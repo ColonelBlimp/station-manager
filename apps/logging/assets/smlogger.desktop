@@ -1,0 +1,11 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=Station-Manager Logger
+GenericName=QSO Logger
+Comment=A modern free Amateur Radio QSO logging application for Linux.
+Exec=smlogger %u
+Terminal=false
+Type=Application
+Icon=smlogger.png
+Categories=Utility;
+StartupWMClass=SMLogger

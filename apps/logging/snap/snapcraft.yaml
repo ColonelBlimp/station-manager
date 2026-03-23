@@ -1,0 +1,32 @@
+name: sm-logger # you probably want to 'snapcraft register <name>'
+title: Station Manager Desktop Logging App
+base: core24 # the base snap is the execution environment for this snap
+version: '0.0.28'
+summary: A modern amateur radio QSO logging app # 79 char long summary
+description: |
+  An amateur radio QSO logging app, which is part of a suite of apps
+  known as 'Station Manager'. This app is built using the Golang, Typescript,
+  and the Wails framework. It is designed to be a modern, Linux based logging
+  app for amateur radio operators.
+
+grade: devel # must be 'stable' to release into candidate/stable channels
+confinement: devmode # use 'strict' once you have the right plugs and slots
+
+contact: marc@7q5mlv.net
+
+apps:
+  sm-logger:
+    command: usr/bin/smlogger
+
+parts:
+  sm-logger:
+    plugin: dump
+    source: .
+    source-type: local
+    organize:
+      smlogger: usr/bin/smlogger
+    stage-packages:
+      - libgtk-3-0
+      - libwebkit2gtk-4.1-0
+      - libjavascriptcoregtk-4.1-0
+
