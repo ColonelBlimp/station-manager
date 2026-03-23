@@ -1,8 +1,10 @@
 go 1.25.0
 
 use (
+	./internal/adapters
 	./internal/adif
 	./internal/config
+	./internal/database
 	./internal/enums
 	./internal/errors
 	./internal/iocdi
