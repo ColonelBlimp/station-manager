@@ -1,1 +1,20 @@
+# Configuration files that may contain sensitive data
+*.local
+*.secret
+*.private
+
+# Environment-specific config files
+.env
+.env.*
+!.env.example
+
+# Temporary or backup config files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS-generated files
+.DS_Store
+Thumbs.db
 config
