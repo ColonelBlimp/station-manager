@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -1,8 +1,8 @@
 package logging
 
 import (
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/pkg/errors"
+	"github.com/ColonelBlimp/station-manager/pkg/types"
 	"github.com/go-playground/validator/v10"
 	"github.com/rs/zerolog"
 	"path/filepath"

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	smerrors "github.com/Station-Manager/errors"
+	smerrors "github.com/ColonelBlimp/station-manager/pkg/errors"
 	"github.com/rs/zerolog"
 )
 
