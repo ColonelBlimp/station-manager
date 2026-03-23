@@ -17,6 +17,7 @@ type Service struct {
 	AppConfig     types.AppConfig
 	isInitialized atomic.Bool
 	initOnce      sync.Once
+	initErr       error // written only inside initOnce.Do; safe to read after Do returns
 }
 
 // Initialize initializes the config service.
@@ -27,14 +28,13 @@ func (s *Service) Initialize() error {
 		return nil // Exit gracefully
 	}
 
-	var initErr error
 	s.initOnce.Do(func() {
 		var err error
 
 		// This is for situation where the service is not built with an IOCDI container.
 		if s.WorkingDir == "" {
 			if s.WorkingDir, err = utils.WorkingDir(s.WorkingDir); err != nil {
-				initErr = errors.New(op).Err(err).Msg(errMsgWorkingDir)
+				s.initErr = errors.New(op).Err(err).Msg(errMsgWorkingDir)
 				return
 			}
 		}
@@ -44,7 +44,7 @@ func (s *Service) Initialize() error {
 		preseedLogCfg := s.AppConfig.LoggingConfig
 
 		if err = s.loadConfigFile(); err != nil {
-			initErr = errors.New(op).Err(err)
+			s.initErr = errors.New(op).Err(err)
 			return
 		}
 
@@ -55,14 +55,14 @@ func (s *Service) Initialize() error {
 
 		// Early validation of loaded configuration
 		if err = validateAppConfig(&s.AppConfig); err != nil {
-			initErr = errors.New(op).Err(err)
+			s.initErr = errors.New(op).Err(err)
 			return
 		}
 
 		s.isInitialized.Store(true)
 	})
 
-	return initErr
+	return s.initErr
 }
 
 // DatastoreConfig returns the datastore configuration.
@@ -128,7 +128,7 @@ func (s *Service) RigConfigByID(rigID int64) (types.RigConfig, error) {
 		}
 	}
 
-	return emptyRetVal, nil
+	return emptyRetVal, errors.New(op).Errorf("rig not found for ID: %d", rigID)
 }
 
 // CatStateValues retrieves the CAT state values for the default rig configuration in the service's application configuration.
@@ -162,9 +162,9 @@ func (s *Service) CatStateValues() (types.StateValues, error) {
 	return stateValues, nil
 }
 
-// LoggingStationConfigs retrieves the logging station configuration from the service's application configuration.
-func (s *Service) LoggingStationConfigs() (types.LoggingStation, error) {
-	const op errors.Op = "config.Service.LoggingStationConfigs"
+// LoggingStationConfig retrieves the logging station configuration from the service's application configuration.
+func (s *Service) LoggingStationConfig() (types.LoggingStation, error) {
+	const op errors.Op = "config.Service.LoggingStationConfig"
 	emptyRetVal := types.LoggingStation{}
 	if !s.isInitialized.Load() {
 		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
@@ -272,5 +272,10 @@ func (s *Service) UpdateAppConfig(cfg types.AppConfig) error {
 		return errors.New(op).Err(err)
 	}
 
-	return writeDataToFile(data, filepath.Join(s.WorkingDir, configFileName))
+	if err = writeDataToFile(data, filepath.Join(s.WorkingDir, configFileName)); err != nil {
+		return err
+	}
+
+	s.AppConfig = cfg
+	return nil
 }

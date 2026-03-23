@@ -1,8 +1,6 @@
 package config
 
 import (
-	"fmt"
-
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -26,7 +24,7 @@ func validateAppConfig(cfg *types.AppConfig) error {
 		// Just accept the driver selection.
 		_ = db
 	default:
-		return errors.New(op).Msg(fmt.Sprintf("unsupported driver: %s", db.Driver))
+		return errors.New(op).Msgf("unsupported driver: %s", db.Driver)
 	}
 
 	// Minimal check for logging config

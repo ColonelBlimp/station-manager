@@ -1,15 +1,15 @@
 package config
 
 import (
-	"github.com/ColonelBlimp/station-manager/internal/types"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // TestInitialize_createsDefaultConfig ensures Initialize writes a default config and populates fields.
 func TestInitialize_createsDefaultConfig(t *testing.T) {
-	t.TempDir() // ensure testing.T has cleanup
 	workDir := t.TempDir()
 
 	svc := &Service{WorkingDir: workDir}

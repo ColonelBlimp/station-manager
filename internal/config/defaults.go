@@ -76,7 +76,7 @@ var defaultServerConfig = types.AppConfig{
 		ShutdownTimeoutMS:      10000,
 		ShutdownTimeoutWarning: false,
 	},
-	RequiredConfigs: types.RequiredConfigs{},
+	RequiredConfigs: types.RequiredConfigs{}, // Should be empty for server
 	ServerConfig: &types.ServerConfig{
 		Name:         "Station Manager",
 		Port:         3000,
@@ -85,13 +85,20 @@ var defaultServerConfig = types.AppConfig{
 		IdleTimeout:  60,      // Seconds
 		BodyLimit:    2097152, // 1024 * 1024 * 2 = 2MB
 	},
+	RigConfigs:           defaultRigConfigs,
+	LookupServiceConfigs: defaultLookupServiceConfigs,
+	LoggingStation:       defaultLoggingStationDetails,
+	EmailConfig:          defaultEmailConfig,
+	ForwardingConfigs:    defaultForwardingConfigs,
+	OptionalConfigs:      defaultOptionalConfigs,
+	ListenerConfigs:      defaultListenerConfigs,
 }
 
 var defaultRequiredConfigs = types.RequiredConfigs{
 	SetupComplete:      false, // Indicates whether setup has been completed
 	DefaultLogbookID:   1,
 	DefaultRigID:       1,
-	DefaultFreq:        "14.300.000",
+	DefaultFreq:        "14300.000",
 	DefaultMode:        "USB",
 	DefaultIsRandomQso: true,
 	DefaultTxPower:     50,
@@ -130,41 +137,17 @@ var defaultLookupServiceConfigs = []types.LookupConfig{
 	},
 }
 
-var defaultLoggingStationDetails = types.LoggingStation{
-	AntennaAzimuth:  "",
-	MyAltitude:      "",
-	MyAntenna:       "",
-	MyCity:          "",
-	MyCountry:       "",
-	MyCqZone:        "",
-	MyDXCC:          "",
-	MyGridsquare:    "",
-	MyIota:          "",
-	MyIotaIslandID:  "",
-	MyITUZone:       "",
-	MyLat:           "",
-	MyLon:           "",
-	MyMorseKeyInfo:  "",
-	MyMorseKeyType:  "",
-	MyName:          "",
-	MyPostalCode:    "",
-	MyRig:           "",
-	MyStreet:        "",
-	MyWwffRef:       "",
-	Operator:        "",
-	OwnerCallsign:   "",
-	StationCallsign: "",
-}
+var defaultLoggingStationDetails = types.LoggingStation{}
 
 var defaultEmailConfig = types.EmailConfig{
 	Name:               types.EmailServiceName,
 	Enabled:            false,
-	Username:           "?",
-	Password:           "?",
-	Host:               "?",
+	Username:           "",
+	Password:           "",
+	Host:               "",
 	Port:               587,
-	From:               "?",
-	To:                 "?",
+	From:               "",
+	To:                 "",
 	Subject:            "",
 	Body:               "",
 	SmtpDialTimeoutSec: 10,
