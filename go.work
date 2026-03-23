@@ -1,6 +1,7 @@
 go 1.25.0
 
 use (
+	./pkg/enums
 	./pkg/errors
 	./pkg/types
 	./pkg/utils

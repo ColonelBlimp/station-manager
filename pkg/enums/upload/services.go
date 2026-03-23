@@ -1,6 +1,6 @@
 package upload
 
-import "github.com/Station-Manager/types"
+import "github.com/ColonelBlimp/station-manager/pkg/types"
 
 type OnlineService string
 
