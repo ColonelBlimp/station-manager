@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-// ConvertToXDDDMMM converts a latitude or longitude string to the XDDD°MMM.MMM'N/S/E/W' format and returns the result.
-// It parses the input, calculates degrees and minutes, determines the direction, and formats it accordingly.
+// ConvertToXDDDMMM converts a latitude or longitude string to the XDDD MMM.MMM format.
+// isLat must be true for latitude (N/S) and false for longitude (E/W).
 // Returns an error if the input cannot be parsed as a valid floating-point number.
-func ConvertToXDDDMMM(input string) (string, error) {
+func ConvertToXDDDMMM(input string, isLat bool) (string, error) {
 	// Parse the input string to a float
 	coord, err := strconv.ParseFloat(input, 64)
 	if err != nil {
@@ -20,12 +20,20 @@ func ConvertToXDDDMMM(input string) (string, error) {
 
 	// Determine the directional character
 	var direction string
-	if coord < 0 {
-		direction = "S"
-		coord = math.Abs(coord)
+	if isLat {
+		if coord < 0 {
+			direction = "S"
+		} else {
+			direction = "N"
+		}
 	} else {
-		direction = "N"
+		if coord < 0 {
+			direction = "W"
+		} else {
+			direction = "E"
+		}
 	}
+	coord = math.Abs(coord)
 
 	// Extract degrees and minutes
 	degrees := int(coord)
@@ -60,8 +68,6 @@ func IsXDDDMMM(s string) bool {
 	}
 
 	// Split into parts
-	dir := s[:1]
-	_ = dir // currently not used further, but kept for clarity and potential future rules
 	degStr := s[1:4]
 	minStr := s[5:]
 

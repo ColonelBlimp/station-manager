@@ -2,12 +2,13 @@ package utils
 
 import (
 	"fmt"
+
 	"github.com/goccy/go-json"
 )
 
 // DeepCopy performs a deep copy of any object using JSON serialization and deserialization.
 // The input `in` is the object to copy, and the output `out` should be a pointer to the desired type.
-func DeepCopy(in interface{}, out interface{}) error {
+func DeepCopy(in any, out any) error {
 	// Marshal the input object to JSON
 	serialized, err := json.Marshal(in)
 	if err != nil {

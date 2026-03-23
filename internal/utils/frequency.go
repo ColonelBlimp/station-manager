@@ -14,8 +14,10 @@ var (
 	ErrFrequencyInvalid  = errors.New("invalid frequency string (must have 9 characters)")
 )
 
-// FrequencyRanges holds the mapping of frequency prefixes to their min and max ranges.
-var FrequencyRanges = map[string][2]float64{
+var reFrequencyMHz = regexp.MustCompile(`^\d{7,8}$`)
+
+// frequencyRanges holds the mapping of frequency prefixes to their min and max ranges.
+var frequencyRanges = map[string][2]float64{
 	"54.": {50.000000, 54.000000},
 	"53.": {50.000000, 54.000000},
 	"52.": {50.000000, 54.000000},
@@ -35,7 +37,7 @@ var FrequencyRanges = map[string][2]float64{
 	"1.":  {1.810000, 2.000000},
 }
 
-var BandNames = map[string]string{
+var bandNames = map[string]string{
 	"54.": "6m",
 	"53.": "6m",
 	"52.": "6m",
@@ -70,7 +72,7 @@ func FormatFrequencyToKhz(rawFreq string) (string, error) {
 // GetFrequencyRange retrieves the min and max frequency range for a given frequency prefix.
 // It returns the minimum and maximum frequency values if a match is found, or 0, 0 if no match exists.
 func GetFrequencyRange(freq string) (float64, float64) {
-	for prefix, ranges := range FrequencyRanges {
+	for prefix, ranges := range frequencyRanges {
 		if strings.HasPrefix(freq, prefix) {
 			return ranges[0], ranges[1]
 		}
@@ -81,7 +83,7 @@ func GetFrequencyRange(freq string) (float64, float64) {
 // FrequencyToBand determines the band corresponding to a given frequency string using predefined mappings.
 // It returns the band name if a match is found or an empty string if no match exists.
 func FrequencyToBand(freq string) string {
-	for prefix, band := range BandNames {
+	for prefix, band := range bandNames {
 		if strings.HasPrefix(freq, prefix) {
 			return band
 		}
@@ -116,8 +118,7 @@ func IsValidFrequencyMHz(s string) bool {
 	if s == emptyString {
 		return false
 	}
-	re := regexp.MustCompile(`^\d{7,8}$`)
-	if !re.MatchString(s) {
+	if !reFrequencyMHz.MatchString(s) {
 		return false
 	}
 	f, err := strconv.ParseInt(s, 10, 64)

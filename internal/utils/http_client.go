@@ -25,15 +25,10 @@ func NewHTTPClient(httpTimeout time.Duration) *http.Client {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		// DisableCompression: false,
 	}
 
 	return &http.Client{
 		Timeout:   reqTimeout, // hard deadline for the whole request
 		Transport: transport,
-		// CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		//     if len(via) >= 10 { return http.ErrUseLastResponse }
-		//     return nil
-		// },
 	}
 }

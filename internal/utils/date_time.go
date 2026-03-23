@@ -10,7 +10,7 @@ import (
 // Returns "YYYY-MM-DD" if the input does not have exactly 8 characters.
 func FormatDate(rawDate string) string {
 	if len(rawDate) != 8 {
-		return "YYYY-MM-DD"
+		return emptyString
 	}
 
 	return rawDate[:4] + "-" + rawDate[4:6] + "-" + rawDate[6:]
@@ -19,7 +19,7 @@ func FormatDate(rawDate string) string {
 // FormatTime converts a 4-digit string representing time in HHMM format to a string in HH:MM format. Returns "HH:MM" on error.
 func FormatTime(rawTime string) string {
 	if len(rawTime) != 4 {
-		return "HH:MM"
+		return emptyString
 	}
 	return rawTime[:2] + ":" + rawTime[2:]
 }

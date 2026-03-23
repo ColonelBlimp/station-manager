@@ -24,6 +24,8 @@ func (f *FIFOList[T]) Pop() (T, bool) {
 		return zero, false
 	}
 	item := f.items[0]
+	var zero T
+	f.items[0] = zero
 	f.items = f.items[1:]
 	return item, true
 }
