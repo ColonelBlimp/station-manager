@@ -1,0 +1,28 @@
+version: '3'
+
+tasks:
+  default:
+    desc: "Sync Go workspace"
+    cmds:
+      - go work sync
+
+  build:
+    desc: "Build all modules"
+    cmds:
+      - go build ./...
+
+  test:
+    desc: "Run all tests (short)"
+    cmds:
+      - go test -race ./... -short
+
+  tidy:
+    desc: "Run go mod tidy on all modules"
+    cmds:
+      - |
+        for mod in pkg/* internal/* apps/* cmd/*; do
+          if [ -f "${mod}/go.mod" ]; then
+            echo "Tidying ${mod}..."
+            (cd "$mod" && go mod tidy)
+          fi
+        done
