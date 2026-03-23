@@ -9,18 +9,30 @@ tasks:
   build:
     desc: "Build all modules"
     cmds:
-      - go build ./...
+      - |
+        for mod in internal/* apps/* cmd/*; do
+          if [ -f "${mod}/go.mod" ]; then
+            echo "Building ${mod}..."
+            (cd "$mod" && go build ./...)
+          fi
+        done
 
   test:
     desc: "Run all tests (short)"
     cmds:
-      - go test -race ./... -short
+      - |
+        for mod in internal/* apps/* cmd/*; do
+          if [ -f "${mod}/go.mod" ]; then
+            echo "Testing ${mod}..."
+            (cd "$mod" && go test -race ./... -short)
+          fi
+        done
 
   tidy:
     desc: "Run go mod tidy on all modules"
     cmds:
       - |
-        for mod in pkg/* internal/* apps/* cmd/*; do
+        for mod in internal/* apps/* cmd/*; do
           if [ -f "${mod}/go.mod" ]; then
             echo "Tidying ${mod}..."
             (cd "$mod" && go mod tidy)
