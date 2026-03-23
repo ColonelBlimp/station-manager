@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/pkg/types"
 	"os"
 	"path/filepath"
 	"testing"

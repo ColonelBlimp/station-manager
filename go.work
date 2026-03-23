@@ -1,6 +1,7 @@
 go 1.25.0
 
 use (
+	./internal/config
 	./internal/iocdi
 	./pkg/adif
 	./pkg/enums

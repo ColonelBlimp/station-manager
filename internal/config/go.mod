@@ -1,12 +1,12 @@
-module github.com/Station-Manager/config
+module github.com/ColonelBlimp/station-manager/internal/config
 
 go 1.25.0
 
 require (
-	github.com/Station-Manager/enums v0.0.8
-	github.com/Station-Manager/errors v0.0.11
-	github.com/Station-Manager/types v0.0.88
-	github.com/Station-Manager/utils v0.0.6
+	github.com/ColonelBlimp/station-manager/pkg/enums v0.0.0
+	github.com/ColonelBlimp/station-manager/pkg/errors v0.0.0
+	github.com/ColonelBlimp/station-manager/pkg/types v0.0.0
+	github.com/ColonelBlimp/station-manager/pkg/utils v0.0.0
 	github.com/goccy/go-json v0.10.6
 )
 
@@ -17,3 +17,11 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 )
+
+replace github.com/ColonelBlimp/station-manager/pkg/enums => ../../pkg/enums
+
+replace github.com/ColonelBlimp/station-manager/pkg/errors => ../../pkg/errors
+
+replace github.com/ColonelBlimp/station-manager/pkg/types => ../../pkg/types
+
+replace github.com/ColonelBlimp/station-manager/pkg/utils => ../../pkg/utils

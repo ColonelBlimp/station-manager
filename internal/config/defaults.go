@@ -1,9 +1,9 @@
 package config
 
 import (
-	"github.com/Station-Manager/enums/cmds"
-	"github.com/Station-Manager/enums/tags"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/pkg/enums/cmds"
+	"github.com/ColonelBlimp/station-manager/pkg/enums/tags"
+	"github.com/ColonelBlimp/station-manager/pkg/types"
 )
 
 var postgresConfig = types.DatastoreConfig{
