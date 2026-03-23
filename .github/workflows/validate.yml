@@ -20,6 +20,11 @@ jobs:
         run: |
           set -eo pipefail
           while IFS= read -r mod; do
+            # Skip Wails apps: their go:embed requires a frontend build
+            if [ -f "$mod/wails.json" ]; then
+              echo "==> SKIP (Wails app) ./$mod"
+              continue
+            fi
             echo "==> go vet ./$mod"
             (cd "$mod" && go vet ./...)
           done < <(find apps internal cmd -name go.mod -printf '%h\n' | sort)
@@ -56,6 +61,11 @@ jobs:
         run: |
           set -eo pipefail
           while IFS= read -r mod; do
+            # Skip Wails apps: their go:embed requires a frontend build
+            if [ -f "$mod/wails.json" ]; then
+              echo "==> SKIP (Wails app) ./$mod"
+              continue
+            fi
             echo "==> go test -race ./... -short in ./$mod"
             (cd "$mod" && go test -race ./... -short)
           done < <(find apps internal cmd -name go.mod -printf '%h\n' | sort)
@@ -76,6 +86,11 @@ jobs:
           export PATH="$(go env GOPATH)/bin:$PATH"
           set -eo pipefail
           while IFS= read -r mod; do
+            # Skip Wails apps: their go:embed requires a frontend build
+            if [ -f "$mod/wails.json" ]; then
+              echo "==> SKIP (Wails app) ./$mod"
+              continue
+            fi
             echo "==> golangci-lint ./$mod"
             (cd "$mod" && golangci-lint run --timeout=5m ./...)
           done < <(find apps internal cmd -name go.mod -printf '%h\n' | sort)
