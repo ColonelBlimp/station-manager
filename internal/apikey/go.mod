@@ -1,4 +1,4 @@
-module github.com/Station-Manager/apikey
+module github.com/ColonelBlimp/station-manager/internal/apikey
 
 go 1.25.0
 

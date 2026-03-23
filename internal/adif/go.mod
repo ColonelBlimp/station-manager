@@ -63,3 +63,9 @@ replace github.com/ColonelBlimp/station-manager/internal/logging => ../logging
 replace github.com/ColonelBlimp/station-manager/internal/utils => ../utils
 
 replace github.com/ColonelBlimp/station-manager/internal/types => ../types
+
+replace github.com/ColonelBlimp/station-manager/internal/adapters => ../adapters
+
+replace github.com/ColonelBlimp/station-manager/internal/database => ../database
+
+replace github.com/ColonelBlimp/station-manager/internal/enums => ../enums

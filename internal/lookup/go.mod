@@ -1,18 +1,18 @@
-module github.com/Station-Manager/lookup
+module github.com/ColonelBlimp/station-manager/internal/lookup
 
 go 1.25.0
 
 require (
-	github.com/Station-Manager/config v0.0.39
+	github.com/Station-Manager/config v0.0.30
 	github.com/Station-Manager/errors v0.0.11
-	github.com/Station-Manager/logging v0.0.12
-	github.com/Station-Manager/types v0.0.78
-	github.com/Station-Manager/utils v0.0.5
+	github.com/Station-Manager/logging v0.0.10
+	github.com/Station-Manager/types v0.0.64
+	github.com/Station-Manager/utils v0.0.4
 	github.com/goccy/go-json v0.10.6
 )
 
 require (
-	github.com/Station-Manager/enums v0.0.7 // indirect
+	github.com/Station-Manager/enums v0.0.4 // indirect
 	github.com/creack/goselect v0.1.3 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
@@ -30,3 +30,17 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
+
+replace github.com/ColonelBlimp/station-manager/internal/config => ../config
+
+replace github.com/ColonelBlimp/station-manager/internal/errors => ../errors
+
+replace github.com/ColonelBlimp/station-manager/internal/iocdi => ../iocdi
+
+replace github.com/ColonelBlimp/station-manager/internal/logging => ../logging
+
+replace github.com/ColonelBlimp/station-manager/internal/types => ../types
+
+replace github.com/ColonelBlimp/station-manager/internal/enums => ../enums
+
+replace github.com/ColonelBlimp/station-manager/internal/utils => ../utils

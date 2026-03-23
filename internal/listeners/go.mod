@@ -1,20 +1,19 @@
-module github.com/Station-Manager/listeners
+module github.com/ColonelBlimp/station-manager/internal/listeners
 
 go 1.25.0
 
 require (
-	github.com/Station-Manager/config v0.0.49
+	github.com/Station-Manager/config v0.0.30
 	github.com/Station-Manager/errors v0.0.11
-	github.com/Station-Manager/iocdi v0.0.1
-	github.com/Station-Manager/logging v0.0.13
-	github.com/Station-Manager/types v0.0.88
-	github.com/Station-Manager/utils v0.0.6
+	github.com/Station-Manager/logging v0.0.10
+	github.com/Station-Manager/types v0.0.64
+	github.com/Station-Manager/utils v0.0.4
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/stretchr/testify v1.11.1
 )
 
 require (
-	github.com/Station-Manager/enums v0.0.8 // indirect
+	github.com/Station-Manager/enums v0.0.4 // indirect
 	github.com/creack/goselect v0.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
@@ -36,3 +35,21 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/ColonelBlimp/station-manager/internal/config => ../config
+
+replace github.com/ColonelBlimp/station-manager/internal/database => ../database
+
+replace github.com/ColonelBlimp/station-manager/internal/errors => ../errors
+
+replace github.com/ColonelBlimp/station-manager/internal/iocdi => ../iocdi
+
+replace github.com/ColonelBlimp/station-manager/internal/logging => ../logging
+
+replace github.com/ColonelBlimp/station-manager/internal/types => ../types
+
+replace github.com/ColonelBlimp/station-manager/internal/enums => ../enums
+
+replace github.com/ColonelBlimp/station-manager/internal/utils => ../utils
+
+replace github.com/ColonelBlimp/station-manager/internal/adapters => ../adapters
