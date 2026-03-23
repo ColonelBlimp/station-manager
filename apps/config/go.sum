@@ -1,7 +1,6 @@
-github.com/Station-Manager/errors v0.0.11 h1:I5C57weFS9hDx5j5E3xhQU+CdC1w0tXjdlqUQU3VnjY=
-github.com/Station-Manager/errors v0.0.11/go.mod h1:yedsGkIKLyDEUhkm7VrjwE2Qq6Jdlq0MpwEjdDhBwh0=
-github.com/Station-Manager/utils v0.0.5 h1:zrKXZlG03ApJXbJ1ui+PVj0j48izD4edhZtXmqFcwaU=
-github.com/Station-Manager/utils v0.0.5/go.mod h1:EnFoj5YpCZntfBjfSiVaLuh21wQStGoHGcFMJBWorsI=
 github.com/goccy/go-json v0.10.6 h1:p8HrPJzOakx/mn/bQtjgNjdTcN+/S6FcG2CTtQOrHVU=
+github.com/goccy/go-json v0.10.6/go.mod h1:oq7eo15ShAhp70Anwd5lgX2pLfOS3QCiwU/PULtXL6M=
 golang.org/x/net v0.52.0 h1:He/TN1l0e4mmR3QqHMT2Xab3Aj3L9qjbhRm78/6jrW0=
+golang.org/x/net v0.52.0/go.mod h1:R1MAz7uMZxVMualyPXb+VaqGSa3LIaUqk0eEt3w36Sw=
 golang.org/x/text v0.35.0 h1:JOVx6vVDFokkpaq1AEptVzLTpDe9KGpj5tR4/X+ybL8=
+golang.org/x/text v0.35.0/go.mod h1:khi/HExzZJ2pGnjenulevKNX1W67CUy0AsXcNubPGCA=
