@@ -1,4 +1,4 @@
-module github.com/ColonelBlimp/station-manager/pkg/utils
+module github.com/ColonelBlimp/station-manager/internal/utils
 
 go 1.25.0
 

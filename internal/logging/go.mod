@@ -4,9 +4,6 @@ go 1.25.0
 
 require (
 	github.com/ColonelBlimp/station-manager/internal/config v0.0.0
-	github.com/ColonelBlimp/station-manager/pkg/errors v0.0.0
-	github.com/ColonelBlimp/station-manager/pkg/types v0.0.0
-	github.com/ColonelBlimp/station-manager/pkg/utils v0.0.0
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.11.1
@@ -15,8 +12,6 @@ require (
 )
 
 require (
-	github.com/ColonelBlimp/station-manager/pkg/enums v0.0.0 // indirect
-	github.com/creack/goselect v0.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
@@ -28,9 +23,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	go.bug.st/serial v1.6.4 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
-	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
@@ -39,10 +32,10 @@ require (
 
 replace github.com/ColonelBlimp/station-manager/internal/config => ../config
 
-replace github.com/ColonelBlimp/station-manager/pkg/enums => ../../pkg/enums
+replace github.com/ColonelBlimp/station-manager/internal/enums => ../enums
 
-replace github.com/ColonelBlimp/station-manager/pkg/errors => ../../pkg/errors
+replace github.com/ColonelBlimp/station-manager/internal/errors => ../errors
 
-replace github.com/ColonelBlimp/station-manager/pkg/types => ../../pkg/types
+replace github.com/ColonelBlimp/station-manager/internal/types => ../types
 
-replace github.com/ColonelBlimp/station-manager/pkg/utils => ../../pkg/utils
+replace github.com/ColonelBlimp/station-manager/internal/utils => ../utils

@@ -1,13 +1,13 @@
 go 1.25.0
 
 use (
+	./internal/adif
 	./internal/config
+	./internal/enums
+	./internal/errors
 	./internal/iocdi
 	./internal/logging
-	./pkg/adif
-	./pkg/enums
-	./pkg/errors
-	./pkg/maidenhead
-	./pkg/types
-	./pkg/utils
+	./internal/maidenhead
+	./internal/types
+	./internal/utils
 )
