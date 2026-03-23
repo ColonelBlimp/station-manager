@@ -1,4 +1,4 @@
-module github.com/Station-Manager/iocdi
+module github.com/ColonelBlimp/station-manager/internal/iocdi
 
 go 1.25
 
