@@ -1,0 +1,6 @@
+copilot.*
+.env
+frontend/build
+frontend/node_modules
+frontend/.svelte-kit
+frontend/src/lib/wailsjs
