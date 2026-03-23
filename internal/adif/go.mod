@@ -4,11 +4,11 @@ go 1.25.0
 
 require (
 	github.com/Station-Manager/adapters v0.0.11
-	github.com/Station-Manager/config v0.0.31
+	github.com/Station-Manager/config v0.0.30
 	github.com/Station-Manager/database v0.0.39
 	github.com/Station-Manager/errors v0.0.11
 	github.com/Station-Manager/logging v0.0.10
-	github.com/Station-Manager/types v0.0.78
+	github.com/Station-Manager/types v0.0.64
 	github.com/Station-Manager/utils v0.0.4
 	golang.org/x/net v0.52.0
 )
@@ -53,3 +53,13 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.46.1 // indirect
 )
+
+replace github.com/ColonelBlimp/station-manager/internal/config => ../config
+
+replace github.com/ColonelBlimp/station-manager/internal/errors => ../errors
+
+replace github.com/ColonelBlimp/station-manager/internal/logging => ../logging
+
+replace github.com/ColonelBlimp/station-manager/internal/utils => ../utils
+
+replace github.com/ColonelBlimp/station-manager/internal/types => ../types
