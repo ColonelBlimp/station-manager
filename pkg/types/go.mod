@@ -1,4 +1,4 @@
-module github.com/Station-Manager/types
+module github.com/ColonelBlimp/station-manager/types
 
 go 1.25.0
 
