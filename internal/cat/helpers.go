@@ -1,8 +1,8 @@
 package cat
 
 import (
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/go-playground/validator/v10"
 )
 

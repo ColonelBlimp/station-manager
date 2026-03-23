@@ -3,7 +3,7 @@ package wsjtx
 import (
 	"testing"
 
-	"github.com/Station-Manager/listeners/handlers"
+	"github.com/ColonelBlimp/station-manager/internal/listeners/handlers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

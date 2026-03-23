@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Station-Manager/config"
-	smerrors "github.com/Station-Manager/errors"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	smerrors "github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // --- Test doubles ---

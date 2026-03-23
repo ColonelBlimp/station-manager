@@ -3,9 +3,9 @@ package adapters
 import (
 	"strconv"
 
-	"github.com/Station-Manager/database/sqlite/models"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/goccy/go-json"
 )
 

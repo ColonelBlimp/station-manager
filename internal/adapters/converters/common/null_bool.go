@@ -1,7 +1,7 @@
 package common
 
 import (
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/aarondl/null/v8"
 )
 

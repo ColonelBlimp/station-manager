@@ -3,8 +3,8 @@ module github.com/ColonelBlimp/station-manager/internal/serial
 go 1.25.0
 
 require (
-	github.com/Station-Manager/errors v0.0.11
-	github.com/Station-Manager/types v0.0.64
+	github.com/ColonelBlimp/station-manager/internal/errors v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/types v0.0.0
 	go.bug.st/serial v1.6.4
 )
 
@@ -24,3 +24,25 @@ replace github.com/ColonelBlimp/station-manager/internal/logging => ../logging
 replace github.com/ColonelBlimp/station-manager/internal/types => ../types
 
 replace github.com/ColonelBlimp/station-manager/internal/utils => ../utils
+
+replace github.com/ColonelBlimp/station-manager/internal/adapters => ../adapters
+
+replace github.com/ColonelBlimp/station-manager/internal/adif => ../adif
+
+replace github.com/ColonelBlimp/station-manager/internal/apikey => ../apikey
+
+replace github.com/ColonelBlimp/station-manager/internal/cat => ../cat
+
+replace github.com/ColonelBlimp/station-manager/internal/database => ../database
+
+replace github.com/ColonelBlimp/station-manager/internal/email => ../email
+
+replace github.com/ColonelBlimp/station-manager/internal/forwarding => ../forwarding
+
+replace github.com/ColonelBlimp/station-manager/internal/iocdi => ../iocdi
+
+replace github.com/ColonelBlimp/station-manager/internal/listeners => ../listeners
+
+replace github.com/ColonelBlimp/station-manager/internal/lookup => ../lookup
+
+replace github.com/ColonelBlimp/station-manager/internal/maidenhead => ../maidenhead

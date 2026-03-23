@@ -1,6 +1,6 @@
 package sqlite
 
-import "github.com/Station-Manager/errors"
+import "github.com/ColonelBlimp/station-manager/internal/errors"
 
 // checkService checks if the database service is not nil, has been initialized and is open.
 func checkService(op errors.Op, s *Service) error {

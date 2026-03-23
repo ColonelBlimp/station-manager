@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

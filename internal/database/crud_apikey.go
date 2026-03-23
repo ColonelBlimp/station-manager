@@ -5,10 +5,10 @@ package database
 //	"context"
 //	"database/sql"
 //	stderr "errors"
-//	"github.com/Station-Manager/adapters"
-//	"github.com/Station-Manager/database/postgres/models"
-//	"github.com/Station-Manager/errors"
-//	"github.com/Station-Manager/types"
+//	"github.com/ColonelBlimp/station-manager/internal/adapters"
+//	"github.com/ColonelBlimp/station-manager/internal/database/postgres/models"
+//	"github.com/ColonelBlimp/station-manager/internal/errors"
+//	"github.com/ColonelBlimp/station-manager/internal/types"
 //	"github.com/aarondl/sqlboiler/v4/boil"
 //)
 //

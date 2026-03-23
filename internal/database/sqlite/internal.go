@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 func (s *Service) getOpenHandle(op errors.Op) (*sql.DB, error) {

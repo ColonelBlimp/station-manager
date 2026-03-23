@@ -4,7 +4,7 @@ import (
 	"html"
 	"net/url"
 
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
 func parseResponse(body []byte) (*Response, error) {

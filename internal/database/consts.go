@@ -1,6 +1,6 @@
 package database
 
-import "github.com/Station-Manager/types"
+import "github.com/ColonelBlimp/station-manager/internal/types"
 
 const (
 	errMsgNotInitialized = "Database service is not initialized."

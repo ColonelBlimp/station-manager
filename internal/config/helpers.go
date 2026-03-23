@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/ColonelBlimp/station-manager/pkg/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"os"
 )
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"net/smtp"
 )
 

@@ -1,11 +1,11 @@
 package database
 
 import (
-	"github.com/Station-Manager/adapters"
-	pgmodels "github.com/Station-Manager/database/postgres/models"
-	sqmodels "github.com/Station-Manager/database/sqlite/models"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/adapters"
+	pgmodels "github.com/ColonelBlimp/station-manager/internal/database/postgres/models"
+	sqmodels "github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // checkService checks if the database service is not nil, has been initialized and is open.

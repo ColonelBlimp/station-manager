@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	stderr "errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"strings"
 	"time"
 )

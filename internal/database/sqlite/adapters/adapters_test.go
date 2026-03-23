@@ -3,8 +3,8 @@ package adapters
 import (
 	"testing"
 
-	"github.com/Station-Manager/database/sqlite/models"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/aarondl/null/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

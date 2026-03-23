@@ -2,8 +2,8 @@ package database
 
 import (
 	"context"
-	sqmodels "github.com/Station-Manager/database/sqlite/models"
-	"github.com/Station-Manager/errors"
+	sqmodels "github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/aarondl/sqlboiler/v4/boil"
 )
 

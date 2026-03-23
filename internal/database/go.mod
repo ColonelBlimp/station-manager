@@ -3,14 +3,13 @@ module github.com/ColonelBlimp/station-manager/internal/database
 go 1.25.0
 
 require (
-	github.com/Station-Manager/adapters v0.0.11
-	github.com/Station-Manager/config v0.0.30
-	github.com/Station-Manager/database v0.0.39
-	github.com/Station-Manager/enums v0.0.4
-	github.com/Station-Manager/errors v0.0.11
-	github.com/Station-Manager/logging v0.0.10
-	github.com/Station-Manager/types v0.0.64
-	github.com/Station-Manager/utils v0.0.4
+	github.com/ColonelBlimp/station-manager/internal/adapters v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/config v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/enums v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/errors v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/logging v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/types v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/utils v0.0.0
 	github.com/aarondl/null/v8 v8.1.3
 	github.com/aarondl/sqlboiler/v4 v4.19.7
 	github.com/aarondl/strmangle v0.0.9
@@ -71,3 +70,23 @@ replace github.com/ColonelBlimp/station-manager/internal/logging => ../logging
 replace github.com/ColonelBlimp/station-manager/internal/types => ../types
 
 replace github.com/ColonelBlimp/station-manager/internal/utils => ../utils
+
+replace github.com/ColonelBlimp/station-manager/internal/adif => ../adif
+
+replace github.com/ColonelBlimp/station-manager/internal/apikey => ../apikey
+
+replace github.com/ColonelBlimp/station-manager/internal/cat => ../cat
+
+replace github.com/ColonelBlimp/station-manager/internal/email => ../email
+
+replace github.com/ColonelBlimp/station-manager/internal/forwarding => ../forwarding
+
+replace github.com/ColonelBlimp/station-manager/internal/iocdi => ../iocdi
+
+replace github.com/ColonelBlimp/station-manager/internal/listeners => ../listeners
+
+replace github.com/ColonelBlimp/station-manager/internal/lookup => ../lookup
+
+replace github.com/ColonelBlimp/station-manager/internal/maidenhead => ../maidenhead
+
+replace github.com/ColonelBlimp/station-manager/internal/serial => ../serial

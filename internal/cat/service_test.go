@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/enums/cmds"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/enums/cmds"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/stretchr/testify/require"
 )
 

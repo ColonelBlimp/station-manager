@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
 // getIP parses an address string and returns a net.IP.

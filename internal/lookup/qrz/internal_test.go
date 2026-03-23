@@ -2,8 +2,8 @@ package qrz
 
 import (
 	stderrors "errors"
-	smerrors "github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	smerrors "github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"testing"
 )
 

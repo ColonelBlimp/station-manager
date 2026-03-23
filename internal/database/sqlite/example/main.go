@@ -2,11 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/database"
-	"github.com/Station-Manager/database/sqlite"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"os"
 	"path/filepath"
 )

@@ -1,6 +1,6 @@
 package forwarding
 
-import "github.com/Station-Manager/types"
+import "github.com/ColonelBlimp/station-manager/internal/types"
 
 // Forwarder defines the minimal interface for a QSO forwarder that can be
 // registered and resolved via the iocdi container.

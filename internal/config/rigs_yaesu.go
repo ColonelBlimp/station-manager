@@ -1,6 +1,6 @@
 package config
 
-import "github.com/ColonelBlimp/station-manager/pkg/types"
+import "github.com/ColonelBlimp/station-manager/internal/types"
 
 var ftdx10RigConfigs = types.RigConfig{
 	ID:           0,

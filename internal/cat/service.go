@@ -5,12 +5,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/enums/cmds"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/serial"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/enums/cmds"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/serial"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 const (

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func Test_QsoToRecord_And_RenderIncludesQslAndMisc(t *testing.T) {

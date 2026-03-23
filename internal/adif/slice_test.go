@@ -3,13 +3,13 @@
 package adif
 
 import (
-	"github.com/Station-Manager/adapters"
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/database/sqlite"
-	models "github.com/Station-Manager/database/sqlite/models"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/types"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/adapters"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	models "github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"golang.org/x/net/context"
 	"html"
 	"testing"

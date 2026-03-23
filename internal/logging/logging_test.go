@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
-	"github.com/ColonelBlimp/station-manager/pkg/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

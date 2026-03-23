@@ -6,13 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"log"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/Station-Manager/serial"
+	"github.com/ColonelBlimp/station-manager/internal/serial"
 	bugst "go.bug.st/serial"
 )
 

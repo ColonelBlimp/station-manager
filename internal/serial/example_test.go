@@ -3,10 +3,10 @@ package serial_test
 import (
 	"context"
 	"fmt"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"time"
 
-	"github.com/Station-Manager/serial"
+	"github.com/ColonelBlimp/station-manager/internal/serial"
 )
 
 func Example() {

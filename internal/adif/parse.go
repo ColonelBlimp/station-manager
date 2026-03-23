@@ -2,7 +2,7 @@ package adif
 
 import (
 	"bytes"
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"reflect"
 	"regexp"
 	"strconv"

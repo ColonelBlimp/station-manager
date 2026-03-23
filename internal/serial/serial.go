@@ -3,8 +3,8 @@ package serial
 import (
 	"context"
 	stderr "errors"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"go.bug.st/serial"
 	"sync"
 )

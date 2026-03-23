@@ -3,10 +3,10 @@ package sqlite
 import (
 	"context"
 
-	"github.com/Station-Manager/enums/upload"
-	"github.com/Station-Manager/enums/upload/action"
-	"github.com/Station-Manager/enums/upload/status"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 /**********************************************************************************************************************

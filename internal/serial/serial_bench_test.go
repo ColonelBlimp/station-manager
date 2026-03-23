@@ -2,7 +2,7 @@ package serial
 
 import (
 	"context"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"testing"
 	"time"
 )

@@ -5,11 +5,11 @@ import (
 	"database/sql"
 	stderr "errors"
 	"fmt"
-	"github.com/Station-Manager/adapters"
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/logging" // added for structured logging
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/adapters"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging" // added for structured logging
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 	"sync"

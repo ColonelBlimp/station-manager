@@ -1,6 +1,6 @@
 package logging
 
-import "github.com/ColonelBlimp/station-manager/pkg/types"
+import "github.com/ColonelBlimp/station-manager/internal/types"
 
 const (
 	// ServiceName is the DI/service locator name for the logging service.

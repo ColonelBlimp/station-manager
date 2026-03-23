@@ -3,18 +3,18 @@ module github.com/ColonelBlimp/station-manager/internal/adif
 go 1.25.0
 
 require (
-	github.com/Station-Manager/adapters v0.0.11
-	github.com/Station-Manager/config v0.0.30
-	github.com/Station-Manager/database v0.0.39
-	github.com/Station-Manager/errors v0.0.11
-	github.com/Station-Manager/logging v0.0.10
-	github.com/Station-Manager/types v0.0.64
-	github.com/Station-Manager/utils v0.0.4
+	github.com/ColonelBlimp/station-manager/internal/adapters v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/config v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/database v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/errors v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/logging v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/types v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/utils v0.0.0
 	golang.org/x/net v0.52.0
 )
 
 require (
-	github.com/Station-Manager/enums v0.0.4 // indirect
+	github.com/ColonelBlimp/station-manager/internal/enums v0.0.0 // indirect
 	github.com/aarondl/inflect v0.0.2 // indirect
 	github.com/aarondl/null/v8 v8.1.3 // indirect
 	github.com/aarondl/randomize v0.0.2 // indirect
@@ -69,3 +69,21 @@ replace github.com/ColonelBlimp/station-manager/internal/adapters => ../adapters
 replace github.com/ColonelBlimp/station-manager/internal/database => ../database
 
 replace github.com/ColonelBlimp/station-manager/internal/enums => ../enums
+
+replace github.com/ColonelBlimp/station-manager/internal/apikey => ../apikey
+
+replace github.com/ColonelBlimp/station-manager/internal/cat => ../cat
+
+replace github.com/ColonelBlimp/station-manager/internal/email => ../email
+
+replace github.com/ColonelBlimp/station-manager/internal/forwarding => ../forwarding
+
+replace github.com/ColonelBlimp/station-manager/internal/iocdi => ../iocdi
+
+replace github.com/ColonelBlimp/station-manager/internal/listeners => ../listeners
+
+replace github.com/ColonelBlimp/station-manager/internal/lookup => ../lookup
+
+replace github.com/ColonelBlimp/station-manager/internal/maidenhead => ../maidenhead
+
+replace github.com/ColonelBlimp/station-manager/internal/serial => ../serial

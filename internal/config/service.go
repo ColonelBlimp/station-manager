@@ -6,9 +6,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/ColonelBlimp/station-manager/pkg/errors"
-	"github.com/ColonelBlimp/station-manager/pkg/types"
-	"github.com/ColonelBlimp/station-manager/pkg/utils"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/goccy/go-json"
 )
 

@@ -3,8 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"net"
 	"net/url"
 	"os"

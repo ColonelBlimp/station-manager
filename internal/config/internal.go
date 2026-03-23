@@ -1,8 +1,8 @@
 package config
 
 import (
-	"github.com/ColonelBlimp/station-manager/pkg/errors"
-	"github.com/ColonelBlimp/station-manager/pkg/utils"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/goccy/go-json"
 	"os"
 	"path/filepath"

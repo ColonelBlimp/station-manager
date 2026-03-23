@@ -2,9 +2,9 @@ package logging
 
 import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
-	"github.com/ColonelBlimp/station-manager/pkg/errors"
-	"github.com/ColonelBlimp/station-manager/pkg/types"
-	"github.com/ColonelBlimp/station-manager/pkg/utils"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/rs/zerolog"
 	"go.uber.org/atomic"
 	"gopkg.in/natefinch/lumberjack.v2"

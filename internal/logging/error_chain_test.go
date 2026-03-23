@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	smerrors "github.com/ColonelBlimp/station-manager/pkg/errors"
+	smerrors "github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )

@@ -1,9 +1,9 @@
 package qrz
 
 import (
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // UpdateDatabase updates the local database with the provided QSO record.

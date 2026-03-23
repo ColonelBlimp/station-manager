@@ -2,12 +2,12 @@ package database
 
 //
 //import (
-//	"github.com/Station-Manager/adapters"
-//	"github.com/Station-Manager/adapters/converters/common"
-//	"github.com/Station-Manager/adapters/converters/postgres"
-//	"github.com/Station-Manager/adapters/converters/sqlite"
-//	sqmodels "github.com/Station-Manager/database/sqlite/models"
-//	"github.com/Station-Manager/types"
+//	"github.com/ColonelBlimp/station-manager/internal/adapters"
+//	"github.com/ColonelBlimp/station-manager/internal/adapters/converters/common"
+//	"github.com/ColonelBlimp/station-manager/internal/adapters/converters/postgres"
+//	"github.com/ColonelBlimp/station-manager/internal/adapters/converters/sqlite"
+//	sqmodels "github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+//	"github.com/ColonelBlimp/station-manager/internal/types"
 //)
 //
 //// initAdapters lazily initializes reusable adapters for model<->type conversions.

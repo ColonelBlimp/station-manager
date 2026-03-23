@@ -1,8 +1,8 @@
 package sqlite
 
 import (
-	"github.com/Station-Manager/adapters/converters"
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/adapters/converters"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"time"
 )
 

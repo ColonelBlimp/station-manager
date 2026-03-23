@@ -1,9 +1,9 @@
 package adapters
 
 import (
-	"github.com/Station-Manager/adapters/converters/common"
-	sqmodels "github.com/Station-Manager/database/sqlite/models"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/adapters/converters/common"
+	sqmodels "github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"

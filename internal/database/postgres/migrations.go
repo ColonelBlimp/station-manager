@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/golang-migrate/migrate/v4/database"
 	pg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source"

@@ -1,7 +1,7 @@
 package converters
 
 import (
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"math"
 	"time"
 )

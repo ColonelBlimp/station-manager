@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Station-Manager/listeners/handlers"
+	"github.com/ColonelBlimp/station-manager/internal/listeners/handlers"
 )
 
 func init() {

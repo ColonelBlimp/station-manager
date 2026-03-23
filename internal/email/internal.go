@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
 func (s *Service) validateConfig(op errors.Op) error {

@@ -1,7 +1,7 @@
 package cat
 
 import (
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func (s *Service) lineProcessor(shutdown <-chan struct{}) {

@@ -3,8 +3,8 @@ package config
 import (
 	"fmt"
 
-	"github.com/ColonelBlimp/station-manager/pkg/errors"
-	"github.com/ColonelBlimp/station-manager/pkg/types"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // validateAppConfig performs minimal validation to avoid obviously bad configs while remaining permissive.

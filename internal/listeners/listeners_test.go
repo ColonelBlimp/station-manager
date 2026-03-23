@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/iocdi"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/iocdi"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
 	// Register packet handlers for testing
-	_ "github.com/Station-Manager/listeners/handlers/wsjtx"
+	_ "github.com/ColonelBlimp/station-manager/internal/listeners/handlers/wsjtx"
 )
 
 type TestSuite struct {

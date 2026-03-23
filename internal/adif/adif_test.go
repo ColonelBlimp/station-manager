@@ -1,7 +1,7 @@
 package adif
 
 import (
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"testing"
 )
 
