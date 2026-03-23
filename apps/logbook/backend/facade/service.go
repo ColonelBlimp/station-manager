@@ -4,13 +4,13 @@ package facade
 import (
 	"context"
 
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/database/sqlite"
-	"github.com/Station-Manager/email"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/iocdi"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/email"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/iocdi"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/go-playground/validator/v10"
 
 	"sync"

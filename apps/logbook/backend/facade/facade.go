@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Station-Manager/database/sqlite"
-	"github.com/Station-Manager/database/sqlite/meta"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/meta"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // allowedBrowserDomains is the allowlist of domains that can be opened in the browser.

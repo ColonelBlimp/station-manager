@@ -1,5 +1,6 @@
 go 1.25.0
 use (
+./apps/logbook
 ./apps/logging
 ./internal/adapters
 ./internal/adif

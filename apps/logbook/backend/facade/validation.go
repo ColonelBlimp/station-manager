@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Station-Manager/enums/bands"
-	"github.com/Station-Manager/enums/modes"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
+	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/go-playground/validator/v10"
 )
 

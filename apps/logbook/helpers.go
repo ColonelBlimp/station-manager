@@ -5,13 +5,13 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/database/sqlite"
-	"github.com/Station-Manager/email"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/iocdi"
-	"github.com/Station-Manager/logbook-app/backend/facade"
-	"github.com/Station-Manager/logging"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/email"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/iocdi"
+	"github.com/ColonelBlimp/station-manager/apps/logbook/backend/facade"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
 func initializeContainer(workingDir string) error {
