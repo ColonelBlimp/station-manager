@@ -1,4 +1,4 @@
-module github.com/Station-Manager/adif
+module github.com/ColonelBlimp/station-manager/pkg/adif
 
 go 1.25.0
 
