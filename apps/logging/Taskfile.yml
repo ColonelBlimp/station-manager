@@ -4,9 +4,9 @@ vars:
   MODULE_NAME: "Logging App"
   EXE_NAME: "smlogger"
 
-includes:
-  version: ../Taskfile.version.yml
-  production: ../Taskfile.prod.yml
+#includes:
+#  version: ../Taskfile.version.yml
+#  production: ../Taskfile.prod.yml
 
 tasks:
   default:
