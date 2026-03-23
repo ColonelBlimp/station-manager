@@ -4,6 +4,7 @@ use (
 	./pkg/adif
 	./pkg/enums
 	./pkg/errors
+	./pkg/maidenhead
 	./pkg/types
 	./pkg/utils
 )
