@@ -1,0 +1,13 @@
+@import 'tailwindcss';
+
+@layer container {
+    html {
+        @apply text-gray-900;
+    }
+    h2 {
+        @apply text-2xl font-bold my-4;
+    }
+    p {
+        @apply my-2;
+    }
+}
