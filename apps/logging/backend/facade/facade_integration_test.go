@@ -679,10 +679,10 @@ func TestLookupCallsignOnline_NotInitialized(t *testing.T) {
 func TestInitializeForwarding(t *testing.T) {
 	s := createTestService()
 	s.requiredCfgs = &types.RequiredConfigs{
-		QsoForwardingPollIntervalSeconds: 120,
-		QsoForwardingWorkerCount:         5,
-		QsoForwardingQueueSize:           100,
-		DatabaseWriteQueueSize:           100,
+		QsoForwardingPollIntervalSec: 120,
+		QsoForwardingWorkerCount:     5,
+		QsoForwardingQueueSize:       100,
+		DatabaseWriteQueueSize:       100,
 	}
 
 	err := s.initializeForwarding()
@@ -1019,10 +1019,10 @@ func TestForwardQsoWithSerializedDB_NoForwarderFound(t *testing.T) {
 func TestInitializeForwarding_SetsCorrectValues(t *testing.T) {
 	s := createTestService()
 	s.requiredCfgs = &types.RequiredConfigs{
-		QsoForwardingPollIntervalSeconds: 60,
-		QsoForwardingWorkerCount:         3,
-		QsoForwardingQueueSize:           50,
-		DatabaseWriteQueueSize:           25,
+		QsoForwardingPollIntervalSec: 60,
+		QsoForwardingWorkerCount:     3,
+		QsoForwardingQueueSize:       50,
+		DatabaseWriteQueueSize:       25,
 	}
 	s.LoggerService = &logging.Service{}
 

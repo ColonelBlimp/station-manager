@@ -217,11 +217,11 @@ func (m *MockConfigService) RequiredConfigs() (types.RequiredConfigs, error) {
 		return m.RequiredConfigsFunc()
 	}
 	return types.RequiredConfigs{
-		DefaultLogbookID:                 1,
-		QsoForwardingPollIntervalSeconds: 120,
-		QsoForwardingWorkerCount:         5,
-		QsoForwardingQueueSize:           100,
-		DatabaseWriteQueueSize:           100,
+		DefaultLogbookID:             1,
+		QsoForwardingPollIntervalSec: 120,
+		QsoForwardingWorkerCount:     5,
+		QsoForwardingQueueSize:       100,
+		DatabaseWriteQueueSize:       100,
 	}, nil
 }
 
