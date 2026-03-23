@@ -1,0 +1,11 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=Station-Manager Log Book
+GenericName=QSO Log Book
+Comment=A modern free Amateur Radio QSO log book application for Linux.
+Exec=smlogger %u
+Terminal=false
+Type=Application
+Icon=smbook.png
+Categories=Utility;
+StartupWMClass=SMLogbook
