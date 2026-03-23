@@ -44,7 +44,7 @@ func (s *Service) FetchUiConfig() (*types.UiConfig, error) {
 		return nil, err
 	}
 
-	loggingStation, err := s.ConfigService.LoggingStationConfigs()
+	loggingStation, err := s.ConfigService.LoggingStationConfig()
 	if err != nil {
 		err = errors.New(op).Err(err)
 		s.LoggerService.ErrorWith().Err(err).Msg("Failed to fetch logging station configs.")

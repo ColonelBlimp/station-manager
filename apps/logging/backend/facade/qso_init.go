@@ -70,7 +70,7 @@ func (s *Service) initializeQso(callsign string) (*types.Qso, error) {
 func (s *Service) initLoggingStationSection() (types.LoggingStation, error) {
 	const op errors.Op = "facade.Service.initLoggingStationSection"
 
-	loggingStation, err := s.ConfigService.LoggingStationConfigs()
+	loggingStation, err := s.ConfigService.LoggingStationConfig()
 	if err != nil {
 		return types.LoggingStation{}, errors.New(op).Err(err)
 	}
