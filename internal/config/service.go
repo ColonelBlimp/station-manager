@@ -235,7 +235,7 @@ func (s *Service) EmailConfig() (types.EmailConfig, error) {
 	if !s.isInitialized.Load() {
 		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.EmailConfigs, nil
+	return s.AppConfig.EmailConfig, nil
 }
 
 // OptionalConfigs retrieves optional configuration settings from the service if it has been properly initialized.

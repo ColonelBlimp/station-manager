@@ -43,8 +43,8 @@ func validateAppConfig(cfg *types.AppConfig) error {
 // applyForwardingDefaults sets sensible defaults for forwarding configuration values
 // that would cause panics or misbehavior if left at zero.
 func applyForwardingDefaults(cfg *types.RequiredConfigs) {
-	if cfg.QsoForwardingPollIntervalSeconds <= 0 {
-		cfg.QsoForwardingPollIntervalSeconds = defaultRequiredConfigs.QsoForwardingPollIntervalSeconds
+	if cfg.QsoForwardingPollIntervalSec <= 0 {
+		cfg.QsoForwardingPollIntervalSec = defaultRequiredConfigs.QsoForwardingPollIntervalSec
 	}
 	if cfg.QsoForwardingWorkerCount <= 0 {
 		cfg.QsoForwardingWorkerCount = defaultRequiredConfigs.QsoForwardingWorkerCount

@@ -55,7 +55,7 @@ var defaultDesktopConfig = types.AppConfig{
 	RigConfigs:           defaultRigConfigs,
 	LookupServiceConfigs: defaultLookupServiceConfigs,
 	LoggingStation:       defaultLoggingStationDetails,
-	EmailConfigs:         defaultEmailConfigs,
+	EmailConfig:          defaultEmailConfig,
 	ForwardingConfigs:    defaultForwardingConfigs,
 	OptionalConfigs:      defaultOptionalConfigs,
 	ListenerConfigs:      defaultListenerConfigs,
@@ -102,13 +102,13 @@ var defaultRequiredConfigs = types.RequiredConfigs{
 	/*
 		General configs to do with forwarding QSOs to online services.
 	*/
-	QsoForwardingPollIntervalSeconds: 120, // Poll every 120 seconds
-	QsoForwardingWorkerCount:         5,
-	QsoForwardingQueueSize:           20,
-	QsoForwardingRowLimit:            5,
-	DatabaseWriteQueueSize:           100,
+	QsoForwardingPollIntervalSec: 120, // Poll every 120 seconds
+	QsoForwardingWorkerCount:     5,
+	QsoForwardingQueueSize:       20,
+	QsoForwardingRowLimit:        5,
+	DatabaseWriteQueueSize:       100,
 
-	PagingationPageSize: 24,
+	PaginationPageSize: 24,
 }
 
 var defaultLookupServiceConfigs = []types.LookupConfig{
@@ -156,7 +156,7 @@ var defaultLoggingStationDetails = types.LoggingStation{
 	StationCallsign: "",
 }
 
-var defaultEmailConfigs = types.EmailConfig{
+var defaultEmailConfig = types.EmailConfig{
 	Name:               types.EmailServiceName,
 	Enabled:            false,
 	Username:           "?",

@@ -43,7 +43,7 @@ func (s *Service) FetchUiConfig() (types.UiConfig, error) {
 
 	retVal := types.UiConfig{
 		Logbook:            s.currentLogbook,
-		PaginationPageSize: requiredCfg.PagingationPageSize,
+		PaginationPageSize: requiredCfg.PaginationPageSize,
 		DefaultFwdEmail:    requiredCfg.DefaultFwdEmail,
 	}
 

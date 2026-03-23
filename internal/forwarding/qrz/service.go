@@ -77,7 +77,7 @@ func (s *Service) Initialize() error {
 		s.Config = &cfg
 
 		if s.Config.Enabled {
-			s.client = utils.NewHTTPClient(s.Config.HttpTimeoutSec * time.Second)
+			s.client = utils.NewHTTPClient(time.Duration(s.Config.HttpTimeoutSec) * time.Second)
 		} else {
 			s.LoggerService.InfoWith().Msg("QRZ.com QSO forwarding is disabled in the config")
 		}

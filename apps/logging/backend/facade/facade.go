@@ -69,7 +69,7 @@ func (s *Service) FetchUiConfig() (*types.UiConfig, error) {
 		DefaultFreq:        requiredCfg.DefaultFreq,
 		DefaultMode:        requiredCfg.DefaultMode,
 		DefaultFwdEmail:    requiredCfg.DefaultFwdEmail,
-		OwnersCallsign:     strings.ToUpper(loggingStation.OwnerCallsign),
+		OwnerCallsign:      strings.ToUpper(loggingStation.OwnerCallsign),
 		QrzViewUrl:         optionalCfg.QrzViewUrl,
 	}, nil
 }

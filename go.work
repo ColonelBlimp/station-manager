@@ -1,24 +1,25 @@
 go 1.25.0
+
 use (
-./apps/config
-./apps/logbook
-./apps/logging
-./internal/adapters
-./internal/adif
-./internal/apikey
-./internal/cat
-./internal/config
-./internal/database
-./internal/email
-./internal/enums
-./internal/errors
-./internal/forwarding
-./internal/iocdi
-./internal/listeners
-./internal/logging
-./internal/lookup
-./internal/maidenhead
-./internal/serial
-./internal/types
-./internal/utils
+	./apps/config
+	./apps/logbook
+	./apps/logging
+	./internal/adapters
+	./internal/adif
+	./internal/apikey
+	./internal/cat
+	./internal/config
+	./internal/database
+	./internal/email
+	./internal/enums
+	./internal/errors
+	./internal/forwarding
+	./internal/iocdi
+	./internal/listeners
+	./internal/logging
+	./internal/lookup
+	./internal/maidenhead
+	./internal/serial
+	./internal/types
+	./internal/utils
 )
