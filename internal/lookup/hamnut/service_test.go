@@ -215,7 +215,10 @@ func TestIsNetworkError_NonNetwork(t *testing.T) {
 }
 
 func TestIsNetworkError_Network(t *testing.T) {
-	_, err := net.Dial("tcp", "192.0.2.1:65535")
+	// Use a short dial timeout to avoid blocking on the kernel TCP timeout
+	// when connecting to an unroutable TEST-NET address.
+	d := net.Dialer{Timeout: 500 * time.Millisecond}
+	_, err := d.Dial("tcp", "192.0.2.1:65535")
 	if err == nil {
 		t.Skip("unexpectedly connected; cannot test network error")
 	}
