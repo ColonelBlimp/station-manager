@@ -101,7 +101,6 @@ type ContactedStationAdditionalData struct {
 	Lat          string `json:"lat,omitempty"`
 	Lon          string `json:"lon,omitempty"`
 	QTH          string `json:"qth,omitempty"`
-	Rig          string `json:"rig,omitempty"`
 	Sig          string `json:"sig,omitempty"`
 	SigInfo      string `json:"sig_info,omitempty"`
 	Web          string `json:"web,omitempty"`

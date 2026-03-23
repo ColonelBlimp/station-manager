@@ -1,7 +1,5 @@
 package types
 
-import "time"
-
 type RequiredConfigs struct {
 	SetupComplete      bool   `json:"setup_complete"`
 	DefaultLogbookID   int64  `json:"default_logbook_id"`
@@ -17,8 +15,8 @@ type RequiredConfigs struct {
 
 	// QsoForwardingIntervalSeconds determines the interval at which QSO forwarding occurs, defined as a duration in
 	// seconds. The forwarding process checks for queued QSOs at the interval defined by this setting.
-	QsoForwardingPollIntervalSeconds time.Duration `json:"qso_forwarding_poll_interval_seconds"`
-	QsoForwardingWorkerCount         int           `json:"qso_forwarding_worker_count"`
+	QsoForwardingPollIntervalSec int `json:"qso_forwarding_poll_interval_sec"`
+	QsoForwardingWorkerCount     int `json:"qso_forwarding_worker_count"`
 
 	// QsoForwardingQueueSize defines the maximum number of QSOs that can be stored in the forwarding queue awaiting processing.
 	QsoForwardingQueueSize int `json:"qso_forwarding_queue_size"`
@@ -30,5 +28,5 @@ type RequiredConfigs struct {
 	// and busy signal.
 	DatabaseWriteQueueSize int `json:"database_write_queue_size"`
 
-	PagingationPageSize int `json:"pagingation_page_size"`
+	PaginationPageSize int `json:"pagination_page_size"`
 }

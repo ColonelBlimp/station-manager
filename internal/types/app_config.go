@@ -8,7 +8,7 @@ type AppConfig struct {
 	RigConfigs           []RigConfig       `json:"rig_configs,omitempty"`
 	LookupServiceConfigs []LookupConfig    `json:"lookup_service_configs,omitempty"`
 	ForwardingConfigs    []ForwarderConfig `json:"forwarding_configs,omitempty"`
-	EmailConfigs         EmailConfig       `json:"email_configs,omitempty"`
+	EmailConfig          EmailConfig       `json:"email_config"`
 	LoggingStation       LoggingStation    `json:"logging_station"`
 	OptionalConfigs      OptionalConfigs   `json:"optional_configs"`
 	ListenerConfigs      []ListenerConfig  `json:"listener_configs,omitempty"`
@@ -21,8 +21,8 @@ type UiConfig struct {
 	// DefaultFreq is in khz. This is used when the CAT system is unavailable.
 	DefaultFreq string `json:"default_freq"`
 	// DefaultMode is the CAT mode when the CAT system is unavailable.
-	DefaultMode        string `json:"default_mode"`
-	OwnersCallsign     string `json:"owners_callsign"`
+	DefaultMode string `json:"default_mode"`
+
 	DefaultIsRandomQso bool   `json:"default_is_random_qso"`
 	UsePowerMultiplier bool   `json:"use_power_multiplier"`
 	PowerMultiplier    int    `json:"power_multiplier"`
