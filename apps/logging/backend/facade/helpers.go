@@ -3,8 +3,8 @@ package facade
 import (
 	"unicode"
 
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func mergeCountryIntoContactedStation(station *types.ContactedStation, country types.Country) error {

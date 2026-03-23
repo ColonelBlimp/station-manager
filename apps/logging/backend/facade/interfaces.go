@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // DatabaseServiceInterface defines the interface for database operations used by the facade.

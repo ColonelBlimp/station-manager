@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestForwardingStart(t *testing.T) {

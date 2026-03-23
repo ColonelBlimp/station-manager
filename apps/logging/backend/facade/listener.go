@@ -3,8 +3,8 @@ package facade
 import (
 	"sync"
 
-	"github.com/Station-Manager/enums/events"
-	"github.com/Station-Manager/errors"
+	"github.com/ColonelBlimp/station-manager/internal/enums/events"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

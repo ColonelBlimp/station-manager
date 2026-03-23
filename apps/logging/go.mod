@@ -1,30 +1,30 @@
-module github.com/Station-Manager/logging-app
+module github.com/ColonelBlimp/station-manager/apps/logging
 
 go 1.25.0
 
 require (
-	github.com/Station-Manager/adif v0.0.8
-	github.com/Station-Manager/cat v0.0.10
-	github.com/Station-Manager/config v0.0.51
-	github.com/Station-Manager/database v0.0.62
-	github.com/Station-Manager/email v0.0.8
-	github.com/Station-Manager/enums v0.0.8
-	github.com/Station-Manager/errors v0.0.11
-	github.com/Station-Manager/forwarding v0.0.13
-	github.com/Station-Manager/iocdi v0.0.1
-	github.com/Station-Manager/listeners v0.0.0-20260322084429-212dbe2ad6d3
-	github.com/Station-Manager/logging v0.0.13
-	github.com/Station-Manager/lookup v0.0.16
-	github.com/Station-Manager/maidenhead v0.0.1
-	github.com/Station-Manager/types v0.0.88
-	github.com/Station-Manager/utils v0.0.6
+	github.com/ColonelBlimp/station-manager/internal/adif v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/cat v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/config v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/database v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/email v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/enums v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/errors v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/forwarding v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/iocdi v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/listeners v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/logging v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/lookup v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/maidenhead v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/types v0.0.0
+	github.com/ColonelBlimp/station-manager/internal/utils v0.0.0
 	github.com/aarondl/sqlboiler/v4 v4.19.7
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/wailsapp/wails/v2 v2.11.0
 )
 
 require (
-	github.com/Station-Manager/serial v0.0.7 // indirect
+	github.com/ColonelBlimp/station-manager/internal/serial v0.0.0 // indirect
 	github.com/aarondl/inflect v0.0.2 // indirect
 	github.com/aarondl/null/v8 v8.1.3 // indirect
 	github.com/aarondl/randomize v0.0.2 // indirect
@@ -82,3 +82,39 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.47.0 // indirect
 )
+
+replace github.com/ColonelBlimp/station-manager/internal/adapters => ../../internal/adapters
+
+replace github.com/ColonelBlimp/station-manager/internal/adif => ../../internal/adif
+
+replace github.com/ColonelBlimp/station-manager/internal/apikey => ../../internal/apikey
+
+replace github.com/ColonelBlimp/station-manager/internal/cat => ../../internal/cat
+
+replace github.com/ColonelBlimp/station-manager/internal/config => ../../internal/config
+
+replace github.com/ColonelBlimp/station-manager/internal/database => ../../internal/database
+
+replace github.com/ColonelBlimp/station-manager/internal/email => ../../internal/email
+
+replace github.com/ColonelBlimp/station-manager/internal/enums => ../../internal/enums
+
+replace github.com/ColonelBlimp/station-manager/internal/errors => ../../internal/errors
+
+replace github.com/ColonelBlimp/station-manager/internal/forwarding => ../../internal/forwarding
+
+replace github.com/ColonelBlimp/station-manager/internal/iocdi => ../../internal/iocdi
+
+replace github.com/ColonelBlimp/station-manager/internal/listeners => ../../internal/listeners
+
+replace github.com/ColonelBlimp/station-manager/internal/logging => ../../internal/logging
+
+replace github.com/ColonelBlimp/station-manager/internal/lookup => ../../internal/lookup
+
+replace github.com/ColonelBlimp/station-manager/internal/maidenhead => ../../internal/maidenhead
+
+replace github.com/ColonelBlimp/station-manager/internal/serial => ../../internal/serial
+
+replace github.com/ColonelBlimp/station-manager/internal/types => ../../internal/types
+
+replace github.com/ColonelBlimp/station-manager/internal/utils => ../../internal/utils

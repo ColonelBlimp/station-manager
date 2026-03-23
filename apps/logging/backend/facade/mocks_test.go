@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // MockDatabaseService is a mock implementation of DatabaseServiceInterface for testing.

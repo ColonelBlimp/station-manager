@@ -4,10 +4,10 @@ import (
 	"context"
 	stderr "errors"
 
-	"github.com/Station-Manager/database/sqlite/adapters"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/aarondl/sqlboiler/v4/boil"
 )
 

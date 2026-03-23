@@ -3,9 +3,9 @@ package facade
 import (
 	stderr "errors"
 
-	"github.com/Station-Manager/adif"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // initializeQso initializes a QSO object by populating its sections such as logging station, contacted station, and country details.

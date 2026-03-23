@@ -7,9 +7,9 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/iocdi"
-	"github.com/Station-Manager/utils"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/iocdi"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 )

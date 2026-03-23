@@ -1,6 +1,6 @@
 package facade
 
-import "github.com/Station-Manager/errors"
+import "github.com/ColonelBlimp/station-manager/internal/errors"
 
 // IsContestDuplicate checks if a contest entry with the given callsign and band already exists in the current logbook.
 func (s *Service) IsContestDuplicate(callsign, band string) (bool, error) {

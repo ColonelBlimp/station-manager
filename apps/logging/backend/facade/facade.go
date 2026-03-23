@@ -5,12 +5,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Station-Manager/enums/cmds"
-	"github.com/Station-Manager/enums/upload"
-	"github.com/Station-Manager/enums/upload/action"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/maidenhead"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/enums/cmds"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/maidenhead"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

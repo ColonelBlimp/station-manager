@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Station-Manager/enums/upload/action"
-	"github.com/Station-Manager/enums/upload/status"
-	"github.com/Station-Manager/errors"
-	"github.com/Station-Manager/maidenhead"
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/maidenhead"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // launchWorkerThread starts a new goroutine for the given worker function and manages its lifecycle using a wait group.

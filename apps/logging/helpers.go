@@ -3,21 +3,21 @@ package main
 import (
 	"reflect"
 
-	"github.com/Station-Manager/cat"
-	"github.com/Station-Manager/config"
-	"github.com/Station-Manager/database/sqlite"
-	"github.com/Station-Manager/email"
-	"github.com/Station-Manager/errors"
-	fwdrqrz "github.com/Station-Manager/forwarding/qrz"
-	"github.com/Station-Manager/iocdi"
-	"github.com/Station-Manager/listeners"
-	"github.com/Station-Manager/logging"
-	"github.com/Station-Manager/logging-app/backend/facade"
-	"github.com/Station-Manager/lookup/hamnut"
-	"github.com/Station-Manager/lookup/qrz"
+	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/email"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	fwdrqrz "github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"
+	"github.com/ColonelBlimp/station-manager/internal/iocdi"
+	"github.com/ColonelBlimp/station-manager/internal/listeners"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/apps/logging/backend/facade"
+	"github.com/ColonelBlimp/station-manager/internal/lookup/hamnut"
+	"github.com/ColonelBlimp/station-manager/internal/lookup/qrz"
 
 	// Register packet handlers
-	_ "github.com/Station-Manager/listeners/handlers/wsjtx"
+	_ "github.com/ColonelBlimp/station-manager/internal/listeners/handlers/wsjtx"
 )
 
 // initializeContainer initializes the dependency injection container with required services and configurations.

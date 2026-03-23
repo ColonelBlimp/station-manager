@@ -3,7 +3,7 @@ package facade
 import (
 	"testing"
 
-	"github.com/Station-Manager/types"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestInitQsoDetailsSection(t *testing.T) {
