@@ -89,7 +89,7 @@ func SanitizeDateToYYYYMMDD(s string) string {
 		return s
 	}
 	// Replace common separators '-' and '/' with nothing if pattern matches YYYY[-|/]MM[-|/]DD
-	re := regexp.MustCompile(`^(\d{4})[-\/]?(\d{2})[-\/]?(\d{2})$`)
+	re := regexp.MustCompile(`^(\d{4})[-/]?(\d{2})[-/]?(\d{2})$`)
 	matches := re.FindStringSubmatch(s)
 	if len(matches) == 4 {
 		candidate := matches[1] + matches[2] + matches[3]
