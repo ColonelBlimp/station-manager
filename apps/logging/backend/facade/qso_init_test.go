@@ -283,9 +283,6 @@ func TestInitializeQsoStructure(t *testing.T) {
 
 	// Initialize empty contact history slice (similar to what the code does)
 	history := make([]types.ContactHistory, 0)
-	if history == nil {
-		t.Error("Contact history should not be nil")
-	}
 	if len(history) != 0 {
 		t.Error("Contact history should be empty initially")
 	}

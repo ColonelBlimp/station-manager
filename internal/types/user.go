@@ -6,6 +6,6 @@ type User struct {
 	PassHash       string `json:"pass_hash" validate:"required"`
 	Issuer         string `json:"issuer,omitempty"`
 	Subject        string `json:"subject,omitempty"`
-	Email          string `json:"email,required"`
+	Email          string `json:"email" validate:"required,email"`
 	EmailConfirmed bool   `json:"email_confirmed"`
 }

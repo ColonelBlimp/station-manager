@@ -226,12 +226,6 @@ func (h *Handler) infof(format string, args ...any) {
 	}
 }
 
-func (h *Handler) errorf(format string, args ...any) {
-	if h.logError != nil {
-		h.logError(format, args...)
-	}
-}
-
 func msgTypeName(msgType uint32) string {
 	names := map[uint32]string{
 		MsgHeartbeat:     "Heartbeat",

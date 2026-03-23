@@ -38,6 +38,7 @@ func TestInitFailureInvalidRigID(t *testing.T) {
 	}
 	err := cfgService.Initialize()
 	require.NoError(t, err)
+	cfgService.AppConfig.RequiredConfigs.DefaultRigID = 0
 
 	service := &Service{
 		ConfigService: cfgService,
@@ -45,8 +46,8 @@ func TestInitFailureInvalidRigID(t *testing.T) {
 	}
 
 	err = service.Initialize()
-	//require.Error(t, err)
-	//require.Contains(t, err.Error(), errMsgInvalidRigID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errMsgInvalidRigID)
 }
 
 // helper to build a minimal, valid ConfigService for tests.

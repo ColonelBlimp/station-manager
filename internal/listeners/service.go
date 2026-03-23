@@ -515,7 +515,6 @@ func (s *Service) resolveAddresses(op errors.Op, configs []types.ListenerConfig)
 }
 
 func (s *Service) Stop() error {
-	const op errors.Op = "listeners.Service.Stop"
 
 	// Phase 1: Acquire lock, validate state, initiate shutdown
 	s.mu.Lock()

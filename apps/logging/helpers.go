@@ -3,6 +3,7 @@ package main
 import (
 	"reflect"
 
+	"github.com/ColonelBlimp/station-manager/apps/logging/backend/facade"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -12,7 +13,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/listeners"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
-	"github.com/ColonelBlimp/station-manager/apps/logging/backend/facade"
 	"github.com/ColonelBlimp/station-manager/internal/lookup/hamnut"
 	"github.com/ColonelBlimp/station-manager/internal/lookup/qrz"
 

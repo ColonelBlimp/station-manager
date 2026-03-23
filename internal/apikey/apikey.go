@@ -145,9 +145,7 @@ func encodeUserFriendly(b []byte) string {
 	}
 	secret := sb.String()
 	// trim trailing dash if we ended exactly on a group boundary
-	if strings.HasSuffix(secret, "-") {
-		secret = secret[:len(secret)-1]
-	}
+	secret = strings.TrimSuffix(secret, "-")
 	return secret
 }
 
@@ -185,10 +183,7 @@ func isValidSecret(s string) bool {
 			return false
 		}
 	}
-	if plainCount != SecretSymbolLen {
-		return false
-	}
-	return true
+	return plainCount == SecretSymbolLen
 }
 
 // internal helper to assert that strings we generate are valid UTF-8 and contain no NUL

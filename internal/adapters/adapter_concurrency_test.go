@@ -31,14 +31,6 @@ type dstRecord struct {
 	AdditionalData null.JSON
 }
 
-// upper converts a string to upper case (simple demo converter)
-func upper(src any) (any, error) {
-	if s, ok := src.(string); ok {
-		return string([]byte(s)), nil // avoid allocations; placeholder
-	}
-	return src, nil
-}
-
 // actualUpper uses standard library for correctness
 func actualUpper(s string) string {
 	b := []byte(s)

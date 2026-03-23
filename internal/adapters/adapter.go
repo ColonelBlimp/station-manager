@@ -2,11 +2,12 @@ package adapters
 
 import (
 	"fmt"
-	"github.com/goccy/go-json"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/goccy/go-json"
 
 	"github.com/aarondl/null/v8"
 	boilertypes "github.com/aarondl/sqlboiler/v4/types"
@@ -739,8 +740,6 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 				dstField.Set(srcField)
 			} else if srcType.ConvertibleTo(dstType) {
 				dstField.Set(srcField.Convert(dstType))
-			} else {
-				// skip incompatible types (match previous behavior)
 			}
 		}
 		// Validator
@@ -986,7 +985,7 @@ func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal
 		remaining[sf.name] = srcField.Interface()
 	}
 	t := dstAdditionalData.Type()
-	if remaining == nil || len(remaining) == 0 {
+	if len(remaining) == 0 {
 		// set zero values without allocating/marshaling
 		if t == reflect.TypeOf(null.JSON{}) {
 			dstAdditionalData.Set(reflect.ValueOf(null.JSON{}))

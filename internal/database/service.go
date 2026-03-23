@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	stderr "errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/ColonelBlimp/station-manager/internal/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -12,9 +16,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 type Service struct {
@@ -29,7 +30,6 @@ type Service struct {
 
 	adapterToModel   *adapters.Adapter
 	adapterFromModel *adapters.Adapter
-	adaptersOnce     sync.Once
 }
 
 // Initialize initializes the database service. No constructor is provided as this service is to be

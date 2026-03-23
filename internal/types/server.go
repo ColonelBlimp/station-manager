@@ -1,23 +1,11 @@
 package types
 
-type RequestAction string
-
-func (s RequestAction) String() string {
-	return string(s)
-}
-
-const (
-	// RegisterLogbookAction registers a new logbook with the server.
-	RegisterLogbookAction RequestAction = "register_logbook"
-	InsertQsoAction                     = "insert_qso"
-)
-
 type PostRequest struct {
 	Callsign string `json:"callsign"` // The callsign associated with the user account *NOT THE LOGBOOK CALLSIGN*. The logbook callsign is associated with Key.
 	Key      string `json:"key"`      // Logbook's API Key, or if registering, the Bootstrap Key
-	// For RegisterLogbookAction, a Logbook must be provided.
+	// For the "register_logbook" action, a Logbook must be provided.
 	Logbook *Logbook `json:"logbook,omitempty"`
-	// For InsertQsoAction, Qso must be provided.
+	// For the "insert_qso" action, Qso must be provided.
 	Qso *Qso `json:"qso,omitempty"`
 }
 

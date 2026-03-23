@@ -213,7 +213,8 @@ func TestService_Start_NotInitialized(t *testing.T) {
 func TestService_Start_NilContext(t *testing.T) {
 	s := createInitializedTestService()
 
-	err := s.Start(nil)
+	var ctx context.Context
+	err := s.Start(ctx)
 	if err == nil {
 		t.Error("Start() should fail with nil context")
 	}

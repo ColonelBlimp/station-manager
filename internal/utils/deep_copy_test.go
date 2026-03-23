@@ -1,9 +1,6 @@
 package utils
 
-import (
-	"errors"
-	"testing"
-)
+import "testing"
 
 type person struct {
 	Name string
@@ -32,9 +29,5 @@ func TestDeepCopy_ErrorOnUnmarshal(t *testing.T) {
 	err := DeepCopy(person{Name: "x"}, &out)
 	if err == nil {
 		t.Fatal("expected error for unsupported type")
-	}
-	// ensure wrapping with %w possible
-	if !errors.Is(err, err) { // trivial check to exercise errors.Is call site
-		// no-op, just ensure err is error
 	}
 }

@@ -10,17 +10,18 @@ const (
 var readBufPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, defaultBufSize)
-		return b
+		return &b
 	},
 }
 
 func getReadBuf() []byte {
-	return readBufPool.Get().([]byte)
+	return *(readBufPool.Get().(*[]byte))
 }
 
 func putReadBuf(b []byte) {
 	if cap(b) != defaultBufSize {
 		return
 	}
-	readBufPool.Put(b[:defaultBufSize])
+	b = b[:defaultBufSize]
+	readBufPool.Put(&b)
 }

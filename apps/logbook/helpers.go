@@ -5,12 +5,12 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/apps/logbook/backend/facade"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
-	"github.com/ColonelBlimp/station-manager/apps/logbook/backend/facade"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 

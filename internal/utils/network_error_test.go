@@ -42,17 +42,10 @@ func TestIsNetworkError(t *testing.T) {
 		}
 	})
 
-	t.Run("returns true for temporary net.Error", func(t *testing.T) {
-		netErr := &mockNetError{temporary: true, msg: "temporary error"}
-		if !IsNetworkError(netErr) {
-			t.Error("expected true for temporary net.Error")
-		}
-	})
-
-	t.Run("returns false for non-timeout/non-temporary net.Error", func(t *testing.T) {
+	t.Run("returns false for non-timeout net.Error", func(t *testing.T) {
 		netErr := &mockNetError{timeout: false, temporary: false, msg: "other error"}
 		if IsNetworkError(netErr) {
-			t.Error("expected false for non-timeout/non-temporary net.Error")
+			t.Error("expected false for non-timeout net.Error")
 		}
 	})
 
@@ -258,7 +251,7 @@ func TestIsNetworkError(t *testing.T) {
 		// Attempt to connect to a port that's likely closed
 		conn, dialErr := net.DialTimeout("tcp", "localhost:1", 10*time.Millisecond)
 		if dialErr == nil {
-			conn.Close()
+			_ = conn.Close()
 			t.Skip("localhost:1 is open, skipping test")
 		}
 

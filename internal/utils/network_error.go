@@ -16,10 +16,10 @@ func IsNetworkError(err error) bool {
 		return false
 	}
 
-	// Check for net.Error interface (timeout/temporary)
+	// Check for net.Error timeouts.
 	var ne net.Error
 	if errors.As(err, &ne) {
-		if ne.Timeout() || ne.Temporary() {
+		if ne.Timeout() {
 			return true
 		}
 	}

@@ -1,18 +1,6 @@
 package qrz
 
-import (
-	"database/sql"
-	"testing"
-)
-
-// dummyDB implements database.Database for testing pointer-to-interface injection
-type dummyDB struct{}
-
-func (d *dummyDB) Open() error                        { return nil }
-func (d *dummyDB) IsOpen() bool                       { return false }
-func (d *dummyDB) Close() error                       { return nil }
-func (d *dummyDB) Conn() *sql.DB                      { return nil }
-func (d *dummyDB) BeginTransaction() (*sql.Tx, error) { return nil, nil }
+import "testing"
 
 func TestInitialise_WithInjectedServices_EmptyNameError(t *testing.T) {
 	//	// Build a non-nil pointer to interface value for DatabaseService

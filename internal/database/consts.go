@@ -1,7 +1,5 @@
 package database
 
-import "github.com/ColonelBlimp/station-manager/internal/types"
-
 const (
 	errMsgNotInitialized = "Database service is not initialized."
 	errMsgNilService     = "Database service is nil."
@@ -20,11 +18,6 @@ const (
 )
 
 const (
-	errMsgInvalidId = "Invalid ID"
-)
-
-const (
-	ServiceName    = types.DatabaseServiceName
 	PostgresDriver = "postgres"
 	SqliteDriver   = "sqlite"
 	emptyString    = ""
