@@ -1,2 +1,6 @@
 .env
 internal/logging/config.json
+!build/bin/.gitkeep
+!build/db/.gitkeep
+!build/logs/.gitkeep
+build/*

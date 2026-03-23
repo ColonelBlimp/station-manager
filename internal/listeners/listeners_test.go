@@ -3,8 +3,6 @@ package listeners
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -37,12 +35,7 @@ func (suite *TestSuite) SetupTest() {
 	err = container.Register(ServiceName, reflect.TypeOf(&Service{}))
 	assert.NoError(suite.T(), err)
 
-	path, err := filepath.Abs(filepath.Join("..", "build"))
-	assert.NoError(suite.T(), err)
-
-	err = os.Setenv(utils.EnvSmWorkingDir, path)
-	assert.NoError(suite.T(), err)
-
+	// The working directory is set in the Taskfile through an environment variable
 	workDir, err := utils.WorkingDir()
 	assert.NoError(suite.T(), err)
 
