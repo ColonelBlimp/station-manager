@@ -42,6 +42,11 @@ func TestSetStructStringField_Errors(t *testing.T) {
 	if err := SetStructStringField(bp, "X", "x"); err == nil {
 		t.Fatal("expected error for non-string field")
 	}
+	// nil pointer
+	var nilPtr *sample
+	if err := SetStructStringField(nilPtr, "Name", "x"); err == nil {
+		t.Fatal("expected error for nil pointer input")
+	}
 	// cannot set unexported not applicable here; ensure proper error messages contain key phrases
 	err := SetStructStringField(&sample{}, "Name", "ok")
 	if err != nil {

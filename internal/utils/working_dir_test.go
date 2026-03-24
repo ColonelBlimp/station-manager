@@ -31,3 +31,15 @@ func TestWorkingDir_ErrorForMissing(t *testing.T) {
 		t.Fatal("expected error for non-existing working directory")
 	}
 }
+
+func TestWorkingDir_Default(t *testing.T) {
+	// Ensure no env var is set so the fallback uses the executable directory.
+	os.Unsetenv(EnvSmWorkingDir)
+	got, err := WorkingDir()
+	if err != nil {
+		t.Fatalf("WorkingDir() default = error: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("WorkingDir() default = %q; expected absolute path", got)
+	}
+}
