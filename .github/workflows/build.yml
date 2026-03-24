@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build Go Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build non-Wails apps
+        run: |
+          set -eo pipefail
+          mkdir -p build/bin
+          while IFS= read -r mod; do
+            # Skip Wails apps for now: they need a frontend build first
+            if [ -f "$mod/wails.json" ]; then
+              echo "==> SKIP (Wails app) ./$mod"
+              continue
+            fi
+            # Only build modules that contain a main package
+            if ! grep -rq '^package main' "$mod"/*.go 2>/dev/null; then
+              echo "==> SKIP (library) ./$mod"
+              continue
+            fi
+            BINNAME=$(basename "$mod")
+            echo "==> Building ./$mod -> build/bin/${BINNAME}"
+            (cd "$mod" && go build -o "../../build/bin/${BINNAME}" .)
+          done < <(find apps cmd -name go.mod -printf '%h\n' | sort)
+
+      - name: Verify binaries
+        run: |
+          echo "Built artifacts:"
+          ls -lh build/bin/
+          file build/bin/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: station-manager-linux-amd64
+          path: build/bin/*
+          retention-days: 14
