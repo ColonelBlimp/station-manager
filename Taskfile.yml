@@ -2,6 +2,10 @@ version: '3'
 
 dotenv: ['.env']
 
+includes:
+  wails:
+    taskfile: ./Taskfile.wails.yml
+
 tasks:
   default:
     desc: "Sync Go workspace"

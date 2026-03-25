@@ -1,0 +1,71 @@
+# Taskfile.wails.yml — Wails application builds
+# Included from root Taskfile.yml as namespace "wails".
+# Usage: task wails:logging
+#
+# Add more apps one-by-one following the logging pattern.
+
+version: '3'
+
+vars:
+  BUILD_DIR: '{{.ROOT_DIR}}/build/bin'
+
+tasks:
+  default:
+    desc: "Build all Wails apps"
+    cmds:
+      - task: logging
+
+  # ── shared-utils (must be built before any frontend) ──────────
+  shared-utils:
+    desc: "Build web/shared-utils"
+    dir: web/shared-utils
+    cmds:
+      - npm ci
+      - npm run build
+    sources:
+      - package.json
+      - package-lock.json
+      - src/**/*
+      - tsconfig.json
+    generates:
+      - dist/**/*
+
+  # ── apps/logging ──────────────────────────────────────────────
+  logging:
+    desc: "Build the Logging Wails app (frontend + binary)"
+    cmds:
+      - task: shared-utils
+      - task: logging:frontend
+      - task: logging:binary
+
+  logging:frontend:
+    desc: "Install deps and build the Logging frontend"
+    dir: apps/logging/frontend
+    cmds:
+      - npm ci
+      - npm run build
+    sources:
+      - package.json
+      - package-lock.json
+      - src/**/*
+      - svelte.config.js
+      - vite.config.ts
+      - tsconfig.json
+    generates:
+      - build/**/*
+
+  logging:binary:
+    desc: "Build the Logging Go binary (frontend must be built first)"
+    dir: apps/logging
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/smlogger .
+    sources:
+      - "*.go"
+      - backend/**/*.go
+      - go.mod
+      - go.sum
+      - frontend/build/**/*
+    generates:
+      - '{{.BUILD_DIR}}/smlogger'
+

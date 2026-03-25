@@ -45,6 +45,6 @@
     },
     "dependencies": {
         "vitest": "^4.0.14",
-        "@station-manager/shared-utils": "file:../../shared-utils"
+        "@station-manager/shared-utils": "file:../../../web/shared-utils"
     }
 }
