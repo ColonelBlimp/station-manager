@@ -14,10 +14,11 @@ require (
 	github.com/ColonelBlimp/station-manager/internal/utils v0.0.0
 	github.com/aarondl/sqlboiler/v4 v4.19.7
 	github.com/go-playground/validator/v10 v10.30.1
-	github.com/wailsapp/wails/v2 v2.11.0
+	github.com/wailsapp/wails/v2 v2.12.0
 )
 
 require (
+	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/ColonelBlimp/station-manager/internal/adif v0.0.0 // indirect
 	github.com/aarondl/inflect v0.0.2 // indirect
 	github.com/aarondl/null/v8 v8.1.3 // indirect

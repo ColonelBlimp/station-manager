@@ -2,9 +2,9 @@ version: '3'
 
 dotenv: ['.env']
 
-includes:
-  wails:
-    taskfile: ./Taskfile.wails.yml
+#includes:
+#  wails:
+#    taskfile: ./Taskfile.wails.yml
 
 tasks:
   default:
@@ -31,6 +31,17 @@ tasks:
           if [ -f "${mod}/go.mod" ]; then
             echo "Testing ${mod}..."
             (cd "$mod" && go test -race ./... -short)
+          fi
+        done
+
+  update:
+    desc: "Update dependencies for all modules"
+    cmds:
+      - |
+        for mod in internal/* apps/* cmd/*; do
+          if [ -f "${mod}/go.mod" ]; then
+            echo "Updating ${mod}..."
+            (cd "$mod" && go get -u ./... && go mod tidy)
           fi
         done
 

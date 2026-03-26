@@ -3,7 +3,7 @@ module github.com/ColonelBlimp/station-manager/internal/email
 go 1.25.0
 
 require (
-	github.com/ColonelBlimp/station-manager/internal/adif v0.0.0-00010101000000-000000000000
+	github.com/ColonelBlimp/station-manager/internal/adif v0.0.0-20260325144354-9cc936f765df
 	github.com/ColonelBlimp/station-manager/internal/config v0.0.0
 	github.com/ColonelBlimp/station-manager/internal/errors v0.0.0
 	github.com/ColonelBlimp/station-manager/internal/logging v0.0.0
