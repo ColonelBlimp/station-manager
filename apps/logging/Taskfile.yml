@@ -1,0 +1,21 @@
+version: '3'
+
+dotenv: ['../../.env']
+
+tasks:
+  default:
+    desc: "Development build of the Logging module"
+    cmds:
+      - go mod tidy
+      - go mod verify
+      - go vet ./...
+      - task: format
+      - go test -race -run Test ./...
+      - echo "✓ Logging module build complete"
+      - wails dev -ldflags "-X main.version=Dev" -tags webkit2_41
+
+  format:
+    dir: frontend
+    cmds:
+      - npm run format
+      - npm run lint

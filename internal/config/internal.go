@@ -1,12 +1,13 @@
 package config
 
 import (
-	"github.com/ColonelBlimp/station-manager/internal/errors"
-	"github.com/ColonelBlimp/station-manager/internal/utils"
-	"github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
+	"github.com/goccy/go-json"
 )
 
 func (s *Service) loadConfigFile() error {

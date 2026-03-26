@@ -52,12 +52,13 @@
 <div class="mx-20 flex flex-col gap-y-6">
     <div class="mt-4">
         <h2 class="text-center">Setting your Default Log Book</h2>
-        <p>This page will create the <b>default log book</b> used by the <i>Station Manager</i> logging application. The callsign
-            you provide here will identify the <i>Station Callsign</i> for all QSOs associated with this log book.
+        <p>This page will create the <b>default log book</b> used by the <i>Station Manager</i> application suite. The callsign
+            you provide here will identify the <i>Station Callsign</i> for all QSOs associated with the <i>Default</i> log book.
         </p>
         <p>If you use QRZ.com, then the callsign entered here should be the same as the callsign for the QRZ.com log book
             to which the QSOs will be forwarded (forwarding of QSOs is configurable and not enabled by default).
         </p>
+        <p class="text-red-400">If you are not sure what to do here, don't worry it can be changed - just enter your main call sign.</p>
     </div>
     <div class="flex flex-col gap-y-6 mx-68">
         <div>

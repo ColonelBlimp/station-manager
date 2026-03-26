@@ -33,7 +33,7 @@ func (s *Service) Initialize() error {
 
 		// This is for situation where the service is not built with an IOCDI container.
 		if s.WorkingDir == "" {
-			if s.WorkingDir, err = utils.WorkingDir(s.WorkingDir); err != nil {
+			if s.WorkingDir, err = utils.WorkingDir(); err != nil {
 				s.initErr = errors.New(op).Err(err).Msg(errMsgWorkingDir)
 				return
 			}
@@ -74,7 +74,14 @@ func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
 		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
-	return s.AppConfig.DatastoreConfig, nil
+	cfg := s.AppConfig.DatastoreConfig
+
+	// For sqlite, resolve relative path against WorkingDir (desktop only)
+	if cfg.Driver == types.SqliteDriverName && cfg.Path != "" && !filepath.IsAbs(cfg.Path) {
+		cfg.Path = filepath.Join(s.WorkingDir, cfg.Path)
+	}
+
+	return cfg, nil
 }
 
 // LoggingConfig returns the logging configuration.

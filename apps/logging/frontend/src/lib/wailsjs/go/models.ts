@@ -27,13 +27,13 @@ export namespace tags {
 	
 	export enum CatStateTag {
 	    IDENTITY = "IDENTITY",
-	    VFOAFREQ = "VFOAFREQ",
-	    VFOBFREQ = "VFOBFREQ",
-	    SPLIT = "SPLIT",
-	    SELECT = "SELECT",
 	    MAINMODE = "MAINMODE",
+	    SELECT = "SELECT",
+	    SPLIT = "SPLIT",
 	    SUBMODE = "SUBMODE",
 	    TXPWR = "TXPWR",
+	    VFOAFREQ = "VFOAFREQ",
+	    VFOBFREQ = "VFOBFREQ",
 	}
 
 }
@@ -360,7 +360,6 @@ export namespace types {
 	    rig_name: string;
 	    default_freq: string;
 	    default_mode: string;
-	    owners_callsign: string;
 	    default_is_random_qso: boolean;
 	    use_power_multiplier: boolean;
 	    power_multiplier: number;
@@ -381,7 +380,6 @@ export namespace types {
 	        this.rig_name = source["rig_name"];
 	        this.default_freq = source["default_freq"];
 	        this.default_mode = source["default_mode"];
-	        this.owners_callsign = source["owners_callsign"];
 	        this.default_is_random_qso = source["default_is_random_qso"];
 	        this.use_power_multiplier = source["use_power_multiplier"];
 	        this.power_multiplier = source["power_multiplier"];

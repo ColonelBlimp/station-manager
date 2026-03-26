@@ -66,24 +66,27 @@ func (s *Service) Initialize() error {
 		}
 		s.Config = &cfg
 
-		if err = s.validateConfig(op); err != nil {
-			initErr = err
-			s.Config.Enabled = false
-			return
-		}
+		// Default is disabled, so only validate if enabled in config
+		if s.Config.Enabled {
+			if err = s.validateConfig(op); err != nil {
+				initErr = err
+				s.Config.Enabled = false
+				return
+			}
 
-		// Configure SMTP dial timeout from config, with sane bounds
-		if cfg.SmtpDialTimeoutSec > 0 {
-			d := time.Duration(cfg.SmtpDialTimeoutSec) * time.Second
-			if d < time.Second {
-				d = time.Second
+			// Configure SMTP dial timeout from config, with sane bounds
+			if cfg.SmtpDialTimeoutSec > 0 {
+				d := time.Duration(cfg.SmtpDialTimeoutSec) * time.Second
+				if d < time.Second {
+					d = time.Second
+				}
+				if d > 60*time.Second {
+					d = 60 * time.Second
+				}
+				smtpDialTimeout = d
+			} else {
+				smtpDialTimeout = 10 * time.Second
 			}
-			if d > 60*time.Second {
-				d = 60 * time.Second
-			}
-			smtpDialTimeout = d
-		} else {
-			smtpDialTimeout = 10 * time.Second
 		}
 
 		s.isInitialized.Store(true)
@@ -154,6 +157,11 @@ func (s *Service) Send(email MsgDef) error {
 
 func (s *Service) BuildEmailWithADIFAttachment(from, subject, msg string, to []string, slice []types.Qso) (MsgDef, error) {
 	const op errors.Op = "email.Service.BuildEmailWithADIFAttachment"
+
+	if !s.Config.Enabled {
+		s.LoggerService.WarnWith().Msg("email service is disabled in the config")
+		return MsgDef{}, nil
+	}
 
 	from = strings.TrimSpace(from)
 	if from == "" {
