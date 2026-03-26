@@ -88,8 +88,6 @@ replace github.com/ColonelBlimp/station-manager/internal/adapters => ../../inter
 
 replace github.com/ColonelBlimp/station-manager/internal/adif => ../../internal/adif
 
-replace github.com/ColonelBlimp/station-manager/internal/apikey => ../../internal/apikey
-
 replace github.com/ColonelBlimp/station-manager/internal/cat => ../../internal/cat
 
 replace github.com/ColonelBlimp/station-manager/internal/config => ../../internal/config

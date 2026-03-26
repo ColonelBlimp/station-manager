@@ -83,10 +83,6 @@ replace github.com/ColonelBlimp/station-manager/internal/adapters => ../../inter
 
 replace github.com/ColonelBlimp/station-manager/internal/adif => ../../internal/adif
 
-replace github.com/ColonelBlimp/station-manager/internal/apikey => ../../internal/apikey
-
-replace github.com/ColonelBlimp/station-manager/internal/cat => ../../internal/cat
-
 replace github.com/ColonelBlimp/station-manager/internal/config => ../../internal/config
 
 replace github.com/ColonelBlimp/station-manager/internal/database => ../../internal/database
@@ -97,19 +93,9 @@ replace github.com/ColonelBlimp/station-manager/internal/enums => ../../internal
 
 replace github.com/ColonelBlimp/station-manager/internal/errors => ../../internal/errors
 
-replace github.com/ColonelBlimp/station-manager/internal/forwarding => ../../internal/forwarding
-
 replace github.com/ColonelBlimp/station-manager/internal/iocdi => ../../internal/iocdi
 
-replace github.com/ColonelBlimp/station-manager/internal/listeners => ../../internal/listeners
-
 replace github.com/ColonelBlimp/station-manager/internal/logging => ../../internal/logging
-
-replace github.com/ColonelBlimp/station-manager/internal/lookup => ../../internal/lookup
-
-replace github.com/ColonelBlimp/station-manager/internal/maidenhead => ../../internal/maidenhead
-
-replace github.com/ColonelBlimp/station-manager/internal/serial => ../../internal/serial
 
 replace github.com/ColonelBlimp/station-manager/internal/types => ../../internal/types
 
