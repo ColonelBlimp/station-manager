@@ -2,12 +2,21 @@
 # Included from root Taskfile.yml as namespace "wails".
 # Usage: task wails:logging
 #
+# Version is injected via -ldflags. Override with:
+#   task wails:logging APP_VERSION=1.2.3
+#
+# NOTE: wails build is NOT used in CI because its bindings generation
+# step runs the binary, which requires a fully configured environment
+# (database, email, etc.). The bindings are committed to git, so we
+# build the frontend and Go binary directly.
+#
 # Add more apps one-by-one following the logging pattern.
 
 version: '3'
 
 vars:
   BUILD_DIR: '{{.ROOT_DIR}}/build/bin'
+  APP_VERSION: '{{.APP_VERSION | default "dev"}}'
 
 tasks:
   default:
@@ -59,7 +68,10 @@ tasks:
     dir: apps/logging
     cmds:
       - mkdir -p {{.BUILD_DIR}}
-      - go build -o {{.BUILD_DIR}}/smlogger .
+      - >-
+        go build
+        -ldflags "-s -w -X 'main.version={{.APP_VERSION}}'"
+        -o {{.BUILD_DIR}}/smlogger .
     sources:
       - "*.go"
       - backend/**/*.go
@@ -68,4 +80,3 @@ tasks:
       - frontend/build/**/*
     generates:
       - '{{.BUILD_DIR}}/smlogger'
-

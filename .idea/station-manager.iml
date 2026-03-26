@@ -4,7 +4,6 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/apps/logging/frontend/.svelte-kit" />
-      <excludeFolder url="file://$MODULE_DIR$/apps/logging/frontend/src/lib/wailsjs/go" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

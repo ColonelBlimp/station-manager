@@ -44,6 +44,58 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: station-manager-linux-amd64
+          name: go-binaries-linux-amd64
           path: build/bin/*
           retention-days: 14
+
+  wails-apps:
+    name: Build Wails Apps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Install Task
+        run: |
+          sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - name: Derive version
+        id: version
+        run: |
+          # Use git tag if available, otherwise short SHA
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev-${GITHUB_SHA::7}")
+          echo "app_version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
+      - name: Build Wails apps
+        run: task wails:logging APP_VERSION=${{ steps.version.outputs.app_version }}
+
+      - name: Verify binaries
+        run: |
+          echo "Built Wails artifacts:"
+          ls -lh build/bin/
+          file build/bin/smlogger
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wails-apps-linux-amd64
+          path: build/bin/smlogger
+          retention-days: 14
+

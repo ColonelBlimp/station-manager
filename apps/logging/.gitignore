@@ -3,6 +3,5 @@ copilot.*
 frontend/build
 frontend/node_modules
 frontend/.svelte-kit
-frontend/src/lib/wailsjs
 **/coverage.out
 snap/smlogger
