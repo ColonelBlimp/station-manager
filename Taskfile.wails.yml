@@ -5,6 +5,7 @@ tasks:
     desc: "Build the logging application"
     cmds:
       - task: logging:frontend-dep-install
+      - task: logging:wails-build
 
   logging:frontend-dep-install:
     desc: "Install frontend dependencies for apps/logging"
@@ -15,3 +16,24 @@ tasks:
       - package-lock.json
     generates:
       - node_modules/.package-lock.json
+
+  logging:frontend-build:
+    desc: "Build the logging frontend"
+    dir: apps/logging/frontend
+    cmds:
+      - npm run build
+    sources:
+      - src/**/*
+    generates:
+      - build/index.html
+
+  logging:wails-build:
+    desc: "Build the logging Wails binary"
+    dir: apps/logging
+    deps:
+      - logging:frontend-build
+    cmds:
+      - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
+    requires:
+      vars:
+        - APP_VERSION

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="$HOME/go/bin:$PATH"
+
 if git diff --cached --name-only | grep -q '^apps/logging/'; then
   echo ">> apps/logging changed — running wails generate module..."
   (cd apps/logging && wails generate module)
