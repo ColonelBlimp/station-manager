@@ -3,3 +3,15 @@ version: '3'
 tasks:
   default:
     desc: "Build the logging application"
+    cmds:
+      - task: logging:frontend-dep-install
+
+  logging:frontend-dep-install:
+    desc: "Install frontend dependencies for apps/logging"
+    dir: apps/logging/frontend
+    cmds:
+      - npm install
+    sources:
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
