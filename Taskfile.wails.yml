@@ -1,9 +1,32 @@
 version: '3'
 
 tasks:
+  shared-utils:dep-install:
+    desc: "Install shared-utils dependencies"
+    dir: web/shared-utils
+    cmds:
+      - npm install
+    sources:
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+
+  shared-utils:build:
+    desc: "Build shared-utils"
+    dir: web/shared-utils
+    deps:
+      - shared-utils:dep-install
+    cmds:
+      - npm run build
+    sources:
+      - src/**/*
+    generates:
+      - dist/index.js
+
   logging:
     desc: "Build the logging application"
     cmds:
+      - task: shared-utils:build
       - task: logging:frontend-dep-install
       - task: logging:wails-build
 
