@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ColonelBlimp/station-manager/internal/types"
 	"net/smtp"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestValidateConfig_IPv6AndMessages(t *testing.T) {
@@ -77,6 +78,7 @@ func TestBuildEmailWithADIFAttachmentHeadersAndBoundary(t *testing.T) {
 		To:      "alice@example.com, bob@example.org",
 		Subject: "Subject",
 		Body:    "Body",
+		Enabled: true,
 	}}
 
 	// Minimal QSO input
