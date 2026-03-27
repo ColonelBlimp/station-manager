@@ -6,6 +6,9 @@ includes:
   wails:
     taskfile: ./Taskfile.wails.yml
 
+vars:
+  SNAP_VERSION: '{{.SNAP_VERSION | default "dev-local"}}'
+
 tasks:
   default:
     desc: "Sync Go workspace"
@@ -63,3 +66,63 @@ tasks:
       - chmod +x .git/hooks/pre-commit
     status:
       - diff -q scripts/pre-commit .git/hooks/pre-commit
+
+  # ── Snap (local dev) ───────────────────────────────────────────
+  snap:dev:
+    desc: "Build and install snap locally for testing"
+    cmds:
+      - task: build
+      - task: wails
+        vars:
+          APP_VERSION: '{{.SNAP_VERSION}}'
+      - task: snap:stage
+      - task: snap:build
+      - task: snap:install
+
+  snap:stage:
+    desc: "Copy binaries to repo root for snapcraft"
+    cmds:
+      - cp build/bin/smlogger build/bin/smbook .
+      - |
+        # config binary name comes from basename of apps/config
+        cp build/bin/config .
+      - chmod +x smlogger smbook config
+      - echo "Staged binaries:" && ls -lh smlogger smbook config
+    preconditions:
+      - test -f build/bin/smlogger
+      - test -f build/bin/smbook
+      - test -f build/bin/config
+
+  snap:build:
+    desc: "Build the snap package locally"
+    cmds:
+      - |
+        VERSION="{{.SNAP_VERSION}}"
+        sed -i "s/^version: .*/version: '${VERSION}'/" snap/snapcraft.yaml
+        echo "Building snap version: ${VERSION}"
+      - snapcraft --destructive-mode
+    preconditions:
+      - test -f smlogger
+      - test -f smbook
+      - test -f config
+
+  snap:install:
+    desc: "Install the locally built snap (devmode)"
+    cmds:
+      - sudo snap install station-manager_*.snap --devmode --dangerous
+    preconditions:
+      - sh: ls station-manager_*.snap 2>/dev/null
+        msg: "No .snap file found — run 'task snap:build' first"
+
+  snap:remove:
+    desc: "Remove the locally installed snap"
+    cmds:
+      - sudo snap remove station-manager
+
+  snap:clean:
+    desc: "Remove staged binaries and snap artifacts"
+    cmds:
+      - rm -f smlogger smbook config
+      - rm -f station-manager_*.snap
+      - git checkout snap/snapcraft.yaml
+      - echo "Cleaned snap staging files"

@@ -40,6 +40,7 @@
 
 ## Where to look first
 - Project intent: `README.md`
+- Developer setup & tasks: `DEVELOPING.md`
 - Release process: `RELEASING.md`
 - Build/test workflow: `Taskfile.yml`, `Taskfile.wails.yml`
 - Active Go modules: `go.work`
