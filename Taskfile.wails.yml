@@ -1,7 +1,7 @@
 version: '3'
 
 tasks:
-  default:
+  logging:
     desc: "Build the logging application"
     cmds:
       - task: logging:frontend-dep-install
