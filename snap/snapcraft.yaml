@@ -43,12 +43,6 @@ apps:
     command: usr/bin/smbook
     plugs: *gui-plugs
 
-  sm-config:
-    command: usr/bin/config
-    plugs:
-      - network
-      - home
-
 # ── Parts ────────────────────────────────────────────────────────
 parts:
   station-manager:
@@ -58,7 +52,6 @@ parts:
     organize:
       smlogger: usr/bin/smlogger
       smbook:   usr/bin/smbook
-      config:   usr/bin/config
     stage-packages:
       - libgtk-3-0
       - libwebkit2gtk-4.1-0

@@ -19,10 +19,23 @@ tasks:
     desc: "Build all modules"
     cmds:
       - |
+        mkdir -p build/bin
         for mod in internal/* apps/* cmd/*; do
           if [ -f "${mod}/go.mod" ]; then
-            echo "Building ${mod}..."
-            (cd "$mod" && go build ./...)
+            # Skip Wails apps — they are built via 'task wails'
+            if [ -f "${mod}/wails.json" ]; then
+              echo "SKIP (Wails app) ${mod}"
+              continue
+            fi
+            # Build binary for main packages, otherwise just compile-check
+            if grep -rq '^package main' "${mod}"/*.go 2>/dev/null; then
+              BINNAME=$(basename "$mod")
+              echo "Building ${mod} -> build/bin/${BINNAME}"
+              (cd "$mod" && go build -o "../../build/bin/${BINNAME}" .)
+            else
+              echo "Compiling ${mod}..."
+              (cd "$mod" && go build ./...)
+            fi
           fi
         done
 
@@ -71,7 +84,6 @@ tasks:
   snap:dev:
     desc: "Build and install snap locally for testing"
     cmds:
-      - task: build
       - task: wails
         vars:
           APP_VERSION: '{{.SNAP_VERSION}}'
@@ -83,15 +95,11 @@ tasks:
     desc: "Copy binaries to repo root for snapcraft"
     cmds:
       - cp build/bin/smlogger build/bin/smbook .
-      - |
-        # config binary name comes from basename of apps/config
-        cp build/bin/config .
-      - chmod +x smlogger smbook config
-      - echo "Staged binaries:" && ls -lh smlogger smbook config
+      - chmod +x smlogger smbook
+      - echo "Staged binaries:" && ls -lh smlogger smbook
     preconditions:
       - test -f build/bin/smlogger
       - test -f build/bin/smbook
-      - test -f build/bin/config
 
   snap:build:
     desc: "Build the snap package locally"
@@ -104,7 +112,6 @@ tasks:
     preconditions:
       - test -f smlogger
       - test -f smbook
-      - test -f config
 
   snap:install:
     desc: "Install the locally built snap (devmode)"
