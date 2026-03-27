@@ -5,7 +5,14 @@ tasks:
     desc: "Build all Wails applications"
     cmds:
       - task: logging
+        vars:
+          APP_VERSION: '{{.APP_VERSION}}'
       - task: logbook
+        vars:
+          APP_VERSION: '{{.APP_VERSION}}'
+    requires:
+      vars:
+        - APP_VERSION
 
   # ── Shared Utils ─────────────────────────────────────────────
   shared-utils:dep-install:
@@ -37,6 +44,11 @@ tasks:
       - task: shared-utils:build
       - task: logging:frontend-dep-install
       - task: logging:wails-build
+        vars:
+          APP_VERSION: '{{.APP_VERSION}}'
+    requires:
+      vars:
+        - APP_VERSION
 
   logging:frontend-dep-install:
     desc: "Install frontend dependencies for apps/logging"
@@ -76,6 +88,11 @@ tasks:
       - task: shared-utils:build
       - task: logbook:frontend-dep-install
       - task: logbook:wails-build
+        vars:
+          APP_VERSION: '{{.APP_VERSION}}'
+    requires:
+      vars:
+        - APP_VERSION
 
   logbook:frontend-dep-install:
     desc: "Install frontend dependencies for apps/logbook"
