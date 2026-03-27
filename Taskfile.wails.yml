@@ -73,8 +73,6 @@ tasks:
   logging:wails-build:
     desc: "Build the logging Wails binary"
     dir: apps/logging
-    deps:
-      - logging:frontend-build
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
     requires:
@@ -117,8 +115,6 @@ tasks:
   logbook:wails-build:
     desc: "Build the logbook Wails binary"
     dir: apps/logbook
-    deps:
-      - logbook:frontend-build
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
     requires:
