@@ -55,3 +55,11 @@ tasks:
             (cd "$mod" && go mod tidy)
           fi
         done
+
+  setup-hooks:
+    desc: "Install Git pre-commit hook"
+    cmds:
+      - cp scripts/pre-commit .git/hooks/pre-commit
+      - chmod +x .git/hooks/pre-commit
+    status:
+      - diff -q scripts/pre-commit .git/hooks/pre-commit

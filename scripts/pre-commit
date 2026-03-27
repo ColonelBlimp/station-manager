@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if git diff --cached --name-only | grep -q '^apps/logging/'; then
+  echo ">> apps/logging changed — running wails generate module..."
+  (cd apps/logging && wails generate module)
+  git add apps/logging/frontend/src/lib/
+fi
