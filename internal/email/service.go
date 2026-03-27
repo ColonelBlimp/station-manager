@@ -212,15 +212,14 @@ func (s *Service) BuildEmailWithADIFAttachment(from, subject, msg string, to []s
 	boundary := mw.Boundary()
 	hdr.Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%q", boundary))
 
-	// Write headers
-	for k, v := range hdr {
-		if len(v) == 0 {
-			continue
+	// Write headers in a fixed order (map iteration is non-deterministic).
+	for _, k := range []string{"From", "To", "Subject", "Date", "Message-Id", "Mime-Version", "Content-Type"} {
+		if v := hdr.Values(k); len(v) > 0 {
+			buf.WriteString(k)
+			buf.WriteString(": ")
+			buf.WriteString(strings.Join(v, ", "))
+			buf.WriteString("\r\n")
 		}
-		buf.WriteString(k)
-		buf.WriteString(": ")
-		buf.WriteString(strings.Join(v, ", "))
-		buf.WriteString("\r\n")
 	}
 	buf.WriteString("\r\n")
 
@@ -234,6 +233,12 @@ func (s *Service) BuildEmailWithADIFAttachment(from, subject, msg string, to []s
 	}
 
 	qp := quotedprintable.NewWriter(wp)
+	defer func(qp *quotedprintable.Writer) {
+		err := qp.Close()
+		if err != nil {
+			s.LoggerService.ErrorWith().Err(err).Msg("close quoted-printable writer")
+		}
+	}(qp)
 	if _, err = qp.Write([]byte(msg)); err != nil {
 		return MsgDef{}, errors.New(op).Err(err).Msg("write body")
 	}
