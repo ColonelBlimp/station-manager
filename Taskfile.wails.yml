@@ -1,6 +1,13 @@
 version: '3'
 
 tasks:
+  default:
+    desc: "Build all Wails applications"
+    cmds:
+      - task: logging
+      - task: logbook
+
+  # ── Shared Utils ─────────────────────────────────────────────
   shared-utils:dep-install:
     desc: "Install shared-utils dependencies"
     dir: web/shared-utils
@@ -23,6 +30,7 @@ tasks:
     generates:
       - dist/index.js
 
+  # ── Logging ──────────────────────────────────────────────────
   logging:
     desc: "Build the logging application"
     cmds:
@@ -60,3 +68,43 @@ tasks:
     requires:
       vars:
         - APP_VERSION
+
+  # ── Logbook ──────────────────────────────────────────────────
+  logbook:
+    desc: "Build the logbook application"
+    cmds:
+      - task: shared-utils:build
+      - task: logbook:frontend-dep-install
+      - task: logbook:wails-build
+
+  logbook:frontend-dep-install:
+    desc: "Install frontend dependencies for apps/logbook"
+    dir: apps/logbook/frontend
+    cmds:
+      - npm install
+    sources:
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+
+  logbook:frontend-build:
+    desc: "Build the logbook frontend"
+    dir: apps/logbook/frontend
+    cmds:
+      - npm run build
+    sources:
+      - src/**/*
+    generates:
+      - build/index.html
+
+  logbook:wails-build:
+    desc: "Build the logbook Wails binary"
+    dir: apps/logbook
+    deps:
+      - logbook:frontend-build
+    cmds:
+      - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
+    requires:
+      vars:
+        - APP_VERSION
+

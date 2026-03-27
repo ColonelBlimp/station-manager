@@ -1,0 +1,66 @@
+name: station-manager
+title: Station Manager – Amateur Radio Suite
+base: core24
+version: '0.0.1'
+summary: A suite of desktop apps for amateur radio operators
+description: |
+  Station Manager is a collection of Linux desktop applications for
+  amateur radio operators. The suite includes a QSO logging app,
+  a logbook viewer, a configuration tool, and CLI utilities.
+  Built with Go, SvelteKit, and Wails.
+
+grade: devel
+confinement: devmode
+
+contact: marc@7q5mlv.net
+
+# ── Environment ──────────────────────────────────────────────────
+# SM_WORKING_DIR is read by utils.WorkingDir() in every app.
+# $SNAP_USER_COMMON persists across snap refreshes.
+#
+# Runtime layout:
+#   $SNAP_USER_COMMON/
+#   ├── config.json
+#   ├── db/data.db
+#   └── logs/
+environment:
+  SM_WORKING_DIR: "$SNAP_USER_COMMON"
+
+# ── Apps ─────────────────────────────────────────────────────────
+apps:
+  sm-logger:
+    command: usr/bin/smlogger
+    plugs: &gui-plugs
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+      - opengl
+      - network
+      - home
+
+  sm-logbook:
+    command: usr/bin/smbook
+    plugs: *gui-plugs
+
+  sm-config:
+    command: usr/bin/config
+    plugs:
+      - network
+      - home
+
+# ── Parts ────────────────────────────────────────────────────────
+parts:
+  station-manager:
+    plugin: dump
+    source: .
+    source-type: local
+    organize:
+      smlogger: usr/bin/smlogger
+      smbook:   usr/bin/smbook
+      config:   usr/bin/config
+    stage-packages:
+      - libgtk-3-0
+      - libwebkit2gtk-4.1-0
+      - libjavascriptcoregtk-4.1-0
+
