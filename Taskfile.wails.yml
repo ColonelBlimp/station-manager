@@ -1,18 +1,21 @@
 version: '3'
 
+vars:
+  APP_VERSION: '{{.APP_VERSION | default (env "APP_VERSION") | default "dev"}}'
+  GIT_SHORT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+  VERSION: '{{if eq .APP_VERSION "dev"}}dev-{{.GIT_SHORT}}{{else}}{{.APP_VERSION}}{{end}}'
+
 tasks:
   default:
     desc: "Build all Wails applications"
     cmds:
       - task: logging
         vars:
-          APP_VERSION: '{{.APP_VERSION}}'
+          APP_VERSION: '{{.VERSION}}'
       - task: logbook
         vars:
-          APP_VERSION: '{{.APP_VERSION}}'
-    requires:
-      vars:
-        - APP_VERSION
+          APP_VERSION: '{{.VERSION}}'
 
   # ── Shared Utils ─────────────────────────────────────────────
   shared-utils:dep-install:
@@ -45,10 +48,7 @@ tasks:
       - task: logging:frontend-dep-install
       - task: logging:wails-build
         vars:
-          APP_VERSION: '{{.APP_VERSION}}'
-    requires:
-      vars:
-        - APP_VERSION
+          APP_VERSION: '{{.APP_VERSION | default $.VERSION}}'
 
   logging:frontend-dep-install:
     desc: "Install frontend dependencies for apps/logging"
@@ -75,9 +75,6 @@ tasks:
     dir: apps/logging
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
-    requires:
-      vars:
-        - APP_VERSION
 
   # ── Logbook ──────────────────────────────────────────────────
   logbook:
@@ -87,10 +84,7 @@ tasks:
       - task: logbook:frontend-dep-install
       - task: logbook:wails-build
         vars:
-          APP_VERSION: '{{.APP_VERSION}}'
-    requires:
-      vars:
-        - APP_VERSION
+          APP_VERSION: '{{.APP_VERSION | default $.VERSION}}'
 
   logbook:frontend-dep-install:
     desc: "Install frontend dependencies for apps/logbook"
@@ -117,7 +111,4 @@ tasks:
     dir: apps/logbook
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
-    requires:
-      vars:
-        - APP_VERSION
 

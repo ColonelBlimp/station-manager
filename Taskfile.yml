@@ -94,7 +94,7 @@ tasks:
   snap:dev:
     desc: "Build and install snap locally for testing"
     cmds:
-      - task: wails
+      - task: wails:default
         vars:
           APP_VERSION: '{{.SNAP_VERSION}}'
       - task: snap:stage
