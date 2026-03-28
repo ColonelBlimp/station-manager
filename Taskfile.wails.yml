@@ -76,6 +76,15 @@ tasks:
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
 
+  logging:dev:
+    desc: "Run the logging app in Wails dev mode (hot-reload)"
+    deps:
+      - shared-utils:build
+      - logging:frontend-dep-install
+    dir: apps/logging
+    cmds:
+      - wails dev -tags webkit2_41
+
   # ── Logbook ──────────────────────────────────────────────────
   logbook:
     desc: "Build the logbook application"
@@ -112,3 +121,11 @@ tasks:
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
 
+  logbook:dev:
+    desc: "Run the logbook app in Wails dev mode (hot-reload)"
+    deps:
+      - shared-utils:build
+      - logbook:frontend-dep-install
+    dir: apps/logbook
+    cmds:
+      - wails dev -tags webkit2_41
