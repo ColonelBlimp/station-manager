@@ -85,6 +85,8 @@ jobs:
         run: |
           export PATH="$(go env GOPATH)/bin:$PATH"
           set -eo pipefail
+          echo "==> golangci-lint ./internal"
+          (cd internal && golangci-lint run --timeout=5m ./...)
           while IFS= read -r mod; do
             # Skip Wails apps: their go:embed requires a frontend build
             if [ -f "$mod/wails.json" ]; then
@@ -93,4 +95,4 @@ jobs:
             fi
             echo "==> golangci-lint ./$mod"
             (cd "$mod" && golangci-lint run --timeout=5m ./...)
-          done < <(find apps internal cmd -name go.mod -printf '%h\n' | sort)
+          done < <(find apps cmd -name go.mod -printf '%h\n' | sort)

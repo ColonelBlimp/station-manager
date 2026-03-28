@@ -20,7 +20,11 @@ tasks:
     cmds:
       - |
         mkdir -p build/bin
-        for mod in internal/* apps/* cmd/*; do
+        # Build the consolidated internal module
+        echo "Compiling internal/..."
+        (cd internal && go build ./...)
+        # Build apps and cmd modules
+        for mod in apps/* cmd/*; do
           if [ -f "${mod}/go.mod" ]; then
             # Skip Wails apps — they are built via 'task wails'
             if [ -f "${mod}/wails.json" ]; then
@@ -43,7 +47,9 @@ tasks:
     desc: "Run all tests (short)"
     cmds:
       - |
-        for mod in internal/* apps/* cmd/*; do
+        echo "Testing internal/..."
+        (cd internal && go test -race ./... -short)
+        for mod in apps/* cmd/*; do
           if [ -f "${mod}/go.mod" ]; then
             echo "Testing ${mod}..."
             (cd "$mod" && go test -race ./... -short)
@@ -54,7 +60,9 @@ tasks:
     desc: "Update dependencies for all modules"
     cmds:
       - |
-        for mod in internal/* apps/* cmd/*; do
+        echo "Updating internal/..."
+        (cd internal && go get -u ./... && go mod tidy)
+        for mod in apps/* cmd/*; do
           if [ -f "${mod}/go.mod" ]; then
             echo "Updating ${mod}..."
             (cd "$mod" && go get -u ./... && go mod tidy)
@@ -65,7 +73,9 @@ tasks:
     desc: "Run go mod tidy on all modules"
     cmds:
       - |
-        for mod in internal/* apps/* cmd/*; do
+        echo "Tidying internal/..."
+        (cd internal && go mod tidy)
+        for mod in apps/* cmd/*; do
           if [ -f "${mod}/go.mod" ]; then
             echo "Tidying ${mod}..."
             (cd "$mod" && go mod tidy)

@@ -7,9 +7,10 @@
 
 ## Workspace and module boundaries
 - This is a Go workspace (`go.work`, Go `1.25.0`) with no root `go.mod`.
-- Active modules are listed in `go.work` under `internal/*`, `apps/*`, `cmd/*`.
+- **One consolidated `internal/` module** (`internal/go.mod`) contains all shared domain packages (adapters, adif, cat, config, database, etc.) as plain Go packages — not individual modules.
+- App modules live under `apps/*` (e.g., `apps/logging`, `apps/logbook`); each has its own `go.mod` with a single `replace` directive pointing to `../../internal`.
 - `web/shared-utils/` is a TypeScript/Svelte library consumed by Wails app frontends.
-- Do not add a root-level `go.mod`; keep module boundaries explicit per directory.
+- Do not add a root-level `go.mod`; do not split `internal/` back into per-package modules.
 
 ## Build/test commands (use Task, not make)
 - `task` → runs `go work sync`
@@ -33,8 +34,8 @@
 - All apps use `utils.WorkingDir()` (`internal/utils/working_dir.go`) to resolve data paths.
 
 ## Conventions for agents
-- Prefer adding reusable domain code to existing `internal/*` modules already in `go.work`.
-- If you create a new module under `internal/`, `apps/`, or `cmd/`, add a local `go.mod`, then run `task` to sync workspace usage.
+- Add new reusable domain code as packages under `internal/` (e.g., `internal/newpkg/`). No new `go.mod` needed — they are packages within the single `internal` module.
+- If you create a new app under `apps/`, add a local `go.mod` with `require` + `replace` for the internal module, then add it to `go.work`.
 - Keep offline-first behavior in mind when adding network features (per `README.md` requirement).
 - CAT support note from `README.md`: tested rigs are Yaesu `FTdx10` and `FT-710` only.
 
