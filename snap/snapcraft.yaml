@@ -10,19 +10,9 @@ description: |
   Built with Go, SvelteKit, and Wails.
 
 grade: devel
-confinement: devmode
+confinement: strict
 
 contact: marc@7q5mlv.net
-
-# ── Layout ───────────────────────────────────────────────────────
-# WebKit2GTK has hardcoded absolute paths for its subprocess binaries
-# (WebKitNetworkProcess, WebKitWebProcess, etc.).  The stage-packages
-# install them at $SNAP/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/ but
-# the library looks for /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/ at
-# runtime.  The layout makes the snap's copy visible at that path.
-layout:
-  /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1:
-    bind: $SNAP/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
 
 # ── Environment ──────────────────────────────────────────────────
 # SM_WORKING_DIR is read by utils.WorkingDir() in every app.
@@ -33,28 +23,40 @@ layout:
 #   ├── config.json
 #   ├── db/data.db
 #   └── logs/
+#
+# WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: WebKit2GTK runs its own
+# seccomp-bpf sandbox which conflicts with snap's confinement,
+# causing the WebView to silently crash (blank page). Disabling it
+# is safe here because snap already provides sandboxing.
+#
+# WEBKIT_DISABLE_COMPOSITING_MODE: avoids GPU-compositing issues
+# inside the snap's confined graphics stack.
 environment:
   SM_WORKING_DIR: "$SNAP_USER_COMMON"
+  WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+  WEBKIT_DISABLE_COMPOSITING_MODE: "1"
 
 # ── Apps ─────────────────────────────────────────────────────────
-# Desktop files live in snap/gui/<app>.desktop and are picked up
-# automatically by snapcraft.  Icons are snap/gui/<app>.png.
+# The gnome extension provides: GTK3/4 libraries, WebKit2GTK,
+# fonts/fontconfig, GPU driver passthrough, theme integration,
+# and proper WebKit subprocess paths — all from the gnome-46-2404
+# content snap.  No manual stage-packages or layouts needed.
 apps:
   sm-logger:
+    extensions: [gnome]
     command: usr/bin/smlogger
-    desktop: snap/gui/sm-logger.desktop
+    desktop: usr/share/applications/sm-logger.desktop
     plugs: &gui-plugs
-      - desktop
-      - desktop-legacy
-      - wayland
-      - x11
-      - opengl
       - network
       - home
+      - serial-port
+      - browser-support
+      - opengl
 
   sm-logbook:
+    extensions: [gnome]
     command: usr/bin/smbook
-    desktop: snap/gui/sm-logbook.desktop
+    desktop: usr/share/applications/sm-logbook.desktop
     plugs: *gui-plugs
 
 # ── Parts ────────────────────────────────────────────────────────
@@ -66,14 +68,26 @@ parts:
     organize:
       smlogger: usr/bin/smlogger
       smbook:   usr/bin/smbook
-    stage-packages:
-      - libgtk-3-0
-      - libwebkit2gtk-4.1-0
-      - libjavascriptcoregtk-4.1-0
+      snap/gui/sm-logger.desktop:  usr/share/applications/sm-logger.desktop
+      snap/gui/sm-logbook.desktop: usr/share/applications/sm-logbook.desktop
+      snap/gui/sm-logger.png:      usr/share/icons/sm-logger.png
+      snap/gui/sm-logbook.png:     usr/share/icons/sm-logbook.png
+    stage:
+      - usr/bin/smlogger
+      - usr/bin/smbook
+      - usr/share/applications/*
+      - usr/share/icons/*
+    prime:
+      - usr/bin/smlogger
+      - usr/bin/smbook
+      - usr/share/applications/*
+      - usr/share/icons/*
 
   metainfo:
     plugin: dump
     source: snap/local
     organize:
       station-manager.metainfo.xml: usr/share/metainfo/station-manager.metainfo.xml
+    prime:
+      - usr/share/metainfo/station-manager.metainfo.xml
 

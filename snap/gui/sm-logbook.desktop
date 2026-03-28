@@ -5,7 +5,7 @@ Comment=A modern free Amateur Radio QSO log book application for Linux
 Exec=station-manager.sm-logbook
 Terminal=false
 Type=Application
-Icon=${SNAP}/meta/gui/sm-logbook.png
+Icon=${SNAP}/usr/share/icons/sm-logbook.png
 Categories=Utility;HamRadio;
 StartupWMClass=SMLogbook
 

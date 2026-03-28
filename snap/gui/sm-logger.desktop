@@ -5,7 +5,7 @@ Comment=A modern free Amateur Radio QSO logging application for Linux
 Exec=station-manager.sm-logger
 Terminal=false
 Type=Application
-Icon=${SNAP}/meta/gui/sm-logger.png
+Icon=${SNAP}/usr/share/icons/sm-logger.png
 Categories=Utility;HamRadio;
 StartupWMClass=SMLogger
 
