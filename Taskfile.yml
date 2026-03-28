@@ -102,13 +102,13 @@ tasks:
       - test -f build/bin/smbook
 
   snap:build:
-    desc: "Build the snap package locally"
+    desc: "Build the snap package locally (uses LXD managed build)"
     cmds:
       - |
         VERSION="{{.SNAP_VERSION}}"
         sed -i "s/^version: .*/version: '${VERSION}'/" snap/snapcraft.yaml
         echo "Building snap version: ${VERSION}"
-      - snapcraft --destructive-mode
+      - snapcraft pack --use-lxd
     preconditions:
       - test -f smlogger
       - test -f smbook
@@ -129,7 +129,7 @@ tasks:
   snap:clean:
     desc: "Remove staged binaries and snap artifacts"
     cmds:
-      - rm -f smlogger smbook config
+      - rm -f smlogger smbook
       - rm -f station-manager_*.snap
       - git checkout snap/snapcraft.yaml
       - echo "Cleaned snap staging files"

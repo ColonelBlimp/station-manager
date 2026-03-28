@@ -1,7 +1,7 @@
 name: station-manager
 title: Station Manager – Amateur Radio Suite
 base: core24
-version: '0.0.1'
+version: '2026.1'
 summary: A suite of desktop apps for amateur radio operators
 description: |
   Station Manager is a collection of Linux desktop applications for
