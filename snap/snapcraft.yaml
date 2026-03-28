@@ -27,9 +27,12 @@ environment:
   SM_WORKING_DIR: "$SNAP_USER_COMMON"
 
 # ── Apps ─────────────────────────────────────────────────────────
+# Desktop files live in snap/gui/<app>.desktop and are picked up
+# automatically by snapcraft.  Icons are snap/gui/<app>.png.
 apps:
   sm-logger:
     command: usr/bin/smlogger
+    desktop: snap/gui/sm-logger.desktop
     plugs: &gui-plugs
       - desktop
       - desktop-legacy
@@ -41,6 +44,7 @@ apps:
 
   sm-logbook:
     command: usr/bin/smbook
+    desktop: snap/gui/sm-logbook.desktop
     plugs: *gui-plugs
 
 # ── Parts ────────────────────────────────────────────────────────
@@ -56,4 +60,10 @@ parts:
       - libgtk-3-0
       - libwebkit2gtk-4.1-0
       - libjavascriptcoregtk-4.1-0
+
+  metainfo:
+    plugin: dump
+    source: snap/local
+    organize:
+      station-manager.metainfo.xml: usr/share/metainfo/station-manager.metainfo.xml
 

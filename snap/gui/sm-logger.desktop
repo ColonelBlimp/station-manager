@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=SM Logger
+GenericName=QSO Logger
+Comment=A modern free Amateur Radio QSO logging application for Linux
+Exec=station-manager.sm-logger
+Terminal=false
+Type=Application
+Icon=${SNAP}/meta/gui/sm-logger.png
+Categories=Utility;HamRadio;
+StartupWMClass=SMLogger
+
