@@ -4,3 +4,4 @@ internal/logging/config.json
 !build/db/.gitkeep
 !build/logs/.gitkeep
 build/*
+.task
