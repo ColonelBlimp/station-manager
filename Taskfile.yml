@@ -124,9 +124,9 @@ tasks:
       - test -f smbook
 
   snap:install:
-    desc: "Install the locally built snap (devmode)"
+    desc: "Install the locally built snap (strict confinement, --dangerous for unsigned)"
     cmds:
-      - sudo snap install station-manager_*.snap --devmode --dangerous
+      - sudo snap install station-manager_*.snap --dangerous
     preconditions:
       - sh: ls station-manager_*.snap 2>/dev/null
         msg: "No .snap file found — run 'task snap:build' first"

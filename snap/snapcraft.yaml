@@ -37,10 +37,21 @@ environment:
   WEBKIT_DISABLE_COMPOSITING_MODE: "1"
 
 # ── Apps ─────────────────────────────────────────────────────────
-# The gnome extension provides: GTK3/4 libraries, WebKit2GTK,
-# fonts/fontconfig, GPU driver passthrough, theme integration,
-# and proper WebKit subprocess paths — all from the gnome-46-2404
-# content snap.  No manual stage-packages or layouts needed.
+# The gnome extension provides: GTK3/4 libraries, fonts/fontconfig,
+# GPU driver passthrough, and theme integration — from the
+# gnome-46-2404 content snap.  WebKit2GTK is bundled separately
+# via the webkit-runtime part below.
+
+# ── Layout ───────────────────────────────────────────────────────
+# WebKit2GTK hardcodes the absolute path to its subprocess
+# executables (WebKitNetworkProcess, WebKitWebProcess) at build
+# time.  The staged Ubuntu packages put them under $SNAP/usr/lib/…
+# but the library looks at /usr/lib/… — this bind-mount bridges
+# the gap.
+layout:
+  /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1:
+    bind: $SNAP/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+
 apps:
   sm-logger:
     extensions: [gnome]
@@ -82,6 +93,17 @@ parts:
       - usr/bin/smbook
       - usr/share/applications/*
       - usr/share/icons/*
+
+  # WebKit2GTK runtime — the gnome content snap provides GTK3/4,
+  # fonts, and themes, but NOT WebKit2GTK.  Wails needs the shared
+  # libraries AND the subprocess executables (WebKitNetworkProcess,
+  # WebKitWebProcess) to render its webview.
+  webkit-runtime:
+    plugin: nil
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+    # Allow all staged files through — webkit2gtk has many transitive
+    # library dependencies that must be present at runtime.
 
   metainfo:
     plugin: dump
