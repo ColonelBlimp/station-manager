@@ -5,3 +5,9 @@ internal/logging/config.json
 !build/logs/.gitkeep
 build/*
 .task
+*.snap
+
+# Wails binaries built at project root
+/smlogger
+/smbook
+
