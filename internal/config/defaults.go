@@ -98,7 +98,7 @@ var defaultRequiredConfigs = types.RequiredConfigs{
 	SetupComplete:      false, // Indicates whether setup has been completed
 	DefaultLogbookID:   1,
 	DefaultRigID:       1,
-	DefaultFreq:        "14300.000",
+	DefaultFreq:        "14.300.000",
 	DefaultMode:        "USB",
 	DefaultIsRandomQso: true,
 	DefaultTxPower:     50,
