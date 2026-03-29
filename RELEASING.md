@@ -55,7 +55,7 @@ Pushing the tag triggers the **Release** workflow, which runs three sequential
 stages:
 
 ```
-validate ── build-wails ── release
+validate ── build-and-package ── release
 ```
 
 #### Stage 1 — Validate
@@ -63,20 +63,28 @@ validate ── build-wails ── release
 Same checks as the daily workflow (vet, fmt, test, lint), run as a single job
 to gate the build stages.
 
-#### Stage 2 — Build Wails Apps (`build-wails`)
+#### Stage 2 — Build & Package (`build-wails`)
 
-Installs Node 22, GTK/WebKit system libraries, and the Wails CLI, then runs:
+Installs Node 22, GTK/WebKit system libraries, the Wails CLI, and nfpm, then:
 
-```bash
-task wails APP_VERSION=<tag>
-```
-
-This builds **all** Wails applications via `Taskfile.wails.yml`:
+1. Builds all Wails applications via `Taskfile.wails.yml`:
 
 | App | Source | Binary | Version injected via |
 |---|---|---|---|
 | sm-logger | `apps/logging` | `build/bin/smlogger` | `-ldflags "-X main.version=<tag>"` |
 | sm-logbook | `apps/logbook` | `build/bin/smbook` | `-ldflags "-X main.version=<tag>"` |
+
+2. Packages with [nfpm](https://nfpm.goreleaser.com/) using `nfpm.yaml`:
+
+| Format | Output | Dependencies declared |
+|---|---|---|
+| `.deb` | `station-manager_<ver>_amd64.deb` | `libgtk-3-0`, `libwebkit2gtk-4.1-0` |
+| `.rpm` | `station-manager-<ver>-1.x86_64.rpm` | `gtk3`, `webkit2gtk4.1` |
+
+Each package installs:
+- Binaries → `/usr/bin/smlogger`, `/usr/bin/smbook`
+- Desktop entries → `/usr/share/applications/`
+- Icons → `/usr/share/pixmaps/`
 
 The build chain for each Wails app is:
 
@@ -85,7 +93,7 @@ The build chain for each Wails app is:
 3. `<app>:frontend-build` — `npm run build` (Vite) in `apps/<app>/frontend/`
 4. `<app>:wails-build` — `wails build` in `apps/<app>/`
 
-Outputs uploaded as artifact `wails-apps-linux-amd64`.
+Outputs uploaded as artifact `release-linux-amd64`.
 
 #### Stage 3 — Create GitHub Release (`release`)
 
@@ -93,7 +101,7 @@ Downloads the build artifacts and creates a GitHub Release with:
 
 - **Tag name** and **release name** set to the tag (e.g. `v1.2.3`)
 - **Auto-generated release notes** from commits since the last tag
-- **Attached assets**: Wails app binaries (smlogger, smbook)
+- **Attached assets**: raw binaries + `.deb` and `.rpm` packages
 
 ---
 
@@ -115,6 +123,13 @@ task wails:logging APP_VERSION=$(git rev-parse --short HEAD)
 # Build all Wails apps
 task wails APP_VERSION=$(git rev-parse --short HEAD)
 
+# Build .deb and .rpm packages (requires binaries in build/bin/)
+task package:deb TAG=1.0.0
+task package:rpm TAG=1.0.0
+
+# Full local release: validate → build → wails → package
+task release:local TAG=1.0.0
+
 # Update all Go module dependencies
 task update
 
@@ -131,9 +146,10 @@ task setup-hooks
 
 | File | Purpose |
 |---|---|
-| `Taskfile.yml` | Root task runner — Go build, test, tidy, update, hooks |
+| `Taskfile.yml` | Root task runner — Go build, test, tidy, update, package, hooks |
 | `Taskfile.wails.yml` | Wails app build tasks (shared-utils, logging, logbook) |
+| `nfpm.yaml` | nfpm packaging config — produces .deb and .rpm |
 | `.github/workflows/validate.yml` | CI: runs on every push to `main` |
-| `.github/workflows/release.yml` | CI: runs on `v*` tag push — build + GitHub Release |
+| `.github/workflows/release.yml` | CI: runs on `v*` tag push — build + package + GitHub Release |
 | `scripts/pre-commit` | Git hook: regenerates Wails bindings on commit |
 | `internal/utils/working_dir.go` | `WorkingDir()` — reads `SM_WORKING_DIR` env var |

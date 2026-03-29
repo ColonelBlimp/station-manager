@@ -6,6 +6,6 @@ Comment=A modern free Amateur Radio QSO log book application for Linux.
 Exec=smbook %u
 Terminal=false
 Type=Application
-Icon=smbook.png
+Icon=smbook
 Categories=Utility;
 StartupWMClass=SMLogbook

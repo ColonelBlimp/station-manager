@@ -8,6 +8,7 @@
 | Node.js | 22+ | https://nodejs.org/ |
 | Task | 3.x | https://taskfile.dev/installation/ |
 | Wails | 2.x | `go install github.com/wailsapp/wails/v2/cmd/wails@latest` |
+| nfpm | 2.x | `go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest` |
 
 Linux system libraries (needed for Wails builds):
 
@@ -91,24 +92,30 @@ Both automatically build `shared-utils` and install frontend dependencies first.
 
 | Command | Description |
 |---|---|
-| `task release:local` | Full pipeline: validate → build → wails → stage artifacts |
-| `task release:local TAG=v1.2.3` | Same, with a specific version tag |
+| `task release:local` | Full pipeline: validate → build → wails → package (.deb + .rpm) |
+| `task release:local TAG=1.2.3` | Same, with a specific version |
 | `task release:validate` | Run only the CI validation checks (vet, fmt, test, lint) |
-| `task release:stage` | Collect `build/bin/` artifacts into `build/release/` |
+| `task release:stage TAG=1.2.3` | Collect binaries + build .deb/.rpm into `build/release/` |
+| `task package:deb TAG=1.2.3` | Build just the .deb package |
+| `task package:rpm TAG=1.2.3` | Build just the .rpm package |
 
 This mirrors the CI release pipeline (`release.yml`) so you can catch failures
 before pushing a tag. If `golangci-lint` is not installed, the lint step is
 skipped with a warning.
 
 ```bash
-# Quick smoke test — validates + builds everything
+# Quick smoke test — validates + builds everything + packages
 task release:local
 
 # Simulate a tagged release
-task release:local TAG=v1.0.0
+task release:local TAG=1.0.0
+
+# Build just an RPM from existing binaries in build/bin/
+task package:rpm TAG=1.0.0
 ```
 
-Staged artifacts land in `build/release/`.
+Staged artifacts land in `build/release/`. Packaging uses [nfpm](https://nfpm.goreleaser.com/)
+via `nfpm.yaml` in the project root.
 
 ### Other
 
@@ -207,10 +214,11 @@ development without polluting your shell.
 | File | Purpose |
 |---|---|
 | `go.work` | Go workspace — lists all active modules |
-| `Taskfile.yml` | Root task runner (build, test, tidy, update) |
+| `Taskfile.yml` | Root task runner (build, test, tidy, update, package) |
 | `Taskfile.wails.yml` | Wails app build chain (shared-utils → frontend → wails) |
+| `nfpm.yaml` | nfpm packaging config — produces .deb and .rpm |
 | `.github/workflows/validate.yml` | CI: vet, fmt, test, lint on every push to `main` |
-| `.github/workflows/release.yml` | CI: build + GitHub Release on `v*` tag |
+| `.github/workflows/release.yml` | CI: build + package + GitHub Release on `v*` tag |
 | `scripts/pre-commit` | Git hook: regenerates Wails bindings on commit |
 | `internal/utils/working_dir.go` | `WorkingDir()` — data directory resolution |
 | `RELEASING.md` | Full release process documentation |

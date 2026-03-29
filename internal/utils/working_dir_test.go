@@ -24,11 +24,19 @@ func TestWorkingDir_WithEnv(t *testing.T) {
 	}
 }
 
-func TestWorkingDir_ErrorForMissing(t *testing.T) {
-	non := filepath.Join(t.TempDir(), "missing")
-	_, err := WorkingDir(non)
-	if err == nil {
-		t.Fatal("expected error for non-existing working directory")
+func TestWorkingDir_CreatesDir(t *testing.T) {
+	// WorkingDir should auto-create a missing directory (covers first-run after package install).
+	dir := filepath.Join(t.TempDir(), "newdir")
+	got, err := WorkingDir(dir)
+	if err != nil {
+		t.Fatalf("WorkingDir(newdir) error: %v", err)
+	}
+	if got != dir {
+		t.Fatalf("WorkingDir(newdir) = %q; want %q", got, dir)
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("expected directory to be created at %q", dir)
 	}
 }
 
@@ -41,5 +49,46 @@ func TestWorkingDir_Default(t *testing.T) {
 	}
 	if !filepath.IsAbs(got) {
 		t.Fatalf("WorkingDir() default = %q; expected absolute path", got)
+	}
+}
+
+func TestIsSystemPath(t *testing.T) {
+	tests := []struct {
+		dir  string
+		want bool
+	}{
+		{"/usr/bin", true},
+		{"/usr/local/bin", true},
+		{"/usr/sbin", true},
+		{"/usr/bin/extra", true},
+		{"/home/user/bin", false},
+		{"/tmp", false},
+		{"/usr/share", false},
+	}
+	for _, tt := range tests {
+		if got := isSystemPath(tt.dir); got != tt.want {
+			t.Errorf("isSystemPath(%q) = %v; want %v", tt.dir, got, tt.want)
+		}
+	}
+}
+
+func TestXdgDataDir_Default(t *testing.T) {
+	os.Unsetenv("XDG_DATA_HOME")
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".local", "share", xdgAppName)
+	got := xdgDataDir()
+	if got != want {
+		t.Fatalf("xdgDataDir() = %q; want %q", got, want)
+	}
+}
+
+func TestXdgDataDir_Custom(t *testing.T) {
+	custom := t.TempDir()
+	os.Setenv("XDG_DATA_HOME", custom)
+	t.Cleanup(func() { os.Unsetenv("XDG_DATA_HOME") })
+	want := filepath.Join(custom, xdgAppName)
+	got := xdgDataDir()
+	if got != want {
+		t.Fatalf("xdgDataDir() = %q; want %q", got, want)
 	}
 }

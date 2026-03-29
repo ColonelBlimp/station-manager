@@ -6,6 +6,6 @@ Comment=A modern free Amateur Radio QSO logging application for Linux.
 Exec=smlogger %u
 Terminal=false
 Type=Application
-Icon=smlogger.png
+Icon=smlogger
 Categories=Utility;
 StartupWMClass=SMLogger

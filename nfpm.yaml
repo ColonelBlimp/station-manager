@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+name: station-manager
+arch: amd64
+platform: linux
+version: "${VERSION}"
+maintainer: "ColonelBlimp"
+description: "Amateur Radio station management suite — QSO logger and logbook"
+homepage: "https://github.com/ColonelBlimp/station-manager"
+license: "MIT"
+# Default depends (deb package names)
+depends:
+  - libgtk-3-0
+  - libwebkit2gtk-4.1-0
+contents:
+  # ── Binaries ──
+  - src: build/bin/smlogger
+    dst: /usr/bin/smlogger
+  - src: build/bin/smbook
+    dst: /usr/bin/smbook
+  # ── Desktop entries ──
+  - src: apps/logging/assets/smlogger.desktop
+    dst: /usr/share/applications/smlogger.desktop
+  - src: apps/logbook/assets/smbook.desktop
+    dst: /usr/share/applications/smbook.desktop
+  # ── Icons ──
+  - src: apps/logging/assets/smlogger.png
+    dst: /usr/share/pixmaps/smlogger.png
+  - src: apps/logbook/assets/smbook.png
+    dst: /usr/share/pixmaps/smbook.png
+# RPM needs different dependency names
+overrides:
+  rpm:
+    depends:
+      - gtk3
+      - webkit2gtk4.1

@@ -6,8 +6,6 @@ includes:
   wails:
     taskfile: ./Taskfile.wails.yml
 
-vars:
-  SNAP_VERSION: '{{.SNAP_VERSION | default "dev-local"}}'
 
 tasks:
   default:
@@ -94,7 +92,7 @@ tasks:
   release:local:
     desc: "Simulate the full CI release pipeline locally"
     vars:
-      TAG: '{{.TAG | default "local"}}'
+      TAG: '{{.TAG | default "0.0.0-local"}}'
     cmds:
       - task: release:validate
       - task: build
@@ -159,9 +157,9 @@ tasks:
         done < <(find apps cmd -name go.mod -printf '%h\n' | sort)
 
   release:stage:
-    desc: "Collect release artifacts into build/release/"
+    desc: "Collect release artifacts and build packages into build/release/"
     vars:
-      TAG: '{{.TAG | default "local"}}'
+      TAG: '{{.TAG | default "0.0.0-local"}}'
     cmds:
       - |
         set -e
@@ -170,11 +168,35 @@ tasks:
         for bin in build/bin/*; do
           [ -f "$bin" ] || continue
           name=$(basename "$bin")
-          # Skip .gitkeep files
           [ "$name" = ".gitkeep" ] && continue
           cp "$bin" "build/release/${name}"
           echo "  → build/release/${name}"
         done
+      - task: package:deb
+        vars:
+          TAG: '{{.TAG}}'
+      - task: package:rpm
+        vars:
+          TAG: '{{.TAG}}'
+      - |
         echo ""
         echo "✅ Local release staged (tag={{.TAG}}):"
         ls -lh build/release/
+
+  # ── nfpm packaging ─────────────────────────────────────────
+  package:deb:
+    desc: "Build .deb package via nfpm"
+    vars:
+      TAG: '{{.TAG | default "0.0.0-local"}}'
+    cmds:
+      - mkdir -p build/release
+      - VERSION={{.TAG}} nfpm pkg -f nfpm.yaml -p deb -t build/release/
+
+  package:rpm:
+    desc: "Build .rpm package via nfpm"
+    vars:
+      TAG: '{{.TAG | default "0.0.0-local"}}'
+    cmds:
+      - mkdir -p build/release
+      - VERSION={{.TAG}} nfpm pkg -f nfpm.yaml -p rpm -t build/release/
+
