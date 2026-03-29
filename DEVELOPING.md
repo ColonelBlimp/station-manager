@@ -87,6 +87,29 @@ task wails:logbook:dev
 
 Both automatically build `shared-utils` and install frontend dependencies first.
 
+### Local release testing
+
+| Command | Description |
+|---|---|
+| `task release:local` | Full pipeline: validate → build → wails → stage artifacts |
+| `task release:local TAG=v1.2.3` | Same, with a specific version tag |
+| `task release:validate` | Run only the CI validation checks (vet, fmt, test, lint) |
+| `task release:stage` | Collect `build/bin/` artifacts into `build/release/` |
+
+This mirrors the CI release pipeline (`release.yml`) so you can catch failures
+before pushing a tag. If `golangci-lint` is not installed, the lint step is
+skipped with a warning.
+
+```bash
+# Quick smoke test — validates + builds everything
+task release:local
+
+# Simulate a tagged release
+task release:local TAG=v1.0.0
+```
+
+Staged artifacts land in `build/release/`.
+
 ### Other
 
 | Command | Description |
