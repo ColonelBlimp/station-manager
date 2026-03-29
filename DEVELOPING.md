@@ -8,8 +8,6 @@
 | Node.js | 22+ | https://nodejs.org/ |
 | Task | 3.x | https://taskfile.dev/installation/ |
 | Wails | 2.x | `go install github.com/wailsapp/wails/v2/cmd/wails@latest` |
-| snapcraft | latest | `sudo snap install snapcraft --classic` |
-| LXD | latest | Required for `snapcraft pack --use-lxd` (see [LXD setup](#lxd-setup)) |
 
 Linux system libraries (needed for Wails builds):
 
@@ -89,70 +87,6 @@ task wails:logbook:dev
 
 Both automatically build `shared-utils` and install frontend dependencies first.
 
-### Local snap testing
-
-| Command | Description |
-|---|---|
-| `task snap:dev` | Full pipeline: build Wails apps → stage → package snap → install |
-| `task snap:dev SNAP_VERSION=0.2.0` | Same, with a custom version string |
-| `task snap:stage` | Copy pre-built binaries to repo root for snapcraft |
-| `task snap:build` | Run `snapcraft pack --use-lxd` |
-| `task snap:install` | Install the `.snap` with `--devmode --dangerous` |
-| `task snap:remove` | Uninstall the snap |
-| `task snap:clean` | Remove staged binaries, `.snap` file, restore `snapcraft.yaml` |
-
-#### Snap dev workflow
-
-The one-liner for a full local snap test:
-
-```bash
-task snap:dev
-```
-
-This runs the following steps in sequence:
-
-1. **`wails`** — builds all Wails apps (`smlogger`, `smbook`) with the snap version
-2. **`snap:stage`** — copies binaries from `build/bin/` to the repo root where
-   `snap/snapcraft.yaml` expects them, and verifies they exist
-3. **`snap:build`** — patches the version in `snapcraft.yaml` and runs
-   `snapcraft pack --use-lxd`
-4. **`snap:install`** — installs the resulting `.snap` locally with `--devmode`
-
-You can then run the snap apps:
-
-```bash
-station-manager.sm-logger
-station-manager.sm-logbook
-```
-
-Snap data is written to `$SNAP_USER_COMMON` (`~/snap/station-manager/common/`):
-
-```
-~/snap/station-manager/common/
-├── config.json
-├── db/data.db
-└── logs/
-```
-
-To tear down:
-
-```bash
-task snap:remove   # uninstall the snap
-task snap:clean    # remove staged files and restore snapcraft.yaml
-```
-
-#### LXD setup
-
-The snap build uses LXD for cross-distro compatibility (the snap targets
-`core24` / Ubuntu 24.04). If LXD is not installed:
-
-```bash
-sudo snap install lxd
-sudo lxd init --auto
-sudo usermod -aG lxd $USER
-# Log out and back in for the group change to take effect
-```
-
 ### Other
 
 | Command | Description |
@@ -194,15 +128,11 @@ station-manager/
 │   └── shared-utils/    TypeScript/Svelte library shared by Wails frontends
 ├── build/
 │   └── bin/             Compiled binaries land here
-├── snap/
-│   ├── snapcraft.yaml   Snap package definition (all apps in one snap)
-│   ├── gui/             .desktop files and icons for snap apps
-│   └── local/           AppStream metainfo XML
 ├── scripts/
 │   └── pre-commit       Git hook script
 ├── .github/
 │   └── workflows/       CI: validate.yml, release.yml
-├── Taskfile.yml          Root task runner (Go build, test, tidy, snap)
+├── Taskfile.yml          Root task runner (Go build, test, tidy)
 ├── Taskfile.wails.yml    Wails build tasks (shared-utils, logging, logbook)
 ├── RELEASING.md          CI/CD and release process documentation
 ├── DEVELOPING.md         This file
@@ -227,9 +157,8 @@ their data directory. The resolution order:
 2. `SM_WORKING_DIR` environment variable
 3. Directory of the running executable
 
-In the snap, `SM_WORKING_DIR` is set to `$SNAP_USER_COMMON` automatically.
-For local development outside the snap, the binary's own directory is used by
-default, or you can set the env var:
+For local development, the binary's own directory is used by default, or you
+can set the env var:
 
 ```bash
 SM_WORKING_DIR=/tmp/sm-dev ./build/bin/smlogger
@@ -243,7 +172,6 @@ SM_WORKING_DIR=/tmp/sm-dev ./build/bin/smlogger
 |---|---|---|
 | `SM_WORKING_DIR` | Override data directory for all apps | Executable's directory |
 | `APP_VERSION` | Baked into Wails binaries at build time | `dev-<git-short-hash>` |
-| `SNAP_VERSION` | Version string for local snap builds | `dev-local` |
 
 A `.env` file in the project root is loaded automatically by the Taskfile
 (`dotenv: ['.env']`). This is useful for setting `SM_WORKING_DIR` during
@@ -256,11 +184,10 @@ development without polluting your shell.
 | File | Purpose |
 |---|---|
 | `go.work` | Go workspace — lists all active modules |
-| `Taskfile.yml` | Root task runner (build, test, tidy, update, snap) |
+| `Taskfile.yml` | Root task runner (build, test, tidy, update) |
 | `Taskfile.wails.yml` | Wails app build chain (shared-utils → frontend → wails) |
-| `snap/snapcraft.yaml` | Snap package definition for the full suite |
 | `.github/workflows/validate.yml` | CI: vet, fmt, test, lint on every push to `main` |
-| `.github/workflows/release.yml` | CI: build + snap + GitHub Release on `v*` tag |
+| `.github/workflows/release.yml` | CI: build + GitHub Release on `v*` tag |
 | `scripts/pre-commit` | Git hook: regenerates Wails bindings on commit |
 | `internal/utils/working_dir.go` | `WorkingDir()` — data directory resolution |
 | `RELEASING.md` | Full release process documentation |

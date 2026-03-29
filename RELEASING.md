@@ -51,15 +51,11 @@ The tag **must** start with `v` (e.g. `v0.1.0`, `v1.0.0-rc.1`).
 
 ### 2. What happens automatically
 
-Pushing the tag triggers the **Release** workflow, which runs five sequential
+Pushing the tag triggers the **Release** workflow, which runs three sequential
 stages:
 
 ```
-validate ──┬── build-go ────┐
-           │                │
-           └── build-wails ─┼── snap ── release
-                            │
-                            └───────────────┘
+validate ── build-wails ── release
 ```
 
 #### Stage 1 — Validate
@@ -67,13 +63,7 @@ validate ──┬── build-go ────┐
 Same checks as the daily workflow (vet, fmt, test, lint), run as a single job
 to gate the build stages.
 
-#### Stage 2a — Build Go Binaries (`build-go`)
-
-Builds all non-Wails `package main` modules under `apps/` and `cmd/`.
-Binary names are derived from the directory name (e.g. `apps/config` → `config`).
-Outputs uploaded as artifact `go-binaries-linux-amd64`.
-
-#### Stage 2b — Build Wails Apps (`build-wails`)
+#### Stage 2 — Build Wails Apps (`build-wails`)
 
 Installs Node 22, GTK/WebKit system libraries, and the Wails CLI, then runs:
 
@@ -97,70 +87,13 @@ The build chain for each Wails app is:
 
 Outputs uploaded as artifact `wails-apps-linux-amd64`.
 
-#### Stage 3 — Build & Publish Snap (`snap`)
+#### Stage 3 — Create GitHub Release (`release`)
 
-Requires both `build-go` and `build-wails` to complete. Downloads all binaries
-into the repo root, patches `snap/snapcraft.yaml` with the version from the tag
-(stripping the `v` prefix: `v1.2.3` → `1.2.3`), then:
-
-1. Runs `snapcraft` via `snapcore/action-build@v1`
-2. Publishes to the **Snap Store `edge` channel** via `snapcore/action-publish@v1`
-3. Uploads the `.snap` file as artifact `snap-linux-amd64`
-
-##### Snap package contents
-
-The snap `station-manager` bundles all apps in a single package:
-
-| Snap command | Binary | Type |
-|---|---|---|
-| `station-manager.sm-logger` | `smlogger` | Wails GUI |
-| `station-manager.sm-logbook` | `smbook` | Wails GUI |
-| `station-manager.sm-config` | `config` | CLI |
-
-##### Snap runtime data
-
-All apps read `SM_WORKING_DIR` (set to `$SNAP_USER_COMMON` in the snap
-environment). Data persists across snap refreshes:
-
-```
-$SNAP_USER_COMMON/
-├── config.json
-├── db/data.db
-└── logs/
-```
-
-#### Stage 4 — Create GitHub Release (`release`)
-
-Downloads all three artifacts and creates a GitHub Release with:
+Downloads the build artifacts and creates a GitHub Release with:
 
 - **Tag name** and **release name** set to the tag (e.g. `v1.2.3`)
 - **Auto-generated release notes** from commits since the last tag
-- **Attached assets**: Go binaries, Wails binaries, and the `.snap` file
-
----
-
-## Snap Store promotion
-
-Releases are published to the `edge` channel automatically. To promote:
-
-```bash
-# Promote to beta
-snapcraft release station-manager <revision> beta
-
-# Promote to stable
-snapcraft release station-manager <revision> stable
-```
-
-Find the revision number on https://snapcraft.io/station-manager/releases or
-via `snapcraft revisions station-manager`.
-
----
-
-## Required GitHub secrets
-
-| Secret | Purpose | How to generate |
-|---|---|---|
-| `SNAPCRAFT_STORE_CREDENTIALS` | Authenticate `snapcraft upload/release` | `snapcraft export-login --snaps=station-manager --channels=edge,beta,candidate,stable -` |
+- **Attached assets**: Wails app binaries (smlogger, smbook)
 
 ---
 
@@ -200,9 +133,7 @@ task setup-hooks
 |---|---|
 | `Taskfile.yml` | Root task runner — Go build, test, tidy, update, hooks |
 | `Taskfile.wails.yml` | Wails app build tasks (shared-utils, logging, logbook) |
-| `snap/snapcraft.yaml` | Snap package definition for the full suite |
 | `.github/workflows/validate.yml` | CI: runs on every push to `main` |
-| `.github/workflows/release.yml` | CI: runs on `v*` tag push — build + snap + GitHub Release |
+| `.github/workflows/release.yml` | CI: runs on `v*` tag push — build + GitHub Release |
 | `scripts/pre-commit` | Git hook: regenerates Wails bindings on commit |
 | `internal/utils/working_dir.go` | `WorkingDir()` — reads `SM_WORKING_DIR` env var |
-

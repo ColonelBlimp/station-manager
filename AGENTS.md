@@ -24,14 +24,13 @@
 
 ## CI and release process
 - **Every push to `main`**: `.github/workflows/validate.yml` runs vet, fmt, test, lint.
-- **On `v*` tag push**: `.github/workflows/release.yml` runs validate → build → snap → GitHub Release.
+- **On `v*` tag push**: `.github/workflows/release.yml` runs validate → build Wails apps → GitHub Release.
 - Wails modules are skipped during validation (their `go:embed` requires a frontend build).
 - Full release process documented in `RELEASING.md`.
 
-## Snap packaging
-- Single snap `station-manager` bundles all apps: `snap/snapcraft.yaml`.
-- `SM_WORKING_DIR` env var is set to `$SNAP_USER_COMMON` in the snap environment.
+## Runtime data
 - All apps use `utils.WorkingDir()` (`internal/utils/working_dir.go`) to resolve data paths.
+- Resolution order: explicit argument → `SM_WORKING_DIR` env var → executable's directory.
 
 ## Conventions for agents
 - Add new reusable domain code as packages under `internal/` (e.g., `internal/newpkg/`). No new `go.mod` needed — they are packages within the single `internal` module.
@@ -46,6 +45,4 @@
 - Build/test workflow: `Taskfile.yml`, `Taskfile.wails.yml`
 - Active Go modules: `go.work`
 - CI workflows: `.github/workflows/`
-- Snap definition: `snap/snapcraft.yaml`
 - Runtime artifact directories: `build/bin`, `build/db`, `build/logs`
-

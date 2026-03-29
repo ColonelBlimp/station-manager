@@ -67,7 +67,6 @@ jobs:
             (cd "$mod" && golangci-lint run --timeout=5m ./...)
           done < <(find apps internal cmd -name go.mod -printf '%h\n' | sort)
 
-
   build-wails:
     name: Build Wails Apps
     needs: validate
@@ -111,51 +110,9 @@ jobs:
             build/bin/smbook
           retention-days: 30
 
-  snap:
-    name: Build & Publish Snap
-    needs: build-wails
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Download Wails binaries into the repo root — snapcraft.yaml
-      # organize section maps them into usr/bin/
-      - uses: actions/download-artifact@v4
-        with:
-          name: wails-apps-linux-amd64
-          path: .
-
-      - name: Set snap version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version: .*/version: '${VERSION}'/" snap/snapcraft.yaml
-          echo "Snap version: ${VERSION}"
-
-      - name: Verify staged binaries
-        run: |
-          chmod +x smlogger smbook
-          ls -lh smlogger smbook
-
-      # snapcore/action-build finds snap/snapcraft.yaml at repo root
-      - uses: snapcore/action-build@v1
-        id: snap-build
-
-      - uses: snapcore/action-publish@v1
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-        with:
-          snap: ${{ steps.snap-build.outputs.snap }}
-          release: edge
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: snap-linux-amd64
-          path: ${{ steps.snap-build.outputs.snap }}
-          retention-days: 30
-
   release:
     name: Create GitHub Release
-    needs: [build-wails, snap]
+    needs: build-wails
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -166,11 +123,6 @@ jobs:
         with:
           name: wails-apps-linux-amd64
           path: artifacts/wails-apps
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: snap-linux-amd64
-          path: artifacts/snap
 
       - name: List release assets
         run: find artifacts/ -type f | sort
@@ -183,4 +135,3 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/wails-apps/*
-            artifacts/snap/*.snap
