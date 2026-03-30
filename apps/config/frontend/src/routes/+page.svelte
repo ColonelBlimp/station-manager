@@ -1,4 +1,4 @@
 <script lang="ts">
 </script>
 
-Page
+<p>Page</p>

@@ -1,11 +1,11 @@
 package main
 
 import (
+	"embed"
 	"fmt"
 	"os"
 	"runtime/debug"
 
-	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/wailsapp/wails/v2"
@@ -23,6 +23,9 @@ const (
 var (
 	version string
 )
+
+//go:embed all:frontend/build
+var assets embed.FS
 
 func main() {
 	defer func() {
@@ -43,33 +46,33 @@ func main() {
 	fmt.Println(workingDir)
 
 	opts := &options.App{
-		Title:              fmt.Sprintf("%s: %s", AppTitle, version),
-		Width:              minWidth,
-		Height:             minHeight,
-		DisableResize:      true,
-		Fullscreen:         false,
-		Frameless:          false,
-		MinWidth:           minWidth,
-		MinHeight:          minHeight,
-		MaxWidth:           minWidth,
-		MaxHeight:          minHeight,
-		StartHidden:        false,
-		HideWindowOnClose:  false,
-		AlwaysOnTop:        false,
-		BackgroundColour:   &options.RGBA{R: 255, G: 255, B: 255, A: 255},
-		AssetServer:        &assetserver.Options{},
-		Menu:               nil,
-		Logger:             nil,
-		LogLevel:           logger.WARNING,
-		LogLevelProduction: logger.ERROR,
-		OnStartup:          nil,
-		OnDomReady:         nil,
-		OnShutdown:         nil,
-		OnBeforeClose:      nil,
-		Bind:               []interface{}{},
-		EnumBind: []interface{}{
-			sqlite.OrderingNames,
+		Title:             fmt.Sprintf("%s: %s", AppTitle, version),
+		Width:             minWidth,
+		Height:            minHeight,
+		DisableResize:     true,
+		Fullscreen:        false,
+		Frameless:         false,
+		MinWidth:          minWidth,
+		MinHeight:         minHeight,
+		MaxWidth:          minWidth,
+		MaxHeight:         minHeight,
+		StartHidden:       false,
+		HideWindowOnClose: false,
+		AlwaysOnTop:       false,
+		BackgroundColour:  &options.RGBA{R: 255, G: 255, B: 255, A: 255},
+		AssetServer: &assetserver.Options{
+			Assets: assets,
 		},
+		Menu:                             nil,
+		Logger:                           nil,
+		LogLevel:                         logger.WARNING,
+		LogLevelProduction:               logger.ERROR,
+		OnStartup:                        nil,
+		OnDomReady:                       nil,
+		OnShutdown:                       nil,
+		OnBeforeClose:                    nil,
+		Bind:                             []interface{}{},
+		EnumBind:                         []interface{}{},
 		WindowStartState:                 options.Normal,
 		ErrorFormatter:                   nil,
 		CSSDragProperty:                  "",
