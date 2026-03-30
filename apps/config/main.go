@@ -5,8 +5,23 @@ import (
 	"os"
 	"runtime/debug"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/logger"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
+)
+
+const (
+	minWidth  int = 1024
+	minHeight int = 784
+)
+
+var (
+	version string
 )
 
 func main() {
@@ -26,4 +41,74 @@ func main() {
 	}
 
 	fmt.Println(workingDir)
+
+	opts := &options.App{
+		Title:              fmt.Sprintf("%s: %s", AppTitle, version),
+		Width:              minWidth,
+		Height:             minHeight,
+		DisableResize:      true,
+		Fullscreen:         false,
+		Frameless:          false,
+		MinWidth:           minWidth,
+		MinHeight:          minHeight,
+		MaxWidth:           minWidth,
+		MaxHeight:          minHeight,
+		StartHidden:        false,
+		HideWindowOnClose:  false,
+		AlwaysOnTop:        false,
+		BackgroundColour:   &options.RGBA{R: 255, G: 255, B: 255, A: 255},
+		AssetServer:        &assetserver.Options{},
+		Menu:               nil,
+		Logger:             nil,
+		LogLevel:           logger.WARNING,
+		LogLevelProduction: logger.ERROR,
+		OnStartup:          nil,
+		OnDomReady:         nil,
+		OnShutdown:         nil,
+		OnBeforeClose:      nil,
+		Bind:               []interface{}{},
+		EnumBind: []interface{}{
+			sqlite.OrderingNames,
+		},
+		WindowStartState:                 options.Normal,
+		ErrorFormatter:                   nil,
+		CSSDragProperty:                  "",
+		CSSDragValue:                     "",
+		EnableDefaultContextMenu:         false,
+		EnableFraudulentWebsiteDetection: false,
+		SingleInstanceLock:               nil,
+		Windows: &windows.Options{
+			WebviewIsTransparent:                true,
+			WindowIsTranslucent:                 false,
+			DisableWindowIcon:                   false,
+			IsZoomControlEnabled:                false,
+			ZoomFactor:                          0,
+			DisablePinchZoom:                    false,
+			DisableFramelessWindowDecorations:   false,
+			WebviewUserDataPath:                 "",
+			WebviewBrowserPath:                  "",
+			Theme:                               windows.SystemDefault,
+			CustomTheme:                         nil,
+			BackdropType:                        0,
+			Messages:                            nil,
+			ResizeDebounceMS:                    0,
+			OnSuspend:                           nil,
+			OnResume:                            nil,
+			WebviewGpuIsDisabled:                false,
+			WebviewDisableRendererCodeIntegrity: false,
+			EnableSwipeGestures:                 false,
+		},
+		Mac:          nil,
+		Linux:        nil,
+		Experimental: nil,
+		Debug: options.Debug{
+			OpenInspectorOnStartup: isDevelopment(),
+		},
+		DragAndDrop: nil,
+	}
+	if err = wails.Run(opts); err != nil {
+		errors.PrintChain(err)
+		_, _ = fmt.Fprintf(os.Stderr, "failed to run wails: %v\n", errors.Root(err))
+		os.Exit(ExitWailsRun)
+	}
 }
