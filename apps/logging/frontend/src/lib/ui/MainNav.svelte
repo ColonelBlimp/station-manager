@@ -1,7 +1,7 @@
 <script lang="ts">
     import {page} from "$app/state";
 
-    const baseLink = "px-3 py-1.5 rounded-md text-sm font-medium text-white";
+    const baseLink = "px-3 py-1 rounded-md text-base font-medium text-white";
     const selectedCss = "bg-indigo-700";
     const hoverCss = "hover:bg-white/10";
 
