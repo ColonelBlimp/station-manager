@@ -7,6 +7,6 @@ Exec=smconfig %u
 Terminal=false
 Type=Application
 Icon=smconfig
-Categories=Utility;
+Categories=HamRadio;Network;
 StartupWMClass=SMConfig
 

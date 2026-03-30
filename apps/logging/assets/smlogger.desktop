@@ -7,5 +7,5 @@ Exec=smlogger %u
 Terminal=false
 Type=Application
 Icon=smlogger
-Categories=Utility;
+Categories=HamRadio;Network;
 StartupWMClass=SMLogger

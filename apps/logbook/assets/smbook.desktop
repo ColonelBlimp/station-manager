@@ -7,5 +7,5 @@ Exec=smbook %u
 Terminal=false
 Type=Application
 Icon=smbook
-Categories=Utility;
+Categories=HamRadio;Network;
 StartupWMClass=SMLogbook

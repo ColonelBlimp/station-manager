@@ -33,6 +33,11 @@ contents:
     dst: /usr/share/pixmaps/smbook.png
   - src: apps/config/assets/smconfig.png
     dst: /usr/share/pixmaps/smconfig.png
+  # ── XDG menu: "Amateur Radio" submenu ──
+  - src: assets/xdg/amateur-radio.directory
+    dst: /usr/share/desktop-directories/amateur-radio.directory
+  - src: assets/xdg/amateur-radio.menu
+    dst: /etc/xdg/menus/applications-merged/amateur-radio.menu
 # RPM needs different dependency names
 overrides:
   rpm:
