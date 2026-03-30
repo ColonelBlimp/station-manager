@@ -121,6 +121,17 @@ tasks:
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
 
+  frontend-update:
+    desc: "Update npm dependencies for all frontends"
+    cmds:
+      - echo "Updating web/shared-utils..."
+      - cmd: bash -c 'cd web/shared-utils && npm update'
+      - echo "Updating apps/logging/frontend..."
+      - cmd: bash -c 'cd apps/logging/frontend && npm update'
+      - echo "Updating apps/logbook/frontend..."
+      - cmd: bash -c 'cd apps/logbook/frontend && npm update'
+      - echo "✓ All frontend dependencies updated"
+
   logbook:dev:
     desc: "Run the logbook app in Wails dev mode (hot-reload)"
     deps:
