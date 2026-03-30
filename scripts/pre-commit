@@ -8,3 +8,10 @@ if git diff --cached --name-only | grep -q '^apps/logging/'; then
   (cd apps/logging && wails generate module)
   git add apps/logging/frontend/src/lib/
 fi
+
+if git diff --cached --name-only | grep -q '^apps/config/'; then
+  echo ">> apps/config changed — running wails generate module..."
+  (cd apps/config && wails generate module)
+  git add apps/config/frontend/src/lib/
+fi
+

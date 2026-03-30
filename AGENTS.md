@@ -8,7 +8,7 @@
 ## Workspace and module boundaries
 - This is a Go workspace (`go.work`, Go `1.25.0`) with no root `go.mod`.
 - **One consolidated `internal/` module** (`internal/go.mod`) contains all shared domain packages (adapters, adif, cat, config, database, etc.) as plain Go packages — not individual modules.
-- App modules live under `apps/*` (e.g., `apps/logging`, `apps/logbook`); each has its own `go.mod` with a single `replace` directive pointing to `../../internal`.
+- App modules live under `apps/*` (e.g., `apps/logging`, `apps/logbook`, `apps/config`); each has its own `go.mod` with a single `replace` directive pointing to `../../internal`.
 - `web/shared-utils/` is a TypeScript/Svelte library consumed by Wails app frontends.
 - Do not add a root-level `go.mod`; do not split `internal/` back into per-package modules.
 
@@ -19,6 +19,8 @@
 - `task tidy` → `go mod tidy` in each module
 - `task update` → `go get -u ./...` + `go mod tidy` in each module
 - `task wails:logging APP_VERSION=<ver>` → build the logging Wails app
+- `task wails:logbook APP_VERSION=<ver>` → build the logbook Wails app
+- `task wails:config APP_VERSION=<ver>` → build the config Wails app
 - `task wails APP_VERSION=<ver>` → build all Wails apps
 - `task setup-hooks` → install Git pre-commit hook
 

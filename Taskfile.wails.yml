@@ -16,6 +16,9 @@ tasks:
       - task: logbook
         vars:
           APP_VERSION: '{{.VERSION}}'
+      - task: config
+        vars:
+          APP_VERSION: '{{.VERSION}}'
 
   # ── Shared Utils ─────────────────────────────────────────────
   shared-utils:dep-install:
@@ -121,6 +124,60 @@ tasks:
     cmds:
       - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
 
+  logbook:dev:
+    desc: "Run the logbook app in Wails dev mode (hot-reload)"
+    deps:
+      - shared-utils:build
+      - logbook:frontend-dep-install
+    dir: apps/logbook
+    cmds:
+      - wails dev -tags webkit2_41
+
+  # ── Config ───────────────────────────────────────────────────
+  config:
+    desc: "Build the config application"
+    cmds:
+      - task: shared-utils:build
+      - task: config:frontend-dep-install
+      - task: config:wails-build
+        vars:
+          APP_VERSION: '{{.APP_VERSION | default $.VERSION}}'
+
+  config:frontend-dep-install:
+    desc: "Install frontend dependencies for apps/config"
+    dir: apps/config/frontend
+    cmds:
+      - npm install
+    sources:
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+
+  config:frontend-build:
+    desc: "Build the config frontend"
+    dir: apps/config/frontend
+    cmds:
+      - npm run build
+    sources:
+      - src/**/*
+    generates:
+      - build/index.html
+
+  config:wails-build:
+    desc: "Build the config Wails binary"
+    dir: apps/config
+    cmds:
+      - wails build -tags webkit2_41 -ldflags "-X main.version={{.APP_VERSION}}"
+
+  config:dev:
+    desc: "Run the config app in Wails dev mode (hot-reload)"
+    deps:
+      - shared-utils:build
+      - config:frontend-dep-install
+    dir: apps/config
+    cmds:
+      - wails dev -tags webkit2_41
+
   frontend-update:
     desc: "Update npm dependencies for all frontends"
     cmds:
@@ -130,13 +187,7 @@ tasks:
       - cmd: bash -c 'cd apps/logging/frontend && npm update'
       - echo "Updating apps/logbook/frontend..."
       - cmd: bash -c 'cd apps/logbook/frontend && npm update'
+      - echo "Updating apps/config/frontend..."
+      - cmd: bash -c 'cd apps/config/frontend && npm update'
       - echo "✓ All frontend dependencies updated"
 
-  logbook:dev:
-    desc: "Run the logbook app in Wails dev mode (hot-reload)"
-    deps:
-      - shared-utils:build
-      - logbook:frontend-dep-install
-    dir: apps/logbook
-    cmds:
-      - wails dev -tags webkit2_41

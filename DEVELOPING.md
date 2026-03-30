@@ -57,9 +57,11 @@ Run `task --list` for a full listing. The key commands:
 |---|---|
 | `task wails:logging APP_VERSION=dev` | Build the logging app only |
 | `task wails:logbook APP_VERSION=dev` | Build the logbook app only |
+| `task wails:config APP_VERSION=dev` | Build the config app only |
 | `task wails APP_VERSION=dev` | Build all Wails apps |
 | `task wails:logging:dev` | Run logging app in **dev mode** (hot-reload) |
 | `task wails:logbook:dev` | Run logbook app in **dev mode** (hot-reload) |
+| `task wails:config:dev` | Run config app in **dev mode** (hot-reload) |
 
 `APP_VERSION` is **required** for production builds — it gets baked into the
 binary via `-ldflags "-X main.version=..."`. For local dev, any string works.
@@ -84,6 +86,9 @@ task wails:logging:dev
 
 # Logbook app
 task wails:logbook:dev
+
+# Config app
+task wails:config:dev
 ```
 
 Both automatically build `shared-utils` and install frontend dependencies first.
@@ -128,9 +133,9 @@ via `nfpm.yaml` in the project root.
 ## Pre-commit hook
 
 The hook at `scripts/pre-commit` runs automatically on commit. When files under
-`apps/logging/` are staged, it regenerates the Wails JS/TS bindings
-(`wails generate module`) and stages the output under
-`apps/logging/frontend/src/lib/`:
+`apps/logging/` or `apps/config/` are staged, it regenerates the Wails JS/TS bindings
+(`wails generate module`) and stages the output under the respective
+`apps/<app>/frontend/src/lib/` directory:
 
 ```bash
 # Manual install / update:
@@ -147,7 +152,7 @@ for environments (like Git hooks) that don't inherit the full shell `PATH`.
 ```
 station-manager/
 ├── apps/
-│   ├── config/          CLI configuration tool (Go, to be converted to Wails)
+│   ├── config/          Configuration tool (Wails + SvelteKit)
 │   ├── logbook/         Logbook viewer (Wails + SvelteKit)
 │   └── logging/         QSO logging app (Wails + SvelteKit)
 ├── cmd/
@@ -215,7 +220,7 @@ development without polluting your shell.
 |---|---|
 | `go.work` | Go workspace — lists all active modules |
 | `Taskfile.yml` | Root task runner (build, test, tidy, update, package) |
-| `Taskfile.wails.yml` | Wails app build chain (shared-utils → frontend → wails) |
+| `Taskfile.wails.yml` | Wails app build chain (shared-utils → frontend → wails) for logging, logbook, config |
 | `nfpm.yaml` | nfpm packaging config — produces .deb and .rpm |
 | `.github/workflows/validate.yml` | CI: vet, fmt, test, lint on every push to `main` |
 | `.github/workflows/release.yml` | CI: build + package + GitHub Release on `v*` tag |

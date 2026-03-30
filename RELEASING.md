@@ -23,7 +23,7 @@ Every push to `main` runs **Validate** — four parallel jobs:
 3. **Unit Tests** — `go test -race ./... -short` in each non-Wails module
 4. **Lint** — `golangci-lint run ./...` in each non-Wails module
 
-Wails app modules (`apps/logging`, `apps/logbook`) are **skipped** during
+Wails app modules (`apps/logging`, `apps/logbook`, `apps/config`) are **skipped** during
 validation because their `go:embed` directives require a frontend build.
 
 ### Pre-commit hook
@@ -73,6 +73,7 @@ Installs Node 22, GTK/WebKit system libraries, the Wails CLI, and nfpm, then:
 |---|---|---|---|
 | sm-logger | `apps/logging` | `build/bin/smlogger` | `-ldflags "-X main.version=<tag>"` |
 | sm-logbook | `apps/logbook` | `build/bin/smbook` | `-ldflags "-X main.version=<tag>"` |
+| sm-config | `apps/config` | `build/bin/smconfig` | `-ldflags "-X main.version=<tag>"` |
 
 2. Packages with [nfpm](https://nfpm.goreleaser.com/) using `nfpm.yaml`:
 
@@ -82,7 +83,7 @@ Installs Node 22, GTK/WebKit system libraries, the Wails CLI, and nfpm, then:
 | `.rpm` | `station-manager-<ver>-1.x86_64.rpm` | `gtk3`, `webkit2gtk4.1` |
 
 Each package installs:
-- Binaries → `/usr/bin/smlogger`, `/usr/bin/smbook`
+- Binaries → `/usr/bin/smlogger`, `/usr/bin/smbook`, `/usr/bin/smconfig`
 - Desktop entries → `/usr/share/applications/`
 - Icons → `/usr/share/pixmaps/`
 
@@ -147,7 +148,7 @@ task setup-hooks
 | File | Purpose |
 |---|---|
 | `Taskfile.yml` | Root task runner — Go build, test, tidy, update, package, hooks |
-| `Taskfile.wails.yml` | Wails app build tasks (shared-utils, logging, logbook) |
+| `Taskfile.wails.yml` | Wails app build tasks (shared-utils, logging, logbook, config) |
 | `nfpm.yaml` | nfpm packaging config — produces .deb and .rpm |
 | `.github/workflows/validate.yml` | CI: runs on every push to `main` |
 | `.github/workflows/release.yml` | CI: runs on `v*` tag push — build + package + GitHub Release |

@@ -119,6 +119,7 @@ jobs:
           path: |
             build/bin/smlogger
             build/bin/smbook
+            build/bin/smconfig
             build/release/*.deb
             build/release/*.rpm
           retention-days: 30
@@ -149,5 +150,6 @@ jobs:
           files: |
             artifacts/build/bin/smlogger
             artifacts/build/bin/smbook
+            artifacts/build/bin/smconfig
             artifacts/build/release/*.deb
             artifacts/build/release/*.rpm

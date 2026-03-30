@@ -1,0 +1,12 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=Station-Manager Configuration
+GenericName=Station Configuration
+Comment=Configuration tool for the Station Manager amateur radio suite.
+Exec=smconfig %u
+Terminal=false
+Type=Application
+Icon=smconfig
+Categories=Utility;
+StartupWMClass=SMConfig
+

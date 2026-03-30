@@ -4,7 +4,7 @@ arch: amd64
 platform: linux
 version: "${VERSION}"
 maintainer: "ColonelBlimp"
-description: "Amateur Radio station management suite — QSO logger and logbook"
+description: "Amateur Radio station management suite — QSO logger, logbook, and configuration tool"
 homepage: "https://github.com/ColonelBlimp/station-manager"
 license: "MIT"
 # Default depends (deb package names)
@@ -17,16 +17,22 @@ contents:
     dst: /usr/bin/smlogger
   - src: build/bin/smbook
     dst: /usr/bin/smbook
+  - src: build/bin/smconfig
+    dst: /usr/bin/smconfig
   # ── Desktop entries ──
   - src: apps/logging/assets/smlogger.desktop
     dst: /usr/share/applications/smlogger.desktop
   - src: apps/logbook/assets/smbook.desktop
     dst: /usr/share/applications/smbook.desktop
+  - src: apps/config/assets/smconfig.desktop
+    dst: /usr/share/applications/smconfig.desktop
   # ── Icons ──
   - src: apps/logging/assets/smlogger.png
     dst: /usr/share/pixmaps/smlogger.png
   - src: apps/logbook/assets/smbook.png
     dst: /usr/share/pixmaps/smbook.png
+  - src: apps/config/assets/smconfig.png
+    dst: /usr/share/pixmaps/smconfig.png
 # RPM needs different dependency names
 overrides:
   rpm:
