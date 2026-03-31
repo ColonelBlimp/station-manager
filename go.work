@@ -4,5 +4,6 @@ use (
 	./apps/config
 	./apps/logbook
 	./apps/logging
+	./cmd/importer
 	./internal
 )
