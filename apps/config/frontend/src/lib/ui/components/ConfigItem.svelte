@@ -8,7 +8,7 @@
         cannotUpdate?: boolean;
         cannotUpdateReason?: string;
         updateCallback?: (value: string) => void;
-        inputSnippet?: Snippet<[{value: string, onChange: (v: string) => void}]>;
+        inputSnippet?: Snippet<[{value: string, onChange: (v: string) => void, ref: (el: HTMLElement) => void}]>;
     }
 
     let {
@@ -23,10 +23,12 @@
 
     let editState = $state(false);
     let editValue = $state(value);
+    let inputEl: HTMLElement | undefined;
 
     const onClickEdit = () => {
         editValue = value;
         editState = true;
+        setTimeout(() => inputEl?.focus(), 0);
     };
 
     const onSave = () => {
@@ -44,7 +46,7 @@
     <dt class="text-sm font-semibold w-56">{label}</dt>
     <dd class="flex items-center gap-2 text-sm text-gray-700">
         {#if editState && inputSnippet}
-            {@render inputSnippet({ value: editValue, onChange: (v) => (editValue = v) })}
+            {@render inputSnippet({ value: editValue, onChange: (v) => (editValue = v), ref: (el) => (inputEl = el) })}
             <button
                 onclick={onSave}
                 type="button"

@@ -1,4 +1,6 @@
 <script lang="ts">
+    const modes = ["AM", "CW", "FM", "RTTY", "SSB", "DIGITALVOICE", "MFSK", "PSK", "HELL", "PACKET"];
+
     interface Props {
         value: string;
         onChange: (v: string) => void;
@@ -6,17 +8,20 @@
     }
 
     let { value, onChange, ref }: Props = $props();
-    let inputEl: HTMLInputElement;
+    let selectEl: HTMLSelectElement;
 
     $effect(() => {
-        if (inputEl) ref?.(inputEl);
+        if (selectEl) ref?.(selectEl);
     });
 </script>
 
-<input
-    bind:this={inputEl}
-    type="number"
+<select
+    bind:this={selectEl}
     {value}
-    oninput={(e) => onChange(e.currentTarget.value)}
+    onchange={(e) => onChange(e.currentTarget.value)}
     class="w-36 rounded border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-500 focus:ring-opacity-50"
-/>
+>
+    {#each modes as mode}
+        <option value={mode}>{mode}</option>
+    {/each}
+</select>
