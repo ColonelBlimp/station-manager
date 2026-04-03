@@ -46,3 +46,27 @@ func (s *Service) Initialize() error {
 
 	return initErr
 }
+
+// SetContainer sets the IOC container for the Service. Returns an error if the Service is uninitialized or the container is nil.
+func (s *Service) SetContainer(container *iocdi.Container) error {
+	const op errors.Op = "facade.Service.SetContainer"
+	if !s.initialized.Load() {
+		err := errors.New(op).Msg(errMsgServiceNotInit)
+		s.LoggerService.ErrorWith().Err(err).Msg(errMsgServiceNotInit)
+		return err
+	}
+
+	if s.started.Load() {
+		return nil
+	}
+
+	if container == nil {
+		err := errors.New(op).Msg("Container cannot be nil")
+		s.LoggerService.ErrorWith().Err(err).Msg("Container cannot be nil")
+		return err
+	}
+
+	s.container = container
+
+	return nil
+}

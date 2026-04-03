@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/apps/config/backend/facade"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
@@ -26,12 +27,29 @@ func initializeContainer(workingDir string) error {
 	if err := container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
 		return errors.New(op).Err(err)
 	}
+	if err := container.Register(facade.ServiceName, reflect.TypeOf((*facade.Service)(nil))); err != nil {
+		return errors.New(op).Err(err)
+	}
 
 	if err := container.Build(); err != nil {
 		return errors.New(op).Err(err)
 	}
 
 	return nil
+}
+
+func getFacadeService() (*facade.Service, error) {
+	const op errors.Op = "logging-app.main.getFacadeService"
+
+	obj, err := container.ResolveSafe(facade.ServiceName)
+	if err != nil {
+		return nil, errors.New(op).Err(err)
+	}
+	svc, ok := obj.(*facade.Service)
+	if !ok {
+		return nil, errors.New(op).Msg("Failed to cast facade service")
+	}
+	return svc, nil
 }
 
 // isDevelopment determines if the current application version is a development version by checking if "dev" is in its name.

@@ -5,6 +5,10 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
+const (
+	ServiceName = "config-app-facade"
+)
+
 func (s *Service) GetConfig() (*types.AppConfig, error) {
 	const op errors.Op = "facade.Service.GetConfig"
 
