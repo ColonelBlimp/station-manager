@@ -43,7 +43,11 @@ func main() {
 		os.Exit(ExitWorkingDir)
 	}
 
-	fmt.Println(workingDir)
+	if err = initializeContainer(workingDir); err != nil {
+		errors.PrintChain(err)
+		_, _ = fmt.Fprintf(os.Stderr, "failed to initialize container: %v\n", errors.Root(err))
+		os.Exit(ExitContainerInit)
+	}
 
 	opts := &options.App{
 		Title:             fmt.Sprintf("%s: %s", AppTitle, version),

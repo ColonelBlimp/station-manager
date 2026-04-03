@@ -8,7 +8,6 @@ import (
 	"runtime/debug"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
-	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -22,8 +21,6 @@ const (
 var (
 	version string
 )
-
-var container *iocdi.Container
 
 //go:embed all:frontend/build
 var assets embed.FS

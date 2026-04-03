@@ -20,6 +20,8 @@ import (
 	_ "github.com/ColonelBlimp/station-manager/internal/listeners/handlers/wsjtx"
 )
 
+var container *iocdi.Container
+
 // initializeContainer initializes the dependency injection container with required services and configurations.
 // It registers instances and services by their identifiers, builds the container, and ensures all dependencies are resolved.
 // Returns an error if any registration or build process fails.
