@@ -34,6 +34,7 @@ type Service struct {
 
 	supportedCatStates map[string]types.CatState
 	maxCatPrefixLen    int
+	catCommandIndex    map[string]types.CatCommand
 
 	initialized atomic.Bool
 	started     atomic.Bool // guarded via atomic operations; Start/Stop also hold mu for a broader state

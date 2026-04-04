@@ -64,6 +64,12 @@ func (s *Service) initializeStateSet() error {
 	}
 
 	s.maxCatPrefixLen = maxLen
+
+	s.catCommandIndex = make(map[string]types.CatCommand, len(s.config.CatCommands))
+	for _, cmd := range s.config.CatCommands {
+		s.catCommandIndex[cmd.Name] = cmd
+	}
+
 	return nil
 }
 
@@ -78,13 +84,11 @@ func (s *Service) launchWorkerThread(run *runState, workerFunc func(<-chan struc
 	}()
 }
 
-// commandLookup retrieves a CatCommand by its name from the service configuration. Returns an error if the command is not found.
+// commandLookup retrieves a CatCommand by its name from the pre-built index. Returns an error if the command is not found.
 func (s *Service) commandLookup(name cmds.CatCmdName) (types.CatCommand, error) {
 	const op errors.Op = "cat.Service.commandLookup"
-	for _, c := range s.config.CatCommands {
-		if c.Name == name.String() {
-			return c, nil
-		}
+	if cmd, ok := s.catCommandIndex[name.String()]; ok {
+		return cmd, nil
 	}
 	return types.CatCommand{}, errors.New(op).Msgf("command %s not found", name)
 }
