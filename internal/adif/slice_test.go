@@ -16,7 +16,6 @@ import (
 )
 
 func TestComposeToAdifString(t *testing.T) {
-	t.Skip("integration test skipped in unit test run")
 	cfg, err := config.New()
 	if err != nil {
 		t.Fatalf("Failed to create config: %v", err)

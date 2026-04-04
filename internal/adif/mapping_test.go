@@ -24,15 +24,12 @@ func Test_QsoToRecord_And_RenderIncludesQslAndMisc(t *testing.T) {
 			QslSent:  "Y",
 			QslVia:   "B",
 		},
-		//Misc: types.Misc{
 		QrzComUploadStatus:  "Y",
 		QrzComUploadDate:    "20250508010101",
 		SmQsoUploadStatus:   "Y",
 		SmQsoUploadDate:     "20250508010101",
 		SmFwrdByEmailStatus: "N",
 		SmFwrdByEmailDate:   "",
-		//		QslWanted:             "Y",
-		//},
 	}
 
 	rec := QsoToRecord(q)
@@ -48,7 +45,6 @@ func Test_QsoToRecord_And_RenderIncludesQslAndMisc(t *testing.T) {
 		"<QSL_VIA:1>B",
 		"<QRZCOM_QSO_UPLOAD_STATUS:1>Y",
 		"<SM_QSO_UPLOAD_STATUS:1>Y",
-		//		"<QSL_WANTED:1>Y",
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(adif, s) {

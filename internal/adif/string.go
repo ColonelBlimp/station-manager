@@ -110,8 +110,7 @@ func formatField(tagName string, value string) string {
 	// Special formatting required for certain fields by the ADIF standard.
 	switch tagName {
 	case "FREQ", "FREQ_RX":
-		//		value = normalizeFreqMHz(value)
-		value = khzToMHz(value)
+		value = hzToMHz(value)
 	case "QSO_DATE", "QSO_DATE_OFF", "QSLRDATE", "QSLSDATE":
 		value = strings.ReplaceAll(value, DashStr, emptyString)
 	case "TIME_ON", "TIME_OFF":
@@ -121,34 +120,13 @@ func formatField(tagName string, value string) string {
 	return fmt.Sprintf(elementFormat, tagName, len(value), value)
 }
 
-// normalizeFreqMHz attempts to normalize frequency strings to MHz with decimals.
-// Examples:
-//   - "7.050.000" -> "7.050"
-//   - "144.390"   -> "144.390"
-//   - "144."      -> "144"
-//
-// The function is defensive and will not panic on short inputs.
-func normalizeFreqMHz(s string) string {
-	s = strings.TrimSpace(s)
-	if s == emptyString {
+// hzToMHz converts a raw integer Hz frequency string (7 or 8 digits) to an MHz string.
+// Example: "14310000" -> "14.310", "7050000" -> "7.050"
+// Values that already contain a decimal point are returned unchanged.
+func hzToMHz(s string) string {
+	if strings.ContainsRune(s, '.') {
 		return s
 	}
-	// If it contains two dots (xxx.xxx.xxx), drop the last group
-	if strings.Count(s, ".") >= 2 {
-		last := strings.LastIndex(s, ".")
-		if last > 0 {
-			s = s[:last]
-		}
-	}
-	// Remove any trailing dot, e.g., "144." -> "144"
-	s = strings.TrimSuffix(s, ".")
-
-	return s
-}
-
-// khzToMHz converts a frequency string of 7 or 8 characters (representing kHz) to MHz.
-// Example: "14310000" -> "14.310"
-func khzToMHz(s string) string {
 	if len(s) < 7 || len(s) > 8 {
 		return s
 	}
@@ -156,7 +134,5 @@ func khzToMHz(s string) string {
 	if err != nil {
 		return s
 	}
-	// The input is assumed to be in a format where 14310000 represents 14.310 MHz.
-	// This corresponds to dividing by 1,000,000.
 	return fmt.Sprintf("%.3f", f/1000000.0)
 }

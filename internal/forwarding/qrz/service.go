@@ -132,10 +132,7 @@ func (s *Service) ForwardNetworkOnly(qso types.Qso, param ...string) error {
 		return errors.New(op).Err(err).Msg("invalid QRZ base URL")
 	}
 
-	payload, err := adif.ConvertQsoToAdifNoHeader(qso)
-	if err != nil {
-		return errors.New(op).Err(err).Msg("converting QSO to ADIF")
-	}
+	payload := adif.ConvertQsoToAdifNoHeader(qso)
 
 	form := url.Values{
 		"KEY":    {s.Config.APIKey},

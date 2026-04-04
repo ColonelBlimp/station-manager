@@ -18,7 +18,7 @@ type QslSection struct {
 	QslMsg     string `adif:"qslmsg,omitempty"`
 	QslMsgIntl string `adif:"qslmsg_intl,omitempty"`
 	QslRDate   string `adif:"qslrdate,omitempty"`
-	QslSDate   string `adif:"qsl_sdate,omitempty"`
+	QslSDate   string `adif:"qslsdate,omitempty"`
 	QslRcvd    string `adif:"qsl_rcvd,omitempty"` // QslRcvd: the QSL received status
 	QslSent    string `adif:"qsl_sent,omitempty"` // QslSent: the QSL sent status
 	QslSentVia string `adif:"qsl_sent_via,omitempty"`
@@ -43,10 +43,10 @@ type Adif struct {
 }
 
 type UserDef struct {
-	SmQsoUploadDate     string `adif:"sm_qso_upload_date"`      // Values: "[date-time-stamp]" or empty string
-	SmQsoUploadStatus   string `adif:"sm_qso_upload_status"`    // Values: "Y" = Uploaded, "N" = Not Uploaded
-	SmFwrdByEmailDate   string `adif:"sm_fwrd_by_email_date"`   // Values: "[date-time-stamp]" or empty string
-	SmFwrdByEmailStatus string `adif:"sm_fwrd_by_email_status"` // Values: "Y" = Forwarded by email, "N" = Not forwarded
+	SmQsoUploadDate     string `adif:"sm_qso_upload_date"`     // Values: "[date-time-stamp]" or empty string
+	SmQsoUploadStatus   string `adif:"sm_qso_upload_status"`   // Values: "Y" = Uploaded, "N" = Not Uploaded
+	SmFwrdByEmailDate   string `adif:"sm_fwd_by_email_date"`   // Values: "[date-time-stamp]" or empty string
+	SmFwrdByEmailStatus string `adif:"sm_fwd_by_email_status"` // Values: "Y" = Forwarded by email, "N" = Not forwarded
 
 	// Indicates if a QSL (physical card) is wanted for this QSO. This allows for tracking if a QSL card is required for
 	// this qso. 'qsl_rcvd' should be then used to track the status: 'R' = Requested, 'Y' = QSL received.
@@ -78,14 +78,13 @@ func QsoToRecord(q types.Qso) Record {
 		SmQsoUploadStatus:   q.SmQsoUploadStatus,
 		SmFwrdByEmailDate:   q.SmFwrdByEmailDate,
 		SmFwrdByEmailStatus: q.SmFwrdByEmailStatus,
-		//		QslWanted:           q.Misc.QslWanted,
 	}
 	return r
 }
 
-func ConvertQsoToAdifNoHeader(q types.Qso) (string, error) {
+func ConvertQsoToAdifNoHeader(q types.Qso) string {
 	rec := QsoToRecord(q)
-	return (&rec).String(), nil
+	return (&rec).String()
 }
 
 func ComposeToAdifString(slice types.QsoSlice) (string, error) {

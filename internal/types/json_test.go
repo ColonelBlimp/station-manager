@@ -706,7 +706,6 @@ func TestRequiredConfigs_RoundTrip(t *testing.T) {
 		PowerMultiplier:              1,
 		DefaultTxPower:               100,
 		UsePowerMultiplier:           false,
-		DefaultFwdEmail:              "op@example.com",
 		QsoForwardingPollIntervalSec: 60,
 		QsoForwardingWorkerCount:     2,
 		QsoForwardingQueueSize:       100,

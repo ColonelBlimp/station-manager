@@ -86,10 +86,7 @@ func parseRecords(body []byte) ([]Record, error) {
 			// No more <EOR>; also handle trailing block without EOR by ignoring if empty
 			blk := bytes.TrimSpace(body[start:])
 			if len(blk) > 0 {
-				rec, err := parseRecord(blk)
-				if err == nil {
-					out = append(out, rec)
-				}
+				out = append(out, parseRecord(blk))
 			}
 			break
 		}
@@ -97,11 +94,7 @@ func parseRecords(body []byte) ([]Record, error) {
 		blk := body[start:end]
 		blk = bytes.TrimSpace(blk)
 		if len(blk) > 0 {
-			rec, err := parseRecord(blk)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, rec)
+			out = append(out, parseRecord(blk))
 		}
 		// Move past the marker
 		start = end + len(EorStr)
@@ -121,8 +114,6 @@ func parseFields(b []byte) map[string][]string {
 		if loc == nil {
 			break
 		}
-		// Translate to absolute positions
-		off := idx + loc[0]
 		end := idx + loc[1]
 		nameStart, nameEnd := idx+loc[2], idx+loc[3]
 		lenStart, lenEnd := idx+loc[4], idx+loc[5]
@@ -137,12 +128,11 @@ func parseFields(b []byte) map[string][]string {
 		val := string(b[valStart:valEnd])
 		m[tag] = append(m[tag], strings.TrimRightFunc(val, unicode.IsSpace))
 		idx = valEnd
-		_ = off // off unused but computed
 	}
 	return m
 }
 
-func parseRecord(b []byte) (Record, error) {
+func parseRecord(b []byte) Record {
 	fields := parseFields(b)
 	rec := Record{}
 	// Build a map tag -> setter function on the rec struct using reflection over fields with `adif` tags (or json fallback)
@@ -154,7 +144,7 @@ func parseRecord(b []byte) (Record, error) {
 			}
 		}
 	}
-	return rec, nil
+	return rec
 }
 
 // buildTagSetter prepares a map of uppercase tag -> setter(value) that writes into the struct field.
@@ -201,22 +191,3 @@ func indexOfCaseInsensitive(s []byte, pat string) int {
 	idx := strings.Index(lowerS, strings.ToLower(pat))
 	return idx
 }
-
-// splitKeepDelimiter is retained for reference; not used in final flow.
-//func splitKeepDelimiter(s, delim string) []string {
-//	var result []string
-//	start := 0
-//	for {
-//		idx := strings.Index(s[start:], delim)
-//		if idx < 0 {
-//			if start < len(s) {
-//				result = append(result, s[start:])
-//			}
-//			break
-//		}
-//		end := start + idx + len(delim)
-//		result = append(result, s[start:end])
-//		start = end
-//	}
-//	return result
-//}

@@ -1,8 +1,10 @@
 package adif
 
 import (
-	"github.com/ColonelBlimp/station-manager/internal/types"
+	"strings"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestRecord_String(t *testing.T) {
@@ -27,10 +29,21 @@ func TestRecord_String(t *testing.T) {
 			StationCallsign: "7Q5MLV/T",
 			MyName:          "Veary",
 		},
-		//		QslSection:       QslSection{},
 	}
 
-	adif := record.String()
+	out := record.String()
 
-	t.Log(adif)
+	mustContain := []string{
+		EorStr,
+		"<CALL:5>M0CMC",
+		"<BAND:3>40m",
+		"<MODE:3>SSB",
+		"<QSO_DATE:8>20250508", // dashes stripped
+		"<TIME_ON:6>084500",    // colons stripped
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Fatalf("ADIF output missing expected segment: %s\nGot:\n%s", s, out)
+		}
+	}
 }

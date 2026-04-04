@@ -49,6 +49,11 @@ tasks:
         (cd internal && go test -race ./... -short)
         for mod in apps/* cmd/*; do
           if [ -f "${mod}/go.mod" ]; then
+            # Skip Wails apps — they require a frontend build
+            if [ -f "${mod}/wails.json" ]; then
+              echo "SKIP (Wails app) ${mod}"
+              continue
+            fi
             echo "Testing ${mod}..."
             (cd "$mod" && go test -race ./... -short)
           fi
