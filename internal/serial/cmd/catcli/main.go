@@ -22,7 +22,7 @@ func main() {
 	dataBits := flag.Int("databits", 8, "data bits")
 	parity := flag.String("parity", "N", "parity (N,E,O)")
 	stopBits := flag.Int("stopbits", 1, "stop bits (1 or 2)")
-	delimiter := flag.String("delim", ";", "line delimiter used by CAT (default ';')")
+	delimiter := flag.String("delim", ";", "line delimiter used by CAT")
 	cmd := flag.String("cmd", "", "single CAT command to send; if empty, read commands from stdin")
 	listen := flag.Bool("listen", false, "listen-only mode: print incoming CAT lines until interrupted")
 	readTimeout := flag.Duration("read-timeout", 2*time.Second, "read timeout per response")
