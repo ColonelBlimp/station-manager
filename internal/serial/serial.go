@@ -320,12 +320,15 @@ func (p *Port) Close() error {
 	p.mu.Unlock()
 
 	// Close the underlying port first to unblock any in-flight Read calls.
-	if err := p.port.Close(); err != nil {
-		return errors.New(op).Err(err)
-	}
+	closeErr := p.port.Close()
 
-	// Wait for the reader loop to finish cleanup.
+	// Always wait for the reader loop to finish cleanup, even if the port
+	// close failed, to prevent goroutine leaks.
 	<-p.doneCh
+
+	if closeErr != nil {
+		return errors.New(op).Err(closeErr)
+	}
 	return nil
 }
 
