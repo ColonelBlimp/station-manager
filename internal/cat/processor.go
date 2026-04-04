@@ -58,21 +58,24 @@ func (s *Service) lineProcessor(shutdown <-chan struct{}) {
 }
 
 // sendStatusWithEviction attempts to send a status update to the status channel.
-// If the channel is full, it evicts the oldest status and retries.
+// If the channel is full, it evicts the oldest status once and retries.
 // For unbuffered channels, it drops the status with a warning.
 // Returns true if sent successfully, false if shutdown was signaled.
 func (s *Service) sendStatusWithEviction(status types.CatStatus, shutdown <-chan struct{}) bool {
-	for {
+	select {
+	case <-shutdown:
+		return false
+	case s.statusChannel <- status:
+		return true
+	default:
+		if !s.tryEvictOldestStatus(shutdown) {
+			return false
+		}
 		select {
 		case <-shutdown:
 			return false
 		case s.statusChannel <- status:
 			return true
-		default:
-			if !s.tryEvictOldestStatus(shutdown) {
-				return false
-			}
-			// Successfully evicted, loop will retry send
 		}
 	}
 }
