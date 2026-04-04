@@ -115,7 +115,7 @@ type Port struct {
 
 	// errCh carries a single terminal error from the reader loop, if any.
 	// It is closed when readerLoop exits.
-	ErrCh chan error
+	errCh chan error
 
 	closed bool
 	mu     sync.RWMutex
@@ -165,9 +165,9 @@ func newPort(sp SerialPort, cfg types.SerialConfig) *Port {
 		responses: make(chan []byte, responsesBufSize),
 		closeCh:   make(chan struct{}),
 		doneCh:    make(chan struct{}),
-		// ErrCh is buffered by one so the reader loop can report a terminal
+		// errCh is buffered by one so the reader loop can report a terminal
 		// error without blocking; it is closed when readerLoop exits.
-		ErrCh: make(chan error, 1),
+		errCh: make(chan error, 1),
 	}
 
 	go po.readerLoop()
@@ -303,7 +303,7 @@ func (p *Port) ExecBytes(ctx context.Context, cmd []byte) ([]byte, error) {
 //	    }
 //	}()
 func (p *Port) Errors() <-chan error {
-	return p.ErrCh
+	return p.errCh
 }
 
 // Close implements Client.
@@ -337,7 +337,7 @@ func (p *Port) Close() error {
 func (p *Port) readerLoop() {
 	defer close(p.doneCh)
 	defer close(p.responses)
-	defer close(p.ErrCh)
+	defer close(p.errCh)
 
 	buf := getReadBuf()
 	defer putReadBuf(buf)
@@ -362,7 +362,7 @@ func (p *Port) readerLoop() {
 
 			// Non-timeout error: surface it to callers, then exit.
 			select {
-			case p.ErrCh <- errors.New(errors.Op("serial.readerLoop")).Err(err):
+			case p.errCh <- errors.New(errors.Op("serial.readerLoop")).Err(err):
 			default:
 			}
 			return
@@ -381,7 +381,7 @@ func (p *Port) readerLoop() {
 					// best-effort basis without terminating the loop.
 					lineBuf = lineBuf[:0]
 					select {
-					case p.ErrCh <- errors.New(errors.Op("serial.readerLoop")).Msg("serial: dropped line exceeding maxLineSize (4096 bytes)"):
+					case p.errCh <- errors.New(errors.Op("serial.readerLoop")).Msg("serial: dropped line exceeding maxLineSize (4096 bytes)"):
 					default:
 					}
 				}
