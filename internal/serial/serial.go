@@ -3,10 +3,12 @@ package serial
 import (
 	"context"
 	stderr "errors"
+	"sync"
+	"time"
+
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"go.bug.st/serial"
-	"sync"
 )
 
 const (
@@ -36,7 +38,7 @@ type Client interface {
 	//
 	// ReadResponse is not safe to call concurrently from multiple
 	// goroutines on the same Client. Use a single reader goroutine to
-	// consume responses, and fan them out if needed.
+	// consume responses and fan them out if needed.
 	ReadResponse(ctx context.Context) (string, error)
 
 	// Exec is a convenience that writes a command then reads one response
@@ -78,7 +80,7 @@ type Client interface {
 	// an error.
 	//
 	// A typical usage pattern is to run a small supervisor goroutine that
-	// watches the channel and triggers a reconnect or shutdown when a
+	// watches the channel and triggers a reconnection or shutdown when a
 	// non-nil error is received:
 	//
 	//   go func() {
@@ -141,7 +143,7 @@ func Open(cfg types.SerialConfig) (*Port, error) {
 	}
 
 	if ncfg.ReadTimeoutMS > 0 {
-		if err = p.SetReadTimeout(ncfg.ReadTimeoutMS); err != nil {
+		if err = p.SetReadTimeout(ncfg.ReadTimeoutMS * time.Millisecond); err != nil {
 			return nil, errors.New(op).Err(err)
 		}
 	}
