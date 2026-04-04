@@ -1,11 +1,12 @@
 package cat
 
 import (
+	"strings"
+
 	"github.com/ColonelBlimp/station-manager/internal/enums/cmds"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 	"github.com/ColonelBlimp/station-manager/internal/types"
-	"strings"
 )
 
 // getRigConfig retrieves the default rig configuration based on the default rig ID from the required configurations.
@@ -93,12 +94,19 @@ func (s *Service) commandLookup(name cmds.CatCmdName) (types.CatCommand, error) 
 func (s *Service) validateCommandFormat(command string, params ...interface{}) error {
 	const op errors.Op = "cat.Service.validateCommandFormat"
 
-	// Count the number of %s in the command string as a simple way to validate format specifiers.
-	expectedParams := strings.Count(command, "%s")
-	providedParams := len(params)
+	// Reject any format verb other than %s or %% to prevent ambiguity.
+	for i := 0; i < len(command)-1; i++ {
+		if command[i] == '%' {
+			next := command[i+1]
+			if next != 's' && next != '%' {
+				return errors.New(op).Msgf("unsupported format verb %%%c in command: only %%s is allowed", next)
+			}
+		}
+	}
 
-	if expectedParams != providedParams {
-		return errors.New(op).Msgf("invalid command format: expected %d parameters, got %d", expectedParams, providedParams)
+	expectedParams := strings.Count(command, "%s")
+	if expectedParams != len(params) {
+		return errors.New(op).Msgf("invalid command format: expected %d parameters, got %d", expectedParams, len(params))
 	}
 
 	return nil
