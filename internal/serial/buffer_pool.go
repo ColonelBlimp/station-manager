@@ -2,10 +2,7 @@ package serial
 
 import "sync"
 
-const (
-	defaultBufSize = 512
-	maxLineSize    = 4096
-)
+const defaultBufSize = 512
 
 var readBufPool = sync.Pool{
 	New: func() any {

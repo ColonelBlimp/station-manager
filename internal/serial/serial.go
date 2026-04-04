@@ -16,6 +16,10 @@ const (
 	// responsesBufSize controls the capacity of the responses channel used to
 	// deliver framed lines from the background reader loop to callers.
 	responsesBufSize = 64
+
+	// maxLineSize is the maximum number of bytes buffered for a single framed
+	// line before it is dropped and an error is emitted on Errors().
+	maxLineSize = 4096
 )
 
 // Client is the high-level interface for sending CAT commands and
