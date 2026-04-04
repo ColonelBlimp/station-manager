@@ -14,6 +14,14 @@ export function SetContainer(arg1) {
   return window['go']['facade']['Service']['SetContainer'](arg1);
 }
 
+export function Start(arg1) {
+  return window['go']['facade']['Service']['Start'](arg1);
+}
+
+export function Stop() {
+  return window['go']['facade']['Service']['Stop']();
+}
+
 export function UpdateConfig() {
   return window['go']['facade']['Service']['UpdateConfig']();
 }

@@ -47,6 +47,14 @@ func (s *Service) Initialize() error {
 	return initErr
 }
 
+func (s *Service) Start(ctx context.Context) error {
+	return nil
+}
+
+func (s *Service) Stop() error {
+	return nil
+}
+
 // SetContainer sets the IOC container for the Service. Returns an error if the Service is uninitialized or the container is nil.
 func (s *Service) SetContainer(container *iocdi.Container) error {
 	const op errors.Op = "facade.Service.SetContainer"
