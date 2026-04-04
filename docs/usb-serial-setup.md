@@ -32,8 +32,7 @@ Enter the following command to verify that you are now a member of the group:
 
      id $USER
 
-You should see the group name listed. If not, you may need to log out and log back in
-for the changes to take effect.
+You should see the group name listed. If not, you may need to reboot for the changes to take effect.
 
 ## Configuration opions
 
