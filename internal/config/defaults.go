@@ -104,7 +104,7 @@ var defaultRequiredConfigs = types.RequiredConfigs{
 	DefaultTxPower:     50,
 	PowerMultiplier:    10, // 1 equals no power multiplier
 	UsePowerMultiplier: true,
-	DefaultFwdEmail:    "",
+	//	DefaultFwdEmail:    "",
 
 	/*
 		General configs to do with forwarding QSOs to online services.
@@ -150,6 +150,7 @@ var defaultEmailConfig = types.EmailConfig{
 	To:                 "",
 	Subject:            "",
 	Body:               "",
+	DefaultFwdEmail:    "",
 	SmtpDialTimeoutSec: 10,
 	SmtpRetryCount:     0,
 	SmtpRetryDelaySec:  0,

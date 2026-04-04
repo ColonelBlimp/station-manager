@@ -58,6 +58,13 @@ func (s *Service) FetchUiConfig() (*types.UiConfig, error) {
 		return nil, err
 	}
 
+	emailCfg, err := s.ConfigService.EmailConfig()
+	if err != nil {
+		err = errors.New(op).Err(err)
+		s.LoggerService.ErrorWith().Err(err).Msg("Failed to fetch email configs.")
+		return nil, err
+	}
+
 	return &types.UiConfig{
 		DefaultRigID:       requiredCfg.DefaultRigID,
 		Logbook:            s.CurrentLogbook,
@@ -68,7 +75,7 @@ func (s *Service) FetchUiConfig() (*types.UiConfig, error) {
 		PowerMultiplier:    requiredCfg.PowerMultiplier,
 		DefaultFreq:        requiredCfg.DefaultFreq,
 		DefaultMode:        requiredCfg.DefaultMode,
-		DefaultFwdEmail:    requiredCfg.DefaultFwdEmail,
+		DefaultFwdEmail:    emailCfg.DefaultFwdEmail,
 		OwnerCallsign:      strings.ToUpper(loggingStation.OwnerCallsign),
 		QrzViewUrl:         optionalCfg.QrzViewUrl,
 	}, nil

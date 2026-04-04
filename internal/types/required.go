@@ -11,7 +11,7 @@ type RequiredConfigs struct {
 	DefaultTxPower     int    `json:"default_tx_power"`
 	UsePowerMultiplier bool   `json:"use_power_multiplier"`
 	// The default TO email address.
-	DefaultFwdEmail string `json:"default_fwd_email"`
+	//	DefaultFwdEmail string `json:"default_fwd_email"` - moved to EmailConfig
 
 	// QsoForwardingIntervalSeconds determines the interval at which QSO forwarding occurs, defined as a duration in
 	// seconds. The forwarding process checks for queued QSOs at the interval defined by this setting.

@@ -3,6 +3,7 @@
     import NumberInput from "$lib/ui/components/NumberInput.svelte";
     import Textinput from "$lib/ui/components/Textinput.svelte";
     import ModeInput from "$lib/ui/components/ModeInput.svelte";
+    import {configState} from "$lib/states/config-state.svelte";
 
     const updateDefaultRig = (value: string) => {
         console.log(`Updating default rig to ${value}`);
@@ -13,11 +14,14 @@
     const updateDefaultMode = (value: string) => {
         console.log(`Updating default mode to ${value}`);
     }
+    const updatePowerMultiplier = (value: string) => {
+        console.log(`Updating power multiplier to ${value}`);
+    }
+    const updateTxPower = (value: string) => {
+        console.log(`Updating tx power to ${value}`);
+    }
 </script>
 
-{#snippet numberInput({ value, onChange, ref }: { value: string, onChange: (v: string) => void, ref: (el: HTMLElement) => void })}
-    <NumberInput {value} {onChange} ref={ref} />
-{/snippet}
 {#snippet textInput({ value, onChange, ref }: { value: string, onChange: (v: string) => void, ref: (el: HTMLElement) => void })}
     <Textinput {value} {onChange} ref={ref} />
 {/snippet}
@@ -32,22 +36,32 @@
     </div>
     <div class="mt-4">
         <dl class="divide-y divide-gray-100 dark:divide-white/10">
-            <ConfigItem cannotUpdate={true} cannotUpdateReason="Modify via logbook app" id="default-logbook" label="Default Logbook ID" value="1"/>
+            <ConfigItem cannotUpdate={true} cannotUpdateReason="Modify via logbook app" id="default-logbook" label="Default Logbook ID" value={configState.cfg.required_configs.default_logbook_id.toString()}/>
         </dl>
     </div>
     <div class="mt-4">
         <dl class="divide-y divide-gray-100 dark:divide-white/10">
-            <ConfigItem id="default-rig" label="Default Rig ID" value="1" updateCallback={updateDefaultRig} inputSnippet={textInput}/>
+            <ConfigItem id="default-rig" label="Default Rig ID" value={configState.cfg.required_configs.default_rig_id.toString()} updateCallback={updateDefaultRig} inputSnippet={textInput}/>
         </dl>
     </div>
     <div class="mt-4">
         <dl class="divide-y divide-gray-100 dark:divide-white/10">
-            <ConfigItem id="default-freq" label="Default Frequency" value="14.600.000" updateCallback={updateDefaultFreq} inputSnippet={textInput}/>
+            <ConfigItem id="default-freq" label="Default Frequency" value={configState.cfg.required_configs.default_freq} updateCallback={updateDefaultFreq} inputSnippet={textInput}/>
         </dl>
     </div>
     <div class="mt-4">
         <dl class="divide-y divide-gray-100 dark:divide-white/10">
-            <ConfigItem id="default-mode" label="Default Mode" value="SSB" updateCallback={updateDefaultMode} inputSnippet={modeInput}/>
+            <ConfigItem id="default-mode" label="Default Mode" value={configState.cfg.required_configs.default_mode} updateCallback={updateDefaultMode} inputSnippet={modeInput}/>
+        </dl>
+    </div>
+    <div class="mt-4">
+        <dl class="divide-y divide-gray-100 dark:divide-white/10">
+            <ConfigItem id="pwr-multiplier" label="Power Multiplier" value={configState.cfg.required_configs.power_multiplier.toString()} updateCallback={updatePowerMultiplier} inputSnippet={textInput}/>
+        </dl>
+    </div>
+    <div class="mt-4">
+        <dl class="divide-y divide-gray-100 dark:divide-white/10">
+            <ConfigItem id="tx-pwr" label="Default TX Power" value={configState.cfg.required_configs.default_tx_power.toString()} updateCallback={updateTxPower} inputSnippet={textInput}/>
         </dl>
     </div>
 </div>

@@ -128,6 +128,7 @@ export namespace types {
 	    to: string;
 	    subject: string;
 	    body: string;
+	    default_fwd_email: string;
 	    smtp_dial_timeout_sec?: number;
 	    smtp_retry_count?: number;
 	    smtp_retry_delay_sec?: number;
@@ -148,6 +149,7 @@ export namespace types {
 	        this.to = source["to"];
 	        this.subject = source["subject"];
 	        this.body = source["body"];
+	        this.default_fwd_email = source["default_fwd_email"];
 	        this.smtp_dial_timeout_sec = source["smtp_dial_timeout_sec"];
 	        this.smtp_retry_count = source["smtp_retry_count"];
 	        this.smtp_retry_delay_sec = source["smtp_retry_delay_sec"];
@@ -437,7 +439,6 @@ export namespace types {
 	    power_multiplier: number;
 	    default_tx_power: number;
 	    use_power_multiplier: boolean;
-	    default_fwd_email: string;
 	    qso_forwarding_poll_interval_sec: number;
 	    qso_forwarding_worker_count: number;
 	    qso_forwarding_queue_size: number;
@@ -460,7 +461,6 @@ export namespace types {
 	        this.power_multiplier = source["power_multiplier"];
 	        this.default_tx_power = source["default_tx_power"];
 	        this.use_power_multiplier = source["use_power_multiplier"];
-	        this.default_fwd_email = source["default_fwd_email"];
 	        this.qso_forwarding_poll_interval_sec = source["qso_forwarding_poll_interval_sec"];
 	        this.qso_forwarding_worker_count = source["qso_forwarding_worker_count"];
 	        this.qso_forwarding_queue_size = source["qso_forwarding_queue_size"];
