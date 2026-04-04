@@ -1,6 +1,7 @@
 package serial
 
 import (
+	"bytes"
 	"context"
 	stderr "errors"
 	"sync"
@@ -373,7 +374,7 @@ func (p *Port) readerLoop() {
 
 		chunk := buf[:n]
 		for len(chunk) > 0 {
-			idx := indexByte(chunk, p.cfg.LineDelimiter)
+			idx := bytes.IndexByte(chunk, p.cfg.LineDelimiter)
 			if idx == -1 {
 				lineBuf = append(lineBuf, chunk...)
 				if len(lineBuf) > maxLineSize {
@@ -403,14 +404,4 @@ func (p *Port) readerLoop() {
 			chunk = chunk[idx+1:]
 		}
 	}
-}
-
-// indexByte is a small helper to avoid importing bytes for single-byte search.
-func indexByte(b []byte, c byte) int {
-	for i, v := range b {
-		if v == c {
-			return i
-		}
-	}
-	return -1
 }
