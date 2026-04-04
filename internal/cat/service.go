@@ -238,9 +238,7 @@ func (s *Service) EnqueueCommand(cmdName cmds.CatCmdName, params ...string) erro
 		return errors.New(op).Err(err).Msg("Command parameter validation failed")
 	}
 
-	pCmd := &catCmd
-	pCmd.Cmd = fmt.Sprintf(catCmd.Cmd, paramsInterface...)
-	catCmd = *pCmd
+	catCmd.Cmd = fmt.Sprintf(catCmd.Cmd, paramsInterface...)
 
 	// Command is fully defined in configuration and already validated for format/arity,
 	// so no additional sanitization is required here.

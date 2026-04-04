@@ -1,6 +1,6 @@
 package cat
 
-var (
+const (
 	errMsgNilConfigService  = "Config service is nil."
 	errMsgNilLoggerService  = "Logger service is nil."
 	errMsgInvalidRigID      = "Invalid default rig ID."
