@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"context"
 	stderr "errors"
-	"github.com/ColonelBlimp/station-manager/internal/types"
 	"strings"
 	"time"
-)
 
-const (
-	defaultListenerReadTimeoutMS = 200
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // serialPortListener listens for and processes data from a serial port at a set interval until a shutdown signal is received.
@@ -19,9 +16,6 @@ func (s *Service) serialPortListener(shutdown <-chan struct{}) {
 	defer readTicker.Stop()
 
 	readTimeout := s.config.CatConfig.ListenerReadTimeoutMS
-	if readTimeout <= 0 {
-		readTimeout = defaultListenerReadTimeoutMS
-	}
 	readTimeoutDur := time.Duration(readTimeout) * time.Millisecond
 
 	for {
