@@ -18,5 +18,6 @@
     <a href="/forwarders" class={linkClass("/forwarders")} title="Forwarders">Forwarders</a>
     <a href="/listeners" class={linkClass("/listeners")} title="Listeners">Listeners</a>
     <a href="/email" class={linkClass("/email")} title="Email">Email</a>
+    <a href="/rigs" class={linkClass("/rigs")} title="Rigs">Rigs</a>
     <!-- a href="/manager" class={linkClass("/manager")} title="Logbook Manager">Manager</a -->
 </nav>
