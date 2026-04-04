@@ -180,6 +180,9 @@ func TestEnqueueCommandFormatValidation(t *testing.T) {
 		LoggerService: &logging.Service{},
 		config:        cfg,
 		sendChannel:   make(chan types.CatCommand, 1),
+		catCommandIndex: map[string]types.CatCommand{
+			cmds.Init.String(): cfg.CatCommands[0],
+		},
 	}
 	service.initialized.Store(true)
 	service.started.Store(true)

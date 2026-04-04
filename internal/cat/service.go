@@ -182,7 +182,7 @@ func (s *Service) Stop() error {
 
 	if s.serialPort != nil {
 		if err := s.serialPort.Close(); err != nil {
-			return errors.New(op).Msgf("Failed to close serial port: %v", err)
+			return errors.New(op).Err(err).Msg("Failed to close serial port")
 		}
 		s.serialPort = nil
 	}
@@ -226,7 +226,7 @@ func (s *Service) EnqueueCommand(cmdName cmds.CatCmdName, params ...string) erro
 
 	catCmd, err := s.commandLookup(cmdName)
 	if err != nil {
-		return errors.New(op).Msgf("Command lookup failed: %v", err)
+		return errors.New(op).Err(err).Msg("Command lookup failed")
 	}
 
 	paramsInterface := make([]interface{}, len(params))

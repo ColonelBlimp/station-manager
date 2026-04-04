@@ -108,6 +108,11 @@ func (s *Service) validateCommandFormat(command string, params ...interface{}) e
 		}
 	}
 
+	// A trailing bare '%' would produce a malformed fmt.Sprintf output.
+	if len(command) > 0 && command[len(command)-1] == '%' {
+		return errors.New(op).Msg("command ends with incomplete format verb '%'")
+	}
+
 	expectedParams := strings.Count(command, "%s")
 	if expectedParams != len(params) {
 		return errors.New(op).Msgf("invalid command format: expected %d parameters, got %d", expectedParams, len(params))
