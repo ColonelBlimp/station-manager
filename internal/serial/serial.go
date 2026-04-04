@@ -198,9 +198,10 @@ func (p *Port) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 		return nil
 	}
 
-	// ensure delimiter
+	// ensure delimiter; use a 3-index slice to prevent appending into the
+	// caller's backing array if their slice has spare capacity.
 	if cmd[len(cmd)-1] != p.cfg.LineDelimiter {
-		cmd = append(cmd, p.cfg.LineDelimiter)
+		cmd = append(cmd[:len(cmd):len(cmd)], p.cfg.LineDelimiter)
 	}
 
 	p.writeMu.Lock()
