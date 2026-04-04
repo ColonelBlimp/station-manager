@@ -1,7 +1,5 @@
 package types
 
-import "time"
-
 type CatCommand struct {
 	Name string
 	Cmd  string
@@ -45,7 +43,7 @@ type CatConfig struct {
 	// poll the serial port for new data. The unit is milliseconds.
 	//
 	// Default is 10ms.
-	ListenerRateLimiterIntervalMS time.Duration
+	ListenerRateLimiterIntervalMS int
 	// ListenerReadTimeoutMS controls how long each CAT listener cycle will wait for
 	// a framed response line from the serial client. This should typically be less
 	// than or equal to ListenerRateLimiterInterval so that each tick's read can
@@ -55,7 +53,7 @@ type CatConfig struct {
 	// underlying SerialConfig.ReadTimeoutMS.
 	//
 	// Default is 8ms.
-	ListenerReadTimeoutMS time.Duration
+	ListenerReadTimeoutMS int
 
 	// SendChannelSize is the size of the channel used to send CAT commands to the serial port.
 	//

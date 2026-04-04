@@ -1,4 +1,4 @@
-# Call site, combine Erros with a normal control loop
+# Call site, combine Errors with a normal control loop
 
 ```go
 

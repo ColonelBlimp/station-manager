@@ -2,10 +2,11 @@ package serial
 
 import (
 	"context"
-	"github.com/ColonelBlimp/station-manager/internal/types"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 type mockPort struct {
@@ -166,13 +167,15 @@ func TestCloseWhileReading(t *testing.T) {
 	defer cancel()
 
 	done := make(chan struct{})
+	ready := make(chan struct{})
 	go func() {
 		defer close(done)
+		close(ready)
 		_, _ = c.ReadResponse(ctx)
 	}()
 
-	// Give the goroutine a moment to block in ReadResponse.
-	time.Sleep(10 * time.Millisecond)
+	// Wait for the goroutine to be scheduled and about to block in ReadResponse.
+	<-ready
 
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
@@ -201,13 +204,15 @@ func TestCloseUnblocksRead(t *testing.T) {
 	defer cancel()
 
 	done := make(chan struct{})
+	ready := make(chan struct{})
 	go func() {
 		defer close(done)
+		close(ready)
 		_, _ = c.ReadResponse(ctx)
 	}()
 
-	// give goroutine time to block in ReadResponse
-	time.Sleep(10 * time.Millisecond)
+	// Wait for the goroutine to be scheduled and about to block in ReadResponse.
+	<-ready
 
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
@@ -332,6 +337,21 @@ func newOverflowPort() *overflowPort {
 	return &overflowPort{mockPort{readCh: make(chan []byte, 16)}}
 }
 
+// feedOverflow sends enough delimiter-free chunks through readCh to
+// push lineBuf past maxLineSize. Each chunk is sized to exactly fill
+// the 512-byte read buffer so the mock port delivers it without
+// truncation.
+func feedOverflow(readCh chan<- []byte) {
+	chunk := make([]byte, defaultBufSize)
+	for i := range chunk {
+		chunk[i] = 'A'
+	}
+	numChunks := (maxLineSize / defaultBufSize) + 2 // ensure we exceed
+	for i := 0; i < numChunks; i++ {
+		readCh <- chunk
+	}
+}
+
 func TestOversizedLineEmitsErrorAndIsDropped(t *testing.T) {
 	o := newOverflowPort()
 	cfg := types.SerialConfig{
@@ -345,13 +365,10 @@ func TestOversizedLineEmitsErrorAndIsDropped(t *testing.T) {
 	c := newPort(o, cfg)
 
 	// Feed enough data to exceed maxLineSize (4096) without any delimiter.
-	bigChunk := make([]byte, maxLineSize+10)
-	for i := range bigChunk {
-		bigChunk[i] = 'A'
-	}
-	o.readCh <- bigChunk
+	feedOverflow(o.readCh)
 
-	// Close the underlying mock so readerLoop eventually stops reading.
+	// Send a delimiter to end the oversized line, then close the mock.
+	o.readCh <- []byte(";")
 	close(o.readCh)
 
 	// We expect one best-effort error on Errors(), and no line delivered.
@@ -392,11 +409,7 @@ func TestOversizedLineEmitsErrorOnErrorsStream(t *testing.T) {
 	c := newPort(o, cfg)
 
 	// Feed enough data to exceed maxLineSize (4096) without any delimiter.
-	bigChunk := make([]byte, maxLineSize+10)
-	for i := range bigChunk {
-		bigChunk[i] = 'A'
-	}
-	o.readCh <- bigChunk
+	feedOverflow(o.readCh)
 
 	// Close underlying channel so readerLoop eventually exits after
 	// processing the oversized line.
@@ -766,5 +779,98 @@ func TestWriteCommandBytesConcurrentWrites(t *testing.T) {
 
 	if len(mp.writes) != 10 {
 		t.Fatalf("expected 10 writes, got %d", len(mp.writes))
+	}
+}
+
+// TestOversizedLineTailIsDiscarded verifies that after an oversized line is
+// dropped, the remaining tail bytes (up to and including the delimiter) are
+// also discarded. The next well-formed line should be delivered cleanly
+// without any spurious partial data from the dropped line.
+func TestOversizedLineTailIsDiscarded(t *testing.T) {
+	o := newOverflowPort()
+	cfg := types.SerialConfig{
+		PortName:      "mock",
+		BaudRate:      9600,
+		DataBits:      8,
+		StopBits:      1,
+		LineDelimiter: ';',
+	}
+
+	c := newPort(o, cfg)
+
+	// Feed enough small chunks to exceed maxLineSize without any delimiter.
+	feedOverflow(o.readCh)
+
+	// Now feed the tail of the oversized line (ending with delimiter)
+	// followed by a well-formed line. Without the discard logic, "TAIL"
+	// would be emitted as a spurious response.
+	o.readCh <- []byte("TAIL;GOOD;")
+
+	// Drain the best-effort oversized-line error.
+	select {
+	case <-c.Errors():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for oversized-line error")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// The first response must be "GOOD", not "TAIL".
+	resp, err := c.ReadResponseBytes(ctx)
+	if err != nil {
+		t.Fatalf("ReadResponseBytes error: %v", err)
+	}
+	if string(resp) != "GOOD" {
+		t.Fatalf("expected response %q, got %q (tail of oversized line leaked)", "GOOD", string(resp))
+	}
+}
+
+// TestFramingResumesAfterOversizedLine verifies that the reader loop
+// fully recovers from an oversized-line discard: multiple well-formed
+// lines sent after the overflow delimiter must all be correctly framed
+// and delivered in order.
+func TestFramingResumesAfterOversizedLine(t *testing.T) {
+	o := newOverflowPort()
+	cfg := types.SerialConfig{
+		PortName:      "mock",
+		BaudRate:      9600,
+		DataBits:      8,
+		StopBits:      1,
+		LineDelimiter: ';',
+	}
+
+	c := newPort(o, cfg)
+
+	// 1. Trigger overflow (no delimiter).
+	feedOverflow(o.readCh)
+
+	// 2. End the oversized line with its delimiter.
+	o.readCh <- []byte(";")
+
+	// 3. Send several normal lines, some fragmented across chunks.
+	o.readCh <- []byte("FIRST;SEC")
+	o.readCh <- []byte("OND;")
+	o.readCh <- []byte("THIRD;")
+
+	// Drain the best-effort oversized-line error so it doesn't block.
+	select {
+	case <-c.Errors():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for oversized-line error")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	expected := []string{"FIRST", "SECOND", "THIRD"}
+	for _, want := range expected {
+		got, err := c.ReadResponse(ctx)
+		if err != nil {
+			t.Fatalf("ReadResponse(%q) error: %v", want, err)
+		}
+		if got != want {
+			t.Fatalf("expected %q, got %q", want, got)
+		}
 	}
 }

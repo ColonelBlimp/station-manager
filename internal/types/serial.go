@@ -2,7 +2,6 @@ package types
 
 import (
 	"go.bug.st/serial"
-	"time"
 )
 
 type SerialConfig struct {
@@ -15,8 +14,8 @@ type SerialConfig struct {
 	// The serial drivers' read timeout. The unit is milliseconds.
 	//
 	// Default is 200ms.
-	ReadTimeoutMS  time.Duration
-	WriteTimeoutMS time.Duration // Milliseconds
+	ReadTimeoutMS  int // Milliseconds
+	WriteTimeoutMS int // Milliseconds
 	RTS            bool
 	DTR            bool
 	LineDelimiter  byte // If not provided, the default is '\r'.

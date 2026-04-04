@@ -148,7 +148,7 @@ func Open(cfg types.SerialConfig) (*Port, error) {
 	}
 
 	if ncfg.ReadTimeoutMS > 0 {
-		if err = p.SetReadTimeout(ncfg.ReadTimeoutMS * time.Millisecond); err != nil {
+		if err = p.SetReadTimeout(time.Duration(ncfg.ReadTimeoutMS) * time.Millisecond); err != nil {
 			return nil, errors.New(op).Err(err)
 		}
 	}
@@ -190,7 +190,7 @@ func (p *Port) WriteCommand(ctx context.Context, cmd string) error {
 
 // WriteCommandBytes implements the byte-oriented write for Client.
 func (p *Port) WriteCommandBytes(ctx context.Context, cmd []byte) error {
-	const op errors.Op = "serial.WriteCommand"
+	const op errors.Op = "serial.WriteCommandBytes"
 
 	p.mu.RLock()
 	closed := p.closed
@@ -303,7 +303,7 @@ func (p *Port) ExecBytes(ctx context.Context, cmd []byte) ([]byte, error) {
 // whether to log the error, reconnect, or shut down:
 //
 //	go func() {
-//	    if err, ok := port.Errors(); ok && err != nil {
+//	    if err, ok := <-port.Errors(); ok && err != nil {
 //	        // handle terminal reader error
 //	    }
 //	}()
@@ -348,6 +348,11 @@ func (p *Port) readerLoop() {
 	defer putReadBuf(buf)
 
 	var lineBuf []byte
+	// discarding is set when the current line exceeds maxLineSize.
+	// While true, incoming bytes are skipped until the next delimiter
+	// so that the tail of the oversized line is not emitted as a
+	// spurious partial response.
+	discarding := false
 
 	for {
 		select {
@@ -365,6 +370,13 @@ func (p *Port) readerLoop() {
 				continue
 			}
 
+			// Don't surface errors caused by a graceful Close.
+			select {
+			case <-p.closeCh:
+				return
+			default:
+			}
+
 			// Non-timeout error: surface it to callers, then exit.
 			select {
 			case p.errCh <- errors.New(errors.Op("serial.readerLoop")).Err(err):
@@ -380,17 +392,32 @@ func (p *Port) readerLoop() {
 		for len(chunk) > 0 {
 			idx := bytes.IndexByte(chunk, p.cfg.LineDelimiter)
 			if idx == -1 {
+				if discarding {
+					// Still inside an oversized line; skip the
+					// entire chunk.
+					break
+				}
 				lineBuf = append(lineBuf, chunk...)
 				if len(lineBuf) > maxLineSize {
 					// drop overly long lines and notify via Errors() on a
 					// best-effort basis without terminating the loop.
 					lineBuf = lineBuf[:0]
+					discarding = true
 					select {
 					case p.errCh <- errors.New(errors.Op("serial.readerLoop")).Msg("serial: dropped line exceeding maxLineSize (4096 bytes)"):
 					default:
 					}
 				}
 				break
+			}
+
+			if discarding {
+				// Found the delimiter that ends the oversized line.
+				// Discard everything up to and including it, then
+				// resume normal framing.
+				discarding = false
+				chunk = chunk[idx+1:]
+				continue
 			}
 
 			lineBuf = append(lineBuf, chunk[:idx]...)
