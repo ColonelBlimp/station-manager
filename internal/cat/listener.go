@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	stderr "errors"
-	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -61,7 +60,10 @@ func (s *Service) serialPortListener(shutdown <-chan struct{}) {
 
 // lookupCatState attempts to find a CatState based on the byte slice prefix, returning the state and a success indicator.
 func (s *Service) lookupCatState(line []byte) (types.CatState, bool) {
-	const minPrefix = 2
+	const (
+		minPrefix  = 2
+		maxBufSize = 16 // larger than any valid CAT prefix
+	)
 
 	if len(line) < minPrefix {
 		return types.CatState{}, false
@@ -75,17 +77,29 @@ func (s *Service) lookupCatState(line []byte) (types.CatState, bool) {
 	if maxLen < minPrefix {
 		maxLen = minPrefix
 	}
+	if maxLen > maxBufSize {
+		maxLen = maxBufSize
+	}
 
-	// take the slice once, uppercase it for consistent lookup
-	prefixSlice := string(bytes.ToUpper(line[:maxLen]))
+	// Uppercase into a stack buffer to avoid the heap allocation from bytes.ToUpper.
+	var buf [maxBufSize]byte
+	for i := 0; i < maxLen; i++ {
+		c := line[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		buf[i] = c
+	}
 
 	// try longest first to match multi-char prefixes (3..8) before 2-char ones
 	for l := maxLen; l >= minPrefix; l-- {
-		key := strings.TrimSpace(prefixSlice[:l])
-		if key == "" {
+		// bytes.TrimSpace returns a sub-slice; no allocation.
+		key := bytes.TrimSpace(buf[:l])
+		if len(key) == 0 {
 			continue
 		}
-		if st, ok := s.supportedCatStates[key]; ok {
+		// string(key) in a map index expression is optimised by the compiler to avoid allocation.
+		if st, ok := s.supportedCatStates[string(key)]; ok {
 			// Store the line minus the matched prefix (as a string) in the Data field.
 			// At this point l is guaranteed to be <= len(line) because maxLen is bounded by len(line).
 			st.Data = string(line[l:])
