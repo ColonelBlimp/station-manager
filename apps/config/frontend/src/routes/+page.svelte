@@ -1,7 +1,7 @@
 <script lang="ts">
     import ConfigItem from "$lib/ui/components/ConfigItem.svelte";
     import NumberInput from "$lib/ui/components/NumberInput.svelte";
-    import Textinput from "$lib/ui/components/Textinput.svelte";
+    import TextInput from "$lib/ui/components/TextInput.svelte";
     import ModeInput from "$lib/ui/components/ModeInput.svelte";
     import {configState} from "$lib/states/config-state.svelte";
 
@@ -23,7 +23,7 @@
 </script>
 
 {#snippet textInput({ value, onChange, ref }: { value: string, onChange: (v: string) => void, ref: (el: HTMLElement) => void })}
-    <Textinput {value} {onChange} ref={ref} />
+    <TextInput {value} {onChange} ref={ref} />
 {/snippet}
 {#snippet modeInput({ value, onChange, ref }: { value: string, onChange: (v: string) => void, ref: (el: HTMLElement) => void })}
     <ModeInput {value} {onChange} ref={ref} />

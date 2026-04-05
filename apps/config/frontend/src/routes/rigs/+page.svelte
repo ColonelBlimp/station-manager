@@ -1,6 +1,6 @@
 <script lang="ts">
     import ConfigItem from "$lib/ui/components/ConfigItem.svelte";
-    import Textinput from "$lib/ui/components/Textinput.svelte";
+    import TextInput from "$lib/ui/components/TextInput.svelte";
     import {types} from "$lib/wailsjs/go/models";
     import {configState} from "$lib/states/config-state.svelte";
 
@@ -10,7 +10,7 @@
 </script>
 
 {#snippet textInput({ value, onChange, ref }: { value: string, onChange: (v: string) => void, ref: (el: HTMLElement) => void })}
-    <Textinput {value} {onChange} ref={ref} />
+    <TextInput {value} {onChange} ref={ref} />
 {/snippet}
 
 <div class="flex flex-row h-full divide-x divide-gray-300 dark:divide-white/10">
