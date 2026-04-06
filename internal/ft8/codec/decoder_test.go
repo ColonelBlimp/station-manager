@@ -52,15 +52,10 @@ func bitsToLLR(cw [N]uint8, magnitude float32) [N]float32 {
 
 // addGaussianNoise adds Gaussian noise to LLR values using a seeded PRNG.
 // sigma controls the noise standard deviation.
-func addGaussianNoise(llr *[N]float32, sigma float64, rng *rand.Rand) {
+func addGaussianNoise(llr *[N]float32, sigma float32, rng *rand.Rand) {
 	for i := range N {
-		llr[i] += float32(rng.NormFloat64() * sigma)
+		llr[i] += sigma * float32(rng.NormFloat64())
 	}
-}
-
-// infoEqual compares two info byte arrays.
-func infoEqual(a, b [KBytes]byte) bool {
-	return a == b
 }
 
 // --- Tests ---
@@ -103,7 +98,7 @@ func TestDecodePerfectLLR(t *testing.T) {
 			if !ok {
 				t.Fatal("Decode returned ok=false for perfect LLR")
 			}
-			if !infoEqual(decoded, tc.info) {
+			if decoded != tc.info {
 				t.Errorf("decoded info mismatch:\n  got  %x\n  want %x", decoded, tc.info)
 			}
 		})
@@ -121,7 +116,7 @@ func TestDecodeConvergesIn1Iteration(t *testing.T) {
 	if !ok {
 		t.Fatal("Decode failed to converge in 1 iteration with perfect LLR")
 	}
-	if !infoEqual(decoded, info) {
+	if decoded != info {
 		t.Errorf("decoded info mismatch:\n  got  %x\n  want %x", decoded, info)
 	}
 }
@@ -142,7 +137,7 @@ func TestDecodeNoisyRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("Decode returned ok=false for moderate noise")
 	}
-	if !infoEqual(decoded, info) {
+	if decoded != info {
 		t.Errorf("decoded info mismatch:\n  got  %x\n  want %x", decoded, info)
 	}
 }
@@ -153,7 +148,10 @@ func TestDecodeHeavyNoise(t *testing.T) {
 	info := [KBytes]byte{0x42, 0x73, 0x1A, 0xF0, 0x00, 0x55, 0xAA, 0x0F, 0xE1, 0xC3, 0x87, 0x00}
 	cw := testEncode(t, info)
 
-	// σ = 2.0 with LLR magnitude 3.0 — challenging but decodable
+	// σ = 2.0 with LLR magnitude 3.0 — challenging but decodable.
+	// With seeded PRNG these trials are deterministic; all 5 decode at these
+	// parameters. Require ≥ 4/5 to catch performance regressions while
+	// allowing for one marginal seed.
 	seeds := []int64{100, 200, 300, 400, 500}
 	decoded := 0
 	for _, seed := range seeds {
@@ -162,13 +160,12 @@ func TestDecodeHeavyNoise(t *testing.T) {
 		addGaussianNoise(&llr, 2.0, rng)
 
 		result, ok := Decode(llr, 50)
-		if ok && infoEqual(result, info) {
+		if ok && result == info {
 			decoded++
 		}
 	}
-	// At these noise levels, we expect most trials to succeed.
-	if decoded == 0 {
-		t.Errorf("no trials decoded successfully out of %d", len(seeds))
+	if decoded < 4 {
+		t.Errorf("only %d/%d trials decoded successfully, want >= 4", decoded, len(seeds))
 	}
 	t.Logf("%d/%d trials decoded successfully", decoded, len(seeds))
 }
@@ -279,7 +276,7 @@ func TestDecodeMultipleInfoVectors(t *testing.T) {
 			t.Errorf("vector %d: Decode returned ok=false", i)
 			continue
 		}
-		if !infoEqual(decoded, info) {
+		if decoded != info {
 			t.Errorf("vector %d: decoded info mismatch:\n  got  %x\n  want %x", i, decoded, info)
 		}
 	}

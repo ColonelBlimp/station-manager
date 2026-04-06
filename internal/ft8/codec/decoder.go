@@ -75,6 +75,11 @@ func Decode(llr [N]float32, maxIter int) (info [KBytes]byte, ok bool) {
 			for nIdx := range deg {
 				n := int(Nm[m][nIdx]) - 1 // 0-indexed variable node
 				q := llr[n]
+				// Sum check→variable messages from all checks EXCEPT m.
+				// Mn[n] always has exactly 3 entries (variable-node degree is 3),
+				// and exactly one of them equals m+1, so this adds exactly 2
+				// of the 3 tov values. Graph consistency is validated by
+				// TestBipartiteConsistency.
 				for mIdx := range 3 {
 					if int(Mn[n][mIdx])-1 != m {
 						q += tov[n][mIdx]
@@ -96,6 +101,9 @@ func Decode(llr [N]float32, maxIter int) (info [KBytes]byte, ok bool) {
 				deg := int(NmCount[m])
 
 				sign := float32(1.0)
+				// Every check node has degree 6 or 7 (NmCount), and we exclude
+				// the current variable node, so at least 5 terms contribute.
+				// minAbs is therefore always overwritten before use.
 				minAbs := float32(math.MaxFloat32)
 
 				for nIdx := range deg {
