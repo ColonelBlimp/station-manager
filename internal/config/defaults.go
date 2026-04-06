@@ -59,6 +59,11 @@ var defaultDesktopConfig = types.AppConfig{
 	ForwardingConfigs:    defaultForwardingConfigs,
 	OptionalConfigs:      defaultOptionalConfigs,
 	ListenerConfigs:      defaultListenerConfigs,
+	AudioPlaybackConfig: types.AudioPlaybackConfig{
+		Enabled:     false,
+		DeviceIndex: -1, // default device
+		BufferSize:  512,
+	},
 }
 
 var defaultServerConfig = types.AppConfig{
@@ -92,6 +97,7 @@ var defaultServerConfig = types.AppConfig{
 	ForwardingConfigs:    defaultForwardingConfigs,
 	OptionalConfigs:      defaultOptionalConfigs,
 	ListenerConfigs:      defaultListenerConfigs,
+	AudioPlaybackConfig:  types.AudioPlaybackConfig{Enabled: false},
 }
 
 var defaultRequiredConfigs = types.RequiredConfigs{
@@ -453,6 +459,11 @@ var defaultRigConfigs = []types.RigConfig{
 
 			SendChannelSize:       10,
 			ProcessingChannelSize: 10,
+		},
+		PTTConfig: types.PTTConfig{
+			Enabled:  false,
+			PortName: "/dev/ttyUSB1",
+			Line:     "rts",
 		},
 	},
 }

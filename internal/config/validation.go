@@ -35,6 +35,11 @@ func validateAppConfig(cfg *types.AppConfig) error {
 	// Apply defaults for forwarding config if not set (prevents panics from zero values)
 	applyForwardingDefaults(&cfg.RequiredConfigs)
 
+	// Audio playback config
+	if cfg.AudioPlaybackConfig.Enabled && cfg.AudioPlaybackConfig.BufferSize == 0 {
+		cfg.AudioPlaybackConfig.BufferSize = 512
+	}
+
 	return nil
 }
 

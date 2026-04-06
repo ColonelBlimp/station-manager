@@ -1,12 +1,13 @@
 package types
 
 type RigConfig struct {
-	ID           int64        `koanf:"id"`
-	Name         string       `koanf:"name"`
-	Model        string       `koanf:"model"`
-	Terminator   string       `koanf:"terminator"` // Terminator defines the character used to signal the end of a command.
-	CatCommands  []CatCommand `koanf:"commands"`
-	CatStates    []CatState   `koanf:"states"`
-	SerialConfig SerialConfig `koanf:"serial_port"`
-	CatConfig    CatConfig    `koanf:"cat"`
+	ID           int64        `json:"id"`
+	Name         string       `json:"name"`
+	Model        string       `json:"model"`
+	Terminator   string       `json:"terminator"` // Terminator defines the character used to signal the end of a command.
+	CatCommands  []CatCommand `json:"commands"`
+	CatStates    []CatState   `json:"states"`
+	SerialConfig SerialConfig `json:"serial_port"`
+	CatConfig    CatConfig    `json:"cat"`
+	PTTConfig    PTTConfig    `json:"ptt"`
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.bug.st/serial"
 )
 
 // --- QsoAdditionalData ---
@@ -514,15 +515,20 @@ func TestServerConfig_RoundTrip(t *testing.T) {
 
 func TestLoggingConfig_RoundTrip(t *testing.T) {
 	original := LoggingConfig{
-		Level:             "info",
-		SkipFrameCount:    0,
-		ConsoleLogging:    true,
-		FileLogging:       true,
-		RelLogFileDir:     "./logs",
-		LogFileMaxBackups: 3,
-		LogFileMaxAgeDays: 30,
-		LogFileMaxSizeMB:  10,
-		WithTimestamp:     true,
+		Level:                  "info",
+		SkipFrameCount:         0,
+		ConsoleLogging:         true,
+		FileLogging:            true,
+		RelLogFileDir:          "./logs",
+		LogFileMaxBackups:      3,
+		LogFileMaxAgeDays:      30,
+		LogFileMaxSizeMB:       10,
+		WithTimestamp:          true,
+		ShutdownTimeoutMS:      500,
+		ShutdownTimeoutWarning: true,
+		ConsoleNoColor:         true,
+		ConsoleTimeFormat:      "15:04:05",
+		LogFileCompress:        true,
 	}
 	b, err := json.Marshal(original)
 	require.NoError(t, err)
@@ -590,6 +596,7 @@ func TestEmailConfig_RoundTrip(t *testing.T) {
 		To:                 "to@example.com",
 		Subject:            "QSO Forward",
 		Body:               "See attached",
+		DefaultFwdEmail:    "fwd@example.com",
 		SmtpDialTimeoutSec: 10,
 		SmtpRetryCount:     3,
 		SmtpRetryDelaySec:  2,
@@ -778,4 +785,304 @@ func TestQsoUpload_RoundTrip(t *testing.T) {
 	assert.Equal(t, original.QsoID, decoded.QsoID)
 	assert.Equal(t, original.Service, decoded.Service)
 	assert.Equal(t, original.Status, decoded.Status)
+}
+
+// --- PTTConfig ---
+
+func TestPTTConfig_RoundTrip(t *testing.T) {
+	original := PTTConfig{
+		Enabled:  true,
+		PortName: "/dev/ttyUSB1",
+		Line:     "rts",
+	}
+	b, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded PTTConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Equal(t, original, decoded)
+}
+
+func TestPTTConfig_JsonKeys(t *testing.T) {
+	cfg := PTTConfig{Enabled: true, PortName: "/dev/ttyUSB1", Line: "dtr"}
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(b, &result))
+	assert.Equal(t, true, result["enabled"])
+	assert.Equal(t, "/dev/ttyUSB1", result["port_name"])
+	assert.Equal(t, "dtr", result["line"])
+}
+
+func TestPTTConfig_ZeroValue(t *testing.T) {
+	var cfg PTTConfig
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var decoded PTTConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.False(t, decoded.Enabled)
+	assert.Empty(t, decoded.PortName)
+	assert.Empty(t, decoded.Line)
+}
+
+// --- AudioPlaybackConfig ---
+
+func TestAudioPlaybackConfig_RoundTrip(t *testing.T) {
+	original := AudioPlaybackConfig{
+		Enabled:     true,
+		DeviceIndex: -1,
+		BufferSize:  512,
+	}
+	b, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded AudioPlaybackConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Equal(t, original, decoded)
+}
+
+func TestAudioPlaybackConfig_JsonKeys(t *testing.T) {
+	cfg := AudioPlaybackConfig{Enabled: true, DeviceIndex: 2, BufferSize: 1024}
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(b, &result))
+	assert.Equal(t, true, result["enabled"])
+	assert.Equal(t, float64(2), result["device_index"])
+	assert.Equal(t, float64(1024), result["buffer_size"])
+}
+
+func TestAudioPlaybackConfig_DefaultDeviceIndex(t *testing.T) {
+	cfg := AudioPlaybackConfig{DeviceIndex: -1}
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var decoded AudioPlaybackConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Equal(t, -1, decoded.DeviceIndex, "DeviceIndex -1 must survive round-trip for default device")
+}
+
+func TestAudioPlaybackConfig_ZeroValue(t *testing.T) {
+	var cfg AudioPlaybackConfig
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var decoded AudioPlaybackConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.False(t, decoded.Enabled)
+	assert.Equal(t, 0, decoded.DeviceIndex)
+	assert.Equal(t, uint32(0), decoded.BufferSize)
+}
+
+// --- AppConfig ---
+
+func TestAppConfig_RoundTrip(t *testing.T) {
+	original := AppConfig{
+		DatastoreConfig: DatastoreConfig{Driver: SqliteDriverName, Path: "/tmp/test.db"},
+		LoggingConfig:   LoggingConfig{Level: "info", ConsoleLogging: true},
+		RequiredConfigs: RequiredConfigs{SetupComplete: true, DefaultLogbookID: 1},
+		ServerConfig:    &ServerConfig{Name: "test", Port: 8080},
+		RigConfigs: []RigConfig{
+			{
+				ID: 1, Name: "Rig1", Model: "FTdx10",
+				PTTConfig: PTTConfig{Enabled: true, PortName: "/dev/ttyUSB1", Line: "rts"},
+			},
+		},
+		EmailConfig:     EmailConfig{Name: "alerts", Enabled: false},
+		LoggingStation:  LoggingStation{StationCallsign: "W1AW"},
+		OptionalConfigs: OptionalConfigs{QrzViewUrl: "https://www.qrz.com/db/"},
+		AudioPlaybackConfig: AudioPlaybackConfig{
+			Enabled:     true,
+			DeviceIndex: -1,
+			BufferSize:  512,
+		},
+	}
+
+	b, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded AppConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Equal(t, original, decoded)
+}
+
+func TestAppConfig_JsonKeys_Audio(t *testing.T) {
+	cfg := AppConfig{
+		AudioPlaybackConfig: AudioPlaybackConfig{Enabled: true, DeviceIndex: -1, BufferSize: 512},
+	}
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(b, &result))
+
+	// Verify top-level JSON key exists
+	assert.Contains(t, result, "audio_playback_config")
+
+	// Verify nested structure
+
+	audio, ok := result["audio_playback_config"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, audio["enabled"])
+	assert.Equal(t, float64(-1), audio["device_index"])
+}
+
+func TestAppConfig_OmitEmptySlicesAndPointer(t *testing.T) {
+	cfg := AppConfig{
+		LoggingConfig: LoggingConfig{Level: "info"},
+	}
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(b, &result))
+
+	// Pointer field with omitempty
+	assert.NotContains(t, result, "server_config", "nil ServerConfig should be omitted")
+	// Slice fields with omitempty
+	assert.NotContains(t, result, "rig_configs", "nil RigConfigs should be omitted")
+	assert.NotContains(t, result, "lookup_service_configs")
+	assert.NotContains(t, result, "forwarding_configs")
+	assert.NotContains(t, result, "listener_configs")
+
+	// Non-pointer structs without omitempty must always be present
+	assert.Contains(t, result, "audio_playback_config")
+	assert.Contains(t, result, "datastore_config")
+}
+
+func TestAppConfig_NilServerConfig_RoundTrip(t *testing.T) {
+	original := AppConfig{
+		LoggingConfig: LoggingConfig{Level: "debug"},
+		ServerConfig:  nil,
+	}
+	b, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded AppConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Nil(t, decoded.ServerConfig)
+}
+
+// --- RigConfig ---
+
+func TestRigConfig_RoundTrip(t *testing.T) {
+	original := RigConfig{
+		ID:         1,
+		Name:       "My Rig",
+		Model:      "FTdx10",
+		Terminator: ";",
+		CatCommands: []CatCommand{
+			{Name: "get_freq", Cmd: "FA;"},
+			{Name: "get_mode", Cmd: "MD0;"},
+		},
+		CatStates: []CatState{
+			{
+				Prefix: "FA",
+				Data:   "FA00014025000;",
+				Markers: []Marker{
+					{
+						Tag:    "freq",
+						Index:  2,
+						Length: 11,
+						ValueMappings: []ValueMapping{
+							{Key: "00014025000", Value: "14025000"},
+						},
+					},
+				},
+			},
+		},
+		SerialConfig: SerialConfig{
+			PortName:       "/dev/ttyUSB0",
+			BaudRate:       38400,
+			DataBits:       8,
+			Parity:         serial.NoParity,
+			StopBits:       serial.OneStopBit,
+			ReadTimeoutMS:  200,
+			WriteTimeoutMS: 100,
+			RTS:            true,
+			DTR:            false,
+			LineDelimiter:  ';',
+		},
+		CatConfig: CatConfig{
+			Enabled:                       true,
+			ListenerRateLimiterIntervalMS: 10,
+			ListenerReadTimeoutMS:         8,
+			SendChannelSize:               10,
+			ProcessingChannelSize:         10,
+		},
+		PTTConfig: PTTConfig{
+			Enabled:  true,
+			PortName: "/dev/ttyUSB1",
+			Line:     "rts",
+		},
+	}
+
+	b, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded RigConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Equal(t, original, decoded)
+}
+
+func TestRigConfig_JsonKeys(t *testing.T) {
+	cfg := RigConfig{
+		ID:    1,
+		Name:  "Test Rig",
+		Model: "FT-710",
+		CatCommands: []CatCommand{
+			{Name: "get_freq", Cmd: "FA;"},
+		},
+		CatStates: []CatState{
+			{Prefix: "FA"},
+		},
+		PTTConfig: PTTConfig{Enabled: true, PortName: "/dev/ttyUSB1", Line: "dtr"},
+	}
+	b, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(b, &result))
+
+	// Top-level RigConfig JSON keys
+	assert.Contains(t, result, "id")
+	assert.Contains(t, result, "name")
+	assert.Contains(t, result, "model")
+	assert.Contains(t, result, "terminator")
+	assert.Contains(t, result, "commands")
+	assert.Contains(t, result, "states")
+	assert.Contains(t, result, "serial_port")
+	assert.Contains(t, result, "cat")
+	assert.Contains(t, result, "ptt")
+
+	// Nested PTTConfig under ptt key
+	ptt, ok := result["ptt"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, ptt["enabled"])
+	assert.Equal(t, "/dev/ttyUSB1", ptt["port_name"])
+	assert.Equal(t, "dtr", ptt["line"])
+}
+
+// --- LookupConfig ---
+
+func TestLookupConfig_RoundTrip(t *testing.T) {
+	original := LookupConfig{
+		Name:           "qrz",
+		Enabled:        true,
+		URL:            "https://xmldata.qrz.com/xml/current/",
+		Username:       "user",
+		Password:       "pass",
+		UserAgent:      "station-manager/1.0",
+		HttpTimeoutSec: 30,
+		ViewUrl:        "https://www.qrz.com/db/",
+	}
+	b, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded LookupConfig
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Equal(t, original, decoded)
 }

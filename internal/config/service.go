@@ -266,6 +266,15 @@ func (s *Service) ListenerConfigs() ([]types.ListenerConfig, error) {
 	return s.AppConfig.ListenerConfigs, nil
 }
 
+// AudioPlaybackConfig retrieves the audio playback configuration from the application configuration.
+func (s *Service) AudioPlaybackConfig() (types.AudioPlaybackConfig, error) {
+	const op errors.Op = "config.Service.AudioPlaybackConfig"
+	if !s.isInitialized.Load() {
+		return types.AudioPlaybackConfig{}, errors.New(op).Msg(errMsgNotInitialized)
+	}
+	return s.AppConfig.AudioPlaybackConfig, nil
+}
+
 // UpdateAppConfig updates the application configuration and writes it to the configuration file.
 func (s *Service) UpdateAppConfig(cfg types.AppConfig) error {
 	const op errors.Op = "config.Service.UpdateAppConfig"
