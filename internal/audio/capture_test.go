@@ -1,0 +1,581 @@
+package audio
+
+import (
+	"context"
+	"math"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+// newCapture creates a Capture for testing and registers cleanup.
+func newCapture(t *testing.T) *Capture {
+	t.Helper()
+	c := New(DefaultConfig())
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+// --------------- Config -------------------------------------------------------
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	require.Equal(t, -1, cfg.DeviceIndex)
+	require.Equal(t, uint32(48000), cfg.SampleRate)
+	require.Equal(t, uint32(1), cfg.Channels)
+	require.Equal(t, uint32(512), cfg.BufferSize)
+}
+
+func TestConfig_ZeroValue(t *testing.T) {
+	var cfg Config
+	require.Equal(t, 0, cfg.DeviceIndex)
+	require.Equal(t, uint32(0), cfg.SampleRate)
+}
+
+func TestConfig_CustomValues(t *testing.T) {
+	cfg := Config{DeviceIndex: 5, SampleRate: 96000, Channels: 2, BufferSize: 2048}
+	require.Equal(t, 5, cfg.DeviceIndex)
+	require.Equal(t, uint32(96000), cfg.SampleRate)
+	require.Equal(t, uint32(2), cfg.Channels)
+	require.Equal(t, uint32(2048), cfg.BufferSize)
+}
+
+// --------------- New / construction ------------------------------------------
+
+func TestNew(t *testing.T) {
+	cfg := Config{DeviceIndex: 2, SampleRate: 44100, Channels: 2, BufferSize: 1024}
+	c := New(cfg)
+	require.NotNil(t, c)
+	require.Equal(t, 2, c.config.DeviceIndex)
+	require.Equal(t, uint32(44100), c.config.SampleRate)
+	require.NotNil(t, c.Samples)
+}
+
+func TestNew_ChannelBufferSize(t *testing.T) {
+	c := New(DefaultConfig())
+	require.Equal(t, SampleChannelBufferSize, cap(c.Samples))
+}
+
+// --------------- IsRunning ---------------------------------------------------
+
+func TestCapture_IsRunning_InitialState(t *testing.T) {
+	c := newCapture(t)
+	require.False(t, c.IsRunning())
+}
+
+// --------------- SetCallback -------------------------------------------------
+
+func TestCapture_SetCallback(t *testing.T) {
+	c := newCapture(t)
+	c.SetCallback(func(_ []float32) {})
+	require.NotNil(t, c.callbackPtr.Load())
+}
+
+func TestCapture_SetCallback_Nil(t *testing.T) {
+	c := newCapture(t)
+	c.SetCallback(func(_ []float32) {})
+	c.SetCallback(nil)
+	require.Nil(t, c.callbackPtr.Load())
+}
+
+// --------------- Error sentinels ---------------------------------------------
+
+func TestErrors(t *testing.T) {
+	require.Equal(t, "audio capture not initialized", ErrNotInitialized.Error())
+	require.Equal(t, "audio capture already running", ErrAlreadyRunning.Error())
+	require.Equal(t, "audio capture not running", ErrNotRunning.Error())
+}
+
+// --------------- ListDevices -------------------------------------------------
+
+func TestCapture_ListDevices_NotInitialized(t *testing.T) {
+	c := newCapture(t)
+	_, err := c.ListDevices()
+	require.ErrorIs(t, err, ErrNotInitialized)
+}
+
+// --------------- Start -------------------------------------------------------
+
+func TestCapture_Start_NotInitialized(t *testing.T) {
+	c := newCapture(t)
+	err := c.Start(context.Background())
+	require.ErrorIs(t, err, ErrNotInitialized)
+}
+
+func TestCapture_Start_AlreadyRunning(t *testing.T) {
+	c := newCapture(t)
+	c.running.Store(true)
+	err := c.Start(context.Background())
+	require.ErrorIs(t, err, ErrAlreadyRunning)
+}
+
+// --------------- Stop --------------------------------------------------------
+
+func TestCapture_Stop_NotRunning(t *testing.T) {
+	c := newCapture(t)
+	err := c.Stop()
+	require.ErrorIs(t, err, ErrNotRunning)
+}
+
+// --------------- Close -------------------------------------------------------
+
+func TestCapture_ClosedFlag_InitialState(t *testing.T) {
+	c := newCapture(t)
+	require.False(t, c.closed.Load())
+}
+
+func TestCapture_ClosedFlag_SetOnClose(t *testing.T) {
+	c := New(DefaultConfig())
+	require.NoError(t, c.Init())
+	require.NoError(t, c.Close())
+	require.True(t, c.closed.Load())
+}
+
+func TestCapture_CloseOnce_MultipleCloses(t *testing.T) {
+	c := New(DefaultConfig())
+	require.NoError(t, c.Init())
+	require.NoError(t, c.Close())
+	// Second close must not panic
+	_ = c.Close()
+}
+
+func TestCapture_CloseOnce_ConcurrentCloses(t *testing.T) {
+	c := New(DefaultConfig())
+	require.NoError(t, c.Init())
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = c.Close()
+		}()
+	}
+	wg.Wait() // must not panic
+}
+
+func TestCapture_Close_SetsClosedBeforeChannelClose(t *testing.T) {
+	c := New(DefaultConfig())
+	require.NoError(t, c.Init())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range c.Samples {
+			// drain
+		}
+		require.True(t, c.closed.Load(), "closed flag must be true when channel is drained")
+	}()
+
+	require.NoError(t, c.Close())
+	<-done
+}
+
+// --------------- safeSend ----------------------------------------------------
+
+func TestCapture_SafeSend_NormalOperation(t *testing.T) {
+	c := newCapture(t)
+	c.safeSend([]float32{1.0, 2.0, 3.0})
+
+	select {
+	case samples := <-c.Samples:
+		require.Len(t, samples, 3)
+	default:
+		t.Fatal("expected sample in channel")
+	}
+}
+
+func TestCapture_SafeSend_RecoverFromClosedChannel(t *testing.T) {
+	// Do not use newCapture: we close the channel directly, bypassing closeOnce,
+	// so the cleanup's Close() call would panic on double-close.
+	c := New(DefaultConfig())
+	close(c.Samples)
+	// Must not panic
+	c.safeSend([]float32{1.0, 2.0, 3.0})
+}
+
+func TestCapture_SafeSend_ChannelFull(t *testing.T) {
+	c := &Capture{
+		config:  DefaultConfig(),
+		Samples: make(chan []float32, 1),
+	}
+	c.safeSend([]float32{1.0}) // fills channel
+	c.safeSend([]float32{2.0}) // should be dropped, not block
+
+	select {
+	case samples := <-c.Samples:
+		require.Equal(t, float32(1.0), samples[0])
+	default:
+		t.Fatal("expected first sample in channel")
+	}
+	select {
+	case <-c.Samples:
+		t.Fatal("channel should be empty")
+	default:
+	}
+}
+
+// --------------- closed flag logic -------------------------------------------
+
+func TestCapture_ClosedFlag_PreventsSendOnClosedChannel(t *testing.T) {
+	c := newCapture(t)
+	c.closed.Store(true)
+
+	sent := false
+	if !c.closed.Load() {
+		select {
+		case c.Samples <- []float32{1.0}:
+			sent = true
+		default:
+		}
+	}
+	require.False(t, sent)
+}
+
+func TestCapture_ConcurrentCloseAndSend(t *testing.T) {
+	c := newCapture(t)
+
+	sentCount := 0
+	for i := 0; i < 10; i++ {
+		if !c.closed.Load() {
+			select {
+			case c.Samples <- []float32{1.0}:
+				sentCount++
+			default:
+			}
+		}
+	}
+	require.Greater(t, sentCount, 0)
+
+	c.closed.Store(true)
+
+	attemptedAfterClose := false
+	if !c.closed.Load() {
+		attemptedAfterClose = true
+	}
+	require.False(t, attemptedAfterClose)
+
+	c.closeOnce.Do(func() { close(c.Samples) })
+	// Second Do must not execute
+	c.closeOnce.Do(func() {
+		t.Error("closeOnce should prevent this from running")
+	})
+}
+
+func TestCapture_ConcurrentCloseAndSend_Stress(t *testing.T) {
+	for iter := 0; iter < 100; iter++ {
+		c := New(DefaultConfig())
+		var wg sync.WaitGroup
+
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 100; j++ {
+					_ = c.closed.Load()
+				}
+			}()
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.closed.Store(true)
+			c.closeOnce.Do(func() { close(c.Samples) })
+		}()
+
+		wg.Wait()
+		require.True(t, c.closed.Load())
+	}
+}
+
+// --------------- Concurrent access -------------------------------------------
+
+func TestCapture_ConcurrentAccess(t *testing.T) {
+	c := newCapture(t)
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = c.IsRunning()
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.SetCallback(func(_ []float32) {})
+		}()
+	}
+	wg.Wait()
+}
+
+func TestCapture_ConcurrentSetCallbackAndRead(t *testing.T) {
+	c := newCapture(t)
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					c.SetCallback(func(_ []float32) {})
+				}
+			}
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_ = c.callbackPtr.Load()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestCapture_ClosedFlag_RaceWithCallback(t *testing.T) {
+	c := newCapture(t)
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					c.closed.Store(true)
+					c.closed.Store(false)
+				}
+			}
+		}()
+	}
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_ = c.closed.Load()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestCapture_ContextCancellation_ConcurrentWithClose(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		c := New(DefaultConfig())
+		require.NoError(t, c.Init())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		_ = c.Start(ctx) // may fail without hardware — that's fine
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); cancel() }()
+		go func() { defer wg.Done(); _ = c.Close() }()
+		wg.Wait()
+
+		require.True(t, c.closed.Load())
+	}
+}
+
+// --------------- bytesToFloat32 ----------------------------------------------
+
+func TestBytesToFloat32_Empty(t *testing.T) {
+	result := bytesToFloat32([]byte{})
+	require.Empty(t, result)
+}
+
+func TestBytesToFloat32_SingleSample(t *testing.T) {
+	// 1.0 = 0x3F800000 little-endian
+	result := bytesToFloat32([]byte{0x00, 0x00, 0x80, 0x3F})
+	require.Len(t, result, 1)
+	require.Equal(t, float32(1.0), result[0])
+}
+
+func TestBytesToFloat32_MultipleSamples(t *testing.T) {
+	data := []byte{
+		0x00, 0x00, 0x00, 0x00, // 0.0
+		0x00, 0x00, 0x80, 0x3F, // 1.0
+		0x00, 0x00, 0x80, 0xBF, // -1.0
+	}
+	result := bytesToFloat32(data)
+	require.Len(t, result, 3)
+	require.Equal(t, []float32{0.0, 1.0, -1.0}, result)
+}
+
+func TestBytesToFloat32_PartialBytes(t *testing.T) {
+	result := bytesToFloat32([]byte{0x00, 0x00, 0x80})
+	require.Empty(t, result)
+}
+
+func TestBytesToFloat32_ExtraBytes(t *testing.T) {
+	result := bytesToFloat32([]byte{0x00, 0x00, 0x80, 0x3F, 0xFF})
+	require.Len(t, result, 1)
+	require.Equal(t, float32(1.0), result[0])
+}
+
+func TestBytesToFloat32_SpecialValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected float32
+	}{
+		{"positive zero", []byte{0x00, 0x00, 0x00, 0x00}, 0.0},
+		{"0.5", []byte{0x00, 0x00, 0x00, 0x3F}, 0.5},
+		{"-0.5", []byte{0x00, 0x00, 0x00, 0xBF}, -0.5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := bytesToFloat32(tt.data)
+			require.Len(t, result, 1)
+			require.Equal(t, tt.expected, result[0])
+		})
+	}
+}
+
+func TestBytesToFloat32_LargeBuffer(t *testing.T) {
+	numSamples := 512
+	data := make([]byte, numSamples*4)
+	for i := 0; i < numSamples; i++ {
+		offset := i * 4
+		if i%2 == 0 {
+			// 1.0
+			data[offset+2] = 0x80
+			data[offset+3] = 0x3F
+		} else {
+			// -1.0
+			data[offset+2] = 0x80
+			data[offset+3] = 0xBF
+		}
+	}
+	result := bytesToFloat32(data)
+	require.Len(t, result, numSamples)
+	for i, sample := range result {
+		expected := float32(1.0)
+		if i%2 != 0 {
+			expected = -1.0
+		}
+		require.Equal(t, expected, sample)
+	}
+}
+
+// --------------- bytesAsFloat32 ----------------------------------------------
+
+func TestBytesAsFloat32_ZeroCopy(t *testing.T) {
+	data := []byte{0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x80, 0xBF}
+	result := bytesAsFloat32(data)
+	require.Len(t, result, 2)
+	require.Equal(t, float32(1.0), result[0])
+	require.Equal(t, float32(-1.0), result[1])
+}
+
+func TestBytesAsFloat32_Empty(t *testing.T) {
+	require.Nil(t, bytesAsFloat32([]byte{}))
+}
+
+func TestBytesAsFloat32_TooSmall(t *testing.T) {
+	require.Nil(t, bytesAsFloat32([]byte{0x00, 0x00, 0x80}))
+}
+
+// --------------- float32frombits ---------------------------------------------
+
+func TestFloat32frombits(t *testing.T) {
+	tests := []struct {
+		bits     uint32
+		expected float32
+	}{
+		{0x00000000, 0.0},
+		{0x3F800000, 1.0},
+		{0xBF800000, -1.0},
+		{0x40000000, 2.0},
+		{0x3F000000, 0.5},
+	}
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			require.Equal(t, tt.expected, float32frombits(tt.bits))
+		})
+	}
+}
+
+func TestFloat32frombits_NaN(t *testing.T) {
+	result := float32frombits(0x7FC00000)
+	require.True(t, math.IsNaN(float64(result)))
+}
+
+func TestFloat32frombits_Infinity(t *testing.T) {
+	require.True(t, math.IsInf(float64(float32frombits(0x7F800000)), 1))
+	require.True(t, math.IsInf(float64(float32frombits(0xFF800000)), -1))
+}
+
+// --------------- copyFloat32Slice --------------------------------------------
+
+func TestCopyFloat32Slice(t *testing.T) {
+	original := []float32{1.0, 2.0, 3.0}
+	copied := copyFloat32Slice(original)
+	require.Equal(t, original, copied)
+	original[0] = 999.0
+	require.NotEqual(t, float32(999.0), copied[0])
+}
+
+func TestCopyFloat32Slice_Nil(t *testing.T) {
+	require.Nil(t, copyFloat32Slice(nil))
+}
+
+func TestCopyFloat32Slice_Empty(t *testing.T) {
+	require.Empty(t, copyFloat32Slice([]float32{}))
+}
+
+// --------------- Benchmarks --------------------------------------------------
+
+func BenchmarkBytesToFloat32(b *testing.B) {
+	data := make([]byte, 512*4)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = bytesToFloat32(data)
+	}
+}
+
+func BenchmarkBytesAsFloat32(b *testing.B) {
+	data := make([]byte, 512*4)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = bytesAsFloat32(data)
+	}
+}
+
+func BenchmarkCopyFloat32Slice(b *testing.B) {
+	data := make([]float32, 512)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = copyFloat32Slice(data)
+	}
+}
