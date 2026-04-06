@@ -3,13 +3,13 @@ package audio
 
 import (
 	"context"
-	"errors"
-	"fmt"
+	stderr "errors"
 	"log"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/gen2brain/malgo"
 )
 
@@ -22,9 +22,10 @@ const (
 )
 
 var (
-	ErrNotInitialized = errors.New("audio capture not initialized")
-	ErrAlreadyRunning = errors.New("audio capture already running")
-	ErrNotRunning     = errors.New("audio capture not running")
+	ErrNotInitialized = stderr.New("audio capture not initialized")
+	ErrAlreadyRunning = stderr.New("audio capture already running")
+	ErrNotRunning     = stderr.New("audio capture not running")
+	ErrClosed         = stderr.New("audio capture closed")
 )
 
 // Config holds audio capture configuration
@@ -86,19 +87,27 @@ func (c *Capture) SetCallback(cb SampleCallback) {
 	}
 }
 
-// Init initializes the audio backend
+// Init initializes the audio backend.
+// Returns ErrClosed if Close has already been called; a Capture cannot be reused
+// after closing because the Samples channel and closeOnce are permanently spent.
 func (c *Capture) Init() error {
+	const op errors.Op = "audio.Capture.Init"
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closed.Load() {
+		return ErrClosed
+	}
+
 	if c.ctx != nil {
-		return errors.New("already initialized")
+		return errors.New(op).Msg("already initialized")
 	}
 
 	ctxConfig := malgo.ContextConfig{}
 	ctx, err := malgo.InitContext(nil, ctxConfig, nil)
 	if err != nil {
-		return fmt.Errorf("init audio context: %w", err)
+		return errors.New(op).Err(err)
 	}
 	c.ctx = ctx
 
@@ -107,6 +116,8 @@ func (c *Capture) Init() error {
 
 // ListDevices returns available capture devices
 func (c *Capture) ListDevices() ([]malgo.DeviceInfo, error) {
+	const op errors.Op = "audio.Capture.ListDevices"
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -116,7 +127,7 @@ func (c *Capture) ListDevices() ([]malgo.DeviceInfo, error) {
 
 	infos, err := c.ctx.Devices(malgo.Capture)
 	if err != nil {
-		return nil, fmt.Errorf("enumerate devices: %w", err)
+		return nil, errors.New(op).Err(err)
 	}
 
 	return infos, nil
@@ -124,6 +135,8 @@ func (c *Capture) ListDevices() ([]malgo.DeviceInfo, error) {
 
 // Start begins audio capture
 func (c *Capture) Start(ctx context.Context) error {
+	const op errors.Op = "audio.Capture.Start"
+
 	// Use atomic swap to ensure only one caller can start
 	if !c.running.CompareAndSwap(false, true) {
 		return ErrAlreadyRunning
@@ -146,12 +159,12 @@ func (c *Capture) Start(ctx context.Context) error {
 		if err != nil {
 			c.mu.Unlock()
 			c.running.Store(false)
-			return fmt.Errorf("enumerate devices: %w", err)
+			return errors.New(op).Err(err)
 		}
 		if c.config.DeviceIndex >= len(devices) {
 			c.mu.Unlock()
 			c.running.Store(false)
-			return fmt.Errorf("device index %d out of range (have %d devices)",
+			return errors.New(op).Msgf("device index %d out of range (have %d devices)",
 				c.config.DeviceIndex, len(devices))
 		}
 		deviceID = devices[c.config.DeviceIndex].ID.Pointer()
@@ -200,7 +213,7 @@ func (c *Capture) Start(ctx context.Context) error {
 	device, err := malgo.InitDevice(audioCtx, deviceConfig, deviceCallbacks)
 	if err != nil {
 		c.running.Store(false)
-		return fmt.Errorf("init device: %w", err)
+		return errors.New(op).Err(err)
 	}
 
 	// Store device immediately so it can be cleaned up if Start() fails or panics
@@ -214,13 +227,13 @@ func (c *Capture) Start(ctx context.Context) error {
 		c.device = nil
 		c.mu.Unlock()
 		c.running.Store(false)
-		return fmt.Errorf("start device: %w", err)
+		return errors.New(op).Err(err)
 	}
 
 	// Wait for context cancellation
 	go func() {
 		<-ctx.Done()
-		if err := c.Stop(); err != nil && !errors.Is(err, ErrNotRunning) {
+		if err := c.Stop(); err != nil && !stderr.Is(err, ErrNotRunning) {
 			log.Printf("audio: stop on context cancel: %v", err)
 		}
 	}()
@@ -248,26 +261,28 @@ func (c *Capture) Stop() error {
 	return nil
 }
 
-// Close releases all audio resources
+// Close releases all audio resources.
+// It is safe to call concurrently with Stop or the context-cancellation goroutine.
 func (c *Capture) Close() error {
-	// Set closed flag first to stop any in-flight callbacks from sending
+	const op errors.Op = "audio.Capture.Close"
+
+	// Set closed flag first to prevent any in-flight callbacks from sending
+	// to the channel after we close it below.
 	c.closed.Store(true)
+
+	// Delegate device teardown to Stop, which owns the running CAS and is the
+	// single authority for the running→false transition. ErrNotRunning is
+	// expected when Close is called on an inactive capture.
+	if err := c.Stop(); err != nil && !stderr.Is(err, ErrNotRunning) {
+		log.Printf("audio: stop on close: %v", err)
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.running.Load() && c.device != nil {
-		if err := c.device.Stop(); err != nil {
-			log.Printf("audio: device stop on close: %v", err)
-		}
-		c.device.Uninit()
-		c.device = nil
-		c.running.Store(false)
-	}
-
 	if c.ctx != nil {
 		if err := c.ctx.Uninit(); err != nil {
-			return fmt.Errorf("uninit context: %w", err)
+			return errors.New(op).Err(err)
 		}
 		c.ctx.Free()
 		c.ctx = nil
@@ -307,6 +322,8 @@ func (c *Capture) safeSend(samples []float32) {
 // bytesAsFloat32 performs zero-copy conversion of a byte slice to float32 slice.
 // WARNING: The returned slice shares memory with the input - do not use after
 // the input buffer is reused or freed.
+// WARNING: The byte slice must be 4-byte aligned. malgo callback buffers satisfy
+// this requirement; do not call with arbitrary byte slices from other sources.
 func bytesAsFloat32(data []byte) []float32 {
 	if len(data) < BytesPerFloat32 {
 		return nil
@@ -324,28 +341,4 @@ func copyFloat32Slice(src []float32) []float32 {
 	dst := make([]float32, len(src))
 	copy(dst, src)
 	return dst
-}
-
-// bytesToFloat32 converts raw bytes to float32 samples (allocates new slice).
-// Prefer bytesAsFloat32 for zero-copy access in hot paths.
-func bytesToFloat32(data []byte) []float32 {
-	numSamples := len(data) / BytesPerFloat32
-	samples := make([]float32, numSamples)
-
-	for i := 0; i < numSamples; i++ {
-		offset := i * BytesPerFloat32
-		// Little-endian float32
-		bits := uint32(data[offset]) |
-			uint32(data[offset+1])<<8 |
-			uint32(data[offset+2])<<16 |
-			uint32(data[offset+3])<<24
-		samples[i] = float32frombits(bits)
-	}
-
-	return samples
-}
-
-// float32frombits converts IEEE 754 binary representation to float32
-func float32frombits(b uint32) float32 {
-	return *(*float32)(unsafe.Pointer(&b))
 }

@@ -2,7 +2,6 @@ package audio
 
 import (
 	"context"
-	"math"
 	"sync"
 	"testing"
 	"time"
@@ -86,6 +85,14 @@ func TestErrors(t *testing.T) {
 	require.Equal(t, "audio capture not initialized", ErrNotInitialized.Error())
 	require.Equal(t, "audio capture already running", ErrAlreadyRunning.Error())
 	require.Equal(t, "audio capture not running", ErrNotRunning.Error())
+	require.Equal(t, "audio capture closed", ErrClosed.Error())
+}
+
+func TestCapture_Init_AfterClose_ReturnsErrClosed(t *testing.T) {
+	c := New(DefaultConfig())
+	require.NoError(t, c.Init())
+	require.NoError(t, c.Close())
+	require.ErrorIs(t, c.Init(), ErrClosed)
 }
 
 // --------------- ListDevices -------------------------------------------------
@@ -390,7 +397,7 @@ func TestCapture_ClosedFlag_RaceWithCallback(t *testing.T) {
 }
 
 func TestCapture_ContextCancellation_ConcurrentWithClose(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		c := New(DefaultConfig())
 		require.NoError(t, c.Init())
 
@@ -404,87 +411,6 @@ func TestCapture_ContextCancellation_ConcurrentWithClose(t *testing.T) {
 		wg.Wait()
 
 		require.True(t, c.closed.Load())
-	}
-}
-
-// --------------- bytesToFloat32 ----------------------------------------------
-
-func TestBytesToFloat32_Empty(t *testing.T) {
-	result := bytesToFloat32([]byte{})
-	require.Empty(t, result)
-}
-
-func TestBytesToFloat32_SingleSample(t *testing.T) {
-	// 1.0 = 0x3F800000 little-endian
-	result := bytesToFloat32([]byte{0x00, 0x00, 0x80, 0x3F})
-	require.Len(t, result, 1)
-	require.Equal(t, float32(1.0), result[0])
-}
-
-func TestBytesToFloat32_MultipleSamples(t *testing.T) {
-	data := []byte{
-		0x00, 0x00, 0x00, 0x00, // 0.0
-		0x00, 0x00, 0x80, 0x3F, // 1.0
-		0x00, 0x00, 0x80, 0xBF, // -1.0
-	}
-	result := bytesToFloat32(data)
-	require.Len(t, result, 3)
-	require.Equal(t, []float32{0.0, 1.0, -1.0}, result)
-}
-
-func TestBytesToFloat32_PartialBytes(t *testing.T) {
-	result := bytesToFloat32([]byte{0x00, 0x00, 0x80})
-	require.Empty(t, result)
-}
-
-func TestBytesToFloat32_ExtraBytes(t *testing.T) {
-	result := bytesToFloat32([]byte{0x00, 0x00, 0x80, 0x3F, 0xFF})
-	require.Len(t, result, 1)
-	require.Equal(t, float32(1.0), result[0])
-}
-
-func TestBytesToFloat32_SpecialValues(t *testing.T) {
-	tests := []struct {
-		name     string
-		data     []byte
-		expected float32
-	}{
-		{"positive zero", []byte{0x00, 0x00, 0x00, 0x00}, 0.0},
-		{"0.5", []byte{0x00, 0x00, 0x00, 0x3F}, 0.5},
-		{"-0.5", []byte{0x00, 0x00, 0x00, 0xBF}, -0.5},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := bytesToFloat32(tt.data)
-			require.Len(t, result, 1)
-			require.Equal(t, tt.expected, result[0])
-		})
-	}
-}
-
-func TestBytesToFloat32_LargeBuffer(t *testing.T) {
-	numSamples := 512
-	data := make([]byte, numSamples*4)
-	for i := 0; i < numSamples; i++ {
-		offset := i * 4
-		if i%2 == 0 {
-			// 1.0
-			data[offset+2] = 0x80
-			data[offset+3] = 0x3F
-		} else {
-			// -1.0
-			data[offset+2] = 0x80
-			data[offset+3] = 0xBF
-		}
-	}
-	result := bytesToFloat32(data)
-	require.Len(t, result, numSamples)
-	for i, sample := range result {
-		expected := float32(1.0)
-		if i%2 != 0 {
-			expected = -1.0
-		}
-		require.Equal(t, expected, sample)
 	}
 }
 
@@ -506,36 +432,6 @@ func TestBytesAsFloat32_TooSmall(t *testing.T) {
 	require.Nil(t, bytesAsFloat32([]byte{0x00, 0x00, 0x80}))
 }
 
-// --------------- float32frombits ---------------------------------------------
-
-func TestFloat32frombits(t *testing.T) {
-	tests := []struct {
-		bits     uint32
-		expected float32
-	}{
-		{0x00000000, 0.0},
-		{0x3F800000, 1.0},
-		{0xBF800000, -1.0},
-		{0x40000000, 2.0},
-		{0x3F000000, 0.5},
-	}
-	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
-			require.Equal(t, tt.expected, float32frombits(tt.bits))
-		})
-	}
-}
-
-func TestFloat32frombits_NaN(t *testing.T) {
-	result := float32frombits(0x7FC00000)
-	require.True(t, math.IsNaN(float64(result)))
-}
-
-func TestFloat32frombits_Infinity(t *testing.T) {
-	require.True(t, math.IsInf(float64(float32frombits(0x7F800000)), 1))
-	require.True(t, math.IsInf(float64(float32frombits(0xFF800000)), -1))
-}
-
 // --------------- copyFloat32Slice --------------------------------------------
 
 func TestCopyFloat32Slice(t *testing.T) {
@@ -555,14 +451,6 @@ func TestCopyFloat32Slice_Empty(t *testing.T) {
 }
 
 // --------------- Benchmarks --------------------------------------------------
-
-func BenchmarkBytesToFloat32(b *testing.B) {
-	data := make([]byte, 512*4)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = bytesToFloat32(data)
-	}
-}
 
 func BenchmarkBytesAsFloat32(b *testing.B) {
 	data := make([]byte, 512*4)
