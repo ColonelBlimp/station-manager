@@ -58,7 +58,12 @@ type Capture struct {
 	device  *malgo.Device
 	running atomic.Bool
 	closed  atomic.Bool // prevents sends to closed channel
-	mu      sync.Mutex  // protects ctx and device
+	mu      sync.Mutex  // protects ctx, device, and cancelInternal
+
+	// cancelInternal cancels the per-Start internal context, signalling the
+	// context-watcher goroutine to exit when Stop/Close is called directly
+	// rather than via context cancellation.
+	cancelInternal context.CancelFunc
 
 	// Atomic pointer for lock-free callback access in hot path
 	callbackPtr atomic.Pointer[SampleCallback]
@@ -224,23 +229,34 @@ func (c *Capture) Start(ctx context.Context) error {
 		return errors.New(op).Err(err)
 	}
 
-	// Store device immediately so it can be cleaned up if Start() fails or panics
+	// Create an internal context so Stop/Close can terminate the watcher goroutine
+	// even when the caller-supplied context is never cancelled (e.g. context.Background()).
+	internalCtx, cancelInternal := context.WithCancel(context.Background())
+
+	// Store device and cancel func together so Stop() can reach both.
 	c.mu.Lock()
 	c.device = device
+	c.cancelInternal = cancelInternal
 	c.mu.Unlock()
 
 	if err := device.Start(); err != nil {
 		c.mu.Lock()
 		c.device.Uninit()
 		c.device = nil
+		c.cancelInternal = nil
 		c.mu.Unlock()
+		cancelInternal()
 		c.running.Store(false)
 		return errors.New(op).Err(err)
 	}
 
-	// Wait for context cancellation
+	// Watch for either external context cancellation or an internal Stop/Close signal.
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-internalCtx.Done():
+			return // stopped via Stop() or Close() directly — no further action needed
+		}
 		if err := c.Stop(); err != nil && !stderr.Is(err, ErrNotRunning) {
 			log.Printf("audio: stop on context cancel: %v", err)
 		}
@@ -264,6 +280,13 @@ func (c *Capture) Stop() error {
 		}
 		c.device.Uninit()
 		c.device = nil
+	}
+
+	// Signal the context-watcher goroutine to exit so it doesn't leak when
+	// Stop is called directly rather than via context cancellation.
+	if c.cancelInternal != nil {
+		c.cancelInternal()
+		c.cancelInternal = nil
 	}
 
 	return nil
