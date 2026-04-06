@@ -288,13 +288,13 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 
 	select {
 	case <-done:
-		// All samples have been submitted to the hardware. Wait one additional
-		// period before stopping so that the driver/PipeWire output buffer has
-		// time to drain. Without this, device.Stop() cuts the stream while audio
-		// is still buffered, and nothing is heard on short files.
-		drainDur := time.Duration(p.config.BufferSize) * time.Second / time.Duration(wav.SampleRate)
+		// All samples have been submitted to the hardware, but the audio data is
+		// still in transit through PipeWire/ALSA/driver buffers before reaching
+		// the DAC. device.Stop() cuts the stream immediately, so we must wait for
+		// the pipeline to drain. PipeWire + ALSA can have 150–250ms total latency;
+		// 500ms is a conservative but safe bound.
 		select {
-		case <-time.After(drainDur * 4):
+		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
 		case <-playCtx.Done():
 		}

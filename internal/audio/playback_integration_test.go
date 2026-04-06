@@ -62,10 +62,20 @@ func TestPlayback_PlayFile_Integration(t *testing.T) {
 	require.NoError(t, p.Init())
 
 	path := buildSineWAV(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	require.NoError(t, p.PlayFile(ctx, path))
+	elapsed := time.Since(start)
+
+	// A 1s WAV + 500ms drain should take ~1.5s.
+	// If it returned in < 200ms the audio callback never fired —
+	// check system audio routing (pavucontrol, qpwgraph, system volume).
+	t.Logf("PlayFile completed in %v", elapsed)
+	require.Greater(t, elapsed, 200*time.Millisecond,
+		"PlayFile returned too quickly — audio callback may not have fired; check audio routing")
+
 	require.False(t, p.IsPlaying())
 }
 
