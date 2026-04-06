@@ -25,3 +25,9 @@ and FT8.
 
 The software does support CAT operation; however, only Yaesu FTdx10 and F7-100 have been tested (I don't own any other
 rigs).
+
+# FT8/FT4
+
+The code base contains a partial Go implementation of the FT8 codec layer (a Go implementation of FT8 message packing,
+LDPC forward error correction, audio I/O, and window timing). The goal is to eventually have a complete native Go FT8
+implementation.
