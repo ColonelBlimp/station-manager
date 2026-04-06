@@ -87,15 +87,21 @@ func (p *Playback) IsPlaying() bool {
 
 // Stop interrupts any in-progress PlayFile, causing it to return immediately.
 // Returns ErrPlaybackNotPlaying if nothing is playing.
+// If Stop is called in the sub-microsecond window between playing being set true
+// and cancelPlay being registered (essentially impossible in practice), it returns
+// nil without cancelling — IsPlaying() remains the authoritative "is it running" check.
 func (p *Playback) Stop() error {
+	if !p.playing.Load() {
+		return ErrPlaybackNotPlaying
+	}
+
 	p.mu.Lock()
 	cancel := p.cancelPlay
 	p.mu.Unlock()
 
-	if cancel == nil {
-		return ErrPlaybackNotPlaying
+	if cancel != nil {
+		cancel()
 	}
-	cancel()
 	return nil
 }
 
@@ -157,29 +163,24 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 	}
 	defer p.playing.Store(false)
 
-	// Validate and extract the malgo context under lock, with a second closed check
-	// to cover the window between wg.Add and here.
-	p.mu.Lock()
-	if p.ctx == nil {
-		p.mu.Unlock()
-		return ErrPlaybackNotInitialized
-	}
-	if p.closed.Load() {
-		p.mu.Unlock()
-		return ErrPlaybackClosed
-	}
-	audioCtx := p.ctx.Context
-	p.mu.Unlock()
-
-	// Decode the WAV file before touching any audio hardware.
-	wav, err := readWAV(path)
-	if err != nil {
-		return errors.New(op).Err(err)
-	}
-
-	// Create an internal play context that Stop() and Close() can cancel.
+	// Create the play context immediately after the CAS so that Stop() can always
+	// cancel when IsPlaying() is true. Previously cancelPlay was set only after
+	// readWAV, leaving a window (as long as the file read) where IsPlaying()
+	// returned true but Stop() returned ErrPlaybackNotPlaying.
 	playCtx, cancelPlay := context.WithCancel(context.Background())
 	p.mu.Lock()
+	// Second closed check: cover the window between wg.Add and acquiring mu.
+	if p.closed.Load() {
+		p.mu.Unlock()
+		cancelPlay()
+		return ErrPlaybackClosed
+	}
+	if p.ctx == nil {
+		p.mu.Unlock()
+		cancelPlay()
+		return ErrPlaybackNotInitialized
+	}
+	audioCtx := p.ctx.Context
 	p.cancelPlay = cancelPlay
 	p.mu.Unlock()
 	defer func() {
@@ -188,6 +189,18 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 		p.cancelPlay = nil
 		p.mu.Unlock()
 	}()
+
+	// Decode the WAV file. Stop()/Close() may be called during this read.
+	wav, err := readWAV(path)
+	if err != nil {
+		return errors.New(op).Err(err)
+	}
+
+	// If Stop() or Close() arrived during the WAV decode, bail now before
+	// touching any audio hardware.
+	if playCtx.Err() != nil {
+		return nil
+	}
 
 	// Playback state — only accessed from the single audio callback thread.
 	pos := 0
@@ -223,9 +236,19 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 			Channels: uint32(wav.Channels),
 		},
 	}
+
 	if p.config.DeviceIndex >= 0 {
-		// Non-default device selection would require listing devices here;
-		// for now DeviceIndex is treated as a hint: only -1 (default) is honoured.
+		p.mu.Lock()
+		devices, listErr := p.ctx.Devices(malgo.Playback)
+		p.mu.Unlock()
+		if listErr != nil {
+			return errors.New(op).Err(listErr)
+		}
+		if p.config.DeviceIndex >= len(devices) {
+			return errors.New(op).Msgf("device index %d out of range (have %d playback devices)",
+				p.config.DeviceIndex, len(devices))
+		}
+		deviceConfig.Playback.DeviceID = devices[p.config.DeviceIndex].ID.Pointer()
 	}
 
 	device, err := malgo.InitDevice(audioCtx, deviceConfig, malgo.DeviceCallbacks{Data: onSendFrames})

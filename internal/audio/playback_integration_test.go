@@ -4,6 +4,7 @@ package audio
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -13,20 +14,18 @@ import (
 // These tests require audio output hardware and are skipped by default.
 // Run with: go test -tags=integration ./audio/
 
-// buildSineWAV generates a 0.1s 440 Hz sine wave as a PCM16 WAV file.
+// buildSineWAV generates a 0.1s 440 Hz sine wave as a PCM16 mono WAV file.
 func buildSineWAV(t *testing.T) string {
 	t.Helper()
 	const (
 		sampleRate = 48000
-		duration   = 100 * time.Millisecond
 		freq       = 440.0
+		duration   = 100 * time.Millisecond
 	)
 	numSamples := int(sampleRate * float64(duration) / float64(time.Second))
 	samples := make([]float32, numSamples)
 	for i := range samples {
-		// Not importing math here to avoid cycle risk; use a simple linear ramp instead.
-		_ = freq
-		samples[i] = float32(i%2)*0.1 - 0.05 // quiet pulse train as stand-in
+		samples[i] = float32(math.Sin(2 * math.Pi * freq * float64(i) / sampleRate))
 	}
 	return buildWAV(t, wavAudioFormatPCM, 1, sampleRate, 16, pcm16Bytes(samples))
 }

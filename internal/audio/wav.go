@@ -120,9 +120,14 @@ outer:
 			if !fmtFound {
 				return nil, errors.New(op).Msg("data chunk precedes fmt chunk")
 			}
-			pcmData = make([]byte, chunkSize)
-			if _, err := io.ReadFull(f, pcmData); err != nil {
-				return nil, errors.New(op).Err(err)
+			// Use LimitReader rather than pre-allocating chunkSize bytes: a corrupt or
+			// adversarial file could declare chunkSize = 0xFFFFFFFF and OOM the process
+			// before io.ReadFull even attempts to read. LimitReader caps the read to the
+			// declared size but only allocates as fast as data actually arrives.
+			var readErr error
+			pcmData, readErr = io.ReadAll(io.LimitReader(f, int64(chunkSize)))
+			if readErr != nil {
+				return nil, errors.New(op).Err(readErr)
 			}
 			break outer
 
