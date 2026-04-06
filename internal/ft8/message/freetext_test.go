@@ -233,6 +233,7 @@ func TestFreeText_PackedRoundTrip(t *testing.T) {
 			want := text
 			if want == "" {
 				// Empty encodes as all-spaces which decodes to "".
+				_ = want
 			}
 			require.Equal(t, want, got)
 		})

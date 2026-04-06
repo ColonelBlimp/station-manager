@@ -81,10 +81,19 @@ const charset = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 // and offset by callBase (= NTokens + Max22) to place it in the standard
 // callsign region of the 28-bit field.
 //
+// Special prefix workarounds (matching ft8_lib pack_basecall):
+//   - Swaziland (3DA0): "3DA0XY" → packed as "3D0XY" (drops the 'A')
+//   - Guinea (3X): "3XAYY" → packed as "QAYY" (replaces "3X" with "Q")
+//
+// These are reversed by DecodeCallsign on unpack.
+//
 // This function handles standard callsigns only. For special tokens, use
 // EncodeCQ, EncodeCQNum, EncodeCQSuffix, EncodeDE, or EncodeQRZ.
 func EncodeCallsign(call string) (uint32, error) {
 	const op errors.Op = "message.EncodeCallsign"
+
+	// Apply special prefix workarounds before normalization.
+	call = packCallWorkaround(call)
 
 	c6, err := normalizeCallsign(call)
 	if err != nil {
@@ -329,6 +338,9 @@ func decodeToken(n28 uint32) (string, error) {
 
 // decodeStandard reverses the mixed-radix encoding for a standard callsign.
 // n is the basecall value (0..NBase-1), already offset-adjusted.
+//
+// After decoding, special prefix workarounds are applied to reverse the
+// 3DA0→3D0 and 3X→Q remapping done at encode time.
 func decodeStandard(n uint32) (string, error) {
 	const op errors.Op = "message.decodeStandard"
 
@@ -356,7 +368,10 @@ func decodeStandard(n uint32) (string, error) {
 	c6[4] = charset[mrToLetterSpace(d4)]
 	c6[5] = charset[mrToLetterSpace(d5)]
 
-	return strings.TrimSpace(string(c6[:])), nil
+	call := strings.TrimSpace(string(c6[:]))
+
+	// Reverse special prefix workarounds (3D0→3DA0, Q→3X).
+	return unpackCallWorkaround(call), nil
 }
 
 // decodeCQSuffix decodes a CQ directed suffix from its base-27 encoding.
@@ -389,4 +404,49 @@ func decodeCQSuffix(k uint32) (string, error) {
 
 func isAlphanumeric(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')
+}
+
+// --- Special prefix workarounds (3DA0 / 3X) ----------------------------------
+
+// packCallWorkaround applies encode-time prefix remapping for callsigns that
+// don't fit the standard 6-character normalization scheme.
+//
+// Matches ft8_lib pack_basecall() (message.c):
+//   - Swaziland (3DA0): "3DA0XY" → "3D0XY" (drops the 'A')
+//   - Guinea (3X): "3XAYY" → "QAYY" (replaces "3X" with "Q")
+func packCallWorkaround(call string) string {
+	call = strings.ToUpper(strings.TrimSpace(call))
+
+	// 3DA0 prefix: "3DA0..." → "3D0..." (remove the 'A').
+	if len(call) >= 4 && call[0] == '3' && call[1] == 'D' &&
+		call[2] == 'A' && call[3] == '0' {
+		return "3D0" + call[4:]
+	}
+
+	// 3X prefix: "3X..." → "Q..." (replace "3X" with "Q").
+	if len(call) >= 2 && call[0] == '3' && call[1] == 'X' {
+		return "Q" + call[2:]
+	}
+
+	return call
+}
+
+// unpackCallWorkaround reverses the encode-time prefix remapping applied by
+// packCallWorkaround.
+//
+// Matches ft8_lib unpack28() (message.c):
+//   - "3D0..." → "3DA0..." (Swaziland)
+//   - "Q[A-Z]..." → "3X[A-Z]..." (Guinea)
+func unpackCallWorkaround(call string) string {
+	// 3D0 → 3DA0: if decoded call starts with "3D0", insert 'A'.
+	if len(call) >= 3 && call[0] == '3' && call[1] == 'D' && call[2] == '0' {
+		return "3DA0" + call[3:]
+	}
+
+	// Q → 3X: if decoded call starts with 'Q' followed by a letter.
+	if len(call) >= 2 && call[0] == 'Q' && call[1] >= 'A' && call[1] <= 'Z' {
+		return "3X" + call[1:]
+	}
+
+	return call
 }
