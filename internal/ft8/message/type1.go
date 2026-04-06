@@ -49,21 +49,21 @@ func packType1(msg *Message) ([MsgBytes]byte, error) {
 	n28a, err := encodeCallField(msg.Call1)
 	if err != nil {
 		return [MsgBytes]byte{}, errors.New(op).Err(err).Msgf(
-			"first callsign %q: %s", msg.Call1, err)
+			"first callsign %q", msg.Call1)
 	}
 
 	// Encode the second callsign/token.
 	n28b, err := encodeCallField(msg.Call2)
 	if err != nil {
 		return [MsgBytes]byte{}, errors.New(op).Err(err).Msgf(
-			"second callsign %q: %s", msg.Call2, err)
+			"second callsign %q", msg.Call2)
 	}
 
 	// Encode grid/report field.
 	igrid4, ir, err := EncodeGridField(msg.Grid)
 	if err != nil {
 		return [MsgBytes]byte{}, errors.New(op).Err(err).Msgf(
-			"grid field %q: %s", msg.Grid, err)
+			"grid field %q", msg.Grid)
 	}
 
 	// Pack into the 77-bit payload.
@@ -102,19 +102,19 @@ func unpackType1(payload [MsgBytes]byte) (*Message, error) {
 	// Decode first callsign.
 	call1, err := DecodeCallsign(n28a)
 	if err != nil {
-		return nil, errors.New(op).Err(err).Msgf("first callsign n28=%d: %s", n28a, err)
+		return nil, errors.New(op).Err(err).Msgf("first callsign n28=%d", n28a)
 	}
 
 	// Decode second callsign.
 	call2, err := DecodeCallsign(n28b)
 	if err != nil {
-		return nil, errors.New(op).Err(err).Msgf("second callsign n28=%d: %s", n28b, err)
+		return nil, errors.New(op).Err(err).Msgf("second callsign n28=%d", n28b)
 	}
 
 	// Decode grid/report field.
 	grid, err := DecodeGridField(igrid4, ir)
 	if err != nil {
-		return nil, errors.New(op).Err(err).Msgf("grid field igrid4=%d ir=%v: %s", igrid4, ir, err)
+		return nil, errors.New(op).Err(err).Msgf("grid field igrid4=%d ir=%v", igrid4, ir)
 	}
 
 	return &Message{
@@ -163,6 +163,10 @@ func encodeCallField(call string) (uint32, error) {
 		if len(suffix) >= 1 && len(suffix) <= 4 && isAllLetters(suffix) {
 			return EncodeCQSuffix(suffix)
 		}
+		// Unrecognized CQ modifier — return a descriptive error rather than
+		// falling through to EncodeCallsign which would give a generic error.
+		return 0, errors.New(op).Msgf(
+			"invalid CQ modifier %q: must be 3-digit frequency (000–999) or 1–4 letter suffix", suffix)
 	}
 
 	// Standard callsign.

@@ -3,6 +3,7 @@ package message
 import (
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"os"
 	"testing"
 
@@ -277,6 +278,49 @@ func TestPackType1_InvalidGrid(t *testing.T) {
 	}
 	_, err := Pack(msg)
 	require.Error(t, err)
+}
+
+func TestPackType1_InvalidCQModifier_TwoDigits(t *testing.T) {
+	msg := &Message{
+		MsgType: TypeStandard,
+		Call1:   "CQ 12",
+		Call2:   "W1AW",
+		Grid:    "FN31",
+	}
+	_, err := Pack(msg)
+	require.Error(t, err)
+	// The outer error wraps the CQ-specific error from encodeCallField.
+	inner := stderrors.Unwrap(err)
+	require.NotNil(t, inner)
+	require.Contains(t, inner.Error(), "invalid CQ modifier")
+}
+
+func TestPackType1_InvalidCQModifier_LongSuffix(t *testing.T) {
+	msg := &Message{
+		MsgType: TypeStandard,
+		Call1:   "CQ TOOLONG",
+		Call2:   "W1AW",
+		Grid:    "FN31",
+	}
+	_, err := Pack(msg)
+	require.Error(t, err)
+	inner := stderrors.Unwrap(err)
+	require.NotNil(t, inner)
+	require.Contains(t, inner.Error(), "invalid CQ modifier")
+}
+
+func TestPackType1_InvalidCQModifier_MixedAlphaNum(t *testing.T) {
+	msg := &Message{
+		MsgType: TypeStandard,
+		Call1:   "CQ A1",
+		Call2:   "W1AW",
+		Grid:    "FN31",
+	}
+	_, err := Pack(msg)
+	require.Error(t, err)
+	inner := stderrors.Unwrap(err)
+	require.NotNil(t, inner)
+	require.Contains(t, inner.Error(), "invalid CQ modifier")
 }
 
 // --------------- trimUpper ----------------------------------------------------

@@ -34,7 +34,7 @@ func packType0(msg *Message) ([MsgBytes]byte, error) {
 	hi, lo, err := EncodeFreeText(msg.FreeText)
 	if err != nil {
 		return [MsgBytes]byte{}, errors.New(op).Err(err).Msgf(
-			"free text %q: %s", msg.FreeText, err)
+			"free text %q", msg.FreeText)
 	}
 
 	var buf [MsgBytes]byte
