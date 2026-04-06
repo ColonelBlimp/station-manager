@@ -1,5 +1,4 @@
-// Package message
-// FT8/FT4 28-bit callsign field encoding and decoding.
+// callsign.go — FT8/FT4 28-bit callsign field encoding and decoding.
 //
 // The 28-bit field (0..268,435,455) is partitioned as follows:
 //
@@ -17,6 +16,7 @@
 //	532444..NTokens-1  reserved/unused
 //
 // Reference: ft8_lib src/ft8/message.c pack28()/unpack28(), WSJT-X lib/ft8/pack77.f90.
+
 package message
 
 import (
@@ -97,7 +97,7 @@ func EncodeCallsign(call string) (uint32, error) {
 
 	c6, err := normalizeCallsign(call)
 	if err != nil {
-		return 0, errors.New(op).Err(err).Msg(err.Error())
+		return 0, errors.New(op).Err(err).Msgf("callsign %q: %s", call, err)
 	}
 
 	// Charset indices for each position.
@@ -181,8 +181,8 @@ func EncodeCQSuffix(suffix string) (uint32, error) {
 //
 // Return values by region:
 //   - Token (0..NTokens-1): "DE", "QRZ", "CQ", "CQ 350", "CQ DX", etc.
-//   - Hash22 (NTokens..NTokens+Max22-1): "<...>" (hash cannot be reversed)
-//   - Standard callsign (NTokens+Max22..): decoded and trimmed, e.g. "W1AW"
+//   - Hash22 (NTOKENS..NTOKENS+Max22-1): "<...>" (hash cannot be reversed)
+//   - Standard callsign (NTOKENS+Max22..): decoded and trimmed, e.g. "W1AW"
 func DecodeCallsign(n28 uint32) (string, error) {
 	const op errors.Op = "message.DecodeCallsign"
 

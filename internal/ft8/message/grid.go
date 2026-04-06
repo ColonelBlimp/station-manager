@@ -1,5 +1,4 @@
-// Package message
-// FT8/FT4 15-bit grid/report field encoding and decoding.
+// grid.go — FT8/FT4 15-bit grid/report field encoding and decoding.
 //
 // The 15-bit igrid4 field in a standard FT8 message (type 1/2) is overloaded
 // to encode one of several data types:
@@ -18,6 +17,7 @@
 //   - ir is ignored for tokens (RRR, RR73, 73) and empty
 //
 // Reference: ft8_lib ft8/message.c packgrid()/unpackgrid(), WSJT-X lib/ft8/pack77.f90.
+
 package message
 
 import (
@@ -160,7 +160,7 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 	if len(extra) == 6 && extra[0] == 'R' && extra[1] == ' ' {
 		ig, gridErr := EncodeGrid(extra[2:])
 		if gridErr != nil {
-			return 0, false, errors.New(op).Err(gridErr).Msg(gridErr.Error())
+			return 0, false, errors.New(op).Err(gridErr).Msgf("roger grid %q: %s", extra, gridErr)
 		}
 		return ig, true, nil
 	}
@@ -181,7 +181,7 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 			if encErr == nil {
 				return ig, true, nil
 			}
-			return 0, false, errors.New(op).Err(encErr).Msg(encErr.Error())
+			return 0, false, errors.New(op).Err(encErr).Msgf("roger report %q: %s", extra, encErr)
 		}
 	}
 
@@ -193,7 +193,7 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 			if encErr == nil {
 				return ig, false, nil
 			}
-			return 0, false, errors.New(op).Err(encErr).Msg(encErr.Error())
+			return 0, false, errors.New(op).Err(encErr).Msgf("report %q: %s", extra, encErr)
 		}
 	}
 

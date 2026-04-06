@@ -1,5 +1,4 @@
-// Package message
-// Bit-level packing and unpacking utilities for FT8/FT4 77-bit messages.
+// bits.go — Bit-level packing and unpacking utilities for FT8/FT4 77-bit messages.
 //
 // FT8 messages are represented as byte slices in big-endian (MSB-first) bit
 // order: bit 0 is the MSB of byte 0. PackBits and UnpackBits read and write
@@ -8,6 +7,7 @@
 // grid, report) into the 77-bit payload without manual shift-and-mask logic.
 //
 // Reference: ft8_lib src/ft8/encode.c pack_bits()/unpack_bits().
+
 package message
 
 // PackBits writes the low `width` bits of value into dst starting at bit

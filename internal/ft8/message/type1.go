@@ -1,5 +1,4 @@
-// Package message
-// Type 1 standard message pack/unpack (i3=1).
+// type1.go — Type 1 standard message pack/unpack (i3=1).
 //
 // 77-bit layout (MSB-first):
 //
@@ -13,6 +12,7 @@
 //	W1AW VK2XYZ RR73  (confirmation)
 //
 // Reference: ft8_lib src/ft8/message.c pack_type1()/unpack_type1().
+
 package message
 
 import (

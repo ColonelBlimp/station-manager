@@ -110,6 +110,9 @@ func NextWindowStart(m Mode, now time.Time) time.Time {
 
 // SlotParity returns the parity (even/odd) of the window that contains now.
 // Slot index 0 (the Unix epoch) is defined as Even.
+//
+// Note: pre-epoch times (before 1970) may produce unexpected parity due to
+// Go's signed modulus operator. This is not a concern for real-world use.
 func SlotParity(m Mode, now time.Time) Parity {
 	wn := windowNanos(m)
 	idx := now.UnixNano() / wn
@@ -135,7 +138,10 @@ func WaitForNext(ctx context.Context, m Mode) (time.Time, error) {
 	d := time.Until(target)
 
 	if d <= 0 {
-		// Already past the boundary (can happen if the goroutine was delayed).
+		// Already past the boundary (can happen if the goroutine was delayed
+		// between NextWindowStart and time.Until by an entire window duration).
+		// This defensive guard is intentionally untested — it requires injecting
+		// a clock abstraction that isn't warranted for this package's scope.
 		return target, nil
 	}
 

@@ -1,15 +1,3 @@
-// Package message
-// Top-level FT8/FT4 77-bit message type definitions with Pack/Unpack dispatch.
-//
-// FT8 messages are 77 bits packed MSB-first into 10 bytes. The last 3 bits
-// (positions 74–76) encode the i3 field that identifies the message type.
-// For i3=0, the preceding 3 bits (positions 71–73) encode the n3 sub-type.
-//
-// This file defines the Type enum, the Message struct (carrying both
-// human-readable and encoded field values), and the top-level Pack/Unpack
-// entry points that dispatch to type-specific packers.
-//
-// Reference: ft8_lib src/ft8/message.c pack77()/unpack77(), WSJT-X lib/ft8/pack77.f90.
 package message
 
 import (

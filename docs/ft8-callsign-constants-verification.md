@@ -82,15 +82,17 @@ The `unpack28()` boundaries match exactly:
 - `NTOKENS ≤ n28 < NTOKENS + MAX22` → 22-bit hash
 - `≥ NTOKENS + MAX22` → standard callsign (subtract NTOKENS + MAX22)
 
-### 9. Note: Missing Special Prefix Workarounds
+### 9. Special Prefix Workarounds ✅
 
 ft8_lib's `pack_basecall()` and `unpack28()` contain special-case handling for:
 - **Swaziland (3DA0):** `3DA0XYZ → 3D0XYZ` (pack) / `3D0XYZ → 3DA0XYZ` (unpack)
 - **Guinea (3X):** `3XA0XYZ → QA0XYZ` (pack) / `QA... → 3XA...` (unpack)
 
-These are **not** constant issues — the Go `normalizeCallsign()` and `decodeStandard()` do not implement these workarounds yet. This is a functional gap to address separately, not a constant mismatch.
+These workarounds are implemented in `callsign.go` as `packCallWorkaround()` (encode-time
+remapping) and `unpackCallWorkaround()` (decode-time reversal), with full test coverage in
+`callsign_workaround_test.go` including round-trip, Pack/Unpack integration, and edge cases.
 
 ---
 
-**Conclusion:** All constants, sentinel values, CQ sub-range offsets, and mixed-radix encoding/decoding in `callsign.go` are verified correct against ft8_lib HEAD (`9fec6ca`). No changes needed.
+**Conclusion:** All constants, sentinel values, CQ sub-range offsets, mixed-radix encoding/decoding, and special prefix workarounds in `callsign.go` are verified correct against ft8_lib HEAD (`9fec6ca`). No changes needed.
 

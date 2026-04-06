@@ -1,7 +1,7 @@
-// Package message implements FT8/FT4 77-bit message packing, unpacking,
-// and CRC-14 checksum computation as defined by the WSJT-X protocol.
+// crc14.go — FT8/FT4 CRC-14 checksum computation.
 //
 // Reference: WSJT-X source lib/ft8/pack77.f90, ft8_lib src/ft8/crc.c.
+
 package message
 
 import "fmt"
@@ -72,10 +72,10 @@ func CRC14(msg []byte) uint16 {
 }
 
 // Append91 takes a 77-bit packed message (10 bytes, only first 77 bits used)
-// and returns a new 12-byte slice containing the 91-bit payload:
+// and returns a new 12-byte array containing the 91-bit payload:
 // 77 message bits + 14 CRC bits, suitable for LDPC encoding.
 //
-// The returned slice has bits packed MSB-first. Bit 0 of out[0] is the
+// The returned array has bits packed MSB-first. Bit 0 of out[0] is the
 // first message bit; bits 77–90 are the CRC (MSB of CRC in bit position 77).
 func Append91(msg []byte) [12]byte {
 	if len(msg) < MsgBytes {

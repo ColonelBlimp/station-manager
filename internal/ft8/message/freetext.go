@@ -1,5 +1,4 @@
-// Package message
-// FT8/FT4 free-text encoding and decoding (71-bit, 13-character, base-42).
+// freetext.go — FT8/FT4 free-text encoding and decoding (71-bit, 13-character, base-42).
 //
 // Free text is one of the FT8 message types (i3=0, n3=0). It encodes up to
 // 13 characters from a 42-symbol alphabet into 71 bits using base-42 packing.
@@ -18,6 +17,7 @@
 // 42^13 = 1,265,437,718,438,866,624,512 < 2^71 = 2,361,183,241,434,822,606,848.
 //
 // Reference: ft8_lib src/ft8/text.c pack_text()/unpack_text().
+
 package message
 
 import (

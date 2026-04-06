@@ -1,5 +1,4 @@
-// Package message
-// Type 0 free-text message pack/unpack (i3=0, n3=0).
+// type0.go — Type 0 free-text message pack/unpack (i3=0, n3=0).
 //
 // 77-bit layout (MSB-first):
 //
@@ -9,6 +8,7 @@
 // FT8 free-text alphabet (0-9, A-Z, +, -, ., /, ?, space).
 //
 // Reference: ft8_lib src/ft8/message.c pack_type0()/unpack_type0().
+
 package message
 
 import (

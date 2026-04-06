@@ -398,6 +398,28 @@ func TestTrimUpper_InternalSpacesPreserved(t *testing.T) {
 	require.Equal(t, "CQ DX", trimUpper("  CQ DX  "))
 }
 
+// --------------- Type.String() ------------------------------------------------
+
+func TestType_String(t *testing.T) {
+	tests := []struct {
+		t    Type
+		want string
+	}{
+		{TypeFreeText, "Free Text (i3=0, n3=0)"},
+		{TypeStandard, "Standard (i3=1)"},
+		{TypeNonStandard, "Non-Standard (i3=4)"},
+		{TypeContestRTTY, "Contest RTTY (i3=0, n3=1)"},
+		{TypeContestFieldDay, "Contest Field Day (i3=0, n3=3)"},
+		{TypeContestTelemetry, "Telemetry (i3=0, n3=4)"},
+		{Type(99), "Unknown(99)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.t.String())
+		})
+	}
+}
+
 // --------------- Message.String() --------------------------------------------
 
 func TestMessageString_Standard(t *testing.T) {
@@ -586,19 +608,9 @@ func splitWords(s string) []string {
 }
 
 func isAllDigitStr(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return len(s) > 0
+	return isAllDigits(s)
 }
 
 func isAllLetterStr(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < 'A' || s[i] > 'Z' {
-			return false
-		}
-	}
-	return len(s) > 0
+	return isAllLetters(s)
 }
