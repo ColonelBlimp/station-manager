@@ -234,6 +234,50 @@ func TestPackType1_DE(t *testing.T) {
 	require.Equal(t, "DE W1AW FN31", decoded.String())
 }
 
+func TestPackType1_CQDXRogerGrid(t *testing.T) {
+	msg := &Message{
+		MsgType: TypeStandard,
+		Call1:   "CQ DX",
+		Call2:   "W1AW",
+		Grid:    "R FN31",
+	}
+	payload, err := Pack(msg)
+	require.NoError(t, err)
+
+	decoded, err := Unpack(payload)
+	require.NoError(t, err)
+	require.Equal(t, "CQ DX W1AW R FN31", decoded.String())
+}
+
+// --------------- splitType1Text edge cases ------------------------------------
+
+func TestSplitType1Text_CQDXRogerGrid(t *testing.T) {
+	// "CQ DX W1AW R FN31" must produce ["CQ DX", "W1AW", "R FN31"],
+	// not ["CQ DX", "W1AW", "R", "FN31"].
+	parts := splitType1Text("CQ DX W1AW R FN31")
+	require.Equal(t, []string{"CQ DX", "W1AW", "R FN31"}, parts)
+}
+
+func TestSplitType1Text_CQNumRogerGrid(t *testing.T) {
+	parts := splitType1Text("CQ 350 W1AW R FN31")
+	require.Equal(t, []string{"CQ 350", "W1AW", "R FN31"}, parts)
+}
+
+func TestSplitType1Text_SimpleRogerGrid(t *testing.T) {
+	parts := splitType1Text("VK2XYZ W1AW R FN31")
+	require.Equal(t, []string{"VK2XYZ", "W1AW", "R FN31"}, parts)
+}
+
+func TestSplitType1Text_NoCQ_NoRoger(t *testing.T) {
+	parts := splitType1Text("W1AW VK2XYZ -12")
+	require.Equal(t, []string{"W1AW", "VK2XYZ", "-12"}, parts)
+}
+
+func TestSplitType1Text_CQDXSimpleGrid(t *testing.T) {
+	parts := splitType1Text("CQ DX W1AW FN31")
+	require.Equal(t, []string{"CQ DX", "W1AW", "FN31"}, parts)
+}
+
 // --------------- Pack Type 1 — error cases -----------------------------------
 
 func TestPackType1_EmptyCall1(t *testing.T) {
@@ -474,15 +518,16 @@ func parseType1Text(t *testing.T, text string) *Message {
 // splitType1Text splits a Type 1 text into 2 or 3 logical fields.
 // It handles compound first fields:
 //
-//	"CQ 350 W1AW FN31" → ["CQ 350", "W1AW", "FN31"]
-//	"CQ DX W1AW FN31"  → ["CQ DX", "W1AW", "FN31"]
-//	"CQ W1AW FN31"     → ["CQ", "W1AW", "FN31"]
-//	"W1AW VK2XYZ -12"  → ["W1AW", "VK2XYZ", "-12"]
-//	"W1AW VK2XYZ"      → ["W1AW", "VK2XYZ"]
+//	"CQ 350 W1AW FN31"       → ["CQ 350", "W1AW", "FN31"]
+//	"CQ DX W1AW FN31"        → ["CQ DX", "W1AW", "FN31"]
+//	"CQ DX W1AW R FN31"      → ["CQ DX", "W1AW", "R FN31"]
+//	"CQ W1AW FN31"           → ["CQ", "W1AW", "FN31"]
+//	"W1AW VK2XYZ -12"        → ["W1AW", "VK2XYZ", "-12"]
+//	"W1AW VK2XYZ"            → ["W1AW", "VK2XYZ"]
 //
 // It also handles compound grid fields:
 //
-//	"VK2XYZ W1AW R FN31" → ["VK2XYZ", "W1AW", "R FN31"]
+//	"VK2XYZ W1AW R FN31"     → ["VK2XYZ", "W1AW", "R FN31"]
 func splitType1Text(text string) []string {
 	words := splitWords(text)
 	if len(words) == 0 {
@@ -497,12 +542,21 @@ func splitType1Text(text string) []string {
 			(len(suffix) >= 1 && len(suffix) <= 4 && isAllLetterStr(suffix)) {
 			first := words[0] + " " + words[1]
 			rest := words[2:]
-			return append([]string{first}, rest...)
+			// Apply R-grid compounding to the remainder (e.g. "W1AW R FN31" → "W1AW", "R FN31").
+			result := []string{first}
+			result = append(result, compoundRGrid(rest)...)
+			return result
 		}
 	}
 
 	// Handle "R FN31" compound grid field (Roger + grid at end).
-	if len(words) >= 4 && words[len(words)-2] == "R" {
+	return compoundRGrid(words)
+}
+
+// compoundRGrid merges a trailing "R" + grid into a single "R grid" field
+// if the slice has at least 3 elements and the second-to-last word is "R".
+func compoundRGrid(words []string) []string {
+	if len(words) >= 3 && words[len(words)-2] == "R" {
 		grid := words[len(words)-2] + " " + words[len(words)-1]
 		return append(words[:len(words)-2], grid)
 	}
