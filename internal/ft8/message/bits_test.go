@@ -183,6 +183,22 @@ func TestBits_RoundTrip_DoesNotCorruptAdjacent(t *testing.T) {
 
 // --------------- Panic guards ------------------------------------------------
 
+func TestPackBits_PanicsOnNegativeOffset(t *testing.T) {
+	require.PanicsWithValue(t,
+		"message: PackBits offset must be non-negative",
+		func() { PackBits(make([]byte, 1), -1, 1, 0) },
+	)
+}
+
+// Regression: offset=-8, width=8 passes the endBit<=len*8 check (0<=8)
+// but would compute byteIdx=-1 in the loop without the offset guard.
+func TestPackBits_PanicsOnNegativeOffsetBypassingEndBit(t *testing.T) {
+	require.PanicsWithValue(t,
+		"message: PackBits offset must be non-negative",
+		func() { PackBits(make([]byte, 1), -8, 8, 0) },
+	)
+}
+
 func TestPackBits_PanicsOnNegativeWidth(t *testing.T) {
 	require.Panics(t, func() { PackBits(make([]byte, 1), 0, -1, 0) })
 }
@@ -194,6 +210,22 @@ func TestPackBits_PanicsOnWidth65(t *testing.T) {
 func TestPackBits_PanicsOnOverflow(t *testing.T) {
 	// 1-byte buffer can hold 8 bits; writing 1 bit at offset 8 overflows.
 	require.Panics(t, func() { PackBits(make([]byte, 1), 8, 1, 1) })
+}
+
+func TestUnpackBits_PanicsOnNegativeOffset(t *testing.T) {
+	require.PanicsWithValue(t,
+		"message: UnpackBits offset must be non-negative",
+		func() { UnpackBits(make([]byte, 1), -1, 1) },
+	)
+}
+
+// Regression: offset=-8, width=8 passes the endBit<=len*8 check (0<=8)
+// but would compute byteIdx=-1 in the loop without the offset guard.
+func TestUnpackBits_PanicsOnNegativeOffsetBypassingEndBit(t *testing.T) {
+	require.PanicsWithValue(t,
+		"message: UnpackBits offset must be non-negative",
+		func() { UnpackBits(make([]byte, 1), -8, 8) },
+	)
 }
 
 func TestUnpackBits_PanicsOnNegativeWidth(t *testing.T) {

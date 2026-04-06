@@ -14,12 +14,15 @@ package message
 // position `offset`, MSB-first. Bits already present in dst outside the
 // written range are preserved.
 //
-// PackBits panics if width is negative or exceeds 64, or if the write would
-// extend past the end of dst.
+// PackBits panics if offset is negative, width is negative or exceeds 64,
+// or if the write would extend past the end of dst.
 //
 // Example: PackBits(buf, 0, 28, 0x0000002) writes the 28-bit CQ token into
 // the first 28 bits of buf.
 func PackBits(dst []byte, offset int, width int, value uint64) {
+	if offset < 0 {
+		panic("message: PackBits offset must be non-negative")
+	}
 	if width < 0 || width > 64 {
 		panic("message: PackBits width must be in [0, 64]")
 	}
@@ -50,11 +53,14 @@ func PackBits(dst []byte, offset int, width int, value uint64) {
 // UnpackBits reads `width` bits from src starting at bit position `offset`,
 // MSB-first, and returns them as a uint64.
 //
-// UnpackBits panics if width is negative or exceeds 64, or if the read would
-// extend past the end of src.
+// UnpackBits panics if offset is negative, width is negative or exceeds 64,
+// or if the read would extend past the end of src.
 //
 // Example: UnpackBits(buf, 0, 28) reads the first 28 bits of buf as a uint64.
 func UnpackBits(src []byte, offset int, width int) uint64 {
+	if offset < 0 {
+		panic("message: UnpackBits offset must be non-negative")
+	}
 	if width < 0 || width > 64 {
 		panic("message: UnpackBits width must be in [0, 64]")
 	}
