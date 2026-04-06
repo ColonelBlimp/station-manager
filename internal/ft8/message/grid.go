@@ -157,9 +157,10 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 	// Roger + grid: "R " followed by a 4-char grid.
 	if len(extra) == 6 && extra[0] == 'R' && extra[1] == ' ' {
 		ig, gridErr := EncodeGrid(extra[2:])
-		if gridErr == nil {
-			return ig, true, nil
+		if gridErr != nil {
+			return 0, false, fmt.Errorf("%s: %w", op, gridErr)
 		}
+		return ig, true, nil
 	}
 
 	// Plain 4-char grid.
@@ -231,6 +232,13 @@ func DecodeGridField(igrid4 uint16, ir bool) (string, error) {
 		return "RR73", nil
 	case 4:
 		return "73", nil
+	}
+
+	// Reserved/unused gap: irpt == 0 corresponds to igrid4 == MaxGrid4 (32400),
+	// which the FT8 protocol defines as unused. Distinguish it from values
+	// that overshoot the report region so callers can diagnose the cause.
+	if irpt == 0 {
+		return "", fmt.Errorf("%s: igrid4 %d is reserved/unused by the FT8 protocol", op, igrid4)
 	}
 
 	// Signal report region.

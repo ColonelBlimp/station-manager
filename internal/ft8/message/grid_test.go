@@ -182,6 +182,31 @@ func TestDecodeTokens(t *testing.T) {
 	}
 }
 
+// TestDecodeTokens_IrIgnored verifies that the ir (Roger) flag is silently
+// ignored for all token values, as documented in the package comment.
+func TestDecodeTokens_IrIgnored(t *testing.T) {
+	tests := []struct {
+		name   string
+		igrid4 uint16
+		want   string
+	}{
+		{"empty", gridEmpty, ""},
+		{"RRR", gridRRR, "RRR"},
+		{"RR73", gridRR73, "RR73"},
+		{"73", grid73, "73"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotFalse, err := DecodeGridField(tt.igrid4, false)
+			require.NoError(t, err)
+			gotTrue, err := DecodeGridField(tt.igrid4, true)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, gotFalse)
+			require.Equal(t, tt.want, gotTrue, "ir=true must not alter token %q", tt.name)
+		})
+	}
+}
+
 // --------------- Report encoding ---------------------------------------------
 
 // TestEncodeReport_KnownValues verifies report encoding against ft8_lib
@@ -350,6 +375,7 @@ func TestEncodeGridField_Invalid(t *testing.T) {
 		{"random text", "HELLO"},
 		{"just R", "R"},
 		{"R without sign", "R12"},
+		{"invalid roger grid", "R SN31"},
 		{"out of range report", "+31"},
 		{"out of range roger report", "R-31"},
 	}
@@ -361,7 +387,50 @@ func TestEncodeGridField_Invalid(t *testing.T) {
 	}
 }
 
+func TestEncodeGridField_InvalidRogerGrid_SpecificError(t *testing.T) {
+	// "R SN31" structurally matches Roger+grid but 'S' is out of range A–R.
+	// The error must come from EncodeGrid (mentioning the field), not the
+	// generic "unrecognized grid/report" fallthrough.
+	_, _, err := EncodeGridField("R SN31")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not in range")
+	require.NotContains(t, err.Error(), "unrecognized")
+}
+
 // --------------- Full round-trip via EncodeGridField / DecodeGridField --------
+
+// TestGridField_NonCanonicalReports verifies that non-canonical report inputs
+// (e.g. "+5" instead of "+05") encode to the correct igrid4 value and decode
+// back to the canonical zero-padded form. These inputs are valid — the
+// canonical format is an output property of DecodeGridField, not an input
+// constraint of EncodeGridField.
+func TestGridField_NonCanonicalReports(t *testing.T) {
+	tests := []struct {
+		input     string // non-canonical input
+		wantIG    uint16 // expected igrid4 (same as canonical)
+		wantIR    bool
+		canonical string // what DecodeGridField produces
+	}{
+		{"+5", 32440, false, "+05"},
+		{"-1", 32434, false, "-01"},
+		{"+0", 32435, false, "+00"},
+		{"-0", 32435, false, "+00"},
+		{"R+5", 32440, true, "R+05"},
+		{"R-1", 32434, true, "R-01"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			ig, ir, err := EncodeGridField(tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantIG, ig, "igrid4 mismatch")
+			require.Equal(t, tt.wantIR, ir, "ir mismatch")
+
+			dec, err := DecodeGridField(ig, ir)
+			require.NoError(t, err)
+			require.Equal(t, tt.canonical, dec, "decode must produce canonical form")
+		})
+	}
+}
 
 func TestGridField_RoundTrip(t *testing.T) {
 	tests := []string{
@@ -394,16 +463,18 @@ func TestGridField_RoundTrip(t *testing.T) {
 // --------------- Out of range decode -----------------------------------------
 
 func TestDecodeGridField_OutOfRange(t *testing.T) {
-	// igrid4 = MaxGrid4 (32400) is unused — falls into report region with
-	// irpt=0, dB = 0 - 35 = -35, which is below ReportMin.
+	// igrid4 = MaxGrid4 (32400) is reserved/unused by the FT8 protocol.
 	_, err := DecodeGridField(MaxGrid4, false)
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "reserved/unused")
 
 	// Above max report (32466+).
 	_, err = DecodeGridField(32466, false)
 	require.Error(t, err)
+	require.NotContains(t, err.Error(), "reserved/unused")
 
 	// Maximum 15-bit value.
 	_, err = DecodeGridField(1<<15-1, false)
 	require.Error(t, err)
+	require.NotContains(t, err.Error(), "reserved/unused")
 }
