@@ -12,21 +12,21 @@ import (
 func TestFreeTextCharIndex_Digits(t *testing.T) {
 	for i := 0; i <= 9; i++ {
 		c := byte('0' + i)
-		require.Equal(t, uint64(i), freeTextCharIndex(c), "char %q", c)
+		require.Equal(t, uint8(i), freeTextCharIndex(c), "char %q", c)
 	}
 }
 
 func TestFreeTextCharIndex_Letters(t *testing.T) {
 	for i := 0; i < 26; i++ {
 		c := byte('A' + i)
-		require.Equal(t, uint64(10+i), freeTextCharIndex(c), "char %q", c)
+		require.Equal(t, uint8(10+i), freeTextCharIndex(c), "char %q", c)
 	}
 }
 
 func TestFreeTextCharIndex_Symbols(t *testing.T) {
 	tests := []struct {
 		c    byte
-		want uint64
+		want uint8
 	}{
 		{'+', 36},
 		{'-', 37},
@@ -45,7 +45,7 @@ func TestFreeTextCharIndex_Symbols(t *testing.T) {
 func TestFreeTextCharIndex_InvalidMapsToSpace(t *testing.T) {
 	// Characters outside the alphabet should map to space (41).
 	for _, c := range []byte{'!', '@', '#', '$', '%', '&', '*', '(', ')', 'a', 'z', '~'} {
-		require.Equal(t, uint64(41), freeTextCharIndex(c),
+		require.Equal(t, uint8(41), freeTextCharIndex(c),
 			"invalid char %q should map to space index 41", c)
 	}
 }
@@ -80,18 +80,15 @@ func TestFreeText_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestFreeText_RoundTrip_TrailingSpacesTrimmed(t *testing.T) {
-	// Trailing spaces are trimmed on decode, so "HELLO   " decodes as "HELLO".
-	hi, lo, err := EncodeFreeText("HELLO")
+func TestFreeText_RoundTrip_TrailingSpacesCanonical(t *testing.T) {
+	// "HELLO" and "HELLO        " (padded to 13) must produce identical encodings
+	// because EncodeFreeText right-pads with spaces before encoding.
+	hi1, lo1, err := EncodeFreeText("HELLO")
 	require.NoError(t, err)
-	got := DecodeFreeText(hi, lo)
-	require.Equal(t, "HELLO", got)
-
-	// Explicit trailing spaces should produce the same encoding.
 	hi2, lo2, err := EncodeFreeText("HELLO        ") // 13 chars with trailing spaces
 	require.NoError(t, err)
-	require.Equal(t, hi, hi2)
-	require.Equal(t, lo, lo2)
+	require.Equal(t, hi1, hi2)
+	require.Equal(t, lo1, lo2)
 }
 
 func TestFreeText_RoundTrip_CaseInsensitive(t *testing.T) {
@@ -115,39 +112,59 @@ func TestFreeText_RoundTrip_InvalidCharsReplacedWithSpace(t *testing.T) {
 
 // --------------- Encode: known values ----------------------------------------
 
-func TestEncodeFreeText_AllSpaces(t *testing.T) {
-	// 13 spaces → all indices are 41. Value = 41 * (42^12 + 42^11 + ... + 42^0)
-	// which is the maximum possible value. Decoded it trims to empty.
-	hi, lo, err := EncodeFreeText("             ") // 13 spaces
-	require.NoError(t, err)
-	got := DecodeFreeText(hi, lo)
-	require.Equal(t, "", got)
+// TestEncodeFreeText_KnownValues pins exact (hi, lo) pairs for several inputs.
+// Values were independently derived using math/big (base-42 polynomial evaluation)
+// and cross-checked against the ft8_lib pack_text() algorithm.
+//
+// This catches radix, bit-split, or charset-ordering regressions that pure
+// round-trip tests would miss (since encode and decode could share the same bug).
+func TestEncodeFreeText_KnownValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		wantHi uint8
+		wantLo uint64
+	}{
+		// All zeros → every index is 0 → value = 0.
+		{"all zeros", "0000000000000", 0x00, 0x0000000000000000},
 
-	// The maximum value: 41*(42^12 + 42^11 + ... + 1) = 42^13 - 1
-	// 42^13 - 1 = 1,418,481,495,116,009,471
-	// This fits in 71 bits since 2^71 = 2,361,183,241,434,822,606,848.
-	// hi should have some bits set.
-	require.True(t, hi > 0 || lo > 0, "all-spaces should produce non-zero encoding")
-}
+		// All spaces → every index is 41 → value = 42^13 - 1.
+		// 42^13 - 1 = 1,265,437,718,438,866,624,511 = 0x44_9979E458016C9FFF.
+		{"all spaces", "             ", 0x44, 0x9979E458016C9FFF},
 
-func TestEncodeFreeText_AllZeros(t *testing.T) {
-	// "0000000000000" → all indices are 0. Value = 0.
-	hi, lo, err := EncodeFreeText("0000000000000")
-	require.NoError(t, err)
-	require.Equal(t, uint8(0), hi)
-	require.Equal(t, uint64(0), lo)
-}
+		// "1" → index 1, then 12 spaces (index 41 each).
+		// Value = 1·42^12 + 41·(42^12 − 1)/41 = 2·42^12 − 1.
+		// 2·42^12 − 1 = 60,258,938,973,279,363,071 = 0x03_4442C1BB0C421FFF.
+		{"single 1", "1", 0x03, 0x4442C1BB0C421FFF},
 
-func TestEncodeFreeText_SingleDigit1(t *testing.T) {
-	// "1            " → index 1 followed by 12 spaces (index 41 each).
-	// Value = 1 * 42^12 + 41*(42^11 + 42^10 + ... + 42^0)
-	// = 42^12 + 41*(42^12 - 1)/41  [geometric series]
-	// = 42^12 + 42^12 - 1 = 2*42^12 - 1
-	// But let's just verify round-trip since the arithmetic is complex.
-	hi, lo, err := EncodeFreeText("1")
-	require.NoError(t, err)
-	got := DecodeFreeText(hi, lo)
-	require.Equal(t, "1", got)
+		// Typical free text message.
+		// TNX BOB 73 GL → 0x30_4ACFFAE330617641.
+		{"TNX BOB 73 GL", "TNX BOB 73 GL", 0x30, 0x4ACFFAE330617641},
+
+		// Sequential digits + letters (max length, low indices).
+		// 0123456789ABC → 0x00_0A7271499BCB384A.
+		{"sequential", "0123456789ABC", 0x00, 0x0A7271499BCB384A},
+
+		// All Z (highest letter index = 35).
+		// ZZZZZZZZZZZZZ → 0x3A_8F81079C4C248895.
+		{"all Z", "ZZZZZZZZZZZZZ", 0x3A, 0x8F81079C4C248895},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hi, lo, err := EncodeFreeText(tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantHi, hi, "hi mismatch")
+			require.Equal(t, tt.wantLo, lo, "lo mismatch")
+
+			// Also verify decode round-trip.
+			got := DecodeFreeText(hi, lo)
+			want := tt.input
+			if want == "             " {
+				want = "" // all-spaces trims to empty
+			}
+			require.Equal(t, want, got, "decode mismatch")
+		})
+	}
 }
 
 // --------------- Encode: error cases -----------------------------------------
@@ -167,20 +184,11 @@ func TestEncodeFreeText_ExactlyMaxLength(t *testing.T) {
 
 func TestEncodeFreeText_MaxValue_FitsIn71Bits(t *testing.T) {
 	// The maximum possible value is 42^13 - 1, produced by all-spaces.
-	// Verify it fits in 71 bits: hi must be < 128 (7 bits).
+	// hi must be exactly 0x44 (68), which fits in 7 bits (< 128).
 	hi, _, err := EncodeFreeText("             ") // 13 spaces
 	require.NoError(t, err)
+	require.Equal(t, uint8(0x44), hi, "hi must be 0x44 for max value")
 	require.Less(t, hi, uint8(128), "hi must fit in 7 bits")
-}
-
-func TestEncodeFreeText_MinValue(t *testing.T) {
-	// "0" + 12 trailing spaces → but wait, "0" is index 0, spaces are index 41.
-	// So it's not the minimum. The actual minimum non-zero for first char is "0".
-	// Actually, all-zeros "0000000000000" is the minimum (value=0).
-	hi, lo, err := EncodeFreeText("0000000000000")
-	require.NoError(t, err)
-	require.Equal(t, uint8(0), hi)
-	require.Equal(t, uint64(0), lo)
 }
 
 // --------------- Full encode/decode with bit packing -------------------------

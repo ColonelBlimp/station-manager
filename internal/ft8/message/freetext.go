@@ -15,7 +15,7 @@
 //
 // Encoding: the 13-character string is treated as a base-42 number (most
 // significant character first). The result fits in 71 bits since
-// 42^13 = 1,418,481,495,116,009,472 < 2^71 = 2,361,183,241,434,822,606,848.
+// 42^13 = 1,265,437,718,438,866,624,512 < 2^71 = 2,361,183,241,434,822,606,848.
 //
 // Reference: ft8_lib src/ft8/text.c pack_text()/unpack_text().
 package message
@@ -39,7 +39,7 @@ const FreeTextBits = 71
 // Index 0–9 = '0'–'9', 10–35 = 'A'–'Z', 36–41 = '+', '-', '.', '/', '?', ' '.
 //
 // This matches ft8_lib FT8_CHAR_TABLE_FULL (text.c) and the nchar() mapping.
-const freeTextCharset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-./?  "
+const freeTextCharset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-./? "
 
 // freeTextBase is the radix for free-text encoding (number of distinct symbols).
 const freeTextBase = 42
@@ -81,7 +81,7 @@ func EncodeFreeText(text string) (hi uint8, lo uint64, err error) {
 	idx := new(big.Int)
 	for i := 0; i < FreeTextLen; i++ {
 		val.Mul(val, bigBase)
-		idx.SetInt64(int64(freeTextCharIndex(text[i])))
+		idx.SetInt64(int64(freeTextCharIndex(text[i]))) // uint8 → int64: safe widening
 		val.Add(val, idx)
 	}
 
@@ -127,12 +127,12 @@ func DecodeFreeText(hi uint8, lo uint64) string {
 // freeTextCharIndex returns the index (0–41) of byte c in the FT8 free-text
 // charset. Characters not in the alphabet map to 41 (space), matching ft8_lib
 // nchar() fallback behaviour.
-func freeTextCharIndex(c byte) uint64 {
+func freeTextCharIndex(c byte) uint8 {
 	switch {
 	case c >= '0' && c <= '9':
-		return uint64(c - '0')
+		return c - '0'
 	case c >= 'A' && c <= 'Z':
-		return uint64(c-'A') + 10
+		return c - 'A' + 10
 	case c == '+':
 		return 36
 	case c == '-':
