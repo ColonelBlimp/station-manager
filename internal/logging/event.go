@@ -637,6 +637,10 @@ func (n *noopLogContext) Interface(key string, val interface{}) LogContext {
 }
 func (n *noopLogContext) Logger() Logger { return &noopLogger{} }
 
+// Noop returns a Logger that silently discards all log output.
+// Use it as the default when no logger is provided.
+func Noop() Logger { return &noopLogger{} }
+
 // noopLogger is a no-op implementation of Logger
 type noopLogger struct{}
 

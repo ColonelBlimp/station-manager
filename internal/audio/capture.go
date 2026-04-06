@@ -4,12 +4,12 @@ package audio
 import (
 	"context"
 	stderr "errors"
-	"log"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/gen2brain/malgo"
 )
 
@@ -30,10 +30,11 @@ var (
 
 // Config holds audio capture configuration
 type Config struct {
-	DeviceIndex int    // -1 for default device
-	SampleRate  uint32 // e.g., 48000
-	Channels    uint32 // 1 for mono, 2 for stereo
-	BufferSize  uint32 // frames per callback
+	DeviceIndex int            // -1 for default device
+	SampleRate  uint32         // e.g., 48000
+	Channels    uint32         // 1 for mono, 2 for stereo
+	BufferSize  uint32         // frames per callback
+	Logger      logging.Logger // nil defaults to no-op
 }
 
 // DefaultConfig returns sensible defaults for audio capture
@@ -76,6 +77,9 @@ type Capture struct {
 
 // New creates a new audio capture instance
 func New(cfg Config) *Capture {
+	if cfg.Logger == nil {
+		cfg.Logger = logging.Noop()
+	}
 	return &Capture{
 		config:  cfg,
 		samples: make(chan []float32, SampleChannelBufferSize),
@@ -258,7 +262,7 @@ func (c *Capture) Start(ctx context.Context) error {
 			return // stopped via Stop() or Close() directly — no further action needed
 		}
 		if err := c.Stop(); err != nil && !stderr.Is(err, ErrNotRunning) {
-			log.Printf("audio: stop on context cancel: %v", err)
+			c.config.Logger.WarnWith().Err(err).Msg("stop on context cancel")
 		}
 	}()
 
@@ -276,7 +280,7 @@ func (c *Capture) Stop() error {
 
 	if c.device != nil {
 		if err := c.device.Stop(); err != nil {
-			log.Printf("audio: device stop: %v", err)
+			c.config.Logger.WarnWith().Err(err).Msg("device stop")
 		}
 		c.device.Uninit()
 		c.device = nil
@@ -305,7 +309,7 @@ func (c *Capture) Close() error {
 	// single authority for the running→false transition. ErrNotRunning is
 	// expected when Close is called on an inactive capture.
 	if err := c.Stop(); err != nil && !stderr.Is(err, ErrNotRunning) {
-		log.Printf("audio: stop on close: %v", err)
+		c.config.Logger.WarnWith().Err(err).Msg("stop on close")
 	}
 
 	c.mu.Lock()
