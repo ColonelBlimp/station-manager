@@ -49,12 +49,12 @@ func TestNew(t *testing.T) {
 	require.NotNil(t, c)
 	require.Equal(t, 2, c.config.DeviceIndex)
 	require.Equal(t, uint32(44100), c.config.SampleRate)
-	require.NotNil(t, c.Samples)
+	require.NotNil(t, c.Samples())
 }
 
 func TestNew_ChannelBufferSize(t *testing.T) {
 	c := New(DefaultConfig())
-	require.Equal(t, SampleChannelBufferSize, cap(c.Samples))
+	require.Equal(t, SampleChannelBufferSize, cap(c.samples))
 }
 
 // --------------- IsRunning ---------------------------------------------------
@@ -170,7 +170,7 @@ func TestCapture_Close_SetsClosedBeforeChannelClose(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for range c.Samples {
+		for range c.Samples() {
 			// drain
 		}
 		require.True(t, c.closed.Load(), "closed flag must be true when channel is drained")
@@ -187,7 +187,7 @@ func TestCapture_SafeSend_NormalOperation(t *testing.T) {
 	c.safeSend([]float32{1.0, 2.0, 3.0})
 
 	select {
-	case samples := <-c.Samples:
+	case samples := <-c.Samples():
 		require.Len(t, samples, 3)
 	default:
 		t.Fatal("expected sample in channel")
@@ -198,7 +198,7 @@ func TestCapture_SafeSend_RecoverFromClosedChannel(t *testing.T) {
 	// Do not use newCapture: we close the channel directly, bypassing closeOnce,
 	// so the cleanup's Close() call would panic on double-close.
 	c := New(DefaultConfig())
-	close(c.Samples)
+	close(c.samples)
 	// Must not panic
 	c.safeSend([]float32{1.0, 2.0, 3.0})
 }
@@ -206,19 +206,19 @@ func TestCapture_SafeSend_RecoverFromClosedChannel(t *testing.T) {
 func TestCapture_SafeSend_ChannelFull(t *testing.T) {
 	c := &Capture{
 		config:  DefaultConfig(),
-		Samples: make(chan []float32, 1),
+		samples: make(chan []float32, 1),
 	}
 	c.safeSend([]float32{1.0}) // fills channel
 	c.safeSend([]float32{2.0}) // should be dropped, not block
 
 	select {
-	case samples := <-c.Samples:
+	case samples := <-c.Samples():
 		require.Equal(t, float32(1.0), samples[0])
 	default:
 		t.Fatal("expected first sample in channel")
 	}
 	select {
-	case <-c.Samples:
+	case <-c.Samples():
 		t.Fatal("channel should be empty")
 	default:
 	}
@@ -233,7 +233,7 @@ func TestCapture_ClosedFlag_PreventsSendOnClosedChannel(t *testing.T) {
 	sent := false
 	if !c.closed.Load() {
 		select {
-		case c.Samples <- []float32{1.0}:
+		case c.samples <- []float32{1.0}:
 			sent = true
 		default:
 		}
@@ -248,7 +248,7 @@ func TestCapture_ConcurrentCloseAndSend(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		if !c.closed.Load() {
 			select {
-			case c.Samples <- []float32{1.0}:
+			case c.samples <- []float32{1.0}:
 				sentCount++
 			default:
 			}
@@ -264,7 +264,7 @@ func TestCapture_ConcurrentCloseAndSend(t *testing.T) {
 	}
 	require.False(t, attemptedAfterClose)
 
-	c.closeOnce.Do(func() { close(c.Samples) })
+	c.closeOnce.Do(func() { close(c.samples) })
 	// Second Do must not execute
 	c.closeOnce.Do(func() {
 		t.Error("closeOnce should prevent this from running")
@@ -290,7 +290,7 @@ func TestCapture_ConcurrentCloseAndSend_Stress(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			c.closed.Store(true)
-			c.closeOnce.Do(func() { close(c.Samples) })
+			c.closeOnce.Do(func() { close(c.samples) })
 		}()
 
 		wg.Wait()

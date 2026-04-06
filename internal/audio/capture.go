@@ -63,8 +63,9 @@ type Capture struct {
 	// Atomic pointer for lock-free callback access in hot path
 	callbackPtr atomic.Pointer[SampleCallback]
 
-	// Output channel for audio samples (float32 normalized -1.0 to 1.0)
-	Samples   chan []float32
+	// samples is the internal send/close end of the output channel.
+	// External consumers receive from it via the Samples() accessor.
+	samples   chan []float32
 	closeOnce sync.Once // ensures channel is closed only once
 }
 
@@ -72,8 +73,15 @@ type Capture struct {
 func New(cfg Config) *Capture {
 	return &Capture{
 		config:  cfg,
-		Samples: make(chan []float32, SampleChannelBufferSize),
+		samples: make(chan []float32, SampleChannelBufferSize),
 	}
+}
+
+// Samples returns a receive-only channel that delivers audio sample buffers.
+// Each buffer contains float32 samples normalised to [-1.0, 1.0].
+// The channel is closed when Close is called.
+func (c *Capture) Samples() <-chan []float32 {
+	return c.samples
 }
 
 // SetCallback sets a callback for real-time sample processing.
@@ -290,7 +298,7 @@ func (c *Capture) Close() error {
 
 	// Safely close channel only once
 	c.closeOnce.Do(func() {
-		close(c.Samples)
+		close(c.samples)
 	})
 	return nil
 }
@@ -313,7 +321,7 @@ func (c *Capture) safeSend(samples []float32) {
 	}()
 
 	select {
-	case c.Samples <- samples:
+	case c.samples <- samples:
 	default:
 		// Drop samples if channel is full (consumer too slow)
 	}

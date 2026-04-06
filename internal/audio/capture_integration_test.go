@@ -66,7 +66,7 @@ func TestCapture_ReceivesSamples_Integration(t *testing.T) {
 	require.NoError(t, c.Start(ctx))
 
 	select {
-	case samples := <-c.Samples:
+	case samples := <-c.Samples():
 		t.Logf("Received %d samples", len(samples))
 		require.NotEmpty(t, samples)
 	case <-ctx.Done():
