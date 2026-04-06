@@ -6,6 +6,7 @@ import (
 	stderr "errors"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -78,6 +79,25 @@ func (p *Playback) Init() error {
 	}
 	p.ctx = ctx
 	return nil
+}
+
+// ListDevices returns available playback devices.
+// Init must be called first.
+func (p *Playback) ListDevices() ([]malgo.DeviceInfo, error) {
+	const op errors.Op = "audio.Playback.ListDevices"
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.ctx == nil {
+		return nil, ErrPlaybackNotInitialized
+	}
+
+	infos, err := p.ctx.Devices(malgo.Playback)
+	if err != nil {
+		return nil, errors.New(op).Err(err)
+	}
+	return infos, nil
 }
 
 // IsPlaying returns true if a PlayFile call is currently in progress.
@@ -268,7 +288,16 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 
 	select {
 	case <-done:
-		// Natural end-of-file.
+		// All samples have been submitted to the hardware. Wait one additional
+		// period before stopping so that the driver/PipeWire output buffer has
+		// time to drain. Without this, device.Stop() cuts the stream while audio
+		// is still buffered, and nothing is heard on short files.
+		drainDur := time.Duration(p.config.BufferSize) * time.Second / time.Duration(wav.SampleRate)
+		select {
+		case <-time.After(drainDur * 4):
+		case <-ctx.Done():
+		case <-playCtx.Done():
+		}
 	case <-ctx.Done():
 		// Caller cancelled the context.
 	case <-playCtx.Done():

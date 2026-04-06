@@ -14,13 +14,15 @@ import (
 // These tests require audio output hardware and are skipped by default.
 // Run with: go test -tags=integration ./audio/
 
-// buildSineWAV generates a 0.1s 440 Hz sine wave as a PCM16 mono WAV file.
+// buildSineWAV generates a 1s 440 Hz sine wave as a PCM16 mono WAV file.
+// 1s is long enough to survive PipeWire/PulseAudio output latency (~100-200ms)
+// and still be clearly audible when the integration test runs.
 func buildSineWAV(t *testing.T) string {
 	t.Helper()
 	const (
 		sampleRate = 48000
 		freq       = 440.0
-		duration   = 100 * time.Millisecond
+		duration   = 1 * time.Second
 	)
 	numSamples := int(sampleRate * float64(duration) / float64(time.Second))
 	samples := make([]float32, numSamples)
@@ -28,6 +30,21 @@ func buildSineWAV(t *testing.T) string {
 		samples[i] = float32(math.Sin(2 * math.Pi * freq * float64(i) / sampleRate))
 	}
 	return buildWAV(t, wavAudioFormatPCM, 1, sampleRate, 16, pcm16Bytes(samples))
+}
+
+func TestPlayback_ListDevices_Integration(t *testing.T) {
+	p := NewPlayback(DefaultConfig())
+	defer p.Close()
+
+	require.NoError(t, p.Init())
+
+	devices, err := p.ListDevices()
+	require.NoError(t, err)
+
+	t.Logf("Found %d playback device(s):", len(devices))
+	for i, d := range devices {
+		t.Logf("  [%d] %s", i, d.Name())
+	}
 }
 
 func TestPlayback_Init_Integration(t *testing.T) {
