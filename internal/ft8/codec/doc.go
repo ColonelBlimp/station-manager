@@ -12,7 +12,7 @@
 //     generator and parity-check structure.
 //   - [Encode] — systematic LDPC encoder (TX path).
 //   - [Decode] — normalised min-sum belief-propagation decoder (RX path).
-//   - (Future) [EncodeMessage] / [DecodeMessage] — convenience wrappers bridging
+//   - [EncodeMessage] / [DecodeMessage] — convenience wrappers bridging
 //     the [message] package with the raw LDPC functions.
 //
 // The encode chain is: message.Pack → message.Append91 → codec.Encode →
