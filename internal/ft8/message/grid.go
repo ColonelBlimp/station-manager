@@ -1,4 +1,4 @@
-// package message
+// Package message
 // FT8/FT4 15-bit grid/report field encoding and decoding.
 //
 // The 15-bit igrid4 field in a standard FT8 message (type 1/2) is overloaded
@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
 // --- Grid constants ----------------------------------------------------------
@@ -63,26 +65,26 @@ const (
 // The encoding uses mixed-radix 18 × 18 × 10 × 10, matching ft8_lib's
 // packgrid() for valid 4-char grids.
 func EncodeGrid(grid4 string) (uint16, error) {
-	const op = "message.EncodeGrid"
+	const op errors.Op = "message.EncodeGrid"
 
 	grid4 = strings.ToUpper(strings.TrimSpace(grid4))
 	if len(grid4) != 4 {
-		return 0, fmt.Errorf("%s: grid must be exactly 4 characters, got %d", op, len(grid4))
+		return 0, errors.New(op).Msgf("grid must be exactly 4 characters, got %d", len(grid4))
 	}
 
 	f1, f2, d1, d2 := grid4[0], grid4[1], grid4[2], grid4[3]
 
 	if f1 < 'A' || f1 > 'R' {
-		return 0, fmt.Errorf("%s: field 1 %q not in range A–R", op, f1)
+		return 0, errors.New(op).Msgf("field 1 %q not in range A–R", f1)
 	}
 	if f2 < 'A' || f2 > 'R' {
-		return 0, fmt.Errorf("%s: field 2 %q not in range A–R", op, f2)
+		return 0, errors.New(op).Msgf("field 2 %q not in range A–R", f2)
 	}
 	if d1 < '0' || d1 > '9' {
-		return 0, fmt.Errorf("%s: digit 1 %q not in range 0–9", op, d1)
+		return 0, errors.New(op).Msgf("digit 1 %q not in range 0–9", d1)
 	}
 	if d2 < '0' || d2 > '9' {
-		return 0, fmt.Errorf("%s: digit 2 %q not in range 0–9", op, d2)
+		return 0, errors.New(op).Msgf("digit 2 %q not in range 0–9", d2)
 	}
 
 	igrid4 := uint16(f1 - 'A')
@@ -99,11 +101,11 @@ func EncodeGrid(grid4 string) (uint16, error) {
 // The ir (Roger) flag is not set by this function — the caller must track it
 // separately for R-prefixed reports.
 func EncodeReport(db int) (uint16, error) {
-	const op = "message.EncodeReport"
+	const op errors.Op = "message.EncodeReport"
 
 	if db < ReportMin || db > ReportMax {
-		return 0, fmt.Errorf("%s: report %d dB out of range [%d, %d]",
-			op, db, ReportMin, ReportMax)
+		return 0, errors.New(op).Msgf("report %d dB out of range [%d, %d]",
+			db, ReportMin, ReportMax)
 	}
 
 	return uint16(int(MaxGrid4) + reportBias + db), nil
@@ -135,7 +137,7 @@ func Encode73() uint16 { return grid73 }
 // This combines the functionality of ft8_lib's packgrid() with the "R " grid
 // prefix handling that packgrid() leaves as a TODO.
 func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
-	const op = "message.EncodeGridField"
+	const op errors.Op = "message.EncodeGridField"
 
 	extra = strings.ToUpper(strings.TrimSpace(extra))
 
@@ -158,7 +160,7 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 	if len(extra) == 6 && extra[0] == 'R' && extra[1] == ' ' {
 		ig, gridErr := EncodeGrid(extra[2:])
 		if gridErr != nil {
-			return 0, false, fmt.Errorf("%s: %w", op, gridErr)
+			return 0, false, errors.New(op).Err(gridErr).Msg(gridErr.Error())
 		}
 		return ig, true, nil
 	}
@@ -179,7 +181,7 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 			if encErr == nil {
 				return ig, true, nil
 			}
-			return 0, false, fmt.Errorf("%s: %w", op, encErr)
+			return 0, false, errors.New(op).Err(encErr).Msg(encErr.Error())
 		}
 	}
 
@@ -191,11 +193,11 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 			if encErr == nil {
 				return ig, false, nil
 			}
-			return 0, false, fmt.Errorf("%s: %w", op, encErr)
+			return 0, false, errors.New(op).Err(encErr).Msg(encErr.Error())
 		}
 	}
 
-	return 0, false, fmt.Errorf("%s: unrecognized grid/report %q", op, extra)
+	return 0, false, errors.New(op).Msgf("unrecognized grid/report %q", extra)
 }
 
 // --- Decode function ---------------------------------------------------------
@@ -209,7 +211,7 @@ func EncodeGridField(extra string) (igrid4 uint16, ir bool, err error) {
 //   - Token (MaxGrid4+2..+4): "RRR", "RR73", "73"
 //   - Report (MaxGrid4+5..+65): "+05", "-12", or "R+05", "R-12" (if ir=true)
 func DecodeGridField(igrid4 uint16, ir bool) (string, error) {
-	const op = "message.DecodeGridField"
+	const op errors.Op = "message.DecodeGridField"
 
 	// Grid region: 0..MaxGrid4-1.
 	if igrid4 < MaxGrid4 {
@@ -238,13 +240,13 @@ func DecodeGridField(igrid4 uint16, ir bool) (string, error) {
 	// which the FT8 protocol defines as unused. Distinguish it from values
 	// that overshoot the report region so callers can diagnose the cause.
 	if irpt == 0 {
-		return "", fmt.Errorf("%s: igrid4 %d is reserved/unused by the FT8 protocol", op, igrid4)
+		return "", errors.New(op).Msgf("igrid4 %d is reserved/unused by the FT8 protocol", igrid4)
 	}
 
 	// Signal report region.
 	db := int(irpt) - reportBias
 	if db < ReportMin || db > ReportMax {
-		return "", fmt.Errorf("%s: igrid4 %d out of valid range", op, igrid4)
+		return "", errors.New(op).Msgf("igrid4 %d out of valid range", igrid4)
 	}
 
 	// Format as sign + 2 zero-padded digits (matching ft8_lib int_to_dd with

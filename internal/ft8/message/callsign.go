@@ -1,4 +1,4 @@
-// package message
+// Package message
 // FT8/FT4 28-bit callsign field encoding and decoding.
 //
 // The 28-bit field (0..268,435,455) is partitioned as follows:
@@ -22,6 +22,8 @@ package message
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
 // --- Constants ---------------------------------------------------------------
@@ -82,11 +84,11 @@ const charset = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 // This function handles standard callsigns only. For special tokens, use
 // EncodeCQ, EncodeCQNum, EncodeCQSuffix, EncodeDE, or EncodeQRZ.
 func EncodeCallsign(call string) (uint32, error) {
-	const op = "message.EncodeCallsign"
+	const op errors.Op = "message.EncodeCallsign"
 
 	c6, err := normalizeCallsign(call)
 	if err != nil {
-		return 0, fmt.Errorf("%s: %w", op, err)
+		return 0, errors.New(op).Err(err).Msg(err.Error())
 	}
 
 	// Charset indices for each position.
@@ -98,7 +100,7 @@ func EncodeCallsign(call string) (uint32, error) {
 	i5 := charsetIndex(c6[5])
 
 	if i0 < 0 || i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0 || i5 < 0 {
-		return 0, fmt.Errorf("%s: invalid character in normalized callsign %q", op, c6)
+		return 0, errors.New(op).Msgf("invalid character in normalized callsign %q", c6)
 	}
 
 	// Mixed-radix encoding (matching ft8_lib pack_basecall):
@@ -131,8 +133,10 @@ func EncodeQRZ() uint32 { return TokenQRZ }
 // EncodeCQNum encodes a CQ with a 3-digit frequency offset (0–999).
 // For example, EncodeCQNum(350) represents "CQ 350".
 func EncodeCQNum(freq int) (uint32, error) {
+	const op errors.Op = "message.EncodeCQNum"
+
 	if freq < 0 || freq > 999 {
-		return 0, fmt.Errorf("message.EncodeCQNum: frequency %d out of range [0, 999]", freq)
+		return 0, errors.New(op).Msgf("frequency %d out of range [0, 999]", freq)
 	}
 	return tokenCQNumBase + uint32(freq), nil
 }
@@ -143,18 +147,18 @@ func EncodeCQNum(freq int) (uint32, error) {
 // The suffix is encoded in base-27 (A=1..Z=26) following ft8_lib
 // parse_cq_modifier() (message.c line 792).
 func EncodeCQSuffix(suffix string) (uint32, error) {
-	const op = "message.EncodeCQSuffix"
+	const op errors.Op = "message.EncodeCQSuffix"
 
 	suffix = strings.ToUpper(strings.TrimSpace(suffix))
 	if len(suffix) < 1 || len(suffix) > 4 {
-		return 0, fmt.Errorf("%s: suffix length %d out of range [1, 4]", op, len(suffix))
+		return 0, errors.New(op).Msgf("suffix length %d out of range [1, 4]", len(suffix))
 	}
 
 	var k uint32
 	for i := 0; i < len(suffix); i++ {
 		c := suffix[i]
 		if c < 'A' || c > 'Z' {
-			return 0, fmt.Errorf("%s: invalid character %q at position %d (letters only)", op, c, i)
+			return 0, errors.New(op).Msgf("invalid character %q at position %d (letters only)", c, i)
 		}
 		k = k*27 + uint32(c-'A') + 1
 	}
@@ -171,7 +175,7 @@ func EncodeCQSuffix(suffix string) (uint32, error) {
 //   - Hash22 (NTokens..NTokens+Max22-1): "<...>" (hash cannot be reversed)
 //   - Standard callsign (NTokens+Max22..): decoded and trimmed, e.g. "W1AW"
 func DecodeCallsign(n28 uint32) (string, error) {
-	const op = "message.DecodeCallsign"
+	const op errors.Op = "message.DecodeCallsign"
 
 	switch {
 	case n28 < NTokens:
@@ -184,7 +188,7 @@ func DecodeCallsign(n28 uint32) (string, error) {
 	default:
 		n := n28 - callBase
 		if n >= NBase {
-			return "", fmt.Errorf("%s: value %d exceeds maximum standard callsign", op, n28)
+			return "", errors.New(op).Msgf("value %d exceeds maximum standard callsign", n28)
 		}
 		return decodeStandard(n)
 	}
@@ -244,20 +248,20 @@ func mrToLetterSpace(d int) int {
 //   - Validate position 2 is a digit, position 1 is alphanumeric, and
 //     positions 3–5 are letter or space.
 func normalizeCallsign(call string) ([callLen]byte, error) {
-	const op = "message.normalizeCallsign"
+	const op errors.Op = "message.normalizeCallsign"
 
 	call = strings.ToUpper(strings.TrimSpace(call))
 
 	if len(call) < 2 || len(call) > callLen {
-		return [callLen]byte{}, fmt.Errorf(
-			"%s: length %d out of range [2, %d]", op, len(call), callLen)
+		return [callLen]byte{}, errors.New(op).Msgf(
+			"length %d out of range [2, %d]", len(call), callLen)
 	}
 
 	// Validate: only alphanumeric in the raw callsign (no space, no '/').
 	for i := 0; i < len(call); i++ {
 		if !isAlphanumeric(call[i]) {
-			return [callLen]byte{}, fmt.Errorf(
-				"%s: invalid character %q at position %d", op, call[i], i)
+			return [callLen]byte{}, errors.New(op).Msgf(
+				"invalid character %q at position %d", call[i], i)
 		}
 	}
 
@@ -271,9 +275,9 @@ func normalizeCallsign(call string) ([callLen]byte, error) {
 		// Second character is a digit → left-pad with space.
 		// Max original length is 5 (single-char prefix + digit + 3 suffix).
 		if len(call) > callLen-1 {
-			return [callLen]byte{}, fmt.Errorf(
-				"%s: callsign %q too long after left-pad (max %d chars with single-char prefix)",
-				op, call, callLen-1)
+			return [callLen]byte{}, errors.New(op).Msgf(
+				"callsign %q too long after left-pad (max %d chars with single-char prefix)",
+				call, callLen-1)
 		}
 		copy(c6[1:1+len(call)], call)
 	} else {
@@ -282,20 +286,20 @@ func normalizeCallsign(call string) ([callLen]byte, error) {
 
 	// Validate normalized position constraints.
 	if c6[2] < '0' || c6[2] > '9' {
-		return [callLen]byte{}, fmt.Errorf(
-			"%s: position 2 must be a digit, got %q (normalized: %q)",
-			op, c6[2], string(c6[:]))
+		return [callLen]byte{}, errors.New(op).Msgf(
+			"position 2 must be a digit, got %q (normalized: %q)",
+			c6[2], string(c6[:]))
 	}
 	if c6[1] == ' ' {
-		return [callLen]byte{}, fmt.Errorf(
-			"%s: position 1 must be alphanumeric (normalized: %q)",
-			op, string(c6[:]))
+		return [callLen]byte{}, errors.New(op).Msgf(
+			"position 1 must be alphanumeric (normalized: %q)",
+			string(c6[:]))
 	}
 	for i := 3; i < callLen; i++ {
 		if c6[i] >= '0' && c6[i] <= '9' {
-			return [callLen]byte{}, fmt.Errorf(
-				"%s: position %d must be letter or space, got %q (normalized: %q)",
-				op, i, c6[i], string(c6[:]))
+			return [callLen]byte{}, errors.New(op).Msgf(
+				"position %d must be letter or space, got %q (normalized: %q)",
+				i, c6[i], string(c6[:]))
 		}
 	}
 
@@ -304,6 +308,8 @@ func normalizeCallsign(call string) ([callLen]byte, error) {
 
 // decodeToken handles the token region (n28 < NTokens).
 func decodeToken(n28 uint32) (string, error) {
+	const op errors.Op = "message.decodeToken"
+
 	switch {
 	case n28 == TokenDE:
 		return "DE", nil
@@ -317,13 +323,15 @@ func decodeToken(n28 uint32) (string, error) {
 		return decodeCQSuffix(n28 - tokenCQSufBase)
 	default:
 		// Reserved/unused token space (532444..NTokens-1).
-		return "", fmt.Errorf("message.decodeToken: reserved token value %d", n28)
+		return "", errors.New(op).Msgf("reserved token value %d", n28)
 	}
 }
 
 // decodeStandard reverses the mixed-radix encoding for a standard callsign.
 // n is the basecall value (0..NBase-1), already offset-adjusted.
 func decodeStandard(n uint32) (string, error) {
+	const op errors.Op = "message.decodeStandard"
+
 	d5 := int(n % 27)
 	n /= 27
 	d4 := int(n % 27)
@@ -337,7 +345,7 @@ func decodeStandard(n uint32) (string, error) {
 	d0 := int(n)
 
 	if d0 > 36 {
-		return "", fmt.Errorf("message.decodeStandard: position 0 value %d exceeds charset", d0)
+		return "", errors.New(op).Msgf("position 0 value %d exceeds charset", d0)
 	}
 
 	var c6 [callLen]byte
