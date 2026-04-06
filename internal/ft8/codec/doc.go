@@ -11,7 +11,7 @@
 //   - Matrix constants ([G], [Mn], [Nm], [NmCount]) defining the code's
 //     generator and parity-check structure.
 //   - (Future) [Encode] — systematic LDPC encoder (TX path).
-//   - (Future) [Decode] — normalised min-sum belief-propagation decoder (RX path).
+//   - [Decode] — normalised min-sum belief-propagation decoder (RX path).
 //   - (Future) [EncodeMessage] / [DecodeMessage] — convenience wrappers bridging
 //     the [message] package with the raw LDPC functions.
 //
