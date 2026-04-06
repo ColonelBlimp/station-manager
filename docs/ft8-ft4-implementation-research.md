@@ -6,8 +6,8 @@ This document captures research into implementing FT8 and FT4 digital modes nati
 without relying on WSJT-X. It also identifies components that have immediate value to the
 project independent of a full FT8/FT4 implementation (notably audio I/O for contest CQ playback).
 
-**Status:** Foundational layers (audio I/O, WAV support, window timing) and message
-packing/unpacking (item 4) are complete. The next milestone is LDPC codec (item 5).
+**Status:** Items 1–5 (audio I/O, WAV, timing, message packing, LDPC codec) are
+complete. The next milestone is DSP pipeline (item 6).
 
 ---
 
@@ -172,9 +172,9 @@ RRR/RR73 handling, optional simultaneous multi-QSO support.
 | `Playback.PlaySamples` for TX | Low | 2–3 days |
 | FFT + spectrum analysis | Medium | 1–2 weeks |
 | Soft demodulation (LLRs) | High | 2–4 weeks |
-| **LDPC decoder** | **Very High** | **4–8 weeks** |
-| Message pack/unpack + CRC-14 | ~~Medium~~ | ✅ Complete |
-| LDPC encoder (TX) | Medium | 1–2 weeks |
+| ~~LDPC decoder~~ | ~~Very High~~ | ✅ Complete |
+| ~~Message pack/unpack + CRC-14~~ | ~~Medium~~ | ✅ Complete |
+| ~~LDPC encoder (TX)~~ | ~~Medium~~ | ✅ Complete |
 | Audio synthesis + GFSK | Medium | 1–2 weeks |
 | QSO state machine | Medium | 1–2 weeks |
 | Testing + validation against real recordings | High | 4–8 weeks |
@@ -201,10 +201,10 @@ RRR/RR73 handling, optional simultaneous multi-QSO support.
    - 3DA0/3X callsign workarounds
    - Full test coverage with ft8_lib cross-checked vectors
 
-5. **`internal/ft8/codec/`** — LDPC encoder first (TX path), then decoder (RX path) ← **next**
+5. **`internal/ft8/codec/`** — LDPC encoder first (TX path), then decoder (RX path) ✅
    - Port from `ft8_lib` C source as reference
 
-6. **`internal/ft8/dsp/`** — FFT pipeline, soft demodulation
+6. **`internal/ft8/dsp/`** — FFT pipeline, soft demodulation ← **next**
 
 7. **`internal/ft8/service/`** — Top-level `ft8.Service` with `Initialize()/Start()/Stop()`
    following the existing project service pattern
