@@ -1,39 +1,17 @@
 package codec
 
 import (
-	"math/bits"
 	"math/rand"
 	"testing"
 )
 
 // --- Test helpers ---
 
-// testEncode builds a valid 174-bit codeword from a KBytes info vector
-// using the generator matrix G. Returns the codeword as a [N]uint8 bit array.
-// This is an inline encoder used until Encode() is implemented.
-// TODO: replace with codec.Encode once the encoder is available.
-func testEncode(t *testing.T, info [KBytes]byte) [N]uint8 {
-	t.Helper()
-
-	// Compute 83 parity bits via G.
-	var parity [M]uint8
-	for p := range M {
-		var xor uint8
-		for b := range KBytes {
-			xor ^= G[p][b] & info[b]
-		}
-		parity[p] = uint8(bits.OnesCount8(xor) % 2)
-	}
-
-	// Build the full 174-bit codeword.
-	var cw [N]uint8
-	for i := range K {
-		cw[i] = uint8((info[i/8] >> uint(7-i%8)) & 1)
-	}
-	for p := range M {
-		cw[K+p] = parity[p]
-	}
-	return cw
+// encodeUnpacked encodes an information vector and returns the codeword as
+// a per-bit [N]uint8 array suitable for syndromeOK and bitsToLLR.
+func encodeUnpacked(info [KBytes]byte) [N]uint8 {
+	packed := Encode(info)
+	return unpackCodeword(packed)
 }
 
 // bitsToLLR converts hard bits to LLR values.
@@ -91,7 +69,7 @@ func TestDecodePerfectLLR(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cw := testEncode(t, tc.info)
+			cw := encodeUnpacked(tc.info)
 			llr := bitsToLLR(cw, 6.0)
 
 			decoded, ok := Decode(llr, 50)
@@ -109,7 +87,7 @@ func TestDecodePerfectLLR(t *testing.T) {
 // maxIter=1, since the hard decision on noiseless input is already correct.
 func TestDecodeConvergesIn1Iteration(t *testing.T) {
 	info := [KBytes]byte{0xA5, 0x3C}
-	cw := testEncode(t, info)
+	cw := encodeUnpacked(info)
 	llr := bitsToLLR(cw, 6.0)
 
 	decoded, ok := Decode(llr, 1)
@@ -125,7 +103,7 @@ func TestDecodeConvergesIn1Iteration(t *testing.T) {
 // decoder can still recover the original information bits.
 func TestDecodeNoisyRoundTrip(t *testing.T) {
 	info := [KBytes]byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xE0}
-	cw := testEncode(t, info)
+	cw := encodeUnpacked(info)
 
 	// Moderate noise: σ = 1.0 with LLR magnitude 4.0.
 	// This is well within decoding capability.
@@ -146,7 +124,7 @@ func TestDecodeNoisyRoundTrip(t *testing.T) {
 // to exercise the decoder more thoroughly.
 func TestDecodeHeavyNoise(t *testing.T) {
 	info := [KBytes]byte{0x42, 0x73, 0x1A, 0xF0, 0x00, 0x55, 0xAA, 0x0F, 0xE1, 0xC3, 0x87, 0x00}
-	cw := testEncode(t, info)
+	cw := encodeUnpacked(info)
 
 	// σ = 2.0 with LLR magnitude 3.0 — challenging but decodable.
 	// With seeded PRNG these trials are deterministic; all 5 decode at these
@@ -203,7 +181,7 @@ func TestDecodeAllPositiveLLR(t *testing.T) {
 func TestSyndromeOK(t *testing.T) {
 	// A valid codeword should pass.
 	info := [KBytes]byte{0xA5, 0x3C}
-	cw := testEncode(t, info)
+	cw := encodeUnpacked(info)
 	if !syndromeOK(&cw) {
 		t.Error("syndromeOK returned false for valid codeword")
 	}
@@ -268,7 +246,7 @@ func TestDecodeMultipleInfoVectors(t *testing.T) {
 	}
 
 	for i, info := range vectors {
-		cw := testEncode(t, info)
+		cw := encodeUnpacked(info)
 		llr := bitsToLLR(cw, 6.0)
 
 		decoded, ok := Decode(llr, 1)
@@ -286,7 +264,7 @@ func TestDecodeMultipleInfoVectors(t *testing.T) {
 // are performed and the decoder returns ok=false.
 func TestDecodeRespectsMaxIter(t *testing.T) {
 	info := [KBytes]byte{0xA5, 0x3C}
-	cw := testEncode(t, info)
+	cw := encodeUnpacked(info)
 	llr := bitsToLLR(cw, 6.0)
 
 	_, ok := Decode(llr, 0)

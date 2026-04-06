@@ -1,0 +1,33 @@
+[
+  {
+    "name": "all_zeros",
+    "info_hex": "000000000000000000000000",
+    "codeword_hex": "00000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "bit0_set",
+    "info_hex": "800000000000000000000000",
+    "codeword_hex": "80000000000000000000001414a11b18e4052fd0eae0"
+  },
+  {
+    "name": "multi_byte",
+    "info_hex": "a53c00000000000000000000",
+    "codeword_hex": "a53c0000000000000000000b770bc76fc101d0dea56c"
+  },
+  {
+    "name": "deadbeef",
+    "info_hex": "deadbeef123456789abcdee0",
+    "codeword_hex": "deadbeef123456789abcdee9f4dfae4ab374d7b4c33c"
+  },
+  {
+    "name": "all_ones_91bits",
+    "info_hex": "ffffffffffffffffffffffe0",
+    "codeword_hex": "ffffffffffffffffffffffe08721adcae4ae81569878"
+  },
+  {
+    "name": "bit90_only",
+    "info_hex": "000000000000000000000020",
+    "codeword_hex": "00000000000000000000002be28c18a1d1486d73ab10"
+  }
+]
+
