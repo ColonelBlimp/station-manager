@@ -6,6 +6,9 @@ This document captures research into implementing FT8 and FT4 digital modes nati
 without relying on WSJT-X. It also identifies components that have immediate value to the
 project independent of a full FT8/FT4 implementation (notably audio I/O for contest CQ playback).
 
+**Status:** Foundational layers (audio I/O, WAV support, window timing) are complete.
+The next milestone is message packing (item 4).
+
 ---
 
 ## Full Stack Required
@@ -36,31 +39,41 @@ project independent of a full FT8/FT4 implementation (notably audio I/O for cont
 
 ## Component Breakdown
 
-### 1. Audio I/O
+### 1. Audio I/O ✅
 - No pure Go option for low-latency audio — requires CGo
-- **Recommended library:** `github.com/gen2brain/malgo` (miniaudio wrapper)
-  - Already used in the `cwdecoder` project at `/home/mveary/Development/cwdecoder`
-  - The `internal/audio/capture.go` in that project is a well-structured, reusable `Capture`
-    struct with atomic state, context cancellation, and a `Samples chan []float32` output
-  - **This code should be ported/adapted into `internal/audio/` in this project**
+- **Library:** `github.com/gen2brain/malgo` (miniaudio wrapper)
+  - Originally ported from the `cwdecoder` project at `/home/mveary/Development/cwdecoder`
+- **Implemented in `internal/audio/`:**
+  - `Capture` — real-time audio capture with `Samples()` channel (64-frame buffer) and
+    low-latency `SetCallback` for audio-thread-direct processing
+  - `Playback` — WAV file playback via `PlayFile(ctx, path)` with context cancellation
+  - `readWAV` — WAV reader supporting PCM 8/16-bit and IEEE float 32-bit
+  - Device enumeration, integration tests, shared `Config` struct
+  - See `internal/audio/README.md` for full API reference
 - Sample rate: 12000 Hz (standard for WSJT modes)
 - FT8: needs 180,000 samples buffered per 15s window
 - FT4: needs 90,000 samples buffered per 7.5s window
-- Playback (TX) also needed — `malgo` supports both capture and playback devices
 
-#### Immediate Value: Contest CQ Playback
+#### Gap: `PlaySamples` method needed for TX
+The current `Playback` only supports `PlayFile(ctx, path)` — reading a WAV from disk.
+The FT8 TX pipeline will synthesise audio in memory (`[]float32`) and needs to play it
+directly. A `PlaySamples(ctx, samples []float32, sampleRate uint32) error` method (or
+similar) must be added to `Playback` before TX work begins (items 5–7).
+
+#### Contest CQ Playback (complete)
 Audio I/O is useful **independently** of FT8/FT4:
 - Play pre-recorded CQ calls (.wav files) during contests
 - Route audio to the radio via soundcard interface
-- Could be implemented as a standalone `internal/audio/` package with both
-  `Capture` (RX) and `Playback` (TX) capabilities
-- This is a natural first milestone before any DSP work begins
+- Compose with `internal/ptt/` for PTT assert/release around playback
 
-### 2. Precise Timing
+### 2. Precise Timing ✅
+- **Implemented in `internal/ft8/timing/`**
 - FT8: TX starts at T+1s after even 15s boundary (00:00, 00:15, 00:30...)
 - FT4: TX starts at T+0.5s after each 7.5s boundary
 - Go's `time.Now()` is sufficient if system clock is NTP-synced (within ±1s)
-- Implementation: goroutine sleeping until next window start using `time.Until()`
+- API: `CurrentWindowStart`, `NextWindowStart`, `SlotParity` (even/odd), `TimeUntilTX`,
+  `WaitForNext(ctx, mode)` — all pure functions except `WaitForNext` which blocks
+- Integer nanosecond arithmetic avoids floating-point drift in boundary calculations
 
 ### 3. Receive DSP Pipeline
 
@@ -97,6 +110,8 @@ FT8 uses a **(174, 91) LDPC code**:
 FT4 uses a **(152, 76) LDPC code** with similar structure.
 
 ### 5. Message Packing (77 bits)
+
+→ *Implementation order item 4: `internal/ft8/message/` (includes CRC-14 from §6 below)*
 
 Well-specified but intricate. Key elements:
 - Standard callsigns: 28-bit encoding (base-37 charset: `0-9A-Z `, up to 6 chars)
@@ -151,41 +166,43 @@ RRR/RR73 handling, optional simultaneous multi-QSO support.
 
 | Component | Complexity | Rough Effort |
 |---|---|---|
-| Audio I/O + buffering (port from cwdecoder) | Low–Medium | 1 week |
-| WAV file playback for contest CQ | Low | 2–3 days |
-| Precise timing | Low | 2–3 days |
+| ~~Audio I/O + buffering~~ | ~~Low–Medium~~ | ✅ Complete |
+| ~~WAV file playback for contest CQ~~ | ~~Low~~ | ✅ Complete (reader; writer not needed for pipeline) |
+| ~~Precise timing~~ | ~~Low~~ | ✅ Complete |
+| `Playback.PlaySamples` for TX | Low | 2–3 days |
 | FFT + spectrum analysis | Medium | 1–2 weeks |
 | Soft demodulation (LLRs) | High | 2–4 weeks |
 | **LDPC decoder** | **Very High** | **4–8 weeks** |
-| Message pack/unpack | Medium | 2–3 weeks |
-| CRC-14 | Low | 1–2 days |
+| Message pack/unpack + CRC-14 | Medium | 2–3 weeks |
 | LDPC encoder (TX) | Medium | 1–2 weeks |
 | Audio synthesis + GFSK | Medium | 1–2 weeks |
 | QSO state machine | Medium | 1–2 weeks |
 | Testing + validation against real recordings | High | 4–8 weeks |
-| **Total (full FT8/FT4)** | | **~6–12 months** |
+| **Remaining (full FT8/FT4)** | | **~5–11 months** |
 
 ---
 
 ## Recommended Implementation Order
 
-1. **`internal/audio/`** — Port audio capture + add playback from `cwdecoder` project
-   - Immediate contest CQ playback value
-   - Foundation for all subsequent DSP work
-   - Library: `github.com/gen2brain/malgo` (already proven in cwdecoder)
+1. ~~**`internal/audio/`** — Audio capture + playback~~ ✅
+   - `Capture`, `Playback`, `SetCallback`, device enumeration
+   - Library: `github.com/gen2brain/malgo`
 
-2. **`internal/audio/wav`** — WAV file reader/writer for recorded CQ files
+2. ~~**`internal/audio/wav.go`** — WAV file reader for recorded CQ files~~ ✅
+   - Reader only (PCM 8/16-bit, IEEE float 32-bit). Writer not needed for the FT8 pipeline.
 
-3. **`internal/ft8/timing`** — TX/RX window timing
+3. ~~**`internal/ft8/timing/`** — TX/RX window timing~~ ✅
+   - `Mode`, `Parity`, `CurrentWindowStart`, `NextWindowStart`, `SlotParity`,
+     `TimeUntilTX`, `WaitForNext`
 
-4. **`internal/ft8/message`** — 77-bit message pack/unpack + CRC-14
+4. **`internal/ft8/message/`** — 77-bit message pack/unpack + CRC-14 ← **next**
 
-5. **`internal/ft8/codec`** — LDPC encoder first (TX path), then decoder (RX path)
+5. **`internal/ft8/codec/`** — LDPC encoder first (TX path), then decoder (RX path)
    - Port from `ft8_lib` C source as reference
 
-6. **`internal/ft8/dsp`** — FFT pipeline, soft demodulation
+6. **`internal/ft8/dsp/`** — FFT pipeline, soft demodulation
 
-7. **`internal/ft8/service`** — Top-level `ft8.Service` with `Initialize()/Start()/Stop()`
+7. **`internal/ft8/service/`** — Top-level `ft8.Service` with `Initialize()/Start()/Stop()`
    following the existing project service pattern
 
 ---
@@ -194,12 +211,16 @@ RRR/RR73 handling, optional simultaneous multi-QSO support.
 
 | Asset | Location | Relevance |
 |---|---|---|
-| Audio capture (malgo) | `cwdecoder/internal/audio/capture.go` | Port to `internal/audio/` |
-| Goertzel DSP detector | `cwdecoder/internal/dsp/goertzel.go` | Reference for DSP patterns |
+| Audio I/O (capture + playback) | `internal/audio/` | ✅ Foundation for all DSP work |
+| WAV reader | `internal/audio/wav.go` | ✅ Reads PCM/float WAV files for playback |
+| FT8/FT4 window timing | `internal/ft8/timing/` | ✅ Window boundaries, slot parity, TX offset, wait-for-next |
+| PTT control (serial RTS/DTR) | `internal/ptt/` | Assert/Release TX during FT8/FT4 transmit |
 | Maidenhead grid encoding | `internal/maidenhead/` | Used in FT8 message packing |
 | Service lifecycle pattern | `internal/cat/service.go` | Model for `ft8.Service` |
 | Structured error handling | `internal/errors/` | Apply throughout FT8 package |
 | Dependency injection | `internal/iocdi/` | Wire ft8.Service into apps |
+| Goertzel DSP detector | `cwdecoder/internal/dsp/goertzel.go` | Reference for DSP patterns |
+| Original audio capture | `cwdecoder/internal/audio/capture.go` | Historical — ported to `internal/audio/` |
 
 ---
 

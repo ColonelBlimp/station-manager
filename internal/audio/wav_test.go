@@ -28,12 +28,16 @@ func buildWAV(t *testing.T, audioFormat, channels uint16, sampleRate uint32, bit
 	write := func(v any) {
 		require.NoError(t, binary.Write(f, binary.LittleEndian, v))
 	}
+	writeStr := func(s string) {
+		_, err := f.WriteString(s)
+		require.NoError(t, err)
+	}
 
-	f.WriteString("RIFF")
+	writeStr("RIFF")
 	write(uint32(fileSize))
-	f.WriteString("WAVE")
+	writeStr("WAVE")
 
-	f.WriteString("fmt ")
+	writeStr("fmt ")
 	write(fmtChunkSize)
 	write(audioFormat)
 	write(channels)
@@ -42,9 +46,10 @@ func buildWAV(t *testing.T, audioFormat, channels uint16, sampleRate uint32, bit
 	write(uint16(uint16(channels) * bitsPerSample / 8))                              // blockAlign
 	write(bitsPerSample)
 
-	f.WriteString("data")
+	writeStr("data")
 	write(dataChunkSize)
-	f.Write(data)
+	_, err = f.Write(data)
+	require.NoError(t, err)
 
 	return f.Name()
 }
@@ -68,12 +73,16 @@ func buildWAVWithExtraChunk(t *testing.T) string {
 	write := func(v any) {
 		require.NoError(t, binary.Write(f, binary.LittleEndian, v))
 	}
+	writeStr := func(s string) {
+		_, err := f.WriteString(s)
+		require.NoError(t, err)
+	}
 
-	f.WriteString("RIFF")
+	writeStr("RIFF")
 	write(uint32(fileSize))
-	f.WriteString("WAVE")
+	writeStr("WAVE")
 
-	f.WriteString("fmt ")
+	writeStr("fmt ")
 	write(fmtSize)
 	write(uint16(1))     // PCM
 	write(uint16(1))     // mono
@@ -83,13 +92,14 @@ func buildWAVWithExtraChunk(t *testing.T) string {
 	write(uint16(16))    // bits per sample
 
 	// Extra unknown chunk (LIST with 4-byte payload — already word-aligned)
-	f.WriteString("LIST")
+	writeStr("LIST")
 	write(uint32(4))
-	f.WriteString("INFO")
+	writeStr("INFO")
 
-	f.WriteString("data")
+	writeStr("data")
 	write(dataSize)
-	f.Write(pcm)
+	_, err = f.Write(pcm)
+	require.NoError(t, err)
 
 	return f.Name()
 }
@@ -199,7 +209,8 @@ func TestReadWAV_EmptyFile(t *testing.T) {
 func TestReadWAV_NotRIFF(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "*.wav")
 	require.NoError(t, err)
-	f.WriteString("OGG vorbis garbage data here!!!")
+	_, err = f.WriteString("OGG vorbis garbage data here!!!")
+	require.NoError(t, err)
 	f.Close()
 
 	_, err = readWAV(f.Name())
@@ -209,9 +220,10 @@ func TestReadWAV_NotRIFF(t *testing.T) {
 func TestReadWAV_RIFFButNotWAVE(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "*.wav")
 	require.NoError(t, err)
-	binary.Write(f, binary.LittleEndian, []byte("RIFF"))
-	binary.Write(f, binary.LittleEndian, uint32(12))
-	f.WriteString("AVI ") // not WAVE
+	require.NoError(t, binary.Write(f, binary.LittleEndian, []byte("RIFF")))
+	require.NoError(t, binary.Write(f, binary.LittleEndian, uint32(12)))
+	_, err = f.WriteString("AVI ") // not WAVE
+	require.NoError(t, err)
 	f.Close()
 
 	_, err = readWAV(f.Name())
