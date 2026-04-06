@@ -9,13 +9,22 @@ import (
 
 // --------------- EncodeCallsign ----------------------------------------------
 
-// TestEncodeCallsign_KnownValues verifies encoding against hand-computed values.
+// TestEncodeCallsign_KnownValues verifies encoding against values cross-checked
+// with compiled ft8_lib pack_basecall() output (commit 9fec6ca).
+// See docs/ft8-callsign-constants-verification.md §7.
 //
-// The basecall value (mixed-radix) is offset by callBase (= NTokens + Max22 = 6,257,896)
-// to produce the final 28-bit field value. This matches ft8_lib pack28() which returns
-// NTOKENS + MAX22 + pack_basecall().
+// Each basecall value is computed via the mixed-radix formula
 //
-// W1AW basecall = 6319593, n28 = 6257896 + 6319593 = 12577489.
+//	n = i0*36*10*27*27*27 + i1*10*27*27*27 + i2*27*27*27 + i3*27*27 + i4*27 + i5
+//
+// over the normalized 6-char form, then offset by callBase (= NTokens + Max22 = 6,257,896).
+//
+// Derivations:
+//
+//	W1AW   → " W1AW " → (0,32,1,1,23,0)  → basecall 6,319,593
+//	K1ABC  → " K1ABC" → (0,20,1,1,2,3)   → basecall 3,957,069
+//	VK2XYZ → "VK2XYZ" → (32,20,2,24,25,26) → basecall 230,742,323
+//	9A1A   → "9A1A  " → (10,10,1,1,0,0)  → basecall 72,847,512
 func TestEncodeCallsign_KnownValues(t *testing.T) {
 	tests := []struct {
 		call string
@@ -52,6 +61,8 @@ func TestEncodeCallsign_LeftPad(t *testing.T) {
 		{"W1AW", " W1AW "},
 		{"K1ABC", " K1ABC"},
 		{"A1A", " A1A  "},
+		{"A1ABC", " A1ABC"}, // 5-char: longest single-prefix call
+		{"A1", " A1   "},    // 2-char: minimum length call
 	}
 	for _, tt := range tests {
 		t.Run(tt.call, func(t *testing.T) {
@@ -130,6 +141,8 @@ func TestCallsign_RoundTrip(t *testing.T) {
 	calls := []string{
 		"W1AW", "K1ABC", "VK2XYZ", "9A1A", "AA1A", "ZZ9ZZZ",
 		"A1A", "N0CAL", "3A2X",
+		"A1ABC", // 5-char single-prefix call (longest before left-pad overflow)
+		"A1",    // 2-char minimum-length call
 	}
 	for _, call := range calls {
 		t.Run(call, func(t *testing.T) {
@@ -256,6 +269,22 @@ func TestCQSuffix_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestCQSuffix_ZeroK_DecodesToPlainCQ(t *testing.T) {
+	// n28 = tokenCQSufBase (1003) corresponds to k=0 in decodeCQSuffix.
+	// k=0 produces an all-space suffix which trims to "", falling back to "CQ".
+	// This is the same decoded string as TokenCQ (n28=2), so the two distinct
+	// 28-bit values are ambiguous on decode. EncodeCQSuffix never produces k=0
+	// (minimum suffix is one letter → k ≥ 1), so no round-trip hazard exists.
+	dec, err := DecodeCallsign(tokenCQSufBase)
+	require.NoError(t, err)
+	require.Equal(t, "CQ", dec, "tokenCQSufBase with k=0 should decode as plain CQ")
+
+	// Confirm it matches the plain-CQ token decode.
+	plainCQ, err := DecodeCallsign(TokenCQ)
+	require.NoError(t, err)
+	require.Equal(t, plainCQ, dec, "k=0 suffix decode must match plain-CQ token decode")
+}
+
 func TestCQSuffix_CaseInsensitive(t *testing.T) {
 	n1, err := EncodeCQSuffix("dx")
 	require.NoError(t, err)
@@ -312,4 +341,33 @@ func TestCharsetIndex(t *testing.T) {
 	require.Equal(t, 36, charsetIndex('Z'))
 	require.Equal(t, -1, charsetIndex('!'))
 	require.Equal(t, -1, charsetIndex('a'))
+}
+
+// --------------- letterSpaceMR -----------------------------------------------
+
+func TestLetterSpaceMR_ValidIndices(t *testing.T) {
+	// Space (charset index 0) → mixed-radix 0.
+	require.Equal(t, uint32(0), letterSpaceMR(0))
+	// A (charset index 11) → mixed-radix 1.
+	require.Equal(t, uint32(1), letterSpaceMR(11))
+	// Z (charset index 36) → mixed-radix 26.
+	require.Equal(t, uint32(26), letterSpaceMR(36))
+}
+
+func TestLetterSpaceMR_PanicsOnDigitIndex(t *testing.T) {
+	// Digit indices (1–10) are invalid for letter-or-space positions.
+	for idx := 1; idx <= 10; idx++ {
+		idx := idx
+		t.Run(fmt.Sprintf("idx=%d", idx), func(t *testing.T) {
+			require.Panics(t, func() { letterSpaceMR(idx) })
+		})
+	}
+}
+
+func TestLetterSpaceMR_PanicsOnNegativeIndex(t *testing.T) {
+	require.Panics(t, func() { letterSpaceMR(-1) })
+}
+
+func TestLetterSpaceMR_PanicsOnOutOfRange(t *testing.T) {
+	require.Panics(t, func() { letterSpaceMR(37) })
 }

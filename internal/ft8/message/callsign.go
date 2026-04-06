@@ -49,7 +49,7 @@ const (
 	tokenCQNumBase uint32 = 3      // start of CQ nnn
 	tokenCQNumMax  uint32 = 1002   // end of CQ nnn (inclusive)
 	tokenCQSufBase uint32 = 1003   // start of CQ with letter suffix
-	tokenCQSufMax  uint32 = 532443 // end of CQ suffix (inclusive); 1003 + 27^4 - 1
+	tokenCQSufMax  uint32 = 532443 // end of CQ suffix (inclusive); 1003 + 26*(27^3 + 27^2 + 27 + 1) = 1003 + 531440
 )
 
 // hashBase is the start of the 22-bit hash region in the 28-bit field.
@@ -96,6 +96,10 @@ func EncodeCallsign(call string) (uint32, error) {
 	i3 := charsetIndex(c6[3])
 	i4 := charsetIndex(c6[4])
 	i5 := charsetIndex(c6[5])
+
+	if i0 < 0 || i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0 || i5 < 0 {
+		return 0, fmt.Errorf("%s: invalid character in normalized callsign %q", op, c6)
+	}
 
 	// Mixed-radix encoding (matching ft8_lib pack_basecall):
 	//   c[0]: FT8_CHAR_TABLE_ALPHANUM_SPACE → 0–36  (37 values)
@@ -206,9 +210,16 @@ func charsetIndex(c byte) int {
 // letterSpaceMR maps a charset index for a letter-or-space position to a
 // mixed-radix digit 0–26. Space (charset 0) → 0, A–Z (charset 11–36) → 1–26.
 // Matches ft8_lib's FT8_CHAR_TABLE_LETTERS_SPACE: space=0, A=1..Z=26.
+//
+// Precondition: idx must be 0 (space) or 11–36 (A–Z). Digit indices (1–10)
+// and negative values are invalid; normalizeCallsign ensures positions 3–5
+// contain only letters or spaces before this function is called.
 func letterSpaceMR(idx int) uint32 {
 	if idx == 0 {
 		return 0
+	}
+	if idx < 11 || idx > 36 {
+		panic(fmt.Sprintf("letterSpaceMR: charset index %d is not space or letter (expected 0 or 11–36)", idx))
 	}
 	return uint32(idx - 10)
 }
@@ -357,6 +368,12 @@ func decodeCQSuffix(k uint32) (string, error) {
 
 	suffix := strings.TrimSpace(string(buf[:]))
 	if suffix == "" {
+		// k=0 produces all-space digits → empty suffix. This is unreachable via
+		// EncodeCQSuffix (minimum suffix is one letter → k ≥ 1), but could arise
+		// from a raw n28 = tokenCQSufBase (1003). We return "CQ" to match ft8_lib's
+		// trim_front() behaviour, noting that this is the same decoded string as the
+		// plain-CQ token (TokenCQ = 2) — the two 28-bit values are distinct but
+		// decode identically.
 		return "CQ", nil
 	}
 	return "CQ " + suffix, nil
