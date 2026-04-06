@@ -79,7 +79,7 @@ func (t Type) String() string {
 //	Call1, Call2  — decoded callsign strings
 //	Grid         — decoded grid/report/token string (e.g. "FN31", "-12", "R-08", "RR73")
 //	N28a, N28b   — 28-bit encoded callsign values
-//	P1, P2       — 1-bit callsign type flags (0=standard/token, 1=hash)
+//	P1, P2       — 1-bit callsign type flags (false=standard/token, true=hash)
 //	IR           — 1-bit Roger flag
 //	IGrid4       — 15-bit encoded grid/report value
 //
@@ -109,10 +109,10 @@ type Message struct {
 	N28a uint32
 	// N28b is the 28-bit encoded second callsign field value.
 	N28b uint32
-	// P1 is the 1-bit type flag for the first callsign (0=std/token, 1=hash).
-	P1 uint8
-	// P2 is the 1-bit type flag for the second callsign (0=std/token, 1=hash).
-	P2 uint8
+	// P1 is the 1-bit type flag for the first callsign (false=std/token, true=hash).
+	P1 bool
+	// P2 is the 1-bit type flag for the second callsign (false=std/token, true=hash).
+	P2 bool
 	// IR is the 1-bit Roger flag.
 	IR bool
 	// IGrid4 is the 15-bit encoded grid/report field value.
@@ -153,8 +153,10 @@ func (m *Message) String() string {
 // Pack encodes a Message into a 10-byte (77-bit) MSB-first payload.
 //
 // The caller must set MsgType and the relevant human-readable fields (Call1,
-// Call2, Grid for TypeStandard; FreeText for TypeFreeText). Pack fills in
-// the encoded field values (N28a, N28b, etc.) as a side effect.
+// Call2, Grid for TypeStandard; FreeText for TypeFreeText).
+//
+// Pack does not modify msg. To obtain encoded field values (N28a, N28b, etc.),
+// call Unpack on the returned payload.
 //
 // Returns an error if the message type is unsupported or field encoding fails.
 func Pack(msg *Message) ([MsgBytes]byte, error) {

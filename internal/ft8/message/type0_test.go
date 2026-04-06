@@ -81,17 +81,17 @@ func TestPackType0_KnownPayload(t *testing.T) {
 	require.Equal(t, "TNX BOB 73 GL", decoded.String())
 }
 
-// TestPackType0_FillsEncodedFields verifies that Pack populates FreeTextHi
-// and FreeTextLo on the Message.
-func TestPackType0_FillsEncodedFields(t *testing.T) {
+// TestPackType0_DoesNotMutateMessage verifies that Pack does not modify the
+// input Message's encoded fields.
+func TestPackType0_DoesNotMutateMessage(t *testing.T) {
 	msg := &Message{
 		MsgType:  TypeFreeText,
 		FreeText: "TNX BOB 73 GL",
 	}
 	_, err := Pack(msg)
 	require.NoError(t, err)
-	require.Equal(t, uint8(0x30), msg.FreeTextHi)
-	require.Equal(t, uint64(0x4ACFFAE330617641), msg.FreeTextLo)
+	require.Equal(t, uint8(0), msg.FreeTextHi, "Pack must not mutate FreeTextHi")
+	require.Equal(t, uint64(0), msg.FreeTextLo, "Pack must not mutate FreeTextLo")
 }
 
 // TestPackType0_TooLong verifies that a free-text message exceeding 13 chars

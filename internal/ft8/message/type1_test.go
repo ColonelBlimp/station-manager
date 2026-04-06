@@ -73,37 +73,42 @@ func TestUnpackType1_FieldValues(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Equal(t, v.C28a, msg.N28a, "N28a")
-			require.Equal(t, v.P1, int(msg.P1), "P1")
+			require.Equal(t, v.P1 != 0, msg.P1, "P1")
 			require.Equal(t, v.C28b, msg.N28b, "N28b")
-			require.Equal(t, v.P2, int(msg.P2), "P2")
-
-			wantIR := v.IR != 0
-			require.Equal(t, wantIR, msg.IR, "IR")
+			require.Equal(t, v.P2 != 0, msg.P2, "P2")
+			require.Equal(t, v.IR != 0, msg.IR, "IR")
 			require.Equal(t, v.G15, msg.IGrid4, "IGrid4")
 		})
 	}
 }
 
-// TestPackType1_FieldValues verifies that Pack populates the encoded field
-// values on the Message struct as a side effect.
-func TestPackType1_FieldValues(t *testing.T) {
-	vectors := loadType1VectorsMsg(t)
-	for _, v := range vectors {
-		t.Run(v.Text, func(t *testing.T) {
-			msg := parseType1Text(t, v.Text)
-			msg.MsgType = TypeStandard
-
-			_, err := Pack(msg)
-			require.NoError(t, err)
-
-			require.Equal(t, v.C28a, msg.N28a, "N28a")
-			require.Equal(t, v.C28b, msg.N28b, "N28b")
-
-			wantIR := v.IR != 0
-			require.Equal(t, wantIR, msg.IR, "IR")
-			require.Equal(t, v.G15, msg.IGrid4, "IGrid4")
-		})
+// TestPackDoesNotMutateMessage verifies that Pack does not modify the input Message.
+func TestPackDoesNotMutateMessage(t *testing.T) {
+	msg := &Message{
+		MsgType: TypeStandard,
+		Call1:   "CQ",
+		Call2:   "W1AW",
+		Grid:    "FN31",
 	}
+
+	// Take a snapshot of zero-value encoded fields before Pack.
+	require.Equal(t, uint32(0), msg.N28a)
+	require.Equal(t, uint32(0), msg.N28b)
+	require.False(t, msg.P1)
+	require.False(t, msg.P2)
+	require.False(t, msg.IR)
+	require.Equal(t, uint16(0), msg.IGrid4)
+
+	_, err := Pack(msg)
+	require.NoError(t, err)
+
+	// Encoded fields must remain zero — Pack must not write back.
+	require.Equal(t, uint32(0), msg.N28a, "Pack must not mutate N28a")
+	require.Equal(t, uint32(0), msg.N28b, "Pack must not mutate N28b")
+	require.False(t, msg.P1, "Pack must not mutate P1")
+	require.False(t, msg.P2, "Pack must not mutate P2")
+	require.False(t, msg.IR, "Pack must not mutate IR")
+	require.Equal(t, uint16(0), msg.IGrid4, "Pack must not mutate IGrid4")
 }
 
 // --------------- Pack Type 1 — manual messages --------------------------------
@@ -272,6 +277,37 @@ func TestPackType1_InvalidGrid(t *testing.T) {
 	}
 	_, err := Pack(msg)
 	require.Error(t, err)
+}
+
+// --------------- trimUpper ----------------------------------------------------
+
+func TestTrimUpper_MultipleLeadingSpaces(t *testing.T) {
+	require.Equal(t, "W1AW", trimUpper("  W1AW"))
+}
+
+func TestTrimUpper_MultipleTrailingSpaces(t *testing.T) {
+	require.Equal(t, "W1AW", trimUpper("W1AW   "))
+}
+
+func TestTrimUpper_BothSides(t *testing.T) {
+	require.Equal(t, "W1AW", trimUpper("  W1AW  "))
+}
+
+func TestTrimUpper_Lowercase(t *testing.T) {
+	require.Equal(t, "CQ W1AW", trimUpper("  cq w1aw  "))
+}
+
+func TestTrimUpper_Tabs(t *testing.T) {
+	require.Equal(t, "CQ", trimUpper("\tCQ\t"))
+}
+
+func TestTrimUpper_Empty(t *testing.T) {
+	require.Equal(t, "", trimUpper(""))
+	require.Equal(t, "", trimUpper("   "))
+}
+
+func TestTrimUpper_InternalSpacesPreserved(t *testing.T) {
+	require.Equal(t, "CQ DX", trimUpper("  CQ DX  "))
 }
 
 // --------------- Message.String() --------------------------------------------

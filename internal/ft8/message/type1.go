@@ -16,6 +16,8 @@
 package message
 
 import (
+	"strings"
+
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
@@ -36,10 +38,10 @@ const (
 // --- Pack Type 1 -------------------------------------------------------------
 
 // packType1 encodes a Type 1 standard message from human-readable fields into
-// a 10-byte payload. The Message's encoded field values (N28a, N28b, P1, P2,
-// IR, IGrid4) are filled in as a side effect.
+// a 10-byte payload.
 //
 // The caller must set Call1, Call2, and optionally Grid on the message.
+// Pack does not modify msg.
 func packType1(msg *Message) ([MsgBytes]byte, error) {
 	const op errors.Op = "message.packType1"
 
@@ -64,20 +66,12 @@ func packType1(msg *Message) ([MsgBytes]byte, error) {
 			"grid field %q: %s", msg.Grid, err)
 	}
 
-	// Store encoded values in the message.
-	msg.N28a = n28a
-	msg.N28b = n28b
-	msg.P1 = 0 // standard/token callsigns
-	msg.P2 = 0
-	msg.IR = ir
-	msg.IGrid4 = igrid4
-
 	// Pack into the 77-bit payload.
 	var buf [MsgBytes]byte
 	PackBits(buf[:], type1OffC28a, 28, uint64(n28a))
-	PackBits(buf[:], type1OffP1, 1, uint64(msg.P1))
+	PackBits(buf[:], type1OffP1, 1, 0) // standard/token callsigns → p1=0
 	PackBits(buf[:], type1OffC28b, 28, uint64(n28b))
-	PackBits(buf[:], type1OffP2, 1, uint64(msg.P2))
+	PackBits(buf[:], type1OffP2, 1, 0) // standard/token callsigns → p2=0
 
 	var irBit uint64
 	if ir {
@@ -99,9 +93,9 @@ func unpackType1(payload [MsgBytes]byte) (*Message, error) {
 
 	// Extract encoded fields.
 	n28a := uint32(UnpackBits(payload[:], type1OffC28a, 28))
-	p1 := uint8(UnpackBits(payload[:], type1OffP1, 1))
+	p1 := UnpackBits(payload[:], type1OffP1, 1) != 0
 	n28b := uint32(UnpackBits(payload[:], type1OffC28b, 28))
-	p2 := uint8(UnpackBits(payload[:], type1OffP2, 1))
+	p2 := UnpackBits(payload[:], type1OffP2, 1) != 0
 	ir := UnpackBits(payload[:], type1OffIR, 1) != 0
 	igrid4 := uint16(UnpackBits(payload[:], type1OffG15, 15))
 
@@ -175,20 +169,9 @@ func encodeCallField(call string) (uint32, error) {
 	return EncodeCallsign(call)
 }
 
-// trimUpper returns the uppercase, trimmed version of s.
+// trimUpper returns the uppercase, whitespace-trimmed version of s.
 func trimUpper(s string) string {
-	result := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == ' ' && (i == 0 || i == len(s)-1) {
-			continue // trim leading/trailing spaces
-		}
-		if c >= 'a' && c <= 'z' {
-			c -= 32
-		}
-		result = append(result, c)
-	}
-	return string(result)
+	return strings.TrimSpace(strings.ToUpper(s))
 }
 
 // isAllDigits returns true if s is non-empty and all bytes are '0'-'9'.

@@ -27,8 +27,7 @@ const (
 // --- Pack Type 0 -------------------------------------------------------------
 
 // packType0 encodes a Type 0 free-text message from the FreeText field into
-// a 10-byte payload. The Message's encoded values (FreeTextHi, FreeTextLo)
-// are filled in as a side effect.
+// a 10-byte payload. Pack does not modify msg.
 func packType0(msg *Message) ([MsgBytes]byte, error) {
 	const op errors.Op = "message.packType0"
 
@@ -37,9 +36,6 @@ func packType0(msg *Message) ([MsgBytes]byte, error) {
 		return [MsgBytes]byte{}, errors.New(op).Err(err).Msgf(
 			"free text %q: %s", msg.FreeText, err)
 	}
-
-	msg.FreeTextHi = hi
-	msg.FreeTextLo = lo
 
 	var buf [MsgBytes]byte
 	PackBits(buf[:], type0OffF71Hi, type0WidthHi, uint64(hi))
