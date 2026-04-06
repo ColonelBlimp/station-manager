@@ -344,6 +344,7 @@ func (c *Capture) safeSend(samples []float32) {
 		if r := recover(); r != nil {
 			// Channel was closed between our check and send - this is expected
 			// during shutdown and can be safely ignored
+			_ = r
 		}
 	}()
 
