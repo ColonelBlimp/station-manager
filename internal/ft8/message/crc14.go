@@ -4,6 +4,8 @@
 // Reference: WSJT-X source lib/ft8/pack77.f90, ft8_lib src/ft8/crc.c.
 package message
 
+import "fmt"
+
 // crc14Poly is the FT8/FT4 CRC-14 generator polynomial (degree 14).
 // The implicit leading 1-bit is included, making it a 15-bit value.
 // Polynomial: x^14 + x^13 + x^10 + x^9 + x^8 + x^6 + x^4 + x^2 + x + 1
@@ -15,6 +17,10 @@ const CRC14Bits = 14
 
 // MsgBits is the number of payload bits in a packed FT8/FT4 message.
 const MsgBits = 77
+
+// MsgBytes is the minimum byte-slice length required to hold MsgBits
+// (⌈77/8⌉ = 10). Both CRC14 and Append91 require at least this many bytes.
+const MsgBytes = (MsgBits + 7) / 8
 
 // CRC14 computes the 14-bit CRC over a packed 77-bit FT8/FT4 message.
 //
@@ -30,6 +36,10 @@ const MsgBits = 77
 //
 // Returns the 14-bit CRC as a uint16.
 func CRC14(msg []byte) uint16 {
+	if len(msg) < MsgBytes {
+		panic(fmt.Sprintf("message: CRC14 requires at least %d bytes, got %d", MsgBytes, len(msg)))
+	}
+
 	// Total bits to process: 77 message + 5 zero-pad = 82.
 	const totalBits = MsgBits + 5
 
@@ -68,6 +78,10 @@ func CRC14(msg []byte) uint16 {
 // The returned slice has bits packed MSB-first. Bit 0 of out[0] is the
 // first message bit; bits 77–90 are the CRC (MSB of CRC in bit position 77).
 func Append91(msg []byte) [12]byte {
+	if len(msg) < MsgBytes {
+		panic(fmt.Sprintf("message: Append91 requires at least %d bytes, got %d", MsgBytes, len(msg)))
+	}
+
 	crc := CRC14(msg)
 
 	var out [12]byte
