@@ -233,7 +233,7 @@ and filters results by CRC pass.
 
 ```
 symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go ✅ → spectrogram.go ✅
-  → candidates.go → demod.go → dsp.go
+  → candidates.go ✅ → demod.go → dsp.go
 ```
 
 `symbols.go` is **complete** — it provides `BitsToSymbols`, `SymbolsToBits`,
@@ -281,6 +281,26 @@ into the time × frequency matrix consumed by candidate detection and demodulati
 **Next up: `candidates.go`** — Costas sync correlation to detect FT8 signals in
 the spectrogram. This is the first component that uses FT8-specific protocol
 knowledge (sync block positions, tone grid) rather than generic DSP.
+
+`candidates.go` is **complete** — FT8 signal candidate detection:
+- `Candidate` struct with `Freq` (Hz), `TimeOff` (s), `Score`
+- `FindCandidates(spectrogram, maxCandidates) []Candidate` — searches the
+  spectrogram for FT8 signals via Costas sync correlation, returns candidates
+  sorted by descending score, truncated to maxCandidates
+- `syncScore(sg, timeOff, baseBin) float32` — computes mean sync power minus
+  mean total power across 79×8 tone positions (unexported scoring function)
+- Searches the ~200–3000 Hz audio passband, all valid time offsets
+- Bin-to-tone mapping uses nearest-bin approximation (valid for all 8 FT8 tones
+  at 2048-point FFT / 12 kHz; maximum error 0.47 bins at tone 7)
+- Full test coverage: nil/empty/too-small inputs, silence (no false positives),
+  single signal detection at correct (freq, time), full signal with data symbols,
+  multiple signals at different frequencies, descending sort order, maxCandidates
+  truncation, syncScore properties (positive for sync-only, zero for uniform,
+  monotonic with signal strength), end-to-end integration from synthesised audio
+  through Spectrogram → FindCandidates, minimum-size spectrogram (no panic).
+
+**Next up: `demod.go`** — soft demodulation to extract 174 LLR values from a
+detected candidate, bridging the DSP front-end to `codec.Decode`.
 
 ## Design Notes
 
