@@ -233,7 +233,7 @@ and filters results by CRC pass.
 
 ```
 symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go ✅ → spectrogram.go ✅
-  → candidates.go ✅ → demod.go ✅ → dsp.go
+  → candidates.go ✅ → demod.go ✅ → dsp.go ✅
 ```
 
 `symbols.go` is **complete** — it provides `BitsToSymbols`, `SymbolsToBits`,
@@ -320,9 +320,27 @@ detected candidate, bridging the DSP front-end to `codec.Decode`.
   recovering the original 77-bit message, LLR magnitude monotonicity with signal
   strength, uniform power → zero LLRs.
 
-**Next up: `dsp.go`** — top-level `ProcessWindow` entry point connecting
-`Spectrogram → FindCandidates → Demodulate → codec.DecodeMessage` with CRC
-filtering and deduplication.
+`dsp.go` is **complete** — top-level RX pipeline entry point:
+- `DecodedMessage` struct with `Msg77`, `Freq`, `TimeOff`, `SNR`
+- `ProcessWindow(samples, maxCandidates, maxIter) []DecodedMessage` — full RX
+  chain: `Spectrogram → FindCandidates → Demodulate → codec.DecodeMessage`
+- CRC-14 filtering (only successfully decoded messages are returned)
+- Deduplication by 77-bit message content (first decode wins)
+- `estimateNoiseFloor` — mean-power noise floor estimator
+- `estimateSNR(score, noiseFloor)` — coarse dB-scale SNR from sync correlation
+  score vs. noise floor (suitable for display/logging, not calibrated)
+- Full test coverage: nil/empty/too-short/silence edge cases, maxCandidates=0
+  and maxIter=0 guards, exact-79-frames boundary, **full end-to-end round-trip**
+  (EncodeMessage → BitsToSymbols → InsertSync → tone synthesis → ProcessWindow
+  → verify original message recovered), deduplication verification (same message
+  at two frequencies decoded only once), multiple distinct messages at different
+  frequencies both decoded, SNR ordering (stronger signal → higher SNR), SNR
+  estimator unit tests (positive/negative/zero score, zero noise floor),
+  noise floor estimator tests (nil, uniform, silence).
+
+**This milestone is complete.** All 8 files in the `internal/ft8/dsp/` pipeline
+are implemented and tested:
+`symbols.go → window.go → fft.go → spectrum.go → spectrogram.go → candidates.go → demod.go → dsp.go`
 
 ## Design Notes
 
