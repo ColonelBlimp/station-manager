@@ -232,15 +232,20 @@ and filters results by CRC pass.
 ## Suggested Implementation Order
 
 ```
-symbols.go → window.go → fft.go → spectrum.go → spectrogram.go
+symbols.go ✅ → window.go → fft.go → spectrum.go → spectrogram.go
   → candidates.go → demod.go → dsp.go
 ```
 
-Start with the symbol mapping utilities — they are needed by both TX synthesis
-(future) and the demodulator, and are straightforward to test against reference
-vectors. The FFT is the next foundation, followed by the spectrogram builder.
-Candidate detection and demodulation build on the spectrogram. The top-level
-`ProcessWindow` ties everything together.
+`symbols.go` is **complete** — it provides `BitsToSymbols`, `SymbolsToBits`,
+`InsertSync`, `ExtractData`, Gray code tables, and all FT8 protocol constants.
+Full test coverage including round-trip tests against known encoder vectors.
+
+**Next up: `window.go`** — Hann window function. No dependencies on other
+unbuilt DSP code; needed by the spectrogram builder.
+
+The FFT is the next foundation after windowing, followed by the spectrogram
+builder. Candidate detection and demodulation build on the spectrogram. The
+top-level `ProcessWindow` ties everything together.
 
 ## Design Notes
 
