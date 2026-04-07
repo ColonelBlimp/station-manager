@@ -50,7 +50,7 @@ func TestGrayEncodeBijective(t *testing.T) {
 }
 
 // TestGrayAdjacentDifferByOneBit verifies the defining property of Gray
-// code: consecutive values differ in exactly one bit position.
+// code: consecutive values differ in exactly one-bit position.
 func TestGrayAdjacentDifferByOneBit(t *testing.T) {
 	for n := range uint8(NumTones - 1) {
 		diff := grayEncode[n] ^ grayEncode[n+1]
@@ -450,9 +450,13 @@ func TestConstantConsistency(t *testing.T) {
 		t.Errorf("NumSyncSyms(%d) != 3 * SyncLen(%d)", NumSyncSyms, SyncLen)
 	}
 
-	if SamplesPerSymbol != int(SampleRate*SymbolPeriod) {
-		t.Errorf("SamplesPerSymbol(%d) != SampleRate(%d) * SymbolPeriod(%.3f) = %d",
-			SamplesPerSymbol, SampleRate, SymbolPeriod, int(SampleRate*SymbolPeriod))
+	if dataSegmentLen != Sync2Start-Sync1Start-SyncLen {
+		t.Errorf("dataSegmentLen(%d) != Sync2Start-Sync1Start-SyncLen(%d)",
+			dataSegmentLen, Sync2Start-Sync1Start-SyncLen)
+	}
+
+	if 2*dataSegmentLen != NumDataSyms {
+		t.Errorf("2*dataSegmentLen(%d) != NumDataSyms(%d)", 2*dataSegmentLen, NumDataSyms)
 	}
 
 	if CodewordBytes != (CodedBits+7)/8 {

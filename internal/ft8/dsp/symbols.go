@@ -50,8 +50,8 @@ const (
 	SampleRate = 12000
 
 	// SamplesPerSymbol is the number of audio samples in one symbol period.
-	// SampleRate × SymbolPeriod = 12000 × 0.160 = 1920.
-	SamplesPerSymbol = 1920
+	// 12 000 × 0.160 = 1920 (exact in IEEE 754).
+	SamplesPerSymbol = int(SampleRate * SymbolPeriod)
 
 	// WindowSamples is the total number of samples in one FT8 RX window
 	// (15 s × 12 000 Hz = 180 000).
@@ -77,6 +77,10 @@ const (
 	Sync2Start = 36 // positions 36–42
 	Sync3Start = 72 // positions 72–78
 	SyncLen    = 7
+
+	// dataSegmentLen is the number of data symbols between consecutive
+	// Costas sync blocks. Derived: (Sync2Start − Sync1Start − SyncLen) = 29.
+	dataSegmentLen = Sync2Start - Sync1Start - SyncLen
 )
 
 // --- Gray code tables ---
@@ -150,14 +154,14 @@ func InsertSync(data [NumDataSyms]uint8) [NumSymbols]uint8 {
 	// First Costas block (positions 0–6).
 	copy(out[Sync1Start:], CostasSync[:])
 
-	// First data segment: 29 symbols (positions 7–35).
-	copy(out[Sync1Start+SyncLen:], data[:29])
+	// First data segment (positions 7–35).
+	copy(out[Sync1Start+SyncLen:], data[:dataSegmentLen])
 
 	// Second Costas block (positions 36–42).
 	copy(out[Sync2Start:], CostasSync[:])
 
-	// Second data segment: 29 symbols (positions 43–71).
-	copy(out[Sync2Start+SyncLen:], data[29:])
+	// Second data segment (positions 43–71).
+	copy(out[Sync2Start+SyncLen:], data[dataSegmentLen:])
 
 	// Third Costas block (positions 72–78).
 	copy(out[Sync3Start:], CostasSync[:])
@@ -171,11 +175,11 @@ func InsertSync(data [NumDataSyms]uint8) [NumSymbols]uint8 {
 func ExtractData(seq [NumSymbols]uint8) [NumDataSyms]uint8 {
 	var data [NumDataSyms]uint8
 
-	// First data segment: positions 7–35 (29 symbols).
-	copy(data[:29], seq[Sync1Start+SyncLen:Sync2Start])
+	// First data segment: positions 7–35.
+	copy(data[:dataSegmentLen], seq[Sync1Start+SyncLen:Sync2Start])
 
-	// Second data segment: positions 43–71 (29 symbols).
-	copy(data[29:], seq[Sync2Start+SyncLen:Sync3Start])
+	// Second data segment: positions 43–71.
+	copy(data[dataSegmentLen:], seq[Sync2Start+SyncLen:Sync3Start])
 
 	return data
 }
