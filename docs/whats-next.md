@@ -232,7 +232,7 @@ and filters results by CRC pass.
 ## Suggested Implementation Order
 
 ```
-symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go → spectrogram.go
+symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go ✅ → spectrogram.go
   → candidates.go → demod.go → dsp.go
 ```
 
@@ -256,9 +256,16 @@ values, edge cases, and FT8 frame-size verification.
   Parseval's theorem, zero-padding equivalence, non-power-of-two input, FT8
   frame size, brute-force DFT cross-check, linearity, Hermitian symmetry.
 
-**Next up: `spectrum.go`** — power spectrum computation (|X[k]|² for each bin).
-This is a thin function but separates concerns cleanly for the spectrogram
-builder.
+`spectrum.go` is **complete** — power spectrum computation:
+- `PowerSpectrum(bins) []float32` — magnitude-squared |X[k]|² = re² + im²
+- `LogPowerSpectrum(bins, floorDB) []float32` — 10·log10(|X[k]|²) with
+  configurable floor for zero-power bins (useful for waterfall display / SNR)
+- Full test coverage: nil/empty, pure real/imaginary/complex, non-negativity,
+  known dB values, floor clamping, consistency between PowerSpectrum and
+  LogPowerSpectrum, Parseval energy check, cmplx.Abs² cross-check.
+
+**Next up: `spectrogram.go`** — ties together windowing, FFT, and power spectrum
+into the time × frequency matrix consumed by candidate detection and demodulation.
 
 ## Design Notes
 

@@ -253,13 +253,13 @@ func TestSymbolsToBitsHighBitsMasked(t *testing.T) {
 
 // --- InsertSync tests ---
 
-// TestInsertSyncLength verifies that InsertSync produces exactly 79 symbols.
+// TestInsertSyncLength verifies that InsertSync produces a [NumSymbols]uint8
+// (compile-time guarantee) and does not panic for zero-valued input.
 func TestInsertSyncLength(t *testing.T) {
 	var data [NumDataSyms]uint8
-	seq := InsertSync(data)
-	if len(seq) != NumSymbols {
-		t.Errorf("len(InsertSync) = %d, want %d", len(seq), NumSymbols)
-	}
+	// The return type is [NumSymbols]uint8, so length is guaranteed at
+	// compile time. We just verify the call succeeds.
+	_ = InsertSync(data)
 }
 
 // TestInsertSyncCostasPositions verifies that the three Costas sync blocks
@@ -329,10 +329,19 @@ func TestInsertSyncAllZeroData(t *testing.T) {
 
 	for i, v := range seq {
 		if syncPos[i] {
-			// Sync positions should have non-zero Costas values (except
-			// CostasSync[3]=0, which is legitimately zero).
-			if v != CostasSync[i%SyncLen] && v != CostasSync[(i-Sync2Start)%SyncLen] && v != CostasSync[(i-Sync3Start)%SyncLen] {
-				// Just check it matches the expected Costas value.
+			// Determine which Costas block this position belongs to and
+			// compute the expected value.
+			var want uint8
+			switch {
+			case i < Sync1Start+SyncLen:
+				want = CostasSync[i-Sync1Start]
+			case i >= Sync2Start && i < Sync2Start+SyncLen:
+				want = CostasSync[i-Sync2Start]
+			default:
+				want = CostasSync[i-Sync3Start]
+			}
+			if v != want {
+				t.Errorf("sync position %d: got %d, want %d", i, v, want)
 			}
 		} else {
 			if v != 0 {
