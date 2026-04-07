@@ -49,7 +49,8 @@ const (
 //
 // The spectrogram is a [nFrames][nBins]float32 power matrix as produced by
 // [Spectrogram]. Each row corresponds to one symbol period; each column is
-// a frequency bin.
+// a frequency bin. All rows must have the same length (uniform matrix);
+// passing a jagged slice causes undefined behaviour (likely a panic).
 //
 // Returns candidates sorted by descending score, up to maxCandidates.
 // Returns nil if the spectrogram is too small to contain a full FT8 message
@@ -80,9 +81,6 @@ func FindCandidates(spectrogram [][]float32, maxCandidates int) []Candidate {
 	// Convert frequency search bounds to bin indices.
 	minBin := int(minSearchFreqHz / float64(binWidth))
 	maxBin := int(maxSearchFreqHz/float64(binWidth)) + 1
-	if minBin < 0 {
-		minBin = 0
-	}
 	// The tone grid spans baseBin..baseBin+7, so the highest valid baseBin
 	// is nBins − NumTones.
 	if maxBin > nBins-NumTones {

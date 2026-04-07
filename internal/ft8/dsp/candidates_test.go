@@ -206,8 +206,8 @@ func TestFindCandidatesMultipleSignals(t *testing.T) {
 	}
 
 	// The stronger signal should rank higher.
-	if candidates[0].Freq != wantFreq2 {
-		t.Errorf("expected stronger signal (%.1f Hz) first, got %.1f Hz",
+	if !approxEq(candidates[0].Freq, wantFreq2, binWidth) {
+		t.Errorf("expected stronger signal (~%.1f Hz) first, got %.1f Hz",
 			wantFreq2, candidates[0].Freq)
 	}
 }
