@@ -232,7 +232,7 @@ and filters results by CRC pass.
 ## Suggested Implementation Order
 
 ```
-symbols.go ✅ → window.go ✅ → fft.go → spectrum.go → spectrogram.go
+symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go → spectrogram.go
   → candidates.go → demod.go → dsp.go
 ```
 
@@ -246,8 +246,19 @@ Full test coverage including round-trip tests against known encoder vectors.
 symmetry, coherent gain (≈0.5), normalised energy (≈0.375), known reference
 values, edge cases, and FT8 frame-size verification.
 
-**Next up: `fft.go`** — pure-Go radix-2 FFT with zero-padding to 2048. This is
-the computational core needed by the spectrogram builder.
+`fft.go` is **complete** — pure-Go radix-2 Cooley-Tukey FFT with:
+- `NextPow2(n)` — smallest power of 2 ≥ n (exported for spectrogram builder)
+- `RealFFT(samples) []complex64` — real-input FFT returning N/2+1 non-negative
+  frequency bins, zero-padded to next power of 2 (1920 → 2048 for FT8)
+- `complex128` internally for twiddle-factor precision, `complex64` output
+- Precomputed twiddle factors per stage (no accumulated multiplication error)
+- Full test coverage: DC, impulse, single sample, cosine/sine at exact bins,
+  Parseval's theorem, zero-padding equivalence, non-power-of-two input, FT8
+  frame size, brute-force DFT cross-check, linearity, Hermitian symmetry.
+
+**Next up: `spectrum.go`** — power spectrum computation (|X[k]|² for each bin).
+This is a thin function but separates concerns cleanly for the spectrogram
+builder.
 
 ## Design Notes
 
