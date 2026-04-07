@@ -8,6 +8,14 @@
 // patterns) and by the spectrogram builder (to produce the time × frequency
 // matrix). A separate log-power variant is provided for the soft demodulator,
 // which operates in the log domain for numerical stability.
+//
+// Precision note: [PowerSpectrum] computes power in float32 arithmetic,
+// while [LogPowerSpectrum] computes power in float64 (needed for the log10
+// step). The two functions do NOT share a common power computation, so for
+// bins with large dynamic range or many significant digits, callers should
+// not assume LogPowerSpectrum(bins)[k] == 10·log10(PowerSpectrum(bins)[k])
+// to full float32 precision. In practice the difference is negligible
+// (< 0.01 dB).
 
 package dsp
 
@@ -15,6 +23,8 @@ import "math"
 
 // PowerSpectrum returns the magnitude-squared (power) of each complex
 // frequency bin: P[k] = re²+im² for k = 0..len(bins)-1.
+//
+// Computed in float32 arithmetic. See the package-level precision note.
 //
 // Returns nil for nil or empty input.
 func PowerSpectrum(bins []complex64) []float32 {
@@ -31,7 +41,12 @@ func PowerSpectrum(bins []complex64) []float32 {
 }
 
 // LogPowerSpectrum returns 10·log10(|X[k]|²) for each bin, i.e. the power
-// in decibels. Bins with zero power are clamped to floorDB to avoid −Inf.
+// in decibels. The output is clamped so that no value falls below floorDB,
+// which prevents −Inf for zero-power bins and caps the output range for
+// subnormal values.
+//
+// Computed in float64 arithmetic for the log10 step. See the package-level
+// precision note regarding differences from [PowerSpectrum].
 //
 // This is useful for display (waterfall) and SNR estimation. The soft
 // demodulator uses raw log(power) instead (via natural log), so this
@@ -42,16 +57,20 @@ func LogPowerSpectrum(bins []complex64, floorDB float32) []float32 {
 	if len(bins) == 0 {
 		return nil
 	}
+	floor64 := float64(floorDB)
 	ps := make([]float32, len(bins))
 	for i, b := range bins {
 		re := float64(real(b))
 		im := float64(imag(b))
 		power := re*re + im*im
+		db := floor64
 		if power > 0 {
-			ps[i] = float32(10 * math.Log10(power))
-		} else {
-			ps[i] = floorDB
+			db = 10 * math.Log10(power)
 		}
+		if db < floor64 {
+			db = floor64
+		}
+		ps[i] = float32(db)
 	}
 	return ps
 }

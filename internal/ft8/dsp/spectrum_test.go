@@ -208,6 +208,22 @@ func TestLogPowerSpectrumFloor(t *testing.T) {
 	}
 }
 
+// TestLogPowerSpectrumSubnormalClamped verifies that subnormal (denormal)
+// power values are clamped to floorDB rather than producing extremely
+// negative dB values.
+func TestLogPowerSpectrumSubnormalClamped(t *testing.T) {
+	// A very tiny complex value whose power is subnormal/near-zero.
+	tiny := complex(float32(1e-20), float32(1e-20))
+	bins := []complex64{tiny}
+	const floor float32 = -120
+
+	ps := LogPowerSpectrum(bins, floor)
+
+	if ps[0] < floor {
+		t.Errorf("subnormal bin: got %g dB, want >= %g dB (floor)", ps[0], floor)
+	}
+}
+
 // TestLogPowerSpectrumConsistency verifies that LogPowerSpectrum matches
 // 10·log10(PowerSpectrum) for non-zero bins.
 func TestLogPowerSpectrumConsistency(t *testing.T) {
