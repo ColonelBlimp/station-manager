@@ -233,7 +233,7 @@ and filters results by CRC pass.
 
 ```
 symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go ✅ → spectrogram.go ✅
-  → candidates.go ✅ → demod.go → dsp.go
+  → candidates.go ✅ → demod.go ✅ → dsp.go
 ```
 
 `symbols.go` is **complete** — it provides `BitsToSymbols`, `SymbolsToBits`,
@@ -301,6 +301,28 @@ knowledge (sync block positions, tone grid) rather than generic DSP.
 
 **Next up: `demod.go`** — soft demodulation to extract 174 LLR values from a
 detected candidate, bridging the DSP front-end to `codec.Decode`.
+
+`demod.go` is **complete** — soft 8-FSK demodulation with Gray-code awareness:
+- `Demodulate(spectrogram, cand) [174]float32` — extracts 174 soft LLR values
+  from the spectrogram at a candidate's (freq, time) position, suitable for
+  direct input to `codec.Decode` or `codec.DecodeMessage`
+- Precomputed bit-group tables (`bit0Tones`, `bit1Tones`) derived from the Gray
+  code mapping — partitions the 8 tones into 4+4 for each of the 3 bit positions
+- `logSumExp4` — numerically stable log-sum-exp for 4 values
+- `logFloor` (-30) prevents -Inf propagation from zero-power bins
+- LLR sign convention: positive → bit 0, negative → bit 1 (matches `codec.Decode`)
+- Bounds-checked: returns zero LLRs for out-of-range candidates
+- Full test coverage: logSumExp4 properties (equal values, one dominant, known
+  value, all negative), bit-group consistency with grayDecode, nil/out-of-bounds/
+  zero-power edge cases, single-tone LLR sign correctness for all 8 tones,
+  known codeword LLR sign verification against coded bits, **full round-trip**
+  through `codec.EncodeMessage → BitsToSymbols → Demodulate → codec.DecodeMessage`
+  recovering the original 77-bit message, LLR magnitude monotonicity with signal
+  strength, uniform power → zero LLRs.
+
+**Next up: `dsp.go`** — top-level `ProcessWindow` entry point connecting
+`Spectrogram → FindCandidates → Demodulate → codec.DecodeMessage` with CRC
+filtering and deduplication.
 
 ## Design Notes
 
