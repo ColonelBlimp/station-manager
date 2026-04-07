@@ -232,7 +232,7 @@ and filters results by CRC pass.
 ## Suggested Implementation Order
 
 ```
-symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go ✅ → spectrogram.go
+symbols.go ✅ → window.go ✅ → fft.go ✅ → spectrum.go ✅ → spectrogram.go ✅
   → candidates.go → demod.go → dsp.go
 ```
 
@@ -266,6 +266,21 @@ values, edge cases, and FT8 frame-size verification.
 
 **Next up: `spectrogram.go`** — ties together windowing, FFT, and power spectrum
 into the time × frequency matrix consumed by candidate detection and demodulation.
+
+`spectrogram.go` is **complete** — spectrogram builder:
+- `Spectrogram(samples, fftSize, stepSamples) [][]float32` — slides a Hann-
+  windowed FFT across the capture buffer, returning [nFrames][nBins] power matrix
+- Precomputes Hann coefficients once and reuses a frame buffer across all frames
+- Only full frames are included; trailing samples are discarded
+- For FT8: 180 000 samples → 93 frames × 1025 bins (~0.17s with race detector)
+- Full test coverage: nil/invalid params, dimension checks (including FT8 93×1025),
+  silence → zero output, sinusoid peak at correct bin, window-applied verification,
+  exact match against manual HannCoefficients+ApplyWindow+RealFFT+PowerSpectrum
+  pipeline, fftSize=1920 vs 2048 equivalence, non-negativity.
+
+**Next up: `candidates.go`** — Costas sync correlation to detect FT8 signals in
+the spectrogram. This is the first component that uses FT8-specific protocol
+knowledge (sync block positions, tone grid) rather than generic DSP.
 
 ## Design Notes
 
