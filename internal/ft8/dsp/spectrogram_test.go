@@ -154,10 +154,12 @@ func TestSpectrogramSinusoidPeak(t *testing.T) {
 			}
 		}
 
-		// The peak should be near bin 100. The Hann window smears
-		// energy across ~3 bins, and the signal doesn't land on an exact
-		// bin of the 2048-point FFT when the frame is 1920 samples, so
-		// allow ±2 bins of tolerance.
+		// The peak should be near bin 100. Although the frequency is chosen
+		// to land on exact bin 100 of a 2048-point FFT, the 1920-sample
+		// frame contains a non-integer number of cycles at that frequency
+		// (1920/2048 × 100 = 93.75 cycles), so the DFT sees a truncated
+		// signal and the Hann window spreads energy across neighbouring
+		// bins. Allow ±2 bins of tolerance.
 		if absDiff(peakBin, 100) > 2 {
 			t.Errorf("frame[%d]: peak at bin %d, want near 100", f, peakBin)
 		}

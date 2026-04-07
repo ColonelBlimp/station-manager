@@ -44,7 +44,7 @@ func Spectrogram(samples []float32, fftSize, stepSamples int) [][]float32 {
 	}
 
 	// Number of full frames.
-	nFrames := (len(samples)-stepSamples)/stepSamples + 1
+	nFrames := len(samples) / stepSamples
 
 	// Precompute the Hann window (reused for every frame).
 	window := HannCoefficients(stepSamples)
