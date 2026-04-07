@@ -232,7 +232,7 @@ and filters results by CRC pass.
 ## Suggested Implementation Order
 
 ```
-symbols.go ✅ → window.go → fft.go → spectrum.go → spectrogram.go
+symbols.go ✅ → window.go ✅ → fft.go → spectrum.go → spectrogram.go
   → candidates.go → demod.go → dsp.go
 ```
 
@@ -240,12 +240,14 @@ symbols.go ✅ → window.go → fft.go → spectrum.go → spectrogram.go
 `InsertSync`, `ExtractData`, Gray code tables, and all FT8 protocol constants.
 Full test coverage including round-trip tests against known encoder vectors.
 
-**Next up: `window.go`** — Hann window function. No dependencies on other
-unbuilt DSP code; needed by the spectrogram builder.
+`window.go` is **complete** — it provides `Hann` (in-place), `HannCoefficients`
+(pre-computed table for reuse in the spectrogram builder), and `ApplyWindow`
+(multiply by pre-computed coefficients). Full test coverage: endpoints, midpoint,
+symmetry, coherent gain (≈0.5), normalised energy (≈0.375), known reference
+values, edge cases, and FT8 frame-size verification.
 
-The FFT is the next foundation after windowing, followed by the spectrogram
-builder. Candidate detection and demodulation build on the spectrogram. The
-top-level `ProcessWindow` ties everything together.
+**Next up: `fft.go`** — pure-Go radix-2 FFT with zero-padding to 2048. This is
+the computational core needed by the spectrogram builder.
 
 ## Design Notes
 
