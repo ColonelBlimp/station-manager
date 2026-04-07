@@ -147,10 +147,10 @@ func TestProcessWindowDeduplication(t *testing.T) {
 	dataSyms := BitsToSymbols(cwDSP)
 	chanSyms := InsertSync(dataSyms)
 
-	// Place the same signal at two frequencies: 1000 Hz and ~1006.25 Hz (one
-	// tone apart — close enough that the candidate detector may pick up both).
+	// Place the same signal at two well-separated frequencies so the
+	// candidate detector picks up both independently.
 	const freq1 = 1000.0
-	const freq2 = 1500.0 // far enough for separate candidate detection
+	const freq2 = 1500.0
 	const amplitude = 1.0
 
 	samples := make([]float32, WindowSamples)
