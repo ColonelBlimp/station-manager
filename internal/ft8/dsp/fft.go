@@ -21,13 +21,23 @@
 
 package dsp
 
-import "math"
+import (
+	"math"
+	"math/bits"
+)
+
+// maxPow2 is the largest power of 2 representable as a positive int.
+// On 64-bit systems: 1 << 62 = 4611686018427387904.
+const maxPow2 = 1 << (bits.UintSize - 2)
 
 // NextPow2 returns the smallest power of 2 that is ≥ n.
-// Returns 1 for n ≤ 1.
+// Returns 1 for n ≤ 1. Panics if n > maxPow2 (the result would overflow int).
 func NextPow2(n int) int {
 	if n <= 1 {
 		return 1
+	}
+	if n > maxPow2 {
+		panic("dsp.NextPow2: n too large, result would overflow int")
 	}
 	p := 1
 	for p < n {

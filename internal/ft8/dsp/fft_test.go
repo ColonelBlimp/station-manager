@@ -26,6 +26,8 @@ func TestNextPow2(t *testing.T) {
 		{1920, 2048},
 		{2048, 2048},
 		{2049, 4096},
+		{maxPow2, maxPow2},     // exact boundary — should not panic
+		{maxPow2 - 1, maxPow2}, // just below — should not panic
 	}
 	for _, tc := range tests {
 		got := NextPow2(tc.n)
@@ -33,6 +35,17 @@ func TestNextPow2(t *testing.T) {
 			t.Errorf("NextPow2(%d) = %d, want %d", tc.n, got, tc.want)
 		}
 	}
+}
+
+// TestNextPow2Overflow verifies that NextPow2 panics for inputs whose
+// result would overflow int, rather than looping infinitely.
+func TestNextPow2Overflow(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("NextPow2(maxPow2+1) did not panic")
+		}
+	}()
+	NextPow2(maxPow2 + 1)
 }
 
 // --- RealFFT output length tests ---
@@ -287,6 +300,17 @@ func TestRealFFTParseval(t *testing.T) {
 			}
 			return s
 		}()},
+		// Non-power-of-2 lengths exercise the zero-padding path.
+		{"padded_5", func() []float32 {
+			return []float32{1, -0.5, 0.3, -0.1, 0.7} // 5 → padded to 8
+		}()},
+		{"padded_1920", func() []float32 {
+			s := make([]float32, SamplesPerSymbol) // 1920 → padded to 2048
+			for i := range s {
+				s[i] = float32(math.Sin(2 * math.Pi * 800 * float64(i) / float64(SampleRate)))
+			}
+			return s
+		}()},
 	}
 
 	for _, tc := range tests {
@@ -346,7 +370,10 @@ func TestRealFFTZeroPadding(t *testing.T) {
 	mag64 := cmplx.Abs(complex128(bins64[k]))
 	mag128 := cmplx.Abs(complex128(bins128[2*k]))
 
-	if !approxEq64(mag64, mag128, 0.5) {
+	// Both magnitudes should be ~32 (N/2 = 64/2). Use a relative
+	// tolerance of 0.1% of the expected value.
+	relTol := mag64 * 0.001
+	if !approxEq64(mag64, mag128, relTol) {
 		t.Errorf("magnitude mismatch after zero-padding: 64-pt bin[%d]=%g, 128-pt bin[%d]=%g",
 			k, mag64, 2*k, mag128)
 	}
