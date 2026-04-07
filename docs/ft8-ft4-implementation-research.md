@@ -6,8 +6,8 @@ This document captures research into implementing FT8 and FT4 digital modes nati
 without relying on WSJT-X. It also identifies components that have immediate value to the
 project independent of a full FT8/FT4 implementation (notably audio I/O for contest CQ playback).
 
-**Status:** Items 1–5 (audio I/O, WAV, timing, message packing, LDPC codec) are
-complete. The next milestone is DSP pipeline (item 6).
+**Status:** Items 1–6 (audio I/O, WAV, timing, message packing, LDPC codec,
+DSP pipeline) are complete. The next milestone is TX synthesis + PlaySamples.
 
 ---
 
@@ -170,8 +170,8 @@ RRR/RR73 handling, optional simultaneous multi-QSO support.
 | ~~WAV file playback for contest CQ~~ | ~~Low~~ | ✅ Complete (reader; writer not needed for pipeline) |
 | ~~Precise timing~~ | ~~Low~~ | ✅ Complete |
 | `Playback.PlaySamples` for TX | Low | 2–3 days |
-| FFT + spectrum analysis | Medium | 1–2 weeks |
-| Soft demodulation (LLRs) | High | 2–4 weeks |
+| ~~FFT + spectrum analysis~~ | ~~Medium~~ | ✅ Complete |
+| ~~Soft demodulation (LLRs)~~ | ~~High~~ | ✅ Complete |
 | ~~LDPC decoder~~ | ~~Very High~~ | ✅ Complete |
 | ~~Message pack/unpack + CRC-14~~ | ~~Medium~~ | ✅ Complete |
 | ~~LDPC encoder (TX)~~ | ~~Medium~~ | ✅ Complete |
@@ -204,9 +204,11 @@ RRR/RR73 handling, optional simultaneous multi-QSO support.
 5. **`internal/ft8/codec/`** — LDPC encoder first (TX path), then decoder (RX path) ✅
    - Port from `ft8_lib` C source as reference
 
-6. **`internal/ft8/dsp/`** — FFT pipeline, soft demodulation ← **next**
+6. **`internal/ft8/dsp/`** — FFT pipeline, soft demodulation ✅
 
-7. **`internal/ft8/service/`** — Top-level `ft8.Service` with `Initialize()/Start()/Stop()`
+7. **`internal/ft8/synth/`** + **`Playback.PlaySamples`** — TX audio synthesis ← **next**
+
+8. **`internal/ft8/service/`** — Top-level `ft8.Service` with `Initialize()/Start()/Stop()`
    following the existing project service pattern
 
 ---

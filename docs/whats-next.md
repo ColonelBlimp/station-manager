@@ -382,15 +382,211 @@ are implemented and tested:
   for regression. Consider recording a real FT8 `.wav` file and including it
   (or generating a synthetic one programmatically).
 
-## After This Milestone
+## Next Milestone: TX Synthesis + PlaySamples
 
-With the DSP layer complete, the remaining items are:
+With the DSP layer complete, the next milestone delivers the **complete FT8 TX
+audio path** — from channel symbols to speaker output. It comprises two tightly
+coupled items:
 
-- **TX synthesis** (`internal/ft8/synth/` or similar): `BitsToSymbols →
-  InsertSync → GFSK tone synthesis → audio samples`. This is item 7 in the
-  research doc and is relatively straightforward once symbol mapping exists.
-- **`Playback.PlaySamples`**: needed to route synthesised TX audio to the
-  soundcard (gap noted in the research doc).
-- **`internal/ft8/service/`** (item 7 in research doc): top-level service
-  with `Initialize()/Start()/Stop()` wiring audio capture, DSP processing,
-  and the QSO state machine together.
+1. **`internal/ft8/synth/`** — GFSK tone synthesis (Gaussian-filtered FSK)
+2. **`Playback.PlaySamples`** — play in-memory `[]float32` via `internal/audio/`
+
+The `internal/ft8/service/` integration layer is **deferred** to a subsequent
+milestone — it depends on both TX and RX paths plus the QSO state machine and
+is a larger orchestration concern.
+
+### TX Pipeline (what's already done vs. what remains)
+
+```
+77-bit message
+  → CRC-14 → 91 bits                          ✅ codec.EncodeMessage
+  → LDPC encode → 174 bits                     ✅ codec.Encode
+  → Map 3-bit groups → 8-tone symbols          ✅ dsp.BitsToSymbols
+  → Insert 3 Costas sync arrays → 79 symbols   ✅ dsp.InsertSync
+  → GFSK smoothing (Gaussian filter)            ← NEW: synth/gfsk.go
+  → Synthesise audio samples                    ← NEW: synth/synth.go
+  → Play at precise T+1s start time             ← NEW: audio.PlaySamples
+```
+
+### Key Constants (FT8 GFSK)
+
+```
+Gaussian BT product:  2.0 (bandwidth × symbol period)
+Kernel truncation:    ±2 symbols (5-symbol span, 9600 taps at 1920 samples/sym)
+Output length:        79 × 1920 = 151 680 samples (12.64 s at 12 kHz)
+Audio frequency:      configurable, typically 1000–2000 Hz AF
+Amplitude:            normalised to ≤ 0.95 (avoids clipping)
+Phase precision:      float64 accumulation (max phase ≈ 238k radians, well within
+                      float64's ~15 significant digits)
+```
+
+### What Needs to Be Built
+
+#### 1. Gaussian filter — `gfsk.go`
+
+Compute the Gaussian impulse response kernel used to smooth the step-wise
+symbol-to-frequency mapping, producing continuous-phase GFSK.
+
+```go
+// GaussianFilter returns a normalised Gaussian impulse response kernel for
+// GFSK smoothing. bt is the bandwidth-time product (2.0 for FT8), span is
+// the truncation width in symbol periods (typically 5 = ±2 symbols), and
+// symbolSamples is the number of audio samples per symbol period (1920).
+//
+// Returns a kernel of length span × symbolSamples, normalised to sum to 1.0.
+func GaussianFilter(bt float64, span, symbolSamples int) []float64
+```
+
+- Standard Gaussian pulse shape: `h(t) = √(2π/ln2) · BT · exp(-2(π·BT·t)²/ln2)`.
+- Sampled at `1/symbolSamples` intervals over `[-span/2, +span/2)` symbol
+  periods, then normalised so the sum equals 1.0.
+- The kernel is symmetric about its centre.
+
+**Tests:**
+- Kernel sums to 1.0 (normalisation).
+- Kernel is symmetric.
+- Peak is at the centre index.
+- Length equals `span × symbolSamples`.
+- BT=2.0 / span=5 / 1920 samples: verify shape against a known reference value
+  at the midpoint.
+
+#### 2. Smoothed frequency trajectory — `gfsk.go`
+
+```go
+// SmoothedFrequency convolves the step-wise symbol-to-frequency mapping with
+// the Gaussian kernel to produce a smooth per-sample frequency trajectory.
+//
+// symbols is the 79-symbol channel sequence (from dsp.InsertSync).
+// baseFreqHz is the audio offset frequency for tone 0.
+// kernel is the Gaussian filter from GaussianFilter.
+//
+// Returns a frequency trajectory of length NumSymbols × symbolSamples.
+func SmoothedFrequency(symbols [dsp.NumSymbols]uint8, baseFreqHz float64,
+    kernel []float64, symbolSamples int) []float64
+```
+
+- Raw frequency at sample n: `baseFreqHz + float64(symbols[n/symbolSamples]) × ToneSpacing`.
+- Convolve with the Gaussian kernel. Use a direct linear convolution (the
+  kernel is ~9600 taps, but only needs to be applied once per TX).
+- Output length: exactly `79 × 1920 = 151 680` samples.
+
+**Tests:**
+- Constant-symbol input → mid-symbol frequency equals `baseFreq + tone × ToneSpacing`.
+- Maximum adjacent-sample frequency delta is bounded (no discontinuities).
+- Output length matches expectation.
+
+#### 3. Audio synthesis — `synth.go`
+
+```go
+// Synthesize generates FT8 audio samples from the 79-symbol channel sequence.
+//
+// symbols is the full channel sequence from dsp.InsertSync (sync + data).
+// baseFreqHz is the audio offset frequency for tone 0 (typically 1000–2000 Hz).
+//
+// Returns 151 680 float32 samples at 12 kHz, amplitude-normalised to ≈0.95.
+func Synthesize(symbols [dsp.NumSymbols]uint8, baseFreqHz float64) []float32
+
+// SynthesizeWithAmplitude is like Synthesize but with configurable peak amplitude.
+func SynthesizeWithAmplitude(symbols [dsp.NumSymbols]uint8,
+    baseFreqHz, amplitude float64) []float32
+```
+
+- Build Gaussian kernel (BT=2.0, span=5, 1920 samples/symbol).
+- Compute smoothed frequency trajectory.
+- Phase-integrate: `φ[n+1] = φ[n] + 2π × freq[n] / SampleRate`, with
+  `φ = math.Mod(φ, 2π)` every symbol period for insurance.
+- Output: `sample[n] = float32(amplitude × math.Sin(φ[n]))`.
+- Uses `float64` internally for phase accumulation; downcast to `float32` output.
+
+**Tests:**
+- Output length = 151 680.
+- All samples within `[-amplitude, +amplitude]`.
+- Constant-symbol input → FFT peak at the expected frequency bin.
+- Phase starts near 0 (first sample ≈ 0, since sin(0) = 0).
+- **Full TX→RX round-trip**: `codec.EncodeMessage → dsp.BitsToSymbols →
+  dsp.InsertSync → synth.Synthesize → dsp.ProcessWindow → verify decoded
+  message matches input`. This is the capstone test validating that GFSK
+  synthesis produces audio that the RX pipeline can decode.
+
+#### 4. PlaySamples — `playback.go`
+
+```go
+// PlaySamples plays in-memory float32 audio samples to the playback device,
+// blocking until all samples have been played, the context is cancelled, or
+// Stop()/Close() is called.
+//
+// sampleRate is the playback sample rate (e.g., 12000 for FT8).
+// channels is the number of audio channels (1 for mono FT8 audio).
+//
+// Returns ErrPlaybackEmptySamples if samples is nil or empty.
+// Other error semantics match PlayFile.
+func (p *Playback) PlaySamples(ctx context.Context, samples []float32,
+    sampleRate uint32, channels uint32) error
+```
+
+- Follows the same `playing` CAS, `cancelPlay`, `wg`, and `closed` guards as
+  `PlayFile` — extract the shared setup into a helper if the duplication is
+  excessive.
+- `onSendFrames` callback copies from the `samples` slice using a position
+  cursor (identical pattern to `PlayFile`).
+- 500 ms drain wait after final sample, same as `PlayFile`.
+- New sentinel: `ErrPlaybackEmptySamples`.
+- Update `internal/audio/README.md` with API reference and usage example.
+
+**Tests (unit — no hardware):**
+- nil/empty samples → `ErrPlaybackEmptySamples`.
+- Not initialised → `ErrPlaybackNotInitialized`.
+- Already playing → `ErrPlaybackAlreadyPlaying`.
+- Closed → `ErrPlaybackClosed`.
+
+**Tests (integration — real hardware, `//go:build integration`):**
+- Synthesise a 1-second 440 Hz sine wave as `[]float32`, play via
+  `PlaySamples`, assert it blocks for >200 ms.
+
+### Suggested Implementation Order
+
+```
+gfsk.go → synth.go → synth_test.go → PlaySamples (playback.go) → playback_test.go → docs
+```
+
+`gfsk.go` is standalone; `synth.go` depends on it; tests validate both;
+`PlaySamples` is independent of synth but completes the TX audio path.
+
+### Dependencies on Existing Code
+
+| Dependency | Used by | How |
+|---|---|---|
+| `dsp.NumSymbols`, `dsp.SamplesPerSymbol`, `dsp.ToneSpacing`, `dsp.SampleRate` | `synth` | Protocol constants (import) |
+| `dsp.BitsToSymbols`, `dsp.InsertSync` | `synth_test.go` | Build channel symbols for round-trip tests |
+| `dsp.ProcessWindow` | `synth_test.go` | RX-side verification of synthesised TX audio |
+| `codec.EncodeMessage` | `synth_test.go` | Encode test messages for round-trip |
+| `Playback` struct, `malgo` | `PlaySamples` | Reuse existing device init, CAS, cancel, wg patterns |
+| `errors.Op`, `errors.New` | Both packages | Structured error wrapping |
+
+### Design Notes
+
+- **Gaussian kernel truncation span:** hardcode 5 (±2 symbols) per WSJT-X
+  convention. Add a `// TODO: FT4` comment — FT4 may need a different BT
+  product or span.
+
+- **Phase wrap:** include `φ = math.Mod(φ, 2π)` every symbol period as cheap
+  insurance, even though `float64` precision is sufficient for 151k samples.
+
+- **`PlaySamples` channel count:** accept a `channels` parameter for generality
+  beyond FT8 (e.g., stereo contest CQ playback). FT8 TX will always pass 1.
+
+- **No new external dependencies.** The synth package is pure Go math. The
+  `PlaySamples` addition reuses the existing `malgo` binding.
+
+### After This Milestone
+
+With TX synthesis and PlaySamples complete, the remaining items are:
+
+- **`internal/ft8/service/`** — top-level service with `Initialize()/Start()/
+  Stop()` wiring audio capture → `dsp.ProcessWindow` (RX), and `timing.WaitForNext`
+  → `synth.Synthesize` → `audio.PlaySamples` (TX), plus PTT control via
+  `internal/ptt/`.
+- **QSO state machine** — slot selection (even/odd), timeout handling, duplicate
+  suppression, RRR/RR73 handling.
+- **Testing against real FT8 recordings** — validate decode rate on actual
+  on-air signals.

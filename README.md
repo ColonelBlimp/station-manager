@@ -28,6 +28,22 @@ rigs).
 
 ## FT8/FT4
 
-The code base contains a partial Go implementation of the FT8 codec layer (a Go implementation of FT8 message packing,
-LDPC forward error correction, audio I/O, and window timing). The goal is to eventually have a complete native Go FT8
-implementation.
+The code base contains a native Go implementation of the FT8 protocol stack,
+working towards a complete FT8 digital mode without external dependencies
+(no WSJT-X required).
+
+| Component | Package | Status |
+|---|---|---|
+| Audio I/O (capture + playback) | `internal/audio/` | ✅ Complete |
+| WAV file reader | `internal/audio/wav.go` | ✅ Complete |
+| Window timing (TX/RX boundaries) | `internal/ft8/timing/` | ✅ Complete |
+| Message pack/unpack + CRC-14 | `internal/ft8/message/` | ✅ Complete |
+| LDPC codec (encoder + decoder) | `internal/ft8/codec/` | ✅ Complete |
+| DSP pipeline (FFT, spectrogram, candidate detection, soft demodulation) | `internal/ft8/dsp/` | ✅ Complete |
+| TX synthesis (GFSK) + PlaySamples | `internal/ft8/synth/`, `internal/audio/` | 🔧 Next |
+| FT8 service (orchestration + QSO state machine) | `internal/ft8/service/` | Planned |
+
+The full **RX decode chain** is functional end-to-end: audio samples →
+spectrogram → candidate detection → soft demodulation → LDPC decode → CRC
+verify → decoded messages. The **TX encode chain** is complete at the bit level
+(message → LDPC encode → symbol mapping); GFSK audio synthesis is next.
