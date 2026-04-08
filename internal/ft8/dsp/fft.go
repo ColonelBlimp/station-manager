@@ -6,12 +6,17 @@
 // frequency resolution but do not affect the 6.25 Hz tone spacing needed
 // for symbol discrimination.
 //
-// Twiddle factors are precomputed per butterfly stage (not accumulated
-// iteratively) to avoid numerical drift. The implementation uses complex128
-// internally for twiddle-factor precision, converting to complex64 on
-// output to match the float32 audio pipeline.
+// Twiddle factors are precomputed per butterfly stage once per FFT size and
+// cached for reuse. Since the hot path (SpectrogramFT8) always uses 2048-
+// point transforms, this eliminates ~2000 allocations per 15-second window.
+// The cache is protected by a sync.Mutex; contention is negligible because
+// the pipeline is single-threaded per window and the lock is only acquired
+// once per FFT call (not per stage).
 //
-// Performance note: at 2048 points × ~93 FFTs per 15-second window, a
+// The implementation uses complex128 internally for twiddle-factor precision,
+// converting to complex64 on output to match the float32 audio pipeline.
+//
+// Performance note: at 2048 points × ~188 FFTs per 15-second window, a
 // pure-Go FFT is more than adequate. If profiling reveals a bottleneck,
 // the implementation can be swapped for a mixed-radix or CGo FFTW wrapper
 // behind the same [RealFFT] interface.
@@ -24,6 +29,7 @@ package dsp
 import (
 	"math"
 	"math/bits"
+	"sync"
 )
 
 // maxPow2 is the largest power of 2 representable as a positive int.
@@ -79,6 +85,52 @@ func RealFFT(samples []float32) []complex64 {
 	return out
 }
 
+// --- Twiddle factor cache ---
+
+// twiddleTable holds precomputed twiddle factors for all butterfly stages of
+// a specific FFT size N. Stage s (0-indexed) corresponds to butterfly size
+// 2^(s+1) and contains 2^s twiddle factors.
+//
+// Each factor is computed directly from sin/cos (not accumulated iteratively)
+// to avoid numerical drift.
+type twiddleTable struct {
+	stages [][]complex128
+}
+
+var (
+	twiddleMu    sync.Mutex
+	twiddleCache = make(map[int]*twiddleTable)
+)
+
+// getTwiddles returns cached twiddle factors for an FFT of length n (must be
+// a power of 2). On the first call for a given n, the factors are computed
+// and cached; subsequent calls return the cached table.
+func getTwiddles(n int) *twiddleTable {
+	twiddleMu.Lock()
+	defer twiddleMu.Unlock()
+
+	if t, ok := twiddleCache[n]; ok {
+		return t
+	}
+
+	t := &twiddleTable{}
+	for size := 2; size <= n; size <<= 1 {
+		half := size / 2
+		step := -2 * math.Pi / float64(size)
+		tw := make([]complex128, half)
+		for j := range half {
+			angle := step * float64(j)
+			tw[j] = complex(math.Cos(angle), math.Sin(angle))
+		}
+		t.stages = append(t.stages, tw)
+	}
+
+	twiddleCache[n] = t
+	return t
+}
+
+// --- FFT implementation ---
+
 // fftDIT performs an in-place radix-2 decimation-in-time FFT.
 // len(x) must be a power of 2.
 func fftDIT(x []complex128) {
@@ -91,18 +143,12 @@ func fftDIT(x []complex128) {
 	bitReverse(x)
 
 	// Step 2: Butterfly stages, from 2-point DFTs up to n-point.
-	for size := 2; size <= n; size <<= 1 {
+	// Twiddle factors are retrieved from the cache (precomputed once per
+	// FFT size, reused on every subsequent call).
+	tw := getTwiddles(n)
+	for s, size := 0, 2; size <= n; s, size = s+1, size<<1 {
 		half := size / 2
-
-		// Precompute twiddle factors for this stage. Computing each
-		// factor directly from sin/cos avoids the accumulated error of
-		// iterative w *= wn multiplication.
-		step := -2 * math.Pi / float64(size)
-		twiddles := make([]complex128, half)
-		for j := range half {
-			angle := step * float64(j)
-			twiddles[j] = complex(math.Cos(angle), math.Sin(angle))
-		}
+		twiddles := tw.stages[s]
 
 		// Apply butterfly operations across all groups at this stage.
 		for k := 0; k < n; k += size {
