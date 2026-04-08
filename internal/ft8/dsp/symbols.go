@@ -8,14 +8,15 @@
 // path (codec.Encode → BitsToSymbols → InsertSync → GFSK modulation) and
 // the RX demodulation path (ExtractData → SymbolsToBits → codec.Decode).
 //
-// Gray coding: FT8 applies a 3-bit Gray code to each symbol so that
-// adjacent tones differ by only one bit, reducing the bit-error rate for
-// small frequency estimation errors. The mapping is:
+// Gray coding: FT8 maps each 3-bit data value to a tone index using the
+// mapping defined in WSJT-X (genft8.f90, ft8b.f90) and ft8_lib. This is
+// NOT the standard binary-reflected Gray code (n XOR n>>1); the FT8
+// mapping differs for values 4–7. The mapping is:
 //
 //	binary  0 1 2 3 4 5 6 7
-//	Gray    0 1 3 2 6 7 5 4
+//	tone    0 1 3 2 5 6 4 7
 //
-// Reference: WSJT-X genft8.f90, ft8_lib encode.c.
+// Reference: WSJT-X genft8.f90 graymap, ft8_lib kFT8_Gray_map.
 
 package dsp
 
@@ -87,13 +88,11 @@ const (
 
 // grayEncode maps a 3-bit data value (0–7) to the FT8 tone index.
 //
-// FT8 uses a Gray code where adjacent TONES (not adjacent data values)
-// differ by exactly 1 bit in the decoded binary value. This ensures that
-// if the demodulator selects an adjacent tone by mistake, only 1 bit error
-// results — minimising the bit-error rate for small frequency estimation
-// errors.
+// This is the mapping defined in WSJT-X genft8.f90 and ft8_lib
+// kFT8_Gray_map. It is NOT the standard binary-reflected Gray code
+// (n XOR n>>1); the two differ for values 4–7.
 //
-// Reference: WSJT-X genft8.f90 igray(), ft8_lib kFT8_Gray_map.
+// Reference: WSJT-X genft8.f90 graymap, ft8_lib kFT8_Gray_map.
 //
 //	data  0 1 2 3 4 5 6 7
 //	tone  0 1 3 2 5 6 4 7

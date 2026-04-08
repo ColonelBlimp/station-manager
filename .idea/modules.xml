@@ -2,9 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/../ft8_lib/.idea/ft8_lib.iml" filepath="$PROJECT_DIR$/../ft8_lib/.idea/ft8_lib.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/station-manager.iml" filepath="$PROJECT_DIR$/.idea/station-manager.iml" />
-      <module fileurl="file://$PROJECT_DIR$/../wsjt-wsjtx/.idea/wsjt-wsjtx.iml" filepath="$PROJECT_DIR$/../wsjt-wsjtx/.idea/wsjt-wsjtx.iml" />
     </modules>
   </component>
 </project>

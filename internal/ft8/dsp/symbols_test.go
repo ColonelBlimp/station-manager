@@ -9,14 +9,18 @@ import (
 
 // --- Gray code tests ---
 
-// TestGrayEncodeFormula verifies that the grayEncode lookup table matches
-// the formula Gray(n) = n ^ (n >> 1) for all 3-bit values.
-func TestGrayEncodeFormula(t *testing.T) {
+// TestGrayEncodeMatchesWSJTX verifies that the grayEncode lookup table
+// matches the authoritative FT8 mapping from WSJT-X (genft8.f90, ft8b.f90)
+// and ft8_lib (kFT8_Gray_map).
+//
+// Note: FT8 does NOT use the standard binary-reflected Gray code (n ^ n>>1).
+// The mapping differs for values 4–7. This is by design in the FT8 protocol.
+func TestGrayEncodeMatchesWSJTX(t *testing.T) {
+	// Reference: WSJT-X genft8.f90: data graymap/0,1,3,2,5,6,4,7/
+	wsjt := [NumTones]uint8{0, 1, 3, 2, 5, 6, 4, 7}
 	for n := range uint8(NumTones) {
-		want := n ^ (n >> 1)
-		got := grayEncode[n]
-		if got != want {
-			t.Errorf("grayEncode[%d] = %d, want %d (n ^ n>>1)", n, got, want)
+		if grayEncode[n] != wsjt[n] {
+			t.Errorf("grayEncode[%d] = %d, want %d (WSJT-X graymap)", n, grayEncode[n], wsjt[n])
 		}
 	}
 }
