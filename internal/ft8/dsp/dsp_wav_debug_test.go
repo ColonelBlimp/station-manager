@@ -241,8 +241,8 @@ func dbgGoertzelDemod(samples []float32, hann []float32, cand Candidate) [CodedB
 		}
 		for b := range BitsPerSymbol {
 			g0, g1 := bit0Tones[b], bit1Tones[b]
-			llr[idx] = float32(logSumExp4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]]) -
-				logSumExp4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]]))
+			llr[idx] = float32(max4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]]) -
+				max4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]]))
 			idx++
 		}
 	}

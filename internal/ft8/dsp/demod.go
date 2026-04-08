@@ -12,8 +12,10 @@
 //   - Negative LLR → bit more likely 1
 //   - Magnitude → confidence
 //
-// The demodulation uses the log-sum-exp trick for numerical stability when
-// computing the LLR from log-domain tone powers.
+// The LLR for each bit is computed as max(log-powers of bit=0 tones) −
+// max(log-powers of bit=1 tones), matching ft8_lib's max-log approximation.
+// After extraction, the 174 LLR values are normalised by variance to
+// ensure consistent scaling for the LDPC decoder.
 
 package dsp
 
@@ -26,16 +28,6 @@ import "math"
 // The value -30 corresponds to power ≈ 9.4×10⁻¹⁴, effectively zero in the
 // context of audio spectral power.
 const logFloor = -30.0
-
-// LLRClampMax is the maximum absolute value for log-likelihood ratios
-// produced by [DemodulateAudio]. Clamping LLR magnitudes prevents the
-// normalised min-sum LDPC decoder from receiving over-confident soft bits,
-// which can stall belief propagation on incorrect initial decisions.
-//
-// Typical values for min-sum decoders range from 4.0 to 6.0. The value 6.0
-// provides room for strong signals while still preventing decoder stalling.
-// This can be tuned empirically against real FT8 recordings.
-const LLRClampMax = 6.0
 
 // Precomputed tone groups for LLR computation. For each bit position
 // (0 = MSB, 2 = LSB), the tone indices whose Gray-decoded binary value
@@ -108,7 +100,7 @@ func Demodulate(spectrogram [][]float32, cand Candidate) [CodedBits]float32 {
 // For each of the 3 bit positions (MSB to LSB), the 8 tones are partitioned
 // by the Gray-decoded bit value. The LLR is:
 //
-//	LLR = logSumExp(s[k] for k where bit=0) − logSumExp(s[k] for k where bit=1)
+//	LLR = max(s[k] for k where bit=0) − max(s[k] for k where bit=1)
 //
 // where s[k] = log(power[k]).
 func demodSymbol(row []float32, baseBin int, llr []float32, idx *int) {
@@ -127,9 +119,9 @@ func demodSymbol(row []float32, baseBin int, llr []float32, idx *int) {
 	for b := range BitsPerSymbol {
 		g0 := bit0Tones[b]
 		g1 := bit1Tones[b]
-		lse0 := logSumExp4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]])
-		lse1 := logSumExp4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]])
-		llr[*idx] = float32(lse0 - lse1)
+		max0 := max4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]])
+		max1 := max4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]])
+		llr[*idx] = float32(max0 - max1)
 		*idx++
 	}
 }
@@ -192,6 +184,10 @@ func DemodulateAudio(samples []float32, hann []float32, cand Candidate) [CodedBi
 // than absolute power levels. This matches ft8_lib's per-symbol normalisation
 // and removes band-dependent amplitude variation that would otherwise bias
 // the LDPC decoder.
+//
+// LLR extraction uses the max-log approximation (matching ft8_lib):
+//
+//	LLR = max(s[bit=0 tones]) − max(s[bit=1 tones])
 func demodAudioSymbol(samples []float32, hann []float32, symStart int, baseFreq float64, llr []float32, idx *int) {
 	if symStart+SamplesPerSymbol > len(samples) {
 		*idx += BitsPerSymbol
@@ -224,22 +220,13 @@ func demodAudioSymbol(samples []float32, hann []float32, symStart int, baseFreq 
 		}
 	}
 
-	// Compute LLR for each of the 3 bits (MSB to LSB).
+	// Compute LLR for each of the 3 bits (MSB to LSB) using max-log.
 	for b := range BitsPerSymbol {
 		g0 := bit0Tones[b]
 		g1 := bit1Tones[b]
-		lse0 := logSumExp4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]])
-		lse1 := logSumExp4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]])
-		v := float32(lse0 - lse1)
-
-		// Clamp magnitude to prevent decoder stalling.
-		if v > LLRClampMax {
-			v = LLRClampMax
-		} else if v < -LLRClampMax {
-			v = -LLRClampMax
-		}
-
-		llr[*idx] = v
+		m0 := max4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]])
+		m1 := max4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]])
+		llr[*idx] = float32(m0 - m1)
 		*idx++
 	}
 }
@@ -257,11 +244,9 @@ func sortFloat64s(a *[NumTones]float64) {
 	}
 }
 
-// logSumExp4 computes log(exp(a) + exp(b) + exp(c) + exp(d)) using the
-// log-sum-exp trick to avoid numerical overflow/underflow.
-//
-//	result = max(a,b,c,d) + log(exp(a−max) + exp(b−max) + exp(c−max) + exp(d−max))
-func logSumExp4(a, b, c, d float64) float64 {
+// max4 returns the maximum of four float64 values.
+// This is the max-log approximation used by ft8_lib for LLR extraction.
+func max4(a, b, c, d float64) float64 {
 	m := a
 	if b > m {
 		m = b
@@ -272,6 +257,30 @@ func logSumExp4(a, b, c, d float64) float64 {
 	if d > m {
 		m = d
 	}
-	return m + math.Log(
-		math.Exp(a-m)+math.Exp(b-m)+math.Exp(c-m)+math.Exp(d-m))
+	return m
+}
+
+// NormalizeLLR scales the 174 LLR values so their variance equals 24.0,
+// matching ft8_lib's ftx_normalize_logl(). This ensures the LDPC decoder
+// receives consistently scaled soft-decision inputs regardless of signal
+// strength, which is critical for sum-product or min-sum BP convergence.
+//
+// The normalisation factor is sqrt(24 / variance). If the variance is zero
+// (e.g., all-zero LLR), no scaling is applied.
+func NormalizeLLR(llr *[CodedBits]float32) {
+	var sum, sum2 float64
+	for i := range CodedBits {
+		v := float64(llr[i])
+		sum += v
+		sum2 += v * v
+	}
+	invN := 1.0 / float64(CodedBits)
+	variance := (sum2 - sum*sum*invN) * invN
+	if variance <= 0 {
+		return
+	}
+	normFactor := float32(math.Sqrt(24.0 / variance))
+	for i := range CodedBits {
+		llr[i] *= normFactor
+	}
 }

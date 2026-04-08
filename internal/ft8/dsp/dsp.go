@@ -109,6 +109,11 @@ func ProcessWindow(samples []float32, maxCandidates, maxIter int) []DecodedMessa
 		// exact FT8 tone frequencies.
 		llr := DemodulateAudio(samples, hann, refined)
 
+		// Normalise LLR variance to 24.0, matching ft8_lib's
+		// ftx_normalize_logl. This ensures consistent scaling for
+		// the LDPC decoder regardless of signal strength.
+		NormalizeLLR(&llr)
+
 		// LDPC decode + CRC-14 verification.
 		msg77, ok := codec.DecodeMessage(llr, maxIter)
 		if !ok {

@@ -6,12 +6,6 @@ package message
 
 import "fmt"
 
-// crc14Poly is the FT8/FT4 CRC-14 generator polynomial (degree 14).
-// The implicit leading 1-bit is included, making it a 15-bit value.
-// Polynomial: x^14 + x^13 + x^10 + x^9 + x^8 + x^6 + x^4 + x^2 + x + 1
-// = 0x6757 (with leading 1) / 0x2757 (without).
-const crc14Poly = 0x6757
-
 // CRC14Bits is the number of CRC bits produced.
 const CRC14Bits = 14
 

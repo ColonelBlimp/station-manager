@@ -4,48 +4,38 @@ package dsp
 
 import (
 	"encoding/hex"
-	"math"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/ft8/codec"
 )
 
-// --- logSumExp4 tests ---
+// --- max4 tests ---
 
-func TestLogSumExp4EqualValues(t *testing.T) {
-	// logSumExp4(x, x, x, x) = x + log(4).
-	x := 5.0
-	want := x + math.Log(4)
-	got := logSumExp4(x, x, x, x)
-	if !approxEq64(got, want, 1e-10) {
-		t.Errorf("logSumExp4(%g,%g,%g,%g) = %g, want %g", x, x, x, x, got, want)
+func TestMax4EqualValues(t *testing.T) {
+	got := max4(5.0, 5.0, 5.0, 5.0)
+	if got != 5.0 {
+		t.Errorf("max4(5,5,5,5) = %g, want 5", got)
 	}
 }
 
-func TestLogSumExp4OneDominant(t *testing.T) {
-	// When one value dominates, logSumExp4 ≈ that value.
-	got := logSumExp4(100, -30, -30, -30)
-	if !approxEq64(got, 100, 1e-10) {
-		t.Errorf("logSumExp4(100,-30,-30,-30) = %g, want ~100", got)
+func TestMax4OneDominant(t *testing.T) {
+	got := max4(100, -30, -30, -30)
+	if got != 100 {
+		t.Errorf("max4(100,-30,-30,-30) = %g, want 100", got)
 	}
 }
 
-func TestLogSumExp4KnownValue(t *testing.T) {
-	// logSumExp4(0, 0, 0, 0) = log(4) ≈ 1.3863.
-	want := math.Log(4)
-	got := logSumExp4(0, 0, 0, 0)
-	if !approxEq64(got, want, 1e-10) {
-		t.Errorf("logSumExp4(0,0,0,0) = %g, want %g", got, want)
+func TestMax4KnownValue(t *testing.T) {
+	got := max4(-10, -5, -20, -1)
+	if got != -1.0 {
+		t.Errorf("max4(-10,-5,-20,-1) = %g, want -1", got)
 	}
 }
 
-func TestLogSumExp4NegativeValues(t *testing.T) {
-	// Should work correctly with all-negative values.
-	a, b, c, d := -10.0, -20.0, -15.0, -12.0
-	want := math.Log(math.Exp(a) + math.Exp(b) + math.Exp(c) + math.Exp(d))
-	got := logSumExp4(a, b, c, d)
-	if !approxEq64(got, want, 1e-8) {
-		t.Errorf("logSumExp4(%g,%g,%g,%g) = %g, want %g", a, b, c, d, got, want)
+func TestMax4NegativeValues(t *testing.T) {
+	got := max4(-10.0, -20.0, -15.0, -12.0)
+	if got != -10.0 {
+		t.Errorf("max4(-10,-20,-15,-12) = %g, want -10", got)
 	}
 }
 

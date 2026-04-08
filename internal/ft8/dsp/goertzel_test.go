@@ -283,10 +283,10 @@ func TestDemodulateAudioLLRClamped(t *testing.T) {
 	cand := Candidate{Freq: baseFreqHz, TimeOff: 0}
 	llr := DemodulateAudio(samples, hann, cand)
 
+	// Verify all LLR values are finite.
 	for i, v := range llr {
-		if v > LLRClampMax || v < -LLRClampMax {
-			t.Errorf("llr[%d] = %g, exceeds clamp bounds [%g, %g]",
-				i, v, -LLRClampMax, LLRClampMax)
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			t.Errorf("llr[%d] = %g, expected finite value", i, v)
 		}
 	}
 }
