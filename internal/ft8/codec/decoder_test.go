@@ -272,3 +272,43 @@ func TestDecodeRespectsMaxIter(t *testing.T) {
 		t.Error("Decode returned ok=true with maxIter=0")
 	}
 }
+
+// --- Benchmarks ---
+
+// BenchmarkDecode measures LDPC decoding with perfect LLRs (converges in 1
+// iteration — best-case throughput).
+func BenchmarkDecode(b *testing.B) {
+	info := [KBytes]byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0x00, 0x00}
+	cw := encodeUnpacked(info)
+	llr := bitsToLLR(cw, 6.0)
+	b.ResetTimer()
+	for range b.N {
+		Decode(llr, 50)
+	}
+}
+
+// BenchmarkDecodeNoisy measures LDPC decoding with noisy LLRs (multiple
+// iterations required — realistic throughput).
+func BenchmarkDecodeNoisy(b *testing.B) {
+	info := [KBytes]byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0x00, 0x00}
+	cw := encodeUnpacked(info)
+	llr := bitsToLLR(cw, 2.0)
+	rng := rand.New(rand.NewSource(42))
+	addGaussianNoise(&llr, 1.0, rng)
+	b.ResetTimer()
+	for range b.N {
+		Decode(llr, 50)
+	}
+}
+
+// BenchmarkDecodeMessage measures the full DecodeMessage path (LDPC + CRC-14).
+func BenchmarkDecodeMessage(b *testing.B) {
+	msg77 := [10]byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xB8}
+	cw := EncodeMessage(msg77)
+	unpacked := unpackCodeword(cw)
+	llr := bitsToLLR(unpacked, 6.0)
+	b.ResetTimer()
+	for range b.N {
+		DecodeMessage(llr, 50)
+	}
+}
