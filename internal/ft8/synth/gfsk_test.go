@@ -367,14 +367,13 @@ func TestSmoothedFrequencyCrossValidation(t *testing.T) {
 	}
 
 	baseFreq := 1000.0
-	nsps := dsp.SamplesPerSymbol
 
 	// Our approach.
-	k := GaussianFilter(GaussianBT, KernelSpan, nsps)
-	ours := SmoothedFrequency(symbols, baseFreq, k, nsps)
+	k := GaussianFilter(GaussianBT, KernelSpan, dsp.SamplesPerSymbol)
+	ours := SmoothedFrequency(symbols, baseFreq, k, dsp.SamplesPerSymbol)
 
 	// Reference: erf-difference overlap-add (ft8_lib algorithm).
-	ref := erfDifferenceFrequency(symbols, baseFreq, nsps)
+	ref := refFrequency(symbols, baseFreq)
 
 	if len(ours) != len(ref) {
 		t.Fatalf("length mismatch: ours=%d, ref=%d", len(ours), len(ref))
@@ -395,56 +394,4 @@ func TestSmoothedFrequencyCrossValidation(t *testing.T) {
 	if maxDiff > 0.01 {
 		t.Errorf("max difference between Gaussian conv and erf-diff = %.6f Hz, want < 0.01", maxDiff)
 	}
-}
-
-// erfDifferenceFrequency computes the smoothed frequency trajectory using
-// the erf-difference overlap-add approach from WSJT-X/ft8_lib, for cross-
-// validation purposes.
-func erfDifferenceFrequency(symbols [dsp.NumSymbols]uint8, baseFreqHz float64, nsps int) []float64 {
-	nsym := dsp.NumSymbols
-	nWave := nsym * nsps
-
-	// Compute the GFSK pulse (erf-difference), length 3*nsps.
-	c := math.Pi * math.Sqrt(2.0/math.Ln2) // GFSK_CONST_K
-	bt := GaussianBT
-	pulse := make([]float64, 3*nsps)
-	for i := range pulse {
-		tt := float64(i)/float64(nsps) - 1.5
-		arg1 := c * bt * (tt + 0.5)
-		arg2 := c * bt * (tt - 0.5)
-		pulse[i] = 0.5 * (math.Erf(arg1) - math.Erf(arg2))
-	}
-
-	// Build dphi array (phase increment per sample), length (nsym+2)*nsps.
-	dphiLen := (nsym + 2) * nsps
-	dphi := make([]float64, dphiLen)
-
-	// Initialise with base frequency phase increment.
-	baseDphi := 2 * math.Pi * baseFreqHz / dsp.SampleRate
-	for i := range dphi {
-		dphi[i] = baseDphi
-	}
-
-	// Overlap-add: for each symbol, add dphi_peak * tone * pulse.
-	dphiPeak := 2 * math.Pi * 1.0 / float64(nsps) // hmod=1.0
-	for j := range nsym {
-		ib := j * nsps
-		for k := range 3 * nsps {
-			dphi[ib+k] += dphiPeak * float64(symbols[j]) * pulse[k]
-		}
-	}
-
-	// Dummy symbols at start and end.
-	for k := range 2 * nsps {
-		dphi[k] += dphiPeak * float64(symbols[0]) * pulse[k+nsps]
-		dphi[nsym*nsps+k] += dphiPeak * float64(symbols[nsym-1]) * pulse[k]
-	}
-
-	// Convert dphi to instantaneous frequency: freq = dphi * SampleRate / (2π).
-	freq := make([]float64, nWave)
-	for i := range nWave {
-		freq[i] = dphi[i+nsps] * dsp.SampleRate / (2 * math.Pi)
-	}
-
-	return freq
 }

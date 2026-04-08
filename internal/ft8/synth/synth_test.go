@@ -316,7 +316,7 @@ func TestSynthesizeCrossValidationFt8Lib(t *testing.T) {
 
 	baseFreq := 1000.0
 	ours := Synthesize(chanSyms, baseFreq)
-	ref := referenceSynthGFSK(chanSyms, baseFreq, DefaultAmplitude)
+	ref := refSynthGFSK(chanSyms, baseFreq, DefaultAmplitude)
 
 	if len(ours) != len(ref) {
 		t.Fatalf("length mismatch: ours=%d, ref=%d", len(ours), len(ref))
@@ -345,66 +345,4 @@ func TestSynthesizeCrossValidationFt8Lib(t *testing.T) {
 	if maxDiff > 0.02 {
 		t.Errorf("max body sample difference = %f, want < 0.02", maxDiff)
 	}
-}
-
-// referenceSynthGFSK implements the ft8_lib synth_gfsk algorithm for
-// cross-validation. This is a direct port of gen_ft8.c's synth_gfsk.
-func referenceSynthGFSK(symbols [dsp.NumSymbols]uint8, baseFreqHz, amplitude float64) []float32 {
-	nsps := dsp.SamplesPerSymbol
-	nsym := dsp.NumSymbols
-	nWave := nsym * nsps
-
-	// Compute the GFSK pulse (erf-difference), length 3*nsps.
-	c := math.Pi * math.Sqrt(2.0/math.Ln2) // GFSK_CONST_K
-	bt := GaussianBT
-	pulse := make([]float64, 3*nsps)
-	for i := range pulse {
-		tt := float64(i)/float64(nsps) - 1.5
-		arg1 := c * bt * (tt + 0.5)
-		arg2 := c * bt * (tt - 0.5)
-		pulse[i] = 0.5 * (math.Erf(arg1) - math.Erf(arg2))
-	}
-
-	// Build dphi array (phase increment per sample), length (nsym+2)*nsps.
-	dphiLen := (nsym + 2) * nsps
-	dphi := make([]float64, dphiLen)
-
-	// Initialise with base frequency phase increment.
-	baseDphi := 2 * math.Pi * baseFreqHz / dsp.SampleRate
-	for i := range dphi {
-		dphi[i] = baseDphi
-	}
-
-	// Overlap-add: for each symbol, add dphi_peak * tone * pulse.
-	dphiPeak := 2 * math.Pi * 1.0 / float64(nsps) // hmod=1.0
-	for j := range nsym {
-		ib := j * nsps
-		for k := range 3 * nsps {
-			dphi[ib+k] += dphiPeak * float64(symbols[j]) * pulse[k]
-		}
-	}
-
-	// Dummy symbols at start and end.
-	for k := range 2 * nsps {
-		dphi[k] += dphiPeak * float64(symbols[0]) * pulse[k+nsps]
-		dphi[nsym*nsps+k] += dphiPeak * float64(symbols[nsym-1]) * pulse[k]
-	}
-
-	// Phase integration — skip first dummy symbol (start at nsps).
-	phi := 0.0
-	signal := make([]float32, nWave)
-	for k := range nWave {
-		signal[k] = float32(amplitude * math.Sin(phi))
-		phi = math.Mod(phi+dphi[k+nsps], 2*math.Pi)
-	}
-
-	// Envelope shaping.
-	nRamp := nsps / 8
-	for i := range nRamp {
-		env := (1 - math.Cos(2*math.Pi*float64(i)/float64(2*nRamp))) / 2
-		signal[i] *= float32(env)
-		signal[nWave-1-i] *= float32(env)
-	}
-
-	return signal
 }
