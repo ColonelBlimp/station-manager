@@ -24,12 +24,12 @@ const MsgBytes = (MsgBits + 7) / 8
 
 // CRC14 computes the 14-bit CRC over a packed 77-bit FT8/FT4 message.
 //
-// The algorithm matches the ft8_lib reference implementation (ftx_compute_crc):
-//  1. The 77 message bits are processed MSB-first.
-//  2. Five zero bits are appended (3 padding + 2 flush) to push the
-//     remainder through the shift register, for a total of 82 input bits.
-//  3. The generator polynomial is 0x2757 (degree 14, without leading 1).
-//  4. The XOR condition is: top bit of register != input bit.
+// The algorithm is a direct transliteration of ft8_lib's ftx_compute_crc:
+//   - At every 8-bit boundary, the next message byte is XORed into the top
+//     of the 14-bit shift register.
+//   - Each step shifts the register left by 1; if the outgoing MSB was set,
+//     the polynomial 0x2757 is XORed in.
+//   - 82 total bits are processed: 77 message + 5 zero-pad.
 //
 // The message is represented as a byte slice in big-endian bit order:
 // bit 0 (MSB of msg[0]) is the first transmitted bit. Only the first
@@ -49,21 +49,28 @@ func CRC14(msg []byte) uint16 {
 	var crc uint16
 
 	for i := range totalBits {
-		// Extract the next input bit (MSB-first from the byte slice).
-		// Bits 77–81 are implicitly zero (the 5 appended zero bits).
-		var bit uint16
-		if i < MsgBits {
+		// At every 8-bit boundary, XOR the next message byte into the
+		// top of the register (positions 13..6). Bytes beyond the message
+		// are treated as zero (the 5 zero-pad bits).
+		if i%8 == 0 {
 			byteIdx := i / 8
-			bitIdx := uint(7 - i%8)
-			bit = uint16((msg[byteIdx] >> bitIdx) & 1)
+			if byteIdx < len(msg) {
+				b := msg[byteIdx]
+				if byteIdx == MsgBytes-1 {
+					// Byte 9 contains bits 72–79, but only bits 72–76
+					// are message bits. Clear the 3 trailing bits (positions
+					// 2..0) so they cannot affect the CRC.
+					b &= 0xF8
+				}
+				crc ^= uint16(b) << 6 // CRC_WIDTH - 8 = 14 - 8 = 6
+			}
 		}
 
-		// XOR condition: top bit of register != input bit.
-		// This matches ft8_lib's (crc >> 13) != bit check.
-		if ((crc >> 13) & 1) != bit {
-			crc = ((crc << 1) | bit) ^ 0x2757
+		// Shift out the MSB; if it was set, XOR with the polynomial.
+		if crc&0x2000 != 0 {
+			crc = (crc << 1) ^ 0x2757
 		} else {
-			crc = (crc << 1) | bit
+			crc <<= 1
 		}
 	}
 

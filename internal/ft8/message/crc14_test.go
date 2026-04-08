@@ -86,29 +86,18 @@ func TestCRC14_Deterministic(t *testing.T) {
 	require.Equal(t, crc1, crc2, "CRC must be deterministic")
 }
 
-// TestCRC14_KnownVector verifies against a hand-computed CRC-14.
+// TestCRC14_KnownVector verifies against the ft8_lib reference implementation.
 //
 // Input: 77-bit message where only bit 76 (the last message bit) is set.
 // Bit 76 is in byte 9 at position 7 - (76 % 8) = 7 - 4 = 3, i.e., byte 9 = 0x08.
 //
-// The shift register processes 82 bits total (77 msg + 5 zero padding).
-// Bits 0–75 are zero, bit 76 is 1, bits 77–81 are zero.
-//
-// Walking the CRC computation manually:
-//
-//	Steps 0–75: sr stays 0 (no feedback, input is 0).
-//	Step 76: input bit = 1, feedback = (sr>>13)&1 = 0, sr = (0<<1)|1 = 0x0001.
-//	Step 77: input bit = 0, feedback = 0, sr = 0x0002.
-//	Step 78: input bit = 0, feedback = 0, sr = 0x0004.
-//	Step 79: input bit = 0, feedback = 0, sr = 0x0008.
-//	Step 80: input bit = 0, feedback = 0, sr = 0x0010.
-//	Step 81: input bit = 0, feedback = 0, sr = 0x0020.
-//	Result: sr & 0x3FFF = 0x0020.
+// Reference value 0x3874 was computed using ft8_lib's ftx_compute_crc()
+// with the same input and 82 processing bits (77 msg + 5 zero-pad).
 func TestCRC14_KnownVector_LastBitSet(t *testing.T) {
 	msg := make([]byte, 10)
 	msg[9] = 0x08 // bit 76 set
 	crc := CRC14(msg)
-	require.Equal(t, uint16(0x0020), crc)
+	require.Equal(t, uint16(0x3874), crc)
 }
 
 // TestCRC14_KnownVector_FirstBitSet verifies CRC with only bit 0 set.
@@ -117,14 +106,13 @@ func TestCRC14_KnownVector_LastBitSet(t *testing.T) {
 // 81 more steps with XOR feedback whenever the top bit is set.
 // This exercises the full polynomial feedback chain.
 //
-// Expected value 0x0DD2 was computed independently using the reference
-// polynomial 0x6757 over the 82-step (77 msg + 5 pad) shift register.
+// Reference value 0x2BF8 was computed using ft8_lib's ftx_compute_crc().
 func TestCRC14_KnownVector_FirstBitSet(t *testing.T) {
 	msg := make([]byte, 10)
 	msg[0] = 0x80 // bit 0 set
 
 	crc := CRC14(msg)
-	require.Equal(t, uint16(0x0DD2), crc)
+	require.Equal(t, uint16(0x2BF8), crc)
 }
 
 // --------------- Append91 ----------------------------------------------------
