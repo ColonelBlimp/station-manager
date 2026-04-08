@@ -263,13 +263,20 @@ func RefineCandidateAudio(samples []float32, hann []float32, cand Candidate) Can
 // syncScoreAudio computes the Costas sync correlation score using the
 // Goertzel algorithm on raw audio samples.
 //
-// For efficiency, this only computes power at the 21 known Costas sync
-// tone positions (not all 79 × 8 positions). The returned score is the
-// sum of sync-tone powers — sufficient for comparing candidates and
-// finding the best time/frequency alignment.
+// The score is computed the same way as [syncScoreSteps]:
+//
+//	meanSyncPower − meanTotalPower
+//
+// where meanSyncPower is the average Goertzel power at the 21 known Costas
+// sync tone positions, and meanTotalPower is the average across all 8 tones
+// at those same 21 symbol positions (168 Goertzel evaluations total).
+//
+// Subtracting the mean total power removes the noise/spectral-shape bias,
+// making the score comparable across frequencies and suitable for both
+// refinement and SNR estimation.
 func syncScoreAudio(samples []float32, hann []float32, startSample int, baseFreq float64) float64 {
-	// Sum power at the 21 sync positions.
 	var syncPower float64
+	var totalPower float64
 	for _, blockStart := range [3]int{Sync1Start, Sync2Start, Sync3Start} {
 		for j := range SyncLen {
 			symStart := startSample + (blockStart+j)*SamplesPerSymbol
@@ -277,10 +284,20 @@ func syncScoreAudio(samples []float32, hann []float32, startSample int, baseFreq
 				return math.Inf(-1)
 			}
 			frame := samples[symStart : symStart+SamplesPerSymbol]
-			toneFreq := baseFreq + float64(CostasSync[j])*ToneSpacing
-			syncPower += Goertzel(frame, hann, toneFreq)
+
+			// Compute power at all 8 tones for this sync symbol.
+			syncTone := int(CostasSync[j])
+			for tone := range NumTones {
+				toneFreq := baseFreq + float64(tone)*ToneSpacing
+				power := Goertzel(frame, hann, toneFreq)
+				totalPower += power
+				if tone == syncTone {
+					syncPower += power
+				}
+			}
 		}
 	}
 
-	return syncPower
+	// Score = mean sync power − mean total power (matches syncScoreSteps).
+	return syncPower/float64(NumSyncSyms) - totalPower/float64(NumSyncSyms*NumTones)
 }
