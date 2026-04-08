@@ -32,6 +32,20 @@ func BenchmarkGaussianFilter(b *testing.B) {
 	})
 }
 
+// --- Synthesize (full pipeline) ---
+
+func BenchmarkSynthesize(b *testing.B) {
+	// Realistic symbol sequence (from an encoded message).
+	var symbols [dsp.NumSymbols]uint8
+	for i := range symbols {
+		symbols[i] = uint8(i % dsp.NumTones)
+	}
+	b.ResetTimer()
+	for range b.N {
+		Synthesize(symbols, 1000.0)
+	}
+}
+
 // --- Smoothed frequency trajectory ---
 
 func BenchmarkSmoothedFrequency(b *testing.B) {

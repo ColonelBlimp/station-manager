@@ -403,8 +403,8 @@ is a larger orchestration concern.
   → LDPC encode → 174 bits                     ✅ codec.Encode
   → Map 3-bit groups → 8-tone symbols          ✅ dsp.BitsToSymbols
   → Insert 3 Costas sync arrays → 79 symbols   ✅ dsp.InsertSync
-  → GFSK smoothing (Gaussian filter)            ← NEW: synth/gfsk.go
-  → Synthesise audio samples                    ← NEW: synth/synth.go
+  → GFSK smoothing (Gaussian filter)            ✅ synth.SmoothedFrequency
+  → Synthesise audio samples                    ✅ synth.Synthesize
   → Play at precise T+1s start time             ← NEW: audio.PlaySamples
 ```
 
@@ -546,7 +546,7 @@ func (p *Playback) PlaySamples(ctx context.Context, samples []float32,
 ### Suggested Implementation Order
 
 ```
-gfsk.go ✅ → synth.go → synth_test.go → PlaySamples (playback.go) → playback_test.go → docs
+gfsk.go ✅ → synth.go ✅ → synth_test.go ✅ → PlaySamples (playback.go) → playback_test.go → docs
 ```
 
 `gfsk.go` is **complete** — Gaussian filter and smoothed frequency trajectory:
@@ -567,7 +567,23 @@ gfsk.go ✅ → synth.go → synth_test.go → PlaySamples (playback.go) → pla
   **cross-validation against the erf-difference overlap-add** (WSJT-X/ft8_lib
   algorithm) — max difference < 0.01 Hz.
 
-`synth.go` depends on it; tests validate both;
+`synth.go` is **complete** — GFSK audio waveform synthesis:
+- `Synthesize(symbols, baseFreqHz) []float32` — convenience wrapper with
+  DefaultAmplitude (0.95). Returns 151 680 float32 samples at 12 kHz.
+- `SynthesizeWithAmplitude(symbols, baseFreqHz, amplitude) []float32` — full
+  pipeline: GaussianFilter → SmoothedFrequency → phase integration (float64
+  precision, modulo 2π wrap every symbol period) → sin(φ) output → raised-
+  cosine envelope shaping on first/last 240 samples (matching WSJT-X
+  gen_ft8wave.f90 and ft8_lib gen_ft8.c).
+- `OutputSamples = 151 680`, `DefaultAmplitude = 0.95`, `rampSamples = 240`.
+- Full test coverage: nil/invalid amplitude, amplitude clamping, output length,
+  amplitude bounds, phase starts at zero, envelope shaping (edge=0, body≈full),
+  constant-tone FFT frequency verification, amplitude scaling correctness,
+  **cross-validation against ft8_lib's synth_gfsk** (max body difference < 0.02),
+  **full TX→RX round-trip** (EncodeMessage → BitsToSymbols → InsertSync →
+  Synthesize → ProcessWindow → verify original message recovered), and
+  **multi-message round-trip** (two messages at different frequencies, both decoded).
+
 `PlaySamples` is independent of synth but completes the TX audio path.
 
 ### Dependencies on Existing Code

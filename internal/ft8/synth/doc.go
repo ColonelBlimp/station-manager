@@ -13,7 +13,7 @@
 //  2. [SmoothedFrequency] — convolve the step-wise frequency trajectory
 //     with the kernel to produce a smooth per-sample frequency curve.
 //  3. [Synthesize] / [SynthesizeWithAmplitude] — phase-integrate the
-//     smoothed frequency and output sin(φ) samples (to be implemented).
+//     smoothed frequency and output sin(φ) samples with envelope shaping.
 //
 // The Gaussian filter parameters match the WSJT-X and ft8_lib reference
 // implementations:
