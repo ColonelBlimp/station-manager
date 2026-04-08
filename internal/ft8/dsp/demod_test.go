@@ -269,21 +269,24 @@ func TestDemodulateDecodeRoundTrip(t *testing.T) {
 // --- LLR magnitude ---
 
 // TestDemodulateLLRMagnitude verifies that stronger signals produce larger
-// LLR magnitudes.
+// LLR magnitudes. A background noise level is set so that the LLR
+// differences stay within the [LLRClampMax] range, allowing the test to
+// distinguish weak from strong signals without hitting the clamp ceiling.
 func TestDemodulateLLRMagnitude(t *testing.T) {
 	const nBins = 1025
 	const baseBin = 100
+	const noise = float32(1.0) // background noise level
 	binWidth := spectrogramBinWidth(nBins)
 	cand := Candidate{Freq: float32(baseBin) * binWidth, TimeOff: 0}
 
-	// Weak signal.
-	sg1 := makeSpectrogram(93, nBins, 0)
-	placeDataTone(sg1, 0, baseBin, 3, 10.0)
+	// Weak signal (power=5 on tone 3, noise=1 everywhere else).
+	sg1 := makeSpectrogram(93, nBins, noise)
+	placeDataTone(sg1, 0, baseBin, 3, 5.0)
 	llr1 := Demodulate(sg1, cand)
 
-	// Strong signal.
-	sg2 := makeSpectrogram(93, nBins, 0)
-	placeDataTone(sg2, 0, baseBin, 3, 1000.0)
+	// Strong signal (power=100 on tone 3, noise=1 everywhere else).
+	sg2 := makeSpectrogram(93, nBins, noise)
+	placeDataTone(sg2, 0, baseBin, 3, 100.0)
 	llr2 := Demodulate(sg2, cand)
 
 	// The strong signal should produce larger magnitude LLRs.

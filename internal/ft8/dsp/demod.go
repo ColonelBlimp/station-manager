@@ -29,6 +29,21 @@ import "math"
 // context of audio spectral power.
 const logFloor = -30.0
 
+// LLRClampMax is the maximum absolute value allowed for a single LLR output
+// from the demodulator. Any LLR whose magnitude exceeds this is clamped to
+// ±LLRClampMax (preserving sign).
+//
+// Without clamping, a single extremely strong tone can produce an LLR of 30+
+// in log-domain, which effectively "freezes" that bit in the normalised
+// min-sum LDPC decoder: the check→variable update uses the minimum incoming
+// magnitude, so one over-confident message prevents the decoder from
+// correcting an error at that position.
+//
+// The value 20.0 is generous enough to preserve normal signal dynamics
+// (typical post-Goertzel LLR maxima are 8–15) while preventing pathological
+// outliers from stalling convergence.
+const LLRClampMax = 20.0
+
 // Precomputed tone groups for LLR computation. For each bit position
 // (0 = MSB, 2 = LSB), the tone indices whose Gray-decoded binary value
 // has that bit equal to 0 or 1.
@@ -53,6 +68,9 @@ var (
 // Demodulate extracts 174 soft log-likelihood ratio (LLR) values from the
 // spectrogram at the given candidate position. The returned LLRs are
 // suitable for direct input to codec.Decode or codec.DecodeMessage.
+//
+// Individual LLR magnitudes are clamped to [LLRClampMax] to prevent
+// over-confident soft bits from stalling the min-sum LDPC decoder.
 //
 // The candidate's Freq and TimeOff are converted back to spectrogram bin
 // and frame indices. The spectrogram must be a uniform matrix (all rows
@@ -121,7 +139,7 @@ func demodSymbol(row []float32, baseBin int, llr []float32, idx *int) {
 		g1 := bit1Tones[b]
 		max0 := max4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]])
 		max1 := max4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]])
-		llr[*idx] = float32(max0 - max1)
+		llr[*idx] = clampLLR(float32(max0 - max1))
 		*idx++
 	}
 }
@@ -226,7 +244,7 @@ func demodAudioSymbol(samples []float32, hann []float32, symStart int, baseFreq 
 		g1 := bit1Tones[b]
 		m0 := max4(s[g0[0]], s[g0[1]], s[g0[2]], s[g0[3]])
 		m1 := max4(s[g1[0]], s[g1[1]], s[g1[2]], s[g1[3]])
-		llr[*idx] = float32(m0 - m1)
+		llr[*idx] = clampLLR(float32(m0 - m1))
 		*idx++
 	}
 }
@@ -258,6 +276,17 @@ func max4(a, b, c, d float64) float64 {
 		m = d
 	}
 	return m
+}
+
+// clampLLR clamps an LLR value to the range [−LLRClampMax, +LLRClampMax].
+func clampLLR(v float32) float32 {
+	if v > LLRClampMax {
+		return LLRClampMax
+	}
+	if v < -LLRClampMax {
+		return -LLRClampMax
+	}
+	return v
 }
 
 // NormalizeLLR scales the 174 LLR values so their variance equals 24.0,
