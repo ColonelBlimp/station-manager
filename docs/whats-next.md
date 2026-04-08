@@ -546,10 +546,28 @@ func (p *Playback) PlaySamples(ctx context.Context, samples []float32,
 ### Suggested Implementation Order
 
 ```
-gfsk.go → synth.go → synth_test.go → PlaySamples (playback.go) → playback_test.go → docs
+gfsk.go ✅ → synth.go → synth_test.go → PlaySamples (playback.go) → playback_test.go → docs
 ```
 
-`gfsk.go` is standalone; `synth.go` depends on it; tests validate both;
+`gfsk.go` is **complete** — Gaussian filter and smoothed frequency trajectory:
+- `GaussianFilter(bt, span, symbolSamples) []float64` — normalised Gaussian
+  impulse response kernel, parameterised by BT product and truncation span.
+  h(t) = √(2π/ln2)·BT·exp(−2(π·BT·t)²/ln2), normalised to sum=1.0.
+- `SmoothedFrequency(symbols, baseFreqHz, kernel, symbolSamples) []float64` —
+  convolves step-wise frequency trajectory with the kernel, producing 151 680
+  smooth per-sample frequency values. Uses segment decomposition with kernel
+  prefix sums for O(outLen × numSegments) performance (~100× faster than naive
+  convolution). Edge padding matches WSJT-X/ft8_lib dummy-symbol convention.
+- `GaussianBT = 2.0`, `KernelSpan = 5` — FT8 defaults with `// TODO: FT4`.
+- Full test coverage: nil/invalid params, kernel length, normalisation (sum=1.0
+  within 1e-12), symmetry, peak at centre, non-negativity, centre value cross-
+  check against formula, BT comparison (higher BT → narrower peak), constant-
+  symbol passthrough, mid-symbol frequency dominance, no discontinuities (max
+  adjacent-sample Δf < 1 Hz), frequency bounds, monotone transition, and
+  **cross-validation against the erf-difference overlap-add** (WSJT-X/ft8_lib
+  algorithm) — max difference < 0.01 Hz.
+
+`synth.go` depends on it; tests validate both;
 `PlaySamples` is independent of synth but completes the TX audio path.
 
 ### Dependencies on Existing Code
