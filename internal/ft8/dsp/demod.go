@@ -65,9 +65,16 @@ var (
 	}
 )
 
-// Demodulate extracts 174 soft log-likelihood ratio (LLR) values from the
-// spectrogram at the given candidate position. The returned LLRs are
-// suitable for direct input to codec.Decode or codec.DecodeMessage.
+// Demodulate extracts 174 soft log-likelihood ratio (LLR) values from a
+// linear-power spectrogram at the given candidate position. The returned
+// LLRs are suitable for direct input to codec.Decode or codec.DecodeMessage.
+//
+// IMPORTANT: the spectrogram must contain linear power values as produced by
+// [Spectrogram] (via [PowerSpectrum]). Do NOT pass the output of
+// [SpectrogramFT8], which stores log2(power) — the internal math.Log
+// conversion would compute log(log2(power)), producing garbage LLRs.
+// For log2-power spectrograms or for higher accuracy in general, use
+// [DemodulateAudio] instead (which is what [ProcessWindow] uses).
 //
 // Individual LLR magnitudes are clamped to [LLRClampMax] to prevent
 // over-confident soft bits from stalling the min-sum LDPC decoder.
@@ -112,8 +119,11 @@ func Demodulate(spectrogram [][]float32, cand Candidate) [CodedBits]float32 {
 	return llr
 }
 
-// demodSymbol extracts 3 LLR values from a single spectrogram row at the
-// given base bin, appending them to llr starting at *idx.
+// demodSymbol extracts 3 LLR values from a single linear-power spectrogram
+// row at the given base bin, appending them to llr starting at *idx.
+//
+// The row values must be linear power (not log-domain). Each value is
+// converted to the log domain via math.Log before LLR extraction.
 //
 // For each of the 3 bit positions (MSB to LSB), the 8 tones are partitioned
 // by the Gray-decoded bit value. The LLR is:

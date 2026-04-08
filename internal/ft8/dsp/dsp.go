@@ -2,7 +2,8 @@
 //
 // [ProcessWindow] connects the full receive chain:
 //
-//	audio samples → [Spectrogram] → [FindCandidates] → [Demodulate] →
+//	audio samples → [SpectrogramFT8] → [FindCandidates] →
+//	[RefineCandidateAudio] → [DemodulateAudio] →
 //	codec.DecodeMessage → CRC filter → deduplicate
 //
 // The function accepts one FT8 capture window (typically 180 000 samples at

@@ -3,7 +3,16 @@
 // The spectrogram builder ties together windowing ([HannCoefficients],
 // [ApplyWindow]), FFT ([RealFFT]), and power spectrum ([PowerSpectrum])
 // into a single function that produces the matrix consumed by candidate
-// detection ([FindCandidates]) and soft demodulation ([Demodulate]).
+// detection ([FindCandidates]) and soft demodulation.
+//
+// Two spectrogram variants are provided:
+//
+//   - [Spectrogram] produces linear power values. These can be passed to
+//     [Demodulate] (which applies math.Log internally).
+//   - [SpectrogramFT8] produces log2(power) values for robust sync detection.
+//     It is used by [ProcessWindow] for candidate detection; demodulation
+//     is handled by [DemodulateAudio] (Goertzel on raw audio), NOT by
+//     [Demodulate].
 //
 // For FT8, a typical call is:
 //
