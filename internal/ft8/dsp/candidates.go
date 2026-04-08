@@ -208,6 +208,11 @@ const (
 //   - Time: ±1 symbol period in [refineTimeSteps] steps
 //   - Frequency: ±[refineFreqRange] Hz in [refineFreqStep] Hz steps
 //
+// The grid search uses [refineSyncScore] (sync-tone-only, 21 Goertzel
+// evaluations per point) instead of the full [syncScoreAudio] (168
+// evaluations) for an 8× speedup. After finding the best grid position,
+// the full normalised score is computed once for SNR estimation.
+//
 // The candidate with the highest sync score is returned. If the input
 // samples are too short for any search position, the original candidate is
 // returned unchanged.
@@ -220,8 +225,10 @@ func RefineCandidateAudio(samples []float32, hann []float32, cand Candidate) Can
 	coarseStart := int(math.Round(float64(cand.TimeOff) * SampleRate))
 	coarseFreq := float64(cand.Freq)
 
-	best := cand
-	bestScore := float64(math.Inf(-1))
+	bestStart := coarseStart
+	bestFreq := coarseFreq
+	bestScore := math.Inf(-1)
+	found := false
 
 	// Time search: sweep sub-symbol offsets around the coarse position.
 	timeStep := SamplesPerSymbol / refineTimeSteps
@@ -245,19 +252,31 @@ func RefineCandidateAudio(samples []float32, hann []float32, cand Candidate) Can
 				continue
 			}
 
-			score := syncScoreAudio(samples, hann, startSample, freq)
+			// Use fast sync-tone-only score for grid ranking (8× fewer
+			// Goertzel evaluations than syncScoreAudio).
+			score := refineSyncScore(samples, hann, startSample, freq)
 			if score > bestScore {
 				bestScore = score
-				best = Candidate{
-					Freq:    float32(freq),
-					TimeOff: float32(startSample) / float32(SampleRate),
-					Score:   float32(score),
-				}
+				bestStart = startSample
+				bestFreq = freq
+				found = true
 			}
 		}
 	}
 
-	return best
+	if !found {
+		return cand
+	}
+
+	// Compute the full normalised sync score at the best position so that
+	// Score is suitable for SNR estimation in ProcessWindow.
+	finalScore := syncScoreAudio(samples, hann, bestStart, bestFreq)
+
+	return Candidate{
+		Freq:    float32(bestFreq),
+		TimeOff: float32(bestStart) / float32(SampleRate),
+		Score:   float32(finalScore),
+	}
 }
 
 // syncScoreAudio computes the Costas sync correlation score using the
@@ -300,4 +319,30 @@ func syncScoreAudio(samples []float32, hann []float32, startSample int, baseFreq
 
 	// Score = mean sync power − mean total power (matches syncScoreSteps).
 	return syncPower/float64(NumSyncSyms) - totalPower/float64(NumSyncSyms*NumTones)
+}
+
+// refineSyncScore computes a fast sync correlation proxy for the refinement
+// grid search. Unlike [syncScoreAudio], which evaluates all 8 tones at each
+// of the 21 sync symbol positions (168 Goertzel calls), this function
+// evaluates only the known sync tone at each position (21 Goertzel calls) —
+// an 8× reduction.
+//
+// The returned score is the sum of sync-tone powers. Because it omits the
+// per-symbol noise normalisation, it is suitable only for relative ranking
+// across a small search grid (where the noise floor is approximately
+// constant), not for absolute SNR estimation.
+func refineSyncScore(samples []float32, hann []float32, startSample int, baseFreq float64) float64 {
+	var syncPower float64
+	for _, blockStart := range [3]int{Sync1Start, Sync2Start, Sync3Start} {
+		for j := range SyncLen {
+			symStart := startSample + (blockStart+j)*SamplesPerSymbol
+			if symStart < 0 || symStart+SamplesPerSymbol > len(samples) {
+				return math.Inf(-1)
+			}
+			frame := samples[symStart : symStart+SamplesPerSymbol]
+			toneFreq := baseFreq + float64(CostasSync[j])*ToneSpacing
+			syncPower += Goertzel(frame, hann, toneFreq)
+		}
+	}
+	return syncPower
 }

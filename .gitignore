@@ -6,3 +6,4 @@ internal/logging/config.json
 build/*
 .task
 
+/internal/ft8/dsp/testdata/*.wav
