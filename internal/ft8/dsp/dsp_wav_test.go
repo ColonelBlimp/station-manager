@@ -4,6 +4,11 @@
 // If no WAV files are present the tests skip gracefully (t.Skipf), so they
 // never cause CI failures when the files are not bundled.
 //
+// TestProcessWindowWAVRegression is the critical regression guard: it records
+// the expected minimum decode count per WAV file and FAILS if any change
+// causes the count to drop. Update the expectedDecodes map when the decoder
+// improves to lock in the new baseline.
+//
 // To run these tests, place one or more 12 kHz mono FT8 WAV recordings in
 // internal/ft8/dsp/testdata/ (see testdata/README.md for details).
 
@@ -18,6 +23,20 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/message"
 )
+
+// expectedDecodes maps each WAV filename to the minimum number of messages
+// the pipeline must decode. This is the regression baseline.
+//
+// Update this map when the decoder improves:
+//   - Run: go test -v -run TestProcessWindowWAVRegression ./ft8/dsp/
+//   - Note the "decoded N message(s)" output for each file
+//   - Set the new minimum to the improved count
+//
+// DO NOT lower these values without understanding the regression.
+var expectedDecodes = map[string]int{
+	"181201_180245.wav": 14,
+	"210703_133430.wav": 7,
+}
 
 // testdataDir returns the absolute path to the testdata directory.
 func testdataDir(t *testing.T) string {
@@ -51,6 +70,66 @@ func findWAVFiles(t *testing.T) []string {
 		}
 	}
 	return wavs
+}
+
+// TestProcessWindowWAVRegression is the regression guard for the RX pipeline.
+// It runs each WAV file through ProcessWindow and FAILS if the decode count
+// drops below the established baseline in expectedDecodes.
+//
+// This test must be run after every change to the DSP or codec packages.
+func TestProcessWindowWAVRegression(t *testing.T) {
+	wavFiles := findWAVFiles(t)
+	if len(wavFiles) == 0 {
+		t.Skipf("no WAV files in testdata/ — place 12 kHz mono FT8 recordings there to enable this test")
+	}
+
+	for _, path := range wavFiles {
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			wav, err := audio.ReadWAV(path)
+			if err != nil {
+				t.Fatalf("ReadWAV(%s): %v", name, err)
+			}
+
+			if wav.SampleRate != SampleRate {
+				t.Skipf("%s: sample rate %d Hz, want %d Hz (skipping)", name, wav.SampleRate, SampleRate)
+			}
+			if wav.Channels != 1 {
+				t.Skipf("%s: %d channels, want 1 (mono) (skipping)", name, wav.Channels)
+			}
+
+			msgs := ProcessWindow(wav.Samples, 100, 50)
+
+			t.Logf("%s: decoded %d message(s)", name, len(msgs))
+			for i, dm := range msgs {
+				if msg, err := message.Unpack(dm.Msg77); err == nil {
+					t.Logf("  [%d] freq=%.1f Hz time=%.3f s snr=%.1f dB — %s",
+						i, dm.Freq, dm.TimeOff, dm.SNR, formatMessage(msg))
+				} else {
+					t.Logf("  [%d] freq=%.1f Hz time=%.3f s snr=%.1f dB — unpack error: %v",
+						i, dm.Freq, dm.TimeOff, dm.SNR, err)
+				}
+			}
+
+			// Check against expected baseline.
+			expected, hasBaseline := expectedDecodes[name]
+			if !hasBaseline {
+				t.Logf("%s: no baseline in expectedDecodes — add entry: %q: %d",
+					name, name, len(msgs))
+				return
+			}
+
+			if len(msgs) < expected {
+				t.Errorf("REGRESSION: %s decoded %d messages, expected >= %d (baseline)",
+					name, len(msgs), expected)
+			}
+
+			if len(msgs) > expected {
+				t.Logf("%s: IMPROVEMENT — decoded %d (baseline %d). Update expectedDecodes to lock in.",
+					name, len(msgs), expected)
+			}
+		})
+	}
 }
 
 // TestProcessWindowWAVFile loads each WAV file from testdata/ and runs the
