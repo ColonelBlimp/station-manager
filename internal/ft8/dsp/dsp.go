@@ -66,16 +66,24 @@ func ProcessWindow(samples []float32, maxCandidates, maxIter int) []DecodedMessa
 		return nil
 	}
 
-	// Step 1: build the spectrogram.
-	// Use SamplesPerSymbol (1920) as both FFT input length and hop size.
-	// RealFFT internally zero-pads to 2048, giving 1025 frequency bins.
-	sg := Spectrogram(samples, SamplesPerSymbol, SamplesPerSymbol)
-	if len(sg) < NumSymbols {
+	// Step 1: build the FT8-optimised spectrogram.
+	// Half-symbol step (960 samples), log2(power), periodic Hann window.
+	sg := SpectrogramFT8(samples)
+	if sg == nil {
+		return nil
+	}
+
+	// With half-symbol stepping, each symbol spans 2 rows.
+	const stepsPerSymbol = 2
+
+	// Need at least (79-1)*2 + 1 = 157 frames for a full FT8 message.
+	minFrames := (NumSymbols-1)*stepsPerSymbol + 1
+	if len(sg) < minFrames {
 		return nil
 	}
 
 	// Step 2: detect candidate signals via Costas sync correlation.
-	candidates := FindCandidates(sg, maxCandidates)
+	candidates := FindCandidates(sg, maxCandidates, stepsPerSymbol)
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -83,15 +91,23 @@ func ProcessWindow(samples []float32, maxCandidates, maxIter int) []DecodedMessa
 	// Estimate the noise floor from the spectrogram for SNR computation.
 	noiseFloor := estimateNoiseFloor(sg)
 
-	// Step 3: demodulate and decode each candidate.
+	// Pre-compute Hann window for Goertzel-based demodulation.
+	hann := HannCoefficients(SamplesPerSymbol)
+
+	// Step 3: refine, demodulate, and decode each candidate.
 	seen := make(map[[10]byte]struct{})
 	var decoded []DecodedMessage
 
 	for i := range candidates {
 		cand := &candidates[i]
 
-		// Demodulate: extract 174 soft LLR values.
-		llr := Demodulate(sg, *cand)
+		// Refine the candidate's time and frequency using Goertzel
+		// sync correlation on the raw audio.
+		refined := RefineCandidateAudio(samples, hann, *cand)
+
+		// Demodulate: extract 174 soft LLR values using Goertzel at
+		// exact FT8 tone frequencies.
+		llr := DemodulateAudio(samples, hann, refined)
 
 		// LDPC decode + CRC-14 verification.
 		msg77, ok := codec.DecodeMessage(llr, maxIter)
@@ -108,12 +124,12 @@ func ProcessWindow(samples []float32, maxCandidates, maxIter int) []DecodedMessa
 		}
 		seen[msg77] = struct{}{}
 
-		snr := estimateSNR(cand.Score, noiseFloor)
+		snr := estimateSNR(refined.Score, noiseFloor)
 
 		decoded = append(decoded, DecodedMessage{
 			Msg77:   msg77,
-			Freq:    cand.Freq,
-			TimeOff: cand.TimeOff,
+			Freq:    refined.Freq,
+			TimeOff: refined.TimeOff,
 			SNR:     snr,
 		})
 	}

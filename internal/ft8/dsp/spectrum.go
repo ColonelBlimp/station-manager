@@ -74,3 +74,34 @@ func LogPowerSpectrum(bins []complex64, floorDB float32) []float32 {
 	}
 	return ps
 }
+
+// Log2PowerSpectrum returns log2(|X[k]|²) for each bin, matching the
+// power representation used by ft8_lib. This log-domain representation
+// compresses dynamic range and makes the Costas sync correlation more
+// robust against strong narrowband interferers.
+//
+// Zero-power bins are floored at log2Floor (approximately −240 dB) to
+// prevent −Inf from propagating into downstream computations.
+//
+// Returns nil for nil or empty input.
+func Log2PowerSpectrum(bins []complex64) []float32 {
+	if len(bins) == 0 {
+		return nil
+	}
+	// log2(x) = ln(x) / ln(2)
+	const ln2inv = 1.0 / 0.6931471805599453 // 1/ln(2)
+	const log2Floor = -240.0                // floor for zero-power bins
+
+	ps := make([]float32, len(bins))
+	for i, b := range bins {
+		re := float64(real(b))
+		im := float64(imag(b))
+		power := re*re + im*im
+		if power > 0 {
+			ps[i] = float32(math.Log(power) * ln2inv)
+		} else {
+			ps[i] = log2Floor
+		}
+	}
+	return ps
+}

@@ -85,13 +85,26 @@ const (
 
 // --- Gray code tables ---
 
-// grayEncode maps a 3-bit binary value (0–7) to its Gray code equivalent.
-// Formula: Gray(n) = n ^ (n >> 1).
-var grayEncode = [NumTones]uint8{0, 1, 3, 2, 6, 7, 5, 4}
+// grayEncode maps a 3-bit data value (0–7) to the FT8 tone index.
+//
+// FT8 uses a Gray code where adjacent TONES (not adjacent data values)
+// differ by exactly 1 bit in the decoded binary value. This ensures that
+// if the demodulator selects an adjacent tone by mistake, only 1 bit error
+// results — minimising the bit-error rate for small frequency estimation
+// errors.
+//
+// Reference: WSJT-X genft8.f90 igray(), ft8_lib kFT8_Gray_map.
+//
+//	data  0 1 2 3 4 5 6 7
+//	tone  0 1 3 2 5 6 4 7
+var grayEncode = [NumTones]uint8{0, 1, 3, 2, 5, 6, 4, 7}
 
-// grayDecode maps a 3-bit Gray code value (0–7) back to binary.
+// grayDecode maps an FT8 tone index (0–7) back to the 3-bit data value.
 // This is the inverse permutation of grayEncode.
-var grayDecode = [NumTones]uint8{0, 1, 3, 2, 7, 6, 4, 5}
+//
+//	tone  0 1 2 3 4 5 6 7
+//	data  0 1 3 2 6 4 5 7
+var grayDecode = [NumTones]uint8{0, 1, 3, 2, 6, 4, 5, 7}
 
 // --- Symbol mapping functions ---
 

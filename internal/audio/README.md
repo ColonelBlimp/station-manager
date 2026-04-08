@@ -197,7 +197,16 @@ p := audio.NewPlayback(cfg)
 
 ## WAV support
 
-`PlayFile` reads WAV files internally. Supported formats:
+`PlayFile` reads WAV files internally. The exported `ReadWAV` function is also
+available for other packages that need to decode WAV files (e.g., the FT8 DSP
+pipeline tests).
+
+```go
+wav, err := audio.ReadWAV("recording.wav")
+// wav.SampleRate, wav.Channels, wav.Samples ([]float32)
+```
+
+Supported formats:
 
 | Format | Bit depth |
 |---|---|
@@ -210,12 +219,12 @@ The file is fully decoded into memory before playback starts.
 `readWAV` uses `io.LimitReader` rather than pre-allocating the full chunk size,
 so a corrupt file declaring `chunkSize = 0xFFFFFFFF` will not OOM the process.
 
-Errors:
-
-| Symbol | Meaning |
-|---|---|
-| `ErrWAVInvalidHeader` | Not a valid RIFF/WAVE file |
-| `ErrWAVUnsupportedFormat` | Bit depth or format not supported |
+| Symbol | Type | Description |
+|---|---|---|
+| `ReadWAV(path) (*WAVData, error)` | Function | Decode a WAV file to `[]float32` |
+| `WAVData` | Struct | Holds `SampleRate`, `Channels`, `Samples` |
+| `ErrWAVInvalidHeader` | Error | Not a valid RIFF/WAVE file |
+| `ErrWAVUnsupportedFormat` | Error | Bit depth or format not supported |
 
 ---
 

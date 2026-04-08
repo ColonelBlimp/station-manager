@@ -55,8 +55,12 @@ func TestProcessWindowSilence(t *testing.T) {
 }
 
 func TestProcessWindowTooFewFrames(t *testing.T) {
-	// Buffer that produces fewer than NumSymbols (79) frames.
-	nSamples := (NumSymbols - 1) * SamplesPerSymbol
+	// Buffer that is too short to produce enough spectrogram frames for
+	// a full FT8 message with half-symbol stepping.
+	// SpectrogramFT8 needs at least SamplesPerSymbol samples to produce
+	// any frames. With half-symbol step, we need ~157 frames for 79 symbols.
+	// Provide just under one symbol period — too short for any decode.
+	nSamples := SamplesPerSymbol - 1
 	samples := make([]float32, nSamples)
 	msgs := ProcessWindow(samples, 10, 25)
 	if msgs != nil {
@@ -341,13 +345,16 @@ func TestDecodedMessageZeroValue(t *testing.T) {
 // --- ProcessWindow with spectrogram-only input (minimal frame count) ---
 
 func TestProcessWindowExactly79Frames(t *testing.T) {
-	// A buffer that produces exactly 79 frames — the minimum for one
-	// FT8 message. With silence, nothing should decode, but it must not panic.
-	nSamples := NumSymbols * SamplesPerSymbol
+	// A buffer that produces exactly enough half-symbol frames for one
+	// FT8 message. With half-symbol stepping, 79 symbols need 157 half-symbol
+	// rows, which requires: (nSamples - 1920) / 960 + 1 >= 157
+	// → nSamples >= 1920 + 156*960 = 151680 samples.
+	// With silence, nothing should decode, but it must not panic.
+	nSamples := SamplesPerSymbol + (NumSymbols-1)*2*(SamplesPerSymbol/2) // exactly 151680
 	samples := make([]float32, nSamples)
 	msgs := ProcessWindow(samples, 10, 25)
 	if len(msgs) != 0 {
-		t.Errorf("silence with 79 frames: got %d messages, want 0", len(msgs))
+		t.Errorf("silence with minimal frames: got %d messages, want 0", len(msgs))
 	}
 }
 

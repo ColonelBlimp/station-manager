@@ -24,17 +24,20 @@ const MsgBytes = (MsgBits + 7) / 8
 
 // CRC14 computes the 14-bit CRC over a packed 77-bit FT8/FT4 message.
 //
-// The algorithm follows the WSJT-X reference implementation:
+// The algorithm matches the ft8_lib reference implementation (ftx_compute_crc):
 //  1. The 77 message bits are processed MSB-first.
 //  2. Five zero bits are appended (3 padding + 2 flush) to push the
 //     remainder through the shift register, for a total of 82 input bits.
-//  3. The generator polynomial is 0x2757 (degree 14).
+//  3. The generator polynomial is 0x2757 (degree 14, without leading 1).
+//  4. The XOR condition is: top bit of register != input bit.
 //
 // The message is represented as a byte slice in big-endian bit order:
 // bit 0 (MSB of msg[0]) is the first transmitted bit. Only the first
 // 77 bits are used; any trailing bits in msg[9] beyond bit 76 are ignored.
 //
 // Returns the 14-bit CRC as a uint16.
+//
+// Reference: ft8_lib crc.c ftx_compute_crc().
 func CRC14(msg []byte) uint16 {
 	if len(msg) < MsgBytes {
 		panic(fmt.Sprintf("message: CRC14 requires at least %d bytes, got %d", MsgBytes, len(msg)))
@@ -43,9 +46,7 @@ func CRC14(msg []byte) uint16 {
 	// Total bits to process: 77 message + 5 zero-pad = 82.
 	const totalBits = MsgBits + 5
 
-	// Work in a 16-bit shift register. Only the top 14 bits matter, but
-	// using 16 bits simplifies the shift-and-XOR logic.
-	var sr uint16
+	var crc uint16
 
 	for i := range totalBits {
 		// Extract the next input bit (MSB-first from the byte slice).
@@ -56,19 +57,18 @@ func CRC14(msg []byte) uint16 {
 			bitIdx := uint(7 - i%8)
 			bit = uint16((msg[byteIdx] >> bitIdx) & 1)
 		}
-		// else: bit remains 0 for the appended zero bits
 
-		// Shift the register left by 1 and insert the new bit at position 0.
-		feedback := (sr >> 13) & 1 // the bit about to be shifted out
-		sr = (sr << 1) | bit
-
-		if feedback != 0 {
-			sr ^= crc14Poly
+		// XOR condition: top bit of register != input bit.
+		// This matches ft8_lib's (crc >> 13) != bit check.
+		if ((crc >> 13) & 1) != bit {
+			crc = ((crc << 1) | bit) ^ 0x2757
+		} else {
+			crc = (crc << 1) | bit
 		}
 	}
 
-	// The CRC is the lower 14 bits of the shift register.
-	return sr & 0x3FFF
+	// The CRC is the lower 14 bits of the register.
+	return crc & 0x3FFF
 }
 
 // Append91 takes a 77-bit packed message (10 bytes, only first 77 bits used)

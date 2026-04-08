@@ -59,20 +59,20 @@ func spectrogramBinWidth(nBins int) float32 {
 // --- Nil / edge-case tests ---
 
 func TestFindCandidatesNil(t *testing.T) {
-	if c := FindCandidates(nil, 10); c != nil {
+	if c := FindCandidates(nil, 10, 1); c != nil {
 		t.Error("FindCandidates(nil) != nil")
 	}
-	if c := FindCandidates([][]float32{}, 10); c != nil {
+	if c := FindCandidates([][]float32{}, 10, 1); c != nil {
 		t.Error("FindCandidates([]) != nil")
 	}
 }
 
 func TestFindCandidatesMaxZero(t *testing.T) {
 	sg := makeSpectrogram(93, 1025, 0)
-	if c := FindCandidates(sg, 0); c != nil {
+	if c := FindCandidates(sg, 0, 1); c != nil {
 		t.Error("maxCandidates=0 should return nil")
 	}
-	if c := FindCandidates(sg, -1); c != nil {
+	if c := FindCandidates(sg, -1, 1); c != nil {
 		t.Error("maxCandidates<0 should return nil")
 	}
 }
@@ -80,7 +80,7 @@ func TestFindCandidatesMaxZero(t *testing.T) {
 func TestFindCandidatesTooFewFrames(t *testing.T) {
 	// Fewer than 79 frames → cannot contain a full FT8 message.
 	sg := makeSpectrogram(NumSymbols-1, 1025, 0)
-	if c := FindCandidates(sg, 10); c != nil {
+	if c := FindCandidates(sg, 10, 1); c != nil {
 		t.Error("too few frames should return nil")
 	}
 }
@@ -88,7 +88,7 @@ func TestFindCandidatesTooFewFrames(t *testing.T) {
 func TestFindCandidatesTooFewBins(t *testing.T) {
 	// Fewer than 8 bins → cannot hold the 8-tone grid.
 	sg := makeSpectrogram(93, NumTones-1, 0)
-	if c := FindCandidates(sg, 10); c != nil {
+	if c := FindCandidates(sg, 10, 1); c != nil {
 		t.Error("too few bins should return nil")
 	}
 }
@@ -97,7 +97,7 @@ func TestFindCandidatesTooFewBins(t *testing.T) {
 
 func TestFindCandidatesSilence(t *testing.T) {
 	sg := makeSpectrogram(93, 1025, 0)
-	c := FindCandidates(sg, 100)
+	c := FindCandidates(sg, 100, 1)
 	if len(c) != 0 {
 		t.Errorf("silence: got %d candidates, want 0", len(c))
 	}
@@ -116,7 +116,7 @@ func TestFindCandidatesSingleSignal(t *testing.T) {
 	const syncPower = float32(50.0)
 	placeCostasSignal(sg, timeOff, baseBin, syncPower)
 
-	candidates := FindCandidates(sg, 10)
+	candidates := FindCandidates(sg, 10, 1)
 
 	if len(candidates) == 0 {
 		t.Fatal("expected at least 1 candidate, got 0")
@@ -149,7 +149,7 @@ func TestFindCandidatesFullSignal(t *testing.T) {
 	const timeOff = 3
 	placeFullSignal(sg, timeOff, baseBin, 100.0, 20.0)
 
-	candidates := FindCandidates(sg, 10)
+	candidates := FindCandidates(sg, 10, 1)
 
 	if len(candidates) == 0 {
 		t.Fatal("expected at least 1 candidate, got 0")
@@ -177,7 +177,7 @@ func TestFindCandidatesMultipleSignals(t *testing.T) {
 	placeCostasSignal(sg, timeOff, baseBin1, 50.0)
 	placeCostasSignal(sg, timeOff, baseBin2, 80.0)
 
-	candidates := FindCandidates(sg, 10)
+	candidates := FindCandidates(sg, 10, 1)
 
 	if len(candidates) < 2 {
 		t.Fatalf("expected at least 2 candidates, got %d", len(candidates))
@@ -223,7 +223,7 @@ func TestFindCandidatesSorted(t *testing.T) {
 	placeCostasSignal(sg, 0, 200, 90.0)
 	placeCostasSignal(sg, 0, 300, 60.0)
 
-	candidates := FindCandidates(sg, 100)
+	candidates := FindCandidates(sg, 100, 1)
 
 	for i := 1; i < len(candidates); i++ {
 		if candidates[i].Score > candidates[i-1].Score {
@@ -244,7 +244,7 @@ func TestFindCandidatesMaxCandidates(t *testing.T) {
 	placeCostasSignal(sg, 0, 200, 60.0)
 	placeCostasSignal(sg, 0, 300, 70.0)
 
-	candidates := FindCandidates(sg, 2)
+	candidates := FindCandidates(sg, 2, 1)
 
 	if len(candidates) > 2 {
 		t.Errorf("got %d candidates, want ≤ 2", len(candidates))
@@ -331,7 +331,7 @@ func TestFindCandidatesFromSynthesisedTones(t *testing.T) {
 		t.Fatal("empty spectrogram")
 	}
 
-	candidates := FindCandidates(sg, 10)
+	candidates := FindCandidates(sg, 10, 1)
 	if len(candidates) == 0 {
 		t.Fatal("no candidates found from synthesised signal")
 	}
@@ -358,7 +358,7 @@ func TestFindCandidatesMinimumSize(t *testing.T) {
 	// No candidates expected (too few bins for the frequency search range),
 	// but it should not panic.
 	sg := makeSpectrogram(NumSymbols, NumTones, 0)
-	c := FindCandidates(sg, 10)
+	c := FindCandidates(sg, 10, 1)
 	// Just verifying no panic; result may or may not be nil depending
 	// on whether minBin..maxBin maps into the narrow bin range.
 	_ = c

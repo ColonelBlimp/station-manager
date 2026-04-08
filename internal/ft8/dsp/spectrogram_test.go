@@ -35,10 +35,10 @@ func TestSpectrogramInvalidParams(t *testing.T) {
 }
 
 func TestSpectrogramTooShort(t *testing.T) {
-	// Buffer shorter than one frame.
+	// Buffer shorter than one frame (fftSize).
 	samples := make([]float32, 1919)
 	if sg := Spectrogram(samples, 1920, 1920); sg != nil {
-		t.Error("buffer shorter than stepSamples should return nil")
+		t.Error("buffer shorter than fftSize should return nil")
 	}
 }
 
@@ -61,8 +61,9 @@ func TestSpectrogramDimensions(t *testing.T) {
 		{"partial_discard", 2020, 1920, 1920, 1, 1025},
 		// Small power-of-2 sizes.
 		{"small_pow2", 32, 8, 8, 4, 5},
-		// fftSize > stepSamples (explicit zero-padding to 2048).
-		{"zero_padded", 1920, 2048, 1920, 1, 1025},
+		// fftSize > stepSamples: overlapping analysis.
+		// 3840 samples with fftSize=1920, step=960 → (3840-1920)/960 + 1 = 3 frames.
+		{"overlapping", 3840, 1920, 960, 3, 1025},
 	}
 
 	for _, tc := range tests {
@@ -255,32 +256,30 @@ func TestSpectrogramMatchesManualPipeline(t *testing.T) {
 
 // --- Zero-padding equivalence ---
 
-// TestSpectrogramZeroPadEquivalence verifies that passing fftSize > stepSamples
-// produces the same result as fftSize == stepSamples (since RealFFT pads
-// to the same next power of 2 in both cases).
-func TestSpectrogramZeroPadEquivalence(t *testing.T) {
-	const step = 1920
+// TestSpectrogramOverlapFrameCount verifies that overlapping analysis
+// produces the expected number of frames.
+func TestSpectrogramOverlapFrameCount(t *testing.T) {
+	const fftSize = 1920
+	const step = 960
+	const nSamples = 5 * fftSize // plenty of samples
 
-	// Single frame with a known signal.
-	samples := make([]float32, step)
+	samples := make([]float32, nSamples)
 	for i := range samples {
 		samples[i] = float32(math.Cos(2 * math.Pi * 500 * float64(i) / float64(SampleRate)))
 	}
 
-	sg1920 := Spectrogram(samples, 1920, step)
-	sg2048 := Spectrogram(samples, 2048, step)
+	sg := Spectrogram(samples, fftSize, step)
+	wantFrames := (nSamples-fftSize)/step + 1
 
-	if len(sg1920) != 1 || len(sg2048) != 1 {
-		t.Fatalf("expected 1 frame each: got %d, %d", len(sg1920), len(sg2048))
-	}
-	if len(sg1920[0]) != len(sg2048[0]) {
-		t.Fatalf("bin counts differ: %d vs %d", len(sg1920[0]), len(sg2048[0]))
+	if len(sg) != wantFrames {
+		t.Errorf("overlapping: got %d frames, want %d", len(sg), wantFrames)
 	}
 
-	for k := range sg1920[0] {
-		if !approxEq(sg1920[0][k], sg2048[0][k], float32Eps) {
-			t.Errorf("bin[%d]: fftSize=1920 → %g, fftSize=2048 → %g",
-				k, sg1920[0][k], sg2048[0][k])
+	// Each frame should have the same number of bins.
+	wantBins := NextPow2(fftSize)/2 + 1
+	for i, row := range sg {
+		if len(row) != wantBins {
+			t.Errorf("frame[%d]: got %d bins, want %d", i, len(row), wantBins)
 		}
 	}
 }

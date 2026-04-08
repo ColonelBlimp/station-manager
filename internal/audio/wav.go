@@ -30,6 +30,31 @@ type wavData struct {
 	Samples    []float32 // normalised to [-1.0, 1.0]
 }
 
+// WAVData holds the decoded contents of a WAV file.
+// This is the exported counterpart of wavData for use by other packages
+// (e.g., the FT8 DSP pipeline tests).
+type WAVData struct {
+	SampleRate uint32
+	Channels   uint16
+	Samples    []float32 // normalised to [-1.0, 1.0]
+}
+
+// ReadWAV opens a WAV file and decodes it to float32 samples.
+// Supported formats: PCM 8-bit (unsigned), PCM 16-bit (signed), IEEE 754 float 32-bit.
+// All channel interleaving is preserved; the caller is responsible for
+// de-interleaving if mono downmix is needed.
+func ReadWAV(path string) (*WAVData, error) {
+	w, err := readWAV(path)
+	if err != nil {
+		return nil, err
+	}
+	return &WAVData{
+		SampleRate: w.SampleRate,
+		Channels:   w.Channels,
+		Samples:    w.Samples,
+	}, nil
+}
+
 // readWAV opens a WAV file and decodes it to float32 samples.
 // Supported formats: PCM 8-bit (unsigned), PCM 16-bit (signed), IEEE 754 float 32-bit.
 // All channel interleaving is preserved; the caller is responsible for de-interleaving

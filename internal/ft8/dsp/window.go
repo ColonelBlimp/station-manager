@@ -79,3 +79,28 @@ func ApplyWindow(samples, window []float32) {
 		samples[i] *= window[i]
 	}
 }
+
+// HannPeriodicCoefficients returns a pre-computed periodic Hann window of
+// length n. The periodic form uses 2πi/N (not 2πi/(N−1)), which is the
+// correct variant for STFT overlap-add analysis and matches ft8_lib's window.
+//
+// The periodic Hann differs from the symmetric form ([HannCoefficients]) in
+// that w[N−1] ≠ 0 — the last sample does not reach zero. This is deliberate:
+// in the STFT context with 50% overlap, adjacent periodic Hann windows sum
+// to a constant (the COLA property), preserving signal energy.
+//
+// Returns nil if n ≤ 0.
+func HannPeriodicCoefficients(n int) []float32 {
+	if n <= 0 {
+		return nil
+	}
+	if n == 1 {
+		return []float32{1.0}
+	}
+	w := make([]float32, n)
+	inv := 2 * math.Pi / float64(n) // periodic: divide by N, not N-1
+	for i := range w {
+		w[i] = float32(0.5 * (1.0 - math.Cos(inv*float64(i))))
+	}
+	return w
+}
