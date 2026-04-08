@@ -53,12 +53,15 @@ func TestGrayEncodeBijective(t *testing.T) {
 	}
 }
 
-// TestGrayAdjacentDifferByOneBit verifies the defining property of Gray
-// code: consecutive values differ in exactly one-bit position.
-func TestGrayAdjacentDifferByOneBit(t *testing.T) {
-	for n := range uint8(NumTones - 1) {
+// TestGrayLowNibbleAdjacentDifferByOneBit verifies that the lower 4 values
+// (0–3) of the FT8 Gray map have the standard adjacent-differ-by-one-bit
+// property. The FT8 mapping deliberately diverges from the standard
+// binary-reflected Gray code for values 4–7, so we only check 0–3.
+//
+// Reference: WSJT-X genft8.f90 graymap, ft8_lib kFT8_Gray_map.
+func TestGrayLowNibbleAdjacentDifferByOneBit(t *testing.T) {
+	for n := range uint8(3) { // 0→1, 1→2, 2→3
 		diff := grayEncode[n] ^ grayEncode[n+1]
-		// diff should be a power of two (exactly one bit set).
 		if diff == 0 || diff&(diff-1) != 0 {
 			t.Errorf("grayEncode[%d]=%d and grayEncode[%d]=%d differ in %d bits, want 1",
 				n, grayEncode[n], n+1, grayEncode[n+1], popcount3(diff))
@@ -107,7 +110,7 @@ func TestBitsToSymbolsRange(t *testing.T) {
 }
 
 // TestBitsToSymbolsAllOnes verifies that a codeword with all 174 bits set
-// produces the expected all-7-binary → Gray(7)=4 symbols.
+// produces the expected all-7-binary → grayEncode[7]=7 symbols.
 func TestBitsToSymbolsAllOnes(t *testing.T) {
 	var cw [CodewordBytes]byte
 	for i := range cw {
@@ -115,10 +118,11 @@ func TestBitsToSymbolsAllOnes(t *testing.T) {
 	}
 
 	syms := BitsToSymbols(cw)
-	// Every 3-bit group is 111 = 7 → Gray(7) = 4.
+	// Every 3-bit group is 111 = 7 → grayEncode[7] = 7.
+	want := grayEncode[7] // FT8 map: 7 (differs from standard Gray code's 4)
 	for i, s := range syms {
-		if s != 4 {
-			t.Errorf("sym[%d] = %d, want 4 (Gray(7))", i, s)
+		if s != want {
+			t.Errorf("sym[%d] = %d, want %d (grayEncode[7])", i, s, want)
 		}
 	}
 }
@@ -129,18 +133,19 @@ func TestBitsToSymbolsAllOnes(t *testing.T) {
 // Codeword: deadbeef123456789abcdee9f4dfae4ab374d7b4c33c
 // (the "deadbeef" encoder test vector)
 //
-// Manual computation for the first 6 symbols:
+// Manual computation for the first 6 symbols using the FT8 Gray map
+// {0,1,3,2,5,6,4,7} from WSJT-X genft8.f90 / ft8_lib kFT8_Gray_map:
 //
 //	Byte 0: 0xde = 11011110
 //	Byte 1: 0xad = 10101101
 //	Byte 2: 0xbe = 10111110
 //
-//	Sym 0: bits [0,1,2]  → 1,1,0 → binary 6 → Gray(6) = 5
-//	Sym 1: bits [3,4,5]  → 1,1,1 → binary 7 → Gray(7) = 4
-//	Sym 2: bits [6,7,8]  → 1,0,1 → binary 5 → Gray(5) = 7
-//	Sym 3: bits [9,10,11] → 0,1,0 → binary 2 → Gray(2) = 3
-//	Sym 4: bits [12,13,14] → 1,1,0 → binary 6 → Gray(6) = 5
-//	Sym 5: bits [15,16,17] → 1,1,0 → binary 6 → Gray(6) = 5
+//	Sym 0: bits [0,1,2]   → 1,1,0 → binary 6 → grayEncode[6] = 4
+//	Sym 1: bits [3,4,5]   → 1,1,1 → binary 7 → grayEncode[7] = 7
+//	Sym 2: bits [6,7,8]   → 1,0,1 → binary 5 → grayEncode[5] = 6
+//	Sym 3: bits [9,10,11]  → 0,1,0 → binary 2 → grayEncode[2] = 3
+//	Sym 4: bits [12,13,14] → 1,1,0 → binary 6 → grayEncode[6] = 4
+//	Sym 5: bits [15,16,17] → 1,1,0 → binary 6 → grayEncode[6] = 4
 func TestBitsToSymbolsKnownVector(t *testing.T) {
 	cwHex := "deadbeef123456789abcdee9f4dfae4ab374d7b4c33c"
 	cwBytes, err := hex.DecodeString(cwHex)
@@ -156,7 +161,7 @@ func TestBitsToSymbolsKnownVector(t *testing.T) {
 
 	syms := BitsToSymbols(cw)
 
-	wantPrefix := []uint8{5, 4, 7, 3, 5, 5}
+	wantPrefix := []uint8{4, 7, 6, 3, 4, 4}
 	for i, want := range wantPrefix {
 		if syms[i] != want {
 			t.Errorf("sym[%d] = %d, want %d", i, syms[i], want)
