@@ -106,6 +106,18 @@ func Demodulate(spectrogram [][]float32, cand Candidate) [CodedBits]float32 {
 		return llr
 	}
 
+	// Guard: linear power values are always ≥ 0 (they are |X[k]|²).
+	// If any tone bin in the first data symbol row is negative, the
+	// spectrogram is in a log domain (e.g. log2(power) from
+	// SpectrogramFT8) and will produce garbage LLRs. Return zeros
+	// rather than silently computing log(log2(power)).
+	firstDataRow := spectrogram[timeFrame+Sync1Start+SyncLen]
+	for k := range NumTones {
+		if firstDataRow[baseBin+k] < 0 {
+			return llr
+		}
+	}
+
 	llrIdx := 0
 
 	// Iterate over data symbol positions (7–35 and 43–71).

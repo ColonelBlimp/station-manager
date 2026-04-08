@@ -94,6 +94,25 @@ func TestDemodulateNil(t *testing.T) {
 	}
 }
 
+// TestDemodulateRejectsLogDomainSpectrogram verifies that Demodulate detects
+// a log-domain spectrogram (negative values, as produced by SpectrogramFT8)
+// and returns zero LLRs rather than silently computing log(log2(power)).
+func TestDemodulateRejectsLogDomainSpectrogram(t *testing.T) {
+	// Build a spectrogram filled with negative values typical of
+	// Log2PowerSpectrum output (log2(power) is negative for power < 1).
+	sg := makeSpectrogram(93, 1025, -10.0)
+	binWidth := spectrogramBinWidth(1025)
+	cand := Candidate{Freq: 100 * binWidth, TimeOff: 0}
+
+	llr := Demodulate(sg, cand)
+	for i, v := range llr {
+		if v != 0 {
+			t.Errorf("log-domain spectrogram: llr[%d] = %g, want 0", i, v)
+			break
+		}
+	}
+}
+
 func TestDemodulateOutOfBounds(t *testing.T) {
 	sg := makeSpectrogram(93, 1025, 0)
 
