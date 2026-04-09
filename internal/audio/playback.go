@@ -19,18 +19,20 @@ var (
 	ErrPlaybackAlreadyPlaying = stderr.New("audio playback already playing")
 	ErrPlaybackNotPlaying     = stderr.New("audio playback not playing")
 	ErrPlaybackClosed         = stderr.New("audio playback closed")
+	ErrPlaybackEmptySamples   = stderr.New("audio playback samples are nil or empty")
 )
 
-// Playback handles audio playback of WAV files.
-// A single Playback can play one file at a time; concurrent PlayFile calls return
-// ErrPlaybackAlreadyPlaying. A Playback cannot be reused after Close().
+// Playback handles audio playback of WAV files and in-memory sample buffers.
+// A single Playback can play one source at a time; concurrent PlayFile or
+// PlaySamples calls return ErrPlaybackAlreadyPlaying. A Playback cannot be
+// reused after Close().
 type Playback struct {
 	config Config
 
 	ctx *malgo.AllocatedContext
 
-	// playing is true while a PlayFile call is in progress.
-	// CompareAndSwap in PlayFile prevents concurrent plays.
+	// playing is true while a PlayFile or PlaySamples call is in progress.
+	// CompareAndSwap prevents concurrent plays.
 	playing atomic.Bool
 
 	// closed is set permanently by Close() to prevent reuse after shutdown.
@@ -39,12 +41,12 @@ type Playback struct {
 	// mu protects ctx and cancelPlay.
 	mu sync.Mutex
 
-	// cancelPlay is set by PlayFile and called by Stop() or Close() to interrupt
-	// in-progress playback. Nil when no playback is in progress.
+	// cancelPlay is set by PlayFile/PlaySamples and called by Stop() or Close()
+	// to interrupt in-progress playback. Nil when no playback is in progress.
 	cancelPlay context.CancelFunc
 
-	// wg tracks in-progress PlayFile calls so that Close() can wait for device
-	// teardown to complete before uninitialising the malgo context.
+	// wg tracks in-progress PlayFile/PlaySamples calls so that Close() can wait
+	// for device teardown to complete before uninitialising the malgo context.
 	wg sync.WaitGroup
 }
 
@@ -163,52 +165,17 @@ func (p *Playback) Close() error {
 // The device is configured to match the WAV file's sample rate and channel count.
 // cfg.SampleRate and cfg.Channels from the constructor are not used here.
 //
-// Returns ErrPlaybackAlreadyPlaying if another PlayFile is already in progress.
+// Returns ErrPlaybackAlreadyPlaying if another PlayFile or PlaySamples is already in progress.
 // Returns ErrPlaybackNotInitialized if Init has not been called.
 // Returns ErrPlaybackClosed if Close has been called.
 func (p *Playback) PlayFile(ctx context.Context, path string) error {
 	const op errors.Op = "audio.Playback.PlayFile"
 
-	// wg.Add before closed check so Close().wg.Wait() is guaranteed to observe
-	// this goroutine if it races past the closed check.
-	p.wg.Add(1)
-	defer p.wg.Done()
-
-	if p.closed.Load() {
-		return ErrPlaybackClosed
+	playCtx, audioCtx, err := p.acquirePlay()
+	if err != nil {
+		return err
 	}
-
-	if !p.playing.CompareAndSwap(false, true) {
-		return ErrPlaybackAlreadyPlaying
-	}
-	defer p.playing.Store(false)
-
-	// Create the play context immediately after the CAS so that Stop() can always
-	// cancel when IsPlaying() is true. Previously cancelPlay was set only after
-	// readWAV, leaving a window (as long as the file read) where IsPlaying()
-	// returned true but Stop() returned ErrPlaybackNotPlaying.
-	playCtx, cancelPlay := context.WithCancel(context.Background())
-	p.mu.Lock()
-	// Second closed check: cover the window between wg.Add and acquiring mu.
-	if p.closed.Load() {
-		p.mu.Unlock()
-		cancelPlay()
-		return ErrPlaybackClosed
-	}
-	if p.ctx == nil {
-		p.mu.Unlock()
-		cancelPlay()
-		return ErrPlaybackNotInitialized
-	}
-	audioCtx := p.ctx.Context
-	p.cancelPlay = cancelPlay
-	p.mu.Unlock()
-	defer func() {
-		cancelPlay()
-		p.mu.Lock()
-		p.cancelPlay = nil
-		p.mu.Unlock()
-	}()
+	defer p.releasePlay()
 
 	// Decode the WAV file. Stop()/Close() may be called during this read.
 	wav, err := readWAV(path)
@@ -221,6 +188,108 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 	if playCtx.Err() != nil {
 		return nil
 	}
+
+	return p.playBuffer(op, ctx, playCtx, audioCtx, wav.Samples, wav.SampleRate, uint32(wav.Channels))
+}
+
+// PlaySamples plays in-memory float32 audio samples to the playback device,
+// blocking until all samples have been played, the context is cancelled, or
+// Stop()/Close() is called.
+//
+// sampleRate is the playback sample rate (e.g., 12000 for FT8).
+// channels is the number of audio channels (1 for mono FT8 audio).
+//
+// Returns ErrPlaybackEmptySamples if samples is nil or empty.
+// Returns ErrPlaybackAlreadyPlaying if another PlayFile or PlaySamples is already in progress.
+// Returns ErrPlaybackNotInitialized if Init has not been called.
+// Returns ErrPlaybackClosed if Close has been called.
+func (p *Playback) PlaySamples(ctx context.Context, samples []float32,
+	sampleRate uint32, channels uint32) error {
+
+	const op errors.Op = "audio.Playback.PlaySamples"
+
+	if len(samples) == 0 {
+		return ErrPlaybackEmptySamples
+	}
+
+	playCtx, audioCtx, err := p.acquirePlay()
+	if err != nil {
+		return err
+	}
+	defer p.releasePlay()
+
+	return p.playBuffer(op, ctx, playCtx, audioCtx, samples, sampleRate, channels)
+}
+
+// acquirePlay performs the shared preamble for PlayFile and PlaySamples:
+// wg.Add, closed check, playing CAS, play-context creation, double-close
+// check, and audioCtx extraction.
+//
+// On success it returns (playCtx, audioCtx, nil) and the caller MUST call
+// releasePlay when done. On failure it returns a non-nil error and no
+// cleanup is needed.
+func (p *Playback) acquirePlay() (context.Context, malgo.Context, error) {
+	// wg.Add before closed check so Close().wg.Wait() is guaranteed to observe
+	// this goroutine if it races past the closed check.
+	p.wg.Add(1)
+
+	if p.closed.Load() {
+		p.wg.Done()
+		return nil, malgo.Context{}, ErrPlaybackClosed
+	}
+
+	if !p.playing.CompareAndSwap(false, true) {
+		p.wg.Done()
+		return nil, malgo.Context{}, ErrPlaybackAlreadyPlaying
+	}
+
+	// Create the play context immediately after the CAS so that Stop() can always
+	// cancel when IsPlaying() is true.
+	playCtx, cancelPlay := context.WithCancel(context.Background())
+
+	p.mu.Lock()
+	// Second closed check: cover the window between wg.Add and acquiring mu.
+	if p.closed.Load() {
+		p.mu.Unlock()
+		cancelPlay()
+		p.playing.Store(false)
+		p.wg.Done()
+		return nil, malgo.Context{}, ErrPlaybackClosed
+	}
+	if p.ctx == nil {
+		p.mu.Unlock()
+		cancelPlay()
+		p.playing.Store(false)
+		p.wg.Done()
+		return nil, malgo.Context{}, ErrPlaybackNotInitialized
+	}
+	audioCtx := p.ctx.Context
+	p.cancelPlay = cancelPlay
+	p.mu.Unlock()
+
+	return playCtx, audioCtx, nil
+}
+
+// releasePlay performs the shared cleanup for PlayFile and PlaySamples:
+// cancel the play context, clear cancelPlay, reset the playing flag, and
+// signal the wait group.
+func (p *Playback) releasePlay() {
+	p.mu.Lock()
+	cancel := p.cancelPlay
+	p.cancelPlay = nil
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	p.playing.Store(false)
+	p.wg.Done()
+}
+
+// playBuffer is the shared device-level playback logic used by both PlayFile
+// and PlaySamples. It configures the malgo device, streams samples through the
+// audio callback, and blocks until completion/cancellation.
+func (p *Playback) playBuffer(op errors.Op, ctx, playCtx context.Context,
+	audioCtx malgo.Context, samples []float32, sampleRate, channels uint32) error {
 
 	// Playback state — only accessed from the single audio callback thread.
 	pos := 0
@@ -235,9 +304,9 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 		// malgo guarantees 4-byte alignment for output buffers.
 		out := unsafe.Slice((*float32)(unsafe.Pointer(&outputSamples[0])), len(outputSamples)/BytesPerFloat32)
 
-		n := copy(out, wav.Samples[pos:])
+		n := copy(out, samples[pos:])
 		pos += n
-		// Zero any frames beyond the end of the file.
+		// Zero any frames beyond the end of the source.
 		for i := n; i < len(out); i++ {
 			out[i] = 0
 		}
@@ -249,11 +318,11 @@ func (p *Playback) PlayFile(ctx context.Context, path string) error {
 
 	deviceConfig := malgo.DeviceConfig{
 		DeviceType:         malgo.Playback,
-		SampleRate:         wav.SampleRate,
+		SampleRate:         sampleRate,
 		PeriodSizeInFrames: p.config.BufferSize,
 		Playback: malgo.SubConfig{
 			Format:   malgo.FormatF32,
-			Channels: uint32(wav.Channels),
+			Channels: channels,
 		},
 	}
 

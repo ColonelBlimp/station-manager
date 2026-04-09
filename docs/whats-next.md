@@ -405,7 +405,7 @@ is a larger orchestration concern.
   → Insert 3 Costas sync arrays → 79 symbols   ✅ dsp.InsertSync
   → GFSK smoothing (Gaussian filter)            ✅ synth.SmoothedFrequency
   → Synthesise audio samples                    ✅ synth.Synthesize
-  → Play at precise T+1s start time             ← NEW: audio.PlaySamples
+  → Play at precise T+1s start time             ✅ audio.PlaySamples
 ```
 
 ### Key Constants (FT8 GFSK)
@@ -546,7 +546,7 @@ func (p *Playback) PlaySamples(ctx context.Context, samples []float32,
 ### Suggested Implementation Order
 
 ```
-gfsk.go ✅ → synth.go ✅ → synth_test.go ✅ → PlaySamples (playback.go) → playback_test.go → docs
+gfsk.go ✅ → synth.go ✅ → synth_test.go ✅ → PlaySamples (playback.go) ✅ → playback_test.go ✅ → docs ✅
 ```
 
 `gfsk.go` is **complete** — Gaussian filter and smoothed frequency trajectory:
@@ -585,6 +585,25 @@ gfsk.go ✅ → synth.go ✅ → synth_test.go ✅ → PlaySamples (playback.go)
   **multi-message round-trip** (two messages at different frequencies, both decoded).
 
 `PlaySamples` is independent of synth but completes the TX audio path.
+
+`PlaySamples` is **complete** — in-memory audio playback on `Playback` struct:
+- `PlaySamples(ctx, samples, sampleRate, channels) error` — plays `[]float32`
+  samples directly to the audio device, blocking until completion/cancellation.
+  Follows the same CAS/cancel/wg guard pattern as `PlayFile`.
+- `ErrPlaybackEmptySamples` — returned when samples is nil or empty.
+- Refactored `PlayFile` and `PlaySamples` to share `acquirePlay()` (preamble),
+  `releasePlay()` (cleanup), and `playBuffer()` (device lifecycle + drain) —
+  eliminating ~100 lines of duplication.
+- Full unit test coverage: nil samples, empty samples, not initialised, after
+  close, already playing, mutual exclusion with PlayFile, empty-before-acquire
+  ordering.
+- Full integration test coverage: 1-second 440 Hz sine wave playback (elapsed
+  > 200 ms), stop mid-play, context cancellation, close during play.
+- `internal/audio/README.md` updated with PlaySamples usage example, API
+  reference, and FT8 TX path documentation.
+
+**This milestone is complete.** All TX audio path components are implemented:
+`gfsk.go → synth.go → PlaySamples (playback.go)`
 
 ### Dependencies on Existing Code
 

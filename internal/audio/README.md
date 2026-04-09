@@ -1,6 +1,6 @@
 # audio
 
-Package `audio` provides real-time audio capture and WAV file playback via
+Package `audio` provides real-time audio capture and playback via
 [miniaudio](https://miniaud.io/) (through the `github.com/gen2brain/malgo` CGo binding).
 It is a pure I/O layer with no station-manager service dependencies.
 
@@ -13,7 +13,7 @@ Requires CGo and a C compiler. On Fedora: `sudo dnf install gcc`.
 | Type | Purpose |
 |---|---|
 | `Capture` | Records audio from a microphone or line-in device |
-| `Playback` | Plays a WAV file to an output device |
+| `Playback` | Plays a WAV file or in-memory `[]float32` samples to an output device |
 
 Both types share the same `Config` struct and `DefaultConfig()` constructor.
 They are independent — you can use either without the other.
@@ -25,8 +25,8 @@ They are independent — you can use either without the other.
 ```go
 type Config struct {
     DeviceIndex int            // -1 = default device
-    SampleRate  uint32         // used by Capture only; Playback reads rate from WAV
-    Channels    uint32         // used by Capture only; Playback reads channels from WAV
+    SampleRate  uint32         // used by Capture only; PlayFile reads from WAV, PlaySamples from args
+    Channels    uint32         // used by Capture only; PlayFile reads from WAV, PlaySamples from args
     BufferSize  uint32         // frames per audio callback
     Logger      logging.Logger // nil = no-op
 }
@@ -115,7 +115,12 @@ for i, d := range devices {
 
 ## Playback
 
-### Basic usage
+`Playback` supports two modes: playing a WAV file from disk (`PlayFile`) or
+playing in-memory `[]float32` samples directly (`PlaySamples`). Both block until
+completion, context cancellation, or `Stop()`/`Close()`. Only one source can
+play at a time; concurrent calls return `ErrPlaybackAlreadyPlaying`.
+
+### PlayFile — basic usage
 
 ```go
 p := audio.NewPlayback(audio.DefaultConfig())
@@ -139,6 +144,39 @@ is called. Only one file can play at a time; concurrent calls return
 
 The device sample rate and channel count are read from the WAV file header, so
 `Config.SampleRate` and `Config.Channels` are ignored for playback.
+
+### PlaySamples — in-memory audio (FT8 TX path)
+
+```go
+import (
+    "github.com/ColonelBlimp/station-manager/internal/audio"
+    "github.com/ColonelBlimp/station-manager/internal/ft8/synth"
+)
+
+// Synthesise FT8 audio waveform in memory.
+samples := synth.Synthesize(symbols, 1500.0) // 151 680 float32 samples at 12 kHz
+
+p := audio.NewPlayback(audio.DefaultConfig())
+defer p.Close()
+
+if err := p.Init(); err != nil {
+    log.Fatal(err)
+}
+
+ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+defer cancel()
+
+if err := p.PlaySamples(ctx, samples, 12000, 1); err != nil {
+    log.Fatal(err)
+}
+```
+
+`PlaySamples` is identical to `PlayFile` in behaviour — it blocks, respects
+`Stop()`/`Close()`, and shares the same mutual-exclusion flag. The caller
+supplies the sample rate and channel count directly instead of reading them
+from a WAV header.
+
+Returns `ErrPlaybackEmptySamples` if samples is nil or empty.
 
 ### Stop mid-play
 
@@ -185,13 +223,15 @@ p := audio.NewPlayback(cfg)
 | `(*Playback).Init() error` | Initialise the audio backend |
 | `(*Playback).ListDevices() ([]malgo.DeviceInfo, error)` | Enumerate playback devices |
 | `(*Playback).PlayFile(ctx, path) error` | Play a WAV file (blocking) |
+| `(*Playback).PlaySamples(ctx, samples, sampleRate, channels) error` | Play in-memory `[]float32` samples (blocking) |
 | `(*Playback).Stop() error` | Interrupt in-progress playback |
 | `(*Playback).Close() error` | Stop playback and release all resources |
-| `(*Playback).IsPlaying() bool` | True while PlayFile is in progress |
+| `(*Playback).IsPlaying() bool` | True while PlayFile or PlaySamples is in progress |
 | `ErrPlaybackNotInitialized` | Init not called |
-| `ErrPlaybackAlreadyPlaying` | PlayFile called while already playing |
+| `ErrPlaybackAlreadyPlaying` | PlayFile/PlaySamples called while already playing |
 | `ErrPlaybackNotPlaying` | Stop called while nothing is playing |
 | `ErrPlaybackClosed` | Operation attempted after Close |
+| `ErrPlaybackEmptySamples` | PlaySamples called with nil or empty samples |
 
 ---
 
@@ -265,8 +305,9 @@ go test -tags=integration ./audio/ -v
 ```
 
 Integration tests require audio input and output devices. They play a 1-second
-440 Hz sine wave and record live input. The playback test asserts that `PlayFile`
-takes longer than 200 ms to return (guards against audio callback never firing).
+440 Hz sine wave (via both `PlayFile` and `PlaySamples`) and record live input.
+The playback tests assert that playback takes longer than 200 ms to return
+(guards against audio callback never firing).
 
 ---
 
