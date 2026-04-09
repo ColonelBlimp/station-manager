@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -127,6 +128,12 @@ func TestRigConfigByID_notInitialized(t *testing.T) {
 func TestRigConfigByID_zeroIDReturnsError(t *testing.T) {
 	svc := newInitializedService(t)
 	_, err := svc.RigConfigByID(0)
+	assert.Error(t, err)
+}
+
+func TestRigConfigByID_negativeIDReturnsError(t *testing.T) {
+	svc := newInitializedService(t)
+	_, err := svc.RigConfigByID(-1)
 	assert.Error(t, err)
 }
 
@@ -314,6 +321,38 @@ func TestListenerConfigs_returnsList(t *testing.T) {
 	assert.NotEmpty(t, cfgs)
 }
 
+// --- AudioPlaybackConfig ---
+
+func TestAudioPlaybackConfig_notInitialized(t *testing.T) {
+	_, err := (&Service{}).AudioPlaybackConfig()
+	assert.Error(t, err)
+}
+
+func TestAudioPlaybackConfig_returnsValue(t *testing.T) {
+	svc := newInitializedService(t)
+	cfg, err := svc.AudioPlaybackConfig()
+	require.NoError(t, err)
+	// Default desktop config has DeviceIndex -1 and BufferSize 512
+	assert.Equal(t, -1, cfg.DeviceIndex)
+	assert.Equal(t, uint32(512), cfg.BufferSize)
+}
+
+// --- FT8Config ---
+
+func TestFT8Config_notInitialized(t *testing.T) {
+	_, err := (&Service{}).FT8Config()
+	assert.Error(t, err)
+}
+
+func TestFT8Config_returnsValue(t *testing.T) {
+	svc := newInitializedService(t)
+	cfg, err := svc.FT8Config()
+	require.NoError(t, err)
+	// Default desktop config has DeviceIndex -1 and BufferSize 512
+	assert.Equal(t, -1, cfg.DeviceIndex)
+	assert.Equal(t, uint32(512), cfg.BufferSize)
+}
+
 // --- UpdateAppConfig ---
 
 func TestUpdateAppConfig_notInitialized(t *testing.T) {
@@ -349,17 +388,45 @@ func TestUpdateAppConfig_diskWriteFailureDoesNotUpdateMemory(t *testing.T) {
 	svc := newInitializedService(t)
 	original := svc.AppConfig.OptionalConfigs.QrzViewUrl
 
-	// Make the config file read-only so write fails
-	cfgPath := filepath.Join(svc.WorkingDir, configFileName)
-	require.NoError(t, os.Chmod(cfgPath, 0o444))
-	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o640) })
-
 	updated := svc.AppConfig
 	updated.OptionalConfigs.QrzViewUrl = "https://should-not-be-set.com/"
+
+	// Redirect writes to a non-existent directory so the write always fails,
+	// even under root (unlike a chmod-based approach).
+	svc.WorkingDir = filepath.Join(t.TempDir(), "nonexistent", "subdir")
 
 	err := svc.UpdateAppConfig(updated)
 	assert.Error(t, err, "expected error when write fails")
 
 	// In-memory state must be unchanged
 	assert.Equal(t, original, svc.AppConfig.OptionalConfigs.QrzViewUrl)
+}
+
+// TestUpdateAppConfig_concurrentReadsDuringWrite verifies that concurrent getter
+// calls during an UpdateAppConfig do not race. Run with -race to detect violations.
+func TestUpdateAppConfig_concurrentReadsDuringWrite(t *testing.T) {
+	svc := newInitializedService(t)
+
+	var wg sync.WaitGroup
+	// Spawn readers
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = svc.OptionalConfigs()
+			_, _ = svc.LoggingConfig()
+			_, _ = svc.DatastoreConfig()
+		}()
+	}
+	// Spawn writers
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cfg := svc.AppConfig
+			cfg.OptionalConfigs.QrzViewUrl = "https://concurrent.example.com/"
+			_ = svc.UpdateAppConfig(cfg)
+		}()
+	}
+	wg.Wait()
 }

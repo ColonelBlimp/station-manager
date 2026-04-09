@@ -1,3 +1,4 @@
+// internal/config/service.go
 package config
 
 import (
@@ -17,15 +18,27 @@ type Service struct {
 	AppConfig     types.AppConfig
 	isInitialized atomic.Bool
 	initOnce      sync.Once
-	initErr       error // written only inside initOnce.Do; safe to read after Do returns
+	initErr       error        // written only inside initOnce.Do; safe to read after Do returns (sync.Once memory guarantee)
+	mu            sync.RWMutex // protects AppConfig against races between UpdateAppConfig and getters
 }
 
-// Initialize initializes the config service.
+// appConfig returns a snapshot copy of AppConfig under the read lock.
+// All getters must use this to avoid races with concurrent UpdateAppConfig calls.
+func (s *Service) appConfig() types.AppConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.AppConfig
+}
+
+// Initialize initializes the config service. It is safe to call concurrently;
+// only the first call performs initialization. If initialization fails, all
+// subsequent calls return the same error — the service cannot recover from a
+// failed initialization.
 func (s *Service) Initialize() error {
 	const op errors.Op = "config.Service.Initialize"
 
 	if s.isInitialized.Load() {
-		return nil // Exit gracefully
+		return nil
 	}
 
 	s.initOnce.Do(func() {
@@ -66,15 +79,19 @@ func (s *Service) Initialize() error {
 }
 
 // DatastoreConfig returns the datastore configuration.
+//
+// For sqlite, relative paths are resolved against WorkingDir in the returned
+// copy only — the on-disk config retains the relative path. Callers must not
+// pass the returned DatastoreConfig back to UpdateAppConfig without restoring
+// the original relative path, as doing so would make the config non-portable.
 func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
 	const op errors.Op = "config.Service.DatastoreConfig"
-	emptyRetVal := types.DatastoreConfig{}
 
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.DatastoreConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
-	cfg := s.AppConfig.DatastoreConfig
+	cfg := s.appConfig().DatastoreConfig
 
 	// For sqlite, resolve relative path against WorkingDir (desktop only)
 	if cfg.Driver == types.SqliteDriverName && cfg.Path != "" && !filepath.IsAbs(cfg.Path) {
@@ -87,13 +104,12 @@ func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
 // LoggingConfig returns the logging configuration.
 func (s *Service) LoggingConfig() (types.LoggingConfig, error) {
 	const op errors.Op = "config.Service.LoggingConfig"
-	emptyRetVal := types.LoggingConfig{}
 
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.LoggingConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
-	return s.AppConfig.LoggingConfig, nil
+	return s.appConfig().LoggingConfig, nil
 }
 
 // ServerConfig returns the server configuration from the application configuration. It requires the service to be initialized.
@@ -104,7 +120,7 @@ func (s *Service) ServerConfig() (*types.ServerConfig, error) {
 		return nil, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
-	return s.AppConfig.ServerConfig, nil
+	return s.appConfig().ServerConfig, nil
 }
 
 // RequiredConfigs retrieves the required configurations for the application. Returns an error if the service is uninitialized.
@@ -114,28 +130,27 @@ func (s *Service) RequiredConfigs() (types.RequiredConfigs, error) {
 	if !s.isInitialized.Load() {
 		return types.RequiredConfigs{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.RequiredConfigs, nil
+	return s.appConfig().RequiredConfigs, nil
 }
 
 // RigConfigByID retrieves the RigConfig for the given rig ID from the service's AppConfig. Returns an error if unavailable.
 func (s *Service) RigConfigByID(rigID int64) (types.RigConfig, error) {
 	const op errors.Op = "config.Service.RigConfigByID"
-	emptyRetVal := types.RigConfig{}
 
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.RigConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	if rigID == 0 {
-		return emptyRetVal, errors.New(op).Errorf("Invalid rig ID: %d", rigID)
+	if rigID <= 0 {
+		return types.RigConfig{}, errors.New(op).Errorf("rig ID must be positive, got: %d", rigID)
 	}
 
-	for _, rig := range s.AppConfig.RigConfigs {
+	for _, rig := range s.appConfig().RigConfigs {
 		if rig.ID == rigID {
 			return rig, nil
 		}
 	}
 
-	return emptyRetVal, errors.New(op).Errorf("rig not found for ID: %d", rigID)
+	return types.RigConfig{}, errors.New(op).Errorf("rig not found for ID: %d", rigID)
 }
 
 // CatStateValues retrieves the CAT state values for the default rig configuration in the service's application configuration.
@@ -147,12 +162,22 @@ func (s *Service) CatStateValues() (types.StateValues, error) {
 		return nil, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
-	stateValues := make(types.StateValues)
-	rigConfig, err := s.RigConfigByID(s.AppConfig.RequiredConfigs.DefaultRigID)
-	if err != nil {
-		return nil, errors.New(op).Err(err)
+	cfg := s.appConfig()
+
+	var rigConfig types.RigConfig
+	found := false
+	for _, rig := range cfg.RigConfigs {
+		if rig.ID == cfg.RequiredConfigs.DefaultRigID {
+			rigConfig = rig
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, errors.New(op).Errorf("rig not found for ID: %d", cfg.RequiredConfigs.DefaultRigID)
 	}
 
+	stateValues := make(types.StateValues)
 	for _, state := range rigConfig.CatStates {
 		for _, marker := range state.Markers {
 			if len(marker.ValueMappings) == 0 {
@@ -172,116 +197,117 @@ func (s *Service) CatStateValues() (types.StateValues, error) {
 // LoggingStationConfig retrieves the logging station configuration from the service's application configuration.
 func (s *Service) LoggingStationConfig() (types.LoggingStation, error) {
 	const op errors.Op = "config.Service.LoggingStationConfig"
-	emptyRetVal := types.LoggingStation{}
+
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.LoggingStation{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
-	return s.AppConfig.LoggingStation, nil
+	return s.appConfig().LoggingStation, nil
 }
 
 // LookupServiceConfig fetches the configuration for a given service by its name from the loaded application settings.
 func (s *Service) LookupServiceConfig(serviceName string) (types.LookupConfig, error) {
 	const op errors.Op = "config.Service.LookupServiceConfig"
-	emptyRetVal := types.LookupConfig{}
+
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.LookupConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName == "" {
-		return emptyRetVal, errors.New(op).Msg("service name cannot be empty")
+		return types.LookupConfig{}, errors.New(op).Msg("service name cannot be empty")
 	}
 
-	for _, cfg := range s.AppConfig.LookupServiceConfigs {
+	for _, cfg := range s.appConfig().LookupServiceConfigs {
 		if cfg.Name == serviceName {
 			return cfg, nil
 		}
 	}
 
-	return emptyRetVal, errors.New(op).Msgf("service config not found for: %s", serviceName)
+	return types.LookupConfig{}, errors.New(op).Msgf("service config not found for: %s", serviceName)
 }
 
 // ForwarderConfig retrieves the forwarder configuration for the specified service name.
 // Returns a ForwarderConfig object and nil error if found, otherwise returns an empty object and an appropriate error.
 func (s *Service) ForwarderConfig(serviceName string) (types.ForwarderConfig, error) {
 	const op errors.Op = "config.Service.ForwarderConfig"
-	emptyRetVal := types.ForwarderConfig{}
+
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.ForwarderConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
 
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName == "" {
-		return emptyRetVal, errors.New(op).Msg("service name cannot be empty")
+		return types.ForwarderConfig{}, errors.New(op).Msg("service name cannot be empty")
 	}
 
-	for _, cfg := range s.AppConfig.ForwardingConfigs {
+	for _, cfg := range s.appConfig().ForwardingConfigs {
 		if cfg.Name == serviceName {
 			return cfg, nil
 		}
 	}
 
-	return emptyRetVal, errors.New(op).Msgf("service config not found for: %s", serviceName)
+	return types.ForwarderConfig{}, errors.New(op).Msgf("service config not found for: %s", serviceName)
 }
 
 // ForwarderConfigs retrieves the list of forwarder configurations from the application configuration.
 func (s *Service) ForwarderConfigs() ([]types.ForwarderConfig, error) {
 	const op errors.Op = "config.Service.ForwarderConfigs"
-	var emptyRetVal []types.ForwarderConfig
+
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return nil, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.ForwardingConfigs, nil
+	return s.appConfig().ForwardingConfigs, nil
 }
 
 // EmailConfig retrieves the email configuration from the application configuration. Returns an error if uninitialized.
 func (s *Service) EmailConfig() (types.EmailConfig, error) {
 	const op errors.Op = "config.Service.EmailConfig"
-	emptyRetVal := types.EmailConfig{}
+
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.EmailConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.EmailConfig, nil
+	return s.appConfig().EmailConfig, nil
 }
 
 // OptionalConfigs retrieves optional configuration settings from the service if it has been properly initialized.
 func (s *Service) OptionalConfigs() (types.OptionalConfigs, error) {
 	const op errors.Op = "config.Service.OptionalConfigs"
-	emptyRetVal := types.OptionalConfigs{}
+
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return types.OptionalConfigs{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.OptionalConfigs, nil
+	return s.appConfig().OptionalConfigs, nil
 }
 
 // ListenerConfigs retrieves the listener configuration from the application configuration.
-// Returns an empty slice if the service is not initialized.
 func (s *Service) ListenerConfigs() ([]types.ListenerConfig, error) {
 	const op errors.Op = "config.Service.ListenerConfigs"
-	var emptyRetVal []types.ListenerConfig
+
 	if !s.isInitialized.Load() {
-		return emptyRetVal, errors.New(op).Msg(errMsgNotInitialized)
+		return nil, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.ListenerConfigs, nil
+	return s.appConfig().ListenerConfigs, nil
 }
 
 // AudioPlaybackConfig retrieves the audio playback configuration from the application configuration.
 func (s *Service) AudioPlaybackConfig() (types.AudioPlaybackConfig, error) {
 	const op errors.Op = "config.Service.AudioPlaybackConfig"
+
 	if !s.isInitialized.Load() {
 		return types.AudioPlaybackConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.AudioPlaybackConfig, nil
+	return s.appConfig().AudioPlaybackConfig, nil
 }
 
 // FT8Config retrieves the FT8 digital mode configuration from the application configuration.
 func (s *Service) FT8Config() (types.FT8Config, error) {
 	const op errors.Op = "config.Service.FT8Config"
+
 	if !s.isInitialized.Load() {
 		return types.FT8Config{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
-	return s.AppConfig.FT8Config, nil
+	return s.appConfig().FT8Config, nil
 }
 
 // UpdateAppConfig updates the application configuration and writes it to the configuration file.
@@ -301,6 +327,8 @@ func (s *Service) UpdateAppConfig(cfg types.AppConfig) error {
 		return err
 	}
 
+	s.mu.Lock()
 	s.AppConfig = cfg
+	s.mu.Unlock()
 	return nil
 }

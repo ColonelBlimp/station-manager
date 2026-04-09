@@ -40,10 +40,15 @@ working towards a complete FT8 digital mode without external dependencies
 | Message pack/unpack + CRC-14 | `internal/ft8/message/` | ✅ Complete |
 | LDPC codec (encoder + decoder) | `internal/ft8/codec/` | ✅ Complete |
 | DSP pipeline (FFT, spectrogram, candidate detection, soft demodulation) | `internal/ft8/dsp/` | ✅ Complete |
-| TX synthesis (GFSK) + PlaySamples | `internal/ft8/synth/`, `internal/audio/` | 🔧 Next |
-| FT8 service (orchestration + QSO state machine) | `internal/ft8/service/` | Planned |
+| TX synthesis (GFSK) | `internal/ft8/synth/` | ✅ Complete |
+| In-memory audio playback (PlaySamples) | `internal/audio/` | ✅ Complete |
+| FT8 service (RX orchestration) | `internal/ft8/service/` | 🔧 In Progress |
+| FT8 service (TX orchestration + QSO state machine) | `internal/ft8/service/` | Planned |
 
 The full **RX decode chain** is functional end-to-end: audio samples →
 spectrogram → candidate detection → soft demodulation → LDPC decode → CRC
-verify → decoded messages. The **TX encode chain** is complete at the bit level
-(message → LDPC encode → symbol mapping); GFSK audio synthesis is next.
+verify → decoded messages. The full **TX audio chain** is also complete:
+message → LDPC encode → symbol mapping → GFSK synthesis → PlaySamples.
+The FT8 service that orchestrates both paths is under active development,
+starting with the RX-only loop (audio capture → window accumulation →
+decode → output).

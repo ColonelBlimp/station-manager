@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -13,32 +16,20 @@ func TestInitialize_createsDefaultConfig(t *testing.T) {
 	workDir := t.TempDir()
 
 	svc := &Service{WorkingDir: workDir}
-	if err := svc.Initialize(); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
-	}
+	require.NoError(t, svc.Initialize())
 
 	// Verify config.json exists
 	cfgPath := filepath.Join(workDir, configFileName)
-	if _, err := os.Stat(cfgPath); err != nil {
-		t.Fatalf("expected %s to exist, got error: %v", cfgPath, err)
-	}
+	_, err := os.Stat(cfgPath)
+	require.NoError(t, err, "expected %s to exist", cfgPath)
 
-	// Verify getters work and initialized
 	dbCfg, err := svc.DatastoreConfig()
-	if err != nil {
-		t.Fatalf("DatastoreConfig() error = %v", err)
-	}
-	if dbCfg.Driver != types.SqliteDriverName {
-		t.Errorf("expected default driver %q, got %q", types.SqliteDriverName, dbCfg.Driver)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, types.SqliteDriverName, dbCfg.Driver)
 
 	logCfg, err := svc.LoggingConfig()
-	if err != nil {
-		t.Fatalf("LoggingConfig() error = %v", err)
-	}
-	if logCfg.Level == "" {
-		t.Errorf("expected logging level to be set, got empty")
-	}
+	require.NoError(t, err)
+	assert.NotEmpty(t, logCfg.Level)
 }
 
 // TestInitialize_idempotent ensures multiple Initialize calls are safe and do not error.
@@ -46,70 +37,42 @@ func TestInitialize_idempotent(t *testing.T) {
 	workDir := t.TempDir()
 	svc := &Service{WorkingDir: workDir}
 
-	if err := svc.Initialize(); err != nil {
-		t.Fatalf("first Initialize() error = %v", err)
-	}
-	if err := svc.Initialize(); err != nil { // should be a no-op
-		t.Fatalf("second Initialize() error = %v", err)
-	}
-}
-
-// TestGetters_notInitialized ensures getters fail when service not initialized.
-func TestGetters_notInitialized(t *testing.T) {
-	svc := &Service{}
-	if _, err := svc.DatastoreConfig(); err == nil {
-		t.Errorf("expected error when not initialized for DatastoreConfig()")
-	}
-	if _, err := svc.LoggingConfig(); err == nil {
-		t.Errorf("expected error when not initialized for LoggingConfig()")
-	}
+	require.NoError(t, svc.Initialize(), "first Initialize()")
+	require.NoError(t, svc.Initialize(), "second Initialize() should be a no-op")
 }
 
 func TestInitialize_envSelectsSqlite(t *testing.T) {
-	workDir := t.TempDir()
-	// Ensure file does not exist and env selects sqlite
-	_ = os.Unsetenv(EnvSmDefaultDB)
-	if err := os.Setenv(EnvSmDefaultDB, "sqlite"); err != nil {
-		t.Fatalf("Setenv: %v", err)
-	}
 	t.Cleanup(func() { _ = os.Unsetenv(EnvSmDefaultDB) })
+	require.NoError(t, os.Setenv(EnvSmDefaultDB, "sqlite"))
 
-	svc := &Service{WorkingDir: workDir}
-	if err := svc.Initialize(); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
-	}
-
-	cfgPath := filepath.Join(workDir, configFileName)
-	if _, err := os.Stat(cfgPath); err != nil {
-		t.Fatalf("expected %s to exist, got error: %v", cfgPath, err)
-	}
+	svc := &Service{WorkingDir: t.TempDir()}
+	require.NoError(t, svc.Initialize())
 
 	dbCfg, err := svc.DatastoreConfig()
-	if err != nil {
-		t.Fatalf("DatastoreConfig() error = %v", err)
-	}
-	if dbCfg.Driver != types.SqliteDriverName {
-		t.Errorf("expected driver %q, got %q", types.SqliteDriverName, dbCfg.Driver)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, types.SqliteDriverName, dbCfg.Driver)
 }
 
 func TestInitialize_envSelectsPostgres(t *testing.T) {
-	workDir := t.TempDir()
-	_ = os.Unsetenv(EnvSmDefaultDB)
-	if err := os.Setenv(EnvSmDefaultDB, "postgres"); err != nil {
-		t.Fatalf("Setenv: %v", err)
-	}
 	t.Cleanup(func() { _ = os.Unsetenv(EnvSmDefaultDB) })
+	require.NoError(t, os.Setenv(EnvSmDefaultDB, "postgres"))
 
-	svc := &Service{WorkingDir: workDir}
-	if err := svc.Initialize(); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
-	}
+	svc := &Service{WorkingDir: t.TempDir()}
+	require.NoError(t, svc.Initialize())
+
 	dbCfg, err := svc.DatastoreConfig()
-	if err != nil {
-		t.Fatalf("DatastoreConfig() error = %v", err)
-	}
-	if dbCfg.Driver != types.PostgresDriverName {
-		t.Errorf("expected driver %q, got %q", types.PostgresDriverName, dbCfg.Driver)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, types.PostgresDriverName, dbCfg.Driver)
+}
+
+// TestInitialize_unrecognizedEnvVarReturnsError ensures that an unknown SM_DEFAULT_DB
+// value causes Initialize to return an error rather than silently using the default.
+func TestInitialize_unrecognizedEnvVarReturnsError(t *testing.T) {
+	t.Cleanup(func() { _ = os.Unsetenv(EnvSmDefaultDB) })
+	require.NoError(t, os.Setenv(EnvSmDefaultDB, "mysql"))
+
+	svc := &Service{WorkingDir: t.TempDir()}
+	err := svc.Initialize()
+	require.Error(t, err, "expected error for unrecognized SM_DEFAULT_DB value")
+	assert.False(t, svc.isInitialized.Load(), "service must not be marked initialized after failure")
 }
