@@ -285,13 +285,15 @@ func (s *Service) Initialize() error {
 
 		s.isInitialized.Store(true)
 
+		// Log the effective config values (after defaults are applied, not
+		// the raw cfg which may still show zeros for MaxCandidates/MaxIterations).
 		s.Logger.InfoWith().
-			Int("device_index", cfg.DeviceIndex).
-			Uint32("buffer_size", cfg.BufferSize).
-			Int("max_candidates", cfg.MaxCandidates).
-			Int("max_iterations", cfg.MaxIterations).
-			Bool("enabled", cfg.Enabled).
-			Bool("tx_enabled", cfg.TXEnabled).
+			Int("device_index", s.ft8Config.DeviceIndex).
+			Uint32("buffer_size", s.ft8Config.BufferSize).
+			Int("max_candidates", s.ft8Config.MaxCandidates).
+			Int("max_iterations", s.ft8Config.MaxIterations).
+			Bool("enabled", s.ft8Config.Enabled).
+			Bool("tx_enabled", s.ft8Config.TXEnabled).
 			Msg("FT8 service initialized")
 	})
 

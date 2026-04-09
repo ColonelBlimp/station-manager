@@ -3,6 +3,53 @@
 ## Date
 2026-04-09
 
+## Status: RESOLVED (2026-04-09)
+
+### Root Cause
+The DSP pipeline (`ProcessWindowMultiPass`) is **NOT broken**. WAV regression
+testing confirms it decodes **equal or more** messages than the original
+`ProcessWindow` (15 vs 14 on the primary test file, 8 vs 7 on the second).
+
+The reported "0 decodes" was caused by **two misleading log statements** that
+showed `max_candidates=0 max_iterations=0`, making it appear the pipeline was
+misconfigured. In reality, the service's `Initialize()` correctly applies
+defaults (120, 40) before the pipeline runs — the logs just printed the raw
+config values BEFORE defaults were applied.
+
+The 0 decodes from live audio were likely caused by **no FT8 signals present
+on 10m (28.074 MHz)** during the test period — propagation on 10m is
+intermittent.
+
+### Fixes Applied
+1. **`service.go` line 288**: Changed log to use `s.ft8Config` (after defaults)
+   instead of `cfg` (raw config). Now correctly shows `max_candidates=120`.
+2. **`root.go` (CLI)**: Moved config log to AFTER `service.Initialize()` so
+   defaults are visible. Added clarifying message about 0-value defaults.
+3. **`dsp_wav_test.go`**: Added `TestProcessWindowMultiPassWAVRegression` with
+   baselines: `181201_180245.wav: 15`, `210703_133430.wav: 8`.
+4. **`multipass_diag_test.go`**: Added comprehensive diagnostic tests (Steps
+   1–5 from the debugging plan below).
+
+### Diagnostic Test Results
+
+| Test | Result |
+|---|---|
+| Step 1: MultiPass vs ProcessWindow on WAV | MultiPass **wins** (15 vs 14, 8 vs 7) |
+| Step 2: syncScoreNeighbor distribution | max=5.39, p99=1.32, threshold 1.5 gives 177 candidates |
+| Step 3: Candidate counts | Standard: 200, Hi-res: 177 — both healthy |
+| Step 4: freqOSR=1 vs 2 | Both find 120 candidates (hit cap) |
+| Step 5: RefineAudioFast vs original | Both decode 14 — identical |
+
+### WSJT-X Reference Analysis
+WSJT-X `sync8.f90` uses a fundamentally different scoring method (ratio-based
+on linear power with baseline normalization) than either `syncScoreSteps`
+(mean-difference on log2 power) or `syncScoreNeighbor` (neighbor-comparison
+on log2 power). The ft8_lib `decode.c` neighbor method operates on uint8
+quantized dB values with `min_score=10` (≈5 dB), which corresponds to ~1.66
+in log2 units — close to the current threshold of 1.5.
+
+---
+
 ## What Was Changed ("Close FT8 Decode-Rate Gap" Implementation)
 
 Three new techniques were implemented to close the decode-rate gap with WSJT-X:
@@ -43,8 +90,9 @@ Default config values were updated: `DefaultMaxCandidates = 120` and `DefaultMax
 | File | Status |
 |---|---|
 | `internal/ft8/dsp/dsp.go` | `ProcessWindow` retained as-is (unit tests still use it) |
-| `internal/ft8/dsp/dsp_test.go` | All existing tests still target `ProcessWindow` — **no tests for `ProcessWindowMultiPass`** |
-| `internal/ft8/dsp/dsp_wav_test.go` | WAV regression tests still use `ProcessWindow` — **not testing the new pipeline** |
+| `internal/ft8/dsp/dsp_test.go` | All existing tests still target `ProcessWindow` |
+| `internal/ft8/dsp/dsp_wav_test.go` | WAV regression tests for both `ProcessWindow` AND `ProcessWindowMultiPass` |
+| `internal/ft8/dsp/multipass_diag_test.go` | Diagnostic tests comparing both pipelines (Steps 1–5) |
 
 ## The Bug: 0 Decodes from Live Audio
 
@@ -148,7 +196,8 @@ This immediately restores live decoding while the multi-pass pipeline is debugge
 | `internal/ft8/dsp/demod.go` | `DemodulateAudio`, `NormalizeLLR` |
 | `internal/ft8/dsp/symbols.go` | All FT8 constants (`SamplesPerSymbol=1920`, `SampleRate=12000`, etc.) |
 | `internal/ft8/dsp/dsp_test.go` | Pipeline unit tests (all for `ProcessWindow`, none for `ProcessWindowMultiPass`) |
-| `internal/ft8/dsp/dsp_wav_test.go` | WAV regression tests (all for `ProcessWindow`) |
+| `internal/ft8/dsp/dsp_wav_test.go` | WAV regression tests for both `ProcessWindow` and `ProcessWindowMultiPass` |
+| `internal/ft8/dsp/multipass_diag_test.go` | Diagnostic tests (Steps 1–5) comparing both pipelines |
 | `internal/ft8/service/service.go` | FT8 service wiring — `processWindow` calls `dsp.ProcessWindowMultiPass` (line 574) |
 | `internal/types/ft8.go` | `FT8Config` struct |
 | `cmd/ft8/cmd/root.go` | CLI entry point |

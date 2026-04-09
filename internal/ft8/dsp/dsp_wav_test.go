@@ -38,6 +38,17 @@ var expectedDecodes = map[string]int{
 	"210703_133430.wav": 7,
 }
 
+// expectedDecodesMultiPass maps each WAV filename to the minimum number of
+// messages that [ProcessWindowMultiPass] must decode. The multi-pass pipeline
+// uses hi-res spectrograms, neighbor-comparison sync scoring, and iterative
+// signal subtraction, so it should decode at least as many as [ProcessWindow].
+//
+// DO NOT lower these values without understanding the regression.
+var expectedDecodesMultiPass = map[string]int{
+	"181201_180245.wav": 15,
+	"210703_133430.wav": 8,
+}
+
 // testdataDir returns the absolute path to the testdata directory.
 func testdataDir(t *testing.T) string {
 	t.Helper()
@@ -129,6 +140,71 @@ func TestProcessWindowWAVRegression(t *testing.T) {
 
 			if len(msgs) > expected {
 				t.Logf("%s: IMPROVEMENT — decoded %d (baseline %d). Update expectedDecodes to lock in.",
+					name, len(msgs), expected)
+			}
+		})
+	}
+}
+
+// TestProcessWindowMultiPassWAVRegression is the regression guard for the
+// multi-pass RX pipeline. It runs each WAV file through ProcessWindowMultiPass
+// and FAILS if the decode count drops below the established baseline.
+//
+// The multi-pass pipeline should decode at least as many messages as the
+// standard ProcessWindow pipeline (and typically more, due to signal
+// subtraction and hi-res candidate detection).
+func TestProcessWindowMultiPassWAVRegression(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping WAV regression test (slow under -race)")
+	}
+	wavFiles := findWAVFiles(t)
+	if len(wavFiles) == 0 {
+		t.Skipf("no WAV files in testdata/ — place 12 kHz mono FT8 recordings there to enable this test")
+	}
+
+	for _, path := range wavFiles {
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			wav, err := audio.ReadWAV(path)
+			if err != nil {
+				t.Fatalf("ReadWAV(%s): %v", name, err)
+			}
+
+			if wav.SampleRate != SampleRate {
+				t.Skipf("%s: sample rate %d Hz, want %d Hz (skipping)", name, wav.SampleRate, SampleRate)
+			}
+			if wav.Channels != 1 {
+				t.Skipf("%s: %d channels, want 1 (mono) (skipping)", name, wav.Channels)
+			}
+
+			msgs := ProcessWindowMultiPass(wav.Samples, DefaultMaxCandidates, DefaultMaxIterations)
+
+			t.Logf("%s: decoded %d message(s)", name, len(msgs))
+			for i, dm := range msgs {
+				if msg, err := message.Unpack(dm.Msg77); err == nil {
+					t.Logf("  [%d] freq=%.1f Hz time=%.3f s snr=%.1f dB — %s",
+						i, dm.Freq, dm.TimeOff, dm.SNR, formatMessage(msg))
+				} else {
+					t.Logf("  [%d] freq=%.1f Hz time=%.3f s snr=%.1f dB — unpack error: %v",
+						i, dm.Freq, dm.TimeOff, dm.SNR, err)
+				}
+			}
+
+			// Check against expected baseline.
+			expected, hasBaseline := expectedDecodesMultiPass[name]
+			if !hasBaseline {
+				t.Logf("%s: no baseline in expectedDecodesMultiPass — add entry: %q: %d",
+					name, name, len(msgs))
+				return
+			}
+
+			if len(msgs) < expected {
+				t.Errorf("REGRESSION: %s decoded %d messages, expected >= %d (baseline)",
+					name, len(msgs), expected)
+			}
+
+			if len(msgs) > expected {
+				t.Logf("%s: IMPROVEMENT — decoded %d (baseline %d). Update expectedDecodesMultiPass to lock in.",
 					name, len(msgs), expected)
 			}
 		})

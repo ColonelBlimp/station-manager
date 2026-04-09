@@ -169,14 +169,6 @@ func runRX(_ *cobra.Command, _ []string) error {
 		configService.AppConfig.FT8Config.DeviceIndex = flagDevice
 	}
 
-	ft8Cfg := configService.AppConfig.FT8Config
-	logService.InfoWith().
-		Int("device_index", ft8Cfg.DeviceIndex).
-		Uint32("buffer_size", ft8Cfg.BufferSize).
-		Int("max_candidates", ft8Cfg.MaxCandidates).
-		Int("max_iterations", ft8Cfg.MaxIterations).
-		Msg("FT8 RX configuration")
-
 	// --- Create and initialise the FT8 service ---
 	ft8svc := &service.Service{
 		ConfigService: configService,
@@ -186,6 +178,16 @@ func runRX(_ *cobra.Command, _ []string) error {
 	if err := ft8svc.Initialize(); err != nil {
 		return fmt.Errorf("FT8 service init: %w", err)
 	}
+
+	// Log the effective config AFTER Initialize() has applied defaults
+	// (e.g., MaxCandidates=120, MaxIterations=40 when the config file has 0).
+	ft8Cfg := configService.AppConfig.FT8Config
+	logService.InfoWith().
+		Int("device_index", ft8Cfg.DeviceIndex).
+		Uint32("buffer_size", ft8Cfg.BufferSize).
+		Int("max_candidates", ft8Cfg.MaxCandidates).
+		Int("max_iterations", ft8Cfg.MaxIterations).
+		Msg("FT8 RX configuration (from config file — service applies defaults for 0 values)")
 
 	// --- Signal handling ---
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
