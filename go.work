@@ -4,6 +4,7 @@ use (
 	./apps/config
 	./apps/logbook
 	./apps/logging
+	./cmd/ft8
 	./cmd/importer
 	./internal
 )
