@@ -61,6 +61,7 @@ func NewPlayback(cfg Config) *Playback {
 }
 
 // Init initialises the audio backend.
+// Idempotent: a second call after successful initialisation returns nil.
 // Returns ErrPlaybackClosed if Close has already been called.
 func (p *Playback) Init() error {
 	const op errors.Op = "audio.Playback.Init"
@@ -72,7 +73,7 @@ func (p *Playback) Init() error {
 		return ErrPlaybackClosed
 	}
 	if p.ctx != nil {
-		return errors.New(op).Msg("already initialized")
+		return nil // already initialised — idempotent
 	}
 
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
@@ -102,16 +103,30 @@ func (p *Playback) ListDevices() ([]malgo.DeviceInfo, error) {
 	return infos, nil
 }
 
-// IsPlaying returns true if a PlayFile call is currently in progress.
+// IsPlaying returns true if a PlayFile or PlaySamples call is currently in progress.
 func (p *Playback) IsPlaying() bool {
 	return p.playing.Load()
 }
 
-// Stop interrupts any in-progress PlayFile, causing it to return immediately.
-// Returns ErrPlaybackNotPlaying if nothing is playing.
-// If Stop is called in the sub-microsecond window between playing being set true
-// and cancelPlay being registered (essentially impossible in practice), it returns
-// nil without cancelling — IsPlaying() remains the authoritative "is it running" check.
+// Stop interrupts any in-progress PlayFile or PlaySamples call, causing it to
+// return immediately. Returns ErrPlaybackNotPlaying if nothing is playing.
+//
+// There are two benign TOCTOU windows where Stop returns nil without actually
+// cancelling anything:
+//
+//  1. Start race: playing.Load() sees true, but cancelPlay has not been
+//     registered yet (the window between the CAS in acquirePlay and the
+//     mu.Lock that stores cancelPlay). This is sub-microsecond.
+//
+//  2. End race: playing.Load() sees true, but releasePlay() fires on the
+//     playback goroutine before Stop acquires mu — clearing cancelPlay to
+//     nil and setting playing to false. This is common when playback
+//     finishes quickly or the buffer is short.
+//
+// In both cases Stop returns nil (not an error) and the playback either
+// hasn't started cancellation setup yet or has already finished naturally.
+// Callers should treat IsPlaying() as the authoritative state check, not
+// the return value of Stop.
 func (p *Playback) Stop() error {
 	if !p.playing.Load() {
 		return ErrPlaybackNotPlaying
@@ -290,6 +305,13 @@ func (p *Playback) releasePlay() {
 // audio callback, and blocks until completion/cancellation.
 func (p *Playback) playBuffer(op errors.Op, ctx, playCtx context.Context,
 	audioCtx malgo.Context, samples []float32, sampleRate, channels uint32) error {
+
+	// Bail early if the caller's context or Stop()/Close() already fired
+	// before we allocate a device. Analogous to the playCtx.Err() check
+	// in PlayFile after readWAV.
+	if ctx.Err() != nil || playCtx.Err() != nil {
+		return nil
+	}
 
 	// Playback state — only accessed from the single audio callback thread.
 	pos := 0

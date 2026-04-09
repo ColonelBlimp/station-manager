@@ -3,6 +3,7 @@ package audio
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -56,7 +57,22 @@ func TestPlayback_Stop_NotPlaying(t *testing.T) {
 	require.ErrorIs(t, err, ErrPlaybackNotPlaying)
 }
 
+// --------------- ListDevices -------------------------------------------------
+
+func TestPlayback_ListDevices_NotInitialized(t *testing.T) {
+	p := newPlayback(t)
+	_, err := p.ListDevices()
+	require.ErrorIs(t, err, ErrPlaybackNotInitialized)
+}
+
 // --------------- Init --------------------------------------------------------
+
+func TestPlayback_Init_Idempotent(t *testing.T) {
+	p := NewPlayback(DefaultConfig())
+	defer p.Close()
+	require.NoError(t, p.Init())
+	require.NoError(t, p.Init(), "second Init must be a no-op")
+}
 
 func TestPlayback_Init_AfterClose_ReturnsErrClosed(t *testing.T) {
 	p := NewPlayback(DefaultConfig())
@@ -132,7 +148,7 @@ func TestPlayback_PlayFile_FileNotFound(t *testing.T) {
 	require.NoError(t, p.Init())
 	defer p.Close()
 
-	err := p.PlayFile(context.Background(), "/tmp/no-such-file-for-station-manager-test.wav")
+	err := p.PlayFile(context.Background(), filepath.Join(t.TempDir(), "no-such.wav"))
 	require.Error(t, err)
 	require.False(t, p.IsPlaying(), "IsPlaying must be false after failed PlayFile")
 }
@@ -158,6 +174,7 @@ func createTempFile(t *testing.T, content []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer tmp.Close()
 	_, err = tmp.Write(content)
 	return tmp.Name(), err
 }

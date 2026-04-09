@@ -105,6 +105,7 @@ func (c *Capture) SetCallback(cb SampleCallback) {
 }
 
 // Init initializes the audio backend.
+// Idempotent: a second call after successful initialisation returns nil.
 // Returns ErrClosed if Close has already been called; a Capture cannot be reused
 // after closing because the Samples channel and closeOnce are permanently spent.
 func (c *Capture) Init() error {
@@ -118,7 +119,7 @@ func (c *Capture) Init() error {
 	}
 
 	if c.ctx != nil {
-		return errors.New(op).Msg("already initialized")
+		return nil // already initialised — idempotent
 	}
 
 	ctxConfig := malgo.ContextConfig{}

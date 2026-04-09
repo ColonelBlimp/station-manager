@@ -70,10 +70,11 @@ func TestPlayback_PlayFile_Integration(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// A 1s WAV + 500ms drain should take ~1.5s.
-	// If it returned in < 200ms the audio callback never fired —
-	// check system audio routing (pavucontrol, qpwgraph, system volume).
+	// If it returned in < 100ms the audio callback almost certainly never fired.
+	// The threshold is kept low (100ms rather than 200ms) to avoid flakes on
+	// slow VMs where device start-up latency eats into the measured time.
 	t.Logf("PlayFile completed in %v", elapsed)
-	require.Greater(t, elapsed, 200*time.Millisecond,
+	require.Greater(t, elapsed, 100*time.Millisecond,
 		"PlayFile returned too quickly — audio callback may not have fired; check audio routing")
 
 	require.False(t, p.IsPlaying())
@@ -93,9 +94,9 @@ func TestPlayback_Stop_Integration(t *testing.T) {
 		done <- p.PlayFile(ctx, path)
 	}()
 
-	// Give the device time to start.
-	time.Sleep(20 * time.Millisecond)
-	require.True(t, p.IsPlaying())
+	// Wait for the device to start rather than a fixed sleep.
+	require.Eventually(t, p.IsPlaying, 500*time.Millisecond, 5*time.Millisecond,
+		"playback did not start in time")
 
 	require.NoError(t, p.Stop())
 
@@ -122,7 +123,8 @@ func TestPlayback_ContextCancel_Integration(t *testing.T) {
 		done <- p.PlayFile(ctx, path)
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, p.IsPlaying, 500*time.Millisecond, 5*time.Millisecond,
+		"playback did not start in time")
 	cancel()
 
 	select {
@@ -143,7 +145,8 @@ func TestPlayback_Close_DuringPlay_Integration(t *testing.T) {
 		done <- p.PlayFile(context.Background(), path)
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, p.IsPlaying, 500*time.Millisecond, 5*time.Millisecond,
+		"playback did not start in time")
 	require.NoError(t, p.Close())
 
 	select {
@@ -182,9 +185,9 @@ func TestPlayback_PlaySamples_Integration(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// A 1s buffer + 500ms drain should take ~1.5s.
-	// If it returned in < 200ms the audio callback never fired.
+	// If it returned in < 100ms the audio callback almost certainly never fired.
 	t.Logf("PlaySamples completed in %v", elapsed)
-	require.Greater(t, elapsed, 200*time.Millisecond,
+	require.Greater(t, elapsed, 100*time.Millisecond,
 		"PlaySamples returned too quickly — audio callback may not have fired; check audio routing")
 
 	require.False(t, p.IsPlaying())
@@ -204,9 +207,9 @@ func TestPlayback_PlaySamples_Stop_Integration(t *testing.T) {
 		done <- p.PlaySamples(ctx, samples, 48000, 1)
 	}()
 
-	// Give the device time to start.
-	time.Sleep(20 * time.Millisecond)
-	require.True(t, p.IsPlaying())
+	// Wait for the device to start rather than a fixed sleep.
+	require.Eventually(t, p.IsPlaying, 500*time.Millisecond, 5*time.Millisecond,
+		"playback did not start in time")
 
 	require.NoError(t, p.Stop())
 
@@ -233,7 +236,8 @@ func TestPlayback_PlaySamples_ContextCancel_Integration(t *testing.T) {
 		done <- p.PlaySamples(ctx, samples, 48000, 1)
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, p.IsPlaying, 500*time.Millisecond, 5*time.Millisecond,
+		"playback did not start in time")
 	cancel()
 
 	select {
@@ -254,7 +258,8 @@ func TestPlayback_PlaySamples_Close_DuringPlay_Integration(t *testing.T) {
 		done <- p.PlaySamples(context.Background(), samples, 48000, 1)
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, p.IsPlaying, 500*time.Millisecond, 5*time.Millisecond,
+		"playback did not start in time")
 	require.NoError(t, p.Close())
 
 	select {

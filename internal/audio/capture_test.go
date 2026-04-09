@@ -88,6 +88,13 @@ func TestErrors(t *testing.T) {
 	require.Equal(t, "audio capture closed", ErrClosed.Error())
 }
 
+func TestCapture_Init_Idempotent(t *testing.T) {
+	c := New(DefaultConfig())
+	defer c.Close()
+	require.NoError(t, c.Init())
+	require.NoError(t, c.Init(), "second Init must be a no-op")
+}
+
 func TestCapture_Init_AfterClose_ReturnsErrClosed(t *testing.T) {
 	c := New(DefaultConfig())
 	require.NoError(t, c.Init())
