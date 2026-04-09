@@ -11,6 +11,18 @@ type FT8Config struct {
 	MaxCandidates int    `json:"max_candidates"`
 	MaxIterations int    `json:"max_iterations"`
 
+	// CaptureChannels is the number of channels to request from the audio
+	// device: 1 for mono, 2 for stereo. Default 0 means 2 (stereo).
+	// Many USB audio codecs (e.g., Yaesu FTdx10 / FT-710 PCM2903C) deliver
+	// the rig's received audio on only one channel. Capturing in stereo and
+	// extracting the correct channel avoids the ~6 dB signal loss caused by
+	// miniaudio's automatic (L+R)/2 downmix.
+	CaptureChannels uint32 `json:"capture_channels"`
+
+	// CaptureChannel selects which channel to extract when CaptureChannels is
+	// 2: "left" (default) or "right". Ignored when CaptureChannels is 1.
+	CaptureChannel string `json:"capture_channel"`
+
 	// --- TX (playback + synthesis) ---
 
 	// TXEnabled controls whether the TX path is wired up during Initialize.

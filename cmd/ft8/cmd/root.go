@@ -41,6 +41,7 @@ var (
 	flagDevice      int
 	flagListDevices bool
 	flagVerbose     bool
+	flagDiag        bool
 )
 
 var rootCmd = &cobra.Command{
@@ -57,6 +58,7 @@ Examples:
   ft8 --list-devices            List available audio capture devices
   ft8 --device 3                Decode using capture device 3
   ft8 --device 3 --windows 4   Decode 4 windows (60 s) and exit
+  ft8 --device 1 --diag         Audio capture diagnostics (no decode)
   ft8 --verbose                 Enable debug-level logging`,
 	PersistentPreRunE: setup,
 	RunE:              runRX,
@@ -77,6 +79,8 @@ func init() {
 		"list audio capture devices and exit")
 	rootCmd.Flags().BoolVar(&flagVerbose, "verbose", false,
 		"enable debug-level logging")
+	rootCmd.Flags().BoolVar(&flagDiag, "diag", false,
+		"run audio capture diagnostics (no FT8 decode)")
 }
 
 // setup performs DI wiring, config loading, and logging initialisation.
@@ -155,6 +159,15 @@ func runRX(_ *cobra.Command, _ []string) error {
 	// --- List devices mode ---
 	if flagListDevices {
 		return listDevices()
+	}
+
+	// --- Audio diagnostics mode ---
+	if flagDiag {
+		dev := flagDevice
+		if dev < 0 {
+			dev = configService.AppConfig.FT8Config.DeviceIndex
+		}
+		return runDiag(dev)
 	}
 
 	// --- Apply runtime overrides to FT8 config ---

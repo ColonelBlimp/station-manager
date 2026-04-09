@@ -5,16 +5,19 @@
 //
 // The service wires the complete receive chain:
 //
-//	audio.Capture → sample accumulation → dsp.ProcessWindow →
-//	message.Unpack → output channel
+//	audio.Capture (48 kHz) → channel extraction → Decimate4 (12 kHz) →
+//	sample accumulation → dsp.ProcessWindow → message.Unpack → output channel
 //
-// Audio samples are captured at 12 kHz mono (the standard WSJT sample rate)
-// and accumulated into window-sized buffers of [dsp.WindowSamples] samples
-// (180 000 = 15 seconds). When a full window is collected, the buffer is
-// handed to [dsp.ProcessWindow] which runs the spectrogram → candidate
-// detection → soft demodulation → LDPC decode → CRC verify pipeline. Each
-// successfully decoded 77-bit message is unpacked via [message.Unpack] and
-// delivered to the [Messages] output channel as an [RXMessage].
+// Audio is captured at 48 kHz (the native rate of USB audio codecs such as
+// the TI PCM2903C used in Yaesu FTdx10 / FT-710) and decimated to the
+// FT8-standard 12 kHz using a 49-tap FIR anti-aliasing lowpass filter
+// (matching WSJT-X's lib/fil4.f90). The decimated samples are accumulated
+// into window-sized buffers of [dsp.WindowSamples] samples (180 000 =
+// 15 seconds). When a full window is collected, the buffer is handed to
+// [dsp.ProcessWindow] which runs the spectrogram → candidate detection →
+// soft demodulation → LDPC decode → CRC verify pipeline. Each successfully
+// decoded 77-bit message is unpacked via [message.Unpack] and delivered to
+// the [Messages] output channel as an [RXMessage].
 //
 // # TX Pipeline
 //
@@ -119,7 +122,14 @@ type Service struct {
 
 	ft8Config types.FT8Config
 	capture   *audio.Capture
+	decimator *dsp.Decimator // 48 kHz → 12 kHz anti-aliasing FIR + decimation
 	messages  chan RXMessage
+
+	// capChannels is the number of channels the capture device delivers.
+	// When > 1 the rxLoop extracts a single channel before accumulation.
+	capChannels uint32
+	// capChanIdx is the 0-based channel index to extract (0 = left, 1 = right).
+	capChanIdx int
 
 	// --- TX ---
 
@@ -173,11 +183,31 @@ func (s *Service) Initialize() error {
 		}
 		s.ft8Config = cfg
 
-		// Create audio capture with FT8-specific settings: 12 kHz mono.
+		// Resolve capture channel count: default to 2 (stereo) so that USB
+		// audio codecs that carry signal on a single channel (e.g., Yaesu
+		// FTdx10 / FT-710) are not degraded by the automatic (L+R)/2 downmix.
+		capChannels := cfg.CaptureChannels
+		if capChannels == 0 {
+			capChannels = 2
+		}
+
+		// Resolve which channel to extract when stereo.
+		capChanIdx := 0 // left
+		if capChannels >= 2 && cfg.CaptureChannel == "right" {
+			capChanIdx = 1
+		}
+		s.capChannels = capChannels
+		s.capChanIdx = capChanIdx
+
+		// Create audio capture with FT8-specific settings.
+		// Capture at 48 kHz (the native rate of USB audio codecs) and
+		// decimate to 12 kHz with a proper anti-aliasing FIR filter.
+		// This matches WSJT-X's approach (lib/fil4.f90) and avoids
+		// relying on miniaudio's internal resampler.
 		capCfg := audio.Config{
 			DeviceIndex: cfg.DeviceIndex,
-			SampleRate:  dsp.SampleRate,
-			Channels:    1,
+			SampleRate:  dsp.CaptureSampleRate, // 48000
+			Channels:    capChannels,
 			BufferSize:  cfg.BufferSize,
 			Logger:      s.Logger,
 		}
@@ -187,6 +217,9 @@ func (s *Service) Initialize() error {
 			s.initErr = errors.New(op).Err(err).Msg("failed to initialize audio capture")
 			return
 		}
+
+		// Create the decimator for 48 kHz → 12 kHz conversion.
+		s.decimator = dsp.NewDecimator()
 
 		s.messages = make(chan RXMessage, messageChannelSize)
 		s.txQueue = make(chan TXRequest, 1)
@@ -437,6 +470,9 @@ func (s *Service) rxLoop(ctx context.Context, samples <-chan []float32) {
 
 	buf := make([]float32, 0, dsp.WindowSamples+dsp.SamplesPerSymbol)
 
+	channels := int(s.capChannels)
+	chanIdx := s.capChanIdx
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -444,6 +480,27 @@ func (s *Service) rxLoop(ctx context.Context, samples <-chan []float32) {
 		case chunk, ok := <-samples:
 			if !ok {
 				return // capture channel closed
+			}
+
+			// When capturing in stereo (channels > 1), extract the
+			// selected channel from the interleaved sample buffer.
+			if channels > 1 {
+				mono := make([]float32, 0, len(chunk)/channels)
+				for i := chanIdx; i < len(chunk); i += channels {
+					mono = append(mono, chunk[i])
+				}
+				chunk = mono
+			}
+
+			// Decimate from 48 kHz to 12 kHz using the WSJT-X
+			// anti-aliasing FIR filter (fil4). This is the critical
+			// step that ensures USB audio codec signals are properly
+			// filtered before FT8 DSP processing.
+			if s.decimator != nil {
+				chunk = s.decimator.Decimate(chunk)
+				if len(chunk) == 0 {
+					continue
+				}
 			}
 
 			buf = append(buf, chunk...)
