@@ -238,20 +238,18 @@ func runRX(_ *cobra.Command, _ []string) error {
 // windows. It returns when the context is cancelled, the messages channel
 // closes, or the window limit is reached.
 func rxLoop(ctx context.Context, ft8svc *service.Service, maxWindows int) (msgCount int64, windowCount int) {
-	// Window counting via wall-clock timer. This approximates FT8 window
-	// boundaries — it may drift from actual decode cycles. Acceptable for a
-	// test harness; a production tool should use a service-level callback.
-	windowTicker := time.NewTicker(15 * time.Second)
-	defer windowTicker.Stop()
-
 	messages := ft8svc.Messages()
+	windowDone := ft8svc.WindowDone()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
-		case <-windowTicker.C:
+		case _, ok := <-windowDone:
+			if !ok {
+				return
+			}
 			windowCount++
 			if maxWindows > 0 && windowCount >= maxWindows {
 				fmt.Printf("\n  Reached %d window limit.\n", maxWindows)

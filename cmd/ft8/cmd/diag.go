@@ -82,7 +82,7 @@ func runDiag(deviceIndex int) error {
 
 // captureWindow captures one FT8 window by recording at 48 kHz stereo,
 // extracting the left channel, and decimating to 12 kHz via the WSJT-X
-// anti-aliasing FIR filter. Returns exactly WindowSamples (180,000) at
+// antialiasing FIR filter. Returns exactly WindowSamples (180,000) at
 // 12 kHz.
 func captureWindow(deviceIndex int) ([]float32, error) {
 	cfg := audio.Config{

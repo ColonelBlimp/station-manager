@@ -120,10 +120,11 @@ type Service struct {
 	ConfigService *config.Service  `di.inject:"configservice"`
 	Logger        *logging.Service `di.inject:"loggingservice"`
 
-	ft8Config types.FT8Config
-	capture   *audio.Capture
-	decimator *dsp.Decimator // 48 kHz → 12 kHz anti-aliasing FIR + decimation
-	messages  chan RXMessage
+	ft8Config  types.FT8Config
+	capture    *audio.Capture
+	decimator  *dsp.Decimator // 48 kHz → 12 kHz anti-aliasing FIR + decimation
+	messages   chan RXMessage
+	windowDone chan struct{} // signals after each decode window completes
 
 	// capChannels is the number of channels the capture device delivers.
 	// When > 1 the rxLoop extracts a single channel before accumulation.
@@ -183,6 +184,17 @@ func (s *Service) Initialize() error {
 		}
 		s.ft8Config = cfg
 
+		// Apply sensible defaults for zero-valued config fields.
+		if s.ft8Config.MaxCandidates <= 0 {
+			s.ft8Config.MaxCandidates = 50
+		}
+		if s.ft8Config.MaxIterations <= 0 {
+			s.ft8Config.MaxIterations = 25
+		}
+		if s.ft8Config.BufferSize == 0 {
+			s.ft8Config.BufferSize = 512
+		}
+
 		// Resolve capture channel count: default to 2 (stereo) so that USB
 		// audio codecs that carry signal on a single channel (e.g., Yaesu
 		// FTdx10 / FT-710) are not degraded by the automatic (L+R)/2 downmix.
@@ -205,10 +217,10 @@ func (s *Service) Initialize() error {
 		// This matches WSJT-X's approach (lib/fil4.f90) and avoids
 		// relying on miniaudio's internal resampler.
 		capCfg := audio.Config{
-			DeviceIndex: cfg.DeviceIndex,
+			DeviceIndex: s.ft8Config.DeviceIndex,
 			SampleRate:  dsp.CaptureSampleRate, // 48000
 			Channels:    capChannels,
-			BufferSize:  cfg.BufferSize,
+			BufferSize:  s.ft8Config.BufferSize,
 			Logger:      s.Logger,
 		}
 		s.capture = audio.New(capCfg)
@@ -222,6 +234,7 @@ func (s *Service) Initialize() error {
 		s.decimator = dsp.NewDecimator()
 
 		s.messages = make(chan RXMessage, messageChannelSize)
+		s.windowDone = make(chan struct{}, 4)
 		s.txQueue = make(chan TXRequest, 1)
 		s.waitForWindow = timing.WaitForNext
 
@@ -441,6 +454,9 @@ func (s *Service) Close() error {
 		if s.messages != nil {
 			close(s.messages)
 		}
+		if s.windowDone != nil {
+			close(s.windowDone)
+		}
 	})
 
 	s.isInitialized.Store(false)
@@ -454,6 +470,14 @@ func (s *Service) Close() error {
 // messages. The channel is closed when [Close] is called.
 func (s *Service) Messages() <-chan RXMessage {
 	return s.messages
+}
+
+// WindowDone returns a receive-only channel that fires each time a
+// decode window completes, regardless of whether any messages were decoded.
+// Consumers can use this to count actual decode cycles instead of relying
+// on a wall-clock timer.
+func (s *Service) WindowDone() <-chan struct{} {
+	return s.windowDone
 }
 
 // rxLoop is the main RX processing goroutine. It reads audio sample chunks
@@ -532,6 +556,14 @@ func (s *Service) processWindow(ctx context.Context, samples []float32) {
 		return
 	default:
 	}
+
+	// Notify window-done observers after decoding completes (or finds nothing).
+	defer func() {
+		select {
+		case s.windowDone <- struct{}{}:
+		default: // non-blocking; drop if nobody is listening
+		}
+	}()
 
 	decoded := dsp.ProcessWindow(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations)
 	if len(decoded) == 0 {
