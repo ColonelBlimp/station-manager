@@ -17,6 +17,60 @@ export namespace iocdi {
 
 export namespace types {
 	
+	export class FT8Config {
+	    enabled: boolean;
+	    device_index: number;
+	    buffer_size: number;
+	    max_candidates: number;
+	    max_iterations: number;
+	    capture_channels: number;
+	    capture_channel: string;
+	    tx_enabled: boolean;
+	    tx_device_index: number;
+	    tx_buffer_size: number;
+	    tx_base_freq_hz: number;
+	    ptt_port_name: string;
+	    ptt_line: string;
+	    tx_parity: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FT8Config(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.device_index = source["device_index"];
+	        this.buffer_size = source["buffer_size"];
+	        this.max_candidates = source["max_candidates"];
+	        this.max_iterations = source["max_iterations"];
+	        this.capture_channels = source["capture_channels"];
+	        this.capture_channel = source["capture_channel"];
+	        this.tx_enabled = source["tx_enabled"];
+	        this.tx_device_index = source["tx_device_index"];
+	        this.tx_buffer_size = source["tx_buffer_size"];
+	        this.tx_base_freq_hz = source["tx_base_freq_hz"];
+	        this.ptt_port_name = source["ptt_port_name"];
+	        this.ptt_line = source["ptt_line"];
+	        this.tx_parity = source["tx_parity"];
+	    }
+	}
+	export class AudioPlaybackConfig {
+	    enabled: boolean;
+	    device_index: number;
+	    buffer_size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AudioPlaybackConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.device_index = source["device_index"];
+	        this.buffer_size = source["buffer_size"];
+	    }
+	}
 	export class ListenerConfig {
 	    name: string;
 	    enabled: boolean;
@@ -207,6 +261,22 @@ export namespace types {
 	        this.view_url = source["view_url"];
 	    }
 	}
+	export class PTTConfig {
+	    enabled: boolean;
+	    port_name: string;
+	    line: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PTTConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.port_name = source["port_name"];
+	        this.line = source["line"];
+	    }
+	}
 	export class CatConfig {
 	    Enabled: boolean;
 	    ListenerRateLimiterIntervalMS: number;
@@ -356,14 +426,15 @@ export namespace types {
 	    }
 	}
 	export class RigConfig {
-	    ID: number;
-	    Name: string;
-	    Model: string;
-	    Terminator: string;
-	    CatCommands: CatCommand[];
-	    CatStates: CatState[];
-	    SerialConfig: SerialConfig;
-	    CatConfig: CatConfig;
+	    id: number;
+	    name: string;
+	    model: string;
+	    terminator: string;
+	    commands: CatCommand[];
+	    states: CatState[];
+	    serial_port: SerialConfig;
+	    cat: CatConfig;
+	    ptt: PTTConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new RigConfig(source);
@@ -371,14 +442,15 @@ export namespace types {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ID = source["ID"];
-	        this.Name = source["Name"];
-	        this.Model = source["Model"];
-	        this.Terminator = source["Terminator"];
-	        this.CatCommands = this.convertValues(source["CatCommands"], CatCommand);
-	        this.CatStates = this.convertValues(source["CatStates"], CatState);
-	        this.SerialConfig = this.convertValues(source["SerialConfig"], SerialConfig);
-	        this.CatConfig = this.convertValues(source["CatConfig"], CatConfig);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.model = source["model"];
+	        this.terminator = source["terminator"];
+	        this.commands = this.convertValues(source["commands"], CatCommand);
+	        this.states = this.convertValues(source["states"], CatState);
+	        this.serial_port = this.convertValues(source["serial_port"], SerialConfig);
+	        this.cat = this.convertValues(source["cat"], CatConfig);
+	        this.ptt = this.convertValues(source["ptt"], PTTConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -563,6 +635,8 @@ export namespace types {
 	    logging_station: LoggingStation;
 	    optional_configs: OptionalConfigs;
 	    listener_configs?: ListenerConfig[];
+	    audio_playback_config: AudioPlaybackConfig;
+	    ft8_config: FT8Config;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -581,6 +655,8 @@ export namespace types {
 	        this.logging_station = this.convertValues(source["logging_station"], LoggingStation);
 	        this.optional_configs = this.convertValues(source["optional_configs"], OptionalConfigs);
 	        this.listener_configs = this.convertValues(source["listener_configs"], ListenerConfig);
+	        this.audio_playback_config = this.convertValues(source["audio_playback_config"], AudioPlaybackConfig);
+	        this.ft8_config = this.convertValues(source["ft8_config"], FT8Config);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -601,6 +677,9 @@ export namespace types {
 		    return a;
 		}
 	}
+	
+	
+	
 	
 	
 	
