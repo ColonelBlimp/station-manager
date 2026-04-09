@@ -40,6 +40,19 @@ func validateAppConfig(cfg *types.AppConfig) error {
 		cfg.AudioPlaybackConfig.BufferSize = 512
 	}
 
+	// FT8 config
+	if cfg.FT8Config.Enabled {
+		if cfg.FT8Config.BufferSize == 0 {
+			cfg.FT8Config.BufferSize = 512
+		}
+		if cfg.FT8Config.MaxCandidates <= 0 {
+			cfg.FT8Config.MaxCandidates = 50
+		}
+		if cfg.FT8Config.MaxIterations <= 0 {
+			cfg.FT8Config.MaxIterations = 25
+		}
+	}
+
 	return nil
 }
 

@@ -275,6 +275,15 @@ func (s *Service) AudioPlaybackConfig() (types.AudioPlaybackConfig, error) {
 	return s.AppConfig.AudioPlaybackConfig, nil
 }
 
+// FT8Config retrieves the FT8 digital mode configuration from the application configuration.
+func (s *Service) FT8Config() (types.FT8Config, error) {
+	const op errors.Op = "config.Service.FT8Config"
+	if !s.isInitialized.Load() {
+		return types.FT8Config{}, errors.New(op).Msg(errMsgNotInitialized)
+	}
+	return s.AppConfig.FT8Config, nil
+}
+
 // UpdateAppConfig updates the application configuration and writes it to the configuration file.
 func (s *Service) UpdateAppConfig(cfg types.AppConfig) error {
 	const op errors.Op = "config.Service.UpdateAppConfig"

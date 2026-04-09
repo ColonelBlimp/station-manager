@@ -13,6 +13,7 @@ type AppConfig struct {
 	OptionalConfigs      OptionalConfigs     `json:"optional_configs"`
 	ListenerConfigs      []ListenerConfig    `json:"listener_configs,omitempty"`
 	AudioPlaybackConfig  AudioPlaybackConfig `json:"audio_playback_config"`
+	FT8Config            FT8Config           `json:"ft8_config"`
 }
 
 type UiConfig struct {

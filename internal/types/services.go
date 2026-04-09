@@ -11,4 +11,5 @@ const (
 	QrzForwardingServiceName = "qrzforwardingservice"
 	EmailServiceName         = "emailservice"
 	ListenersServiceName     = "networklisteners"
+	FT8ServiceName           = "ft8service"
 )

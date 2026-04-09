@@ -64,6 +64,13 @@ var defaultDesktopConfig = types.AppConfig{
 		DeviceIndex: -1, // default device
 		BufferSize:  512,
 	},
+	FT8Config: types.FT8Config{
+		Enabled:       false,
+		DeviceIndex:   -1, // default device
+		BufferSize:    512,
+		MaxCandidates: 50,
+		MaxIterations: 25,
+	},
 }
 
 var defaultServerConfig = types.AppConfig{
