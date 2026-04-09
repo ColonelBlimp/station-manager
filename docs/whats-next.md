@@ -705,3 +705,189 @@ The remaining items are:
 - **Testing against real FT8 recordings** — validate decode rate on actual
   on-air signals.
 
+## Milestone: 48 kHz Capture + FIR Decimation (Live RX Decode)
+
+This milestone is **complete**. The FT8 RX pipeline now decodes live signals
+from the FTdx10 transceiver on 28.074 MHz.
+
+### Problem
+
+The FT8 service was requesting 12 kHz audio directly from the FTdx10's USB
+audio codec (TI PCM2903C), which only natively supports 48 kHz. This forced
+miniaudio's internal resampler to downsample with unknown filter quality,
+introducing spectral artifacts that corrupted the narrow FT8 tones (6.25 Hz
+spacing, requiring clean spectral representation for LDPC decode).
+
+WSJT-X handles this by capturing at 48 kHz and decimating to 12 kHz with a
+proven 49-tap FIR anti-aliasing filter (`lib/fil4.f90`), designed with ScopeFIR:
+- Cutoff: 4500 Hz
+- Stopband edge: 6000 Hz
+- Passband ripple: 1 dB
+- Stopband attenuation: 40 dB
+
+### Solution
+
+1. **`internal/ft8/dsp/decimate.go`** (new) — `Decimator` struct using exact
+   WSJT-X `fil4` coefficients. `Decimate(input []float32) []float32` maintains
+   FIR filter state across chunked audio callbacks. Constants:
+   `DecimationFactor=4`, `CaptureSampleRate=48000`.
+
+2. **`internal/ft8/service/service.go`** — capture at 48 kHz instead of 12 kHz;
+   decimation step in `rxLoop` after stereo channel extraction; config defaults
+   for `MaxCandidates=50`, `MaxIterations=25`, `BufferSize=512`.
+
+3. **`cmd/ft8/cmd/diag.go`** — `captureWindow()` captures at 48 kHz stereo,
+   extracts left channel, decimates to 12 kHz.
+
+4. **`build/config.json`** — added `capture_channels` (default 2) and
+   `capture_channel` (default "left") fields.
+
+### RX Pipeline (updated)
+
+```
+audio.Capture (48 kHz stereo) → channel extraction (left/right) →
+  Decimate4×  (12 kHz mono, fil4 FIR) → sample accumulation →
+  dsp.ProcessWindow → message.Unpack → output channel
+```
+
+### Test results
+
+- 14 new decimator unit tests (all pass with `-race`)
+- 43 existing service tests (all pass)
+- Full DSP suite (all pass)
+- Live decode: 7 messages in 3 windows on 28.074 MHz
+
+### After This Milestone
+
+The remaining items are:
+
+- **Window alignment to 15 s wall-clock boundaries** — WSJT-X's Detector.cpp
+  resets the accumulation buffer at T%15==0. The current implementation
+  accumulates continuously. This may affect decode rate slightly (secondary).
+- **Extended live testing** — compare decode rate against WSJT-X.
+- **QSO state machine** — slot selection, timeout handling, duplicate
+  suppression, RRR/RR73 handling, auto-reply sequencing.
+
+## Milestone: FT8 CLI Hardening (Config Validation + Console Logging Fix)
+
+This milestone is **complete**. The FT8 CLI tool (`cmd/ft8`) now validates its
+config at startup and correctly outputs structured log messages to the console.
+
+### 1. FT8 Config Validation
+
+Added `validate` struct tags to `FT8Config` (in `internal/types/ft8.go`) and a
+`validateConfig()` function in `internal/ft8/service/`, following the same
+pattern used by the database and CAT services.
+
+**`internal/types/ft8.go`** — struct tags added:
+```
+DeviceIndex    validate:"min=-1"
+BufferSize     validate:"min=0,max=8192"
+MaxCandidates  validate:"min=0,max=200"
+MaxIterations  validate:"min=0,max=100"
+CaptureChannels validate:"min=0,max=2"
+CaptureChannel  validate:"omitempty,oneof=left right"
+TXDeviceIndex  validate:"min=-1"
+TXBufferSize   validate:"min=0,max=8192"
+TXBaseFreqHz   validate:"min=0,max=5000"
+PTTLine        validate:"omitempty,oneof=RTS DTR"
+TXParity       validate:"omitempty,oneof=even odd"
+```
+
+**Files created:**
+- **`internal/ft8/service/validation.go`** — `validateConfig(*FT8Config) error`
+  using `go-playground/validator/v10`, `sync.Once` for validator instance.
+- **`internal/ft8/service/validation_test.go`** — 18 tests covering all
+  validated fields: NilConfig, ValidMinimal, ValidDefaults, DeviceIndexTooLow,
+  BufferSizeTooLarge, MaxCandidatesTooLarge, MaxIterationsTooLarge,
+  CaptureChannelsTooLarge, CaptureChannelInvalid, CaptureChannelEmpty,
+  TXDeviceIndexTooLow, TXBufferSizeTooLarge, TXBaseFreqHzTooHigh,
+  PTTLineInvalid, PTTLineValid, TXParityInvalid, TXParityValid, FullTXConfig.
+
+**`internal/ft8/service/service.go`** — wired `validateConfig(&cfg)` into
+`Initialize()` immediately after loading the raw config from `config.json`,
+before applying defaults.
+
+### 2. Console Logging Fix (IOCDI Preseed Timing)
+
+**Problem:** The FT8 CLI's `--verbose` flag had no effect — all log output went
+to a file instead of stderr. The on-disk `config.json` has
+`console_logging: false, file_logging: true` (correct for Wails desktop apps),
+and the CLI's preseed that overrides this to `console_logging: true` was applied
+**after** `container.Build()`.
+
+**Root cause:** The IOCDI container's `Build()` method auto-calls `Initialize()`
+on all beans in topological dependency order (lines 258–268 of `container.go`).
+In the original `setup()`:
+1. `container.Build()` at line 106 — auto-initialises `configService` (reads
+   `config.json` with `console_logging: false`) and `logService` (reads the
+   config and sets up file-only writers).
+2. Preseed at line 130 — sets `ConsoleLogging: true`, but both services are
+   already initialised. `Initialize()` is guarded by `sync.Once`, so subsequent
+   calls are no-ops.
+
+**Fix:** Create the `configService` manually, set the preseed on it, then
+register it as an instance via `RegisterInstance` before calling `Build()`:
+
+```go
+configService = &config.Service{WorkingDir: workingDir}
+configService.AppConfig.LoggingConfig = types.LoggingConfig{
+    Level:          logLevel,
+    ConsoleLogging: true,
+    FileLogging:    false,
+    // ...
+}
+container.RegisterInstance(config.ServiceName, configService)
+// Build() now auto-calls configService.Initialize(), which sees the preseed
+// (Level != "") and preserves it after loading config.json from disk.
+```
+
+The `config.Service.Initialize()` preseed logic (lines 57–67 of
+`config/service.go`) saves `AppConfig.LoggingConfig` before loading the disk
+file and restores it afterwards if `Level != ""`. By setting the preseed before
+`Build()`, the logging service initialises with the correct console-only config.
+
+**Files modified:**
+- **`cmd/ft8/cmd/root.go`** — restructured `setup()`: config service created
+  and preseeded before `Build()`; removed post-Build `Initialize()` calls;
+  removed all diagnostic code and unused imports (`io`, `zerolog`).
+
+### 3. Build Task
+
+Added `task ft8` to `Taskfile.yml` for building the FT8 CLI binary with
+incremental source tracking:
+
+```yaml
+ft8:
+  desc: "Build the FT8 RX/TX CLI tool → build/bin/ft8"
+  cmds:
+    - mkdir -p build/bin
+    - cd cmd/ft8 && go build -o ../../build/bin/ft8 .
+  sources:
+    - cmd/ft8/**/*.go
+    - internal/**/*.go
+```
+
+Updated `AGENTS.md` and `DEVELOPING.md` with the new task.
+
+### Test Results
+
+- 18 new validation tests (all pass)
+- 43 existing service tests (all pass)
+- 14 decimation tests (all pass)
+- Full DSP suite (all pass)
+- `go vet ./cmd/ft8/...` — clean
+- Live smoke test: `ft8 --device 1 --windows 1 --verbose` — structured log
+  output appears on stderr via zerolog ConsoleWriter ✅
+
+### After This Milestone
+
+The remaining items are:
+
+- **Window alignment to 15 s wall-clock boundaries** — WSJT-X's Detector.cpp
+  resets the accumulation buffer at T%15==0. The current implementation
+  accumulates continuously. This may affect decode rate slightly (secondary).
+- **Extended live testing** — compare decode rate against WSJT-X.
+- **QSO state machine** — slot selection, timeout handling, duplicate
+  suppression, RRR/RR73 handling, auto-reply sequencing.
+
