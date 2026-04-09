@@ -1,4 +1,7 @@
-// Package service provides the RX-only FT8 digital mode service.
+// Package service provides the FT8 digital mode service with both RX and TX
+// paths.
+//
+// # RX Pipeline
 //
 // The service wires the complete receive chain:
 //
@@ -13,19 +16,38 @@
 // successfully decoded 77-bit message is unpacked via [message.Unpack] and
 // delivered to the [Messages] output channel as an [RXMessage].
 //
+// # TX Pipeline
+//
+// The TX path is activated when TXEnabled is true in the FT8 configuration.
+// Callers submit messages via [Service.Transmit], which queues a [TXRequest].
+// The txLoop goroutine waits for the correct window boundary (respecting
+// even/odd parity), then executes:
+//
+//	message.Pack → codec.EncodeMessage → dsp.BitsToSymbols → dsp.InsertSync →
+//	synth.Synthesize → PTT assert → audio.PlaySamples → PTT release
+//
+// PTT control is optional — when no serial port is configured, the
+// assert/release steps are skipped (VOX mode).
+//
+// RX and TX use separate audio devices (capture vs. playback) and operate
+// concurrently without interference.
+//
+// # Lifecycle
+//
 // The service follows the standard Initialize → Start → Stop lifecycle:
 //
 //   - [Service.Initialize] validates injected dependencies, loads the
-//     [types.FT8Config], creates and initialises the [audio.Capture].
+//     [types.FT8Config], creates and initialises the [audio.Capture]
+//     and (when TX is enabled) the [audio.Playback] and optional PTT.
 //   - [Service.Start] starts audio capture and launches the RX accumulation
-//     goroutine. Returns immediately.
-//   - [Service.Stop] signals the RX loop to exit, waits for completion, and
-//     stops audio capture.
-//   - [Service.Close] releases all owned resources (capture device, output
-//     channel). The service cannot be reused after Close.
+//     goroutine and (when TX is enabled) the TX goroutine. Returns immediately.
+//   - [Service.Stop] signals both loops to exit, waits for completion, and
+//     stops audio capture and playback.
+//   - [Service.Close] releases all owned resources (capture device, playback
+//     device, PTT port, output channel). The service cannot be reused after Close.
 //
-// TX synthesis, PTT control, QSO state machine, and timing alignment are
-// deferred to a subsequent milestone.
+// QSO state machine and auto-parity selection are deferred to a subsequent
+// milestone.
 package service
 
 import (
@@ -39,6 +61,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/ft8/dsp"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/message"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/ptt"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -83,7 +106,7 @@ type RXMessage struct {
 	SNR float32
 }
 
-// Service is the RX-only FT8 digital mode service.
+// Service is the FT8 digital mode service with RX and TX paths.
 //
 // Dependencies are injected via DI struct tags. Call [Initialize] before
 // [Start], and [Stop] before [Close]. The service is safe for concurrent
@@ -96,7 +119,17 @@ type Service struct {
 	capture   *audio.Capture
 	messages  chan RXMessage
 
-	// Lifecycle state.
+	// --- TX ---
+
+	playback     txPlayer           // audio playback device (nil when TX disabled)
+	pttCtl       pttController      // PTT control (nil when no PTT port configured)
+	txQueue      chan TXRequest     // buffered channel for pending TX requests (cap 1)
+	txActive     atomic.Bool        // true while audio is being played
+	txMu         sync.Mutex         // protects txPlayCancel
+	txPlayCancel context.CancelFunc // cancels the current playback
+
+	// --- Lifecycle state ---
+
 	isInitialized atomic.Bool
 	running       atomic.Bool
 	initOnce      sync.Once
@@ -104,6 +137,8 @@ type Service struct {
 	mu            sync.Mutex         // protects cancel
 	cancel        context.CancelFunc // cancels the RX loop context
 	wg            sync.WaitGroup     // tracks the RX loop goroutine
+	txCancel      context.CancelFunc // cancels the TX loop context
+	txWg          sync.WaitGroup     // tracks the TX loop goroutine
 }
 
 // Initialize validates injected dependencies, loads the FT8 configuration,
@@ -150,6 +185,47 @@ func (s *Service) Initialize() error {
 		}
 
 		s.messages = make(chan RXMessage, messageChannelSize)
+		s.txQueue = make(chan TXRequest, 1)
+
+		// --- TX setup (when enabled) ---
+		if cfg.TXEnabled {
+			pbCfg := audio.Config{
+				DeviceIndex: cfg.TXDeviceIndex,
+				SampleRate:  dsp.SampleRate,
+				Channels:    1,
+				BufferSize:  cfg.TXBufferSize,
+				Logger:      s.Logger,
+			}
+			pb := audio.NewPlayback(pbCfg)
+			if err := pb.Init(); err != nil {
+				s.initErr = errors.New(op).Err(err).Msg("failed to initialize TX playback")
+				return
+			}
+			s.playback = pb
+
+			// PTT is optional — only opened when a port name is configured.
+			if cfg.PTTPortName != "" {
+				pttLine := ptt.LineRTS
+				if cfg.PTTLine == "DTR" {
+					pttLine = ptt.LineDTR
+				}
+				p, err := ptt.Open(ptt.Config{
+					PortName: cfg.PTTPortName,
+					Line:     pttLine,
+					Logger:   s.Logger,
+				})
+				if err != nil {
+					// PTT failure is not fatal — log a warning and continue
+					// without PTT (VOX mode).
+					s.Logger.WarnWith().Err(err).
+						Str("port", cfg.PTTPortName).
+						Msg("FT8 TX: PTT open failed; continuing without PTT (VOX mode)")
+				} else {
+					s.pttCtl = p
+				}
+			}
+		}
+
 		s.isInitialized.Store(true)
 
 		s.Logger.InfoWith().
@@ -158,6 +234,7 @@ func (s *Service) Initialize() error {
 			Int("max_candidates", cfg.MaxCandidates).
 			Int("max_iterations", cfg.MaxIterations).
 			Bool("enabled", cfg.Enabled).
+			Bool("tx_enabled", cfg.TXEnabled).
 			Msg("FT8 service initialized")
 	})
 
@@ -210,7 +287,20 @@ func (s *Service) Start(ctx context.Context) error {
 	s.wg.Add(1)
 	go s.rxLoop(rxCtx, s.capture.Samples())
 
-	s.Logger.InfoWith().Msg("FT8 RX service started")
+	// Launch the TX loop if TX is enabled.
+	if s.ft8Config.TXEnabled && s.playback != nil {
+		txCtx, txCancel := context.WithCancel(ctx)
+		s.mu.Lock()
+		s.txCancel = txCancel
+		s.mu.Unlock()
+
+		s.txWg.Add(1)
+		go s.txLoop(txCtx)
+	}
+
+	s.Logger.InfoWith().
+		Bool("tx_enabled", s.ft8Config.TXEnabled).
+		Msg("FT8 service started")
 	return nil
 }
 
@@ -233,17 +323,30 @@ func (s *Service) Stop() error {
 		s.cancel()
 		s.cancel = nil
 	}
+	// Cancel the TX loop context.
+	if s.txCancel != nil {
+		s.txCancel()
+		s.txCancel = nil
+	}
 	s.mu.Unlock()
 
-	// Wait for the RX loop goroutine to exit.
+	// Wait for both loop goroutines to exit.
 	s.wg.Wait()
+	s.txWg.Wait()
 
 	// Stop audio capture.
 	if err := s.capture.Stop(); err != nil {
 		s.Logger.WarnWith().Err(err).Msg("error stopping audio capture")
 	}
 
-	s.Logger.InfoWith().Msg("FT8 RX service stopped")
+	// Stop playback if active.
+	if s.playback != nil {
+		// Stop is not part of the txPlayer interface, but if the concrete
+		// type supports it (audio.Playback), the playback context
+		// cancellation via txCancel already handled interruption.
+	}
+
+	s.Logger.InfoWith().Msg("FT8 service stopped")
 	return nil
 }
 
@@ -273,6 +376,20 @@ func (s *Service) Close() error {
 		}
 	}
 
+	// Close TX playback device.
+	if s.playback != nil {
+		if err := s.playback.Close(); err != nil {
+			s.Logger.WarnWith().Err(err).Msg("error closing TX playback")
+		}
+	}
+
+	// Close PTT.
+	if s.pttCtl != nil {
+		if err := s.pttCtl.Close(); err != nil {
+			s.Logger.WarnWith().Err(err).Msg("error closing PTT")
+		}
+	}
+
 	// Close messages output channel.
 	if s.messages != nil {
 		close(s.messages)
@@ -290,7 +407,7 @@ func (s *Service) Messages() <-chan RXMessage {
 }
 
 // rxLoop is the main RX processing goroutine. It reads audio sample chunks
-// from the samples channel, accumulates them into a window-sized buffer,
+// from the sample's channel, accumulates them into a window-sized buffer,
 // and runs the DSP decode pipeline each time a full window is collected.
 //
 // Sample overflow from one window is carried into the next, ensuring no

@@ -643,3 +643,65 @@ With TX synthesis and PlaySamples complete, the remaining items are:
   suppression, RRR/RR73 handling.
 - **Testing against real FT8 recordings** — validate decode rate on actual
   on-air signals.
+
+## Milestone: TX Orchestration in `internal/ft8/service/`
+
+TX orchestration is **complete**. The FT8 service now supports both RX and TX
+paths running concurrently on separate audio devices.
+
+### TX Pipeline
+
+```
+TXRequest → timing.WaitForNext (parity-aligned) → TX offset wait (1 s) →
+  PTT assert → synth.Synthesize → audio.PlaySamples → PTT release
+```
+
+### Files created/modified:
+1. **`internal/types/ft8.go`** — extended `FT8Config` with TX fields:
+   `TXEnabled`, `TXDeviceIndex`, `TXBufferSize`, `TXBaseFreqHz`,
+   `PTTPortName`, `PTTLine`, `TXParity`.
+2. **`internal/ft8/service/tx.go`** (new, ~290 lines) — `TXRequest`, `Transmit()`,
+   `CancelTX()`, `IsTXActive()`, `txLoop`, `executeTX`, `parseParity`, plus
+   `txPlayer` and `pttController` interfaces for testability.
+3. **`internal/ft8/service/service.go`** — wired TX into lifecycle:
+   - `Service` struct gains `playback`, `pttCtl`, `txQueue`, `txActive`,
+     `txMu`, `txPlayCancel`, `txCancel`, `txWg` fields.
+   - `Initialize` creates `Playback`, opens PTT (optional), allocates `txQueue`.
+   - `Start` launches `txLoop` goroutine alongside `rxLoop`.
+   - `Stop` cancels and waits for both loops.
+   - `Close` releases playback and PTT resources.
+4. **`internal/ft8/service/tx_test.go`** (new) — 17 tests covering all TX
+   guard conditions, queue behaviour, cancellation, loop lifecycle, and the
+   encode/synth pipeline.
+
+### Test results: all 38 pass (21 RX + 17 TX)
+- Transmit guards (nil receiver, not initialized, TX disabled, not running,
+  nil message, queue full)
+- Transmit success, queue delivery
+- CancelTX drains queue, nil-safe
+- IsTXActive nil receiver, default false
+- txLoop context cancel, channel closed
+- executeTX context timeout during window wait, nil message guard, pack failure
+- parseParity even/odd/default
+
+### Key design decisions:
+- **`txPlayer` / `pttController` interfaces**: narrow interfaces allow mock
+  injection for unit tests without real audio hardware or serial ports.
+- **Capacity-1 `txQueue`**: only one TX request at a time; `Transmit` returns
+  `errMsgTXQueueFull` on overflow. Future QSO state machine can manage
+  sequencing externally.
+- **PTT is optional**: nil `pttCtl` is handled gracefully (VOX mode).
+- **RX and TX are independent**: separate audio devices, no pause needed
+  during TX.
+- **Parity-aligned TX windows**: `executeTX` loops past wrong-parity windows
+  until the matching slot arrives.
+
+### After This Milestone
+
+The remaining items are:
+
+- **QSO state machine** — slot selection (even/odd auto-toggle), timeout
+  handling, duplicate suppression, RRR/RR73 handling, auto-reply sequencing.
+- **Testing against real FT8 recordings** — validate decode rate on actual
+  on-air signals.
+
