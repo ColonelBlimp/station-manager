@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,8 +29,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Services resolved during setup (PersistentPreRunE).
 var (
-	container     *iocdi.Container
 	configService *config.Service
 	logService    *logging.Service
 )
@@ -59,7 +58,8 @@ Examples:
   ft8 --device 3                Decode using capture device 3
   ft8 --device 3 --windows 4   Decode 4 windows (60 s) and exit
   ft8 --verbose                 Enable debug-level logging`,
-	RunE: runRX,
+	PersistentPreRunE: setup,
+	RunE:              runRX,
 }
 
 func Execute() {
@@ -77,34 +77,50 @@ func init() {
 		"list audio capture devices and exit")
 	rootCmd.Flags().BoolVar(&flagVerbose, "verbose", false,
 		"enable debug-level logging")
+}
 
-	// --- DI wiring (mirrors cmd/importer pattern) ---
-
+// setup performs DI wiring, config loading, and logging initialisation.
+// Running in PersistentPreRunE ensures errors flow through Cobra's normal
+// error path instead of calling os.Exit in init(), and deferred cleanup
+// runs correctly.
+func setup(_ *cobra.Command, _ []string) error {
 	workingDir, err := utils.WorkingDir()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "error: cannot resolve working directory: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("cannot resolve working directory: %w", err)
 	}
 
-	container = iocdi.New()
-	cobra.CheckErr(container.RegisterInstance("workingdir", workingDir))
-	cobra.CheckErr(container.Register(config.ServiceName, reflect.TypeOf((*config.Service)(nil))))
-	cobra.CheckErr(container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))))
-	cobra.CheckErr(container.Build())
+	container := iocdi.New()
+	if err := container.RegisterInstance("workingdir", workingDir); err != nil {
+		return fmt.Errorf("DI register workingdir: %w", err)
+	}
+	if err := container.Register(config.ServiceName, reflect.TypeOf((*config.Service)(nil))); err != nil {
+		return fmt.Errorf("DI register config: %w", err)
+	}
+	if err := container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
+		return fmt.Errorf("DI register logging: %w", err)
+	}
+	if err := container.Build(); err != nil {
+		return fmt.Errorf("DI build: %w", err)
+	}
 
 	// Resolve config service.
 	cfgInst, err := container.ResolveSafe(config.ServiceName)
-	cobra.CheckErr(err)
+	if err != nil {
+		return fmt.Errorf("DI resolve config: %w", err)
+	}
 	var ok bool
 	configService, ok = cfgInst.(*config.Service)
 	if !ok {
-		panic("resolved config service is not *config.Service")
+		return fmt.Errorf("resolved config service has unexpected type %T", cfgInst)
 	}
 
 	// Pre-seed logging config for console-only output before Initialize.
 	// The config.Service.Initialize preseed logic preserves a LoggingConfig
 	// whose Level field is non-empty.
 	logLevel := "info"
+	if flagVerbose {
+		logLevel = "debug"
+	}
 	configService.AppConfig.LoggingConfig = types.LoggingConfig{
 		Level:             logLevel,
 		SkipFrameCount:    3,
@@ -115,19 +131,27 @@ func init() {
 		ShutdownTimeoutMS: 5000,
 	}
 
-	cobra.CheckErr(configService.Initialize())
+	if err := configService.Initialize(); err != nil {
+		return fmt.Errorf("config init: %w", err)
+	}
 
 	// Resolve logging service.
 	logInst, err := container.ResolveSafe(logging.ServiceName)
-	cobra.CheckErr(err)
+	if err != nil {
+		return fmt.Errorf("DI resolve logging: %w", err)
+	}
 	logService, ok = logInst.(*logging.Service)
 	if !ok {
-		panic("resolved logging service is not *logging.Service")
+		return fmt.Errorf("resolved logging service has unexpected type %T", logInst)
 	}
-	cobra.CheckErr(logService.Initialize())
+	if err := logService.Initialize(); err != nil {
+		return fmt.Errorf("logging init: %w", err)
+	}
+
+	return nil
 }
 
-func runRX(cmd *cobra.Command, args []string) error {
+func runRX(_ *cobra.Command, _ []string) error {
 	// --- List devices mode ---
 	if flagListDevices {
 		return listDevices()
@@ -137,13 +161,6 @@ func runRX(cmd *cobra.Command, args []string) error {
 	configService.AppConfig.FT8Config.Enabled = true
 	if flagDevice >= 0 {
 		configService.AppConfig.FT8Config.DeviceIndex = flagDevice
-	}
-
-	if flagVerbose {
-		// Re-seed with debug level. The logging service is already initialised
-		// so we update it via the config. This won't take effect on the zerolog
-		// instance, so just log a note.
-		logService.InfoWith().Msg("verbose mode requested (service logs at info level; DSP debug output enabled)")
 	}
 
 	ft8Cfg := configService.AppConfig.FT8Config
@@ -181,44 +198,10 @@ func runRX(cmd *cobra.Command, args []string) error {
 	fmt.Printf("%-10s %6s %9s  %s\n", "TIME", "SNR", "FREQ", "MESSAGE")
 	fmt.Println("────────── ────── ─────────  ──────────────────────────────────")
 
-	// --- RX loop ---
-	var msgCount atomic.Int64
-	var windowCount int
 	startTime := time.Now()
+	msgCount, windowCount := rxLoop(ctx, ft8svc, flagWindows)
 
-	// Window counting via wall-clock timer (avoids modifying the FT8 service).
-	windowTicker := time.NewTicker(15 * time.Second)
-	defer windowTicker.Stop()
-
-	messages := ft8svc.Messages()
-
-	for {
-		select {
-		case <-ctx.Done():
-			goto shutdown
-
-		case <-windowTicker.C:
-			windowCount++
-			if flagWindows > 0 && windowCount >= flagWindows {
-				fmt.Printf("\n  Reached %d window limit.\n", flagWindows)
-				goto shutdown
-			}
-
-		case rxMsg, ok := <-messages:
-			if !ok {
-				goto shutdown
-			}
-			msgCount.Add(1)
-			now := time.Now().Format("15:04:05")
-			fmt.Printf("%-10s %+6.1f %8.1f  %s\n",
-				now,
-				rxMsg.SNR,
-				rxMsg.Freq,
-				rxMsg.Message.String())
-		}
-	}
-
-shutdown:
+	// --- Shutdown ---
 	fmt.Println()
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
@@ -232,10 +215,49 @@ shutdown:
 	elapsed := time.Since(startTime).Round(time.Second)
 	fmt.Printf("  Elapsed:  %s\n", elapsed)
 	fmt.Printf("  Windows:  %d\n", windowCount)
-	fmt.Printf("  Decoded:  %d messages\n", msgCount.Load())
+	fmt.Printf("  Decoded:  %d messages\n", msgCount)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	return nil
+}
+
+// rxLoop runs the main receive loop, printing decoded messages and counting
+// windows. It returns when the context is cancelled, the messages channel
+// closes, or the window limit is reached.
+func rxLoop(ctx context.Context, ft8svc *service.Service, maxWindows int) (msgCount int64, windowCount int) {
+	// Window counting via wall-clock timer. This approximates FT8 window
+	// boundaries — it may drift from actual decode cycles. Acceptable for a
+	// test harness; a production tool should use a service-level callback.
+	windowTicker := time.NewTicker(15 * time.Second)
+	defer windowTicker.Stop()
+
+	messages := ft8svc.Messages()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-windowTicker.C:
+			windowCount++
+			if maxWindows > 0 && windowCount >= maxWindows {
+				fmt.Printf("\n  Reached %d window limit.\n", maxWindows)
+				return
+			}
+
+		case rxMsg, ok := <-messages:
+			if !ok {
+				return
+			}
+			msgCount++
+			now := time.Now().Format("15:04:05")
+			fmt.Printf("%-10s %+6.1f %8.1f  %s\n",
+				now,
+				rxMsg.SNR,
+				rxMsg.Freq,
+				rxMsg.Message.String())
+		}
+	}
 }
 
 func windowsLabel(n int) string {
