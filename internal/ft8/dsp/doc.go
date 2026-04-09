@@ -13,19 +13,34 @@
 // FT8 protocol parameters (8-FSK, 6.25 baud, 6.25 Hz tone spacing,
 // 79 symbols per message) are defined as package-level constants.
 //
-// # Future Optimisation Opportunities
+// # RX Pipeline Variants
 //
-// The current implementation prioritises correctness and clarity over raw
-// throughput. The following optimisations are identified for when profiling
-// shows they are needed. None changes the public API.
+// Two top-level entry points are provided:
+//
+//   - [ProcessWindow]: single-pass pipeline for backward compatibility and
+//     unit testing. Uses standard-resolution spectrogram (1025 bins) with
+//     mean-based sync scoring and flat refinement grid.
+//   - [ProcessWindowMultiPass]: production pipeline with three enhancements:
+//     (1) frequency-oversampled spectrogram (2049 bins via [SpectrogramFT8HiRes]),
+//     (2) neighbor-comparison sync scoring ([FindCandidatesHiRes]),
+//     (3) iterative signal subtraction — after each decode pass, the decoded
+//     signal is subtracted from the audio and detection re-runs on the
+//     residual to uncover weaker signals.
+//
+// The multi-pass pipeline also uses coarse-fine refinement
+// ([RefineCandidateAudioFast]) for ~13× fewer Goertzel evaluations per
+// candidate compared to [RefineCandidateAudio].
+//
+// # Future Optimisation Opportunities
 //
 // ## 1. Struct-based pipeline with pre-allocated buffers (all files)
 //
-// [ProcessWindow] is stateless: every call allocates a fresh spectrogram,
-// FFT buffers, Hann coefficients, and LLR arrays. A struct-based API (e.g.
-// a Processor struct with Reset/Process methods) could pre-allocate all
-// working memory once and reuse it across successive 15-second windows,
-// eliminating the majority of per-window allocations.
+// [ProcessWindow] and [ProcessWindowMultiPass] are stateless: every call
+// allocates a fresh spectrogram, FFT buffers, Hann coefficients, and LLR
+// arrays. A struct-based API (e.g. a Processor struct with Reset/Process
+// methods) could pre-allocate all working memory once and reuse it across
+// successive 15-second windows, eliminating the majority of per-window
+// allocations.
 //
 // ## 2. RealFFT per-call allocations (fft.go)
 //
@@ -43,37 +58,21 @@
 // (single []float32 of nFrames×nBins) with row slicing would reduce GC
 // pressure and improve cache locality.
 //
-// ## 4. Refinement grid search cost (candidates.go)
+// ## 4. Parallelism for candidate evaluation
 //
-// [RefineCandidateAudio] evaluates a (time × frequency) grid around each
-// coarse candidate: ±1 symbol period in refineTimeSteps steps × ±refineFreqRange
-// in refineFreqStep increments ≈ 33 × 49 ≈ 1,617 grid points per candidate.
-// Each point requires 21 [Goertzel] evaluations ([refineSyncScore]), so with
-// 50 candidates the refinement phase performs ~1.7 million Goertzel calls of
-// 1,920 samples each (~3.3 billion multiply-adds). This is the dominant cost
-// in the RX pipeline, confirmed by profiling and the TestProcessWindow stack
-// traces. Possible mitigations:
+// Each candidate's refine→demod→decode is independent. A worker-pool of
+// runtime.NumCPU() goroutines processing candidates concurrently would
+// nearly eliminate the per-candidate speed bottleneck, especially after the
+// refinement grid is already shrunk by the coarse-fine approach. This is
+// orthogonal to the pipeline structure and can be added independently.
 //
-//   - Coarse-to-fine grid: start with a wider step, then refine around the
-//     best point (halves total evaluations).
-//   - Early termination: skip remaining grid points once the score exceeds
-//     a high-confidence threshold.
-//   - Parallelise across candidates: each candidate's refinement is
-//     independent and can run in its own goroutine.
-//   - Pre-compute Goertzel coefficients: the 2·cos(ω) coefficient for each
-//     tone frequency is recomputed on every [Goertzel] call via math.Cos.
-//     Since the refinement loop sweeps a small frequency range around 8
-//     fixed tone offsets, caching these coefficients per frequency would
-//     save redundant trig evaluations.
+// ## 5. Full GFSK signal subtraction
 //
-// ## 5. Goertzel coefficient recomputation (goertzel.go)
-//
-// [Goertzel] computes 2·cos(2πf/fs) on every call. In the demodulation
-// path ([DemodulateAudio]), the same 8 tone frequencies are evaluated for
-// all 58 data symbols — 464 calls with only 8 distinct coefficients. A
-// variant that accepts pre-computed coefficients (or a [GoertzelTones] that
-// caches them across symbols) would eliminate ~456 redundant math.Cos calls
-// per candidate.
+// The current signal subtraction uses simple per-symbol cosine tones
+// (synthesizeSimple in multipass.go). Full GFSK synthesis (via the synth
+// package) would provide more accurate cancellation, especially at symbol
+// transitions. This requires either a higher-level package that imports
+// both dsp and synth, or factoring the GFSK kernel into a shared package.
 //
 // Reference: ft8_lib (https://github.com/kgoba/ft8_lib),
 // WSJT-X (https://sourceforge.net/projects/wsjt/).

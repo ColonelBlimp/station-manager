@@ -69,3 +69,60 @@ func GoertzelTones(frame, hann []float32, baseFreqHz float64) (powers [NumTones]
 	}
 	return powers, peak
 }
+
+// GoertzelCoeff computes the Goertzel coefficient 2·cos(2πf/fs) for a given
+// frequency. This can be pre-computed once and reused across multiple calls
+// to [GoertzelWithCoeff] for the same frequency, avoiding redundant math.Cos
+// evaluations.
+//
+// In the demodulation path, the same 8 tone frequencies are evaluated for
+// all 58 data symbols — 464 calls with only 8 distinct coefficients. Caching
+// coefficients eliminates ~456 redundant trig calls per candidate.
+func GoertzelCoeff(freqHz float64) float64 {
+	return 2.0 * math.Cos(2.0*math.Pi*freqHz/float64(SampleRate))
+}
+
+// GoertzelWithCoeff computes the DFT magnitude-squared (power) at a single
+// frequency using a pre-computed Goertzel coefficient. This is functionally
+// identical to [Goertzel] but avoids the math.Cos call per invocation.
+//
+// The coefficient should be obtained from [GoertzelCoeff].
+func GoertzelWithCoeff(frame, hann []float32, coeff float64) float64 {
+	n := len(frame)
+	if n == 0 || len(hann) < n {
+		return 0
+	}
+
+	var s0, s1, s2 float64
+	for i := range n {
+		s0 = float64(frame[i])*float64(hann[i]) + coeff*s1 - s2
+		s2 = s1
+		s1 = s0
+	}
+
+	return s1*s1 + s2*s2 - coeff*s1*s2
+}
+
+// GoertzelTonesCoeffs pre-computes Goertzel coefficients for all 8 FT8
+// tones relative to a base frequency. The returned array can be passed to
+// [GoertzelTonesWithCoeffs] across multiple symbol positions.
+func GoertzelTonesCoeffs(baseFreqHz float64) [NumTones]float64 {
+	var coeffs [NumTones]float64
+	for k := range NumTones {
+		coeffs[k] = GoertzelCoeff(baseFreqHz + float64(k)*ToneSpacing)
+	}
+	return coeffs
+}
+
+// GoertzelTonesWithCoeffs computes the DFT power at each of the 8 FT8
+// tones using pre-computed coefficients from [GoertzelTonesCoeffs].
+// Returns powers and the index of the tone with the highest power (peak).
+func GoertzelTonesWithCoeffs(frame, hann []float32, coeffs [NumTones]float64) (powers [NumTones]float64, peak int) {
+	for k := range NumTones {
+		powers[k] = GoertzelWithCoeff(frame, hann, coeffs[k])
+		if powers[k] > powers[peak] {
+			peak = k
+		}
+	}
+	return powers, peak
+}

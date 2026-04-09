@@ -30,6 +30,7 @@ type Candidate struct {
 	Freq    float32 // base audio frequency (Hz)
 	TimeOff float32 // time offset within the window (seconds)
 	Score   float32 // sync correlation strength (higher = better)
+	FreqSub int     // frequency sub-bin index (0..FreqOSR-1) for oversampled spectrograms
 }
 
 // Search bounds for the FT8 audio passband.

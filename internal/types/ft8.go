@@ -8,7 +8,7 @@ type FT8Config struct {
 	Enabled       bool   `json:"enabled"`
 	DeviceIndex   int    `json:"device_index" validate:"min=-1"`
 	BufferSize    uint32 `json:"buffer_size" validate:"min=0,max=8192"`
-	MaxCandidates int    `json:"max_candidates" validate:"min=0,max=200"`
+	MaxCandidates int    `json:"max_candidates" validate:"min=0,max=250"`
 	MaxIterations int    `json:"max_iterations" validate:"min=0,max=100"`
 
 	// CaptureChannels is the number of channels to request from the audio

@@ -192,10 +192,10 @@ func (s *Service) Initialize() error {
 
 		// Apply sensible defaults for zero-valued config fields.
 		if s.ft8Config.MaxCandidates <= 0 {
-			s.ft8Config.MaxCandidates = 50
+			s.ft8Config.MaxCandidates = dsp.DefaultMaxCandidates // 120
 		}
 		if s.ft8Config.MaxIterations <= 0 {
-			s.ft8Config.MaxIterations = 25
+			s.ft8Config.MaxIterations = dsp.DefaultMaxIterations // 40
 		}
 		if s.ft8Config.BufferSize == 0 {
 			s.ft8Config.BufferSize = 512
@@ -571,7 +571,7 @@ func (s *Service) processWindow(ctx context.Context, samples []float32) {
 		}
 	}()
 
-	decoded := dsp.ProcessWindow(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations)
+	decoded := dsp.ProcessWindowMultiPass(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations)
 	if len(decoded) == 0 {
 		s.Logger.DebugWith().Msg("FT8 window: no messages decoded")
 		return

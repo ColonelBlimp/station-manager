@@ -144,8 +144,8 @@ func captureWindow(deviceIndex int) ([]float32, error) {
 // runDSPPipeline runs each stage of the FT8 DSP pipeline on a captured
 // window and reports detailed diagnostics at each step.
 func runDSPPipeline(samples []float32) {
-	const maxCandidates = 50
-	const maxIter = 25
+	const maxCandidates = 120
+	const maxIter = 40
 
 	fmt.Println("  ── Stage 1: Spectrogram ──")
 	sg := dsp.SpectrogramFT8(samples)

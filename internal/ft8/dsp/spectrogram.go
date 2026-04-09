@@ -123,3 +123,60 @@ func SpectrogramFT8(samples []float32) [][]float32 {
 
 	return result
 }
+
+// SpectrogramFT8HiRes computes a frequency-oversampled FT8 spectrogram.
+//
+// It uses a longer analysis window of [SamplesPerSymbol] × freqOSR samples
+// (e.g., 3840 for freqOSR=2), giving sub-bin frequency resolution. This
+// matches ft8_lib's approach where nfft = block_size × freq_osr. The RealFFT
+// zero-pads to the next power of 2 (4096 for freqOSR=2), producing 2049 bins
+// at ~2.93 Hz spacing instead of the standard 1025 bins at ~5.86 Hz.
+//
+// The longer analysis window captures nearly 2 full symbol periods per frame,
+// providing genuine sub-bin spectral information (not just zero-padding
+// interpolation). This significantly improves candidate detection for signals
+// that fall between the standard FFT bins.
+//
+// Parameters:
+//   - samples: audio capture buffer (one FT8 window)
+//   - freqOSR: frequency oversampling rate (typically 2). Values < 1 are
+//     treated as 1 (standard resolution).
+//
+// The step size remains [SamplesPerSymbol]/2 (960 samples) for time_osr=2
+// compatibility. Returns nil if the buffer is shorter than the analysis window.
+func SpectrogramFT8HiRes(samples []float32, freqOSR int) [][]float32 {
+	if freqOSR < 1 {
+		freqOSR = 1
+	}
+	if freqOSR == 1 {
+		return SpectrogramFT8(samples) // no oversampling — use standard path
+	}
+
+	// Analysis window: SamplesPerSymbol × freqOSR (e.g., 3840 for freqOSR=2).
+	analysisLen := SamplesPerSymbol * freqOSR
+	step := SamplesPerSymbol / 2 // 960 — half-symbol overlap (time_osr=2)
+
+	if len(samples) < analysisLen || step <= 0 {
+		return nil
+	}
+
+	nFrames := (len(samples)-analysisLen)/step + 1
+
+	// Periodic Hann window of length analysisLen (matching ft8_lib).
+	window := HannPeriodicCoefficients(analysisLen)
+
+	frame := make([]float32, analysisLen)
+
+	result := make([][]float32, nFrames)
+	for i := range nFrames {
+		start := i * step
+
+		copy(frame, samples[start:start+analysisLen])
+		ApplyWindow(frame, window)
+
+		bins := RealFFT(frame) // pads to next pow2 (4096 for 3840)
+		result[i] = Log2PowerSpectrum(bins)
+	}
+
+	return result
+}
