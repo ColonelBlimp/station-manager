@@ -74,6 +74,9 @@ func TestProcessWindowTooFewFrames(t *testing.T) {
 // 79-symbol FT8 tone sequence as audio, embeds it in a capture buffer, and
 // verifies that ProcessWindow decodes the original message.
 func TestProcessWindowRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping full-pipeline round-trip (slow under -race)")
+	}
 	// Known 77-bit message.
 	msg77 := [10]byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xB8}
 
@@ -143,6 +146,9 @@ func TestProcessWindowRoundTrip(t *testing.T) {
 // TestProcessWindowDeduplication verifies that the same message at two
 // slightly different frequencies is decoded only once.
 func TestProcessWindowDeduplication(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping full-pipeline deduplication test (slow under -race)")
+	}
 	msg77 := [10]byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x00, 0x11, 0x22, 0x30}
 
 	cw := codec.EncodeMessage(msg77)
@@ -198,6 +204,9 @@ func TestProcessWindowDeduplication(t *testing.T) {
 // TestProcessWindowMultipleMessages verifies that two distinct messages
 // at different frequencies are both decoded.
 func TestProcessWindowMultipleMessages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping full-pipeline multi-message test (slow under -race)")
+	}
 	msg1 := [10]byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xB8}
 	msg2 := [10]byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x00, 0x11, 0x22, 0x30}
 
@@ -361,6 +370,9 @@ func TestProcessWindowExactly79Frames(t *testing.T) {
 // --- SNR ordering ---
 
 func TestProcessWindowSNROrdering(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping full-pipeline SNR ordering test (slow under -race)")
+	}
 	// Two messages with different amplitudes. The stronger one should have
 	// a higher (or equal) SNR in the output. This test synthesises two
 	// signals and checks the relative SNR ordering.

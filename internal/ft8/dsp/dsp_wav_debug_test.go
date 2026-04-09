@@ -81,6 +81,9 @@ func dbgLDPCInstrumentation(t *testing.T, label string, llr [CodedBits]float32) 
 }
 
 func TestWAVDebugDiagnostics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping WAV debug diagnostics (slow under -race)")
+	}
 	dir := testdataDir(t)
 	entries, err := os.ReadDir(dir)
 	if err != nil {

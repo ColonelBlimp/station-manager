@@ -78,6 +78,9 @@ func findWAVFiles(t *testing.T) []string {
 //
 // This test must be run after every change to the DSP or codec packages.
 func TestProcessWindowWAVRegression(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping WAV regression test (slow under -race)")
+	}
 	wavFiles := findWAVFiles(t)
 	if len(wavFiles) == 0 {
 		t.Skipf("no WAV files in testdata/ — place 12 kHz mono FT8 recordings there to enable this test")
@@ -141,6 +144,9 @@ func TestProcessWindowWAVRegression(t *testing.T) {
 // This is the strongest validation of the RX stack — it exercises every
 // component against real over-the-air signals.
 func TestProcessWindowWAVFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping WAV file decode test (slow under -race)")
+	}
 	wavFiles := findWAVFiles(t)
 	if len(wavFiles) == 0 {
 		t.Skipf("no WAV files in testdata/ — place 12 kHz mono FT8 recordings there to enable this test")
@@ -198,6 +204,9 @@ func TestProcessWindowWAVFile(t *testing.T) {
 // it logs the count but does not fail if the threshold isn't met (real-world
 // signals have variable decode rates depending on conditions).
 func TestProcessWindowWAVFileDecodeRate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping WAV decode rate test (slow under -race)")
+	}
 	wavFiles := findWAVFiles(t)
 	if len(wavFiles) == 0 {
 		t.Skipf("no WAV files in testdata/")

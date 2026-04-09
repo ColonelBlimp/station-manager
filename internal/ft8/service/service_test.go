@@ -185,6 +185,9 @@ func TestProcessWindow_silence(t *testing.T) {
 }
 
 func TestProcessWindow_roundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping full-pipeline round-trip (slow under -race)")
+	}
 	samples, orig := synthFT8Signal(t, 1000.0)
 
 	ch := make(chan RXMessage, messageChannelSize)
@@ -238,6 +241,9 @@ func TestProcessWindow_contextCancelled(t *testing.T) {
 // --- rxLoop ---
 
 func TestRxLoop_accumulates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping rxLoop accumulation test (slow under -race)")
+	}
 	samples, orig := synthFT8Signal(t, 1000.0)
 
 	// Feed the samples in small chunks via a channel.

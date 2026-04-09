@@ -199,6 +199,9 @@ func TestSynthesizeDifferentAmplitudes(t *testing.T) {
 // --- Full TX→RX round-trip ---
 
 func TestSynthesizeTXRXRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping TX→RX round-trip (slow under -race)")
+	}
 	// This is the capstone test: encode a message, synthesise GFSK audio,
 	// then decode it with dsp.ProcessWindow and verify the original message
 	// is recovered.
@@ -253,6 +256,9 @@ func TestSynthesizeTXRXRoundTrip(t *testing.T) {
 }
 
 func TestSynthesizeMultipleMessageRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping multi-message TX→RX round-trip (slow under -race)")
+	}
 	// Synthesise two distinct messages at different frequencies and verify
 	// both are decoded.
 	msgs := [2][10]byte{

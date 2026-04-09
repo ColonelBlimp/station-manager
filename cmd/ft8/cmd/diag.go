@@ -297,9 +297,7 @@ func captureAndReport(deviceIndex int, sampleRate uint32) error {
 			return nil
 
 		case <-deadline:
-			if err := cap.Stop(); err != nil {
-				// Drain remaining.
-			}
+			_ = cap.Stop() // Best-effort stop; drain remaining samples.
 			reportStats(sampleRate, totalSamples, totalChunks, firstChunk, peakAbs, sumSquared, captureDuration)
 			return nil
 
