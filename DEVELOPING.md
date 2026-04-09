@@ -51,6 +51,15 @@ Run `task --list` for a full listing. The key commands:
 | `task tidy` | `go mod tidy` in every module |
 | `task update` | Update all module dependencies (`go get -u ./...` + `go mod tidy`) |
 
+### CLI tools
+
+| Command | Description |
+|---|---|
+| `task ft8` | Build the FT8 RX/TX CLI tool → `build/bin/ft8` |
+
+The `ft8` task tracks source changes (`cmd/ft8/**/*.go`, `internal/**/*.go`) and
+skips the build when nothing has changed.
+
 ### Wails applications
 
 | Command | Description |
@@ -156,6 +165,8 @@ station-manager/
 │   ├── logbook/         Logbook viewer (Wails + SvelteKit)
 │   └── logging/         QSO logging app (Wails + SvelteKit)
 ├── cmd/
+│   ├── ft8/             FT8 RX/TX CLI test harness
+│   ├── importer/        Cobra-based ADIF import tool
 │   ├── server/          (placeholder)
 │   └── tools/           (placeholder)
 ├── internal/            Shared Go libraries — single module, many packages

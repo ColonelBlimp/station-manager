@@ -182,6 +182,12 @@ func (s *Service) Initialize() error {
 			s.initErr = errors.New(op).Err(err).Msg("failed to load FT8 configuration")
 			return
 		}
+
+		// Validate the raw config from config.json before applying defaults.
+		if err := validateConfig(&cfg); err != nil {
+			s.initErr = errors.New(op).Err(err)
+			return
+		}
 		s.ft8Config = cfg
 
 		// Apply sensible defaults for zero-valued config fields.

@@ -85,6 +85,15 @@ tasks:
           fi
         done
 
+  ft8:
+    desc: "Build the FT8 RX/TX CLI tool → build/bin/ft8"
+    cmds:
+      - mkdir -p build/bin
+      - cd cmd/ft8 && go build -o ../../build/bin/ft8 .
+    sources:
+      - cmd/ft8/**/*.go
+      - internal/**/*.go
+
   setup-hooks:
     desc: "Install Git pre-commit hook"
     cmds:

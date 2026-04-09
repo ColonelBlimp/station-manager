@@ -87,44 +87,25 @@ func init() {
 // Running in PersistentPreRunE ensures errors flow through Cobra's normal
 // error path instead of calling os.Exit in init(), and deferred cleanup
 // runs correctly.
+//
+// The config service is created manually and pre-seeded with a console-only
+// LoggingConfig BEFORE container.Build(). This is necessary because Build()
+// auto-calls Initialize() on all beans in dependency order — if the preseed
+// were applied after Build(), the logging service would already be initialized
+// with the on-disk config.json values (console_logging: false).
 func setup(_ *cobra.Command, _ []string) error {
 	workingDir, err := utils.WorkingDir()
 	if err != nil {
 		return fmt.Errorf("cannot resolve working directory: %w", err)
 	}
 
-	container := iocdi.New()
-	if err := container.RegisterInstance("workingdir", workingDir); err != nil {
-		return fmt.Errorf("DI register workingdir: %w", err)
-	}
-	if err := container.Register(config.ServiceName, reflect.TypeOf((*config.Service)(nil))); err != nil {
-		return fmt.Errorf("DI register config: %w", err)
-	}
-	if err := container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
-		return fmt.Errorf("DI register logging: %w", err)
-	}
-	if err := container.Build(); err != nil {
-		return fmt.Errorf("DI build: %w", err)
-	}
-
-	// Resolve config service.
-	cfgInst, err := container.ResolveSafe(config.ServiceName)
-	if err != nil {
-		return fmt.Errorf("DI resolve config: %w", err)
-	}
-	var ok bool
-	configService, ok = cfgInst.(*config.Service)
-	if !ok {
-		return fmt.Errorf("resolved config service has unexpected type %T", cfgInst)
-	}
-
-	// Pre-seed logging config for console-only output before Initialize.
-	// The config.Service.Initialize preseed logic preserves a LoggingConfig
-	// whose Level field is non-empty.
+	// Pre-seed the config service with console-only logging BEFORE Build().
+	// config.Service.Initialize preserves a LoggingConfig whose Level != "".
 	logLevel := "info"
 	if flagVerbose {
 		logLevel = "debug"
 	}
+	configService = &config.Service{WorkingDir: workingDir}
 	configService.AppConfig.LoggingConfig = types.LoggingConfig{
 		Level:             logLevel,
 		SkipFrameCount:    3,
@@ -135,8 +116,22 @@ func setup(_ *cobra.Command, _ []string) error {
 		ShutdownTimeoutMS: 5000,
 	}
 
-	if err := configService.Initialize(); err != nil {
-		return fmt.Errorf("config init: %w", err)
+	container := iocdi.New()
+	if err := container.RegisterInstance("workingdir", workingDir); err != nil {
+		return fmt.Errorf("DI register workingdir: %w", err)
+	}
+	if err := container.RegisterInstance(config.ServiceName, configService); err != nil {
+		return fmt.Errorf("DI register config: %w", err)
+	}
+	if err := container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
+		return fmt.Errorf("DI register logging: %w", err)
+	}
+
+	// Build() calls Initialize() on all beans in dependency order.
+	// configService.Initialize() sees the preseed (Level != "") and preserves it.
+	// logService.Initialize() then reads the preseeded console-only config.
+	if err := container.Build(); err != nil {
+		return fmt.Errorf("DI build: %w", err)
 	}
 
 	// Resolve logging service.
@@ -144,12 +139,10 @@ func setup(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("DI resolve logging: %w", err)
 	}
+	var ok bool
 	logService, ok = logInst.(*logging.Service)
 	if !ok {
 		return fmt.Errorf("resolved logging service has unexpected type %T", logInst)
-	}
-	if err := logService.Initialize(); err != nil {
-		return fmt.Errorf("logging init: %w", err)
 	}
 
 	return nil

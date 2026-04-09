@@ -1,9 +1,10 @@
 package logging
 
 import (
-	"github.com/rs/zerolog"
 	"net"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // LogContext provides a fluent interface for building a context logger with pre-populated fields.

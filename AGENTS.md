@@ -19,6 +19,7 @@
 - `task test` → `go test -race ./... -short` for all Go modules
 - `task tidy` → `go mod tidy` in each module
 - `task update` → `go get -u ./...` + `go mod tidy` in each module
+- `task ft8` → build the FT8 RX/TX CLI tool → `build/bin/ft8`
 - `task wails:logging APP_VERSION=<ver>` → build the logging Wails app
 - `task wails:logbook APP_VERSION=<ver>` → build the logbook Wails app
 - `task wails:config APP_VERSION=<ver>` → build the config Wails app
