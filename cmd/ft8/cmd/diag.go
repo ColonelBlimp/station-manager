@@ -257,11 +257,11 @@ func captureAndReport(deviceIndex int, sampleRate uint32) error {
 		BufferSize:  512,
 	}
 
-	cap := audio.New(cfg)
-	if err := cap.Init(); err != nil {
+	capture := audio.New(cfg)
+	if err := capture.Init(); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
-	defer func() { _ = cap.Close() }()
+	defer func() { _ = capture.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -270,11 +270,11 @@ func captureAndReport(deviceIndex int, sampleRate uint32) error {
 	sigCtx, sigStop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer sigStop()
 
-	if err := cap.Start(sigCtx); err != nil {
+	if err := capture.Start(sigCtx); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
 
-	samples := cap.Samples()
+	samples := capture.Samples()
 
 	const captureDuration = 5 * time.Second
 	fmt.Printf("  Capturing for %s...\n", captureDuration)
@@ -297,7 +297,7 @@ func captureAndReport(deviceIndex int, sampleRate uint32) error {
 			return nil
 
 		case <-deadline:
-			_ = cap.Stop() // Best-effort stop; drain remaining samples.
+			_ = capture.Stop() // Best-effort stop; drain remaining samples.
 			reportStats(sampleRate, totalSamples, totalChunks, firstChunk, peakAbs, sumSquared, captureDuration)
 			return nil
 
