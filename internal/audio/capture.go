@@ -58,8 +58,9 @@ type Capture struct {
 	ctx     *malgo.AllocatedContext
 	device  *malgo.Device
 	running atomic.Bool
-	closed  atomic.Bool // prevents sends to closed channel
-	mu      sync.Mutex  // protects ctx, device, and cancelInternal
+	closed  atomic.Bool  // prevents sends to closed channel
+	dropped atomic.Int64 // counts chunks dropped by safeSend when channel is full
+	mu      sync.Mutex   // protects ctx, device, and cancelInternal
 
 	// cancelInternal cancels the per-Start internal context, signalling the
 	// context-watcher goroutine to exit when Stop/Close is called directly
@@ -352,8 +353,17 @@ func (c *Capture) safeSend(samples []float32) {
 	select {
 	case c.samples <- samples:
 	default:
-		// Drop samples if channel is full (consumer too slow)
+		// Drop samples if channel is full (consumer too slow).
+		c.dropped.Add(1)
 	}
+}
+
+// DroppedChunks returns the total number of audio chunks dropped because
+// the Samples channel was full (consumer too slow). A non-zero value
+// indicates that audio data has been lost — typically because the consumer
+// blocked during processing instead of draining the channel promptly.
+func (c *Capture) DroppedChunks() int64 {
+	return c.dropped.Load()
 }
 
 // bytesAsFloat32 performs zero-copy conversion of a byte slice to float32 slice.

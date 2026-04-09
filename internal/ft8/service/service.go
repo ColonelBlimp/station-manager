@@ -490,20 +490,37 @@ func (s *Service) WindowDone() <-chan struct{} {
 
 // rxLoop is the main RX processing goroutine. It reads audio sample chunks
 // from the sample's channel, accumulates them into a window-sized buffer,
-// and runs the DSP decode pipeline each time a full window is collected.
+// and hands complete windows to a separate processing goroutine.
 //
 // Sample overflow from one window is carried into the next, ensuring no
 // audio data is lost at window boundaries.
+//
+// Audio accumulation and DSP processing are decoupled: the accumulation
+// loop never blocks on decode processing. If the processor is still busy
+// when a new window is ready, the window is skipped with a warning.
 //
 // The samples channel is passed explicitly (rather than read from
 // s.capture internally) to enable testing without audio hardware.
 func (s *Service) rxLoop(ctx context.Context, samples <-chan []float32) {
 	defer s.wg.Done()
 
+	// Window processing runs in a separate goroutine so that audio
+	// accumulation is never blocked by the DSP pipeline.
+	windowCh := make(chan []float32, 1)
+
+	s.wg.Add(1)
+	go s.processLoop(ctx, windowCh)
+
+	// Close windowCh when the accumulation loop exits, which naturally
+	// terminates the processing goroutine.
+	defer close(windowCh)
+
 	buf := make([]float32, 0, dsp.WindowSamples+dsp.SamplesPerSymbol)
 
 	channels := int(s.capChannels)
 	chanIdx := s.capChanIdx
+
+	var lastDropped int64
 
 	for {
 		select {
@@ -549,9 +566,43 @@ func (s *Service) rxLoop(ctx context.Context, samples <-chan []float32) {
 				}
 				buf = buf[:overflow]
 
-				s.processWindow(ctx, window)
+				// Log dropped audio chunks since last window.
+				if s.capture != nil {
+					dropped := s.capture.DroppedChunks()
+					if dropped > lastDropped {
+						s.Logger.WarnWith().
+							Int64("dropped_chunks", dropped-lastDropped).
+							Int64("total_dropped", dropped).
+							Msg("FT8 RX: audio chunks dropped (consumer too slow)")
+						lastDropped = dropped
+					}
+				}
+
+				// Hand off to the processing goroutine. Non-blocking:
+				// if the previous window is still being processed, skip
+				// this window rather than blocking audio accumulation.
+				select {
+				case windowCh <- window:
+				default:
+					s.Logger.WarnWith().Msg("FT8 RX: window skipped, processor busy")
+				}
 			}
 		}
+	}
+}
+
+// processLoop drains the window channel and runs the DSP decode pipeline
+// on each received window. It exits when windowCh is closed (accumulation
+// loop has exited) or the context is cancelled.
+func (s *Service) processLoop(ctx context.Context, windowCh <-chan []float32) {
+	defer s.wg.Done()
+	for window := range windowCh {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		s.processWindow(ctx, window)
 	}
 }
 
@@ -574,8 +625,20 @@ func (s *Service) processWindow(ctx context.Context, samples []float32) {
 	}()
 
 	decoded := dsp.ProcessWindowMultiPass(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations)
+
+	// Diagnostic comparison: when the multi-pass pipeline fails to decode
+	// any messages, run the standard single-pass pipeline on the same audio
+	// and log the result. This helps distinguish "no signals present" from
+	// "multi-pass pipeline regression" during live operation.
 	if len(decoded) == 0 {
-		s.Logger.DebugWith().Msg("FT8 window: no messages decoded")
+		diagCount := len(dsp.ProcessWindow(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations))
+		if diagCount > 0 {
+			s.Logger.WarnWith().
+				Int("standard_pipeline_decoded", diagCount).
+				Msg("FT8 window: multi-pass decoded 0 but standard pipeline decoded messages — possible multi-pass regression")
+		} else {
+			s.Logger.DebugWith().Msg("FT8 window: no messages decoded (both pipelines)")
+		}
 		return
 	}
 

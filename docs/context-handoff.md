@@ -3,32 +3,42 @@
 ## Date
 2026-04-09
 
-## Status: RESOLVED (2026-04-09)
+## Status: FIXED (2026-04-09)
 
 ### Root Cause
-The DSP pipeline (`ProcessWindowMultiPass`) is **NOT broken**. WAV regression
-testing confirms it decodes **equal or more** messages than the original
-`ProcessWindow` (15 vs 14 on the primary test file, 8 vs 7 on the second).
+Two bugs in the live audio path:
 
-The reported "0 decodes" was caused by **two misleading log statements** that
-showed `max_candidates=0 max_iterations=0`, making it appear the pipeline was
-misconfigured. In reality, the service's `Initialize()` correctly applies
-defaults (120, 40) before the pipeline runs — the logs just printed the raw
-config values BEFORE defaults were applied.
+**Bug 1 (Critical): `processWindow` blocked the rxLoop, causing massive audio drops.**
+The `rxLoop` called `s.processWindow(ctx, window)` synchronously inside its
+`select` case. While `ProcessWindowMultiPass` ran (1–5 seconds for 3 passes ×
+120 candidates), no audio chunks were consumed from the Samples channel. The
+audio callback's `safeSend` silently dropped chunks once the 64-slot channel
+buffer filled (~682ms). This corrupted all windows after the first with
+significant audio gaps → 0 decodes on windows 2+.
 
-The 0 decodes from live audio were likely caused by **no FT8 signals present
-on 10m (28.074 MHz)** during the test period — propagation on 10m is
-intermittent.
+**Bug 2: Audio drops were completely invisible.**
+The `safeSend` method in `audio.Capture` dropped samples with no logging, no
+counter, and no way for the service to detect data loss.
+
+The previously hypothesised "no FT8 signals on 10m" was incorrect — the diag
+tool confirmed signals were present and decodable.
 
 ### Fixes Applied
-1. **`service.go` line 288**: Changed log to use `s.ft8Config` (after defaults)
-   instead of `cfg` (raw config). Now correctly shows `max_candidates=120`.
-2. **`root.go` (CLI)**: Moved config log to AFTER `service.Initialize()` so
-   defaults are visible. Added clarifying message about 0-value defaults.
-3. **`dsp_wav_test.go`**: Added `TestProcessWindowMultiPassWAVRegression` with
-   baselines: `181201_180245.wav: 15`, `210703_133430.wav: 8`.
-4. **`multipass_diag_test.go`**: Added comprehensive diagnostic tests (Steps
-   1–5 from the debugging plan below).
+1. **`service.go` — Async processWindow**: Restructured `rxLoop` to hand off
+   complete windows to a dedicated `processLoop` goroutine via a `chan []float32`
+   (capacity 1). Audio accumulation never blocks on DSP processing. If the
+   processor is still busy when a new window is ready, the window is skipped
+   with a warning (non-blocking send).
+2. **`capture.go` — Drop counter**: Added `atomic.Int64` drop counter to
+   `Capture.safeSend`. New `DroppedChunks()` method exposes the count.
+   `rxLoop` logs a warning with the delta whenever chunks are dropped.
+3. **`service.go` — Diagnostic comparison**: When `ProcessWindowMultiPass`
+   returns 0 messages, `ProcessWindow` (standard pipeline) is also run on
+   the same audio. If the standard pipeline decodes messages, a warning is
+   logged identifying a possible multi-pass regression. This distinguishes
+   "no signals present" from "pipeline bug".
+4. **Earlier fixes retained**: Log statements in `service.go` and `root.go`
+   correctly show post-default config values (max_candidates=120).
 
 ### Diagnostic Test Results
 
@@ -198,7 +208,7 @@ This immediately restores live decoding while the multi-pass pipeline is debugge
 | `internal/ft8/dsp/dsp_test.go` | Pipeline unit tests (all for `ProcessWindow`, none for `ProcessWindowMultiPass`) |
 | `internal/ft8/dsp/dsp_wav_test.go` | WAV regression tests for both `ProcessWindow` and `ProcessWindowMultiPass` |
 | `internal/ft8/dsp/multipass_diag_test.go` | Diagnostic tests (Steps 1–5) comparing both pipelines |
-| `internal/ft8/service/service.go` | FT8 service wiring — `processWindow` calls `dsp.ProcessWindowMultiPass` (line 574) |
+| `internal/ft8/service/service.go` | FT8 service wiring — `rxLoop` hands off windows to async `processLoop`; `processWindow` calls `dsp.ProcessWindowMultiPass` with diagnostic fallback |
 | `internal/types/ft8.go` | `FT8Config` struct |
 | `cmd/ft8/cmd/root.go` | CLI entry point |
 | `cmd/ft8/cmd/diag.go` | Diagnostic tool (still uses `ProcessWindow`) |
