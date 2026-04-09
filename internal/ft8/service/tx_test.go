@@ -286,7 +286,7 @@ func TestTxLoop_channelClosed(t *testing.T) {
 
 // --- executeTX ---
 
-func TestExecuteTX_encodesAndPlays(t *testing.T) {
+func TestExecuteTX_cancelledDuringWindowWait(t *testing.T) {
 	player := &mockPlayer{}
 	pttMock := &mockPTT{}
 
@@ -347,12 +347,134 @@ func TestParseParity(t *testing.T) {
 	assert.Equal(t, timing.Odd, parseParity("odd"))
 }
 
-// --- Integration: executeTX with mocks (bypasses timing) ---
+// --- Integration: executeTX with mocks ---
 
-// testExecuteTXDirect tests the encode → synth → PTT → play pipeline by
-// calling executeTX on a service where the context is set to expire right
-// after the encoding stage. This verifies that the encoding pipeline
-// produces valid output.
+// TestExecuteTX_fullPipeline exercises the complete encode → PTT assert →
+// PlaySamples → PTT release pipeline by injecting a waitForWindow that
+// returns immediately with an even-parity timestamp, bypassing the real
+// 15-second timing boundary.
+func TestExecuteTX_fullPipeline(t *testing.T) {
+	player := &mockPlayer{}
+	pttMock := &mockPTT{}
+
+	// Pick a time that is on an even slot boundary (Unix epoch = slot 0 = even).
+	evenTime := time.Unix(0, 0).UTC()
+
+	s := &Service{
+		ft8Config: types.FT8Config{
+			TXEnabled:    true,
+			TXBaseFreqHz: 1000.0,
+			TXParity:     "even",
+		},
+		playback: player,
+		pttCtl:   pttMock,
+		Logger:   noopLogger(),
+		waitForWindow: func(ctx context.Context, m timing.Mode) (time.Time, error) {
+			return evenTime, nil
+		},
+	}
+
+	msg := &message.Message{
+		MsgType: message.TypeStandard,
+		Call1:   "CQ",
+		Call2:   "W1AW",
+		Grid:    "FN31",
+	}
+
+	// Use a generous timeout — the TX offset wait (1s) is the longest part.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	s.executeTX(ctx, TXRequest{Message: msg})
+
+	// Verify PTT Assert → PlaySamples → PTT Release ordering.
+	pttCalls := pttMock.getCalls()
+	require.Equal(t, []string{"Assert", "Release"}, pttCalls,
+		"PTT should be asserted before play and released after")
+
+	playerCalls := player.getCalls()
+	require.Equal(t, []string{"PlaySamples"}, playerCalls,
+		"PlaySamples should be called exactly once")
+
+	// Verify samples were actually synthesised (151680 samples for FT8).
+	player.mu.Lock()
+	sampleLen := len(player.samples)
+	player.mu.Unlock()
+	assert.Equal(t, 151680, sampleLen, "expected 151680 FT8 TX samples")
+
+	// Verify txActive was set during play and cleared after.
+	assert.False(t, s.txActive.Load(), "txActive should be false after TX completes")
+}
+
+// TestExecuteTX_fullPipeline_noPTT verifies the pipeline works without PTT
+// (VOX mode — pttCtl is nil).
+func TestExecuteTX_fullPipeline_noPTT(t *testing.T) {
+	player := &mockPlayer{}
+	evenTime := time.Unix(0, 0).UTC()
+
+	s := &Service{
+		ft8Config: types.FT8Config{
+			TXEnabled:    true,
+			TXBaseFreqHz: 1000.0,
+			TXParity:     "even",
+		},
+		playback: player,
+		pttCtl:   nil, // VOX mode
+		Logger:   noopLogger(),
+		waitForWindow: func(ctx context.Context, m timing.Mode) (time.Time, error) {
+			return evenTime, nil
+		},
+	}
+
+	msg := &message.Message{
+		MsgType: message.TypeStandard,
+		Call1:   "CQ",
+		Call2:   "W1AW",
+		Grid:    "FN31",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	s.executeTX(ctx, TXRequest{Message: msg})
+
+	playerCalls := player.getCalls()
+	assert.Equal(t, []string{"PlaySamples"}, playerCalls)
+}
+
+// TestCancelTX_cancelsInFlightPlayback verifies that CancelTX cancels an
+// in-progress playback by calling the stored txPlayCancel function.
+func TestCancelTX_cancelsInFlightPlayback(t *testing.T) {
+	cancelled := make(chan struct{})
+
+	s := &Service{
+		txQueue: make(chan TXRequest, 1),
+		Logger:  noopLogger(),
+	}
+
+	// Simulate an in-progress playback by setting txPlayCancel.
+	s.txMu.Lock()
+	s.txPlayCancel = func() {
+		close(cancelled)
+	}
+	s.txMu.Unlock()
+
+	s.CancelTX()
+
+	// Verify the cancel function was called.
+	select {
+	case <-cancelled:
+		// OK — cancel was invoked.
+	case <-time.After(1 * time.Second):
+		t.Fatal("CancelTX did not invoke txPlayCancel")
+	}
+
+	// Verify txPlayCancel was nil-ed out.
+	s.txMu.Lock()
+	assert.Nil(t, s.txPlayCancel, "txPlayCancel should be nil after CancelTX")
+	s.txMu.Unlock()
+}
+
 func TestExecuteTX_packFailure(t *testing.T) {
 	player := &mockPlayer{}
 	s := &Service{
@@ -362,18 +484,21 @@ func TestExecuteTX_packFailure(t *testing.T) {
 		},
 		playback: player,
 		Logger:   noopLogger(),
+		// Inject a waitForWindow that returns immediately so we don't
+		// block on timing if pack somehow succeeds.
+		waitForWindow: func(ctx context.Context, m timing.Mode) (time.Time, error) {
+			return time.Now(), nil
+		},
 	}
 
-	// A message with an invalid type should fail packing.
+	// A message with an invalid type should fail packing synchronously.
 	badMsg := &message.Message{
 		MsgType: message.Type(99),
 		Call1:   "CQ",
 		Call2:   "W1AW",
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	s.executeTX(ctx, TXRequest{Message: badMsg})
+	s.executeTX(context.Background(), TXRequest{Message: badMsg})
 
 	calls := player.getCalls()
 	assert.Empty(t, calls, "expected no playback when pack fails")

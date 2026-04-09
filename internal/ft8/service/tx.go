@@ -171,10 +171,11 @@ func (s *Service) executeTX(ctx context.Context, req TXRequest) {
 	}
 
 	// Resolve the slot parity.
-	parity := parseParity(req.Parity)
-	if req.Parity == "" {
-		parity = parseParity(s.ft8Config.TXParity)
+	parityStr := req.Parity
+	if parityStr == "" {
+		parityStr = s.ft8Config.TXParity
 	}
+	parity := parseParity(parityStr)
 
 	// --- 1. Encode the message ---
 	packed, err := message.Pack(req.Message)
@@ -198,8 +199,12 @@ func (s *Service) executeTX(ctx context.Context, req TXRequest) {
 		Msg("FT8 TX: message encoded, waiting for window")
 
 	// --- 2. Wait for the correct window boundary ---
+	waitFn := s.waitForWindow
+	if waitFn == nil {
+		waitFn = timing.WaitForNext
+	}
 	for {
-		windowStart, err := timing.WaitForNext(ctx, timing.FT8)
+		windowStart, err := waitFn(ctx, timing.FT8)
 		if err != nil {
 			s.Logger.DebugWith().Err(err).Msg("FT8 TX: window wait cancelled")
 			return
@@ -214,7 +219,14 @@ func (s *Service) executeTX(ctx context.Context, req TXRequest) {
 			Str("got", slotParity.String()).
 			Str("want", parity.String()).
 			Msg("FT8 TX: skipping wrong-parity window")
-		// Loop to wait for the next window.
+
+		// Check context between iterations so cancellation arriving after
+		// WaitForNext returns doesn't block for another full window period.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 	}
 
 	// --- 3. Wait for the TX offset (1 s into the window) ---
@@ -286,6 +298,8 @@ func parseParity(s string) timing.Parity {
 	switch s {
 	case "odd":
 		return timing.Odd
+	case "even":
+		return timing.Even
 	default:
 		return timing.Even
 	}

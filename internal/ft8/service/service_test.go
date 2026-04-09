@@ -110,6 +110,23 @@ func TestClose_notRunning_noCapture(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestClose_idempotent(t *testing.T) {
+	// Verify that calling Close() twice does not panic (double-close on
+	// the messages channel). This exercises the closeOnce guard.
+	ch := make(chan RXMessage, messageChannelSize)
+	s := &Service{
+		messages: ch,
+		Logger:   noopLogger(),
+	}
+
+	err := s.Close()
+	assert.NoError(t, err)
+
+	// Second call must not panic.
+	err = s.Close()
+	assert.NoError(t, err)
+}
+
 // --- Messages ---
 
 func TestMessages_returnsChannel(t *testing.T) {

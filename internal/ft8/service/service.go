@@ -54,12 +54,14 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/dsp"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/message"
+	"github.com/ColonelBlimp/station-manager/internal/ft8/timing"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/ptt"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -121,12 +123,13 @@ type Service struct {
 
 	// --- TX ---
 
-	playback     txPlayer           // audio playback device (nil when TX disabled)
-	pttCtl       pttController      // PTT control (nil when no PTT port configured)
-	txQueue      chan TXRequest     // buffered channel for pending TX requests (cap 1)
-	txActive     atomic.Bool        // true while audio is being played
-	txMu         sync.Mutex         // protects txPlayCancel
-	txPlayCancel context.CancelFunc // cancels the current playback
+	playback      txPlayer                                                    // audio playback device (nil when TX disabled)
+	pttCtl        pttController                                               // PTT control (nil when no PTT port configured)
+	txQueue       chan TXRequest                                              // buffered channel for pending TX requests (cap 1)
+	txActive      atomic.Bool                                                 // true while audio is being played
+	txMu          sync.Mutex                                                  // protects txPlayCancel
+	txPlayCancel  context.CancelFunc                                          // cancels the current playback
+	waitForWindow func(ctx context.Context, m timing.Mode) (time.Time, error) // injectable for tests
 
 	// --- Lifecycle state ---
 
@@ -134,7 +137,8 @@ type Service struct {
 	running       atomic.Bool
 	initOnce      sync.Once
 	initErr       error
-	mu            sync.Mutex         // protects cancel
+	closeOnce     sync.Once          // ensures messages channel is closed only once
+	mu            sync.Mutex         // protects cancel, txCancel
 	cancel        context.CancelFunc // cancels the RX loop context
 	wg            sync.WaitGroup     // tracks the RX loop goroutine
 	txCancel      context.CancelFunc // cancels the TX loop context
@@ -186,6 +190,7 @@ func (s *Service) Initialize() error {
 
 		s.messages = make(chan RXMessage, messageChannelSize)
 		s.txQueue = make(chan TXRequest, 1)
+		s.waitForWindow = timing.WaitForNext
 
 		// --- TX setup (when enabled) ---
 		if cfg.TXEnabled {
@@ -248,7 +253,7 @@ func (s *Service) Initialize() error {
 // call Start without checking Enabled first.
 //
 // The provided context controls the lifetime of the RX loop: when the context
-// is cancelled the loop exits, but callers must still call [Stop] to reset
+// is cancelled, the loop exits, but callers must still call [Stop] to reset
 // the service state.
 func (s *Service) Start(ctx context.Context) error {
 	const op errors.Op = "ft8.Service.Start"
@@ -280,20 +285,26 @@ func (s *Service) Start(ctx context.Context) error {
 	// caller's context, so either external cancellation or Stop() will
 	// terminate the loop.
 	rxCtx, cancel := context.WithCancel(ctx)
+
+	// Prepare the TX loop context if TX is enabled. Both cancel funcs are
+	// stored under a single mutex acquisition, so a concurrent Stop() sees
+	// either both or neither.
+	var txCtx context.Context
+	var txCancel context.CancelFunc
+	if s.ft8Config.TXEnabled && s.playback != nil {
+		txCtx, txCancel = context.WithCancel(ctx)
+	}
+
 	s.mu.Lock()
 	s.cancel = cancel
+	s.txCancel = txCancel
 	s.mu.Unlock()
 
 	s.wg.Add(1)
 	go s.rxLoop(rxCtx, s.capture.Samples())
 
 	// Launch the TX loop if TX is enabled.
-	if s.ft8Config.TXEnabled && s.playback != nil {
-		txCtx, txCancel := context.WithCancel(ctx)
-		s.mu.Lock()
-		s.txCancel = txCancel
-		s.mu.Unlock()
-
+	if txCtx != nil {
 		s.txWg.Add(1)
 		go s.txLoop(txCtx)
 	}
@@ -335,26 +346,25 @@ func (s *Service) Stop() error {
 	s.txWg.Wait()
 
 	// Stop audio capture.
-	if err := s.capture.Stop(); err != nil {
-		s.Logger.WarnWith().Err(err).Msg("error stopping audio capture")
+	if s.capture != nil {
+		if err := s.capture.Stop(); err != nil && s.Logger != nil {
+			s.Logger.WarnWith().Err(err).Msg("error stopping audio capture")
+		}
 	}
 
-	// Stop playback if active.
-	if s.playback != nil {
-		// Stop is not part of the txPlayer interface, but if the concrete
-		// type supports it (audio.Playback), the playback context
-		// cancellation via txCancel already handled interruption.
+	if s.Logger != nil {
+		s.Logger.InfoWith().Msg("FT8 service stopped")
 	}
-
-	s.Logger.InfoWith().Msg("FT8 service stopped")
 	return nil
 }
 
 // Close releases all resources owned by the service. The service cannot be
-// reused after Close is called.
+// reused after Close is called — initOnce is permanently spent, so a
+// subsequent Initialize call would be a no-op returning stale state.
 //
 // Close stops the service if it is running, closes the audio capture device,
-// and closes the Messages output channel.
+// and closes the Messages output channel. Idempotent with respect to the
+// messages channel (safe to call twice).
 func (s *Service) Close() error {
 	const op errors.Op = "ft8.Service.Close"
 
@@ -362,9 +372,12 @@ func (s *Service) Close() error {
 		return errors.New(op).Msg(errMsgNilService)
 	}
 
-	// Stop if still running (ignore "not running" errors).
-	if s.running.Load() {
-		if err := s.Stop(); err != nil {
+	// Stop unconditionally; ignore "not running" — avoids the TOCTOU
+	// between running.Load() and Stop() that would log a spurious warning
+	// if a concurrent goroutine calls Stop() in between.
+	if err := s.Stop(); err != nil {
+		// Only log genuine errors, not the expected "not running" case.
+		if s.Logger != nil && err.Error() != errMsgNotRunning {
 			s.Logger.WarnWith().Err(err).Msg("error during stop on close")
 		}
 	}
@@ -378,25 +391,29 @@ func (s *Service) Close() error {
 
 	// Close TX playback device.
 	if s.playback != nil {
-		if err := s.playback.Close(); err != nil {
+		if err := s.playback.Close(); err != nil && s.Logger != nil {
 			s.Logger.WarnWith().Err(err).Msg("error closing TX playback")
 		}
 	}
 
 	// Close PTT.
 	if s.pttCtl != nil {
-		if err := s.pttCtl.Close(); err != nil {
+		if err := s.pttCtl.Close(); err != nil && s.Logger != nil {
 			s.Logger.WarnWith().Err(err).Msg("error closing PTT")
 		}
 	}
 
-	// Close messages output channel.
-	if s.messages != nil {
-		close(s.messages)
-	}
+	// Close messages output channel — once only to prevent double-close panic.
+	s.closeOnce.Do(func() {
+		if s.messages != nil {
+			close(s.messages)
+		}
+	})
 
 	s.isInitialized.Store(false)
-	s.Logger.InfoWith().Msg("FT8 service closed")
+	if s.Logger != nil {
+		s.Logger.InfoWith().Msg("FT8 service closed")
+	}
 	return nil
 }
 
