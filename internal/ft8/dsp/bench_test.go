@@ -36,6 +36,61 @@ func BenchmarkRealFFT(b *testing.B) {
 	})
 }
 
+func BenchmarkRealFFTN_MixedRadix(b *testing.B) {
+	b.Run("3840", func(b *testing.B) {
+		frame := makeSinFrame(3840, 1000.0)
+		b.ResetTimer()
+		for range b.N {
+			RealFFTN(frame, 3840)
+		}
+	})
+	b.Run("3200", func(b *testing.B) {
+		frame := makeSinFrame(3200, 1000.0)
+		b.ResetTimer()
+		for range b.N {
+			RealFFTN(frame, 3200)
+		}
+	})
+}
+
+func BenchmarkMixedRadixDFT_vs_Bluestein(b *testing.B) {
+	// Direct comparison of mixed-radix vs Bluestein for the three hot-path sizes.
+	for _, n := range []int{3200, 3840, 192000} {
+		b.Run(itoa(n)+"/mixed_radix", func(b *testing.B) {
+			x := make([]complex128, n)
+			for i := range x {
+				x[i] = complex(math.Sin(float64(i)*0.001), 0)
+			}
+			buf := make([]complex128, n)
+			b.ResetTimer()
+			for range b.N {
+				copy(buf, x)
+				mixedRadixDFT(buf)
+			}
+		})
+		b.Run(itoa(n)+"/bluestein", func(b *testing.B) {
+			x := make([]complex128, n)
+			for i := range x {
+				x[i] = complex(math.Sin(float64(i)*0.001), 0)
+			}
+			buf := make([]complex128, n)
+			b.ResetTimer()
+			for range b.N {
+				copy(buf, x)
+				bluesteinDFT(buf)
+			}
+		})
+	}
+}
+
+func BenchmarkLongFFT(b *testing.B) {
+	samples := makeSinFrame(WindowSamples, 1000.0)
+	b.ResetTimer()
+	for range b.N {
+		LongFFT(samples)
+	}
+}
+
 func BenchmarkGoertzel(b *testing.B) {
 	frame := makeSinFrame(SamplesPerSymbol, 1000.0)
 	hann := HannCoefficients(SamplesPerSymbol)

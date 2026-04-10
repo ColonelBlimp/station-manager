@@ -438,15 +438,7 @@ func NormalizeBmet(bmet *[CodedBits]float32) {
 }
 
 // complexFFTForward computes an in-place forward FFT on a complex slice.
-// Uses radix-2 when len(x) is a power of 2, otherwise Bluestein's algorithm.
+// Auto-dispatches: radix-2, mixed-radix (5-smooth), or Bluestein.
 func complexFFTForward(x []complex128) {
-	n := len(x)
-	if n <= 1 {
-		return
-	}
-	if n > 0 && (n&(n-1)) == 0 {
-		fftDIT(x) // power-of-2 fast path
-	} else {
-		bluesteinDFT(x)
-	}
+	generalDFT(x)
 }

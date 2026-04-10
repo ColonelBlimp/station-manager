@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10
 **Updated:** 2026-04-10
-**Status:** Baseband demodulation implemented (4/13 decoded), further improvement work next
+**Status:** Baseband demodulation + OSD + mixed-radix FFT (6/13 decoded), further improvement work next
 
 ## What Was Built
 
@@ -10,7 +10,7 @@
 A CLI tool at `cmd/ft8test/` for stage-by-stage integration testing of the FT8 decode pipeline. Each stage is a separate Cobra subcommand.
 
 ### Phase 2: WSJT-X-style baseband demodulation (complete)
-Ported WSJT-X's `ft8_downsample.f90`, `sync8d.f90`, and the core of `ft8b.f90` to Go, improving decode rate from **1/13 to 4/13** messages.
+Ported WSJT-X's `ft8_downsample.f90`, `sync8d.f90`, and the core of `ft8b.f90` to Go, improving decode rate from **1/13 to 6/13** messages (with OSD fallback).
 
 ### Files Created/Modified
 
@@ -71,14 +71,17 @@ task ft8test                                          # build → build/bin/ft8t
 | Pipeline | Decoded | Messages |
 |---|---|---|
 | Goertzel (original) | **1/13** | VE1WT K4GBI 73 |
-| Baseband (new) | **4/13** | VE1WT K4GBI 73, <...> RA1OHX KP91, SV2SIH KI8JP -10, HZ1TT RU1AB R-10 |
+| Baseband (BP only) | **4/13** | VE1WT K4GBI 73, <...> RA1OHX KP91, SV2SIH KI8JP -10, HZ1TT RU1AB R-10 |
+| Baseband (BP+OSD) | **6/13** | + <...> RV6ASU KN94, A61CK W3DQS -12 |
 
-### Baseband decode details:
+### Baseband decode details (BP+OSD):
 ```
   TIME (s)     SNR     FREQ  MESSAGE
     +0.140  +17.1   1309.9  VE1WT K4GBI 73
     +0.090  +11.2   2098.4  <...> RA1OHX KP91
     +0.030  +18.2   1902.9  SV2SIH KI8JP -10
+    +0.180  +10.1    460.9  <...> RV6ASU KN94       (OSD)
+    +0.050  +12.4    579.2  A61CK W3DQS -12         (OSD)
     +1.080   +3.3   2208.4  HZ1TT RU1AB R-10
 ```
 
@@ -107,7 +110,7 @@ audio (180k samples, 12 kHz)
 ```
 
 ### Key implementation notes:
-- The 192k-point FFT uses Bluestein's algorithm (192000 is not a power of 2). It's the most expensive single operation but is computed only once per window.
+- The 192k-point FFT uses mixed-radix Cooley-Tukey (192000 = 2⁹ × 3 × 5³ is 5-smooth). The `generalDFT` dispatcher auto-routes to the optimal algorithm. It's 1.29× faster than Bluestein with 63% less memory.
 - The 3200-point IFFT uses an unnormalized inverse (`complexIFFTUnnorm`) to match WSJT-X's `four2a` convention, with scaling by `1/√(NFFT1 × NFFT2)`.
 - The per-symbol 32-point FFT uses Go 0-indexed arrays: bins 0–7 correspond to tones 0–7 (DC through 43.75 Hz). The Fortran code uses 1-indexed `csymb(1:8)`.
 - LLR sign convention: our decoder expects positive LLR → bit more likely 0. WSJT-X uses the opposite convention. The LLR extraction computes `max(bit=0 group) − max(bit=1 group)` to match our convention.
@@ -128,24 +131,40 @@ OSD (Ordered Statistics Decoding) order-1 has been implemented as a fallback whe
 
 **Performance:** OSD order-1 adds ~80µs (perfect LLR) to ~300µs (noisy) per candidate when BP fails. This is negligible compared to the FFT/demodulation cost.
 
-### 2. Missing AP (a priori) decoding
-WSJT-X uses additional decode passes with a priori information (known callsigns from the QSO state). These passes substitute high-confidence LLR values for known message bits, effectively reducing the LDPC problem from 174→~100 unknown bits. This is particularly effective for signals in the -20 to -24 dB range.
+### 2. ~~192k-point FFT performance~~ ✅ RESOLVED
+Mixed-radix Cooley-Tukey FFT implemented for 5-smooth sizes (factors of 2, 3, 5 only). The `generalDFT` dispatcher auto-routes:
+- Power of 2 → radix-2 Cooley-Tukey
+- 5-smooth → mixed-radix Cooley-Tukey (radix-2/3/5 butterflies)
+- Other → Bluestein's algorithm
 
-### 3. 192k-point Bluestein FFT performance
-The long FFT is recomputed for each subtraction pass. At ~192k complex points through Bluestein (padded to 262144), each computation takes ~50-100ms. For 3 subtraction passes, this adds ~150-300ms per window. Optimization paths:
-- Cache the Bluestein tables (already done)
-- Use a mixed-radix FFT for N=192000 = 2⁷ × 3 × 5³ instead of Bluestein
+**Benchmark results (192k-point FFT):**
+| Algorithm | Time | Memory |
+|---|---|---|
+| Bluestein | 47.3 ms | 8.4 MB |
+| Mixed-radix | 36.8 ms | 3.1 MB |
+| **Speedup** | **1.29×** | **63% less** |
+
+**Files added:**
+- `internal/ft8/dsp/fft_mixedradix.go` — `mixedRadixDFT()`, `generalDFT()` dispatcher, `factorize235()`, `is5Smooth()`, radix-2/3/5 DIT butterflies, digit-reversal permutation, twiddle cache
+- `internal/ft8/dsp/fft_mixedradix_test.go` — correctness tests (67 sizes vs brute-force DFT), Bluestein comparison (3200, 3840, 192000), Parseval energy conservation, digit-reversal permutation validity, RealFFTN integration
+
+**Files modified:**
+- `internal/ft8/dsp/fft.go` — doc updates, `RealFFTN` now routes non-power-of-2 through `generalDFT`
+- `internal/ft8/dsp/baseband.go` — `LongFFT`, `complexIFFT`, `complexIFFTUnnorm` now use `generalDFT`
+
+### 3. Missing AP (a priori) decoding
+WSJT-X uses additional decode passes with a priori information (known callsigns from the QSO state). These passes substitute high-confidence LLR values for known message bits, effectively reducing the LDPC problem from 174→~100 unknown bits. This is particularly effective for signals in the -20 to -24 dB range.
 
 ## Next Steps (Priority Order)
 
-### 1. Optimize the 192k-point FFT
-Replace Bluestein for NFFT1=192000 with a mixed-radix FFT that exploits the factorisation 192000 = 2⁷ × 3 × 5³. This would reduce the FFT cost by ~2-3×.
+### 1. Consider AP decoding for the logging app
+When the Wails logging app has QSO context (mycall, dxcall), AP passes could be added. This would require passing callsign info into the decode pipeline. This is the primary path to decoding the remaining 7/13 signals (SNR -15 to -23 dB range).
 
-### 2. Consider AP decoding for the logging app
-When the Wails logging app has QSO context (mycall, dxcall), AP passes could be added. This would require passing callsign info into the decode pipeline.
-
-### 3. Profile and optimise baseband pipeline
+### 2. Profile and optimise baseband pipeline
 The pipeline currently computes the full long FFT + downsample + sync8d + DFT for EVERY candidate. In WSJT-X, the long FFT is computed once and the downsample is cheap (band extraction + IFFT). Consider caching the long FFT across candidates within a single pass.
+
+### 3. Explore multi-symbol LLR passes with OSD
+Currently only the nsym=1 LLR pass successfully decodes. The nsym=2,3 and bit-normalised passes produce LLRs with 96–100% sign agreement but fail both BP and OSD. Investigate whether the LLR magnitude scaling or normalisation differs from WSJT-X.
 
 ## Existing DSP Code Reference
 
@@ -161,12 +180,6 @@ Key files in `internal/ft8/dsp/`:
 - `demod.go` — `DemodulateAudio()` (Goertzel-based), `NormalizeLLR()`
 - `symbols.go` — FT8 constants (SampleRate=12000, SamplesPerSymbol=1920, etc.)
 - `fft.go` — `RealFFT()`, `RealFFTN()`, `fftDIT()`, `bluesteinDFT()`
+- `fft_mixedradix.go` — `mixedRadixDFT()`, `generalDFT()`, radix-2/3/5 DIT butterflies
 - `goertzel.go` — `Goertzel()` single-tone power
 - `window.go` — `HannCoefficients()`, `HannPeriodicCoefficients()`
-
-Key files in `internal/ft8/codec/`:
-- `codec.go` — `DecodeMessage()` (LDPC BP → OSD fallback + CRC-14)
-- `osd.go` — `DecodeOSD()` ordered-statistics decoder (order-0 + order-1)
-
-Key files in `internal/ft8/message/`:
-- `message.go` — `Unpack()`, `Message.String()`

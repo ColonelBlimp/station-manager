@@ -5,16 +5,18 @@
 //   - [RealFFT]: zero-pads to the next power of 2, uses radix-2 Cooley-Tukey.
 //     Retained for backward compatibility.
 //   - [RealFFTN]: computes an N-point DFT for arbitrary N. Uses radix-2 when
-//     N is a power of 2, otherwise Bluestein's algorithm (chirp-Z transform).
+//     N is a power of 2, mixed-radix Cooley-Tukey for 5-smooth N (factors of
+//     2, 3, 5 only), and Bluestein's algorithm (chirp-Z) otherwise.
 //
-// The FT8-critical use case is N = 3840 (= 2×NSPS), matching WSJT-X's
-// sync8.f90 NFFT1 parameter. This gives exactly 2 FFT bins per FT8 tone
-// (6.25 Hz tone spacing / 3.125 Hz bin width), eliminating the fractional-bin
-// alignment issue that degraded sync correlation with the old 2048-point FFT.
+// The FT8-critical use cases are all 5-smooth:
+//   - N = 3840  (= 2⁸×3×5):  spectrogram FFT, 2 bins per FT8 tone
+//   - N = 192000 (= 2⁹×3×5³): long FFT in baseband pipeline
+//   - N = 3200  (= 2⁷×5²):   short IFFT in baseband pipeline
 //
-// Twiddle factors and Bluestein chirp tables are precomputed and cached per
-// FFT size. Since the hot path (SpectrogramFT8) always uses the same size,
-// the tables are computed once and reused for all ~372 frames per window.
+// Twiddle factors are precomputed and cached per FFT size. Since the hot
+// paths always reuse the same sizes, tables are computed once and reused.
+//
+// See fft_mixedradix.go for the mixed-radix implementation.
 //
 // Reference: Bluestein, L.I. "A linear filtering approach to the computation
 // of discrete Fourier transform", IEEE Trans. Audio Electroacoustics, 1970.
@@ -87,9 +89,10 @@ func RealFFT(samples []float32) []complex64 {
 // non-negative frequency bins (N/2 + 1 bins).
 //
 // If len(samples) < n, the input is zero-padded. If len(samples) > n, the
-// input is truncated. When n is a power of 2, the fast radix-2 path is used;
-// otherwise Bluestein's algorithm converts the DFT to a convolution computed
-// via power-of-2 FFTs.
+// input is truncated. Algorithm selection:
+//   - Power of 2: radix-2 Cooley-Tukey
+//   - 5-smooth (factors of 2, 3, 5 only): mixed-radix Cooley-Tukey
+//   - Other: Bluestein's algorithm (chirp-Z)
 //
 // Returns nil for n ≤ 0.
 func RealFFTN(samples []float32, n int) []complex64 {
@@ -112,13 +115,13 @@ func RealFFTN(samples []float32, n int) []complex64 {
 		return out
 	}
 
-	// Non-power-of-2: Bluestein's algorithm.
+	// Non-power-of-2: mixed-radix (5-smooth) or Bluestein.
 	x := make([]complex128, n)
 	for i := 0; i < len(samples) && i < n; i++ {
 		x[i] = complex(float64(samples[i]), 0)
 	}
 
-	bluesteinDFT(x)
+	generalDFT(x)
 
 	bins := n/2 + 1
 	out := make([]complex64, bins)

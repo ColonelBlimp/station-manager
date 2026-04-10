@@ -66,8 +66,8 @@ func LongFFT(samples []float32) []complex128 {
 		x[i] = complex(float64(samples[i]), 0)
 	}
 
-	// NFFT1 = 192000 is not a power of 2, so we use Bluestein's algorithm.
-	bluesteinDFT(x)
+	// NFFT1 = 192000 = 2⁷×3×5³ (5-smooth) → mixed-radix FFT.
+	generalDFT(x)
 
 	// Return only the non-negative frequency bins (real input symmetry).
 	bins := NFFT1/2 + 1
@@ -188,12 +188,8 @@ func complexIFFT(x []complex128) {
 		x[i] = complex(real(x[i]), -imag(x[i]))
 	}
 
-	// Forward DFT.
-	if n&(n-1) == 0 {
-		fftDIT(x) // power-of-2 fast path
-	} else {
-		bluesteinDFT(x)
-	}
+	// Forward DFT (auto-dispatches: radix-2, mixed-radix, or Bluestein).
+	generalDFT(x)
 
 	// Conjugate and scale.
 	invN := 1.0 / float64(n)
@@ -216,12 +212,8 @@ func complexIFFTUnnorm(x []complex128) {
 		x[i] = complex(real(x[i]), -imag(x[i]))
 	}
 
-	// Forward DFT.
-	if n&(n-1) == 0 {
-		fftDIT(x)
-	} else {
-		bluesteinDFT(x)
-	}
+	// Forward DFT (auto-dispatches: radix-2, mixed-radix, or Bluestein).
+	generalDFT(x)
 
 	// Conjugate only (no 1/N scaling).
 	for i := range x {
