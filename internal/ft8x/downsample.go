@@ -87,7 +87,9 @@ func (d *Downsampler) Downsample(dd []float32, newdat *bool, f0 float64) []compl
 	result := IFFT(c1)
 
 	// Scale to match the Fortran normalisation: 1/sqrt(nfft1 * nfft2).
-	fac := 1.0 / math.Sqrt(float64(nfft1)*float64(nfft2))
+	// Go's IFFT already divides by nfft2, but Fortran's four2a(c2c, isign=1)
+	// does NOT normalise. So we undo the 1/nfft2 and apply the Fortran scaling.
+	fac := float64(nfft2) / math.Sqrt(float64(nfft1)*float64(nfft2))
 	for i := range result {
 		result[i] *= complex(fac, 0)
 	}

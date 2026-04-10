@@ -251,19 +251,6 @@ func OSDDecode(llr [LDPCn]float64, keff int, apmask [LDPCn]int8, norder int) ([L
 		}
 	}
 
-	// Re-order generator matrix columns and hard decisions by reliability.
-	var genmrb [k][n]int8
-	for i := 0; i < n; i++ {
-		for r := 0; r < k; r++ {
-			if indices[i] < k {
-				genmrb[r][i] = gen[r][indices[i]] // simplified: only message cols
-			}
-		}
-	}
-	// For OSD we need the full generator in systematic form.
-	// Use a simplified approach: encode and compare.
-	_ = genmrb // suppress unused warning; full OSD below
-
 	// --- Simplified OSD (order 0 + 1) ---
 	// Re-order received hard bits.
 	var hdecR [n]int8
@@ -273,13 +260,29 @@ func OSDDecode(llr [LDPCn]float64, keff int, apmask [LDPCn]int8, norder int) ([L
 		absR[i] = absLLR[indices[i]]
 	}
 
-	// Build re-ordered generator (k rows, n columns).
+	// Build the full systematic generator matrix G: [k][n].
+	// For a systematic (n,k) code: G[row][col] = I_k if col < k, else parity.
+	// gen (from LDPCGenerator) is [m][k]: parity[parityRow] = sum(gen[parityRow][j] * msg[j]).
+	// So the full systematic generator row r (message bit r) produces:
+	//   codeword[c] = delta(r,c) for c < k
+	//   codeword[k+p] = gen[p][r]  for p = 0..m-1
+	//
+	// We then re-order columns by reliability (indices).
+	var gFull [k][n]int8
+	for row := 0; row < k; row++ {
+		// Identity part: gFull[row][row] = 1.
+		gFull[row][row] = 1
+		// Parity part: gFull[row][k+p] = gen[p][row].
+		for p := 0; p < m; p++ {
+			gFull[row][k+p] = gen[p][row]
+		}
+	}
+
+	// Re-order columns by reliability.
 	var g [k][n]int8
 	for row := 0; row < k; row++ {
 		for col := 0; col < n; col++ {
-			if indices[col] < k {
-				g[row][col] = gen[row][indices[col]]
-			}
+			g[row][col] = gFull[row][indices[col]]
 		}
 	}
 

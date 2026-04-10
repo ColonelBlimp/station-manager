@@ -31,11 +31,13 @@ func ComputeSymbolSpectra(cd0 []complex128, ibest int) ([8][NN]complex128, [8][N
 		copy(cx, csymb[:])
 		fftRadix2(cx, false)
 
-		// Bins 1..8 (0-indexed: indices 1..8) correspond to the 8 FSK tones
-		// (the Fortran stores cs(0:7,k) = csymb(1:8)/1e3).
+		// Bins 0..7 (Go 0-indexed) correspond to the 8 FSK tones at
+		// frequencies 0..7 × (fs2/32) Hz relative to baseband DC.
+		// Fortran uses 1-indexed: cs(0:7,k) = csymb(1:8)/1e3
+		// which is bins 0..7 in 0-indexed (DC through tone 7).
 		scale := 1.0 / 1e3
 		for t := 0; t < 8; t++ {
-			cs[t][k] = cx[t+1] * complex(scale, 0)
+			cs[t][k] = cx[t] * complex(scale, 0)
 			s8[t][k] = math.Abs(real(cs[t][k] * complexConj(cs[t][k])))
 		}
 	}

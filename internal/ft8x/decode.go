@@ -61,8 +61,11 @@ func Decode(audio []float32, candidates []CandidateFreq, params DecodeParams) []
 	var results []DecodeCandidate
 	seen := make(map[string]bool) // deduplicate by message
 
-	for _, cand := range candidates {
-		result, ok := DecodeSingle(audio, ds, cand.Freq, cand.DT, true, params)
+	for i, cand := range candidates {
+		// Only compute the big 192k FFT on the first candidate;
+		// subsequent calls reuse the cached spectrum via the Downsampler.
+		newdat := (i == 0)
+		result, ok := DecodeSingle(audio, ds, cand.Freq, cand.DT, newdat, params)
 		if !ok {
 			continue
 		}
@@ -146,7 +149,9 @@ func DecodeSingle(
 	f1 += delfBest
 
 	// ── Step 5: re-downsample with corrected frequency ────────────────────
-	newdat2 := true
+	// Reuse the cached 192k FFT (newdat=false); only re-extract around corrected f1.
+	// Matches WSJT-X ft8b.f90 line 140: call ft8_downsample(dd0,.false.,f1,cd0)
+	newdat2 := false
 	cd0 = ds.Downsample(dd, &newdat2, f1)
 
 	// ── Step 6: refine time offset ────────────────────────────────────────
