@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10
 **Updated:** 2026-04-10
-**Status:** Baseband demodulation + sum-product BP + OSD-2(zsave) + sync8 + AP decoding + Type 4 message support + demodulator fixes (10/13 capture1, 8/15 capture2)
+**Status:** Baseband demodulation + sum-product BP + OSD-2(zsave) + sync8 + AP decoding + Type 4 message support + demodulator fixes + false decode mitigation (10/13 capture1, 7/15 capture2, 2 false in capture2 down from 3)
 
 ## What Was Built
 
@@ -304,12 +304,37 @@ Implemented unpacking for i3=4 messages carrying non-standard callsigns (contain
 ### 3. Wire AP context into Wails logging facade
 The `APContext` is currently only accessible via the ft8test CLI (`--mycall`/`--dxcall`). To benefit real-time operation, the Wails logging app facade should construct an `APContext` from the operator's configured callsign and pass it to `ProcessWindowBaseband()`. The QSO progress state should advance as the logging app tracks QSO exchanges.
 
-### 4. Reduce false decode rate
-Capture 2 produced 3 likely false decodes (CRC-14 collisions). Potential mitigations:
-- Post-decode plausibility checks: reject decoded callsigns that fail basic format validation.
-- SNR-based filtering: reject decodes with implausible SNR (e.g. < -28 dB).
-- Reduce decode attempts per candidate: the current 4 LLR passes × 3 subtraction passes × (zsave + raw LLR OSD + AP CQ) inflate false alarm probability.
-- Consider OSD order-0 only for AP CQ pass (lower false rate, similar sensitivity).
+### 4. ~~Reduce false decode rate~~ ✅ PARTIALLY RESOLVED
+Capture 2's false decode count reduced from 3 to 2 (VK2USH UA6EED LN14 at 2694 Hz, CQ 5W1SA AH46 at 2750 Hz remain). UA4CCH VK2VT RR73 was eliminated. Capture 1 retains 1 false decode (N3AQ OK4FX JO70 at 2681 Hz).
+
+**Mitigations applied:**
+
+1. **Proper post-decode SNR computation** (`dsp.go`): Replaced `estimateSNRFromScore()` placeholder with `computePostDecodeSNR()` matching WSJT-X ft8b.f90 lines 438–452. Uses per-symbol s8 magnitude array and re-encoded tone sequence: `SNR = 10·log10(xsig/xnoi − 1) − 27.0` with -24 dB floor. Also added `msg77ToTones()` helper. `BasebandDemodResult` now exposes `S8 [8][79]float64`.
+
+2. **All-zero codeword rejection in OSD path** (`codec.go`): Added check in `verifyAndExtract()` to reject all-zero info payloads. BP already rejects all-zero hard decisions, but OSD can produce the all-zero codeword from noise input. Matches WSJT-X ft8b.f90 line 423.
+
+3. **OSD order-1 for secondary LLR passes** (`codec.go`, `baseband_pipeline.go`): Added `DecodeMessageShallow()` that uses OSD order-1 (91 single-bit flips) instead of order-2 (91+4095 pair flips). Primary LLR pass (bmeta) retains full OSD order-2 for maximum sensitivity. Secondary passes (bmetb, bmetc) use order-1 to reduce false alarm probability by ~45× per pass.
+
+4. **Reduced OSD depth for AP CQ passes** (`baseband_pipeline.go`): `tryAPPasses()` uses OSD order-0 (hard decisions only, no flip search) for AP type 1 (CQ), which constrains only 32 of 77 message bits. AP types 2–6 retain full OSD order-2. Added `DecodeMessageAPWithDepth()` to `codec.go`.
+
+5. **Removed raw-LLR OSD fallback** (`codec.go`): `DecodeMessage()` no longer falls back to OSD with raw channel LLRs after zsave-based OSD fails. This was our addition beyond WSJT-X and inflated false alarm rate without significant sensitivity gain. Matches WSJT-X's maxosd=2 (zsave[0] + zsave[1] only).
+
+6. **Reduced to 3 LLR passes** (`baseband_pipeline.go`): Removed bmetd (bit-normalised, nsym=1) pass, matching WSJT-X ft8b.f90's 3-pass approach (llra, llrb, llrc). Trade-off: lost JR3UIC SP7IIT RR73 (marginal decode via bmetd + OSD order-2).
+
+7. **Callsign plausibility filter** (`message/validate.go`): Added `PlausibleCallsign()` and `PlausibleMessage()` that verify decoded callsigns contain both letters and digits (ITU requirement). Integrated into `ValidateMsg77()` in `codec.go`. Does not catch the remaining false decodes (their callsigns are structurally valid).
+
+**Remaining false decodes are stubborn CRC-14 collisions** where OSD order-2 on the primary LLR pass produces valid-looking codewords from high-frequency noise. Further mitigation would require either reducing OSD order to 1 globally (losing weak-signal sensitivity) or adding frequency-aware decode depth (matching WSJT-X's ndepth parameter which gates full OSD to candidates near the QSO/TX frequency).
+
+**Files added:**
+- `internal/ft8/message/validate.go` — `PlausibleCallsign()`, `PlausibleMessage()`
+- `internal/ft8/message/validate_test.go` — 30 test cases
+- `internal/ft8/dsp/baseband_pipeline_test.go` — regression tests for capture 1 and 2
+
+**Files modified:**
+- `internal/ft8/dsp/baseband_demod.go` — Exposed `S8` field in `BasebandDemodResult`
+- `internal/ft8/dsp/dsp.go` — Added `computePostDecodeSNR()`, `msg77ToTones()`, removed `estimateSNRFromScore()`
+- `internal/ft8/dsp/baseband_pipeline.go` — 3 LLR passes (not 4), primary OSD-2 + secondary OSD-1, post-decode SNR, AP CQ OSD-0, hard error checks in diag path
+- `internal/ft8/codec/codec.go` — Added `DecodeMessageShallow()`, `DecodeMessageAPWithDepth()`, all-zero rejection in `verifyAndExtract()`, callsign plausibility in `ValidateMsg77()`
 
 ### 5. Investigate LLR extraction quality (highest-impact remaining bottleneck)
 Both captures have 5+ signals detected as candidates with good nsync (11–16) but failing ALL 4 LLR extraction passes AND all OSD fallback attempts (zsave + raw). This includes TL8GD UT2VX KN69 at -5 dB with nsync=11 — a strong signal that should decode trivially. The LDPC decoder is no longer the bottleneck; the LLR quality from the demodulator is the limiting factor.
@@ -324,8 +349,8 @@ Investigation approach:
 - Check the NormalizeBmet scaling: the 2.83 scale factor was originally tuned for sum-product BP; verify it's still appropriate
 - Compare the s8 (magnitude-squared) arrays against WSJT-X to identify where demodulation diverges
 
-### 6. SNR calibration
-The current SNR estimation uses a placeholder calibration (`estimateSNRFromScore`). WSJT-X computes SNR from the per-symbol s8 array after decoding. A proper port would improve SNR accuracy for logging and display.
+### 6. ~~SNR calibration~~ ✅ RESOLVED
+The post-decode SNR computation now matches WSJT-X ft8b.f90 lines 438–452 using the per-symbol s8 magnitude array and re-encoded tone sequence. See step 4 above for details.
 
 ## Existing DSP Code Reference
 

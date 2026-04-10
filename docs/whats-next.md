@@ -891,3 +891,87 @@ The remaining items are:
 - **QSO state machine** — slot selection, timeout handling, duplicate
   suppression, RRR/RR73 handling, auto-reply sequencing.
 
+## Milestone: Reduce False Decode Rate
+
+This milestone is **complete**. False decodes in capture 2 reduced from 3 to 2.
+Capture 1 retains 10 decodes (9 correct + 1 false), no regression.
+
+### Problem
+
+The baseband pipeline produced 3 false decodes in capture 2 (CRC-14 collisions
+from OSD order-2 processing of noise-only candidates). The total number of
+codeword tests per window (~10M across all candidates × LLR passes × OSD calls)
+meant CRC-14 collisions were statistically likely.
+
+### Solution
+
+Seven mitigations applied, in order of impact:
+
+1. **Proper post-decode SNR** — replaced `estimateSNRFromScore` placeholder with
+   WSJT-X ft8b.f90 lines 438–452 computation using s8 magnitude array and
+   re-encoded tone sequence. Added `S8` field to `BasebandDemodResult`.
+
+2. **OSD order-1 for secondary LLR passes** — `DecodeMessageShallow()` uses
+   OSD order-1 (91 flips) instead of order-2 (4186 flips). Primary pass
+   (bmeta) keeps full OSD-2; secondary passes (bmetb, bmetc) use OSD-1.
+   This eliminated UA4CCH VK2VT RR73 false decode.
+
+3. **Reduced to 3 LLR passes** — removed bmetd (bit-normalised) to match
+   WSJT-X's 3-pass approach and reduce total codeword tests.
+
+4. **OSD order-0 for AP CQ passes** — CQ constrains only 32/77 bits, so
+   full OSD-2 inflates false positives. `DecodeMessageAPWithDepth()` added.
+
+5. **Removed raw-LLR OSD fallback** — `DecodeMessage()` no longer tries OSD
+   with raw channel LLRs after zsave fails (WSJT-X doesn't do this).
+
+6. **All-zero codeword rejection** — `verifyAndExtract()` rejects all-zero
+   info payloads from OSD.
+
+7. **Callsign plausibility filter** — `PlausibleCallsign()` /
+   `PlausibleMessage()` check decoded callsigns contain both letters and digits.
+
+### Results
+
+| Capture | Before | After | Change |
+|---------|--------|-------|--------|
+| capture1 correct | 9 | 9 | — |
+| capture1 false | 1 | 1 | — |
+| capture2 correct | 8 | 7 | -1 (lost JR3UIC — marginal OSD-2 only) |
+| capture2 false | 3 | 2 | -1 (eliminated UA4CCH VK2VT RR73) |
+
+### Trade-offs
+
+- Lost JR3UIC SP7IIT RR73 (capture 2) — this was a marginal decode that
+  required bmetd + OSD order-2, both of which were removed. It may be
+  recoverable with frequency-aware OSD depth (deeper OSD near QSO frequency).
+- Remaining 2 false decodes have structurally valid callsigns and reasonable
+  post-decode SNR (-11.6, -12.1 dB). Further reduction requires either
+  frequency-aware decode depth (WSJT-X ndepth) or OSD order-1 globally.
+
+### Files Created
+
+- `internal/ft8/message/validate.go` — callsign plausibility checks
+- `internal/ft8/message/validate_test.go` — 30 test cases
+- `internal/ft8/dsp/baseband_pipeline_test.go` — regression tests
+
+### Files Modified
+
+- `internal/ft8/dsp/baseband_demod.go` — S8 field in BasebandDemodResult
+- `internal/ft8/dsp/dsp.go` — computePostDecodeSNR(), msg77ToTones()
+- `internal/ft8/dsp/baseband_pipeline.go` — 3 LLR passes, OSD depth control
+- `internal/ft8/codec/codec.go` — DecodeMessageShallow, DecodeMessageAPWithDepth,
+  all-zero rejection, callsign plausibility in ValidateMsg77
+- `docs/ft8-decoder-testing-handoff.md` — updated status
+
+### After This Milestone
+
+The remaining items are:
+
+- **Wire AP context into Wails logging facade** — currently CLI-only.
+- **Investigate LLR extraction quality** — 5+ signals with good nsync fail
+  all decode passes; LLR quality from the demodulator is the limiting factor.
+- **Window alignment to 15 s wall-clock boundaries**.
+- **Extended live testing** — compare decode rate against WSJT-X.
+- **QSO state machine** — slot selection, timeout handling, duplicate
+  suppression, RRR/RR73 handling, auto-reply sequencing.

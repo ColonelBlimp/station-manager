@@ -30,13 +30,10 @@ func EncodeMessage(msg77 [10]byte) [NBytes]byte {
 // negative = bit more likely 1). maxIter is the maximum number of BP
 // iterations (typically 25–50).
 //
-// The decode chain matches WSJT-X decode174_91.f90 with maxosd=2, plus
-// an additional raw-LLR OSD fallback:
+// The decode chain matches WSJT-X decode174_91.f90 with maxosd=2:
 //   - Sum-product belief-propagation with convergence checking
 //   - On BP failure, up to 2 OSD calls fed by cumulative zsum snapshots
 //     (zsave) from the BP iterations
-//   - Final fallback: OSD with raw channel LLRs (for signals where BP
-//     posteriors don't help but the channel LLRs are good enough)
 //
 // Returns ok=false if all decoders fail or the CRC-14 check does not pass.
 func DecodeMessage(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
@@ -59,14 +56,6 @@ func DecodeMessage(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
 		}
 	}
 
-	// Final fallback: OSD with raw channel LLRs.
-	// For signals where BP doesn't converge usefully, the raw channel
-	// LLRs may still have enough reliability for OSD order-2.
-	info, decOK = DecodeOSD(llr, 2)
-	if decOK {
-		return verifyAndExtract(info)
-	}
-
 	return msg77, false
 }
 
@@ -83,18 +72,25 @@ func DecodeMessage(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
 //
 // Returns ok=false if all decoders fail or the CRC-14 check does not pass.
 func DecodeMessageAP(llr [N]float32, apmask [N]uint8, maxIter int) (msg77 [10]byte, ok bool) {
-	info, zsave, decOK := DecodeAP(llr, apmask, maxIter)
+	return DecodeMessageAPWithDepth(llr, apmask, maxIter, 2)
+}
+
+// DecodeMessageShallow is like [DecodeMessage] but uses OSD order-1 instead
+// of order-2. This reduces false alarm probability by 45× (91 single-bit
+// flips vs 91+4095 pair flips) at the cost of slightly reduced sensitivity
+// for marginal signals.
+//
+// Use this for secondary LLR passes (bmetb, bmetc) where the primary pass
+// (bmeta) already has full OSD order-2 coverage.
+func DecodeMessageShallow(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
+	info, zsave, decOK := DecodeWithZsave(llr, maxIter)
 	if decOK {
 		return verifyAndExtract(info)
 	}
 
-	// BP failed — try OSD with zsave snapshots (maxosd=2).
-	// zsave[0] = channel LLRs (iteration 0 is not saved, but zsave[0] is
-	// from iteration 1 zsum). We try up to 2 OSD calls matching WSJT-X.
-	// ndeep=2 matches WSJT-X norder=2.
 	maxOSD := 2
 	for i := range maxOSD {
-		info, decOK = DecodeOSDAP(zsave[i], apmask, 2)
+		info, decOK = DecodeOSD(zsave[i], 1) // order-1 only
 		if decOK {
 			return verifyAndExtract(info)
 		}
@@ -103,9 +99,58 @@ func DecodeMessageAP(llr [N]float32, apmask [N]uint8, maxIter int) (msg77 [10]by
 	return msg77, false
 }
 
+// DecodeMessageAPWithDepth is like [DecodeMessageAP] but accepts an explicit
+// OSD search depth (ndeep). Use ndeep=0 for AP types with few constrained
+// bits (e.g., AP CQ type 1 constrains only 32 of 77 message bits) to reduce
+// false alarm probability. Use ndeep=2 for AP types that constrain most
+// bits (types 3–6).
+//
+// ndeep controls:
+//   - 0: order-0 OSD only (hard decisions, no flip search)
+//   - 1: order-0 + order-1 (91 single-bit flips)
+//   - 2: order-0 + order-1 + order-2 (91 + 4095 pair flips)
+//   - <0: BP only, no OSD fallback
+func DecodeMessageAPWithDepth(llr [N]float32, apmask [N]uint8, maxIter, ndeep int) (msg77 [10]byte, ok bool) {
+	info, zsave, decOK := DecodeAP(llr, apmask, maxIter)
+	if decOK {
+		return verifyAndExtract(info)
+	}
+
+	// BP failed — try OSD with zsave snapshots.
+	if ndeep >= 0 {
+		maxOSD := 2
+		for i := range maxOSD {
+			info, decOK = DecodeOSDAP(zsave[i], apmask, ndeep)
+			if decOK {
+				return verifyAndExtract(info)
+			}
+		}
+	}
+
+	return msg77, false
+}
+
 // verifyAndExtract checks CRC-14 and extracts the 77-bit message from a
 // decoded 91-bit info payload. Shared by [DecodeMessage] and [DecodeMessageAP].
+//
+// Also rejects the all-zero codeword (WSJT-X ft8b.f90 line 423) which is a
+// trivial fixed point of LDPC decoding.
 func verifyAndExtract(info [KBytes]byte) (msg77 [10]byte, ok bool) {
+	// Reject all-zero info payload. The all-zero codeword is a valid LDPC
+	// codeword (zero syndrome) and passes CRC-14 trivially, but it encodes
+	// no useful message. This matches WSJT-X ft8b.f90 line 423:
+	//   if(count(cw.eq.0).eq.174) cycle
+	allZero := true
+	for _, b := range info {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return msg77, false
+	}
+
 	// Extract the 77-bit message from the 91-bit info payload.
 	// Bytes 0–8 are fully message bits; byte 9 upper 5 bits (positions
 	// 72–76) are message bits, lower 3 bits are the start of the CRC.
@@ -129,4 +174,62 @@ func verifyAndExtract(info [KBytes]byte) (msg77 [10]byte, ok bool) {
 	}
 
 	return msg77, true
+}
+
+// ValidateMsg77 checks that a CRC-verified 77-bit message has valid (i3,n3)
+// type fields, can be unpacked, and contains plausible callsigns. This
+// filters false decodes that pass CRC by chance but contain structurally
+// invalid or implausible message payloads.
+//
+// Call this after [DecodeMessage] or [DecodeMessageAP] returns ok=true to
+// apply WSJT-X-style post-decode validation plus callsign plausibility.
+//
+// Checks (matching WSJT-X ft8b.f90 lines 425–430 + additional):
+//  1. i3 must be in [0,5]
+//  2. When i3=0, n3 must be in [0,6] excluding 2
+//  3. For supported types, message.Unpack must succeed
+//  4. Decoded callsigns must be structurally plausible (letter+digit rule)
+func ValidateMsg77(msg77 [10]byte) bool {
+	i3 := int(message.UnpackBits(msg77[:], 74, 3))
+	n3 := int(message.UnpackBits(msg77[:], 71, 3))
+
+	// i3 range check: i3 must be 0–5.
+	if i3 > 5 {
+		return false
+	}
+
+	// When i3=0, n3 must be 0–6, excluding n3=2 (reserved/invalid).
+	if i3 == 0 && n3 > 6 {
+		return false
+	}
+	if i3 == 0 && n3 == 2 {
+		return false
+	}
+
+	// Try to unpack — reject if the supported unpackers fail.
+	// For unsupported (i3,n3) combinations, we pass through: they are
+	// valid FT8 messages, just not types we can decode text for.
+	_, err := message.Unpack(msg77)
+	if err != nil {
+		// Distinguish "unsupported type" (pass through) from "invalid payload"
+		// (reject). For types we claim to support, unpack failure means
+		// corrupted payload fields — reject as false decode.
+		switch {
+		case i3 == 1: // Type 1 standard — we support this, so failure = bad
+			return false
+		case i3 == 0 && n3 == 0: // Type 0 free text — we support this
+			return false
+		case i3 == 4: // Type 4 non-standard — we support this
+			return false
+		}
+		// Other types: pass through (unsupported but structurally valid).
+	}
+
+	// Callsign plausibility check: reject messages with structurally
+	// implausible callsigns (e.g., all-digits or all-letters).
+	if !message.PlausibleMessage(msg77) {
+		return false
+	}
+
+	return true
 }

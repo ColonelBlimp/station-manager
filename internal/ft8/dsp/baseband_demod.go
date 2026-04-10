@@ -141,6 +141,10 @@ type BasebandDemodResult struct {
 	IBest   int                // refined starting sample index in baseband
 	FreqAdj float64            // frequency adjustment (Hz) applied during refinement
 
+	// S8 holds per-symbol tone magnitudes: S8[tone][symbol] = |DFT bin|.
+	// Used for post-decode SNR computation (WSJT-X ft8b.f90 lines 438–452).
+	S8 [NumTones][NumSymbols]float64
+
 	// Diagnostic fields (always populated, zero cost when unused).
 	Is1       int     // sync hits in Costas block 1 (symbols 0–6)
 	Is2       int     // sync hits in Costas block 2 (symbols 36–42)
@@ -266,6 +270,9 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 			s8[tone][k] = cmplx.Abs(csymb[tone])
 		}
 	}
+
+	// Copy s8 into result for post-decode SNR computation.
+	result.S8 = s8
 
 	// Step 6: Hard sync quality check — per Costas block.
 	is1, is2, is3 := 0, 0, 0

@@ -187,20 +187,50 @@ func estimateSNR(score float32, noiseFloor float64) float32 {
 	return float32(10.0 * math.Log10(s))
 }
 
-// estimateSNRFromScore produces a rough dB-scale SNR estimate from the
-// Goertzel-based sync score alone, without a spectrogram noise floor.
+// computePostDecodeSNR computes the SNR from the per-symbol tone magnitude
+// array s8 and the decoded message's tone sequence. This matches WSJT-X
+// ft8b.f90 lines 438–452:
 //
-// This is used by the baseband pipeline where sync8 candidate detection
-// replaces the spectrogram-based noise floor. The -27 dB offset matches
-// the FT8 convention for SNR in a 2500 Hz reference bandwidth.
+//	xsig = Σ s8(itone(i), i)²       — total signal power (79 symbols)
+//	xnoi = Σ s8(mod(itone(i)+4,7), i)²  — noise at offset tones
+//	SNR  = 10·log10(xsig/xnoi − 1) − 27.0
 //
-// This is a placeholder calibration — the proper approach is to compute
-// SNR from the per-symbol s8 array after decoding (matching WSJT-X
-// ft8b.f90 lines 438–452).
-func estimateSNRFromScore(score float32) float32 {
-	s := float64(score)
-	if s <= 0 {
-		return -30.0
+// The noise tone is chosen as (signal_tone + 4) mod 7, which picks a tone
+// well-separated from the signal but avoids tone 7 (which can have wrap
+// artifacts). The −27 dB offset converts from per-symbol to the FT8
+// standard 2500 Hz reference bandwidth.
+//
+// Returns -24.0 dB if the computation yields < -24.0 (WSJT-X floor).
+func computePostDecodeSNR(s8 *[NumTones][NumSymbols]float64, itone *[NumSymbols]uint8) float32 {
+	var xsig, xnoi float64
+	for i := range NumSymbols {
+		sig := s8[itone[i]][i]
+		xsig += sig * sig
+		ios := (int(itone[i]) + 4) % 7
+		noi := s8[ios][i]
+		xnoi += noi * noi
 	}
-	return float32(10.0*math.Log10(s)) - 27.0
+
+	xsnr := 0.001
+	if xnoi > 0 {
+		arg := xsig/xnoi - 1.0
+		if arg > 0.1 {
+			xsnr = arg
+		}
+	}
+	snr := float32(10.0*math.Log10(xsnr)) - 27.0
+
+	// Floor at -24 dB (WSJT-X ft8b.f90 line 460).
+	if snr < -24.0 {
+		snr = -24.0
+	}
+	return snr
+}
+
+// msg77ToTones re-encodes a decoded 77-bit message to recover the 79-symbol
+// tone sequence, for use with [computePostDecodeSNR].
+func msg77ToTones(msg77 [10]byte) [NumSymbols]uint8 {
+	cw := codec.EncodeMessage(msg77)
+	data := BitsToSymbols(cw)
+	return InsertSync(data)
 }
