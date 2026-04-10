@@ -94,6 +94,15 @@ tasks:
       - cmd/ft8/**/*.go
       - internal/**/*.go
 
+  ft8test:
+    desc: "Build the FT8 stage-by-stage test CLI → build/bin/ft8test"
+    cmds:
+      - mkdir -p build/bin
+      - cd cmd/ft8test && go build -o ../../build/bin/ft8test .
+    sources:
+      - cmd/ft8test/**/*.go
+      - internal/**/*.go
+
   setup-hooks:
     desc: "Install Git pre-commit hook"
     cmds:
