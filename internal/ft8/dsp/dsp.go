@@ -186,3 +186,21 @@ func estimateSNR(score float32, noiseFloor float64) float32 {
 	// No noise floor available (e.g., silence); use score directly.
 	return float32(10.0 * math.Log10(s))
 }
+
+// estimateSNRFromScore produces a rough dB-scale SNR estimate from the
+// Goertzel-based sync score alone, without a spectrogram noise floor.
+//
+// This is used by the baseband pipeline where sync8 candidate detection
+// replaces the spectrogram-based noise floor. The -27 dB offset matches
+// the FT8 convention for SNR in a 2500 Hz reference bandwidth.
+//
+// This is a placeholder calibration — the proper approach is to compute
+// SNR from the per-symbol s8 array after decoding (matching WSJT-X
+// ft8b.f90 lines 438–452).
+func estimateSNRFromScore(score float32) float32 {
+	s := float64(score)
+	if s <= 0 {
+		return -30.0
+	}
+	return float32(10.0*math.Log10(s)) - 27.0
+}

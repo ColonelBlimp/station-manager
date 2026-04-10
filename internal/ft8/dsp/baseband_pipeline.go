@@ -56,27 +56,16 @@ func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int) []Deco
 		// Step 1: Compute the long FFT for this pass's audio.
 		longFFT := LongFFT(audio)
 
-		// Step 2: High-resolution spectrogram for candidate detection.
-		sg := SpectrogramFT8HiRes(audio, FreqOSR)
-		if sg == nil {
-			break
-		}
-
-		const stepsPerSymbol = 4
-		minFrames := (NumSymbols-1)*stepsPerSymbol + 1
-		if len(sg) < minFrames {
-			break
-		}
-
-		// Step 3: Candidate detection.
-		candidates := FindCandidatesHiRes(sg, maxCandidates, stepsPerSymbol)
+		// Step 2: WSJT-X-faithful sync8 candidate detection.
+		// Uses linear-power spectrogram with ratio-metric scoring,
+		// 40th-percentile normalization, and near-dupe suppression.
+		sync8Result := Sync8FindCandidates(audio, DefaultSyncMin, maxCandidates)
+		candidates := sync8Result.Candidates
 		if len(candidates) == 0 {
 			break
 		}
 
-		noiseFloor := estimateNoiseFloor(sg)
-
-		// Step 4: Refine, baseband demodulate, and decode.
+		// Step 3: Refine, baseband demodulate, and decode.
 		var passDecoded []DecodedMessage
 
 		for i := range candidates {
@@ -125,7 +114,8 @@ func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int) []Deco
 			}
 			seen[msg77] = struct{}{}
 
-			snr := estimateSNR(refined.Score, noiseFloor)
+			// Rough SNR estimate from the refined sync score.
+			snr := estimateSNRFromScore(refined.Score)
 
 			dm := DecodedMessage{
 				Msg77:   msg77,
@@ -178,6 +168,7 @@ type BasebandDiag struct {
 
 // ProcessWindowBasebandWithDiag is a diagnostic variant of ProcessWindowBaseband
 // that returns per-candidate diagnostics alongside decoded messages.
+// It also performs multi-pass signal subtraction (matching the production path).
 func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int) ([]DecodedMessage, []BasebandDiag) {
 	if len(samples) < SamplesPerSymbol || maxCandidates <= 0 || maxIter <= 0 {
 		return nil, nil
@@ -188,98 +179,101 @@ func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int
 
 	hann := HannCoefficients(SamplesPerSymbol)
 
-	// Compute long FFT once.
-	longFFT := LongFFT(audio)
-
-	// Spectrogram and candidates.
-	sg := SpectrogramFT8HiRes(audio, FreqOSR)
-	if sg == nil {
-		return nil, nil
-	}
-
-	const stepsPerSymbol = 4
-	minFrames := (NumSymbols-1)*stepsPerSymbol + 1
-	if len(sg) < minFrames {
-		return nil, nil
-	}
-
-	candidates := FindCandidatesHiRes(sg, maxCandidates, stepsPerSymbol)
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-
-	noiseFloor := estimateNoiseFloor(sg)
 	seen := make(map[[10]byte]struct{})
-	var decoded []DecodedMessage
-	var diags []BasebandDiag
+	var allDecoded []DecodedMessage
+	var allDiags []BasebandDiag
 
-	for i := range candidates {
-		cand := &candidates[i]
-		refined := RefineCandidateAudioFast(audio, hann, *cand)
+	for pass := range SubtractionPasses {
+		// Compute long FFT for this pass's audio.
+		longFFT := LongFFT(audio)
 
-		bbResult := DemodulateBaseband(longFFT,
-			float64(refined.Freq),
-			float64(refined.TimeOff))
-
-		diag := BasebandDiag{
-			CandIdx: i,
-			Freq:    refined.Freq,
-			TimeOff: refined.TimeOff,
-			Score:   refined.Score,
-			Nsync:   bbResult.Nsync,
-			FreqAdj: bbResult.FreqAdj,
+		// WSJT-X-faithful sync8 candidate detection.
+		sync8Result := Sync8FindCandidates(audio, DefaultSyncMin, maxCandidates)
+		candidates := sync8Result.Candidates
+		if len(candidates) == 0 {
+			break
 		}
 
-		// Compute LLR stats for each pass.
-		llrSets := [4]*[CodedBits]float32{
-			&bbResult.LLRa,
-			&bbResult.LLRb,
-			&bbResult.LLRc,
-			&bbResult.LLRd,
-		}
-		for p, llr := range llrSets {
-			diag.PassIdx[p] = -1
-			var sum, sum2 float64
-			for _, v := range llr {
-				sum += float64(v)
-				sum2 += float64(v) * float64(v)
+		var passDecoded []DecodedMessage
+
+		for i := range candidates {
+			cand := &candidates[i]
+			refined := RefineCandidateAudioFast(audio, hann, *cand)
+
+			bbResult := DemodulateBaseband(longFFT,
+				float64(refined.Freq),
+				float64(refined.TimeOff))
+
+			diag := BasebandDiag{
+				CandIdx: i,
+				Freq:    refined.Freq,
+				TimeOff: refined.TimeOff,
+				Score:   refined.Score,
+				Nsync:   bbResult.Nsync,
+				FreqAdj: bbResult.FreqAdj,
 			}
-			n := float64(CodedBits)
-			diag.LLRMean[p] = sum / n
-			diag.LLRVar[p] = sum2/n - (sum/n)*(sum/n)
-		}
 
-		if bbResult.Nsync <= minSyncForDecode {
-			diags = append(diags, diag)
-			continue
-		}
-
-		// Try each LLR set.
-		for p, llr := range llrSets {
-			msg77, ok := codec.DecodeMessage(*llr, maxIter)
-			if ok {
-				msg77[9] &= 0xF8
-				diag.PassIdx[p] = p
-				if _, dup := seen[msg77]; !dup {
-					seen[msg77] = struct{}{}
-					diag.Decoded = true
-					snr := estimateSNR(refined.Score, noiseFloor)
-					diag.SNR = snr
-					decoded = append(decoded, DecodedMessage{
-						Msg77:   msg77,
-						Freq:    refined.Freq,
-						TimeOff: refined.TimeOff,
-						SNR:     snr,
-					})
+			// Compute LLR stats for each pass.
+			llrSets := [4]*[CodedBits]float32{
+				&bbResult.LLRa,
+				&bbResult.LLRb,
+				&bbResult.LLRc,
+				&bbResult.LLRd,
+			}
+			for p, llr := range llrSets {
+				diag.PassIdx[p] = -1
+				var sum, sum2 float64
+				for _, v := range llr {
+					sum += float64(v)
+					sum2 += float64(v) * float64(v)
 				}
-				break
+				n := float64(CodedBits)
+				diag.LLRMean[p] = sum / n
+				diag.LLRVar[p] = sum2/n - (sum/n)*(sum/n)
 			}
+
+			if bbResult.Nsync <= minSyncForDecode {
+				allDiags = append(allDiags, diag)
+				continue
+			}
+
+			// Try each LLR set.
+			for p, llr := range llrSets {
+				msg77, ok := codec.DecodeMessage(*llr, maxIter)
+				if ok {
+					msg77[9] &= 0xF8
+					diag.PassIdx[p] = p
+					if _, dup := seen[msg77]; !dup {
+						seen[msg77] = struct{}{}
+						diag.Decoded = true
+						snr := estimateSNRFromScore(refined.Score)
+						diag.SNR = snr
+						dm := DecodedMessage{
+							Msg77:   msg77,
+							Freq:    refined.Freq,
+							TimeOff: refined.TimeOff,
+							SNR:     snr,
+						}
+						allDecoded = append(allDecoded, dm)
+						passDecoded = append(passDecoded, dm)
+					}
+					break
+				}
+			}
+
+			allDiags = append(allDiags, diag)
 		}
 
-		diags = append(diags, diag)
+		// Signal subtraction for next pass.
+		if len(passDecoded) == 0 || pass == SubtractionPasses-1 {
+			break
+		}
+		for i := range passDecoded {
+			subtractSignal(audio, &passDecoded[i])
+		}
 	}
 
-	return decoded, diags
+	return allDecoded, allDiags
 }
 
 // llrStats computes mean and variance of a 174-element LLR array.
