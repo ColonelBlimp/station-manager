@@ -20,6 +20,7 @@
 - `task tidy` → `go mod tidy` in each module
 - `task update` → `go get -u ./...` + `go mod tidy` in each module
 - `task ft8` → build the FT8 RX/TX CLI tool → `build/bin/ft8`
+- `task ft8test` → build the FT8 stage-by-stage test CLI → `build/bin/ft8test`
 - `task wails:logging APP_VERSION=<ver>` → build the logging Wails app
 - `task wails:logbook APP_VERSION=<ver>` → build the logbook Wails app
 - `task wails:config APP_VERSION=<ver>` → build the config Wails app
@@ -63,3 +64,5 @@
 - CI workflows: `.github/workflows/`
 - DI bean IDs: `internal/types/services.go`
 - Runtime artifact directories: `build/bin`, `build/db`, `build/logs`
+- FT8 decoder testing status & next steps: `docs/ft8-decoder-testing-handoff.md`
+- FT8 stage-by-stage test CLI: `cmd/ft8test/` (subcommands: `devices`, `capture`, `spectrogram`, `candidates`, `decode`)
