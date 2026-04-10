@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10
 **Updated:** 2026-04-10
-**Status:** Baseband demodulation + OSD + sync8 + AP decoding + Type 4 message support (9/13 capture1, 7/15 capture2)
+**Status:** Baseband demodulation + sum-product BP + OSD(zsave) + sync8 + AP decoding + Type 4 message support (9/13 capture1, 7/15 capture2)
 
 ## What Was Built
 
@@ -17,6 +17,9 @@ Ported WSJT-X's AP decode passes from `ft8b.f90` and `decode174_91.f90` to Go. W
 
 ### Phase 4: Type 4 non-standard callsign messages (complete)
 Implemented unpacking for i3=4 messages carrying non-standard callsigns (containing '/', up to 11 characters from a 38-symbol alphabet). The 58-bit base-38 encoded callsign is decoded; the 12-bit hashed companion callsign is shown as `<...>` (no hash lookup table). This enabled decoding messages like `VK/ZL4XZ <...> RR73` that previously failed with "Type 4 not yet supported".
+
+### Phase 5: Sum-product BP + zsave OSD (complete)
+Replaced the normalised min-sum BP decoder with sum-product BP (tanh/atanh) matching WSJT-X `decode174_91.f90`. OSD fallback now receives cumulative BP posterior LLR snapshots (zsave) instead of raw channel LLRs, plus a final raw-LLR OSD fallback. Key result: KB7THX WB9VGJ RR73 now decodes **without AP context** (previously required `--mycall`), demonstrating improved decoder sensitivity for weak signals.
 
 ### Files Created/Modified
 
@@ -207,6 +210,20 @@ audio (180k samples, 12 kHz)
 ### 1. ~~LDPC decoder strength~~ ✅ RESOLVED
 OSD (Ordered Statistics Decoding) order-1 has been implemented as a fallback when BP fails to converge. `codec.DecodeMessage` now automatically chains BP → OSD.
 
+### 1b. ~~Sum-product BP + zsave OSD~~ ✅ RESOLVED
+Replaced normalised min-sum BP (sign × β × min) with sum-product BP (tanh/atanh) matching WSJT-X `decode174_91.f90`. OSD fallback now receives cumulative BP posterior LLR snapshots (zsave) from iterations 1–3, plus raw-LLR OSD as a final fallback. This enabled KB7THX WB9VGJ RR73 to decode **without AP context** (the AP CQ type 1 pass succeeds with the stronger BP+zsave chain).
+
+**Files modified:**
+- `internal/ft8/codec/decoder.go` — Replaced `decodeInternal` + `bpCollectZsave` with unified `bpDecode` using sum-product check→variable update. Added `platanh()` (piecewise-linear atanh matching WSJT-X). Added `DecodeWithZsave()`. Added early stopping criterion (WSJT-X lines 91–104).
+- `internal/ft8/codec/decoder_debug.go` — Updated `DecodeDebug` to use sum-product c→v update.
+- `internal/ft8/codec/codec.go` — `DecodeMessage()` now calls `DecodeWithZsave()`, tries OSD with zsave[0] and zsave[1], then raw-LLR OSD as final fallback.
+- `internal/ft8/codec/osd_test.go` — Updated `TestDecodeMessageOSDFallback` for zsave-aware path.
+
+**Key implementation notes:**
+- LLR sign convention required adapting the WSJT-X formula: WSJT-X uses `tanh(-toc/2)` and `atanh(-Tmn)` for positive=likely 1 convention. Our positive=likely 0 convention uses `tanh(toc/2)` and `atanh(prod)` — no negations.
+- `platanh` is a piecewise-linear approximation of atanh, clamped at ±7.0, avoiding infinity for inputs near ±1. Matches WSJT-X `lib/platanh.f90` exactly.
+- The unified `bpDecode` function collects zsave during its single BP pass (no double BP run), then does convergence checking and early stopping in the same loop.
+
 ### 2. ~~192k-point FFT performance~~ ✅ RESOLVED
 Mixed-radix Cooley-Tukey FFT implemented for 5-smooth sizes. 1.29× faster, 63% less memory for 192k-point FFT.
 
@@ -269,14 +286,18 @@ The `APContext` is currently only accessible via the ft8test CLI (`--mycall`/`--
 Capture 2 produced 3 likely false decodes (CRC-14 collisions). Potential mitigations:
 - Post-decode plausibility checks: reject decoded callsigns that fail basic format validation.
 - SNR-based filtering: reject decodes with implausible SNR (e.g. < -28 dB).
-- Reduce decode attempts per candidate: the current 4 LLR passes × 3 subtraction passes × 2 (with AP CQ) = ~1200 attempts inflate false alarm probability.
+- Reduce decode attempts per candidate: the current 4 LLR passes × 3 subtraction passes × (zsave + raw LLR OSD + AP CQ) inflate false alarm probability.
 - Consider OSD order-0 only for AP CQ pass (lower false rate, similar sensitivity).
 
-### 5. Improve LDPC success rate for found candidates
-Capture 2 shows 5 signals detected as candidates (good nsync) but failing all 4 LLR passes. This is the largest gap between our pipeline and WSJT-X. Investigate:
-- Multi-symbol LLR passes (nsym=2,3): currently only nsym=1 succeeds. The joint-symbol passes produce correct sign polarity but magnitude/normalisation may differ from WSJT-X.
-- Fine frequency correction: compare Sync8d Δf values with WSJT-X to verify sub-bin accuracy.
-- Signal subtraction fidelity: verify the subtracted signal doesn't corrupt nearby frequencies.
+### 5. Investigate LLR extraction quality (highest-impact remaining bottleneck)
+Both captures have 5+ signals detected as candidates with good nsync (11–16) but failing ALL 4 LLR extraction passes AND all OSD fallback attempts (zsave + raw). This includes TL8GD UT2VX KN69 at -5 dB with nsync=11 — a strong signal that should decode trivially. The LDPC decoder is no longer the bottleneck; the LLR quality from the demodulator is the limiting factor.
+
+Investigation approach:
+- Export raw LLR arrays for the failing signals and compare against WSJT-X's ft8b.f90 output for the same candidates
+- Check if the fine-sync Δf correction from Sync8d is accurate — a sub-bin frequency error would contaminate all LLR passes
+- Verify that the 32-point per-symbol DFT bin assignment (Go 0-indexed vs Fortran 1-indexed) is correct for all tone mappings
+- Check the NormalizeBmet scaling: the 2.83 scale factor was originally tuned for sum-product BP; verify it's still appropriate
+- Compare the s8 (magnitude-squared) arrays against WSJT-X to identify where demodulation diverges
 
 ### 6. SNR calibration
 The current SNR estimation uses a placeholder calibration (`estimateSNRFromScore`). WSJT-X computes SNR from the per-symbol s8 array after decoding. A proper port would improve SNR accuracy for logging and display.

@@ -84,7 +84,7 @@ func (r DecodeResult) Summary() string {
 	return b.String()
 }
 
-// DecodeDebug performs normalised min-sum BP decoding identical to [Decode]
+// DecodeDebug performs sum-product BP decoding identical to [Decode]
 // but records per-iteration diagnostic metrics.
 //
 // See [Decode] for parameter semantics.
@@ -188,43 +188,44 @@ func DecodeDebug(llr [N]float32, maxIter int) DecodeResult {
 		}
 
 		// --- Variable→Check update ---
+		// toc[m][nIdx] = zn[n] - tov from check m (extrinsic message)
 		for m := range M {
 			deg := int(NmCount[m])
 			for nIdx := range deg {
 				n := int(Nm[m][nIdx]) - 1
-				q := llr[n]
-				for mIdx := range 3 {
-					if int(Mn[n][mIdx])-1 != m {
-						q += tov[n][mIdx]
+				zn := llr[n] + tov[n][0] + tov[n][1] + tov[n][2]
+				q := zn
+				for kk := range 3 {
+					if int(Mn[n][kk])-1 == m {
+						q -= tov[n][kk]
 					}
 				}
 				toc[m][nIdx] = q
 			}
 		}
 
-		// --- Check→Variable update (normalised min-sum) ---
+		// --- Check→Variable update (sum-product) ---
+		var tanhtoc [M][7]float32
+		for m := range M {
+			deg := int(NmCount[m])
+			for nIdx := range deg {
+				tanhtoc[m][nIdx] = float32(math.Tanh(float64(toc[m][nIdx] / 2)))
+			}
+		}
+
 		for n := range N {
 			for mIdx := range 3 {
 				m := int(Mn[n][mIdx]) - 1
 				deg := int(NmCount[m])
 
-				sign := float32(1.0)
-				minAbs := float32(math.MaxFloat32)
-
+				prod := float32(1.0)
 				for nIdx := range deg {
 					if int(Nm[m][nIdx])-1 != n {
-						val := toc[m][nIdx]
-						if val < 0 {
-							sign = -sign
-							val = -val
-						}
-						if val < minAbs {
-							minAbs = val
-						}
+						prod *= tanhtoc[m][nIdx]
 					}
 				}
 
-				tov[n][mIdx] = sign * beta * minAbs
+				tov[n][mIdx] = 2 * platanh(prod)
 			}
 		}
 	}

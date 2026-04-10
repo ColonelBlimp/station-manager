@@ -1,4 +1,4 @@
-// decoder.go — LDPC(174,91) normalised min-sum belief-propagation decoder.
+// decoder.go — LDPC(174,91) sum-product belief-propagation decoder.
 //
 // The decoder takes 174 log-likelihood ratios and iteratively refines hard
 // bit decisions until all 83 parity checks pass or the iteration limit is
@@ -7,20 +7,38 @@
 // LLR sign convention: positive means bit more likely 0, negative means bit
 // more likely 1.
 //
-// Reference algorithm: normalised min-sum BP, matching the compact array
-// layout of ft8_lib bp_decode (tov[N][3] / toc[M][7]) but replacing
-// sum-product (tanh/atanh) with sign × β × min-magnitude.
+// Reference algorithm: sum-product BP using tanh/atanh, matching WSJT-X
+// decode174_91.f90 lines 120–133. Collects cumulative zsum snapshots for
+// OSD fallback (lines 51–64).
 
 package codec
 
 import "math"
 
-// beta is the normalised min-sum scaling factor, matching ft8_lib.
-// It attenuates the check-to-variable messages to compensate for the
-// min-sum approximation of the exact BP update.
-const beta = 0.8
+// platanh is a piecewise-linear approximation of atanh(x), clamped at ±7.0.
+// Matches WSJT-X lib/platanh.f90 exactly.
+func platanh(x float32) float32 {
+	sign := float32(1.0)
+	z := x
+	if x < 0 {
+		sign = -1.0
+		z = -x
+	}
+	switch {
+	case z <= 0.664:
+		return x / 0.83
+	case z <= 0.9217:
+		return sign * (z - 0.4064) / 0.322
+	case z <= 0.9951:
+		return sign * (z - 0.8378) / 0.0524
+	case z <= 0.9998:
+		return sign * (z - 0.9914) / 0.0012
+	default:
+		return sign * 7.0
+	}
+}
 
-// Decode performs normalised min-sum belief-propagation decoding of a
+// Decode performs sum-product belief-propagation decoding of a
 // (174,91) LDPC codeword.
 //
 // llr contains 174 log-likelihood ratios (positive = bit more likely 0,
@@ -32,10 +50,20 @@ const beta = 0.8
 // maxIter iterations, it returns a zero-valued array and ok=false.
 func Decode(llr [N]float32, maxIter int) (info [KBytes]byte, ok bool) {
 	var apmask [N]uint8
-	return decodeInternal(llr, apmask, maxIter)
+	info, _, ok = bpDecode(llr, apmask, maxIter)
+	return
 }
 
-// DecodeAP performs normalised min-sum belief-propagation decoding with
+// DecodeWithZsave performs sum-product BP decoding and also returns
+// cumulative zsum snapshots from iterations 1–3 for OSD fallback.
+// This is the entry point used by [DecodeMessage] to get both the BP
+// result and zsave in a single pass.
+func DecodeWithZsave(llr [N]float32, maxIter int) (info [KBytes]byte, zsave [3][N]float32, ok bool) {
+	var apmask [N]uint8
+	return bpDecode(llr, apmask, maxIter)
+}
+
+// DecodeAP performs sum-product belief-propagation decoding with
 // a priori (AP) mask support.
 //
 // For bits where apmask[i]==1, the a-posteriori LLR is held at the channel
@@ -46,38 +74,59 @@ func Decode(llr [N]float32, maxIter int) (info [KBytes]byte, ok bool) {
 // The function also accumulates zsum snapshots for up to 3 OSD fallback
 // calls, matching WSJT-X's maxosd=2 behaviour.
 func DecodeAP(llr [N]float32, apmask [N]uint8, maxIter int) (info [KBytes]byte, zsave [3][N]float32, ok bool) {
-	info, ok = decodeInternal(llr, apmask, maxIter)
-	if ok {
-		return
-	}
-
-	// If BP failed, produce zsave snapshots for OSD.
-	// We re-run BP to collect the cumulative zsum at iterations 1, 2, 3.
-	// This matches WSJT-X decode174_91.f90 lines 61–64.
-	zsave = bpCollectZsave(llr, apmask, maxIter)
-	return
+	return bpDecode(llr, apmask, maxIter)
 }
 
-// decodeInternal is the shared BP implementation supporting both regular
-// and AP-masked decoding.
-func decodeInternal(llr [N]float32, apmask [N]uint8, maxIter int) (info [KBytes]byte, ok bool) {
+// bpDecode is the unified sum-product BP implementation. It performs BP
+// iterations with convergence checking AND collects cumulative zsum
+// snapshots at iterations 1, 2, and 3 for OSD fallback.
+//
+// This matches WSJT-X decode174_91.f90:
+//   - Sum-product check→variable update (tanh/atanh, lines 120–133)
+//   - zsum accumulation and zsave snapshots (lines 51–64)
+//   - Convergence check each iteration (lines 66–89)
+//   - Early stopping when syndrome isn't improving (lines 91–104)
+func bpDecode(llr [N]float32, apmask [N]uint8, maxIter int) (info [KBytes]byte, zsave [3][N]float32, ok bool) {
 	var tov [N][3]float32
 	var toc [M][7]float32
+	var tanhtoc [M][7]float32
+	var zn [N]float32
+	var zsum [N]float32
 	var plain [N]uint8
 
-	for range maxIter {
-		// --- Hard decision ---
-		// A-posteriori LLR = channel LLR + all incoming check→variable messages.
+	iterations := maxIter
+	if iterations > 30 {
+		iterations = 30
+	}
+
+	nclast := 0
+	ncnt := 0
+
+	for iter := range iterations {
+		// --- A-posteriori LLR ---
+		// zn = channel LLR + all incoming check→variable messages.
 		// For AP-masked bits, ignore extrinsic messages (hold at channel value).
+		for n := range N {
+			if apmask[n] == 1 {
+				zn[n] = llr[n]
+			} else {
+				zn[n] = llr[n] + tov[n][0] + tov[n][1] + tov[n][2]
+			}
+		}
+
+		// --- Accumulate zsum and save zsave snapshots ---
+		// Matches WSJT-X decode174_91.f90 lines 61–64.
+		for n := range N {
+			zsum[n] += zn[n]
+		}
+		if iter >= 1 && iter <= 3 {
+			copy(zsave[iter-1][:], zsum[:])
+		}
+
+		// --- Hard decision ---
 		plainSum := 0
 		for n := range N {
-			var app float32
-			if apmask[n] == 1 {
-				app = llr[n]
-			} else {
-				app = llr[n] + tov[n][0] + tov[n][1] + tov[n][2]
-			}
-			if app < 0 {
+			if zn[n] < 0 {
 				plain[n] = 1
 			} else {
 				plain[n] = 0
@@ -87,95 +136,42 @@ func decodeInternal(llr [N]float32, apmask [N]uint8, maxIter int) (info [KBytes]
 
 		// All-zero codeword is a trivial fixed point of BP — reject it.
 		if plainSum == 0 {
-			return info, false
+			return info, zsave, false
 		}
 
 		// --- Syndrome check ---
 		if syndromeOK(&plain) {
-			return packInfoBits(&plain), true
+			return packInfoBits(&plain), zsave, true
+		}
+
+		// --- Early stopping criterion (WSJT-X lines 91–104) ---
+		if iter > 0 {
+			ncheck := 0
+			for m := range M {
+				deg := int(NmCount[m])
+				var x uint8
+				for i := range deg {
+					x ^= plain[int(Nm[m][i])-1]
+				}
+				if x != 0 {
+					ncheck++
+				}
+			}
+			nd := ncheck - nclast
+			if nd < 0 {
+				ncnt = 0
+			} else {
+				ncnt++
+			}
+			if ncnt >= 5 && iter >= 10 && ncheck > 15 {
+				break // BP is stuck, exit early
+			}
+			nclast = ncheck
 		}
 
 		// --- Variable→Check update ---
-		for m := range M {
-			deg := int(NmCount[m])
-			for nIdx := range deg {
-				n := int(Nm[m][nIdx]) - 1
-				q := llr[n]
-				for mIdx := range 3 {
-					if int(Mn[n][mIdx])-1 != m {
-						q += tov[n][mIdx]
-					}
-				}
-				toc[m][nIdx] = q
-			}
-		}
-
-		// --- Check→Variable update (normalised min-sum) ---
-		for n := range N {
-			for mIdx := range 3 {
-				m := int(Mn[n][mIdx]) - 1
-				deg := int(NmCount[m])
-
-				sign := float32(1.0)
-				minAbs := float32(math.MaxFloat32)
-
-				for nIdx := range deg {
-					if int(Nm[m][nIdx])-1 != n {
-						val := toc[m][nIdx]
-						if val < 0 {
-							sign = -sign
-							val = -val
-						}
-						if val < minAbs {
-							minAbs = val
-						}
-					}
-				}
-
-				tov[n][mIdx] = sign * beta * minAbs
-			}
-		}
-	}
-
-	return info, false
-}
-
-// bpCollectZsave runs BP iterations and collects cumulative zsum snapshots
-// at iterations 1, 2, and 3 for use by the OSD fallback decoder.
-// This matches WSJT-X decode174_91.f90 lines 51–64.
-func bpCollectZsave(llr [N]float32, apmask [N]uint8, maxIter int) [3][N]float32 {
-	var zsave [3][N]float32
-	var tov [N][3]float32
-	var toc [M][7]float32
-	var zsum [N]float32
-
-	iterations := maxIter
-	if iterations > 30 {
-		iterations = 30
-	}
-
-	for iter := range iterations {
-		// Compute zn (a-posteriori LLR).
-		var zn [N]float32
-		for n := range N {
-			if apmask[n] == 1 {
-				zn[n] = llr[n]
-			} else {
-				zn[n] = llr[n] + tov[n][0] + tov[n][1] + tov[n][2]
-			}
-		}
-
-		// Accumulate into zsum.
-		for n := range N {
-			zsum[n] += zn[n]
-		}
-
-		// Save snapshots at iterations 1, 2, 3 (0-indexed).
-		if iter >= 1 && iter <= 3 {
-			copy(zsave[iter-1][:], zsum[:])
-		}
-
-		// Variable→Check update.
+		// toc[m][nIdx] = zn[n] - tov from check m (extrinsic message)
+		// Matches WSJT-X decode174_91.f90 lines 108–118.
 		for m := range M {
 			deg := int(NmCount[m])
 			for nIdx := range deg {
@@ -190,34 +186,40 @@ func bpCollectZsave(llr [N]float32, apmask [N]uint8, maxIter int) [3][N]float32 
 			}
 		}
 
-		// Check→Variable update (normalised min-sum).
+		// --- Check→Variable update (sum-product) ---
+		// tov[n][mIdx] = 2 × atanh(∏ tanh(toc_k / 2)) for k ≠ n
+		//
+		// Note: WSJT-X uses tanh(-toc/2) and atanh(-Tmn) because its LLR
+		// convention is positive=likely 1. Our convention is positive=likely 0,
+		// so we use tanh(toc/2) and atanh(prod) — no negations.
+
+		// Pre-compute tanh(toc/2) for all check→variable messages.
+		for m := range M {
+			deg := int(NmCount[m])
+			for nIdx := range deg {
+				tanhtoc[m][nIdx] = float32(math.Tanh(float64(toc[m][nIdx] / 2)))
+			}
+		}
+
+		// Compute tov from product of tanhtoc, excluding the current variable.
 		for n := range N {
 			for mIdx := range 3 {
 				m := int(Mn[n][mIdx]) - 1
 				deg := int(NmCount[m])
 
-				sign := float32(1.0)
-				minAbs := float32(math.MaxFloat32)
-
+				prod := float32(1.0)
 				for nIdx := range deg {
 					if int(Nm[m][nIdx])-1 != n {
-						val := toc[m][nIdx]
-						if val < 0 {
-							sign = -sign
-							val = -val
-						}
-						if val < minAbs {
-							minAbs = val
-						}
+						prod *= tanhtoc[m][nIdx]
 					}
 				}
 
-				tov[n][mIdx] = sign * beta * minAbs
+				tov[n][mIdx] = 2 * platanh(prod)
 			}
 		}
 	}
 
-	return zsave
+	return info, zsave, false
 }
 
 // syndromeOK returns true if all 83 parity checks are satisfied.

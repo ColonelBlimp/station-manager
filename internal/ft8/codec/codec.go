@@ -30,19 +30,43 @@ func EncodeMessage(msg77 [10]byte) [NBytes]byte {
 // negative = bit more likely 1). maxIter is the maximum number of BP
 // iterations (typically 25–50).
 //
-// The decode chain is: belief-propagation first; if BP fails to converge,
-// ordered-statistics decoding (OSD order-1) is attempted as a fallback.
-// Returns ok=false if both decoders fail or the CRC-14 check does not pass.
+// The decode chain matches WSJT-X decode174_91.f90 with maxosd=2, plus
+// an additional raw-LLR OSD fallback:
+//   - Sum-product belief-propagation with convergence checking
+//   - On BP failure, up to 2 OSD calls fed by cumulative zsum snapshots
+//     (zsave) from the BP iterations
+//   - Final fallback: OSD with raw channel LLRs (for signals where BP
+//     posteriors don't help but the channel LLRs are good enough)
+//
+// Returns ok=false if all decoders fail or the CRC-14 check does not pass.
 func DecodeMessage(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
-	info, decOK := Decode(llr, maxIter)
-	if !decOK {
-		// BP failed to converge — try OSD as fallback.
-		info, decOK = DecodeOSD(llr, 1)
-		if !decOK {
-			return msg77, false
+	info, zsave, decOK := DecodeWithZsave(llr, maxIter)
+	if decOK {
+		return verifyAndExtract(info)
+	}
+
+	// BP failed — try OSD with zsave snapshots (maxosd=2).
+	// zsave[0] = cumulative zsum after iteration 1
+	// zsave[1] = cumulative zsum after iteration 2
+	// These carry BP-refined posterior information that can decode
+	// weaker signals where BP partially converged.
+	maxOSD := 2
+	for i := range maxOSD {
+		info, decOK = DecodeOSD(zsave[i], 1)
+		if decOK {
+			return verifyAndExtract(info)
 		}
 	}
-	return verifyAndExtract(info)
+
+	// Final fallback: OSD with raw channel LLRs.
+	// For signals where BP doesn't converge usefully, the raw channel
+	// LLRs may still have enough reliability for OSD order-1.
+	info, decOK = DecodeOSD(llr, 1)
+	if decOK {
+		return verifyAndExtract(info)
+	}
+
+	return msg77, false
 }
 
 // DecodeMessageAP takes 174 soft LLRs with an AP mask, LDPC-decodes using
