@@ -50,9 +50,10 @@ func DecodeMessage(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
 	// zsave[1] = cumulative zsum after iteration 2
 	// These carry BP-refined posterior information that can decode
 	// weaker signals where BP partially converged.
+	// ndeep=2 matches WSJT-X norder=2 (order-2 pair-flip search).
 	maxOSD := 2
 	for i := range maxOSD {
-		info, decOK = DecodeOSD(zsave[i], 1)
+		info, decOK = DecodeOSD(zsave[i], 2)
 		if decOK {
 			return verifyAndExtract(info)
 		}
@@ -60,8 +61,8 @@ func DecodeMessage(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
 
 	// Final fallback: OSD with raw channel LLRs.
 	// For signals where BP doesn't converge usefully, the raw channel
-	// LLRs may still have enough reliability for OSD order-1.
-	info, decOK = DecodeOSD(llr, 1)
+	// LLRs may still have enough reliability for OSD order-2.
+	info, decOK = DecodeOSD(llr, 2)
 	if decOK {
 		return verifyAndExtract(info)
 	}
@@ -90,9 +91,10 @@ func DecodeMessageAP(llr [N]float32, apmask [N]uint8, maxIter int) (msg77 [10]by
 	// BP failed — try OSD with zsave snapshots (maxosd=2).
 	// zsave[0] = channel LLRs (iteration 0 is not saved, but zsave[0] is
 	// from iteration 1 zsum). We try up to 2 OSD calls matching WSJT-X.
+	// ndeep=2 matches WSJT-X norder=2.
 	maxOSD := 2
 	for i := range maxOSD {
-		info, decOK = DecodeOSDAP(zsave[i], apmask, 1)
+		info, decOK = DecodeOSDAP(zsave[i], apmask, 2)
 		if decOK {
 			return verifyAndExtract(info)
 		}

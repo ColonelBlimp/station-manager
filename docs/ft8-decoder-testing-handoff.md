@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10
 **Updated:** 2026-04-10
-**Status:** Baseband demodulation + sum-product BP + OSD(zsave) + sync8 + AP decoding + Type 4 message support (9/13 capture1, 7/15 capture2)
+**Status:** Baseband demodulation + sum-product BP + OSD-2(zsave) + sync8 + AP decoding + Type 4 message support + demodulator fixes (10/13 capture1, 8/15 capture2)
 
 ## What Was Built
 
@@ -87,6 +87,7 @@ task ft8test                                          # build → build/bin/ft8t
 | Baseband (BP+OSD) | **6/13** | + <...> RV6ASU KN94, A61CK W3DQS -12 |
 | Baseband (BP+OSD+sync8) | **9/13** | + SV2SIH ES2AJ -16, CQ PV8AJ FJ92, A61CK UA1CEI KP50 |
 | Baseband (BP+OSD+sync8+AP) | **10/13** | + KB7THX WB9VGJ RR73 (with mycall=KB7THX, dxcall=WB9VGJ) |
+| Baseband (BP+OSD2+sync8, no Goertzel refine) | **9/13 + 1 false** | KB7THX decodes without AP; N3AQ OK4FX JO70 false |
 
 ### Baseband decode details (BP+OSD+sync8):
 ```
@@ -136,6 +137,7 @@ The 3 new decodes (SV2SIH ES2AJ, CQ PV8AJ, A61CK UA1CEI) were previously **invis
 |---|---|---|---|
 | Goertzel (original) | **7** | **5/15** | **2** |
 | Baseband (BP+OSD+sync8) | **10** | **7/15** | **3** |
+| Baseband (BP+OSD2+sync8, no Goertzel refine) | **11** | **8/15** | **3** |
 
 ### Baseband decode details:
 ```
@@ -153,17 +155,16 @@ The 3 new decodes (SV2SIH ES2AJ, CQ PV8AJ, A61CK UA1CEI) were previously **invis
 ```
 
 ### Analysis — capture 2:
-- **7 correct matches** out of 15 WSJT-X decodes (47%), including VK/ZL4XZ (Type 4 non-standard callsign).
-- **3 likely false decodes** at high frequencies (2594–2751 Hz) with extreme SNRs (-20 to -33 dB). These pass CRC-14 by chance — expected false alarm rate with 240 candidates × 4 LLR passes + AP CQ pass ≈ 1200 decode attempts → ~7% chance of at least 1 false per run; 3 is higher than expected.
-- **8 WSJT-X signals missed** — analysis by failure mode:
+- **8 correct matches** out of 15 WSJT-X decodes (53%), including VK/ZL4XZ (Type 4 non-standard callsign) and JR3UIC SP7IIT RR73 (newly decoded by OSD order-2).
+- **3 likely false decodes** at high frequencies (2594–2751 Hz) with extreme SNRs (-20 to -33 dB). These pass CRC-14 by chance — expected false alarm rate with 240 candidates × 4 LLR passes + AP CQ pass + OSD order-2 inflate false alarm probability.
+- **7 WSJT-X signals missed** — analysis by failure mode:
   - UY7VV KE6SU DM14 (553 Hz, -17 dB) — nsync=6 (≤ 6 threshold, skipped)
-  - TL8GD UT2VX KN69 (319 Hz, -5 dB) — nsync=11, all 4 LLR passes fail
-  - RU4LM 4X5JK R-14 (1840 Hz, -18 dB) — nsync=16, all 4 LLR passes fail
+  - TL8GD UT2VX KN69 (319 Hz, -5 dB) — nsync=6 (≤ 6, skipped; NP2 bound zeroes 3rd Costas block at this time offset)
+  - RU4LM 4X5JK R-14 (1840 Hz, -18 dB) — nsync=12(2+7+3), rawσ=0.000447, all passes fail (marginal LLR quality)
   - JT1CO IZ7DIO 73 (1768 Hz, -14 dB) — nsync=4 (skipped)
-  - VK3ZSJ US7KC KO21 (1502 Hz, -18 dB) — nsync=13, all 4 LLR passes fail
-  - JR3UIC SP7IIT RR73 (1410 Hz, -15 dB) — nsync=14, all 4 LLR passes fail
+  - VK3ZSJ US7KC KO21 (1502 Hz, -18 dB) — not detected as candidate near this frequency
   - JT1CO YO3HST KN24 (1096 Hz, -22 dB) — no candidate near this frequency
-  - CQ TN8GD JI75 (451 Hz, -12 dB) — nsync=13, all 4 LLR passes fail
+  - CQ TN8GD JI75 (451 Hz, -12 dB) — nsync=8(0+6+2), rawσ=0.000552, all passes fail (marginal LLR quality)
 
 ## Architecture: Baseband Demodulation Pipeline
 
@@ -174,7 +175,6 @@ audio (180k samples, 12 kHz)
     → ratio-metric sync scoring (sync_abc + sync_bc)
     → 40th-percentile normalization, near-dupe suppression
     → candidate list with freq + time offset
-  → RefineCandidateAudioFast: Goertzel coarse-fine grid search
   → LongFFT: 192000-point real FFT (mixed-radix, computed once per pass)
   → DownsampleBaseband: extract ±5-tone band around f0, cosine taper, cshift, 3200-pt IFFT
   → 3200 complex samples at 200 Hz, f0 at DC
@@ -223,6 +223,28 @@ Replaced normalised min-sum BP (sign × β × min) with sum-product BP (tanh/ata
 - LLR sign convention required adapting the WSJT-X formula: WSJT-X uses `tanh(-toc/2)` and `atanh(-Tmn)` for positive=likely 1 convention. Our positive=likely 0 convention uses `tanh(toc/2)` and `atanh(prod)` — no negations.
 - `platanh` is a piecewise-linear approximation of atanh, clamped at ±7.0, avoiding infinity for inputs near ±1. Matches WSJT-X `lib/platanh.f90` exactly.
 - The unified `bpDecode` function collects zsave during its single BP pass (no double BP run), then does convergence checking and early stopping in the same loop.
+
+### 1c. ~~Demodulator fixes + OSD order-2~~ ✅ RESOLVED
+Three discrepancies between the Go baseband demodulator and WSJT-X `ft8b.f90` were identified and fixed, plus OSD was upgraded from order-1 to order-2. Combined result: capture 1 went from 9/13 to **10/13** (9 correct + 1 false), capture 2 from 7/15 to **8/15** (8 correct + 3 false).
+
+**Bug fixes:**
+1. **DC bin inclusion** (`baseband.go`): `DownsampleBaseband` clamped `ib` to 0 (includes DC), but WSJT-X `ft8_downsample.f90` line 36 clamps to 1 (skips DC). DC energy contaminated the baseband signal. Fixed: `if ib < 1 { ib = 1 }`.
+2. **NP2 bounds** (`baseband_demod.go`): `Sync8d` and the per-symbol 32-point DFT used `len(cd0)=3200` as upper bound, but WSJT-X uses `NP2=2812` (ft8b.f90 line 10, sync8d.f90 line 5). Samples 2812–3199 are zero-pad circular wrap-around artifacts. Added `const BasebandNP2 = 2812` and applied to all bounds checks.
+3. **Goertzel refinement removed** (`baseband_pipeline.go`): WSJT-X passes sync8 candidates **directly** to `ft8b` with no intermediate Goertzel refinement. The Go pipeline had inserted `RefineCandidateAudioFast` between sync8 and `DemodulateBaseband`, which could push frequency/time estimates outside Sync8d's ±2.5 Hz / ±10-sample recovery window. Removed: sync8 candidates now go directly to `DemodulateBaseband`, matching WSJT-X.
+
+**OSD order-2:**
+- `internal/ft8/codec/osd.go` — Added order-2 pair-flip search: tries all K×(K-1)/2 = 4,095 two-bit flip patterns in the information positions, matching WSJT-X `osd174_91.f90` `norder=2`. This is 45× more candidate codewords than order-1.
+- `internal/ft8/codec/codec.go` — `DecodeMessage()` and `DecodeMessageAP()` now call OSD with `ndeep=2` (was 1).
+
+**Diagnostic improvements:**
+- `BasebandDemodResult` now includes per-Costas-block sync counts (`Is1`, `Is2`, `Is3`), valid symbol count (`ValidSyms`), and raw LLR sigma before normalization (`RawSigma`).
+- `BasebandDiag` in the diagnostic pipeline exposes these fields.
+- ft8test CLI diagnostic output shows `nsync=N(a+b+c)`, `ibest`, `vsym`, and `rawσ` for each candidate.
+
+**Key findings from diagnostics:**
+- Successfully decoded signals have rawσ > 0.0008; failing signals have rawσ < 0.0008. The raw LLR quality (not the normalization or decoder) is the limiting factor.
+- JR3UIC SP7IIT RR73 (1410 Hz, rawσ=0.001236) was on the boundary — OSD order-2 pushed it over the decode threshold.
+- RU4LM 4X5JK R-14 (1840 Hz, rawσ=0.000447) remains undecoded — too marginal even for OSD order-2.
 
 ### 2. ~~192k-point FFT performance~~ ✅ RESOLVED
 Mixed-radix Cooley-Tukey FFT implemented for 5-smooth sizes. 1.29× faster, 63% less memory for 192k-point FFT.
@@ -295,6 +317,9 @@ Both captures have 5+ signals detected as candidates with good nsync (11–16) b
 Investigation approach:
 - Export raw LLR arrays for the failing signals and compare against WSJT-X's ft8b.f90 output for the same candidates
 - Check if the fine-sync Δf correction from Sync8d is accurate — a sub-bin frequency error would contaminate all LLR passes
+- Verify that the 32-point per-symbol DFT bin assignment (Go 0-indexed vs Fortran 1-indexed) is correct for all tone mappings
+- Check the NormalizeBmet scaling: the 2.83 scale factor was originally tuned for sum-product BP; verify it's still appropriate
+- Compare the s8 (magnitude-squared) arrays against WSJT-X to identify where demodulation diverges
 - Verify that the 32-point per-symbol DFT bin assignment (Go 0-indexed vs Fortran 1-indexed) is correct for all tone mappings
 - Check the NormalizeBmet scaling: the 2.83 scale factor was originally tuned for sum-product BP; verify it's still appropriate
 - Compare the s8 (magnitude-squared) arrays against WSJT-X to identify where demodulation diverges

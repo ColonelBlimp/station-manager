@@ -94,8 +94,8 @@ func DownsampleBaseband(longFFT []complex128, f0 float64) []complex128 {
 	it := int(math.Round(ft / df)) // upper bin
 	fb := f0 - 1.5*baud            // lower edge
 	ib := int(math.Round(fb / df)) // lower bin
-	if ib < 0 {
-		ib = 0
+	if ib < 1 {
+		ib = 1 // Skip DC bin (index 0), matching WSJT-X ft8_downsample.f90 line 36.
 	}
 	maxBin := NFFT1 / 2
 	if it > maxBin {

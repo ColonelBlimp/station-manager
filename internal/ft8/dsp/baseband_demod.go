@@ -29,6 +29,13 @@ import (
 // WSJT-X ft8b.f90 line 235.
 const scaleFac = 2.83
 
+// BasebandNP2 is the upper limit (exclusive) on usable baseband sample indices.
+// Samples at indices 0..NP2-1 contain valid downsampled signal; indices
+// NP2..NFFT2-1 are circular wrap-around from zero-padding and must not
+// be accessed. Matches WSJT-X ft8b.f90 parameter(NP2=2812) and
+// sync8d.f90 parameter(NP2=2812).
+const BasebandNP2 = 2812
+
 // minSyncForDecode is the minimum hard-sync count (out of 21) required
 // to proceed with decode. Signals below this threshold are almost certainly
 // noise. Matches WSJT-X ft8b.f90 line 177.
@@ -98,18 +105,19 @@ func Sync8d(cd0 []complex128, i0 int, ctwk []complex128, usetwk bool) float64 {
 		}
 
 		// Correlate against three Costas positions.
+		// Upper bound is NP2-1 (not len(cd0)-1), matching WSJT-X sync8d.f90.
 		var z1, z2, z3 complex128
-		if i1 >= 0 && i1+BasebandSamplesPerSymbol-1 < len(cd0) {
+		if i1 >= 0 && i1+BasebandSamplesPerSymbol-1 <= BasebandNP2-1 {
 			for j := range BasebandSamplesPerSymbol {
 				z1 += cd0[i1+j] * complex(real(csync2[j]), -imag(csync2[j]))
 			}
 		}
-		if i2 >= 0 && i2+BasebandSamplesPerSymbol-1 < len(cd0) {
+		if i2 >= 0 && i2+BasebandSamplesPerSymbol-1 <= BasebandNP2-1 {
 			for j := range BasebandSamplesPerSymbol {
 				z2 += cd0[i2+j] * complex(real(csync2[j]), -imag(csync2[j]))
 			}
 		}
-		if i3 >= 0 && i3+BasebandSamplesPerSymbol-1 < len(cd0) {
+		if i3 >= 0 && i3+BasebandSamplesPerSymbol-1 <= BasebandNP2-1 {
 			for j := range BasebandSamplesPerSymbol {
 				z3 += cd0[i3+j] * complex(real(csync2[j]), -imag(csync2[j]))
 			}
@@ -132,6 +140,13 @@ type BasebandDemodResult struct {
 	Nsync   int                // hard sync count (0–21)
 	IBest   int                // refined starting sample index in baseband
 	FreqAdj float64            // frequency adjustment (Hz) applied during refinement
+
+	// Diagnostic fields (always populated, zero cost when unused).
+	Is1       int     // sync hits in Costas block 1 (symbols 0–6)
+	Is2       int     // sync hits in Costas block 2 (symbols 36–42)
+	Is3       int     // sync hits in Costas block 3 (symbols 72–78)
+	ValidSyms int     // number of symbols within NP2 bound (0–79)
+	RawSigma  float64 // raw bmeta σ before normalization (0 if nsync ≤ 6)
 }
 
 // DemodulateBaseband performs complete baseband demodulation of a candidate
@@ -214,6 +229,16 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 	result.IBest = ibest
 	result.FreqAdj = delfbest
 
+	// Count how many symbols are within the NP2 bound.
+	validSyms := 0
+	for k := 0; k < NumSymbols; k++ {
+		i1 := ibest + k*BasebandSamplesPerSymbol
+		if i1 >= 0 && i1+BasebandSamplesPerSymbol-1 <= BasebandNP2-1 {
+			validSyms++
+		}
+	}
+	result.ValidSyms = validSyms
+
 	// Step 5: Extract per-symbol 32-point DFTs.
 	// cs[tone][symbol] = complex tone value, s8[tone][symbol] = magnitude.
 	var cs [NumTones][NumSymbols]complex128
@@ -222,7 +247,8 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 	for k := 0; k < NumSymbols; k++ {
 		i1 := ibest + k*BasebandSamplesPerSymbol
 		var csymb [BasebandSamplesPerSymbol]complex128
-		if i1 >= 0 && i1+BasebandSamplesPerSymbol-1 < len(cd0) {
+		// Upper bound is NP2-1 (not len(cd0)-1), matching WSJT-X ft8b.f90 line 157.
+		if i1 >= 0 && i1+BasebandSamplesPerSymbol-1 <= BasebandNP2-1 {
 			copy(csymb[:], cd0[i1:i1+BasebandSamplesPerSymbol])
 		}
 
@@ -241,8 +267,8 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 		}
 	}
 
-	// Step 6: Hard sync quality check.
-	nsync := 0
+	// Step 6: Hard sync quality check — per Costas block.
+	is1, is2, is3 := 0, 0, 0
 	for k := 0; k < 7; k++ {
 		// First Costas block (symbols 0–6).
 		peakTone := 0
@@ -252,7 +278,7 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 			}
 		}
 		if peakTone == int(CostasSync[k]) {
-			nsync++
+			is1++
 		}
 
 		// Second Costas block (symbols 36–42).
@@ -263,7 +289,7 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 			}
 		}
 		if peakTone == int(CostasSync[k]) {
-			nsync++
+			is2++
 		}
 
 		// Third Costas block (symbols 72–78).
@@ -274,10 +300,14 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 			}
 		}
 		if peakTone == int(CostasSync[k]) {
-			nsync++
+			is3++
 		}
 	}
+	nsync := is1 + is2 + is3
 	result.Nsync = nsync
+	result.Is1 = is1
+	result.Is2 = is2
+	result.Is3 = is3
 
 	if nsync <= minSyncForDecode {
 		return result
@@ -385,7 +415,26 @@ func DemodulateBaseband(longFFT []complex128, f0, xdt float64) BasebandDemodResu
 		}
 	}
 
-	// Step 8: Normalize and scale.
+	// Step 8: Compute raw sigma before normalization (for diagnostics).
+	{
+		n := float64(CodedBits)
+		var sum, sum2 float64
+		for i := range CodedBits {
+			v := float64(bmeta[i])
+			sum += v
+			sum2 += v * v
+		}
+		bmetav := sum / n
+		bmet2av := sum2 / n
+		vari := bmet2av - bmetav*bmetav
+		if vari > 0 {
+			result.RawSigma = math.Sqrt(vari)
+		} else {
+			result.RawSigma = math.Sqrt(bmet2av)
+		}
+	}
+
+	// Step 9: Normalize and scale.
 	NormalizeBmet(&bmeta)
 	NormalizeBmet(&bmetb)
 	NormalizeBmet(&bmetc)

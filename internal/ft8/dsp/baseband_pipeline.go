@@ -51,9 +51,6 @@ func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int, ap *AP
 	audio := make([]float32, len(samples))
 	copy(audio, samples)
 
-	// Pre-compute Hann window for refinement.
-	hann := HannCoefficients(SamplesPerSymbol)
-
 	seen := make(map[[10]byte]struct{})
 	var allDecoded []DecodedMessage
 
@@ -70,19 +67,19 @@ func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int, ap *AP
 			break
 		}
 
-		// Step 3: Refine, baseband demodulate, and decode.
+		// Step 3: Baseband demodulate and decode.
+		// WSJT-X passes sync8 candidates directly to ft8b — no
+		// intermediate Goertzel refinement. Sync8d inside
+		// DemodulateBaseband performs its own fine time/freq search.
 		var passDecoded []DecodedMessage
 
 		for i := range candidates {
 			cand := &candidates[i]
 
-			// Coarse-fine Goertzel refinement to get sub-sample time/freq.
-			refined := RefineCandidateAudioFast(audio, hann, *cand)
-
 			// Baseband demodulation: downsample → sync8d → 32-pt DFT → 4 LLR sets.
 			bbResult := DemodulateBaseband(longFFT,
-				float64(refined.Freq),
-				float64(refined.TimeOff))
+				float64(cand.Freq),
+				float64(cand.TimeOff))
 
 			if bbResult.Nsync <= minSyncForDecode {
 				continue
@@ -124,13 +121,13 @@ func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int, ap *AP
 			}
 			seen[msg77] = struct{}{}
 
-			// Rough SNR estimate from the refined sync score.
-			snr := estimateSNRFromScore(refined.Score)
+			// SNR estimate from the sync8 candidate score.
+			snr := estimateSNRFromScore(cand.Score)
 
 			dm := DecodedMessage{
 				Msg77:   msg77,
-				Freq:    refined.Freq,
-				TimeOff: refined.TimeOff,
+				Freq:    cand.Freq,
+				TimeOff: cand.TimeOff,
 				SNR:     snr,
 			}
 			allDecoded = append(allDecoded, dm)
@@ -162,19 +159,25 @@ func DemodulateBasebandSingle(samples []float32, freq, timeOff float64) Baseband
 // ProcessWindowBasebandDiag is like [ProcessWindowBaseband] but returns
 // per-candidate diagnostic information for the ft8test CLI.
 type BasebandDiag struct {
-	CandIdx int
-	Freq    float32
-	TimeOff float32
-	Score   float32
-	Nsync   int
-	FreqAdj float64
-	PassIdx [4]int // which LDPC pass succeeded (-1 if failed)
-	LLRMean [4]float64
-	LLRVar  [4]float64
-	Decoded bool
-	APType  int // AP type that decoded (0 = no AP, >0 = AP type)
-	Text    string
-	SNR     float32
+	CandIdx   int
+	Freq      float32
+	TimeOff   float32
+	Score     float32
+	Nsync     int
+	FreqAdj   float64
+	PassIdx   [4]int // which LDPC pass succeeded (-1 if failed)
+	LLRMean   [4]float64
+	LLRVar    [4]float64
+	Decoded   bool
+	APType    int // AP type that decoded (0 = no AP, >0 = AP type)
+	Text      string
+	SNR       float32
+	Is1       int     // sync hits in Costas block 1
+	Is2       int     // sync hits in Costas block 2
+	Is3       int     // sync hits in Costas block 3
+	IBest     int     // refined baseband sample index
+	ValidSyms int     // symbols within NP2 bound (0–79)
+	RawSigma  float64 // raw bmeta σ before normalization
 }
 
 // ProcessWindowBasebandWithDiag is a diagnostic variant of ProcessWindowBaseband
@@ -187,8 +190,6 @@ func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int
 
 	audio := make([]float32, len(samples))
 	copy(audio, samples)
-
-	hann := HannCoefficients(SamplesPerSymbol)
 
 	seen := make(map[[10]byte]struct{})
 	var allDecoded []DecodedMessage
@@ -209,19 +210,25 @@ func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int
 
 		for i := range candidates {
 			cand := &candidates[i]
-			refined := RefineCandidateAudioFast(audio, hann, *cand)
 
+			// WSJT-X passes sync8 candidates directly to ft8b — no Goertzel refinement.
 			bbResult := DemodulateBaseband(longFFT,
-				float64(refined.Freq),
-				float64(refined.TimeOff))
+				float64(cand.Freq),
+				float64(cand.TimeOff))
 
 			diag := BasebandDiag{
-				CandIdx: i,
-				Freq:    refined.Freq,
-				TimeOff: refined.TimeOff,
-				Score:   refined.Score,
-				Nsync:   bbResult.Nsync,
-				FreqAdj: bbResult.FreqAdj,
+				CandIdx:   i,
+				Freq:      cand.Freq,
+				TimeOff:   cand.TimeOff,
+				Score:     cand.Score,
+				Nsync:     bbResult.Nsync,
+				FreqAdj:   bbResult.FreqAdj,
+				Is1:       bbResult.Is1,
+				Is2:       bbResult.Is2,
+				Is3:       bbResult.Is3,
+				IBest:     bbResult.IBest,
+				ValidSyms: bbResult.ValidSyms,
+				RawSigma:  bbResult.RawSigma,
 			}
 
 			// Compute LLR stats for each pass.
@@ -257,12 +264,12 @@ func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int
 					if _, dup := seen[msg77]; !dup {
 						seen[msg77] = struct{}{}
 						diag.Decoded = true
-						snr := estimateSNRFromScore(refined.Score)
+						snr := estimateSNRFromScore(cand.Score)
 						diag.SNR = snr
 						dm := DecodedMessage{
 							Msg77:   msg77,
-							Freq:    refined.Freq,
-							TimeOff: refined.TimeOff,
+							Freq:    cand.Freq,
+							TimeOff: cand.TimeOff,
 							SNR:     snr,
 						}
 						allDecoded = append(allDecoded, dm)
@@ -281,12 +288,12 @@ func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int
 						seen[msg77] = struct{}{}
 						diag.Decoded = true
 						diag.APType = -1 // indicates AP decoded (detailed type tracking TBD)
-						snr := estimateSNRFromScore(refined.Score)
+						snr := estimateSNRFromScore(cand.Score)
 						diag.SNR = snr
 						dm := DecodedMessage{
 							Msg77:   msg77,
-							Freq:    refined.Freq,
-							TimeOff: refined.TimeOff,
+							Freq:    cand.Freq,
+							TimeOff: cand.TimeOff,
 							SNR:     snr,
 						}
 						allDecoded = append(allDecoded, dm)

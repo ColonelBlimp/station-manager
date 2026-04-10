@@ -165,8 +165,9 @@ func runDecodeBasebandDiag(samples []float32) error {
 	passNames := [4]string{"nsym=1", "nsym=2", "nsym=3", "bit-norm"}
 
 	for _, d := range diags {
-		fmt.Printf("  [%3d] %7.1f Hz  t=%+.3f s  score=%.2f  nsync=%d  Δf=%+.1f Hz\n",
-			d.CandIdx+1, d.Freq, d.TimeOff, d.Score, d.Nsync, d.FreqAdj)
+		fmt.Printf("  [%3d] %7.1f Hz  t=%+.3f s  score=%.2f  nsync=%d(%d+%d+%d)  Δf=%+.1f Hz  ibest=%d  vsym=%d  rawσ=%.6f\n",
+			d.CandIdx+1, d.Freq, d.TimeOff, d.Score, d.Nsync, d.Is1, d.Is2, d.Is3,
+			d.FreqAdj, d.IBest, d.ValidSyms, d.RawSigma)
 
 		if d.Nsync <= 6 {
 			fmt.Printf("        ❌ nsync=%d ≤ 6 — skipped\n\n", d.Nsync)

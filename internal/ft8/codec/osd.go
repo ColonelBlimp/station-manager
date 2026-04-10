@@ -66,6 +66,10 @@ func initFullGenerator() {
 // negative = bit more likely 1). ndeep controls the search depth:
 //   - 0: order-0 only (hard decisions from K most-reliable bits, encoded)
 //   - 1: order-0 + order-1 (flip each of K bits one at a time)
+//   - 2: order-0 + order-1 + order-2 (flip all pairs of K bits)
+//
+// ndeep=2 matches WSJT-X's norder=2 in ft8b.f90, testing K*(K-1)/2 = 4095
+// additional two-bit flip patterns beyond the 91 single-bit flips.
 //
 // On success it returns the 91-bit information payload packed MSB-first
 // into 12 bytes. ok=false is returned only when Gaussian elimination
@@ -207,6 +211,34 @@ func decodeOSDInternal(llr [N]float32, apmask [N]uint8, ndeep int) (info [KBytes
 			if dd < dmin {
 				dmin = dd
 				bestCW = ce
+			}
+		}
+	}
+
+	// --- Order-2: try flipping all pairs of K bits -------------------
+	// Matches WSJT-X osd174_91.f90 norder=2: tries K*(K-1)/2 = 4095
+	// two-bit flip patterns. This is significantly more powerful than
+	// order-1 for marginal signals where single-bit flips are insufficient.
+	if ndeep >= 2 {
+		for j1 := 0; j1 < K; j1++ {
+			if apmaskPerm[j1] == 1 {
+				continue
+			}
+			for j2 := j1 + 1; j2 < K; j2++ {
+				if apmaskPerm[j2] == 1 {
+					continue
+				}
+
+				var ce [N]uint8
+				for i := range N {
+					ce[i] = c0[i] ^ g2[i][j1] ^ g2[i][j2]
+				}
+
+				dd := osdDistance(&ce, &hdecPerm, &absRPerm)
+				if dd < dmin {
+					dmin = dd
+					bestCW = ce
+				}
 			}
 		}
 	}
