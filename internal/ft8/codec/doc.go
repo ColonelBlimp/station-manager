@@ -12,14 +12,18 @@
 //     generator and parity-check structure.
 //   - [Encode] — systematic LDPC encoder (TX path).
 //   - [Decode] — normalised min-sum belief-propagation decoder (RX path).
+//   - [DecodeOSD] — ordered-statistics decoder, used as a fallback when BP
+//     fails to converge. Sorts bits by reliability, Gaussian-eliminates the
+//     generator matrix, and searches over small error patterns.
 //   - [EncodeMessage] / [DecodeMessage] — convenience wrappers bridging
-//     the [message] package with the raw LDPC functions.
+//     the [message] package with the raw LDPC functions. [DecodeMessage]
+//     automatically falls back to OSD when BP does not converge.
 //
 // The encode chain is: message.Pack → message.Append91 → codec.Encode →
 // symbol mapping → GFSK synthesis.
 //
-// The decode chain is: soft demodulation → codec.Decode → CRC-14 verify →
-// message.Unpack.
+// The decode chain is: soft demodulation → codec.Decode (BP) → if BP fails,
+// codec.DecodeOSD → CRC-14 verify → message.Unpack.
 //
 // Matrix data provenance:
 //

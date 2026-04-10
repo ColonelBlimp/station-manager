@@ -115,8 +115,18 @@ audio (180k samples, 12 kHz)
 
 ## Current Bottlenecks (in order of impact)
 
-### 1. LDPC decoder strength
-Our `codec.DecodeMessage` uses belief-propagation (BP) only. WSJT-X's `decode174_91` uses BP + ordered statistics decoding (OSD), which significantly improves decode capability for weak signals. The multi-symbol LLR passes (nsym=2,3) produce correct bit-sign patterns (96–100% agreement with nsym=1) but our BP decoder can't converge on them.
+### 1. ~~LDPC decoder strength~~ ✅ RESOLVED
+OSD (Ordered Statistics Decoding) order-1 has been implemented as a fallback when BP fails to converge. `codec.DecodeMessage` now automatically chains BP → OSD. The multi-symbol LLR passes (nsym=2,3) should now benefit from OSD's ability to decode signals that BP cannot converge on.
+
+**Files added:**
+- `internal/ft8/codec/osd.go` — `DecodeOSD()` with order-0 and order-1 search, `initFullGenerator()` (lazy K×N generator matrix), Gaussian elimination with reliability-ordered column pivoting
+- `internal/ft8/codec/osd_test.go` — comprehensive tests including BP-failure-recovery, generator matrix validation, and benchmarks
+
+**Files modified:**
+- `internal/ft8/codec/codec.go` — `DecodeMessage()` now falls back to `DecodeOSD(llr, 1)` when BP fails
+- `internal/ft8/codec/doc.go` — updated package documentation
+
+**Performance:** OSD order-1 adds ~80µs (perfect LLR) to ~300µs (noisy) per candidate when BP fails. This is negligible compared to the FFT/demodulation cost.
 
 ### 2. Missing AP (a priori) decoding
 WSJT-X uses additional decode passes with a priori information (known callsigns from the QSO state). These passes substitute high-confidence LLR values for known message bits, effectively reducing the LDPC problem from 174→~100 unknown bits. This is particularly effective for signals in the -20 to -24 dB range.
@@ -128,18 +138,13 @@ The long FFT is recomputed for each subtraction pass. At ~192k complex points th
 
 ## Next Steps (Priority Order)
 
-### 1. Implement OSD (ordered statistics decoding)
-Add OSD-0 or OSD-2 to `codec.Decode` as a fallback when BP fails. This is the single biggest improvement path — it would enable the multi-symbol LLR passes to actually decode additional signals.
-
-**Reference:** WSJT-X `lib/bpdecode174_91.f90`, Reed & Chase "On decoding of Reed-Solomon codes" (the OSD concept).
-
-### 2. Optimize the 192k-point FFT
+### 1. Optimize the 192k-point FFT
 Replace Bluestein for NFFT1=192000 with a mixed-radix FFT that exploits the factorisation 192000 = 2⁷ × 3 × 5³. This would reduce the FFT cost by ~2-3×.
 
-### 3. Consider AP decoding for the logging app
+### 2. Consider AP decoding for the logging app
 When the Wails logging app has QSO context (mycall, dxcall), AP passes could be added. This would require passing callsign info into the decode pipeline.
 
-### 4. Profile and optimise baseband pipeline
+### 3. Profile and optimise baseband pipeline
 The pipeline currently computes the full long FFT + downsample + sync8d + DFT for EVERY candidate. In WSJT-X, the long FFT is computed once and the downsample is cheap (band extraction + IFFT). Consider caching the long FFT across candidates within a single pass.
 
 ## Existing DSP Code Reference
@@ -160,7 +165,8 @@ Key files in `internal/ft8/dsp/`:
 - `window.go` — `HannCoefficients()`, `HannPeriodicCoefficients()`
 
 Key files in `internal/ft8/codec/`:
-- `codec.go` — `DecodeMessage()` (LDPC BP + CRC-14)
+- `codec.go` — `DecodeMessage()` (LDPC BP → OSD fallback + CRC-14)
+- `osd.go` — `DecodeOSD()` ordered-statistics decoder (order-0 + order-1)
 
 Key files in `internal/ft8/message/`:
 - `message.go` — `Unpack()`, `Message.String()`

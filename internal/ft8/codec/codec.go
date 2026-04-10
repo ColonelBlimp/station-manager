@@ -30,12 +30,17 @@ func EncodeMessage(msg77 [10]byte) [NBytes]byte {
 // negative = bit more likely 1). maxIter is the maximum number of BP
 // iterations (typically 25–50).
 //
-// Returns ok=false if the LDPC decode fails to converge or the CRC-14
-// check does not pass.
+// The decode chain is: belief-propagation first; if BP fails to converge,
+// ordered-statistics decoding (OSD order-1) is attempted as a fallback.
+// Returns ok=false if both decoders fail or the CRC-14 check does not pass.
 func DecodeMessage(llr [N]float32, maxIter int) (msg77 [10]byte, ok bool) {
 	info, decOK := Decode(llr, maxIter)
 	if !decOK {
-		return msg77, false
+		// BP failed to converge — try OSD as fallback.
+		info, decOK = DecodeOSD(llr, 1)
+		if !decOK {
+			return msg77, false
+		}
 	}
 
 	// Extract the 77-bit message from the 91-bit info payload.
