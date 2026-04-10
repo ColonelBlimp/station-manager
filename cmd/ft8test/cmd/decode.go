@@ -17,6 +17,8 @@ var decodeFlags struct {
 	showAll       bool
 	diagnose      bool
 	baseband      bool
+	mycall        string
+	dxcall        string
 }
 
 var decodeCmd = &cobra.Command{
@@ -61,6 +63,10 @@ func init() {
 		"show detailed per-candidate diagnostics (refine, LLR stats, LDPC)")
 	decodeCmd.Flags().BoolVar(&decodeFlags.baseband, "baseband", false,
 		"use WSJT-X-style baseband demodulation with 4-pass LDPC")
+	decodeCmd.Flags().StringVar(&decodeFlags.mycall, "mycall", "",
+		"operator callsign for AP decoding (enables a priori passes)")
+	decodeCmd.Flags().StringVar(&decodeFlags.dxcall, "dxcall", "",
+		"DX station callsign for AP decoding (optional, enables deep AP)")
 	rootCmd.AddCommand(decodeCmd)
 }
 
@@ -98,9 +104,20 @@ func runDecodeBaseband() error {
 
 	// Non-diagnostic mode: just run the pipeline and print results.
 	fmt.Println("  ── Running baseband pipeline ──")
+
+	// Build AP context if mycall is provided.
+	var ap *dsp.APContext
+	if decodeFlags.mycall != "" {
+		ap = dsp.NewAPContext(decodeFlags.mycall, decodeFlags.dxcall, 0)
+		fmt.Printf("  AP decoding enabled: mycall=%s", decodeFlags.mycall)
+		if decodeFlags.dxcall != "" {
+			fmt.Printf("  dxcall=%s", decodeFlags.dxcall)
+		}
+		fmt.Println()
+	}
 	fmt.Println()
 
-	decoded := dsp.ProcessWindowBaseband(samples, decodeFlags.maxCandidates, decodeFlags.maxIterations)
+	decoded := dsp.ProcessWindowBaseband(samples, decodeFlags.maxCandidates, decodeFlags.maxIterations, ap)
 
 	if len(decoded) == 0 {
 		fmt.Println("  ❌ No messages decoded.")
@@ -129,10 +146,21 @@ func runDecodeBaseband() error {
 
 func runDecodeBasebandDiag(samples []float32) error {
 	fmt.Println("  ── Baseband pipeline with diagnostics ──")
+
+	// Build AP context if mycall is provided.
+	var ap *dsp.APContext
+	if decodeFlags.mycall != "" {
+		ap = dsp.NewAPContext(decodeFlags.mycall, decodeFlags.dxcall, 0)
+		fmt.Printf("  AP decoding enabled: mycall=%s", decodeFlags.mycall)
+		if decodeFlags.dxcall != "" {
+			fmt.Printf("  dxcall=%s", decodeFlags.dxcall)
+		}
+		fmt.Println()
+	}
 	fmt.Println()
 
 	decoded, diags := dsp.ProcessWindowBasebandWithDiag(samples,
-		decodeFlags.maxCandidates, decodeFlags.maxIterations)
+		decodeFlags.maxCandidates, decodeFlags.maxIterations, ap)
 
 	passNames := [4]string{"nsym=1", "nsym=2", "nsym=3", "bit-norm"}
 
@@ -155,7 +183,11 @@ func runDecodeBasebandDiag(samples []float32) error {
 		}
 
 		if d.Decoded {
-			fmt.Printf("        ✓ Decoded (SNR %+.1f)\n", d.SNR)
+			apNote := ""
+			if d.APType != 0 {
+				apNote = " [AP]"
+			}
+			fmt.Printf("        ✓ Decoded (SNR %+.1f)%s\n", d.SNR, apNote)
 		} else {
 			fmt.Printf("        ❌ All 4 passes failed\n")
 		}

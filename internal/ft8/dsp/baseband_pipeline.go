@@ -29,15 +29,20 @@ import (
 // [ProcessWindowMultiPass], but replaces the Goertzel-based demodulation
 // with complex baseband processing and 4-pass LDPC decoding per candidate.
 //
+// When an [APContext] is provided, up to 4 additional AP decode passes
+// are attempted after the 4 regular LLR passes fail, matching the WSJT-X
+// ft8b.f90 AP decoding strategy.
+//
 // Parameters match [ProcessWindow] for drop-in use:
 //   - samples: audio capture buffer (one FT8 window).
 //   - maxCandidates: upper limit on sync candidates per pass.
 //   - maxIter: maximum LDPC belief-propagation iterations per candidate.
+//   - ap: optional AP context for a priori decoding (nil to disable).
 //
 // Returns all successfully decoded messages (deduplicated across passes),
 // sorted by descending SNR. Returns nil if the input is too short or no
 // messages decode.
-func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int) []DecodedMessage {
+func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int, ap *APContext) []DecodedMessage {
 	if len(samples) < SamplesPerSymbol || maxCandidates <= 0 || maxIter <= 0 {
 		return nil
 	}
@@ -103,6 +108,11 @@ func ProcessWindowBaseband(samples []float32, maxCandidates, maxIter int) []Deco
 				}
 			}
 
+			// If regular passes failed, try AP passes.
+			if !decoded && ap != nil {
+				msg77, decoded = tryAPPasses(&bbResult.LLRa, maxIter, ap)
+			}
+
 			if !decoded {
 				continue
 			}
@@ -162,6 +172,7 @@ type BasebandDiag struct {
 	LLRMean [4]float64
 	LLRVar  [4]float64
 	Decoded bool
+	APType  int // AP type that decoded (0 = no AP, >0 = AP type)
 	Text    string
 	SNR     float32
 }
@@ -169,7 +180,7 @@ type BasebandDiag struct {
 // ProcessWindowBasebandWithDiag is a diagnostic variant of ProcessWindowBaseband
 // that returns per-candidate diagnostics alongside decoded messages.
 // It also performs multi-pass signal subtraction (matching the production path).
-func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int) ([]DecodedMessage, []BasebandDiag) {
+func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int, ap *APContext) ([]DecodedMessage, []BasebandDiag) {
 	if len(samples) < SamplesPerSymbol || maxCandidates <= 0 || maxIter <= 0 {
 		return nil, nil
 	}
@@ -261,6 +272,29 @@ func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int
 				}
 			}
 
+			// If regular passes failed, try AP passes.
+			if !diag.Decoded && ap != nil {
+				msg77, apDecoded := tryAPPasses(&bbResult.LLRa, maxIter, ap)
+				if apDecoded {
+					msg77[9] &= 0xF8
+					if _, dup := seen[msg77]; !dup {
+						seen[msg77] = struct{}{}
+						diag.Decoded = true
+						diag.APType = -1 // indicates AP decoded (detailed type tracking TBD)
+						snr := estimateSNRFromScore(refined.Score)
+						diag.SNR = snr
+						dm := DecodedMessage{
+							Msg77:   msg77,
+							Freq:    refined.Freq,
+							TimeOff: refined.TimeOff,
+							SNR:     snr,
+						}
+						allDecoded = append(allDecoded, dm)
+						passDecoded = append(passDecoded, dm)
+					}
+				}
+			}
+
 			allDiags = append(allDiags, diag)
 		}
 
@@ -274,6 +308,47 @@ func ProcessWindowBasebandWithDiag(samples []float32, maxCandidates, maxIter int
 	}
 
 	return allDecoded, allDiags
+}
+
+// tryAPPasses attempts AP decode passes on a candidate using the nsym=1 LLR
+// array (llra) as the base. It iterates through the AP types defined by the
+// APContext's QSO progress state.
+//
+// Returns the decoded 77-bit message and true if any AP pass succeeds.
+func tryAPPasses(baseLLR *[CodedBits]float32, maxIter int, ap *APContext) (msg77 [10]byte, ok bool) {
+	qp := ap.QSOProgress
+	if qp < 0 || qp > 5 {
+		qp = 0
+	}
+
+	numPasses := nappasses[qp]
+	for passIdx := range numPasses {
+		apType := naptypes[qp][passIdx]
+		if apType == APTypeNone {
+			continue
+		}
+
+		// Guard: AP types requiring mycall.
+		if apType >= APTypeMyCall && !ap.hasMyCall {
+			continue
+		}
+		// Guard: AP types requiring dxcall.
+		if apType >= APTypeMyDx && !ap.hasDxCall {
+			continue
+		}
+
+		llrz, apmask, apOK := applyAPPass(baseLLR, apType, ap)
+		if !apOK {
+			continue
+		}
+
+		m, decOK := codec.DecodeMessageAP(llrz, apmask, maxIter)
+		if decOK {
+			return m, true
+		}
+	}
+
+	return msg77, false
 }
 
 // llrStats computes mean and variance of a 174-element LLR array.

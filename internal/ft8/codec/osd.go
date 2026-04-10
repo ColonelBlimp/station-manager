@@ -75,6 +75,25 @@ func initFullGenerator() {
 // the generator matrix). The caller must still verify CRC-14 to confirm
 // correctness — [DecodeMessage] does this automatically.
 func DecodeOSD(llr [N]float32, ndeep int) (info [KBytes]byte, ok bool) {
+	var apmask [N]uint8
+	return decodeOSDInternal(llr, apmask, ndeep)
+}
+
+// DecodeOSDAP performs ordered-statistics decoding with AP mask support.
+//
+// For bits where apmask[i]==1, the order-1 search skips flip patterns that
+// touch those bits, matching WSJT-X osd174_91.f90 line 193:
+//
+//	if(any(iand(apmaskr(1:k),mi).eq.1)) cycle
+//
+// This ensures the OSD search does not flip known-correct AP bits.
+func DecodeOSDAP(llr [N]float32, apmask [N]uint8, ndeep int) (info [KBytes]byte, ok bool) {
+	return decodeOSDInternal(llr, apmask, ndeep)
+}
+
+// decodeOSDInternal is the shared OSD implementation supporting both regular
+// and AP-masked decoding.
+func decodeOSDInternal(llr [N]float32, apmask [N]uint8, ndeep int) (info [KBytes]byte, ok bool) {
 	initFullGenerator()
 
 	// --- Hard decisions and reliability --------------------------------
@@ -152,9 +171,11 @@ func DecodeOSD(llr [N]float32, ndeep int) (info [KBytes]byte, ok bool) {
 	// --- Reorder received signal into the permuted order --------------
 	var hdecPerm [N]uint8
 	var absRPerm [N]float32
+	var apmaskPerm [N]uint8
 	for i := range N {
 		hdecPerm[i] = hdec[indices[i]]
 		absRPerm[i] = absLLR[indices[i]]
+		apmaskPerm[i] = apmask[indices[i]]
 	}
 
 	// --- Order-0: encode MRB hard decisions ---------------------------
@@ -171,6 +192,12 @@ func DecodeOSD(llr [N]float32, ndeep int) (info [KBytes]byte, ok bool) {
 		// Flipping bit j in the message is equivalent to XORing the
 		// codeword with column j of g2 (since codeword = g2 × msg).
 		for j := range K {
+			// Skip flipping AP-masked bits — these are known-correct.
+			// Matches WSJT-X osd174_91.f90 line 193.
+			if apmaskPerm[j] == 1 {
+				continue
+			}
+
 			var ce [N]uint8
 			for i := range N {
 				ce[i] = c0[i] ^ g2[i][j]

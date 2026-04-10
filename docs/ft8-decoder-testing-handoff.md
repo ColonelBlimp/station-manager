@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10
 **Updated:** 2026-04-10
-**Status:** Baseband demodulation + OSD + sync8 candidate detection (9/13 decoded), AP decoding next
+**Status:** Baseband demodulation + OSD + sync8 + AP decoding (9/13 baseline, 10/13 with AP context)
 
 ## What Was Built
 
@@ -11,6 +11,9 @@ A CLI tool at `cmd/ft8test/` for stage-by-stage integration testing of the FT8 d
 
 ### Phase 2: WSJT-X-style baseband demodulation (complete)
 Ported WSJT-X's `ft8_downsample.f90`, `sync8d.f90`, and the core of `ft8b.f90` to Go, improving decode rate from **1/13 to 6/13** messages (with OSD fallback).
+
+### Phase 3: A priori (AP) decoding (complete)
+Ported WSJT-X's AP decode passes from `ft8b.f90` and `decode174_91.f90` to Go. When the operator's callsign is provided, additional AP decode passes inject known message bits as high-confidence LLRs, enabling decoding of signals at -21 to -23 dB that fail standard BP+OSD. Improves decode rate from **9/13 to 10/13** with appropriate AP context.
 
 ### Files Created/Modified
 
@@ -45,6 +48,8 @@ task ft8test                                          # build → build/bin/ft8t
 ./build/bin/ft8test decode --input capture.wav        # Goertzel decode (original)
 ./build/bin/ft8test decode --input capture.wav --baseband  # baseband decode (new)
 ./build/bin/ft8test decode --input capture.wav --baseband --diagnose  # with diagnostics
+./build/bin/ft8test decode --input capture.wav --baseband --mycall KB7THX  # AP decode (CQ + MyCall)
+./build/bin/ft8test decode --input capture.wav --baseband --mycall KB7THX --dxcall WB9VGJ  # AP with both calls
 ```
 
 ## Test Results (capture.wav)
@@ -74,6 +79,7 @@ task ft8test                                          # build → build/bin/ft8t
 | Baseband (BP only) | **4/13** | VE1WT K4GBI 73, <...> RA1OHX KP91, SV2SIH KI8JP -10, HZ1TT RU1AB R-10 |
 | Baseband (BP+OSD) | **6/13** | + <...> RV6ASU KN94, A61CK W3DQS -12 |
 | Baseband (BP+OSD+sync8) | **9/13** | + SV2SIH ES2AJ -16, CQ PV8AJ FJ92, A61CK UA1CEI KP50 |
+| Baseband (BP+OSD+sync8+AP) | **10/13** | + KB7THX WB9VGJ RR73 (with mycall=KB7THX, dxcall=WB9VGJ) |
 
 ### Baseband decode details (BP+OSD+sync8):
 ```
@@ -154,22 +160,40 @@ WSJT-X-faithful sync8 algorithm ported to Go, replacing the neighbor-comparison 
 - `internal/ft8/dsp/baseband_pipeline.go` — `ProcessWindowBaseband()` and `ProcessWindowBasebandWithDiag()` now use `Sync8FindCandidates` instead of `SpectrogramFT8HiRes` + `FindCandidatesHiRes`. Diagnostic variant now includes multi-pass signal subtraction.
 - `internal/ft8/dsp/dsp.go` — added `estimateSNRFromScore()` for SNR estimation without a spectrogram noise floor.
 
-### 4. Remaining 4/13 signals not decoded
+### 4. Remaining 4/13 signals not decoded (3/13 with AP context)
 
-Of the 4 remaining undecked signals:
-- **3 signals found as candidates but LDPC fails**: <...> LU3DXU GF05 (1273 Hz, -15 dB), <...> RA6ABC KN96 (1814 Hz, -17 dB), KB7THX WB9VGJ RR73 (2328 Hz, -21 dB). All have good nsync (15–16) but the LLR quality is insufficient for BP+OSD convergence.
+Of the 4 remaining undecoded signals (without AP), 1 can now be decoded with appropriate AP context:
+- **Decoded with AP**: KB7THX WB9VGJ RR73 (2328 Hz, -21 dB) — decoded at -23.6 dB with mycall=KB7THX, dxcall=WB9VGJ via AP type 2 (MyCall + i3).
+- **2 signals found as candidates but LDPC fails**: <...> LU3DXU GF05 (1273 Hz, -15 dB), <...> RA6ABC KN96 (1814 Hz, -17 dB). These have hashed first callsigns; AP types 1/2 don't match because the first field is a 22-bit hash, not CQ or a known callsign. Type 3+ AP would require knowing the hash source callsign.
 - **1 signal not found as candidate**: ES2AJ UA3LAR KO75 (835 Hz, -23 dB) — too weak for sync8 detection.
 
-These are all in the -15 to -23 dB SNR range where WSJT-X uses AP (a priori) decoding to fill in known message bits, effectively reducing the LDPC problem dimension.
 
 ## Next Steps (Priority Order)
 
-### 1. AP (a priori) decoding for weak signals
-The primary path to decoding the remaining 4/13 signals. WSJT-X uses additional decode passes with a priori information (known callsigns from the QSO state). These passes substitute high-confidence LLR values for known message bits, effectively reducing the LDPC problem from 174→~100 unknown bits. This is particularly effective for signals in the -15 to -23 dB range.
+### 1. ~~AP (a priori) decoding for weak signals~~ ✅ IMPLEMENTED
+AP decoding has been implemented matching WSJT-X's ft8b.f90 approach. The system supports 6 AP types (CQ, MyCall, MyCall+DxCall, MyCall+DxCall+RRR/73/RR73) across all 6 QSO progress states. When the operator's callsign matches a signal, AP passes inject high-confidence LLR values for known message bits, reducing the LDPC problem dimension. This decoded KB7THX WB9VGJ RR73 at -23.6 dB (previously undecodable at -21 dB SNR).
 
-When the Wails logging app has QSO context (mycall, dxcall), AP passes could be added. This would require passing callsign info into the decode pipeline.
+**Files added:**
+- `internal/ft8/dsp/ap.go` — `APContext`, `NewAPContext()`, AP type constants, pass tables, known-fragment bipolar arrays (CQ, RRR, 73, RR73), and `applyAPPass()` for LLR injection.
 
-### 2. Explore multi-symbol LLR passes with OSD
+**Files modified:**
+- `internal/ft8/codec/decoder.go` — Added `DecodeAP()` with apmask support (holds AP bits at channel value during BP iterations) and `bpCollectZsave()` for OSD fallback with cumulative zsum snapshots. Refactored `Decode()` to share `decodeInternal()`.
+- `internal/ft8/codec/osd.go` — Added `DecodeOSDAP()` that skips flipping AP-masked bits during order-1 search. Refactored `DecodeOSD()` to share `decodeOSDInternal()`.
+- `internal/ft8/codec/codec.go` — Added `DecodeMessageAP()` chaining BP→OSD with apmask and zsave, plus shared `verifyAndExtract()`.
+- `internal/ft8/dsp/baseband_pipeline.go` — `ProcessWindowBaseband()` and `ProcessWindowBasebandWithDiag()` now accept `*APContext`. Added `tryAPPasses()` helper that iterates AP types per QSO progress state.
+- `cmd/ft8test/cmd/decode.go` — Added `--mycall` and `--dxcall` flags for AP testing.
+
+**Key implementation notes:**
+- LLR sign convention: Our decoder uses positive=likely 0 (opposite of WSJT-X). AP bit injection negates the bipolar values: `llrz[i] = -apmag * bipolar[i]`.
+- The `apmask` parameter flows through BP → OSD: during BP, masked bits ignore extrinsic messages; during OSD, masked bits are excluded from the flip search.
+- `bpCollectZsave` accumulates `zsum` across iterations and saves snapshots at iterations 1–3 for OSD fallback, matching WSJT-X's `maxosd=2` approach.
+- AP type 1 (CQ) doesn't require mycall — it injects the fixed CQ bit pattern for any candidate.
+- QSO progress state 0 (default) enables AP types 1 (CQ) and 2 (MyCall) only. Deeper AP types (3–6) activate at higher QSO progress states when both callsigns are known.
+
+### 2. Wire AP context into Wails logging facade
+The `APContext` is currently only accessible via the ft8test CLI (`--mycall`/`--dxcall`). To benefit real-time operation, the Wails logging app facade should construct an `APContext` from the operator's configured callsign and pass it to `ProcessWindowBaseband()`. The QSO progress state should advance as the logging app tracks QSO exchanges.
+
+### 3. Explore multi-symbol LLR passes with OSD
 Currently only the nsym=1 LLR pass successfully decodes in most cases. The nsym=2,3 and bit-normalised passes produce LLRs with 96–100% sign agreement but fail both BP and OSD. Investigate whether the LLR magnitude scaling or normalisation differs from WSJT-X.
 
 ### 3. SNR calibration
@@ -184,6 +208,7 @@ Key files in `internal/ft8/dsp/`:
 - `baseband.go` — `LongFFT()`, `DownsampleBaseband()` (frequency-domain downsampling)
 - `baseband_demod.go` — `DemodulateBaseband()`, `Sync8d()`, `NormalizeBmet()`
 - `baseband_pipeline.go` — `ProcessWindowBaseband()`, `ProcessWindowBasebandWithDiag()`
+- `ap.go` — `APContext`, `NewAPContext()`, `applyAPPass()`, AP type constants/tables
 - `spectrogram.go` — `SpectrogramFT8()` (3840-pt FFT, log2 power)
 - `candidates.go` — `FindCandidates()`, `RefineCandidateAudio()`
 - `hires.go` — `FindCandidatesHiRes()`, `RefineCandidateAudioFast()`
