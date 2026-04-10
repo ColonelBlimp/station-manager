@@ -16,6 +16,7 @@ var decodeFlags struct {
 	maxIterations int
 	showAll       bool
 	diagnose      bool
+	baseband      bool
 }
 
 var decodeCmd = &cobra.Command{
@@ -33,8 +34,14 @@ var decodeCmd = &cobra.Command{
 Use --diagnose for detailed per-candidate diagnostics showing where
 each candidate succeeds or fails in the pipeline.
 
+Use --baseband to switch from Goertzel demodulation to WSJT-X-style
+complex baseband processing with 4-pass LDPC decoding (nsym=1,2,3 +
+bit-normalised LLRs).
+
 Comparable to WSJT-X's sync8 → ft8b → ft8_decode pipeline.`,
 	Example: `  ft8test decode --input capture.wav
+  ft8test decode --input capture.wav --baseband
+  ft8test decode --input capture.wav --baseband --diagnose
   ft8test decode --input capture.wav --diagnose
   ft8test decode --input capture.wav --show-all
   ft8test decode --input capture.wav --max-candidates 200 --max-iterations 50`,
@@ -52,10 +59,143 @@ func init() {
 		"show all candidates including LDPC failures")
 	decodeCmd.Flags().BoolVar(&decodeFlags.diagnose, "diagnose", false,
 		"show detailed per-candidate diagnostics (refine, LLR stats, LDPC)")
+	decodeCmd.Flags().BoolVar(&decodeFlags.baseband, "baseband", false,
+		"use WSJT-X-style baseband demodulation with 4-pass LDPC")
 	rootCmd.AddCommand(decodeCmd)
 }
 
 func runDecode(_ *cobra.Command, _ []string) error {
+	if decodeFlags.baseband {
+		return runDecodeBaseband()
+	}
+	return runDecodeGoertzel()
+}
+
+func runDecodeBaseband() error {
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("  Stage 4: Full Decode Pipeline (BASEBAND mode)")
+	fmt.Printf("  Input: %s\n", decodeFlags.input)
+	fmt.Printf("  Max candidates: %d  |  Max LDPC iterations: %d\n",
+		decodeFlags.maxCandidates, decodeFlags.maxIterations)
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+
+	// Load WAV.
+	samples, sampleRate, err := readWAV(decodeFlags.input)
+	if err != nil {
+		return fmt.Errorf("read WAV: %w", err)
+	}
+	fmt.Printf("  WAV: %d samples, %d Hz, %.2f s\n",
+		len(samples), sampleRate, float64(len(samples))/float64(sampleRate))
+	if sampleRate != dsp.SampleRate {
+		fmt.Printf("  ⚠  Expected %d Hz, got %d Hz\n", dsp.SampleRate, sampleRate)
+	}
+	fmt.Println()
+
+	if decodeFlags.diagnose {
+		return runDecodeBasebandDiag(samples)
+	}
+
+	// Non-diagnostic mode: just run the pipeline and print results.
+	fmt.Println("  ── Running baseband pipeline ──")
+	fmt.Println()
+
+	decoded := dsp.ProcessWindowBaseband(samples, decodeFlags.maxCandidates, decodeFlags.maxIterations)
+
+	if len(decoded) == 0 {
+		fmt.Println("  ❌ No messages decoded.")
+		fmt.Println("     Try --diagnose to see per-candidate details.")
+		return nil
+	}
+
+	fmt.Printf("  %-9s %6s %8s  %s\n", "TIME (s)", "SNR", "FREQ", "MESSAGE")
+	fmt.Println("  ───────── ────── ────────  ──────────────────────────────────")
+	for _, dm := range decoded {
+		msg, unpackErr := message.Unpack(dm.Msg77)
+		var text string
+		if unpackErr != nil {
+			text = fmt.Sprintf("(unpack error: %v)", unpackErr)
+		} else {
+			text = msg.String()
+		}
+		fmt.Printf("  %+8.3f  %+5.1f  %7.1f  %s\n",
+			dm.TimeOff, dm.SNR, dm.Freq, text)
+	}
+
+	fmt.Println()
+	fmt.Printf("  ✓ %d message(s) decoded (baseband mode)\n", len(decoded))
+	return nil
+}
+
+func runDecodeBasebandDiag(samples []float32) error {
+	fmt.Println("  ── Baseband pipeline with diagnostics ──")
+	fmt.Println()
+
+	decoded, diags := dsp.ProcessWindowBasebandWithDiag(samples,
+		decodeFlags.maxCandidates, decodeFlags.maxIterations)
+
+	passNames := [4]string{"nsym=1", "nsym=2", "nsym=3", "bit-norm"}
+
+	for _, d := range diags {
+		fmt.Printf("  [%3d] %7.1f Hz  t=%+.3f s  score=%.2f  nsync=%d  Δf=%+.1f Hz\n",
+			d.CandIdx+1, d.Freq, d.TimeOff, d.Score, d.Nsync, d.FreqAdj)
+
+		if d.Nsync <= 6 {
+			fmt.Printf("        ❌ nsync=%d ≤ 6 — skipped\n\n", d.Nsync)
+			continue
+		}
+
+		for p := range 4 {
+			status := "❌ fail"
+			if d.PassIdx[p] >= 0 {
+				status = "✓ DECODED"
+			}
+			fmt.Printf("        Pass %d (%s): mean=%.2f var=%.2f  %s\n",
+				p+1, passNames[p], d.LLRMean[p], d.LLRVar[p], status)
+		}
+
+		if d.Decoded {
+			fmt.Printf("        ✓ Decoded (SNR %+.1f)\n", d.SNR)
+		} else {
+			fmt.Printf("        ❌ All 4 passes failed\n")
+		}
+		fmt.Println()
+	}
+
+	// Print decoded messages summary.
+	if len(decoded) > 0 {
+		fmt.Println()
+		fmt.Printf("  %-9s %6s %8s  %s\n", "TIME (s)", "SNR", "FREQ", "MESSAGE")
+		fmt.Println("  ───────── ────── ────────  ──────────────────────────────────")
+		for _, dm := range decoded {
+			msg, unpackErr := message.Unpack(dm.Msg77)
+			var text string
+			if unpackErr != nil {
+				text = fmt.Sprintf("(unpack error: %v)", unpackErr)
+			} else {
+				text = msg.String()
+			}
+			fmt.Printf("  %+8.3f  %+5.1f  %7.1f  %s\n",
+				dm.TimeOff, dm.SNR, dm.Freq, text)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("  ── Summary ──")
+	fmt.Printf("  Candidates evaluated : %d\n", len(diags))
+	fmt.Printf("  Unique messages      : %d\n", len(decoded))
+	fmt.Println()
+
+	if len(decoded) == 0 {
+		fmt.Println("  ❌ No messages decoded in baseband mode.")
+	} else {
+		fmt.Printf("  ✓ %d message(s) decoded (baseband mode)\n", len(decoded))
+	}
+
+	return nil
+}
+
+func runDecodeGoertzel() error {
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("  Stage 4: Full Decode Pipeline")
 	fmt.Printf("  Input: %s\n", decodeFlags.input)
