@@ -78,83 +78,33 @@ func Spectrogram(samples []float32, fftSize, stepSamples int) [][]float32 {
 	return result
 }
 
-// SpectrogramFT8 computes an FT8-optimised spectrogram matching the ft8_lib
-// reference implementation:
+// SpectrogramFT8 computes an FT8-optimised spectrogram matching WSJT-X's
+// sync8.f90 parameters:
 //
-//   - Frame size: [SamplesPerSymbol] (1920) — one FT8 symbol period
-//   - Step: [SamplesPerSymbol]/2 (960) — half-symbol overlap for 2× time
-//     resolution, matching ft8_lib's nfft/2 step
-//   - Periodic Hann window — the DFT-periodic variant used by ft8_lib
-//   - Log2(power) output — log-domain representation for robust sync detection
+//   - Analysis window: [SamplesPerSymbol] (1920) — one FT8 symbol period
+//   - FFT size: 2 × [SamplesPerSymbol] (3840) — zero-padded for exact
+//     2-bins-per-tone alignment (NFFT1 = 2 × NSPS in WSJT-X)
+//   - Step: [SamplesPerSymbol]/4 (480) — quarter-symbol overlap (NSTEP in
+//     WSJT-X), giving 4× time resolution
+//   - Periodic Hann window — the DFT-periodic variant
+//   - Log2(power) output — log-domain representation for sync detection
 //
 // The returned matrix has dimensions [nFrames][nBins], where:
-//   - nFrames ≈ (len(samples) − 1920) / 960 + 1
-//   - nBins = NextPow2(1920)/2 + 1 = 1025
+//   - nFrames ≈ (len(samples) − 1920) / 480 + 1 ≈ 372 (matching WSJT-X NHSYM)
+//   - nBins = 3840/2 + 1 = 1921 (matching WSJT-X NH1)
 //
-// Each row represents a half-symbol time step (80 ms). Symbol k of an FT8
-// message starting at row t is at row t + 2*k.
+// Each row represents a quarter-symbol time step (40 ms). Symbol k of an FT8
+// message starting at row t is at row t + 4*k.
+//
+// Bin alignment: with binWidth = 12000/3840 = 3.125 Hz, each FT8 tone
+// (6.25 Hz spacing) maps to exactly 2 bins — eliminating the fractional-bin
+// alignment issue that degraded sync scoring with the old 2048-point FFT.
 //
 // Returns nil if the buffer is shorter than one symbol period.
 func SpectrogramFT8(samples []float32) [][]float32 {
-	fftSize := SamplesPerSymbol  // 1920
-	step := SamplesPerSymbol / 2 // 960 — half-symbol overlap
-
-	if len(samples) < fftSize || step <= 0 {
-		return nil
-	}
-
-	nFrames := (len(samples)-fftSize)/step + 1
-
-	// Periodic Hann window matching ft8_lib.
-	window := HannPeriodicCoefficients(fftSize)
-
-	frame := make([]float32, fftSize)
-
-	result := make([][]float32, nFrames)
-	for i := range nFrames {
-		start := i * step
-
-		copy(frame, samples[start:start+fftSize])
-		ApplyWindow(frame, window)
-
-		bins := RealFFT(frame)
-		result[i] = Log2PowerSpectrum(bins)
-	}
-
-	return result
-}
-
-// SpectrogramFT8HiRes computes a frequency-oversampled FT8 spectrogram.
-//
-// It uses a longer analysis window of [SamplesPerSymbol] × freqOSR samples
-// (e.g., 3840 for freqOSR=2), giving sub-bin frequency resolution. This
-// matches ft8_lib's approach where nfft = block_size × freq_osr. The RealFFT
-// zero-pads to the next power of 2 (4096 for freqOSR=2), producing 2049 bins
-// at ~2.93 Hz spacing instead of the standard 1025 bins at ~5.86 Hz.
-//
-// The longer analysis window captures nearly 2 full symbol periods per frame,
-// providing genuine sub-bin spectral information (not just zero-padding
-// interpolation). This significantly improves candidate detection for signals
-// that fall between the standard FFT bins.
-//
-// Parameters:
-//   - samples: audio capture buffer (one FT8 window)
-//   - freqOSR: frequency oversampling rate (typically 2). Values < 1 are
-//     treated as 1 (standard resolution).
-//
-// The step size remains [SamplesPerSymbol]/2 (960 samples) for time_osr=2
-// compatibility. Returns nil if the buffer is shorter than the analysis window.
-func SpectrogramFT8HiRes(samples []float32, freqOSR int) [][]float32 {
-	if freqOSR < 1 {
-		freqOSR = 1
-	}
-	if freqOSR == 1 {
-		return SpectrogramFT8(samples) // no oversampling — use standard path
-	}
-
-	// Analysis window: SamplesPerSymbol × freqOSR (e.g., 3840 for freqOSR=2).
-	analysisLen := SamplesPerSymbol * freqOSR
-	step := SamplesPerSymbol / 2 // 960 — half-symbol overlap (time_osr=2)
+	analysisLen := SamplesPerSymbol // 1920 — audio samples per frame
+	nfft := 2 * SamplesPerSymbol    // 3840 — zero-padded FFT size (WSJT-X NFFT1)
+	step := SamplesPerSymbol / 4    // 480 — quarter-symbol step (WSJT-X NSTEP)
 
 	if len(samples) < analysisLen || step <= 0 {
 		return nil
@@ -162,7 +112,7 @@ func SpectrogramFT8HiRes(samples []float32, freqOSR int) [][]float32 {
 
 	nFrames := (len(samples)-analysisLen)/step + 1
 
-	// Periodic Hann window of length analysisLen (matching ft8_lib).
+	// Periodic Hann window of the analysis length (not the FFT size).
 	window := HannPeriodicCoefficients(analysisLen)
 
 	frame := make([]float32, analysisLen)
@@ -174,7 +124,61 @@ func SpectrogramFT8HiRes(samples []float32, freqOSR int) [][]float32 {
 		copy(frame, samples[start:start+analysisLen])
 		ApplyWindow(frame, window)
 
-		bins := RealFFT(frame) // pads to next pow2 (4096 for 3840)
+		// 3840-point FFT via Bluestein — gives exact 2 bins/tone alignment.
+		bins := RealFFTN(frame, nfft)
+		result[i] = Log2PowerSpectrum(bins)
+	}
+
+	return result
+}
+
+// SpectrogramFT8HiRes computes a frequency-oversampled FT8 spectrogram
+// with sub-bin frequency resolution.
+//
+// It uses a longer analysis window of [SamplesPerSymbol] × freqOSR samples
+// (e.g., 3840 for freqOSR=2) and an FFT size of 2 × analysisLen (e.g., 7680),
+// giving freqOSR × 2 bins per tone. Combined with the quarter-symbol time
+// step matching WSJT-X's NSTEP, this provides high time–frequency resolution
+// for multi-pass candidate detection and signal subtraction.
+//
+// Parameters:
+//   - samples: audio capture buffer (one FT8 window)
+//   - freqOSR: frequency oversampling rate (typically 2). Values < 1 are
+//     treated as 1 (standard resolution).
+//
+// Returns nil if the buffer is shorter than the analysis window.
+func SpectrogramFT8HiRes(samples []float32, freqOSR int) [][]float32 {
+	if freqOSR < 1 {
+		freqOSR = 1
+	}
+	if freqOSR == 1 {
+		return SpectrogramFT8(samples) // no oversampling — use standard path
+	}
+
+	// Analysis window: SamplesPerSymbol × freqOSR (e.g., 3840 for freqOSR=2).
+	analysisLen := SamplesPerSymbol * freqOSR
+	nfft := 2 * analysisLen      // e.g., 7680 — exact integer bins/tone
+	step := SamplesPerSymbol / 4 // 480 — quarter-symbol step
+
+	if len(samples) < analysisLen || step <= 0 {
+		return nil
+	}
+
+	nFrames := (len(samples)-analysisLen)/step + 1
+
+	// Periodic Hann window of length analysisLen.
+	window := HannPeriodicCoefficients(analysisLen)
+
+	frame := make([]float32, analysisLen)
+
+	result := make([][]float32, nFrames)
+	for i := range nFrames {
+		start := i * step
+
+		copy(frame, samples[start:start+analysisLen])
+		ApplyWindow(frame, window)
+
+		bins := RealFFTN(frame, nfft)
 		result[i] = Log2PowerSpectrum(bins)
 	}
 

@@ -68,16 +68,17 @@ func ProcessWindow(samples []float32, maxCandidates, maxIter int) []DecodedMessa
 	}
 
 	// Step 1: build the FT8-optimised spectrogram.
-	// Half-symbol step (960 samples), log2(power), periodic Hann window.
+	// Quarter-symbol step (480 samples), 3840-point FFT, log2(power),
+	// periodic Hann window — matching WSJT-X sync8.f90 parameters.
 	sg := SpectrogramFT8(samples)
 	if sg == nil {
 		return nil
 	}
 
-	// With half-symbol stepping, each symbol spans 2 rows.
-	const stepsPerSymbol = 2
+	// With quarter-symbol stepping, each symbol spans 4 rows.
+	const stepsPerSymbol = 4
 
-	// Need at least (79-1)*2 + 1 = 157 frames for a full FT8 message.
+	// Need at least (79-1)*4 + 1 = 313 frames for a full FT8 message.
 	minFrames := (NumSymbols-1)*stepsPerSymbol + 1
 	if len(sg) < minFrames {
 		return nil

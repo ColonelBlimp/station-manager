@@ -79,7 +79,7 @@ func ProcessWindowMultiPass(samples []float32, maxCandidates, maxIter int) []Dec
 			break
 		}
 
-		const stepsPerSymbol = 2
+		const stepsPerSymbol = 4
 
 		minFrames := (NumSymbols-1)*stepsPerSymbol + 1
 		if len(sg) < minFrames {

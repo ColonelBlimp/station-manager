@@ -108,7 +108,7 @@ func TestStep2_SyncScoreNeighborDistribution(t *testing.T) {
 		t.Fatal("SpectrogramFT8HiRes returned nil")
 	}
 
-	const stepsPerSymbol = 2
+	const stepsPerSymbol = 4
 	nFrames := len(sg)
 	nBins := len(sg[0])
 	fftSize := 2 * (nBins - 1)
@@ -216,7 +216,7 @@ func TestStep3_CompareCandidateCounts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			samples := loadTestWAV(t, name)
 
-			const stepsPerSymbol = 2
+			const stepsPerSymbol = 4
 
 			// Standard spectrogram + FindCandidates.
 			sgStd := SpectrogramFT8(samples)
@@ -261,7 +261,7 @@ func TestStep4_FindCandidatesHiResWithFreqOSR1(t *testing.T) {
 
 	// With freqOSR=1, SpectrogramFT8HiRes delegates to SpectrogramFT8.
 	sgOSR1 := SpectrogramFT8HiRes(samples, 1)
-	const stepsPerSymbol = 2
+	const stepsPerSymbol = 4
 	candsOSR1 := FindCandidatesHiRes(sgOSR1, 120, stepsPerSymbol)
 
 	sgOSR2 := SpectrogramFT8HiRes(samples, FreqOSR)
@@ -297,7 +297,7 @@ func TestStep5_RefineFastVsOriginal(t *testing.T) {
 
 	// Use standard spectrogram + standard FindCandidates.
 	sgStd := SpectrogramFT8(samples)
-	const stepsPerSymbol = 2
+	const stepsPerSymbol = 4
 	candidates := FindCandidates(sgStd, 120, stepsPerSymbol)
 
 	hann := HannCoefficients(SamplesPerSymbol)

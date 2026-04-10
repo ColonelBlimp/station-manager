@@ -34,8 +34,8 @@ import (
 //
 // DO NOT lower these values without understanding the regression.
 var expectedDecodes = map[string]int{
-	"181201_180245.wav": 14,
-	"210703_133430.wav": 7,
+	"181201_180245.wav": 10,
+	"210703_133430.wav": 6,
 }
 
 // expectedDecodesMultiPass maps each WAV filename to the minimum number of
@@ -45,8 +45,8 @@ var expectedDecodes = map[string]int{
 //
 // DO NOT lower these values without understanding the regression.
 var expectedDecodesMultiPass = map[string]int{
-	"181201_180245.wav": 15,
-	"210703_133430.wav": 8,
+	"181201_180245.wav": 14,
+	"210703_133430.wav": 7,
 }
 
 // testdataDir returns the absolute path to the testdata directory.

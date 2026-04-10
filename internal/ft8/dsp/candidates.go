@@ -7,12 +7,10 @@
 // much power the Costas sync tones carry relative to the average across all
 // tone positions.
 //
-// FFT bin spacing vs. FT8 tone spacing: with a 2048-point FFT at 12 kHz,
-// the bin width is 12000/2048 = 5.859375 Hz, while FT8 tone spacing is
-// 6.25 Hz. The ratio is 16/15 ≈ 1.067 bins per tone. For tone indices 0–7
-// the maximum fractional offset is 7×(1/15) ≈ 0.47 bins, which rounds to
-// zero — so baseBin + toneIndex is a valid nearest-bin approximation for
-// all 8 tones. Sub-bin frequency refinement can be added later if needed.
+// Bin alignment: with the WSJT-X-matching 3840-point FFT, the bin width is
+// 12000/3840 = 3.125 Hz and FT8 tone spacing is 6.25 Hz, giving exactly
+// 2 bins per tone (nfos = NFFT1/NSPS = 2 in WSJT-X notation). The sync
+// scoring code derives binsPerTone from the spectrogram dimensions.
 //
 // Reference: Franke, S. & Taylor, J., "The FT4 and FT8 Communication
 // Protocols", QEX July/August 2020.
@@ -88,23 +86,31 @@ func FindCandidates(spectrogram [][]float32, maxCandidates int, stepsPerSymbol i
 	fftSize := 2 * (nBins - 1)
 	binWidth := float32(SampleRate) / float32(fftSize)
 
+	// Compute bins per FT8 tone. With the 3840-point FFT this is exactly 2;
+	// with the old 2048-point FFT this rounds to 1 (backward compatible).
+	binsPerTone := int(math.Round(float64(ToneSpacing) / float64(binWidth)))
+	if binsPerTone < 1 {
+		binsPerTone = 1
+	}
+
 	// Convert time offset from frame index to seconds.
 	stepDuration := float32(SamplesPerSymbol) / float32(stepsPerSymbol) / float32(SampleRate)
 
 	// Use the appropriate sync score threshold.
 	threshold := float32(minSyncScoreLinear)
 	if stepsPerSymbol > 1 {
-		// Half-symbol stepping implies log2-power spectrogram.
+		// Multi-step implies log2-power spectrogram.
 		threshold = minSyncScoreLog2
 	}
 
 	// Convert frequency search bounds to bin indices.
 	minBin := int(minSearchFreqHz / float64(binWidth))
 	maxBin := int(maxSearchFreqHz/float64(binWidth)) + 1
-	// The tone grid spans baseBin..baseBin+7, so the highest valid baseBin
-	// is nBins − NumTones.
-	if maxBin > nBins-NumTones {
-		maxBin = nBins - NumTones
+	// The tone grid spans baseBin..baseBin+(NumTones-1)*binsPerTone, so the
+	// highest valid baseBin is nBins - 1 - (NumTones-1)*binsPerTone.
+	maxToneOffset := (NumTones - 1) * binsPerTone
+	if maxBin > nBins-1-maxToneOffset {
+		maxBin = nBins - 1 - maxToneOffset
 	}
 	if minBin > maxBin {
 		return nil
@@ -118,7 +124,7 @@ func FindCandidates(spectrogram [][]float32, maxCandidates int, stepsPerSymbol i
 
 	for t := 0; t <= maxTimeOff; t++ {
 		for b := minBin; b <= maxBin; b++ {
-			score := syncScoreSteps(spectrogram, t, b, stepsPerSymbol)
+			score := syncScoreSteps(spectrogram, t, b, stepsPerSymbol, binsPerTone)
 			if score > threshold {
 				candidates = append(candidates, Candidate{
 					Freq:    float32(b) * binWidth,
@@ -144,21 +150,23 @@ func FindCandidates(spectrogram [][]float32, maxCandidates int, stepsPerSymbol i
 
 // syncScoreSteps computes the Costas sync correlation score for a candidate
 // at the given time offset and base frequency bin, accounting for the number
-// of spectrogram rows per symbol.
+// of spectrogram rows per symbol and bins per tone.
 //
-// When stepsPerSymbol=1, each row is one symbol (no overlap); when
-// stepsPerSymbol=2, each row is a half-symbol (50% overlap). Symbol k is
-// at row timeOff + k*stepsPerSymbol.
+// stepsPerSymbol: number of spectrogram rows per FT8 symbol (4 for quarter-
+// symbol stepping, 2 for half-symbol, 1 for no overlap).
+//
+// binsPerTone: number of FFT bins per FT8 tone (2 for 3840-point FFT,
+// 1 for legacy 2048-point). Tone k maps to bin baseBin + k*binsPerTone.
 //
 // The score is the mean power at the 21 sync tone positions minus the mean
 // power across all 79 × 8 tone positions.
-func syncScoreSteps(sg [][]float32, timeOff, baseBin, stepsPerSymbol int) float32 {
+func syncScoreSteps(sg [][]float32, timeOff, baseBin, stepsPerSymbol, binsPerTone int) float32 {
 	// Sum power at the 21 sync positions (3 blocks × 7 Costas symbols).
 	var syncPower float32
 	for _, start := range [3]int{Sync1Start, Sync2Start, Sync3Start} {
 		for j := range SyncLen {
 			row := timeOff + (start+j)*stepsPerSymbol
-			syncPower += sg[row][baseBin+int(CostasSync[j])]
+			syncPower += sg[row][baseBin+int(CostasSync[j])*binsPerTone]
 		}
 	}
 
@@ -167,7 +175,7 @@ func syncScoreSteps(sg [][]float32, timeOff, baseBin, stepsPerSymbol int) float3
 	for s := range NumSymbols {
 		row := sg[timeOff+s*stepsPerSymbol]
 		for tone := range NumTones {
-			totalPower += row[baseBin+tone]
+			totalPower += row[baseBin+tone*binsPerTone]
 		}
 	}
 
@@ -176,9 +184,9 @@ func syncScoreSteps(sg [][]float32, timeOff, baseBin, stepsPerSymbol int) float3
 }
 
 // syncScore is a convenience wrapper for syncScoreSteps with stepsPerSymbol=1
-// (non-overlapping spectrogram).
+// and binsPerTone=1 (non-overlapping spectrogram, legacy FFT size).
 func syncScore(sg [][]float32, timeOff, baseBin int) float32 {
-	return syncScoreSteps(sg, timeOff, baseBin, 1)
+	return syncScoreSteps(sg, timeOff, baseBin, 1, 1)
 }
 
 // Refinement search parameters for [RefineCandidateAudio].
@@ -190,9 +198,9 @@ const (
 	refineTimeSteps = 16
 
 	// refineFreqRange is the half-width of the frequency search window (Hz).
-	// Widened from 3.0 to accommodate the bin mismatch between 2048-point
-	// FFT (5.86 Hz bins) and 6.25 Hz tone spacing — coarse frequency
-	// estimates can be off by up to half a bin (≈3 Hz) or more.
+	// With the 3840-point FFT, bins are exactly aligned with tone spacing
+	// (3.125 Hz bins, 2 bins per tone), so the coarse frequency is off by
+	// at most 1.5625 Hz. The wider range covers multi-path and Doppler.
 	refineFreqRange = 6.0
 
 	// refineFreqStep is the frequency search step size (Hz).

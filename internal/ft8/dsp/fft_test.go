@@ -535,6 +535,150 @@ func TestRealFFTHermitianSymmetry(t *testing.T) {
 	}
 }
 
+// --- RealFFTN tests ---
+
+// TestRealFFTN_PowerOf2_MatchesRealFFT verifies that RealFFTN with a
+// power-of-2 size produces identical output to RealFFT.
+func TestRealFFTN_PowerOf2_MatchesRealFFT(t *testing.T) {
+	samples := []float32{1, -0.5, 0.3, -0.1, 0.7, -0.4, 0.2, 0.6}
+	binsFFT := RealFFT(samples)
+	binsFFTN := RealFFTN(samples, 8)
+
+	if len(binsFFT) != len(binsFFTN) {
+		t.Fatalf("length mismatch: RealFFT=%d, RealFFTN=%d", len(binsFFT), len(binsFFTN))
+	}
+	for k := range binsFFT {
+		if !approxEqC64(binsFFT[k], binsFFTN[k], 1e-3) {
+			t.Errorf("bin[%d]: RealFFT=%v, RealFFTN=%v", k, binsFFT[k], binsFFTN[k])
+		}
+	}
+}
+
+// TestRealFFTN_Bluestein_AgainstDFT verifies Bluestein's algorithm for
+// non-power-of-2 sizes against a brute-force DFT.
+func TestRealFFTN_Bluestein_AgainstDFT(t *testing.T) {
+	tests := []struct {
+		name string
+		n    int
+	}{
+		{"N=3", 3},
+		{"N=5", 5},
+		{"N=6", 6},
+		{"N=7", 7},
+		{"N=10", 10},
+		{"N=15", 15},
+		{"N=100", 100},
+		{"N=3840", 3840}, // WSJT-X NFFT1
+	}
+
+	// Use a pseudo-random input.
+	samples := make([]float32, 4000)
+	for i := range samples {
+		samples[i] = float32(math.Sin(float64(i)*0.7+0.3) + 0.5*math.Cos(float64(i)*2.1))
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := samples[:tc.n]
+			bins := RealFFTN(input, tc.n)
+
+			if len(bins) != tc.n/2+1 {
+				t.Fatalf("got %d bins, want %d", len(bins), tc.n/2+1)
+			}
+
+			// Brute-force DFT for comparison.
+			for k := range tc.n/2 + 1 {
+				var sum complex128
+				for i := range tc.n {
+					var val float64
+					if i < len(input) {
+						val = float64(input[i])
+					}
+					angle := -2 * math.Pi * float64(k) * float64(i) / float64(tc.n)
+					sum += complex(val, 0) * complex(math.Cos(angle), math.Sin(angle))
+				}
+				want := complex64(sum)
+
+				if !approxEqC64(bins[k], want, 0.05) {
+					t.Errorf("bin[%d]: Bluestein=%v, DFT=%v", k, bins[k], want)
+				}
+			}
+		})
+	}
+}
+
+// TestRealFFTN_3840_BinAlignment verifies that a 3840-point FFT gives
+// exactly 2 bins per FT8 tone, eliminating the fractional alignment issue.
+func TestRealFFTN_3840_BinAlignment(t *testing.T) {
+	const nfft = 2 * SamplesPerSymbol // 3840
+
+	bins := RealFFTN(make([]float32, SamplesPerSymbol), nfft)
+
+	// Expected: 3840/2 + 1 = 1921 bins.
+	if len(bins) != nfft/2+1 {
+		t.Fatalf("got %d bins, want %d", len(bins), nfft/2+1)
+	}
+
+	binWidth := float64(SampleRate) / float64(nfft)
+	binsPerTone := ToneSpacing / binWidth
+
+	t.Logf("FFT size:     %d", nfft)
+	t.Logf("Freq bins:    %d", len(bins))
+	t.Logf("Bin width:    %.6f Hz", binWidth)
+	t.Logf("Bins/tone:    %.6f", binsPerTone)
+
+	// The key assertion: bins per tone must be EXACTLY 2.
+	if math.Abs(binsPerTone-2.0) > 1e-10 {
+		t.Errorf("bins per tone = %g, want exactly 2.0", binsPerTone)
+	}
+}
+
+// TestRealFFTN_3840_Cosine verifies that a cosine at an FT8 tone frequency
+// produces a clean peak at the exact expected bin with no spectral leakage.
+func TestRealFFTN_3840_Cosine(t *testing.T) {
+	const nfft = 2 * SamplesPerSymbol // 3840
+	const testFreq = 1000.0           // Hz — choose a frequency on the bin grid
+	binWidth := float64(SampleRate) / float64(nfft)
+	expectedBin := int(math.Round(testFreq / binWidth))
+	actualFreq := float64(expectedBin) * binWidth
+
+	// Generate a cosine at the exact bin frequency.
+	samples := make([]float32, SamplesPerSymbol) // 1920 samples
+	for i := range samples {
+		samples[i] = float32(math.Cos(2 * math.Pi * actualFreq * float64(i) / float64(SampleRate)))
+	}
+
+	bins := RealFFTN(samples, nfft)
+
+	// Find the peak.
+	peakBin := 0
+	peakMag := float64(0)
+	for k, b := range bins {
+		m := math.Sqrt(float64(real(b))*float64(real(b)) + float64(imag(b))*float64(imag(b)))
+		if m > peakMag {
+			peakMag = m
+			peakBin = k
+		}
+	}
+
+	if peakBin != expectedBin {
+		t.Errorf("peak at bin %d, expected %d (freq %.1f Hz)", peakBin, expectedBin, actualFreq)
+	}
+
+	t.Logf("Cosine at %.1f Hz → peak at bin %d (expected %d), magnitude %.1f",
+		actualFreq, peakBin, expectedBin, peakMag)
+}
+
+// TestRealFFTN_Nil verifies edge cases.
+func TestRealFFTN_Nil(t *testing.T) {
+	if bins := RealFFTN(nil, 0); bins != nil {
+		t.Errorf("RealFFTN(nil, 0) = %v, want nil", bins)
+	}
+	if bins := RealFFTN(nil, -1); bins != nil {
+		t.Errorf("RealFFTN(nil, -1) = %v, want nil", bins)
+	}
+}
+
 // --- Test helpers ---
 
 // approxEqC64 returns true if both real and imaginary parts of a and b

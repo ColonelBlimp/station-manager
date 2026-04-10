@@ -173,7 +173,7 @@ func runDSPPipeline(samples []float32) {
 	fmt.Println()
 
 	fmt.Println("  ── Stage 2: Candidate detection (Costas sync) ──")
-	const stepsPerSymbol = 2
+	const stepsPerSymbol = 4
 	candidates := dsp.FindCandidates(sg, maxCandidates, stepsPerSymbol)
 	fmt.Printf("  Candidates found: %d (max %d)\n", len(candidates), maxCandidates)
 

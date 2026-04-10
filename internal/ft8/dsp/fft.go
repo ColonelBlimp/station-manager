@@ -1,28 +1,23 @@
-// fft.go — pure-Go radix-2 Cooley-Tukey FFT for real-valued input.
+// fft.go — pure-Go FFT for real-valued input.
 //
-// This implements a decimation-in-time (DIT) FFT that zero-pads the input
-// to the next power of 2. For FT8's 1920-sample symbol frames, this means
-// zero-padding to 2048 — the extra bins provide slightly interpolated
-// frequency resolution but do not affect the 6.25 Hz tone spacing needed
-// for symbol discrimination.
+// Two DFT entry points are provided:
 //
-// Twiddle factors are precomputed per butterfly stage once per FFT size and
-// cached for reuse. Since the hot path (SpectrogramFT8) always uses 2048-
-// point transforms, this eliminates ~2000 allocations per 15-second window.
-// The cache is protected by a sync.Mutex; contention is negligible because
-// the pipeline is single-threaded per window and the lock is only acquired
-// once per FFT call (not per stage).
+//   - [RealFFT]: zero-pads to the next power of 2, uses radix-2 Cooley-Tukey.
+//     Retained for backward compatibility.
+//   - [RealFFTN]: computes an N-point DFT for arbitrary N. Uses radix-2 when
+//     N is a power of 2, otherwise Bluestein's algorithm (chirp-Z transform).
 //
-// The implementation uses complex128 internally for twiddle-factor precision,
-// converting to complex64 on output to match the float32 audio pipeline.
+// The FT8-critical use case is N = 3840 (= 2×NSPS), matching WSJT-X's
+// sync8.f90 NFFT1 parameter. This gives exactly 2 FFT bins per FT8 tone
+// (6.25 Hz tone spacing / 3.125 Hz bin width), eliminating the fractional-bin
+// alignment issue that degraded sync correlation with the old 2048-point FFT.
 //
-// Performance note: at 2048 points × ~188 FFTs per 15-second window, a
-// pure-Go FFT is more than adequate. If profiling reveals a bottleneck,
-// the implementation can be swapped for a mixed-radix or CGo FFTW wrapper
-// behind the same [RealFFT] interface.
+// Twiddle factors and Bluestein chirp tables are precomputed and cached per
+// FFT size. Since the hot path (SpectrogramFT8) always uses the same size,
+// the tables are computed once and reused for all ~372 frames per window.
 //
-// Reference: Cooley, J.W. & Tukey, J.W. "An Algorithm for the Machine
-// Calculation of Complex Fourier Series", Mathematics of Computation, 1965.
+// Reference: Bluestein, L.I. "A linear filtering approach to the computation
+// of discrete Fourier transform", IEEE Trans. Audio Electroacoustics, 1970.
 
 package dsp
 
@@ -61,6 +56,9 @@ func NextPow2(n int) int {
 //   - Bin N/2: Nyquist component
 //
 // Returns nil for empty input.
+//
+// For FT8 use, prefer [RealFFTN] with an explicit FFT size to control bin
+// alignment with FT8 tone spacing.
 func RealFFT(samples []float32) []complex64 {
 	if len(samples) == 0 {
 		return nil
@@ -83,6 +81,153 @@ func RealFFT(samples []float32) []complex64 {
 		out[i] = complex64(x[i])
 	}
 	return out
+}
+
+// RealFFTN computes an N-point DFT of real-valued samples and returns the
+// non-negative frequency bins (N/2 + 1 bins).
+//
+// If len(samples) < n, the input is zero-padded. If len(samples) > n, the
+// input is truncated. When n is a power of 2, the fast radix-2 path is used;
+// otherwise Bluestein's algorithm converts the DFT to a convolution computed
+// via power-of-2 FFTs.
+//
+// Returns nil for n ≤ 0.
+func RealFFTN(samples []float32, n int) []complex64 {
+	if n <= 0 {
+		return nil
+	}
+
+	// Power-of-2 fast path: use the existing radix-2 FFT.
+	if n > 0 && (n&(n-1)) == 0 {
+		x := make([]complex128, n)
+		for i := 0; i < len(samples) && i < n; i++ {
+			x[i] = complex(float64(samples[i]), 0)
+		}
+		fftDIT(x)
+		bins := n/2 + 1
+		out := make([]complex64, bins)
+		for i := range bins {
+			out[i] = complex64(x[i])
+		}
+		return out
+	}
+
+	// Non-power-of-2: Bluestein's algorithm.
+	x := make([]complex128, n)
+	for i := 0; i < len(samples) && i < n; i++ {
+		x[i] = complex(float64(samples[i]), 0)
+	}
+
+	bluesteinDFT(x)
+
+	bins := n/2 + 1
+	out := make([]complex64, bins)
+	for i := range bins {
+		out[i] = complex64(x[i])
+	}
+	return out
+}
+
+// --- Bluestein's algorithm ---
+
+// bluesteinTab holds precomputed chirp sequences and the FFT of the
+// convolution kernel for a specific DFT size N. Cached to avoid
+// recomputation across spectrogram frames.
+type bluesteinTab struct {
+	chirp []complex128 // chirp[k] = exp(-jπk²/N) for k = 0..N-1
+	hFFT  []complex128 // FFT of the zero-padded chirp kernel, length M
+	m     int          // convolution length (power of 2, ≥ 2N-1)
+}
+
+var (
+	bluesteinMu    sync.Mutex
+	bluesteinCache = make(map[int]*bluesteinTab)
+)
+
+// getBluestein returns the cached Bluestein table for DFT size n. On the
+// first call for a given n, the chirp sequence and kernel FFT are computed.
+func getBluestein(n int) *bluesteinTab {
+	bluesteinMu.Lock()
+	defer bluesteinMu.Unlock()
+
+	if tab, ok := bluesteinCache[n]; ok {
+		return tab
+	}
+
+	m := NextPow2(2*n - 1)
+
+	// Chirp: b[k] = exp(-jπk²/N).
+	chirp := make([]complex128, n)
+	for k := range n {
+		angle := -math.Pi * float64(k) * float64(k) / float64(n)
+		chirp[k] = complex(math.Cos(angle), math.Sin(angle))
+	}
+
+	// Convolution kernel h: conj(chirp) with circular wrap-around.
+	// h[0..N-1] = conj(chirp[0..N-1])
+	// h[M-k]    = conj(chirp[k]) for k = 1..N-1  (wrap-around)
+	h := make([]complex128, m)
+	for k := range n {
+		c := complex(real(chirp[k]), -imag(chirp[k])) // conj
+		h[k] = c
+		if k > 0 {
+			h[m-k] = c
+		}
+	}
+
+	// Precompute FFT of h.
+	fftDIT(h)
+
+	tab := &bluesteinTab{chirp: chirp, hFFT: h, m: m}
+	bluesteinCache[n] = tab
+	return tab
+}
+
+// bluesteinDFT computes the in-place N-point DFT of x using Bluestein's
+// chirp-Z algorithm. len(x) = N, which can be any positive integer.
+//
+// The algorithm converts the DFT into a circular convolution:
+//
+//	X[k] = chirp[k] · (a ∗ h)[k]
+//
+// where a[n] = x[n]·chirp[n] and h is the conjugate chirp kernel.
+// The convolution is computed via power-of-2 FFTs of size M ≥ 2N-1.
+func bluesteinDFT(x []complex128) {
+	n := len(x)
+	if n <= 1 {
+		return
+	}
+
+	tab := getBluestein(n)
+	m := tab.m
+
+	// Modulated input: a[k] = x[k] · chirp[k], zero-padded to M.
+	a := make([]complex128, m)
+	for k := range n {
+		a[k] = x[k] * tab.chirp[k]
+	}
+
+	// Circular convolution via FFT: Y = IFFT(FFT(a) · H).
+	fftDIT(a)
+
+	for k := range m {
+		a[k] *= tab.hFFT[k]
+	}
+
+	// Inverse FFT: IFFT(z) = conj(FFT(conj(z))) / M.
+	for k := range m {
+		a[k] = complex(real(a[k]), -imag(a[k]))
+	}
+	fftDIT(a)
+	invM := 1.0 / float64(m)
+	for k := range m {
+		a[k] = complex(real(a[k])*invM, -imag(a[k])*invM)
+	}
+
+	// Extract result: X[k] = chirp[k] · conv[k].
+	for k := range n {
+		x[k] = tab.chirp[k] * a[k]
+	}
 }
 
 // --- Twiddle factor cache ---

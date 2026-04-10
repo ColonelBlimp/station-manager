@@ -55,6 +55,9 @@ package service
 
 import (
 	"context"
+	"encoding/binary"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -144,6 +147,7 @@ type Service struct {
 
 	// --- Lifecycle state ---
 
+	diagSaveOnce  atomic.Bool // ensures first-window WAV is saved only once
 	isInitialized atomic.Bool
 	running       atomic.Bool
 	initOnce      sync.Once
@@ -624,25 +628,34 @@ func (s *Service) processWindow(ctx context.Context, samples []float32) {
 		}
 	}()
 
-	decoded := dsp.ProcessWindowMultiPass(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations)
-
-	// Diagnostic comparison: when the multi-pass pipeline fails to decode
-	// any messages, run the standard single-pass pipeline on the same audio
-	// and log the result. This helps distinguish "no signals present" from
-	// "multi-pass pipeline regression" during live operation.
-	if len(decoded) == 0 {
-		diagCount := len(dsp.ProcessWindow(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations))
-		if diagCount > 0 {
-			s.Logger.WarnWith().
-				Int("standard_pipeline_decoded", diagCount).
-				Msg("FT8 window: multi-pass decoded 0 but standard pipeline decoded messages — possible multi-pass regression")
+	// --- First-window WAV dump ---
+	// Save the very first complete window as a 12 kHz mono WAV file so the
+	// decimated audio can be verified offline (Audacity, WSJT-X, etc.).
+	// This is written at most once per service lifetime.
+	if s.diagSaveOnce.CompareAndSwap(false, true) {
+		wavPath := filepath.Join(".", "ft8_live_window.wav")
+		if err := saveWindowWAV(wavPath, samples, dsp.SampleRate); err != nil {
+			s.Logger.WarnWith().Err(err).Msg("FT8 diag: failed to save window WAV")
 		} else {
-			s.Logger.DebugWith().Msg("FT8 window: no messages decoded (both pipelines)")
+			s.Logger.InfoWith().Str("path", wavPath).Msg("FT8 diag: saved first window as WAV for offline analysis")
 		}
+	}
+
+	start := time.Now()
+	decoded := dsp.ProcessWindowMultiPass(samples, s.ft8Config.MaxCandidates, s.ft8Config.MaxIterations)
+	elapsed := time.Since(start)
+
+	if len(decoded) == 0 {
+		s.Logger.InfoWith().
+			Int64("elapsed_ms", elapsed.Milliseconds()).
+			Msg("FT8 window: no messages decoded")
 		return
 	}
 
-	s.Logger.InfoWith().Int("count", len(decoded)).Msg("FT8 window: messages decoded")
+	s.Logger.InfoWith().
+		Int("count", len(decoded)).
+		Int64("multipass_ms", elapsed.Milliseconds()).
+		Msg("FT8 window: messages decoded")
 
 	for i := range decoded {
 		dm := &decoded[i]
@@ -683,4 +696,54 @@ func (s *Service) processWindow(ctx context.Context, samples []float32) {
 				Msg("FT8 message channel full; dropping message")
 		}
 	}
+}
+
+// saveWindowWAV writes decimated 12 kHz mono float32 samples as a 16-bit PCM
+// WAV file. The file can be loaded in Audacity, fed to WSJT-X, or used with
+// the offline DSP test suite to verify that the decimated audio contains valid
+// FT8 signals.
+func saveWindowWAV(path string, samples []float32, sampleRate uint32) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	numSamples := uint32(len(samples))
+	dataSize16 := numSamples * 2
+
+	// RIFF header.
+	f.Write([]byte("RIFF"))
+	binary.Write(f, binary.LittleEndian, uint32(36+dataSize16))
+	f.Write([]byte("WAVE"))
+
+	// fmt chunk.
+	f.Write([]byte("fmt "))
+	binary.Write(f, binary.LittleEndian, uint32(16))   // chunk size
+	binary.Write(f, binary.LittleEndian, uint16(1))    // PCM format
+	binary.Write(f, binary.LittleEndian, uint16(1))    // mono
+	binary.Write(f, binary.LittleEndian, sampleRate)   // sample rate
+	binary.Write(f, binary.LittleEndian, sampleRate*2) // byte rate
+	binary.Write(f, binary.LittleEndian, uint16(2))    // block align
+	binary.Write(f, binary.LittleEndian, uint16(16))   // bits per sample
+
+	// data chunk.
+	f.Write([]byte("data"))
+	binary.Write(f, binary.LittleEndian, dataSize16)
+
+	// Convert float32 → int16 and write.
+	buf := make([]byte, 2)
+	for _, s := range samples {
+		if s > 1.0 {
+			s = 1.0
+		} else if s < -1.0 {
+			s = -1.0
+		}
+		v := int16(s * 32767)
+		buf[0] = byte(v)
+		buf[1] = byte(v >> 8)
+		f.Write(buf)
+	}
+
+	return nil
 }
