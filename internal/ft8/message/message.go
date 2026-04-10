@@ -21,8 +21,9 @@ const (
 	// two 1-bit type flags, a 1-bit Roger flag, a 15-bit grid/report, and i3=001.
 	TypeStandard
 
-	// TypeNonStandard is a Type 4 non-standard callsign message (i3=4).
-	// Not yet implemented — Pack/Unpack return an "unsupported" error.
+	// TypeNonStandard is a Type 4 non-standard callsign message (i3=4):
+	// one 58-bit base-38 encoded non-standard callsign + one 12-bit hashed
+	// callsign + iflip + 2-bit report + CQ flag.
 	TypeNonStandard
 
 	// TypeContestRTTY is i3=0, n3=1 (ARRL RTTY Roundup). Unsupported.
@@ -123,7 +124,7 @@ type Message struct {
 //	"TNX BOB 73 GL"
 func (m *Message) String() string {
 	switch m.MsgType {
-	case TypeStandard:
+	case TypeStandard, TypeNonStandard:
 		parts := []string{m.Call1, m.Call2}
 		if m.Grid != "" {
 			parts = append(parts, m.Grid)
@@ -186,8 +187,7 @@ func Unpack(payload [MsgBytes]byte) (*Message, error) {
 				"unsupported i3=0 sub-type n3=%d", n3)
 		}
 	case 4:
-		return nil, errors.New(op).Msg(
-			"Type 4 (non-standard callsign) messages are not yet supported")
+		return unpackType4(payload)
 	default:
 		return nil, errors.New(op).Msgf("unsupported message type i3=%d", i3)
 	}

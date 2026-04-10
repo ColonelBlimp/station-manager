@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10
 **Updated:** 2026-04-10
-**Status:** Baseband demodulation + OSD + sync8 + AP decoding (9/13 baseline, 10/13 with AP context)
+**Status:** Baseband demodulation + OSD + sync8 + AP decoding + Type 4 message support (9/13 capture1, 7/15 capture2)
 
 ## What Was Built
 
@@ -14,6 +14,9 @@ Ported WSJT-X's `ft8_downsample.f90`, `sync8d.f90`, and the core of `ft8b.f90` t
 
 ### Phase 3: A priori (AP) decoding (complete)
 Ported WSJT-X's AP decode passes from `ft8b.f90` and `decode174_91.f90` to Go. When the operator's callsign is provided, additional AP decode passes inject known message bits as high-confidence LLRs, enabling decoding of signals at -21 to -23 dB that fail standard BP+OSD. Improves decode rate from **9/13 to 10/13** with appropriate AP context.
+
+### Phase 4: Type 4 non-standard callsign messages (complete)
+Implemented unpacking for i3=4 messages carrying non-standard callsigns (containing '/', up to 11 characters from a 38-symbol alphabet). The 58-bit base-38 encoded callsign is decoded; the 12-bit hashed companion callsign is shown as `<...>` (no hash lookup table). This enabled decoding messages like `VK/ZL4XZ <...> RR73` that previously failed with "Type 4 not yet supported".
 
 ### Files Created/Modified
 
@@ -39,7 +42,8 @@ Ported WSJT-X's AP decode passes from `ft8b.f90` and `decode174_91.f90` to Go. W
 - `cmd/ft8test/cmd/decode.go` — added `--baseband` flag that routes to the new baseband pipeline
 
 **Test data:**
-- `internal/ft8/dsp/testdata/ft8test_capture_20260410.wav` — known-good 15s capture, 13 WSJT-X decodes
+- `internal/ft8/dsp/testdata/ft8test_capture_20260410.wav` — known-good 15s capture, 13 WSJT-X decodes (capture 1)
+- `internal/ft8/dsp/testdata/ft8test_capture2_20260410.wav` — known-good 15s capture, 15 WSJT-X decodes (capture 2)
 
 ### Build & Run
 
@@ -101,6 +105,62 @@ The 3 new decodes (SV2SIH ES2AJ, CQ PV8AJ, A61CK UA1CEI) were previously **invis
 - The sync_bc mode (blocks 2+3 only) catches late-arriving signals that the old detector missed
 - 40th-percentile baseline normalization adapts to the local noise floor
 - Near-dupe suppression frees candidate budget for weaker signals
+
+## Test Results (capture2.wav)
+
+### WSJT-X decoded 15 messages from the same WAV:
+```
+ -8  816 Hz  HA5LB 5B4AMX RR73
+ -4 1776 Hz  CQ ZS4AW KG31
+-13 2100 Hz  CQ SV0TPN KM28
+-10  745 Hz  CQ Z62NS KN02
+ -1  332 Hz  VK/ZL4XZ <...> RR73
+-13  862 Hz  VK3ZSJ YO8RQP KN37
+-14 1464 Hz  R1QD KB2ELA -12
+-17  553 Hz  UY7VV KE6SU DM14
+ -5  319 Hz  TL8GD UT2VX KN69
+-18 1840 Hz  RU4LM 4X5JK R-14
+-14 1768 Hz  JT1CO IZ7DIO 73
+-18 1502 Hz  VK3ZSJ US7KC KO21
+-15 1410 Hz  JR3UIC SP7IIT RR73
+-22 1096 Hz  JT1CO YO3HST KN24
+-12  451 Hz  CQ TN8GD JI75
+```
+
+### Our pipeline results (BP+OSD+sync8):
+
+| Pipeline | Decoded | Correct | False |
+|---|---|---|---|
+| Goertzel (original) | **7** | **5/15** | **2** |
+| Baseband (BP+OSD+sync8) | **10** | **7/15** | **3** |
+
+### Baseband decode details:
+```
+  TIME (s)     SNR     FREQ  MESSAGE
+    +2.960  -15.9    815.6  HA5LB 5B4AMX RR73         ✓ WSJT-X match
+    +2.350   -3.8   1776.0  CQ ZS4AW KG31             ✓ WSJT-X match
+    +2.310   -6.1    745.6  CQ Z62NS KN02             ✓ WSJT-X match
+    +2.360   -7.7    862.5  VK3ZSJ YO8RQP KN37        ✓ WSJT-X match
+    +2.360  -20.3   2100.0  CQ SV0TPN KM28            ✓ WSJT-X match
+    +2.310  -12.8   1463.8  R1QD KB2ELA -12            ✓ WSJT-X match
+    +2.320   -7.2    331.8  VK/ZL4XZ <...> RR73        ✓ WSJT-X match (Type 4)
+    +2.270  -20.3   2694.5  VK2USH UA6EED LN14         ✗ not in WSJT-X (likely false)
+    +2.290  -25.5   2751.0  CQ 5W1SA AH46              ✗ not in WSJT-X (likely false)
+    +2.360  -32.6   2594.2  UA4CCH VK2VT RR73          ✗ not in WSJT-X (likely false)
+```
+
+### Analysis — capture 2:
+- **7 correct matches** out of 15 WSJT-X decodes (47%), including VK/ZL4XZ (Type 4 non-standard callsign).
+- **3 likely false decodes** at high frequencies (2594–2751 Hz) with extreme SNRs (-20 to -33 dB). These pass CRC-14 by chance — expected false alarm rate with 240 candidates × 4 LLR passes + AP CQ pass ≈ 1200 decode attempts → ~7% chance of at least 1 false per run; 3 is higher than expected.
+- **8 WSJT-X signals missed** — analysis by failure mode:
+  - UY7VV KE6SU DM14 (553 Hz, -17 dB) — nsync=6 (≤ 6 threshold, skipped)
+  - TL8GD UT2VX KN69 (319 Hz, -5 dB) — nsync=11, all 4 LLR passes fail
+  - RU4LM 4X5JK R-14 (1840 Hz, -18 dB) — nsync=16, all 4 LLR passes fail
+  - JT1CO IZ7DIO 73 (1768 Hz, -14 dB) — nsync=4 (skipped)
+  - VK3ZSJ US7KC KO21 (1502 Hz, -18 dB) — nsync=13, all 4 LLR passes fail
+  - JR3UIC SP7IIT RR73 (1410 Hz, -15 dB) — nsync=14, all 4 LLR passes fail
+  - JT1CO YO3HST KN24 (1096 Hz, -22 dB) — no candidate near this frequency
+  - CQ TN8GD JI75 (451 Hz, -12 dB) — nsync=13, all 4 LLR passes fail
 
 ## Architecture: Baseband Demodulation Pipeline
 
@@ -190,13 +250,35 @@ AP decoding has been implemented matching WSJT-X's ft8b.f90 approach. The system
 - AP type 1 (CQ) doesn't require mycall — it injects the fixed CQ bit pattern for any candidate.
 - QSO progress state 0 (default) enables AP types 1 (CQ) and 2 (MyCall) only. Deeper AP types (3–6) activate at higher QSO progress states when both callsigns are known.
 
-### 2. Wire AP context into Wails logging facade
+### 2. ~~Type 4 non-standard callsign messages~~ ✅ IMPLEMENTED
+Implemented unpacking for i3=4 messages carrying non-standard callsigns (containing '/', up to 11 characters from a 38-symbol alphabet: space, 0-9, A-Z, /). The 58-bit base-38 encoded callsign is decoded; the 12-bit hashed companion callsign is shown as `<...>` (no hash lookup table).
+
+**Files added:**
+- `internal/ft8/message/type4.go` — `unpackType4()`, `decodeCallsign58()`, charset38 constant, Type 4 bit offsets.
+- `internal/ft8/message/type4_test.go` — roundtrip and unpack tests for Type 4 messages.
+
+**Files modified:**
+- `internal/ft8/message/message.go` — `Unpack()` now routes i3=4 to `unpackType4()`; `String()` handles `TypeNonStandard` the same as `TypeStandard`.
+- `internal/ft8/message/doc.go` — updated supported types documentation.
+- `internal/ft8/message/type1_test.go` — updated old `TestUnpack_Type4Unsupported` → `TestUnpack_Type4Supported`; updated `TestMessageString_Unsupported` → new `TestMessageString_NonStandard`/`TestMessageString_NonStandardNoGrid`.
+
+### 3. Wire AP context into Wails logging facade
 The `APContext` is currently only accessible via the ft8test CLI (`--mycall`/`--dxcall`). To benefit real-time operation, the Wails logging app facade should construct an `APContext` from the operator's configured callsign and pass it to `ProcessWindowBaseband()`. The QSO progress state should advance as the logging app tracks QSO exchanges.
 
-### 3. Explore multi-symbol LLR passes with OSD
-Currently only the nsym=1 LLR pass successfully decodes in most cases. The nsym=2,3 and bit-normalised passes produce LLRs with 96–100% sign agreement but fail both BP and OSD. Investigate whether the LLR magnitude scaling or normalisation differs from WSJT-X.
+### 4. Reduce false decode rate
+Capture 2 produced 3 likely false decodes (CRC-14 collisions). Potential mitigations:
+- Post-decode plausibility checks: reject decoded callsigns that fail basic format validation.
+- SNR-based filtering: reject decodes with implausible SNR (e.g. < -28 dB).
+- Reduce decode attempts per candidate: the current 4 LLR passes × 3 subtraction passes × 2 (with AP CQ) = ~1200 attempts inflate false alarm probability.
+- Consider OSD order-0 only for AP CQ pass (lower false rate, similar sensitivity).
 
-### 3. SNR calibration
+### 5. Improve LDPC success rate for found candidates
+Capture 2 shows 5 signals detected as candidates (good nsync) but failing all 4 LLR passes. This is the largest gap between our pipeline and WSJT-X. Investigate:
+- Multi-symbol LLR passes (nsym=2,3): currently only nsym=1 succeeds. The joint-symbol passes produce correct sign polarity but magnitude/normalisation may differ from WSJT-X.
+- Fine frequency correction: compare Sync8d Δf values with WSJT-X to verify sub-bin accuracy.
+- Signal subtraction fidelity: verify the subtracted signal doesn't corrupt nearby frequencies.
+
+### 6. SNR calibration
 The current SNR estimation uses a placeholder calibration (`estimateSNRFromScore`). WSJT-X computes SNR from the per-symbol s8 array after decoding. A proper port would improve SNR accuracy for logging and display.
 
 ## Existing DSP Code Reference

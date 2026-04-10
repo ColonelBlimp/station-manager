@@ -8,6 +8,9 @@
 //
 //   - Type 1 (i3=1): Standard QSO exchange — two callsigns + grid/report/token.
 //     Covers ~90% of on-air FT8 traffic (CQ, signal report, Roger, RR73/73).
+//   - Type 4 (i3=4): Non-standard callsign — one callsign encoded in 58 bits
+//     (base-38, up to 11 chars including '/') + one 12-bit hashed callsign.
+//     Handles compound calls like VK/ZL4XZ, PJ4/KA1ABC.
 //   - Type 0 (i3=0, n3=0): Free-text — up to 13 characters from a 42-symbol
 //     alphabet, base-42 encoded into 71 bits.
 //

@@ -437,9 +437,14 @@ func TestMessageString_FreeText(t *testing.T) {
 	require.Equal(t, "TNX BOB 73 GL", m.String())
 }
 
-func TestMessageString_Unsupported(t *testing.T) {
-	m := &Message{MsgType: TypeNonStandard}
-	require.Contains(t, m.String(), "Non-Standard")
+func TestMessageString_NonStandard(t *testing.T) {
+	m := &Message{MsgType: TypeNonStandard, Call1: "VK/ZL4XZ", Call2: "<...>", Grid: "RR73"}
+	require.Equal(t, "VK/ZL4XZ <...> RR73", m.String())
+}
+
+func TestMessageString_NonStandardNoGrid(t *testing.T) {
+	m := &Message{MsgType: TypeNonStandard, Call1: "CQ", Call2: "VK/ZL4XZ"}
+	require.Equal(t, "CQ VK/ZL4XZ", m.String())
 }
 
 // --------------- Unpack — unsupported types ----------------------------------
@@ -452,12 +457,12 @@ func TestUnpack_UnsupportedI3(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported")
 }
 
-func TestUnpack_Type4Unsupported(t *testing.T) {
+func TestUnpack_Type4Supported(t *testing.T) {
 	var payload [MsgBytes]byte
 	PackBits(payload[:], 74, 3, 4) // i3=4
-	_, err := Unpack(payload)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not yet supported")
+	msg, err := Unpack(payload)
+	require.NoError(t, err)
+	require.Equal(t, TypeNonStandard, msg.MsgType)
 }
 
 func TestUnpack_I3_0_N3_1_Unsupported(t *testing.T) {
