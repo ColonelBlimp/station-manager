@@ -1,0 +1,179 @@
+# Station Manager — Architectural Invariants
+
+**Status:** v1 analysis document, 2026-04-14. Load-bearing rules that have been explicitly articulated and agreed during the analysis effort. These must carry forward into v2 (rewrite or refactor), and any future proposal should be checked against this list — if a proposal contradicts one of these, flag it explicitly rather than silently accepting.
+
+**Purpose:** Some rules aren't details, they're constraints the design must satisfy. Detail decisions can be revisited; invariants generally cannot without revisiting the whole design. This document keeps the distinction clear.
+
+**How this document relates to others:**
+- `design-decisions-log.md` — individual decisions with keep/change/delete/undecided verdicts. Invariants here are upstream of those decisions.
+- `lessons-for-v2.md` — design patterns and principles. Invariants here are the non-negotiables; lessons-for-v2 has the softer guidance.
+- `bug-inventory.md` — any bug that violates an invariant here is load-bearing, not cosmetic.
+
+---
+
+## Logging service / daemon core
+
+### Enrichment never blocks logging
+
+External lookups (hamnut.com, QRZ.com, any future callsign/country service) are **best-effort**. Any failure in enrichment degrades the QSO draft's completeness but never prevents the operator from logging.
+
+**The only thing that should stop logging is a broken local DB** — because then there's nowhere to log to. Infrastructure failure (DB unreachable, disk full, migrations broken) is legitimate grounds for blocking. External service unavailability is not.
+
+**Why this matters:** this principle was violated in v1's `initCountrySection`, where a failed hamnut.com lookup propagated as a fatal error and prevented the operator from starting a QSO *at all*. Fixed 2026-04-14. The bug was subtle because the local country table had valid rows for the callsign — the code just refused to use them if the online confirmation failed. The fix synthesizes `types.Country{Name: "Unknown"}` when there's no local row and no online data, so logging proceeds with whatever the operator can type.
+
+**How to apply in v2:** every enrichment path must have an explicit fallback. When writing a new enrichment caller, the first test to write is "what does this do when the external service is down," and the answer had better be "log a warning and continue, not return an error to the caller."
+
+### One-fails-all-fail for QSO writes
+
+The QSO row and its upload-queue row(s) are **atomic** — a single database transaction, all commit or none do. A write that succeeds in the QSO table but fails in the upload-queue table must roll back the QSO, because otherwise the QSO exists but will never be forwarded, and the caller will retry the write and produce a duplicate.
+
+**Cache-table writes (`ContactedStation`, `Country`) live *outside* the transaction and are best-effort**, because they are caches/enrichment, not authoritative. A failed cache write logs a warning and returns success to the caller, because the cache is rebuildable from hamnut.com on next access.
+
+**Why this matters:** v1 shipped with this bug (identified and fixed 2026-04-14). `LogQso` originally ran four sequential non-transactional writes: `InsertQso` → `insertOrUpdateContactedStation` → `insertOrUpdateCountry` → `InsertQsoUpload`. The first succeeded durably; the fourth could fail; the caller retried and got duplicates. Fixed by wrapping insert + upload-insert in a `BeginTxContext` transaction and moving the cache writes outside the transaction as best-effort.
+
+**How to apply in v2:** the atomic unit is (authoritative write + its side-effect state in authoritative tables). Cache writes and other derived state are outside the transaction boundary and are explicitly non-fatal.
+
+### Core concern is log + forward, nothing else
+
+Station Manager's core is **logging QSOs to a local database and forwarding them to online services**. Everything else — manual data entry, FT8 capture, WSJT-X ingest, rig control, audio, CAT, PTT — is a *client* of this core, not part of it.
+
+**Do not let rig control, capture UX, or protocol decoding bleed into the daemon's responsibilities.** The daemon is stable and narrow; the clients are replaceable and many.
+
+**Why this matters:** v1 conflated data capture with storage/forwarding. Adding WSJT-X UDP ingest and FT8 support exposed this as a structural mistake — FT8 had to be extracted to its own repo, WSJT-X integration hit a serial-contention wall, and the logging app accumulated responsibilities that don't belong together. v2's decomposition (daemon + clients + bridge) exists specifically to avoid re-making this mistake.
+
+### Contest dupe check and general ingest dedupe are two different things
+
+**General idempotency:** "did I already ingest this exact QSO" — hash on `(call, band, mode, time)` at ingest time, applies to bulk import and UDP bridges. Used to prevent double-logging from multiple ingest sources.
+
+**Contest dupe:** "per contest rules, is this call already worked on this band in this logbook" — different semantics, different scope, different caller (manual logger mid-entry, synchronous). Contest rules vary by contest, often per-band or per-band-per-mode.
+
+**Do not conflate these.** They share the word "dupe" but nothing else.
+
+### Authoritative data vs cache of remote
+
+The local database has **two data categories** and they must be treated differently:
+
+- **Authoritative:** `logbook`, `qso`, `session`, `qso_upload`. Source of truth. Backup matters. Loss = real data loss. Must be part of transactional writes.
+- **Cache of remote (hamnut.com, etc.):** `country`, `contacted_station`. Rebuildable. Can be nuked on schema migration without ceremony. Writes are best-effort, outside the log/forward transaction.
+
+Backups, migrations, and "blow away to force refresh" operations should treat these categories differently.
+
+## Data model
+
+### `types.Qso` follows the ADIF specification
+
+**`types.Qso` is shaped to mirror the ADIF spec.** Every ADIF tag the software supports has a corresponding field in `types.Qso` (or one of its nested sub-structs — the nesting is a Go-level organizational convenience; ADIF itself is flat). In the long run, `types.Qso` will follow ADIF faithfully.
+
+**Why this matters:** ADIF is an actively-evolving specification. New tags are added periodically by the maintainers. Station Manager needs a data shape that can absorb spec evolution without churning the schema or the codebase, and the design answer is "make the application type track ADIF directly, and make the storage absorb the overflow via the `additional_data` pattern below."
+
+### The `additional_data` JSON blob absorbs ADIF spec evolution
+
+Database tables have **real columns only for fields that are queryable, indexed, or frequently filtered on** — `call`, `band`, `mode`, `freq`, `qso_date`, `time_on`, etc. Everything else (the vast majority of ADIF fields) is serialized into an `additional_data` JSON blob column.
+
+This keeps schema changes to a minimum: **adding a new ADIF field should be a one-line change** (add a field to `types.Qso`), and the storage layer carries it through automatically via JSON marshaling. Schema migrations happen only when a field is *promoted* to a real column — which is a deliberate feature decision (you want to query on it, index it, or filter by it), not a spec-tracking obligation.
+
+**Why this matters:** without this pattern, every new ADIF tag is a schema migration. That's a lot of operational friction for a specification that changes on the maintainers' schedule, not yours. The pattern also keeps the schema small and focused on what actually gets queried, rather than being a giant flat table that mirrors ADIF.
+
+**Constraint on the adapter layer:** the adapter's job is to translate between `types.Qso` (full ADIF shape) and the storage row (promoted columns + blob). It must preserve the property that adding a new field to `types.Qso` requires no other change. If the adapter has a second struct type that mirrors `types.Qso` and must be manually kept in sync (as `types.QsoAdditionalData` does in v1), the property is violated and the adapter needs to be fixed. See `design-decisions-log.md` and `bug-inventory.md` for the specific v1 violation and the planned simplification.
+
+### Per-database adapter pattern, not generic-across-backends
+
+If multiple database backends are ever supported, each gets its **own adapter package** (`internal/database/sqlite/adapters/`, `internal/database/postgres/adapters/`, etc.), and they share nothing at the Go level beyond `internal/types`.
+
+**The attempt to build a generic reflection-based adapter framework (`internal/adapters/` in v1) is dead. Full stop.** It was abandoned as too complicated to maintain and too hard to use correctly, and it will be deleted from the repo as part of v1 cleanup or not carried into v2. Do not try to resurrect it, do not try to build a simpler generic version — per-driver is the settled pattern.
+
+**Why this matters:** the cost of a small amount of code duplication between per-driver adapters (the field-copying is mostly mechanical) is far less than the cost of a generic framework that tries to abstract over different backends' conventions, column types, and JSON handling. The generic version looks clean at the design stage and becomes unmaintainable in practice.
+
+## Serial / CAT bridge
+
+### CAT, PTT, and audio are three separate contention problems
+
+Do not design solutions as if they're unified:
+
+- **CAT** — solved by the rigctld-compat TCP bridge.
+- **PTT** — has its own arbitration (lease model with auto-release on disconnect; stuck-PTT-on-disconnect is a hard safety requirement).
+- **Audio** — usually shareable via pipewire/pulseaudio on Linux; different OS story on Windows/macOS. Not a serial-contention problem, different problem class entirely.
+
+Any design that treats these as one problem will get one of them wrong.
+
+### Multi-rig is a first-class assumption from day one
+
+Serious stations routinely run more than one rig (SO2R, contest setups, FT8 on rig A while phone/CW on rig B). **Each rig is on its own physical port and is an independent contention domain.** One rig's PTT lease, CAT stream, and AUTO/transceive state has nothing to do with the other's.
+
+The bridge must be **multi-rig capable from the start**: one bridge process managing N ports, per-rig state isolation, rigctld frontend exposing each rig on its own TCP port (4532, 4533, etc. per hamlib convention), SM-native event stream carrying a rig identifier so clients can subscribe per-rig or to all rigs.
+
+**Corollary:** FT8 and phone/CW on the same rig at the same time is **not a real scenario** and the bridge does not need to arbitrate it. If both modes are active simultaneously at a station, they are on different rigs on different ports.
+
+### CAT is push-state / AUTO mode, not strict request/response
+
+Modern rigs (Yaesu AUTO, Icom CI-V transceive) **broadcast state changes unsolicited**. Clients are observers that occasionally poke the rig; broadcasting rig state to multiple clients is a feature, not corruption. The user's own CAT library leans into this.
+
+Do not reason about CAT as strict request/response. The rig is a state broadcaster, and "client B received a frequency update it didn't ask for" is a feature — B's local picture stays in sync with reality.
+
+### Stuck-PTT safety is a hard requirement
+
+On **any** client disconnect (TCP drop, Unix socket close, client process death), the bridge must force PTT to RX immediately.
+
+Stuck key-down damages the rig's finals and violates continuous-transmission regulations. Only the bridge can guarantee this because clients cannot clean up after their own crashes. This is not a design choice — it's a safety requirement.
+
+### PTT arbitration is a simple lease model
+
+Bridge grants PTT to the first requester, auto-releases on explicit unkey / release / client disconnect, rejects the second requester cleanly until released.
+
+Does not need a sophisticated fairness algorithm because in practice contention is rare:
+- WSJT-X/JTDX holds PTT during FT8 TX slots (~12.6s each).
+- SM's logging app treats PTT as off-by-default, only claimed on-demand for the optional voice-keyer feature (which is purely ergonomic, not a contest requirement — voice-keyer just saves the operator's voice during long sessions).
+
+If an operator triggers voice-keyer mid-WSJT-X-transmission they get a clean rejection — that's a user mistake, not something the bridge has to arbitrate elegantly.
+
+### Two-frontend bridge shape
+
+The serial/CAT bridge has **two frontends on one internal pipeline**:
+
+1. **rigctld-compat TCP** for third-party interop (WSJT-X, JTDX, anything speaking "Hamlib Net rigctl"). Zero config change required on their side — they already support "Hamlib Net rigctl" as a rig type.
+2. **SM-native event stream** over Unix socket for in-house clients (manual logger, FT8 client, future SM clients). Delivers rig state in the CAT library's native vocabulary, not hamlib's — SM clients are not forced to inherit hamlib's limitations, mode vocabulary, or VFO model.
+
+Internally, the bridge consumes the rig's AUTO/transceive stream once, parses it once via the user's CAT library, and fans it out on both frontends. Commands from both frontends go through one serialization queue to the rig.
+
+## Transport / API
+
+### Log/forward daemon: HTTP+JSON/ADIF over Unix domain socket + SSE for events
+
+**Settled direction.** Unix socket for filesystem-permissions auth (single-user desktop), ADIF as raw POST body for submit (no JSON wrapping — lets any ADIF-producing tool POST directly), SSE for `qso.stored` / `forward.succeeded` / `forward.failed` / etc.
+
+gRPC was considered and rejected as ceremony for an all-Go stack with a small, stable API surface.
+
+### Serial/CAT bridge SM-native frontend: NDJSON over Unix socket
+
+**Different service, different workload** (continuous bidirectional streaming vs. request/response with occasional events), so a different protocol is justified. One bidirectional connection per client, each line a JSON object with a `type` field, no HTTP layer, connection-lifetime = lease-lifetime for free (PTT release, subscription cleanup on socket close).
+
+Not reused from the log/forward daemon's HTTP+SSE stack because the rig bridge's traffic profile is continuous and bidirectional rather than request/response-dominant; forcing HTTP+SSE on it would cost performance and code clarity without any consistency benefit.
+
+## Decomposition
+
+### The three-concerns split across `apps/logging` / `apps/logbook` / `apps/config` is deliberate and must carry forward
+
+- **`apps/logging`** — real-time QSO entry during operating sessions. High-frequency, low-latency, focused UI.
+- **`apps/logbook`** — logbook management and historical QSO editing. Creating, deleting, exporting logbooks; editing historical records. Low-frequency, higher-latency-tolerant, handles large result sets.
+- **`apps/config`** — configuration editing. Rare-use, focused UI, distinct from the daily-driver apps.
+
+These are **different workflows with different latency profiles and different UI focus**. Keeping them as three separate apps keeps each one simple and focused, and avoids cross-concern UI bloat.
+
+**Implication for v2 daemon:** the daemon API surface must serve **all three concerns**, not just logging. Earlier API sketches in session discussions were logging-centric and were missing the entire logbook-management surface (logbook CRUD, batch QSO edit, export, etc.). A dedicated API-shape exercise for v2 needs to explicitly cover logbook-management endpoints as a first-class slice of the API, not an afterthought.
+
+### Daemon scope is explicitly narrow
+
+- In scope: ingest (ADIF via HTTP POST and/or UDP), validate, store in local DB, forward to online services (QRZ, ClubLog, future SM-Online), emit status events, serve queries for logging/logbook/config concerns.
+- **Not in scope:** rig control, CAT, PTT, audio, protocol decoding, capture UX. Those live in clients or separate services (the serial/CAT bridge is its own process, entirely separate from the daemon).
+
+This narrow scope is what makes the daemon stable — it's the one thing in the system that shouldn't churn, because everything else plugs into it.
+
+---
+
+## How to apply
+
+When discussing any architectural proposal in future sessions:
+
+1. **Check against each invariant above.** If a proposal violates one, flag it explicitly and ask whether the invariant should be revised or the proposal reshaped. Do not silently accept a violation.
+2. **Do not re-derive these from scratch.** They are settled. If new invariants emerge in future sessions, add them here.
+3. **This document is source material for the v2 design specification**, along with `design-decisions-log.md` and `lessons-for-v2.md`. When v2 design starts in earnest, these three documents together constitute the starting-point spec.
