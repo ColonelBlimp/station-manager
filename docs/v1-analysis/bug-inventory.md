@@ -52,7 +52,7 @@
 
 ## Open issues
 
-### QsoAdditionalData intermediate struct — **MEDIUM**
+### ~~QsoAdditionalData intermediate struct~~ — **FIXED (2026-04-14)**
 
 **Location:** `internal/types/` (the struct), `internal/database/sqlite/adapters/type_to_model.go` (its usage).
 
@@ -66,13 +66,23 @@
 
 **Root cause:** someone at some point reasoned "I shouldn't marshal the whole `types.Qso` into the blob because some fields are promoted to columns," and built `QsoAdditionalData` as the "correct subset" to marshal. That reasoning is wrong but non-obviously so — the duplication cost of marshaling the whole Qso is trivial (~50 bytes per row for duplicated promoted-column values), and the column-overlay-on-read pattern makes the blob's duplicate copies safely ignorable.
 
-**Fix (planned, not yet applied):** delete `types.QsoAdditionalData`. Rewrite `QsoTypeToModel` to use `json.Marshal(qso)` for the blob and explicit column assignments for the promoted fields. The reverse direction (`QsoModelToType`) is already close to the right shape — it unmarshals the blob into `types.Qso` and overlays the column values — just needs tightening. Total adapter code collapses from ~200 lines to ~50.
+**Fix (applied 2026-04-14):**
+- Deleted `internal/types/additional_data.go` entirely (contained only `types.QsoAdditionalData` and `types.ContactedStationAdditionalData`, both removed).
+- Rewrote `QsoTypeToModel` in `internal/database/sqlite/adapters/type_to_model.go` to call `json.Marshal(qso)` directly for the blob and keep the explicit column assignments for promoted fields.
+- Rewrote `ContactedStationTypeToModel` the same way — `json.Marshal(station)` for the blob.
+- Rewrote `ContactedStationModelToType` in `model_to_type.go` to `json.Unmarshal` directly into `types.ContactedStation` and overlay the promoted columns, instead of going through the intermediate struct. `QsoModelToType` already had the right shape and just needed a comment clarifying the pattern.
+- Added doc comments on all four functions explaining the promoted-columns + blob pattern and why the duplication is safe (columns are authoritative on read).
+- Removed the five dead test functions for `QsoAdditionalData` and `ContactedStationAdditionalData` from `internal/types/json_test.go`. All other tests in the file preserved.
+- `CountryTypeToModel`, `LogbookTypeToModel`, `CountryModelToType`, `LogbookModelToType` were already clean and not touched.
 
-**Severity rationale:** not critical because the code currently works, just painfully. Medium because the "painfully" is ongoing — every new ADIF field pays the tax — and because the maintenance burden is what caused the whole adapters package to be labeled "abandoned as too complicated."
+**Verification:** existing adapter tests (`internal/database/sqlite/adapters/adapters_test.go`) pass unchanged, which serves as the regression guard. The round-trip tests (`TestQsoRoundTrip`, `TestContactedStationRoundTrip`) verify that a populated struct survives marshaling and unmarshaling with the new adapter. Full `internal/...` test suite passes. Full `apps/logging/...` test suite passes.
 
-**Invariant it violates:** "Adding a new ADIF field should be a one-line change" (see `invariants.md`).
+**Impact of the fix:**
+- Adapter code for Qso/ContactedStation collapsed from ~200 lines across both files to ~60 lines.
+- Adding a new ADIF field to `types.Qso` is now a one-line change — the adapter doesn't need to be touched.
+- No more three-shapes maintenance problem: `types.Qso` is the single source of truth; the blob is shaped like `types.Qso`; the reverse overlays columns.
 
-**Disposition:** fixable in v1 as a cleanup commit (code-level fix, not architecture-level). If v2 is rebuilt, implement the simplified shape from day one.
+**Invariant it violated (now upheld):** "Adding a new ADIF field should be a one-line change" (see `invariants.md`).
 
 **Related:** `design-decisions-log.md` → "QsoAdditionalData intermediate struct"; `lessons-for-v2.md` → "Mostly-blob + promoted fields pattern."
 
@@ -118,23 +128,23 @@ Recommended: option 1 (delete) for minimal cleanup. Option 2 only if there's a r
 
 **Related:** `design-decisions-log.md` → "Interface vs concrete-type mismatch."
 
-### `internal/adapters/` — generic reflection-based adapter framework — **LOW (dead code, slated for deletion)**
+### `internal/adapters/` — generic reflection-based adapter framework — **RECLASSIFIED: server-layer dependency, not dead code**
 
 **Location:** `internal/adapters/` including `converters/{common,sqlite,postgres}/`.
 
-**Description:** A sophisticated reflection-based struct-to-struct adapter framework with 30+ test files, builder API, generics, field converters, tag-based ignores, and `AdditionalData` JSON handling. Was built to be a generic solution for the same problem `database/sqlite/adapters` solves manually.
+**Description:** A sophisticated reflection-based struct-to-struct adapter framework with 30+ test files, builder API, generics, field converters, tag-based ignores, and `AdditionalData` JSON handling.
 
-**Impact:** ~40 files of dead code that nobody uses but everybody reading the repo has to mentally classify. The package name is confusingly similar to `database/sqlite/adapters` and has caused real confusion during this very analysis session.
+**Correction (2026-04-14):** earlier analysis in this document classified `internal/adapters` as "dead code, slated for deletion." **That classification was wrong.** Verified via import graph: `internal/adapters` is an **active dependency** of the top-level `internal/database/` package (specifically `service.go`, `helpers.go`, and `crud_user.go`), which is the server-side database layer that lives alongside the client-side `internal/database/sqlite/` layer we've been working with. It is not dead code in the client repo; it is server-layer infrastructure awaiting relocation.
 
-**Root cause:** "abandoned as too complicated to maintain and use correctly," per the author. This is the archetypal example of over-generalizing: the design looked clean at the whiteboard stage and became unmaintainable in practice. Generic Go frameworks that try to abstract over different backends' conventions almost always end up this way.
+**Actual disposition:** `internal/adapters/` relocates with the server-side database layer when postgres/SM-Online work moves to a separate repo. The top-level `internal/database/` package as a whole — including its `postgres/` and `sqlite/` subdirectories, its crud files, its service layer, and its adapter framework dependency (`internal/adapters/`) — is a cohesive cluster that travels together. Not delete, **relocate**.
 
-**Fix (planned, not yet applied):** delete the entire `internal/adapters/` tree. Do not carry into v2. Do not try to rebuild a lighter version — per-driver (`database/sqlite/adapters/`) is the settled pattern and works.
+**What's still true about it:** the author's label of "abandoned as too complicated to maintain and use correctly" applies. It's the archetypal example of over-generalizing, and the per-driver pattern (`internal/database/sqlite/adapters/`) that the client side uses is the shape v2 should adopt for any backend-specific adapter work. But "abandoned for client-side use" ≠ "unused in the repo" — it's still running on the server-layer side.
 
-**Severity rationale:** low because it doesn't break anything, it's just dead weight. But impact on analysis is real: it caused confusion during this session's review and would cause the same confusion for anyone else reading the repo.
+**Important distinction to preserve:** do not conflate `internal/adapters/` (the generic reflection framework, server-layer) with `internal/database/sqlite/adapters/` (the simple per-driver adapter, client-layer, just simplified this session). They solve similar problems with different approaches. The client uses the simple one; the server uses the generic one. They do not share code.
 
-**Disposition:** v1 cleanup commit.
+**Wrinkle:** `internal/adif/slice_test.go` imports `internal/adapters` as a test dependency. When `internal/adapters` relocates out of this repo, that test file will need updating — either by providing a local test helper or by removing the specific test that uses the dependency. Minor TODO for the eventual relocation commit.
 
-**Lesson for v2:** see `lessons-for-v2.md` → "Build specific, not generic."
+**Lesson for v2:** see `lessons-for-v2.md` → "Build specific, not generic." The lesson about the framework's design trap still stands, even though the framework itself isn't dead in the current repo.
 
 ### WSJT-X UDP listener is dead code — **LOW (but architecturally significant)**
 
@@ -205,6 +215,23 @@ Recommended: option 1 (delete) for minimal cleanup. Option 2 only if there's a r
 **Impact:** any refactor (including the adapters simplification and the hardcoded-forwarder fix listed above) is riskier than it should be because silent behavior drift won't show up in CI. The fixes landed this session (hamnut, atomicity) also lack regression tests.
 
 **Disposition:** before any substantial refactor work, add characterization tests for the critical QSO lifecycle paths. See `lessons-for-v2.md` → "Characterization tests before refactoring." At minimum: one test per failure mode of the enrichment-never-blocks-logging invariant; one test per failure mode of the one-fails-all-fail invariant; end-to-end round-trip tests for `NewQso → LogQso → FetchQso` and `UpdateQso → FetchQso`.
+
+### Architecture-map gap: top-level `internal/database/` package missing — **LOW (doc bug)**
+
+**Location:** `docs/v1-analysis/architecture-map.md`.
+
+**Description:** The architecture map I drafted earlier in this session describes `internal/database/sqlite/` and `internal/database/postgres/` as the database layer, but it completely omits the top-level `internal/database/` package itself. That top-level package is a separate, distinct layer with its own `service.go`, `interface.go`, `migrations.go`, `validation.go`, `helpers.go`, `adapters_cache.go`, `README.md`, and a set of `crud_*.go` files (`crud_user.go`, `crud_apikey.go`, `crud_qso.go`, `crud_logbook.go`, `crud_contacted_station.go`, `crud_country.go`, `crud_sessions.go`). It imports `internal/adapters` (the generic framework) and contains its own `postgres/` and `sqlite/` subdirectories.
+
+The presence of `crud_user.go` and `crud_apikey.go` strongly suggests this is the **server-side database layer** for the planned SM-Online server — user management and API key authentication are server concerns, not client concerns. The client-side database layer is `internal/database/sqlite/` (one level deeper into the sqlite subdir from the top-level), which is a completely separate package.
+
+**Impact:** an incomplete architecture map that misrepresents the relationships between database-related packages. Specifically, it means:
+- The "internal/adapters is dead code" classification in this inventory (now corrected above) was a consequence of not seeing the top-level `internal/database/` package.
+- Any future analysis of the client-vs-server split will need to account for this top-level package.
+- The map's "Internal library packages → Database layer" section needs an entry for the top-level `internal/database/` package, clearly distinguished from the client-side `internal/database/sqlite/`.
+
+**Disposition:** update `architecture-map.md` to add a section on the top-level `internal/database/` package. Describe it as "server-side database layer, scheduled for relocation to the SM-Online server repo along with `internal/adapters/`." Preserve the existing entries for `internal/database/sqlite/` (client-side) and `internal/database/postgres/` (currently part of the top-level cluster, same relocation fate).
+
+**Severity rationale:** low because it's a documentation gap, not a code issue. But it caused a real analysis error (the "delete internal/adapters" classification) that had to be corrected, so it's worth fixing to prevent similar errors in future sessions.
 
 ### Dead doc files in `docs/` — **LOW**
 

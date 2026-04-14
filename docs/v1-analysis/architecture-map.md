@@ -106,7 +106,16 @@ Grouped by concern. Some groupings are guesses — the user should correct mispl
 
 ### Database layer
 
-- **`internal/database/sqlite`** — the active local DB package. sqlboiler-based. Contains:
+**Important distinction (corrected 2026-04-14):** there are **two separate database layers** in this repo, and it took a second pass through the import graph to see them clearly.
+
+- **Client-side database layer:** `internal/database/sqlite/` (one level deeper into the sqlite subdir). This is what the Wails apps use. Covered in detail below.
+- **Server-side database layer:** the **top-level** `internal/database/` package (not a subdirectory — the files living directly in `internal/database/*.go`). This is a completely separate package with its own service, CRUD files, migrations, and backends. Intended for the future SM-Online server. Covered after the client-side section.
+
+The two layers do not share code beyond `internal/types`.
+
+#### Client-side (`internal/database/sqlite/`)
+
+- **`internal/database/sqlite`** — the active local DB package used by all three Wails apps. sqlboiler-based. Contains:
   - `service.go` — the `Service` struct, DB handle management, `BeginTxContext`, etc.
   - `api.go` — high-level non-context methods (background-context wrappers)
   - `api_context.go` — the real implementations, all with `ctx` parameters. Contains the `*WithContext` methods and (newly added 2026-04-14) the `*Tx` transactional variants (`InsertQsoTx`, `UpdateQsoTx`, `InsertQsoUploadTx`) used by the atomic `LogQso`/`UpdateQso` fix.
@@ -120,7 +129,21 @@ Grouped by concern. Some groupings are guesses — the user should correct mispl
   - `meta/` — unverified
   - `example/` — unverified
   - `validation.go`, `consts.go`, `enums.go`, `error_msgs.go`, `internal.go`, `helpers.go`, `migrations.go`, `sqlboiler.toml`
-- **`internal/database/postgres`** — **diverged from sqlite, under reconsideration.** Originally intended for the future public SM-Online server (`cmd/server`). Should probably move to that server's repo when it exists (see `design-decisions-log.md`).
+#### Server-side (`internal/database/` top-level, including `postgres/`)
+
+- **`internal/database/`** (top-level package, not a subdirectory) — **server-side database layer**, intended for the future SM-Online server (`cmd/server`). A completely separate package from `internal/database/sqlite/`. Contains:
+  - `service.go`, `interface.go`, `migrations.go`, `validation.go`, `helpers.go`, `internal.go`, `consts.go`, `adapters_cache.go`, `README.md` — the service layer and supporting infrastructure
+  - CRUD files shaped for a server-style data model: `crud_user.go`, `crud_apikey.go`, `crud_qso.go`, `crud_logbook.go`, `crud_contacted_station.go`, `crud_country.go`, `crud_sessions.go`. The presence of `crud_user.go` and `crud_apikey.go` is the strongest indicator that this is server-side — user and API-key management are not client concerns.
+  - **Imports `internal/adapters`** — the generic reflection-based adapter framework — specifically from `service.go`, `helpers.go`, and `crud_user.go`. This is the active consumer of `internal/adapters`, not any postgres subdirectory directly. Several other CRUD files have commented-out imports waiting to come back (`crud_apikey.go`, `crud_country.go`, `adapters_cache.go`).
+  - Has its own `postgres/` and `sqlite/` subdirectories (see below) for backend-specific implementations.
+
+- **`internal/database/postgres/`** — postgres-specific sqlboiler models, migrations, service, and examples. Does NOT directly import `internal/adapters` itself; the import happens at the parent (`internal/database/`) level. Part of the server-side cluster and relocates with it.
+
+- **No sqlite subdirectory collision:** the filesystem layout has one sqlite directory at `internal/database/sqlite/`. That directory *is* the client-side sqlite package described earlier in this section. The top-level server-side `internal/database/` package and the client-side `internal/database/sqlite/` package share a parent directory on disk but are two distinct Go packages (normal Go package semantics — subdirectories are separate packages). There is no naming ambiguity to resolve. (An earlier draft of this document flagged this as a possible collision; the concern was mine, not the code's.)
+
+**Disposition:** the entire server-side cluster (top-level `internal/database/` + its `postgres/` subdirectory + `internal/adapters/` + likely `internal/adapters/converters/common/`, `internal/adapters/converters/sqlite/`, `internal/adapters/converters/postgres/`) **relocates together** to the future SM-Online server repo when that server becomes real. Not dead code — server-layer infrastructure awaiting its home. See `bug-inventory.md` → "Architecture-map gap: top-level `internal/database/` package missing" for how this was surfaced.
+
+**Earlier mislabeling note:** this document's first draft treated `internal/adapters` as dead code, and the client-side `internal/database/sqlite/` as the only database package. Both were wrong in the same way — the server-side layer was invisible to a pass that was focused on the client-side logging app. Corrected 2026-04-14 during refactor of the client-side adapter.
 
 ### Generic adapter framework (ABANDONED — for deletion)
 

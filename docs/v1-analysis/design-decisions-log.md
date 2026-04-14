@@ -42,7 +42,7 @@
 
 **Action:** keep. Simplify the sqlite version (see next entry). Delete the generic version (see separate entry).
 
-### `types.QsoAdditionalData` intermediate struct in sqlite adapter — **CHANGE (delete and simplify)**
+### `types.QsoAdditionalData` intermediate struct in sqlite adapter — **CHANGED (deleted and simplified, 2026-04-14)**
 
 **Decision:** Delete `types.QsoAdditionalData` entirely. Simplify the sqlite adapter to use `json.Marshal(qso)` for the blob and explicit column assignments for the promoted fields.
 
@@ -53,19 +53,25 @@
 
 The fix is straightforward: let `json.Marshal(qso)` produce the blob directly. Promoted fields end up duplicated (once in the column, once in the blob — trivial cost, ~50 bytes per row), and on read the column values overlay the blob values (columns are authoritative). New ADIF fields become one-line changes as the invariant requires. Adapter code collapses from ~200 lines across both files to ~50 lines.
 
-**Action:** fixable in v1 as a cleanup commit (one of the "code-level, not architecture-level" issues). If v2 is rebuilt from scratch, use the simplified shape from day one and never build `QsoAdditionalData`.
+**Action (completed 2026-04-14):** deleted `internal/types/additional_data.go`, simplified `QsoTypeToModel` / `ContactedStationTypeToModel` to use `json.Marshal` directly, simplified `ContactedStationModelToType` to unmarshal into `types.ContactedStation` and overlay columns. Added doc comments on all four adapter functions explaining the pattern. Adapter code for Qso/ContactedStation collapsed from ~200 lines to ~60. Existing `adapters_test.go` serves as the regression guard — all tests pass unchanged.
 
-**Related:** `bug-inventory.md` → "QsoAdditionalData"; `lessons-for-v2.md` → "Mostly-blob + promoted fields pattern," "Asymmetric round-trips are a clue."
+**Related:** `bug-inventory.md` → "QsoAdditionalData intermediate struct" (marked FIXED); `lessons-for-v2.md` → "Mostly-blob + promoted fields pattern," "Asymmetric round-trips are a clue."
 
-### `internal/adapters/` — generic reflection-based adapter framework — **DELETE**
+### `internal/adapters/` — generic reflection-based adapter framework — **RELOCATE (with server-side database layer)**
 
-**Decision:** Delete `internal/adapters/` including the whole `converters/{common,sqlite,postgres}/` subtree.
+**Decision:** Relocate `internal/adapters/` (including the whole `converters/{common,sqlite,postgres}/` subtree) to the future SM-Online server repo, along with the rest of the server-side database layer.
 
-**Rationale:** This was a sophisticated reflection-based struct-to-struct adapter framework with field converters, tag-based ignores, and `AdditionalData` handling. 30+ test files, builder API, generics. Author has confirmed it is "abandoned as too complicated to maintain and use correctly." It represents the generic-across-backends approach that was explicitly rejected in favor of the per-driver pattern.
+**Correction (2026-04-14):** this entry previously read "DELETE" based on the incorrect assumption that `internal/adapters` was dead code. Import-graph verification showed it is actually an active dependency of the top-level `internal/database/` package (the server-side database layer with `crud_user.go`, `crud_apikey.go`, etc.). It is not dead code in the client repo — it is server-layer infrastructure. "Delete" was wrong; "relocate with the server layer" is correct.
 
-**Action:** delete from the repo as part of v1 cleanup. Do not carry into v2. Do not conflate with `internal/database/sqlite/adapters/`, which is a different and much smaller package that is being kept.
+**Rationale:** `internal/adapters/` is a sophisticated reflection-based struct-to-struct adapter framework (30+ test files, builder API, generics, field converters, tag-based ignores, `AdditionalData` handling). Author labeled it "abandoned as too complicated to maintain and use correctly" — but that label applies to its use on the client side. On the server side, the top-level `internal/database/` package actively imports it. When the server work moves to its own repo, the framework moves with it.
 
-**Related:** `bug-inventory.md` → "internal/adapters generic framework"; `lessons-for-v2.md` → "Build specific, not generic."
+**Do not conflate with `internal/database/sqlite/adapters/`**, which is a different and much smaller per-driver package that the client side uses. They solve similar problems with different approaches; they do not share code.
+
+**Action:** no immediate action. Tag for relocation along with the top-level `internal/database/` package when the SM-Online server becomes real. Until then, leave in place. Do not delete, do not refactor — the server work will want it as-is (or choose a different adapter approach at that time, which is a server-design question).
+
+**Wrinkle:** `internal/adif/slice_test.go` imports `internal/adapters` as a test dependency. When `internal/adapters` eventually relocates, that test needs updating.
+
+**Related:** `bug-inventory.md` → "internal/adapters generic framework" (reclassified); `lessons-for-v2.md` → "Build specific, not generic" (the lesson still applies as a design principle, even though the framework isn't being deleted).
 
 ### `internal/database/postgres` — **RELOCATE (stage for future server repo)**
 

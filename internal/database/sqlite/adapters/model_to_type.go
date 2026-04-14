@@ -9,43 +9,30 @@ import (
 	"github.com/goccy/go-json"
 )
 
+// ContactedStationModelToType converts a sqlite row back to types.ContactedStation.
+//
+// The additional_data blob is shaped like types.ContactedStation (written by
+// ContactedStationTypeToModel as json.Marshal(station)), so we unmarshal it
+// directly into the target struct and then overlay the promoted column values,
+// which are authoritative.
 func ContactedStationModelToType(model *models.ContactedStation) (types.ContactedStation, error) {
 	const op errors.Op = "sqlite.adapters.ContactedStationModelToType"
 	if model == nil {
 		return types.ContactedStation{}, errors.New(op).Msg(errMsgNilModel)
 	}
 
-	data := types.ContactedStationAdditionalData{}
-	if err := json.Unmarshal(model.AdditionalData, &data); err != nil {
-		return types.ContactedStation{}, err
+	station := types.ContactedStation{}
+	if err := json.Unmarshal(model.AdditionalData, &station); err != nil {
+		return types.ContactedStation{}, errors.New(op).Err(err)
 	}
 
-	return types.ContactedStation{
-		CSID:         model.ID,
-		Name:         model.Name,
-		Call:         model.Call,
-		Country:      model.Country,
-		Address:      data.Address,
-		Age:          data.Age,
-		Altitude:     data.Altitude,
-		Cont:         data.Cont,
-		ContactedOp:  data.ContactedOp,
-		CQZ:          data.CQZ,
-		DXCC:         data.DXCC,
-		Email:        data.Email,
-		EqCall:       data.EqCall,
-		Gridsquare:   data.Gridsquare,
-		Iota:         data.Iota,
-		IotaIslandId: data.IotaIslandId,
-		ITUZ:         data.ITUZ,
-		Lat:          data.Lat,
-		Lon:          data.Lon,
-		QTH:          data.QTH,
-		Sig:          data.Sig,
-		SigInfo:      data.SigInfo,
-		Web:          data.Web,
-		WwffRef:      data.WwffRef,
-	}, nil
+	// Overlay promoted columns — authoritative over anything in the blob.
+	station.CSID = model.ID
+	station.Name = model.Name
+	station.Call = model.Call
+	station.Country = model.Country
+
+	return station, nil
 }
 
 func CountryModelToType(model *models.Country) (types.Country, error) {
@@ -65,32 +52,41 @@ func CountryModelToType(model *models.Country) (types.Country, error) {
 	}, nil
 }
 
+// QsoModelToType converts a sqlite row back to types.Qso.
+//
+// The additional_data blob is shaped like types.Qso (written by QsoTypeToModel
+// as json.Marshal(qso)), so we unmarshal it directly into the target struct
+// and then overlay the promoted column values, which are authoritative. Any
+// disagreement between the blob's copy of a promoted field and the column's
+// copy is resolved in favor of the column — so if the blob is ever stale, the
+// next write rewrites it correctly.
 func QsoModelToType(model *models.Qso) (types.Qso, error) {
 	const op errors.Op = "sqlite.adapters.QsoModelToType"
 	if model == nil {
 		return types.Qso{}, errors.New(op).Msg(errMsgNilModel)
 	}
 
-	typesQso := types.Qso{}
-	if err := json.Unmarshal(model.AdditionalData, &typesQso); err != nil {
-		return typesQso, err
+	qso := types.Qso{}
+	if err := json.Unmarshal(model.AdditionalData, &qso); err != nil {
+		return qso, errors.New(op).Err(err)
 	}
 
-	typesQso.ID = model.ID
-	typesQso.QsoDetails.Band = model.Band
-	typesQso.QsoDetails.Freq = strconv.FormatInt(model.Freq, 10)
-	typesQso.QsoDetails.Mode = model.Mode
-	typesQso.QsoDetails.QsoDate = model.QsoDate
-	typesQso.QsoDetails.RstRcvd = model.RstRcvd
-	typesQso.QsoDetails.RstSent = model.RstSent
-	typesQso.QsoDetails.TimeOff = model.TimeOff
-	typesQso.QsoDetails.TimeOn = model.TimeOn
-	typesQso.LogbookID = model.LogbookID
-	typesQso.SessionID = model.SessionID
-	typesQso.ContactedStation.Country = model.Country
-	typesQso.ContactedStation.Call = model.Call
+	// Overlay promoted columns — authoritative over anything in the blob.
+	qso.ID = model.ID
+	qso.LogbookID = model.LogbookID
+	qso.SessionID = model.SessionID
+	qso.ContactedStation.Call = model.Call
+	qso.ContactedStation.Country = model.Country
+	qso.QsoDetails.Band = model.Band
+	qso.QsoDetails.Mode = model.Mode
+	qso.QsoDetails.Freq = strconv.FormatInt(model.Freq, 10)
+	qso.QsoDetails.QsoDate = model.QsoDate
+	qso.QsoDetails.TimeOn = model.TimeOn
+	qso.QsoDetails.TimeOff = model.TimeOff
+	qso.QsoDetails.RstSent = model.RstSent
+	qso.QsoDetails.RstRcvd = model.RstRcvd
 
-	return typesQso, nil
+	return qso, nil
 }
 
 func LogbookModelToType(model *models.Logbook) (types.Logbook, error) {

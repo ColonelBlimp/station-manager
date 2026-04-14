@@ -11,6 +11,19 @@ import (
 	"github.com/goccy/go-json"
 )
 
+// QsoTypeToModel converts a types.Qso to the sqlite row shape.
+//
+// Design: types.Qso follows the ADIF specification. Fields that are queryable,
+// indexed, or frequently filtered on (call, band, mode, freq, etc.) are promoted
+// to real columns; every other field travels through the additional_data JSON
+// blob via json.Marshal of the whole struct. Promoted fields are duplicated
+// (once in the column, once in the blob) — the duplication is trivial (~50 bytes
+// per row) and the column is authoritative on read (see QsoModelToType, which
+// overlays the column values over the unmarshaled blob).
+//
+// Consequence: adding a new ADIF field to types.Qso is a one-line change. This
+// adapter does not need to be updated unless you want to promote the new field
+// to a real column (a deliberate indexing decision, not a spec-tracking one).
 func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 	const op errors.Op = "sqlite.adapters.QsoTypeToModel"
 
@@ -19,116 +32,32 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 		return models.Qso{}, errors.New(op).Err(err).Msg("failed to parse frequency")
 	}
 
-	// Normalize date and time fields
+	// Normalize date and time fields for the promoted columns.
 	date := qso.QsoDetails.QsoDate
 	if strings.Contains(date, "-") {
 		date = strings.ReplaceAll(date, "-", "")
 	}
-
 	timeOn := qso.QsoDetails.TimeOn
 	if strings.Contains(timeOn, ":") {
 		timeOn = strings.ReplaceAll(timeOn, ":", "")
 	}
-
 	timeOff := qso.QsoDetails.TimeOff
 	if strings.Contains(timeOff, ":") {
 		timeOff = strings.ReplaceAll(timeOff, ":", "")
 	}
 
-	additionalData := types.QsoAdditionalData{
-		// Upload status fields
-		SmQsoUploadDate:     qso.SmQsoUploadDate,
-		SmQsoUploadStatus:   qso.SmQsoUploadStatus,
-		SmFwrdByEmailDate:   qso.SmFwrdByEmailDate,
-		SmFwrdByEmailStatus: qso.SmFwrdByEmailStatus,
-		QrzComUploadDate:    qso.QrzComUploadDate,
-		QrzComUploadStatus:  qso.QrzComUploadStatus,
-
-		// QsoDetails fields
-		AIndex:      qso.QsoDetails.AIndex,
-		AntPath:     qso.QsoDetails.AntPath,
-		BandRx:      qso.QsoDetails.BandRx,
-		Comment:     qso.QsoDetails.Comment,
-		ContestId:   qso.QsoDetails.ContestId,
-		Distance:    qso.QsoDetails.Distance,
-		FreqRx:      qso.QsoDetails.FreqRx,
-		Submode:     qso.QsoDetails.Submode,
-		Notes:       qso.QsoDetails.Notes,
-		QsoDateOff:  qso.QsoDetails.QsoDateOff,
-		QsoRandom:   qso.QsoDetails.QsoRandom,
-		QsoComplete: qso.QsoDetails.QsoComplete,
-		RxPwr:       qso.QsoDetails.RxPwr,
-		SRX:         qso.QsoDetails.SRX,
-		STX:         qso.QsoDetails.STX,
-		TxPwr:       qso.QsoDetails.TxPwr,
-		Rig:         qso.QsoDetails.Rig,
-
-		// ContactedStation fields
-		Address:      qso.ContactedStation.Address,
-		Age:          qso.ContactedStation.Age,
-		Altitude:     qso.ContactedStation.Altitude,
-		Cont:         qso.ContactedStation.Cont,
-		ContactedOp:  qso.ContactedStation.ContactedOp,
-		CQZ:          qso.ContactedStation.CQZ,
-		DXCC:         qso.ContactedStation.DXCC,
-		Email:        qso.ContactedStation.Email,
-		EqCall:       qso.ContactedStation.EqCall,
-		Gridsquare:   qso.ContactedStation.Gridsquare,
-		Iota:         qso.ContactedStation.Iota,
-		IotaIslandId: qso.ContactedStation.IotaIslandId,
-		ITUZ:         qso.ContactedStation.ITUZ,
-		Lat:          qso.ContactedStation.Lat,
-		Lon:          qso.ContactedStation.Lon,
-		Name:         qso.ContactedStation.Name,
-		QTH:          qso.ContactedStation.QTH,
-		Sig:          qso.ContactedStation.Sig,
-		SigInfo:      qso.ContactedStation.SigInfo,
-		Web:          qso.ContactedStation.Web,
-		WwffRef:      qso.ContactedStation.WwffRef,
-
-		// LoggingStation fields
-		AntennaAzimuth:  qso.LoggingStation.AntennaAzimuth,
-		MyAltitude:      qso.LoggingStation.MyAltitude,
-		MyAntenna:       qso.LoggingStation.MyAntenna,
-		MyCity:          qso.LoggingStation.MyCity,
-		MyCountry:       qso.LoggingStation.MyCountry,
-		MyCqZone:        qso.LoggingStation.MyCqZone,
-		MyDXCC:          qso.LoggingStation.MyDXCC,
-		MyGridsquare:    qso.LoggingStation.MyGridsquare,
-		MyIota:          qso.LoggingStation.MyIota,
-		MyIotaIslandID:  qso.LoggingStation.MyIotaIslandID,
-		MyITUZone:       qso.LoggingStation.MyITUZone,
-		MyLat:           qso.LoggingStation.MyLat,
-		MyLon:           qso.LoggingStation.MyLon,
-		MyMorseKeyInfo:  qso.LoggingStation.MyMorseKeyInfo,
-		MyMorseKeyType:  qso.LoggingStation.MyMorseKeyType,
-		MyName:          qso.LoggingStation.MyName,
-		MyPostalCode:    qso.LoggingStation.MyPostalCode,
-		MyRig:           qso.LoggingStation.MyRig,
-		MySig:           qso.LoggingStation.MySig,
-		MySigInfo:       qso.LoggingStation.MySigInfo,
-		MyStreet:        qso.LoggingStation.MyStreet,
-		MyWwffRef:       qso.LoggingStation.MyWwffRef,
-		Operator:        qso.LoggingStation.Operator,
-		OwnerCallsign:   qso.LoggingStation.OwnerCallsign,
-		StationCallsign: qso.LoggingStation.StationCallsign,
-	}
-
-	jsonData, err := json.Marshal(additionalData)
+	jsonData, err := json.Marshal(qso)
 	if err != nil {
-		return models.Qso{}, err
+		return models.Qso{}, errors.New(op).Err(err).Msg("failed to marshal qso to JSON")
 	}
-
 	if len(jsonData) == 0 {
 		jsonData = []byte("{}")
 	}
 
 	return models.Qso{
-		ID:        qso.ID,
-		LogbookID: qso.LogbookID,
-		SessionID: qso.SessionID,
-
-		// Field name matches between types and models
+		ID:             qso.ID,
+		LogbookID:      qso.LogbookID,
+		SessionID:      qso.SessionID,
 		Call:           qso.ContactedStation.Call,
 		Band:           qso.QsoDetails.Band,
 		Mode:           qso.QsoDetails.Mode,
@@ -143,35 +72,16 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 	}, nil
 }
 
+// ContactedStationTypeToModel converts a types.ContactedStation to the sqlite row shape.
+// Same pattern as QsoTypeToModel: promoted columns + json.Marshal of the whole struct
+// for the blob. See QsoTypeToModel for the design rationale.
 func ContactedStationTypeToModel(station types.ContactedStation) (models.ContactedStation, error) {
-	additionalData := types.ContactedStationAdditionalData{
-		Address:      station.Address,
-		Age:          station.Age,
-		Altitude:     station.Altitude,
-		Cont:         station.Cont,
-		ContactedOp:  station.ContactedOp,
-		CQZ:          station.CQZ,
-		DXCC:         station.DXCC,
-		Email:        station.Email,
-		EqCall:       station.EqCall,
-		Gridsquare:   station.Gridsquare,
-		Iota:         station.Iota,
-		IotaIslandId: station.IotaIslandId,
-		ITUZ:         station.ITUZ,
-		Lat:          station.Lat,
-		Lon:          station.Lon,
-		QTH:          station.QTH,
-		Sig:          station.Sig,
-		SigInfo:      station.SigInfo,
-		Web:          station.Web,
-		WwffRef:      station.WwffRef,
-	}
+	const op errors.Op = "sqlite.adapters.ContactedStationTypeToModel"
 
-	jsonData, err := json.Marshal(additionalData)
+	jsonData, err := json.Marshal(station)
 	if err != nil {
-		return models.ContactedStation{}, err
+		return models.ContactedStation{}, errors.New(op).Err(err).Msg("failed to marshal contacted_station to JSON")
 	}
-
 	if len(jsonData) == 0 {
 		jsonData = []byte("{}")
 	}
