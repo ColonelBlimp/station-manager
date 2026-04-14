@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"context"
 	"net/url"
 	"strconv"
 	"strings"
@@ -159,6 +160,11 @@ func (s *Service) NewQso(callsign string) (*types.Qso, error) {
 }
 
 // LogQso inserts a new QSO into the database.
+//
+// Atomicity: the QSO row and its upload-queue row(s) are written in a single transaction —
+// one fails, all fail. Cache writes for ContactedStation and Country happen outside the
+// transaction and are best-effort: they never block logging (enrichment-never-blocks-logging
+// invariant) because the cache is rebuildable from hamnut.com on next access.
 func (s *Service) LogQso(qso types.Qso) error {
 	const op errors.Op = "facade.Service.LogQso"
 	if !s.initialized.Load() {
@@ -186,39 +192,65 @@ func (s *Service) LogQso(qso types.Qso) error {
 	qso.Distance = distance
 	qso.LoggingStation.AntennaAzimuth = direction
 
-	// Insert the QSO into the database
-	qsoId, err := s.DatabaseService.InsertQso(qso)
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tx, cancel, err := s.DatabaseService.BeginTxContext(ctx)
+	if err != nil {
+		err = errors.New(op).Err(err)
+		s.LoggerService.ErrorWith().Err(err).Msg("Failed to begin transaction for LogQso.")
+		return errors.Root(err)
+	}
+	defer cancel()
+
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	qsoId, err := s.DatabaseService.InsertQsoTx(ctx, tx, qso)
 	if err != nil {
 		err = errors.New(op).Err(err)
 		s.LoggerService.ErrorWith().Err(err).Msg("Failed to insert QSO into database.")
 		return errors.Root(err)
 	}
-	s.LoggerService.InfoWith().Str("callsign", qso.Call).Msg("QSO logged successfully")
 
-	// Check if the contacted station exists in the database and insert or update it if it does not
-	// match the current QSO's contacted station. The ContactedStation object is loaded when
-	// the QSO is initialized.
-	if err = s.insertOrUpdateContactedStation(qso.ContactedStation); err != nil {
-		// This is a serious error, but not fatal, so log and carry on.
-		s.LoggerService.ErrorWith().Err(err).Msg("Failed to insert or update contacted station.")
-	}
-
-	if err = s.insertOrUpdateCountry(qso.CountryDetails); err != nil {
-		// This is a serious error, but not fatal, so log and carry on.
-		s.LoggerService.ErrorWith().Err(err).Msg("Failed to insert or update country.")
-	}
-
-	// The last operation is to add an upload record.
-	if err = s.DatabaseService.InsertQsoUpload(qsoId, action.Insert, upload.OnlineServiceQRZ); err != nil {
+	// TODO: iterate configured forwarders instead of hardcoding QRZ. Fan-out design
+	// is deferred pending the forwarder-config redesign.
+	if err = s.DatabaseService.InsertQsoUploadTx(ctx, tx, qsoId, action.Insert, upload.OnlineServiceQRZ); err != nil {
 		err = errors.New(op).Err(err)
 		s.LoggerService.ErrorWith().Err(err).Msg("Failed to insert QSO upload into database.")
 		return errors.Root(err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		err = errors.New(op).Err(err)
+		s.LoggerService.ErrorWith().Err(err).Msg("Failed to commit LogQso transaction.")
+		return errors.Root(err)
+	}
+	committed = true
+	s.LoggerService.InfoWith().Str("callsign", qso.Call).Msg("QSO logged successfully")
+
+	// Cache writes are best-effort: the QSO is already durably logged, and the cache tables
+	// are rebuildable from hamnut.com on next access. Failure here must not propagate.
+	if err = s.insertOrUpdateContactedStation(qso.ContactedStation); err != nil {
+		s.LoggerService.ErrorWith().Err(err).Msg("Failed to update contacted station cache (non-fatal).")
+	}
+	if err = s.insertOrUpdateCountry(qso.CountryDetails); err != nil {
+		s.LoggerService.ErrorWith().Err(err).Msg("Failed to update country cache (non-fatal).")
 	}
 
 	return nil
 }
 
 // UpdateQso updates an existing QSO record in the database and logs the operation; validates input and service state.
+//
+// Atomicity: the QSO row update and its upload-queue row are written in a single transaction —
+// one fails, all fail.
 func (s *Service) UpdateQso(qso types.Qso) error {
 	const op errors.Op = "facade.Service.UpdateQso"
 	if !s.initialized.Load() {
@@ -254,17 +286,45 @@ func (s *Service) UpdateQso(qso types.Qso) error {
 		}
 	}
 
-	if err := s.DatabaseService.UpdateQso(qso); err != nil {
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tx, cancel, err := s.DatabaseService.BeginTxContext(ctx)
+	if err != nil {
+		err = errors.New(op).Err(err)
+		s.LoggerService.ErrorWith().Err(err).Msg("Failed to begin transaction for UpdateQso.")
+		return errors.Root(err)
+	}
+	defer cancel()
+
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err = s.DatabaseService.UpdateQsoTx(ctx, tx, qso); err != nil {
 		err = errors.New(op).Err(err)
 		s.LoggerService.ErrorWith().Err(err).Msg("Failed to update QSO in database.")
 		return errors.Root(err)
 	}
 
-	if err := s.DatabaseService.InsertQsoUpload(qso.ID, action.Update, upload.OnlineServiceQRZ); err != nil {
+	// TODO: iterate configured forwarders instead of hardcoding QRZ.
+	if err = s.DatabaseService.InsertQsoUploadTx(ctx, tx, qso.ID, action.Update, upload.OnlineServiceQRZ); err != nil {
 		err = errors.New(op).Err(err)
 		s.LoggerService.ErrorWith().Err(err).Msg("Failed to insert QSO upload into database.")
 		return errors.Root(err)
 	}
+
+	if err = tx.Commit(); err != nil {
+		err = errors.New(op).Err(err)
+		s.LoggerService.ErrorWith().Err(err).Msg("Failed to commit UpdateQso transaction.")
+		return errors.Root(err)
+	}
+	committed = true
 
 	return nil
 }

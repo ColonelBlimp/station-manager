@@ -137,7 +137,13 @@ func (s *Service) initCountrySection(callsign string) (types.Country, error) {
 	// Look up the country online.
 	country, err := s.HamnutLookupService.Lookup(parsedCallsign)
 	if err != nil {
-		return dbCountry, errors.New(op).Err(err)
+		// Enrichment never blocks logging: fall back to whatever we have.
+		s.LoggerService.WarnWith().Err(err).Msgf("Hamnut lookup failed for %s, using fallback", parsedCallsign)
+		if isNewEntity {
+			return types.Country{Name: "Unknown"}, nil
+		}
+		// Local row is possibly stale; don't flag IsNewEntity since we couldn't confirm it.
+		return dbCountry, nil
 	}
 
 	if isNewEntity {

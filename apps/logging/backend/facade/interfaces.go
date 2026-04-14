@@ -34,6 +34,12 @@ type DatabaseServiceInterface interface {
 	IsContestDuplicateByLogbookID(logbookId int64, callsign string, band string) (bool, error)
 	SoftDeleteSessionByID(sessionID int64) error
 	BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFunc, error)
+
+	// Transactional variants — run against a caller-supplied *sql.Tx.
+	// The caller is responsible for Begin/Commit/Rollback.
+	InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (int64, error)
+	UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) error
+	InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action interface{}, service interface{}) error
 }
 
 // ConfigServiceInterface defines the interface for configuration operations.

@@ -1086,3 +1086,82 @@ func (s *Service) UpdateQsoUploadStatusWithContext(ctx context.Context, id int64
 
 	return nil
 }
+
+/**********************************************************************************************************************
+ * Transactional variants — used by callers that compose multiple writes in a single transaction.
+ * These methods run against the caller-supplied *sql.Tx and do not open their own handle or timeout.
+ * The caller is responsible for Begin/Commit/Rollback.
+ **********************************************************************************************************************/
+
+func (s *Service) InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (int64, error) {
+	const op errors.Op = "sqlite.Service.InsertQsoTx"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+	if tx == nil {
+		return 0, errors.New(op).Msg("tx is nil")
+	}
+
+	model, err := adapters.QsoTypeToModel(qso)
+	if err != nil {
+		return 0, errors.New(op).Err(err)
+	}
+
+	if err = model.Insert(ctx, tx, boil.Infer()); err != nil {
+		return 0, errors.New(op).Err(err)
+	}
+
+	return model.ID, nil
+}
+
+func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) error {
+	const op errors.Op = "sqlite.Service.UpdateQsoTx"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if tx == nil {
+		return errors.New(op).Msg("tx is nil")
+	}
+	if qso.ID < 1 {
+		return errors.New(op).Msgf("QSO ID is invalid: %d", qso.ID)
+	}
+
+	model, err := adapters.QsoTypeToModel(qso)
+	if err != nil {
+		return errors.New(op).Err(err)
+	}
+
+	model.ModifiedAt = null.TimeFrom(time.Now())
+
+	if _, err = model.Update(ctx, tx, boil.Infer()); err != nil {
+		return errors.New(op).Err(err)
+	}
+
+	return nil
+}
+
+func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action action.Action, service upload.OnlineService) error {
+	const op errors.Op = "sqlite.Service.InsertQsoUploadTx"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if tx == nil {
+		return errors.New(op).Msg("tx is nil")
+	}
+	if qsoId < 1 {
+		return errors.New(op).Msgf("QSO ID is invalid: %d", qsoId)
+	}
+
+	model := models.QsoUpload{
+		QsoID:   qsoId,
+		Service: service.String(),
+		Action:  action.String(),
+		Status:  status.Pending.String(),
+	}
+
+	if err := model.Insert(ctx, tx, boil.Infer()); err != nil {
+		return errors.New(op).Err(err).Msg("Inserting new QSO upload failed.")
+	}
+
+	return nil
+}

@@ -34,6 +34,9 @@ type MockDatabaseService struct {
 	IsContestDuplicateByLogbookIDFunc   func(logbookId int64, callsign string, band string) (bool, error)
 	SoftDeleteSessionByIDFunc           func(sessionID int64) error
 	BeginTxContextFunc                  func(ctx context.Context) (*sql.Tx, context.CancelFunc, error)
+	InsertQsoTxFunc                     func(ctx context.Context, tx *sql.Tx, qso types.Qso) (int64, error)
+	UpdateQsoTxFunc                     func(ctx context.Context, tx *sql.Tx, qso types.Qso) error
+	InsertQsoUploadTxFunc               func(ctx context.Context, tx *sql.Tx, qsoId int64, action interface{}, service interface{}) error
 }
 
 func (m *MockDatabaseService) Open() error {
@@ -202,6 +205,27 @@ func (m *MockDatabaseService) BeginTxContext(ctx context.Context) (*sql.Tx, cont
 		return m.BeginTxContextFunc(ctx)
 	}
 	return nil, func() {}, nil
+}
+
+func (m *MockDatabaseService) InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (int64, error) {
+	if m.InsertQsoTxFunc != nil {
+		return m.InsertQsoTxFunc(ctx, tx, qso)
+	}
+	return 1, nil
+}
+
+func (m *MockDatabaseService) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) error {
+	if m.UpdateQsoTxFunc != nil {
+		return m.UpdateQsoTxFunc(ctx, tx, qso)
+	}
+	return nil
+}
+
+func (m *MockDatabaseService) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action interface{}, service interface{}) error {
+	if m.InsertQsoUploadTxFunc != nil {
+		return m.InsertQsoUploadTxFunc(ctx, tx, qsoId, action, service)
+	}
+	return nil
 }
 
 // MockConfigService is a mock implementation of ConfigServiceInterface for testing.
