@@ -1,8 +1,8 @@
 # Station Manager — Design Decisions Log
 
-**Status:** v1 analysis document, 2026-04-14. A catalog of every major shape decision identified during the v1 analysis, with an explicit verdict: **keep** / **change** / **delete** / **undecided**. Each entry has an action (if any) and rationale.
+**Status:** v1 analysis document, 2026-04-14 (updated same day after the v2 rewrite decision). A catalog of every major shape decision identified during the v1 analysis, with an explicit verdict: **keep** / **change** / **delete** / **undecided**. Each entry has an action (if any) and rationale.
 
-**Purpose:** Before v2 starts (or before v1 refactor lands, whichever path is chosen), every major design decision needs an explicit judgment. This document makes those judgments and the reasoning behind them visible.
+**Purpose:** Before v2 starts, every major design decision needs an explicit judgment. This document makes those judgments and the reasoning behind them visible. As of 2026-04-14 the v2 rewrite path has been chosen (see "Execution path" entry below); the keep/change/delete verdicts below are the inputs to v2 design.
 
 **How to read this document:** entries are grouped by subsystem. Verdicts mean:
 - **Keep** — the decision is correct as-is; preserve verbatim in v2 or leave alone in v1.
@@ -212,6 +212,31 @@ V2's plan is different: WSJT-X (or whatever FT8 code is used) logs QSOs via the 
 **Rationale:** the API key handling exists in the shared internal library but most of its logic belongs to either the client side (store the full key, send with requests) or the server side (hash/validate/revoke), and the two sides share almost nothing beyond a key-format spec.
 
 **Action:** defer until v2 client/server split is designed. Probable eventual outcome: two independent `apikey` packages (one per side), sharing only a constants file for the key format. Don't try to solve this now.
+
+## Execution path
+
+### v2 rewrite vs. v1 incremental refactor — **DECIDED: v2 rewrite (2026-04-14)**
+
+**Decision:** Build v2 from scratch on `main`, using the v1 analysis in `docs/v1-analysis/` as the spec. Preserve v1 as a frozen reference point (`v1.0.0` tag) and a maintenance branch (`v1`) for daily use and bug fixes while v2 is under construction.
+
+**Rationale:**
+
+1. **Roughly half the problem list is architecture-level**, not code-level — see `lessons-for-v2.md` → "Code-level vs architecture-level problems." The daemon/client split, the serial/CAT bridge as a separate process, the multi-destination forwarder fan-out redesign, and multi-rig as a first-class assumption all require substantial restructuring. Evolving v1 into that shape in-place is ~80% of the work a rewrite is anyway, just spread across phased commits that are harder to reason about than a clean build.
+2. **The usual refactor-safety-net argument doesn't apply.** Station Manager is a personal/learning project with a single user (the author). There is no user base to protect, no migration window to coordinate, no shipped-product constraints. The "rewrite is risky because it might break things for users" case doesn't hit.
+3. **The analysis gives v2 an unusually concrete spec.** The "interminable 90%" failure mode is the main risk of any rewrite, and the usual cause is starting from vibes rather than a clear design brief. The five analysis documents (architecture-map, bug-inventory, design-decisions-log, invariants, lessons-for-v2) are the brief. The "what v1 got right" list and the "carry forward verbatim" list in `lessons-for-v2.md` explicitly name what v2 preserves; the "delete, don't carry forward" list and "patterns to avoid" sections name what it skips.
+4. **v1 is cleaner than it was at session start** thanks to three code-level fixes that already landed (hamnut, atomicity, adapter simplification) and the v1.0.0 cleanup. v1 is usable as both archived reference and day-to-day operational software.
+
+**Action (completed 2026-04-14):**
+- Three bug fixes committed to v1 (commits `5288983`, `1ae516d`).
+- FT8 experiment tree removed from v1 (commit `0e158ec`).
+- `pre-ft8-removal` tag created at commit `1ae516d` to preserve the FT8 tree in history.
+- `v1.0.0` tag created at commit `0e158ec` as the frozen reference point.
+- `v1` branch created at `v1.0.0` for ongoing bug fixes while the user runs v1 day-to-day.
+- `main` is now free for v2 construction work.
+
+**Main risk to mitigate:** scope creep producing the "interminable 90%" outcome. Mitigation is narrow initial scope: the first v2 milestone should be "daemon + `apps/logging` thin client + QRZ forwarder working end-to-end," with `apps/logbook`, `apps/config`, the serial/CAT bridge, the `wsjtx-bridge` client, and multi-destination forwarder fan-out all deferred to later milestones.
+
+**Related:** `lessons-for-v2.md` → "Code-level vs architecture-level problems," "Concrete v2 scope (provisional)"; `project_sm_restructure` memory note; `project_sm_v2_analysis` memory note.
 
 ---
 

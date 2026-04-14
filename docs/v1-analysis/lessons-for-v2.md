@@ -223,6 +223,8 @@ This is a classification lens that emerged during the analysis and is worth nami
 
 **Current read:** roughly half the issues are code-level (the six fixable items above) and half are architecture-level (the daemon split, the bridge, the forwarder fan-out, multi-rig). That's enough architectural churn to justify v2 *if* the other factors (personal project, single user, learning-oriented, willing to run v1 from a tag while v2 is built) align — which they do for this specific situation. For a shipping product with users to protect, the answer would lean toward refactoring. For this project, v2 is defensible.
 
+**Decision (2026-04-14):** v2 rewrite chosen. v1 tagged at `v1.0.0` (commit `0e158ec`), `v1` branch created for daily operational use and bug fixes, main is where v2 construction begins. See `design-decisions-log.md` → "v2 rewrite vs. v1 incremental refactor" for the full reasoning.
+
 ---
 
 ## Meta-lessons about the work itself
@@ -292,14 +294,14 @@ This section is more speculative than the rest of the document — it's a first 
 - `internal/logging`, `internal/utils`, `internal/config`, `internal/email`
 - `internal/database/sqlite` (core package, with the simplified adapter)
 
-**Delete, don't carry forward:**
-- `internal/adapters` (the generic reflection framework)
-- `internal/database/postgres` (relocate to future server repo)
-- `internal/ft8`, `internal/ft8x`
-- `internal/listeners/handlers/wsjtx` (and probably `internal/listeners` framework itself)
-- `internal/audio` (if no non-FT8 consumer — verify)
-- `cmd/ft8`, `cmd/ft8test`
-- FT8-related docs in `docs/`
+**Delete, don't carry forward** (status after v1.0.0 cleanup on 2026-04-14):
+- ~~`internal/ft8`, `internal/ft8x`~~ — ✅ deleted 2026-04-14 (commit `0e158ec`)
+- ~~`cmd/ft8`, `cmd/ft8test`~~ — ✅ deleted 2026-04-14 (commit `0e158ec`)
+- ~~FT8-related docs in `docs/`~~ — ✅ deleted 2026-04-14 (commit `0e158ec`)
+- `internal/listeners/handlers/wsjtx` (and probably `internal/listeners` framework itself) — still pending
+- `internal/audio` (if no non-FT8 consumer — verify) — still pending, reverse-dependency check needed now that FT8 is gone
+- `internal/adapters` (the generic reflection framework) — RECLASSIFIED as "relocate with server-side DB cluster," not delete. See `bug-inventory.md` → "internal/adapters generic framework."
+- `internal/database/postgres` and top-level `internal/database/` — relocate to future server repo, not delete.
 
 **New in v2:**
 - The daemon binary itself (`smd` or similar). Owns SQLite, HTTP+JSON/ADIF server over Unix socket, SSE event stream.

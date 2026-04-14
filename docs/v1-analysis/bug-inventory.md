@@ -1,10 +1,10 @@
 # Station Manager — Bug Inventory
 
-**Status:** v1 analysis document, 2026-04-14. A catalog of known issues in v1, both fixed and unresolved. Each entry includes severity, current state, and disposition.
+**Status:** v1 analysis document, 2026-04-14 (updated same day after the v1.0.0 cleanup). A catalog of known issues in v1, both fixed and unresolved. Each entry includes severity, current state, and disposition.
 
-**Purpose:** make the "known-wrong" list visible. Two uses:
-1. Refactor path: a concrete list of things to fix.
-2. Rewrite path: a concrete list of things v2 must not recreate, plus lessons about *why* each one happened.
+**Purpose:** make the "known-wrong" list visible. v2 is now the chosen path (decided 2026-04-14), so this list is primarily "things v2 must not recreate, plus lessons about *why* each one happened." Entries that were fixed in v1 before the v1.0.0 tag are retained here for the historical record and because the lessons behind them carry forward.
+
+> **Update 2026-04-14 (post-v1.0.0):** three cleanup items landed in commit `0e158ec` (tagged `v1.0.0`): the FT8 code/CLIs, the FT8/legacy docs, and the README/audio-README/.gitignore FT8 references. Entries marked FIXED with that date range refer to this cleanup.
 
 **Severity scale:**
 - **Critical** — silently corrupts data, blocks core workflows, or violates safety requirements.
@@ -164,15 +164,13 @@ Recommended: option 1 (delete) for minimal cleanup. Option 2 only if there's a r
 
 **Related:** `architecture-map.md` → observation #9; `design-decisions-log.md` → "WSJT-X listener deletion."
 
-### `internal/ft8/` and `internal/ft8x/` — **LOW (slated for removal)**
+### ~~`internal/ft8/` and `internal/ft8x/`~~ — **FIXED (2026-04-14, commit `0e158ec`)**
 
-**Location:** `internal/ft8/` with subpackages `codec`, `dsp`, `message`, `service`, `synth`, `timing`; plus `internal/ft8x/`.
+**Location (now deleted):** `internal/ft8/` with subpackages `codec`, `dsp`, `message`, `service`, `synth`, `timing`; plus `internal/ft8x/`.
 
-**Description:** The FT8 implementation work that spawned the separate `go-ft8` and `goft8x` projects in other repos. Per the author, FT8 has been extracted and these directories should be removed.
+**Description:** The FT8 implementation work that spawned the separate `go-ft8` and `goft8x` projects in other repos. Per the author, FT8 has been extracted and these directories are no longer wanted in the client repo.
 
-**Impact:** dead weight in the monorepo. Not harmful, just confusing for anyone reading the repo expecting FT8 to be part of Station Manager.
-
-**Disposition:** delete both directories. Also delete `cmd/ft8/` and `cmd/ft8test/` (which depend on them), remove them from `go.work`, and archive or delete the FT8-related docs in `docs/` (`whats-next.md`, `ft8-library-assessment.md`, `ft8-ft4-implementation-research.md`, `ft8-callsign-constants-verification.md`, `ft8-decoder-testing-handoff.md`). The docs may be better moved to the FT8 repo rather than deleted outright.
+**Fix applied:** deleted `internal/ft8/`, `internal/ft8x/`, `cmd/ft8/`, `cmd/ft8test/`. Updated `go.work` to drop `./cmd/ft8` and `./cmd/ft8test` (7 modules → 5). Removed the FT8/FT4 section from `README.md`, replaced the `internal/ft8/synth` example in `internal/audio/README.md` with a generic caller-supplied samples example, and dropped FT8 patterns from `.gitignore`. The experiment tree prior to the cleanup is preserved under the `pre-ft8-removal` tag at commit `1ae516d` so anything useful can be recovered from history. Build + vet pass clean across all five remaining workspace modules.
 
 ### `internal/audio/` — **LOW (investigation needed)**
 
@@ -233,8 +231,8 @@ The presence of `crud_user.go` and `crud_apikey.go` strongly suggests this is th
 
 **Severity rationale:** low because it's a documentation gap, not a code issue. But it caused a real analysis error (the "delete internal/adapters" classification) that had to be corrected, so it's worth fixing to prevent similar errors in future sessions.
 
-### Dead doc files in `docs/` — **LOW**
+### ~~Dead doc files in `docs/`~~ — **FIXED (2026-04-14, commit `0e158ec`)**
 
-**Description:** Several FT8-related docs (`whats-next.md`, `ft8-library-assessment.md`, `ft8-ft4-implementation-research.md`, `ft8-callsign-constants-verification.md`, `ft8-decoder-testing-handoff.md`) describe work that has been extracted to separate repos. They have no ongoing relevance to this repo.
+**Description:** Several FT8-related docs and legacy handoff/setup docs had no ongoing relevance.
 
-**Disposition:** move to the FT8 repo if still relevant there, delete otherwise. Same cleanup commit as the FT8 code deletion.
+**Fix applied:** deleted all top-level `.md` files from `docs/` — the FT8 set (`whats-next.md`, `ft8-library-assessment.md`, `ft8-ft4-implementation-research.md`, `ft8-callsign-constants-verification.md`, `ft8-decoder-testing-handoff.md`) plus legacy `context-handoff.md` and `usb-serial-setup.md`. Only `docs/v1-analysis/` and the new `docs/session-handoff.md` remain in `docs/`.

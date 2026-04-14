@@ -1,8 +1,10 @@
 # Station Manager v1 — Architecture Map
 
-**Status:** First draft, 2026-04-14. Part of the v1 analysis effort preceding the v2 rewrite / refactor decision (see `project_sm_v2_analysis` memory note). This document is meant to be reviewed and corrected by the author — places where I'm inferring or guessing are marked clearly with `?` or "unverified" so they can be fixed up.
+**Status:** First draft 2026-04-14, updated same day after the v2 rewrite decision and v1.0.0 cleanup. Part of the v1 analysis effort that led to the v2 rewrite decision (see `project_sm_v2_analysis` memory note).
 
-**Purpose:** Ground truth for "what v1 actually is." Every other analysis document (`design-decisions-log.md`, `bug-inventory.md`, `external-surfaces.md`, `lessons-for-v2.md`) builds on this one. If something isn't mapped here accurately, the downstream documents will be wrong.
+**Purpose:** Ground truth for "what v1 actually is." Every other analysis document (`design-decisions-log.md`, `bug-inventory.md`, `lessons-for-v2.md`) builds on this one.
+
+> **Update 2026-04-14 (post-v1.0.0):** The FT8 code (`internal/ft8`, `internal/ft8x`), the FT8 CLIs (`cmd/ft8`, `cmd/ft8test`), and the top-level FT8/legacy docs have all been removed as part of the v1.0.0 cleanup commit `0e158ec`. The experiment tree prior to cleanup is preserved under the `pre-ft8-removal` tag at commit `1ae516d`. Sections below that described FT8 packages as "being removed" now describe them as removed. The workspace now has **five** Go modules, not seven.
 
 ---
 
@@ -20,17 +22,15 @@ The monorepo layout is **already partially decomposed** — the three Wails apps
 
 ## Go modules (from `go.work`)
 
-Seven modules are active in the workspace:
+Five modules are active in the workspace (post-v1.0.0 cleanup — `cmd/ft8` and `cmd/ft8test` were removed):
 
-| Module path | Purpose (inferred) | Maturity (inferred) |
+| Module path | Purpose | Maturity |
 |---|---|---|
 | `./apps/config` | Wails app — configuration editor / settings UI | Thin (facade has 3 files) |
-| `./apps/logbook` | Wails app — logbook management (CRUD over logbooks?) | Medium (facade has 7 files) |
+| `./apps/logbook` | Wails app — logbook management | Medium (facade has 7 files) |
 | `./apps/logging` | Wails app — **the main logging application** (QSO entry, contesting, forwarding, CAT status display) | Mature (facade has 20 files, substantial test coverage) |
-| `./cmd/ft8` | FT8 CLI tool (?) | Unverified |
-| `./cmd/ft8test` | FT8 test/diagnostics CLI | Unverified |
-| `./cmd/importer` | ADIF bulk importer CLI (?) | Unverified |
-| `./internal` | Shared library packages, consumed by all apps and CLIs | Large, ~30 packages |
+| `./cmd/importer` | ADIF bulk importer CLI | — |
+| `./internal` | Shared library packages, consumed by all apps and CLIs | Large, ~25 packages (post-FT8-removal) |
 
 **Not in `go.work`:**
 - `cmd/server/` — empty directory, only a `.gitkeep`. Reserved for future work, probably the planned SM-Online server module that isn't written yet.
@@ -91,9 +91,11 @@ Each `backend/facade` package implements the **Facade design pattern** (per `app
 
 ### Active (in `go.work`)
 
-- **`cmd/ft8`** — FT8 test package / CLI. Part of the in-tree FT8 work that has since been extracted to a separate repo. **Slated for removal** along with the rest of `internal/ft8*` (see Cleanup targets).
-- **`cmd/ft8test`** — Separate from `cmd/ft8`. Originally a test harness but retained as a standalone binary because its CLI has **diagnostic value** for future FT8 work. Goes away with the rest of the FT8 code in this repo.
 - **`cmd/importer`** — **ADIF-only** bulk importer for populating the database from historical logs exported from other software. No other formats currently supported.
+
+### Removed 2026-04-14 (preserved in `pre-ft8-removal` tag)
+
+- `cmd/ft8` and `cmd/ft8test` — FT8 CLIs. Depended on `internal/ft8` which was extracted to a separate repo. Removed as part of the v1.0.0 cleanup commit.
 
 ### Reserved but empty
 
@@ -217,11 +219,9 @@ The two layers do not share code beyond `internal/types`.
 - **`internal/email`** — email sending (used by `ForwardSessionQsosByEmail` — operator can email their session log as ADIF).
 - **`internal/apikey`** — API key handling. Per the `database/sqlite/README.md`, this is for authenticating against the future SM-Online server: the client stores the full key (on the logbook row), the server would store only a hash/HMAC. **Status: undecided — blocked on v2 client/server split design.** The package currently lives in the shared internal library but may need to split or move. The client needs key storage/retrieval/sending; the server needs hashing/validation/revocation. Minimal shared Go code in practice — probably two independent `apikey` packages eventually, one per side, sharing only a key-format constants file. Revisit during v2 design of the SM-Online server.
 
-### FT8 (being removed)
+### FT8 — REMOVED 2026-04-14 (commit `0e158ec`)
 
-- **`internal/ft8`** with subpackages `codec`, `dsp`, `message`, `service`, `synth`, `timing` — the FT8 implementation. This work spawned the `go-ft8` / `goft8x` projects that now live in separate repos.
-- **`internal/ft8x`** — parallel FT8 experiment, also slated for removal.
-- **Status: confirmed, remove.** FT8 is no longer a concern for this repo. Both directories (plus `cmd/ft8`, `cmd/ft8test`, and the FT8-related docs in `docs/`) are to be deleted as part of v1 cleanup or dropped entirely from the v2 starting point. See **Cleanup targets** below.
+`internal/ft8` (subpackages: `codec`, `dsp`, `message`, `service`, `synth`, `timing`) and `internal/ft8x` were removed in the v1.0.0 cleanup commit, along with `cmd/ft8`, `cmd/ft8test`, the top-level FT8 docs, and the FT8 sections of `README.md` and `internal/audio/README.md`. The experiment tree is preserved under the `pre-ft8-removal` tag at commit `1ae516d` and can be recovered from history if anything in it turns out to be useful. FT8 work continues in separate `go-ft8` / `goft8x` repos.
 
 ## Web side
 
@@ -318,41 +318,30 @@ cmd/ft8, cmd/ft8test
 
 10. **The three-concerns split across `apps/logging` / `apps/logbook` / `apps/config` is deliberate and clean, and must carry forward into v2.** Logging is real-time QSO entry; logbook is management and historical editing; config is settings. Different workflows, different latency profiles, different UI focus. The v2 daemon needs to serve *all three* concerns over its API, which means the daemon's API surface is wider than my earlier sketches suggested — the logging-centric sketch I produced earlier was missing the entire logbook-management surface (create/delete/rename/export logbooks, batch QSO edits, etc.). Worth a dedicated API-shape exercise before v2 design starts.
 
-## Cleanup targets (from author answers, 2026-04-14)
+## Cleanup targets — status after v1.0.0
 
-Consolidated list of code and documentation slated for removal based on the answers in the Q&A section below. This belongs in `bug-inventory.md` as the "what v1 carries that v2 doesn't need" section. **This list describes *intent*, not completed deletions** — the actual removals are a separate cleanup task.
+### Done 2026-04-14 (commit `0e158ec`)
 
-### Definitely delete
+- ✅ **`internal/ft8/`** (all subpackages) — removed.
+- ✅ **`internal/ft8x/`** — removed.
+- ✅ **`cmd/ft8/`**, **`cmd/ft8test/`** — removed, `go.work` updated from 7 to 5 modules.
+- ✅ **FT8/legacy docs** — `whats-next.md`, `ft8-library-assessment.md`, `ft8-ft4-implementation-research.md`, `ft8-callsign-constants-verification.md`, `ft8-decoder-testing-handoff.md`, `context-handoff.md`, `usb-serial-setup.md` all removed. Only `docs/v1-analysis/` remains in `docs/`.
+- ✅ **README.md** FT8/FT4 section removed; `internal/audio/README.md` FT8 synth example genericized; `.gitignore` FT8 patterns removed.
 
-- **`internal/adapters/`** including the whole `converters/{common,sqlite,postgres}/` subtree. The generic reflection-based adapter framework that was "abandoned as too complicated." 30+ test files, builder API, generics. Do not conflate with `internal/database/sqlite/adapters/` which is a different package and is being kept.
-- **`internal/ft8/`** (all subpackages: `codec`, `dsp`, `message`, `service`, `synth`, `timing`). FT8 is extracted to a separate repo.
-- **`internal/ft8x/`** — parallel FT8 experiment.
-- **`cmd/ft8/`** — FT8 test binary. Remove from `go.work`.
-- **`cmd/ft8test/`** — FT8 diagnostic CLI. Remove from `go.work`.
-- **`internal/listeners/handlers/wsjtx/`** — non-functional UDP listener that never ran in a working configuration. V2's ingest approach is different (a separate bridge client talking to the daemon API).
-- **FT8-related documentation** in `docs/`:
-  - `docs/whats-next.md` (FT8 DSP pipeline roadmap)
-  - `docs/ft8-library-assessment.md`
-  - `docs/ft8-ft4-implementation-research.md`
-  - `docs/ft8-callsign-constants-verification.md`
-  - `docs/ft8-decoder-testing-handoff.md`
-  - Consider whether any of these should instead move to the extracted FT8 repo rather than being deleted outright.
-- **`apps/logging/backend/facade/mocks_test.go`** (or the interfaces it mocks) — the `DatabaseServiceInterface` and its mocks are unused scaffolding that doesn't match the concrete `*sqlite.Service`. Clean up the interface-vs-concrete mismatch.
+### Still to do (deferred or reclassified)
 
-### Investigate before deleting
-
-- **`internal/audio/`** — was part of the FT8 pipeline per `docs/whats-next.md` ("item 1: Audio I/O ✅ complete"). If its *only* consumer was FT8, it goes. If it has other users (voice keyer? SSB monitoring? general WAV handling?), it stays. Needs a reverse-dependency check before the cleanup commit.
-- **`internal/listeners/`** (the framework itself, not just the wsjtx handler) — if wsjtx was the only handler using this infrastructure, the framework may also be dead. Verify no other consumers before removing. If there are other handlers planned or present that I missed, the framework stays.
-- **`internal/database/postgres/`** — the diverged postgres package. User has confirmed generic-across-backends adapters is dead; postgres was intended for the future SM-Online server. Probably moves to *that* repo (whenever `cmd/server` becomes real), rather than being deleted entirely. For now, mark as "stage for relocation" rather than "delete."
+- **`internal/adapters/`** — RECLASSIFIED. Previously listed as "dead code, delete." Import-graph verification showed it is an active dependency of the server-side `internal/database/` package. Correct disposition: **relocate with the server-side database cluster** when the SM-Online server work moves to its own repo. Do not delete.
+- **`internal/listeners/handlers/wsjtx/`** — non-functional UDP listener. Still pending deletion. Unblocks deletion of `internal/listeners/` framework itself if wsjtx is the only handler (verify during cleanup).
+- **`apps/logging/backend/facade/mocks_test.go`** + `DatabaseServiceInterface` — the interface-vs-concrete mismatch. Still pending cleanup.
+- **`internal/audio/`** — investigate before deleting. Unclear whether it has any non-FT8 consumer now that FT8 is removed. Do a reverse-dependency check next session.
+- **`internal/database/postgres/`** and top-level `internal/database/` and `internal/adapters/` — all stage for relocation to the future SM-Online server repo when that exists. Not delete; stage.
 
 ### Keep (explicitly confirmed)
 
-Listed here for completeness so they don't get caught in a cleanup sweep by accident:
-
-- `internal/iocdi/` — home-grown DI, keep.
-- `internal/database/sqlite/adapters/` — simple per-driver mapping, keep (distinct from `internal/adapters/`).
+- `internal/iocdi/` — home-grown DI.
+- `internal/database/sqlite/adapters/` — simple per-driver mapping (distinct from `internal/adapters/`).
 - `internal/enums/*` — per-concept split is intentional.
-- `cmd/server/` and `cmd/tools/` — empty reservations for future work, keep the slots.
+- `cmd/server/` and `cmd/tools/` — empty reservations for future work.
 
 ## Open questions requiring the author
 
