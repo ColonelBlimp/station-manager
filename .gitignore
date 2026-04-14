@@ -5,6 +5,3 @@ internal/logging/config.json
 !build/logs/.gitkeep
 build/*
 .task
-
-/internal/ft8/dsp/testdata/*.wav
-#/internal/ft8x

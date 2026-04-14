@@ -145,16 +145,15 @@ is called. Only one file can play at a time; concurrent calls return
 The device sample rate and channel count are read from the WAV file header, so
 `Config.SampleRate` and `Config.Channels` are ignored for playback.
 
-### PlaySamples — in-memory audio (FT8 TX path)
+### PlaySamples — in-memory audio
 
 ```go
 import (
     "github.com/ColonelBlimp/station-manager/internal/audio"
-    "github.com/ColonelBlimp/station-manager/internal/ft8/synth"
 )
 
-// Synthesise FT8 audio waveform in memory.
-samples := synth.Synthesize(symbols, 1500.0) // 151 680 float32 samples at 12 kHz
+// samples is a []float32 produced by a caller-side synthesiser.
+var samples []float32
 
 p := audio.NewPlayback(audio.DefaultConfig())
 defer p.Close()
@@ -238,8 +237,7 @@ p := audio.NewPlayback(cfg)
 ## WAV support
 
 `PlayFile` reads WAV files internally. The exported `ReadWAV` function is also
-available for other packages that need to decode WAV files (e.g., the FT8 DSP
-pipeline tests).
+available for other packages that need to decode WAV files.
 
 ```go
 wav, err := audio.ReadWAV("recording.wav")
