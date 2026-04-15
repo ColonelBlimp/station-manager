@@ -24,95 +24,94 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-16 end-of-session)
+## Current state (as of 2026-04-18 end-of-session)
 
-### main is now at the v2 milestone-1 layout (working tree, uncommitted)
+### Both carry-forward library packages are in their v2 final state
 
-Session 3 executed the restructure commit that reshapes main into the v2 milestone-1 layout specified in `docs/v2-design/structure.md`. The working tree has ~720 file changes — mostly deletions — and the v2 tree builds clean, vets clean, and tests clean across every package. **Not yet committed.** The commit is waiting on user review and any last artifact-cleanup decisions.
+Sessions 5 and 6 completed full code reviews and fix passes on
+`internal/errors` and `internal/logging` — the two most load-bearing
+carry-forward library packages. Both are now audited, comprehensively
+tested, cleanly documented, and in a state that should not need
+revisiting except for genuine bug fixes. The full review documents
+with their resolution annotations live in `docs/reviews/`.
 
-Shape of main's tree after session 3:
+### v2 daemon HTTP API design is captured in `docs/v2-design/api.md`
+
+Session 5 produced the HTTP API design brief: a ~270-line document
+covering consumer enumeration, dedupe key shape, async forward
+lifecycle, pagination model, SSE event vocabulary, and error response
+envelope. Every load-bearing cross-cutting decision for the daemon's
+HTTP API surface is in that document, with explicit "design brief,
+not spec" framing and an anti-waterfall commitment that every
+decision is revisable against running code.
+
+### HTTP framework decision settled: stdlib `net/http`
+
+Session 5 settled the framework question: **stdlib `net/http`**, with
+`github.com/go-chi/chi/v5` as an optional small router if path-parameter
+routing gets awkward. No Gin, no Fiber, no Echo. Rationale: Unix socket
+support is native and clean in stdlib; the API surface is ~15-20
+endpoints; testing via `httptest` is first-class; middleware composes
+universally; the project convention (CLAUDE.md) favors lightweight
+home-grown or stdlib choices over heavy framework dependencies; and
+frame performance is irrelevant at personal-operator scale. Documented
+in `docs/v2-design/api.md` Section 2.
+
+### v2 milestone-1 tree shape (unchanged since session 3)
 
 ```
 station-manager/
 ├── cmd/
-│   ├── smd/       # daemon binary entry point (NEW, stub)
+│   ├── smd/       # daemon binary entry point (stub)
 │   ├── server/    # reserved slot (empty)
 │   └── tools/     # reserved slot (empty)
 ├── internal/
 │   ├── adif/            # carry-forward (ADIF parser)
 │   ├── api/             # NEW — HTTP handler layer stub
 │   ├── config/          # REWRITTEN fresh (minimal daemon config)
-│   ├── database/sqlite/ # carry-forward (with session-1 simplified adapters/)
+│   ├── database/sqlite/ # carry-forward (with simplified adapters/)
 │   ├── enums/           # carry-forward
-│   ├── errors/          # carry-forward
+│   ├── errors/          # AUDITED and reviewed (session 5 — v2 final state)
 │   ├── iocdi/           # carry-forward
-│   ├── logging/         # carry-forward
+│   ├── logging/         # AUDITED and reviewed (sessions 5-6 — v2 final state)
 │   ├── qsoservice/      # NEW — daemon domain layer stub
 │   ├── types/           # PRUNED — QSO core only
 │   └── utils/           # carry-forward
 ├── docs/
 │   ├── v1-analysis/
 │   ├── v2-design/
+│   ├── reviews/
 │   └── session-handoff.md
 ├── CLAUDE.md, DEVELOPING.md, README.md, RELEASING.md
+├── Taskfile.yml
 ├── go.mod, go.sum
 ```
 
-**Single root `go.mod`** at module path `github.com/ColonelBlimp/station-manager`. No `go.work`, no per-package `go.mod` files. Import paths for carry-forward packages are unchanged because `internal/` was already at the right relative depth under the v1 `internal/` module — the module-root move was semantically transparent to the import strings.
+**Single root `go.mod`** at module path `github.com/ColonelBlimp/station-manager`.
+Import paths for carry-forward packages are unchanged because `internal/`
+was already at the right relative depth under the v1 `internal/` module.
 
-**11 internal packages** (was ~25 in v1). Everything in this tree is either a deliberate carry-forward (subject to code-review-as-we-go during v2 construction) or a v2 rewrite stub.
+**11 internal packages.** Everything in this tree is either a deliberate
+carry-forward (two of which — errors and logging — have been formally
+audited and brought to v2 final state) or a v2 rewrite stub.
 
-### v2 structural decisions are captured in `docs/v2-design/structure.md`
+### Repo state — all commits pushed to origin
 
-Session 2 produced the first durable v2 design document, and session 3 executed it. Before touching any v2 code, read `docs/v2-design/structure.md` — it captures the repo layout, module boundaries, release model, and milestone-1 vs milestone-2 target trees with rationale for every decision. Any future session that questions "why is v2 shaped this way" should find the answer there.
+**Tags** (pushed): `pre-ft8-removal` at `1ae516d`, `v1.0.0` at `0e158ec`.
 
-### The v2 rewrite decision is made (unchanged from 2026-04-14)
+**Branches** (pushed):
+- `main` at `af46e43` — session 6 end-of-session state. 10 commits ahead
+  of where session 2 left origin (`5ef55c1`).
+- `v1` at `0e158ec` — unchanged since session 2. The day-to-day working
+  branch for ham radio operations.
 
-After completing a collaborative v1 analysis effort (five documents in
-`docs/v1-analysis/`), the author chose the **v2 rewrite** path over
-incremental refactoring. Rationale and the full entry are in
-`docs/v1-analysis/design-decisions-log.md` → "v2 rewrite vs. v1 incremental
-refactor." The short version:
+**Working tree:** clean. Nothing uncommitted, nothing stashed.
 
-- Roughly half the problem list is architecture-level (daemon split, serial
-  bridge, forwarder fan-out, multi-rig), which is ~80% of a rewrite's work
-  anyway, just spread across phased commits that are harder to reason about.
-- Personal/learning project with a single user — the refactor-safety-net
-  argument doesn't apply.
-- The analysis docs give v2 an unusually concrete spec, mitigating the
-  "interminable 90%" failure mode.
-- v1 can be preserved as a frozen reference and a working maintenance branch
-  while v2 is built on main.
+### Workspace shape — one Go module, no `go.work`
 
-### Repo state
-
-**Tags:**
-- `pre-ft8-removal` at commit `1ae516d` — snapshot of the tree including the
-  FT8 experiments (`internal/ft8`, `internal/ft8x`, `cmd/ft8`, `cmd/ft8test`).
-  If anything in that experiment code turns out to be useful later, it's
-  recoverable from here.
-- `v1.0.0` at commit `0e158ec` — the frozen v1 reference point. Post-cleanup:
-  FT8 code removed, legacy docs removed, workspace down to 5 modules.
-
-**Branches:**
-- `main` — at `v1.0.0` as of 2026-04-14. This is where v2 construction work
-  happens going forward. It will diverge from `v1` as soon as v2 work starts.
-- `v1` — created at `v1.0.0`. This is what the author checks out to build
-  and run Station Manager for day-to-day ham radio operations. Any bug
-  surfaced while running v1 should be fixed on this branch, then the fix can
-  inform v2 design but does not need to be merged anywhere.
-
-**Pushed to origin 2026-04-15** (session 2): `main` (including the session-1 doc-update commit `66e0af3`), the `v1` branch (tracking `origin/v1`), and both tags (`v1.0.0`, `pre-ft8-removal`) are all on origin. Nothing v1-related is local-only anymore.
-
-### Workspace shape (post-cleanup)
-
-Five Go modules in `go.work`:
-
-- `./apps/config` — Wails app, configuration editor
-- `./apps/logbook` — Wails app, logbook management and historical QSO editing
-- `./apps/logging` — Wails app, the main real-time QSO entry application
-- `./cmd/importer` — ADIF bulk importer CLI
-- `./internal` — shared library packages (~25 packages after FT8 removal)
+Five binaries are expected in the eventual v2 tree (cmd/smd plus four
+reserved or future slots), but currently only `cmd/smd` exists as a
+stub. No `go.work` file. Single root `go.mod`.
 
 Empty reservation slots (kept on purpose, not dead code):
 - `cmd/server/` — for a future SM-Online public server binary
@@ -120,506 +119,594 @@ Empty reservation slots (kept on purpose, not dead code):
 
 ### Documentation inventory
 
-**`docs/v1-analysis/`** — the durable v1 analysis record (the spec source for
-v2 design work):
-- `architecture-map.md` — what v1 actually contains, module by module
+**`docs/v1-analysis/`** — the durable v1 analysis record (the spec source
+for v2 design work):
+- `architecture-map.md` — what v1 actually contained, module by module
 - `bug-inventory.md` — known issues, fixed and outstanding
 - `design-decisions-log.md` — keep/change/delete verdicts on every major
-  shape decision, plus the "v2 rewrite vs. refactor" execution-path entry
-- `invariants.md` — load-bearing rules that must carry forward
-- `lessons-for-v2.md` — synthesis document: patterns to apply, patterns to
-  avoid, what v1 got right, provisional v2 scope
-
-The **synthesis document** (`lessons-for-v2.md`) is the single most
-important read before any v2 design choice.
+  shape decision, including the "v2 rewrite vs. refactor" execution-path
+  entry
+- `invariants.md` — load-bearing rules. Master rule: "Nothing blocks
+  logging a QSO, except catastrophic local failure." See also
+  "Enrichment never blocks logging" and "Forwarding never blocks
+  logging" as specific applications.
+- `lessons-for-v2.md` — synthesis document: patterns to apply, patterns
+  to avoid, what v1 got right, provisional v2 scope
 
 **`docs/v2-design/`** — v2 design decisions as they're made. Scope is
 deliberately kept separate from `v1-analysis/`:
-- `structure.md` (2026-04-15) — repo layout, module boundaries, shared
-  `internal/`, source-vs-wire compatibility axes, milestone 1 and 2 target
-  trees, migration-from-main plan. Six decisions with full rationale.
-- Future siblings: `api.md` (HTTP API shape), `milestones.md` (milestone
-  plans), `db-layer.md` (ORM/generator choice), `forwarding.md` (fan-out
-  redesign), etc. — added as the corresponding design questions get answered.
+- `structure.md` — repo layout, module boundaries, shared `internal/`,
+  source-vs-wire compatibility axes, milestone 1 and 2 target trees
+- `api.md` — the HTTP API design brief (new in session 5). Contains all
+  six cross-cutting decisions plus a provisional endpoint sketch.
+- Future siblings: `milestones.md`, `db-layer.md`, `forwarding.md`,
+  `multi-rig.md`, `logging-app-resilience.md` — added as their
+  corresponding design questions get answered.
+
+**`docs/reviews/`** — code review documents (new tree created in session
+5). Each review is a thorough audit of a package with categorized
+findings, action plan, and resolution annotation once fixes land:
+- `internal-errors.md` — session 5. **All 11 findings applied and
+  resolved.** Preserved as historical record.
+- `internal-logging.md` — sessions 5 (review written) through 6
+  (all fixes applied). **All 14 findings actioned** (12 fixed, 1
+  accepted as-is with documentation, 1 noted and deferred).
 
 **`docs/session-handoff.md`** — this file. Rolling cross-session state.
 
 **Memory files** (`~/.claude/projects/.../memory/`) — durable facts and
-invariants used across all sessions. Key entries: `project_sm_restructure`,
-`project_sm_v2_analysis`, `project_sm_design_invariants`, `project_sm_overview`,
-`user_profile`, `feedback_design_patterns`, `project_sm_serial_bridge`,
-`project_ft8_library`. See `MEMORY.md` index for the full list.
+invariants used across all sessions. Session 5 added two new feedback
+memories: `feedback_one_question_at_a_time` (ask one design question
+per turn in exploratory conversations) and `feedback_no_magic_numbers`
+(runtime values come from config, code constants only as fallback
+defaults). See `MEMORY.md` index for the full list.
 
 ---
 
-## What happened in the 2026-04-16 session (session 3)
+## What happened in the 2026-04-18 session (session 6)
 
 ### Goals set for the session
 
-- Execute the restructure commit that reshapes main into the v2 milestone-1 layout, per `docs/v2-design/structure.md`.
-- Verify the resulting tree builds, vets, and tests clean before committing.
-- Do not start writing daemon code yet — structure first, implementation next.
+- Apply the findings from `docs/reviews/internal-logging.md` to bring
+  the logging package to its v2 final state before daemon code starts.
+- Verify that the shutdown race fix (finding 4.1) actually resolves
+  the v1 CI data race — or at least plausibly does.
+- Don't revisit the package after this; whatever's going to be fixed
+  should land in this session's commits.
 
 ### What got done
 
-1. **Session start — verified git state.** Read `docs/session-handoff.md`, confirmed session 2's housekeeping commit (`5ef55c1`) and the v1 branch had been pushed upstream. Working tree clean, main up to date with origin. Natural next action per the handoff was the restructure commit.
+1. **Applied review findings 4.1, 4.2, 4.3 + discovered and fixed a
+   pre-existing embedding bug** (commit `7359b6c`):
+   - **4.1 (critical):** dropped the shutdown force-drain loop in
+     `Service.Close()` that was double-decrementing the counter when
+     in-flight goroutines called their own `trackedLogEvent.Msg()`
+     defer cleanup. The panic-on-`wg.Done()`-past-`wg.Add()` pattern
+     is gone.
+   - **Embedding bug (discovered while implementing 4.1):** the old
+     `trackedLogEvent` type embedded `logEvent` and overrode only the
+     terminal methods (Msg/Msgf/Send). But because the typed field
+     methods (Str, Int, etc.) are defined on `*logEvent` and return
+     `*logEvent` via `return e`, calling any of them on a
+     `*trackedLogEvent` dispatched through method promotion to the
+     embedded `*logEvent` and returned the inner pointer — losing the
+     trackedLogEvent identity. Any subsequent terminal call hit the
+     non-tracking logEvent method, so counters never decremented for
+     chained calls. The old force-drain was masking this. Fix: merged
+     the two types into one `logEvent` with optional tracking fields
+     (`service`, `location`). Terminal methods conditionally run
+     `finish()` based on whether `service != nil`. Also closed
+     finding 4.9 (duplicated defer cleanup across three terminal
+     methods) as a side effect.
+   - **4.2 (high):** moved the hardcoded `timeoutMS := 100` literal to
+     a named `defaultShutdownTimeoutMS` constant in `consts.go`.
+   - **4.3 (high):** extracted debug location tracking
+     (`activeOpLocations`, `trackLocation`, `untrackLocation`,
+     `snapshotLocations`) into two build-tagged files:
+     `debug_tracking.go` (`//go:build logging_debug`) with the real
+     implementation and `debug_tracking_nop.go` (`//go:build
+     !logging_debug`) with no-op stubs. Release builds now pay zero
+     overhead for the debug-only tracking.
 
-2. **Pre-flight verification checks.** Before touching the tree, verified four things from the restructure plan:
-   - `internal/audio` reverse-dep check — only self-references, safe to delete.
-   - `internal/listeners` reverse-dep check — external consumers only in `apps/logging/` which is being deleted anyway.
-   - `internal/serial` / `cat` / `ptt` reverse-dep check — external consumers only in `apps/logging/`; the packages carry forward only for the v1 branch.
-   - `internal/database/` structural check — confirmed the surgical deletion shape (top-level `*.go` files + `postgres/` subdirectory go; `sqlite/` subdirectory stays).
+2. **Applied finding 4.4** (commit `ba5f8ba`): extracted the 7-case
+   zerolog level-dispatch switch into an `eventForLevel` helper,
+   eliminating the duplication between `logEventBuilder` and
+   `newTrackedContextLogEvent`. Small but hygienic.
 
-3. **Confirmed the `go.mod` collapse preserves import paths.** Current v1 module at `internal/go.mod` has path `github.com/ColonelBlimp/station-manager/internal`, so `./internal/types` is imported as `github.com/ColonelBlimp/station-manager/internal/types`. New root module at path `github.com/ColonelBlimp/station-manager` produces the same import path for the same package. No rewrite of import statements in carry-forward code needed.
+3. **Applied findings 4.6, 4.7, 4.8, 4.10–4.14 plus added regression
+   tests** (commit `af46e43`):
+   - **4.6 (medium):** reordered `logEventBuilder` to short-circuit
+     the level check before incrementing counters or acquiring locks.
+     Filtered-out events now return an untracked no-op after two
+     atomic reads (logger pointer load + GetLevel) instead of the
+     full counter+lock dance. Real performance win in the common case
+     of Debug-at-runtime-Info logging.
+   - **4.7 (medium):** added a dedicated `debugMu sync.Mutex` field to
+     Service. Debug tracking uses it exclusively; the main mutex
+     `s.mu` is now only for isInitialized transitions and fileWriter
+     close. Completely isolates the two concerns.
+   - **4.8 (medium):** deleted `internal/logging/dump.go` entirely.
+     Zero production callers (grep confirmed), significant security
+     hazard (walks any struct via reflection, logs every exported
+     field at Debug — could leak credentials). Removed the
+     corresponding `TestService_Dump` from `logging_test.go`.
+   - **4.10 (low):** documented the deliberate method asymmetry
+     between `LogContext` (12 methods) and `LogEvent` (~30 methods)
+     in the `LogContext` interface doc comment. No code change.
+   - **4.11 (low):** deleted the pointless `parseLevel` wrapper in
+     `helper.go` (it was a 6-line passthrough to
+     `zerolog.ParseLevel`). Updated two callers to call
+     `zerolog.ParseLevel` directly.
+   - **4.12 (low):** documented the terminal-method hazard (chains
+     built but never terminated leak their tracked counter) in the
+     `LogEvent` interface doc comment. Go has no way to enforce
+     terminal-method calls at the type level, so documentation is
+     the fix.
+   - **4.13 (low):** normalized the four `errMsg*` constants in
+     `consts.go` from title-case-with-period ("Logging config is
+     nil.") to Go-convention lowercase-without-period ("logging
+     config is nil"). The assert.Contains tests that reference these
+     constants pass unchanged because they reference the constant
+     names, not the literal strings.
+   - **4.14 (low):** audited `internal/logging/README.md` (3782
+     bytes). Found two pieces of content not duplicated in `doc.go`:
+     the error-chain enrichment field reference (error_chain,
+     error_root, error_history, error_ops, error_root_op, plus AnErr
+     prefixing and a concrete JSON example) and notes on
+     DetailedError vs. stdlib error traversal. Found three stale
+     items: a "Dump helper" section referencing the function we just
+     deleted, a Testing note mentioning Dump, and a wrong import path
+     (`github.com/Station-Manager/errors`). **Migrated the useful
+     content into `doc.go`** (grew from ~23 to ~78 lines). **Deleted
+     `README.md`** — one documentation home, no drift risk.
+   - **Regression tests:** added three new tests in `logging_test.go`
+     to lock in the behavioral guarantees of sessions 5-6's refactors:
+     `TestLogEventBuilder_FilteredLevelSkipsCounters` (bursts 1000
+     filtered events and asserts activeOps stays at 0 + Close returns
+     in under 100ms — catches regressions of both 4.6 and the
+     embedding bug), `TestEventForLevel_AllKnownLevels` (direct test
+     for the 4.4 helper across all 7 zerolog levels + unknown),
+     `TestNoop_FullChainIsNoOp` (closes the biggest existing coverage
+     gap — `Noop()` and its underlying `noopLogger`/`noopLogContext`
+     had zero tests before this).
 
-4. **Mapped out the restructure plan** — one big commit with explicit delete list, create list, scaffold list, and migration sequence. Got user go-ahead.
+4. **Pushed to origin.** All ten session 3-6 commits are now on
+   `origin/main`. The race fix question (does session 6's work fix the
+   v1 CI race?) is now testable: the same shutdown-race fix could be
+   cherry-picked or reapplied to the `v1` branch, and if `go test
+   -race -short ./...` passes there, we've confirmed both are the
+   same bug.
 
-5. **First execution wave** (before hitting complications):
-   - Deleted `go.work`, all five v1 `go.mod`/`go.sum` files, `apps/`, `Taskfile.yml`, `Taskfile.wails.yml`.
-   - Deleted the server-side DB cluster: top-level `internal/database/*.go`, `internal/database/postgres/`, `internal/adapters/`. Kept `internal/database/sqlite/`.
-   - Deleted `internal/listeners/`, `internal/audio/`, `internal/serial/`, `internal/cat/`, `internal/ptt/`.
-   - Fixed the session-1 `internal/adif/slice_test.go` wrinkle by swapping its import from the deleted `internal/adapters` framework to the simplified client-side `internal/database/sqlite/adapters.QsoModelToType`.
-   - Scaffolded `cmd/smd/main.go` + `doc.go`, `internal/api/doc.go`, `internal/qsoservice/doc.go` with intent comments referencing the invariants.
-   - Wrote a minimal root `go.mod` with module path `github.com/ColonelBlimp/station-manager`.
+5. **Logging test suite runtime dropped from ~15s to ~1.7s.** This is
+   not a false speedup — it's a direct consequence of fixing the
+   embedding bug. Previously, tests that exercised chained logging
+   calls left leaked counters, which caused `Close()` to hit the
+   timeout (1–10 seconds depending on config) before proceeding.
+   With the real bug fixed, the tests run at their actual speed.
 
-6. **Hit the Go module cache ambiguity problem.** First `go mod tidy` run failed with:
-   ```
-   ambiguous import: found package github.com/ColonelBlimp/station-manager/internal/database/sqlite in multiple modules:
-     github.com/ColonelBlimp/station-manager (local)
-     github.com/ColonelBlimp/station-manager/internal/database (cached v1 pseudo-version)
-   ```
-   Root cause: every `internal/*` subdirectory in v1 had been its own Go module at various points (each with its own `go.mod`), and the proxy/cache had recorded all of them as valid modules with their own pseudo-versions. Go's longest-prefix resolver was matching the cached v1 `internal/database` module before falling back to the local root module. Every `internal/database/sqlite/...` import was ambiguous, every `internal/database/sqlite/adapters/...` import was ambiguous, etc.
+### Review findings status — internal/logging review complete
 
-7. **Resolved the ambiguity** after several iterations:
-   - First tried clearing the station-manager entries from the Go module cache. Tidy re-downloaded them from the proxy, same ambiguity.
-   - Then tried `GOPROXY=off go mod tidy` with an explicit `require` list. That surfaced real missing-dep errors (because some carry-forward code still imported packages like `go-playground/validator/v10` that hadn't been added to the explicit list yet) but confirmed the ambiguity path disappears when the proxy isn't consulted.
-   - Combined: clear the station-manager cache entries, use an explicit `require` list recovered from v1's `internal/go.mod`, then let `go mod tidy` populate indirect deps from the concrete direct set. That worked.
-
-8. **Hit the scope issue that the restructure plan had not anticipated.** During tidy iteration, build errors revealed that `internal/types/serial.go` imports `go.bug.st/serial` — meaning the v1 types package had a non-stdlib import (a violation of the "types only imports stdlib" invariant we wrote into CLAUDE.md). Further investigation showed `internal/config` was deeply wired into the v1 type universe (rig configs, CAT state values, audio playback, FT8, server config, listener configs), and its dependency chain pulled in a lot of v1-specific types.
-
-9. **Paused for a user decision on scope.** Proposed three options:
-   - **A:** Restore serial/cat/ptt to main and keep v1 types + config as-is. Violates "types only stdlib" invariant; violates narrow-daemon-scope thinking. Smallest change.
-   - **B:** Prune `internal/config` and `internal/types` to a v2-minimal shape. Medium change.
-   - **C:** Delete v1 config and types entirely, write both fresh. Biggest change, most philosophical purity.
-
-10. **User chose a refined version of C:** keep `errors`, `logging`, `adif`, `database/sqlite`, `iocdi`, `enums`, `utils`, and a pruned `types` for later code-review-as-we-go (explicitly framing carry-forward as "carry forward to code-review," not "carry forward as gospel"). Delete `cmd/importer` (defer to milestone 2 as a thin ADIF-to-daemon tool). Rewrite `internal/config` fresh. Accept "structured copy-and-prune" as the valid form of `internal/types` rewrite (fast, preserves ADIF domain knowledge).
-
-11. **Second execution wave — the scope-corrected deletions and rewrites:**
-    - Deleted `cmd/importer/`, `internal/lookup/`, `internal/forwarding/`, `internal/email/`, `internal/maidenhead/`, `internal/apikey/`.
-    - Pruned `internal/types/` grab-bag: deleted `audio.go`, `cat.go`, `ft8.go`, `listener.go`, `ptt.go`, `rig.go`, `serial.go`, `server.go`, `user.go`, `apikey.go`, `app_config.go`, `email.go`, `forwarding.go`, `lookup.go`, `optional.go`, `required.go` (restored minimal version with one field), `json_test.go` (1019 lines of v1-shape tests), `types_test.go` (214 lines of the same). Pruned `services.go` to drop DI bean names for deleted services.
-    - Deleted `internal/config/` entirely. Wrote fresh `internal/config/config.go` + `doc.go` with a minimal `Config` struct, a `Service` wrapper providing the four getters the kept v1 code actually calls (`LoggingConfig()`, `DatastoreConfig()`, `RequiredConfigs()`, `WorkingDir()`), idempotent lifecycle methods, and a `New()` constructor.
-    - Deleted `internal/database/sqlite/example/` (dead code that imported the deleted server-side `internal/database` package).
-    - Fixed `internal/enums/upload/services.go` to inline the QRZ constant as `"qrzforwardingservice"` instead of importing from types.
-
-12. **Chased down the remaining compile/vet errors:**
-    - Two test files had references to deleted types: `internal/enums/upload/services_test.go` and `internal/logging/logging_test.go`. Both fixed with surgical edits (inline literal + update test helper to use the new `config.Service{Cfg: config.Config{...}}` shape).
-    - Restored minimal `internal/types/required.go` with just the `QsoForwardingRowLimit` field that the carry-forward sqlite service actually reads at Open time.
-
-13. **Verified the resulting tree.** Clean runs:
-    - `go mod tidy` — populates indirect deps, no ambiguity.
-    - `go build ./...` — clean.
-    - `go vet ./...` — clean.
-    - `go test ./...` — all packages passing. adif, adapter round-trip, meta, bands, cmds, events, modes, tags, upload/*, errors, iocdi, logging (14.8s for concurrency tests), utils. Stub packages (api, config, cmd/smd, qsoservice, types, database/sqlite, database/sqlite/models) have no test files which is expected.
-
-14. **Did not commit.** Waiting on user review of the roughly 720-file diff.
+| Finding | Severity | Status |
+|---|---|---|
+| 4.1 | critical | DONE (shutdown race + embedding bug, commit `7359b6c`) |
+| 4.2 | high | DONE (magic number → defaultShutdownTimeoutMS, `7359b6c`) |
+| 4.3 | high | DONE (debug tracking behind logging_debug build tag, `7359b6c`) |
+| 4.4 | medium | DONE (eventForLevel helper, commit `ba5f8ba`) |
+| 4.5 | medium | noted — accept event.go size, no action |
+| 4.6 | medium | DONE (level check short-circuit, commit `af46e43`) |
+| 4.7 | medium | DONE (separate debugMu, commit `af46e43`) |
+| 4.8 | medium | DONE (Dump deleted, commit `af46e43`) |
+| 4.9 | medium | DONE (subsumed by embedding bug fix) |
+| 4.10 | low | DONE (LogContext asymmetry documented, `af46e43`) |
+| 4.11 | low | DONE (parseLevel deleted, `af46e43`) |
+| 4.12 | low | DONE (terminal-method hazard documented, `af46e43`) |
+| 4.13 | low | DONE (errMsg constants normalized, `af46e43`) |
+| 4.14 | low | DONE (README audited, useful content → doc.go, `af46e43`) |
 
 ### What did NOT get done this session
 
-- **Did not commit the restructure.** The working tree has the full v2 milestone-1 layout applied and verified, but no git commit exists. User is reviewing and cleaning up some stray artifacts before the commit lands.
-- **Did not start writing daemon code.** `cmd/smd/main.go` is a stub with a `TODO(v2 milestone 1)` comment and an empty `main()`. Real daemon construction begins next session.
-- **Did not write `docs/v2-design/api.md`.** This is the next-steps item — enumerate daemon API consumers before designing any endpoints. Still pending.
-- **Did not write `docs/v2-design/milestones.md`.** Concrete definition of milestone 1 "done" still pending.
+- **Did not write any v2 daemon code.** `cmd/smd/main.go` is still a
+  stub with a TODO comment. Real daemon construction is the natural
+  next step for session 7.
+- **Did not verify the v1 race fix empirically.** The shutdown-race
+  fix almost certainly IS the v1 CI race, but nobody has applied the
+  fix to the `v1` branch and run `go test -race` there. Parked as a
+  v1-branch follow-up.
+- **Did not start the internal/adif or internal/database/sqlite
+  reviews.** Both are still queued on the carry-forward
+  code-review track.
 
-## What happened in the 2026-04-15 session (session 2)
+---
+
+## What happened in the 2026-04-17 session (session 5)
 
 ### Goals set for the session
 
-- Push the v1.0.0 milestone upstream.
-- Start thinking about v2 structure — not implementation, just shape and module boundaries.
-- Capture whatever gets decided so future sessions don't re-derive it.
+- Settle enough of the v2 daemon's HTTP API surface that the first
+  handler can be written without accidentally painting into a corner.
+- Review and fix the `internal/errors` package so the api.md error
+  envelope has a solid foundation.
+- Start the `internal/logging` review (but not necessarily finish
+  applying its findings).
 
 ### What got done
 
-1. **Pushed v1 artifacts upstream.** User ran the push commands for `main`,
-   the `v1` branch (with `-u` to set tracking), and both tags
-   (`v1.0.0`, `pre-ft8-removal`). All session-1 work is now on origin.
+1. **Wrote `docs/v2-design/api.md`** (commit `7fdc010`). A ~270-line
+   design brief structured around a single idea: enumerate all
+   consumers before designing any endpoints. The document covers:
+   - Consumer list: `apps/logging`, `apps/logbook`, `cmd/importer`,
+     `cmd/udp-bridge`. Explicit non-consumers: `apps/config` (reads
+     config file directly), serial/CAT bridge (independent
+     subsystem), SM-Online (forwarding destination, not consumer).
+   - Transport: HTTP over Unix domain socket, listener config-driven.
+   - Dedupe key: `hash(call + band + mode + start_time_rounded_to_minute)`
+     with `?force=true` override for contest edge cases.
+   - Async forward lifecycle: `POST /v1/qso` returns on local commit,
+     forwarding runs in background, SSE publishes terminal outcomes.
+   - Pagination: forward-cursor-only at the API, client-side windowed
+     buffer for backward navigation.
+   - SSE event vocabulary: `qso.{stored,updated,deleted}`,
+     `forward.{succeeded,failed}`. Payload shapes and reconnect
+     semantics explicitly deferred to implementation time.
+   - Error envelope: JSON with `code`, `message`, `op` fields.
+     Handler-layer mapping from internal errors to HTTP responses
+     lives in `internal/api`, not `internal/errors`.
+   - Explicit "design brief, not spec" framing and an anti-waterfall
+     commitment in Section 7.
 
-2. **Explored v2 repo structure collaboratively.** Discussed monorepo shape,
-   whether to start with single `go.mod` vs `go.work`, which binaries earn
-   their own modules, whether `internal/*` should be split into sub-modules,
-   and how source-sharing interacts with release coordination.
+2. **Strengthened `docs/v1-analysis/invariants.md`** with a new master
+   rule: **"Nothing blocks logging a QSO, except catastrophic local
+   failure."** The existing "Enrichment never blocks logging" and a
+   new "Forwarding never blocks logging" became specific applications.
+   The rule requires the logging app to maintain its own local
+   text-file fallback independent of the daemon. Captured in the same
+   commit as api.md.
 
-3. **Settled six structural decisions with explicit rationale:**
-   - Monorepo on main; v1 preserved on the `v1` branch.
-   - Single `go.mod` at milestone 1; `go.work` returns at milestone 2 only
-     when Wails clients come back.
-   - Only Wails apps get their own modules; pure Go binaries (smd, importer,
-     future bridges) stay in the root module.
-   - Shared `internal/` — all binaries import from one shared library tree.
-     Four-point rationale: types.Qso coherence is load-bearing, solo-dev
-     release coordination is trivial, shared bugfixes are a feature,
-     emergency one-binary builds still work.
-   - Source sharing and wire compatibility are separate axes — the HTTP API
-     is the real compatibility boundary, version the wire not the source.
-   - `internal/*` packages split into sub-modules only when (a) published
-     externally or (b) they have exotic deps — both rare; default is flat.
+3. **Added "Deferred features to investigate" section to the
+   handoff** with the logging-app text-file fallback + reconciliation
+   feature as the first entry.
 
-4. **New package names chosen for v2:** `cmd/smd` (unix daemon convention),
-   `internal/qsoservice` (domain service layer), `internal/api` (HTTP
-   handlers), `internal/smclient` (Go HTTP client for daemon consumers).
+4. **Full `internal/errors` code review and fix application** (commit
+   `376a3dd`). 11 findings applied in one coherent commit:
+   - 4.1 default `"Internal system error."` message removed from
+     `New()`.
+   - 4.2 `Error()` rewritten to return a rich `"op: msg: cause"`
+     format matching stdlib wrapped-error conventions.
+   - 4.3 `Root()` uses a depth limit of 100 instead of map-based
+     cycle detection (which could panic on non-comparable error
+     types).
+   - 4.4 `Errorf` deleted entirely. Its dual-role semantics were a
+     footgun. All ~20 call sites migrated to either
+     `.WithErr(fmt.Errorf("...: %w", err))` for wrapping or
+     `.WithMsgf("...", args)` for formatted messages — per-site
+     judgment based on whether the format string used `%w`.
+   - 4.5 dead `Error` interface type removed.
+   - 4.6 unused `PrintChain` debug helper deleted.
+   - 4.7 `Cause()` method deleted (duplicated `Unwrap()`). The one
+     external caller in `internal/logging/helper.go` was updated to
+     use `stderrs.Unwrap`.
+   - 4.8 `sentinals.go` renamed to `sentinels.go`.
+   - 4.9 ~30 comprehensive tests added — covering construction, all
+     builder methods, nil-safety, `AsDetailedError`
+     positive/negative/wrapped/nil cases, `errors.Is`/`errors.As`
+     interop through mixed chains, `Error()` format across every
+     op/msg/cause combination, `Root()` simple/nested/depth-limit/
+     unhashable-error cases, and `ErrNotFound` sentinel propagation.
+   - 4.10 **Full rename of the builder method family to the `With*`
+     convention** to eliminate the naming collision with zerolog's
+     terminal `.Msg()`. `Msg → WithMsg`, `Msgf → WithMsgf`,
+     `Err → WithErr`. Sweep touched 16 consumer files across
+     `internal/adif`, all of `internal/database/sqlite/*`, and
+     `internal/logging`. A handful of zerolog/LogEvent chain calls
+     and one `context.Context.Err()` call site were incorrectly
+     caught by the initial bulk rename and restored manually.
+   - 4.11 added a short `doc.go` describing the package's
+     operation-tagging philosophy, canonical usage pattern, builder
+     semantics, and pointers to api.md and the review doc.
+   - Updated `CLAUDE.md` "Code style" section to reference the new
+     `With*` pattern and the explicit `.WithErr(fmt.Errorf(...))`
+     idiom that replaces `Errorf`.
+   - Updated `docs/v2-design/api.md` Section 4.6 to use the new
+     method names in its example.
+   - Annotated `docs/reviews/internal-errors.md` with a resolution
+     note; the original audit text is preserved as historical record.
 
-5. **Milestone 1 target tree specified.** Deliberately absent list for
-   milestone 1 enumerated: no `apps/*` (Wails comes back milestone 2), no
-   rig control packages (narrow daemon scope), no server-side database
-   cluster (relocates to future server repo), no dead listeners, no
-   milestone-1 multi-destination forwarder work.
+5. **Wrote `docs/reviews/internal-logging.md`** (commit `a19e802`). A
+   ~535-line review with 14 findings categorized by severity (1
+   critical, 3 high, 5 medium, 5 low), a strengths list, a fit
+   assessment against v2 daemon needs, and a detailed action plan. The
+   critical finding (4.1 shutdown force-drain race) was explicitly
+   flagged as the likely v1 CI race, with a reconciliation note.
 
-6. **Migration plan from current main to milestone-1 layout drafted.**
-   Single restructure commit is the recommended shape (cleaner history than
-   phased), with the `v1` branch as the safety net. The explicit delete-list
-   and create-list are captured in `docs/v2-design/structure.md` →
-   "Migration from main's current state to milestone 1."
-
-7. **Created `docs/v2-design/` directory and wrote `structure.md`** — the
-   first durable v2 design document. About 250 lines. Captures all six
-   decisions above with full rationale, both milestone target trees, the
-   deliberately-absent list for milestone 1, the migration plan, and
-   pointers to future sibling documents (`api.md`, `milestones.md`, etc.)
-   for design questions explicitly deferred.
-
-8. **Added cross-reference in `docs/v1-analysis/design-decisions-log.md`**
-   pointing at `docs/v2-design/` so readers know where v2-scope decisions
-   live. Keeps v1-analysis cleanly scoped to v1.
-
-9. **Updated this handoff document** (currently being read) to reflect
-   session 2 progress.
-
-10. **Reviewed and rewrote `CLAUDE.md`** from scratch. The original file was
-    a generic code-style guide that didn't mention Station Manager at all
-    and contained several bullets that actively contradicted project
-    lessons (most notably "avoid duplicate code" conflicting with "build
-    specific, not generic" from `lessons-for-v2.md`, and "ALWAYS include
-    unit tests" conflicting with the integration-tests-over-mocks
-    preference). The new 91-line file is Station Manager-specific: it
-    covers repo structure (v1/v2 split), points at the durable doc
-    inventory (`docs/v1-analysis/`, `docs/v2-design/`,
-    `docs/session-handoff.md`), captures load-bearing invariants and
-    applied lessons as headlines, and has Go-specific code style notes
-    that are internally consistent and match the project's existing
-    idioms. Dead bullets (composition-vs-inheritance in Go, FP-vs-OOP,
-    redundant pairs) were dropped.
-
-11. **Reviewed and deleted `AGENTS.md`.** It was a v1-era agent
-    instructions file that duplicated ~half of CLAUDE.md and described a
-    workspace/module layout that was already stale (FT8 task references,
-    listener handler plugin patterns for now-deleted code, v1 multi-module
-    structure that's about to be reshaped). Five genuinely useful
-    conventions that weren't already in CLAUDE.md were extracted into a
-    new **"Project idioms"** section of CLAUDE.md before deletion:
-    `internal/types` stdlib-only rule, the service lifecycle pattern
-    (`Initialize()` → `Open()`/`Start(ctx)` → `Close()`/`Stop()`,
-    idempotent), the DI `ServiceName` constants convention, the
-    sqlboiler-generated-models-are-read-only rule, and the
-    `utils.WorkingDir()` path resolution convention. AGENTS.md's v1 content
-    is preserved on the `v1` branch. CLAUDE.md final size: ~91 lines.
-
-12. **Diagnosed GitHub Actions failure emails** the user had been getting
-    on every push. Cause: `go test -race ./... -short` in `validate.yml`
-    was catching a data race in v1 code. The race fix belongs on the `v1`
-    branch (not main), because the racing code is about to be restructured
-    or deleted during the v2 milestone-1 reshape. Fixing it on main would
-    be pointless churn.
-
-13. **Deleted both workflow files from main:**
-    `.github/workflows/validate.yml` (stops the failure email noise
-    immediately) and `.github/workflows/release.yml` (prevents it from
-    running v1 build steps on a future v2 tag push). Both files are
-    preserved on the `v1` branch. Tag-triggered workflows use the
-    workflow file present at the tagged commit, so any future `v1.x.y`
-    tag pushed from the `v1` branch will correctly use the preserved
-    `release.yml` on that branch.
-
-14. **Replaced `RELEASING.md` and `DEVELOPING.md` with short stubs** on
-    main. The originals described v1's Taskfile + Wails + nfpm pipeline
-    and v1's developer setup — entirely v1-specific content that doesn't
-    apply to v2 milestone 1 (no Wails apps, no packaging, no release
-    process yet). The new stubs are ~20 lines each: they explain that v2
-    is under construction, point at the current durable documentation
-    (`CLAUDE.md`, `docs/v1-analysis/`, `docs/v2-design/`,
-    `docs/session-handoff.md`), and tell any reader looking for v1 details
-    to check out the `v1` branch. v1 originals are preserved on the `v1`
-    branch.
-
-15. **Added a "v1 branch follow-ups" section to this handoff document**
-    (see below). The data race is its first item, with a short
-    how-to-chase checklist and notes on typical race-prone patterns in
-    this codebase. This keeps v1-track work separated from v2-track work
-    in the next-steps list going forward.
-
-16. **`.config/ai/rules/general.md` was deleted by the user** earlier in
-    the session (they mentioned removing the whole `.config` directory).
-    This file was unrelated to the session's work but appears in the
-    commit-candidate set.
+6. **Saved two new feedback memory files** during the api.md
+   discussion:
+   - `feedback_one_question_at_a_time.md` — during design
+     conversations, pose one question at a time and wait for the
+     answer before introducing the next. Don't stack multi-question
+     messages.
+   - `feedback_no_magic_numbers.md` — runtime values come from
+     configuration; code constants only as fallback defaults. All
+     socket paths, timeouts, sizes, intervals, retry counts, etc.
+     are config-driven.
 
 ### What did NOT get done this session
 
-- **Did not execute the restructure commit.** The milestone-1 layout is
-  specified in `structure.md` but main has not yet been reshaped. The big
-  deletions (apps/, server-side DB cluster, listeners, etc.) and
-  scaffolding (`cmd/smd`, `internal/api`, `internal/qsoservice`) still
-  need to happen. That is the natural next action for session 3.
-- **Did not start any v2 code.** No `cmd/smd/main.go`, no `internal/api`,
-  no `internal/qsoservice`. Structure and housekeeping were the goals.
-- **Did not touch `Taskfile.yml` or `Taskfile.wails.yml`.** These are
-  v1-specific and the next domino in the same chain as the workflows and
-  docs cleared out this session. Left alone because the natural time to
-  delete them is during the restructure commit, not as an isolated move.
-- **Did not fix the v1 data race.** Belongs on the v1 branch; captured in
-  "v1 branch follow-ups" below.
-- **Did not commit any of session 2's work.** At session end, the working
-  tree has the full session 2 cleanup staged or ready-to-stage but
-  uncommitted, pending the user's review.
+- **Did not apply any `internal/logging` review findings.** The review
+  document was written but the fix pass was deferred to session 6.
+- **Did not write any v2 daemon code.**
 
-## What happened in the 2026-04-14 session (session 1)
+---
 
-### Goals set for the session
+## What happened in the 2026-04-16 session (session 4)
 
-- Complete the v1 analysis effort far enough to make the v2-vs-refactor call.
-- Act on any code-level cleanup that was clearly needed regardless of path.
+Short session picking up right after the session 3 restructure
+commit. Two goals: write a basic `Taskfile.yml` so `task`-based
+vet/build/test works on the new layout, and clear the last v1-era
+leftovers (the `scripts/` directory, `assets/xdg/`, `web/shared-utils/`)
+that the session 3 restructure had left behind.
 
-### What got done
+**Commit `1ee2ced`** — "Add Taskfile.yml and remove remaining v1
+leftovers." Introduced a minimal 5-task `Taskfile.yml` (vet, build,
+test with race detector, tidy, plus a default that runs vet + build +
+test as a CI-equivalent smoke check). Deleted `scripts/` (the old
+Wails-bindings pre-commit hook, dead now that apps are gone),
+`assets/xdg/` (Linux desktop entry files for the deleted Wails apps),
+and `web/shared-utils/` (TypeScript lib consumed only by the deleted
+Wails frontends). `assets/logo.png` stays because `README.md`
+references it.
 
-1. **Reviewed the analysis state.** Started by reading `docs/v1-analysis/` and
-   the relevant memory notes to ground the discussion. All five analysis docs
-   were already drafted from prior work in this session; this session worked
-   from them rather than producing them.
+---
 
-2. **Made the v2 rewrite decision.** After discussing the tradeoffs, the
-   author chose the v2 rewrite path. Key reasoning recorded in
-   `design-decisions-log.md` → "v2 rewrite vs. v1 incremental refactor."
+## Sessions 1–3 (compressed summaries)
 
-3. **Decided on the tag-and-branch workflow.** Main reflects where the project
-   is going (v2); the `v1` branch is the frozen-plus-maintenance container
-   the author runs day-to-day. v2 work happens on main. Bug fixes for v1 land
-   on the `v1` branch.
+Per the maintenance rule, older session entries are compressed to
+one-paragraph summaries. Full detail lives in git history.
 
-4. **Cleaned up mid-state in the working tree.** Three FT8 files were in a
-   staged-as-new-but-deleted-from-disk limbo state at session start. Ran
-   `git add` to reconcile the index with the working tree, leaving only the
-   expected untracked `ft8_live_window.wav` file (which was about to be
-   swept away with the rest of `internal/ft8/service/`).
+### Session 1 (2026-04-14)
 
-5. **Tagged `pre-ft8-removal`** at commit `1ae516d` to preserve the full FT8
-   experiment tree in git history before deletion.
+The v2 rewrite decision session. Completed the v1 analysis effort
+(five documents in `docs/v1-analysis/`: `architecture-map.md`,
+`bug-inventory.md`, `design-decisions-log.md`, `invariants.md`,
+`lessons-for-v2.md`), chose the v2 rewrite path over incremental
+refactoring, decided the repo layout (main = v2, `v1` branch = v1
+maintenance), tagged the `pre-ft8-removal` and `v1.0.0` reference
+points, created the `v1` branch, and landed three v1-on-main bug
+fixes before tagging v1.0.0: the hamnut-blocks-logging fix
+(`5288983`), the LogQso/UpdateQso atomicity fix (same commit), and
+the sqlite adapter simplification via `QsoAdditionalData` deletion
+(`1ae516d`). Ended with the FT8 experiment tree removed from main
+(`0e158ec`) and tagged `v1.0.0`, plus a session-handoff doc added
+(`66e0af3`).
 
-6. **Removed FT8 code and legacy docs** in commit `0e158ec`:
-   - Deleted `internal/ft8/`, `internal/ft8x/`, `cmd/ft8/`, `cmd/ft8test/`
-   - Updated `go.work` (7 modules → 5)
-   - Deleted top-level `docs/*.md` files: `ft8-*.md`, `whats-next.md`,
-     `context-handoff.md`, `usb-serial-setup.md` (kept `docs/v1-analysis/`)
-   - Removed the FT8/FT4 section from `README.md`
-   - Replaced the `internal/ft8/synth` example in
-     `internal/audio/README.md` with a generic caller-supplied samples
-     example
-   - Removed FT8 patterns from `.gitignore`
-   - 132 files touched: 4 edits + 128 deletions; 33,138 lines deleted,
-     4 inserted
+### Session 2 (2026-04-15)
 
-7. **Verified the build.** Ran `go build` and `go vet` across all five
-   workspace modules. Both passed clean.
+Housekeeping and v2 structural design session. Pushed session 1's
+artifacts upstream. Wrote the first durable v2 design document —
+`docs/v2-design/structure.md`, with six structural decisions
+(monorepo on main, single go.mod at milestone 1, only Wails apps get
+their own modules, shared `internal/`, source-vs-wire compatibility
+as separate axes, `internal/*` split only when forced) and migration
+plan for the upcoming session 3 restructure. Reviewed and rewrote
+`CLAUDE.md` from a generic code-style guide to a Station Manager-
+specific project instructions file. Consolidated `AGENTS.md` into
+`CLAUDE.md` under a new "Project idioms" section and deleted
+`AGENTS.md`. Deleted both v1-era `.github/workflows/*.yml` files
+(they were failing on every push due to the v1 data race) and
+replaced `RELEASING.md`/`DEVELOPING.md` with short stubs pointing at
+the v1 branch. **Commit `5ef55c1`** covers all of session 2's work.
 
-8. **Tagged `v1.0.0`** at the cleanup commit.
+### Session 3 (2026-04-16)
 
-9. **Created the `v1` branch** at the `v1.0.0` tag. This is now the author's
-   day-to-day working branch.
-
-10. **Updated documentation and memory** to reflect the v2 decision and the
-    post-cleanup repo state:
-    - Memory files `project_sm_restructure.md` and `project_sm_v2_analysis.md`
-      updated (decision state, repo state, post-decision guidance).
-    - `MEMORY.md` index entries updated.
-    - `docs/v1-analysis/architecture-map.md` — module table fixed (5 modules),
-      FT8 section marked removed, cleanup targets split into done/pending.
-    - `docs/v1-analysis/bug-inventory.md` — FT8 entry and dead-docs entry
-      marked FIXED.
-    - `docs/v1-analysis/design-decisions-log.md` — new "Execution path" entry
-      records the v2 rewrite decision.
-    - `docs/v1-analysis/lessons-for-v2.md` — "Current read" paragraph updated
-      from speculative to decided; FT8 items in the "Delete, don't carry
-      forward" list marked done.
-    - `docs/v1-analysis/invariants.md` — no changes needed (invariants are
-      stable).
-
-11. **Wrote this handoff document** so the next session starts with full
-    context.
-
-### What did NOT get done this session
-
-- **Did not push anything to origin.** All commits, tags, and the `v1` branch
-  are local. Push is a deliberate-action step — decide when you're ready and
-  run the commands in the "Repo state" section above.
-- **Did not start any v2 design work.** The decision was made; no code
-  written for v2 yet.
-- **Did not address the remaining code-level cleanup items** that surfaced
-  during the analysis — see "Next steps" below.
-- **Did not write `docs/v1-analysis/external-surfaces.md`.** This was proposed
-  as part of the original analysis plan but deferred. It covers the Wails
-  frontend's binding surface, ADIF formats used, online service APIs, and the
-  serial/CAT subsystem's external touchpoints — "things I can't just change
-  without breaking something observable." Useful before v2 design starts in
-  earnest; not urgent.
+The big restructure session. Executed the full v2 milestone-1 reshape
+of main according to `docs/v2-design/structure.md`. Deletion scope:
+all three Wails apps (`apps/config`, `apps/logbook`, `apps/logging`),
+the server-side database cluster (top-level `internal/database/*.go` +
+`internal/database/postgres/` + `internal/adapters/`), the dead
+`internal/listeners/*` tree, the orphaned `internal/audio/`, rig
+control (`internal/serial/`, `internal/cat/`, `internal/ptt/`),
+enrichment and forwarding (`internal/lookup/*`, `internal/forwarding/qrz`,
+`internal/email/`, `internal/maidenhead/`, `internal/apikey/`),
+`cmd/importer` (deferred to milestone 2 as a thin ADIF-to-HTTP tool),
+the v1 `internal/config` entirely (rewritten fresh), and a large
+chunk of the v1 `internal/types` grab-bag. Collapsed the five-module
+`go.work` workspace into a single root `go.mod`. Hit and resolved a
+Go module cache ambiguity problem (every `internal/*` subdirectory
+had been its own module at various points in v1 and the cache had
+phantom versions of them). Scaffolded `cmd/smd/{main.go,doc.go}`,
+`internal/api/doc.go`, `internal/qsoservice/doc.go` as stubs. Wrote
+a fresh `internal/config` from scratch (minimal daemon-shaped, ~80
+lines, replacing v1's ~1600-line aggregation). **Commit `0010b6e`**
+covers all of session 3's work — 730 files changed, 433 insertions,
+68,934 deletions.
 
 ---
 
 ## Next steps (priority order)
 
-The author picks what to work on next — this is a suggestion list, not a
-script. Items near the top are the natural continuation of session 3; items
-lower down are bigger v2 milestones.
+Session 7 picks up from here. The library-package review track is
+done; the main gating question for the next session is "start writing
+real v2 daemon code or keep making design decisions."
 
 ### The natural next action
 
-1. **Commit the restructure that's currently in the working tree.** Session 3
-   executed the full v2 milestone-1 reshape and verified it (`go build ./...`,
-   `go vet ./...`, `go test ./...` all clean), but did not commit — the user
-   is reviewing and doing some final artifact cleanup. The commit is a
-   ~720-file diff, most of which is deletions (v1 workspace scaffolding,
-   apps, Taskfiles, FT8 already gone from session 1, server-side DB
-   cluster, rig control packages, listener framework, audio, enrichment and
-   forwarding packages, v1 types grab-bag, v1 config). New files: `go.mod`
-   (single root), `cmd/smd/main.go` + `doc.go` stub, `internal/api/doc.go`
-   stub, `internal/qsoservice/doc.go` stub, `internal/config/config.go` + 
-   `doc.go` (fresh minimal daemon config). Modified files: a handful of
-   test helpers and one enum constant that used deleted types.
+1. **Write the first real daemon code.** `cmd/smd/main.go` is
+   currently a stub with a TODO comment. The smallest possible first
+   step that exercises the settled cross-cutting decisions end to end:
+   - Load `internal/config.Config` (currently a stub) from disk or
+     defaults.
+   - Initialize the `internal/database/sqlite.Service` via the iocdi
+     container.
+   - Initialize the `internal/logging.Service` the same way.
+   - Bind a `net.Listen("unix", cfg.SocketPath)` listener.
+   - Serve `POST /v1/qso` accepting raw ADIF request bodies, parsing
+     via `internal/adif`, calling a `qsoservice.Submit()` method that
+     writes the QSO + its upload-queue rows atomically per the
+     one-fails-all-fail invariant, and returning a JSON envelope
+     indicating "stored" or "duplicate".
+   - No SSE, no forwarding, no logbook CRUD, no pagination, no
+     authentication beyond Unix-socket filesystem permissions. One
+     endpoint.
+   - Exercise via `curl` over the Unix socket (e.g.
+     `curl --unix-socket /tmp/smd.sock -X POST --data-binary @sample.adi
+     http://localhost/v1/qso`).
 
-   Proposed commit message shape:
-   ```
-   Restructure main into v2 milestone-1 layout
+   Expected size: maybe 300–500 lines of new code across `cmd/smd`,
+   `internal/api`, `internal/qsoservice`, and probably some filling-in
+   of `internal/config`. Several sessions of work, but the first
+   concrete v2 daemon milestone.
 
-   Collapse the v1 multi-module workspace into a single root Go module
-   and clear v1 code that doesn't belong in v2 milestone 1. v2 is now a
-   clean-slate daemon-plus-stubs shell on main; v1 continues on the v1
-   branch for day-to-day operational use.
+### v2 design work (follow-ups to `docs/v2-design/`)
 
-   ... (full breakdown in structure.md and in session 3's notes above)
-   ```
+2. **Write `docs/v2-design/milestones.md`** to concretely define what
+   milestone 1 "done" means. Proposed shape: daemon + one POST endpoint
+   + a `curl` test script is milestone 1a; milestone 1b adds the
+   remaining QSO CRUD endpoints + contact history + contest dupe check
+   + a minimal forwarder; milestone 2 reintroduces the Wails clients.
+   Writing it down forces commitment and is the explicit mitigation
+   for the "interminable 90%" failure mode.
 
-   Once committed, main is at the v2 milestone-1 layout and v2 construction
-   work can begin.
+3. **Pick the ORM/generator approach** → `docs/v2-design/db-layer.md`
+   when v2 DB work starts. sqlboiler (v1's choice, currently
+   carried-forward), Bob, sqlc, or hand-rolled. Not urgent; the
+   current plan is "sqlboiler stays until there's a reason to
+   change." Make it an explicit decision when the sqlite review
+   happens.
 
-### v2 design work (follow-ups to structure.md)
-
-2. **Write `docs/v2-design/api.md`** before designing any daemon endpoints.
-   Per `lessons-for-v2.md` → "Enumerate all API surfaces before designing
-   any of them." The three Wails apps have different needs:
-   - `apps/logging` — real-time, high-frequency, needs QSO draft init, log,
-     update, dupe check, session state, CAT status, forwarding events.
-   - `apps/logbook` — low-frequency, bulk operations, needs logbook CRUD,
-     batch QSO edit, list with paging, export to ADIF.
-   - `apps/config` — rare-use, needs config read/write and validation.
-   Earlier daemon API sketches were logging-centric and missed the logbook
-   and config surfaces. Make a table of all three consumers' required
-   operations *before* deciding endpoint URIs. This enumeration is the
-   main content of `api.md`.
-
-3. **Write `docs/v2-design/milestones.md`** to concretely define what
-   milestone 1 "done" means. The risk `structure.md` explicitly flagged is
-   the "interminable 90%" — mitigated only by narrow initial scope.
-   Proposed milestone 1: daemon + `curl`-based HTTP API exercise + one
-   carry-forward client (`cmd/importer` adapted to go through the daemon
-   instead of writing sqlite directly). Then milestone 2 adds the first
-   Wails client. Then multi-destination forwarding, then bridges, then
-   multi-rig. Writing it down forces commitment.
-
-4. **Pick the ORM/generator approach** — this becomes `docs/v2-design/db-layer.md`
-   when v2 DB work starts. sqlboiler (v1's choice), Bob (successor), sqlc
-   (query-first), or hand-rolled. Not urgent; the current carry-forward
-   plan is "sqlboiler stays until there's a reason to change." Make it an
-   explicit decision when you're actually touching DB code for v2.
-
-5. **Think about multi-rig as a first-class assumption** before the serial
-   bridge design starts — this becomes `docs/v2-design/multi-rig.md` when
-   it's a real concern. v1 has no multi-rig support. The bridge (milestone
-   3+) is the place to bake it in. Data-model questions to answer: does
-   `types.Qso` carry a rig identifier? Does the logbook schema need a rig
-   table? These are cheaper to answer before the daemon API is frozen than
+4. **Think about multi-rig as a first-class assumption** →
+   `docs/v2-design/multi-rig.md` when the bridge design starts. v1
+   has no multi-rig support. Cheaper to answer "does `types.Qso`
+   carry a rig identifier" before the daemon API is frozen than
    after.
 
-6. **Expand `CLAUDE.md` frontend guidance when Wails clients return in
-   milestone 2.** The current file has deliberately thin TypeScript/Svelte
-   5 coverage (runes preference, Vitest/Playwright, snippets-for-tightly-
-   coupled-UI) because there's no frontend code in the v2 tree yet. When
-   the first Wails app lands, expand with concrete guidance on: component
-   organization, Svelte 5 state/store patterns, TS strictness level, Wails
-   bindings conventions between the Go backend and Svelte frontend, form
-   handling patterns, the API client layer that wraps `internal/smclient`
-   calls for the Svelte side, error surfacing, and loading/optimistic-UI
-   patterns. Flagged 2026-04-15 — don't forget.
+5. **Expand `CLAUDE.md` frontend guidance when Wails clients return
+   in milestone 2.** The current file has deliberately thin
+   TypeScript/Svelte 5 coverage because there's no frontend code in
+   the v2 tree yet. When the first Wails app lands, expand with
+   concrete guidance on component organization, Svelte 5 state/store
+   patterns, TS strictness level, Wails bindings conventions, form
+   handling patterns, the API client layer that wraps a future
+   `internal/smclient` for the Svelte side, error surfacing, and
+   loading/optimistic-UI patterns.
 
-### Carry-forward package code-review track (runs in parallel with v2 design)
+### Carry-forward package code-review track
 
-The carry-forward packages were kept because rewriting them would be too expensive, but they are **not** blessed as final — each one is a code-review candidate during v2 construction. The user explicitly framed this as "carry forward to code-review," not "carry forward as gospel." Each review may land as its own commit, separate from v2 feature work.
+Two of the seven carry-forward library packages have been formally
+audited and brought to v2 final state (`internal/errors`,
+`internal/logging`). Five remain as carry-forward-for-code-review
+candidates. Priority order from highest to lowest expected yield:
 
-7. **Audit `internal/database/sqlite`.** User flagged this as "probably has a smarter implementation." The session-1 adapter simplification was one pass; the rest of the package (the `Service` struct, the `api.go`/`api_context.go` split, the migrations infrastructure, the error wrapping, the `requiredCfgs` field tied to the v1 forwarder row-limit) hasn't been reviewed at that depth. A dedicated pass is likely to find more wins. **Probably the highest-value review target.**
+6. **Audit `internal/database/sqlite`.** Flagged as "probably has a
+   smarter implementation." The session 1 adapter simplification was
+   one pass; the rest of the package (the `Service` struct, the
+   `api.go`/`api_context.go` split, the migrations infrastructure,
+   the error wrapping, the `requiredCfgs` field tied to the v1
+   forwarder row-limit) has not been reviewed at that depth.
+   **Highest-value review target.** Likely to surface an ORM/driver
+   decision in the process, feeding into `db-layer.md`.
 
-8. **Audit `internal/iocdi`.** The home-grown DI container. Generally considered a "keep," but worth a read to confirm it still makes sense for the v2 daemon's smaller service graph. If the daemon ends up with only 4–5 services, manual wiring might be cleaner than reflection-based DI.
+7. **Audit `internal/adif`.** ~2000 lines of ADIF parser.
+   Load-bearing for milestone 1 because the daemon's POST endpoint
+   accepts raw ADIF bodies. Review for any v1-era shortcuts that
+   could be cleaned up, and for test coverage gaps around the
+   "malformed ADIF input" error paths.
 
-9. **Audit `internal/adif`.** ~2000 lines of ADIF parser. Load-bearing for milestone 1. Review for any v1-era shortcuts that could be cleaned up, and for test coverage gaps around the "ADIF is down" error paths (see `lessons-for-v2.md` → "Explicit fallbacks for every external dependency").
+8. **Audit `internal/iocdi`.** The home-grown DI container. Generally
+   considered a keep, but worth a read to confirm it makes sense for
+   the v2 daemon's smaller service graph. If the daemon ends up with
+   only 4–5 services, manual wiring might be cleaner than reflection-
+   based DI.
 
-10. **Audit `internal/types` (pruned version).** 13 files left after the session 3 prune. Some (like `adif.go`, `datastore.go`, `logging.go`) may still be pruneable. Worth a read-through once the daemon is far enough along that the actual minimal surface is clearer.
+9. **Audit `internal/types` (pruned).** 13 files remain after the
+   session 3 prune. Some (`adif.go`, `datastore.go`, `logging.go`) may
+   still be prunable now that the daemon's actual needs are clearer.
 
-11. **Audit `internal/errors`, `internal/logging`, `internal/enums`, `internal/utils`.** Less urgent than the above — these are "maturing" per the user's framing — but each one should get at least a quick pass when its first v2 consumer lands.
+10. **Audit `internal/enums`, `internal/utils`.** Less urgent — these
+    are small, self-contained, and have been touched only
+    incidentally. Each should get at least a quick pass when its
+    first v2 consumer lands.
 
 ### Deferred features to investigate
 
-These are features that are understood to be desirable but explicitly *not* day-one requirements. They are captured here so they don't get lost between sessions. When a feature reaches "ready to design," it graduates into a real `docs/v2-design/*.md` sibling (or into an existing milestone plan).
+These are features that are understood to be desirable but explicitly
+*not* day-one requirements. They are captured here so they don't get
+lost between sessions. When a feature reaches "ready to design," it
+graduates into a real `docs/v2-design/*.md` sibling.
 
-- **Logging-app text-file fallback reconciliation** (captured 2026-04-16, session 5). The master invariant "Nothing blocks logging a QSO" (see `docs/v1-analysis/invariants.md`) requires the logging app to maintain its own local durability independent of the daemon: when the daemon is unavailable, the logging app falls back to writing the QSO to a local text file (plain-text ADIF). This part is a day-one requirement of the logging app when it returns in milestone 2+.
+- **Logging-app text-file fallback reconciliation** (captured
+  2026-04-17, session 5). The master invariant "Nothing blocks
+  logging a QSO" (see `docs/v1-analysis/invariants.md`) requires the
+  logging app to maintain its own local durability independent of
+  the daemon: when the daemon is unavailable, the logging app falls
+  back to writing the QSO to a local text file (plain-text ADIF).
+  This part is a day-one requirement of the logging app when it
+  returns in milestone 2+.
 
-  The *reconciliation* flow is the follow-up: when the daemon comes back online after an outage, the logging app resubmits the QSOs it captured only to its text-file fallback during the outage. **Mechanism:** the logging app submits each queued entry via the daemon's normal submit API (`POST /v1/qso`, whatever the endpoint ends up being). It does **not** use a special import endpoint or a direct file-merge path. The dedupe key (`hash(call + band + mode + start_time_rounded_to_minute)`) silently absorbs any accidental double-submissions from overlapping reconciliation attempts — if the same QSO happens to be submitted twice, the daemon returns "duplicate, ignored" on the second submission and nothing breaks.
+  The *reconciliation* flow is the follow-up: when the daemon comes
+  back online after an outage, the logging app resubmits the QSOs
+  it captured only to its text-file fallback during the outage.
+  **Mechanism:** the logging app submits each queued entry via the
+  daemon's normal submit API (`POST /v1/qso`, whatever the endpoint
+  ends up being). It does **not** use a special import endpoint or
+  a direct file-merge path. The dedupe key
+  (`hash(call + band + mode + start_time_rounded_to_minute)`)
+  silently absorbs any accidental double-submissions from
+  overlapping reconciliation attempts.
 
-  This reconciliation flow is **not a milestone 1 concern** and **not a milestone 2 day-one requirement for the logging app**. It is a post-first-flight refinement — the logging app is usable without it, the text file is a faithful record during the outage, and the operator can manually replay entries via `cmd/importer` (or its future v2 equivalent) if needed before the automatic flow exists. When it becomes real, it gets its own design doc (probably `docs/v2-design/logging-app-resilience.md` or similar).
+  Not a milestone 1 concern, not a milestone 2 day-one requirement.
+  Post-first-flight refinement. When it becomes real, it gets its
+  own design doc (probably `docs/v2-design/logging-app-resilience.md`
+  or similar).
+
+- **Daemon dashboard / monitoring UI.** Considered out loud during
+  session 5's SSE discussion as a possible future consumer of the
+  daemon's event stream. Not a milestone 1 concern. If built, it
+  would subscribe to the same SSE endpoint (`/v1/events`) that
+  `apps/logging` and `apps/logbook` use — no new protocol design
+  required.
 
 ### v1 branch follow-ups (distinct track from v2 main work)
 
-v1 is a live maintenance branch. Bug fixes and improvements for v1 land
-there directly, not on main. These items are tracked separately because
-main is about to diverge significantly from v1 and the two tracks should
-not bleed into each other.
+v1 is a live maintenance branch. Bug fixes and improvements for v1
+land there directly, not on main. These items are tracked separately
+because main has diverged significantly from v1 and the two tracks
+should not bleed into each other.
 
-- **Track down and fix a data race in v1.** The failing
-  `go test -race ./... -short` in the v1 `validate.yml` workflow is caught
-  by the race detector. The race is in v1 code that will be restructured
-  or replaced during the v2 milestone-1 reshape, so fixing it on main is
-  pointless churn — but v1 needs to be correct for day-to-day operational
-  use. To chase it:
-  - `git checkout v1`
-  - `go test -race ./... -short` in each module to find which test triggers it
-  - Typical culprits in this codebase: concurrent cache/map access in
-    lookup/enrichment paths, goroutine leaks in forwarding workers,
-    unsynchronized state in the CAT listener event emitter
-  - Fix on the v1 branch only; tag a v1.0.1 if the fix is worth shipping
-- **Known-but-deferred items from the bug inventory that still apply to v1:**
-  - Hardcoded QRZ forwarder in `LogQso` / `UpdateQso` (see
-    `docs/v1-analysis/bug-inventory.md` → "Hardcoded QRZ forwarder"). Not
-    a crash, but blocks multi-destination forwarding. Unlikely to be fixed
-    on v1 since the redesign is a v2 concern.
-  - `DatabaseServiceInterface` vs `*sqlite.Service` mismatch — cosmetic,
-    unused scaffolding. Could be deleted from v1 if it's bothering
-    anything, but probably not worth the churn.
+- **Data race — candidate fix identified session 6, not yet verified
+  on v1.** The failing `go test -race ./... -short` in the v1
+  `validate.yml` workflow (before we deleted that workflow in session
+  2) is almost certainly the shutdown force-drain race fixed in
+  session 6's commit `7359b6c`. The symptoms match exactly: the race
+  detector tripped on concurrent access to `activeOps` during
+  `Service.Close()` + in-flight logging goroutines, which is the
+  exact pattern the force-drain loop was racing with. **To verify:**
+  check out the `v1` branch, apply the equivalent of session 6's
+  `trackedLogEvent → logEvent` merge and `Close()` force-drain
+  removal (the fix is confined to `internal/logging/event.go` and
+  `internal/logging/service.go`), then run `go test -race -short
+  ./...` on v1. If it passes, we've fixed both. If it still fails,
+  there's a second race to hunt. Either way, the v1 fix could
+  justify a `v1.0.1` tag if there are other v1 bugs accumulated from
+  day-to-day use.
+
+- **Known-but-deferred items from the bug inventory that still apply
+  to v1:**
+  - Hardcoded QRZ forwarder in `LogQso`/`UpdateQso` (see
+    `docs/v1-analysis/bug-inventory.md`). Not a crash, blocks
+    multi-destination forwarding. Unlikely to be fixed on v1
+    because the redesign is a v2 concern.
+  - `DatabaseServiceInterface` vs `*sqlite.Service` signature
+    mismatch — cosmetic, unused scaffolding. Could be deleted from
+    v1 if it's bothering anything, but probably not worth the churn.
 
 ### Maintenance of this handoff document
 
-12. **Update this file at the end of every session.** Move completed items
-    from "Next steps" into "What happened," add new items as they surface,
-    prune "What happened" to keep it to the last 2–3 sessions of history.
-    The git history and the v1-analysis / v2-design docs are the long-form
-    record; this file is the quick-reference for cross-session continuity.
+11. **Update this file at the end of every session.** Move completed
+    items from "Next steps" into "What happened," add new items as
+    they surface, prune "What happened" to keep it to the last 2–3
+    sessions of history. The git history and the v1-analysis /
+    v2-design docs are the long-form record; this file is the
+    quick-reference for cross-session continuity.
 
-13. **Prune session-1's "What happened" entry next session.** The handoff
-    is now carrying three sessions of history. Per the maintenance rule
-    above, only 2–3 sessions stay in full detail. After session 4 lands,
-    consider compressing session 1 to a one-paragraph summary referencing
-    the relevant commit hashes (`5288983`, `1ae516d`, `0e158ec`,
-    `66e0af3`) and the session-2 handoff entry that already contains its
-    work, so this file doesn't grow unbounded.
+12. **Session compression applied session 6.** Sessions 1–3 are now
+    one-paragraph summaries. After session 7 lands, session 4 becomes
+    the next candidate for compression to a summary.
