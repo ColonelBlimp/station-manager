@@ -129,6 +129,29 @@ func (s *Service) Initialize() error {
 // Close stops accepting new log operations, waits for in-flight logging to
 // finish up to a configured timeout, optionally warns on timeout, and closes
 // any open file writer. It is safe to call multiple times.
+//
+// Shutdown semantics: new log operations are rejected immediately (the
+// isInitialized flag is flipped before any draining begins, and event
+// builders return no-ops). In-flight operations — events that have been
+// constructed but not yet had their terminal method (Msg/Msgf/Send)
+// called — are given up to ShutdownTimeoutMS (default
+// defaultShutdownTimeoutMS) to complete. If the drain times out and
+// ShutdownTimeoutWarning is enabled, a warning is logged naming the
+// number of outstanding operations.
+//
+// On drain timeout, Close() deliberately does NOT force-drain the
+// WaitGroup. The previous implementation ran a loop calling wg.Done() once
+// per outstanding op under the assumption that the orphans would never
+// call Msg()/Send() themselves, but that assumption is racy: a concurrent
+// goroutine executing its own trackedLogEvent.Msg() defer block decrements
+// the same counters, and the force-drain could push wg.Done() past
+// wg.Add() and panic with "sync: negative WaitGroup counter." Leaking the
+// remaining Add() calls is harmless because Close() has already flipped
+// isInitialized to false, nothing else is waiting on the WaitGroup, and
+// stragglers that complete after Close() returns will decrement their own
+// counters normally — they're just updating state on a Service that's
+// about to be garbage collected. See docs/reviews/internal-logging.md
+// finding 4.1 for the background.
 func (s *Service) Close() error {
 	const op errors.Op = "logging.Service.Close"
 	if s == nil {
@@ -155,8 +178,9 @@ func (s *Service) Close() error {
 	s.logger.Store(nil)
 	s.mu.Unlock()
 
-	// Determine timeout (default 100ms if not configured)
-	timeoutMS := 100
+	// Determine drain timeout (fallback to defaultShutdownTimeoutMS if
+	// config is unset or zero) and whether to warn on timeout.
+	timeoutMS := defaultShutdownTimeoutMS
 	warnOnTimeout := false
 	if s.LoggingConfig != nil {
 		if s.LoggingConfig.ShutdownTimeoutMS > 0 {
@@ -165,43 +189,26 @@ func (s *Service) Close() error {
 		warnOnTimeout = s.LoggingConfig.ShutdownTimeoutWarning
 	}
 
-	// Wait for active logging operations to complete using WaitGroup with timeout
-	if waitTimeout(&s.wg, time.Duration(timeoutMS)*time.Millisecond) {
-		// Timed out
-		if warnOnTimeout && logger != nil {
-			activeOps := s.activeOps.Load()
+	// Wait for active logging operations to complete using WaitGroup with
+	// timeout. If the drain times out, we log a warning (when configured)
+	// but do NOT force-drain — see the doc comment above for why.
+	if waitTimeout(&s.wg, time.Duration(timeoutMS)*time.Millisecond) && warnOnTimeout && logger != nil {
+		event := logger.Warn().
+			Int32("active_operations", s.activeOps.Load()).
+			Int("timeout_ms", timeoutMS)
 
-			// Capture location info for debugging
-			s.mu.Lock()
-			locations := make(map[string]int)
-			for k, v := range s.activeOpLocations {
-				locations[k] = v
-			}
-			s.mu.Unlock()
-
-			event := logger.Warn().
-				Int32("active_operations", activeOps).
-				Int("timeout_ms", timeoutMS)
-
-			// Add location info if available
-			if len(locations) > 0 {
-				event = event.Interface("operation_locations", locations)
-			}
-
-			event.Msg("Logger shutdown timeout exceeded, forcing close with active operations")
-
-			// Force-drain the WaitGroup to prevent indefinite blocking
-			// This handles orphaned log operations that never called Msg()/Send()
-			for i := int32(0); i < activeOps; i++ {
-				s.activeOps.Add(-1)
-				s.wg.Done()
-			}
+		// Include debug location info if the `logging_debug` build tag
+		// is enabled and the location map was populated. In release
+		// builds snapshotLocations is a no-op that returns nil.
+		if locations := snapshotLocations(s); locations != nil {
+			event = event.Interface("operation_locations", locations)
 		}
+
+		event.Msg("Logger shutdown timeout exceeded; in-flight operations will complete after Close() returns")
 	}
 
 	// Close the file writer if it exists
 	// fileWriter is only accessed here and during initialization (protected by sync.Once)
-	// The activeOps counter ensures no writes are in progress
 	s.mu.Lock()
 	fileWriter := s.fileWriter
 	s.fileWriter = nil

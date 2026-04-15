@@ -69,57 +69,66 @@ type LogEvent interface {
 	Send()
 }
 
-// logEvent implements LogEvent by wrapping zerolog.Event
-// It is safe to call methods on a nil underlying event; in that case the methods
-// become no-ops. This allows returning a LogEvent even when the logger is disabled.
+// logEvent implements LogEvent by wrapping zerolog.Event.
+//
+// Fields `service` and `location` are optional tracking state. When they
+// are set (by newTrackedLogEvent or newTrackedContextLogEvent), the
+// terminal methods Msg/Msgf/Send call finish() to decrement the active
+// operations counter and signal the WaitGroup — coordinating with
+// Service.Close()'s shutdown drain. When they are unset (from newLogEvent
+// on a disabled logger, or from a no-op code path), finish() is a no-op
+// and no shutdown coordination happens.
+//
+// This is a single-type design on purpose. An earlier version had a
+// separate trackedLogEvent type that embedded logEvent. That version
+// had a subtle bug: the builder methods (Str, Int, etc.) are defined on
+// *logEvent and return *logEvent via `return e`. When called on a
+// *trackedLogEvent, Go's method promotion dispatched to the embedded
+// logEvent's method, which returned the inner *logEvent pointer — losing
+// the trackedLogEvent identity. Any subsequent Msg/Msgf/Send on the
+// returned interface value hit the non-tracking logEvent methods, so the
+// active-operations counter was never decremented. The bug was masked
+// by the Close() force-drain path and surfaced only when that force-drain
+// was removed (see docs/reviews/internal-logging.md finding 4.1).
+//
+// It is safe to call any method on a logEvent with a nil event field;
+// the builder methods become no-ops and the terminal methods still run
+// finish() if tracking is configured. This preserves the invariant that
+// every tracked event is drained regardless of whether the underlying
+// zerolog event was actually written.
 type logEvent struct {
-	event *zerolog.Event
-}
-
-// trackedLogEvent wraps a logEvent and decrements the active operations counter when finalized.
-// This ensures Close() can wait for in-flight logging to complete (up to a timeout) without races.
-type trackedLogEvent struct {
-	logEvent
+	event    *zerolog.Event
 	service  *Service
-	location string // Debug: Track where this operation was created
+	location string // populated only when debug tracking is enabled
 }
 
-// newLogEvent creates a new LogEvent wrapper.
-// If e is nil, the returned LogEvent is a no-op implementation.
+// newLogEvent creates a new LogEvent wrapper without shutdown tracking.
+// If e is nil, the returned LogEvent is a no-op implementation. Use this
+// for events that should not participate in the Service shutdown drain
+// (e.g. no-op events returned from disabled loggers or invalid states).
 func newLogEvent(e *zerolog.Event) LogEvent {
-	if e == nil {
-		return &logEvent{event: nil}
-	}
 	return &logEvent{event: e}
 }
 
-// newTrackedLogEvent creates a new tracked LogEvent that decrements activeOps when finished
-// (on Msg/Msgf/Send calls).
+// newTrackedLogEvent creates a LogEvent wrapper that participates in the
+// Service shutdown drain: its terminal methods (Msg/Msgf/Send) decrement
+// the Service's active-operations counter and signal its WaitGroup. The
+// caller is expected to have already incremented the counter before
+// calling this — if e is nil or s is nil we release the counter here
+// because there is no tracked event to do it later.
 func newTrackedLogEvent(e *zerolog.Event, s *Service, location string) LogEvent {
 	if e == nil || s == nil {
-		// If event is nil, we need to decrement the counter that was already incremented
-		// by the caller (logEventBuilder or newTrackedContextLogEvent)
 		if s != nil {
+			// Counter was incremented by the caller but we won't create a
+			// tracked event, so release it immediately to keep the counter
+			// balanced.
 			s.activeOps.Add(-1)
 			s.wg.Done()
-			if location != "" {
-				s.mu.Lock()
-				if s.activeOpLocations != nil {
-					s.activeOpLocations[location]--
-					if s.activeOpLocations[location] <= 0 {
-						delete(s.activeOpLocations, location)
-					}
-				}
-				s.mu.Unlock()
-			}
+			untrackLocation(s, location)
 		}
 		return &logEvent{event: nil}
 	}
-	return &trackedLogEvent{
-		logEvent: logEvent{event: e},
-		service:  s,
-		location: location,
-	}
+	return &logEvent{event: e, service: s, location: location}
 }
 
 // newTrackedContextLogEvent creates a tracked log event for context loggers
@@ -389,83 +398,36 @@ func (e *logEvent) Dict(key string, dict func(LogEvent)) LogEvent {
 	return e
 }
 
+// finish decrements the active-operations counter and signals the
+// WaitGroup on the owning Service, IF this event was constructed with
+// tracking. No-op for untracked events. Called from the terminal methods
+// Msg, Msgf, and Send. Extracted as a helper to avoid the three-way
+// defer-block duplication the previous code had.
+func (e *logEvent) finish() {
+	if e.service == nil {
+		return
+	}
+	e.service.activeOps.Add(-1)
+	e.service.wg.Done()
+	untrackLocation(e.service, e.location)
+}
+
 func (e *logEvent) Msg(msg string) {
+	defer e.finish()
 	if e.event != nil {
 		e.event.Msg(msg)
 	}
 }
 
 func (e *logEvent) Msgf(format string, v ...interface{}) {
+	defer e.finish()
 	if e.event != nil {
 		e.event.Msgf(format, v...)
 	}
 }
 
 func (e *logEvent) Send() {
-	if e.event != nil {
-		e.event.Send()
-	}
-}
-
-// Override Msg, Msgf, and Send for trackedLogEvent to decrement counter
-func (e *trackedLogEvent) Msg(msg string) {
-	defer func() {
-		e.service.activeOps.Add(-1)
-		e.service.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if e.location != "" {
-			e.service.mu.Lock()
-			if e.service.activeOpLocations != nil {
-				e.service.activeOpLocations[e.location]--
-				if e.service.activeOpLocations[e.location] <= 0 {
-					delete(e.service.activeOpLocations, e.location)
-				}
-			}
-			e.service.mu.Unlock()
-		}
-	}()
-	if e.event != nil {
-		e.event.Msg(msg)
-	}
-}
-
-func (e *trackedLogEvent) Msgf(format string, v ...interface{}) {
-	defer func() {
-		e.service.activeOps.Add(-1)
-		e.service.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if e.location != "" {
-			e.service.mu.Lock()
-			if e.service.activeOpLocations != nil {
-				e.service.activeOpLocations[e.location]--
-				if e.service.activeOpLocations[e.location] <= 0 {
-					delete(e.service.activeOpLocations, e.location)
-				}
-			}
-			e.service.mu.Unlock()
-		}
-	}()
-	if e.event != nil {
-		e.event.Msgf(format, v...)
-	}
-}
-
-func (e *trackedLogEvent) Send() {
-	defer func() {
-		e.service.activeOps.Add(-1)
-		e.service.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if e.location != "" {
-			e.service.mu.Lock()
-			if e.service.activeOpLocations != nil {
-				e.service.activeOpLocations[e.location]--
-				if e.service.activeOpLocations[e.location] <= 0 {
-					delete(e.service.activeOpLocations, e.location)
-				}
-			}
-			e.service.mu.Unlock()
-		}
-	}()
+	defer e.finish()
 	if e.event != nil {
 		e.event.Send()
 	}

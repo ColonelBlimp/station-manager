@@ -2,8 +2,6 @@ package logging
 
 import (
 	stderrs "errors"
-	"fmt"
-	"runtime"
 	"strings"
 
 	smerrors "github.com/ColonelBlimp/station-manager/internal/errors"
@@ -93,24 +91,16 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 		return newLogEvent(nil)
 	}
 
-	// Increment active operations counter before acquiring lock
+	// Increment active operations counter before acquiring lock. Every
+	// early-return path below must decrement these (via releaseCounters)
+	// to keep the WaitGroup balanced.
 	s.activeOps.Add(1)
 	s.wg.Add(1)
 
-	// Debug: Track where this operation was created
-	var location string
-	if s.LoggingConfig.ShutdownTimeoutWarning {
-		_, file, line, ok := runtime.Caller(2)
-		if ok {
-			location = fmt.Sprintf("%s:%d", file, line)
-			s.mu.Lock()
-			if s.activeOpLocations == nil {
-				s.activeOpLocations = make(map[string]int)
-			}
-			s.activeOpLocations[location]++
-			s.mu.Unlock()
-		}
-	}
+	// Debug: capture file:line of the caller, but only when compiled
+	// with the `logging_debug` build tag. In release builds trackLocation
+	// is a no-op that returns "", so there is no runtime.Caller cost.
+	location := trackLocation(s, 2)
 
 	// Acquire read lock to prevent Close() from running during log creation
 	s.mu.RLock()
@@ -118,56 +108,20 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 	// Double-check after acquiring lock (TOCTOU protection)
 	if !s.isInitialized.Load() {
 		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if location != "" {
-			s.mu.Lock()
-			if s.activeOpLocations != nil {
-				s.activeOpLocations[location]--
-				if s.activeOpLocations[location] <= 0 {
-					delete(s.activeOpLocations, location)
-				}
-			}
-			s.mu.Unlock()
-		}
+		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
 	logger := s.logger.Load()
 	if logger == nil {
 		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if location != "" {
-			s.mu.Lock()
-			if s.activeOpLocations != nil {
-				s.activeOpLocations[location]--
-				if s.activeOpLocations[location] <= 0 {
-					delete(s.activeOpLocations, location)
-				}
-			}
-			s.mu.Unlock()
-		}
+		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
 	if logger.GetLevel() > level {
 		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if location != "" {
-			s.mu.Lock()
-			if s.activeOpLocations != nil {
-				s.activeOpLocations[location]--
-				if s.activeOpLocations[location] <= 0 {
-					delete(s.activeOpLocations, location)
-				}
-			}
-			s.mu.Unlock()
-		}
+		releaseCounters(s, location)
 		return newLogEvent(nil) // Return early if level is not enabled
 	}
 
@@ -189,13 +143,24 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 		event = logger.Trace()
 	default:
 		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
+		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
 	s.mu.RUnlock()
 
-	// Wrap the event to decrement counter when done
+	// Wrap the event so its terminal Msg/Msgf/Send call decrements the
+	// counters this function incremented above.
 	return newTrackedLogEvent(event, s, location)
+}
+
+// releaseCounters undoes the active-operations counter + WaitGroup
+// increment that logEventBuilder makes before entering any of its
+// early-return paths. Extracted as a helper to eliminate three copies
+// of the same 3-6 line unwind block that the previous code carried in
+// logEventBuilder's early-return paths.
+func releaseCounters(s *Service, location string) {
+	s.activeOps.Add(-1)
+	s.wg.Done()
+	untrackLocation(s, location)
 }
