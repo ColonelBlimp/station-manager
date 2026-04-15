@@ -125,23 +125,8 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 		return newLogEvent(nil) // Return early if level is not enabled
 	}
 
-	var event *zerolog.Event
-	switch level {
-	case zerolog.DebugLevel:
-		event = logger.Debug()
-	case zerolog.InfoLevel:
-		event = logger.Info()
-	case zerolog.WarnLevel:
-		event = logger.Warn()
-	case zerolog.ErrorLevel:
-		event = logger.Error()
-	case zerolog.FatalLevel:
-		event = logger.Fatal()
-	case zerolog.PanicLevel:
-		event = logger.Panic()
-	case zerolog.TraceLevel:
-		event = logger.Trace()
-	default:
+	event := eventForLevel(logger, level)
+	if event == nil {
 		s.mu.RUnlock()
 		releaseCounters(s, location)
 		return newLogEvent(nil)
@@ -152,6 +137,34 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 	// Wrap the event so its terminal Msg/Msgf/Send call decrements the
 	// counters this function incremented above.
 	return newTrackedLogEvent(event, s, location)
+}
+
+// eventForLevel returns the zerolog.Event for the given level from the
+// given logger. Returns nil for zerolog.NoLevel or any unrecognized
+// level (which the caller should treat as an untracked no-op).
+//
+// Extracted so the 7-case level dispatch isn't duplicated between
+// logEventBuilder and newTrackedContextLogEvent — see
+// docs/reviews/internal-logging.md finding 4.4.
+func eventForLevel(l *zerolog.Logger, level zerolog.Level) *zerolog.Event {
+	switch level {
+	case zerolog.DebugLevel:
+		return l.Debug()
+	case zerolog.InfoLevel:
+		return l.Info()
+	case zerolog.WarnLevel:
+		return l.Warn()
+	case zerolog.ErrorLevel:
+		return l.Error()
+	case zerolog.FatalLevel:
+		return l.Fatal()
+	case zerolog.PanicLevel:
+		return l.Panic()
+	case zerolog.TraceLevel:
+		return l.Trace()
+	default:
+		return nil
+	}
 }
 
 // releaseCounters undoes the active-operations counter + WaitGroup

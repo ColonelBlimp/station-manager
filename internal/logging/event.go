@@ -92,7 +92,7 @@ type LogEvent interface {
 // was removed (see docs/reviews/internal-logging.md finding 4.1).
 //
 // It is safe to call any method on a logEvent with a nil event field;
-// the builder methods become no-ops and the terminal methods still run
+// the builder methods become no-ops, and the terminal methods still run
 // finish() if tracking is configured. This preserves the invariant that
 // every tracked event is drained regardless of whether the underlying
 // zerolog event was actually written.
@@ -114,12 +114,12 @@ func newLogEvent(e *zerolog.Event) LogEvent {
 // Service shutdown drain: its terminal methods (Msg/Msgf/Send) decrement
 // the Service's active-operations counter and signal its WaitGroup. The
 // caller is expected to have already incremented the counter before
-// calling this — if e is nil or s is nil we release the counter here
+// calling this — if e is nil or s is nil, we release the counter here
 // because there is no tracked event to do it later.
 func newTrackedLogEvent(e *zerolog.Event, s *Service, location string) LogEvent {
 	if e == nil || s == nil {
 		if s != nil {
-			// Counter was incremented by the caller but we won't create a
+			// Counter was incremented by the caller, but we won't create a
 			// tracked event, so release it immediately to keep the counter
 			// balanced.
 			s.activeOps.Add(-1)
@@ -154,24 +154,10 @@ func newTrackedContextLogEvent(cl *contextLogger, level zerolog.Level) LogEvent 
 	cl.parent.activeOps.Add(1)
 	cl.parent.wg.Add(1)
 
-	var event *zerolog.Event
-	switch level {
-	case zerolog.DebugLevel:
-		event = cl.logger.Debug()
-	case zerolog.InfoLevel:
-		event = cl.logger.Info()
-	case zerolog.WarnLevel:
-		event = cl.logger.Warn()
-	case zerolog.ErrorLevel:
-		event = cl.logger.Error()
-	case zerolog.FatalLevel:
-		event = cl.logger.Fatal()
-	case zerolog.PanicLevel:
-		event = cl.logger.Panic()
-	case zerolog.TraceLevel:
-		event = cl.logger.Trace()
-	default:
-		// Should not happen, but decrement counter if it does
+	event := eventForLevel(cl.logger, level)
+	if event == nil {
+		// Unrecognized level — release the counter we just incremented
+		// and return a no-op event.
 		cl.parent.activeOps.Add(-1)
 		cl.parent.wg.Done()
 		return newLogEvent(nil)
