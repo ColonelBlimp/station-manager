@@ -18,12 +18,12 @@ import (
 func ContactedStationModelToType(model *models.ContactedStation) (types.ContactedStation, error) {
 	const op errors.Op = "sqlite.adapters.ContactedStationModelToType"
 	if model == nil {
-		return types.ContactedStation{}, errors.New(op).Msg(errMsgNilModel)
+		return types.ContactedStation{}, errors.New(op).WithMsg(errMsgNilModel)
 	}
 
 	station := types.ContactedStation{}
 	if err := json.Unmarshal(model.AdditionalData, &station); err != nil {
-		return types.ContactedStation{}, errors.New(op).Err(err)
+		return types.ContactedStation{}, errors.New(op).WithErr(err)
 	}
 
 	// Overlay promoted columns — authoritative over anything in the blob.
@@ -38,7 +38,7 @@ func ContactedStationModelToType(model *models.ContactedStation) (types.Contacte
 func CountryModelToType(model *models.Country) (types.Country, error) {
 	const op errors.Op = "sqlite.adapters.CountryModelToType"
 	if model == nil {
-		return types.Country{}, errors.New(op).Msg(errMsgNilModel)
+		return types.Country{}, errors.New(op).WithMsg(errMsgNilModel)
 	}
 	return types.Country{
 		Name:       model.Name,
@@ -63,12 +63,12 @@ func CountryModelToType(model *models.Country) (types.Country, error) {
 func QsoModelToType(model *models.Qso) (types.Qso, error) {
 	const op errors.Op = "sqlite.adapters.QsoModelToType"
 	if model == nil {
-		return types.Qso{}, errors.New(op).Msg(errMsgNilModel)
+		return types.Qso{}, errors.New(op).WithMsg(errMsgNilModel)
 	}
 
 	qso := types.Qso{}
 	if err := json.Unmarshal(model.AdditionalData, &qso); err != nil {
-		return qso, errors.New(op).Err(err)
+		return qso, errors.New(op).WithErr(err)
 	}
 
 	// Overlay promoted columns — authoritative over anything in the blob.
@@ -92,7 +92,7 @@ func QsoModelToType(model *models.Qso) (types.Qso, error) {
 func LogbookModelToType(model *models.Logbook) (types.Logbook, error) {
 	const op errors.Op = "sqlite.adapters.LogbookModelToType"
 	if model == nil {
-		return types.Logbook{}, errors.New(op).Msg(errMsgNilModel)
+		return types.Logbook{}, errors.New(op).WithMsg(errMsgNilModel)
 	}
 	return types.Logbook{
 		ID:          model.ID,

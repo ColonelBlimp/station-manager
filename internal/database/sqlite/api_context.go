@@ -40,11 +40,11 @@ func (s *Service) InsertQsoWithContext(ctx context.Context, qso types.Qso) (int6
 
 	model, err := adapters.QsoTypeToModel(qso)
 	if err != nil {
-		return 0, errors.New(op).Err(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
-		return 0, errors.New(op).Err(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 
 	return model.ID, nil
@@ -57,7 +57,7 @@ func (s *Service) FetchQsoSliceBySessionIDWithContext(ctx context.Context, id in
 	}
 
 	if id < 1 {
-		return nil, errors.New(op).Msg(errMsgInvalidId)
+		return nil, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -74,7 +74,7 @@ func (s *Service) FetchQsoSliceBySessionIDWithContext(ctx context.Context, id in
 
 	slice, err := models.Qsos(mods...).All(ctx, h)
 	if err != nil {
-		return nil, errors.New(op).Err(err).Msg("Failed to fetch QSOs by session ID.")
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to fetch QSOs by session ID.")
 	}
 
 	result := make([]types.Qso, 0, len(slice))
@@ -97,7 +97,7 @@ func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsi
 
 	callsign = strings.TrimSpace(callsign)
 	if callsign == "" {
-		return nil, errors.New(op).Msg(errMsgEmptyCallsign)
+		return nil, errors.New(op).WithMsg(errMsgEmptyCallsign)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -120,7 +120,7 @@ func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsi
 		if stderr.Is(err, sql.ErrNoRows) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, errors.New(op).Err(err).Msg("Failed to fetch contact history.")
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to fetch contact history.")
 	}
 
 	history := make([]types.ContactHistory, 0, len(slice))
@@ -157,7 +157,7 @@ func (s *Service) FetchQsoSliceByLogbookIdWithContext(ctx context.Context, id in
 	}
 
 	if id < 1 {
-		return nil, errors.New(op).Msg(errMsgInvalidId)
+		return nil, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -170,7 +170,7 @@ func (s *Service) FetchQsoSliceByLogbookIdWithContext(ctx context.Context, id in
 
 	slice, err := models.Qsos(models.QsoWhere.LogbookID.EQ(id)).All(ctx, h)
 	if err != nil {
-		return nil, errors.New(op).Err(err).Msg("Failed to fetch QSO slice.")
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to fetch QSO slice.")
 	}
 
 	var typeSlice []types.Qso
@@ -197,7 +197,7 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 	}
 
 	if id < 1 {
-		return 0, errors.New(op).Msg(errMsgInvalidId)
+		return 0, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -210,7 +210,7 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 
 	count, err := models.Qsos(models.QsoWhere.LogbookID.EQ(id)).Count(ctx, h)
 	if err != nil {
-		return 0, errors.New(op).Err(err).Msg("Failed to fetch QSO count by logbook ID.")
+		return 0, errors.New(op).WithErr(err).WithMsg("Failed to fetch QSO count by logbook ID.")
 	}
 
 	return count, nil
@@ -223,7 +223,7 @@ func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error
 	}
 
 	if qso.ID < 1 {
-		return errors.New(op).Msgf("QSO ID is invalid: %d", qso.ID)
+		return errors.New(op).WithMsgf("QSO ID is invalid: %d", qso.ID)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -236,13 +236,13 @@ func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error
 
 	model, err := adapters.QsoTypeToModel(qso)
 	if err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	model.ModifiedAt = null.TimeFrom(time.Now())
 
 	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	return nil
@@ -270,7 +270,7 @@ func (s *Service) FetchQsoSliceNotForwardedWithContext(ctx context.Context) (typ
 	).All(ctx, h)
 
 	if err != nil {
-		return nil, errors.New(op).Err(err).Msg("Failed to non-forwarded QSO slice.")
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to non-forwarded QSO slice.")
 	}
 
 	var typeSlice []types.Qso
@@ -297,7 +297,7 @@ func (s *Service) InsertQsoUploadWithContext(ctx context.Context, qsoId int64, a
 	}
 
 	if qsoId < 1 {
-		return errors.New(op).Msgf("QSO ID is invalid: %d", qsoId)
+		return errors.New(op).WithMsgf("QSO ID is invalid: %d", qsoId)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -316,7 +316,7 @@ func (s *Service) InsertQsoUploadWithContext(ctx context.Context, qsoId int64, a
 	}
 
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
-		return errors.New(op).Err(err).Msg("Inserting new QSO upload failed.")
+		return errors.New(op).WithErr(err).WithMsg("Inserting new QSO upload failed.")
 	}
 
 	return nil
@@ -329,7 +329,7 @@ func (s *Service) FetchQsoByIdWithContext(ctx context.Context, id int64) (types.
 	}
 
 	if id < 1 {
-		return types.Qso{}, errors.New(op).Msg(errMsgInvalidId)
+		return types.Qso{}, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -345,12 +345,12 @@ func (s *Service) FetchQsoByIdWithContext(ctx context.Context, id int64) (types.
 		if stderr.Is(err, sql.ErrNoRows) {
 			return types.Qso{}, errors.ErrNotFound
 		}
-		return types.Qso{}, errors.New(op).Err(err)
+		return types.Qso{}, errors.New(op).WithErr(err)
 	}
 
 	qso, err := adapters.QsoModelToType(model)
 	if err != nil {
-		return types.Qso{}, errors.New(op).Err(err)
+		return types.Qso{}, errors.New(op).WithErr(err)
 	}
 
 	return qso, nil
@@ -363,13 +363,13 @@ func (s *Service) FetchQsoSlicePagingWithContext(ctx context.Context, logbookId,
 	}
 
 	if logbookId < 1 {
-		return nil, errors.New(op).Msg(errMsgInvalidId)
+		return nil, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 	if pageNum < 1 {
-		return nil, errors.New(op).Msg("Invalid page number. Must be greater than 0.")
+		return nil, errors.New(op).WithMsg("Invalid page number. Must be greater than 0.")
 	}
 	if pageSize < 1 {
-		return nil, errors.New(op).Msg("Invalid page size. Must be greater than 0.")
+		return nil, errors.New(op).WithMsg("Invalid page size. Must be greater than 0.")
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -390,7 +390,7 @@ func (s *Service) FetchQsoSlicePagingWithContext(ctx context.Context, logbookId,
 
 	slice, err := models.Qsos(mods...).All(ctx, h)
 	if err != nil {
-		return nil, errors.New(op).Err(err)
+		return nil, errors.New(op).WithErr(err)
 	}
 
 	var typeSlice []types.Qso
@@ -422,7 +422,7 @@ func (s *Service) FetchContactedStationByCallsignWithContext(ctx context.Context
 
 	callsign = strings.TrimSpace(callsign)
 	if callsign == "" {
-		return types.ContactedStation{}, errors.New(op).Msg(errMsgEmptyCallsign)
+		return types.ContactedStation{}, errors.New(op).WithMsg(errMsgEmptyCallsign)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -438,12 +438,12 @@ func (s *Service) FetchContactedStationByCallsignWithContext(ctx context.Context
 		if stderr.Is(err, sql.ErrNoRows) {
 			return types.ContactedStation{}, errors.ErrNotFound
 		}
-		return types.ContactedStation{}, errors.New(op).Err(err)
+		return types.ContactedStation{}, errors.New(op).WithErr(err)
 	}
 
 	contactedStation, err := adapters.ContactedStationModelToType(model)
 	if err != nil {
-		return types.ContactedStation{}, errors.New(op).Err(err)
+		return types.ContactedStation{}, errors.New(op).WithErr(err)
 	}
 
 	return contactedStation, nil
@@ -465,10 +465,10 @@ func (s *Service) InsertContactedStationWithContext(ctx context.Context, station
 
 	model, err := adapters.ContactedStationTypeToModel(station)
 	if err != nil {
-		return 0, errors.New(op).Err(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
-		return 0, errors.New(op).Err(err).Msg("Inserting new contacted station failed.")
+		return 0, errors.New(op).WithErr(err).WithMsg("Inserting new contacted station failed.")
 	}
 
 	return model.ID, nil
@@ -490,14 +490,14 @@ func (s *Service) UpdateContactedStationWithContext(ctx context.Context, station
 
 	model, err := adapters.ContactedStationTypeToModel(station)
 	if err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	model.ModifiedAt = null.TimeFrom(time.Now())
 
 	_, err = model.Update(ctx, h, boil.Infer())
 	if err != nil {
-		return errors.New(op).Err(err).Msg("Updating contacted station failed.")
+		return errors.New(op).WithErr(err).WithMsg("Updating contacted station failed.")
 	}
 
 	return nil
@@ -515,7 +515,7 @@ func (s *Service) FetchCountryByCallsignWithContext(ctx context.Context, callsig
 
 	callsign = strings.TrimSpace(callsign)
 	if callsign == "" {
-		return types.Country{}, errors.New(op).Msg(errMsgEmptyCallsign)
+		return types.Country{}, errors.New(op).WithMsg(errMsgEmptyCallsign)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -537,12 +537,12 @@ func (s *Service) FetchCountryByCallsignWithContext(ctx context.Context, callsig
 		if stderr.Is(err, sql.ErrNoRows) {
 			return types.Country{}, errors.ErrNotFound
 		}
-		return types.Country{}, errors.New(op).Err(err)
+		return types.Country{}, errors.New(op).WithErr(err)
 	}
 
 	country, err := adapters.CountryModelToType(model)
 	if err != nil {
-		return types.Country{}, errors.New(op).Err(err)
+		return types.Country{}, errors.New(op).WithErr(err)
 	}
 
 	return country, nil
@@ -556,7 +556,7 @@ func (s *Service) FetchCountryByNameWithContext(ctx context.Context, name string
 
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return types.Country{}, errors.New(op).Msg("Country name cannot be empty")
+		return types.Country{}, errors.New(op).WithMsg("Country name cannot be empty")
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -572,12 +572,12 @@ func (s *Service) FetchCountryByNameWithContext(ctx context.Context, name string
 		if stderr.Is(err, sql.ErrNoRows) {
 			return types.Country{}, errors.ErrNotFound
 		}
-		return types.Country{}, errors.New(op).Err(err)
+		return types.Country{}, errors.New(op).WithErr(err)
 	}
 
 	country, err := adapters.CountryModelToType(model)
 	if err != nil {
-		return types.Country{}, errors.New(op).Err(err)
+		return types.Country{}, errors.New(op).WithErr(err)
 	}
 
 	return country, nil
@@ -599,10 +599,10 @@ func (s *Service) InsertCountryWithContext(ctx context.Context, country types.Co
 
 	model, err := adapters.CountryTypeToModel(country)
 	if err != nil {
-		return 0, errors.New(op).Err(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
-		return 0, errors.New(op).Err(err).Msg("Inserting new country failed.")
+		return 0, errors.New(op).WithErr(err).WithMsg("Inserting new country failed.")
 	}
 
 	return model.ID, nil
@@ -624,11 +624,11 @@ func (s *Service) UpdateCountryWithContext(ctx context.Context, country types.Co
 
 	model, err := adapters.CountryTypeToModel(country)
 	if err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
-		return errors.New(op).Err(err).Msg("Updating country failed.")
+		return errors.New(op).WithErr(err).WithMsg("Updating country failed.")
 	}
 
 	return nil
@@ -645,7 +645,7 @@ func (s *Service) FetchLogbookByIDWithContext(ctx context.Context, id int64) (ty
 	}
 
 	if id < 1 {
-		return types.Logbook{}, errors.New(op).Msg(errMsgInvalidId)
+		return types.Logbook{}, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 	h, err := s.getOpenHandle(op)
 	if err != nil {
@@ -660,12 +660,12 @@ func (s *Service) FetchLogbookByIDWithContext(ctx context.Context, id int64) (ty
 		if stderr.Is(err, sql.ErrNoRows) {
 			return types.Logbook{}, errors.ErrNotFound
 		}
-		return types.Logbook{}, errors.New(op).Err(err)
+		return types.Logbook{}, errors.New(op).WithErr(err)
 	}
 
 	logbook, err := adapters.LogbookModelToType(model)
 	if err != nil {
-		return types.Logbook{}, errors.New(op).Err(err)
+		return types.Logbook{}, errors.New(op).WithErr(err)
 	}
 
 	return logbook, nil
@@ -687,14 +687,14 @@ func (s *Service) FetchAllLogbooksWithContext(ctx context.Context) ([]types.Logb
 
 	list, err := models.Logbooks().All(ctx, h)
 	if err != nil {
-		return nil, errors.New(op).Err(err)
+		return nil, errors.New(op).WithErr(err)
 	}
 
 	result := make([]types.Logbook, 0, len(list))
 	for _, logbook := range list {
 		typeLogbook, er := adapters.LogbookModelToType(logbook)
 		if er != nil {
-			return nil, errors.New(op).Err(er).Msg("Converting logbook model to type failed.")
+			return nil, errors.New(op).WithErr(er).WithMsg("Converting logbook model to type failed.")
 		}
 		result = append(result, typeLogbook)
 	}
@@ -718,10 +718,10 @@ func (s *Service) InsertLogbookWithContext(ctx context.Context, logbook types.Lo
 
 	model, err := adapters.LogbookTypeToModel(logbook)
 	if err != nil {
-		return 0, errors.New(op).Err(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
-		return 0, errors.New(op).Err(err).Msg("Inserting new logbook failed.")
+		return 0, errors.New(op).WithErr(err).WithMsg("Inserting new logbook failed.")
 	}
 
 	return model.ID, nil
@@ -734,7 +734,7 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	}
 
 	if id < 1 {
-		return errors.New(op).Msg(errMsgInvalidId)
+		return errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -750,11 +750,11 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 		if stderr.Is(err, sql.ErrNoRows) {
 			return errors.ErrNotFound
 		}
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	if _, err = logbook.Delete(ctx, h, false); err != nil {
-		return errors.New(op).Err(err).Msg("Failed to delete logbook.")
+		return errors.New(op).WithErr(err).WithMsg("Failed to delete logbook.")
 	}
 
 	return nil
@@ -779,10 +779,10 @@ func (s *Service) CheckDefaultLogbookExistsWithContext(ctx context.Context) (boo
 		if stderr.Is(err, sql.ErrNoRows) {
 			return false, errors.ErrNotFound
 		}
-		return false, errors.New(op).Err(err)
+		return false, errors.New(op).WithErr(err)
 	}
 	if model == nil {
-		return false, errors.New(op).Msg("Default logbook not found")
+		return false, errors.New(op).WithMsg("Default logbook not found")
 	}
 	return true, nil
 }
@@ -794,7 +794,7 @@ func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Lo
 	}
 
 	if logbook.ID < 1 {
-		return errors.New(op).Msg("Logbook ID must be greater than 0")
+		return errors.New(op).WithMsg("Logbook ID must be greater than 0")
 	}
 	//TODO: Other validation
 
@@ -814,7 +814,7 @@ func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Lo
 	}
 
 	if err = model.Upsert(ctx, h, false, nil, boil.Infer(), boil.Infer()); err != nil {
-		return errors.New(op).Err(err).Msg("Upserting logbook failed.")
+		return errors.New(op).WithErr(err).WithMsg("Upserting logbook failed.")
 	}
 
 	return nil
@@ -831,7 +831,7 @@ func (s *Service) SoftDeleteSessionByIDWithContext(ctx context.Context, id int64
 	}
 
 	if id < 1 {
-		return errors.New(op).Msg(errMsgInvalidId)
+		return errors.New(op).WithMsg(errMsgInvalidId)
 	}
 	h, err := s.getOpenHandle(op)
 	if err != nil {
@@ -846,11 +846,11 @@ func (s *Service) SoftDeleteSessionByIDWithContext(ctx context.Context, id int64
 		if stderr.Is(err, sql.ErrNoRows) {
 			return errors.ErrNotFound
 		}
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	if _, err = model.Delete(ctx, h, false); err != nil {
-		return errors.New(op).Err(err).Msgf("Failed to soft delete session: %d", id)
+		return errors.New(op).WithErr(err).WithMsgf("Failed to soft delete session: %d", id)
 	}
 
 	return nil
@@ -872,7 +872,7 @@ func (s *Service) GenerateSessionWithContext(ctx context.Context) (int64, error)
 
 	session := models.Session{}
 	if err = session.Insert(ctx, h, boil.Infer()); err != nil {
-		return 0, errors.New(op).Err(err).Msg("Inserting new session failed.")
+		return 0, errors.New(op).WithErr(err).WithMsg("Inserting new session failed.")
 	}
 
 	return session.ID, nil
@@ -889,16 +889,16 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 	}
 
 	if id < 1 {
-		return false, errors.New(op).Msg(errMsgInvalidId)
+		return false, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 	callsign = strings.TrimSpace(callsign)
 	if callsign == "" {
-		return false, errors.New(op).Msg("Callsign cannot be empty")
+		return false, errors.New(op).WithMsg("Callsign cannot be empty")
 	}
 
 	band = strings.TrimSpace(band)
 	if band == "" {
-		return false, errors.New(op).Msg("Band cannot be empty")
+		return false, errors.New(op).WithMsg("Band cannot be empty")
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -916,7 +916,7 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 
 	exists, err := models.Qsos(mods...).Exists(ctx, h)
 	if err != nil {
-		return false, errors.New(op).Err(err)
+		return false, errors.New(op).WithErr(err)
 	}
 
 	return exists, nil
@@ -978,7 +978,7 @@ func (s *Service) FetchPendingUploadsWithContext(ctx context.Context) ([]types.Q
 		batchLimit,
 	).Bind(ctx, h, &rows)
 	if err != nil && !stderr.Is(err, sql.ErrNoRows) {
-		return nil, errors.New(op).Err(err).Msg("Failed to reserve pending uploads")
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to reserve pending uploads")
 	}
 
 	if len(rows) == 0 {
@@ -1000,7 +1000,7 @@ func (s *Service) FetchPendingUploadsWithContext(ctx context.Context) ([]types.Q
 		qm.Load(models.QsoUploadRels.Qso),
 	).All(ctx, h)
 	if err != nil {
-		return nil, errors.New(op).Err(err).Msg("Failed to load reserved uploads")
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to load reserved uploads")
 	}
 
 	// Adapt to types.QsoUpload.
@@ -1037,7 +1037,7 @@ func (s *Service) UpdateQsoUploadStatusWithContext(ctx context.Context, id int64
 	}
 
 	if id < 1 {
-		return errors.New(op).Msg(errMsgInvalidId)
+		return errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -1050,13 +1050,13 @@ func (s *Service) UpdateQsoUploadStatusWithContext(ctx context.Context, id int64
 
 	tx, err := h.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.New(op).Err(err).Msg("Failed to begin transaction")
+		return errors.New(op).WithErr(err).WithMsg("Failed to begin transaction")
 	}
 
 	uploadModel, err := models.FindQsoUpload(ctx, tx, id)
 	if err != nil {
 		_ = tx.Rollback()
-		return errors.New(op).Err(err).Msg("Failed to find QSO upload")
+		return errors.New(op).WithErr(err).WithMsg("Failed to find QSO upload")
 	}
 
 	uploadModel.Status = status.String()
@@ -1073,7 +1073,7 @@ func (s *Service) UpdateQsoUploadStatusWithContext(ctx context.Context, id int64
 	_, err = uploadModel.Update(ctx, tx, boil.Infer())
 	if err != nil {
 		_ = tx.Rollback()
-		return errors.New(op).Err(err).Msg("Failed to update QSO upload status")
+		return errors.New(op).WithErr(err).WithMsg("Failed to update QSO upload status")
 	}
 
 	// At this point, we don't need to update the QSO itself as that SHOULD have been
@@ -1081,7 +1081,7 @@ func (s *Service) UpdateQsoUploadStatusWithContext(ctx context.Context, id int64
 	// qso object to update based on the service.
 
 	if err = tx.Commit(); err != nil {
-		return errors.New(op).Err(err).Msg("Failed to commit transaction")
+		return errors.New(op).WithErr(err).WithMsg("Failed to commit transaction")
 	}
 
 	return nil
@@ -1099,16 +1099,16 @@ func (s *Service) InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (i
 		return 0, err
 	}
 	if tx == nil {
-		return 0, errors.New(op).Msg("tx is nil")
+		return 0, errors.New(op).WithMsg("tx is nil")
 	}
 
 	model, err := adapters.QsoTypeToModel(qso)
 	if err != nil {
-		return 0, errors.New(op).Err(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 
 	if err = model.Insert(ctx, tx, boil.Infer()); err != nil {
-		return 0, errors.New(op).Err(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 
 	return model.ID, nil
@@ -1120,21 +1120,21 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 		return err
 	}
 	if tx == nil {
-		return errors.New(op).Msg("tx is nil")
+		return errors.New(op).WithMsg("tx is nil")
 	}
 	if qso.ID < 1 {
-		return errors.New(op).Msgf("QSO ID is invalid: %d", qso.ID)
+		return errors.New(op).WithMsgf("QSO ID is invalid: %d", qso.ID)
 	}
 
 	model, err := adapters.QsoTypeToModel(qso)
 	if err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	model.ModifiedAt = null.TimeFrom(time.Now())
 
 	if _, err = model.Update(ctx, tx, boil.Infer()); err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	return nil
@@ -1146,10 +1146,10 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 		return err
 	}
 	if tx == nil {
-		return errors.New(op).Msg("tx is nil")
+		return errors.New(op).WithMsg("tx is nil")
 	}
 	if qsoId < 1 {
-		return errors.New(op).Msgf("QSO ID is invalid: %d", qsoId)
+		return errors.New(op).WithMsgf("QSO ID is invalid: %d", qsoId)
 	}
 
 	model := models.QsoUpload{
@@ -1160,7 +1160,7 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 	}
 
 	if err := model.Insert(ctx, tx, boil.Infer()); err != nil {
-		return errors.New(op).Err(err).Msg("Inserting new QSO upload failed.")
+		return errors.New(op).WithErr(err).WithMsg("Inserting new QSO upload failed.")
 	}
 
 	return nil

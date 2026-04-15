@@ -17,7 +17,7 @@ func Marshal(data []byte) (Adif, error) {
 	const op errors.Op = "adif.Marshal"
 	var res Adif
 	if len(data) == 0 {
-		return res, errors.New(op).Msg("input is empty")
+		return res, errors.New(op).WithMsg("input is empty")
 	}
 
 	// Work on a normalized copy for tag detection (case-insensitive markers),

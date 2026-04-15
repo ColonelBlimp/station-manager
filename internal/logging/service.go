@@ -1,6 +1,13 @@
 package logging
 
 import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -8,11 +15,6 @@ import (
 	"github.com/rs/zerolog"
 	"go.uber.org/atomic"
 	"gopkg.in/natefinch/lumberjack.v2"
-	"io"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 )
 
 // Service is the primary logging facility for the application.
@@ -48,22 +50,22 @@ type Service struct {
 func (s *Service) Initialize() error {
 	const op errors.Op = "logging.Service.Initialize"
 	if s == nil {
-		return errors.New(op).Msg(errMsgNilService)
+		return errors.New(op).WithMsg(errMsgNilService)
 	}
 
 	if s.ConfigService == nil {
-		return errors.New(op).Msg(errMsgAppCfgNotSet)
+		return errors.New(op).WithMsg(errMsgAppCfgNotSet)
 	}
 
 	s.initOnce.Do(func() {
 		loggingCfg, cfgErr := s.ConfigService.LoggingConfig()
 		if cfgErr != nil {
-			s.initErr = errors.New(op).Errorf("s.AppConfig.LoggingConfig: %w", cfgErr)
+			s.initErr = errors.New(op).WithErr(fmt.Errorf("s.AppConfig.LoggingConfig: %w", cfgErr))
 			return
 		}
 
 		if cfgErr = validateConfig(&loggingCfg); cfgErr != nil {
-			s.initErr = errors.New(op).Errorf("validateConfig: %w", cfgErr)
+			s.initErr = errors.New(op).WithErr(fmt.Errorf("validateConfig: %w", cfgErr))
 			return
 		}
 		s.LoggingConfig = &loggingCfg
@@ -71,7 +73,7 @@ func (s *Service) Initialize() error {
 		if s.WorkingDir == emptyString {
 			exeDir, pathErr := utils.AbsDirPathForExecutable()
 			if pathErr != nil {
-				s.initErr = errors.New(op).Errorf("utils.AbsDirPathForExecutable: %w", pathErr)
+				s.initErr = errors.New(op).WithErr(fmt.Errorf("utils.AbsDirPathForExecutable: %w", pathErr))
 				return
 			}
 			s.WorkingDir = exeDir
@@ -80,20 +82,20 @@ func (s *Service) Initialize() error {
 		loggingDir := filepath.Join(s.WorkingDir, s.LoggingConfig.RelLogFileDir)
 		exists, existsErr := utils.PathExists(loggingDir)
 		if existsErr != nil {
-			s.initErr = errors.New(op).Errorf("utils.PathExists: %w", existsErr)
+			s.initErr = errors.New(op).WithErr(fmt.Errorf("utils.PathExists: %w", existsErr))
 			return
 		}
 
 		if !exists {
 			if mdErr := os.MkdirAll(loggingDir, 0750); mdErr != nil {
-				s.initErr = errors.New(op).Errorf("os.MkdirAll: %w", mdErr)
+				s.initErr = errors.New(op).WithErr(fmt.Errorf("os.MkdirAll: %w", mdErr))
 				return
 			}
 		}
 
 		exeName, exeErr := utils.ExecName(true)
 		if exeErr != nil {
-			s.initErr = errors.New(op).Errorf("utils.ExecName: %w", exeErr)
+			s.initErr = errors.New(op).WithErr(fmt.Errorf("utils.ExecName: %w", exeErr))
 			return
 		}
 
@@ -102,7 +104,7 @@ func (s *Service) Initialize() error {
 
 		level, levelErr := parseLevel(s.LoggingConfig.Level)
 		if levelErr != nil {
-			s.initErr = errors.New(op).Errorf("parseLevel: %w", levelErr)
+			s.initErr = errors.New(op).WithErr(fmt.Errorf("parseLevel: %w", levelErr))
 			return
 		}
 		logger = logger.Level(level)
@@ -207,7 +209,7 @@ func (s *Service) Close() error {
 
 	if fileWriter != nil {
 		if err := fileWriter.Close(); err != nil {
-			return errors.New(op).Errorf("fileWriter.Close: %w", err)
+			return errors.New(op).WithErr(fmt.Errorf("fileWriter.Close: %w", err))
 		}
 	}
 

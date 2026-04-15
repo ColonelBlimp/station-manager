@@ -29,7 +29,7 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 
 	freqHz, err := strconv.ParseInt(qso.QsoDetails.Freq, 10, 64)
 	if err != nil {
-		return models.Qso{}, errors.New(op).Err(err).Msg("failed to parse frequency")
+		return models.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to parse frequency")
 	}
 
 	// Normalize date and time fields for the promoted columns.
@@ -48,7 +48,7 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 
 	jsonData, err := json.Marshal(qso)
 	if err != nil {
-		return models.Qso{}, errors.New(op).Err(err).Msg("failed to marshal qso to JSON")
+		return models.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to marshal qso to JSON")
 	}
 	if len(jsonData) == 0 {
 		jsonData = []byte("{}")
@@ -80,7 +80,7 @@ func ContactedStationTypeToModel(station types.ContactedStation) (models.Contact
 
 	jsonData, err := json.Marshal(station)
 	if err != nil {
-		return models.ContactedStation{}, errors.New(op).Err(err).Msg("failed to marshal contacted_station to JSON")
+		return models.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("failed to marshal contacted_station to JSON")
 	}
 	if len(jsonData) == 0 {
 		jsonData = []byte("{}")

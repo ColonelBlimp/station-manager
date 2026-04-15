@@ -3,6 +3,7 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,30 +15,42 @@ import (
 type logEntry map[string]any
 
 func TestBuildErrorChain_WithDetailedAndStd(t *testing.T) {
-	// Build Station-Manager DetailedError chain
-	inner := smerrors.New("db.Connect").Msg("dial tcp 127.0.0.1:5432: connect: connection refused")
-	middle := smerrors.New("db.Open").Err(inner).Msg("failed to connect to database")
-	outer := smerrors.New("server.Start").Err(middle).Msg("startup failed")
+	// Build Station-Manager DetailedError chain.
+	//
+	// Note on assertions: after the 4.1/4.2 errors-package rework, every
+	// frame's Error() returns a rich "op: msg: cause.Error()" representation
+	// that recursively includes the remaining chain from that point. The
+	// per-frame entries collected by buildErrorChain therefore each contain
+	// the full tail of the chain, not just the local message. This is a
+	// deliberate consequence of aligning Error() with stdlib conventions
+	// for wrapped errors; the test was updated to reflect the new shape.
+	inner := smerrors.New("db.Connect").WithMsg("dial tcp 127.0.0.1:5432: connect: connection refused")
+	middle := smerrors.New("db.Open").WithErr(inner).WithMsg("failed to connect to database")
+	outer := smerrors.New("server.Start").WithErr(middle).WithMsg("startup failed")
 
 	chain, root := func(e error) ([]string, string) {
 		c, _, r, _ := buildErrorChain(e)
 		return c, r
 	}(outer)
 	assert.Equal(t, []string{
-		"startup failed",
-		"failed to connect to database",
-		"dial tcp 127.0.0.1:5432: connect: connection refused",
+		"server.Start: startup failed: db.Open: failed to connect to database: db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused",
+		"db.Open: failed to connect to database: db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused",
+		"db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused",
 	}, chain)
-	assert.Equal(t, "dial tcp 127.0.0.1:5432: connect: connection refused", root)
+	assert.Equal(t, "db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused", root)
 
-	// Build std errors chain
-	wrapped := smerrors.New("wrap.Std").Errorf("wrap: %w", outer)
+	// Build a DetailedError wrapping a std error chain.
+	wrapped := smerrors.New("wrap.Std").WithErr(fmt.Errorf("wrap: %w", outer))
 	chain2, root2 := func(e error) ([]string, string) {
 		c, _, r, _ := buildErrorChain(e)
 		return c, r
 	}(wrapped)
-	// first element is wrapped message
-	assert.True(t, strings.HasPrefix(chain2[0], "wrap:"))
+	// first element is the wrap.Std DetailedError's full chain output,
+	// which starts with its op identifier under the new Error() format
+	assert.True(t, strings.HasPrefix(chain2[0], "wrap.Std:"))
+	// the format string passed to Errorf is still present inside that first
+	// element, verifying the wrapper's intent is preserved
+	assert.True(t, strings.Contains(chain2[0], "wrap: "))
 	assert.Equal(t, root, root2)
 }
 
@@ -46,8 +59,8 @@ func TestEventErr_EmitsChainFields(t *testing.T) {
 	logger := zerolog.New(&buf)
 	le := newLogEvent(logger.Error())
 
-	inner := smerrors.New("db.Connect").Msg("dial tcp 127.0.0.1:5432: connect: connection refused")
-	outer := smerrors.New("server.Start").Err(inner).Msg("startup failed")
+	inner := smerrors.New("db.Connect").WithMsg("dial tcp 127.0.0.1:5432: connect: connection refused")
+	outer := smerrors.New("server.Start").WithErr(inner).WithMsg("startup failed")
 
 	le.Err(outer).Msg("boom")
 

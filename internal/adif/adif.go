@@ -90,7 +90,7 @@ func ConvertQsoToAdifNoHeader(q types.Qso) string {
 func ComposeToAdifString(slice types.QsoSlice) (string, error) {
 	const op errors.Op = "adif.ComposeToAdifString"
 	if len(slice) == 0 {
-		return emptyString, errors.New(op).Msg("QSO slice is empty")
+		return emptyString, errors.New(op).WithMsg("QSO slice is empty")
 	}
 	recs := make([]Record, 0, len(slice))
 	for _, q := range slice {

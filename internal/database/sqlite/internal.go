@@ -21,7 +21,7 @@ func (s *Service) getOpenHandle(op errors.Op) (*sql.DB, error) {
 	isOpen := s.isOpen.Load()
 	s.mu.RUnlock()
 	if h == nil || !isOpen {
-		return nil, errors.New(op).Msg(errMsgNotOpen)
+		return nil, errors.New(op).WithMsg(errMsgNotOpen)
 	}
 	return h, nil
 }
@@ -31,12 +31,12 @@ func (s *Service) getDsn() (string, error) {
 	const op errors.Op = "sqlite.Service.getDsn"
 
 	if s.DatabaseConfig.Driver != SqliteDriver {
-		return emptyString, errors.New(op).Errorf("Unsupported database driver: %s (expected %q)", s.DatabaseConfig.Driver, SqliteDriver)
+		return emptyString, errors.New(op).WithMsgf("Unsupported database driver: %s (expected %q)", s.DatabaseConfig.Driver, SqliteDriver)
 	}
 
 	path := s.DatabaseConfig.Path
 	if path == emptyString {
-		return emptyString, errors.New(op).Msg(errMsgEmptyPath)
+		return emptyString, errors.New(op).WithMsg(errMsgEmptyPath)
 	}
 
 	s.LoggerService.InfoWith().Str("path", path).Msg("Using sqlite database file")
@@ -116,21 +116,21 @@ func (s *Service) checkDatabaseDir(dbFilePath string) error {
 	const op errors.Op = "sqlite.Service.checkDatabaseDir"
 
 	if len(dbFilePath) == 0 {
-		return errors.New(op).Msg(errMsgEmptyPath)
+		return errors.New(op).WithMsg(errMsgEmptyPath)
 	}
 
 	dbDir := filepath.Dir(dbFilePath)
 
 	exists, err := utils.PathExists(dbDir)
 	if err != nil {
-		return errors.New(op).Errorf("utils.PathExists: %w", err)
+		return errors.New(op).WithErr(fmt.Errorf("utils.PathExists: %w", err))
 	}
 	if exists {
 		return nil
 	}
 
 	if err = os.MkdirAll(dbDir, 0o700); err != nil {
-		return errors.New(op).Errorf("os.MkdirAll: %w", err)
+		return errors.New(op).WithErr(fmt.Errorf("os.MkdirAll: %w", err))
 	}
 
 	return nil
@@ -140,14 +140,14 @@ func (s *Service) checkDatabaseDir(dbFilePath string) error {
 func (s *Service) missingCoreTables() ([]string, error) {
 	const op errors.Op = "sqlite.Service.missingCoreTables"
 	if s == nil {
-		return nil, errors.New(op).Msg(errMsgNilService)
+		return nil, errors.New(op).WithMsg(errMsgNilService)
 	}
 	if s.handle == nil {
-		return nil, errors.New(op).Msg(errMsgNotOpen)
+		return nil, errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	if s.DatabaseConfig.Driver != SqliteDriver {
-		return nil, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+		return nil, errors.New(op).WithMsgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 	}
 
 	// Client-side schema: no api_keys table (full key stored on logbook)
@@ -155,7 +155,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 
 	rows, err := s.handle.Query(`SELECT name FROM sqlite_master WHERE type='table'`)
 	if err != nil {
-		return nil, errors.New(op).Errorf("sqlite_master query: %w", err)
+		return nil, errors.New(op).WithErr(fmt.Errorf("sqlite_master query: %w", err))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -163,7 +163,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New(op).Errorf("sqlite_master scan: %w", err)
+			return nil, errors.New(op).WithErr(fmt.Errorf("sqlite_master scan: %w", err))
 		}
 		existing[name] = struct{}{}
 	}

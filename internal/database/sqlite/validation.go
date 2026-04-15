@@ -14,7 +14,7 @@ var once sync.Once
 func validateConfig(cfg *types.DatastoreConfig) error {
 	const op errors.Op = "sqlite.validateConfig"
 	if cfg == nil {
-		return errors.New(op).Msg(errMsgNilConfig)
+		return errors.New(op).WithMsg(errMsgNilConfig)
 	}
 
 	once.Do(func() {
@@ -22,7 +22,7 @@ func validateConfig(cfg *types.DatastoreConfig) error {
 	})
 
 	if err := validate.Struct(cfg); err != nil {
-		return errors.New(op).Err(err).Msg(errMsgConfigInvalid)
+		return errors.New(op).WithErr(err).WithMsg(errMsgConfigInvalid)
 	}
 
 	return nil

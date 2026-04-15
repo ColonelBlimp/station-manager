@@ -168,7 +168,7 @@ Clients can freely ignore forwarding state — the local log is already durable.
 - **HTTP status code** is the primary signal. Standard semantics — 4xx = client's fault, 5xx = daemon's fault.
 - **`code`** is a short, stable, machine-readable identifier. Clients switch on this for behavior. The vocabulary grows naturally as real error cases are encountered during implementation; no preemptive enumeration.
 - **`message`** is human-readable for UI display. Clients must not string-match on it.
-- **`op`** is the internal `errors.Op` value from the daemon, which maps directly to the existing `internal/errors` pattern (`errors.New(op).Err(err).Msg(...)`). Carries operation context from the internal error chain to the client so bug reports name exactly where the error originated.
+- **`op`** is the internal `errors.Op` value from the daemon, which maps directly to the `internal/errors` pattern (`errors.New(op).WithErr(err).WithMsg("context")`). Carries operation context from the internal error chain to the client so bug reports name exactly where the error originated.
 
 **Mapping from internal errors to HTTP responses is handler-layer code** in `internal/api`, not in `internal/errors`. The `internal/errors` package stays focused on internal error context and does not grow HTTP-awareness. The handler layer has a small `writeError(w, err)` helper that inspects the error and picks a status/code; the exact mechanism (sentinel errors, typed `HTTPError` wrapper, mapping registry) is a detail to settle when we write the first handler.
 

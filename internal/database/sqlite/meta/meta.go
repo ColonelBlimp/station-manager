@@ -28,17 +28,17 @@ func (m *SqliteMetadata) Load(databaseDir string) error {
 	const op errors.Op = "meta.LoadSqliteDatabaseList"
 	databaseDir = strings.TrimSpace(databaseDir)
 	if databaseDir == "" {
-		return errors.New(op).Msg("Database directory cannot be empty")
+		return errors.New(op).WithMsg("Database directory cannot be empty")
 	}
 
 	data, err := readFile(filepath.Join(databaseDir, ".meta.json"))
 	if err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	var meta []SqliteMeta
 	if err = json.Unmarshal(data, &meta); err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	m.DatabaseFiles = meta
@@ -50,15 +50,15 @@ func (m *SqliteMetadata) Save(databaseDir string, meta []SqliteMeta) error {
 	const op errors.Op = "meta.SaveSqliteDatabaseList"
 	databaseDir = strings.TrimSpace(databaseDir)
 	if databaseDir == "" {
-		return errors.New(op).Msg("Database directory cannot be empty")
+		return errors.New(op).WithMsg("Database directory cannot be empty")
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	if err = writeFile(filepath.Join(databaseDir, ".meta.json"), data); err != nil {
-		return errors.New(op).Err(err)
+		return errors.New(op).WithErr(err)
 	}
 
 	return nil
@@ -70,7 +70,7 @@ func (m *SqliteMetadata) Save(databaseDir string, meta []SqliteMeta) error {
 //
 //	entries, err := os.ReadDir(databaseDir)
 //	if err != nil {
-//		return errors.New(op).Err(err)
+//		return errors.New(op).WithErr(err)
 //	}
 //
 //	var slice []string
@@ -80,7 +80,7 @@ func (m *SqliteMetadata) Save(databaseDir string, meta []SqliteMeta) error {
 //		}
 //		matched, merr := filepath.Match("*.db", entry.Name())
 //		if merr != nil {
-//			return errors.New(op).Err(merr)
+//			return errors.New(op).WithErr(merr)
 //		}
 //		if matched {
 //			slice = append(slice, strings.ReplaceAll(entry.Name(), ".db", ""))

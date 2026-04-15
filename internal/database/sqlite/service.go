@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	stderr "errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,23 +44,23 @@ func (s *Service) Initialize() error {
 	var initErr error
 	s.initOnce.Do(func() {
 		if s.LoggerService == nil {
-			initErr = errors.New(op).Msg("logger service has not been set/injected")
+			initErr = errors.New(op).WithMsg("logger service has not been set/injected")
 			return
 		}
 
 		if s.ConfigService == nil {
-			initErr = errors.New(op).Msg("application config has not been set/injected")
+			initErr = errors.New(op).WithMsg("application config has not been set/injected")
 			return
 		}
 
 		dbCfg, err := s.ConfigService.DatastoreConfig()
 		if err != nil {
-			initErr = errors.New(op).Err(err)
+			initErr = errors.New(op).WithErr(err)
 			return
 		}
 
 		if err = validateConfig(&dbCfg); err != nil {
-			initErr = errors.New(op).Err(err).Msg("Invalid database config")
+			initErr = errors.New(op).WithErr(err).WithMsg("Invalid database config")
 			return
 		}
 		s.DatabaseConfig = &dbCfg
@@ -67,13 +68,13 @@ func (s *Service) Initialize() error {
 		if s.DatabaseConfig.Driver == SqliteDriver {
 			// Ensure the database directory exists
 			if err = s.checkDatabaseDir(s.DatabaseConfig.Path); err != nil {
-				initErr = errors.New(op).Err(err)
+				initErr = errors.New(op).WithErr(err)
 				return
 			}
 		}
 
 		if s.requiredCfgs, err = s.ConfigService.RequiredConfigs(); err != nil {
-			initErr = errors.New(op).Err(err)
+			initErr = errors.New(op).WithErr(err)
 			return
 		}
 
@@ -89,18 +90,18 @@ func (s *Service) Open() error {
 
 	// Has the service been initialized?
 	if !s.isInitialized.Load() {
-		return errors.New(op).Msg(errMsgNotInitialized)
+		return errors.New(op).WithMsg(errMsgNotInitialized)
 	}
 
 	// Quick pre-check to see if the database is already open.
 	if s.isOpen.Load() {
-		return errors.New(op).Msg(errMsgAlreadyOpen)
+		return errors.New(op).WithMsg(errMsgAlreadyOpen)
 	}
 
 	// Outside the mutex as its config is read-only
 	dsn, err := s.getDsn()
 	if err != nil {
-		return errors.New(op).Err(err).Msg(errMsgDsnBuildError)
+		return errors.New(op).WithErr(err).WithMsg(errMsgDsnBuildError)
 	}
 
 	s.mu.Lock()
@@ -108,12 +109,12 @@ func (s *Service) Open() error {
 
 	// Re-check under lock to avoid TOCTOU
 	if s.isOpen.Load() {
-		return errors.New(op).Msg(errMsgAlreadyOpen)
+		return errors.New(op).WithMsg(errMsgAlreadyOpen)
 	}
 
 	db, err := sql.Open(s.DatabaseConfig.Driver, dsn)
 	if err != nil {
-		return errors.New(op).Err(err).Msg(errMsgConnFailed)
+		return errors.New(op).WithErr(err).WithMsg(errMsgConnFailed)
 	}
 
 	db.SetMaxOpenConns(s.DatabaseConfig.MaxOpenConns)
@@ -125,23 +126,23 @@ func (s *Service) Open() error {
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return errors.New(op).Err(err).Msg(errMsgPingFailed)
+		return errors.New(op).WithErr(err).WithMsg(errMsgPingFailed)
 	}
 
 	// Ensure SQLite enforces foreign keys on this connection. Some drivers may ignore DSN params,
 	// so execute the PRAGMA explicitly per-connection. If this fails, close the DB and return error.
 	if _, err = db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
 		_ = db.Close()
-		return errors.New(op).Err(err).Msg("failed to enable sqlite foreign_keys PRAGMA")
+		return errors.New(op).WithErr(err).WithMsg("failed to enable sqlite foreign_keys PRAGMA")
 	}
 	// Reinforce busy timeout and WAL journal mode explicitly (DSN may not always apply reliably across drivers)
 	if _, err = db.ExecContext(ctx, "PRAGMA busy_timeout=5000"); err != nil {
 		_ = db.Close()
-		return errors.New(op).Err(err).Msg("failed to set sqlite busy_timeout PRAGMA")
+		return errors.New(op).WithErr(err).WithMsg("failed to set sqlite busy_timeout PRAGMA")
 	}
 	if _, err = db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
-		return errors.New(op).Err(err).Msg("failed to set sqlite journal_mode WAL")
+		return errors.New(op).WithErr(err).WithMsg("failed to set sqlite journal_mode WAL")
 	}
 
 	s.handle = db
@@ -158,7 +159,7 @@ func (s *Service) Close() error {
 	// Quick pre-check
 	if !s.isOpen.Load() {
 		return nil // Idempotent
-		// return errors.New(op).Msg(errMsgNotOpen)
+		// return errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	s.mu.Lock()
@@ -167,11 +168,11 @@ func (s *Service) Close() error {
 	// Re-check under lock - TOCTOU
 	if !s.isOpen.Load() {
 		return nil // Idempotent
-		// return errors.New(op).Msg(errMsgNotOpen)
+		// return errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	if err := s.handle.Close(); err != nil {
-		return errors.New(op).Err(err).Msg(errMsgFailedClose)
+		return errors.New(op).WithErr(err).WithMsg(errMsgFailedClose)
 	}
 
 	s.handle = nil
@@ -201,13 +202,13 @@ func (s *Service) Ping() error {
 		}
 		lastErr = err
 		if !isTransientPingError(err) {
-			return errors.New(op).Err(err).Msg(errMsgPingFailed)
+			return errors.New(op).WithErr(err).WithMsg(errMsgPingFailed)
 		}
 		// Small backoff before retrying transient failure
 		time.Sleep(pingRetryBackoff)
 	}
 
-	return errors.New(op).Err(lastErr).Msg(errMsgPingFailed)
+	return errors.New(op).WithErr(lastErr).WithMsg(errMsgPingFailed)
 }
 
 // Migrate runs the database migrations.
@@ -218,12 +219,12 @@ func (s *Service) Migrate() error {
 	defer s.mu.Unlock()
 
 	if s.handle == nil || !s.isOpen.Load() {
-		return errors.New(op).Msg(errMsgNotOpen)
+		return errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	err := s.doMigrations()
 	if err != nil {
-		return errors.New(op).Err(err).Msg(errMsgMigrateFailed)
+		return errors.New(op).WithErr(err).WithMsg(errMsgMigrateFailed)
 	}
 
 	return nil
@@ -252,9 +253,9 @@ func (s *Service) BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFu
 	if err != nil {
 		cancel()
 		if stderr.Is(err, context.DeadlineExceeded) {
-			return nil, nil, errors.New(op).Err(err).Msg("Transaction context timed out.")
+			return nil, nil, errors.New(op).WithErr(err).WithMsg("Transaction context timed out.")
 		}
-		return nil, nil, errors.New(op).Errorf("creating new transaction: %w", err)
+		return nil, nil, errors.New(op).WithErr(fmt.Errorf("creating new transaction: %w", err))
 	}
 
 	return tx, cancel, nil
@@ -272,7 +273,7 @@ func (s *Service) ExecContext(ctx context.Context, query string, args ...interfa
 	s.mu.RUnlock()
 
 	if h == nil || !isOpen {
-		return nil, errors.New(op).Msg(errMsgNotOpen)
+		return nil, errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	var cancel context.CancelFunc
@@ -286,7 +287,7 @@ func (s *Service) ExecContext(ctx context.Context, query string, args ...interfa
 
 	res, err := h.ExecContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New(op).Errorf("s.handle.ExecContext: %w", err)
+		return nil, errors.New(op).WithErr(fmt.Errorf("s.handle.ExecContext: %w", err))
 	}
 
 	return res, nil
@@ -304,7 +305,7 @@ func (s *Service) QueryContext(ctx context.Context, query string, args ...interf
 	s.mu.RUnlock()
 
 	if h == nil || !isOpen {
-		return nil, errors.New(op).Msg(errMsgNotOpen)
+		return nil, errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	// Note: We do NOT defer cancel() here because the returned *sql.Rows needs
@@ -318,7 +319,7 @@ func (s *Service) QueryContext(ctx context.Context, query string, args ...interf
 
 	res, err := h.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New(op).Errorf("s.handle.QueryContext: %w", err)
+		return nil, errors.New(op).WithErr(fmt.Errorf("s.handle.QueryContext: %w", err))
 	}
 
 	return res, nil
