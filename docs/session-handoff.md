@@ -570,6 +570,16 @@ The carry-forward packages were kept because rewriting them would be too expensi
 
 11. **Audit `internal/errors`, `internal/logging`, `internal/enums`, `internal/utils`.** Less urgent than the above — these are "maturing" per the user's framing — but each one should get at least a quick pass when its first v2 consumer lands.
 
+### Deferred features to investigate
+
+These are features that are understood to be desirable but explicitly *not* day-one requirements. They are captured here so they don't get lost between sessions. When a feature reaches "ready to design," it graduates into a real `docs/v2-design/*.md` sibling (or into an existing milestone plan).
+
+- **Logging-app text-file fallback reconciliation** (captured 2026-04-16, session 5). The master invariant "Nothing blocks logging a QSO" (see `docs/v1-analysis/invariants.md`) requires the logging app to maintain its own local durability independent of the daemon: when the daemon is unavailable, the logging app falls back to writing the QSO to a local text file (plain-text ADIF). This part is a day-one requirement of the logging app when it returns in milestone 2+.
+
+  The *reconciliation* flow is the follow-up: when the daemon comes back online after an outage, the logging app resubmits the QSOs it captured only to its text-file fallback during the outage. **Mechanism:** the logging app submits each queued entry via the daemon's normal submit API (`POST /v1/qso`, whatever the endpoint ends up being). It does **not** use a special import endpoint or a direct file-merge path. The dedupe key (`hash(call + band + mode + start_time_rounded_to_minute)`) silently absorbs any accidental double-submissions from overlapping reconciliation attempts — if the same QSO happens to be submitted twice, the daemon returns "duplicate, ignored" on the second submission and nothing breaks.
+
+  This reconciliation flow is **not a milestone 1 concern** and **not a milestone 2 day-one requirement for the logging app**. It is a post-first-flight refinement — the logging app is usable without it, the text file is a faithful record during the outage, and the operator can manually replay entries via `cmd/importer` (or its future v2 equivalent) if needed before the automatic flow exists. When it becomes real, it gets its own design doc (probably `docs/v2-design/logging-app-resilience.md` or similar).
+
 ### v1 branch follow-ups (distinct track from v2 main work)
 
 v1 is a live maintenance branch. Bug fixes and improvements for v1 land

@@ -13,15 +13,52 @@
 
 ## Logging service / daemon core
 
+### Nothing blocks logging a QSO, except catastrophic local failure
+
+This is the master rule from which several more specific invariants below are derived. **The operator must always be able to log a QSO.** The only legitimate reason the logging app can refuse to accept a QSO is a catastrophic failure in its own local storage — disk full, filesystem read-only, or equivalent hardware/OS conditions that prevent writing *anywhere* on the local machine. Anything short of that is survivable and must not block logging.
+
+**Specifically, the following conditions must never block logging:**
+- External enrichment services (hamnut.com, QRZ.com, any callsign/country lookup) being down or slow.
+- The daemon process being unavailable — either because it crashed, because it hasn't started yet, because it's being restarted, or because it's on another machine and the network is down.
+- Upstream forwarding services (QRZ logbook, ClubLog, future SM-Online) being down or rejecting submissions.
+- Disk write errors affecting non-critical paths (log files, caches) while the authoritative log path is still writable.
+- Any transient database lock contention, connection pool exhaustion, or other recoverable infrastructure hiccup.
+
+**The logging app owns its own durability independent of the daemon.** When the daemon is reachable and healthy, the normal submission path goes `logging app → daemon HTTP API → sqlite + upload queue`. When the daemon is not reachable, the logging app falls back to writing the QSO to its own local text file (plain-text ADIF on disk, owned by the logging app, outside the daemon's sqlite database). The operator sees the QSO as logged in both cases — the only difference is which storage path handled it.
+
+**The logging app should visibly note the degraded state** when it's operating in text-file fallback mode so the operator knows the daemon is unavailable and action may be needed later. It must not require the operator to do anything different to keep logging.
+
+**Why this matters:** the logger is the operator's real-time tool during a contest, a session, a fleeting band opening. The cost of refusing to log a single QSO because a background service is flaky is catastrophic for the workflow (the contact is gone, the opportunity is lost). The cost of deferring to a text-file fallback and reconciling later is nothing — the QSO is recorded, the operator moves on, the sync happens later. **This is the single most load-bearing operational requirement in the system.**
+
+**How to apply in v2:**
+- Every path in the logging app that touches the daemon's HTTP API must have an explicit fallback that writes to the local text file and returns success to the UI. A failed daemon submit is a *warning*, not an error.
+- Every path in the daemon that touches an external service must have an explicit fallback (cached value, synthesized default, or skip-and-continue). A failed external call is a *warning*, not an error.
+- When designing new features, the first test to write is "what does this do when the daemon is down / the external service is broken / the network is gone." The answer must be "continue logging."
+- Catastrophic local failure is detectable (the write syscall returns an error) and should be surfaced to the operator immediately — this is the one case where the UI does say "stop, fix this now."
+
+**Related:** the existing "Enrichment never blocks logging" and "Forwarding never blocks logging" (below) are specific applications of this master rule. The text-file fallback architecture in the logging app is the mechanism that extends the protection all the way to "the daemon is down."
+
+**Reconciliation flow (deferred feature):** when the daemon comes back online after an outage, the logging app should resubmit any QSOs it captured only to its text-file fallback during the outage. The submission uses the daemon's normal submit API (`POST /v1/qso` or whatever the endpoint ends up being) — not a special import endpoint, not a direct file-merge path. The dedupe key (see "Contest dupe check and general ingest dedupe" below, and `docs/v2-design/api.md` when it exists) silently absorbs any accidental double-submissions from overlapping reconciliation attempts. This flow is not a day-one requirement; it is a recognized future enhancement to investigate, and is tracked in `docs/session-handoff.md` → "Deferred features to investigate."
+
 ### Enrichment never blocks logging
 
-External lookups (hamnut.com, QRZ.com, any future callsign/country service) are **best-effort**. Any failure in enrichment degrades the QSO draft's completeness but never prevents the operator from logging.
+(This invariant is a specific application of the master rule above. Preserved here because it has a concrete v1 fix history.)
 
-**The only thing that should stop logging is a broken local DB** — because then there's nowhere to log to. Infrastructure failure (DB unreachable, disk full, migrations broken) is legitimate grounds for blocking. External service unavailability is not.
+External lookups (hamnut.com, QRZ.com, any future callsign/country service) are **best-effort**. Any failure in enrichment degrades the QSO draft's completeness but never prevents the operator from logging.
 
 **Why this matters:** this principle was violated in v1's `initCountrySection`, where a failed hamnut.com lookup propagated as a fatal error and prevented the operator from starting a QSO *at all*. Fixed 2026-04-14. The bug was subtle because the local country table had valid rows for the callsign — the code just refused to use them if the online confirmation failed. The fix synthesizes `types.Country{Name: "Unknown"}` when there's no local row and no online data, so logging proceeds with whatever the operator can type.
 
 **How to apply in v2:** every enrichment path must have an explicit fallback. When writing a new enrichment caller, the first test to write is "what does this do when the external service is down," and the answer had better be "log a warning and continue, not return an error to the caller."
+
+### Forwarding never blocks logging
+
+Upstream forwarding services (QRZ logbook, ClubLog, future SM-Online) are **best-effort downstream** of the authoritative local write. A submitted QSO is considered logged the instant the local transaction commits — before any attempt is made to push it to any online service.
+
+The daemon's forwarding worker runs asynchronously, picks up pending `qso_upload` rows after the logging response has already been sent, attempts each configured destination, and writes the outcome (succeeded / failed / retry-pending) back to the row. Forwarding failures are surfaced to clients via SSE events and via re-queries, never by blocking the submit path.
+
+**Why this matters:** the same reason as the master rule. QRZ being down or slow must not affect the operator's ability to log. A flaky upstream does not get to take the logger offline. This invariant extends the same non-blocking guarantee to the "after I write locally, what happens next" part of the pipeline.
+
+**How to apply in v2:** `POST /v1/qso` (or whatever the submit endpoint becomes) must return its response as soon as the local sqlite transaction has committed — not after any forwarder has accepted the QSO. Forwarding state is a separate observable via SSE and `GET /v1/qso/:id/uploads` or similar, pulled on demand, never coupled to submit latency.
 
 ### One-fails-all-fail for QSO writes
 
