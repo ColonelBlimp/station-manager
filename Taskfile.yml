@@ -1,0 +1,28 @@
+version: '3'
+
+dotenv: ['.env']
+
+tasks:
+  default:
+    desc: Run vet, build, and test — the CI-equivalent local smoke check
+    deps: [vet, build, test]
+
+  vet:
+    desc: Run go vet over the whole module
+    cmds:
+      - go vet ./...
+
+  build:
+    desc: Build the daemon binary into build/bin/smd
+    cmds:
+      - go build -o build/bin/smd ./cmd/smd
+
+  test:
+    desc: Run tests with race detector and -short
+    cmds:
+      - go test -race -short ./...
+
+  tidy:
+    desc: Tidy go.mod and go.sum
+    cmds:
+      - go mod tidy
