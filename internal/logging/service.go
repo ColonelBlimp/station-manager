@@ -37,10 +37,17 @@ type Service struct {
 	isInitialized     atomic.Bool
 	initOnce          sync.Once
 	initErr           error
-	mu                sync.RWMutex
+	mu                sync.RWMutex // guards isInitialized transitions and fileWriter close
 	activeOps         atomic.Int32 // Track active logging operations
 	wg                sync.WaitGroup
-	activeOpLocations map[string]int // Debug: Track where active operations were created
+
+	// debugMu guards activeOpLocations. Separate from mu so the debug
+	// tracking path does not contend with event-creation paths that
+	// hold mu.RLock. Only used when the `logging_debug` build tag is
+	// set; untouched in release builds. See
+	// docs/reviews/internal-logging.md finding 4.7.
+	debugMu           sync.Mutex
+	activeOpLocations map[string]int // Debug: where active operations were created
 }
 
 // Initialize prepares the Service for use: it validates configuration, ensures
@@ -102,9 +109,9 @@ func (s *Service) Initialize() error {
 		mw := io.MultiWriter(s.initializeWriters(exeName)...)
 		logger := zerolog.New(mw).With().Logger()
 
-		level, levelErr := parseLevel(s.LoggingConfig.Level)
+		level, levelErr := zerolog.ParseLevel(s.LoggingConfig.Level)
 		if levelErr != nil {
-			s.initErr = errors.New(op).WithErr(fmt.Errorf("parseLevel: %w", levelErr))
+			s.initErr = errors.New(op).WithErr(fmt.Errorf("zerolog.ParseLevel: %w", levelErr))
 			return
 		}
 		logger = logger.Level(level)

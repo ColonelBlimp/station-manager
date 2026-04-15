@@ -7,9 +7,19 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// LogContext provides a fluent interface for building a context logger with pre-populated fields.
-// Fields added through LogContext will be included in all subsequent log messages created from
-// the resulting child logger. The returned LogContext is immutable; each method returns a new state.
+// LogContext provides a fluent interface for building a context logger
+// with pre-populated fields. Fields added through LogContext are included
+// in every log message created from the resulting child logger. The
+// returned LogContext is immutable; each method returns a new state.
+//
+// Method asymmetry with LogEvent (finding 4.10 in the internal/logging
+// review): LogContext intentionally exposes a subset of LogEvent's typed
+// field methods. Context loggers are almost always used with simple
+// scalar fields — request IDs, user IDs, a single error — and the
+// smaller surface keeps both the interface and every implementor
+// (including noopLogContext) compact. If a specific field type becomes
+// genuinely needed at the context scope, add it explicitly at that
+// moment; do not preemptively mirror LogEvent's full ~30-method vocabulary.
 type LogContext interface {
 	Str(key, val string) LogContext
 	Strs(key string, vals []string) LogContext
@@ -26,10 +36,25 @@ type LogContext interface {
 	Logger() Logger
 }
 
-// LogEvent provides a fluent interface for structured logging with type-safe field methods.
-// It wraps zerolog.Event to provide a clean API for adding typed fields to log entries.
-// Calling Msg/Msgf/Send finalizes the event. If the event is a trackedLogEvent, finalizing
-// the event also decrements the internal reference counters used for graceful shutdown.
+// LogEvent provides a fluent interface for structured logging with
+// type-safe field methods. It wraps zerolog.Event to provide a clean
+// API for adding typed fields to log entries.
+//
+// Terminal methods: Msg, Msgf, and Send finalize the event and write
+// it to the configured writers. Every chain MUST end in a terminal
+// call. An event that is constructed (via InfoWith, ErrorWith, etc.)
+// and chained with field methods but never terminated leaks its
+// tracked-operations counter for the lifetime of the owning Service.
+// The leak is not a correctness bug — counters are bounded and the
+// leaked state is discarded when the Service is closed — but it can
+// extend Service.Close()'s drain timeout and trigger the shutdown
+// timeout warning in the log. Forgetting to call Msg/Msgf/Send is a
+// bug in the caller, not a language-level hazard; Go has no way to
+// enforce terminal-method calls on a fluent-builder interface. If you
+// need to construct a chain without immediately emitting it, store it
+// in a local variable and ensure every code path calls a terminal
+// method (including error paths via defer). See finding 4.12 in the
+// internal/logging review for the full background.
 type LogEvent interface {
 	Str(key, val string) LogEvent
 	Strs(key string, vals []string) LogEvent

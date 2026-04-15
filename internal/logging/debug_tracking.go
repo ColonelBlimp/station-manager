@@ -31,12 +31,12 @@ func trackLocation(s *Service, skip int) string {
 		return ""
 	}
 	location := fmt.Sprintf("%s:%d", file, line)
-	s.mu.Lock()
+	s.debugMu.Lock()
 	if s.activeOpLocations == nil {
 		s.activeOpLocations = make(map[string]int)
 	}
 	s.activeOpLocations[location]++
-	s.mu.Unlock()
+	s.debugMu.Unlock()
 	return location
 }
 
@@ -47,8 +47,8 @@ func untrackLocation(s *Service, location string) {
 	if s == nil || location == "" {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.debugMu.Lock()
+	defer s.debugMu.Unlock()
 	if s.activeOpLocations == nil {
 		return
 	}
@@ -65,8 +65,8 @@ func snapshotLocations(s *Service) map[string]int {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.debugMu.Lock()
+	defer s.debugMu.Unlock()
 	if len(s.activeOpLocations) == 0 {
 		return nil
 	}

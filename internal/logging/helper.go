@@ -8,16 +8,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// parseLevel parses a string log level into a zerolog.Level.
-// Returns zerolog.NoLevel and an error if parsing fails.
-func parseLevel(level string) (zerolog.Level, error) {
-	l, err := zerolog.ParseLevel(level)
-	if err != nil {
-		return zerolog.NoLevel, err
-	}
-	return l, nil
-}
-
 // buildErrorChain walks an error's cause chain and returns:
 //   - chain: outermost -> innermost error messages
 //   - ops: operation identifiers for DetailedError links ("" if not available)
@@ -86,43 +76,48 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 		return newLogEvent(nil)
 	}
 
-	// Check if initialized BEFORE incrementing counters to avoid leaks during shutdown
-	if !s.isInitialized.Load() {
+	// Short-circuit level check BEFORE incrementing counters or taking
+	// any lock. In the common case — a filtered-out Debug event at
+	// runtime level Info, for example — this returns an untracked
+	// no-op after only two atomic reads (s.logger.Load and
+	// logger.GetLevel), avoiding the counter increment, WaitGroup.Add,
+	// location capture, and RWMutex RLock the tracked path requires.
+	// See docs/reviews/internal-logging.md finding 4.6.
+	//
+	// The logger snapshot here is used only for the level check; the
+	// tracked path below re-loads the logger under the read lock to
+	// guard against concurrent Close() which may have stored nil.
+	logger := s.logger.Load()
+	if logger == nil || logger.GetLevel() > level {
 		return newLogEvent(nil)
 	}
 
-	// Increment active operations counter before acquiring lock. Every
-	// early-return path below must decrement these (via releaseCounters)
-	// to keep the WaitGroup balanced.
+	// Event is going to be logged. Commit: increment counters (every
+	// early-return path below must decrement them via releaseCounters
+	// to keep the WaitGroup balanced), capture debug location if the
+	// logging_debug build tag is set, then acquire the read lock.
 	s.activeOps.Add(1)
 	s.wg.Add(1)
-
-	// Debug: capture file:line of the caller, but only when compiled
-	// with the `logging_debug` build tag. In release builds trackLocation
-	// is a no-op that returns "", so there is no runtime.Caller cost.
 	location := trackLocation(s, 2)
 
-	// Acquire read lock to prevent Close() from running during log creation
 	s.mu.RLock()
 
-	// Double-check after acquiring lock (TOCTOU protection)
+	// TOCTOU: between the short-circuit check and the lock acquisition
+	// above, Close() could have run and flipped isInitialized to false.
 	if !s.isInitialized.Load() {
 		s.mu.RUnlock()
 		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
-	logger := s.logger.Load()
+	// Re-load the logger under the lock — Close() replaces the logger
+	// pointer with nil, and the short-circuit snapshot above may be
+	// stale at this point.
+	logger = s.logger.Load()
 	if logger == nil {
 		s.mu.RUnlock()
 		releaseCounters(s, location)
 		return newLogEvent(nil)
-	}
-
-	if logger.GetLevel() > level {
-		s.mu.RUnlock()
-		releaseCounters(s, location)
-		return newLogEvent(nil) // Return early if level is not enabled
 	}
 
 	event := eventForLevel(logger, level)
