@@ -31,8 +31,8 @@ func validLoggingConfig() *types.LoggingConfig {
 // Helper to create a config service with logging config
 func newTestConfigService(cfg *types.LoggingConfig) *config.Service {
 	svc := &config.Service{
-		AppConfig: types.AppConfig{
-			LoggingConfig: *cfg,
+		Cfg: config.Config{
+			Logging: *cfg,
 		},
 	}
 	_ = svc.Initialize()

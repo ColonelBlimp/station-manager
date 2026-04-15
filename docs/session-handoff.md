@@ -24,11 +24,47 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-15 end-of-session)
+## Current state (as of 2026-04-16 end-of-session)
 
-### v2 structural decisions are now captured in `docs/v2-design/structure.md`
+### main is now at the v2 milestone-1 layout (working tree, uncommitted)
 
-Session 2 of v2 work produced the first durable v2 design document. Before touching any v2 code, read `docs/v2-design/structure.md` — it captures the repo layout, module boundaries, release model, and milestone-1 vs milestone-2 target trees with rationale for every decision. Any future session that questions "why is v2 shaped this way" should find the answer there.
+Session 3 executed the restructure commit that reshapes main into the v2 milestone-1 layout specified in `docs/v2-design/structure.md`. The working tree has ~720 file changes — mostly deletions — and the v2 tree builds clean, vets clean, and tests clean across every package. **Not yet committed.** The commit is waiting on user review and any last artifact-cleanup decisions.
+
+Shape of main's tree after session 3:
+
+```
+station-manager/
+├── cmd/
+│   ├── smd/       # daemon binary entry point (NEW, stub)
+│   ├── server/    # reserved slot (empty)
+│   └── tools/     # reserved slot (empty)
+├── internal/
+│   ├── adif/            # carry-forward (ADIF parser)
+│   ├── api/             # NEW — HTTP handler layer stub
+│   ├── config/          # REWRITTEN fresh (minimal daemon config)
+│   ├── database/sqlite/ # carry-forward (with session-1 simplified adapters/)
+│   ├── enums/           # carry-forward
+│   ├── errors/          # carry-forward
+│   ├── iocdi/           # carry-forward
+│   ├── logging/         # carry-forward
+│   ├── qsoservice/      # NEW — daemon domain layer stub
+│   ├── types/           # PRUNED — QSO core only
+│   └── utils/           # carry-forward
+├── docs/
+│   ├── v1-analysis/
+│   ├── v2-design/
+│   └── session-handoff.md
+├── CLAUDE.md, DEVELOPING.md, README.md, RELEASING.md
+├── go.mod, go.sum
+```
+
+**Single root `go.mod`** at module path `github.com/ColonelBlimp/station-manager`. No `go.work`, no per-package `go.mod` files. Import paths for carry-forward packages are unchanged because `internal/` was already at the right relative depth under the v1 `internal/` module — the module-root move was semantically transparent to the import strings.
+
+**11 internal packages** (was ~25 in v1). Everything in this tree is either a deliberate carry-forward (subject to code-review-as-we-go during v2 construction) or a v2 rewrite stub.
+
+### v2 structural decisions are captured in `docs/v2-design/structure.md`
+
+Session 2 produced the first durable v2 design document, and session 3 executed it. Before touching any v2 code, read `docs/v2-design/structure.md` — it captures the repo layout, module boundaries, release model, and milestone-1 vs milestone-2 target trees with rationale for every decision. Any future session that questions "why is v2 shaped this way" should find the answer there.
 
 ### The v2 rewrite decision is made (unchanged from 2026-04-14)
 
@@ -115,6 +151,84 @@ invariants used across all sessions. Key entries: `project_sm_restructure`,
 `project_ft8_library`. See `MEMORY.md` index for the full list.
 
 ---
+
+## What happened in the 2026-04-16 session (session 3)
+
+### Goals set for the session
+
+- Execute the restructure commit that reshapes main into the v2 milestone-1 layout, per `docs/v2-design/structure.md`.
+- Verify the resulting tree builds, vets, and tests clean before committing.
+- Do not start writing daemon code yet — structure first, implementation next.
+
+### What got done
+
+1. **Session start — verified git state.** Read `docs/session-handoff.md`, confirmed session 2's housekeeping commit (`5ef55c1`) and the v1 branch had been pushed upstream. Working tree clean, main up to date with origin. Natural next action per the handoff was the restructure commit.
+
+2. **Pre-flight verification checks.** Before touching the tree, verified four things from the restructure plan:
+   - `internal/audio` reverse-dep check — only self-references, safe to delete.
+   - `internal/listeners` reverse-dep check — external consumers only in `apps/logging/` which is being deleted anyway.
+   - `internal/serial` / `cat` / `ptt` reverse-dep check — external consumers only in `apps/logging/`; the packages carry forward only for the v1 branch.
+   - `internal/database/` structural check — confirmed the surgical deletion shape (top-level `*.go` files + `postgres/` subdirectory go; `sqlite/` subdirectory stays).
+
+3. **Confirmed the `go.mod` collapse preserves import paths.** Current v1 module at `internal/go.mod` has path `github.com/ColonelBlimp/station-manager/internal`, so `./internal/types` is imported as `github.com/ColonelBlimp/station-manager/internal/types`. New root module at path `github.com/ColonelBlimp/station-manager` produces the same import path for the same package. No rewrite of import statements in carry-forward code needed.
+
+4. **Mapped out the restructure plan** — one big commit with explicit delete list, create list, scaffold list, and migration sequence. Got user go-ahead.
+
+5. **First execution wave** (before hitting complications):
+   - Deleted `go.work`, all five v1 `go.mod`/`go.sum` files, `apps/`, `Taskfile.yml`, `Taskfile.wails.yml`.
+   - Deleted the server-side DB cluster: top-level `internal/database/*.go`, `internal/database/postgres/`, `internal/adapters/`. Kept `internal/database/sqlite/`.
+   - Deleted `internal/listeners/`, `internal/audio/`, `internal/serial/`, `internal/cat/`, `internal/ptt/`.
+   - Fixed the session-1 `internal/adif/slice_test.go` wrinkle by swapping its import from the deleted `internal/adapters` framework to the simplified client-side `internal/database/sqlite/adapters.QsoModelToType`.
+   - Scaffolded `cmd/smd/main.go` + `doc.go`, `internal/api/doc.go`, `internal/qsoservice/doc.go` with intent comments referencing the invariants.
+   - Wrote a minimal root `go.mod` with module path `github.com/ColonelBlimp/station-manager`.
+
+6. **Hit the Go module cache ambiguity problem.** First `go mod tidy` run failed with:
+   ```
+   ambiguous import: found package github.com/ColonelBlimp/station-manager/internal/database/sqlite in multiple modules:
+     github.com/ColonelBlimp/station-manager (local)
+     github.com/ColonelBlimp/station-manager/internal/database (cached v1 pseudo-version)
+   ```
+   Root cause: every `internal/*` subdirectory in v1 had been its own Go module at various points (each with its own `go.mod`), and the proxy/cache had recorded all of them as valid modules with their own pseudo-versions. Go's longest-prefix resolver was matching the cached v1 `internal/database` module before falling back to the local root module. Every `internal/database/sqlite/...` import was ambiguous, every `internal/database/sqlite/adapters/...` import was ambiguous, etc.
+
+7. **Resolved the ambiguity** after several iterations:
+   - First tried clearing the station-manager entries from the Go module cache. Tidy re-downloaded them from the proxy, same ambiguity.
+   - Then tried `GOPROXY=off go mod tidy` with an explicit `require` list. That surfaced real missing-dep errors (because some carry-forward code still imported packages like `go-playground/validator/v10` that hadn't been added to the explicit list yet) but confirmed the ambiguity path disappears when the proxy isn't consulted.
+   - Combined: clear the station-manager cache entries, use an explicit `require` list recovered from v1's `internal/go.mod`, then let `go mod tidy` populate indirect deps from the concrete direct set. That worked.
+
+8. **Hit the scope issue that the restructure plan had not anticipated.** During tidy iteration, build errors revealed that `internal/types/serial.go` imports `go.bug.st/serial` — meaning the v1 types package had a non-stdlib import (a violation of the "types only imports stdlib" invariant we wrote into CLAUDE.md). Further investigation showed `internal/config` was deeply wired into the v1 type universe (rig configs, CAT state values, audio playback, FT8, server config, listener configs), and its dependency chain pulled in a lot of v1-specific types.
+
+9. **Paused for a user decision on scope.** Proposed three options:
+   - **A:** Restore serial/cat/ptt to main and keep v1 types + config as-is. Violates "types only stdlib" invariant; violates narrow-daemon-scope thinking. Smallest change.
+   - **B:** Prune `internal/config` and `internal/types` to a v2-minimal shape. Medium change.
+   - **C:** Delete v1 config and types entirely, write both fresh. Biggest change, most philosophical purity.
+
+10. **User chose a refined version of C:** keep `errors`, `logging`, `adif`, `database/sqlite`, `iocdi`, `enums`, `utils`, and a pruned `types` for later code-review-as-we-go (explicitly framing carry-forward as "carry forward to code-review," not "carry forward as gospel"). Delete `cmd/importer` (defer to milestone 2 as a thin ADIF-to-daemon tool). Rewrite `internal/config` fresh. Accept "structured copy-and-prune" as the valid form of `internal/types` rewrite (fast, preserves ADIF domain knowledge).
+
+11. **Second execution wave — the scope-corrected deletions and rewrites:**
+    - Deleted `cmd/importer/`, `internal/lookup/`, `internal/forwarding/`, `internal/email/`, `internal/maidenhead/`, `internal/apikey/`.
+    - Pruned `internal/types/` grab-bag: deleted `audio.go`, `cat.go`, `ft8.go`, `listener.go`, `ptt.go`, `rig.go`, `serial.go`, `server.go`, `user.go`, `apikey.go`, `app_config.go`, `email.go`, `forwarding.go`, `lookup.go`, `optional.go`, `required.go` (restored minimal version with one field), `json_test.go` (1019 lines of v1-shape tests), `types_test.go` (214 lines of the same). Pruned `services.go` to drop DI bean names for deleted services.
+    - Deleted `internal/config/` entirely. Wrote fresh `internal/config/config.go` + `doc.go` with a minimal `Config` struct, a `Service` wrapper providing the four getters the kept v1 code actually calls (`LoggingConfig()`, `DatastoreConfig()`, `RequiredConfigs()`, `WorkingDir()`), idempotent lifecycle methods, and a `New()` constructor.
+    - Deleted `internal/database/sqlite/example/` (dead code that imported the deleted server-side `internal/database` package).
+    - Fixed `internal/enums/upload/services.go` to inline the QRZ constant as `"qrzforwardingservice"` instead of importing from types.
+
+12. **Chased down the remaining compile/vet errors:**
+    - Two test files had references to deleted types: `internal/enums/upload/services_test.go` and `internal/logging/logging_test.go`. Both fixed with surgical edits (inline literal + update test helper to use the new `config.Service{Cfg: config.Config{...}}` shape).
+    - Restored minimal `internal/types/required.go` with just the `QsoForwardingRowLimit` field that the carry-forward sqlite service actually reads at Open time.
+
+13. **Verified the resulting tree.** Clean runs:
+    - `go mod tidy` — populates indirect deps, no ambiguity.
+    - `go build ./...` — clean.
+    - `go vet ./...` — clean.
+    - `go test ./...` — all packages passing. adif, adapter round-trip, meta, bands, cmds, events, modes, tags, upload/*, errors, iocdi, logging (14.8s for concurrency tests), utils. Stub packages (api, config, cmd/smd, qsoservice, types, database/sqlite, database/sqlite/models) have no test files which is expected.
+
+14. **Did not commit.** Waiting on user review of the roughly 720-file diff.
+
+### What did NOT get done this session
+
+- **Did not commit the restructure.** The working tree has the full v2 milestone-1 layout applied and verified, but no git commit exists. User is reviewing and cleaning up some stray artifacts before the commit lands.
+- **Did not start writing daemon code.** `cmd/smd/main.go` is a stub with a `TODO(v2 milestone 1)` comment and an empty `main()`. Real daemon construction begins next session.
+- **Did not write `docs/v2-design/api.md`.** This is the next-steps item — enumerate daemon API consumers before designing any endpoints. Still pending.
+- **Did not write `docs/v2-design/milestones.md`.** Concrete definition of milestone 1 "done" still pending.
 
 ## What happened in the 2026-04-15 session (session 2)
 
@@ -360,32 +474,38 @@ invariants used across all sessions. Key entries: `project_sm_restructure`,
 ## Next steps (priority order)
 
 The author picks what to work on next — this is a suggestion list, not a
-script. Items near the top are the natural continuation of session 2; items
+script. Items near the top are the natural continuation of session 3; items
 lower down are bigger v2 milestones.
 
 ### The natural next action
 
-1. **Execute the restructure commit that reshapes main into the milestone-1
-   layout.** The delete-list and create-list are fully specified in
-   `docs/v2-design/structure.md` → "Migration from main's current state to
-   milestone 1." Key moves:
-   - Delete `apps/config/`, `apps/logbook/`, `apps/logging/` (preserved on
-     v1 branch)
-   - Collapse `go.work` to a single `go.mod` at the repo root
-   - Delete `internal/database/*.go` top-level files, `internal/database/postgres/`,
-     `internal/adapters/` (all relocate to future server repo)
-   - Delete `internal/listeners/handlers/wsjtx/` and verify the
-     `internal/listeners/` framework has no other consumers (likely dead too)
-   - Reverse-dependency check on `internal/audio/` — if no non-FT8 consumer
-     remains, delete it; if something legitimate uses it, keep it
-   - Scaffold `cmd/smd/main.go`, `internal/api/doc.go`,
-     `internal/qsoservice/doc.go` as empty stubs with intent comments
-   - Clean up the root `go.mod` of any dependencies that were only needed
-     by the deleted packages
-   
-   Recommended as **a single commit** for clean git history; the `v1` branch
-   is the safety net so nothing is lost. This is a big, satisfying commit
-   that takes main from "v1 tip" to "v2 milestone-1 empty layout."
+1. **Commit the restructure that's currently in the working tree.** Session 3
+   executed the full v2 milestone-1 reshape and verified it (`go build ./...`,
+   `go vet ./...`, `go test ./...` all clean), but did not commit — the user
+   is reviewing and doing some final artifact cleanup. The commit is a
+   ~720-file diff, most of which is deletions (v1 workspace scaffolding,
+   apps, Taskfiles, FT8 already gone from session 1, server-side DB
+   cluster, rig control packages, listener framework, audio, enrichment and
+   forwarding packages, v1 types grab-bag, v1 config). New files: `go.mod`
+   (single root), `cmd/smd/main.go` + `doc.go` stub, `internal/api/doc.go`
+   stub, `internal/qsoservice/doc.go` stub, `internal/config/config.go` + 
+   `doc.go` (fresh minimal daemon config). Modified files: a handful of
+   test helpers and one enum constant that used deleted types.
+
+   Proposed commit message shape:
+   ```
+   Restructure main into v2 milestone-1 layout
+
+   Collapse the v1 multi-module workspace into a single root Go module
+   and clear v1 code that doesn't belong in v2 milestone 1. v2 is now a
+   clean-slate daemon-plus-stubs shell on main; v1 continues on the v1
+   branch for day-to-day operational use.
+
+   ... (full breakdown in structure.md and in session 3's notes above)
+   ```
+
+   Once committed, main is at the v2 milestone-1 layout and v2 construction
+   work can begin.
 
 ### v2 design work (follow-ups to structure.md)
 
@@ -436,17 +556,19 @@ lower down are bigger v2 milestones.
    calls for the Svelte side, error surfacing, and loading/optimistic-UI
    patterns. Flagged 2026-04-15 — don't forget.
 
-### Optional remaining v1 cleanup (can land on v1 branch if a bug surfaces)
+### Carry-forward package code-review track (runs in parallel with v2 design)
 
-These were in session-1's next-steps list. Most are subsumed by the
-restructure commit in item #1 above (they happen when those directories are
-deleted from main). Listed here only for completeness; if item #1 happens,
-you can cross these off.
+The carry-forward packages were kept because rewriting them would be too expensive, but they are **not** blessed as final — each one is a code-review candidate during v2 construction. The user explicitly framed this as "carry forward to code-review," not "carry forward as gospel." Each review may land as its own commit, separate from v2 feature work.
 
-6. **Delete `internal/listeners/handlers/wsjtx/`** — subsumed by item #1.
-7. **Delete `internal/listeners/` framework** if wsjtx was the only consumer — subsumed by item #1.
-8. **Reverse-dependency check on `internal/audio/`** — subsumed by item #1.
-9. **Resolve the `DatabaseServiceInterface` mismatch** in `apps/logging/backend/facade/` — subsumed by item #1 (the entire `apps/logging/` directory is deleted; the interface dies with it). The lesson survives in `lessons-for-v2.md` → "Aspirational interfaces with no real consumer."
+7. **Audit `internal/database/sqlite`.** User flagged this as "probably has a smarter implementation." The session-1 adapter simplification was one pass; the rest of the package (the `Service` struct, the `api.go`/`api_context.go` split, the migrations infrastructure, the error wrapping, the `requiredCfgs` field tied to the v1 forwarder row-limit) hasn't been reviewed at that depth. A dedicated pass is likely to find more wins. **Probably the highest-value review target.**
+
+8. **Audit `internal/iocdi`.** The home-grown DI container. Generally considered a "keep," but worth a read to confirm it still makes sense for the v2 daemon's smaller service graph. If the daemon ends up with only 4–5 services, manual wiring might be cleaner than reflection-based DI.
+
+9. **Audit `internal/adif`.** ~2000 lines of ADIF parser. Load-bearing for milestone 1. Review for any v1-era shortcuts that could be cleaned up, and for test coverage gaps around the "ADIF is down" error paths (see `lessons-for-v2.md` → "Explicit fallbacks for every external dependency").
+
+10. **Audit `internal/types` (pruned version).** 13 files left after the session 3 prune. Some (like `adif.go`, `datastore.go`, `logging.go`) may still be pruneable. Worth a read-through once the daemon is far enough along that the actual minimal surface is clearer.
+
+11. **Audit `internal/errors`, `internal/logging`, `internal/enums`, `internal/utils`.** Less urgent than the above — these are "maturing" per the user's framing — but each one should get at least a quick pass when its first v2 consumer lands.
 
 ### v1 branch follow-ups (distinct track from v2 main work)
 
@@ -478,8 +600,16 @@ not bleed into each other.
 
 ### Maintenance of this handoff document
 
-10. **Update this file at the end of every session.** Move completed items
+12. **Update this file at the end of every session.** Move completed items
     from "Next steps" into "What happened," add new items as they surface,
     prune "What happened" to keep it to the last 2–3 sessions of history.
     The git history and the v1-analysis / v2-design docs are the long-form
     record; this file is the quick-reference for cross-session continuity.
+
+13. **Prune session-1's "What happened" entry next session.** The handoff
+    is now carrying three sessions of history. Per the maintenance rule
+    above, only 2–3 sessions stay in full detail. After session 4 lands,
+    consider compressing session 1 to a one-paragraph summary referencing
+    the relevant commit hashes (`5288983`, `1ae516d`, `0e158ec`,
+    `66e0af3`) and the session-2 handoff entry that already contains its
+    work, so this file doesn't grow unbounded.

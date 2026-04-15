@@ -1,7 +1,0 @@
-@import 'tailwindcss';
-
-@layer container {
-    html {
-        @apply text-gray-900;
-    }
-}

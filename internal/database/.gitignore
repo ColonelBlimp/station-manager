@@ -1,8 +1,0 @@
-copilot.*
-postgres/.env
-:memory:
-coverage*
-data
-relative
-db
-config.json

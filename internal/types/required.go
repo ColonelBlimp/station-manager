@@ -1,32 +1,20 @@
 package types
 
+// RequiredConfigs holds the small set of "required" runtime tunables that
+// the kept v1 code still references. This struct has been pruned from its
+// v1 shape — most of the original fields were Wails-app concerns (default
+// logbook ID, default rig ID, power multiplier, pagination page size, etc.)
+// that don't apply to the v2 daemon.
+//
+// What's left is the single field the sqlite service reads during batch
+// upload reservation. When the v2 forwarder redesign lands
+// (docs/v1-analysis/design-decisions-log.md → "Hardcoded QRZ forwarder"
+// and docs/v2-design/structure.md → "Open items deferred"), this field is
+// a candidate to move into a forwarder-specific config struct and this
+// file may go away entirely.
 type RequiredConfigs struct {
-	SetupComplete      bool   `json:"setup_complete"`
-	DefaultLogbookID   int64  `json:"default_logbook_id"`
-	DefaultRigID       int64  `json:"default_rig_id"`
-	DefaultFreq        string `json:"default_freq"`
-	DefaultMode        string `json:"default_mode"`
-	DefaultIsRandomQso bool   `json:"default_is_random_qso"`
-	PowerMultiplier    int    `json:"power_multiplier"`
-	DefaultTxPower     int    `json:"default_tx_power"`
-	UsePowerMultiplier bool   `json:"use_power_multiplier"`
-	// The default TO email address.
-	//	DefaultFwdEmail string `json:"default_fwd_email"` - moved to EmailConfig
-
-	// QsoForwardingIntervalSeconds determines the interval at which QSO forwarding occurs, defined as a duration in
-	// seconds. The forwarding process checks for queued QSOs at the interval defined by this setting.
-	QsoForwardingPollIntervalSec int `json:"qso_forwarding_poll_interval_sec"`
-	QsoForwardingWorkerCount     int `json:"qso_forwarding_worker_count"`
-
-	// QsoForwardingQueueSize defines the maximum number of QSOs that can be stored in the forwarding queue awaiting processing.
-	QsoForwardingQueueSize int `json:"qso_forwarding_queue_size"`
-
-	// The maximum number of QSOs to retrieve from the database for forwarding.
-	// This the SQL select LIMIT clause.
+	// QsoForwardingRowLimit caps how many QSO rows the sqlite upload
+	// reservation query will lock in a single batch. Zero means use the
+	// sqlite package's compiled-in default.
 	QsoForwardingRowLimit int `json:"qso_forwarding_row_limit"`
-	// This is related to forwarding. Writes to the SQLite database are serialized to prevent concurrent write conflicts.
-	// and busy signal.
-	DatabaseWriteQueueSize int `json:"database_write_queue_size"`
-
-	PaginationPageSize int `json:"pagination_page_size"`
 }

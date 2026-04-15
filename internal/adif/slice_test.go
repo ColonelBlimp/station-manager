@@ -3,9 +3,9 @@
 package adif
 
 import (
-	"github.com/ColonelBlimp/station-manager/internal/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	models "github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -66,12 +66,11 @@ func TestComposeToAdifString(t *testing.T) {
 func qsoModelSliceToQsoTypeSlice(slice models.QsoSlice) (types.QsoSlice, error) {
 	var qsoList []types.Qso
 	for _, model := range slice {
-		item, err := adapters.ConvertModelToType[types.Qso](model)
+		item, err := adapters.QsoModelToType(model)
 		if err != nil {
 			return nil, err
 		}
 
-		//		item.Name = html.EscapeString(item.Name)
 		if item.Name, err = utils.DecodeStringToUTF8(item.Name); err != nil {
 			item.Name = html.EscapeString(item.Name)
 		}
@@ -84,7 +83,7 @@ func qsoModelSliceToQsoTypeSlice(slice models.QsoSlice) (types.QsoSlice, error) 
 		item.TimeOn = utils.FormatTime(item.TimeOn)
 		item.TimeOff = utils.FormatTime(item.TimeOff)
 
-		qsoList = append(qsoList, *item)
+		qsoList = append(qsoList, item)
 	}
 
 	return qsoList, nil

@@ -2,8 +2,6 @@ package upload
 
 import (
 	"testing"
-
-	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestOnlineServiceValid(t *testing.T) {
@@ -34,7 +32,7 @@ func TestOnlineServiceString(t *testing.T) {
 		t.Fatalf("OnlineServiceSM.String() = %q, want %q", got, "sm")
 	}
 
-	if got := OnlineServiceQRZ.String(); got != types.QrzForwardingServiceName {
-		t.Fatalf("OnlineServiceQRZ.String() = %q, want %q", got, types.QrzForwardingServiceName)
+	if got := OnlineServiceQRZ.String(); got != "qrzforwardingservice" {
+		t.Fatalf("OnlineServiceQRZ.String() = %q, want %q", got, "qrzforwardingservice")
 	}
 }
