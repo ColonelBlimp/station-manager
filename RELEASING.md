@@ -1,156 +1,25 @@
-# Release Process
+# Releasing Station Manager (v2)
 
-## Overview
+**v2 has no release process yet.** It is under construction on the `main`
+branch as of 2026-04-15 and has not reached a releasable milestone.
 
-Station Manager uses a **trunk-based** workflow (no branching). All development
-is committed directly to `main`. Releases are triggered by pushing a **git tag**.
-
-### Two CI workflows
-
-| Workflow | Trigger | File |
-|---|---|---|
-| **Validate** | Every push to `main` | `.github/workflows/validate.yml` |
-| **Release** | Push of a `v*` tag | `.github/workflows/release.yml` |
-
----
-
-## Day-to-day: push to `main`
-
-Every push to `main` runs **Validate** — four parallel jobs:
-
-1. **Go Vet** — `go vet ./...` in each non-Wails module
-2. **Go Format** — `gofmt -l` on all tracked `.go` files
-3. **Unit Tests** — `go test -race ./... -short` in each non-Wails module
-4. **Lint** — `golangci-lint run ./...` in each non-Wails module
-
-Wails app modules (`apps/logging`, `apps/logbook`, `apps/config`) are **skipped** during
-validation because their `go:embed` directives require a frontend build.
-
-### Pre-commit hook
-
-A Git pre-commit hook auto-regenerates Wails JS/TS bindings when
-`apps/logging/` files are staged:
-
-```bash
-# Install once (or after any change to scripts/pre-commit):
-task setup-hooks
-```
-
----
-
-## Creating a release
-
-### 1. Tag the commit
-
-```bash
-git tag v1.2.3
-git push origin v1.2.3
-```
-
-The tag **must** start with `v` (e.g. `v0.1.0`, `v1.0.0-rc.1`).
-
-### 2. What happens automatically
-
-Pushing the tag triggers the **Release** workflow, which runs three sequential
-stages:
+The v1 release process (Taskfile + Wails build + nfpm packaging via GitHub
+Actions) is preserved on the `v1` branch along with the `v1.0.0` tag. To see
+how v1 was released:
 
 ```
-validate ── build-and-package ── release
+git checkout v1
+cat RELEASING.md
 ```
 
-#### Stage 1 — Validate
+Tag-triggered workflows on GitHub run against the workflow files present at
+the tagged commit, so pushing a `v1.x.y` tag from the `v1` branch will use
+v1's preserved `.github/workflows/release.yml` even though `main` no longer
+has it.
 
-Same checks as the daily workflow (vet, fmt, test, lint), run as a single job
-to gate the build stages.
-
-#### Stage 2 — Build & Package (`build-wails`)
-
-Installs Node 22, GTK/WebKit system libraries, the Wails CLI, and nfpm, then:
-
-1. Builds all Wails applications via `Taskfile.wails.yml`:
-
-| App | Source | Binary | Version injected via |
-|---|---|---|---|
-| sm-logger | `apps/logging` | `build/bin/smlogger` | `-ldflags "-X main.version=<tag>"` |
-| sm-logbook | `apps/logbook` | `build/bin/smbook` | `-ldflags "-X main.version=<tag>"` |
-| sm-config | `apps/config` | `build/bin/smconfig` | `-ldflags "-X main.version=<tag>"` |
-
-2. Packages with [nfpm](https://nfpm.goreleaser.com/) using `nfpm.yaml`:
-
-| Format | Output | Dependencies declared |
-|---|---|---|
-| `.deb` | `station-manager_<ver>_amd64.deb` | `libgtk-3-0`, `libwebkit2gtk-4.1-0` |
-| `.rpm` | `station-manager-<ver>-1.x86_64.rpm` | `gtk3`, `webkit2gtk4.1` |
-
-Each package installs:
-- Binaries → `/usr/bin/smlogger`, `/usr/bin/smbook`, `/usr/bin/smconfig`
-- Desktop entries → `/usr/share/applications/`
-- Icons → `/usr/share/pixmaps/`
-
-The build chain for each Wails app is:
-
-1. `shared-utils:build` — `npm install` + `tsc` in `web/shared-utils/`
-2. `<app>:frontend-dep-install` — `npm install` in `apps/<app>/frontend/`
-3. `<app>:frontend-build` — `npm run build` (Vite) in `apps/<app>/frontend/`
-4. `<app>:wails-build` — `wails build` in `apps/<app>/`
-
-Outputs uploaded as artifact `release-linux-amd64`.
-
-#### Stage 3 — Create GitHub Release (`release`)
-
-Downloads the build artifacts and creates a GitHub Release with:
-
-- **Tag name** and **release name** set to the tag (e.g. `v1.2.3`)
-- **Auto-generated release notes** from commits since the last tag
-- **Attached assets**: raw binaries + `.deb` and `.rpm` packages
-
----
-
-## Local build commands
-
-```bash
-# Sync Go workspace
-task
-
-# Build all Go modules (non-Wails)
-task build
-
-# Run all tests
-task test
-
-# Build a single Wails app
-task wails:logging APP_VERSION=$(git rev-parse --short HEAD)
-
-# Build all Wails apps
-task wails APP_VERSION=$(git rev-parse --short HEAD)
-
-# Build .deb and .rpm packages (requires binaries in build/bin/)
-task package:deb TAG=1.0.0
-task package:rpm TAG=1.0.0
-
-# Full local release: validate → build → wails → package
-task release:local TAG=1.0.0
-
-# Update all Go module dependencies
-task update
-
-# Tidy all Go modules
-task tidy
-
-# Install pre-commit hook
-task setup-hooks
-```
-
----
-
-## Key files
-
-| File | Purpose |
-|---|---|
-| `Taskfile.yml` | Root task runner — Go build, test, tidy, update, package, hooks |
-| `Taskfile.wails.yml` | Wails app build tasks (shared-utils, logging, logbook, config) |
-| `nfpm.yaml` | nfpm packaging config — produces .deb and .rpm |
-| `.github/workflows/validate.yml` | CI: runs on every push to `main` |
-| `.github/workflows/release.yml` | CI: runs on `v*` tag push — build + package + GitHub Release |
-| `scripts/pre-commit` | Git hook: regenerates Wails bindings on commit |
-| `internal/utils/working_dir.go` | `WorkingDir()` — reads `SM_WORKING_DIR` env var |
+The v2 release process will be designed and documented when v2 reaches a
+state where it can be shipped. This will likely involve a new GitHub Actions
+workflow, a revised Taskfile, and decisions about packaging format
+(`.deb` / `.rpm` / Flatpak / something else). None of these are settled yet.
+When a v2 release process is designed, it will appear as
+`docs/v2-design/release-process.md`.

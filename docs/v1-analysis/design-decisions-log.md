@@ -4,6 +4,8 @@
 
 **Purpose:** Before v2 starts, every major design decision needs an explicit judgment. This document makes those judgments and the reasoning behind them visible. As of 2026-04-14 the v2 rewrite path has been chosen (see "Execution path" entry below); the keep/change/delete verdicts below are the inputs to v2 design.
 
+> **Scope note:** this document holds **v1** design decisions (including the decision *to do* v2). **v2 design decisions** — repo layout, module boundaries, HTTP API shape, milestone plan, etc. — live in `docs/v2-design/`, starting with `docs/v2-design/structure.md` (written 2026-04-15). Check there before asking "why is v2 shaped this way."
+
 **How to read this document:** entries are grouped by subsystem. Verdicts mean:
 - **Keep** — the decision is correct as-is; preserve verbatim in v2 or leave alone in v1.
 - **Change** — the decision is right in spirit but the implementation needs fixing.
