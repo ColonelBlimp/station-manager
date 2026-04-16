@@ -25,7 +25,11 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	// ---- Read body with size limit ----
 
 	lr := http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
-	defer lr.Close()
+	defer func() {
+		if err := lr.Close(); err != nil {
+			s.logger.WarnWith().Err(err).Msg("failed to close request body reader")
+		}
+	}()
 
 	body, err := io.ReadAll(lr)
 	if err != nil {
