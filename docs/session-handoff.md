@@ -24,16 +24,31 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-18 end-of-session)
+## Current state (as of 2026-04-16 mid-session 7)
 
-### Both carry-forward library packages are in their v2 final state
+### Seven of eight carry-forward packages are reviewed and in v2 state
 
-Sessions 5 and 6 completed full code reviews and fix passes on
-`internal/errors` and `internal/logging` — the two most load-bearing
-carry-forward library packages. Both are now audited, comprehensively
-tested, cleanly documented, and in a state that should not need
-revisiting except for genuine bug fixes. The full review documents
-with their resolution annotations live in `docs/reviews/`.
+Session 7 completed the carry-forward review track for all packages
+except `internal/database/sqlite` (the heaviest, ~2039 lines). The
+review order was bottom-up by dependency:
+
+| Package | Status | Session |
+|---------|--------|---------|
+| `internal/errors` | v2 final | 5 |
+| `internal/logging` | v2 final | 6 |
+| `internal/types` | reviewed, fixes applied | 7 |
+| `internal/utils` | reviewed, dead code removed | 7 |
+| `internal/enums` | reviewed, CAT packages deleted | 7 |
+| `internal/config` | reviewed, clean (stub) | 7 |
+| `internal/iocdi` | reviewed, cosmetic fixes | 7 |
+| `internal/adif` | reviewed, fixes + tests added | 7 |
+| `internal/database/sqlite` | **NOT YET REVIEWED** | — |
+
+The `database/sqlite` review is the last gate before writing daemon
+code. Several findings from earlier reviews (types `SessionID`,
+`APIKey`, `Sm*` upload fields, `boil` struct tags, `RequiredConfigs`)
+were explicitly deferred to this review because the sqlite adapter
+code is the consumer.
 
 ### v2 daemon HTTP API design is captured in `docs/v2-design/api.md`
 
@@ -70,13 +85,13 @@ station-manager/
 │   ├── api/             # NEW — HTTP handler layer stub
 │   ├── config/          # REWRITTEN fresh (minimal daemon config)
 │   ├── database/sqlite/ # carry-forward (with simplified adapters/)
-│   ├── enums/           # carry-forward
-│   ├── errors/          # AUDITED and reviewed (session 5 — v2 final state)
-│   ├── iocdi/           # carry-forward
-│   ├── logging/         # AUDITED and reviewed (sessions 5-6 — v2 final state)
+│   ├── enums/           # carry-forward (CAT subpackages deleted session 7)
+│   ├── errors/          # AUDITED (session 5 — v2 final state)
+│   ├── iocdi/           # REVIEWED session 7 — cosmetic fixes, doc.go added
+│   ├── logging/         # AUDITED (sessions 5-6 — v2 final state)
 │   ├── qsoservice/      # NEW — daemon domain layer stub
-│   ├── types/           # PRUNED — QSO core only
-│   └── utils/           # carry-forward
+│   ├── types/           # REVIEWED session 7 — postgres dead code removed, doc.go
+│   └── utils/           # REVIEWED session 7 — dead code removed, doc.go
 ├── docs/
 │   ├── v1-analysis/
 │   ├── v2-design/
@@ -91,21 +106,22 @@ station-manager/
 Import paths for carry-forward packages are unchanged because `internal/`
 was already at the right relative depth under the v1 `internal/` module.
 
-**11 internal packages.** Everything in this tree is either a deliberate
-carry-forward (two of which — errors and logging — have been formally
-audited and brought to v2 final state) or a v2 rewrite stub.
+**11 internal packages.** Everything in this tree is either a
+reviewed/audited carry-forward or a v2 rewrite stub. Seven of eight
+carry-forward packages have been reviewed in sessions 5-7; only
+`database/sqlite` remains.
 
-### Repo state — all commits pushed to origin
+### Repo state
 
 **Tags** (pushed): `pre-ft8-removal` at `1ae516d`, `v1.0.0` at `0e158ec`.
 
-**Branches** (pushed):
-- `main` at `af46e43` — session 6 end-of-session state. 10 commits ahead
-  of where session 2 left origin (`5ef55c1`).
-- `v1` at `0e158ec` — unchanged since session 2. The day-to-day working
-  branch for ham radio operations.
+**Branches:**
+- `main` — session 7 work in progress. 6 uncommitted review commits
+  on top of `4121c6e` (session 6 handoff). Latest: `ab51724`.
+- `v1` at `0e158ec` — unchanged since session 2.
 
-**Working tree:** clean. Nothing uncommitted, nothing stashed.
+**Working tree:** modified (this handoff doc). All review fixes are
+committed locally but not yet pushed.
 
 ### Workspace shape — one Go module, no `go.work`
 
@@ -160,6 +176,100 @@ memories: `feedback_one_question_at_a_time` (ask one design question
 per turn in exploratory conversations) and `feedback_no_magic_numbers`
 (runtime values come from config, code constants only as fallback
 defaults). See `MEMORY.md` index for the full list.
+
+---
+
+## What happened in the 2026-04-16 session (session 7, in progress)
+
+### Goals set for the session
+
+- Complete the carry-forward package code-review track: review every
+  v1 package that the v2 daemon will depend on before writing daemon
+  code.
+
+### What got done
+
+1. **Reviewed and fixed `internal/types`** (commit `3e22cf0`):
+   - Stripped `DatastoreConfig` of all postgres dead code (8 fields,
+     `PostgresDriverName` constant). Narrowed `Driver` validate tag
+     to `sqlite` only. Struct went from 17 fields to 9.
+   - Removed `adapter:"ignore"` tags from `Qso` (generic adapter
+     framework is deleted).
+   - Added `doc.go` documenting the stdlib-only import constraint,
+     ADIF alignment, and struct tag conventions.
+   - Deferred `SessionID`, `APIKey`, `Sm*` upload fields, and `boil`
+     tags to the `database/sqlite` review (active consumers there).
+
+2. **Reviewed and cleaned `internal/utils`** (commit `ccfa633`):
+   - Deleted 5 dead items (10 files): `DeepCopy` (also removed the
+     sole `goccy/go-json` consumer in utils), `SetStructStringField`,
+     `FIFOList`, `IsNetworkError`, `NewHTTPClient`. ~610 lines of
+     source + ~700 lines of tests removed.
+   - Hoisted per-call `regexp.MustCompile` in date/time sanitizers
+     to package-level vars.
+   - Added `doc.go`.
+   - Kept domain-specific ham radio utilities (frequency, lat/long,
+     date/time, DXCC) — they'll be consumed when the API layer lands.
+   - Flagged `DecodeStringToUTF8` (`golang.org/x/net` dependency)
+     for evaluation during the adif review.
+
+3. **Reviewed and pruned `internal/enums`** (commit `48856b0`):
+   - Deleted 3 CAT subpackages (`events`, `cmds`, `tags`) and the
+     empty `dummy.go`. These are bridge/milestone-2 scope, not daemon.
+   - Fixed `action.Parse` to return an error for unknown values
+     instead of silently defaulting to `Insert`.
+   - Added package-level doc comments to `bands`, `modes`,
+     `upload`, `upload/status`, `upload/action`.
+
+4. **Reviewed `internal/config`** — clean stub, no fixes needed.
+   Deleted the dead v1 integration test `adif/slice_test.go` that
+   referenced non-existent v1 config API (commit `9c62418`).
+
+5. **Reviewed and cleaned `internal/iocdi`** (commit `9c62418`):
+   - Deleted commented-out test block and 3 debug `fmt.Println`
+     artifacts.
+   - Fixed "coresponding" → "corresponding" typos.
+   - Added `doc.go` documenting the tag convention, lifecycle, and
+     rationale for being home-grown.
+
+6. **Reviewed and fixed `internal/adif`** (commits `7f371ab`,
+   `ab51724`):
+   - Renamed `Marshal` → `Parse` (was named backwards vs Go
+     convention).
+   - Removed incorrect `QslMsgIntl: q.Qsl.QslMsgRcvd` mapping with
+     its "confirm your desired mapping" comment.
+   - Deleted dead `validate` field-name checks in both reflection
+     walkers.
+   - Extracted hardcoded `"7QSM"` and `"0.0.1"` to `ProgramID` and
+     `ProgramVersion` constants. (User changed ProgramID to `"SM"`.)
+   - Added `doc.go`.
+   - Added 11 parser tests: full file with header, no header, empty
+     input, whitespace-only, case-insensitive tags, case-insensitive
+     EOH, unknown fields ignored, round-trip serialise→parse, trailing
+     record without EOR, ComposeToAdifString empty slice, and
+     ComposeToAdifString with records.
+   - Flagged `QslSection` vs `types.Qsl` structural drift as a design
+     question for later.
+
+### Deferred findings (to be addressed in `database/sqlite` review)
+
+These findings from session 7's reviews were explicitly deferred
+because the sqlite adapter code is the active consumer:
+
+- `types.Qso.SessionID` — v1 session concept, no v2 equivalent.
+  Removing requires coordinated adapter changes.
+- `types.Logbook.UserID` / `APIKey` — server-side/postgres concerns.
+  Removing requires adapter changes.
+- `types.Qso.SmQsoUploadDate/Status` / `SmFwrdByEmail*` — may
+  duplicate `QsoUpload` table. Evaluate whether these are still
+  read/written.
+- `boil:"..."` struct tags on `QsoUpload`, `ContactHistory` — ORM
+  coupling. Revisit when ORM choice is made.
+- `types.RequiredConfigs` — single-field struct for forwarder row
+  limit. Candidate to fold into forwarder config.
+- `validate:"band"` / `validate:"mode"` custom validators — tags
+  exist on `types.QsoDetails` but no validators are registered
+  anywhere in the codebase.
 
 ---
 
@@ -523,107 +633,50 @@ covers all of session 3's work — 730 files changed, 433 insertions,
 
 ## Next steps (priority order)
 
-Session 7 picks up from here. The library-package review track is
-done; the main gating question for the next session is "start writing
-real v2 daemon code or keep making design decisions."
+### The immediate next action
 
-### The natural next action
+1. **Review `internal/database/sqlite`** (~2039 lines). This is the
+   last carry-forward package and the heaviest. It is the gate before
+   writing daemon code. The review will also address the deferred
+   findings from session 7's types/enums/config reviews (see above).
+   Key areas to examine:
+   - The `Service` struct, lifecycle, and `requiredCfgs` field
+   - The `api.go` / `api_context.go` split and query patterns
+   - The adapter layer (`adapters/model_to_type.go`,
+     `adapters/type_to_model.go`) — including the deferred
+     `SessionID`, `APIKey`, and `Sm*` field questions
+   - The migrations infrastructure
+   - Error wrapping consistency with `internal/errors`
+   - sqlboiler-generated models (read-only, but verify they match
+     the schema and aren't hiding surprises)
+   - Whether the ORM question needs answering now or can stay
+     deferred (feeds into `docs/v2-design/db-layer.md`)
+   - The `validate:"band"` / `validate:"mode"` custom validators
+     that are referenced in types but never registered
 
-1. **Write the first real daemon code.** `cmd/smd/main.go` is
-   currently a stub with a TODO comment. The smallest possible first
-   step that exercises the settled cross-cutting decisions end to end:
-   - Load `internal/config.Config` (currently a stub) from disk or
-     defaults.
-   - Initialize the `internal/database/sqlite.Service` via the iocdi
-     container.
-   - Initialize the `internal/logging.Service` the same way.
-   - Bind a `net.Listen("unix", cfg.SocketPath)` listener.
-   - Serve `POST /v1/qso` accepting raw ADIF request bodies, parsing
-     via `internal/adif`, calling a `qsoservice.Submit()` method that
-     writes the QSO + its upload-queue rows atomically per the
-     one-fails-all-fail invariant, and returning a JSON envelope
-     indicating "stored" or "duplicate".
-   - No SSE, no forwarding, no logbook CRUD, no pagination, no
-     authentication beyond Unix-socket filesystem permissions. One
-     endpoint.
-   - Exercise via `curl` over the Unix socket (e.g.
-     `curl --unix-socket /tmp/smd.sock -X POST --data-binary @sample.adi
-     http://localhost/v1/qso`).
+### After the sqlite review: write daemon code
 
-   Expected size: maybe 300–500 lines of new code across `cmd/smd`,
-   `internal/api`, `internal/qsoservice`, and probably some filling-in
-   of `internal/config`. Several sessions of work, but the first
-   concrete v2 daemon milestone.
+2. **Write the first real daemon code.** `cmd/smd/main.go` is
+   currently a stub. The smallest end-to-end slice:
+   - Load config, init sqlite + logging via iocdi, bind Unix socket,
+     serve `POST /v1/qso` (parse ADIF, write QSO + upload-queue rows
+     atomically, return JSON envelope).
+   - No SSE, no forwarding, no logbook CRUD, no pagination.
+   - Exercise via `curl --unix-socket`.
 
-### v2 design work (follow-ups to `docs/v2-design/`)
+### v2 design work
 
-2. **Write `docs/v2-design/milestones.md`** to concretely define what
-   milestone 1 "done" means. Proposed shape: daemon + one POST endpoint
-   + a `curl` test script is milestone 1a; milestone 1b adds the
-   remaining QSO CRUD endpoints + contact history + contest dupe check
-   + a minimal forwarder; milestone 2 reintroduces the Wails clients.
-   Writing it down forces commitment and is the explicit mitigation
-   for the "interminable 90%" failure mode.
+3. **Write `docs/v2-design/milestones.md`** to define milestone 1
+   "done". Prevents the "interminable 90%" failure mode.
 
-3. **Pick the ORM/generator approach** → `docs/v2-design/db-layer.md`
-   when v2 DB work starts. sqlboiler (v1's choice, currently
-   carried-forward), Bob, sqlc, or hand-rolled. Not urgent; the
-   current plan is "sqlboiler stays until there's a reason to
-   change." Make it an explicit decision when the sqlite review
-   happens.
+4. **Pick the ORM/generator approach** → `docs/v2-design/db-layer.md`.
+   The sqlite review may force this decision.
 
-4. **Think about multi-rig as a first-class assumption** →
-   `docs/v2-design/multi-rig.md` when the bridge design starts. v1
-   has no multi-rig support. Cheaper to answer "does `types.Qso`
-   carry a rig identifier" before the daemon API is frozen than
-   after.
+5. **Multi-rig as first-class assumption** →
+   `docs/v2-design/multi-rig.md` when bridge design starts.
 
-5. **Expand `CLAUDE.md` frontend guidance when Wails clients return
-   in milestone 2.** The current file has deliberately thin
-   TypeScript/Svelte 5 coverage because there's no frontend code in
-   the v2 tree yet. When the first Wails app lands, expand with
-   concrete guidance on component organization, Svelte 5 state/store
-   patterns, TS strictness level, Wails bindings conventions, form
-   handling patterns, the API client layer that wraps a future
-   `internal/smclient` for the Svelte side, error surfacing, and
-   loading/optimistic-UI patterns.
-
-### Carry-forward package code-review track
-
-Two of the seven carry-forward library packages have been formally
-audited and brought to v2 final state (`internal/errors`,
-`internal/logging`). Five remain as carry-forward-for-code-review
-candidates. Priority order from highest to lowest expected yield:
-
-6. **Audit `internal/database/sqlite`.** Flagged as "probably has a
-   smarter implementation." The session 1 adapter simplification was
-   one pass; the rest of the package (the `Service` struct, the
-   `api.go`/`api_context.go` split, the migrations infrastructure,
-   the error wrapping, the `requiredCfgs` field tied to the v1
-   forwarder row-limit) has not been reviewed at that depth.
-   **Highest-value review target.** Likely to surface an ORM/driver
-   decision in the process, feeding into `db-layer.md`.
-
-7. **Audit `internal/adif`.** ~2000 lines of ADIF parser.
-   Load-bearing for milestone 1 because the daemon's POST endpoint
-   accepts raw ADIF bodies. Review for any v1-era shortcuts that
-   could be cleaned up, and for test coverage gaps around the
-   "malformed ADIF input" error paths.
-
-8. **Audit `internal/iocdi`.** The home-grown DI container. Generally
-   considered a keep, but worth a read to confirm it makes sense for
-   the v2 daemon's smaller service graph. If the daemon ends up with
-   only 4–5 services, manual wiring might be cleaner than reflection-
-   based DI.
-
-9. **Audit `internal/types` (pruned).** 13 files remain after the
-   session 3 prune. Some (`adif.go`, `datastore.go`, `logging.go`) may
-   still be prunable now that the daemon's actual needs are clearer.
-
-10. **Audit `internal/enums`, `internal/utils`.** Less urgent — these
-    are small, self-contained, and have been touched only
-    incidentally. Each should get at least a quick pass when its
-    first v2 consumer lands.
+6. **Expand `CLAUDE.md` frontend guidance** when Wails clients return
+   in milestone 2.
 
 ### Deferred features to investigate
 
@@ -708,5 +761,5 @@ should not bleed into each other.
     quick-reference for cross-session continuity.
 
 12. **Session compression applied session 6.** Sessions 1–3 are now
-    one-paragraph summaries. After session 7 lands, session 4 becomes
-    the next candidate for compression to a summary.
+    one-paragraph summaries. After session 8 lands, sessions 4 and 5
+    become candidates for compression.

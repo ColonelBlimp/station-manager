@@ -1,2 +1,0 @@
-# Station Manager: adif package
-
