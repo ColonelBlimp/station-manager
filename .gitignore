@@ -5,3 +5,6 @@ internal/logging/config.json
 !build/logs/.gitkeep
 build/*
 .task
+apps/*
+web/*
+/internal/cat/config.json

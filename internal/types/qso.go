@@ -27,8 +27,8 @@ type Qso struct {
 	LoggingStation
 	Qsl
 
-	CountryDetails Country          `json:"country_details" adapter:"ignore"` // More detailed information about the contacted station's country
-	ContactHistory []ContactHistory `json:"contact_history" adapter:"ignore"`
+	CountryDetails Country          `json:"country_details"` // Enrichment: contacted station's country details
+	ContactHistory []ContactHistory `json:"contact_history"` // Prior QSOs with this callsign
 }
 
 type QsoSlice []Qso
