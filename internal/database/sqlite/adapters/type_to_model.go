@@ -57,7 +57,6 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 	return models.Qso{
 		ID:             qso.ID,
 		LogbookID:      qso.LogbookID,
-		SessionID:      qso.SessionID,
 		Call:           qso.ContactedStation.Call,
 		Band:           qso.QsoDetails.Band,
 		Mode:           qso.QsoDetails.Mode,
@@ -110,16 +109,10 @@ func CountryTypeToModel(country types.Country) (models.Country, error) {
 }
 
 func LogbookTypeToModel(logbook types.Logbook) (models.Logbook, error) {
-	var apiKey null.String
-	if logbook.APIKey != "" {
-		apiKey = null.StringFrom(logbook.APIKey)
-	}
-
 	return models.Logbook{
 		ID:          logbook.ID,
 		Name:        logbook.Name,
 		Callsign:    logbook.Callsign,
-		APIKey:      apiKey,
 		Description: null.StringFrom(logbook.Description),
 	}, nil
 }

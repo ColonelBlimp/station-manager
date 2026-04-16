@@ -18,7 +18,8 @@ const (
 )
 
 const (
-	errMsgInvalidId = "Invalid ID"
+	errMsgInvalidId     = "Invalid ID"
+	errMsgEmptyCallsign = "Callsign cannot be empty."
 )
 
 const (

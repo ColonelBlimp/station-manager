@@ -7,10 +7,6 @@ type Qso struct {
 	// Every QSO entry MUST have a logbook associated with it.
 	LogbookID int64 `json:"logbook_id" validate:"required"`
 
-	// SessionID represents the foreign key to the session associated with a QSO entry.
-	// Every QSO entry MUST have a session associated with it.
-	SessionID int64 `json:"session_id" validate:"required"`
-
 	SmQsoUploadDate     string `json:"sm_qso_upload_date"`
 	SmQsoUploadStatus   string `json:"sm_qso_upload_status"`
 	SmFwrdByEmailDate   string `json:"sm_fwrd_by_email_date"`

@@ -50,45 +50,6 @@ func (s *Service) InsertQsoWithContext(ctx context.Context, qso types.Qso) (int6
 	return model.ID, nil
 }
 
-func (s *Service) FetchQsoSliceBySessionIDWithContext(ctx context.Context, id int64) (types.QsoSlice, error) {
-	const op errors.Op = "sqlite.Service.FetchQsoSliceBySessionIDWithContext"
-	if err := checkService(op, s); err != nil {
-		return nil, err
-	}
-
-	if id < 1 {
-		return nil, errors.New(op).WithMsg(errMsgInvalidId)
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	var mods []qm.QueryMod
-	mods = append(mods, models.QsoWhere.SessionID.EQ(id))
-	mods = append(mods, qm.OrderBy(models.QsoColumns.CreatedAt+" DESC"))
-
-	slice, err := models.Qsos(mods...).All(ctx, h)
-	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsg("Failed to fetch QSOs by session ID.")
-	}
-
-	result := make([]types.Qso, 0, len(slice))
-	for _, qso := range slice {
-		typeQso, er := adapters.QsoModelToType(qso)
-		if er != nil {
-			s.LoggerService.WarnWith().Int64("qso.id", qso.ID).Err(er).Msg("Failed to adapt QSO for contact history.")
-			continue
-		}
-		result = append(result, typeQso)
-	}
-	return result, nil
-}
-
 func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsign string) ([]types.ContactHistory, error) {
 	const op errors.Op = "sqlite.Service.FetchContactHistoryWithContext"
 	if err := checkService(op, s); err != nil {
@@ -246,48 +207,6 @@ func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error
 	}
 
 	return nil
-}
-
-func (s *Service) FetchQsoSliceNotForwardedWithContext(ctx context.Context) (types.QsoSlice, error) {
-	const op errors.Op = "sqlite.Service.FetchQsoSliceNotForwardedWithContext"
-	if err := checkService(op, s); err != nil {
-		return nil, err
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	modelSlice, err := models.Qsos(
-		qm.Where(
-			"json_extract(\"qso\".\"additional_data\", '$.QrzComUploadStatus') IS NULL "+
-				"OR json_extract(\"qso\".\"additional_data\", '$.SmQsoUploadStatus') IS NULL",
-		),
-	).All(ctx, h)
-
-	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsg("Failed to non-forwarded QSO slice.")
-	}
-
-	var typeSlice []types.Qso
-	if modelSlice != nil {
-		typeSlice = make([]types.Qso, 0, len(modelSlice))
-
-		for _, qso := range modelSlice {
-			typeQso, er := adapters.QsoModelToType(qso)
-			if er != nil {
-				s.LoggerService.WarnWith().Int64("qso.id", qso.ID).Err(er).Msg("Failed to adapt QSO for contact history.")
-				continue
-			}
-			typeSlice = append(typeSlice, typeQso)
-		}
-	}
-
-	return typeSlice, nil
 }
 
 func (s *Service) InsertQsoUploadWithContext(ctx context.Context, qsoId int64, action action.Action, service upload.OnlineService) error {
@@ -760,33 +679,6 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	return nil
 }
 
-func (s *Service) CheckDefaultLogbookExistsWithContext(ctx context.Context) (bool, error) {
-	const op errors.Op = "sqlite.Service.CheckDefaultLogbookExistsWithContext"
-	if err := checkService(op, s); err != nil {
-		return false, err
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return false, err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	model, err := models.Logbooks(models.LogbookWhere.Name.EQ("Default")).One(ctx, h)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return false, errors.ErrNotFound
-		}
-		return false, errors.New(op).WithErr(err)
-	}
-	if model == nil {
-		return false, errors.New(op).WithMsg("Default logbook not found")
-	}
-	return true, nil
-}
-
 func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Logbook) error {
 	const op errors.Op = "sqlite.Service.UpsertLogbookWithContext"
 	if err := checkService(op, s); err != nil {
@@ -818,64 +710,6 @@ func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Lo
 	}
 
 	return nil
-}
-
-/**********************************************************************************************************************
- * Session Methods
- **********************************************************************************************************************/
-
-func (s *Service) SoftDeleteSessionByIDWithContext(ctx context.Context, id int64) error {
-	const op errors.Op = "sqlite.Service.SoftDeleteSessionByIDWithContext"
-	if err := checkService(op, s); err != nil {
-		return err
-	}
-
-	if id < 1 {
-		return errors.New(op).WithMsg(errMsgInvalidId)
-	}
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	model, err := models.FindSession(ctx, h, id)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
-		}
-		return errors.New(op).WithErr(err)
-	}
-
-	if _, err = model.Delete(ctx, h, false); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("Failed to soft delete session: %d", id)
-	}
-
-	return nil
-}
-
-func (s *Service) GenerateSessionWithContext(ctx context.Context) (int64, error) {
-	const op errors.Op = "sqlite.Service.InsertSessionWithContext"
-	if err := checkService(op, s); err != nil {
-		return 0, err
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return 0, err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	session := models.Session{}
-	if err = session.Insert(ctx, h, boil.Infer()); err != nil {
-		return 0, errors.New(op).WithErr(err).WithMsg("Inserting new session failed.")
-	}
-
-	return session.ID, nil
 }
 
 /**********************************************************************************************************************

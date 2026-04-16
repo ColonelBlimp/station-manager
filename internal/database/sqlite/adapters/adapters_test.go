@@ -93,7 +93,6 @@ func TestQsoModelToType_ValidModel_MinimalData(t *testing.T) {
 	model := &models.Qso{
 		ID:             100,
 		LogbookID:      1,
-		SessionID:      10,
 		Call:           "DL1ABC",
 		Band:           "20m",
 		Mode:           "SSB",
@@ -110,7 +109,6 @@ func TestQsoModelToType_ValidModel_MinimalData(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(100), result.ID)
 	assert.Equal(t, int64(1), result.LogbookID)
-	assert.Equal(t, int64(10), result.SessionID)
 	assert.Equal(t, "DL1ABC", result.ContactedStation.Call)
 	assert.Equal(t, "20m", result.QsoDetails.Band)
 	assert.Equal(t, "SSB", result.QsoDetails.Mode)
@@ -120,7 +118,6 @@ func TestQsoModelToType_InvalidJSON(t *testing.T) {
 	model := &models.Qso{
 		ID:             300,
 		LogbookID:      1,
-		SessionID:      1,
 		Call:           "TEST",
 		Band:           "20m",
 		Mode:           "SSB",
@@ -147,12 +144,11 @@ func TestLogbookModelToType_NilModel(t *testing.T) {
 	assert.Equal(t, types.Logbook{}, result)
 	assert.Contains(t, err.Error(), errMsgNilModel)
 }
-func TestLogbookModelToType_ValidModel_WithAPIKey(t *testing.T) {
+func TestLogbookModelToType_ValidModel(t *testing.T) {
 	model := &models.Logbook{
 		ID:          1,
 		Name:        "My Logbook",
 		Callsign:    "W1ABC",
-		APIKey:      null.StringFrom("test-api-key-123"),
 		Description: null.StringFrom("My primary logbook"),
 	}
 	result, err := LogbookModelToType(model)
@@ -160,7 +156,6 @@ func TestLogbookModelToType_ValidModel_WithAPIKey(t *testing.T) {
 	assert.Equal(t, int64(1), result.ID)
 	assert.Equal(t, "My Logbook", result.Name)
 	assert.Equal(t, "W1ABC", result.Callsign)
-	assert.Equal(t, "test-api-key-123", result.APIKey)
 	assert.Equal(t, "My primary logbook", result.Description)
 }
 
@@ -171,7 +166,6 @@ func TestQsoTypeToModel_ValidQso_MinimalData(t *testing.T) {
 	qso := types.Qso{
 		ID:        500,
 		LogbookID: 1,
-		SessionID: 10,
 		QsoDetails: types.QsoDetails{
 			Band:    "20m",
 			Mode:    "SSB",
@@ -191,7 +185,6 @@ func TestQsoTypeToModel_ValidQso_MinimalData(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(500), result.ID)
 	assert.Equal(t, int64(1), result.LogbookID)
-	assert.Equal(t, int64(10), result.SessionID)
 	assert.Equal(t, "DL1ABC", result.Call)
 	assert.Equal(t, "20m", result.Band)
 	assert.Equal(t, "SSB", result.Mode)
@@ -202,7 +195,6 @@ func TestQsoTypeToModel_ValidQso_MinimalData(t *testing.T) {
 func TestQsoTypeToModel_DateNormalization_WithDashes(t *testing.T) {
 	qso := types.Qso{
 		LogbookID: 1,
-		SessionID: 1,
 		QsoDetails: types.QsoDetails{
 			Band:    "20m",
 			Mode:    "SSB",
@@ -227,7 +219,6 @@ func TestQsoTypeToModel_DateNormalization_WithDashes(t *testing.T) {
 func TestQsoTypeToModel_InvalidFrequency(t *testing.T) {
 	qso := types.Qso{
 		LogbookID: 1,
-		SessionID: 1,
 		QsoDetails: types.QsoDetails{
 			Band:    "20m",
 			Mode:    "SSB",
@@ -251,7 +242,6 @@ func TestQsoTypeToModel_InvalidFrequency(t *testing.T) {
 func TestQsoTypeToModel_EmptyFrequency(t *testing.T) {
 	qso := types.Qso{
 		LogbookID: 1,
-		SessionID: 1,
 		QsoDetails: types.QsoDetails{
 			Band:    "20m",
 			Mode:    "SSB",
@@ -319,12 +309,11 @@ func TestCountryTypeToModel_ValidCountry(t *testing.T) {
 // =============================================================================
 // LogbookTypeToModel Tests
 // =============================================================================
-func TestLogbookTypeToModel_ValidLogbook_WithAPIKey(t *testing.T) {
+func TestLogbookTypeToModel_ValidLogbook(t *testing.T) {
 	logbook := types.Logbook{
 		ID:          1,
 		Name:        "My Logbook",
 		Callsign:    "W1ABC",
-		APIKey:      "secret-api-key",
 		Description: "Primary logbook",
 	}
 	result, err := LogbookTypeToModel(logbook)
@@ -332,23 +321,7 @@ func TestLogbookTypeToModel_ValidLogbook_WithAPIKey(t *testing.T) {
 	assert.Equal(t, int64(1), result.ID)
 	assert.Equal(t, "My Logbook", result.Name)
 	assert.Equal(t, "W1ABC", result.Callsign)
-	assert.True(t, result.APIKey.Valid)
-	assert.Equal(t, "secret-api-key", result.APIKey.String)
-}
-func TestLogbookTypeToModel_ValidLogbook_WithoutAPIKey(t *testing.T) {
-	logbook := types.Logbook{
-		ID:          2,
-		Name:        "Contest Log",
-		Callsign:    "K1XYZ",
-		APIKey:      "",
-		Description: "For contests",
-	}
-	result, err := LogbookTypeToModel(logbook)
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), result.ID)
-	assert.Equal(t, "Contest Log", result.Name)
-	assert.Equal(t, "K1XYZ", result.Callsign)
-	assert.False(t, result.APIKey.Valid)
+	assert.Equal(t, "Primary logbook", result.Description.String)
 }
 
 // =============================================================================
@@ -358,7 +331,6 @@ func TestQsoRoundTrip(t *testing.T) {
 	original := types.Qso{
 		ID:                1000,
 		LogbookID:         5,
-		SessionID:         50,
 		SmQsoUploadDate:   "20250101",
 		SmQsoUploadStatus: "uploaded",
 		QsoDetails: types.QsoDetails{
@@ -389,7 +361,6 @@ func TestQsoRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original.ID, result.ID)
 	assert.Equal(t, original.LogbookID, result.LogbookID)
-	assert.Equal(t, original.SessionID, result.SessionID)
 	assert.Equal(t, original.ContactedStation.Call, result.ContactedStation.Call)
 	assert.Equal(t, original.QsoDetails.Band, result.QsoDetails.Band)
 	assert.Equal(t, original.SmQsoUploadDate, result.SmQsoUploadDate)
@@ -422,7 +393,6 @@ func TestLogbookRoundTrip(t *testing.T) {
 		ID:          10,
 		Name:        "DX Log",
 		Callsign:    "ZL1ABC",
-		APIKey:      "my-secret-key",
 		Description: "For DX contacts",
 	}
 	model, err := LogbookTypeToModel(original)
@@ -432,7 +402,6 @@ func TestLogbookRoundTrip(t *testing.T) {
 	assert.Equal(t, original.ID, result.ID)
 	assert.Equal(t, original.Name, result.Name)
 	assert.Equal(t, original.Callsign, result.Callsign)
-	assert.Equal(t, original.APIKey, result.APIKey)
 	assert.Equal(t, original.Description, result.Description)
 }
 func TestContactedStationRoundTrip(t *testing.T) {

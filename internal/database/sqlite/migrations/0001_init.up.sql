@@ -15,26 +15,7 @@ CREATE TABLE IF NOT EXISTS logbook
     */
     callsign    TEXT     NOT NULL CHECK (length(callsign) <= 32),
 
-    -- Client-side storage for server linkage and credentials
-    api_key     TEXT, -- full API key (prefix.secretHex); optional; stored client-side only
-
     description TEXT
-);
-
--- Ensure api_key is unique when present
-CREATE UNIQUE INDEX IF NOT EXISTS uq_logbook_api_key ON logbook (api_key) WHERE api_key IS NOT NULL;
-
--- Seed a default logbook so newly initialized databases have a usable logbook.
--- Use INSERT OR IGNORE so migrations are idempotent.
--- INSERT OR IGNORE INTO logbook (name, callsign, description)
--- VALUES ('Default', '7Q5MLV/T', 'Default logbook created when the database was first initialized.');
-
-CREATE TABLE IF NOT EXISTS session
-(
-    id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    created_at  DATETIME,
-    deleted_at  DATETIME,
-    modified_at DATETIME
 );
 
 CREATE TABLE IF NOT EXISTS qso
@@ -49,7 +30,6 @@ CREATE TABLE IF NOT EXISTS qso
     mode            TEXT     NOT NULL CHECK (length(trim(mode)) <= 10),
     /* freq is in kHz, thus app MUST multiply by 1000 for MHz */
     freq            INTEGER  NOT NULL CHECK (freq >= 0 AND freq <= 99999999),
-    /* DATETIME here prompts SQLBoiler to use the "time.Time" type */
     qso_date        TEXT     NOT NULL CHECK (
         length(qso_date) = 8 AND
         substr(qso_date, 1, 4) BETWEEN '0000' AND '9999' AND
@@ -57,12 +37,10 @@ CREATE TABLE IF NOT EXISTS qso
         substr(qso_date, 7, 2) BETWEEN '01' AND '31' AND
         date(substr(qso_date, 1, 4) || '-' || substr(qso_date, 5, 2) || '-' || substr(qso_date, 7, 2)) IS NOT NULL
         ),
-    /* DATETIME here prompts SQLBoiler to use the "time.Time" type */
     time_on         TEXT     NOT NULL CHECK (
         (length(time_on) = 4 AND substr(time_on, 1, 2) BETWEEN '00' AND '23' AND
          substr(time_on, 3, 2) BETWEEN '00' AND '59')
         ),
-    /* DATETIME here prompts SQLBoiler to use the "time.Time" type */
     time_off        TEXT     NOT NULL CHECK (
         (length(time_off) = 4 AND substr(time_off, 1, 2) BETWEEN '00' AND '23' AND
          substr(time_off, 3, 2) BETWEEN '00' AND '59')
@@ -73,7 +51,6 @@ CREATE TABLE IF NOT EXISTS qso
     additional_data JSON     NOT NULL DEFAULT ('{}') CHECK (json_valid(additional_data)),
 
     logbook_id      INTEGER  NOT NULL,
-    session_id      INTEGER  NOT NULL,
 
     CONSTRAINT qso_data_no_duplicates CHECK (
         json_extract(additional_data, '$.call') IS NULL AND
@@ -88,8 +65,7 @@ CREATE TABLE IF NOT EXISTS qso
         json_extract(additional_data, '$.country') IS NULL
         ),
     -- Client uses soft deletes; prevent deleting a logbook that still has QSOs
-    CONSTRAINT fk_qso_logbook_id FOREIGN KEY (logbook_id) REFERENCES logbook (id) ON DELETE RESTRICT ON UPDATE NO ACTION,
-    CONSTRAINT fk_qso_session_id FOREIGN KEY (session_id) REFERENCES session (id) ON DELETE RESTRICT ON UPDATE NO ACTION
+    CONSTRAINT fk_qso_logbook_id FOREIGN KEY (logbook_id) REFERENCES logbook (id) ON DELETE RESTRICT ON UPDATE NO ACTION
 );
 
 CREATE INDEX IF NOT EXISTS idx_qso_call ON qso (call);
@@ -98,8 +74,6 @@ CREATE INDEX IF NOT EXISTS idx_qso_country ON qso (country);
 CREATE INDEX IF NOT EXISTS idx_qso_date_time ON qso (qso_date, time_on);
 -- Index on the FK column for joins/deletes
 CREATE INDEX IF NOT EXISTS idx_qso_logbook_id ON qso (logbook_id);
-
-CREATE INDEX IF NOT EXISTS idx_qso_session_id ON qso (session_id);
 
 -- Optional partial indexes to speed queries that ignore soft-deleted rows
 CREATE INDEX IF NOT EXISTS idx_qso_active_call ON qso (call) WHERE deleted_at IS NULL;

@@ -21,10 +21,6 @@ func (s *Service) UpdateQso(qso types.Qso) error {
 	return s.UpdateQsoWithContext(context.Background(), qso)
 }
 
-func (s *Service) FetchQsoSliceBySessionID(id int64) (types.QsoSlice, error) {
-	return s.FetchQsoSliceBySessionIDWithContext(context.Background(), id)
-}
-
 func (s *Service) FetchQsoSliceByCallsign(callsign string) ([]types.ContactHistory, error) {
 	return s.FetchQsoSliceByCallsignWithContext(context.Background(), callsign)
 }
@@ -105,24 +101,8 @@ func (s *Service) DeleteLogbookByID(id int64) error {
 	return s.DeleteLogbookByIDWithContext(context.Background(), id)
 }
 
-func (s *Service) CheckDefaultLogbookExists() (bool, error) {
-	return s.CheckDefaultLogbookExistsWithContext(context.Background())
-}
-
 func (s *Service) UpsertLogbook(logbook types.Logbook) error {
 	return s.UpsertLogbookWithContext(context.Background(), logbook)
-}
-
-/**********************************************************************************************************************
- * Session Methods
- **********************************************************************************************************************/
-
-func (s *Service) SoftDeleteSessionByID(id int64) error {
-	return s.SoftDeleteSessionByIDWithContext(context.Background(), id)
-}
-
-func (s *Service) GenerateSession() (int64, error) {
-	return s.GenerateSessionWithContext(context.Background())
 }
 
 /**********************************************************************************************************************

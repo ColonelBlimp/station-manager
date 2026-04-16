@@ -74,7 +74,6 @@ func QsoModelToType(model *models.Qso) (types.Qso, error) {
 	// Overlay promoted columns — authoritative over anything in the blob.
 	qso.ID = model.ID
 	qso.LogbookID = model.LogbookID
-	qso.SessionID = model.SessionID
 	qso.ContactedStation.Call = model.Call
 	qso.ContactedStation.Country = model.Country
 	qso.QsoDetails.Band = model.Band
@@ -98,7 +97,6 @@ func LogbookModelToType(model *models.Logbook) (types.Logbook, error) {
 		ID:          model.ID,
 		Name:        model.Name,
 		Callsign:    model.Callsign,
-		APIKey:      model.APIKey.String,
 		Description: model.Description.String,
 	}, nil
 }

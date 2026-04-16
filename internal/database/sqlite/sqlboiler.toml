@@ -7,7 +7,7 @@ add-enum-types = true
 add-soft-deletes = true
 
 [sqlite3]
-dbname = "../../build/db/data.db"
+dbname = "../../../build/db/data.db"
 blacklist = ["schema_migrations"]
 
 [aliases.tables.qso.columns]
