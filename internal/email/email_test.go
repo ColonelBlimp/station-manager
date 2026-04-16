@@ -50,7 +50,7 @@ func TestSend_AddrJoinHostPortAndRetry(t *testing.T) {
 		atomic.AddInt32(&calls, 1)
 		// ensure address uses JoinHostPort canonical form (host:port)
 		if !strings.HasPrefix(addr, "smtp.example.com:") {
-			t.Msgf("addr not built with JoinHostPort, got %q", addr)
+			t.Errorf("addr not built with JoinHostPort, got %q", addr)
 		}
 		if atomic.LoadInt32(&calls) < 3 {
 			return assertError("temporary")
@@ -93,10 +93,10 @@ func TestBuildEmailWithADIFAttachmentHeadersAndBoundary(t *testing.T) {
 	}
 	// Check headers
 	if !strings.Contains(msg1.Msg, "Date:") {
-		t.Msgf("missing Date header")
+		t.Errorf("missing Date header")
 	}
 	if !strings.Contains(strings.ToLower(msg1.Msg), "\r\nmessage-id: ") {
-		t.Msgf("missing Message-ID header")
+		t.Errorf("missing Message-ID header")
 	}
 	// Extract boundary from header Content-Type
 	re := regexp.MustCompile(`(?i)Content-Type: multipart/mixed; boundary="([^"]+)"`)
@@ -106,7 +106,7 @@ func TestBuildEmailWithADIFAttachmentHeadersAndBoundary(t *testing.T) {
 	}
 	boundary := m[1]
 	if !strings.Contains(msg1.Msg, "--"+boundary) {
-		t.Msgf("boundary marker not found in body")
+		t.Errorf("boundary marker not found in body")
 	}
 
 	// Boundary should be random across calls
@@ -121,7 +121,7 @@ func TestBuildEmailWithADIFAttachmentHeadersAndBoundary(t *testing.T) {
 		t.Fatalf("could not find boundary in header (2)")
 	}
 	if m2[1] == boundary {
-		t.Msgf("expected randomized boundary, got the same value")
+		t.Errorf("expected randomized boundary, got the same value")
 	}
 }
 

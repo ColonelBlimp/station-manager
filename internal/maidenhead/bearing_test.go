@@ -41,13 +41,13 @@ func TestNormalizeGridSquare_Lengths(t *testing.T) {
 	cases := []string{"J", "JN58T", "JN58TDX", ""}
 	for _, in := range cases {
 		if out := normalizeGridSquare(in); out != in {
-			t.Msgf("normalizeGridSquare(%q) = %q, want unchanged", in, out)
+			t.Errorf("normalizeGridSquare(%q) = %q, want unchanged", in, out)
 		}
 	}
 
 	// proper 6-char should be normalized
 	if got := normalizeGridSquare("jN58Td"); got != "JN58td" {
-		t.Msgf("normalizeGridSquare mixed case got %q want %q", got, "JN58td")
+		t.Errorf("normalizeGridSquare mixed case got %q want %q", got, "JN58td")
 	}
 }
 
@@ -75,10 +75,10 @@ func TestLatitudeLongitude_KnownValues(t *testing.T) {
 		}
 
 		if !almostEqual(lat, tc.expLat, 1e-4) { // 1e-4 ~ 0.0001 deg tolerance
-			t.Msgf("%s latitude got %.7f want %.7f", tc.grid, lat, tc.expLat)
+			t.Errorf("%s latitude got %.7f want %.7f", tc.grid, lat, tc.expLat)
 		}
 		if !almostEqual(lon, tc.expLon, 1e-4) {
-			t.Msgf("%s longitude got %.7f want %.7f", tc.grid, lon, tc.expLon)
+			t.Errorf("%s longitude got %.7f want %.7f", tc.grid, lon, tc.expLon)
 		}
 	}
 }
@@ -94,10 +94,10 @@ func TestValidationErrors(t *testing.T) {
 	}
 	for _, s := range bad {
 		if _, err := LatitudeFromGridSquare(s); err == nil {
-			t.Msgf("expected error for %q latitude, got nil", s)
+			t.Errorf("expected error for %q latitude, got nil", s)
 		}
 		if _, err := LongitudeFromGridSquare(s); err == nil {
-			t.Msgf("expected error for %q longitude, got nil", s)
+			t.Errorf("expected error for %q longitude, got nil", s)
 		}
 	}
 }
@@ -116,7 +116,7 @@ func TestValidationSpecificPositionErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if err := validateInput(tc.in); err == nil || !strings.Contains(err.Error(), tc.contains) {
-			t.Msgf("validateInput(%q) error %v, want to contain %q", tc.in, err, tc.contains)
+			t.Errorf("validateInput(%q) error %v, want to contain %q", tc.in, err, tc.contains)
 		}
 	}
 }
@@ -127,7 +127,7 @@ func TestCalculateBearing_Known(t *testing.T) {
 	// Known initial bearing approx 288.3° with this spherical model.
 	if !almostEqual(b, 288.3, 1.0) {
 		// allow 1.0 deg tolerance to account for model differences
-		t.Msgf("bearing got %.3f want approx 288.3", b)
+		t.Errorf("bearing got %.3f want approx 288.3", b)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestCalculateBearing_EdgeCases(t *testing.T) {
 	for _, tc := range cases {
 		b := CalculateBearing(tc.lat1, tc.lon1, tc.lat2, tc.lon2)
 		if b < tc.min || b > tc.max {
-			t.Msgf("%s: bearing=%.2f not in [%.2f, %.2f]", tc.name, b, tc.min, tc.max)
+			t.Errorf("%s: bearing=%.2f not in [%.2f, %.2f]", tc.name, b, tc.min, tc.max)
 		}
 	}
 }
@@ -167,7 +167,7 @@ func TestShortAndLongPaths_JN58td_to_FN31pr(t *testing.T) {
 	}
 	// sum should be approx 180 apart
 	if !almostEqual(math.Mod(spb+180, 360), lpb, 0.1) && !almostEqual(math.Mod(lpb+180, 360), spb, 0.1) {
-		t.Msgf("short and long bearings not opposite: sp=%.1f lp=%.1f", spb, lpb)
+		t.Errorf("short and long bearings not opposite: sp=%.1f lp=%.1f", spb, lpb)
 	}
 
 	spKm, spMi, err := GetShortPathDistance("JN58td", "FN31pr")
@@ -182,14 +182,14 @@ func TestShortAndLongPaths_JN58td_to_FN31pr(t *testing.T) {
 	// Check that long path + short path approx Earth's circumference (ceil introduces at most ~1-2 km error)
 	earthCircumferenceKm := 2 * math.Pi * earthRad
 	if math.Abs((spKm+lpKm)-math.Ceil(earthCircumferenceKm)) > 2 {
-		t.Msgf("sp+lp km not approx Earth circumference: sp=%.0f lp=%.0f sum=%.0f want~%.0f", spKm, lpKm, spKm+lpKm, math.Ceil(earthCircumferenceKm))
+		t.Errorf("sp+lp km not approx Earth circumference: sp=%.0f lp=%.0f sum=%.0f want~%.0f", spKm, lpKm, spKm+lpKm, math.Ceil(earthCircumferenceKm))
 	}
 	// Miles consistency via kmToMiles with Ceil
 	if spMi != math.Ceil(spKm*kmToMiles) {
-		t.Msgf("short miles mismatch: got %.0f want %.0f", spMi, math.Ceil(spKm*kmToMiles))
+		t.Errorf("short miles mismatch: got %.0f want %.0f", spMi, math.Ceil(spKm*kmToMiles))
 	}
 	if lpMi != math.Ceil(lpKm*kmToMiles) {
-		t.Msgf("long miles mismatch: got %.0f want %.0f", lpMi, math.Ceil(lpKm*kmToMiles))
+		t.Errorf("long miles mismatch: got %.0f want %.0f", lpMi, math.Ceil(lpKm*kmToMiles))
 	}
 }
 
@@ -199,17 +199,17 @@ func TestGetLocation(t *testing.T) {
 		t.Fatalf("GetLocation error: %v", err)
 	}
 	if loc.LocalGridSquare != "JN58TD" || loc.RemoteGridSquare != "FN31pr" {
-		t.Msgf("grid squares echoed incorrectly: %+v", loc)
+		t.Errorf("grid squares echoed incorrectly: %+v", loc)
 	}
 	// Spot-check types and plausible ranges
 	if loc.ShortPathBearing < 0 || loc.ShortPathBearing >= 360 {
-		t.Msgf("invalid SP bearing: %.1f", loc.ShortPathBearing)
+		t.Errorf("invalid SP bearing: %.1f", loc.ShortPathBearing)
 	}
 	if loc.LongPathBearing < 0 || loc.LongPathBearing >= 360 {
-		t.Msgf("invalid LP bearing: %.1f", loc.LongPathBearing)
+		t.Errorf("invalid LP bearing: %.1f", loc.LongPathBearing)
 	}
 	if loc.ShortPathDistanceKm <= 0 || loc.LongPathDistanceKm <= 0 {
-		t.Msgf("distances should be positive: %+v", loc)
+		t.Errorf("distances should be positive: %+v", loc)
 	}
 }
 
@@ -224,15 +224,15 @@ func TestGetLocation_ErrorPropagation(t *testing.T) {
 
 func TestShortPathDistance_ErrorCases(t *testing.T) {
 	if _, _, err := GetShortPathDistance("BAD", "JN58td"); err == nil || !strings.Contains(err.Error(), "invalid local grid square") {
-		t.Msgf("expected invalid local grid square error, got %v", err)
+		t.Errorf("expected invalid local grid square error, got %v", err)
 	}
 	if _, _, err := GetShortPathDistance("JN58td", "BAD"); err == nil || !strings.Contains(err.Error(), "invalid remote grid square") {
-		t.Msgf("expected invalid remote grid square error, got %v", err)
+		t.Errorf("expected invalid remote grid square error, got %v", err)
 	}
 }
 
 func TestLongPathDistance_ErrorCases(t *testing.T) {
 	if _, _, err := GetLongPathDistance("BAD", "JN58td"); err == nil {
-		t.Msgf("expected error from GetLongPathDistance when short path fails")
+		t.Errorf("expected error from GetLongPathDistance when short path fails")
 	}
 }

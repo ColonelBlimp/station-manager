@@ -67,7 +67,7 @@ func TestIsSystemPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if got := isSystemPath(tt.dir); got != tt.want {
-			t.Msgf("isSystemPath(%q) = %v; want %v", tt.dir, got, tt.want)
+			t.Errorf("isSystemPath(%q) = %v; want %v", tt.dir, got, tt.want)
 		}
 	}
 }

@@ -52,7 +52,7 @@ func TestForwardingStart(t *testing.T) {
 			err := f.start(tt.ctx, shutdown)
 
 			if (err != nil) != tt.wantErr {
-				t.Msgf("start() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("start() error = %v, wantErr %v", err, tt.wantErr)
 			}
 
 			if !tt.wantErr {
@@ -61,7 +61,7 @@ func TestForwardingStart(t *testing.T) {
 				activeCount := f.ActiveWorkerCount()
 				expectedWorkers := f.maxWorkers + 2 // workers + db-writer + poller
 				if activeCount != expectedWorkers {
-					t.Msgf("ActiveWorkerCount() = %d, want %d", activeCount, expectedWorkers)
+					t.Errorf("ActiveWorkerCount() = %d, want %d", activeCount, expectedWorkers)
 				}
 
 				// Stop workers
@@ -193,13 +193,13 @@ func TestForwardingStop(t *testing.T) {
 	close(shutdown)
 	err = f.stop(5 * time.Second)
 	if err != nil {
-		t.Msgf("stop() error = %v", err)
+		t.Errorf("stop() error = %v", err)
 	}
 
 	// Verify all workers stopped
 	activeCount := f.ActiveWorkerCount()
 	if activeCount != 0 {
-		t.Msgf("ActiveWorkerCount() = %d after stop, want 0", activeCount)
+		t.Errorf("ActiveWorkerCount() = %d after stop, want 0", activeCount)
 	}
 }
 
@@ -299,11 +299,11 @@ func TestForwardingWorkerLoop(t *testing.T) {
 
 	// Verify results
 	if processedCount.Load() != 3 {
-		t.Msgf("Processed count = %d, want 3", processedCount.Load())
+		t.Errorf("Processed count = %d, want 3", processedCount.Load())
 	}
 
 	if errorCount.Load() != 1 {
-		t.Msgf("Error count = %d, want 1", errorCount.Load())
+		t.Errorf("Error count = %d, want 1", errorCount.Load())
 	}
 
 	// Cleanup
@@ -350,7 +350,7 @@ func TestForwardingPollerLoop(t *testing.T) {
 
 	// Should have polled at least 3 times
 	if fetchCallCount.Load() < 3 {
-		t.Msgf("Fetch call count = %d, want >= 3", fetchCallCount.Load())
+		t.Errorf("Fetch call count = %d, want >= 3", fetchCallCount.Load())
 	}
 
 	// Cleanup
@@ -406,14 +406,14 @@ func TestForwardingDBWriteWorker(t *testing.T) {
 
 	// Verify all operations executed
 	if executedOps.Load() != 5 {
-		t.Msgf("Executed operations = %d, want 5", executedOps.Load())
+		t.Errorf("Executed operations = %d, want 5", executedOps.Load())
 	}
 
 	// Verify operations executed in order (serialized)
 	mu.Lock()
 	for i, opNum := range executionOrder {
 		if opNum != i+1 {
-			t.Msgf("Operation at index %d = %d, want %d (operations not serialized)", i, opNum, i+1)
+			t.Errorf("Operation at index %d = %d, want %d (operations not serialized)", i, opNum, i+1)
 		}
 	}
 	mu.Unlock()
@@ -462,7 +462,7 @@ func TestLaunchWorker(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	count := f.ActiveWorkerCount()
 	if count != 0 {
-		t.Msgf("ActiveWorkerCount() = %d after workers finished, want 0", count)
+		t.Errorf("ActiveWorkerCount() = %d after workers finished, want 0", count)
 	}
 }
 
@@ -485,7 +485,7 @@ func TestActiveWorkerCount(t *testing.T) {
 
 	// Initially should be 0
 	if count := f.ActiveWorkerCount(); count != 0 {
-		t.Msgf("Initial ActiveWorkerCount() = %d, want 0", count)
+		t.Errorf("Initial ActiveWorkerCount() = %d, want 0", count)
 	}
 
 	ctx := context.Background()
@@ -504,7 +504,7 @@ func TestActiveWorkerCount(t *testing.T) {
 	expectedCount := f.maxWorkers + 2
 	count := f.ActiveWorkerCount()
 	if count != expectedCount {
-		t.Msgf("ActiveWorkerCount() after start = %d, want %d", count, expectedCount)
+		t.Errorf("ActiveWorkerCount() after start = %d, want %d", count, expectedCount)
 	}
 
 	// Stop workers
@@ -513,6 +513,6 @@ func TestActiveWorkerCount(t *testing.T) {
 
 	// Should be 0 again
 	if count := f.ActiveWorkerCount(); count != 0 {
-		t.Msgf("ActiveWorkerCount() after stop = %d, want 0", count)
+		t.Errorf("ActiveWorkerCount() after stop = %d, want 0", count)
 	}
 }

@@ -120,7 +120,7 @@ func TestParseCallsign(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := s.parseCallsign(tt.input)
 			if result != tt.expected {
-				t.Msgf("parseCallsign(%q) = %q, want %q", tt.input, result, tt.expected)
+				t.Errorf("parseCallsign(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -159,16 +159,16 @@ func TestMergeCountryIntoContactedStation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := mergeCountryIntoContactedStation(tt.station, tt.country)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("mergeCountryIntoContactedStation() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("mergeCountryIntoContactedStation() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 
 			if !tt.wantErr && tt.station != nil {
 				if tt.station.Country != tt.country.Name {
-					t.Msgf("Country = %v, want %v", tt.station.Country, tt.country.Name)
+					t.Errorf("Country = %v, want %v", tt.station.Country, tt.country.Name)
 				}
 				if tt.station.Cont != tt.country.Continent {
-					t.Msgf("Continent = %v, want %v", tt.station.Cont, tt.country.Continent)
+					t.Errorf("Continent = %v, want %v", tt.station.Cont, tt.country.Continent)
 				}
 			}
 		})
@@ -222,19 +222,19 @@ func TestMergeIntoQso(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := mergeIntoQso(tt.qso, tt.country, tt.history)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("mergeIntoQso() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("mergeIntoQso() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 
 			if !tt.wantErr && tt.qso != nil {
 				if tt.qso.CountryDetails.Name != tt.country.Name {
-					t.Msgf("CountryDetails.Name = %v, want %v", tt.qso.CountryDetails.Name, tt.country.Name)
+					t.Errorf("CountryDetails.Name = %v, want %v", tt.qso.CountryDetails.Name, tt.country.Name)
 				}
 				if tt.history == nil && tt.qso.ContactHistory == nil {
 					t.Error("ContactHistory should not be nil when nil history is passed")
 				}
 				if tt.history == nil && len(tt.qso.ContactHistory) != 0 {
-					t.Msgf("ContactHistory length = %d, want 0", len(tt.qso.ContactHistory))
+					t.Errorf("ContactHistory length = %d, want 0", len(tt.qso.ContactHistory))
 				}
 			}
 		})
@@ -298,7 +298,7 @@ func TestIsAllNumbers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isAllNumbers(tt.input)
 			if result != tt.expected {
-				t.Msgf("isAllNumbers(%q) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("isAllNumbers(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}

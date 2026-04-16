@@ -38,7 +38,7 @@ func TestRegisterBandValidator(t *testing.T) {
 			ts := TestStruct{Band: tt.band}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("band validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("band validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -76,7 +76,7 @@ func TestRegisterModeValidator(t *testing.T) {
 			ts := TestStruct{Mode: tt.mode}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("mode validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("mode validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -114,7 +114,7 @@ func TestRegisterDateValidator(t *testing.T) {
 			ts := TestStruct{Date: tt.date}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("date validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("date validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -155,7 +155,7 @@ func TestRegisterTimeValidator(t *testing.T) {
 			ts := TestStruct{Time: tt.time}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("time validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("time validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -192,7 +192,7 @@ func TestRegisterRSTValidator(t *testing.T) {
 			ts := TestStruct{RST: tt.rst}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("RST validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("RST validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -231,7 +231,7 @@ func TestRegisterFrequencyValidator(t *testing.T) {
 			ts := TestStruct{Freq: tt.freq}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Msgf("frequency validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("frequency validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -271,7 +271,7 @@ func TestInitializeValidation(t *testing.T) {
 
 	err = s.validate.Struct(validData)
 	if err != nil {
-		t.Msgf("Valid data failed validation: %v", err)
+		t.Errorf("Valid data failed validation: %v", err)
 	}
 
 	invalidData := CompleteStruct{
@@ -320,7 +320,7 @@ func TestEmailValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := s.validate.Var(tt.email, "required,email")
 			if (err != nil) != tt.wantErr {
-				t.Msgf("email validation(%q) error = %v, wantErr %v", tt.email, err, tt.wantErr)
+				t.Errorf("email validation(%q) error = %v, wantErr %v", tt.email, err, tt.wantErr)
 			}
 		})
 	}
@@ -353,7 +353,7 @@ func TestAllowedBrowserDomains(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := allowedBrowserDomains[tt.domain]
 			if result != tt.allowed {
-				t.Msgf("allowedBrowserDomains[%q] = %v, want %v", tt.domain, result, tt.allowed)
+				t.Errorf("allowedBrowserDomains[%q] = %v, want %v", tt.domain, result, tt.allowed)
 			}
 		})
 	}

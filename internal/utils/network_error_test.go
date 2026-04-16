@@ -256,7 +256,7 @@ func TestIsNetworkError(t *testing.T) {
 		}
 
 		if !IsNetworkError(dialErr) {
-			t.Msgf("expected true for real dial error, got false. Error: %v", dialErr)
+			t.Errorf("expected true for real dial error, got false. Error: %v", dialErr)
 		}
 	})
 

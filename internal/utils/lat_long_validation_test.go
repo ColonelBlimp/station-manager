@@ -11,7 +11,7 @@ func TestIsXDDDMMM_Valid(t *testing.T) {
 	}
 	for _, c := range cases {
 		if !IsXDDDMMM(c) {
-			t.Msgf("expected %q to be valid XDDDMMM", c)
+			t.Errorf("expected %q to be valid XDDDMMM", c)
 		}
 	}
 }
@@ -29,7 +29,7 @@ func TestIsXDDDMMM_Invalid(t *testing.T) {
 	}
 	for _, c := range cases {
 		if IsXDDDMMM(c) {
-			t.Msgf("expected %q to be invalid XDDDMMM", c)
+			t.Errorf("expected %q to be invalid XDDDMMM", c)
 		}
 	}
 }
