@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+var (
+	// reDateYMD matches YYYY[-/]MM[-/]DD with optional separators.
+	reDateYMD = regexp.MustCompile(`^(\d{4})[-/]?(\d{2})[-/]?(\d{2})$`)
+
+	// reNonDigit splits on any run of non-digit characters.
+	reNonDigit = regexp.MustCompile(`[^0-9]+`)
+)
+
 // FormatDate converts a raw date string in YYYYMMDD format into a formatted date string in YYYY-MM-DD format.
 // Returns "YYYY-MM-DD" if the input does not have exactly 8 characters.
 func FormatDate(rawDate string) string {
@@ -89,8 +97,7 @@ func SanitizeDateToYYYYMMDD(s string) string {
 		return s
 	}
 	// Replace common separators '-' and '/' with nothing if pattern matches YYYY[-|/]MM[-|/]DD
-	re := regexp.MustCompile(`^(\d{4})[-/]?(\d{2})[-/]?(\d{2})$`)
-	matches := re.FindStringSubmatch(s)
+	matches := reDateYMD.FindStringSubmatch(s)
 	if len(matches) == 4 {
 		candidate := matches[1] + matches[2] + matches[3]
 		if IsValidDateYYYYMMDD(candidate) {
@@ -116,8 +123,7 @@ func SanitizeTimeToADIF(s string) string {
 		return s
 	}
 	// If contains any non-digit separators, split into numeric parts
-	sep := regexp.MustCompile(`[^0-9]+`)
-	parts := sep.Split(s, -1)
+	parts := reNonDigit.Split(s, -1)
 	// Remove empty parts from edges or multiple separators
 	filtered := make([]string, 0, len(parts))
 	for _, p := range parts {
