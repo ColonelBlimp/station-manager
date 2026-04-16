@@ -44,7 +44,7 @@ func New() *Container {
 // Register registers a bean by its reflect.Type.
 // If the type is a struct, it will be normalized to a pointer-to-struct for consistent injection semantics.
 // The 'beanID' parameter is case-sensitive with regard to the bean identifier and the
-// coresponding receiving bean tag. The case of the bean identifier must match the case of the
+// corresponding receiving bean tag. The case of the bean identifier must match the case of the
 // tag in the receiving bean.
 //
 // This method only supports registering structs and pointers to structs; simple types (e.g., string)
@@ -92,7 +92,7 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 // RegisterInstance registers a concrete instance for type T.
 // The instance is treated as a singleton. Struct instances are normalized to pointers.
 // The 'beanID' parameter is case-sensitive with regard to the bean identifier and the
-// coresponding receiving bean tag. The case of the bean identifier must match the case of the
+// corresponding receiving bean tag. The case of the bean identifier must match the case of the
 // tag in the receiving bean.
 func (c *Container) RegisterInstance(beanID string, instance any) error {
 	if beanID == emptyString {
@@ -200,7 +200,6 @@ func (c *Container) Build() (err error) {
 		}
 
 		if bn.beanType.Kind() == reflect.Ptr && bn.beanType.Elem().Kind() == reflect.Struct {
-			//			fmt.Println("Creating instance of bean:", bn.id, "of type", bn.beanType)
 			instance, ierr := createInstance(bn.beanType)
 			if ierr != nil {
 				return ierr

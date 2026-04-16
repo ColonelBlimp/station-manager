@@ -204,50 +204,6 @@ func TestTagOnlyInjection_MultipleSameTypeQualified(t *testing.T) {
 	require.NotSame(t, recv.L1, recv.L2)
 }
 
-//func TestLiteralProvider_InjectsStringIntoConfig(t *testing.T) {
-//	t.Cleanup(func() { SetLiteralProvider(nil) })
-//
-//	want := "/tmp/working-dir"
-//	SetLiteralProvider(func(id string, targetType reflect.Type) (any, bool, error) {
-//		if id == "WorkingDir" && targetType == reflect.TypeOf("") {
-//			return want, true, nil
-//		}
-//		return nil, false, nil
-//	})
-//
-//	cfg := &Config{}
-//	c := &Container{
-//		registeredBeans:    map[string]bean{},
-//		requiredDependency: map[string]reflect.Type{},
-//	}
-//
-//	// Discover dependencies for the Config bean (should include "WorkingDir": string).
-//	has, deps := c.checkForDependency(reflect.TypeOf(cfg))
-//	require.True(t, has)
-//	require.Equal(t, 1, len(deps))
-//	require.Equal(t, "WorkingDir", deps[0])
-//	require.Equal(t, reflect.TypeOf(""), c.requiredDependency["WorkingDir"])
-//
-//	// Register the Config bean with its dependencies but do not register "WorkingDir" bean.
-//	c.registeredBeans["ServiceBeanConfig"] = bean{
-//		id:              "ServiceBeanConfig",
-//		instance:        cfg,
-//		beanType:        reflect.TypeOf(cfg),
-//		hasDependencies: true,
-//		dependencies:    deps,
-//	}
-//
-//	err := c.injectDependencies()
-//	require.NoError(t, err)
-//
-//	// Verify literal was injected and a synthetic bean was created/cached.
-//	require.Equal(t, want, cfg.WorkingDir)
-//	synth, ok := c.registeredBeans["WorkingDir"]
-//	require.True(t, ok)
-//	require.Equal(t, want, synth.instance)
-//	require.Equal(t, reflect.TypeOf(""), synth.beanType)
-//}
-
 func TestLiteralProvider_NotInstalled_MissingDependency(t *testing.T) {
 	t.Cleanup(func() { SetLiteralProvider(nil) })
 	SetLiteralProvider(nil)

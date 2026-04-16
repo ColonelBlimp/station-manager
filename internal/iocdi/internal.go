@@ -63,9 +63,6 @@ func (c *Container) checkForDependency(beanType reflect.Type) (bool, []string) {
 }
 
 func (c *Container) injectDependencies() error {
-	//	fmt.Println("Injecting dependencies...")
-
-	// DFS-based cycle detection and ordered injection
 	visited := make(map[string]bool) // fully processed
 	onPath := make(map[string]bool)  // nodes in the current recursion stack
 	path := make([]string, 0, 16)    // ordered path for clear errors
@@ -109,8 +106,6 @@ func (c *Container) injectDependencies() error {
 		path = append(path, id)
 
 		if bn.hasDependencies {
-			//			fmt.Println("Injecting dependencies for bean:", bn.id, " hasDependencies:", bn.hasDependencies, "list:", bn.dependencies)
-
 			if bn.instance == nil {
 				return fmt.Errorf("injectDependencies: receiver bean '%s' is nil", bn.id)
 			}
