@@ -13,8 +13,9 @@ tasks:
       - go vet ./...
 
   build:
-    desc: Build the daemon binary into build/bin/smd
+    desc: Compile the whole module and build the daemon binary
     cmds:
+      - go build ./...
       - go build -o build/bin/smd ./cmd/smd
 
   test:
