@@ -68,6 +68,7 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 		RstRcvd:        qso.QsoDetails.RstRcvd,
 		Country:        qso.ContactedStation.Country,
 		AdditionalData: jsonData,
+		DedupeKey:      qso.DedupeKey,
 	}, nil
 }
 

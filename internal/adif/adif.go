@@ -81,6 +81,32 @@ func QsoToRecord(q types.Qso) Record {
 	return r
 }
 
+// RecordToQso converts a parsed ADIF Record into a types.Qso, setting the
+// given logbookID. QSL and user-defined fields are mapped where possible.
+func RecordToQso(rec Record, logbookID int64) types.Qso {
+	q := types.Qso{
+		LogbookID:        logbookID,
+		QsoDetails:       rec.QsoDetails,
+		ContactedStation: rec.ContactedStation,
+		LoggingStation:   rec.LoggingStation,
+		Qsl: types.Qsl{
+			QslMsg:   rec.QslSection.QslMsg,
+			QslRDate: rec.QslSection.QslRDate,
+			QslSDate: rec.QslSection.QslSDate,
+			QslRcvd:  rec.QslSection.QslRcvd,
+			QslSent:  rec.QslSection.QslSent,
+			QslVia:   rec.QslSection.QslVia,
+		},
+		QrzComUploadDate:    rec.QslSection.QrzComQsoUploadDate,
+		QrzComUploadStatus:  rec.QslSection.QrzComQsoUploadStatus,
+		SmQsoUploadDate:     rec.UserDef.SmQsoUploadDate,
+		SmQsoUploadStatus:   rec.UserDef.SmQsoUploadStatus,
+		SmFwrdByEmailDate:   rec.UserDef.SmFwrdByEmailDate,
+		SmFwrdByEmailStatus: rec.UserDef.SmFwrdByEmailStatus,
+	}
+	return q
+}
+
 func ConvertQsoToAdifNoHeader(q types.Qso) string {
 	rec := QsoToRecord(q)
 	return (&rec).String()

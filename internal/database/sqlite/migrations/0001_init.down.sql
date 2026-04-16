@@ -9,6 +9,7 @@ DROP INDEX IF EXISTS idx_qso_upload_uploaded;
 DROP INDEX IF EXISTS idx_qso_upload_pending;
 DROP INDEX IF EXISTS idx_qso_active_date_time;
 DROP INDEX IF EXISTS idx_qso_active_call;
+DROP INDEX IF EXISTS uq_qso_logbook_dedupe;
 DROP INDEX IF EXISTS idx_qso_logbook_id;
 DROP INDEX IF EXISTS idx_qso_date_time;
 DROP INDEX IF EXISTS idx_qso_country;

@@ -1,23 +1,20 @@
 package config
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // ServiceName is the DI bean ID for the config service (used by internal/iocdi).
 const ServiceName = types.ConfigServiceName
 
-// Config is the daemon's on-disk configuration. The zero value is not usable;
-// construct via New() or with explicit field values.
-//
-// TODO(milestone 1): add a loader that reads $SM_WORKING_DIR/config.json
-// (or the equivalent) and returns a validated *Config. For the initial
-// restructure commit this package exists as a minimal stub — it compiles
-// with zero-valued defaults so the daemon and carry-forward services
-// (internal/database/sqlite, internal/logging) have somewhere to pull their
-// configuration shape from without dragging in v1's grab-bag AppConfig.
+// Config is the daemon's on-disk configuration.
 type Config struct {
 	// DataDir is the root directory for on-disk state: sqlite database,
 	// log files, any future cache directories. Resolved via
@@ -25,9 +22,11 @@ type Config struct {
 	DataDir string `json:"data_dir"`
 
 	// SocketPath is the absolute path to the Unix domain socket the daemon
-	// binds its HTTP API to. Clients connect here to submit QSOs and query
-	// state.
+	// binds its HTTP API to.
 	SocketPath string `json:"socket_path"`
+
+	// Server holds HTTP server tunables.
+	Server ServerConfig `json:"server"`
 
 	// Datastore is the sqlite datastore configuration. Reuses
 	// types.DatastoreConfig so the carry-forward sqlite service can consume
@@ -35,62 +34,140 @@ type Config struct {
 	Datastore types.DatastoreConfig `json:"datastore"`
 
 	// Logging is the zerolog + lumberjack configuration used by
-	// internal/logging. Reused from types for the same reason as Datastore.
+	// internal/logging.
 	Logging types.LoggingConfig `json:"logging"`
 
-	// Required holds the small set of runtime tunables the kept sqlite
-	// service still reads at Open time. Pruned from v1's RequiredConfigs
-	// to the single field that is actually referenced.
+	// Required holds runtime tunables the sqlite service reads at Open time.
 	Required types.RequiredConfigs `json:"required"`
 }
 
+// ServerConfig holds HTTP server tunables. All timeouts are in seconds.
+type ServerConfig struct {
+	ReadTimeoutSec     int   `json:"read_timeout_sec"`
+	WriteTimeoutSec    int   `json:"write_timeout_sec"`
+	IdleTimeoutSec     int   `json:"idle_timeout_sec"`
+	ShutdownTimeoutSec int   `json:"shutdown_timeout_sec"`
+	MaxBodyBytes       int64 `json:"max_body_bytes"`
+}
+
+// Load reads a JSON config file and returns a populated Config with defaults
+// applied for any zero-valued fields.
+func Load(path string) (Config, error) {
+	var cfg Config
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, fmt.Errorf("reading config file: %w", err)
+	}
+
+	if err = json.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parsing config file: %w", err)
+	}
+
+	applyDefaults(&cfg, filepath.Dir(path))
+	return cfg, nil
+}
+
+// DefaultConfig returns a Config with sensible defaults. Used when no
+// config file is provided.
+func DefaultConfig(dataDir string) Config {
+	var cfg Config
+	applyDefaults(&cfg, dataDir)
+	return cfg
+}
+
+func applyDefaults(cfg *Config, baseDir string) {
+	if cfg.DataDir == "" {
+		cfg.DataDir = baseDir
+	}
+	if cfg.SocketPath == "" {
+		cfg.SocketPath = filepath.Join(os.TempDir(), "smd.sock")
+	}
+
+	// Server defaults
+	if cfg.Server.ReadTimeoutSec == 0 {
+		cfg.Server.ReadTimeoutSec = 10
+	}
+	if cfg.Server.WriteTimeoutSec == 0 {
+		cfg.Server.WriteTimeoutSec = 30
+	}
+	if cfg.Server.IdleTimeoutSec == 0 {
+		cfg.Server.IdleTimeoutSec = 120
+	}
+	if cfg.Server.ShutdownTimeoutSec == 0 {
+		cfg.Server.ShutdownTimeoutSec = 10
+	}
+	if cfg.Server.MaxBodyBytes == 0 {
+		cfg.Server.MaxBodyBytes = 1 << 20 // 1 MiB
+	}
+
+	// Datastore defaults
+	if cfg.Datastore.Driver == "" {
+		cfg.Datastore.Driver = types.SqliteDriverName
+	}
+	if cfg.Datastore.Path == "" {
+		cfg.Datastore.Path = filepath.Join(cfg.DataDir, "station-manager.db")
+	}
+	if cfg.Datastore.MaxOpenConns == 0 {
+		cfg.Datastore.MaxOpenConns = 1 // sqlite is single-writer
+	}
+	if cfg.Datastore.MaxIdleConns == 0 {
+		cfg.Datastore.MaxIdleConns = 1
+	}
+	if cfg.Datastore.ContextTimeout == 0 {
+		cfg.Datastore.ContextTimeout = 10
+	}
+	if cfg.Datastore.TransactionContextTimeout == 0 {
+		cfg.Datastore.TransactionContextTimeout = 10
+	}
+
+	// Logging defaults
+	if cfg.Logging.Level == "" {
+		cfg.Logging.Level = "info"
+	}
+	if cfg.Logging.RelLogFileDir == "" {
+		cfg.Logging.RelLogFileDir = "logs"
+	}
+	if !cfg.Logging.ConsoleLogging && !cfg.Logging.FileLogging {
+		cfg.Logging.ConsoleLogging = true
+	}
+}
+
 // Service is the runtime wrapper around Config that other services obtain
-// via the iocdi container. It exposes the getter methods the kept v1 code
-// calls (LoggingConfig, DatastoreConfig, RequiredConfigs, WorkingDir).
-//
-// The service follows the project's lifecycle convention:
-// Initialize() -> Open()/Start() -> Close()/Stop(), idempotent.
-// For milestone 1 only Initialize() does real work; Open/Start/Close are
-// noop placeholders until a file loader lands.
+// via the iocdi container.
 type Service struct {
-	// workingDir is the resolved on-disk data directory. Populated by
-	// Initialize() from Config.DataDir or utils.WorkingDir() fallback.
-	workingDir string
-
-	// Cfg is the configuration this service hands out via its getter
-	// methods. For the initial stub it can be set directly; once a
-	// loader exists, Initialize() will populate it from a config file.
-	Cfg Config
-
+	workingDir  string
+	Cfg         Config
 	initialized atomic.Bool
 }
 
-// New constructs a Service with zero-value Config. Callers that need a
-// populated config should set Cfg fields directly or wait for the file
-// loader to land.
-func New() (*Service, error) {
-	return &Service{}, nil
+// New constructs a Service with the given Config.
+func New(cfg Config) *Service {
+	return &Service{Cfg: cfg}
 }
 
-// Initialize prepares the service for use. Idempotent. For milestone 1
-// this simply records that Initialize has been called; once a config file
-// loader lands, this is where the file is read and validated.
+// Initialize prepares the service for use. Resolves the working directory.
 func (s *Service) Initialize() error {
+	if s.initialized.Load() {
+		return nil
+	}
+
+	dir, err := utils.WorkingDir(s.Cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("config.Service.Initialize: %w", err)
+	}
+	s.workingDir = dir
 	s.initialized.Store(true)
 	return nil
 }
 
-// Close is a no-op for the stub. Exists to satisfy the project's service
-// lifecycle convention so the iocdi container can manage this service
-// alongside others.
+// Close resets the service state.
 func (s *Service) Close() error {
 	s.initialized.Store(false)
 	return nil
 }
 
-// WorkingDir returns the resolved data directory for the runtime state.
-// Returns the empty string if Initialize has not been called or the
-// config has not been populated.
+// WorkingDir returns the resolved data directory.
 func (s *Service) WorkingDir() string {
 	if s.workingDir != "" {
 		return s.workingDir
@@ -98,22 +175,17 @@ func (s *Service) WorkingDir() string {
 	return s.Cfg.DataDir
 }
 
-// LoggingConfig returns the logging configuration. The stub returns the
-// Cfg.Logging field as-is with no validation; real validation moves here
-// when the file loader lands.
+// LoggingConfig returns the logging configuration.
 func (s *Service) LoggingConfig() (types.LoggingConfig, error) {
 	return s.Cfg.Logging, nil
 }
 
-// DatastoreConfig returns the sqlite datastore configuration. Consumed by
-// internal/database/sqlite at Open time.
+// DatastoreConfig returns the sqlite datastore configuration.
 func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
 	return s.Cfg.Datastore, nil
 }
 
-// RequiredConfigs returns the pruned v1 "required" tunables. Only
-// QsoForwardingRowLimit is referenced by the carry-forward sqlite code;
-// see internal/types/required.go for the background.
+// RequiredConfigs returns the runtime tunables.
 func (s *Service) RequiredConfigs() (types.RequiredConfigs, error) {
 	return s.Cfg.Required, nil
 }

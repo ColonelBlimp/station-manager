@@ -84,6 +84,7 @@ func QsoModelToType(model *models.Qso) (types.Qso, error) {
 	qso.QsoDetails.TimeOff = model.TimeOff
 	qso.QsoDetails.RstSent = model.RstSent
 	qso.QsoDetails.RstRcvd = model.RstRcvd
+	qso.DedupeKey = model.DedupeKey
 
 	return qso, nil
 }

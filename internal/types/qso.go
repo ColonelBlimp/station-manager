@@ -7,6 +7,12 @@ type Qso struct {
 	// Every QSO entry MUST have a logbook associated with it.
 	LogbookID int64 `json:"logbook_id" validate:"required"`
 
+	// DedupeKey is a SHA-256 hex hash of CALL|BAND|MODE|QSO_DATE|TIME_ON
+	// (uppercased, pipe-separated). Used by the submit endpoint to detect
+	// duplicate QSOs within the same logbook. Computed by qsoservice, not
+	// set by callers.
+	DedupeKey string `json:"dedupe_key,omitempty"`
+
 	SmQsoUploadDate     string `json:"sm_qso_upload_date"`
 	SmQsoUploadStatus   string `json:"sm_qso_upload_status"`
 	SmFwrdByEmailDate   string `json:"sm_fwrd_by_email_date"`

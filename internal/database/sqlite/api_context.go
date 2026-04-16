@@ -275,6 +275,47 @@ func (s *Service) FetchQsoByIdWithContext(ctx context.Context, id int64) (types.
 	return qso, nil
 }
 
+func (s *Service) FetchQsoByDedupeKeyWithContext(ctx context.Context, logbookID int64, dedupeKey string) (types.Qso, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoByDedupeKeyWithContext"
+	if err := checkService(op, s); err != nil {
+		return types.Qso{}, err
+	}
+
+	if logbookID < 1 {
+		return types.Qso{}, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	if dedupeKey == "" {
+		return types.Qso{}, errors.New(op).WithMsg("dedupe key cannot be empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return types.Qso{}, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	model, err := models.Qsos(
+		models.QsoWhere.LogbookID.EQ(logbookID),
+		models.QsoWhere.DedupeKey.EQ(dedupeKey),
+		models.QsoWhere.DeletedAt.IsNull(),
+	).One(ctx, h)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return types.Qso{}, errors.ErrNotFound
+		}
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
+
+	qso, err := adapters.QsoModelToType(model)
+	if err != nil {
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
+
+	return qso, nil
+}
+
 func (s *Service) FetchQsoSlicePagingWithContext(ctx context.Context, logbookId, pageNum, pageSize int64, ordering Ordering) (types.QsoSlice, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoByCallsignWithContext"
 	if err := checkService(op, s); err != nil {

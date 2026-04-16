@@ -1,9 +1,10 @@
 .env
 internal/logging/config.json
+build/
+!build/config.json
 !build/bin/.gitkeep
 !build/db/.gitkeep
-!build/logs/.gitkeep
-build/*
+!build/log/.gitkeep
 .task
 apps/*
 web/*

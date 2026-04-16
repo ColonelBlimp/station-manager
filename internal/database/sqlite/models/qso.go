@@ -40,6 +40,7 @@ type Qso struct {
 	RstRcvd        string     `boil:"rst_rcvd" json:"rst_rcvd" toml:"rst_rcvd" yaml:"rst_rcvd"`
 	Country        string     `boil:"country" json:"country" toml:"country" yaml:"country"`
 	AdditionalData types.JSON `boil:"additional_data" json:"additional_data" toml:"additional_data" yaml:"additional_data"`
+	DedupeKey      string     `boil:"dedupe_key" json:"dedupe_key" toml:"dedupe_key" yaml:"dedupe_key"`
 	LogbookID      int64      `boil:"logbook_id" json:"logbook_id" toml:"logbook_id" yaml:"logbook_id"`
 
 	R *qsoR `boil:"-" json:"-" toml:"-" yaml:"-"`
@@ -62,6 +63,7 @@ var QsoColumns = struct {
 	RstRcvd        string
 	Country        string
 	AdditionalData string
+	DedupeKey      string
 	LogbookID      string
 }{
 	ID:             "id",
@@ -79,6 +81,7 @@ var QsoColumns = struct {
 	RstRcvd:        "rst_rcvd",
 	Country:        "country",
 	AdditionalData: "additional_data",
+	DedupeKey:      "dedupe_key",
 	LogbookID:      "logbook_id",
 }
 
@@ -98,6 +101,7 @@ var QsoTableColumns = struct {
 	RstRcvd        string
 	Country        string
 	AdditionalData string
+	DedupeKey      string
 	LogbookID      string
 }{
 	ID:             "qso.id",
@@ -115,6 +119,7 @@ var QsoTableColumns = struct {
 	RstRcvd:        "qso.rst_rcvd",
 	Country:        "qso.country",
 	AdditionalData: "qso.additional_data",
+	DedupeKey:      "qso.dedupe_key",
 	LogbookID:      "qso.logbook_id",
 }
 
@@ -136,6 +141,7 @@ var QsoWhere = struct {
 	RstRcvd        whereHelperstring
 	Country        whereHelperstring
 	AdditionalData whereHelpertypes_JSON
+	DedupeKey      whereHelperstring
 	LogbookID      whereHelperint64
 }{
 	ID:             whereHelperint64{field: "\"qso\".\"id\""},
@@ -153,6 +159,7 @@ var QsoWhere = struct {
 	RstRcvd:        whereHelperstring{field: "\"qso\".\"rst_rcvd\""},
 	Country:        whereHelperstring{field: "\"qso\".\"country\""},
 	AdditionalData: whereHelpertypes_JSON{field: "\"qso\".\"additional_data\""},
+	DedupeKey:      whereHelperstring{field: "\"qso\".\"dedupe_key\""},
 	LogbookID:      whereHelperint64{field: "\"qso\".\"logbook_id\""},
 }
 
@@ -212,8 +219,8 @@ func (r *qsoR) GetQsoUploads() QsoUploadSlice {
 type qsoL struct{}
 
 var (
-	qsoAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "additional_data", "logbook_id"}
-	qsoColumnsWithoutDefault = []string{"call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "logbook_id"}
+	qsoAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "additional_data", "dedupe_key", "logbook_id"}
+	qsoColumnsWithoutDefault = []string{"call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "dedupe_key", "logbook_id"}
 	qsoColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "additional_data"}
 	qsoPrimaryKeyColumns     = []string{"id"}
 	qsoGeneratedColumns      = []string{"id"}

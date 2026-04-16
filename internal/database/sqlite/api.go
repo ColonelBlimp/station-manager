@@ -41,6 +41,10 @@ func (s *Service) FetchQsoById(id int64) (types.Qso, error) {
 	return s.FetchQsoByIdWithContext(context.Background(), id)
 }
 
+func (s *Service) FetchQsoByDedupeKey(logbookID int64, dedupeKey string) (types.Qso, error) {
+	return s.FetchQsoByDedupeKeyWithContext(context.Background(), logbookID, dedupeKey)
+}
+
 func (s *Service) FetchQsoSlicePaging(logbookId, pageNum, pageSize int64, ordering Ordering) (types.QsoSlice, error) {
 	return s.FetchQsoSlicePagingWithContext(context.Background(), logbookId, pageNum, pageSize, ordering)
 }

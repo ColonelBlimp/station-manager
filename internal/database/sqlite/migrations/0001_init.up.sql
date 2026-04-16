@@ -50,21 +50,18 @@ CREATE TABLE IF NOT EXISTS qso
     country         TEXT     NOT NULL CHECK (length(trim(country)) <= 50),
     additional_data JSON     NOT NULL DEFAULT ('{}') CHECK (json_valid(additional_data)),
 
+    /* Dedupe key: SHA-256 hex of CALL|BAND|MODE|QSO_DATE|TIME_ON (uppercased,
+       pipe-separated). Used by the 'submit' endpoint to detect duplicate QSOs.
+       Unique per logbook (active rows only). */
+    dedupe_key      TEXT     NOT NULL CHECK (length(dedupe_key) = 64),
+
     logbook_id      INTEGER  NOT NULL,
 
-    CONSTRAINT qso_data_no_duplicates CHECK (
-        json_extract(additional_data, '$.call') IS NULL AND
-        json_extract(additional_data, '$.band') IS NULL AND
-        json_extract(additional_data, '$.mode') IS NULL AND
-        json_extract(additional_data, '$.freq') IS NULL AND
-        json_extract(additional_data, '$.qso_date') IS NULL AND
-        json_extract(additional_data, '$.time_on') IS NULL AND
-        json_extract(additional_data, '$.time_off') IS NULL AND
-        json_extract(additional_data, '$.rst_sent') IS NULL AND
-        json_extract(additional_data, '$.rst_rcvd') IS NULL AND
-        json_extract(additional_data, '$.country') IS NULL
-        ),
-    -- Client uses soft deletes; prevent deleting a logbook that still has QSOs
+    -- Note: no CHECK constraint preventing promoted fields from appearing in
+    -- additional_data. The adapter strategy (docs/v1-analysis/design-decisions-log.md)
+    -- deliberately duplicates promoted fields in the JSON blob via json.Marshal(qso).
+    -- Columns are authoritative on read; the blob carries everything for round-trip
+    -- fidelity.
     CONSTRAINT fk_qso_logbook_id FOREIGN KEY (logbook_id) REFERENCES logbook (id) ON DELETE RESTRICT ON UPDATE NO ACTION
 );
 
@@ -74,6 +71,11 @@ CREATE INDEX IF NOT EXISTS idx_qso_country ON qso (country);
 CREATE INDEX IF NOT EXISTS idx_qso_date_time ON qso (qso_date, time_on);
 -- Index on the FK column for joins/deletes
 CREATE INDEX IF NOT EXISTS idx_qso_logbook_id ON qso (logbook_id);
+
+-- Dedupe: unique per logbook among active (non-deleted) rows
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qso_logbook_dedupe
+    ON qso (logbook_id, dedupe_key)
+    WHERE deleted_at IS NULL;
 
 -- Optional partial indexes to speed queries that ignore soft-deleted rows
 CREATE INDEX IF NOT EXISTS idx_qso_active_call ON qso (call) WHERE deleted_at IS NULL;
@@ -98,13 +100,7 @@ CREATE TABLE IF NOT EXISTS contacted_station
     name            TEXT     NOT NULL,
     call            TEXT     NOT NULL CHECK (length(trim(call)) <= 20),
     country         TEXT     NOT NULL CHECK (length(trim(country)) <= 50),
-    additional_data JSON     NOT NULL DEFAULT ('{}') CHECK (json_valid(additional_data)),
-
-    CONSTRAINT qso_data_no_duplicates CHECK (
-        json_extract(additional_data, '$.name') IS NULL AND
-        json_extract(additional_data, '$.call') IS NULL AND
-        json_extract(additional_data, '$.country') IS NULL
-        )
+    additional_data JSON     NOT NULL DEFAULT ('{}') CHECK (json_valid(additional_data))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_contacted_station_active_call
