@@ -1,3 +1,4 @@
+// Package upload defines the online service identifiers for QSO forwarding.
 package upload
 
 type OnlineService string

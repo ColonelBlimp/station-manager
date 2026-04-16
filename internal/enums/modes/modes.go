@@ -1,3 +1,5 @@
+// Package modes defines the ADIF main-mode and sub-mode constants used by
+// Station Manager, along with the sub-mode → main-mode mapping table.
 package modes
 
 import "strings"

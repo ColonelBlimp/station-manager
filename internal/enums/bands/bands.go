@@ -1,3 +1,4 @@
+// Package bands defines the HF amateur radio band constants per the ADIF spec.
 package bands
 
 type Band string

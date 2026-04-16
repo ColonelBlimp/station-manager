@@ -1,3 +1,4 @@
+// Package status defines the upload queue row lifecycle states.
 package status
 
 type Status string

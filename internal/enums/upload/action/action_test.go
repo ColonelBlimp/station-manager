@@ -24,7 +24,6 @@ func TestParse(t *testing.T) {
 		{in: "insert", want: Insert},
 		{in: "update", want: Update},
 		{in: "delete", want: Delete},
-		{in: "unknown", want: Insert},
 	}
 
 	for _, tc := range cases {
@@ -35,5 +34,15 @@ func TestParse(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("Parse(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestParse_UnknownReturnsError(t *testing.T) {
+	got, err := Parse("unknown")
+	if err == nil {
+		t.Fatalf("Parse(%q) = (%q, nil), want error", "unknown", got)
+	}
+	if got != "" {
+		t.Fatalf("Parse(%q) = (%q, err), want empty Action on error", "unknown", got)
 	}
 }
