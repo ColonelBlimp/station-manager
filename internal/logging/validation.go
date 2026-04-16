@@ -1,13 +1,15 @@
 package logging
 
 import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
+
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/go-playground/validator/v10"
 	"github.com/rs/zerolog"
-	"path/filepath"
-	"strings"
-	"sync"
 )
 
 var validate *validator.Validate
@@ -32,7 +34,7 @@ func validateConfig(cfg *types.LoggingConfig) error {
 
 	// Validate log level
 	if _, err := zerolog.ParseLevel(cfg.Level); err != nil {
-		return errors.New(op).Msgf("invalid log level '%s': %w", cfg.Level, err)
+		return errors.New(op).Err(fmt.Errorf("invalid log level '%s': %w", cfg.Level, err))
 	}
 
 	// Validate skip frame count is reasonable

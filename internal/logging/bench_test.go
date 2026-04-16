@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"fmt"
 	"io"
 	"strconv"
 	"testing"
@@ -23,10 +24,10 @@ func makeDetailedChain(depth int) error {
 	if depth <= 0 {
 		return nil
 	}
-	err := smerrors.New(smerrors.Op("op_0")).Msg("root cause message")
+	err := smerrors.New(smerrors.Op("op_0")).WithMsg("root cause message")
 	for i := 1; i < depth; i++ {
 		op := "op_" + strconv.Itoa(i)
-		err = smerrors.New(smerrors.Op(op)).Err(err).Msg("wrapped message")
+		err = smerrors.New(smerrors.Op(op)).WithErr(err).WithMsg("wrapped message")
 	}
 	return err
 }
@@ -35,10 +36,10 @@ func makeStdWrapChain(depth int) error {
 	if depth <= 0 {
 		return nil
 	}
-	err := smerrors.New(smerrors.Op("std_root")).Msg("root cause message")
+	err := smerrors.New(smerrors.Op("std_root")).WithMsg("root cause message")
 	for i := 1; i < depth; i++ {
 		op := "std_" + strconv.Itoa(i)
-		err = smerrors.New(smerrors.Op(op)).Msgf("wrap %d: %w", i, err)
+		err = smerrors.New(smerrors.Op(op)).WithErr(fmt.Errorf("wrap %d: %w", i, err))
 	}
 	return err
 }

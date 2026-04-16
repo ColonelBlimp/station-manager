@@ -2,6 +2,9 @@ package logging
 
 import (
 	"bytes"
+	stderrs "errors"
+	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -31,8 +34,8 @@ func validLoggingConfig() *types.LoggingConfig {
 // Helper to create a config service with logging config
 func newTestConfigService(cfg *types.LoggingConfig) *config.Service {
 	svc := &config.Service{
-		AppConfig: types.AppConfig{
-			LoggingConfig: *cfg,
+		Cfg: config.Config{
+			Logging: *cfg,
 		},
 	}
 	_ = svc.Initialize()
@@ -404,84 +407,6 @@ func TestService_With(t *testing.T) {
 	})
 }
 
-func TestService_Dump(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validLoggingConfig()
-
-	service := &Service{
-		WorkingDir:    tmpDir,
-		ConfigService: newTestConfigService(cfg),
-	}
-
-	require.NoError(t, service.Initialize())
-	defer service.Close()
-
-	t.Run("dump nil", func(t *testing.T) {
-		service.Dump(nil)
-	})
-
-	t.Run("dump struct", func(t *testing.T) {
-		type TestStruct struct {
-			Name  string
-			Value int
-		}
-		service.Dump(TestStruct{Name: "test", Value: 42})
-	})
-
-	t.Run("dump map", func(t *testing.T) {
-		m := map[string]int{"a": 1, "b": 2}
-		service.Dump(m)
-	})
-
-	t.Run("dump slice", func(t *testing.T) {
-		s := []int{1, 2, 3, 4, 5}
-		service.Dump(s)
-	})
-
-	t.Run("dump basic type", func(t *testing.T) {
-		service.Dump(42)
-		service.Dump("string")
-		service.Dump(true)
-	})
-
-	t.Run("dump nested struct", func(t *testing.T) {
-		type Inner struct {
-			Value int
-		}
-		type Outer struct {
-			Name  string
-			Inner Inner
-		}
-		service.Dump(Outer{Name: "test", Inner: Inner{Value: 42}})
-	})
-
-	t.Run("dump large slice", func(t *testing.T) {
-		s := make([]int, 20)
-		for i := range s {
-			s[i] = i
-		}
-		service.Dump(s)
-	})
-
-	t.Run("dump circular reference", func(t *testing.T) {
-		type Node struct {
-			Value int
-			Next  *Node
-		}
-		n1 := &Node{Value: 1}
-		n2 := &Node{Value: 2}
-		n1.Next = n2
-		n2.Next = n1
-
-		service.Dump(n1)
-	})
-
-	t.Run("dump when uninitialized", func(t *testing.T) {
-		uninitService := &Service{}
-		uninitService.Dump("should not panic")
-	})
-}
-
 func TestConcurrentLogging(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validLoggingConfig()
@@ -694,7 +619,7 @@ func TestGetLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, err := parseLevel(tt.level)
+			level, err := zerolog.ParseLevel(tt.level)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -846,4 +771,183 @@ func TestService_ActiveOperationsAndClose_NoLeaks(t *testing.T) {
 	// (The internal counter may be left >0 in rare forced-timeout paths, which Close
 	// handles by draining the WaitGroup and logging a warning.)
 	assert.GreaterOrEqual(t, service.ActiveOperations(), int32(0))
+}
+
+// stringerValue is a minimal fmt.Stringer implementation used by
+// TestNoop_FullChainIsNoOp to exercise LogEvent.Stringer().
+type stringerValue string
+
+func (s stringerValue) String() string { return string(s) }
+
+// TestLogEventBuilder_FilteredLevelSkipsCounters locks in the
+// behavioral guarantee from docs/reviews/internal-logging.md finding
+// 4.6: a log call at a level below the logger's configured level must
+// NOT increment the activeOps counter. The short-circuit level check
+// in logEventBuilder ensures filtered events return an untracked no-op
+// LogEvent without touching counters or locks.
+//
+// We verify two things: (1) activeOps is zero after a large burst of
+// filtered events — proving no leak — and (2) Close() returns
+// essentially immediately — proving no drain wait occurred, which
+// would only happen if the counter were being incremented along the
+// filtered path.
+func TestLogEventBuilder_FilteredLevelSkipsCounters(t *testing.T) {
+	workingDir := t.TempDir()
+	cfg := types.LoggingConfig{
+		Level:                  "warn", // Debug, Info, Trace all filtered
+		SkipFrameCount:         0,
+		WithTimestamp:          false,
+		ConsoleLogging:         false,
+		FileLogging:            true,
+		RelLogFileDir:          "logs",
+		LogFileMaxBackups:      1,
+		LogFileMaxAgeDays:      1,
+		LogFileMaxSizeMB:       1,
+		ShutdownTimeoutMS:      5000, // generous — we expect Close to return far faster
+		ShutdownTimeoutWarning: false,
+		ConsoleNoColor:         true,
+	}
+	service := &Service{
+		WorkingDir:    workingDir,
+		ConfigService: newTestConfigService(&cfg),
+	}
+	require.NoError(t, service.Initialize())
+
+	// Burst 1000 filtered events of each filtered level. Every call
+	// constructs a chain with typed field methods and terminates with
+	// Msg — exactly the shape that would leak under the pre-fix
+	// embedding bug AND the pre-fix level-check ordering.
+	for i := 0; i < 1000; i++ {
+		service.DebugWith().Str("key", "value").Int("i", i).Msg("filtered debug")
+		service.InfoWith().Str("key", "value").Int("i", i).Msg("filtered info")
+		service.TraceWith().Str("key", "value").Msg("filtered trace")
+	}
+
+	assert.Equal(t, int32(0), service.activeOps.Load(),
+		"filtered events must never increment activeOps (finding 4.6)")
+
+	start := time.Now()
+	err := service.Close()
+	elapsed := time.Since(start)
+	assert.NoError(t, err)
+	assert.Less(t, elapsed, 100*time.Millisecond,
+		"Close() should return immediately when no tracked events are outstanding; took %v", elapsed)
+}
+
+// TestEventForLevel_AllKnownLevels directly exercises the eventForLevel
+// helper extracted in docs/reviews/internal-logging.md finding 4.4. It
+// verifies that every zerolog level recognized by the switch returns a
+// non-nil event when the logger is configured to accept all levels, and
+// that an unknown level falls through the default case to nil.
+func TestEventForLevel_AllKnownLevels(t *testing.T) {
+	// Logger at TraceLevel — every documented level is enabled.
+	logger := zerolog.New(io.Discard).Level(zerolog.TraceLevel)
+
+	knownLevels := []struct {
+		name  string
+		level zerolog.Level
+	}{
+		{"trace", zerolog.TraceLevel},
+		{"debug", zerolog.DebugLevel},
+		{"info", zerolog.InfoLevel},
+		{"warn", zerolog.WarnLevel},
+		{"error", zerolog.ErrorLevel},
+		{"fatal", zerolog.FatalLevel},
+		{"panic", zerolog.PanicLevel},
+	}
+
+	for _, tc := range knownLevels {
+		t.Run(tc.name, func(t *testing.T) {
+			event := eventForLevel(&logger, tc.level)
+			assert.NotNil(t, event, "eventForLevel should return non-nil for level %v on a fully-enabled logger", tc.level)
+		})
+	}
+
+	t.Run("unknown_level_returns_nil", func(t *testing.T) {
+		// zerolog.NoLevel is not in the switch cases; the default
+		// branch returns nil so the caller can treat it as a no-op.
+		event := eventForLevel(&logger, zerolog.NoLevel)
+		assert.Nil(t, event, "eventForLevel should return nil for unrecognized level")
+	})
+}
+
+// TestNoop_FullChainIsNoOp exercises every method on the LogEvent and
+// LogContext interfaces via Noop(). The noopLogger, noopLogContext, and
+// no-op logEvent implementations together have ~50 methods that must
+// chain correctly and never panic. Before this test the Noop path had
+// zero coverage, so any accidental nil-return or wrong type in a noop
+// method would go undetected until a consumer tripped over it.
+func TestNoop_FullChainIsNoOp(t *testing.T) {
+	n := Noop()
+	require.NotNil(t, n, "Noop() must return non-nil")
+
+	err := stderrs.New("test error")
+
+	// Exercise every LogEvent method in a single chain, then terminate.
+	n.InfoWith().
+		Str("str", "x").
+		Strs("strs", []string{"a", "b"}).
+		Stringer("stringer", stringerValue("v")).
+		Int("int", 1).
+		Int8("int8", 2).
+		Int16("int16", 3).
+		Int32("int32", 4).
+		Int64("int64", 5).
+		Uint("uint", 6).
+		Uint8("uint8", 7).
+		Uint16("uint16", 8).
+		Uint32("uint32", 9).
+		Uint64("uint64", 10).
+		Float32("f32", 1.1).
+		Float64("f64", 1.2).
+		Bool("bool", true).
+		Bools("bools", []bool{true, false}).
+		Time("time", time.Now()).
+		Dur("dur", time.Second).
+		Err(err).
+		AnErr("err2", err).
+		Bytes("bytes", []byte("b")).
+		Hex("hex", []byte{0xff}).
+		IPAddr("ip", net.ParseIP("127.0.0.1")).
+		MACAddr("mac", net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}).
+		Interface("iface", "value").
+		Dict("dict", func(e LogEvent) { e.Str("nested", "v") }).
+		Msg("message")
+
+	// Terminal variants
+	n.DebugWith().Str("x", "y").Msgf("formatted: %d", 42)
+	n.WarnWith().Str("x", "y").Send()
+	n.ErrorWith().Err(err).Msg("error")
+	n.TraceWith().Msg("trace")
+	// Not calling FatalWith().Msg() or PanicWith().Msg() because those
+	// call os.Exit / panic in the real zerolog path. The noop variants
+	// don't, but we shouldn't encode that dependency into a test — just
+	// verify they return a non-nil LogEvent.
+	assert.NotNil(t, n.FatalWith())
+	assert.NotNil(t, n.PanicWith())
+
+	// Context logger path: build a context, turn it into a Logger, and
+	// chain through it too.
+	child := n.With().
+		Str("str", "x").
+		Strs("strs", []string{"a"}).
+		Int("int", 1).
+		Int64("int64", 5).
+		Uint("uint", 6).
+		Uint64("uint64", 10).
+		Float64("f64", 1.2).
+		Bool("bool", true).
+		Time("time", time.Now()).
+		Err(err).
+		Interface("iface", "value").
+		Logger()
+	require.NotNil(t, child, "Noop context logger must produce a non-nil child Logger")
+
+	child.InfoWith().Str("child", "msg").Msg("from child")
+	child.ErrorWith().Err(err).Msg("child error")
+
+	// Verify the child also exposes a With() that doesn't panic.
+	grandchild := child.With().Str("gc", "ok").Logger()
+	require.NotNil(t, grandchild)
+	grandchild.InfoWith().Msg("grandchild")
 }

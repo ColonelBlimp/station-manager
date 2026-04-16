@@ -1,6 +1,13 @@
 package logging
 
 import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -8,11 +15,6 @@ import (
 	"github.com/rs/zerolog"
 	"go.uber.org/atomic"
 	"gopkg.in/natefinch/lumberjack.v2"
-	"io"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 )
 
 // Service is the primary logging facility for the application.
@@ -27,18 +29,25 @@ import (
 // A Service must be initialized via Initialize() before use and closed with Close().
 // It is safe for concurrent use by multiple goroutines.
 type Service struct {
-	WorkingDir        string          `di.inject:"workingdir"`
-	ConfigService     *config.Service `di.inject:"configservice"`
-	LoggingConfig     *types.LoggingConfig
-	fileWriter        *lumberjack.Logger
-	logger            atomic.Pointer[zerolog.Logger]
-	isInitialized     atomic.Bool
-	initOnce          sync.Once
-	initErr           error
-	mu                sync.RWMutex
-	activeOps         atomic.Int32 // Track active logging operations
-	wg                sync.WaitGroup
-	activeOpLocations map[string]int // Debug: Track where active operations were created
+	WorkingDir    string          `di.inject:"workingdir"`
+	ConfigService *config.Service `di.inject:"configservice"`
+	LoggingConfig *types.LoggingConfig
+	fileWriter    *lumberjack.Logger
+	logger        atomic.Pointer[zerolog.Logger]
+	isInitialized atomic.Bool
+	initOnce      sync.Once
+	initErr       error
+	mu            sync.RWMutex // guards isInitialized transitions and fileWriter close
+	activeOps     atomic.Int32 // Track active logging operations
+	wg            sync.WaitGroup
+
+	// debugMu guards activeOpLocations. Separate from mu so the debug
+	// tracking path does not contend with event-creation paths that
+	// hold mu.RLock. Only used when the `logging_debug` build tag is
+	// set; untouched in release builds. See
+	// docs/reviews/internal-logging.md finding 4.7.
+	debugMu           sync.Mutex
+	activeOpLocations map[string]int // Debug: where active operations were created
 }
 
 // Initialize prepares the Service for use: it validates configuration, ensures
@@ -58,12 +67,12 @@ func (s *Service) Initialize() error {
 	s.initOnce.Do(func() {
 		loggingCfg, cfgErr := s.ConfigService.LoggingConfig()
 		if cfgErr != nil {
-			s.initErr = errors.New(op).Msgf("s.AppConfig.LoggingConfig: %w", cfgErr)
+			s.initErr = errors.New(op).Err(fmt.Errorf("s.AppConfig.LoggingConfig: %w", cfgErr))
 			return
 		}
 
 		if cfgErr = validateConfig(&loggingCfg); cfgErr != nil {
-			s.initErr = errors.New(op).Msgf("validateConfig: %w", cfgErr)
+			s.initErr = errors.New(op).Err(fmt.Errorf("validateConfig: %w", cfgErr))
 			return
 		}
 		s.LoggingConfig = &loggingCfg
@@ -71,7 +80,7 @@ func (s *Service) Initialize() error {
 		if s.WorkingDir == emptyString {
 			exeDir, pathErr := utils.AbsDirPathForExecutable()
 			if pathErr != nil {
-				s.initErr = errors.New(op).Msgf("utils.AbsDirPathForExecutable: %w", pathErr)
+				s.initErr = errors.New(op).Err(fmt.Errorf("utils.AbsDirPathForExecutable: %w", pathErr))
 				return
 			}
 			s.WorkingDir = exeDir
@@ -80,29 +89,29 @@ func (s *Service) Initialize() error {
 		loggingDir := filepath.Join(s.WorkingDir, s.LoggingConfig.RelLogFileDir)
 		exists, existsErr := utils.PathExists(loggingDir)
 		if existsErr != nil {
-			s.initErr = errors.New(op).Msgf("utils.PathExists: %w", existsErr)
+			s.initErr = errors.New(op).Err(fmt.Errorf("utils.PathExists: %w", existsErr))
 			return
 		}
 
 		if !exists {
 			if mdErr := os.MkdirAll(loggingDir, 0750); mdErr != nil {
-				s.initErr = errors.New(op).Msgf("os.MkdirAll: %w", mdErr)
+				s.initErr = errors.New(op).Err(fmt.Errorf("os.MkdirAll: %w", mdErr))
 				return
 			}
 		}
 
 		exeName, exeErr := utils.ExecName(true)
 		if exeErr != nil {
-			s.initErr = errors.New(op).Msgf("utils.ExecName: %w", exeErr)
+			s.initErr = errors.New(op).Err(fmt.Errorf("utils.ExecName: %w", exeErr))
 			return
 		}
 
 		mw := io.MultiWriter(s.initializeWriters(exeName)...)
 		logger := zerolog.New(mw).With().Logger()
 
-		level, levelErr := parseLevel(s.LoggingConfig.Level)
+		level, levelErr := zerolog.ParseLevel(s.LoggingConfig.Level)
 		if levelErr != nil {
-			s.initErr = errors.New(op).Msgf("parseLevel: %w", levelErr)
+			s.initErr = errors.New(op).Err(fmt.Errorf("zerolog.ParseLevel: %w", levelErr))
 			return
 		}
 		logger = logger.Level(level)
@@ -127,6 +136,29 @@ func (s *Service) Initialize() error {
 // Close stops accepting new log operations, waits for in-flight logging to
 // finish up to a configured timeout, optionally warns on timeout, and closes
 // any open file writer. It is safe to call multiple times.
+//
+// Shutdown semantics: new log operations are rejected immediately (the
+// isInitialized flag is flipped before any draining begins, and event
+// builders return no-ops). In-flight operations — events that have been
+// constructed but not yet had their terminal method (Msg/Msgf/Send)
+// called — are given up to ShutdownTimeoutMS (default
+// defaultShutdownTimeoutMS) to complete. If the drain times out and
+// ShutdownTimeoutWarning is enabled, a warning is logged naming the
+// number of outstanding operations.
+//
+// On drain timeout, Close() deliberately does NOT force-drain the
+// WaitGroup. The previous implementation ran a loop calling wg.Done() once
+// per outstanding op under the assumption that the orphans would never
+// call Msg()/Send() themselves, but that assumption is racy: a concurrent
+// goroutine executing its own trackedLogEvent.Msg() defer block decrements
+// the same counters, and the force-drain could push wg.Done() past
+// wg.Add() and panic with "sync: negative WaitGroup counter." Leaking the
+// remaining Add() calls is harmless because Close() has already flipped
+// isInitialized to false, nothing else is waiting on the WaitGroup, and
+// stragglers that complete after Close() returns will decrement their own
+// counters normally — they're just updating state on a Service that's
+// about to be garbage collected. See docs/reviews/internal-logging.md
+// finding 4.1 for the background.
 func (s *Service) Close() error {
 	const op errors.Op = "logging.Service.Close"
 	if s == nil {
@@ -153,8 +185,9 @@ func (s *Service) Close() error {
 	s.logger.Store(nil)
 	s.mu.Unlock()
 
-	// Determine timeout (default 100ms if not configured)
-	timeoutMS := 100
+	// Determine drain timeout (fallback to defaultShutdownTimeoutMS if
+	// config is unset or zero) and whether to warn on timeout.
+	timeoutMS := defaultShutdownTimeoutMS
 	warnOnTimeout := false
 	if s.LoggingConfig != nil {
 		if s.LoggingConfig.ShutdownTimeoutMS > 0 {
@@ -163,43 +196,26 @@ func (s *Service) Close() error {
 		warnOnTimeout = s.LoggingConfig.ShutdownTimeoutWarning
 	}
 
-	// Wait for active logging operations to complete using WaitGroup with timeout
-	if waitTimeout(&s.wg, time.Duration(timeoutMS)*time.Millisecond) {
-		// Timed out
-		if warnOnTimeout && logger != nil {
-			activeOps := s.activeOps.Load()
+	// Wait for active logging operations to complete using WaitGroup with
+	// timeout. If the drain times out, we log a warning (when configured)
+	// but do NOT force-drain — see the doc comment above for why.
+	if waitTimeout(&s.wg, time.Duration(timeoutMS)*time.Millisecond) && warnOnTimeout && logger != nil {
+		event := logger.Warn().
+			Int32("active_operations", s.activeOps.Load()).
+			Int("timeout_ms", timeoutMS)
 
-			// Capture location info for debugging
-			s.mu.Lock()
-			locations := make(map[string]int)
-			for k, v := range s.activeOpLocations {
-				locations[k] = v
-			}
-			s.mu.Unlock()
-
-			event := logger.Warn().
-				Int32("active_operations", activeOps).
-				Int("timeout_ms", timeoutMS)
-
-			// Add location info if available
-			if len(locations) > 0 {
-				event = event.Interface("operation_locations", locations)
-			}
-
-			event.Msg("Logger shutdown timeout exceeded, forcing close with active operations")
-
-			// Force-drain the WaitGroup to prevent indefinite blocking
-			// This handles orphaned log operations that never called Msg()/Send()
-			for i := int32(0); i < activeOps; i++ {
-				s.activeOps.Add(-1)
-				s.wg.Done()
-			}
+		// Include debug location info if the `logging_debug` build tag
+		// is enabled and the location map was populated. In release
+		// builds snapshotLocations is a no-op that returns nil.
+		if locations := snapshotLocations(s); locations != nil {
+			event = event.Interface("operation_locations", locations)
 		}
+
+		event.Msg("Logger shutdown timeout exceeded; in-flight operations will complete after Close() returns")
 	}
 
 	// Close the file writer if it exists
 	// fileWriter is only accessed here and during initialization (protected by sync.Once)
-	// The activeOps counter ensures no writes are in progress
 	s.mu.Lock()
 	fileWriter := s.fileWriter
 	s.fileWriter = nil
@@ -207,7 +223,7 @@ func (s *Service) Close() error {
 
 	if fileWriter != nil {
 		if err := fileWriter.Close(); err != nil {
-			return errors.New(op).Msgf("fileWriter.Close: %w", err)
+			return errors.New(op).Err(fmt.Errorf("fileWriter.Close: %w", err))
 		}
 	}
 

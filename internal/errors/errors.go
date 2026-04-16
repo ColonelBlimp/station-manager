@@ -118,7 +118,7 @@ func Root(err error) error {
 	return current
 }
 
-// Used in the front ends
+// PrintChain used in the front ends
 func PrintChain(err error) {
 	for i := 0; err != nil; i++ {
 		if d, ok := AsDetailedError(err); ok {

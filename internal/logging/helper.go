@@ -2,23 +2,11 @@ package logging
 
 import (
 	stderrs "errors"
-	"fmt"
-	"runtime"
 	"strings"
 
 	smerrors "github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/rs/zerolog"
 )
-
-// parseLevel parses a string log level into a zerolog.Level.
-// Returns zerolog.NoLevel and an error if parsing fails.
-func parseLevel(level string) (zerolog.Level, error) {
-	l, err := zerolog.ParseLevel(level)
-	if err != nil {
-		return zerolog.NoLevel, err
-	}
-	return l, nil
-}
 
 // buildErrorChain walks an error's cause chain and returns:
 //   - chain: outermost -> innermost error messages
@@ -42,8 +30,7 @@ func buildErrorChain(err error) (chain []string, ops []string, root string, root
 			chain = append(chain, msg)
 			op := string(dErr.Op())
 			ops = append(ops, op)
-			// prefer unwrapping via our error type first
-			err = dErr.Unwrap()
+			err = stderrs.Unwrap(err)
 			continue
 		}
 
@@ -89,114 +76,99 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 		return newLogEvent(nil)
 	}
 
-	// Check if initialized BEFORE incrementing counters to avoid leaks during shutdown
-	if !s.isInitialized.Load() {
+	// Short-circuit level check BEFORE incrementing counters or taking
+	// any lock. In the common case — a filtered-out Debug event at
+	// runtime level Info, for example — this returns an untracked
+	// no-op after only two atomic reads (s.logger.Load and
+	// logger.GetLevel), avoiding the counter increment, WaitGroup.Add,
+	// location capture, and RWMutex RLock the tracked path requires.
+	// See docs/reviews/internal-logging.md finding 4.6.
+	//
+	// The logger snapshot here is used only for the level check; the
+	// tracked path below re-loads the logger under the read lock to
+	// guard against concurrent Close() which may have stored nil.
+	logger := s.logger.Load()
+	if logger == nil || logger.GetLevel() > level {
 		return newLogEvent(nil)
 	}
 
-	// Increment active operations counter before acquiring lock
+	// Event is going to be logged. Commit: increment counters (every
+	// early-return path below must decrement them via releaseCounters
+	// to keep the WaitGroup balanced), capture debug location if the
+	// logging_debug build tag is set, then acquire the read lock.
 	s.activeOps.Add(1)
 	s.wg.Add(1)
+	location := trackLocation(s, 2)
 
-	// Debug: Track where this operation was created
-	var location string
-	if s.LoggingConfig.ShutdownTimeoutWarning {
-		_, file, line, ok := runtime.Caller(2)
-		if ok {
-			location = fmt.Sprintf("%s:%d", file, line)
-			s.mu.Lock()
-			if s.activeOpLocations == nil {
-				s.activeOpLocations = make(map[string]int)
-			}
-			s.activeOpLocations[location]++
-			s.mu.Unlock()
-		}
-	}
-
-	// Acquire read lock to prevent Close() from running during log creation
 	s.mu.RLock()
 
-	// Double-check after acquiring lock (TOCTOU protection)
+	// TOCTOU: between the short-circuit check and the lock acquisition
+	// above, Close() could have run and flipped isInitialized to false.
 	if !s.isInitialized.Load() {
 		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if location != "" {
-			s.mu.Lock()
-			if s.activeOpLocations != nil {
-				s.activeOpLocations[location]--
-				if s.activeOpLocations[location] <= 0 {
-					delete(s.activeOpLocations, location)
-				}
-			}
-			s.mu.Unlock()
-		}
+		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
-	logger := s.logger.Load()
+	// Re-load the logger under the lock — Close() replaces the logger
+	// pointer with nil, and the short-circuit snapshot above may be
+	// stale at this point.
+	logger = s.logger.Load()
 	if logger == nil {
 		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if location != "" {
-			s.mu.Lock()
-			if s.activeOpLocations != nil {
-				s.activeOpLocations[location]--
-				if s.activeOpLocations[location] <= 0 {
-					delete(s.activeOpLocations, location)
-				}
-			}
-			s.mu.Unlock()
-		}
+		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
-	if logger.GetLevel() > level {
+	event := eventForLevel(logger, level)
+	if event == nil {
 		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
-		// Also decrement location counter if tracking is enabled
-		if location != "" {
-			s.mu.Lock()
-			if s.activeOpLocations != nil {
-				s.activeOpLocations[location]--
-				if s.activeOpLocations[location] <= 0 {
-					delete(s.activeOpLocations, location)
-				}
-			}
-			s.mu.Unlock()
-		}
-		return newLogEvent(nil) // Return early if level is not enabled
-	}
-
-	var event *zerolog.Event
-	switch level {
-	case zerolog.DebugLevel:
-		event = logger.Debug()
-	case zerolog.InfoLevel:
-		event = logger.Info()
-	case zerolog.WarnLevel:
-		event = logger.Warn()
-	case zerolog.ErrorLevel:
-		event = logger.Error()
-	case zerolog.FatalLevel:
-		event = logger.Fatal()
-	case zerolog.PanicLevel:
-		event = logger.Panic()
-	case zerolog.TraceLevel:
-		event = logger.Trace()
-	default:
-		s.mu.RUnlock()
-		s.activeOps.Add(-1)
-		s.wg.Done()
+		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
 	s.mu.RUnlock()
 
-	// Wrap the event to decrement counter when done
+	// Wrap the event so its terminal Msg/Msgf/Send call decrements the
+	// counters this function incremented above.
 	return newTrackedLogEvent(event, s, location)
+}
+
+// eventForLevel returns the zerolog.Event for the given level from the
+// given logger. Returns nil for zerolog.NoLevel or any unrecognized
+// level (which the caller should treat as an untracked no-op).
+//
+// Extracted so the 7-case level dispatch isn't duplicated between
+// logEventBuilder and newTrackedContextLogEvent — see
+// docs/reviews/internal-logging.md finding 4.4.
+func eventForLevel(l *zerolog.Logger, level zerolog.Level) *zerolog.Event {
+	switch level {
+	case zerolog.DebugLevel:
+		return l.Debug()
+	case zerolog.InfoLevel:
+		return l.Info()
+	case zerolog.WarnLevel:
+		return l.Warn()
+	case zerolog.ErrorLevel:
+		return l.Error()
+	case zerolog.FatalLevel:
+		return l.Fatal()
+	case zerolog.PanicLevel:
+		return l.Panic()
+	case zerolog.TraceLevel:
+		return l.Trace()
+	default:
+		return nil
+	}
+}
+
+// releaseCounters undoes the active-operations counter + WaitGroup
+// increment that logEventBuilder makes before entering any of its
+// early-return paths. Extracted as a helper to eliminate three copies
+// of the same 3-6 line unwind block that the previous code carried in
+// logEventBuilder's early-return paths.
+func releaseCounters(s *Service, location string) {
+	s.activeOps.Add(-1)
+	s.wg.Done()
+	untrackLocation(s, location)
 }

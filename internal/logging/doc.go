@@ -1,17 +1,17 @@
 // Package logging provides a thin, concurrency-safe wrapper over rs/zerolog
 // with a structured-first API, safe lifecycle management, and file rotation.
 //
-// Key features
+// # Key features
+//
 //   - Structured logging only: prefer typed fields over printf-style helpers
 //   - Context loggers via With() for per-request scoping
 //   - Graceful shutdown that waits for in-flight logs (bounded timeout)
 //   - File rotation via lumberjack and configurable console formatting
-//   - Error history enrichment: for any Err/AnErr, the logger includes
-//     the full error chain (outermost -> root), the root cause string, a
-//     joined human-readable history, the operations chain (when using
-//     Station-Manager DetailedError), and the root operation if available.
+//   - Error chain enrichment: Err/AnErr calls automatically emit the full
+//     error chain, the root cause, operation identifiers, and a
+//     human-readable history. See "Error chain enrichment" below.
 //
-// Typical usage
+// # Typical usage
 //
 //	svc := &logging.Service{ConfigService: cfg}
 //	if err := svc.Initialize(); err != nil { panic(err) }
@@ -20,4 +20,50 @@
 //	svc.InfoWith().Str("user_id", id).Msg("processed")
 //	req := svc.With().Str("request_id", rid).Logger()
 //	req.ErrorWith().Err(err).Msg("failed")
+//
+// # Error chain enrichment
+//
+// When you attach an error via Err(err) or AnErr(key, err), the logger
+// emits additional structured fields describing the full error chain in
+// addition to zerolog's standard "error" field:
+//
+//	error_chain    — array of frame messages from outermost to root
+//	error_root     — the root cause message (last element of the chain)
+//	error_history  — the joined chain as a single string with " -> " between
+//	                 frames; human-readable for console output
+//	error_ops      — array of operation identifiers per chain frame; empty
+//	                 string for frames that are not DetailedError
+//	                 (stdlib errors or fmt.Errorf wrappers)
+//	error_root_op  — the root frame's operation identifier if it is a
+//	                 DetailedError, otherwise absent
+//
+// For AnErr(key, err) the field names are prefixed with the key — for
+// example, AnErr("db_err", err) emits db_err_chain, db_err_root,
+// db_err_history, db_err_ops, and db_err_root_op.
+//
+// Example log output (JSON, abbreviated):
+//
+//	{
+//	  "level": "error",
+//	  "msg":   "operation failed",
+//	  "error": "startup failed",
+//	  "error_chain": [
+//	    "startup failed",
+//	    "failed to connect to database",
+//	    "dial tcp 127.0.0.1:5432: connect: connection refused"
+//	  ],
+//	  "error_ops":     ["server.Start", "db.Open", "db.Connect"],
+//	  "error_root":    "dial tcp 127.0.0.1:5432: connect: connection refused",
+//	  "error_root_op": "db.Connect",
+//	  "error_history": "startup failed -> failed to connect to database -> dial tcp 127.0.0.1:5432: connect: connection refused"
+//	}
+//
+// Operation identifiers (error_ops, error_root_op) are populated only
+// when errors are created via
+// github.com/ColonelBlimp/station-manager/internal/errors (the
+// DetailedError type). Standard-library wrapped errors (fmt.Errorf with
+// %w, errors.Unwrap chains) are traversed correctly for their message
+// strings but contribute empty strings to error_ops because they carry
+// no operation context. See docs/reviews/internal-errors.md and
+// docs/reviews/internal-logging.md for the full pattern rationale.
 package logging
