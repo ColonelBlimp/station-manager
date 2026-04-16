@@ -10,11 +10,11 @@ import (
 	"unicode"
 )
 
-// Marshal parses ADIF data provided as bytes and returns a populated Adif struct.
+// Parse parses ADIF data provided as bytes and returns a populated Adif struct.
 // It is intentionally tolerant: unknown fields are ignored, tags are case-insensitive,
 // and only string fields are supported.
-func Marshal(data []byte) (Adif, error) {
-	const op errors.Op = "adif.Marshal"
+func Parse(data []byte) (Adif, error) {
+	const op errors.Op = "adif.Parse"
 	var res Adif
 	if len(data) == 0 {
 		return res, errors.New(op).WithMsg("input is empty")
@@ -158,9 +158,6 @@ func buildTagSetter(rec *Record) map[string]func(string) {
 		for i := 0; i < rv.NumField(); i++ {
 			f := rv.Field(i)
 			ft := rv.Type().Field(i)
-			if ft.Name == "validate" {
-				continue
-			}
 			if f.Kind() == reflect.Struct {
 				walk(f)
 				continue

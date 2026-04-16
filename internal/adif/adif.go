@@ -62,7 +62,6 @@ func QsoToRecord(q types.Qso) Record {
 	// Map QSL
 	r.QslSection = QslSection{
 		QslMsg:                q.Qsl.QslMsg,
-		QslMsgIntl:            q.Qsl.QslMsgRcvd, // confirm your desired mapping here
 		QslRDate:              q.Qsl.QslRDate,
 		QslSDate:              q.Qsl.QslSDate,
 		QslRcvd:               q.Qsl.QslRcvd,
