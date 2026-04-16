@@ -12,7 +12,7 @@ const (
 	NewLineStr    = "\n"
 
 	// ProgramID is the ADIF PROGRAMID header value identifying Station Manager.
-	ProgramID = "7QSM"
+	ProgramID = "SM"
 	// ProgramVersion is the ADIF PROGRAMVERSION header value. Update when the
 	// export format changes materially.
 	ProgramVersion = "0.0.1"
