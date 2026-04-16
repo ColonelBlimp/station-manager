@@ -27,10 +27,8 @@ tasks:
             # Skip Wails apps — they are built via 'task wails'
             if [ -f "${mod}/wails.json" ]; then
               echo "SKIP (Wails app) ${mod}"
-              continue
-            fi
             # Build binary for main packages, otherwise just compile-check
-            if grep -rq '^package main' "${mod}"/*.go 2>/dev/null; then
+            elif grep -rq '^package main' "${mod}"/*.go 2>/dev/null; then
               BINNAME=$(basename "$mod")
               echo "Building ${mod} -> build/bin/${BINNAME}"
               (cd "$mod" && go build -o "../../build/bin/${BINNAME}" .)
@@ -52,10 +50,10 @@ tasks:
             # Skip Wails apps — they require a frontend build
             if [ -f "${mod}/wails.json" ]; then
               echo "SKIP (Wails app) ${mod}"
-              continue
+            else
+              echo "Testing ${mod}..."
+              (cd "$mod" && go test -race ./... -short)
             fi
-            echo "Testing ${mod}..."
-            (cd "$mod" && go test -race ./... -short)
           fi
         done
 

@@ -10,7 +10,7 @@ func TypeToModelBoolConverter(src any) (any, error) {
 	const op errors.Op = "converters.common.TypeToModelBoolConverter"
 	srcVal, ok := src.(bool)
 	if !ok {
-		return null.Bool{}, errors.New(op).Errorf("Given parameter not a bool, got %T", src)
+		return null.Bool{}, errors.New(op).Msgf("Given parameter not a bool, got %T", src)
 	}
 
 	return null.BoolFrom(srcVal), nil
@@ -32,5 +32,5 @@ func ModelToTypeBoolConverter(src any) (any, error) {
 		return s, nil
 	}
 
-	return false, errors.New(op).Errorf("Given parameter not a string or null.String, got %T", src)
+	return false, errors.New(op).Msgf("Given parameter not a string or null.String, got %T", src)
 }

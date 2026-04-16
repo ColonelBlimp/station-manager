@@ -31,7 +31,7 @@ func TestBuildErrorChain_WithDetailedAndStd(t *testing.T) {
 	assert.Equal(t, "dial tcp 127.0.0.1:5432: connect: connection refused", root)
 
 	// Build std errors chain
-	wrapped := smerrors.New("wrap.Std").Errorf("wrap: %w", outer)
+	wrapped := smerrors.New("wrap.Std").Msgf("wrap: %w", outer)
 	chain2, root2 := func(e error) ([]string, string) {
 		c, _, r, _ := buildErrorChain(e)
 		return c, r

@@ -181,7 +181,7 @@ func TestMetadataCache_And_AdditionalData_Concurrent(t *testing.T) {
 		close(errCh)
 		if len(errCh) > 0 {
 			for msg := range errCh {
-				t.Errorf("concurrent metadata/adapt error: %s", msg)
+				t.Msgf("concurrent metadata/adapt error: %s", msg)
 			}
 			t.FailNow()
 		}

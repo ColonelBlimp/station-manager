@@ -142,7 +142,7 @@ package database
 //		return emptyRetVal, errors.New(op).Err(err)
 //	}
 //	if model == nil || err != nil {
-//		return emptyRetVal, errors.New(op).Err(err).Errorf("prefix not found: %s", prefix)
+//		return emptyRetVal, errors.New(op).Err(err).Msgf("prefix not found: %s", prefix)
 //	}
 //
 //	var apiKey types.ApiKey

@@ -35,7 +35,7 @@ func (s *Service) doMigrations() error {
 	m, err := migrate.NewWithInstance("iofs", srcDriver, s.DatabaseConfig.Driver, dbDriver)
 	if err != nil {
 		_ = srcDriver.Close()
-		return errors.New(op).Errorf("migrate.NewWithInstance: %w", err)
+		return errors.New(op).Msgf("migrate.NewWithInstance: %w", err)
 	}
 	defer func() { _ = srcDriver.Close() }()
 
@@ -48,7 +48,7 @@ func (s *Service) doMigrations() error {
 		if s.Logger != nil {
 			s.Logger.ErrorWith().Err(upErr).Msg("m.Up failed")
 		}
-		return errors.New(op).Errorf("m.Up: %w", upErr)
+		return errors.New(op).Msgf("m.Up: %w", upErr)
 	}
 	if s.Logger != nil {
 		s.Logger.InfoWith().Msg("m.Up completed or no change")
@@ -81,7 +81,7 @@ func (s *Service) doMigrations() error {
 			return errors.New(op).Err(chkErr).Msg("schema verification failed (post-fallback)")
 		}
 		if len(missing) > 0 {
-			return errors.New(op).Errorf("schema still missing after fallback: %v", missing)
+			return errors.New(op).Msgf("schema still missing after fallback: %v", missing)
 		}
 		if s.Logger != nil {
 			s.Logger.InfoWith().Msg("schema created via fallback")
@@ -89,5 +89,5 @@ func (s *Service) doMigrations() error {
 		return nil
 	}
 
-	return errors.New(op).Errorf("schema missing after migrations and no fallback for driver %s: %v", s.DatabaseConfig.Driver, missing)
+	return errors.New(op).Msgf("schema missing after migrations and no fallback for driver %s: %v", s.DatabaseConfig.Driver, missing)
 }

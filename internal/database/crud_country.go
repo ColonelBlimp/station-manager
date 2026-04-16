@@ -51,7 +51,7 @@ package database
 //	case PostgresDriver:
 //		return emptyRetVal, errors.New(op).Msg("Not supported. Desktop application only.")
 //	default:
-//		return emptyRetVal, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+//		return emptyRetVal, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 //	}
 //}
 //
@@ -118,7 +118,7 @@ package database
 //	case PostgresDriver:
 //		return emptyRetVal, errors.New(op).Msg("Not supported. Desktop application only.")
 //	default:
-//		return emptyRetVal, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+//		return emptyRetVal, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 //	}
 //}
 //
@@ -190,7 +190,7 @@ package database
 //	case PostgresDriver:
 //		return false, errors.New(op).Msg("Not supported. Desktop application only.")
 //	default:
-//		return false, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+//		return false, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 //	}
 //}
 //
@@ -242,7 +242,7 @@ package database
 //	case PostgresDriver:
 //		return false, errors.New(op).Msg("Not supported. Desktop application only.")
 //	default:
-//		return false, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+//		return false, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 //	}
 //}
 //

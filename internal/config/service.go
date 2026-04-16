@@ -141,7 +141,7 @@ func (s *Service) RigConfigByID(rigID int64) (types.RigConfig, error) {
 		return types.RigConfig{}, errors.New(op).Msg(errMsgNotInitialized)
 	}
 	if rigID <= 0 {
-		return types.RigConfig{}, errors.New(op).Errorf("rig ID must be positive, got: %d", rigID)
+		return types.RigConfig{}, errors.New(op).Msgf("rig ID must be positive, got: %d", rigID)
 	}
 
 	for _, rig := range s.appConfig().RigConfigs {
@@ -150,7 +150,7 @@ func (s *Service) RigConfigByID(rigID int64) (types.RigConfig, error) {
 		}
 	}
 
-	return types.RigConfig{}, errors.New(op).Errorf("rig not found for ID: %d", rigID)
+	return types.RigConfig{}, errors.New(op).Msgf("rig not found for ID: %d", rigID)
 }
 
 // CatStateValues retrieves the CAT state values for the default rig configuration in the service's application configuration.
@@ -174,7 +174,7 @@ func (s *Service) CatStateValues() (types.StateValues, error) {
 		}
 	}
 	if !found {
-		return nil, errors.New(op).Errorf("rig not found for ID: %d", cfg.RequiredConfigs.DefaultRigID)
+		return nil, errors.New(op).Msgf("rig not found for ID: %d", cfg.RequiredConfigs.DefaultRigID)
 	}
 
 	stateValues := make(types.StateValues)

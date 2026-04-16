@@ -126,28 +126,28 @@ package qrz
 //		t.Fatalf("request not captured")
 //	}
 //	if captured.Method != http.MethodPost {
-//		t.Errorf("expected POST, got %s", captured.Method)
+//		t.Msgf("expected POST, got %s", captured.Method)
 //	}
 //	if captured.URL.String() != cfg.URL {
-//		t.Errorf("expected URL %s got %s", cfg.URL, captured.URL.String())
+//		t.Msgf("expected URL %s got %s", cfg.URL, captured.URL.String())
 //	}
 //	if ua := captured.Header.Get("User-Agent"); ua != cfg.UserAgent {
-//		t.Errorf("expected UA %s got %s", cfg.UserAgent, ua)
+//		t.Msgf("expected UA %s got %s", cfg.UserAgent, ua)
 //	}
 //	if ct := captured.Header.Get("Content-Type"); !strings.Contains(ct, "application/x-www-form-urlencoded") {
-//		t.Errorf("expected form content type, got %s", ct)
+//		t.Msgf("expected form content type, got %s", ct)
 //	}
 //
 //	// Check form body
 //	bodyBytes, _ := io.ReadAll(captured.Body)
 //	vals, _ := url.ParseQuery(string(bodyBytes))
 //	if vals.Get("KEY") != cfg.APIKey {
-//		t.Errorf("expected KEY=%s got %s", cfg.APIKey, vals.Get("KEY"))
+//		t.Msgf("expected KEY=%s got %s", cfg.APIKey, vals.Get("KEY"))
 //	}
 //	if vals.Get("ACTION") != "INSERT" {
-//		t.Errorf("expected ACTION=INSERT got %s", vals.Get("ACTION"))
+//		t.Msgf("expected ACTION=INSERT got %s", vals.Get("ACTION"))
 //	}
 //	if vals.Get("ADIF") == "" {
-//		t.Errorf("expected ADIF present")
+//		t.Msgf("expected ADIF present")
 //	}
 //}

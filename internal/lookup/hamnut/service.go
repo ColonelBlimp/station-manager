@@ -160,12 +160,12 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return emptyRetVal, errors.New(op).Errorf("Service returned unexpected status %d: %s", resp.StatusCode, string(b))
+		return emptyRetVal, errors.New(op).Msgf("Service returned unexpected status %d: %s", resp.StatusCode, string(b))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return emptyRetVal, errors.New(op).Errorf("Failed to read response body: %w", err)
+		return emptyRetVal, errors.New(op).Msgf("Failed to read response body: %w", err)
 	}
 
 	country, err := s.unmarshalResponse(body)

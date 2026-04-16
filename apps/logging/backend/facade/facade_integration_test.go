@@ -196,7 +196,7 @@ func TestService_SetContainer_AlreadyStarted(t *testing.T) {
 	err := s.SetContainer(nil)
 	// Should return nil when already started (no-op)
 	if err != nil {
-		t.Errorf("SetContainer() should return nil when already started, got: %v", err)
+		t.Msgf("SetContainer() should return nil when already started, got: %v", err)
 	}
 }
 
@@ -305,7 +305,7 @@ func TestNewQso_InvalidCallsign(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := s.NewQso(tt.callsign)
 			if err == nil {
-				t.Errorf("NewQso(%q) should fail with invalid callsign", tt.callsign)
+				t.Msgf("NewQso(%q) should fail with invalid callsign", tt.callsign)
 			}
 		})
 	}
@@ -362,7 +362,7 @@ func TestUpdateQso_InvalidID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := s.UpdateQso(types.Qso{ID: tt.id})
 			if err == nil {
-				t.Errorf("UpdateQso() should fail with invalid ID: %d", tt.id)
+				t.Msgf("UpdateQso() should fail with invalid ID: %d", tt.id)
 			}
 		})
 	}
@@ -443,7 +443,7 @@ func TestOpenInBrowser_InvalidURL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := s.OpenInBrowser(tt.url)
 			if err == nil {
-				t.Errorf("OpenInBrowser(%q) should fail with invalid URL", tt.url)
+				t.Msgf("OpenInBrowser(%q) should fail with invalid URL", tt.url)
 			}
 		})
 	}
@@ -465,7 +465,7 @@ func TestOpenInBrowser_NonHttpsScheme(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := s.OpenInBrowser(tt.url)
 			if err == nil {
-				t.Errorf("OpenInBrowser(%q) should fail with non-https scheme", tt.url)
+				t.Msgf("OpenInBrowser(%q) should fail with non-https scheme", tt.url)
 			}
 		})
 	}
@@ -489,7 +489,7 @@ func TestOpenInBrowser_NotAllowedDomain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := s.OpenInBrowser(tt.url)
 			if err == nil {
-				t.Errorf("OpenInBrowser(%q) should fail with non-allowlisted domain", tt.url)
+				t.Msgf("OpenInBrowser(%q) should fail with non-allowlisted domain", tt.url)
 			}
 		})
 	}
@@ -544,7 +544,7 @@ func TestForwardSessionQsosByEmail_InvalidEmail(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := s.ForwardSessionQsosByEmail(qsos, tt.email)
 			if err == nil {
-				t.Errorf("ForwardSessionQsosByEmail() should fail with invalid email: %q", tt.email)
+				t.Msgf("ForwardSessionQsosByEmail() should fail with invalid email: %q", tt.email)
 			}
 		})
 	}
@@ -583,7 +583,7 @@ func TestGetQsoById_InvalidID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := s.GetQsoById(tt.id)
 			if err == nil {
-				t.Errorf("GetQsoById() should fail with invalid ID: %d", tt.id)
+				t.Msgf("GetQsoById() should fail with invalid ID: %d", tt.id)
 			}
 		})
 	}
@@ -644,7 +644,7 @@ func TestTotalQsosByLogbookId_InvalidID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := s.TotalQsosByLogbookId(tt.id)
 			if err == nil {
-				t.Errorf("TotalQsosByLogbookId() should fail with invalid ID: %d", tt.id)
+				t.Msgf("TotalQsosByLogbookId() should fail with invalid ID: %d", tt.id)
 			}
 		})
 	}
@@ -687,7 +687,7 @@ func TestInitializeForwarding(t *testing.T) {
 
 	err := s.initializeForwarding()
 	if err != nil {
-		t.Errorf("initializeForwarding() failed: %v", err)
+		t.Msgf("initializeForwarding() failed: %v", err)
 	}
 
 	if s.forwarding == nil {
@@ -695,7 +695,7 @@ func TestInitializeForwarding(t *testing.T) {
 	}
 
 	if s.forwarding.maxWorkers != 5 {
-		t.Errorf("maxWorkers = %d, want 5", s.forwarding.maxWorkers)
+		t.Msgf("maxWorkers = %d, want 5", s.forwarding.maxWorkers)
 	}
 }
 
@@ -779,7 +779,7 @@ func TestForwardNetworkOnly_WithVariadicForwarder(t *testing.T) {
 
 	err := s.forwardNetworkOnly(mock, qsoUpload)
 	if err != nil {
-		t.Errorf("forwardNetworkOnly() unexpected error: %v", err)
+		t.Msgf("forwardNetworkOnly() unexpected error: %v", err)
 	}
 
 	if !mock.forwardNetworkOnlyCalled {
@@ -799,7 +799,7 @@ func TestForwardNetworkOnly_FallbackToLegacyForward(t *testing.T) {
 
 	err := s.forwardNetworkOnly(mock, qsoUpload)
 	if err != nil {
-		t.Errorf("forwardNetworkOnly() unexpected error: %v", err)
+		t.Msgf("forwardNetworkOnly() unexpected error: %v", err)
 	}
 
 	if !mock.forwardCalled {
@@ -824,7 +824,7 @@ func TestForwardNetworkOnly_NoForwardInterface(t *testing.T) {
 
 	// Check error message contains expected text
 	if !containsString(err.Error(), "does not implement Forward interface") {
-		t.Errorf("expected error about Forward interface, got: %v", err)
+		t.Msgf("expected error about Forward interface, got: %v", err)
 	}
 }
 
@@ -978,7 +978,7 @@ func TestInitLoggingStationSection_Success(t *testing.T) {
 
 	// Verify the service has the expected logbook
 	if s.CurrentLogbook.Callsign != "W1AW" {
-		t.Errorf("CurrentLogbook.Callsign = %q, want %q", s.CurrentLogbook.Callsign, "W1AW")
+		t.Msgf("CurrentLogbook.Callsign = %q, want %q", s.CurrentLogbook.Callsign, "W1AW")
 	}
 }
 
@@ -988,7 +988,7 @@ func TestInitQsoDetailsSection_ReturnsCorrectDefaults(t *testing.T) {
 	details := s.initQsoDetailsSection()
 
 	if details.AntPath != "S" {
-		t.Errorf("AntPath = %q, want %q", details.AntPath, "S")
+		t.Msgf("AntPath = %q, want %q", details.AntPath, "S")
 	}
 }
 
@@ -1036,15 +1036,15 @@ func TestInitializeForwarding_SetsCorrectValues(t *testing.T) {
 	}
 
 	if s.forwarding.maxWorkers != 3 {
-		t.Errorf("maxWorkers = %d, want 3", s.forwarding.maxWorkers)
+		t.Msgf("maxWorkers = %d, want 3", s.forwarding.maxWorkers)
 	}
 
 	if cap(s.forwarding.forwardingQueue) != 50 {
-		t.Errorf("forwardingQueue capacity = %d, want 50", cap(s.forwarding.forwardingQueue))
+		t.Msgf("forwardingQueue capacity = %d, want 50", cap(s.forwarding.forwardingQueue))
 	}
 
 	if cap(s.forwarding.dbWriteQueue) != 25 {
-		t.Errorf("dbWriteQueue capacity = %d, want 25", cap(s.forwarding.dbWriteQueue))
+		t.Msgf("dbWriteQueue capacity = %d, want 25", cap(s.forwarding.dbWriteQueue))
 	}
 }
 
@@ -1078,7 +1078,7 @@ func TestRegisterDateValidator_QsoDateOff(t *testing.T) {
 			ts := TestStruct{DateOff: tt.date}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("qso_date_off validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Msgf("qso_date_off validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -1111,7 +1111,7 @@ func TestRegisterTimeValidator_TimeOff(t *testing.T) {
 			ts := TestStruct{TimeOff: tt.time}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("time_off validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Msgf("time_off validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -1144,7 +1144,7 @@ func TestRegisterRSTValidator_RstRcvd(t *testing.T) {
 			ts := TestStruct{RSTRcvd: tt.rst}
 			err := v.Struct(ts)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("rst_rcvd validation error = %v, wantErr %v", err, tt.wantErr)
+				t.Msgf("rst_rcvd validation error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -1182,7 +1182,7 @@ func TestNewQso_CallsignNormalization(t *testing.T) {
 			_, err := s.NewQso(tt.callsign)
 			// Error should NOT be about invalid callsign
 			if err != nil && err.Error() == errMsgInvalidCallsign {
-				t.Errorf("NewQso(%q) rejected valid callsign", tt.callsign)
+				t.Msgf("NewQso(%q) rejected valid callsign", tt.callsign)
 			}
 		})
 	}
@@ -1349,7 +1349,7 @@ func TestForwardingWorkerLoop_ChannelClosed(t *testing.T) {
 	close(shutdown)
 	err = f.stop(2 * time.Second)
 	if err != nil {
-		t.Errorf("stop() failed: %v", err)
+		t.Msgf("stop() failed: %v", err)
 	}
 }
 

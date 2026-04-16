@@ -18,7 +18,7 @@ func TestIsValidFrequencyMHz(t *testing.T) {
 	}
 	for _, v := range valid {
 		if !IsValidFrequencyMHz(v) {
-			t.Errorf("expected valid frequency: %q", v)
+			t.Msgf("expected valid frequency: %q", v)
 		}
 	}
 
@@ -45,7 +45,7 @@ func TestIsValidFrequencyMHz(t *testing.T) {
 			continue
 		}
 		if IsValidFrequencyMHz(v) {
-			t.Errorf("expected invalid frequency: %q", v)
+			t.Msgf("expected invalid frequency: %q", v)
 		}
 	}
 }
@@ -70,7 +70,7 @@ func TestIsValidFrequencyMHz_EdgeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := IsValidFrequencyMHz(tt.input)
 			if got != tt.want {
-				t.Errorf("IsValidFrequencyMHz(%q) = %v, want %v", tt.input, got, tt.want)
+				t.Msgf("IsValidFrequencyMHz(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}

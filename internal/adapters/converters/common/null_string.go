@@ -10,7 +10,7 @@ func TypeToModelStringConverter(src any) (any, error) {
 	const op errors.Op = "converters.common.TypeToModelStringConverter"
 	srcVal, ok := src.(string)
 	if !ok {
-		return null.String{}, errors.New(op).Errorf("Given parameter not a string, got %T", src)
+		return null.String{}, errors.New(op).Msgf("Given parameter not a string, got %T", src)
 	}
 	// Treat empty string as null
 	if srcVal == "" {
@@ -36,5 +36,5 @@ func ModelToTypeStringConverter(src any) (any, error) {
 		return s, nil
 	}
 
-	return "", errors.New(op).Errorf("Given parameter not a string or null.String, got %T", src)
+	return "", errors.New(op).Msgf("Given parameter not a string or null.String, got %T", src)
 }

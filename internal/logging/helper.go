@@ -43,7 +43,7 @@ func buildErrorChain(err error) (chain []string, ops []string, root string, root
 			op := string(dErr.Op())
 			ops = append(ops, op)
 			// prefer unwrapping via our error type first
-			err = dErr.Cause()
+			err = dErr.Unwrap()
 			continue
 		}
 

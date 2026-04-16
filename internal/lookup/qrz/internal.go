@@ -31,7 +31,7 @@ func (s *Service) requestAndSetSessionKey() error {
 	// Build request to set headers (User-Agent is often required)
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
-		err = errors.New(op).Errorf("Failed to create HTTP GET request: %w", err)
+		err = errors.New(op).Msgf("Failed to create HTTP GET request: %w", err)
 		return err
 	}
 	req.Header.Set("User-Agent", s.Config.UserAgent)
@@ -39,7 +39,7 @@ func (s *Service) requestAndSetSessionKey() error {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		err = errors.New(op).Errorf("Failed to perform HTTP GET request: %w", err)
+		err = errors.New(op).Msgf("Failed to perform HTTP GET request: %w", err)
 		return err
 	}
 	defer func(Body io.ReadCloser) {
@@ -51,25 +51,25 @@ func (s *Service) requestAndSetSessionKey() error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Try to read body for context
 		b, _ := io.ReadAll(resp.Body)
-		err = errors.New(op).Errorf("QRZ.com returned unexpected status %d: %s", resp.StatusCode, string(b))
+		err = errors.New(op).Msgf("QRZ.com returned unexpected status %d: %s", resp.StatusCode, string(b))
 		return err
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		err = errors.New(op).Errorf("Failed to read response body: %w", err)
+		err = errors.New(op).Msgf("Failed to read response body: %w", err)
 		return err
 	}
 
 	var db Database
 	if err = xml.Unmarshal(body, &db); err != nil {
-		err = errors.New(op).Errorf("Failed to unmarshal XML: %w", err)
+		err = errors.New(op).Msgf("Failed to unmarshal XML: %w", err)
 		return err
 	}
 
 	// Check for API-level error
 	if db.Session.Error != "" {
-		err = errors.New(op).Errorf("QRZ.com returned error: %s", db.Session.Error)
+		err = errors.New(op).Msgf("QRZ.com returned error: %s", db.Session.Error)
 		return err
 	}
 	if db.Session.Key == "" {

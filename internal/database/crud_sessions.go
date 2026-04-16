@@ -19,7 +19,7 @@ func (s *Service) GenerateNewSessionID() (int64, error) {
 	case PostgresDriver:
 		return 0, errors.New(op).Msg("Not supported. Desktop application only.")
 	default:
-		return 0, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+		return 0, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 	}
 }
 
@@ -64,7 +64,7 @@ func (s *Service) SoftDeleteSessionID(id int64) error {
 	case PostgresDriver:
 		return errors.New(op).Msg("Not supported. Desktop application only.")
 	default:
-		return errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+		return errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 	}
 }
 

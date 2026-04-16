@@ -73,7 +73,7 @@ func (s *Service) getDsn() (string, error) {
 		return fmt.Sprintf("file:%s?%s", path, q.Encode()), nil
 
 	default:
-		return emptyString, errors.New(op).Errorf("Unsupported database driver: %s (expected %q or %q)", s.DatabaseConfig.Driver, PostgresDriver, SqliteDriver)
+		return emptyString, errors.New(op).Msgf("Unsupported database driver: %s (expected %q or %q)", s.DatabaseConfig.Driver, PostgresDriver, SqliteDriver)
 	}
 }
 
@@ -113,14 +113,14 @@ func (s *Service) checkDatabaseDir(dbFilePath string) error {
 
 	exists, err := utils.PathExists(dbDir)
 	if err != nil {
-		return errors.New(op).Errorf("utils.PathExists: %w", err)
+		return errors.New(op).Msgf("utils.PathExists: %w", err)
 	}
 	if exists {
 		return nil
 	}
 
 	if err = os.MkdirAll(dbDir, 0o700); err != nil {
-		return errors.New(op).Errorf("os.MkdirAll: %w", err)
+		return errors.New(op).Msgf("os.MkdirAll: %w", err)
 	}
 
 	return nil
@@ -144,7 +144,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 		// Client-side schema: no api_keys table (full key stored on logbook)
 		required = []string{"logbook", "qso"}
 	default:
-		return nil, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+		return nil, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 	}
 
 	missing := make([]string, 0, len(required))
@@ -153,14 +153,14 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	case PostgresDriver:
 		rows, err := s.handle.Query(`SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()`)
 		if err != nil {
-			return nil, errors.New(op).Errorf("information_schema.tables query: %w", err)
+			return nil, errors.New(op).Msgf("information_schema.tables query: %w", err)
 		}
 		defer func() { _ = rows.Close() }()
 		existing := map[string]struct{}{}
 		for rows.Next() {
 			var name string
 			if err := rows.Scan(&name); err != nil {
-				return nil, errors.New(op).Errorf("tables scan: %w", err)
+				return nil, errors.New(op).Msgf("tables scan: %w", err)
 			}
 			existing[name] = struct{}{}
 		}
@@ -172,14 +172,14 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	case SqliteDriver:
 		rows, err := s.handle.Query(`SELECT name FROM sqlite_master WHERE type='table'`)
 		if err != nil {
-			return nil, errors.New(op).Errorf("sqlite_master query: %w", err)
+			return nil, errors.New(op).Msgf("sqlite_master query: %w", err)
 		}
 		defer func() { _ = rows.Close() }()
 		existing := map[string]struct{}{}
 		for rows.Next() {
 			var name string
 			if err := rows.Scan(&name); err != nil {
-				return nil, errors.New(op).Errorf("sqlite_master scan: %w", err)
+				return nil, errors.New(op).Msgf("sqlite_master scan: %w", err)
 			}
 			existing[name] = struct{}{}
 		}

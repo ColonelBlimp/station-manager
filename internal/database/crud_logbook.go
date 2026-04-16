@@ -35,7 +35,7 @@ package database
 //	case PostgresDriver:
 //		return s.postgresInsertLogbookContext(ctx, logbook)
 //	default:
-//		return logbook, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+//		return logbook, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 //	}
 //}
 //
@@ -53,7 +53,7 @@ package database
 //	case PostgresDriver:
 //		return s.postgresInsertLogbookWithTxContext(ctx, tx, logbook)
 //	default:
-//		return logbook, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+//		return logbook, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 //	}
 //}
 //
@@ -272,7 +272,7 @@ package database
 //	case PostgresDriver:
 //		return s.postgresFetchLogbookByIDContext(ctx, id)
 //	default:
-//		return emptyRetVal, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+//		return emptyRetVal, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 //	}
 //}
 //
@@ -306,7 +306,7 @@ package database
 //	}
 //
 //	if model == nil || err != nil {
-//		return emptyRetVal, errors.New(op).Err(err).Errorf("logbook not found: %d", id)
+//		return emptyRetVal, errors.New(op).Err(err).Msgf("logbook not found: %d", id)
 //	}
 //
 //	s.initAdapters()
@@ -346,7 +346,7 @@ package database
 //	}
 //
 //	if model == nil || err != nil {
-//		return emptyRetVal, errors.New(op).Err(err).Errorf("logbook not found: %d", id)
+//		return emptyRetVal, errors.New(op).Err(err).Msgf("logbook not found: %d", id)
 //	}
 //
 //	s.initAdapters()

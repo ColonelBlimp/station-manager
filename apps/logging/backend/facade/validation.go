@@ -17,22 +17,22 @@ func (s *Service) initializeValidation() error {
 	s.validate = validator.New(validator.WithRequiredStructEnabled())
 
 	if err := registerBandValidator(s.validate); err != nil {
-		return errors.New(op).Errorf("registerBandValidator: %w", err)
+		return errors.New(op).Msgf("registerBandValidator: %w", err)
 	}
 	if err := registerModeValidator(s.validate); err != nil {
-		return errors.New(op).Errorf("registerModeValidator: %w", err)
+		return errors.New(op).Msgf("registerModeValidator: %w", err)
 	}
 	if err := registerDateValidator(s.validate); err != nil {
-		return errors.New(op).Errorf("registerDateValidator: %w", err)
+		return errors.New(op).Msgf("registerDateValidator: %w", err)
 	}
 	if err := registerTimeValidator(s.validate); err != nil {
-		return errors.New(op).Errorf("registerTimeValidator: %w", err)
+		return errors.New(op).Msgf("registerTimeValidator: %w", err)
 	}
 	if err := registerRSTValidator(s.validate); err != nil {
-		return errors.New(op).Errorf("registerRSTValidator: %w", err)
+		return errors.New(op).Msgf("registerRSTValidator: %w", err)
 	}
 	if err := registerFrequencyValidator(s.validate); err != nil {
-		return errors.New(op).Errorf("registerFrequencyValidator: %w", err)
+		return errors.New(op).Msgf("registerFrequencyValidator: %w", err)
 	}
 	return nil
 }

@@ -254,7 +254,7 @@ func (s *Service) BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFu
 		if stderr.Is(err, context.DeadlineExceeded) {
 			return nil, nil, errors.New(op).Err(err).Msg("Transaction context timed out.")
 		}
-		return nil, nil, errors.New(op).Errorf("creating new transaction: %w", err)
+		return nil, nil, errors.New(op).Msgf("creating new transaction: %w", err)
 	}
 
 	return tx, cancel, nil
@@ -286,7 +286,7 @@ func (s *Service) ExecContext(ctx context.Context, query string, args ...interfa
 
 	res, err := h.ExecContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New(op).Errorf("s.handle.ExecContext: %w", err)
+		return nil, errors.New(op).Msgf("s.handle.ExecContext: %w", err)
 	}
 
 	return res, nil
@@ -318,7 +318,7 @@ func (s *Service) QueryContext(ctx context.Context, query string, args ...interf
 
 	res, err := h.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New(op).Errorf("s.handle.QueryContext: %w", err)
+		return nil, errors.New(op).Msgf("s.handle.QueryContext: %w", err)
 	}
 
 	return res, nil

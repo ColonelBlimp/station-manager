@@ -32,7 +32,7 @@ func validateConfig(cfg *types.LoggingConfig) error {
 
 	// Validate log level
 	if _, err := zerolog.ParseLevel(cfg.Level); err != nil {
-		return errors.New(op).Errorf("invalid log level '%s': %w", cfg.Level, err)
+		return errors.New(op).Msgf("invalid log level '%s': %w", cfg.Level, err)
 	}
 
 	// Validate skip frame count is reasonable

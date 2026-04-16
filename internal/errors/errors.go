@@ -21,9 +21,7 @@ type DetailedError struct {
 // The Cause is set to nil.
 func New(op Op) *DetailedError {
 	return &DetailedError{
-		op:    op,
-		cause: nil,
-		msg:   "Internal system error.",
+		op: op,
 	}
 }
 
@@ -41,7 +39,22 @@ func (e *DetailedError) Error() string {
 	if e == nil {
 		return ""
 	}
-	return e.msg
+	var local string
+	switch {
+	case e.op != "" && e.msg != "":
+		local = string(e.op) + ": " + e.msg
+	case e.op != "":
+		local = string(e.op)
+	case e.msg != "":
+		local = e.msg
+	}
+	if e.cause == nil {
+		return local
+	}
+	if local == "" {
+		return e.cause.Error()
+	}
+	return local + ": " + e.cause.Error()
 }
 
 // Op returns the operation identifier associated with this error.
@@ -78,29 +91,6 @@ func (e *DetailedError) Err(err error) *DetailedError {
 	return e
 }
 
-// Errorf formats the error message for a DetailedError instance.
-//
-// Syntactically the same as fmt.Errorf.
-func (e *DetailedError) Errorf(format string, a ...any) *DetailedError {
-	if e == nil {
-		return nil
-	}
-	e.cause = fmt.Errorf(format, a...)
-	e.msg = e.cause.Error()
-	return e
-}
-
-// Cause returns the cause of a DetailedError instance.
-func (e *DetailedError) Cause() error {
-	if e == nil {
-		return nil
-	}
-	if e.cause == nil {
-		return nil
-	}
-	return e.cause
-}
-
 // Unwrap provides compatibility with the errors.Unwrap function.
 func (e *DetailedError) Unwrap() error {
 	return e.cause
@@ -116,27 +106,19 @@ func Root(err error) error {
 	if err == nil {
 		return nil
 	}
-
+	const maxDepth = 100
 	current := err
-	visited := map[error]struct{}{}
-
-	for current != nil {
-		if _, seen := visited[current]; seen {
-			// Cycle detected; return the last error before the cycle.
-			return current
-		}
-		visited[current] = struct{}{}
-
+	for depth := 0; depth < maxDepth; depth++ {
 		next := stderr.Unwrap(current)
 		if next == nil {
 			return current
 		}
 		current = next
 	}
-
-	return err
+	return current
 }
 
+// Used in the front ends
 func PrintChain(err error) {
 	for i := 0; err != nil; i++ {
 		if d, ok := AsDetailedError(err); ok {

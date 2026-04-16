@@ -38,7 +38,7 @@ func makeStdWrapChain(depth int) error {
 	err := smerrors.New(smerrors.Op("std_root")).Msg("root cause message")
 	for i := 1; i < depth; i++ {
 		op := "std_" + strconv.Itoa(i)
-		err = smerrors.New(smerrors.Op(op)).Errorf("wrap %d: %w", i, err)
+		err = smerrors.New(smerrors.Op(op)).Msgf("wrap %d: %w", i, err)
 	}
 	return err
 }

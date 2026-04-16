@@ -31,7 +31,7 @@ func (s *Service) getDsn() (string, error) {
 	const op errors.Op = "sqlite.Service.getDsn"
 
 	if s.DatabaseConfig.Driver != SqliteDriver {
-		return emptyString, errors.New(op).Errorf("Unsupported database driver: %s (expected %q)", s.DatabaseConfig.Driver, SqliteDriver)
+		return emptyString, errors.New(op).Msgf("Unsupported database driver: %s (expected %q)", s.DatabaseConfig.Driver, SqliteDriver)
 	}
 
 	path := s.DatabaseConfig.Path
@@ -123,14 +123,14 @@ func (s *Service) checkDatabaseDir(dbFilePath string) error {
 
 	exists, err := utils.PathExists(dbDir)
 	if err != nil {
-		return errors.New(op).Errorf("utils.PathExists: %w", err)
+		return errors.New(op).Msgf("utils.PathExists: %w", err)
 	}
 	if exists {
 		return nil
 	}
 
 	if err = os.MkdirAll(dbDir, 0o700); err != nil {
-		return errors.New(op).Errorf("os.MkdirAll: %w", err)
+		return errors.New(op).Msgf("os.MkdirAll: %w", err)
 	}
 
 	return nil
@@ -147,7 +147,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	}
 
 	if s.DatabaseConfig.Driver != SqliteDriver {
-		return nil, errors.New(op).Errorf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
+		return nil, errors.New(op).Msgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 	}
 
 	// Client-side schema: no api_keys table (full key stored on logbook)
@@ -155,7 +155,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 
 	rows, err := s.handle.Query(`SELECT name FROM sqlite_master WHERE type='table'`)
 	if err != nil {
-		return nil, errors.New(op).Errorf("sqlite_master query: %w", err)
+		return nil, errors.New(op).Msgf("sqlite_master query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -163,7 +163,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New(op).Errorf("sqlite_master scan: %w", err)
+			return nil, errors.New(op).Msgf("sqlite_master scan: %w", err)
 		}
 		existing[name] = struct{}{}
 	}

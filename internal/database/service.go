@@ -267,7 +267,7 @@ func (s *Service) BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFu
 		if stderr.Is(err, context.DeadlineExceeded) {
 			return nil, nil, errors.New(op).Err(err).Msg("Transaction context timed out.")
 		}
-		return nil, nil, errors.New(op).Errorf("creating new transaction: %w", err)
+		return nil, nil, errors.New(op).Msgf("creating new transaction: %w", err)
 	}
 
 	// If using Postgres, set a local statement_timeout so long-running queries inside the
@@ -296,7 +296,7 @@ func (s *Service) BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFu
 				if stderr.Is(err, context.DeadlineExceeded) {
 					return nil, nil, errors.New(op).Err(err).Msg("Transaction context timed out while setting statement_timeout.")
 				}
-				return nil, nil, errors.New(op).Errorf("setting local statement_timeout: %w", err)
+				return nil, nil, errors.New(op).Msgf("setting local statement_timeout: %w", err)
 			}
 			// Also set a lock_timeout to a fraction of the statement timeout so waits on locks fail sooner.
 			lockMs := ms / 2
@@ -306,7 +306,7 @@ func (s *Service) BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFu
 			if _, err := tx.ExecContext(txCtx, fmt.Sprintf("SET LOCAL lock_timeout = %d", lockMs)); err != nil {
 				_ = tx.Rollback()
 				cancel()
-				return nil, nil, errors.New(op).Errorf("setting local lock_timeout: %w", err)
+				return nil, nil, errors.New(op).Msgf("setting local lock_timeout: %w", err)
 			}
 		}
 	}
@@ -343,7 +343,7 @@ func (s *Service) ExecContext(ctx context.Context, query string, args ...interfa
 
 	res, err := h.ExecContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New(op).Errorf("s.handle.ExecContext: %w", err)
+		return nil, errors.New(op).Msgf("s.handle.ExecContext: %w", err)
 	}
 
 	return res, nil
@@ -378,7 +378,7 @@ func (s *Service) QueryContext(ctx context.Context, query string, args ...interf
 
 	res, err := h.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New(op).Errorf("s.handle.QueryContext: %w", err)
+		return nil, errors.New(op).Msgf("s.handle.QueryContext: %w", err)
 	}
 
 	return res, nil

@@ -8,7 +8,7 @@ func TestFIFOList_Basic(t *testing.T) {
 		t.Error("New FIFO should be empty")
 	}
 	if fifo.Len() != 0 {
-		t.Errorf("New FIFO Len() = %d, want 0", fifo.Len())
+		t.Msgf("New FIFO Len() = %d, want 0", fifo.Len())
 	}
 	_, ok := fifo.Pop()
 	if ok {
@@ -25,22 +25,22 @@ func TestFIFOList_PushPop(t *testing.T) {
 	fifo.Push("second")
 	fifo.Push("third")
 	if fifo.Len() != 3 {
-		t.Errorf("Len() = %d, want 3", fifo.Len())
+		t.Msgf("Len() = %d, want 3", fifo.Len())
 	}
 	if fifo.IsEmpty() {
 		t.Error("FIFO with items should not be empty")
 	}
 	val, ok := fifo.Pop()
 	if !ok || val != "first" {
-		t.Errorf("Pop() = %q, %v, want first, true", val, ok)
+		t.Msgf("Pop() = %q, %v, want first, true", val, ok)
 	}
 	val, ok = fifo.Pop()
 	if !ok || val != "second" {
-		t.Errorf("Pop() = %q, %v, want second, true", val, ok)
+		t.Msgf("Pop() = %q, %v, want second, true", val, ok)
 	}
 	val, ok = fifo.Pop()
 	if !ok || val != "third" {
-		t.Errorf("Pop() = %q, %v, want third, true", val, ok)
+		t.Msgf("Pop() = %q, %v, want third, true", val, ok)
 	}
 	if !fifo.IsEmpty() {
 		t.Error("FIFO should be empty after popping all items")
@@ -52,10 +52,10 @@ func TestFIFOList_Peek(t *testing.T) {
 	fifo.Push(100)
 	val, ok := fifo.Peek()
 	if !ok || val != 42 {
-		t.Errorf("Peek() = %d, %v, want 42, true", val, ok)
+		t.Msgf("Peek() = %d, %v, want 42, true", val, ok)
 	}
 	if fifo.Len() != 2 {
-		t.Errorf("Len() after Peek = %d, want 2", fifo.Len())
+		t.Msgf("Len() after Peek = %d, want 2", fifo.Len())
 	}
 }
 func TestFIFOList_Clear(t *testing.T) {
@@ -68,6 +68,6 @@ func TestFIFOList_Clear(t *testing.T) {
 		t.Error("FIFO should be empty after Clear")
 	}
 	if fifo.Len() != 0 {
-		t.Errorf("Len() after Clear = %d, want 0", fifo.Len())
+		t.Msgf("Len() after Clear = %d, want 0", fifo.Len())
 	}
 }

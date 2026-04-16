@@ -11,7 +11,7 @@ func TypeToModelTimeConverter(src any) (any, error) {
 	const op errors.Op = "converters.common.TypeToModelTimeConverter"
 	srcVal, ok := src.(time.Time)
 	if !ok {
-		return null.Time{}, errors.New(op).Errorf("Given parameter not a string, got %T", src)
+		return null.Time{}, errors.New(op).Msgf("Given parameter not a string, got %T", src)
 	}
 	// Treat empty time as a valid time, do not error
 	if srcVal.IsZero() {
@@ -35,5 +35,5 @@ func ModelToTypeTimeConverter(src any) (any, error) {
 		return s, nil
 	}
 
-	return time.Time{}, errors.New(op).Errorf("Given parameter not a string or null.String, got %T", src)
+	return time.Time{}, errors.New(op).Msgf("Given parameter not a string or null.String, got %T", src)
 }

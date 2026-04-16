@@ -92,4 +92,4 @@ Safely logs nested structures at Debug level with cycle protection and depth lim
 
 ## Notes
 - Error ops are included when errors are created via github.com/Station-Manager/errors.DetailedError.
-- Standard library wrapped errors (errors.Unwrap / fmt.Errorf("%w")) are traversed for messages, but have empty ops.
+- Standard library wrapped errors (errors.Unwrap / fmt.Msgf("%w")) are traversed for messages, but have empty ops.
