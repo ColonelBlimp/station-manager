@@ -71,6 +71,13 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	// to match an existing logbook, or create one.
 
 	rec := parsed.Records[0]
+
+	if strings.TrimSpace(rec.StationCallsign) == "" {
+		writeError(w, http.StatusBadRequest, "missing_required_field",
+			"STATION_CALLSIGN is required", op)
+		return
+	}
+
 	logbookID, err := s.resolveLogbook(r.Context(), rec.StationCallsign)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "logbook_error", err.Error(), op)

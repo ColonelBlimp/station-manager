@@ -2,11 +2,14 @@ package qsoservice
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	stderr "errors"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
@@ -26,7 +29,6 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	const op errors.Op = "qsoservice.Submit"
 
 	// ---- Validate required fields ----
-
 	call := strings.ToUpper(strings.TrimSpace(rec.Call))
 	if call == "" {
 		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "CALL is required"}
@@ -66,7 +68,6 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	// ---- Validate field values ----
-
 	if !bands.IsValidBand(band) {
 		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("BAND %q is not a recognised band", band)}
 	}
@@ -91,6 +92,30 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		timeOff = timeOn // Default to timeOn if not provided
 	}
 
+	// Sanitize qsoDateOff if present
+	qsoDateOff := utils.SanitizeDateToYYYYMMDD(strings.TrimSpace(rec.QsoDateOff))
+
+	// ---- Validate time coherence ----
+	// If TIME_ON > TIME_OFF the QSO crossed midnight, which is only valid
+	// when QSO_DATE_OFF is the following day.
+	if timeOn > timeOff {
+		if qsoDateOff == "" || qsoDateOff == qsoDate {
+			return SubmitResult{}, &SubmitError{
+				Code:    "invalid_field_value",
+				Message: "TIME_ON is after TIME_OFF but QSO_DATE_OFF is not the following day",
+			}
+		}
+		// Verify qsoDateOff is exactly qsoDate + 1 day.
+		onDate, _ := time.Parse("20060102", qsoDate)
+		offDate, _ := time.Parse("20060102", qsoDateOff)
+		if !offDate.Equal(onDate.AddDate(0, 0, 1)) {
+			return SubmitResult{}, &SubmitError{
+				Code:    "invalid_field_value",
+				Message: fmt.Sprintf("TIME_ON > TIME_OFF requires QSO_DATE_OFF to be the day after QSO_DATE (got %s and %s)", qsoDate, qsoDateOff),
+			}
+		}
+	}
+
 	// ---- Normalize frequency ----
 	// ADIF freq is MHz as a string (e.g. "14.074"). The sqlite schema stores
 	// freq as integer kHz. The adapter expects an integer string in the Freq
@@ -105,7 +130,6 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	// ---- Build the Qso ----
-
 	qso := adif.RecordToQso(rec, logbookID)
 	qso.ContactedStation.Call = call
 	qso.QsoDetails.Band = band
@@ -113,6 +137,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	qso.QsoDetails.QsoDate = qsoDate
 	qso.QsoDetails.TimeOn = timeOn
 	qso.QsoDetails.TimeOff = timeOff
+	qso.QsoDetails.QsoDateOff = qsoDateOff
 	qso.QsoDetails.Freq = freqKHz
 	qso.LoggingStation.StationCallsign = stationCallsign
 
@@ -131,11 +156,18 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	// ---- Dedupe ----
-
 	dedupeKey := ComputeDedupeKey(call, band, mode, qsoDate, timeOn)
-	qso.DedupeKey = dedupeKey
 
-	if !force {
+	if force {
+		// Force mode: generate a unique dedupe key so the UNIQUE index
+		// doesn't block the insert. The key is still a valid 64-char hex
+		// string but is not reproducible — this QSO won't be deduplicated.
+		nonce := make([]byte, 32)
+		if _, err = rand.Read(nonce); err != nil {
+			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("generating force nonce")
+		}
+		dedupeKey = hex.EncodeToString(nonce)
+	} else {
 		existing, err := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
 		if err == nil {
 			return SubmitResult{Status: "duplicate", ID: existing.ID}, nil
@@ -145,8 +177,9 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		}
 	}
 
-	// ---- Atomic write: QSO + upload-queue rows ----
+	qso.DedupeKey = dedupeKey
 
+	// ---- Atomic write: QSO + upload-queue rows ----
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
 	if err != nil {
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to begin transaction")
@@ -163,13 +196,13 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// For milestone 1 there are no configured services; the forwarder
 	// lands in milestone 1c. When it does, this loop populates the queue.
 	for _, svc := range configuredUploadServices() {
-		if err := s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, svc); err != nil {
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, svc); err != nil {
 			_ = tx.Rollback()
 			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to commit transaction")
 	}
 
@@ -202,9 +235,10 @@ func freqMHzToKHzString(s string) (string, error) {
 		kHz := int64(math.Round(f * 1000))
 		return strconv.FormatInt(kHz, 10), nil
 	}
-	// No dot — assume already integer. Verify it parses.
+	// No dot — assume already integer and vrify it parses.
 	if _, err := strconv.ParseInt(s, 10, 64); err != nil {
 		return "", fmt.Errorf("cannot parse as integer frequency: %w", err)
 	}
+
 	return s, nil
 }
