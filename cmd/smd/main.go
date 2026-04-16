@@ -27,7 +27,7 @@ func main() {
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "smd: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -37,16 +37,16 @@ func main() {
 
 	container := iocdi.New()
 
-	if err := container.RegisterInstance(config.ServiceName, cfgSvc); err != nil {
+	if err = container.RegisterInstance(config.ServiceName, cfgSvc); err != nil {
 		fatal("register config service", err)
 	}
-	if err := container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
+	if err = container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
 		fatal("register logging service", err)
 	}
-	if err := container.Register(types.SqliteServiceName, reflect.TypeOf((*sqlite.Service)(nil))); err != nil {
+	if err = container.Register(types.SqliteServiceName, reflect.TypeOf((*sqlite.Service)(nil))); err != nil {
 		fatal("register sqlite service", err)
 	}
-	if err := container.Register(qsoservice.ServiceName, reflect.TypeOf((*qsoservice.Service)(nil))); err != nil {
+	if err = container.Register(qsoservice.ServiceName, reflect.TypeOf((*qsoservice.Service)(nil))); err != nil {
 		fatal("register qso service", err)
 	}
 
@@ -59,7 +59,7 @@ func main() {
 	})
 
 	// Build triggers Initialize() on all beans in dependency order.
-	if err := container.Build(); err != nil {
+	if err = container.Build(); err != nil {
 		fatal("build container", err)
 	}
 
@@ -82,11 +82,11 @@ func main() {
 
 	// ---- Open database and run migrations ----
 
-	if err := dbSvc.Open(); err != nil {
+	if err = dbSvc.Open(); err != nil {
 		fatal("open database", err)
 	}
 
-	if err := dbSvc.Migrate(); err != nil {
+	if err = dbSvc.Migrate(); err != nil {
 		fatal("run migrations", err)
 	}
 
@@ -109,7 +109,7 @@ func main() {
 	select {
 	case sig := <-sigCh:
 		loggerSvc.InfoWith().Str("signal", sig.String()).Msg("shutdown signal received")
-	case err := <-errCh:
+	case err = <-errCh:
 		if err != nil {
 			loggerSvc.ErrorWith().Err(err).Msg("server exited with error")
 		}
@@ -121,16 +121,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err = server.Shutdown(ctx); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("HTTP server shutdown error")
 	}
 
-	if err := dbSvc.Close(); err != nil {
+	if err = dbSvc.Close(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("database close error")
 	}
 
-	if err := loggerSvc.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", err)
+	if err = loggerSvc.Close(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", err)
 	}
 
 	loggerSvc.InfoWith().Msg("smd stopped")
@@ -159,6 +159,6 @@ func loadConfig(path string) (config.Config, error) {
 }
 
 func fatal(context string, err error) {
-	fmt.Fprintf(os.Stderr, "smd: %s: %v\n", context, err)
+	_, _ = fmt.Fprintf(os.Stderr, "smd: %s: %v\n", context, err)
 	os.Exit(1)
 }

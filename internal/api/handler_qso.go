@@ -24,7 +24,10 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 
 	// ---- Read body with size limit ----
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxBodyBytes))
+	lr := http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
+	defer lr.Close()
+
+	body, err := io.ReadAll(lr)
 	if err != nil {
 		if err.Error() == "http: request body too large" {
 			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
