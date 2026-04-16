@@ -24,9 +24,9 @@ func TestBuildErrorChain_WithDetailedAndStd(t *testing.T) {
 	// the full tail of the chain, not just the local message. This is a
 	// deliberate consequence of aligning Error() with stdlib conventions
 	// for wrapped errors; the test was updated to reflect the new shape.
-	inner := smerrors.New("db.Connect").WithMsg("dial tcp 127.0.0.1:5432: connect: connection refused")
-	middle := smerrors.New("db.Open").WithErr(inner).WithMsg("failed to connect to database")
-	outer := smerrors.New("server.Start").WithErr(middle).WithMsg("startup failed")
+	inner := smerrors.New("db.Connect").Msg("dial tcp 127.0.0.1:5432: connect: connection refused")
+	middle := smerrors.New("db.Open").Err(inner).Msg("failed to connect to database")
+	outer := smerrors.New("server.Start").Err(middle).Msg("startup failed")
 
 	chain, root := func(e error) ([]string, string) {
 		c, _, r, _ := buildErrorChain(e)
@@ -40,7 +40,7 @@ func TestBuildErrorChain_WithDetailedAndStd(t *testing.T) {
 	assert.Equal(t, "db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused", root)
 
 	// Build a DetailedError wrapping a std error chain.
-	wrapped := smerrors.New("wrap.Std").WithErr(fmt.Errorf("wrap: %w", outer))
+	wrapped := smerrors.New("wrap.Std").Err(fmt.Errorf("wrap: %w", outer))
 	chain2, root2 := func(e error) ([]string, string) {
 		c, _, r, _ := buildErrorChain(e)
 		return c, r
@@ -59,8 +59,8 @@ func TestEventErr_EmitsChainFields(t *testing.T) {
 	logger := zerolog.New(&buf)
 	le := newLogEvent(logger.Error())
 
-	inner := smerrors.New("db.Connect").WithMsg("dial tcp 127.0.0.1:5432: connect: connection refused")
-	outer := smerrors.New("server.Start").WithErr(inner).WithMsg("startup failed")
+	inner := smerrors.New("db.Connect").Msg("dial tcp 127.0.0.1:5432: connect: connection refused")
+	outer := smerrors.New("server.Start").Err(inner).Msg("startup failed")
 
 	le.Err(outer).Msg("boom")
 
