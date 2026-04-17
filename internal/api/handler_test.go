@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,11 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
+
+// unmarshalJSON decodes a response body string into v.
+func unmarshalJSON(body string, v any) error {
+	return json.Unmarshal([]byte(body), v)
+}
 
 // testServer creates a Server wired to an in-memory sqlite database for
 // handler testing.
@@ -738,5 +744,306 @@ func TestGetQso_InvalidID(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// =============================================================================
+// Update QSO (PATCH)
+// =============================================================================
+
+// submitAndGetID is a test helper that submits testQsoADIF and returns the
+// resulting QSO ID.
+func submitAndGetID(t *testing.T, srv *Server, lbID int64, body string) int64 {
+	t.Helper()
+	w := submitQso(t, srv, lbID, body, false)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("submit: status = %d; body = %s", w.Code, w.Body.String())
+	}
+	var id int64
+	_, _ = fmt.Sscanf(w.Body.String(), `{"status":"stored","id":%d}`, &id)
+	if id < 1 {
+		t.Fatalf("failed to parse QSO id from %s", w.Body.String())
+	}
+	return id
+}
+
+// patchQso is a test helper that sends a PATCH to /v1/qso/{id}.
+func patchQso(t *testing.T, srv *Server, qsoID int64, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/v1/qso/%d", qsoID), strings.NewReader(body))
+	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleUpdateQso(w, req)
+	return w
+}
+
+func TestUpdateQso_PatchComment(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	w := patchQso(t, srv, id, `{"comment":"nice chat"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"comment":"nice chat"`) {
+		t.Fatalf("body = %q, want comment updated", w.Body.String())
+	}
+}
+
+func TestUpdateQso_RecomputesDedupeKey(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	// Fetch the pre-edit dedupe key.
+	getW := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
+	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	srv.handleGetQso(getW, getReq)
+	var before struct {
+		DedupeKey string `json:"dedupe_key"`
+	}
+	if err := unmarshalJSON(getW.Body.String(), &before); err != nil {
+		t.Fatalf("decode pre-edit: %v", err)
+	}
+
+	// Change CALL — a dedupe input — and confirm the key changed.
+	w := patchQso(t, srv, id, `{"call":"M0XYZ"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var after struct {
+		Call      string `json:"call"`
+		DedupeKey string `json:"dedupe_key"`
+	}
+	if err := unmarshalJSON(w.Body.String(), &after); err != nil {
+		t.Fatalf("decode post-edit: %v", err)
+	}
+	if after.Call != "M0XYZ" {
+		t.Fatalf("call = %q, want M0XYZ", after.Call)
+	}
+	if after.DedupeKey == before.DedupeKey {
+		t.Fatalf("dedupe key unchanged after CALL edit: %s", after.DedupeKey)
+	}
+}
+
+func TestUpdateQso_FreqChangeRecomputesDedupe(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	// Pre-edit dedupe key.
+	getW := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
+	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	srv.handleGetQso(getW, getReq)
+	var before struct {
+		DedupeKey string `json:"dedupe_key"`
+	}
+	if err := unmarshalJSON(getW.Body.String(), &before); err != nil {
+		t.Fatalf("decode pre-edit: %v", err)
+	}
+
+	// Change FREQ — a dedupe input — and confirm the key changed.
+	w := patchQso(t, srv, id, `{"freq":"7.120"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var after struct {
+		Freq      string `json:"freq"`
+		DedupeKey string `json:"dedupe_key"`
+	}
+	if err := unmarshalJSON(w.Body.String(), &after); err != nil {
+		t.Fatalf("decode post-edit: %v", err)
+	}
+	if after.Freq != "7120" {
+		t.Fatalf("freq = %q, want normalized 7120", after.Freq)
+	}
+	if after.DedupeKey == before.DedupeKey {
+		t.Fatalf("dedupe key unchanged after FREQ edit: %s", after.DedupeKey)
+	}
+}
+
+func TestSubmitQso_SameCallSameTimeDifferentFreq(t *testing.T) {
+	// Regression test for the dedupe-key expansion: two QSOs with
+	// identical CALL/BAND/MODE/DATE/TIME but different FREQ are legitimate
+	// distinct QSOs (net ops, split, frequency hopping) and must both
+	// store. Before FREQ was added to the dedupe key, the second would
+	// have been flagged as a duplicate.
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	first := `<CALL:5>M0CMC<BAND:3>40m<MODE:3>SSB<FREQ:5>7.050<QSO_DATE:8>20250508<TIME_ON:4>0845<TIME_OFF:4>0850<RST_SENT:2>59<RST_RCVD:2>59<STATION_CALLSIGN:5>G4ABC<COUNTRY:7>England<EOR>`
+	w1 := submitQso(t, srv, lbID, first, false)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("first: status = %d; body = %s", w1.Code, w1.Body.String())
+	}
+
+	second := `<CALL:5>M0CMC<BAND:3>40m<MODE:3>SSB<FREQ:5>7.120<QSO_DATE:8>20250508<TIME_ON:4>0845<TIME_OFF:4>0850<RST_SENT:2>59<RST_RCVD:2>59<STATION_CALLSIGN:5>G4ABC<COUNTRY:7>England<EOR>`
+	w2 := submitQso(t, srv, lbID, second, false)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("second: status = %d; body = %s", w2.Code, w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), `"status":"stored"`) {
+		t.Fatalf("second body = %q, want stored", w2.Body.String())
+	}
+}
+
+func TestUpdateQso_NonDedupeFieldLeavesKeyAlone(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	getW := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
+	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	srv.handleGetQso(getW, getReq)
+	var before struct {
+		DedupeKey string `json:"dedupe_key"`
+	}
+	if err := unmarshalJSON(getW.Body.String(), &before); err != nil {
+		t.Fatalf("decode pre-edit: %v", err)
+	}
+
+	w := patchQso(t, srv, id, `{"rst_sent":"57","comment":"late report"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", w.Code, w.Body.String())
+	}
+	var after struct {
+		DedupeKey string `json:"dedupe_key"`
+	}
+	if err := unmarshalJSON(w.Body.String(), &after); err != nil {
+		t.Fatalf("decode post-edit: %v", err)
+	}
+	if after.DedupeKey != before.DedupeKey {
+		t.Fatalf("dedupe key changed on non-dedupe edit: %s -> %s", before.DedupeKey, after.DedupeKey)
+	}
+}
+
+func TestUpdateQso_DuplicateKeyConflict(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	// Two distinct QSOs in the same logbook.
+	id1 := submitAndGetID(t, srv, lbID, testQsoADIF)
+	second := `<CALL:6>DL1ABC<BAND:3>20m<MODE:2>CW<FREQ:6>14.074<QSO_DATE:8>20250508<TIME_ON:4>1000<TIME_OFF:4>1005<RST_SENT:3>599<RST_RCVD:3>599<STATION_CALLSIGN:5>G4ABC<COUNTRY:7>Germany<EOR>`
+	_ = submitAndGetID(t, srv, lbID, second)
+
+	// Edit QSO 1 so it would collide with QSO 2. Must match all dedupe
+	// inputs, including freq. Include time_off so the merged result doesn't
+	// trip the time_on > time_off coherence check first.
+	body := `{"call":"DL1ABC","band":"20m","mode":"CW","freq":"14.074","qso_date":"20250508","time_on":"1000","time_off":"1005"}`
+	w := patchQso(t, srv, id1, body)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "duplicate_key") {
+		t.Fatalf("body = %q, want duplicate_key", w.Body.String())
+	}
+}
+
+func TestUpdateQso_ImmutableFieldsIgnored(t *testing.T) {
+	srv := testServer(t)
+	lbID1 := createTestLogbook(t, srv, "Primary", "G4ABC")
+	lbID2 := createTestLogbook(t, srv, "Secondary", "M0CMC")
+	id := submitAndGetID(t, srv, lbID1, testQsoADIF)
+
+	// Attempt to rewrite structural fields. They should be silently ignored:
+	// the PATCH succeeds, but station_callsign and logbook_id stay the same.
+	body := fmt.Sprintf(`{"station_callsign":"M0CMC","logbook_id":%d,"id":9999,"comment":"poke"}`, lbID2)
+	w := patchQso(t, srv, id, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), fmt.Sprintf(`"logbook_id":%d`, lbID1)) {
+		t.Fatalf("logbook_id changed: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"station_callsign":"G4ABC"`) {
+		t.Fatalf("station_callsign changed: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), fmt.Sprintf(`"id":%d`, id)) {
+		t.Fatalf("id changed: %s", w.Body.String())
+	}
+}
+
+func TestUpdateQso_InvalidBand(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	w := patchQso(t, srv, id, `{"band":"not-a-band"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_field_value") {
+		t.Fatalf("body = %q, want invalid_field_value", w.Body.String())
+	}
+}
+
+func TestUpdateQso_InvalidCall(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	// No digit — fails callsign validation.
+	w := patchQso(t, srv, id, `{"call":"ABC"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+}
+
+func TestUpdateQso_TimeCoherenceViolation(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	// TIME_ON after TIME_OFF with no QSO_DATE_OFF set.
+	w := patchQso(t, srv, id, `{"time_on":"2300","time_off":"0100"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_time_range") {
+		t.Fatalf("body = %q, want invalid_time_range", w.Body.String())
+	}
+}
+
+func TestUpdateQso_NotFound(t *testing.T) {
+	srv := testServer(t)
+
+	req := httptest.NewRequest(http.MethodPatch, "/v1/qso/999", strings.NewReader(`{"comment":"x"}`))
+	req.SetPathValue("id", "999")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleUpdateQso(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestUpdateQso_InvalidJSON(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	w := patchQso(t, srv, id, `{not json`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestUpdateQso_EmptyPatchIsNoOp(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	w := patchQso(t, srv, id, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"call":"M0CMC"`) {
+		t.Fatalf("body = %q, want original call preserved", w.Body.String())
 	}
 }

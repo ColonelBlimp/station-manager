@@ -129,7 +129,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	if freqStr == "" {
 		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "FREQ is required"}
 	}
-	freqKHz, err := freqMHzToKHzString(freqStr)
+	freqKHz, err := FreqMHzToKHzString(freqStr)
 	if err != nil {
 		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("FREQ %q: %v", freqStr, err)}
 	}
@@ -161,7 +161,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	// ---- Dedupe ----
-	dedupeKey := ComputeDedupeKey(call, band, mode, qsoDate, timeOn)
+	dedupeKey := ComputeDedupeKey(call, band, mode, freqKHz, qsoDate, timeOn)
 
 	if force {
 		// Force mode: generate a unique dedupe key so the UNIQUE index
@@ -228,10 +228,10 @@ func configuredUploadServices() []upload.OnlineService {
 	return nil
 }
 
-// freqMHzToKHzString converts a frequency string from MHz (e.g. "14.074",
+// FreqMHzToKHzString converts a frequency string from MHz (e.g. "14.074",
 // "7.050") to an integer kHz string (e.g. "14074", "7050"). Also accepts
 // plain integer strings that are already in kHz.
-func freqMHzToKHzString(s string) (string, error) {
+func FreqMHzToKHzString(s string) (string, error) {
 	// If it contains a dot, treat as MHz float.
 	if strings.Contains(s, ".") {
 		f, err := strconv.ParseFloat(s, 64)

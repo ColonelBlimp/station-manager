@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// ---- freqMHzToKHzString tests ----
+// ---- FreqMHzToKHzString tests ----
 
 func TestFreqMHzToKHzString_MHzFloat(t *testing.T) {
 	cases := map[string]string{
@@ -16,12 +16,12 @@ func TestFreqMHzToKHzString_MHzFloat(t *testing.T) {
 		"1.840":   "1840",
 	}
 	for in, want := range cases {
-		got, err := freqMHzToKHzString(in)
+		got, err := FreqMHzToKHzString(in)
 		if err != nil {
-			t.Fatalf("freqMHzToKHzString(%q) error: %v", in, err)
+			t.Fatalf("FreqMHzToKHzString(%q) error: %v", in, err)
 		}
 		if got != want {
-			t.Fatalf("freqMHzToKHzString(%q) = %q, want %q", in, got, want)
+			t.Fatalf("FreqMHzToKHzString(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -34,12 +34,12 @@ func TestFreqMHzToKHzString_IntegerPassthrough(t *testing.T) {
 		"144390": "144390",
 	}
 	for in, want := range cases {
-		got, err := freqMHzToKHzString(in)
+		got, err := FreqMHzToKHzString(in)
 		if err != nil {
-			t.Fatalf("freqMHzToKHzString(%q) error: %v", in, err)
+			t.Fatalf("FreqMHzToKHzString(%q) error: %v", in, err)
 		}
 		if got != want {
-			t.Fatalf("freqMHzToKHzString(%q) = %q, want %q", in, got, want)
+			t.Fatalf("FreqMHzToKHzString(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -47,20 +47,20 @@ func TestFreqMHzToKHzString_IntegerPassthrough(t *testing.T) {
 func TestFreqMHzToKHzString_InvalidInput(t *testing.T) {
 	invalid := []string{"", "abc", "14.abc", "not-a-number"}
 	for _, in := range invalid {
-		_, err := freqMHzToKHzString(in)
+		_, err := FreqMHzToKHzString(in)
 		if err == nil {
-			t.Fatalf("freqMHzToKHzString(%q) expected error, got nil", in)
+			t.Fatalf("FreqMHzToKHzString(%q) expected error, got nil", in)
 		}
 	}
 }
 
 func TestFreqMHzToKHzString_Rounding(t *testing.T) {
 	// 14.0745 MHz = 14074.5 kHz → should round to 14075
-	got, err := freqMHzToKHzString("14.0745")
+	got, err := FreqMHzToKHzString("14.0745")
 	if err != nil {
-		t.Fatalf("freqMHzToKHzString(\"14.0745\") error: %v", err)
+		t.Fatalf("FreqMHzToKHzString(\"14.0745\") error: %v", err)
 	}
 	if got != "14075" {
-		t.Fatalf("freqMHzToKHzString(\"14.0745\") = %q, want %q", got, "14075")
+		t.Fatalf("FreqMHzToKHzString(\"14.0745\") = %q, want %q", got, "14075")
 	}
 }

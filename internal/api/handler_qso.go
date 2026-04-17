@@ -35,6 +35,62 @@ func (s *Server) handleGetQso(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, qso)
 }
 
+func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleUpdateQso"
+
+	id, err := parsePathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		return
+	}
+
+	existing, err := s.db.FetchQsoByIdWithContext(r.Context(), id)
+	if err != nil {
+		if stderr.Is(err, errors.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		return
+	}
+
+	lr := http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
+	defer func() {
+		if err := lr.Close(); err != nil {
+			s.logger.WarnWith().Err(err).Msg("failed to close request body reader")
+		}
+	}()
+	body, err := io.ReadAll(lr)
+	if err != nil {
+		if err.Error() == "http: request body too large" {
+			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
+				"request body exceeds maximum size", op)
+			return
+		}
+		writeError(w, http.StatusBadRequest, "read_error", "failed to read request body", op)
+		return
+	}
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+
+	updated, err := s.qso.Update(r.Context(), existing, body)
+	if err != nil {
+		if se := qsoservice.IsSubmitError(err); se != nil {
+			status := http.StatusBadRequest
+			if se.Code == "duplicate_key" {
+				status = http.StatusConflict
+			}
+			writeError(w, status, se.Code, se.Message, op)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "update_failed", err.Error(), op)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleSubmitQso"
 

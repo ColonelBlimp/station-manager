@@ -1,6 +1,8 @@
 package qsoservice
 
 import (
+	stderr "errors"
+
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
@@ -36,9 +38,10 @@ func (e *SubmitError) Error() string {
 	return e.Code + ": " + e.Message
 }
 
-// IsSubmitError returns the SubmitError if err is one, or nil.
+// IsSubmitError returns the SubmitError if err is one (or wraps one), or nil.
 func IsSubmitError(err error) *SubmitError {
-	if se, ok := err.(*SubmitError); ok {
+	var se *SubmitError
+	if stderr.As(err, &se) {
 		return se
 	}
 	return nil

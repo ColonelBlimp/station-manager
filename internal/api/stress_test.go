@@ -26,8 +26,10 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 
 	var stored atomic.Int64
 	var fetched atomic.Int64
+	var patched atomic.Int64
 	var errCount atomic.Int64
 	var fetchErrCount atomic.Int64
+	var patchErrCount atomic.Int64
 	var wg sync.WaitGroup
 
 	start := time.Now()
@@ -111,6 +113,56 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 					continue
 				}
 				fetched.Add(1)
+
+				// Capture the pre-patch dedupe key so we can verify FREQ
+				// change triggers recompute.
+				var fetched1 struct {
+					DedupeKey string `json:"dedupe_key"`
+				}
+				if err := unmarshalJSON(getW.Body.String(), &fetched1); err != nil || fetched1.DedupeKey == "" {
+					patchErrCount.Add(1)
+					t.Logf("client %d qso %d: cannot decode pre-patch dedupe_key", clientID, i)
+					continue
+				}
+
+				// PATCH the freq to something unique per (clientID, i) so
+				// neighbouring QSOs don't collide. Original is 7.050;
+				// spread new freqs across 7.100–7.199 MHz so the patched
+				// value is always different from the pre-patch value.
+				newFreqMHz := fmt.Sprintf("7.%03d", 100+((clientID*qsosPerClient+i)%100))
+				patchBody := fmt.Sprintf(`{"freq":"%s","comment":"edited"}`, newFreqMHz)
+				patchReq := httptest.NewRequest(http.MethodPatch,
+					fmt.Sprintf("/v1/qso/%d", qsoID), strings.NewReader(patchBody))
+				patchReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+				patchReq.Header.Set("Content-Type", "application/json")
+				patchW := httptest.NewRecorder()
+				srv.handleUpdateQso(patchW, patchReq)
+
+				if patchW.Code != http.StatusOK {
+					patchErrCount.Add(1)
+					t.Logf("client %d qso %d patch: status=%d body=%s", clientID, i, patchW.Code, patchW.Body.String())
+					continue
+				}
+				var fetched2 struct {
+					DedupeKey string `json:"dedupe_key"`
+					Comment   string `json:"comment"`
+				}
+				if err := unmarshalJSON(patchW.Body.String(), &fetched2); err != nil {
+					patchErrCount.Add(1)
+					t.Logf("client %d qso %d patch: decode failed", clientID, i)
+					continue
+				}
+				if fetched2.Comment != "edited" {
+					patchErrCount.Add(1)
+					t.Logf("client %d qso %d patch: comment not updated, body=%s", clientID, i, patchW.Body.String())
+					continue
+				}
+				if fetched2.DedupeKey == fetched1.DedupeKey {
+					patchErrCount.Add(1)
+					t.Logf("client %d qso %d patch: dedupe_key not recomputed after FREQ change", clientID, i)
+					continue
+				}
+				patched.Add(1)
 			}
 		}(client)
 	}
@@ -124,10 +176,12 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	t.Logf("Total QSOs:    %d", totalQSOs)
 	t.Logf("Stored:        %d", stored.Load())
 	t.Logf("Fetched:       %d", fetched.Load())
+	t.Logf("Patched:       %d", patched.Load())
 	t.Logf("Submit errors: %d", errCount.Load())
 	t.Logf("Fetch errors:  %d", fetchErrCount.Load())
+	t.Logf("Patch errors:  %d", patchErrCount.Load())
 	t.Logf("Elapsed:       %s", elapsed)
-	t.Logf("Avg latency:   %s (submit+fetch round trip)", elapsed/time.Duration(totalQSOs))
+	t.Logf("Avg latency:   %s (submit+fetch+patch round trip)", elapsed/time.Duration(totalQSOs))
 	t.Logf("Throughput:    %.1f QSOs/sec", float64(totalQSOs)/elapsed.Seconds())
 
 	if errCount.Load() > 0 {
@@ -136,10 +190,16 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	if fetchErrCount.Load() > 0 {
 		t.Fatalf("expected 0 fetch errors, got %d", fetchErrCount.Load())
 	}
+	if patchErrCount.Load() > 0 {
+		t.Fatalf("expected 0 patch errors, got %d", patchErrCount.Load())
+	}
 	if stored.Load() != totalQSOs {
 		t.Fatalf("expected %d stored, got %d", totalQSOs, stored.Load())
 	}
 	if fetched.Load() != totalQSOs {
 		t.Fatalf("expected %d fetched, got %d", totalQSOs, fetched.Load())
+	}
+	if patched.Load() != totalQSOs {
+		t.Fatalf("expected %d patched, got %d", totalQSOs, patched.Load())
 	}
 }
