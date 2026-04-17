@@ -260,6 +260,94 @@ These are known concerns that were raised during session 5 and deliberately not 
 
 ---
 
+## 7a. Landed endpoints (as of session 9, 2026-04-17)
+
+This section captures the concrete shapes that actually shipped, to
+supplement the sketch in Section 5. When the sketch and this section
+disagree, **this section is authoritative**; the sketch reflects
+design intent, this reflects code.
+
+### QSO submission
+
+- `POST /v1/qso?logbook=<id>[&force=true]` — body is ADIF
+  (`application/x-adif` or `text/plain`). `?logbook` is **required**;
+  the daemon verifies the logbook exists and its callsign matches
+  `STATION_CALLSIGN`. Response: `{"status":"stored"|"duplicate","id":<int>}`,
+  201 on stored, 200 on duplicate.
+
+### QSO retrieval and editing
+
+- `GET /v1/qso/{id}` — returns `types.Qso` JSON. 404 if missing or
+  soft-deleted.
+- `PATCH /v1/qso/{id}` — JSON body matching `types.Qso`'s field
+  shape. Missing keys leave fields alone; `id`, `logbook_id`,
+  `station_callsign`, `dedupe_key`, forwarding-state and enrichment
+  fields are immutable (silently restored server-side). Dedupe-key
+  inputs (CALL/BAND/MODE/FREQ/QSO_DATE/TIME_ON) trigger a key
+  recompute and collision check; collision → 409 `duplicate_key`.
+  No `force=true` bypass on edit.
+- `DELETE /v1/qso/{id}` — soft-delete (`deleted_at`). 204 on success.
+
+### Logbook management
+
+- `GET /v1/logbook` — list all logbooks. Small result set, no
+  pagination.
+- `GET /v1/logbook/{id}` — single logbook. 404 if missing.
+- `POST /v1/logbook` — JSON `{name, callsign, description?}`.
+  Callsign is validated. 409 on duplicate name.
+- `PATCH /v1/logbook/{id}` — JSON partial update; `callsign` is
+  **immutable** (silently ignored in the body).
+- `DELETE /v1/logbook/{id}` — soft-delete. 409 `has_qsos` if the
+  logbook still contains QSOs.
+
+### QSO list
+
+- `GET /v1/logbook/{id}/qso?after=<cursor>&limit=<N>` — forward-
+  cursor pagination, newest-first by `(qso_date, time_on, id)` DESC.
+  Both params optional: `after` omitted on first request, `limit`
+  falls back to `Server.DefaultPageLimit` (50), caps at
+  `Server.MaxPageLimit` (500).
+- Cursor is opaque base64url-encoded JSON `{"d","t","i"}`; clients
+  must not parse or construct it.
+- Response: `{"items": types.Qso[], "next_cursor": string|null}`.
+  `next_cursor` is JSON `null` on the last page.
+- Soft-deleted rows are always hidden. Opt-in visibility is deferred
+  until the logbook-app needs it.
+
+### Contest dupe
+
+- `GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>[&mode=<mode>]`
+  — required: `logbook`, `call`, `band`. Optional: `mode` (include
+  for band+mode contests like CQ WW, omit for band-only contests
+  like ARRL DX). Client owns the contest rule.
+- Response: `{"duplicate": bool}`.
+- **Contest isolation is achieved via the logbook, not a separate
+  DB file.** Hits in other logbooks do not count.
+
+### Operational
+
+- `GET /v1/healthz` — 200 if the daemon is up and sqlite is
+  reachable. `{"status":"ok"}`.
+
+### Error envelope
+
+All 4xx/5xx responses use the `ErrorResponse` shape from
+Section 4.6: `{"code":"<machine>", "message":"<human>", "op":"<package.Func>"}`.
+
+### Field units & canonical forms
+
+- **FREQ:** `types.Qso.Freq` is the **ADIF-native MHz decimal string**
+  on the API surface (e.g. `"14.074"`). kHz is only the sqlite
+  storage unit, translated in the adapter. Three-decimal-place
+  canonical form matches kHz granularity and is round-trip stable.
+- **QSO_DATE / TIME_ON / TIME_OFF:** ADIF-native formats (`YYYYMMDD`,
+  `HHMM` or `HHMMSS`).
+- **CALL / STATION_CALLSIGN:** uppercased at the daemon boundary.
+- **BAND:** lowercased (`"40m"`, not `"40M"`).
+- **MODE:** uppercased (`"SSB"`, `"CW"`, etc.).
+
+---
+
 ## 8. Related documents
 
 - `docs/v1-analysis/invariants.md` — especially "Nothing blocks logging a QSO, except catastrophic local failure," "Enrichment never blocks logging," "Forwarding never blocks logging," "One-fails-all-fail for QSO writes," "Core concern is log + forward, nothing else," "Contest dupe check and general ingest dedupe are two different things."

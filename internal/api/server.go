@@ -56,6 +56,9 @@ func New(cfg config.Config, qso *qsoservice.Service, db *sqlite.Service, logger 
 	mux.HandleFunc("DELETE /v1/logbook/{id}", s.handleDeleteLogbook)
 	mux.HandleFunc("GET /v1/logbook/{id}/qso", s.handleListQsoByLogbook)
 
+	// Contest
+	mux.HandleFunc("GET /v1/contest-dupe", s.handleContestDupe)
+
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 

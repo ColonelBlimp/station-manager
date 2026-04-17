@@ -919,8 +919,15 @@ func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Lo
  * Contest Related Methods
  **********************************************************************************************************************/
 
-func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, id int64, callsign, band string) (bool, error) {
-	const op errors.Op = "sqlite.Service.IsContestDuplicatByLogbookIDWithContext"
+// IsContestDuplicateByLogbookIDWithContext reports whether the given
+// callsign has already been worked on (band [, mode]) within the given
+// logbook. Soft-deleted rows are excluded by sqlboiler's default.
+//
+// Pass mode="" for band-only contests (ARRL DX, etc.). Pass mode="SSB"
+// (or similar) for band+mode contests (CQ WW, etc.). The client owns the
+// contest rule; the daemon just answers the filtered existence question.
+func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, id int64, callsign, band, mode string) (bool, error) {
+	const op errors.Op = "sqlite.Service.IsContestDuplicateByLogbookIDWithContext"
 	if err := checkService(op, s); err != nil {
 		return false, err
 	}
@@ -938,6 +945,8 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 		return false, errors.New(op).WithMsg("Band cannot be empty")
 	}
 
+	mode = strings.TrimSpace(mode)
+
 	h, err := s.getOpenHandle(op)
 	if err != nil {
 		return false, err
@@ -946,10 +955,14 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	var mods []qm.QueryMod
-	mods = append(mods, models.QsoWhere.Call.EQ(callsign))
-	mods = append(mods, models.QsoWhere.Band.EQ(band))
-	mods = append(mods, models.QsoWhere.LogbookID.EQ(id))
+	mods := []qm.QueryMod{
+		models.QsoWhere.Call.EQ(callsign),
+		models.QsoWhere.Band.EQ(band),
+		models.QsoWhere.LogbookID.EQ(id),
+	}
+	if mode != "" {
+		mods = append(mods, models.QsoWhere.Mode.EQ(mode))
+	}
 
 	exists, err := models.Qsos(mods...).Exists(ctx, h)
 	if err != nil {

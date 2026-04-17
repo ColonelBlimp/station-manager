@@ -273,8 +273,8 @@ func TestIsContestDuplicate_HitAndMiss(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	// Hit: same callsign + band in same logbook
-	hit, err := svc.IsContestDuplicateByLogbookID(lbID, "M0CMC", "40m")
+	// Hit: same callsign + band in same logbook, mode skipped (band-only contest).
+	hit, err := svc.IsContestDuplicateByLogbookID(lbID, "M0CMC", "40m", "")
 	if err != nil {
 		t.Fatalf("dupe check hit: %v", err)
 	}
@@ -282,8 +282,26 @@ func TestIsContestDuplicate_HitAndMiss(t *testing.T) {
 		t.Fatal("expected contest duplicate hit")
 	}
 
+	// Hit: same callsign + band + matching mode.
+	hitMode, err := svc.IsContestDuplicateByLogbookID(lbID, "M0CMC", "40m", "SSB")
+	if err != nil {
+		t.Fatalf("dupe check hit (mode): %v", err)
+	}
+	if !hitMode {
+		t.Fatal("expected contest duplicate hit with mode")
+	}
+
+	// Miss: same callsign + band but different mode (band+mode contest).
+	missMode, err := svc.IsContestDuplicateByLogbookID(lbID, "M0CMC", "40m", "CW")
+	if err != nil {
+		t.Fatalf("dupe check miss (mode): %v", err)
+	}
+	if missMode {
+		t.Fatal("expected miss on different mode")
+	}
+
 	// Miss: different band
-	miss, err := svc.IsContestDuplicateByLogbookID(lbID, "M0CMC", "20m")
+	miss, err := svc.IsContestDuplicateByLogbookID(lbID, "M0CMC", "20m", "")
 	if err != nil {
 		t.Fatalf("dupe check miss: %v", err)
 	}
@@ -292,7 +310,7 @@ func TestIsContestDuplicate_HitAndMiss(t *testing.T) {
 	}
 
 	// Miss: different callsign
-	miss2, err := svc.IsContestDuplicateByLogbookID(lbID, "DL1ABC", "40m")
+	miss2, err := svc.IsContestDuplicateByLogbookID(lbID, "DL1ABC", "40m", "")
 	if err != nil {
 		t.Fatalf("dupe check miss2: %v", err)
 	}
@@ -303,13 +321,13 @@ func TestIsContestDuplicate_HitAndMiss(t *testing.T) {
 
 func TestIsContestDuplicate_InvalidInputs(t *testing.T) {
 	svc := testService(t)
-	if _, err := svc.IsContestDuplicateByLogbookID(0, "M0CMC", "40m"); err == nil {
+	if _, err := svc.IsContestDuplicateByLogbookID(0, "M0CMC", "40m", ""); err == nil {
 		t.Fatal("expected error for id=0")
 	}
-	if _, err := svc.IsContestDuplicateByLogbookID(1, "", "40m"); err == nil {
+	if _, err := svc.IsContestDuplicateByLogbookID(1, "", "40m", ""); err == nil {
 		t.Fatal("expected error for empty callsign")
 	}
-	if _, err := svc.IsContestDuplicateByLogbookID(1, "M0CMC", ""); err == nil {
+	if _, err := svc.IsContestDuplicateByLogbookID(1, "M0CMC", "", ""); err == nil {
 		t.Fatal("expected error for empty band")
 	}
 }

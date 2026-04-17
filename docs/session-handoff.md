@@ -26,11 +26,12 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-04-17 end-of-session 9)
 
-### Milestone 1 complete, milestone 1b halfway
+### Milestone 1 complete, milestone 1b 4 of 6 landed
 
 Milestone 1 (submit a QSO) is complete and CI-green. Milestone 1b
-(QSO CRUD and logbook management) is half done — logbook CRUD and
-QSO fetch/edit/delete are both landed.
+(QSO CRUD and logbook management) is 4 of 6 done — logbook CRUD,
+QSO fetch/edit/delete, QSO list with cursor pagination, and the
+contest-dupe endpoint have all landed.
 
 ### Milestone 1b progress
 
@@ -38,8 +39,8 @@ QSO fetch/edit/delete are both landed.
 |------|-------|--------|
 | 1. Logbook CRUD | `GET/POST/PATCH/DELETE /v1/logbook` | **done** (session 8) |
 | 2. QSO fetch/edit/delete | `GET/PATCH/DELETE /v1/qso/:id` | **done** (session 9) |
-| 3. QSO list with pagination | `GET /v1/logbook/:id/qso` | not started |
-| 4. Contest dupe check | `GET /v1/contest-dupe` | not started |
+| 3. QSO list with pagination | `GET /v1/logbook/:id/qso` | **done** (session 9) |
+| 4. Contest dupe check | `GET /v1/contest-dupe` | **done** (session 9) |
 | 5. Contact history | `GET /v1/contact-history` | not started |
 | 6. Version | `GET /v1/version` | not started |
 
@@ -84,6 +85,58 @@ return 404. The partial unique index on `dedupe_key` is scoped
 `WHERE deleted_at IS NULL`, so soft-deleting a QSO frees its dedupe
 key — the same (call, band, mode, freq, date, time) can be re-logged
 after deletion.
+
+### FREQ is MHz on the external surface (session 9)
+
+`types.Qso.Freq` was storing the integer-kHz string, leaking a
+storage unit out through the HTTP API and the "QSO stored" log line.
+Fixed: `types.Qso.Freq` is the ADIF-native MHz decimal string
+(e.g. `"14.074"`) everywhere above the adapter; the sqlite adapter
+is the only place that knows about integer-kHz storage.
+
+- `utils.ParseFreqMHz(string) (int64, error)` and
+  `utils.FormatFreqMHz(int64) string` are the kHz↔MHz bridge,
+  co-located with the other freq helpers.
+- The old `qsoservice.FreqMHzToKHzString` helper was removed.
+- The sqlite `freq` column is still INTEGER kHz (per v2-design
+  decision: SQLite likes integers for sortable/indexable storage;
+  translation happens in the daemon).
+- Dedupe-key hash still uses the int-kHz string internally for
+  deterministic numeric normalization ("7.050" / "7.0500" / "7050"
+  all collapse to the same integer).
+
+### Cursor-based QSO list pagination (session 9)
+
+`GET /v1/logbook/{id}/qso?after=<cursor>&limit=<N>` per api.md §4.4.
+Forward-only, DESC sort on `(qso_date, time_on, id)` — newest first.
+Cursor is opaque base64url-encoded JSON `{"d","t","i"}`. Response
+shape: `{"items": [...], "next_cursor": null | "<token>"}`.
+
+- `ServerConfig.DefaultPageLimit` (50) and `ServerConfig.MaxPageLimit`
+  (500) added. Clients that omit `?limit` get the default; values
+  above max are silently clamped; non-positive values are 400.
+- Soft-deleted rows are hidden (sqlboiler default).
+- Opt-in "show deleted" is deferred — logbook-app concern per the
+  narrow-daemon invariant. When the logbook-app is built we'll add
+  `?include_deleted=true` symmetrically across GET/LIST.
+
+### Contest-dupe endpoint (session 9)
+
+`GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>`
+returns `{"duplicate": bool}`. Mode is optional: omit for band-only
+contests (ARRL DX), include for band+mode contests (CQ WW).
+
+- Narrow purpose-built endpoint rather than filters on the list
+  endpoint — contest operators hit this path hard and the answer
+  is a single boolean.
+- **Contest isolation via logbook-per-contest, not separate DB
+  file.** The logbook abstraction is designed for exactly this
+  partitioning; contest-dupe queries are `WHERE logbook_id = ?` so
+  they're inherently scoped to the contest's logbook with no
+  cross-contamination. See the `project_sm_session_scope.md` memory
+  for the related "logging session stays client-side" decision.
+- `IsContestDuplicateByLogbookIDWithContext` widened to take an
+  optional `mode` argument.
 
 ### QSO submit path tightened (session 8)
 
@@ -174,29 +227,61 @@ a Pi) without any code changes — just a config change.
    assertion. Future-proofs against anyone wrapping a `*SubmitError`
    with `%w` or the `internal/errors` builder.
 
-6. **`qsoservice.FreqMHzToKHzString` exported** so the PATCH path
-   could reuse the MHz→kHz normalization without duplicating it.
-
-7. **Stress test expanded** — `TestStress_20Clients_50QSOs` now runs
+6. **Stress test expanded** — `TestStress_20Clients_50QSOs` now runs
    submit → fetch (verify call) → PATCH(freq) (verify dedupe-key
    recomputed) → DELETE (verify 204, verify subsequent GET 404) per
    QSO. 1000 QSOs, zero errors across all four operations, race
    detector clean. End-to-end round trip ~17–18 ms.
 
-8. **Types-package audit** — searched for exported types outside
+7. **Types-package audit** — searched for exported types outside
    `internal/types` that cross package boundaries. Concluded (with
    user agreement) that types move into `internal/types` only when
    there is actual cyclic-dependency risk, not prophylactically. No
    migrations made; `adif.Record`, `qsoservice.SubmitResult`,
    `qsoservice.SubmitError` stay in their own packages.
 
+8. **FREQ leak fix — MHz is the canonical external form.**
+   `types.Qso.Freq` was holding the integer-kHz string, so HTTP
+   responses and log lines returned `"14074"` instead of `"14.074"` —
+   violating the ADIF-follows-spec invariant. Fix: added
+   `utils.ParseFreqMHz` / `utils.FormatFreqMHz`, moved the
+   MHz↔kHz boundary into the sqlite adapter, made `types.Qso.Freq`
+   canonical MHz everywhere above the adapter. DB column stays
+   INTEGER kHz (user decision: SQLite prefers integers for sortable
+   storage). `qsoservice.FreqMHzToKHzString` removed; dedupe-key
+   hash still uses the int-kHz string internally for determinism.
+   Adapter tests had nonsense `Freq: 14250000` values (14.25 GHz
+   in kHz) — fixed to realistic `14250` / `"14.250"` in the process.
+
+9. **`IsContestDuplicateByLogbookIDWithContext` widened** to take
+   an optional `mode` argument for band+mode contests, in
+   preparation for the contest-dupe endpoint.
+
+10. **`GET /v1/logbook/{id}/qso`** — forward-cursor pagination.
+    New sqlite method `FetchQsoPageByLogbookWithContext` uses a
+    tuple predicate on `(qso_date, time_on, id)` DESC and fetches
+    `limit+1` to detect "has more" cheaply. Handler encodes/decodes
+    an opaque base64url JSON cursor. `ServerConfig.DefaultPageLimit`
+    (50) and `ServerConfig.MaxPageLimit` (500) added. Nine tests
+    including a three-page walk with full ordering reconstruction
+    and soft-delete-hidden assertion.
+
+11. **`GET /v1/contest-dupe`** — narrow purpose-built endpoint.
+    Validates `logbook`, `call`, `band` (required) and `mode`
+    (optional). Returns `{"duplicate": bool}`. 15 tests covering
+    band-only / band+mode hits and misses, soft-delete exclusion,
+    logbook-scoping (hit in logbook A must NOT match in logbook B —
+    the whole point of the logbook-per-contest pattern), and all
+    validation error paths.
+
 ### Coverage summary end-of-session
 
 | Package | Coverage |
 |---------|----------|
-| `internal/api` | higher than session 8 (PATCH + DELETE + GET + freq tests added) |
-| `internal/qsoservice` | `Update` has full path coverage via api tests |
-| `internal/database/sqlite` | `DeleteQsoByIDWithContext` added |
+| `internal/api` | full CRUD + list + contest-dupe handler tests; 1000-QSO stress round trip |
+| `internal/qsoservice` | `Update` and `Submit` exercised via api tests; dedupe unit tests cover freq |
+| `internal/database/sqlite` | new `DeleteQsoByIDWithContext`, `FetchQsoPageByLogbookWithContext`; widened contest-dupe method |
+| `internal/utils` | new freq-conversion helpers with round-trip tests |
 
 Full suite race-detector clean.
 
@@ -205,18 +290,31 @@ Full suite race-detector clean.
 - **`types.Qso` is the canonical DTO** for HTTP/service boundaries.
   Do not build parallel `XPatch` / `XRequest` structs that duplicate
   field lists from `types.X`. Use `json.Unmarshal` overlay + stash-
-  restore of immutables instead. Captured as a memory for future
-  sessions.
+  restore of immutables instead. Captured as a memory.
 - **types package rule is pragmatic, not prophylactic.** Exported
   types move to `internal/types` only when an actual cycle could
   form, not as a preventive measure. Captured as a memory.
 - **FREQ is part of QSO identity.** Dedupe key now includes FREQ per
   ADIF-spec guidance. Schema unchanged.
+- **FREQ on the external surface is MHz** (ADIF-native). kHz is the
+  sqlite storage unit; translation lives in the adapter, not
+  anywhere above it.
 - **PATCH design:** immutable fields always restored server-side,
   dedupe inputs recomputed on change, collision rejected with 409,
   no force bypass on edit.
 - **DELETE is always soft-delete at the daemon.** Hard-delete stays
   a logbook-app concern.
+- **Pagination is forward-cursor only**, newest-first, opaque token.
+  Soft-deleted rows are always hidden. Opt-in "show deleted" is
+  deferred until the logbook-app needs it.
+- **Contest isolation via logbook-per-contest, not separate DB
+  file.** `logbook_id` partition gives the contest-dupe endpoint
+  false-positive-free scoping by construction.
+- **Logging session is entirely client-side.** No `session_id`
+  column, no `/v1/session` endpoints. The logging app keeps an
+  in-memory list of QSOs submitted since Start, uses existing
+  PATCH/DELETE for edits, and a future `POST /v1/logbook/{id}/export?ids=…`
+  for end-of-session email. Captured as a memory.
 
 ---
 
@@ -401,38 +499,36 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (session 10 start)
 
-**Implement QSO list with pagination.** Step 3 of the milestone 1b
-workflow. The operator needs to see what they've logged.
+**Implement contact history.** Step 5 of the milestone 1b workflow.
+Nice-to-have rather than essential — operator uses it outside a
+pileup to see "have I worked this call before, and where?".
 
-- `GET /v1/logbook/{id}/qso` — forward-cursor pagination via
-  `?after=<cursor>&limit=<N>` per `docs/v2-design/api.md` §4.4.
-- Existing offset-based `FetchQsoSlicePaging` in the sqlite layer
-  needs rewriting to cursor-based. Cursor shape per api.md:
-  opaque-base64-encoded `(qso_date DESC, time_on DESC, id DESC)` tuple.
-- Response envelope: `{"items": [...], "next_cursor": "...", "has_more": bool}`.
-- Default limit, max limit, and the sort direction (DESC most-recent-first)
-  are all called out in api.md §4.4 — read that first before coding.
+- `GET /v1/contact-history?call=<callsign>` — returns prior QSOs
+  with a callsign across all logbooks (not scoped to a single
+  logbook, unlike contest-dupe).
+- sqlite layer already has `FetchQsoSliceByCallsignWithContext`
+  which returns a `[]types.ContactHistory` slice. Check whether its
+  current output shape is what the endpoint should return directly
+  or whether any transformation is needed.
+- Likely a simpler handler than the list endpoint — no pagination
+  unless the result set is huge. Spec doesn't call out pagination
+  for this path.
 
 Design questions to resolve (one at a time) before coding:
-- Should list include soft-deleted rows via an `?include_deleted=true`
-  flag, or is that strictly a future logbook-app concern and the v1
-  endpoint always hides them?
-- Cursor stability under concurrent inserts: the tuple-based cursor
-  handles this naturally (older rows can't suddenly sort newer), but
-  confirm that's the intent.
+- **Scope:** all logbooks, or a `?logbook=<id>` filter? My read:
+  all logbooks by default (the whole point is "have I ever worked
+  them"); optional `?logbook=<id>` for operators who want to restrict.
+- **Soft-delete:** hide, same as everywhere else.
+- **Ordering:** newest-first, same convention as list.
+- **Result cap:** is there one? Per the memory, any number-with-meaning
+  goes in config rather than hardcoded.
 
 ### Continue milestone 1b — remaining workflow steps
 
-4. **Contest dupe check** — essential for contesting.
-   - `GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>`
-   - sqlite layer already has `IsContestDuplicateByLogbookIDWithContext`
-
-5. **Contact history** — nice to have, not essential.
-   - `GET /v1/contact-history?call=<callsign>`
-   - sqlite layer already has `FetchQsoSliceByCallsignWithContext`
-
 6. **Version** — diagnostic, lowest priority.
-   - `GET /v1/version`
+   - `GET /v1/version` — daemon build version, go version, schema
+     version. Useful for diagnostics and for clients that want to
+     refuse to talk to an incompatible daemon.
 
 ### v2 design work
 

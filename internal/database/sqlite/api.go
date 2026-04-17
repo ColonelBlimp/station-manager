@@ -117,8 +117,8 @@ func (s *Service) UpsertLogbook(logbook types.Logbook) error {
  * Contest Related Methods
  **********************************************************************************************************************/
 
-func (s *Service) IsContestDuplicateByLogbookID(id int64, callsign, band string) (bool, error) {
-	return s.IsContestDuplicateByLogbookIDWithContext(context.Background(), id, callsign, band)
+func (s *Service) IsContestDuplicateByLogbookID(id int64, callsign, band, mode string) (bool, error) {
+	return s.IsContestDuplicateByLogbookIDWithContext(context.Background(), id, callsign, band, mode)
 }
 
 /**********************************************************************************************************************
