@@ -213,6 +213,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 
 	s.Logger.InfoWith().
 		Int64("qso_id", qsoID).
+		Int64("logbook_id", logbookID).
 		Str("call", call).
 		Str("band", band).
 		Str("mode", mode).
