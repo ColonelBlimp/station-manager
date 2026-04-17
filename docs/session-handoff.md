@@ -24,24 +24,66 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-17 end-of-session 8)
+## Current state (as of 2026-04-17 end-of-session 9)
 
-### Milestone 1 complete, milestone 1b in progress
+### Milestone 1 complete, milestone 1b halfway
 
 Milestone 1 (submit a QSO) is complete and CI-green. Milestone 1b
-(QSO CRUD and logbook management) is in progress — logbook CRUD is
-done (step 1 of 6 in the workflow-driven implementation order).
+(QSO CRUD and logbook management) is half done — logbook CRUD and
+QSO fetch/edit/delete are both landed.
 
-### Milestone 1b progress (reprioritised session 8)
+### Milestone 1b progress
 
 | Step | Scope | Status |
 |------|-------|--------|
-| 1. Logbook CRUD | `GET/POST/PATCH/DELETE /v1/logbook` | **done** |
-| 2. QSO fetch/edit/delete | `GET/PATCH/DELETE /v1/qso/:id` | not started |
+| 1. Logbook CRUD | `GET/POST/PATCH/DELETE /v1/logbook` | **done** (session 8) |
+| 2. QSO fetch/edit/delete | `GET/PATCH/DELETE /v1/qso/:id` | **done** (session 9) |
 | 3. QSO list with pagination | `GET /v1/logbook/:id/qso` | not started |
 | 4. Contest dupe check | `GET /v1/contest-dupe` | not started |
 | 5. Contact history | `GET /v1/contact-history` | not started |
 | 6. Version | `GET /v1/version` | not started |
+
+### FREQ added to dedupe-key inputs (session 9)
+
+The dedupe-key hash was expanded from
+`CALL|BAND|MODE|QSO_DATE|TIME_ON` to
+`CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON`. Aligns with ADIF-spec
+guidance on QSO identity and distinguishes same-call/same-time
+contacts on different frequencies (net ops, split, frequency
+hopping). FREQ is the normalized integer-kHz string so "14.074" /
+"14074" / "14.0740" all hash to the same key.
+
+No schema change — `dedupe_key` is just a hash column. No migration
+needed pre-1.0.
+
+### PATCH design decisions (session 9)
+
+- **Immutable fields:** `id`, `logbook_id`, `station_callsign`,
+  `dedupe_key`, forwarding state (`sm_*`, `qrzcom_*`), enrichment
+  (`country_details`, `contact_history`). Always restored from the
+  existing row after `json.Unmarshal` overlay. Clients cannot rewrite
+  them via PATCH even if they include those keys in the body.
+- **Dedupe-key recompute:** if any of CALL/BAND/MODE/FREQ/QSO_DATE/
+  TIME_ON change, the key is recomputed. A new key that collides with
+  another QSO in the same logbook returns 409 `duplicate_key`. No
+  `force=true` bypass on edit — edit is never allowed to create a
+  duplicate.
+- **No parallel patch struct.** PATCH accepts a JSON body matching
+  the canonical `types.Qso` shape. `json.Unmarshal` overlays present
+  keys onto a copy of the existing QSO; missing keys leave fields
+  alone. Adding an ADIF field to `types.Qso` automatically becomes
+  editable via PATCH with no second change.
+
+### DELETE is soft-delete only (session 9)
+
+`DELETE /v1/qso/:id` flips `deleted_at`. The daemon's job is "log +
+forward"; any hard-delete / purge tooling is a logbook-app concern.
+Soft-deleted rows are hidden from `FindQso` (sqlboiler's generated
+WHERE clause filters `deleted_at IS NULL`), so subsequent GETs
+return 404. The partial unique index on `dedupe_key` is scoped
+`WHERE deleted_at IS NULL`, so soft-deleting a QSO frees its dedupe
+key — the same (call, band, mode, freq, date, time) can be re-logged
+after deletion.
 
 ### QSO submit path tightened (session 8)
 
@@ -89,7 +131,96 @@ a Pi) without any code changes — just a config change.
 
 ---
 
-## What happened in the 2026-04-17 session (session 8, in progress)
+## What happened in session 9 (2026-04-17)
+
+### Goals set for the session
+
+- Implement milestone 1b step 2 (QSO fetch/edit/delete)
+- Extend the stress test to exercise new read/edit/delete paths
+
+### What got done
+
+1. **`GET /v1/qso/{id}`** — `handleGetQso` in
+   `internal/api/handler_qso.go`. Parses `{id}`, calls
+   `FetchQsoByIdWithContext`, maps `ErrNotFound` → 404. Soft-deleted
+   rows return 404 because `FindQso` already filters
+   `deleted_at IS NULL`.
+
+2. **`PATCH /v1/qso/{id}`** — `handleUpdateQso` + `qsoservice.Update`
+   in `internal/qsoservice/update.go`. First iteration built a
+   `QsoPatch` struct with pointer fields per editable attribute; was
+   torn out and rebuilt to use `types.Qso` directly via
+   `json.Unmarshal` overlay + stash-restore of immutables. The
+   rewrite prevents drift with `types.Qso` and honors the "adding an
+   ADIF field is a one-line change" invariant. Validation errors
+   come back as `*SubmitError`; collision → `duplicate_key` → 409.
+   No `force=true` bypass.
+
+3. **`DELETE /v1/qso/{id}`** — `handleDeleteQso` + sqlite
+   `DeleteQsoByIDWithContext`. Soft-delete via sqlboiler's
+   `qso.Delete(ctx, h, false)`. Returns 404 if the QSO doesn't exist
+   or is already soft-deleted. No FK check — QSO is the child. Test
+   `TestDeleteQso_FreesDedupeKey` locks in the behavior that
+   soft-deletion frees the dedupe-key slot (thanks to the partial
+   unique index `WHERE deleted_at IS NULL`).
+
+4. **FREQ added to dedupe-key inputs** —
+   `ComputeDedupeKey(call, band, mode, freq, qsoDate, timeOn)`.
+   Tests, call sites (submit + update), and the `dedupeChanged`
+   check in `Update` all updated in lockstep. See "FREQ added to
+   dedupe-key inputs" above for the rationale.
+
+5. **`IsSubmitError` uses `errors.As`** instead of a direct type
+   assertion. Future-proofs against anyone wrapping a `*SubmitError`
+   with `%w` or the `internal/errors` builder.
+
+6. **`qsoservice.FreqMHzToKHzString` exported** so the PATCH path
+   could reuse the MHz→kHz normalization without duplicating it.
+
+7. **Stress test expanded** — `TestStress_20Clients_50QSOs` now runs
+   submit → fetch (verify call) → PATCH(freq) (verify dedupe-key
+   recomputed) → DELETE (verify 204, verify subsequent GET 404) per
+   QSO. 1000 QSOs, zero errors across all four operations, race
+   detector clean. End-to-end round trip ~17–18 ms.
+
+8. **Types-package audit** — searched for exported types outside
+   `internal/types` that cross package boundaries. Concluded (with
+   user agreement) that types move into `internal/types` only when
+   there is actual cyclic-dependency risk, not prophylactically. No
+   migrations made; `adif.Record`, `qsoservice.SubmitResult`,
+   `qsoservice.SubmitError` stay in their own packages.
+
+### Coverage summary end-of-session
+
+| Package | Coverage |
+|---------|----------|
+| `internal/api` | higher than session 8 (PATCH + DELETE + GET + freq tests added) |
+| `internal/qsoservice` | `Update` has full path coverage via api tests |
+| `internal/database/sqlite` | `DeleteQsoByIDWithContext` added |
+
+Full suite race-detector clean.
+
+### Design decisions made
+
+- **`types.Qso` is the canonical DTO** for HTTP/service boundaries.
+  Do not build parallel `XPatch` / `XRequest` structs that duplicate
+  field lists from `types.X`. Use `json.Unmarshal` overlay + stash-
+  restore of immutables instead. Captured as a memory for future
+  sessions.
+- **types package rule is pragmatic, not prophylactic.** Exported
+  types move to `internal/types` only when an actual cycle could
+  form, not as a preventive measure. Captured as a memory.
+- **FREQ is part of QSO identity.** Dedupe key now includes FREQ per
+  ADIF-spec guidance. Schema unchanged.
+- **PATCH design:** immutable fields always restored server-side,
+  dedupe inputs recomputed on change, collision rejected with 409,
+  no force bypass on edit.
+- **DELETE is always soft-delete at the daemon.** Hard-delete stays
+  a logbook-app concern.
+
+---
+
+## What happened in session 8 (2026-04-17)
 
 ### Goals set for the session
 
@@ -218,26 +349,14 @@ Race detector clean across all 14 packages.
 
 ---
 
-## What happened in session 7 (2026-04-16)
+## Session 7 (2026-04-16, compressed)
 
-### Goals
-
-- Complete carry-forward package review track
-- Write milestones doc
-- Write milestone 1 daemon code
-
-### What got done
-
-Reviewed all 8 carry-forward packages (types, utils, enums, config,
-iocdi, adif, database/sqlite). Wrote `docs/v2-design/milestones.md`.
-Implemented milestone 1: daemon entry point, config loader, qsoservice
-with validation/dedupe/atomic write, API handlers, error envelope,
-healthz. Set up dev environment (build/config.json, task run) and
-GitHub Actions CI. Found and fixed 5 bugs during testing (force dedupe,
-malformed ADIF status, MaxBytesReader leak, empty dedupe fields,
-time coherence). 25 tests across 4 packages. Schema updated: removed
-session table/apikey, added dedupe_key column, removed contradictory
-CHECK constraints.
+Reviewed all 8 carry-forward packages and wrote
+`docs/v2-design/milestones.md`. Implemented milestone 1: daemon,
+config, qsoservice (validation/dedupe/atomic write), API handlers,
+error envelope, healthz. Dev environment + GitHub Actions CI.
+5 bugs fixed during testing. 25 tests across 4 packages. Schema
+cleanup (removed session table/apikey, added dedupe_key column).
 
 ---
 
@@ -280,41 +399,29 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### The immediate next action (session 9 start)
+### The immediate next action (session 10 start)
 
-**Implement QSO fetch/edit/delete.** This is step 2 of the
-reprioritised milestone 1b workflow. The operator needs to correct
-mistakes immediately after logging.
+**Implement QSO list with pagination.** Step 3 of the milestone 1b
+workflow. The operator needs to see what they've logged.
 
-Endpoints to add:
-- `GET /v1/qso/{id}` — fetch a QSO
-- `PATCH /v1/qso/{id}` — edit a QSO
-- `DELETE /v1/qso/{id}` — soft-delete a QSO
+- `GET /v1/logbook/{id}/qso` — forward-cursor pagination via
+  `?after=<cursor>&limit=<N>` per `docs/v2-design/api.md` §4.4.
+- Existing offset-based `FetchQsoSlicePaging` in the sqlite layer
+  needs rewriting to cursor-based. Cursor shape per api.md:
+  opaque-base64-encoded `(qso_date DESC, time_on DESC, id DESC)` tuple.
+- Response envelope: `{"items": [...], "next_cursor": "...", "has_more": bool}`.
+- Default limit, max limit, and the sort direction (DESC most-recent-first)
+  are all called out in api.md §4.4 — read that first before coding.
 
-Groundwork already done:
-- `FetchQsoByIdWithContext` exists in sqlite layer
-- `UpdateQsoWithContext` exists in sqlite layer
-- Schema has `deleted_at` column for soft-delete
-- Test patterns established in `handler_test.go` (see logbook CRUD tests)
-
-Still needed:
-- Soft-delete method in sqlite layer (similar to
-  `DeleteLogbookByIDWithContext` but for QSOs; no FK-constraint check
-  since QSO is the child)
-- Handler functions: `handleGetQso`, `handleUpdateQso`, `handleDeleteQso`
-- Route registration in `server.go`
-- Design: should PATCH allow changing `station_callsign` or `logbook_id`?
-  Probably NO — those are structural, like the logbook's callsign.
-  Should it recompute the dedupe key if CALL/BAND/MODE/DATE/TIME change?
-  YES — otherwise the update could silently create an in-DB duplicate.
+Design questions to resolve (one at a time) before coding:
+- Should list include soft-deleted rows via an `?include_deleted=true`
+  flag, or is that strictly a future logbook-app concern and the v1
+  endpoint always hides them?
+- Cursor stability under concurrent inserts: the tuple-based cursor
+  handles this naturally (older rows can't suddenly sort newer), but
+  confirm that's the intent.
 
 ### Continue milestone 1b — remaining workflow steps
-
-3. **QSO list with pagination** — operator needs to see what they've
-   logged.
-   - `GET /v1/logbook/{id}/qso` (forward-cursor pagination)
-   - Existing offset-based `FetchQsoSlicePaging` needs rewriting to
-     cursor-based per api.md Section 4.4
 
 4. **Contest dupe check** — essential for contesting.
    - `GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>`
@@ -348,5 +455,5 @@ Still needed:
 
 ### Maintenance
 
-- Compress session 7 after session 9 lands.
+- Compress session 8 after session 10 lands.
 - Update this file at end of every session.
