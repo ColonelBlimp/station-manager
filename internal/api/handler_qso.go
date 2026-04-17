@@ -13,6 +13,28 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
 
+func (s *Server) handleGetQso(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleGetQso"
+
+	id, err := parsePathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		return
+	}
+
+	qso, err := s.db.FetchQsoByIdWithContext(r.Context(), id)
+	if err != nil {
+		if stderr.Is(err, errors.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, qso)
+}
+
 func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleSubmitQso"
 

@@ -40,6 +40,7 @@ func New(cfg config.Config, qso *qsoservice.Service, db *sqlite.Service, logger 
 
 	// QSO
 	mux.HandleFunc("POST /v1/qso", s.handleSubmitQso)
+	mux.HandleFunc("GET /v1/qso/{id}", s.handleGetQso)
 
 	// Logbook CRUD
 	mux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)

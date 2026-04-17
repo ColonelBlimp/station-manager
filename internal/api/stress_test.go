@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +25,9 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	const totalQSOs = numClients * qsosPerClient
 
 	var stored atomic.Int64
+	var fetched atomic.Int64
 	var errCount atomic.Int64
+	var fetchErrCount atomic.Int64
 	var wg sync.WaitGroup
 
 	start := time.Now()
@@ -76,12 +79,38 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 
 				w := submitQso(t, srv, lbID, body, false)
 
-				if w.Code == http.StatusCreated && strings.Contains(w.Body.String(), `"status":"stored"`) {
-					stored.Add(1)
-				} else {
+				if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"status":"stored"`) {
 					errCount.Add(1)
-					t.Logf("client %d qso %d: status=%d body=%s", clientID, i, w.Code, w.Body.String())
+					t.Logf("client %d qso %d submit: status=%d body=%s", clientID, i, w.Code, w.Body.String())
+					continue
 				}
+				stored.Add(1)
+
+				// Parse the QSO ID from the submit response and fetch it back
+				// to exercise the read path under concurrent write load.
+				var qsoID int64
+				if _, err := fmt.Sscanf(w.Body.String(), `{"status":"stored","id":%d}`, &qsoID); err != nil || qsoID < 1 {
+					fetchErrCount.Add(1)
+					t.Logf("client %d qso %d: failed to parse id from %s", clientID, i, w.Body.String())
+					continue
+				}
+
+				getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
+				getReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+				getW := httptest.NewRecorder()
+				srv.handleGetQso(getW, getReq)
+
+				if getW.Code != http.StatusOK {
+					fetchErrCount.Add(1)
+					t.Logf("client %d qso %d fetch: status=%d body=%s", clientID, i, getW.Code, getW.Body.String())
+					continue
+				}
+				if !strings.Contains(getW.Body.String(), fmt.Sprintf(`"call":"%s"`, callsign)) {
+					fetchErrCount.Add(1)
+					t.Logf("client %d qso %d fetch: call mismatch, body=%s", clientID, i, getW.Body.String())
+					continue
+				}
+				fetched.Add(1)
 			}
 		}(client)
 	}
@@ -94,15 +123,23 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	t.Logf("QSOs/client:   %d", qsosPerClient)
 	t.Logf("Total QSOs:    %d", totalQSOs)
 	t.Logf("Stored:        %d", stored.Load())
-	t.Logf("Errors:        %d", errCount.Load())
+	t.Logf("Fetched:       %d", fetched.Load())
+	t.Logf("Submit errors: %d", errCount.Load())
+	t.Logf("Fetch errors:  %d", fetchErrCount.Load())
 	t.Logf("Elapsed:       %s", elapsed)
-	t.Logf("Avg latency:   %s", elapsed/time.Duration(totalQSOs))
+	t.Logf("Avg latency:   %s (submit+fetch round trip)", elapsed/time.Duration(totalQSOs))
 	t.Logf("Throughput:    %.1f QSOs/sec", float64(totalQSOs)/elapsed.Seconds())
 
 	if errCount.Load() > 0 {
-		t.Fatalf("expected 0 errors, got %d", errCount.Load())
+		t.Fatalf("expected 0 submit errors, got %d", errCount.Load())
+	}
+	if fetchErrCount.Load() > 0 {
+		t.Fatalf("expected 0 fetch errors, got %d", fetchErrCount.Load())
 	}
 	if stored.Load() != totalQSOs {
 		t.Fatalf("expected %d stored, got %d", totalQSOs, stored.Load())
+	}
+	if fetched.Load() != totalQSOs {
+		t.Fatalf("expected %d fetched, got %d", totalQSOs, fetched.Load())
 	}
 }

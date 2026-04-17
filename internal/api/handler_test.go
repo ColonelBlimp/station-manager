@@ -679,3 +679,64 @@ func TestSubmitQso_NormalTimeOrder_Accepted(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusCreated, w.Body.String())
 	}
 }
+
+// =============================================================================
+// Get QSO
+// =============================================================================
+
+func TestGetQso(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	submitW := submitQso(t, srv, lbID, testQsoADIF, false)
+	if submitW.Code != http.StatusCreated {
+		t.Fatalf("submit: status = %d; body = %s", submitW.Code, submitW.Body.String())
+	}
+	var qsoID int64
+	_, _ = fmt.Sscanf(submitW.Body.String(), `{"status":"stored","id":%d}`, &qsoID)
+	if qsoID < 1 {
+		t.Fatalf("failed to parse QSO id from %s", submitW.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
+	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	w := httptest.NewRecorder()
+	srv.handleGetQso(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"call":"M0CMC"`) {
+		t.Fatalf("body = %q, want call M0CMC", body)
+	}
+	if !strings.Contains(body, fmt.Sprintf(`"logbook_id":%d`, lbID)) {
+		t.Fatalf("body = %q, want logbook_id %d", body, lbID)
+	}
+}
+
+func TestGetQso_NotFound(t *testing.T) {
+	srv := testServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/qso/999", nil)
+	req.SetPathValue("id", "999")
+	w := httptest.NewRecorder()
+	srv.handleGetQso(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestGetQso_InvalidID(t *testing.T) {
+	srv := testServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/qso/abc", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	srv.handleGetQso(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
