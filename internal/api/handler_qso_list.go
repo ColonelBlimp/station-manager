@@ -36,7 +36,7 @@ func decodeQsoCursor(s string) (qsoPageCursor, error) {
 		return qsoPageCursor{}, err
 	}
 	var c qsoPageCursor
-	if err := json.Unmarshal(b, &c); err != nil {
+	if err = json.Unmarshal(b, &c); err != nil {
 		return qsoPageCursor{}, err
 	}
 	if c.QsoDate == "" || c.TimeOn == "" || c.ID < 1 {

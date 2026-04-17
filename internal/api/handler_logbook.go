@@ -119,7 +119,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 		Description *string `json:"description,omitempty"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "failed to parse request body", op)
 		return
 	}
@@ -136,7 +136,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 		existing.Description = strings.TrimSpace(*req.Description)
 	}
 
-	if err := s.db.UpdateLogbookWithContext(r.Context(), existing); err != nil {
+	if err = s.db.UpdateLogbookWithContext(r.Context(), existing); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
 			writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
