@@ -24,7 +24,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-17 mid-session 8)
+## Current state (as of 2026-04-17 end-of-session 8)
 
 ### Milestone 1 complete, milestone 1b in progress
 
@@ -176,6 +176,10 @@ a Pi) without any code changes — just a config change.
      `updateOnConflict=false` — silently no-op'd on existing rows.
      Now correctly set to `true`.
 
+10. **Added `logbook_id` to QSO stored log line:**
+    - `submit.go` log now includes `logbook_id` alongside `qso_id`,
+      `call`, `band`, `mode` for full diagnostic context.
+
 ### Coverage summary end-of-session
 
 | Package | Coverage |
@@ -276,20 +280,35 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### Continue milestone 1b — reprioritised workflow
+### The immediate next action (session 9 start)
 
-Priority reordered (session 8) to focus on what the operator
-actually needs to log and manage QSOs. Enrichment and draft-building
-features are nice-to-have, not essential — especially during a
-pile-up.
+**Implement QSO fetch/edit/delete.** This is step 2 of the
+reprioritised milestone 1b workflow. The operator needs to correct
+mistakes immediately after logging.
 
-2. **QSO fetch/edit/delete** — operator needs to correct mistakes
-   immediately after logging.
-   - `GET /v1/qso/{id}`
-   - `PATCH /v1/qso/{id}`
-   - `DELETE /v1/qso/{id}`
-   - sqlite layer has `FetchQsoByIdWithContext`, `UpdateQsoWithContext`
-   - Need soft-delete method (schema has `deleted_at`)
+Endpoints to add:
+- `GET /v1/qso/{id}` — fetch a QSO
+- `PATCH /v1/qso/{id}` — edit a QSO
+- `DELETE /v1/qso/{id}` — soft-delete a QSO
+
+Groundwork already done:
+- `FetchQsoByIdWithContext` exists in sqlite layer
+- `UpdateQsoWithContext` exists in sqlite layer
+- Schema has `deleted_at` column for soft-delete
+- Test patterns established in `handler_test.go` (see logbook CRUD tests)
+
+Still needed:
+- Soft-delete method in sqlite layer (similar to
+  `DeleteLogbookByIDWithContext` but for QSOs; no FK-constraint check
+  since QSO is the child)
+- Handler functions: `handleGetQso`, `handleUpdateQso`, `handleDeleteQso`
+- Route registration in `server.go`
+- Design: should PATCH allow changing `station_callsign` or `logbook_id`?
+  Probably NO — those are structural, like the logbook's callsign.
+  Should it recompute the dedupe key if CALL/BAND/MODE/DATE/TIME change?
+  YES — otherwise the update could silently create an in-DB duplicate.
+
+### Continue milestone 1b — remaining workflow steps
 
 3. **QSO list with pagination** — operator needs to see what they've
    logged.
