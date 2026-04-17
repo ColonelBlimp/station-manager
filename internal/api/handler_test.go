@@ -529,7 +529,7 @@ func TestSubmitQso_TimeOnAfterTimeOff_WrongDateOff_Rejected(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "QSO_DATE_OFF to be the day after QSO_DATE") {
+	if !strings.Contains(w.Body.String(), "must be the day after") {
 		t.Fatalf("body = %q, want time coherence error", w.Body.String())
 	}
 }

@@ -101,17 +101,16 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	if timeOn > timeOff {
 		if qsoDateOff == "" || qsoDateOff == qsoDate {
 			return SubmitResult{}, &SubmitError{
-				Code:    "invalid_field_value",
-				Message: "TIME_ON is after TIME_OFF but QSO_DATE_OFF is not the following day",
+				Code:    "invalid_time_range",
+				Message: "TIME_ON is after TIME_OFF without a QSO_DATE_OFF on the following day",
 			}
 		}
-		// Verify qsoDateOff is exactly qsoDate + 1 day.
 		onDate, _ := time.Parse("20060102", qsoDate)
 		offDate, _ := time.Parse("20060102", qsoDateOff)
 		if !offDate.Equal(onDate.AddDate(0, 0, 1)) {
 			return SubmitResult{}, &SubmitError{
-				Code:    "invalid_field_value",
-				Message: fmt.Sprintf("TIME_ON > TIME_OFF requires QSO_DATE_OFF to be the day after QSO_DATE (got %s and %s)", qsoDate, qsoDateOff),
+				Code:    "invalid_time_range",
+				Message: fmt.Sprintf("QSO_DATE_OFF (%s) must be the day after QSO_DATE (%s) when TIME_ON is after TIME_OFF", qsoDateOff, qsoDate),
 			}
 		}
 	}

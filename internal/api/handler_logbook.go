@@ -161,7 +161,7 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.db.DeleteLogbookByIDWithContext(r.Context(), id); err != nil {
+	if err = s.db.DeleteLogbookByIDWithContext(r.Context(), id); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
