@@ -795,8 +795,10 @@ func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Lo
 		Description: null.StringFrom(logbook.Description),
 	}
 
-	if err = model.Upsert(ctx, h, false, nil, boil.Infer(), boil.Infer()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("Upserting logbook failed.")
+	// updateOnConflict=true means: on conflict (by primary key), update
+	// the non-key columns. conflictColumns=nil uses the primary key.
+	if err = model.Upsert(ctx, h, true, nil, boil.Infer(), boil.Infer()); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("upserting logbook failed")
 	}
 
 	return nil

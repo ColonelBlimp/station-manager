@@ -165,6 +165,29 @@ a Pi) without any code changes — just a config change.
      avg latency, race detector clean
    - Benchmark: daemon has ~100x headroom over peak operator load
 
+9. **sqlite package coverage (0% → 66.9%):**
+   - 28 new tests in `internal/database/sqlite/service_test.go`
+   - Covers: service lifecycle (Initialize/Open/Close/Ping
+     idempotency, error paths), logbook CRUD, QSO insert/fetch/update,
+     dedupe key lookup, contest dupe check, contacted station CRUD,
+     country CRUD, QSO list and count, contact history, paging,
+     upload queue insert/fetch/update status, upsert
+   - Found and fixed latent bug: `UpsertLogbookWithContext` had
+     `updateOnConflict=false` — silently no-op'd on existing rows.
+     Now correctly set to `true`.
+
+### Coverage summary end-of-session
+
+| Package | Coverage |
+|---------|----------|
+| `internal/api` | 70.0% |
+| `internal/config` | 90.3% |
+| `internal/database/sqlite` | **66.9%** (was 0%) |
+| `internal/database/sqlite/adapters` | 94.0% |
+| `internal/qsoservice` | 17.5% direct (exercised via api tests) |
+
+Race detector clean across all 14 packages.
+
 ### Design decisions made
 
 - **Logbooks are created explicitly** — no auto-creation during QSO
