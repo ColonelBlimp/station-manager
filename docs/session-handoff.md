@@ -118,7 +118,7 @@ a Pi) without any code changes — just a config change.
      callsign mismatch
    - All existing submit tests updated to create logbooks first
 
-3. **Code style fixes** (in progress):
+3. **Code style fixes:**
    - `server.go` — `fmt.Errorf` → `errors.New(op).WithErr(err)`
    - All handler ops standardised to `errors.Op` type with
      `api.FuncName` pattern
@@ -126,6 +126,44 @@ a Pi) without any code changes — just a config change.
    - `writeError` and `ErrorResponse.Op` — `errors.Op` type
    - `ServerConfig.Protocol` field added (default `"unix"`)
    - Listener protocol now config-driven in `ListenAndServe`
+
+4. **Logbook update tightened:**
+   - Callsign is immutable after logbook creation — PATCH only
+     accepts `name` and `description`. A callsign field in the
+     request body is silently ignored.
+   - SubmitError messages cleaned up — no programming symbols,
+     consistent `invalid_time_range` code for time coherence errors.
+
+5. **Callsign validation added:**
+   - `IsValidCallsign()` in `qsoservice` — minimum 3 chars, at
+     least 1 digit, maximum 32 chars. Accepts `/` for portable
+     suffixes and secondary prefixes.
+   - Enforced at three levels: schema CHECK, API handler
+     (logbook creation + STATION_CALLSIGN), and domain service
+     (CALL + STATION_CALLSIGN in Submit).
+   - Tests for valid callsigns (K1A, G4ABC, 7Q5MLV, 7Q5MLV/T)
+     and invalid (too short, no digit, empty).
+
+6. **Logbook delete with QSOs fix:**
+   - Soft-delete didn't trigger FK RESTRICT. Added explicit QSO
+     count check in `DeleteLogbookByIDWithContext` before
+     soft-deleting.
+
+7. **Coverage gaps plugged:**
+   - Delete logbook with QSOs (409 conflict)
+   - Body too large (413)
+   - Invalid CALL callsign in ADIF
+   - Invalid STATION_CALLSIGN in ADIF
+
+8. **Stress test:**
+   - 20 concurrent clients, 50 QSOs each, 1000 total
+   - Clients 0-9: CW (RST 599), clients 10-19: SSB/USB (RST 59)
+   - Each QSO includes non-promoted fields (comment, name, qth,
+     gridsquare, my_gridsquare) exercising the additional_data
+     JSON blob
+   - Results: 1000/1000 stored, 0 errors, ~146 QSOs/sec, ~6.8ms
+     avg latency, race detector clean
+   - Benchmark: daemon has ~100x headroom over peak operator load
 
 ### Design decisions made
 
@@ -135,12 +173,17 @@ a Pi) without any code changes — just a config change.
   fetches the logbook by ID and verifies its callsign matches
   STATION_CALLSIGN. Both must match; either failing returns a clear
   error.
-- **Workflow-driven implementation order** — endpoints are implemented
-  in the order an operator uses them, not alphabetically or by
-  resource type. Logbook CRUD first (can't log without a logbook),
-  then contact history and contest dupe (needed while building a QSO),
-  then QSO fetch/edit/delete (post-logging corrections), then
-  pagination (browsing), then version (diagnostic).
+- **Logbook callsign is immutable** — set at creation, cannot be
+  changed via PATCH. The callsign is the logbook's identity; changing
+  it would break the STATION_CALLSIGN contract with existing QSOs.
+- **Callsign validation at the gate** — minimum 3 chars, at least
+  1 digit, max 32. The daemon is the system boundary; bad data
+  rejected here doesn't reach sqlite. Callsign parsing (prefix/
+  suffix structure, DXCC mapping) is a client/enrichment concern.
+- **Workflow-driven implementation order** — reprioritised to focus
+  on what the operator needs to log and manage QSOs. QSO
+  fetch/edit/delete before enrichment features. Contact history is
+  nice-to-have, not essential (especially during a pile-up).
 - **`errors.Op` convention** — all ops follow `package.FuncName`,
   typed as `errors.Op`, not plain strings.
 - **Listener protocol configurable** — `ServerConfig.Protocol`
