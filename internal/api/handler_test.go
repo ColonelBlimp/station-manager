@@ -1047,3 +1047,95 @@ func TestUpdateQso_EmptyPatchIsNoOp(t *testing.T) {
 		t.Fatalf("body = %q, want original call preserved", w.Body.String())
 	}
 }
+
+// =============================================================================
+// Delete QSO (DELETE)
+// =============================================================================
+
+func deleteQso(t *testing.T, srv *Server, qsoID int64) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
+	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	w := httptest.NewRecorder()
+	srv.handleDeleteQso(w, req)
+	return w
+}
+
+func TestDeleteQso(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	w := deleteQso(t, srv, id)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusNoContent, w.Body.String())
+	}
+
+	// GET should now return 404 — soft-deleted rows are filtered by FindQso.
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
+	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	getW := httptest.NewRecorder()
+	srv.handleGetQso(getW, getReq)
+	if getW.Code != http.StatusNotFound {
+		t.Fatalf("GET after delete: status = %d, want %d", getW.Code, http.StatusNotFound)
+	}
+}
+
+func TestDeleteQso_NotFound(t *testing.T) {
+	srv := testServer(t)
+
+	w := deleteQso(t, srv, 999)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDeleteQso_Twice(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	if w := deleteQso(t, srv, id); w.Code != http.StatusNoContent {
+		t.Fatalf("first delete: status = %d", w.Code)
+	}
+	// Second delete sees no non-deleted row with that ID and returns 404.
+	if w := deleteQso(t, srv, id); w.Code != http.StatusNotFound {
+		t.Fatalf("second delete: status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDeleteQso_InvalidID(t *testing.T) {
+	srv := testServer(t)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/qso/abc", nil)
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	srv.handleDeleteQso(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDeleteQso_FreesDedupeKey(t *testing.T) {
+	// Soft-delete should free the dedupe key so the same (call, band,
+	// mode, freq, date, time) can be logged again. The partial unique
+	// index on dedupe_key is scoped WHERE deleted_at IS NULL, so a
+	// soft-deleted row does not block re-submission.
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	if w := deleteQso(t, srv, id); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: status = %d", w.Code)
+	}
+
+	// Resubmit the same QSO — should store, not be rejected as duplicate.
+	w := submitQso(t, srv, lbID, testQsoADIF, false)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("resubmit: status = %d, want %d; body = %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"status":"stored"`) {
+		t.Fatalf("resubmit body = %q, want stored", w.Body.String())
+	}
+}

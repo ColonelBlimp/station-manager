@@ -177,6 +177,44 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 	return count, nil
 }
 
+// DeleteQsoByIDWithContext soft-deletes a QSO by setting its deleted_at
+// column. Subsequent FetchQsoByIdWithContext calls return ErrNotFound
+// because FindQso filters deleted rows. Returns ErrNotFound if the QSO
+// does not exist (or is already soft-deleted). No FK check is needed —
+// QSO is the child row.
+func (s *Service) DeleteQsoByIDWithContext(ctx context.Context, id int64) error {
+	const op errors.Op = "sqlite.Service.DeleteQsoByIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+
+	if id < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	qso, err := models.FindQso(ctx, h, id)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return errors.ErrNotFound
+		}
+		return errors.New(op).WithErr(err)
+	}
+
+	if _, err = qso.Delete(ctx, h, false); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("failed to delete QSO")
+	}
+
+	return nil
+}
+
 func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error {
 	const op errors.Op = "sqlite.Service.UpdateQsoWithContext"
 	if err := checkService(op, s); err != nil {

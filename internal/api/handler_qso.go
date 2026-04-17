@@ -35,6 +35,27 @@ func (s *Server) handleGetQso(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, qso)
 }
 
+func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleDeleteQso"
+
+	id, err := parsePathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		return
+	}
+
+	if err = s.db.DeleteQsoByIDWithContext(r.Context(), id); err != nil {
+		if stderr.Is(err, errors.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleUpdateQso"
 

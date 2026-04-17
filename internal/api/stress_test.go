@@ -27,9 +27,11 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	var stored atomic.Int64
 	var fetched atomic.Int64
 	var patched atomic.Int64
+	var deleted atomic.Int64
 	var errCount atomic.Int64
 	var fetchErrCount atomic.Int64
 	var patchErrCount atomic.Int64
+	var deleteErrCount atomic.Int64
 	var wg sync.WaitGroup
 
 	start := time.Now()
@@ -163,6 +165,33 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 					continue
 				}
 				patched.Add(1)
+
+				// DELETE the QSO, then confirm a subsequent GET returns
+				// 404 — the soft-delete path must hide the row from reads.
+				delReq := httptest.NewRequest(http.MethodDelete,
+					fmt.Sprintf("/v1/qso/%d", qsoID), nil)
+				delReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+				delW := httptest.NewRecorder()
+				srv.handleDeleteQso(delW, delReq)
+
+				if delW.Code != http.StatusNoContent {
+					deleteErrCount.Add(1)
+					t.Logf("client %d qso %d delete: status=%d body=%s", clientID, i, delW.Code, delW.Body.String())
+					continue
+				}
+
+				verifyReq := httptest.NewRequest(http.MethodGet,
+					fmt.Sprintf("/v1/qso/%d", qsoID), nil)
+				verifyReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+				verifyW := httptest.NewRecorder()
+				srv.handleGetQso(verifyW, verifyReq)
+
+				if verifyW.Code != http.StatusNotFound {
+					deleteErrCount.Add(1)
+					t.Logf("client %d qso %d post-delete GET: status=%d, want 404", clientID, i, verifyW.Code)
+					continue
+				}
+				deleted.Add(1)
 			}
 		}(client)
 	}
@@ -177,11 +206,13 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	t.Logf("Stored:        %d", stored.Load())
 	t.Logf("Fetched:       %d", fetched.Load())
 	t.Logf("Patched:       %d", patched.Load())
+	t.Logf("Deleted:       %d", deleted.Load())
 	t.Logf("Submit errors: %d", errCount.Load())
 	t.Logf("Fetch errors:  %d", fetchErrCount.Load())
 	t.Logf("Patch errors:  %d", patchErrCount.Load())
+	t.Logf("Delete errors: %d", deleteErrCount.Load())
 	t.Logf("Elapsed:       %s", elapsed)
-	t.Logf("Avg latency:   %s (submit+fetch+patch round trip)", elapsed/time.Duration(totalQSOs))
+	t.Logf("Avg latency:   %s (submit+fetch+patch+delete round trip)", elapsed/time.Duration(totalQSOs))
 	t.Logf("Throughput:    %.1f QSOs/sec", float64(totalQSOs)/elapsed.Seconds())
 
 	if errCount.Load() > 0 {
@@ -193,6 +224,9 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	if patchErrCount.Load() > 0 {
 		t.Fatalf("expected 0 patch errors, got %d", patchErrCount.Load())
 	}
+	if deleteErrCount.Load() > 0 {
+		t.Fatalf("expected 0 delete errors, got %d", deleteErrCount.Load())
+	}
 	if stored.Load() != totalQSOs {
 		t.Fatalf("expected %d stored, got %d", totalQSOs, stored.Load())
 	}
@@ -201,5 +235,8 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	}
 	if patched.Load() != totalQSOs {
 		t.Fatalf("expected %d patched, got %d", totalQSOs, patched.Load())
+	}
+	if deleted.Load() != totalQSOs {
+		t.Fatalf("expected %d deleted, got %d", totalQSOs, deleted.Load())
 	}
 }
