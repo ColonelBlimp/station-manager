@@ -122,17 +122,20 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	// ---- Normalize frequency ----
-	// ADIF freq is MHz as a string (e.g. "14.074"). The sqlite schema stores
-	// freq as integer kHz. The adapter expects an integer string in the Freq
-	// field. Convert MHz → kHz integer string.
+	// ADIF freq is MHz as a string (e.g. "14.074"). types.Qso.Freq follows
+	// the ADIF spec and stores MHz too — the kHz integer is only the DB
+	// storage unit and lives below the adapter. We keep the int-kHz form
+	// around locally for the dedupe hash (deterministic numeric
+	// representation) and format the canonical MHz string for the Qso.
 	freqStr := strings.TrimSpace(rec.Freq)
 	if freqStr == "" {
 		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "FREQ is required"}
 	}
-	freqKHz, err := FreqMHzToKHzString(freqStr)
+	freqKHz, err := utils.ParseFreqMHz(freqStr)
 	if err != nil {
 		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("FREQ %q: %v", freqStr, err)}
 	}
+	freqMHz := utils.FormatFreqMHz(freqKHz)
 
 	// ---- Build the Qso ----
 	qso := adif.RecordToQso(rec, logbookID)
@@ -143,7 +146,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	qso.QsoDetails.TimeOn = timeOn
 	qso.QsoDetails.TimeOff = timeOff
 	qso.QsoDetails.QsoDateOff = qsoDateOff
-	qso.QsoDetails.Freq = freqKHz
+	qso.QsoDetails.Freq = freqMHz
 	qso.LoggingStation.StationCallsign = stationCallsign
 
 	// Country: use whatever was in the record, or empty string as fallback.
@@ -161,7 +164,10 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	// ---- Dedupe ----
-	dedupeKey := ComputeDedupeKey(call, band, mode, freqKHz, qsoDate, timeOn)
+	// Hash input uses the int-kHz string, so the hash is deterministic
+	// regardless of how the caller wrote the MHz decimal ("7.050" /
+	// "7.0500" / "7050" all collapse to the same integer).
+	dedupeKey := ComputeDedupeKey(call, band, mode, strconv.FormatInt(freqKHz, 10), qsoDate, timeOn)
 
 	if force {
 		// Force mode: generate a unique dedupe key so the UNIQUE index
@@ -215,6 +221,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Int64("qso_id", qsoID).
 		Int64("logbook_id", logbookID).
 		Str("call", call).
+		Str("freq_mhz", freqMHz).
 		Str("band", band).
 		Str("mode", mode).
 		Msg("QSO stored")

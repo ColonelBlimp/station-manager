@@ -858,8 +858,8 @@ func TestUpdateQso_FreqChangeRecomputesDedupe(t *testing.T) {
 	if err := unmarshalJSON(w.Body.String(), &after); err != nil {
 		t.Fatalf("decode post-edit: %v", err)
 	}
-	if after.Freq != "7120" {
-		t.Fatalf("freq = %q, want normalized 7120", after.Freq)
+	if after.Freq != "7.120" {
+		t.Fatalf("freq = %q, want canonical MHz 7.120", after.Freq)
 	}
 	if after.DedupeKey == before.DedupeKey {
 		t.Fatalf("dedupe key unchanged after FREQ edit: %s", after.DedupeKey)

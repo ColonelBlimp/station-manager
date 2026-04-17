@@ -1,11 +1,10 @@
 package adapters
 
 import (
-	"strconv"
-
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/goccy/go-json"
 )
 
@@ -78,7 +77,9 @@ func QsoModelToType(model *models.Qso) (types.Qso, error) {
 	qso.ContactedStation.Country = model.Country
 	qso.QsoDetails.Band = model.Band
 	qso.QsoDetails.Mode = model.Mode
-	qso.QsoDetails.Freq = strconv.FormatInt(model.Freq, 10)
+	// model.Freq is integer kHz (DB storage). types.Qso.Freq is the
+	// ADIF-native MHz decimal string.
+	qso.QsoDetails.Freq = utils.FormatFreqMHz(model.Freq)
 	qso.QsoDetails.QsoDate = model.QsoDate
 	qso.QsoDetails.TimeOn = model.TimeOn
 	qso.QsoDetails.TimeOff = model.TimeOff

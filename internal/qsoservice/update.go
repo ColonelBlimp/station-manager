@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	stderr "errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,11 +73,11 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 	merged.QsoDetails.RstRcvd = strings.TrimSpace(merged.QsoDetails.RstRcvd)
 	merged.ContactedStation.Country = strings.TrimSpace(merged.ContactedStation.Country)
 	if freq := strings.TrimSpace(merged.QsoDetails.Freq); freq != "" {
-		kHz, err := FreqMHzToKHzString(freq)
+		kHz, err := utils.ParseFreqMHz(freq)
 		if err != nil {
 			return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("freq %q: %v", freq, err)}
 		}
-		merged.QsoDetails.Freq = kHz
+		merged.QsoDetails.Freq = utils.FormatFreqMHz(kHz)
 	}
 
 	// ---- Validate required-field invariants on the merged result ----
@@ -151,11 +152,15 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 		merged.QsoDetails.TimeOn != existing.QsoDetails.TimeOn
 
 	if dedupeChanged {
+		// Hash input uses the int-kHz string for determinism — the same
+		// contract as Submit. merged.Freq is canonical MHz (set above),
+		// so this parse cannot fail.
+		kHz, _ := utils.ParseFreqMHz(merged.QsoDetails.Freq)
 		newKey := ComputeDedupeKey(
 			merged.ContactedStation.Call,
 			merged.QsoDetails.Band,
 			merged.QsoDetails.Mode,
-			merged.QsoDetails.Freq,
+			strconv.FormatInt(kHz, 10),
 			merged.QsoDetails.QsoDate,
 			merged.QsoDetails.TimeOn,
 		)
@@ -181,6 +186,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 		Int64("qso_id", merged.ID).
 		Int64("logbook_id", merged.LogbookID).
 		Str("call", merged.ContactedStation.Call).
+		Str("freq_mhz", merged.QsoDetails.Freq).
 		Str("band", merged.QsoDetails.Band).
 		Str("mode", merged.QsoDetails.Mode).
 		Msg("QSO updated")

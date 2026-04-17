@@ -2,6 +2,8 @@ package utils
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -111,6 +113,38 @@ func FormatFrequencyToMhz(rawFreq string) (string, error) {
 		mhz := strings.TrimLeft(parts[0], "0")
 		return mhz + dotString + parts[1], nil
 	}
+}
+
+// ParseFreqMHz parses a frequency string and returns the equivalent integer
+// kHz value — the unit the sqlite schema stores. Accepts either decimal MHz
+// ("14.074", the ADIF-native form) or plain integer kHz ("14074"). The
+// tolerance for bare integers is there for legacy clients and tools that
+// already speak kHz; ADIF-compliant callers send MHz.
+func ParseFreqMHz(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == emptyString {
+		return 0, fmt.Errorf("empty frequency")
+	}
+	if strings.Contains(s, dotString) {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, fmt.Errorf("cannot parse as MHz: %w", err)
+		}
+		return int64(math.Round(f * 1000)), nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("cannot parse as integer frequency: %w", err)
+	}
+	return n, nil
+}
+
+// FormatFreqMHz formats an integer kHz value as a canonical decimal MHz
+// string with exactly three decimal places (the DB's kHz granularity):
+// 14074 → "14.074", 7050 → "7.050", 7000 → "7.000". Always three decimals
+// so round-tripping is stable and the canonical form is unambiguous.
+func FormatFreqMHz(kHz int64) string {
+	return fmt.Sprintf("%d.%03d", kHz/1000, kHz%1000)
 }
 
 func IsValidFrequencyMHz(s string) bool {

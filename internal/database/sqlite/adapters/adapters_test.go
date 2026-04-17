@@ -96,7 +96,7 @@ func TestQsoModelToType_ValidModel_MinimalData(t *testing.T) {
 		Call:           "DL1ABC",
 		Band:           "20m",
 		Mode:           "SSB",
-		Freq:           14250000,
+		Freq:           14250,
 		QsoDate:        "20250107",
 		TimeOn:         "1430",
 		TimeOff:        "1445",
@@ -112,7 +112,7 @@ func TestQsoModelToType_ValidModel_MinimalData(t *testing.T) {
 	assert.Equal(t, "DL1ABC", result.ContactedStation.Call)
 	assert.Equal(t, "20m", result.QsoDetails.Band)
 	assert.Equal(t, "SSB", result.QsoDetails.Mode)
-	assert.Equal(t, "14250000", result.QsoDetails.Freq)
+	assert.Equal(t, "14.250", result.QsoDetails.Freq)
 }
 func TestQsoModelToType_InvalidJSON(t *testing.T) {
 	model := &models.Qso{
@@ -121,7 +121,7 @@ func TestQsoModelToType_InvalidJSON(t *testing.T) {
 		Call:           "TEST",
 		Band:           "20m",
 		Mode:           "SSB",
-		Freq:           14250000,
+		Freq:           14250,
 		QsoDate:        "20250107",
 		TimeOn:         "1200",
 		TimeOff:        "1215",
@@ -169,7 +169,7 @@ func TestQsoTypeToModel_ValidQso_MinimalData(t *testing.T) {
 		QsoDetails: types.QsoDetails{
 			Band:    "20m",
 			Mode:    "SSB",
-			Freq:    "14250000",
+			Freq:    "14.250",
 			QsoDate: "20250107",
 			TimeOn:  "1430",
 			TimeOff: "1445",
@@ -188,7 +188,7 @@ func TestQsoTypeToModel_ValidQso_MinimalData(t *testing.T) {
 	assert.Equal(t, "DL1ABC", result.Call)
 	assert.Equal(t, "20m", result.Band)
 	assert.Equal(t, "SSB", result.Mode)
-	assert.Equal(t, int64(14250000), result.Freq)
+	assert.Equal(t, int64(14250), result.Freq)
 	assert.Equal(t, "20250107", result.QsoDate)
 	assert.NotEmpty(t, result.AdditionalData)
 }
@@ -198,7 +198,7 @@ func TestQsoTypeToModel_DateNormalization_WithDashes(t *testing.T) {
 		QsoDetails: types.QsoDetails{
 			Band:    "20m",
 			Mode:    "SSB",
-			Freq:    "14250000",
+			Freq:    "14.250",
 			QsoDate: "2025-01-07",
 			TimeOn:  "14:30",
 			TimeOff: "14:45",
@@ -336,7 +336,7 @@ func TestQsoRoundTrip(t *testing.T) {
 		QsoDetails: types.QsoDetails{
 			Band:    "20m",
 			Mode:    "SSB",
-			Freq:    "14250000",
+			Freq:    "14.250",
 			QsoDate: "20250107",
 			TimeOn:  "1430",
 			TimeOff: "1445",

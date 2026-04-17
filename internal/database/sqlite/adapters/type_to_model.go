@@ -1,12 +1,12 @@
 package adapters
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/aarondl/null/v8"
 	"github.com/goccy/go-json"
 )
@@ -27,7 +27,10 @@ import (
 func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 	const op errors.Op = "sqlite.adapters.QsoTypeToModel"
 
-	freqHz, err := strconv.ParseInt(qso.QsoDetails.Freq, 10, 64)
+	// qso.QsoDetails.Freq is the ADIF-native MHz decimal string (e.g.
+	// "14.074"). The sqlite schema stores integer kHz; convert here at the
+	// type→model boundary.
+	freqKHz, err := utils.ParseFreqMHz(qso.QsoDetails.Freq)
 	if err != nil {
 		return models.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to parse frequency")
 	}
@@ -60,7 +63,7 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 		Call:           qso.ContactedStation.Call,
 		Band:           qso.QsoDetails.Band,
 		Mode:           qso.QsoDetails.Mode,
-		Freq:           freqHz,
+		Freq:           freqKHz,
 		QsoDate:        date,
 		TimeOn:         timeOn,
 		TimeOff:        timeOff,

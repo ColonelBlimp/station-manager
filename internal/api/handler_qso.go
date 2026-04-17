@@ -116,7 +116,6 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleSubmitQso"
 
 	// ---- Content-Type check ----
-
 	ct := r.Header.Get("Content-Type")
 	if ct != "" && !strings.HasPrefix(ct, "application/x-adif") && !strings.HasPrefix(ct, "text/plain") {
 		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type",
