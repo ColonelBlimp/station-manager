@@ -720,6 +720,43 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	return nil
 }
 
+func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Logbook) error {
+	const op errors.Op = "sqlite.Service.UpdateLogbookWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+
+	if logbook.ID < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	model, err := models.FindLogbook(ctx, h, logbook.ID)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return errors.ErrNotFound
+		}
+		return errors.New(op).WithErr(err)
+	}
+
+	model.Name = logbook.Name
+	model.Callsign = logbook.Callsign
+	model.Description = null.StringFrom(logbook.Description)
+
+	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("failed to update logbook")
+	}
+
+	return nil
+}
+
 func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Logbook) error {
 	const op errors.Op = "sqlite.Service.UpsertLogbookWithContext"
 	if err := checkService(op, s); err != nil {

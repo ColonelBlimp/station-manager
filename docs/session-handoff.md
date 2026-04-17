@@ -266,18 +266,33 @@ The daemon's full read/write API surface. Still `curl`-only, no GUI.
 See `docs/v2-design/milestones.md` for the full scope and acceptance
 test.
 
-1. `GET /v1/qso/:id` — fetch a single QSO
-2. `PATCH /v1/qso/:id` — edit a QSO
-3. `DELETE /v1/qso/:id` — soft-delete a QSO
-4. `GET /v1/logbook` — list all logbooks
-5. `GET /v1/logbook/:id` — fetch a single logbook
-6. `POST /v1/logbook` — create a logbook
-7. `PATCH /v1/logbook/:id` — edit logbook metadata
-8. `DELETE /v1/logbook/:id` — soft-delete a logbook
-9. `GET /v1/logbook/:id/qso` — list QSOs with forward-cursor pagination
-10. `GET /v1/contact-history?call=<callsign>` — contact history
-11. `GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>`
-12. `GET /v1/version` — daemon version info
+**Implementation order follows the operator workflow** (decided
+end-of-session 7), not the endpoint list. Each group is built and
+tested before moving to the next:
+
+1. **Logbook CRUD** — can't log a QSO without a logbook.
+   - `GET /v1/logbook` — list all logbooks
+   - `GET /v1/logbook/:id` — fetch a single logbook
+   - `POST /v1/logbook` — create a logbook
+   - `PATCH /v1/logbook/:id` — edit logbook metadata
+   - `DELETE /v1/logbook/:id` — soft-delete a logbook
+
+2. **Contact history** — needed while building a new QSO.
+   - `GET /v1/contact-history?call=<callsign>`
+
+3. **Contest dupe check** — needed while building a new QSO.
+   - `GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>`
+
+4. **QSO fetch/edit/delete** — post-logging corrections.
+   - `GET /v1/qso/:id`
+   - `PATCH /v1/qso/:id`
+   - `DELETE /v1/qso/:id`
+
+5. **QSO list with pagination** — browsing the log.
+   - `GET /v1/logbook/:id/qso` (forward-cursor pagination)
+
+6. **Version** — diagnostic, lowest priority.
+   - `GET /v1/version`
 
 **Implementation note:** Go 1.22+ `http.ServeMux` supports method+path
 patterns (`GET /v1/qso/{id}`) natively, so no router dependency is

@@ -3,7 +3,10 @@ package api
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+
+	stderr "errors"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -11,7 +14,7 @@ import (
 )
 
 func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
-	const op = "api.v1.qso.submit"
+	const op errors.Op = "api.handleSubmitQso"
 
 	// ---- Content-Type check ----
 
@@ -23,7 +26,6 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---- Read body with size limit ----
-
 	lr := http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
 	defer func() {
 		if err := lr.Close(); err != nil {
@@ -48,7 +50,6 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---- Parse ADIF ----
-
 	parsed, err := adif.Parse(body)
 	if err != nil {
 		de, ok := errors.AsDetailedError(err)
@@ -65,27 +66,51 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ---- Resolve logbook ----
-	// For milestone 1: use ?logbook=<id> query param, or look up by
-	// STATION_CALLSIGN, or auto-create. Simplest: require the callsign
-	// to match an existing logbook, or create one.
-
 	rec := parsed.Records[0]
 
-	if strings.TrimSpace(rec.StationCallsign) == "" {
+	// ---- Validate STATION_CALLSIGN ----
+	stationCallsign := strings.ToUpper(strings.TrimSpace(rec.StationCallsign))
+	if stationCallsign == "" {
 		writeError(w, http.StatusBadRequest, "missing_required_field",
 			"STATION_CALLSIGN is required", op)
 		return
 	}
 
-	logbookID, err := s.resolveLogbook(r.Context(), rec.StationCallsign)
+	// ---- Resolve and validate logbook ----
+	// The client must provide ?logbook=<id>. The daemon verifies the
+	// logbook exists and its callsign matches STATION_CALLSIGN.
+	logbookIDStr := r.URL.Query().Get("logbook")
+	if logbookIDStr == "" {
+		writeError(w, http.StatusBadRequest, "missing_required_param",
+			"logbook query parameter is required (e.g. ?logbook=1)", op)
+		return
+	}
+
+	logbookID, err := strconv.ParseInt(logbookIDStr, 10, 64)
+	if err != nil || logbookID < 1 {
+		writeError(w, http.StatusBadRequest, "invalid_id",
+			"logbook must be a positive integer", op)
+		return
+	}
+
+	logbook, err := s.db.FetchLogbookByIDWithContext(r.Context(), logbookID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "logbook_error", err.Error(), op)
+		if stderr.Is(err, errors.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "logbook_not_found",
+				"logbook does not exist", op)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		return
+	}
+
+	if !strings.EqualFold(logbook.Callsign, stationCallsign) {
+		writeError(w, http.StatusBadRequest, "callsign_mismatch",
+			"STATION_CALLSIGN does not match the logbook's callsign", op)
 		return
 	}
 
 	// ---- Submit ----
-
 	force := r.URL.Query().Get("force") == "true"
 	result, err := s.qso.Submit(r.Context(), logbookID, rec, force)
 	if err != nil {

@@ -43,11 +43,14 @@ type Config struct {
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
 type ServerConfig struct {
-	ReadTimeoutSec     int   `json:"read_timeout_sec"`
-	WriteTimeoutSec    int   `json:"write_timeout_sec"`
-	IdleTimeoutSec     int   `json:"idle_timeout_sec"`
-	ShutdownTimeoutSec int   `json:"shutdown_timeout_sec"`
-	MaxBodyBytes       int64 `json:"max_body_bytes"`
+	// Protocol is the network protocol for the listener: "unix" (default)
+	// or "tcp" for network deployment.
+	Protocol           string `json:"protocol"`
+	ReadTimeoutSec     int    `json:"read_timeout_sec"`
+	WriteTimeoutSec    int    `json:"write_timeout_sec"`
+	IdleTimeoutSec     int    `json:"idle_timeout_sec"`
+	ShutdownTimeoutSec int    `json:"shutdown_timeout_sec"`
+	MaxBodyBytes       int64  `json:"max_body_bytes"`
 }
 
 // Load reads a JSON config file and returns a populated Config with defaults
@@ -85,6 +88,9 @@ func applyDefaults(cfg *Config, baseDir string) {
 	}
 
 	// Server defaults
+	if cfg.Server.Protocol == "" {
+		cfg.Server.Protocol = "unix"
+	}
 	if cfg.Server.ReadTimeoutSec == 0 {
 		cfg.Server.ReadTimeoutSec = 10
 	}
