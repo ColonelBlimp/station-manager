@@ -72,6 +72,11 @@ func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_required_field", "callsign is required", op)
 		return
 	}
+	if !isValidCallsign(req.Callsign) {
+		writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"callsign must be 3-32 characters and contain at least one digit", op)
+		return
+	}
 
 	id, err := s.db.InsertLogbookWithContext(r.Context(), types.Logbook{
 		Name:        req.Name,
@@ -111,7 +116,6 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Name        *string `json:"name,omitempty"`
-		Callsign    *string `json:"callsign,omitempty"`
 		Description *string `json:"description,omitempty"`
 	}
 
@@ -127,14 +131,6 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		existing.Name = name
-	}
-	if req.Callsign != nil {
-		callsign := strings.ToUpper(strings.TrimSpace(*req.Callsign))
-		if callsign == "" {
-			writeError(w, http.StatusBadRequest, "invalid_field_value", "callsign cannot be empty", op)
-			return
-		}
-		existing.Callsign = callsign
 	}
 	if req.Description != nil {
 		existing.Description = strings.TrimSpace(*req.Description)
@@ -166,7 +162,7 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
 		}
-		if strings.Contains(err.Error(), "FOREIGN KEY constraint") || strings.Contains(err.Error(), "RESTRICT") {
+		if strings.Contains(err.Error(), "contains QSOs") {
 			writeError(w, http.StatusConflict, "has_qsos", "cannot delete a logbook that contains QSOs", op)
 			return
 		}

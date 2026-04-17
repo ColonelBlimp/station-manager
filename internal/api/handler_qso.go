@@ -75,6 +75,11 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 			"STATION_CALLSIGN is required", op)
 		return
 	}
+	if !isValidCallsign(stationCallsign) {
+		writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"STATION_CALLSIGN must be 3-32 characters and contain at least one digit", op)
+		return
+	}
 
 	// ---- Resolve and validate logbook ----
 	// The client must provide ?logbook=<id>. The daemon verifies the

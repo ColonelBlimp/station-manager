@@ -713,8 +713,20 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 		return errors.New(op).WithErr(err)
 	}
 
+	// Check for QSOs referencing this logbook before soft-deleting.
+	// The FK RESTRICT only fires on hard deletes; soft-delete (setting
+	// deleted_at) would silently succeed, orphaning QSOs under a
+	// deleted logbook.
+	qsoCount, err := models.Qsos(models.QsoWhere.LogbookID.EQ(id)).Count(ctx, h)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("checking logbook QSO count")
+	}
+	if qsoCount > 0 {
+		return errors.New(op).WithMsg("cannot delete a logbook that contains QSOs")
+	}
+
 	if _, err = logbook.Delete(ctx, h, false); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("Failed to delete logbook.")
+		return errors.New(op).WithErr(err).WithMsg("failed to delete logbook")
 	}
 
 	return nil

@@ -168,6 +168,38 @@ func TestCreateLogbook_MissingCallsign(t *testing.T) {
 	}
 }
 
+func TestCreateLogbook_InvalidCallsign(t *testing.T) {
+	srv := testServer(t)
+
+	// No digit
+	body := `{"name":"Bad Log","callsign":"ABC"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/logbook", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleCreateLogbook(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_field_value") {
+		t.Fatalf("body = %q, want invalid_field_value", w.Body.String())
+	}
+}
+
+func TestCreateLogbook_CallsignTooShort(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"name":"Bad Log","callsign":"K1"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/logbook", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleCreateLogbook(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+}
+
 func TestCreateLogbook_DuplicateName(t *testing.T) {
 	srv := testServer(t)
 
@@ -257,6 +289,35 @@ func TestUpdateLogbook(t *testing.T) {
 	}
 }
 
+func TestUpdateLogbook_CallsignIgnored(t *testing.T) {
+	srv := testServer(t)
+
+	id := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	// Attempt to change callsign — should be silently ignored.
+	body := `{"name":"Updated","callsign":"M0CMC"}`
+	req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/v1/logbook/%d", id), strings.NewReader(body))
+	req.SetPathValue("id", fmt.Sprintf("%d", id))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleUpdateLogbook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	// Name should be updated
+	if !strings.Contains(w.Body.String(), "Updated") {
+		t.Fatalf("body = %q, want updated name", w.Body.String())
+	}
+	// Callsign should still be G4ABC, not M0CMC
+	if !strings.Contains(w.Body.String(), "G4ABC") {
+		t.Fatalf("body = %q, want original callsign G4ABC", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "M0CMC") {
+		t.Fatalf("body = %q, callsign should not have changed to M0CMC", w.Body.String())
+	}
+}
+
 func TestUpdateLogbook_NotFound(t *testing.T) {
 	srv := testServer(t)
 
@@ -297,6 +358,79 @@ func TestDeleteLogbook_NotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDeleteLogbook_WithQSOs_Rejected(t *testing.T) {
+	srv := testServer(t)
+
+	lbID := createTestLogbook(t, srv, "Has QSOs", "G4ABC")
+	// Submit a QSO so the logbook is non-empty.
+	w := submitQso(t, srv, lbID, testQsoADIF, false)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("setup submit: status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	// Attempt to delete — should fail with 409.
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v1/logbook/%d", lbID), nil)
+	req.SetPathValue("id", fmt.Sprintf("%d", lbID))
+	w = httptest.NewRecorder()
+	srv.handleDeleteLogbook(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "has_qsos") {
+		t.Fatalf("body = %q, want has_qsos", w.Body.String())
+	}
+}
+
+func TestSubmitQso_BodyTooLarge(t *testing.T) {
+	srv := testServer(t)
+	// The default MaxBodyBytes is 1 MiB. Send something bigger.
+	// Override maxBodyBytes to a tiny value for this test.
+	srv.maxBodyBytes = 10
+
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/qso?logbook=%d", lbID),
+		strings.NewReader(strings.Repeat("X", 100)))
+	req.Header.Set("Content-Type", "application/x-adif")
+	w := httptest.NewRecorder()
+	srv.handleSubmitQso(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusRequestEntityTooLarge, w.Body.String())
+	}
+}
+
+func TestSubmitQso_InvalidCallInADIF(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	// CALL has no digit
+	body := `<CALL:3>ABC<BAND:3>40m<MODE:3>SSB<FREQ:5>7.050<QSO_DATE:8>20250508<TIME_ON:4>0845<TIME_OFF:4>0850<STATION_CALLSIGN:5>G4ABC<COUNTRY:7>England<EOR>`
+	w := submitQso(t, srv, lbID, body, false)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_field_value") {
+		t.Fatalf("body = %q, want invalid_field_value", w.Body.String())
+	}
+}
+
+func TestSubmitQso_InvalidStationCallsign(t *testing.T) {
+	srv := testServer(t)
+	// Create logbook with valid callsign, but submit ADIF with invalid STATION_CALLSIGN.
+	// The handler validates STATION_CALLSIGN before the logbook lookup.
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	body := `<CALL:5>M0CMC<BAND:3>40m<MODE:3>SSB<FREQ:5>7.050<QSO_DATE:8>20250508<TIME_ON:4>0845<TIME_OFF:4>0850<STATION_CALLSIGN:2>AB<COUNTRY:7>England<EOR>`
+	w := submitQso(t, srv, lbID, body, false)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 }
 

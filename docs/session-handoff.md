@@ -32,15 +32,15 @@ Milestone 1 (submit a QSO) is complete and CI-green. Milestone 1b
 (QSO CRUD and logbook management) is in progress — logbook CRUD is
 done (step 1 of 6 in the workflow-driven implementation order).
 
-### Milestone 1b progress
+### Milestone 1b progress (reprioritised session 8)
 
 | Step | Scope | Status |
 |------|-------|--------|
 | 1. Logbook CRUD | `GET/POST/PATCH/DELETE /v1/logbook` | **done** |
-| 2. Contact history | `GET /v1/contact-history` | not started |
-| 3. Contest dupe check | `GET /v1/contest-dupe` | not started |
-| 4. QSO fetch/edit/delete | `GET/PATCH/DELETE /v1/qso/:id` | not started |
-| 5. QSO list with pagination | `GET /v1/logbook/:id/qso` | not started |
+| 2. QSO fetch/edit/delete | `GET/PATCH/DELETE /v1/qso/:id` | not started |
+| 3. QSO list with pagination | `GET /v1/logbook/:id/qso` | not started |
+| 4. Contest dupe check | `GET /v1/contest-dupe` | not started |
+| 5. Contact history | `GET /v1/contact-history` | not started |
 | 6. Version | `GET /v1/version` | not started |
 
 ### QSO submit path tightened (session 8)
@@ -210,29 +210,34 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### Continue milestone 1b — workflow steps 2–6
+### Continue milestone 1b — reprioritised workflow
 
-Pick up from step 2 (contact history). The implementation order:
+Priority reordered (session 8) to focus on what the operator
+actually needs to log and manage QSOs. Enrichment and draft-building
+features are nice-to-have, not essential — especially during a
+pile-up.
 
-2. **Contact history** — needed while building a new QSO.
-   - `GET /v1/contact-history?call=<callsign>`
-   - sqlite layer already has `FetchQsoSliceByCallsignWithContext`
-
-3. **Contest dupe check** — needed while building a new QSO.
-   - `GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>`
-   - sqlite layer already has `IsContestDuplicateByLogbookIDWithContext`
-
-4. **QSO fetch/edit/delete** — post-logging corrections.
+2. **QSO fetch/edit/delete** — operator needs to correct mistakes
+   immediately after logging.
    - `GET /v1/qso/{id}`
    - `PATCH /v1/qso/{id}`
    - `DELETE /v1/qso/{id}`
    - sqlite layer has `FetchQsoByIdWithContext`, `UpdateQsoWithContext`
    - Need soft-delete method (schema has `deleted_at`)
 
-5. **QSO list with pagination** — browsing the log.
+3. **QSO list with pagination** — operator needs to see what they've
+   logged.
    - `GET /v1/logbook/{id}/qso` (forward-cursor pagination)
    - Existing offset-based `FetchQsoSlicePaging` needs rewriting to
      cursor-based per api.md Section 4.4
+
+4. **Contest dupe check** — essential for contesting.
+   - `GET /v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>`
+   - sqlite layer already has `IsContestDuplicateByLogbookIDWithContext`
+
+5. **Contact history** — nice to have, not essential.
+   - `GET /v1/contact-history?call=<callsign>`
+   - sqlite layer already has `FetchQsoSliceByCallsignWithContext`
 
 6. **Version** — diagnostic, lowest priority.
    - `GET /v1/version`

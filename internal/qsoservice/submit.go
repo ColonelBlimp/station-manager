@@ -33,6 +33,9 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	if call == "" {
 		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "CALL is required"}
 	}
+	if !IsValidCallsign(call) {
+		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "CALL must be 3-32 characters and contain at least one digit"}
+	}
 
 	band := strings.ToLower(strings.TrimSpace(rec.Band))
 	if band == "" {
@@ -65,6 +68,9 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	stationCallsign := strings.ToUpper(strings.TrimSpace(rec.StationCallsign))
 	if stationCallsign == "" {
 		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "STATION_CALLSIGN is required"}
+	}
+	if !IsValidCallsign(stationCallsign) {
+		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "STATION_CALLSIGN must be 3-32 characters and contain at least one digit"}
 	}
 
 	// ---- Validate field values ----

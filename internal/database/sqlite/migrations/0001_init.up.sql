@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS logbook
         The callsign associated with the logbook. This should be treated as the 'station_callsign' according to the
         ADIF standard (the one used 'on the air').
     */
-    callsign    TEXT     NOT NULL CHECK (length(callsign) <= 32),
+    callsign    TEXT     NOT NULL CHECK (length(callsign) BETWEEN 3 AND 32),
 
     description TEXT
 );
