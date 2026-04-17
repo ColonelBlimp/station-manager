@@ -354,6 +354,79 @@ func (s *Service) FetchQsoByDedupeKeyWithContext(ctx context.Context, logbookID 
 	return qso, nil
 }
 
+// FetchQsoPageByLogbookWithContext returns a forward-cursor page of QSOs
+// for a logbook, sorted newest-first by (qso_date, time_on, id) DESC.
+// Soft-deleted rows are hidden (sqlboiler's default WHERE clause).
+//
+// Pass afterDate/afterTime empty and afterID=0 for the first page.
+// For subsequent pages pass the (qso_date, time_on, id) tuple from the
+// last row of the previous page; the query returns rows strictly before
+// that tuple in DESC order.
+//
+// Fetches up to limit+1 rows so the caller can detect "has more" without
+// a second query. Caller is responsible for trimming to `limit` and
+// emitting the cursor from the last item actually returned.
+func (s *Service) FetchQsoPageByLogbookWithContext(
+	ctx context.Context,
+	logbookID int64,
+	afterDate, afterTime string,
+	afterID int64,
+	limit int,
+) (types.QsoSlice, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoPageByLogbookWithContext"
+	if err := checkService(op, s); err != nil {
+		return nil, err
+	}
+	if logbookID < 1 {
+		return nil, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	if limit < 1 {
+		return nil, errors.New(op).WithMsgf("limit must be positive, got %d", limit)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	mods := []qm.QueryMod{
+		models.QsoWhere.LogbookID.EQ(logbookID),
+	}
+	// Cursor predicate on the (qso_date, time_on, id) tuple in DESC order:
+	// rows strictly before the cursor.
+	if afterDate != "" && afterTime != "" && afterID > 0 {
+		mods = append(mods, qm.Where(
+			"(qso_date < ? OR (qso_date = ? AND time_on < ?) OR (qso_date = ? AND time_on = ? AND id < ?))",
+			afterDate,
+			afterDate, afterTime,
+			afterDate, afterTime, afterID,
+		))
+	}
+	mods = append(mods,
+		qm.OrderBy("qso_date DESC, time_on DESC, id DESC"),
+		qm.Limit(limit+1),
+	)
+
+	slice, err := models.Qsos(mods...).All(ctx, h)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err)
+	}
+
+	out := make(types.QsoSlice, 0, len(slice))
+	for _, row := range slice {
+		q, er := adapters.QsoModelToType(row)
+		if er != nil {
+			s.LoggerService.WarnWith().Int64("qso.id", row.ID).Err(er).Msg("failed to adapt QSO row")
+			continue
+		}
+		out = append(out, q)
+	}
+	return out, nil
+}
+
 func (s *Service) FetchQsoSlicePagingWithContext(ctx context.Context, logbookId, pageNum, pageSize int64, ordering Ordering) (types.QsoSlice, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoByCallsignWithContext"
 	if err := checkService(op, s); err != nil {

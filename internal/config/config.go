@@ -51,6 +51,13 @@ type ServerConfig struct {
 	IdleTimeoutSec     int    `json:"idle_timeout_sec"`
 	ShutdownTimeoutSec int    `json:"shutdown_timeout_sec"`
 	MaxBodyBytes       int64  `json:"max_body_bytes"`
+
+	// DefaultPageLimit is the page size used when a list request omits
+	// ?limit. MaxPageLimit is the ceiling applied to any client-supplied
+	// limit. Both live in config, not as code constants, per the no-magic-
+	// numbers rule.
+	DefaultPageLimit int `json:"default_page_limit"`
+	MaxPageLimit     int `json:"max_page_limit"`
 }
 
 // Load reads a JSON config file and returns a populated Config with defaults
@@ -105,6 +112,12 @@ func applyDefaults(cfg *Config, baseDir string) {
 	}
 	if cfg.Server.MaxBodyBytes == 0 {
 		cfg.Server.MaxBodyBytes = 1 << 20 // 1 MiB
+	}
+	if cfg.Server.DefaultPageLimit == 0 {
+		cfg.Server.DefaultPageLimit = 50
+	}
+	if cfg.Server.MaxPageLimit == 0 {
+		cfg.Server.MaxPageLimit = 500
 	}
 
 	// Datastore defaults

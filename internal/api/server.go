@@ -17,23 +17,27 @@ import (
 
 // Server holds the HTTP server and its dependencies.
 type Server struct {
-	httpServer   *http.Server
-	listener     net.Listener
-	qso          *qsoservice.Service
-	db           *sqlite.Service
-	logger       *logging.Service
-	maxBodyBytes int64
-	protocol     string
+	httpServer       *http.Server
+	listener         net.Listener
+	qso              *qsoservice.Service
+	db               *sqlite.Service
+	logger           *logging.Service
+	maxBodyBytes     int64
+	protocol         string
+	defaultPageLimit int
+	maxPageLimit     int
 }
 
 // New constructs a Server from the resolved services and config.
 func New(cfg config.Config, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service) *Server {
 	s := &Server{
-		qso:          qso,
-		db:           db,
-		logger:       logger,
-		maxBodyBytes: cfg.Server.MaxBodyBytes,
-		protocol:     cfg.Server.Protocol,
+		qso:              qso,
+		db:               db,
+		logger:           logger,
+		maxBodyBytes:     cfg.Server.MaxBodyBytes,
+		protocol:         cfg.Server.Protocol,
+		defaultPageLimit: cfg.Server.DefaultPageLimit,
+		maxPageLimit:     cfg.Server.MaxPageLimit,
 	}
 
 	mux := http.NewServeMux()
@@ -50,6 +54,7 @@ func New(cfg config.Config, qso *qsoservice.Service, db *sqlite.Service, logger 
 	mux.HandleFunc("POST /v1/logbook", s.handleCreateLogbook)
 	mux.HandleFunc("PATCH /v1/logbook/{id}", s.handleUpdateLogbook)
 	mux.HandleFunc("DELETE /v1/logbook/{id}", s.handleDeleteLogbook)
+	mux.HandleFunc("GET /v1/logbook/{id}/qso", s.handleListQsoByLogbook)
 
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
