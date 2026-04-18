@@ -14,9 +14,13 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/api"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/stub" // side-effect: register "stub" forwarder
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -145,6 +149,32 @@ func run() error {
 
 	loggerSvc.InfoWith().Msg("database open and migrated")
 
+	// ---- Forwarder workers ----
+	// Orphan sweep: any qso_upload row left in 'in_progress' by a
+	// previous crashed run is reset to 'pending' so it becomes
+	// reclaimable. Safe because most upstreams dedupe server-side, and
+	// the ones that don't will return a dedupe error which forwarders
+	// classify as success — see forwarding.md §7.
+	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	n, err := dbSvc.ResetOrphanedUploadsWithContext(sweepCtx)
+	sweepCancel()
+	if err != nil {
+		return fmt.Errorf("reset orphaned upload rows: %w", err)
+	}
+	if n > 0 {
+		loggerSvc.InfoWith().Int64("reset", n).Msg("forwarder: orphaned in_progress rows reset to pending")
+	}
+
+	// workerCtx is the parent context for all forwarder workers. It is
+	// cancelled at shutdown, thus Run's select can observe it; each worker
+	// then finishes its current processRow and exits.
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+
+	if err = spawnForwarderWorkers(workerCtx, cfg.Forwarders, dbSvc, loggerSvc); err != nil {
+		return fmt.Errorf("spawn forwarder workers: %w", err)
+	}
+
 	// ---- Start HTTP server ----
 	server := api.New(cfg, Version, qsoSvc, dbSvc, loggerSvc)
 
@@ -168,6 +198,12 @@ func run() error {
 	}
 
 	// ---- Graceful shutdown ----
+	// Cancel forwarder workers first so any in-flight forwarder Submit
+	// with ctx-cancel support (e.g. HTTP POST to QRZ) aborts promptly,
+	// and no new DB work is started against the about-to-close handle.
+	// Each worker finishes its current processRow then returns from Run.
+	workerCancel()
+
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
@@ -177,6 +213,89 @@ func run() error {
 	}
 
 	return runErr
+}
+
+// defaultForwarderRetry is the fallback RetryConfig used when a
+// forwarder config entry has no explicit `retry` block. Conservative
+// values that match v1's operator-environment experience on a
+// slow/unreliable link — see docs/v2-design/forwarding.md §2 / §5.
+//
+// When real forwarders land (QRZ, ClubLog, LoTW) each package will
+// want to ship its own upstream-tuned defaults; the shape of that
+// ownership is deferred until the first real forwarder is written.
+// Today the stub is the only forwarder and these fallback values work
+// for it.
+var defaultForwarderRetry = types.RetryConfig{
+	MaxAttempts:       5,
+	InitialBackoffSec: 60,
+	MaxBackoffSec:     3600,
+}
+
+// spawnForwarderWorkers constructs one worker per enabled forwarder
+// in cfg and launches each under safego.Go with respawn=true. A panic
+// inside a worker's Run path is recovered, logged via the daemon
+// logger, and the worker is respawned so that a transient panic doesn't
+// permanently disable a destination — see forwarding.md §9.
+//
+// Disabled entries are skipped (no goroutine spawned, no queue rows
+// processed). If forwarding.Build rejects a config, startup fails —
+// better to refuse to run than silently drop a destination the
+// operator thought was active.
+func spawnForwarderWorkers(
+	ctx context.Context,
+	fwds []types.ForwarderConfig,
+	dbSvc *sqlite.Service,
+	loggerSvc *logging.Service,
+) error {
+	panicHandler := func(name string, pv any, stack []byte) {
+		loggerSvc.ErrorWith().
+			Str("goroutine", name).
+			Interface("panic", pv).
+			Bytes("stack", stack).
+			Msg("forwarder worker panic recovered")
+	}
+
+	for _, fc := range fwds {
+		if !fc.Enabled {
+			loggerSvc.InfoWith().Str("forwarder", fc.Name).Msg("forwarder disabled, skipping")
+			continue
+		}
+
+		fwd, err := forwarding.Build(fc)
+		if err != nil {
+			return fmt.Errorf("build forwarder %q: %w", fc.Name, err)
+		}
+
+		retry := defaultForwarderRetry
+		if fc.Retry != nil {
+			retry = *fc.Retry
+		}
+
+		w, err := worker.New(worker.Config{
+			Name:  fc.Name,
+			Tick:  time.Duration(fc.TickIntervalSec) * time.Second,
+			Batch: fc.BatchSize,
+			Retry: retry,
+		}, fwd, dbSvc, loggerSvc)
+		if err != nil {
+			return fmt.Errorf("construct worker for %q: %w", fc.Name, err)
+		}
+
+		// Capture loop var for the closure — Go 1.22+ makes this safe
+		// without explicit shadowing, but the extra clarity is free.
+		workerRef := w
+		safego.Go(ctx, fc.Name, panicHandler, func() {
+			workerRef.Run(ctx)
+		}, true)
+
+		loggerSvc.InfoWith().
+			Str("forwarder", fc.Name).
+			Str("type", fc.Type).
+			Int("tick_interval_sec", fc.TickIntervalSec).
+			Int("batch_size", fc.BatchSize).
+			Msg("forwarder worker started")
+	}
+	return nil
 }
 
 func loadConfig(path string) (config.Config, error) {
