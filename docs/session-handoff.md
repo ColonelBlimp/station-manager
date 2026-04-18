@@ -883,9 +883,61 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (session 12 start)
 
-Forwarder thin slice (stages 1–11) is done and on `main`. The
-pragmatic next piece to land against milestone 1c's acceptance list
-is one of:
+**First task: write the forwarder implementation guide.** The
+forwarder subsystem carries real cognitive debt — 11 pieces across
+~10 files, with subtle interactions (tx boundaries, soft-delete per
+action, trigger-driven columns, `models.NewQuery` vs `FindQso`).
+Operator wants this documented end-to-end while the shape is fresh
+in everyone's head. Target file:
+`docs/v2-design/forwarding-implementation.md` — sibling to the
+design doc (`forwarding.md`). Design doc answers "what and why";
+implementation doc answers "where in the code and what exactly."
+
+**Pre-agreed outline** (confirmed end of session 11; start writing
+against this, don't re-derive):
+
+1. **Purpose & audience** — you or a new joiner in 6 months
+   re-orienting without re-reading the whole codebase.
+2. **System map** — one ASCII diagram showing every moving piece
+   and how data flows between them.
+3. **Anatomy of one QSO submit** — narrated walkthrough of an
+   insert from `curl` to `status=uploaded` across the stack, with
+   file/function references at each step.
+4. **The pieces in detail** — each subsystem gets a focused
+   section:
+   - `ForwarderConfig` and validation
+   - The `Forwarder` interface and registry
+   - The `qso_upload` table: schema, lifecycle states, indexes
+   - Ingest fan-out (`qsoservice.Submit/Update/Delete` +
+     `shouldEnqueue`)
+   - Worker loop: tick, claim, process, persist
+   - Retry policy and backoff formula
+   - Soft-delete handling per action type
+   - Panic recovery via `safego`
+5. **Lifecycle operations** — startup sequence, orphan sweep,
+   graceful shutdown ordering, what a crash looks like.
+6. **Observability** — the pull endpoint, what log lines to grep
+   for.
+7. **Testing layers** — unit → worker-integration → handler-
+   integration → E2E, which test proves which property.
+8. **How to extend** — recipe for adding a real forwarder (QRZ)
+   and the SSE emit points.
+9. **Gotchas and invariants** — subtle rules that break things
+   silently if violated (tx boundaries, `models.NewQuery` vs
+   `FindQso`, soft-delete-with-delete-action, trigger-driven
+   `modified_at`).
+
+**Tone:** assumes Go literacy and familiarity with the project's
+invariants (`CLAUDE.md`, `invariants.md`); does not assume memory
+of session-by-session context.
+
+**Length target:** 500–700 lines. Long enough to be thorough,
+short enough to be re-readable in one sitting.
+
+### Follow-ups after the implementation guide
+
+The thin-slice work is done but milestone 1c isn't closed. In
+priority order:
 
 1. **Port v1's QRZ forwarder into `internal/forwarding/qrz/`.** v1
    code lives at `internal/upload/qrz/` — XML request/response,
