@@ -253,7 +253,7 @@ These are known concerns that were raised during session 5 and deliberately not 
 - **Internal error typing for HTTP mapping.** Whether the handler layer uses sentinel errors, a typed `HTTPError` wrapper, or a mapping registry to translate internal errors to response codes — to be decided when the first handler is written.
 - **Request ID / trace ID propagation.** If added, it would be a middleware concern and a field in the error envelope. Not needed for a single-user desktop deployment; add if a debugging need surfaces.
 - **Rate limiting, quotas, request size caps beyond a simple global body size limit.** Not a concern at personal-operator scale. All runtime limits come from config (no magic numbers), and the configured defaults are generous.
-- **The forwarder fan-out config shape.** v2's forwarder redesign (to support multi-destination fan-out, replacing v1's hardcoded QRZ) is its own design concern that will eventually get `docs/v2-design/forwarding.md`. The API side of it (how clients query forwarder status) is already covered in Section 5; the internal shape is out of scope here.
+- **The forwarder fan-out config shape.** v2's forwarder redesign (to support multi-destination fan-out, replacing v1's hardcoded QRZ) is covered in `docs/v2-design/forwarding.md` (draft 2026-04-18). The API side of it (how clients query forwarder status) is already covered in Section 5; the internal shape lives in that sibling document.
 - **Session lifecycle.** Whether v2 has sessions as a first-class concept, and what their endpoints look like, is part of the logging app design in milestone 2.
 
 ---

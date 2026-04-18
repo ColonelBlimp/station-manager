@@ -1,0 +1,726 @@
+# Station Manager v2 — Forwarding Subsystem
+
+**Status:** Fourth entry in `docs/v2-design/`, written 2026-04-18 at the
+start of milestone 1c work. Draft — everything here is revisable until
+code contradicts it.
+
+**Purpose:** Settle the internal shape of the forwarding subsystem
+before writing code. The API-facing side of forwarding is already
+decided in `api.md §4.3` and `api.md §4.5`; this document covers the
+pieces that are internal to the daemon: fan-out config, the
+`Forwarder` plugin boundary, worker topology, retry policy, queue-row
+lifecycle, reload semantics, and the crash-safety helpers the workers
+need.
+
+**Why this document exists:** The v1 forwarder was hardcoded to QRZ at
+the ingest site. v2 needs multi-destination fan-out (QRZ, ClubLog,
+LoTW, eQSL, future SM-Online). That is one structural change, and
+three other concerns need answers before any code lands: how a
+destination is declared in config, how the daemon dispatches to it,
+and how retries survive a daemon restart. Settling these in prose
+first prevents the worker topology being "discovered" late.
+
+**How this document relates to others:**
+
+- `docs/v1-analysis/invariants.md` — "Forwarding never blocks logging"
+  and "one-fails-all-fail for QSO writes" are the two rules this
+  design is built around.
+- `docs/v2-design/api.md` — `§4.3` (async forward lifecycle),
+  `§4.5` (SSE vocabulary — `forward.succeeded` / `forward.failed`
+  are the only events this subsystem emits), `§5` (the
+  `GET /v1/qso/:id/uploads` pull endpoint).
+- `docs/v2-design/milestones.md` — milestone 1c is the milestone this
+  design enables. The acceptance test there is the finish line.
+- `docs/v1-analysis/design-decisions-log.md` → "Hardcoded QRZ forwarder
+  in `LogQso` / `UpdateQso`" — the decision to redesign fan-out.
+- `docs/v1-analysis/bug-inventory.md` → "Hardcoded QRZ forwarder" —
+  the v1 problem this subsystem exists to not recreate.
+- `docs/reviews/milestone-1b-review.md` → M8 (forwarder retry
+  cooldown) — deferred TODO that lands here.
+- `docs/session-handoff.md` — `safeGo` worker-recovery helper is
+  parked there; this doc is where it lands.
+
+---
+
+## 1. Constraints carried forward
+
+Everything below must satisfy these. They are decided elsewhere; this
+list exists so that proposals in later sections can be checked against
+them at a glance.
+
+1. **Forwarding never blocks logging.** `POST /v1/qso` returns as soon
+   as the local sqlite transaction commits. Nothing in this subsystem
+   runs on the request path.
+2. **One-fails-all-fail for the ingest transaction.** The QSO row and
+   one `qso_upload` row per configured destination are inserted in a
+   single sqlite transaction. Forwarders **consume** queue rows; they
+   never write them. If queue-row insert fails, the whole ingest
+   fails and the submit returns an error.
+3. **Local log is authoritative.** A QSO is "logged" the moment it is
+   in sqlite. Forward status is metadata on an already-logged QSO,
+   never a gate on whether the QSO exists.
+4. **Narrow daemon scope.** The daemon owns log + forward. Anything
+   UX-y (spinners, badges, per-operator retry buttons) lives in the
+   client, driven by pull (`/v1/qso/:id/uploads`) or push (SSE).
+5. **Personal-operator scale.** At most tens of QSOs per active
+   session, a handful of destinations, a single user. Simple and
+   sequential beats clever and concurrent wherever the tradeoff is
+   neutral.
+6. **Home-grown over framework.** No job queue library, no cron
+   library, no retry framework. Standard library + a goroutine per
+   destination. v1's retry loop, goroutine topology, and upload-queue
+   polling shapes are the reference point; the thing being replaced
+   is the fan-out, not the mechanics.
+
+---
+
+## 2. Fan-out config shape
+
+**Decision:** Each forwarder is a named entry in a `forwarders` array
+in `config.json`. Every entry has a `type`, a human-friendly `name`,
+an `enabled` flag, a `credentials` object whose shape is
+type-specific, and an optional `action_filter` restricting which QSO
+actions this destination cares about.
+
+```jsonc
+{
+  "forwarders": [
+    {
+      "name": "qrz-primary",
+      "type": "qrz",
+      "enabled": true,
+      "credentials": {
+        "username": "M0CMC",
+        "api_key": "..."
+      },
+      "action_filter": ["insert", "update", "delete"],
+      "retry": {
+        "max_attempts": 10,
+        "initial_backoff_sec": 30,
+        "max_backoff_sec": 3600
+      }
+    },
+    {
+      "name": "clublog-backup",
+      "type": "clublog",
+      "enabled": false,
+      "credentials": { "email": "...", "password": "...", "callsign": "..." }
+    }
+  ]
+}
+```
+
+**Why an array, not a map keyed by type:** the operator may want two
+instances of the same type (e.g. two QRZ accounts, or a staging +
+production pair during testing). Type is not a primary key; `name`
+is.
+
+**Why credentials are a nested object, not flat fields:** each
+forwarder type has its own authentication shape. QRZ wants
+`username`/`api_key`; ClubLog wants `email`/`password`/`callsign`;
+LoTW wants a certificate path. Nesting the type-specific fields under
+`credentials` keeps the top-level shape uniform and the
+type-specific unmarshaling local to the forwarder's own package.
+
+**Why `action_filter` is explicit:** v1 uploaded everything to QRZ
+including deletes. Some destinations don't support updates or deletes
+cleanly (LoTW is famously write-once). The filter lets the operator
+restrict a destination to just inserts without changing code.
+
+**Why retry policy is per-forwarder:** QRZ and LoTW have very
+different tolerance for repeated submits. QRZ is happy with retries
+every 30 seconds; LoTW shouldn't be hammered. Per-forwarder retry
+config acknowledges this. Defaults are generous (`max_attempts=10`,
+starting at 30s, capped at 1h) and come from config, not code
+constants (per the no-magic-numbers rule).
+
+**Validation at startup.** `config.Load` validates that every
+forwarder has a known `type`, a non-empty `name`, unique names across
+the array, and a `credentials` blob that the matching forwarder
+type's `ValidateCredentials` accepts. Invalid config → daemon refuses
+to start, with an error naming the offending forwarder.
+
+**Alternative considered:** a single global `enabled_forwarders`
+array of type-strings, with credentials pulled from environment
+variables. Rejected — it couples the config model to env-var naming
+conventions and forbids multiple instances of the same type.
+
+---
+
+## 3. The `Forwarder` interface
+
+**Decision:** Every forwarder implements a small, synchronous
+interface. Each destination lives in its own package under
+`internal/forwarding/<type>/`. The worker layer calls `Submit` and
+interprets the result; the forwarder has no knowledge of the queue
+row, the retry policy, or the SSE event vocabulary.
+
+```go
+package forwarding
+
+// Forwarder is the plugin boundary between the worker layer and a
+// concrete destination (QRZ, ClubLog, LoTW, …). Implementations are
+// stateless with respect to the queue; they make one network call
+// per Submit and return a Result describing the outcome.
+type Forwarder interface {
+    // Type returns the forwarder's type identifier, matching the
+    // "type" field in config.json. Used for logging and for the
+    // qso_upload.service column.
+    Type() string
+
+    // Submit attempts to push one QSO + action pair to the upstream
+    // service. It MUST respect ctx cancellation. It MUST NOT retry
+    // internally — retries are the worker's job.
+    Submit(ctx context.Context, qso types.Qso, action Action) Result
+}
+
+type Action string // "insert" | "update" | "delete"
+
+type Outcome string
+const (
+    OutcomeSuccess      Outcome = "success"      // upstream accepted, mark uploaded
+    OutcomeTransient    Outcome = "transient"    // try again later per retry policy
+    OutcomeTerminal     Outcome = "terminal"     // upstream rejected; mark failed
+)
+
+type Result struct {
+    Outcome    Outcome
+    Err        error  // set when Outcome != success; stored in qso_upload.last_error
+    UpstreamID string // optional — some services return a remote ID
+}
+```
+
+**Why three outcomes, not just error/nil:** the classification
+`transient vs terminal` is the forwarder's call, not the worker's.
+Only the QRZ module knows that "Invalid session" is transient (log
+in again and retry) but "CALL/QSO_DATE required" is terminal
+(rejecting won't help). Lifting this into the interface prevents
+error-classification logic being duplicated across types or — worse —
+guessed wrong in the worker layer.
+
+**Why Submit takes `types.Qso`, not the `qso_upload` row:** the
+queue row is an implementation detail of the worker layer.
+Forwarders should be testable in isolation with nothing but a QSO
+and HTTP fixtures.
+
+**Why no `Initialize` / `Close` on the interface:** forwarders are
+stateless. Any per-forwarder setup (HTTP client construction,
+credential validation) happens in the package's constructor
+(`qrz.New(cfg Config) (*Forwarder, error)`). Shutdown is just
+letting the goroutine exit; no explicit teardown.
+
+**Package layout:**
+
+```
+internal/forwarding/
+├── forwarding.go       # interface + Result, Outcome, Action types
+├── registry.go         # type-name → constructor registry
+├── worker/             # worker/dispatcher implementation (§4)
+│   ├── worker.go
+│   └── worker_test.go
+├── qrz/
+│   ├── doc.go
+│   ├── qrz.go          # implements forwarding.Forwarder
+│   └── qrz_test.go
+├── clublog/            # future, milestone 1c+
+├── lotw/               # future
+└── ...
+```
+
+**v1 reference.** The v1 QRZ code in `internal/upload/qrz/` is good —
+the XML request/response shapes, the session-key caching, the
+response parsing. The v2 port keeps the HTTP and parsing logic and
+rewraps it behind this `Forwarder` interface. It is **not** a
+ground-up rewrite.
+
+---
+
+## 4. Worker topology
+
+**Decision:** One goroutine per enabled forwarder. Each goroutine owns
+its destination's `qso_upload` rows exclusively: it claims, submits,
+updates status, sleeps. The goroutines are independent — there is no
+central dispatcher and no shared work queue.
+
+```
+┌──────────────┐    claims rows WHERE service='qrz-primary'
+│ qrz-primary  │──▶  submits                     ────▶ qso_upload
+│ goroutine    │    writes status / attempts back
+└──────────────┘
+
+┌──────────────┐    claims rows WHERE service='clublog-backup'
+│ clublog      │──▶  submits                     ────▶ qso_upload
+│ goroutine    │    writes status / attempts back
+└──────────────┘
+```
+
+**Each goroutine's loop:**
+
+```
+for {
+    select {
+    case <-ctx.Done():
+        return
+    case <-ticker.C:
+    }
+
+    rows := claim_up_to(N, service=self, status IN ('pending','in_progress'),
+                        next_attempt_at <= now)
+    for _, row := range rows {
+        qso := fetch_qso(row.qso_id)         // soft-deleted handled below
+        res := forwarder.Submit(ctx, qso, row.action)
+        persist_outcome(row, res)            // updates status/attempts/last_error
+        maybe_emit_sse(row, res)             // only on terminal outcomes
+    }
+}
+```
+
+**Why per-destination goroutines, not a central dispatcher:**
+
+1. **Isolation.** One slow/failing destination can't back up the
+   others. QRZ being down doesn't delay ClubLog pushes.
+2. **Simplicity.** No shared work queue, no dispatch logic, no
+   fairness policy. Each goroutine reads only its own rows via a
+   `service = ?` filter.
+3. **Natural rate limiting.** Per-destination retry policy is
+   enforced by that destination's own loop. No cross-destination
+   coordination needed.
+4. **Personal-operator scale.** There will be 1–4 destinations. A
+   fancy dispatcher saves nothing.
+
+**Why not a goroutine per row / per QSO:** needless concurrency.
+Sequential submission within a destination is the correct default —
+many upstream APIs rate-limit per account anyway, and parallelism
+within a single destination just creates new ways to get throttled.
+
+**Claim semantics.** `claim_up_to` transitions `pending` →
+`in_progress` in a single `UPDATE` statement and returns the claimed
+rows. This makes the "what happens if the daemon crashes mid-flight"
+question tractable: any row stuck in `in_progress` is reset to
+`pending` at next startup (see §7).
+
+**Batch size.** `N` comes from per-forwarder config
+(`batch_size`, default 10). Keeps the loop responsive to ctx
+cancellation — a worker processing 10 rows at a time can shut down
+within one network call of being told to.
+
+**Soft-deleted QSOs.** A `qso_upload` row may point at a QSO that has
+since been soft-deleted. The worker handles this as follows:
+
+- `action = 'insert'` with a soft-deleted QSO: skip (mark
+  `terminal`, `last_error = "qso soft-deleted before insert
+  forwarded"`). Operator deleted before we got to it; no point
+  pushing a QSO to QRZ that we've already decided to remove.
+- `action = 'update'` with a soft-deleted QSO: treat as `delete`
+  instead (re-route action in-memory for the Submit call).
+- `action = 'delete'`: always forward — that's the point.
+
+---
+
+## 5. Retry policy and backoff
+
+**Decision:** Exponential backoff with jitter, per-forwarder, capped.
+Every non-success outcome updates `attempts`, `last_attempt_at`,
+`next_attempt_at`, and `last_error`. When `attempts >= max_attempts`
+on a transient error, the row is promoted to terminal `failed` and an
+SSE event fires.
+
+**Backoff formula:**
+
+```
+backoff = min(
+    initial_backoff_sec * 2^(attempts - 1),
+    max_backoff_sec
+)
+jitter = random_between(0, backoff * 0.2)   // ±20% jitter
+next_attempt_at = now + backoff + jitter
+```
+
+**Why jitter:** two forwarders recovering from the same outage
+otherwise synchronize their retry waves. With jitter they drift
+apart. Twenty percent is the standard rule-of-thumb.
+
+**Why exponential, not linear:** upstream services that go down tend
+to stay down longer than a few minutes. Linear backoff retries too
+aggressively during a multi-hour outage; exponential gives the
+upstream time to breathe.
+
+**Why a per-forwarder `max_attempts`, not a global one:** discussed in
+§2 — different upstreams tolerate different retry patterns.
+
+**Terminal vs transient at max_attempts.** Once attempts exhausts, the
+row transitions to `failed` regardless of the last outcome's
+classification. The operator can re-queue it manually (endpoint
+deferred — see §11).
+
+**New column: `next_attempt_at INTEGER`.** The schema already has
+`last_attempt_at`; deriving `next_attempt_at` on the fly requires
+replaying the backoff formula inside every claim query, which is
+awkward in SQL. A pre-computed `next_attempt_at` column lets the
+claim query be a simple `WHERE next_attempt_at <= ? ORDER BY
+next_attempt_at`. This adds one more column to `0001_init.up.sql`
+before any QSO data exists — we're pre-milestone-1c, the schema is
+not yet frozen.
+
+**M8 lands here.** The milestone 1b review's M8 finding (forwarder
+retry cooldown) is this section. The TODO pointer in code becomes
+the retry-policy implementation described here.
+
+---
+
+## 6. Queue-row data shape
+
+**The row is the contract between ingest, worker, and client query
+endpoints.** It must describe unambiguously: which QSO and destination
+this work belongs to, what action is being forwarded, where the
+attempt stands, when to try again, and what came back from the
+upstream.
+
+### Schema
+
+```
+id                INTEGER PK
+created_at        default now
+modified_at       trigger-maintained
+qso_id            FK → qso.id  (ON DELETE CASCADE; soft-delete does not cascade)
+forwarder_name    TEXT   -- per-instance handle, matches config.forwarders[].name
+forwarder_type    TEXT   -- plugin identifier, matches Forwarder.Type()
+action            TEXT   -- 'insert' | 'update' | 'delete'
+status            TEXT   -- 'pending' | 'in_progress' | 'uploaded' | 'failed'
+attempts          INTEGER default 0
+last_attempt_at   INTEGER (unix) — diagnostic only, workers do not read
+next_attempt_at   INTEGER (unix) — load-bearing for the claim query (§5)
+last_error        TEXT   -- most recent Result.Err message when not success
+upstream_id       TEXT   -- optional; set from Result.UpstreamID on success
+UNIQUE(qso_id, forwarder_name, action)
+```
+
+### Changes from v1
+
+- **`service` split into `forwarder_name` + `forwarder_type`.** v1 had
+  one destination and a free-text `service` column was enough. v2's
+  multi-destination model needs both a per-instance handle (so
+  workers can claim exclusively) and a stable type identifier (so
+  rows remain interpretable after an operator renames or removes a
+  destination from config). Two columns, ~10 bytes per row, row is
+  self-describing.
+- **Added `next_attempt_at`.** See §5. Lets the pending index be
+  ordered by "when should this next be tried" without replaying the
+  backoff formula in SQL.
+- **Added `upstream_id`.** Optional. Destinations that return a
+  handle (QRZ's log-entry ID, ClubLog's upload ref) get it persisted
+  so future UI can link out and future `update` / `delete` calls can
+  target the right upstream record.
+- **Clarified `last_attempt_at` as diagnostic-only.** v1 used it
+  ambiguously; v2 workers read `next_attempt_at` for scheduling and
+  use `last_attempt_at` only for operator-facing "last tried at"
+  display.
+
+### Row creation: one per (enabled destination × matching action)
+
+At each QSO lifecycle event, `qsoservice` inserts one row per enabled
+forwarder whose `action_filter` includes that event's action:
+
+```
+-- POST /v1/qso (all three destinations accept 'insert'):
+qso_upload(qso_id=42, forwarder_name='qrz-primary',    forwarder_type='qrz',     action='insert', …)
+qso_upload(qso_id=42, forwarder_name='clublog-backup', forwarder_type='clublog', action='insert', …)
+qso_upload(qso_id=42, forwarder_name='lotw-main',      forwarder_type='lotw',    action='insert', …)
+
+-- PATCH /v1/qso/42 — lotw-main's filter is ["insert"], so it gets no row:
++ qso_upload(qso_id=42, forwarder_name='qrz-primary',    forwarder_type='qrz',     action='update', …)
++ qso_upload(qso_id=42, forwarder_name='clublog-backup', forwarder_type='clublog', action='update', …)
+```
+
+**N is dynamic per action**, not fixed per QSO. A QSO that goes
+through insert + edit + delete with three fully-filtered destinations
+accumulates at most 9 rows over its lifetime — a small, bounded audit
+trail of forwardable events.
+
+### Re-queue semantics under the UNIQUE constraint
+
+`UNIQUE(qso_id, forwarder_name, action)` means at most one row exists
+per (QSO, destination, action) triple. This prevents duplicate work
+but needs a defined behavior when a new instance of the same action
+arrives before the existing row has terminated.
+
+**The rule: reset the existing row, don't insert a new one.** On
+PATCH, if an `update` row already exists for a (QSO, destination)
+pair:
+
+- If it is `pending` or `in_progress`: bump `attempts=0`,
+  `next_attempt_at=now`, clear `last_error`. Worker picks it up on
+  the next tick and forwards whatever the current QSO state is.
+- If it is `failed` or `uploaded`: reset to `pending` with
+  `attempts=0`. Fresh retry cycle starts.
+
+This is the correct ham-radio behavior: the operator's latest edit
+is the truth to forward. An in-flight "update from two edits ago"
+doesn't need to complete in isolation — its only job was to push
+the current state, and there's still a worker whose only job is to
+push the current state.
+
+### No snapshot on the row
+
+The row does **not** carry a copy of the QSO body at forward-queue
+time. Workers re-read `types.Qso` by `qso_id` at claim time. If the
+operator edits between claim and the next tick, the worker submits
+the newer state. This:
+
+- Keeps the row lean (row size stays bounded and predictable).
+- Matches operator intent (forward the latest truth).
+- Sidesteps snapshot-vs-current ambiguity that would otherwise need
+  a design decision every time the question comes up.
+
+The only caveat is the soft-delete handling already documented in
+§4: an `insert` row whose QSO is soft-deleted before the worker
+claimed it is terminal (no point inserting upstream something we've
+decided to remove); an `update` row whose QSO is soft-deleted is
+re-routed to a `delete` at claim time.
+
+### Migration note
+
+No data has shipped yet, so the three schema changes above (split
+`service`, add `next_attempt_at`, add `upstream_id`) land as edits
+to `0001_init.up.sql` in place rather than as a `0002_*.up.sql`
+migration. This matches the pattern used when the composite index
+was added in milestone 1b. If the daemon has ever been started and
+the schema migrated locally, a `DROP TABLE qso_upload` before rerun
+is enough — no production data exists.
+
+---
+
+## 7. Row lifecycle and status transitions
+
+The existing schema already has the right states:
+
+```
+pending → in_progress → uploaded   (success)
+pending → in_progress → pending    (transient, backoff)
+pending → in_progress → failed     (terminal or max_attempts)
+```
+
+**Ingest writes `pending`.** The submit transaction inserts one row
+per configured destination with `status='pending'`, `attempts=0`,
+`next_attempt_at=now`. This is the only place non-forwarder code
+writes `qso_upload`.
+
+**Worker transitions.**
+
+| From | To | When |
+|---|---|---|
+| `pending` | `in_progress` | Claimed by the worker, before Submit |
+| `in_progress` | `uploaded` | Submit returned `OutcomeSuccess` |
+| `in_progress` | `pending` | Submit returned `OutcomeTransient` and `attempts < max_attempts` |
+| `in_progress` | `failed` | Submit returned `OutcomeTerminal`, OR `OutcomeTransient` with `attempts >= max_attempts` |
+
+**Crash recovery on startup.** The daemon resets any
+`status='in_progress'` row back to `status='pending'` during service
+initialization (one `UPDATE` per startup). This covers the case where
+the daemon crashed between claim and persist-outcome — the row was
+"being worked on" but the result never got written, so we treat it
+as never-claimed. Duplicates on the upstream are acceptable because
+most forwarders are idempotent (QRZ dedupes on CALL+QSO_DATE+TIME_ON
+server-side, ClubLog the same). For the few that aren't, the
+upstream returns a dedupe error classified as `OutcomeSuccess` with
+`last_error` noting the dedupe hit.
+
+**SSE emission points.** Only terminal transitions emit events:
+
+- `in_progress` → `uploaded`: emit `forward.succeeded`.
+- `in_progress` → `failed`: emit `forward.failed`.
+
+`pending` → `pending` (backoff) is silent. Clients that want spinner
+UX query `GET /v1/qso/:id/uploads` and show a spinner for any row in
+`pending` or `in_progress`; the spinner clears when a terminal event
+arrives.
+
+**No `attempts_total` vs `attempts_current`.** The single `attempts`
+counter is the count since the row was created. If the operator
+manually re-queues a `failed` row (future endpoint), it resets to
+zero. v1 overcomplicated this; v2 does not.
+
+---
+
+## 8. Config reload
+
+**Decision:** Config changes require a daemon restart. Live reload
+(SIGHUP, admin endpoint, file watching) is **off the table** — not
+just for milestone 1c but for the foreseeable future.
+
+**Why:** the restart is cheap (sub-second on a Unix socket with no
+persistent connections worth preserving), the operator is the only
+user, and live-reload introduces real complexity around the
+in-flight-attempts question (drain claimed rows? abandon them?
+restart the goroutine mid-batch?). Restarting sidesteps all of it.
+If a genuine need appears later, this decision can be revisited —
+but it isn't the kind of feature to build against speculative
+future demand.
+
+**What restart does:** the startup path walks `config.Forwarders`,
+constructs each enabled forwarder, and spawns one worker goroutine
+per enabled entry. Disabled forwarders are not constructed and their
+queue rows sit at `pending` until the operator re-enables them and
+restarts.
+
+---
+
+## 9. Worker-goroutine panic recovery: `safeGo`
+
+**Decision:** Each worker goroutine runs under a `safeGo` wrapper
+that recovers panics, logs them structurally (with stack), and
+arranges for the worker to be respawned. This is the third layer of
+panic defense after `main`'s recover (session 10) and the HTTP
+`recoverPanic` middleware (session 10).
+
+**Location:** `internal/utils/safego.go` — close to the
+goroutine-spawning code it protects, not buried in a framework
+package.
+
+**Shape:**
+
+```go
+package utils
+
+// SafeGo runs fn in a new goroutine. If fn panics, SafeGo recovers
+// the panic, logs it via the provided logger with a stack trace,
+// and (if respawn is true) re-invokes fn in a fresh goroutine after
+// a short cooldown.
+//
+// Intended for long-lived workers (forwarders, future forwarding-
+// aware SSE publishers) whose absence silently breaks a feature.
+// One-shot goroutines that do not need respawn should use the
+// two-argument form with respawn=false.
+func SafeGo(name string, logger *logging.Service, fn func(), respawn bool) {
+    go func() {
+        defer func() {
+            if r := recover(); r != nil {
+                logger.ErrorWith().
+                    Str("goroutine", name).
+                    Interface("panic", r).
+                    Bytes("stack", debug.Stack()).
+                    Msg("goroutine panic recovered")
+                if respawn {
+                    time.Sleep(respawnCooldown)
+                    SafeGo(name, logger, fn, respawn)
+                }
+            }
+        }()
+        fn()
+    }()
+}
+```
+
+**Why respawn is opt-in, not default:** a respawning panic loop is
+worse than a dead worker if the panic is deterministic — you get a
+logging storm with no progress. Forwarders use `respawn=true`
+because a transient panic (e.g. weird network state) should not
+permanently disable uploads. A future panic-loop detector (kill
+after N respawns in M seconds) can be added if it becomes a real
+problem; it is not in the initial shape.
+
+**Why a named goroutine:** log filtering. When the forwarder
+subsystem grows to multiple destinations, `goroutine=qrz-primary`
+tells you which one panicked without having to unscramble the stack.
+
+**Testability:** the first test for `SafeGo` is "panic inside fn
+does not crash the test process." The second is "respawn=true
+re-runs fn." Straightforward unit tests; no goroutine leak concerns
+because the respawn chain terminates when `fn` stops panicking or
+when ctx cancellation propagates via fn's closure.
+
+---
+
+## 10. Migration from v1
+
+**What carries forward:**
+
+- `internal/upload/qrz/` HTTP and XML parsing logic. Moved to
+  `internal/forwarding/qrz/` and adapted to the `Forwarder`
+  interface. Session-key caching, error-code classification, the
+  "login-then-request" pattern — all kept.
+- The `qso_upload` table shape. Already re-created in the v2 schema
+  (`0001_init.up.sql`). Adding the `next_attempt_at` column (§5) is
+  the only schema change needed for milestone 1c.
+- The v1 retry loop's shape as a reference for the per-destination
+  goroutine in §4.
+
+**What changes:**
+
+- The hardcoded `upload.OnlineServiceQRZ` at the ingest site is gone.
+  `qsoservice.Submit` reads `config.Forwarders` and inserts one row
+  per enabled destination.
+- Per-forwarder retry policy (v1 was global).
+- Per-destination goroutines (v1 was a single worker).
+- `Forwarder` interface at the plugin boundary (v1 had no seam).
+
+**What's deleted:**
+
+- The v1 dispatcher coupling between forwarder and logbook mutation.
+  In v2 the forwarder only submits — it does not re-read or re-write
+  QSO state beyond the `qso_upload` row.
+
+---
+
+## 11. Explicitly deferred
+
+- **Manual re-queue endpoint** (e.g. `POST /v1/qso/:id/uploads/:name/retry`
+  to reset a `failed` row to `pending` with `attempts=0`). Clients
+  need it eventually; not required for milestone 1c acceptance.
+- **Dead-letter handling for permanently failed rows.** Today they
+  sit in `failed` forever. A future cleanup job or admin endpoint
+  can prune them; no design pressure yet.
+- **Operator-facing upload-queue introspection endpoints.** Listed in
+  `api.md §5` as "not designed yet." The client UX for this is
+  logbook-app territory and is milestone 2 work.
+- **Forwarder-specific rate limiting beyond retry backoff.** If QRZ
+  starts 429-ing us during bulk imports, a token-bucket per
+  forwarder is the fix. Not a concern at personal-operator steady
+  state.
+- **Parallelism within a single destination.** §4 is explicit about
+  sequential-per-destination being the default. Revisit if a
+  measurement shows a real bottleneck.
+- **Forwarder health metrics.** The operator can infer health from
+  SSE events and the pull endpoint; a dedicated `/v1/forwarders`
+  status endpoint is easy to add later if a dashboard needs it.
+
+---
+
+## 12. Acceptance for milestone 1c
+
+This is a re-statement of `milestones.md §1c` with the shape above
+plugged in.
+
+- `config.json` with two forwarders (one QRZ real, one a
+  test-endpoint stub) loads and validates.
+- A `POST /v1/qso` insert creates two `qso_upload` rows, one per
+  forwarder.
+- The QRZ worker picks up its row within one tick, calls the
+  upstream, and writes either `uploaded` or a transient retry.
+- The stub-endpoint worker picks up its row within one tick and
+  transitions to `uploaded`.
+- `GET /v1/qso/:id/uploads` returns both rows with their current
+  status.
+- An SSE client on `/v1/events` receives `forward.succeeded` events
+  as terminal transitions happen.
+- Killing the daemon mid-upload and restarting it does not lose the
+  row: `in_progress` is reset to `pending` and the retry cycle
+  resumes.
+- A panic inside the forwarder's `Submit` (induced via a test
+  injection) is caught by `SafeGo`, logged, and the worker respawns.
+
+When all eight pass, milestone 1c is done.
+
+---
+
+## Related documents
+
+- `docs/v2-design/api.md` — client-facing shape of forwarding.
+- `docs/v2-design/milestones.md` — milestone 1c scope.
+- `docs/v1-analysis/invariants.md` — the constraints §1 summarizes.
+- `docs/v1-analysis/design-decisions-log.md` — why v1's QRZ
+  hardcoding is being replaced.
+- `docs/reviews/milestone-1b-review.md` → M8 — the deferred retry-
+  cooldown TODO that §5 resolves.
+- `docs/session-handoff.md` — `safeGo` parking spot; will be moved
+  into §9 of this document once implemented.

@@ -215,6 +215,12 @@ contest dupe check, and verify the version endpoint.
 **Goal:** The daemon forwards QSOs to external services asynchronously
 and publishes events to connected clients via SSE.
 
+**Design doc:** `docs/v2-design/forwarding.md` (draft 2026-04-18)
+settles the internal shape — fan-out config, `Forwarder` interface,
+per-destination worker topology, retry policy, queue-row lifecycle,
+`SafeGo` panic recovery, and the v1 → v2 migration path. Read that
+before implementing.
+
 ### Scope (additive on top of milestone 1b)
 
 - Background forwarding worker: picks up pending `qso_upload` rows,
