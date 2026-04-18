@@ -142,19 +142,27 @@ CREATE TABLE IF NOT EXISTS country
 
 CREATE INDEX IF NOT EXISTS idx_country_name ON country (name);
 
+-- qso_upload — forwarding queue. One row per (QSO, forwarder, action) triple.
+-- See docs/v2-design/forwarding.md §6 for the row-shape rationale.
+-- forwarder_name is the per-instance handle (matches config.forwarders[].name);
+-- forwarder_type is the plugin identifier (matches Forwarder.Type()). Storing
+-- both keeps rows interpretable even if the instance is later deleted from config.
 CREATE TABLE IF NOT EXISTS qso_upload
 (
     id              INTEGER  NOT NULL PRIMARY KEY AUTOINCREMENT,
     created_at      DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
     modified_at     DATETIME,
     qso_id          INTEGER  NOT NULL,
-    service         TEXT     NOT NULL,
+    forwarder_name  TEXT     NOT NULL,
+    forwarder_type  TEXT     NOT NULL,
     action          TEXT     NOT NULL DEFAULT 'insert' CHECK (action IN ('insert', 'update', 'delete')),
     status          TEXT     NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'uploaded', 'failed')),
     attempts        INTEGER  NOT NULL DEFAULT 0,
-    last_attempt_at INTEGER, -- Unix time
+    last_attempt_at INTEGER, -- Unix time; diagnostic only, workers do not read this
+    next_attempt_at INTEGER  NOT NULL DEFAULT (strftime('%s', 'now')), -- Unix time; load-bearing for the claim query
     last_error      TEXT,
-    CONSTRAINT uq_qso_service UNIQUE (qso_id, service, action),
+    upstream_id     TEXT,    -- optional; set from Result.UpstreamID on success
+    CONSTRAINT uq_qso_forwarder_action UNIQUE (qso_id, forwarder_name, action),
     CONSTRAINT fk_qso_upload_qso FOREIGN KEY (qso_id) REFERENCES qso (id) ON DELETE CASCADE
 );
 
@@ -169,12 +177,14 @@ BEGIN
     WHERE id = OLD.id;
 END;
 
--- Pending work per service, ordered by next_attempt_at
+-- Pending work per forwarder, ordered by next_attempt_at so retries don't jump
+-- the queue. Filtered to pending/in_progress to keep the index small.
 CREATE INDEX IF NOT EXISTS idx_qso_upload_pending
-    ON qso_upload (service)
+    ON qso_upload (forwarder_name, next_attempt_at)
     WHERE status IN ('pending', 'in_progress');
 
--- Fast lookup of uploaded rows per service (optional)
+-- Fast lookup of uploaded rows per forwarder (for operator-facing "recent successful
+-- uploads" views; not on the worker's hot path)
 CREATE INDEX IF NOT EXISTS idx_qso_upload_uploaded
-    ON qso_upload (service, modified_at)
+    ON qso_upload (forwarder_name, modified_at)
     WHERE status = 'uploaded';

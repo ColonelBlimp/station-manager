@@ -42,6 +42,62 @@ first prevents the worker topology being "discovered" late.
 
 ---
 
+## Terminology
+
+A few terms are used throughout. Defined here in one place so later
+sections can use them without re-explaining.
+
+- **Forwarder** — a plugin implementing the `Forwarder` interface
+  (§3) that pushes QSOs to one specific upstream destination (QRZ,
+  ClubLog, LoTW, …). "The QRZ forwarder" = `internal/forwarding/qrz`.
+
+- **`forwarder_name`** — the **per-instance** handle the operator
+  chooses in config (e.g. `"qrz-primary"`, `"qrz-backup"`). Used to
+  key the `qso_upload.forwarder_name` column and to scope the
+  worker's claim query. An operator may have two instances of the
+  same type — they share a `forwarder_type` but differ in
+  `forwarder_name`.
+
+- **`forwarder_type`** — the **plugin identifier** returned by
+  `Forwarder.Type()` (e.g. `"qrz"`, `"clublog"`). Stable across
+  config renames; stored redundantly on the row so historical rows
+  remain interpretable even after an operator deletes the instance
+  from config.
+
+- **Outcome** — one of three classifications returned by
+  `Forwarder.Submit` (§3):
+  - `OutcomeSuccess` — upstream accepted.
+  - `OutcomeTransient` — try again later (network error, rate limit,
+    temporary upstream outage). The worker re-queues per the retry
+    policy in §5.
+  - `OutcomeTerminal` — upstream definitively rejected; **retrying
+    will not help** (malformed data, revoked credentials, etc.). The
+    worker marks the row `failed` immediately, no retries. Only the
+    forwarder knows enough about its upstream to make this call.
+
+- **Terminal state** — a row whose `status` is `uploaded` or
+  `failed`. No more work will be done on it. Contrast with `pending`
+  (waiting) and `in_progress` (actively being submitted).
+
+- **Terminal transition** — the moment a row enters a terminal
+  state: `in_progress → uploaded` or `in_progress → failed`. These
+  are the **only** two transitions that emit SSE events (§7).
+
+- **Claim** — the atomic `UPDATE ... RETURNING` (§4) that flips a
+  row from `pending` to `in_progress` and hands it to the worker.
+
+- **Tick** — the periodic wake-up of a worker goroutine (§4).
+  Defaults to 120 s, per v1 operational experience and the
+  operator's slow/unreliable link.
+
+**Cause vs state:** `OutcomeTerminal` is a cause the forwarder
+reports. A terminal transition is the row-state effect. A terminal
+transition can be caused by `OutcomeSuccess` (→ `uploaded`),
+`OutcomeTerminal` (→ `failed`), or `OutcomeTransient` hitting
+`max_attempts` (→ `failed`). Don't conflate the two.
+
+---
+
 ## 1. Constraints carried forward
 
 Everything below must satisfy these. They are decided elsewhere; this
@@ -299,10 +355,25 @@ rows. This makes the "what happens if the daemon crashes mid-flight"
 question tractable: any row stuck in `in_progress` is reset to
 `pending` at next startup (see §7).
 
-**Batch size.** `N` comes from per-forwarder config
-(`batch_size`, default 10). Keeps the loop responsive to ctx
-cancellation — a worker processing 10 rows at a time can shut down
-within one network call of being told to.
+**Batch size and tick interval.** Both come from per-forwarder
+config, with package-level defaults that match the values v1
+settled on in operation:
+
+- `tick_interval_sec`, default **120** (2 minutes)
+- `batch_size`, default **5**
+
+These are deliberately conservative because the operator's internet
+is slow and unreliable. Tight tick cadence or large batches would
+concentrate all the network-time variance into a single tick, make
+graceful shutdown sluggish (shutdown waits for the current batch to
+finish), and hammer upstream services that a flaky link can't keep
+up with anyway. A batch of 5 on a flaky connection fits comfortably
+inside 120 s of wall time in the worst case.
+
+The tick keeps the loop responsive to `ctx.Done()` — a worker
+processing up to 5 rows can shut down within one in-flight network
+call of being told to. Any operator with better connectivity can
+tune either value down in config.
 
 **Soft-deleted QSOs.** A `qso_upload` row may point at a QSO that has
 since been soft-deleted. The worker handles this as follows:
@@ -534,6 +605,15 @@ upstream returns a dedupe error classified as `OutcomeSuccess` with
 UX query `GET /v1/qso/:id/uploads` and show a spinner for any row in
 `pending` or `in_progress`; the spinner clears when a terminal event
 arrives.
+
+**Every terminal transition emits an event**, regardless of how many
+attempts were needed. A one-shot success and a five-retry success
+both emit `forward.succeeded`. The event payload carries the
+`attempts` count, so clients that want to distinguish "succeeded
+first try" from "succeeded after retries" can do so without the
+daemon having to care. Under-emission (gating on `attempts > 1` or
+similar) would force clients to poll to detect first-try successes,
+which defeats the purpose of the event stream.
 
 **No `attempts_total` vs `attempts_current`.** The single `attempts`
 counter is the count since the row was created. If the operator

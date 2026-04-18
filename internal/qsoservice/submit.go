@@ -13,7 +13,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
-	"github.com/ColonelBlimp/station-manager/internal/enums/upload"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -223,11 +222,12 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert QSO")
 	}
 
-	// Insert upload-queue rows for each configured upload service.
-	// For milestone 1 there are no configured services; the forwarder
-	// lands in milestone 1c. When it does, this loop populates the queue.
-	for _, svc := range configuredUploadServices() {
-		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, svc); err != nil {
+	// Insert upload-queue rows for each enabled forwarder whose action_filter
+	// includes 'insert'. Stage 7 will replace configuredForwarders() with a
+	// real read from config.Forwarders. For now the stub returns nothing, so
+	// the loop is a no-op and the tx commits with only the qso row.
+	for _, fwd := range configuredForwarders() {
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type); err != nil {
 			_ = tx.Rollback()
 			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}
@@ -249,9 +249,17 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	return SubmitResult{Status: "stored", ID: qsoID}, nil
 }
 
-// configuredUploadServices returns the list of upload services for which
-// queue rows should be created on QSO insert. Empty for milestone 1.
-func configuredUploadServices() []upload.OnlineService {
+// forwarderRef is the minimal shape this loop needs from a configured
+// forwarder entry. Stage 7 replaces the stub below with a real read
+// from config.Forwarders and this local type disappears.
+type forwarderRef struct {
+	Name string
+	Type string
+}
+
+// configuredForwarders returns the forwarders that should receive an 'insert'
+// queue row when a QSO is submitted. Stub — Stage 7 wires this to config.
+func configuredForwarders() []forwarderRef {
 	return nil
 }
 

@@ -3,9 +3,6 @@ package sqlite
 import (
 	"context"
 
-	"github.com/ColonelBlimp/station-manager/internal/enums/upload"
-	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
-	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -39,10 +36,6 @@ func (s *Service) FetchQsoSliceByLogbookId(id int64) (types.QsoSlice, error) {
 
 func (s *Service) FetchQsoCountByLogbookId(id int64) (int64, error) {
 	return s.FetchQsoCountByLogbookIdWithContext(context.Background(), id)
-}
-
-func (s *Service) InsertQsoUpload(id int64, action action.Action, service upload.OnlineService) error {
-	return s.InsertQsoUploadWithContext(context.Background(), id, action, service)
 }
 
 func (s *Service) FetchQsoById(id int64) (types.Qso, error) {
@@ -127,16 +120,4 @@ func (s *Service) UpsertLogbook(logbook types.Logbook) error {
 
 func (s *Service) IsContestDuplicateByLogbookID(id int64, callsign, band, mode string) (bool, error) {
 	return s.IsContestDuplicateByLogbookIDWithContext(context.Background(), id, callsign, band, mode)
-}
-
-/**********************************************************************************************************************
- * Upload Methods
- **********************************************************************************************************************/
-
-func (s *Service) FetchPendingUploads() ([]types.QsoUpload, error) {
-	return s.FetchPendingUploadsWithContext(context.Background())
-}
-
-func (s *Service) UpdateQsoUploadStatus(id int64, status status.Status, action action.Action, attempts int64, lastError string) error {
-	return s.UpdateQsoUploadStatusWithContext(context.Background(), id, status, action, attempts, lastError)
 }

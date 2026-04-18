@@ -9,14 +9,12 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
-	"github.com/ColonelBlimp/station-manager/internal/enums/upload"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/aarondl/null/v8"
 	"github.com/aarondl/sqlboiler/v4/boil"
-	"github.com/aarondl/sqlboiler/v4/queries"
 	"github.com/aarondl/sqlboiler/v4/queries/qm"
 )
 
@@ -299,38 +297,6 @@ func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error
 
 	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
 		return errors.New(op).WithErr(err)
-	}
-
-	return nil
-}
-
-func (s *Service) InsertQsoUploadWithContext(ctx context.Context, qsoId int64, action action.Action, service upload.OnlineService) error {
-	const op errors.Op = "sqlite.Service.InsertQsoUploadWithContext"
-	if err := checkService(op, s); err != nil {
-		return err
-	}
-
-	if qsoId < 1 {
-		return errors.New(op).WithMsgf("QSO ID is invalid: %d", qsoId)
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	model := models.QsoUpload{
-		QsoID:   qsoId,
-		Service: service.String(),
-		Action:  action.String(),
-		Status:  status.Pending.String(),
-	}
-
-	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("Inserting new QSO upload failed.")
 	}
 
 	return nil
@@ -1108,171 +1074,6 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 }
 
 /**********************************************************************************************************************
- * Upload Methods
- **********************************************************************************************************************/
-
-func (s *Service) FetchPendingUploadsWithContext(ctx context.Context) ([]types.QsoUpload, error) {
-	const op errors.Op = "sqlite.Service.FetchPendingUploadsWithContext"
-	if err := checkService(op, s); err != nil {
-		return nil, err
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	batchLimit := defaultUploadBatchLimit
-	if s.requiredCfgs.QsoForwardingRowLimit > 0 {
-		batchLimit = s.requiredCfgs.QsoForwardingRowLimit
-	}
-
-	now := time.Now()
-	cutoff := now.Add(-uploadRetryCooldown).Unix()
-
-	// Reserve a batch and capture their IDs
-	updateAndReturn := `
-		UPDATE qso_upload
-		   SET status = ?, modified_at = ?, last_attempt_at = ?
-		 WHERE id IN (
-		     SELECT id
-		       FROM qso_upload
-		      WHERE status IN (?, ?)
-		        AND (last_attempt_at IS NULL OR last_attempt_at < ?)
-		      LIMIT ?
-		   )
-		RETURNING id`
-
-	type returnID struct {
-		ID int64 `boil:"id"`
-	}
-
-	var rows []returnID
-
-	err = queries.Raw(
-		updateAndReturn,
-		status.InProgress.String(),
-		null.TimeFrom(now),
-		null.Int64From(now.Unix()),
-		status.Pending.String(),
-		status.Failed.String(),
-		cutoff,
-		batchLimit,
-	).Bind(ctx, h, &rows)
-	if err != nil && !stderr.Is(err, sql.ErrNoRows) {
-		return nil, errors.New(op).WithErr(err).WithMsg("Failed to reserve pending uploads")
-	}
-
-	if len(rows) == 0 {
-		return nil, nil
-	}
-
-	ids := make([]int64, 0, len(rows))
-	for _, r := range rows {
-		ids = append(ids, r.ID)
-	}
-	idArgs := make([]interface{}, len(ids))
-	for i, v := range ids {
-		idArgs[i] = v
-	}
-
-	// Fetch the reserved rows with QSO eagerly loaded.
-	uploads, err := models.QsoUploads(
-		qm.WhereIn("qso_upload.id IN ?", idArgs...),
-		qm.Load(models.QsoUploadRels.Qso),
-	).All(ctx, h)
-	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsg("Failed to load reserved uploads")
-	}
-
-	// Adapt to types.QsoUpload.
-	out := make([]types.QsoUpload, 0, len(uploads))
-	for _, ref := range uploads {
-		up := types.QsoUpload{
-			ID:            ref.ID,
-			QsoID:         ref.QsoID,
-			Service:       ref.Service,
-			Action:        ref.Action,
-			Status:        ref.Status,
-			Attempts:      ref.Attempts,
-			LastError:     ref.LastError.String,
-			LastAttemptAt: ref.LastAttemptAt.Int64,
-		}
-		if ref.R != nil && ref.R.Qso != nil {
-			qso, er := adapters.QsoModelToType(ref.R.Qso)
-			if er != nil {
-				s.LoggerService.ErrorWith().Err(er).Msg("Failed to adapt QSO for QsoUpload.")
-				continue
-			}
-			up.Qso = qso
-		}
-		out = append(out, up)
-	}
-
-	return out, nil
-}
-
-func (s *Service) UpdateQsoUploadStatusWithContext(ctx context.Context, id int64, status status.Status, action action.Action, attempts int64, lastError string) error {
-	const op errors.Op = "sqlite.Service.UpdateQsoUploadStatusWithContext"
-	if err := checkService(op, s); err != nil {
-		return err
-	}
-
-	if id < 1 {
-		return errors.New(op).WithMsg(errMsgInvalidId)
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	tx, err := h.BeginTx(ctx, nil)
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("Failed to begin transaction")
-	}
-
-	uploadModel, err := models.FindQsoUpload(ctx, tx, id)
-	if err != nil {
-		_ = tx.Rollback()
-		return errors.New(op).WithErr(err).WithMsg("Failed to find QSO upload")
-	}
-
-	uploadModel.Status = status.String()
-	uploadModel.Action = action.String()
-	uploadModel.Attempts = attempts
-	uploadModel.LastError = null.NewString(lastError, lastError != "")
-	uploadModel.ModifiedAt = null.TimeFrom(time.Now())
-
-	// Clear last_attempt_at on failure so it can be retried on next poll
-	if uploadModel.Status == "failed" {
-		uploadModel.LastAttemptAt = null.Int64{}
-	}
-
-	_, err = uploadModel.Update(ctx, tx, boil.Infer())
-	if err != nil {
-		_ = tx.Rollback()
-		return errors.New(op).WithErr(err).WithMsg("Failed to update QSO upload status")
-	}
-
-	// At this point, we don't need to update the QSO itself as that SHOULD have been
-	// done by the online-forwarder, since the online-forwarder knows what fields in the
-	// qso object to update based on the service.
-
-	if err = tx.Commit(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("Failed to commit transaction")
-	}
-
-	return nil
-}
-
-/**********************************************************************************************************************
  * Transactional variants — used by callers that compose multiple writes in a single transaction.
  * These methods run against the caller-supplied *sql.Tx and do not open their own handle or timeout.
  * The caller is responsible for Begin/Commit/Rollback.
@@ -1325,7 +1126,12 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 	return nil
 }
 
-func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action action.Action, service upload.OnlineService) error {
+// InsertQsoUploadTx enqueues one qso_upload row within the caller-supplied tx.
+// forwarderName is the per-instance config handle (e.g. "qrz-primary");
+// forwarderType is the plugin identifier (e.g. "qrz"). Both are stored on the
+// row so historical queue entries remain interpretable even after an operator
+// renames or removes the destination from config. See docs/v2-design/forwarding.md §6.
+func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action action.Action, forwarderName, forwarderType string) error {
 	const op errors.Op = "sqlite.Service.InsertQsoUploadTx"
 	if err := checkService(op, s); err != nil {
 		return err
@@ -1336,12 +1142,19 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 	if qsoId < 1 {
 		return errors.New(op).WithMsgf("QSO ID is invalid: %d", qsoId)
 	}
+	if forwarderName == "" {
+		return errors.New(op).WithMsg("forwarderName is empty")
+	}
+	if forwarderType == "" {
+		return errors.New(op).WithMsg("forwarderType is empty")
+	}
 
 	model := models.QsoUpload{
-		QsoID:   qsoId,
-		Service: service.String(),
-		Action:  action.String(),
-		Status:  status.Pending.String(),
+		QsoID:         qsoId,
+		ForwarderName: forwarderName,
+		ForwarderType: forwarderType,
+		Action:        action.String(),
+		Status:        status.Pending.String(),
 	}
 
 	if err := model.Insert(ctx, tx, boil.Infer()); err != nil {
