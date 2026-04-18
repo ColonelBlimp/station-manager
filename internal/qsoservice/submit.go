@@ -222,11 +222,15 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert QSO")
 	}
 
-	// Insert upload-queue rows for each enabled forwarder whose action_filter
-	// includes 'insert'. Stage 7 will replace configuredForwarders() with a
-	// real read from config.Forwarders. For now the stub returns nothing, so
-	// the loop is a no-op and the tx commits with only the qso row.
-	for _, fwd := range configuredForwarders() {
+	// Insert upload-queue rows for each enabled forwarder whose
+	// action_filter includes 'insert'. Inside the same transaction as
+	// the QSO insert per the one-fails-all-fail invariant (see
+	// docs/v2-design/forwarding.md §1). Zero forwarders configured →
+	// the loop is a no-op and only the QSO row is committed.
+	for _, fwd := range s.Config.Forwarders() {
+		if !shouldEnqueue(fwd, action.Insert) {
+			continue
+		}
 		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type); err != nil {
 			_ = tx.Rollback()
 			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
@@ -247,20 +251,6 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Msg("QSO stored")
 
 	return SubmitResult{Status: "stored", ID: qsoID}, nil
-}
-
-// forwarderRef is the minimal shape this loop needs from a configured
-// forwarder entry. Stage 7 replaces the stub below with a real read
-// from config.Forwarders and this local type disappears.
-type forwarderRef struct {
-	Name string
-	Type string
-}
-
-// configuredForwarders returns the forwarders that should receive an 'insert'
-// queue row when a QSO is submitted. Stub — Stage 7 wires this to config.
-func configuredForwarders() []forwarderRef {
-	return nil
 }
 
 // isUniqueConstraintError reports whether err is a sqlite UNIQUE-index

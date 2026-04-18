@@ -11,6 +11,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -194,12 +195,20 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to update QSO")
 	}
 
-	// Future forwarder hook: for _, svc := range configuredUploadServices() {
-	//     if err = s.DB.InsertQsoUploadTx(ctx, tx, merged.ID, action.Update, svc); err != nil {
-	//         _ = tx.Rollback()
-	//         return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
-	//     }
-	// }
+	// Enqueue one qso_upload row per enabled forwarder whose action_filter
+	// includes 'update'. Same tx as the QSO update per the one-fails-all-fail
+	// invariant. If the destination's filter is ["insert"] (LoTW-style write-
+	// once), no row is inserted for it and the edit simply doesn't propagate
+	// there — which matches the operator's declared intent.
+	for _, fwd := range s.Config.Forwarders() {
+		if !shouldEnqueue(fwd, action.Update) {
+			continue
+		}
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, merged.ID, action.Update, fwd.Name, fwd.Type); err != nil {
+			_ = tx.Rollback()
+			return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
+		}
+	}
 
 	if err = tx.Commit(); err != nil {
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to commit transaction")

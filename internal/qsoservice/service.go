@@ -3,6 +3,7 @@ package qsoservice
 import (
 	stderr "errors"
 
+	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
@@ -10,10 +11,12 @@ import (
 const ServiceName = "qsoservice"
 
 // Service is the daemon's domain service for QSO ingest. It coordinates
-// parsing, validation, deduplication, and atomic storage.
+// parsing, validation, deduplication, atomic storage, and forwarder
+// queue fan-out (per docs/v2-design/forwarding.md §6).
 type Service struct {
 	DB     *sqlite.Service  `di.inject:"sqliteservice"`
 	Logger *logging.Service `di.inject:"loggingservice"`
+	Config *config.Service  `di.inject:"configservice"`
 }
 
 // Initialize satisfies the iocdi.Initializer interface.

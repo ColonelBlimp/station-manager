@@ -43,7 +43,7 @@ func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.db.DeleteQsoByIDWithContext(r.Context(), id); err != nil {
+	if err = s.qso.Delete(r.Context(), id); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return

@@ -233,44 +233,6 @@ func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64,
 	return version, dirty, nil
 }
 
-// DeleteQsoByIDWithContext soft-deletes a QSO by setting its deleted_at
-// column. Subsequent FetchQsoByIdWithContext calls return ErrNotFound
-// because FindQso filters deleted rows. Returns ErrNotFound if the QSO
-// does not exist (or is already soft-deleted). No FK check is needed —
-// QSO is the child row.
-func (s *Service) DeleteQsoByIDWithContext(ctx context.Context, id int64) error {
-	const op errors.Op = "sqlite.Service.DeleteQsoByIDWithContext"
-	if err := checkService(op, s); err != nil {
-		return err
-	}
-
-	if id < 1 {
-		return errors.New(op).WithMsg(errMsgInvalidId)
-	}
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	qso, err := models.FindQso(ctx, h, id)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
-		}
-		return errors.New(op).WithErr(err)
-	}
-
-	if _, err = qso.Delete(ctx, h, false); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("failed to delete QSO")
-	}
-
-	return nil
-}
-
 func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error {
 	const op errors.Op = "sqlite.Service.UpdateQsoWithContext"
 	if err := checkService(op, s); err != nil {
@@ -1089,6 +1051,16 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 // construction; the per-forwarder scope (forwarder_name = ?) also
 // means two workers for different destinations never compete for a
 // row.
+//
+// This method uses raw SQL rather than sqlboiler-generated queries
+// because the shape requires two features sqlboiler does not express
+// cleanly: (1) `UPDATE ... RETURNING *` — sqlboiler's UpdateAll
+// returns rows-affected, not the modified rows, forcing an extra
+// SELECT that reintroduces the very claim-race we used RETURNING to
+// close; and (2) the `WHERE id IN (SELECT ... LIMIT N)` subquery,
+// which sqlboiler query-mods don't compose naturally against the
+// same table. The sibling methods (MarkUpload*, ResetOrphanedUploads)
+// use sqlboiler idioms per the project convention.
 func (s *Service) ClaimPendingUploadsWithContext(ctx context.Context, forwarderName string, limit int) ([]types.QsoUpload, error) {
 	const op errors.Op = "sqlite.Service.ClaimPendingUploadsWithContext"
 	if err := checkService(op, s); err != nil {
@@ -1169,19 +1141,24 @@ func (s *Service) MarkUploadSuccessWithContext(ctx context.Context, id int64, up
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	const q = `
-UPDATE qso_upload
-SET    status = ?,
-       attempts = attempts + 1,
-       upstream_id = ?,
-       last_error = NULL
-WHERE  id = ?`
-
-	var upstream any
-	if upstreamID != "" {
-		upstream = upstreamID
+	row, err := models.FindQsoUpload(ctx, h, id)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return errors.ErrNotFound
+		}
+		return errors.New(op).WithErr(err)
 	}
-	if _, err = h.ExecContext(ctx, q, status.Uploaded.String(), upstream, id); err != nil {
+
+	row.Status = status.Uploaded.String()
+	row.Attempts++
+	if upstreamID != "" {
+		row.UpstreamID = null.StringFrom(upstreamID)
+	} else {
+		row.UpstreamID = null.String{}
+	}
+	row.LastError = null.String{}
+
+	if _, err = row.Update(ctx, h, boil.Infer()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload success")
 	}
 	return nil
@@ -1211,19 +1188,24 @@ func (s *Service) MarkUploadTransientRetryWithContext(ctx context.Context, id in
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	const q = `
-UPDATE qso_upload
-SET    status = ?,
-       attempts = attempts + 1,
-       next_attempt_at = ?,
-       last_error = ?
-WHERE  id = ?`
-
-	var errMsg any
-	if lastError != "" {
-		errMsg = lastError
+	row, err := models.FindQsoUpload(ctx, h, id)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return errors.ErrNotFound
+		}
+		return errors.New(op).WithErr(err)
 	}
-	if _, err = h.ExecContext(ctx, q, status.Pending.String(), nextAttemptAt, errMsg, id); err != nil {
+
+	row.Status = status.Pending.String()
+	row.Attempts++
+	row.NextAttemptAt = nextAttemptAt
+	if lastError != "" {
+		row.LastError = null.StringFrom(lastError)
+	} else {
+		row.LastError = null.String{}
+	}
+
+	if _, err = row.Update(ctx, h, boil.Infer()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload transient retry")
 	}
 	return nil
@@ -1249,18 +1231,23 @@ func (s *Service) MarkUploadFailedWithContext(ctx context.Context, id int64, las
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	const q = `
-UPDATE qso_upload
-SET    status = ?,
-       attempts = attempts + 1,
-       last_error = ?
-WHERE  id = ?`
-
-	var errMsg any
-	if lastError != "" {
-		errMsg = lastError
+	row, err := models.FindQsoUpload(ctx, h, id)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return errors.ErrNotFound
+		}
+		return errors.New(op).WithErr(err)
 	}
-	if _, err = h.ExecContext(ctx, q, status.Failed.String(), errMsg, id); err != nil {
+
+	row.Status = status.Failed.String()
+	row.Attempts++
+	if lastError != "" {
+		row.LastError = null.StringFrom(lastError)
+	} else {
+		row.LastError = null.String{}
+	}
+
+	if _, err = row.Update(ctx, h, boil.Infer()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload failed")
 	}
 	return nil
@@ -1288,18 +1275,13 @@ func (s *Service) ResetOrphanedUploadsWithContext(ctx context.Context) (int64, e
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	const q = `
-UPDATE qso_upload
-SET    status = ?
-WHERE  status = ?`
-
-	res, err := h.ExecContext(ctx, q, status.Pending.String(), status.InProgress.String())
+	n, err := models.QsoUploads(
+		models.QsoUploadWhere.Status.EQ(status.InProgress.String()),
+	).UpdateAll(ctx, h, models.M{
+		models.QsoUploadColumns.Status: status.Pending.String(),
+	})
 	if err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("reset orphaned uploads")
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, errors.New(op).WithErr(err).WithMsg("rows affected")
 	}
 	return n, nil
 }
@@ -1392,6 +1374,39 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 		return errors.New(op).WithErr(err)
 	}
 
+	return nil
+}
+
+// DeleteQsoByIDTx soft-deletes a QSO within the caller-supplied tx by
+// setting its deleted_at column (sqlboiler's generated Delete
+// honours the add-soft-deletes flag). Returns ErrNotFound if the QSO
+// does not exist or is already soft-deleted.
+//
+// Used by qsoservice.Delete to bundle the soft-delete with
+// qso_upload(delete) inserts under the same one-fails-all-fail tx.
+func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id int64) error {
+	const op errors.Op = "sqlite.Service.DeleteQsoByIDTx"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if tx == nil {
+		return errors.New(op).WithMsg("tx is nil")
+	}
+	if id < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	qso, err := models.FindQso(ctx, tx, id)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return errors.ErrNotFound
+		}
+		return errors.New(op).WithErr(err)
+	}
+
+	if _, err = qso.Delete(ctx, tx, false); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("failed to delete QSO")
+	}
 	return nil
 }
 

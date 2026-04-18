@@ -24,10 +24,21 @@ func unmarshalJSON(body string, v any) error {
 // testServer creates a Server wired to an in-memory sqlite database for
 // handler testing.
 func testServer(t *testing.T) *Server {
+	return testServerWithCfg(t, nil)
+}
+
+// testServerWithCfg is testServer with an optional config-mutation hook.
+// The hook runs against a default Config after the temp data dir is
+// set, before any service is constructed — giving tests a chance to
+// populate cfg.Forwarders, tweak page limits, etc.
+func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 	t.Helper()
 
 	cfg := config.DefaultConfig(t.TempDir())
 	cfg.Datastore.Path = ":memory:"
+	if mutate != nil {
+		mutate(&cfg)
+	}
 
 	cfgSvc := config.New(cfg)
 	if err := cfgSvc.Initialize(); err != nil {
@@ -66,7 +77,7 @@ func testServer(t *testing.T) *Server {
 		_ = logSvc.Close()
 	})
 
-	qsoSvc := &qsoservice.Service{DB: dbSvc, Logger: logSvc}
+	qsoSvc := &qsoservice.Service{DB: dbSvc, Logger: logSvc, Config: cfgSvc}
 
 	return New(cfg, "test", qsoSvc, dbSvc, logSvc)
 }

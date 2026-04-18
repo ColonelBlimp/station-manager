@@ -30,7 +30,7 @@ precisely so we don't re-derive state or redo finished work.
 
 Design: `docs/v2-design/forwarding.md` is the authoritative shape;
 everything below is the thin slice that implements it. Commits so
-far this session have landed stages 1–6 of an 11-stage plan — see
+far this session have landed stages 1–7 of an 11-stage plan — see
 "Session 11 progress" below for the status table.
 
 ### Session 11 progress (2026-04-18, in-progress)
@@ -71,8 +71,8 @@ committable unit:
 | 4 | Stub forwarder — `internal/forwarding/stub/`, modes: `always_success`, `always_transient`, `always_terminal`, `flap_n` | **done** |
 | 5 | `safego` helper — landed as `internal/safego/` (not `internal/utils`; cycle avoided), callback-based, ctx-aware cooldown | **done** |
 | 6 | DB methods — `ClaimPendingUploadsWithContext` (atomic `UPDATE ... RETURNING`), `MarkUpload{Success,TransientRetry,Failed}WithContext`, `ResetOrphanedUploadsWithContext`, `FetchUploadsByQsoIDWithContext` | **done** |
-| 7 | Wire ingest — `submit.go` reads `config.Forwarders` filtered by enabled + action_filter contains 'insert'; same in update/delete paths | **next** |
-| 8 | Worker loop — `internal/forwarding/worker/` per-forwarder tick + claim + submit + persist | pending |
+| 7 | Wire ingest — `submit.go`/`update.go` loops read `config.Forwarders` filtered by enabled + action_filter; new `qsoservice.Delete` atomically soft-deletes + enqueues delete rows | **done** |
+| 8 | Worker loop — `internal/forwarding/worker/` per-forwarder tick + claim + submit + persist | **next** |
 | 9 | Startup wiring — `main.go` orphan sweep + spawn workers via SafeGo | pending |
 | 10 | Pull endpoint — `GET /v1/qso/:id/uploads` | pending |
 | 11 | E2E integration test — POST → observe row transition to `uploaded` | pending |
@@ -125,6 +125,39 @@ stored as NULL rather than the empty string. New
 callers that don't care about null-vs-value. 13 integration tests
 cover claim ordering, forwarder scoping, future-`next_attempt_at`
 gating, each mark method, orphan sweep, and pull-endpoint fetch.
+
+**Stage 6b — sqlboiler refactor (post-review).** User flagged that
+four of the Stage-6 methods were using raw SQL where sqlboiler's
+type-safe builders would do. Refactored `MarkUploadSuccess`,
+`MarkUploadTransientRetry`, `MarkUploadFailed` to the load-then-save
+pattern (`FindQsoUpload` → mutate fields → `Update(ctx, h, boil.Infer())`);
+refactored `ResetOrphanedUploads` to `models.QsoUploads(...).UpdateAll(...)`.
+`ClaimPendingUploadsWithContext` kept as raw with an expanded doc
+comment naming the two sqlboiler limitations that justify the
+exception (`UPDATE ... RETURNING *`, `WHERE id IN (SELECT ... LIMIT N)`
+subquery-same-table). Bonus: Mark* now correctly surface
+`errors.ErrNotFound` for nonexistent row IDs — the raw version was
+silently no-oping, a latent bug. Preference saved as
+`feedback_sqlboiler_default.md` memory.
+
+**Stage 7 — ingest → forwarders wired.** `qsoservice.Service` gains
+a `Config *config.Service` DI field. New
+`internal/qsoservice/forwarders.go` helper
+(`shouldEnqueue(fc, action) bool`) centralises the enabled-and-
+action-filter check for all three ingest sites. `submit.go` loop
+swaps the stub for `s.Config.Forwarders()`; `update.go` activates
+its commented hook with the same pattern. New
+`internal/qsoservice/delete.go` introduces the first domain-level
+`Delete(ctx, id)` that atomically soft-deletes the QSO and enqueues
+`delete`-action queue rows under one tx (one-fails-all-fail). DB
+layer gains `DeleteQsoByIDTx(ctx, tx, id)` for the tx-scoped
+soft-delete; the old `DeleteQsoByIDWithContext` is deleted (its one
+caller, `handleDeleteQso`, now goes through `qsoservice.Delete`).
+`testServer` split into `testServerWithCfg(t, mutate)` so tests can
+populate `cfg.Forwarders` before construction. 6 new HTTP-level
+tests verify enabled→row-inserted, disabled→skipped, action-filter
+exclusion, update-path enqueue, delete-path enqueue + soft-delete,
+and delete-with-zero-forwarders.
 
 ### Current state (as of 2026-04-17 end-of-session 10)
 
@@ -756,21 +789,21 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (session 11 continuation / session 12 start)
 
-Forwarder subsystem is under active construction, stages 1–6 of 11
-committed. Pick up at **Stage 7 (wire ingest to real forwarders)**
-per the status table in "Session 11 progress" above.
+Forwarder subsystem is under active construction, stages 1–7 of 11
+committed. Pick up at **Stage 8 (worker loop)** per the status
+table in "Session 11 progress" above.
 
 Priority order:
 
-1. **Continue forwarder stages 7–11.** Stage 7 next: replace the
-   `configuredForwarders()` stub in `qsoservice/submit.go` with a
-   real read from `config.Forwarders`, filtered by `Enabled &&
-   slices.Contains(ActionFilter, "insert")`. Each matching entry
-   becomes one `InsertQsoUploadTx` call with its `Name` and `Type`.
-   The existing tx envelope already has the loop in place; this is
-   a ~10-line swap. Same treatment for the hook in
-   `qsoservice/update.go` (and a future `qsoservice/delete.go`
-   when soft-delete enqueues a `delete` action row).
+1. **Continue forwarder stages 8–11.** Stage 8 next: build
+   `internal/forwarding/worker/worker.go` — per-forwarder goroutine
+   with ticker + claim (via `ClaimPendingUploadsWithContext`) +
+   re-read QSO + `Submit` + persist outcome (success/transient/
+   failed via the Mark* methods) + ctx-aware shutdown. Launched
+   via `safego.Go` in Stage 9. Design reference: forwarding.md §4.
+   After Stage 8 the spine is end-to-end runnable against the stub
+   forwarder; Stages 9–11 wire it into `main.go`, add the pull
+   endpoint, and cover it with an integration test.
 
 2. **SSE event stream (`GET /v1/events`)**. First consumer will be
    the logging-app's "new QSO arrived in my session" refresh. Will
