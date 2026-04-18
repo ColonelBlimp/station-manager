@@ -54,6 +54,7 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 	mux.HandleFunc("GET /v1/qso/{id}", s.handleGetQso)
 	mux.HandleFunc("PATCH /v1/qso/{id}", s.handleUpdateQso)
 	mux.HandleFunc("DELETE /v1/qso/{id}", s.handleDeleteQso)
+	mux.HandleFunc("GET /v1/qso/{id}/uploads", s.handleListQsoUploads)
 
 	// Logbook CRUD
 	mux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)
