@@ -1,11 +1,12 @@
 package adapters
 
 import (
+	"encoding/json"
+
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
-	"github.com/goccy/go-json"
 )
 
 // ContactedStationModelToType converts a sqlite row back to types.ContactedStation.

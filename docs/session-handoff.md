@@ -73,6 +73,16 @@ code outstanding.
   onto structured decode. Eight `fmt.Sscanf` sites converted to
   `unmarshalJSON`. Contact-history LIKE pattern anchored on slash
   (`X/%`) so coincidental prefixes no longer match.
+- **Panic handling added (post-review).** `main()` has a
+  `defer recover()` with `ExitError`/`ExitPanic` exit-code
+  constants so a supervisor can tell a panic from a graceful
+  error exit. `api.recoverPanic` middleware wraps the mux — any
+  handler panic is structurally logged and returns a generic 500
+  envelope (no panic-value leak). Worker-goroutine recovery is a
+  noted follow-up for when the forwarder lands.
+- **`goccy/go-json` dep dropped (post-review).** Adapters now use
+  stdlib `encoding/json`; go.mod / go.sum cleaned. Consistency
+  restored — one JSON library, fewer external deps.
 
 Commits covering session 10 are in the `main` branch; the review
 doc has a resolution note pointing at them.
@@ -321,6 +331,40 @@ a Pi) without any code changes — just a config change.
    - **L12**: `adif.parseRecords` error return dropped (dead
      path; caller check collapsed).
 
+4. **Panic handling added** (post-review, user-initiated).
+   - `cmd/smd/main.go`: `ExitError` / `ExitPanic` constants (ExitOK
+     is implicit — Go's default on clean return). `main()` wraps
+     `run()` with a `defer recover()` that prints a `PANIC:`-prefixed
+     stderr line + `debug.Stack()` and exits `ExitPanic`. `run()`'s
+     own defers (logger close, dbSvc close) still fire first as the
+     panic unwinds through its frame.
+   - `internal/api/middleware.go`: new `recoverPanic` middleware on
+     `*Server`. Wraps the mux so any panic in a handler logs through
+     `logging.Service` with panic value + stack + method + path, then
+     writes a generic 500 `internal_error` envelope. The panic value
+     is deliberately NOT surfaced to the client (could leak
+     internals; full detail stays in the log).
+   - Two regression tests (`TestRecoverPanic_CatchesAndReturns500`,
+     `TestRecoverPanic_NoPanicPassesThrough`) — including a canary
+     assertion that the panic message doesn't bleed into the
+     response body.
+   - Worker-goroutine recovery (`safeGo` helper) intentionally
+     deferred until the forwarder PR spawns its first worker — the
+     pattern template is noted here so the forwarder author can
+     copy it from `recoverPanic`.
+
+5. **`goccy/go-json` dropped from the dependency tree** (user pref).
+   - Two adapter files (`internal/database/sqlite/adapters/model_to_type.go`
+     and `type_to_model.go`) switched from `github.com/goccy/go-json`
+     to stdlib `encoding/json`. Drop-in — `Marshal` / `Unmarshal`
+     signatures are identical. `go mod tidy` removed the dependency
+     from both `go.mod` and `go.sum`.
+   - Rationale: at this daemon's scale (~146 QSO/s per stress test)
+     the performance delta is below the noise floor; stdlib preference
+     per CLAUDE.md; one fewer external dep to carry. The adapter's
+     prior use of goccy was inherited from sqlboiler-generated
+     idioms, not a deliberate choice.
+
 ### Coverage summary end-of-session
 
 All tests green under `-race` after every finding. One new test
@@ -332,6 +376,9 @@ family:
 - `TestLogbookCallsignByID` — new sqlite helper.
 - `TestContactHistory_PortableSuffixMatches`,
   `TestContactHistory_CoincidentalPrefixExcluded` — L6 regressions.
+- `TestRecoverPanic_CatchesAndReturns500`,
+  `TestRecoverPanic_NoPanicPassesThrough` — panic-handling
+  middleware (post-review).
 
 ### Design decisions made / reaffirmed
 
@@ -346,6 +393,15 @@ family:
   `X/suffix`). The looser `LIKE X%` shape is gone.
 - **`cmd/smd/main.go` follows the `run() error` pattern.**
   Cleanups are defers; startup failures unwind them in LIFO order.
+- **Panic handling is two-layered.** Top-level `main` defer catches
+  anything that escapes `run()` and exits with `ExitPanic` (2) so
+  process supervisors can distinguish it from startup errors
+  (`ExitError`, 1). A `recoverPanic` middleware on the HTTP mux
+  catches handler panics, logs them structurally, and returns a
+  generic 500 envelope (panic value stays server-side).
+- **`encoding/json` is the only JSON library.** Dropped
+  `goccy/go-json`. At this scale stdlib is fine and the "minimise
+  external deps" rule wins over marginal throughput gains.
 
 ### Parked follow-ups
 

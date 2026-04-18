@@ -24,11 +24,11 @@ import (
 // at build time with: go build -ldflags "-X main.Version=1.2.3" ...
 var Version = "dev"
 
-// Process exit codes. Keeping these as named constants so service
-// managers (systemd, monit, supervisord) can distinguish a clean
-// startup-error exit from an uncaught panic.
+// Process exit codes. Named so service managers (systemd, monit,
+// supervisord) can distinguish a clean startup-error exit from an
+// uncaught panic. ExitOK (0) is implicit — Go returns 0 when main
+// exits normally, so there's no constant for it.
 const (
-	ExitOK    = 0
 	ExitError = 1
 	ExitPanic = 2
 )
@@ -56,10 +56,10 @@ func main() {
 
 // run wires the daemon's lifecycle into a single function with
 // defer-based cleanup. Any failure returns an error; deferred closers
-// run on the way out so the "Open → Close" contract is honored in the
+// run on the way out, so the "Open → Close" contract is honored in the
 // happy path AND the failure path. The alternative — ad-hoc fatal()
 // calls peppered through startup — left open handles when startup
-// failed mid-way (see review L4).
+// failed midway (see review L4).
 func run() error {
 	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
 	flag.Parse()
@@ -111,7 +111,7 @@ func run() error {
 	// dbSvc close below, so later defers can still use the logger).
 	defer func() {
 		loggerSvc.InfoWith().Msg("smd stopped")
-		if err := loggerSvc.Close(); err != nil {
+		if err = loggerSvc.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", err)
 		}
 	}()

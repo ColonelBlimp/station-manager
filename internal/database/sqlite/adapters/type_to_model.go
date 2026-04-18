@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
@@ -8,7 +9,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/aarondl/null/v8"
-	"github.com/goccy/go-json"
 )
 
 // QsoTypeToModel converts a types.Qso to the sqlite row shape.
