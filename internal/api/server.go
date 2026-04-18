@@ -74,7 +74,7 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
 
 	s.httpServer = &http.Server{
-		Handler:      mux,
+		Handler:      s.recoverPanic(mux),
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeoutSec) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeoutSec) * time.Second,
 		IdleTimeout:  time.Duration(cfg.Server.IdleTimeoutSec) * time.Second,

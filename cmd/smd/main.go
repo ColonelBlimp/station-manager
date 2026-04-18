@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -23,10 +24,33 @@ import (
 // at build time with: go build -ldflags "-X main.Version=1.2.3" ...
 var Version = "dev"
 
+// Process exit codes. Keeping these as named constants so service
+// managers (systemd, monit, supervisord) can distinguish a clean
+// startup-error exit from an uncaught panic.
+const (
+	ExitOK    = 0
+	ExitError = 1
+	ExitPanic = 2
+)
+
 func main() {
+	// Top-level panic safety net. run()'s own defers (dbSvc close,
+	// loggerSvc close) still fire first as the panic unwinds through
+	// its frame, so db/logger get shut down cleanly before we land
+	// here. We just need to make sure the panic is logged in a
+	// recognisable shape and that we exit with a distinct code so a
+	// process supervisor can tell a panic from a graceful error exit.
+	defer func() {
+		if r := recover(); r != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "smd: PANIC: %v\n", r)
+			_, _ = fmt.Fprintf(os.Stderr, "Stack trace:\n%s\n", debug.Stack())
+			os.Exit(ExitPanic)
+		}
+	}()
+
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
-		os.Exit(1)
+		os.Exit(ExitError)
 	}
 }
 
@@ -41,14 +65,12 @@ func run() error {
 	flag.Parse()
 
 	// ---- Load configuration ----
-
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
 
 	// ---- Build DI container ----
-
 	cfgSvc := config.New(cfg)
 
 	container := iocdi.New()
@@ -80,11 +102,11 @@ func run() error {
 	}
 
 	// ---- Resolve services ----
-
 	loggerSvc, err := iocdi.ResolveAs[*logging.Service](container, logging.ServiceName)
 	if err != nil {
 		return fmt.Errorf("resolve logging service: %w", err)
 	}
+
 	// Register logger cleanup first (defer-LIFO means it runs last, after
 	// dbSvc close below, so later defers can still use the logger).
 	defer func() {
@@ -105,14 +127,14 @@ func run() error {
 	}
 
 	// ---- Open database and run migrations ----
-
 	if err = dbSvc.Open(); err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	// Registered AFTER Open succeeds so we never double-close or close a
+
+	// Registered AFTER Open succeeds, so we never double-close or close a
 	// handle we didn't open.
 	defer func() {
-		if err := dbSvc.Close(); err != nil {
+		if err = dbSvc.Close(); err != nil {
 			loggerSvc.ErrorWith().Err(err).Msg("database close error")
 		}
 	}()
@@ -124,7 +146,6 @@ func run() error {
 	loggerSvc.InfoWith().Msg("database open and migrated")
 
 	// ---- Start HTTP server ----
-
 	server := api.New(cfg, Version, qsoSvc, dbSvc, loggerSvc)
 
 	errCh := make(chan error, 1)
@@ -133,7 +154,6 @@ func run() error {
 	}()
 
 	// ---- Wait for shutdown signal ----
-
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -148,7 +168,6 @@ func run() error {
 	}
 
 	// ---- Graceful shutdown ----
-
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
