@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	stderr "errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -178,6 +177,16 @@ func (s *Service) Close() error {
 	s.handle = nil
 	s.isOpen.Store(false)
 
+	// Reset Initialize's guard so a subsequent Initialize()->Open() cycle
+	// actually re-runs. Without this the next Initialize is a no-op and
+	// any config change between cycles is silently ignored — a trap for
+	// a future config-reload path (SIGHUP etc.). Safe against races
+	// because Close holds s.mu.Lock() and every non-get path takes the
+	// same mutex; if that lock discipline ever changes this reassignment
+	// needs revisiting.
+	s.initOnce = sync.Once{}
+	s.isInitialized.Store(false)
+
 	return nil
 }
 
@@ -255,74 +264,10 @@ func (s *Service) BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFu
 		if stderr.Is(err, context.DeadlineExceeded) {
 			return nil, nil, errors.New(op).WithErr(err).WithMsg("Transaction context timed out.")
 		}
-		return nil, nil, errors.New(op).WithErr(fmt.Errorf("creating new transaction: %w", err))
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("creating new transaction")
 	}
 
 	return tx, cancel, nil
-}
-
-func (s *Service) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	const op errors.Op = "sqlite.Service.ExecContext"
-
-	// Holding s.mu.RLock() while performing s.handle.ExecContext(...) means the read lock is held for the duration
-	// of the exec. This can block Close()/Migrate(), which need the write lock. So, we copy the *sql.DB handle under
-	// the lock, release the lock, then call ExecContext so long-running ops don’t hold the lock.
-	s.mu.RLock()
-	h := s.handle
-	isOpen := s.isOpen.Load()
-	s.mu.RUnlock()
-
-	if h == nil || !isOpen {
-		return nil, errors.New(op).WithMsg(errMsgNotOpen)
-	}
-
-	var cancel context.CancelFunc
-	_, ok := ctx.Deadline()
-	if !ok {
-		ctx, cancel = s.withDefaultTimeout(ctx)
-	} else {
-		cancel = func() {} // No-op
-	}
-	defer cancel()
-
-	res, err := h.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, errors.New(op).WithErr(fmt.Errorf("s.handle.ExecContext: %w", err))
-	}
-
-	return res, nil
-}
-
-func (s *Service) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	const op errors.Op = "sqlite.Service.QueryContext"
-
-	// Holding s.mu.RLock() while performing s.handle.ExecContext(...) means the read lock is held for the duration
-	// of the exec. This can block Close()/Migrate(), which need the write lock. So, we copy the *sql.DB handle under
-	// the lock, release the lock, then call ExecContext so long-running ops don’t hold the lock.
-	s.mu.RLock()
-	h := s.handle
-	isOpen := s.isOpen.Load()
-	s.mu.RUnlock()
-
-	if h == nil || !isOpen {
-		return nil, errors.New(op).WithMsg(errMsgNotOpen)
-	}
-
-	// Note: We do NOT defer cancel() here because the returned *sql.Rows needs
-	// the context to remain valid while the caller iterates over rows.
-	// The caller must ensure rows.Close() is called to release resources.
-	// The timeout context (if created) will be automatically cleaned up after the timeout expires.
-	_, ok := ctx.Deadline()
-	if !ok {
-		ctx, _ = s.withDefaultTimeout(ctx)
-	}
-
-	res, err := h.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, errors.New(op).WithErr(fmt.Errorf("s.handle.QueryContext: %w", err))
-	}
-
-	return res, nil
 }
 
 func (s *Service) LogStats(prefix string) {

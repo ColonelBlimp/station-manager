@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"embed"
 	stderr "errors"
-	"fmt"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/golang-migrate/migrate/v4"
@@ -21,12 +20,12 @@ func GetMigrationDrivers(handle *sql.DB) (source.Driver, database.Driver, error)
 	const op errors.Op = "sqlite.GetMigrationDrivers"
 	srcDriver, err := iofs.New(migrationFiles, "migrations")
 	if err != nil {
-		return nil, nil, errors.New(op).WithErr(fmt.Errorf("iofs.New: %w", err))
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("iofs.New")
 	}
 	dbDriver, err := sqlite3.WithInstance(handle, &sqlite3.Config{})
 	if err != nil {
 		_ = srcDriver.Close()
-		return nil, nil, errors.New(op).WithErr(fmt.Errorf("sqlite3.WithInstance: %w", err))
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("sqlite3.WithInstance")
 	}
 	return srcDriver, dbDriver, nil
 }
@@ -46,7 +45,7 @@ func (s *Service) doMigrations() error {
 
 	m, err := migrate.NewWithInstance("iofs", srcDriver, s.DatabaseConfig.Driver, dbDriver)
 	if err != nil {
-		return errors.New(op).WithErr(fmt.Errorf("migrate.NewWithInstance: %w", err))
+		return errors.New(op).WithErr(err).WithMsg("migrate.NewWithInstance")
 	}
 
 	if s.LoggerService != nil {
@@ -58,7 +57,7 @@ func (s *Service) doMigrations() error {
 		if s.LoggerService != nil {
 			s.LoggerService.ErrorWith().Err(upErr).Msg("m.Up failed")
 		}
-		return errors.New(op).WithErr(fmt.Errorf("m.Up: %w", upErr))
+		return errors.New(op).WithErr(upErr).WithMsg("m.Up")
 	}
 	if s.LoggerService != nil {
 		s.LoggerService.InfoWith().Msg("m.Up completed or no change")

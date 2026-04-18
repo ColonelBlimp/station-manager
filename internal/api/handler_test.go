@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -222,6 +223,59 @@ func TestCreateLogbook_DuplicateName(t *testing.T) {
 	}
 }
 
+// TestCreateLogbook_BodyTooLarge covers the M1 fix: JSON handlers now
+// honour Server.MaxBodyBytes the same way the QSO handlers do.
+func TestCreateLogbook_BodyTooLarge(t *testing.T) {
+	srv := testServer(t)
+	srv.maxBodyBytes = 50
+
+	body := `{"name":"` + strings.Repeat("X", 200) + `","callsign":"G4ABC"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/logbook", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleCreateLogbook(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusRequestEntityTooLarge, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "body_too_large") {
+		t.Fatalf("body = %q, want body_too_large", w.Body.String())
+	}
+}
+
+func TestUpdateLogbook_BodyTooLarge(t *testing.T) {
+	srv := testServer(t)
+	id := createTestLogbook(t, srv, "Old Name", "G4ABC")
+	srv.maxBodyBytes = 50
+
+	body := `{"name":"` + strings.Repeat("X", 200) + `"}`
+	req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/v1/logbook/%d", id), strings.NewReader(body))
+	req.SetPathValue("id", fmt.Sprintf("%d", id))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleUpdateLogbook(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusRequestEntityTooLarge, w.Body.String())
+	}
+}
+
+func TestCreateLogbook_InvalidJSON(t *testing.T) {
+	srv := testServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/logbook", strings.NewReader(`{not json`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleCreateLogbook(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(w.Body.String(), "invalid_json") {
+		t.Fatalf("body = %q, want invalid_json", w.Body.String())
+	}
+}
+
 func TestListLogbooks(t *testing.T) {
 	srv := testServer(t)
 
@@ -286,12 +340,15 @@ func TestUpdateLogbook(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "New Name") {
-		t.Fatalf("body = %q, want updated name", w.Body.String())
+	var got types.Logbook
+	if err := unmarshalJSON(w.Body.String(), &got); err != nil {
+		t.Fatalf("decode logbook: %v", err)
 	}
-	// Callsign should be unchanged
-	if !strings.Contains(w.Body.String(), "G4ABC") {
-		t.Fatalf("body = %q, want unchanged callsign", w.Body.String())
+	if got.Name != "New Name" {
+		t.Fatalf("Name = %q, want %q", got.Name, "New Name")
+	}
+	if got.Callsign != "G4ABC" {
+		t.Fatalf("Callsign = %q, want unchanged G4ABC", got.Callsign)
 	}
 }
 
@@ -311,16 +368,15 @@ func TestUpdateLogbook_CallsignIgnored(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
 	}
-	// Name should be updated
-	if !strings.Contains(w.Body.String(), "Updated") {
-		t.Fatalf("body = %q, want updated name", w.Body.String())
+	var got types.Logbook
+	if err := unmarshalJSON(w.Body.String(), &got); err != nil {
+		t.Fatalf("decode logbook: %v", err)
 	}
-	// Callsign should still be G4ABC, not M0CMC
-	if !strings.Contains(w.Body.String(), "G4ABC") {
-		t.Fatalf("body = %q, want original callsign G4ABC", w.Body.String())
+	if got.Name != "Updated" {
+		t.Fatalf("Name = %q, want %q", got.Name, "Updated")
 	}
-	if strings.Contains(w.Body.String(), "M0CMC") {
-		t.Fatalf("body = %q, callsign should not have changed to M0CMC", w.Body.String())
+	if got.Callsign != "G4ABC" {
+		t.Fatalf("Callsign = %q, want unchanged G4ABC (callsign is immutable on PATCH)", got.Callsign)
 	}
 }
 
@@ -393,11 +449,10 @@ func TestDeleteLogbook_WithQSOs_Rejected(t *testing.T) {
 
 func TestSubmitQso_BodyTooLarge(t *testing.T) {
 	srv := testServer(t)
-	// The default MaxBodyBytes is 1 MiB. Send something bigger.
-	// Override maxBodyBytes to a tiny value for this test.
-	srv.maxBodyBytes = 10
-
+	// Create the logbook at default cap, THEN drop the cap — otherwise the
+	// M1 fix would also block the test's logbook POST.
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	srv.maxBodyBytes = 10
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/qso?logbook=%d", lbID),
 		strings.NewReader(strings.Repeat("X", 100)))
@@ -473,6 +528,60 @@ func TestSubmitQso_Duplicate(t *testing.T) {
 	}
 	if !strings.Contains(w2.Body.String(), `"status":"duplicate"`) {
 		t.Fatalf("body = %q, want duplicate", w2.Body.String())
+	}
+}
+
+// TestSubmitQso_ConcurrentDuplicate is the deterministic regression test
+// for the H1 race: two concurrent submits with identical dedupe-key
+// inputs both pass the pre-transaction FetchQsoByDedupeKey and race
+// into InsertQsoTx. The loser used to surface as a 500; with the fix
+// it must resolve to the duplicate-outcome shape, matching whichever
+// goroutine wrote first.
+func TestSubmitQso_ConcurrentDuplicate(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	const workers = 2
+	var wg sync.WaitGroup
+	results := make([]*httptest.ResponseRecorder, workers)
+	start := make(chan struct{})
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			results[idx] = submitQso(t, srv, lbID, testQsoADIF, false)
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+
+	var stored, duplicate int
+	var storedID, duplicateID int64
+	for i, w := range results {
+		body := w.Body.String()
+		switch {
+		case w.Code == http.StatusCreated && strings.Contains(body, `"status":"stored"`):
+			stored++
+			_, _ = fmt.Sscanf(body, `{"status":"stored","id":%d}`, &storedID)
+		case w.Code == http.StatusOK && strings.Contains(body, `"status":"duplicate"`):
+			duplicate++
+			_, _ = fmt.Sscanf(body, `{"status":"duplicate","id":%d}`, &duplicateID)
+		default:
+			t.Fatalf("worker %d: unexpected status %d, body = %s", i, w.Code, body)
+		}
+	}
+
+	if stored != 1 {
+		t.Fatalf("stored = %d, want exactly 1", stored)
+	}
+	if duplicate != 1 {
+		t.Fatalf("duplicate = %d, want exactly 1", duplicate)
+	}
+	if storedID == 0 || storedID != duplicateID {
+		t.Fatalf("stored id %d != duplicate id %d — both should name the same row", storedID, duplicateID)
 	}
 }
 
@@ -642,8 +751,12 @@ func TestSubmitQso_TimeOnAfterTimeOff_SameDate_Rejected(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "TIME_ON is after TIME_OFF") {
-		t.Fatalf("body = %q, want time coherence error", w.Body.String())
+	var envelope ErrorResponse
+	if err := unmarshalJSON(w.Body.String(), &envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if envelope.Code != "invalid_time_range" {
+		t.Fatalf("code = %q, want invalid_time_range", envelope.Code)
 	}
 }
 
@@ -669,8 +782,12 @@ func TestSubmitQso_TimeOnAfterTimeOff_WrongDateOff_Rejected(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "must be the day after") {
-		t.Fatalf("body = %q, want time coherence error", w.Body.String())
+	var envelope ErrorResponse
+	if err := unmarshalJSON(w.Body.String(), &envelope); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if envelope.Code != "invalid_time_range" {
+		t.Fatalf("code = %q, want invalid_time_range", envelope.Code)
 	}
 }
 

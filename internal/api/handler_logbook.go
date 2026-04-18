@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,8 +54,7 @@ func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description,omitempty"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", "failed to parse request body", op)
+	if !s.readJSONBody(w, r, op, &req) {
 		return
 	}
 
@@ -119,8 +117,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 		Description *string `json:"description,omitempty"`
 	}
 
-	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", "failed to parse request body", op)
+	if !s.readJSONBody(w, r, op, &req) {
 		return
 	}
 

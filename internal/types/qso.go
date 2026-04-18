@@ -7,10 +7,12 @@ type Qso struct {
 	// Every QSO entry MUST have a logbook associated with it.
 	LogbookID int64 `json:"logbook_id" validate:"required"`
 
-	// DedupeKey is a SHA-256 hex hash of CALL|BAND|MODE|QSO_DATE|TIME_ON
-	// (uppercased, pipe-separated). Used by the submit endpoint to detect
-	// duplicate QSOs within the same logbook. Computed by qsoservice, not
-	// set by callers.
+	// DedupeKey is a SHA-256 hex hash of
+	// CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON (uppercased, pipe-separated;
+	// FREQ is the normalized integer-kHz string so MHz decimal variants
+	// of the same frequency hash identically). Used by the submit
+	// endpoint to detect duplicate QSOs within the same logbook.
+	// Computed by qsoservice, not set by callers.
 	DedupeKey string `json:"dedupe_key,omitempty"`
 
 	SmQsoUploadDate     string `json:"sm_qso_upload_date"`

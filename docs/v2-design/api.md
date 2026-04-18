@@ -22,7 +22,7 @@ Per the "enumerate all API surfaces before designing any of them" lesson, the st
 | Consumer | Milestone | Primary workflow | SSE consumer? |
 |---|---|---|---|
 | `apps/logging` | 2 | Real-time QSO entry during active operation. Highest latency-sensitivity. Needs draft init, submit, contact history, contest dupe check, live forwarding status. | Yes — primary. |
-| `apps/logbook` | 2 | Management and historical editing. Logbook CRUD, batch QSO edit, list with paging, ADIF export, forwarding status review. Lower latency-sensitivity, larger result sets. | Yes — secondary. |
+| `apps/logbook` | 2 | Management and historical editing. Logbook CRUD, batch QSO edit, list with paging, ADIF export (client-side via `internal/adif` — no daemon endpoint), forwarding status review. Lower latency-sensitivity, larger result sets. | Yes — secondary. |
 | `cmd/importer` | 2 | ADIF bulk import from historical logs or other software. One-shot CLI, submits N QSOs and exits. | No. |
 | `cmd/udp-bridge` | 3 | Generic UDP-to-daemon bridge. Listens on UDP for ADIF-formatted payloads and forwards them to the daemon's submit endpoint. Not WSJT-X-specific — protocol-agnostic. | No. |
 
@@ -62,8 +62,9 @@ Per the "enumerate all API surfaces before designing any of them" lesson, the st
 **Response bodies:**
 
 - `application/json` for structured responses (query results, lists, status).
-- `application/x-adif` or `text/plain` for ADIF export endpoints.
 - `text/event-stream` for the SSE event stream endpoint.
+- ADIF export is not a daemon endpoint; clients that need ADIF
+  serialize client-side using `internal/adif` as a library import.
 
 **Config reload:** the daemon reads its config file once at startup. Changes made by `apps/config` are not picked up until the daemon is restarted. This is acceptable for milestone 1; a future refinement (file watch, SIGHUP, or an explicit reload endpoint) will be designed when it matters. Not today.
 
@@ -209,7 +210,14 @@ This section is the starting point for review, not the final shape. URLs, method
 | `PATCH` | `/v1/logbook/:id` | Edit logbook metadata (name, callsign, contest association, etc.). |
 | `DELETE` | `/v1/logbook/:id` | Soft-delete a logbook. |
 | `GET` | `/v1/logbook/:id/qso` | List QSOs in a logbook. Forward-cursor pagination via `?after=<cursor>&limit=<N>`. |
-| `POST` | `/v1/logbook/:id/export` | Export a logbook to ADIF. Response is `application/x-adif`. Large logbooks stream. |
+
+ADIF export is **not** a daemon endpoint. Clients that need an
+ADIF file (session email, full-logbook export, migration) page
+through `/v1/logbook/:id/qso` and serialize client-side using
+`internal/adif` as a library import. The daemon's
+backup/redundancy story is forwarding to online services
+(QRZ/LoTW/SM-online), not file export. See the decision log for
+the rationale.
 
 ### QSO draft support (apps/logging primarily)
 

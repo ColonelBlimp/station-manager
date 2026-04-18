@@ -177,9 +177,32 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 		merged.DedupeKey = newKey
 	}
 
-	// ---- Persist ----
-	if err := s.DB.UpdateQsoWithContext(ctx, merged); err != nil {
+	// ---- Atomic write: QSO + (future) upload-queue rows ----
+	// Symmetric with Submit: both ingest paths write under the same
+	// one-fails-all-fail contract. No upload-queue rows are produced on
+	// edit today (the forwarder lands in a later milestone), but when
+	// they are, the Insert loop will slot in here alongside the update
+	// inside the existing transaction envelope — no shape change needed.
+	tx, cancel, err := s.DB.BeginTxContext(ctx)
+	if err != nil {
+		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to begin transaction")
+	}
+	defer cancel()
+
+	if err = s.DB.UpdateQsoTx(ctx, tx, merged); err != nil {
+		_ = tx.Rollback()
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to update QSO")
+	}
+
+	// Future forwarder hook: for _, svc := range configuredUploadServices() {
+	//     if err = s.DB.InsertQsoUploadTx(ctx, tx, merged.ID, action.Update, svc); err != nil {
+	//         _ = tx.Rollback()
+	//         return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
+	//     }
+	// }
+
+	if err = tx.Commit(); err != nil {
+		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to commit transaction")
 	}
 
 	s.Logger.InfoWith().

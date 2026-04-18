@@ -1,7 +1,6 @@
 package api
 
 import (
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -75,20 +74,8 @@ func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lr := http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
-	defer func() {
-		if err := lr.Close(); err != nil {
-			s.logger.WarnWith().Err(err).Msg("failed to close request body reader")
-		}
-	}()
-	body, err := io.ReadAll(lr)
-	if err != nil {
-		if err.Error() == "http: request body too large" {
-			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
-				"request body exceeds maximum size", op)
-			return
-		}
-		writeError(w, http.StatusBadRequest, "read_error", "failed to read request body", op)
+	body, ok := s.readBody(w, r, op)
+	if !ok {
 		return
 	}
 	if len(body) == 0 {
@@ -124,21 +111,8 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---- Read body with size limit ----
-	lr := http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
-	defer func() {
-		if err := lr.Close(); err != nil {
-			s.logger.WarnWith().Err(err).Msg("failed to close request body reader")
-		}
-	}()
-
-	body, err := io.ReadAll(lr)
-	if err != nil {
-		if err.Error() == "http: request body too large" {
-			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
-				"request body exceeds maximum size", op)
-			return
-		}
-		writeError(w, http.StatusBadRequest, "read_error", "failed to read request body", op)
+	body, ok := s.readBody(w, r, op)
+	if !ok {
 		return
 	}
 

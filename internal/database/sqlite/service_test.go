@@ -127,6 +127,46 @@ func TestService_InitializeIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestService_InitOpenCloseInitOpen is the M4 regression: Close must
+// reset the Initialize guard so a subsequent Initialize re-executes
+// (previously it was a silent no-op, masking any config change that
+// might have happened between cycles).
+func TestService_InitOpenCloseInitOpen(t *testing.T) {
+	svc := testService(t) // already initialised + open + migrated
+
+	if err := svc.Close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+
+	// Re-init must actually run — if it silently no-ops, isInitialized
+	// stays false from the reset and Open will fail with the
+	// not-initialised error.
+	if err := svc.Initialize(); err != nil {
+		t.Fatalf("re-init after close: %v", err)
+	}
+
+	// testService forces :memory: after Initialize because the DI path
+	// resolves the on-disk default. Repeat that here.
+	svc.DatabaseConfig = &types.DatastoreConfig{
+		Driver:                    "sqlite",
+		Path:                      ":memory:",
+		MaxOpenConns:              1,
+		MaxIdleConns:              1,
+		ContextTimeout:            10,
+		TransactionContextTimeout: 10,
+	}
+
+	if err := svc.Open(); err != nil {
+		t.Fatalf("re-open after re-init: %v", err)
+	}
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+	if err := svc.Ping(); err != nil {
+		t.Fatalf("ping after cycle: %v", err)
+	}
+}
+
 func TestService_DoubleOpen_Fails(t *testing.T) {
 	svc := testService(t)
 	err := svc.Open()

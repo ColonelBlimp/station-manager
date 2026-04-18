@@ -123,14 +123,14 @@ func (s *Service) checkDatabaseDir(dbFilePath string) error {
 
 	exists, err := utils.PathExists(dbDir)
 	if err != nil {
-		return errors.New(op).WithErr(fmt.Errorf("utils.PathExists: %w", err))
+		return errors.New(op).WithErr(err).WithMsg("utils.PathExists")
 	}
 	if exists {
 		return nil
 	}
 
 	if err = os.MkdirAll(dbDir, 0o700); err != nil {
-		return errors.New(op).WithErr(fmt.Errorf("os.MkdirAll: %w", err))
+		return errors.New(op).WithErr(err).WithMsg("os.MkdirAll")
 	}
 
 	return nil
@@ -155,7 +155,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 
 	rows, err := s.handle.Query(`SELECT name FROM sqlite_master WHERE type='table'`)
 	if err != nil {
-		return nil, errors.New(op).WithErr(fmt.Errorf("sqlite_master query: %w", err))
+		return nil, errors.New(op).WithErr(err).WithMsg("sqlite_master query")
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -163,7 +163,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New(op).WithErr(fmt.Errorf("sqlite_master scan: %w", err))
+			return nil, errors.New(op).WithErr(err).WithMsg("sqlite_master scan")
 		}
 		existing[name] = struct{}{}
 	}

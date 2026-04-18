@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	stderr "errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
+	"github.com/mattn/go-sqlite3"
 )
 
 // Submit validates an ADIF record, checks for duplicates, and atomically
@@ -200,6 +200,26 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	qsoID, err := s.DB.InsertQsoTx(ctx, tx, qso)
 	if err != nil {
 		_ = tx.Rollback()
+
+		// Race window: two submits with identical dedupe-key inputs
+		// can both pass the pre-transaction FetchQsoByDedupeKey check
+		// above and both try to insert. The second to hit the UNIQUE
+		// index on (logbook_id, dedupe_key) WHERE deleted_at IS NULL
+		// fails here. From the client's point of view this is a
+		// duplicate, not a daemon error — the submit path is
+		// advertised as idempotent (see api.md §4.2; the text-file
+		// fallback relies on this). Translate the constraint violation
+		// into a duplicate outcome.
+		if isUniqueConstraintError(err) && !force {
+			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
+			if ferr == nil {
+				return SubmitResult{Status: "duplicate", ID: existing.ID}, nil
+			}
+			// If the row isn't there on the follow-up query, something
+			// stranger is going on — fall through to surface the
+			// original insert error.
+		}
+
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert QSO")
 	}
 
@@ -235,23 +255,23 @@ func configuredUploadServices() []upload.OnlineService {
 	return nil
 }
 
-// FreqMHzToKHzString converts a frequency string from MHz (e.g. "14.074",
-// "7.050") to an integer kHz string (e.g. "14074", "7050"). Also accepts
-// plain integer strings that are already in kHz.
-func FreqMHzToKHzString(s string) (string, error) {
-	// If it contains a dot, treat as MHz float.
-	if strings.Contains(s, ".") {
-		f, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return "", fmt.Errorf("cannot parse as MHz: %w", err)
-		}
-		kHz := int64(math.Round(f * 1000))
-		return strconv.FormatInt(kHz, 10), nil
+// isUniqueConstraintError reports whether err is a sqlite UNIQUE-index
+// violation, including through wrapping. Used in the Submit race-
+// resolution path above. Scoped to this package — if a second caller
+// ever wants the same check, promote it to a helper in the sqlite
+// package where the driver dependency lives.
+//
+// Belt and braces: try the typed sqlite3.Error first (the correct
+// detection), then fall back to matching the driver's stable
+// "UNIQUE constraint failed" message. The fallback exists because
+// sqlboiler wraps errors with `friendsofgo/errors.Wrap`, and if a
+// future version ever drops Unwrap interop the typed path would
+// silently stop matching.
+func isUniqueConstraintError(err error) bool {
+	var sqliteErr sqlite3.Error
+	if stderr.As(err, &sqliteErr) {
+		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
+			sqliteErr.Code == sqlite3.ErrConstraint
 	}
-	// No dot — assume already integer and vrify it parses.
-	if _, err := strconv.ParseInt(s, 10, 64); err != nil {
-		return "", fmt.Errorf("cannot parse as integer frequency: %w", err)
-	}
-
-	return s, nil
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }

@@ -50,9 +50,11 @@ CREATE TABLE IF NOT EXISTS qso
     country         TEXT     NOT NULL CHECK (length(trim(country)) <= 50),
     additional_data JSON     NOT NULL DEFAULT ('{}') CHECK (json_valid(additional_data)),
 
-    /* Dedupe key: SHA-256 hex of CALL|BAND|MODE|QSO_DATE|TIME_ON (uppercased,
-       pipe-separated). Used by the 'submit' endpoint to detect duplicate QSOs.
-       Unique per logbook (active rows only). */
+    /* Dedupe key: SHA-256 hex of CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON
+       (uppercased, pipe-separated; FREQ is the normalized integer-kHz string
+       so MHz decimal variants collapse to the same hash). Used by the
+       'submit' endpoint to detect duplicate QSOs. Unique per logbook
+       (active rows only). */
     dedupe_key      TEXT     NOT NULL CHECK (length(dedupe_key) = 64),
 
     logbook_id      INTEGER  NOT NULL,

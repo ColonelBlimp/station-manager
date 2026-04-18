@@ -32,9 +32,18 @@ const (
 
 	// uploadRetryCooldown is the minimum time that must pass before a failed upload
 	// can be retried. This prevents rapid retry loops for persistently failing uploads.
+	//
+	// TODO(forwarder): this is the fallback default only. When the forwarder
+	// subsystem lands (see docs/v2-design/forwarding.md, not yet written)
+	// it must surface this as a config field — per feedback_no_magic_numbers,
+	// retry intervals are exactly the kind of value that belongs in config.
+	// Expected shape is ForwarderConfig.RetryCooldownSec (or equivalent
+	// once the forwarder config struct is decided), with this constant as
+	// the zero-value fallback. Do not ship the forwarder without this fix.
 	uploadRetryCooldown = 5 * time.Minute
 
 	// defaultUploadBatchLimit is the default number of pending uploads to process per batch
-	// when QsoForwardingRowLimit is not configured.
+	// when QsoForwardingRowLimit is not configured. This one is already a
+	// proper fallback-on-zero default per the no-magic-numbers rule.
 	defaultUploadBatchLimit = 5
 )

@@ -335,8 +335,17 @@ Full suite race-detector clean.
 - **Logging session is entirely client-side.** No `session_id`
   column, no `/v1/session` endpoints. The logging app keeps an
   in-memory list of QSOs submitted since Start, uses existing
-  PATCH/DELETE for edits, and a future `POST /v1/logbook/{id}/export?ids=…`
-  for end-of-session email. Captured as a memory.
+  PATCH/DELETE for edits, and formats the end-of-session email
+  payload client-side from data it already has (or re-fetches via
+  `GET /v1/qso/{id}`). Captured as a memory.
+- **No daemon-side ADIF export endpoint.** Export is a
+  client/admin concern, not a daemon concern. Clients that need
+  ADIF page through the QSO list and serialize client-side using
+  `internal/adif` (which is a regular Go library, not HTTP-wrapped).
+  The "real" backup story is forwarding to online services
+  (QRZ, LoTW, SM-online) — that's the daemon's redundancy
+  mechanism. Filesystem backup of the sqlite file is a user/OS
+  concern.
 
 ---
 
@@ -522,28 +531,38 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 ### The immediate next action (session 10 start)
 
 Milestone 1b is done — the daemon API surface for client apps is
-complete. Next worthwhile threads, in rough priority order:
+complete. The daemon's HTTP surface is feature-complete for now;
+the remaining big pieces are subsystems (forwarder, SSE, bridge)
+rather than endpoints.
 
-1. **Export endpoint (`POST /v1/logbook/{id}/export`)**. Milestone
-   2's client-app session flow (see `project_sm_session_scope.md`
-   memory) needs `POST /v1/logbook/{id}/export?ids=1,2,3` to build
-   the end-of-session email payload. Response is `application/x-adif`;
-   large logbooks stream. No design questions outstanding —
-   session-handoff section §7a already nominates the shape.
+**Reshuffle note (session 9):** the previously-nominated
+`POST /v1/logbook/{id}/export` endpoint was dropped from the
+roadmap. ADIF export is a client/admin concern — clients that
+need ADIF page through the QSO list and serialize client-side
+using `internal/adif` (imported as a regular library, not
+HTTP-wrapped). The daemon's backup/redundancy story is forwarding
+to online services, not file export. See the end-of-session
+design-decisions list above for the full rationale.
 
-2. **Forwarder subsystem** (milestone 1c / 2). Real upload-queue
-   worker, retries, fan-out config. v1 forwarding code is the
-   reference per the "v1 forwarding code is good" note in
-   `docs/v2-design/api.md` §4.3. Biggest open design question: the
-   forwarder fan-out config shape (`docs/v2-design/forwarding.md`
-   doesn't exist yet).
+Priority order:
 
-3. **SSE event stream (`GET /v1/events`)**. First consumer will be
+1. **Forwarder subsystem** (milestone 1c / 2). This is now the top
+   item and the biggest remaining design question. Real upload-queue
+   worker, retries, fan-out to N configured destinations (replacing
+   v1's hardcoded-QRZ shape). Biggest open design question: the
+   forwarder fan-out config shape. `docs/v2-design/forwarding.md`
+   doesn't exist yet and should — that's where the design gets
+   settled. v1 forwarding code is the structural reference (retry
+   loop, goroutine topology, upload-queue polling) per
+   `docs/v2-design/api.md` §4.3; the piece that needs redesign is
+   fan-out.
+
+2. **SSE event stream (`GET /v1/events`)**. First consumer will be
    the logging-app's "new QSO arrived in my session" refresh. Will
-   need `qso.stored`/`qso.updated`/`qso.deleted` emit sites wired up
-   alongside the respective handlers.
+   need `qso.stored`/`qso.updated`/`qso.deleted`/`forward.*` emit
+   sites wired up alongside the respective handlers.
 
-4. **Bridge / CAT design**. Separate subsystem; see
+3. **Bridge / CAT design**. Separate subsystem; see
    `project_sm_serial_bridge.md` memory.
 
 If you want a small cleanup tick before any of these, there's one
@@ -553,6 +572,14 @@ accepts `Call LIKE 'X%'` which catches portable suffixes like
 `Call = 'X' OR Call LIKE 'X/%'` would be better but is a behaviour
 change with no active complaint — worth flagging rather than
 silently changing.
+
+Second small item: the `database/sqlite` call-site audit
+(performed late session 9) landed items 1 and 2 (lightweight
+`LogbookCallsignByIDWithContext` on the submit hot path; composite
+pagination index `idx_qso_logbook_date_time`). Items 3+ were
+parked as dedicated follow-ups (dead-method sweep; optional
+`(call, logbook_id)` composite for contact-history under a
+logbook filter).
 
 ### v2 design work
 
