@@ -243,10 +243,42 @@ func defaultCfg(name string) Config {
 	}
 }
 
-// runOnce spins up the worker just long enough for tickOnce to drain
-// what's claimable, then cancels and waits for Run to return. Avoids
-// racing on goroutine scheduling at test shutdown.
-func runOnce(t *testing.T, w *Worker) {
+// runUntil runs the worker until match reports true for the single
+// qso_upload row of qsoID, then cancels ctx and waits for Run to
+// return. Polls at 10 ms against an in-memory DB, so convergence is
+// cheap; a deadline guards against bugs that would otherwise hang the
+// suite. Use this for positive assertions ("row reaches status X") —
+// it's deterministic across test-harness load, unlike a fixed sleep.
+func runUntil(t *testing.T, w *Worker, h *testHarness, qsoID int64, match func(types.QsoUpload) bool) types.QsoUpload {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err := h.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+		if err == nil && len(rows) == 1 && match(rows[0]) {
+			cancel()
+			<-done
+			return rows[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("runUntil: condition not reached within deadline")
+	return types.QsoUpload{}
+}
+
+// runFor runs the worker for a bounded duration, then cancels. Use
+// this for negative assertions ("after running, the row is still
+// pending") where there's no positive transition to wait for.
+func runFor(t *testing.T, w *Worker, d time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -254,10 +286,7 @@ func runOnce(t *testing.T, w *Worker) {
 		w.Run(ctx)
 		close(done)
 	}()
-	// The initial tick runs synchronously at the top of Run; give it a
-	// moment to finish before cancelling. 100ms is generous for the
-	// in-memory DB and the stub's no-op Submit.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(d)
 	cancel()
 	<-done
 }
@@ -322,12 +351,9 @@ func TestWorker_InsertSuccessPath(t *testing.T) {
 		t.Fatalf("new worker: %v", err)
 	}
 
-	runOnce(t, w)
-
-	row := h.fetchUpload(qsoID)
-	if row.Status != status.Uploaded.String() {
-		t.Fatalf("status = %q, want uploaded", row.Status)
-	}
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
 	if row.Attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", row.Attempts)
 	}
@@ -353,7 +379,9 @@ func TestWorker_DoesNotClaimOtherForwardersRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	runOnce(t, w)
+	// Negative assertion: let the worker tick for a bounded window and
+	// confirm it didn't touch somebody else's row.
+	runFor(t, w, 200*time.Millisecond)
 
 	row := h.fetchUpload(qsoID)
 	if row.Status != status.Pending.String() {
@@ -379,12 +407,9 @@ func TestWorker_TransientRetrySchedulesNextAttempt(t *testing.T) {
 	}
 
 	before := time.Now().Unix()
-	runOnce(t, w)
-
-	row := h.fetchUpload(qsoID)
-	if row.Status != status.Pending.String() {
-		t.Fatalf("status = %q, want pending (backoff reschedule)", row.Status)
-	}
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Pending.String() && u.Attempts >= 1
+	})
 	if row.Attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", row.Attempts)
 	}
@@ -409,12 +434,9 @@ func TestWorker_TerminalMarksFailedImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	runOnce(t, w)
-
-	row := h.fetchUpload(qsoID)
-	if row.Status != status.Failed.String() {
-		t.Fatalf("status = %q, want failed", row.Status)
-	}
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Failed.String()
+	})
 	if row.Attempts != 1 {
 		t.Fatalf("attempts = %d, want 1 (terminal goes straight to failed)", row.Attempts)
 	}
@@ -438,12 +460,9 @@ func TestWorker_TransientExhaustionBecomesFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	runOnce(t, w)
-
-	row := h.fetchUpload(qsoID)
-	if row.Status != status.Failed.String() {
-		t.Fatalf("status = %q, want failed (MaxAttempts=1 exhausted on first try)", row.Status)
-	}
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Failed.String()
+	})
 	if row.Attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", row.Attempts)
 	}
@@ -463,12 +482,9 @@ func TestWorker_SoftDeletedQso_InsertMarkedFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	runOnce(t, w)
-
-	row := h.fetchUpload(qsoID)
-	if row.Status != status.Failed.String() {
-		t.Fatalf("status = %q, want failed (soft-deleted before insert)", row.Status)
-	}
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Failed.String()
+	})
 	if row.LastError == "" {
 		t.Fatal("last_error should describe the soft-delete skip")
 	}
@@ -484,12 +500,9 @@ func TestWorker_SoftDeletedQso_UpdateMarkedFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	runOnce(t, w)
-
-	row := h.fetchUpload(qsoID)
-	if row.Status != status.Failed.String() {
-		t.Fatalf("status = %q, want failed (soft-deleted update superseded by delete row)", row.Status)
-	}
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Failed.String()
+	})
 }
 
 func TestWorker_SoftDeletedQso_DeleteStillForwards(t *testing.T) {
@@ -502,12 +515,9 @@ func TestWorker_SoftDeletedQso_DeleteStillForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	runOnce(t, w)
-
-	row := h.fetchUpload(qsoID)
-	if row.Status != status.Uploaded.String() {
-		t.Fatalf("status = %q, want uploaded (delete must still forward)", row.Status)
-	}
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
 	if row.UpstreamID != "stub-ok" {
 		t.Fatalf("upstream_id = %q, want stub-ok", row.UpstreamID)
 	}
@@ -532,17 +542,22 @@ func TestWorker_DoesNotClaimFutureRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	runOnce(t, w)
+	// Wait for the first transient outcome to push next_attempt_at 60 s
+	// into the future.
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Pending.String() && u.Attempts >= 1
+	})
 
-	beforeAttempts := h.fetchUpload(qsoID).Attempts // expect 1 after the first run
+	beforeAttempts := h.fetchUpload(qsoID).Attempts
 
-	// Second pass with a success stub — should NOT claim the row because
-	// next_attempt_at is still in the future.
+	// Second worker (success stub) must NOT re-claim the row, because
+	// next_attempt_at is still 60 s out. Let it tick for a bounded
+	// window and confirm no transition happened.
 	w2, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
 	if err != nil {
 		t.Fatalf("new worker 2: %v", err)
 	}
-	runOnce(t, w2)
+	runFor(t, w2, 200*time.Millisecond)
 
 	row := h.fetchUpload(qsoID)
 	if row.Status != status.Pending.String() {
@@ -562,54 +577,48 @@ func TestWorker_FlapN_EventuallySucceeds(t *testing.T) {
 	qsoID := h.seedLogbookAndQso()
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
 
-	// flap_n=2 → first two submits transient, third succeeds. One Worker
-	// tick processes one row only once, so we run three cycles to reach
-	// the success. Between cycles the next_attempt_at clamp would keep
-	// us waiting — set initial_backoff_sec to 1 s but reset the row's
-	// next_attempt_at to now after each transient to exercise the full
-	// state machine without sleeping through real backoff.
+	// flap_n=2: first two submits transient, third succeeds. Flat
+	// 1 s backoff (MaxBackoffSec=1 clamps the exponential growth) means
+	// the row becomes re-claimable ~1 s after each transient outcome.
+	// The worker's 50 ms tick makes the re-claim prompt, so end-to-end
+	// convergence is roughly 2 × 1 s + jitter, well under the
+	// deadline we extend below.
 	stubFwd := buildStub(t, stub.ModeFlapN, 2)
 	cfg := defaultCfg("stub")
-	// Headroom for the test's reset hack: each real tick costs 1 stub
-	// call, but the reset also bumps attempts once, so attempts grows
-	// 2× as fast as real retries would. Pick a MaxAttempts that doesn't
-	// exhaust before the third real submit.
-	cfg.Retry.MaxAttempts = 20
-	// Long ticker so only the initial tickOnce fires during runOnce's
-	// 100 ms window. Each runOnce is then exactly one submit attempt,
-	// keeping the attempts arithmetic deterministic.
-	cfg.Tick = 10 * time.Second
+	cfg.Retry.MaxAttempts = 5
+	cfg.Retry.InitialBackoffSec = 1
+	cfg.Retry.MaxBackoffSec = 1
 	w, err := New(cfg, stubFwd, h.db, h.logger)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
 
-	// The number of runOnce cycles isn't exactly flap_n+1 because the
-	// test's "normalise next_attempt_at" reset also calls
-	// MarkUploadTransientRetry, which bumps attempts. That inflation is
-	// bounded — each real tick costs 1 stub call regardless of how
-	// many times we re-queued the row — so a small headroom over
-	// flap_n+1 is enough to observe the eventual success. We don't
-	// assert an exact attempts count here; the point is that a
-	// flapping destination does succeed within a bounded number of
-	// cycles.
-	const maxCycles = 6
-	for cycle := 0; cycle < maxCycles; cycle++ {
-		runOnce(t, w)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+
+	// Convergence needs ~2 s of real wall-clock because each retry
+	// waits out the backoff; give a generous deadline.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		row := h.fetchUpload(qsoID)
 		if row.Status == status.Uploaded.String() {
+			if row.Attempts != 3 {
+				t.Fatalf("attempts = %d, want 3 (flap_n=2 + success)", row.Attempts)
+			}
+			cancel()
+			<-done
 			return
 		}
-		// Not yet succeeded — normalise next_attempt_at so the next tick
-		// can claim it again without waiting real wall time.
-		if err := h.db.MarkUploadTransientRetryWithContext(
-			context.Background(), row.ID, time.Now().Unix(), row.LastError,
-		); err != nil {
-			t.Fatalf("reset next_attempt_at: %v", err)
-		}
+		time.Sleep(25 * time.Millisecond)
 	}
-
-	t.Fatalf("flap_n=2 did not succeed within %d cycles", maxCycles)
+	cancel()
+	<-done
+	t.Fatal("flap_n=2 did not succeed within deadline")
 }
 
 // =============================================================================
