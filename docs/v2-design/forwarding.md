@@ -51,18 +51,21 @@ sections can use them without re-explaining.
   (§3) that pushes QSOs to one specific upstream destination (QRZ,
   ClubLog, LoTW, …). "The QRZ forwarder" = `internal/forwarding/qrz`.
 
-- **`forwarder_name`** — the **per-instance** handle the operator
-  chooses in config (e.g. `"qrz-primary"`, `"qrz-backup"`). Used to
-  key the `qso_upload.forwarder_name` column and to scope the
-  worker's claim query. An operator may have two instances of the
-  same type — they share a `forwarder_type` but differ in
-  `forwarder_name`.
+- **`forwarder_name`** — the **per-instance** label the operator
+  picks in config (defaults to the type name, e.g. `"qrz"`). Used
+  to key the `qso_upload.forwarder_name` column and scope the
+  worker's claim query. Ham online services are effectively
+  singleton per operator — one QRZ account, one ClubLog, one LoTW
+  cert — so in practice `name` and `type` are usually the same
+  string. The split exists for rename safety (see below), not
+  because operators run multiple instances of the same type.
 
 - **`forwarder_type`** — the **plugin identifier** returned by
-  `Forwarder.Type()` (e.g. `"qrz"`, `"clublog"`). Stable across
-  config renames; stored redundantly on the row so historical rows
-  remain interpretable even after an operator deletes the instance
-  from config.
+  `Forwarder.Type()` (e.g. `"qrz"`, `"clublog"`). Stored on the
+  row alongside `forwarder_name` so historical queue entries
+  remain interpretable after the operator renames or deletes the
+  instance from config — if `name` were the only handle, renaming
+  would orphan every existing row for that destination.
 
 - **Outcome** — one of three classifications returned by
   `Forwarder.Submit` (§3):
@@ -142,22 +145,16 @@ actions this destination cares about.
 {
   "forwarders": [
     {
-      "name": "qrz-primary",
+      "name": "qrz",
       "type": "qrz",
       "enabled": true,
       "credentials": {
         "username": "M0CMC",
         "api_key": "..."
-      },
-      "action_filter": ["insert", "update", "delete"],
-      "retry": {
-        "max_attempts": 10,
-        "initial_backoff_sec": 30,
-        "max_backoff_sec": 3600
       }
     },
     {
-      "name": "clublog-backup",
+      "name": "clublog",
       "type": "clublog",
       "enabled": false,
       "credentials": { "email": "...", "password": "...", "callsign": "..." }
@@ -166,10 +163,16 @@ actions this destination cares about.
 }
 ```
 
-**Why an array, not a map keyed by type:** the operator may want two
-instances of the same type (e.g. two QRZ accounts, or a staging +
-production pair during testing). Type is not a primary key; `name`
-is.
+**Why an array, not a map keyed by type:** arrays preserve order and
+give the operator a natural place to hang per-instance overrides
+(`tick_interval_sec`, `batch_size`, `retry`). In everyday use `name`
+and `type` will be the same string — ham online services are
+effectively singleton per operator (one QRZ account, one ClubLog,
+one LoTW cert), so a second instance of the same type is vanishingly
+rare. The split exists so that `qso_upload` rows remain interpretable
+when an operator *renames* a destination (e.g. after rotating an API
+key they relabel `qrz` → `qrz-2026`): `forwarder_type` stays `"qrz"`,
+historical rows still make sense.
 
 **Why credentials are a nested object, not flat fields:** each
 forwarder type has its own authentication shape. QRZ wants
@@ -181,25 +184,36 @@ type-specific unmarshaling local to the forwarder's own package.
 **Why `action_filter` is explicit:** v1 uploaded everything to QRZ
 including deletes. Some destinations don't support updates or deletes
 cleanly (LoTW is famously write-once). The filter lets the operator
-restrict a destination to just inserts without changing code.
+restrict a destination to just inserts without changing code. When
+omitted from config, defaults to `["insert","update","delete"]`.
 
-**Why retry policy is per-forwarder:** QRZ and LoTW have very
-different tolerance for repeated submits. QRZ is happy with retries
-every 30 seconds; LoTW shouldn't be hammered. Per-forwarder retry
-config acknowledges this. Defaults are generous (`max_attempts=10`,
-starting at 30s, capped at 1h) and come from config, not code
-constants (per the no-magic-numbers rule).
+**Why retry defaults live in the forwarder package, not config.** QRZ
+and LoTW have very different tolerance for repeated submits (QRZ is
+happy with retries every minute or two, LoTW should not be hammered).
+Each forwarder's own package carries sensible upstream-specific
+defaults — `qrz.New` knows what QRZ can tolerate — so the common-case
+config doesn't carry a `retry` block at all. Operators who need to
+deviate drop an explicit `retry` object into the entry, and it
+overrides. This keeps operator-facing config lean without violating
+the no-magic-numbers rule: the fallback values are still named
+constants in code, just scoped to the forwarder that knows what
+they mean.
 
 **Validation at startup.** `config.Load` validates that every
-forwarder has a known `type`, a non-empty `name`, unique names across
-the array, and a `credentials` blob that the matching forwarder
-type's `ValidateCredentials` accepts. Invalid config → daemon refuses
-to start, with an error naming the offending forwarder.
+forwarder has a non-empty `name` and `type`, unique names across the
+array, valid entries in `action_filter`, and (if present) sane
+`retry` bounds. Type-specific credential validation happens later
+when the forwarder package's constructor is called — only that
+package knows what its credentials object should contain. Invalid
+config → daemon refuses to start, with an error naming the offending
+forwarder.
 
 **Alternative considered:** a single global `enabled_forwarders`
 array of type-strings, with credentials pulled from environment
 variables. Rejected — it couples the config model to env-var naming
-conventions and forbids multiple instances of the same type.
+conventions and loses the per-forwarder override slots (action
+filter, tick interval, retry override) without a compensating
+benefit for a single-operator deployment.
 
 ---
 
@@ -299,12 +313,12 @@ updates status, sleeps. The goroutines are independent — there is no
 central dispatcher and no shared work queue.
 
 ```
-┌──────────────┐    claims rows WHERE service='qrz-primary'
-│ qrz-primary  │──▶  submits                     ────▶ qso_upload
+┌──────────────┐    claims rows WHERE forwarder_name='qrz'
+│ qrz          │──▶  submits                     ────▶ qso_upload
 │ goroutine    │    writes status / attempts back
 └──────────────┘
 
-┌──────────────┐    claims rows WHERE service='clublog-backup'
+┌──────────────┐    claims rows WHERE forwarder_name='clublog'
 │ clublog      │──▶  submits                     ────▶ qso_upload
 │ goroutine    │    writes status / attempts back
 └──────────────┘
@@ -494,13 +508,13 @@ forwarder whose `action_filter` includes that event's action:
 
 ```
 -- POST /v1/qso (all three destinations accept 'insert'):
-qso_upload(qso_id=42, forwarder_name='qrz-primary',    forwarder_type='qrz',     action='insert', …)
-qso_upload(qso_id=42, forwarder_name='clublog-backup', forwarder_type='clublog', action='insert', …)
-qso_upload(qso_id=42, forwarder_name='lotw-main',      forwarder_type='lotw',    action='insert', …)
+qso_upload(qso_id=42, forwarder_name='qrz',     forwarder_type='qrz',     action='insert', …)
+qso_upload(qso_id=42, forwarder_name='clublog', forwarder_type='clublog', action='insert', …)
+qso_upload(qso_id=42, forwarder_name='lotw',    forwarder_type='lotw',    action='insert', …)
 
--- PATCH /v1/qso/42 — lotw-main's filter is ["insert"], so it gets no row:
-+ qso_upload(qso_id=42, forwarder_name='qrz-primary',    forwarder_type='qrz',     action='update', …)
-+ qso_upload(qso_id=42, forwarder_name='clublog-backup', forwarder_type='clublog', action='update', …)
+-- PATCH /v1/qso/42 — lotw's action_filter is ["insert"], so it gets no row:
++ qso_upload(qso_id=42, forwarder_name='qrz',     forwarder_type='qrz',     action='update', …)
++ qso_upload(qso_id=42, forwarder_name='clublog', forwarder_type='clublog', action='update', …)
 ```
 
 **N is dynamic per action**, not fixed per QSO. A QSO that goes
@@ -700,8 +714,8 @@ after N respawns in M seconds) can be added if it becomes a real
 problem; it is not in the initial shape.
 
 **Why a named goroutine:** log filtering. When the forwarder
-subsystem grows to multiple destinations, `goroutine=qrz-primary`
-tells you which one panicked without having to unscramble the stack.
+subsystem grows to multiple destinations, `goroutine=qrz` tells you
+which one panicked without having to unscramble the stack.
 
 **Testability:** the first test for `SafeGo` is "panic inside fn
 does not crash the test process." The second is "respawn=true

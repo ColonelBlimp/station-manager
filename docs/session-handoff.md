@@ -24,7 +24,75 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-17 end-of-session 10)
+## Current state (as of 2026-04-18 mid-session 11)
+
+### Forwarder subsystem under active construction
+
+Design: `docs/v2-design/forwarding.md` is the authoritative shape;
+everything below is the thin slice that implements it. Commits so
+far this session have landed stages 1–3 of an 11-stage plan — see
+"Session 11 progress" below for the status table.
+
+### Session 11 progress (2026-04-18, in-progress)
+
+**Design doc landed.** `docs/v2-design/forwarding.md` settles the
+internal shape of the forwarder subsystem: constraints, terminology,
+fan-out config, `Forwarder` interface, per-destination worker
+topology, retry policy, queue-row data shape (§6), lifecycle and
+status transitions, `SafeGo` recovery, v1 migration, acceptance.
+Walked through the flow step-by-step with the user, which surfaced
+several refinements:
+
+- **Ham services are effectively singleton per operator.** One QRZ,
+  one ClubLog, one LoTW per operator; `forwarder_name` defaults to
+  the type string. The `name`/`type` split exists for rename safety
+  (historical rows stay interpretable when an operator relabels a
+  destination), not because we expect multi-instance deployments.
+  Memory: `project_sm_ham_services_singleton.md`.
+- **Retry defaults live in the forwarder package, not config.** Each
+  upstream's tolerances are different; `qrz.New` knows what QRZ can
+  take. Operators only write a `retry` block in config when they
+  need to override.
+- **Config reload is off the table.** Restart required for config
+  changes. Live reload introduces real complexity (in-flight
+  attempts, credential rotation) without matching operator benefit.
+- **Slow-link operator-environment defaults** went into the doc:
+  `tick_interval_sec=120`, `batch_size=5`, matching v1 operational
+  values. Memory: `project_sm_operator_network.md`.
+
+**Implementation plan: 11-stage thin slice**, each stage a
+committable unit:
+
+| # | Stage | Status |
+|---|-------|--------|
+| 1 | Schema update — split `service` into `forwarder_name`+`forwarder_type`, add `next_attempt_at`, `upstream_id` | **done** |
+| 2 | Config surface — `ForwarderConfig`/`RetryConfig` in types, `Forwarders[]` on `Config`, defaults + validation, `Forwarders()` accessor | **done** |
+| 3 | `internal/forwarding/` — `Forwarder` interface, `Outcome`/`Result`, `Action` alias, init()-time `Register`/`Build` registry | **done** |
+| 4 | Stub forwarder — `internal/forwarding/stub/` configurable via credentials blob (always_success / always_transient / flap_n) | **next** |
+| 5 | `SafeGo` helper — `internal/utils/safego.go` named goroutine + recover + optional respawn | pending |
+| 6 | DB methods — claim query, outcome persist, orphan sweep, fetch-by-qso-id | pending |
+| 7 | Wire ingest — `submit.go` reads `config.Forwarders` filtered by enabled + action_filter contains 'insert'; same in update/delete paths | pending |
+| 8 | Worker loop — `internal/forwarding/worker/` per-forwarder tick + claim + submit + persist | pending |
+| 9 | Startup wiring — `main.go` orphan sweep + spawn workers via SafeGo | pending |
+| 10 | Pull endpoint — `GET /v1/qso/:id/uploads` | pending |
+| 11 | E2E integration test — POST → observe row transition to `uploaded` | pending |
+
+**Stage 1 cleanup (incidentally resolved):**
+- `uploadRetryCooldown` + `defaultUploadBatchLimit` constants
+  deleted from `sqlite/consts.go` — the M8 `TODO(forwarder)` is
+  closed. Retry cadence now lives in per-forwarder config / the
+  forwarder package's own defaults.
+- `types.RequiredConfigs` + `config.Service.RequiredConfigs()`
+  deleted (its one field `QsoForwardingRowLimit` was consumed only
+  by the now-deleted legacy worker code; the replacement lives in
+  `ForwarderConfig.BatchSize`).
+- Legacy v1 worker methods (`InsertQsoUploadWithContext`,
+  `FetchPendingUploadsWithContext`, `UpdateQsoUploadStatusWithContext`
+  and their non-ctx wrappers) deleted from the sqlite package;
+  their three tests likewise removed. Stage 6 will add the new
+  purpose-built replacements.
+
+### Current state (as of 2026-04-17 end-of-session 10)
 
 ### Milestones 1 and 1b both complete, full code review landed
 
@@ -652,54 +720,45 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### The immediate next action (session 11 start)
+### The immediate next action (session 11 continuation / session 12 start)
 
-Milestone 1b is done AND hardened. No known bugs. No convention
-drift. The codebase is at a clean baseline for the forwarder
-subsystem.
+Forwarder subsystem is under active construction, stages 1–3 of 11
+committed. Pick up at **Stage 4 (stub forwarder)** per the status
+table in "Session 11 progress" above.
 
 Priority order:
 
-1. **Forwarder subsystem** (milestone 1c / 2). This is now
-   unambiguously the next thing. Real upload-queue worker,
-   retries, fan-out to N configured destinations (replacing v1's
-   hardcoded-QRZ shape). Biggest open design question is the
-   forwarder fan-out config shape; `docs/v2-design/forwarding.md`
-   doesn't exist yet and should be the first artefact of this
-   milestone — write the design before any code. v1 forwarding
-   code is the structural reference (retry loop, goroutine
-   topology, upload-queue polling) per `docs/v2-design/api.md`
-   §4.3; the piece that needs redesign is fan-out.
-
-   Forwarder-specific gotchas already flagged in the codebase:
-   - `internal/database/sqlite/consts.go` — `uploadRetryCooldown`
-     has a `TODO(forwarder)` naming the expected config field
-     (`ForwarderConfig.RetryCooldownSec`). Do not ship the
-     forwarder with this as a hardcoded constant.
-   - `internal/qsoservice/update.go` — commented forwarder hook
-     inside the existing tx envelope shows exactly where the
-     `InsertQsoUploadTx(action.Update)` loop drops in.
+1. **Continue forwarder stages 4–11.** Stage 4 next: stub forwarder
+   in `internal/forwarding/stub/`, configurable via credentials
+   blob (always_success / always_transient / flap_n). This is what
+   lets stages 5–11 verify the plumbing end-to-end without writing
+   any QRZ-protocol code. After stage 4 the rest of the stages
+   each have a clear scope in the table above.
 
 2. **SSE event stream (`GET /v1/events`)**. First consumer will be
    the logging-app's "new QSO arrived in my session" refresh. Will
    need `qso.stored`/`qso.updated`/`qso.deleted`/`forward.*` emit
    sites wired up alongside the respective handlers. Depends on
-   the forwarder for the `forward.*` vocabulary.
+   the forwarder for the `forward.*` vocabulary. Deferred out of
+   the stage-1–11 thin slice; picks up after the spine is green.
 
 3. **Bridge / CAT design**. Separate subsystem; see
    `project_sm_serial_bridge.md` memory.
 
 ### Parked follow-ups (low priority, not blockers)
 
-- **Dead-method sweep (SQL audit item 3).** Seven sqlite methods
-  have only test callers today. Four are expected milestone-2
-  consumers (enrichment: `FetchContactedStationByCallsign`,
-  `FetchCountryByCallsign`, `FetchCountryByName`) or milestone-1c
-  consumers (forwarder queue: `FetchPendingUploads`,
-  `UpdateQsoUploadStatus`). The other three
+- **Dead-method sweep (SQL audit item 3).** Several sqlite methods
+  have only test callers today. The former forwarder-queue
+  candidates (`FetchPendingUploads`, `UpdateQsoUploadStatus`) have
+  already been deleted in session 11 — they were v1 worker code,
+  replaced by the stage-6 purpose-built methods. The remaining
+  low-signal methods
   (`FetchQsoSliceByLogbookId`, `FetchQsoCountByLogbookId`,
-  likely `FetchQsoByDedupeKey`'s no-context wrapper) need a
-  specific "delete or keep" decision. Park until we know.
+  `FetchQsoByDedupeKey`'s no-context wrapper,
+  `FetchContactedStationByCallsign`, `FetchCountryByCallsign`,
+  `FetchCountryByName`) still need a specific "delete or keep"
+  decision. Enrichment methods likely return in milestone 2; the
+  QSO list helpers may be dead. Park until we know.
 - **SQL audit item 4** — optional `(call, logbook_id) WHERE
   deleted_at IS NULL` composite for contact-history with
   `?logbook=` filter. Defer until a concrete performance
