@@ -24,16 +24,32 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-18 mid-session 11)
+## Current state (as of 2026-04-18 end-of-session 11)
 
-### Forwarder subsystem under active construction
+### Forwarder subsystem thin-slice complete
 
 Design: `docs/v2-design/forwarding.md` is the authoritative shape;
-everything below is the thin slice that implements it. Commits so
-far this session have landed stages 1–7 of an 11-stage plan — see
-"Session 11 progress" below for the status table.
+the 11-stage thin slice below implements it end-to-end. All 11
+stages landed in session 11. The spine — POST → queue → worker →
+forwarder submit → persist outcome → pull endpoint — is covered by
+a regression test at `internal/api/handler_e2e_test.go` for the
+insert / update / delete actions.
 
-### Session 11 progress (2026-04-18, in-progress)
+**What's still deferred from milestone 1c** (tracked below as
+follow-ups, not thin-slice scope):
+
+- **Real QRZ forwarder implementation.** The stub exercises the
+  plumbing; porting v1's `internal/upload/qrz/` into
+  `internal/forwarding/qrz/` is milestone-1c work but was not part
+  of the 11-stage slice.
+- **SSE event stream (`GET /v1/events`).** Terminal transitions
+  (`in_progress → uploaded` / `failed`) are the emit sites per
+  forwarding.md §7, but the stream itself hasn't been built yet.
+  The worker code has comments marking the emit points.
+- **Manual re-queue / dead-letter cleanup endpoints** (forwarding.md
+  §11). Deferred by design; no design pressure yet.
+
+### Session 11 progress (2026-04-18)
 
 **Design doc landed.** `docs/v2-design/forwarding.md` settles the
 internal shape of the forwarder subsystem: constraints, terminology,
@@ -72,10 +88,10 @@ committable unit:
 | 5 | `safego` helper — landed as `internal/safego/` (not `internal/utils`; cycle avoided), callback-based, ctx-aware cooldown | **done** |
 | 6 | DB methods — `ClaimPendingUploadsWithContext` (atomic `UPDATE ... RETURNING`), `MarkUpload{Success,TransientRetry,Failed}WithContext`, `ResetOrphanedUploadsWithContext`, `FetchUploadsByQsoIDWithContext` | **done** |
 | 7 | Wire ingest — `submit.go`/`update.go` loops read `config.Forwarders` filtered by enabled + action_filter; new `qsoservice.Delete` atomically soft-deletes + enqueues delete rows | **done** |
-| 8 | Worker loop — `internal/forwarding/worker/` per-forwarder tick + claim + submit + persist | **next** |
-| 9 | Startup wiring — `main.go` orphan sweep + spawn workers via SafeGo | pending |
-| 10 | Pull endpoint — `GET /v1/qso/:id/uploads` | pending |
-| 11 | E2E integration test — POST → observe row transition to `uploaded` | pending |
+| 8 | Worker loop — `internal/forwarding/worker/` per-forwarder tick + claim + submit + persist | **done** |
+| 9 | Startup wiring — `main.go` orphan sweep + spawn workers via SafeGo | **done** |
+| 10 | Pull endpoint — `GET /v1/qso/:id/uploads` | **done** |
+| 11 | E2E integration test — POST → observe row transition to `uploaded` | **done** |
 
 **Stage 1 cleanup (incidentally resolved):**
 - `uploadRetryCooldown` + `defaultUploadBatchLimit` constants
@@ -158,6 +174,84 @@ populate `cfg.Forwarders` before construction. 6 new HTTP-level
 tests verify enabled→row-inserted, disabled→skipped, action-filter
 exclusion, update-path enqueue, delete-path enqueue + soft-delete,
 and delete-with-zero-forwarders.
+
+**Stage 8 — worker loop.** `internal/forwarding/worker/` lands the
+per-destination goroutine the design calls for. `Worker` holds a
+resolved `Config` (name, tick, batch, retry) plus references to
+`*sqlite.Service`, `*logging.Service`, and a `forwarding.Forwarder`.
+`Run(ctx)` runs an initial tick then selects on a `time.Ticker`
+until ctx cancels; each tick calls `ClaimPendingUploadsWithContext`
+for its forwarder_name and iterates rows, calling the forwarder's
+`Submit` and persisting the outcome via `MarkUpload{Success,
+TransientRetry,Failed}`. Soft-delete handling per forwarding.md §4
+is implemented: `insert`/`update` with a soft-deleted QSO marks the
+row failed; `delete` falls back to
+`FetchQsoByIDIncludingDeletedWithContext` so the upstream still gets
+told. Backoff (`backoff.go`) implements §5's exponential +20% jitter
+with an overflow cap at `maxBackoffShift=30`. 16 tests across
+`worker_test.go` (positive outcomes via real sqlite + stub
+forwarder) and `backoff_test.go` (pure-function bounds). Test
+helpers `runUntil(t, w, h, qsoID, match)` and `runFor(t, w, d)`
+replace an earlier fixed-sleep `runOnce` shape that flaked under
+`-race` load; the polling approach is deterministic regardless of
+scheduler latency. New sqlite method
+`FetchQsoByIDIncludingDeletedWithContext` uses `models.NewQuery` +
+`qm` mods — sqlboiler's re-exported query builder — to sidestep the
+auto-filter on `deleted_at IS NULL` that `FindQso` and
+`models.Qsos(...)` bake in; column/table references still come from
+generated constants. Memory `feedback_sqlboiler_default.md`
+expanded with the `models.NewQuery` idiom so future sessions reach
+for it before `queries.Raw`.
+
+**Stage 9 — startup wiring in `cmd/smd/main.go`.** Blank import
+`_ "internal/forwarding/stub"` registers the stub type. After
+migrations run, `ResetOrphanedUploadsWithContext` sweeps any
+`in_progress` rows back to `pending` with a 10s context; log line
+fires only when the count is non-zero. A `workerCtx/workerCancel`
+pair is constructed before the HTTP server starts, so workers live
+exactly for the daemon's lifetime. A new
+`spawnForwarderWorkers(ctx, fwds, db, logger) error` helper loops
+`cfg.Forwarders`, skips disabled entries, builds each forwarder via
+`forwarding.Build`, resolves retry (per-entry override or the
+package-level `defaultForwarderRetry = {5, 60, 3600}` fallback, a
+temporary stand-in until real forwarders supply their own per
+forwarding.md §2), constructs a `worker.Worker`, and launches it
+under `safego.Go` with `respawn=true`. Panic handler logs
+structured fields (`goroutine`, `panic`, `stack`) through the
+daemon logger. Shutdown ordering: `workerCancel()` fires **before**
+`server.Shutdown(ctx)` so in-flight forwarder HTTP calls abort
+promptly and workers stop starting new DB ops against the
+about-to-close handle.
+
+**Stage 10 — pull endpoint `GET /v1/qso/:id/uploads`.**
+`internal/api/handler_uploads.go` implements a thin handler: parse
+id (400 on bad), existence-probe via
+`FetchQsoByIDIncludingDeletedWithContext` (404 only for
+genuinely-unknown ids; soft-deleted QSOs still return their rows
+because the delete-action forwarding work remains observable),
+fetch via `FetchUploadsByQsoIDWithContext`, normalise nil→empty
+slice, return `{"items": [...]}`. Route wired in `server.go`. Five
+handler tests cover: two-forwarder happy path with stable
+`(forwarder_name, action)` ordering, no-forwarders → literal
+`"items":[]` (not `null`), soft-deleted QSO → still returns rows,
+unknown id → 404 `not_found`, invalid id → 400 `invalid_id`.
+
+**Stage 11 — end-to-end acceptance test.**
+`internal/api/handler_e2e_test.go`, three scenarios, all using the
+existing `testServerWithCfg` harness plus real `worker.Worker`
+goroutines (plain `go` + `sync.WaitGroup` for deterministic
+shutdown — `safego`'s respawn path is tested in its own package):
+`TestE2E_InsertReachesUploaded` (POST, both upload rows reach
+`uploaded`, `attempts=1`, `upstream_id=stub-ok`),
+`TestE2E_UpdateReachesUploaded` (POST → settle → PATCH → wait for
+update row to upload), `TestE2E_DeleteReachesUploaded` (POST →
+settle → DELETE → wait for delete row to upload, asserts canonical
+`GET /v1/qso/{id}` now 404s while the uploads endpoint still shows
+the rows). Helpers: `startE2E(t, fwds...)` spawns workers with a
+50ms tick and returns a shutdown closure registered as
+`t.Cleanup` backstop; `waitForUploads(t, srv, qsoID, match)` polls
+at 25 ms with a 3 s deadline, logs the last observed rows on
+timeout.
 
 ### Current state (as of 2026-04-17 end-of-session 10)
 
@@ -787,33 +881,39 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### The immediate next action (session 11 continuation / session 12 start)
+### The immediate next action (session 12 start)
 
-Forwarder subsystem is under active construction, stages 1–7 of 11
-committed. Pick up at **Stage 8 (worker loop)** per the status
-table in "Session 11 progress" above.
+Forwarder thin slice (stages 1–11) is done and on `main`. The
+pragmatic next piece to land against milestone 1c's acceptance list
+is one of:
 
-Priority order:
+1. **Port v1's QRZ forwarder into `internal/forwarding/qrz/`.** v1
+   code lives at `internal/upload/qrz/` — XML request/response,
+   session-key caching, error-code classification, login-then-
+   request pattern all carry forward. The adapter layer wraps it in
+   the `forwarding.Forwarder` interface. Picking this unlocks real
+   end-to-end testing against the QRZ sandbox. Also the natural
+   place to settle the "each forwarder package ships its own retry
+   defaults" question (forwarding.md §2) — the stand-in
+   `defaultForwarderRetry` in `cmd/smd/main.go` can be replaced by
+   an interface method or a per-package exported constant at that
+   point.
 
-1. **Continue forwarder stages 8–11.** Stage 8 next: build
-   `internal/forwarding/worker/worker.go` — per-forwarder goroutine
-   with ticker + claim (via `ClaimPendingUploadsWithContext`) +
-   re-read QSO + `Submit` + persist outcome (success/transient/
-   failed via the Mark* methods) + ctx-aware shutdown. Launched
-   via `safego.Go` in Stage 9. Design reference: forwarding.md §4.
-   After Stage 8 the spine is end-to-end runnable against the stub
-   forwarder; Stages 9–11 wire it into `main.go`, add the pull
-   endpoint, and cover it with an integration test.
-
-2. **SSE event stream (`GET /v1/events`)**. First consumer will be
-   the logging-app's "new QSO arrived in my session" refresh. Will
-   need `qso.stored`/`qso.updated`/`qso.deleted`/`forward.*` emit
-   sites wired up alongside the respective handlers. Depends on
-   the forwarder for the `forward.*` vocabulary. Deferred out of
-   the stage-1–11 thin slice; picks up after the spine is green.
+2. **SSE event stream (`GET /v1/events`)**. The forwarder's
+   terminal transitions are the primary consumer
+   (`forward.succeeded` / `forward.failed`), but `qso.stored` /
+   `qso.updated` / `qso.deleted` emit sites also land here. Needs a
+   publish/subscribe shape that fits single-operator scale: one
+   in-memory channel per connected client, buffered, dropped on
+   slow-reader rather than blocking the daemon. The worker code
+   already has comments marking the emit points.
 
 3. **Bridge / CAT design**. Separate subsystem; see
    `project_sm_serial_bridge.md` memory.
+
+Recommendation: QRZ forwarder first, because SSE without a real
+forwarder to emit real `forward.*` events is hard to acceptance-
+test beyond the shape.
 
 ### Parked follow-ups (low priority, not blockers)
 

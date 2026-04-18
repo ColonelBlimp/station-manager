@@ -797,27 +797,56 @@ dial it down without racing against in-flight goroutines.
 ## 12. Acceptance for milestone 1c
 
 This is a re-statement of `milestones.md §1c` with the shape above
-plugged in.
+plugged in. Per-bullet status reflects the state of `main` at end
+of session 11; the thin slice (stages 1–11 in
+`docs/session-handoff.md`) delivered the spine, two bullets remain
+open pending the real QRZ forwarder and the SSE event stream.
 
-- `config.json` with two forwarders (one QRZ real, one a
-  test-endpoint stub) loads and validates.
-- A `POST /v1/qso` insert creates two `qso_upload` rows, one per
-  forwarder.
-- The QRZ worker picks up its row within one tick, calls the
+- ✅ `config.json` with forwarders loads and validates.
+  `internal/config` parses the `forwarders` array, applies the
+  per-entry defaults (`tick_interval_sec=120`, `batch_size=5`,
+  `action_filter=["insert","update","delete"]`), and rejects
+  duplicate names, unknown actions, and broken retry bounds.
+- ✅ A `POST /v1/qso` insert creates one `qso_upload` row per
+  enabled forwarder whose `action_filter` includes `"insert"`.
+  Covered by `internal/api/handler_forwarders_test.go` and the
+  E2E test in `internal/api/handler_e2e_test.go`.
+- ⏳ The QRZ worker picks up its row within one tick, calls the
   upstream, and writes either `uploaded` or a transient retry.
-- The stub-endpoint worker picks up its row within one tick and
-  transitions to `uploaded`.
-- `GET /v1/qso/:id/uploads` returns both rows with their current
-  status.
-- An SSE client on `/v1/events` receives `forward.succeeded` events
-  as terminal transitions happen.
-- Killing the daemon mid-upload and restarting it does not lose the
-  row: `in_progress` is reset to `pending` and the retry cycle
-  resumes.
-- A panic inside the forwarder's `Submit` (induced via a test
-  injection) is caught by `SafeGo`, logged, and the worker respawns.
+  **Pending a real QRZ forwarder port** — `internal/forwarding/qrz/`
+  doesn't exist yet; v1's `internal/upload/qrz/` is the source
+  material. The worker and queue plumbing are in place, so this
+  is a forwarder-package-only piece of work.
+- ✅ The stub worker picks up its row within one tick and
+  transitions to `uploaded`. Covered end-to-end in
+  `TestE2E_InsertReachesUploaded`.
+- ✅ `GET /v1/qso/:id/uploads` returns all rows with their current
+  status, ordered by `(forwarder_name, action)`. Handler at
+  `internal/api/handler_uploads.go`; soft-deleted QSOs still
+  surface their rows (the delete-action forward is legitimate
+  work). Tests in `handler_uploads_test.go`.
+- ⏳ An SSE client on `/v1/events` receives `forward.succeeded` /
+  `forward.failed` events as terminal transitions happen.
+  **Pending the SSE subsystem** — `GET /v1/events` hasn't been
+  built yet. The worker code has comments at the emit sites
+  (success/terminal-failure) so wiring the publisher in is
+  mechanical once the stream exists.
+- ✅ Killing the daemon mid-upload and restarting it does not lose
+  the row: `in_progress` is reset to `pending` and the retry cycle
+  resumes. Implemented in `cmd/smd/main.go`'s startup sweep
+  (calls `ResetOrphanedUploadsWithContext` immediately after
+  `Migrate`). DB method has its own test
+  (`TestResetOrphanedUploads`), and the E2E test proves the cycle
+  then proceeds to `uploaded`.
+- ✅ A panic inside the forwarder's `Submit` is caught by
+  `safego.Go`, logged through the daemon logger, and the worker
+  respawns. `safego` has unit-test coverage of the panic-recovery
+  and respawn paths in `internal/safego/safego_test.go`; the
+  wire-up to real workers is in `spawnForwarderWorkers` with
+  `respawn=true`.
 
-When all eight pass, milestone 1c is done.
+When the two ⏳ bullets land (QRZ port + SSE stream), milestone 1c
+closes.
 
 ---
 

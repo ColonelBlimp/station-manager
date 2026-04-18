@@ -221,20 +221,38 @@ per-destination worker topology, retry policy, queue-row lifecycle,
 `SafeGo` panic recovery, and the v1 → v2 migration path. Read that
 before implementing.
 
+**Status (end of session 11, 2026-04-18):** Forwarder thin slice is
+complete — stages 1–11 in `docs/session-handoff.md` delivered the
+spine, from config + queue-row schema through the per-destination
+worker, pull endpoint, and end-to-end regression test. Two pieces
+from the original scope are still open: a real QRZ forwarder port
+(the stub proves the plumbing, but `internal/forwarding/qrz/` hasn't
+been written) and the SSE event stream (`GET /v1/events`). The
+third originally-listed piece, ADIF export, was dropped in
+session 10 (ADIF is client-side per the session-scope memory;
+backup = forwarding to online services, not a daemon endpoint).
+See `docs/v2-design/forwarding.md §12` for the per-acceptance-
+criterion breakdown.
+
 ### Scope (additive on top of milestone 1b)
 
-- Background forwarding worker: picks up pending `qso_upload` rows,
-  attempts each configured destination, writes status back, retries
-  with backoff on transient failures.
-- QRZ forwarder (carried forward from v1, adapted to the new worker
-  shape). Additional destinations (ClubLog, LoTW, eQSL) as separate
-  forwarder implementations behind the fan-out config.
-- `GET /v1/qso/:id/uploads` — per-destination forwarding status
-- `GET /v1/events` — SSE event stream with `qso.stored`,
-  `qso.updated`, `qso.deleted`, `forward.succeeded`, `forward.failed`
-- `POST /v1/logbook/:id/export` — ADIF export
-- Forwarder configuration in config file (enable/disable per
-  destination, credentials, action filter)
+- ✅ Background forwarding worker: picks up pending `qso_upload`
+  rows, attempts each configured destination, writes status back,
+  retries with backoff on transient failures.
+- ⏳ QRZ forwarder (carried forward from v1, adapted to the new
+  worker shape). Additional destinations (ClubLog, LoTW, eQSL) as
+  separate forwarder implementations behind the fan-out config.
+  **Open** — stub proves plumbing; real forwarder not yet ported.
+- ✅ `GET /v1/qso/:id/uploads` — per-destination forwarding status.
+- ⏳ `GET /v1/events` — SSE event stream with `qso.stored`,
+  `qso.updated`, `qso.deleted`, `forward.succeeded`, `forward.failed`.
+  **Open** — emit sites annotated in worker code; stream not built.
+- ❌ `POST /v1/logbook/:id/export` — ADIF export.
+  **Dropped** (session 10) per session-scope memory: ADIF is a
+  client/admin concern, not a daemon concern. Backup story is
+  forwarding to online services.
+- ✅ Forwarder configuration in config file (enable/disable per
+  destination, credentials, action filter).
 
 ### Acceptance test
 
