@@ -22,8 +22,6 @@ type Service struct {
 	LoggerService  *logging.Service `di.inject:"loggingservice"`
 	DatabaseConfig *types.DatastoreConfig
 
-	requiredCfgs types.RequiredConfigs
-
 	handle *sql.DB
 
 	mu            sync.RWMutex
@@ -70,11 +68,6 @@ func (s *Service) Initialize() error {
 				initErr = errors.New(op).WithErr(err)
 				return
 			}
-		}
-
-		if s.requiredCfgs, err = s.ConfigService.RequiredConfigs(); err != nil {
-			initErr = errors.New(op).WithErr(err)
-			return
 		}
 
 		s.isInitialized.Store(true)

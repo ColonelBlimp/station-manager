@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -37,8 +38,11 @@ type Config struct {
 	// internal/logging.
 	Logging types.LoggingConfig `json:"logging"`
 
-	// Required holds runtime tunables the sqlite service reads at Open time.
-	Required types.RequiredConfigs `json:"required"`
+	// Forwarders declares the list of forwarding destinations the daemon
+	// dispatches QSO events to. Shape and defaults: see
+	// docs/v2-design/forwarding.md §2. Each enabled entry produces one
+	// worker goroutine at startup.
+	Forwarders []types.ForwarderConfig `json:"forwarders"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -82,6 +86,11 @@ func Load(path string) (Config, error) {
 	}
 
 	applyDefaults(&cfg, filepath.Dir(path))
+
+	if err = validateForwarders(cfg.Forwarders); err != nil {
+		return cfg, fmt.Errorf("validating forwarders: %w", err)
+	}
+
 	return cfg, nil
 }
 
@@ -160,6 +169,72 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if !cfg.Logging.ConsoleLogging && !cfg.Logging.FileLogging {
 		cfg.Logging.ConsoleLogging = true
 	}
+
+	// Forwarder defaults — see docs/v2-design/forwarding.md §4.
+	// Zero-valued tunables pick up the operator-environment defaults; a
+	// nil Retry stays nil so the forwarder package supplies its own
+	// type-specific retry numbers.
+	for i := range cfg.Forwarders {
+		fc := &cfg.Forwarders[i]
+		if fc.TickIntervalSec == 0 {
+			fc.TickIntervalSec = 120
+		}
+		if fc.BatchSize == 0 {
+			fc.BatchSize = 5
+		}
+		if len(fc.ActionFilter) == 0 {
+			fc.ActionFilter = []string{
+				string(action.Insert),
+				string(action.Update),
+				string(action.Delete),
+			}
+		}
+	}
+}
+
+// validateForwarders checks the statically-decidable correctness of every
+// forwarder entry. Type-specific credential validation happens later when
+// the forwarder package is constructed at daemon startup.
+func validateForwarders(fwds []types.ForwarderConfig) error {
+	names := make(map[string]struct{}, len(fwds))
+	for i, fc := range fwds {
+		if fc.Name == "" {
+			return fmt.Errorf("forwarder[%d]: name is empty", i)
+		}
+		if fc.Type == "" {
+			return fmt.Errorf("forwarder[%d] (%s): type is empty", i, fc.Name)
+		}
+		if _, dup := names[fc.Name]; dup {
+			return fmt.Errorf("forwarder[%d]: duplicate name %q", i, fc.Name)
+		}
+		names[fc.Name] = struct{}{}
+
+		for _, a := range fc.ActionFilter {
+			if _, err := action.Parse(a); err != nil {
+				return fmt.Errorf("forwarder %q: %w", fc.Name, err)
+			}
+		}
+
+		if fc.TickIntervalSec < 0 {
+			return fmt.Errorf("forwarder %q: tick_interval_sec must be >= 0", fc.Name)
+		}
+		if fc.BatchSize < 0 {
+			return fmt.Errorf("forwarder %q: batch_size must be >= 0", fc.Name)
+		}
+
+		if fc.Retry != nil {
+			if fc.Retry.MaxAttempts < 1 {
+				return fmt.Errorf("forwarder %q: retry.max_attempts must be >= 1", fc.Name)
+			}
+			if fc.Retry.InitialBackoffSec < 1 {
+				return fmt.Errorf("forwarder %q: retry.initial_backoff_sec must be >= 1", fc.Name)
+			}
+			if fc.Retry.MaxBackoffSec < fc.Retry.InitialBackoffSec {
+				return fmt.Errorf("forwarder %q: retry.max_backoff_sec must be >= initial_backoff_sec", fc.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // Service is the runtime wrapper around Config that other services obtain
@@ -214,7 +289,8 @@ func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
 	return s.Cfg.Datastore, nil
 }
 
-// RequiredConfigs returns the runtime tunables.
-func (s *Service) RequiredConfigs() (types.RequiredConfigs, error) {
-	return s.Cfg.Required, nil
+// Forwarders returns the configured forwarding destinations. The caller
+// should not mutate the returned slice.
+func (s *Service) Forwarders() []types.ForwarderConfig {
+	return s.Cfg.Forwarders
 }
