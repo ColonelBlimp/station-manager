@@ -26,12 +26,12 @@ func (s *Server) handleContactHistory(w http.ResponseWriter, r *http.Request) {
 
 	callsign := strings.ToUpper(strings.TrimSpace(q.Get("call")))
 	if callsign == "" {
-		writeError(w, http.StatusBadRequest, "missing_required_param",
+		s.writeError(w, http.StatusBadRequest, "missing_required_param",
 			"call query parameter is required", op)
 		return
 	}
 	if !isValidCallsign(callsign) {
-		writeError(w, http.StatusBadRequest, "invalid_field_value",
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 			"call must be 3-32 characters and contain at least one digit", op)
 		return
 	}
@@ -41,7 +41,7 @@ func (s *Server) handleContactHistory(w http.ResponseWriter, r *http.Request) {
 	if raw := q.Get("logbook"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || id < 1 {
-			writeError(w, http.StatusBadRequest, "invalid_id",
+			s.writeError(w, http.StatusBadRequest, "invalid_id",
 				"logbook must be a positive integer", op)
 			return
 		}
@@ -49,11 +49,11 @@ func (s *Server) handleContactHistory(w http.ResponseWriter, r *http.Request) {
 		// produce an empty result that looks identical to "never worked".
 		exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), id)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+			s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 			return
 		}
 		if !exists {
-			writeError(w, http.StatusNotFound, "logbook_not_found",
+			s.writeError(w, http.StatusNotFound, "logbook_not_found",
 				"logbook does not exist", op)
 			return
 		}
@@ -68,7 +68,7 @@ func (s *Server) handleContactHistory(w http.ResponseWriter, r *http.Request) {
 		if stderr.Is(err, errors.ErrNotFound) {
 			history = nil
 		} else {
-			writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+			s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 			return
 		}
 	}
@@ -77,7 +77,7 @@ func (s *Server) handleContactHistory(w http.ResponseWriter, r *http.Request) {
 		history = []types.ContactHistory{}
 	}
 
-	writeJSON(w, http.StatusOK, struct {
+	s.writeJSON(w, http.StatusOK, struct {
 		Items []types.ContactHistory `json:"items"`
 	}{
 		Items: history,

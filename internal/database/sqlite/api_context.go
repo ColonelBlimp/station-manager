@@ -56,11 +56,13 @@ func (s *Service) InsertQsoWithContext(ctx context.Context, qso types.Qso) (int6
 // caps the result count; pass limit<=0 to apply no cap. Soft-deleted
 // rows are hidden.
 //
-// The callsign match accepts an exact hit OR a prefix match
-// ("M0CMC%"), which catches portable suffixes like "M0CMC/P". The
-// prefix is lossy — "M0CMC" also matches "M0CMCE" — so the endpoint
-// layer is expected to normalize the input callsign before passing
-// it in.
+// The callsign match accepts either an exact hit OR a portable-suffix
+// variant ("M0CMC/P", "M0CMC/MM", "M0CMC/DX"). The LIKE anchors on a
+// slash — `call LIKE 'M0CMC/%'` — so unrelated callsigns that happen
+// to share a prefix (e.g. "M0CMCE") are excluded. Slash is not a LIKE
+// metacharacter, so no ESCAPE clause is needed. Callers are still
+// expected to pass the base callsign in canonical form (uppercase,
+// trimmed); the handler layer does that before calling in.
 func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsign string, logbookID int64, limit int) ([]types.ContactHistory, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoSliceByCallsignWithContext"
 	if err := checkService(op, s); err != nil {
@@ -84,10 +86,13 @@ func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsi
 	// it, AND-ing additional predicates (logbook_id, the implicit
 	// deleted_at IS NULL from sqlboiler's default) would bind tighter than
 	// the OR and leak rows that don't satisfy the extra constraints.
+	//
+	// The LIKE pattern "X/%" matches portable variants only (M0CMC/P,
+	// M0CMC/MM, …) and excludes coincidental prefixes like M0CMCE.
 	mods := []qm.QueryMod{
 		qm.Expr(
 			models.QsoWhere.Call.EQ(callsign),
-			qm.Or2(models.QsoWhere.Call.LIKE(callsign+"%")),
+			qm.Or2(models.QsoWhere.Call.LIKE(callsign+"/%")),
 		),
 	}
 	if logbookID > 0 {
@@ -216,6 +221,9 @@ func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64,
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
+	// LIMIT 1 is defensive. golang-migrate guarantees exactly one row in
+	// schema_migrations (the current state), so the limit never actually
+	// clips results — it just pins the query shape in case of corruption.
 	row := h.QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations LIMIT 1`)
 	if err = row.Scan(&version, &dirty); err != nil {
 		if stderr.Is(err, sql.ErrNoRows) {

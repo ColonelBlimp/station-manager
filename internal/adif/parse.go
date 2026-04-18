@@ -38,11 +38,7 @@ func Parse(data []byte) (Adif, error) {
 		bodyPart = data
 	}
 
-	records, err := parseRecords(bodyPart)
-	if err != nil {
-		return Adif{}, err
-	}
-	res.Records = records
+	res.Records = parseRecords(bodyPart)
 	return res, nil
 }
 
@@ -70,15 +66,16 @@ func parseHeader(b []byte) HeaderSection {
 }
 
 // parseRecords splits the body by EOR and parses each block into a Record.
-func parseRecords(body []byte) ([]Record, error) {
-	var out []Record
+// Per ADIF convention this parser is liberal — malformed fields surface as
+// empty tags, not errors — so no error return is needed.
+func parseRecords(body []byte) []Record {
 	if len(bytes.TrimSpace(body)) == 0 {
-		return out, nil
+		return nil
 	}
 
 	// We'll scan the original body for <EOR> in case-insensitive way.
 
-	out = make([]Record, 0, 64)
+	out := make([]Record, 0, 64)
 	start := 0
 	for {
 		idx := indexOfCaseInsensitive(body[start:], EorStr)
@@ -99,7 +96,7 @@ func parseRecords(body []byte) ([]Record, error) {
 		// Move past the marker
 		start = end + len(EorStr)
 	}
-	return out, nil
+	return out
 }
 
 var fieldRe = regexp.MustCompile(`(?is)<\s*([a-z0-9_]+)\s*:(\d+)(?::[^>]+)?\s*>`)

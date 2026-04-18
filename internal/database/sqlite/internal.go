@@ -167,6 +167,12 @@ func (s *Service) missingCoreTables() ([]string, error) {
 		}
 		existing[name] = struct{}{}
 	}
+	// Standard Go SQL idiom: check iteration error after the loop.
+	// rows.Next() returning false could mean "no more rows" OR "the
+	// driver hit an error"; rows.Err() disambiguates.
+	if err := rows.Err(); err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("sqlite_master iteration")
+	}
 
 	missing := make([]string, 0, len(required))
 	for _, r := range required {

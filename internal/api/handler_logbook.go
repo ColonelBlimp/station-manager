@@ -16,11 +16,11 @@ func (s *Server) handleListLogbooks(w http.ResponseWriter, r *http.Request) {
 
 	logbooks, err := s.db.FetchAllLogbooksWithContext(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, logbooks)
+	s.writeJSON(w, http.StatusOK, logbooks)
 }
 
 func (s *Server) handleGetLogbook(w http.ResponseWriter, r *http.Request) {
@@ -28,21 +28,21 @@ func (s *Server) handleGetLogbook(w http.ResponseWriter, r *http.Request) {
 
 	id, err := parsePathID(r, "id")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
 		return
 	}
 
 	logbook, err := s.db.FetchLogbookByIDWithContext(r.Context(), id)
 	if err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
+			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, logbook)
+	s.writeJSON(w, http.StatusOK, logbook)
 }
 
 func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
@@ -63,15 +63,15 @@ func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
 	req.Description = strings.TrimSpace(req.Description)
 
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "missing_required_field", "name is required", op)
+		s.writeError(w, http.StatusBadRequest, "missing_required_field", "name is required", op)
 		return
 	}
 	if req.Callsign == "" {
-		writeError(w, http.StatusBadRequest, "missing_required_field", "callsign is required", op)
+		s.writeError(w, http.StatusBadRequest, "missing_required_field", "callsign is required", op)
 		return
 	}
 	if !isValidCallsign(req.Callsign) {
-		writeError(w, http.StatusBadRequest, "invalid_field_value",
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 			"callsign must be 3-32 characters and contain at least one digit", op)
 		return
 	}
@@ -83,14 +83,14 @@ func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
-			writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
+			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+	s.writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
 func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
@@ -98,17 +98,17 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 
 	id, err := parsePathID(r, "id")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
 		return
 	}
 
 	existing, err := s.db.FetchLogbookByIDWithContext(r.Context(), id)
 	if err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
+			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 
@@ -124,7 +124,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if name == "" {
-			writeError(w, http.StatusBadRequest, "invalid_field_value", "name cannot be empty", op)
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value", "name cannot be empty", op)
 			return
 		}
 		existing.Name = name
@@ -135,14 +135,14 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 
 	if err = s.db.UpdateLogbookWithContext(r.Context(), existing); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
-			writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
+			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, existing)
+	s.writeJSON(w, http.StatusOK, existing)
 }
 
 func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
@@ -150,20 +150,20 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 
 	id, err := parsePathID(r, "id")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
 		return
 	}
 
 	if err = s.db.DeleteLogbookByIDWithContext(r.Context(), id); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
+			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
 		}
 		if strings.Contains(err.Error(), "contains QSOs") {
-			writeError(w, http.StatusConflict, "has_qsos", "cannot delete a logbook that contains QSOs", op)
+			s.writeError(w, http.StatusConflict, "has_qsos", "cannot delete a logbook that contains QSOs", op)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 

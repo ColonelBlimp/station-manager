@@ -67,7 +67,7 @@ func validTestQso(logbookID int64, call, band, mode, qsoDate, timeOn string) typ
 	q.ContactedStation.Country = "Test"
 	q.QsoDetails.Band = band
 	q.QsoDetails.Mode = mode
-	q.QsoDetails.Freq = "7050" // kHz
+	q.QsoDetails.Freq = "7.050" // canonical MHz decimal — types.Qso.Freq is ADIF-native
 	q.QsoDetails.QsoDate = qsoDate
 	q.QsoDetails.TimeOn = timeOn
 	q.QsoDetails.TimeOff = timeOn

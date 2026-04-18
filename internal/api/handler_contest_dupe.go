@@ -24,44 +24,44 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 
 	logbookIDStr := q.Get("logbook")
 	if logbookIDStr == "" {
-		writeError(w, http.StatusBadRequest, "missing_required_param",
+		s.writeError(w, http.StatusBadRequest, "missing_required_param",
 			"logbook query parameter is required", op)
 		return
 	}
 	logbookID, err := strconv.ParseInt(logbookIDStr, 10, 64)
 	if err != nil || logbookID < 1 {
-		writeError(w, http.StatusBadRequest, "invalid_id",
+		s.writeError(w, http.StatusBadRequest, "invalid_id",
 			"logbook must be a positive integer", op)
 		return
 	}
 
 	callsign := strings.ToUpper(strings.TrimSpace(q.Get("call")))
 	if callsign == "" {
-		writeError(w, http.StatusBadRequest, "missing_required_param",
+		s.writeError(w, http.StatusBadRequest, "missing_required_param",
 			"call query parameter is required", op)
 		return
 	}
 	if !isValidCallsign(callsign) {
-		writeError(w, http.StatusBadRequest, "invalid_field_value",
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 			"call must be 3-32 characters and contain at least one digit", op)
 		return
 	}
 
 	band := strings.ToLower(strings.TrimSpace(q.Get("band")))
 	if band == "" {
-		writeError(w, http.StatusBadRequest, "missing_required_param",
+		s.writeError(w, http.StatusBadRequest, "missing_required_param",
 			"band query parameter is required", op)
 		return
 	}
 	if !bands.IsValidBand(band) {
-		writeError(w, http.StatusBadRequest, "invalid_field_value",
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 			"band is not a recognised band", op)
 		return
 	}
 
 	mode := strings.ToUpper(strings.TrimSpace(q.Get("mode")))
 	if mode != "" && !modes.IsValidMode(mode) {
-		writeError(w, http.StatusBadRequest, "invalid_field_value",
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 			"mode is not a recognised mode", op)
 		return
 	}
@@ -72,11 +72,11 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 	// lightweight EXISTS probe is important here.
 	exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), logbookID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 	if !exists {
-		writeError(w, http.StatusNotFound, "logbook_not_found",
+		s.writeError(w, http.StatusNotFound, "logbook_not_found",
 			"logbook does not exist", op)
 		return
 	}
@@ -85,11 +85,11 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 		r.Context(), logbookID, callsign, band, mode,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, struct {
+	s.writeJSON(w, http.StatusOK, struct {
 		Duplicate bool `json:"duplicate"`
 	}{
 		Duplicate: dupe,

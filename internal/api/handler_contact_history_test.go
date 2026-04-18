@@ -131,6 +131,53 @@ func TestContactHistory_NewestFirst(t *testing.T) {
 	}
 }
 
+// TestContactHistory_PortableSuffixMatches locks in the L6 fix's
+// positive case: querying for the base callsign catches portable
+// variants (M0CMC/P, M0CMC/MM, M0CMC/DX) — the same operator from a
+// different location/mode.
+func TestContactHistory_PortableSuffixMatches(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	submitQsoAt(t, srv, lbID, "M0CMC", "20250508", "0800", "7.050")
+	submitQsoAt(t, srv, lbID, "M0CMC/P", "20250508", "0900", "7.100")
+	submitQsoAt(t, srv, lbID, "M0CMC/MM", "20250508", "1000", "7.150")
+
+	w := contactHistory(t, srv, "M0CMC", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	got := decodeContactHistory(t, w)
+	if len(got.Items) != 3 {
+		t.Fatalf("items = %d, want 3 (base + /P + /MM)", len(got.Items))
+	}
+}
+
+// TestContactHistory_CoincidentalPrefixExcluded locks in the L6 fix's
+// negative case: an unrelated callsign that happens to share a prefix
+// with the query (M0CMCE vs M0CMC) must NOT match. The old LIKE
+// 'M0CMC%' pattern would have surfaced it; the new 'M0CMC/%' anchors
+// on a slash and correctly excludes it.
+func TestContactHistory_CoincidentalPrefixExcluded(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	submitQsoAt(t, srv, lbID, "M0CMC", "20250508", "0800", "7.050")
+	submitQsoAt(t, srv, lbID, "M0CMCE", "20250508", "0900", "7.100") // different operator
+
+	w := contactHistory(t, srv, "M0CMC", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	got := decodeContactHistory(t, w)
+	if len(got.Items) != 1 {
+		t.Fatalf("items = %d, want 1 (M0CMCE must NOT be a match)", len(got.Items))
+	}
+	if got.Items[0].Call != "M0CMC" {
+		t.Fatalf("items[0].call = %q, want M0CMC", got.Items[0].Call)
+	}
+}
+
 func TestContactHistory_SoftDeletedHidden(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")

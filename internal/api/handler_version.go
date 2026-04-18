@@ -42,5 +42,5 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		s.logger.WarnWith().Err(err).Msg("failed to read schema version")
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	s.writeJSON(w, http.StatusOK, resp)
 }

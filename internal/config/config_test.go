@@ -98,6 +98,15 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	if cfg.Server.MaxBodyBytes != 1<<20 {
 		t.Fatalf("Server.MaxBodyBytes = %d, want %d", cfg.Server.MaxBodyBytes, 1<<20)
 	}
+	if cfg.Server.DefaultPageLimit != 50 {
+		t.Fatalf("Server.DefaultPageLimit = %d, want 50", cfg.Server.DefaultPageLimit)
+	}
+	if cfg.Server.MaxPageLimit != 500 {
+		t.Fatalf("Server.MaxPageLimit = %d, want 500", cfg.Server.MaxPageLimit)
+	}
+	if cfg.Server.MaxContactHistoryResults != 100 {
+		t.Fatalf("Server.MaxContactHistoryResults = %d, want 100", cfg.Server.MaxContactHistoryResults)
+	}
 
 	// Datastore defaults
 	if cfg.Datastore.Driver != types.SqliteDriverName {

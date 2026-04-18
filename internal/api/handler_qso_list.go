@@ -50,7 +50,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 
 	logbookID, err := parsePathID(r, "id")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
 		return
 	}
 
@@ -59,11 +59,11 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 	// surprising for clients.
 	exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), logbookID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 	if !exists {
-		writeError(w, http.StatusNotFound, "logbook_not_found", "logbook does not exist", op)
+		s.writeError(w, http.StatusNotFound, "logbook_not_found", "logbook does not exist", op)
 		return
 	}
 
@@ -72,7 +72,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			writeError(w, http.StatusBadRequest, "invalid_limit",
+			s.writeError(w, http.StatusBadRequest, "invalid_limit",
 				"limit must be a positive integer", op)
 			return
 		}
@@ -88,7 +88,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 	if raw := r.URL.Query().Get("after"); raw != "" {
 		c, err := decodeQsoCursor(raw)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_cursor",
+			s.writeError(w, http.StatusBadRequest, "invalid_cursor",
 				"after cursor is malformed", op)
 			return
 		}
@@ -100,7 +100,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 		r.Context(), logbookID, afterDate, afterTime, afterID, limit,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
 		return
 	}
 
@@ -112,7 +112,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 		nextCursor = &c
 	}
 
-	writeJSON(w, http.StatusOK, struct {
+	s.writeJSON(w, http.StatusOK, struct {
 		Items      types.QsoSlice `json:"items"`
 		NextCursor *string        `json:"next_cursor"`
 	}{

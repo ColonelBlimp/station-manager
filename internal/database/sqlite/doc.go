@@ -4,10 +4,13 @@
 // # Service lifecycle
 //
 // [Service] follows the project's lifecycle convention: Initialize() →
-// Open() → use → Close(). All lifecycle methods are idempotent.
-// Initialize validates config and ensures the database directory exists.
-// Open connects to sqlite, sets PRAGMAs (foreign_keys, WAL, busy_timeout),
-// pings, and runs migrations. Close closes the connection.
+// Open() → Migrate() → use → Close(). All lifecycle methods are
+// idempotent. Initialize validates config and ensures the database
+// directory exists. Open connects to sqlite, sets PRAGMAs
+// (foreign_keys, WAL, busy_timeout) and pings. Migrate runs pending
+// schema migrations — it is a distinct call after Open, not part of
+// Open itself. Close closes the connection and resets the Initialize
+// guard so the service can be re-initialised.
 //
 // # Adapter pattern
 //

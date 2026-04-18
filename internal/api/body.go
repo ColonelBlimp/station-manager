@@ -32,11 +32,11 @@ func (s *Server) readBody(w http.ResponseWriter, r *http.Request, op errors.Op) 
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if stderr.As(err, &maxBytesErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
+			s.writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
 				"request body exceeds maximum size", op)
 			return nil, false
 		}
-		writeError(w, http.StatusBadRequest, "read_error",
+		s.writeError(w, http.StatusBadRequest, "read_error",
 			"failed to read request body", op)
 		return nil, false
 	}
@@ -60,7 +60,7 @@ func (s *Server) readJSONBody(w http.ResponseWriter, r *http.Request, op errors.
 		body = []byte("{}")
 	}
 	if err := json.Unmarshal(body, dst); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json",
+		s.writeError(w, http.StatusBadRequest, "invalid_json",
 			"failed to parse request body", op)
 		return false
 	}

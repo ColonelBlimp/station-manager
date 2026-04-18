@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
 
 // TestStress_20Clients_50QSOs launches 20 concurrent clients, each submitting
@@ -92,12 +94,13 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 
 				// Parse the QSO ID from the submit response and fetch it back
 				// to exercise the read path under concurrent write load.
-				var qsoID int64
-				if _, err := fmt.Sscanf(w.Body.String(), `{"status":"stored","id":%d}`, &qsoID); err != nil || qsoID < 1 {
+				var r qsoservice.SubmitResult
+				if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
 					fetchErrCount.Add(1)
-					t.Logf("client %d qso %d: failed to parse id from %s", clientID, i, w.Body.String())
+					t.Logf("client %d qso %d: failed to decode id from %s (err=%v)", clientID, i, w.Body.String(), err)
 					continue
 				}
+				qsoID := r.ID
 
 				getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
 				getReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))

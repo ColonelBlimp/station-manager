@@ -24,6 +24,7 @@ type Server struct {
 	logger                   *logging.Service
 	maxBodyBytes             int64
 	protocol                 string
+	socketPath               string
 	defaultPageLimit         int
 	maxPageLimit             int
 	maxContactHistoryResults int
@@ -98,6 +99,7 @@ func (s *Server) ListenAndServe(socketPath string) error {
 		return errors.New(op).WithErr(err).WithMsgf("binding %s listener on %s", s.protocol, socketPath)
 	}
 	s.listener = ln
+	s.socketPath = socketPath // cached for Shutdown's socket-file cleanup
 
 	s.logger.InfoWith().Str("protocol", s.protocol).Str("address", socketPath).Msg("HTTP server listening")
 
@@ -108,7 +110,17 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	return nil
 }
 
-// Shutdown gracefully shuts down the HTTP server.
+// Shutdown gracefully shuts down the HTTP server. On Unix-socket
+// deployments the socket file is best-effort removed afterwards so
+// operators grepping /tmp for daemon state don't see a stale file
+// between runs. The next startup's pre-bind cleanup also handles this,
+// but removing on exit keeps the filesystem honest.
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.httpServer.Shutdown(ctx)
+	err := s.httpServer.Shutdown(ctx)
+	if s.protocol == "unix" && s.socketPath != "" {
+		// Ignore the remove error: the kernel may have already unlinked
+		// the file when the listener closed, and we're on the way out.
+		_ = os.Remove(s.socketPath)
+	}
+	return err
 }

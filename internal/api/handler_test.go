@@ -82,13 +82,13 @@ func createTestLogbook(t *testing.T, srv *Server, name, callsign string) int64 {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("createTestLogbook: status = %d, body = %s", w.Code, w.Body.String())
 	}
-	// Extract ID from {"id":N}
-	var id int64
-	_, _ = fmt.Sscanf(w.Body.String(), `{"id":%d}`, &id)
-	if id < 1 {
-		t.Fatalf("createTestLogbook: failed to parse ID from %s", w.Body.String())
+	var resp struct {
+		ID int64 `json:"id"`
 	}
-	return id
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil || resp.ID < 1 {
+		t.Fatalf("createTestLogbook: failed to decode id from %s (err=%v)", w.Body.String(), err)
+	}
+	return resp.ID
 }
 
 // submitQso is a test helper that submits a QSO via the handler.
@@ -562,13 +562,17 @@ func TestSubmitQso_ConcurrentDuplicate(t *testing.T) {
 	var storedID, duplicateID int64
 	for i, w := range results {
 		body := w.Body.String()
+		var r qsoservice.SubmitResult
+		if err := unmarshalJSON(body, &r); err != nil {
+			t.Fatalf("worker %d: decode response: %v; body = %s", i, err, body)
+		}
 		switch {
-		case w.Code == http.StatusCreated && strings.Contains(body, `"status":"stored"`):
+		case w.Code == http.StatusCreated && r.Status == "stored":
 			stored++
-			_, _ = fmt.Sscanf(body, `{"status":"stored","id":%d}`, &storedID)
-		case w.Code == http.StatusOK && strings.Contains(body, `"status":"duplicate"`):
+			storedID = r.ID
+		case w.Code == http.StatusOK && r.Status == "duplicate":
 			duplicate++
-			_, _ = fmt.Sscanf(body, `{"status":"duplicate","id":%d}`, &duplicateID)
+			duplicateID = r.ID
 		default:
 			t.Fatalf("worker %d: unexpected status %d, body = %s", i, w.Code, body)
 		}
@@ -815,11 +819,11 @@ func TestGetQso(t *testing.T) {
 	if submitW.Code != http.StatusCreated {
 		t.Fatalf("submit: status = %d; body = %s", submitW.Code, submitW.Body.String())
 	}
-	var qsoID int64
-	_, _ = fmt.Sscanf(submitW.Body.String(), `{"status":"stored","id":%d}`, &qsoID)
-	if qsoID < 1 {
-		t.Fatalf("failed to parse QSO id from %s", submitW.Body.String())
+	var r qsoservice.SubmitResult
+	if err := unmarshalJSON(submitW.Body.String(), &r); err != nil || r.ID < 1 {
+		t.Fatalf("decode QSO id from %s (err=%v)", submitW.Body.String(), err)
 	}
+	qsoID := r.ID
 
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
 	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
@@ -876,12 +880,11 @@ func submitAndGetID(t *testing.T, srv *Server, lbID int64, body string) int64 {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("submit: status = %d; body = %s", w.Code, w.Body.String())
 	}
-	var id int64
-	_, _ = fmt.Sscanf(w.Body.String(), `{"status":"stored","id":%d}`, &id)
-	if id < 1 {
-		t.Fatalf("failed to parse QSO id from %s", w.Body.String())
+	var r qsoservice.SubmitResult
+	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
+		t.Fatalf("decode QSO id from %s (err=%v)", w.Body.String(), err)
 	}
-	return id
+	return r.ID
 }
 
 // patchQso is a test helper that sends a PATCH to /v1/qso/{id}.

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -24,12 +25,11 @@ func submitQsoAt(t *testing.T, srv *Server, lbID int64, call, qsoDate, timeOn, f
 	if w.Code != http.StatusCreated {
 		t.Fatalf("submit: status = %d; body = %s", w.Code, w.Body.String())
 	}
-	var id int64
-	_, _ = fmt.Sscanf(w.Body.String(), `{"status":"stored","id":%d}`, &id)
-	if id < 1 {
-		t.Fatalf("parse id failed: %s", w.Body.String())
+	var r qsoservice.SubmitResult
+	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
+		t.Fatalf("decode id from %s (err=%v)", w.Body.String(), err)
 	}
-	return id
+	return r.ID
 }
 
 // listQsoByLogbook is a test helper that sends GET /v1/logbook/{id}/qso

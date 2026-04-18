@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
 
 // contestDupe is a test helper that sends GET /v1/contest-dupe with the
@@ -131,8 +133,11 @@ func TestContestDupe_SoftDeletedNotCounted(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("submit: status = %d", w.Code)
 	}
-	var qsoID int64
-	_, _ = fmt.Sscanf(w.Body.String(), `{"status":"stored","id":%d}`, &qsoID)
+	var r qsoservice.SubmitResult
+	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
+		t.Fatalf("decode id from %s (err=%v)", w.Body.String(), err)
+	}
+	qsoID := r.ID
 
 	if dw := deleteQso(t, srv, qsoID); dw.Code != http.StatusNoContent {
 		t.Fatalf("delete: status = %d", dw.Code)
