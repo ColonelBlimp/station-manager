@@ -11,7 +11,7 @@ import (
 // is truncated to 4 characters (HHMM) to give minute-granularity
 // deduplication per api.md Section 4.2. FREQ is the normalized integer-kHz
 // string (callers parse MHz input via utils.ParseFreqMHz, then pass the
-// int-kHz as a string) so the input is deterministic across
+// int-kHz as a string), so the input is deterministic across
 // "14.074" / "14074" / "14.0740" encodings of the same frequency.
 //
 // Including FREQ distinguishes same-station/same-band/same-mode/same-minute

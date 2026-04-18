@@ -205,7 +205,7 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 // SchemaVersionWithContext returns the current migration version recorded
 // in the schema_migrations table (maintained by golang-migrate). Returns
 // 0 if no migrations have been applied yet (fresh DB). The `dirty` flag
-// is true if the last migration attempt failed mid-way.
+// is true if the last migration attempt failed midway.
 func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64, dirty bool, err error) {
 	const op errors.Op = "sqlite.Service.SchemaVersionWithContext"
 	if err = checkService(op, s); err != nil {
@@ -296,6 +296,59 @@ func (s *Service) FetchQsoByIdWithContext(ctx context.Context, id int64) (types.
 		return types.Qso{}, errors.New(op).WithErr(err)
 	}
 
+	return qso, nil
+}
+
+// FetchQsoByIDIncludingDeletedWithContext is FetchQsoByIdWithContext without
+// the soft-delete filter: it returns the QSO row even when deleted_at is
+// non-null. Used by the forwarder worker on delete-action rows — the
+// upstream still needs to be told to remove a QSO after the operator
+// soft-deleted it locally, and the usual FetchQsoByIdWithContext hides
+// the row too aggressively for that case.
+//
+// Uses models.NewQuery (the generated package's re-export of
+// sqlboiler's query builder) rather than models.FindQso or
+// models.Qsos(...): both of those bake `WHERE deleted_at IS NULL` into
+// their SQL and provide no caller-level mod to bypass it. NewQuery +
+// qm mods stays on the sqlboiler-idiomatic path — table and column
+// references come from the generated TableNames / QsoColumns constants,
+// so a schema rename still propagates through regen.
+func (s *Service) FetchQsoByIDIncludingDeletedWithContext(ctx context.Context, id int64) (types.Qso, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoByIDIncludingDeletedWithContext"
+	if err := checkService(op, s); err != nil {
+		return types.Qso{}, err
+	}
+	if id < 1 {
+		return types.Qso{}, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return types.Qso{}, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	model := &models.Qso{}
+	err = models.NewQuery(
+		qm.Select("*"),
+		qm.From(models.TableNames.Qso),
+		qm.Where(models.QsoColumns.ID+"=?", id),
+		qm.Limit(1),
+	).Bind(ctx, h, model)
+
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return types.Qso{}, errors.ErrNotFound
+		}
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
+
+	qso, err := adapters.QsoModelToType(model)
+	if err != nil {
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
 	return qso, nil
 }
 
@@ -697,7 +750,7 @@ func (s *Service) UpdateCountryWithContext(ctx context.Context, country types.Co
 
 // LogbookCallsignByIDWithContext returns the callsign of a logbook by
 // ID. Cheaper than FetchLogbookByIDWithContext when the caller only
-// needs the callsign (notably the submit hot path, which compares it
+// needs the callsign (notably the 'submit' hot path, which compares it
 // against STATION_CALLSIGN). Runs
 //
 //	SELECT callsign FROM logbook WHERE id=? AND deleted_at IS NULL
@@ -1287,7 +1340,7 @@ func (s *Service) ResetOrphanedUploadsWithContext(ctx context.Context) (int64, e
 }
 
 // FetchUploadsByQsoIDWithContext returns every qso_upload row for the
-// given QSO, ordered by (forwarder_name, action) so the output is
+// given QSO, ordered by (forwarder_name, action), so the output is
 // stable across calls. Drives the GET /v1/qso/:id/uploads endpoint.
 func (s *Service) FetchUploadsByQsoIDWithContext(ctx context.Context, qsoID int64) ([]types.QsoUpload, error) {
 	const op errors.Op = "sqlite.Service.FetchUploadsByQsoIDWithContext"
@@ -1413,7 +1466,7 @@ func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id int64) err
 // InsertQsoUploadTx enqueues one qso_upload row within the caller-supplied tx.
 // forwarderName is the per-instance config handle (e.g. "qrz-primary");
 // forwarderType is the plugin identifier (e.g. "qrz"). Both are stored on the
-// row so historical queue entries remain interpretable even after an operator
+// row, so historical queue entries remain interpretable even after an operator
 // renames or removes the destination from config. See docs/v2-design/forwarding.md §6.
 func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action action.Action, forwarderName, forwarderType string) error {
 	const op errors.Op = "sqlite.Service.InsertQsoUploadTx"

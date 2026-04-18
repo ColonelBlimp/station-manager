@@ -41,7 +41,7 @@ const (
 // Result is what Forwarder.Submit returns. Err is set when Outcome is not
 // Success; it is stored in qso_upload.last_error for diagnostics.
 // UpstreamID is optional and, when populated on success, is stored in
-// qso_upload.upstream_id so later operator UI can link out to the remote
+// qso_upload.upstream_id, so the later operator UI can link out to the remote
 // record.
 type Result struct {
 	Outcome    Outcome

@@ -52,5 +52,6 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	}
 
 	s.Logger.InfoWith().Int64("qso_id", id).Msg("QSO soft-deleted")
+
 	return nil
 }
