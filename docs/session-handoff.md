@@ -26,12 +26,13 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-04-17 end-of-session 9)
 
-### Milestone 1 complete, milestone 1b 4 of 6 landed
+### Milestones 1 and 1b both complete
 
-Milestone 1 (submit a QSO) is complete and CI-green. Milestone 1b
-(QSO CRUD and logbook management) is 4 of 6 done — logbook CRUD,
-QSO fetch/edit/delete, QSO list with cursor pagination, and the
-contest-dupe endpoint have all landed.
+Milestone 1 (submit a QSO) and milestone 1b (QSO CRUD, logbook
+management, list, contest-dupe, contact history, version) are both
+complete and CI-green under `-race`. The daemon now exposes the
+full set of endpoints the logging-app and logbook-app need for
+milestone 2+.
 
 ### Milestone 1b progress
 
@@ -41,8 +42,8 @@ contest-dupe endpoint have all landed.
 | 2. QSO fetch/edit/delete | `GET/PATCH/DELETE /v1/qso/:id` | **done** (session 9) |
 | 3. QSO list with pagination | `GET /v1/logbook/:id/qso` | **done** (session 9) |
 | 4. Contest dupe check | `GET /v1/contest-dupe` | **done** (session 9) |
-| 5. Contact history | `GET /v1/contact-history` | not started |
-| 6. Version | `GET /v1/version` | not started |
+| 5. Contact history | `GET /v1/contact-history` | **done** (session 9) |
+| 6. Version | `GET /v1/version` | **done** (session 9) |
 
 ### FREQ added to dedupe-key inputs (session 9)
 
@@ -274,6 +275,27 @@ a Pi) without any code changes — just a config change.
     the whole point of the logbook-per-contest pattern), and all
     validation error paths.
 
+12. **`GET /v1/contact-history`** — "have I ever worked this call"
+    lookup for the logging-app's draft panel. Required: `?call=`.
+    Optional: `?logbook=` to restrict to a single logbook (default
+    scope is all logbooks). Returns `{"items": [...]}` capped at
+    `Server.MaxContactHistoryResults` (default 100). 10 tests
+    including a **latent-bug fix** in the underlying sqlite query:
+    the existing `Call = ? OR Call LIKE ?%` group was not
+    parenthesised, so AND-ing additional predicates (logbook_id,
+    the implicit `deleted_at IS NULL`) bound tighter than the OR
+    and silently leaked rows. Wrapping the OR in `qm.Expr(...)`
+    fixed it. The old code had the same issue but no test
+    exercised it, so nothing caught the leak.
+
+13. **`GET /v1/version`** — diagnostic. Returns
+    `{"daemon":"<build>","go":"<runtime>","schema":{"version":N,"dirty":bool}}`.
+    The daemon build version comes from `cmd/smd/main.go`'s
+    package-level `Version` var, overridable via
+    `go build -ldflags "-X main.Version=..."`. Schema version is
+    pulled from `schema_migrations` (golang-migrate's table).
+    `api.New` signature extended to accept `daemonVersion string`.
+
 ### Coverage summary end-of-session
 
 | Package | Coverage |
@@ -499,36 +521,38 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (session 10 start)
 
-**Implement contact history.** Step 5 of the milestone 1b workflow.
-Nice-to-have rather than essential — operator uses it outside a
-pileup to see "have I worked this call before, and where?".
+Milestone 1b is done — the daemon API surface for client apps is
+complete. Next worthwhile threads, in rough priority order:
 
-- `GET /v1/contact-history?call=<callsign>` — returns prior QSOs
-  with a callsign across all logbooks (not scoped to a single
-  logbook, unlike contest-dupe).
-- sqlite layer already has `FetchQsoSliceByCallsignWithContext`
-  which returns a `[]types.ContactHistory` slice. Check whether its
-  current output shape is what the endpoint should return directly
-  or whether any transformation is needed.
-- Likely a simpler handler than the list endpoint — no pagination
-  unless the result set is huge. Spec doesn't call out pagination
-  for this path.
+1. **Export endpoint (`POST /v1/logbook/{id}/export`)**. Milestone
+   2's client-app session flow (see `project_sm_session_scope.md`
+   memory) needs `POST /v1/logbook/{id}/export?ids=1,2,3` to build
+   the end-of-session email payload. Response is `application/x-adif`;
+   large logbooks stream. No design questions outstanding —
+   session-handoff section §7a already nominates the shape.
 
-Design questions to resolve (one at a time) before coding:
-- **Scope:** all logbooks, or a `?logbook=<id>` filter? My read:
-  all logbooks by default (the whole point is "have I ever worked
-  them"); optional `?logbook=<id>` for operators who want to restrict.
-- **Soft-delete:** hide, same as everywhere else.
-- **Ordering:** newest-first, same convention as list.
-- **Result cap:** is there one? Per the memory, any number-with-meaning
-  goes in config rather than hardcoded.
+2. **Forwarder subsystem** (milestone 1c / 2). Real upload-queue
+   worker, retries, fan-out config. v1 forwarding code is the
+   reference per the "v1 forwarding code is good" note in
+   `docs/v2-design/api.md` §4.3. Biggest open design question: the
+   forwarder fan-out config shape (`docs/v2-design/forwarding.md`
+   doesn't exist yet).
 
-### Continue milestone 1b — remaining workflow steps
+3. **SSE event stream (`GET /v1/events`)**. First consumer will be
+   the logging-app's "new QSO arrived in my session" refresh. Will
+   need `qso.stored`/`qso.updated`/`qso.deleted` emit sites wired up
+   alongside the respective handlers.
 
-6. **Version** — diagnostic, lowest priority.
-   - `GET /v1/version` — daemon build version, go version, schema
-     version. Useful for diagnostics and for clients that want to
-     refuse to talk to an incompatible daemon.
+4. **Bridge / CAT design**. Separate subsystem; see
+   `project_sm_serial_bridge.md` memory.
+
+If you want a small cleanup tick before any of these, there's one
+latent thing on the shelf: the contact-history match predicate
+accepts `Call LIKE 'X%'` which catches portable suffixes like
+`M0CMC/P` but also false-positives on `M0CMCE`. A tighter
+`Call = 'X' OR Call LIKE 'X/%'` would be better but is a behaviour
+change with no active complaint — worth flagging rather than
+silently changing.
 
 ### v2 design work
 

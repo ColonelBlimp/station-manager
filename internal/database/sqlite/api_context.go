@@ -50,8 +50,19 @@ func (s *Service) InsertQsoWithContext(ctx context.Context, qso types.Qso) (int6
 	return model.ID, nil
 }
 
-func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsign string) ([]types.ContactHistory, error) {
-	const op errors.Op = "sqlite.Service.FetchContactHistoryWithContext"
+// FetchQsoSliceByCallsignWithContext returns prior QSOs matching a
+// callsign (contact history). Pass logbookID=0 to search across all
+// logbooks; pass a positive value to restrict to one logbook. limit
+// caps the result count; pass limit<=0 to apply no cap. Soft-deleted
+// rows are hidden.
+//
+// The callsign match accepts an exact hit OR a prefix match
+// ("M0CMC%"), which catches portable suffixes like "M0CMC/P". The
+// prefix is lossy — "M0CMC" also matches "M0CMCE" — so the endpoint
+// layer is expected to normalize the input callsign before passing
+// it in.
+func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsign string, logbookID int64, limit int) ([]types.ContactHistory, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoSliceByCallsignWithContext"
 	if err := checkService(op, s); err != nil {
 		return nil, err
 	}
@@ -69,13 +80,23 @@ func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsi
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	var mods []qm.QueryMod
-	mods = append(mods, models.QsoWhere.Call.EQ(callsign))
-	mods = append(mods, qm.Or2(
-		models.QsoWhere.Call.LIKE(callsign+"%"),
-	))
-
+	// Wrap the call match in Expr so the OR group is parenthesised. Without
+	// it, AND-ing additional predicates (logbook_id, the implicit
+	// deleted_at IS NULL from sqlboiler's default) would bind tighter than
+	// the OR and leak rows that don't satisfy the extra constraints.
+	mods := []qm.QueryMod{
+		qm.Expr(
+			models.QsoWhere.Call.EQ(callsign),
+			qm.Or2(models.QsoWhere.Call.LIKE(callsign+"%")),
+		),
+	}
+	if logbookID > 0 {
+		mods = append(mods, models.QsoWhere.LogbookID.EQ(logbookID))
+	}
 	mods = append(mods, qm.OrderBy(models.QsoColumns.CreatedAt+" DESC"))
+	if limit > 0 {
+		mods = append(mods, qm.Limit(limit))
+	}
 	slice, err := models.Qsos(mods...).All(ctx, h)
 	if err != nil {
 		if stderr.Is(err, sql.ErrNoRows) {
@@ -175,6 +196,34 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 	}
 
 	return count, nil
+}
+
+// SchemaVersionWithContext returns the current migration version recorded
+// in the schema_migrations table (maintained by golang-migrate). Returns
+// 0 if no migrations have been applied yet (fresh DB). The `dirty` flag
+// is true if the last migration attempt failed mid-way.
+func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64, dirty bool, err error) {
+	const op errors.Op = "sqlite.Service.SchemaVersionWithContext"
+	if err = checkService(op, s); err != nil {
+		return 0, false, err
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return 0, false, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	row := h.QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations LIMIT 1`)
+	if err = row.Scan(&version, &dirty); err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, errors.New(op).WithErr(err)
+	}
+	return version, dirty, nil
 }
 
 // DeleteQsoByIDWithContext soft-deletes a QSO by setting its deleted_at
@@ -709,6 +758,78 @@ func (s *Service) UpdateCountryWithContext(ctx context.Context, country types.Co
  * Logbook Methods
  **********************************************************************************************************************/
 
+// LogbookCallsignByIDWithContext returns the callsign of a logbook by
+// ID. Cheaper than FetchLogbookByIDWithContext when the caller only
+// needs the callsign (notably the submit hot path, which compares it
+// against STATION_CALLSIGN). Runs
+//
+//	SELECT callsign FROM logbook WHERE id=? AND deleted_at IS NULL
+//
+// and skips the full row scan + adapter work. Returns ErrNotFound if
+// the logbook doesn't exist or is soft-deleted.
+func (s *Service) LogbookCallsignByIDWithContext(ctx context.Context, id int64) (string, error) {
+	const op errors.Op = "sqlite.Service.LogbookCallsignByIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return "", err
+	}
+
+	if id < 1 {
+		return "", errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	var callsign string
+	row := h.QueryRowContext(ctx,
+		`SELECT callsign FROM logbook WHERE id=? AND deleted_at IS NULL`, id)
+	if err = row.Scan(&callsign); err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return "", errors.ErrNotFound
+		}
+		return "", errors.New(op).WithErr(err)
+	}
+	return callsign, nil
+}
+
+// LogbookExistsByIDWithContext is a lightweight "does this logbook exist
+// (and isn't soft-deleted)" check. Use this in preference to
+// FetchLogbookByIDWithContext anywhere the handler only needs to know
+// whether the row exists — it runs `SELECT EXISTS(...)` (an index
+// probe) and skips the row scan + adapter work.
+func (s *Service) LogbookExistsByIDWithContext(ctx context.Context, id int64) (bool, error) {
+	const op errors.Op = "sqlite.Service.LogbookExistsByIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return false, err
+	}
+
+	if id < 1 {
+		return false, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return false, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	// models.LogbookExists runs
+	//   SELECT EXISTS(SELECT 1 FROM logbook WHERE id=? AND deleted_at IS NULL LIMIT 1)
+	// which is an index-only probe — no row data read, no adapter call.
+	exists, err := models.LogbookExists(ctx, h, id)
+	if err != nil {
+		return false, errors.New(op).WithErr(err)
+	}
+	return exists, nil
+}
+
 func (s *Service) FetchLogbookByIDWithContext(ctx context.Context, id int64) (types.Logbook, error) {
 	const op errors.Op = "sqlite.Service.FetchLogbookByIDWithContext"
 	if err := checkService(op, s); err != nil {
@@ -828,11 +949,17 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	// The FK RESTRICT only fires on hard deletes; soft-delete (setting
 	// deleted_at) would silently succeed, orphaning QSOs under a
 	// deleted logbook.
-	qsoCount, err := models.Qsos(models.QsoWhere.LogbookID.EQ(id)).Count(ctx, h)
+	//
+	// .Exists() is cheaper than .Count(): it short-circuits at the
+	// first hit rather than summing the whole match set. For a
+	// logbook with thousands of QSOs this is the difference between
+	// "read one row via idx_qso_logbook_id" and "scan the whole
+	// partition".
+	hasQsos, err := models.Qsos(models.QsoWhere.LogbookID.EQ(id)).Exists(ctx, h)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("checking logbook QSO count")
 	}
-	if qsoCount > 0 {
+	if hasQsos {
 		return errors.New(op).WithMsg("cannot delete a logbook that contains QSOs")
 	}
 

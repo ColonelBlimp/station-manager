@@ -1,0 +1,57 @@
+package api
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+func TestVersion_HappyPath(t *testing.T) {
+	srv := testServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/version", nil)
+	w := httptest.NewRecorder()
+	srv.handleVersion(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+
+	// daemon version: testServer passes "test" into api.New.
+	if !strings.Contains(body, `"daemon":"test"`) {
+		t.Fatalf("body = %q, want daemon:test", body)
+	}
+
+	// go version: runtime.Version() is always non-empty and starts with "go".
+	if !strings.Contains(body, `"go":"`+runtime.Version()+`"`) {
+		t.Fatalf("body = %q, want go:%q", body, runtime.Version())
+	}
+
+	// schema version: migrations ran in testServer's setup, so schema
+	// should be version 1 and not dirty.
+	if !strings.Contains(body, `"schema":{"version":1,"dirty":false}`) {
+		t.Fatalf("body = %q, want schema:{version:1,dirty:false}", body)
+	}
+}
+
+func TestVersion_ReportsInjectedDaemonVersion(t *testing.T) {
+	// Confirm the daemon version field reflects whatever api.New was
+	// called with — future-proofs the ldflags-injection path.
+	srv := testServer(t)
+	srv.daemonVersion = "9.9.9-pretend-release"
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/version", nil)
+	w := httptest.NewRecorder()
+	srv.handleVersion(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"daemon":"9.9.9-pretend-release"`) {
+		t.Fatalf("body = %q, want injected daemon version", w.Body.String())
+	}
+}

@@ -7,6 +7,7 @@ DROP TRIGGER IF EXISTS trg_qso_set_modified_at;
 -- Drop indexes
 DROP INDEX IF EXISTS idx_qso_upload_uploaded;
 DROP INDEX IF EXISTS idx_qso_upload_pending;
+DROP INDEX IF EXISTS idx_qso_logbook_date_time;
 DROP INDEX IF EXISTS idx_qso_active_date_time;
 DROP INDEX IF EXISTS idx_qso_active_call;
 DROP INDEX IF EXISTS uq_qso_logbook_dedupe;

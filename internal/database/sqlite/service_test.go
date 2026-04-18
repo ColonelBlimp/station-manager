@@ -174,6 +174,96 @@ func TestFetchLogbookByID_NotFound(t *testing.T) {
 	}
 }
 
+func TestLogbookExistsByID(t *testing.T) {
+	svc := testService(t)
+	lbID, err := svc.InsertLogbook(types.Logbook{Name: "Primary", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Present row → true.
+	got, err := svc.LogbookExistsByID(lbID)
+	if err != nil {
+		t.Fatalf("exists (present): %v", err)
+	}
+	if !got {
+		t.Fatalf("exists = false, want true for id %d", lbID)
+	}
+
+	// Missing row → false, no error (not ErrNotFound — this is a boolean
+	// question, not a fetch).
+	got, err = svc.LogbookExistsByID(999)
+	if err != nil {
+		t.Fatalf("exists (missing): %v", err)
+	}
+	if got {
+		t.Fatal("exists = true, want false for id 999")
+	}
+
+	// Soft-deleted row → false. `models.LogbookExists` filters
+	// `deleted_at IS NULL`.
+	if err = svc.DeleteLogbookByID(lbID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got, err = svc.LogbookExistsByID(lbID)
+	if err != nil {
+		t.Fatalf("exists (soft-deleted): %v", err)
+	}
+	if got {
+		t.Fatal("exists = true after soft-delete, want false")
+	}
+
+	// Invalid id → error.
+	if _, err = svc.LogbookExistsByID(0); err == nil {
+		t.Fatal("expected error for id=0")
+	}
+}
+
+func TestLogbookCallsignByID(t *testing.T) {
+	svc := testService(t)
+	lbID, err := svc.InsertLogbook(types.Logbook{Name: "Primary", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Present row → callsign returned, no error.
+	got, err := svc.LogbookCallsignByID(lbID)
+	if err != nil {
+		t.Fatalf("callsign (present): %v", err)
+	}
+	if got != "G4ABC" {
+		t.Fatalf("callsign = %q, want G4ABC", got)
+	}
+
+	// Missing row → ErrNotFound. Unlike LogbookExistsByID (boolean
+	// question → no error), this is a fetch, so ErrNotFound is the
+	// right signal for "row doesn't exist".
+	_, err = svc.LogbookCallsignByID(999)
+	if !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for missing id, got %v", err)
+	}
+
+	// Soft-deleted row → ErrNotFound. Consistent with how
+	// FetchLogbookByIDWithContext behaves.
+	if err = svc.DeleteLogbookByID(lbID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_, err = svc.LogbookCallsignByID(lbID)
+	if !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for soft-deleted row, got %v", err)
+	}
+
+	// Invalid id → error (not ErrNotFound — id < 1 is a programming
+	// error, not a missing row).
+	_, err = svc.LogbookCallsignByID(0)
+	if err == nil {
+		t.Fatal("expected error for id=0")
+	}
+	if stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("expected non-ErrNotFound error for id=0, got %v", err)
+	}
+}
+
 func TestInsertQso_AndFetchByID(t *testing.T) {
 	svc := testService(t)
 	lbID, err := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
@@ -588,7 +678,7 @@ func TestFetchQsoSliceByCallsign(t *testing.T) {
 		}
 	}
 
-	got, err := svc.FetchQsoSliceByCallsign("M0CMC")
+	got, err := svc.FetchQsoSliceByCallsign("M0CMC", 0, 0)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -599,7 +689,7 @@ func TestFetchQsoSliceByCallsign(t *testing.T) {
 
 func TestFetchQsoSliceByCallsign_EmptyCallsign(t *testing.T) {
 	svc := testService(t)
-	_, err := svc.FetchQsoSliceByCallsign("")
+	_, err := svc.FetchQsoSliceByCallsign("", 0, 0)
 	if err == nil {
 		t.Fatal("expected error for empty callsign")
 	}

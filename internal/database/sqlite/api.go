@@ -21,8 +21,16 @@ func (s *Service) UpdateQso(qso types.Qso) error {
 	return s.UpdateQsoWithContext(context.Background(), qso)
 }
 
-func (s *Service) FetchQsoSliceByCallsign(callsign string) ([]types.ContactHistory, error) {
-	return s.FetchQsoSliceByCallsignWithContext(context.Background(), callsign)
+func (s *Service) FetchQsoSliceByCallsign(callsign string, logbookID int64, limit int) ([]types.ContactHistory, error) {
+	return s.FetchQsoSliceByCallsignWithContext(context.Background(), callsign, logbookID, limit)
+}
+
+func (s *Service) LogbookExistsByID(id int64) (bool, error) {
+	return s.LogbookExistsByIDWithContext(context.Background(), id)
+}
+
+func (s *Service) LogbookCallsignByID(id int64) (string, error) {
+	return s.LogbookCallsignByIDWithContext(context.Background(), id)
 }
 
 func (s *Service) FetchQsoSliceByLogbookId(id int64) (types.QsoSlice, error) {

@@ -196,7 +196,10 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logbook, err := s.db.FetchLogbookByIDWithContext(r.Context(), logbookID)
+	// We only need the logbook's callsign (to match against
+	// STATION_CALLSIGN). The dedicated SELECT-callsign helper avoids a
+	// full-row scan + adapter call on the submit hot path.
+	logbookCallsign, err := s.db.LogbookCallsignByIDWithContext(r.Context(), logbookID)
 	if err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "logbook_not_found",
@@ -207,7 +210,7 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !strings.EqualFold(logbook.Callsign, stationCallsign) {
+	if !strings.EqualFold(logbookCallsign, stationCallsign) {
 		writeError(w, http.StatusBadRequest, "callsign_mismatch",
 			"STATION_CALLSIGN does not match the logbook's callsign", op)
 		return

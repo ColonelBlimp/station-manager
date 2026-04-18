@@ -1,7 +1,6 @@
 package api
 
 import (
-	stderr "errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,13 +68,16 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 
 	// Verify the logbook exists, same rationale as the list endpoint: a
 	// bogus id silently returning "not a dupe" would be misleading.
-	if _, err = s.db.FetchLogbookByIDWithContext(r.Context(), logbookID); err != nil {
-		if stderr.Is(err, errors.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "logbook_not_found",
-				"logbook does not exist", op)
-			return
-		}
+	// Contest operators hammer this endpoint during pileups, so the
+	// lightweight EXISTS probe is important here.
+	exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), logbookID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, "logbook_not_found",
+			"logbook does not exist", op)
 		return
 	}
 

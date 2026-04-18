@@ -17,27 +17,33 @@ import (
 
 // Server holds the HTTP server and its dependencies.
 type Server struct {
-	httpServer       *http.Server
-	listener         net.Listener
-	qso              *qsoservice.Service
-	db               *sqlite.Service
-	logger           *logging.Service
-	maxBodyBytes     int64
-	protocol         string
-	defaultPageLimit int
-	maxPageLimit     int
+	httpServer               *http.Server
+	listener                 net.Listener
+	qso                      *qsoservice.Service
+	db                       *sqlite.Service
+	logger                   *logging.Service
+	maxBodyBytes             int64
+	protocol                 string
+	defaultPageLimit         int
+	maxPageLimit             int
+	maxContactHistoryResults int
+	daemonVersion            string
 }
 
-// New constructs a Server from the resolved services and config.
-func New(cfg config.Config, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service) *Server {
+// New constructs a Server from the resolved services and config. The
+// daemonVersion string is served by /v1/version; "dev" is the usual
+// placeholder when no build-time version is injected.
+func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service) *Server {
 	s := &Server{
-		qso:              qso,
-		db:               db,
-		logger:           logger,
-		maxBodyBytes:     cfg.Server.MaxBodyBytes,
-		protocol:         cfg.Server.Protocol,
-		defaultPageLimit: cfg.Server.DefaultPageLimit,
-		maxPageLimit:     cfg.Server.MaxPageLimit,
+		qso:                      qso,
+		db:                       db,
+		logger:                   logger,
+		maxBodyBytes:             cfg.Server.MaxBodyBytes,
+		protocol:                 cfg.Server.Protocol,
+		defaultPageLimit:         cfg.Server.DefaultPageLimit,
+		maxPageLimit:             cfg.Server.MaxPageLimit,
+		maxContactHistoryResults: cfg.Server.MaxContactHistoryResults,
+		daemonVersion:            daemonVersion,
 	}
 
 	mux := http.NewServeMux()
@@ -59,8 +65,12 @@ func New(cfg config.Config, qso *qsoservice.Service, db *sqlite.Service, logger 
 	// Contest
 	mux.HandleFunc("GET /v1/contest-dupe", s.handleContestDupe)
 
+	// QSO draft support
+	mux.HandleFunc("GET /v1/contact-history", s.handleContactHistory)
+
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
+	mux.HandleFunc("GET /v1/version", s.handleVersion)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

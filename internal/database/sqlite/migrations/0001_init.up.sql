@@ -81,6 +81,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_qso_logbook_dedupe
 CREATE INDEX IF NOT EXISTS idx_qso_active_call ON qso (call) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_qso_active_date_time ON qso (qso_date, time_on) WHERE deleted_at IS NULL;
 
+-- Composite index for cursor-based QSO list pagination
+-- (GET /v1/logbook/{id}/qso). Query shape:
+--   WHERE logbook_id = ? AND deleted_at IS NULL
+--     AND (qso_date, time_on, id) < (?, ?, ?)   -- cursor predicate
+--   ORDER BY qso_date DESC, time_on DESC, id DESC
+--   LIMIT ?+1
+-- Without this index SQLite picks idx_qso_logbook_id or
+-- idx_qso_active_date_time then does an in-memory sort of the filtered
+-- set. This composite lets the planner seek directly to the cursor
+-- position and walk the index in sorted order — O(limit) rather than
+-- O(rows in logbook).
+CREATE INDEX IF NOT EXISTS idx_qso_logbook_date_time
+    ON qso (logbook_id, qso_date DESC, time_on DESC, id DESC)
+    WHERE deleted_at IS NULL;
+
 -- Trigger to set modified_at on updates (safe pattern: update the row after the user's update)
 CREATE TRIGGER IF NOT EXISTS trg_qso_set_modified_at
     AFTER UPDATE

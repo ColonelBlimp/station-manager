@@ -57,12 +57,13 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 	// Verify the logbook exists. Without this, a bad id silently returns
 	// an empty page, which is indistinguishable from an empty logbook —
 	// surprising for clients.
-	if _, err = s.db.FetchLogbookByIDWithContext(r.Context(), logbookID); err != nil {
-		if stderr.Is(err, errors.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "logbook_not_found", "logbook does not exist", op)
-			return
-		}
+	exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), logbookID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, "logbook_not_found", "logbook does not exist", op)
 		return
 	}
 

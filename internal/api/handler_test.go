@@ -67,7 +67,7 @@ func testServer(t *testing.T) *Server {
 
 	qsoSvc := &qsoservice.Service{DB: dbSvc, Logger: logSvc}
 
-	return New(cfg, qsoSvc, dbSvc, logSvc)
+	return New(cfg, "test", qsoSvc, dbSvc, logSvc)
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.

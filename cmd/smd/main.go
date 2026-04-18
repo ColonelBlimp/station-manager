@@ -19,6 +19,10 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
+// Version is the daemon build version, served by /v1/version. Override
+// at build time with: go build -ldflags "-X main.Version=1.2.3" ...
+var Version = "dev"
+
 func main() {
 	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
 	flag.Parse()
@@ -94,7 +98,7 @@ func main() {
 
 	// ---- Start HTTP server ----
 
-	server := api.New(cfg, qsoSvc, dbSvc, loggerSvc)
+	server := api.New(cfg, Version, qsoSvc, dbSvc, loggerSvc)
 
 	errCh := make(chan error, 1)
 	go func() {

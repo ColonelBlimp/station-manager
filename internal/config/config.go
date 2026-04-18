@@ -58,6 +58,13 @@ type ServerConfig struct {
 	// numbers rule.
 	DefaultPageLimit int `json:"default_page_limit"`
 	MaxPageLimit     int `json:"max_page_limit"`
+
+	// MaxContactHistoryResults caps the number of prior contacts returned
+	// by /v1/contact-history. The endpoint doesn't paginate — it's a
+	// "recent contacts" view, not a log browser — so the cap keeps
+	// response size bounded for callsigns that have been worked many
+	// times.
+	MaxContactHistoryResults int `json:"max_contact_history_results"`
 }
 
 // Load reads a JSON config file and returns a populated Config with defaults
@@ -118,6 +125,9 @@ func applyDefaults(cfg *Config, baseDir string) {
 	}
 	if cfg.Server.MaxPageLimit == 0 {
 		cfg.Server.MaxPageLimit = 500
+	}
+	if cfg.Server.MaxContactHistoryResults == 0 {
+		cfg.Server.MaxContactHistoryResults = 100
 	}
 
 	// Datastore defaults
