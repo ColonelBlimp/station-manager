@@ -30,7 +30,7 @@ precisely so we don't re-derive state or redo finished work.
 
 Design: `docs/v2-design/forwarding.md` is the authoritative shape;
 everything below is the thin slice that implements it. Commits so
-far this session have landed stages 1–3 of an 11-stage plan — see
+far this session have landed stages 1–6 of an 11-stage plan — see
 "Session 11 progress" below for the status table.
 
 ### Session 11 progress (2026-04-18, in-progress)
@@ -68,10 +68,10 @@ committable unit:
 | 1 | Schema update — split `service` into `forwarder_name`+`forwarder_type`, add `next_attempt_at`, `upstream_id` | **done** |
 | 2 | Config surface — `ForwarderConfig`/`RetryConfig` in types, `Forwarders[]` on `Config`, defaults + validation, `Forwarders()` accessor | **done** |
 | 3 | `internal/forwarding/` — `Forwarder` interface, `Outcome`/`Result`, `Action` alias, init()-time `Register`/`Build` registry | **done** |
-| 4 | Stub forwarder — `internal/forwarding/stub/` configurable via credentials blob (always_success / always_transient / flap_n) | **next** |
-| 5 | `SafeGo` helper — `internal/utils/safego.go` named goroutine + recover + optional respawn | pending |
-| 6 | DB methods — claim query, outcome persist, orphan sweep, fetch-by-qso-id | pending |
-| 7 | Wire ingest — `submit.go` reads `config.Forwarders` filtered by enabled + action_filter contains 'insert'; same in update/delete paths | pending |
+| 4 | Stub forwarder — `internal/forwarding/stub/`, modes: `always_success`, `always_transient`, `always_terminal`, `flap_n` | **done** |
+| 5 | `safego` helper — landed as `internal/safego/` (not `internal/utils`; cycle avoided), callback-based, ctx-aware cooldown | **done** |
+| 6 | DB methods — `ClaimPendingUploadsWithContext` (atomic `UPDATE ... RETURNING`), `MarkUpload{Success,TransientRetry,Failed}WithContext`, `ResetOrphanedUploadsWithContext`, `FetchUploadsByQsoIDWithContext` | **done** |
+| 7 | Wire ingest — `submit.go` reads `config.Forwarders` filtered by enabled + action_filter contains 'insert'; same in update/delete paths | **next** |
 | 8 | Worker loop — `internal/forwarding/worker/` per-forwarder tick + claim + submit + persist | pending |
 | 9 | Startup wiring — `main.go` orphan sweep + spawn workers via SafeGo | pending |
 | 10 | Pull endpoint — `GET /v1/qso/:id/uploads` | pending |
@@ -89,8 +89,42 @@ committable unit:
 - Legacy v1 worker methods (`InsertQsoUploadWithContext`,
   `FetchPendingUploadsWithContext`, `UpdateQsoUploadStatusWithContext`
   and their non-ctx wrappers) deleted from the sqlite package;
-  their three tests likewise removed. Stage 6 will add the new
+  their three tests likewise removed. Stage 6 added the new
   purpose-built replacements.
+
+**Stage 4 — stub forwarder.** `internal/forwarding/stub/` implements
+`Forwarder` with four modes (`always_success`, `always_transient`,
+`always_terminal`, `flap_n`) selected via the credentials blob. Ctx
+cancellation short-circuits before the call counter bumps so tests
+can assert on "how many real submits happened" cleanly. Registers
+under type `"stub"` via `init()`; 11 tests covering validation,
+each mode, flap transition, ctx-cancel, and round-trip via
+`forwarding.Build`.
+
+**Stage 5 — `internal/safego/`.** Deviation from the draft doc:
+lives in its own package, not `internal/utils`. Cause: `logging`
+already imports `utils`, so putting `*logging.Service` in utils
+would create a cycle. The landed shape takes a `PanicHandler`
+callback instead of a concrete logger — zero dependency on logging,
+callers wire the log format. Signature also gained a `ctx` parameter
+so the cooldown sleep is interrupted by shutdown rather than
+spawning a final respawn that immediately exits. Cooldown is an
+`atomic.Int64` (nanoseconds) after the race detector caught a real
+race between `t.Cleanup` and still-running goroutines. `docs/v2-
+design/forwarding.md §9` rewritten to match as-implemented shape.
+
+**Stage 6 — upload-queue DB surface.** Six methods, all worker-
+facing. `ClaimPendingUploadsWithContext` is the atomic
+`UPDATE ... RETURNING *` from the design doc, scoped to a single
+forwarder so two workers never compete. `modified_at` is driven by
+`trg_qso_upload_set_updated_at` so the mark/claim statements don't
+touch it manually; SQLite's default `recursive_triggers=off` prevents
+the trigger's own UPDATE from re-firing. Empty `upstream_id` is
+stored as NULL rather than the empty string. New
+`QsoUploadModelToType` adapter flattens nullable columns for
+callers that don't care about null-vs-value. 13 integration tests
+cover claim ordering, forwarder scoping, future-`next_attempt_at`
+gating, each mark method, orphan sweep, and pull-endpoint fetch.
 
 ### Current state (as of 2026-04-17 end-of-session 10)
 
@@ -722,18 +756,21 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (session 11 continuation / session 12 start)
 
-Forwarder subsystem is under active construction, stages 1–3 of 11
-committed. Pick up at **Stage 4 (stub forwarder)** per the status
-table in "Session 11 progress" above.
+Forwarder subsystem is under active construction, stages 1–6 of 11
+committed. Pick up at **Stage 7 (wire ingest to real forwarders)**
+per the status table in "Session 11 progress" above.
 
 Priority order:
 
-1. **Continue forwarder stages 4–11.** Stage 4 next: stub forwarder
-   in `internal/forwarding/stub/`, configurable via credentials
-   blob (always_success / always_transient / flap_n). This is what
-   lets stages 5–11 verify the plumbing end-to-end without writing
-   any QRZ-protocol code. After stage 4 the rest of the stages
-   each have a clear scope in the table above.
+1. **Continue forwarder stages 7–11.** Stage 7 next: replace the
+   `configuredForwarders()` stub in `qsoservice/submit.go` with a
+   real read from `config.Forwarders`, filtered by `Enabled &&
+   slices.Contains(ActionFilter, "insert")`. Each matching entry
+   becomes one `InsertQsoUploadTx` call with its `Name` and `Type`.
+   The existing tx envelope already has the loop in place; this is
+   a ~10-line swap. Same treatment for the hook in
+   `qsoservice/update.go` (and a future `qsoservice/delete.go`
+   when soft-delete enqueues a `delete` action row).
 
 2. **SSE event stream (`GET /v1/events`)**. First consumer will be
    the logging-app's "new QSO arrived in my session" refresh. Will

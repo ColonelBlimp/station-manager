@@ -335,7 +335,7 @@ for {
     case <-ticker.C:
     }
 
-    rows := claim_up_to(N, service=self, status IN ('pending','in_progress'),
+    rows := claim_up_to(N, forwarder_name=self, status = 'pending',
                         next_attempt_at <= now)
     for _, row := range rows {
         qso := fetch_qso(row.qso_id)         // soft-deleted handled below
@@ -393,12 +393,17 @@ tune either value down in config.
 **Soft-deleted QSOs.** A `qso_upload` row may point at a QSO that has
 since been soft-deleted. The worker handles this as follows:
 
-- `action = 'insert'` with a soft-deleted QSO: skip (mark
-  `terminal`, `last_error = "qso soft-deleted before insert
-  forwarded"`). Operator deleted before we got to it; no point
-  pushing a QSO to QRZ that we've already decided to remove.
-- `action = 'update'` with a soft-deleted QSO: treat as `delete`
-  instead (re-route action in-memory for the Submit call).
+- `action = 'insert'` with a soft-deleted QSO: **skip** — mark the
+  row `failed` with `last_error = "qso soft-deleted before insert
+  forwarded"`. The operator deleted before we got to the upstream,
+  so there's nothing worth pushing.
+- `action = 'update'` with a soft-deleted QSO: **skip** — mark the
+  row `failed` with `last_error = "qso soft-deleted; delete row
+  supersedes"`. `qsoservice.Delete` has already enqueued a
+  dedicated `delete` row (for each destination whose `action_filter`
+  includes `"delete"`), which is the correct vehicle for the delete
+  signal. Rerouting update → delete in-memory was considered and
+  rejected as unnecessarily clever.
 - `action = 'delete'`: always forward — that's the point.
 
 ---
@@ -566,12 +571,13 @@ re-routed to a `delete` at claim time.
 
 ### Migration note
 
-No data has shipped yet, so the three schema changes above (split
-`service`, add `next_attempt_at`, add `upstream_id`) land as edits
+No data had shipped, so the three schema changes above (split
+`service`, add `next_attempt_at`, add `upstream_id`) landed as edits
 to `0001_init.up.sql` in place rather than as a `0002_*.up.sql`
-migration. This matches the pattern used when the composite index
-was added in milestone 1b. If the daemon has ever been started and
-the schema migrated locally, a `DROP TABLE qso_upload` before rerun
+migration (stage 1, session 11). This matches the pattern used when
+the composite index was added in milestone 1b. If the daemon has
+ever been started and the schema migrated locally, a
+`DROP TABLE qso_upload` before rerun
 is enough — no production data exists.
 
 ---
