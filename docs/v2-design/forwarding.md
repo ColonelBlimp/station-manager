@@ -37,8 +37,9 @@ first prevents the worker topology being "discovered" late.
   the v1 problem this subsystem exists to not recreate.
 - `docs/reviews/milestone-1b-review.md` → M8 (forwarder retry
   cooldown) — deferred TODO that lands here.
-- `docs/session-handoff.md` — `safeGo` worker-recovery helper is
-  parked there; this doc is where it lands.
+- `docs/session-handoff.md` — the `safego` worker-recovery helper
+  was parked there; it has since landed as `internal/safego`
+  (stage 5).
 
 ---
 
@@ -659,51 +660,57 @@ restarts.
 
 ---
 
-## 9. Worker-goroutine panic recovery: `safeGo`
+## 9. Worker-goroutine panic recovery: `safego`
 
-**Decision:** Each worker goroutine runs under a `safeGo` wrapper
-that recovers panics, logs them structurally (with stack), and
-arranges for the worker to be respawned. This is the third layer of
-panic defense after `main`'s recover (session 10) and the HTTP
-`recoverPanic` middleware (session 10).
+**Decision:** Each worker goroutine runs under a `safego.Go` wrapper
+that recovers panics, hands them to a caller-supplied logging
+callback, and arranges for the worker to be respawned. This is the
+third layer of panic defense after `main`'s recover (session 10) and
+the HTTP `recoverPanic` middleware (session 10).
 
-**Location:** `internal/utils/safego.go` — close to the
-goroutine-spawning code it protects, not buried in a framework
-package.
+**Location:** `internal/safego/safego.go` — its own package. The
+original draft proposed `internal/utils/safego.go`, but
+`internal/logging` already imports `internal/utils`, so a
+`*logging.Service` parameter in utils would create an import cycle.
+Keeping safego in its own package and having it take a callback
+(`PanicHandler`) instead of a concrete logger means zero dependency
+on logging — callers wire up whatever log format they want.
 
-**Shape:**
+**Shape (as implemented, stage 5):**
 
 ```go
-package utils
+package safego
 
-// SafeGo runs fn in a new goroutine. If fn panics, SafeGo recovers
-// the panic, logs it via the provided logger with a stack trace,
-// and (if respawn is true) re-invokes fn in a fresh goroutine after
-// a short cooldown.
-//
-// Intended for long-lived workers (forwarders, future forwarding-
-// aware SSE publishers) whose absence silently breaks a feature.
-// One-shot goroutines that do not need respawn should use the
-// two-argument form with respawn=false.
-func SafeGo(name string, logger *logging.Service, fn func(), respawn bool) {
-    go func() {
-        defer func() {
-            if r := recover(); r != nil {
-                logger.ErrorWith().
-                    Str("goroutine", name).
-                    Interface("panic", r).
-                    Bytes("stack", debug.Stack()).
-                    Msg("goroutine panic recovered")
-                if respawn {
-                    time.Sleep(respawnCooldown)
-                    SafeGo(name, logger, fn, respawn)
-                }
-            }
-        }()
-        fn()
-    }()
-}
+type PanicHandler func(name string, panicValue any, stack []byte)
+
+// Go runs fn in a new goroutine with panic recovery. If fn panics,
+// onPanic is invoked with the recovered value and a stack trace;
+// if respawn is true, Go schedules another attempt after
+// respawnCooldown. Respawns are cancelled if ctx is Done before the
+// cooldown elapses.
+func Go(ctx context.Context, name string, onPanic PanicHandler, fn func(), respawn bool)
 ```
+
+Forwarder workers build their `PanicHandler` once at startup,
+binding the logger into a closure:
+
+```go
+handler := func(name string, pv any, stack []byte) {
+    logger.ErrorWith().
+        Str("goroutine", name).
+        Interface("panic", pv).
+        Bytes("stack", stack).
+        Msg("goroutine panic recovered")
+}
+safego.Go(ctx, "qrz", handler, workerFn, true)
+```
+
+**Why ctx is a parameter (deviation from the first draft):** the
+original signature was `SafeGo(name, logger, fn, respawn)`. Adding
+ctx lets the cooldown sleep be interrupted by shutdown — without it,
+a panicking worker might spawn one last goroutine after SIGTERM that
+immediately exits. Small quality-of-shutdown improvement, free to
+add.
 
 **Why respawn is opt-in, not default:** a respawning panic loop is
 worse than a dead worker if the panic is deterministic — you get a
@@ -717,11 +724,12 @@ problem; it is not in the initial shape.
 subsystem grows to multiple destinations, `goroutine=qrz` tells you
 which one panicked without having to unscramble the stack.
 
-**Testability:** the first test for `SafeGo` is "panic inside fn
+**Testability:** the first test for `safego.Go` is "panic inside fn
 does not crash the test process." The second is "respawn=true
 re-runs fn." Straightforward unit tests; no goroutine leak concerns
 because the respawn chain terminates when `fn` stops panicking or
-when ctx cancellation propagates via fn's closure.
+when ctx is cancelled. The cooldown is an atomic var so tests can
+dial it down without racing against in-flight goroutines.
 
 ---
 
@@ -816,5 +824,6 @@ When all eight pass, milestone 1c is done.
   hardcoding is being replaced.
 - `docs/reviews/milestone-1b-review.md` → M8 — the deferred retry-
   cooldown TODO that §5 resolves.
-- `docs/session-handoff.md` — `safeGo` parking spot; will be moved
-  into §9 of this document once implemented.
+- `docs/session-handoff.md` — historical parking spot for
+  `safego`; the real shape now lives in §9 above and the package
+  itself is `internal/safego`.
