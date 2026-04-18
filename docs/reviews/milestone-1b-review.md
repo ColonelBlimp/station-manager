@@ -1,5 +1,37 @@
 # Milestone 1b code review (session 10, 2026-04-17)
 
+## Resolution status (2026-04-17, end-of-session 10)
+
+**All 23 findings addressed in the same session.** Walked H1 → L12
+one-by-one; every item landed either a fix or (for M8 only) a
+pinned-down deferral with a visible in-code TODO. Details of each
+fix live in the commits for this branch and the session-10
+writeup in `docs/session-handoff.md`. Headline notes:
+
+- **M8 is the only deferred item**, by design — it depends on the
+  forwarder's config shape, which is itself undecided.
+  `internal/database/sqlite/consts.go` carries a `TODO(forwarder)`
+  comment naming the expected field.
+- **L6 was broadened** beyond the review's original scope: the
+  contact-history `LIKE 'X%'` predicate was changed to `LIKE 'X/%'`
+  (anchored on slash) so coincidental prefixes like M0CMCE no
+  longer match M0CMC. Closed both L6 and the known-issues item
+  the review had referenced as deferred.
+- **L11's Sscanf-based parsing** turned into an 8-site refactor
+  — every handler test that decoded a submit-response ID now uses
+  structured decode via `qsoservice.SubmitResult`.
+- **M5's deletion also eliminated M7 contributors** — dropping
+  `ExecContext` and `QueryContext` removed two of the 11
+  `fmt.Errorf` call sites before the M7 sweep even started.
+
+Two new test families were added as regressions:
+`TestSubmitQso_ConcurrentDuplicate` (H1 race),
+`TestService_InitOpenCloseInitOpen` (M4 cycle), the body-size
+caps on logbook handlers (M1), `TestLogbookCallsignByID` (new
+helper), and the portable-suffix / coincidental-prefix pair (L6).
+
+Full test suite green under `-race` after every finding.
+
 ## Scope
 
 Read-only review of the v2 daemon at the milestone-1 / 1b checkpoint, with CI green and the forwarder subsystem next on the roadmap. Covered: `cmd/smd/`, `internal/api/` (handlers, server, response envelope, handler + stress tests), `internal/qsoservice/` (Submit, Update, dedupe, validation), `internal/database/sqlite/` (service lifecycle, API methods, migrations), `internal/config/`, plus a scan of `internal/adif/`, `internal/types/`, `internal/utils/frequency.go`, and surface-level checks against `internal/errors` / `internal/logging` / `internal/iocdi` for regressions. Deliberately **not** covered: `internal/database/sqlite/models/` (sqlboiler-generated), the already-reviewed `internal/errors` and `internal/logging` packages beyond regression spotting, the `apps/` tree, `v1` branch, the forwarder subsystem (does not yet exist), and performance micro-optimizations — the session-9 SQL call-site audit already landed the main fixes and this review only looks for what remains.

@@ -24,15 +24,58 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-17 end-of-session 9)
+## Current state (as of 2026-04-17 end-of-session 10)
 
-### Milestones 1 and 1b both complete
+### Milestones 1 and 1b both complete, full code review landed
 
 Milestone 1 (submit a QSO) and milestone 1b (QSO CRUD, logbook
 management, list, contest-dupe, contact history, version) are both
 complete and CI-green under `-race`. The daemon now exposes the
 full set of endpoints the logging-app and logbook-app need for
 milestone 2+.
+
+**Session 10 focus was hardening, not new features.** A full
+independent code review (`docs/reviews/milestone-1b-review.md`)
+surfaced 23 findings across high/medium/low severity; every one
+has been addressed. The codebase is now in a "clean slate for
+forwarder" state — no known bugs, no convention drift, no dead
+code outstanding.
+
+### Session 10 headline changes
+
+- **H1 — concurrent-submit race plugged.** Pre-transaction dedupe
+  check + UNIQUE-constraint catch-and-reclassify; deterministic
+  test (`TestSubmitQso_ConcurrentDuplicate`) locks it in.
+- **ADIF export moves entirely client-side.** `POST /v1/logbook/{id}/export`
+  is dropped from the roadmap; clients that need ADIF use
+  `internal/adif` as a library. Backup story is forwarding to
+  online services, not file dumps. See
+  `memory/project_sm_session_scope.md`.
+- **SQL call-site audit items 1–2 landed.** New
+  `LogbookCallsignByIDWithContext` on the submit hot path; new
+  composite partial index `idx_qso_logbook_date_time` for cursor
+  pagination.
+- **M6 proactive fix for one-fails-all-fail.** `qsoservice.Update`
+  is now transactional with a commented forwarder hook inside the
+  tx envelope, so the forwarder PR just drops the
+  `InsertQsoUploadTx(action.Update)` loop into the existing slot.
+- **Daemon lifecycle is defer-based.** `cmd/smd/main.go` delegates
+  to `run() error` with defers for logger + db cleanup; `fatal()`
+  is gone. Failures at any startup step unwind cleanly through
+  registered defers.
+- **Dead code swept.** `qsoservice.FreqMHzToKHzString`,
+  `sqlite.Service.ExecContext`, `sqlite.Service.QueryContext`,
+  `fatal()`, and the unused-error-return in `adif.parseRecords` —
+  all deleted. No functional change; less noise.
+- **Convention sweep.** All 9 residual `fmt.Errorf` call sites in
+  the sqlite package converted to `errors.New(op).WithErr(err).WithMsg(...)`.
+  Four handler tests moved off English-message substring matching
+  onto structured decode. Eight `fmt.Sscanf` sites converted to
+  `unmarshalJSON`. Contact-history LIKE pattern anchored on slash
+  (`X/%`) so coincidental prefixes no longer match.
+
+Commits covering session 10 are in the `main` branch; the review
+doc has a resolution note pointing at them.
 
 ### Milestone 1b progress
 
@@ -180,8 +223,143 @@ a Pi) without any code changes — just a config change.
 ### Repo state
 
 **Branches:**
-- `main` — milestone 1b in progress. CI green.
+- `main` — milestone 1b complete, session-10 hardening landed. CI green.
 - `v1` at `0e158ec` — unchanged since session 2.
+
+---
+
+## What happened in session 10 (2026-04-17)
+
+### Goals set for the session
+
+- Finish the SQL call-site audit items 1–2 (started late session 9).
+- Do a full pre-forwarder code review to catch drift/bugs before
+  the much larger forwarder subsystem lands.
+- Address everything the review surfaces.
+
+### What got done
+
+1. **SQL audit wins (items 1–2 of the session-9 list).**
+   - Added `LogbookCallsignByIDWithContext` — `SELECT callsign …`,
+     skips full-row scan + adapter; submit hot path now uses it.
+   - Added composite partial index
+     `idx_qso_logbook_date_time ON qso (logbook_id, qso_date DESC,
+     time_on DESC, id DESC) WHERE deleted_at IS NULL` for cursor
+     pagination. `EXPLAIN QUERY PLAN` confirms the planner seeks
+     directly on the index with no temp B-tree for ORDER BY.
+   - Added directly to `0001_init.up.sql` rather than a new
+     migration file — pre-1.0, no data to migrate.
+
+2. **Export-endpoint reversal.** Previously-nominated
+   `POST /v1/logbook/{id}/export` dropped from the roadmap.
+   Rationale in the session-scope memory and in `api.md` §5.
+   ADIF is a client/admin concern; daemon's backup story is
+   forwarding to online services.
+
+3. **Full milestone-1b review** (`docs/reviews/milestone-1b-review.md`).
+   Independent agent pass with CLAUDE.md + memory files as context.
+   23 findings: 2 high, 9 medium, 12 low. All addressed in the
+   same session:
+
+   **High:**
+   - **H1**: concurrent-submit race (two workers passing the pre-tx
+     dedupe check, second losing on UNIQUE index, surfacing as 500
+     instead of 200-duplicate). Fixed with constraint-error catch
+     and re-query. Deterministic regression test added.
+   - **H2**: dead `qsoservice.FreqMHzToKHzString` still in tree
+     despite session-9 handoff claiming removal. Deleted. `math`
+     import dropped with it.
+
+   **Medium:**
+   - **M1 + M2**: shared `readBody` / `readJSONBody` helpers on
+     `*Server`; logbook POST/PATCH now honour `MaxBodyBytes`;
+     `*http.MaxBytesError` detected via `errors.As` instead of
+     stdlib string match.
+   - **M3**: SQL schema comment and `types.Qso.DedupeKey` docstring
+     now name FREQ in the dedupe-key list.
+   - **M4**: `sqlite.Service.Close` resets `initOnce` +
+     `isInitialized` so re-init cycles work. Cycle test added.
+   - **M5**: dead `ExecContext` + `QueryContext` deleted (also
+     eliminates the context-cancel leak).
+   - **M6**: `qsoservice.Update` is now transactional, mirroring
+     Submit's shape. Commented forwarder hook in place for the
+     future `InsertQsoUploadTx(action.Update)` loop.
+   - **M7**: all 9 residual `fmt.Errorf` sites in the sqlite
+     package converted to the `errors.New(op).WithErr(err).WithMsg(...)`
+     pattern. Two `fmt` imports dropped.
+   - **M8**: `uploadRetryCooldown` annotated with a `TODO(forwarder)`
+     pointer naming the expected config shape
+     (`ForwarderConfig.RetryCooldownSec`). Deferred to the
+     forwarder PR by design.
+   - **M9**: four handler tests moved off English-message substring
+     matching onto structured decode (`ErrorResponse`/`types.Logbook`).
+
+   **Low (all 12 addressed):**
+   - **L1**: `writeJSON`/`writeError` are now methods on `*Server`
+     with encode-error logging; 81 call sites converted.
+   - **L2**: `Server.Shutdown` removes the Unix socket file
+     (best-effort, gated on `s.protocol == "unix"`).
+   - **L3**: "smd stopped" log moved above `loggerSvc.Close()`.
+   - **L4**: `main` now delegates to `run() error` with
+     defer-based cleanup; `fatal()` deleted.
+   - **L5**: `LIMIT 1` in `SchemaVersionWithContext` annotated as
+     defensive.
+   - **L6 (broadened)**: contact-history LIKE pattern changed
+     from `X%` to `X/%` — anchors on slash, matches portable
+     variants (M0CMC/P) but excludes coincidental prefixes
+     (M0CMCE). Two new regression tests.
+   - **L7**: `missingCoreTables` checks `rows.Err()` after the
+     `for rows.Next()` loop.
+   - **L8**: `validTestQso` uses canonical MHz `"7.050"` instead
+     of legacy kHz `"7050"`.
+   - **L9**: sqlite `doc.go` lifecycle description corrected —
+     Migrate is a distinct call, Close resets init guard.
+   - **L10**: `config_test.go` now asserts `DefaultPageLimit=50`,
+     `MaxPageLimit=500`, `MaxContactHistoryResults=100`.
+   - **L11**: 8 `fmt.Sscanf` JSON-substring-matching sites
+     converted to `unmarshalJSON` + structured decode.
+   - **L12**: `adif.parseRecords` error return dropped (dead
+     path; caller check collapsed).
+
+### Coverage summary end-of-session
+
+All tests green under `-race` after every finding. One new test
+family:
+- `TestSubmitQso_ConcurrentDuplicate` — H1 regression.
+- `TestService_InitOpenCloseInitOpen` — M4 cycle regression.
+- `TestCreateLogbook_BodyTooLarge`, `TestUpdateLogbook_BodyTooLarge`,
+  `TestCreateLogbook_InvalidJSON` — M1 regressions.
+- `TestLogbookCallsignByID` — new sqlite helper.
+- `TestContactHistory_PortableSuffixMatches`,
+  `TestContactHistory_CoincidentalPrefixExcluded` — L6 regressions.
+
+### Design decisions made / reaffirmed
+
+- **No daemon-side ADIF export endpoint.** Captured in
+  `memory/project_sm_session_scope.md` as explicit "do not propose."
+- **`qsoservice.Update` shape matches Submit** (tx envelope).
+  Forwarder-hook placeholder inside the tx makes the later
+  extension mechanical.
+- **MaxBodyBytes is enforced on every handler that reads a body.**
+  `readBody` / `readJSONBody` are the single enforcement point.
+- **Contact-history prefix match is portable-only** (`X` OR
+  `X/suffix`). The looser `LIKE X%` shape is gone.
+- **`cmd/smd/main.go` follows the `run() error` pattern.**
+  Cleanups are defers; startup failures unwind them in LIFO order.
+
+### Parked follow-ups
+
+- SQL audit item 3 — dead-method sweep of the six sqlite methods
+  with only test callers (`FetchContactedStationByCallsign`,
+  `FetchCountryByCallsign`, `FetchCountryByName`,
+  `FetchPendingUploads`, `UpdateQsoUploadStatus`,
+  `FetchQsoSliceByLogbookId`, `FetchQsoCountByLogbookId`). The
+  last two forwarder-queue methods will get real callers when the
+  forwarder lands. The enrichment ones will get real callers in
+  milestone 2.
+- SQL audit item 4 — optional `(call, logbook_id) WHERE
+  deleted_at IS NULL` composite for contact-history queries under
+  `?logbook=` filter. Flagged under "wait for a concrete problem."
 
 ---
 
@@ -349,132 +527,22 @@ Full suite race-detector clean.
 
 ---
 
-## What happened in session 8 (2026-04-17)
+## Session 8 (2026-04-17, compressed)
 
-### Goals set for the session
+Implemented milestone 1b step 1 (full logbook CRUD: list, get,
+create, update, delete with FK-safe soft-delete). Tightened QSO
+submit to require `?logbook=<id>` with existence + callsign-match
+validation. Standardised `errors.Op` pattern across handlers
+(`api.FuncName`). Added `IsValidCallsign` at three layers (schema
+CHECK, handler, domain). Fixed `UpsertLogbookWithContext` latent
+no-op-on-existing bug. Listener protocol made config-driven
+(`unix` / `tcp`). 20-client × 50-QSO stress test green with
+~146 QSO/s baseline. sqlite package coverage 0% → 66.9%.
 
-- Implement milestone 1b following the workflow-driven order
-- Code quality review and tightening
-
-### What got done
-
-1. **Logbook CRUD endpoints** (commit `6680386`):
-   - `GET /v1/logbook` — list all logbooks
-   - `GET /v1/logbook/{id}` — fetch by ID, 404 if not found
-   - `POST /v1/logbook` — create with name + callsign validation,
-     409 on duplicate name
-   - `PATCH /v1/logbook/{id}` — partial update with pointer fields,
-     404 if not found
-   - `DELETE /v1/logbook/{id}` — soft-delete, 404 if not found,
-     409 if logbook has QSOs (FK constraint)
-   - Added `UpdateLogbookWithContext` to the sqlite layer
-   - 11 logbook CRUD tests
-
-2. **QSO submit path tightened** (same commit):
-   - `?logbook=<id>` query parameter now required
-   - Logbook existence + callsign match validated before submit
-   - Auto-create logic and `resolveLogbook` method removed
-   - 3 new tests: missing logbook param, logbook not found,
-     callsign mismatch
-   - All existing submit tests updated to create logbooks first
-
-3. **Code style fixes:**
-   - `server.go` — `fmt.Errorf` → `errors.New(op).WithErr(err)`
-   - All handler ops standardised to `errors.Op` type with
-     `api.FuncName` pattern
-   - `parsePathID` — proper `const op errors.Op = "api.parsePathID"`
-   - `writeError` and `ErrorResponse.Op` — `errors.Op` type
-   - `ServerConfig.Protocol` field added (default `"unix"`)
-   - Listener protocol now config-driven in `ListenAndServe`
-
-4. **Logbook update tightened:**
-   - Callsign is immutable after logbook creation — PATCH only
-     accepts `name` and `description`. A callsign field in the
-     request body is silently ignored.
-   - SubmitError messages cleaned up — no programming symbols,
-     consistent `invalid_time_range` code for time coherence errors.
-
-5. **Callsign validation added:**
-   - `IsValidCallsign()` in `qsoservice` — minimum 3 chars, at
-     least 1 digit, maximum 32 chars. Accepts `/` for portable
-     suffixes and secondary prefixes.
-   - Enforced at three levels: schema CHECK, API handler
-     (logbook creation + STATION_CALLSIGN), and domain service
-     (CALL + STATION_CALLSIGN in Submit).
-   - Tests for valid callsigns (K1A, G4ABC, 7Q5MLV, 7Q5MLV/T)
-     and invalid (too short, no digit, empty).
-
-6. **Logbook delete with QSOs fix:**
-   - Soft-delete didn't trigger FK RESTRICT. Added explicit QSO
-     count check in `DeleteLogbookByIDWithContext` before
-     soft-deleting.
-
-7. **Coverage gaps plugged:**
-   - Delete logbook with QSOs (409 conflict)
-   - Body too large (413)
-   - Invalid CALL callsign in ADIF
-   - Invalid STATION_CALLSIGN in ADIF
-
-8. **Stress test:**
-   - 20 concurrent clients, 50 QSOs each, 1000 total
-   - Clients 0-9: CW (RST 599), clients 10-19: SSB/USB (RST 59)
-   - Each QSO includes non-promoted fields (comment, name, qth,
-     gridsquare, my_gridsquare) exercising the additional_data
-     JSON blob
-   - Results: 1000/1000 stored, 0 errors, ~146 QSOs/sec, ~6.8ms
-     avg latency, race detector clean
-   - Benchmark: daemon has ~100x headroom over peak operator load
-
-9. **sqlite package coverage (0% → 66.9%):**
-   - 28 new tests in `internal/database/sqlite/service_test.go`
-   - Covers: service lifecycle (Initialize/Open/Close/Ping
-     idempotency, error paths), logbook CRUD, QSO insert/fetch/update,
-     dedupe key lookup, contest dupe check, contacted station CRUD,
-     country CRUD, QSO list and count, contact history, paging,
-     upload queue insert/fetch/update status, upsert
-   - Found and fixed latent bug: `UpsertLogbookWithContext` had
-     `updateOnConflict=false` — silently no-op'd on existing rows.
-     Now correctly set to `true`.
-
-10. **Added `logbook_id` to QSO stored log line:**
-    - `submit.go` log now includes `logbook_id` alongside `qso_id`,
-      `call`, `band`, `mode` for full diagnostic context.
-
-### Coverage summary end-of-session
-
-| Package | Coverage |
-|---------|----------|
-| `internal/api` | 70.0% |
-| `internal/config` | 90.3% |
-| `internal/database/sqlite` | **66.9%** (was 0%) |
-| `internal/database/sqlite/adapters` | 94.0% |
-| `internal/qsoservice` | 17.5% direct (exercised via api tests) |
-
-Race detector clean across all 14 packages.
-
-### Design decisions made
-
-- **Logbooks are created explicitly** — no auto-creation during QSO
-  submit. The client creates logbooks via `POST /v1/logbook` first.
-- **QSO submit validates logbook ID + callsign match** — the daemon
-  fetches the logbook by ID and verifies its callsign matches
-  STATION_CALLSIGN. Both must match; either failing returns a clear
-  error.
-- **Logbook callsign is immutable** — set at creation, cannot be
-  changed via PATCH. The callsign is the logbook's identity; changing
-  it would break the STATION_CALLSIGN contract with existing QSOs.
-- **Callsign validation at the gate** — minimum 3 chars, at least
-  1 digit, max 32. The daemon is the system boundary; bad data
-  rejected here doesn't reach sqlite. Callsign parsing (prefix/
-  suffix structure, DXCC mapping) is a client/enrichment concern.
-- **Workflow-driven implementation order** — reprioritised to focus
-  on what the operator needs to log and manage QSOs. QSO
-  fetch/edit/delete before enrichment features. Contact history is
-  nice-to-have, not essential (especially during a pile-up).
-- **`errors.Op` convention** — all ops follow `package.FuncName`,
-  typed as `errors.Op`, not plain strings.
-- **Listener protocol configurable** — `ServerConfig.Protocol`
-  defaults to `"unix"` but supports `"tcp"` for network deployment.
+Design decisions fixed in this session and carried forward:
+logbooks are created explicitly (no auto-create); logbook
+callsign is immutable after creation; workflow-driven milestone-1b
+order (fetch/edit/delete before enrichment).
 
 ---
 
@@ -528,58 +596,58 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### The immediate next action (session 10 start)
+### The immediate next action (session 11 start)
 
-Milestone 1b is done — the daemon API surface for client apps is
-complete. The daemon's HTTP surface is feature-complete for now;
-the remaining big pieces are subsystems (forwarder, SSE, bridge)
-rather than endpoints.
-
-**Reshuffle note (session 9):** the previously-nominated
-`POST /v1/logbook/{id}/export` endpoint was dropped from the
-roadmap. ADIF export is a client/admin concern — clients that
-need ADIF page through the QSO list and serialize client-side
-using `internal/adif` (imported as a regular library, not
-HTTP-wrapped). The daemon's backup/redundancy story is forwarding
-to online services, not file export. See the end-of-session
-design-decisions list above for the full rationale.
+Milestone 1b is done AND hardened. No known bugs. No convention
+drift. The codebase is at a clean baseline for the forwarder
+subsystem.
 
 Priority order:
 
-1. **Forwarder subsystem** (milestone 1c / 2). This is now the top
-   item and the biggest remaining design question. Real upload-queue
-   worker, retries, fan-out to N configured destinations (replacing
-   v1's hardcoded-QRZ shape). Biggest open design question: the
-   forwarder fan-out config shape. `docs/v2-design/forwarding.md`
-   doesn't exist yet and should — that's where the design gets
-   settled. v1 forwarding code is the structural reference (retry
-   loop, goroutine topology, upload-queue polling) per
-   `docs/v2-design/api.md` §4.3; the piece that needs redesign is
-   fan-out.
+1. **Forwarder subsystem** (milestone 1c / 2). This is now
+   unambiguously the next thing. Real upload-queue worker,
+   retries, fan-out to N configured destinations (replacing v1's
+   hardcoded-QRZ shape). Biggest open design question is the
+   forwarder fan-out config shape; `docs/v2-design/forwarding.md`
+   doesn't exist yet and should be the first artefact of this
+   milestone — write the design before any code. v1 forwarding
+   code is the structural reference (retry loop, goroutine
+   topology, upload-queue polling) per `docs/v2-design/api.md`
+   §4.3; the piece that needs redesign is fan-out.
+
+   Forwarder-specific gotchas already flagged in the codebase:
+   - `internal/database/sqlite/consts.go` — `uploadRetryCooldown`
+     has a `TODO(forwarder)` naming the expected config field
+     (`ForwarderConfig.RetryCooldownSec`). Do not ship the
+     forwarder with this as a hardcoded constant.
+   - `internal/qsoservice/update.go` — commented forwarder hook
+     inside the existing tx envelope shows exactly where the
+     `InsertQsoUploadTx(action.Update)` loop drops in.
 
 2. **SSE event stream (`GET /v1/events`)**. First consumer will be
    the logging-app's "new QSO arrived in my session" refresh. Will
    need `qso.stored`/`qso.updated`/`qso.deleted`/`forward.*` emit
-   sites wired up alongside the respective handlers.
+   sites wired up alongside the respective handlers. Depends on
+   the forwarder for the `forward.*` vocabulary.
 
 3. **Bridge / CAT design**. Separate subsystem; see
    `project_sm_serial_bridge.md` memory.
 
-If you want a small cleanup tick before any of these, there's one
-latent thing on the shelf: the contact-history match predicate
-accepts `Call LIKE 'X%'` which catches portable suffixes like
-`M0CMC/P` but also false-positives on `M0CMCE`. A tighter
-`Call = 'X' OR Call LIKE 'X/%'` would be better but is a behaviour
-change with no active complaint — worth flagging rather than
-silently changing.
+### Parked follow-ups (low priority, not blockers)
 
-Second small item: the `database/sqlite` call-site audit
-(performed late session 9) landed items 1 and 2 (lightweight
-`LogbookCallsignByIDWithContext` on the submit hot path; composite
-pagination index `idx_qso_logbook_date_time`). Items 3+ were
-parked as dedicated follow-ups (dead-method sweep; optional
-`(call, logbook_id)` composite for contact-history under a
-logbook filter).
+- **Dead-method sweep (SQL audit item 3).** Seven sqlite methods
+  have only test callers today. Four are expected milestone-2
+  consumers (enrichment: `FetchContactedStationByCallsign`,
+  `FetchCountryByCallsign`, `FetchCountryByName`) or milestone-1c
+  consumers (forwarder queue: `FetchPendingUploads`,
+  `UpdateQsoUploadStatus`). The other three
+  (`FetchQsoSliceByLogbookId`, `FetchQsoCountByLogbookId`,
+  likely `FetchQsoByDedupeKey`'s no-context wrapper) need a
+  specific "delete or keep" decision. Park until we know.
+- **SQL audit item 4** — optional `(call, logbook_id) WHERE
+  deleted_at IS NULL` composite for contact-history with
+  `?logbook=` filter. Defer until a concrete performance
+  complaint surfaces.
 
 ### v2 design work
 
@@ -602,5 +670,6 @@ logbook filter).
 
 ### Maintenance
 
-- Compress session 8 after session 10 lands.
+- Compress session 9 after session 11 lands (session 8 is already
+  compressed at end of session 10).
 - Update this file at end of every session.
