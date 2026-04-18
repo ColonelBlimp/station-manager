@@ -103,3 +103,32 @@ func LogbookModelToType(model *models.Logbook) (types.Logbook, error) {
 		Description: model.Description.String,
 	}, nil
 }
+
+// QsoUploadModelToType converts a sqlite row to types.QsoUpload.
+//
+// The model has several nullable columns (created_at, modified_at,
+// last_attempt_at, last_error, upstream_id); the DTO flattens them to
+// zero-values so downstream consumers (worker, pull-endpoint handler)
+// don't have to handle null-vs-value distinctions the daemon doesn't
+// care about.
+func QsoUploadModelToType(model *models.QsoUpload) (types.QsoUpload, error) {
+	const op errors.Op = "sqlite.adapters.QsoUploadModelToType"
+	if model == nil {
+		return types.QsoUpload{}, errors.New(op).WithMsg(errMsgNilModel)
+	}
+	return types.QsoUpload{
+		ID:            model.ID,
+		CreatedAt:     model.CreatedAt,
+		ModifiedAt:    model.ModifiedAt.Time,
+		QsoID:         model.QsoID,
+		ForwarderName: model.ForwarderName,
+		ForwarderType: model.ForwarderType,
+		Action:        model.Action,
+		Status:        model.Status,
+		Attempts:      model.Attempts,
+		LastAttemptAt: model.LastAttemptAt.Int64,
+		NextAttemptAt: model.NextAttemptAt,
+		LastError:     model.LastError.String,
+		UpstreamID:    model.UpstreamID.String,
+	}, nil
+}

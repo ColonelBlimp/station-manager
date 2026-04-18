@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/aarondl/null/v8"
 	"github.com/aarondl/sqlboiler/v4/boil"
+	"github.com/aarondl/sqlboiler/v4/queries"
 	"github.com/aarondl/sqlboiler/v4/queries/qm"
 )
 
@@ -1071,6 +1072,274 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 	}
 
 	return exists, nil
+}
+
+/**********************************************************************************************************************
+ * Upload Methods — forwarder worker lifecycle over qso_upload rows.
+ * See docs/v2-design/forwarding.md §4 and §7 for the design.
+ **********************************************************************************************************************/
+
+// ClaimPendingUploadsWithContext atomically transitions up to `limit`
+// pending rows for the given forwarder from 'pending' to 'in_progress'
+// and returns them. Rows are selected by next_attempt_at <= now (so
+// retries don't jump the queue) and ordered by next_attempt_at ASC
+// (FIFO). Returns an empty slice when there is nothing to claim.
+//
+// SQLite is single-writer, so the UPDATE...RETURNING is race-free by
+// construction; the per-forwarder scope (forwarder_name = ?) also
+// means two workers for different destinations never compete for a
+// row.
+func (s *Service) ClaimPendingUploadsWithContext(ctx context.Context, forwarderName string, limit int) ([]types.QsoUpload, error) {
+	const op errors.Op = "sqlite.Service.ClaimPendingUploadsWithContext"
+	if err := checkService(op, s); err != nil {
+		return nil, err
+	}
+	if forwarderName == "" {
+		return nil, errors.New(op).WithMsg("forwarderName is empty")
+	}
+	if limit < 1 {
+		return nil, errors.New(op).WithMsg("limit must be >= 1")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	// modified_at is maintained by the trg_qso_upload_set_updated_at
+	// trigger, so we don't set it here.
+	const q = `
+UPDATE qso_upload
+SET    status = ?,
+       last_attempt_at = ?
+WHERE  id IN (
+    SELECT id FROM qso_upload
+    WHERE  forwarder_name = ?
+      AND  status         = ?
+      AND  next_attempt_at <= ?
+    ORDER BY next_attempt_at
+    LIMIT  ?
+)
+RETURNING *`
+
+	now := time.Now().Unix()
+
+	var rows []*models.QsoUpload
+	err = queries.Raw(q,
+		status.InProgress.String(),
+		now,
+		forwarderName,
+		status.Pending.String(),
+		now,
+		limit,
+	).Bind(ctx, h, &rows)
+	if err != nil && !stderr.Is(err, sql.ErrNoRows) {
+		return nil, errors.New(op).WithErr(err).WithMsg("claim pending uploads")
+	}
+
+	out := make([]types.QsoUpload, 0, len(rows))
+	for _, r := range rows {
+		u, er := adapters.QsoUploadModelToType(r)
+		if er != nil {
+			return nil, errors.New(op).WithErr(er)
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+// MarkUploadSuccessWithContext records a successful Submit outcome:
+// status → 'uploaded', attempts bumped, upstream_id persisted
+// (empty string becomes NULL), last_error cleared.
+func (s *Service) MarkUploadSuccessWithContext(ctx context.Context, id int64, upstreamID string) error {
+	const op errors.Op = "sqlite.Service.MarkUploadSuccessWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if id < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	const q = `
+UPDATE qso_upload
+SET    status = ?,
+       attempts = attempts + 1,
+       upstream_id = ?,
+       last_error = NULL
+WHERE  id = ?`
+
+	var upstream any
+	if upstreamID != "" {
+		upstream = upstreamID
+	}
+	if _, err = h.ExecContext(ctx, q, status.Uploaded.String(), upstream, id); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("mark upload success")
+	}
+	return nil
+}
+
+// MarkUploadTransientRetryWithContext records a transient failure
+// that is eligible for another attempt: status → 'pending' (so the
+// worker's next claim picks it up), attempts bumped, next_attempt_at
+// set (caller computes the backoff per docs/v2-design/forwarding.md
+// §5), last_error stored.
+func (s *Service) MarkUploadTransientRetryWithContext(ctx context.Context, id int64, nextAttemptAt int64, lastError string) error {
+	const op errors.Op = "sqlite.Service.MarkUploadTransientRetryWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if id < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	if nextAttemptAt < 1 {
+		return errors.New(op).WithMsg("nextAttemptAt must be >= 1")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	const q = `
+UPDATE qso_upload
+SET    status = ?,
+       attempts = attempts + 1,
+       next_attempt_at = ?,
+       last_error = ?
+WHERE  id = ?`
+
+	var errMsg any
+	if lastError != "" {
+		errMsg = lastError
+	}
+	if _, err = h.ExecContext(ctx, q, status.Pending.String(), nextAttemptAt, errMsg, id); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("mark upload transient retry")
+	}
+	return nil
+}
+
+// MarkUploadFailedWithContext records a terminal outcome: status →
+// 'failed', attempts bumped, last_error stored. Used for both an
+// OutcomeTerminal from the forwarder and an OutcomeTransient that
+// has exhausted its retry budget.
+func (s *Service) MarkUploadFailedWithContext(ctx context.Context, id int64, lastError string) error {
+	const op errors.Op = "sqlite.Service.MarkUploadFailedWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if id < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	const q = `
+UPDATE qso_upload
+SET    status = ?,
+       attempts = attempts + 1,
+       last_error = ?
+WHERE  id = ?`
+
+	var errMsg any
+	if lastError != "" {
+		errMsg = lastError
+	}
+	if _, err = h.ExecContext(ctx, q, status.Failed.String(), errMsg, id); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("mark upload failed")
+	}
+	return nil
+}
+
+// ResetOrphanedUploadsWithContext transitions any 'in_progress' rows
+// back to 'pending'. Run at daemon startup to recover from a crash
+// that left rows claimed by a worker that never wrote their outcome.
+// Returns the number of rows reset for logging.
+//
+// Safe because duplicates on the upstream are tolerable (most
+// forwarders are idempotent on their own dedupe rules — see
+// docs/v2-design/forwarding.md §7). A claimed-but-never-persisted row
+// is treated as if the claim never happened.
+func (s *Service) ResetOrphanedUploadsWithContext(ctx context.Context) (int64, error) {
+	const op errors.Op = "sqlite.Service.ResetOrphanedUploadsWithContext"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	const q = `
+UPDATE qso_upload
+SET    status = ?
+WHERE  status = ?`
+
+	res, err := h.ExecContext(ctx, q, status.Pending.String(), status.InProgress.String())
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("reset orphaned uploads")
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("rows affected")
+	}
+	return n, nil
+}
+
+// FetchUploadsByQsoIDWithContext returns every qso_upload row for the
+// given QSO, ordered by (forwarder_name, action) so the output is
+// stable across calls. Drives the GET /v1/qso/:id/uploads endpoint.
+func (s *Service) FetchUploadsByQsoIDWithContext(ctx context.Context, qsoID int64) ([]types.QsoUpload, error) {
+	const op errors.Op = "sqlite.Service.FetchUploadsByQsoIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return nil, err
+	}
+	if qsoID < 1 {
+		return nil, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	rows, err := models.QsoUploads(
+		models.QsoUploadWhere.QsoID.EQ(qsoID),
+		qm.OrderBy("forwarder_name, action"),
+	).All(ctx, h)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("fetch uploads by qso id")
+	}
+
+	out := make([]types.QsoUpload, 0, len(rows))
+	for _, r := range rows {
+		u, er := adapters.QsoUploadModelToType(r)
+		if er != nil {
+			return nil, errors.New(op).WithErr(er)
+		}
+		out = append(out, u)
+	}
+	return out, nil
 }
 
 /**********************************************************************************************************************

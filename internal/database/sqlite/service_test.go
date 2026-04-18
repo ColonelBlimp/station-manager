@@ -1,10 +1,13 @@
 package sqlite
 
 import (
+	"context"
 	stderr "errors"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -888,5 +891,381 @@ func TestUpsertLogbook_InvalidID(t *testing.T) {
 	err := svc.UpsertLogbook(types.Logbook{ID: 0, Name: "X", Callsign: "G4ABC"})
 	if err == nil {
 		t.Fatal("expected error for id=0")
+	}
+}
+
+// ---- Upload queue (qso_upload) ----
+
+// enqueueUpload is a test-only helper that inserts one qso_upload row via
+// the transactional API. Wraps BeginTx/InsertQsoUploadTx/Commit so the
+// upload-methods tests can set up fixtures without repeating the dance.
+func enqueueUpload(t *testing.T, svc *Service, qsoID int64, name, typ string, act action.Action) {
+	t.Helper()
+	ctx := context.Background()
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, act, name, typ); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert upload: %v", err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+// rawExec runs a raw SQL statement against the service's DB. Test-only —
+// used to back-date next_attempt_at columns for claim-ordering tests
+// where the production API doesn't expose the knob.
+func rawExec(t *testing.T, svc *Service, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+	if _, err = tx.ExecContext(ctx, sql, args...); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("raw exec: %v", err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+func TestClaimPendingUploads_Empty(t *testing.T) {
+	svc := testService(t)
+
+	got, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 5)
+	if err != nil {
+		t.Fatalf("claim on empty table: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0 (nothing to claim)", len(got))
+	}
+}
+
+func TestClaimPendingUploads_HappyPath(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+
+	qso := validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845")
+	qsoID, err := svc.InsertQso(qso)
+	if err != nil {
+		t.Fatalf("insert qso: %v", err)
+	}
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	claimed, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 5)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("len = %d, want 1", len(claimed))
+	}
+
+	row := claimed[0]
+	if row.QsoID != qsoID {
+		t.Fatalf("QsoID = %d, want %d", row.QsoID, qsoID)
+	}
+	if row.Status != "in_progress" {
+		t.Fatalf("Status = %q, want in_progress (claim should flip it)", row.Status)
+	}
+	if row.ForwarderName != "qrz" || row.ForwarderType != "qrz" {
+		t.Fatalf("name/type = %q/%q", row.ForwarderName, row.ForwarderType)
+	}
+	if row.LastAttemptAt == 0 {
+		t.Fatal("LastAttemptAt not set by claim")
+	}
+
+	// Second claim should pick up nothing — the row is now in_progress,
+	// not pending.
+	again, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 5)
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("second claim returned %d rows, want 0", len(again))
+	}
+}
+
+func TestClaimPendingUploads_ScopedByForwarderName(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+
+	qso := validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845")
+	qsoID, _ := svc.InsertQso(qso)
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	enqueueUpload(t, svc, qsoID, "clublog", "clublog", action.Insert)
+
+	// Claim as qrz — clublog row must NOT be returned.
+	got, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 5)
+	if err != nil {
+		t.Fatalf("claim qrz: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].ForwarderName != "qrz" {
+		t.Fatalf("claimed forwarder_name = %q, want qrz", got[0].ForwarderName)
+	}
+}
+
+func TestClaimPendingUploads_OrderedByNextAttemptAt(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+
+	// Three QSOs, three queue rows all for the same forwarder.
+	var qsoIDs [3]int64
+	for i := 0; i < 3; i++ {
+		q := validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "084"+string(rune('5'+i)))
+		q.DedupeKey = q.DedupeKey[:63] + string(rune('a'+i)) // uniquify
+		id, err := svc.InsertQso(q)
+		if err != nil {
+			t.Fatalf("insert qso %d: %v", i, err)
+		}
+		qsoIDs[i] = id
+		enqueueUpload(t, svc, id, "qrz", "qrz", action.Insert)
+	}
+
+	// Manually back-date the first two rows' next_attempt_at so we know
+	// the expected claim order: row-0 (earliest) → row-1 → row-2.
+	rawExec(t, svc,
+		`UPDATE qso_upload SET next_attempt_at = ? WHERE qso_id = ?`,
+		int64(1000), qsoIDs[0])
+	rawExec(t, svc,
+		`UPDATE qso_upload SET next_attempt_at = ? WHERE qso_id = ?`,
+		int64(2000), qsoIDs[1])
+	// row 2 keeps its default next_attempt_at ≈ now (large unix time)
+
+	claimed, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 2)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(claimed) != 2 {
+		t.Fatalf("len = %d, want 2 (batch cap)", len(claimed))
+	}
+	// Oldest two next_attempt_at should come out, in order.
+	if claimed[0].QsoID != qsoIDs[0] {
+		t.Fatalf("first claim QsoID = %d, want %d (earliest next_attempt_at)", claimed[0].QsoID, qsoIDs[0])
+	}
+	if claimed[1].QsoID != qsoIDs[1] {
+		t.Fatalf("second claim QsoID = %d, want %d", claimed[1].QsoID, qsoIDs[1])
+	}
+}
+
+func TestClaimPendingUploads_SkipsFutureNextAttempt(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	// Push next_attempt_at an hour into the future. Claim must not pick
+	// this up.
+	future := time.Now().Add(time.Hour).Unix()
+	rawExec(t, svc,
+		`UPDATE qso_upload SET next_attempt_at = ? WHERE qso_id = ?`,
+		future, qsoID)
+
+	got, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 5)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0 (next_attempt_at in future)", len(got))
+	}
+}
+
+func TestMarkUploadSuccess(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	if len(claimed) != 1 {
+		t.Fatalf("claim: len = %d, want 1", len(claimed))
+	}
+	rowID := claimed[0].ID
+
+	if err := svc.MarkUploadSuccessWithContext(context.Background(), rowID, "upstream-42"); err != nil {
+		t.Fatalf("mark success: %v", err)
+	}
+
+	uploads, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("len = %d, want 1", len(uploads))
+	}
+	got := uploads[0]
+	if got.Status != "uploaded" {
+		t.Fatalf("Status = %q, want uploaded", got.Status)
+	}
+	if got.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", got.Attempts)
+	}
+	if got.UpstreamID != "upstream-42" {
+		t.Fatalf("UpstreamID = %q, want upstream-42", got.UpstreamID)
+	}
+	if got.LastError != "" {
+		t.Fatalf("LastError = %q, want empty", got.LastError)
+	}
+}
+
+func TestMarkUploadSuccess_EmptyUpstreamID_StoresNull(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	rowID := claimed[0].ID
+
+	if err := svc.MarkUploadSuccessWithContext(context.Background(), rowID, ""); err != nil {
+		t.Fatalf("mark success: %v", err)
+	}
+
+	uploads, _ := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if uploads[0].UpstreamID != "" {
+		t.Fatalf("UpstreamID = %q, want empty (stored as NULL)", uploads[0].UpstreamID)
+	}
+}
+
+func TestMarkUploadTransientRetry(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	rowID := claimed[0].ID
+
+	future := time.Now().Add(time.Minute).Unix()
+	if err := svc.MarkUploadTransientRetryWithContext(context.Background(), rowID, future, "timeout"); err != nil {
+		t.Fatalf("mark transient retry: %v", err)
+	}
+
+	uploads, _ := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	got := uploads[0]
+	if got.Status != "pending" {
+		t.Fatalf("Status = %q, want pending (transient retry goes back to pending)", got.Status)
+	}
+	if got.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", got.Attempts)
+	}
+	if got.NextAttemptAt != future {
+		t.Fatalf("NextAttemptAt = %d, want %d", got.NextAttemptAt, future)
+	}
+	if got.LastError != "timeout" {
+		t.Fatalf("LastError = %q, want timeout", got.LastError)
+	}
+}
+
+func TestMarkUploadFailed(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	rowID := claimed[0].ID
+
+	if err := svc.MarkUploadFailedWithContext(context.Background(), rowID, "bad credentials"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	uploads, _ := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	got := uploads[0]
+	if got.Status != "failed" {
+		t.Fatalf("Status = %q, want failed", got.Status)
+	}
+	if got.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", got.Attempts)
+	}
+	if got.LastError != "bad credentials" {
+		t.Fatalf("LastError = %q, want 'bad credentials'", got.LastError)
+	}
+}
+
+func TestResetOrphanedUploads(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	// Claim (flips pending → in_progress) and then crash — don't mark
+	// the outcome. The row is now orphaned.
+	if _, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	n, err := svc.ResetOrphanedUploadsWithContext(context.Background())
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("reset count = %d, want 1", n)
+	}
+
+	uploads, _ := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if uploads[0].Status != "pending" {
+		t.Fatalf("Status = %q after reset, want pending", uploads[0].Status)
+	}
+}
+
+func TestResetOrphanedUploads_NoOrphans_ReturnsZero(t *testing.T) {
+	svc := testService(t)
+	n, err := svc.ResetOrphanedUploadsWithContext(context.Background())
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("reset count = %d, want 0", n)
+	}
+}
+
+func TestFetchUploadsByQsoID_Empty(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	got, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0 (no queue rows for this qso)", len(got))
+	}
+}
+
+func TestFetchUploadsByQsoID_Multiple(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	enqueueUpload(t, svc, qsoID, "clublog", "clublog", action.Insert)
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
+
+	got, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	// Ordered (forwarder_name, action): clublog/insert, qrz/insert, qrz/update.
+	wantOrder := []string{"clublog|insert", "qrz|insert", "qrz|update"}
+	for i, w := range wantOrder {
+		have := got[i].ForwarderName + "|" + got[i].Action
+		if have != w {
+			t.Fatalf("row %d = %q, want %q", i, have, w)
+		}
 	}
 }
