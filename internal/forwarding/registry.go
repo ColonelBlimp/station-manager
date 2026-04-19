@@ -15,8 +15,9 @@ import (
 type Constructor func(types.ForwarderConfig) (Forwarder, error)
 
 var (
-	registryMu sync.Mutex
-	registry   = map[string]Constructor{}
+	registryMu      sync.Mutex
+	registry        = map[string]Constructor{}
+	defaultRetryMap = map[string]types.RetryConfig{}
 )
 
 // Register adds a forwarder constructor under the given type name.
@@ -68,4 +69,51 @@ func IsRegistered(typeName string) bool {
 	defer registryMu.Unlock()
 	_, ok := registry[typeName]
 	return ok
+}
+
+// RegisterDefaultRetry records the type-specific default RetryConfig
+// for forwarder typeName. Each concrete forwarder package supplies
+// its own, tuned to the upstream's tolerances (QRZ web API vs.
+// ClubLog daily batches vs. LoTW's slow acknowledgements), so a
+// single one-size-fits-all default doesn't have to live in
+// cmd/smd/main.go. The daemon looks up the per-type default via
+// DefaultRetryFor when the operator's config doesn't override
+// `retry` explicitly.
+//
+// Panics on empty typeName, an obviously-invalid RetryConfig, or
+// duplicate registration — all three are bugs in the binary, not
+// runtime conditions.
+//
+// Validation here matches worker.New's constructor checks so an
+// invalid default never silently survives to worker-spawn.
+func RegisterDefaultRetry(typeName string, retry types.RetryConfig) {
+	if typeName == "" {
+		panic("forwarding.RegisterDefaultRetry: empty type name")
+	}
+	if retry.MaxAttempts < 1 {
+		panic("forwarding.RegisterDefaultRetry: MaxAttempts must be >= 1 for " + typeName)
+	}
+	if retry.InitialBackoffSec < 1 {
+		panic("forwarding.RegisterDefaultRetry: InitialBackoffSec must be >= 1 for " + typeName)
+	}
+	if retry.MaxBackoffSec < retry.InitialBackoffSec {
+		panic("forwarding.RegisterDefaultRetry: MaxBackoffSec must be >= InitialBackoffSec for " + typeName)
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := defaultRetryMap[typeName]; exists {
+		panic("forwarding.RegisterDefaultRetry: type already has a default: " + typeName)
+	}
+	defaultRetryMap[typeName] = retry
+}
+
+// DefaultRetryFor returns the registered default RetryConfig for
+// typeName, or (zero, false) if none was registered. The daemon
+// treats the absence as a config error — forwarder packages should
+// always register one, since retry values are upstream-specific.
+func DefaultRetryFor(typeName string) (types.RetryConfig, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	retry, ok := defaultRetryMap[typeName]
+	return retry, ok
 }

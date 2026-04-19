@@ -101,3 +101,88 @@ func TestIsRegistered_UnknownType(t *testing.T) {
 		t.Fatal("IsRegistered returned true for unregistered type")
 	}
 }
+
+// ---- RegisterDefaultRetry / DefaultRetryFor (stage 7) ----
+
+func validRetry() types.RetryConfig {
+	return types.RetryConfig{
+		MaxAttempts:       3,
+		InitialBackoffSec: 10,
+		MaxBackoffSec:     60,
+	}
+}
+
+func TestRegisterDefaultRetry_And_Lookup(t *testing.T) {
+	RegisterDefaultRetry("retrytest-ok", validRetry())
+
+	got, ok := DefaultRetryFor("retrytest-ok")
+	if !ok {
+		t.Fatal("DefaultRetryFor returned ok=false for registered type")
+	}
+	want := validRetry()
+	if got != want {
+		t.Fatalf("DefaultRetryFor = %+v, want %+v", got, want)
+	}
+}
+
+func TestDefaultRetryFor_UnknownType(t *testing.T) {
+	if _, ok := DefaultRetryFor("retrytest-never-used"); ok {
+		t.Fatal("DefaultRetryFor returned ok=true for unregistered type")
+	}
+}
+
+func TestRegisterDefaultRetry_PanicsOnEmptyType(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("empty type did not panic")
+		}
+	}()
+	RegisterDefaultRetry("", validRetry())
+}
+
+func TestRegisterDefaultRetry_PanicsOnDuplicate(t *testing.T) {
+	RegisterDefaultRetry("retrytest-dup", validRetry())
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("duplicate did not panic")
+		}
+	}()
+	RegisterDefaultRetry("retrytest-dup", validRetry())
+}
+
+func TestRegisterDefaultRetry_PanicsOnInvalidConfig(t *testing.T) {
+	cases := []struct {
+		name  string
+		cfg   types.RetryConfig
+		panic string
+	}{
+		{
+			"MaxAttempts < 1",
+			types.RetryConfig{MaxAttempts: 0, InitialBackoffSec: 10, MaxBackoffSec: 60},
+			"MaxAttempts",
+		},
+		{
+			"InitialBackoff < 1",
+			types.RetryConfig{MaxAttempts: 3, InitialBackoffSec: 0, MaxBackoffSec: 60},
+			"InitialBackoffSec",
+		},
+		{
+			"MaxBackoff < InitialBackoff",
+			types.RetryConfig{MaxAttempts: 3, InitialBackoffSec: 60, MaxBackoffSec: 30},
+			"MaxBackoffSec",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("%s: did not panic", tc.name)
+				}
+			}()
+			// Use a unique name each loop so tests don't collide.
+			RegisterDefaultRetry("retrytest-bad-"+tc.name, tc.cfg)
+		})
+	}
+}

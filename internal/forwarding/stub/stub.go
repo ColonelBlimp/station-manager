@@ -40,8 +40,20 @@ const (
 	ModeFlapN           = "flap_n"
 )
 
+// DefaultRetry is the retry policy the daemon uses when a stub
+// forwarder config entry has no explicit `retry` block. Tight
+// values — the stub exists for plumbing verification, not real
+// retries; tests that want to exercise backoff set Config.Retry
+// directly.
+var DefaultRetry = types.RetryConfig{
+	MaxAttempts:       3,
+	InitialBackoffSec: 1,
+	MaxBackoffSec:     5,
+}
+
 func init() {
 	forwarding.Register(Type, New)
+	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials

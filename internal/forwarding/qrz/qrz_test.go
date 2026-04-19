@@ -28,6 +28,17 @@ func TestInit_RegistersQrzType(t *testing.T) {
 	}
 }
 
+func TestInit_RegistersDefaultRetry(t *testing.T) {
+	got, ok := forwarding.DefaultRetryFor(Type)
+	if !ok {
+		t.Fatalf("qrz type %q has no default retry registered via init()", Type)
+	}
+	if got != DefaultRetry {
+		t.Fatalf("registered default = %+v, want %+v (should match exported DefaultRetry)",
+			got, DefaultRetry)
+	}
+}
+
 func TestNew_Valid_ReturnsForwarder(t *testing.T) {
 	fwd, err := New(types.ForwarderConfig{
 		Name: "qrz-test", Type: Type,

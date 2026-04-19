@@ -213,27 +213,18 @@ func run() error {
 	return runErr
 }
 
-// defaultForwarderRetry is the fallback RetryConfig used when a
-// forwarder config entry has no explicit `retry` block. Conservative
-// values that match v1's operator-environment experience on a
-// slow/unreliable link — see docs/v2-design/forwarding.md §2 / §5.
-//
-// When real forwarders land (QRZ, ClubLog, LoTW) each package will
-// want to ship its own upstream-tuned defaults; the shape of that
-// ownership is deferred until the first real forwarder is written.
-// Today the stub is the only forwarder and these fallback values work
-// for it.
-var defaultForwarderRetry = types.RetryConfig{
-	MaxAttempts:       5,
-	InitialBackoffSec: 60,
-	MaxBackoffSec:     3600,
-}
-
 // spawnForwarderWorkers constructs one worker per enabled forwarder
 // in cfg and launches each under safego.Go with respawn=true. A panic
 // inside a worker's Run path is recovered, logged via the daemon
 // logger, and the worker is respawned so that a transient panic doesn't
 // permanently disable a destination — see forwarding.md §9.
+//
+// Retry config resolution (stage 7): operator's `retry` block wins if
+// present; otherwise the forwarder package's own registered
+// DefaultRetry is used (tuned to the upstream's tolerances — see each
+// package's DefaultRetry var for rationale). A type with no registered
+// default AND no explicit config retry is a setup error and fails
+// startup loudly.
 //
 // Disabled entries are skipped (no goroutine spawned, no queue rows
 // processed). If forwarding.Build rejects a config, startup fails —
@@ -264,9 +255,19 @@ func spawnForwarderWorkers(
 			return fmt.Errorf("build forwarder %q: %w", fc.Name, err)
 		}
 
-		retry := defaultForwarderRetry
+		var retry types.RetryConfig
 		if fc.Retry != nil {
 			retry = *fc.Retry
+		} else {
+			def, ok := forwarding.DefaultRetryFor(fc.Type)
+			if !ok {
+				return fmt.Errorf(
+					"forwarder %q (type %q) has no retry config and no default registered — "+
+						"either add a `retry` block to config.forwarders or have the forwarder package call "+
+						"forwarding.RegisterDefaultRetry in init()", fc.Name, fc.Type,
+				)
+			}
+			retry = def
 		}
 
 		w, err := worker.New(worker.Config{

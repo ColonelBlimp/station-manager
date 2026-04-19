@@ -71,8 +71,21 @@ const DefaultHTTPTimeout = 30 * time.Second
 // (stage 8). Until then the "dev" fallback keeps tests hermetic.
 var UserAgent = "station-manager/dev"
 
+// DefaultRetry is the retry policy the daemon uses when a QRZ
+// forwarder config entry has no explicit `retry` block. Tuned for
+// QRZ's web API: transient 5xx/429/network blips recover within
+// minutes, and the operator's link is slow/unreliable so we don't
+// hammer the server. Five attempts spans ~60s → ~1800s of backoff,
+// a reasonable window before giving up and marking the row failed.
+var DefaultRetry = types.RetryConfig{
+	MaxAttempts:       5,
+	InitialBackoffSec: 60,
+	MaxBackoffSec:     1800,
+}
+
 func init() {
 	forwarding.Register(Type, New)
+	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials

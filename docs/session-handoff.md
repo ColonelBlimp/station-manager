@@ -26,11 +26,13 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-04-19, session 13 in progress)
 
-### QRZ port: stages 1–6 complete
+### QRZ port: stages 1–7 complete
 
-Stages 1–6 of the 8-stage QRZ port are committed and under test.
+Stages 1–7 of the 8-stage QRZ port are committed and under test.
 Insert / update / delete are live-validated against real QRZ;
-stage 6 adds the ADIF upload-status stamp. Stages 7–8 remain.
+stage 6 adds the ADIF upload-status stamp; stage 7 moves retry
+defaults into the forwarder packages themselves. Stage 8 (the
+final wiring + doc refresh) is what remains.
 
 **Stage 1 — Forwarder interface extension** (session 12, committed):
 
@@ -208,8 +210,45 @@ stage 6 adds the ADIF upload-status stamp. Stages 7–8 remain.
   `types.Qso` fields (for ADIF export round-trip) get the
   matching JSON tag.
 
-Full suite green under `-race`. Stage 7 (retry-defaults
-ownership refactor) is the immediate next action.
+**Stage 7 — Retry-defaults ownership refactor** (session 13):
+
+- `internal/forwarding/registry.go`: new
+  `RegisterDefaultRetry(typeName, retry)` + `DefaultRetryFor(typeName)`.
+  Companion map alongside the existing constructor registry.
+  `Register` panics on empty type / duplicate / nil ctor; the new
+  `RegisterDefaultRetry` adds validation parity with
+  `worker.New` (panics on MaxAttempts < 1, InitialBackoffSec < 1,
+  or MaxBackoffSec < InitialBackoffSec) so an invalid default never
+  survives to spawn.
+- `internal/forwarding/qrz/qrz.go`: exports
+  `DefaultRetry = {5 attempts, 60s initial, 1800s max}`, tuned for
+  the QRZ web API + the operator's slow/unreliable link. Registered
+  in `init()`.
+- `internal/forwarding/stub/stub.go`: exports
+  `DefaultRetry = {3 attempts, 1s initial, 5s max}`. Tight values —
+  stub is for plumbing verification; tests that want to exercise
+  backoff set `Config.Retry` directly.
+- `cmd/smd/main.go`: `spawnForwarderWorkers` now resolves retry
+  via `forwarding.DefaultRetryFor(fc.Type)` when `fc.Retry` is
+  absent. A type with neither a config override nor a registered
+  default is a setup error and fails startup loudly with a clear
+  message naming both the forwarder instance and the type. The
+  package-level `defaultForwarderRetry` fallback is deleted.
+- Tests: registry gets 6 new cases (register + lookup, missing
+  type, empty-type panic, duplicate panic, invalid-config panic
+  for each of the three RetryConfig fields). qrz and stub each
+  get an `TestInit_RegistersDefaultRetry` asserting the var is
+  exported and registered consistently.
+- **Consequence for future forwarders**: ClubLog / LoTW / eQSL
+  each ship their own `DefaultRetry` with values appropriate to
+  that upstream's quirks (LoTW's batch acknowledgements,
+  ClubLog's daily windows, ...). No main.go changes to land a
+  new forwarder.
+
+Full suite green under `-race`. Stage 8 (blank-import
+forwarders in cmd/smd/main.go, wire `qrz.UserAgent` and
+`adif.ProgramVersion` from `main.Version`, final doc refresh)
+is the last stage.
 
 ### Forwarder subsystem thin-slice complete (session 11)
 
@@ -1068,8 +1107,8 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (continue QRZ port)
 
-Stages 1–6 are committed (1–5 live-validated against real QRZ);
-stages 7–8 remain. The full plan, with design decisions already
+Stages 1–7 are committed (1–5 live-validated against real QRZ);
+stage 8 remains. The full plan, with design decisions already
 resolved, is below — do **not** re-derive.
 
 **QRZ API reference** (from the operator's paste of QRZ's developer
@@ -1135,8 +1174,8 @@ guide — use this, not an inferred version):
 | 4 | Insert + update `Submit` — real HTTP, `buildForm` + `classifyHTTPStatus`, `DefaultEndpoint`/`DefaultHTTPTimeout`/`UserAgent`, package-internal `newWithEndpoint`; 18 httptest tests + live harness (`TestLive_InsertThenUpdate` quick, `TestLive_InteractiveFlow` with `/dev/tty` pauses); live-validated against real QRZ | **done** (session 13) |
 | 5 | Delete `Submit` + worker LOGID lookup — `FetchInsertUpstreamIDWithContext` (defensive ORDER BY, UNIQUE-constraint-aware), worker `resolvePriorUpstreamID` short-circuit, QRZ `buildForm` delete branch; CI fix for `:memory:` + `-race` flake (DSN `cache=shared`); live harness delete via `Submit` | **done** (session 13) |
 | 6 | ADIF-stamp wiring — `MarkUploadSuccessWithAdifStampWithContext` writes both the qso_upload transition and a `json_set` stamp on `qso.additional_data` in one tx (no new columns; matches the "additional_data absorbs ADIF spec evolution" invariant); worker `markSuccess` dispatch gates on AdifPrefix + action; prefix-agnostic so new forwarders land without sqlite/migration changes | **done** (session 13) |
-| 7 | Retry-defaults ownership refactor (see above) | pending |
-| 8 | Blank-import `_ "internal/forwarding/qrz"` in `cmd/smd/main.go`; session-handoff.md, forwarding.md, forwarding-implementation.md final updates | pending |
+| 7 | Retry-defaults ownership refactor — per-forwarder `DefaultRetry` vars, `forwarding.RegisterDefaultRetry` / `DefaultRetryFor` registry companions, `spawnForwarderWorkers` lookup-by-type + loud error for missing defaults, hardcoded `defaultForwarderRetry` deleted | **done** (session 13) |
+| 8 | Blank-import `_ "internal/forwarding/qrz"` in `cmd/smd/main.go`; wire `qrz.UserAgent = "station-manager/" + Version` and `adif.ProgramVersion = Version` (flip adif.ProgramVersion from const to var); final session-handoff.md, forwarding.md, forwarding-implementation.md updates | pending |
 
 ### Follow-ups after the QRZ port
 

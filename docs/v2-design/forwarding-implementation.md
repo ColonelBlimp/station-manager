@@ -721,17 +721,30 @@ below reflects the as-built structure after stages 2–5.
    Transport-level classification (network errors, HTTP 4xx/5xx,
    ctx cancellation → Transient) is handled at the `Submit` call
    site in stage 4, not inside `classifyResponse`.
-4. **Registration** (`qrz.go`):
+4. **Registration** (`qrz.go`, stage 2 + stage 7):
    ```go
-   func init() { forwarding.Register(Type, New) }
+   var DefaultRetry = types.RetryConfig{
+       MaxAttempts: 5, InitialBackoffSec: 60, MaxBackoffSec: 1800,
+   }
+   func init() {
+       forwarding.Register(Type, New)
+       forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+   }
    ```
+   Retry values are upstream-specific — tune them to the API's
+   tolerances (respect rate limits, avoid hammering slow batch
+   services). `RegisterDefaultRetry` validates the shape and
+   panics on `MaxAttempts < 1`, `InitialBackoffSec < 1`, or
+   `MaxBackoffSec < InitialBackoffSec` — same guard
+   `worker.New` applies, so bad defaults never survive to
+   spawn.
 5. **Blank-import** from `cmd/smd/main.go` (stage 8):
    `_ "github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"`.
-6. **Retry-defaults ownership** (stage 7): export a package-level
-   `DefaultRetry types.RetryConfig`. `spawnForwarderWorkers` looks
-   it up by type. The temporary `defaultForwarderRetry` fallback
-   in `main.go` is removed once every registered forwarder type
-   supplies its own.
+   `main.go` resolves retry config per instance:
+   `fc.Retry` (operator override) → `forwarding.DefaultRetryFor(fc.Type)`
+   (package default) → startup error. No per-type switch in
+   `main.go`; adding a new forwarder requires zero changes there
+   (beyond the blank-import).
 7. **Tests**: three layers.
    - **Unit** (`response_test.go`): pure-function tests for
      `parseResponse` + `classifyResponse`. No network.
