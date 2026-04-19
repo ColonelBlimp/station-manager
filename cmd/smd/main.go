@@ -11,11 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/api"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
-	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/stub" // side-effect: register "stub" forwarder
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"    // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
+	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/stub" // side-effect: register "stub" forwarder + default retry
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -67,6 +69,18 @@ func main() {
 func run() error {
 	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
 	flag.Parse()
+
+	// ---- Propagate build version to package-level vars ----
+	// These packages expose a mutable var with a "dev" default so tests
+	// stay hermetic; main.go injects the ldflags-bound Version so real
+	// daemon runs report their build version correctly.
+	//   - qrz.UserAgent goes on the User-Agent header of every QRZ API
+	//     call (QRZ's developer guide asks for ≤128 chars identifying
+	//     the client + app).
+	//   - adif.ProgramVersion is emitted as PROGRAMVERSION in ADIF
+	//     export headers.
+	qrz.UserAgent = "station-manager/" + Version
+	adif.ProgramVersion = Version
 
 	// ---- Load configuration ----
 	cfg, err := loadConfig(*configPath)

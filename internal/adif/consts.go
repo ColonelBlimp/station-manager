@@ -12,11 +12,15 @@ const (
 	NewLineStr    = "\n"
 
 	// ProgramID is the ADIF PROGRAMID header value identifying Station Manager.
+	// Station-identity marker — not version-dependent, stays a const.
 	ProgramID = "SM"
-	// ProgramVersion is the ADIF PROGRAMVERSION header value. Update when the
-	// export format changes materially.
-	ProgramVersion = "0.0.1"
 )
+
+// ProgramVersion is the ADIF PROGRAMVERSION header value. The daemon
+// startup (cmd/smd/main.go) overrides this to the ldflags-injected
+// daemon version so ADIF exports reflect the binary that produced
+// them. "dev" is the untagged fallback for local builds and tests.
+var ProgramVersion = "dev"
 
 const (
 	UserDefQslWanted        = "<USERDEF1:10>QSL_WANTED"             //

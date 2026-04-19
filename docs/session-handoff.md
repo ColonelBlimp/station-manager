@@ -26,13 +26,17 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-04-19, session 13 in progress)
 
-### QRZ port: stages 1–7 complete
+### QRZ port: complete (stages 1–8 all landed)
 
-Stages 1–7 of the 8-stage QRZ port are committed and under test.
-Insert / update / delete are live-validated against real QRZ;
-stage 6 adds the ADIF upload-status stamp; stage 7 moves retry
-defaults into the forwarder packages themselves. Stage 8 (the
-final wiring + doc refresh) is what remains.
+The 8-stage QRZ port is done. Insert / update / delete are
+live-validated against real QRZ; the ADIF upload-status stamp
+rides on success; each forwarder owns its own retry defaults;
+and the daemon binary's ldflags-injected Version now threads
+into `qrz.UserAgent` and `adif.ProgramVersion` at startup.
+
+Station Manager v2 can now push QSOs to QRZ.com end-to-end
+through the daemon's forwarding pipeline. The stub forwarder
+remains available for plumbing tests.
 
 **Stage 1 — Forwarder interface extension** (session 12, committed):
 
@@ -245,10 +249,36 @@ final wiring + doc refresh) is what remains.
   ClubLog's daily windows, ...). No main.go changes to land a
   new forwarder.
 
-Full suite green under `-race`. Stage 8 (blank-import
-forwarders in cmd/smd/main.go, wire `qrz.UserAgent` and
-`adif.ProgramVersion` from `main.Version`, final doc refresh)
-is the last stage.
+**Stage 8 — Wire-up + docs** (session 13, final):
+
+- `cmd/smd/main.go`: added regular import of
+  `internal/forwarding/qrz` (so the init() registers the
+  constructor and default retry, AND so main can set
+  `qrz.UserAgent`) and blank import of
+  `internal/forwarding/stub` (registration only). The
+  blank-import style is preserved for forwarders main.go
+  doesn't otherwise reference.
+- `cmd/smd/main.go`: at the top of `run()`, two package vars
+  are now overridden from the ldflags-bound `Version`:
+  ```go
+  qrz.UserAgent      = "station-manager/" + Version
+  adif.ProgramVersion = Version
+  ```
+  This thread ensures ADIF exports' PROGRAMVERSION header
+  and QRZ's User-Agent both reflect the actual binary
+  version.
+- `internal/adif/consts.go`: `ProgramVersion` flipped from
+  `const` to `var` (default `"dev"`) with a doc comment
+  explaining the override mechanism; `ProgramID` stays
+  `const` (identity marker, not version-dependent).
+- Ldflags smoke check:
+  `go build -ldflags "-X main.Version=1.2.3-test" ./cmd/smd`
+  builds cleanly.
+
+Full suite green under `-race`. v2's forwarding subsystem is
+complete end-to-end: ingest → queue → worker → forwarder →
+upstream → outcome → qso_upload + ADIF stamp, with live QRZ
+validated. **Ready for a session-14 review pass.**
 
 ### Forwarder subsystem thin-slice complete (session 11)
 
@@ -1105,11 +1135,13 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### The immediate next action (continue QRZ port)
+### The immediate next action (QRZ port → review)
 
-Stages 1–7 are committed (1–5 live-validated against real QRZ);
-stage 8 remains. The full plan, with design decisions already
-resolved, is below — do **not** re-derive.
+All 8 stages landed. The immediate next action is a **review
+pass** of the forwarding subsystem as a whole — surfacing any
+inconsistencies, dead code, or missing glue before moving on.
+The 8-stage plan is retained below for historical context; do
+**not** re-derive the design decisions captured in it.
 
 **QRZ API reference** (from the operator's paste of QRZ's developer
 guide — use this, not an inferred version):
@@ -1175,7 +1207,7 @@ guide — use this, not an inferred version):
 | 5 | Delete `Submit` + worker LOGID lookup — `FetchInsertUpstreamIDWithContext` (defensive ORDER BY, UNIQUE-constraint-aware), worker `resolvePriorUpstreamID` short-circuit, QRZ `buildForm` delete branch; CI fix for `:memory:` + `-race` flake (DSN `cache=shared`); live harness delete via `Submit` | **done** (session 13) |
 | 6 | ADIF-stamp wiring — `MarkUploadSuccessWithAdifStampWithContext` writes both the qso_upload transition and a `json_set` stamp on `qso.additional_data` in one tx (no new columns; matches the "additional_data absorbs ADIF spec evolution" invariant); worker `markSuccess` dispatch gates on AdifPrefix + action; prefix-agnostic so new forwarders land without sqlite/migration changes | **done** (session 13) |
 | 7 | Retry-defaults ownership refactor — per-forwarder `DefaultRetry` vars, `forwarding.RegisterDefaultRetry` / `DefaultRetryFor` registry companions, `spawnForwarderWorkers` lookup-by-type + loud error for missing defaults, hardcoded `defaultForwarderRetry` deleted | **done** (session 13) |
-| 8 | Blank-import `_ "internal/forwarding/qrz"` in `cmd/smd/main.go`; wire `qrz.UserAgent = "station-manager/" + Version` and `adif.ProgramVersion = Version` (flip adif.ProgramVersion from const to var); final session-handoff.md, forwarding.md, forwarding-implementation.md updates | pending |
+| 8 | Import `internal/forwarding/qrz` in `cmd/smd/main.go` (regular import — main sets qrz.UserAgent); wired `qrz.UserAgent = "station-manager/" + Version` and `adif.ProgramVersion = Version` at the top of run(); flipped `adif.ProgramVersion` from const to var; ldflags smoke-check passes | **done** (session 13) |
 
 ### Follow-ups after the QRZ port
 
