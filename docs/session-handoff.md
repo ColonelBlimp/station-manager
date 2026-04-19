@@ -26,11 +26,11 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-04-19, session 13 in progress)
 
-### QRZ port: stages 1–4 complete
+### QRZ port: stages 1–5 complete
 
-The 8-stage QRZ port is past the halfway mark. Stages 1–4 are
-committed and under test, with stage 4 validated against real
-QRZ via a manual live harness. Stages 5–8 remain.
+Stages 1–5 of the 8-stage QRZ port are committed and under test,
+with insert / update / delete all live-validated against real
+QRZ via the manual harness. Stages 6–8 remain.
 
 **Stage 1 — Forwarder interface extension** (session 12, committed):
 
@@ -122,9 +122,57 @@ QRZ via a manual live harness. Stages 5–8 remain.
   with stub forwarder; QRZ unit + live with no DB) cover the seam
   transitively.
 
-Full suite green under `-race` after each stage. Stage 5 (delete
-via `Submit` + worker-side LOGID lookup) is the immediate next
-action.
+**Stage 5 — Delete via `Submit` + worker-side LOGID lookup** (session 13):
+
+- `internal/database/sqlite/api_context.go`: new
+  `FetchInsertUpstreamIDWithContext(ctx, qsoID, forwarderName)
+  (string, error)`. Returns the `upstream_id` from the one
+  successful insert row for the (qso, forwarder) pair, `""` when
+  no match, non-nil error only for infrastructure failures.
+  `ORDER BY modified_at DESC LIMIT 1` is defensive — the schema
+  already enforces `UNIQUE(qso_id, forwarder_name, action)` so
+  only one row can match in practice. Tests: `service_test.go`
+  gains 6 cases covering happy path, scope (forwarder, action,
+  status) filtering, the UNIQUE-constraint guard, and input
+  validation.
+- `internal/forwarding/worker/worker.go`: new
+  `resolvePriorUpstreamID` helper called from `processRow`. For
+  `action=delete`, consults the DB lookup before `Submit`:
+  infra error → transient, empty result → terminal
+  ("no upstream id for delete — no successful insert found"),
+  non-empty → passed through as `priorUpstreamID`. Worker tests:
+  `TestWorker_Delete_NoPriorInsert_IsTerminalImmediately`,
+  `TestWorker_Delete_WithPriorInsert_PassesUpstreamID`,
+  `TestWorker_InsertAndUpdate_DoNotTriggerLookup`. The existing
+  `TestWorker_SoftDeletedQso_DeleteStillForwards` was updated to
+  seed a prior successful insert (the pre-stage-5 test would now
+  fail on "no upstream id"). Added a `recordingForwarder`
+  helper that captures Submit arguments for delete-path tests.
+- `internal/forwarding/qrz/qrz.go`: `buildForm` delete branch
+  assembles `ACTION=DELETE + LOGIDS=priorUpstreamID`. Empty
+  `priorUpstreamID` here is a caller bug (worker should have
+  short-circuited) — classified Terminal with clear error, no
+  HTTP fired. Tests: replaced `TestSubmit_Delete_DeferredToStage5`
+  with 4 new cases (OK/Success, FAIL/idempotent-success,
+  EmptyPriorID/Terminal, RequestShape verifying
+  `ACTION=DELETE`/`LOGIDS=...`/no ADIF/no OPTION).
+- Live harness: `TestLive_InsertThenUpdate` cleanup and
+  `TestLive_InteractiveFlow` delete phase both converted from the
+  raw HTTP helper to `Submit(..., Delete, logID)`. Dropped
+  `liveDelete` helper and its dead imports (`io`, `net/url`,
+  `strings`).
+- **CI fix (bundled)**: `internal/database/sqlite/internal.go`
+  adds `cache=shared` to the DSN options when path is `:memory:`.
+  Under `-race` timing in CI, a single pooled connection could
+  transiently drop and be replaced with a fresh private
+  `:memory:` DB, producing "no such table: qso_upload". Shared
+  cache makes all pool connections to the same DSN see the same
+  in-memory DB; file-backed paths unchanged.
+
+Full suite green under `-race`. Stage 6 (ADIF-stamp wiring —
+new sqlite method that updates `qso_upload` AND the QSO row's
+`<PREFIX>_QSO_UPLOAD_{STATUS,DATE}` in one tx) is the immediate
+next action.
 
 ### Forwarder subsystem thin-slice complete (session 11)
 
@@ -983,9 +1031,9 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (continue QRZ port)
 
-The QRZ port is past the halfway mark. Stages 1–4 are committed
-and live-validated; stages 5–8 remain. The full plan, with design
-decisions already resolved, is below — do **not** re-derive.
+Stages 1–5 are committed, live-validated (insert/update/delete);
+stages 6–8 remain. The full plan, with design decisions already
+resolved, is below — do **not** re-derive.
 
 **QRZ API reference** (from the operator's paste of QRZ's developer
 guide — use this, not an inferred version):
@@ -1048,7 +1096,7 @@ guide — use this, not an inferred version):
 | 2 | `internal/forwarding/qrz/` skeleton — credentials struct (`api_key` only), `New`, `Type()="qrz"`, `AdifPrefix()="QRZCOM"`, registry init, stubbed Submit, validation tests | **done** (session 13) |
 | 3 | Response parser + classification function — `parseResponse` + `classifyResponse` with per-action helpers (`classifyInsert`/`Update`/`Delete`); `AUTH` global, single-LOGID-delete `FAIL` → Success; 26 unit tests | **done** (session 13) |
 | 4 | Insert + update `Submit` — real HTTP, `buildForm` + `classifyHTTPStatus`, `DefaultEndpoint`/`DefaultHTTPTimeout`/`UserAgent`, package-internal `newWithEndpoint`; 18 httptest tests + live harness (`TestLive_InsertThenUpdate` quick, `TestLive_InteractiveFlow` with `/dev/tty` pauses); live-validated against real QRZ | **done** (session 13) |
-| 5 | Delete `Submit` + worker LOGID lookup: new sqlite method `FetchInsertUpstreamIDWithContext(ctx, qsoID, forwarderName)`; worker gates delete on lookup result; QRZ delete uses `LOGIDS=priorUpstreamID` | pending |
+| 5 | Delete `Submit` + worker LOGID lookup — `FetchInsertUpstreamIDWithContext` (defensive ORDER BY, UNIQUE-constraint-aware), worker `resolvePriorUpstreamID` short-circuit, QRZ `buildForm` delete branch; CI fix for `:memory:` + `-race` flake (DSN `cache=shared`); live harness delete via `Submit` | **done** (session 13) |
 | 6 | ADIF-stamp wiring: new sqlite `MarkUploadSuccessWithAdifStampWithContext(ctx, id, upstreamID, qsoID, adifPrefix)` that updates the `qso_upload` row AND stamps the QSO row's `<PREFIX>_QSO_UPLOAD_{STATUS,DATE}` in one tx; worker calls it when prefix non-empty and action != delete | pending |
 | 7 | Retry-defaults ownership refactor (see above) | pending |
 | 8 | Blank-import `_ "internal/forwarding/qrz"` in `cmd/smd/main.go`; session-handoff.md, forwarding.md, forwarding-implementation.md final updates | pending |

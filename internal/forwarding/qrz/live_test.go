@@ -26,11 +26,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -102,16 +99,17 @@ func TestLive_InsertThenUpdate(t *testing.T) {
 	t.Logf("live insert OK — LOGID=%s", logID)
 
 	// Cleanup registered immediately so a mid-test failure still
-	// removes the record. Uses a raw HTTP call because Submit(
-	// ..., Delete, ...) is stubbed until stage 5.
+	// removes the record. Exercises the stage-5 delete path via
+	// Submit(..., Delete, logID) rather than a raw HTTP call.
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(
 			context.Background(), 30*time.Second,
 		)
 		defer cleanupCancel()
-		if err := liveDelete(cleanupCtx, apiKey, logID); err != nil {
-			t.Logf("warning: cleanup delete for LOGID=%s failed: %v "+
-				"(record may need manual removal)", logID, err)
+		del := fwd.Submit(cleanupCtx, types.Qso{}, action.Delete, logID)
+		if del.Outcome != forwarding.OutcomeSuccess {
+			t.Logf("warning: cleanup delete for LOGID=%s failed: outcome=%s err=%v "+
+				"(record may need manual removal)", logID, del.Outcome, del.Err)
 		} else {
 			t.Logf("cleanup delete OK — LOGID=%s removed", logID)
 		}
@@ -213,9 +211,10 @@ func TestLive_InteractiveFlow(t *testing.T) {
 	_ = os.Stdout.Sync()
 	stdin.Scan()
 
-	// --- DELETE (raw HTTP until stage 5) ---
-	if err := liveDelete(ctx, apiKey, logID); err != nil {
-		t.Fatalf("delete failed: %v", err)
+	// --- DELETE (stage 5: via Submit) ---
+	del := fwd.Submit(ctx, types.Qso{}, action.Delete, logID)
+	if del.Outcome != forwarding.OutcomeSuccess {
+		t.Fatalf("delete outcome = %q, err = %v", del.Outcome, del.Err)
 	}
 	fmt.Printf("\n>>> DELETE OK — LOGID=%s removed from logbook\n"+
 		"    Verify on QRZ.com that the record is gone.\n"+
@@ -224,47 +223,4 @@ func TestLive_InteractiveFlow(t *testing.T) {
 	)
 	_ = os.Stdout.Sync()
 	stdin.Scan()
-}
-
-// liveDelete issues a raw DELETE against QRZ for cleanup. Exists
-// because Submit(..., Delete, ...) is stubbed until stage 5.
-// Post-stage-5, this helper can be replaced with a Submit call.
-func liveDelete(ctx context.Context, apiKey, logID string) error {
-	form := url.Values{}
-	form.Set("KEY", apiKey)
-	form.Set("ACTION", "DELETE")
-	form.Set("LOGIDS", logID)
-
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, DefaultEndpoint, strings.NewReader(form.Encode()),
-	)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", UserAgent)
-
-	client := &http.Client{Timeout: DefaultHTTPTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode/100 != 2 {
-		return &liveError{msg: "HTTP " + resp.Status, body: string(body)}
-	}
-	return nil
-}
-
-type liveError struct {
-	msg, body string
-}
-
-func (e *liveError) Error() string {
-	if e.body == "" {
-		return e.msg
-	}
-	return e.msg + " — " + e.body
 }

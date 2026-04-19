@@ -142,8 +142,13 @@ func (f *Forwarder) AdifPrefix() string { return AdifFieldPrefix }
 //
 //	insert   ACTION=INSERT                                ADIF=<record>
 //	update   ACTION=INSERT  OPTION=REPLACE                ADIF=<record>
-//	delete   deferred to stage 5 (needs priorUpstreamID
-//	         LOGID from the worker-side DB lookup)
+//	delete   ACTION=DELETE  LOGIDS=<priorUpstreamID>
+//
+// For delete, priorUpstreamID must be the LOGID QRZ returned on the
+// earlier successful insert; the worker fetches this from the
+// qso_upload history before calling Submit. An empty priorUpstreamID
+// here is a caller bug — surfaced as Terminal rather than sent to
+// QRZ as a malformed delete.
 //
 // Outcome classification has two layers:
 //   - transport (this function): ctx cancel, network error, or
@@ -243,11 +248,15 @@ func buildForm(apiKey string, qso types.Qso, act forwarding.Action, priorUpstrea
 
 	case action.Delete:
 		// priorUpstreamID is the LOGID captured on the earlier successful
-		// insert. Stage 5 wires the worker-side lookup; until then any
-		// delete lands here as terminal so a mis-routed delete surfaces
-		// loudly instead of silently dropping.
-		_ = priorUpstreamID
-		return nil, errors.New(op).WithMsg("delete action deferred to stage 5")
+		// insert, resolved by the worker via
+		// sqlite.Service.FetchInsertUpstreamIDWithContext before Submit.
+		// Empty here is a caller bug — the worker should have
+		// short-circuited with a terminal result before we got this far.
+		if priorUpstreamID == "" {
+			return nil, errors.New(op).WithMsg("delete requires non-empty priorUpstreamID (worker lookup failed)")
+		}
+		form.Set("ACTION", "DELETE")
+		form.Set("LOGIDS", priorUpstreamID)
 
 	default:
 		return nil, errors.New(op).WithMsgf("unknown action %q", act)

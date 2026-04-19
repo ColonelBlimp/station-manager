@@ -637,9 +637,7 @@ before `dbSvc.Close`" semantics.
 ### 8.1 Adding a real forwarder (recipe for QRZ)
 
 The QRZ forwarder lives at `internal/forwarding/qrz/`. The shape
-below reflects the as-built structure after stages 2–4; stage 5
-adds the delete path and the worker-side LOGID lookup, but the
-file layout doesn't change.
+below reflects the as-built structure after stages 2–5.
 
 1. **Type + credentials** (`qrz.go`):
    ```go
@@ -676,7 +674,25 @@ file layout doesn't change.
    ```
    `buildForm` assembles the form body per action: insert =
    `ACTION=INSERT + ADIF`; update = `ACTION=INSERT + OPTION=REPLACE +
-   ADIF`; delete = `ACTION=DELETE + LOGIDS=priorUpstreamID` (stage 5).
+   ADIF`; delete = `ACTION=DELETE + LOGIDS=priorUpstreamID`.
+
+   For `action=delete` the worker resolves `priorUpstreamID` from a
+   prior successful insert's `upstream_id` before calling Submit:
+
+   ```go
+   // worker.resolvePriorUpstreamID (abbrev):
+   //   if act != Delete                      → ("", not-handled)
+   //   upstreamID, err := FetchInsertUpstreamIDWithContext(...)
+   //   if err != nil                         → markTransientInternal
+   //   if upstreamID == ""                   → markFailed
+   //                                           "no upstream id for delete
+   //                                            — no successful insert found"
+   //   return (upstreamID, not-handled)
+   ```
+
+   Empty `priorUpstreamID` reaching `buildForm` is a caller bug
+   (the worker should have short-circuited) — surfaced as Terminal
+   with no HTTP fired.
 3. **Response parser + classifier** (`response.go`, stage 3):
    - `parseResponse(body []byte) (response, error)` — splits the
      application/x-www-form-urlencoded body into its fields

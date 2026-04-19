@@ -177,11 +177,49 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 		return
 	}
 
-	// priorUpstreamID is populated for delete actions only (stage 5);
-	// for insert/update it's always empty. Passing empty here preserves
-	// today's behaviour until the delete-LOGID lookup lands.
-	res := w.fwd.Submit(ctx, qso, act, "")
+	priorUpstreamID, handled := w.resolvePriorUpstreamID(ctx, row, act)
+	if handled {
+		return
+	}
+
+	res := w.fwd.Submit(ctx, qso, act, priorUpstreamID)
 	w.persistOutcome(ctx, row, res)
+}
+
+// resolvePriorUpstreamID fetches the upstream_id recorded on the prior
+// successful insert for delete actions, so the forwarder can identify
+// the record to remove upstream. For insert/update it returns an empty
+// string without touching the DB.
+//
+// Returns handled=true when the row has already been resolved (DB
+// infra error → transient, no matching insert → terminal) so the
+// caller skips the 'submit' step.
+func (w *Worker) resolvePriorUpstreamID(
+	ctx context.Context, row types.QsoUpload, act action.Action,
+) (string, bool) {
+	if act != action.Delete {
+		return "", false
+	}
+
+	upstreamID, err := w.db.FetchInsertUpstreamIDWithContext(
+		ctx, row.QsoID, w.cfg.Name,
+	)
+	if err != nil {
+		// Infra error (DB down, ctx cancel). Retry — the row isn't
+		// structurally broken, we just couldn't look it up right now.
+		w.markTransientInternal(ctx, row, err)
+		return "", true
+	}
+	if upstreamID == "" {
+		// No prior successful insert for this (qso, forwarder). The
+		// delete can never resolve — mark terminal per the stage-5
+		// design decision (rather than looping on an impossible
+		// operation).
+		w.markFailed(ctx, row,
+			"no upstream id for delete — no successful insert found")
+		return "", true
+	}
+	return upstreamID, false
 }
 
 // fetchQsoForAction retrieves the QSO for forwarding. Returns handled=true

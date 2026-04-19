@@ -325,9 +325,44 @@ func TestSubmit_Update_SendsOptionReplace(t *testing.T) {
 	}
 }
 
-// ---------- action=delete still deferred ----------
+// ---------- action=delete ----------
 
-func TestSubmit_Delete_DeferredToStage5(t *testing.T) {
+func TestSubmit_Delete_OK_Success(t *testing.T) {
+	var cap captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &cap)
+	fwd := fwdAt(srv.URL, "key")
+
+	res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "1440102010")
+	if res.Outcome != forwarding.OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success", res.Outcome)
+	}
+	// Delete doesn't return an UpstreamID — classifyDelete leaves it
+	// blank because there's no record to link out to anymore.
+	if res.UpstreamID != "" {
+		t.Fatalf("UpstreamID = %q, want empty on delete success", res.UpstreamID)
+	}
+}
+
+func TestSubmit_Delete_FAIL_IsIdempotentSuccess(t *testing.T) {
+	// RESULT=FAIL on a single-LOGID delete means "LOGID not found" —
+	// the record is already gone upstream, which matches our intent.
+	var cap captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=FAIL&REASON=Invalid+LOGID", &cap)
+	fwd := fwdAt(srv.URL, "key")
+
+	res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "9999999999")
+	if res.Outcome != forwarding.OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success (idempotent delete)", res.Outcome)
+	}
+	if res.Err != nil {
+		t.Fatalf("Err = %v, want nil on idempotent-delete success", res.Err)
+	}
+}
+
+func TestSubmit_Delete_EmptyPriorID_IsTerminal(t *testing.T) {
+	// The worker should have short-circuited before calling Submit —
+	// an empty priorUpstreamID here is a caller bug, classified
+	// Terminal so retries don't hammer QRZ with a malformed delete.
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -337,15 +372,43 @@ func TestSubmit_Delete_DeferredToStage5(t *testing.T) {
 
 	fwd := fwdAt(srv.URL, "key")
 
-	res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "prior-logid-123")
+	res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "")
 	if res.Outcome != forwarding.OutcomeTerminal {
-		t.Fatalf("outcome = %q, want terminal (delete deferred)", res.Outcome)
+		t.Fatalf("outcome = %q, want terminal on empty priorUpstreamID", res.Outcome)
 	}
-	if !strings.Contains(res.Err.Error(), "deferred to stage 5") {
-		t.Fatalf("err = %q, want 'deferred to stage 5' substring", res.Err.Error())
+	if !strings.Contains(res.Err.Error(), "priorUpstreamID") {
+		t.Fatalf("err = %q, want 'priorUpstreamID' substring", res.Err.Error())
 	}
 	if got := calls.Load(); got != 0 {
-		t.Fatalf("server saw %d calls, want 0 — delete must not fire HTTP yet", got)
+		t.Fatalf("server saw %d calls, want 0 — empty priorUpstreamID must not fire HTTP", got)
+	}
+}
+
+func TestSubmit_Delete_RequestShape(t *testing.T) {
+	var cap captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &cap)
+	fwd := fwdAt(srv.URL, "the-api-key")
+
+	if res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "1440102010"); res.Outcome != forwarding.OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success", res.Outcome)
+	}
+
+	if got := cap.form.Get("KEY"); got != "the-api-key" {
+		t.Fatalf("KEY = %q, want 'the-api-key'", got)
+	}
+	if got := cap.form.Get("ACTION"); got != "DELETE" {
+		t.Fatalf("ACTION = %q, want DELETE", got)
+	}
+	if got := cap.form.Get("LOGIDS"); got != "1440102010" {
+		t.Fatalf("LOGIDS = %q, want '1440102010'", got)
+	}
+	// ADIF should not be sent on a delete — QRZ identifies the record
+	// by LOGID, not by payload.
+	if cap.form.Get("ADIF") != "" {
+		t.Fatalf("ADIF = %q, want empty on delete", cap.form.Get("ADIF"))
+	}
+	if cap.form.Get("OPTION") != "" {
+		t.Fatalf("OPTION = %q, want empty on delete", cap.form.Get("OPTION"))
 	}
 }
 

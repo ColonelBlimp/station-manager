@@ -1377,6 +1377,72 @@ func (s *Service) FetchUploadsByQsoIDWithContext(ctx context.Context, qsoID int6
 	return out, nil
 }
 
+// FetchInsertUpstreamIDWithContext returns the upstream_id recorded on
+// the successful insert for the given (qso_id, forwarder_name) pair.
+// The QRZ delete forwarder needs this value to populate LOGIDS on the
+// DELETE call — upstream's delete endpoint identifies records by its
+// own id, not by our QSO id.
+//
+// The qso_upload table enforces UNIQUE(qso_id, forwarder_name, action),
+// so at most one insert row exists per (qso, forwarder) pair in
+// practice. The `ORDER BY modified_at DESC LIMIT 1` below is defensive:
+// it protects the caller if the schema ever relaxes that constraint.
+//
+// Returns:
+//   - ("", nil) when no matching row exists. The worker reclassifies
+//     this as a terminal failure because a delete without a prior
+//     successful insert is structurally unresolvable — retrying cannot
+//     conjure an upstream id.
+//   - (upstreamID, nil) on the happy path.
+//   - ("", err) only for infrastructure failures (ctx cancel, DB error).
+func (s *Service) FetchInsertUpstreamIDWithContext(
+	ctx context.Context, qsoID int64, forwarderName string,
+) (string, error) {
+	const op errors.Op = "sqlite.Service.FetchInsertUpstreamIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return "", err
+	}
+	if qsoID < 1 {
+		return "", errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	if forwarderName == "" {
+		return "", errors.New(op).WithMsg("forwarderName is empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	row, err := models.QsoUploads(
+		models.QsoUploadWhere.QsoID.EQ(qsoID),
+		models.QsoUploadWhere.ForwarderName.EQ(forwarderName),
+		models.QsoUploadWhere.Action.EQ(action.Insert.String()),
+		models.QsoUploadWhere.Status.EQ(status.Uploaded.String()),
+		models.QsoUploadWhere.UpstreamID.IsNotNull(),
+		qm.OrderBy("modified_at DESC"),
+		qm.Limit(1),
+	).One(ctx, h)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", errors.New(op).WithErr(err).WithMsg("fetch insert upstream id")
+	}
+
+	if !row.UpstreamID.Valid || row.UpstreamID.String == "" {
+		// Defensive: the IsNotNull filter plus the mark-success path
+		// should make this unreachable, but if an older row somehow
+		// has status=uploaded and no upstream_id, treat it as "no
+		// match" rather than returning a useless empty string as if
+		// it were real.
+		return "", nil
+	}
+	return row.UpstreamID.String, nil
+}
+
 /**********************************************************************************************************************
  * Transactional variants — used by callers that compose multiple writes in a single transaction.
  * These methods run against the caller-supplied *sql.Tx and do not open their own handle or timeout.

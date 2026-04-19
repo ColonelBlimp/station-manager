@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,6 +185,51 @@ func (h *testHarness) fetchUpload(qsoID int64) types.QsoUpload {
 	return rows[0]
 }
 
+// seedSuccessfulInsert arranges the DB state "a prior successful
+// insert for (qsoID, forwarderName) with upstream_id=X" so that the
+// stage-5 delete-LOGID lookup finds something. Used by delete-path
+// tests that otherwise would trip the "no upstream id" terminal
+// guard immediately.
+func (h *testHarness) seedSuccessfulInsert(qsoID int64, forwarderName, forwarderType, upstreamID string) {
+	h.t.Helper()
+	h.enqueueUpload(qsoID, forwarderName, forwarderType, action.Insert)
+
+	claimed, err := h.db.ClaimPendingUploadsWithContext(
+		context.Background(), forwarderName, 1,
+	)
+	if err != nil {
+		h.t.Fatalf("claim seeded insert: %v", err)
+	}
+	if len(claimed) != 1 {
+		h.t.Fatalf("claim seeded insert: got %d rows, want 1", len(claimed))
+	}
+	if err := h.db.MarkUploadSuccessWithContext(
+		context.Background(), claimed[0].ID, upstreamID,
+	); err != nil {
+		h.t.Fatalf("mark seeded insert success: %v", err)
+	}
+}
+
+// fetchUploadByAction returns the qso_upload row for (qsoID, act).
+// Fails the test if zero or more-than-one row matches.
+func (h *testHarness) fetchUploadByAction(qsoID int64, act action.Action) types.QsoUpload {
+	h.t.Helper()
+	rows, err := h.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		h.t.Fatalf("fetch uploads: %v", err)
+	}
+	var match []types.QsoUpload
+	for _, r := range rows {
+		if r.Action == act.String() {
+			match = append(match, r)
+		}
+	}
+	if len(match) != 1 {
+		h.t.Fatalf("fetchUploadByAction(%s): got %d rows, want 1", act, len(match))
+	}
+	return match[0]
+}
+
 // buildStub constructs a stub forwarder via the registry, parameterised
 // by mode. mode is one of the stub.Mode* constants; flapN is only used
 // when mode == ModeFlapN.
@@ -289,6 +335,82 @@ func runFor(t *testing.T, w *Worker, d time.Duration) {
 	time.Sleep(d)
 	cancel()
 	<-done
+}
+
+// runUntilAction is like runUntil but tolerates multiple qso_upload
+// rows per QSO. It waits for a row with the given action to satisfy
+// match. Needed for stage-5 delete-path tests where we pre-seed a
+// successful insert row so the LOGID lookup succeeds — in those
+// tests there are 2 rows (insert + delete).
+func runUntilAction(
+	t *testing.T, w *Worker, h *testHarness, qsoID int64,
+	act action.Action, match func(types.QsoUpload) bool,
+) types.QsoUpload {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err := h.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+		if err == nil {
+			for _, r := range rows {
+				if r.Action == act.String() && match(r) {
+					cancel()
+					<-done
+					return r
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatalf("runUntilAction(%s): condition not reached within deadline", act)
+	return types.QsoUpload{}
+}
+
+// recordingForwarder is a test-only Forwarder that captures the
+// arguments each Submit call receives. Lets delete-path tests
+// inspect whether the worker actually passed through the expected
+// priorUpstreamID rather than an empty string.
+type recordingForwarder struct {
+	typeName string
+	result   forwarding.Result
+
+	mu    sync.Mutex
+	calls []recordedCall
+}
+
+type recordedCall struct {
+	action          forwarding.Action
+	priorUpstreamID string
+}
+
+func (r *recordingForwarder) Type() string       { return r.typeName }
+func (r *recordingForwarder) AdifPrefix() string { return "" }
+
+func (r *recordingForwarder) Submit(
+	_ context.Context, _ types.Qso,
+	act forwarding.Action, priorUpstreamID string,
+) forwarding.Result {
+	r.mu.Lock()
+	r.calls = append(r.calls, recordedCall{action: act, priorUpstreamID: priorUpstreamID})
+	r.mu.Unlock()
+	return r.result
+}
+
+func (r *recordingForwarder) snapshotCalls() []recordedCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]recordedCall, len(r.calls))
+	copy(out, r.calls)
+	return out
 }
 
 // =============================================================================
@@ -508,6 +630,10 @@ func TestWorker_SoftDeletedQso_UpdateMarkedFailed(t *testing.T) {
 func TestWorker_SoftDeletedQso_DeleteStillForwards(t *testing.T) {
 	h := newHarness(t)
 	qsoID := h.seedLogbookAndQso()
+	// Stage 5: delete requires a prior successful insert row (so the
+	// worker's LOGID lookup has something to return). Seed one, then
+	// enqueue the delete + soft-delete the QSO.
+	h.seedSuccessfulInsert(qsoID, "stub", stub.Type, "stub-prior")
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Delete)
 	h.softDeleteQso(qsoID)
 
@@ -515,12 +641,128 @@ func TestWorker_SoftDeletedQso_DeleteStillForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
-	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+	row := runUntilAction(t, w, h, qsoID, action.Delete, func(u types.QsoUpload) bool {
 		return u.Status == status.Uploaded.String()
 	})
 	if row.UpstreamID != "stub-ok" {
 		t.Fatalf("upstream_id = %q, want stub-ok", row.UpstreamID)
 	}
+}
+
+// =============================================================================
+// Stage 5: delete action + priorUpstreamID lookup
+// =============================================================================
+
+func TestWorker_Delete_NoPriorInsert_IsTerminalImmediately(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	// No prior insert row seeded — the lookup will come back empty.
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Delete)
+
+	// The forwarder should never be invoked. A recordingForwarder with
+	// an empty-by-default Result lets us observe that Submit wasn't
+	// called.
+	fwd := &recordingForwarder{typeName: stub.Type}
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Failed.String()
+	})
+	if !containsSubstring(row.LastError, "no upstream id for delete") {
+		t.Fatalf("last_error = %q, want 'no upstream id for delete' substring", row.LastError)
+	}
+	if row.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 (single terminal transition)", row.Attempts)
+	}
+	if got := fwd.snapshotCalls(); len(got) != 0 {
+		t.Fatalf("forwarder Submit was called %d times, want 0 (worker must short-circuit)", len(got))
+	}
+}
+
+func TestWorker_Delete_WithPriorInsert_PassesUpstreamID(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.seedSuccessfulInsert(qsoID, "stub", stub.Type, "logid-7777")
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Delete)
+
+	// Recording forwarder so we can assert the priorUpstreamID we
+	// received was the one from the seeded insert row.
+	fwd := &recordingForwarder{
+		typeName: stub.Type,
+		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess},
+	}
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	runUntilAction(t, w, h, qsoID, action.Delete, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	calls := fwd.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("forwarder Submit called %d times, want exactly 1", len(calls))
+	}
+	if calls[0].action != action.Delete {
+		t.Fatalf("Submit action = %q, want delete", calls[0].action)
+	}
+	if calls[0].priorUpstreamID != "logid-7777" {
+		t.Fatalf("Submit priorUpstreamID = %q, want 'logid-7777'", calls[0].priorUpstreamID)
+	}
+}
+
+func TestWorker_InsertAndUpdate_DoNotTriggerLookup(t *testing.T) {
+	// Sanity check: for insert and update actions, the worker must
+	// NOT consult the upstream_id lookup and must pass empty
+	// priorUpstreamID through to the forwarder. Regression guard
+	// against accidentally running the delete-path lookup for
+	// non-delete actions.
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	fwd := &recordingForwarder{
+		typeName: stub.Type,
+		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "new-id"},
+	}
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	calls := fwd.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("Submit called %d times, want 1", len(calls))
+	}
+	if calls[0].action != action.Insert {
+		t.Fatalf("Submit action = %q, want insert", calls[0].action)
+	}
+	if calls[0].priorUpstreamID != "" {
+		t.Fatalf("Submit priorUpstreamID = %q, want empty for insert", calls[0].priorUpstreamID)
+	}
+}
+
+// containsSubstring is a tiny helper so the test file doesn't import
+// strings just for one call.
+func containsSubstring(s, sub string) bool {
+	return len(sub) == 0 || len(s) >= len(sub) && indexOf(s, sub) >= 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 // =============================================================================

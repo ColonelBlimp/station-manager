@@ -1269,3 +1269,149 @@ func TestFetchUploadsByQsoID_Multiple(t *testing.T) {
 		}
 	}
 }
+
+// ---- FetchInsertUpstreamID (stage 5: delete-action LOGID resolution) ----
+
+func TestFetchInsertUpstreamID_NoRows_ReturnsEmpty(t *testing.T) {
+	svc := testService(t)
+
+	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), 999, "qrz")
+	if err != nil {
+		t.Fatalf("fetch on empty: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestFetchInsertUpstreamID_HappyPath(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// Enqueue + claim + mark-success on an insert row so qso_upload has
+	// an uploaded row with a populated upstream_id.
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "1440100000"); err != nil {
+		t.Fatalf("mark success: %v", err)
+	}
+
+	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "1440100000" {
+		t.Fatalf("got %q, want 1440100000", got)
+	}
+}
+
+func TestFetchInsertUpstreamID_IgnoresOtherForwarders(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// Successful insert on "clublog" must not leak into a "qrz" query.
+	enqueueUpload(t, svc, qsoID, "clublog", "clublog", action.Insert)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "clublog", 1)
+	_ = svc.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "cl-999")
+
+	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty (clublog upstream_id must not match qrz query)", got)
+	}
+}
+
+func TestFetchInsertUpstreamID_IgnoresNonInsertActions(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// Successful update (with upstream_id!) should not satisfy a
+	// delete's LOGID lookup — the update didn't create the record.
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	_ = svc.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "update-upstream")
+
+	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty (update row must not satisfy insert lookup)", got)
+	}
+}
+
+func TestFetchInsertUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// A pending insert row shouldn't match — no upstream_id yet.
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty (pending row must not match)", got)
+	}
+
+	// A failed insert row shouldn't match either — even though the
+	// row exists, it didn't produce an upstream id.
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	_ = svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "boom")
+
+	got, err = svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty (failed row must not match)", got)
+	}
+}
+
+// Documents the schema constraint that makes the ORDER BY in
+// FetchInsertUpstreamIDWithContext defensive rather than load-bearing:
+// the qso_upload table has UNIQUE(qso_id, forwarder_name, action), so
+// a second insert row for the same (qso, forwarder) pair is rejected
+// by the DB, not chosen by our query. If the schema ever relaxes this
+// constraint, the ORDER BY modified_at DESC LIMIT 1 protects us; the
+// test below pins the current behaviour.
+func TestFetchInsertUpstreamID_UniqueConstraintPreventsDuplicates(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// First insert row succeeds.
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	// Second insert row for the same (qso, forwarder, insert) must
+	// fail on the UNIQUE constraint.
+	ctx := context.Background()
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+	err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz")
+	_ = tx.Rollback()
+	if err == nil {
+		t.Fatal("expected UNIQUE constraint to reject a second insert row for (qso, forwarder)")
+	}
+}
+
+func TestFetchInsertUpstreamID_InvalidInputs(t *testing.T) {
+	svc := testService(t)
+
+	if _, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), 0, "qrz"); err == nil {
+		t.Fatal("expected error for qsoID=0")
+	}
+	if _, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), 1, ""); err == nil {
+		t.Fatal("expected error for empty forwarderName")
+	}
+}
