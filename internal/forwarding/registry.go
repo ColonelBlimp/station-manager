@@ -23,7 +23,7 @@ var (
 // Intended to be called from a forwarder package's init() function.
 //
 // Panics on empty type, nil constructor, or duplicate registration —
-// every one of these is a bug in the binary, not a runtime condition.
+// every one of these is a bug (code error), not a runtime condition.
 func Register(typeName string, ctor Constructor) {
 	if typeName == "" {
 		panic("forwarding.Register: empty type name")
@@ -39,7 +39,7 @@ func Register(typeName string, ctor Constructor) {
 	registry[typeName] = ctor
 }
 
-// Build constructs a Forwarder from a ForwarderConfig. Returns an error
+// Build constructs a Forwarder from the given ForwarderConfig. Returns an error
 // if the type is not registered or if the constructor rejects the
 // config (bad credentials, etc.).
 func Build(fc types.ForwarderConfig) (Forwarder, error) {
@@ -62,7 +62,7 @@ func Build(fc types.ForwarderConfig) (Forwarder, error) {
 
 // IsRegistered reports whether a forwarder type name has a constructor
 // registered. Useful at startup when the daemon wants to validate every
-// configured forwarder type without actually building them yet.
+// configured forwarder type before building it.
 func IsRegistered(typeName string) bool {
 	registryMu.Lock()
 	defer registryMu.Unlock()

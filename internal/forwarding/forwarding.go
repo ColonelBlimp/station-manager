@@ -52,7 +52,7 @@ type Result struct {
 // Forwarder is the plugin boundary between the worker layer and a concrete
 // destination. Implementations make one synchronous network call per
 // Submit and return a Result. They MUST NOT retry internally — retries
-// are the worker's job.
+// are the worker's responsibility.
 type Forwarder interface {
 	// Type returns the plugin identifier, matching the "type" field in
 	// config.forwarders[] and the key the implementation registered
@@ -60,7 +60,7 @@ type Forwarder interface {
 	Type() string
 
 	// AdifPrefix returns the ADIF field-name prefix that the worker
-	// stamps on the QSO row on successful submit — e.g. "QRZCOM" for
+	// stamps on the QSO row on successful 'submit' — e.g. "QRZCOM" for
 	// QRZ (producing QRZCOM_QSO_UPLOAD_STATUS / QRZCOM_QSO_UPLOAD_DATE),
 	// "CLUBLOG" for ClubLog, "LOTW" for LoTW. Return "" for forwarders
 	// with no corresponding ADIF slot (custom webhooks, SM-private
@@ -74,8 +74,8 @@ type Forwarder interface {
 	// priorUpstreamID is the UpstreamID recorded on a prior successful
 	// Submit for the same (QSO, forwarder) pair — populated by the
 	// worker only for action=Delete, empty otherwise. Forwarders that
-	// need the upstream's record id to issue a delete (e.g. QRZ, which
-	// takes LOGIDS) read it from here; forwarders that don't, ignore
-	// it.
+	// need the upstream's record id to issue a 'delete' (e.g. QRZ, which
+	// takes LOGIDS) read it from here; forwarders that don't have this requirement
+	// should ignore it.
 	Submit(ctx context.Context, qso types.Qso, action Action, priorUpstreamID string) Result
 }
