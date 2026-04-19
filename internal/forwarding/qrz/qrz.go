@@ -184,8 +184,9 @@ func (f *Forwarder) Submit(
 
 	form, err := buildForm(f.apiKey, qso, act, priorUpstreamID)
 	if err != nil {
-		// A build-time error (unknown action, delete deferred to stage 5,
-		// adif conversion failure) is not something retries can heal.
+		// A build-time error (unknown action, empty priorUpstreamID on
+		// delete, adif conversion failure) is not something retries
+		// can heal.
 		return forwarding.Result{Outcome: forwarding.OutcomeTerminal, Err: err}
 	}
 
@@ -240,9 +241,10 @@ func (f *Forwarder) Submit(
 
 // buildForm assembles the x-www-form-urlencoded request body for the
 // given action. Insert and update share ACTION=INSERT; update adds
-// OPTION=REPLACE. Delete is deferred to stage 5 because it needs a
-// worker-side DB lookup to populate priorUpstreamID with the LOGID
-// that QRZ returned on the earlier successful insert.
+// OPTION=REPLACE. Delete uses ACTION=DELETE + LOGIDS=priorUpstreamID,
+// where priorUpstreamID is the LOGID QRZ returned on the earlier
+// successful insert — resolved by the worker via
+// sqlite.Service.FetchInsertUpstreamIDWithContext before Submit.
 func buildForm(apiKey string, qso types.Qso, act forwarding.Action, priorUpstreamID string) (url.Values, error) {
 	const op errors.Op = "qrz.buildForm"
 

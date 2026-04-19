@@ -4,10 +4,8 @@
 // ticker + claim + submit + persist-outcome loop.
 //
 // Design rationale: docs/v2-design/forwarding.md §4 (topology), §5
-// (retry policy), §7 (row lifecycle).
-//
-// Launched by cmd/smd via safego.Go in Stage 9; consumed by the
-// integration test in Stage 11.
+// (retry policy), §7 (row lifecycle). Launched by cmd/smd's
+// spawnForwarderWorkers under safego.Go.
 package worker
 
 import (

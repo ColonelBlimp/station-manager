@@ -2,9 +2,9 @@
 // worker layers and the concrete destination plugins (QRZ, ClubLog, LoTW, ...).
 //
 // A Forwarder implementation pushes QSOs to one specific upstream. The
-// worker layer (internal/forwarding/worker, landing in stage 8) calls
-// Submit and classifies the outcome; the forwarder itself has no knowledge
-// of the qso_upload row, the retry policy, or SSE emission.
+// worker layer (internal/forwarding/worker) calls Submit and classifies
+// the outcome; the forwarder itself has no knowledge of the qso_upload
+// row, the retry policy, or SSE emission.
 //
 // See docs/v2-design/forwarding.md §3 for the design rationale.
 package forwarding

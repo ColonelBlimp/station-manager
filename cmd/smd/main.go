@@ -233,12 +233,12 @@ func run() error {
 // logger, and the worker is respawned so that a transient panic doesn't
 // permanently disable a destination — see forwarding.md §9.
 //
-// Retry config resolution (stage 7): operator's `retry` block wins if
-// present; otherwise the forwarder package's own registered
-// DefaultRetry is used (tuned to the upstream's tolerances — see each
-// package's DefaultRetry var for rationale). A type with no registered
-// default AND no explicit config retry is a setup error and fails
-// startup loudly.
+// Retry config resolution: operator's `retry` block wins if present;
+// otherwise the forwarder package's own registered DefaultRetry is
+// used (tuned to the upstream's tolerances — see each package's
+// DefaultRetry var for rationale). A type with no registered default
+// AND no explicit config retry is a setup error and fails startup
+// loudly.
 //
 // Disabled entries are skipped (no goroutine spawned, no queue rows
 // processed). If forwarding.Build rejects a config, startup fails —
