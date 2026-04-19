@@ -135,7 +135,7 @@ func run() error {
 		return fmt.Errorf("open database: %w", err)
 	}
 
-	// Registered AFTER Open succeeds, so we never double-close or close a
+	// Registered AFTER Open succeeds, so that we never double-close or close a
 	// handle we didn't open.
 	defer func() {
 		if err = dbSvc.Close(); err != nil {
@@ -151,10 +151,8 @@ func run() error {
 
 	// ---- Forwarder workers ----
 	// Orphan sweep: any qso_upload row left in 'in_progress' by a
-	// previous crashed run is reset to 'pending' so it becomes
-	// reclaimable. Safe because most upstreams dedupe server-side, and
-	// the ones that don't will return a dedupe error which forwarders
-	// classify as success — see forwarding.md §7.
+	// previous crashed run is reset to 'pending'. This makes it
+	// reclaimable.
 	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	n, err := dbSvc.ResetOrphanedUploadsWithContext(sweepCtx)
 	sweepCancel()
@@ -198,7 +196,7 @@ func run() error {
 	}
 
 	// ---- Graceful shutdown ----
-	// Cancel forwarder workers first so any in-flight forwarder Submit
+	// Cancel forwarder workers first so that any in-flight forwarder Submit() call
 	// with ctx-cancel support (e.g. HTTP POST to QRZ) aborts promptly,
 	// and no new DB work is started against the about-to-close handle.
 	// Each worker finishes its current processRow then returns from Run.

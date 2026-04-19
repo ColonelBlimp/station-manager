@@ -177,7 +177,10 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 		return
 	}
 
-	res := w.fwd.Submit(ctx, qso, act)
+	// priorUpstreamID is populated for delete actions only (stage 5);
+	// for insert/update it's always empty. Passing empty here preserves
+	// today's behaviour until the delete-LOGID lookup lands.
+	res := w.fwd.Submit(ctx, qso, act, "")
 	w.persistOutcome(ctx, row, res)
 }
 

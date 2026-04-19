@@ -14,8 +14,9 @@ import (
 // package-global singleton).
 type fakeFwd struct{ typeName string }
 
-func (f *fakeFwd) Type() string { return f.typeName }
-func (f *fakeFwd) Submit(context.Context, types.Qso, Action) Result {
+func (f *fakeFwd) Type() string       { return f.typeName }
+func (f *fakeFwd) AdifPrefix() string { return "" }
+func (f *fakeFwd) Submit(context.Context, types.Qso, Action, string) Result {
 	return Result{Outcome: OutcomeSuccess}
 }
 

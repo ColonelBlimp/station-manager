@@ -40,7 +40,7 @@ func TestNew_DefaultMode_IsAlwaysSuccess(t *testing.T) {
 	if fwd.Type() != Type {
 		t.Fatalf("Type = %q, want %q", fwd.Type(), Type)
 	}
-	res := fwd.Submit(context.Background(), types.Qso{}, "insert")
+	res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 	if res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("outcome = %q, want success (default mode)", res.Outcome)
 	}
@@ -49,7 +49,7 @@ func TestNew_DefaultMode_IsAlwaysSuccess(t *testing.T) {
 func TestNew_EmptyModeDefaultsToSuccess(t *testing.T) {
 	// Credentials blob present but mode field empty — should still default.
 	fwd := newFwd(t, map[string]any{"mode": ""})
-	res := fwd.Submit(context.Background(), types.Qso{}, "insert")
+	res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 	if res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("outcome = %q, want success", res.Outcome)
 	}
@@ -95,7 +95,7 @@ func TestSubmit_AlwaysSuccess(t *testing.T) {
 	fwd := newFwd(t, map[string]any{"mode": ModeAlwaysSuccess})
 
 	for i := 1; i <= 3; i++ {
-		res := fwd.Submit(context.Background(), types.Qso{}, "insert")
+		res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 		if res.Outcome != forwarding.OutcomeSuccess {
 			t.Fatalf("iter %d: outcome = %q, want success", i, res.Outcome)
 		}
@@ -114,7 +114,7 @@ func TestSubmit_AlwaysSuccess(t *testing.T) {
 
 func TestSubmit_AlwaysTransient(t *testing.T) {
 	fwd := newFwd(t, map[string]any{"mode": ModeAlwaysTransient})
-	res := fwd.Submit(context.Background(), types.Qso{}, "insert")
+	res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 
 	if res.Outcome != forwarding.OutcomeTransient {
 		t.Fatalf("outcome = %q, want transient", res.Outcome)
@@ -126,7 +126,7 @@ func TestSubmit_AlwaysTransient(t *testing.T) {
 
 func TestSubmit_AlwaysTerminal(t *testing.T) {
 	fwd := newFwd(t, map[string]any{"mode": ModeAlwaysTerminal})
-	res := fwd.Submit(context.Background(), types.Qso{}, "insert")
+	res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 
 	if res.Outcome != forwarding.OutcomeTerminal {
 		t.Fatalf("outcome = %q, want terminal", res.Outcome)
@@ -144,20 +144,20 @@ func TestSubmit_FlapN_TransientThenSuccess(t *testing.T) {
 
 	// First 3 calls → transient.
 	for i := 1; i <= 3; i++ {
-		res := fwd.Submit(context.Background(), types.Qso{}, "insert")
+		res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 		if res.Outcome != forwarding.OutcomeTransient {
 			t.Fatalf("call %d: outcome = %q, want transient", i, res.Outcome)
 		}
 	}
 
 	// 4th call → success (past the flap window).
-	res := fwd.Submit(context.Background(), types.Qso{}, "insert")
+	res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 	if res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("call 4: outcome = %q, want success after flap", res.Outcome)
 	}
 
 	// 5th call → still success.
-	res = fwd.Submit(context.Background(), types.Qso{}, "insert")
+	res = fwd.Submit(context.Background(), types.Qso{}, "insert", "")
 	if res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("call 5: outcome = %q, want success after flap", res.Outcome)
 	}
@@ -169,7 +169,7 @@ func TestSubmit_CtxCancelled_DoesNotConsumeCallSlot(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	res := fwd.Submit(ctx, types.Qso{}, "insert")
+	res := fwd.Submit(ctx, types.Qso{}, "insert", "")
 	if res.Outcome != forwarding.OutcomeTransient {
 		t.Fatalf("outcome = %q, want transient on cancelled ctx", res.Outcome)
 	}

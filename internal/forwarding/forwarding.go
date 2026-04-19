@@ -59,7 +59,23 @@ type Forwarder interface {
 	// under. Used for logging and for qso_upload.forwarder_type.
 	Type() string
 
+	// AdifPrefix returns the ADIF field-name prefix that the worker
+	// stamps on the QSO row on successful submit — e.g. "QRZCOM" for
+	// QRZ (producing QRZCOM_QSO_UPLOAD_STATUS / QRZCOM_QSO_UPLOAD_DATE),
+	// "CLUBLOG" for ClubLog, "LOTW" for LoTW. Return "" for forwarders
+	// with no corresponding ADIF slot (custom webhooks, SM-private
+	// destinations). When empty, the worker skips the QSO-row stamp
+	// and only updates qso_upload.
+	AdifPrefix() string
+
 	// Submit attempts to push one QSO + action pair to the upstream
 	// service. It MUST respect ctx cancellation.
-	Submit(ctx context.Context, qso types.Qso, action Action) Result
+	//
+	// priorUpstreamID is the UpstreamID recorded on a prior successful
+	// Submit for the same (QSO, forwarder) pair — populated by the
+	// worker only for action=Delete, empty otherwise. Forwarders that
+	// need the upstream's record id to issue a delete (e.g. QRZ, which
+	// takes LOGIDS) read it from here; forwarders that don't, ignore
+	// it.
+	Submit(ctx context.Context, qso types.Qso, action Action, priorUpstreamID string) Result
 }

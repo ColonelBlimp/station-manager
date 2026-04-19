@@ -235,14 +235,27 @@ package forwarding
 // per Submit and return a Result describing the outcome.
 type Forwarder interface {
     // Type returns the forwarder's type identifier, matching the
-    // "type" field in config.json. Used for logging and for the
-    // qso_upload.service column.
+    // "type" field in config.json. Used for logging and for
+    // qso_upload.forwarder_type.
     Type() string
+
+    // AdifPrefix returns the ADIF field-name prefix that the worker
+    // stamps on the QSO row on successful submit — e.g. "QRZCOM" for
+    // QRZ (producing QRZCOM_QSO_UPLOAD_STATUS / QRZCOM_QSO_UPLOAD_DATE).
+    // Return "" for forwarders with no corresponding ADIF slot; the
+    // worker then skips the QSO-row stamp and only updates qso_upload.
+    AdifPrefix() string
 
     // Submit attempts to push one QSO + action pair to the upstream
     // service. It MUST respect ctx cancellation. It MUST NOT retry
     // internally — retries are the worker's job.
-    Submit(ctx context.Context, qso types.Qso, action Action) Result
+    //
+    // priorUpstreamID is the UpstreamID recorded on a prior successful
+    // Submit for the same (QSO, forwarder) pair — populated by the
+    // worker only for action=Delete, empty otherwise. Forwarders that
+    // need the upstream's record id to issue a delete (e.g. QRZ, which
+    // takes LOGIDS) read it from here; forwarders that don't, ignore it.
+    Submit(ctx context.Context, qso types.Qso, action Action, priorUpstreamID string) Result
 }
 
 type Action string // "insert" | "update" | "delete"
@@ -257,7 +270,7 @@ const (
 type Result struct {
     Outcome    Outcome
     Err        error  // set when Outcome != success; stored in qso_upload.last_error
-    UpstreamID string // optional — some services return a remote ID
+    UpstreamID string // optional — some services return a remote ID (QRZ: LOGID)
 }
 ```
 
@@ -279,6 +292,31 @@ stateless. Any per-forwarder setup (HTTP client construction,
 credential validation) happens in the package's constructor
 (`qrz.New(cfg Config) (*Forwarder, error)`). Shutdown is just
 letting the goroutine exit; no explicit teardown.
+
+**Why `AdifPrefix`:** the ADIF spec defines per-service upload-status
+fields (`QRZCOM_QSO_UPLOAD_STATUS`, `CLUBLOG_QSO_UPLOAD_STATUS`, …).
+When a submit succeeds, the corresponding QSO-row field should be
+stamped `"Y"` + today's date so ADIF exports and client UIs see
+accurate state without joining against `qso_upload`. The **worker**
+performs the stamp in the same sqlite tx as `MarkUploadSuccess`;
+`AdifPrefix` is just declarative metadata telling the worker which
+field pair to write. Forwarders without an ADIF slot (custom
+webhooks, SM-private destinations) return `""` and the QSO stamp is
+skipped. See §6 for how this shows up at the storage layer. v1 did
+this write from inside the QRZ service, which broke the plugin
+boundary; the v2 shape keeps forwarders pure by moving the write to
+the worker.
+
+**Why `priorUpstreamID` on Submit:** some upstreams (QRZ, ClubLog)
+need the remote record id to issue a delete. That id was captured on
+the earlier successful insert as `Result.UpstreamID` and stored in
+`qso_upload.upstream_id`. For a delete action, the worker looks up
+that insert row's `upstream_id` and passes it through. For
+insert/update the param is empty and forwarders ignore it. The
+alternative shapes considered (stashing it on `types.Qso`, or letting
+the forwarder query sqlite itself) either abused the DTO or broke
+the plugin boundary; a single extra interface param is the least
+invasive honest shape.
 
 **Package layout:**
 
@@ -339,8 +377,14 @@ for {
                         next_attempt_at <= now)
     for _, row := range rows {
         qso := fetch_qso(row.qso_id)         // soft-deleted handled below
-        res := forwarder.Submit(ctx, qso, row.action)
-        persist_outcome(row, res)            // updates status/attempts/last_error
+        priorID := ""
+        if row.action == "delete" {
+            priorID = fetch_insert_upstream_id(row.qso_id, self)
+        }
+        res := forwarder.Submit(ctx, qso, row.action, priorID)
+        persist_outcome(row, res)            // updates status/attempts/last_error;
+                                             // on success, also stamps the qso row's
+                                             // <AdifPrefix>_QSO_UPLOAD_{STATUS,DATE}
         maybe_emit_sse(row, res)             // only on terminal outcomes
     }
 }

@@ -97,11 +97,17 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 // Type returns the registry identifier for this forwarder.
 func (f *Forwarder) Type() string { return Type }
 
+// AdifPrefix returns "" — the stub has no ADIF upload-status slot.
+// The worker will skip the qso-row stamp for stub-backed uploads.
+func (f *Forwarder) AdifPrefix() string { return "" }
+
 // Submit honours ctx cancellation, increments the call counter, and
 // returns a Result per the configured mode. Ctx cancellation returns
 // a transient outcome without consuming a call slot so tests can
 // reason about the counter cleanly.
-func (f *Forwarder) Submit(ctx context.Context, _ types.Qso, _ forwarding.Action) forwarding.Result {
+//
+// priorUpstreamID is ignored — the stub doesn't use it.
+func (f *Forwarder) Submit(ctx context.Context, _ types.Qso, _ forwarding.Action, _ string) forwarding.Result {
 	if err := ctx.Err(); err != nil {
 		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}
 	}
