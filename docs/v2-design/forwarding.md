@@ -150,7 +150,6 @@ actions this destination cares about.
       "type": "qrz",
       "enabled": true,
       "credentials": {
-        "callsign": "M0CMC",
         "api_key": "..."
       }
     },
@@ -176,14 +175,14 @@ key they relabel `qrz` → `qrz-2026`): `forwarder_type` stays `"qrz"`,
 historical rows still make sense.
 
 **Why credentials are a nested object, not flat fields:** each
-forwarder type has its own authentication shape. QRZ wants
-`callsign`/`api_key` (each QRZ logbook is keyed by callsign and has
-its own api_key; every QSO's `STATION_CALLSIGN` must match the
-logbook's callsign or QRZ rejects the record); ClubLog wants
-`email`/`password`/`callsign`; LoTW wants a certificate path.
-Nesting the type-specific fields under `credentials` keeps the
-top-level shape uniform and the type-specific unmarshaling local to
-the forwarder's own package.
+forwarder type has its own authentication shape. QRZ wants just
+`api_key` (each QRZ logbook has a unique key that both authenticates
+the caller and selects the logbook — QRZ itself enforces the
+callsign match and rejects QSOs whose `STATION_CALLSIGN` doesn't
+match the logbook); ClubLog wants `email`/`password`/`callsign`;
+LoTW wants a certificate path. Nesting the type-specific fields
+under `credentials` keeps the top-level shape uniform and the
+type-specific unmarshaling local to the forwarder's own package.
 
 **Why `action_filter` is explicit:** v1 uploaded everything to QRZ
 including deletes. Some destinations don't support updates or deletes

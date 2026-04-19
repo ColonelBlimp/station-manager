@@ -10,13 +10,11 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// validCreds returns a minimally-valid credentials blob. Tests that
-// need to perturb a single field copy this and mutate.
+// validCreds returns a minimally-valid credentials blob.
 func validCreds(t *testing.T) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(map[string]string{
-		"callsign": "M0TEST",
-		"api_key":  "ABCD-1234-EFGH-5678",
+		"api_key": "ABCD-1234-EFGH-5678",
 	})
 	if err != nil {
 		t.Fatalf("marshal creds: %v", err)
@@ -66,23 +64,10 @@ func TestNew_MalformedCredentials_Errors(t *testing.T) {
 	}
 }
 
-func TestNew_MissingCallsign_Errors(t *testing.T) {
-	_, err := New(types.ForwarderConfig{
-		Name: "x", Type: Type,
-		Credentials: json.RawMessage(`{"api_key":"ABCD-1234"}`),
-	})
-	if err == nil {
-		t.Fatal("expected error for missing callsign")
-	}
-	if !strings.Contains(err.Error(), "callsign") {
-		t.Fatalf("error = %q, want 'callsign' substring", err.Error())
-	}
-}
-
 func TestNew_MissingApiKey_Errors(t *testing.T) {
 	_, err := New(types.ForwarderConfig{
 		Name: "x", Type: Type,
-		Credentials: json.RawMessage(`{"callsign":"M0TEST"}`),
+		Credentials: json.RawMessage(`{}`),
 	})
 	if err == nil {
 		t.Fatal("expected error for missing api_key")
@@ -92,20 +77,10 @@ func TestNew_MissingApiKey_Errors(t *testing.T) {
 	}
 }
 
-func TestNew_EmptyCallsign_Errors(t *testing.T) {
-	_, err := New(types.ForwarderConfig{
-		Name: "x", Type: Type,
-		Credentials: json.RawMessage(`{"callsign":"","api_key":"ABCD-1234"}`),
-	})
-	if err == nil {
-		t.Fatal("expected error for empty callsign")
-	}
-}
-
 func TestNew_EmptyApiKey_Errors(t *testing.T) {
 	_, err := New(types.ForwarderConfig{
 		Name: "x", Type: Type,
-		Credentials: json.RawMessage(`{"callsign":"M0TEST","api_key":""}`),
+		Credentials: json.RawMessage(`{"api_key":""}`),
 	})
 	if err == nil {
 		t.Fatal("expected error for empty api_key")

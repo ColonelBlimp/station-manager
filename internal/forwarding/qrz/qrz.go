@@ -3,16 +3,19 @@
 // into Success / Transient / Terminal outcomes so the worker can
 // retry, mark failed, or stamp success as appropriate.
 //
-// Credentials shape (both fields required):
+// Credentials shape (only api_key is required):
 //
-//	{"callsign": "M0CMC", "api_key": "XXXX-XXXX-XXXX-XXXX"}
+//	{"api_key": "XXXX-XXXX-XXXX-XXXX"}
 //
-// Each QRZ logbook is keyed by a callsign and has its own api_key;
-// the api_key alone authenticates API calls, but every QSO submitted
-// through the logbook must carry a matching STATION_CALLSIGN or QRZ
-// will reject it. The callsign here is therefore a data-integrity
-// constraint, not a log-tag — stage 4 validates each QSO against it
-// before POSTing.
+// Each QRZ logbook has a unique api_key that both authenticates the
+// caller and identifies which logbook the QSO lands in. Each logbook
+// is also keyed by a callsign, and QRZ rejects any QSO whose
+// STATION_CALLSIGN doesn't match the logbook's callsign — but that
+// is enforced by QRZ, not locally: the response parser classifies the
+// rejection as terminal and the worker marks the row failed with
+// QRZ's error message in last_error. Keeping a copy of the callsign
+// in config would only introduce drift risk (stale config could
+// reject correct QSOs) without adding a correctness guarantee.
 //
 // (QRZ.com's website login — username + password — is a separate
 // credential for the user account as a whole; it is not used here
@@ -53,8 +56,7 @@ func init() {
 // credentials is the type-specific shape of ForwarderConfig.Credentials
 // for QRZ. Extra fields are ignored.
 type credentials struct {
-	Callsign string `json:"callsign"`
-	APIKey   string `json:"api_key"`
+	APIKey string `json:"api_key"`
 }
 
 // Forwarder implements forwarding.Forwarder by POSTing to the QRZ
@@ -62,37 +64,28 @@ type credentials struct {
 // so it's safe for concurrent use, as the worker may call Submit from
 // multiple goroutines if a future batch size > 1 is wired up.
 type Forwarder struct {
-	callsign string
-	apiKey   string
+	apiKey string
 }
 
-// New constructs a QRZ Forwarder from the given ForwarderConfig. Both
-// callsign and api_key are required: the api_key authenticates the
-// call, and the callsign identifies which QRZ logbook it targets, so
-// stage-4 validation can reject a QSO whose STATION_CALLSIGN doesn't
-// match this logbook.
+// New constructs a QRZ Forwarder from the given ForwarderConfig. Only
+// api_key is required — it both authenticates the caller and selects
+// which logbook the QSO lands in.
 func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	const op errors.Op = "qrz.New"
 
 	if len(fc.Credentials) == 0 {
-		return nil, errors.New(op).WithMsg("credentials required (callsign + api_key)")
+		return nil, errors.New(op).WithMsg("credentials required (api_key)")
 	}
 
 	var creds credentials
 	if err := json.Unmarshal(fc.Credentials, &creds); err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsg("parse credentials")
 	}
-	if creds.Callsign == "" {
-		return nil, errors.New(op).WithMsg("credentials.callsign is required")
-	}
 	if creds.APIKey == "" {
 		return nil, errors.New(op).WithMsg("credentials.api_key is required")
 	}
 
-	return &Forwarder{
-		callsign: creds.Callsign,
-		apiKey:   creds.APIKey,
-	}, nil
+	return &Forwarder{apiKey: creds.APIKey}, nil
 }
 
 // Type returns the registry identifier for this forwarder.
