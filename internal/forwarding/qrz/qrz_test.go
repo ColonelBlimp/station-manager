@@ -125,26 +125,5 @@ func TestSubmit_CtxCancelled_IsTransient(t *testing.T) {
 	}
 }
 
-func TestSubmit_Stubbed_ReturnsTerminal(t *testing.T) {
-	// Until stage 4 lands the real HTTP call, Submit returns terminal
-	// with a "not yet implemented" error. This guard catches anyone
-	// who wires up a real QRZ forwarder in config before stage 4.
-	fwd, err := New(types.ForwarderConfig{
-		Name: "x", Type: Type,
-		Credentials: validCreds(t),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	res := fwd.Submit(context.Background(), types.Qso{}, "insert", "")
-	if res.Outcome != forwarding.OutcomeTerminal {
-		t.Fatalf("outcome = %q, want terminal (stub)", res.Outcome)
-	}
-	if res.Err == nil {
-		t.Fatal("Err nil on stubbed Submit")
-	}
-	if !strings.Contains(res.Err.Error(), "not yet implemented") {
-		t.Fatalf("err = %q, want 'not yet implemented' substring", res.Err.Error())
-	}
-}
+// Real HTTP-backed Submit tests live in submit_test.go — they use
+// httptest.NewServer via newWithEndpoint so the call stays hermetic.
