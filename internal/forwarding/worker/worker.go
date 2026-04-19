@@ -343,7 +343,35 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 	}
 }
 
+// markSuccess persists a success outcome, dispatching between the
+// plain and ADIF-stamping variants based on the forwarder's
+// declarative metadata and the row's action.
+//
+// Rules (stage 6):
+//   - delete → plain variant always; a soft-deleted local QSO should
+//     not be stamped as "uploaded".
+//   - forwarder has no ADIF prefix (stub, custom webhooks) → plain
+//     variant; there is no ADIF slot to stamp.
+//   - otherwise → MarkUploadSuccessWithAdifStamp, which updates
+//     qso_upload AND the QSO row's <PREFIX>_QSO_UPLOAD_{STATUS,DATE}
+//     in one transaction, honouring the one-fails-all-fail invariant.
 func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID string) {
+	prefix := w.fwd.AdifPrefix()
+	if prefix != "" && row.Action != action.Delete.String() {
+		if err := w.db.MarkUploadSuccessWithAdifStampWithContext(
+			ctx, row.ID, upstreamID, row.QsoID, prefix,
+		); err != nil {
+			w.logger.ErrorWith().
+				Str("forwarder", w.cfg.Name).
+				Int64("upload_id", row.ID).
+				Int64("qso_id", row.QsoID).
+				Str("adif_prefix", prefix).
+				Err(err).
+				Msg("forwarder: mark success + adif stamp failed")
+		}
+		return
+	}
+
 	if err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID); err != nil {
 		w.logger.ErrorWith().
 			Str("forwarder", w.cfg.Name).

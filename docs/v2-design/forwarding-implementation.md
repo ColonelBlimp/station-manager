@@ -122,15 +122,22 @@ stable than numbers.
      `<PREFIX>_QSO_UPLOAD_DATE=today` on the QSO row in the same tx
      as the `qso_upload` row update.
 
-7. **`markSuccess`** calls the appropriate sqlite method
-   (`MarkUploadSuccessWithContext` for forwarders with no ADIF slot,
-   or the ADIF-stamping variant when `AdifPrefix()` is non-empty),
-   which — inside one tx — loads the `qso_upload` row, sets
-   `status='uploaded'`, bumps `attempts`, writes `upstream_id`,
-   clears `last_error`, and (when stamping) updates the QSO row's
-   `<PREFIX>_QSO_UPLOAD_STATUS` + `<PREFIX>_QSO_UPLOAD_DATE`.
-   The `trg_qso_upload_set_updated_at` trigger fires and stamps
-   `modified_at`.
+7. **`markSuccess`** dispatches based on the forwarder's declarative
+   metadata and the row's action:
+   - `AdifPrefix() == ""` or `action == Delete` →
+     `MarkUploadSuccessWithContext`. Loads the `qso_upload` row,
+     sets `status='uploaded'`, bumps `attempts`, writes
+     `upstream_id`, clears `last_error`. No QSO-row changes.
+   - Otherwise → `MarkUploadSuccessWithAdifStampWithContext`.
+     Single transaction: the same `qso_upload` transition **plus**
+     `UPDATE qso SET additional_data = json_set(additional_data,
+     '$.<prefix>_qso_upload_status', 'Y',
+     '$.<prefix>_qso_upload_date', today)`. The stamp lives in the
+     JSON blob (the project's "additional_data absorbs ADIF spec
+     evolution" idiom) — no per-destination columns, no migration
+     when a new forwarder lands.
+   In both cases, `trg_qso_upload_set_updated_at` fires and stamps
+   `qso_upload.modified_at`.
 
 8. **Client polls `GET /v1/qso/1/uploads`** any time after step 3.
    `handleListQsoUploads` probes existence with

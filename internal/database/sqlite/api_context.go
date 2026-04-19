@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	stderr "errors"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
@@ -1213,6 +1215,134 @@ func (s *Service) MarkUploadSuccessWithContext(ctx context.Context, id int64, up
 
 	if _, err = row.Update(ctx, h, boil.Infer()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload success")
+	}
+	return nil
+}
+
+// adifPrefixPattern enforces a safe shape for ADIF field prefixes
+// before they are concatenated into column names. Prefixes come from
+// Forwarder.AdifPrefix() — our own code — but the validator guards
+// against typos (e.g. a stray lowercase letter or space) that would
+// otherwise slip a malformed column name into a raw UPDATE. The ADIF
+// specification uses uppercase ASCII for field-name prefixes.
+var adifPrefixPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*$`)
+
+// MarkUploadSuccessWithAdifStampWithContext records a successful
+// Submit outcome AND stamps the QSO row's per-destination ADIF
+// upload-status fields, all in one transaction. The one-fails-all-
+// fail invariant (docs/v1-analysis/invariants.md) requires that the
+// operator never sees a queue row in state `uploaded` without the
+// corresponding QSO-row stamp reflecting it, and vice versa.
+//
+// The stamp lands inside the qso row's `additional_data` JSON blob
+// (the project idiom — additional_data absorbs ADIF spec evolution,
+// per project_sm_design_invariants memory). Two JSON keys are
+// written via SQLite's json_set function:
+//
+//	$.<prefix_lower>_qso_upload_status = "Y"          (adif.YesString)
+//	$.<prefix_lower>_qso_upload_date   = today (UTC, YYYYMMDD)
+//
+// For QRZ (adifPrefix = "QRZCOM") that's
+// $.qrzcom_qso_upload_status / $.qrzcom_qso_upload_date. These keys
+// match the JSON tags on types.Qso so the next read via
+// QsoModelToType surfaces the stamp as struct fields automatically.
+//
+// The caller (worker) only invokes this for action != delete with a
+// non-empty AdifPrefix — delete never stamps (local QSO is
+// soft-deleted so "uploaded" on a tombstone is nonsensical), and a
+// forwarder with no ADIF slot uses MarkUploadSuccessWithContext.
+//
+// Adding a new forwarder does not require changing this method or
+// the schema: prefix-agnostic keys mean any validated prefix just
+// works.
+//
+// Returns ErrNotFound if either id or qsoID points at a missing row.
+func (s *Service) MarkUploadSuccessWithAdifStampWithContext(
+	ctx context.Context, id int64, upstreamID string, qsoID int64, adifPrefix string,
+) error {
+	const op errors.Op = "sqlite.Service.MarkUploadSuccessWithAdifStampWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if id < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	if qsoID < 1 {
+		return errors.New(op).WithMsgf("qsoID must be >= 1, got %d", qsoID)
+	}
+	if !adifPrefixPattern.MatchString(adifPrefix) {
+		return errors.New(op).WithMsgf(
+			"invalid adifPrefix %q (must match %s)", adifPrefix, adifPrefixPattern,
+		)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	tx, err := h.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("begin tx")
+	}
+	// Safe on commit — tx.Rollback returns an error after commit but we
+	// ignore it; the rollback-only-on-failure idiom keeps the control
+	// flow readable.
+	defer func() { _ = tx.Rollback() }()
+
+	// Step 1 — qso_upload: same shape as MarkUploadSuccessWithContext.
+	// Done via raw SQL (rather than sqlboiler Find+Update) to share one
+	// transaction with step 2.
+	var upstreamArg any
+	if upstreamID != "" {
+		upstreamArg = upstreamID
+	} else {
+		upstreamArg = nil
+	}
+	res, err := tx.ExecContext(ctx, `
+UPDATE qso_upload
+SET    status      = ?,
+       attempts    = attempts + 1,
+       upstream_id = ?,
+       last_error  = NULL
+WHERE  id = ?`,
+		status.Uploaded.String(), upstreamArg, id,
+	)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("update qso_upload")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.ErrNotFound
+	}
+
+	// Step 2 — qso row ADIF stamp via json_set on additional_data.
+	// The JSON paths are built from the validated prefix; both paths
+	// and values are bound parameters so the statement itself is
+	// static (defence-in-depth beyond the regex validator above).
+	// today is UTC per the ADIF spec.
+	prefixLower := strings.ToLower(adifPrefix)
+	statusPath := "$." + prefixLower + "_qso_upload_status"
+	datePath := "$." + prefixLower + "_qso_upload_date"
+	today := time.Now().UTC().Format("20060102")
+	res, err = tx.ExecContext(ctx, `
+UPDATE qso
+SET    additional_data = json_set(additional_data, ?, ?, ?, ?)
+WHERE  id = ?`,
+		statusPath, adif.YesString, datePath, today, qsoID,
+	)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsgf(
+			"stamp qso row with prefix %q", adifPrefix,
+		)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.ErrNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("commit")
 	}
 	return nil
 }

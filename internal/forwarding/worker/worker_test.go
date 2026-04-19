@@ -650,6 +650,127 @@ func TestWorker_SoftDeletedQso_DeleteStillForwards(t *testing.T) {
 }
 
 // =============================================================================
+// Stage 6: ADIF-stamp dispatch
+// =============================================================================
+
+// stampingForwarder is a minimal Forwarder with a non-empty
+// AdifPrefix, letting the worker exercise the
+// MarkUploadSuccessWithAdifStamp dispatch path. Returns configurable
+// outcomes per call.
+type stampingForwarder struct {
+	typeName string
+	prefix   string
+	result   forwarding.Result
+}
+
+func (s *stampingForwarder) Type() string       { return s.typeName }
+func (s *stampingForwarder) AdifPrefix() string { return s.prefix }
+func (s *stampingForwarder) Submit(
+	_ context.Context, _ types.Qso,
+	_ forwarding.Action, _ string,
+) forwarding.Result {
+	return s.result
+}
+
+func TestWorker_InsertSuccess_WithAdifPrefix_StampsQsoRow(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "qrz", "qrz", action.Insert)
+
+	fwd := &stampingForwarder{
+		typeName: "qrz",
+		prefix:   "QRZCOM",
+		result: forwarding.Result{
+			Outcome: forwarding.OutcomeSuccess, UpstreamID: "logid-1001",
+		},
+	}
+	w, err := New(defaultCfg("qrz"), fwd, h.db, h.logger)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	// QSO row must now carry the QRZCOM upload-status stamp.
+	qso, err := h.db.FetchQsoByIdWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch qso: %v", err)
+	}
+	if qso.QrzComUploadStatus != "Y" {
+		t.Fatalf("QrzComUploadStatus = %q, want Y", qso.QrzComUploadStatus)
+	}
+	if qso.QrzComUploadDate == "" {
+		t.Fatal("QrzComUploadDate empty — worker didn't dispatch to stamp path")
+	}
+}
+
+func TestWorker_DeleteSuccess_WithAdifPrefix_DoesNotStamp(t *testing.T) {
+	// Delete action must not stamp even when the forwarder has an
+	// ADIF prefix — stamping "uploaded" on a soft-deleted QSO is
+	// nonsensical.
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	// Stage 5: delete needs a prior successful insert row for the
+	// LOGID lookup. Use the plain MarkUploadSuccess path so no stamp
+	// leaks from the seeding step.
+	h.enqueueUpload(qsoID, "qrz", "qrz", action.Insert)
+	claimed, _ := h.db.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	_ = h.db.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "prior-logid")
+
+	h.enqueueUpload(qsoID, "qrz", "qrz", action.Delete)
+	h.softDeleteQso(qsoID)
+
+	fwd := &stampingForwarder{
+		typeName: "qrz",
+		prefix:   "QRZCOM",
+		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess},
+	}
+	w, err := New(defaultCfg("qrz"), fwd, h.db, h.logger)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	runUntilAction(t, w, h, qsoID, action.Delete, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	// Re-fetch the soft-deleted QSO (including-deleted variant).
+	qso, err := h.db.FetchQsoByIDIncludingDeletedWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch qso incl deleted: %v", err)
+	}
+	if qso.QrzComUploadStatus != "" {
+		t.Fatalf("QrzComUploadStatus = %q, want empty (delete must not stamp)", qso.QrzComUploadStatus)
+	}
+}
+
+func TestWorker_InsertSuccess_EmptyPrefix_DoesNotStamp(t *testing.T) {
+	// Forwarder with AdifPrefix="" (stub, custom webhooks) must go
+	// through the plain MarkUploadSuccess path. This regression
+	// guard ensures the dispatch doesn't accidentally write empty
+	// JSON paths when the prefix is empty.
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	qso, _ := h.db.FetchQsoByIdWithContext(context.Background(), qsoID)
+	if qso.QrzComUploadStatus != "" {
+		t.Fatalf("QrzComUploadStatus = %q, want empty (empty-prefix must not stamp)", qso.QrzComUploadStatus)
+	}
+}
+
+// =============================================================================
 // Stage 5: delete action + priorUpstreamID lookup
 // =============================================================================
 

@@ -26,11 +26,11 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-04-19, session 13 in progress)
 
-### QRZ port: stages 1–5 complete
+### QRZ port: stages 1–6 complete
 
-Stages 1–5 of the 8-stage QRZ port are committed and under test,
-with insert / update / delete all live-validated against real
-QRZ via the manual harness. Stages 6–8 remain.
+Stages 1–6 of the 8-stage QRZ port are committed and under test.
+Insert / update / delete are live-validated against real QRZ;
+stage 6 adds the ADIF upload-status stamp. Stages 7–8 remain.
 
 **Stage 1 — Forwarder interface extension** (session 12, committed):
 
@@ -169,10 +169,47 @@ QRZ via the manual harness. Stages 6–8 remain.
   cache makes all pool connections to the same DSN see the same
   in-memory DB; file-backed paths unchanged.
 
-Full suite green under `-race`. Stage 6 (ADIF-stamp wiring —
-new sqlite method that updates `qso_upload` AND the QSO row's
-`<PREFIX>_QSO_UPLOAD_{STATUS,DATE}` in one tx) is the immediate
-next action.
+**Stage 6 — ADIF-stamp wiring** (session 13):
+
+- `internal/database/sqlite/api_context.go`: new
+  `MarkUploadSuccessWithAdifStampWithContext(ctx, id, upstreamID, qsoID, adifPrefix)`.
+  Single transaction, two writes:
+  1. `qso_upload` row transitions (same shape as
+     `MarkUploadSuccessWithContext`).
+  2. `qso.additional_data` gets `json_set` for
+     `$.<prefix>_qso_upload_status = "Y"` (adif.YesString) and
+     `$.<prefix>_qso_upload_date = today UTC YYYYMMDD`.
+  One-fails-all-fail holds: either both writes land or the tx
+  rolls back. Regex validator on adifPrefix (`^[A-Z][A-Z0-9]*$`)
+  as defense-in-depth.
+- **Schema discovery**: the `qso` table has no per-destination
+  ADIF columns — `types.Qso.QrzComUploadDate` /
+  `QrzComUploadStatus` ride inside `additional_data`, not as
+  columns. json_set on additional_data is the right landing
+  place and matches the "additional_data absorbs ADIF spec
+  evolution" invariant. No schema migration needed for the
+  stamp, and none needed for future forwarders either.
+- `internal/forwarding/worker/worker.go`: `markSuccess` now
+  dispatches — `fwd.AdifPrefix() != "" && row.Action != Delete`
+  → ADIF-stamp variant; else plain variant. Delete never
+  stamps (soft-deleted local QSO); prefix-less forwarders
+  (stub, custom webhooks) never stamp.
+- Tests: sqlite gets 6 new cases (happy path with round-trip
+  via `FetchQsoByID`; raw-SQL verification of JSON blob keys;
+  prefix-agnostic test using a notional CLUBLOG prefix; invalid
+  prefix rejection including injection-style strings; missing
+  upload row / missing qso row with rollback verification).
+  Worker gets 3 new cases via a local `stampingForwarder` type
+  (insert+prefix stamps, delete+prefix doesn't stamp, empty
+  prefix doesn't stamp).
+- **Generalisability**: adding a new forwarder (ClubLog, LoTW,
+  ...) requires zero sqlite/worker/migration changes. The
+  forwarder's package returns its `AdifPrefix()`, and future
+  `types.Qso` fields (for ADIF export round-trip) get the
+  matching JSON tag.
+
+Full suite green under `-race`. Stage 7 (retry-defaults
+ownership refactor) is the immediate next action.
 
 ### Forwarder subsystem thin-slice complete (session 11)
 
@@ -1031,8 +1068,8 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (continue QRZ port)
 
-Stages 1–5 are committed, live-validated (insert/update/delete);
-stages 6–8 remain. The full plan, with design decisions already
+Stages 1–6 are committed (1–5 live-validated against real QRZ);
+stages 7–8 remain. The full plan, with design decisions already
 resolved, is below — do **not** re-derive.
 
 **QRZ API reference** (from the operator's paste of QRZ's developer
@@ -1097,7 +1134,7 @@ guide — use this, not an inferred version):
 | 3 | Response parser + classification function — `parseResponse` + `classifyResponse` with per-action helpers (`classifyInsert`/`Update`/`Delete`); `AUTH` global, single-LOGID-delete `FAIL` → Success; 26 unit tests | **done** (session 13) |
 | 4 | Insert + update `Submit` — real HTTP, `buildForm` + `classifyHTTPStatus`, `DefaultEndpoint`/`DefaultHTTPTimeout`/`UserAgent`, package-internal `newWithEndpoint`; 18 httptest tests + live harness (`TestLive_InsertThenUpdate` quick, `TestLive_InteractiveFlow` with `/dev/tty` pauses); live-validated against real QRZ | **done** (session 13) |
 | 5 | Delete `Submit` + worker LOGID lookup — `FetchInsertUpstreamIDWithContext` (defensive ORDER BY, UNIQUE-constraint-aware), worker `resolvePriorUpstreamID` short-circuit, QRZ `buildForm` delete branch; CI fix for `:memory:` + `-race` flake (DSN `cache=shared`); live harness delete via `Submit` | **done** (session 13) |
-| 6 | ADIF-stamp wiring: new sqlite `MarkUploadSuccessWithAdifStampWithContext(ctx, id, upstreamID, qsoID, adifPrefix)` that updates the `qso_upload` row AND stamps the QSO row's `<PREFIX>_QSO_UPLOAD_{STATUS,DATE}` in one tx; worker calls it when prefix non-empty and action != delete | pending |
+| 6 | ADIF-stamp wiring — `MarkUploadSuccessWithAdifStampWithContext` writes both the qso_upload transition and a `json_set` stamp on `qso.additional_data` in one tx (no new columns; matches the "additional_data absorbs ADIF spec evolution" invariant); worker `markSuccess` dispatch gates on AdifPrefix + action; prefix-agnostic so new forwarders land without sqlite/migration changes | **done** (session 13) |
 | 7 | Retry-defaults ownership refactor (see above) | pending |
 | 8 | Blank-import `_ "internal/forwarding/qrz"` in `cmd/smd/main.go`; session-handoff.md, forwarding.md, forwarding-implementation.md final updates | pending |
 

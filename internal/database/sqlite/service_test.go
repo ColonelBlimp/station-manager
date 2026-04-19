@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	stderr "errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1413,5 +1414,189 @@ func TestFetchInsertUpstreamID_InvalidInputs(t *testing.T) {
 	}
 	if _, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), 1, ""); err == nil {
 		t.Fatal("expected error for empty forwarderName")
+	}
+}
+
+// ---- MarkUploadSuccessWithAdifStamp (stage 6: ADIF upload-status stamp) ----
+
+// todayUTC8 returns today's UTC date in ADIF YYYYMMDD form, matching
+// what the method under test stamps. Used by the assertions below.
+func todayUTC8() string {
+	return time.Now().UTC().Format("20060102")
+}
+
+func TestMarkUploadSuccessWithAdifStamp_HappyPath(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	rowID := claimed[0].ID
+
+	if err := svc.MarkUploadSuccessWithAdifStampWithContext(
+		context.Background(), rowID, "logid-42", qsoID, "QRZCOM",
+	); err != nil {
+		t.Fatalf("mark + stamp: %v", err)
+	}
+
+	// qso_upload row transitioned as expected.
+	uploads, _ := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if len(uploads) != 1 {
+		t.Fatalf("uploads = %d, want 1", len(uploads))
+	}
+	got := uploads[0]
+	if got.Status != "uploaded" {
+		t.Fatalf("Status = %q, want uploaded", got.Status)
+	}
+	if got.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", got.Attempts)
+	}
+	if got.UpstreamID != "logid-42" {
+		t.Fatalf("UpstreamID = %q, want logid-42", got.UpstreamID)
+	}
+
+	// QSO row stamped — surfaced on read via QrzComUploadStatus / QrzComUploadDate.
+	qso, err := svc.FetchQsoByIdWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch qso: %v", err)
+	}
+	if qso.QrzComUploadStatus != "Y" {
+		t.Fatalf("QrzComUploadStatus = %q, want Y", qso.QrzComUploadStatus)
+	}
+	if qso.QrzComUploadDate != todayUTC8() {
+		t.Fatalf("QrzComUploadDate = %q, want %q", qso.QrzComUploadDate, todayUTC8())
+	}
+}
+
+func TestMarkUploadSuccessWithAdifStamp_AdditionalDataContainsKeys(t *testing.T) {
+	// Belt-and-braces: read the raw additional_data blob via raw SQL
+	// and confirm the JSON keys are literally present. Catches any
+	// future refactor that might route types.Qso through a different
+	// persistence shape.
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+
+	if err := svc.MarkUploadSuccessWithAdifStampWithContext(
+		context.Background(), claimed[0].ID, "logid-99", qsoID, "QRZCOM",
+	); err != nil {
+		t.Fatalf("mark + stamp: %v", err)
+	}
+
+	tx, cancel, _ := svc.BeginTxContext(context.Background())
+	defer cancel()
+	var raw string
+	err := tx.QueryRowContext(
+		context.Background(),
+		`SELECT additional_data FROM qso WHERE id = ?`, qsoID,
+	).Scan(&raw)
+	_ = tx.Rollback()
+	if err != nil {
+		t.Fatalf("read raw additional_data: %v", err)
+	}
+	if !strings.Contains(raw, `"qrzcom_qso_upload_status":"Y"`) {
+		t.Fatalf("additional_data missing upload_status stamp: %s", raw)
+	}
+	if !strings.Contains(raw, `"qrzcom_qso_upload_date":"`+todayUTC8()+`"`) {
+		t.Fatalf("additional_data missing upload_date stamp: %s", raw)
+	}
+}
+
+func TestMarkUploadSuccessWithAdifStamp_UnknownPrefix_WorksGenerically(t *testing.T) {
+	// The method is prefix-agnostic — a new forwarder's prefix writes
+	// the right JSON keys even when no Go struct field currently
+	// surfaces them. Pin this so future forwarders don't have to
+	// change the sqlite layer.
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "clublog", "clublog", action.Insert)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "clublog", 1)
+
+	if err := svc.MarkUploadSuccessWithAdifStampWithContext(
+		context.Background(), claimed[0].ID, "cl-5", qsoID, "CLUBLOG",
+	); err != nil {
+		t.Fatalf("mark + stamp with CLUBLOG prefix: %v", err)
+	}
+
+	tx, cancel, _ := svc.BeginTxContext(context.Background())
+	defer cancel()
+	var raw string
+	_ = tx.QueryRowContext(
+		context.Background(),
+		`SELECT additional_data FROM qso WHERE id = ?`, qsoID,
+	).Scan(&raw)
+	_ = tx.Rollback()
+
+	if !strings.Contains(raw, `"clublog_qso_upload_status":"Y"`) {
+		t.Fatalf("additional_data missing CLUBLOG stamp: %s", raw)
+	}
+}
+
+func TestMarkUploadSuccessWithAdifStamp_InvalidPrefix_Rejected(t *testing.T) {
+	svc := testService(t)
+
+	cases := []string{
+		"",
+		"qrzcom",  // lowercase
+		"QRZ com", // space
+		"QRZCOM!", // punctuation
+		"1QRZ",    // digit-first
+		"Q;DROP",  // injection attempt
+	}
+	for _, bad := range cases {
+		err := svc.MarkUploadSuccessWithAdifStampWithContext(
+			context.Background(), 1, "upstream", 1, bad,
+		)
+		if err == nil {
+			t.Fatalf("prefix %q: want error, got nil", bad)
+		}
+	}
+}
+
+func TestMarkUploadSuccessWithAdifStamp_MissingUploadRow_NotFound(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// qsoID exists but no qso_upload row.
+	err := svc.MarkUploadSuccessWithAdifStampWithContext(
+		context.Background(), 9999, "upstream", qsoID, "QRZCOM",
+	)
+	if !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestMarkUploadSuccessWithAdifStamp_MissingQso_RollsBack(t *testing.T) {
+	// One-fails-all-fail: when the qso row lookup fails, the
+	// qso_upload transition must roll back too, leaving the row in
+	// its claimed (in_progress) state so the worker can retry.
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+
+	// Point at a non-existent QSO id.
+	err := svc.MarkUploadSuccessWithAdifStampWithContext(
+		context.Background(), claimed[0].ID, "u", 99999, "QRZCOM",
+	)
+	if !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+
+	// Upload row must NOT be marked uploaded — transaction rolled
+	// back — so the worker can observe it is still in_progress and
+	// reset-orphans on restart will requeue it.
+	uploads, _ := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if len(uploads) != 1 {
+		t.Fatalf("uploads = %d, want 1", len(uploads))
+	}
+	if uploads[0].Status == "uploaded" {
+		t.Fatal("qso_upload reached uploaded despite failed qso stamp — rollback broken")
 	}
 }
