@@ -56,6 +56,16 @@ func (s *Service) getDsn() (string, error) {
 	if _, ok := opts["_foreign_keys"]; !ok {
 		opts["_foreign_keys"] = "on"
 	}
+	// Shared-cache mode is essential for in-memory databases: without
+	// it each pool connection opens a private :memory: DB, so schema
+	// created on one connection is invisible to the next. Without
+	// cache=shared, CI flaked under -race timing when the single
+	// pooled connection was transiently dropped and replaced.
+	if path == ":memory:" {
+		if _, ok := opts["cache"]; !ok {
+			opts["cache"] = "shared"
+		}
+	}
 
 	if len(opts) == 0 {
 		return fmt.Sprintf("file:%s", path), nil
