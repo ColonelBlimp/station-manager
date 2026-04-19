@@ -1546,6 +1546,7 @@ func TestMarkUploadSuccessWithAdifStamp_InvalidPrefix_Rejected(t *testing.T) {
 		"QRZCOM!", // punctuation
 		"1QRZ",    // digit-first
 		"Q;DROP",  // injection attempt
+		"QRZCOMé", // multi-byte UTF-8 — ASCII-scoped regex must reject
 	}
 	for _, bad := range cases {
 		err := svc.MarkUploadSuccessWithAdifStampWithContext(

@@ -57,8 +57,12 @@ func liveQso(stationCallsign string) types.Qso {
 	now := time.Now().UTC()
 	return types.Qso{
 		ContactedStation: types.ContactedStation{
-			Call:    "2E0TEST",
-			Country: "England",
+			// ARRL HQ station's documented portable-temporary suffix —
+			// syntactically valid and stable against upstream callsign
+			// validation. Not a real contact; the live harness only
+			// exercises the HTTP plumbing, not the QSO semantics.
+			Call:    "W1AW/T",
+			Country: "United States",
 		},
 		QsoDetails: types.QsoDetails{
 			QsoDate: now.Format("20060102"),

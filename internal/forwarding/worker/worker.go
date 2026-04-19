@@ -161,17 +161,21 @@ func (w *Worker) tickOnce(ctx context.Context) {
 // the outcome. Soft-delete handling (§4): insert/update → skip as
 // terminal; delete → fetch-including-deleted and forward.
 func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
-	qso, handled := w.fetchQsoForAction(ctx, row)
-	if handled {
-		return
-	}
-
+	// Parse once at the top; the typed value threads through both
+	// fetchQsoForAction's soft-delete switch and resolvePriorUpstreamID's
+	// delete-only branch. This also resolves "unknown action" here,
+	// so fetchQsoForAction doesn't need to handle it again.
 	act, err := action.Parse(row.Action)
 	if err != nil {
 		// Row has an action string we don't recognise. Terminal — retrying
 		// won't help (the row is bad data on disk). Should be unreachable:
 		// ingest only writes known action values.
 		w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action))
+		return
+	}
+
+	qso, handled := w.fetchQsoForAction(ctx, row, act)
+	if handled {
 		return
 	}
 
@@ -224,7 +228,11 @@ func (w *Worker) resolvePriorUpstreamID(
 // when the row has already been resolved (e.g. soft-delete on
 // insert/update → marked failed in-band) so the caller can skip the
 // 'submit' step. The normal case returns (qso, false).
-func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload) (types.Qso, bool) {
+//
+// act is already parsed by processRow — every action reaching here
+// is one of Insert/Update/Delete, so no unknown-action branch is
+// needed.
+func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act action.Action) (types.Qso, bool) {
 	qso, err := w.db.FetchQsoByIdWithContext(ctx, row.QsoID)
 	if err == nil {
 		return qso, false
@@ -238,16 +246,16 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload) (ty
 	}
 
 	// QSO absent or soft-deleted. §4 semantics:
-	switch row.Action {
-	case action.Insert.String():
+	switch act {
+	case action.Insert:
 		w.markFailed(ctx, row, "qso soft-deleted before insert forwarded")
 		return types.Qso{}, true
 
-	case action.Update.String():
+	case action.Update:
 		w.markFailed(ctx, row, "qso soft-deleted; delete row supersedes")
 		return types.Qso{}, true
 
-	case action.Delete.String():
+	case action.Delete:
 		// Delete must still forward — the upstream needs telling. Fetch
 		// including soft-deleted rows so the forwarder has CALL/DATE/TIME
 		// to identify the record to remove upstream.
@@ -266,8 +274,10 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload) (ty
 		return types.Qso{}, true
 	}
 
-	// Unknown action — marking transient would loop. Terminal is safer.
-	w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action))
+	// action.Parse accepts only insert/update/delete, so an unknown act
+	// reaching the switch is unreachable in practice. Belt-and-braces:
+	// terminal so we don't loop.
+	w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act))
 	return types.Qso{}, true
 }
 

@@ -75,13 +75,16 @@ func TestParseResponse_ReasonPercentEncoded(t *testing.T) {
 	}
 }
 
-func TestParseResponse_ExtraFieldsPreserved(t *testing.T) {
+func TestParseResponse_ExtraFieldsIgnored(t *testing.T) {
+	// Unknown fields don't cause an error — they're just not surfaced
+	// on the response struct (we only keep typed fields that drive
+	// classification).
 	resp, err := parseResponse([]byte("RESULT=OK&LOGID=5&EXTRA=somevalue"))
 	if err != nil {
 		t.Fatalf("parseResponse: %v", err)
 	}
-	if got := resp.Fields["EXTRA"]; got != "somevalue" {
-		t.Fatalf("Fields[EXTRA] = %q, want somevalue", got)
+	if resp.LogID != "5" {
+		t.Fatalf("LogID = %q, want 5", resp.LogID)
 	}
 }
 
@@ -90,6 +93,42 @@ func TestParseResponse_MalformedQuery_Errors(t *testing.T) {
 	_, err := parseResponse([]byte("RESULT=OK&REASON=%ZZ"))
 	if err == nil {
 		t.Fatal("expected error for malformed URL-encoded body")
+	}
+}
+
+func TestParseResponse_HTMLProxyBody_ErrorsOnMissingRESULT(t *testing.T) {
+	// A transparent proxy or CDN may intercept the QRZ endpoint with
+	// an HTML error page. url.ParseQuery will accept it as
+	// syntactically-valid key=value pairs (or as one key with empty
+	// value), but no RESULT field exists, so parseResponse rejects it
+	// as malformed — the caller classifies that as Terminal.
+	cases := []string{
+		"<html><body>502 Bad Gateway</body></html>",
+		"<!DOCTYPE html><html>Internal error</html>",
+	}
+	for _, body := range cases {
+		_, err := parseResponse([]byte(body))
+		if err == nil {
+			t.Fatalf("body %q: want error (missing RESULT), got nil", body)
+		}
+	}
+}
+
+func TestParseResponse_MultiLineReason(t *testing.T) {
+	// QRZ has been observed to return REASON text that includes a
+	// newline. url.ParseQuery percent-decodes the newline and we
+	// preserve the full string on the response; classification
+	// downstream uses the reason verbatim in last_error.
+	resp, err := parseResponse([]byte("RESULT=FAIL&REASON=line%20one%0Aline%20two"))
+	if err != nil {
+		t.Fatalf("parseResponse: %v", err)
+	}
+	if resp.Result != "FAIL" {
+		t.Fatalf("Result = %q, want FAIL", resp.Result)
+	}
+	want := "line one\nline two"
+	if resp.Reason != want {
+		t.Fatalf("Reason = %q, want %q", resp.Reason, want)
 	}
 }
 

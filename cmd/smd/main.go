@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime/debug"
+	"sync"
 	"syscall"
 	"time"
 
@@ -183,7 +184,14 @@ func run() error {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
 
-	if err = spawnForwarderWorkers(workerCtx, cfg.Forwarders, dbSvc, loggerSvc); err != nil {
+	// workerWG tracks live forwarder workers so shutdown can wait for
+	// them to exit cleanly before the deferred dbSvc.Close() fires —
+	// otherwise an in-flight DB query (inside processRow) can race the
+	// close and surface as "database is closed" log spam on every
+	// restart.
+	var workerWG sync.WaitGroup
+
+	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, loggerSvc); err != nil {
 		return fmt.Errorf("spawn forwarder workers: %w", err)
 	}
 
@@ -224,6 +232,24 @@ func run() error {
 		loggerSvc.ErrorWith().Err(err).Msg("HTTP server shutdown error")
 	}
 
+	// Wait for forwarder workers to finish draining before the
+	// deferred dbSvc.Close() fires. Bounded so a stuck worker (say,
+	// a forwarder ignoring ctx inside a long upstream call) can't
+	// wedge shutdown indefinitely.
+	drainDone := make(chan struct{})
+	go func() {
+		workerWG.Wait()
+		close(drainDone)
+	}()
+	select {
+	case <-drainDone:
+		loggerSvc.InfoWith().Msg("forwarder workers drained")
+	case <-ctx.Done():
+		loggerSvc.WarnWith().
+			Dur("timeout", shutdownTimeout).
+			Msg("forwarder workers did not drain within shutdown timeout")
+	}
+
 	return runErr
 }
 
@@ -244,8 +270,16 @@ func run() error {
 // processed). If forwarding.Build rejects a config, startup fails —
 // better to refuse to run than silently drop a destination the
 // operator thought was active.
+//
+// Load-bearing invariant: this function is the single enforcement
+// point for "at most one worker per forwarder_name" (the config
+// loader validates Name uniqueness across cfg.Forwarders before we
+// see it). ClaimPendingUploadsWithContext's documentation calls this
+// out — don't add a second spawn site without preserving that chain,
+// or two workers will share the same destination's queue slice.
 func spawnForwarderWorkers(
 	ctx context.Context,
+	wg *sync.WaitGroup,
 	fwds []types.ForwarderConfig,
 	dbSvc *sqlite.Service,
 	loggerSvc *logging.Service,
@@ -297,7 +331,18 @@ func spawnForwarderWorkers(
 		// Capture loop var for the closure — Go 1.22+ makes this safe
 		// without explicit shadowing, but the extra clarity is free.
 		workerRef := w
+		// wg.Add/Done straddle each Run call so a clean ctx-cancel
+		// shutdown can join workers before the daemon closes the DB.
+		// Note: placed INSIDE the safego-managed closure so respawns
+		// (after a recovered panic) re-increment on their own
+		// goroutine. A panic between Done and the respawn's Add leaves
+		// a brief counter-underflow window; we accept it because
+		// shutdown drain only matters on the normal (no-panic) path,
+		// and the Wait call in run() is bounded by a timeout that
+		// limits exposure if a panicking worker never settles.
 		safego.Go(ctx, fc.Name, panicHandler, func() {
+			wg.Add(1)
+			defer wg.Done()
 			workerRef.Run(ctx)
 		}, true)
 

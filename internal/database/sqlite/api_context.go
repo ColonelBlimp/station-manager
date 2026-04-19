@@ -1107,6 +1107,18 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 // means two workers for different destinations never compete for a
 // row.
 //
+// Load-bearing invariant: at most ONE worker per forwarder_name may
+// call this concurrently. Violating it does not produce a per-row
+// race (the atomic UPDATE still assigns each row to a single caller),
+// but both callers would claim disjoint subsets of the pending set
+// for the same destination, share any mutable state on the
+// forwarding.Forwarder instance, and double-spend the upstream's
+// rate budget. Enforcement lives at config load (unique Name per
+// ForwarderConfig) and at spawn in cmd/smd/main.go (one
+// spawnForwarderWorkers iteration over the validated set). Nothing
+// at this layer checks it; don't add a second spawn site without
+// auditing that chain.
+//
 // This method uses raw SQL rather than sqlboiler-generated queries
 // because the shape requires two features sqlboiler does not express
 // cleanly: (1) `UPDATE ... RETURNING *` — sqlboiler's UpdateAll
@@ -1515,8 +1527,11 @@ func (s *Service) FetchUploadsByQsoIDWithContext(ctx context.Context, qsoID int6
 //
 // The qso_upload table enforces UNIQUE(qso_id, forwarder_name, action),
 // so at most one insert row exists per (qso, forwarder) pair in
-// practice. The `ORDER BY modified_at DESC LIMIT 1` below is defensive:
+// practice. The `ORDER BY created_at DESC LIMIT 1` below is defensive:
 // it protects the caller if the schema ever relaxes that constraint.
+// created_at is stable across row lifetime (set at insert, never
+// mutated), so the ordering picks the most-recently-inserted row
+// regardless of what retry bookkeeping updates did to modified_at.
 //
 // Returns:
 //   - ("", nil) when no matching row exists. The worker reclassifies
@@ -1552,7 +1567,7 @@ func (s *Service) FetchInsertUpstreamIDWithContext(
 		models.QsoUploadWhere.Action.EQ(action.Insert.String()),
 		models.QsoUploadWhere.Status.EQ(status.Uploaded.String()),
 		models.QsoUploadWhere.UpstreamID.IsNotNull(),
-		qm.OrderBy("modified_at DESC"),
+		qm.OrderBy("created_at DESC"),
 		qm.Limit(1),
 	).One(ctx, h)
 	if err != nil {

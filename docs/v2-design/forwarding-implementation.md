@@ -168,8 +168,9 @@ forwarding destination, loaded from `config.json`. Fields:
 - `TickIntervalSec`, `BatchSize` — defaulted to 120 / 5 in config
   normalisation, deliberately conservative for slow operator links.
 - `Retry *RetryConfig` — optional override. When nil, the daemon
-  falls back to `defaultForwarderRetry` (see §5 on why this is
-  temporary).
+  uses the per-forwarder `DefaultRetry` registered by that
+  forwarder's package via `forwarding.RegisterDefaultRetry` at
+  init-time (see §5 for the resolution chain).
 
 The `name`/`type` split exists for rename safety — historical
 `qso_upload` rows stay interpretable if an operator renames an instance.
@@ -390,12 +391,24 @@ nextAt := time.Now().Add(delay).Unix()
 w.markTransientRetry(ctx, row, nextAt, errText(cause))
 ```
 
-Retry defaults today live in `cmd/smd/main.go` as
-`defaultForwarderRetry = {MaxAttempts: 5, InitialBackoffSec: 60,
-MaxBackoffSec: 3600}` — conservative values that match v1's
-operator-environment experience. When real forwarders land, each
-package will own its own upstream-tuned defaults and the temporary
-fallback goes away. See §8.1.
+Retry defaults live with each forwarder package as a `DefaultRetry`
+var, registered in that package's `init()` via
+`forwarding.RegisterDefaultRetry(Type, DefaultRetry)`. For
+example:
+
+- `internal/forwarding/qrz/qrz.go` exports
+  `DefaultRetry = {MaxAttempts: 5, InitialBackoffSec: 60, MaxBackoffSec: 1800}` —
+  tuned for QRZ's web API tolerances on a slow operator link.
+- `internal/forwarding/stub/stub.go` exports
+  `DefaultRetry = {MaxAttempts: 3, InitialBackoffSec: 1, MaxBackoffSec: 5}` —
+  tight values so stub-backed tests don't linger.
+
+`cmd/smd/main.go`'s `spawnForwarderWorkers` resolves retry config
+per instance: operator's `fc.Retry` wins if non-nil, otherwise
+`forwarding.DefaultRetryFor(fc.Type)` supplies the package default.
+A type with neither is a setup error and startup fails loudly with
+a clear message naming the forwarder instance and type. See §8.1
+for the full recipe.
 
 ### 4.7 Soft-delete handling per action
 
@@ -904,14 +917,16 @@ forwarder_name" rule is enforced at spawn time (we don't loop-create
 them). The per-forwarder scope is load-bearing — don't drop it
 "because sqlite is single-writer anyway."
 
-### 9.12 Retry defaults are a temporary shape
+### 9.12 Retry defaults belong to the forwarder package
 
-`defaultForwarderRetry` in `cmd/smd/main.go` exists because the stub
-has no opinions about retry budgets. Real forwarders do. When the QRZ
-port lands, pick one of the ownership shapes in §8.1 and delete the
-fallback. Grep for `TODO(forwarder)` and `defaultForwarderRetry` when
-doing this — there are references to cleanup in the design doc and
-the session handoff as well.
+Each forwarder package owns its `DefaultRetry` and registers it via
+`forwarding.RegisterDefaultRetry` in `init()`. Upstream-specific
+tolerances (QRZ's web API rate limits, ClubLog's daily batch
+windows, LoTW's slow acknowledgement loop) belong with the code
+that knows them, not with `cmd/smd/main.go`. The registry's
+validation mirrors `worker.New`'s constructor checks, so a
+malformed default panics at package init rather than surviving to
+first use.
 
 ---
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -237,7 +239,7 @@ func buildStub(t *testing.T, mode string, flapN int64) forwarding.Forwarder {
 	t.Helper()
 	creds := []byte(`{"mode":"` + mode + `"}`)
 	if mode == stub.ModeFlapN {
-		creds = []byte(`{"mode":"flap_n","flap_n":` + itoa(flapN) + `}`)
+		creds = []byte(`{"mode":"flap_n","flap_n":` + strconv.FormatInt(flapN, 10) + `}`)
 	}
 	fwd, err := forwarding.Build(types.ForwarderConfig{
 		Name:        "test",
@@ -248,29 +250,6 @@ func buildStub(t *testing.T, mode string, flapN int64) forwarding.Forwarder {
 		t.Fatalf("build stub: %v", err)
 	}
 	return fwd
-}
-
-func itoa(n int64) string {
-	// Tiny helper so the test file doesn't pull strconv just for this.
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
 
 // defaultCfg returns a Worker Config suitable for tests: short tick so
@@ -792,7 +771,7 @@ func TestWorker_Delete_NoPriorInsert_IsTerminalImmediately(t *testing.T) {
 	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
 		return u.Status == status.Failed.String()
 	})
-	if !containsSubstring(row.LastError, "no upstream id for delete") {
+	if !strings.Contains(row.LastError, "no upstream id for delete") {
 		t.Fatalf("last_error = %q, want 'no upstream id for delete' substring", row.LastError)
 	}
 	if row.Attempts != 1 {
@@ -869,21 +848,6 @@ func TestWorker_InsertAndUpdate_DoNotTriggerLookup(t *testing.T) {
 	if calls[0].priorUpstreamID != "" {
 		t.Fatalf("Submit priorUpstreamID = %q, want empty for insert", calls[0].priorUpstreamID)
 	}
-}
-
-// containsSubstring is a tiny helper so the test file doesn't import
-// strings just for one call.
-func containsSubstring(s, sub string) bool {
-	return len(sub) == 0 || len(s) >= len(sub) && indexOf(s, sub) >= 0
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 // =============================================================================

@@ -25,16 +25,16 @@ const (
 	resultAuth    = "AUTH"
 )
 
-// response is the parsed QRZ Logbook API response body. The known
-// fields are pulled out for convenience; Fields retain the full
-// parsed map for diagnostics and for any future RESULT types that
-// arrive with extra payload we don't yet consume.
+// response is the parsed QRZ Logbook API response body. Only the
+// fields that drive classification are kept as typed struct members;
+// anything else QRZ returns is ignored (the classifier matrix in
+// classifyResponse exhaustively handles every documented RESULT
+// value, so there's nothing to consume a generic-overflow map for).
 type response struct {
 	Result string
 	Reason string
 	LogID  string
 	Count  string
-	Fields map[string]string
 }
 
 // parseResponse parses a QRZ Logbook API response body. The format
@@ -58,25 +58,25 @@ func parseResponse(body []byte) (response, error) {
 		return response{}, errors.New(op).WithErr(err).WithMsg("parse response body")
 	}
 
-	fields := make(map[string]string, len(vals))
-	for k, v := range vals {
-		if len(v) > 0 {
-			fields[k] = v[0]
+	first := func(key string) string {
+		v := vals[key]
+		if len(v) == 0 {
+			return ""
 		}
+		return v[0]
 	}
 
-	if _, ok := fields["RESULT"]; !ok {
+	if _, ok := vals["RESULT"]; !ok {
 		return response{}, errors.New(op).WithMsgf(
-			"response missing RESULT field (got %d fields)", len(fields),
+			"response missing RESULT field (got %d fields)", len(vals),
 		)
 	}
 
 	return response{
-		Result: fields["RESULT"],
-		Reason: fields["REASON"],
-		LogID:  fields["LOGID"],
-		Count:  fields["COUNT"],
-		Fields: fields,
+		Result: first("RESULT"),
+		Reason: first("REASON"),
+		LogID:  first("LOGID"),
+		Count:  first("COUNT"),
 	}, nil
 }
 
