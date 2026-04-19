@@ -278,7 +278,65 @@ remains available for plumbing tests.
 Full suite green under `-race`. v2's forwarding subsystem is
 complete end-to-end: ingest → queue → worker → forwarder →
 upstream → outcome → qso_upload + ADIF stamp, with live QRZ
-validated. **Ready for a session-14 review pass.**
+validated.
+
+### Forwarding subsystem code review (session 13, end-of-session)
+
+In-depth subagent review of the 8-stage port landed at
+`docs/reviews/forwarding-subsystem.md`. Headline: 0 high · 6
+medium · 7 low · 5 positives. No correctness bugs, no invariant
+violations, no credential leakage.
+
+Triaged and **actioned** in the same commit series:
+
+- **M2** — `spawnForwarderWorkers` now takes a `*sync.WaitGroup`;
+  `run()` waits (bounded) for workers to drain after
+  `server.Shutdown` before the deferred `dbSvc.Close()` fires.
+  Matches the E2E test harness shape; stops the "database is
+  closed" log spam on every clean shutdown.
+- **M3** — `FetchInsertUpstreamIDWithContext` changed to
+  `ORDER BY created_at DESC` so the defensive fallback (if the
+  UNIQUE constraint ever relaxes) picks the most-recently-inserted
+  row regardless of what retry bookkeeping did to `modified_at`.
+- **M4** — Document-only invariant comments at
+  `ClaimPendingUploadsWithContext` and `spawnForwarderWorkers`
+  pinning "one worker per forwarder_name" and its single
+  enforcement point.
+- **M5** — Three sections of `forwarding-implementation.md` that
+  referenced the deleted `defaultForwarderRetry` rewritten for the
+  per-package `DefaultRetry` + `RegisterDefaultRetry` shape.
+- **M6 (partial)** — Added HTML-proxy-body and multi-line `REASON`
+  tests to freeze QRZ's real-world failure modes. `cmd/smd/main.go`
+  spawn-path coverage parked as task #29.
+- **L1** — Deleted unused `response.Fields` map.
+- **L2** — Parse `action.Parse` once at the top of `processRow`;
+  `fetchQsoForAction` now switches on the typed value.
+- **L3** — Deleted hand-rolled `itoa`/`containsSubstring`/`indexOf`
+  helpers in worker tests; import `strconv` / `strings`.
+- **L5** — Multi-byte UTF-8 case (`QRZCOMé`) added to the
+  invalid-prefix test slice.
+- **L7** — Hardcoded contact callsign in the live harness changed
+  from `2E0TEST` to `W1AW/T` (ARRL HQ portable-temporary).
+
+Triaged and **accepted as-is** with rationale pinned in the review
+doc's Resolution status section:
+
+- **M1** — Worker wedging a row `in_progress` when a mark-call DB
+  write fails. The daemon-restart `ResetOrphanedUploadsWithContext`
+  sweep is the documented safety net; the failure requires a
+  tx-commit error or sqlboiler Update failure on SQLite — vanishingly
+  rare.
+- **L4** — `qrz.Forwarder` concurrent-safety docstring is slightly
+  imprecise but not misleading.
+- **L6** — `bodySnippet` byte-boundary truncation is theoretical
+  (QRZ responds in ASCII).
+
+**Task #29** — `cmd/smd/main.go` test coverage (spawn-path +
+lifecycle) parked as separate effort.
+
+Full suite green under `-race` after every fix; ldflags build
+smoke-check passes. Forwarding subsystem is **review-complete**
+and ready for the next phase.
 
 ### Forwarder subsystem thin-slice complete (session 11)
 
@@ -1135,13 +1193,29 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### The immediate next action (QRZ port → review)
+### The immediate next action (post-review, pick a phase)
 
-All 8 stages landed. The immediate next action is a **review
-pass** of the forwarding subsystem as a whole — surfacing any
-inconsistencies, dead code, or missing glue before moving on.
-The 8-stage plan is retained below for historical context; do
-**not** re-derive the design decisions captured in it.
+QRZ port complete, review complete, 10 of 13 findings actioned
+and 3 accepted with rationale. `docs/reviews/forwarding-subsystem.md`
+captures both the findings and the triage decisions. Task #29
+(cmd/smd/main.go spawn-path + lifecycle tests) is parked.
+
+The forwarding subsystem is **done** — the next session picks
+one of three directions below (see "Follow-ups after the QRZ
+port" for the full list). No work blocks any of them.
+
+My standing recommendation is the SSE event stream: it closes
+the loop on the forwarding subsystem's terminal transitions
+(`forward.succeeded` / `forward.failed`), is a well-bounded
+piece of work (~sized like QRZ stages 2–3), and makes
+everything we just built visible to the logging-app UI without
+polling. Bridge / CAT is a larger subsystem with its own design
+doc pending. A second real forwarder (ClubLog / LoTW) validates
+the "prefix-agnostic plumbing" claim but doesn't unblock a user-
+facing feature the way SSE does.
+
+The 8-stage QRZ plan is retained below for historical context;
+do **not** re-derive the design decisions captured in it.
 
 **QRZ API reference** (from the operator's paste of QRZ's developer
 guide — use this, not an inferred version):
@@ -1217,10 +1291,22 @@ guide — use this, not an inferred version):
    `qso.deleted` from ingest. Publish/subscribe fits single-
    operator scale: one in-memory channel per connected client,
    buffered, dropped on slow-reader. Worker code has comments
-   marking the emit points.
+   marking the emit points. **My standing recommendation for the
+   next phase.**
 
-2. **Bridge / CAT design**. Separate subsystem; see
-   `project_sm_serial_bridge.md` memory.
+2. **A second real forwarder (ClubLog / LoTW / eQSL)**. Exercises
+   the "prefix-agnostic generic plumbing" claim. Would validate
+   the registry + `DefaultRetry` ownership pattern in anger. Also
+   a good smoke test for whether the stage-6 ADIF-stamp json_set
+   generalises as cleanly as we think it does.
+
+3. **Bridge / CAT design**. Separate subsystem; see
+   `project_sm_serial_bridge.md` memory. Larger scope with its own
+   design surface.
+
+4. **Task #29** — `cmd/smd/main.go` spawn-path + lifecycle tests.
+   Smaller scope; good for getting back into rhythm after a
+   session break.
 
 ### Parked follow-ups (low priority, not blockers)
 
