@@ -29,7 +29,7 @@ type captured struct {
 // newTestServer returns an httptest server that records the incoming
 // request into *captured and responds with the given status + body.
 // Callers close the server in a t.Cleanup.
-func newTestServer(t *testing.T, status int, body string, cap *captured) *httptest.Server {
+func newTestServer(t *testing.T, status int, body string, rec *captured) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, err := io.ReadAll(r.Body)
@@ -38,12 +38,12 @@ func newTestServer(t *testing.T, status int, body string, cap *captured) *httpte
 			http.Error(w, "bad body", http.StatusInternalServerError)
 			return
 		}
-		cap.method = r.Method
-		cap.userAgent = r.Header.Get("User-Agent")
-		cap.body = string(raw)
+		rec.method = r.Method
+		rec.userAgent = r.Header.Get("User-Agent")
+		rec.body = string(raw)
 		parsed, perr := url.ParseQuery(string(raw))
 		if perr == nil {
-			cap.form = parsed
+			rec.form = parsed
 		}
 		w.Header().Set("Content-Type", "application/x-www-form-urlencoded")
 		w.WriteHeader(status)
@@ -91,8 +91,8 @@ func TestSubmit_Insert_NetworkError_IsTransient(t *testing.T) {
 }
 
 func TestSubmit_Insert_CtxCancelled_IsTransient(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=1", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -105,8 +105,8 @@ func TestSubmit_Insert_CtxCancelled_IsTransient(t *testing.T) {
 }
 
 func TestSubmit_Insert_HTTP500_IsTransient(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusInternalServerError, "oops", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusInternalServerError, "oops", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -119,8 +119,8 @@ func TestSubmit_Insert_HTTP500_IsTransient(t *testing.T) {
 }
 
 func TestSubmit_Insert_HTTP429_IsTransient(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusTooManyRequests, "rate limited", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusTooManyRequests, "rate limited", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -130,8 +130,8 @@ func TestSubmit_Insert_HTTP429_IsTransient(t *testing.T) {
 }
 
 func TestSubmit_Insert_HTTP408_IsTransient(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusRequestTimeout, "timed out", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusRequestTimeout, "timed out", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -141,8 +141,8 @@ func TestSubmit_Insert_HTTP408_IsTransient(t *testing.T) {
 }
 
 func TestSubmit_Insert_HTTP400_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusBadRequest, "bad request", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusBadRequest, "bad request", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -155,8 +155,8 @@ func TestSubmit_Insert_HTTP400_IsTerminal(t *testing.T) {
 }
 
 func TestSubmit_Insert_HTTP401_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusUnauthorized, "unauthorized", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusUnauthorized, "unauthorized", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -168,8 +168,8 @@ func TestSubmit_Insert_HTTP401_IsTerminal(t *testing.T) {
 // ---------- body classification (insert) ----------
 
 func TestSubmit_Insert_OK_Success(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=12345&COUNT=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=12345&COUNT=1", &rec)
 	fwd := fwdAt(srv.URL, "secret-key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -185,8 +185,8 @@ func TestSubmit_Insert_OK_Success(t *testing.T) {
 }
 
 func TestSubmit_Insert_OK_MissingLOGID_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -196,8 +196,8 @@ func TestSubmit_Insert_OK_MissingLOGID_IsTerminal(t *testing.T) {
 }
 
 func TestSubmit_Insert_FAIL_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=FAIL&REASON=Duplicate+QSO", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=FAIL&REASON=Duplicate+QSO", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -210,8 +210,8 @@ func TestSubmit_Insert_FAIL_IsTerminal(t *testing.T) {
 }
 
 func TestSubmit_Insert_AUTH_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=AUTH&REASON=Invalid+API+key", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=AUTH&REASON=Invalid+API+key", &rec)
 	fwd := fwdAt(srv.URL, "bogus-key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -226,8 +226,8 @@ func TestSubmit_Insert_AUTH_IsTerminal(t *testing.T) {
 // ---------- body classification (update) ----------
 
 func TestSubmit_Update_REPLACE_Success(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=REPLACE&LOGID=999&COUNT=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=REPLACE&LOGID=999&COUNT=1", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Update, "")
@@ -242,8 +242,8 @@ func TestSubmit_Update_REPLACE_Success(t *testing.T) {
 func TestSubmit_Update_OK_Success(t *testing.T) {
 	// OK on an update means QRZ inserted the record because it didn't
 	// already exist. End state matches intent — treat as success.
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=100", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=100", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Update, "")
@@ -255,8 +255,8 @@ func TestSubmit_Update_OK_Success(t *testing.T) {
 // ---------- malformed body ----------
 
 func TestSubmit_Insert_MalformedBody_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "%ZZ not a real body", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "%ZZ not a real body", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -266,8 +266,8 @@ func TestSubmit_Insert_MalformedBody_IsTerminal(t *testing.T) {
 }
 
 func TestSubmit_Insert_EmptyBody_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
@@ -279,48 +279,48 @@ func TestSubmit_Insert_EmptyBody_IsTerminal(t *testing.T) {
 // ---------- request shape assertions ----------
 
 func TestSubmit_Insert_RequestShape(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=1", &rec)
 	fwd := fwdAt(srv.URL, "the-api-key")
 
 	if res := fwd.Submit(context.Background(), sampleQso(), action.Insert, ""); res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("outcome = %q, want success", res.Outcome)
 	}
 
-	if cap.method != http.MethodPost {
-		t.Fatalf("method = %q, want POST", cap.method)
+	if rec.method != http.MethodPost {
+		t.Fatalf("method = %q, want POST", rec.method)
 	}
-	if got := cap.form.Get("KEY"); got != "the-api-key" {
+	if got := rec.form.Get("KEY"); got != "the-api-key" {
 		t.Fatalf("KEY = %q, want 'the-api-key'", got)
 	}
-	if got := cap.form.Get("ACTION"); got != "INSERT" {
+	if got := rec.form.Get("ACTION"); got != "INSERT" {
 		t.Fatalf("ACTION = %q, want INSERT", got)
 	}
-	if cap.form.Get("OPTION") != "" {
-		t.Fatalf("OPTION = %q, want empty for insert", cap.form.Get("OPTION"))
+	if rec.form.Get("OPTION") != "" {
+		t.Fatalf("OPTION = %q, want empty for insert", rec.form.Get("OPTION"))
 	}
-	if adif := cap.form.Get("ADIF"); adif == "" {
+	if adif := rec.form.Get("ADIF"); adif == "" {
 		t.Fatal("ADIF field empty in request")
 	} else if !strings.Contains(adif, "7Q5MLV/T") {
 		t.Fatalf("ADIF = %q, want STATION_CALLSIGN embedded", adif)
 	}
-	if !strings.HasPrefix(cap.userAgent, "station-manager/") {
-		t.Fatalf("User-Agent = %q, want 'station-manager/*'", cap.userAgent)
+	if !strings.HasPrefix(rec.userAgent, "station-manager/") {
+		t.Fatalf("User-Agent = %q, want 'station-manager/*'", rec.userAgent)
 	}
 }
 
 func TestSubmit_Update_SendsOptionReplace(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=REPLACE&LOGID=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=REPLACE&LOGID=1", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	if res := fwd.Submit(context.Background(), sampleQso(), action.Update, ""); res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("outcome = %q, want success", res.Outcome)
 	}
-	if got := cap.form.Get("ACTION"); got != "INSERT" {
+	if got := rec.form.Get("ACTION"); got != "INSERT" {
 		t.Fatalf("ACTION = %q, want INSERT (update uses INSERT+REPLACE)", got)
 	}
-	if got := cap.form.Get("OPTION"); got != "REPLACE" {
+	if got := rec.form.Get("OPTION"); got != "REPLACE" {
 		t.Fatalf("OPTION = %q, want REPLACE", got)
 	}
 }
@@ -328,8 +328,8 @@ func TestSubmit_Update_SendsOptionReplace(t *testing.T) {
 // ---------- action=delete ----------
 
 func TestSubmit_Delete_OK_Success(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "1440102010")
@@ -346,8 +346,8 @@ func TestSubmit_Delete_OK_Success(t *testing.T) {
 func TestSubmit_Delete_FAIL_IsIdempotentSuccess(t *testing.T) {
 	// RESULT=FAIL on a single-LOGID delete means "LOGID not found" —
 	// the record is already gone upstream, which matches our intent.
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=FAIL&REASON=Invalid+LOGID", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=FAIL&REASON=Invalid+LOGID", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "9999999999")
@@ -385,38 +385,38 @@ func TestSubmit_Delete_EmptyPriorID_IsTerminal(t *testing.T) {
 }
 
 func TestSubmit_Delete_RequestShape(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &rec)
 	fwd := fwdAt(srv.URL, "the-api-key")
 
 	if res := fwd.Submit(context.Background(), sampleQso(), action.Delete, "1440102010"); res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("outcome = %q, want success", res.Outcome)
 	}
 
-	if got := cap.form.Get("KEY"); got != "the-api-key" {
+	if got := rec.form.Get("KEY"); got != "the-api-key" {
 		t.Fatalf("KEY = %q, want 'the-api-key'", got)
 	}
-	if got := cap.form.Get("ACTION"); got != "DELETE" {
+	if got := rec.form.Get("ACTION"); got != "DELETE" {
 		t.Fatalf("ACTION = %q, want DELETE", got)
 	}
-	if got := cap.form.Get("LOGIDS"); got != "1440102010" {
+	if got := rec.form.Get("LOGIDS"); got != "1440102010" {
 		t.Fatalf("LOGIDS = %q, want '1440102010'", got)
 	}
 	// ADIF should not be sent on a delete — QRZ identifies the record
 	// by LOGID, not by payload.
-	if cap.form.Get("ADIF") != "" {
-		t.Fatalf("ADIF = %q, want empty on delete", cap.form.Get("ADIF"))
+	if rec.form.Get("ADIF") != "" {
+		t.Fatalf("ADIF = %q, want empty on delete", rec.form.Get("ADIF"))
 	}
-	if cap.form.Get("OPTION") != "" {
-		t.Fatalf("OPTION = %q, want empty on delete", cap.form.Get("OPTION"))
+	if rec.form.Get("OPTION") != "" {
+		t.Fatalf("OPTION = %q, want empty on delete", rec.form.Get("OPTION"))
 	}
 }
 
 // ---------- unknown action ----------
 
 func TestSubmit_UnknownAction_IsTerminal(t *testing.T) {
-	var cap captured
-	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=1", &cap)
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=1", &rec)
 	fwd := fwdAt(srv.URL, "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), "hovercraft", "")
