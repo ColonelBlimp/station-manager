@@ -637,9 +637,9 @@ before `dbSvc.Close`" semantics.
 ### 8.1 Adding a real forwarder (recipe for QRZ)
 
 The QRZ forwarder lives at `internal/forwarding/qrz/`. The shape
-below reflects the as-built structure after stages 2–3; later
-stages add the HTTP plumbing and the worker-side LOGID lookup, but
-the file layout doesn't change.
+below reflects the as-built structure after stages 2–4; stage 5
+adds the delete path and the worker-side LOGID lookup, but the
+file layout doesn't change.
 
 1. **Type + credentials** (`qrz.go`):
    ```go
@@ -655,18 +655,28 @@ the file layout doesn't change.
    whose `STATION_CALLSIGN` doesn't match the logbook's callsign) is
    enforced server-side; keeping a local copy of the callsign would
    only introduce drift risk without adding a guarantee.
-2. **Interface implementation** (`qrz.go`):
+2. **Interface implementation** (`qrz.go`, stage 4):
    ```go
+   const DefaultEndpoint    = "https://logbook.qrz.com/api"
+   const DefaultHTTPTimeout = 30 * time.Second
+   var UserAgent = "station-manager/dev" // overridden from cmd/smd/main.go in stage 8
+
    func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) { ... }
    func (f *Forwarder) Type() string       { return Type }
    func (f *Forwarder) AdifPrefix() string { return AdifFieldPrefix }
    func (f *Forwarder) Submit(ctx context.Context, qso types.Qso, act forwarding.Action, priorUpstreamID string) forwarding.Result {
-       // one HTTP call, respecting ctx. For insert, ACTION=INSERT;
-       // for update, ACTION=INSERT + OPTION=REPLACE; for delete,
-       // ACTION=DELETE + LOGIDS=priorUpstreamID.
-       // parse body, then call classifyResponse(act, parsed).
+       // ctx.Err → Transient; buildForm → POST to endpoint; classifyHTTPStatus
+       // (408/429/5xx → Transient, other non-2xx → Terminal); 2xx → parseResponse
+       // + classifyResponse(act, parsed).
    }
+
+   // Package-internal constructor used by tests to swap in httptest.NewServer.URL.
+   // Production code goes through New, which wraps this with DefaultEndpoint.
+   func newWithEndpoint(apiKey, endpoint string, client *http.Client) *Forwarder
    ```
+   `buildForm` assembles the form body per action: insert =
+   `ACTION=INSERT + ADIF`; update = `ACTION=INSERT + OPTION=REPLACE +
+   ADIF`; delete = `ACTION=DELETE + LOGIDS=priorUpstreamID` (stage 5).
 3. **Response parser + classifier** (`response.go`, stage 3):
    - `parseResponse(body []byte) (response, error)` — splits the
      application/x-www-form-urlencoded body into its fields
@@ -699,12 +709,27 @@ the file layout doesn't change.
    it up by type. The temporary `defaultForwarderRetry` fallback
    in `main.go` is removed once every registered forwarder type
    supplies its own.
-7. **Tests**: pure-function tests for the parser and classifier
-   (see `response_test.go`), plus end-to-end tests against
-   `httptest.NewServer` returning fixtures per RESULT class
-   (landing in stage 4). Do **not** talk to the real QRZ service
-   from automated tests — the operator's live test logbook is for
-   manual verification only.
+7. **Tests**: three layers.
+   - **Unit** (`response_test.go`): pure-function tests for
+     `parseResponse` + `classifyResponse`. No network.
+   - **HTTP** (`submit_test.go`): `httptest.NewServer` fixtures
+     per RESULT class via the `newWithEndpoint` hook. Transport
+     classification (network errors, 408/429/5xx, other non-2xx),
+     body classification (OK/FAIL/AUTH/REPLACE), malformed bodies,
+     request-shape assertions (method, form fields, User-Agent).
+   - **Live manual** (`live_test.go`, `//go:build manual`): talks
+     to real QRZ, gated behind `QRZ_TEST_API_KEY` +
+     `QRZ_TEST_CALLSIGN` env vars and the `manual` build tag so it
+     never runs in `go test ./...`. Two modes:
+     - `TestLive_InsertThenUpdate` — quick round-trip with
+       `t.Cleanup` delete. `task test:qrz-live`.
+     - `TestLive_InteractiveFlow` — insert → pause → update →
+       pause → delete, with `[Enter]` prompts between steps so the
+       operator can inspect the record on QRZ.com. Opens
+       `/dev/tty` directly because `go test` feeds the test
+       binary a closed stdin. `task test:qrz-live-interactive`.
+   Do **not** add the live tests to CI — the operator's logbook
+   is not a shared fixture.
 
 The pattern is specifically designed to be mechanical after the
 first implementation. The plumbing above doesn't need to change for

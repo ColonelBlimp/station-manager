@@ -26,10 +26,11 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-04-19, session 13 in progress)
 
-### QRZ port: stages 1–3 complete
+### QRZ port: stages 1–4 complete
 
-The 8-stage QRZ port is now half-done. Stages 1–3 are committed
-and under test; stages 4–8 remain.
+The 8-stage QRZ port is past the halfway mark. Stages 1–4 are
+committed and under test, with stage 4 validated against real
+QRZ via a manual live harness. Stages 5–8 remain.
 
 **Stage 1 — Forwarder interface extension** (session 12, committed):
 
@@ -76,8 +77,54 @@ and under test; stages 4–8 remain.
   single-LOGID delete is treated as Terminal (shouldn't occur in
   practice).
 
-Full suite green under `-race` after stages 2 and 3. The HTTP
-submit (stage 4) is the immediate next action.
+**Stage 4 — HTTP Submit for insert + update** (session 13):
+
+- `internal/forwarding/qrz/qrz.go`: real `Submit` implementation
+  with `buildForm` (insert = `ACTION=INSERT + ADIF`; update =
+  `ACTION=INSERT + OPTION=REPLACE + ADIF`) and `classifyHTTPStatus`
+  (408/429/5xx → Transient; other non-2xx → Terminal; 2xx falls
+  through to body parse). Delete still returns Terminal "deferred
+  to stage 5".
+- Package-level knobs: `DefaultEndpoint = "https://logbook.qrz.com/api"`,
+  `DefaultHTTPTimeout = 30 * time.Second`, `var UserAgent =
+  "station-manager/dev"` (to be overridden from `cmd/smd/main.go`
+  alongside the blank import in stage 8).
+- Package-internal `newWithEndpoint(apiKey, endpoint, client)` —
+  tests use it to point at `httptest.NewServer.URL`; production
+  code goes through public `New` with the real endpoint.
+- `submit_test.go`: 18 httptest-based tests covering transport
+  class (network error, ctx cancel, 408/429/500/400/401), body
+  class (OK/FAIL/AUTH/REPLACE on insert+update), malformed bodies,
+  request-shape assertions (method, KEY, ACTION, OPTION=REPLACE
+  on update, ADIF payload, User-Agent), delete-deferred guard,
+  unknown-action fallthrough.
+- **Live harness** at `internal/forwarding/qrz/live_test.go`
+  (`//go:build manual`, gated by `QRZ_TEST_API_KEY` +
+  `QRZ_TEST_CALLSIGN` env vars loaded from `.env`):
+  - `TestLive_InsertThenUpdate` — quick round-trip with t.Cleanup
+    delete; `task test:qrz-live`.
+  - `TestLive_InteractiveFlow` — insert → pause → update → pause →
+    delete, with `[Enter]` prompts between steps so the operator
+    can inspect the record on QRZ.com. `task test:qrz-live-interactive`.
+  - **Gotcha recorded**: `go test` feeds the test binary a closed
+    stdin, so `bufio.Scanner(os.Stdin)` returns EOF immediately.
+    Interactive test opens `/dev/tty` directly to read the
+    controlling terminal — Unix-only (Linux/macOS is fine for the
+    operator's setup).
+- **Live-validated end-to-end**: insert → LOGID returned, update
+  with `OPTION=REPLACE` returns the same LOGID (confirming in-place
+  update rather than new record), raw delete cleans up. Real QRZ
+  response shapes match our parser's assumptions exactly.
+- **DB-level verification in the live harness is deferred to
+  stage 6** — when `MarkUploadSuccessWithAdifStampWithContext`
+  lands, that's the fresh multi-table tx code that earns a
+  real-stack check. Today's layered tests (worker + SQLite in-memory
+  with stub forwarder; QRZ unit + live with no DB) cover the seam
+  transitively.
+
+Full suite green under `-race` after each stage. Stage 5 (delete
+via `Submit` + worker-side LOGID lookup) is the immediate next
+action.
 
 ### Forwarder subsystem thin-slice complete (session 11)
 
@@ -936,9 +983,9 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (continue QRZ port)
 
-The QRZ port is mid-flight. Stages 1–3 are committed; stages 4–8
-remain. The full plan, with design decisions already resolved, is
-below — do **not** re-derive.
+The QRZ port is past the halfway mark. Stages 1–4 are committed
+and live-validated; stages 5–8 remain. The full plan, with design
+decisions already resolved, is below — do **not** re-derive.
 
 **QRZ API reference** (from the operator's paste of QRZ's developer
 guide — use this, not an inferred version):
@@ -1000,7 +1047,7 @@ guide — use this, not an inferred version):
 | 1 | Extend `Forwarder` interface (`AdifPrefix`, `priorUpstreamID`) | **done** (session 12) |
 | 2 | `internal/forwarding/qrz/` skeleton — credentials struct (`api_key` only), `New`, `Type()="qrz"`, `AdifPrefix()="QRZCOM"`, registry init, stubbed Submit, validation tests | **done** (session 13) |
 | 3 | Response parser + classification function — `parseResponse` + `classifyResponse` with per-action helpers (`classifyInsert`/`Update`/`Delete`); `AUTH` global, single-LOGID-delete `FAIL` → Success; 26 unit tests | **done** (session 13) |
-| 4 | Insert + update `Submit` implementation; OPTION=REPLACE for update; transport-level classification (network / 5xx / 429 → Transient, other non-2xx → Terminal); `httptest.NewServer` per-response-class tests | pending |
+| 4 | Insert + update `Submit` — real HTTP, `buildForm` + `classifyHTTPStatus`, `DefaultEndpoint`/`DefaultHTTPTimeout`/`UserAgent`, package-internal `newWithEndpoint`; 18 httptest tests + live harness (`TestLive_InsertThenUpdate` quick, `TestLive_InteractiveFlow` with `/dev/tty` pauses); live-validated against real QRZ | **done** (session 13) |
 | 5 | Delete `Submit` + worker LOGID lookup: new sqlite method `FetchInsertUpstreamIDWithContext(ctx, qsoID, forwarderName)`; worker gates delete on lookup result; QRZ delete uses `LOGIDS=priorUpstreamID` | pending |
 | 6 | ADIF-stamp wiring: new sqlite `MarkUploadSuccessWithAdifStampWithContext(ctx, id, upstreamID, qsoID, adifPrefix)` that updates the `qso_upload` row AND stamps the QSO row's `<PREFIX>_QSO_UPLOAD_{STATUS,DATE}` in one tx; worker calls it when prefix non-empty and action != delete | pending |
 | 7 | Retry-defaults ownership refactor (see above) | pending |
