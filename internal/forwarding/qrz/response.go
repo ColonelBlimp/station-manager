@@ -11,8 +11,8 @@ import (
 
 // QRZ RESULT values. The documented per-action sets are:
 //
-//	INSERT:  OK, FAIL, REPLACE
-//	DELETE:  OK, FAIL, PARTIAL
+//	INSERT: OK, FAIL, REPLACE
+//	DELETE: OK, FAIL, PARTIAL
 //
 // AUTH is a global response (can accompany any ACTION) and always
 // indicates api_key rejection. Any RESULT outside the documented
@@ -26,7 +26,7 @@ const (
 )
 
 // response is the parsed QRZ Logbook API response body. The known
-// fields are pulled out for convenience; Fields retains the full
+// fields are pulled out for convenience; Fields retain the full
 // parsed map for diagnostics and for any future RESULT types that
 // arrive with extra payload we don't yet consume.
 type response struct {
@@ -41,7 +41,10 @@ type response struct {
 // is application/x-www-form-urlencoded — key=value pairs separated by
 // &, with URL-encoded values. An empty body or a body missing the
 // RESULT field is an error: a real QRZ call always returns at least
-// RESULT=....
+// RESULT=..., even for malformed requests. Any other parsing error is
+// also an error. The returned response struct may have empty fields if the
+// corresponding keys are missing from the body; that's not an error
+// because some RESULT types don't include all fields.
 func parseResponse(body []byte) (response, error) {
 	const op errors.Op = "qrz.parseResponse"
 

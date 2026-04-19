@@ -636,42 +636,80 @@ before `dbSvc.Close`" semantics.
 
 ### 8.1 Adding a real forwarder (recipe for QRZ)
 
-The v1 code is at `internal/upload/qrz/`. Port it into
-`internal/forwarding/qrz/` following this shape:
+The QRZ forwarder lives at `internal/forwarding/qrz/`. The shape
+below reflects the as-built structure after stages 2–3; later
+stages add the HTTP plumbing and the worker-side LOGID lookup, but
+the file layout doesn't change.
 
-1. Define `Type = "qrz"` and a `credentials` struct that parses
-   `fc.Credentials`.
-2. Implement `Forwarder`:
+1. **Type + credentials** (`qrz.go`):
+   ```go
+   const Type            = "qrz"
+   const AdifFieldPrefix = "QRZCOM"
+
+   type credentials struct {
+       APIKey string `json:"api_key"`
+   }
+   ```
+   Only `api_key` is required — it both authenticates the caller
+   and selects the logbook. The callsign match (QRZ rejects a QSO
+   whose `STATION_CALLSIGN` doesn't match the logbook's callsign) is
+   enforced server-side; keeping a local copy of the callsign would
+   only introduce drift risk without adding a guarantee.
+2. **Interface implementation** (`qrz.go`):
    ```go
    func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) { ... }
    func (f *Forwarder) Type() string       { return Type }
-   func (f *Forwarder) AdifPrefix() string { return "QRZCOM" }
+   func (f *Forwarder) AdifPrefix() string { return AdifFieldPrefix }
    func (f *Forwarder) Submit(ctx context.Context, qso types.Qso, act forwarding.Action, priorUpstreamID string) forwarding.Result {
-       // one HTTP call, respecting ctx. For insert/update, OPTION=REPLACE
-       // on update; for delete, LOGIDS=priorUpstreamID.
-       // classify the response:
-       //   RESULT=OK / RESULT=REPLACE   → OutcomeSuccess (UpstreamID=LOGID)
-       //   RESULT=AUTH                  → OutcomeTerminal (creds bad)
-       //   RESULT=FAIL "not found" del  → OutcomeSuccess (already gone)
-       //   RESULT=FAIL other            → OutcomeTerminal
-       //   HTTP 429 / 5xx / network     → OutcomeTransient
+       // one HTTP call, respecting ctx. For insert, ACTION=INSERT;
+       // for update, ACTION=INSERT + OPTION=REPLACE; for delete,
+       // ACTION=DELETE + LOGIDS=priorUpstreamID.
+       // parse body, then call classifyResponse(act, parsed).
    }
    ```
-3. `func init() { forwarding.Register(Type, New) }`.
-4. Blank-import from `cmd/smd/main.go`:
-   `_ "github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"`.
-5. Settle the retry-defaults question. Two options on the table:
-   - Export a package-level `DefaultRetry types.RetryConfig`, and
-     change `spawnForwarderWorkers` to look up a per-type map.
-   - Add a `DefaultRetry()` method to `Forwarder`.
-   Pick one, remove `defaultForwarderRetry` from `main.go`.
-6. Tests: stub-style unit tests for each upstream response class, then
-   the QSO classification paths. Do **not** talk to the real QRZ
-   service from automated tests; build a local test server with
-   `httptest.NewServer` that returns the shapes you care about.
+3. **Response parser + classifier** (`response.go`, stage 3):
+   - `parseResponse(body []byte) (response, error)` — splits the
+     application/x-www-form-urlencoded body into its fields
+     (`RESULT`, `REASON`, `LOGID`, `COUNT`, and anything else QRZ
+     returns). Empty body or missing `RESULT` is an error.
+   - `classifyResponse(act, resp) forwarding.Result` — pure function
+     mapping a parsed response to an outcome. The per-action matrix
+     is the shape the forwarder's tests target:
 
-The pattern is specifically designed to be mechanical after the first
-implementation. The plumbing above doesn't need to change.
+   | QRZ `RESULT` | insert | update (INSERT+REPLACE) | delete |
+   |---|---|---|---|
+   | `OK`       | Success (LOGID required)   | Success (LOGID if present)    | Success              |
+   | `REPLACE`  | Success (LOGID required)   | Success (LOGID required)      | Terminal (undocumented) |
+   | `FAIL`     | Terminal                   | Terminal                      | **Success** (idempotent — row gone upstream) |
+   | `PARTIAL`  | Terminal (undocumented)    | Terminal (undocumented)       | Terminal (shouldn't occur with single LOGID) |
+   | `AUTH`     | Terminal (global — api_key rejected across all actions)                             ||| 
+   | other      | Terminal                   | Terminal                      | Terminal             |
+
+   Transport-level classification (network errors, HTTP 4xx/5xx,
+   ctx cancellation → Transient) is handled at the `Submit` call
+   site in stage 4, not inside `classifyResponse`.
+4. **Registration** (`qrz.go`):
+   ```go
+   func init() { forwarding.Register(Type, New) }
+   ```
+5. **Blank-import** from `cmd/smd/main.go` (stage 8):
+   `_ "github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"`.
+6. **Retry-defaults ownership** (stage 7): export a package-level
+   `DefaultRetry types.RetryConfig`. `spawnForwarderWorkers` looks
+   it up by type. The temporary `defaultForwarderRetry` fallback
+   in `main.go` is removed once every registered forwarder type
+   supplies its own.
+7. **Tests**: pure-function tests for the parser and classifier
+   (see `response_test.go`), plus end-to-end tests against
+   `httptest.NewServer` returning fixtures per RESULT class
+   (landing in stage 4). Do **not** talk to the real QRZ service
+   from automated tests — the operator's live test logbook is for
+   manual verification only.
+
+The pattern is specifically designed to be mechanical after the
+first implementation. The plumbing above doesn't need to change for
+subsequent forwarders (ClubLog, LoTW, …): swap `Type`,
+`AdifFieldPrefix`, credentials schema, and the classifier matrix.
 
 ### 8.2 SSE emit points
 

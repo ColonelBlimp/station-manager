@@ -24,20 +24,14 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-19, session 12 in progress)
+## Current state (as of 2026-04-19, session 13 in progress)
 
-### Forwarder implementation guide landed; QRZ port started (stage 1 done)
+### QRZ port: stages 1–3 complete
 
-`docs/v2-design/forwarding-implementation.md` (820 lines) was written
-as the session-12 opener per the outline parked in session 11. Sibling
-to `forwarding.md`: the design doc answers *what and why*, the
-implementation guide answers *where in the code and what exactly*.
-Nine sections: purpose, system map, anatomy of one QSO submit,
-per-piece detail (8 subsystems), lifecycle, observability, testing
-layers, how to extend, gotchas.
+The 8-stage QRZ port is now half-done. Stages 1–3 are committed
+and under test; stages 4–8 remain.
 
-The QRZ port then started as an 8-stage plan. Stage 1 (interface
-extension) is committed:
+**Stage 1 — Forwarder interface extension** (session 12, committed):
 
 - `Forwarder.Submit` gained a `priorUpstreamID string` parameter so
   the worker can pass QRZ's LOGID (captured on the earlier successful
@@ -48,18 +42,42 @@ extension) is committed:
   for QRZ, `CLUBLOG_*` for ClubLog, `""` for stub / custom webhooks).
   v1 did this stamp from inside the QRZ service; v2 moves it to the
   worker so forwarders stay pure plugins.
-- Stub returns `""` for `AdifPrefix`, ignores `priorUpstreamID`.
-  Worker passes `""` for now — the delete-action lookup lands in
-  stage 5.
-- `forwarding.md` §3 rewritten with the new interface shape and
-  rationale paragraphs for both additions. Implementation guide
-  updated: narrated anatomy, §4.2 interface block + rules, §4.5
-  worker-loop flow, §8.1 QRZ recipe signature, two new gotchas
-  (§9.4 `priorUpstreamID`-delete-only, §9.5 `AdifPrefix`-is-
-  declarative), §9 sub-sections renumbered.
 
-Full suite green under `-race` after stage 1. Remaining stages 2–8
-of the QRZ port are the immediate next action (see below).
+**Stage 2 — QRZ package skeleton** (session 13):
+
+- `internal/forwarding/qrz/qrz.go`: `Type = "qrz"`,
+  `AdifFieldPrefix = "QRZCOM"`, registry `init()`, `New` with
+  credentials validation, stubbed `Submit` that returns Terminal
+  until stage 4 lands the real HTTP call.
+- `internal/forwarding/qrz/qrz_test.go`: 9 tests covering registry
+  round-trip, happy path, malformed/missing credentials, ctx
+  cancellation.
+- **Credentials shape decided**: `{"api_key": "..."}` — only.
+  QRZ enforces the callsign/logbook match server-side (every QSO's
+  `STATION_CALLSIGN` must match the logbook's callsign, or QRZ
+  rejects the record); keeping a local copy of the callsign would
+  only introduce config-drift risk without a correctness guarantee.
+  `forwarding.md` §2 updated.
+
+**Stage 3 — Response parser + classifier** (session 13):
+
+- `internal/forwarding/qrz/response.go`: `parseResponse(body)` (pure
+  function, `net/url.ParseQuery`-based) and `classifyResponse(act,
+  resp)` split into per-action helpers (`classifyInsert`,
+  `classifyUpdate`, `classifyDelete`). `AUTH` short-circuits across
+  all actions. No substring matching on `REASON` text — QRZ's
+  documented per-action RESULT sets are unambiguous.
+- `internal/forwarding/qrz/response_test.go`: 26 tests covering the
+  full per-action matrix (see `forwarding-implementation.md` §8.1).
+- **Key classification refinement**: for `action=delete`, QRZ's
+  single-LOGID delete makes `RESULT=FAIL` unambiguously mean "LOGID
+  not found". We reclassify it as `OutcomeSuccess` — the record's
+  absence upstream matches intent. `RESULT=PARTIAL` on a
+  single-LOGID delete is treated as Terminal (shouldn't occur in
+  practice).
+
+Full suite green under `-race` after stages 2 and 3. The HTTP
+submit (stage 4) is the immediate next action.
 
 ### Forwarder subsystem thin-slice complete (session 11)
 
@@ -918,9 +936,9 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (continue QRZ port)
 
-The QRZ port is mid-flight. Stage 1 is committed; stages 2–8 remain.
-The full plan, with design decisions already resolved, is below — do
-**not** re-derive.
+The QRZ port is mid-flight. Stages 1–3 are committed; stages 4–8
+remain. The full plan, with design decisions already resolved, is
+below — do **not** re-derive.
 
 **QRZ API reference** (from the operator's paste of QRZ's developer
 guide — use this, not an inferred version):
@@ -951,15 +969,20 @@ guide — use this, not an inferred version):
   Worker does a DB lookup before `Submit`; forwarder receives LOGID
   via `priorUpstreamID`; empty lookup → terminal "no upstream id
   for delete".
-- **QRZ response classification** (stage 4):
-  - `RESULT=OK` / `RESULT=REPLACE` → `OutcomeSuccess` (`UpstreamID = LOGID`)
-  - `RESULT=AUTH` → `OutcomeTerminal` (bad key; retry won't help)
-  - `RESULT=FAIL` with "not found" on delete → `OutcomeSuccess`
-    (already gone is the goal)
-  - Other `RESULT=FAIL` → `OutcomeTerminal`
-  - HTTP 429 / 5xx / network / timeout → `OutcomeTransient`
-  - Missing `LOGID` on claimed-OK insert → `OutcomeTerminal`
-    (can't delete later without it — surface the problem now)
+- **QRZ credentials shape**: `{"api_key": "..."}` only — QRZ
+  enforces the callsign/logbook match server-side, so a local
+  `callsign` field would only introduce drift risk without a
+  guarantee. (stage 2, landed)
+- **QRZ response classification** (stage 3, landed): per-action
+  matrix in `response.go` and `forwarding-implementation.md` §8.1.
+  Short form: `RESULT=AUTH` → Terminal (global); `RESULT=OK` /
+  `RESULT=REPLACE` → Success with `UpstreamID = LOGID`;
+  `RESULT=FAIL` on delete → **Success** (idempotent);
+  `RESULT=FAIL` elsewhere → Terminal; `RESULT=PARTIAL` / unknown
+  on any action → Terminal; missing `LOGID` on claimed-OK insert →
+  Terminal. Transport-level errors (HTTP 4xx/5xx, network, timeout)
+  are classified at the `Submit` call site in stage 4 — network
+  and 5xx/429 → Transient, 4xx → Terminal.
 - **Retry-defaults ownership** (stage 7): each forwarder package
   exports `var DefaultRetry types.RetryConfig`.
   `spawnForwarderWorkers` in `cmd/smd/main.go` looks it up by type.
@@ -974,10 +997,10 @@ guide — use this, not an inferred version):
 
 | # | Stage | Status |
 |---|-------|--------|
-| 1 | Extend `Forwarder` interface (`AdifPrefix`, `priorUpstreamID`) | **done** (this session) |
-| 2 | `internal/forwarding/qrz/` skeleton — credentials struct, `New`, `Type()="qrz"`, `AdifPrefix()="QRZCOM"`, registry init, empty Submit, validation tests | pending |
-| 3 | Response parser + classification function (port v1's `parseResponse`, add outcome classifier) with unit tests per class | pending |
-| 4 | Insert + update `Submit` implementation; OPTION=REPLACE for update; `httptest.NewServer` per-response-class tests | pending |
+| 1 | Extend `Forwarder` interface (`AdifPrefix`, `priorUpstreamID`) | **done** (session 12) |
+| 2 | `internal/forwarding/qrz/` skeleton — credentials struct (`api_key` only), `New`, `Type()="qrz"`, `AdifPrefix()="QRZCOM"`, registry init, stubbed Submit, validation tests | **done** (session 13) |
+| 3 | Response parser + classification function — `parseResponse` + `classifyResponse` with per-action helpers (`classifyInsert`/`Update`/`Delete`); `AUTH` global, single-LOGID-delete `FAIL` → Success; 26 unit tests | **done** (session 13) |
+| 4 | Insert + update `Submit` implementation; OPTION=REPLACE for update; transport-level classification (network / 5xx / 429 → Transient, other non-2xx → Terminal); `httptest.NewServer` per-response-class tests | pending |
 | 5 | Delete `Submit` + worker LOGID lookup: new sqlite method `FetchInsertUpstreamIDWithContext(ctx, qsoID, forwarderName)`; worker gates delete on lookup result; QRZ delete uses `LOGIDS=priorUpstreamID` | pending |
 | 6 | ADIF-stamp wiring: new sqlite `MarkUploadSuccessWithAdifStampWithContext(ctx, id, upstreamID, qsoID, adifPrefix)` that updates the `qso_upload` row AND stamps the QSO row's `<PREFIX>_QSO_UPLOAD_{STATUS,DATE}` in one tx; worker calls it when prefix non-empty and action != delete | pending |
 | 7 | Retry-defaults ownership refactor (see above) | pending |
