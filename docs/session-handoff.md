@@ -24,9 +24,44 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-18 end-of-session 11)
+## Current state (as of 2026-04-19, session 12 in progress)
 
-### Forwarder subsystem thin-slice complete
+### Forwarder implementation guide landed; QRZ port started (stage 1 done)
+
+`docs/v2-design/forwarding-implementation.md` (820 lines) was written
+as the session-12 opener per the outline parked in session 11. Sibling
+to `forwarding.md`: the design doc answers *what and why*, the
+implementation guide answers *where in the code and what exactly*.
+Nine sections: purpose, system map, anatomy of one QSO submit,
+per-piece detail (8 subsystems), lifecycle, observability, testing
+layers, how to extend, gotchas.
+
+The QRZ port then started as an 8-stage plan. Stage 1 (interface
+extension) is committed:
+
+- `Forwarder.Submit` gained a `priorUpstreamID string` parameter so
+  the worker can pass QRZ's LOGID (captured on the earlier successful
+  insert's `Result.UpstreamID`) through to the delete call.
+- New `AdifPrefix() string` method: declarative metadata telling the
+  worker which ADIF upload-status field pair to stamp on the QSO row
+  on success (`QRZCOM_QSO_UPLOAD_STATUS` / `QRZCOM_QSO_UPLOAD_DATE`
+  for QRZ, `CLUBLOG_*` for ClubLog, `""` for stub / custom webhooks).
+  v1 did this stamp from inside the QRZ service; v2 moves it to the
+  worker so forwarders stay pure plugins.
+- Stub returns `""` for `AdifPrefix`, ignores `priorUpstreamID`.
+  Worker passes `""` for now — the delete-action lookup lands in
+  stage 5.
+- `forwarding.md` §3 rewritten with the new interface shape and
+  rationale paragraphs for both additions. Implementation guide
+  updated: narrated anatomy, §4.2 interface block + rules, §4.5
+  worker-loop flow, §8.1 QRZ recipe signature, two new gotchas
+  (§9.4 `priorUpstreamID`-delete-only, §9.5 `AdifPrefix`-is-
+  declarative), §9 sub-sections renumbered.
+
+Full suite green under `-race` after stage 1. Remaining stages 2–8
+of the QRZ port are the immediate next action (see below).
+
+### Forwarder subsystem thin-slice complete (session 11)
 
 Design: `docs/v2-design/forwarding.md` is the authoritative shape;
 the 11-stage thin slice below implements it end-to-end. All 11
@@ -881,91 +916,85 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ## Next steps (priority order)
 
-### The immediate next action (session 12 start)
+### The immediate next action (continue QRZ port)
 
-**First task: write the forwarder implementation guide.** The
-forwarder subsystem carries real cognitive debt — 11 pieces across
-~10 files, with subtle interactions (tx boundaries, soft-delete per
-action, trigger-driven columns, `models.NewQuery` vs `FindQso`).
-Operator wants this documented end-to-end while the shape is fresh
-in everyone's head. Target file:
-`docs/v2-design/forwarding-implementation.md` — sibling to the
-design doc (`forwarding.md`). Design doc answers "what and why";
-implementation doc answers "where in the code and what exactly."
+The QRZ port is mid-flight. Stage 1 is committed; stages 2–8 remain.
+The full plan, with design decisions already resolved, is below — do
+**not** re-derive.
 
-**Pre-agreed outline** (confirmed end of session 11; start writing
-against this, don't re-derive):
+**QRZ API reference** (from the operator's paste of QRZ's developer
+guide — use this, not an inferred version):
 
-1. **Purpose & audience** — you or a new joiner in 6 months
-   re-orienting without re-reading the whole codebase.
-2. **System map** — one ASCII diagram showing every moving piece
-   and how data flows between them.
-3. **Anatomy of one QSO submit** — narrated walkthrough of an
-   insert from `curl` to `status=uploaded` across the stack, with
-   file/function references at each step.
-4. **The pieces in detail** — each subsystem gets a focused
-   section:
-   - `ForwarderConfig` and validation
-   - The `Forwarder` interface and registry
-   - The `qso_upload` table: schema, lifecycle states, indexes
-   - Ingest fan-out (`qsoservice.Submit/Update/Delete` +
-     `shouldEnqueue`)
-   - Worker loop: tick, claim, process, persist
-   - Retry policy and backoff formula
-   - Soft-delete handling per action type
-   - Panic recovery via `safego`
-5. **Lifecycle operations** — startup sequence, orphan sweep,
-   graceful shutdown ordering, what a crash looks like.
-6. **Observability** — the pull endpoint, what log lines to grep
-   for.
-7. **Testing layers** — unit → worker-integration → handler-
-   integration → E2E, which test proves which property.
-8. **How to extend** — recipe for adding a real forwarder (QRZ)
-   and the SSE emit points.
-9. **Gotchas and invariants** — subtle rules that break things
-   silently if violated (tx boundaries, `models.NewQuery` vs
-   `FindQso`, soft-delete-with-delete-action, trigger-driven
-   `modified_at`).
+- Endpoint: `https://logbook.qrz.com/api`, HTTP POST with
+  `application/x-www-form-urlencoded`.
+- User-Agent header required (≤128 chars, should include callsign
+  + app name for identifiability).
+- **INSERT**: `ACTION=INSERT`, `KEY=<apikey>`, `ADIF=<single-record>`.
+  Response: `RESULT=OK|FAIL|REPLACE` + `LOGID` + `COUNT`.
+- **UPDATE**: no native update — use `ACTION=INSERT` +
+  `OPTION=REPLACE`. Response `RESULT=REPLACE` when it overwrote a
+  duplicate. This is what v1 did.
+- **DELETE**: `ACTION=DELETE`, `LOGIDS=<id>` (comma list for many).
+  Response: `RESULT=OK|PARTIAL|FAIL` + `COUNT`.
 
-**Tone:** assumes Go literacy and familiarity with the project's
-invariants (`CLAUDE.md`, `invariants.md`); does not assume memory
-of session-by-session context.
+**Resolved design decisions** (don't re-open):
 
-**Length target:** 500–700 lines. Long enough to be thorough,
-short enough to be re-readable in one sitting.
+- **`Forwarder.Submit` signature**: `(ctx, qso, action, priorUpstreamID string)`
+  (stage 1). Worker populates `priorUpstreamID` from the prior
+  insert row's `upstream_id` for delete actions only.
+- **`Forwarder.AdifPrefix()`** (stage 1). QRZ returns `"QRZCOM"`.
+  Worker stamps `QRZCOM_QSO_UPLOAD_STATUS="Y"` +
+  `QRZCOM_QSO_UPLOAD_DATE=today` on success (insert/update, not
+  delete — soft-deleted QSOs don't export). Failures/transients
+  stamp nothing.
+- **Delete LOGID wiring**: option A from the session-12 discussion.
+  Worker does a DB lookup before `Submit`; forwarder receives LOGID
+  via `priorUpstreamID`; empty lookup → terminal "no upstream id
+  for delete".
+- **QRZ response classification** (stage 4):
+  - `RESULT=OK` / `RESULT=REPLACE` → `OutcomeSuccess` (`UpstreamID = LOGID`)
+  - `RESULT=AUTH` → `OutcomeTerminal` (bad key; retry won't help)
+  - `RESULT=FAIL` with "not found" on delete → `OutcomeSuccess`
+    (already gone is the goal)
+  - Other `RESULT=FAIL` → `OutcomeTerminal`
+  - HTTP 429 / 5xx / network / timeout → `OutcomeTransient`
+  - Missing `LOGID` on claimed-OK insert → `OutcomeTerminal`
+    (can't delete later without it — surface the problem now)
+- **Retry-defaults ownership** (stage 7): each forwarder package
+  exports `var DefaultRetry types.RetryConfig`.
+  `spawnForwarderWorkers` in `cmd/smd/main.go` looks it up by type.
+  Delete the `defaultForwarderRetry` temporary fallback.
+- **Test creds**: operator has a QRZ test logbook with `USER` and
+  API key in env vars. Used for manual integration verification
+  after code lands — **not** for automated tests.
+- **Automated tests**: `httptest.NewServer` everywhere, hermetic
+  and CI-safe.
 
-### Follow-ups after the implementation guide
+**Remaining stages** (each is a committable unit):
 
-The thin-slice work is done but milestone 1c isn't closed. In
-priority order:
+| # | Stage | Status |
+|---|-------|--------|
+| 1 | Extend `Forwarder` interface (`AdifPrefix`, `priorUpstreamID`) | **done** (this session) |
+| 2 | `internal/forwarding/qrz/` skeleton — credentials struct, `New`, `Type()="qrz"`, `AdifPrefix()="QRZCOM"`, registry init, empty Submit, validation tests | pending |
+| 3 | Response parser + classification function (port v1's `parseResponse`, add outcome classifier) with unit tests per class | pending |
+| 4 | Insert + update `Submit` implementation; OPTION=REPLACE for update; `httptest.NewServer` per-response-class tests | pending |
+| 5 | Delete `Submit` + worker LOGID lookup: new sqlite method `FetchInsertUpstreamIDWithContext(ctx, qsoID, forwarderName)`; worker gates delete on lookup result; QRZ delete uses `LOGIDS=priorUpstreamID` | pending |
+| 6 | ADIF-stamp wiring: new sqlite `MarkUploadSuccessWithAdifStampWithContext(ctx, id, upstreamID, qsoID, adifPrefix)` that updates the `qso_upload` row AND stamps the QSO row's `<PREFIX>_QSO_UPLOAD_{STATUS,DATE}` in one tx; worker calls it when prefix non-empty and action != delete | pending |
+| 7 | Retry-defaults ownership refactor (see above) | pending |
+| 8 | Blank-import `_ "internal/forwarding/qrz"` in `cmd/smd/main.go`; session-handoff.md, forwarding.md, forwarding-implementation.md final updates | pending |
 
-1. **Port v1's QRZ forwarder into `internal/forwarding/qrz/`.** v1
-   code lives at `internal/upload/qrz/` — XML request/response,
-   session-key caching, error-code classification, login-then-
-   request pattern all carry forward. The adapter layer wraps it in
-   the `forwarding.Forwarder` interface. Picking this unlocks real
-   end-to-end testing against the QRZ sandbox. Also the natural
-   place to settle the "each forwarder package ships its own retry
-   defaults" question (forwarding.md §2) — the stand-in
-   `defaultForwarderRetry` in `cmd/smd/main.go` can be replaced by
-   an interface method or a per-package exported constant at that
-   point.
+### Follow-ups after the QRZ port
 
-2. **SSE event stream (`GET /v1/events`)**. The forwarder's
-   terminal transitions are the primary consumer
-   (`forward.succeeded` / `forward.failed`), but `qso.stored` /
-   `qso.updated` / `qso.deleted` emit sites also land here. Needs a
-   publish/subscribe shape that fits single-operator scale: one
-   in-memory channel per connected client, buffered, dropped on
-   slow-reader rather than blocking the daemon. The worker code
-   already has comments marking the emit points.
+1. **SSE event stream (`GET /v1/events`)**. The QRZ terminal
+   transitions are the primary consumer (`forward.succeeded` /
+   `forward.failed`), plus `qso.stored` / `qso.updated` /
+   `qso.deleted` from ingest. Publish/subscribe fits single-
+   operator scale: one in-memory channel per connected client,
+   buffered, dropped on slow-reader. Worker code has comments
+   marking the emit points.
 
-3. **Bridge / CAT design**. Separate subsystem; see
+2. **Bridge / CAT design**. Separate subsystem; see
    `project_sm_serial_bridge.md` memory.
-
-Recommendation: QRZ forwarder first, because SSE without a real
-forwarder to emit real `forward.*` events is hard to acceptance-
-test beyond the shape.
 
 ### Parked follow-ups (low priority, not blockers)
 
