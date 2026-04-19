@@ -192,7 +192,7 @@ func (f *Forwarder) Submit(
 			Err:     errors.New(op).WithErr(err).WithMsg("POST to QRZ"),
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
