@@ -23,6 +23,26 @@ tasks:
     cmds:
       - go test -race -short ./...
 
+  test:qrz-live:
+    desc: |
+      Run the manual QRZ.com live-integration test (quick round-trip,
+      no pauses). Requires QRZ_TEST_API_KEY and QRZ_TEST_CALLSIGN in
+      .env (for the operator's test logbook). Makes real HTTP calls
+      to QRZ and cleans up the test record via an in-test DELETE.
+    cmds:
+      - go test -v -count=1 -tags manual -run TestLive_InsertThenUpdate ./internal/forwarding/qrz/...
+
+  test:qrz-live-interactive:
+    desc: |
+      Interactive QRZ.com live flow: INSERT → pause → UPDATE → pause →
+      DELETE, pausing after each operation so you can verify the
+      record on QRZ.com's website between steps. Requires
+      QRZ_TEST_API_KEY and QRZ_TEST_CALLSIGN in .env. Ctrl+C between
+      steps leaves the record in the logbook.
+    interactive: true
+    cmds:
+      - go test -v -count=1 -tags manual -run TestLive_InteractiveFlow ./internal/forwarding/qrz/...
+
   run:
     desc: Build and run the daemon using SM_WORKING_DIR from .env
     deps: [build]
