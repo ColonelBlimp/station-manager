@@ -1,12 +1,14 @@
 package cat
 
 import (
+	stderr "errors"
 	"testing"
 )
 
-// encodeCase pins one (rig, command name, args) → expected wire string
-// mapping. Fixtures are the acceptance criteria for cat.Encode once it
-// exists; they must all pass against referenceEncode (frozen v1 logic).
+// encodeCase pins one (rig, command name, args) → expected wire bytes
+// mapping. Fixtures are the acceptance criteria for cat.Encode and must
+// all pass against the real codec AND against referenceEncode (frozen
+// v1 logic in reference_test.go).
 //
 // Command names and templates follow v1's battle-tested defaults: three
 // burst categories (INIT, READ, PLAYBACK) rather than per-field commands.
@@ -37,25 +39,28 @@ var encodeCases = []encodeCase{
 	{name: "unknown command name", rigID: "yaesu-ftdx10", cmdName: "NOT_A_COMMAND", wantErr: true},
 }
 
-func TestReferenceEncode(t *testing.T) {
+func TestEncode(t *testing.T) {
 	for _, tc := range encodeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			def, ok := Lookup(tc.rigID)
 			if !ok {
 				t.Fatalf("Lookup(%q) not found", tc.rigID)
 			}
-			got, err := referenceEncode(def, tc.cmdName, tc.args...)
+			got, err := Encode(def, tc.cmdName, tc.args...)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("expected error for command %q, got nil (result: %q)", tc.cmdName, got)
+					t.Fatalf("expected error for command %q, got nil (result: %q)", tc.cmdName, string(got))
+				}
+				if !stderr.Is(err, ErrUnknownCommand) {
+					t.Fatalf("expected ErrUnknownCommand for %q, got unexpected error: %v", tc.cmdName, err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("encode(%q on %s)\n got:  %q\n want: %q", tc.cmdName, tc.rigID, got, tc.want)
+			if string(got) != tc.want {
+				t.Errorf("encode(%q on %s)\n got:  %q\n want: %q", tc.cmdName, tc.rigID, string(got), tc.want)
 			}
 		})
 	}

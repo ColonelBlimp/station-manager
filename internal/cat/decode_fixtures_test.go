@@ -1,14 +1,17 @@
 package cat
 
 import (
+	stderr "errors"
 	"reflect"
 	"testing"
 )
 
 // decodeCase pins one (rig, input bytes) → expected CatStatus mapping.
 // Fixtures are the source of truth for the §4 carve-out acceptance
-// criteria: they must all pass against referenceDecode (frozen v1 logic)
-// and, once it exists, against cat.Decode.
+// criteria: they must all pass against cat.Decode (the real codec) AND
+// against referenceDecode (frozen v1 logic in reference_test.go). The
+// reference stays frozen; this suite is what proves cat.Decode is
+// equivalent to v1.
 //
 // Fixture values here follow v1's battle-tested FTdx10 config (lifted
 // from internal/config/defaults.go on the v1 branch), so any drift from
@@ -198,7 +201,7 @@ var decodeCases = []decodeCase{
 	},
 }
 
-func TestReferenceDecode(t *testing.T) {
+func TestDecode(t *testing.T) {
 	for _, tc := range decodeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			def, ok := Lookup(tc.rigID)
@@ -206,23 +209,24 @@ func TestReferenceDecode(t *testing.T) {
 				t.Fatalf("Lookup(%q) not found", tc.rigID)
 			}
 
-			state, tail, matched := referenceLookup([]byte(tc.input), def.States)
+			got, err := Decode(def, []byte(tc.input))
 
 			if tc.expected == nil {
-				if matched {
-					t.Fatalf("expected no prefix match, but matched state with Prefix=%q tail=%q",
-						state.Prefix, tail)
+				if err == nil {
+					t.Fatalf("expected ErrNoMatch for %q, got success with status=%v", tc.input, got)
+				}
+				if !stderr.Is(err, ErrNoMatch) {
+					t.Fatalf("expected ErrNoMatch for %q, got unexpected error: %v", tc.input, err)
 				}
 				return
 			}
 
-			if !matched {
-				t.Fatalf("expected prefix match for %q, got no match", tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error decoding %q: %v", tc.input, err)
 			}
-			got := referenceDecode(state, tail)
 			if !reflect.DeepEqual(got, tc.expected) {
-				t.Errorf("decode(%q on %s via prefix %q)\n got:  %v\n want: %v",
-					tc.input, tc.rigID, state.Prefix, got, tc.expected)
+				t.Errorf("decode(%q on %s)\n got:  %v\n want: %v",
+					tc.input, tc.rigID, got, tc.expected)
 			}
 		})
 	}
