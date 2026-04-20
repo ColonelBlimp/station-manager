@@ -264,7 +264,7 @@ These are known design questions that don't belong in `structure.md` and will be
 - **ORM / query generator choice** — sqlboiler (status quo, v1 uses it) vs. Bob vs. sqlc vs. hand-rolled. The transformation layer between DB rows and `types.Qso` exists regardless; the choice is ergonomics-level. → `docs/v2-design/db-layer.md` when v2 DB design starts.
 - **Forwarder configuration model redesign** — the multi-destination fan-out shape. → `docs/v2-design/forwarding.md` when it becomes a milestone 2+ concern.
 - **`internal/errors` HTTP serialization** — how the v1 `errors.Op` pattern crosses the HTTP boundary. → part of `docs/v2-design/api.md`.
-- **Multi-rig as a first-class assumption** — where in the data model does a rig identifier live, does the logbook schema need a rig table, how does the serial/CAT bridge expose multi-rig state. → `docs/v2-design/multi-rig.md` or similar, when rig control is being designed.
+- **Multi-rig as a first-class assumption** — where in the data model does a rig identifier live, does the logbook schema need a rig table, how does the serial/CAT bridge expose multi-rig state. Bridge-side shape is now captured in `docs/v2-design/bridge.md` (multi-rig is first-class in the bridge from day one); the data-model side — whether `types.Qso` carries a rig identifier, logbook schema impact — is still open and will be addressed when rig control construction starts.
 - **Whether `cmd/server` gets populated as the SM-Online server in this repo or moves to a separate one** — undecided; depends on how the server work shapes up.
 
 ---

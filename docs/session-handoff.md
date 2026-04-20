@@ -1379,9 +1379,13 @@ guide — use this, not an inferred version):
    a good smoke test for whether the stage-6 ADIF-stamp json_set
    generalises as cleanly as we think it does.
 
-3. **Bridge / CAT design**. Separate subsystem; see
-   `project_sm_serial_bridge.md` memory. Larger scope with its own
-   design surface.
+3. **Bridge / CAT design**. Separate subsystem. Design scaffold
+   landed 2026-04-20 at `docs/v2-design/bridge.md` — settled
+   direction (two frontends: rigctld-compat TCP + SM-native NDJSON;
+   one internal pipeline; multi-rig first-class; push-state CAT
+   assumed) plus ~10 open questions ready to close one at a time.
+   Currently the most likely next work item — dogfooding (option 1)
+   can't happen without a logging client, which needs this bridge.
 
 ### Parked follow-ups (low priority, not blockers)
 
@@ -1406,8 +1410,11 @@ guide — use this, not an inferred version):
 
 - **Pick the ORM/generator approach** → `docs/v2-design/db-layer.md`.
   sqlboiler stays until there's a reason to change.
-- **Multi-rig as first-class assumption** →
-  `docs/v2-design/multi-rig.md` when bridge design starts.
+- **Multi-rig as first-class assumption** — bridge-side shape now
+  captured in `docs/v2-design/bridge.md` (first-class from day one
+  in the bridge). Data-model side (rig id on `types.Qso`, logbook
+  schema impact) still open; address when rig control construction
+  starts.
 
 ### Deferred features
 
