@@ -1,194 +1,300 @@
 # Station Manager v2 — Serial / CAT Bridge Design
 
-**Status:** First draft, written 2026-04-20. Scaffold only — lifts the settled direction from the `project_sm_serial_bridge` memory entry (last updated 2026-04-14) into a versioned document, and collects open questions in one place for resolution.
+**Status:** Draft, last revised 2026-04-20 during a design re-examination session. An earlier scaffold (same day, earlier in the session) captured the 2026-04-14 two-frontend design (rigctld-compat TCP + SM-native NDJSON). That scaffold is **superseded** by this document. The earlier shape wasn't wrong so much as overbuilt — the daemon having already absorbed the QSO-logging concern makes most of the multiplexing problem disappear, and re-examining from that starting point produces a much smaller bridge.
 
-**Everything in this document is subject to revision.** Even sections marked "settled" may change once we start building; memory captured a design direction, not an implementation. Where something changes, update this doc explicitly (don't silently drift), and record the new reasoning.
+**Everything in this document is still subject to revision.** Even sections marked "decided" may change once construction starts.
 
-**Purpose:** Capture the *why* of the bridge's design choices so they survive session handoff. Once enough of the open questions are closed, this becomes the input to `cmd/sm-serial-bridge` construction in milestone 3.
+**Purpose:** Capture the *why* of the bridge's design so it survives session handoff. Once enough of the open questions are closed, this becomes the input to `cmd/sm-serial-bridge` construction — if we build it at all (see §6).
 
 **How this document relates to others:**
 
-- `docs/v1-analysis/*` — what v1 had for serial/CAT (`internal/serial/`, `internal/cat/`, the "home-grown choices are deliberate" note in CLAUDE.md).
-- `docs/v2-design/structure.md` — establishes that pure Go binaries (including bridges) stay in the root module; see decision 3.
-- `docs/v2-design/milestones.md` — §Milestone 3 places `cmd/sm-serial-bridge` alongside the other external-integration binaries. Scope there is the one-liner; this doc is the detail.
-- `docs/v2-design/api.md` — daemon API. The bridge does **not** call the daemon. Rig control is a client-side concern; the daemon only cares about QSOs. Kept separate on purpose.
-- Memory `project_sm_serial_bridge` — the source this scaffold was lifted from. When this doc and memory disagree, this doc wins.
+- `docs/v1-analysis/invariants.md` §"Two-frontend bridge shape" and §"Serial/CAT bridge SM-native frontend: NDJSON over Unix socket" — the pre-v2 thinking. The "two-frontend" shape described there is the one this document now steps back from; the NDJSON-over-Unix-socket transport carries forward.
+- `docs/v1-analysis/design-decisions-log.md` §"Serial/CAT bridge SM-native frontend: NDJSON over Unix socket" — same. NDJSON transport stays decided.
+- `docs/v2-design/structure.md` — pure Go binaries (including this one if built) live in the root module.
+- `docs/v2-design/milestones.md` §Milestone 3 — `cmd/sm-serial-bridge` is listed as an external-integration binary. Scope there is a one-liner; this doc is the detail.
+- `docs/v2-design/api.md` — daemon API. The bridge does **not** call the daemon. Rig control and QSO logging are separate concerns.
 
 ---
 
-## 1. Problem statement
+## 1. Problem statement (revised)
 
-SM and WSJT-X/JTDX both want to drive the same radio over one USB port for CAT, PTT, and (separately) audio. USB serial devices are single-owner — only one process can hold the port — so SM's own serial/CAT libraries cannot coexist with hamlib-using apps on the same physical interface. Something has to own the port and mediate shared access.
+**v1 version of the problem:** SM and WSJT-X/JTDX both want to drive the same radio over one USB port. USB serial devices are single-owner. Something has to mediate shared access.
 
-**Multi-rig is first-class from day one.** Serious stations routinely run more than one rig (SO2R, contest setups, FT8 on rig A while the operator works phone/CW on rig B). Each rig is on its own USB port and is an **independent contention domain** — one rig's PTT lease, CAT stream, and AUTO/transceive state has nothing to do with another's. One bridge process manages N physical ports with per-rig state isolation.
+**What changed in v2:** the daemon absorbed the QSO-logging concern. The reason multiple apps used to want the same serial port was that the logging app *was* the database, so any app that logged a QSO needed to be the logging app, so it needed the port. With a separate daemon, every app logs QSOs via HTTP to the daemon over a Unix socket — **port ownership decouples from logging**.
 
-**Non-scenario:** FT8 and phone/CW on the *same* rig at the *same* time. If both modes are active simultaneously at a station, they are on different rigs on different ports. The bridge does not have to arbitrate this.
+**What this means in practice:**
+
+- **WSJT-X / JTDX own their own rig's port directly.** They log QSOs via UDP logging packets (their existing protocol) → a future `cmd/wsjtx-bridge` translates UDP → daemon HTTP. No serial contention with SM.
+- **A bespoke SM FT8 app, if built, runs on its own rig** (user point 5 from the 2026-04-20 re-examination). Different port, no contention.
+- **The logging app owns its rig's port directly** when running. Uses `internal/cat` + `internal/serial` without a bridge in between.
+- **The only scenario that *might* want a multiplexing bridge is: logging app + a future CAT control app on the *same* rig, both wanting CAT access simultaneously.** The logging app as read-only listener, the CAT control app as listener+setter.
+
+User quote (2026-04-20): "Typically, two apps writing to the same serial device is rare to non-existent — a deliberate effort to do what should not be done." So even the remaining contention scenario is SM-internal and uncommon.
+
+**Multi-rig is still first-class** — a serious station routinely runs more than one rig (SO2R, contest). Each rig is its own contention domain; multi-rig resolves by ports being distinct, not by any multiplexing magic.
 
 ---
 
 ## 2. CAT model assumption: push-state AUTO / transceive
 
-Modern rigs commonly run in push-state modes:
+Unchanged from earlier thinking. Modern rigs run in push-state modes (Yaesu AUTO, Icom CI-V transceive) — state changes propagate from the rig automatically without being polled. The bridge's design assumes this. The rig is a state broadcaster; clients observe and occasionally poke. "Client B sees a frequency update it didn't ask for" is a feature, not corruption.
 
-- **Yaesu AUTO mode** — any change to the transceiver (VFO knob, mode change, PTT, band change, whether user-driven or CAT-driven from any source) is emitted down the wire automatically.
-- **Icom CI-V transceive mode** — similar: the rig pushes transceive messages when state changes.
-
-The bridge's design assumes this mode. The rig is a **state broadcaster**, clients are **observers that occasionally poke it**, and "client B receives a frequency update it didn't ask for" is a *feature* (B's local picture stays in sync with reality), not corruption.
-
-**Do not re-derive the classic request/response framing for CAT.** That framing ("broadcasting replies to multiple clients corrupts state") is wrong for AUTO/transceive and was corrected during the 2026-04-14 design conversation. If a specific rig forces polling mode, that's a per-driver concern, not a framing problem for the whole bridge.
+Do not re-derive classic request/response framing for CAT. See `docs/v1-analysis/invariants.md` §"CAT protocol model" for the fuller discussion.
 
 ---
 
-## 3. Two frontends, one internal pipeline
+## 3. Design (if built): Unix-socket-only, SM-internal multiplexer
 
-The bridge owns the physical port exclusively, consumes the rig's AUTO/transceive stream once, parses it once via the CAT library, and fans the parsed state out on **two separate frontends**.
+The bridge is an **SM-internal** fan-out. Third-party apps (WSJT-X, JTDX) do not connect to it; they own their own rigs' ports directly.
 
-### 3a. Frontend 1 — rigctld-compat TCP (third-party interop)
+### 3a. Topology
 
-- Speaks hamlib's `rigctld` wire protocol on TCP. Default port 4532 for the first rig, +1 per additional rig (4533, 4534, ...), following hamlib convention.
-- **WSJT-X and JTDX natively support "Hamlib Net rigctl" as a rig type** — zero code change on their side, they just point at the bridge instead of grabbing the serial port.
-- Per-TCP-connection = per-client identity. Request/response routing for commands that *do* want a targeted reply is free.
-- Line-oriented ASCII protocol. Short commands: `f`/`F` (get/set freq), `m`/`M` (mode + passband), `t`/`T` (PTT), `v`/`V` (VFO), `s`/`S` (split). Replies terminated by `RPRT <errcode>`. Optional extended key-value mode.
-- **Effort estimate (directional only):** ~1 week of focused work for an MVP covering the 10–15 commands WSJT-X/JTDX actually use. Confirm against hamlib source (`tests/rigctl_parse.c`, `rigctld(1)`) before committing to a schedule.
+- One `sm-serial-bridge` process
+- Owns N physical rig ports (one worker per rig)
+- Exposes **one Unix socket per rig**: e.g. `/run/smbridge/rig1.sock`, `/run/smbridge/rig2.sock`
+- M concurrent endpoints per rig socket — whoever `connect()`s gets an endpoint; no fixed count. In practice M = 1 or 2 (logging app + CAT control app).
 
-### 3b. Frontend 2 — SM-native rig-state event stream (in-house clients)
+One-socket-per-rig means the rig binding is implicit in which socket you connect to. No rig identifier in the wire protocol.
 
-- **Transport: NDJSON over Unix domain socket.** One bidirectional connection per client, each line a JSON object with a `type` field. No HTTP layer. Decided pre-v2 and recorded in `docs/v1-analysis/design-decisions-log.md` → "Serial/CAT bridge SM-native frontend: NDJSON over Unix socket" and `docs/v1-analysis/invariants.md` §"Serial/CAT bridge SM-native frontend."
-- **Why not reuse the daemon's HTTP+SSE stack?** Rig bridge traffic is continuous bidirectional streaming (AUTO/transceive push from the rig, commands going back), not request/response-dominant. HTTP+SSE is the wrong rhythm. NDJSON gives one socket per client, **connection-lifetime = lease-lifetime for free** (PTT release and subscription cleanup on socket close fall out of the transport), is debuggable with `socat`, and implements in ~30 lines of Go.
-- Delivers rig state in **the CAT library's native vocabulary**, not hamlib's. SM clients are not forced to inherit hamlib's mode names, VFO model, or its limitations.
-- Carries a rig identifier so clients can subscribe per-rig or to all rigs.
-- Commands from these clients go through the same internal serialization queue as commands from the rigctld frontend.
+### 3b. Wire format: NDJSON
 
-### 3c. Internal pipeline (shared by both frontends)
+Decided pre-v2 (see `docs/v1-analysis/design-decisions-log.md`). One bidirectional connection per client, each line a JSON object with a `type` field, no HTTP layer.
 
-**Upstream (clients → rig):** commands from both frontends land in one serialization queue. The bridge buffers a full command frame from one source before letting the next source's bytes hit the wire — avoids mid-frame byte interleaving. Framing awareness is per-rig-protocol (Kenwood/Yaesu `;` terminators, Icom CI-V `0xFE 0xFE … 0xFD` frames, etc.); the CAT library already encodes this.
+Shape (indicative — exact schema is open question §8.1):
 
-**Downstream (rig → clients):** the AUTO/transceive stream is parsed once and fanned out to every subscriber on both frontends, each in the form that frontend expects. The rigctld side translates to hamlib vocabulary; the SM-native side passes through CAT-library vocabulary.
+- Client → bridge: `{"type":"set_mode","mode":"USB"}`, `{"type":"set_freq","hz":14250000}`, `{"type":"ptt","on":true}`, `{"type":"get_state"}`
+- Bridge → client: `{"type":"state","freq":14250000,"mode":"USB","split":false,...}` (full snapshot on connect + after every delta), `{"type":"error","msg":"..."}`
 
-**PTT arbitration — simple lease model.**
+### 3c. Per-rig pipeline
 
-- Bridge grants PTT to the first requester, auto-releases on explicit `T 0` / release, or on client disconnect.
-- Second requester gets a clean rejection until released.
-- In practice contention is rare. WSJT-X/JTDX is the heavy PTT user, holds PTT during FT8 TX slots (~12.6 s). SM's logging app is **not normally a PTT consumer** — it does not claim PTT at startup.
-- Voice keyer is the only SM-side PTT consumer, and it's optional/ergonomic (plays a recorded CQ clip to save the operator's voice). Path: request lease → key → play clip → unkey → release, total hold time seconds. If an operator triggers the voice keyer mid-WSJT-X-TX, clean rejection — that's a user mistake, not something the bridge has to handle elegantly.
+Correct layering (corrected 2026-04-20 during the session):
 
-**Stuck-PTT safety — hard requirement, not a design choice.** On *any* client disconnect (TCP drop, Unix socket close, client process death), the bridge **must** force PTT to RX immediately. Stuck key-down damages finals and puts the station in continuous-transmission territory regulatorily. Only the bridge can guarantee this because clients can't clean up after their own crashes. Implement as a connection-close hook on both frontends.
+- `internal/serial` — owns the physical port, byte-level I/O, **no protocol knowledge**
+- `internal/cat` — CAT protocol encoder/decoder (Yaesu / Icom / Kenwood), **pure logic, no I/O**
+- Bridge — glue between them
+
+**Upstream (client command → rig):**
+1. NDJSON command arrives on endpoint: `{"type":"set_mode","mode":"USB"}`
+2. Bridge calls `internal/cat` to encode → wire bytes for this rig's driver (e.g. `"MD2;"` for Yaesu/Kenwood, a CI-V frame for Icom)
+3. Bridge writes those bytes to the port via `internal/serial`
+
+**Downstream (rig → client):**
+1. `internal/serial` yields bytes from the port
+2. Bridge feeds them to `internal/cat` to parse into a structured update
+3. Bridge broadcasts that update as NDJSON to all endpoints on this rig's socket
+
+### 3d. Concurrency and framing
+
+**Upstream serialisation:** one send queue per rig. Commands from all endpoints go through it. Because SM's own apps cooperate (one command per `write()` syscall, which the kernel guarantees atomic up to `PIPE_BUF`), the bridge does **not** need per-rig-protocol client-side framing logic. This was over-engineered in the earlier scaffold; the actual work is "read a line of NDJSON from an endpoint, pass the encoded bytes through the queue to the wire."
+
+**Downstream broadcast:** parse once, fan-out to all endpoints on this rig's socket. No per-endpoint filtering — every endpoint sees every update.
+
+### 3e. PTT safety
+
+Single-owner-per-rig means no arbitration complexity — the OS enforces port exclusivity. But **stuck-PTT on client crash** is still a real risk. If the logging app crashes while holding PTT via a CAT command (e.g. `"TX;"` sent, no `"RX;"` follow-up), the rig stays in TX until the rig's own CAT watchdog kicks in (not all rigs have one) or the operator unkeys manually. Continuous key-down damages finals.
+
+**Safety rule for the bridge:** track "did this endpoint assert PTT?" On disconnect of an endpoint that had PTT asserted, bridge sends PTT-release. One-line safety net.
+
+### 3f. Rig driver family note
+
+Yaesu, Kenwood, and Icom are the three families the bridge needs to support via `internal/cat`. Yaesu and Kenwood use the same protocol family: ASCII commands terminated by `;` (e.g. `"FA014250000;"`). Icom CI-V is binary (`0xFE 0xFE … 0xFD` frames). Earlier discussion incorrectly suggested Kenwood might be a "not supported" outlier; it's not — it's in the same family as Yaesu. All three are handled via `internal/cat`.
 
 ---
 
-## 4. Explicitly rejected approach: PTY virtual serial ports
+## 4. What this design collapses out
 
-Original framing was "expose N virtual USB ports per physical port and broadcast device output to each." On Linux this is buildable via `openpty()` / `tty0tty` / `socat`. Rejected because:
+Compared to the 2026-04-14 two-frontend design:
 
-- WSJT-X and JTDX (the two apps driving the whole redesign) already speak rigctl-net natively, so the TCP frontend solves the interop problem with zero config on their side.
-- PTY would force the bridge to parse *client-side* framing for every supported rig protocol, not just rig-side — duplicating work.
-- Windows has no clean PTY equivalent (com0com is a separate kernel driver, different story).
-- SM's own in-house clients are better served by a native event stream over Unix socket than by pretending to be serial devices.
-
-Revisit only if a specific third-party app refuses to speak rigctl-net and the user actually needs it. Narrower, later problem.
+- **No rigctld-compat TCP frontend.** WSJT-X and JTDX own their own rigs' ports directly; they never talk to the bridge. If a future third-party app ever *does* need to share a rig with the logging app, rigctld TCP can be added as a second frontend — but that's a "when it becomes real" problem.
+- **No PTY / virtual serial ports.** Same reason — no third-party app needs serial-device shape from the bridge.
+- **No hamlib vocabulary translation.** The bridge speaks SM's native CAT vocabulary end-to-end because all its endpoints are SM's own apps.
+- **No complex PTT arbitration.** Simple convention within SM-land: only the logging app asserts PTT (for its optional voice keyer). The CAT control app is listener + state-setter, not a PTT consumer. One-line rule, not arbitration logic.
+- **No command interleaving smarts.** SM's own apps cooperate on write boundaries.
 
 ---
 
 ## 5. Scope boundaries — CAT vs PTT vs audio
 
-- **CAT** — solved by this bridge.
-- **PTT** — often on a second serial/HID interface. Its own contention model (lease + auto-release on disconnect, §3c). Stuck-PTT-on-disconnect is a hard safety rule.
+- **CAT** — addressed by this bridge (if built).
+- **PTT** — often on a second serial/HID interface. Its own contention model (single-owner with safety-release on disconnect, §3e). Stuck-PTT-on-disconnect is the only hard safety rule.
 - **Audio** — usually shareable via pipewire/pulseaudio on Linux; different OS story on Windows/macOS. **Not addressed by this bridge.** Different problem class from serial exclusivity.
 
-Do not conflate the three. The bridge is a CAT mediator with a PTT arbitration rider, nothing more.
+Do not conflate the three.
 
 ---
 
-## 6. Open questions
+## 6. The YAGNI question — should we build this bridge at all?
 
-These need decisions before implementation starts. Some may already have answers in the user's head; writing them down surfaces the ones that don't.
+Surfaced during the 2026-04-20 re-examination and **still open** as of session end.
 
-### 6a. Repo placement — monorepo or separate repo?
+**The case for building it now:**
 
-The bridge is in principle reusable by other ham radio projects (any station running WSJT-X/JTDX alongside another logger faces the same USB-exclusivity problem). If that reuse is a goal, a separate repo lowers the barrier for others to pick it up. If not, monorepo is simpler.
+- The shape is clear and small (§3 above fits in one page).
+- A CAT control app is a "strong possibility" (user point 2 from the 2026-04-20 design conversation), and when built it'll want the bridge.
+- Better to design it alongside `internal/cat`'s transport abstraction than bolt it on later.
 
-**Defaults to lean on:** `docs/v2-design/structure.md` decision 3 says pure Go binaries live in the root module. That points toward monorepo unless a reuse argument wins.
+**The case for deferring (YAGNI):**
 
-### 6b. Relationship with v1 `internal/serial` and `internal/cat`
+- **Nothing today needs the bridge.** The logging app, the only SM rig-facing app that currently exists, can own its rig's port directly via `internal/cat` + `internal/serial`. Zero added latency, zero new code.
+- The CAT control app is speculative. Until it's real, the bridge is infrastructure looking for a user.
+- A deferred bridge costs nothing to future-you **if** `internal/cat` is designed from the start with a **pluggable transport abstraction**:
+  - **"serial transport"** — `internal/cat` opens a real port via `internal/serial` directly. Used by the logging app today.
+  - **"bridge socket transport"** — `internal/cat` connects to a Unix socket that speaks NDJSON. Used the day a second app exists that wants the same rig.
+  - Apps choose transport via config. Flipping transport = config change, not a code rewrite.
+- This keeps the logging app's CAT path as direct as possible (no IPC hop) until multiplexing is actually needed.
 
-v1 has home-grown serial and CAT packages (CLAUDE.md → "home-grown choices are deliberate"). Options:
+**User lean at session end:** leaning toward deferring, based on performance concern (§7) and "nothing currently needs this."
 
-- **Carry forward as-is** into the shared `internal/` tree; the bridge imports them.
-- **Carry forward, refactor opportunistically** if the APIs want reshaping for bridge use.
-- **Rewrite** — unlikely to be worth it; the libraries were judged solid in v1 analysis.
-
-The cautionary tale from lessons-for-v2 is "characterization tests before refactoring." If we refactor, freeze behavior first.
-
-### 6c. SM-native event stream shape — snapshot-then-deltas, or pure deltas?
-
-**Transport is decided (NDJSON over Unix socket, §3b).** The open question is the *event shape*: rig state is stateful (a current frequency, a current mode) where the daemon's event stream is incremental (a QSO was stored, a forward succeeded). Options:
-
-- **Snapshot-on-subscribe then deltas.** First line on a new connection is a full current-state object per rig; subsequent lines are deltas. Client doesn't need to wait for the next state change to know what the rig is doing.
-- **Pure deltas.** Client subscribes, waits for the next state change, is blind until then. Matches the daemon's SSE shape but not its use case.
-- **Snapshot available on demand.** A `{"type":"get_state"}` command returns the current state as a single NDJSON line; stream is pure deltas otherwise.
-
-Leaning toward (a) — "what is the rig doing right now" is the first thing any client wants to know and making them wait for a state change is a bad UX.
-
-### 6d. rigctld MVP command set
-
-Memory estimates "10–15 commands WSJT-X/JTDX actually use" but doesn't enumerate them. Before committing to the week-of-work estimate we need the list — either by reading WSJT-X/JTDX source, or by running them against real `rigctld` with tracing and observing what crosses the wire.
-
-### 6e. Configuration — how does the bridge discover rigs?
-
-A static config file (YAML/TOML) is the obvious default, listing per-rig: device path, baud rate, CAT driver, rigctld TCP port, SM-native stream path. Open sub-questions:
-
-- Is hot-reload on config change worth the complexity? (Probably not for v2.)
-- How does a client know which rigs exist? (Probably a small HTTP endpoint on the bridge, or an initial snapshot over the SM-native stream.)
-
-### 6f. PTT serial interface discovery
-
-On many rigs PTT is on a second serial/HID interface (often RTS/DTR on a different `/dev/ttyUSB*`). Config needs to express this. Decide the shape together with 6e so we don't have two config models.
-
-### 6g. Per-driver CAT adapters
-
-v1 supported multiple rig families. The v2 bridge needs the same. Design question: where does the driver-selection boundary live — in the CAT library (bridge just calls `cat.Open(driver, port)`) or in the bridge (bridge holds a driver registry analogous to `internal/forwarding/Register`)?
-
-Forwarding's pattern is a good reference point — it worked out well and is worth copying if the shapes are similar.
-
-### 6h. Bridge process lifecycle and supervision
-
-- Run as a standalone binary (`cmd/sm-serial-bridge`) — decided, matches the structure doc.
-- systemd unit vs. user runs it manually — probably systemd for dogfood, but not a v2 blocker.
-- How does the bridge behave if a USB port goes away mid-session (cable yanked)? Auto-reconnect? Fail-fast and let systemd restart? Open.
-
-### 6i. Testing strategy
-
-Integration tests against real hardware are not reproducible. Options:
-
-- A `stub` CAT driver (analogous to the stub forwarder) that simulates a rig over an in-memory pipe. Good for bridge-internal logic.
-- `socat`-backed pty pair for end-to-end tests of the rigctld frontend — real TCP, real bytes, no real rig.
-- Manual test matrix against the user's actual rigs for release acceptance.
-
-Decide which are worth building; (a) is probably essential, (b) nice-to-have, (c) always happens.
-
-### 6j. Relationship to milestone 3's other bridges
-
-Milestone 3 also lists `cmd/udp-bridge` and `cmd/importer`. Those are daemon-adjacent (they feed QSOs in); the serial bridge is rig-adjacent (it mediates CAT). Almost no shared code between them. Confirm that's actually true before designing — if `udp-bridge` and `sm-serial-bridge` both want a common "small Unix-socket HTTP client + event subscriber" helper, extract it once.
+**Decision pending.** Pick at next session.
 
 ---
 
-## 7. Not yet addressed
+## 7. Performance — examined during the 2026-04-20 re-examination
 
-Things that are conspicuously absent from this scaffold and will need their own sections when the time comes:
+User raised a real concern: v1 had UI lag with "no bridge, JSON in between." Would adding a Unix socket hop make it worse?
 
-- **Windows and macOS support.** Linux is primary; other platforms are "works someday" not "works now." Port enumeration, PTY story, audio story all differ.
-- **Multi-bridge coordination.** If the operator has *more* rigs than one bridge instance is willing to manage, does a second bridge instance coexist on different ports? (Probably yes, trivially, since ports don't overlap.)
-- **Observability.** Logs, metrics, a way to see "what is rig 1 currently doing" without attaching a debugger. Probably a small read-only HTTP endpoint.
-- **Security.** The Unix socket is local-user by filesystem perms; the rigctld TCP port is typically localhost-only. Revisit if the user wants to run the bridge on a headless station accessed from a laptop on the LAN.
+### 7a. Actual cost of the bridge hop
+
+- JSON encode/decode: microseconds each
+- Unix socket write → read: tens of microseconds on Linux
+- Total added latency per event: **well under 1ms**
+
+Unix sockets are what low-latency audio systems and game engines use for cross-process IPC. You'd need thousands of events per second to see accumulated delay in the single-digit ms range.
+
+### 7b. What likely caused v1 UI lag
+
+v1's JSON wasn't the bridge (there was no bridge) — it was **Wails backend ↔ Svelte frontend IPC**. Wails serialises Go↔JS calls over JSON via its message bridge; each call has ~ms-range overhead (10-100x a Unix socket hop). Likely v1 lag suspects in order:
+
+1. Wails IPC call overhead (events emitted one-per-message, not batched)
+2. DOM update thrashing on the Svelte side (re-renders per event, not coalesced to animation frame)
+3. Serial port polling interval (if `internal/serial` polled instead of blocking-read)
+4. JSON encoding a large state object when a small delta would do
+
+**None of these are affected by whether a Unix socket bridge sits between `internal/serial` and `internal/cat`.** The Wails layer was the bottleneck; adding a bridge hop underneath it would add <1ms to a pipeline that was already spending 10-100x that elsewhere.
+
+### 7c. Implication for the bridge design
+
+If the bridge *is* built, these v1 lessons still apply to the **apps** that consume its output:
+
+- Batch high-frequency rig updates at the frontend (e.g. coalesce to animation frame)
+- Don't emit one Wails message per CAT event; buffer and ship periodically if appropriate
+- Send deltas, not full state snapshots, after the initial connect-time snapshot
+
+The bridge itself isn't the performance risk. The app that displays the bridge's output might be.
 
 ---
 
-## Decision log (to be filled in as open questions close)
+## 8. Open questions (narrowed)
+
+### 8.1. Exact NDJSON message schema
+
+`type` names, field names, field types. Indicative shapes in §3b but not finalised. Worth pinning down before coding — each rig driver will need to emit and consume this vocabulary consistently.
+
+### 8.2. Snapshot-on-connect vs pure deltas
+
+**Lean: snapshot-on-connect + deltas after.** Client needs to know the rig's current state immediately without waiting for the next change. Earlier open question §6c; keeping here until confirmed.
+
+### 8.3. `internal/cat` transport abstraction shape
+
+This is the load-bearing design call for the YAGNI path (§6). Approximate shape:
+
+```go
+// internal/cat
+type Transport interface {
+    Send(ctx context.Context, cmd Command) error
+    Events() <-chan Event
+    Close() error
+}
+
+// Serial transport: opens a real port via internal/serial.
+// Used when the app owns the rig directly (logging app today).
+func SerialTransport(cfg SerialConfig) (Transport, error) { ... }
+
+// Socket transport: connects to a bridge Unix socket, speaks NDJSON.
+// Used when the bridge is mediating (future CAT control app scenario).
+func SocketTransport(cfg SocketConfig) (Transport, error) { ... }
+```
+
+App-level config picks which. The rest of `internal/cat` (command encoders, AUTO-mode parsers, rig-family dispatch) is transport-agnostic.
+
+If we commit to this shape, the bridge itself can be deferred to milestone 3+ without any infrastructure pain. Logging app uses `SerialTransport` today; drop in `SocketTransport` the day the CAT control app exists.
+
+### 8.4. Configuration shape
+
+Per-rig: device path, baud, CAT driver (yaesu/icom/kenwood), socket path. Format: YAML or TOML (match whatever the daemon picks). Sub-questions:
+
+- Hot-reload on config change? Probably not for v2.
+- How does a client discover which rigs exist? For one-socket-per-rig, "check if the socket path exists" is the answer.
+
+### 8.5. USB cable yank / reconnect behaviour
+
+If a cable is yanked mid-session, what does the bridge do? Options:
+
+- Fail-fast, let systemd/user restart. Simple, lossy.
+- Retry loop, rig reappears on same path. Complex, preserves endpoint connections.
+- Expose a status event on the NDJSON stream ("rig disconnected") so clients can react. Middle ground.
+
+### 8.6. Repo placement
+
+Memory hedged "undecided." Default per `docs/v2-design/structure.md` decision 3: pure Go binaries live in the root module. That points toward monorepo unless a reuse argument wins. No reuse argument yet — mark as "monorepo, root module" unless something changes.
+
+### 8.7. Testing strategy
+
+- **Stub CAT driver** — analogous to the stub forwarder. In-memory pipe pretends to be a rig. Good for bridge-internal logic. Essential.
+- **`socat`-backed PTY pair** — if we need to test real serial I/O without real hardware. Nice-to-have.
+- **Manual matrix against real rigs** — always happens at release acceptance time.
+
+### 8.8. `internal/cat` carry-forward strategy
+
+Use v1's `internal/cat` as-is in v2, refactor opportunistically, or reshape the API? The transport abstraction in §8.3 forces at least a minor API reshape. Characterisation tests first (per the "characterization tests before refactoring" lesson), then reshape.
+
+---
+
+## 9. Closed questions (from the earlier scaffold, now resolved)
+
+| Question | Resolution | Source |
+| -------- | ---------- | ------ |
+| Third-party interop frontend (rigctld) | **Not needed.** WSJT-X/JTDX own their own rigs' ports directly; no overlap with SM-internal bridge scenarios. Can be added later if a specific app forces it. | 2026-04-20 re-examination |
+| PTY virtual serial ports | **Rejected.** Same reason as rigctld; no third-party app needs it. | 2026-04-20 re-examination (consistent with 2026-04-14) |
+| Two-frontend design (TCP + Unix socket) | **Collapsed to Unix-socket-only.** | 2026-04-20 re-examination |
+| Hamlib vocabulary translation | **Not needed.** All bridge endpoints are SM's own apps. | 2026-04-20 re-examination |
+| Complex PTT arbitration (lease model, rejection logic) | **Not needed.** Convention: only logging app asserts PTT. | 2026-04-20 re-examination |
+| Command interleaving framing logic | **Not needed.** SM apps cooperate on write boundaries; kernel `PIPE_BUF` atomicity covers the rest. | 2026-04-20 re-examination |
+| Kenwood as outlier | **Incorrect framing.** Kenwood is same family as Yaesu (ASCII + `;`). | 2026-04-20 re-examination |
+
+---
+
+## 10. Not yet addressed
+
+- **Windows and macOS support.** Linux is primary. Unix socket transport is Linux/macOS-clean; Windows needs named pipes or AF_UNIX on modern Windows 10+. Revisit when cross-platform becomes real.
+- **Observability.** Logs, metrics, "what is rig 1 currently doing" introspection. Probably a small read-only HTTP endpoint if the bridge runs.
+- **Security.** Unix socket is local-user via filesystem perms; sufficient for single-user desktop. Revisit for headless/networked scenarios.
+- **Relationship with `cmd/wsjtx-bridge` and `cmd/udp-bridge`** (the other two milestone-3 bridges). Near-zero shared code expected (different concerns: QSO ingest vs CAT mediation); confirm at implementation time.
+- **Multi-bridge coordination.** Running two bridge instances for different rig groups. Probably trivial (ports don't overlap), but confirm.
+
+---
+
+## 11. Decision log
 
 | Date | Question | Decision | Rationale |
 | ---- | -------- | -------- | --------- |
-| 2026-04-14 | CAT framing model | Push-state AUTO/transceive is the assumed mode | Original "request/response" framing was wrong for modern rigs; corrected during design conversation |
-| 2026-04-14 | PTY virtual serial ports | Rejected | WSJT-X/JTDX already speak rigctl-net; PTY adds client-side framing work for no gain |
-| 2026-04-14 | PTT arbitration | Simple lease + auto-release on disconnect | Contention is rare in practice; stuck-PTT-on-disconnect is the only hard rule |
-| 2026-04-14 | Multi-rig support | First-class from day one | Serious stations routinely run >1 rig; per-rig state isolation required |
-| pre-v2 | SM-native frontend transport | NDJSON over Unix domain socket (not HTTP+SSE) | Rig bridge traffic is continuous+bidirectional; connection-lifetime = lease-lifetime falls out for free; see `docs/v1-analysis/design-decisions-log.md` and `invariants.md` |
+| 2026-04-14 | CAT framing model | Push-state AUTO / transceive is the assumed mode | Modern rigs broadcast state; request/response framing was wrong starting point |
+| 2026-04-14 | Multi-rig support | First-class from day one | Serious stations routinely run >1 rig |
+| pre-v2 | SM-native frontend transport | NDJSON over Unix domain socket | Continuous bidirectional streaming, not HTTP+SSE rhythm; connection-lifetime = lease-lifetime for free |
+| 2026-04-20 | Third-party interop frontend (rigctld TCP) | **Dropped.** Not currently needed | WSJT-X/JTDX own their own rigs' ports directly in the v2 architecture; no shared-rig scenario with them |
+| 2026-04-20 | PTY virtual serial ports | **Dropped.** Not currently needed | Same reason as rigctld |
+| 2026-04-20 | Design shape | **Unix-socket-only, SM-internal multiplexer** | Daemon already solves the QSO-logging-port-ownership coupling that motivated multiplexing |
+| 2026-04-20 | Layering clarification | `internal/serial` for port I/O, `internal/cat` for protocol encoding/decoding, bridge as glue | User correction during re-examination |
+| **OPEN** | **YAGNI — build the bridge now or defer?** | **Pending.** User lean: defer, with `internal/cat` transport abstraction enabling the deferred path at zero cost | See §6, §7, §8.3 |
+
+---
+
+## 12. Session pick-up point (next session)
+
+**Where we left off:** the bridge design is now small and clear. Three live threads to resolve next session, in recommended order:
+
+1. **Answer §6 — build now or defer?** Everything else depends on this.
+2. **If deferred:** settle `internal/cat`'s transport abstraction shape (§8.3). This is the only design work the logging app depends on before milestone 2 can start.
+3. **If built now:** sequence is (a) `internal/cat` transport abstraction, (b) NDJSON schema (§8.1), (c) bridge implementation, (d) logging app wired through `SocketTransport`, (e) defer CAT control app until its own design session.
+
+My recommendation: **defer the bridge, but do §8.3 as a design-only exercise now.** That keeps the logging app on the fastest path (direct `SerialTransport`) without foreclosing the bridge. When the CAT control app becomes real, the switch is mechanical.

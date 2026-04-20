@@ -24,7 +24,56 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-20, session 14)
+## Current state (as of 2026-04-20, session 15 — bridge design re-examination)
+
+### Session 15 work: bridge design simplified, YAGNI question on the table
+
+Started with the three "next options" from session 14 (alpha checkpoint, second
+real forwarder, bridge/CAT design). User reasoned through dependencies:
+alpha checkpoint needs a logging client, which needs the bridge → bridge is the
+real blocker → picked bridge for this session.
+
+**What landed:**
+
+- `docs/v2-design/bridge.md` created and then substantially rewritten in the
+  same session as the design was re-examined.
+- Pointer updates: `docs/v2-design/structure.md`, this handoff, and
+  `project_sm_serial_bridge` memory now point to the new doc instead of the
+  memory-as-canonical + hypothetical `multi-rig.md`.
+- NDJSON-over-Unix-socket transport **confirmed decided** (was recorded
+  pre-v2 in `design-decisions-log.md` and `invariants.md`; was wrongly hedged
+  as "probably SSE" in memory and in the first draft of bridge.md — corrected).
+
+**What the re-examination produced:**
+
+1. **The bridge is much smaller than the 2026-04-14 two-frontend design.**
+   Daemon absorbing the QSO-logging concern means port ownership decouples
+   from logging, so most of the multiplexing rationale disappears.
+2. **No rigctld TCP frontend.** WSJT-X/JTDX own their own rigs' ports
+   directly in the v2 architecture — no shared-rig scenario with them.
+3. **No PTY virtual serial ports.** Same reason.
+4. **The bridge, if built, is SM-internal only** — mediates between
+   logging app + future CAT control app on the same rig. Third-party apps
+   never touch it.
+5. **Correct layering pinned:** `internal/serial` for port I/O (no protocol
+   knowledge), `internal/cat` for CAT protocol encoding/decoding (no I/O),
+   bridge as glue.
+6. **SM apps cooperate on write boundaries**, so the bridge needs no
+   per-rig-protocol client-side framing logic (I over-engineered this in
+   the first draft; user called it out).
+7. **Kenwood is NOT an outlier** — same family as Yaesu (ASCII + `;`);
+   only Icom CI-V is binary.
+8. **v1 UI lag was almost certainly Wails IPC, not a bridge concern.**
+   A Unix socket hop adds <1ms; Wails backend↔frontend JSON adds 10-100x that.
+
+**Open at session end (in `docs/v2-design/bridge.md §6`):**
+
+- **YAGNI: build the bridge now, or defer?** The logging app currently can own
+  its rig's port directly via `internal/cat` + `internal/serial` — no bridge
+  needed today. A CAT control app is a "strong possibility," not a commitment.
+  Deferring costs nothing **if** `internal/cat` is given a pluggable transport
+  abstraction from the start (`SerialTransport` today → `SocketTransport` the
+  day a second app exists). User leaning toward defer at session end.
 
 ### SSE event stream: complete (stages 1–4 landed, docs updated)
 
@@ -1379,13 +1428,26 @@ guide — use this, not an inferred version):
    a good smoke test for whether the stage-6 ADIF-stamp json_set
    generalises as cleanly as we think it does.
 
-3. **Bridge / CAT design**. Separate subsystem. Design scaffold
-   landed 2026-04-20 at `docs/v2-design/bridge.md` — settled
-   direction (two frontends: rigctld-compat TCP + SM-native NDJSON;
-   one internal pipeline; multi-rig first-class; push-state CAT
-   assumed) plus ~10 open questions ready to close one at a time.
-   Currently the most likely next work item — dogfooding (option 1)
-   can't happen without a logging client, which needs this bridge.
+3. **Bridge / CAT design — substantial progress session 15, now at a
+   decision point.** Design is in `docs/v2-design/bridge.md`, rewritten
+   in-session from a two-frontend shape to a much smaller Unix-socket-only
+   SM-internal multiplexer. The live question is **§6 YAGNI: build now or
+   defer?** User lean at session end is *defer*, with `internal/cat` given
+   a pluggable transport abstraction (§8.3) so the deferred path costs
+   nothing. Recommended next-session work order:
+
+   **a. Answer §6.** Everything else depends on this.
+   **b. If deferred:** settle §8.3 (`internal/cat` transport abstraction
+      shape) as a design-only exercise. This unblocks the logging app for
+      milestone 2 without foreclosing the bridge.
+   **c. If built now:** sequence is (i) `internal/cat` transport abstraction,
+      (ii) NDJSON schema (§8.1), (iii) bridge implementation, (iv) logging
+      app wired through `SocketTransport`, (v) defer CAT control app to its
+      own design session.
+
+   My recommendation: **defer the bridge, but do §8.3 now.** Keeps the
+   logging app on the fastest path (direct `SerialTransport`) and makes the
+   eventual switch to a bridge mechanical.
 
 ### Parked follow-ups (low priority, not blockers)
 
