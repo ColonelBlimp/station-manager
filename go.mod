@@ -12,6 +12,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/rs/zerolog v1.35.0
 	github.com/stretchr/testify v1.11.1
+	go.bug.st/serial v1.6.4
 	go.uber.org/atomic v1.11.0
 	golang.org/x/net v0.52.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -21,6 +22,7 @@ require (
 require (
 	github.com/aarondl/inflect v0.0.2 // indirect
 	github.com/aarondl/randomize v0.0.2 // indirect
+	github.com/creack/goselect v0.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ericlagergren/decimal v0.0.0-20190420051523-6335edbaa640 // indirect
