@@ -48,11 +48,39 @@ precisely so we don't re-derive state or redo finished work.
 - Fixture tests updated: replaced the old "raw passthrough" FT-710 ID case with `ID0800 → IDENTITY: "FT-710"` and `ID9999 → IDENTITY: ""`; added `ST=2 on FT-710 → SPLIT: ""` to pin the rig-specific difference. 41 subtests green.
 - `cat-serial-reuse.md` §6 decision log has the matching FT-710 verification entry.
 
+### §4 Step 1 landed (real codec)
+
+- `internal/cat/codec.go` — `Decode(def, line) (Status, error)` with `ErrNoMatch` sentinel, `Encode(def, name, args...) ([]byte, error)` with `ErrUnknownCommand` sentinel, and unexported `lookupState` helper. Logic byte-for-byte equivalent to `referenceLookup`/`referenceDecode`/`referenceEncode` in `reference_test.go`.
+- `decode_fixtures_test.go` / `encode_fixtures_test.go` — swapped `reference*` calls for `cat.Decode` / `cat.Encode`; tests renamed `TestDecode` / `TestEncode`.
+- `codec_equivalence_test.go` (new) — runs every fixture through BOTH the real codec and the frozen reference, asserts identical output. Drift detection: catches any divergence between the two even if the fixture table is also updated.
+- 76 subtests green total in `internal/cat`.
+
+### `cmd/catcli` relocated + extended for live rig verification
+
+- Moved from `internal/serial/cmd/catcli/` to top-level `cmd/catcli/` (§7.4 closed).
+- New `-rig <id>` flag — looks the rig up in `cat.Lookup`, uses its serial defaults, pipes every framed response through `cat.Decode`, prints raw bytes plus the extracted tag map.
+- New `-init` flag — sends the rig's `INIT` command via `cat.Encode` at startup (enables AI push-state mode on Yaesu rigs).
+- Without `-rig`, behaviour is unchanged from before (pure serial diagnostic, raw bytes).
+- End-to-end validation path: `catcli -device /dev/ttyUSB0 -rig yaesu-ftdx10 -init -listen` → live decoded state stream.
+- First real wiring of `serial.Port` + `cat.Lookup` + `cat.Decode`/`Encode`. Inline `serial.Config`-from-`RigSerial` conversion (~15 LOC) foreshadows `internal/rigconfig`.
+
+### Live-rig validation landed
+
+Operator plugged in the FTdx10, ran `catcli -device /dev/ttyUSB0 -rig yaesu-ftdx10 -init -listen`, and confirmed end-to-end:
+
+- `INIT` burst sent cleanly.
+- `ID0761` received, decoded as `IDENTITY: FTdx10`.
+- Live `FA` VFO-A broadcasts tracked as the operator turned the knob, each decoded to `VFOAFREQ: <9 digits>`.
+- Mode change decoded: `MD02 → MAINMODE: USB`.
+- SIGINT on the listen loop produced a clean `serial.ReadResponseBytes: serial: port closed` error and graceful exit.
+
+The FTdx10 in AI mode broadcasts ~15 prefixes v1 never configured (`IF`, `SS`, `NB`, `RF`, `AC`, `RM`, `RG`, `MG`, `ML`, `GT`, `SH`, `BI`, `KR`, plus a mystery `FD` not in the manual). These surface as `[no match]` in catcli, which is the correct behaviour — v1 ignored them silently; we flag them louder. Decision recorded in cat-serial-reuse.md §6: do NOT pre-broaden the state table; expand only when a specific downstream feature needs a specific prefix. `FD` logged as an open item in §8 for future investigation.
+
 ### Next session
 
-§4 Step 1 of the carve-out: implement `cat.Decode(def RigDefinition, line []byte) (map[string]string, error)` and `cat.Encode(def RigDefinition, name string, args ...any) ([]byte, error)`. Port logic from the frozen `referenceDecode` / `referenceEncode` / `referenceLookup` in `reference_test.go`. Swap the `reference*` calls in `decode_fixtures_test.go` / `encode_fixtures_test.go` for `cat.*` calls; all 23 decode + encode fixtures must still pass unchanged.
-
-Then §4 Step 2 (caller-owned I/O glue — lands inside the logging app when that work begins) and §4 Step 3 (delete v1's `Service` shell from memory — no code action on main, just a note).
+- **Gio UI spike** (exploratory): evening-scale throwaway — live freq/mode readout + one-line QSO entry, wired to a local catloop. Decision point: commit to Gio for the v2 logging app, or fall back to Wails-with-fixed-IPC.
+- Then the logging app scaffold proper — and with it, §4 Step 2 (caller-owned I/O glue: `serial.Port` + `cat.Decode` read loop in the logging app) and `internal/rigconfig` (the composition function, with real operator-override semantics driven by the logging app's actual config shape).
+- §4 Step 3 is a doc note only; no code change.
 
 ### Session 15 work: bridge design simplified, YAGNI question on the table
 

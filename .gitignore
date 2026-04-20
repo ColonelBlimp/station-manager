@@ -9,3 +9,4 @@ build/
 apps/*
 web/*
 /internal/cat/config.json
+catcli

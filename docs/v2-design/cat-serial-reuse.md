@@ -35,7 +35,7 @@
 
 Non-blocking flags from the same review, also resolved: small resource leak in `Open` (now closes the port if `SetReadTimeout` fails); `DEV.md` + `README.md` merged into a Go-conventional `doc.go` (the stale `github.com/Station-Manager/...` import paths came with that consolidation); `cmd/catcli` now traps SIGINT/SIGTERM to close the port cleanly; `Config` struct fields documented with per-field defaults.
 
-Still outstanding — see §7.4: `cmd/catcli` lives at `internal/serial/cmd/catcli/` but per `structure.md` diagnostic binaries belong at top-level `cmd/catcli/`. Relocation is a follow-up, not a blocker.
+`cmd/catcli` was relocated from `internal/serial/cmd/catcli/` to top-level `cmd/catcli/` and extended with a `-rig <id>` flag that pipes framed responses through `cat.Decode` for live rig verification (see §7.4).
 
 ### 1b. `internal/cat` — **YELLOW**, needs carve-out
 
@@ -236,6 +236,8 @@ With `Driver` as a value type and I/O owned by the caller, running two rigs mean
 | 2026-04-20 | Rig JSONs sourced from v1's `internal/config/defaults.go` | v1's runtime rig config is battle-tested from daily operation. Lifting it verbatim gives us confidence-by-provenance rather than confidence-by-synthetic-validation. Structure choices that came with the lift: command bursts (INIT / READ / PLAYBACK), ALL-CAPS tag names (VFOAFREQ etc.), MD0/MD1 as separate prefixes (not one MD with a VFO marker). |
 | 2026-04-20 | FTdx10 rig JSON cross-checked against Yaesu CAT manual (FTDX10_CAT_OM_ENG_2308-F) | Every command, state prefix, marker length, and value mapping in `yaesu-ftdx10.json` was verified against the official CAT reference. All 16 mode codes (incl. `E=PSK`, `F=DATA-FM-N`), `ID P1=0761 → FTdx10`, `FA/FB` 9-digit Hz range `000030000-075000000`, `ST 0/1/2`, `VS 0/1`, `PC 005-100`, `PB0%s;` template, and `AI` behaviour (USB-only, resets to 0 at power-off — hence the `INIT` burst) all confirmed. Only cosmetic gap: manual labels `ST=2` as "SPLIT ON + 5 kHz Up" where v1 renders "ON+" — UX label choice, not correctness. |
 | 2026-04-20 | FT-710 rig JSON cross-checked against Yaesu CAT manual (FT-710_CAT_OM_ENG_2306-C) | Two rig-specific differences from the FTdx10 were found and applied to `yaesu-ft710.json`: (1) identity code is `0800` (not `0761` — added `{"0800": "FT-710"}` mapping to the `IDENTITY` state); (2) `SPLIT` only has values `0=OFF` and `1=ON` — no `2=ON+` like the FTdx10, so the `{"2": "ON+"}` value_mapping was removed. Confirmed identical to the FTdx10: all 16 `MD` mode codes (incl. `E=PSK`, `F=DATA-FM-N`), `FA/FB` 9-digit Hz range, `PC` 3-digit range 005-100, `PB0%s;` template, `AI` behaviour (USB-only, resets at power-off). `VS P1` is semantically different (the manual describes it as main-band/sub-band VFO assignment rather than "VFO-A/B operation") but operationally equivalent — kept the v1 `VFO-A`/`VFO-B` labels. |
+| 2026-04-20 | End-to-end CAT pipeline validated against a live FTdx10 | `cmd/catcli -device /dev/ttyUSB0 -rig yaesu-ftdx10 -init -listen` successfully sent the `INIT` burst, received the rig's `ID0761;` response (decoded as `IDENTITY: FTdx10`), tracked live `FA` frequency broadcasts as the operator turned the VFO knob (decoded to `VFOAFREQ: <9 digits>`), and decoded mode changes (`MD02 → MAINMODE: USB`). The serial + codec pipeline works. |
+| 2026-04-20 | Minimal state table retained — do not expand per-rig state coverage for its own sake | The FTdx10 in AI mode pushes state for ~15 prefixes beyond v1's configured 8 (`IF`, `SS`, `NB`, `RF`, `AC`, `RM`, `RG`, `MG`, `ML`, `GT`, `SH`, `BI`, `KR`, plus the mystery `FD`). v1 ignored them; v2 flags them as `[no match]` in catcli and the decoder returns `ErrNoMatch` at the API level. The logging app only needs frequency, mode, and identity for the QSO record, so this is fine. Expand the state table only when a specific downstream feature needs a specific prefix — don't pre-broaden. |
 | 2026-04-20 | External override via `cat.RegisterExternalDir(path)`, stubbed | Hybrid pattern (embedded + external). Package-level func is ergonomic; realistically one override dir per install. Stub today, implement when a real need emerges. |
 | 2026-04-20 | `SerialConfig` / `CATConfig` are fields of `RigConfig`, never standalone | Rig + CAT + serial are one unit. A bare `SerialConfig` at the top of any config file would be meaningless. |
 
@@ -265,11 +267,17 @@ v1's `internal/cat/helpers.go` uses `github.com/go-playground/validator/v10` for
 
 Lean: drop from `internal/cat` for sure; decide for config-load separately.
 
-### 7.4 `cmd/catcli` — relocation outstanding
+### 7.4 `cmd/catcli` — relocated and extended (closed)
 
-Decided: keep. The CLI is useful for poking rigs while developing the logging app, and porting was zero-effort (it came across with the rest of the package).
+Decided: keep and grow. Session 16 landing:
 
-Outstanding: it currently sits at `internal/serial/cmd/catcli/` — an unusual nesting inherited from v1's standalone-package shape. Per `structure.md`, binaries live at top-level `cmd/<name>/`. Move to `cmd/catcli/` when convenient; `doc.go`'s reference to `cmd/catcli` will become accurate once moved. Not a blocker for any current work.
+- Relocated from `internal/serial/cmd/catcli/` to top-level `cmd/catcli/` per `structure.md`.
+- Extended with `-rig <id>` flag: when set, catcli looks up the rig in the embedded database, uses its serial defaults, and pipes every framed response through `cat.Decode`, printing the raw bytes plus the extracted tag map on each line.
+- Extended with `-init` flag: when set with `-rig`, sends the rig's `INIT` command (via `cat.Encode`) at startup. For Yaesu rigs this enables AI push-state mode.
+- Typical workflow: `catcli -device /dev/ttyUSB0 -rig yaesu-ftdx10 -init -listen` — gives you a live decoded state stream from the radio.
+- No-rig behaviour preserved: catcli without `-rig` works exactly as before (pure serial diagnostic, raw bytes in/out).
+
+This is also the first end-to-end wiring of `serial.Port` + `cat.Lookup` + `cat.Decode` / `Encode` against real hardware. The inline `serial.Config`-from-`RigSerial` conversion (~15 LOC in catcli) foreshadows what `internal/rigconfig` will do more principally once the logging app needs it.
 
 ### 7.5 `types.RigConfig` exact shape
 
@@ -309,6 +317,7 @@ Deferred until a concrete need surfaces.
 - **Test fixture sourcing.** Step 0's characterization tests need real rig outputs. Simulated bytes work for most cases, but there are edge cases (malformed responses, partial lines across reads, etc.) where real captures are more trustworthy. Plan: capture a representative session from the operator's FT-710 during a normal operating session before starting Step 1.
 - **Concurrency contract for the caller.** The carved-out codec is pure, so it's trivially safe for concurrent `Decode` / `Encode` calls. But the caller (logging app's glue) owns a single `serial.Port`, which is not concurrent-safe for simultaneous reads+writes on the same goroutine. The glue pattern needs to be documented once written — probably a single read goroutine + mutex-guarded writes, matching v1's pattern.
 - **Error taxonomy.** v1's `internal/cat` returns `errors.Op`-tagged errors. The carved-out codec will too, but the specific ops (`cat.Decode`, `cat.Encode`, `cat.DriverLookup`, `cat.RigLookup`, etc.) get named during Step 1. Not pre-decidable here.
+- **Mystery `FD` prefix on the FTdx10.** Observed during live rig validation: the FTdx10 emits `FD000<9-digit-Hz>` immediately after every `FA` broadcast when AI mode is on. It is not in the FTDX10_CAT_OM_ENG_2308-F command index. Harmless today (decoder returns `ErrNoMatch`), but worth clarifying — possibly a newer firmware addition, or a non-documented sidecar to FA. Investigate if the logging app ever needs whatever value this carries (possibly the display-formatted frequency vs VFO-A hardware frequency).
 
 ---
 
