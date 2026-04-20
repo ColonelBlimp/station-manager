@@ -1,0 +1,68 @@
+{
+  "id": "yaesu-ft710",
+  "name": "Yaesu FT-710",
+  "manufacturer": "Yaesu",
+  "model": "FT-710",
+  "family": "yaesu",
+  "description": "Yaesu FT-710 HF/50MHz SDR transceiver. ASCII CAT terminated by ';'. Supports push-state updates via AI (Auto-Information) mode. Commands and states mirror the FTdx10 and share the Yaesu ASCII family; individual commands are expected to match but should be verified against the FT-710 CAT reference.",
+  "terminator": ";",
+  "serial": {
+    "baud_rate": 38400,
+    "data_bits": 8,
+    "stop_bits": 1,
+    "parity": "none",
+    "line_delimiter": ";",
+    "read_timeout_ms": 200
+  },
+  "timing": {
+    "listener_interval_ms": 50,
+    "listener_read_timeout_ms": 40
+  },
+  "commands": [
+    {"name": "enable_auto_info",  "cmd": "AI1;"},
+    {"name": "disable_auto_info", "cmd": "AI0;"},
+    {"name": "read_freq_a",       "cmd": "FA;"},
+    {"name": "read_freq_b",       "cmd": "FB;"},
+    {"name": "read_mode",         "cmd": "MD0;"},
+    {"name": "read_info",         "cmd": "IF;"}
+  ],
+  "states": [
+    {
+      "prefix": "FA",
+      "markers": [
+        {"tag": "freq_vfo_a_hz", "index": 0, "length": 9}
+      ]
+    },
+    {
+      "prefix": "FB",
+      "markers": [
+        {"tag": "freq_vfo_b_hz", "index": 0, "length": 9}
+      ]
+    },
+    {
+      "prefix": "MD",
+      "markers": [
+        {"tag": "mode_vfo", "index": 0, "length": 1, "value_mappings": [
+          {"key": "0", "value": "main"},
+          {"key": "1", "value": "sub"}
+        ]},
+        {"tag": "mode", "index": 1, "length": 1, "value_mappings": [
+          {"key": "1", "value": "LSB"},
+          {"key": "2", "value": "USB"},
+          {"key": "3", "value": "CW-U"},
+          {"key": "4", "value": "FM"},
+          {"key": "5", "value": "AM"},
+          {"key": "6", "value": "RTTY-L"},
+          {"key": "7", "value": "CW-L"},
+          {"key": "8", "value": "DATA-L"},
+          {"key": "9", "value": "RTTY-U"},
+          {"key": "A", "value": "DATA-FM"},
+          {"key": "B", "value": "FM-N"},
+          {"key": "C", "value": "DATA-U"},
+          {"key": "D", "value": "AM-N"},
+          {"key": "E", "value": "C4FM"}
+        ]}
+      ]
+    }
+  ]
+}

@@ -138,15 +138,19 @@ rigs:
 
 The operator config does **not** contain CAT command tables or state markers — those come from the rig database by `model` lookup. The operator config belongs to whichever client owns rig control (the logging app for now); it is not part of the daemon's config, per the narrow-daemon invariant.
 
-### 3c. Rig, CAT, and serial are one unit
+### 3c. Three types, three roles — no composition in `types`
 
-A rig is defined by its serial port settings **and** its CAT command set — you do not have one without the other. This has structural consequences for the types:
+A rig is defined by its serial port settings **and** its CAT command set — you do not have one without the other. But that unity is a runtime concept, not a type-level one. Three distinct types carry different responsibilities:
 
-- `types.SerialConfig` is a **field of** `types.RigConfig`, not a standalone top-level config.
-- `types.CATConfig` (command/state tables) is similarly a field of `RigConfig`.
-- A rig-database entry (`RigDefinition`, embedded JSON) supplies default `Serial` values and the authoritative `CAT` tables; operator config supplies `id`, `model`, `port`, and optional `Serial` overrides.
+- **`types.RigConfig`** (canonical operator DTO — `internal/types/rig.go`): what the operator writes in their config file. Stdlib-only fields: `ID`, `Model`, `Port`, and an `Overrides` block that optionally shadows the rig database's defaults. This is what gets JSON-loaded from the operator's config.
+- **`cat.RigDefinition`** (rig-database entry — `internal/cat/rig.go`): ships with SM, loaded from embedded `rigs/*.json`. Contains the authoritative CAT command table, state parsers, terminator, and per-rig serial **defaults**. No port name — that's operator-specific.
+- **`serial.Config`** (runtime port config — `internal/serial/config.go`): the concrete type `serial.Open` accepts, with `go.bug.st/serial` enum values.
 
-This rules out putting a bare `SerialConfig` at the top of any config file. It also means `SerialConfig` can live in `internal/types` as a standalone Go type (it's a shared payload shape), but it never appears as a root-level entity anywhere on disk or in a runtime config.
+**Why `RigConfig` lives in `types` and not composed with `serial.Config`:** `types` is stdlib-only (load-bearing invariant, see `internal/types/doc.go`). If `RigConfig` embedded `serial.Config`, `types` would transitively import `go.bug.st/serial`, breaking the invariant. Instead, `RigConfig.Overrides` holds primitive stdlib fields (`int`, `string`), and the "put it all together" step happens in a separate composition function.
+
+**The composition** — blending `types.RigConfig` + `cat.Lookup(Model)` → `serial.Config` ready for `serial.Open` — is ~40 LOC: resolve rig-database defaults, layer operator overrides on top, parse the `parity` string and `line_delimiter` string into `go.bug.st/serial` types. Home: a new `internal/rigconfig` package introduced when the logging app is built (first consumer). The FT8/4 app is the expected second consumer and will import the same package. Until one of those apps is under construction, the composition function doesn't need to exist — `cat.Lookup(id)` returning a `RigDefinition` is sufficient infrastructure for the §4 carve-out.
+
+**What this rules out:** bare `serial.Config` at the top of any on-disk config file; a single monolithic "rig" type that tries to be DTO and runtime config at once; `types` importing `serial` or `cat` or `go.bug.st/serial`.
 
 ---
 
@@ -260,12 +264,14 @@ Outstanding: it currently sits at `internal/serial/cmd/catcli/` — an unusual n
 
 ### 7.5 `types.RigConfig` exact shape
 
-§3c sketches `RigConfig = {ID, Model, Port, Serial, CAT}`. The exact field set and JSON schema is still open:
-- Which `Serial` fields are operator-overridable vs authoritative-from-model?
-- Does `Port` live at top level of `RigConfig` or nested inside `Serial`? Lean: top level — operators always set it, the rest of `Serial` is rarely touched, so surfacing `port` makes the common operator-facing JSON cleaner.
-- Final field list for the `RigDefinition` JSON (embedded, not operator-facing).
+§3c settles the type split (DTO in `types`, rig database in `cat`, runtime config in `serial`, composition in a future `internal/rigconfig`). Remaining opens on the DTO itself:
 
-Resolve when the first rig JSON is actually written.
+- **Which fields go in `Overrides`?** Proposed set: `BaudRate`, `DataBits`, `StopBits`, `Parity`, `LineDelimiter`, `ReadTimeoutMS`. Confirm this covers every realistic operator override — in particular, whether operators ever want to override CAT timing (`listener_interval_ms`) per install.
+- **`Port` at top level or inside `Overrides`?** Lean: top level. Operators always set it, always for this install. The rest of the block is rarely touched, so surfacing `Port` makes the common operator JSON cleaner.
+- **Zero-value-means-inherit vs pointer-to-override?** Lean: zero-value-means-inherit. Operators rarely set "parity = none" explicitly when the rig default is already none; a zero on the wire is the same as "use rig default." Cost: you can't distinguish "operator explicitly set zero" from "operator omitted the field." This is only a concern if a real override-to-zero case exists; for now none does.
+- **Overall operator-config file shape** — does the logging app's config wrap rigs in `rigs: [...]` or something else? That's a logging-app-config decision, not a `types.RigConfig` one.
+
+Settle when the logging app is being built and the first real config file gets written.
 
 ### 7.6 Kenwood driver status
 
@@ -299,13 +305,23 @@ Deferred until a concrete need surfaces.
 
 ## 9. Session pick-up point
 
-`internal/serial` is green on `main` as of session 16 (builds, tests pass, doc.go published). Next session starts with the data layer:
+Data layer landed in session 16:
 
-1. Author `yaesu-ftdx10.json` and `yaesu-ft710.json`. The first one forces the schema decision in §7.7; treat it as the de-facto schema and formalise once both files agree.
-2. Stand up `internal/cat/rigdb.go` with `go:embed rigs/*.json`, `Lookup(id)`, `List()`, and a stubbed `RegisterExternalDir(path)` (returns nil, does nothing; real loader deferred per §7.8).
-3. Define `RigConfig` per §3c and §7.5. Open question: which package owns it? `internal/cat` is the natural home since it composes `serial.Config` and the rig database; putting it in `internal/types` would require `types` to import `serial`, breaking the stdlib-only invariant.
-4. With the data layer in place, begin the carve-out: §4 Step 0 (characterization tests against v1) → Step 1 (extract pure codec) → Step 2 (caller-owned I/O glue in the logging app).
+- `internal/serial` green (builds, tests pass, doc.go published).
+- `internal/cat/rigs/yaesu-ftdx10.json` and `yaesu-ft710.json` authored (first-cut schema — FT-710 command set to be verified by hand against the manual).
+- `internal/cat/rig.go` + `rigdb.go` + `rigdb_test.go`: `go:embed` loader, `Lookup(id)`, `List()`, stubbed `RegisterExternalDir(dir)`. Five tests passing.
+- `types.RigConfig` + `types.RigOverrides` shaped per §3c (DTO-only, stdlib-friendly, no composition of `serial.Config` inside `types`).
+
+Next:
+
+1. Characterization tests (§4 Step 0): capture representative rig outputs and freeze v1's parser behaviour with table-driven tests. Start from what v1's `processor_test.go` already covers; add real-capture fixtures where synthetic bytes aren't enough.
+2. Extract the pure codec (§4 Step 1): port the prefix-match + marker-extraction logic from v1 into `cat.Encode` / `cat.Decode`. Pass the §4 Step 0 table unchanged.
+3. The `internal/rigconfig` composition function — landing criterion is "the logging app is under construction and needs it," not calendar. Expected second consumer is the FT8/4 app (if built).
+
+Deferred follow-ups:
+
+- §7.4: relocate `cmd/catcli` from `internal/serial/cmd/` to top-level `cmd/catcli/`.
+- §7.5: settle the `Overrides` field set and `Port`-at-top-level call against the logging app's real config file.
+- §7.8: real implementation of `RegisterExternalDir`.
 
 The §7.1 "carve-out before bridge YAGNI" recommendation still stands: do the carve-out next, regardless of the bridge decision.
-
-Relocation of `cmd/catcli` (§7.4) is a separate low-priority follow-up; fit it in whenever.
