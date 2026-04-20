@@ -73,6 +73,9 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 	// QSO draft support
 	mux.HandleFunc("GET /v1/contact-history", s.handleContactHistory)
 
+	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
+	mux.HandleFunc("GET /v1/events", s.handleEvents)
+
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)

@@ -93,6 +93,16 @@ func (h *Hub) Subscribe() (<-chan Event, func()) {
 	return ch, unsub
 }
 
+// SubscriberCount returns the number of active subscribers. Primarily
+// useful for test barriers ("wait until the handler has subscribed
+// before publishing") and for debug introspection; production code
+// should not branch on it.
+func (h *Hub) SubscriberCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subs)
+}
+
 // Close disconnects every subscriber and marks the hub closed so
 // later Publish calls are no-ops and later Subscribe calls return
 // an already-closed channel. Safe to call more than once.
