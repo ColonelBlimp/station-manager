@@ -35,10 +35,32 @@ var decodeCases = []decodeCase{
 		expected: map[string]string{"IDENTITY": ""},
 	},
 	{
-		name:     "ID raw passthrough on FT-710 (no value_mapping)",
+		name:     "ID on FT-710 — manual says P1=0800 is the FT-710 identifier",
 		rigID:    "yaesu-ft710",
-		input:    "ID0000",
-		expected: map[string]string{"IDENTITY": "0000"},
+		input:    "ID0800",
+		expected: map[string]string{"IDENTITY": "FT-710"},
+	},
+	{
+		name:     "ID on FT-710 unknown code → empty string (v1 quirk)",
+		rigID:    "yaesu-ft710",
+		input:    "ID9999",
+		expected: map[string]string{"IDENTITY": ""},
+	},
+
+	// --- FT-710-specific: ST only supports 0/1 (no "ON+"). ST2 decodes to
+	// empty string per v1's unmapped-value quirk, unlike the FTdx10 which
+	// maps 2 → "ON+". This fixture pins the rig-specific difference.
+	{
+		name:     "ST=2 on FT-710 → empty (rig only has 0/1, no ON+)",
+		rigID:    "yaesu-ft710",
+		input:    "ST2",
+		expected: map[string]string{"SPLIT": ""},
+	},
+	{
+		name:     "ST=1 on FT-710 → ON",
+		rigID:    "yaesu-ft710",
+		input:    "ST1",
+		expected: map[string]string{"SPLIT": "ON"},
 	},
 
 	// --- FA / FB: 9-digit frequency, no mappings ---

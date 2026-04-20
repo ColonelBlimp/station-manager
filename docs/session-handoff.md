@@ -28,9 +28,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ### Session 16 work (CAT/serial data layer + characterization tests)
 
-**Session ended mid-task — laptop ran out of power during FT-710 manual verification. FT-710 state below is partial.**
-
-**What landed and was committed earlier in the session:**
+**What landed:**
 
 - `internal/serial` brought across from v1, audited, drift-fixed (drift = v1 errors API `.Msg`/`.Err` → v2 `.WithMsg`/`.WithErr`, `types.SerialConfig` moved into the serial package as `serial.Config`, `go.bug.st/serial v1.6.4` added to go.mod, tiny Open() port-leak fix, cmd/catcli SIGINT handler, README+DEV merged into doc.go).
 - `internal/cat/rigs/yaesu-ftdx10.json` and `yaesu-ft710.json` authored, lifted from v1's battle-tested `internal/config/defaults.go` on the v1 branch (3 commands INIT/READ/PLAYBACK, 8 states ID/FA/FB/ST/VS/MD0/MD1/PC, v1 tag names VFOAFREQ etc.).
@@ -41,29 +39,20 @@ precisely so we don't re-derive state or redo finished work.
 - `docs/v2-design/cat-serial-reuse.md` continuously updated — §1a blockers resolved, §3 rig-database story, §3c three-type split, §4 Step 0 marked done, §6 decision log extended (incl. v1-provenance entry and FTdx10 manual-verification entry), §7.5 updated, §9 session pickup updated.
 - FTdx10 verified against `FTDX10_CAT_OM_ENG_2308-F.pdf` — every command/state/mode-code confirmed. Recorded in §6 decision log.
 
-**In progress at power loss (NOT committed):**
+**FT-710 manual verification (completed at session resume):**
 
-- **FT-710 manual verification against `FT-710_CAT_OM_ENG_2306-C.pdf`.** Confirmed so far:
-  - `ID = 0800` (Fixed) — FT-710's identity code. JSON currently has no value_mapping; needs `{"key": "0800", "value": "FT-710"}`.
-  - `MD` — identical 16 mode codes to FTdx10 incl. `E=PSK`, `F=DATA-FM-N`. ✓
-  - `FA/FB` — 9-digit Hz, range `000030000-075000000`. ✓
-  - `PC` — 3 digits, 005-100. ✓
-  - `PB` — `PB0x;` same wire format as FTdx10 (labels differ — "MESSAGE" vs "DVS" — but template matches). ✓
-  - `AI` — same as FTdx10 (AI=0 at power-off, re-send AI1; each session). ✓
-  - **`ST` DIFFERS from FTdx10** — FT-710 only has `0=OFF, 1=ON`, no `2=ON+` like FTdx10. JSON needs `ST` value_mappings trimmed to 2 entries.
-  - `VS` — NOT YET READ. Manual page with VS was requested but not fetched before power loss.
-- JSON edits NOT yet applied. §6 decision log entry for FT-710 verification NOT yet added.
+- `ID = 0800 (Fixed)` — FT-710's identity code. Added `{"key": "0800", "value": "FT-710"}` to the `IDENTITY` state in `yaesu-ft710.json`.
+- `ST` on FT-710 only supports `0=OFF` / `1=ON` — no `2=ON+` like the FTdx10. Removed the `{"key": "2", "value": "ON+"}` mapping.
+- `VS` on FT-710: `P1=0: MAIN Band: VFO-A / SUB Band: VFO-B`, `P1=1: MAIN Band: VFO-B / SUB Band: VFO-A`. Operationally equivalent to FTdx10's "VFO-A/B operation" — kept v1's `VFO-A` / `VFO-B` labels.
+- `MD`, `FA`/`FB`, `PC`, `PB`, `AI` — identical to FTdx10 (all 16 mode codes incl. `E=PSK`/`F=DATA-FM-N`, 9-digit Hz range `000030000-075000000`, 3-digit power 005-100, `PB0%s;` template, AI USB-only with power-off reset).
+- Fixture tests updated: replaced the old "raw passthrough" FT-710 ID case with `ID0800 → IDENTITY: "FT-710"` and `ID9999 → IDENTITY: ""`; added `ST=2 on FT-710 → SPLIT: ""` to pin the rig-specific difference. 41 subtests green.
+- `cat-serial-reuse.md` §6 decision log has the matching FT-710 verification entry.
 
-### Next session — resume FT-710 verification
+### Next session
 
-1. Read `FT-710_CAT_OM_ENG_2306-C.pdf` pages 22-25 for the VS (VFO SELECT) command. Confirm whether it matches FTdx10's `0: VFO-A Operation / 1: VFO-B Operation`.
-2. Apply two edits to `internal/cat/rigs/yaesu-ft710.json`:
-   - Add `{"key": "0800", "value": "FT-710"}` to the `ID` state's `value_mappings`.
-   - Remove the `{"key": "2", "value": "ON+"}` entry from the `ST` state's `value_mappings` (FT-710 doesn't have it).
-   - Any VS-driven edit depending on what page 22+ says.
-3. Re-run `go test ./internal/cat/...` — nothing should break (fixtures don't currently test FT-710 ST or ID value-mapping specifics, but worth adding a fixture for `ID0800 → IDENTITY: "FT-710"` and, if ST=2 isn't in FT-710, verifying it decodes to empty string).
-4. Add a §6 decision log entry in `cat-serial-reuse.md` for the FT-710 manual verification (matching the FTdx10 entry in shape).
-5. Once FT-710 is verified, proceed to §4 Step 1 of the carve-out: implement `cat.Decode(def RigDefinition, line []byte)` and `cat.Encode(def RigDefinition, name string, args ...any)`, port logic from `referenceDecode` / `referenceEncode`, swap reference* → cat.* in fixture tests, all must still pass.
+§4 Step 1 of the carve-out: implement `cat.Decode(def RigDefinition, line []byte) (map[string]string, error)` and `cat.Encode(def RigDefinition, name string, args ...any) ([]byte, error)`. Port logic from the frozen `referenceDecode` / `referenceEncode` / `referenceLookup` in `reference_test.go`. Swap the `reference*` calls in `decode_fixtures_test.go` / `encode_fixtures_test.go` for `cat.*` calls; all 23 decode + encode fixtures must still pass unchanged.
+
+Then §4 Step 2 (caller-owned I/O glue — lands inside the logging app when that work begins) and §4 Step 3 (delete v1's `Service` shell from memory — no code action on main, just a note).
 
 ### Session 15 work: bridge design simplified, YAGNI question on the table
 

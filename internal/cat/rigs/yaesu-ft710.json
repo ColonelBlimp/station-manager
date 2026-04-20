@@ -4,7 +4,7 @@
   "manufacturer": "Yaesu",
   "model": "FT-710",
   "family": "yaesu",
-  "description": "Yaesu FT-710 HF/50MHz SDR transceiver. Mirrors the FTdx10 schema (same Yaesu ASCII+';' family, same command set). Less battle-tested than the FTdx10 — commands are assumed compatible and the IDENTITY value_mapping is left empty until the actual 4-char rig id is captured from the radio.",
+  "description": "Yaesu FT-710 HF/50MHz SDR transceiver. Verified against FT-710_CAT_OM_ENG_2306-C. Mostly mirrors the FTdx10 (same Yaesu ASCII+';' family, same mode codes, same FA/FB/PC/PB/AI/VS formats). Differences from the FTdx10: identity code is 0800 (not 0761); SPLIT only has 0/1 (no ON+). VS P1 semantically maps main-band to VFO-A or VFO-B (operationally equivalent to FTdx10).",
   "terminator": ";",
   "serial": {
     "baud_rate": 38400,
@@ -30,7 +30,9 @@
     {
       "prefix": "ID",
       "markers": [
-        {"tag": "IDENTITY", "index": 0, "length": 4}
+        {"tag": "IDENTITY", "index": 0, "length": 4, "value_mappings": [
+          {"key": "0800", "value": "FT-710"}
+        ]}
       ]
     },
     {
@@ -50,8 +52,7 @@
       "markers": [
         {"tag": "SPLIT", "index": 0, "length": 1, "value_mappings": [
           {"key": "0", "value": "OFF"},
-          {"key": "1", "value": "ON"},
-          {"key": "2", "value": "ON+"}
+          {"key": "1", "value": "ON"}
         ]}
       ]
     },
