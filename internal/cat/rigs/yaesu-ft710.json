@@ -4,7 +4,7 @@
   "manufacturer": "Yaesu",
   "model": "FT-710",
   "family": "yaesu",
-  "description": "Yaesu FT-710 HF/50MHz SDR transceiver. ASCII CAT terminated by ';'. Supports push-state updates via AI (Auto-Information) mode. Commands and states mirror the FTdx10 and share the Yaesu ASCII family; individual commands are expected to match but should be verified against the FT-710 CAT reference.",
+  "description": "Yaesu FT-710 HF/50MHz SDR transceiver. Mirrors the FTdx10 schema (same Yaesu ASCII+';' family, same command set). Less battle-tested than the FTdx10 — commands are assumed compatible and the IDENTITY value_mapping is left empty until the actual 4-char rig id is captured from the radio.",
   "terminator": ";",
   "serial": {
     "baud_rate": 38400,
@@ -12,41 +12,62 @@
     "stop_bits": 1,
     "parity": "none",
     "line_delimiter": ";",
-    "read_timeout_ms": 200
+    "read_timeout_ms": 8,
+    "write_timeout_ms": 20,
+    "rts": true,
+    "dtr": true
   },
   "timing": {
-    "listener_interval_ms": 50,
-    "listener_read_timeout_ms": 40
+    "listener_interval_ms": 10,
+    "listener_read_timeout_ms": 8
   },
   "commands": [
-    {"name": "enable_auto_info",  "cmd": "AI1;"},
-    {"name": "disable_auto_info", "cmd": "AI0;"},
-    {"name": "read_freq_a",       "cmd": "FA;"},
-    {"name": "read_freq_b",       "cmd": "FB;"},
-    {"name": "read_mode",         "cmd": "MD0;"},
-    {"name": "read_info",         "cmd": "IF;"}
+    {"name": "INIT",     "cmd": "AI1;ID;"},
+    {"name": "READ",     "cmd": "FA;FB;ST;VS;MD0;MD1;PC;"},
+    {"name": "PLAYBACK", "cmd": "PB0%s;"}
   ],
   "states": [
     {
+      "prefix": "ID",
+      "markers": [
+        {"tag": "IDENTITY", "index": 0, "length": 4}
+      ]
+    },
+    {
       "prefix": "FA",
       "markers": [
-        {"tag": "freq_vfo_a_hz", "index": 0, "length": 9}
+        {"tag": "VFOAFREQ", "index": 0, "length": 9}
       ]
     },
     {
       "prefix": "FB",
       "markers": [
-        {"tag": "freq_vfo_b_hz", "index": 0, "length": 9}
+        {"tag": "VFOBFREQ", "index": 0, "length": 9}
       ]
     },
     {
-      "prefix": "MD",
+      "prefix": "ST",
       "markers": [
-        {"tag": "mode_vfo", "index": 0, "length": 1, "value_mappings": [
-          {"key": "0", "value": "main"},
-          {"key": "1", "value": "sub"}
-        ]},
-        {"tag": "mode", "index": 1, "length": 1, "value_mappings": [
+        {"tag": "SPLIT", "index": 0, "length": 1, "value_mappings": [
+          {"key": "0", "value": "OFF"},
+          {"key": "1", "value": "ON"},
+          {"key": "2", "value": "ON+"}
+        ]}
+      ]
+    },
+    {
+      "prefix": "VS",
+      "markers": [
+        {"tag": "SELECT", "index": 0, "length": 1, "value_mappings": [
+          {"key": "0", "value": "VFO-A"},
+          {"key": "1", "value": "VFO-B"}
+        ]}
+      ]
+    },
+    {
+      "prefix": "MD0",
+      "markers": [
+        {"tag": "MAINMODE", "index": 0, "length": 1, "value_mappings": [
           {"key": "1", "value": "LSB"},
           {"key": "2", "value": "USB"},
           {"key": "3", "value": "CW-U"},
@@ -60,8 +81,37 @@
           {"key": "B", "value": "FM-N"},
           {"key": "C", "value": "DATA-U"},
           {"key": "D", "value": "AM-N"},
-          {"key": "E", "value": "C4FM"}
+          {"key": "E", "value": "PSK"},
+          {"key": "F", "value": "DATA-FM-N"}
         ]}
+      ]
+    },
+    {
+      "prefix": "MD1",
+      "markers": [
+        {"tag": "SUBMODE", "index": 0, "length": 1, "value_mappings": [
+          {"key": "1", "value": "LSB"},
+          {"key": "2", "value": "USB"},
+          {"key": "3", "value": "CW-U"},
+          {"key": "4", "value": "FM"},
+          {"key": "5", "value": "AM"},
+          {"key": "6", "value": "RTTY-L"},
+          {"key": "7", "value": "CW-L"},
+          {"key": "8", "value": "DATA-L"},
+          {"key": "9", "value": "RTTY-U"},
+          {"key": "A", "value": "DATA-FM"},
+          {"key": "B", "value": "FM-N"},
+          {"key": "C", "value": "DATA-U"},
+          {"key": "D", "value": "AM-N"},
+          {"key": "E", "value": "PSK"},
+          {"key": "F", "value": "DATA-FM-N"}
+        ]}
+      ]
+    },
+    {
+      "prefix": "PC",
+      "markers": [
+        {"tag": "TXPWR", "index": 0, "length": 3}
       ]
     }
   ]

@@ -158,16 +158,22 @@ A rig is defined by its serial port settings **and** its CAT command set — you
 
 Order matters. Skipping step 0 is the thing CLAUDE.md's "characterization tests before refactoring" lesson exists to prevent.
 
-### Step 0 — characterization tests against v1's behaviour
+### Step 0 — characterization tests against v1's behaviour — **LANDED session 16**
 
-Before touching `internal/cat`, freeze what it currently does:
+Status: done. `internal/cat/reference_test.go` + `decode_fixtures_test.go` + `encode_fixtures_test.go` pin the expected behaviour as a frozen reference.
 
-- Collect representative input lines for each driver (Yaesu AUTO-mode output samples, Icom CI-V frames, Kenwood responses). Where possible, capture real bytes from the operator's rigs rather than synthesising them.
-- Write table-driven tests: `(driver config, input bytes) → expected CatStatus`.
-- Write table-driven tests for the send path: `(driver config, high-level command) → expected wire bytes`.
-- Run them against the v1 package (on the `v1` branch or via a temporary test harness on main). They must all pass before any carve-out code is written.
+Approach taken: rather than branch-switching to `v1` and running fixtures through v1's actual `lineProcessor`, v1's parser logic is mirrored inline as `referenceLookup` / `referenceDecode` / `referenceEncode` in `reference_test.go`. The mirror is ~60 LOC, byte-for-byte faithful to v1's `internal/cat/internal.go` (lookup) and `processor.go` (decode), and will not change. Fixtures run against the mirror today (14 decode + 9 encode cases, all pass). When `cat.Decode` / `cat.Encode` are written, they must produce identical outputs for the same fixtures.
 
-These tests are the acceptance criteria for the carve-out: the new pure codec must pass the identical test table.
+What's covered:
+- Decode: FA/FB frequency extraction, MD mode-plus-VFO with value mappings, case-insensitive prefix lookup, longest-prefix-wins, out-of-range / clamped / empty-slice marker handling, unknown prefix → no match, empty input → no match, v1's "empty string for unmatched value mapping" quirk.
+- Encode: plain templates for both rigs, unknown command → error. No `%s` template fixtures because none of the current rig JSONs use template args; add when the first `%s` command lands.
+
+What's not covered (follow-up if needed):
+- Binary Icom CI-V framing — no Icom rig JSON exists yet.
+- Real rig captures — current fixtures are synthesised from the rig JSON schema. A live capture from the FTdx10 or FT-710 could surface edge cases (partial lines across reads, spurious bytes) that the reference doesn't exercise. The current fixtures are enough to pin the happy path and documented quirks; captures would extend coverage, not change acceptance criteria.
+- Verification against v1's actual running code. The mirror is inspectable by eye against v1; if doubt emerges, a git worktree on `v1` can run the same fixtures through v1's real `lineProcessor` at any time.
+
+These tests are the acceptance criteria for the carve-out: `cat.Decode` and `cat.Encode`, once written, must pass the identical fixture tables.
 
 ### Step 1 — extract the pure codec
 
@@ -227,6 +233,8 @@ With `Driver` as a value type and I/O owned by the caller, running two rigs mean
 | 2026-04-20 | Two-layer config model: rig database (shared) + operator config (per-install) | Operator config stays tiny; rig database is SM's static knowledge and scales as new rigs are supported without bloating per-install config. |
 | 2026-04-20 | Rig database embedded in `internal/cat` via `go:embed` | Rig definitions are the data the codec consumes. Embedding them in the codec package means any binary importing `cat` gets the database for free — no per-app duplication. |
 | 2026-04-20 | Initial builtins: `yaesu-ftdx10.json`, `yaesu-ft710.json` | Operator's two rigs. Both same Yaesu ASCII+`;` family — covers the driver family code path completely on day one. |
+| 2026-04-20 | Rig JSONs sourced from v1's `internal/config/defaults.go` | v1's runtime rig config is battle-tested from daily operation. Lifting it verbatim gives us confidence-by-provenance rather than confidence-by-synthetic-validation. Structure choices that came with the lift: command bursts (INIT / READ / PLAYBACK), ALL-CAPS tag names (VFOAFREQ etc.), MD0/MD1 as separate prefixes (not one MD with a VFO marker). |
+| 2026-04-20 | FTdx10 rig JSON cross-checked against Yaesu CAT manual (FTDX10_CAT_OM_ENG_2308-F) | Every command, state prefix, marker length, and value mapping in `yaesu-ftdx10.json` was verified against the official CAT reference. All 16 mode codes (incl. `E=PSK`, `F=DATA-FM-N`), `ID P1=0761 → FTdx10`, `FA/FB` 9-digit Hz range `000030000-075000000`, `ST 0/1/2`, `VS 0/1`, `PC 005-100`, `PB0%s;` template, and `AI` behaviour (USB-only, resets to 0 at power-off — hence the `INIT` burst) all confirmed. Only cosmetic gap: manual labels `ST=2` as "SPLIT ON + 5 kHz Up" where v1 renders "ON+" — UX label choice, not correctness. FT-710 is NOT yet manual-verified (no manual consulted); treated as a schema mirror of the FTdx10 until one is. |
 | 2026-04-20 | External override via `cat.RegisterExternalDir(path)`, stubbed | Hybrid pattern (embedded + external). Package-level func is ergonomic; realistically one override dir per install. Stub today, implement when a real need emerges. |
 | 2026-04-20 | `SerialConfig` / `CATConfig` are fields of `RigConfig`, never standalone | Rig + CAT + serial are one unit. A bare `SerialConfig` at the top of any config file would be meaningless. |
 
@@ -305,18 +313,19 @@ Deferred until a concrete need surfaces.
 
 ## 9. Session pick-up point
 
-Data layer landed in session 16:
+Data layer + characterization tests landed in session 16:
 
 - `internal/serial` green (builds, tests pass, doc.go published).
-- `internal/cat/rigs/yaesu-ftdx10.json` and `yaesu-ft710.json` authored (first-cut schema — FT-710 command set to be verified by hand against the manual).
+- `internal/cat/rigs/yaesu-ftdx10.json` lifted from v1's battle-tested `defaultRigConfigs` in `internal/config/defaults.go` on the `v1` branch — command bursts (INIT / READ / PLAYBACK), 8 state parsers (ID / FA / FB / ST / VS / MD0 / MD1 / PC), v1 tag names (VFOAFREQ, MAINMODE, etc.), mode codes 1-F including `E → PSK` and `F → DATA-FM-N`. `yaesu-ft710.json` mirrors the FTdx10 schema (same Yaesu family, same command set per the operator); the IDENTITY state has no value_mapping yet because the FT-710 4-char rig id hasn't been captured from hardware.
 - `internal/cat/rig.go` + `rigdb.go` + `rigdb_test.go`: `go:embed` loader, `Lookup(id)`, `List()`, stubbed `RegisterExternalDir(dir)`. Five tests passing.
 - `types.RigConfig` + `types.RigOverrides` shaped per §3c (DTO-only, stdlib-friendly, no composition of `serial.Config` inside `types`).
+- §4 Step 0 done: `reference_test.go` mirrors v1's decode + encode logic inline; `decode_fixtures_test.go` (14 cases) and `encode_fixtures_test.go` (9 cases) pin expected behaviour. Together with `rigdb_test.go` the cat package has 29 tests green.
 
 Next:
 
-1. Characterization tests (§4 Step 0): capture representative rig outputs and freeze v1's parser behaviour with table-driven tests. Start from what v1's `processor_test.go` already covers; add real-capture fixtures where synthetic bytes aren't enough.
-2. Extract the pure codec (§4 Step 1): port the prefix-match + marker-extraction logic from v1 into `cat.Encode` / `cat.Decode`. Pass the §4 Step 0 table unchanged.
-3. The `internal/rigconfig` composition function — landing criterion is "the logging app is under construction and needs it," not calendar. Expected second consumer is the FT8/4 app (if built).
+1. Extract the pure codec (§4 Step 1): `cat.Decode(def RigDefinition, line []byte) (CatStatus, error)` and `cat.Encode(def RigDefinition, name string, args ...any) ([]byte, error)`. Port the logic from `referenceDecode` / `referenceEncode`; the fixture tables in `decode_fixtures_test.go` and `encode_fixtures_test.go` are the acceptance criteria (swap the `reference*` function calls for `cat.*` once the real functions exist).
+2. `internal/rigconfig` composition function — landing criterion is "the logging app is under construction and needs it," not calendar. Expected second consumer is the FT8/4 app (if built).
+3. §4 Step 2 / Step 3 follow §4 Step 1 once the codec is in place.
 
 Deferred follow-ups:
 

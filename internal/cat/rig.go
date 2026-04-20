@@ -28,12 +28,15 @@ type RigDefinition struct {
 // layering described in docs/v2-design/bridge.md §3c and keeps the
 // pluggable transport abstraction in bridge.md §8.3 reachable.
 type RigSerial struct {
-	BaudRate      int    `json:"baud_rate"`
-	DataBits      int    `json:"data_bits"`
-	StopBits      int    `json:"stop_bits"`
-	Parity        string `json:"parity"`
-	LineDelimiter string `json:"line_delimiter"`
-	ReadTimeoutMS int    `json:"read_timeout_ms"`
+	BaudRate       int    `json:"baud_rate"`
+	DataBits       int    `json:"data_bits"`
+	StopBits       int    `json:"stop_bits"`
+	Parity         string `json:"parity"`
+	LineDelimiter  string `json:"line_delimiter"`
+	ReadTimeoutMS  int    `json:"read_timeout_ms"`
+	WriteTimeoutMS int    `json:"write_timeout_ms,omitempty"`
+	RTS            bool   `json:"rts,omitempty"`
+	DTR            bool   `json:"dtr,omitempty"`
 }
 
 // RigTiming holds CAT-level timing tunables for the rig's background
