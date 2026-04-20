@@ -11,6 +11,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -77,9 +78,12 @@ func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 		_ = logSvc.Close()
 	})
 
-	qsoSvc := &qsoservice.Service{DB: dbSvc, Logger: logSvc, Config: cfgSvc}
+	hub := events.NewHub()
+	t.Cleanup(func() { hub.Close() })
 
-	return New(cfg, "test", qsoSvc, dbSvc, logSvc)
+	qsoSvc := &qsoservice.Service{DB: dbSvc, Logger: logSvc, Config: cfgSvc, Hub: hub}
+
+	return New(cfg, "test", qsoSvc, dbSvc, logSvc, hub)
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.

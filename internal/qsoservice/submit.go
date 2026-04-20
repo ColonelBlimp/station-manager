@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/mattn/go-sqlite3"
 )
@@ -249,6 +250,11 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Str("band", band).
 		Str("mode", mode).
 		Msg("QSO stored")
+
+	s.Hub.Publish(events.NameQsoStored, events.QsoStoredPayload{
+		QsoID:     qsoID,
+		LogbookID: logbookID,
+	})
 
 	return SubmitResult{Status: "stored", ID: qsoID}, nil
 }

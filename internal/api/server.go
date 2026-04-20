@@ -11,6 +11,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
@@ -22,6 +23,7 @@ type Server struct {
 	qso                      *qsoservice.Service
 	db                       *sqlite.Service
 	logger                   *logging.Service
+	hub                      *events.Hub
 	maxBodyBytes             int64
 	protocol                 string
 	socketPath               string
@@ -34,11 +36,12 @@ type Server struct {
 // New constructs a Server from the resolved services and config. The
 // daemonVersion string is served by /v1/version; "dev" is the usual
 // placeholder when no build-time version is injected.
-func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service) *Server {
+func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub) *Server {
 	s := &Server{
 		qso:                      qso,
 		db:                       db,
 		logger:                   logger,
+		hub:                      hub,
 		maxBodyBytes:             cfg.Server.MaxBodyBytes,
 		protocol:                 cfg.Server.Protocol,
 		defaultPageLimit:         cfg.Server.DefaultPageLimit,

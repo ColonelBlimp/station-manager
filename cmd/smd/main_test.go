@@ -12,6 +12,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/stub"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -89,11 +90,13 @@ func newTestDeps(t *testing.T) (*sqlite.Service, *logging.Service) {
 func spawnAndDrain(t *testing.T, fwds []types.ForwarderConfig) (spawnErr error, drained bool) {
 	t.Helper()
 	db, logger := newTestDeps(t)
+	hub := events.NewHub()
+	t.Cleanup(func() { hub.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	spawnErr = spawnForwarderWorkers(ctx, &wg, fwds, db, logger)
+	spawnErr = spawnForwarderWorkers(ctx, &wg, fwds, db, logger, hub)
 
 	cancel()
 

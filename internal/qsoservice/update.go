@@ -13,6 +13,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -222,6 +223,11 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 		Str("band", merged.QsoDetails.Band).
 		Str("mode", merged.QsoDetails.Mode).
 		Msg("QSO updated")
+
+	s.Hub.Publish(events.NameQsoUpdated, events.QsoUpdatedPayload{
+		QsoID:     merged.ID,
+		LogbookID: merged.LogbookID,
+	})
 
 	return merged, nil
 }

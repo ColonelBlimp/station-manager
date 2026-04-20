@@ -17,6 +17,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -55,6 +56,7 @@ type Worker struct {
 	fwd    forwarding.Forwarder
 	db     *sqlite.Service
 	logger *logging.Service
+	hub    *events.Hub
 }
 
 // New constructs a Worker from its fully resolved Config and
@@ -62,7 +64,7 @@ type Worker struct {
 // missing name, non-positive tick / batch, or incomplete retry bounds.
 // Type-specific forwarder validation already happened in the forwarder's
 // own constructor.
-func New(cfg Config, fwd forwarding.Forwarder, db *sqlite.Service, logger *logging.Service) (*Worker, error) {
+func New(cfg Config, fwd forwarding.Forwarder, db *sqlite.Service, logger *logging.Service, hub *events.Hub) (*Worker, error) {
 	const op errors.Op = "forwarding/worker.New"
 
 	if cfg.Name == "" {
@@ -92,8 +94,11 @@ func New(cfg Config, fwd forwarding.Forwarder, db *sqlite.Service, logger *loggi
 	if logger == nil {
 		return nil, errors.New(op).WithMsg("logger is nil")
 	}
+	if hub == nil {
+		return nil, errors.New(op).WithMsg("hub is nil")
+	}
 
-	return &Worker{cfg: cfg, fwd: fwd, db: db, logger: logger}, nil
+	return &Worker{cfg: cfg, fwd: fwd, db: db, logger: logger, hub: hub}, nil
 }
 
 // Name returns the forwarder_name this worker is scoped to.
@@ -282,8 +287,9 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 }
 
 // persistOutcome translates a forwarder.Result into the appropriate
-// queue-row transition. Terminal transitions (uploaded / failed) will
-// become SSE emit sites when the event stream lands (§7).
+// queue-row transition. Terminal transitions (uploaded / failed)
+// publish the corresponding forward.* event on the hub after the
+// DB write succeeds — markSuccess and markFailed own that emit.
 func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, res forwarding.Result) {
 	switch res.Outcome {
 	case forwarding.OutcomeSuccess:
@@ -348,7 +354,15 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 			Int64("upload_id", row.ID).
 			Err(err).
 			Msg("forwarder: mark failed failed")
+		return
 	}
+	w.hub.Publish(events.NameForwardFailed, events.ForwardFailedPayload{
+		QsoID:         row.QsoID,
+		ForwarderName: w.cfg.Name,
+		Action:        row.Action,
+		Attempts:      int(row.Attempts) + 1,
+		Reason:        lastErr,
+	})
 }
 
 // markSuccess persists a success outcome, dispatching between the
@@ -376,17 +390,26 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 				Str("adif_prefix", prefix).
 				Err(err).
 				Msg("forwarder: mark success + adif stamp failed")
+			return
 		}
-		return
+	} else {
+		if err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID); err != nil {
+			w.logger.ErrorWith().
+				Str("forwarder", w.cfg.Name).
+				Int64("upload_id", row.ID).
+				Err(err).
+				Msg("forwarder: mark success failed")
+			return
+		}
 	}
 
-	if err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID); err != nil {
-		w.logger.ErrorWith().
-			Str("forwarder", w.cfg.Name).
-			Int64("upload_id", row.ID).
-			Err(err).
-			Msg("forwarder: mark success failed")
-	}
+	w.hub.Publish(events.NameForwardSucceeded, events.ForwardSucceededPayload{
+		QsoID:         row.QsoID,
+		ForwarderName: w.cfg.Name,
+		Action:        row.Action,
+		UpstreamID:    upstreamID,
+		Attempts:      int(row.Attempts) + 1,
+	})
 }
 
 func errText(err error) string {

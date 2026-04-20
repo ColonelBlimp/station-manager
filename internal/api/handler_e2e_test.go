@@ -60,7 +60,7 @@ func startE2E(t *testing.T, fwds ...types.ForwarderConfig) *e2eHarness {
 				InitialBackoffSec: 1,
 				MaxBackoffSec:     60,
 			},
-		}, fwd, srv.db, srv.logger)
+		}, fwd, srv.db, srv.logger, srv.hub)
 		if err != nil {
 			cancel()
 			t.Fatalf("worker.New(%q): %v", fc.Name, err)

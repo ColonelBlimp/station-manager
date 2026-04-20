@@ -1643,35 +1643,37 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 
 // DeleteQsoByIDTx soft-deletes a QSO within the caller-supplied tx by
 // setting its deleted_at column (sqlboiler's generated Delete
-// honours the add-soft-deletes flag). Returns ErrNotFound if the QSO
-// does not exist or is already soft-deleted.
+// honours the add-soft-deletes flag). Returns the QSO's logbook_id
+// on success so the caller can emit an accurately-scoped
+// qso.deleted event without a second round-trip, or ErrNotFound if
+// the QSO does not exist or is already soft-deleted.
 //
 // Used by qsoservice.Delete to bundle the soft-delete with
 // qso_upload(delete) inserts under the same one-fails-all-fail tx.
-func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id int64) error {
+func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id int64) (int64, error) {
 	const op errors.Op = "sqlite.Service.DeleteQsoByIDTx"
 	if err := checkService(op, s); err != nil {
-		return err
+		return 0, err
 	}
 	if tx == nil {
-		return errors.New(op).WithMsg("tx is nil")
+		return 0, errors.New(op).WithMsg("tx is nil")
 	}
 	if id < 1 {
-		return errors.New(op).WithMsg(errMsgInvalidId)
+		return 0, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
 	qso, err := models.FindQso(ctx, tx, id)
 	if err != nil {
 		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
+			return 0, errors.ErrNotFound
 		}
-		return errors.New(op).WithErr(err)
+		return 0, errors.New(op).WithErr(err)
 	}
 
 	if _, err = qso.Delete(ctx, tx, false); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("failed to delete QSO")
+		return 0, errors.New(op).WithErr(err).WithMsg("failed to delete QSO")
 	}
-	return nil
+	return qso.LogbookID, nil
 }
 
 // InsertQsoUploadTx enqueues one qso_upload row within the caller-supplied tx.

@@ -14,6 +14,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/stub"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -33,12 +34,13 @@ func randomDedupeKey(t *testing.T) string {
 }
 
 // testHarness wires up real services over an in-memory sqlite db, plus
-// an initialized logger. No mocks; per CLAUDE.md this is the preferred
-// shape.
+// an initialized logger and an event hub. No mocks; per CLAUDE.md this
+// is the preferred shape.
 type testHarness struct {
 	t      *testing.T
 	db     *sqlite.Service
 	logger *logging.Service
+	hub    *events.Hub
 }
 
 func newHarness(t *testing.T) *testHarness {
@@ -84,7 +86,10 @@ func newHarness(t *testing.T) *testHarness {
 		_ = logSvc.Close()
 	})
 
-	return &testHarness{t: t, db: dbSvc, logger: logSvc}
+	hub := events.NewHub()
+	t.Cleanup(func() { hub.Close() })
+
+	return &testHarness{t: t, db: dbSvc, logger: logSvc, hub: hub}
 }
 
 // seedLogbookAndQso inserts a logbook and a QSO under it, returning the
@@ -164,7 +169,7 @@ func (h *testHarness) softDeleteQso(qsoID int64) {
 	}
 	defer cancel()
 
-	if err = h.db.DeleteQsoByIDTx(ctx, tx, qsoID); err != nil {
+	if _, err = h.db.DeleteQsoByIDTx(ctx, tx, qsoID); err != nil {
 		_ = tx.Rollback()
 		h.t.Fatalf("soft-delete qso: %v", err)
 	}
@@ -415,7 +420,7 @@ func TestNew_ValidationRejectsBadCfg(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := defaultCfg("test")
 			tc.mod(&cfg)
-			if _, err := New(cfg, fwd, h.db, h.logger); err == nil {
+			if _, err := New(cfg, fwd, h.db, h.logger, h.hub); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
@@ -427,14 +432,17 @@ func TestNew_NilDeps(t *testing.T) {
 	fwd := buildStub(t, stub.ModeAlwaysSuccess, 0)
 	cfg := defaultCfg("test")
 
-	if _, err := New(cfg, nil, h.db, h.logger); err == nil {
+	if _, err := New(cfg, nil, h.db, h.logger, h.hub); err == nil {
 		t.Fatal("expected error for nil forwarder")
 	}
-	if _, err := New(cfg, fwd, nil, h.logger); err == nil {
+	if _, err := New(cfg, fwd, nil, h.logger, h.hub); err == nil {
 		t.Fatal("expected error for nil db")
 	}
-	if _, err := New(cfg, fwd, h.db, nil); err == nil {
+	if _, err := New(cfg, fwd, h.db, nil, h.hub); err == nil {
 		t.Fatal("expected error for nil logger")
+	}
+	if _, err := New(cfg, fwd, h.db, h.logger, nil); err == nil {
+		t.Fatal("expected error for nil hub")
 	}
 }
 
@@ -447,7 +455,7 @@ func TestWorker_InsertSuccessPath(t *testing.T) {
 	qsoID := h.seedLogbookAndQso()
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -476,7 +484,7 @@ func TestWorker_DoesNotClaimOtherForwardersRows(t *testing.T) {
 	// Queue a row for "other", not for the worker's own name.
 	h.enqueueUpload(qsoID, "other", stub.Type, action.Insert)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -502,7 +510,7 @@ func TestWorker_TransientRetrySchedulesNextAttempt(t *testing.T) {
 	qsoID := h.seedLogbookAndQso()
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysTransient, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysTransient, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -531,7 +539,7 @@ func TestWorker_TerminalMarksFailedImmediately(t *testing.T) {
 	qsoID := h.seedLogbookAndQso()
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysTerminal, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysTerminal, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -557,7 +565,7 @@ func TestWorker_TransientExhaustionBecomesFailed(t *testing.T) {
 
 	cfg := defaultCfg("stub")
 	cfg.Retry.MaxAttempts = 1 // First transient outcome exhausts the budget.
-	w, err := New(cfg, buildStub(t, stub.ModeAlwaysTransient, 0), h.db, h.logger)
+	w, err := New(cfg, buildStub(t, stub.ModeAlwaysTransient, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -579,7 +587,7 @@ func TestWorker_SoftDeletedQso_InsertMarkedFailed(t *testing.T) {
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
 	h.softDeleteQso(qsoID)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -597,7 +605,7 @@ func TestWorker_SoftDeletedQso_UpdateMarkedFailed(t *testing.T) {
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Update)
 	h.softDeleteQso(qsoID)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -616,7 +624,7 @@ func TestWorker_SoftDeletedQso_DeleteStillForwards(t *testing.T) {
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Delete)
 	h.softDeleteQso(qsoID)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -663,7 +671,7 @@ func TestWorker_InsertSuccess_WithAdifPrefix_StampsQsoRow(t *testing.T) {
 			Outcome: forwarding.OutcomeSuccess, UpstreamID: "logid-1001",
 		},
 	}
-	w, err := New(defaultCfg("qrz"), fwd, h.db, h.logger)
+	w, err := New(defaultCfg("qrz"), fwd, h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -706,7 +714,7 @@ func TestWorker_DeleteSuccess_WithAdifPrefix_DoesNotStamp(t *testing.T) {
 		prefix:   "QRZCOM",
 		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess},
 	}
-	w, err := New(defaultCfg("qrz"), fwd, h.db, h.logger)
+	w, err := New(defaultCfg("qrz"), fwd, h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -734,7 +742,7 @@ func TestWorker_InsertSuccess_EmptyPrefix_DoesNotStamp(t *testing.T) {
 	qsoID := h.seedLogbookAndQso()
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -763,7 +771,7 @@ func TestWorker_Delete_NoPriorInsert_IsTerminalImmediately(t *testing.T) {
 	// an empty-by-default Result lets us observe that Submit wasn't
 	// called.
 	fwd := &recordingForwarder{typeName: stub.Type}
-	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger)
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -794,7 +802,7 @@ func TestWorker_Delete_WithPriorInsert_PassesUpstreamID(t *testing.T) {
 		typeName: stub.Type,
 		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess},
 	}
-	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger)
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -829,7 +837,7 @@ func TestWorker_InsertAndUpdate_DoNotTriggerLookup(t *testing.T) {
 		typeName: stub.Type,
 		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "new-id"},
 	}
-	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger)
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -865,7 +873,7 @@ func TestWorker_DoesNotClaimFutureRows(t *testing.T) {
 	cfg := defaultCfg("stub")
 	cfg.Retry.InitialBackoffSec = 60 // 60 s into the future
 	cfg.Retry.MaxBackoffSec = 60
-	w, err := New(cfg, buildStub(t, stub.ModeAlwaysTransient, 0), h.db, h.logger)
+	w, err := New(cfg, buildStub(t, stub.ModeAlwaysTransient, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -880,7 +888,7 @@ func TestWorker_DoesNotClaimFutureRows(t *testing.T) {
 	// Second worker (success stub) must NOT re-claim the row, because
 	// next_attempt_at is still 60 s out. Let it tick for a bounded
 	// window and confirm no transition happened.
-	w2, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w2, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker 2: %v", err)
 	}
@@ -915,7 +923,7 @@ func TestWorker_FlapN_EventuallySucceeds(t *testing.T) {
 	cfg.Retry.MaxAttempts = 5
 	cfg.Retry.InitialBackoffSec = 1
 	cfg.Retry.MaxBackoffSec = 1
-	w, err := New(cfg, stubFwd, h.db, h.logger)
+	w, err := New(cfg, stubFwd, h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
@@ -955,7 +963,7 @@ func TestWorker_FlapN_EventuallySucceeds(t *testing.T) {
 func TestWorker_RunReturnsWhenCtxCancelled(t *testing.T) {
 	h := newHarness(t)
 
-	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}

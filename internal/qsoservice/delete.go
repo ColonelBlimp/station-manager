@@ -5,6 +5,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 )
 
 // Delete soft-deletes a QSO and atomically enqueues one qso_upload
@@ -30,7 +31,8 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	}
 	defer cancel()
 
-	if err = s.DB.DeleteQsoByIDTx(ctx, tx, id); err != nil {
+	logbookID, err := s.DB.DeleteQsoByIDTx(ctx, tx, id)
+	if err != nil {
 		_ = tx.Rollback()
 		// Pass through ErrNotFound as-is so callers (handler layer) can
 		// translate it to 404 via stderr.Is.
@@ -52,6 +54,11 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	}
 
 	s.Logger.InfoWith().Int64("qso_id", id).Msg("QSO soft-deleted")
+
+	s.Hub.Publish(events.NameQsoDeleted, events.QsoDeletedPayload{
+		QsoID:     id,
+		LogbookID: logbookID,
+	})
 
 	return nil
 }

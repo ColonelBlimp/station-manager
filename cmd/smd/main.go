@@ -16,6 +16,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/api"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"    // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
 	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/stub" // side-effect: register "stub" forwarder + default retry
@@ -94,8 +95,17 @@ func run() error {
 
 	container := iocdi.New()
 
+	// Event hub — registered before Build so every service with a
+	// `di.inject:"eventhub"` field (qsoservice, future subscribers)
+	// gets the same instance. Closed at shutdown after publishers
+	// have stopped.
+	hub := events.NewHub()
+
 	if err = container.RegisterInstance(config.ServiceName, cfgSvc); err != nil {
 		return fmt.Errorf("register config service: %w", err)
+	}
+	if err = container.RegisterInstance(events.ServiceName, hub); err != nil {
+		return fmt.Errorf("register event hub: %w", err)
 	}
 	if err = container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
 		return fmt.Errorf("register logging service: %w", err)
@@ -191,12 +201,12 @@ func run() error {
 	// restart.
 	var workerWG sync.WaitGroup
 
-	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, loggerSvc); err != nil {
+	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, loggerSvc, hub); err != nil {
 		return fmt.Errorf("spawn forwarder workers: %w", err)
 	}
 
 	// ---- Start HTTP server ----
-	server := api.New(cfg, Version, qsoSvc, dbSvc, loggerSvc)
+	server := api.New(cfg, Version, qsoSvc, dbSvc, loggerSvc, hub)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -250,6 +260,12 @@ func run() error {
 			Msg("forwarder workers did not drain within shutdown timeout")
 	}
 
+	// All publishers (workers, qsoservice via in-flight HTTP handlers)
+	// have stopped by here — workers drained above, handlers finished
+	// under server.Shutdown. Close the hub so any still-connected SSE
+	// subscribers see a clean channel-close and return.
+	hub.Close()
+
 	return runErr
 }
 
@@ -283,6 +299,7 @@ func spawnForwarderWorkers(
 	fwds []types.ForwarderConfig,
 	dbSvc *sqlite.Service,
 	loggerSvc *logging.Service,
+	hub *events.Hub,
 ) error {
 	panicHandler := func(name string, pv any, stack []byte) {
 		loggerSvc.ErrorWith().
@@ -323,7 +340,7 @@ func spawnForwarderWorkers(
 			Tick:  time.Duration(fc.TickIntervalSec) * time.Second,
 			Batch: fc.BatchSize,
 			Retry: retry,
-		}, fwd, dbSvc, loggerSvc)
+		}, fwd, dbSvc, loggerSvc, hub)
 		if err != nil {
 			return fmt.Errorf("construct worker for %q: %w", fc.Name, err)
 		}

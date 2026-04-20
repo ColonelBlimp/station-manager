@@ -5,6 +5,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
@@ -17,6 +18,7 @@ type Service struct {
 	DB     *sqlite.Service  `di.inject:"sqliteservice"`
 	Logger *logging.Service `di.inject:"loggingservice"`
 	Config *config.Service  `di.inject:"configservice"`
+	Hub    *events.Hub      `di.inject:"eventhub"`
 }
 
 // Initialize satisfies the iocdi.Initializer interface.
