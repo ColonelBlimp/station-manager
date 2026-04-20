@@ -132,27 +132,62 @@ Clients can freely ignore forwarding state — the local log is already durable.
 
 **Internal cursor shape** (not visible to clients) decodes to a sort-key tuple: `(qso_date, time_on, id)` for QSO lists, `(queued_at, id)` for upload queue lists, etc. Each endpoint's cursor is specific to its natural sort order.
 
-### 4.5 SSE event stream — provisional vocabulary
+### 4.5 SSE event stream
 
 **The daemon exposes a single event stream endpoint**: `GET /v1/events` with `Accept: text/event-stream`. Clients subscribe once and receive all events the daemon publishes; per-client filtering happens on the client side. At personal-operator scale, event volumes are low enough that a firehose-plus-client-filter model is simpler and cheaper than server-side topic subscriptions.
 
-**Minimum event vocabulary (provisional, revise during implementation):**
+**Event vocabulary:**
 
 | Event | When emitted | Primary consumer |
 |---|---|---|
 | `qso.stored` | A new QSO has been committed to the local database. | Both — `apps/logging` appends to recent-QSOs list, `apps/logbook` invalidates its current view. |
 | `qso.updated` | An existing QSO has been edited. | Both — keeps open client views consistent. |
-| `qso.deleted` | An existing QSO has been deleted. | Both — same reason. |
+| `qso.deleted` | An existing QSO has been soft-deleted. | Both — same reason. |
 | `forward.succeeded` | The forwarding worker has successfully pushed a QSO+destination pair to its upstream service. | Both — updates forwarding status badges in the UI. |
 | `forward.failed` | The forwarding worker hit a terminal failure for a QSO+destination pair (retries exhausted or non-retryable rejection). | Both — shows failure indicators; operator may need to take action. |
 
-**Explicitly NOT in the MVP vocabulary:**
+**Explicitly NOT in the vocabulary:**
 
 - `forward.attempted` — noise. Every retry cycle would emit one. Clients that want spinner UX show a spinner for any QSO in a "pending" or "retrying" state (visible via query) and remove it on the terminal `forward.*` event.
 - Session lifecycle events — deferred until the logging app is being designed in milestone 2 and we know whether sessions are a first-class concept in v2.
 - Operational/health events (daemon started, config reloaded) — no clear consumer today; add when a dashboard-style client actually needs them.
 
-**Payload shapes, reconnect semantics, and `Last-Event-ID` support** are explicitly deferred to implementation time. The vocabulary is the settled part; the bytes on the wire are a detail we pin down when we write the first SSE handler. This is explicitly a "come back when closer to implementation" area per the session 5 discussion.
+**Wire format** is the standard `text/event-stream` encoding, one frame per event:
+
+```
+id: 42
+event: forward.succeeded
+data: {"qso_id":123,"forwarder_name":"qrz","action":"insert","upstream_id":"1234567","attempts":1}
+
+```
+
+- `id` — monotonic per-hub counter, primarily useful for debug-tracing and client-side dedup. Not a resume cursor (see "Reconnect semantics" below).
+- `event` — one of the five names above.
+- `data` — JSON. Never contains embedded newlines; always a single `data:` line per frame.
+- Comment lines (`: keepalive`) arrive every 30 s while the connection is idle, to keep intermediaries from dropping the TCP/unix-socket. Per SSE spec, clients MUST ignore them.
+
+**Payload shapes** (struct definitions live in `internal/events`):
+
+```json
+qso.stored        {"qso_id": int64, "logbook_id": int64}
+qso.updated       {"qso_id": int64, "logbook_id": int64}
+qso.deleted       {"qso_id": int64, "logbook_id": int64}
+forward.succeeded {"qso_id": int64, "forwarder_name": string,
+                   "action": "insert"|"update"|"delete",
+                   "upstream_id": string, "attempts": int}
+forward.failed    {"qso_id": int64, "forwarder_name": string,
+                   "action": "insert"|"update"|"delete",
+                   "attempts": int, "reason": string}
+```
+
+Payloads are intentionally minimal. Clients re-query via `GET /v1/qso/:id` (etc.) for any details beyond identifiers — the authoritative state is in the database, not on the wire. `logbook_id` is carried on the `qso.*` events so the logbook-app can filter without a fetch; `action` is carried on `forward.*` so a single QSO's INSERT vs. DELETE transitions are distinguishable. `upstream_id` is omitted from `forward.succeeded` when the destination doesn't produce one (e.g. stub).
+
+**Reconnect semantics and buffering:**
+
+- The hub keeps **no backlog**. A client that connects (or reconnects) receives events from that moment forward only. `Last-Event-ID` is not honored — event IDs are monotonic within a daemon lifetime and useful for dedup, but are not a resume cursor.
+- Baseline state on connect is reconciled via ordinary GET endpoints. Client contract: **open the SSE stream first, then fetch current state via `GET /v1/qsos` (etc.)**. Any event for an ID the fetch already returned is a no-op; any event for an ID newer than the fetch is applied. Following this order avoids the race where an event fires between the fetch and the subscribe.
+- **Slow-reader policy:** each subscriber has a 64-event in-memory buffer. When Publish finds the buffer full, the daemon disconnects that subscriber (closes its channel). The handler returns, the HTTP connection ends, the client sees EOF and reconnects + resyncs. Silent event-dropping was rejected: a client that can't tell it's out of sync is worse than a clean disconnect.
+- **Daemon shutdown:** `server.Shutdown` cancels in-flight SSE handlers via request context; remaining subscribers see their channels closed by `hub.Close()`.
 
 ### 4.6 Error response envelope
 
@@ -247,8 +282,6 @@ the rationale.
 
 These are known concerns that were raised during session 5 and deliberately not decided now because they are cheaper to answer against running code than in the abstract.
 
-- **Full SSE payload schemas.** The event vocabulary is settled (Section 4.5) but the exact JSON shape of each event's data field is not. Will be pinned down when the first handler emits a `qso.stored` event and the first client subscribes to it.
-- **SSE reconnect and replay semantics.** `Last-Event-ID` support, event buffering for disconnected clients, catch-up on reconnect — none of this is designed yet. For milestone 2's first real SSE client, the simplest version is "if you disconnect, you miss events; reconnect and re-query the current state." More sophisticated replay is a refinement to add when a client actually needs it.
 - **Concrete error code vocabulary.** The envelope shape is settled (Section 4.6) but the specific `code` values are not. Will grow naturally from the first few handlers.
 - **Internal error typing for HTTP mapping.** Whether the handler layer uses sentinel errors, a typed `HTTPError` wrapper, or a mapping registry to translate internal errors to response codes — to be decided when the first handler is written.
 - **Request ID / trace ID propagation.** If added, it would be a middleware concern and a field in the error envelope. Not needed for a single-user desktop deployment; add if a debugging need surfaces.
@@ -331,6 +364,17 @@ design intent, this reflects code.
 - Response: `{"duplicate": bool}`.
 - **Contest isolation is achieved via the logbook, not a separate
   DB file.** Hits in other logbooks do not count.
+
+### Event stream
+
+- `GET /v1/events` — SSE firehose. Serves all five event names
+  from Section 4.5 with the payloads documented there. No
+  backlog, no replay; slow subscribers are disconnected so they
+  reconnect + resync. Keep-alive comment every 30 s.
+- The handler disables the server's per-request write deadline
+  for the duration of the stream (via `http.ResponseController`),
+  so an idle-but-connected client isn't force-cut every
+  `Server.WriteTimeoutSec`. `ReadTimeout` is unaffected.
 
 ### Operational
 

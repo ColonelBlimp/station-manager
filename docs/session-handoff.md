@@ -24,7 +24,86 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-19, session 13 in progress)
+## Current state (as of 2026-04-20, session 14)
+
+### SSE event stream: complete (stages 1–4 landed, docs updated)
+
+`GET /v1/events` serves the firehose of the five settled events
+(`qso.stored`, `qso.updated`, `qso.deleted`, `forward.succeeded`,
+`forward.failed`). End-to-end proof in
+`internal/api/handler_events_e2e_test.go`: a real HTTP client opens
+the stream, the logging path commits a QSO via `POST /v1/qso`, the
+worker runs and submits to the stub forwarder, and the client
+receives both `qso.stored` and `forward.succeeded` frames in
+monotonic-ID order.
+
+Shape settled and pinned in `docs/v2-design/api.md §4.5` — wire
+format, payload shapes, reconnect semantics, slow-reader policy,
+keepalive. The "deferred to implementation" items for SSE in §6
+are now closed.
+
+**Stage 1 — `internal/events` hub**:
+
+- Plain `*Hub` (not a DI service type; registered as an instance).
+- `NewHub()`, `Publish(name, payload)`, `Subscribe() (<-chan Event, unsub)`,
+  `Close()`, `SubscriberCount()` (for test rendezvous).
+- 64-event per-subscriber buffer. Publish is non-blocking and
+  under a mutex so publish order is preserved; full buffer → the
+  hub closes that subscriber's channel and drops it from the map.
+- Monotonic event IDs assigned inside the Publish mutex so IDs
+  match on-the-wire order.
+- 12 unit tests including a race-detector soak for concurrent
+  publish + subscribe/unsubscribe.
+
+**Stage 2 — emit wiring + DI injection**:
+
+- `events.ServiceName = "eventhub"`; `cmd/smd/main.go` calls
+  `events.NewHub()` and registers via `container.RegisterInstance`
+  before `container.Build` so anything with a
+  `di.inject:"eventhub"` field gets the same `*Hub`.
+- `qsoservice.Service` gained `Hub *events.Hub`; Submit/Update/Delete
+  publish `qso.stored` / `qso.updated` / `qso.deleted` AFTER tx
+  commit (so a rolled-back write never emits).
+- `DeleteQsoByIDTx` now returns `(logbookID, error)` so the delete
+  path can emit an accurately-scoped `qso.deleted` without a second
+  DB round-trip (sqlboiler `FindQso` was already running).
+- `worker.Worker` gained a required `*events.Hub` constructor
+  parameter; `markSuccess`/`markFailed` publish
+  `forward.succeeded` / `forward.failed` AFTER the DB mark call
+  succeeds. `Attempts` is read as `int(row.Attempts) + 1` because
+  the DB `Mark*` methods increment internally before the write.
+- `api.Server.New` takes the hub (held for stage 3's handler).
+
+**Stage 3 — `GET /v1/events` handler**:
+
+- `internal/api/handler_events.go`. Sets
+  `Content-Type: text/event-stream`, `Cache-Control: no-cache`,
+  `Connection: keep-alive`, `X-Accel-Buffering: no` (harmless on
+  unix sockets, cleans TCP mode behind nginx).
+- Disables the per-request write deadline via
+  `http.ResponseController.SetWriteDeadline(time.Time{})` — without
+  this, Go's `WriteTimeout` would cut idle-but-healthy SSE
+  connections every `WriteTimeoutSec`.
+- Subscribe → select on `r.Context().Done()` + hub channel +
+  30 s keep-alive ticker. Frames are `id: %d\nevent: %s\ndata: %s\n\n`.
+  On channel close (hub close or slow-reader eviction) or write
+  error: return → defer unsubscribe.
+- 7 handler tests + 2 e2e-with-worker tests covering delivery,
+  shape, multi-event ordering, client disconnect unsub, hub close,
+  slow-reader eviction, keep-alive, insert happy path, terminal
+  failure path.
+
+**Stage 4 — e2e tests**: see above; live `httptest.NewServer`
+wrapping `srv.httpServer.Handler` so a real HTTP client can stream
+frames while the worker goroutine ticks.
+
+**Bonus fix** — the M2 race the review had accepted as theoretical
+was surfaced reliably by `-race`: `spawnForwarderWorkers` now does
+`wg.Add(1)` synchronously BEFORE `safego.Go`, with an `isRespawn`
+closure flag so respawn paths still re-increment after a panic.
+Stable under 10 consecutive race-detector runs of
+`TestSpawnForwarderWorkers_HappyPath_Single` where it previously
+flaked ~40% of the time.
 
 ### QRZ port: complete (stages 1–8 all landed)
 
@@ -1197,26 +1276,23 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (post-review, pick a phase)
 
-QRZ port complete, review complete, all 10 actioned findings plus
-the 3 accepted-as-is items captured in
-`docs/reviews/forwarding-subsystem.md`. Task #29 (cmd/smd/main.go
-spawn-path + lifecycle tests) completed in session 14 —
-`cmd/smd/main_test.go` covers the spawn paths and the loadConfig
-resolution modes.
+QRZ port complete, review triage complete, Task #29 (cmd/smd/main.go
+tests) complete in session 14, SSE event stream complete in session
+14. The forwarding subsystem + its live notification surface is
+**done** — the next session picks one of three directions below.
 
-The forwarding subsystem is **done** — the next session picks
-one of three directions below (see "Follow-ups after the QRZ
-port" for the full list). No work blocks any of them.
-
-My standing recommendation is the SSE event stream: it closes
-the loop on the forwarding subsystem's terminal transitions
-(`forward.succeeded` / `forward.failed`), is a well-bounded
-piece of work (~sized like QRZ stages 2–3), and makes
-everything we just built visible to the logging-app UI without
-polling. Bridge / CAT is a larger subsystem with its own design
-doc pending. A second real forwarder (ClubLog / LoTW) validates
-the "prefix-agnostic plumbing" claim but doesn't unblock a user-
-facing feature the way SSE does.
+My standing recommendation is a **daemon-only alpha checkpoint**:
+cut a tagged build, dogfood via curl + SSE + the existing HTTP
+endpoints, and use the results to inform the next subsystem
+choice (a second real forwarder vs. bridge/CAT vs. client work).
+The forwarding + events surface is the minimum viable
+daemon-side feature set; running it against real QSOs for a
+week will surface gaps cheaper than guessing at the next
+subsystem. If alpha feels premature, the second-best option is
+a second real forwarder (ClubLog or LoTW) — it validates the
+"prefix-agnostic plumbing" claim and gives the SSE stream more
+to say. Bridge/CAT is a larger effort with its own design doc
+still to write.
 
 The 8-stage QRZ plan is retained below for historical context;
 do **not** re-derive the design decisions captured in it.
@@ -1289,14 +1365,13 @@ guide — use this, not an inferred version):
 
 ### Follow-ups after the QRZ port
 
-1. **SSE event stream (`GET /v1/events`)**. The QRZ terminal
-   transitions are the primary consumer (`forward.succeeded` /
-   `forward.failed`), plus `qso.stored` / `qso.updated` /
-   `qso.deleted` from ingest. Publish/subscribe fits single-
-   operator scale: one in-memory channel per connected client,
-   buffered, dropped on slow-reader. Worker code has comments
-   marking the emit points. **My standing recommendation for the
-   next phase.**
+1. **Alpha checkpoint.** Tag a build, dogfood the daemon against
+   real QSOs for a week: ingest via `POST /v1/qso` (curl or a
+   disposable script), QRZ forwarding on, SSE stream tailed with
+   `curl -N` or a browser `EventSource`. The forwarding +
+   events surface is the smallest self-contained daemon-side
+   feature set; real use will surface gaps cheaper than guessing.
+   **My standing recommendation for the next phase.**
 
 2. **A second real forwarder (ClubLog / LoTW / eQSL)**. Exercises
    the "prefix-agnostic generic plumbing" claim. Would validate

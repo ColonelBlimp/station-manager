@@ -348,17 +348,25 @@ func spawnForwarderWorkers(
 		// Capture loop var for the closure — Go 1.22+ makes this safe
 		// without explicit shadowing, but the extra clarity is free.
 		workerRef := w
-		// wg.Add/Done straddle each Run call so a clean ctx-cancel
-		// shutdown can join workers before the daemon closes the DB.
-		// Note: placed INSIDE the safego-managed closure so respawns
-		// (after a recovered panic) re-increment on their own
-		// goroutine. A panic between Done and the respawn's Add leaves
-		// a brief counter-underflow window; we accept it because
-		// shutdown drain only matters on the normal (no-panic) path,
-		// and the Wait call in run() is bounded by a timeout that
-		// limits exposure if a panicking worker never settles.
+
+		// wg.Add is called SYNCHRONOUSLY here, before safego.Go, so
+		// wg.Wait() in the caller's shutdown drain never sees a
+		// 0-counter while a worker is starting up (the -race detector
+		// correctly flags the alternative). fn's defer wg.Done()
+		// handles clean exit on the first invocation. On respawn
+		// (after a recovered panic) the closure sees isRespawn=true
+		// and re-adds for its new goroutine; the counter-underflow
+		// window between fn's Done and the respawn's Add is brief,
+		// bounded by the shutdown-wait timeout, and only matters on
+		// the panic path — consistent with the review's M2
+		// acceptance rationale.
+		wg.Add(1)
+		var isRespawn bool
 		safego.Go(ctx, fc.Name, panicHandler, func() {
-			wg.Add(1)
+			if isRespawn {
+				wg.Add(1)
+			}
+			isRespawn = true
 			defer wg.Done()
 			workerRef.Run(ctx)
 		}, true)
