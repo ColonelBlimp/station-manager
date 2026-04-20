@@ -22,9 +22,13 @@ rationale captured below.
 - **M5** — Swept the three sections of `forwarding-implementation.md`
   that referenced the deleted `defaultForwarderRetry`; now describe
   the per-package `DefaultRetry` + `RegisterDefaultRetry` shape.
-- **M6 (partial)** — Added HTML-proxy-body test and multi-line
-  `REASON` test in `qrz/submit_test.go`. Spawn-path coverage for
-  `cmd/smd/main.go` parked as task #29 (separate effort).
+- **M6** — Added HTML-proxy-body test and multi-line `REASON` test in
+  `qrz/submit_test.go`. Spawn-path coverage for `cmd/smd/main.go`
+  landed as `main_test.go` (session 14, task #29): 8 tests on
+  `spawnForwarderWorkers` (happy single/multi, disabled-skip, unknown
+  type, missing default retry, explicit-retry override, invalid worker
+  config, empty list) and 4 on `loadConfig` (explicit path, env var,
+  cwd fallback, default).
 - **L1** — Deleted `response.Fields` and the
   `TestParseResponse_ExtraFieldsPreserved` test.
 - **L2** — Refactored: `action.Parse(row.Action)` now happens once at

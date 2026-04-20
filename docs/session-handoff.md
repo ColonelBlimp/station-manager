@@ -305,9 +305,11 @@ Triaged and **actioned** in the same commit series:
 - **M5** — Three sections of `forwarding-implementation.md` that
   referenced the deleted `defaultForwarderRetry` rewritten for the
   per-package `DefaultRetry` + `RegisterDefaultRetry` shape.
-- **M6 (partial)** — Added HTML-proxy-body and multi-line `REASON`
-  tests to freeze QRZ's real-world failure modes. `cmd/smd/main.go`
-  spawn-path coverage parked as task #29.
+- **M6** — Added HTML-proxy-body and multi-line `REASON` tests to
+  freeze QRZ's real-world failure modes. `cmd/smd/main.go` spawn-path
+  coverage landed in session 14 (task #29): `cmd/smd/main_test.go`
+  covers 7 `spawnForwarderWorkers` paths + `loadConfig`'s 4 resolution
+  modes.
 - **L1** — Deleted unused `response.Fields` map.
 - **L2** — Parse `action.Parse` once at the top of `processRow`;
   `fetchQsoForAction` now switches on the typed value.
@@ -332,7 +334,7 @@ doc's Resolution status section:
   (QRZ responds in ASCII).
 
 **Task #29** — `cmd/smd/main.go` test coverage (spawn-path +
-lifecycle) parked as separate effort.
+lifecycle) completed in session 14; see M6 above.
 
 Full suite green under `-race` after every fix; ldflags build
 smoke-check passes. Forwarding subsystem is **review-complete**
@@ -1195,10 +1197,12 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 
 ### The immediate next action (post-review, pick a phase)
 
-QRZ port complete, review complete, 10 of 13 findings actioned
-and 3 accepted with rationale. `docs/reviews/forwarding-subsystem.md`
-captures both the findings and the triage decisions. Task #29
-(cmd/smd/main.go spawn-path + lifecycle tests) is parked.
+QRZ port complete, review complete, all 10 actioned findings plus
+the 3 accepted-as-is items captured in
+`docs/reviews/forwarding-subsystem.md`. Task #29 (cmd/smd/main.go
+spawn-path + lifecycle tests) completed in session 14 —
+`cmd/smd/main_test.go` covers the spawn paths and the loadConfig
+resolution modes.
 
 The forwarding subsystem is **done** — the next session picks
 one of three directions below (see "Follow-ups after the QRZ
@@ -1303,10 +1307,6 @@ guide — use this, not an inferred version):
 3. **Bridge / CAT design**. Separate subsystem; see
    `project_sm_serial_bridge.md` memory. Larger scope with its own
    design surface.
-
-4. **Task #29** — `cmd/smd/main.go` spawn-path + lifecycle tests.
-   Smaller scope; good for getting back into rhythm after a
-   session break.
 
 ### Parked follow-ups (low priority, not blockers)
 
