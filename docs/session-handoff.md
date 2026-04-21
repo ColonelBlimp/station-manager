@@ -24,7 +24,33 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-20, session 16 — CAT data layer + serial carve-out)
+## Current state (as of 2026-04-21, session 17 — Gio UI spike validated)
+
+### Session 17 work (Gio UI spike — toolkit decision)
+
+**Goal:** evening-scale throwaway spike to decide whether Gio can carry the v2 logging app, or whether we fall back to Wails.
+
+**What landed:**
+
+- `cmd/giospike/main.go` — ~250-LOC Gio app wired to a live FTdx10. Hard-codes `rigID = "yaesu-ftdx10"` and `portPath = "/dev/ttyUSB0"`. On startup: opens port via `serial.Open` (with inline `serial.Config`-from-`RigSerial` helper, same shape as catcli), starts a reader goroutine, sends `INIT` to enable AI push-state, sends `READ` to seed current VFO/mode/etc. into the UI without waiting for a knob twirl.
+- Reader goroutine: `port.ReadResponseBytes` → `cat.Decode` → folds `VFOAFREQ` / `VFOBFREQ` / `MAINMODE` into a `rigState` snapshot → publishes to a buffered channel and calls `w.Invalidate()`.
+- Main loop: blocks on `w.Event()`, drains the channel inside `FrameEvent`, renders three readout rows + callsign editor + Log button. Log prints a draft QSO to stdout (no DB, no validation beyond non-empty).
+- `gioui.org v0.9.0` added to `go.mod` (plus transitive: `golang.org/x/image`, `github.com/go-text/typesetting`, `golang.org/x/exp/shiny`, `eliasnaur.com/font`, `gioui.org/shader`, `github.com/go-text/typesetting-utils`).
+
+**Linux build deps installed** (system-level, not in go.mod):
+
+- `vulkan-headers`, `vulkan-loader-devel`, `libxkbcommon-x11-devel` (the first build on a fresh machine will need these).
+- Wayland / X / xkbcommon / Xcursor / Xfixes devel packages were already present.
+
+**Bugs hit + fixed during the spike:**
+
+1. **First run: no updates in the UI.** Cause: main loop's non-blocking `select` checked the channel once, then `w.Event()` blocked forever because the reader wasn't calling `w.Invalidate()`. Fix: reader now calls `w.Invalidate()` after each channel push, and the main loop drains the channel inside the `FrameEvent` handler.
+2. **Second run: channel pushes happening but UI still stale.** Cause: I guessed the tag names (`VFO-A`, `VFO-B`, `MODE`) rather than checking `yaesu-ftdx10.json`. Real tags are `VFOAFREQ`, `VFOBFREQ`, `MAINMODE`. Fix: corrected the keys + added `log.Printf` of every successful decode so the stream is observable.
+3. **Third run: updates live but fields empty until a knob is touched.** Cause: only `INIT` (= `AI1;ID;`) was sent; the rig only broadcasts state when something changes. Fix: follow `INIT` with `READ` (= `FA;FB;ST;VS;MD0;MD1;PC;`) to seed the current state.
+
+**Decision:** commit to Gio for the v2 logging app. Operator's verdict after live-rig validation: "we can build a clean UI from this and keep the whole thing with Go." Recorded in memory (`project_sm_ui_toolkit.md`). `cmd/giospike/` stays in the tree as a working reference; it gets deleted when the real logging app lands.
+
+### Session 16 work (CAT/serial data layer + characterization tests)
 
 ### Session 16 work (CAT/serial data layer + characterization tests)
 
@@ -78,9 +104,10 @@ The FTdx10 in AI mode broadcasts ~15 prefixes v1 never configured (`IF`, `SS`, `
 
 ### Next session
 
-- **Gio UI spike** (exploratory): evening-scale throwaway — live freq/mode readout + one-line QSO entry, wired to a local catloop. Decision point: commit to Gio for the v2 logging app, or fall back to Wails-with-fixed-IPC.
-- Then the logging app scaffold proper — and with it, §4 Step 2 (caller-owned I/O glue: `serial.Port` + `cat.Decode` read loop in the logging app) and `internal/rigconfig` (the composition function, with real operator-override semantics driven by the logging app's actual config shape).
-- §4 Step 3 is a doc note only; no code change.
+- **Logging app scaffold proper** — pick `cmd/logging/` (or similar) and start the real v2 logging app in Gio. First cut should absorb the §4 Step 2 work: caller-owned I/O glue (`serial.Port` + `cat.Decode` read loop, lifted from `cmd/giospike/` but promoted into a reusable `internal/rigsession` or equivalent, TBD during design). At the same time: `internal/rigconfig` — the `types.RigConfig` → `serial.Config` composition function with real operator-override semantics, driven by the logging app's actual config shape rather than catcli's stub.
+- **Before any big Gio structuring commitments**, sketch the screen inventory for the logging app (QSO entry + live rig readout at minimum; session list is client-side per the memory invariant; enrichment display is TBD). The layout and data-flow shape drive whether we need a single `app.Window` or multiple, and whether state lives in a `sync.RWMutex`-guarded struct or a channel-fed snapshot model. The spike used the snapshot model successfully and it should remain the default unless a concrete reason surfaces.
+- §4 Step 3 is still a doc-note-only item; no code change.
+- Open item from session 16 still outstanding: the mystery `FD` prefix the FTdx10 broadcasts in AI mode — not in the CAT OM command index. Investigate opportunistically (next time the rig is up) but not urgent.
 
 ### Session 15 work: bridge design simplified, YAGNI question on the table
 
