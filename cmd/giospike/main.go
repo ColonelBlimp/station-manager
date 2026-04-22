@@ -1,3 +1,5 @@
+//go:build gio
+
 // giospike is a throwaway evening-scale Gio UI experiment to answer a
 // single question: can Gio carry the v2 logging app?
 //
