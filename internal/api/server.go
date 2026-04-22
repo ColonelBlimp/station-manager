@@ -24,6 +24,7 @@ type Server struct {
 	db                       *sqlite.Service
 	logger                   *logging.Service
 	hub                      *events.Hub
+	limits                   *loadLimiter
 	maxBodyBytes             int64
 	protocol                 string
 	socketPath               string
@@ -42,6 +43,7 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 		db:                       db,
 		logger:                   logger,
 		hub:                      hub,
+		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		maxBodyBytes:             cfg.Server.MaxBodyBytes,
 		protocol:                 cfg.Server.Protocol,
 		defaultPageLimit:         cfg.Server.DefaultPageLimit,
@@ -52,8 +54,9 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 
 	mux := http.NewServeMux()
 
-	// QSO
-	mux.HandleFunc("POST /v1/qso", s.handleSubmitQso)
+	// QSO — POST /v1/qso carries the hottest per-endpoint cap (token
+	// bucket). See docs/v2-design/api.md §6 for the threat model.
+	mux.Handle("POST /v1/qso", s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))
 	mux.HandleFunc("GET /v1/qso/{id}", s.handleGetQso)
 	mux.HandleFunc("PATCH /v1/qso/{id}", s.handleUpdateQso)
 	mux.HandleFunc("DELETE /v1/qso/{id}", s.handleDeleteQso)
@@ -74,14 +77,17 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 	mux.HandleFunc("GET /v1/contact-history", s.handleContactHistory)
 
 	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
-	mux.HandleFunc("GET /v1/events", s.handleEvents)
+	// Wrapped with its own subscriber cap (NOT counted against the
+	// general concurrent-request limit since SSE connections are
+	// long-lived by design).
+	mux.Handle("GET /v1/events", s.limitEventSubscribers(http.HandlerFunc(s.handleEvents)))
 
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
 
 	s.httpServer = &http.Server{
-		Handler:      s.recoverPanic(mux),
+		Handler:      s.limitConcurrent(s.recoverPanic(mux)),
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeoutSec) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeoutSec) * time.Second,
 		IdleTimeout:  time.Duration(cfg.Server.IdleTimeoutSec) * time.Second,

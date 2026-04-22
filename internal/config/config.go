@@ -69,6 +69,35 @@ type ServerConfig struct {
 	// response size bounded for callsigns that have been worked many
 	// times.
 	MaxContactHistoryResults int `json:"max_contact_history_results"`
+
+	// Accidental self-DoS floor. See docs/v2-design/api.md §6: a buggy
+	// local client (cron loop, retry storm, SSE reconnect loop) can
+	// exhaust daemon resources even in single-user mode, so a minimal
+	// floor is maintained even though no malicious threat model applies.
+	// All four values fail loud (429 / 503) rather than failing silent
+	// (timeouts, OOM, starved forwarder).
+
+	// MaxConcurrentRequests caps simultaneous non-SSE requests in
+	// flight. When exceeded the server returns 503 server_busy rather
+	// than queueing indefinitely. SSE requests to /v1/events are NOT
+	// counted here — they are long-lived by design and have their own
+	// cap below. Default: 128.
+	MaxConcurrentRequests int `json:"max_concurrent_requests"`
+
+	// MaxEventSubscribers caps simultaneous SSE subscribers on
+	// /v1/events. Guards against a reconnect storm spawning unbounded
+	// goroutines. Returns 503 when full. Default: 16.
+	MaxEventSubscribers int `json:"max_event_subscribers"`
+
+	// SubmitRatePerSec and SubmitRateBurst implement a token-bucket rate
+	// limit on POST /v1/qso specifically (the hot path that writes
+	// sqlite rows and spawns forwarder work). Requests beyond the burst
+	// get 429 rate_limited. The submit endpoint is the one place a
+	// runaway local client can cause the most damage, so it carries its
+	// own cap on top of the concurrent-request floor. Defaults:
+	// 20/sec, burst 40.
+	SubmitRatePerSec int `json:"submit_rate_per_sec"`
+	SubmitRateBurst  int `json:"submit_rate_burst"`
 }
 
 // Load reads a JSON config file and returns a populated Config with defaults
@@ -135,6 +164,18 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.Server.MaxPageLimit == 0 {
 		cfg.Server.MaxPageLimit = 500
 	}
+	if cfg.Server.MaxConcurrentRequests == 0 {
+		cfg.Server.MaxConcurrentRequests = 128
+	}
+	if cfg.Server.MaxEventSubscribers == 0 {
+		cfg.Server.MaxEventSubscribers = 16
+	}
+	if cfg.Server.SubmitRatePerSec == 0 {
+		cfg.Server.SubmitRatePerSec = 20
+	}
+	if cfg.Server.SubmitRateBurst == 0 {
+		cfg.Server.SubmitRateBurst = 40
+	}
 	if cfg.Server.MaxContactHistoryResults == 0 {
 		cfg.Server.MaxContactHistoryResults = 100
 	}
@@ -192,7 +233,7 @@ func applyDefaults(cfg *Config, baseDir string) {
 	}
 }
 
-// validateForwarders checks the statically-decidable correctness of every
+// validateForwarders checks the statically decidable correctness of every
 // forwarder entry. Type-specific credential validation happens later when
 // the forwarder package is constructed at daemon startup.
 func validateForwarders(fwds []types.ForwarderConfig) error {
