@@ -24,7 +24,50 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-21, session 17 — Gio UI spike validated)
+## Current state (as of 2026-04-22, session 18 — daemon hardening + logging-app scaffold started)
+
+### Session 18 work (daemon accidental-self-DoS floor + structure.md amendment + logging-app DI decision)
+
+**What landed:**
+
+- **Daemon hardening floor** (driven by the scenario "a user's cron job floods the submit endpoint and knocks the daemon over with 500s"):
+  - `internal/config/config.go` — four new `ServerConfig` fields with defaults: `MaxConcurrentRequests=128`, `MaxEventSubscribers=16`, `SubmitRatePerSec=20`, `SubmitRateBurst=40`. Documented in-line with the threat model (accidental self-DoS, not malicious).
+  - `internal/api/limits.go` (new, ~110 LOC) — `loadLimiter` with a buffered-channel semaphore (concurrent cap), a mutex-guarded subscriber counter (SSE cap), and a lazy-refill token bucket (submit cap). No background goroutines.
+  - `internal/api/middleware.go` — three new methods: `limitConcurrent` (wraps full mux, exempts `/v1/events`, returns 503 `server_busy`), `limitEventSubscribers` (wraps `/v1/events`, 503), `limitSubmitRate` (wraps `POST /v1/qso`, 429 `rate_limited`).
+  - `internal/api/server.go` — routes for `POST /v1/qso` and `GET /v1/events` now use `mux.Handle(...)` with per-route wrappers; outer chain is `limitConcurrent(recoverPanic(mux))`.
+  - `internal/api/limits_test.go` (new) — 5 tests; edge case caught during implementation: `allowSubmit` must advance `submitLastFill` unconditionally (even on negative elapsed) or subsequent calls see negative elapsed forever. Full suite green.
+  - `docs/v2-design/api.md` §6 rewritten to recognize accidental self-DoS as a milestone-1 concern (not just a TCP-exposure concern) and to record the minimal-floor as "implemented" with trigger conditions for the fuller hardening items (TCP binding, non-owner clients, multi-client workload).
+
+- **CI fix:** `cmd/giospike/main.go` now has `//go:build gio`. CI's `go build ./...` skips it (no Gio system deps installed on the runner); local build uses `go build -tags gio ./cmd/giospike/`. When `cmd/logging` (the real Gio app) lands, CI gets a one-line `apt-get install` for Vulkan/Wayland/xkbcommon dev packages and the build-tag gate is removed.
+
+- **`docs/v2-design/structure.md` amended** to reflect the Gio pivot:
+  - Decisions #2 and #3 each carry a `> Superseded 2026-04-21 by decision #7` banner (historical rationale preserved — the rule "module boundaries earn their keep via independent build tooling or dependency isolation" still stands; it just no longer applies because we have no Wails apps).
+  - New decision #7: "Gio UI toolkit replaces Wails; all apps stay in the root module" — records spike validation, structural consequence (no `go.work`, no `apps/`), CI wrinkle (Linux C build deps).
+  - "Deliberately absent from milestone 1" — `apps/logging/…` bullet rewritten as `cmd/logging/…`.
+  - "Target layout for milestone 2" — replaced `apps/*/go.mod`-and-`go.work` diagram with single-`go.mod`-extra-`cmd/` diagram.
+
+- **Logging app scaffold started.** Operator has begun work on `cmd/logging`. Not yet reviewed in this session — the user started it in parallel.
+
+**Design decision taken (iocdi in cmd/logging):**
+
+Initial lean was *don't use iocdi* — argued that a Gio app with "config + logging + reader loop" doesn't need a framework. The user corrected the premise by sharing the real service inventory for the logging app: callsign-online lookup (QRZ), prefix/country lookup (Hamnut), enrichment orchestrator, email-out-to-QSL-manager, plus config/logging/smclient/rigloop. That's ~8–10 services with real interdependencies (enrichment depends on hamnut + qrz + config; email depends on config; rigloop depends on config for rig selection) AND the enrichment-never-blocks-logging invariant, which demands each external service declare its graceful-degradation path at startup — exactly iocdi's `Initialize()` phase.
+
+**Decision (2026-04-22):** `cmd/logging` uses iocdi from day one. Reasons:
+1. Several services (QRZ, Hamnut, email) are lift-and-shift from v1 and already iocdi-shaped.
+2. The enrichment-never-blocks-logging invariant needs a principled "validate / warn / continue" hook per service, which iocdi provides via `Initialize()`.
+3. Ordering matters across the graph; iocdi's container enforces what would otherwise be a hand-maintained init order in `main.go` that drifts over time.
+4. Consistency with `cmd/smd` — same pattern, same failure modes, reduced cognitive load.
+
+The earlier "CLAUDE.md says build specific" pull still stands but its target was v1's reflection-based adapter framework, not DI. iocdi survived the v2 cull specifically because it solves a real problem — and `cmd/logging` at this service count has the same problem.
+
+### Next session
+
+- **Resume `cmd/logging` scaffold.** Review whatever the operator started. Register `config` + `logging` + `smclient` as iocdi services; stub placeholders for `hamnut`, `qrz`, `enrichment`, `email`, `rigloop` so the service graph is visible even if most implementations are TODO. First working UI frame: Gio window with `rigloop` feeding live rig state + one QSO-entry row + Log button (same functional surface as `cmd/giospike/` but wired through iocdi + daemon `POST /v1/qso` via `smclient` instead of stdout).
+- Once `cmd/logging` binds to Gio for real: remove `//go:build gio` gate on `cmd/giospike/` (or delete `cmd/giospike/` entirely per memory `project_sm_ui_toolkit`), AND add the Gio Linux deps to `.github/workflows/ci.yml`. Both changes land together.
+- `internal/rigconfig` composition function — landing criterion (`logging app under construction`) is now met. Expected shape: `rigconfig.Compose(types.RigConfig, cat.RigDefinition) (serial.Config, error)`, absorbing the inline ~15 LOC helper currently duplicated in `cmd/catcli/` and `cmd/giospike/`.
+- Open item from session 16 still outstanding: mystery `FD` prefix on FTdx10 in AI mode. Investigate opportunistically.
+
+### Session 17 work (Gio UI spike — toolkit decision)
 
 ### Session 17 work (Gio UI spike — toolkit decision)
 
@@ -102,12 +145,9 @@ Operator plugged in the FTdx10, ran `catcli -device /dev/ttyUSB0 -rig yaesu-ftdx
 
 The FTdx10 in AI mode broadcasts ~15 prefixes v1 never configured (`IF`, `SS`, `NB`, `RF`, `AC`, `RM`, `RG`, `MG`, `ML`, `GT`, `SH`, `BI`, `KR`, plus a mystery `FD` not in the manual). These surface as `[no match]` in catcli, which is the correct behaviour — v1 ignored them silently; we flag them louder. Decision recorded in cat-serial-reuse.md §6: do NOT pre-broaden the state table; expand only when a specific downstream feature needs a specific prefix. `FD` logged as an open item in §8 for future investigation.
 
-### Next session
+### Outcome (superseded by session 18)
 
-- **Logging app scaffold proper** — pick `cmd/logging/` (or similar) and start the real v2 logging app in Gio. First cut should absorb the §4 Step 2 work: caller-owned I/O glue (`serial.Port` + `cat.Decode` read loop, lifted from `cmd/giospike/` but promoted into a reusable `internal/rigsession` or equivalent, TBD during design). At the same time: `internal/rigconfig` — the `types.RigConfig` → `serial.Config` composition function with real operator-override semantics, driven by the logging app's actual config shape rather than catcli's stub.
-- **Before any big Gio structuring commitments**, sketch the screen inventory for the logging app (QSO entry + live rig readout at minimum; session list is client-side per the memory invariant; enrichment display is TBD). The layout and data-flow shape drive whether we need a single `app.Window` or multiple, and whether state lives in a `sync.RWMutex`-guarded struct or a channel-fed snapshot model. The spike used the snapshot model successfully and it should remain the default unless a concrete reason surfaces.
-- §4 Step 3 is still a doc-note-only item; no code change.
-- Open item from session 16 still outstanding: the mystery `FD` prefix the FTdx10 broadcasts in AI mode — not in the CAT OM command index. Investigate opportunistically (next time the rig is up) but not urgent.
+Session 18 picked up from here — see the "Next session" block under the session-18 heading above.
 
 ### Session 15 work: bridge design simplified, YAGNI question on the table
 

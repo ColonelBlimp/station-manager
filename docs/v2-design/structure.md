@@ -33,6 +33,9 @@
 
 ### 2. Single Go module at milestone 1; `go.work` returns at milestone 2
 
+> **Superseded 2026-04-21 by decision #7 (Gio UI toolkit).** With Gio replacing Wails, there is no `go.work` in milestone 2 either — a single `go.mod` at the repo root covers every binary in v2. The rationale below still explains *why* module boundaries were only going to come back for Wails-tooling reasons; that reason no longer exists.
+
+
 **Decision:** Milestone 1 of v2 uses a **single `go.mod`** at the repo root. Everything under `cmd/` and `internal/` lives in this one module. `go build ./...` just works; there is no `go.work` file.
 
 When the first Wails thin client is reintroduced in milestone 2, `go.work` comes back — but **only** to accommodate the Wails apps, each of which gets its own module for frontend-tooling reasons.
@@ -49,6 +52,9 @@ When the first Wails thin client is reintroduced in milestone 2, `go.work` comes
 ---
 
 ### 3. Only Wails apps get their own modules; pure Go binaries stay in the root module
+
+> **Superseded 2026-04-21 by decision #7.** There are no Wails apps in v2. Every binary — daemon, importer, logging app, logbook app, config app, any future bridge — is a pure Go binary living in the root module, built via `go build ./cmd/<name>`. The rationale below is preserved because the underlying rule ("module boundaries earn their keep via independent build tooling or dependency isolation; pure Go binaries have neither") is still how we decide whether a future package ever needs its own module.
+
 
 **Decision:** The only things that get their own `go.mod` files in v2 are the Wails client applications. Every pure Go binary — the daemon `smd`, `importer`, any future bridges like `sm-serial-bridge` or `wsjtx-bridge` — lives in the root module and is built via `go build ./cmd/<name>`.
 
@@ -113,6 +119,25 @@ Each Wails app imports from the root module via its full path (`github.com/Colon
 
 ---
 
+### 7. Gio UI toolkit replaces Wails; all apps stay in the root module
+
+**Decision:** The v2 client apps — `logging`, `logbook`, `config`, plus any future siblings — are **pure-Go Gio applications**, not Wails web-view applications. They live under `cmd/` in the root module, alongside `cmd/smd` and `cmd/catcli`, and are built with `go build ./cmd/<name>`. The `apps/` directory originally reserved for Wails apps is **not created** in v2; it has no role.
+
+**Why:**
+
+- Validated 2026-04-21 by the `cmd/giospike/` evening-scale live-rig spike (FTdx10 VFO/mode readout + one-line QSO entry wired through `internal/serial` + `internal/cat`). Streaming redraw via `w.Invalidate()` from a background goroutine, text input, and button/layout behaved well. Operator verdict: "we can build a clean UI from this and keep the whole thing with Go." See `project_sm_ui_toolkit` memory note.
+- Gio is a pure-Go library. It has no JavaScript frontend, no Vite/npm toolchain, no code generation — none of the reasons that drove Wails apps to want their own `go.mod` under `go.work` (decision #3).
+- By decisions #2 and #3's own rule — "module boundaries earn their keep via independent build tooling or dependency isolation" — a Gio app has neither need. It is structurally identical to `cmd/smd`: a pure-Go main package that imports from `internal/*`.
+- One `go.mod` covers every binary. `go build ./...` continues to work end-to-end. No `go.work` migration is ever needed for this project.
+
+**Concrete consequence:** the milestone-2 layout below (originally targeting `apps/logging/go.mod` under `go.work`) is replaced by additional `cmd/<name>/` directories. CI's `go build ./...` handles everything; the only operational wrinkle is that Gio has non-trivial Linux system dependencies (Vulkan headers, Wayland/xkbcommon devel packages) that the CI runner needs — when the first Gio app under `cmd/` lands, CI gets an `apt-get install` step and any build-tag gating on the throwaway `cmd/giospike/` is removed.
+
+**Alternative considered:** keep Wails as originally planned. Rejected on the spike's outcome plus the operator's preference to avoid a JS/webview stack for a Go-centric single-user desktop tool. Gio's tradeoff (non-trivial Linux C build deps) is less painful than Wails' tradeoff (a second toolchain, bindings generation, an embedded browser runtime) for this project.
+
+**Related:** `project_sm_ui_toolkit` memory. `docs/session-handoff.md` session 17 block. `cmd/giospike/main.go` as the working reference (deleted when the real logging app lands).
+
+---
+
 ### 6. `internal/*` packages get their own module only in two rare cases
 
 **Decision:** Do not split `internal/*` into sub-modules by default. A package moves out of the flat `internal/` tree only in two situations:
@@ -169,7 +194,7 @@ station-manager/
 
 Each item has a reason for not being in milestone 1. Listing them explicitly so that future sessions don't reintroduce them by accident or wonder why they aren't there.
 
-- **`apps/logging`, `apps/logbook`, `apps/config`** — the three Wails thin clients. Milestone 2+. They can't be built usefully until the daemon's HTTP API has stabilized and been exercised via `curl` and `smclient`. Building them in parallel with the daemon invites the shape of the daemon API to be unintentionally constrained by frontend needs before the domain model is settled.
+- **`cmd/logging`, `cmd/logbook`, `cmd/config`** — the three v2 client apps (Gio, per decision #7). Milestone 2+. They can't be built usefully until the daemon's HTTP API has stabilized and been exercised via `curl` and `smclient`. Building them in parallel with the daemon invites the shape of the daemon API to be unintentionally constrained by frontend needs before the domain model is settled. (The docs originally placed these under `apps/logging/` etc. because they were going to be Wails apps with their own `go.mod`; decision #7 collapses them back into `cmd/`.)
 
 - **`internal/serial`, `internal/cat`, `internal/ptt`** — rig control. These stay on the v1 branch until a v2 consumer is being built. Rig control is a *client* concern per the narrow-daemon-scope invariant (see `docs/v1-analysis/invariants.md`). The daemon does not own the rig. Carrying these packages into `internal/` before their consumer exists would clutter the v2 tree with unused code. They come back in milestone 3+ as dependencies of the `cmd/sm-serial-bridge` binary, or of a future dedicated rig-control client.
 
@@ -183,42 +208,34 @@ Each item has a reason for not being in milestone 1. Listing them explicitly so 
 
 ---
 
-## Target layout for milestone 2 (when Wails clients return)
+## Target layout for milestone 2 (client apps)
+
+Per decision #7 (Gio, not Wails), milestone 2 does **not** introduce `go.work` or an `apps/` directory. It extends the milestone-1 layout with additional `cmd/` entries — the client apps are structurally identical to the daemon.
 
 ```
 station-manager/
-├── go.work                       # NEW at milestone 2
-├── go.mod                        # root module — daemon, importer, all internal/*
+├── go.mod                        # root module — still the only module
 ├── go.sum
 ├── cmd/
-│   ├── smd/
-│   └── importer/
-├── internal/                     # ALL shared library code, one module
+│   ├── smd/                      # daemon
+│   ├── catcli/                   # diagnostic CLI
+│   ├── importer/                 # ADIF bulk importer
+│   ├── logging/                  # NEW — Gio logging app
+│   ├── logbook/                  # NEW — Gio logbook app
+│   ├── config/                   # NEW — Gio config app
+│   └── giospike/                 # throwaway spike (deleted once cmd/logging exists)
+├── internal/                     # ALL shared library code, flat tree
 │   ├── api/
 │   ├── qsoservice/
-│   ├── smclient/
+│   ├── smclient/                 # HTTP client, consumed by the Gio apps
 │   ├── types/
+│   ├── serial/
+│   ├── cat/
 │   └── ...everything from milestone 1...
-├── apps/
-│   ├── logging/
-│   │   ├── go.mod                # OWN MODULE (Wails/Vite tooling)
-│   │   ├── go.sum
-│   │   ├── backend/
-│   │   └── frontend/
-│   ├── logbook/
-│   │   ├── go.mod                # OWN MODULE
-│   │   ├── go.sum
-│   │   ├── backend/
-│   │   └── frontend/
-│   └── config/
-│       ├── go.mod                # OWN MODULE
-│       ├── go.sum
-│       ├── backend/
-│       └── frontend/
 └── docs/
 ```
 
-At this point `go.work` has four entries: `.`, `./apps/logging`, `./apps/logbook`, `./apps/config`. Each Wails app's backend imports from `github.com/ColonelBlimp/station-manager/internal/smclient` (and whatever other root-module packages it needs). Local development sees live source via `go.work`; released builds resolve through normal module versioning using a monorepo-tagged version of the root module.
+Each Gio app imports from `internal/*` directly — no inter-module wiring, no replace directives, no workspace file. `go build ./...` covers every binary. `go build ./cmd/<name>` produces an individual one. The single tradeoff versus the original Wails plan is that CI now needs Gio's Linux system dependencies (Vulkan headers, Wayland/xkbcommon devel packages) installed before `go build ./...` can compile the real `cmd/logging` binary; a one-line `apt-get install` step in CI covers it when the first non-spike Gio binary lands.
 
 ---
 
