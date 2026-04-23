@@ -24,7 +24,29 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-22, session 18 — daemon hardening + logging-app scaffold started)
+## Current state (as of 2026-04-23, session 19 — cmd/logging window scaffold + CI Gio deps)
+
+### Session 19 work (cmd/logging main window + CI Linux deps for Gio)
+
+**What landed:**
+
+- **`cmd/logging/main.go` — empty 1024×751 Gio main window.** Fixed-size window constants (`windowWidth = unit.Dp(1024)`, `windowHeight = unit.Dp(751)`), title "Station Manager — Logging". Standard Gio event loop: `DestroyEvent` exits cleanly (wrapped through `errors.Op = "logging.app.main.run"` so the shutdown path uses the project error convention), `FrameEvent` renders an empty frame. No widgets yet — this is the shell on which the iocdi-wired service graph and the first QSO-entry row will be built.
+  - Import note: Gio's `op` package is aliased as `giop` so it doesn't collide with the `errors.Op` constant used inside `run()`.
+
+- **CI Linux deps for Gio** (`.github/workflows/ci.yml`) — `apt-get install` step added before `go vet`. Installs: `libwayland-dev`, `libxkbcommon-dev`, `libxkbcommon-x11-dev`, `libvulkan-dev`, `libgles2-mesa-dev`, `libegl1-mesa-dev`, `libffi-dev`, `libx11-dev`, `libx11-xcb-dev`, `libxcb1-dev`, `libxcursor-dev`, `libxfixes-dev`, `libxrandr-dev`, `libxinerama-dev`, `libxi-dev`, `libxxf86vm-dev`. Two iterations — the first pass missed `libx11-xcb-dev` and `libxfixes-dev`, which Gio's pkg-config requires via `x11-xcb` and `xfixes` (both ship as separate Debian/Ubuntu packages from `libx11-dev`).
+
+**Follow-up teed up but not taken this session:**
+
+- `//go:build gio` tag on `cmd/giospike/main.go` can now be removed — CI has the deps. Per the session-18 plan this change is meant to land alongside the CI update; keeping them separate this session because the user asked only for the scaffold + CI fix. Remove when picking up next session.
+- `cmd/giospike/` can also be deleted entirely per memory `project_sm_ui_toolkit` (spike's job is done). The operator's call — preserved for now as a working reference.
+
+### Next session
+
+- **Wire the service graph into `cmd/logging`.** Register `config` + `logging` + `smclient` as iocdi services with real implementations; stub placeholders (iocdi-shaped, `Initialize()` green, behaviour TODO) for `hamnut`, `qrz`, `enrichment`, `email`, `rigloop`. The goal is to make the dependency graph visible in code before any of the tricky services are implemented.
+- **First meaningful UI frame.** Gio window with `rigloop` feeding live rig state + one QSO-entry row + Log button — same functional surface as `cmd/giospike/` but wired through iocdi + daemon `POST /v1/qso` via `smclient` instead of stdout.
+- **Drop `//go:build gio` from `cmd/giospike/main.go`** (or delete `cmd/giospike/` entirely). CI can now build it.
+- `internal/rigconfig` composition function — landing criterion (`logging app under construction`) is met. Expected shape: `rigconfig.Compose(types.RigConfig, cat.RigDefinition) (serial.Config, error)`, absorbing the inline ~15 LOC helper duplicated in `cmd/catcli/` and `cmd/giospike/`.
+- Open item from session 16 still outstanding: mystery `FD` prefix on FTdx10 in AI mode. Investigate opportunistically.
 
 ### Session 18 work (daemon accidental-self-DoS floor + structure.md amendment + logging-app DI decision)
 
@@ -60,12 +82,9 @@ Initial lean was *don't use iocdi* — argued that a Gio app with "config + logg
 
 The earlier "CLAUDE.md says build specific" pull still stands but its target was v1's reflection-based adapter framework, not DI. iocdi survived the v2 cull specifically because it solves a real problem — and `cmd/logging` at this service count has the same problem.
 
-### Next session
+### Outcome (superseded by session 19)
 
-- **Resume `cmd/logging` scaffold.** Review whatever the operator started. Register `config` + `logging` + `smclient` as iocdi services; stub placeholders for `hamnut`, `qrz`, `enrichment`, `email`, `rigloop` so the service graph is visible even if most implementations are TODO. First working UI frame: Gio window with `rigloop` feeding live rig state + one QSO-entry row + Log button (same functional surface as `cmd/giospike/` but wired through iocdi + daemon `POST /v1/qso` via `smclient` instead of stdout).
-- Once `cmd/logging` binds to Gio for real: remove `//go:build gio` gate on `cmd/giospike/` (or delete `cmd/giospike/` entirely per memory `project_sm_ui_toolkit`), AND add the Gio Linux deps to `.github/workflows/ci.yml`. Both changes land together.
-- `internal/rigconfig` composition function — landing criterion (`logging app under construction`) is now met. Expected shape: `rigconfig.Compose(types.RigConfig, cat.RigDefinition) (serial.Config, error)`, absorbing the inline ~15 LOC helper currently duplicated in `cmd/catcli/` and `cmd/giospike/`.
-- Open item from session 16 still outstanding: mystery `FD` prefix on FTdx10 in AI mode. Investigate opportunistically.
+Session 19 picked up from here — see the "Next session" block under the session-19 heading above. Empty `cmd/logging` window landed; CI got Gio deps; iocdi service registration still open.
 
 ### Session 17 work (Gio UI spike — toolkit decision)
 
