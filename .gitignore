@@ -13,3 +13,4 @@ web/*
 catcli
 !cmd/giospike/*
 giospike
+logging
