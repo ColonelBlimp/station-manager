@@ -29,7 +29,10 @@ jobs:
             libegl1-mesa-dev \
             libffi-dev \
             libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
             libxcursor-dev \
+            libxfixes-dev \
             libxrandr-dev \
             libxinerama-dev \
             libxi-dev \
