@@ -402,7 +402,7 @@ func (e *logEvent) Interface(key string, val any) LogEvent {
 // Dict for nested objects
 func (e *logEvent) Dict(key string, dict func(LogEvent)) LogEvent {
 	if e.event != nil {
-		dictEvent := zerolog.Dict()
+		dictEvent := e.event.CreateDict()
 		dict(newLogEvent(dictEvent))
 		e.event.Dict(key, dictEvent)
 	}
@@ -410,7 +410,7 @@ func (e *logEvent) Dict(key string, dict func(LogEvent)) LogEvent {
 }
 
 // finish decrements the active-operations counter and signals the
-// WaitGroup on the owning Service, IF this event was constructed with
+// WaitGroup on the owning Service IF this event was constructed with
 // tracking. No-op for untracked events. Called from the terminal methods
 // Msg, Msgf, and Send. Extracted as a helper to avoid the three-way
 // defer-block duplication the previous code had.
