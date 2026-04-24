@@ -6,6 +6,11 @@
         <language minSize="152" name="Go" />
       </Languages>
     </inspection_tool>
+    <inspection_tool class="GoResourceLeak" enabled="true" level="WARNING" enabled_by_default="true">
+      <functions>
+        <function importPath="github.com/ColonelBlimp/station-manager/internal/config" name="New" />
+      </functions>
+    </inspection_tool>
     <inspection_tool class="HtmlUnknownTag" enabled="true" level="WARNING" enabled_by_default="true">
       <option name="myValues">
         <value>
