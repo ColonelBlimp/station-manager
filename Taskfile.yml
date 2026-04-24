@@ -13,10 +13,11 @@ tasks:
       - go vet ./...
 
   build:
-    desc: Compile the whole module and build the daemon binary
+    desc: Compile the whole module and build the daemon + logging-app binaries
     cmds:
       - go build ./...
       - go build -o build/bin/smd ./cmd/smd
+      - go build -o build/bin/logging ./cmd/logging
 
   test:
     desc: Run tests with race detector and -short
