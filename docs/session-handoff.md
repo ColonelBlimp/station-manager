@@ -24,7 +24,60 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-23, session 19 — cmd/logging window scaffold + CI Gio deps)
+## Current state (as of 2026-04-24, session 20 — Go 1.26 bump + modernize pass + cmd/logging wired + first entry row)
+
+### Session 20 work (toolchain modernisation + cmd/logging wired into iocdi + three-column QSO entry row)
+
+**What landed:**
+
+- **Go 1.26.2 bump.** `go.mod` updated from `go 1.25.0` → `go 1.26.2` (operator installed the toolchain locally; CI picks it up automatically via `actions/setup-go` with `go-version-file: go.mod`). Clean `go mod tidy`; full build + `go test -race ./...` green post-bump.
+
+- **`go vet ./...`** — zero findings after the toolchain bump. Already part of CI.
+
+- **Modernize pass via `gopls/modernize`.** Dry-run surfaced ~130 findings; applied the safe bucket across 29 files in one pass, reverted two judgment items for review:
+  - **Safe (applied):** `interface{}` → `any`, `for i := 0; i < n; i++` → `for i := range n`, `if x > y { x = y }` → `min`/`max`, `[]byte(fmt.Sprintf(...))` → `fmt.Appendf`, `m[k]=v` loop → `maps.Copy`, `b.N` → `b.Loop()`, `go func() + wg.Wait()` → `wg.Go(fn)` (Go 1.25 `WaitGroup.Go`), `context.WithCancel` in tests → `t.Context()`, `slices.Contains`, `reflect.TypeOf((*T)(nil)).Elem()` → `reflect.TypeFor[T]()` (hand-written code only).
+  - **Skipped (generated code):** all hits under `internal/database/sqlite/models/*.go` — sqlboiler output, per CLAUDE.md rule "sqlboiler-generated models are not hand-edited."
+  - **Judgment item #1 — applied:** `internal/types/rig.go:39` `json:"overrides,omitempty"` → `json:"overrides,omitzero"`. The original tag was a no-op (omitempty has no effect on nested struct fields); `omitzero` (Go 1.24+) actually omits when the struct is zero-valued, matching the doc-comment's "missing = inherit" promise.
+  - **Judgment item #2 — skipped:** `internal/iocdi/internal.go:29` offered `reflect.Type.Fields()` iteration (new in Go 1.26). Low value for the cost — the rewrite saves two lines but introduces a `field := field` shadow in DI-container hot-path reflection code; kept the explicit index loop.
+
+- **zerolog deprecation fixed.** `internal/logging/event.go:405` — `zerolog.Dict()` is deprecated because it doesn't preserve the parent event's stack, hooks, or context. Swapped to `e.event.CreateDict()`. `zerolog` import remains for level constants and type references elsewhere in the file.
+
+- **`Taskfile.yml` build target now emits the logging-app binary.** Added `go build -o build/bin/logging ./cmd/logging` alongside the existing `smd` line, so `task build` produces both `build/bin/smd` and `build/bin/logging`.
+
+- **CI Gio Linux deps finalised.** Two-pass fix: initial apt list missed `libx11-xcb-dev` and `libxfixes-dev` (Gio's pkg-config requires `x11-xcb` and `xfixes`, both shipped as separate Debian/Ubuntu packages from `libx11-dev`). Final list: `libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxfixes-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev`.
+
+- **`cmd/logging` wired into iocdi.** `cmd/logging/container.go` (new) exposes `buildContainer(cfg config.Config) (*iocdi.Container, error)`, mirroring `cmd/smd`'s pattern: registers the `config` service (instance) and the `logging` service (type via `reflect.TypeFor[*logging.Service]()`), sets the `LiteralProvider` so `logging.Service.WorkingDir` (`di.inject:"workingdir"`) resolves from `cfgSvc.WorkingDir()`, then calls `container.Build()` to fire `Initialize()` in dependency order. Uses the `errors.Op = "logging.app.main.buildContainer"` convention. A leading comment lists the six services still-to-register so the service graph is visible in source even before implementations exist: `smclient`, `hamnut`, `qrz`, `enrichment`, `email`, `rigloop`.
+
+  `cmd/logging/main.go` now:
+  - Parses `-config` flag, loads config via `loadConfig` (same resolution order as `cmd/smd`: explicit path → `$SM_WORKING_DIR/config.json` → `./config.json` → `config.DefaultConfig(cwd)`).
+  - Calls `buildContainer(cfg)`, resolves `*logging.Service` out of the container.
+  - Spawns the Gio goroutine, passing the logger into `run()`. Logger emits `"logging app started"` / `"logging app stopped"` bookends; `loggerSvc.Close()` runs before `os.Exit` in the shutdown path.
+  - `DestroyEvent` returns `nil` cleanly when `e.Err == nil` (previously wrapped nil as an error).
+
+- **First QSO entry row rendered** (three fixed-width labeled inputs, left-aligned, horizontal flex, top of the 16dp-inset window):
+  - **Callsign** — `unit.Dp(130)` (~10 proportional chars), hint `"G0ABC"`, receives initial focus on first `FrameEvent` via `gtx.Execute(key.FocusCmd{Tag: &callsign})` *after* `layoutUI` (Gio's focus command resolves against registered event.Ops, so it must run post-layout).
+  - **RST Sent** — `unit.Dp(60)` (~3 digits), default value `"59"` set via `SetText("59")`.
+  - **RST Rcvd** — same width, default `"59"`.
+  - All three are `widget.Editor` with `SingleLine = true, Submit = true`. All share a `widget.Border` frame (1dp outline in `#101828`, 4dp corner radius, 6dp inner inset). Input border colour is a package-level `color.NRGBA` constant — named, not parameterised, per session-20 decision below.
+  - Labels use `material.Body2` (≈12sp) rather than `Body1` (≈14sp) — slight reduction kept tight vertical rhythm as the row grew to three columns.
+  - Helpers: `labeledInput(th, label, ed, hint, width)` returns a vertical flex (label stacked above input), `borderedInput(th, ed, hint, width)` returns the fixed-width outlined editor. Both return `layout.Widget`, matching Gio's `material.*` idiom. Kept in `main.go` — splitting to `widgets.go` is teed up for when a third widget type lands (not a third instance of the same type).
+
+- **v1 layout reference logged** (operator shared a v1 logging-window screenshot). Alignment notes for v2:
+  - **Kept:** status row (`Logging Mode: [Normal ▾] | Logbook: <name> | Rig: <model> | Session Time: hh:mm:ss`), three-row entry block (Row 1: Callsign / RST Sent / RST Rcvd / Mode / VFO-A/B + freq + band; Row 2: Name / Qth / Comment; Row 3: Date / Time On UTC / Time Off UTC / Log Contact / Clear), bottom sub-tab strip (`Worked / Details / My Station / Session`) over a QSO table.
+  - **Dropped:** the v1 top-level tab strip (`Logging` / `Control` as siblings). In v2, `cmd/logging` and a future `cmd/control` (CAT client) are separate binaries — no in-app nav between them.
+
+- **Widget-abstraction discussion closed** (operator asked whether to split widgets into reusable blocks). Outcome: the current function-returning-`layout.Widget` shape is the Gio idiom; don't promote to a framework prematurely. Named constants over parameters for colour/inset/size. Extract to a `cmd/logging/widgets.go` file once a third *kind* of widget lands (dropdown, date picker, etc.), not on the third instance of the same kind. Promote to an `internal/ui` package only when a second app (`cmd/logbook`, `cmd/config`) needs the same widget — that's when the API has two uses to fit, rather than speculation.
+
+### Next session
+
+- **Register `smclient` as the first real service with a dependency.** It's the precondition for a working Log Contact button (POST `/v1/qso` to the daemon). Stub `hamnut`, `qrz`, `enrichment`, `email`, `rigloop` as iocdi-shaped placeholders with green `Initialize()` and TODO bodies so the service graph is fully visible.
+- **Status row** (top of the window): `Logging Mode: [Normal ▾] | Logbook: <name> | Rig: <model> | Session Time: hh:mm:ss`. Session time is a monotonic counter started at window-open.
+- **Row 1 completion:** Mode dropdown (Gio has no stock dropdown — either a cycle-button or a small custom menu) and VFO-A/B buttons + frequency readout. Frequency readout needs `rigloop`, so this unblocks once that service exists.
+- **Row 2:** Name / Qth / Comment (textarea; `widget.Editor` with `SingleLine = false`).
+- **Row 3:** Date picker, Time On UTC, Time Off UTC, Log Contact (filled button → smclient.Submit), Clear (outline button → reset editors).
+- **Drop `//go:build gio` from `cmd/giospike/main.go`** (or delete `cmd/giospike/` entirely — spike's job is done; see memory `project_sm_ui_toolkit`). CI has the deps.
+- **`internal/rigconfig` composition function** — still unblocked. Expected shape: `rigconfig.Compose(types.RigConfig, cat.RigDefinition) (serial.Config, error)`. Absorbs the ~15 LOC inline helper duplicated in `cmd/catcli/` and `cmd/giospike/`.
+- Open item from session 16 still outstanding: mystery `FD` prefix on FTdx10 in AI mode. Investigate opportunistically.
 
 ### Session 19 work (cmd/logging main window + CI Linux deps for Gio)
 
@@ -40,13 +93,9 @@ precisely so we don't re-derive state or redo finished work.
 - `//go:build gio` tag on `cmd/giospike/main.go` can now be removed — CI has the deps. Per the session-18 plan this change is meant to land alongside the CI update; keeping them separate this session because the user asked only for the scaffold + CI fix. Remove when picking up next session.
 - `cmd/giospike/` can also be deleted entirely per memory `project_sm_ui_toolkit` (spike's job is done). The operator's call — preserved for now as a working reference.
 
-### Next session
+### Outcome (superseded by session 20)
 
-- **Wire the service graph into `cmd/logging`.** Register `config` + `logging` + `smclient` as iocdi services with real implementations; stub placeholders (iocdi-shaped, `Initialize()` green, behaviour TODO) for `hamnut`, `qrz`, `enrichment`, `email`, `rigloop`. The goal is to make the dependency graph visible in code before any of the tricky services are implemented.
-- **First meaningful UI frame.** Gio window with `rigloop` feeding live rig state + one QSO-entry row + Log button — same functional surface as `cmd/giospike/` but wired through iocdi + daemon `POST /v1/qso` via `smclient` instead of stdout.
-- **Drop `//go:build gio` from `cmd/giospike/main.go`** (or delete `cmd/giospike/` entirely). CI can now build it.
-- `internal/rigconfig` composition function — landing criterion (`logging app under construction`) is met. Expected shape: `rigconfig.Compose(types.RigConfig, cat.RigDefinition) (serial.Config, error)`, absorbing the inline ~15 LOC helper duplicated in `cmd/catcli/` and `cmd/giospike/`.
-- Open item from session 16 still outstanding: mystery `FD` prefix on FTdx10 in AI mode. Investigate opportunistically.
+Session 20 picked up from here — see the "Next session" block under the session-20 heading above. Container wiring (config + logging + LiteralProvider) and the first QSO entry row (Callsign / RST Sent / RST Rcvd) landed; Go 1.26 bump and modernize pass came along for the ride.
 
 ### Session 18 work (daemon accidental-self-DoS floor + structure.md amendment + logging-app DI decision)
 
