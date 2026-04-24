@@ -47,8 +47,8 @@ func makeStdWrapChain(depth int) error {
 func BenchmarkInfoWith_NoErr(b *testing.B) {
 	s := newBenchService(zerolog.InfoLevel)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for i := 0; b.Loop(); i++ {
 		s.InfoWith().Str("k", "v").Int("n", i).Msg("hello")
 	}
 }
@@ -57,8 +57,8 @@ func BenchmarkErrorWith_DetailedChain3(b *testing.B) {
 	s := newBenchService(zerolog.ErrorLevel)
 	err := makeDetailedChain(3)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		s.ErrorWith().Err(err).Msg("oops")
 	}
 }
@@ -67,8 +67,8 @@ func BenchmarkErrorWith_DetailedChain6(b *testing.B) {
 	s := newBenchService(zerolog.ErrorLevel)
 	err := makeDetailedChain(6)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		s.ErrorWith().Err(err).Msg("oops")
 	}
 }
@@ -77,8 +77,8 @@ func BenchmarkErrorWith_StdWrap6(b *testing.B) {
 	s := newBenchService(zerolog.ErrorLevel)
 	err := makeStdWrapChain(6)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		s.ErrorWith().Err(err).Msg("oops")
 	}
 }

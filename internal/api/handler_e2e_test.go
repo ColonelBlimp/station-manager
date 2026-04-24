@@ -66,11 +66,9 @@ func startE2E(t *testing.T, fwds ...types.ForwarderConfig) *e2eHarness {
 			t.Fatalf("worker.New(%q): %v", fc.Name, err)
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			w.Run(workerCtx)
-		}()
+		})
 	}
 
 	shutdown := func() {

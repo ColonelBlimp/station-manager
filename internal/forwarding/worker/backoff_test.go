@@ -37,7 +37,7 @@ func TestComputeBackoff_BaseAndGrowth(t *testing.T) {
 		// Sample a few times — jitter is random so a single observation
 		// could sit anywhere in [base, upper). We want every sample to
 		// fall inside the window.
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			got := computeBackoff(tc.attempt, rc)
 			if got < base {
 				t.Fatalf("attempt=%d: got %s < base %s", tc.attempt, got, base)

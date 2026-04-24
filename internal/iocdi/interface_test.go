@@ -19,10 +19,10 @@ func TestInterfaceInjection(t *testing.T) {
 	c := New()
 
 	// Register the receiver and the concrete dependency
-	if err := c.Register("receiver", reflect.TypeOf((*receiver)(nil))); err != nil {
+	if err := c.Register("receiver", reflect.TypeFor[*receiver]()); err != nil {
 		t.Fatalf("register receiver: %v", err)
 	}
-	if err := c.Register("dep", reflect.TypeOf((*concreteDep)(nil))); err != nil {
+	if err := c.Register("dep", reflect.TypeFor[*concreteDep]()); err != nil {
 		t.Fatalf("register dep: %v", err)
 	}
 
@@ -47,10 +47,10 @@ func TestInterfaceMismatchFailsBuild(t *testing.T) {
 	type other struct{}
 
 	c := New()
-	if err := c.Register("receiver", reflect.TypeOf((*receiver)(nil))); err != nil {
+	if err := c.Register("receiver", reflect.TypeFor[*receiver]()); err != nil {
 		t.Fatalf("register receiver: %v", err)
 	}
-	if err := c.Register("dep", reflect.TypeOf((*other)(nil))); err != nil {
+	if err := c.Register("dep", reflect.TypeFor[*other]()); err != nil {
 		t.Fatalf("register dep: %v", err)
 	}
 

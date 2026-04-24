@@ -195,7 +195,7 @@ func (s *Service) Ping() error {
 
 	var lastErr error
 	// Up to 2 attempts for transient failures (e.g., brief network hiccup, SQLITE_BUSY)
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		ctx, cancel := s.withDefaultTimeout(context.Background())
 		err := h.PingContext(ctx)
 		cancel()

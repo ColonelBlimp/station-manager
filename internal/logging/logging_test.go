@@ -260,13 +260,11 @@ func TestService_CloseWaitsForLogs(t *testing.T) {
 
 	// Use a WaitGroup so we know the goroutine has actually issued the log call
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		// Small delay to overlap with Close, but not too long
 		time.Sleep(50 * time.Millisecond)
 		service.InfoWith().Msg("final log message")
-	}()
+	})
 
 	// Wait until the logging goroutine has run InfoWith().Msg
 	wg.Wait()
@@ -423,11 +421,11 @@ func TestConcurrentLogging(t *testing.T) {
 	numGoroutines := 10
 	logsPerGoroutine := 50
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < logsPerGoroutine; j++ {
+			for j := range logsPerGoroutine {
 				service.InfoWith().Int("goroutine", id).Int("iteration", j).Msg("concurrent log")
 			}
 		}(i)
@@ -451,11 +449,11 @@ func TestConcurrentLoggingAndClose(t *testing.T) {
 	numGoroutines := 5
 
 	// Start logging goroutines
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				service.InfoWith().Int("goroutine", id).Msg("log before close")
 				time.Sleep(time.Microsecond)
 			}
@@ -485,12 +483,12 @@ func TestConcurrentContextLoggers(t *testing.T) {
 	var wg sync.WaitGroup
 	numGoroutines := 10
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			childLogger := service.With().Int("goroutine_id", id).Logger()
-			for j := 0; j < 30; j++ {
+			for j := range 30 {
 				childLogger.InfoWith().Int("iteration", j).Msg("context log")
 			}
 		}(i)
@@ -729,11 +727,11 @@ func TestService_ActiveOperationsAndClose_NoLeaks(t *testing.T) {
 	const goroutines = 20
 	const iterations = 200
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				service.InfoWith().Int("goroutine", id).Int("iteration", j).Msg("active-ops-test")
 			}
 		}(i)
@@ -742,9 +740,7 @@ func TestService_ActiveOperationsAndClose_NoLeaks(t *testing.T) {
 	// While logging is happening, periodically read ActiveOperations in a best-effort way
 	stopMonitor := make(chan struct{})
 	var monitorWG sync.WaitGroup
-	monitorWG.Add(1)
-	go func() {
-		defer monitorWG.Done()
+	monitorWG.Go(func() {
 		for {
 			select {
 			case <-stopMonitor:
@@ -754,7 +750,7 @@ func TestService_ActiveOperationsAndClose_NoLeaks(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 		}
-	}()
+	})
 
 	// Wait for all log goroutines to complete
 	wg.Wait()
@@ -817,7 +813,7 @@ func TestLogEventBuilder_FilteredLevelSkipsCounters(t *testing.T) {
 	// constructs a chain with typed field methods and terminates with
 	// Msg — exactly the shape that would leak under the pre-fix
 	// embedding bug AND the pre-fix level-check ordering.
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		service.DebugWith().Str("key", "value").Int("i", i).Msg("filtered debug")
 		service.InfoWith().Str("key", "value").Int("i", i).Msg("filtered info")
 		service.TraceWith().Str("key", "value").Msg("filtered trace")

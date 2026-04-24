@@ -3,6 +3,7 @@ package iocdi
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -21,10 +22,8 @@ func createInstance(beanType reflect.Type) (any, error) {
 func injectIntoStruct(receiverBean bean, depBean bean, chain []string) error {
 	// Fail fast if a direct/self cycle is observed based on the current chain context.
 	// This complements the DFS detection in injectDependencies with a local guard.
-	for _, id := range chain {
-		if id == depBean.id {
-			return fmt.Errorf("dependency cycle detected: %s -> %s", strings.Join(chain, pathSep), depBean.id)
-		}
+	if slices.Contains(chain, depBean.id) {
+		return fmt.Errorf("dependency cycle detected: %s -> %s", strings.Join(chain, pathSep), depBean.id)
 	}
 
 	rv := reflect.ValueOf(receiverBean.instance)

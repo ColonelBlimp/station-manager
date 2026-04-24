@@ -121,7 +121,7 @@ func TestListQso_PaginationWalk(t *testing.T) {
 	// 7 QSOs, spaced one minute apart so the sort key is deterministic.
 	const total = 7
 	calls := make([]string, total)
-	for i := 0; i < total; i++ {
+	for i := range total {
 		c := fmt.Sprintf("DL1A%02d", i)
 		calls[i] = c
 		submitQsoAt(t, srv, lbID, c, "20250508",
@@ -176,7 +176,7 @@ func TestListQso_PaginationWalk(t *testing.T) {
 		}
 	}
 	// Expected: calls reversed.
-	for i := 0; i < total; i++ {
+	for i := range total {
 		want := calls[total-1-i]
 		if walked[i] != want {
 			t.Fatalf("walked[%d] = %q, want %q (walk = %v)", i, walked[i], want, walked)
@@ -273,7 +273,7 @@ func TestListQso_DefaultLimitApplied(t *testing.T) {
 	// the test to be fast. We just want to confirm that omitting ?limit
 	// doesn't fail and the server returns some consistent count.
 	const n = 5
-	for i := 0; i < n; i++ {
+	for i := range n {
 		submitQsoAt(t, srv, lbID, fmt.Sprintf("DL1A%02d", i), "20250508",
 			fmt.Sprintf("08%02d", i), "7.050")
 	}

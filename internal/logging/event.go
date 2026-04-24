@@ -31,7 +31,7 @@ type LogContext interface {
 	Bool(key string, val bool) LogContext
 	Time(key string, val time.Time) LogContext
 	Err(err error) LogContext
-	Interface(key string, val interface{}) LogContext
+	Interface(key string, val any) LogContext
 	// Logger creates and returns the new context logger
 	Logger() Logger
 }
@@ -84,12 +84,12 @@ type LogEvent interface {
 	Hex(key string, val []byte) LogEvent
 	IPAddr(key string, val net.IP) LogEvent
 	MACAddr(key string, val net.HardwareAddr) LogEvent
-	Interface(key string, val interface{}) LogEvent
+	Interface(key string, val any) LogEvent
 	Dict(key string, dict func(LogEvent)) LogEvent
 	// Msg writes the event with a literal message
 	Msg(msg string)
 	// Msgf writes the event using a format string
-	Msgf(format string, v ...interface{})
+	Msgf(format string, v ...any)
 	// Send writes the event without a message
 	Send()
 }
@@ -392,7 +392,7 @@ func (e *logEvent) MACAddr(key string, val net.HardwareAddr) LogEvent {
 	return e
 }
 
-func (e *logEvent) Interface(key string, val interface{}) LogEvent {
+func (e *logEvent) Interface(key string, val any) LogEvent {
 	if e.event != nil {
 		e.event.Interface(key, val)
 	}
@@ -430,7 +430,7 @@ func (e *logEvent) Msg(msg string) {
 	}
 }
 
-func (e *logEvent) Msgf(format string, v ...interface{}) {
+func (e *logEvent) Msgf(format string, v ...any) {
 	defer e.finish()
 	if e.event != nil {
 		e.event.Msgf(format, v...)
@@ -577,7 +577,7 @@ func (c *logContext) Err(err error) LogContext {
 	return c
 }
 
-func (c *logContext) Interface(key string, val interface{}) LogContext {
+func (c *logContext) Interface(key string, val any) LogContext {
 	c.context = c.context.Interface(key, val)
 	return c
 }
@@ -606,7 +606,7 @@ func (n *noopLogContext) Float64(key string, val float64) LogContext { return n 
 func (n *noopLogContext) Bool(key string, val bool) LogContext       { return n }
 func (n *noopLogContext) Time(key string, val time.Time) LogContext  { return n }
 func (n *noopLogContext) Err(err error) LogContext                   { return n }
-func (n *noopLogContext) Interface(key string, val interface{}) LogContext {
+func (n *noopLogContext) Interface(key string, val any) LogContext {
 	return n
 }
 func (n *noopLogContext) Logger() Logger { return &noopLogger{} }

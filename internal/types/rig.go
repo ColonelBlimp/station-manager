@@ -36,7 +36,7 @@ type RigConfig struct {
 	// defaults. Zero-value-means-inherit implies operators cannot
 	// distinguish "explicitly set to zero" from "omitted" — acceptable
 	// because no realistic override-to-zero case exists today.
-	Overrides RigOverrides `json:"overrides,omitempty"`
+	Overrides RigOverrides `json:"overrides,omitzero"`
 }
 
 // RigOverrides shadows per-rig defaults from cat.RigDefinition. Field

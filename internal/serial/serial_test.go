@@ -114,7 +114,7 @@ func TestConcurrentWrites(t *testing.T) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -164,8 +164,7 @@ func TestCloseWhileReading(t *testing.T) {
 
 	c := newPort(mp, cfg)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	done := make(chan struct{})
 	ready := make(chan struct{})
@@ -201,8 +200,7 @@ func TestCloseUnblocksRead(t *testing.T) {
 
 	c := newPort(mp, cfg)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	done := make(chan struct{})
 	ready := make(chan struct{})
@@ -348,7 +346,7 @@ func feedOverflow(readCh chan<- []byte) {
 		chunk[i] = 'A'
 	}
 	numChunks := (maxLineSize / defaultBufSize) + 2 // ensure we exceed
-	for i := 0; i < numChunks; i++ {
+	for range numChunks {
 		readCh <- chunk
 	}
 }
@@ -448,7 +446,7 @@ func TestConcurrentReadResponseCalls(t *testing.T) {
 
 	// Feed a handful of well-formed lines.
 	go func() {
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			mp.readCh <- []byte("RSP;")
 		}
 		close(mp.readCh)
@@ -458,17 +456,15 @@ func TestConcurrentReadResponseCalls(t *testing.T) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			for {
 				_, err := c.ReadResponse(ctx)
 				if err != nil {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -768,12 +764,10 @@ func TestWriteCommandBytesConcurrentWrites(t *testing.T) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 10 {
+		wg.Go(func() {
 			_ = c.WriteCommandBytes(ctx, []byte("CMD"))
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1265,7 +1259,7 @@ func TestCloseWhileResponseChannelFull(t *testing.T) {
 	c := newPort(mp, cfg)
 
 	// Fill the responses channel to capacity.
-	for i := 0; i < responsesBufSize; i++ {
+	for range responsesBufSize {
 		mp.readCh <- []byte("X;")
 	}
 

@@ -35,10 +35,7 @@ func computeBackoff(attempt int64, rc types.RetryConfig) time.Duration {
 		return 0
 	}
 
-	shift := attempt - 1
-	if shift > maxBackoffShift {
-		shift = maxBackoffShift
-	}
+	shift := min(attempt-1, maxBackoffShift)
 
 	backoff := initial << shift
 	if backoff <= 0 || backoff > maxBackoff {
@@ -50,9 +47,6 @@ func computeBackoff(attempt int64, rc types.RetryConfig) time.Duration {
 
 	// 20% jitter. rand.Int64N panics on non-positive n, so floor at 1 ns
 	// when backoff/5 rounds to zero.
-	j := int64(backoff) / 5
-	if j < 1 {
-		j = 1
-	}
+	j := max(int64(backoff)/5, 1)
 	return backoff + time.Duration(rand.Int64N(j))
 }

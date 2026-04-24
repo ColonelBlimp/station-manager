@@ -60,7 +60,7 @@ func (a *Adif) String() string {
 	return buf.String()
 }
 
-func parseToAdifString(obj interface{}) string {
+func parseToAdifString(obj any) string {
 	var buf bytes.Buffer
 	var parser func(v reflect.Value)
 

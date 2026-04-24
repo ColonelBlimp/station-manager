@@ -87,10 +87,7 @@ func referenceDecode(state State, tail string) map[string]string {
 		if m.Index < 0 || m.Index >= len(tail) {
 			continue
 		}
-		end := m.Index + m.Length
-		if end > len(tail) {
-			end = len(tail)
-		}
+		end := min(m.Index+m.Length, len(tail))
 		if m.Index >= end {
 			continue
 		}

@@ -118,10 +118,7 @@ func parseFields(b []byte) map[string][]string {
 		tag := strings.ToUpper(string(b[nameStart:nameEnd]))
 		n, _ := strconv.Atoi(string(b[lenStart:lenEnd]))
 		valStart := end
-		valEnd := valStart + n
-		if valEnd > len(b) {
-			valEnd = len(b)
-		}
+		valEnd := min(valStart+n, len(b))
 		val := string(b[valStart:valEnd])
 		m[tag] = append(m[tag], strings.TrimRightFunc(val, unicode.IsSpace))
 		idx = valEnd

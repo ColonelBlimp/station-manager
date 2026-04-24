@@ -38,12 +38,12 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 
 	start := time.Now()
 
-	for client := 0; client < numClients; client++ {
+	for client := range numClients {
 		wg.Add(1)
 		go func(clientID int) {
 			defer wg.Done()
 
-			for i := 0; i < qsosPerClient; i++ {
+			for i := range qsosPerClient {
 				callsign := fmt.Sprintf("T%dST%03d", clientID, i)
 				// Spread times to avoid dedupe collisions.
 				minute := (clientID*qsosPerClient + i) % 1440

@@ -28,17 +28,15 @@ func TestLimitConcurrent_Rejects503WhenFull(t *testing.T) {
 
 	// Fire N = capacity requests and park them inside the handler.
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 2 {
+		wg.Go(func() {
 			req := httptest.NewRequest(http.MethodGet, "/something", nil)
 			w := httptest.NewRecorder()
 			wrapped.ServeHTTP(w, req)
 			if w.Code != http.StatusOK {
 				t.Errorf("background request: status = %d, want 200 (body=%s)", w.Code, w.Body.String())
 			}
-		}()
+		})
 	}
 
 	// Give the goroutines time to acquire.
@@ -110,14 +108,12 @@ func TestLimitEventSubscribers_Rejects503WhenFull(t *testing.T) {
 	wrapped := srv.limitEventSubscribers(handler)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 2 {
+		wg.Go(func() {
 			req := httptest.NewRequest(http.MethodGet, sseEventsPath, nil)
 			w := httptest.NewRecorder()
 			wrapped.ServeHTTP(w, req)
-		}()
+		})
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -158,7 +154,7 @@ func TestLimitEventSubscribers_ReleasesOnDisconnect(t *testing.T) {
 	})
 	wrapped := srv.limitEventSubscribers(handler)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		req := httptest.NewRequest(http.MethodGet, sseEventsPath, nil)
 		w := httptest.NewRecorder()
 		wrapped.ServeHTTP(w, req)
@@ -182,7 +178,7 @@ func TestLimitSubmitRate_429AfterBurst(t *testing.T) {
 	})
 	wrapped := srv.limitSubmitRate(handler)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		req := httptest.NewRequest(http.MethodPost, "/v1/qso", nil)
 		w := httptest.NewRecorder()
 		wrapped.ServeHTTP(w, req)
@@ -214,7 +210,7 @@ func TestLimitSubmitRate_RefillRestoresTokens(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 
 	// Drain the burst.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if !lim.allowSubmit(base) {
 			t.Fatalf("drain %d refused; want allowed", i)
 		}
@@ -226,7 +222,7 @@ func TestLimitSubmitRate_RefillRestoresTokens(t *testing.T) {
 	// Advance half a second → 5 tokens/sec * 0.5 = 2.5 tokens.
 	later := base.Add(500 * time.Millisecond)
 	// Well, 10/sec * 0.5 = 5 tokens, capped at burst=5.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if !lim.allowSubmit(later) {
 			t.Fatalf("after refill, request %d refused", i)
 		}

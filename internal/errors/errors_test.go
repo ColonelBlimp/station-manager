@@ -321,7 +321,7 @@ func TestRoot_DepthLimit(t *testing.T) {
 	// depth limit kicks in and Root terminates without running indefinitely.
 	// We use a simple custom error type that unwraps to the next layer.
 	current := error(stderr.New("deepest"))
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		current = fmt.Errorf("layer %d: %w", i, current)
 	}
 	// Root should return something (not panic, not hang). It won't be the

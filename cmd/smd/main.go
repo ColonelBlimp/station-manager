@@ -107,13 +107,13 @@ func run() error {
 	if err = container.RegisterInstance(events.ServiceName, hub); err != nil {
 		return fmt.Errorf("register event hub: %w", err)
 	}
-	if err = container.Register(logging.ServiceName, reflect.TypeOf((*logging.Service)(nil))); err != nil {
+	if err = container.Register(logging.ServiceName, reflect.TypeFor[*logging.Service]()); err != nil {
 		return fmt.Errorf("register logging service: %w", err)
 	}
-	if err = container.Register(types.SqliteServiceName, reflect.TypeOf((*sqlite.Service)(nil))); err != nil {
+	if err = container.Register(types.SqliteServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
 		return fmt.Errorf("register sqlite service: %w", err)
 	}
-	if err = container.Register(qsoservice.ServiceName, reflect.TypeOf((*qsoservice.Service)(nil))); err != nil {
+	if err = container.Register(qsoservice.ServiceName, reflect.TypeFor[*qsoservice.Service]()); err != nil {
 		return fmt.Errorf("register qso service: %w", err)
 	}
 

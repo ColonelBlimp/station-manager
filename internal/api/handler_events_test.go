@@ -165,12 +165,12 @@ func TestHandleEvents_MultipleEventsInOrder(t *testing.T) {
 
 	waitForSubscriberCount(t, hub, 1)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		hub.Publish(events.NameQsoStored, events.QsoStoredPayload{QsoID: int64(100 + i)})
 	}
 
 	br := bufio.NewReader(resp.Body)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		id, name, _, ok := readOneSSEFrame(t, br)
 		if !ok {
 			t.Fatalf("frame %d missing", i)
@@ -259,7 +259,7 @@ func TestHandleEvents_SlowReaderIsEvictedAndStreamEnds(t *testing.T) {
 	// The handler's own consume loop runs concurrently, so we need
 	// significantly more than 64 to reliably overflow; 500 is
 	// plenty without being slow.
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		hub.Publish(events.NameQsoStored, events.QsoStoredPayload{QsoID: int64(i)})
 	}
 

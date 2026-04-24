@@ -150,7 +150,7 @@ func Root(err error) error {
 	}
 	const maxDepth = 100
 	current := err
-	for depth := 0; depth < maxDepth; depth++ {
+	for range maxDepth {
 		next := stderr.Unwrap(current)
 		if next == nil {
 			return current

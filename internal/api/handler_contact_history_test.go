@@ -210,7 +210,7 @@ func TestContactHistory_CappedByMaxResults(t *testing.T) {
 	srv.maxContactHistoryResults = 3
 
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		submitQsoAt(t, srv, lbID, "M0CMC", "20250508",
 			fmt.Sprintf("08%02d", i), "7.050")
 	}

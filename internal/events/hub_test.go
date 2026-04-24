@@ -75,12 +75,12 @@ func TestHub_EventIDsMonotonic(t *testing.T) {
 	ch, unsub := h.Subscribe()
 	defer unsub()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		h.Publish(NameQsoStored, QsoStoredPayload{QsoID: int64(i)})
 	}
 
 	var ids []int64
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		select {
 		case evt := <-ch:
 			ids = append(ids, evt.ID)
@@ -139,7 +139,7 @@ func TestHub_SlowSubscriberDisconnectedWhenBufferFull(t *testing.T) {
 	defer unsub()
 
 	// Fill the buffer without consuming.
-	for i := 0; i < subscriberBufferSize; i++ {
+	for i := range subscriberBufferSize {
 		h.Publish(NameQsoStored, QsoStoredPayload{QsoID: int64(i)})
 	}
 
@@ -232,24 +232,20 @@ func TestHub_ConcurrentPublishAndSubscribe(t *testing.T) {
 	var publishers, subscribers sync.WaitGroup
 	var stop atomic.Bool
 
-	for i := 0; i < 4; i++ {
-		publishers.Add(1)
-		go func() {
-			defer publishers.Done()
+	for range 4 {
+		publishers.Go(func() {
 			for !stop.Load() {
 				h.Publish(NameQsoStored, QsoStoredPayload{QsoID: 1})
 			}
-		}()
+		})
 	}
 
-	for i := 0; i < 4; i++ {
-		subscribers.Add(1)
-		go func() {
-			defer subscribers.Done()
-			for iter := 0; iter < 20; iter++ {
+	for range 4 {
+		subscribers.Go(func() {
+			for range 20 {
 				ch, unsub := h.Subscribe()
 				// Consume a few, then unsubscribe.
-				for j := 0; j < 3; j++ {
+				for range 3 {
 					select {
 					case <-ch:
 					case <-time.After(10 * time.Millisecond):
@@ -257,7 +253,7 @@ func TestHub_ConcurrentPublishAndSubscribe(t *testing.T) {
 				}
 				unsub()
 			}
-		}()
+		})
 	}
 
 	subscribers.Wait()

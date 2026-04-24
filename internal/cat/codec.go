@@ -57,10 +57,7 @@ func Decode(def RigDefinition, line []byte) (Status, error) {
 		if m.Index < 0 || m.Index >= len(tail) {
 			continue
 		}
-		end := m.Index + m.Length
-		if end > len(tail) {
-			end = len(tail)
-		}
+		end := min(m.Index+m.Length, len(tail))
 		if m.Index >= end {
 			continue
 		}
@@ -99,7 +96,7 @@ func Encode(def RigDefinition, name string, args ...any) ([]byte, error) {
 		if len(args) == 0 {
 			return []byte(c.Cmd), nil
 		}
-		return []byte(fmt.Sprintf(c.Cmd, args...)), nil
+		return fmt.Appendf(nil, c.Cmd, args...), nil
 	}
 	return nil, errors.New(op).WithErr(ErrUnknownCommand).WithMsgf("unknown command %q", name)
 }

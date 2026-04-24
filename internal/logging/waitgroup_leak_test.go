@@ -243,7 +243,7 @@ func TestWaitGroupWithConcurrentLoggingAndShutdown(t *testing.T) {
 
 	// Start goroutines that log continuously
 	stopLogging := make(chan struct{})
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		go func(id int) {
 			for {
 				select {

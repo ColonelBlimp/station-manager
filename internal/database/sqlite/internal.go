@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -43,9 +44,7 @@ func (s *Service) getDsn() (string, error) {
 
 	// Merge defaults if not provided
 	opts := map[string]string{}
-	for k, v := range s.DatabaseConfig.Options {
-		opts[k] = v
-	}
+	maps.Copy(opts, s.DatabaseConfig.Options)
 	// Set safe defaults only if not present
 	if _, ok := opts["_busy_timeout"]; !ok {
 		opts["_busy_timeout"] = "5000"

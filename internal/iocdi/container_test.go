@@ -50,11 +50,11 @@ func (suite *TestSuite) TestContainer() {
 	container := New()
 	assert.NotNil(suite.T(), container)
 
-	err := container.Register("ServiceBean", reflect.TypeOf((*Service)(nil)))
+	err := container.Register("ServiceBean", reflect.TypeFor[*Service]())
 	assert.NoError(suite.T(), err)
-	err = container.Register("ServiceBeanConfig", reflect.TypeOf((*Config)(nil)))
+	err = container.Register("ServiceBeanConfig", reflect.TypeFor[*Config]())
 	assert.NoError(suite.T(), err)
-	err = container.Register("ServiceBeanLogger", reflect.TypeOf((*Logger)(nil)))
+	err = container.Register("ServiceBeanLogger", reflect.TypeFor[*Logger]())
 	assert.NoError(suite.T(), err)
 	err = container.RegisterInstance("WorkingDir", "/home/user/test")
 	assert.NoError(suite.T(), err)
@@ -69,7 +69,7 @@ func (suite *TestSuite) TestInject_PointerFields_FromStructValueInstances() {
 	c := New()
 
 	// Register Service by type (pointer-to-struct type)
-	err := c.Register("ServiceBean", reflect.TypeOf((*Service)(nil)))
+	err := c.Register("ServiceBean", reflect.TypeFor[*Service]())
 	assert.NoError(suite.T(), err)
 
 	// Register dependencies as struct values (will be normalized to pointers)
@@ -138,7 +138,7 @@ func TestTagOnlyInjection_UntaggedFieldIgnored(t *testing.T) {
 	c := New()
 
 	// Register receiver by type.
-	err := c.Register("ReceiverBean", reflect.TypeOf((*untaggedReceiver)(nil)))
+	err := c.Register("ReceiverBean", reflect.TypeFor[*untaggedReceiver]())
 	require.NoError(t, err)
 
 	// Register tagged dependency for Config and its literal dependency.
@@ -176,7 +176,7 @@ func TestTagOnlyInjection_UntaggedFieldIgnored(t *testing.T) {
 func TestTagOnlyInjection_MultipleSameTypeQualified(t *testing.T) {
 	c := New()
 
-	err := c.Register("ReceiverBean", reflect.TypeOf((*dualLoggerReceiver)(nil)))
+	err := c.Register("ReceiverBean", reflect.TypeFor[*dualLoggerReceiver]())
 	require.NoError(t, err)
 
 	// Register two distinct Logger beans with different ids.
@@ -213,12 +213,12 @@ func TestLiteralProvider_NotInstalled_MissingDependency(t *testing.T) {
 		registeredBeans:    map[string]bean{},
 		requiredDependency: map[string]reflect.Type{},
 	}
-	_, deps := c.checkForDependency(reflect.TypeOf(cfg))
+	_, deps := c.checkForDependency(reflect.TypeFor[*Config]())
 
 	c.registeredBeans["servicebeanconfig"] = bean{
 		id:              "servicebeanconfig",
 		instance:        cfg,
-		beanType:        reflect.TypeOf(cfg),
+		beanType:        reflect.TypeFor[*Config](),
 		hasDependencies: true,
 		dependencies:    deps,
 	}
@@ -239,12 +239,12 @@ func TestLiteralProvider_FoundFalse_MissingDependency(t *testing.T) {
 		registeredBeans:    map[string]bean{},
 		requiredDependency: map[string]reflect.Type{},
 	}
-	_, deps := c.checkForDependency(reflect.TypeOf(cfg))
+	_, deps := c.checkForDependency(reflect.TypeFor[*Config]())
 
 	c.registeredBeans["servicebeanconfig"] = bean{
 		id:              "servicebeanconfig",
 		instance:        cfg,
-		beanType:        reflect.TypeOf(cfg),
+		beanType:        reflect.TypeFor[*Config](),
 		hasDependencies: true,
 		dependencies:    deps,
 	}
@@ -265,12 +265,12 @@ func TestLiteralProvider_ErrorPropagates(t *testing.T) {
 		registeredBeans:    map[string]bean{},
 		requiredDependency: map[string]reflect.Type{},
 	}
-	_, deps := c.checkForDependency(reflect.TypeOf(cfg))
+	_, deps := c.checkForDependency(reflect.TypeFor[*Config]())
 
 	c.registeredBeans["servicebeanconfig"] = bean{
 		id:              "servicebeanconfig",
 		instance:        cfg,
-		beanType:        reflect.TypeOf(cfg),
+		beanType:        reflect.TypeFor[*Config](),
 		hasDependencies: true,
 		dependencies:    deps,
 	}
@@ -293,19 +293,19 @@ func TestLiteralProvider_NotCalled_WhenBeanAlreadyExists(t *testing.T) {
 		registeredBeans:    map[string]bean{},
 		requiredDependency: map[string]reflect.Type{},
 	}
-	_, deps := c.checkForDependency(reflect.TypeOf(cfg))
+	_, deps := c.checkForDependency(reflect.TypeFor[*Config]())
 
 	// Pre-register a real bean for "WorkingDir"
 	c.registeredBeans["workingdir"] = bean{
 		id:       "workingdir",
 		instance: "/var/app",
-		beanType: reflect.TypeOf(""),
+		beanType: reflect.TypeFor[string](),
 	}
 
 	c.registeredBeans["servicebeanconfig"] = bean{
 		id:              "servicebeanconfig",
 		instance:        cfg,
-		beanType:        reflect.TypeOf(cfg),
+		beanType:        reflect.TypeFor[*Config](),
 		hasDependencies: true,
 		dependencies:    deps,
 	}
@@ -329,14 +329,14 @@ func TestLiteralProvider_NotUsed_ForNonStringDependencies(t *testing.T) {
 		requiredDependency: map[string]reflect.Type{},
 	}
 	// Discover dependencies for Service (pointer-to-structs only).
-	has, deps := c.checkForDependency(reflect.TypeOf(svc))
+	has, deps := c.checkForDependency(reflect.TypeFor[*Service]())
 	require.True(t, has)
 	require.ElementsMatch(t, []string{"servicebeanconfig", "servicebeanlogger"}, deps)
 
 	c.registeredBeans["servicebean"] = bean{
 		id:              "servicebean",
 		instance:        svc,
-		beanType:        reflect.TypeOf(svc),
+		beanType:        reflect.TypeFor[*Service](),
 		hasDependencies: true,
 		dependencies:    deps,
 	}
@@ -353,7 +353,7 @@ func TestLiteralProvider_InjectsStringIntoConfig(t *testing.T) {
 
 	// Arrange
 	c := New()
-	err := c.Register("ReceiverBean", reflect.TypeOf((*Service)(nil)))
+	err := c.Register("ReceiverBean", reflect.TypeFor[*Service]())
 	require.NoError(t, err)
 
 	err = c.RegisterInstance("ServiceBeanConfig", &Config{})
@@ -395,8 +395,8 @@ type cycleB struct {
 func TestCycleDetection_TwoNode(t *testing.T) {
 	c := New()
 
-	require.NoError(t, c.Register("A", reflect.TypeOf((*cycleA)(nil))))
-	require.NoError(t, c.Register("B", reflect.TypeOf((*cycleB)(nil))))
+	require.NoError(t, c.Register("A", reflect.TypeFor[*cycleA]()))
+	require.NoError(t, c.Register("B", reflect.TypeFor[*cycleB]()))
 
 	err := c.Build()
 	require.Error(t, err)
@@ -426,9 +426,9 @@ type cycleC3 struct {
 func TestCycleDetection_ThreeNode(t *testing.T) {
 	c := New()
 
-	require.NoError(t, c.Register("A3", reflect.TypeOf((*cycleA3)(nil))))
-	require.NoError(t, c.Register("B3", reflect.TypeOf((*cycleB3)(nil))))
-	require.NoError(t, c.Register("C3", reflect.TypeOf((*cycleC3)(nil))))
+	require.NoError(t, c.Register("A3", reflect.TypeFor[*cycleA3]()))
+	require.NoError(t, c.Register("B3", reflect.TypeFor[*cycleB3]()))
+	require.NoError(t, c.Register("C3", reflect.TypeFor[*cycleC3]()))
 
 	err := c.Build()
 	require.Error(t, err)
@@ -452,7 +452,7 @@ type selfCycleA struct {
 func TestCycleDetection_SelfCycle(t *testing.T) {
 	c := New()
 
-	require.NoError(t, c.Register("Aself", reflect.TypeOf((*selfCycleA)(nil))))
+	require.NoError(t, c.Register("Aself", reflect.TypeFor[*selfCycleA]()))
 
 	err := c.Build()
 	require.Error(t, err)
@@ -521,7 +521,7 @@ func (suite *TestSuite) TestResolveSafe_IdempotentBuildAndSingleton() {
 	c := New()
 
 	// Register a service and its dependencies to ensure Build creates and injects.
-	require.NoError(suite.T(), c.Register("ServiceBean", reflect.TypeOf((*Service)(nil))))
+	require.NoError(suite.T(), c.Register("ServiceBean", reflect.TypeFor[*Service]()))
 	require.NoError(suite.T(), c.RegisterInstance("ServiceBeanConfig", &Config{WorkingDir: "/app"}))
 	require.NoError(suite.T(), c.RegisterInstance("ServiceBeanLogger", &Logger{}))
 	// Provide the literal dependency explicitly to avoid missing-bean error during injection.
@@ -615,8 +615,8 @@ func TestInitializer_CalledAfterInjection(t *testing.T) {
 	c := New()
 
 	// Register types
-	require.NoError(t, c.Register("InitBean", reflect.TypeOf((*initBean)(nil))))
-	require.NoError(t, c.Register("InitCfg", reflect.TypeOf((*initCfg)(nil))))
+	require.NoError(t, c.Register("InitBean", reflect.TypeFor[*initBean]()))
+	require.NoError(t, c.Register("InitCfg", reflect.TypeFor[*initCfg]()))
 	// Provide literal dependency
 	require.NoError(t, c.RegisterInstance("WorkingDir", "/data"))
 
@@ -671,8 +671,8 @@ func (c3 *orderC) Initialize() error {
 func TestInitializer_OrderByDependencies_Depth2(t *testing.T) {
 	initOrder = nil
 	c := New()
-	require.NoError(t, c.Register("OrderA", reflect.TypeOf((*orderA)(nil))))
-	require.NoError(t, c.Register("OrderB", reflect.TypeOf((*orderB)(nil))))
+	require.NoError(t, c.Register("OrderA", reflect.TypeFor[*orderA]()))
+	require.NoError(t, c.Register("OrderB", reflect.TypeFor[*orderB]()))
 
 	require.NoError(t, c.Build())
 	// Expect B before A
@@ -682,9 +682,9 @@ func TestInitializer_OrderByDependencies_Depth2(t *testing.T) {
 func TestInitializer_OrderByDependencies_Depth3(t *testing.T) {
 	initOrder = nil
 	c := New()
-	require.NoError(t, c.Register("OrderC", reflect.TypeOf((*orderC)(nil))))
-	require.NoError(t, c.Register("OrderA", reflect.TypeOf((*orderA)(nil))))
-	require.NoError(t, c.Register("OrderB", reflect.TypeOf((*orderB)(nil))))
+	require.NoError(t, c.Register("OrderC", reflect.TypeFor[*orderC]()))
+	require.NoError(t, c.Register("OrderA", reflect.TypeFor[*orderA]()))
+	require.NoError(t, c.Register("OrderB", reflect.TypeFor[*orderB]()))
 
 	require.NoError(t, c.Build())
 	// Expected order: B -> A -> C

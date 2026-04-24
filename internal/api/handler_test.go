@@ -561,7 +561,7 @@ func TestSubmitQso_ConcurrentDuplicate(t *testing.T) {
 	results := make([]*httptest.ResponseRecorder, workers)
 	start := make(chan struct{})
 
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

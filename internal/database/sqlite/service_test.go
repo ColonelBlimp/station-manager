@@ -1022,7 +1022,7 @@ func TestClaimPendingUploads_OrderedByNextAttemptAt(t *testing.T) {
 
 	// Three QSOs, three queue rows all for the same forwarder.
 	var qsoIDs [3]int64
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		q := validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "084"+string(rune('5'+i)))
 		q.DedupeKey = q.DedupeKey[:63] + string(rune('a'+i)) // uniquify
 		id, err := svc.InsertQso(q)
