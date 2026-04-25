@@ -50,6 +50,12 @@ tasks:
     cmds:
       - ./build/bin/smd
 
+  run:logging:
+    desc: Build and run the logging app only, using SM_WORKING_DIR from .env
+    cmds:
+      - go build -o build/bin/logging ./cmd/logging
+      - ./build/bin/logging
+
   tidy:
     desc: Tidy go.mod and go.sum
     cmds:

@@ -24,7 +24,54 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-24, session 20 — Go 1.26 bump + modernize pass + cmd/logging wired + first entry row)
+## Current state (as of 2026-04-25, session 21 — small-step UI frame: status row + 2/3-1/3 main row)
+
+### Session 21 work (UI frame built up in single-concept steps; entry-row helpers parked for later)
+
+**Working mode (operator-set):** *"work through building the logging app UI with you in very small steps — I don't want cognitive debt."* Each step landed one new concept with a short explanation: Constraints (Min/Max), Flex axes, `Rigid` vs `Flexed`, single-edge rules via `clip+paint` (since `widget.Border` is all-four-or-nothing), border composition (panels compose like HTML boxes — adjacent borders sit side-by-side, no `border-collapse`).
+
+**What landed:**
+
+- **`run()` reset to a bare event loop, helpers kept in place.** The session-20 three-column QSO entry row was *not deleted* — `layoutUI`, `labeledInput`, `borderedInput`, the callsign/RST editors, focus logic — they're parked as package-level helpers and constants in `main.go`, just no longer called from `run()`. Intent: reintroduce them inside the green left panel once the outer frame is finalised. Go is fine with unused package-level funcs; the imports they pull in (`material`, `widget`) are still used by the helpers themselves.
+
+- **`task run:logging` added to `Taskfile.yml`** — builds *only* `cmd/logging` and runs the binary (skips daemon + full-module build). Picks up `SM_WORKING_DIR` from `.env` like the existing `run` task. Faster cycle when iterating on UI.
+
+- **Top frame assembled, three nested layers, debug-coloured borders so each layer is identifiable on screen:**
+  - Outer: `layout.Flex{Axis: Vertical}` in `run()`'s `FrameEvent`, with `statusRow()` and `mainRow()` as `Rigid` children.
+  - **`statusRow()`** — full-width, fixed height (currently `unit.Dp(40)`), single 1dp red rule along the *bottom edge only*. `widget.Border` paints all four sides, so for a single-edge rule we drop `widget.Border` and use `clip.Rect(...).Push(ops)` + `paint.ColorOp` + `paint.PaintOp` to fill a 1px-tall image rectangle along the bottom. Pattern: clip-as-shape — the clip's geometry *is* the painted shape; `PaintOp{}` paints the entire active clip.
+  - **`mainRow()`** — full-width, fixed height (currently `unit.Dp(400)`), framed by a 1dp blue `widget.Border` (all four sides). Inner content is a `layout.Flex{Axis: Horizontal}` split 2/3 + 1/3 via `Flexed(2, …)` / `Flexed(1, …)`. Weights are relative numbers, not percentages.
+  - **Inner panels** — left panel has a 1dp green border, right panel a 1dp yellow border, both via `borderedPanel(c color.NRGBA) layout.Widget`. Wraps `fillPanel` (a primitive that pins `Min = Max` and returns those dims) in a `widget.Border`. Same higher-order shape as `labeledInput` / `borderedInput` — function takes config, returns `layout.Widget`. The blue outer border + adjacent green/yellow borders produce visible 2px seams; per session-21 confirmation, that's the expected "borders compose, they don't merge" behaviour (CSS analogue: no `border-collapse`).
+
+- **Debug colours split into `cmd/logging/colours.go`.** Centralised so `main.go` doesn't carry `image/color` purely for var declarations. Currently holds: `inputBorderColor` (`#101828` — production input outline), `statusRowBorderColor` (red), `mainRowBorderColor` (blue), `leftPanelBorderColor` (green), `rightPanelBorderColor` (yellow). The four debug colours are flagged as "temporary debug" in their doc comments — they come out when each layer gets its real fill / contents.
+
+- **New imports in `main.go`** to support the frame work: `image`, `image/color`, `gioui.org/op/clip`, `gioui.org/op/paint`.
+
+**Helper inventory in `cmd/logging/main.go` after session 21:**
+
+| Helper | Status | Returns | Purpose |
+|---|---|---|---|
+| `statusRow()` | live | `layout.Widget` | top status strip with bottom-edge rule |
+| `mainRow()` | live | `layout.Widget` | 2/3 + 1/3 row beneath status |
+| `fillPanel` | live | `layout.Dimensions` | bare "claim my assigned space" primitive |
+| `borderedPanel(c)` | live | `layout.Widget` | parameterised colour-bordered fill panel |
+| `layoutUI(...)` | parked | `layout.Dimensions` | three-column QSO entry row from session 20 |
+| `labeledInput(...)` | parked | `layout.Widget` | label-above-input vertical pair |
+| `borderedInput(...)` | parked | `layout.Widget` | fixed-width outlined editor |
+| `loadConfig(path)` | live | `(config.Config, error)` | flag → env → cwd → defaults config resolution |
+
+### Next session
+
+- **Replace debug border colours with real fills/contents.** The four debug colours (red status-row rule, blue main-row frame, green/yellow inner panels) come out as each layer gets its real treatment. Status row is the natural first one — see below.
+- **Status row contents** (red debug rule comes out): `Logging Mode: [Normal ▾] | Logbook: <name> | Rig: <model> | Session Time: hh:mm:ss`. Session time = monotonic counter started at window-open. Inset the row contents 8dp horizontally so text doesn't sit flush against the window edge.
+- **Reintroduce the three-column QSO entry row inside the green left panel** of `mainRow`. The helpers (`layoutUI`, `labeledInput`, `borderedInput`) and editor variables are already parked in `main.go` — the work is wiring them through the `mainRow()` left panel instead of the current `borderedPanel(leftPanelBorderColor)`. Restore the post-layout `key.FocusCmd{Tag: &callsign}` first-frame focus call.
+- **Right panel content** — 1/3-width pane: session list (per `project_sm_session_scope` memory: client-side, no daemon endpoints). For now a placeholder header + empty list view is enough.
+- **Register `smclient` as the first real iocdi service with a dependency.** Precondition for a working Log Contact button (POST `/v1/qso` to the daemon). Stub `hamnut`, `qrz`, `enrichment`, `email`, `rigloop` as iocdi-shaped placeholders with green `Initialize()` and TODO bodies so the service graph is fully visible from `cmd/logging/container.go`.
+- **Remaining v1-layout rows** (after the entry row is back inside the left panel): Row 2 — Name / Qth / Comment (textarea via `widget.Editor` with `SingleLine = false`); Row 3 — Date picker, Time On UTC, Time Off UTC, Log Contact (filled button → smclient.Submit), Clear (outline button → reset editors).
+- **Mode dropdown** (Row 1 completion): Gio has no stock dropdown — choose between a cycle-button (click cycles SSB/CW/FT8/…) and a small custom menu. Worth a small spike.
+- **Frequency readout + VFO-A/B** (Row 1 completion): blocked on `rigloop`. Will land once that service exists.
+- **Drop `//go:build gio` from `cmd/giospike/main.go`** (or delete `cmd/giospike/` entirely — spike's job is done; see memory `project_sm_ui_toolkit`). CI has the deps.
+- **`internal/rigconfig` composition function** — still unblocked. Expected shape: `rigconfig.Compose(types.RigConfig, cat.RigDefinition) (serial.Config, error)`. Absorbs the ~15 LOC inline helper duplicated in `cmd/catcli/` and `cmd/giospike/`.
+- **Open item from session 16 still outstanding:** mystery `FD` prefix on FTdx10 in AI mode. Investigate opportunistically.
 
 ### Session 20 work (toolchain modernisation + cmd/logging wired into iocdi + three-column QSO entry row)
 
@@ -68,16 +115,7 @@ precisely so we don't re-derive state or redo finished work.
 
 - **Widget-abstraction discussion closed** (operator asked whether to split widgets into reusable blocks). Outcome: the current function-returning-`layout.Widget` shape is the Gio idiom; don't promote to a framework prematurely. Named constants over parameters for colour/inset/size. Extract to a `cmd/logging/widgets.go` file once a third *kind* of widget lands (dropdown, date picker, etc.), not on the third instance of the same kind. Promote to an `internal/ui` package only when a second app (`cmd/logbook`, `cmd/config`) needs the same widget — that's when the API has two uses to fit, rather than speculation.
 
-### Next session
-
-- **Register `smclient` as the first real service with a dependency.** It's the precondition for a working Log Contact button (POST `/v1/qso` to the daemon). Stub `hamnut`, `qrz`, `enrichment`, `email`, `rigloop` as iocdi-shaped placeholders with green `Initialize()` and TODO bodies so the service graph is fully visible.
-- **Status row** (top of the window): `Logging Mode: [Normal ▾] | Logbook: <name> | Rig: <model> | Session Time: hh:mm:ss`. Session time is a monotonic counter started at window-open.
-- **Row 1 completion:** Mode dropdown (Gio has no stock dropdown — either a cycle-button or a small custom menu) and VFO-A/B buttons + frequency readout. Frequency readout needs `rigloop`, so this unblocks once that service exists.
-- **Row 2:** Name / Qth / Comment (textarea; `widget.Editor` with `SingleLine = false`).
-- **Row 3:** Date picker, Time On UTC, Time Off UTC, Log Contact (filled button → smclient.Submit), Clear (outline button → reset editors).
-- **Drop `//go:build gio` from `cmd/giospike/main.go`** (or delete `cmd/giospike/` entirely — spike's job is done; see memory `project_sm_ui_toolkit`). CI has the deps.
-- **`internal/rigconfig` composition function** — still unblocked. Expected shape: `rigconfig.Compose(types.RigConfig, cat.RigDefinition) (serial.Config, error)`. Absorbs the ~15 LOC inline helper duplicated in `cmd/catcli/` and `cmd/giospike/`.
-- Open item from session 16 still outstanding: mystery `FD` prefix on FTdx10 in AI mode. Investigate opportunistically.
+*(Session 20's "Next session" goals are superseded by session 21's "Next session" block above. Service-registration, mode dropdown, and rig-loop-blocked items were rolled forward; layout-frame items have been taken.)*
 
 ### Session 19 work (cmd/logging main window + CI Linux deps for Gio)
 

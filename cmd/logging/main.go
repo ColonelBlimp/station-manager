@@ -3,15 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
 	"image/color"
 	"os"
 
 	"gioui.org/app"
-	"gioui.org/font/gofont"
-	"gioui.org/io/key"
 	"gioui.org/layout"
 	giop "gioui.org/op"
-	"gioui.org/text"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -32,10 +32,13 @@ const (
 	callsignFieldWidth = unit.Dp(130)
 	// rstFieldWidth sizes the RST inputs to ~3 digits plus border padding.
 	rstFieldWidth = unit.Dp(60)
+	// statusRowHeight is the fixed height of the top status row.
+	statusRowHeight = unit.Dp(40)
+	// mainRowHeight is the fixed height of the main row that sits below
+	// the status row and holds the QSO entry form (left) and the
+	// session list / preview pane (right).
+	mainRowHeight = unit.Dp(400)
 )
-
-// inputBorderColor is the 1dp outline drawn around text inputs.
-var inputBorderColor = color.NRGBA{R: 0x10, G: 0x18, B: 0x28, A: 0xff}
 
 func main() {
 	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
@@ -88,27 +91,7 @@ func run(window *app.Window, loggerSvc *logging.Service) error {
 	}
 	loggerSvc.InfoWith().Msg("logging app started")
 
-	th := material.NewTheme()
-	th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
-
-	var callsign widget.Editor
-	callsign.SingleLine = true
-	callsign.Submit = true
-
-	var rstSent widget.Editor
-	rstSent.SingleLine = true
-	rstSent.Submit = true
-	rstSent.SetText("59")
-
-	var rstRcvd widget.Editor
-	rstRcvd.SingleLine = true
-	rstRcvd.Submit = true
-	rstRcvd.SetText("59")
-
-	var (
-		ops             giop.Ops
-		initialFocusSet bool
-	)
+	var ops giop.Ops
 	for {
 		switch e := window.Event().(type) {
 		case app.DestroyEvent:
@@ -118,16 +101,84 @@ func run(window *app.Window, loggerSvc *logging.Service) error {
 			return nil
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
-			layoutUI(gtx, th, &callsign, &rstSent, &rstRcvd)
-			// Request focus AFTER layout on the first frame so the
-			// editor's event.Op is registered and the FocusCmd can
-			// resolve to it.
-			if !initialFocusSet {
-				gtx.Execute(key.FocusCmd{Tag: &callsign})
-				initialFocusSet = true
-			}
+			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(statusRow()),
+				layout.Rigid(mainRow()),
+			)
 			e.Frame(gtx.Ops)
 		}
+	}
+}
+
+// statusRow renders the top status strip: full window width, fixed
+// height, with a 1dp line along its bottom edge. widget.Border draws
+// all four sides, so for a single-edge rule we paint a thin filled
+// rectangle ourselves using clip + paint.
+func statusRow() layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		// Force the row to take the full available width and exactly
+		// statusRowHeight tall, regardless of its (empty) contents.
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		gtx.Constraints.Min.Y = gtx.Dp(statusRowHeight)
+		gtx.Constraints.Max.Y = gtx.Dp(statusRowHeight)
+
+		size := gtx.Constraints.Min
+		borderPx := gtx.Dp(unit.Dp(1))
+
+		// Clip drawing to a 1px-tall rect along the bottom edge, fill
+		// it with the border colour, then pop the clip stack so we
+		// don't bleed into anything painted after us.
+		rect := image.Rect(0, size.Y-borderPx, size.X, size.Y)
+		stack := clip.Rect(rect).Push(gtx.Ops)
+		paint.ColorOp{Color: statusRowBorderColor}.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		stack.Pop()
+
+		return layout.Dimensions{Size: size}
+	}
+}
+
+// mainRow renders the row directly below the status row: full window
+// width, fixed height, framed by a 1dp blue border. The row is split
+// horizontally into a 2/3-width left panel and a 1/3-width right
+// panel using a Flex with weighted (Flexed) children.
+func mainRow() layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		gtx.Constraints.Min.Y = gtx.Dp(mainRowHeight)
+		gtx.Constraints.Max.Y = gtx.Dp(mainRowHeight)
+		return widget.Border{
+			Color: mainRowBorderColor,
+			Width: unit.Dp(1),
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+				layout.Flexed(2, borderedPanel(leftPanelBorderColor)),
+				layout.Flexed(1, borderedPanel(rightPanelBorderColor)),
+			)
+		})
+	}
+}
+
+// fillPanel is a placeholder widget that simply consumes whatever
+// space the Flex assigns it. Each panel will grow its own contents
+// later — for now we just need them to claim their share so the
+// surrounding row keeps its 2/3 + 1/3 split visible.
+func fillPanel(gtx layout.Context) layout.Dimensions {
+	gtx.Constraints.Min = gtx.Constraints.Max
+	return layout.Dimensions{Size: gtx.Constraints.Min}
+}
+
+// borderedPanel returns a layout.Widget that fills the space the
+// parent Flex assigns it, framed by a 1dp border in the supplied
+// colour. Used to make the inner panel split visible while the panel
+// contents are still empty.
+func borderedPanel(c color.NRGBA) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Min = gtx.Constraints.Max
+		return widget.Border{
+			Color: c,
+			Width: unit.Dp(1),
+		}.Layout(gtx, fillPanel)
 	}
 }
 
