@@ -63,13 +63,15 @@ func main() {
 	}
 
 	go func() {
+		theme := getTheme()
+
 		window := new(app.Window)
 		window.Option(
 			app.Title(windowTitle),
 			app.MaxSize(windowWidth, windowHeight),
 			app.MinSize(windowWidth, windowHeight),
 		)
-		runErr := run(window, loggerSvc)
+		runErr := run(window, theme, loggerSvc)
 
 		loggerSvc.InfoWith().Msg("logging app stopped")
 		if cerr := loggerSvc.Close(); cerr != nil {
@@ -85,7 +87,7 @@ func main() {
 	app.Main()
 }
 
-func run(window *app.Window, loggerSvc *logging.Service) error {
+func run(window *app.Window, theme *material.Theme, loggerSvc *logging.Service) error {
 	const op errors.Op = "logging.app.main.run"
 	if window == nil {
 		return errors.New(op).WithMsg("window cannot be nil")
@@ -105,7 +107,7 @@ func run(window *app.Window, loggerSvc *logging.Service) error {
 			// Three rows in our main window
 			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(statusRow()),
-				layout.Rigid(mainRow()),
+				layout.Rigid(mainRow(theme)),
 				layout.Rigid(bottomRow()),
 			)
 			e.Frame(gtx.Ops)
