@@ -9,8 +9,5 @@ build/
 apps/*
 web/*
 /internal/cat/config.json
-!cmd/catcli/*
-catcli
-!cmd/giospike/*
-giospike
-logging
+
+/logging

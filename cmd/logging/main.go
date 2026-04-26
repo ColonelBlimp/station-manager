@@ -37,7 +37,7 @@ const (
 	// mainRowHeight is the fixed height of the main row that sits below
 	// the status row and holds the QSO entry form (left) and the
 	// session list / preview pane (right).
-	mainRowHeight = unit.Dp(400)
+	mainRowHeight = unit.Dp(300)
 )
 
 func main() {
@@ -66,7 +66,8 @@ func main() {
 		window := new(app.Window)
 		window.Option(
 			app.Title(windowTitle),
-			app.Size(windowWidth, windowHeight),
+			app.MaxSize(windowWidth, windowHeight),
+			app.MinSize(windowWidth, windowHeight),
 		)
 		runErr := run(window, loggerSvc)
 
@@ -101,9 +102,11 @@ func run(window *app.Window, loggerSvc *logging.Service) error {
 			return nil
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
+			// Three rows in our main window
 			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(statusRow()),
 				layout.Rigid(mainRow()),
+				layout.Rigid(bottomRow()),
 			)
 			e.Frame(gtx.Ops)
 		}
@@ -138,23 +141,17 @@ func statusRow() layout.Widget {
 	}
 }
 
-// mainRow renders the row directly below the status row: full window
-// width, fixed height, framed by a 1dp blue border. The row is split
-// horizontally into a 2/3-width left panel and a 1/3-width right
-// panel using a Flex with weighted (Flexed) children.
-func mainRow() layout.Widget {
+func bottomRow() layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		gtx.Constraints.Min.Y = gtx.Dp(mainRowHeight)
-		gtx.Constraints.Max.Y = gtx.Dp(mainRowHeight)
+		gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
+		gtx.Constraints.Max.X = gtx.Constraints.Min.X
+		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
 		return widget.Border{
-			Color: mainRowBorderColor,
+			Color: statusRowBorderColor,
 			Width: unit.Dp(1),
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-				layout.Flexed(2, borderedPanel(leftPanelBorderColor)),
-				layout.Flexed(1, borderedPanel(rightPanelBorderColor)),
-			)
+			return layout.Dimensions{Size: gtx.Constraints.Min}
 		})
 	}
 }
