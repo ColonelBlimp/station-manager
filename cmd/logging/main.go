@@ -9,6 +9,8 @@ import (
 	"gioui.org/layout"
 	giop "gioui.org/op"
 	"gioui.org/unit"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
@@ -153,33 +155,33 @@ func run(window *app.Window, loggerSvc *logging.Service) error {
 // editor. Returned as a layout.Widget so callers can place it in a
 // horizontal flex alongside other labeled inputs without reaching into
 // the vertical stack.
-//func labeledInput(th *material.Theme, label string, ed *widget.Editor, hint string, width unit.Dp) layout.Widget {
-//	return func(gtx layout.Context) layout.Dimensions {
-//		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Start}.Layout(gtx,
-//			layout.Rigid(material.Body2(th, label).Layout),
-//			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-//			layout.Rigid(borderedInput(th, ed, hint, width)),
-//		)
-//	}
-//}
+func labeledInput(th *material.Theme, label string, ed *widget.Editor, hint string, width unit.Dp) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Start}.Layout(gtx,
+			layout.Rigid(material.Body2(th, label).Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+			layout.Rigid(borderedInput(th, ed, hint, width)),
+		)
+	}
+}
 
 // borderedInput renders a widget.Editor at a fixed width, wrapped in
 // the standard 1dp outlined, 4dp rounded-corner input frame used
 // throughout the logging UI.
-//func borderedInput(th *material.Theme, ed *widget.Editor, hint string, width unit.Dp) layout.Widget {
-//	return func(gtx layout.Context) layout.Dimensions {
-//		gtx.Constraints.Min.X = gtx.Dp(width)
-//		gtx.Constraints.Max.X = gtx.Dp(width)
-//		return widget.Border{
-//			Color:        inputBorderColor,
-//			Width:        unit.Dp(1),
-//			CornerRadius: unit.Dp(4),
-//		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-//			return layout.UniformInset(unit.Dp(6)).Layout(gtx,
-//				material.Editor(th, ed, hint).Layout)
-//		})
-//	}
-//}
+func borderedInput(th *material.Theme, ed *widget.Editor, hint string, width unit.Dp) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Min.X = gtx.Dp(width)
+		gtx.Constraints.Max.X = gtx.Dp(width)
+		return widget.Border{
+			Color:        gray500,
+			Width:        unit.Dp(1),
+			CornerRadius: unit.Dp(4),
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.UniformInset(unit.Dp(6)).Layout(gtx,
+				material.Editor(th, ed, hint).Layout)
+		})
+	}
+}
 
 // loadConfig mirrors cmd/smd's resolution order: explicit path, then
 // $SM_WORKING_DIR/config.json, then ./config.json, then defaults rooted
