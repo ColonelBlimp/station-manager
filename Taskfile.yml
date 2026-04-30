@@ -80,6 +80,14 @@ tasks:
       - go build -o build/bin/logging ./cmd/logging
       - ./build/bin/logging
 
+  run:smd:
+    desc: |
+      Run the daemon directly via `go run` for SPA development. Pair with
+      `task frontend:dev` in another terminal — Vite serves the SPA on :5173
+      and proxies /v1/* to this daemon. Uses SM_WORKING_DIR from .env.
+    cmds:
+      - go run ./cmd/smd
+
   tidy:
     desc: Tidy go.mod and go.sum
     cmds:

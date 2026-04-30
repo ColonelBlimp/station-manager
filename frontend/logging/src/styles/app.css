@@ -1,1 +1,27 @@
 @import "tailwindcss";
+
+@layer base {
+    html {
+        @apply text-gray-900;
+    }
+    h2 {
+        @apply text-2xl font-bold my-4;
+    }
+    p {
+        @apply my-2;
+    }
+}
+
+@layer components {
+    .input-base {
+        @apply px-2.5 py-1.5 rounded-md mt-2 w-full
+        outline-1 -outline-offset-1 outline-gray-300
+        focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600;
+    }
+    .input-label {
+        @apply text-sm font-medium ml-0.5;
+    }
+    .invalid-input {
+        @apply outline-red-600 focus:outline-red-600;
+    }
+}
