@@ -23,7 +23,7 @@ End-to-end dial-spin to UI update: **<300 ms feels okay, >300 ms feels noticeabl
 
 ## Where the codec actually fits
 
-Codec time (parsing one framed CAT line in `cat.Decode`) currently takes on the order of **3–5 µs per call** (estimated from code inspection — *needs benchmarking*). Even with no optimisation, that's 0.005% of a 100 ms poll cycle. **The codec is not on the critical latency path for any realistic budget.**
+Codec time (parsing one framed CAT line in `cat.Decode`) measured at **~200 ns/op** on commodity hardware (see baseline below; was estimated at 3–5 µs before benchmarking). Even with no optimisation, that's 0.0002% of a 100 ms poll cycle. **The codec is not on the critical latency path for any realistic budget.**
 
 The reasons to optimise the codec are different:
 
@@ -106,7 +106,7 @@ Roughly 3–5× faster than `EqualFold` for short ASCII strings.
 
 ## Measurement-first plan
 
-`internal/serial/serial_bench_test.go` exists but **nothing benchmarks `cat.Decode`**. Add benchmarks before optimising — otherwise it's guesswork:
+`internal/serial/serial_bench_test.go` exists but until 2026-04-30 **nothing benchmarked `cat.Decode`**. The baseline benchmarks now live at `internal/cat/codec_bench_test.go`:
 
 ```go
 // internal/cat/codec_bench_test.go
@@ -115,7 +115,7 @@ package cat
 import "testing"
 
 func BenchmarkDecode(b *testing.B) {
-    def, ok := Lookup("ftdx10")
+    def, ok := Lookup("yaesu-ftdx10")
     if !ok { b.Fatal("rig not found") }
     line := []byte("FA014250000;")
     b.ReportAllocs()
@@ -126,7 +126,7 @@ func BenchmarkDecode(b *testing.B) {
 }
 
 func BenchmarkLookupState(b *testing.B) {
-    def, _ := Lookup("ftdx10")
+    def, _ := Lookup("yaesu-ftdx10")
     line := []byte("FA014250000;")
     b.ReportAllocs()
     b.ResetTimer()
@@ -136,11 +136,26 @@ func BenchmarkLookupState(b *testing.B) {
 }
 ```
 
-Run with `-benchmem`. The `allocs/op` number tells whether map allocation is dominating (likely 2–4 allocs/op currently). After the Tier 1 refactor it should be 0 allocs/op for the steady state.
+Run with `go test -run=^$ -bench=. -benchmem -benchtime=2s ./internal/cat/`.
 
-Recommended order:
+### Baseline — captured 2026-04-30
 
-1. Add the benchmarks. Establish baseline allocs/op and ns/op.
+Hardware: Intel Core i3-10100F @ 3.60 GHz, Linux, Go default GC, single-threaded bench. Input line `FA014250000;` against the embedded `yaesu-ftdx10` rig def.
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `BenchmarkDecode` | 197.5 | 352 | 3 |
+| `BenchmarkLookupState` | 60.05 | 16 | 1 |
+
+Reads on the numbers:
+
+- **Decode: ~200 ns/op.** An order of magnitude faster than the 3–5 µs estimate the rest of this document was written against. The codec is *even less* of a latency factor than the analysis assumed — at 100 ms poll cadence it's 0.0002% of the budget.
+- **3 allocs/op, 352 B/op on Decode.** Matches the "2–4 allocs/op" prediction. Composed of: the fresh `Status{}` map (`codec.go:55`), the tail string conversion in `lookupState` (`codec.go:129`), and the per-marker value string write into the map. Tier 1 refactor target: 0 allocs/op steady state.
+- **1 alloc/op, 16 B/op on lookupState.** That allocation is the `string(line[bestLen:])` tail conversion. Returning `[]byte` (Tier 2 item) zeroes it. The 60 ns also covers ~30 prefix compares via `bytes.EqualFold`; first-byte indexing would compress that.
+
+### Recommended order
+
+1. ~~Add the benchmarks. Establish baseline allocs/op and ns/op.~~ **Done 2026-04-30** (numbers above).
 2. Refactor `Status` to a slice-of-tags (or caller-owned map). Re-bench. Expect this to dominate the win.
 3. *Maybe* add the first-byte index for States. Re-bench. If the win is <20% under realistic load, skip it.
 4. Skip the uint64-packing trick unless step 3 shows `lookupState` is still meaningful in the profile.
@@ -170,7 +185,8 @@ Open since session 16. Investigate when revisiting CAT perf — may be related t
 - `internal/cat/codec.go:55` — fresh `Status{}` allocation per `Decode`
 - `internal/cat/codec.go:107` — `lookupState` linear scan
 - `internal/cat/rigdb.go:17` — `rigDB` (cold path, not relevant to per-frame perf)
-- `internal/serial/serial_bench_test.go` — existing serial benchmarks (codec equivalent missing)
+- `internal/cat/codec_bench_test.go` — codec baseline benchmarks (added 2026-04-30)
+- `internal/serial/serial_bench_test.go` — existing serial benchmarks
 - `cat-serial-reuse.md` — broader cat/serial reuse design
 - [topology.md](topology.md) — bridge owns CAT; daemon doesn't
 - [ui-toolkit.md](ui-toolkit.md) — why the UI toolkit's contribution to latency is in the noise

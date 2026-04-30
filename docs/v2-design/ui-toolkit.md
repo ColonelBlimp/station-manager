@@ -90,11 +90,12 @@ The Gio code in `cmd/logging/` is small (~30 lines per layout cell) and the cons
 
 ## Decision status
 
-**Open.** Move to C is recommended; operator has not confirmed. If staying with A, add `cmd/logging/` to the keep-tracking list and continue the small-step build per session-handoff. If moving to B or C, the Gio code is small enough to abandon cleanly.
+**Resolved 2026-04-30: Option C (browser SPA, Svelte 5 + Vite, embedded into the daemon).** Operator confirmed Svelte 5 preference and the CI-builds-SPA-before-go-build stance. Detailed scaffold + wiring + build pipeline captured in [frontend-spa.md](frontend-spa.md). The Gio code in `cmd/logging/` is left in place until the SPA reaches feature parity, then abandoned cleanly.
 
 ## Cross-references
 
+- [frontend-spa.md](frontend-spa.md) — the SPA scaffold, embed wiring, and build pipeline (the realisation of Option C)
 - [topology.md](topology.md) — daemon/bridge/client peer model that the UI choice plugs into
 - [cat-performance.md](cat-performance.md) — why the toolkit isn't a perf-driving factor
 - `docs/v1-analysis/design-decisions-log.md` — original 2026-04-21 Gio decision
-- Memory: `project_sm_ui_toolkit` — captures the 2026-04-21 Gio choice (will need a follow-up entry once this is resolved)
+- Memory: `project_sm_ui_toolkit` — captures the 2026-04-21 Gio choice (needs a follow-up entry recording the 2026-04-30 pivot to Svelte 5 SPA)
