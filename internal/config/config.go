@@ -98,6 +98,15 @@ type ServerConfig struct {
 	// 20/sec, burst 40.
 	SubmitRatePerSec int `json:"submit_rate_per_sec"`
 	SubmitRateBurst  int `json:"submit_rate_burst"`
+
+	// ServeSPA controls whether the daemon hosts the embedded logging
+	// SPA at "/" (and any future SPAs at their respective prefixes).
+	// Pointer-typed so applyDefaults can distinguish "absent from config"
+	// (nil — apply the protocol-driven default) from "explicitly false"
+	// (operator wants a headless TCP daemon). Default: true on TCP,
+	// false on Unix-socket (browsers can only reach TCP listeners).
+	// See docs/v2-design/frontend-spa.md.
+	ServeSPA *bool `json:"serve_spa,omitempty"`
 }
 
 // Load reads a JSON config file and returns a populated Config with defaults
@@ -178,6 +187,13 @@ func applyDefaults(cfg *Config, baseDir string) {
 	}
 	if cfg.Server.MaxContactHistoryResults == 0 {
 		cfg.Server.MaxContactHistoryResults = 100
+	}
+	if cfg.Server.ServeSPA == nil {
+		// Default: serve the SPA on TCP, not on Unix-socket. Browsers
+		// can only reach TCP listeners; a Unix-socket deployment is
+		// implicitly headless.
+		def := cfg.Server.Protocol == "tcp"
+		cfg.Server.ServeSPA = &def
 	}
 
 	// Datastore defaults

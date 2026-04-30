@@ -24,11 +24,11 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-30, session 22 — UI toolkit resolved (Svelte SPA), CAT codec baseline captured, frontend scaffold designed)
+## Current state (as of 2026-04-30, session 22 — UI toolkit resolved (Svelte SPA), CAT codec baseline captured, frontend scaffold landed and verified end-to-end)
 
-### Session 22 work (architecture conversation captured into v2-design docs; one new test file in `internal/cat`; no other runtime code changes)
+### Session 22 work (architecture conversation captured into v2-design docs; SPA scaffold landed with both daemon-embed and Vite-dev paths verified live via Chrome DevTools MCP)
 
-**Three open questions surfaced; UI toolkit and CAT-perf decisions both resolved by end of session. Frontend scaffold sketched and captured.**
+**Three open questions surfaced; UI toolkit, CAT-perf, and CSS-approach decisions all resolved by end of session. Frontend scaffold sketched, implemented, and verified end-to-end.**
 
 **What landed:**
 
@@ -38,7 +38,11 @@ precisely so we don't re-derive state or redo finished work.
 
 - **UI toolkit decision resolved 2026-04-30: browser SPA, Svelte 5 + Vite + plain TS, embedded into the daemon via `//go:embed`.** Operator concern that prompted the reconsideration: Gio learning curve fights the "small steps / no cognitive debt" working-mode preference. Three options analysed (stick with Gio / fall back to Wails v2 / browser SPA hosted by daemon). Operator confirmed Svelte 5 over Vue/React on three grounds: compiled-reactivity DOM updates suit a long-running tab consuming a 10–20 Hz rig SSE stream; bundle size matters when the SPA is `go:embed`-ed; existing fluency removes cognitive overhead. Performance is not the deciding factor (see topology and cat-performance docs). [`docs/v2-design/ui-toolkit.md`](v2-design/ui-toolkit.md) was updated with the resolution; the SPA scaffold itself is captured in [`docs/v2-design/frontend-spa.md`](v2-design/frontend-spa.md).
 
-- **Frontend SPA scaffold designed (no code yet).** `frontend/logging/` (Svelte 5 + Vite + plain TS, *not* SvelteKit) with three routes (`/log`, `/logbook`, `/config`) served from one bundle. Module-level `$state` (`bridge.svelte.ts`) holds rig state populated by an `EventSource` against the bridge; any component reading `rigState.freq` re-renders automatically. Daemon-side wiring: new `frontend/embed.go` package owns `//go:embed all:logging/dist`, `internal/api/server.go` registers a `GET /` catch-all SPA handler with index.html-fallback for client-side routing. SPA route is conditional on `cfg.Server.Protocol == "tcp" && cfg.Server.ServeSPA` — Unix-socket headless deployments stay supported. `api.New()` signature changes from `*Server` to `(*Server, error)` because the embed load can fail. **CI builds the SPA before `go build`; `dist/` is NOT committed.** The embed itself enforces ordering — a missed build step fails compilation rather than producing a working binary that serves nothing. Captured in [`docs/v2-design/frontend-spa.md`](v2-design/frontend-spa.md).
+- **Frontend SPA scaffold designed AND landed AND verified.** `frontend/logging/` (Svelte 5 + Vite 6 + plain TS + Tailwind CSS v4, *not* SvelteKit). Daemon-side: new `frontend/embed.go` package owns `//go:embed all:logging/dist`, `internal/api/spa.go` is the `spaHandler` (with index.html-fallback for client-side routing), `internal/api/server.go` registers `GET /` conditionally on `cfg.Server.Protocol == "tcp" && *cfg.Server.ServeSPA` so Unix-socket headless deployments stay supported. **Implementation simplification vs. the original sketch:** `LoggingFS()` returns just `fs.FS` (no error) — `fs.Sub` on a hard-coded valid embed path is infallible at runtime; the panic-on-error stays as a programmer-error guard but is unreachable. This kept `api.New()`'s signature stable, so no test changes were needed. **Tailwind CSS v4 added during scaffolding** — the original "plain scoped component CSS to start" stance was reversed in favour of v4's CSS-first config (`@tailwindcss/vite` plugin, single `@import "tailwindcss";`). Verified via Chrome DevTools MCP that all utilities apply correctly. **CI builds the SPA before `go build`; `dist/` is NOT committed** (except a placeholder `dist/index.html` so first-time builds compile before anyone runs `npm install`). Full file inventory + verification tables in [`docs/v2-design/frontend-spa.md`](v2-design/frontend-spa.md) §"Scaffold landed and verified".
+
+- **End-to-end smoke test landed via Chrome DevTools MCP.** Two paths verified:
+  - **Path A (daemon-embedded placeholder):** `task build && ./build/bin/smd` → `GET /v1/healthz` 200 → `GET /` returns embedded `dist/index.html` → page title + h1 + body text confirmed via accessibility-tree snapshot in Chromium. Plus `internal/api/spa_test.go` covers the same handler at unit level (root + four fallback paths).
+  - **Path B (Vite dev server with the real Svelte 5 + Tailwind app):** `task frontend:install` + `task frontend:dev` → 17 network requests all 200 (one cosmetic 404 for `favicon.ico`) → Svelte 5 `$state` rune rendered → seven Tailwind v4 utility classes verified via computed-style readback (oklch colours, viewport min-height, font stack, font weights). The whole frontend toolchain works end-to-end: Vite + `@sveltejs/vite-plugin-svelte` + `@tailwindcss/vite` + Svelte 5 + the `$state` rune + HMR.
 
 - **Topology refined:** the bridge is a **peer** of the daemon, not a subordinate. Load-bearing distinction = host-bound (rig wires) vs network-shaped (storage + HTTP). Bridge owns CAT/serial/PTT/audio (host-bound by physics); daemon owns log + forwarding + SPA hosting (network-shaped, can live anywhere). **The two never talk to each other — they share clients.** Client subscribes to bridge for live rig state, submits QSOs to daemon with freq/mode in the payload. Earlier wording about "daemon brokers events from the bridge" was wrong if "brokers" implied bridge → daemon → client; the correct model is bridge → client and daemon → client as parallel channels. Enables four deployment topologies (all-on-one, server+shack, remote operating, multi-rig) without code changes. Captured in [`docs/v2-design/topology.md`](v2-design/topology.md).
 
@@ -46,20 +50,34 @@ precisely so we don't re-derive state or redo finished work.
 
 **Files added:**
 
-- `docs/v2-design/ui-toolkit.md` — Gio vs Wails vs browser-SPA analysis (decision resolved at end of session)
+- `docs/v2-design/ui-toolkit.md` — Gio vs Wails vs browser-SPA analysis (decision resolved end of session)
 - `docs/v2-design/topology.md` — bridge/daemon/client peer model, deployment scenarios, CORS/auth/discovery practicalities
 - `docs/v2-design/cat-performance.md` — codec hot-spot analysis cited to file:line, ranked optimisations, baseline benchmark numbers
-- `docs/v2-design/frontend-spa.md` — SPA scaffold, embed wiring, build pipeline, CI stance
+- `docs/v2-design/frontend-spa.md` — SPA scaffold, embed wiring, build pipeline, CI stance, "Scaffold landed and verified" verification tables
 - `cmd/logging/mode_cycle.go` — Mode cycle-button widget
 - `internal/cat/codec_bench_test.go` — baseline `BenchmarkDecode` + `BenchmarkLookupState`
+- `frontend/embed.go` — Go embed package owning the SPA `dist/` filesystem
+- `frontend/logging/` — full scaffold: `package.json`, `vite.config.ts`, `tsconfig.json`, `svelte.config.js`, `index.html`, `src/main.ts`, `src/app.svelte`, `src/styles/app.css` (Tailwind import), `dist/index.html` (placeholder), `package-lock.json`
+- `internal/api/spa.go` — `spaHandler` with index.html-fallback
+- `internal/api/spa_test.go` — covers root + four fallback paths
+
+**Files modified:**
+
+- `internal/config/config.go` — `cfg.Server.ServeSPA *bool` with TCP-default-true logic
+- `internal/api/server.go` — imports `frontend`; conditionally registers `GET /` SPA route
+- `Taskfile.yml` — `frontend:install` (auto-detects lockfile), `frontend:dev`, `frontend:build`, `build:smd`
+- `.gitignore` — ignores `frontend/logging/{node_modules,dist/*}` except `dist/index.html`
+- `build/config.json` — switched to TCP `127.0.0.1:8080` for the smoke test (daemon configurable per deployment)
 
 ### Next session
 
-- **Land the SPA skeleton.** Smallest first commit per `frontend-spa.md`: create `frontend/logging/` (`package.json`, `vite.config.ts`, `index.html`, `src/main.ts`, `src/app.svelte` rendering "hello"), create `frontend/embed.go`, wire the SPA route into `internal/api/server.go` behind `cfg.Server.ServeSPA`, add Taskfile entries (`frontend:install`, `frontend:dev`, `frontend:build`, `build:smd` with `frontend:build` dep), update `.gitignore` for `frontend/logging/{node_modules,dist}/`. Verify: `task build:smd && ./build/smd`, hit `localhost:8080`, see "hello". `api.New()` signature change to `(*Server, error)` propagates one line in `cmd/smd/main.go`.
-- **Resolve open SPA questions** (listed in `frontend-spa.md` §"Open questions for the next session"): router choice (`svelte-spa-router` vs hand-rolled hash router — lean hand-rolled), CSS approach (plain scoped component CSS to start), bridge default port for the SPA's config defaults.
+- **Land the first real route.** Pick between `svelte-spa-router` (~3 KB dep) and a hand-rolled hash router (~50 lines). Add `/log` as the first route stub. The Tailwind v4 toolchain is verified working; use it.
 - **Bridge HTTP/SSE surface** — concrete API design to drop into `bridge.md`. Endpoints: `GET /v1/rig` (snapshot), `GET /v1/rig/events` (SSE stream), `POST /v1/rig/freq`, `POST /v1/rig/mode`, plus the existing rigctld TCP frontend unchanged. CORS (`Access-Control-Allow-Origin: *` for single-user, scoped to daemon origin for stricter setups). Reconnection semantics on the SSE side.
+- **`bridge.svelte.ts` rig-state module** — once the bridge SSE shape is settled. Module-level `$state` holds `{freq, mode, vfo}`; any component that reads it re-renders on EventSource updates. ~30 lines.
 - **Client-side QSO payload shape** — agree what the client sends to `POST /v1/qso`. Since the client is the only thing that knows current freq/mode (subscribed to bridge), it must include those fields in the QSO submission. Daemon takes them as authoritative.
-- **CI workflow update** when the SPA scaffold lands: add Node LTS setup + `task frontend:install && task frontend:build` before the Go build/test steps. The `//go:embed` enforces ordering — missing `dist/` is a compile error, so a botched CI step surfaces immediately.
+- **CI workflow update** — add Node ≥22 setup + `task frontend:install && task frontend:build` before the Go build/test steps. The `//go:embed` enforces ordering — missing `dist/` is a compile error, so a botched CI step surfaces immediately. (Lockfile is now committed, so CI can use `npm ci` for deterministic resolution.)
+- **Trivial cleanup:** drop `frontend/logging/public/favicon.ico` (any file) to silence the cosmetic 404 the Vite smoke test surfaced. Or accept it.
+- **Chrome DevTools MCP env note** — see memory `reference_chrome_devtools_mcp_setup`. The plugin's launch config is read from `~/.claude/plugins/cache/chrome-devtools-plugins/chrome-devtools-mcp/<version>/.claude-plugin/plugin.json`; if you upgrade the plugin and Chromium-not-Chrome breaks browser automation again, re-add `--executablePath=/usr/bin/chromium-browser --isolated` to that file's `mcpServers.args` array.
 - **`cmd/logging/` (Gio app) is left alone for now.** Per `ui-toolkit.md` and `frontend-spa.md`, it stays in place until the SPA reaches feature parity, then gets abandoned cleanly. Don't pre-emptively delete.
 
 ### Session 21 work (UI frame built up in single-concept steps; entry-row helpers parked for later)

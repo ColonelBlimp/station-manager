@@ -19,6 +19,30 @@ tasks:
       - go build -o build/bin/smd ./cmd/smd
       - go build -o build/bin/logging ./cmd/logging
 
+  frontend:install:
+    desc: Install logging-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
+    dir: frontend/logging
+    cmds:
+      - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
+
+  frontend:dev:
+    desc: Run the logging SPA Vite dev server with HMR (proxies /v1/* to daemon on :8080)
+    dir: frontend/logging
+    cmds:
+      - npm run dev
+
+  frontend:build:
+    desc: Production build of the logging SPA (consumed by go:embed)
+    dir: frontend/logging
+    cmds:
+      - npm run build
+
+  build:smd:
+    desc: Build the daemon with a freshly built embedded SPA
+    deps: [frontend:build]
+    cmds:
+      - go build -o build/bin/smd ./cmd/smd
+
   test:
     desc: Run tests with race detector and -short
     cmds:

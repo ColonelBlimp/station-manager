@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/frontend"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -85,6 +86,16 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
+
+	// SPA — served at the root. Anything not matched by /v1/* falls
+	// through to the SPA's index.html so client-side routing handles
+	// /log, /logbook, /config, etc. Conditional on TCP + opt-in so a
+	// Unix-socket headless deployment stays a supported shape (browsers
+	// can only reach TCP listeners). See docs/v2-design/frontend-spa.md
+	// and docs/v2-design/topology.md.
+	if cfg.Server.Protocol == "tcp" && cfg.Server.ServeSPA != nil && *cfg.Server.ServeSPA {
+		mux.Handle("GET /", spaHandler(frontend.LoggingFS()))
+	}
 
 	s.httpServer = &http.Server{
 		Handler:      s.limitConcurrent(s.recoverPanic(mux)),

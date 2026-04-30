@@ -11,3 +11,10 @@ web/*
 /internal/cat/config.json
 
 /logging
+
+# Frontend SPA — node_modules never tracked; dist/ is built by Vite
+# but the placeholder dist/index.html is committed so go:embed compiles
+# before anyone runs `task frontend:install`.
+frontend/logging/node_modules/
+frontend/logging/dist/*
+!frontend/logging/dist/index.html
