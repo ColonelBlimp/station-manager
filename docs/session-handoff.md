@@ -24,7 +24,41 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-25, session 21 — small-step UI frame: status row + 2/3-1/3 main row)
+## Current state (as of 2026-04-30, session 22 — UI toolkit reconsidered, topology pinned, CAT perf analysed)
+
+### Session 22 work (architecture conversation captured into v2-design docs; no code changes to runtime packages)
+
+**Three open questions surfaced and were documented; none decided yet.**
+
+**What landed:**
+
+- **`cmd/logging` UI step:** Mode picker added. New file `cmd/logging/mode_cycle.go` — a click-to-advance cycle button over `[]string{"USB", "LSB", "CW"}`. Wired into `qsoSectionTop` as a 4th cell next to Callsign/RST Sent/RST Rcvd, using a `labeledMode(theme)` helper that mirrors `labeledInput`'s vertical label-over-content shape. Cycle button rebuilt to match `borderedInput` exactly (1 dp `gray500` border, 4 dp corner radius, 6 dp uniform inset, body1 text) so heights align across the row. Pinned to fixed 60 dp width via `gtx.Constraints.Min.X = gtx.Constraints.Max.X = gtx.Dp(modeFieldWidth)` so frame width doesn't reflow as the label changes.
+
+- **Tailwind v4 palettes added to `cmd/logging/colours.go`:** `red50–red950`, `gray50–gray950`, `green50–green950` alongside the existing indigo palette. Each block has a header comment listing canonical `oklch(L C H)` tuples for traceability. `borderedInput` (in `main.go`) now uses `gray500` for its border (`inputBorderColor` const removed).
+
+- **UI toolkit decision reopened.** Operator concern: Gio learning curve fights the "small steps / no cognitive debt" working-mode preference. Three options analysed (stick with Gio / fall back to Wails v2 / browser SPA hosted by daemon). Recommendation lands on **browser SPA**: simpler deployment, removes the toolkit-choice problem, reuses operator's TS/Svelte 5 preference, three-tab model (`/log`, `/logbook`, `/config`) fits the daemon + clients architecture cleanly. Performance is not the deciding factor — see the topology and cat-performance docs. **Status: open, leaning toward SPA.** Captured in [`docs/v2-design/ui-toolkit.md`](v2-design/ui-toolkit.md).
+
+- **Topology refined:** the bridge is a **peer** of the daemon, not a subordinate. Load-bearing distinction = host-bound (rig wires) vs network-shaped (storage + HTTP). Bridge owns CAT/serial/PTT/audio (host-bound by physics); daemon owns log + forwarding + SPA hosting (network-shaped, can live anywhere). **The two never talk to each other — they share clients.** Client subscribes to bridge for live rig state, submits QSOs to daemon with freq/mode in the payload. Earlier wording about "daemon brokers events from the bridge" was wrong if "brokers" implied bridge → daemon → client; the correct model is bridge → client and daemon → client as parallel channels. Enables four deployment topologies (all-on-one, server+shack, remote operating, multi-rig) without code changes. Captured in [`docs/v2-design/topology.md`](v2-design/topology.md).
+
+- **CAT codec perf analysed (no code changed).** Code-read of `internal/cat/codec.go` and `rigdb.go`. Real hot-spots identified at file:line — `Status{}` fresh-allocated per `Decode` call (`codec.go:55`) is the biggest cost; `lookupState` linear scan with `bytes.EqualFold` (`codec.go:107`) is second. The "map and rehashing" the operator was recalling is **not** `rigDB` (that's cold-path init-only) — it was the per-frame `Status` map allocation. Ranked optimisations Tier 1/2/3 documented. **Decision: don't optimise yet.** The codec is ~3–5 µs per call inside a 100 ms poll cycle — invisible to the latency budget. Real latency dominators are bridge-side (poll interval, USB-serial latency timer, TCP_NODELAY, async/auto-tx mode). Captured in [`docs/v2-design/cat-performance.md`](v2-design/cat-performance.md), including a `BenchmarkDecode`/`BenchmarkLookupState` skeleton for when measurement is wanted.
+
+**Files added:**
+
+- `docs/v2-design/ui-toolkit.md` — Gio vs Wails vs browser-SPA analysis, recommendation, what changes per pivot direction
+- `docs/v2-design/topology.md` — bridge/daemon/client peer model, deployment scenarios, CORS/auth/discovery practicalities
+- `docs/v2-design/cat-performance.md` — codec hot-spot analysis cited to file:line, ranked optimisations, measurement-first plan
+- `cmd/logging/mode_cycle.go` — Mode cycle-button widget
+
+### Next session
+
+- **UI toolkit decision** — resolve the open question. If browser SPA wins: scaffold `frontend/logging/` (Vite + Svelte 5 + TS), add static-file embed to the daemon, draft the daemon's REST shape (`/v1/qso` POST, `/v1/lookup/{call}` GET, `/v1/forward/status` GET) and the bridge's SSE shape (`/v1/rig/events`). If Gio survives: continue the small-step build per the session-21 plan below.
+- **Bridge HTTP/SSE surface** — concrete API design to drop into `bridge.md`. Endpoints: `GET /v1/rig` (snapshot), `GET /v1/rig/events` (SSE stream), `POST /v1/rig/freq`, `POST /v1/rig/mode`, plus the existing rigctld TCP frontend unchanged. CORS handling. Reconnection semantics on the SSE side.
+- **Client-side QSO payload shape** — agree what the client sends to `POST /v1/qso`. Since the client is the only thing that knows current freq/mode (subscribed to bridge), it must include those fields in the QSO submission. Daemon takes them as authoritative.
+- **Optional small Gio refinements** while toolkit is undecided (cheap to throw away, useful for visual feedback): replace remaining debug border colours with real fills, status row contents.
+
+### Session 21 work (UI frame built up in single-concept steps; entry-row helpers parked for later)
+
+**Working mode (operator-set):** *"work through building the logging app UI with you in very small steps — I don't want cognitive debt."* Each step landed one new concept with a short explanation: Constraints (Min/Max), Flex axes, `Rigid` vs `Flexed`, single-edge rules via `clip+paint` (since `widget.Border` is all-four-or-nothing), border composition (panels compose like HTML boxes — adjacent borders sit side-by-side, no `border-collapse`).
 
 ### Session 21 work (UI frame built up in single-concept steps; entry-row helpers parked for later)
 
@@ -59,7 +93,7 @@ precisely so we don't re-derive state or redo finished work.
 | `borderedInput(...)` | parked | `layout.Widget` | fixed-width outlined editor |
 | `loadConfig(path)` | live | `(config.Config, error)` | flag → env → cwd → defaults config resolution |
 
-### Next session
+### Next session (session 21 — *superseded by session 22's Next session block above; preserved for the sub-items still relevant if the Gio path is kept*)
 
 - **Replace debug border colours with real fills/contents.** The four debug colours (red status-row rule, blue main-row frame, green/yellow inner panels) come out as each layer gets its real treatment. Status row is the natural first one — see below.
 - **Status row contents** (red debug rule comes out): `Logging Mode: [Normal ▾] | Logbook: <name> | Rig: <model> | Session Time: hh:mm:ss`. Session time = monotonic counter started at window-open. Inset the row contents 8dp horizontally so text doesn't sit flush against the window edge.
