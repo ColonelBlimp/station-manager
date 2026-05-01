@@ -1,14 +1,11 @@
 <script lang="ts">
     import { isValidCallsign } from '../../validators/callsign';
-    import type {FocusRefs} from "../../states/focus-context.svelte";
 
     interface Props {
         id: string;
         label: string;
         value: string;
         widthClass?: string;
-        focusRefKey?: keyof FocusRefs;
-        focusRefs?: FocusRefs;
         onenrich?: (callsign: string) => void;
     }
 
@@ -17,8 +14,6 @@
         label,
         value = $bindable(''),
         widthClass = 'w-36',
-        focusRefKey,
-        focusRefs,
         onenrich,
     }: Props = $props();
 
@@ -28,19 +23,10 @@
     const handleInput = (e: Event): void => {
         const target = e.currentTarget as HTMLInputElement;
         if (!target) return;
-        const v = target.value;
-        if (v === '') {
-            invalid = false;
-            return;
-        }
-        invalid = !isValidCallsign(v);
+        invalid = !isValidCallsign(target.value);
     };
 
     const validateAndFocus = (): void => {
-        if (value === '') {
-            invalid = false;
-            return;
-        }
         invalid = !isValidCallsign(value);
         if (invalid && inputElement) {
             inputElement.focus();
@@ -50,8 +36,9 @@
 
     const handleKeydown = (e: KeyboardEvent): void => {
         if (e.key !== 'Tab') return;
-        if (value === '' || !isValidCallsign(value)) return;
-        onenrich?.(value.trim().toUpperCase());
+        const trimmed = value.trim();
+        if (trimmed === '' || !isValidCallsign(trimmed)) return;
+        onenrich?.(trimmed.toUpperCase());
     };
 </script>
 

@@ -22,8 +22,12 @@ describe('isValidCallsign', () => {
         expect(isValidCallsign('  M0ABC  ')).toBe(true);
     });
 
-    it('rejects an empty string', () => {
-        expect(isValidCallsign('')).toBe(false);
+    it('treats empty string as not-invalid (presence is a separate concern)', () => {
+        expect(isValidCallsign('')).toBe(true);
+    });
+
+    it('treats whitespace-only string as not-invalid', () => {
+        expect(isValidCallsign('   ')).toBe(true);
     });
 
     it('rejects too-short input', () => {

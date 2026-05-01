@@ -26,19 +26,10 @@
     const handleInput = (e: Event): void => {
         const target = e.currentTarget as HTMLInputElement;
         if (!target) return;
-        const v = target.value;
-        if (v === '') {
-            invalid = false;
-            return;
-        }
-        invalid = !validator(v);
+        invalid = !validator(target.value);
     };
 
     const validateAndFocus = (): void => {
-        if (value === '') {
-            invalid = false;
-            return;
-        }
         invalid = !validator(value);
         if (invalid && inputElement) {
             inputElement.focus();

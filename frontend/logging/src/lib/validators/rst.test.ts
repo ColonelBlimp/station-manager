@@ -18,8 +18,12 @@ describe('isValidRst', () => {
         expect(isValidRst('5999')).toBe(false);
     });
 
-    it('rejects an empty string', () => {
-        expect(isValidRst('')).toBe(false);
+    it('treats empty string as not-invalid (presence is a separate concern)', () => {
+        expect(isValidRst('')).toBe(true);
+    });
+
+    it('treats whitespace-only string as not-invalid', () => {
+        expect(isValidRst('   ')).toBe(true);
     });
 
     it('rejects letters', () => {

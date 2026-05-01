@@ -333,11 +333,21 @@ Default Tab behaviour is preserved (no `preventDefault`), so focus moves to RST 
 
 `src/lib/validators/*.ts` holds pure boolean validator functions and their constants. No DOM, no Svelte. Reusable from search filters, list-view rendering, ADIF parse paths, tests. Current entries: `callsign.ts`, `rst.ts`. New input fields land their validator in this directory before the component is written.
 
+### Validators don't enforce presence (settled 2026-05-01)
+
+A validator is a pure predicate over the field's *data domain* — "is this string a well-formed callsign?" An empty (or whitespace-only) string is **not** a malformed value; it's the absence of one, which is a separate axis. Convention:
+
+- **`isValid…('')` returns `true`.** Whitespace-only also returns `true` (validators trim before pattern-testing).
+- **Required-ness is enforced at the form layer**, not inside the validator. The submit handler composes the two checks: `draft.callsign.trim() !== '' && isValidCallsign(draft.callsign)`. Same validator works for a search filter where empty means "no filter."
+- **Components rely on this contract.** No `if (v === '') { invalid = false; return; }` shortcuts in `ValidatedInput.svelte` / `Callsign.svelte`. The validator returns the right answer; the component just trusts it.
+
+**Why this over `requireValidCallsign`-style renaming:** keeping the validator pure means one function serves both required and optional contexts. Baking presence into the predicate forces every consumer to either accept the decision or write the empty-string-shortcut around it — exactly the boundary leak this convention removes.
+
 ### Global CSS conventions (`src/styles/app.css`)
 
 Single global stylesheet, imported once from `main.ts`. Three buckets, each with a different purpose:
 
-- **`@layer base`** — element-level defaults that should cascade under everything else: `html { @apply text-gray-900 }`, `h1`/`h2`/`p` defaults. (Note: the file currently uses `@layer container` — a typo for `@layer base` flagged in the 2026-04-30 review; fix queued.)
+- **`@layer base`** — element-level defaults that should cascade under everything else: `html { @apply text-gray-900 }`, `h1`/`h2`/`p` defaults.
 - **`@layer components`** — repeating utility clusters extracted via `@apply`. Currently: `.input-base`, `.input-label`, `.invalid-input`. The threshold for extracting is "I would otherwise paste this 11-utility class string into multiple components"; a Tailwind v4 `@apply` block beats both string-constant duplication and an over-engineered `<TextInput>` Svelte wrapper for pure styling concerns.
 - **`@theme`** (when added) — design tokens that should also become Tailwind utilities. Mode palettes, status-row dimensions, focus-ring colours go here when they appear.
 

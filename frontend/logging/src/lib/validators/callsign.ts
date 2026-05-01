@@ -6,6 +6,9 @@ const CALLSIGN_PATTERN = new RegExp(
 
 export const isValidCallsign = (value: string): boolean => {
     const trimmed = value.trim().toUpperCase();
+    if (trimmed === '') {
+        return true;
+    }
     const len = trimmed.length;
     if (len < CALLSIGN_MIN || len > CALLSIGN_MAX) {
         return false;
