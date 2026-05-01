@@ -23,5 +23,5 @@ and FT8.
 
 ## Computer Aided Transceiver (CAT)
 
-The software does support CAT operation; however, only Yaesu FTdx10 and F7-100 have been tested (I don't own any other
+The software does support CAT operation; however, only Yaesu FTdx10 and FT-710 have been tested (I don't own any other
 rigs).

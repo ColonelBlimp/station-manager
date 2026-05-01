@@ -1,0 +1,219 @@
+---
+number: 0010
+title: Rig SSE wire shape — single endpoint, three event types, passive liveness via rig data flow
+status: Accepted
+date: 2026-05-01
+---
+
+# 0010 — Rig SSE wire shape
+
+## Context
+
+ADR 0006 / 0009 settled SPA-side state ownership but left the wire format between bridge and SPA undefined. Implementation of `bridge.svelte.ts` (per ADR 0009's four-object decomposition) needs the wire contract to know what events to listen for, what payloads to expect, and what the SPA's three flags (`enabled`, `connected`, `rigResponding`) are derived from.
+
+Two things constrain the design that are worth surfacing before the decision:
+
+- **AUTO-mode CAT is the assumed rig protocol shape** (per memory `project_sm_serial_bridge`). In AUTO mode the rig pushes data to the bridge — frequency / mode / VFO changes when the operator turns the dial, plus continuous data the SPA doesn't care about (waterfall noise, S-meter telemetry). The bridge listens, filters, and forwards SPA-relevant deltas. **The continuous-flow nature is load-bearing** for liveness detection: it means "data on the wire" can be used as a passive heartbeat without the bridge having to ping or poll.
+- **Serial port disconnection is hard to detect cleanly.** The OS doesn't tell the bridge when the rig is unplugged or powered off; the bridge only learns by trying to read (and getting `EIO`) or by noticing data flow has stopped. This makes liveness detection inherently best-effort.
+
+A separate concern: ADR 0001 chose a daemon-hosted SPA, but `topology.md` makes the bridge a *peer* service to the daemon, not a subordinate. Whether the SSE endpoint lives on the daemon process or a separate bridge subprocess is determined by topology, not by this ADR. **This ADR specifies the wire contract** (URL path, events, payloads) — which Go process answers it is settled by `bridge.md` (forthcoming).
+
+## Decision
+
+### Endpoint
+
+`GET /v1/rig/events` — an SSE stream. Single endpoint, no separate snapshot endpoint.
+
+The SPA opens the EventSource conditionally on `configState.station.enabled`. If CAT is disabled in operator config, the SPA never opens the connection.
+
+### Event types
+
+Three named SSE events:
+
+#### `rig-state`
+
+Partial JSON of CAT-relevant fields. Carries:
+
+- All fields on the **initial** event after a new SSE connection (full snapshot from the bridge's current-state cache).
+- Only **changed fields** on subsequent events (delta).
+
+The SPA's handler is the same in both cases: merge the payload into `catState` field-by-field. No distinction between snapshot and delta at the protocol or handler level.
+
+Fields (initial set; grows as more rig data is wired up):
+
+```json
+{
+    "rigIdentity": "IC-7300",
+    "vfoA": 14250000,
+    "vfoB": 14250000,
+    "mode": "USB",
+    "subMode": "",
+    "selectedVfo": "A",
+    "splitOverride": false,
+    "power": 100
+}
+```
+
+Frequency in Hz (consistent with `cat.svelte.ts`). Mode/subMode follow ADIF naming. Power in watts (raw rig output — `displayedState.effectivePower` is the multiplier-applied value, computed SPA-side per ADR 0009).
+
+#### `rig-disconnected`
+
+Sent when the bridge concludes the rig is no longer alive. Triggers (any of):
+
+- **CAT identity fails at bridge startup.** Bridge sends a query for rig identity; gets nothing, garbage, or a timeout. Rig was never confirmed alive.
+- **Data flow stalls.** No data has arrived on the wire for N seconds (suggested 30s starting value, tunable). In AUTO mode the rig sends continuous waterfall/telemetry data; absence of *any* data implies the rig is gone.
+- **Serial port error.** `EIO` on read, port disappears from the OS, framing errors, etc.
+
+Payload:
+
+```json
+{ "reason": "serial port closed" }
+```
+
+Reason is a short human-readable string for the SPA to show in a toast (per ADR 0008) and on the stale-values indicator. The SPA does **not** clear `catState` on `rig-disconnected` — last-known values persist, marked stale via `bridgeState.rigResponding === false`.
+
+#### `bridge-error`
+
+Sent when the bridge encounters an operator-relevant error (port permission denied, baud-rate mismatch, rig identification failed, etc.). Distinct from `rig-disconnected` — `bridge-error` is for "something happened the operator should know about"; `rig-disconnected` is the steady-state "rig isn't alive."
+
+Payload: `{ "message": string }`. SPA toasts it via ADR 0008.
+
+Don't surface every protocol-level retry or transient hiccup as `bridge-error` — only operator-actionable conditions.
+
+### Reconnection: implicit
+
+There is no `rig-reconnected` event. The first `rig-state` event after a `rig-disconnected` implies reconnect. The SPA flips `bridgeState.rigResponding` back to `true` on receiving any `rig-state` event.
+
+This keeps the protocol to three events instead of four. Since `rig-state` always merges into `catState`, the merge naturally re-populates whatever fields the rig is now reporting.
+
+### Bridge-side current-state cache
+
+The bridge maintains an internal cache of the last-known rig state. It serves three purposes:
+
+1. **Delta computation.** When a rig push arrives, the bridge compares to the cache and emits only the changed fields.
+2. **Initial snapshot on new SSE connection.** When the SPA reconnects (browser reload, network blip), the bridge sends the cached state as the first `rig-state` event.
+3. **Cache survives `rig-disconnected`.** When the rig goes away, the cache holds the last-known values. When the rig comes back, the cache continues to be updated by new pushes.
+
+### Behaviour when SPA opens SSE while rig is already disconnected
+
+Per Q-B confirmed during design conversation: bridge sends the cached `rig-state` first (last-known values), then `rig-disconnected`. The SPA briefly shows the last-known values, then marks them stale.
+
+If the bridge has **no cache** (first-ever launch, rig has never been alive in this bridge's lifetime), only `rig-disconnected` is sent. The SPA's `catState` keeps its hardcoded defaults (per ADR 0003 / 0009); `displayedState` falls back to `manualState` because `rigResponding === false`.
+
+### SPA flags and `editable`
+
+The SPA's bridge module owns three flags:
+
+| Flag | Source | Meaning |
+|---|---|---|
+| `configState.station.enabled` | Operator config (`/v1/config`) | Operator wants CAT |
+| `bridgeState.connected` | `EventSource.readyState === OPEN` | SSE channel is open |
+| `bridgeState.rigResponding` | `false` until first `rig-state`; `false` after `rig-disconnected`; `true` after any `rig-state` | Rig is actively reporting |
+
+The `editable` derived helper from ADR 0006 / 0009 expands to:
+
+```ts
+const editable = $derived(
+    !(configState.station.enabled
+      && bridgeState.connected
+      && bridgeState.rigResponding)
+);
+```
+
+Operator can edit when **any** of the three is false — CAT disabled, bridge unreachable, or rig not responding.
+
+### What's deferred
+
+- **Last-Event-ID** for replay across brief reconnects. Not used in v1. Re-snapshotting on reconnect (which is free given the bridge's cache) covers the same ground.
+- **Synthetic heartbeat / keepalive.** The rig's own waterfall/telemetry data flow IS the heartbeat. No additional ping needed.
+- **Authentication.** No auth in v1 (LAN-only deployment). Static-token-via-`Authorization` for remote deployment per `topology.md` is future work.
+- **Per-rig liveness configurability.** The 30-second data-flow timeout is global; per-rig tuning if it becomes necessary.
+
+## Alternatives considered
+
+### Full state in every event (no deltas)
+
+Originally my recommendation in design conversation. The user pushed back: in AUTO mode the rig genuinely pushes deltas natively, and the bridge has to maintain current-state internally anyway (to know what to query at startup, to filter SPA-relevant fields, to detect changes). So forcing the bridge to send full state on every event throws away information the bridge already has.
+
+Rejected. Deltas are correct: lower bandwidth (probably negligible at SM scale, but still), match the rig's natural protocol, and the merge-into-`catState` is one line on the SPA side. Same merge logic handles initial snapshot and deltas — no client-side complexity introduced.
+
+### Separate snapshot endpoint (`GET /v1/rig` + `GET /v1/rig/events`)
+
+`GET /v1/rig` returns current state as one-shot JSON. `GET /v1/rig/events` is deltas only.
+
+Rejected: SPA never wants snapshot without live updates. A separate snapshot endpoint is only useful for non-streaming consumers (CLI tools, monitoring scripts) which we don't have. Keeps the surface smaller.
+
+### One event type with `type` field in payload
+
+`event: message` for everything; payload has `{type: "state" | "disconnected" | "error", ...}`. Client switches on the type field.
+
+Rejected: named SSE events are exactly what the SSE protocol provides; using them is more idiomatic. Client handler shape is cleaner — `eventSource.addEventListener('rig-state', ...)` per type, no inner switch.
+
+### Active polling instead of AUTO-mode-driven push
+
+Bridge polls the rig at fixed intervals (e.g. 100 ms) regardless of whether the rig is in AUTO mode. Simpler liveness detection (no data → poll fails → disconnected).
+
+Rejected for v1: contradicts the established `AUTO-mode CAT assumed` choice (memory `project_sm_serial_bridge`). Also unnecessary — the rig's continuous waterfall data already gives liveness. Trigger to revisit: encountering a rig that doesn't have continuous data flow (forces explicit polling or synthetic heartbeat).
+
+### Synthetic heartbeat (`event: keepalive` every N seconds)
+
+Bridge emits a periodic keepalive event so SPA can detect transport problems even when the rig hasn't changed.
+
+Rejected: redundant with the rig's own continuous data flow. The whole point of using waterfall data as a passive heartbeat is to avoid the synthetic version. Trigger to revisit: per ADR 0006's deferred-heartbeat note, if silent rig stalls happen in non-AUTO mode.
+
+### `rig-reconnected` as its own event type
+
+Originally on the table as a fourth event. Rejected (Q-A confirmed): the first `rig-state` after a `rig-disconnected` is unambiguously a reconnection. The fourth event type carries no information the third doesn't.
+
+### Clear `catState` on `rig-disconnected`
+
+`rig-disconnected` carries empty/zeroed values; SPA `catState` clears.
+
+Rejected: bad operator UX. Operator was on 14.250 MHz USB; rig powers off; SPA shows blank. When the rig comes back, the values are immediately repopulated. The transition is a brief blank-out window for no benefit. Keeping last-known values marked stale is more useful — operator sees what the rig was last on, knows it's stale.
+
+## Consequences
+
+**Signed up for:**
+
+- **Bridge implementation owns a current-state cache.** Required for: delta computation, initial-snapshot-on-connect, surviving `rig-disconnected`. Likely a small struct in the bridge process keyed by field name.
+- **Liveness detection is best-effort.** A rig that's wedged-but-streaming-waterfall looks alive. A rig that's powered off but the OS hasn't surfaced the serial-port closure looks alive until the timeout fires. Operators may occasionally see stale values that don't immediately mark stale; documented as a v1 limitation.
+- **30-second data-flow timeout is a tunable.** Will probably need to be revisited based on real operating use. Per-rig configurability if different rigs have different baseline data rates.
+- **SPA's bridge module subscribes to three event types** and maintains the three flags. ~50 lines for the consumer logic + EventSource wiring + reconnect handling (browser default).
+- **`bridgeState.rigResponding` derived from event sequence,** not from a single field on `catState`. The rule: `rig-disconnected` flips it false; any `rig-state` flips it true.
+
+**Accepted costs:**
+
+- **Wedged-but-streaming rig** is undetectable. Acceptable for v1; revisit if it bites.
+- **Brief stale-values window** is possible if the rig disappears between data pushes and the timeout fires. Mitigated by marking stale visually (operator can see "wait, this is from 30 seconds ago").
+- **The bridge has to track which fields the SPA cares about.** Forwarding all rig data (waterfall, S-meter) over the wire to the SPA would be wasteful; the bridge filters. Filter list grows as new fields are added — implementation detail, not architectural cost.
+
+**Gained:**
+
+- **Three flags cleanly separate three concerns** (configured / transport-up / rig-alive). Each is independently observable; the `editable` derivation is one line.
+- **No heartbeat infrastructure to build.** The rig's own data flow does the work.
+- **Reconnection is automatic.** Browser's default `EventSource` retry + bridge's "send full snapshot on connect" gives stateless recovery.
+- **Cache survives transient operator confusion.** Operator reloads the SPA → bridge re-sends cached state → operator sees what the rig was on, no blank-screen moment.
+
+## Triggers to revisit
+
+- **30-second data-flow timeout turns out wrong.** Too short → false-positive disconnects during normal-but-quiet operation. Too long → stale data shown beyond operator-acceptable window. Tune based on real operating use; may need per-rig tuning.
+- **Encountering a rig without continuous data flow.** "AUTO-mode CAT assumed" is v1. If a rig is encountered that only emits on changes (no waterfall/telemetry stream), passive liveness collapses and the bridge needs explicit polling or a synthetic heartbeat. ADR 0006's deferred-heartbeat path becomes live.
+- **Wedged-but-streaming rig becomes a real problem.** Operator is "on a frequency" that hasn't actually been set because the rig stopped responding to commands but is still spamming waterfall. Detection requires explicit command-acknowledge tracking, which the bridge doesn't do today.
+- **Many SPA tabs / clients connecting simultaneously.** Each opens its own SSE; bridge fans out from a single rig source. If fan-out becomes expensive (Go-side allocation correlated with subscriber count), worth re-examining — but this is in the noise per `cat-performance.md`'s analysis at the codec layer.
+- **Multi-rig deployment.** SSE endpoint becomes `GET /v1/rig/{id}/events` or similar. Wire shape per-rig is unchanged; routing layer added.
+- **Last-Event-ID becomes worthwhile** if SPA-bridge connection becomes flaky enough to cause flicker between disconnect and reconnect. Replay buffer joins the bridge cache.
+- **Auth required** for remote-VPS deployment. Static token via `Authorization` header; EventSource constructor doesn't accept headers natively, so polyfill or query-string token. Per `topology.md`.
+
+## References
+
+- ADR 0001 (`0001-ui-toolkit-browser-spa.md`) — daemon-hosts-SPA premise. The bridge URL the SPA connects to may be daemon or peer service; settled in `bridge.md` (forthcoming), not here.
+- ADR 0003 (`0003-spa-config-daemon-only.md`) — `configState.station.enabled` source.
+- ADR 0004 (`0004-daemon-vs-spa-responsibilities.md`) — daemon owns external-service orchestration; bridge is the rig-side service.
+- ADR 0006 (`0006-cat-state-precedence-rule.md`) — precedence rule that this wire shape implements; `editable` helper depends on the three flags this ADR defines.
+- ADR 0008 (`0008-notifications-toast-system.md`) — `bridge-error` and `rig-disconnected` reasons surface as toasts.
+- ADR 0009 (`0009-cat-state-decomposition.md`) — `catState` is the SPA-side mirror that this stream populates; merge logic lives in `bridge.svelte.ts`.
+- `docs/v2-design/topology.md` — bridge as a peer of daemon; informs which Go process hosts the endpoint.
+- `docs/v2-design/bridge.md` (forthcoming) — bridge architecture, including which process serves this endpoint, internal cache shape, AUTO-mode CAT integration, serial port handling.
+- Memory `project_sm_serial_bridge` — `AUTO-mode CAT assumed`, the assumption this ADR's liveness model depends on.
+- Memory `project_sm_cat_precedence_rule` — the `editable` helper using all three flags from this ADR.
+- (Planned) `frontend/logging/src/lib/states/bridge.svelte.ts` — SPA-side EventSource consumer; subscribes to the three event types defined here.
