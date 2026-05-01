@@ -55,17 +55,22 @@
 
 <div class="flex flex-col space-y-2 mt-6 w-56">
     {#if catState.selectedVfo === 'A'}
-        {@render box('VFO-A', catState.split, 'RX', catState.vfoA)}
-        {@render box('VFO-B', catState.split, 'TX', catState.vfoB)}
+        {@render box('VFO-A', catState.split, 'RX', catState.vfoA, (hz) => catState.vfoA = hz)}
+        {@render box('VFO-B', catState.split, 'TX', catState.vfoB, (hz) => catState.vfoB = hz)}
     {:else}
-        {@render box('VFO-B', catState.split, 'RX', catState.vfoB)}
-        {@render box('VFO-A', catState.split, 'TX', catState.vfoA)}
+        {@render box('VFO-B', catState.split, 'RX', catState.vfoB, (hz) => catState.vfoB = hz)}
+        {@render box('VFO-A', catState.split, 'TX', catState.vfoA, (hz) => catState.vfoA = hz)}
     {/if}
 </div>
 
-{#snippet box(label: string, isSplit: boolean, action: string, frequency: number)}
+{#snippet box(label: string, isSplit: boolean, action: string, frequency: number, onCommit: (hz: number) => void)}
     <div class="flex w-full">
         <VfoBox label={label.toUpperCase()} isSplit={isSplit} action={action}/>
-        <VfoInput id={label.toLowerCase()} value={formatFrequency(frequency)} band={frequencyToBand(frequency)} />
+        <VfoInput
+            id={label.toLowerCase()}
+            value={formatFrequency(frequency)}
+            band={frequencyToBand(frequency)}
+            {onCommit}
+        />
     </div>
 {/snippet}

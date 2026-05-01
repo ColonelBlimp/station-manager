@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/svelte';
+import { render, cleanup, fireEvent } from '@testing-library/svelte';
 import Vfos from './Vfos.svelte';
 import { catState } from '../../states/cat.svelte';
 
@@ -154,6 +154,79 @@ describe('Vfos', () => {
             expect(text).not.toContain('20m'); // vfoA is out of band; no band text
             expect(text).not.toContain('60m');
             expect(text).not.toContain('80m');
+        });
+    });
+
+    /**
+     * Commit-routing tests — verify that the closure passed into the `box`
+     * snippet writes to the correct catState slot regardless of which VFO
+     * is in the RX vs TX position. The id of each input ("vfo-a" / "vfo-b")
+     * stays tied to its catState slot; the rendering position changes
+     * with selectedVfo, but the routing must not.
+     */
+    describe('commit routing', () => {
+        it('committing to vfo-a updates catState.vfoA when selectedVfo=A', async () => {
+            catState.selectedVfo = 'A';
+            const { container } = render(Vfos);
+            const input = container.querySelector('#vfo-a') as HTMLInputElement;
+
+            await fireEvent.focus(input);
+            await fireEvent.input(input, { target: { value: '21.200' } });
+            await fireEvent.blur(input);
+
+            expect(catState.vfoA).toBe(21_200_000);
+            expect(catState.vfoB).toBe(7_100_000); // untouched
+        });
+
+        it('committing to vfo-b updates catState.vfoB when selectedVfo=A', async () => {
+            catState.selectedVfo = 'A';
+            const { container } = render(Vfos);
+            const input = container.querySelector('#vfo-b') as HTMLInputElement;
+
+            await fireEvent.focus(input);
+            await fireEvent.input(input, { target: { value: '3.750' } });
+            await fireEvent.blur(input);
+
+            expect(catState.vfoB).toBe(3_750_000);
+            expect(catState.vfoA).toBe(14_250_000); // untouched
+        });
+
+        it('committing to vfo-a updates catState.vfoA when selectedVfo=B (RX/TX positions reversed)', async () => {
+            catState.selectedVfo = 'B';
+            const { container } = render(Vfos);
+            const input = container.querySelector('#vfo-a') as HTMLInputElement;
+
+            await fireEvent.focus(input);
+            await fireEvent.input(input, { target: { value: '28.500' } });
+            await fireEvent.blur(input);
+
+            expect(catState.vfoA).toBe(28_500_000);
+            expect(catState.vfoB).toBe(7_100_000);
+        });
+
+        it('committing to vfo-b updates catState.vfoB when selectedVfo=B', async () => {
+            catState.selectedVfo = 'B';
+            const { container } = render(Vfos);
+            const input = container.querySelector('#vfo-b') as HTMLInputElement;
+
+            await fireEvent.focus(input);
+            await fireEvent.input(input, { target: { value: '50.150' } });
+            await fireEvent.blur(input);
+
+            expect(catState.vfoB).toBe(50_150_000);
+            expect(catState.vfoA).toBe(14_250_000);
+        });
+
+        it('does not update catState when an invalid value is committed', async () => {
+            catState.selectedVfo = 'A';
+            const { container } = render(Vfos);
+            const input = container.querySelector('#vfo-a') as HTMLInputElement;
+
+            await fireEvent.focus(input);
+            await fireEvent.input(input, { target: { value: '14.' } });
+            await fireEvent.blur(input);
+
+            expect(catState.vfoA).toBe(14_250_000); // unchanged
         });
     });
 });
