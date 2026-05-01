@@ -1,16 +1,43 @@
 <script lang="ts">
-
     interface Props {
         label: string;
         isSplit?: boolean;
         action?: string;
-        bgColor?: string;
+        disabled?: boolean;
+        onSelect?: () => void;
+    }
+    let {
+        label,
+        isSplit = false,
+        action = 'RX',
+        disabled = false,
+        onSelect,
+    }: Props = $props();
+
+    function handleClick(): void {
+        if (disabled) return;
+        onSelect?.();
     }
 
-    let { label, isSplit = false, action = 'RX'}: Props = $props();
+    function handleKeydown(e: KeyboardEvent): void {
+        if (disabled) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect?.();
+        }
+    }
 </script>
 
-<div class="flex flex-col font-medium text-xs text-white">
+<div
+    role="button"
+    tabindex={disabled ? -1 : 0}
+    aria-label="Select {label}"
+    aria-disabled={disabled}
+    data-vfo={label}
+    onclick={handleClick}
+    onkeydown={handleKeydown}
+    class="flex flex-col font-medium text-xs text-white outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded {disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:brightness-110'}"
+>
     {#if isSplit}
         <div class="text-center w-13 h-4.25 rounded-t {action === 'RX' ? 'bg-green-600/80' : 'bg-rose-900/80'}">{action}</div>
         <div class="text-center w-13 h-4.25 rounded-b bg-blue-700/90">{label}</div>

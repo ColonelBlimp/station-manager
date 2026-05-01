@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { catState } from '../../states/cat.svelte';
+    import { displayedState } from '../../states/displayed.svelte';
+    import { manualState } from '../../states/manual.svelte';
     import VfoBox from "./VfoBox.svelte";
     import VfoInput from "./VfoInput.svelte";
 
@@ -54,23 +55,35 @@
 </script>
 
 <div class="flex flex-col space-y-2 mt-6 w-56">
-    {#if catState.selectedVfo === 'A'}
-        {@render box('VFO-A', catState.split, 'RX', catState.vfoA, (hz) => catState.vfoA = hz)}
-        {@render box('VFO-B', catState.split, 'TX', catState.vfoB, (hz) => catState.vfoB = hz)}
+    {#if displayedState.selectedVfo === 'A'}
+        {@render box('A', 'RX')}
+        {@render box('B', 'TX')}
     {:else}
-        {@render box('VFO-B', catState.split, 'RX', catState.vfoB, (hz) => catState.vfoB = hz)}
-        {@render box('VFO-A', catState.split, 'TX', catState.vfoA, (hz) => catState.vfoA = hz)}
+        {@render box('B', 'RX')}
+        {@render box('A', 'TX')}
     {/if}
 </div>
 
-{#snippet box(label: string, isSplit: boolean, action: string, frequency: number, onCommit: (hz: number) => void)}
+{#snippet box(vfo: 'A' | 'B', action: 'RX' | 'TX')}
+    {@const frequency = vfo === 'A' ? displayedState.vfoA : displayedState.vfoB}
+    {@const label = `VFO-${vfo}`}
     <div class="flex w-full">
-        <VfoBox label={label.toUpperCase()} isSplit={isSplit} action={action}/>
+        <VfoBox
+            {label}
+            isSplit={displayedState.split}
+            {action}
+            disabled={!displayedState.editable}
+            onSelect={() => manualState.selectedVfo = vfo}
+        />
         <VfoInput
-            id={label.toLowerCase()}
+            id={`vfo-${vfo.toLowerCase()}`}
             value={formatFrequency(frequency)}
             band={frequencyToBand(frequency)}
-            {onCommit}
+            disabled={!displayedState.editable}
+            onCommit={(hz) => {
+                if (vfo === 'A') manualState.vfoA = hz;
+                else manualState.vfoB = hz;
+            }}
         />
     </div>
 {/snippet}

@@ -1,109 +1,91 @@
 /**
- * CAT (Computer Aided Transceiver) state.
+ * CAT (Computer Aided Transceiver) state — read-only mirror of the rig.
  *
- * Module-level singleton — any component that reads `catState.enabled`
- * (or any other field) re-renders automatically when the value changes.
+ * Per ADR 0009 (`docs/decisions/0009-cat-state-decomposition.md`), this
+ * is one of four state singletons in the SPA's CAT decomposition:
  *
- * **Why this is its own state object:** the VFO panel and several future
- * widgets (band indicator, mode display, split indicator, TX/RX state)
- * all derive from the rig's CAT-reported state. Centralising avoids
- * each widget reaching into the bridge transport directly, and gives
- * a single place to enforce the "rig off → use defaults" fallback.
+ *   - **catState** (this) — pure rig mirror. Bridge SSE writes only.
+ *     Components MUST NOT read this directly outside the displayedState
+ *     derivation; they read displayedState (`displayed.svelte.ts`).
+ *   - manualState — operator edits in CAT-off mode.
+ *   - configState — operator-declared station properties.
+ *   - displayedState — derived view that components actually read.
  *
- * **Layering:** this module owns the *state shape*. The bridge SSE
- * subscription that updates these fields lives in (TBD)
- * `lib/states/bridge.svelte.ts` per the v2-design sketch. Operator-config
- * fields like `enabled` are populated from the daemon's config API,
- * not from the bridge.
+ * Bridge SSE wire shape per ADR 0010
+ * (`docs/decisions/0010-rig-sse-wire-shape.md`): the bridge maintains a
+ * current-state cache and emits `rig-state` events (full snapshot on
+ * connect, deltas thereafter). The SPA's `lib/states/bridge.svelte.ts`
+ * subscribes and merges payloads into catState field-by-field.
  *
- * **Defaults are bootstrap fallbacks.** The constants below are the
- * second (and only) in-code tier per ADR
- * `docs/decisions/0003-spa-config-daemon-only.md`: daemon `/v1/config`
- * is the authoritative source, and these hardcoded constants are what
- * the UI shows during boot before the first daemon response arrives,
- * or on first-install when the daemon's config file doesn't yet exist.
- * Live CAT values from the bridge override both at runtime. There is
- * no localStorage cache layer — the SPA is hosted by the daemon, so
- * the daemon is always reachable when the SPA is running.
- * Implementation of the daemon-config wiring is deferred; until then,
- * only these hardcoded fallbacks are in use.
+ * **Defaults are bootstrap fallbacks** per ADR 0003. The constants below
+ * are exported because manualState shares the same defaults — both
+ * states bootstrap from these values until either the bridge has
+ * something to say (catState) or the operator types something
+ * (manualState).
  */
 
-const DEFAULT_VFO_HZ = 14_250_000;
-const DEFAULT_MODE = 'USB';
-const DEFAULT_SUB_MODE = '';
-const DEFAULT_SELECTED_VFO: 'A' | 'B' = 'A';
-const DEFAULT_SPLIT = false;
-const DEFAULT_RIG_IDENTITY = '';
+export const DEFAULT_VFO_HZ = 14_250_000;
+export const DEFAULT_MODE = 'USB';
+export const DEFAULT_SUB_MODE = '';
+export const DEFAULT_SELECTED_VFO: 'A' | 'B' = 'A';
+export const DEFAULT_RIG_IDENTITY = '';
+export const DEFAULT_POWER_WATTS = 100;
 
 class CatState {
     /**
-     * Whether the operator has enabled CAT in their configuration.
-     *
-     * Distinct from "the rig is currently responding" — CAT can be
-     * enabled while the rig is switched off, the cable is unplugged,
-     * or the bridge service isn't reachable. In all of those cases
-     * the VFO panel falls back to default values; this flag only
-     * tells you whether the operator *intends* CAT to be in use.
-     */
-    enabled: boolean = $state(false);
-
-    /**
      * Rig identity as reported by CAT (model string, e.g. "IC-7300",
      * "FT-991A"). Empty string when CAT has not yet reported — rig
-     * off, bridge unreachable, or CAT disabled. Not part of operator
-     * config; purely live from the rig.
+     * off, bridge unreachable, or CAT disabled. Bridge writes only.
      */
     rigIdentity: string = $state(DEFAULT_RIG_IDENTITY);
 
     /**
-     * VFO A frequency in Hz. Hz (not kHz / MHz) is the natural CAT
-     * protocol unit and avoids floating-point drift; JS f64 has 53
-     * bits of integer precision, comfortably more than any radio
-     * frequency. UI formatting (e.g. "14.250.000") is a render
-     * concern, not a state concern. ADIF stores frequency in MHz —
-     * conversion happens at the QSO submit boundary.
+     * VFO A frequency in Hz. Bridge writes only via `rig-state` event
+     * merge. Hz (not kHz / MHz) is the natural CAT protocol unit and
+     * avoids floating-point drift; JS f64 has 53 bits of integer
+     * precision. UI formatting and ADIF MHz conversion happen at
+     * presentation/submit boundaries — not here.
      */
     vfoA: number = $state(DEFAULT_VFO_HZ);
 
-    /**
-     * VFO B frequency in Hz. Defaults to the same value as VFO A;
-     * many rigs power up with both VFOs synced, and split is off
-     * by default so VFO B is functionally inert until the operator
-     * acts on it.
-     */
+    /** VFO B frequency in Hz. Bridge writes only. */
     vfoB: number = $state(DEFAULT_VFO_HZ);
 
     /**
-     * Mode of the active VFO. ADIF MODE field — USB, LSB, CW, FM,
-     * AM, RTTY, FT8, etc. Maps directly to `types.Qso.Mode` at QSO
-     * submit time.
+     * Mode of the active VFO. ADIF MODE field — USB, LSB, CW, FM, AM,
+     * RTTY, FT8, etc. Maps to `types.Qso.Mode` at QSO submit time.
+     * Bridge writes only.
      */
     mode: string = $state(DEFAULT_MODE);
 
     /**
-     * Sub-mode refinement. ADIF SUBMODE field — e.g. CW-N (narrow),
-     * FT4 (subset of digital), FM-D (digital FM). Empty string when
-     * the mode has no submode or none is reported. Maps to
-     * `types.Qso.SubMode` at submit time.
+     * Sub-mode refinement. ADIF SUBMODE field — e.g. CW-N, FT4, FM-D.
+     * Empty string when none reported. Bridge writes only.
      */
     subMode: string = $state(DEFAULT_SUB_MODE);
 
     /**
-     * Which VFO is currently selected. In non-split operation this
-     * is both the TX and RX VFO. In split operation, RX uses this
-     * VFO and TX uses the other. Defaults to 'A' which is the
-     * conventional power-on selection across most rigs.
+     * Which VFO is currently selected. In non-split operation this is
+     * both the TX and RX VFO; in split, RX uses this VFO and TX uses
+     * the other. Bridge writes only.
      */
     selectedVfo: 'A' | 'B' = $state(DEFAULT_SELECTED_VFO);
 
     /**
-     * Split operation flag. When true, RX uses `selectedVfo` and TX
-     * uses the other VFO. Some rigs report split via a dedicated
-     * status flag; others infer it from VFO frequency divergence.
-     * The bridge normalises both into this single boolean.
+     * Bridge-set split flag from the rig. `null` when the rig has not
+     * reported a split status (CAT-off mode), in which case
+     * `displayedState.split` derives split from frequency divergence
+     * per ADR 0009. `true` / `false` when the rig has reported.
+     * Bridge writes only.
      */
-    split: boolean = $state(DEFAULT_SPLIT);
+    splitOverride: boolean | null = $state(null);
+
+    /**
+     * Raw power reported by the rig (watts). 0 when the bridge has
+     * not yet reported. `displayedState.effectivePower` applies the
+     * operator's amp multiplier per ADR 0009. Bridge writes only.
+     */
+    power: number = $state(0);
 }
 
 export const catState = new CatState();
