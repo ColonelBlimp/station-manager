@@ -42,7 +42,7 @@
     };
 </script>
 
-<div class="{widthClass} my-4 h-17.5">
+<div class="{widthClass} input-row">
     <label for={id} class="input-label">{label}</label>
     <input
         {id}
