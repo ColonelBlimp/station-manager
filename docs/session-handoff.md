@@ -24,9 +24,9 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-01, session 25 — CAT state landed; four ADRs settled architectural splits; Vfos component shipped with display tests)
+## Current state (as of 2026-05-01, session 25 — CAT state landed; eight ADRs settled architectural splits; Vfos component shipped with display + commit-routing tests; CAT precedence + decomposition + keyboard shortcuts + toasts settled)
 
-### Session 25 work (CAT state + ADRs 0002–0005 + Vfos component + component-testing infra)
+### Session 25 work (CAT state + ADRs 0002–0009 + Vfos component + component-testing infra + CAT precedence + 4-object decomposition + keyboard shortcuts + toast system)
 
 **Operator brief at session start:** keep the SPA's architectural shape coherent — surface the load-bearing decisions before code cements them, then build the Vfos display.
 
@@ -60,7 +60,28 @@ precisely so we don't re-derive state or redo finished work.
   - `feedback_svelte_empty_script_block` — captured the operator's convention "always include `<script lang="ts"></script>` even if empty" after I incorrectly recommended deleting empty script blocks earlier.
   - `MEMORY.md` index updated for all of the above.
 
-**Test/check status at session end:** `svelte-check` clean (145 files, 0 errors); 31 tests pass across 3 files (validators × 2 + Vfos).
+**Mid-session additions (continued 2026-05-01):**
+
+- **Frequency input validation.** `src/lib/validators/frequency.ts` (`parseFrequency` + `isValidFrequency`) — accepts display format `"14.250.000"` and decimal MHz `"14.250"`; range 100 kHz to 30 GHz; empty/whitespace returns true per the validator-presence convention. 28 unit tests in `frequency.test.ts`.
+- **VfoInput edit/commit wiring** — local `editValue` buffer with `editing` flag; commit on Enter or blur (only when valid); revert on Escape; `aria-invalid` while typing invalid; new `onCommit?: (hz: number) => void` prop. Vfos.svelte threads per-VFO commit closures (`(hz) => catState.vfoA = hz`, etc.) into the `box` snippet.
+- **Component test coverage** — `VfoInput.test.ts` (13 tests: display, commit on blur, commit on Enter, Escape revert, invalid styling) and 5 new commit-routing tests appended to `Vfos.test.ts` covering closure-routing under both `selectedVfo='A'` and `'B'`. Total: 77 tests across 5 files.
+- **ADR 0006 — CAT-state precedence rule (Accepted).** Conversation thread covered the CAT-off vs CAT-on transition, who-writes-when, the bridge-connect handover, split derivation, and bridge liveness. Five sub-decisions settled:
+  1. **Three state singletons.** `catState` (rig state) + `qsoDraftState` (in-progress QSO, planned) + `bridgeState` (transport, planned). No field duplicated across them. QSO submit reads from all three.
+  2. **Precedence rule.** SPA edit affordances disabled when `catState.enabled && bridgeState.connected`; otherwise SPA writes accepted. Implement once as `const editable = $derived(!(catState.enabled && bridgeState.connected))` — every editable component reads it.
+  3. **Bridge-connect transition.** Unconditional read of rig state from first SSE event. Operator's manual edits superseded — *this is the act of CAT handover, not silent loss*. A toast notification ("CAT connected — reading rig state") makes it visible; until the toast system exists this is silent (known technical debt, flag in `bridge.md` when written).
+  4. **Liveness: connection-only.** `EventSource.readyState === OPEN`. No heartbeat in v1 — rig-not-changing is indistinguishable from rig-not-responding without one. Deferred. Operator agreed: if it bites, two heartbeat shapes available (bridge keepalive vs CAT-poll-derived `cat-stalled` event); prefer the latter.
+  5. **Split derivation.** CAT-off: `split = (vfoA !== vfoB)`. CAT-on: bridge writes `splitOverride: boolean` overriding the derivation. Same-frequency-split limitation accepted (rare; additive fix later via explicit toggle button).
+- **ADR 0007 — Keyboard shortcuts (Accepted).** Library: `@svelte-put/shortcut` (~1 KB, action-based, idiomatic Svelte 5). Hand-rolled rejected: modifier normalisation and platform quirks aren't worth re-solving. Initial shortcut map: `Ctrl+\\` (swap VFO, CAT-gated via `editable`), `Ctrl+Enter` (submit QSO, not gated), `Escape` (revert in-field / cancel draft outside field), `?` (help overlay, suppressed in fields). In-field policy: modifier-keyed shortcuts work in-field by default; bare keys check `event.target` against `INPUT`/`TEXTAREA`/`contenteditable` and bail. F1–F12 reserved for future contest macros. Initial map will iterate after ~30 days of operating use; revisions amend the ADR rather than supersede.
+
+- **ADR 0008 — Notifications/toast system (Accepted).** Hand-rolled rather than `@zerodevx/svelte-toast` / `svelte-french-toast` / `svelte-sonner` — the `$state`-queue subscribability fits the architecture and the platform-quirks-layer that justifies a library elsewhere doesn't exist for toasts. State singleton at `lib/states/toasts.svelte.ts` (`Toast[]` reactive array + `pushToast` / `dismissToast` / `info` / `warn` / `error` helpers). Three levels: info (4s TTL), warn (6s), error (8s). Max stack 5; oldest dropped on overflow. Click-to-dismiss always available. `<Toasts/>` mounted once in `app.svelte` shell, `fixed bottom-4 right-4`. Tailwind styling via `@layer components` cluster (`.toast-base`, `.toast-info`, `.toast-warn`, `.toast-error`) — same convention as `.input-base`/`.input-row`. Discipline: **toasts express events, inline messages express state**. First concrete consumer: ADR 0006's CAT-handover toast. Triggers to revisit named: missed-toasts → pause-on-hover; promise-toasts wanted; toast-history view; per-toast custom components.
+
+- **ADR 0009 — CAT-state decomposition (Accepted; refines ADR 0006).** Operator's instinct that the mode-flipped `catState` had a smell turned out to be correct. Forced into the open by the power-with-linear-amp example: `effectivePower = rigPower × ampMultiplier` doesn't fit a single mode-flipped object — there's nowhere for the multiplier to live. Decomposition into four state objects with static ownership: `catState` (rig mirror, bridge-only writes), `manualState` (operator edits in CAT-off mode, SPA-only writes — only the operator-writeable subset of fields), `configState` (operator-declared station properties from `/v1/config`), `displayedState` (derived `$derived.by(...)` view, read by every component, no own storage). `split` and `selectedVfo` become structurally derived projections — no writeable `split` field anywhere; setting "split" in CAT-off mode means changing a VFO frequency. Snapshot-on-CAT-off rule recommended (manualState adopts catState on bridge disconnect for value continuity). All ADR 0006 behavioural rules stand — precedence, edit-affordance lockout, transition handover, connection-only liveness, split-from-divergence, same-frequency-split limitation. ADR 0006 status remains Accepted; a forward-pointer to 0009 was added at the top. Memory `project_sm_cat_precedence_rule.md` rewritten to reflect the four-object structure. The `editable` helper from ADR 0006 stays — gates UI write affordances; less load-bearing now that structural ownership prevents accidental wrong-object writes.
+- **Documentation updates:**
+  - `docs/decisions/0006-cat-state-precedence-rule.md` — new ADR (Accepted).
+  - `docs/v2-design/frontend-spa.md` — added 0006 to architectural decisions list; new entries in open questions for QSO draft state, bridge state, keyboard shortcuts (forthcoming 0007); CAT-state precedence struck through with 0006 link.
+  - Memory `project_sm_cat_precedence_rule.md` — new entry capturing the rule for future sessions; `MEMORY.md` index updated.
+
+**Test/check status at session end:** `svelte-check` clean; 77 tests pass across 5 files (validators × 3 + VfoInput + Vfos).
 
 ### Next session
 
