@@ -24,7 +24,90 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-30, session 23 — first SPA components landed; Tab-on-callsign carved out as the enrichment trigger boundary)
+## Current state (as of 2026-05-01, session 24 — code-review queue worked down; SPA tree cleaned up; vitest landed; validator presence convention settled)
+
+### Session 24 work (vitest + testing infra landed, code-review round 2, queued cleanups closed, validator-presence convention settled)
+
+**Operator brief at session start:** add vitest, do a fresh code review of `frontend/logging/src/` to make sure the early shape is right, and work down the carried queue.
+
+**What landed:**
+
+- **Vitest wired up.** Added `vitest`, `@vitest/ui`, `jsdom`, `@testing-library/svelte`, `@testing-library/jest-dom`, `@types/node` as devDeps. New scripts `test`, `test:watch`, `test:ui`. Test config lives in `vite.config.ts` (`test:` block, `jsdom` environment, globals on, `src/test/setup.ts` imports `jest-dom/vitest`). Switched `defineConfig` import from `vite` to `vitest/config` so the `test:` block type-checks. Split tsconfig: new `tsconfig.node.json` covers `vite.config.ts` so the IDE stops complaining about unresolved `@tailwindcss/vite` imports — the root tsconfig references it. Added validator suites at `src/lib/validators/{callsign,rst}.test.ts`. **21 tests pass; svelte-check clean.**
+
+- **Code review round 2** — surfaced one major project-rule violation (focus-context infrastructure) plus the carried queue. Operator deleted `lib/states/focus-context.svelte.ts` + its test (≈500 LOC of speculative/mock-based infra that violated the "build specific, not generic" rule and "no mock interfaces for internal services" rule from CLAUDE.md). Two more concerns surfaced — zero-value wrappers, and validator-presence semantics — both addressed this session.
+
+- **Concern 2 — zero-value wrappers flattened.** `LoggingCardHeader.svelte` and `LoggingCardContent.svelte` deleted; `LoggingCard.svelte` absorbed the header markup directly. Composition chain went from `app → LoggingCard → LoggingCardContent → QsoPanel` (four boundaries, one piece of content) to `app → LoggingCard → QsoPanel` (two boundaries). `LoggingCard` is now load-bearing — owns both the header and the panel slot, ready for sibling panels (StationPanel, InfoPanel) when they land.
+
+- **Concern 3 — validator presence convention settled (2026-05-01).** Validators are pure predicates over the field's data domain; an empty/whitespace-only string returns `true` (= "validator has no objection"). Required-ness is enforced at the form layer, not inside the validator. Removed the `if (v === '') { invalid = false; return; }` shortcuts from both `ValidatedInput.svelte` and `Callsign.svelte`. `Callsign.handleKeydown` now calls `value.trim()` once instead of testing empty + non-trimmed-validity separately. Convention captured in `frontend-spa.md` §"Validators don't enforce presence". Same validator now serves both required (QSO submit) and optional (search filter) contexts without consumers writing the empty-string-shortcut around it.
+
+- **Carried queue closures:** Fix 1 (`@layer container` → `@layer base` typo, fixed by operator), Fix 2 (debug `border border-blue-500` removed from `QsoPanel.svelte:6`), Fix 8 (`min-w-200 max-w-200` redundancy → `w-200` on `app.svelte:5`), Fix 9 (empty `<script>` blocks resolved by Concern-2's structural cleanup; deleted files + `LoggingCard` script now imports `QsoPanel`), Fix 10 *partially* (`.input-row { @apply my-4 h-17.5 }` extracted to `app.css` `@layer components`; `ValidatedInput`/`Callsign` use it now; threshold for further extraction documented — single-use magic numbers stay inline until 2nd use shows up). Trivial cleanups: `.editorconfig` added (4-space indent for code, 2-space for md/yml/yaml/json), `app.svelte` re-indented to match, `public/favicon.ico` placeholder file (0 bytes) silences the dev-server 404.
+
+- **Fix 13 still open (deferred by design).** Validation feedback is currently colour-only (red outline) — discussed in detail. Deferred because the right design depends on QSO draft store + form composition (currently unbuilt). The eventual fix is largely additive: `.input-row`'s `h-17.5` already reserves space for an inline error message slot. Captured the toast-vs-inline distinction during the conversation: toasts are for non-blocking system **events** (QSO saved, enrichment outcome, bridge dis/connect, forwarder progress); inline messages are for **state** of a specific field. Both will exist; they don't substitute. The toast-system design itself is a separate piece of work — capture in `docs/v2-design/notifications.md` (or similar) when the first event-style outcome needs to surface.
+
+- **Items dropped from the queue as no-longer-applicable:** Fix 4 (subsumed by Concern 3's resolution — function name no longer lies because empty is now valid), Fix 5 (`$bindable()` defaults verified during cleanup), Fix 11 (`;` vs `,` separator — current Props interfaces all use `;` consistently).
+
+**Queue still open after this session:**
+
+| # | Item | Status |
+|---|---|---|
+| 13 | Validation feedback design — inline message slot under inputs (Fix 13) | deferred until form composition lands |
+| — | Carried magic dimensions (`h-120`, `h-13.5`, `w-72.5`, `mt-10`, `w-19`, `w-36`) | inline until 2nd use case appears (per documented threshold) |
+| — | Toast / notifications system (`docs/v2-design/notifications.md`) | needed before first async outcome surfaces (QSO save, enrichment, bridge connect) |
+
+**Files added:**
+
+- `frontend/logging/.editorconfig` — 4-space code, 2-space data
+- `frontend/logging/tsconfig.node.json` — covers `vite.config.ts` for IDE/typecheck
+- `frontend/logging/src/test/setup.ts` — imports `@testing-library/jest-dom/vitest`
+- `frontend/logging/src/lib/validators/callsign.test.ts` — pure validator suite
+- `frontend/logging/src/lib/validators/rst.test.ts` — pure validator suite
+- `frontend/logging/public/favicon.ico` — 0-byte placeholder
+
+**Files modified:**
+
+- `frontend/logging/package.json` — vitest + testing-library devDeps; `test`/`test:watch`/`test:ui` scripts
+- `frontend/logging/vite.config.ts` — `defineConfig` from `vitest/config`; `test:` block (jsdom, globals, setup file, glob)
+- `frontend/logging/tsconfig.json` — `types: ["vitest/globals", "@testing-library/jest-dom"]`; references `tsconfig.node.json`
+- `frontend/logging/src/styles/app.css` — `.input-row` extracted to `@layer components`
+- `frontend/logging/src/lib/ui/components/ValidatedInput.svelte` — empty-string shortcut removed; `class` uses `.input-row`
+- `frontend/logging/src/lib/ui/components/Callsign.svelte` — empty-string shortcut removed; `handleKeydown` uses `value.trim()` once; `class` uses `.input-row`
+- `frontend/logging/src/lib/validators/callsign.ts` — empty/whitespace returns `true`
+- `frontend/logging/src/lib/validators/rst.ts` — empty/whitespace returns `true`; trims before pattern-test
+- `frontend/logging/src/app.svelte` — `min-w-200 max-w-200` → `w-200`; re-indented to 4-space
+- `frontend/logging/src/lib/ui/cards/LoggingCard.svelte` — absorbed header; imports `QsoPanel` directly
+- `frontend/logging/src/lib/ui/panels/QsoPanel.svelte` — debug border removed
+- `docs/v2-design/frontend-spa.md` — added "Validators don't enforce presence" subsection; documented `.input-row` + magic-number threshold; removed stale `@layer container` parenthetical
+
+**Files deleted:**
+
+- `frontend/logging/src/lib/states/focus-context.svelte.ts` (+ test) — speculative infra, never wired up, mocked Svelte runtime in its tests
+- `frontend/logging/src/lib/ui/cards/LoggingCardHeader.svelte`
+- `frontend/logging/src/lib/ui/cards/LoggingCardContent.svelte`
+
+### Next session
+
+**Highest leverage — pick one to start:**
+
+- **Enrichment pipeline architecture (`docs/v2-design/enrichment.md`).** Still the next architecturally-significant decision. Callsign emits "this call is ready" on Tab; the orchestration that consumes it doesn't exist. Decisions: where the orchestrator lives (`enrichment.svelte.ts` module vs a `qsoStore`), source ordering and concurrency (cache → hamnut → QRZ in parallel? cancellation when a newer Tab arrives?), how partial results flow back into the QsoPanel's draft, how loading/error state surfaces, and how the [enrichment-never-blocks-logging](v1-analysis/invariants.md) invariant is enforced at this boundary. **This is now the head-of-queue architecture decision.** Capture in a design doc before code lands.
+
+- **QSO draft store.** `QsoPanel`'s `<Callsign value=""/>` and two `<Rst value=""/>` are inert — `bind:value` has nothing to bind back to. Needs a `qsoDraft.svelte.ts` `$state` module that holds the in-progress QSO and absorbs the `onenrich` callback's results. Likely lands in the same session as enrichment pipeline since the two are coupled.
+
+- **First real route.** `svelte-spa-router` (~3 KB dep) vs hand-rolled hash router (~50 lines). Add `/log` as the first route stub.
+
+- **Bridge HTTP/SSE surface for `bridge.md`.** Endpoints (`GET /v1/rig`, `GET /v1/rig/events`, `POST /v1/rig/freq`, `POST /v1/rig/mode`), CORS, reconnection semantics. Blocks `bridge.svelte.ts`.
+
+**Carried over (multi-session):**
+
+- **CI workflow update** — Node ≥22 setup + `task frontend:install && task frontend:build` before Go build/test. Lockfile committed → CI uses `npm ci` for deterministic resolution. Tests now exist (vitest), so a `task frontend:test` step (or equivalent) should also land.
+- **Client-side QSO payload shape** — agree what the client sends to `POST /v1/qso`, given the client (subscribed to bridge) is the only thing that knows current freq/mode.
+- **`cmd/logging/` (Gio app) left alone until SPA reaches feature parity**, then abandoned cleanly. Don't pre-emptively delete.
+- **Chrome DevTools MCP env note** if the plugin upgrades and Chromium-not-Chrome breaks again — see memory `reference_chrome_devtools_mcp_setup`.
+
+**Tactical (small, batch in one commit when convenient):**
+
+- **Toast / notifications system (`docs/v2-design/notifications.md`).** Inline-message-under-input is for **state**; toasts are for **events**. The two are complementary. Capture: levels (info/warn/error), default TTL, max stack depth, dismissable behaviour, mount point. Will be needed before the first async outcome surfaces (QSO save, enrichment, bridge connect/disconnect, forwarder progress).
+- **Fix 13 — inline error message slot under inputs.** `.input-row`'s `h-17.5` already reserves space. Open question: where the error string comes from (validators stay `boolean`, components hold their own message string is the leading candidate; alternative is `{ valid, message }` return tuple but that breaks the pure-predicate convention). Lands cleanly once form composition + draft store exist.
+- **Carried magic dimensions** — `h-120`, `h-13.5`, `w-72.5`, `mt-10`, `w-19`, `w-36` stay inline until 2nd use case appears. Per documented threshold in `frontend-spa.md`.
 
 ### Session 23 work (dev workflow established; first round of input components shipped; component-pattern split between generic primitive and domain widgets settled)
 
