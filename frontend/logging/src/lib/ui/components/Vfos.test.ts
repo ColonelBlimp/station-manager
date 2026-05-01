@@ -25,6 +25,15 @@ import { bridgeState } from '../../states/bridge.svelte';
 
 describe('Vfos', () => {
     beforeEach(() => {
+        // Clear localStorage so persisted manualState fields from a
+        // prior test don't bleed into the current one (ADR 0011).
+        try {
+            localStorage.clear();
+        } catch {
+            // jsdom should always provide localStorage; if not, in-memory
+            // state alone is what matters for these tests.
+        }
+
         // Reset catState (even though Vfos no longer reads it directly,
         // a previous test in the run may have written to it).
         catState.rigIdentity = '';

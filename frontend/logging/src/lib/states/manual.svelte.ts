@@ -13,19 +13,25 @@
  * configState/bridgeState.
  *
  * **Write path:** SPA components write here via VfoInput's onCommit,
- * the Mode dropdown, VfoBox click-to-swap (planned), and keyboard
- * shortcuts that mutate VFO/mode (planned per ADR 0007).
+ * the Mode dropdown, VfoBox click-to-swap, and keyboard shortcuts that
+ * mutate VFO/mode (planned per ADR 0007).
  *
- * **Defaults** are imported from `cat.svelte.ts` — both states share
- * the same hardcoded fallbacks per ADR 0003's bootstrap-fallback
- * pattern. When `/v1/config` wires up later, operator-defined
- * defaults will override these at app start.
+ * **Persistence (ADR 0011):** manualState fields persist to
+ * localStorage under the `sm.manual.<fieldName>` namespace. On module
+ * load each field hydrates from localStorage if present, else uses the
+ * hardcoded default from `cat.svelte.ts`. Every write mirrors back to
+ * localStorage via a per-field `$effect`. Failure modes (quota, private
+ * browsing, disabled storage) are silently swallowed — the SPA falls
+ * back to in-memory state without breaking. Distinct from the
+ * daemon-authoritative `configState` (ADR 0003): manualState is
+ * transient session activity per device; configState is operator
+ * preference per the operator.
  *
  * **Snapshot-on-disconnect rule (ADR 0009, recommended):** when the
  * bridge transitions from connected→disconnected, manualState SHOULD
  * adopt catState's most recent values for value continuity. That
- * effect lives in bridge.svelte.ts when SSE wiring lands; manualState's
- * own module never reads or writes catState.
+ * effect lives in bridge.svelte.ts when SSE wiring lands. Snapshot
+ * writes also persist via the localStorage mirror.
  */
 
 import {
@@ -36,13 +42,67 @@ import {
     DEFAULT_POWER_WATTS,
 } from './cat.svelte';
 
+const KEY_PREFIX = 'sm.manual.';
+
+function loadString(field: string, fallback: string): string {
+    try {
+        const raw = localStorage.getItem(KEY_PREFIX + field);
+        return raw ?? fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function loadNumber(field: string, fallback: number): number {
+    try {
+        const raw = localStorage.getItem(KEY_PREFIX + field);
+        if (raw === null) return fallback;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function loadVfo(field: string, fallback: 'A' | 'B'): 'A' | 'B' {
+    try {
+        const raw = localStorage.getItem(KEY_PREFIX + field);
+        if (raw === 'A' || raw === 'B') return raw;
+        return fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function save(field: string, value: unknown): void {
+    try {
+        localStorage.setItem(KEY_PREFIX + field, String(value));
+    } catch {
+        // Storage unavailable / quota exceeded / private browsing —
+        // fall back to in-memory state. Don't break the SPA.
+    }
+}
+
 class ManualState {
-    vfoA: number = $state(DEFAULT_VFO_HZ);
-    vfoB: number = $state(DEFAULT_VFO_HZ);
-    mode: string = $state(DEFAULT_MODE);
-    subMode: string = $state(DEFAULT_SUB_MODE);
-    selectedVfo: 'A' | 'B' = $state(DEFAULT_SELECTED_VFO);
-    power: number = $state(DEFAULT_POWER_WATTS);
+    vfoA: number = $state(loadNumber('vfoA', DEFAULT_VFO_HZ));
+    vfoB: number = $state(loadNumber('vfoB', DEFAULT_VFO_HZ));
+    mode: string = $state(loadString('mode', DEFAULT_MODE));
+    subMode: string = $state(loadString('subMode', DEFAULT_SUB_MODE));
+    selectedVfo: 'A' | 'B' = $state(loadVfo('selectedVfo', DEFAULT_SELECTED_VFO));
+    power: number = $state(loadNumber('power', DEFAULT_POWER_WATTS));
 }
 
 export const manualState = new ManualState();
+
+// Per-field effects mirror writes to localStorage. Each effect tracks
+// only its own field, so writes to other fields don't cause spurious
+// re-saves. $effect.root is needed because this is module-level
+// (outside a component lifecycle).
+$effect.root(() => {
+    $effect(() => save('vfoA', manualState.vfoA));
+    $effect(() => save('vfoB', manualState.vfoB));
+    $effect(() => save('mode', manualState.mode));
+    $effect(() => save('subMode', manualState.subMode));
+    $effect(() => save('selectedVfo', manualState.selectedVfo));
+    $effect(() => save('power', manualState.power));
+});
