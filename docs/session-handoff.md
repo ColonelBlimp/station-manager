@@ -24,7 +24,66 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-01, session 24 — code-review queue worked down; SPA tree cleaned up; vitest landed; validator presence convention settled)
+## Current state (as of 2026-05-01, session 25 — CAT state landed; four ADRs settled architectural splits; Vfos component shipped with display tests)
+
+### Session 25 work (CAT state + ADRs 0002–0005 + Vfos component + component-testing infra)
+
+**Operator brief at session start:** keep the SPA's architectural shape coherent — surface the load-bearing decisions before code cements them, then build the Vfos display.
+
+**What landed:**
+
+- **`frontend/logging/src/lib/states/cat.svelte.ts`** — first SPA state singleton. Module-level `class CatState` with eight fields: `enabled`, `rigIdentity`, `vfoA`/`vfoB` (Hz), `mode`, `subMode`, `selectedVfo`, `split`. All defaults defined as named module-level `const`s (`DEFAULT_VFO_HZ` = 14.250 MHz, `DEFAULT_MODE` = 'USB', etc.) per `no magic numbers` rule. JSDoc captures load-bearing distinctions: `enabled` (operator config) is separate from "rig is currently responding"; frequency in Hz not MHz (JS f64 has 53-bit integer precision, ADIF MHz string is a submit-boundary conversion); `mode`/`subMode` map to ADIF MODE/SUBMODE.
+
+- **`lib/states/` directory convention** — settled 2026-05-01. Each `*.svelte.ts` file owns one slice of cross-component state. `cat.svelte.ts` first; `bridge.svelte.ts` (planned EventSource transport) and `qsoDraft.svelte.ts` (planned, when form composition lands) sit alongside. `frontend-spa.md` layout sketch + "Notes on the layout" updated to match.
+
+- **`docs/decisions/0002-spa-config-shape.md`** — Status: **Superseded by 0003** (same day). Originally specified a three-layer daemon/localStorage/hardcoded config resolution with offline-write queue and last-write-wins sync. Body preserved as a record of how the more complex shape was considered and rejected.
+
+- **`docs/decisions/0003-spa-config-daemon-only.md`** — Status: Accepted. Operator's correction to 0002: the SPA is hosted by the daemon (ADR 0001), so loading the SPA *requires* a successful daemon round-trip — there is no SPA-running-offline scenario to cache for. From the SPA's standpoint, the daemon is always reachable when the SPA is running. Two layers: daemon `/v1/config` + hardcoded module-level constants as bootstrap/first-install fallback. No localStorage. No offline write queue. The forthcoming "offline QSO storage" ADR flagged in 0002 is also no longer needed — same reasoning rules out SPA-side offline QSO log; daemon-side write resilience (atomic transaction, forwarder retry) stays daemon internals.
+
+- **`docs/decisions/0004-daemon-vs-spa-responsibilities.md`** — Status: Accepted. The general rule that 0003 surfaced. **Daemon owns persistence, external-service orchestration, and shared cross-session state. SPA owns UI reactivity, presentation, and per-session UX.** Two-topology framing keeps it honest: the *persistence/authority* topology collapsed to daemon-only by ADR 0003, but the *runtime/events* topology still lives in the browser (DOM, keystrokes, SSE event dispatch — can't relocate). Includes a 13-row table assigning concrete features to sides. Three anti-patterns flagged in the memory entry: "daemon is local, so put orchestration in SPA" (wrong — credentials and shared cache belong daemon-side regardless of locality); "SPA is hosted by daemon, so render server-side" (wrong — that's SSR, explicitly rejected by 0001); "SPA orchestrates parallel fetches to hamnut/QRZ" (wrong per 0004 + 0005).
+
+- **`docs/decisions/0005-enrichment-pipeline-shape.md`** — Status: Accepted. First concrete application of 0004 beyond config. **One daemon endpoint** (`GET /v1/enrich/callsign?call=X`), **aggregated JSON response** (no SSE streaming for v1), **cache-first orchestration** with concurrent hamnut+QRZ on miss. **Always returns 200** per the `enrichment never blocks logging` invariant — partial/null fields when only some sources succeed. **AbortController on the SPA** propagates to daemon request context for cancellation. **7-day cache TTL** default, operator-configurable via daemon config (per 0003). Reverses the prior `frontend-spa.md` framing of `lib/enrichment.svelte.ts` orchestrating concurrent fetches in the browser; the SPA module now becomes a thin (~30 line) fetch + abort-handle wrapper.
+
+- **`Vfos.svelte` built and shipped** — sits alongside Callsign/Rst/Mode in `QsoPanel`. Reads `catState` directly. Visual stacking: the **selected VFO is rendered in the top "RX" position**, the other in the bottom "TX" position. `VfoBox` (small label badge) + `VfoInput` (formatted freq + band) per VFO. When `split === true`, both VfoBoxes show explicit RX/TX action labels above the VFO label. Frequency formatting in MHz.kHz.Hz convention (`14_250_000` → `"14.250.000"`).
+
+- **`frequencyToBand(hz)` helper in `Vfos.svelte`** — module-local lookup table over the amateur-radio band allocations (160m through 23cm, ADIF BAND-field naming). Returns `''` for out-of-band frequencies (UI decides how to render absence). Inline per "build specific not generic"; extract to `lib/bands.ts` when a second consumer (QSO list, history view) appears. 60m widened to 5.25–5.45 MHz to cover regional variations; rest follow IARU allocations.
+
+- **`Vfos.test.ts` — 10 component tests** — exercises the four state combinations (`selectedVfo: A|B` × `split: true|false`) plus a band-display sanity pair. Uses `@testing-library/svelte`'s `render` + DOM assertions on `container.textContent` for ordering (`indexOf(...) < indexOf(...)`) and `querySelectorAll('input')` for input values. `beforeEach` resets `catState` to known defaults so the module-level singleton doesn't bleed across cases; `afterEach(cleanup)` unmounts.
+
+- **`@testing-library/svelte/vite` plugin wired into `vite.config.ts`** — without `svelteTesting()`, vitest loaded Svelte's SSR build and `mount()` threw `lifecycle_function_unavailable`. The plugin sets `resolve.conditions = ['browser', ...]` only when `process.env.VITEST` is set, so production builds are unaffected. Established the canonical Svelte component-testing setup for this project.
+
+- **`docs/decisions/README.md` and `template.md`** — already in place from session 24; the four ADRs in this session validated the format works.
+
+- **Memory updates:**
+  - `project_sm_spa_config_layering` — rewritten to match ADR 0003 (was originally written for the now-superseded 0002).
+  - `project_sm_daemon_vs_spa_split` — new entry capturing the 0004 rule + the three anti-patterns. Most likely to be load-bearing in future sessions when deciding feature placement.
+  - `feedback_svelte_empty_script_block` — captured the operator's convention "always include `<script lang="ts"></script>` even if empty" after I incorrectly recommended deleting empty script blocks earlier.
+  - `MEMORY.md` index updated for all of the above.
+
+**Test/check status at session end:** `svelte-check` clean (145 files, 0 errors); 31 tests pass across 3 files (validators × 2 + Vfos).
+
+### Next session
+
+**Highest leverage — pick one:**
+
+- **Daemon-side `/v1/config` API.** ADR 0003 promised this; the SPA's hardcoded fallbacks are placeholders waiting for it. First operator-config field is the CAT defaults. Schema decision: single blob or per-section endpoints; PUT-vs-PATCH semantics. Touches `internal/config/` (new operator-config layer adjacent to the existing system-config) and the SPA's `lib/config.svelte.ts` (TBD).
+
+- **Bridge HTTP/SSE surface for `bridge.md`.** Endpoints (`GET /v1/rig`, `GET /v1/rig/events`, `POST /v1/rig/freq`, `POST /v1/rig/mode`), CORS, reconnection semantics. Then `lib/states/bridge.svelte.ts` consumes the SSE stream and updates `catState`. Blocks the live-VFO rendering — currently `Vfos.svelte` only ever shows hardcoded defaults.
+
+- **Daemon-side `/v1/enrich/callsign` handler.** ADR 0005 specifies the contract; implementation lives daemon-side. Reuses v1's hamnut/QRZ services and the cache shape from `internal/database/sqlite/cache.go`. Then `lib/enrichment.svelte.ts` in the SPA is the thin wrapper that Callsign's `onenrich` callback calls into.
+
+**Tactical (small, batch in one commit when convenient):**
+
+- **Fix 13 — inline error message slot under inputs.** Still deferred; lands cleanly once form composition + draft store exist.
+- **Toast / notifications system (`docs/v2-design/notifications.md`).** Will be needed before the first async outcome surfaces (QSO save, enrichment completion, bridge connect/disconnect, forwarder progress).
+- **Carried magic dimensions** — `h-120`, `h-13.5`, `w-72.5`, `mt-10`, `w-19`, `w-36`, `w-48`, `w-56` — stay inline until 2nd use case appears per the documented threshold.
+
+**Carried over (multi-session):**
+
+- **CI workflow update** — Node ≥22 setup + `task frontend:install && task frontend:build && task frontend:test` before Go build/test. Tests now exist (vitest), so include them.
+- **Client-side QSO payload shape** — agree what the client sends to `POST /v1/qso`. Client owns freq/mode (subscribed to bridge) and includes them in the submission.
+- **`cmd/logging/` (Gio app) parked** until SPA reaches feature parity, then abandoned cleanly. Don't pre-emptively delete.
+- **Chrome DevTools MCP env note** if the plugin upgrades and Chromium-not-Chrome breaks again — see memory `reference_chrome_devtools_mcp_setup`.
 
 ### Session 24 work (vitest + testing infra landed, code-review round 2, queued cleanups closed, validator-presence convention settled)
 

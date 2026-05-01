@@ -68,6 +68,15 @@ Performance is not the *deciding* factor — every framework hits the 300 ms lat
 
 **Why not SvelteKit:** SvelteKit gives you SSR, file-based routing, and adapters for Vercel/Netlify/Node — none of which apply when the SPA is embedded into a Go binary served by SM's daemon. Plain Svelte + Vite + a tiny client-side router (~3 KB or hand-rolled hash router ~50 lines) is the right shape. Less ceremony, cleaner `dist/` for embed.
 
+## Architectural decisions ([`docs/decisions/`](../decisions/))
+
+The SPA's shape is governed by these accepted ADRs. Skim them before making non-trivial design choices in this layer:
+
+- **[ADR 0001](../decisions/0001-ui-toolkit-browser-spa.md)** — UI toolkit: browser SPA hosted by daemon. Establishes the *premise* that the daemon serves the SPA bundle, which load-bears for everything below.
+- **[ADR 0003](../decisions/0003-spa-config-daemon-only.md)** — Config: daemon `/v1/config` is the only source; hardcoded constants are bootstrap fallback only. No localStorage cache. (Supersedes ADR 0002.)
+- **[ADR 0004](../decisions/0004-daemon-vs-spa-responsibilities.md)** — Responsibility split: daemon owns persistence, external-service orchestration, and shared cross-session state. SPA owns UI reactivity, presentation, and per-session UX. The default rule for "where does this new feature live?"
+- **[ADR 0005](../decisions/0005-enrichment-pipeline-shape.md)** — Enrichment: single daemon endpoint `/v1/enrich/callsign`, aggregated JSON response, AbortController cancellation. SPA's enrichment module is a thin fetch wrapper.
+
 ## Frontend layout — `frontend/logging/`
 
 ```
@@ -117,9 +126,17 @@ frontend/logging/
 ### Deliberately not included
 
 - No state-management library — Svelte's runes are the state manager.
-- No CSS framework — Svelte scopes component `<style>` blocks automatically, no class-name collisions. Tailwind is fine if it gets pulled in later, but don't pre-scaffold.
-- No test framework yet — add Vitest when the first non-trivial component lands.
+- ~~No CSS framework~~ Resolved 2026-04-30: Tailwind CSS v4 (`@tailwindcss/vite`, CSS-first config).
+- ~~No test framework yet~~ Resolved 2026-05-01: Vitest landed in session 24; component tests landed in session 25 — see "Testing setup" below.
 - No SSR, prerendering, or service worker.
+
+## Testing setup (settled 2026-05-01)
+
+- **Unit tests for pure logic** — validators (`src/lib/validators/{callsign,rst}.test.ts`) and any other pure helper. No DOM, no Svelte runtime.
+- **Component tests for non-trivial Svelte components** — `Vfos.test.ts` is the canonical example. Uses `@testing-library/svelte`'s `render` + DOM assertions on `container.textContent` (for ordering) and `querySelectorAll('input')` (for input values). Asserts on rendered output, not on internal state.
+- **Module-level singleton state requires reset.** When a component reads a `lib/states/*.svelte.ts` singleton (e.g. `catState`), tests reset the singleton's fields in `beforeEach` so state from one test doesn't bleed into the next. `afterEach(cleanup)` unmounts.
+- **`@testing-library/svelte/vite` plugin in `vite.config.ts`.** Without `svelteTesting()`, vitest loads Svelte's SSR build and `mount()` throws `lifecycle_function_unavailable`. The plugin sets `resolve.conditions = ['browser', ...]` only when `process.env.VITEST` is set, so production builds are unaffected.
+- **Don't mock the Svelte runtime.** The deleted `focus-context.svelte.test.ts` (session 24 cleanup) is the cautionary tale — `vi.mock('svelte', ...)` to test a module that no real component consumed. Per CLAUDE.md, integration-style tests on real components beat mocks of the framework.
 
 ## Daemon-side wiring
 
@@ -373,7 +390,9 @@ Two-terminal HMR loop:
 - **Router choice.** `svelte-spa-router` (~3 KB, well-maintained) vs hand-rolled hash router (~50 lines, zero deps). Lean toward hand-rolled given the three-route shape.
 - ~~**CSS approach.**~~ **Resolved 2026-04-30: Tailwind CSS v4** with `@tailwindcss/vite` plugin and CSS-first config (no `tailwind.config.js`). Verified applying utilities correctly during scaffold smoke test.
 - ~~**Favicon.**~~ **Resolved 2026-05-01:** 0-byte placeholder at `frontend/logging/public/favicon.ico` silences the dev 404. Replace with a real icon when there's branding to attach.
-- **QSO draft store + enrichment pipeline.** Callsign emits "this call is ready" via `onenrich` on Tab; nothing consumes it yet. Likely shape: a `lib/enrichment.svelte.ts` module owning cache lookup, concurrent fetches with cancellation when a newer Tab arrives, and surfacing partial results into a `qsoDraft.svelte.ts` `$state` module that the panel components bind to. The [enrichment-never-blocks-logging](../v1-analysis/invariants.md) invariant is enforced at this boundary. Capture in `docs/v2-design/enrichment.md` before code lands.
+- ~~**Enrichment pipeline shape.**~~ **Resolved 2026-05-01 in [ADR 0005](../decisions/0005-enrichment-pipeline-shape.md):** single daemon endpoint `GET /v1/enrich/callsign?call=X`, aggregated JSON response, cache-first orchestration, AbortController cancellation, 7-day TTL. SPA's `lib/enrichment.svelte.ts` becomes a thin (~30 line) fetch + abort-handle wrapper rather than the multi-source orchestration originally implied here. Reverses the prior "SPA orchestrates concurrent hamnut+QRZ fetches" framing — incompatible with [ADR 0004](../decisions/0004-daemon-vs-spa-responsibilities.md)'s rule that external-service orchestration lives daemon-side.
+- ~~**Config source.**~~ **Resolved 2026-05-01 in [ADR 0003](../decisions/0003-spa-config-daemon-only.md)** (which superseded 0002). Daemon `/v1/config` is the only persistent source; hardcoded module-level constants (e.g. `cat.svelte.ts`'s `DEFAULT_VFO_HZ`) are bootstrap/first-install fallback only. No localStorage. Reasoning: SPA is hosted by the daemon, so SPA load implies daemon reachable.
+- **QSO draft store.** Form-level `$state` module that holds the in-progress QSO and absorbs `onenrich` results. Lives at `lib/states/qsoDraft.svelte.ts` (planned) per the `lib/states/` convention. Per-session UX (per [ADR 0004](../decisions/0004-daemon-vs-spa-responsibilities.md)); not persisted across reload by default. Lands when form composition is started.
 - **Inline validation message slot.** `.input-row`'s `h-17.5` already reserves space below each input for an error message; the slot itself isn't built yet. Open question: where the message string comes from. Leading candidate is "validators stay `boolean`, the component holds its own message string" — keeps validators pure, accepts the duplication-on-reuse cost. Alternative `{ valid, message }` return tuple breaks the pure-predicate convention settled 2026-05-01. Lands cleanly once form composition + draft store exist. (Resolves carried Fix 13.)
 - **Toast / notifications system.** Distinct from inline validation messages: inline messages express **field state** (persistent while invalid, lives next to the input); toasts express **events** (transient, screen-corner, fired once on save outcome / enrichment outcome / bridge connect-disconnect / forwarder progress). The two complement each other. Design needed before the first async outcome surfaces — capture in `docs/v2-design/notifications.md`. Decisions: levels (info/warn/error), default TTL, max stack depth, dismissable behaviour, mount point (likely once at the app shell, fed by a `lib/toasts.svelte.ts` `$state`-array store).
 - **Bridge URL discovery.** Static config in the SPA, defaulting to `http://localhost:<bridge-port>`. mDNS / Bonjour is overkill for personal use (per topology.md). Confirm the default port to use for the bridge once the bridge service is built.

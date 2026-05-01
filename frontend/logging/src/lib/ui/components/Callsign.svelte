@@ -44,17 +44,19 @@
 
 <div class="{widthClass} input-row">
     <label for={id} class="input-label">{label}</label>
-    <input
-        {id}
-        bind:this={inputElement}
-        bind:value
-        class="input-base uppercase {invalid ? 'invalid-input' : ''}"
-        aria-invalid={invalid}
-        oninput={handleInput}
-        onblur={validateAndFocus}
-        onkeydown={handleKeydown}
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-    />
+    <div class="mt-1">
+        <input
+            {id}
+            bind:this={inputElement}
+            bind:value
+            class="input-base uppercase {invalid ? 'invalid-input' : ''}"
+            aria-invalid={invalid}
+            oninput={handleInput}
+            onblur={validateAndFocus}
+            onkeydown={handleKeydown}
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+        />
+    </div>
 </div>

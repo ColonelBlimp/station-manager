@@ -40,17 +40,19 @@
 
 <div class="{widthClass} input-row">
     <label for={id} class="input-label">{label}</label>
-    <input
-        {id}
-        bind:this={inputElement}
-        bind:value
-        class="input-base {inputClass} {invalid ? 'invalid-input' : ''}"
-        aria-invalid={invalid}
-        oninput={handleInput}
-        onblur={validateAndFocus}
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        {...rest}
-    />
+    <div class="mt-1">
+        <input
+            {id}
+            bind:this={inputElement}
+            bind:value
+            class="input-base {inputClass} {invalid ? 'invalid-input' : ''}"
+            aria-invalid={invalid}
+            oninput={handleInput}
+            onblur={validateAndFocus}
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            {...rest}
+        />
+    </div>
 </div>

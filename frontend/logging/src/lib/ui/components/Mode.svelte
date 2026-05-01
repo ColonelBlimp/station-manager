@@ -19,7 +19,7 @@
 
 <div class="{widthClass} input-row">
     <label for={id} class="input-label">{label}</label>
-    <div class="mt-2 grid grid-cols-1">
+    <div class="grid grid-cols-1 mt-1">
         <select
             bind:value={value}
             {id}

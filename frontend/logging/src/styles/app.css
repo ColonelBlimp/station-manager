@@ -17,7 +17,7 @@
         @apply my-4 h-17.5;
     }
     .input-base {
-        @apply px-2.5 py-1.5 rounded-md mt-2 w-full
+        @apply px-2.5 py-1.5 rounded-md w-full
         outline-1 -outline-offset-1 outline-gray-300
         focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600;
     }
