@@ -85,9 +85,11 @@ frontend/logging/
 │   ├── app.svelte                   # top shell: nav tabs + <Route/>
 │   ├── lib/
 │   │   ├── api.ts                   # fetch wrappers for daemon /v1/*
-│   │   ├── bridge.svelte.ts         # EventSource → $state rigState
 │   │   ├── config.ts                # daemon.url, bridge.url (defaults localhost)
-│   │   └── types.ts                 # Qso, Logbook, RigState — mirror Go DTOs
+│   │   ├── types.ts                 # Qso, Logbook, RigState — mirror Go DTOs
+│   │   └── states/                  # module-level $state singletons
+│   │       ├── cat.svelte.ts        # CAT state (enabled, rig power, VFOs, …)
+│   │       └── bridge.svelte.ts     # EventSource transport that updates cat state
 │   ├── routes/
 │   │   ├── log/
 │   │   │   ├── +page.svelte         # the logging form
@@ -107,7 +109,7 @@ frontend/logging/
 ### Notes on the layout
 
 - **`+page.svelte` naming is borrowed from SvelteKit** but is purely cosmetic — these are regular Svelte components mounted by the router. Could equally be `LogPage.svelte`. Keep the convention if it reads cleanly.
-- **`bridge.svelte.ts` is a `$state` module.** One module-level `$state` object holds the live rig state; any component that reads `rigState.freq` re-renders automatically when the EventSource fires. No store boilerplate.
+- **`lib/states/` holds module-level `$state` singletons.** Each `*.svelte.ts` file in this directory owns one slice of cross-component state. Convention settled 2026-05-01 with `cat.svelte.ts` as the first occupant — the load-bearing distinction is *state shape* (lives here) vs *transport* (lives here too, for now, but is permitted to split out if it grows independent value). Components import the singleton directly (`import { catState } from '../../states/cat.svelte';`); reads are reactive — any component that reads `catState.enabled` re-renders when it flips. No store boilerplate.
 - **`api.ts` is fetch calls only.** SM's API surface is small enough that `fetch` + Svelte's `$derived` covers it. No axios, no react-query equivalent.
 - **The Mode cycle widget ports straight from the Gio implementation.** Same idea: render the current mode, click cycles `["USB","LSB","CW",...]`. ~20 lines of Svelte.
 - **Config tab doubles as the "where do I find the daemon and bridge" UI.** First-launch UX: defaults to `localhost`, operator overrides for multi-host setups.

@@ -12,7 +12,7 @@
         label,
         value = $bindable(''),
         list,
-        widthClass = 'w-20',
+        widthClass = 'w-28',
     }: Props = $props();
 
 </script>

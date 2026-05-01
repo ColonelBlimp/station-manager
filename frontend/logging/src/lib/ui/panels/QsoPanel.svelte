@@ -2,6 +2,7 @@
     import Callsign from "../components/Callsign.svelte";
     import Rst from "../components/Rst.svelte";
     import Mode from "../components/Mode.svelte";
+    import Vfos from "../components/Vfos.svelte";
 
     const modes = [
         { key: 'USB', value: 'USB' },
@@ -21,4 +22,5 @@
     <Rst id="rst_sent" label="RST Sent" value=""/>
     <Rst id="rst_rcvd" label="RST Rcvd" value=""/>
     <Mode id="mode" label="Mode" value="USB" list={modes}/>
+    <Vfos/>
 </div>
