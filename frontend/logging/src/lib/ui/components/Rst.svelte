@@ -13,7 +13,7 @@
         id,
         label,
         value = $bindable(''),
-        widthClass = 'w-19',
+        widthClass = 'w-16',
     }: Props = $props();
 </script>
 
