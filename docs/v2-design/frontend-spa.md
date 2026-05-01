@@ -303,6 +303,57 @@ The "skeleton works end-to-end" milestone landed and verified:
 
 Next milestones (each its own commit): client-side routing, rig SSE wiring (`bridge.svelte.ts`), the logging form.
 
+## Component patterns (settled 2026-04-30)
+
+The first round of input components surfaced two patterns that should be applied consistently going forward.
+
+### Generic primitive vs domain component
+
+**Rule of thumb:** if the component's only concern is "is this string well-formed?", wrap the shared primitive. If the component owns a domain behaviour (enrichment, lookup, side-effects on other fields), let it stand on its own.
+
+- **`src/lib/ui/components/ValidatedInput.svelte`** is the shared primitive. Takes a `validator: (v: string) => boolean` prop, plus `widthClass`, `inputClass`, and `...rest` for passthrough HTML attributes (`maxlength`, `minlength`, `placeholder`, etc.). Handles the wrapper div, label, `aria-invalid`, focus-on-invalid-blur, and the empty-input-is-not-invalid convention.
+- **`src/lib/ui/components/Rst.svelte`** is the canonical thin wrapper: ~15 lines, binds `isValidRst`, sets `widthClass="w-19"` and `maxlength={3} minlength={2}`. Future Frequency, Grid Square, and similar fields follow the same shape.
+- **`src/lib/ui/components/Callsign.svelte`** is standalone — it owns Tab-fires-enrichment as a domain behaviour (see below) and that doesn't belong inside a generic input. Trying to bolt enrichment onto `ValidatedInput` via callbacks would push the abstraction toward exactly the kind of "clever framework that became too complicated" v1 warned against (cf. `lessons-for-v2.md` → "build specific, not generic").
+
+The threshold for extracting a new primitive from `ValidatedInput` is: *three* genuine consumers with the same shape. The current single-consumer (RST) is on probation; if Frequency / Grid Square don't materialise as wrappers, inlining `ValidatedInput` back into `Rst.svelte` is a 60-second job.
+
+### Tab-on-callsign is the enrichment trigger
+
+`Callsign.svelte` exposes an optional `onenrich?: (callsign: string) => void` prop. The component fires it on `keydown` when:
+
+1. Key is `Tab` (Shift+Tab not yet filtered — easy to add when we know the desired UX).
+2. Value is non-empty.
+3. Value passes `isValidCallsign`.
+
+Default Tab behaviour is preserved (no `preventDefault`), so focus moves to RST Sent and the enrichment kicks off in parallel. The callback receives the normalised callsign (trimmed, uppercased) so the parent doesn't have to renormalise.
+
+**The enrichment pipeline lives outside the component.** `Callsign` only emits "this call is ready"; the parent (or a `qsoStore` / `enrichment.svelte.ts` module) decides what to do — cache lookup, concurrent fetches with cancellation, draft-QSO updates, loading/error UI state. This keeps the [enrichment-never-blocks-logging](../v1-analysis/invariants.md) invariant enforced at the boundary that owns the orchestration, not inside the input widget. The pipeline design itself is a separate piece of work — when it lands, capture it in `docs/v2-design/enrichment.md`.
+
+### Validators are pure modules
+
+`src/lib/validators/*.ts` holds pure boolean validator functions and their constants. No DOM, no Svelte. Reusable from search filters, list-view rendering, ADIF parse paths, tests. Current entries: `callsign.ts`, `rst.ts`. New input fields land their validator in this directory before the component is written.
+
+### Global CSS conventions (`src/styles/app.css`)
+
+Single global stylesheet, imported once from `main.ts`. Three buckets, each with a different purpose:
+
+- **`@layer base`** — element-level defaults that should cascade under everything else: `html { @apply text-gray-900 }`, `h1`/`h2`/`p` defaults. (Note: the file currently uses `@layer container` — a typo for `@layer base` flagged in the 2026-04-30 review; fix queued.)
+- **`@layer components`** — repeating utility clusters extracted via `@apply`. Currently: `.input-base`, `.input-label`, `.invalid-input`. The threshold for extracting is "I would otherwise paste this 11-utility class string into multiple components"; a Tailwind v4 `@apply` block beats both string-constant duplication and an over-engineered `<TextInput>` Svelte wrapper for pure styling concerns.
+- **`@theme`** (when added) — design tokens that should also become Tailwind utilities. Mode palettes, status-row dimensions, focus-ring colours go here when they appear.
+
+**Avoid** `tailwind.config.js` (v4 doesn't use it), per-component `<style>` blocks for project-wide concerns (Svelte scopes them), and a separate `tokens.css` / `vars.css` (v4's scanner wants tokens defined where `@import "tailwindcss"` lives).
+
+## Dev workflow (settled 2026-04-30)
+
+Two-terminal HMR loop:
+
+1. **Terminal 1 — daemon:** `task run:smd` (`go run ./cmd/smd`). Provides `/v1/*` for the SPA to hit. Requires `build/config.json` to be on TCP (`"protocol": "tcp"`, `"socket_path": "127.0.0.1:8080"`).
+2. **Terminal 2 — Vite:** `task frontend:dev`. Serves the SPA on `:5173` with HMR. The `vite.config.ts` proxy forwards `/v1/*` to `:8080`.
+
+**Edit `frontend/logging/src/**` and the browser updates within ~200 ms** — `$state` runes survive most edits, structural changes trigger a full reload. `dist/` is *not* rebuilt during dev; that path (`task build:smd`) is only for verifying the daemon-embedded bundle. If edits aren't reflected in the browser, check the URL — `:5173` is dev, `:8080` is the frozen embedded build.
+
+`task run:smd` was added to `Taskfile.yml` 2026-04-30 specifically for this workflow. The pre-existing `task run` builds everything (including the parked Gio app) and is the wrong shape for SPA dev iteration.
+
 ## Open questions / next-up items
 
 - **Router choice.** `svelte-spa-router` (~3 KB, well-maintained) vs hand-rolled hash router (~50 lines, zero deps). Lean toward hand-rolled given the three-route shape.

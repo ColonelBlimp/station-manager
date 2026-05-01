@@ -24,7 +24,83 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-04-30, session 22 — UI toolkit resolved (Svelte SPA), CAT codec baseline captured, frontend scaffold landed and verified end-to-end)
+## Current state (as of 2026-04-30, session 23 — first SPA components landed; Tab-on-callsign carved out as the enrichment trigger boundary)
+
+### Session 23 work (dev workflow established; first round of input components shipped; component-pattern split between generic primitive and domain widgets settled)
+
+**Operator brief at session start:** open the SPA dev loop, do real frontend work, code-review the first components landed off-session, and resolve a design tension that surfaced — Callsign was shaped to fit a generic `ValidatedInput`, but Tab on callsign is the QSO-enrichment trigger and that pulls the component back into domain-shaped territory.
+
+**What landed:**
+
+- **Dev workflow nailed.** Two-terminal HMR loop established — `task run:smd` (new — `go run ./cmd/smd`) in one terminal for the daemon's `/v1/*`, `task frontend:dev` in another for Vite on `:5173` with `/v1/*` proxied. `dist/` is *not* rebuilt during dev; that path (`task build:smd`) is only for verifying the daemon-embedded bundle. Operator confused dev/embed paths once during the session — captured in `frontend-spa.md` §"Dev workflow" so it's the first-stop reference next time.
+
+- **Code review of `frontend/logging/src/`** — fifteen items surfaced ranging from probable bugs to nits. Three landed this session; the rest are queued for the next.
+
+- **Fix 3 — `Callsign.validateAndFocus` always-on-blur.** The pre-session implementation only ran validation when `lastKey === "Tab"`, so click-away or any non-Tab focus shift left the field silently in an invalid state. Removed the `lastKey` tracking, the `onkeydown` handler that fed it, and the unused `async`/`Promise<void>`. Function now matches `Rst.svelte`'s shape exactly.
+
+- **Fix 6 — generic primitive + thin wrappers extraction (then partially reverted).** Initial pass:
+  - `src/lib/ui/components/ValidatedInput.svelte` — primitive that takes a `validator: (v: string) => boolean` prop, plus `widthClass`, `inputClass`, and `...rest` for passthrough HTML input attrs.
+  - `src/lib/validators/callsign.ts` and `src/lib/validators/rst.ts` — pure validator modules with constants module-level (also closes fix 7's "validator constants belong outside the component").
+  - `Callsign.svelte` and `Rst.svelte` reduced to ~15-line semantic wrappers.
+
+  Then the operator pointed out: **Tab on callsign is the signal for QSO enrichment** (online lookups, hamnut/QRZ, cache hits, populating downstream fields). That's a domain behaviour, not a generic-input concern. Bolting it onto `ValidatedInput` via callbacks would push the abstraction toward exactly the v1-adapter shape the project's "build specific, not generic" rule warns against. **Callsign was reverted to a standalone component** (no longer a thin wrapper) with an optional `onenrich?: (callsign: string) => void` prop fired on Tab when the value is non-empty and valid. Default Tab behaviour preserved (no `preventDefault`); enrichment kicks off in parallel with focus shifting to RST Sent. The callback receives the normalised callsign.
+
+  **What stayed from the initial extraction:**
+  - `validators/callsign.ts` and `validators/rst.ts` — pure modules, valid independent of component shape.
+  - `ValidatedInput.svelte` — kept as the primitive for the well-formed-string-only family. Currently has one consumer (RST). The design bet: Frequency, Grid Square, possibly Operator land as wrappers in the next round, justifying the abstraction. If they don't, inlining ValidatedInput back into Rst is trivial.
+
+- **Component patterns documented.** Added a new "Component patterns" section to [`docs/v2-design/frontend-spa.md`](v2-design/frontend-spa.md) covering: generic-primitive-vs-domain-component rule, Tab-on-callsign as the enrichment trigger boundary, validators as pure modules under `lib/validators/`, and the global-CSS conventions (`@layer base` for element defaults, `@layer components` for `@apply` clusters, `@theme` for design tokens; no `tailwind.config.js`).
+
+- **Globals in `src/styles/app.css`.** During the session the operator added `.input-base`, `.input-label`, `.invalid-input` `@apply` clusters in `@layer components`, plus typographic defaults. Note: the file currently uses `@layer container` (typo) which is non-load-bearing — flagged for fix in the next session.
+
+**Code review fixes still queued (from the same review, not addressed this session):**
+
+| # | Item | Status |
+|---|---|---|
+| 1 | `@layer container` → `@layer base` typo in `app.css` | queued |
+| 2 | Debug `border border-blue-500` on `QsoPanel.svelte:6` | queued (red borders on inputs gone via Callsign/Rst rework) |
+| 4 | `isValid("")` returns `false` in Callsign — function name lies even if behaviour is OK due to caller-side empty-input shortcuts | queued |
+| 5 | `$bindable()` defensive defaults | partially closed (defaults added to wrappers; verify Callsign) |
+| 8 | `min-w-200 max-w-200` redundancy in `app.svelte:5` | queued |
+| 9 | Empty `<script lang="ts">` blocks in `LoggingCardHeader.svelte` etc. | queued |
+| 10 | Magic dimensions (`h-13.5`, `h-17.5`, `h-120`, `w-19`, `w-200`) — promote to `@theme` tokens | queued |
+| 11 | `;` vs `,` separator inconsistency in `Props` interfaces | queued |
+| 13 | Validation feedback colour-only (no icon/border-style cue for colour-blind operators) | queued (low priority) |
+
+**Files added:**
+
+- `frontend/logging/src/lib/ui/components/ValidatedInput.svelte` — generic primitive
+- `frontend/logging/src/lib/validators/callsign.ts` — pure validator + regex constants
+- `frontend/logging/src/lib/validators/rst.ts` — pure validator
+
+**Files modified:**
+
+- `frontend/logging/src/lib/ui/components/Callsign.svelte` — standalone domain component with `onenrich` callback fired on valid-Tab
+- `frontend/logging/src/lib/ui/components/Rst.svelte` — thin wrapper around `ValidatedInput`
+- `Taskfile.yml` — added `run:smd` (direct `go run ./cmd/smd`, no rebuild loop, paired with `frontend:dev`)
+- `docs/v2-design/frontend-spa.md` — new "Component patterns" and "Dev workflow" sections
+
+### Next session
+
+**Highest leverage — pick one to start:**
+
+- **Enrichment pipeline architecture (`docs/v2-design/enrichment.md`).** The Callsign component now emits "this call is ready" on Tab; the orchestration that consumes it doesn't exist. Decisions to make: where the orchestrator lives (`enrichment.svelte.ts` module vs a `qsoStore`), source ordering and concurrency (cache → hamnut → QRZ in parallel? cancellation when a newer Tab arrives?), how partial results flow back into the QsoPanel's draft, how loading/error state surfaces, and how the [enrichment-never-blocks-logging](v1-analysis/invariants.md) invariant is enforced at this boundary. **This is the next architecturally-significant decision** — capture it in a design doc before code lands.
+
+- **First real route.** Pick `svelte-spa-router` (~3 KB) vs hand-rolled hash router (~50 lines) and add `/log` as the first route stub. Tailwind v4 toolchain is verified.
+
+- **Bridge HTTP/SSE surface for `bridge.md`.** Endpoints (`GET /v1/rig`, `GET /v1/rig/events`, `POST /v1/rig/freq`, `POST /v1/rig/mode`), CORS, reconnection semantics. Blocks `bridge.svelte.ts`.
+
+**Cleanups (small, batch in one commit):**
+
+- Walk through the queued code-review items table above. Most are 1–5 minute fixes (`@layer base` typo, `border border-blue-500` debug colour, `min-w-200 max-w-200` redundancy, empty `<script>` blocks, magic dimensions to `@theme` tokens).
+- Drop `frontend/logging/public/favicon.ico` to silence the cosmetic 404.
+
+**Carried over from session 22:**
+
+- **CI workflow update** — Node ≥22 setup + `task frontend:install && task frontend:build` before Go build/test. Lockfile committed → CI uses `npm ci` for deterministic resolution.
+- **Client-side QSO payload shape** — agree what the client sends to `POST /v1/qso`, given the client (subscribed to bridge) is the only thing that knows current freq/mode.
+- **`cmd/logging/` (Gio app) left alone until SPA reaches feature parity, then abandoned cleanly.** Don't pre-emptively delete.
+- **Chrome DevTools MCP env note** if the plugin upgrades and Chromium-not-Chrome breaks again — see memory `reference_chrome_devtools_mcp_setup`.
 
 ### Session 22 work (architecture conversation captured into v2-design docs; SPA scaffold landed with both daemon-embed and Vite-dev paths verified live via Chrome DevTools MCP)
 

@@ -1,11 +1,14 @@
 <script lang="ts">
     import { isValidCallsign } from '../../validators/callsign';
+    import type {FocusRefs} from "../../states/focus-context.svelte";
 
     interface Props {
         id: string;
         label: string;
         value: string;
         widthClass?: string;
+        focusRefKey?: keyof FocusRefs;
+        focusRefs?: FocusRefs;
         onenrich?: (callsign: string) => void;
     }
 
@@ -14,6 +17,8 @@
         label,
         value = $bindable(''),
         widthClass = 'w-36',
+        focusRefKey,
+        focusRefs,
         onenrich,
     }: Props = $props();
 
