@@ -46,6 +46,8 @@ precisely so we don't re-derive state or redo finished work.
 
 - **Items dropped from the queue as no-longer-applicable:** Fix 4 (subsumed by Concern 3's resolution — function name no longer lies because empty is now valid), Fix 5 (`$bindable()` defaults verified during cleanup), Fix 11 (`;` vs `,` separator — current Props interfaces all use `;` consistently).
 
+- **`docs/decisions/` ADR scaffold added.** New directory at `docs/decisions/` with `README.md` (convention, lifecycle, when-to-write), `template.md` (five-section format: Context / Decision / Alternatives considered / Consequences / Triggers to revisit), and `0001-ui-toolkit-browser-spa.md` as a seed example reconstructing the Gio → Wails → SPA decision. Pattern: append-only log, one file per decision, numbered, `status` field walks Proposed → Accepted → Superseded by NNNN. CLAUDE.md "Where the durable project context lives" updated to point at it. Use this when a choice has alternatives that were genuinely weighed and might be revisited; skip for routine code-level choices.
+
 **Queue still open after this session:**
 
 | # | Item | Status |
