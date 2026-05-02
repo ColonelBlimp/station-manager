@@ -1,8 +1,18 @@
+<!--
+    TextInput — generic free-text input, no validation, no domain
+    behaviour. Use this for plain string fields like Name and QTH where
+    well-formedness has no rule.
+
+    Pick instead:
+      - `ValidatedInput` for fields with a well-formed-only predicate.
+      - `Callsign`, `Rst`, etc. for domain components with side-effects.
+-->
 <script lang="ts">
     interface Props {
         id: string;
         label: string;
         value: string;
+        disabled?: boolean;
         widthClass?: string;
     }
 
@@ -10,6 +20,7 @@
         id,
         label,
         value = $bindable(''),
+        disabled = false,
         widthClass = 'w-52',
     }: Props = $props();
 </script>
@@ -20,7 +31,8 @@
         <input
             {id}
             bind:value
-            class="input-base"
+            {disabled}
+            class="input-base disabled:bg-gray-100 disabled:cursor-not-allowed"
             type="text"
             autocomplete="off"
             spellcheck="false"

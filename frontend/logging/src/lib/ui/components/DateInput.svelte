@@ -1,8 +1,18 @@
+<!--
+    DateInput — native browser `type="date"` picker. Browser-native icon
+    only; no project SVG overlay. `accent-indigo-600` tints the picker
+    chrome to match the project's focus colour where the browser
+    supports it (Firefox 92+, Chrome 88+, Safari 15.4+).
+
+    ADIF translation (`YYYY-MM-DD` → `YYYYMMDD`) is the parent / submit
+    boundary's responsibility; this component is unit-naive.
+-->
 <script lang="ts">
     interface Props {
         id: string;
         label: string;
         value: string;
+        disabled?: boolean;
         widthClass?: string;
     }
 
@@ -10,22 +20,20 @@
         id,
         label,
         value = $bindable(''),
-        widthClass = 'w-38',
+        disabled = false,
+        widthClass = 'w-40',
     }: Props = $props();
 </script>
 
 <div class="{widthClass}">
-    <label for="{id}" class="input-label">{label}</label>
-    <div class="relative mt-1">
+    <label for={id} class="input-label">{label}</label>
+    <div class="mt-1">
         <input
-            id={id}
+            {id}
             bind:value
+            {disabled}
             type="date"
-            class="block w-full rounded-md bg-white px-1.5 py-1.5 text-base outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600">
-        <span class="absolute top-2 right-2 pointer-events-none">
-            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5 text-gray-700">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5m-9-6h.008v.008H12v-.008ZM12 15h.008v.008H12V15Zm0 2.25h.008v.008H12v-.008ZM9.75 15h.008v.008H9.75V15Zm0 2.25h.008v.008H9.75v-.008ZM7.5 15h.008v.008H7.5V15Zm0 2.25h.008v.008H7.5v-.008Zm6.75-4.5h.008v.008h-.008v-.008Zm0 2.25h.008v.008h-.008V15Zm0 2.25h.008v.008h-.008v-.008Zm2.25-4.5h.008v.008H16.5v-.008Zm0 2.25h.008v.008H16.5V15Z" />
-            </svg>
-        </span>
+            class="block w-full rounded-md bg-white px-2.5 py-1.5 text-base accent-indigo-600 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 disabled:bg-gray-100 disabled:cursor-not-allowed"
+        />
     </div>
 </div>

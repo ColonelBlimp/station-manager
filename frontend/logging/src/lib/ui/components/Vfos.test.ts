@@ -330,12 +330,12 @@ describe('Vfos', () => {
             expect(vfoABox.classList.contains('cursor-not-allowed')).toBe(false);
         });
 
-        it('bottom (unselected) VfoBox has title="Select" when CAT is off', () => {
+        it('bottom (unselected) VfoBox has title="Select VFO" when CAT is off', () => {
             manualState.selectedVfo = 'A';
             const { container } = render(Vfos);
             const vfoBBox = container.querySelector('[data-vfo="VFO-B"]') as HTMLElement;
 
-            expect(vfoBBox.getAttribute('title')).toBe('Select');
+            expect(vfoBBox.getAttribute('title')).toBe('Select VFO');
         });
 
         it('does not write to manualState when clicking the already-selected VFO', async () => {

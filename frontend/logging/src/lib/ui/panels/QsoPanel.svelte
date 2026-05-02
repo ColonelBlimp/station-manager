@@ -46,10 +46,17 @@
 </script>
 
 <!--
-    Panel owns the vertical rhythm (`py-4`) and horizontal gaps
-    (`space-x-2`). Children (.input-row siblings + Vfos) are layout-naked
-    relative to this row — they don't add their own outer margins. See
-    `app.css` for the matching note on .input-row.
+    Panel owns the layout — outer column with `px-6` horizontal padding,
+    three rows stacked vertically. Row 1 carries `pt-4` (top breathing
+    room from the panel header above); rows 2 and 3 carry `mt-2` (gap
+    to the row above). Each row uses `space-x-2` for horizontal gaps
+    between fields.
+
+    Children (.input-row siblings + Vfos + new field components) are
+    layout-naked relative to this column — they don't add their own
+    outer margins. See `app.css` for the matching note on .input-row,
+    and `frontend-spa.md` §"Layout positioning — parent owns vertical
+    rhythm" for the convention.
 -->
 <div class="flex flex-col px-6">
     <div class="flex flex-row space-x-2 pt-4">
@@ -66,7 +73,7 @@
     </div>
     <div class="flex flex-row space-x-2 mt-2">
         <DateInput id="qso_date" label="Date" value=""/>
-        <TimeInput id="time_on" label="Time On (UTC)" value="" disabled={false}/>
-        <TimeInput id="time_off" label="Time Off (UTC)" value="" disabled={false}/>
+        <TimeInput id="time_on" label="Time On (UTC)" value=""/>
+        <TimeInput id="time_off" label="Time Off (UTC)" value=""/>
     </div>
 </div>

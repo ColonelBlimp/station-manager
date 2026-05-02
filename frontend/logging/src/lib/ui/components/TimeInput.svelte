@@ -1,9 +1,19 @@
+<!--
+    TimeInput — native browser `type="time"` picker. Browser-native UI
+    only; no project SVG overlay. `accent-indigo-600` tints the picker
+    chrome to match the project's focus colour where the browser
+    supports it.
+
+    UTC labelling is the parent's responsibility (e.g. "Time On (UTC)")
+    — TimeInput is unit-naive at this layer. ADIF translation
+    (`HH:MM` → `HHMM` / `HHMMSS`) happens at the submit boundary.
+-->
 <script lang="ts">
     interface Props {
         id: string;
         label: string;
         value: string;
-        disabled: boolean;
+        disabled?: boolean;
         widthClass?: string;
     }
 
@@ -11,25 +21,20 @@
         id,
         label,
         value = $bindable(''),
-        disabled,
-        widthClass = 'w-28',
+        disabled = false,
+        widthClass = 'w-26',
     }: Props = $props();
 </script>
 
 <div class="{widthClass}">
-    <label for="{id}" class="input-label">{label}</label>
-    <div class="relative mt-1">
+    <label for={id} class="input-label">{label}</label>
+    <div class="mt-1">
         <input
             {id}
             bind:value
+            {disabled}
             type="time"
-            disabled={disabled}
-            class="block w-full rounded-md bg-white px-1.5 py-1.5 text-base outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600"
+            class="block w-full rounded-md bg-white px-2.5 py-1.5 text-base accent-indigo-600 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 disabled:bg-gray-100 disabled:cursor-not-allowed"
         />
-        <span class="absolute top-2 right-2">
-            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5 text-gray-700">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
-            </svg>
-        </span>
     </div>
 </div>

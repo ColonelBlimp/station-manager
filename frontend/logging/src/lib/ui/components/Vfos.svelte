@@ -4,11 +4,6 @@
     import VfoBox from "./VfoBox.svelte";
     import VfoInput from "./VfoInput.svelte";
 
-    interface Props {
-    }
-
-    let { }: Props = $props();
-
     function formatFrequency(hz: number): string {
         const mhz = Math.floor(hz / 1_000_000);
         const khz = Math.floor((hz % 1_000_000) / 1_000);
