@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onDestroy } from 'svelte';
     import Callsign from "../components/Callsign.svelte";
     import Rst from "../components/Rst.svelte";
     import Mode from "../components/Mode.svelte";
@@ -11,6 +12,10 @@
     import TimeInput from "../components/TimeInput.svelte";
     import FormControls from "../components/FormControls.svelte";
     import { formatUtcDate, formatUtcTime } from '../../utils/time';
+    import { formatAdifRecord } from '../../utils/adif';
+    import { frequencyToBand } from '../../utils/frequency';
+    import { isValidCallsign } from '../../validators/callsign';
+    import { isValidRst } from '../../validators/rst';
 
     const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
@@ -94,6 +99,39 @@
     });
 
     /*
+        Time-off ticker. The first Tab-on-valid-callsign is treated as
+        the QSO start (per the operator's session 28 plan): both
+        timeOn and timeOff snap to "now" at that moment, then a
+        per-second interval keeps timeOff updated against the wall
+        clock. Subsequent Tabs are no-ops so timeOn doesn't drift if
+        the operator re-Tabs (e.g. correcting a typo).
+
+        The ticker is stopped by `clearDraft()` (which runs on Clear
+        and after submit) and on component unmount. Operator-typed
+        edits to timeOff during an active timer get clobbered on the
+        next minute boundary — the planned Start / Stop buttons will
+        give explicit pause / resume control.
+    */
+    let timeOffTickerId: ReturnType<typeof setInterval> | null = null;
+
+    function startTimeOffTicker(): void {
+        if (timeOffTickerId !== null) return;
+        timeOffTickerId = setInterval(() => {
+            const next = formatUtcTime(new Date());
+            if (next !== timeOff) timeOff = next;
+        }, 1000);
+    }
+
+    function stopTimeOffTicker(): void {
+        if (timeOffTickerId !== null) {
+            clearInterval(timeOffTickerId);
+            timeOffTickerId = null;
+        }
+    }
+
+    onDestroy(stopTimeOffTicker);
+
+    /*
         Enrichment trigger — fires when the operator Tabs out of the
         Callsign field with a valid callsign. Per ADR 0005, the daemon's
         `/v1/enrich/callsign?call=X` endpoint returns aggregated JSON
@@ -106,8 +144,20 @@
         and SPA fetch wrapper land. Overwrite-on-new-callsign is the
         chosen UX — a fresh callsign means a different QSO; operator
         can re-edit if they want.
+
+        Side-effect: starts the time-off ticker on the FIRST valid Tab.
+        Snaps timeOn / timeOff to "now" at that moment. Subsequent
+        Tabs are no-ops on the ticker (it's already running), so
+        repeated callsign edits don't reset timeOn.
     */
     function handleEnrich(call: string): void {
+        if (timeOffTickerId === null) {
+            // First Tab on a valid callsign — treat as QSO start.
+            const fresh = formatUtcTime(new Date());
+            timeOn = fresh;
+            timeOff = fresh;
+            startTimeOffTicker();
+        }
         // TODO(/v1/enrich/callsign): fetch enrichment via
         // lib/enrichment.svelte.ts and assign name/qth from the
         // response. e.g.
@@ -115,6 +165,114 @@
         //   name = r.name ?? '';
         //   qth = r.qth ?? '';
         void call;
+    }
+
+    /*
+        canSubmit — form-level required-ness gate. Per the patterns
+        memory's Rule 3 (validators don't enforce presence), validators
+        treat empty as not-invalid; required-ness lives here. Pass to
+        FormControls's `submitDisabled={!canSubmit}` to gate the Log
+        Contact button.
+
+        Required fields (must be non-empty AND well-formed where applicable):
+          - callsign (non-empty, valid)
+          - rstSent / rstRcvd (non-empty, valid)
+          - qsoDate, timeOn, timeOff (non-empty)
+
+        Mode is always set (defaults). Frequency is always set (VFO
+        defaults). Band derives; out-of-band is allowed (operator may
+        intentionally tune outside an allocation for receive).
+    */
+    const canSubmit = $derived(
+        callsign.trim() !== '' && isValidCallsign(callsign) &&
+        rstSent.trim() !== '' && isValidRst(rstSent) &&
+        rstRcvd.trim() !== '' && isValidRst(rstRcvd) &&
+        qsoDate !== '' &&
+        timeOn !== '' &&
+        timeOff !== ''
+    );
+
+    /*
+        clearDraft — reset every draft field to its initial value.
+        Date / time are recomputed against the current UTC moment so
+        the next QSO starts "now"; RST fall back to the current
+        mode's default; mode is left alone (it mirrors manualState /
+        displayedState and is not panel-owned).
+
+        Called from FormControls's onClear and after a successful
+        submit so the operator can immediately start the next contact.
+    */
+    function clearDraft(): void {
+        stopTimeOffTicker();
+        callsign = '';
+        name = '';
+        qth = '';
+        comment = '';
+        rstSent = displayedState.mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE;
+        rstRcvd = displayedState.mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE;
+        const fresh = new Date();
+        qsoDate = formatUtcDate(fresh);
+        const freshTime = formatUtcTime(fresh);
+        timeOn = freshTime;
+        timeOff = freshTime;
+    }
+
+    /*
+        submitQso — build the ADIF record from the current draft + rig
+        state, then `console.log` it. Daemon `/v1/qso` POST is the next
+        step (path b from the session 27 fork in the road); the
+        intermediate console.log shape is so we can verify the wire
+        format end-to-end before adding the network round-trip.
+
+        Split-mode TX/RX freq derivation: in split mode the SELECTED
+        VFO is RX (per Vfos.svelte's snippet logic); the OTHER VFO is
+        TX. ADIF FREQ is the TX frequency; FREQ_RX is set only when
+        split. In non-split mode TX freq = the selected VFO's freq;
+        FREQ_RX is omitted.
+    */
+    function submitQso(): void {
+        if (!canSubmit) return;
+
+        const selectedHz = displayedState.selectedVfo === 'A'
+            ? displayedState.vfoA
+            : displayedState.vfoB;
+        const otherHz = displayedState.selectedVfo === 'A'
+            ? displayedState.vfoB
+            : displayedState.vfoA;
+
+        const txFreqHz = displayedState.split ? otherHz : selectedHz;
+        const rxFreqHz = displayedState.split ? selectedHz : undefined;
+
+        const adif = formatAdifRecord({
+            callsign: callsign.trim().toUpperCase(),
+            rstSent,
+            rstRcvd,
+            name: name.trim(),
+            qth: qth.trim(),
+            comment: comment.trim(),
+            qsoDate,
+            timeOn,
+            timeOff,
+            mode: displayedState.mode,
+            subMode: displayedState.subMode,
+            txFreqHz,
+            rxFreqHz,
+            band: frequencyToBand(txFreqHz),
+            txPower: displayedState.effectivePower,
+        });
+
+        console.log('[QSO submit] ADIF payload:\n' + adif);
+
+        // TODO(/v1/qso): POST adif as raw body (Content-Type:
+        // application/x-adif or text/plain) to the daemon when the
+        // endpoint lands. On success, clearDraft(); on failure,
+        // surface a toast (per ADR 0008, also pending) and leave
+        // the draft for retry.
+
+        // For now: clear after submit so the operator can immediately
+        // begin the next QSO. When the daemon path is wired, move
+        // this call into the success branch.
+        clearDraft();
     }
 </script>
 
@@ -149,7 +307,11 @@
         <TimeInput id="time_on" label="Time On (UTC)" bind:value={timeOn}/>
         <TimeInput id="time_off" label="Time Off (UTC)" bind:value={timeOff}/>
         <div class="flex flex-row space-x-2">
-            <FormControls/>
+            <FormControls
+                onClear={clearDraft}
+                onSubmit={submitQso}
+                submitDisabled={!canSubmit}
+            />
         </div>
     </div>
 </div>
