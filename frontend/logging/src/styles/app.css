@@ -71,4 +71,7 @@
     .invalid-input {
         @apply outline-red-600 focus:outline-red-600;
     }
+    .textarea-base {
+        @apply text-sm px-2.5 py-1.5 outline-1 -outline-offset-1 outline-gray-300 rounded-md resize-none focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600;
+    }
 }

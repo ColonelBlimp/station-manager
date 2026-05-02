@@ -5,6 +5,8 @@
     import Vfos from "../components/Vfos.svelte";
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
+    import TextInput from "../components/TextInput.svelte";
+    import Comment from "../components/Comment.svelte";
 
     const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
@@ -47,10 +49,17 @@
     relative to this row — they don't add their own outer margins. See
     `app.css` for the matching note on .input-row.
 -->
-<div class="flex space-x-2 py-4 px-6 border-red-500">
-    <Callsign id="call" label="Callsign" value=""/>
-    <Rst id="rst_sent" label="RST Sent" value={defaultRst}/>
-    <Rst id="rst_rcvd" label="RST Rcvd" value={defaultRst}/>
-    <Mode id="mode" label="Mode" bind:value={mode} list={modes} disabled={!displayedState.editable}/>
-    <Vfos/>
+<div class="flex flex-col px-6">
+    <div class="flex flex-row space-x-2 pt-4">
+        <Callsign id="call" label="Callsign" value=""/>
+        <Rst id="rst_sent" label="RST Sent" value={defaultRst}/>
+        <Rst id="rst_rcvd" label="RST Rcvd" value={defaultRst}/>
+        <Mode id="mode" label="Mode" bind:value={mode} list={modes} disabled={!displayedState.editable}/>
+        <Vfos/>
+    </div>
+    <div class="flex flex-row space-x-2">
+        <TextInput id="name" label="Name" value=""/>
+        <TextInput id="qth" label="QTH" widthClass="w-40" value=""/>
+        <Comment id="comment"/>
+    </div>
 </div>
