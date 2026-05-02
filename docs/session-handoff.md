@@ -24,7 +24,62 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-02, session 27 — SPA code review: Mode-dropdown reactivity bug fixed; Callsign Shift+Tab guard; VfoBox top-box affordance suppressed; layout positioning refactored to parent-owns rule; design tokens introduced; test coverage extended Callsign/ValidatedInput/displayedState — 168 tests pass)
+## Current state (as of 2026-05-02, session 28 — SPA-side QSO logging path landed end-to-end via console.log; ADIF wire shape settled with MY_* operator-station fields; QSO timer refactored to paired-ticking model; SessionTimer with sessionStorage persistence; Station store with three-callsigns-aware naming; design tokens (spacing + colour) complete; tab-order indexing wired; 268 tests pass)
+
+### Session 28 work (SPA QSO submit pipeline end-to-end; new field components; QSO + session timer model; design-token palette; station store; tab order)
+
+**Operator brief at session start:** continue from session 27. The next set of asks shaped the session arc — code review fixes, then add field components, wire defaults, design tokens, QSO submit + clear, session timer, station refactor, tab order. No daemon work this session; everything lands on the SPA side and stops at console.log.
+
+**Conversation arc (in order):**
+
+1. Code review of `frontend/logging`. Found: Mode-dropdown reactivity bug (binding never reached `manualState.mode` so the mode-dependent RST default never recomputed); Callsign Tab handler firing on Shift+Tab; VfoBox top-box affordance lying about its behaviour; missing test coverage for Callsign / ValidatedInput / displayedState. Fixed all and added 57 tests across the three new test files. (Done in session 27.)
+2. New field components landed: `TextInput`, `Comment`, `DateInput`, `TimeInput`, `FormControls`, `SessionTimer`. Operator added to QsoPanel layout; review pass tightened the styling consistency, added `disabled` props where missing, dropped doubled date/time icons in favour of native browser pickers tinted with `accent-focus`.
+3. Default values wired in QsoPanel: UTC date / time-on / time-off snapshotted at panel mount; mode-dependent RST defaults (`'59'` voice / `'599'` CW) with re-fill on empty + mode change.
+4. ADIF formatter settled. New `lib/utils/adif.ts` produces ADIF wire format: `<CALL:5>...` / `<EOR>` records with required fields always, optional fields omit-if-empty, fixed emission order (canonical complete-record byte-identity test pins this).
+5. `clearDraft()` and `submitQso()` wired in QsoPanel; `canSubmit` `$derived` gates Log Contact; FormControls receives `onClear` / `onSubmit` / `submitDisabled` callbacks. Console.log of the ADIF record after submit; clearDraft runs after submit so the next QSO starts fresh.
+6. QSO timer model refactor — settled the paired-ticking design (replaced earlier "ticker only after Tab"). One always-running `setInterval(60_000)`; `qsoStarted` boolean picks the branch. Pre-QSO: tick paired-updates qsoDate/timeOn/timeOff. Active QSO: tick only updates timeOff (qsoDate and timeOn pin at Tab moment). Decision to drop Start/Stop button affordances given lookup-only F2 path covers the DX-pile-up case.
+7. SessionTimer landed. New `lib/ui/components/SessionTimer.svelte` — 1Hz tick, `formatDurationHms(ms)` (added to `lib/utils/time.ts`) renders HH:MM:SS. **sessionStorage persistence** under key `sm.session.startedAt` — survives page reload (especially F5 collisions with planned F-key shortcuts), resets on tab close. New persistence tier alongside daemon (config) and localStorage (manualState).
+8. Operator → Station refactor. Renamed `lib/states/operator.ts` → `lib/stores/station.ts`. Justification: ADIF spec uses STATION_CALLSIGN for "logging station's callsign (the callsign used over the air)", distinct from OPERATOR (the human at the controls) and OWNER_CALLSIGN (the license holder of the station). v1 only models STATION_CALLSIGN; the other two are deferred. Field rename: `callsign` → `stationCallsign`. Class name: `Operator` → `Station`. Directory move: `lib/states/` (runes) vs `lib/stores/` (Svelte stores) — paradigm split.
+9. Reactivity-boundary clarification: `$state` is for fields that drive `$derived` computations; Svelte stores for static-ish profile data (no `$derived` dependents, populated once at app start). `configState.station.enabled` and `.ampMultiplier` keep `$state` (they drive `displayedState.isLive` and `.effectivePower`); the new station store fields are plain Svelte writable.
+10. ADIF MY_* fields wired. `formatAdifRecord` extended with `stationCallsign`, `myGridSquare`, `myName`, `myRig`, `myAntenna` — all optional, omit-if-empty, emitted in fixed order after the contact-info block. `submitQso` reads `get(station)` once and threads the values through. Operator populated their actual defaults in `stores/station.ts` (the v1 "edit-the-file" pattern until the daemon `/v1/config` endpoint lands).
+11. Tab-order indexing. `Mode` always `tabindex={-1}`; `VfoBox` always `tabindex={-1}` (Tab skips the box, mouse-click + future Ctrl+\ shortcut handle the swap); `VfoInput` gains `tabindex` prop with default 0 — Vfos passes 0 for the top input, conditional on split for the bottom; `DateInput`/`TimeInput` always `tabindex={-1}`; `FormControls` Clear button `tabindex={-1}`. Resulting tab order: Callsign → RST Sent → RST Rcvd → top VFO → [bottom VFO if split] → Name → QTH → Comment → Log Contact (with VFO inputs naturally absent when CAT is live since they're disabled).
+
+**Cross-cutting work:**
+
+- Design tokens added to `app.css` `@theme`. **Spacing tokens:** `--spacing-vfo-w`, `--spacing-vfo-half`, `--spacing-vfo-full` (with the `full = 2 × half` invariant), `--spacing-input-slot`. **Colour tokens (semantic palette):** `--color-surface`, `--color-surface-muted`, `--color-surface-disabled`, `--color-line`, `--color-line-soft`, `--color-ink`, `--color-focus`, `--color-focus-ring`, `--color-invalid`, `--color-vfo-rx`, `--color-vfo-tx`, `--color-vfo-label`, `--color-vfo-inactive`. All components migrated. Sets up future light/dark-mode swap as a one-block change.
+- Layout positioning rule (Rule 5 in component-patterns memory): parent owns external vertical rhythm via its own `py-*` / `gap-*`; children own internal layout (e.g. Vfos's `pt-2` for label-compensation stays). `.input-row` no longer carries `my-4`; QsoPanel's column owns `pt-4` / `mt-2` between rows. Same visual outcome, cleaner architecture.
+- Utils growing: `lib/utils/time.ts` (`formatUtcDate`, `formatUtcTime`, `formatDurationHms`), `lib/utils/adif.ts` (`formatAdifRecord` + `AdifQsoFields`), `lib/utils/frequency.ts` (`frequencyToBand`, lifted from Vfos when QsoPanel became a second consumer). Each has a sibling `*.test.ts` pinning the spec.
+- Composite `tsconfig.node.json` — added `composite: true` to fix TS6306 from the project-references setup.
+- Favicon 404 — added `<link rel="icon" href="data:," />` in `index.html` to suppress the browser's default `/favicon.ico` request. 0-byte placeholder kept in `public/` for future real icon.
+- "Drop $state when not needed" preference settled. Operator pushed back on reflexive use of `$state` for static config — reactive subscriptions cost something, and config fields without `$derived` consumers don't earn it. Established the `$state`-vs-store split. Memory updated.
+
+**Test coverage growth this session:** 168 → 268 tests across 14 files. New: Mode (7), Callsign (19), ValidatedInput (16), displayed (22), FormControls (12), time utils +10 (`formatDurationHms`), frequency utils (12), adif (33). Plus updates to existing Vfos.test.ts for affordance + tab-order changes.
+
+**Documentation updated this session:** `docs/v2-design/frontend-spa.md` (CSS conventions section, layout positioning section); memory `project_sm_spa_component_patterns` extended from 4 → 7 rules; memory `project_sm_spa_config_layering` reflects sessionStorage tier; this handoff doc gets the session-28 entry.
+
+**No ADR-level decisions.** All session 28 changes fit under existing ADRs (0001 toolkit, 0009 four-object decomposition, 0011 manualState persistence). Component-pattern memory is the canonical place for these conventions.
+
+**Status: SPA-side logging is end-to-end usable.** Type a callsign → Tab triggers QSO start (timer + enrichment hook) → fill remaining fields with the correct tab order → Log Contact emits a complete ADIF record to the dev-tools console → form clears for the next contact. The remaining work is daemon-side: `POST /v1/qso` (turn console.log into persistence), `GET/PUT /v1/config` (replace edit-the-file station defaults), `GET /v1/enrich/callsign` (unlock F2 lookup-only path), and the bridge subsystem (`internal/bridge` per ADR 0013).
+
+### Next steps (carried into session 29+)
+
+In rough order of dependency:
+
+1. **Daemon `POST /v1/qso`** (Go) — accept ADIF body, write QSO + upload-queue rows atomically per `invariants.md` "One-fails-all-fail." Exercises the daemon HTTP scaffold.
+2. **Daemon `GET/PUT /v1/config`** (Go) — replaces the v1 edit-the-file workflow for station/operator config.
+3. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
+4. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
+5. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
+6. **CAT-handover toast** — depends on toast system per ADR 0008.
+7. **"My Station" header card** — UI display of the station store (callsign, grid, rig). Subscribes to `station` store via `$station` template syntax.
+8. **`qsoDraft` state-module lift** — promote QsoPanel local `$state` into `lib/states/qsoDraft.svelte.ts` singleton when a second consumer (recent-QSOs panel, CountryPanel reading current callsign) appears.
+9. **Toast system** (ADR 0008) — submit feedback, CAT handover, bridge errors.
+10. **Keyboard shortcuts** (ADR 0007 + `@svelte-put/shortcut`) — F2 lookup-only, Ctrl+\ VFO swap, Ctrl+Enter submit, ? help overlay.
+11. **Inline validation message slot (Fix 13)** — the `.input-row` `h-input-slot` reserves the height; the slot itself isn't built. Lands cleanly when QSO draft store + form composition exist.
+
+---
+
+## Session 27 archive (was: SPA code review: Mode-dropdown reactivity bug fixed; Callsign Shift+Tab guard; VfoBox top-box affordance suppressed; layout positioning refactored to parent-owns rule; design tokens introduced; test coverage extended Callsign/ValidatedInput/displayedState — 168 tests pass)
 
 ### Session 27 work (logging app code review + fixes)
 

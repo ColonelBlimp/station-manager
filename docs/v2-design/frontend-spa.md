@@ -394,6 +394,110 @@ Children (input-row siblings, Vfos, future panel-children) **do not carry extern
 
 **How to apply when adding a new component for a panel:** the component's root `<div>` should NOT have `my-*` / `mt-*` / `mb-*` for outer-spacing concerns. If it has internal layout reasons for `pt-*`/`pb-*` (label compensation, hidden affordance space), comment the *intrinsic* reason at the use site so it doesn't get "cleaned up" by accident.
 
+### Tab order (settled 2026-05-02)
+
+Operator workflow runs through a strict, deliberate tab order rather than the browser's default document-order traversal. The pattern uses `tabindex={-1}` on every element that should be skipped; included fields keep their default `0`.
+
+**Resulting order:**
+
+| State | Order |
+|---|---|
+| CAT off, not split | Callsign → RST Sent → RST Rcvd → top VFO input → Name → QTH → Comment → Log Contact |
+| CAT off, split | Callsign → RST Sent → RST Rcvd → top VFO input → bottom VFO input → Name → QTH → Comment → Log Contact |
+| CAT on | Callsign → RST Sent → RST Rcvd → Name → QTH → Comment → Log Contact (VFO inputs are `disabled`, naturally absent from the focus chain) |
+
+**Per-component decisions:**
+
+- `Mode` `<select>` — `tabindex={-1}` always. Operator picks via mouse; future Ctrl-shortcut (ADR 0007 contest macros) is the keyboard path.
+- `VfoBox` (the box-shaped click-to-swap target) — `tabindex={-1}` always, regardless of CAT state or selected/non-selected. The swap action is mouse-click + the planned Ctrl+\ shortcut. Tab navigation skips boxes entirely.
+- `VfoInput` carries a `tabindex` prop (default `0`). `Vfos` computes `tabindex={(vfo === selectedVfo) || split ? 0 : -1}` per box snippet — top is always reachable; bottom is reachable only when split is on.
+- `DateInput` / `TimeInput` — `tabindex={-1}` always. Auto-populated by the QSO timer ticker (per "QSO timer model" below); rarely manually edited in this workflow.
+- `FormControls` Clear button — `tabindex={-1}`. Destructive action requires a deliberate click. Log Contact stays in the tab order.
+- `TextInput` (Name, QTH) and `Comment` — default tab order, no `tabindex` prop needed.
+
+**Why no positive `tabindex` values?** Positive values manage a *global* tab order that's hard to maintain across components — change one and you may have to renumber others. The "default 0 + explicit -1 skip" pattern leverages document order for inclusion and explicit attribution for exclusion. Each component owns its own decision.
+
+**When CAT comes on,** the Mode select and both VFO inputs become `disabled`. The browser already excludes disabled controls from the tab order, so the explicit `tabindex={-1}` is redundant for those — but harmless, and the rule stays consistent ("these elements are never tab-stops in this workflow").
+
+## QSO timer model (settled 2026-05-02)
+
+The QSO entry panel maintains three time-related fields — `qsoDate`, `timeOn`, `timeOff` — driven by a single always-running 60-second ticker. The ticker's behaviour branches on a `qsoStarted` boolean:
+
+- **Pre-QSO** (`qsoStarted === false`): tick paired-updates `qsoDate`, `timeOn`, `timeOff` to current UTC. The form reflects "right now" without the operator clicking into a field.
+- **Active QSO** (`qsoStarted === true`): tick updates only `timeOff`. `qsoDate` and `timeOn` are pinned at the Tab moment (per ADIF semantics — `QSO_DATE` is the date the QSO STARTED).
+
+**Transitions:**
+
+- **Tab on a valid callsign** (Callsign's `onenrich` callback) — snap all three fields to current UTC (closes the up-to-60-second staleness window from the paired ticker), then set `qsoStarted = true`. Subsequent Tabs are no-ops on the timer; only the first Tab pins.
+- **Clear** or **Submit** — set `qsoStarted = false`; snap all three fields to current UTC. The paired ticker resumes naturally.
+
+**60-second tick rate matches HH:MM display granularity.** Manual edits to a tick-driven field get clobbered on the next minute boundary, which gives the operator up to 59 seconds to type and submit / Tab to the next field — plenty for back-logging.
+
+**Start/Stop button affordances were considered and dropped.** The lookup-only F2 path (per the planned `onlookup` callback on Callsign) covers the DX-pile-up "look up the call but don't commit yet" case without needing a separate stop. "Abandon a QSO without clearing" isn't a real workflow — operators either log or clear.
+
+## Session timer model (settled 2026-05-02)
+
+A separate 1-Hz ticker drives `SessionTimer.svelte` — the operator's session length in `HH:MM:SS`. Different cadence (seconds matter), different lifecycle (starts on app mount, persists across page reload, resets on tab close), different visual location (header strip in `LoggingCard`).
+
+**`sessionStorage` persistence** under key `sm.session.startedAt` (epoch ms). Picked because:
+
+- **Page refresh (deliberate or accidental F5) survives.** Important because the SPA uses F-keys for log-app actions (planned F2 lookup-only path; future contest macros). Accidental F5 mid-contest losing a multi-hour session timer would be a real papercut.
+- **Tab close / browser close clears it.** Next open is a fresh session naturally — no Reset button needed in v1.
+- **New tab gets its own session.** `sessionStorage` is per-tab.
+
+**Differs from `localStorage`** (used by `manualState` per ADR 0011) on purpose: `localStorage` is for *cross-session preferences* ("I want USB on 14.250 by default"); `sessionStorage` is for *current-session state* ("how long have I been operating right now"). The browser API agrees with the semantic split.
+
+## ADIF wire shape (settled 2026-05-02)
+
+QSO submission produces an ADIF record per `lib/utils/adif.ts` (`formatAdifRecord(fields: AdifQsoFields): string`). The record is the body the daemon will accept on the planned `POST /v1/qso` endpoint — no JSON wrapping, raw ADIF, per `invariants.md` "ADIF as raw POST body."
+
+**Fixed emission order** (the `formatAdifRecord` "complete record" spec test pins this byte-identically):
+
+1. **Required:** `CALL`, `QSO_DATE`, `TIME_ON`, `TIME_OFF`, `MODE`, `FREQ`, `BAND`, `RST_SENT`, `RST_RCVD`.
+2. **Optional QSO conditionals:** `SUBMODE` (when non-empty), `FREQ_RX` (when split — i.e. rxFreqHz differs from txFreqHz), `TX_PWR` (when > 0; rounded to integer).
+3. **Optional contact info:** `NAME`, `QTH`, `COMMENT` (each emitted only when non-empty).
+4. **Optional operator-station info (MY_*):** `STATION_CALLSIGN`, `MY_GRIDSQUARE`, `MY_NAME`, `MY_RIG`, `MY_ANTENNA`. Emitted only when non-empty.
+5. **`<EOR>`** terminator.
+
+**Wire-shape decisions:**
+
+- Frequency in MHz, 6 decimal places (`(hz / 1_000_000).toFixed(6)`).
+- `QSO_DATE` is `YYYYMMDD` (input `YYYY-MM-DD` minus the dashes).
+- `TIME_ON` / `TIME_OFF` is `HHMM` (input `HH:MM` minus the colon). 4-digit form; `HHMMSS` is not used.
+- `TX_PWR` is the *effective* radiated power (rig power × amp multiplier per `displayedState.effectivePower`). Rounded to integer. Omitted when 0 ("not set").
+- `FREQ_RX` only when split — `displayedState.split` true AND rxFreqHz differs from txFreqHz. ADIF `FREQ` is the TX frequency.
+- Empty / undefined optional fields are omitted entirely (no `<NAME:0>` zero-length tags).
+- Operator-station MY_* fields populated from the `station` Svelte store at submit time; see "State / persistence layers" for the reactivity-boundary justification.
+
+The shape is settled. When the daemon `POST /v1/qso` endpoint lands, it accepts this exact body — no SPA-side change needed.
+
+## State / persistence layers (settled 2026-05-02)
+
+Five tiers, each matching what the data semantically *means*:
+
+| Tier | Used for | Examples | Lifecycle |
+|---|---|---|---|
+| Daemon (`/v1/config`) | Operator declarations / cross-device persistent | `configState.station.enabled`, `.ampMultiplier`, planned `daemonUrl` / `bridgeUrl` | Persistent on the daemon's filesystem; future settings UI will PUT updates |
+| `localStorage` | Per-device transient session activity | `manualState.*` (vfoA, vfoB, mode, subMode, selectedVfo, power) under `sm.manual.*` | Survives browser sessions; per-device |
+| `sessionStorage` | Per-tab current-session state | `SessionTimer`'s `startedAt` under `sm.session.startedAt` | Survives page refresh; resets on tab close |
+| In-memory only | Live transport / rig state | `catState`, `bridgeState`, QsoPanel's draft fields, `station` store contents | Rebuilt from rig events / app boot |
+| Hardcoded module constants | Bootstrap / first-install fallback | `cat.svelte.ts`'s `DEFAULT_VFO_HZ`, `stores/station.ts` defaults | Used until daemon `/v1/config` populates real values |
+
+**Reactivity-boundary rule (settled 2026-05-02):** `$state` is for fields that drive `$derived` computations; Svelte stores for static-ish profile data without `$derived` consumers. Concretely:
+
+- `configState.station.enabled` and `.ampMultiplier` use `$state` because `displayedState.isLive` and `.effectivePower` derive from them.
+- `station` (the operator/station profile in `lib/stores/station.ts`) uses a Svelte writable store — populated once at app start, no `$derived` reads from its fields, so per-field reactive subscriptions earn nothing. `submitQso` reads via `get(station)` for a one-shot snapshot at QSO-submit time.
+
+**Directory split:** `lib/states/` holds runes-based state (`*.svelte.ts`); `lib/stores/` holds Svelte stores (`*.ts`). The file extension follows the Svelte compiler convention (only runes-using modules need `.svelte.ts`).
+
+**Three-callsign distinction (per ADIF spec, 2026-05-02):** the `Station` interface intentionally does NOT use the field name `callsign`. ADIF distinguishes:
+
+- `STATION_CALLSIGN` — "the logging station's callsign (the callsign used over the air)" — what the `station` store models today as `stationCallsign`.
+- `OPERATOR` — "the logging operator's callsign" (the human at the controls).
+- `OWNER_CALLSIGN` — "the callsign of the owner of the station used to log the contact (the callsign of the OPERATOR's host)."
+
+For a club station, all three differ. v1 only models STATION_CALLSIGN; OPERATOR and OWNER_CALLSIGN extensions land if a multi-op or club-station scenario surfaces. The naming makes the v1 ambiguity explicit so the future extension is a clean add.
+
 ## Dev workflow (settled 2026-04-30)
 
 Two-terminal HMR loop:
@@ -413,8 +517,8 @@ Two-terminal HMR loop:
 - ~~**Enrichment pipeline shape.**~~ **Resolved 2026-05-01 in [ADR 0005](../decisions/0005-enrichment-pipeline-shape.md):** single daemon endpoint `GET /v1/enrich/callsign?call=X`, aggregated JSON response, cache-first orchestration, AbortController cancellation, 7-day TTL. SPA's `lib/enrichment.svelte.ts` becomes a thin (~30 line) fetch + abort-handle wrapper rather than the multi-source orchestration originally implied here. Reverses the prior "SPA orchestrates concurrent hamnut+QRZ fetches" framing — incompatible with [ADR 0004](../decisions/0004-daemon-vs-spa-responsibilities.md)'s rule that external-service orchestration lives daemon-side.
 - ~~**Config source.**~~ **Resolved 2026-05-01 in [ADR 0003](../decisions/0003-spa-config-daemon-only.md)** (which superseded 0002). Daemon `/v1/config` is the only persistent source; hardcoded module-level constants (e.g. `cat.svelte.ts`'s `DEFAULT_VFO_HZ`) are bootstrap/first-install fallback only. No localStorage. Reasoning: SPA is hosted by the daemon, so SPA load implies daemon reachable.
 - ~~**CAT-state precedence (CAT-off vs CAT-on, transition handover, split derivation).**~~ **Resolved 2026-05-01 in [ADR 0006](../decisions/0006-cat-state-precedence-rule.md):** three state singletons; SPA edit affordances disabled when CAT operating; bridge-connect is unconditional handover with a toast; `split` derived from frequency divergence in CAT-off mode (same-frequency split limitation accepted); connection-only liveness for v1 (heartbeat deferred).
-- **QSO draft store.** `lib/states/qsoDraft.svelte.ts` (planned) per [ADR 0006](../decisions/0006-cat-state-precedence-rule.md)'s state-singleton partitioning. Holds operator-typed QSO fields (callsign, RST sent/rcvd, name, QTH, country, grid, notes) plus enrichment results. Does NOT duplicate `vfoA`/`mode` from `catState` — QSO submit reads from both at submit-time. Per-session UX (per [ADR 0004](../decisions/0004-daemon-vs-spa-responsibilities.md)); **not persisted to localStorage** (distinct from `manualState` per [ADR 0011](../decisions/0011-manualstate-persistence.md)) — QSO draft is per-QSO activity, not session-spanning state. **Mode-dependent default pattern established 2026-05-01:** RST sent/rcvd already use a `$derived` default in QsoPanel — `'59'` for voice modes, `'599'` for CW. When the draft store lands, these defaults move into it as initial values applied at draft creation; mid-QSO mode-change behaviour gets refined at that point (currently mode-change reactively overwrites operator typing — acceptable for v1).
-- **Bridge state.** `lib/states/bridge.svelte.ts` (planned) per [ADR 0006](../decisions/0006-cat-state-precedence-rule.md). Holds `connected: boolean` (from `EventSource.readyState === OPEN`) and the SSE subscription itself. Drives the `editable` derived helper that gates all CAT-state edit affordances.
+- **QSO draft store.** `lib/states/qsoDraft.svelte.ts` (planned) per [ADR 0006](../decisions/0006-cat-state-precedence-rule.md)'s state-singleton partitioning. Holds operator-typed QSO fields (callsign, RST sent/rcvd, name, QTH, country, grid, notes) plus enrichment results. Does NOT duplicate `vfoA`/`mode` from `catState` — QSO submit reads from both at submit-time. Per-session UX (per [ADR 0004](../decisions/0004-daemon-vs-spa-responsibilities.md)); **not persisted to localStorage** (distinct from `manualState` per [ADR 0011](../decisions/0011-manualstate-persistence.md)) — QSO draft is per-QSO activity, not session-spanning state. **Mode-dependent default pattern established 2026-05-01:** RST sent/rcvd use a `$state` initialized to the current mode's default + a `$effect` that re-fills if the field is cleared. When the draft store lands, these defaults move into it as initial values applied at draft creation. **Currently lives as local `$state` in `QsoPanel.svelte`** — the lift to a state singleton is deferred until a second consumer (recent-QSOs panel reading the in-progress draft, CountryPanel reading current callsign for live country lookup) appears. The submit pipeline (`clearDraft()`, `submitQso()`, `canSubmit` `$derived`) is wired and produces ADIF console output (settled 2026-05-02).
+- **Bridge state.** `lib/states/bridge.svelte.ts` lands as a stub — `connected: boolean` and `rigResponding: boolean` per [ADR 0010](../decisions/0010-rig-sse-wire-shape.md)'s three-flag rule. Real EventSource wiring is pending the daemon-side `/v1/rig/events` endpoint per [ADR 0013](../decisions/0013-daemon-owns-bridge-as-subsystem.md).
 - ~~**Keyboard shortcuts.**~~ **Resolved 2026-05-01 in [ADR 0007](../decisions/0007-keyboard-shortcuts.md):** library is `@svelte-put/shortcut`; initial map covers VFO swap (`Ctrl+\\`), QSO submit (`Ctrl+Enter`), revert/cancel (`Escape`), help overlay (`?`). Modifier-keyed shortcuts work in-field; bare keys don't (target check rejects `INPUT`/`TEXTAREA`/`contenteditable`). CAT-mutating shortcuts use the `editable` derived helper from ADR 0006. F-keys reserved for future contest macros. Initial map will iterate after ~30 days of operating use.
 - **Inline validation message slot.** `.input-row`'s `h-17.5` already reserves space below each input for an error message; the slot itself isn't built yet. Open question: where the message string comes from. Leading candidate is "validators stay `boolean`, the component holds its own message string" — keeps validators pure, accepts the duplication-on-reuse cost. Alternative `{ valid, message }` return tuple breaks the pure-predicate convention settled 2026-05-01. Lands cleanly once form composition + draft store exist. (Resolves carried Fix 13.)
 - ~~**Toast / notifications system.**~~ **Resolved 2026-05-01 in [ADR 0008](../decisions/0008-notifications-toast-system.md):** hand-rolled `$state`-array singleton at `lib/states/toasts.svelte.ts`, three levels (info/warn/error) with TTL 4/6/8s, max-stack 5, click-to-dismiss, fade-in/out animation, mounted once at `app.svelte` shell as `bottom-right` fixed. Library options (`@zerodevx/svelte-toast`, `svelte-french-toast`, `svelte-sonner`) rejected because the `$state` queue subscribability is wanted and the platform-quirks layer that justifies a library elsewhere doesn't exist for toasts. Toasts express **events**; inline messages (planned) express **state** — the two complement each other.

@@ -52,7 +52,7 @@
  *   equipment.antenna   → MY_ANTENNA
  */
 
-import { writable } from 'svelte/store';
+import {type Writable, writable} from 'svelte/store';
 
 export interface Station {
     /** ADIF STATION_CALLSIGN — the call attached to this log/station. */
@@ -73,7 +73,7 @@ export interface Station {
     };
 }
 
-export const station = writable<Station>({
+export const station: Writable<Station> = writable<Station>({
     stationCallsign: '7Q5DX',
     location: {
         gridSquare: 'KH78an',
