@@ -374,13 +374,25 @@ A validator is a pure predicate over the field's *data domain* — "is this stri
 
 Single global stylesheet, imported once from `main.ts`. Three buckets, each with a different purpose:
 
+- **`@theme`** (in use as of 2026-05-02) — design tokens that compile to Tailwind v4 utility classes (`--spacing-vfo-w` → `w-vfo-w`, `--spacing-input-slot` → `h-input-slot`, etc.). Currently holds VfoBox dimensions (`vfo-w`, `vfo-half`, `vfo-full` — with the `full = 2 × half` invariant documented inline) and the input-row reserved height (`input-slot`). Tokenize a value when it **anchors a relationship** (a width that must match across two visual states; two heights that must add up to a third; a slot height that's load-bearing for a feature like the planned inline validation slot). Naming convention: `--<theme-key>-<purpose>-<variant>` where the theme key is `spacing` for both width and height utilities.
 - **`@layer base`** — element-level defaults that should cascade under everything else: `html { @apply text-gray-900 }`, `h1`/`h2`/`p` defaults.
-- **`@layer components`** — repeating utility clusters extracted via `@apply`. Currently: `.input-row` (input wrapper height + vertical margin), `.input-base`, `.input-label`, `.invalid-input`. The threshold for extracting is "I would otherwise paste this 11-utility class string into multiple components" or "this combination of values has a named meaning across components" (the input-row dims `my-4 h-17.5` qualify on the second count — they're the height a label + input + future validation message text needs); a Tailwind v4 `@apply` block beats both string-constant duplication and an over-engineered `<TextInput>` Svelte wrapper for pure styling concerns.
+- **`@layer components`** — repeating utility clusters extracted via `@apply`. Currently: `.input-row` (reserved height for label + input + validation-message slot, references the `input-slot` token), `.input-base`, `.input-label`, `.invalid-input`. The threshold for extracting is "I would otherwise paste this 11-utility class string into multiple components" or "this combination of values has a named meaning across components"; a Tailwind v4 `@apply` block beats both string-constant duplication and an over-engineered `<TextInput>` Svelte wrapper for pure styling concerns.
 
-  **Threshold for new tokens (settled 2026-05-01):** extract when a value is used in ≥2 places *for the same semantic reason*, OR when paired values have a named relationship (header + content heights summing to a card height). Single-use magic values like `h-120`, `h-13.5`, `w-72.5`, `mt-10` stay inline until a second use case shows up — naming a value before knowing what it means is its own kind of magic. Domain-specific field widths (`w-19` for RST, `w-36` for callsign) stay in the component that owns them; they're the field's identity, not a shared token.
-- **`@theme`** (when added) — design tokens that should also become Tailwind utilities. Mode palettes, status-row dimensions, focus-ring colours go here when they appear.
+  **Threshold for new tokens (settled 2026-05-01, refined 2026-05-02):** extract when a value is used in ≥2 places *for the same semantic reason*, OR when paired values have a named relationship (header + content heights summing to a card height; split-on/split-off VfoBox heights summing across modes). Single-use magic values like `h-120`/`w-200` (whole-app shell), `h-13.5`/`w-72.5` (header strip), `mt-10` stay inline at the use site **with a one-line comment** explaining what the number anchors to and the threshold for promoting it to a token (typically: "if a second use case appears with the same value for the same reason, lift to a `@theme` token"). Naming a value before knowing what it means is its own kind of magic. Domain-specific field widths (`w-19` for RST, `w-36` for callsign) stay in the component that owns them; they're the field's identity, not a shared token.
 
 **Avoid** `tailwind.config.js` (v4 doesn't use it), per-component `<style>` blocks for project-wide concerns (Svelte scopes them), and a separate `tokens.css` / `vars.css` (v4's scanner wants tokens defined where `@import "tailwindcss"` lives).
+
+### Layout positioning — parent owns vertical rhythm (settled 2026-05-02)
+
+Children (input-row siblings, Vfos, future panel-children) **do not carry external vertical margins**. The panel that places them owns the row's vertical rhythm via its own `py-*` (or `gap-y-*`). Concretely:
+
+- `.input-row` is `h-input-slot` only — reserves height for label + input + the planned validation slot. No `my-*`. The row says "I am this tall"; it does not say where it sits.
+- `Vfos.svelte` carries `pt-2` **as internal label-compensation** (Vfos has no `<label>`, so its first row of content sits 0.5rem above sibling inputs that do; `pt-2` brings it back onto the same baseline). It does NOT carry external `my-*` margins.
+- `QsoPanel.svelte` (and any future panel) carries `py-*` on its flex container to provide the row's breathing room.
+
+**Why:** a future panel that wants tighter or looser vertical rhythm just picks a different `py-*` on its container. No need to override every child's margin. Two concerns ("the row is this tall" vs "rows breathe on the page") are decoupled into two places. The Vfos `pt-2` comment reads honest because external positioning is no longer fighting it in the same div.
+
+**How to apply when adding a new component for a panel:** the component's root `<div>` should NOT have `my-*` / `mt-*` / `mb-*` for outer-spacing concerns. If it has internal layout reasons for `pt-*`/`pb-*` (label compensation, hidden affordance space), comment the *intrinsic* reason at the use site so it doesn't get "cleaned up" by accident.
 
 ## Dev workflow (settled 2026-04-30)
 

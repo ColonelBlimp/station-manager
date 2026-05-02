@@ -24,7 +24,80 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-02, session 26 — topology pivot: bridge collapsed into daemon as internal subsystem; ADRs 0012/0013/0014 + invariants/topology/memory propagation; no code changes — pure design)
+## Current state (as of 2026-05-02, session 27 — SPA code review: Mode-dropdown reactivity bug fixed; Callsign Shift+Tab guard; VfoBox top-box affordance suppressed; layout positioning refactored to parent-owns rule; design tokens introduced; test coverage extended Callsign/ValidatedInput/displayedState — 168 tests pass)
+
+### Session 27 work (logging app code review + fixes)
+
+**Operator brief at session start:** "Let's start with a code review of the logging app and pick up any issues before we move on to add more features."
+
+**Review found three real bugs, several test gaps, one positioning-discipline issue, and one design-token opportunity. All are fixed.**
+
+**Bugs fixed:**
+
+- **Mode dropdown wasn't wired to manualState.** `QsoPanel.svelte` passed a hardcoded `value="USB"` to `<Mode>`; `Mode` declared `value = $bindable('')` but the parent didn't bind. Net effect: changing the mode in the UI didn't update `manualState.mode`, didn't reach `displayedState.mode`, didn't trigger the mode-dependent RST default (`'59'` voice / `'599'` CW) that landed end-of-session-25. Fix: introduce a local `mode` `$state` in `QsoPanel` that mirrors `displayedState.mode` (live source via `$effect`) and writes back to `manualState.mode` on operator edits when `displayedState.editable`. `<Mode>` is now `bind:value={mode}` with `disabled={!displayedState.editable}`. Same static-ownership pattern as the Vfos→manualState writes.
+- **Mode `<option>` had a redundant `selected` attribute** that fights `bind:value` on the `<select>` in some browsers. Removed.
+- **Callsign Tab handler fired `onenrich` on Shift+Tab** as well as Tab. Added `e.shiftKey` guard.
+- **`Mode` component shape was ceremony.** `list: {key, value}[]` with both fields always identical. Collapsed to `list: string[]`.
+
+**VfoBox affordance bug discovered during user testing:**
+
+- The top (selected/RX) VfoBox had identical hover/cursor/focus-ring affordances as the bottom one, but its click closure wrote `manualState.selectedVfo = vfo` — same letter, no swap. Visual affordance lied about behaviour.
+- Fix (Option A from the discussion): `VfoBox` gained an `isSelected` prop. When `isSelected || disabled`, `tabindex={-1}`, no title, click/keydown handlers bail. Cursor classes split three ways: `cursor-pointer` (interactive), `cursor-not-allowed` (CAT operating), `cursor-default` (already selected). Bottom (interactive) box gains `title="Select"` tooltip on hover. `manualState` now only writes on meaningful swaps — no more redundant localStorage mirror writes for top-box clicks.
+
+**Layout positioning refactored — parent owns vertical rhythm (new Rule 5 in component-patterns memory):**
+
+- Children no longer carry external vertical margins. The panel that places them owns the row's vertical rhythm via its own `py-*`.
+- `.input-row` is `h-input-slot` only — no more `my-4`. The class says "I am this tall"; it does not say where it sits.
+- `Vfos.svelte` dropped its `my-4`. Kept `pt-2` with a comment naming it as **internal** label-compensation (Vfos has no `<label>` of its own, so first content row sits 0.5rem above sibling inputs that do; `pt-2` brings it back onto the same baseline). Internal compensations stay inside the child; external positioning lives in the parent.
+- `QsoPanel.svelte` gained `py-4` on its flex container.
+- Visual outcome unchanged; architecture cleaner. A future panel just picks a different `py-*` without overriding every child's margin.
+
+**Design tokens introduced — `@theme` block in `app.css` (new Rule 6):**
+
+- Tokens for values that **anchor a relationship**: `--spacing-vfo-w`, `--spacing-vfo-half`, `--spacing-vfo-full` (with the `full = 2 × half` invariant documented), and `--spacing-input-slot`. Tailwind v4 auto-generates `w-vfo-w`, `h-vfo-half`, `h-vfo-full`, `h-input-slot` utility classes.
+- `VfoBox.svelte` switched from `w-13 h-4.25 h-8.5` to `w-vfo-w h-vfo-half h-vfo-full`. `.input-row` switched from `h-17.5` to `h-input-slot`.
+- One-off shell numbers (`h-13.5`/`w-72.5` in `LoggingCard`, `h-120`/`w-200` in `app.svelte`) stay as Tailwind arbitrary values **with comments** naming them as one-off and the threshold for promoting them to tokens.
+- Top-of-file convention comment in `app.css` captures the rule so future additions follow the same shape.
+
+**Test coverage extended:**
+
+- `Mode.test.ts` (7 tests) — option count + label parity, value/label equality, initial value reflected, change-event binding, default-enabled, disabled prop, label rendering.
+- `Callsign.test.ts` (19 tests) — rendering (label, uppercase class, initial value), validation (invalid styling on/off, empty-not-invalid), focus-trap on blur (refocus + select on invalid non-empty, no trap on empty/valid), and the full Tab→onenrich path: fires only on valid+non-empty, uppercase-normalizes, trims whitespace, ignores empty/whitespace/invalid input, ignores Shift+Tab, ignores Enter/Space/letter keys, tolerates absent callback.
+- `ValidatedInput.test.ts` (16 tests) — rendering, validator wiring (invalid styling on/off, empty-not-invalid), focus-trap parity with Callsign, `inputClass` prop pass-through, base class preservation, HTML attribute spread (`maxlength`), validator-call observability on input + blur.
+- `displayed.test.ts` (22 tests) — three-flag truth table for `isLive`/`editable` (8 cases covering every false/true combination), field source switching catState↔manualState, `rigIdentity` special case, `split` derivation (frequency-divergence in CAT-off, `splitOverride` in CAT-on, frequency-divergence ignored in CAT-on), `rawPower` source switching, `effectivePower` with no/2x/0.5x multiplier in both CAT-on and CAT-off modes.
+- `Vfos.test.ts` updated for the new affordance suppression: top-box has `tabindex=-1`, no `title`, `cursor-default` class; bottom-box has `title="Select"`; no manualState write on no-op clicks; CAT-operating disables both boxes.
+
+**Test totals:** 99 → 168 (+69 across five test files). All passing. `svelte-check` clean (182 files, 0 errors). Production build verified — Tailwind tokens compile correctly into utility classes.
+
+**Documentation updated:**
+
+- `docs/v2-design/frontend-spa.md` §"Global CSS conventions" — `@theme` bucket added, threshold convention refined for 2026-05-02. New §"Layout positioning — parent owns vertical rhythm".
+- Memory `project_sm_spa_component_patterns` — extended from 4 rules to 6 (added Rule 5 parent-owns-positioning, Rule 6 design-tokens). Cross-references updated to point at the current file inventory.
+
+**No ADR-level decisions this session — all changes are SPA implementation/style choices that fit under the existing SPA-related ADRs (0001 toolkit, 0009 four-object decomposition, 0011 manualState persistence).** Component-pattern memory is the canonical place for these conventions; ADR is reserved for choices with plausible alternatives that were genuinely weighed.
+
+**Code review items deferred per "wait for feature work" policy:**
+
+- `configState.daemonUrl` / `bridgeUrl` fields — wait for `/v1/config` daemon endpoint per ADR 0003.
+- `bridgeState` SSE wiring — step 5 of the original execution plan.
+- `catState.power` default-0 visual concern — wait for live SSE behaviour.
+- QSO draft store — wait for form composition / submit pipeline.
+- Inline validation message slot (Fix 13) — `h-input-slot` already reserves the space; lands when form composition arrives.
+- Frequency helpers extraction (`formatFrequency`, `frequencyToBand`) — wait for second consumer (history view, QSO row).
+
+### Next steps (carried into session 28+)
+
+Same as session 26's carried list, plus the deferred review items above. The execution plan from session 25 (now with the topology revision):
+
+- **Step 4 (revised per ADR 0013):** wire `/v1/rig/events` into the daemon binary as part of the `internal/bridge` package. Same wire shape (ADR 0010); host is the daemon by default.
+- **Step 5:** real EventSource wiring in `bridge.svelte.ts`. URL composition reads `configState.bridgeUrl` (defaults equal to `daemonUrl` in single-binary deployment).
+- **Step 6:** CAT-handover toast (depends on toast-system implementation per ADR 0008).
+
+Other carried items: daemon `/v1/config` endpoint (ADR 0003), daemon `/v1/enrich/callsign` handler (ADR 0005), toast system (ADR 0008), keyboard shortcuts (ADR 0007), QSO draft store / form composition, first real route, CI workflow update with Node ≥22 + frontend test step, `internal/bridge` package as a real Go package, `bridge.enabled` config flag in daemon's config schema, driver-shaped forwarder layer, `Authorization: Bearer <token>` header threading.
+
+---
+
+## Session 26 archive (was: Current state as of 2026-05-02 — topology pivot: bridge collapsed into daemon as internal subsystem; ADRs 0012/0013/0014 + invariants/topology/memory propagation; no code changes — pure design)
 
 ### Session 26 work (topology redesign: daemon owns the bridge as an internal subsystem; upstream forwarding deferred; full ADR + doc + memory propagation)
 
