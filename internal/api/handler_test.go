@@ -622,6 +622,59 @@ func TestSubmitQso_ForceBypassesDedupe(t *testing.T) {
 	}
 }
 
+// TestSubmitQso_ForceParamAcceptsBoolVariants covers the H4 fix: `?force`
+// parses through strconv.ParseBool, so "true"/"True"/"TRUE"/"1" all
+// trigger the dedupe-bypass and unrecognised values are rejected with a
+// 400 instead of silently falling through to dedupe-checked behaviour.
+func TestSubmitQso_ForceParamAcceptsBoolVariants(t *testing.T) {
+	for _, raw := range []string{"true", "True", "TRUE", "1"} {
+		t.Run(raw, func(t *testing.T) {
+			srv := testServer(t)
+			lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+			// First submit succeeds normally.
+			if w := submitQso(t, srv, lbID, testQsoADIF, false); w.Code != http.StatusCreated {
+				t.Fatalf("first submit: status = %d; body = %s", w.Code, w.Body.String())
+			}
+
+			url := fmt.Sprintf("/v1/qso?logbook=%d&force=%s", lbID, raw)
+			req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(testQsoADIF))
+			req.Header.Set("Content-Type", "application/x-adif")
+			w := httptest.NewRecorder()
+			srv.handleSubmitQso(w, req)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("force=%s: status = %d, want 201 (force should bypass dedupe); body = %s",
+					raw, w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), `"status":"stored"`) {
+				t.Fatalf("force=%s: body = %q, want stored", raw, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestSubmitQso_ForceParamRejectsGarbage(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	for _, raw := range []string{"yes", "y", "force", "tru", "2"} {
+		t.Run(raw, func(t *testing.T) {
+			url := fmt.Sprintf("/v1/qso?logbook=%d&force=%s", lbID, raw)
+			req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(testQsoADIF))
+			req.Header.Set("Content-Type", "application/x-adif")
+			w := httptest.NewRecorder()
+			srv.handleSubmitQso(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("force=%s: status = %d, want 400 (unrecognised value should fail loud); body = %s",
+					raw, w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "invalid_query_param") {
+				t.Fatalf("force=%s: body = %q, want invalid_query_param", raw, w.Body.String())
+			}
+		})
+	}
+}
+
 // =============================================================================
 // Submit QSO — logbook validation
 // =============================================================================

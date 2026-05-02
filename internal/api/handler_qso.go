@@ -103,6 +103,12 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleSubmitQso"
 
 	// ---- Content-Type check ----
+	// Empty Content-Type is treated as ADIF: ADIF doesn't have a
+	// universally-deployed media type and operators using `curl
+	// --data-binary @file.adi` without --header end up with no CT.
+	// Documented in api.md §3 (Content negotiation) — both
+	// application/x-adif and text/plain are accepted, plus the empty
+	// fallthrough.
 	ct := r.Header.Get("Content-Type")
 	if ct != "" && !strings.HasPrefix(ct, "application/x-adif") && !strings.HasPrefix(ct, "text/plain") {
 		s.writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type",
@@ -135,6 +141,19 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 
 	if len(parsed.Records) == 0 {
 		s.writeError(w, http.StatusBadRequest, "invalid_adif", "no QSO records found in ADIF body", op)
+		return
+	}
+
+	// Single-record contract: POST /v1/qso accepts exactly one QSO. A
+	// multi-record body is almost always a client bug (e.g. an
+	// importer accidentally hitting the single-submit endpoint instead
+	// of looping). Rejecting loud is better than silently dropping
+	// records 2..N, and bounds the parser-allocation cost flagged in
+	// the M5 finding from the 2026-05-02 review (the body itself is
+	// already capped by MaxBodyBytes; this caps records-per-body).
+	if len(parsed.Records) > 1 {
+		s.writeError(w, http.StatusBadRequest, "too_many_records",
+			"POST /v1/qso accepts exactly one QSO record per request; use cmd/importer for bulk", op)
 		return
 	}
 
@@ -191,7 +210,23 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---- Submit ----
-	force := r.URL.Query().Get("force") == "true"
+	// `?force` accepts the standard truthy set ("1"/"true"/"True"/"TRUE",
+	// etc.) via strconv.ParseBool. An unrecognised value is rejected
+	// rather than silently falling through to dedupe-checked behaviour:
+	// the contest operator typing this in the heat of a pile-up wants
+	// either "force" or "tell me you didn't recognise it," not "I
+	// silently ignored your typo and lost the dup." Empty/missing
+	// param keeps the dedupe-checked default.
+	force := false
+	if raw := r.URL.Query().Get("force"); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_query_param",
+				"force must be a boolean (1/0/true/false)", op)
+			return
+		}
+		force = v
+	}
 	result, err := s.qso.Submit(r.Context(), logbookID, rec, force)
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {

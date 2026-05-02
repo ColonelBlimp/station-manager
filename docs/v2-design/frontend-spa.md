@@ -469,7 +469,29 @@ QSO submission produces an ADIF record per `lib/utils/adif.ts` (`formatAdifRecor
 - Empty / undefined optional fields are omitted entirely (no `<NAME:0>` zero-length tags).
 - Operator-station MY_* fields populated from the `station` Svelte store at submit time; see "State / persistence layers" for the reactivity-boundary justification.
 
-The shape is settled. When the daemon `POST /v1/qso` endpoint lands, it accepts this exact body — no SPA-side change needed.
+The shape is settled. The daemon `POST /v1/qso` endpoint already accepts this exact body — no SPA-side change needed.
+
+**Daemon endpoint contract** (full surface in [api.md §7a](api.md)):
+
+- Wire: `POST /v1/qso?logbook=<id>` with `Content-Type: application/x-adif` (or empty), body is one ADIF record.
+- Single-record contract — a multi-record body is rejected with `400 too_many_records`. Bulk imports use a separate `cmd/importer` path.
+- Optional `?force=<bool>` to bypass dedupe (contest mode). Parses via `strconv.ParseBool`; unknown values return `400 invalid_query_param`.
+- Success: `201 {"status":"stored","id":<int>}` or `200 {"status":"duplicate","id":<int>}` for an idempotent re-submit.
+
+**Error responses the SPA must surface** (see [api.md §7a "Shipped error codes"](api.md) for the full table):
+
+- `400 missing_required_field` / `invalid_field_value` / `invalid_adif` / `invalid_time_range` — operator-fixable; show inline validation message at the offending field where possible, otherwise a generic toast.
+- `400 too_many_records` — programmer error in the SPA itself; shouldn't happen if `formatAdifRecord` is the only producer.
+- `400 invalid_query_param` — same; SPA should never construct unparseable `?force` values.
+- `400 callsign_mismatch` — STATION_CALLSIGN doesn't match the chosen logbook. Surface as a toast pointing to the logbook switcher.
+- `404 logbook_not_found` — operator deleted the logbook between page-load and submit, or the SPA hardcoded `?logbook=1` doesn't match. Surface as a toast and re-fetch logbook list.
+- `409 duplicate_key` — only on PATCH (edit collision), not on POST. POST collisions resolve to `200 duplicate` instead.
+- `413 payload_too_large` — operator-fixable but unusual; surface generically.
+- `429 rate_limited` — token bucket exhausted. Per ADR 0008, this is exactly the toast-system case: brief warning, allow retry.
+- `503 server_busy` — concurrent-cap exceeded. Same shape as `429`.
+- `5xx db_error` / `submit_failed` / `internal_error` — generic wire message ("database operation failed", etc.); the daemon logs the full chain. SPA shows a toast and offers retry.
+
+The daemon writes generic `message` text on 5xx (it never leaks raw `err.Error()` to the wire — H1 fix from the 2026-05-02 review). Clients should switch on `code`, not match on `message`.
 
 ## State / persistence layers (settled 2026-05-02)
 

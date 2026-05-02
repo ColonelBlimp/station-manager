@@ -210,8 +210,16 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		// advertised as idempotent (see api.md §4.2; the text-file
 		// fallback relies on this). Translate the constraint violation
 		// into a duplicate outcome.
+		//
+		// Refetch uses a fresh context detached from the request: by
+		// this point the duplicate row is committed in sqlite, so the
+		// lookup is bounded and pure-read. Inheriting `ctx` would let
+		// a request-deadline expiry turn a known-duplicate into a
+		// generic 500 — the M2 finding from the 2026-05-02 review.
 		if isUniqueConstraintError(err) && !force {
-			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
+			refetchCtx, refetchCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(refetchCtx, logbookID, dedupeKey)
+			refetchCancel()
 			if ferr == nil {
 				return SubmitResult{Status: "duplicate", ID: existing.ID}, nil
 			}

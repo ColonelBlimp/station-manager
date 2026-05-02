@@ -111,7 +111,11 @@ The daemon's submit path exists to service an invariant that is strictly bigger 
 
 **Contest edge case override:** a `?force=true` query parameter on the submit endpoint tells the daemon to skip the dedupe check and store the new QSO unconditionally. This covers rare cases (e.g., some contest rules allow working the same station on the same band/mode more than once within a minute). Normal operators never use it; contest operators who need it opt in explicitly.
 
+**`force` is parsed via Go's `strconv.ParseBool`,** so any of `1`/`0`/`t`/`f`/`T`/`F`/`true`/`false`/`True`/`False`/`TRUE`/`FALSE` is accepted. Unknown values (e.g. `yes`, `y`, `force`) return `400 invalid_query_param` rather than silently falling through to dedupe-checked behaviour — a contest-mode operator's typo should fail loud, not lose the dup. Empty/missing keeps the dedupe-checked default.
+
 **Idempotent submit is the foundation of the deferred reconciliation feature.** Because the submit endpoint is idempotent by default, the logging app can safely replay text-file-buffered QSOs after a daemon outage without worrying about creating duplicates. See `docs/session-handoff.md` → "Deferred features to investigate."
+
+**Race-resolution refetch.** When two submits with identical dedupe-key inputs both pass the pre-transaction check and one wins the race at the UNIQUE-index commit, the loser's `qsoservice.Submit` translates the constraint violation into the same `"duplicate"` outcome the pre-check would have produced — so clients always see the same shape regardless of timing. The follow-up "find the winning row's id" lookup runs on a fresh 2-second context detached from the request context: the duplicate row is committed in sqlite by then, so the lookup is bounded and pure-read, and a request-deadline expiry can't turn a known-duplicate into a generic 500.
 
 ### 4.3 Async forward lifecycle
 
@@ -203,7 +207,7 @@ Payloads are intentionally minimal. Clients re-query via `GET /v1/qso/:id` (etc.
 - The hub keeps **no backlog**. A client that connects (or reconnects) receives events from that moment forward only. `Last-Event-ID` is not honored — event IDs are monotonic within a daemon lifetime and useful for dedup, but are not a resume cursor.
 - Baseline state on connect is reconciled via ordinary GET endpoints. Client contract: **open the SSE stream first, then fetch current state via `GET /v1/qsos` (etc.)**. Any event for an ID the fetch already returned is a no-op; any event for an ID newer than the fetch is applied. Following this order avoids the race where an event fires between the fetch and the subscribe.
 - **Slow-reader policy:** each subscriber has a 64-event in-memory buffer. When Publish finds the buffer full, the daemon disconnects that subscriber (closes its channel). The handler returns, the HTTP connection ends, the client sees EOF and reconnects + resyncs. Silent event-dropping was rejected: a client that can't tell it's out of sync is worse than a clean disconnect.
-- **Daemon shutdown:** `server.Shutdown` cancels in-flight SSE handlers via request context; remaining subscribers see their channels closed by `hub.Close()`.
+- **Daemon shutdown:** `server.Shutdown` does *not* cancel `r.Context()` on a still-open SSE connection — that only fires when the underlying connection actually closes. The daemon therefore exposes a separate `Server.shutdownCh` channel, closed at the start of `Shutdown()` before `httpServer.Shutdown(ctx)` runs, which the SSE handler watches alongside its event channel. An idle subscriber sees the close, returns, and the HTTP connection ends promptly — without this the graceful-shutdown timeout would always be paid in full when any SSE client was attached. Final cleanup (`hub.Close()`) runs after publishers (forwarder workers, in-flight HTTP handlers) have stopped.
 
 ### 4.6 Error response envelope
 
@@ -458,6 +462,38 @@ project's v1 / v2 distinction.
 
 All 4xx/5xx responses use the `ErrorResponse` shape from
 Section 4.6: `{"code":"<machine>", "message":"<human>", "op":"<package.Func>"}`.
+
+**Shipped error codes (audited 2026-05-02).** The `code` field is the
+client's machine-readable signal; clients switch on this. The
+`message` field is for human display and may change wording; clients
+must not match on it. New codes appear here as endpoints land — do
+not preempt the vocabulary.
+
+| HTTP | Code | When it fires |
+|---|---|---|
+| 400 | `invalid_id` | Path id missing or not a positive integer. |
+| 400 | `invalid_query_param` | Query param fails parse (e.g. `?force=yes` doesn't pass `strconv.ParseBool`). |
+| 400 | `missing_required_param` | Required query param absent (e.g. submit without `?logbook=`). |
+| 400 | `missing_required_field` | ADIF body missing CALL / BAND / MODE / QSO_DATE / TIME_ON / FREQ / STATION_CALLSIGN, or JSON body missing required field on logbook create. |
+| 400 | `invalid_field_value` | Field value malformed (unrecognised band/mode, bad date/time, callsign too short or no digits, etc.). |
+| 400 | `invalid_adif` | ADIF body fails to parse. |
+| 400 | `invalid_time_range` | TIME_ON > TIME_OFF without QSO_DATE_OFF on the following day. |
+| 400 | `invalid_json` | JSON body is malformed or empty where required. |
+| 400 | `too_many_records` | POST `/v1/qso` body parses to more than one QSO record (single-record endpoint; bulk imports use `cmd/importer`). |
+| 400 | `callsign_mismatch` | Submit's STATION_CALLSIGN doesn't match the target logbook's callsign. |
+| 404 | `not_found` | Path id resolves to no row (or a soft-deleted row, except on `/v1/qso/{id}/uploads` which surfaces delete-action upload status). |
+| 404 | `logbook_not_found` | Submit's `?logbook=<id>` doesn't exist. |
+| 409 | `duplicate_key` | QSO edit (PATCH) would collide with another row's dedupe key in the same logbook. Submit's same-key collisions resolve to `200 {"status":"duplicate"}` rather than 409 — they're idempotent by design. |
+| 409 | `duplicate_name` | Logbook create or rename collides with an existing logbook name. |
+| 409 | `has_qsos` | Logbook delete blocked because the logbook still owns QSO rows. |
+| 413 | `payload_too_large` | Request body exceeds `Server.MaxBodyBytes` (default 1 MiB). |
+| 415 | `unsupported_media_type` | Submit's Content-Type is set and is neither `application/x-adif` nor `text/plain`. Empty Content-Type is accepted as ADIF (curl-without-headers operator path). |
+| 429 | `rate_limited` | `POST /v1/qso` token-bucket exhausted (`Server.SubmitRatePerSec` / `SubmitRateBurst`). |
+| 500 | `db_error` | Unspecified sqlite error during a fetch. Wire message is generic ("database operation failed"); the actual error is logged with full op context. |
+| 500 | `submit_failed` | Submit pipeline error not classified by `qsoservice.SubmitError`. Wire message generic; logs carry the wrap chain. |
+| 500 | `update_failed` | Update pipeline error not classified by `qsoservice.SubmitError`. Same generic-wire / structured-log treatment. |
+| 500 | `internal_error` | Panic recovered by `recoverPanic` middleware. Generic message; full stack in logs. |
+| 503 | `server_busy` | `Server.MaxConcurrentRequests` cap exceeded for non-SSE traffic, or `Server.MaxEventSubscribers` cap exceeded on `/v1/events`. |
 
 ### Field units & canonical forms
 

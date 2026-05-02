@@ -63,9 +63,47 @@ A `general-purpose` agent did a thorough pass over `cmd/smd`, `internal/api`, `i
 
 - **H1 — 5xx paths leaked `err.Error()` to clients without logging.** Every `s.writeError(w, 500, "db_error", err.Error(), op)` site (15 across `handler_qso.go`, `handler_logbook.go`, `handler_uploads.go`, `handler_contact_history.go`, `handler_qso_list.go`, `handler_contest_dupe.go`) returned raw internal text and never logged. Added `s.writeServerError(w, op, err, code, clientMsg)` in `internal/api/response.go` which logs the wrapped error via `s.logger.ErrorWith().Err(err).Str("op", ...)` and emits a deliberately generic envelope. All 15 sites converted. Same defence-in-depth as `recoverPanic`'s generic-message rule.
 
+- **H2 — `qsoservice.Update` didn't translate UNIQUE-constraint races into `duplicate_key`** the way Submit did (`submit.go:202`). A concurrent submit+edit producing the same dedupe key after the pre-check returned "no collision" would bubble as a generic 500. Fixed by mirroring the constraint-violation race-resolution branch from Submit: if `UpdateQsoTx` fails and `isUniqueConstraintError(err)` returns true, return `&SubmitError{Code: "duplicate_key"}` so the handler maps to 409 the same way the pre-check path does (`update.go:194-216`). Pre-check test `TestUpdateQso_DuplicateKeyConflict` covers the handler→409 mapping; the constraint-violation path is genuinely race-only and not deterministically testable without fault injection.
+
+- **H4 — `force=true` strict-equality parsing.** `force := r.URL.Query().Get("force") == "true"` silently accepted `?force=1`/`True`/`TRUE` as **false**, exactly the typo failure mode that loses contest QSOs. Fixed by switching to `strconv.ParseBool` with explicit rejection of unrecognised values (400 `invalid_query_param`). Empty/missing param keeps the dedupe-checked default. New tests `TestSubmitQso_ForceParamAcceptsBoolVariants` (true/True/TRUE/1 all bypass dedupe) and `TestSubmitQso_ForceParamRejectsGarbage` (yes/y/force/tru/2 all 400).
+
 **Findings deferred (medium / low priority):**
 
-The review surfaced ~10 additional findings (M1–M9 + low-priority items) that are deliberately left for follow-up: `cmd/smd/main.go` should use `errors.Op` instead of `fmt.Errorf` (M1); `qsoservice.Update` should translate UNIQUE-constraint races into `duplicate_key` like Submit does (M2 — symmetric with H2 but harder to hit); `handler_logbook.go` uses `strings.Contains(err.Error(), "UNIQUE constraint")` for 409-detection (M3); QRZ `io.ReadAll(resp.Body)` is unbounded (M6). None of these block SPA wiring. They're listed in the review report and will land as a cleanup pass.
+The review surfaced ~10 additional findings that are deliberately left for follow-up: `cmd/smd/main.go` should use `errors.Op` instead of `fmt.Errorf` (M1); Submit's race-resolution refetch has no retry on ctx-deadline (M2); `handler_logbook.go` uses `strings.Contains(err.Error(), "UNIQUE constraint")` for 409-detection — should be promoted to a typed sentinel (M3); QRZ `io.ReadAll(resp.Body)` is unbounded (M6). None of these block SPA wiring. They're listed in the review report and will land as a cleanup pass.
+
+**Medium-priority cleanup pass landed (mid-session):**
+
+- **M1 — `errors.Op` in `cmd/smd/main.go`.** All 15 `fmt.Errorf` sites converted to `errors.New(op).WithErr(err).WithMsg(...)` / `WithMsgf(...)`. New op constants: `smd.run`, `smd.spawnForwarderWorkers`. `fmt.Fprintf` to stderr in pre-logger / post-logger panic paths preserved (those genuinely need stderr).
+- **M2 — Submit race-resolution refetch detached from request ctx.** `submit.go:213` now uses `context.WithTimeout(context.Background(), 2*time.Second)` for the post-constraint-violation `FetchQsoByDedupeKey` lookup. The duplicate row is committed in sqlite by this point, so the lookup is bounded and pure-read; inheriting the request ctx would let a deadline expiry turn a known-duplicate into a generic 500.
+- **M3 — typed sentinels replace string-match in `handler_logbook.go`.** New sentinels `errors.ErrDuplicateName` and `errors.ErrLogbookHasQsos` in `internal/errors/sentinels.go`. `internal/database/sqlite/api_context.go` translates UNIQUE-constraint violations on logbook insert/update into `ErrDuplicateName`, and the "has QSOs" guard returns `ErrLogbookHasQsos` directly. `handler_logbook.go` now uses `stderr.Is(err, sentinel)` for the 409 mapping. New `isUniqueConstraintError` helper in `internal/database/sqlite/internal.go` (mirrors the one in `internal/qsoservice/submit.go`; promoting one canonical copy is deferred until a third caller appears).
+- **M4 — pre-tx dedupe collision check race window documented as backstopped by H2.** `update.go:169-175` keeps the pre-check as a fast-path optimization; the comment now explicitly names H2's UNIQUE-constraint translation as the safety net for the cross-handler race that opens between the pre-check and the actual UPDATE. No behavioural change; the comment closes the review's concern.
+- **M5 — multi-record ADIF body rejected.** `handleSubmitQso` now returns `400 too_many_records` if the body parses to more than one QSO record. POST `/v1/qso` is single-record by contract; bulk imports use `cmd/importer`. Bounds the parser-allocation cost flagged in M5.
+- **M6 — QRZ response body capped.** `internal/forwarding/qrz/qrz.go:216` now reads via `io.LimitReader(resp.Body, maxResponseBytes)` with `maxResponseBytes = 1 << 20` (1 MiB — generous; real QRZ responses are well under 1 KiB). Bounds the worker's memory if a misbehaving upstream returns a giant body.
+- **M7 — structured warnings for unreachable forwarder paths.** Three "should be unreachable" sites in `internal/forwarding/worker/worker.go` (`unknown action`, `unreachable action`, `unknown outcome`) now emit `w.logger.WarnWith()...Msg(...)` alongside the existing `markFailed` `last_error` text. Operators see the unreachable-becoming-reachable signal in logs without grepping `last_error` strings.
+- **M8 — dead commented-out code removed** from `internal/database/sqlite/service.go:154,162` (the obsolete `// return errors.New(op).WithMsg(errMsgNotOpen)` lines).
+- **Low-priority — empty Content-Type acceptance documented** in `handleSubmitQso` (`api.md §3` already says it's accepted; comment now names the curl-without-headers operator scenario).
+
+**Findings genuinely left as-is for now:**
+
+- M9 — additional test coverage for race-only paths (race-only by construction; would need fault injection to test deterministically).
+- Test gap on PATCH/DELETE-twice (covered as part of C1 fix).
+- `safego` recursive self-call obscuring stack traces — already addressed as part of C2 (`runWithRespawn` is now a loop).
+- `internal/iocdi` uses `fmt.Errorf` throughout — accepted carry-forward per the original review.
+- `internal/forwarding/stub/stub.go` `fmt.Errorf` — stub-only test code, acceptable.
+- `internal/database/sqlite/api.go` context-less wrappers — v1 carry-forward, dead daemon-side; cleanup deferred until v1 logging app fully retires.
+
+**Documentation pass after the medium-priority fixes:**
+
+A second drift audit ran after the medium fixes landed; eight findings, all addressed:
+
+- **`docs/v2-design/api.md` §4.2** — `?force` query-param parsing now spells out the `strconv.ParseBool` accepted set and `400 invalid_query_param` rejection of unknown values.
+- **`docs/v2-design/api.md` §4.2** — added a "Race-resolution refetch" paragraph documenting the M2 detached-context (2-second `context.WithTimeout(context.Background(), …)`) for the post-constraint-violation duplicate lookup.
+- **`docs/v2-design/api.md` §4.5** — "Daemon shutdown" bullet rewritten: `r.Context()` doesn't fire on `Shutdown`; `Server.shutdownCh` is the explicit signal the SSE handler watches; final `hub.Close()` after publishers stop.
+- **`docs/v2-design/api.md` §7a** — added a "Shipped error codes" table listing every wire `code` value the daemon emits today (4xx, 5xx, middleware), with HTTP status and trigger condition for each. Replaces the previous "see §4.6 envelope" hand-wave.
+- **`docs/v2-design/forwarding.md` §"Re-queue semantics"** — added implementation note pointing to the `InsertQsoUploadTx` UPSERT and explaining `upstream_id` preservation across re-arm (load-bearing for QRZ delete-after-insert).
+- **`docs/v2-design/forwarding-implementation.md` §4.8** — `safego` shape block now shows both `Go` and `GoTracked` with their respective lifecycle contracts; `cmd/smd/main.go` example uses `GoTracked`. Loop-based respawn called out.
+- **`docs/v2-design/forwarding-implementation.md` §9.10** — `uq_qso_forwarder_action` constraint section rewritten: bare-INSERT was the C1 bug; UPSERT is today's behaviour; `ON CONFLICT DO NOTHING` is rejected with rationale.
+- **`docs/v2-design/frontend-spa.md` (ADIF wire shape section)** — daemon endpoint contract spelled out (single-record, `?force` parsing, response codes); error-codes-the-SPA-must-surface list added with mapping suggestions for each, plus the H1 generic-message rule.
 
 **Status: daemon is now ready for SPA wiring.** All tests pass under `-race`, the four recommended fixes are landed, and the wire contract documented in `api.md §7a` is unchanged. Next session: replace `console.log(adif)` in `frontend/logging/src/lib/ui/panels/QsoPanel.svelte`'s `submitQso()` with `fetch('/v1/qso?logbook=<id>', ...)` per the carried Step 1.
 

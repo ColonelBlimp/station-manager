@@ -436,12 +436,35 @@ and stays type-safe via generated column constants. See §9 on
 ### 4.8 Panic recovery via `safego`
 
 `internal/safego/safego.go`. Wraps `go` with a recovered panic handler
-and optional respawn:
+and optional respawn. Two entry points:
 
 ```go
-safego.Go(ctx, fc.Name, panicHandler, func() {
+// Untracked: short-lived tasks where the caller doesn't need to
+// wait on the goroutine at shutdown. Loop-based respawn (no
+// recursive self-call), so panics report a single creation site
+// in stack traces.
+func Go(ctx context.Context, name string, onPanic PanicHandler, fn func(), respawn bool)
+
+// Tracked: long-lived workers whose lifecycle the caller must
+// drain at shutdown. wg.Add(1) at the call site; wg.Done() runs
+// once when the goroutine permanently exits (normal return,
+// panic with respawn=false, or ctx cancel during respawn
+// cooldown). The respawn loop stays inside the same goroutine,
+// so the WaitGroup count never drops to zero between attempts —
+// closing the underflow window the original "Add inside the
+// closure" pattern in cmd/smd/main.go suffered from.
+func GoTracked(ctx context.Context, name string, onPanic PanicHandler, fn func(), respawn bool, wg *sync.WaitGroup)
+```
+
+`cmd/smd/main.go`'s forwarder spawn site uses `GoTracked` so the
+shutdown drain (`workerWG.Wait()`) reflects "any worker still
+running or in cooldown" rather than "fn currently between
+attempts":
+
+```go
+safego.GoTracked(ctx, fc.Name, panicHandler, func() {
     workerRef.Run(ctx)
-}, true)
+}, true, wg)
 ```
 
 Design choices that matter:
@@ -450,6 +473,11 @@ Design choices that matter:
   no dependency on `internal/logging`. (The original plan had `safego`
   in `internal/utils`, but `logging` already imports `utils` — hence
   the cycle-avoidance.)
+- **Loop-based respawn.** Both `Go` and `GoTracked` share an internal
+  `runWithRespawn` body that loops fn-with-recovery until either fn
+  returns normally, fn panics with `respawn=false`, or ctx is
+  cancelled during the cooldown. No recursive self-call (the
+  earlier shape that obscured stack traces).
 - **Respawn cooldown is ctx-aware.** The sleep between a panic and a
   respawn attempt is interrupted by `ctx.Done()`, so shutdown doesn't
   get held up by a deterministic panic loop.
@@ -483,7 +511,7 @@ Design choices that matter:
    - `forwarding.Build(fc)` per remaining entry.
    - Resolve retry config (operator override or fallback).
    - `worker.New(cfg, fwd, dbSvc, loggerSvc)` — validates config.
-   - `safego.Go(workerCtx, fc.Name, panicHandler, w.Run, true)`.
+   - `safego.GoTracked(workerCtx, fc.Name, panicHandler, w.Run, true, wg)`.
 6. `server.ListenAndServe(...)` in its own goroutine.
 7. Wait for SIGINT/SIGTERM or a server error.
 
@@ -898,14 +926,27 @@ startup orphan sweep is the safety net for the case where the whole
 daemon crashed instead of just the goroutine. Either way, rows get
 reclaimed on the next tick.
 
-### 9.10 `uq_qso_forwarder_action` UNIQUE constraint
+### 9.10 `uq_qso_forwarder_action` UNIQUE constraint + UPSERT re-arm
 
-Prevents double-queuing the same (QSO, forwarder, action) triple. The
-happy path never triggers it — ingest sites only enqueue once per
-action. If a future code path does, it shows up as an
-`InsertQsoUploadTx` error, which aborts the tx. Don't paper over it
-with `ON CONFLICT DO NOTHING`; the constraint failure is telling you
-the caller has a bug.
+Pins the "at most one row per (QSO, forwarder, action) triple" rule
+into the schema. Today's `InsertQsoUploadTx` does **not** treat a
+constraint hit as an error — instead it issues
+`INSERT … ON CONFLICT (qso_id, forwarder_name, action) DO UPDATE SET …`
+which re-arms the existing row to status='pending' with cleared
+retry state (`attempts=0`, `last_error=NULL`, `last_attempt_at=NULL`,
+`next_attempt_at=now`). `upstream_id` and `forwarder_type` are
+preserved / overwritten (excluded values), respectively. See
+[forwarding.md §"Re-queue semantics under the UNIQUE constraint"]
+(forwarding.md) for the operator-facing rationale.
+
+Why UPSERT, not bare INSERT: the bare-INSERT shape was the C1 finding
+from the 2026-05-02 review. A second PATCH or DELETE on the same
+QSO triggered the constraint and bubbled as 500 to the client. The
+UPSERT closes that bug while keeping the constraint as the single
+source of truth for "no duplicate enqueues." Don't replace it with
+`ON CONFLICT DO NOTHING`: that would silently drop the operator's
+re-arm intent (a second PATCH wouldn't refresh the row), which is
+worse than the original bug.
 
 ### 9.11 Claim query is race-free by construction
 

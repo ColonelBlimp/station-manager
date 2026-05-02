@@ -1,11 +1,10 @@
 package api
 
 import (
+	stderr "errors"
 	"net/http"
 	"strconv"
 	"strings"
-
-	stderr "errors"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -82,7 +81,7 @@ func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if stderr.Is(err, errors.ErrDuplicateName) {
 			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
@@ -134,7 +133,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err = s.db.UpdateLogbookWithContext(r.Context(), existing); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if stderr.Is(err, errors.ErrDuplicateName) {
 			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
@@ -159,7 +158,7 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
 		}
-		if strings.Contains(err.Error(), "contains QSOs") {
+		if stderr.Is(err, errors.ErrLogbookHasQsos) {
 			s.writeError(w, http.StatusConflict, "has_qsos", "cannot delete a logbook that contains QSOs", op)
 			return
 		}

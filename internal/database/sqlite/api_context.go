@@ -905,6 +905,13 @@ func (s *Service) InsertLogbookWithContext(ctx context.Context, logbook types.Lo
 		return 0, errors.New(op).WithErr(err)
 	}
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
+		// UNIQUE on logbook.name fires when the operator tries to
+		// create a logbook whose name already exists. Promote to a
+		// typed sentinel so the handler maps it to 409 via errors.Is
+		// rather than string-matching the driver's message.
+		if isUniqueConstraintError(err) {
+			return 0, errors.New(op).WithErr(errors.ErrDuplicateName)
+		}
 		return 0, errors.New(op).WithErr(err).WithMsg("Inserting new logbook failed.")
 	}
 
@@ -952,7 +959,7 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 		return errors.New(op).WithErr(err).WithMsg("checking logbook QSO count")
 	}
 	if hasQsos {
-		return errors.New(op).WithMsg("cannot delete a logbook that contains QSOs")
+		return errors.New(op).WithErr(errors.ErrLogbookHasQsos)
 	}
 
 	if _, err = logbook.Delete(ctx, h, false); err != nil {
@@ -993,6 +1000,12 @@ func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Lo
 	model.Description = null.StringFrom(logbook.Description)
 
 	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
+		// Same UNIQUE-on-name path as InsertLogbookWithContext: if the
+		// rename collides with an existing logbook, surface a typed
+		// sentinel so the handler can return 409 via errors.Is.
+		if isUniqueConstraintError(err) {
+			return errors.New(op).WithErr(errors.ErrDuplicateName)
+		}
 		return errors.New(op).WithErr(err).WithMsg("failed to update logbook")
 	}
 

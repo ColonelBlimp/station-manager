@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	stderr "errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
+	"github.com/mattn/go-sqlite3"
 )
 
 func (s *Service) getOpenHandle(op errors.Op) (*sql.DB, error) {
@@ -193,6 +195,32 @@ func (s *Service) missingCoreTables() ([]string, error) {
 }
 
 // isTransientPingError returns true if the error message indicates a transient condition worth a short retry.
+// isUniqueConstraintError reports whether err is a sqlite UNIQUE-index
+// violation, including through wrapping. Used by Insert/Update paths
+// that need to translate constraint failures into typed sentinels
+// (e.g. errors.ErrDuplicateName) so handlers can map them to 409
+// without string-matching the driver's message.
+//
+// Belt and braces: try the typed sqlite3.Error first (the correct
+// detection), then fall back to matching the driver's stable
+// "UNIQUE constraint failed" message. The fallback exists because
+// sqlboiler wraps errors with `friendsofgo/errors.Wrap`, and if a
+// future version ever drops Unwrap interop the typed path would
+// silently stop matching. Mirrors the same helper in
+// internal/qsoservice/submit.go; promoting one canonical copy here
+// is deferred until a third caller appears.
+func isUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sqliteErr sqlite3.Error
+	if stderr.As(err, &sqliteErr) {
+		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
+			sqliteErr.Code == sqlite3.ErrConstraint
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
 func isTransientPingError(err error) bool {
 	if err == nil {
 		return false

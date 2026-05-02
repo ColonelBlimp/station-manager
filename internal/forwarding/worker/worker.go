@@ -174,7 +174,13 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 	if err != nil {
 		// Row has an action string we don't recognise. Terminal — retrying
 		// won't help (the row is bad data on disk). Should be unreachable:
-		// ingest only writes known action values.
+		// ingest only writes known action values. Structured warn so an
+		// operator notices if the unreachable becomes reachable.
+		w.logger.WarnWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Str("action", row.Action).
+			Msg("forwarder: row carries unknown action string")
 		w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action))
 		return
 	}
@@ -281,7 +287,13 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 
 	// action.Parse accepts only insert/update/delete, so an unknown act
 	// reaching the switch is unreachable in practice. Belt-and-braces:
-	// terminal so we don't loop.
+	// terminal so we don't loop. Structured warn so an operator
+	// notices if the unreachable becomes reachable.
+	w.logger.WarnWith().
+		Str("forwarder", w.cfg.Name).
+		Int64("upload_id", row.ID).
+		Str("action", act.String()).
+		Msg("forwarder: switch reached unreachable action")
 	w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act))
 	return types.Qso{}, true
 }
@@ -304,7 +316,14 @@ func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, res fo
 	default:
 		// Unknown outcome from the forwarder — treat as terminal so we
 		// don't spin on it. Forwarder authors should only return the
-		// three documented outcomes.
+		// three documented outcomes. Structured warn so a misbehaving
+		// forwarder (typically a bug in a new plugin) surfaces in logs
+		// rather than just in last_error text.
+		w.logger.WarnWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Str("outcome", string(res.Outcome)).
+			Msg("forwarder: returned unrecognised Outcome")
 		w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)))
 	}
 }

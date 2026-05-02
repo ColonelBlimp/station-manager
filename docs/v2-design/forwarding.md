@@ -598,6 +598,25 @@ doesn't need to complete in isolation — its only job was to push
 the current state, and there's still a worker whose only job is to
 push the current state.
 
+**Implementation: UPSERT in `InsertQsoUploadTx`.** As of the 2026-05-02
+review (C1 finding), `InsertQsoUploadTx` issues
+`INSERT … ON CONFLICT (qso_id, forwarder_name, action) DO UPDATE SET …`
+rather than a plain `INSERT`. This re-arms the existing row with the
+above reset-fields, atomically inside the caller's transaction. The
+prior shape — bare `INSERT` — surfaced the UNIQUE-constraint as a
+500 on the second PATCH or DELETE of the same QSO; the UPSERT closes
+that bug and pins the re-queue rule into the storage layer. Re-arm
+clears `last_error` / `last_attempt_at` / `attempts` and resets
+`next_attempt_at` to `strftime('%s','now')` so the worker re-scans
+the row on the next tick.
+
+**`upstream_id` is preserved across re-arm,** deliberately.
+`FetchInsertUpstreamIDWithContext` reads it back on the QRZ
+delete-after-insert flow (the upstream's delete endpoint identifies
+records by its own id, not the daemon's QSO id). Clearing it would
+lose history a re-armed insert row needs. The worker's own
+success path overwrites it on the next successful attempt anyway.
+
 ### No snapshot on the row
 
 The row does **not** carry a copy of the QSO body at forward-queue

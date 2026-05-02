@@ -166,6 +166,17 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 			merged.QsoDetails.QsoDate,
 			merged.QsoDetails.TimeOn,
 		)
+		// Pre-tx collision check is a fast-path optimization: it avoids
+		// the BeginTx + UpdateQsoTx + rollback round-trip in the common
+		// case where the operator's edit obviously collides with an
+		// existing row. The cross-handler race window (a concurrent
+		// Submit/Update commits between this check and the UPDATE
+		// below) is intentionally left open here — the H2 backstop
+		// in the UpdateQsoTx error branch translates the
+		// UNIQUE-constraint violation into the same duplicate_key
+		// outcome, so the race resolves correctly without holding a
+		// pre-tx read lock that sqlite would have to serialize against
+		// every concurrent writer.
 		collision, err := s.DB.FetchQsoByDedupeKeyWithContext(ctx, merged.LogbookID, newKey)
 		if err == nil && collision.ID != merged.ID {
 			return types.Qso{}, &SubmitError{
@@ -193,6 +204,21 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 
 	if err = s.DB.UpdateQsoTx(ctx, tx, merged); err != nil {
 		_ = tx.Rollback()
+
+		// Race window symmetric with Submit (submit.go:202–224): the
+		// pre-tx FetchQsoByDedupeKey at line 169 above can return
+		// ErrNotFound while a concurrent Submit/Update is committing
+		// the same dedupe key, then this UPDATE hits the UNIQUE index
+		// on (logbook_id, dedupe_key) WHERE deleted_at IS NULL. From
+		// the client's point of view this is a duplicate-key conflict,
+		// not a daemon error — translate it so the handler maps to 409
+		// the same way the pre-check path does.
+		if isUniqueConstraintError(err) {
+			return types.Qso{}, &SubmitError{
+				Code:    "duplicate_key",
+				Message: "edit would collide with another QSO in this logbook",
+			}
+		}
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to update QSO")
 	}
 

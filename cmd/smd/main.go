@@ -16,6 +16,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/api"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"    // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
@@ -69,6 +70,8 @@ func main() {
 // calls peppered through startup — left open handles when startup
 // failed midway (see review L4).
 func run() error {
+	const op errors.Op = "smd.run"
+
 	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
 	flag.Parse()
 
@@ -102,19 +105,19 @@ func run() error {
 	hub := events.NewHub()
 
 	if err = container.RegisterInstance(config.ServiceName, cfgSvc); err != nil {
-		return fmt.Errorf("register config service: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("register config service")
 	}
 	if err = container.RegisterInstance(events.ServiceName, hub); err != nil {
-		return fmt.Errorf("register event hub: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("register event hub")
 	}
 	if err = container.Register(logging.ServiceName, reflect.TypeFor[*logging.Service]()); err != nil {
-		return fmt.Errorf("register logging service: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("register logging service")
 	}
 	if err = container.Register(types.SqliteServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
-		return fmt.Errorf("register sqlite service: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("register sqlite service")
 	}
 	if err = container.Register(qsoservice.ServiceName, reflect.TypeFor[*qsoservice.Service]()); err != nil {
-		return fmt.Errorf("register qso service: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("register qso service")
 	}
 
 	// The logging service's WorkingDir string field is resolved via LiteralProvider.
@@ -127,13 +130,13 @@ func run() error {
 
 	// Build triggers Initialize() on all beans in dependency order.
 	if err = container.Build(); err != nil {
-		return fmt.Errorf("build container: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("build container")
 	}
 
 	// ---- Resolve services ----
 	loggerSvc, err := iocdi.ResolveAs[*logging.Service](container, logging.ServiceName)
 	if err != nil {
-		return fmt.Errorf("resolve logging service: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("resolve logging service")
 	}
 
 	// Register logger cleanup first (defer-LIFO means it runs last, after
@@ -147,17 +150,17 @@ func run() error {
 
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
 	if err != nil {
-		return fmt.Errorf("resolve sqlite service: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("resolve sqlite service")
 	}
 
 	qsoSvc, err := iocdi.ResolveAs[*qsoservice.Service](container, qsoservice.ServiceName)
 	if err != nil {
-		return fmt.Errorf("resolve qso service: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
 	}
 
 	// ---- Open database and run migrations ----
 	if err = dbSvc.Open(); err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("open database")
 	}
 
 	// Registered AFTER Open succeeds, so that we never double-close or close a
@@ -169,7 +172,7 @@ func run() error {
 	}()
 
 	if err = dbSvc.Migrate(); err != nil {
-		return fmt.Errorf("run migrations: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("run migrations")
 	}
 
 	loggerSvc.InfoWith().Msg("database open and migrated")
@@ -182,7 +185,7 @@ func run() error {
 	n, err := dbSvc.ResetOrphanedUploadsWithContext(sweepCtx)
 	sweepCancel()
 	if err != nil {
-		return fmt.Errorf("reset orphaned upload rows: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("reset orphaned upload rows")
 	}
 	if n > 0 {
 		loggerSvc.InfoWith().Int64("reset", n).Msg("forwarder: orphaned in_progress rows reset to pending")
@@ -202,7 +205,7 @@ func run() error {
 	var workerWG sync.WaitGroup
 
 	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, loggerSvc, hub); err != nil {
-		return fmt.Errorf("spawn forwarder workers: %w", err)
+		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
 	// ---- Start HTTP server ----
@@ -301,6 +304,8 @@ func spawnForwarderWorkers(
 	loggerSvc *logging.Service,
 	hub *events.Hub,
 ) error {
+	const op errors.Op = "smd.spawnForwarderWorkers"
+
 	panicHandler := func(name string, pv any, stack []byte) {
 		loggerSvc.ErrorWith().
 			Str("goroutine", name).
@@ -317,7 +322,7 @@ func spawnForwarderWorkers(
 
 		fwd, err := forwarding.Build(fc)
 		if err != nil {
-			return fmt.Errorf("build forwarder %q: %w", fc.Name, err)
+			return errors.New(op).WithErr(err).WithMsgf("build forwarder %q", fc.Name)
 		}
 
 		var retry types.RetryConfig
@@ -326,7 +331,7 @@ func spawnForwarderWorkers(
 		} else {
 			def, ok := forwarding.DefaultRetryFor(fc.Type)
 			if !ok {
-				return fmt.Errorf(
+				return errors.New(op).WithMsgf(
 					"forwarder %q (type %q) has no retry config and no default registered — "+
 						"either add a `retry` block to config.forwarders or have the forwarder package call "+
 						"forwarding.RegisterDefaultRetry in init()", fc.Name, fc.Type,
@@ -342,7 +347,7 @@ func spawnForwarderWorkers(
 			Retry: retry,
 		}, fwd, dbSvc, loggerSvc, hub)
 		if err != nil {
-			return fmt.Errorf("construct worker for %q: %w", fc.Name, err)
+			return errors.New(op).WithErr(err).WithMsgf("construct worker for %q", fc.Name)
 		}
 
 		// Capture loop var for the closure — Go 1.22+ makes this safe

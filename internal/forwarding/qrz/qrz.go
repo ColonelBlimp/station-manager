@@ -65,6 +65,12 @@ const DefaultEndpoint = "https://logbook.qrz.com/api"
 // hold up the worker indefinitely".
 const DefaultHTTPTimeout = 30 * time.Second
 
+// maxResponseBytes caps the QRZ response body. Real QRZ responses are
+// tiny (a handful of fields, well under 1 KiB), so this is generous.
+// The cap exists to bound the worker's memory if a misbehaving upstream
+// (DNS hijack, transparent proxy) returns a giant body.
+const maxResponseBytes = 1 << 20 // 1 MiB
+
 // UserAgent is the User-Agent header this forwarder sends. QRZ's
 // developer guide requires a UA of ≤128 chars; the default embeds
 // the daemon version once cmd/smd overrides this var at startup
@@ -213,7 +219,7 @@ func (f *Forwarder) Submit(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		// Partial body read is a transient transport fault.
 		return forwarding.Result{

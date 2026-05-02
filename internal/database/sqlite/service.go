@@ -151,7 +151,6 @@ func (s *Service) Close() error {
 	// Quick pre-check
 	if !s.isOpen.Load() {
 		return nil // Idempotent
-		// return errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	s.mu.Lock()
@@ -160,7 +159,6 @@ func (s *Service) Close() error {
 	// Re-check under lock - TOCTOU
 	if !s.isOpen.Load() {
 		return nil // Idempotent
-		// return errors.New(op).WithMsg(errMsgNotOpen)
 	}
 
 	if err := s.handle.Close(); err != nil {
