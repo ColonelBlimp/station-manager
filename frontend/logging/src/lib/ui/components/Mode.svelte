@@ -3,7 +3,8 @@
         id: string;
         label: string;
         value: string;
-        list: {key: string, value: string}[];
+        list: string[];
+        disabled?: boolean;
         widthClass?: string;
     }
 
@@ -12,20 +13,21 @@
         label,
         value = $bindable(''),
         list,
+        disabled = false,
         widthClass = 'w-28',
     }: Props = $props();
-
 </script>
 
 <div class="{widthClass} input-row">
     <label for={id} class="input-label">{label}</label>
     <div class="grid grid-cols-1 mt-1">
         <select
-            bind:value={value}
+            bind:value
             {id}
-            class="col-start-1 row-start-1 w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600">
-            {#each list as mode (mode.key)}
-                <option value={mode.value} selected={value === mode.value}>{mode.value}</option>
+            {disabled}
+            class="col-start-1 row-start-1 w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 disabled:bg-gray-100 disabled:cursor-not-allowed">
+            {#each list as mode (mode)}
+                <option value={mode}>{mode}</option>
             {/each}
         </select>
         <svg class="pointer-events-none col-start-1 row-start-1 mr-2 size-5 self-center justify-self-end text-gray-500 sm:size-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" data-slot="icon">

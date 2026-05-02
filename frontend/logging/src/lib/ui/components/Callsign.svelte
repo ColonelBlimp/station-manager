@@ -35,7 +35,7 @@
     };
 
     const handleKeydown = (e: KeyboardEvent): void => {
-        if (e.key !== 'Tab') return;
+        if (e.key !== 'Tab' || e.shiftKey) return;
         const trimmed = value.trim();
         if (trimmed === '' || !isValidCallsign(trimmed)) return;
         onenrich?.(trimmed.toUpperCase());

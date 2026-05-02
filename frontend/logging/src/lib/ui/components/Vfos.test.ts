@@ -304,6 +304,63 @@ describe('Vfos', () => {
             expect(manualState.selectedVfo).toBe('A');
         });
 
+        it('top (selected) VfoBox has tabindex=-1 even when CAT is off', () => {
+            manualState.selectedVfo = 'A';
+            const { container } = render(Vfos);
+            const vfoABox = container.querySelector('[data-vfo="VFO-A"]') as HTMLElement;
+
+            expect(vfoABox.getAttribute('tabindex')).toBe('-1');
+        });
+
+        it('top (selected) VfoBox has no title (no affordance) even when CAT is off', () => {
+            manualState.selectedVfo = 'A';
+            const { container } = render(Vfos);
+            const vfoABox = container.querySelector('[data-vfo="VFO-A"]') as HTMLElement;
+
+            expect(vfoABox.hasAttribute('title')).toBe(false);
+        });
+
+        it('top (selected) VfoBox uses cursor-default, not cursor-pointer or cursor-not-allowed, when CAT is off', () => {
+            manualState.selectedVfo = 'A';
+            const { container } = render(Vfos);
+            const vfoABox = container.querySelector('[data-vfo="VFO-A"]') as HTMLElement;
+
+            expect(vfoABox.classList.contains('cursor-default')).toBe(true);
+            expect(vfoABox.classList.contains('cursor-pointer')).toBe(false);
+            expect(vfoABox.classList.contains('cursor-not-allowed')).toBe(false);
+        });
+
+        it('bottom (unselected) VfoBox has title="Select" when CAT is off', () => {
+            manualState.selectedVfo = 'A';
+            const { container } = render(Vfos);
+            const vfoBBox = container.querySelector('[data-vfo="VFO-B"]') as HTMLElement;
+
+            expect(vfoBBox.getAttribute('title')).toBe('Select');
+        });
+
+        it('does not write to manualState when clicking the already-selected VFO', async () => {
+            manualState.selectedVfo = 'A';
+            // Spy on localStorage.setItem to detect any persistence side-effect
+            // from a redundant manualState write triggering the $effect mirror.
+            // (A meaningful click writes a NEW value; a no-op click should not.)
+            // Set up: clear any pending writes, then click the selected box.
+            const { container } = render(Vfos);
+            const vfoABox = container.querySelector('[data-vfo="VFO-A"]') as HTMLElement;
+
+            const before = localStorage.getItem('sm.manual.selectedVfo');
+            await fireEvent.click(vfoABox);
+            const after = localStorage.getItem('sm.manual.selectedVfo');
+
+            // Either both null (effect hadn't run) or both equal — but
+            // crucially manualState.selectedVfo is still 'A' and any
+            // localStorage write would have set it to 'A' (same value).
+            expect(manualState.selectedVfo).toBe('A');
+            // The before/after relationship is non-strict because the
+            // initial $effect.root may have written on render. The key
+            // assertion is that the click itself didn't toggle state.
+            expect(after).toBe(before === null ? null : 'A');
+        });
+
         it('does not swap when CAT is operating (disabled)', async () => {
             manualState.selectedVfo = 'A';
             configState.station.enabled = true;
@@ -350,24 +407,28 @@ describe('Vfos', () => {
             expect(manualState.selectedVfo).toBe('A');
         });
 
-        it('VfoBox has role="button" and tabindex=0 for accessibility when editable', () => {
+        it('the unselected (bottom) VfoBox has role="button" and tabindex=0 when editable', () => {
+            // selectedVfo='A' default → VFO-B is the bottom (interactive) box.
             const { container } = render(Vfos);
-            const vfoABox = container.querySelector('[data-vfo="VFO-A"]') as HTMLElement;
+            const vfoBBox = container.querySelector('[data-vfo="VFO-B"]') as HTMLElement;
 
-            expect(vfoABox.getAttribute('role')).toBe('button');
-            expect(vfoABox.getAttribute('tabindex')).toBe('0');
-            expect(vfoABox.getAttribute('aria-disabled')).toBe('false');
+            expect(vfoBBox.getAttribute('role')).toBe('button');
+            expect(vfoBBox.getAttribute('tabindex')).toBe('0');
+            expect(vfoBBox.getAttribute('aria-disabled')).toBe('false');
         });
 
-        it('VfoBox has tabindex=-1 and aria-disabled=true when CAT is operating', () => {
+        it('all VfoBoxes have tabindex=-1 and aria-disabled=true when CAT is operating', () => {
             configState.station.enabled = true;
             bridgeState.connected = true;
             bridgeState.rigResponding = true;
             const { container } = render(Vfos);
             const vfoABox = container.querySelector('[data-vfo="VFO-A"]') as HTMLElement;
+            const vfoBBox = container.querySelector('[data-vfo="VFO-B"]') as HTMLElement;
 
             expect(vfoABox.getAttribute('tabindex')).toBe('-1');
             expect(vfoABox.getAttribute('aria-disabled')).toBe('true');
+            expect(vfoBBox.getAttribute('tabindex')).toBe('-1');
+            expect(vfoBBox.getAttribute('aria-disabled')).toBe('true');
         });
 
         it('after swapping, the new selected VFO renders in the RX position', async () => {

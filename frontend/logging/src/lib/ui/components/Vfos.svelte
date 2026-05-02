@@ -67,12 +67,14 @@
 {#snippet box(vfo: 'A' | 'B', action: 'RX' | 'TX')}
     {@const frequency = vfo === 'A' ? displayedState.vfoA : displayedState.vfoB}
     {@const label = `VFO-${vfo}`}
+    {@const isSelected = vfo === displayedState.selectedVfo}
     <div class="flex w-full">
         <VfoBox
             {label}
             isSplit={displayedState.split}
             {action}
             disabled={!displayedState.editable}
+            {isSelected}
             onSelect={() => manualState.selectedVfo = vfo}
         />
         <VfoInput
