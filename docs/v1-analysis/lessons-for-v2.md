@@ -303,19 +303,18 @@ This section is more speculative than the rest of the document — it's a first 
 - `internal/adapters` (the generic reflection framework) — RECLASSIFIED as "relocate with server-side DB cluster," not delete. See `bug-inventory.md` → "internal/adapters generic framework."
 - `internal/database/postgres` and top-level `internal/database/` — relocate to future server repo, not delete.
 
-**New in v2:**
-- The daemon binary itself (`smd` or similar). Owns SQLite, HTTP+JSON/ADIF server over Unix socket, SSE event stream.
-- An internal `qsoservice` package (or similar) that's the daemon's service layer — the thing HTTP handlers are thin wrappers over. Contains the domain logic currently in `apps/logging/backend/facade`.
-- An internal `smclient` package providing a Go HTTP client for the daemon API, consumed by all three Wails apps.
-- The serial/CAT bridge as its own binary with rigctld-compat TCP frontend and SM-native NDJSON frontend.
-- A `wsjtx-bridge` client binary that translates WSJT-X UDP → daemon HTTP (separate from the serial/CAT bridge; they run alongside each other).
-- Redesigned forwarder configuration model supporting multi-destination fan-out.
-- The proper upload queue API exposed to clients (list pending, list failed, retry, dismiss).
-- Whatever new API surface is needed for the logbook-management concerns that v1 handled in-app.
+**New in v2 (status as of 2026-05-02):**
+- ✅ The daemon binary itself (`cmd/smd`). Owns SQLite, HTTP+JSON/ADIF server over Unix socket OR TCP, SSE event stream. Shipped milestone 1 / 1b / 1c.
+- ✅ Internal `qsoservice` package — the daemon's service layer that HTTP handlers are thin wrappers over. Replaces v1's `apps/logging/backend/facade`. Shipped milestone 1.
+- ✅ Redesigned forwarder configuration model supporting multi-destination fan-out (`internal/forwarding/`). Shipped milestone 1c.
+- ✅ Proper upload-queue API exposed to clients (`GET /v1/qso/{id}/uploads` + SSE `forward.*` events). Shipped milestone 1c.
+- ✅ Logbook-management API surface (`GET/POST/PATCH/DELETE /v1/logbook`). Shipped milestone 1b.
+- 🚧 `frontend/logging/` — Svelte 5 SPA, embedded into the daemon. Replaces the original "smclient + three Wails apps" plan per ADR 0001 (2026-04-30). The SPA talks directly to the daemon from the browser via `fetch()` / `EventSource`, so a Go HTTP client (`smclient`) is no longer needed and was never created.
+- ⏳ `internal/bridge` package per ADR 0013 — daemon subsystem providing rig SSE, rigctld-compat TCP, AUTO-mode CAT, PTT arbitration. Replaces the originally-planned standalone bridge binary; default deployment is single-binary. Split-host shape (`cmd/bridge` as a separate binary) is opt-in.
+- ⏳ A `wsjtx-bridge` client binary that translates WSJT-X UDP → daemon HTTP (separate from the serial/CAT bridge; they run alongside each other). Milestone 3.
 
-**Changed substantially in v2:**
-- `apps/logging`, `apps/logbook`, `apps/config` all become thin clients that call `smclient` over HTTP instead of embedding the service layer. Wails binding stays; everything behind the binding moves out.
-- The facade pattern in each app still exists, but it's a client-side adapter between Wails events/calls and `smclient` HTTP calls, not a service layer in its own right.
+**Changed substantially in v2 (revised per ADR 0001, 2026-04-30):**
+- The original "thin Wails clients + `smclient` HTTP + facade pattern" plan was replaced by a single-page browser SPA. The SPA *is* the thin client; there's no Wails binding layer to adapt for. Validation, draft state, and presentation live in the SPA; the daemon owns persistence, orchestration, and shared state. See `docs/decisions/0004-daemon-vs-spa-feature-split.md` and the `project_sm_daemon_vs_spa_split` memory.
 
 **Undecided until v2 design starts in earnest:**
 - ORM/generator choice (sqlboiler / Bob / sqlc / hand-rolled)

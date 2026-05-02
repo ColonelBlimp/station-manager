@@ -18,6 +18,7 @@ package safego
 import (
 	"context"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -43,10 +44,14 @@ func init() {
 // Go runs fn in a new goroutine with panic recovery.
 //
 // If fn panics, onPanic is invoked with the recovered value and a
-// stack trace; if respawn is true, Go schedules another attempt after
-// respawnCooldown. Respawns are cancelled if ctx is Done before the
-// cooldown elapses — shutdown signals propagate into the respawn
-// loop, not just into fn itself.
+// stack trace; if respawn is true, Go re-invokes fn after
+// respawnCooldown in the same goroutine. Respawns are cancelled if
+// ctx is Done before the cooldown elapses — shutdown signals
+// propagate into the respawn loop, not just into fn itself.
+//
+// Loop-based respawn (rather than recursive self-call) keeps the
+// stack short and makes panics easier to read in logs: every
+// goroutine spawned by Go has a single creation site.
 //
 // fn should be restart-safe when respawn=true — a panicking fn that
 // holds state in local variables will start fresh on each respawn.
@@ -57,29 +62,63 @@ func init() {
 // reported but not automatically retried (e.g. a boot-time task).
 // Use respawn=true for long-lived workers whose absence silently
 // breaks a feature.
+//
+// For workers whose lifecycle the caller needs to wait on at
+// shutdown, use GoTracked instead — Go does no WaitGroup management
+// and a respawn after a panic will outlive any Add/Done bracketing
+// done at the call site.
 func Go(ctx context.Context, name string, onPanic PanicHandler, fn func(), respawn bool) {
+	go runWithRespawn(ctx, name, onPanic, fn, respawn)
+}
+
+// GoTracked is Go with explicit shutdown accounting. wg.Add(1) is
+// called synchronously at the call site; wg.Done() is called once
+// when the goroutine permanently exits (normal return, panic with
+// respawn=false, or ctx cancellation during a respawn cooldown).
+//
+// This closes the underflow window the original "wg.Add inside the
+// closure" pattern in cmd/smd/main.go suffered from: the
+// WaitGroup count never drops to zero between a panic and its
+// respawn, because the goroutine never actually ends — only fn
+// loops. wg.Wait() therefore reflects "is any worker still running
+// or about to respawn," not "is fn currently between attempts."
+func GoTracked(ctx context.Context, name string, onPanic PanicHandler, fn func(), respawn bool, wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
-		defer func() {
-			r := recover()
-			if r == nil {
-				return
-			}
-			if onPanic != nil {
-				onPanic(name, r, debug.Stack())
-			}
-			if !respawn {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Duration(respawnCooldown.Load())):
-			}
-			if ctx.Err() != nil {
-				return
-			}
-			Go(ctx, name, onPanic, fn, respawn)
-		}()
-		fn()
+		defer wg.Done()
+		runWithRespawn(ctx, name, onPanic, fn, respawn)
 	}()
+}
+
+// runWithRespawn is the shared body of Go and GoTracked. Loops
+// fn-with-recovery until either fn returns normally, fn panics with
+// respawn=false, or ctx is cancelled during the cooldown.
+func runWithRespawn(ctx context.Context, name string, onPanic PanicHandler, fn func(), respawn bool) {
+	for {
+		panicked := false
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					return
+				}
+				panicked = true
+				if onPanic != nil {
+					onPanic(name, r, debug.Stack())
+				}
+			}()
+			fn()
+		}()
+		if !panicked || !respawn {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Duration(respawnCooldown.Load())):
+		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
 }

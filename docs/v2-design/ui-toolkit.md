@@ -1,6 +1,8 @@
-# v2 design — UI toolkit choice (reopened)
+# v2 design — UI toolkit choice (resolved)
 
-**Status:** the 2026-04-21 Gio decision is **under reconsideration as of 2026-04-30**. No code change yet. The `cmd/logging` Gio frame stands; this document captures the alternatives and the reasoning so the decision can be revisited or finalised next session.
+**Status:** **Resolved 2026-04-30 in [ADR 0001](../decisions/0001-ui-toolkit-browser-spa.md): Option C (browser SPA, Svelte 5 + Vite, embedded into the daemon).** Scaffold landed and verified end-to-end the same day. SPA development is ongoing in `frontend/logging/`; see [frontend-spa.md](frontend-spa.md) for the SPA shape, embed wiring, and build pipeline. This document is preserved as the analysis record that led to the decision; the option-comparison and rationale below are unchanged.
+
+The progression: Wails (v1, never built in v2) → Gio (decided 2026-04-21, spike landed in `cmd/giospike/`, parked) → Svelte 5 SPA (decided 2026-04-30 per ADR 0001).
 
 ## The concern
 
@@ -98,4 +100,5 @@ The Gio code in `cmd/logging/` is small (~30 lines per layout cell) and the cons
 - [topology.md](topology.md) — daemon/bridge/client peer model that the UI choice plugs into
 - [cat-performance.md](cat-performance.md) — why the toolkit isn't a perf-driving factor
 - `docs/v1-analysis/design-decisions-log.md` — original 2026-04-21 Gio decision
-- Memory: `project_sm_ui_toolkit` — captures the 2026-04-21 Gio choice (needs a follow-up entry recording the 2026-04-30 pivot to Svelte 5 SPA)
+- Memory: `project_sm_ui_toolkit` — captures the 2026-04-30 Svelte 5 SPA decision (with the 2026-04-21 Gio choice and 2026-04-30 pivot recorded)
+- ADR: [0001-ui-toolkit-browser-spa](../decisions/0001-ui-toolkit-browser-spa.md) — the canonical decision record

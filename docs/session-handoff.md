@@ -24,7 +24,83 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-02, session 28 — SPA-side QSO logging path landed end-to-end via console.log; ADIF wire shape settled with MY_* operator-station fields; QSO timer refactored to paired-ticking model; SessionTimer with sessionStorage persistence; Station store with three-callsigns-aware naming; design tokens (spacing + colour) complete; tab-order indexing wired; 268 tests pass)
+## Current state (as of 2026-05-02, session 29 — daemon audit: existing v2 milestone-1 daemon (`cmd/smd`) is fully shipped and serving the wire contract the SPA targets; api.md §7a / milestones.md / handoff updated to reflect what's actually landed; no code changes this session)
+
+### Session 29 work (audit & capture: what landed in the daemon)
+
+**Operator brief at session start:** "Let's attack the daemon and get some QSOs logged." Initial audit revealed the daemon's `POST /v1/qso` endpoint (and most of milestones 1, 1b, 1c) had already shipped — back when the daemon itself was the first slice of the v2 rewrite — but the v2-design docs had drifted. The session pivoted to closing that capture gap before any new daemon code lands.
+
+**Clarification mid-session:** v1 was a Wails app with no daemon. The daemon was the very first work of the v2 rewrite (session-8 cluster). The `/v1/` URL prefix is the **API** version, not the **project** version. **And the v2 milestone-1 restructure already happened.** The current `main` IS structure.md's milestone-1 target layout: Wails `apps/` gone, `go.work` gone, daemon + new internal packages exist, `internal/forwarding/` reshaped from v1's hardcoded-QRZ to multi-destination `Forwarder` interface + worker + registry. Carry-forward packages from v1 (`types`, `adif`, `errors`, `iocdi`, `enums`, `config`, `logging`, `utils`) kept their package paths but were code-reviewed and corrected; new packages (`api`, `qsoservice`, `events`, `safego`) are fresh v2. The only remaining structural addition planned is `internal/bridge` per ADR 0013 (a new package, not a reshape).
+
+**CLAUDE.md updated.** It previously said "main is still at the v1.0.0 layout; the restructure commit … has not yet landed" — that was wrong and was repeated in early drafts of this session before the audit ran. The "Repository structure" section is now rewritten to say main IS the milestone-1 layout, with the UI-toolkit progression (Wails → Gio → SPA) laid out explicitly and ADR 0013 named as the only outstanding *structural* addition.
+
+**Documentation updates:**
+
+- **`docs/v2-design/api.md` §7a** — section retitled from "(as of session 9, 2026-04-17)" to "(current daemon state, audited 2026-05-02)" and given an **Origin note** explaining v1 had no daemon (the daemon is v2 milestone-1 work, the restructure already ran) and that `/v1/` is API versioning. Added landed-endpoint entries that the previous §7a was missing: `GET /v1/qso/{id}/uploads`, `GET /v1/contact-history`, `GET /v1/version`. Added three new subsections: **Transport, listener and SPA hosting**; **Load limits and middleware**; **Server-config knobs** (full table of every `Server.*` field).
+- **`docs/v2-design/api.md` §6** — added status note: the "minimal floor" for accidental-self-DoS has shipped.
+- **`docs/v2-design/api.md` §1 (Consumer enumeration)** — replaced the Wails-era `apps/logging` / `apps/logbook` / `apps/config` consumer table with the current SPA shape per ADR 0001 + ADR 0013. Original table preserved as historical record.
+- **`docs/v2-design/api.md` §3 (Config reload)** — replaced `apps/config` reference with the daemon `PUT /v1/config` shape from ADR 0001's pivot.
+- **`docs/v2-design/milestones.md`** — Milestone 1 → ✅ SHIPPED, Milestone 1b → ✅ SHIPPED, Milestone 1c → ✅ SHIPPED. Milestone 2 rewritten per ADR 0001 (browser SPA, not Wails clients); original Wails-era scope preserved as historical record.
+- **`docs/v2-design/structure.md`** — decision #2, decision #3, decision #7 banner-noted as superseded by ADR 0001. "Migration from main's current state to milestone 1" marked as COMPLETED (the restructure ran in session-8 cluster). "Target layout for milestone 2 (client apps)" replaced with current shape (frontend/logging SPA + cmd/smd + parked Gio + future internal/bridge); original Gio-era layout preserved as record. `internal/smclient` documented as never-created (not needed once SPA replaced Wails plan).
+- **`docs/v2-design/ui-toolkit.md`** — top status line updated: "Resolved 2026-04-30 in ADR 0001"; toolkit progression history laid out. ADR cross-reference added.
+- **`docs/v2-design/bridge.md` §6 "YAGNI question"** — banner-noted as Resolved 2026-05-02 by ADR 0013 (build the bridge as a daemon subsystem; default single-binary, split-host opt-in). "Decision pending" line replaced with the actual decision.
+- **`docs/v2-design/cat-serial-reuse.md`** — banner-noted that ADR 0001 (SPA, not Gio) and ADR 0013 (bridge as daemon subsystem) shifted the *consumer* of `internal/serial` and `internal/cat` from a Gio app to the daemon's bridge subsystem; carve-out questions unchanged.
+- **`docs/v2-design/forwarding.md` §5** — `next_attempt_at` column noted as shipped (with line ref into `0001_init.up.sql`); "pre-milestone-1c, schema is not yet frozen" replaced with the live-schema reference.
+- **`docs/v1-analysis/lessons-for-v2.md` "New in v2" / "Changed substantially"** — flipped status markers (✅ shipped / 🚧 in progress / ⏳ deferred). `internal/smclient` documented as never-created.
+- **`CLAUDE.md`** — opening "Repository structure" rewritten: main IS the milestone-1 layout (no pending restructure), UI-toolkit progression Wails → Gio → SPA spelled out, ADR 0013 bridge subsystem flagged as the only outstanding *structural* addition, `/v1/` URL prefix clarified as API versioning unrelated to v1/v2 project distinction. "Three Wails apps" example updated to "three client apps (now Svelte SPAs per ADR 0001)".
+- **Memory `MEMORY.md` index lines** — `project_sm_restructure` description updated to reflect that the restructure has run; `project_sm_spa_config_layering` description updated to the five-tier model.
+- **Memory `feedback_keep_docs_current.md`** — new memory file added: when the operator says "document," they mean every doc/ADR/memory/CLAUDE.md that touches the changed area; full audit pass, not just the obvious one. Triggered by the CLAUDE.md staleness incident this session.
+
+**Daemon code review (mid-session, before SPA wiring):**
+
+A `general-purpose` agent did a thorough pass over `cmd/smd`, `internal/api`, `internal/qsoservice`, `internal/forwarding`, `internal/database/sqlite`, `internal/events`, `internal/safego`, `internal/iocdi`, `internal/config`. Verdict: yellow — core invariants honored (atomic QSO+upload-queue, dedupe race-resolution, narrow daemon scope), but four issues needed fixing before the SPA wires against it:
+
+- **C1 — `qso_upload` UNIQUE collision on second PATCH/DELETE.** The `UNIQUE (qso_id, forwarder_name, action)` constraint had no partial-status predicate, so a second PATCH triggered a constraint violation (raw 500). Fixed by switching `InsertQsoUploadTx` (`internal/database/sqlite/api_context.go:1684`) from `Insert` to a raw-SQL UPSERT with `ON CONFLICT DO UPDATE` that re-arms the row to status='pending' with cleared retry state. `upstream_id` is preserved across re-arm — `FetchInsertUpstreamIDWithContext` reads it back for the QRZ delete-after-insert flow. The previously-stale `TestFetchInsertUpstreamID_UniqueConstraintPreventsDuplicates` test was rewritten as `TestInsertQsoUploadTx_ReArmOnConflict` to pin the new semantics. New API tests `TestUpdate_TwicePatchesRearm` and `TestDelete_TwiceIsRejectedAt404` cover the second-PATCH and second-DELETE paths.
+
+- **C2 — WaitGroup underflow during forwarder panic-respawn.** `cmd/smd/main.go`'s `wg.Add(1)` outside the closure + `wg.Add(1)` inside the closure on the second invocation pattern had a 5-second underflow window during which `wg.Wait()` could unblock prematurely. Fixed by adding `safego.GoTracked(ctx, name, onPanic, fn, respawn, wg)` which owns the WG lifecycle: `Add(1)` at the call site, `Done()` once when the goroutine permanently exits. Respawns now stay inside the same goroutine (loop-based, not recursive self-call), so the WG count never drops to zero between attempts. `cmd/smd/main.go:347-372` simplified accordingly. New tests in `internal/safego/safego_test.go`: `TestGoTracked_WaitGroup_NoUnderflowDuringRespawn`, `TestGoTracked_WaitGroup_DonePromptlyOnNormalReturn`, `TestGoTracked_WaitGroup_DoneOnCtxCancelDuringCooldown`. The `Go` (untracked) form is preserved with the same loop-based semantics for short-lived callers.
+
+- **H3 — SSE shutdown sequence wedged for the full graceful timeout.** `r.Context().Done()` doesn't fire on `http.Server.Shutdown` — only on connection close — so an idle SSE subscriber kept Shutdown blocked until ctx expired and the listener force-closed. Fixed by adding `Server.shutdownCh chan struct{}`, closed by `Shutdown()` before `httpServer.Shutdown(ctx)`. The SSE handler's select now also watches `<-s.shutdownCh` for prompt exit. Test: `TestHandleEvents_ShutdownChClosureEndsStream`.
+
+- **H1 — 5xx paths leaked `err.Error()` to clients without logging.** Every `s.writeError(w, 500, "db_error", err.Error(), op)` site (15 across `handler_qso.go`, `handler_logbook.go`, `handler_uploads.go`, `handler_contact_history.go`, `handler_qso_list.go`, `handler_contest_dupe.go`) returned raw internal text and never logged. Added `s.writeServerError(w, op, err, code, clientMsg)` in `internal/api/response.go` which logs the wrapped error via `s.logger.ErrorWith().Err(err).Str("op", ...)` and emits a deliberately generic envelope. All 15 sites converted. Same defence-in-depth as `recoverPanic`'s generic-message rule.
+
+**Findings deferred (medium / low priority):**
+
+The review surfaced ~10 additional findings (M1–M9 + low-priority items) that are deliberately left for follow-up: `cmd/smd/main.go` should use `errors.Op` instead of `fmt.Errorf` (M1); `qsoservice.Update` should translate UNIQUE-constraint races into `duplicate_key` like Submit does (M2 — symmetric with H2 but harder to hit); `handler_logbook.go` uses `strings.Contains(err.Error(), "UNIQUE constraint")` for 409-detection (M3); QRZ `io.ReadAll(resp.Body)` is unbounded (M6). None of these block SPA wiring. They're listed in the review report and will land as a cleanup pass.
+
+**Status: daemon is now ready for SPA wiring.** All tests pass under `-race`, the four recommended fixes are landed, and the wire contract documented in `api.md §7a` is unchanged. Next session: replace `console.log(adif)` in `frontend/logging/src/lib/ui/panels/QsoPanel.svelte`'s `submitQso()` with `fetch('/v1/qso?logbook=<id>', ...)` per the carried Step 1.
+
+**What did NOT change:**
+
+- No daemon code touched; no SPA code touched; no config schema changes; no migrations.
+- The "Next steps" carried in from session 28 are still valid; what changed is that step 1 is "wire the SPA to the existing endpoint" rather than "build the endpoint."
+- Memory files unchanged (the project memory's overview already says daemon work has shipped).
+
+**Wire contract the SPA can target today (summary, full detail in api.md §7a):**
+
+- `POST /v1/qso?logbook=<id>[&force=true]` with ADIF body, `Content-Type: application/x-adif` or `text/plain`. Returns `{status:"stored",id}` (201) or `{status:"duplicate",id}` (200). Errors via the standard envelope.
+- Default deployment: TCP listener on the same `host:port` as the SPA (single-origin), so the SPA fetch is just `'/v1/qso?logbook=...'` — no `daemonUrl` prefix needed when running embedded.
+- Submit rate cap is 20 QPS / 40 burst; way above any single-operator logging cadence.
+
+### Next steps (carried into session 30+)
+
+In rough order of dependency:
+
+1. **Wire SPA → daemon `POST /v1/qso`.** Replace `console.log(adif)` in `QsoPanel.submitQso()` with `fetch('/v1/qso?logbook=<id>', {method:'POST', headers:{'Content-Type':'application/x-adif'}, body: adif})`. Same-origin in the embedded-SPA deployment, so no `daemonUrl` prefix needed. Hardcode `?logbook=1` for now; add a startup `GET /v1/logbook` lookup once a logbook switcher is needed.
+2. **Submit error surfacing in the SPA.** Handle 4xx (validation, `duplicate_key`, `callsign_mismatch`) and 5xx (db down) responses. Placeholder error display until the toast system (ADR 0008) lands.
+3. **Daemon `GET/PUT /v1/config`** (Go) — currently missing. Replaces the v1 edit-the-file workflow for station/operator config; the SPA's `station` store hydrates from this on app start.
+4. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
+5. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
+6. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
+7. **CAT-handover toast** — depends on toast system per ADR 0008.
+8. **"My Station" header card** — UI display of the station store (callsign, grid, rig).
+9. **`qsoDraft` state-module lift** — promote QsoPanel local `$state` into `lib/states/qsoDraft.svelte.ts` when a second consumer appears.
+10. **Toast system** (ADR 0008).
+11. **Keyboard shortcuts** (ADR 0007 + `@svelte-put/shortcut`) — F2 lookup-only, Ctrl+\ VFO swap, Ctrl+Enter submit, ? help overlay.
+12. **Inline validation message slot (Fix 13)**.
+
+---
+
+## Session 28 archive (was: SPA-side QSO logging path landed end-to-end via console.log; ADIF wire shape settled with MY_* operator-station fields; QSO timer refactored to paired-ticking model; SessionTimer with sessionStorage persistence; Station store with three-callsigns-aware naming; design tokens (spacing + colour) complete; tab-order indexing wired; 268 tests pass)
 
 ### Session 28 work (SPA QSO submit pipeline end-to-end; new field components; QSO + session timer model; design-token palette; station store; tab order)
 

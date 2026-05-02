@@ -27,7 +27,7 @@ func (s *Server) handleGetQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -48,7 +48,7 @@ func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -70,7 +70,7 @@ func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -92,7 +92,7 @@ func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, status, se.Code, se.Message, op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "update_failed", err.Error(), op)
+		s.writeServerError(w, op, err, "update_failed", "QSO update failed")
 		return
 	}
 
@@ -180,7 +180,7 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 				"logbook does not exist", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -198,7 +198,7 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, se.Code, se.Message, op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "submit_failed", err.Error(), op)
+		s.writeServerError(w, op, err, "submit_failed", "QSO submit failed")
 		return
 	}
 

@@ -1681,6 +1681,17 @@ func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id int64) (in
 // forwarderType is the plugin identifier (e.g. "qrz"). Both are stored on the
 // row, so historical queue entries remain interpretable even after an operator
 // renames or removes the destination from config. See docs/v2-design/forwarding.md §6.
+//
+// Re-arm semantics on conflict: the qso_upload UNIQUE (qso_id, forwarder_name, action)
+// constraint says "at most one row per (QSO, destination, action-kind) ever." A second
+// PATCH or DELETE on the same QSO triggers another InsertQsoUploadTx for the same triple;
+// rather than fail with a constraint violation, this method UPSERTs — re-arming any
+// existing row to status='pending', clearing retry state, and resetting next_attempt_at
+// so the worker re-forwards the latest state. This is correct: the second operator action
+// represents a new state that needs forwarding, regardless of whether the prior action's
+// row was uploaded, failed, or still pending. Raw SQL is used here because sqlboiler's
+// Upsert helper can't express the "overwrite specific columns, leave id alone" update set
+// with a conflict target cleanly.
 func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action action.Action, forwarderName, forwarderType string) error {
 	const op errors.Op = "sqlite.Service.InsertQsoUploadTx"
 	if err := checkService(op, s); err != nil {
@@ -1699,16 +1710,26 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 		return errors.New(op).WithMsg("forwarderType is empty")
 	}
 
-	model := models.QsoUpload{
-		QsoID:         qsoId,
-		ForwarderName: forwarderName,
-		ForwarderType: forwarderType,
-		Action:        action.String(),
-		Status:        status.Pending.String(),
-	}
+	// Re-arm preserves upstream_id deliberately: FetchInsertUpstreamIDWithContext
+	// reads it back for the QRZ delete-after-insert flow, and the worker's
+	// own success path overwrites it on the next successful attempt.
+	// Clearing it here would lose history a re-armed insert (the rare
+	// force=true edge case) might want to keep.
+	const q = `
+		INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (qso_id, forwarder_name, action) DO UPDATE SET
+			forwarder_type  = excluded.forwarder_type,
+			status          = 'pending',
+			attempts        = 0,
+			next_attempt_at = strftime('%s', 'now'),
+			last_attempt_at = NULL,
+			last_error      = NULL`
 
-	if err := model.Insert(ctx, tx, boil.Infer()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("Inserting new QSO upload failed.")
+	if _, err := tx.ExecContext(ctx, q,
+		qsoId, forwarderName, forwarderType, action.String(), status.Pending.String(),
+	); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("upserting qso_upload row failed")
 	}
 
 	return nil

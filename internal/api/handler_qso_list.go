@@ -59,7 +59,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 	// surprising for clients.
 	exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), logbookID)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 	if !exists {
@@ -100,7 +100,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 		r.Context(), logbookID, afterDate, afterTime, afterID, limit,
 	)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 

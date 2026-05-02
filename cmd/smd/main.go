@@ -349,27 +349,17 @@ func spawnForwarderWorkers(
 		// without explicit shadowing, but the extra clarity is free.
 		workerRef := w
 
-		// wg.Add is called SYNCHRONOUSLY here, before safego.Go, so
-		// wg.Wait() in the caller's shutdown drain never sees a
-		// 0-counter while a worker is starting up (the -race detector
-		// correctly flags the alternative). fn's defer wg.Done()
-		// handles clean exit on the first invocation. On respawn
-		// (after a recovered panic) the closure sees isRespawn=true
-		// and re-adds for its new goroutine; the counter-underflow
-		// window between fn's Done and the respawn's Add is brief,
-		// bounded by the shutdown-wait timeout, and only matters on
-		// the panic path — consistent with the review's M2
-		// acceptance rationale.
-		wg.Add(1)
-		var isRespawn bool
-		safego.Go(ctx, fc.Name, panicHandler, func() {
-			if isRespawn {
-				wg.Add(1)
-			}
-			isRespawn = true
-			defer wg.Done()
+		// GoTracked owns the WaitGroup lifecycle: Add(1) at the call
+		// site, Done() once when the goroutine permanently exits.
+		// Respawns after a recovered panic stay inside the same
+		// goroutine (loop-based, not recursive), so the WG count
+		// never drops to zero between attempts. wg.Wait() in the
+		// shutdown drain therefore reflects "any worker still
+		// running or in cooldown," not "fn currently between
+		// attempts."
+		safego.GoTracked(ctx, fc.Name, panicHandler, func() {
 			workerRef.Run(ctx)
-		}, true)
+		}, true, wg)
 
 		loggerSvc.InfoWith().
 			Str("forwarder", fc.Name).

@@ -16,7 +16,7 @@ func (s *Server) handleListLogbooks(w http.ResponseWriter, r *http.Request) {
 
 	logbooks, err := s.db.FetchAllLogbooksWithContext(r.Context())
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -38,7 +38,7 @@ func (s *Server) handleGetLogbook(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -86,7 +86,7 @@ func (s *Server) handleCreateLogbook(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -108,7 +108,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -138,7 +138,7 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
@@ -163,7 +163,7 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, "has_qsos", "cannot delete a logbook that contains QSOs", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 

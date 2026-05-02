@@ -33,7 +33,7 @@
 
 ### 2. Single Go module at milestone 1; `go.work` returns at milestone 2
 
-> **Superseded 2026-04-21 by decision #7 (Gio UI toolkit).** With Gio replacing Wails, there is no `go.work` in milestone 2 either — a single `go.mod` at the repo root covers every binary in v2. The rationale below still explains *why* module boundaries were only going to come back for Wails-tooling reasons; that reason no longer exists.
+> **Superseded 2026-04-21 by decision #7 (Gio), then again 2026-04-30 by ADR 0001 (browser SPA).** Neither Gio nor SPA brings `go.work` back — a single `go.mod` at the repo root covers every Go binary in v2 through every milestone. The SPA is embedded as a Go `//go:embed` asset; it has its own npm/Vite toolchain in `frontend/logging/` but is not a Go module. The rationale below still explains *why* module boundaries were only going to come back for Wails-tooling reasons; that reason no longer exists.
 
 
 **Decision:** Milestone 1 of v2 uses a **single `go.mod`** at the repo root. Everything under `cmd/` and `internal/` lives in this one module. `go build ./...` just works; there is no `go.work` file.
@@ -53,7 +53,7 @@ When the first Wails thin client is reintroduced in milestone 2, `go.work` comes
 
 ### 3. Only Wails apps get their own modules; pure Go binaries stay in the root module
 
-> **Superseded 2026-04-21 by decision #7.** There are no Wails apps in v2. Every binary — daemon, importer, logging app, logbook app, config app, any future bridge — is a pure Go binary living in the root module, built via `go build ./cmd/<name>`. The rationale below is preserved because the underlying rule ("module boundaries earn their keep via independent build tooling or dependency isolation; pure Go binaries have neither") is still how we decide whether a future package ever needs its own module.
+> **Superseded 2026-04-21 by decision #7 (Gio), then again 2026-04-30 by ADR 0001 (browser SPA).** There are no Wails apps in v2, no Gio apps either. The client apps are browser SPAs embedded in the daemon binary. Every Go binary — daemon, importer, future bridge — lives in the root module, built via `go build ./cmd/<name>`. The SPA brings its own npm/Vite toolchain in `frontend/logging/` (separate package.json), but that is not a Go module concern. The rationale below is preserved because the underlying rule ("module boundaries earn their keep via independent build tooling or dependency isolation; pure Go binaries have neither") is still how we decide whether a future package ever needs its own module.
 
 
 **Decision:** The only things that get their own `go.mod` files in v2 are the Wails client applications. Every pure Go binary — the daemon `smd`, `importer`, any future bridges like `sm-serial-bridge` or `wsjtx-bridge` — lives in the root module and is built via `go build ./cmd/<name>`.
@@ -121,6 +121,8 @@ Each Wails app imports from the root module via its full path (`github.com/Colon
 
 ### 7. Gio UI toolkit replaces Wails; all apps stay in the root module
 
+> **Superseded 2026-04-30 by ADR 0001 (browser SPA, Svelte 5 + Vite).** The Gio path was abandoned 9 days after this decision. The v2 client apps are now browser SPAs embedded in the daemon via `//go:embed`. `cmd/giospike/` is a parked spike; `cmd/logging/` (the Gio logging app skeleton) is parked, not deleted, until SPA feature parity is reached. The decision text below is preserved as the historical record. The current shape: `frontend/logging/` (Svelte 5 + Vite + Tailwind v4) is the active client; the daemon serves it at `GET /` when `Protocol=tcp && ServeSPA=true`. See ADR 0001 and `frontend-spa.md`.
+
 **Decision:** The v2 client apps — `logging`, `logbook`, `config`, plus any future siblings — are **pure-Go Gio applications**, not Wails web-view applications. They live under `cmd/` in the root module, alongside `cmd/smd` and `cmd/catcli`, and are built with `go build ./cmd/<name>`. The `apps/` directory originally reserved for Wails apps is **not created** in v2; it has no role.
 
 **Why:**
@@ -186,7 +188,7 @@ station-manager/
 └── go.sum
 ```
 
-**New package names (decided 2026-04-15):** `cmd/smd` (unix daemon convention, cf. `sshd`, `systemd`), `internal/qsoservice` (domain service layer — what the v1 `facade` package used to hold for logging), `internal/api` (HTTP handler layer, thin wrappers over `qsoservice`), `internal/smclient` (Go HTTP client for the daemon, consumed by the Wails thin clients starting in milestone 2).
+**New package names (decided 2026-04-15):** `cmd/smd` (unix daemon convention, cf. `sshd`, `systemd`), `internal/qsoservice` (domain service layer — what the v1 `facade` package used to hold for logging), `internal/api` (HTTP handler layer, thin wrappers over `qsoservice`). `internal/smclient` was originally planned as a Go HTTP client for the daemon (consumed by the Wails thin clients starting in milestone 2); **never created** — the milestone-2 client became a browser SPA per ADR 0001 and talks to the daemon directly from the browser, so no Go HTTP client is needed.
 
 ---
 
@@ -194,7 +196,7 @@ station-manager/
 
 Each item has a reason for not being in milestone 1. Listing them explicitly so that future sessions don't reintroduce them by accident or wonder why they aren't there.
 
-- **`cmd/logging`, `cmd/logbook`, `cmd/config`** — the three v2 client apps (Gio, per decision #7). Milestone 2+. They can't be built usefully until the daemon's HTTP API has stabilized and been exercised via `curl` and `smclient`. Building them in parallel with the daemon invites the shape of the daemon API to be unintentionally constrained by frontend needs before the domain model is settled. (The docs originally placed these under `apps/logging/` etc. because they were going to be Wails apps with their own `go.mod`; decision #7 collapses them back into `cmd/`.)
+- **`cmd/logging`, `cmd/logbook`, `cmd/config`** — the three v2 client apps (originally Gio per decision #7; **superseded 2026-04-30 by ADR 0001 — these are now browser SPAs at `frontend/logging/` etc., embedded in the daemon binary**). `cmd/logging/` exists as a parked Gio skeleton; `cmd/logbook/` and `cmd/config/` were never created as Gio apps. Milestone 2+. (The docs originally placed these under `apps/logging/` etc. because they were going to be Wails apps with their own `go.mod`; decision #7 collapsed them back into `cmd/`; ADR 0001 then moved them to `frontend/<name>/` Svelte SPAs.)
 
 - **`internal/serial`, `internal/cat`, `internal/ptt`** — rig control. These stay on the v1 branch until a v2 consumer is being built. Rig control is a *client* concern per the narrow-daemon-scope invariant (see `docs/v1-analysis/invariants.md`). The daemon does not own the rig. Carrying these packages into `internal/` before their consumer exists would clutter the v2 tree with unused code. They come back in milestone 3+ as dependencies of the `cmd/sm-serial-bridge` binary, or of a future dedicated rig-control client.
 
@@ -210,7 +212,9 @@ Each item has a reason for not being in milestone 1. Listing them explicitly so 
 
 ## Target layout for milestone 2 (client apps)
 
-Per decision #7 (Gio, not Wails), milestone 2 does **not** introduce `go.work` or an `apps/` directory. It extends the milestone-1 layout with additional `cmd/` entries — the client apps are structurally identical to the daemon.
+> **Superseded 2026-04-30 by ADR 0001 (browser SPA).** The Gio-app layout below was the milestone-2 plan under decision #7. Per ADR 0001 the client apps are now Svelte 5 SPAs in `frontend/<name>/`, embedded in the daemon binary via `//go:embed`. The current shape is captured below; the prior Gio layout is preserved as the historical record.
+
+**Current shape (as of 2026-05-02):**
 
 ```
 station-manager/
@@ -218,13 +222,61 @@ station-manager/
 ├── go.sum
 ├── cmd/
 │   ├── smd/                      # daemon
-│   ├── catcli/                   # diagnostic CLI
+│   ├── catcli/                   # diagnostic CLI for serial/CAT testing
 │   ├── importer/                 # ADIF bulk importer
-│   ├── logging/                  # NEW — Gio logging app
-│   ├── logbook/                  # NEW — Gio logbook app
-│   ├── config/                   # NEW — Gio config app
-│   └── giospike/                 # throwaway spike (deleted once cmd/logging exists)
-├── internal/                     # ALL shared library code, flat tree
+│   ├── logging/                  # parked Gio skeleton (decision #7 era);
+│   │                             # not deleted until SPA reaches feature parity
+│   ├── giospike/                 # throwaway Gio spike (decision #7 era);
+│   │                             # not deleted until SPA reaches feature parity
+│   ├── server/                   # reserved slot (future SM-Online server)
+│   └── tools/                    # reserved slot (future dev tools)
+├── frontend/
+│   └── logging/                  # ACTIVE — Svelte 5 + Vite + Tailwind v4
+│                                 # SPA, embedded into the daemon binary
+├── internal/                     # ALL shared Go library code, flat tree
+│   ├── api/                      # daemon HTTP handlers
+│   ├── qsoservice/               # domain layer
+│   ├── adif/                     # ADIF parser/writer
+│   ├── cat/                      # CAT controller (parked with cmd/logging)
+│   ├── config/                   # JSON config loader
+│   ├── database/sqlite/          # storage
+│   ├── enums/                    # band/mode/upload-status enums
+│   ├── errors/                   # tagged-error pattern
+│   ├── events/                   # SSE hub
+│   ├── forwarding/               # multi-destination forwarders + worker
+│   │   ├── qrz/
+│   │   ├── stub/
+│   │   └── worker/
+│   ├── iocdi/                    # home-grown DI
+│   ├── logging/                  # zerolog wrapper
+│   ├── safego/                   # panic-recovering goroutine spawn
+│   ├── serial/                   # serial driver (parked with cmd/logging)
+│   ├── types/                    # types.Qso etc., ADIF-aligned
+│   └── utils/                    # helpers
+└── docs/
+```
+
+`internal/smclient/` from the original milestone-2 plan was a Go HTTP client for the daemon, designed to be consumed by Wails-era backends. It was never created. The SPA talks to the daemon directly via `fetch()` / `EventSource` from the browser; no Go HTTP client is needed.
+
+**`internal/bridge/` is the only outstanding structural addition** per ADR 0013 — a daemon subsystem (rig SSE, rigctld TCP, AUTO-mode CAT, PTT arbitration). When it lands it joins the flat `internal/` tree alongside `internal/forwarding/`. `internal/serial/` and `internal/cat/` already exist (carry-forward from v1) and will be the bridge subsystem's dependencies.
+
+---
+
+### Original Gio milestone-2 layout (pre-ADR 0001, preserved as record)
+
+```
+station-manager/
+├── go.mod
+├── go.sum
+├── cmd/
+│   ├── smd/
+│   ├── catcli/
+│   ├── importer/
+│   ├── logging/                  # Gio logging app
+│   ├── logbook/                  # Gio logbook app
+│   ├── config/                   # Gio config app
+│   └── giospike/                 # throwaway spike
+├── internal/
 │   ├── api/
 │   ├── qsoservice/
 │   ├── smclient/                 # HTTP client, consumed by the Gio apps
@@ -240,6 +292,8 @@ Each Gio app imports from `internal/*` directly — no inter-module wiring, no r
 ---
 
 ## Migration from main's current state to milestone 1
+
+> **Status: COMPLETED (audited 2026-05-02).** The restructure described below ran in the session-8 cluster. Current `main` IS the milestone-1 target layout: Wails `apps/` directory removed, `go.work` removed, single `go.mod` at the repo root, daemon (`cmd/smd`) shipped, new internal packages (`internal/api`, `internal/qsoservice`, `internal/events`, `internal/safego`) created, and `internal/forwarding/` reshaped to multi-destination. The migration plan below is preserved as the historical record of *what* the restructure did. Subsequent UI-toolkit pivots (Gio 2026-04-21, then SPA 2026-04-30 per ADR 0001) shifted the client-side architecture but did not undo the milestone-1 daemon restructure.
 
 The current `main` branch (as of 2026-04-15, at commit `66e0af3`) still contains the v1 Wails apps, the v1 `go.work` with five modules, the server-side database cluster, and other code that doesn't belong in v2 milestone 1. A restructure commit reshapes main into the milestone-1 layout.
 

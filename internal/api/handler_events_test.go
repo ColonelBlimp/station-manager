@@ -44,12 +44,14 @@ func readOneSSEFrame(t *testing.T, br *bufio.Reader) (id, name, data string, ok 
 }
 
 // startEventsServer spins up an httptest.Server whose only route is
-// the events handler, backed by a fresh hub.
+// the events handler, backed by a fresh hub. shutdownCh is initialized
+// so the handler's `<-s.shutdownCh` case is selectable; tests that
+// want to drive shutdown call closeShutdownCh.
 func startEventsServer(t *testing.T) (*httptest.Server, *events.Hub) {
 	t.Helper()
 
 	hub := events.NewHub()
-	srv := &Server{hub: hub}
+	srv := &Server{hub: hub, shutdownCh: make(chan struct{})}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/events", srv.handleEvents)
@@ -60,6 +62,28 @@ func startEventsServer(t *testing.T) (*httptest.Server, *events.Hub) {
 		hub.Close()
 	})
 	return ts, hub
+}
+
+// startEventsServerWithSrv is the same as startEventsServer but also
+// returns the Server so tests can close shutdownCh directly. Used to
+// verify the H3 fix: shutdownCh closure unblocks idle SSE handlers
+// promptly, without waiting on r.Context() (which only fires on
+// connection close, not on http.Server.Shutdown).
+func startEventsServerWithSrv(t *testing.T) (*httptest.Server, *events.Hub, *Server) {
+	t.Helper()
+
+	hub := events.NewHub()
+	srv := &Server{hub: hub, shutdownCh: make(chan struct{})}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/events", srv.handleEvents)
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(func() {
+		ts.Close()
+		hub.Close()
+	})
+	return ts, hub, srv
 }
 
 // waitForSubscriberCount polls until hub.SubscriberCount() == want or
@@ -238,6 +262,30 @@ func TestHandleEvents_HubCloseEndsStream(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("stream did not end after hub.Close()")
 	}
+}
+
+// TestHandleEvents_ShutdownChClosureEndsStream covers the H3 fix:
+// closing srv.shutdownCh must unblock idle SSE handlers without
+// waiting for the underlying connection to close. Without this case
+// in the handler's select, http.Server.Shutdown would block on idle
+// SSE subscribers until ctx expired (forcing every shutdown to pay
+// the full graceful-shutdown timeout).
+func TestHandleEvents_ShutdownChClosureEndsStream(t *testing.T) {
+	ts, hub, srv := startEventsServerWithSrv(t)
+
+	resp, err := http.Get(ts.URL + "/v1/events")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	waitForSubscriberCount(t, hub, 1)
+
+	close(srv.shutdownCh)
+
+	// Handler sees shutdownCh closed, returns, deferred unsub runs,
+	// subscriber count drops to 0 promptly (no connection close required).
+	waitForSubscriberCount(t, hub, 0)
 }
 
 func TestHandleEvents_SlowReaderIsEvictedAndStreamEnds(t *testing.T) {

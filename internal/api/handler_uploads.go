@@ -48,13 +48,13 @@ func (s *Server) handleListQsoUploads(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 
 	rows, err := s.db.FetchUploadsByQsoIDWithContext(r.Context(), id)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 

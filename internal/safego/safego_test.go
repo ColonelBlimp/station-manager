@@ -159,6 +159,105 @@ func TestGo_CtxCancelled_SkipsRespawn(t *testing.T) {
 	}
 }
 
+// TestGoTracked_WaitGroup_NoUnderflowDuringRespawn covers the C2 fix:
+// a panicking worker with respawn=true must not let wg.Wait() unblock
+// during the cooldown window. Counter starts at 1; through panic,
+// cooldown, and respawn, it must stay >= 1 until the goroutine
+// permanently exits.
+func TestGoTracked_WaitGroup_NoUnderflowDuringRespawn(t *testing.T) {
+	setCooldownForTest(t, 50*time.Millisecond)
+
+	var wg sync.WaitGroup
+	var attempts atomic.Int64
+	finished := make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	GoTracked(ctx, "test", noopHandler, func() {
+		n := attempts.Add(1)
+		if n == 1 {
+			panic("first attempt")
+		}
+		// Second attempt: signal we got here, then return cleanly.
+		close(finished)
+	}, true, &wg)
+
+	// Watcher: while goroutine is alive (between panic and respawn-success),
+	// attempt to drain the wg. If wg.Wait() returns before `finished` is
+	// closed, the underflow window is open — bug.
+	waited := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waited)
+	}()
+
+	select {
+	case <-waited:
+		t.Fatal("wg.Wait returned before fn finished — underflow window open")
+	case <-finished:
+	}
+
+	// Now the goroutine has returned cleanly; wg.Done has fired; wg.Wait should
+	// unblock promptly.
+	select {
+	case <-waited:
+	case <-time.After(time.Second):
+		t.Fatal("wg.Wait did not return after fn finished cleanly")
+	}
+
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
+// TestGoTracked_WaitGroup_DonePromptlyOnNormalReturn — fn returns
+// normally (no panic), wg.Done fires immediately.
+func TestGoTracked_WaitGroup_DonePromptlyOnNormalReturn(t *testing.T) {
+	var wg sync.WaitGroup
+	GoTracked(context.Background(), "test", noopHandler, func() {
+		// no-op
+	}, true, &wg)
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wg.Wait did not return within 1s after fn's normal return")
+	}
+}
+
+// TestGoTracked_WaitGroup_DoneOnCtxCancelDuringCooldown — fn panics,
+// ctx cancels during cooldown, wg.Done fires when the goroutine
+// permanently exits.
+func TestGoTracked_WaitGroup_DoneOnCtxCancelDuringCooldown(t *testing.T) {
+	setCooldownForTest(t, 500*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	panicked := make(chan struct{})
+
+	GoTracked(ctx, "test", func(string, any, []byte) {
+		close(panicked)
+	}, func() {
+		panic("always")
+	}, true, &wg)
+
+	<-panicked
+	cancel()
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wg.Wait did not return after ctx cancel")
+	}
+}
+
 func TestGo_NilHandler_IsTolerated(t *testing.T) {
 	setCooldownForTest(t, 10*time.Millisecond)
 

@@ -129,6 +129,8 @@ Do not conflate the three.
 
 ## 6. The YAGNI question — should we build this bridge at all?
 
+> **Resolved 2026-05-02 by ADR 0013.** Build the bridge — but as a daemon subsystem (`internal/bridge`), not a separate process. Default deployment is single-binary: `cmd/smd` imports the bridge package and registers it as a subsystem when `bridge.enabled: true` in config. The split-host shape (separately-built `cmd/bridge` running on the rig host) remains supported as an opt-in for topologies where the rig PC is not the daemon host. See ADR 0013 and `topology.md`. The "deferred-with-pluggable-transport-abstraction" path below was the leaning at session end of 2026-04-20; ADR 0013 resolved the question by collapsing the bridge into the daemon, so the transport-abstraction work is no longer needed for deferral reasons (it might still appear for split-host support).
+
 Surfaced during the 2026-04-20 re-examination and **still open** as of session end.
 
 **The case for building it now:**
@@ -149,7 +151,7 @@ Surfaced during the 2026-04-20 re-examination and **still open** as of session e
 
 **User lean at session end:** leaning toward deferring, based on performance concern (§7) and "nothing currently needs this."
 
-**Decision pending.** Pick at next session.
+**Decision (2026-05-02, ADR 0013):** Build the bridge as a daemon subsystem (`internal/bridge`), not a separate process. Default single-binary; split-host opt-in. Resolves both the "nothing currently needs this" concern (the SPA needs `/v1/rig/events` SSE for live rig display) and the "should the rig PC be a separate host" concern (yes, optionally, via the split-host shape). See ADR 0013.
 
 ---
 

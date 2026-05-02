@@ -49,7 +49,7 @@ func (s *Server) handleContactHistory(w http.ResponseWriter, r *http.Request) {
 		// produce an empty result that looks identical to "never worked".
 		exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), id)
 		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+			s.writeServerError(w, op, err, "db_error", "database operation failed")
 			return
 		}
 		if !exists {
@@ -68,7 +68,7 @@ func (s *Server) handleContactHistory(w http.ResponseWriter, r *http.Request) {
 		if stderr.Is(err, errors.ErrNotFound) {
 			history = nil
 		} else {
-			s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+			s.writeServerError(w, op, err, "db_error", "database operation failed")
 			return
 		}
 	}

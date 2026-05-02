@@ -15,9 +15,31 @@
 
 ## 1. Consumer enumeration
 
-Per the "enumerate all API surfaces before designing any of them" lesson, the starting point is who actually calls the daemon. There are **four real consumers** in scope across milestones 1 through 3, plus a handful of non-consumers whose exclusion is deliberate.
+> **Updated 2026-05-02 per ADR 0001 and ADR 0013.** The original consumer table assumed three Wails-app backends (`apps/logging`, `apps/logbook`, `apps/config`) hitting the daemon over a Unix socket. Per ADR 0001, the client apps are now browser SPAs (`frontend/logging/`, future `frontend/logbook/` and `frontend/config/`) embedded in the daemon binary; per ADR 0013, the rig-control bridge is a daemon subsystem in the default deployment. The consumer concepts (logging concern, logbook concern, config concern) are unchanged; the *transport* and *binding layer* changed. The original table is preserved below for the historical record because every endpoint shape was designed against those concerns; substitute "SPA route" for "Wails app" mentally, or read the current shape that follows.
 
-### Real consumers
+**Current consumers (as of 2026-05-02):**
+
+| Consumer | Milestone | Primary workflow | SSE consumer? |
+|---|---|---|---|
+| `frontend/logging/` (Svelte SPA) | 2 | Real-time QSO entry. Embedded in daemon, served at `GET /` when `Protocol=tcp && ServeSPA=true`. Talks to the daemon directly via `fetch()` / `EventSource`. Highest latency-sensitivity. | Yes — primary. |
+| Future `frontend/logbook/` | 2+ | Logbook management, historical editing, batch QSO edit, paging. Lower latency-sensitivity. Same embed-and-serve mechanism as logging SPA; may be a separate route or a separate bundle. Not yet built. | Yes — secondary. |
+| Future `frontend/config/` | 2+ | Configuration editor. Reads/writes operator config via daemon `GET/PUT /v1/config` (replacing the v1 edit-the-file workflow). Not yet built. | Optional. |
+| `cmd/importer` | 2 | ADIF bulk import from historical logs. One-shot CLI, submits N QSOs and exits. | No. |
+| `cmd/udp-bridge` | 3 | Generic UDP-to-daemon bridge. Listens on UDP for ADIF-formatted payloads and forwards them to the daemon's submit endpoint. Not WSJT-X-specific. | No. |
+| `internal/bridge` (daemon subsystem) | 2 | Rig-control subsystem per ADR 0013. Hosts `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, PTT arbitration. In-process by default; split-host (`cmd/bridge`) is opt-in. Not a daemon-API consumer in the same sense — it's part of the same binary. | Producer. |
+
+### Non-consumers (deliberate exclusions)
+
+- **The forwarder destinations** (QRZ, future ClubLog/LoTW/eQSL) — these are *outbound* targets, not API callers. The daemon pushes to them via `internal/forwarding/<name>/`.
+- **SM-Online (future)** — this is a **forwarding destination**, not a consumer. When SM-Online becomes real, the daemon pushes QSOs outbound to it via `internal/forwarding/smonline/`. SM-Online never calls into the daemon's HTTP API.
+
+### Future speculative consumers (not designed for)
+
+- A standalone daemon dashboard or monitoring UI (considered out loud during session 5). Would consume the same SSE stream as the logging and logbook SPAs. The event stream is open for future subscribers without schema changes.
+
+---
+
+### Original consumer table (pre-ADR 0001, preserved as record)
 
 | Consumer | Milestone | Primary workflow | SSE consumer? |
 |---|---|---|---|
@@ -26,15 +48,9 @@ Per the "enumerate all API surfaces before designing any of them" lesson, the st
 | `cmd/importer` | 2 | ADIF bulk import from historical logs or other software. One-shot CLI, submits N QSOs and exits. | No. |
 | `cmd/udp-bridge` | 3 | Generic UDP-to-daemon bridge. Listens on UDP for ADIF-formatted payloads and forwards them to the daemon's submit endpoint. Not WSJT-X-specific — protocol-agnostic. | No. |
 
-### Non-consumers (deliberate exclusions)
-
-- **`apps/config`** — the configuration editor. Config is **filesystem-resident**: `apps/config` reads and writes `config.json` (or equivalent) directly via the shared `internal/config` package, using the same validation code the daemon uses on load. No daemon API is involved. See Section 3 for the reload mechanism.
-- **The serial/CAT bridge** (rig control) — an independent subsystem. Clients that need rig state talk to the bridge directly via its own frontends (rigctld-compat TCP or SM-native NDJSON over Unix socket). The daemon has no opinion on rig state; this preserves the "narrow daemon scope" invariant.
-- **SM-Online (future)** — this is a **forwarding destination**, not a consumer. When SM-Online becomes real, the daemon pushes QSOs outbound to it via `internal/forwarding/smonline/` (parallel to the future reintroduction of `internal/forwarding/qrz/`). SM-Online never calls into the daemon's HTTP API.
-
-### Future speculative consumers (not designed for)
-
-- A standalone daemon dashboard or monitoring UI (considered out loud during session 5). Would consume the same SSE stream as `apps/logging` and `apps/logbook`. The event stream is open for future subscribers without schema changes.
+Original non-consumers:
+- **`apps/config`** — was modeled as filesystem-resident, reading/writing `config.json` directly via `internal/config`. ADR 0001's SPA pivot moves config-read/write onto the daemon (`GET/PUT /v1/config`) so the operator-config can be edited from the embedded SPA without an "edit the file" workflow.
+- **The serial/CAT bridge** — was modeled as an independent subsystem reachable via its own frontends (rigctld-compat TCP or SM-native NDJSON). ADR 0013 collapsed this into the daemon as `internal/bridge`; the rigctld-compat TCP frontend remains.
 
 ---
 
@@ -66,7 +82,7 @@ Per the "enumerate all API surfaces before designing any of them" lesson, the st
 - ADIF export is not a daemon endpoint; clients that need ADIF
   serialize client-side using `internal/adif` as a library import.
 
-**Config reload:** the daemon reads its config file once at startup. Changes made by `apps/config` are not picked up until the daemon is restarted. This is acceptable for milestone 1; a future refinement (file watch, SIGHUP, or an explicit reload endpoint) will be designed when it matters. Not today.
+**Config reload:** the daemon reads its config file once at startup. Changes made externally (whether by hand-edit or by a future config SPA writing through `PUT /v1/config`, per ADR 0001's pivot from filesystem-resident config) are not picked up until the daemon is restarted. This is acceptable for milestone 1; a future refinement (file watch, SIGHUP, or an explicit reload endpoint) will be designed when it matters. Not today.
 
 ---
 
@@ -293,6 +309,8 @@ These are known concerns that were raised during session 5 and deliberately not 
 
 **Current deploy posture (2026-04-22):** local dev only, supporting logging-app development. Single-user desktop, Unix socket, filesystem permissions. None of the three hardening items above are active concerns in this posture; they are captured here so future-us doesn't forget them the moment the deploy shape changes.
 
+**Status update (2026-05-02 audit):** the "minimal floor" inside the rate-limiting bullet — global concurrent cap, per-endpoint submit rate cap, SSE subscriber cap — has **shipped**; see §7a "Load limits and middleware" for the landed shapes and config knobs. Body-size limit and panic-recovery middleware also shipped. The remaining items in this section (per-client quotas, auth-beyond-socket-perms, TLS, request-ID propagation) are still genuinely deferred per the same triggers.
+
 ---
 
 ## 7. Anti-waterfall commitment
@@ -305,12 +323,39 @@ These are known concerns that were raised during session 5 and deliberately not 
 
 ---
 
-## 7a. Landed endpoints (as of session 9, 2026-04-17)
+## 7a. Landed endpoints (current daemon state, audited 2026-05-02)
 
 This section captures the concrete shapes that actually shipped, to
 supplement the sketch in Section 5. When the sketch and this section
 disagree, **this section is authoritative**; the sketch reflects
 design intent, this reflects code.
+
+**Origin note.** The daemon described here is **v2 milestone-1 work
+that already landed.** v1 was a Wails app with no daemon process;
+the daemon (`cmd/smd`, `internal/api`, `internal/qsoservice`,
+`internal/forwarding`, `internal/events`, `internal/safego`, etc.)
+was the very first piece of the v2 rewrite, started in the session-8
+cluster once the v1 analysis was complete. The `structure.md`
+"Migration from main's current state to milestone 1" restructure
+already ran: the v1 Wails `apps/` directory is gone, `go.work` is
+gone, the daemon and its new internal packages all exist, and
+`internal/forwarding/` has been reshaped from v1's hardcoded-QRZ
+into the multi-destination `Forwarder` interface + worker +
+registry. The current `main` IS the milestone-1 target layout.
+
+Some `internal/` packages are name-stable carry-forwards from v1
+(`types`, `adif`, `errors`, `iocdi`, `enums`, `config`, `logging`,
+`utils`) — same package paths, reviewed and corrected as they were
+brought across. Others (`api`, `qsoservice`, `events`, `safego`)
+were created fresh for v2. `internal/database/sqlite/` is the v1
+package with the v2 simplified-adapters work merged in. The only
+outstanding *structural* addition is `internal/bridge` per ADR 0013,
+which is a new package to add when the bridge subsystem lands — not
+a reshape of anything that exists.
+
+The `/v1/` in the URL prefix is the **API** version (the API's first
+iteration; see §3 "URL-prefixed versioning"), unrelated to the
+project's v1 / v2 distinction.
 
 ### QSO submission
 
@@ -380,10 +425,34 @@ design intent, this reflects code.
   so an idle-but-connected client isn't force-cut every
   `Server.WriteTimeoutSec`. `ReadTimeout` is unaffected.
 
+### QSO upload status (per-destination forwarding)
+
+- `GET /v1/qso/{id}/uploads` — pull counterpart to the
+  `forward.*` SSE events. Returns
+  `{"items": types.QsoUpload[]}` with one row per
+  `(forwarder_name, action)` pair touched for this QSO. Soft-
+  deleted QSOs still report status (the delete-action upload row
+  is legitimate work and stays observable). 404 only when the
+  QSO id has never existed in any state. Empty result is
+  `{"items": []}`, not `null`.
+
+### QSO draft support
+
+- `GET /v1/contact-history?call=<callsign>` — prior QSOs with
+  the supplied callsign across all logbooks. Drives the "recent
+  contacts" panel in the logging client. Result count is capped
+  by `Server.MaxContactHistoryResults` (default 100).
+
 ### Operational
 
 - `GET /v1/healthz` — 200 if the daemon is up and sqlite is
   reachable. `{"status":"ok"}`.
+- `GET /v1/version` — diagnostic. Shape:
+  `{"daemon":"<build>","go":"<runtime>","schema":{"version":N,"dirty":bool}?}`.
+  `daemon` is the `-X main.Version=...` ldflag value (defaults
+  to `"dev"`). `schema` is omitted (not failed) if the
+  migration-version probe errors — the rest of the info still
+  responds 200.
 
 ### Error envelope
 
@@ -401,6 +470,103 @@ Section 4.6: `{"code":"<machine>", "message":"<human>", "op":"<package.Func>"}`.
 - **CALL / STATION_CALLSIGN:** uppercased at the daemon boundary.
 - **BAND:** lowercased (`"40m"`, not `"40M"`).
 - **MODE:** uppercased (`"SSB"`, `"CW"`, etc.).
+
+### Transport, listener and SPA hosting
+
+The daemon supports both transports the design always allowed for,
+and adds an in-binary SPA-hosting mode that the §1 "real consumers"
+table didn't anticipate.
+
+- **`Server.Protocol`** — `"unix"` (default) or `"tcp"`. The
+  socket path / TCP `host:port` comes from `Server.SocketPath`.
+- **Unix-socket cleanup:** stale socket files are removed before
+  bind, and removed on graceful shutdown. Bind-then-rename is
+  not used (single-binary, no rolling restart story yet).
+- **TCP mode** is what makes the embedded SPA reachable from a
+  browser. In TCP mode `Server.ServeSPA` defaults to `true`; in
+  Unix-socket mode it defaults to `false` (browsers can't reach
+  Unix sockets). The flag is explicitly settable to override
+  either default.
+- **SPA-hosting handler:** when both `Protocol == "tcp"` and
+  `ServeSPA == true`, the mux registers a `GET /` catch-all that
+  serves the embedded SPA filesystem (`frontend.LoggingFS()`,
+  produced by `frontend/logging/dist/` at build time). Path
+  resolution: real file → serve as-is; non-existent path →
+  rewrite to `/` and serve `index.html` so the SPA's client-side
+  router can dispatch. Go 1.22+ pattern routing dispatches
+  `/v1/*` first, so the catch-all is naturally bounded to "paths
+  that match nothing else."
+- **CORS:** the default deployment is single-origin (daemon
+  hosts SPA + serves API on the same `host:port`), so no CORS
+  headers are emitted. Split-host deployments (separate
+  `cmd/bridge` per ADR 0013) are an opt-in shape; the operator
+  takes the CORS hit then.
+- **Auth posture:** unchanged from §2. Unix socket = filesystem
+  permissions are the auth. TCP listener = currently no auth
+  layer; revisit per §6 trigger when non-loopback exposure
+  appears.
+
+### Load limits and middleware (the §6 "minimal floor", shipped)
+
+§6 listed three accidental-self-DoS mitigations as *recommended
+even in milestone 1*. All three landed; this section pins their
+shipped shapes.
+
+- **Concurrent-request cap.** `limitConcurrent` middleware caps
+  simultaneous non-SSE requests at `Server.MaxConcurrentRequests`
+  (default 128). Over-budget requests get
+  `503 server_busy` with the standard error envelope —
+  no queue, no wait. `/v1/events` is exempt because SSE
+  connections are long-lived by design.
+- **Submit rate limit.** `limitSubmitRate` middleware applies a
+  token bucket (`Server.SubmitRatePerSec` rate /
+  `Server.SubmitRateBurst` burst, defaults 20 / 40) only to
+  `POST /v1/qso`. Over-budget requests get `429 rate_limited`.
+  This is per-endpoint on top of the global concurrent cap; a
+  runaway logging client gets 429'd before it can starve other
+  endpoints.
+- **SSE subscriber cap.** `limitEventSubscribers` middleware
+  caps simultaneous `/v1/events` subscribers at
+  `Server.MaxEventSubscribers` (default 16). Over-budget
+  connections get `503 server_busy` and never enter the
+  long-lived SSE handler. Released when the handler returns.
+- **Panic recovery.** `recoverPanic` is the outermost wrapper
+  on the mux; per-handler panics are logged through
+  `logging.Service` (with stack, method, path) and converted to
+  a `500 internal_error` envelope. The daemon stays alive.
+- **Body-size limit.** `Server.MaxBodyBytes` (default 1 MiB)
+  caps request bodies via the body-reader helper; oversize
+  reads return `413 payload_too_large`.
+- **Order in the chain:** outermost first —
+  `limitConcurrent → recoverPanic → mux → per-route
+  (limitSubmitRate | limitEventSubscribers)`. Recovery sits
+  inside the concurrent cap so a panicked handler still
+  releases its slot via the deferred release closure.
+
+### Server-config knobs (current `Server` struct, defaults applied at load)
+
+| Field | Default | Used by |
+|---|---|---|
+| `Protocol` | `"unix"` | Listener type. |
+| `SocketPath` | (no default — required) | Unix path or `host:port`. |
+| `ReadTimeoutSec` | 15 | `http.Server.ReadTimeout`. |
+| `WriteTimeoutSec` | 15 | `http.Server.WriteTimeout` (disabled per-handler for SSE). |
+| `IdleTimeoutSec` | 60 | `http.Server.IdleTimeout`. |
+| `ShutdownTimeoutSec` | 30 | Graceful-shutdown deadline. |
+| `MaxBodyBytes` | 1 MiB | Body-size cap. |
+| `MaxConcurrentRequests` | 128 | Global cap, non-SSE. |
+| `MaxEventSubscribers` | 16 | SSE subscriber cap. |
+| `SubmitRatePerSec` | 20 | `POST /v1/qso` token-bucket rate. |
+| `SubmitRateBurst` | 40 | `POST /v1/qso` token-bucket burst. |
+| `DefaultPageLimit` | 50 | List-endpoint default `limit`. |
+| `MaxPageLimit` | 500 | List-endpoint clamp. |
+| `MaxContactHistoryResults` | 100 | `GET /v1/contact-history` clamp. |
+| `ServeSPA` | `Protocol=="tcp"` | Mounts `GET /` SPA catch-all. |
+
+All defaults are applied in `internal/config.applyDefaults` so a
+zero-value `Server` block produces a working daemon. Operators
+override individual fields in `config.json`; everything else
+falls through.
 
 ---
 

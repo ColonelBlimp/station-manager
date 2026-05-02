@@ -490,14 +490,15 @@ row transitions to `failed` regardless of the last outcome's
 classification. The operator can re-queue it manually (endpoint
 deferred — see §11).
 
-**New column: `next_attempt_at INTEGER`.** The schema already has
-`last_attempt_at`; deriving `next_attempt_at` on the fly requires
-replaying the backoff formula inside every claim query, which is
-awkward in SQL. A pre-computed `next_attempt_at` column lets the
-claim query be a simple `WHERE next_attempt_at <= ? ORDER BY
-next_attempt_at`. This adds one more column to `0001_init.up.sql`
-before any QSO data exists — we're pre-milestone-1c, the schema is
-not yet frozen.
+**Column: `next_attempt_at INTEGER`** (shipped in `0001_init.up.sql:162`).
+The schema also has `last_attempt_at`; deriving `next_attempt_at` on
+the fly would require replaying the backoff formula inside every
+claim query, which is awkward in SQL. The pre-computed
+`next_attempt_at` column lets the claim query be a simple
+`WHERE next_attempt_at <= ? ORDER BY next_attempt_at`. The partial
+index `idx_qso_upload_pending` on `(forwarder_name, next_attempt_at)
+WHERE status IN ('pending','in_progress')` is the hot path's
+supporting index.
 
 **M8 lands here.** The milestone 1b review's M8 finding (forwarder
 retry cooldown) is this section. The TODO pointer in code becomes

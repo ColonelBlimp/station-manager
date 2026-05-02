@@ -72,7 +72,7 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 	// lightweight EXISTS probe is important here.
 	exists, err := s.db.LogbookExistsByIDWithContext(r.Context(), logbookID)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 	if !exists {
@@ -85,7 +85,7 @@ func (s *Server) handleContestDupe(w http.ResponseWriter, r *http.Request) {
 		r.Context(), logbookID, callsign, band, mode,
 	)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_error", err.Error(), op)
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}
 

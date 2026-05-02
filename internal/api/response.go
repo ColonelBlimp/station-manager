@@ -35,3 +35,19 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 		Op:      op,
 	})
 }
+
+// writeServerError handles 5xx outcomes consistently: logs the underlying
+// error with full op-tagged context for the operator, then emits a
+// deliberately generic envelope to the client. Raw err.Error() is never
+// returned over the wire because internal error chains can carry SQL
+// constraint snippets, file paths, or driver text that the client has no
+// business seeing — the same defence-in-depth that recoverPanic applies
+// to panic values.
+//
+// `code` and `clientMsg` are the wire-visible classification; pass
+// stable, low-cardinality values ("db_error", "internal_error") so
+// clients can switch on them. The full err goes to the log line.
+func (s *Server) writeServerError(w http.ResponseWriter, op errors.Op, err error, code, clientMsg string) {
+	s.logger.ErrorWith().Err(err).Str("op", string(op)).Str("code", code).Msg("server error")
+	s.writeError(w, http.StatusInternalServerError, code, clientMsg, op)
+}

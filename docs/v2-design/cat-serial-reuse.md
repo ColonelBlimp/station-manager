@@ -2,6 +2,8 @@
 
 **Status:** Draft, last revised 2026-04-20. Initial draft earlier the same day captured the audit + carve-out plan; this revision adds the rig-database and operator-config decisions reached later in the session, and notes the compile-drift issues surfaced after `internal/serial` was copied to main.
 
+**Updates 2026-04-30 / 2026-05-02:** Per ADR 0001 the v2 logging client became a browser SPA, not a Gio binary; per ADR 0013 rig control will live in a daemon subsystem (`internal/bridge`), not in the client process. `internal/serial` and `internal/cat` are already in `internal/` on main (carry-forward from v1) and will be the bridge subsystem's dependencies when it's built. The "first v2 client to need rig control" framing below is preserved as the original analysis context; the consumer is now the daemon's bridge subsystem rather than a Gio app, but the carve-out questions about which v1 parts to reuse vs. rework are unchanged.
+
 **Everything in this document is still subject to revision.** Even sections marked "decided" may change once construction starts.
 
 **Purpose:** The v2 logging app (first v2 client to be built) needs rig control. v1 already has working `internal/cat` and `internal/serial` packages. The question is not "write these from scratch" vs "copy them" — it's: which parts drop in as-is, which parts need carving up, and why.

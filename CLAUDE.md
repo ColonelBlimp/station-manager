@@ -2,9 +2,13 @@
 
 ## Repository structure
 
-- **`main`** is where v2 construction happens. v2 is a clean-slate rewrite of Station Manager around a daemon + clients + bridges model (decided 2026-04-14). As of 2026-04-15, main is still at the v1.0.0 layout; the restructure commit that reshapes it into v2 milestone-1 layout has not yet landed.
-- **`v1` branch** (and the `v1.0.0` tag) preserves the last v1 release. Day-to-day ham radio operations run from this branch; v1 bug fixes land here.
+- **`main`** is the v2 codebase. v2 is a clean-slate rewrite around a daemon + clients + bridges model (decided 2026-04-14). The structure.md "Migration from main's current state to milestone 1" restructure already ran (session-8 cluster): Wails `apps/` directory removed, `go.work` removed, single `go.mod` at the repo root, daemon (`cmd/smd`) and its new internal packages exist (`internal/api`, `internal/qsoservice`, `internal/events`, `internal/safego`), `internal/forwarding/` reshaped from v1's hardcoded-QRZ into the multi-destination `Forwarder` interface + worker + registry. Milestones 1, 1b, 1c are shipped (audited 2026-05-02).
+- **UI toolkit progression on main:** Wails (planned, never built in v2) → Gio (decided 2026-04-21, spike landed, parked) → browser SPA (Svelte 5, decided 2026-04-30 per ADR 0001, scaffold shipped same day, under active development at `frontend/logging/`, embedded in the daemon via `//go:embed` and served at `GET /` when `Protocol=tcp && ServeSPA=true`).
+- **Open structural addition:** `internal/bridge` per ADR 0013 — a daemon subsystem providing `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration. Default deployment is single-binary (daemon imports the bridge package); a separately-built `cmd/bridge` is supported as opt-in for split-host topologies.
+- **`v1` branch** (and the `v1.0.0` tag) preserves the last v1 release (a Wails app with no daemon process). Day-to-day ham radio operations run from this branch; v1 bug fixes land here.
 - **`pre-ft8-removal` tag** preserves the FT8 experiment tree in history for recovery if needed.
+
+**`/v1/` in the daemon's URL prefix is API versioning (the API's first iteration), unrelated to the project's v1/v2 distinction.**
 
 ## Where the durable project context lives
 
@@ -39,7 +43,7 @@ Full list in `docs/v1-analysis/lessons-for-v2.md`. These patterns were explicitl
 - **Explicit fallbacks for every external dependency.** The first test to write for enrichment code is "what happens when the service is down," not the second. Cautionary tale: hamnut-blocks-logging — a failed hamnut lookup propagated as fatal and prevented QSO entry entirely.
 - **Transaction boundaries are conscious design.** Multi-table writes need an explicit decision about what's atomic and what's best-effort. Cautionary tale: v1 `LogQso` ran four sequential non-transactional writes and could leave a QSO stored without its upload-queue row.
 - **Characterization tests before refactoring.** Write tests that freeze current observable behavior first; then refactor against them. Don't trust "CI passes" as evidence the refactor is correct unless CI was exercising the behavior you touched.
-- **Enumerate all API consumers before designing any endpoints.** The three Wails apps (logging, logbook, config) have different needs; a logging-centric API sketch will miss the logbook-management surface entirely.
+- **Enumerate all API consumers before designing any endpoints.** The three client apps (logging, logbook, config — now Svelte SPAs per ADR 0001, originally planned as Wails apps) have different needs; a logging-centric API sketch will miss the logbook-management surface entirely.
 
 ## Code style
 

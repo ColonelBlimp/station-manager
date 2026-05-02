@@ -33,6 +33,13 @@ type Server struct {
 	maxPageLimit             int
 	maxContactHistoryResults int
 	daemonVersion            string
+	// shutdownCh is closed by Shutdown to signal long-lived handlers
+	// (the SSE event stream) that they should return promptly. r.Context()
+	// alone does NOT fire on http.Server.Shutdown — only on connection
+	// close — so without this signal an idle SSE subscriber keeps
+	// Shutdown blocked until the configured graceful-shutdown timeout
+	// expires and the listener force-closes the connection.
+	shutdownCh chan struct{}
 }
 
 // New constructs a Server from the resolved services and config. The
@@ -51,6 +58,7 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 		maxPageLimit:             cfg.Server.MaxPageLimit,
 		maxContactHistoryResults: cfg.Server.MaxContactHistoryResults,
 		daemonVersion:            daemonVersion,
+		shutdownCh:               make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
@@ -134,12 +142,22 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	return nil
 }
 
-// Shutdown gracefully shuts down the HTTP server. On Unix-socket
-// deployments the socket file is best-effort removed afterwards so
-// operators grepping /tmp for daemon state don't see a stale file
-// between runs. The next startup's pre-bind cleanup also handles this,
-// but removing on exit keeps the filesystem honest.
+// Shutdown gracefully shuts down the HTTP server.
+//
+// shutdownCh is closed first so long-lived handlers (the SSE event
+// stream) can observe the shutdown signal and return promptly;
+// without this, http.Server.Shutdown would block on idle SSE
+// connections until ctx expired and the listener force-closed them,
+// turning every shutdown into a full graceful-timeout wait. Closing
+// shutdownCh is a no-op for short-lived request handlers — they
+// don't watch it.
+//
+// On Unix-socket deployments the socket file is best-effort removed
+// afterwards so operators grepping /tmp for daemon state don't see a
+// stale file between runs. The next startup's pre-bind cleanup also
+// handles this, but removing on exit keeps the filesystem honest.
 func (s *Server) Shutdown(ctx context.Context) error {
+	close(s.shutdownCh)
 	err := s.httpServer.Shutdown(ctx)
 	if s.protocol == "unix" && s.socketPath != "" {
 		// Ignore the remove error: the kernel may have already unlinked

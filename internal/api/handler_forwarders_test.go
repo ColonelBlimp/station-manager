@@ -185,6 +185,71 @@ func TestDelete_EnqueuesDeleteRows(t *testing.T) {
 	}
 }
 
+// TestUpdate_TwicePatchesRearm covers the regression that a second PATCH on
+// the same QSO would hit the qso_upload UNIQUE (qso_id, forwarder_name, action)
+// constraint and bubble as 500. Re-arm semantics: each PATCH represents a new
+// state needing forwarding, so the existing row is reset to status='pending'
+// with cleared retry state — the row count stays the same, the row's status
+// returns to pending, and attempts goes back to zero.
+func TestUpdate_TwicePatchesRearm(t *testing.T) {
+	srv := serverWithForwarders(t,
+		forwarderCfg("qrz", "qrz", true, "insert", "update"),
+	)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	for i, body := range []string{`{"comment":"first"}`, `{"comment":"second"}`} {
+		w := patchQso(t, srv, qsoID, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("patch #%d status = %d; body = %s", i+1, w.Code, w.Body.String())
+		}
+	}
+
+	uploads, err := srv.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch uploads: %v", err)
+	}
+	// Expect exactly two rows: qrz+insert (from initial submit) and qrz+update
+	// (re-armed by the second PATCH, not duplicated).
+	if len(uploads) != 2 {
+		t.Fatalf("len = %d, want 2; got %+v", len(uploads), uploads)
+	}
+	var update *types.QsoUpload
+	for i := range uploads {
+		if uploads[i].Action == "update" {
+			update = &uploads[i]
+			break
+		}
+	}
+	if update == nil {
+		t.Fatal("expected qrz+update row")
+	}
+	if update.Status != "pending" {
+		t.Fatalf("update row status = %q, want pending after re-arm", update.Status)
+	}
+	if update.Attempts != 0 {
+		t.Fatalf("update row attempts = %d, want 0 after re-arm", update.Attempts)
+	}
+}
+
+// TestDelete_TwiceDeletesIsRejected covers the second-DELETE path. The handler
+// returns 404 because the QSO is soft-deleted on the first call; the upload-
+// row constraint should NOT be reached.
+func TestDelete_TwiceIsRejectedAt404(t *testing.T) {
+	srv := serverWithForwarders(t,
+		forwarderCfg("qrz", "qrz", true, "insert", "delete"),
+	)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	if w := deleteQso(t, srv, qsoID); w.Code != http.StatusNoContent {
+		t.Fatalf("first delete status = %d", w.Code)
+	}
+	if w := deleteQso(t, srv, qsoID); w.Code != http.StatusNotFound {
+		t.Fatalf("second delete status = %d, want 404", w.Code)
+	}
+}
+
 func TestDelete_NoForwarders_SoftDeletesCleanly(t *testing.T) {
 	// No forwarders configured — delete should still soft-delete the
 	// QSO and commit successfully. Verifies Stage 7 didn't make delete

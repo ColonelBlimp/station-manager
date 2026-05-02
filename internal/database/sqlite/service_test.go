@@ -1376,33 +1376,71 @@ func TestFetchInsertUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
 	}
 }
 
-// Documents the schema constraint that makes the ORDER BY in
-// FetchInsertUpstreamIDWithContext defensive rather than load-bearing:
-// the qso_upload table has UNIQUE(qso_id, forwarder_name, action), so
-// a second insert row for the same (qso, forwarder) pair is rejected
-// by the DB, not chosen by our query. If the schema ever relaxes this
-// constraint, the ORDER BY modified_at DESC LIMIT 1 protects us; the
-// test below pins the current behaviour.
-func TestFetchInsertUpstreamID_UniqueConstraintPreventsDuplicates(t *testing.T) {
+// InsertQsoUploadTx UPSERTs on conflict over (qso_id, forwarder_name,
+// action) — a second enqueue for the same triple does not violate the
+// UNIQUE constraint and does not duplicate the row. Instead, it re-arms
+// the existing row to status='pending' with cleared retry state so the
+// worker re-attempts the latest operator intent. The previous behaviour
+// (constraint violation bubbling out of the transaction) was the C1
+// bug from the 2026-05-02 daemon code review — every second PATCH or
+// DELETE on the same QSO turned into a 500.
+func TestInsertQsoUploadTx_ReArmOnConflict(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
 
-	// First insert row succeeds.
+	// First enqueue creates the row.
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
 
-	// Second insert row for the same (qso, forwarder, insert) must
-	// fail on the UNIQUE constraint.
+	// Simulate a successful upload: status='uploaded', upstream_id set.
+	rows0, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch uploads (pre): %v", err)
+	}
+	if len(rows0) != 1 {
+		t.Fatalf("pre-upsert len = %d, want 1", len(rows0))
+	}
+	uploadID := rows0[0].ID
+	if err = svc.MarkUploadSuccessWithContext(context.Background(), uploadID, "qrz-12345"); err != nil {
+		t.Fatalf("mark uploaded: %v", err)
+	}
+
+	// Second enqueue for the same (qso, forwarder, insert) must succeed
+	// (no constraint violation) and re-arm the existing row.
 	ctx := context.Background()
 	tx, cancel, err := svc.BeginTxContext(ctx)
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
 	defer cancel()
-	err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz")
-	_ = tx.Rollback()
-	if err == nil {
-		t.Fatal("expected UNIQUE constraint to reject a second insert row for (qso, forwarder)")
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz"); err != nil {
+		t.Fatalf("re-enqueue: %v (want nil — UPSERT should re-arm, not fail)", err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// Verify the row count is still 1 (not duplicated) and that re-arm
+	// reset the retry state.
+	rows, err := svc.FetchUploadsByQsoIDWithContext(ctx, qsoID)
+	if err != nil {
+		t.Fatalf("fetch uploads: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("len = %d, want 1 (UPSERT must not duplicate)", len(rows))
+	}
+	r := rows[0]
+	if r.Status != "pending" {
+		t.Errorf("status = %q, want pending after re-arm", r.Status)
+	}
+	if r.Attempts != 0 {
+		t.Errorf("attempts = %d, want 0 after re-arm", r.Attempts)
+	}
+	// upstream_id is preserved across re-arm — see api_context.go's
+	// InsertQsoUploadTx comment for why (FetchInsertUpstreamID needs it
+	// for the delete-after-insert flow).
+	if r.UpstreamID != "qrz-12345" {
+		t.Errorf("upstream_id = %q, want qrz-12345 (must be preserved across re-arm)", r.UpstreamID)
 	}
 }
 

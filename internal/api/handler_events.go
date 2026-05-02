@@ -70,6 +70,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 
+		case <-s.shutdownCh:
+			// Daemon is shutting down. r.Context() does not fire on
+			// http.Server.Shutdown — only on connection close — so
+			// without this case an idle SSE subscriber would keep
+			// shutdown blocked until the graceful-shutdown timeout.
+			return
+
 		case evt, ok := <-ch:
 			if !ok {
 				// Hub closed or subscriber evicted for being slow.
