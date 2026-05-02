@@ -10,6 +10,7 @@
     import DateInput from "../components/DateInput.svelte";
     import TimeInput from "../components/TimeInput.svelte";
     import FormControls from "../components/FormControls.svelte";
+    import { formatUtcDate, formatUtcTime } from '../../utils/time';
 
     const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
@@ -37,11 +38,8 @@
         recompute at that point.
     */
     const now = new Date();
-    const pad = (n: number): string => n.toString().padStart(2, '0');
-    const initialUtcDate =
-        `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}`;
-    const initialUtcTime =
-        `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}`;
+    const initialUtcDate = formatUtcDate(now);
+    const initialUtcTime = formatUtcTime(now);
 
     let qsoDate = $state(initialUtcDate);
     let timeOn = $state(initialUtcTime);
