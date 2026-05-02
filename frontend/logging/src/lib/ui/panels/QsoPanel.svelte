@@ -9,6 +9,7 @@
     import Comment from "../components/Comment.svelte";
     import DateInput from "../components/DateInput.svelte";
     import TimeInput from "../components/TimeInput.svelte";
+    import FormControls from "../components/FormControls.svelte";
 
     const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
@@ -145,9 +146,12 @@
         <TextInput id="qth" label="QTH" widthClass="w-46" bind:value={qth}/>
         <Comment id="comment" label="Comment" bind:value={comment}/>
     </div>
-    <div class="flex flex-row space-x-2 -mt-1">
+    <div class="flex flex-row space-x-2 -mt-2">
         <DateInput id="qso_date" label="Date" bind:value={qsoDate}/>
         <TimeInput id="time_on" label="Time On (UTC)" bind:value={timeOn}/>
         <TimeInput id="time_off" label="Time Off (UTC)" bind:value={timeOff}/>
+        <div class="flex flex-row space-x-2">
+            <FormControls/>
+        </div>
     </div>
 </div>
