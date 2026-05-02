@@ -200,10 +200,12 @@ These are **different workflows with different latency profiles and different UI
 
 ### Daemon scope is explicitly narrow
 
-- In scope: ingest (ADIF via HTTP POST and/or UDP), validate, store in local DB, forward to online services (QRZ, ClubLog, future SM-Online), emit status events, serve queries for logging/logbook/config concerns.
-- **Not in scope:** rig control, CAT, PTT, audio, protocol decoding, capture UX. Those live in clients or separate services (the serial/CAT bridge is its own process, entirely separate from the daemon).
+- **Daemon log/forward subsystems are narrow.** In scope: ingest (ADIF via HTTP POST and/or UDP), validate, store in local DB, forward to online services (QRZ, ClubLog, future SM-Online), emit status events, serve queries for logging/logbook/config concerns.
+- **Not in the log/forward surface:** rig control, CAT, PTT, audio, protocol decoding, capture UX. Those live in clients (browser SPA) or in the daemon's bridge subsystem (ADR 0013), but they must not couple with the log/forward subsystems.
 
-This narrow scope is what makes the daemon stable — it's the one thing in the system that shouldn't churn, because everything else plugs into it.
+**Where the boundary is enforced (revised 2026-05-02 by ADR 0013):** the protection used to be a process boundary — the bridge ran in its own binary, so log/forward code physically could not reach into rig state. Under ADR 0013 the bridge runs as a daemon subsystem in the default deployment, so the boundary moves down to the **package-import graph**: the bridge package exposes only its public Go interface (route registration, internal-API for rig state), and the storage / forwarder packages **do not import** the bridge package. The narrow-daemon-scope rule is preserved at this lower level. Reviewers (and any future lint check) treat a forbidden import as a violation of this invariant. Process-boundary enforcement is still available for the split-host opt-in deployment (separately-built `cmd/bridge` binary), but is no longer the default mechanism.
+
+This narrow scope is what makes the daemon's log/forward surface stable — it's the part of the system that shouldn't churn, because every client and every bridge feature plugs into it.
 
 ---
 

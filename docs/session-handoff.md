@@ -24,7 +24,78 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-01, session 25 — CAT state landed; ten ADRs settled architectural splits; Vfos component shipped with display + commit-routing + select + persistence tests; full CAT/SSE/UX/persistence architecture settled; SPA-side state decomposition implemented through step 3)
+## Current state (as of 2026-05-02, session 26 — topology pivot: bridge collapsed into daemon as internal subsystem; ADRs 0012/0013/0014 + invariants/topology/memory propagation; no code changes — pure design)
+
+### Session 26 work (topology redesign: daemon owns the bridge as an internal subsystem; upstream forwarding deferred; full ADR + doc + memory propagation)
+
+**Operator brief at session start:** "We need to make a design change/decision." After I summarized the current design back, the operator identified the issue: the daemon was supposed to be network-deployable (Pi/NAS/VPS), but the SPA's path to `/v1/rig/events` had drifted to "daemon hosts it" — which couples the daemon to the rig host. Two-process / two-origin / CORS-as-default-config was the consequence.
+
+**Conversation arc:**
+
+1. ADR 0012 drafted earlier in the conversation to codify "daemon and bridge as separate origins; daemon never proxies bridge data." Captured the causal chain through ADR 0001 (browser SPA can't own serial → CAT must run somewhere else → and that somewhere has to be operator-local-to-the-rig, while the daemon must be network-deployable).
+2. The operator stepped back and asked for my honest view of the design overall. I flagged: it's coherent and defensible, but heavy for a personal project — three processes, four state objects, two origins, twelve ADRs at the time. A lot is riding on ADR 0001. The bridge has the most novel work and the least proven value. The all-on-one case (the dominant deployment) pays for split-deployment flexibility.
+3. The operator proposed: default deployment = daemon owns bridge/CAT/serial/SPA/DB on local PC. Cluster-mode (network-deployed daemon for forwarding, locals forward to master) deferred but kept easy to add. Asked for pushback.
+4. I pushed back on the cluster-readiness instinct: it's at risk of design-by-anticipation. Reframed as "four prep-work items justified by v1 scope today" + "explicit foreclosure list for speculative work."
+5. Operator agreed; also flagged a real win for browser SPA missed earlier: native zoom for accessibility (Gio/Wails ship fixed sizes; browser ships `Ctrl-+` reflowable layout from day one).
+6. Drafted everything.
+
+**ADRs landed:**
+
+- **ADR 0001** — added "free, native operator-controlled zoom and accessibility" to "Gained" section. Reworded the SPA→bridge consequence chain from "must be a separate process" to "must run somewhere other than the browser" — the daemon can be that somewhere.
+- **ADR 0010** — second-revision note documenting two host changes the same day (ambiguous → bridge process → daemon-with-bridge-subsystem). Endpoint section distinguishes default (daemon serves it) vs split-host (standalone bridge serves it). CORS clause clarifies "no CORS in default deployment."
+- **ADR 0012** — superseded same day. Forward-pointing note explains why "two processes, two origins" was rejected and what 0013 changed. Body preserved as the reasoning trail.
+- **ADR 0013 (new)** — daemon owns the bridge as an internal subsystem; single binary by default; `bridge.enabled` config flag for the network-deployed-daemon case; split-host preserved as opt-in via separately-buildable `cmd/bridge`. Static-ownership lowered from process boundary to package-import graph (`internal/storage` and `internal/forwarder` must not import `internal/bridge`).
+- **ADR 0014 (new)** — upstream forwarding (federation) deferred. Four prep-work items justified by v1 scope (driver-shaped forwarders, `Authorization` header threaded through every fetch from day one, namespaced subsystem `enabled` flag pattern, `additional_data` provenance metadata). Explicit foreclosure list: master discovery, cluster config schema, federation routing, multi-daemon UI, master-daemon-specific code paths.
+
+**Doc / invariant propagation:**
+
+- `docs/v1-analysis/invariants.md` "Daemon scope is explicitly narrow" — restated to package-boundary phrasing with a 2026-05-02 revision note pointing at ADR 0013. Protection unchanged; enforcement mechanism lowered.
+- `docs/v2-design/topology.md` — substantially rewritten. Default topology is single-binary single-origin; ASCII diagram updated; "Service responsibilities" rewritten; "Alternative deployments" replaces the prior "deployment topologies this enables." Explicit foreclosure section for speculative cluster work.
+- `docs/v2-design/frontend-spa.md` — top-of-file topology revision note. Open-questions resolved: bridge URL discovery → `bridgeUrl == daemonUrl` in default deployment per ADR 0013; CORS → none in default deployment; auth → `Authorization` header threaded from day one per ADR 0014. File structure note updated (`config.ts` comment).
+- `docs/v2-design/bridge.md` — top-of-file revision note flagging which sections of the 2026-04-20 doc are superseded by ADR 0013 (deployment shape) and which were reversed by invariants.md (rigctld-compat TCP frontend stays canonical).
+- `CLAUDE.md` — "Narrow daemon scope" headline rewritten to package-boundary phrasing, with ADR 0013 reference.
+
+**Memory updates:**
+
+- `project_sm_serial_bridge` — rewritten end-to-end. Bridge as daemon subsystem in default; split-host as opt-in; two-frontend (rigctld-compat TCP + SM-native SSE) reaffirmed; package-boundary discipline noted. Session-15 (2026-04-20) "drop rigctld TCP" decision marked as historical/reversed.
+- `project_sm_spa_config_layering` — added "URL fields in configState" section: `daemonUrl` + `bridgeUrl`, default-equality in single-binary, multi-rig future generalization (`bridges[]`).
+- `project_sm_daemon_vs_spa_split` — added bridge subsystem to the daemon-side responsibility list; ADR 0013 reference; package-boundary phrasing for narrow-daemon-scope.
+- `project_sm_restructure` — topology refinement section added; daemon scope updated with bridge subsystem; repo-split stance updated (`internal/bridge` package + opt-in `cmd/bridge` binary).
+
+**No code changes this session.** Pure design / documentation / memory work. Tests still pass from the end of session 25 (svelte-check clean; 99 tests across 6 files).
+
+**Current ADR ledger:** 0001–0011 from session 25; 0012 added then superseded same day; 0013 + 0014 added and accepted. Ten accepted, one superseded. Numbering scheme working as intended (supersession via Status field + forward pointer + body preservation).
+
+### Next steps (carried into session 27+)
+
+The original SPA-side execution plan (steps 4/5/6 from session 25) needs adapting to the new topology:
+
+- ~~**Step 4:** Standalone-bridge-process SSE endpoint per ADR 0010.~~ **Replaced by:** wire `/v1/rig/events` into the daemon binary as part of the `internal/bridge` package implementation (ADR 0013). Same wire shape (ADR 0010); different host.
+- **Step 5:** Real EventSource wiring in `bridge.svelte.ts`. URL composition reads `configState.bridgeUrl`; in default deployment that equals `configState.daemonUrl`. Snapshot-on-CAT-off effect lands here.
+- **Step 6:** CAT-handover toast (depends on toast-system implementation per ADR 0008).
+
+Other pending threads carried from session 25:
+
+- Daemon `/v1/config` endpoint per ADR 0003 (Go work).
+- Daemon `/v1/enrich/callsign` handler per ADR 0005 (Go work).
+- Toast system implementation per ADR 0008.
+- Keyboard shortcuts implementation per ADR 0007.
+- QSO draft store / form composition.
+- Inline validation message slot (Fix 13).
+- First real route (svelte-spa-router vs hand-rolled).
+- CI workflow update with Node ≥22 + frontend test step.
+
+New work surfaced this session, deferred per ADR 0014:
+
+- `internal/bridge` package as a real Go package (when bridge work resumes).
+- `bridge.enabled` config flag in the daemon's config schema.
+- Driver-shaped forwarder layer (justified-today, not just for cluster-readiness).
+- `Authorization: Bearer <token>` header threaded through SPA fetch wrapper from day one (justified-today for the eventual network-deployed daemon case).
+- A future "package-import-graph lint" that flags `internal/storage` or `internal/forwarder` importing `internal/bridge`. Cheap to add when CI gets revisited.
+
+---
+
+
 
 ### Session 25 work (CAT state + ADRs 0002–0011 + Vfos component + component-testing infra + CAT precedence + 4-object decomposition + keyboard shortcuts + toast system + rig SSE wire shape + manualState persistence + step 2 implementation + step 3 select-VFO UI)
 

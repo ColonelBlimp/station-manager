@@ -1,6 +1,8 @@
 # v2 design — frontend SPA (Svelte 5)
 
-**Status:** sketched 2026-04-30; **scaffold landed and verified end-to-end the same day.** Captures the layout, daemon-side embed wiring, build pipeline, and CI stance for the browser-SPA logging client. Builds on [ui-toolkit.md](ui-toolkit.md)'s recommendation (browser SPA over Gio/Wails) and [topology.md](topology.md)'s peer-service model (daemon hosts the SPA; SPA talks to bridge and daemon directly).
+**Status:** sketched 2026-04-30; **scaffold landed and verified end-to-end the same day.** Captures the layout, daemon-side embed wiring, build pipeline, and CI stance for the browser-SPA logging client. Builds on [ui-toolkit.md](ui-toolkit.md)'s recommendation (browser SPA over Gio/Wails) and [topology.md](topology.md)'s daemon-with-bridge-subsystem model (daemon hosts the SPA *and* the rig SSE endpoint by default; split-host opt-in for the rare case).
+
+**Topology revision, 2026-05-02 (ADR 0013):** [topology.md](topology.md) was revised the same day to make the default deployment a single-binary daemon that owns the bridge as an internal subsystem. The implication for this document: in the default deployment the SPA is **same-origin** for everything — daemon API, SPA bundle, and `/v1/rig/events` SSE all served by one HTTP server. CORS is not a default concern. The two-URL `configState` shape (`daemonUrl` + `bridgeUrl`) is preserved (defaults equal in single-binary; operator-overridable for split-host), but the SPA's URL composition is unchanged.
 
 ## Scaffold landed and verified — 2026-04-30
 
@@ -100,7 +102,7 @@ frontend/logging/
 │   ├── app.svelte                   # top shell: nav tabs + <Route/>
 │   ├── lib/
 │   │   ├── api.ts                   # fetch wrappers for daemon /v1/*
-│   │   ├── config.ts                # daemon.url, bridge.url (defaults localhost)
+│   │   ├── config.ts                # daemonUrl + bridgeUrl (defaults equal in single-binary)
 │   │   ├── types.ts                 # Qso, Logbook, RigState — mirror Go DTOs
 │   │   └── states/                  # module-level $state singletons
 │   │       ├── cat.svelte.ts        # CAT state (enabled, rig power, VFOs, …)
@@ -404,9 +406,9 @@ Two-terminal HMR loop:
 - ~~**Keyboard shortcuts.**~~ **Resolved 2026-05-01 in [ADR 0007](../decisions/0007-keyboard-shortcuts.md):** library is `@svelte-put/shortcut`; initial map covers VFO swap (`Ctrl+\\`), QSO submit (`Ctrl+Enter`), revert/cancel (`Escape`), help overlay (`?`). Modifier-keyed shortcuts work in-field; bare keys don't (target check rejects `INPUT`/`TEXTAREA`/`contenteditable`). CAT-mutating shortcuts use the `editable` derived helper from ADR 0006. F-keys reserved for future contest macros. Initial map will iterate after ~30 days of operating use.
 - **Inline validation message slot.** `.input-row`'s `h-17.5` already reserves space below each input for an error message; the slot itself isn't built yet. Open question: where the message string comes from. Leading candidate is "validators stay `boolean`, the component holds its own message string" — keeps validators pure, accepts the duplication-on-reuse cost. Alternative `{ valid, message }` return tuple breaks the pure-predicate convention settled 2026-05-01. Lands cleanly once form composition + draft store exist. (Resolves carried Fix 13.)
 - ~~**Toast / notifications system.**~~ **Resolved 2026-05-01 in [ADR 0008](../decisions/0008-notifications-toast-system.md):** hand-rolled `$state`-array singleton at `lib/states/toasts.svelte.ts`, three levels (info/warn/error) with TTL 4/6/8s, max-stack 5, click-to-dismiss, fade-in/out animation, mounted once at `app.svelte` shell as `bottom-right` fixed. Library options (`@zerodevx/svelte-toast`, `svelte-french-toast`, `svelte-sonner`) rejected because the `$state` queue subscribability is wanted and the platform-quirks layer that justifies a library elsewhere doesn't exist for toasts. Toasts express **events**; inline messages (planned) express **state** — the two complement each other.
-- **Bridge URL discovery.** Static config in the SPA, defaulting to `http://localhost:<bridge-port>`. mDNS / Bonjour is overkill for personal use (per topology.md). Confirm the default port to use for the bridge once the bridge service is built.
-- **CORS on the bridge.** Bridge sets `Access-Control-Allow-Origin` either `*` (single-user) or scoped to the daemon's origin. Lands in the bridge's HTTP setup, not here. Tracked in `bridge.md` work, not in this doc.
-- **Auth.** None for LAN-only use. For "daemon on a VPS, bridge at home over the open internet," static token in config + `Authorization` header per topology.md §Authentication. Out of scope for the first scaffold.
+- ~~**Bridge URL discovery.**~~ **Resolved 2026-05-02 in [ADR 0013](../decisions/0013-daemon-owns-bridge-as-subsystem.md):** in the default deployment `bridgeUrl == daemonUrl` (bridge is a daemon subsystem; same origin). `configState` carries both `daemonUrl` and `bridgeUrl` as separate fields so SPA URL-composition logic is unconditional, but they default equal. Operator overrides `bridgeUrl` only for the split-host opt-in (separate `cmd/bridge` on the rig host). mDNS / Bonjour explicitly foreclosed by [ADR 0014](../decisions/0014-upstream-forwarding-deferred.md) — overkill for personal use.
+- ~~**CORS on the bridge.**~~ **Resolved 2026-05-02 in [ADR 0013](../decisions/0013-daemon-owns-bridge-as-subsystem.md):** no CORS in default deployment (same origin). For the split-host opt-in, the standalone `cmd/bridge` sets `Access-Control-Allow-Origin: *` (single-operator LAN default; tightenable). The CORS work no longer affects the default deployment's HTTP setup.
+- **Auth.** None for LAN-only use. For "daemon on a Pi/VPS reachable beyond LAN," static token in config + `Authorization: Bearer <token>` header per [ADR 0014](../decisions/0014-upstream-forwarding-deferred.md)'s prep-work item #2 (auth header threaded through every fetch from day one; daemon middleware no-op when no validator registered). Out of scope for the first scaffold but the threading shape is settled.
 
 ## Cross-references
 

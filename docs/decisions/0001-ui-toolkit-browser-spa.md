@@ -57,12 +57,14 @@ SvelteKit gives SSR, file-based routing, and adapters for Vercel/Netlify/Node �
 
 - The Gio code in `cmd/logging` stays in place but is parked. It will be deleted cleanly when the SPA reaches feature parity, not pre-emptively (per `docs/v2-design/ui-toolkit.md`'s closing note).
 - Browser security model: anything the SPA does goes through fetch/CORS, so the bridge must set CORS headers when the SPA talks to it directly (per `topology.md`).
+- **Serial / CAT cannot live in the SPA.** Gio could have owned the serial port in-process; a browser SPA cannot. Web Serial exists but is Chromium-only with a per-page permission prompt — not viable for a daily-driver logging app. As a direct consequence, **CAT must run somewhere other than the browser** — either in the daemon binary as an internal subsystem (the v2 default per ADR 0013), or in a separately-deployed bridge process for split-host topologies. ADR 0012 originally treated bridge-as-separate-process as the load-bearing topology; ADR 0013 supersedes that and recasts the bridge as a daemon subsystem with the split-deployment shape preserved as an opt-in. This bullet records the causal chain (SPA choice → CAT cannot live with the UI → CAT lives daemon-side) so the constraint isn't re-litigated.
 
 **Gained:**
 
 - Form-heavy UI (logging) becomes ~30-second work per field instead of ~30-minute.
 - Cross-device naturally — same daemon URL works from anything with a browser.
 - Tailwind CSS v4 (settled later the same day) makes styling a single-line concern rather than a per-widget custom-paint exercise.
+- **Free, native operator-controlled zoom and accessibility.** Gio (and Wails, and most native UI toolkits) bake fixed font sizes and field dimensions into the layout. The operator who needs a larger interface — older eyes, late-night session, second monitor across the room — has to wait for the developer to add a font-size setting or a per-widget scale knob. In a browser, `Ctrl-+` works on every screen on day one, and reflowable layout means it actually reflows rather than clipping. For a personal-use tool whose operator is also the only target user, this matters more than it would for a shipping product where the developer can wave the issue away as "add a setting later."
 
 ## Triggers to revisit
 

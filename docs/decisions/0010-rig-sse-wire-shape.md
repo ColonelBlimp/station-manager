@@ -1,11 +1,19 @@
 ---
 number: 0010
 title: Rig SSE wire shape — single endpoint, three event types, passive liveness via rig data flow
-status: Accepted
+status: Accepted (revised twice on 2026-05-02 — see revision notes)
 date: 2026-05-01
 ---
 
 # 0010 — Rig SSE wire shape
+
+> **2026-05-02 revision notes.**
+>
+> *First revision (morning, ADR 0012):* this ADR originally deferred the question "which Go process answers `GET /v1/rig/events`" to `bridge.md` / `topology.md`. ADR 0012 promoted that to a named decision: bridge serves the endpoint, daemon does not.
+>
+> *Second revision (same day, ADR 0013):* ADR 0012 was superseded within hours. The dominant deployment is single-operator-on-the-shack-PC; forcing a separate bridge process there is ceremony for the case the operator actually lives in. ADR 0013 collapses the bridge into the daemon binary as an internal subsystem. **In the default deployment the daemon hosts `/v1/rig/events` directly, with the bridge subsystem providing the underlying data.** The split-host deployment (network-deployed daemon with no bridge, separate bridge process on the rig host) is preserved as an opt-in via subsystem disable-flagging.
+>
+> The wire shape below — three event types, deltas, passive liveness — is unchanged across both revisions. Only the host changed: ambiguous → bridge process → daemon (with bridge subsystem). The SPA composes the URL as `${configState.bridgeUrl}/v1/rig/events`, where `bridgeUrl` defaults to `daemonUrl` in the single-binary deployment and is operator-overridable for the split-host case.
 
 ## Context
 
@@ -16,15 +24,21 @@ Two things constrain the design that are worth surfacing before the decision:
 - **AUTO-mode CAT is the assumed rig protocol shape** (per memory `project_sm_serial_bridge`). In AUTO mode the rig pushes data to the bridge — frequency / mode / VFO changes when the operator turns the dial, plus continuous data the SPA doesn't care about (waterfall noise, S-meter telemetry). The bridge listens, filters, and forwards SPA-relevant deltas. **The continuous-flow nature is load-bearing** for liveness detection: it means "data on the wire" can be used as a passive heartbeat without the bridge having to ping or poll.
 - **Serial port disconnection is hard to detect cleanly.** The OS doesn't tell the bridge when the rig is unplugged or powered off; the bridge only learns by trying to read (and getting `EIO`) or by noticing data flow has stopped. This makes liveness detection inherently best-effort.
 
-A separate concern: ADR 0001 chose a daemon-hosted SPA, but `topology.md` makes the bridge a *peer* service to the daemon, not a subordinate. Whether the SSE endpoint lives on the daemon process or a separate bridge subprocess is determined by topology, not by this ADR. **This ADR specifies the wire contract** (URL path, events, payloads) — which Go process answers it is settled by `bridge.md` (forthcoming).
+A separate concern (now settled by ADR 0012): ADR 0001 chose a daemon-hosted SPA, but `topology.md` makes the bridge a *peer* service to the daemon, not a subordinate. The SSE endpoint **is hosted by the bridge process**, not the daemon. The SPA opens an EventSource against `bridgeUrl` (from `configState`), which is independent of `daemonUrl`. The wire contract below is host-agnostic; ADR 0012 explains why the host is the bridge.
 
 ## Decision
 
 ### Endpoint
 
-`GET /v1/rig/events` — an SSE stream. Single endpoint, no separate snapshot endpoint.
+`GET /v1/rig/events` — an SSE stream. Single endpoint, no separate snapshot endpoint. The SPA composes the URL as `${configState.bridgeUrl}/v1/rig/events`.
+
+In the **default deployment** (single-binary, ADR 0013), the daemon serves this path; `bridgeUrl == daemonUrl` and the SPA's connection is same-origin. The bridge subsystem inside the daemon binary populates the underlying data.
+
+In the **split-host deployment** (opt-in), the bridge runs as a separate process on the rig host; the SPA's `bridgeUrl` is set to that process's address; the daemon's bridge subsystem is disabled (`bridge.enabled: false`) so the daemon never opens a serial port. The wire shape on either host is identical.
 
 The SPA opens the EventSource conditionally on `configState.station.enabled`. If CAT is disabled in operator config, the SPA never opens the connection.
+
+**CORS.** In the default deployment, no CORS — same origin. In the split-host deployment, the standalone bridge sets `Access-Control-Allow-Origin` headers permissive enough for the SPA loaded from the daemon to subscribe (default `*` for single-operator LAN; tightenable per `topology.md`). This is bridge-side configuration in the split case, not part of the wire shape, but worth naming here so SPA-side debugging starts in the right place when split deployments are in use.
 
 ### Event types
 
@@ -206,8 +220,10 @@ Rejected: bad operator UX. Operator was on 14.250 MHz USB; rig powers off; SPA s
 
 ## References
 
-- ADR 0001 (`0001-ui-toolkit-browser-spa.md`) — daemon-hosts-SPA premise. The bridge URL the SPA connects to may be daemon or peer service; settled in `bridge.md` (forthcoming), not here.
-- ADR 0003 (`0003-spa-config-daemon-only.md`) — `configState.station.enabled` source.
+- ADR 0001 (`0001-ui-toolkit-browser-spa.md`) — daemon-hosts-SPA premise; also names the SPA-cannot-own-serial consequence that forces CAT into the daemon-side process.
+- ADR 0012 (`0012-daemon-and-bridge-separate-origins.md`) — *superseded*. Preserved for the reasoning trail of why "two processes, two origins" was considered before being collapsed.
+- ADR 0013 (`0013-daemon-owns-bridge-as-subsystem.md`) — current decision on which process serves this endpoint (the daemon, with the bridge as an internal subsystem); split-host deployment preserved as an opt-in.
+- ADR 0003 (`0003-spa-config-daemon-only.md`) — `configState.station.enabled` source; also where `bridgeUrl` lives. In default deployment `bridgeUrl == daemonUrl`.
 - ADR 0004 (`0004-daemon-vs-spa-responsibilities.md`) — daemon owns external-service orchestration; bridge is the rig-side service.
 - ADR 0006 (`0006-cat-state-precedence-rule.md`) — precedence rule that this wire shape implements; `editable` helper depends on the three flags this ADR defines.
 - ADR 0008 (`0008-notifications-toast-system.md`) — `bridge-error` and `rig-disconnected` reasons surface as toasts.
