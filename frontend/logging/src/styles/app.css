@@ -1,5 +1,41 @@
 @import "tailwindcss";
 
+/*
+    Design tokens — Tailwind v4 @theme block.
+
+    Convention: values that ANCHOR a relationship (a width that must
+    match across two visual states; two heights that must add up to a
+    third; a slot height that's load-bearing for a specific UI feature)
+    live here as named tokens. One-off cosmetic numbers (whole-app
+    shell dimensions, header strip) stay as Tailwind arbitrary values
+    at the use site with a comment, because tokenizing them adds
+    names without adding clarity.
+
+    Naming: `--<dimension>-<purpose>-<variant>` where dimension is
+    `spacing` (the Tailwind theme key for both width and height utilities).
+*/
+@theme {
+    /*
+        VfoBox dimensions. The split-on layout stacks two half-rows
+        (h-vfo-half × 2); the split-off layout uses one full row
+        (h-vfo-full). Invariant: vfo-full == 2 × vfo-half. Both states
+        share a single width (vfo-w) so the box footprint is stable
+        regardless of split mode.
+    */
+    --spacing-vfo-w:        3.25rem;    /* 52px */
+    --spacing-vfo-half:     1.0625rem;  /* 17px — split-on row height */
+    --spacing-vfo-full:     2.125rem;   /* 34px — split-off row height; = 2 × vfo-half */
+
+    /*
+        Input row reserved height. Includes label + input + a planned
+        inline validation message slot below the input (see Fix 13).
+        When the slot is built, this token will be the load-bearing
+        constant; until then it's reserving space so the layout doesn't
+        shift when the slot eventually appears.
+    */
+    --spacing-input-slot:   4.375rem;   /* 70px */
+}
+
 @layer base {
     html {
         @apply text-gray-900;
@@ -13,8 +49,16 @@
 }
 
 @layer components {
+    /*
+        .input-row reserves height for label + input + a validation message
+        slot (slot itself not yet built; see Fix 13). External vertical
+        rhythm — where the row sits relative to siblings and the panel
+        edge — is the parent's job, NOT this class's. A panel with these
+        rows should set its own `py-*` (or gap-y-*) to provide the
+        vertical breathing room.
+    */
     .input-row {
-        @apply my-4 h-17.5;
+        @apply h-input-slot;
     }
     .input-base {
         @apply px-2.5 py-1.5 rounded-md w-full

@@ -41,7 +41,13 @@
     });
 </script>
 
-<div class="flex space-x-2">
+<!--
+    Panel owns the vertical rhythm (`py-4`) and horizontal gaps
+    (`space-x-2`). Children (.input-row siblings + Vfos) are layout-naked
+    relative to this row — they don't add their own outer margins. See
+    `app.css` for the matching note on .input-row.
+-->
+<div class="flex space-x-2 py-4">
     <Callsign id="call" label="Callsign" value=""/>
     <Rst id="rst_sent" label="RST Sent" value={defaultRst}/>
     <Rst id="rst_rcvd" label="RST Rcvd" value={defaultRst}/>

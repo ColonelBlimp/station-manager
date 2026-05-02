@@ -54,7 +54,20 @@
     }
 </script>
 
-<div class="flex flex-col space-y-2 mt-6 w-56">
+<!--
+    Internal layout only:
+      - flex flex-col space-y-2  → children stack vertically with a small gap
+      - w-56                     → fixed width sized to the boxes + inputs
+      - pt-2                     → INTERNAL label-compensation. Vfos has no
+                                   <label> of its own, so its first row of
+                                   content sits 0.5rem above sibling inputs
+                                   that DO have labels. pt-2 brings it back
+                                   onto the same baseline. This is intrinsic
+                                   to Vfos, not external positioning.
+    External vertical rhythm (where Vfos sits relative to siblings, panel
+    padding, etc.) is the parent's responsibility.
+-->
+<div class="flex flex-col space-y-2 pt-2 w-56">
     {#if displayedState.selectedVfo === 'A'}
         {@render box('A', 'RX')}
         {@render box('B', 'TX')}
