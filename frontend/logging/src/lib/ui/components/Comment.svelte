@@ -15,7 +15,7 @@
 </script>
 
 <div class="{widthClass}">
-    <label for="{id}" class="input-label">Comment</label>
+    <label for="{id}" class="input-label">{label}</label>
     <div class="mt-1">
         <textarea
             id={id}

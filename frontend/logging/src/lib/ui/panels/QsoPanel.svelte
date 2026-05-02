@@ -7,6 +7,8 @@
     import { manualState } from '../../states/manual.svelte';
     import TextInput from "../components/TextInput.svelte";
     import Comment from "../components/Comment.svelte";
+    import DateInput from "../components/DateInput.svelte";
+    import TimeInput from "../components/TimeInput.svelte";
 
     const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
@@ -57,9 +59,14 @@
         <Mode id="mode" label="Mode" bind:value={mode} list={modes} disabled={!displayedState.editable}/>
         <Vfos/>
     </div>
-    <div class="flex flex-row space-x-2">
+    <div class="flex flex-row space-x-2 mt-2">
         <TextInput id="name" label="Name" value=""/>
         <TextInput id="qth" label="QTH" widthClass="w-40" value=""/>
-        <Comment id="comment"/>
+        <Comment id="comment" label="Comment" value=""/>
+    </div>
+    <div class="flex flex-row space-x-2 mt-2">
+        <DateInput id="qso_date" label="Date" value=""/>
+        <TimeInput id="time_on" label="Time On (UTC)" value="" disabled={false}/>
+        <TimeInput id="time_off" label="Time Off (UTC)" value="" disabled={false}/>
     </div>
 </div>
