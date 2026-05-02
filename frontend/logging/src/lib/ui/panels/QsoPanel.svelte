@@ -99,37 +99,52 @@
     });
 
     /*
-        Time-off ticker. The first Tab-on-valid-callsign is treated as
-        the QSO start (per the operator's session 28 plan): both
-        timeOn and timeOff snap to "now" at that moment, then a
-        per-second interval keeps timeOff updated against the wall
-        clock. Subsequent Tabs are no-ops so timeOn doesn't drift if
-        the operator re-Tabs (e.g. correcting a typo).
+        QSO timer model (settled session 28).
 
-        The ticker is stopped by `clearDraft()` (which runs on Clear
-        and after submit) and on component unmount. Operator-typed
-        edits to timeOff during an active timer get clobbered on the
-        next minute boundary — the planned Start / Stop buttons will
-        give explicit pause / resume control.
+        Two states, one always-running ticker:
+
+          - Pre-QSO  (qsoStarted === false): qsoDate, timeOn and
+                     timeOff all paired-tick to current UTC. The form
+                     reflects "right now" without the operator having
+                     to click into a field.
+          - Active   (qsoStarted === true): qsoDate and timeOn are
+                     pinned at the Tab moment; timeOff continues to
+                     tick. ADIF QSO_DATE is the date the QSO STARTED,
+                     so pinning across midnight is semantically right.
+
+        Transitions:
+          - Tab on a valid callsign: snap qsoDate/timeOn/timeOff to
+            current UTC (avoids the up-to-60s staleness window from
+            the paired ticker), then set qsoStarted=true.
+          - Clear / Submit: set qsoStarted=false; the paired ticker
+            resumes naturally on the next tick.
+
+        Tick rate is 60s, matching the HH:MM display granularity. The
+        single ticker runs from panel mount to onDestroy. Manual edits
+        to a tick-driven field get clobbered on the next minute
+        boundary, which gives the operator up to 59s to type and
+        Submit / Tab — plenty for back-logging.
+
+        The Start/Stop button affordances were considered and dropped
+        (session 28): the lookup-only F2 path covers the DX-pile-up
+        case without needing a separate stop, and "abandon a QSO
+        without clearing" isn't a real workflow.
     */
-    let timeOffTickerId: ReturnType<typeof setInterval> | null = null;
+    let qsoStarted = false;
 
-    function startTimeOffTicker(): void {
-        if (timeOffTickerId !== null) return;
-        timeOffTickerId = setInterval(() => {
-            const next = formatUtcTime(new Date());
-            if (next !== timeOff) timeOff = next;
-        }, 1000);
-    }
-
-    function stopTimeOffTicker(): void {
-        if (timeOffTickerId !== null) {
-            clearInterval(timeOffTickerId);
-            timeOffTickerId = null;
+    function tick(): void {
+        const now = new Date();
+        const utcTime = formatUtcTime(now);
+        if (!qsoStarted) {
+            const utcDate = formatUtcDate(now);
+            if (utcDate !== qsoDate) qsoDate = utcDate;
+            if (utcTime !== timeOn) timeOn = utcTime;
         }
+        if (utcTime !== timeOff) timeOff = utcTime;
     }
 
-    onDestroy(stopTimeOffTicker);
+    const tickerId = setInterval(tick, 60_000);
+    onDestroy(() => clearInterval(tickerId));
 
     /*
         Enrichment trigger — fires when the operator Tabs out of the
@@ -151,12 +166,18 @@
         repeated callsign edits don't reset timeOn.
     */
     function handleEnrich(call: string): void {
-        if (timeOffTickerId === null) {
-            // First Tab on a valid callsign — treat as QSO start.
-            const fresh = formatUtcTime(new Date());
-            timeOn = fresh;
-            timeOff = fresh;
-            startTimeOffTicker();
+        if (!qsoStarted) {
+            // Tab on a valid callsign = QSO start. Snap qsoDate /
+            // timeOn / timeOff to current UTC at this exact moment
+            // (the paired ticker may be up to 60s stale; re-snap so
+            // the pinned values are accurate). Then set qsoStarted
+            // so qsoDate and timeOn pin; timeOff keeps ticking.
+            const fresh = new Date();
+            qsoDate = formatUtcDate(fresh);
+            const freshTime = formatUtcTime(fresh);
+            timeOn = freshTime;
+            timeOff = freshTime;
+            qsoStarted = true;
         }
         // TODO(/v1/enrich/callsign): fetch enrichment via
         // lib/enrichment.svelte.ts and assign name/qth from the
@@ -203,13 +224,15 @@
         submit so the operator can immediately start the next contact.
     */
     function clearDraft(): void {
-        stopTimeOffTicker();
+        qsoStarted = false;
         callsign = '';
         name = '';
         qth = '';
         comment = '';
         rstSent = displayedState.mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE;
         rstRcvd = displayedState.mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE;
+        // Snap to current UTC so the paired ticker doesn't show stale
+        // values for up to 60s after Clear.
         const fresh = new Date();
         qsoDate = formatUtcDate(fresh);
         const freshTime = formatUtcTime(fresh);
