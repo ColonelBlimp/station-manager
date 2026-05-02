@@ -25,3 +25,18 @@ export function formatUtcDate(d: Date): string {
 export function formatUtcTime(d: Date): string {
     return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
+
+/**
+ * Format a duration in milliseconds as `HH:MM:SS`. Hours can grow
+ * past 99 — Field Day operating sessions, contest weekends, etc.
+ * Negative or fractional inputs are floored to whole seconds; very
+ * negative inputs clamp to 0 (a session that "started in the future"
+ * is operator error, not something to render as `-00:01:00`).
+ */
+export function formatDurationHms(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
