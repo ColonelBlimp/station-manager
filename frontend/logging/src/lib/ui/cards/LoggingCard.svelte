@@ -25,7 +25,7 @@
     </div>
     <div class="flex text-sm font-semibold w-48">
         <div class="w-24">Session Time:</div>
-        <div class="text-right w-17"><SessionTimer/></div>
+        <div class="text-right w-17Wiat"><SessionTimer/></div>
     </div>
 </header>
 <div class="flex flex-row">

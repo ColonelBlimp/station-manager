@@ -40,6 +40,13 @@
     {@const frequency = vfo === 'A' ? displayedState.vfoA : displayedState.vfoB}
     {@const label = `VFO-${vfo}`}
     {@const isSelected = vfo === displayedState.selectedVfo}
+    <!--
+        Tab order: top input (the selected VFO) is always Tab-reachable.
+        The bottom input (non-selected) is only Tab-reachable in split
+        mode — when not split, the bottom VFO carries no operating
+        meaning and Tab should skip past it to Name.
+    -->
+    {@const tabindex = isSelected || displayedState.split ? 0 : -1}
     <div class="flex">
         <VfoBox
             {label}
@@ -54,6 +61,7 @@
             value={formatFrequency(frequency)}
             band={frequencyToBand(frequency)}
             disabled={!displayedState.editable}
+            {tabindex}
             onCommit={(hz) => {
                 if (vfo === 'A') manualState.vfoA = hz;
                 else manualState.vfoB = hz;

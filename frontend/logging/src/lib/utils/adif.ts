@@ -32,7 +32,7 @@
  */
 
 export interface AdifQsoFields {
-    /** ADIF CALL — required. */
+    /** ADIF CALL — required. The CONTACT's callsign. */
     callsign: string;
     /** ADIF RST_SENT — required. */
     rstSent: string;
@@ -50,9 +50,9 @@ export interface AdifQsoFields {
     band: string;
     /** TX frequency in Hz — required. Emitted as ADIF FREQ in MHz with 6 decimal places. */
     txFreqHz: number;
-    /** Operator name — ADIF NAME. Omitted when empty. */
+    /** Contact's name — ADIF NAME. Omitted when empty. */
     name?: string;
-    /** Operator QTH — ADIF QTH. Omitted when empty. */
+    /** Contact's QTH — ADIF QTH. Omitted when empty. */
     qth?: string;
     /** Free-form notes — ADIF COMMENT. Omitted when empty. */
     comment?: string;
@@ -68,6 +68,23 @@ export interface AdifQsoFields {
      * integer. Omitted when 0 (treated as "not set").
      */
     txPower?: number;
+
+    // Operator-station fields (MY_* family). Populated from the
+    // `operator` Svelte store at QSO submit time. All optional —
+    // omitted when empty. Recommended (but not enforced): set at
+    // least `stationCallsign` so the QSO record identifies who
+    // logged it.
+
+    /** OPERATOR's callsign — ADIF STATION_CALLSIGN. Omitted when empty. */
+    stationCallsign?: string;
+    /** Operator's Maidenhead grid (e.g. "IO91vl") — ADIF MY_GRIDSQUARE. */
+    myGridSquare?: string;
+    /** Operator's name — ADIF MY_NAME. */
+    myName?: string;
+    /** Operator's rig (human-friendly name, e.g. "IC-7300") — ADIF MY_RIG. */
+    myRig?: string;
+    /** Operator's antenna description — ADIF MY_ANTENNA. */
+    myAntenna?: string;
 }
 
 function adifTag(name: string, value: string): string {
@@ -110,6 +127,25 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     }
     if (f.comment && f.comment.length > 0) {
         lines.push(adifTag('COMMENT', f.comment));
+    }
+
+    // Operator-station block (MY_*). Logical grouping puts contact
+    // info before operator info — matches typical ADIF reader habits
+    // (the most distinctive field for THIS QSO comes first).
+    if (f.stationCallsign && f.stationCallsign.length > 0) {
+        lines.push(adifTag('STATION_CALLSIGN', f.stationCallsign));
+    }
+    if (f.myGridSquare && f.myGridSquare.length > 0) {
+        lines.push(adifTag('MY_GRIDSQUARE', f.myGridSquare));
+    }
+    if (f.myName && f.myName.length > 0) {
+        lines.push(adifTag('MY_NAME', f.myName));
+    }
+    if (f.myRig && f.myRig.length > 0) {
+        lines.push(adifTag('MY_RIG', f.myRig));
+    }
+    if (f.myAntenna && f.myAntenna.length > 0) {
+        lines.push(adifTag('MY_ANTENNA', f.myAntenna));
     }
 
     lines.push('<EOR>');

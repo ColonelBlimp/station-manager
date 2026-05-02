@@ -1,11 +1,13 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
+    import { get } from 'svelte/store';
     import Callsign from "../components/Callsign.svelte";
     import Rst from "../components/Rst.svelte";
     import Mode from "../components/Mode.svelte";
     import Vfos from "../components/Vfos.svelte";
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
+    import { station } from '../../stores/station';
     import TextInput from "../components/TextInput.svelte";
     import Comment from "../components/Comment.svelte";
     import DateInput from "../components/DateInput.svelte";
@@ -266,6 +268,19 @@
         const txFreqHz = displayedState.split ? otherHz : selectedHz;
         const rxFreqHz = displayedState.split ? selectedHz : undefined;
 
+        // Logging-station fields — one-shot read of the store at
+        // submit time. The store is populated at app start (by hand-
+        // edit of `stores/station.ts` until the daemon `/v1/config`
+        // endpoint lands) and rarely mutates during the page life,
+        // so a reactive subscription buys nothing for QSO submit.
+        //
+        // TODO: when the bridge SSE adds a rig-name field (distinct
+        // from `catState.rigIdentity` which is the CAT model
+        // identifier — they're typically not the same string), fall
+        // back to it here when `stn.equipment.rig` is empty:
+        //   myRig: stn.equipment.rig || bridgeState.rigName || '',
+        const stn = get(station);
+
         const adif = formatAdifRecord({
             callsign: callsign.trim().toUpperCase(),
             rstSent,
@@ -282,6 +297,11 @@
             rxFreqHz,
             band: frequencyToBand(txFreqHz),
             txPower: displayedState.effectivePower,
+            stationCallsign: stn.stationCallsign,
+            myGridSquare: stn.location.gridSquare,
+            myName: stn.location.name,
+            myRig: stn.equipment.rig,
+            myAntenna: stn.equipment.antenna,
         });
 
         console.log('[QSO submit] ADIF payload:\n' + adif);

@@ -6,6 +6,13 @@
         value: string;
         band: string;
         disabled?: boolean;
+        /**
+         * tabindex for the underlying input. Default is 0 (in tab
+         * order). The Vfos parent passes -1 for the bottom (non-split)
+         * VFO so Tab navigation skips it; the top one is always
+         * Tab-reachable.
+         */
+        tabindex?: number;
         onCommit?: (hz: number) => void;
     }
     let {
@@ -13,6 +20,7 @@
         value,
         band,
         disabled = false,
+        tabindex = 0,
         onCommit,
     }: Props = $props();
 
@@ -75,6 +83,7 @@
         bind:this={inputElement}
         value={editing ? editValue : value}
         disabled={disabled}
+        {tabindex}
         class="input-base {invalid ? 'invalid-input' : ''}"
         aria-invalid={invalid}
         type="text"

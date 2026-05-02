@@ -18,8 +18,14 @@
 
     // Interactive only when neither disabled (CAT operating) nor already
     // selected (clicking the active VFO is a no-op). Non-interactive
-    // boxes suppress hover/cursor/tabindex/title so the visual matches
-    // the behaviour. See Vfos.svelte for the top-vs-bottom positioning.
+    // boxes suppress hover/cursor/title so the visual matches the
+    // behaviour. See Vfos.svelte for the top-vs-bottom positioning.
+    //
+    // VfoBox is intentionally NOT in the keyboard tab order
+    // (`tabindex={-1}` always) — settled session 28. Operators reach
+    // the swap action via mouse click or the planned Ctrl+\ keyboard
+    // shortcut (ADR 0007). Tab navigation skips the box entirely and
+    // lands on the input below it.
     const interactive = $derived(!disabled && !isSelected);
 
     function handleClick(): void {
@@ -38,7 +44,7 @@
 
 <div
     role="button"
-    tabindex={interactive ? 0 : -1}
+    tabindex={-1}
     aria-label="Select {label}"
     aria-disabled={disabled}
     data-vfo={label}

@@ -25,6 +25,7 @@
             bind:value
             {id}
             {disabled}
+            tabindex={-1}
             class="col-start-1 row-start-1 w-full appearance-none rounded-md bg-surface py-1.5 pr-8 pl-3 text-base outline-1 -outline-offset-1 outline-line focus:outline-2 focus:-outline-offset-2 focus:outline-focus disabled:bg-surface-disabled disabled:cursor-not-allowed">
             {#each list as mode (mode)}
                 <option value={mode}>{mode}</option>

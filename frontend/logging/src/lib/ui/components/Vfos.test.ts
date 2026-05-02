@@ -407,13 +407,20 @@ describe('Vfos', () => {
             expect(manualState.selectedVfo).toBe('A');
         });
 
-        it('the unselected (bottom) VfoBox has role="button" and tabindex=0 when editable', () => {
-            // selectedVfo='A' default → VFO-B is the bottom (interactive) box.
+        it('all VfoBoxes have role="button" and tabindex=-1 when editable (Tab skips boxes per session-28 design)', () => {
+            // VfoBox is intentionally NOT in the tab order — operators
+            // reach the swap action via mouse click or the planned
+            // Ctrl+\ keyboard shortcut. Tab navigates from VfoInput
+            // straight to the next field.
             const { container } = render(Vfos);
+            const vfoABox = container.querySelector('[data-vfo="VFO-A"]') as HTMLElement;
             const vfoBBox = container.querySelector('[data-vfo="VFO-B"]') as HTMLElement;
 
+            expect(vfoABox.getAttribute('role')).toBe('button');
+            expect(vfoABox.getAttribute('tabindex')).toBe('-1');
+            expect(vfoABox.getAttribute('aria-disabled')).toBe('false');
             expect(vfoBBox.getAttribute('role')).toBe('button');
-            expect(vfoBBox.getAttribute('tabindex')).toBe('0');
+            expect(vfoBBox.getAttribute('tabindex')).toBe('-1');
             expect(vfoBBox.getAttribute('aria-disabled')).toBe('false');
         });
 
@@ -442,6 +449,52 @@ describe('Vfos', () => {
             const text = container.textContent ?? '';
             // After swap: VFO-B is now in RX (top) position, VFO-A in TX (bottom)
             expect(text.indexOf('VFO-B')).toBeLessThan(text.indexOf('VFO-A'));
+        });
+    });
+
+    /**
+     * Tab-order tests — VfoInput tabindex per session-28 design:
+     *   - top input (selectedVfo's) is always Tab-reachable (tabindex=0).
+     *   - bottom input (non-selected VFO's) is Tab-reachable only when
+     *     split is on; non-split it gets tabindex=-1 so Tab skips past
+     *     to Name.
+     */
+    describe('tab order — VfoInput', () => {
+        it('top (selected) input has tabindex=0 when not split', () => {
+            manualState.selectedVfo = 'A';
+            // vfoA === vfoB → split=false
+            const { container } = render(Vfos);
+            const vfoAInput = container.querySelector('#vfo-a') as HTMLInputElement;
+            expect(vfoAInput.getAttribute('tabindex')).toBe('0');
+        });
+
+        it('bottom (unselected) input has tabindex=-1 when not split', () => {
+            manualState.selectedVfo = 'A';
+            // vfoA === vfoB → split=false
+            const { container } = render(Vfos);
+            const vfoBInput = container.querySelector('#vfo-b') as HTMLInputElement;
+            expect(vfoBInput.getAttribute('tabindex')).toBe('-1');
+        });
+
+        it('both inputs have tabindex=0 when split', () => {
+            manualState.selectedVfo = 'A';
+            // Force frequency divergence → split=true
+            manualState.vfoA = 14_250_000;
+            manualState.vfoB = 14_300_000;
+            const { container } = render(Vfos);
+            const vfoAInput = container.querySelector('#vfo-a') as HTMLInputElement;
+            const vfoBInput = container.querySelector('#vfo-b') as HTMLInputElement;
+            expect(vfoAInput.getAttribute('tabindex')).toBe('0');
+            expect(vfoBInput.getAttribute('tabindex')).toBe('0');
+        });
+
+        it('selectedVfo=B → vfo-b is the top (tabindex=0), vfo-a is bottom (tabindex=-1) when not split', () => {
+            manualState.selectedVfo = 'B';
+            const { container } = render(Vfos);
+            const vfoBInput = container.querySelector('#vfo-b') as HTMLInputElement;
+            const vfoAInput = container.querySelector('#vfo-a') as HTMLInputElement;
+            expect(vfoBInput.getAttribute('tabindex')).toBe('0');
+            expect(vfoAInput.getAttribute('tabindex')).toBe('-1');
         });
     });
 
