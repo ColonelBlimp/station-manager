@@ -1,5 +1,6 @@
 <script lang="ts">
     import QsoPanel from "../panels/QsoPanel.svelte";
+    import CountryPanel from "../panels/CountryPanel.svelte";
 </script>
 
 <!--
@@ -13,4 +14,8 @@
         <h1 class="text-xl font-bold tracking-tight">Logging Mode:</h1>
     </div>
 </header>
-<QsoPanel/>
+<div class="flex flex-row">
+    <QsoPanel/>
+    <CountryPanel/>
+</div>
+

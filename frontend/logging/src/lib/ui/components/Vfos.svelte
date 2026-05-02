@@ -81,7 +81,7 @@
     {@const frequency = vfo === 'A' ? displayedState.vfoA : displayedState.vfoB}
     {@const label = `VFO-${vfo}`}
     {@const isSelected = vfo === displayedState.selectedVfo}
-    <div class="flex w-full">
+    <div class="flex">
         <VfoBox
             {label}
             isSplit={displayedState.split}
