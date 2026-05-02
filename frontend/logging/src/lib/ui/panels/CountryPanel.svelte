@@ -2,7 +2,7 @@
 </script>
 
 <div class="w-full pt-6 pr-6">
-    <div class="w-60 h-59 border border-gray-300 rounded-md bg-gray-200">
+    <div class="w-60 h-59 border border-line rounded-md bg-surface-muted">
     Country Panel
     </div>
 </div>

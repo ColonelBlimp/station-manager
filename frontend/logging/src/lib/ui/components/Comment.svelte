@@ -33,7 +33,7 @@
             {id}
             bind:value
             {disabled}
-            class="textarea-base w-full h-18 disabled:bg-gray-100 disabled:cursor-not-allowed"
+            class="textarea-base w-full h-18 disabled:bg-surface-disabled disabled:cursor-not-allowed"
             autocomplete="off"
             spellcheck="false"
         ></textarea>

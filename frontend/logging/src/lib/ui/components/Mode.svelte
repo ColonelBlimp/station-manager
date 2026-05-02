@@ -25,7 +25,7 @@
             bind:value
             {id}
             {disabled}
-            class="col-start-1 row-start-1 w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 disabled:bg-gray-100 disabled:cursor-not-allowed">
+            class="col-start-1 row-start-1 w-full appearance-none rounded-md bg-surface py-1.5 pr-8 pl-3 text-base outline-1 -outline-offset-1 outline-line focus:outline-2 focus:-outline-offset-2 focus:outline-focus disabled:bg-surface-disabled disabled:cursor-not-allowed">
             {#each list as mode (mode)}
                 <option value={mode}>{mode}</option>
             {/each}

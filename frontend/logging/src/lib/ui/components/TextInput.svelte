@@ -32,7 +32,7 @@
             {id}
             bind:value
             {disabled}
-            class="input-base disabled:bg-gray-100 disabled:cursor-not-allowed"
+            class="input-base disabled:bg-surface-disabled disabled:cursor-not-allowed"
             type="text"
             autocomplete="off"
             spellcheck="false"

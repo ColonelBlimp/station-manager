@@ -11,8 +11,18 @@
     at the use site with a comment, because tokenizing them adds
     names without adding clarity.
 
-    Naming: `--<dimension>-<purpose>-<variant>` where dimension is
-    `spacing` (the Tailwind theme key for both width and height utilities).
+    Two flavours of token live here:
+
+    - `--spacing-*` — sizes used by `w-*` / `h-*` utilities.
+    - `--color-*`   — semantic colour palette. The same colour serves
+                      the same semantic purpose across multiple
+                      components, AND tokenizing it makes a future
+                      light/dark-mode swap a one-block change rather
+                      than an audit-every-utility-class sweep.
+
+    Naming: `--<theme-key>-<purpose>-<variant>`. Keep names tied to
+    what the colour MEANS in the UI (`vfo-rx`, `invalid`, `focus`)
+    rather than what shade it happens to be (`green-600`, `red-600`).
 */
 @theme {
     /*
@@ -34,11 +44,41 @@
         shift when the slot eventually appears.
     */
     --spacing-input-slot:   4.375rem;   /* 70px */
+
+    /*
+        Semantic colour palette. Each token is currently mapped to a
+        Tailwind v4 default-palette value (mapping noted in the
+        comment alongside) so any code still referencing the raw
+        Tailwind class produces the same visual.
+
+        Surfaces / chrome:
+    */
+    --color-surface:           #fff;                          /* tw white */
+    --color-surface-muted:     oklch(92.8% .006 264.531);     /* tw gray-200 — placeholder panels */
+    --color-surface-disabled:  oklch(96.7% .003 264.542);     /* tw gray-100 — disabled input bg */
+    --color-line:              oklch(87.2% .01 258.338);      /* tw gray-300 — input outline */
+    --color-line-soft:         oklch(92.8% .006 264.531);     /* tw gray-200 — card border */
+    --color-ink:               oklch(21% .034 264.665);       /* tw gray-900 — body text */
+
+    /*
+        Status / interaction:
+    */
+    --color-focus:             oklch(51.1% .262 276.966);     /* tw indigo-600 — input focus outline + accent */
+    --color-focus-ring:        oklch(58.5% .233 277.117);     /* tw indigo-500 — button-style focus-visible ring */
+    --color-invalid:           oklch(57.7% .245 27.325);      /* tw red-600 — invalid-input outline */
+
+    /*
+        VFO state colours (Vfos / VfoBox specific):
+    */
+    --color-vfo-rx:            oklch(62.7% .194 149.214);     /* tw green-600 — RX label / active receive */
+    --color-vfo-tx:            oklch(41% .159 10.272);        /* tw rose-900 — TX label / selected non-split */
+    --color-vfo-label:         oklch(48.8% .243 264.376);     /* tw blue-700 — VFO-X label background */
+    --color-vfo-inactive:      oklch(55.1% .027 264.364);     /* tw gray-500 — non-selected box (split-off) */
 }
 
 @layer base {
     html {
-        @apply text-gray-900;
+        @apply text-ink;
     }
     h2 {
         @apply text-2xl font-bold my-4;
@@ -62,16 +102,16 @@
     }
     .input-base {
         @apply px-2.5 py-1.5 rounded-md w-full
-        outline-1 -outline-offset-1 outline-gray-300
-        focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600;
+        outline-1 -outline-offset-1 outline-line
+        focus:outline-2 focus:-outline-offset-2 focus:outline-focus;
     }
     .input-label {
         @apply text-sm font-medium ml-0.5;
     }
     .invalid-input {
-        @apply outline-red-600 focus:outline-red-600;
+        @apply outline-invalid focus:outline-invalid;
     }
     .textarea-base {
-        @apply text-sm px-2.5 py-1.5 outline-1 -outline-offset-1 outline-gray-300 rounded-md resize-none focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600;
+        @apply text-sm px-2.5 py-1.5 outline-1 -outline-offset-1 outline-line rounded-md resize-none focus:outline-2 focus:-outline-offset-2 focus:outline-focus;
     }
 }
