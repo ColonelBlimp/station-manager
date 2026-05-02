@@ -8,6 +8,6 @@
     they want a different overall card size; nothing else depends on
     these values.
 -->
-<main class="rounded-xl border border-gray-200 h-120 w-240 mx-auto mt-10">
+<main class="rounded-xl border border-gray-200 h-120 w-fit mx-auto mt-10">
     <LoggingCard/>
 </main>

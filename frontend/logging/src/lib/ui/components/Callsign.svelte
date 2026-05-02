@@ -13,7 +13,7 @@
         id,
         label,
         value = $bindable(''),
-        widthClass = 'w-36',
+        widthClass = 'w-38',
         onenrich,
     }: Props = $props();
 

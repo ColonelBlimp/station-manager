@@ -12,22 +12,72 @@
 
     const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
-    // RST defaults are mode-dependent ham-radio convention: voice modes
-    // use the two-digit Readability-Strength scale (59); CW adds a third
-    // "tone" digit (599). These are computed defaults — operator-typed
-    // values override per QSO. Not persisted: RST is per-QSO operator
-    // activity, not station configuration. (When the QSO submit / draft-
-    // state machinery lands, these will move into qsoDraftState as
-    // initial values applied at draft creation; for now they live as
-    // a $derived prop value on the Rst components.)
+    /*
+        QSO draft fields — held as local $state in QsoPanel for now. A
+        forthcoming `lib/states/qsoDraft.svelte.ts` will own these as a
+        proper module-level singleton (see open question in
+        frontend-spa.md). Until then this panel owns the in-progress
+        QSO and bind:value's through to each field component. Field
+        components remain $bindable so they're standalone-testable.
+    */
+
+    let callsign = $state('');
+    let name = $state('');
+    let qth = $state('');
+    let comment = $state('');
+
+    /*
+        Date / time defaults — UTC; ham QSOs are logged in UTC universally.
+        Snapshotted once when this panel mounts. Time-on and time-off
+        both start at the current UTC time; operator typically advances
+        time-off as the QSO concludes. Snapshots don't auto-update — the
+        operator owns the values once the panel is mounted. When the QSO
+        draft store lands with a "new QSO" / reset action, these will
+        recompute at that point.
+    */
+    const now = new Date();
+    const pad = (n: number): string => n.toString().padStart(2, '0');
+    const initialUtcDate =
+        `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}`;
+    const initialUtcTime =
+        `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}`;
+
+    let qsoDate = $state(initialUtcDate);
+    let timeOn = $state(initialUtcTime);
+    let timeOff = $state(initialUtcTime);
+
+    /*
+        RST defaults are mode-dependent ham-radio convention: voice modes
+        use the two-digit Readability-Strength scale (59); CW adds a
+        third "tone" digit (599). Initialized to the current mode's
+        default at mount so there's no flash of empty content. The
+        $effect below re-fills if the field is cleared (empty) when the
+        mode changes — so an empty field tracks the current mode while
+        operator-typed values stick.
+
+        Not persisted: RST is per-QSO operator activity, not station
+        configuration.
+    */
     const DEFAULT_RST_VOICE = '59';
     const DEFAULT_RST_CW = '599';
     const defaultRst = $derived(displayedState.mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE);
 
-    // Mode dropdown is operator-edit territory: writes go to manualState
-    // (per ADR 0009 static ownership), reads come from displayedState
-    // which picks catState vs manualState based on the three-flag rule.
-    // Disabled when CAT is live so the rig owns the mode field.
+    let rstSent = $state(displayedState.mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE);
+    let rstRcvd = $state(displayedState.mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE);
+
+    $effect(() => {
+        if (rstSent === '') rstSent = defaultRst;
+    });
+    $effect(() => {
+        if (rstRcvd === '') rstRcvd = defaultRst;
+    });
+
+    /*
+        Mode dropdown is operator-edit territory: writes go to manualState
+        (per ADR 0009 static ownership), reads come from displayedState
+        which picks catState vs manualState based on the three-flag rule.
+        Disabled when CAT is live so the rig owns the mode field.
+    */
     let mode = $state(displayedState.mode);
     $effect(() => {
         // Mirror displayedState → local binding when the live source
@@ -43,6 +93,30 @@
             manualState.mode = mode;
         }
     });
+
+    /*
+        Enrichment trigger — fires when the operator Tabs out of the
+        Callsign field with a valid callsign. Per ADR 0005, the daemon's
+        `/v1/enrich/callsign?call=X` endpoint returns aggregated JSON
+        from hamnut/QRZ/etc.; the SPA's role is a thin fetch wrapper
+        (`lib/enrichment.svelte.ts`, not yet built — daemon endpoint is
+        a deferred item).
+
+        Boundary is wired today: Callsign → onenrich → handleEnrich
+        populates name/qth. The body is a TODO until the daemon endpoint
+        and SPA fetch wrapper land. Overwrite-on-new-callsign is the
+        chosen UX — a fresh callsign means a different QSO; operator
+        can re-edit if they want.
+    */
+    function handleEnrich(call: string): void {
+        // TODO(/v1/enrich/callsign): fetch enrichment via
+        // lib/enrichment.svelte.ts and assign name/qth from the
+        // response. e.g.
+        //   const r = await enrichCallsign(call);
+        //   name = r.name ?? '';
+        //   qth = r.qth ?? '';
+        void call;
+    }
 </script>
 
 <!--
@@ -60,20 +134,20 @@
 -->
 <div class="flex flex-col px-6">
     <div class="flex flex-row space-x-2 pt-4">
-        <Callsign id="call" label="Callsign" value=""/>
-        <Rst id="rst_sent" label="RST Sent" value={defaultRst}/>
-        <Rst id="rst_rcvd" label="RST Rcvd" value={defaultRst}/>
+        <Callsign id="call" label="Callsign" bind:value={callsign} onenrich={handleEnrich}/>
+        <Rst id="rst_sent" label="RST Sent" bind:value={rstSent}/>
+        <Rst id="rst_rcvd" label="RST Rcvd" bind:value={rstRcvd}/>
         <Mode id="mode" label="Mode" bind:value={mode} list={modes} disabled={!displayedState.editable}/>
         <Vfos/>
     </div>
     <div class="flex flex-row space-x-2 mt-2">
-        <TextInput id="name" label="Name" value=""/>
-        <TextInput id="qth" label="QTH" widthClass="w-40" value=""/>
-        <Comment id="comment" label="Comment" value=""/>
+        <TextInput id="name" label="Name" bind:value={name}/>
+        <TextInput id="qth" label="QTH" widthClass="w-46" bind:value={qth}/>
+        <Comment id="comment" label="Comment" bind:value={comment}/>
     </div>
-    <div class="flex flex-row space-x-2 mt-2">
-        <DateInput id="qso_date" label="Date" value=""/>
-        <TimeInput id="time_on" label="Time On (UTC)" value=""/>
-        <TimeInput id="time_off" label="Time Off (UTC)" value=""/>
+    <div class="flex flex-row space-x-2 -mt-1">
+        <DateInput id="qso_date" label="Date" bind:value={qsoDate}/>
+        <TimeInput id="time_on" label="Time On (UTC)" bind:value={timeOn}/>
+        <TimeInput id="time_off" label="Time Off (UTC)" bind:value={timeOff}/>
     </div>
 </div>
