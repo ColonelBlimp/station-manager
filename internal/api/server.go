@@ -105,8 +105,15 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 		mux.Handle("GET /", spaHandler(frontend.LoggingFS()))
 	}
 
+	// Middleware chain — outermost first:
+	//   logRequests       — access log; observes every completion (incl.
+	//                       503 from limitConcurrent and 500 from recoverPanic)
+	//   limitConcurrent   — non-SSE concurrent-request cap
+	//   recoverPanic      — panic safety net + structured panic log
+	//   mux               — per-route handlers (with their own per-route
+	//                       middleware like limitSubmitRate / limitEventSubscribers)
 	s.httpServer = &http.Server{
-		Handler:      s.limitConcurrent(s.recoverPanic(mux)),
+		Handler:      s.logRequests(s.limitConcurrent(s.recoverPanic(mux))),
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeoutSec) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeoutSec) * time.Second,
 		IdleTimeout:  time.Duration(cfg.Server.IdleTimeoutSec) * time.Second,

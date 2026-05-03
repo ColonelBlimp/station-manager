@@ -566,18 +566,40 @@ shipped shapes.
   `Server.MaxEventSubscribers` (default 16). Over-budget
   connections get `503 server_busy` and never enter the
   long-lived SSE handler. Released when the handler returns.
-- **Panic recovery.** `recoverPanic` is the outermost wrapper
-  on the mux; per-handler panics are logged through
-  `logging.Service` (with stack, method, path) and converted to
-  a `500 internal_error` envelope. The daemon stays alive.
+- **Panic recovery.** `recoverPanic` wraps the mux; per-handler
+  panics are logged through `logging.Service` (with stack,
+  method, path) and converted to a `500 internal_error`
+  envelope. The daemon stays alive.
 - **Body-size limit.** `Server.MaxBodyBytes` (default 1 MiB)
   caps request bodies via the body-reader helper; oversize
   reads return `413 payload_too_large`.
+- **Access log.** `logRequests` is the outermost wrapper.
+  Emits one structured `INF http request` line per completion
+  with fields `method`, `path`, `status`, `duration_ms`,
+  `bytes`, `remote`. On 4xx/5xx the line additionally carries
+  `code`, `error`, `op` — the envelope classification from
+  `writeError` / `writeServerError`, propagated up through the
+  `responseRecorder.noteError` hook so the line names *what*
+  the failure was, not just its HTTP status. Captures every
+  shape of completion uniformly: 2xx/3xx normal returns, 4xx
+  from `writeError`, 5xx from `writeServerError` (which also
+  emits its own ERR line with the wrapped error chain — the
+  access-log line is the request-level summary), 503 from the
+  concurrent / subscriber caps, 500 from `recoverPanic`. Status
+  defaults to 200 to mirror net/http's implicit-WriteHeader
+  behaviour; the recorder forwards `Flush()` so SSE handlers
+  keep working through the wrapper. Operators grep `status:5`
+  for any 5xx, `status:4` for any 4xx — the level stays Info
+  uniformly so a structured extractor can pivot on the field
+  rather than the level. SSE connections log once at
+  disconnect with the connection lifetime as `duration_ms`.
 - **Order in the chain:** outermost first —
-  `limitConcurrent → recoverPanic → mux → per-route
-  (limitSubmitRate | limitEventSubscribers)`. Recovery sits
-  inside the concurrent cap so a panicked handler still
-  releases its slot via the deferred release closure.
+  `logRequests → limitConcurrent → recoverPanic → mux →
+  per-route (limitSubmitRate | limitEventSubscribers)`. Access
+  log sits outside the concurrent cap so 503-rejected requests
+  are still observable. Recovery sits inside the concurrent
+  cap so a panicked handler still releases its slot via the
+  deferred release closure.
 
 ### Server-config knobs (current `Server` struct, defaults applied at load)
 

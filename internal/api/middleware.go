@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -113,5 +114,141 @@ func (s *Server) limitSubmitRate(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// responseRecorder wraps http.ResponseWriter so the outer access-log
+// middleware can observe the status code and bytes written. Status
+// defaults to 200 to mirror net/http's implicit-WriteHeader behaviour
+// for handlers that call w.Write without an explicit WriteHeader.
+//
+// errCode / errMessage / errOp carry the 4xx/5xx envelope fields up
+// to logRequests so the access-log line can name *what* the failure
+// was, not just its HTTP status. writeError / writeServerError stash
+// them via noteError before writing the JSON body. For 5xx, the
+// detailed wrapped-error chain is also logged at ERR level by
+// writeServerError itself; the access-log line is the request-level
+// summary.
+//
+// Flush is implemented so SSE handlers (which assert http.Flusher on
+// the writer) keep working through the wrapper. Other writer
+// interfaces (Hijacker, Pusher) are not in use today; if they're
+// added later, mirror the Flush pattern.
+type responseRecorder struct {
+	http.ResponseWriter
+	status      int
+	bytes       int64
+	wroteHeader bool
+
+	errCode    string
+	errMessage string
+	errOp      string
+}
+
+func newResponseRecorder(w http.ResponseWriter) *responseRecorder {
+	return &responseRecorder{ResponseWriter: w, status: http.StatusOK}
+}
+
+// noteError records the error envelope's classification. First call
+// wins (handlers should only call writeError once per request; the
+// guard is defence-in-depth).
+func (r *responseRecorder) noteError(code, message, op string) {
+	if r.errCode == "" {
+		r.errCode = code
+		r.errMessage = message
+		r.errOp = op
+	}
+}
+
+func (r *responseRecorder) WriteHeader(code int) {
+	if !r.wroteHeader {
+		r.status = code
+		r.wroteHeader = true
+	}
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	if !r.wroteHeader {
+		// Mirror net/http: an implicit 200 is committed on first write.
+		r.wroteHeader = true
+	}
+	n, err := r.ResponseWriter.Write(b)
+	r.bytes += int64(n)
+	return n, err
+}
+
+func (r *responseRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// clientIP returns a best-effort representation of the request's
+// originating address. Strips the port off RemoteAddr; honours
+// X-Forwarded-For's first hop when present (LAN reverse-proxy
+// scenarios). Defence-in-depth: the daemon doesn't trust XFF for any
+// security decision today, so this is purely for log breadcrumbs.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if comma := strings.IndexByte(xff, ','); comma >= 0 {
+			return strings.TrimSpace(xff[:comma])
+		}
+		return strings.TrimSpace(xff)
+	}
+	addr := r.RemoteAddr
+	if colon := strings.LastIndexByte(addr, ':'); colon >= 0 {
+		return addr[:colon]
+	}
+	return addr
+}
+
+// logRequests is the outermost middleware: it observes every HTTP
+// request the daemon receives and emits one structured INF line on
+// completion. Mounted outside recoverPanic and limitConcurrent so it
+// captures all four shapes of completion uniformly:
+//
+//   - 2xx / 3xx / 4xx from a normal handler return
+//   - 5xx from writeServerError (the wrapped err is also logged at
+//     ERR by writeServerError itself; the access-log line here is
+//     the request-level summary)
+//   - 503 from limitConcurrent or limitEventSubscribers
+//   - 500 from recoverPanic catching a panic
+//
+// The line shape is the canonical web-access-log set: method, path,
+// status, duration_ms, remote_addr, plus bytes_written for body-size
+// observability. Operators grep `status:5` for any 5xx, `status:4`
+// for any 4xx — the level stays Info uniformly so a structured
+// extractor can pivot on the field rather than the level.
+//
+// SSE caveat: a long-lived /v1/events connection is logged once at
+// disconnect with a large duration (the connection lifetime). That's
+// the right behaviour: the access log records what happened, and
+// "happened" for an SSE connection means "the connection ended."
+func (s *Server) logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := newResponseRecorder(w)
+		start := time.Now()
+		next.ServeHTTP(rec, r)
+		duration := time.Since(start)
+
+		evt := s.logger.InfoWith().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Int("status", rec.status).
+			Int64("duration_ms", duration.Milliseconds()).
+			Int64("bytes", rec.bytes).
+			Str("remote", clientIP(r))
+		// Surface the 4xx/5xx error classification when present, so
+		// the access-log line answers "what went wrong" without an
+		// extra log-stream join. 5xx detail (the wrapped error
+		// chain) still lives on writeServerError's ERR line.
+		if rec.errCode != "" {
+			evt = evt.
+				Str("code", rec.errCode).
+				Str("error", rec.errMessage).
+				Str("op", rec.errOp)
+		}
+		evt.Msg("http request")
 	})
 }

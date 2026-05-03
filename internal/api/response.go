@@ -29,6 +29,14 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, code, message string, op errors.Op) {
+	// Stash the envelope classification on the responseRecorder (when
+	// present — the writer is wrapped by logRequests in production)
+	// so the access-log line can name what the failure was. The
+	// type assertion is a no-op fallback in tests that exercise
+	// writeError without the middleware chain.
+	if rec, ok := w.(*responseRecorder); ok {
+		rec.noteError(code, message, string(op))
+	}
 	s.writeJSON(w, status, ErrorResponse{
 		Code:    code,
 		Message: message,

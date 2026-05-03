@@ -24,7 +24,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-03, session 30 — SPA `POST /v1/qso` wired end-to-end; ADIF mode-vs-submode resolver landed both sides (FT8 added daemon-side); ADR 0015 settled (`additional_data` blob omits empty fields uniformly); ADR 0008 toast system built end-to-end; first real QSO logged successfully via the SPA; full Go test suite green under `-race`, frontend 302/302 + svelte-check clean)
+## Current state (as of 2026-05-03, session 30 — SPA `POST /v1/qso` wired end-to-end; ADIF mode-vs-submode resolver landed both sides (FT8 added daemon-side); ADR 0015 settled (`additional_data` blob omits empty fields uniformly); ADR 0008 toast system built end-to-end with severity-prefixed messages and top-right placement; daemon HTTP access log added (`logRequests` middleware) so 4xx failures are no longer invisible on disk; first real QSO logged successfully via the SPA; full Go test suite green under `-race`, frontend 302/302 + svelte-check clean)
 
 ### Session 30 work (SPA → daemon submit wiring; mode-resolver; ADR 0015 omitempty pass)
 
@@ -105,6 +105,27 @@ A first-cut feedback banner inside QsoPanel proved the daemon-error round-trip e
 
 - `docs/decisions/0008-notifications-toast-system.md` — References section flipped from "(Planned)" to "(built 2026-05-03)" with file paths; first-consumer line names QsoPanel's submit-outcome arms.
 - `docs/v2-design/frontend-spa.md` — "Open questions" toast entry rewritten from "Resolved" to "Resolved + built 2026-05-03" with module API summary; the QSO-draft-store entry's "until ADR 0008 lands" wording replaced with the live behaviour.
+
+**Daemon access log added (`logRequests` middleware):**
+
+The operator surfaced that 4xx failures (the just-tested `404 logbook_not_found`, plus all `400 invalid_field_value`, `409 duplicate_key`, `400 callsign_mismatch`) leave no trace in `smd.log`. `writeError` builds a JSON response but emits no log; only `writeServerError` (5xx) and panic-recovery were observable. For dev work and bug-tracing this gap is real — invisible 4xx failures mean no log evidence to share when something behaves wrong.
+
+Fix: outermost middleware that emits one structured `INF http request` line per completion.
+
+- **`internal/api/middleware.go`** — added `logRequests`, `responseRecorder`, `clientIP`. The recorder wraps `http.ResponseWriter` to capture status (defaults to 200, mirroring net/http's implicit-WriteHeader) and bytes written; it forwards `Flush()` so SSE handlers keep working. `clientIP` strips RemoteAddr's port and honours `X-Forwarded-For`'s first hop for LAN reverse-proxy scenarios. The middleware sits as the outermost wrap so it captures every shape of completion uniformly: 2xx/3xx normal returns, 4xx from `writeError`, 5xx from `writeServerError`, 503 from the concurrent / subscriber caps, 500 from `recoverPanic`. Level stays Info regardless of status — operators grep `status:5` / `status:4` for sweep filtering.
+- **`internal/api/server.go`** — handler chain reordered to `logRequests(limitConcurrent(recoverPanic(mux)))`. Access log outside the concurrent cap so 503-rejected requests stay observable; recovery inside the cap so a panicked handler still releases its slot.
+- **`internal/api/middleware_test.go`** — six new cases: status defaults to 200, explicit status pinned (first WriteHeader sticks), Flush passthrough for SSE, response pass-through unchanged, `clientIP` strips port, `clientIP` honours X-Forwarded-For first hop.
+- **`docs/v2-design/api.md` §"Load limits and middleware"** — updated to list `logRequests`, document the line shape, and re-state the chain order.
+
+`go test ./... -race` green across all 24 packages. Next daemon restart will start emitting access-log lines into `build/log/smd.log` — the missing-logbook submit will now produce `INF http request method=POST path=/v1/qso status=404 duration_ms=2 …` per attempt.
+
+**Two follow-up refinements after the first access-log lines landed without enough context:**
+
+1. **Timestamps were missing from every JSON log line.** Root cause: `with_timestamp` is a `bool` config field that defaults to false on JSON unmarshal, and the operator's `build/config.json` didn't set it. Fixed by adding `"with_timestamp": true` to the operator's config block. Did NOT promote to a forced default in `applyDefaults` because the `bool` shape can't distinguish "absent" from "explicitly false," and existing `internal/logging` tests rely on `WithTimestamp: false` to produce stable test fixtures. A future tri-state migration (`WithTimestamp *bool` like `ServeSPA`) would let operators see the default-true behaviour without breaking those tests.
+
+2. **The 4xx access-log line carried no error context.** `status=404` alone wasn't useful for bug tracing — the line said *something* failed without saying *what*. Threaded the envelope's `code` / `error` / `op` fields up to the access log via a new `responseRecorder.noteError(...)` hook called from `writeError`. The access-log line now includes those three fields when status >= 400, so a tracing operator sees `INF http request method=POST path=/v1/qso status=404 code=logbook_not_found error="logbook does not exist" op=api.handleSubmitQso`. 5xx detail (the wrapped error chain) still lives on `writeServerError`'s separate ERR line; the access-log line is the request-level summary either way. Test coverage: a new case verifies the recorder captures `errCode` / `errMessage` / `errOp` from a `writeError` call, and that the first call wins (defence-in-depth against a buggy handler calling `writeError` twice).
+
+**Frontend logging deliberately deferred.** `build/log/logging.log` is stale (from the parked Gio `cmd/logging` app — last touched 2026-04-29, 17 KB). The browser SPA writes nowhere on disk; only `console.warn`/`console.error` to DevTools. For a single-operator desktop app, DevTools is the right tool — operator IS the developer. A `POST /v1/log/client` endpoint can land later if there's a need to persist SPA logs server-side.
 
 **Recap of v1/v2 phrasing (memory hardening):**
 
