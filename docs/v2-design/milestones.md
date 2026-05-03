@@ -323,13 +323,38 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
 - ✅ Daemon HTTP access log (`logRequests` middleware; 4xx/5xx
   carry `code` / `error` / `op` envelope fields; timestamps
   enabled). Landed session 30, 2026-05-03.
-- ⏳ Seed default logbook on first-run DB init. Today first-launch
-  submits return `404 logbook_not_found`. Bootstrap step inserts
-  a default logbook from operator config; placeholder until
-  `/v1/config` lands.
-- ⏳ Daemon `GET/PUT /v1/config` — operator-config API (replaces
-  the v1 edit-the-file workflow). Hydrates the SPA's `station`
-  store at startup.
+- ✅ First-run `config.json` write. Daemon seeds a default file at
+  the resolved candidate path on first launch (atomic temp+rename
+  via `config.WriteJSON`); subsequent runs load it. Defaults
+  flipped to a "fresh install runs without operator-side edits"
+  shape: `protocol=tcp`, `socket_path=127.0.0.1:8080` (matches Vite
+  dev proxy), `serve_spa=true`, file logging with timestamps,
+  `db/` and `log/` subdirs match the `build/{db,log}/.gitkeep`
+  convention. Landed session 31, 2026-05-03.
+- ✅ Daemon `GET/PUT /v1/config` — operator-config API. Wire shape
+  embeds `types.X` for every nested object (`types.LoggingStation`,
+  `types.Logbook`, `types.RigConfig`); no parallel structs.
+  Source-of-truth split: scalar IDs (`default_logbook_id`,
+  `default_rig_id`) in config.json; display fields (`name`,
+  `callsign`) joined from DB / `cfg.Rigs[]` at GET time. PUT is
+  mutex-guarded (`cfgSvc.Update()`) and atomic on disk; setup
+  transition (`setup_complete` false→true) seeds a default
+  logbook row at id=1 using the operator's just-set callsign,
+  folding what was previously a separate "seed default logbook"
+  step. `setup_complete` is server-managed — clients can't set it
+  directly. Landed session 31, 2026-05-03.
+- ✅ SPA first-run setup form. `lib/api/config.ts` typed clients
+  (`fetchConfig`, `putConfig`); `configState` extended with
+  `loaded`, `setupComplete`, `loggingStation`, `defaultLogbook`,
+  `defaultRig` views + `applyResponse(...)`; `app.svelte` boot
+  gate renders the setup card while `setup_complete=false` and
+  the QSO panel after. Failure paths (network/server) toast and
+  flip `loaded=true` so the UI doesn't hang. Landed session 31,
+  2026-05-03.
+- ✅ `types.RigConfig.ID`: `string` → `int64`. Closes
+  cat-serial-reuse.md §7.5; uniform with `Logbook.ID int64`;
+  numeric defaults (1) work cleanly. Zero blast radius (no
+  consumers in code yet). Landed session 31, 2026-05-03.
 - ⏳ Daemon `GET /v1/enrich/callsign` — enrichment endpoint
   per ADR 0005. Unlocks F2 lookup-only path.
 - ⏳ `internal/bridge` package per ADR 0013 — daemon subsystem
@@ -353,7 +378,8 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
 
 ### Acceptance test
 
-Launch the daemon (`./smd --config config.json`). Open
+Launch the daemon (`./smd` — no flag needed; first run seeds
+`config.json` at the resolved working dir). Open
 `http://localhost:<port>/` in a browser. Log a QSO through the SPA;
 verify the resulting row in sqlite via `GET /v1/qso/{id}`. Verify
 the upload-queue rows exist via `GET /v1/qso/{id}/uploads`. Verify

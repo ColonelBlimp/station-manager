@@ -24,7 +24,92 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-03, session 30 — SPA `POST /v1/qso` wired end-to-end; ADIF mode-vs-submode resolver landed both sides (FT8 added daemon-side); ADR 0015 settled (`additional_data` blob omits empty fields uniformly); ADR 0008 toast system built end-to-end with severity-prefixed messages and top-right placement; daemon HTTP access log added (`logRequests` middleware) so 4xx failures are no longer invisible on disk; first real QSO logged successfully via the SPA; full Go test suite green under `-race`, frontend 302/302 + svelte-check clean)
+## Current state (as of 2026-05-03, session 31 — `/v1/config` GET/PUT shipped end-to-end with first-run setup-transition logbook seed folded in; SPA boot now fetches config and gates the QSO panel behind a setup dialog when `setup_complete=false`; first-run config-file write (`config.json` seeded by daemon on first launch) plus default overhaul to SPA-friendly values (TCP, ServeSPA, file logging with timestamps, db/ + log/ subdirs); `types.RigConfig.ID` settled to int64 (cat-serial-reuse.md §7.5 closed); InfoPanel refactored to data-driven tabs with ARIA tablist; cards/panels naming convention A locked; CLAUDE.md gained "Reuse types.X" idiom rule; full Go test suite green under `-race`, frontend 302/302 + svelte-check clean)
+
+### Session 31 work (first-run config write; /v1/config GET/PUT with setup-transition logbook seed; SPA setup dialog; defaults overhaul; RigConfig.ID → int64; InfoPanel refactor)
+
+**Operator brief:** continue from session 30's carried queue, top-down. Step #1 (seed default logbook) reframed mid-session into a broader "operator can install + run with one prompt for callsign" flow that pulled in #2 (`/v1/config`) ahead of schedule. Two side discussions captured before code: (a) the parallel-struct anti-pattern caught and made explicit in CLAUDE.md after I drifted into it twice, (b) the consumer-driven shape of GET `/v1/config` settled by enumerating who reads it.
+
+**What landed (daemon + types):**
+
+- **First-run config write** — `internal/config/config.go` gains `WriteJSON(path, cfg)` (atomic temp+rename, indented JSON). `cmd/smd/main.go`'s `loadConfig` now seeds a default `config.json` at the resolved candidate path when no file exists yet, then loads it back. Returns the written path so `run()` can emit a structured `first run: wrote default config to disk` line in `smd.log` once the logger is up. `firstRunWrite` falls back to in-memory defaults if the disk write fails so the daemon still starts. `cfgSvc.SetPath(...)` records the path so `/v1/config` PUT knows where to atomically rewrite.
+
+- **Defaults overhaul** — flipped to a "fresh install just runs" shape:
+  - `Server.Protocol`: `unix` → **`tcp`**.
+  - `SocketPath`: gated on protocol — `127.0.0.1:8080` on TCP (matches Vite proxy), `/tmp/smd.sock` on Unix.
+  - `Server.ServeSPA`: derived `true` automatically (was already protocol-gated; flipping protocol flipped this).
+  - `Logging.WithTimestamp`, `FileLogging`, `LogFileCompress`: **set in `DefaultConfig` only**, NOT in `applyDefaults`, so an operator's explicit `false` in their edited config isn't silently flipped on at every Load. Long-term `*bool` migration noted as follow-up.
+  - `Logging.RelLogFileDir`: `"logs"` → **`"log"`** (matches `build/log/.gitkeep` convention).
+  - `Datastore.Path`: `${DataDir}/station-manager.db` → **`${DataDir}/db/station-manager.db`** (matches `build/db/.gitkeep`).
+  - `Logging.LogFileMaxSizeMB / LogFileMaxBackups / LogFileMaxAgeDays`: 100 / 5 / 30 (was zero — using lib defaults).
+  - Tests added: `TestDefaultConfig_TCPAndServeSPADefaultsOn`, `TestLoad_UnixProtocolKeepsUnixSocketDefault`, `TestLoad_OperatorFalsePreserved` (regression guard for the *bool trap).
+
+- **`Config` struct gained four fields:**
+  - `LoggingStation types.LoggingStation` — full embed (canonical-DTO rule, see CLAUDE.md change below).
+  - `SetupComplete bool` — server-managed; flipped false→true on the first PUT that supplies a non-empty `station_callsign`.
+  - `DefaultLogbookID int64` (default 1).
+  - `DefaultRigID int64` (default 1).
+
+- **`config.Service` gained mutex-guarded mutation:**
+  - `Snapshot() Config` — RLock; returns copy.
+  - `Update(fn func(*Config) error) error` — Lock; copies cfg, applies fn, atomic-writes file via `WriteJSON`, then commits in-memory state only on disk-write success.
+  - `SetPath(p string)` — recorded once at startup.
+
+- **`/v1/config` GET/PUT** (`internal/api/handler_config.go`, new file):
+  - **`ConfigResponse`** local projection struct — embeds `types.LoggingStation`, `types.Logbook`, `types.RigConfig` directly. No parallel field definitions.
+  - **GET** reads `cfgSvc.Snapshot()`, joins the logbook row from DB by `DefaultLogbookID` (returns `{id: N}` stub on `ErrNotFound`); rig join deferred until CAT lands.
+  - **PUT** validates callsign with `isValidCallsign`, gates the setup-transition (`!current.SetupComplete && incomingCall != ""`) on inserting a logbook row at id=1 with the operator's callsign, then `cfgSvc.Update(...)` persists `LoggingStation` + (on transition) `SetupComplete=true` and `DefaultLogbookID=<seeded id>`. Server-managed `setup_complete` from the body is ignored; non-writable joined fields (`default_logbook.name` etc.) are ignored.
+  - 7 handler tests covering pre-setup GET, first-setup PUT (with logbook fetch verifying the seed), normalisation, validation, empty-callsign-accepted, server-managed flag immune to client overrides, idempotent re-PUT, file persistence.
+  - New error code `config_write_error` added to api.md table.
+
+- **`types.RigConfig.ID`: `string` → `int64`** — settled the open from `cat-serial-reuse.md` §7.5. Originally a free-form operator label; no consumer ever materialised that needed strings (CAT lib looks up by `Model`, not ID). Numeric matches `Logbook.ID int64` and lets `default_rig_id` default to 1. Blast radius: zero (no code consumers yet). Doc comment updated; ADR §7.5 closed with the decision recorded.
+
+**What landed (SPA):**
+
+- **`frontend/logging/src/lib/api/config.ts`** (new) — typed `fetchConfig()` and `putConfig(payload)` clients matching `ConfigResponse`. Discriminated union `ConfigOutcome` (`ok` / `validation` / `server` / `network`) — same shape as `qso.ts` for consistency.
+
+- **`frontend/logging/src/lib/states/config.svelte.ts`** — extended with `setupComplete`, `loaded`, `loggingStation`, `defaultLogbook`, `defaultRig` views + `applyResponse(resp)` (field-by-field hydration to preserve $state reactivity boundaries) + `markLoaded()` (failure-path sentinel). Existing `station: {enabled, ampMultiplier}` block (CAT-side concern, ADR 0009) untouched.
+
+- **`frontend/logging/src/app.svelte`** — `onMount` calls `fetchConfig()` and dispatches by outcome. Top-level render gate: `{#if configState.loaded}` then `{#if !setupComplete}{@render setup()}{:else}{@render main_app()}{/if}{/if}`. Loading window renders nothing (fast on localhost; toasts mount point always live for failure surfacing). Operator scaffolded the setup card markup with form input + Save button; `putCallsign()` PUTs to `/v1/config`, on `ok` calls `configState.applyResponse` (flips `setupComplete=true` reactively → main_app renders).
+
+- **`InfoPanel.svelte` refactor** — replaced four hand-duplicated tab blocks with:
+  - Typed `TabId = 'worked' | 'details' | 'station' | 'session'` union.
+  - `tabs[]` data array driving the markup loop.
+  - Single `tabItemClass(isActive)` helper (was two functions).
+  - ARIA: `role="tablist"` on a `<div>` (not `<nav>` — landmark/widget conflict), per-tab `role="tab"` + `aria-selected` + `aria-controls`, matching `id="panel-X"` + `role="tabpanel"`.
+  - Icon snippets per-tab dispatched by id inside the loop.
+  - Imports `WorkedPanel`, `DetailsPanel`, `MyStationPanel`, `SessionPanel` (operator scaffolded these four files; content TBD).
+  - New `.tab-item` / `.tab-button` component classes in `app.css`. The cursor-inheritance trick (`cursor-[inherit]`) is now baked into `.tab-button` so future tab navs reach for the class.
+
+- **`LoggingCard.svelte`** — fixed `w-17Wiat` typo → `w-17` (silently dropped by Tailwind, so it had been a no-op).
+
+- **Bug fixes during live testing:**
+  - "Unable to load config" briefly flashed on every page refresh because the `!loaded` branch was used as a *loading* state with failure-state wording. Replaced with render-nothing-while-loading.
+  - `cursor-pointer` on a parent `div` didn't propagate to a child `<button>` — browser default cursor on `<button>` overrides the parent. Fixed by `cursor-[inherit]` on the button (now extracted to `.tab-button`).
+  - Initial 500 from `GET /v1/config` was diagnosed as the daemon listening on Unix socket while the Vite dev proxy targets `localhost:8080` — feedback that drove the TCP-by-default decision.
+
+**What landed (docs + memory):**
+
+- **CLAUDE.md** — new project idiom: *"Reuse `types.X` rather than building parallel structs."* Promoted from the memory entry to CLAUDE.md so it's loaded into every session, not just the ones where the relevant memory triggers.
+
+- **`docs/v2-design/api.md`** — new "Config" subsection under §7a Landed endpoints. Wire shape, source-of-truth split, writable vs server-managed vs read-only-join field rules, setup-transition semantics. New `config_write_error` row in the error code table.
+
+- **`docs/v2-design/cat-serial-reuse.md`** — §7.5 RigConfig ID decision recorded (string → int64, settled session 31, blast radius zero, why).
+
+- **`docs/v2-design/milestones.md`** — acceptance-test daemon-launch snippet updated to remove the `--config ./config.json` flag (the first-run write makes that unnecessary).
+
+- **`internal/config/doc.go`** — first-run-write paragraph added.
+
+- **Cards/panels naming convention "A" locked:** `cards/` = page-level shell (LoggingCard); `panels/` = content blocks within a card (QsoPanel, CountryPanel, InfoPanel, plus the four upcoming tab-content panels). "X card" in conversation is acceptable shorthand; file names use Panel.
+
+**Verification:**
+
+- Full Go test suite green under `-race` — 24 packages, all green.
+- Frontend `npm run check`: 0/0 errors/warnings, 206 files.
+- Frontend `npm test`: 302/302 pass across 17 files.
+- Live end-to-end: fresh install → daemon writes default config → SPA loads → setup dialog renders → operator types `M0XYZ` → daemon seeds logbook + persists config → setup_complete flips → main_app renders. Toasts cover all failure paths.
+
+
 
 ### Session 30 work (SPA → daemon submit wiring; mode-resolver; ADR 0015 omitempty pass)
 
@@ -242,37 +327,37 @@ A second drift audit ran after the medium fixes landed; eight findings, all addr
 - Default deployment: TCP listener on the same `host:port` as the SPA (single-origin), so the SPA fetch is just `'/v1/qso?logbook=...'` — no `daemonUrl` prefix needed when running embedded.
 - Submit rate cap is 20 QPS / 40 burst; way above any single-operator logging cadence.
 
-### Next steps (carried into session 31+)
+### Next steps (carried into session 32+)
 
 In rough order of dependency:
 
-**Landed in session 30 (struck off; kept as record):**
+**Landed in session 31 (struck off; kept as record):**
 
-- ~~**Wire SPA → daemon `POST /v1/qso`.**~~ `lib/api/qso.ts` + `QsoPanel.submitQso()` POST to the daemon and branch on `SubmitOutcome`.
-- ~~**End-to-end verification with a running daemon.**~~ First real QSO (7Q5MLV) logged successfully; daemon confirmed `qso_id=2 mode=SSB`.
-- ~~**Submit error surfacing in the SPA.**~~ ADR 0008 toast system built end-to-end; QsoPanel's four non-stored `SubmitOutcome` arms surface as `toasts.warn` / `toasts.error`.
-- ~~**Toast system (ADR 0008).**~~ `lib/states/toasts.svelte.ts` + `Toasts.svelte` + Tailwind cluster + `app.svelte` mount. Top-right fixed, severity-prefixed (Info/Warning/Error), per-level TTL, click-to-dismiss, max-stack=5.
-- ~~**ADR 0015 — `additional_data` blob omits empty fields.**~~ Five `internal/types/*.go` files retagged with `,omitempty`.
-- ~~**Daemon HTTP access log.**~~ `logRequests` middleware + `responseRecorder` + `clientIP`. 4xx/5xx lines carry `code`, `error`, `op` envelope fields. Timestamps enabled in operator config.
-- ~~**ADIF mode-vs-submode resolver.**~~ SPA-side `lib/utils/mode.ts`; daemon-side FT8 added to `submodeToMode`.
+- ~~**Seed a default logbook on first-run DB init.**~~ Folded into `/v1/config` PUT — setup-transition (`SetupComplete` false→true) inserts a logbook row at id=1 using the operator's just-set callsign. Idempotent.
+- ~~**Daemon `GET/PUT /v1/config`.**~~ Shipped with embedded-`types.X` projection (no parallel structs), source-of-truth split between config.json (scalar IDs) and DB (joined details), server-managed `setup_complete`, atomic file rewrite via `cfgSvc.Update()`.
+- ~~**SPA setup form / first-run dialog.**~~ `lib/api/config.ts` + extended `configState` + `app.svelte` boot gate + operator-scaffolded setup card render `setup_complete=false` until callsign saved.
+- ~~**First-run `config.json` write.**~~ Daemon seeds a default file on first launch; emits structured `first run: wrote default config to disk` line in `smd.log`.
+- ~~**Defaults overhaul.**~~ TCP+ServeSPA on; `with_timestamp`/`file_logging`/`log_file_compress` true via `DefaultConfig` (preserves operator-explicit false on Load); db/log subdirs match `build/{db,log}/.gitkeep` convention.
+- ~~**`types.RigConfig.ID` → int64.**~~ §7.5 of cat-serial-reuse.md closed.
+- ~~**InfoPanel data-driven refactor + ARIA tablist.**~~ Cards/panels convention A locked.
+- ~~**CLAUDE.md "Reuse types.X" idiom.**~~ Promoted from memory to project rules.
 
-**Carried into session 31+ (in rough order of dependency):**
+**Carried into session 32+ (in rough order of dependency):**
 
-1. **Seed a default logbook on first-run DB init.** First-launch submits return `404 logbook_not_found` because the schema leaves `logbook` empty and the SPA hardcodes `?logbook=1`. The error-surfacing fixture has served its purpose now that toasts are wired. Add a bootstrap step (likely in `internal/database/sqlite/migrations/` or the daemon's first-run path) that inserts a default logbook — operator callsign sourced from config; placeholder string acceptable until `/v1/config` lands.
-2. **Daemon `GET/PUT /v1/config`** (Go) — currently missing. Replaces the v1 edit-the-file workflow for station/operator config; the SPA's `station` store hydrates from this on app start.
-3. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
-4. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
-5. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
-6. **CAT-handover toast** — toast system shipped session 30; awaits the bridge so there's a transition to fire on. One `toasts.info("CAT connected — reading rig state")` call when bridgeState transitions to connected.
-7. **"My Station" header card** — UI display of the station store (callsign, grid, rig).
-8. **`qsoDraft` state-module lift** — promote QsoPanel local `$state` into `lib/states/qsoDraft.svelte.ts` when a second consumer appears.
-9. **Keyboard shortcuts** (ADR 0007 + `@svelte-put/shortcut`) — F2 lookup-only, Ctrl+\ VFO swap, Ctrl+Enter submit, ? help overlay.
-10. **Inline validation message slot (Fix 13).**
+1. **Operator's scaffolded `WorkedPanel` / `DetailsPanel` / `MyStationPanel` / `SessionPanel` content.** InfoPanel chassis is in place; the four files exist as scaffolds (operator's work). MyStationPanel is the natural first content target now that `configState.loggingStation` and `configState.defaultLogbook` are hydrated by `/v1/config`. SessionPanel can read `SessionTimer` state. Worked / Details depend on QSO data and contact-history.
+2. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
+3. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
+4. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
+5. **CAT-handover toast** — toast plumbing exists; awaits the bridge so there's a transition to fire on.
+6. **`qsoDraft` state-module lift** — promote QsoPanel local `$state` into `lib/states/qsoDraft.svelte.ts` when a second consumer appears.
+7. **Keyboard shortcuts** (ADR 0007 + `@svelte-put/shortcut`) — F2 lookup-only, Ctrl+\ VFO swap, Ctrl+Enter submit, ? help overlay.
+8. **Inline validation message slot (Fix 13).**
 
 **Lower-priority follow-ups noted but not blocking:**
 
-- **`WithTimestamp` `*bool` migration.** Operator config defaults to false on JSON unmarshal; `applyDefaults` can't promote it to true without breaking `internal/logging` tests that rely on `WithTimestamp: false` for stable fixtures. Worked around this session by setting `"with_timestamp": true` explicitly in `build/config.json`. A future tri-state pointer migration (mirrors `Server.ServeSPA`) lets fresh installs default-on without breaking those tests.
-- **`POST /v1/log/client` endpoint.** SPA-side persistent logging is deliberately deferred — single-operator desktop dev means DevTools is the right tool. Land this only if SPA-side log persistence becomes wanted (e.g. operator wants to share a bug repro from the field without DevTools open).
+- **`*bool` migration for tri-state booleans.** Currently `WithTimestamp`, `FileLogging`, `LogFileCompress` are set in `DefaultConfig` only (not in `applyDefaults`) so operator-explicit `false` survives Load. Future migration to `*bool` (mirrors `Server.ServeSPA`) would let `applyDefaults` distinguish "absent from config" from "explicitly false" and apply defaults uniformly without the split between DefaultConfig and applyDefaults. Regression-guarded by `TestLoad_OperatorFalsePreserved`.
+- **Logbook callsign coupling.** When the operator changes their `station_callsign` in My Station, the default logbook's `callsign` (seeded from it during setup) doesn't auto-update. Two stores diverge unless we propagate. Decide when MyStationPanel edit ships: (i) PUT `/v1/config` propagates to logbook id=1; (ii) operator edits logbook callsign separately via `/v1/logbook/:id`; (iii) make logbook callsign a derived projection of station_callsign for the default logbook only.
+- **`POST /v1/log/client` endpoint.** SPA-side persistent logging deferred. Land this only if SPA-side log persistence becomes wanted.
 
 ---
 

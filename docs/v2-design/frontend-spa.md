@@ -499,7 +499,7 @@ Five tiers, each matching what the data semantically *means*:
 
 | Tier | Used for | Examples | Lifecycle |
 |---|---|---|---|
-| Daemon (`/v1/config`) | Operator declarations / cross-device persistent | `configState.station.enabled`, `.ampMultiplier`, planned `daemonUrl` / `bridgeUrl` | Persistent on the daemon's filesystem; future settings UI will PUT updates |
+| Daemon (`/v1/config`) | Operator declarations / cross-device persistent | `configState.{setupComplete, loggingStation, defaultLogbook, defaultRig}`, plus the CAT-side `configState.station.{enabled, ampMultiplier}` — wired via `lib/api/config.ts` `fetchConfig()` / `putConfig()` (built session 31, 2026-05-03) | Persistent on the daemon's filesystem (`config.json`, atomically rewritten by `cfgSvc.Update()`); SPA boots via `app.svelte` `onMount` → `fetchConfig()` and PUTs back via the setup form / future My Station card |
 | `localStorage` | Per-device transient session activity | `manualState.*` (vfoA, vfoB, mode, subMode, selectedVfo, power) under `sm.manual.*` | Survives browser sessions; per-device |
 | `sessionStorage` | Per-tab current-session state | `SessionTimer`'s `startedAt` under `sm.session.startedAt` | Survives page refresh; resets on tab close |
 | In-memory only | Live transport / rig state | `catState`, `bridgeState`, QsoPanel's draft fields, `station` store contents | Rebuilt from rig events / app boot |
@@ -519,6 +519,40 @@ Five tiers, each matching what the data semantically *means*:
 - `OWNER_CALLSIGN` — "the callsign of the owner of the station used to log the contact (the callsign of the OPERATOR's host)."
 
 For a club station, all three differ. v1 only models STATION_CALLSIGN; OPERATOR and OWNER_CALLSIGN extensions land if a multi-op or club-station scenario surfaces. The naming makes the v1 ambiguity explicit so the future extension is a clean add.
+
+## Boot flow + setup gate (built 2026-05-03, session 31)
+
+`app.svelte`'s `onMount` calls `fetchConfig()` from `lib/api/config.ts`. Outcome dispatch:
+
+- `ok` → `configState.applyResponse(outcome.config)` hydrates `setupComplete`, `loggingStation`, `defaultLogbook`, `defaultRig` (field-by-field copy preserves the inner `$state` reactivity boundaries) and flips `loaded=true`.
+- `validation` / `server` / `network` → `toasts.error(...)` + `configState.markLoaded()` so the failure path doesn't hang the UI; the brief loading window renders nothing.
+
+Render gate:
+
+```svelte
+{#if configState.loaded}
+    {#if !configState.setupComplete}
+        {@render setup()}
+    {:else}
+        {@render main_app()}
+    {/if}
+{/if}
+<Toasts/>
+```
+
+The setup snippet hosts the first-run dialog: a single callsign input + Save button. Save calls `putConfig({ logging_station: { station_callsign } })` — daemon validates, atomically writes `config.json`, seeds the default logbook row at id=1, flips `setup_complete=true`, returns the new config. The SPA calls `applyResponse` on the response → `setupComplete` flips → main_app renders. No manual flag toggling.
+
+`<Toasts/>` is mounted at the top-level (sibling of the if-branch) so failure toasts can render during the loading window before either branch is ready.
+
+## Cards vs panels — naming convention (locked 2026-05-03)
+
+- **`lib/ui/cards/`** — page-level outer shells. `LoggingCard.svelte` is the first occupant: has its own border + dimensions + header strip; hosts everything else. One per route/view. Future Logbook view, Config view → their own cards.
+- **`lib/ui/panels/`** — content blocks placed inside a card. No independent card-chrome; they fill a slot. `QsoPanel`, `CountryPanel`, `InfoPanel`, plus the four upcoming `WorkedPanel` / `DetailsPanel` / `MyStationPanel` / `SessionPanel` (InfoPanel's tab content).
+- **`lib/ui/components/`** — form primitives. Callsign, VfoBox, Rst, etc.
+
+Conversational shorthand "the My Station card" is acceptable but file names and structural docs use Panel. The distinction matters because LoggingCard is a *structurally different kind of thing* (page shell) than the tab-content surfaces inside it.
+
+`InfoPanel.svelte` is the worked example for tab-style nav — typed `TabId` union + `tabs[]` data array + ARIA `role="tablist"` (on a `<div>`, NOT `<nav>` — landmark/widget conflict) + `.tab-item` / `.tab-button` component classes in `app.css`. The `.tab-button` class bakes in `cursor-[inherit]` so child buttons inherit the parent's `cursor-pointer` / `cursor-default` (browser default cursor on `<button>` otherwise wins).
 
 ## Dev workflow (settled 2026-04-30)
 
