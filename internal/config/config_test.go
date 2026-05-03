@@ -168,6 +168,37 @@ func TestDefaultConfig_LoggingDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_LoggingStationEmpty(t *testing.T) {
+	// First-run state: no callsign yet — operator sets it via the
+	// setup dialog. The empty string is a legitimate pre-setup value.
+	cfg := DefaultConfig(t.TempDir())
+	if cfg.LoggingStation.StationCallsign != "" {
+		t.Errorf("DefaultConfig: LoggingStation.StationCallsign = %q, want empty",
+			cfg.LoggingStation.StationCallsign)
+	}
+}
+
+func TestLoad_LoggingStationCallsignPreserved(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+
+	content := `{
+		"logging_station": {"station_callsign": "M0XYZ"}
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LoggingStation.StationCallsign != "M0XYZ" {
+		t.Errorf("LoggingStation.StationCallsign = %q, want %q",
+			cfg.LoggingStation.StationCallsign, "M0XYZ")
+	}
+}
+
 func TestLoad_OperatorFalsePreserved(t *testing.T) {
 	// Regression guard for the *bool trap: an operator who explicitly
 	// sets file_logging false (and console_logging true) must NOT have

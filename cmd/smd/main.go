@@ -431,6 +431,11 @@ func loadConfig(path string) (config.Config, string, error) {
 // the daemon falls back to in-memory defaults so it can still start.
 // Returns the written path on success (empty on fallback) so the
 // caller can log a structured first-run event after the logger boots.
+//
+// The write-failure stderr line is the only one kept: at that moment
+// the structured logger may not boot at all (config defaulted to
+// file_logging=true, but the working dir might be unwritable), so
+// stderr is the operator's last available channel.
 func firstRunWrite(path, baseDir string) (config.Config, string, error) {
 	cfg := config.DefaultConfig(baseDir)
 	if err := config.WriteJSON(path, cfg); err != nil {
@@ -439,7 +444,6 @@ func firstRunWrite(path, baseDir string) (config.Config, string, error) {
 			path, err)
 		return cfg, "", nil
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "smd: wrote default config to %s\n", path)
 	loaded, err := config.Load(path)
 	if err != nil {
 		return loaded, "", err

@@ -43,6 +43,22 @@ type Config struct {
 	// docs/v2-design/forwarding.md §2. Each enabled entry produces one
 	// worker goroutine at startup.
 	Forwarders []types.ForwarderConfig `json:"forwarders"`
+
+	// LoggingStation describes the operator's own station — the
+	// "logging station" side of every QSO in ADIF terms (vs the
+	// "contacted station" side). Reuses types.LoggingStation rather
+	// than defining a parallel config-only struct, per the canonical-
+	// DTO project idiom: every field already has the right ADIF
+	// JSON tag and ,omitempty rule. The "My Station" card and the
+	// QSO ingest path read from the same shape.
+	//
+	// On first-run write the block marshals empty (`{}`) because all
+	// fields are omitempty; the operator fills station_callsign via
+	// the setup dialog (or hand-edits) and may add my_gridsquare,
+	// my_rig, etc. as desired. The validate tag on StationCallsign
+	// only runs on QSO ingest, not on config Load — empty here is
+	// the legitimate pre-setup state.
+	LoggingStation types.LoggingStation `json:"logging_station"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
