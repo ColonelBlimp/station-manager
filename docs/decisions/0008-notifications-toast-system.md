@@ -55,6 +55,8 @@ info(message, ttl?), warn(message, ttl?), error(message, ttl?)  // convenience w
 
 **Click-to-dismiss is always available.** Clicking any toast removes it immediately regardless of its remaining TTL.
 
+**Severity prefix (added 2026-05-03).** Each toast renders a bold level label inside the button — `Info: ` / `Warning: ` / `Error: ` — followed by the call-site message. The prefix is computed in `Toasts.svelte` from `toast.level`, not baked into the message at the call site. Two reasons: single source of truth for the level → label mapping, and `aria-live="polite"` reads the label aloud so severity is conveyed to screen-reader and colour-blind operators without depending on the colour palette. Call sites pass plain operator-readable text (no role-prefix in the message string itself).
+
 **Mount point:** `<Toasts/>` is rendered once in `app.svelte`. Container is `fixed top-4 right-4`, stacks top-down (oldest-first DOM order; newest appends below the existing stack). Top-right matches v1's convention and keeps the QSO entry rows below the toast region — the operator's eye drops naturally from a freshly-arrived notification back to the form.
 
 (Original ADR position — bottom-right with stack-bottom-up — was changed to top-right on 2026-05-03 after the implementation surfaced; reasoning above. The "keep the top of the viewport clear for the QSO entry area" framing was wrong: the entry area sits in the middle of a finite-size shell, not at the top of the viewport, so a top-right toast doesn't obscure it. v1 precedence wins.)

@@ -347,13 +347,24 @@
                 toasts.warn(`Duplicate of QSO #${outcome.id}; not re-logged.`);
                 break;
             case 'validation':
-                toasts.error(`${outcome.code}: ${outcome.message}`);
+                // Daemon's `message` is already operator-readable; the
+                // `code` is a wire-protocol identifier (snake_case
+                // `logbook_not_found` etc.) that's noise to the user
+                // but useful in the dev console for grepping daemon
+                // logs.
+                console.warn(`[QSO submit] ${outcome.code}: ${outcome.message}`);
+                toasts.error(outcome.message);
                 break;
             case 'server':
-                toasts.error(`Daemon error (${outcome.code}): ${outcome.message}. Try again.`);
+                console.error(`[QSO submit] ${outcome.code}: ${outcome.message}`);
+                toasts.error(`${outcome.message}. Try again.`);
                 break;
             case 'network':
-                toasts.error(`Daemon unreachable: ${outcome.message}. Check the daemon is running.`);
+                // The fetch-error detail (e.g. "Failed to fetch") is
+                // useful in the dev console but doesn't help the
+                // operator; the toast just names what they need to do.
+                console.error(`[QSO submit] daemon unreachable: ${outcome.message}`);
+                toasts.error('Cannot reach the daemon — check it is running.');
                 break;
         }
     }

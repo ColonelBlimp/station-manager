@@ -14,7 +14,7 @@
     overlay; nesting it inside <main> would constrain its z-index stack
     and inherit unrelated layout rules.
 -->
-<main class="rounded-xl border border-line-soft h-120 w-fit mx-auto mt-10">
+<main class="rounded-xl border border-line-soft h-120 w-fit mx-auto mt-12">
     <LoggingCard/>
 </main>
 <Toasts/>

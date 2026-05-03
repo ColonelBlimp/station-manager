@@ -127,7 +127,7 @@
         viewport. text-left because messages are sentences, not labels.
     */
     .toast-base {
-        @apply max-w-sm px-3 py-2 rounded-md text-sm text-left
+        @apply max-w-sm px-3 py-2 rounded text-sm text-left
         border shadow-md cursor-pointer
         focus:outline-2 focus:outline-focus;
     }

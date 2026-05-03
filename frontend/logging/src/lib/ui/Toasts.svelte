@@ -24,10 +24,31 @@
             case 'error': return 'toast-error';
         }
     }
+
+    /*
+        Severity prefix rendered as a bold inline element inside each
+        toast. Two reasons it lives here rather than being baked into
+        each call site's message string:
+
+        - Single source of truth for the level → label mapping. Call
+          sites pass plain operator-readable text; the prefix is
+          derived.
+        - Accessibility: `aria-live="polite"` reads the toast text;
+          having "Error" / "Warning" in the spoken stream conveys
+          severity to screen-reader and colour-blind operators
+          without depending on the colour palette.
+    */
+    function levelLabel(level: 'info' | 'warn' | 'error'): string {
+        switch (level) {
+            case 'info': return 'Info: ';
+            case 'warn': return 'Warning: ';
+            case 'error': return 'Error: ';
+        }
+    }
 </script>
 
 <!--
-    Container is `fixed top-4 right-4`. `pointer-events-none` on the
+    Container is `fixed top-1.25 right-1.25`. `pointer-events-none` on the
     column lets clicks pass through the gaps between toasts; each toast
     re-enables pointer-events so click-to-dismiss still works.
 
@@ -44,7 +65,7 @@
     the right WAI-ARIA mapping for non-critical informational regions.
 -->
 <div
-    class="fixed top-4 right-4 flex flex-col gap-2 z-50 pointer-events-none"
+    class="fixed top-1.25 right-1.25 flex flex-col gap-2 z-50 pointer-events-none"
     aria-live="polite"
     role="status"
 >
@@ -56,7 +77,7 @@
             transition:fade={{ duration: 150 }}
             aria-label={`Dismiss ${toast.level} notification`}
         >
-            {toast.message}
+            <strong>{levelLabel(toast.level)}</strong>{toast.message}
         </button>
     {/each}
 </div>
