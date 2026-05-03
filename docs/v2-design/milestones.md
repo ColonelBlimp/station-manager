@@ -287,7 +287,7 @@ connected `curl` event stream.
 
 ## Milestone 2 — Browser SPA clients
 
-**Status: 🚧 IN PROGRESS (as of 2026-05-02).** Original scope was
+**Status: 🚧 IN PROGRESS (as of 2026-05-03).** Original scope was
 "Wails thin clients"; per ADR 0001 (2026-04-30) the client apps are
 now browser SPAs (Svelte 5 + Vite + Tailwind v4) embedded in the
 daemon binary via `//go:embed` and served by the daemon at `GET /`
@@ -299,9 +299,10 @@ QSO-entry UX shipped through session 28 (2026-05-02): callsign /
 mode / RST / VFOs / date-time / name / qth / comment / submit
 controls all wired, ADIF formatter complete, tab-order indexed,
 session timer + QSO timer running, station-profile store populated.
-Submit currently emits a console.log of the ADIF record; the next
-step is wiring it to `POST /v1/qso` (the daemon endpoint that's
-already live from milestone 1).
+Session 30 (2026-05-03) wired submit to `POST /v1/qso` end-to-end
+via `lib/api/qso.ts`, built the toast system per ADR 0008, added
+the daemon HTTP access log, and logged the first real QSO through
+the v2 stack (7Q5MLV @ 14.250 MHz USB).
 
 ### Scope (revised per ADR 0001)
 
@@ -310,8 +311,20 @@ already live from milestone 1).
 - ✅ Daemon TCP listener + SPA-hosting (`GET /` catch-all,
   `Server.ServeSPA` flag).
 - ✅ QSO-entry UX (callsign / mode / RST / VFOs / dates / submit).
-- 🚧 SPA → daemon `POST /v1/qso` wiring (replaces console.log;
-  daemon endpoint already shipped in milestone 1).
+- ✅ SPA → daemon `POST /v1/qso` wiring (`lib/api/qso.ts`
+  discriminated-union outcome type; `QsoPanel.submitQso()`
+  branches on outcome). Landed session 30, 2026-05-03.
+- ✅ Toast system per ADR 0008 — `lib/states/toasts.svelte.ts` +
+  `<Toasts/>` mounted at `app.svelte`; top-right fixed; severity
+  prefix; per-level TTL; click-to-dismiss; max-stack=5. Landed
+  session 30, 2026-05-03.
+- ✅ Daemon HTTP access log (`logRequests` middleware; 4xx/5xx
+  carry `code` / `error` / `op` envelope fields; timestamps
+  enabled). Landed session 30, 2026-05-03.
+- ⏳ Seed default logbook on first-run DB init. Today first-launch
+  submits return `404 logbook_not_found`. Bootstrap step inserts
+  a default logbook from operator config; placeholder until
+  `/v1/config` lands.
 - ⏳ Daemon `GET/PUT /v1/config` — operator-config API (replaces
   the v1 edit-the-file workflow). Hydrates the SPA's `station`
   store at startup.
@@ -323,8 +336,8 @@ already live from milestone 1).
   loop.
 - ⏳ Real `EventSource` consumer in `bridge.svelte.ts` — populates
   catState from SSE.
-- ⏳ Toast system per ADR 0008 — submit feedback, CAT handover,
-  bridge errors.
+- ⏳ CAT-handover toast — toast plumbing exists; awaits the bridge
+  so there's a transition to fire on (one `toasts.info(...)` call).
 - ⏳ Keyboard shortcuts per ADR 0007 — F2 lookup-only, Ctrl+\\ VFO
   swap, Ctrl+Enter submit, ? help overlay.
 - ⏳ Logbook and config SPAs — deferred. Single `frontend/logging/`
@@ -346,7 +359,9 @@ SSE events arrive on a separate `curl http://localhost:<port>/v1/events`
 stream. Refresh the browser; verify the session timer state survives
 (sessionStorage), the manual VFO state survives (localStorage), and
 the daemon QSO list is unchanged. Stop the daemon; verify the SPA
-shows a connection-status indicator (toast/banner) when submit fails.
+shows a connection-status indicator when submit fails — today this
+is a `toasts.error("Cannot reach the daemon — check it is running.")`
+top-right toast (network-arm of `lib/api/qso.ts`'s `SubmitOutcome`).
 
 ### Milestone 2 — Original Wails scope (preserved as record, pre-ADR 0001)
 

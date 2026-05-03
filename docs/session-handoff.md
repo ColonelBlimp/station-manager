@@ -127,6 +127,13 @@ Fix: outermost middleware that emits one structured `INF http request` line per 
 
 **Frontend logging deliberately deferred.** `build/log/logging.log` is stale (from the parked Gio `cmd/logging` app — last touched 2026-04-29, 17 KB). The browser SPA writes nowhere on disk; only `console.warn`/`console.error` to DevTools. For a single-operator desktop app, DevTools is the right tool — operator IS the developer. A `POST /v1/log/client` endpoint can land later if there's a need to persist SPA logs server-side.
 
+**Toast UX iterations after the initial build (in chronological order, all live):**
+
+1. **Position flipped bottom-right → top-right.** ADR 0008's original spec was `bottom-4 right-4` with the rationale "keep the top of the viewport clear for the QSO entry area." Operator pointed out v1 used top-right and the framing was wrong — the entry form sits in a finite-size shell, not at the top of the viewport, so a top-right toast doesn't obscure it. ADR 0008 amended in-place to record both the change and the corrected rationale.
+2. **Stacking direction set to `flex-col` (oldest-at-top, new toasts append below).** Considered `flex-col-reverse` to put the newest at the top, but that shifts existing toasts on every push — calmer to leave older entries in place and have the queue grow downward.
+3. **Severity prefix rendered by `Toasts.svelte`, not by callers.** Initial pass had each call site bake `"Error: …"` / `"Warning: …"` into the message string — fragile (caller has to remember; conflicts with prefixes already in messages like "Daemon error: …"). Hoisted to `Toasts.svelte` as a `<strong>{levelLabel(level)}</strong>` rendered before the message body. Single source of truth + accessibility (`aria-live="polite"` reads "Error" / "Warning" aloud, conveying severity to screen-reader / colour-blind operators without depending on the colour palette).
+4. **Toast message text simplified.** Validation arm now passes the daemon's `message` directly (e.g. `"logbook does not exist"` instead of `"logbook_not_found: logbook does not exist"`) — the wire-protocol `code` is operator-noise but useful in dev console for grepping daemon logs, so it goes to `console.warn` / `console.error` instead. Server arm dropped its redundant `"Daemon error: …"` prefix (the level label does that work). Network arm rewrote to a friendly "Cannot reach the daemon — check it is running." with the underlying fetch error going to console only.
+
 **Recap of v1/v2 phrasing (memory hardening):**
 
 I regressed mid-session and called pre-rewrite packages "v1 carry-forward" — the operator caught it. Same fix as session 29 plus a memory file (`feedback_no_v1_carry_forward_phrasing.md`) explicitly forbidding that phrasing. Correct framing: codebase on `main` is v2 in full; the `v1` branch + `v1.0.0` tag preserve the Wails app; `/v1/` URL is API versioning, unrelated. Pre-rewrite packages are "preserved from the prior tree," never "v1 anything."
@@ -134,9 +141,11 @@ I regressed mid-session and called pre-rewrite packages "v1 carry-forward" — t
 **What did NOT change:**
 
 - No SQL schema changes. No migrations.
-- The wire contract in api.md §7a is unchanged. Daemon endpoint behaviour is identical; only the in-memory struct's marshal output changed.
-- `qsoDraft` state-module lift (next-step #9) is still deferred; QsoPanel still owns the draft as local `$state`.
-- Toast system (ADR 0008) and inline validation message slot are still unbuilt — error surfacing currently lives in `console.warn`/`console.error`.
+- The wire contract in api.md §7a is unchanged. Daemon endpoint behaviour is identical; only the in-memory struct's marshal output (per ADR 0015) and access-log surface (new INF lines) changed.
+- `qsoDraft` state-module lift is still deferred; QsoPanel still owns the draft as local `$state`.
+- Inline validation message slot (Fix 13) is still unbuilt — operator-facing field-level validation today comes via a single toast carrying the daemon's message, not per-field error markers.
+- First-launch DB has no logbooks; `?logbook=1` returns 404. Deliberately deferred (was the fixture for the toast-system verification).
+- `cmd/logging` Gio app is still parked; no work this session.
 
 ### Session 29 archive (was: 2026-05-02, session 29 — daemon audit: existing v2 milestone-1 daemon (`cmd/smd`) is fully shipped and serving the wire contract the SPA targets; api.md §7a / milestones.md / handoff updated to reflect what's actually landed; no code changes this session)
 
@@ -237,20 +246,33 @@ A second drift audit ran after the medium fixes landed; eight findings, all addr
 
 In rough order of dependency:
 
-1. ~~**Wire SPA → daemon `POST /v1/qso`.**~~ ✅ Landed session 30. `lib/api/qso.ts` + `QsoPanel.submitQso()` now POST to the daemon and branch on `SubmitOutcome`.
-2. ~~**End-to-end verification with a running daemon.**~~ ✅ Landed session 30. First real QSO (7Q5MLV) logged successfully; daemon confirmed `qso_id=2 mode=SSB`.
-3. ~~**Submit error surfacing in the SPA.**~~ ✅ Landed session 30. ADR 0008 toast system built end-to-end; QsoPanel's four non-stored `SubmitOutcome` arms surface as `toasts.warn`/`toasts.error`. Browser-side re-verification of the missing-logbook fixture is next-session housekeeping.
-4. **Seed a default logbook on first-run DB init (was deliberately deferred for step #3's fixture; now safe to address).** Today the migration leaves `logbook` empty; the SPA hardcodes `?logbook=1` so first-launch submits 404. With step #3 done, the fixture has served its purpose. Add a bootstrap step (likely in `internal/database/sqlite/migrations/` or in the daemon's first-run path) that inserts a default logbook with the operator's callsign — sourced from config until `/v1/config` lands; placeholder string acceptable in the meantime.
-3. **Daemon `GET/PUT /v1/config`** (Go) — currently missing. Replaces the v1 edit-the-file workflow for station/operator config; the SPA's `station` store hydrates from this on app start.
-4. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
-5. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
-6. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
-7. **CAT-handover toast** — depends on toast system per ADR 0008.
-8. **"My Station" header card** — UI display of the station store (callsign, grid, rig).
-9. **`qsoDraft` state-module lift** — promote QsoPanel local `$state` into `lib/states/qsoDraft.svelte.ts` when a second consumer appears.
-10. **Toast system** (ADR 0008).
-11. **Keyboard shortcuts** (ADR 0007 + `@svelte-put/shortcut`) — F2 lookup-only, Ctrl+\ VFO swap, Ctrl+Enter submit, ? help overlay.
-12. **Inline validation message slot (Fix 13)**.
+**Landed in session 30 (struck off; kept as record):**
+
+- ~~**Wire SPA → daemon `POST /v1/qso`.**~~ `lib/api/qso.ts` + `QsoPanel.submitQso()` POST to the daemon and branch on `SubmitOutcome`.
+- ~~**End-to-end verification with a running daemon.**~~ First real QSO (7Q5MLV) logged successfully; daemon confirmed `qso_id=2 mode=SSB`.
+- ~~**Submit error surfacing in the SPA.**~~ ADR 0008 toast system built end-to-end; QsoPanel's four non-stored `SubmitOutcome` arms surface as `toasts.warn` / `toasts.error`.
+- ~~**Toast system (ADR 0008).**~~ `lib/states/toasts.svelte.ts` + `Toasts.svelte` + Tailwind cluster + `app.svelte` mount. Top-right fixed, severity-prefixed (Info/Warning/Error), per-level TTL, click-to-dismiss, max-stack=5.
+- ~~**ADR 0015 — `additional_data` blob omits empty fields.**~~ Five `internal/types/*.go` files retagged with `,omitempty`.
+- ~~**Daemon HTTP access log.**~~ `logRequests` middleware + `responseRecorder` + `clientIP`. 4xx/5xx lines carry `code`, `error`, `op` envelope fields. Timestamps enabled in operator config.
+- ~~**ADIF mode-vs-submode resolver.**~~ SPA-side `lib/utils/mode.ts`; daemon-side FT8 added to `submodeToMode`.
+
+**Carried into session 31+ (in rough order of dependency):**
+
+1. **Seed a default logbook on first-run DB init.** First-launch submits return `404 logbook_not_found` because the schema leaves `logbook` empty and the SPA hardcodes `?logbook=1`. The error-surfacing fixture has served its purpose now that toasts are wired. Add a bootstrap step (likely in `internal/database/sqlite/migrations/` or the daemon's first-run path) that inserts a default logbook — operator callsign sourced from config; placeholder string acceptable until `/v1/config` lands.
+2. **Daemon `GET/PUT /v1/config`** (Go) — currently missing. Replaces the v1 edit-the-file workflow for station/operator config; the SPA's `station` store hydrates from this on app start.
+3. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
+4. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
+5. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
+6. **CAT-handover toast** — toast system shipped session 30; awaits the bridge so there's a transition to fire on. One `toasts.info("CAT connected — reading rig state")` call when bridgeState transitions to connected.
+7. **"My Station" header card** — UI display of the station store (callsign, grid, rig).
+8. **`qsoDraft` state-module lift** — promote QsoPanel local `$state` into `lib/states/qsoDraft.svelte.ts` when a second consumer appears.
+9. **Keyboard shortcuts** (ADR 0007 + `@svelte-put/shortcut`) — F2 lookup-only, Ctrl+\ VFO swap, Ctrl+Enter submit, ? help overlay.
+10. **Inline validation message slot (Fix 13).**
+
+**Lower-priority follow-ups noted but not blocking:**
+
+- **`WithTimestamp` `*bool` migration.** Operator config defaults to false on JSON unmarshal; `applyDefaults` can't promote it to true without breaking `internal/logging` tests that rely on `WithTimestamp: false` for stable fixtures. Worked around this session by setting `"with_timestamp": true` explicitly in `build/config.json`. A future tri-state pointer migration (mirrors `Server.ServeSPA`) lets fresh installs default-on without breaking those tests.
+- **`POST /v1/log/client` endpoint.** SPA-side persistent logging is deliberately deferred — single-operator desktop dev means DevTools is the right tool. Land this only if SPA-side log persistence becomes wanted (e.g. operator wants to share a bug repro from the field without DevTools open).
 
 ---
 

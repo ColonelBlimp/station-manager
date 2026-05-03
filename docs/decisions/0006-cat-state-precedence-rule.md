@@ -46,7 +46,7 @@ QSO submit reads from all three at submit-time and POSTs to `/v1/qso`. **No stat
 ### Transition handover
 
 - **Bridge connect (after disconnect, or first ever):** SPA unconditionally adopts the rig's first reported state. Operator's manual edits prior to that moment are superseded. Framing: this is the *act of CAT handover*, not silent data loss — the operator chose to enable CAT.
-- A **notification toast** ("CAT connected — reading rig state") fires once on transition. Surfaces via the planned toast system (`docs/v2-design/notifications.md`). Until that system exists, the transition is silent — flagged as known technical debt.
+- A **notification toast** ("CAT connected — reading rig state") fires once on transition. Surfaces via the toast system (ADR 0008, built 2026-05-03 at `lib/states/toasts.svelte.ts`). Wiring of this specific toast lands when `internal/bridge` connects rig events to the SPA — pending per session-handoff carried step.
 - **Bridge disconnect:** edit affordances re-enable. Current displayed values stay until the operator changes them; manual edits during disconnect are valid for that period.
 
 ### Split derivation in CAT-off mode
@@ -116,7 +116,7 @@ Considered tracking last-event-time and re-enabling SPA edits if no event arrive
 - ADR 0005 (`0005-enrichment-pipeline-shape.md`) — enrichment results land in `qsoDraftState` per the partitioning specified here.
 - ADR 0007 (`0007-keyboard-shortcuts.md`, forthcoming) — keyboard map for at-speed operating; some shortcuts will write to `catState` (e.g. swap-VFO) so this precedence rule applies.
 - `docs/v2-design/bridge.md` (forthcoming) — bridge HTTP/SSE surface; heartbeat deferral note will live there.
-- `docs/v2-design/notifications.md` (forthcoming) — toast system; CAT-connect handover toast belongs here.
+- ADR 0008 (`0008-notifications-toast-system.md`) — toast system shape; the CAT-connect handover toast described in this ADR is one of its planned consumers (built 2026-05-03; the `notifications.md` design doc this once referenced was superseded by ADR 0008 and never created).
 - `frontend/logging/src/lib/states/cat.svelte.ts` — current CAT state; will gain `splitOverride: boolean | null` and have `split` become a derived getter.
 - (Planned) `frontend/logging/src/lib/states/bridge.svelte.ts` — `connected` boolean.
 - (Planned) `frontend/logging/src/lib/states/qsoDraft.svelte.ts` — in-progress QSO data.
