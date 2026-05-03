@@ -107,7 +107,7 @@
 <Toasts/>
 
 <!--
-    h-120 / w-fit | w-200 are the whole-app shell dimensions — single use,
+    h-140 / w-fit | w-200 are the whole-app shell dimensions — single use,
     no design-token relationship. Adjust here when the operator decides
     they want a different overall card size; nothing else depends on
     these values.
@@ -118,7 +118,7 @@
     and inherit unrelated layout rules.
 -->
 {#snippet main_app()}
-    <main class="rounded-xl border border-line-soft h-120 w-fit mx-auto mt-12">
+    <main class="rounded-xl border border-line-soft h-160 w-fit mx-auto mt-12">
         <LoggingCard/>
     </main>
 {/snippet}

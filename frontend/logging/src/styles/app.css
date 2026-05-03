@@ -140,4 +140,23 @@
     .toast-error {
         @apply bg-rose-50 text-rose-800 border-rose-200;
     }
+
+    /*
+        Tab nav (InfoPanel and any future tabbed surface). The
+        wrapper (.tab-item) carries layout + the active/inactive
+        cursor; the button (.tab-button) inherits that cursor via
+        cursor-[inherit] so the whole row reads as one clickable
+        thing. The button needs this explicitly because the browser
+        default cursor on <button> beats a parent's cursor-pointer
+        otherwise.
+
+        Active/inactive colour state lives in the component (it's
+        $state-driven), not here.
+    */
+    .tab-item {
+        @apply flex items-center gap-1 font-semibold;
+    }
+    .tab-button {
+        @apply cursor-[inherit];
+    }
 }

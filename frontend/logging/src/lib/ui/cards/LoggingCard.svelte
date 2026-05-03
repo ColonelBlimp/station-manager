@@ -2,6 +2,7 @@
     import QsoPanel from "../panels/QsoPanel.svelte";
     import CountryPanel from "../panels/CountryPanel.svelte";
     import SessionTimer from "../components/SessionTimer.svelte";
+    import InfoPanel from "../panels/InfoPanel.svelte";
 </script>
 
 <!--
@@ -25,10 +26,13 @@
     </div>
     <div class="flex text-sm font-semibold w-48">
         <div class="w-24">Session Time:</div>
-        <div class="text-right w-17Wiat"><SessionTimer/></div>
+        <div class="text-right w-17"><SessionTimer/></div>
     </div>
 </header>
-<div class="flex flex-row">
+<div class="flex">
     <QsoPanel/>
     <CountryPanel/>
+</div>
+<div class="flex">
+    <InfoPanel/>
 </div>
