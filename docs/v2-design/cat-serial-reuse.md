@@ -285,12 +285,13 @@ This is also the first end-to-end wiring of `serial.Port` + `cat.Lookup` + `cat.
 
 §3c settles the type split (DTO in `types`, rig database in `cat`, runtime config in `serial`, composition in a future `internal/rigconfig`). Remaining opens on the DTO itself:
 
+- **`ID` type — settled session 31 (2026-05-03): `int64`.** Originally `string` ("rig1", "ftdx10-shack") to be an operator-chosen free-form label. No consumer ever materialised that needed a string label: the CAT lib looks up by `Model` (e.g. `"yaesu-ftdx10"`), not `ID`. When `/v1/config` landed and the daemon needed a `default_rig_id` field with a sensible first-run default of `1`, the asymmetry with `Logbook.ID int64` and the awkwardness of defaulting a string surfaced. Converted to `int64`. Blast radius: zero (no consumers in code yet). Doc comment in `internal/types/rig.go` records the change.
 - **Which fields go in `Overrides`?** Proposed set: `BaudRate`, `DataBits`, `StopBits`, `Parity`, `LineDelimiter`, `ReadTimeoutMS`. Confirm this covers every realistic operator override — in particular, whether operators ever want to override CAT timing (`listener_interval_ms`) per install.
 - **`Port` at top level or inside `Overrides`?** Lean: top level. Operators always set it, always for this install. The rest of the block is rarely touched, so surfacing `Port` makes the common operator JSON cleaner.
 - **Zero-value-means-inherit vs pointer-to-override?** Lean: zero-value-means-inherit. Operators rarely set "parity = none" explicitly when the rig default is already none; a zero on the wire is the same as "use rig default." Cost: you can't distinguish "operator explicitly set zero" from "operator omitted the field." This is only a concern if a real override-to-zero case exists; for now none does.
 - **Overall operator-config file shape** — does the logging app's config wrap rigs in `rigs: [...]` or something else? That's a logging-app-config decision, not a `types.RigConfig` one.
 
-Settle when the logging app is being built and the first real config file gets written.
+Settle remaining items when the logging app is being built and the first real config file gets written.
 
 ### 7.6 Kenwood driver status
 

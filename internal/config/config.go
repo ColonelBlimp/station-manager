@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
@@ -59,6 +60,32 @@ type Config struct {
 	// only runs on QSO ingest, not on config Load — empty here is
 	// the legitimate pre-setup state.
 	LoggingStation types.LoggingStation `json:"logging_station"`
+
+	// SetupComplete is the explicit "operator has finished first-run
+	// setup" flag. Server-managed: PUT /v1/config can never set or
+	// clear it directly; the daemon flips false → true on the first
+	// PUT that supplies a non-empty station_callsign. SPA reads it on
+	// boot to decide whether to render the setup dialog. Once true it
+	// stays true — operators may change their callsign later via the
+	// My Station card without re-triggering setup.
+	SetupComplete bool `json:"setup_complete"`
+
+	// DefaultLogbookID is a scalar pointer at the logbook row used
+	// when the SPA doesn't supply ?logbook=N on QSO submit. Stored as
+	// a scalar here because the row's display fields (name, callsign)
+	// live in the DB, not in config.json — the API GET /v1/config
+	// joins them at response time. Defaults to 1, so the system runs
+	// on first launch without "missing config" errors; the daemon
+	// ensures a logbook row with that id exists during first-run
+	// setup.
+	DefaultLogbookID int64 `json:"default_logbook_id"`
+
+	// DefaultRigID is a scalar pointer at the rig used when the SPA
+	// doesn't specify which rig a QSO came from. The same UX rationale as
+	// DefaultLogbookID — defaults to 1 so the system runs on first
+	// launch. The rig's display fields (model, port) live in cfg.Rigs
+	// (when CAT lands); the API joins them at response time.
+	DefaultRigID int64 `json:"default_rig_id"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -290,6 +317,18 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Logging.LogFileMaxAgeDays = 30
 	}
 
+	// Default-pointer defaults. 1/1 so the system has a sane "default
+	// logbook" and "default rig" to point at on first run, even before
+	// the operator finishes setup. The first-run logbook row is seeded
+	// to id=1 by the /v1/config setup transition; the default rig is
+	// a no-op until CAT lands.
+	if cfg.DefaultLogbookID == 0 {
+		cfg.DefaultLogbookID = 1
+	}
+	if cfg.DefaultRigID == 0 {
+		cfg.DefaultRigID = 1
+	}
+
 	// Forwarder defaults — see docs/v2-design/forwarding.md §4.
 	// Zero-valued tunables pick up the operator-environment defaults; a
 	// nil Retry stays nil so the forwarder package supplies its own
@@ -359,15 +398,75 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 
 // Service is the runtime wrapper around Config that other services obtain
 // via the iocdi container.
+//
+// The mu mutex serialises read/write access to Cfg and Path so that
+// concurrent PUT /v1/config requests can't tear the in-memory config
+// or race the on-disk file write. Callers should use Snapshot() for
+// reads and Update() for writes; direct .Cfg field access remains for
+// startup-time call sites that read once before any PUT can race.
 type Service struct {
 	workingDir  string
 	Cfg         Config
+	Path        string // filesystem path the daemon loaded from / writes back to
 	initialized atomic.Bool
+	mu          sync.RWMutex
 }
 
 // New constructs a Service with the given Config.
 func New(cfg Config) *Service {
 	return &Service{Cfg: cfg}
+}
+
+// SetPath records the on-disk path the config was loaded from. The
+// daemon calls this once after loadConfig so subsequent Update() calls
+// know where to atomically rewrite. An empty path means the config
+// was never loaded from disk (in-memory DefaultConfig fallback) and
+// Update() returns an error rather than guessing a path.
+func (s *Service) SetPath(p string) {
+	s.mu.Lock()
+	s.Path = p
+	s.mu.Unlock()
+}
+
+// Snapshot returns a copy of the current config under the read lock.
+// Callers receive a value (not a pointer) so they can read fields
+// without holding any lock. Adequate for everything except hot-loop
+// reads — the daemon doesn't have any of those.
+func (s *Service) Snapshot() Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Cfg
+}
+
+// Update applies fn to a copy of the current config under the write
+// lock, then atomically rewrites the on-disk config file via
+// WriteJSON and replaces the in-memory Cfg only after the disk write
+// succeeds. fn may return an error to abort (e.g. validation
+// failure); in that case neither the in-memory state nor the file is
+// touched.
+//
+// Pattern: the API handler reads Snapshot(), constructs the new
+// value, calls Update with a closure that copies the new value into
+// *cfg. Keeps the write window narrow and the mutation explicit.
+func (s *Service) Update(fn func(cfg *Config) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Path == "" {
+		return fmt.Errorf("config.Service.Update: no on-disk path set; cannot persist update")
+	}
+
+	next := s.Cfg
+	if err := fn(&next); err != nil {
+		return err
+	}
+
+	if err := WriteJSON(s.Path, next); err != nil {
+		return fmt.Errorf("config.Service.Update: writing config: %w", err)
+	}
+
+	s.Cfg = next
+	return nil
 }
 
 // Initialize prepares the service for use. Resolves the working directory.

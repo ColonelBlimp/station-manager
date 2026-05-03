@@ -83,7 +83,14 @@ func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 
 	qsoSvc := &qsoservice.Service{DB: dbSvc, Logger: logSvc, Config: cfgSvc, Hub: hub}
 
-	return New(cfg, "test", qsoSvc, dbSvc, logSvc, hub)
+	// Tests that exercise PUT /v1/config need a Path on cfgSvc so
+	// the atomic write target exists; point at a temp file under the
+	// already-allocated test working dir. Reads (Snapshot) work
+	// without a path, so unit tests that don't touch PUT are
+	// unaffected.
+	cfgSvc.SetPath(cfgSvc.WorkingDir() + "/config.json")
+
+	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub)
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.

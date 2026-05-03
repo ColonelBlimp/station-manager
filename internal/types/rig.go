@@ -18,9 +18,21 @@ package types
 // produces a real serial.Config lives in internal/rigconfig (landing when
 // the first consumer — the logging app — is built).
 type RigConfig struct {
-	// ID is the operator's label for this rig ("rig1", "rig2", "ftdx10-shack").
-	// Free-form; used to distinguish rigs within a single operator config.
-	ID string `json:"id"`
+	// ID is a stable numeric identifier for this rig within the
+	// operator's config. Matches Logbook.ID's int64 shape so the
+	// daemon's "default_<thing>_id" pointers (default_rig_id,
+	// default_logbook_id) are uniform across types. Numeric IDs let
+	// the daemon assign 1 on first-run with no operator input — part
+	// of the "install → run → no errors, only one prompt" UX. Model
+	// (below) is the human label; ID doesn't need to double as one.
+	//
+	// Originally string ("rig1", "ftdx10-shack") to be operator-set,
+	// but no consumer materialised — the CAT lib looks up by Model,
+	// not ID — so the free-form-label rationale never paid off.
+	// Settled to int64 in session 31 when /v1/config landed and a
+	// default_rig_id field had to be picked. See cat-serial-reuse.md
+	// §7.5.
+	ID int64 `json:"id"`
 
 	// Model is the lookup key into the embedded rig database
 	// (e.g. "yaesu-ftdx10", "yaesu-ft710"). Must match a cat.Lookup id.

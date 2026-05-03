@@ -447,6 +447,58 @@ project's v1 / v2 distinction.
   contacts" panel in the logging client. Result count is capped
   by `Server.MaxContactHistoryResults` (default 100).
 
+### Config (operator-relevant subset of `config.json`)
+
+`/v1/config` is the SPA's read/write endpoint for the operator-edited
+parts of `config.json`. The shape is **uniform with `types.X` for every
+nested object** (no parallel structs) — `default_logbook` projects
+`types.Logbook`, `default_rig` projects `types.RigConfig`,
+`logging_station` is `types.LoggingStation` directly. Fields whose
+source-of-truth lives elsewhere (DB row, future `cfg.Rigs[]` lookup)
+are joined at GET time; the on-disk Config carries only scalar
+pointer ids.
+
+- `GET /v1/config` — operator's writable config + joined display
+  details. Shape:
+  ```json
+  {
+    "setup_complete": true,
+    "logging_station": { "station_callsign": "M0XYZ", ... },
+    "default_logbook": { "id": 1, "name": "Default", "callsign": "M0XYZ" },
+    "default_rig":     { "id": 1, "model": "...", "port": "..." }
+  }
+  ```
+  Pre-setup (no logbook row, no rigs configured) the joined fields
+  are zero-value: `default_logbook` is `{"id": 1}`, `default_rig`
+  is `{"id": 1}`, `logging_station` is `{}` (everything omitempty).
+  SPA reads `setup_complete` to decide whether to render the setup
+  dialog.
+
+- `PUT /v1/config` — same shape; operator-writable subset is honoured.
+  - **Writable:** `logging_station.*`, `default_logbook.id`,
+    `default_rig.id`.
+  - **Server-managed (ignored if present in body):**
+    `setup_complete`. The daemon flips it false → true on the first
+    PUT that supplies a non-empty `station_callsign`. The flag can
+    never go backwards.
+  - **Read-only join (ignored if present in body):**
+    `default_logbook.{name,callsign,description}`,
+    `default_rig.{model,port,...}`. Edit those via dedicated
+    resource endpoints when they land (`PUT /v1/logbook/{id}`,
+    future rig-config endpoints).
+  - **Setup transition side-effect:** when the false → true
+    transition fires, the daemon also seeds a logbook row at
+    `default_logbook_id` (if no row exists yet) using the operator's
+    just-set callsign with `name="Default"`. Idempotent: re-PUT with
+    the same or a different callsign updates `logging_station` only;
+    the existing logbook row is not rewritten.
+
+  Returns `200` with the post-write body shape. Validation errors
+  (`invalid_field_value` for malformed callsign, `invalid_json` for
+  bad body) return `400`. Disk-write or DB-write errors return
+  `500 config_write_error` / `db_error` with a generic wire message
+  and the full error in the structured log.
+
 ### Operational
 
 - `GET /v1/healthz` — 200 if the daemon is up and sqlite is
@@ -489,6 +541,7 @@ not preempt the vocabulary.
 | 413 | `payload_too_large` | Request body exceeds `Server.MaxBodyBytes` (default 1 MiB). |
 | 415 | `unsupported_media_type` | Submit's Content-Type is set and is neither `application/x-adif` nor `text/plain`. Empty Content-Type is accepted as ADIF (curl-without-headers operator path). |
 | 429 | `rate_limited` | `POST /v1/qso` token-bucket exhausted (`Server.SubmitRatePerSec` / `SubmitRateBurst`). |
+| 500 | `config_write_error` | `PUT /v1/config` failed to atomically rewrite `config.json` on disk (typically permissions or out-of-space). In-memory state is unchanged. |
 | 500 | `db_error` | Unspecified sqlite error during a fetch. Wire message is generic ("database operation failed"); the actual error is logged with full op context. |
 | 500 | `submit_failed` | Submit pipeline error not classified by `qsoservice.SubmitError`. Wire message generic; logs carry the wrap chain. |
 | 500 | `update_failed` | Update pipeline error not classified by `qsoservice.SubmitError`. Same generic-wire / structured-log treatment. |

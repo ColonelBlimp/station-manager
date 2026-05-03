@@ -96,6 +96,11 @@ func run() error {
 
 	// ---- Build DI container ----
 	cfgSvc := config.New(cfg)
+	// Record the on-disk path so /v1/config PUT can rewrite it
+	// atomically. firstRunPath covers the just-seeded path; for an
+	// existing config we re-resolve via the same precedence used in
+	// loadConfig.
+	cfgSvc.SetPath(resolveConfigPath(*configPath, firstRunPath))
 
 	container := iocdi.New()
 
@@ -223,7 +228,7 @@ func run() error {
 	}
 
 	// ---- Start HTTP server ----
-	server := api.New(cfg, Version, qsoSvc, dbSvc, loggerSvc, hub)
+	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -388,6 +393,25 @@ func spawnForwarderWorkers(
 			Msg("forwarder worker started")
 	}
 	return nil
+}
+
+// resolveConfigPath mirrors loadConfig's precedence to determine the
+// on-disk path that holds the config we just loaded. Used to populate
+// cfgSvc.Path so /v1/config PUT can atomically rewrite the same file.
+// firstRunPath wins if non-empty (we just seeded it); otherwise we
+// recompute by checking the explicit flag, env var, and cwd in turn.
+func resolveConfigPath(flagPath, firstRunPath string) string {
+	if firstRunPath != "" {
+		return firstRunPath
+	}
+	if flagPath != "" {
+		return flagPath
+	}
+	if dir := os.Getenv("SM_WORKING_DIR"); dir != "" {
+		return filepath.Join(dir, "config.json")
+	}
+	cwd, _ := os.Getwd()
+	return filepath.Join(cwd, "config.json")
 }
 
 // loadConfig resolves and loads the daemon's configuration. The second

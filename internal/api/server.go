@@ -21,6 +21,7 @@ import (
 type Server struct {
 	httpServer               *http.Server
 	listener                 net.Listener
+	cfg                      *config.Service
 	qso                      *qsoservice.Service
 	db                       *sqlite.Service
 	logger                   *logging.Service
@@ -45,8 +46,16 @@ type Server struct {
 // New constructs a Server from the resolved services and config. The
 // daemonVersion string is served by /v1/version; "dev" is the usual
 // placeholder when no build-time version is injected.
-func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub) *Server {
+//
+// cfgSvc is the live, mutex-guarded config.Service that GET/PUT
+// /v1/config reads from and writes to. Distinct from the cfg snapshot
+// used to materialise startup-time tunables (timeouts, limits,
+// protocol) because those don't change at runtime; the config-update
+// endpoint only touches operator-relevant fields (logging_station,
+// default_*_id) which startup doesn't bake into Server fields.
+func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub) *Server {
 	s := &Server{
+		cfg:                      cfgSvc,
 		qso:                      qso,
 		db:                       db,
 		logger:                   logger,
@@ -90,6 +99,12 @@ func New(cfg config.Config, daemonVersion string, qso *qsoservice.Service, db *s
 	// general concurrent-request limit since SSE connections are
 	// long-lived by design).
 	mux.Handle("GET /v1/events", s.limitEventSubscribers(http.HandlerFunc(s.handleEvents)))
+
+	// Config — operator's writable subset (logging_station,
+	// default_*_id) plus joined display details for the default
+	// logbook/rig. See docs/v2-design/api.md.
+	mux.HandleFunc("GET /v1/config", s.handleGetConfig)
+	mux.HandleFunc("PUT /v1/config", s.handlePutConfig)
 
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)

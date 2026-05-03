@@ -1,0 +1,265 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+)
+
+// TestHandleGetConfig_PreSetup covers the first-boot shape: setup
+// not complete, default IDs in place, no logbook row yet, so the
+// joined default_logbook is just the bare {id: N} stub.
+func TestHandleGetConfig_PreSetup(t *testing.T) {
+	srv := testServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.SetupComplete {
+		t.Error("SetupComplete = true on a fresh server, want false")
+	}
+	if resp.DefaultLogbook.ID != 1 {
+		t.Errorf("DefaultLogbook.ID = %d, want 1 (default)", resp.DefaultLogbook.ID)
+	}
+	if resp.DefaultLogbook.Name != "" || resp.DefaultLogbook.Callsign != "" {
+		t.Errorf("Pre-setup default_logbook should have empty name/callsign; got %+v", resp.DefaultLogbook)
+	}
+	if resp.DefaultRig.ID != 1 {
+		t.Errorf("DefaultRig.ID = %d, want 1 (default)", resp.DefaultRig.ID)
+	}
+	if resp.LoggingStation.StationCallsign != "" {
+		t.Errorf("Pre-setup station_callsign should be empty; got %q", resp.LoggingStation.StationCallsign)
+	}
+}
+
+// TestHandlePutConfig_FirstSetup_SeedsLogbook is the critical
+// transition: a non-empty station_callsign, server flips
+// SetupComplete to true, inserts a logbook row at id=1, and the
+// follow-up GET reflects all three changes.
+func TestHandlePutConfig_FirstSetup_SeedsLogbook(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !resp.SetupComplete {
+		t.Error("SetupComplete should be true after a successful first-setup PUT")
+	}
+	if resp.LoggingStation.StationCallsign != "M0XYZ" {
+		t.Errorf("StationCallsign = %q, want M0XYZ", resp.LoggingStation.StationCallsign)
+	}
+	if resp.DefaultLogbook.ID == 0 {
+		t.Error("DefaultLogbook.ID = 0 after setup; expected the seeded logbook's id")
+	}
+	if resp.DefaultLogbook.Callsign != "M0XYZ" {
+		t.Errorf("DefaultLogbook.Callsign = %q, want M0XYZ", resp.DefaultLogbook.Callsign)
+	}
+	if resp.DefaultLogbook.Name != "Default" {
+		t.Errorf("DefaultLogbook.Name = %q, want Default", resp.DefaultLogbook.Name)
+	}
+
+	// The logbook row really exists in the DB — fetch it via the
+	// other handler to prove the seed wasn't a response-only fiction.
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/logbook/1", nil)
+	getReq.SetPathValue("id", "1")
+	getW := httptest.NewRecorder()
+	srv.handleGetLogbook(getW, getReq)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("logbook fetch after seed: status = %d, body = %s", getW.Code, getW.Body.String())
+	}
+}
+
+// TestHandlePutConfig_LowercaseCallsignNormalised confirms the
+// handler upper-cases the incoming station_callsign before persisting,
+// matching the rule used by /v1/logbook and /v1/qso submission.
+func TestHandlePutConfig_LowercaseCallsignNormalised(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "  m0xyz  "}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.LoggingStation.StationCallsign != "M0XYZ" {
+		t.Errorf("StationCallsign = %q, want normalised M0XYZ", resp.LoggingStation.StationCallsign)
+	}
+}
+
+// TestHandlePutConfig_InvalidCallsignReturns400 covers the validation
+// path. The same callsign rule used elsewhere applies here so the
+// operator sees one consistent failure mode.
+func TestHandlePutConfig_InvalidCallsignReturns400(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "AB"}}` // too short
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want 400", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_field_value") {
+		t.Errorf("body = %s, want invalid_field_value envelope", w.Body.String())
+	}
+}
+
+// TestHandlePutConfig_EmptyCallsignAccepted covers the legitimate
+// pre-setup state: the operator might issue a PUT before they've
+// chosen a callsign (defensive check on the SPA boot path). Empty
+// is allowed; SetupComplete stays false; no logbook is seeded.
+func TestHandlePutConfig_EmptyCallsignAccepted(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": ""}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.SetupComplete {
+		t.Error("SetupComplete flipped to true with empty callsign; should stay false")
+	}
+}
+
+// TestHandlePutConfig_SetupCompleteFromBodyIgnored is the security
+// check on the server-managed flag. A client sending
+// setup_complete: true with empty callsign must NOT be able to
+// satisfy the setup gate and skip the dialog.
+func TestHandlePutConfig_SetupCompleteFromBodyIgnored(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"setup_complete": true, "logging_station": {"station_callsign": ""}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.SetupComplete {
+		t.Error("Client-supplied setup_complete=true was honoured; flag must be server-managed only")
+	}
+}
+
+// TestHandlePutConfig_SetupCompleteIdempotent confirms a re-PUT after
+// setup doesn't double-seed the logbook. The second PUT updates the
+// callsign block but the original logbook id is preserved (the seed
+// is gated on the false→true transition only).
+func TestHandlePutConfig_SetupCompleteIdempotent(t *testing.T) {
+	srv := testServer(t)
+
+	// First PUT — completes setup.
+	first := `{"logging_station": {"station_callsign": "M0XYZ"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(first))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first PUT status = %d", w.Code)
+	}
+
+	// Second PUT — operator changes their callsign.
+	second := `{"logging_station": {"station_callsign": "G0ABC"}}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(second))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second PUT status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
+	if resp.LoggingStation.StationCallsign != "G0ABC" {
+		t.Errorf("StationCallsign after second PUT = %q, want G0ABC", resp.LoggingStation.StationCallsign)
+	}
+	// Logbook callsign was set during seed and is owned by
+	// /v1/logbook/{id} now — the second PUT to /v1/config must NOT
+	// overwrite it.
+	if resp.DefaultLogbook.Callsign != "M0XYZ" {
+		t.Errorf("DefaultLogbook.Callsign was rewritten by second PUT; want M0XYZ stays, got %q",
+			resp.DefaultLogbook.Callsign)
+	}
+}
+
+// TestHandlePutConfig_PersistsToFile verifies the on-disk write
+// happens — without it the daemon would forget the callsign on next
+// restart even though the in-memory cfg looked right.
+func TestHandlePutConfig_PersistsToFile(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// The path was set on cfgSvc by the test helper. Read it back.
+	path := srv.cfg.Path
+	if path == "" {
+		t.Fatal("cfgSvc.Path was not set by the test helper")
+	}
+	// Just check the file exists and has the new callsign in it.
+	// A full re-Load is exercised by config package tests; here we
+	// only need to confirm the write happened.
+	got := readFileForTest(t, path)
+	if !strings.Contains(got, "M0XYZ") {
+		t.Errorf("config file does not contain M0XYZ; got: %s", got)
+	}
+	if !strings.Contains(got, `"setup_complete": true`) {
+		t.Errorf("config file should record setup_complete=true; got: %s", got)
+	}
+}
+
+func readFileForTest(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
