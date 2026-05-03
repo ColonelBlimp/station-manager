@@ -24,7 +24,82 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-02, session 29 — daemon audit: existing v2 milestone-1 daemon (`cmd/smd`) is fully shipped and serving the wire contract the SPA targets; api.md §7a / milestones.md / handoff updated to reflect what's actually landed; no code changes this session)
+## Current state (as of 2026-05-03, session 30 — SPA `POST /v1/qso` wired end-to-end; ADIF mode-vs-submode resolver landed both sides (FT8 added daemon-side); ADR 0015 settled: `additional_data` blob omits empty fields uniformly; first real QSO logged successfully via the SPA; full Go test suite green under `-race`, frontend 288/288 + svelte-check clean)
+
+### Session 30 work (SPA → daemon submit wiring; mode-resolver; ADR 0015 omitempty pass)
+
+**Operator brief:** "Yes" to the carried session-29 next-step #1 — wire the SPA's `QsoPanel.submitQso()` to the daemon's `POST /v1/qso?logbook=<id>` endpoint.
+
+**What landed:**
+
+- **`frontend/logging/src/lib/api/qso.ts`** (new file) — thin daemon wrapper. Exports `submitQso(adif: string, logbookID: number): Promise<SubmitOutcome>` where `SubmitOutcome` is a discriminated union with five `kind`s:
+  - `'stored'` (201) — fresh QSO persisted, draft can be cleared.
+  - `'duplicate'` (200) — dedupe match on existing QSO; daemon did not write.
+  - `'validation'` (4xx) — daemon-emitted code+message (e.g. `invalid_adif`, `callsign_mismatch`).
+  - `'server'` (5xx) — daemon logged full chain; SPA shows generic retry.
+  - `'network'` — fetch threw before getting a Response.
+  
+  Wraps fetch in try/catch for the network arm; treats unparseable JSON body as a synthesised `unknown_error` envelope. Logbook id is `encodeURIComponent`'d defensively.
+
+- **`frontend/logging/src/lib/api/qso.test.ts`** (new file, 8 cases) — covers each outcome arm, the request shape (URL/method/Content-Type/body), and the unparseable-body fallback.
+
+- **`frontend/logging/src/lib/ui/panels/QsoPanel.svelte`** — `submitQso()` is now `async`. The previous `console.log('[QSO submit] ADIF payload:\n' + adif)` block is replaced with a call to `submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID)` and a `switch` on the outcome:
+  - `stored` → `clearDraft()` (operator continues to next QSO).
+  - everything else → draft preserved; `console.warn` (duplicate / validation) or `console.error` (server / network). The "preserve the operator's typing on failure" pattern is baked in until ADR 0008's toast system lands.
+  
+  `DEFAULT_LOGBOOK_ID = 1` constant added at the top of the script with a comment naming the logbook switcher as the future replacement. Imported as `submitQso as submitQsoToDaemon` to avoid colliding with the local `submitQso` handler name.
+
+**Verification:**
+
+- `npm run check` (svelte-check): 0 errors / 0 warnings, 199 files.
+- `npm test` (vitest, full suite): 276/276 pass across 15 files (was 268; the 8 new cases account for the delta).
+- Browser/daemon end-to-end test deferred — daemon spin-up wasn't run this session; the unit tests + the wire-contract docs in api.md §7a are the proxy. First real-traffic verification will land alongside the next browser session.
+
+**Documentation updated:**
+
+- **`docs/v2-design/frontend-spa.md`** — "ADIF wire shape" section now references `lib/api/qso.ts` (added 2026-05-03) and the `SubmitOutcome` discriminated union; the "QSO draft store" open-question bullet's "produces ADIF console output" line is rewritten to "wired to `POST /v1/qso?logbook=1` via `lib/api/qso.ts`; on `stored` outcome the draft clears, on every other outcome the draft is preserved and a console warn/error logged until ADR 0008's toast system lands."
+
+**Mode-vs-submode resolver (mid-session, after the first 7Q5MLV QSO got rejected as `MODE "USB" is not a recognised mode`):**
+
+ADIF distinguishes MODE (parent: SSB, MFSK, PSK, CW, FM, AM, RTTY, DIGITALVOICE, HELL, PACKET) from SUBMODE (the variants: USB/LSB under SSB, FT8/FT4 under MFSK, PSK31 under PSK, CW-N under CW, etc). The operator-facing dropdown — and rigs over CAT — speak in the names operators say at the mic, which are mostly submodes. The SPA was passing those values through as `MODE` and the daemon's strict ADIF-MODE enum rejected them.
+
+- **`frontend/logging/src/lib/utils/mode.ts`** (new, 110 lines) — `resolveModeAndSubmode(opMode, opSubMode)` returns a `(MODE, SUBMODE)` pair. Mirrors the daemon's `submodeToMode` table. Three rules: submode-named-mode → resolve to (parent, submode); main-mode → pass through with whatever subMode was passed; empty / unknown → return as-is for the daemon to reject. Trim + uppercase.
+- **`frontend/logging/src/lib/utils/mode.test.ts`** (new, 12 cases) — every translation arm + edge cases (whitespace, case, unknown values, override-on-submode-conflict).
+- **`QsoPanel.submitQso()`** — calls the resolver before `formatAdifRecord` so the ADIF record carries `MODE=SSB, SUBMODE=USB` (or the appropriate pair) on the wire.
+- **`internal/enums/modes/modes.go`** — added `"FT8": MFSK` to `submodeToMode`. The map had FT4 but FT8 was missing; would have failed any FT8 QSO.
+
+**End-to-end verification (mid-session):** logged 7Q5MLV (Marc, Mzuzu, 14.250 MHz USB, RST 59/59, 100 W, Hex Beam, KH78an grid, FTdx10) via the SPA against the running daemon. Confirmation in the daemon log: `INF QSO stored band=20m call=7Q5MLV freq_mhz=14.250 logbook_id=1 mode=SSB qso_id=2`. The first real QSO logged through the v2 stack.
+
+**ADR 0015 — `additional_data` blob omits empty fields:**
+
+Inspection of the stored QSO's row showed ~80 keys, only ~18 carrying values. The other ~60 were `"field":""` noise — the asymmetric-round-trip lesson surfaced in real data: `types.QsoDetails` had eight `,omitempty` fields documented as "for the importer," but every other field in the blob had the same write-only-when-set rationale and was missing the tag. Operator decided to finish the rule.
+
+- **ADR 0015 (`docs/decisions/0015-additional-data-omits-empty-fields.md`)** — new, status Accepted. Documents the rule, the asymmetric-round-trip motivation, three rejected alternatives (status quo, `*Country` pointer, custom `MarshalJSON`), the read-path impact (none — `json.Unmarshal` already handles absent fields), and triggers to revisit.
+- **`internal/types/qso.go`, `qso_details.go`, `contacted_station.go`, `logging_station.go`, `qsl.go`, `country.go`** — every string and numeric field gets `,omitempty`. `contact_history` slice + `country_details` embed also tagged. Per-struct package comments rewritten to describe the ADR 0015 rule (replacing the old "some fields use omitempty for the importer" notes).
+- **No migration.** Operator's call: dev DB, blow it away.
+- **Tests green unchanged.** Pre-flight audit confirmed all `additional_data`-asserting tests check key *presence* (after `json_set` stamps), not key count or full blob equality. Full `go test ./... -race` passes (24 packages, ~26s).
+- **Wire-format change worth noting:** `Country.ID` previously marshalled as `"ID"` (no json tag, default Go field name); now `"id"` (lowercase + omitempty). Consistent with every other field.
+
+**Documentation updated for ADR 0015:**
+
+- `docs/v1-analysis/invariants.md` § "additional_data absorbs ADIF spec evolution" — added the ADR 0015 callout paragraph.
+- `docs/v1-analysis/lessons-for-v2.md` § "What v1 got right" item 1 — added "(refinement, ADR 0015)" note.
+- `docs/v1-analysis/design-decisions-log.md` § "additional_data JSON blob column" — header changed to "**KEEP (refined by ADR 0015, 2026-05-03)**", rationale paragraph extended to cover the uniform empty-omission rule, related-links section updated.
+
+**Documentation updated for the mode-resolver:** none beyond this entry — the resolver is implementation detail; api.md §7a's MODE description is already correct ("ADIF MODE = parent family, e.g. SSB"); the SPA-side translation is captured here as the canonical record.
+
+**Recap of v1/v2 phrasing (memory hardening):**
+
+I regressed mid-session and called pre-rewrite packages "v1 carry-forward" — the operator caught it. Same fix as session 29 plus a memory file (`feedback_no_v1_carry_forward_phrasing.md`) explicitly forbidding that phrasing. Correct framing: codebase on `main` is v2 in full; the `v1` branch + `v1.0.0` tag preserve the Wails app; `/v1/` URL is API versioning, unrelated. Pre-rewrite packages are "preserved from the prior tree," never "v1 anything."
+
+**What did NOT change:**
+
+- No SQL schema changes. No migrations.
+- The wire contract in api.md §7a is unchanged. Daemon endpoint behaviour is identical; only the in-memory struct's marshal output changed.
+- `qsoDraft` state-module lift (next-step #9) is still deferred; QsoPanel still owns the draft as local `$state`.
+- Toast system (ADR 0008) and inline validation message slot are still unbuilt — error surfacing currently lives in `console.warn`/`console.error`.
+
+### Session 29 archive (was: 2026-05-02, session 29 — daemon audit: existing v2 milestone-1 daemon (`cmd/smd`) is fully shipped and serving the wire contract the SPA targets; api.md §7a / milestones.md / handoff updated to reflect what's actually landed; no code changes this session)
 
 ### Session 29 work (audit & capture: what landed in the daemon)
 
@@ -119,12 +194,14 @@ A second drift audit ran after the medium fixes landed; eight findings, all addr
 - Default deployment: TCP listener on the same `host:port` as the SPA (single-origin), so the SPA fetch is just `'/v1/qso?logbook=...'` — no `daemonUrl` prefix needed when running embedded.
 - Submit rate cap is 20 QPS / 40 burst; way above any single-operator logging cadence.
 
-### Next steps (carried into session 30+)
+### Next steps (carried into session 31+)
 
 In rough order of dependency:
 
-1. **Wire SPA → daemon `POST /v1/qso`.** Replace `console.log(adif)` in `QsoPanel.submitQso()` with `fetch('/v1/qso?logbook=<id>', {method:'POST', headers:{'Content-Type':'application/x-adif'}, body: adif})`. Same-origin in the embedded-SPA deployment, so no `daemonUrl` prefix needed. Hardcode `?logbook=1` for now; add a startup `GET /v1/logbook` lookup once a logbook switcher is needed.
-2. **Submit error surfacing in the SPA.** Handle 4xx (validation, `duplicate_key`, `callsign_mismatch`) and 5xx (db down) responses. Placeholder error display until the toast system (ADR 0008) lands.
+1. ~~**Wire SPA → daemon `POST /v1/qso`.**~~ ✅ Landed session 30. `lib/api/qso.ts` + `QsoPanel.submitQso()` now POST to the daemon and branch on `SubmitOutcome`.
+2. ~~**End-to-end verification with a running daemon.**~~ ✅ Landed session 30. First real QSO (7Q5MLV) logged successfully; daemon confirmed `qso_id=2 mode=SSB`.
+3. **Submit error surfacing in the SPA.** Wire the four non-stored `SubmitOutcome` arms to a real visible affordance (placeholder banner / inline message under the Callsign field) until the toast system (ADR 0008) lands. Today the outcomes only land in the dev-tools console. **Free test fixture available:** a fresh DB has no logbooks, so `?logbook=1` returns `404 logbook_not_found` — exercises the `validation` arm end-to-end without fault injection. Use it to verify the surfacing UX before step #4 lands.
+4. **Seed a default logbook on first-run DB init (deliberately deferred).** Today the migration leaves `logbook` empty; the SPA hardcodes `?logbook=1` so first-launch submits 404. Don't fix this until step #3's error surfacing is wired and verified against the missing-logbook case — the gap is in use as a real-world fixture. After step #3 verifies green, add a bootstrap step (likely in `internal/database/sqlite/migrations/` or in the daemon's first-run path) that inserts a default logbook with the operator's callsign (sourced from config or a placeholder until `/v1/config` lands).
 3. **Daemon `GET/PUT /v1/config`** (Go) — currently missing. Replaces the v1 edit-the-file workflow for station/operator config; the SPA's `station` store hydrates from this on app start.
 4. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
 5. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.

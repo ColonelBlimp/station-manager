@@ -26,15 +26,15 @@
 
 **Related:** `invariants.md` → "types.Qso follows ADIF"; `lessons-for-v2.md` → "Document intent, not just mechanism."
 
-### `additional_data` JSON blob column for non-promoted fields — **KEEP**
+### `additional_data` JSON blob column for non-promoted fields — **KEEP (refined by ADR 0015, 2026-05-03)**
 
-**Decision:** Database row types have **real columns only for queryable/indexed/filterable fields** (`call`, `band`, `mode`, `freq`, `qso_date`, `time_on`, etc.). Everything else is serialized into an `additional_data` JSON blob column.
+**Decision:** Database row types have **real columns only for queryable/indexed/filterable fields** (`call`, `band`, `mode`, `freq`, `qso_date`, `time_on`, etc.). Everything else is serialized into an `additional_data` JSON blob column. Per ADR 0015, every field on `types.Qso` and its embedded sub-structs is `,omitempty`, so the blob carries operator-set / enriched data only — not "field exists but empty" noise.
 
-**Rationale:** absorbs ADIF spec evolution without schema migrations. Adding a new ADIF field is a one-line change to `types.Qso`; the storage carries it through automatically via JSON marshaling. Promoting a field to a real column is a deliberate feature decision (indexing, querying, filtering), not an obligation. This is the right shape for a data model where the field set is defined by an external evolving spec.
+**Rationale:** absorbs ADIF spec evolution without schema migrations. Adding a new ADIF field is a one-line change to `types.Qso`; the storage carries it through automatically via JSON marshaling. Promoting a field to a real column is a deliberate feature decision (indexing, querying, filtering), not an obligation. This is the right shape for a data model where the field set is defined by an external evolving spec. The uniform `,omitempty` rule (ADR 0015) finishes the asymmetric tagging the prior tree left behind: the original eight `QsoDetails` fields tagged "for the importer's dedupe-trigger reason" implied the rule applied to every field, but only those eight were tagged.
 
-**Action:** keep verbatim in v2. Document the pattern in the `internal/database/<driver>/adapters` package's `doc.go` so future readers understand the rationale.
+**Action:** kept; refined by ADR 0015 for the empty-omission rule. Pattern documented in the `internal/database/sqlite/adapters` package's adapter functions; the per-struct package comments in `internal/types/` describe the ADR 0015 rule.
 
-**Related:** `invariants.md` → "additional_data absorbs ADIF evolution"; `bug-inventory.md` → "QsoAdditionalData intermediate struct" (the v1 implementation has a bug that violates the pattern's goal).
+**Related:** `invariants.md` → "additional_data absorbs ADIF evolution" + ADR 0015 callout; `lessons-for-v2.md` → "Asymmetric round-trips are a clue" (this was the asymmetry it predicted); ADR 0015 (`docs/decisions/0015-additional-data-omits-empty-fields.md`).
 
 ### Per-database adapter pattern scoped to each driver — **KEEP**
 

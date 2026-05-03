@@ -263,7 +263,7 @@ Some of the issues surfaced in this session (the hamnut bug, the atomicity gap, 
 
 This section is the explicit counterweight to the "patterns to avoid" list. It's easy in a rewrite to throw out good decisions along with bad ones, so this list documents the things v1 got right.
 
-1. **The ADIF-alignment of `types.Qso`** and the `additional_data` JSON blob pattern. Load-bearing design decision, correctly motivated, should be preserved verbatim in v2.
+1. **The ADIF-alignment of `types.Qso`** and the `additional_data` JSON blob pattern. Load-bearing design decision, correctly motivated, should be preserved verbatim in v2. **Refinement (ADR 0015, 2026-05-03):** every field on `types.Qso` and its embeds is `,omitempty` so the blob omits empty values uniformly — finishes the asymmetric `omitempty` set v1 left behind on `QsoDetails`.
 2. **The three-concerns split across logging / logbook / config apps.** Deliberate, clean, should carry into v2 as three clients of the daemon.
 3. **The per-database adapter pattern scoped to each driver** (not a generic framework). The right tradeoff between code duplication and maintenance burden.
 4. **The `internal/errors` operation-tagging pattern (`errors.Op`).** Works well as internal error context; keep the pattern and revisit only the HTTP serialization question when the daemon's API handlers are being designed.

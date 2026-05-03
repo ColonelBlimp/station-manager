@@ -74,7 +74,7 @@ export interface Station {
 }
 
 export const station: Writable<Station> = writable<Station>({
-    stationCallsign: '7Q5DX',
+    stationCallsign: 'G4ABC',
     location: {
         gridSquare: 'KH78an',
         name: 'My name',

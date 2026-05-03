@@ -16,8 +16,18 @@
     import { formatUtcDate, formatUtcTime } from '../../utils/time';
     import { formatAdifRecord } from '../../utils/adif';
     import { frequencyToBand } from '../../utils/frequency';
+    import { resolveModeAndSubmode } from '../../utils/mode';
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidRst } from '../../validators/rst';
+    import { submitQso as submitQsoToDaemon } from '../../api/qso';
+
+    /*
+        Hardcoded until a logbook switcher lands. The daemon seeds a
+        default logbook at id=1 on first run, so this matches the
+        running-daemon default. When the switcher arrives this becomes
+        a derived value from a logbook store seeded from `GET /v1/logbook`.
+    */
+    const DEFAULT_LOGBOOK_ID = 1;
 
     const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
@@ -244,10 +254,26 @@
 
     /*
         submitQso — build the ADIF record from the current draft + rig
-        state, then `console.log` it. Daemon `/v1/qso` POST is the next
-        step (path b from the session 27 fork in the road); the
-        intermediate console.log shape is so we can verify the wire
-        format end-to-end before adding the network round-trip.
+        state, POST it to the daemon, and branch on outcome.
+
+        Outcome handling (per api.md §4.2 + ADR 0008 deferred):
+          - stored      → clearDraft(); operator continues to next QSO.
+          - duplicate   → leave draft intact; warn to console. The
+                          dedupe match is a feature, not an error —
+                          operator likely already has the contact
+                          logged. Toast (ADR 0008) and a force-retry
+                          affordance come later.
+          - validation  → leave draft intact; warn to console with the
+                          daemon's code+message so the operator can
+                          fix the bad field. Inline field error slots
+                          (also ADR 0008-adjacent) come with the toast
+                          system.
+          - server      → leave draft intact; error to console. The
+                          daemon already logged the full chain; the
+                          SPA's job is to NOT lose the operator's
+                          typing.
+          - network     → leave draft intact; error to console. Same
+                          rationale — daemon may be restarting.
 
         Split-mode TX/RX freq derivation: in split mode the SELECTED
         VFO is RX (per Vfos.svelte's snippet logic); the OTHER VFO is
@@ -255,7 +281,7 @@
         split. In non-split mode TX freq = the selected VFO's freq;
         FREQ_RX is omitted.
     */
-    function submitQso(): void {
+    async function submitQso(): Promise<void> {
         if (!canSubmit) return;
 
         const selectedHz = displayedState.selectedVfo === 'A'
@@ -281,6 +307,12 @@
         //   myRig: stn.equipment.rig || bridgeState.rigName || '',
         const stn = get(station);
 
+        // Operators and rigs speak in submode names (USB, FT8, PSK31).
+        // ADIF requires MODE to be the parent family (SSB, MFSK, PSK)
+        // with the submode value carried in SUBMODE. Resolve here so
+        // the daemon's strict MODE-enum validation accepts the record.
+        const resolved = resolveModeAndSubmode(displayedState.mode, displayedState.subMode);
+
         const adif = formatAdifRecord({
             callsign: callsign.trim().toUpperCase(),
             rstSent,
@@ -291,8 +323,8 @@
             qsoDate,
             timeOn,
             timeOff,
-            mode: displayedState.mode,
-            subMode: displayedState.subMode,
+            mode: resolved.mode,
+            subMode: resolved.subMode,
             txFreqHz,
             rxFreqHz,
             band: frequencyToBand(txFreqHz),
@@ -304,18 +336,24 @@
             myAntenna: stn.equipment.antenna,
         });
 
-        console.log('[QSO submit] ADIF payload:\n' + adif);
-
-        // TODO(/v1/qso): POST adif as raw body (Content-Type:
-        // application/x-adif or text/plain) to the daemon when the
-        // endpoint lands. On success, clearDraft(); on failure,
-        // surface a toast (per ADR 0008, also pending) and leave
-        // the draft for retry.
-
-        // For now: clear after submit so the operator can immediately
-        // begin the next QSO. When the daemon path is wired, move
-        // this call into the success branch.
-        clearDraft();
+        const outcome = await submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID);
+        switch (outcome.kind) {
+            case 'stored':
+                clearDraft();
+                break;
+            case 'duplicate':
+                console.warn(`[QSO submit] duplicate of QSO id=${outcome.id}; draft preserved`);
+                break;
+            case 'validation':
+                console.warn(`[QSO submit] ${outcome.code}: ${outcome.message}`);
+                break;
+            case 'server':
+                console.error(`[QSO submit] daemon error ${outcome.code}: ${outcome.message}`);
+                break;
+            case 'network':
+                console.error(`[QSO submit] daemon unreachable: ${outcome.message}`);
+                break;
+        }
     }
 </script>
 

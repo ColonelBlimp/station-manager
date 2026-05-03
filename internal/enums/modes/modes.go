@@ -47,6 +47,7 @@ var submodeToMode = map[string]Mode{
 
 	// MFSK family (WSJT-X and other MFSK-based)
 	"FT4":       MFSK,
+	"FT8":       MFSK,
 	"FST4":      MFSK,
 	"FST4W":     MFSK,
 	"Q65":       MFSK,
