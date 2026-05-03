@@ -114,4 +114,30 @@
     .textarea-base {
         @apply text-sm px-2.5 py-1.5 outline-1 -outline-offset-1 outline-line rounded-md resize-none focus:outline-2 focus:-outline-offset-2 focus:outline-focus;
     }
+
+    /*
+        Toast cluster (ADR 0008). The base class carries shape and
+        layout; the level classes carry the colour palette only. Colours
+        come from Tailwind's default palette (info=indigo, warn=amber,
+        error=rose) per the ADR; promote to @theme tokens if reused
+        elsewhere.
+
+        max-w-sm caps the toast's width so a long daemon error message
+        wraps inside the toast rather than stretching across the
+        viewport. text-left because messages are sentences, not labels.
+    */
+    .toast-base {
+        @apply max-w-sm px-3 py-2 rounded-md text-sm text-left
+        border shadow-md cursor-pointer
+        focus:outline-2 focus:outline-focus;
+    }
+    .toast-info {
+        @apply bg-indigo-50 text-indigo-800 border-indigo-200;
+    }
+    .toast-warn {
+        @apply bg-amber-50 text-amber-800 border-amber-200;
+    }
+    .toast-error {
+        @apply bg-rose-50 text-rose-800 border-rose-200;
+    }
 }

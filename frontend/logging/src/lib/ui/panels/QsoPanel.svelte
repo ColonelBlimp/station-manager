@@ -20,6 +20,7 @@
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidRst } from '../../validators/rst';
     import { submitQso as submitQsoToDaemon } from '../../api/qso';
+    import { toasts } from '../../states/toasts.svelte';
 
     /*
         Hardcoded until a logbook switcher lands. The daemon seeds a
@@ -256,24 +257,25 @@
         submitQso — build the ADIF record from the current draft + rig
         state, POST it to the daemon, and branch on outcome.
 
-        Outcome handling (per api.md §4.2 + ADR 0008 deferred):
+        Outcome handling (per api.md §4.2 + ADR 0008):
           - stored      → clearDraft(); operator continues to next QSO.
-          - duplicate   → leave draft intact; warn to console. The
-                          dedupe match is a feature, not an error —
-                          operator likely already has the contact
-                          logged. Toast (ADR 0008) and a force-retry
-                          affordance come later.
-          - validation  → leave draft intact; warn to console with the
-                          daemon's code+message so the operator can
-                          fix the bad field. Inline field error slots
-                          (also ADR 0008-adjacent) come with the toast
-                          system.
-          - server      → leave draft intact; error to console. The
-                          daemon already logged the full chain; the
-                          SPA's job is to NOT lose the operator's
-                          typing.
-          - network     → leave draft intact; error to console. Same
-                          rationale — daemon may be restarting.
+                          No toast on the happy path; QSO clearing is
+                          itself the visible feedback.
+          - duplicate   → preserve draft; warn-level toast naming the
+                          existing QSO id. The dedupe match is a
+                          feature, not an error — operator likely
+                          already has the contact logged.
+          - validation  → preserve draft; error-level toast with the
+                          daemon's code+message. Inline per-field error
+                          slots (Fix 13) come later for the validators
+                          that map to a specific field.
+          - server      → preserve draft; error-level toast with the
+                          daemon's generic 5xx code. The daemon already
+                          logged the full chain; the SPA's job is to
+                          NOT lose the operator's typing.
+          - network     → preserve draft; error-level toast with the
+                          fetch error message. Same rationale — daemon
+                          may be restarting.
 
         Split-mode TX/RX freq derivation: in split mode the SELECTED
         VFO is RX (per Vfos.svelte's snippet logic); the OTHER VFO is
@@ -342,16 +344,16 @@
                 clearDraft();
                 break;
             case 'duplicate':
-                console.warn(`[QSO submit] duplicate of QSO id=${outcome.id}; draft preserved`);
+                toasts.warn(`Duplicate of QSO #${outcome.id}; not re-logged.`);
                 break;
             case 'validation':
-                console.warn(`[QSO submit] ${outcome.code}: ${outcome.message}`);
+                toasts.error(`${outcome.code}: ${outcome.message}`);
                 break;
             case 'server':
-                console.error(`[QSO submit] daemon error ${outcome.code}: ${outcome.message}`);
+                toasts.error(`Daemon error (${outcome.code}): ${outcome.message}. Try again.`);
                 break;
             case 'network':
-                console.error(`[QSO submit] daemon unreachable: ${outcome.message}`);
+                toasts.error(`Daemon unreachable: ${outcome.message}. Check the daemon is running.`);
                 break;
         }
     }

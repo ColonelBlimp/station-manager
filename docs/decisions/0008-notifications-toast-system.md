@@ -55,7 +55,9 @@ info(message, ttl?), warn(message, ttl?), error(message, ttl?)  // convenience w
 
 **Click-to-dismiss is always available.** Clicking any toast removes it immediately regardless of its remaining TTL.
 
-**Mount point:** `<Toasts/>` is rendered once in `app.svelte`. Container is `fixed bottom-4 right-4`, stacks bottom-up. Bottom-right keeps the top of the viewport clear for the QSO entry area where the operator's eyes live.
+**Mount point:** `<Toasts/>` is rendered once in `app.svelte`. Container is `fixed top-4 right-4`, stacks top-down (oldest-first DOM order; newest appends below the existing stack). Top-right matches v1's convention and keeps the QSO entry rows below the toast region — the operator's eye drops naturally from a freshly-arrived notification back to the form.
+
+(Original ADR position — bottom-right with stack-bottom-up — was changed to top-right on 2026-05-03 after the implementation surfaced; reasoning above. The "keep the top of the viewport clear for the QSO entry area" framing was wrong: the entry area sits in the middle of a finite-size shell, not at the top of the viewport, so a top-right toast doesn't obscure it. v1 precedence wins.)
 
 **Styling:** Tailwind v4 `@layer components` cluster — `.toast-base`, `.toast-info`, `.toast-warn`, `.toast-error`. Same convention as `.input-base`, `.input-row`, `.invalid-input` already established in `app.css`. Colours come from Tailwind's palette (info = indigo, warn = amber, error = rose) and can move to `@theme` tokens if reused elsewhere.
 
@@ -123,6 +125,9 @@ Persistent banners for connection state plus inline messages for field-level fee
 - ADR 0007 (`0007-keyboard-shortcuts.md`) — `Escape` is reserved for revert/cancel and doesn't dismiss toasts. Toast dismissal is click-only for now (could become an additional `Esc`-dismisses-most-recent shortcut later if desired).
 - Memory `project_sm_spa_component_patterns` — "inline messages express state; toasts express events" rule (rule 4, settled 2026-05-01) — applied here.
 - `frontend/logging/src/styles/app.css` — `@layer components` cluster where the toast classes will land alongside `.input-base`, `.input-row`, `.invalid-input`.
-- (Planned) `frontend/logging/src/lib/states/toasts.svelte.ts` — state singleton.
-- (Planned) `frontend/logging/src/lib/ui/Toasts.svelte` — single-mount renderer.
-- (Planned) `frontend/logging/src/app.svelte` — mounts `<Toasts/>` once.
+- `frontend/logging/src/lib/states/toasts.svelte.ts` — state singleton (built 2026-05-03).
+- `frontend/logging/src/lib/states/toasts.test.ts` — vitest coverage (push, per-level TTL, sticky `ttl=0`, max-stack eviction, dismiss idempotence, `info/warn/error` shortcuts).
+- `frontend/logging/src/lib/ui/Toasts.svelte` — single-mount renderer; bottom-right fixed; fade in/out via `svelte/transition`.
+- `frontend/logging/src/app.svelte` — mounts `<Toasts/>` once.
+- `frontend/logging/src/styles/app.css` — `.toast-base/.toast-info/.toast-warn/.toast-error` cluster in `@layer components`.
+- First consumer: `QsoPanel.svelte`'s submit-outcome arms (duplicate=warn, validation/server/network=error).

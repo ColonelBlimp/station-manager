@@ -24,7 +24,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-03, session 30 — SPA `POST /v1/qso` wired end-to-end; ADIF mode-vs-submode resolver landed both sides (FT8 added daemon-side); ADR 0015 settled: `additional_data` blob omits empty fields uniformly; first real QSO logged successfully via the SPA; full Go test suite green under `-race`, frontend 288/288 + svelte-check clean)
+## Current state (as of 2026-05-03, session 30 — SPA `POST /v1/qso` wired end-to-end; ADIF mode-vs-submode resolver landed both sides (FT8 added daemon-side); ADR 0015 settled (`additional_data` blob omits empty fields uniformly); ADR 0008 toast system built end-to-end; first real QSO logged successfully via the SPA; full Go test suite green under `-race`, frontend 302/302 + svelte-check clean)
 
 ### Session 30 work (SPA → daemon submit wiring; mode-resolver; ADR 0015 omitempty pass)
 
@@ -87,6 +87,24 @@ Inspection of the stored QSO's row showed ~80 keys, only ~18 carrying values. Th
 - `docs/v1-analysis/design-decisions-log.md` § "additional_data JSON blob column" — header changed to "**KEEP (refined by ADR 0015, 2026-05-03)**", rationale paragraph extended to cover the uniform empty-omission rule, related-links section updated.
 
 **Documentation updated for the mode-resolver:** none beyond this entry — the resolver is implementation detail; api.md §7a's MODE description is already correct ("ADIF MODE = parent family, e.g. SSB"); the SPA-side translation is captured here as the canonical record.
+
+**ADR 0008 toast system built (after a placeholder banner exposed the wrong-place problem):**
+
+A first-cut feedback banner inside QsoPanel proved the daemon-error round-trip end-to-end (a fresh-DB submit hit `404 logbook_not_found` and surfaced correctly), but the operator immediately flagged that submit feedback isn't QsoPanel-scoped state — v1 used top/bottom-right toasts for exactly this. ADR 0008 already specified the right answer; we built it.
+
+- **`frontend/logging/src/lib/states/toasts.svelte.ts`** (new, ~140 lines) — `$state`-array singleton with `pushToast(level, message, ttl?)`, `dismissToast(id)`, and `toasts.{info,warn,error,dismiss}` shortcuts. Per-level default TTLs (info=4s/warn=6s/error=8s); `ttl=0` opts out for sticky toasts; max-stack=5 with oldest-evicted semantics; pending timers cancelled on manual dismiss and on eviction.
+- **`frontend/logging/src/lib/states/toasts.test.ts`** (new, 14 cases) — push assignment + monotonic ids + level TTL defaults + explicit-ttl override + sticky `ttl=0` + auto-dismiss timing + per-level TTL + manual dismiss cancels timer + idempotent unknown-id dismiss + max-stack eviction with timer cleanup + convenience-wrapper shape.
+- **`frontend/logging/src/lib/ui/Toasts.svelte`** (new, ~50 lines) — fixed `top-right` flex column with `flex-col` (oldest-at-top, newest appended below — calmer than `flex-col-reverse`'s shift-on-each-push); `svelte/transition`'s `fade` (150 ms) for in/out; `pointer-events-none` on the container, `pointer-events-auto` on each toast (clicks pass through gaps); `aria-live="polite"` and `role="status"` for accessibility; each toast is a `<button>` so the entire surface is click-to-dismiss without nested-control issues. Position revised from ADR 0008's original `bottom-right` after the operator surfaced that v1 used top-right; ADR text amended to record both the change and the corrected rationale (the entry form sits inside a finite-size shell, not at the top of the viewport, so a top-right toast doesn't obscure it).
+- **Tailwind cluster in `styles/app.css` `@layer components`** — `.toast-base` (shape + shadow + max-w-sm) and `.toast-info`/`.toast-warn`/`.toast-error` (colour palette, indigo / amber / rose per ADR 0008's reference). Same convention as `.input-base` / `.invalid-input`.
+- **Mount in `app.svelte`** — `<Toasts/>` rendered as a sibling of `<main>` so the fixed-position overlay isn't constrained by the shell's z-index stack.
+- **`QsoPanel.svelte` rewired** — banner `$state`, helper, and template block removed; the four non-stored `SubmitOutcome` arms now call `toasts.warn(...)` (duplicate) or `toasts.error(...)` (validation / server / network). Net: −40 lines.
+
+**Verification:** `npm run check` 0/0; `npm test` full suite 302/302 (was 288 pre-toast; +14 toast tests). Browser path will be re-verified next session, but the unit-test coverage of TTL/eviction/dismiss + the daemon-side first-real-QSO from earlier in the session means the wiring is on solid ground.
+
+**Documentation updated for ADR 0008:**
+
+- `docs/decisions/0008-notifications-toast-system.md` — References section flipped from "(Planned)" to "(built 2026-05-03)" with file paths; first-consumer line names QsoPanel's submit-outcome arms.
+- `docs/v2-design/frontend-spa.md` — "Open questions" toast entry rewritten from "Resolved" to "Resolved + built 2026-05-03" with module API summary; the QSO-draft-store entry's "until ADR 0008 lands" wording replaced with the live behaviour.
 
 **Recap of v1/v2 phrasing (memory hardening):**
 
@@ -200,8 +218,8 @@ In rough order of dependency:
 
 1. ~~**Wire SPA → daemon `POST /v1/qso`.**~~ ✅ Landed session 30. `lib/api/qso.ts` + `QsoPanel.submitQso()` now POST to the daemon and branch on `SubmitOutcome`.
 2. ~~**End-to-end verification with a running daemon.**~~ ✅ Landed session 30. First real QSO (7Q5MLV) logged successfully; daemon confirmed `qso_id=2 mode=SSB`.
-3. **Submit error surfacing in the SPA.** Wire the four non-stored `SubmitOutcome` arms to a real visible affordance (placeholder banner / inline message under the Callsign field) until the toast system (ADR 0008) lands. Today the outcomes only land in the dev-tools console. **Free test fixture available:** a fresh DB has no logbooks, so `?logbook=1` returns `404 logbook_not_found` — exercises the `validation` arm end-to-end without fault injection. Use it to verify the surfacing UX before step #4 lands.
-4. **Seed a default logbook on first-run DB init (deliberately deferred).** Today the migration leaves `logbook` empty; the SPA hardcodes `?logbook=1` so first-launch submits 404. Don't fix this until step #3's error surfacing is wired and verified against the missing-logbook case — the gap is in use as a real-world fixture. After step #3 verifies green, add a bootstrap step (likely in `internal/database/sqlite/migrations/` or in the daemon's first-run path) that inserts a default logbook with the operator's callsign (sourced from config or a placeholder until `/v1/config` lands).
+3. ~~**Submit error surfacing in the SPA.**~~ ✅ Landed session 30. ADR 0008 toast system built end-to-end; QsoPanel's four non-stored `SubmitOutcome` arms surface as `toasts.warn`/`toasts.error`. Browser-side re-verification of the missing-logbook fixture is next-session housekeeping.
+4. **Seed a default logbook on first-run DB init (was deliberately deferred for step #3's fixture; now safe to address).** Today the migration leaves `logbook` empty; the SPA hardcodes `?logbook=1` so first-launch submits 404. With step #3 done, the fixture has served its purpose. Add a bootstrap step (likely in `internal/database/sqlite/migrations/` or in the daemon's first-run path) that inserts a default logbook with the operator's callsign — sourced from config until `/v1/config` lands; placeholder string acceptable in the meantime.
 3. **Daemon `GET/PUT /v1/config`** (Go) — currently missing. Replaces the v1 edit-the-file workflow for station/operator config; the SPA's `station` store hydrates from this on app start.
 4. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
 5. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.

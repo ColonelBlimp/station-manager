@@ -57,7 +57,7 @@ export async function submitQso(adif: string, logbookID: number): Promise<Submit
     // a proxy rewrites the response). Treat an unparseable body as a
     // server error rather than throwing — the caller has nothing
     // actionable to do with a JSON parse exception.
-    let body: DaemonOk | DaemonError | null = null;
+    let body: DaemonOk | DaemonError | null;
     try {
         body = (await response.json()) as DaemonOk | DaemonError;
     } catch {
