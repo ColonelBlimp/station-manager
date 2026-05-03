@@ -117,12 +117,92 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 		t.Fatalf("Datastore.MaxOpenConns = %d, want 1", cfg.Datastore.MaxOpenConns)
 	}
 
-	// Logging defaults
+	// Logging defaults — Level + dir + the rotated-file int knobs are
+	// filled by applyDefaults; the booleans (file_logging, with_timestamp,
+	// log_file_compress) are intentionally NOT touched on Load so an
+	// operator's explicit false isn't reverted. They come from
+	// DefaultConfig only — covered in TestDefaultConfig_LoggingDefaults.
 	if cfg.Logging.Level != "info" {
 		t.Fatalf("Logging.Level = %q, want %q", cfg.Logging.Level, "info")
 	}
+	if cfg.Logging.RelLogFileDir != "log" {
+		t.Fatalf("Logging.RelLogFileDir = %q, want %q", cfg.Logging.RelLogFileDir, "log")
+	}
+	// Empty-config fallback: when neither console nor file is set, file is on.
+	if !cfg.Logging.FileLogging {
+		t.Fatal("Logging.FileLogging should default to true when neither console nor file is set")
+	}
+	if cfg.Logging.LogFileMaxSizeMB != 100 {
+		t.Fatalf("Logging.LogFileMaxSizeMB = %d, want 100", cfg.Logging.LogFileMaxSizeMB)
+	}
+	if cfg.Logging.LogFileMaxBackups != 5 {
+		t.Fatalf("Logging.LogFileMaxBackups = %d, want 5", cfg.Logging.LogFileMaxBackups)
+	}
+	if cfg.Logging.LogFileMaxAgeDays != 30 {
+		t.Fatalf("Logging.LogFileMaxAgeDays = %d, want 30", cfg.Logging.LogFileMaxAgeDays)
+	}
+
+	// Datastore path uses the ${DataDir}/db/ subdir (matches build/db/.gitkeep).
+	wantPath := filepath.Join(dir, "db", "station-manager.db")
+	if cfg.Datastore.Path != wantPath {
+		t.Fatalf("Datastore.Path = %q, want %q", cfg.Datastore.Path, wantPath)
+	}
+}
+
+func TestDefaultConfig_LoggingDefaults(t *testing.T) {
+	// DefaultConfig is the first-run seed used by the daemon. Booleans
+	// must come out true here because there's no operator input to
+	// preserve.
+	cfg := DefaultConfig(t.TempDir())
+	if !cfg.Logging.WithTimestamp {
+		t.Error("DefaultConfig: Logging.WithTimestamp should be true")
+	}
+	if !cfg.Logging.FileLogging {
+		t.Error("DefaultConfig: Logging.FileLogging should be true")
+	}
+	if cfg.Logging.ConsoleLogging {
+		t.Error("DefaultConfig: Logging.ConsoleLogging should be false (file-only by default)")
+	}
+	if !cfg.Logging.LogFileCompress {
+		t.Error("DefaultConfig: Logging.LogFileCompress should be true")
+	}
+}
+
+func TestLoad_OperatorFalsePreserved(t *testing.T) {
+	// Regression guard for the *bool trap: an operator who explicitly
+	// sets file_logging false (and console_logging true) must NOT have
+	// it silently flipped on again by applyDefaults.
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+
+	content := `{
+		"logging": {
+			"level": "info",
+			"console_logging": true,
+			"file_logging": false,
+			"with_timestamp": false,
+			"log_file_compress": false
+		}
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Logging.FileLogging {
+		t.Error("FileLogging was flipped to true despite explicit false")
+	}
+	if cfg.Logging.WithTimestamp {
+		t.Error("WithTimestamp was flipped to true despite explicit false")
+	}
+	if cfg.Logging.LogFileCompress {
+		t.Error("LogFileCompress was flipped to true despite explicit false")
+	}
 	if !cfg.Logging.ConsoleLogging {
-		t.Fatal("Logging.ConsoleLogging should default to true")
+		t.Error("ConsoleLogging should remain true as set")
 	}
 }
 
@@ -132,8 +212,59 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DataDir != "/some/dir" {
 		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/some/dir")
 	}
-	if cfg.Datastore.Path != "/some/dir/station-manager.db" {
-		t.Fatalf("Datastore.Path = %q, want %q", cfg.Datastore.Path, "/some/dir/station-manager.db")
+	wantPath := filepath.Join("/some/dir", "db", "station-manager.db")
+	if cfg.Datastore.Path != wantPath {
+		t.Fatalf("Datastore.Path = %q, want %q", cfg.Datastore.Path, wantPath)
+	}
+}
+
+func TestWriteJSON_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	original := DefaultConfig(dir)
+	if err := WriteJSON(path, original); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if loaded.DataDir != original.DataDir {
+		t.Errorf("DataDir mismatch: got %q want %q", loaded.DataDir, original.DataDir)
+	}
+	if loaded.Datastore.Driver != original.Datastore.Driver {
+		t.Errorf("Driver mismatch: got %q want %q", loaded.Datastore.Driver, original.Datastore.Driver)
+	}
+	if loaded.Server.MaxBodyBytes != original.Server.MaxBodyBytes {
+		t.Errorf("MaxBodyBytes mismatch: got %d want %d",
+			loaded.Server.MaxBodyBytes, original.Server.MaxBodyBytes)
+	}
+}
+
+func TestWriteJSON_AtomicViaTempFile(t *testing.T) {
+	// The temp file must NOT remain after a successful write — rename
+	// either replaced the target or the cleanup removed it.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp file should not exist after successful WriteJSON; stat err = %v", err)
+	}
+}
+
+func TestWriteJSON_FailsOnBadParentDir(t *testing.T) {
+	// Parent directory doesn't exist — temp-file write must fail and
+	// surface the error rather than silently succeeding.
+	err := WriteJSON("/nonexistent/dir/config.json", DefaultConfig("/nonexistent/dir"))
+	if err == nil {
+		t.Fatal("WriteJSON expected error for nonexistent parent dir, got nil")
 	}
 }
 

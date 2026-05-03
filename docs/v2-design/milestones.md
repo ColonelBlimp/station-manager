@@ -95,8 +95,10 @@ SSE.
 ### Acceptance test
 
 ```
-# Start the daemon
-./smd --config ./config.json
+# Start the daemon (no --config: first run seeds ./config.json with
+# DefaultConfig(cwd); subsequent runs load that file. Pass --config
+# explicitly to point at a non-default path.)
+./smd
 
 # ---- Happy path ----
 

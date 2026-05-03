@@ -237,7 +237,7 @@ package forwarding
 // per Submit and return a Result describing the outcome.
 type Forwarder interface {
     // Type returns the forwarder's type identifier, matching the
-    // "type" field in config.json. Used for logging and for
+    // "type" field in config.json.orig. Used for logging and for
     // qso_upload.forwarder_type.
     Type() string
 

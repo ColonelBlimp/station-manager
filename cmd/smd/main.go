@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"runtime/debug"
 	"sync"
@@ -88,7 +89,7 @@ func run() error {
 	adif.ProgramVersion = Version
 
 	// ---- Load configuration ----
-	cfg, err := loadConfig(*configPath)
+	cfg, firstRunPath, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
@@ -147,6 +148,19 @@ func run() error {
 			_, _ = fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", err)
 		}
 	}()
+
+	// First-run event — structured log goes to smd.log so this major
+	// startup transition is preserved alongside the rest of the
+	// operator's record. The earlier stderr line covers the case where
+	// logger init itself fails.
+	if firstRunPath != "" {
+		loggerSvc.InfoWith().
+			Str("path", firstRunPath).
+			Msg("first run: wrote default config to disk")
+	}
+	loggerSvc.InfoWith().
+		Str("version", Version).
+		Msg("smd starting")
 
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
 	if err != nil {
@@ -376,24 +390,59 @@ func spawnForwarderWorkers(
 	return nil
 }
 
-func loadConfig(path string) (config.Config, error) {
+// loadConfig resolves and loads the daemon's configuration. The second
+// return value is the path that was newly written on a first-run seed
+// (empty when an existing config was loaded) — the caller emits a
+// structured log line for it once the logger is initialised, so the
+// first-run event lands in smd.log alongside the rest of startup.
+func loadConfig(path string) (config.Config, string, error) {
+	// Explicit path: operator chose it, surface a not-found as an error
+	// rather than silently writing a default file at an arbitrary
+	// location they didn't pick.
 	if path != "" {
-		return config.Load(path)
+		cfg, err := config.Load(path)
+		return cfg, "", err
 	}
 
 	// Try SM_WORKING_DIR/config.json, then ./config.json
 	if dir := os.Getenv("SM_WORKING_DIR"); dir != "" {
 		candidate := dir + "/config.json"
 		if _, err := os.Stat(candidate); err == nil {
-			return config.Load(candidate)
+			cfg, err := config.Load(candidate)
+			return cfg, "", err
 		}
+		return firstRunWrite(candidate, dir)
 	}
 
-	if _, err := os.Stat("config.json"); err == nil {
-		return config.Load("config.json")
-	}
-
-	// No config file found — use defaults.
 	cwd, _ := os.Getwd()
-	return config.DefaultConfig(cwd), nil
+	cwdCandidate := filepath.Join(cwd, "config.json")
+	if _, err := os.Stat(cwdCandidate); err == nil {
+		cfg, err := config.Load(cwdCandidate)
+		return cfg, "", err
+	}
+
+	return firstRunWrite(cwdCandidate, cwd)
+}
+
+// firstRunWrite seeds a default config.json at the resolved candidate
+// path so the operator gets a discoverable, hand-editable file on
+// first run rather than an in-memory-only DefaultConfig that vanishes
+// at shutdown. If the write fails (read-only fs, permission denied)
+// the daemon falls back to in-memory defaults so it can still start.
+// Returns the written path on success (empty on fallback) so the
+// caller can log a structured first-run event after the logger boots.
+func firstRunWrite(path, baseDir string) (config.Config, string, error) {
+	cfg := config.DefaultConfig(baseDir)
+	if err := config.WriteJSON(path, cfg); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr,
+			"smd: could not seed default config at %s: %v (continuing with in-memory defaults)\n",
+			path, err)
+		return cfg, "", nil
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "smd: wrote default config to %s\n", path)
+	loaded, err := config.Load(path)
+	if err != nil {
+		return loaded, "", err
+	}
+	return loaded, path, nil
 }

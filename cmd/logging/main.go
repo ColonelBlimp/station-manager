@@ -35,7 +35,7 @@ const (
 var windowHeight = statusRowHeight + mainRowHeight + bottomRowHeight
 
 func main() {
-	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
+	configPath := flag.String("config", "", "path to config.json.orig (default: $SM_WORKING_DIR/config.json.orig or ./config.json.orig)")
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -184,20 +184,20 @@ func borderedInput(th *material.Theme, ed *widget.Editor, hint string, width uni
 }
 
 // loadConfig mirrors cmd/smd's resolution order: explicit path, then
-// $SM_WORKING_DIR/config.json, then ./config.json, then defaults rooted
+// $SM_WORKING_DIR/config.json.orig, then ./config.json.orig, then defaults rooted
 // at the current working directory.
 func loadConfig(path string) (config.Config, error) {
 	if path != "" {
 		return config.Load(path)
 	}
 	if dir := os.Getenv("SM_WORKING_DIR"); dir != "" {
-		candidate := dir + "/config.json"
+		candidate := dir + "/config.json.orig"
 		if _, err := os.Stat(candidate); err == nil {
 			return config.Load(candidate)
 		}
 	}
-	if _, err := os.Stat("config.json"); err == nil {
-		return config.Load("config.json")
+	if _, err := os.Stat("config.json.orig"); err == nil {
+		return config.Load("config.json.orig")
 	}
 	cwd, _ := os.Getwd()
 

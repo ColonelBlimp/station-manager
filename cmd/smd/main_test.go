@@ -334,12 +334,15 @@ func TestLoadConfig_ExplicitPath(t *testing.T) {
 	// Env shouldn't matter when path is explicit.
 	t.Setenv("SM_WORKING_DIR", "/nonexistent")
 
-	cfg, err := loadConfig(path)
+	cfg, firstRunPath, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	if cfg.DataDir != dir {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, dir)
+	}
+	if firstRunPath != "" {
+		t.Errorf("firstRunPath = %q, want empty for explicit existing path", firstRunPath)
 	}
 }
 
@@ -352,12 +355,15 @@ func TestLoadConfig_EnvVarPath(t *testing.T) {
 	writeConfigJSON(t, filepath.Join(envDir, "config.json"))
 	t.Setenv("SM_WORKING_DIR", envDir)
 
-	cfg, err := loadConfig("")
+	cfg, firstRunPath, err := loadConfig("")
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	if cfg.DataDir != envDir {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, envDir)
+	}
+	if firstRunPath != "" {
+		t.Errorf("firstRunPath = %q, want empty when env-dir config already existed", firstRunPath)
 	}
 }
 
@@ -368,31 +374,85 @@ func TestLoadConfig_CwdFallback(t *testing.T) {
 	t.Chdir(cwd)
 	writeConfigJSON(t, filepath.Join(cwd, "config.json"))
 
-	cfg, err := loadConfig("")
+	cfg, firstRunPath, err := loadConfig("")
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	if cfg.DataDir != cwd {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, cwd)
 	}
+	if firstRunPath != "" {
+		t.Errorf("firstRunPath = %q, want empty when cwd config already existed", firstRunPath)
+	}
 }
 
-func TestLoadConfig_DefaultWhenNothingFound(t *testing.T) {
-	// Empty path, unset env, cwd has no config.json → DefaultConfig(cwd).
+func TestLoadConfig_FirstRunWritesDefaultInCwd(t *testing.T) {
+	// Empty path, unset env, cwd has no config.json. Expectation:
+	// loadConfig seeds ./config.json with DefaultConfig(cwd), then
+	// loads it back. After the call the file MUST exist on disk —
+	// that's the "discoverable, hand-editable" property the first-run
+	// write delivers.
 	t.Setenv("SM_WORKING_DIR", "")
 
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 
-	cfg, err := loadConfig("")
+	cfg, firstRunPath, err := loadConfig("")
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	if cfg.DataDir != cwd {
 		t.Errorf("DataDir = %q, want %q (from os.Getwd)", cfg.DataDir, cwd)
 	}
-	// DefaultConfig applies the driver default — a cheap shape check.
 	if cfg.Datastore.Driver == "" {
 		t.Error("DefaultConfig should populate Datastore.Driver")
+	}
+
+	written := filepath.Join(cwd, "config.json")
+	if _, err := os.Stat(written); err != nil {
+		t.Fatalf("config.json was not written to cwd: %v", err)
+	}
+	if firstRunPath != written {
+		t.Errorf("firstRunPath = %q, want %q", firstRunPath, written)
+	}
+
+	// Reload from the file directly — proves the written content is
+	// well-formed JSON that the loader accepts on subsequent startups.
+	reloaded, err := config.Load(written)
+	if err != nil {
+		t.Fatalf("reloading written config: %v", err)
+	}
+	if reloaded.DataDir != cwd {
+		t.Errorf("reloaded DataDir = %q, want %q", reloaded.DataDir, cwd)
+	}
+}
+
+func TestLoadConfig_FirstRunWritesDefaultInEnvDir(t *testing.T) {
+	// SM_WORKING_DIR set, but the dir has no config.json. Expectation:
+	// loadConfig seeds $SM_WORKING_DIR/config.json (not the cwd
+	// fallback), then loads it back.
+	envDir := t.TempDir()
+	t.Setenv("SM_WORKING_DIR", envDir)
+
+	emptyCwd := t.TempDir()
+	t.Chdir(emptyCwd)
+
+	cfg, firstRunPath, err := loadConfig("")
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.DataDir != envDir {
+		t.Errorf("DataDir = %q, want %q (env dir, not cwd)", cfg.DataDir, envDir)
+	}
+
+	written := filepath.Join(envDir, "config.json")
+	if _, err := os.Stat(written); err != nil {
+		t.Fatalf("config.json was not written to env dir: %v", err)
+	}
+	if firstRunPath != written {
+		t.Errorf("firstRunPath = %q, want %q", firstRunPath, written)
+	}
+	if _, err := os.Stat(filepath.Join(emptyCwd, "config.json")); err == nil {
+		t.Error("config.json should NOT have been written to cwd when SM_WORKING_DIR is set")
 	}
 }

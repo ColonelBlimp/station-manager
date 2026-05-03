@@ -132,12 +132,44 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// DefaultConfig returns a Config with sensible defaults. Used when no
-// config file is provided.
+// DefaultConfig returns a Config with sensible defaults. Used by the
+// daemon's first-run path to seed config.json, and as a starting point
+// in tests.
+//
+// The booleans set here are defaults-on for fields where false is a
+// legitimate operator choice — flipping them in applyDefaults would
+// silently rewrite an explicit operator false on every Load. So they
+// live here, where the input is a zero-valued Config{} with no operator
+// preference attached. applyDefaults below only fills the unambiguously
+// blank fields (empty strings, zero ints with min validation).
 func DefaultConfig(dataDir string) Config {
 	var cfg Config
+	cfg.Logging.WithTimestamp = true
+	cfg.Logging.FileLogging = true
+	cfg.Logging.LogFileCompress = true
 	applyDefaults(&cfg, dataDir)
 	return cfg
+}
+
+// WriteJSON serialises cfg to path as indented JSON via temp-file +
+// rename so a partial write can never leave a half-formed config on
+// disk for the next startup. The parent directory must already exist;
+// daemon startup resolves that elsewhere via utils.WorkingDir.
+func WriteJSON(path string, cfg Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling config: %w", err)
+	}
+
+	tmp := path + ".tmp"
+	if err = os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("writing temp config: %w", err)
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("renaming temp config to %s: %w", path, err)
+	}
+	return nil
 }
 
 func applyDefaults(cfg *Config, baseDir string) {
@@ -201,7 +233,9 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Datastore.Driver = types.SqliteDriverName
 	}
 	if cfg.Datastore.Path == "" {
-		cfg.Datastore.Path = filepath.Join(cfg.DataDir, "station-manager.db")
+		// Sits under ${DataDir}/db/ to match the build/{bin,db,log}
+		// layout used in development and any future packaged install.
+		cfg.Datastore.Path = filepath.Join(cfg.DataDir, "db", "station-manager.db")
 	}
 	if cfg.Datastore.MaxOpenConns == 0 {
 		cfg.Datastore.MaxOpenConns = 1 // sqlite is single-writer
@@ -216,15 +250,28 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Datastore.TransactionContextTimeout = 10
 	}
 
-	// Logging defaults
+	// Logging defaults. Boolean fields (with_timestamp, file_logging,
+	// log_file_compress) are intentionally NOT touched here — they are
+	// set in DefaultConfig instead so an explicit `false` from the
+	// operator's config file isn't silently flipped back on. Long-term
+	// fix: convert to *bool (mirrors Server.ServeSPA).
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
 	}
 	if cfg.Logging.RelLogFileDir == "" {
-		cfg.Logging.RelLogFileDir = "logs"
+		cfg.Logging.RelLogFileDir = "log"
 	}
 	if !cfg.Logging.ConsoleLogging && !cfg.Logging.FileLogging {
-		cfg.Logging.ConsoleLogging = true
+		cfg.Logging.FileLogging = true
+	}
+	if cfg.Logging.LogFileMaxSizeMB == 0 {
+		cfg.Logging.LogFileMaxSizeMB = 100
+	}
+	if cfg.Logging.LogFileMaxBackups == 0 {
+		cfg.Logging.LogFileMaxBackups = 5
+	}
+	if cfg.Logging.LogFileMaxAgeDays == 0 {
+		cfg.Logging.LogFileMaxAgeDays = 30
 	}
 
 	// Forwarder defaults — see docs/v2-design/forwarding.md §4.
