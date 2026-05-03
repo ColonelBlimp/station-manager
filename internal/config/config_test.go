@@ -168,6 +168,46 @@ func TestDefaultConfig_LoggingDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_TCPAndServeSPADefaultsOn(t *testing.T) {
+	// First-run UX gate: a fresh install must reach the SPA from a
+	// browser without operator-side config edits. Protocol=tcp,
+	// SocketPath=127.0.0.1:8080 (matches Vite dev proxy default),
+	// ServeSPA=true.
+	cfg := DefaultConfig(t.TempDir())
+
+	if cfg.Server.Protocol != "tcp" {
+		t.Errorf("Server.Protocol = %q, want tcp (first-run default)", cfg.Server.Protocol)
+	}
+	if cfg.SocketPath != "127.0.0.1:8080" {
+		t.Errorf("SocketPath = %q, want 127.0.0.1:8080", cfg.SocketPath)
+	}
+	if cfg.Server.ServeSPA == nil || !*cfg.Server.ServeSPA {
+		t.Error("ServeSPA should default to true on TCP")
+	}
+}
+
+func TestLoad_UnixProtocolKeepsUnixSocketDefault(t *testing.T) {
+	// Operator who flips back to unix should get a unix-socket
+	// SocketPath default (not the TCP one) when they leave
+	// socket_path unset — so they don't have to set both fields.
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	content := `{"server":{"protocol":"unix"}}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.Protocol != "unix" {
+		t.Errorf("Protocol = %q, want unix", cfg.Server.Protocol)
+	}
+	if !strings.HasSuffix(cfg.SocketPath, "smd.sock") {
+		t.Errorf("SocketPath = %q, want a unix-socket-style path ending in smd.sock", cfg.SocketPath)
+	}
+}
+
 func TestDefaultConfig_LoggingStationEmpty(t *testing.T) {
 	// First-run state: no callsign yet — operator sets it via the
 	// setup dialog. The empty string is a legitimate pre-setup value.

@@ -90,8 +90,9 @@ type Config struct {
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
 type ServerConfig struct {
-	// Protocol is the network protocol for the listener: "unix" (default)
-	// or "tcp" for network deployment.
+	// Protocol is the network protocol for the listener: "tcp"
+	// (default — needed for the embedded SPA, which browsers reach
+	// over HTTP) or "unix" for the headless-daemon deployment shape.
 	Protocol           string `json:"protocol"`
 	ReadTimeoutSec     int    `json:"read_timeout_sec"`
 	WriteTimeoutSec    int    `json:"write_timeout_sec"`
@@ -144,10 +145,11 @@ type ServerConfig struct {
 
 	// ServeSPA controls whether the daemon hosts the embedded logging
 	// SPA at "/" (and any future SPAs at their respective prefixes).
-	// Pointer-typed so applyDefaults can distinguish "absent from config"
-	// (nil — apply the protocol-driven default) from "explicitly false"
-	// (operator wants a headless TCP daemon). Default: true on TCP,
-	// false on Unix-socket (browsers can only reach TCP listeners).
+	// Pointer-typed so applyDefaults can distinguish "absent from
+	// config" (nil — apply the protocol-driven default) from
+	// "explicitly false" (operator wants a headless TCP daemon).
+	// Default: true on TCP (the first-run default), false on
+	// Unix-socket (browsers can only reach TCP listeners).
 	// See docs/v2-design/frontend-spa.md.
 	ServeSPA *bool `json:"serve_spa,omitempty"`
 }
@@ -219,13 +221,29 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.DataDir == "" {
 		cfg.DataDir = baseDir
 	}
-	if cfg.SocketPath == "" {
-		cfg.SocketPath = filepath.Join(os.TempDir(), "smd.sock")
-	}
 
-	// Server defaults
+	// Server protocol defaults to TCP on first run because SM is
+	// SPA-driven by default (see ADR 0001 — browser SPA as the
+	// primary UI). Browsers can't reach a Unix socket, so a
+	// unix-socket default would mean every operator hits a "blank
+	// browser" failure mode on first launch and has to find +
+	// hand-edit two config keys before they see anything. The
+	// "install → run → only one prompt" UX principle picks TCP.
+	// The unix-socket headless deployment shape is still supported
+	// — the operator opts in by editing protocol+socket_path.
 	if cfg.Server.Protocol == "" {
-		cfg.Server.Protocol = "unix"
+		cfg.Server.Protocol = "tcp"
+	}
+	if cfg.SocketPath == "" {
+		// Default address for each protocol. localhost-only TCP so
+		// the SPA's Vite dev proxy ("/v1" → http://localhost:8080)
+		// reaches a daemon out of the box; the unix path is the
+		// fallback for operators who flipped Protocol back.
+		if cfg.Server.Protocol == "tcp" {
+			cfg.SocketPath = "127.0.0.1:8080"
+		} else {
+			cfg.SocketPath = filepath.Join(os.TempDir(), "smd.sock")
+		}
 	}
 	if cfg.Server.ReadTimeoutSec == 0 {
 		cfg.Server.ReadTimeoutSec = 10
