@@ -73,8 +73,8 @@ class LoggingStationView {
     /** ADIF STATION_CALLSIGN — set during first-run setup. */
     stationCallsign: string = '';
 
-    /** ADIF OPERATOR — the logging operator's callsign. */
-    operator: string = '';
+    /** ADIF OPERATOR — the logging operator's callsign. Reactive: drives downstream consumers. */
+    operator: string = $state('');
 
     /** ADIF OWNER_CALLSIGN — licensee/club owner if different from station_callsign. */
     ownerCallsign: string = '';

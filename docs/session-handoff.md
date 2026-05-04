@@ -24,7 +24,34 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-03, session 31 — `/v1/config` GET/PUT shipped end-to-end with first-run setup-transition logbook seed folded in; SPA boot now fetches config and gates the QSO panel behind a setup dialog when `setup_complete=false`; first-run config-file write (`config.json` seeded by daemon on first launch) plus default overhaul to SPA-friendly values (TCP, ServeSPA, file logging with timestamps, db/ + log/ subdirs); `types.RigConfig.ID` settled to int64 (cat-serial-reuse.md §7.5 closed); InfoPanel refactored to data-driven tabs with ARIA tablist; cards/panels naming convention A locked; CLAUDE.md gained "Reuse types.X" idiom rule; full Go test suite green under `-race`, frontend 302/302 + svelte-check clean)
+## Current state (as of 2026-05-04, session 32 — `configState.loggingStation` extended with `operator` and `ownerCallsign` plain fields; ADIF identity fallback chain implemented in two places (daemon's first-setup transition seeds operator/owner_callsign from station_callsign one-shot when request leaves them empty; SPA `applyResponse` mirrors the same fallback as a hydration-time no-op safety net); `MyStationPanel.svelte` refactored to render all three callsigns via `ValidatedInput` + `isValidCallsign`; reactivity rule corrected — `$state` is for any reactive consumer (template, `$derived`, `$effect`), not just `$derived`; three new daemon tests cover the materialisation behaviour. Carried over: `/v1/config` GET/PUT shipped end-to-end with first-run setup-transition logbook seed folded in; SPA boot fetches config and gates the QSO panel behind a setup dialog when `setup_complete=false`; first-run config-file write; defaults overhauled to SPA-friendly values; `types.RigConfig.ID` settled to int64; InfoPanel data-driven tabs with ARIA tablist; cards/panels naming convention A locked; CLAUDE.md "Reuse types.X" idiom rule.)
+
+### Session 32 work (ADIF three-callsign fallback chain — daemon + SPA + MyStationPanel + tests)
+
+**Operator brief:** scaffold-and-step-in pattern continued from session 31. Operator was wiring up MyStationPanel content; spotted that the data model only carried `station_callsign` while ADIF defines three load-bearing callsign fields (`STATION_CALLSIGN`, `OPERATOR`, `OWNER_CALLSIGN`) with explicit fallback rules between them.
+
+**What landed:**
+
+- **`configState.loggingStation` extended.** Added `operator` and `ownerCallsign` alongside `stationCallsign` in `frontend/logging/src/lib/states/config.svelte.ts`. All three are **plain class fields** (no `$state`) — operator initially proposed `$state` for `ownerCallsign`, then corrected: these are static-ish ADIF MY_* identity fields hydrated from `/v1/config`, with no reactive consumers. Operator note triggered a memory correction: the rule is "`$state` for any reactivity (template, `$derived`, `$effect`)" — `$derived` is one trigger, not the only one. `InfoPanel.svelte`'s `activeTab: TabId = $state('worked')` is the canonical counter-example.
+- **SPA fallback chain** in `applyResponse(...)`: empty `station_callsign` falls back to `operator`; empty `owner_callsign` falls back to the (post-resolution) `stationCallsign`. Implemented with `||` (truthy chain — `?? ''` was redundant noise that operator flagged on review).
+- **Daemon materialisation** in `internal/api/handler_config.go`'s setup-transition block. On the false→true `SetupComplete` flip, when the request body leaves `Operator` / `OwnerCallsign` empty, the daemon copies `incomingCall` into both. One-shot — post-setup PUTs don't re-seed; My Station panel edits are authoritative including blanking either field. Club-station case (request supplies all three distinct callsigns) flows through unchanged.
+- **Three new daemon tests** in `handler_config_test.go`:
+  - `TestHandlePutConfig_FirstSetup_MaterialisesOperatorAndOwner` — confirms first-setup seed.
+  - `TestHandlePutConfig_FirstSetup_RespectsOperatorAndOwnerWhenProvided` — confirms club-station case (request-supplied values preserved).
+  - `TestHandlePutConfig_PostSetupNoMaterialisation` — confirms one-shot semantics: post-setup PUT that blanks both fields stays blank.
+  All 10 PUT-config tests green.
+- **`MyStationPanel.svelte` refactor.** Replaced the read-only `<div class="input-base">` placeholders with three `ValidatedInput` instances, each wired to `isValidCallsign` and `bind:value` against `configState.loggingStation.{stationCallsign, ownerCallsign, operator}`. Operator added the third (operator) field while reviewing. svelte-check 0/0/0.
+
+**Doc audit (this section):**
+
+- `docs/v2-design/api.md` — `PUT /v1/config` section gains the "ADIF identity materialisation (one-shot, setup transition only)" bullet describing the daemon-side fallback rule.
+- `docs/v2-design/frontend-spa.md` — Reactivity rule corrected (was "no `$state` without `$derived`"; now "`$state` for any reactive consumer"). Three-callsign distinction expanded with the fallback chain and pointers to both materialisation sites.
+- `docs/v2-design/milestones.md` — added "ADIF identity fallback chain" line under Milestone 1c-shipped block.
+- Memory `project_sm_spa_config_layering.md` — reactivity rule corrected (already done mid-session).
+
+**Verified:** `go test ./internal/api/ -count=1` 0 fails; `npx svelte-check` 0 errors / 0 warnings.
+
+### Session 31 work (first-run config write; /v1/config GET/PUT with setup-transition logbook seed; SPA setup dialog; defaults overhaul; RigConfig.ID → int64; InfoPanel refactor)
 
 ### Session 31 work (first-run config write; /v1/config GET/PUT with setup-transition logbook seed; SPA setup dialog; defaults overhaul; RigConfig.ID → int64; InfoPanel refactor)
 
@@ -327,7 +354,9 @@ A second drift audit ran after the medium fixes landed; eight findings, all addr
 - Default deployment: TCP listener on the same `host:port` as the SPA (single-origin), so the SPA fetch is just `'/v1/qso?logbook=...'` — no `daemonUrl` prefix needed when running embedded.
 - Submit rate cap is 20 QPS / 40 burst; way above any single-operator logging cadence.
 
-### Next steps (carried into session 32+)
+### Next steps (carried into session 33+)
+
+**OPERATOR field — contest-mode impact (deferred from session 32, 2026-05-04).** The `operator` field on `configState.loggingStation` was flipped to `$state('')` (reactive) at session-end specifically because it has implications for contest-mode logging that need to be designed before further work lands. Likely shape: in contest mode the *operator* of record may differ from the station owner / station_callsign across QSOs (multi-op contest stations), and the QSO submit path needs to read the current `operator` reactively so downstream logging picks up changes within a session without a page reload. **Don't extend the operator field's behaviour without first nailing down the contest-mode design** — the reactive declaration is a placeholder until that design is made.
 
 In rough order of dependency:
 

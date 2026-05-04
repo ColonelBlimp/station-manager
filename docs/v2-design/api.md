@@ -492,6 +492,17 @@ pointer ids.
     just-set callsign with `name="Default"`. Idempotent: re-PUT with
     the same or a different callsign updates `logging_station` only;
     the existing logbook row is not rewritten.
+  - **ADIF identity materialisation (one-shot, setup transition only):**
+    on the same false → true transition, when the request body leaves
+    `logging_station.operator` and/or `logging_station.owner_callsign`
+    empty, the daemon copies `station_callsign` into the empty
+    field(s). Aligns with the ADIF fallback rule (absent `OPERATOR`
+    means it equals `STATION_CALLSIGN`; absent `OWNER_CALLSIGN` means
+    it equals `STATION_CALLSIGN`). A request that supplies non-empty
+    `operator` / `owner_callsign` (club-station case) is honoured
+    as-is. Post-setup PUTs do NOT re-seed — operator edits via the
+    My Station panel are authoritative, including blanking either
+    field.
 
   Returns `200` with the post-write body shape. Validation errors
   (`invalid_field_value` for malformed callsign, `invalid_json` for

@@ -351,6 +351,17 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   the QSO panel after. Failure paths (network/server) toast and
   flip `loaded=true` so the UI doesn't hang. Landed session 31,
   2026-05-03.
+- ✅ ADIF identity fallback chain — `configState.loggingStation`
+  carries `stationCallsign`, `operator`, `ownerCallsign` as plain
+  fields (no `$state`; nothing reactively derives). Daemon
+  materialises `operator` / `owner_callsign` from `station_callsign`
+  on the first-setup transition only when the request leaves them
+  empty (one-shot — post-setup edits are authoritative).
+  `applyResponse` applies the same fallback at hydration as a
+  no-op safety net. `MyStationPanel.svelte` renders all three via
+  `ValidatedInput` + `isValidCallsign`. Tests cover seed, club-
+  station preserve, and post-setup-blank cases. Landed session 32,
+  2026-05-04.
 - ✅ `types.RigConfig.ID`: `string` → `int64`. Closes
   cat-serial-reuse.md §7.5; uniform with `Logbook.ID int64`;
   numeric defaults (1) work cleanly. Zero blast radius (no

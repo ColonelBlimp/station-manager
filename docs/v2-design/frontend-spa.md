@@ -505,20 +505,31 @@ Five tiers, each matching what the data semantically *means*:
 | In-memory only | Live transport / rig state | `catState`, `bridgeState`, QsoPanel's draft fields, `station` store contents | Rebuilt from rig events / app boot |
 | Hardcoded module constants | Bootstrap / first-install fallback | `cat.svelte.ts`'s `DEFAULT_VFO_HZ`, `stores/station.ts` defaults | Used until daemon `/v1/config` populates real values |
 
-**Reactivity-boundary rule (settled 2026-05-02):** `$state` is for fields that drive `$derived` computations; Svelte stores for static-ish profile data without `$derived` consumers. Concretely:
+**Reactivity rule (corrected session 31, 2026-05-04):** `$state` is for fields where reactivity is needed — i.e. some Svelte template, `$derived`, or `$effect` reads the value and must re-run when it changes. `$derived` is one trigger but not the only one. Plain class fields are correct when the value is hydrated from an external source and has no reactive consumers; Svelte stores fit static-ish profile data accessed via subscribe semantics. Concretely:
 
 - `configState.station.enabled` and `.ampMultiplier` use `$state` because `displayedState.isLive` and `.effectivePower` derive from them.
+- `InfoPanel.svelte`'s `activeTab: TabId = $state('worked')` uses `$state` because the template's `{#if tab.id === activeTab}` branch must re-render on tab switch — no `$derived`, but reactivity is still required.
+- `configState.loggingStation.{stationCallsign, operator, ownerCallsign}` are **plain class fields** (no `$state`). They are hydrated from `/v1/config` and read by `MyStationPanel.svelte` form bindings; nothing reactively re-renders or recomputes when they change. The earlier "no `$state` without `$derived`" framing was too narrow.
 - `station` (the operator/station profile in `lib/stores/station.ts`) uses a Svelte writable store — populated once at app start, no `$derived` reads from its fields, so per-field reactive subscriptions earn nothing. `submitQso` reads via `get(station)` for a one-shot snapshot at QSO-submit time.
 
 **Directory split:** `lib/states/` holds runes-based state (`*.svelte.ts`); `lib/stores/` holds Svelte stores (`*.ts`). The file extension follows the Svelte compiler convention (only runes-using modules need `.svelte.ts`).
 
-**Three-callsign distinction (per ADIF spec, 2026-05-02):** the `Station` interface intentionally does NOT use the field name `callsign`. ADIF distinguishes:
+**Three-callsign distinction (per ADIF spec, 2026-05-02; extended 2026-05-04):** the `Station` interface intentionally does NOT use the field name `callsign`. ADIF distinguishes:
 
-- `STATION_CALLSIGN` — "the logging station's callsign (the callsign used over the air)" — what the `station` store models today as `stationCallsign`.
+- `STATION_CALLSIGN` — "the logging station's callsign (the callsign used over the air)."
 - `OPERATOR` — "the logging operator's callsign" (the human at the controls).
 - `OWNER_CALLSIGN` — "the callsign of the owner of the station used to log the contact (the callsign of the OPERATOR's host)."
 
-For a club station, all three differ. v1 only models STATION_CALLSIGN; OPERATOR and OWNER_CALLSIGN extensions land if a multi-op or club-station scenario surfaces. The naming makes the v1 ambiguity explicit so the future extension is a clean add.
+All three are now first-class on `configState.loggingStation` (`stationCallsign`, `operator`, `ownerCallsign`) and surfaced by `MyStationPanel.svelte` via three `ValidatedInput` instances bound to `isValidCallsign`. For a club station, all three differ.
+
+**ADIF fallback chain.** The spec says:
+- if `STATION_CALLSIGN` is absent, `OPERATOR` is treated as both the station's and operator's callsign;
+- if `OWNER_CALLSIGN` is absent, `STATION_CALLSIGN` is treated as both the station's and owner's callsign.
+
+The fallback materialises in two places:
+
+1. **Daemon, one-shot, on first-setup transition** (`internal/api/handler_config.go`'s setup-transition block) — when `setup_complete` flips false→true and the request body leaves `operator` / `owner_callsign` empty, the daemon copies `station_callsign` into the empty field(s). Persists into `config.json`. Operator-supplied non-empty values are honoured as-is. Post-setup PUTs do NOT re-seed; My Station panel edits are authoritative including blanking either field.
+2. **SPA hydration, idempotent** (`configState.applyResponse`) — empty `operator` falls back to empty/absent `stationCallsign`; empty `owner_callsign` falls back to the resolved `stationCallsign`. After the daemon's one-shot seed, both fields are non-empty in the response and the SPA fallback is a no-op.
 
 ## Boot flow + setup gate (built 2026-05-03, session 31)
 
