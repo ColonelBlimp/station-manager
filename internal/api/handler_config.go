@@ -95,6 +95,17 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			if seededLogbookID != 0 {
 				cfg.DefaultLogbookID = seededLogbookID
 			}
+			// Materialise ADIF identity on first setup: copy the
+			// just-set callsign into Operator and OwnerCallsign when
+			// the request didn't already provide them. One-shot — later
+			// edits via the My Station panel are honoured as-is, no
+			// re-sync.
+			if cfg.LoggingStation.Operator == "" {
+				cfg.LoggingStation.Operator = incomingCall
+			}
+			if cfg.LoggingStation.OwnerCallsign == "" {
+				cfg.LoggingStation.OwnerCallsign = incomingCall
+			}
 		}
 		return nil
 	}); err != nil {

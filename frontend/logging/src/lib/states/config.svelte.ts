@@ -57,8 +57,27 @@ class StationConfig {
 }
 
 class LoggingStationView {
+    /**
+     * Static-ish ADIF MY_* identity fields. Hydrated from `/v1/config`
+     * and rarely change once set, so they are plain properties — no
+     * `$state` overhead. Nothing reactively derives from these; setup
+     * dialog and My Station card write them directly via
+     * `applyResponse(...)` after a PUT round-trip.
+     *
+     * ADIF fallback chain (per spec):
+     *   - If STATION_CALLSIGN is absent, OPERATOR is treated as both the
+     *     logging station's callsign and the logging operator's callsign.
+     *   - If OWNER_CALLSIGN is absent, STATION_CALLSIGN is treated as both
+     *     the station's callsign and the owner's callsign.
+     */
     /** ADIF STATION_CALLSIGN — set during first-run setup. */
-    stationCallsign: string = $state('');
+    stationCallsign: string = '';
+
+    /** ADIF OPERATOR — the logging operator's callsign. */
+    operator: string = '';
+
+    /** ADIF OWNER_CALLSIGN — licensee/club owner if different from station_callsign. */
+    ownerCallsign: string = '';
 }
 
 class DefaultLogbookView {
@@ -105,7 +124,17 @@ class ConfigState {
     applyResponse(resp: ConfigResponse): void {
         this.setupComplete = resp.setup_complete;
 
-        this.loggingStation.stationCallsign = resp.logging_station.station_callsign ?? '';
+        // ADIF fallback chain: OPERATOR fills missing STATION_CALLSIGN;
+        // STATION_CALLSIGN (after that resolution) fills missing
+        // OWNER_CALLSIGN. Order matters — owner depends on the
+        // post-fallback station value.
+        const operator = resp.logging_station.operator ?? '';
+        const stationCallsign = resp.logging_station.station_callsign || operator;
+        const ownerCallsign = resp.logging_station.owner_callsign || stationCallsign;
+
+        this.loggingStation.operator = operator;
+        this.loggingStation.stationCallsign = stationCallsign;
+        this.loggingStation.ownerCallsign = ownerCallsign;
 
         this.defaultLogbook.id = resp.default_logbook.id;
         this.defaultLogbook.name = resp.default_logbook.name ?? '';

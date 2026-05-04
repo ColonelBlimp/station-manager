@@ -223,6 +223,104 @@ func TestHandlePutConfig_SetupCompleteIdempotent(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_FirstSetup_MaterialisesOperatorAndOwner covers
+// the ADIF-identity seed: on the false→true setup transition, when the
+// request body doesn't supply Operator / OwnerCallsign, the daemon
+// fills both with the just-set StationCallsign. Later edits via My
+// Station are honoured as-is — only the first setup transition seeds.
+func TestHandlePutConfig_FirstSetup_MaterialisesOperatorAndOwner(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.LoggingStation.Operator != "M0XYZ" {
+		t.Errorf("Operator = %q, want M0XYZ (seeded from station_callsign)",
+			resp.LoggingStation.Operator)
+	}
+	if resp.LoggingStation.OwnerCallsign != "M0XYZ" {
+		t.Errorf("OwnerCallsign = %q, want M0XYZ (seeded from station_callsign)",
+			resp.LoggingStation.OwnerCallsign)
+	}
+}
+
+// TestHandlePutConfig_FirstSetup_RespectsOperatorAndOwnerWhenProvided
+// confirms the seed is conditional: a request that supplies non-empty
+// Operator / OwnerCallsign is honoured as-is, no overwrite. Covers
+// the club-station case where the operator is logging at someone else's
+// station and the three callsigns differ.
+func TestHandlePutConfig_FirstSetup_RespectsOperatorAndOwnerWhenProvided(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ", "operator": "G0ABC", "owner_callsign": "G7DEF"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.LoggingStation.Operator != "G0ABC" {
+		t.Errorf("Operator = %q, want G0ABC (preserved from request)",
+			resp.LoggingStation.Operator)
+	}
+	if resp.LoggingStation.OwnerCallsign != "G7DEF" {
+		t.Errorf("OwnerCallsign = %q, want G7DEF (preserved from request)",
+			resp.LoggingStation.OwnerCallsign)
+	}
+}
+
+// TestHandlePutConfig_PostSetupNoMaterialisation confirms the seed is
+// one-shot: a later PUT (setup already complete) that clears Operator
+// and OwnerCallsign does NOT re-seed them from station_callsign. The
+// operator's edits via My Station are authoritative.
+func TestHandlePutConfig_PostSetupNoMaterialisation(t *testing.T) {
+	srv := testServer(t)
+
+	// First PUT completes setup — Operator and OwnerCallsign get seeded.
+	first := `{"logging_station": {"station_callsign": "M0XYZ"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(first))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first PUT status = %d", w.Code)
+	}
+
+	// Second PUT — operator deliberately blanks Operator / OwnerCallsign.
+	// This is post-setup, so the materialisation path must NOT fire.
+	second := `{"logging_station": {"station_callsign": "M0XYZ", "operator": "", "owner_callsign": ""}}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(second))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second PUT status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
+	if resp.LoggingStation.Operator != "" {
+		t.Errorf("Operator = %q after post-setup blank; want empty (seed must be one-shot)",
+			resp.LoggingStation.Operator)
+	}
+	if resp.LoggingStation.OwnerCallsign != "" {
+		t.Errorf("OwnerCallsign = %q after post-setup blank; want empty (seed must be one-shot)",
+			resp.LoggingStation.OwnerCallsign)
+	}
+}
+
 // TestHandlePutConfig_PersistsToFile verifies the on-disk write
 // happens — without it the daemon would forget the callsign on next
 // restart even though the in-memory cfg looked right.
