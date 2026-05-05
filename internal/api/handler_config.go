@@ -33,6 +33,7 @@ type ConfigResponse struct {
 	LoggingStation types.LoggingStation `json:"logging_station"`
 	DefaultLogbook types.Logbook        `json:"default_logbook"`
 	DefaultRig     types.RigConfig      `json:"default_rig"`
+	Station        types.StationConfig  `json:"station"`
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +89,15 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		req.LoggingStation.MyLon = lon
 	}
 
+	// Validate the amp multiplier. Negative values are nonsense; a
+	// 1000x cap is a typo guard (real linear amps top out around 50x;
+	// 1000 is well into "operator typed two extra zeros" territory).
+	if req.Station.AmpMultiplier < 0 || req.Station.AmpMultiplier > 1000 {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"station.amp_multiplier must be between 0 and 1000", op)
+		return
+	}
+
 	// Setup transition: if SetupComplete is currently false AND the
 	// incoming callsign is non-empty, this PUT completes setup. Seed
 	// the default logbook row before persisting config so the file
@@ -111,6 +121,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// (SetupComplete, DefaultLogbookID/RigID — except via the
 		// setup transition) are NOT touched from the request body.
 		cfg.LoggingStation = req.LoggingStation
+		cfg.Station = req.Station
 		if completingSetup {
 			cfg.SetupComplete = true
 			if seededLogbookID != 0 {
@@ -181,6 +192,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		LoggingStation: cfg.LoggingStation,
 		DefaultLogbook: types.Logbook{ID: cfg.DefaultLogbookID},
 		DefaultRig:     types.RigConfig{ID: cfg.DefaultRigID},
+		Station:        cfg.Station,
 	}
 
 	if cfg.DefaultLogbookID > 0 {

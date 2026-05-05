@@ -447,6 +447,66 @@ func TestHandlePutConfig_EmptyGridsquareClearsLatLon(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_StationAmpRoundTrip confirms the amp pair
+// (amp_enabled / amp_multiplier) survives a PUT and shows up on the
+// next GET. The SPA's effectivePower derivation reads these directly
+// so they must round-trip exactly.
+func TestHandlePutConfig_StationAmpRoundTrip(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}, "station": {"amp_enabled": true, "amp_multiplier": 10}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if !resp.Station.AmpEnabled {
+		t.Errorf("Station.AmpEnabled = false, want true")
+	}
+	if resp.Station.AmpMultiplier != 10 {
+		t.Errorf("Station.AmpMultiplier = %v, want 10", resp.Station.AmpMultiplier)
+	}
+}
+
+// TestHandlePutConfig_NegativeAmpMultiplierReturns400 — negative gain
+// is nonsense. Reject at the daemon as the authoritative validator;
+// the SPA can defend the same boundary client-side later if needed.
+func TestHandlePutConfig_NegativeAmpMultiplierReturns400(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}, "station": {"amp_enabled": true, "amp_multiplier": -1}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want 400", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "amp_multiplier") {
+		t.Errorf("body = %s, want amp_multiplier in error", w.Body.String())
+	}
+}
+
+// TestHandlePutConfig_AbsurdAmpMultiplierReturns400 — the typo guard.
+// Reject values above 1000 as obvious operator error.
+func TestHandlePutConfig_AbsurdAmpMultiplierReturns400(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}, "station": {"amp_enabled": true, "amp_multiplier": 9999}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want 400", w.Code, w.Body.String())
+	}
+}
+
 // TestHandlePutConfig_InvalidGridsquareReturns400 is the validation
 // backstop. The SPA validates client-side too, but the daemon is the
 // authority: a malformed grid never reaches persistence.

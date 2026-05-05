@@ -90,11 +90,14 @@ class DisplayedState {
     rawPower: number = $derived(this.isLive ? catState.power : manualState.power);
 
     /**
-     * Effective radiated power = raw × amp multiplier. This is what
-     * gets logged in QSO submissions.
+     * Effective radiated power = raw × amp multiplier when the amp
+     * is enabled, raw power otherwise. This is what gets logged in
+     * QSO submissions as ADIF TX_PWR.
      */
     effectivePower: number = $derived(
-        this.rawPower * configState.station.ampMultiplier,
+        configState.station.ampEnabled
+            ? this.rawPower * configState.station.ampMultiplier
+            : this.rawPower,
     );
 }
 

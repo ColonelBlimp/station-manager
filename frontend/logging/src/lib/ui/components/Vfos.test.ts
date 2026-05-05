@@ -56,6 +56,7 @@ describe('Vfos', () => {
         // Reset configState — CAT off by default, so displayedState reads
         // from manualState.
         configState.station.enabled = false;
+        configState.station.ampEnabled = false;
         configState.station.ampMultiplier = 1.0;
 
         // Reset bridgeState — disconnected by default.

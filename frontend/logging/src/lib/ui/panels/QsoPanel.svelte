@@ -7,6 +7,7 @@
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
+    import { qsoDefaults } from '../../states/qsoDefaults.svelte';
     import { qsoDraft } from '../../states/qsoDraft.svelte';
     import TextInput from "../components/TextInput.svelte";
     import Comment from "../components/Comment.svelte";
@@ -166,6 +167,7 @@
             rxFreqHz,
             band: frequencyToBand(txFreqHz),
             txPower: displayedState.effectivePower,
+            qsoRandom: qsoDefaults.qsoRandom === 'off' ? undefined : qsoDefaults.qsoRandom,
             stationCallsign: ls.stationCallsign,
             operator: ls.operator,
             ownerCallsign: ls.ownerCallsign,

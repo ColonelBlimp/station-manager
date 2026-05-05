@@ -118,6 +118,23 @@ describe('formatAdifRecord — optional fields', () => {
     });
 });
 
+describe('formatAdifRecord — QSO_RANDOM', () => {
+    it('omits QSO_RANDOM when missing', () => {
+        const adif = formatAdifRecord(baseFields);
+        expect(adif).not.toContain('QSO_RANDOM');
+    });
+
+    it('emits QSO_RANDOM=Y when set to Y', () => {
+        const adif = formatAdifRecord({ ...baseFields, qsoRandom: 'Y' });
+        expect(adif).toContain('<QSO_RANDOM:1>Y');
+    });
+
+    it('emits QSO_RANDOM=N when set to N', () => {
+        const adif = formatAdifRecord({ ...baseFields, qsoRandom: 'N' });
+        expect(adif).toContain('<QSO_RANDOM:1>N');
+    });
+});
+
 describe('formatAdifRecord — FREQ_RX (split mode)', () => {
     it('omits FREQ_RX when rxFreqHz is missing', () => {
         const adif = formatAdifRecord(baseFields);

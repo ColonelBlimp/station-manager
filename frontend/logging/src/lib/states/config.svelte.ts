@@ -46,12 +46,22 @@
 import type { ConfigResponse } from '../api/config';
 
 class StationConfig {
-    /** Whether CAT is enabled in operator config. */
+    /** Whether CAT is enabled in operator config. SPA-only, in-memory. */
     enabled: boolean = $state(false);
+
+    /**
+     * Whether the linear-amp multiplier is applied to rig power on
+     * QSO submit. Daemon-persisted via /v1/config station.amp_enabled.
+     * `displayedState.effectivePower` checks this flag before
+     * multiplying (false → raw rig power passes through).
+     */
+    ampEnabled: boolean = $state(false);
 
     /**
      * Linear amp multiplier — applied to rig-reported power to compute
      * effective radiated power for QSO logging. 1.0 means no amp.
+     * Daemon-persisted via /v1/config station.amp_multiplier; daemon
+     * rejects negative values and values above 1000.
      */
     ampMultiplier: number = $state(1.0);
 }
@@ -194,6 +204,14 @@ class ConfigState {
         this.defaultRig.id = resp.default_rig.id;
         this.defaultRig.model = resp.default_rig.model ?? '';
         this.defaultRig.port = resp.default_rig.port ?? '';
+
+        // station block — daemon-persisted amp config. CAT-enabled
+        // (this.station.enabled) stays SPA-only and is not touched
+        // here; only the amp pair round-trips.
+        if (resp.station) {
+            this.station.ampEnabled = resp.station.amp_enabled ?? false;
+            this.station.ampMultiplier = resp.station.amp_multiplier ?? 1.0;
+        }
 
         this.loaded = true;
     }

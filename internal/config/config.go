@@ -86,6 +86,14 @@ type Config struct {
 	// launch. The rig's display fields (model, port) live in cfg.Rigs
 	// (when CAT lands); the API joins them at response time.
 	DefaultRigID int64 `json:"default_rig_id"`
+
+	// Station holds operator-typed station-property preferences that
+	// participate in QSO-emission derivations (e.g. effectivePower in
+	// the SPA's displayedState). Distinct from LoggingStation, which
+	// carries ADIF MY_* identity fields. Reuses types.StationConfig
+	// per the canonical-DTO project idiom — same struct travels on
+	// the wire (ConfigResponse.Station) and on disk (config.json).
+	Station types.StationConfig `json:"station"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -333,6 +341,14 @@ func applyDefaults(cfg *Config, baseDir string) {
 	}
 	if cfg.Logging.LogFileMaxAgeDays == 0 {
 		cfg.Logging.LogFileMaxAgeDays = 30
+	}
+
+	// Station defaults. Amp disabled with a 1.0 multiplier so an
+	// unset block reads as "no amp" and behaves identically to
+	// pre-Station-block deployments. Operator opts in via the My
+	// Station panel's QSO sub-tab.
+	if cfg.Station.AmpMultiplier == 0 {
+		cfg.Station.AmpMultiplier = 1.0
 	}
 
 	// Default-pointer defaults. 1/1 so the system has a sane "default

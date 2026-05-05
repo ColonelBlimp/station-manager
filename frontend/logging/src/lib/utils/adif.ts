@@ -69,6 +69,15 @@ export interface AdifQsoFields {
      */
     txPower?: number;
 
+    /**
+     * ADIF QSO_RANDOM — Boolean (Y/N) indicating whether the QSO was
+     * random vs scheduled. Omitted entirely when undefined; the
+     * `qsoDefaults.qsoRandom` operator preference of 'off' becomes
+     * undefined here, matching the omit-when-empty rule for every
+     * other optional ADIF field.
+     */
+    qsoRandom?: 'Y' | 'N';
+
     // Operator-station fields (MY_* family). Sourced from
     // configState.loggingStation at QSO submit time. All optional —
     // omitted when empty. Recommended: set at least `stationCallsign`
@@ -160,6 +169,9 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     }
     if (f.comment && f.comment.length > 0) {
         lines.push(adifTag('COMMENT', f.comment));
+    }
+    if (f.qsoRandom === 'Y' || f.qsoRandom === 'N') {
+        lines.push(adifTag('QSO_RANDOM', f.qsoRandom));
     }
 
     // Operator-station block (MY_*). Order is stable — identity →

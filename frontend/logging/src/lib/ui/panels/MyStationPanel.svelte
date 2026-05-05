@@ -1,6 +1,7 @@
 <script lang="ts">
     import { putConfig } from '../../api/config';
     import { configState } from '../../states/config.svelte';
+    import { qsoDefaults } from '../../states/qsoDefaults.svelte';
     import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidMaidenhead } from '../../validators/maidenhead';
@@ -47,6 +48,10 @@
                     my_morse_key_type: ls.myMorseKeyType,
                     my_morse_key_info: ls.myMorseKeyInfo,
                 },
+                station: {
+                    amp_enabled: configState.station.ampEnabled,
+                    amp_multiplier: configState.station.ampMultiplier,
+                },
             });
             switch (outcome.kind) {
                 case 'ok':
@@ -77,7 +82,7 @@
         ARIA pattern as InfoPanel's outer tabs (tablist / tab /
         tabpanel) so screen readers see the nesting correctly.
     */
-    type SectionId = 'identity' | 'location' | 'equipment' | 'cw';
+    type SectionId = 'identity' | 'location' | 'equipment' | 'cw' | 'qso';
 
     interface Section {
         id: SectionId;
@@ -89,6 +94,7 @@
         { id: 'location', title: 'Location' },
         { id: 'equipment', title: 'Equipment' },
         { id: 'cw', title: 'CW' },
+        { id: 'qso', title: 'QSO' },
     ];
 
     /*
@@ -101,7 +107,7 @@
         tab) when the stored value is missing or unrecognised.
     */
     const ACTIVE_SECTION_KEY = 'sm.myStation.activeSection';
-    const VALID_SECTIONS: readonly SectionId[] = ['identity', 'location', 'equipment', 'cw'];
+    const VALID_SECTIONS: readonly SectionId[] = ['identity', 'location', 'equipment', 'cw', 'qso'];
 
     function loadActiveSection(): SectionId {
         try {
@@ -317,6 +323,54 @@
                     validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
+                />
+            </div>
+        </div>
+    {:else if activeSection === 'qso'}
+        <div id="my-station-qso" role="tabpanel" class="flex flex-col space-y-3 pt-3">
+            <!--
+                QSO_RANDOM tri-state: 'off' omits the field from every
+                ADIF record (default); 'Y' / 'N' force the value on
+                every QSO. localStorage-persisted via qsoDefaults.
+            -->
+            <div class="flex flex-col">
+                <label for="qso-random" class="input-label">QSO Random</label>
+                <select
+                    id="qso-random"
+                    class="input-base w-38 mt-1"
+                    bind:value={qsoDefaults.qsoRandom}
+                >
+                    <option value="off">Don't emit</option>
+                    <option value="Y">Y (random)</option>
+                    <option value="N">N (scheduled)</option>
+                </select>
+            </div>
+
+            <!--
+                Linear-amp pair. Daemon-persisted (config.json
+                station block); applied to TX power on QSO submit
+                via displayedState.effectivePower when ampEnabled is
+                true. Multiplier is meaningful only with the toggle on.
+            -->
+            <div class="flex items-center space-x-2">
+                <input
+                    id="amp-enabled"
+                    type="checkbox"
+                    bind:checked={configState.station.ampEnabled}
+                />
+                <label for="amp-enabled" class="text-sm">Use linear amp multiplier</label>
+            </div>
+            <div class="flex flex-col">
+                <label for="amp-multiplier" class="input-label">Amp multiplier</label>
+                <input
+                    id="amp-multiplier"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="1000"
+                    class="input-base w-38 mt-1"
+                    bind:value={configState.station.ampMultiplier}
+                    disabled={!configState.station.ampEnabled}
                 />
             </div>
         </div>

@@ -27,6 +27,14 @@ export interface ConfigResponse {
     logging_station: LoggingStationFields;
     default_logbook: DefaultLogbookFields;
     default_rig: DefaultRigFields;
+    station: StationFields;
+}
+
+export interface StationFields {
+    /** Whether the linear-amp multiplier is applied to TX power. */
+    amp_enabled: boolean;
+    /** Linear-amp gain factor (e.g. 10 → 50W rig becomes 500W effective). */
+    amp_multiplier: number;
 }
 
 export interface LoggingStationFields {
@@ -106,7 +114,7 @@ export async function fetchConfig(): Promise<ConfigOutcome> {
 }
 
 export async function putConfig(
-    payload: Partial<Pick<ConfigResponse, 'logging_station' | 'default_logbook' | 'default_rig'>>
+    payload: Partial<Pick<ConfigResponse, 'logging_station' | 'default_logbook' | 'default_rig' | 'station'>>
 ): Promise<ConfigOutcome> {
     let response: Response;
     try {
