@@ -403,17 +403,30 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   `MyCqZone`/`MyITUZone`/`MyDxcc` operator-typed for v1 — zone
   derivation needs a polygon dataset SM doesn't bundle); plus
   daemon-derived `MyLat`/`MyLon`. `MyStationPanel.svelte`
-  surfaces the panel as four sub-tabs (identity / location /
-  equipment / CW) — same `tab-item`/`tab-button` pattern as
+  surfaces the panel as **five sub-tabs** (identity / location /
+  equipment / CW / qso) — same `tab-item`/`tab-button` pattern as
   the parent `InfoPanel` strip but no icons + smaller font for
-  visual nesting; `activeSection` is panel-local `$state`. An
-  "Update" button at the bottom-right (outside the tab bodies
-  so it persists across section switches) PUTs the full
-  `logging_station` block and re-applies the daemon's response
-  so canonical normalisations (callsign upper-case, gridsquare
-  mixed case) and derived fields (`MyLat`/`MyLon`) flow back
-  into the UI; info-toast on success, error-toast for
-  validation/server/network outcomes. `formatAdifRecord` emits all MY_* tags +
+  visual nesting; `activeSection` is panel-local `$state` mirrored
+  to `sessionStorage` (`sm.myStation.activeSection`). The QSO
+  sub-tab (added late session 36) carries QSO-emission preferences:
+  a `QSO_RANDOM` tri-state (`'Y'`/`'N'`/`'off'`, default `'off'`
+  omits the field; backed by `qsoDefaults.qsoRandom` in
+  `lib/states/qsoDefaults.svelte.ts`, localStorage-persisted), and
+  the linear-amp pair (`ampEnabled` checkbox + `ampMultiplier`
+  numeric input; daemon-persisted via the new `types.StationConfig`
+  round-tripped through a `station` block on `/v1/config`).
+  `displayedState.effectivePower` is now
+  `ampEnabled ? rawPower * ampMultiplier : rawPower` so unchecked-
+  amp logs raw rig power. An "Update" button at the bottom-right
+  (outside the tab bodies so it persists across section switches)
+  PUTs both the full `logging_station` and `station` blocks and
+  re-applies the daemon's response so canonical normalisations
+  (callsign upper-case, gridsquare mixed case) and derived fields
+  (`MyLat`/`MyLon`) flow back into the UI; info-toast on success,
+  error-toast for validation/server/network outcomes. Free-text
+  inputs use the shared `lib/validators/passthrough.ts`. `MY_SIG`
+  / `MY_SIG_INFO` deferred (special-events use case, not in scope
+  until requested). `formatAdifRecord` emits all MY_* tags +
   `OPERATOR`, `OWNER_CALLSIGN`, `ANT_AZ` with stable order;
   spec test pins the wire shape. `QsoPanel.submitQso` sources
   every identity field from `configState`; `lib/stores/station.ts`
