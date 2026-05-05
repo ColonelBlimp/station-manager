@@ -403,8 +403,17 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   `MyCqZone`/`MyITUZone`/`MyDxcc` operator-typed for v1 — zone
   derivation needs a polygon dataset SM doesn't bundle); plus
   daemon-derived `MyLat`/`MyLon`. `MyStationPanel.svelte`
-  surfaces the panel as four sections (identity → location →
-  equipment → CW). `formatAdifRecord` emits all MY_* tags +
+  surfaces the panel as four sub-tabs (identity / location /
+  equipment / CW) — same `tab-item`/`tab-button` pattern as
+  the parent `InfoPanel` strip but no icons + smaller font for
+  visual nesting; `activeSection` is panel-local `$state`. An
+  "Update" button at the bottom-right (outside the tab bodies
+  so it persists across section switches) PUTs the full
+  `logging_station` block and re-applies the daemon's response
+  so canonical normalisations (callsign upper-case, gridsquare
+  mixed case) and derived fields (`MyLat`/`MyLon`) flow back
+  into the UI; info-toast on success, error-toast for
+  validation/server/network outcomes. `formatAdifRecord` emits all MY_* tags +
   `OPERATOR`, `OWNER_CALLSIGN`, `ANT_AZ` with stable order;
   spec test pins the wire shape. `QsoPanel.submitQso` sources
   every identity field from `configState`; `lib/stores/station.ts`

@@ -24,7 +24,33 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-05, sessions 34-35 — station-store migration and ADIF MY_* end-to-end SHIPPED, all eight tasks (#41-#48) complete. Daemon derives `MyLat`/`MyLon` from `MyGridsquare` (4/6/8-char Maidenhead → ADIF "XDDD MM.MMM"); zones+DXCC stay operator-typed for v1. `configState.loggingStation` carries the full operator-typed MY_* set as plain class fields; `MyStationPanel.svelte` surfaces the panel as four sections (identity / location / equipment / CW); `formatAdifRecord` emits all MY_* + `OPERATOR` + `OWNER_CALLSIGN` + `ANT_AZ` tags with stable order; `QsoPanel.submitQso` sources every identity field from `configState`; legacy `lib/stores/station.ts` and the now-empty `lib/stores/` directory deleted. Bearing utility (`lib/utils/bearing.ts`) ported from v1's `internal/maidenhead` package — `gridToDecimal`, `calculateBearing`, `haversineKm`, `pathInfo` — for the country panel's short/long-path display (next hookup work). All Go tests pass (`go test ./...` clean), all 326 SPA tests pass, `svelte-check` clean. Nothing committed yet — pending the operator's commit + push call.
+## Current state (as of 2026-05-05, sessions 34-36 — station-store migration + ADIF MY_* end-to-end SHIPPED + My Station UX iterated to sub-tabs + Update button. Daemon derives `MyLat`/`MyLon` from `MyGridsquare` (4/6/8-char Maidenhead → ADIF "XDDD MM.MMM"); zones+DXCC stay operator-typed for v1. `configState.loggingStation` carries the full operator-typed MY_* set as plain class fields; `MyStationPanel.svelte` is now a **sub-tabbed surface** (identity / location / equipment / CW) reusing the InfoPanel `tab-item`/`tab-button` styling, with an **Update button** at the bottom that PUTs the full `logging_station` block via `putConfig()` and re-hydrates from the response so canonical normalisations + derived `MyLat`/`MyLon` flow back into the UI. `formatAdifRecord` emits all MY_* + `OPERATOR` + `OWNER_CALLSIGN` + `ANT_AZ` with stable order; `QsoPanel.submitQso` sources every identity field from `configState`; legacy `lib/stores/station.ts` deleted. Bearing utility (`lib/utils/bearing.ts`) ready for country-panel hookup. All Go tests pass, all SPA tests pass, `svelte-check` clean. **Sessions 34-35 committed; session 36 UX iteration just committed by operator.**
+
+### Session 36 work (2026-05-05) — My Station panel UX iteration: sub-tabs + Update button
+
+Operator drove a UX iteration on `MyStationPanel.svelte` after seeing the post-session-35 panel was visually too busy (17 inputs stacked vertically, scrolling required).
+
+**Layout exploration.** Discussed three options: (a) move some fields to a separate config SPA, (b) collapsibles via native `<details>`/`<summary>`, (c) sub-tabs inside the panel. Recommended collapsibles first as the lighter-weight option (no JS state, edit-once-ish fields stay collapsed by default). Operator tried collapsibles, then opted for tabs because tabs eliminate the scroll entirely. Locked: **sub-tabs** as the canonical My Station structure.
+
+**Sub-tab implementation.** Four tabs: Identity / Location / Equipment / CW. Reused the `tab-item` / `tab-button` Tailwind classes from the parent `InfoPanel` so styling stays consistent; differences from the parent (deliberate, marks the nesting): no icons, `text-sm` font (vs default base), tighter `space-x-8` spacing (vs InfoPanel's `space-x-24`), thinner `border-gray-300 pb-1.5` separator. ARIA: `role="tablist"` / `role="tab"` / `role="tabpanel"` mirrors the InfoPanel convention so screen readers see the nested tab strip. `activeSection: SectionId = $state('identity')` is panel-local — first-load is Identity (most-edited at first run); the rest are edit-once-ish. Operator further iterated the layout inside each tab (rows of `flex space-x-4` with `widthClass="w-fit"`).
+
+**Update button.** Single button at the bottom of the panel, outside the `{#if}` tab-body chain so it persists across section switches and saves the panel as a whole. `onUpdate()` builds a `logging_station` payload from `configState.loggingStation` (camelCase → snake_case explicit field-by-field map; `my_lat`/`my_lon` deliberately omitted because daemon derives them on every PUT), calls `putConfig(...)` from `lib/api/config.ts`, and dispatches the discriminated outcome:
+
+- `'ok'` → `configState.applyResponse(outcome.config)` re-hydrates so canonical normalisations (callsign upper-case, gridsquare mixed case) and derived `MyLat`/`MyLon` flow back into the input bindings; info toast "Station updated."
+- `'validation'` / `'server'` / `'network'` → error toasts (same shape as the setup-dialog pattern in `app.svelte`).
+
+`saving = $state(false)` flag swaps the button label to "Saving…" and disables it during the round-trip; styling matches the existing primary CTA (`bg-focus`, white, hover `bg-focus-ring`).
+
+**Documentation pass.** This file (current state line + this entry); `docs/v2-design/frontend-spa.md` migration bullet rewritten to mention sub-tabs + Update button; `docs/v2-design/milestones.md` shipped-block updated similarly. No new memory files — both InfoPanel + MyStationPanel demonstrate the parent-tabs-with-icons / sub-tabs-without-icons pattern in code, easy to rediscover by reading the source.
+
+**What's next (carried into session 37+):**
+
+- Country panel UI — wire `pathInfo()` into the panel's short/long-path display + populate `antAz` on submit when remote grid is known.
+- Daemon `GET /v1/enrich/callsign` per ADR 0005 — supplies remote gridsquare automatically; the country panel becomes useful end-to-end after this.
+- Optional polish: a tiny shared `passthrough.ts` validator export to replace the inline `() => true` literals; or daemon-side string-format validation for the zones (`MyCqZone` 1-40, `MyITUZone` 1-90, `MyDxcc` digit-only).
+- Optional polish: persist `activeSection` to `sessionStorage` so the operator returns to whichever sub-tab they last opened.
+
+**Resume point:** operator-driven from the "What's next" bucket above.
 
 ### Session 35 work (2026-05-05) — completed station-store migration + ADIF MY_* end-to-end
 
