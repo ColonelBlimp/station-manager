@@ -24,7 +24,64 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-05, session 33 — `qsoDraft` state-module lift shipped: `lib/states/qsoDraft.svelte.ts` is now the in-memory singleton owning the QSO draft fields previously local to `QsoPanel.svelte`. Reactivity audit locked the rule for future enrichment fields (form-bound ⇒ `$state`; submit-only ⇒ plain class field). RST default-fill rule reversed from "operator-typed sticks" to "always overwrite on CW ↔ voice mode flip" — `'59'` is meaningless on CW. QSO ticker rate dropped 60s → 1s so `timeOff` catches the minute boundary within ~1s rather than lagging up to 60s; writes still gated on HH:MM string change. STATION_CALLSIGN source switched from the legacy `lib/stores/station.ts` Svelte store to `configState.loggingStation.stationCallsign` after a daemon-side validator caught the mismatch — patched the one field; the rest of `station` store (gridSquare/name/rig/antenna) still holds hardcoded defaults and must migrate before any new daemon validator touches them. svelte-check 0/0/0 + 302 vitest tests + all daemon tests green. Carried over: ADIF three-callsign fallback chain (daemon one-shot seed + SPA hydration mirror); `/v1/config` GET/PUT end-to-end; SPA boot setup-gate; first-run `config.json` write; SPA-friendly defaults; `types.RigConfig.ID` int64; InfoPanel ARIA tablist; cards/panels convention A; CLAUDE.md "Reuse types.X" idiom.)
+## Current state (as of 2026-05-05, session 34 IN-PROGRESS — power-outage save mid-session. Started the station-store migration + ADIF MY_* implementation per the session-33 directive. **Locked decisions:** ADIF MY_* bucketing (configurable / daemon-derived / per-QSO calculated / deferred) — see "Session 34 in-progress" block below for the full list; daemon-derived scope reduced from "all of lat/lon/cq_zone/itu_zone/dxcc" to **lat/lon only** because CQ/ITU zone derivation needs a polygon dataset SM doesn't have. **Pending operator confirmation at outage:** the scope reduction for task #42 — does the operator accept "lat/lon derived, zones+DXCC operator-typed for v1" or push for bundled polygon data. **Shipped today:** `lib/validators/maidenhead.ts` + `maidenhead.test.ts` (15 tests passing — 4/6/8-char field+square+subsquare; case-folded; empty passes). **Tasks #41-#48** created and persisted in the task list — #41 complete, #37 still in_progress, #42-#48 pending. Nothing else committed. Resume at task #42 once operator confirms the scope reduction.
+
+### Session 34 in-progress (power-outage save, 2026-05-05)
+
+**Operator brief at session start:** continue from session 33's directive — migrate `lib/stores/station.ts` MY_* fields into `configState.loggingStation` and implement the ADIF MY_* field set with My Station panel surface.
+
+**Scoping done:**
+
+- **ADIF MY_* bucketing — confirmed by operator after a follow-up clarification.** The `types.LoggingStation` Go struct already enumerates the full set (`internal/types/logging_station.go`); no new fields needed there. Buckets:
+  - **Configurable in My Station (operator-typed):** `MyAntenna`, `MyCity`, `MyCountry`, `MyGridsquare`, `MyName`, `MyPostalCode`, `MyRig`, `MyStreet`, `MyAltitude`, `MyMorseKeyType`, `MyMorseKeyInfo`. Already shipped: `StationCallsign`, `Operator`, `OwnerCallsign`.
+  - **Daemon-derived from `MyGridsquare` — surfaced read-only in `configState.loggingStation`, consumed by UI:** `MyLat`, `MyLon` (deterministic Maidenhead → decimal coords). `MyCqZone`, `MyITUZone`, `MyDXCC` were *originally* in this bucket but reclassified as operator-typed (see scope reduction below) — daemon only validates them as strings.
+  - **Per-QSO calculated client-side from `(MyLat,MyLon)` + contacted-station coords:** `AntennaAzimuth` (short-path bearing); long-path = (short + 180) mod 360; distance via haversine. Lives in a UI-side `lib/utils/bearing.ts` helper. Writes the short-path value into the ADIF record on submit; country/info panel displays both paths. Daemon does NOT store derived bearing on `LoggingStation` (it's per-QSO, not station identity). **Operator clarification at session 34:** AntennaAzimuth IS needed by the UI (country panel, long-path/short-path indication, physical-map lookup) — the bearing math is the load-bearing reason `MyLat`/`MyLon` need to be surfaced.
+  - **Per-activation, deferred (not in this session):** `MyIota`, `MyIotaIslandID`, `MyWwffRef`, `MySig`, `MySigInfo`.
+
+- **Scope reduction applied to task #42 (daemon-side derivation), pending operator confirmation when power returns:**
+  - Original proposal: derive `lat`, `lon`, `cq_zone`, `itu_zone`, `dxcc` from `MyGridsquare`.
+  - Revised: derive **`MyLat` and `MyLon` only** from `MyGridsquare` (pure Maidenhead math, deterministic).
+  - Reason: zone (CQ / ITU) derivation from coordinates requires a polygon dataset; SM doesn't bundle one. The existing `internal/utils/dxcc_iso2.go` is ISO2-country → DXCC, not coord → zone.
+  - For v1, CQ/ITU/DXCC stay **operator-typed** (free-text strings, daemon validates format only). A future enrichment hook (or per-QSO hamnut callsign lookup) can fill the contacted station's zones; the operator's home-station zones are a one-time entry that doesn't change.
+  - **Operator did not yet confirm this reduction at outage** — message was "Save all of this as we have a power outage..." mid-question. Resume with the question.
+
+**Shipped (committed only via filesystem write — NOT git-committed yet, power outage interrupted):**
+
+- `frontend/logging/src/lib/validators/maidenhead.ts` — Maidenhead grid validator. `^[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2})?)?$` after trim+uppercase; empty passes (matches the other validators' "presence is a separate concern" pattern).
+- `frontend/logging/src/lib/validators/maidenhead.test.ts` — 15 cases: accept 4/6/8-char; case-fold; trim; empty/whitespace pass; reject 5/7-char; reject field>R; reject subsquare>X; reject digit-in-field; reject letter-in-square; reject non-alphanumeric. **All 15 passing** (`npx vitest run src/lib/validators/maidenhead.test.ts`).
+
+**Task list state:**
+
+- `#37` Migrate station store fields into configState.loggingStation — **in_progress** (parent task).
+- `#41` Add Maidenhead grid validator (frontend) — **completed**.
+- `#42` Daemon: derive lat/lon (revised scope) from MyGridsquare — **pending**, blocked on operator confirming scope reduction.
+- `#43` Frontend: extend configState.loggingStation with new MY_* fields — **pending**.
+- `#44` Frontend: extend MyStationPanel with operator-editable MY_* fields — **pending**.
+- `#45` Frontend: extend formatAdifRecord with new MY_* tag emissions — **pending**.
+- `#46` Frontend: switch QsoPanel.submitQso to source ALL identity fields from configState; delete station store — **pending**.
+- `#47` Frontend: bearing/distance utility for country panel (short/long path) — **pending**.
+- `#48` Doc + memory pass for station-store migration + ADIF MY_* — **pending**.
+
+**Reading recap (state of relevant files at outage):**
+
+- `internal/types/logging_station.go` — already has the full ADIF MY_* set; no Go-type extension needed.
+- `internal/api/handler_config.go` — already passes `cfg.LoggingStation = req.LoggingStation` wholesale; new fields auto-flow once tags are added on the wire shape. Validation currently only normalises `StationCallsign`.
+- `frontend/logging/src/lib/states/config.svelte.ts` — `LoggingStationView` has `stationCallsign` (plain), `operator` ($state per session-32 contest-mode placeholder), `ownerCallsign` (plain). Needs the new fields added as plain class fields.
+- `frontend/logging/src/lib/api/config.ts` — `LoggingStationFields` already has an index signature `[key: string]: string | undefined` that accepts new fields; the named `station_callsign` field stays for documentation. Will gain typed names for the new fields too (TypeScript benefit).
+- `frontend/logging/src/lib/stores/station.ts` — legacy Svelte writable; hardcoded defaults `'G4ABC'` / `'KH78an'` / `'My name'` / `'FTdx10'` / `'Hex Beam'`. Delete after consumers are switched.
+- `frontend/logging/src/lib/ui/panels/MyStationPanel.svelte` — currently three `ValidatedInput` rows (stationCallsign / ownerCallsign / operator). Will gain rows for the configurable bucket.
+- `frontend/logging/src/lib/utils/adif.ts` — `formatAdifRecord` emits MY_GRIDSQUARE, MY_NAME, MY_RIG, MY_ANTENNA today. Will gain MY_CITY / MY_COUNTRY / MY_POSTAL_CODE / MY_STREET / MY_ALTITUDE / MY_MORSE_KEY_TYPE / MY_MORSE_KEY_INFO / MY_LAT / MY_LON / MY_CQ_ZONE / MY_ITU_ZONE / MY_DXCC.
+- `frontend/logging/src/lib/ui/panels/QsoPanel.svelte` — `submitQso` still reads `gridSquare`/`name`/`rig`/`antenna` from `get(station)`; only `stationCallsign` switched to `configState`. Switch the rest in #46 once the configState fields exist.
+
+**Resume point on power return:** repeat the open question to operator —
+
+> Confirm scope reduction for #42: daemon derives `MyLat`/`MyLon` from `MyGridsquare` only; `MyCqZone`/`MyITUZone`/`MyDXCC` stay operator-typed (validated as strings)? Or do you want zone derivation in scope, which requires bundling a polygon dataset?
+
+Once confirmed, work down the task list in ID order: #42 → #43 → #44 → #45 → #46 → #47 → #48.
+
+### Session 33 prior current-state summary (preserved for context — superseded by the session-34-in-progress current-state line above)
+
+Session 33 — `qsoDraft` state-module lift shipped: `lib/states/qsoDraft.svelte.ts` is now the in-memory singleton owning the QSO draft fields previously local to `QsoPanel.svelte`. Reactivity audit locked the rule for future enrichment fields (form-bound ⇒ `$state`; submit-only ⇒ plain class field). RST default-fill rule reversed from "operator-typed sticks" to "always overwrite on CW ↔ voice mode flip" — `'59'` is meaningless on CW. QSO ticker rate dropped 60s → 1s so `timeOff` catches the minute boundary within ~1s rather than lagging up to 60s; writes still gated on HH:MM string change. STATION_CALLSIGN source switched from the legacy `lib/stores/station.ts` Svelte store to `configState.loggingStation.stationCallsign` after a daemon-side validator caught the mismatch — patched the one field; the rest of `station` store (gridSquare/name/rig/antenna) still holds hardcoded defaults and must migrate before any new daemon validator touches them. svelte-check 0/0/0 + 302 vitest tests + all daemon tests green. Carried over: ADIF three-callsign fallback chain (daemon one-shot seed + SPA hydration mirror); `/v1/config` GET/PUT end-to-end; SPA boot setup-gate; first-run `config.json` write; SPA-friendly defaults; `types.RigConfig.ID` int64; InfoPanel ARIA tablist; cards/panels convention A; CLAUDE.md "Reuse types.X" idiom.)
 
 ### Session 33 work (qsoDraft state-module lift; RST mode-flip rule + 1s ticker; STATION_CALLSIGN source fix)
 
