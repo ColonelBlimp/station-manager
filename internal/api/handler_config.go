@@ -8,6 +8,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // ConfigResponse is the wire shape for GET/PUT /v1/config. It embeds
@@ -65,6 +66,26 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 			"station_callsign must be 3-32 characters and contain at least one digit", op)
 		return
+	}
+
+	// Validate + normalise MyGridsquare and derive MyLat/MyLon. Empty
+	// gridsquare clears the derived coordinates; an invalid gridsquare
+	// is a 400 (operator types it via the My Station panel and gets a
+	// validator there too — daemon-side check is the backstop). Zones
+	// + DXCC are operator-typed strings; not derived from the grid.
+	incomingGrid := utils.NormalizeMaidenhead(req.LoggingStation.MyGridsquare)
+	if incomingGrid != "" && !utils.IsValidMaidenhead(incomingGrid) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"my_gridsquare must be a 4, 6, or 8 character Maidenhead locator", op)
+		return
+	}
+	req.LoggingStation.MyGridsquare = incomingGrid
+	if incomingGrid == "" {
+		req.LoggingStation.MyLat = ""
+		req.LoggingStation.MyLon = ""
+	} else if lat, lon, ok := utils.MaidenheadToADIFLatLon(incomingGrid); ok {
+		req.LoggingStation.MyLat = lat
+		req.LoggingStation.MyLon = lon
 	}
 
 	// Setup transition: if SetupComplete is currently false AND the

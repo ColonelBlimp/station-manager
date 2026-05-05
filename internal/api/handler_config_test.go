@@ -353,6 +353,119 @@ func TestHandlePutConfig_PersistsToFile(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_DerivesLatLonFromGridsquare confirms the daemon
+// fills MY_LAT / MY_LON from MY_GRIDSQUARE on PUT and ignores any
+// client-supplied values for those derived fields. The wire format is
+// ADIF "XDDD MM.MMM" — the same shape used elsewhere for coordinates.
+func TestHandlePutConfig_DerivesLatLonFromGridsquare(t *testing.T) {
+	srv := testServer(t)
+
+	// Client sends bogus lat/lon alongside a valid grid. The daemon
+	// must overwrite both with the centre of the IO91 cell.
+	body := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "IO91", "my_lat": "N000 00.000", "my_lon": "W000 00.000"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.LoggingStation.MyGridsquare != "IO91" {
+		t.Errorf("MyGridsquare = %q, want IO91", resp.LoggingStation.MyGridsquare)
+	}
+	if resp.LoggingStation.MyLat != "N051 30.000" {
+		t.Errorf("MyLat = %q, want N051 30.000 (centre of IO91)", resp.LoggingStation.MyLat)
+	}
+	if resp.LoggingStation.MyLon != "W001 00.000" {
+		t.Errorf("MyLon = %q, want W001 00.000 (centre of IO91)", resp.LoggingStation.MyLon)
+	}
+}
+
+// TestHandlePutConfig_NormalisesGridsquareCase confirms the on-the-wire
+// canonical form: upper field, lower subsquare. Operator types in any
+// case; daemon stores the canonical form so subsequent GETs and ADIF
+// emissions are consistent.
+func TestHandlePutConfig_NormalisesGridsquareCase(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "io91VL"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.LoggingStation.MyGridsquare != "IO91vl" {
+		t.Errorf("MyGridsquare = %q, want canonical IO91vl", resp.LoggingStation.MyGridsquare)
+	}
+}
+
+// TestHandlePutConfig_EmptyGridsquareClearsLatLon confirms blanking the
+// gridsquare also clears the derived coordinates — the alternative
+// (stale lat/lon hanging around from a previous grid) would leak into
+// QSO submissions and country-panel bearing math.
+func TestHandlePutConfig_EmptyGridsquareClearsLatLon(t *testing.T) {
+	srv := testServer(t)
+
+	// First PUT — derives lat/lon from IO91.
+	first := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "IO91"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(first))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first PUT status = %d", w.Code)
+	}
+
+	// Second PUT — operator clears the grid.
+	second := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": ""}}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(second))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second PUT status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
+	if resp.LoggingStation.MyGridsquare != "" {
+		t.Errorf("MyGridsquare = %q after blank, want empty", resp.LoggingStation.MyGridsquare)
+	}
+	if resp.LoggingStation.MyLat != "" {
+		t.Errorf("MyLat = %q after blanking grid, want empty (stale-coord leak)", resp.LoggingStation.MyLat)
+	}
+	if resp.LoggingStation.MyLon != "" {
+		t.Errorf("MyLon = %q after blanking grid, want empty (stale-coord leak)", resp.LoggingStation.MyLon)
+	}
+}
+
+// TestHandlePutConfig_InvalidGridsquareReturns400 is the validation
+// backstop. The SPA validates client-side too, but the daemon is the
+// authority: a malformed grid never reaches persistence.
+func TestHandlePutConfig_InvalidGridsquareReturns400(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "ZZ99xx"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want 400", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "my_gridsquare") {
+		t.Errorf("body = %s, want my_gridsquare in error message", w.Body.String())
+	}
+}
+
 func readFileForTest(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
