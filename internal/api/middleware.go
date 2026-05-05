@@ -228,6 +228,16 @@ func clientIP(r *http.Request) string {
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := newResponseRecorder(w)
+		// Debug-level breadcrumb at handler entry. Pairs with the
+		// info-level completion line below so a debug-configured
+		// daemon shows request-in / request-out, while info-only
+		// stays at completion-only. No-op when level >= info because
+		// zerolog drops the event before any field methods run.
+		s.logger.DebugWith().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Str("remote", clientIP(r)).
+			Msg("http request received")
 		start := time.Now()
 		next.ServeHTTP(rec, r)
 		duration := time.Since(start)

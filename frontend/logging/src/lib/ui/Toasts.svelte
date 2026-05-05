@@ -48,24 +48,31 @@
 </script>
 
 <!--
-    Container is `fixed top-1.25 right-1.25`. `pointer-events-none` on the
-    column lets clicks pass through the gaps between toasts; each toast
-    re-enables pointer-events so click-to-dismiss still works.
+    Container is `fixed top-1.25 left-1/2 -translate-x-1/2` —
+    horizontally centred under the top edge of the viewport. Top-right
+    placement (the previous default since session 30) was easy to miss
+    because the operator's attention sits over the QSO form below;
+    top-centre puts the toast directly in the visual scan path.
+    `items-center` keeps successive toasts horizontally centred under
+    each other rather than left-aligning behind the longest item.
+    `pointer-events-none` on the column lets clicks pass through the
+    gaps between toasts; each toast re-enables pointer-events so
+    click-to-dismiss still works.
 
     Stacking direction: `flex-col` (DOM order, oldest-at-top). New
     toasts append below the existing stack rather than displacing
-    older ones; the queue grows downward from the top-right corner
-    and shrinks back as toasts auto-dismiss. Picked over
-    `flex-col-reverse` (which puts newest-at-top and shifts older
-    entries down on each push) because no in-place movement is calmer
-    when the operator's attention is on the QSO form.
+    older ones; the queue grows downward from the top centre and
+    shrinks back as toasts auto-dismiss. Picked over `flex-col-reverse`
+    (which puts newest-at-top and shifts older entries down on each
+    push) because no in-place movement is calmer when the operator's
+    attention is on the QSO form.
 
     `aria-live="polite"` so screen readers announce new toasts without
     interrupting the operator's current focus context. role="status" is
     the right WAI-ARIA mapping for non-critical informational regions.
 -->
 <div
-    class="fixed top-1.25 right-1.25 flex flex-col gap-2 z-50 pointer-events-none"
+    class="fixed top-1.25 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50 pointer-events-none"
     aria-live="polite"
     role="status"
 >

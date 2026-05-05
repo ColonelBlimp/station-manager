@@ -167,6 +167,16 @@ func run() error {
 		Str("version", Version).
 		Msg("smd starting")
 
+	// Confirmation line so an operator can verify their config.json
+	// `logging.level` setting actually took effect. Otherwise an
+	// expected-debug-but-quiet daemon looks like a logger bug; the
+	// real cause is usually "no DebugWith call in the active path"
+	// rather than the level not loading. This makes the loaded level
+	// observable.
+	loggerSvc.InfoWith().
+		Str("level", cfg.Logging.Level).
+		Msg("logging configured")
+
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve sqlite service")
