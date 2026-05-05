@@ -151,8 +151,12 @@
         // the daemon's strict MODE-enum validation accepts the record.
         const resolved = resolveModeAndSubmode(displayedState.mode, displayedState.subMode);
 
+        // Captured before submit so the post-store toast can name the
+        // contact even after qsoDraft.clear() has wiped the form.
+        const submittedCall = qsoDraft.callsign.trim().toUpperCase();
+
         const adif = formatAdifRecord({
-            callsign: qsoDraft.callsign.trim().toUpperCase(),
+            callsign: submittedCall,
             rstSent: qsoDraft.rstSent,
             rstRcvd: qsoDraft.rstRcvd,
             name: qsoDraft.name.trim(),
@@ -193,6 +197,9 @@
         switch (outcome.kind) {
             case 'stored':
                 qsoDraft.clear();
+                if (qsoDefaults.notifyQsoStored) {
+                    toasts.info(`QSO with ${submittedCall} stored.`);
+                }
                 break;
             case 'duplicate':
                 toasts.warn(`Duplicate of QSO #${outcome.id}; not re-logged.`);

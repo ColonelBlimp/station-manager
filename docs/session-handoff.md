@@ -49,6 +49,12 @@ Operator drove a UX iteration on `MyStationPanel.svelte` after seeing the post-s
 - Daemon `GET /v1/enrich/callsign` per ADR 0005 — supplies remote gridsquare automatically; the country panel becomes useful end-to-end after this.
 - Optional polish: daemon-side string-format validation for zones (`MyCqZone` 1-40, `MyITUZone` 1-90, `MyDxcc` digit-only). Currently round-trip as any string.
 
+**Late session 36 — debug-output diagnostic, toast placement, notification toggles.**
+
+- **Daemon log-level diagnostic.** Operator reported "no debug output despite `level: debug` in config.json". Diagnosis: level wiring is correct; there are simply no `DebugWith` calls in the active hot paths (forwarder worker is the only existing one, `LogStats` is dead-wired). Added two changes: `cmd/smd/main.go` now emits a "logging configured" line at startup with `Str("level", cfg.Logging.Level)` so the operator can verify which level loaded; `internal/api/middleware.go`'s `logRequests` adds a `DebugWith` "http request received" breadcrumb at handler entry, paired with the existing info-level completion line so a debug-configured daemon shows request-in / request-out, while info-only stays completion-only.
+- **Toast placement.** Operator confirmed the My Station Update toast was firing but easy to miss in the top-right corner. Moved to top-centre (`fixed top-1.25 left-1/2 -translate-x-1/2` with `items-center` for stacked-toast alignment) in `Toasts.svelte`. Comment block updated to record the rationale.
+- **Notification toggles + "QSO stored" toast.** Per-event-type info-toast preferences added on `qsoDefaults`: `notifyQsoStored` and `notifyConfigSaved`, both default true, both localStorage-backed under `sm.qsoDefaults.notifyQsoStored` / `notifyConfigSaved`. `QsoPanel.submitQso` now emits an info toast `QSO with <CALL> stored.` after a successful submit (gated on `notifyQsoStored`); the contact callsign is captured before the await so the message survives `qsoDraft.clear()`. `MyStationPanel.onUpdate` wraps its existing `Station updated.` toast in a `notifyConfigSaved` check. Errors, validation failures, and duplicates ALWAYS toast regardless of these flags — they're never noise. Two checkboxes added to the QSO sub-tab under a "Notifications" sub-heading. `svelte-check` clean; 351 SPA tests pass.
+
 **Resume point:** operator-driven from the "What's next" bucket above.
 
 **Mid-session polish (later in session 36):**

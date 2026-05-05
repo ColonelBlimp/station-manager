@@ -56,7 +56,9 @@
             switch (outcome.kind) {
                 case 'ok':
                     configState.applyResponse(outcome.config);
-                    toasts.info('Station updated.');
+                    if (qsoDefaults.notifyConfigSaved) {
+                        toasts.info('Station updated.');
+                    }
                     break;
                 case 'validation':
                     console.warn(`[my-station update] ${outcome.code}: ${outcome.message}`);
@@ -327,51 +329,81 @@
             </div>
         </div>
     {:else if activeSection === 'qso'}
-        <div id="my-station-qso" role="tabpanel" class="flex flex-col space-y-3 pt-3">
-            <!--
-                QSO_RANDOM tri-state: 'off' omits the field from every
-                ADIF record (default); 'Y' / 'N' force the value on
-                every QSO. localStorage-persisted via qsoDefaults.
-            -->
-            <div class="flex flex-col">
-                <label for="qso-random" class="input-label">QSO Random</label>
-                <select
-                    id="qso-random"
-                    class="input-base w-38 mt-1"
-                    bind:value={qsoDefaults.qsoRandom}
-                >
-                    <option value="off">Don't emit</option>
-                    <option value="Y">Y (random)</option>
-                    <option value="N">N (scheduled)</option>
-                </select>
-            </div>
+        <div id="my-station-qso" role="tabpanel" class="flex flex-row space-x-4 pt-3">
+            <div class="flex flex-col space-y-4">
+                <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">Misc</h4>
+                <!--
+                    QSO_RANDOM tri-state: 'off' omits the field from every
+                    ADIF record (default); 'Y' / 'N' force the value on
+                    every QSO. localStorage-persisted via qsoDefaults.
+                -->
+                <div class="flex flex-col">
+                    <label for="qso-random" class="input-label">QSO Random</label>
+                    <select
+                        id="qso-random"
+                        class="input-base w-38 mt-1"
+                        bind:value={qsoDefaults.qsoRandom}
+                    >
+                        <option value="off">Don't emit</option>
+                        <option value="Y">Y (random)</option>
+                        <option value="N">N (scheduled)</option>
+                    </select>
+                </div>
 
-            <!--
-                Linear-amp pair. Daemon-persisted (config.json
-                station block); applied to TX power on QSO submit
-                via displayedState.effectivePower when ampEnabled is
-                true. Multiplier is meaningful only with the toggle on.
-            -->
-            <div class="flex items-center space-x-2">
-                <input
-                    id="amp-enabled"
-                    type="checkbox"
-                    bind:checked={configState.station.ampEnabled}
-                />
-                <label for="amp-enabled" class="text-sm">Use linear amp multiplier</label>
+                <!--
+                    Linear-amp pair. Daemon-persisted (config.json
+                    station block); applied to TX power on QSO submit
+                    via displayedState.effectivePower when ampEnabled is
+                    true. Multiplier is meaningful only with the toggle on.
+                -->
+                <div class="flex items-center space-x-2 w-56">
+                    <input
+                        id="amp-enabled"
+                        type="checkbox"
+                        bind:checked={configState.station.ampEnabled}
+                    />
+                    <label for="amp-enabled" class="text-sm">Use linear amp multiplier</label>
+                </div>
+                <div class="flex flex-col">
+                    <label for="amp-multiplier" class="input-label">Amp multiplier</label>
+                    <input
+                        id="amp-multiplier"
+                        type="number"
+                        step="1"
+                        min="0"
+                        max="1000"
+                        class="input-base w-fit mt-1"
+                        bind:value={configState.station.ampMultiplier}
+                        disabled={!configState.station.ampEnabled}
+                    />
+                </div>
             </div>
-            <div class="flex flex-col">
-                <label for="amp-multiplier" class="input-label">Amp multiplier</label>
-                <input
-                    id="amp-multiplier"
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    max="1000"
-                    class="input-base w-38 mt-1"
-                    bind:value={configState.station.ampMultiplier}
-                    disabled={!configState.station.ampEnabled}
-                />
+            <div class="flex flex-col space-y-4">
+                <!--
+                    Notification toggles. Errors / duplicates always toast
+                    regardless of these flags — see qsoDefaults.svelte.ts
+                    for the rationale. Mute the chatty info toasts here
+                    when they become noise during a high-rate run.
+                -->
+                <div class="flex flex-col space-y-1 w-56">
+                    <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">Notifications</h4>
+                    <div class="flex items-center space-x-2">
+                        <input
+                            id="notify-qso-stored"
+                            type="checkbox"
+                            bind:checked={qsoDefaults.notifyQsoStored}
+                        />
+                        <label for="notify-qso-stored" class="text-sm">Toast on QSO stored</label>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <input
+                            id="notify-config-saved"
+                            type="checkbox"
+                            bind:checked={qsoDefaults.notifyConfigSaved}
+                        />
+                        <label for="notify-config-saved" class="text-sm">Toast on My Station updated</label>
+                    </div>
+                </div>
             </div>
         </div>
     {/if}
