@@ -317,9 +317,15 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   discriminated-union outcome type; `QsoPanel.submitQso()`
   branches on outcome). Landed session 30, 2026-05-03.
 - ✅ Toast system per ADR 0008 — `lib/states/toasts.svelte.ts` +
-  `<Toasts/>` mounted at `app.svelte`; top-right fixed; severity
-  prefix; per-level TTL; click-to-dismiss; max-stack=5. Landed
-  session 30, 2026-05-03.
+  `<Toasts/>` mounted at `app.svelte`; severity prefix; per-level
+  TTL; click-to-dismiss; max-stack=5. Originally top-right (session
+  30, 2026-05-03); placement moved to top-centre session 36
+  (2026-05-05) because top-right was easy to miss when operator
+  focus sits on the QSO form below. Per-event-type info-toast
+  preferences (`qsoDefaults.notifyQsoStored`,
+  `qsoDefaults.notifyConfigSaved`; both default true; toggles in
+  the QSO sub-tab) added session 36; errors / duplicates /
+  validation / server / network outcomes always toast regardless.
 - ✅ Daemon HTTP access log (`logRequests` middleware; 4xx/5xx
   carry `code` / `error` / `op` envelope fields; timestamps
   enabled). Landed session 30, 2026-05-03.
@@ -414,7 +420,15 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   `lib/states/qsoDefaults.svelte.ts`, localStorage-persisted), and
   the linear-amp pair (`ampEnabled` checkbox + `ampMultiplier`
   numeric input; daemon-persisted via the new `types.StationConfig`
-  round-tripped through a `station` block on `/v1/config`).
+  round-tripped through a `station` block on `/v1/config`), and
+  notification toggles (`notifyQsoStored`, `notifyConfigSaved`;
+  localStorage-persisted; errors/duplicates always toast regardless).
+  The Equipment sub-tab gained a "Default TX power (W)" numeric
+  input wired to `types.StationConfig.DefaultPower` (validated
+  0-2000W; 0 = TX_PWR omitted from ADIF) — replaces the old hard-
+  coded `DEFAULT_POWER_WATTS = 100` constant on `manualState.power`
+  which had no UI; `displayedState.rawPower` now reads
+  `configState.station.defaultPower` in the CAT-off branch.
   `displayedState.effectivePower` is now
   `ampEnabled ? rawPower * ampMultiplier : rawPower` so unchecked-
   amp logs raw rig power. An "Update" button at the bottom-right
@@ -468,7 +482,7 @@ stream. Refresh the browser; verify the session timer state survives
 the daemon QSO list is unchanged. Stop the daemon; verify the SPA
 shows a connection-status indicator when submit fails — today this
 is a `toasts.error("Cannot reach the daemon — check it is running.")`
-top-right toast (network-arm of `lib/api/qso.ts`'s `SubmitOutcome`).
+top-centre toast (network-arm of `lib/api/qso.ts`'s `SubmitOutcome`).
 
 ### Milestone 2 — Original Wails scope (preserved as record, pre-ADR 0001)
 
