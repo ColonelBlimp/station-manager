@@ -98,6 +98,17 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the CAT-off default power. 0 means "not set" (ADIF
+	// TX_PWR will be omitted). 2000W cap is a typo guard — legal
+	// limits in most jurisdictions are ≈ 1500W, the headroom allows
+	// for operators describing amp output before the multiplier
+	// applies.
+	if req.Station.DefaultPower < 0 || req.Station.DefaultPower > 2000 {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"station.default_power must be between 0 and 2000", op)
+		return
+	}
+
 	// Setup transition: if SetupComplete is currently false AND the
 	// incoming callsign is non-empty, this PUT completes setup. Seed
 	// the default logbook row before persisting config so the file

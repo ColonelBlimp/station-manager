@@ -39,7 +39,6 @@ import {
     DEFAULT_MODE,
     DEFAULT_SUB_MODE,
     DEFAULT_SELECTED_VFO,
-    DEFAULT_POWER_WATTS,
 } from './cat.svelte';
 
 const KEY_PREFIX = 'sm.manual.';
@@ -89,7 +88,6 @@ class ManualState {
     mode: string = $state(loadString('mode', DEFAULT_MODE));
     subMode: string = $state(loadString('subMode', DEFAULT_SUB_MODE));
     selectedVfo: 'A' | 'B' = $state(loadVfo('selectedVfo', DEFAULT_SELECTED_VFO));
-    power: number = $state(loadNumber('power', DEFAULT_POWER_WATTS));
 }
 
 export const manualState = new ManualState();
@@ -104,5 +102,4 @@ $effect.root(() => {
     $effect(() => save('mode', manualState.mode));
     $effect(() => save('subMode', manualState.subMode));
     $effect(() => save('selectedVfo', manualState.selectedVfo));
-    $effect(() => save('power', manualState.power));
 });

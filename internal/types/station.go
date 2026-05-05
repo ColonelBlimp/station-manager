@@ -30,4 +30,14 @@ type StationConfig struct {
 	// Validated >= 0; the handler also rejects values above 1000 as
 	// an obvious typo guard.
 	AmpMultiplier float64 `json:"amp_multiplier"`
+
+	// DefaultPower is the operator's typical TX power in watts when
+	// CAT is unavailable. Used by the SPA's displayedState.rawPower
+	// derivation in the CAT-off branch; CAT-reported power overrides
+	// this when the bridge is live. 0 means "not set" — the SPA
+	// emits ADIF TX_PWR=0 → omitted, matching the existing
+	// "TX_PWR omitted when 0" rule. Validated in [0, 2000] (legal
+	// max in most jurisdictions ≈ 1500W; the cap allows headroom
+	// for amp output before the multiplier is applied).
+	DefaultPower float64 `json:"default_power"`
 }

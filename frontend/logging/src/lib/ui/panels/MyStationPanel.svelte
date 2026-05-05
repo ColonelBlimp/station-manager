@@ -51,6 +51,7 @@
                 station: {
                     amp_enabled: configState.station.ampEnabled,
                     amp_multiplier: configState.station.ampMultiplier,
+                    default_power: configState.station.defaultPower,
                 },
             });
             switch (outcome.kind) {
@@ -287,7 +288,7 @@
             </div>
         </div>
     {:else if activeSection === 'equipment'}
-        <div id="my-station-equipment" role="tabpanel" class="flex flex-col space-y-1 pt-3">
+        <div id="my-station-equipment" role="tabpanel" class="flex flex-col space-y-3 pt-3">
             <div class="flex space-x-4">
                 <ValidatedInput
                     id="my-rig"
@@ -305,6 +306,32 @@
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
+
+
+                <!--
+                    Default TX power is the fallback used by ADIF TX_PWR
+                    emission when CAT is unavailable. CAT-reported power
+                    from the rig overrides this when the bridge is
+                    connected. 0 means "not set" — TX_PWR is omitted from
+                    the QSO record. Persisted in config.json via the
+                    station block.
+                -->
+                <div class="flex flex-col w-64">
+                    <label for="default-power" class="input-label">Default TX power (W)</label>
+                    <input
+                        id="default-power"
+                        type="number"
+                        step="1"
+                        min="0"
+                        max="2000"
+                        class="input-base w-38 mt-1"
+                        bind:value={configState.station.defaultPower}
+                    />
+                    <p class="text-xs opacity-70 mt-1 max-w-md">
+                        Used only when CAT is unavailable. When CAT is connected, the rig's
+                        reported power overrides this. Set to 0 to omit ADIF TX_PWR from QSO records.
+                    </p>
+                </div>
             </div>
         </div>
     {:else if activeSection === 'cw'}

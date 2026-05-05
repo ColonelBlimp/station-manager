@@ -22,7 +22,7 @@ import { displayedState } from './displayed.svelte';
  *   split           = isLive
  *                       ? (catState.splitOverride ?? false)
  *                       : (manualState.vfoA !== manualState.vfoB)
- *   rawPower        = isLive ? catState.power : manualState.power
+ *   rawPower        = isLive ? catState.power : configState.station.defaultPower
  *   effectivePower  = ampEnabled ? rawPower * ampMultiplier : rawPower
  */
 
@@ -47,11 +47,11 @@ describe('displayedState (ADR 0009 four-object decomposition)', () => {
         manualState.mode = 'USB';
         manualState.subMode = '';
         manualState.selectedVfo = 'A';
-        manualState.power = 100;
 
         configState.station.enabled = false;
         configState.station.ampEnabled = false;
         configState.station.ampMultiplier = 1.0;
+        configState.station.defaultPower = 100;
 
         bridgeState.connected = false;
         bridgeState.rigResponding = false;
@@ -213,8 +213,8 @@ describe('displayedState (ADR 0009 four-object decomposition)', () => {
     });
 
     describe('power and effectivePower', () => {
-        it('rawPower reads from manualState when not live', () => {
-            manualState.power = 75;
+        it('rawPower reads from configState.station.defaultPower when not live', () => {
+            configState.station.defaultPower = 75;
             catState.power = 999;
             expect(displayedState.rawPower).toBe(75);
         });
@@ -224,19 +224,19 @@ describe('displayedState (ADR 0009 four-object decomposition)', () => {
             bridgeState.connected = true;
             bridgeState.rigResponding = true;
             catState.power = 100;
-            manualState.power = 75;
+            configState.station.defaultPower = 75;
             expect(displayedState.rawPower).toBe(100);
         });
 
         it('effectivePower passes raw power through when amp is disabled', () => {
-            manualState.power = 100;
+            configState.station.defaultPower = 100;
             configState.station.ampEnabled = false;
             configState.station.ampMultiplier = 10;
             expect(displayedState.effectivePower).toBe(100);
         });
 
         it('effectivePower applies the amp multiplier when enabled (200W amp on 100W rig)', () => {
-            manualState.power = 100;
+            configState.station.defaultPower = 100;
             configState.station.ampEnabled = true;
             configState.station.ampMultiplier = 2.0;
             expect(displayedState.effectivePower).toBe(200);
@@ -253,17 +253,23 @@ describe('displayedState (ADR 0009 four-object decomposition)', () => {
         });
 
         it('effectivePower handles fractional multipliers when enabled', () => {
-            manualState.power = 100;
+            configState.station.defaultPower = 100;
             configState.station.ampEnabled = true;
             configState.station.ampMultiplier = 0.5;
             expect(displayedState.effectivePower).toBe(50);
         });
 
         it('effectivePower ignores ampMultiplier when ampEnabled is false', () => {
-            manualState.power = 100;
+            configState.station.defaultPower = 100;
             configState.station.ampEnabled = false;
             configState.station.ampMultiplier = 5;
             expect(displayedState.effectivePower).toBe(100);
+        });
+
+        it('rawPower is 0 when defaultPower is unset (TX_PWR will be omitted)', () => {
+            configState.station.defaultPower = 0;
+            expect(displayedState.rawPower).toBe(0);
+            expect(displayedState.effectivePower).toBe(0);
         });
     });
 });

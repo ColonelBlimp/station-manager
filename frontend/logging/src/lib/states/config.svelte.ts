@@ -64,6 +64,17 @@ class StationConfig {
      * rejects negative values and values above 1000.
      */
     ampMultiplier: number = $state(1.0);
+
+    /**
+     * TX power in watts used by displayedState.rawPower when CAT is
+     * unavailable. CAT-reported power overrides this when the bridge
+     * is live. 0 means "not set" — ADIF TX_PWR is omitted from the
+     * QSO record (matches the existing omit-when-zero rule). Set in
+     * the My Station Equipment sub-tab; daemon-persisted via
+     * /v1/config station.default_power; daemon rejects values
+     * outside [0, 2000].
+     */
+    defaultPower: number = $state(0);
 }
 
 class LoggingStationView {
@@ -211,6 +222,7 @@ class ConfigState {
         if (resp.station) {
             this.station.ampEnabled = resp.station.amp_enabled ?? false;
             this.station.ampMultiplier = resp.station.amp_multiplier ?? 1.0;
+            this.station.defaultPower = resp.station.default_power ?? 0;
         }
 
         this.loaded = true;

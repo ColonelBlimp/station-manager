@@ -29,7 +29,6 @@ export const DEFAULT_MODE = 'USB';
 export const DEFAULT_SUB_MODE = '';
 export const DEFAULT_SELECTED_VFO: 'A' | 'B' = 'A';
 export const DEFAULT_RIG_IDENTITY = '';
-export const DEFAULT_POWER_WATTS = 100;
 
 class CatState {
     /**

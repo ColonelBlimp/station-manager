@@ -53,12 +53,6 @@ describe('manualState persistence (ADR 0011)', () => {
             expect(localStorage.getItem('sm.manual.selectedVfo')).toBe('B');
         });
 
-        it('saves power on write', () => {
-            manualState.power = 50;
-            flushSync();
-            expect(localStorage.getItem('sm.manual.power')).toBe('50');
-        });
-
         it('uses the sm.manual.* key namespace', () => {
             manualState.vfoA = 14_300_000;
             flushSync();

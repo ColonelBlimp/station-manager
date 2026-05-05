@@ -492,6 +492,59 @@ func TestHandlePutConfig_NegativeAmpMultiplierReturns400(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_DefaultPowerRoundTrip confirms the CAT-off
+// default power persists across a PUT/GET cycle. The SPA reads this
+// directly to populate displayedState.rawPower when CAT is unavailable.
+func TestHandlePutConfig_DefaultPowerRoundTrip(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}, "station": {"default_power": 100}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Station.DefaultPower != 100 {
+		t.Errorf("Station.DefaultPower = %v, want 100", resp.Station.DefaultPower)
+	}
+}
+
+// TestHandlePutConfig_NegativeDefaultPowerReturns400 — sanity guard.
+func TestHandlePutConfig_NegativeDefaultPowerReturns400(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}, "station": {"default_power": -10}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want 400", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "default_power") {
+		t.Errorf("body = %s, want default_power in error", w.Body.String())
+	}
+}
+
+// TestHandlePutConfig_AbsurdDefaultPowerReturns400 — typo guard at 2000W cap.
+func TestHandlePutConfig_AbsurdDefaultPowerReturns400(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}, "station": {"default_power": 9999}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want 400", w.Code, w.Body.String())
+	}
+}
+
 // TestHandlePutConfig_AbsurdAmpMultiplierReturns400 — the typo guard.
 // Reject values above 1000 as obvious operator error.
 func TestHandlePutConfig_AbsurdAmpMultiplierReturns400(t *testing.T) {

@@ -51,13 +51,13 @@ describe('Vfos', () => {
         manualState.mode = 'USB';
         manualState.subMode = '';
         manualState.selectedVfo = 'A';
-        manualState.power = 100;
 
         // Reset configState — CAT off by default, so displayedState reads
-        // from manualState.
+        // from manualState (vfo/mode/etc) and configState.station.defaultPower (power).
         configState.station.enabled = false;
         configState.station.ampEnabled = false;
         configState.station.ampMultiplier = 1.0;
+        configState.station.defaultPower = 100;
 
         // Reset bridgeState — disconnected by default.
         bridgeState.connected = false;

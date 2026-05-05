@@ -35,6 +35,8 @@ export interface StationFields {
     amp_enabled: boolean;
     /** Linear-amp gain factor (e.g. 10 → 50W rig becomes 500W effective). */
     amp_multiplier: number;
+    /** TX power in watts when CAT is unavailable; 0 = not set (TX_PWR omitted). */
+    default_power: number;
 }
 
 export interface LoggingStationFields {

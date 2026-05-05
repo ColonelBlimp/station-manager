@@ -84,10 +84,16 @@ class DisplayedState {
     );
 
     /**
-     * Raw power. Rig-reported when live; operator-typed (manualState)
-     * when not. Watts.
+     * Raw power. Rig-reported when CAT is live; configured default
+     * (configState.station.defaultPower, set in My Station →
+     * Equipment) when CAT is off / unavailable. Watts. The CAT-off
+     * branch was previously manualState.power but no UI ever drove
+     * that field — moved to configState as a "set once" preference
+     * (session 36, 2026-05-05).
      */
-    rawPower: number = $derived(this.isLive ? catState.power : manualState.power);
+    rawPower: number = $derived(
+        this.isLive ? catState.power : configState.station.defaultPower,
+    );
 
     /**
      * Effective radiated power = raw × amp multiplier when the amp
