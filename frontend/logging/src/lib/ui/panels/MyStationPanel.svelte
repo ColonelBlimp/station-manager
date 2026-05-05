@@ -1,5 +1,7 @@
 <script lang="ts">
+    import { putConfig } from '../../api/config';
     import { configState } from '../../states/config.svelte';
+    import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidMaidenhead } from '../../validators/maidenhead';
     import ValidatedInput from '../components/ValidatedInput.svelte';
@@ -8,168 +10,304 @@
     // format-correct string check on PUT. Per-field validators land
     // when format constraints actually need enforcing client-side.
     const anyValue = (): boolean => true;
+
+    /*
+        Update flow. PUT /v1/config with the current logging-station
+        snapshot; on success re-hydrate from the response so the
+        daemon's normalisations land in the UI:
+          - station_callsign upper-cased
+          - my_gridsquare canonicalised (upper field, lower subsquare)
+          - my_lat / my_lon derived from my_gridsquare
+        The local input bindings are mutated in-place by configState's
+        reactivity, so the operator sees the canonical form appear
+        without a manual refresh. my_lat / my_lon are NOT sent —
+        they're daemon-derived and the wire write of stale values
+        would just be wasted bytes.
+    */
+    let saving = $state(false);
+
+    async function onUpdate(): Promise<void> {
+        if (saving) return;
+        saving = true;
+        try {
+            const ls = configState.loggingStation;
+            const outcome = await putConfig({
+                logging_station: {
+                    station_callsign: ls.stationCallsign,
+                    operator: ls.operator,
+                    owner_callsign: ls.ownerCallsign,
+                    my_name: ls.myName,
+                    my_gridsquare: ls.myGridsquare,
+                    my_street: ls.myStreet,
+                    my_city: ls.myCity,
+                    my_postal_code: ls.myPostalCode,
+                    my_country: ls.myCountry,
+                    my_altitude: ls.myAltitude,
+                    my_cq_zone: ls.myCqZone,
+                    my_itu_zone: ls.myItuZone,
+                    my_dxcc: ls.myDxcc,
+                    my_rig: ls.myRig,
+                    my_antenna: ls.myAntenna,
+                    my_morse_key_type: ls.myMorseKeyType,
+                    my_morse_key_info: ls.myMorseKeyInfo,
+                },
+            });
+            switch (outcome.kind) {
+                case 'ok':
+                    configState.applyResponse(outcome.config);
+                    toasts.info('Station updated.');
+                    break;
+                case 'validation':
+                    console.warn(`[my-station update] ${outcome.code}: ${outcome.message}`);
+                    toasts.error(outcome.message);
+                    break;
+                case 'server':
+                    console.error(`[my-station update] ${outcome.code}: ${outcome.message}`);
+                    toasts.error('Could not save station details. Try again.');
+                    break;
+                case 'network':
+                    console.error(`[my-station update] daemon unreachable: ${outcome.message}`);
+                    toasts.error('Cannot reach the daemon — check it is running.');
+                    break;
+            }
+        } finally {
+            saving = false;
+        }
+    }
+
+    /*
+        Sub-tabs inside My Station. Identity is the first-load tab
+        (most-edited at first run); the rest are edit-once-ish. Same
+        ARIA pattern as InfoPanel's outer tabs (tablist / tab /
+        tabpanel) so screen readers see the nesting correctly.
+    */
+    type SectionId = 'identity' | 'location' | 'equipment' | 'cw';
+
+    interface Section {
+        id: SectionId;
+        title: string;
+    }
+
+    const sections: Section[] = [
+        { id: 'identity', title: 'Identity' },
+        { id: 'location', title: 'Location' },
+        { id: 'equipment', title: 'Equipment' },
+        { id: 'cw', title: 'CW' },
+    ];
+
+    let activeSection: SectionId = $state('identity');
+
+    const sectionItemClass = (isActive: boolean): string =>
+        isActive
+            ? 'text-indigo-700 cursor-default'
+            : 'text-gray-500 hover:text-gray-700 cursor-pointer';
 </script>
 
-<div class="flex flex-col space-y-3 p-2">
-    <section class="flex flex-col space-y-2">
-        <h3 class="text-xs font-semibold uppercase tracking-wide opacity-70">Identity</h3>
-        <ValidatedInput
-            id="station-callsign"
-            label="Station Callsign"
-            bind:value={configState.loggingStation.stationCallsign}
-            validator={isValidCallsign}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="owner-callsign"
-            label="Owner's Callsign"
-            bind:value={configState.loggingStation.ownerCallsign}
-            validator={isValidCallsign}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="operator"
-            label="Operator"
-            bind:value={configState.loggingStation.operator}
-            validator={isValidCallsign}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-name"
-            label="Operator Name"
-            bind:value={configState.loggingStation.myName}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-    </section>
+<div class="flex flex-col p-2">
+    <div role="tablist" class="flex flex-row items-center space-x-8 border-b border-gray-300 pb-1.5">
+        {#each sections as section (section.id)}
+            <div class="tab-item {sectionItemClass(activeSection === section.id)}">
+                <button
+                    type="button"
+                    role="tab"
+                    class="tab-button text-sm"
+                    aria-selected={activeSection === section.id}
+                    aria-controls={`my-station-${section.id}`}
+                    onclick={() => (activeSection = section.id)}
+                >{section.title}</button>
+            </div>
+        {/each}
+    </div>
 
-    <section class="flex flex-col space-y-2">
-        <h3 class="text-xs font-semibold uppercase tracking-wide opacity-70">Location</h3>
-        <ValidatedInput
-            id="my-gridsquare"
-            label="Grid Square"
-            bind:value={configState.loggingStation.myGridsquare}
-            validator={isValidMaidenhead}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-street"
-            label="Street"
-            bind:value={configState.loggingStation.myStreet}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-city"
-            label="City"
-            bind:value={configState.loggingStation.myCity}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-postal-code"
-            label="Postal Code"
-            bind:value={configState.loggingStation.myPostalCode}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-country"
-            label="Country"
-            bind:value={configState.loggingStation.myCountry}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-altitude"
-            label="Altitude (m)"
-            bind:value={configState.loggingStation.myAltitude}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-cq-zone"
-            label="CQ Zone"
-            bind:value={configState.loggingStation.myCqZone}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-itu-zone"
-            label="ITU Zone"
-            bind:value={configState.loggingStation.myItuZone}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-dxcc"
-            label="DXCC"
-            bind:value={configState.loggingStation.myDxcc}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-
-        <!-- Daemon-derived from Grid Square; read-only mirror. -->
-        <div class="w-68 input-row">
-            <span class="input-label">Latitude</span>
-            <p class="mt-1 text-sm font-mono">{configState.loggingStation.myLat || '—'}</p>
+    <div class="flex h-full">
+    {#if activeSection === 'identity'}
+        <div id="my-station-identity" role="tabpanel" class="flex flex-col space-y-1 pt-3">
+            <div class="flex space-x-4">
+            <ValidatedInput
+                id="station-callsign"
+                label="Station Callsign"
+                bind:value={configState.loggingStation.stationCallsign}
+                validator={isValidCallsign}
+                widthClass="w-fit"
+                inputClass="w-38"
+            />
+            <ValidatedInput
+                id="owner-callsign"
+                label="Owner's Callsign"
+                bind:value={configState.loggingStation.ownerCallsign}
+                validator={isValidCallsign}
+                widthClass="w-fit"
+                inputClass="w-38"
+            />
+            </div>
+            <div class="flex space-x-4">
+            <ValidatedInput
+                id="operator"
+                label="Operator"
+                bind:value={configState.loggingStation.operator}
+                validator={isValidCallsign}
+                widthClass="w-fit"
+                inputClass="w-38"
+            />
+            <ValidatedInput
+                id="my-name"
+                label="Operator Name"
+                bind:value={configState.loggingStation.myName}
+                validator={anyValue}
+                widthClass="w-fit"
+                inputClass="w-38"
+            />
+            </div>
         </div>
-        <div class="w-68 input-row">
-            <span class="input-label">Longitude</span>
-            <p class="mt-1 text-sm font-mono">{configState.loggingStation.myLon || '—'}</p>
+    {:else if activeSection === 'location'}
+        <div id="my-station-location" role="tabpanel" class="flex flex-col pt-3">
+            <div class="flex space-x-4">
+                <ValidatedInput
+                    id="my-gridsquare"
+                    label="Grid Square"
+                    bind:value={configState.loggingStation.myGridsquare}
+                    validator={isValidMaidenhead}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-cq-zone"
+                    label="CQ Zone"
+                    bind:value={configState.loggingStation.myCqZone}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-itu-zone"
+                    label="ITU Zone"
+                    bind:value={configState.loggingStation.myItuZone}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-dxcc"
+                    label="DXCC"
+                    bind:value={configState.loggingStation.myDxcc}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+            </div>
+            <div class="flex space-x-4">
+                <ValidatedInput
+                    id="my-street"
+                    label="Street"
+                    bind:value={configState.loggingStation.myStreet}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-city"
+                    label="City"
+                    bind:value={configState.loggingStation.myCity}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-postal-code"
+                    label="Postal Code"
+                    bind:value={configState.loggingStation.myPostalCode}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-country"
+                    label="Country"
+                    bind:value={configState.loggingStation.myCountry}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+            </div>
+            <div class="flex space-x-4">
+                <ValidatedInput
+                    id="my-altitude"
+                    label="Altitude (m)"
+                    bind:value={configState.loggingStation.myAltitude}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <!-- Daemon-derived from Grid Square; read-only mirror. -->
+                <div class="w-38">
+                    <span class="input-label">Latitude</span>
+                    <p class="mt-2">{configState.loggingStation.myLat || '—'}</p>
+                </div>
+                <div class="w-38">
+                    <span class="input-label">Longitude</span>
+                    <p class="mt-2">{configState.loggingStation.myLon || '—'}</p>
+                </div>
+            </div>
         </div>
-    </section>
+    {:else if activeSection === 'equipment'}
+        <div id="my-station-equipment" role="tabpanel" class="flex flex-col space-y-1 pt-3">
+            <div class="flex space-x-4">
+                <ValidatedInput
+                    id="my-rig"
+                    label="Rig"
+                    bind:value={configState.loggingStation.myRig}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-antenna"
+                    label="Antenna"
+                    bind:value={configState.loggingStation.myAntenna}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+            </div>
+        </div>
+    {:else if activeSection === 'cw'}
+        <div id="my-station-cw" role="tabpanel" class="flex flex-col space-y-1 pt-3">
+            <div class="flex space-x-4">
+                <ValidatedInput
+                    id="my-morse-key-type"
+                    label="Morse Key Type"
+                    bind:value={configState.loggingStation.myMorseKeyType}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+                <ValidatedInput
+                    id="my-morse-key-info"
+                    label="Morse Key Info"
+                    bind:value={configState.loggingStation.myMorseKeyInfo}
+                    validator={anyValue}
+                    widthClass="w-fit"
+                    inputClass="w-38"
+                />
+            </div>
+        </div>
+    {/if}
 
-    <section class="flex flex-col space-y-2">
-        <h3 class="text-xs font-semibold uppercase tracking-wide opacity-70">Equipment</h3>
-        <ValidatedInput
-            id="my-rig"
-            label="Rig"
-            bind:value={configState.loggingStation.myRig}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-antenna"
-            label="Antenna"
-            bind:value={configState.loggingStation.myAntenna}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-    </section>
-
-    <section class="flex flex-col space-y-2">
-        <h3 class="text-xs font-semibold uppercase tracking-wide opacity-70">CW</h3>
-        <ValidatedInput
-            id="my-morse-key-type"
-            label="Morse Key Type"
-            bind:value={configState.loggingStation.myMorseKeyType}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-        <ValidatedInput
-            id="my-morse-key-info"
-            label="Morse Key Info"
-            bind:value={configState.loggingStation.myMorseKeyInfo}
-            validator={anyValue}
-            widthClass="w-68"
-            inputClass="w-38"
-        />
-    </section>
+    <!--
+        Update button sits outside the tab content so it persists across
+        section switches and saves the panel as a whole. PUT roundtrips
+        the full logging_station block; the daemon's response is
+        re-applied so derived fields (my_lat / my_lon) and normalised
+        forms (canonical gridsquare casing) flow back into the UI.
+    -->
+        <div class="flex w-full h-52 justify-end items-end pt-3">
+            <button
+                id="my-station-update-btn"
+                type="button"
+                onclick={onUpdate}
+                disabled={saving}
+                class="h-9 cursor-pointer rounded-md bg-focus px-4 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
+            >{saving ? 'Saving…' : 'Update'}</button>
+        </div>
+    </div>
 </div>

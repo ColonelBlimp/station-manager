@@ -118,7 +118,7 @@
     and inherit unrelated layout rules.
 -->
 {#snippet main_app()}
-    <main class="rounded-xl border border-line-soft h-160 w-fit mx-auto mt-12">
+    <main class="rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
         <LoggingCard/>
     </main>
 {/snippet}
