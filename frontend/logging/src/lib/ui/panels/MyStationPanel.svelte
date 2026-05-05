@@ -4,12 +4,8 @@
     import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidMaidenhead } from '../../validators/maidenhead';
+    import { passthrough } from '../../validators/passthrough';
     import ValidatedInput from '../components/ValidatedInput.svelte';
-
-    // Free-text fields use this passthrough; daemon performs the
-    // format-correct string check on PUT. Per-field validators land
-    // when format constraints actually need enforcing client-side.
-    const anyValue = (): boolean => true;
 
     /*
         Update flow. PUT /v1/config with the current logging-station
@@ -95,7 +91,40 @@
         { id: 'cw', title: 'CW' },
     ];
 
-    let activeSection: SectionId = $state('identity');
+    /*
+        Persist the active sub-tab to sessionStorage so a page refresh
+        keeps the operator on whichever section they were editing.
+        sessionStorage tier per the persistence-layers doc — survives
+        reload, resets on tab close. Same try/catch shape as
+        SessionTimer.svelte for the private-browsing / disabled-storage
+        edge cases. Fall back to 'identity' (the default first-load
+        tab) when the stored value is missing or unrecognised.
+    */
+    const ACTIVE_SECTION_KEY = 'sm.myStation.activeSection';
+    const VALID_SECTIONS: readonly SectionId[] = ['identity', 'location', 'equipment', 'cw'];
+
+    function loadActiveSection(): SectionId {
+        try {
+            const raw = sessionStorage.getItem(ACTIVE_SECTION_KEY);
+            if (raw !== null && (VALID_SECTIONS as readonly string[]).includes(raw)) {
+                return raw as SectionId;
+            }
+        } catch {
+            // sessionStorage unavailable — fall through to default.
+        }
+        return 'identity';
+    }
+
+    let activeSection: SectionId = $state(loadActiveSection());
+
+    $effect(() => {
+        try {
+            sessionStorage.setItem(ACTIVE_SECTION_KEY, activeSection);
+        } catch {
+            // Storage write failed — in-memory state is still correct;
+            // we lose refresh-survival for this tab, nothing else.
+        }
+    });
 
     const sectionItemClass = (isActive: boolean): string =>
         isActive
@@ -153,7 +182,7 @@
                 id="my-name"
                 label="Operator Name"
                 bind:value={configState.loggingStation.myName}
-                validator={anyValue}
+                validator={passthrough}
                 widthClass="w-fit"
                 inputClass="w-38"
             />
@@ -174,7 +203,7 @@
                     id="my-cq-zone"
                     label="CQ Zone"
                     bind:value={configState.loggingStation.myCqZone}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -182,7 +211,7 @@
                     id="my-itu-zone"
                     label="ITU Zone"
                     bind:value={configState.loggingStation.myItuZone}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -190,7 +219,7 @@
                     id="my-dxcc"
                     label="DXCC"
                     bind:value={configState.loggingStation.myDxcc}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -200,7 +229,7 @@
                     id="my-street"
                     label="Street"
                     bind:value={configState.loggingStation.myStreet}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -208,7 +237,7 @@
                     id="my-city"
                     label="City"
                     bind:value={configState.loggingStation.myCity}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -216,7 +245,7 @@
                     id="my-postal-code"
                     label="Postal Code"
                     bind:value={configState.loggingStation.myPostalCode}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -224,7 +253,7 @@
                     id="my-country"
                     label="Country"
                     bind:value={configState.loggingStation.myCountry}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -234,7 +263,7 @@
                     id="my-altitude"
                     label="Altitude (m)"
                     bind:value={configState.loggingStation.myAltitude}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -256,7 +285,7 @@
                     id="my-rig"
                     label="Rig"
                     bind:value={configState.loggingStation.myRig}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -264,7 +293,7 @@
                     id="my-antenna"
                     label="Antenna"
                     bind:value={configState.loggingStation.myAntenna}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -277,7 +306,7 @@
                     id="my-morse-key-type"
                     label="Morse Key Type"
                     bind:value={configState.loggingStation.myMorseKeyType}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />
@@ -285,7 +314,7 @@
                     id="my-morse-key-info"
                     label="Morse Key Info"
                     bind:value={configState.loggingStation.myMorseKeyInfo}
-                    validator={anyValue}
+                    validator={passthrough}
                     widthClass="w-fit"
                     inputClass="w-38"
                 />

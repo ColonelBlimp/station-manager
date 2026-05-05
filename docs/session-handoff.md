@@ -47,10 +47,14 @@ Operator drove a UX iteration on `MyStationPanel.svelte` after seeing the post-s
 
 - Country panel UI — wire `pathInfo()` into the panel's short/long-path display + populate `antAz` on submit when remote grid is known.
 - Daemon `GET /v1/enrich/callsign` per ADR 0005 — supplies remote gridsquare automatically; the country panel becomes useful end-to-end after this.
-- Optional polish: a tiny shared `passthrough.ts` validator export to replace the inline `() => true` literals; or daemon-side string-format validation for the zones (`MyCqZone` 1-40, `MyITUZone` 1-90, `MyDxcc` digit-only).
-- Optional polish: persist `activeSection` to `sessionStorage` so the operator returns to whichever sub-tab they last opened.
+- Optional polish: daemon-side string-format validation for zones (`MyCqZone` 1-40, `MyITUZone` 1-90, `MyDxcc` digit-only). Currently round-trip as any string.
 
 **Resume point:** operator-driven from the "What's next" bucket above.
+
+**Mid-session polish (later in session 36):**
+
+- **`lib/validators/passthrough.ts`** added — single-line `passthrough = () => true` export with a comment explaining when to reach for it vs writing a per-field validator. `MyStationPanel.svelte`'s 13 free-text `ValidatedInput`s switched from the inline `anyValue` const to the shared import; the inline const removed. Future panels with free-text fields should reuse `passthrough` rather than reintroducing the literal.
+- **`activeSection` sessionStorage persistence** added to `MyStationPanel.svelte`. Key `sm.myStation.activeSection`; reads on init via `loadActiveSection()` (validates against the `VALID_SECTIONS` set so a stale/foreign value falls back to `'identity'`); writes via a `$effect` on every change. Same try/catch shape as `SessionTimer.svelte` for private-browsing edge cases. Operator returns to whichever sub-tab they last opened after a page refresh; new tab gets a fresh default.
 
 ### Session 35 work (2026-05-05) — completed station-store migration + ADIF MY_* end-to-end
 
