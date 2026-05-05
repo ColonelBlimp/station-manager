@@ -362,12 +362,42 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   `ValidatedInput` + `isValidCallsign`. Tests cover seed, club-
   station preserve, and post-setup-blank cases. Landed session 32,
   2026-05-04.
+- ✅ `qsoDraft` state-module lift — QSO draft fields moved out of
+  `QsoPanel.svelte` into `lib/states/qsoDraft.svelte.ts`. Singleton
+  `QsoDraft` class with 9 form-bound `$state` fields, plain
+  `qsoStarted` flag, `$derived` `defaultRst` / `canSubmit`, and
+  methods `clear()` / `startQso()` / `tick()`. Reactivity audit
+  locks the rule for future enrichment fields: form-bound (`bind:value`)
+  ⇒ `$state`; submit-only (populated by `populateFromEnrichment`
+  when ADR 0005's endpoint lands) ⇒ plain class field. RST
+  default-fill clarified: always-overwrite on CW ↔ voice mode
+  transition (the earlier "operator-typed sticks" rule was
+  reversed because `'59'` is meaningless on CW), plus
+  manual-clear refill. Ticker rate dropped 60s → 1s so `timeOff`
+  catches the minute boundary within ~1s instead of lagging up
+  to 60s; writes still gated on HH:MM string change so cost is
+  one no-op compare per tick. Mode stays panel-local (CAT-state
+  concern, not a draft field). `submitQso` now sources
+  `STATION_CALLSIGN` from `configState.loggingStation.stationCallsign`
+  rather than the legacy `station` store — closes a daemon-side
+  validator mismatch where the My Station card's writes were not
+  reaching the wire. Landed session 33, 2026-05-05.
 - ✅ `types.RigConfig.ID`: `string` → `int64`. Closes
   cat-serial-reuse.md §7.5; uniform with `Logbook.ID int64`;
   numeric defaults (1) work cleanly. Zero blast radius (no
   consumers in code yet). Landed session 31, 2026-05-03.
 - ⏳ Daemon `GET /v1/enrich/callsign` — enrichment endpoint
-  per ADR 0005. Unlocks F2 lookup-only path.
+  per ADR 0005. Unlocks F2 lookup-only path. Plus the SPA-side
+  `qsoDraft.populateFromEnrichment(...)` method that the panel's
+  `handleEnrich` will call on Tab when the wrapper lands.
+- ⏳ Migrate `lib/stores/station.ts` MY_* fields into
+  `configState.loggingStation`. The remaining identity fields
+  (`gridSquare`, `name`, `rig`, `antenna`) still ship via the
+  legacy store with hardcoded defaults; submit reads them via
+  `get(station)`. Daemon-side validation against any of these
+  will hit the same trap that `STATION_CALLSIGN` hit session 33.
+  Migrate before adding more validators. Closes the dual-source
+  identity split flagged in §QSO-submit "Wire-shape decisions".
 - ⏳ `internal/bridge` package per ADR 0013 — daemon subsystem
   for `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT,
   PTT arbitration. Replaces the parked `cmd/logging/` Gio CAT

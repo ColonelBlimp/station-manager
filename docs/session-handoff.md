@@ -24,7 +24,30 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-04, session 32 — `configState.loggingStation` extended with `operator` and `ownerCallsign` plain fields; ADIF identity fallback chain implemented in two places (daemon's first-setup transition seeds operator/owner_callsign from station_callsign one-shot when request leaves them empty; SPA `applyResponse` mirrors the same fallback as a hydration-time no-op safety net); `MyStationPanel.svelte` refactored to render all three callsigns via `ValidatedInput` + `isValidCallsign`; reactivity rule corrected — `$state` is for any reactive consumer (template, `$derived`, `$effect`), not just `$derived`; three new daemon tests cover the materialisation behaviour. Carried over: `/v1/config` GET/PUT shipped end-to-end with first-run setup-transition logbook seed folded in; SPA boot fetches config and gates the QSO panel behind a setup dialog when `setup_complete=false`; first-run config-file write; defaults overhauled to SPA-friendly values; `types.RigConfig.ID` settled to int64; InfoPanel data-driven tabs with ARIA tablist; cards/panels naming convention A locked; CLAUDE.md "Reuse types.X" idiom rule.)
+## Current state (as of 2026-05-05, session 33 — `qsoDraft` state-module lift shipped: `lib/states/qsoDraft.svelte.ts` is now the in-memory singleton owning the QSO draft fields previously local to `QsoPanel.svelte`. Reactivity audit locked the rule for future enrichment fields (form-bound ⇒ `$state`; submit-only ⇒ plain class field). RST default-fill rule reversed from "operator-typed sticks" to "always overwrite on CW ↔ voice mode flip" — `'59'` is meaningless on CW. QSO ticker rate dropped 60s → 1s so `timeOff` catches the minute boundary within ~1s rather than lagging up to 60s; writes still gated on HH:MM string change. STATION_CALLSIGN source switched from the legacy `lib/stores/station.ts` Svelte store to `configState.loggingStation.stationCallsign` after a daemon-side validator caught the mismatch — patched the one field; the rest of `station` store (gridSquare/name/rig/antenna) still holds hardcoded defaults and must migrate before any new daemon validator touches them. svelte-check 0/0/0 + 302 vitest tests + all daemon tests green. Carried over: ADIF three-callsign fallback chain (daemon one-shot seed + SPA hydration mirror); `/v1/config` GET/PUT end-to-end; SPA boot setup-gate; first-run `config.json` write; SPA-friendly defaults; `types.RigConfig.ID` int64; InfoPanel ARIA tablist; cards/panels convention A; CLAUDE.md "Reuse types.X" idiom.)
+
+### Session 33 work (qsoDraft state-module lift; RST mode-flip rule + 1s ticker; STATION_CALLSIGN source fix)
+
+**Operator brief:** carryover item #6 from session 32's queue (qsoDraft lift) — operator decided to bring it forward because draft + enrichment fields will keep growing as the UI expands, and the second-consumer trigger from frontend-spa.md was no longer the right gate.
+
+**What landed:**
+
+- **`lib/states/qsoDraft.svelte.ts`** — new singleton `QsoDraft` class. 9 form-bound `$state` fields (`callsign`, `name`, `qth`, `comment`, `rstSent`, `rstRcvd`, `qsoDate`, `timeOn`, `timeOff`); plain `qsoStarted` flag (no reactive consumer — read only by imperative method bodies); `$derived` `defaultRst` and `canSubmit`; methods `clear()`, `startQso()`, `tick()`. Module-level `$effect.root` for the RST default-fill effects.
+- **Reactivity audit before writing.** Operator pushed back on a default-everything-`$state` shape: "we should keep the overhead down from the beginning rather than refactor later." Per-field audit confirmed all 9 form-bound fields need `$state` (forced by `bind:value`), `qsoStarted` stays plain, `canSubmit` is `$derived`. The audit's payoff is forward — future enrichment fields (`gridSquare`, `country`, `dxcc`, `cqZone`, `ituZone`, `prefix`, `continent`) default to **plain class fields** unless a `bind:value` lands.
+- **`QsoPanel.svelte` refactored.** All draft reads/writes routed through `qsoDraft.*`. Mode local + its two `$effect`s stay in the panel — mode is a CAT-state concern (mirrors displayedState/manualState per ADR 0009), not a draft field. Ticker calls `qsoDraft.tick()` from a panel-scoped `setInterval` so module load is side-effect-free.
+- **RST mode-flip bug + fix.** Live-test caught: RST fields didn't update when mode flipped USB → CW. Original code's "refill if empty" effect skipped populated values. Reversed the rule — a new `$effect` tracks `defaultRst` (which is `$derived` from `displayedState.mode`) and always writes both `rstSent` and `rstRcvd` to the new value when it changes. Only fires on CW ↔ voice transitions (USB ↔ LSB doesn't touch `defaultRst`). Operator-typed RST values are clobbered on a mode flip — accepted because RST is typically set after the contact (mode is settled by then) and `'59'` on CW / `'599'` on voice are nonsense defaults. Manual-clear refill effect kept for the operator-deletes-field case.
+- **Time-off ticker rate bug + fix.** Live-test caught: `timeOff` field appeared not to update. Cause was the original 60s ticker — after Tab at e.g. HH:42:30, the next tick at HH:43:30 was the first chance for `timeOff` to flip from "HH:42" to "HH:43", giving up to 60s of lag. Dropped to 1s; writes still gated on HH:MM string change so cost is one Date construction + format + compare per second (negligible) but the field catches the minute boundary within ~1s.
+- **STATION_CALLSIGN source fix.** Live-test caught: daemon's QSO-submit validator rejected the record with "STATION_CALLSIGN does not match the logbook's callsign" even though config.json and DB both held the correct callsign. Cause: `submitQso` was reading `stn.stationCallsign` from `get(station)` (the legacy `lib/stores/station.ts` writable, which has hardcoded defaults like `'G4ABC'`). My Station card writes to `configState.loggingStation`, not the store, so the wire value was the hardcoded default. Switched `stationCallsign` source in `formatAdifRecord` call to `configState.loggingStation.stationCallsign`; the other identity fields (`gridSquare`, `name`, `rig`, `antenna`) still source from `get(station)` because `/v1/config` doesn't surface them yet. Logged the migration as carried item.
+- **New memory file** — `project_sm_station_store_migration.md` captures the trap so future sessions don't add daemon validators against MY_* fields without first migrating the source out of the legacy store.
+
+**Doc audit (this section):**
+
+- `docs/v2-design/frontend-spa.md` — state-layer table replaces "QsoPanel's draft fields" with `qsoDraft`. The QSO-submit "Wire-shape decisions" footnote rewritten to explain the split-source identity (and the migration ordering constraint). The "QSO draft store" open-question entry resolved with full detail (reactivity audit, RST mode-flip rule, 1s ticker, mode stays panel-local). New open-question entry added for the `station` store migration.
+- `docs/v2-design/milestones.md` — added "qsoDraft state-module lift" under Milestone 1c-shipped block; added "Migrate `lib/stores/station.ts` MY_* fields" to the in-progress list.
+- `docs/session-handoff.md` (this file) — current-state line and Session 33 block.
+- Memory `project_sm_station_store_migration.md` (new) — captures the daemon-validator-vs-store-defaults trap.
+
+**Verified:** `npx svelte-check` 0 errors / 0 warnings / 211 files; `npx vitest run` 17/17 files, 302/302 tests.
 
 ### Session 32 work (ADIF three-callsign fallback chain — daemon + SPA + MyStationPanel + tests)
 
@@ -371,14 +394,18 @@ In rough order of dependency:
 - ~~**InfoPanel data-driven refactor + ARIA tablist.**~~ Cards/panels convention A locked.
 - ~~**CLAUDE.md "Reuse types.X" idiom.**~~ Promoted from memory to project rules.
 
-**Carried into session 32+ (in rough order of dependency):**
+**Landed in session 33 (struck off; kept as record):**
 
-1. **Operator's scaffolded `WorkedPanel` / `DetailsPanel` / `MyStationPanel` / `SessionPanel` content.** InfoPanel chassis is in place; the four files exist as scaffolds (operator's work). MyStationPanel is the natural first content target now that `configState.loggingStation` and `configState.defaultLogbook` are hydrated by `/v1/config`. SessionPanel can read `SessionTimer` state. Worked / Details depend on QSO data and contact-history.
-2. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path.
-3. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
-4. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
-5. **CAT-handover toast** — toast plumbing exists; awaits the bridge so there's a transition to fire on.
-6. **`qsoDraft` state-module lift** — promote QsoPanel local `$state` into `lib/states/qsoDraft.svelte.ts` when a second consumer appears.
+- ~~**`qsoDraft` state-module lift.**~~ Shipped — `lib/states/qsoDraft.svelte.ts` is the singleton; `QsoPanel.svelte` consumes it. Trigger condition relaxed from "second consumer appears" to "fields are growing and refactor cost is rising" — operator's call.
+
+**Carried into session 34+ (in rough order of dependency):**
+
+1. **Migrate `lib/stores/station.ts` MY_* fields into `configState.loggingStation`.** Surfaced session 33 when `STATION_CALLSIGN` validation caught the mismatch. The remaining identity fields (`gridSquare`, `name`, `rig`, `antenna`) still ship via the legacy store with hardcoded defaults; submit reads them via `get(station)`. **Must precede any new daemon-side validator on these fields** — same trap recurs otherwise. Plan: extend `/v1/config` schema, add fields to `configState.loggingStation` (plain class fields per the audit — no `$derived` consumers), wire MyStationPanel to write them through `ValidatedInput` (gridSquare needs a Maidenhead validator; the rest are free-text), switch `submitQso` to source ALL identity fields from `configState`, delete `lib/stores/station.ts`. See `project_sm_station_store_migration.md` memory for the full trap analysis.
+2. **Operator's scaffolded `WorkedPanel` / `DetailsPanel` / `SessionPanel` content.** (MyStationPanel landed session 32.) InfoPanel chassis is in place; the remaining three files exist as scaffolds. SessionPanel can read `SessionTimer` state. Worked / Details depend on QSO data and contact-history.
+3. **Daemon `GET /v1/enrich/callsign`** (Go) — per ADR 0005. Unlocks the F2 lookup-only path. SPA-side `qsoDraft.populateFromEnrichment(...)` method lands alongside the wrapper.
+4. **`internal/bridge` package** (Go) — per ADR 0013. `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, current-state cache, PTT arbitration.
+5. **Real EventSource consumer in `bridge.svelte.ts`** — populate catState from SSE; snapshot-on-CAT-off effect.
+6. **CAT-handover toast** — toast plumbing exists; awaits the bridge so there's a transition to fire on.
 7. **Keyboard shortcuts** (ADR 0007 + `@svelte-put/shortcut`) — F2 lookup-only, Ctrl+\ VFO swap, Ctrl+Enter submit, ? help overlay.
 8. **Inline validation message slot (Fix 13).**
 
