@@ -69,22 +69,55 @@ export interface AdifQsoFields {
      */
     txPower?: number;
 
-    // Operator-station fields (MY_* family). Populated from the
-    // `operator` Svelte store at QSO submit time. All optional —
-    // omitted when empty. Recommended (but not enforced): set at
-    // least `stationCallsign` so the QSO record identifies who
-    // logged it.
+    // Operator-station fields (MY_* family). Sourced from
+    // configState.loggingStation at QSO submit time. All optional —
+    // omitted when empty. Recommended: set at least `stationCallsign`
+    // so the QSO record identifies who logged it.
 
-    /** OPERATOR's callsign — ADIF STATION_CALLSIGN. Omitted when empty. */
+    /** ADIF STATION_CALLSIGN — the logging station's callsign. */
     stationCallsign?: string;
-    /** Operator's Maidenhead grid (e.g. "IO91vl") — ADIF MY_GRIDSQUARE. */
+    /** ADIF OPERATOR — the operating callsign (may differ from station). */
+    operator?: string;
+    /** ADIF OWNER_CALLSIGN — licensee/club owner callsign. */
+    ownerCallsign?: string;
+
+    /** ADIF MY_GRIDSQUARE — operator's Maidenhead grid (e.g. "IO91vl"). */
     myGridSquare?: string;
-    /** Operator's name — ADIF MY_NAME. */
+    /** ADIF MY_LAT — daemon-derived latitude in "XDDD MM.MMM" form. */
+    myLat?: string;
+    /** ADIF MY_LON — daemon-derived longitude in "XDDD MM.MMM" form. */
+    myLon?: string;
+    /** ADIF MY_STREET. */
+    myStreet?: string;
+    /** ADIF MY_CITY. */
+    myCity?: string;
+    /** ADIF MY_POSTAL_CODE. */
+    myPostalCode?: string;
+    /** ADIF MY_COUNTRY. */
+    myCountry?: string;
+    /** ADIF MY_ALTITUDE — metres above sea level. */
+    myAltitude?: string;
+    /** ADIF MY_CQ_ZONE — operator-typed string. */
+    myCqZone?: string;
+    /** ADIF MY_ITU_ZONE — operator-typed string. */
+    myItuZone?: string;
+    /** ADIF MY_DXCC — operator-typed string. */
+    myDxcc?: string;
+
+    /** ADIF MY_NAME — operator's name. */
     myName?: string;
-    /** Operator's rig (human-friendly name, e.g. "IC-7300") — ADIF MY_RIG. */
+    /** ADIF MY_RIG — rig name (e.g. "IC-7300"). */
     myRig?: string;
-    /** Operator's antenna description — ADIF MY_ANTENNA. */
+    /** ADIF MY_ANTENNA — antenna description. */
     myAntenna?: string;
+
+    /** ADIF MY_MORSE_KEY_TYPE — e.g. "PADDLE", "BUG", "SK". */
+    myMorseKeyType?: string;
+    /** ADIF MY_MORSE_KEY_INFO — free-form. */
+    myMorseKeyInfo?: string;
+
+    /** ADIF ANT_AZ — short-path bearing, computed per QSO from MY_LAT/MY_LON. */
+    antAz?: string;
 }
 
 function adifTag(name: string, value: string): string {
@@ -129,14 +162,50 @@ export function formatAdifRecord(f: AdifQsoFields): string {
         lines.push(adifTag('COMMENT', f.comment));
     }
 
-    // Operator-station block (MY_*). Logical grouping puts contact
-    // info before operator info — matches typical ADIF reader habits
-    // (the most distinctive field for THIS QSO comes first).
+    // Operator-station block (MY_*). Order is stable — identity →
+    // location → personal → equipment → CW → per-QSO bearing — so
+    // the byte-identical-output spec tests pin the wire shape.
     if (f.stationCallsign && f.stationCallsign.length > 0) {
         lines.push(adifTag('STATION_CALLSIGN', f.stationCallsign));
     }
+    if (f.operator && f.operator.length > 0) {
+        lines.push(adifTag('OPERATOR', f.operator));
+    }
+    if (f.ownerCallsign && f.ownerCallsign.length > 0) {
+        lines.push(adifTag('OWNER_CALLSIGN', f.ownerCallsign));
+    }
     if (f.myGridSquare && f.myGridSquare.length > 0) {
         lines.push(adifTag('MY_GRIDSQUARE', f.myGridSquare));
+    }
+    if (f.myLat && f.myLat.length > 0) {
+        lines.push(adifTag('MY_LAT', f.myLat));
+    }
+    if (f.myLon && f.myLon.length > 0) {
+        lines.push(adifTag('MY_LON', f.myLon));
+    }
+    if (f.myStreet && f.myStreet.length > 0) {
+        lines.push(adifTag('MY_STREET', f.myStreet));
+    }
+    if (f.myCity && f.myCity.length > 0) {
+        lines.push(adifTag('MY_CITY', f.myCity));
+    }
+    if (f.myPostalCode && f.myPostalCode.length > 0) {
+        lines.push(adifTag('MY_POSTAL_CODE', f.myPostalCode));
+    }
+    if (f.myCountry && f.myCountry.length > 0) {
+        lines.push(adifTag('MY_COUNTRY', f.myCountry));
+    }
+    if (f.myAltitude && f.myAltitude.length > 0) {
+        lines.push(adifTag('MY_ALTITUDE', f.myAltitude));
+    }
+    if (f.myCqZone && f.myCqZone.length > 0) {
+        lines.push(adifTag('MY_CQ_ZONE', f.myCqZone));
+    }
+    if (f.myItuZone && f.myItuZone.length > 0) {
+        lines.push(adifTag('MY_ITU_ZONE', f.myItuZone));
+    }
+    if (f.myDxcc && f.myDxcc.length > 0) {
+        lines.push(adifTag('MY_DXCC', f.myDxcc));
     }
     if (f.myName && f.myName.length > 0) {
         lines.push(adifTag('MY_NAME', f.myName));
@@ -146,6 +215,15 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     }
     if (f.myAntenna && f.myAntenna.length > 0) {
         lines.push(adifTag('MY_ANTENNA', f.myAntenna));
+    }
+    if (f.myMorseKeyType && f.myMorseKeyType.length > 0) {
+        lines.push(adifTag('MY_MORSE_KEY_TYPE', f.myMorseKeyType));
+    }
+    if (f.myMorseKeyInfo && f.myMorseKeyInfo.length > 0) {
+        lines.push(adifTag('MY_MORSE_KEY_INFO', f.myMorseKeyInfo));
+    }
+    if (f.antAz && f.antAz.length > 0) {
+        lines.push(adifTag('ANT_AZ', f.antAz));
     }
 
     lines.push('<EOR>');

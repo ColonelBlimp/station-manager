@@ -205,6 +205,163 @@ describe('formatAdifRecord — operator station (MY_* / STATION_CALLSIGN)', () =
         expect(adif).toContain('<NAME:4>John');
         expect(adif).toContain('<MY_NAME:4>Marc');
     });
+
+    it('emits OPERATOR when set', () => {
+        const adif = formatAdifRecord({ ...baseFields, operator: 'M5OPR' });
+        expect(adif).toContain('<OPERATOR:5>M5OPR');
+    });
+
+    it('emits OWNER_CALLSIGN when set', () => {
+        const adif = formatAdifRecord({ ...baseFields, ownerCallsign: 'G7OWN' });
+        expect(adif).toContain('<OWNER_CALLSIGN:5>G7OWN');
+    });
+
+    it('emits MY_LAT and MY_LON when set', () => {
+        const adif = formatAdifRecord({
+            ...baseFields,
+            myLat: 'N051 30.000',
+            myLon: 'W001 00.000',
+        });
+        expect(adif).toContain('<MY_LAT:11>N051 30.000');
+        expect(adif).toContain('<MY_LON:11>W001 00.000');
+    });
+
+    it('emits MY_CITY, MY_COUNTRY, MY_POSTAL_CODE, MY_STREET when set', () => {
+        const adif = formatAdifRecord({
+            ...baseFields,
+            myStreet: '1 Main St',
+            myCity: 'London',
+            myPostalCode: 'SW1A 1AA',
+            myCountry: 'United Kingdom',
+        });
+        expect(adif).toContain('<MY_STREET:9>1 Main St');
+        expect(adif).toContain('<MY_CITY:6>London');
+        expect(adif).toContain('<MY_POSTAL_CODE:8>SW1A 1AA');
+        expect(adif).toContain('<MY_COUNTRY:14>United Kingdom');
+    });
+
+    it('emits MY_ALTITUDE, MY_CQ_ZONE, MY_ITU_ZONE, MY_DXCC when set', () => {
+        const adif = formatAdifRecord({
+            ...baseFields,
+            myAltitude: '120',
+            myCqZone: '14',
+            myItuZone: '27',
+            myDxcc: '223',
+        });
+        expect(adif).toContain('<MY_ALTITUDE:3>120');
+        expect(adif).toContain('<MY_CQ_ZONE:2>14');
+        expect(adif).toContain('<MY_ITU_ZONE:2>27');
+        expect(adif).toContain('<MY_DXCC:3>223');
+    });
+
+    it('emits MY_MORSE_KEY_TYPE and MY_MORSE_KEY_INFO when set', () => {
+        const adif = formatAdifRecord({
+            ...baseFields,
+            myMorseKeyType: 'PADDLE',
+            myMorseKeyInfo: 'Begali Sculpture',
+        });
+        expect(adif).toContain('<MY_MORSE_KEY_TYPE:6>PADDLE');
+        expect(adif).toContain('<MY_MORSE_KEY_INFO:16>Begali Sculpture');
+    });
+
+    it('emits ANT_AZ when set', () => {
+        const adif = formatAdifRecord({ ...baseFields, antAz: '273.4' });
+        expect(adif).toContain('<ANT_AZ:5>273.4');
+    });
+
+    it('omits all new MY_* fields when missing', () => {
+        const adif = formatAdifRecord(baseFields);
+        for (const tag of [
+            'OPERATOR',
+            'OWNER_CALLSIGN',
+            'MY_LAT',
+            'MY_LON',
+            'MY_STREET',
+            'MY_CITY',
+            'MY_POSTAL_CODE',
+            'MY_COUNTRY',
+            'MY_ALTITUDE',
+            'MY_CQ_ZONE',
+            'MY_ITU_ZONE',
+            'MY_DXCC',
+            'MY_MORSE_KEY_TYPE',
+            'MY_MORSE_KEY_INFO',
+            'ANT_AZ',
+        ]) {
+            expect(adif).not.toContain(tag);
+        }
+    });
+});
+
+describe('formatAdifRecord — full MY_* canonical record', () => {
+    it('emits all MY_* fields in stable order, byte-identical', () => {
+        const adif = formatAdifRecord({
+            callsign: 'M0ABC',
+            rstSent: '59',
+            rstRcvd: '59',
+            qsoDate: '2026-05-02',
+            timeOn: '15:30',
+            timeOff: '15:35',
+            mode: 'USB',
+            txFreqHz: 14_250_000,
+            band: '20m',
+            stationCallsign: 'M5OPR',
+            operator: 'M5OPR',
+            ownerCallsign: 'G7OWN',
+            myGridSquare: 'IO91vl',
+            myLat: 'N051 30.000',
+            myLon: 'W001 00.000',
+            myStreet: '1 Main St',
+            myCity: 'London',
+            myPostalCode: 'SW1A 1AA',
+            myCountry: 'United Kingdom',
+            myAltitude: '120',
+            myCqZone: '14',
+            myItuZone: '27',
+            myDxcc: '223',
+            myName: 'Marc',
+            myRig: 'IC-7300',
+            myAntenna: 'OCF dipole',
+            myMorseKeyType: 'PADDLE',
+            myMorseKeyInfo: 'Begali Sculpture',
+            antAz: '273.4',
+        });
+
+        const expected = [
+            '<CALL:5>M0ABC',
+            '<QSO_DATE:8>20260502',
+            '<TIME_ON:4>1530',
+            '<TIME_OFF:4>1535',
+            '<MODE:3>USB',
+            '<FREQ:9>14.250000',
+            '<BAND:3>20m',
+            '<RST_SENT:2>59',
+            '<RST_RCVD:2>59',
+            '<STATION_CALLSIGN:5>M5OPR',
+            '<OPERATOR:5>M5OPR',
+            '<OWNER_CALLSIGN:5>G7OWN',
+            '<MY_GRIDSQUARE:6>IO91vl',
+            '<MY_LAT:11>N051 30.000',
+            '<MY_LON:11>W001 00.000',
+            '<MY_STREET:9>1 Main St',
+            '<MY_CITY:6>London',
+            '<MY_POSTAL_CODE:8>SW1A 1AA',
+            '<MY_COUNTRY:14>United Kingdom',
+            '<MY_ALTITUDE:3>120',
+            '<MY_CQ_ZONE:2>14',
+            '<MY_ITU_ZONE:2>27',
+            '<MY_DXCC:3>223',
+            '<MY_NAME:4>Marc',
+            '<MY_RIG:7>IC-7300',
+            '<MY_ANTENNA:10>OCF dipole',
+            '<MY_MORSE_KEY_TYPE:6>PADDLE',
+            '<MY_MORSE_KEY_INFO:16>Begali Sculpture',
+            '<ANT_AZ:5>273.4',
+            '<EOR>',
+        ].join('\n');
+
+        expect(adif).toBe(expected);
+    });
 });
 
 describe('formatAdifRecord — TX_PWR', () => {

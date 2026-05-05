@@ -62,7 +62,16 @@ class LoggingStationView {
      * and rarely change once set, so they are plain properties — no
      * `$state` overhead. Nothing reactively derives from these; setup
      * dialog and My Station card write them directly via
-     * `applyResponse(...)` after a PUT round-trip.
+     * `applyResponse(...)` after a PUT round-trip. `bind:value` works
+     * fine on plain fields — it's a binding mechanism, not a reactive
+     * read.
+     *
+     * Bucketing matches the operator-confirmed split (session 34):
+     *   - Identity (station/operator/owner) — fallback chain applied in
+     *     applyResponse.
+     *   - Operator-typed (My Station panel via ValidatedInput).
+     *   - Daemon-derived (myLat/myLon from myGridsquare) — read-only,
+     *     overwritten on every applyResponse, never edited in the SPA.
      *
      * ADIF fallback chain (per spec):
      *   - If STATION_CALLSIGN is absent, OPERATOR is treated as both the
@@ -78,6 +87,28 @@ class LoggingStationView {
 
     /** ADIF OWNER_CALLSIGN — licensee/club owner if different from station_callsign. */
     ownerCallsign: string = '';
+
+    // Operator-typed via the My Station panel (session 34 scope).
+    myAltitude: string = '';
+    myAntenna: string = '';
+    myCity: string = '';
+    myCountry: string = '';
+    myCqZone: string = '';
+    myDxcc: string = '';
+    myGridsquare: string = '';
+    myItuZone: string = '';
+    myMorseKeyInfo: string = '';
+    myMorseKeyType: string = '';
+    myName: string = '';
+    myPostalCode: string = '';
+    myRig: string = '';
+    myStreet: string = '';
+
+    // Daemon-derived from myGridsquare. The SPA never writes these
+    // directly — a PUT with a new myGridsquare causes the daemon to
+    // recompute and the response hydrates them here.
+    myLat: string = '';
+    myLon: string = '';
 }
 
 class DefaultLogbookView {
@@ -135,6 +166,25 @@ class ConfigState {
         this.loggingStation.operator = operator;
         this.loggingStation.stationCallsign = stationCallsign;
         this.loggingStation.ownerCallsign = ownerCallsign;
+
+        const ls = resp.logging_station;
+        this.loggingStation.myAltitude = ls.my_altitude ?? '';
+        this.loggingStation.myAntenna = ls.my_antenna ?? '';
+        this.loggingStation.myCity = ls.my_city ?? '';
+        this.loggingStation.myCountry = ls.my_country ?? '';
+        this.loggingStation.myCqZone = ls.my_cq_zone ?? '';
+        this.loggingStation.myDxcc = ls.my_dxcc ?? '';
+        this.loggingStation.myGridsquare = ls.my_gridsquare ?? '';
+        this.loggingStation.myItuZone = ls.my_itu_zone ?? '';
+        this.loggingStation.myMorseKeyInfo = ls.my_morse_key_info ?? '';
+        this.loggingStation.myMorseKeyType = ls.my_morse_key_type ?? '';
+        this.loggingStation.myName = ls.my_name ?? '';
+        this.loggingStation.myPostalCode = ls.my_postal_code ?? '';
+        this.loggingStation.myRig = ls.my_rig ?? '';
+        this.loggingStation.myStreet = ls.my_street ?? '';
+
+        this.loggingStation.myLat = ls.my_lat ?? '';
+        this.loggingStation.myLon = ls.my_lon ?? '';
 
         this.defaultLogbook.id = resp.default_logbook.id;
         this.defaultLogbook.name = resp.default_logbook.name ?? '';

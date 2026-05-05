@@ -390,14 +390,30 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   per ADR 0005. Unlocks F2 lookup-only path. Plus the SPA-side
   `qsoDraft.populateFromEnrichment(...)` method that the panel's
   `handleEnrich` will call on Tab when the wrapper lands.
-- ⏳ Migrate `lib/stores/station.ts` MY_* fields into
-  `configState.loggingStation`. The remaining identity fields
-  (`gridSquare`, `name`, `rig`, `antenna`) still ship via the
-  legacy store with hardcoded defaults; submit reads them via
-  `get(station)`. Daemon-side validation against any of these
-  will hit the same trap that `STATION_CALLSIGN` hit session 33.
-  Migrate before adding more validators. Closes the dual-source
-  identity split flagged in §QSO-submit "Wire-shape decisions".
+- ✅ Migrate `lib/stores/station.ts` MY_* fields into
+  `configState.loggingStation` and ship the full ADIF MY_* set
+  end-to-end. `internal/utils/maidenhead.go` derives `MyLat`/`MyLon`
+  from `MyGridsquare` (4/6/8-char locator, ADIF "XDDD MM.MMM"
+  output) on every PUT `/v1/config`; daemon validates the grid
+  format and clears coordinates when blanked. Frontend extended
+  `configState.loggingStation` and `LoggingStationFields` with
+  the operator-typed bucket (`MyAntenna`, `MyCity`, `MyCountry`,
+  `MyGridsquare`, `MyName`, `MyPostalCode`, `MyRig`, `MyStreet`,
+  `MyAltitude`, `MyMorseKeyType`, `MyMorseKeyInfo`, plus
+  `MyCqZone`/`MyITUZone`/`MyDxcc` operator-typed for v1 — zone
+  derivation needs a polygon dataset SM doesn't bundle); plus
+  daemon-derived `MyLat`/`MyLon`. `MyStationPanel.svelte`
+  surfaces the panel as four sections (identity → location →
+  equipment → CW). `formatAdifRecord` emits all MY_* tags +
+  `OPERATOR`, `OWNER_CALLSIGN`, `ANT_AZ` with stable order;
+  spec test pins the wire shape. `QsoPanel.submitQso` sources
+  every identity field from `configState`; `lib/stores/station.ts`
+  and the now-empty `lib/stores/` directory deleted. Bearing
+  utility (`lib/utils/bearing.ts`) ported from v1's
+  `internal/maidenhead` package — `gridToDecimal`,
+  `calculateBearing`, `haversineKm`, `pathInfo` — for the
+  country panel's short/long path display. Landed sessions
+  34-35, 2026-05-05.
 - ⏳ `internal/bridge` package per ADR 0013 — daemon subsystem
   for `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT,
   PTT arbitration. Replaces the parked `cmd/logging/` Gio CAT

@@ -30,11 +30,43 @@ export interface ConfigResponse {
 }
 
 export interface LoggingStationFields {
+    // Identity fallback chain — daemon enforces, SPA mirrors.
     station_callsign?: string;
-    // Additional ADIF MY_* fields appear here as the My Station
-    // card surfaces them. The daemon's types.LoggingStation has the
-    // full set; the SPA reads only what it needs.
-    [key: string]: string | undefined;
+    operator?: string;
+    owner_callsign?: string;
+
+    // Operator-typed via the My Station panel (session 34 scope).
+    my_altitude?: string;
+    my_antenna?: string;
+    my_city?: string;
+    my_country?: string;
+    my_cq_zone?: string;
+    my_dxcc?: string;
+    my_gridsquare?: string;
+    my_itu_zone?: string;
+    my_morse_key_info?: string;
+    my_morse_key_type?: string;
+    my_name?: string;
+    my_postal_code?: string;
+    my_rig?: string;
+    my_street?: string;
+
+    // Daemon-derived from my_gridsquare; surfaced read-only in the SPA.
+    my_lat?: string;
+    my_lon?: string;
+
+    // Per-QSO calculated client-side (bearing utility, task #47); part
+    // of types.LoggingStation but normally absent from /v1/config.
+    ant_az?: string;
+
+    // Per-activation, deferred (not surfaced in My Station yet but
+    // present on types.LoggingStation so the wire shape stays in
+    // parity with the daemon).
+    my_iota?: string;
+    my_iota_island_id?: string;
+    my_sig?: string;
+    my_sig_info?: string;
+    my_wwff_ref?: string;
 }
 
 export interface DefaultLogbookFields {
