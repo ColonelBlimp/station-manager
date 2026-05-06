@@ -139,12 +139,13 @@ stable than numbers.
    In both cases, `trg_qso_upload_set_updated_at` fires and stamps
    `qso_upload.modified_at`.
 
-8. **Client polls `GET /v1/qso/1/uploads`** any time after step 3.
-   `handleListQsoUploads` probes existence with
-   `FetchQsoByIDIncludingDeletedWithContext` (so a soft-deleted QSO
-   still returns its rows), reads
-   `FetchUploadsByQsoIDWithContext(id)`, and returns
-   `{"items": [...]}`.
+8. **Client polls `GET /v1/qso/<uuid>/uploads`** any time after
+   step 3. `handleListQsoUploads` parses the UUID (per ADR 0016
+   phase 2), resolves it via
+   `FetchQsoByUUIDIncludingDeletedWithContext` (so a soft-deleted
+   QSO still returns its rows), reads
+   `FetchUploadsByQsoIDWithContext(id)` against the resolved int
+   PK, and returns `{"items": [...]}`.
 
 The path for `Update` is identical except the ingest site is
 `qsoservice.Update` and the action is `action.Update`. `Delete` uses
@@ -555,7 +556,10 @@ is recent.
 
 ### 6.1 The pull endpoint
 
-`GET /v1/qso/{id}/uploads` — `internal/api/handler_uploads.go`.
+`GET /v1/qso/{uuid}/uploads` — `internal/api/handler_uploads.go`.
+The path segment is the QSO's UUIDv7 per ADR 0016 phase 2; the
+handler validates the format, resolves the UUID to the internal int
+row id, and queries `qso_upload` with the resolved id.
 
 Envelope:
 
@@ -672,7 +676,7 @@ production default.
 Three scenarios: insert, update (after settle), delete (after settle).
 Each asserts the final `uploaded` state and the specific `attempts` /
 `upstream_id` values the stub forwarder produces. The delete scenario
-additionally asserts that `GET /v1/qso/{id}` 404s while the uploads
+additionally asserts that `GET /v1/qso/{uuid}` 404s while the uploads
 endpoint still returns the rows.
 
 Shutdown in E2E tests uses plain `go` + `sync.WaitGroup` rather than

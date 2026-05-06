@@ -104,8 +104,17 @@ The daemon's submit path exists to service an invariant that is strictly bigger 
 
 **Every submitted QSO gets a dedupe key**, computed as `hash(call + band + mode + start_time_rounded_to_minute)` and stored on the QSO row. On submit, the daemon checks whether a QSO with the same dedupe key already exists within the same logbook:
 
-- **New QSO:** stored normally, response indicates `"stored"` with the new QSO ID.
-- **Duplicate:** no new row written, response indicates `"duplicate"` with the existing QSO ID.
+- **New QSO:** stored normally, response indicates `"stored"` with the new QSO's `uuid`.
+- **Duplicate:** no new row written, response indicates `"duplicate"` with the existing row's `uuid`.
+
+**QSO identity on the wire is the UUIDv7,** not the internal sqlite
+auto-increment row id. Per ADR 0016, the canonical external identifier
+for every QSO is a UUIDv7 generated at submit time and persisted on
+the row. The integer primary key is an internal storage detail; it
+does not appear on the API surface beyond a transitional `id` field
+in the submit response that exists only to keep older logging code
+compiling and is scheduled for removal. All retrieval / edit / delete
+paths route by UUID (Section 7a).
 
 **Minute-granularity** for the time component aligns with the ADIF spec's canonical time resolution and matches how most logging software treats "the same QSO."
 
@@ -125,7 +134,7 @@ The daemon's submit path exists to service an invariant that is strictly bigger 
 
 **Clients observe forwarding state in two ways:**
 
-- **Pull:** `GET /v1/qso/:id/uploads` returns the current forwarding status of each configured destination for a specific QSO.
+- **Pull:** `GET /v1/qso/:uuid/uploads` returns the current forwarding status of each configured destination for a specific QSO.
 - **Push:** SSE events (`forward.succeeded`, `forward.failed`) on the daemon's event stream (Section 4.5).
 
 Clients can freely ignore forwarding state — the local log is already durable. Operators who want real-time feedback on QRZ uploads use the SSE-backed UI in the logging app; automated clients like `cmd/importer` ignore it entirely.
@@ -200,7 +209,9 @@ forward.failed    {"qso_id": int64, "forwarder_name": string,
                    "attempts": int, "reason": string}
 ```
 
-Payloads are intentionally minimal. Clients re-query via `GET /v1/qso/:id` (etc.) for any details beyond identifiers — the authoritative state is in the database, not on the wire. `logbook_id` is carried on the `qso.*` events so the logbook-app can filter without a fetch; `action` is carried on `forward.*` so a single QSO's INSERT vs. DELETE transitions are distinguishable. `upstream_id` is omitted from `forward.succeeded` when the destination doesn't produce one (e.g. stub).
+Payloads are intentionally minimal. Clients re-query via `GET /v1/qso/:uuid` (etc.) for any details beyond identifiers — the authoritative state is in the database, not on the wire. `logbook_id` is carried on the `qso.*` events so the logbook-app can filter without a fetch; `action` is carried on `forward.*` so a single QSO's INSERT vs. DELETE transitions are distinguishable. `upstream_id` is omitted from `forward.succeeded` when the destination doesn't produce one (e.g. stub).
+
+**Known gap (ADR 0016 follow-up):** the `qso_id` field on every payload above is currently the internal sqlite int — predating Phase 2 of ADR 0016. Real SSE consumers don't exist yet (`bridge.svelte.ts` is stubbed and the e2e test correlates by int), so the wire shape is correct *for current consumers* but inconsistent with the rest of the API surface. When the SPA wires up live event consumption, the payloads grow a `qso_uuid` field and clients migrate to it; the int field stays for one release as a transitional shim, then disappears alongside the `id` field on the submit response.
 
 **Reconnect semantics and buffering:**
 
@@ -244,16 +255,16 @@ This section is the starting point for review, not the final shape. URLs, method
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/v1/qso` | Submit a QSO. Body is raw ADIF (`application/x-adif` or `text/plain`). Query param `?force=true` bypasses dedupe check. Response is JSON indicating `"stored"` or `"duplicate"` with the QSO ID. |
+| `POST` | `/v1/qso` | Submit a QSO. Body is raw ADIF (`application/x-adif` or `text/plain`). Query param `?force=true` bypasses dedupe check. Response is JSON indicating `"stored"` or `"duplicate"` with the QSO's UUID. |
 
 ### QSO retrieval and editing (apps/logging and apps/logbook)
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/v1/qso/:id` | Fetch a single QSO by ID. |
-| `PATCH` | `/v1/qso/:id` | Edit an existing QSO. JSON body contains fields to update. |
-| `DELETE` | `/v1/qso/:id` | Soft-delete a QSO (deleted_at, not physical removal, per v1 convention). |
-| `GET` | `/v1/qso/:id/uploads` | Fetch the per-destination forwarding status for a QSO. Pull-based alternative to `forward.*` SSE events. |
+| `GET` | `/v1/qso/:uuid` | Fetch a single QSO by UUID. |
+| `PATCH` | `/v1/qso/:uuid` | Edit an existing QSO. JSON body contains fields to update. |
+| `DELETE` | `/v1/qso/:uuid` | Soft-delete a QSO (deleted_at, not physical removal, per v1 convention). |
+| `GET` | `/v1/qso/:uuid/uploads` | Fetch the per-destination forwarding status for a QSO. Pull-based alternative to `forward.*` SSE events. |
 
 ### Logbook management (apps/logging and apps/logbook)
 
@@ -366,21 +377,34 @@ project's v1 / v2 distinction.
 - `POST /v1/qso?logbook=<id>[&force=true]` — body is ADIF
   (`application/x-adif` or `text/plain`). `?logbook` is **required**;
   the daemon verifies the logbook exists and its callsign matches
-  `STATION_CALLSIGN`. Response: `{"status":"stored"|"duplicate","id":<int>}`,
-  201 on stored, 200 on duplicate.
+  `STATION_CALLSIGN`. Response:
+  `{"status":"stored"|"duplicate","uuid":"<uuidv7>","id":<int>}`,
+  201 on stored, 200 on duplicate. The `uuid` is the canonical
+  external identifier (ADR 0016 phase 1) generated server-side at
+  submit time and persisted on the row; clients pin to it for every
+  follow-up call. The `id` field is the internal sqlite row id and
+  is **transitional** — it stays in the response for one release so
+  older logging code keeps compiling, then disappears.
 
 ### QSO retrieval and editing
 
-- `GET /v1/qso/{id}` — returns `types.Qso` JSON. 404 if missing or
-  soft-deleted.
-- `PATCH /v1/qso/{id}` — JSON body matching `types.Qso`'s field
-  shape. Missing keys leave fields alone; `id`, `logbook_id`,
+QSO paths route by **UUIDv7** (ADR 0016 phase 2). The path segment
+must be a valid UUIDv7 string; mismatch returns
+`400 invalid_uuid`. The internal int row id is not exposed on these
+paths.
+
+- `GET /v1/qso/{uuid}` — returns `types.Qso` JSON. 404 if missing or
+  soft-deleted. Response body carries the QSO's `uuid`; the
+  transitional `id` field is also present until the submit-response
+  shim is removed.
+- `PATCH /v1/qso/{uuid}` — JSON body matching `types.Qso`'s field
+  shape. Missing keys leave fields alone; `uuid`, `id`, `logbook_id`,
   `station_callsign`, `dedupe_key`, forwarding-state and enrichment
   fields are immutable (silently restored server-side). Dedupe-key
   inputs (CALL/BAND/MODE/FREQ/QSO_DATE/TIME_ON) trigger a key
   recompute and collision check; collision → 409 `duplicate_key`.
   No `force=true` bypass on edit.
-- `DELETE /v1/qso/{id}` — soft-delete (`deleted_at`). 204 on success.
+- `DELETE /v1/qso/{uuid}` — soft-delete (`deleted_at`). 204 on success.
 
 ### Logbook management
 
@@ -431,13 +455,13 @@ project's v1 / v2 distinction.
 
 ### QSO upload status (per-destination forwarding)
 
-- `GET /v1/qso/{id}/uploads` — pull counterpart to the
+- `GET /v1/qso/{uuid}/uploads` — pull counterpart to the
   `forward.*` SSE events. Returns
   `{"items": types.QsoUpload[]}` with one row per
   `(forwarder_name, action)` pair touched for this QSO. Soft-
   deleted QSOs still report status (the delete-action upload row
   is legitimate work and stays observable). 404 only when the
-  QSO id has never existed in any state. Empty result is
+  QSO uuid has never existed in any state. Empty result is
   `{"items": []}`, not `null`.
 
 ### QSO draft support
@@ -445,7 +469,9 @@ project's v1 / v2 distinction.
 - `GET /v1/contact-history?call=<callsign>` — prior QSOs with
   the supplied callsign across all logbooks. Drives the "recent
   contacts" panel in the logging client. Result count is capped
-  by `Server.MaxContactHistoryResults` (default 100).
+  by `Server.MaxContactHistoryResults` (default 100). Each item
+  carries `uuid` so the client can deep-link rows into the
+  logbook viewer.
 
 ### Config (operator-relevant subset of `config.json`)
 
@@ -534,7 +560,8 @@ not preempt the vocabulary.
 
 | HTTP | Code | When it fires |
 |---|---|---|
-| 400 | `invalid_id` | Path id missing or not a positive integer. |
+| 400 | `invalid_id` | Logbook path id missing or not a positive integer. |
+| 400 | `invalid_uuid` | QSO path UUID missing or not a valid UUIDv7 (per ADR 0016: 36 chars, version nibble `7`, RFC 4122 variant). |
 | 400 | `invalid_query_param` | Query param fails parse (e.g. `?force=yes` doesn't pass `strconv.ParseBool`). |
 | 400 | `missing_required_param` | Required query param absent (e.g. submit without `?logbook=`). |
 | 400 | `missing_required_field` | ADIF body missing CALL / BAND / MODE / QSO_DATE / TIME_ON / FREQ / STATION_CALLSIGN, or JSON body missing required field on logbook create. |
@@ -570,6 +597,17 @@ not preempt the vocabulary.
 - **CALL / STATION_CALLSIGN:** uppercased at the daemon boundary.
 - **BAND:** lowercased (`"40m"`, not `"40M"`).
 - **MODE:** uppercased (`"SSB"`, `"CW"`, etc.).
+- **`APP_SM_QSO_ID`** — application-defined ADIF field carrying the
+  QSO's UUIDv7 on every record the daemon emits (forwarder uploads,
+  client-side library exports via `internal/adif`, characterization
+  test fixtures). Per ADR 0016 phase 2, the canonical external
+  identifier round-trips through the ADIF surface as well as the
+  HTTP wire shape so a re-imported export preserves identity. Emitted
+  with `,omitempty` semantics — a QSO with no UUID does not emit an
+  empty `APP_SM_QSO_ID` tag, which keeps pre-Phase-1 historical rows
+  clean. The `APP_SM_` prefix follows the ADIF spec's
+  application-defined field convention; no header declaration is
+  required.
 
 ### Transport, listener and SPA hosting
 

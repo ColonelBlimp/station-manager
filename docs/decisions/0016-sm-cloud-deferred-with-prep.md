@@ -84,6 +84,24 @@ side row. Re-uploads, deletes, and edits route by the same ID. No
 re-identification, no "translate local-id 42 to cloud-id 8819374" mapping
 table, no merge-conflict resolution at upload time.
 
+**Implementation outcome (session 38, 2026-05-06): SHIPPED — UUIDv7 chosen.**
+ULID was rejected for ecosystem familiarity and RFC 9562 standardisation;
+both options had equivalent k-sortability + index-locality properties.
+Generation lives in `internal/utils/uuid.go` (hand-rolled from
+`crypto/rand` to avoid an external dependency). Persistence: `qso.uuid`
+column, `NOT NULL UNIQUE` with a strict format CHECK (length=36, dash
+positions, version-7 nibble), added to `0001_init.up.sql` in place rather
+than via a backfill migration because the project hasn't gone to
+production. External surface: every QSO API path (`GET/PATCH/DELETE
+/v1/qso/{uuid}`, `GET /v1/qso/{uuid}/uploads`) routes by UUID;
+`/v1/contact-history` items carry `uuid`. ADIF emission carries the UUID
+as `APP_SM_QSO_ID` on every record (omit-when-empty). The internal int
+PK stays as a storage detail; the submit response carries a transitional
+`id` field for one release alongside the `uuid` field, then disappears.
+Known wire-shape gap: `internal/events` SSE payloads still carry only int
+`qso_id` because no live consumer yet exists; they grow `qso_uuid` when
+the SPA wires up event consumption.
+
 ### 2. Edit/delete provenance trail (audit table from day one)
 
 Any time a QSO row is edited or deleted, the daemon writes a row to a

@@ -28,7 +28,7 @@ first prevents the worker topology being "discovered" late.
 - `docs/v2-design/api.md` — `§4.3` (async forward lifecycle),
   `§4.5` (SSE vocabulary — `forward.succeeded` / `forward.failed`
   are the only events this subsystem emits), `§5` (the
-  `GET /v1/qso/:id/uploads` pull endpoint).
+  `GET /v1/qso/:uuid/uploads` pull endpoint).
 - `docs/v2-design/milestones.md` — milestone 1c is the milestone this
   design enables. The acceptance test there is the finish line.
 - `docs/v1-analysis/design-decisions-log.md` → "Hardcoded QRZ forwarder
@@ -121,7 +121,7 @@ them at a glance.
    never a gate on whether the QSO exists.
 4. **Narrow daemon scope.** The daemon owns log + forward. Anything
    UX-y (spinners, badges, per-operator retry buttons) lives in the
-   client, driven by pull (`/v1/qso/:id/uploads`) or push (SSE).
+   client, driven by pull (`/v1/qso/:uuid/uploads`) or push (SSE).
 5. **Personal-operator scale.** At most tens of QSOs per active
    session, a handful of destinations, a single user. Simple and
    sequential beats clever and concurrent wherever the tradeoff is
@@ -565,7 +565,7 @@ qso_upload(qso_id=42, forwarder_name='qrz',     forwarder_type='qrz',     action
 qso_upload(qso_id=42, forwarder_name='clublog', forwarder_type='clublog', action='insert', …)
 qso_upload(qso_id=42, forwarder_name='lotw',    forwarder_type='lotw',    action='insert', …)
 
--- PATCH /v1/qso/42 — lotw's action_filter is ["insert"], so it gets no row:
+-- PATCH /v1/qso/<uuid-of-row-42> — lotw's action_filter is ["insert"], so it gets no row:
 + qso_upload(qso_id=42, forwarder_name='qrz',     forwarder_type='qrz',     action='update', …)
 + qso_upload(qso_id=42, forwarder_name='clublog', forwarder_type='clublog', action='update', …)
 ```
@@ -689,7 +689,7 @@ upstream returns a dedupe error classified as `OutcomeSuccess` with
 - `in_progress` → `failed`: emit `forward.failed`.
 
 `pending` → `pending` (backoff) is silent. Clients that want spinner
-UX query `GET /v1/qso/:id/uploads` and show a spinner for any row in
+UX query `GET /v1/qso/:uuid/uploads` and show a spinner for any row in
 `pending` or `in_progress`; the spinner clears when a terminal event
 arrives.
 
@@ -838,7 +838,7 @@ dial it down without racing against in-flight goroutines.
 
 ## 11. Explicitly deferred
 
-- **Manual re-queue endpoint** (e.g. `POST /v1/qso/:id/uploads/:name/retry`
+- **Manual re-queue endpoint** (e.g. `POST /v1/qso/:uuid/uploads/:name/retry`
   to reset a `failed` row to `pending` with `attempts=0`). Clients
   need it eventually; not required for milestone 1c acceptance.
 - **Dead-letter handling for permanently failed rows.** Today they
@@ -886,7 +886,7 @@ open pending the real QRZ forwarder and the SSE event stream.
 - ✅ The stub worker picks up its row within one tick and
   transitions to `uploaded`. Covered end-to-end in
   `TestE2E_InsertReachesUploaded`.
-- ✅ `GET /v1/qso/:id/uploads` returns all rows with their current
+- ✅ `GET /v1/qso/:uuid/uploads` returns all rows with their current
   status, ordered by `(forwarder_name, action)`. Handler at
   `internal/api/handler_uploads.go`; soft-deleted QSOs still
   surface their rows (the delete-action forward is legitimate

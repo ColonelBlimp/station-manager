@@ -202,9 +202,9 @@ GUI.
 
 ### Scope (additive on top of milestone 1)
 
-- `GET /v1/qso/:id` — fetch a single QSO
-- `PATCH /v1/qso/:id` — edit a QSO
-- `DELETE /v1/qso/:id` — soft-delete a QSO
+- `GET /v1/qso/:uuid` — fetch a single QSO (UUIDv7-keyed per ADR 0016)
+- `PATCH /v1/qso/:uuid` — edit a QSO
+- `DELETE /v1/qso/:uuid` — soft-delete a QSO
 - `GET /v1/logbook` — list all logbooks
 - `GET /v1/logbook/:id` — fetch a single logbook
 - `POST /v1/logbook` — create a logbook
@@ -268,7 +268,7 @@ criterion breakdown.
   ClubLog/LoTW/eQSL still TBD as additional `internal/forwarding/*`
   packages, but the registry pattern that QRZ + stub use is the
   template.
-- ✅ `GET /v1/qso/:id/uploads` — per-destination forwarding status.
+- ✅ `GET /v1/qso/:uuid/uploads` — per-destination forwarding status (UUIDv7-keyed per ADR 0016 phase 2).
 - ✅ `GET /v1/events` — SSE event stream with `qso.stored`,
   `qso.updated`, `qso.deleted`, `forward.succeeded`, `forward.failed`.
 - ❌ `POST /v1/logbook/:id/export` — ADIF export.
@@ -282,7 +282,7 @@ criterion breakdown.
 
 Submit a QSO, observe it forwarded to a test endpoint (or QRZ
 sandbox if available), verify the forwarding status via
-`GET /v1/qso/:id/uploads`, and verify SSE events arrive on a
+`GET /v1/qso/:uuid/uploads`, and verify SSE events arrive on a
 connected `curl` event stream.
 
 ---
@@ -474,8 +474,8 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
 Launch the daemon (`./smd` — no flag needed; first run seeds
 `config.json` at the resolved working dir). Open
 `http://localhost:<port>/` in a browser. Log a QSO through the SPA;
-verify the resulting row in sqlite via `GET /v1/qso/{id}`. Verify
-the upload-queue rows exist via `GET /v1/qso/{id}/uploads`. Verify
+verify the resulting row in sqlite via `GET /v1/qso/{uuid}`. Verify
+the upload-queue rows exist via `GET /v1/qso/{uuid}/uploads`. Verify
 SSE events arrive on a separate `curl http://localhost:<port>/v1/events`
 stream. Refresh the browser; verify the session timer state survives
 (sessionStorage), the manual VFO state survives (localStorage), and
@@ -552,6 +552,25 @@ The two prep items are scheduled to land before milestone 3; they
 are independently valuable for v1 (stable external QSO IDs +
 "what did I change?" auditing) regardless of whether SM Cloud
 ever materialises.
+
+**Prep status (audited 2026-05-06):**
+
+- **Prep #1 — globally-unique time-ordered QSO IDs: SHIPPED.**
+  UUIDv7 generated server-side at submit time, persisted on the
+  `qso.uuid` column with a strict format CHECK, exposed as the
+  canonical external identifier on every QSO API response, and
+  carried through ADIF emission as `APP_SM_QSO_ID`. Path routing for
+  `GET/PATCH/DELETE /v1/qso/{uuid}` and `GET /v1/qso/{uuid}/uploads`
+  resolves UUID → internal int row id at the handler boundary; the
+  internal storage shape is unchanged. SSE event payloads still
+  carry the int `qso_id` (no live consumer yet) and grow `qso_uuid`
+  when the SPA wires up event consumption — see api.md §4.5 known-
+  gap note.
+- **Prep #2 — qso_history append-only audit table: NOT STARTED.**
+  Scheduled for a separate session per ADR 0016. Schema lives only
+  in the ADR draft; no `0002_*.sql` migration yet. The intended
+  shape (one row per edit/delete, tracking before/after blobs +
+  actor + timestamp) is documented in ADR 0016.
 
 ---
 
