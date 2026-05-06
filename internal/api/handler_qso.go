@@ -15,13 +15,13 @@ import (
 func (s *Server) handleGetQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleGetQso"
 
-	id, err := parsePathID(r, "id")
+	uuid, err := parsePathUUID(r, "uuid")
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_uuid", err.Error(), op)
 		return
 	}
 
-	qso, err := s.db.FetchQsoByIdWithContext(r.Context(), id)
+	qso, err := s.db.FetchQsoByUUIDWithContext(r.Context(), uuid)
 	if err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
@@ -37,13 +37,27 @@ func (s *Server) handleGetQso(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleDeleteQso"
 
-	id, err := parsePathID(r, "id")
+	uuid, err := parsePathUUID(r, "uuid")
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_uuid", err.Error(), op)
 		return
 	}
 
-	if err = s.qso.Delete(r.Context(), id); err != nil {
+	// Resolve UUID → row to get the local PK; the qsoservice.Delete
+	// path is keyed on int ID for the DB-side soft-delete + upload-
+	// queue tx. Surface separation per ADR 0016: external API speaks
+	// UUID, internal storage retains the int PK.
+	qso, err := s.db.FetchQsoByUUIDWithContext(r.Context(), uuid)
+	if err != nil {
+		if stderr.Is(err, errors.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
+			return
+		}
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
+		return
+	}
+
+	if err = s.qso.Delete(r.Context(), qso.ID); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
@@ -58,13 +72,13 @@ func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleUpdateQso"
 
-	id, err := parsePathID(r, "id")
+	uuid, err := parsePathUUID(r, "uuid")
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_uuid", err.Error(), op)
 		return
 	}
 
-	existing, err := s.db.FetchQsoByIdWithContext(r.Context(), id)
+	existing, err := s.db.FetchQsoByUUIDWithContext(r.Context(), uuid)
 	if err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)

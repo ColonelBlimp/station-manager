@@ -6,12 +6,19 @@ import (
 )
 
 // Record represents a single ADIF (Amateur Data Interchange Format) record.
+//
+// AppSmQsoID rides as an APP_<programid>_<fieldname> field — the ADIF
+// mechanism for application-defined data that does not require a
+// header-side USERDEFx declaration. Per ADR 0016 it carries the QSO's
+// UUIDv7 so re-imports and forwarder uploads round-trip the canonical
+// external identifier.
 type Record struct {
 	types.QsoDetails
 	types.ContactedStation
 	types.LoggingStation
 	QslSection
 	UserDef
+	AppSmQsoID string `adif:"app_sm_qso_id,omitempty"`
 }
 
 type QslSection struct {
@@ -78,6 +85,7 @@ func QsoToRecord(q types.Qso) Record {
 		SmFwrdByEmailDate:   q.SmFwrdByEmailDate,
 		SmFwrdByEmailStatus: q.SmFwrdByEmailStatus,
 	}
+	r.AppSmQsoID = q.UUID
 	return r
 }
 

@@ -134,12 +134,11 @@ func TestContestDupe_SoftDeletedNotCounted(t *testing.T) {
 		t.Fatalf("submit: status = %d", w.Code)
 	}
 	var r qsoservice.SubmitResult
-	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
-		t.Fatalf("decode id from %s (err=%v)", w.Body.String(), err)
+	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.UUID == "" {
+		t.Fatalf("decode uuid from %s (err=%v)", w.Body.String(), err)
 	}
-	qsoID := r.ID
 
-	if dw := deleteQso(t, srv, qsoID); dw.Code != http.StatusNoContent {
+	if dw := deleteQso(t, srv, r.UUID); dw.Code != http.StatusNoContent {
 		t.Fatalf("delete: status = %d", dw.Code)
 	}
 

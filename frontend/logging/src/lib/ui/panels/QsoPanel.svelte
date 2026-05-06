@@ -202,7 +202,11 @@
                 }
                 break;
             case 'duplicate':
-                toasts.warn(`Duplicate of QSO #${outcome.id}; not re-logged.`);
+                // Toast surfaces the operator-readable callsign rather
+                // than the 36-char UUID; the UUID lands in the dev
+                // console for cross-referencing with daemon logs.
+                console.info(`[QSO submit] duplicate uuid=${outcome.uuid}`);
+                toasts.warn(`QSO with ${submittedCall} already logged; not re-logged.`);
                 break;
             case 'validation':
                 // Daemon's `message` is already operator-readable; the

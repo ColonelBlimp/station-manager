@@ -3,11 +3,15 @@
     union so the caller can branch on outcome without parsing HTTP / JSON
     error envelopes inline.
 
-    Wire contract (api.md §4.2 + §4.6):
-      - 201 Created  → { status: "stored",    id: <int64> }
-      - 200 OK       → { status: "duplicate", id: <int64> }   (dedupe-checked, non-force)
-      - 4xx          → { code, message, op? }                 (validation / client error)
-      - 5xx          → { code, message, op? }                 (server / db error)
+    Wire contract (api.md §4.2 + §4.6, ADR 0016):
+      - 201 Created  → { status: "stored",    uuid: <UUIDv7>, id: <int64> }
+      - 200 OK       → { status: "duplicate", uuid: <UUIDv7>, id: <int64> }   (dedupe-checked, non-force)
+      - 4xx          → { code, message, op? }                                  (validation / client error)
+      - 5xx          → { code, message, op? }                                  (server / db error)
+
+    The UUIDv7 is the canonical external identifier per ADR 0016. The
+    daemon also returns the local int PK for transitional logging
+    only; everything client-facing should key off `uuid`.
 
     `kind` collapses to:
       - 'stored'     — fresh QSO persisted, draft can be cleared
@@ -23,15 +27,16 @@
                        DNS, CORS preflight failure). Draft preserved.
 */
 export type SubmitOutcome =
-    | { kind: 'stored'; id: number }
-    | { kind: 'duplicate'; id: number }
+    | { kind: 'stored'; uuid: string }
+    | { kind: 'duplicate'; uuid: string }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'network'; message: string };
 
 interface DaemonOk {
     status: 'stored' | 'duplicate';
-    id: number;
+    uuid: string;
+    id?: number;
 }
 
 interface DaemonError {
@@ -66,10 +71,11 @@ export async function submitQso(adif: string, logbookID: number): Promise<Submit
 
     if (response.ok) {
         const ok = body as DaemonOk | null;
+        const uuid = ok?.uuid ?? '';
         if (ok?.status === 'duplicate') {
-            return { kind: 'duplicate', id: Number(ok.id) };
+            return { kind: 'duplicate', uuid };
         }
-        return { kind: 'stored', id: Number(ok?.id ?? 0) };
+        return { kind: 'stored', uuid };
     }
 
     const err = body as DaemonError | null;

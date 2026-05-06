@@ -8,6 +8,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 func (s *Server) handleListLogbooks(w http.ResponseWriter, r *http.Request) {
@@ -182,4 +183,21 @@ func parsePathID(r *http.Request, name string) (int64, error) {
 		return 0, errors.New(op).WithMsgf("%s must be a positive integer", name)
 	}
 	return id, nil
+}
+
+// parsePathUUID extracts a named UUIDv7 path parameter from the
+// request. Format validation is a quick reject before the DB lookup.
+// Used by the QSO endpoints since ADR 0016 — UUID is the canonical
+// external identifier.
+func parsePathUUID(r *http.Request, name string) (string, error) {
+	const op errors.Op = "api.parsePathUUID"
+
+	raw := r.PathValue(name)
+	if raw == "" {
+		return "", errors.New(op).WithMsgf("%s is required", name)
+	}
+	if !utils.IsValidUUIDv7(raw) {
+		return "", errors.New(op).WithMsgf("%s must be a UUIDv7", name)
+	}
+	return raw, nil
 }

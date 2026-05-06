@@ -93,11 +93,11 @@ func TestE2E_SSE_InsertFlow(t *testing.T) {
 
 	// Submit a QSO via the real HTTP path.
 	lbID := createTestLogbook(t, h.srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
+	qsoID, qsoUUID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
 
 	// Wait until the worker has marked the upload row 'uploaded' —
 	// guarantees forward.succeeded has been emitted.
-	waitForUploads(t, h.srv, qsoID, allUploaded)
+	waitForUploads(t, h.srv, qsoUUID, allUploaded)
 
 	// Drain two frames (qso.stored, forward.succeeded). Order is
 	// fixed by monotonic hub IDs — qsoservice emits first, then
@@ -181,10 +181,10 @@ func TestE2E_SSE_FailureFlow(t *testing.T) {
 	waitForSubscriberCount(t, h.srv.hub, 1)
 
 	lbID := createTestLogbook(t, h.srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
+	qsoID, qsoUUID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
 
 	// Wait for the row to settle on 'failed'.
-	waitForUploads(t, h.srv, qsoID, func(rs []types.QsoUpload) bool {
+	waitForUploads(t, h.srv, qsoUUID, func(rs []types.QsoUpload) bool {
 		if len(rs) == 0 {
 			return false
 		}

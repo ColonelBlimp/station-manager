@@ -92,18 +92,18 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 				}
 				stored.Add(1)
 
-				// Parse the QSO ID from the submit response and fetch it back
-				// to exercise the read path under concurrent write load.
+				// Parse the QSO UUID from the submit response and fetch it
+				// back to exercise the read path under concurrent write load.
 				var r qsoservice.SubmitResult
-				if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
+				if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.UUID == "" {
 					fetchErrCount.Add(1)
-					t.Logf("client %d qso %d: failed to decode id from %s (err=%v)", clientID, i, w.Body.String(), err)
+					t.Logf("client %d qso %d: failed to decode uuid from %s (err=%v)", clientID, i, w.Body.String(), err)
 					continue
 				}
-				qsoID := r.ID
+				qsoUUID := r.UUID
 
-				getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
-				getReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+				getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+qsoUUID, nil)
+				getReq.SetPathValue("uuid", qsoUUID)
 				getW := httptest.NewRecorder()
 				srv.handleGetQso(getW, getReq)
 
@@ -137,8 +137,8 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 				newFreqMHz := fmt.Sprintf("7.%03d", 100+((clientID*qsosPerClient+i)%100))
 				patchBody := fmt.Sprintf(`{"freq":"%s","comment":"edited"}`, newFreqMHz)
 				patchReq := httptest.NewRequest(http.MethodPatch,
-					fmt.Sprintf("/v1/qso/%d", qsoID), strings.NewReader(patchBody))
-				patchReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+					"/v1/qso/"+qsoUUID, strings.NewReader(patchBody))
+				patchReq.SetPathValue("uuid", qsoUUID)
 				patchReq.Header.Set("Content-Type", "application/json")
 				patchW := httptest.NewRecorder()
 				srv.handleUpdateQso(patchW, patchReq)
@@ -172,8 +172,8 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 				// DELETE the QSO, then confirm a subsequent GET returns
 				// 404 — the soft-delete path must hide the row from reads.
 				delReq := httptest.NewRequest(http.MethodDelete,
-					fmt.Sprintf("/v1/qso/%d", qsoID), nil)
-				delReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+					"/v1/qso/"+qsoUUID, nil)
+				delReq.SetPathValue("uuid", qsoUUID)
 				delW := httptest.NewRecorder()
 				srv.handleDeleteQso(delW, delReq)
 
@@ -184,8 +184,8 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 				}
 
 				verifyReq := httptest.NewRequest(http.MethodGet,
-					fmt.Sprintf("/v1/qso/%d", qsoID), nil)
-				verifyReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+					"/v1/qso/"+qsoUUID, nil)
+				verifyReq.SetPathValue("uuid", qsoUUID)
 				verifyW := httptest.NewRecorder()
 				srv.handleGetQso(verifyW, verifyReq)
 

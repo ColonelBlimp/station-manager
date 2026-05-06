@@ -39,7 +39,7 @@ func TestSubmit_EnqueuesRowsForEnabledForwarders(t *testing.T) {
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	qsoID, _ := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	uploads, err := srv.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestSubmit_DisabledForwarder_Skipped(t *testing.T) {
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	qsoID, _ := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	uploads, err := srv.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestSubmit_ActionFilter_Excludes(t *testing.T) {
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	qsoID, _ := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	uploads, err := srv.db.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
 	if err != nil {
@@ -112,9 +112,9 @@ func TestUpdate_EnqueuesUpdateRows(t *testing.T) {
 		forwarderCfg("lotw", "lotw", true, "insert"), // excludes update
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	qsoID, qsoUUID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
-	w := patchQso(t, srv, qsoID, `{"comment":"updated"}`)
+	w := patchQso(t, srv, qsoUUID, `{"comment":"updated"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("patch status = %d; body = %s", w.Code, w.Body.String())
 	}
@@ -151,9 +151,9 @@ func TestDelete_EnqueuesDeleteRows(t *testing.T) {
 		forwarderCfg("lotw", "lotw", true, "insert"), // no delete in filter
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	qsoID, qsoUUID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
-	w := deleteQso(t, srv, qsoID)
+	w := deleteQso(t, srv, qsoUUID)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d; body = %s", w.Code, w.Body.String())
 	}
@@ -196,10 +196,10 @@ func TestUpdate_TwicePatchesRearm(t *testing.T) {
 		forwarderCfg("qrz", "qrz", true, "insert", "update"),
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	qsoID, qsoUUID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	for i, body := range []string{`{"comment":"first"}`, `{"comment":"second"}`} {
-		w := patchQso(t, srv, qsoID, body)
+		w := patchQso(t, srv, qsoUUID, body)
 		if w.Code != http.StatusOK {
 			t.Fatalf("patch #%d status = %d; body = %s", i+1, w.Code, w.Body.String())
 		}
@@ -240,12 +240,12 @@ func TestDelete_TwiceIsRejectedAt404(t *testing.T) {
 		forwarderCfg("qrz", "qrz", true, "insert", "delete"),
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, qsoUUID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
-	if w := deleteQso(t, srv, qsoID); w.Code != http.StatusNoContent {
+	if w := deleteQso(t, srv, qsoUUID); w.Code != http.StatusNoContent {
 		t.Fatalf("first delete status = %d", w.Code)
 	}
-	if w := deleteQso(t, srv, qsoID); w.Code != http.StatusNotFound {
+	if w := deleteQso(t, srv, qsoUUID); w.Code != http.StatusNotFound {
 		t.Fatalf("second delete status = %d, want 404", w.Code)
 	}
 }
@@ -256,9 +256,9 @@ func TestDelete_NoForwarders_SoftDeletesCleanly(t *testing.T) {
 	// depend on having forwarders.
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	qsoID, qsoUUID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
-	w := deleteQso(t, srv, qsoID)
+	w := deleteQso(t, srv, qsoUUID)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d", w.Code)
 	}

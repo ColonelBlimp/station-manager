@@ -15,11 +15,14 @@ function mockFetchJSON(status: number, body: unknown): void {
     vi.stubGlobal('fetch', vi.fn(async () => response));
 }
 
+const STORED_UUID = '01910d3a-7000-7abc-8def-0123456789ab';
+const DUPLICATE_UUID = '01910d3a-7001-7def-9123-0123456789cd';
+
 describe('submitQso', () => {
     it('posts to /v1/qso with the logbook query and application/x-adif body', async () => {
         const fetchSpy = vi.fn(
             async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-                new Response(JSON.stringify({ status: 'stored', id: 42 }), { status: 201 }),
+                new Response(JSON.stringify({ status: 'stored', uuid: STORED_UUID, id: 42 }), { status: 201 }),
         );
         vi.stubGlobal('fetch', fetchSpy);
 
@@ -36,15 +39,15 @@ describe('submitQso', () => {
     });
 
     it('returns kind=stored on 201', async () => {
-        mockFetchJSON(201, { status: 'stored', id: 42 });
+        mockFetchJSON(201, { status: 'stored', uuid: STORED_UUID, id: 42 });
         const out = await submitQso(ADIF, 1);
-        expect(out).toEqual({ kind: 'stored', id: 42 });
+        expect(out).toEqual({ kind: 'stored', uuid: STORED_UUID });
     });
 
     it('returns kind=duplicate on 200 with status=duplicate', async () => {
-        mockFetchJSON(200, { status: 'duplicate', id: 17 });
+        mockFetchJSON(200, { status: 'duplicate', uuid: DUPLICATE_UUID, id: 17 });
         const out = await submitQso(ADIF, 1);
-        expect(out).toEqual({ kind: 'duplicate', id: 17 });
+        expect(out).toEqual({ kind: 'duplicate', uuid: DUPLICATE_UUID });
     });
 
     it('returns kind=validation for 4xx with daemon code+message', async () => {

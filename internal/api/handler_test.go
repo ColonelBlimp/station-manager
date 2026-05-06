@@ -937,13 +937,12 @@ func TestGetQso(t *testing.T) {
 		t.Fatalf("submit: status = %d; body = %s", submitW.Code, submitW.Body.String())
 	}
 	var r qsoservice.SubmitResult
-	if err := unmarshalJSON(submitW.Body.String(), &r); err != nil || r.ID < 1 {
-		t.Fatalf("decode QSO id from %s (err=%v)", submitW.Body.String(), err)
+	if err := unmarshalJSON(submitW.Body.String(), &r); err != nil || r.UUID == "" {
+		t.Fatalf("decode QSO uuid from %s (err=%v)", submitW.Body.String(), err)
 	}
-	qsoID := r.ID
 
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
-	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	req := httptest.NewRequest(http.MethodGet, "/v1/qso/"+r.UUID, nil)
+	req.SetPathValue("uuid", r.UUID)
 	w := httptest.NewRecorder()
 	srv.handleGetQso(w, req)
 
@@ -965,8 +964,10 @@ func TestGetQso(t *testing.T) {
 func TestGetQso_NotFound(t *testing.T) {
 	srv := testServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/qso/999", nil)
-	req.SetPathValue("id", "999")
+	// Valid-format UUIDv7 that no row in this fresh DB will carry.
+	missing := utils.NewUUIDv7()
+	req := httptest.NewRequest(http.MethodGet, "/v1/qso/"+missing, nil)
+	req.SetPathValue("uuid", missing)
 	w := httptest.NewRecorder()
 	srv.handleGetQso(w, req)
 
@@ -979,7 +980,7 @@ func TestGetQso_InvalidID(t *testing.T) {
 	srv := testServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/qso/abc", nil)
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("uuid", "abc")
 	w := httptest.NewRecorder()
 	srv.handleGetQso(w, req)
 
@@ -992,26 +993,28 @@ func TestGetQso_InvalidID(t *testing.T) {
 // Update QSO (PATCH)
 // =============================================================================
 
-// submitAndGetID is a test helper that submits testQsoADIF and returns the
-// resulting QSO ID.
-func submitAndGetID(t *testing.T, srv *Server, lbID int64, body string) int64 {
+// submitAndGetID submits testQsoADIF and returns both the local int
+// PK and the canonical UUIDv7. Tests that only need one drop the
+// other with a blank: `qsoID, _ := submitAndGetID(...)` for DB-direct
+// helpers, `_, qsoUUID := submitAndGetID(...)` for API path helpers.
+func submitAndGetID(t *testing.T, srv *Server, lbID int64, body string) (int64, string) {
 	t.Helper()
 	w := submitQso(t, srv, lbID, body, false)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("submit: status = %d; body = %s", w.Code, w.Body.String())
 	}
 	var r qsoservice.SubmitResult
-	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
-		t.Fatalf("decode QSO id from %s (err=%v)", w.Body.String(), err)
+	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 || r.UUID == "" {
+		t.Fatalf("decode QSO result from %s (err=%v)", w.Body.String(), err)
 	}
-	return r.ID
+	return r.ID, r.UUID
 }
 
-// patchQso is a test helper that sends a PATCH to /v1/qso/{id}.
-func patchQso(t *testing.T, srv *Server, qsoID int64, body string) *httptest.ResponseRecorder {
+// patchQso is a test helper that sends a PATCH to /v1/qso/{uuid}.
+func patchQso(t *testing.T, srv *Server, qsoUUID string, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/v1/qso/%d", qsoID), strings.NewReader(body))
-	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	req := httptest.NewRequest(http.MethodPatch, "/v1/qso/"+qsoUUID, strings.NewReader(body))
+	req.SetPathValue("uuid", qsoUUID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.handleUpdateQso(w, req)
@@ -1021,7 +1024,7 @@ func patchQso(t *testing.T, srv *Server, qsoID int64, body string) *httptest.Res
 func TestUpdateQso_PatchComment(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	w := patchQso(t, srv, id, `{"comment":"nice chat"}`)
 	if w.Code != http.StatusOK {
@@ -1035,12 +1038,12 @@ func TestUpdateQso_PatchComment(t *testing.T) {
 func TestUpdateQso_RecomputesDedupeKey(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	// Fetch the pre-edit dedupe key.
 	getW := httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
-	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+id, nil)
+	getReq.SetPathValue("uuid", id)
 	srv.handleGetQso(getW, getReq)
 	var before struct {
 		DedupeKey string `json:"dedupe_key"`
@@ -1072,12 +1075,12 @@ func TestUpdateQso_RecomputesDedupeKey(t *testing.T) {
 func TestUpdateQso_FreqChangeRecomputesDedupe(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	// Pre-edit dedupe key.
 	getW := httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
-	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+id, nil)
+	getReq.SetPathValue("uuid", id)
 	srv.handleGetQso(getW, getReq)
 	var before struct {
 		DedupeKey string `json:"dedupe_key"`
@@ -1134,11 +1137,11 @@ func TestSubmitQso_SameCallSameTimeDifferentFreq(t *testing.T) {
 func TestUpdateQso_NonDedupeFieldLeavesKeyAlone(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	getW := httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
-	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+id, nil)
+	getReq.SetPathValue("uuid", id)
 	srv.handleGetQso(getW, getReq)
 	var before struct {
 		DedupeKey string `json:"dedupe_key"`
@@ -1167,9 +1170,9 @@ func TestUpdateQso_DuplicateKeyConflict(t *testing.T) {
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
 	// Two distinct QSOs in the same logbook.
-	id1 := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id1 := submitAndGetID(t, srv, lbID, testQsoADIF)
 	second := `<CALL:6>DL1ABC<BAND:3>20m<MODE:2>CW<FREQ:6>14.074<QSO_DATE:8>20250508<TIME_ON:4>1000<TIME_OFF:4>1005<RST_SENT:3>599<RST_RCVD:3>599<STATION_CALLSIGN:5>G4ABC<COUNTRY:7>Germany<EOR>`
-	_ = submitAndGetID(t, srv, lbID, second)
+	submitAndGetID(t, srv, lbID, second)
 
 	// Edit QSO 1 so it would collide with QSO 2. Must match all dedupe
 	// inputs, including freq. Include time_off so the merged result doesn't
@@ -1188,7 +1191,7 @@ func TestUpdateQso_ImmutableFieldsIgnored(t *testing.T) {
 	srv := testServer(t)
 	lbID1 := createTestLogbook(t, srv, "Primary", "G4ABC")
 	lbID2 := createTestLogbook(t, srv, "Secondary", "M0CMC")
-	id := submitAndGetID(t, srv, lbID1, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID1, testQsoADIF)
 
 	// Attempt to rewrite structural fields. They should be silently ignored:
 	// the PATCH succeeds, but station_callsign and logbook_id stay the same.
@@ -1203,15 +1206,15 @@ func TestUpdateQso_ImmutableFieldsIgnored(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"station_callsign":"G4ABC"`) {
 		t.Fatalf("station_callsign changed: %s", w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), fmt.Sprintf(`"id":%d`, id)) {
-		t.Fatalf("id changed: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), fmt.Sprintf(`"uuid":%q`, id)) {
+		t.Fatalf("uuid changed: %s", w.Body.String())
 	}
 }
 
 func TestUpdateQso_InvalidBand(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	w := patchQso(t, srv, id, `{"band":"not-a-band"}`)
 	if w.Code != http.StatusBadRequest {
@@ -1225,7 +1228,7 @@ func TestUpdateQso_InvalidBand(t *testing.T) {
 func TestUpdateQso_InvalidCall(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	// No digit — fails callsign validation.
 	w := patchQso(t, srv, id, `{"call":"ABC"}`)
@@ -1237,7 +1240,7 @@ func TestUpdateQso_InvalidCall(t *testing.T) {
 func TestUpdateQso_TimeCoherenceViolation(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	// TIME_ON after TIME_OFF with no QSO_DATE_OFF set.
 	w := patchQso(t, srv, id, `{"time_on":"2300","time_off":"0100"}`)
@@ -1252,8 +1255,10 @@ func TestUpdateQso_TimeCoherenceViolation(t *testing.T) {
 func TestUpdateQso_NotFound(t *testing.T) {
 	srv := testServer(t)
 
-	req := httptest.NewRequest(http.MethodPatch, "/v1/qso/999", strings.NewReader(`{"comment":"x"}`))
-	req.SetPathValue("id", "999")
+	// Valid-format UUID that no row in this fresh DB carries.
+	missing := utils.NewUUIDv7()
+	req := httptest.NewRequest(http.MethodPatch, "/v1/qso/"+missing, strings.NewReader(`{"comment":"x"}`))
+	req.SetPathValue("uuid", missing)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.handleUpdateQso(w, req)
@@ -1266,7 +1271,7 @@ func TestUpdateQso_NotFound(t *testing.T) {
 func TestUpdateQso_InvalidJSON(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	w := patchQso(t, srv, id, `{not json`)
 	if w.Code != http.StatusBadRequest {
@@ -1277,7 +1282,7 @@ func TestUpdateQso_InvalidJSON(t *testing.T) {
 func TestUpdateQso_EmptyPatchIsNoOp(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	w := patchQso(t, srv, id, `{}`)
 	if w.Code != http.StatusOK {
@@ -1292,10 +1297,10 @@ func TestUpdateQso_EmptyPatchIsNoOp(t *testing.T) {
 // Delete QSO (DELETE)
 // =============================================================================
 
-func deleteQso(t *testing.T, srv *Server, qsoID int64) *httptest.ResponseRecorder {
+func deleteQso(t *testing.T, srv *Server, qsoUUID string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
-	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	req := httptest.NewRequest(http.MethodDelete, "/v1/qso/"+qsoUUID, nil)
+	req.SetPathValue("uuid", qsoUUID)
 	w := httptest.NewRecorder()
 	srv.handleDeleteQso(w, req)
 	return w
@@ -1304,7 +1309,7 @@ func deleteQso(t *testing.T, srv *Server, qsoID int64) *httptest.ResponseRecorde
 func TestDeleteQso(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	w := deleteQso(t, srv, id)
 	if w.Code != http.StatusNoContent {
@@ -1312,8 +1317,8 @@ func TestDeleteQso(t *testing.T) {
 	}
 
 	// GET should now return 404 — soft-deleted rows are filtered by FindQso.
-	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", id), nil)
-	getReq.SetPathValue("id", fmt.Sprintf("%d", id))
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+id, nil)
+	getReq.SetPathValue("uuid", id)
 	getW := httptest.NewRecorder()
 	srv.handleGetQso(getW, getReq)
 	if getW.Code != http.StatusNotFound {
@@ -1324,7 +1329,8 @@ func TestDeleteQso(t *testing.T) {
 func TestDeleteQso_NotFound(t *testing.T) {
 	srv := testServer(t)
 
-	w := deleteQso(t, srv, 999)
+	// Valid-format UUID that no row in this fresh DB carries.
+	w := deleteQso(t, srv, utils.NewUUIDv7())
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
@@ -1333,7 +1339,7 @@ func TestDeleteQso_NotFound(t *testing.T) {
 func TestDeleteQso_Twice(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	if w := deleteQso(t, srv, id); w.Code != http.StatusNoContent {
 		t.Fatalf("first delete: status = %d", w.Code)
@@ -1365,7 +1371,7 @@ func TestDeleteQso_FreesDedupeKey(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
-	id := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 	if w := deleteQso(t, srv, id); w.Code != http.StatusNoContent {
 		t.Fatalf("delete: status = %d", w.Code)
 	}

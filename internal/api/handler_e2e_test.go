@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -82,17 +81,17 @@ func startE2E(t *testing.T, fwds ...types.ForwarderConfig) *e2eHarness {
 	return &e2eHarness{srv: srv, shutdown: shutdown}
 }
 
-// fetchUploads hits GET /v1/qso/{id}/uploads and decodes the envelope.
+// fetchUploads hits GET /v1/qso/{uuid}/uploads and decodes the envelope.
 // Fails the test on any non-200 or decode error.
-func fetchUploads(t *testing.T, srv *Server, qsoID int64) []types.QsoUpload {
+func fetchUploads(t *testing.T, srv *Server, qsoUUID string) []types.QsoUpload {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d/uploads", qsoID), nil)
-	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	req := httptest.NewRequest(http.MethodGet, "/v1/qso/"+qsoUUID+"/uploads", nil)
+	req.SetPathValue("uuid", qsoUUID)
 	w := httptest.NewRecorder()
 	srv.handleListQsoUploads(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("GET /v1/qso/%d/uploads: status = %d, body = %s", qsoID, w.Code, w.Body.String())
+		t.Fatalf("GET /v1/qso/%s/uploads: status = %d, body = %s", qsoUUID, w.Code, w.Body.String())
 	}
 	var env struct {
 		Items []types.QsoUpload `json:"items"`
@@ -103,17 +102,17 @@ func fetchUploads(t *testing.T, srv *Server, qsoID int64) []types.QsoUpload {
 	return env.Items
 }
 
-// waitForUploads polls GET /v1/qso/{id}/uploads at 25 ms intervals
+// waitForUploads polls GET /v1/qso/{uuid}/uploads at 25 ms intervals
 // until match returns true for the current row set, or the deadline
 // is reached. On timeout it fails the test with the last observed
 // rows so diagnostics point at "what state did the system settle on?"
 // rather than "we gave up."
-func waitForUploads(t *testing.T, srv *Server, qsoID int64, match func([]types.QsoUpload) bool) []types.QsoUpload {
+func waitForUploads(t *testing.T, srv *Server, qsoUUID string, match func([]types.QsoUpload) bool) []types.QsoUpload {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	var last []types.QsoUpload
 	for time.Now().Before(deadline) {
-		last = fetchUploads(t, srv, qsoID)
+		last = fetchUploads(t, srv, qsoUUID)
 		if match(last) {
 			return last
 		}
@@ -162,7 +161,7 @@ func TestE2E_InsertReachesUploaded(t *testing.T) {
 	defer h.shutdown()
 
 	lbID := createTestLogbook(t, h.srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
+	_, qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
 
 	rows := waitForUploads(t, h.srv, qsoID, allUploaded)
 
@@ -196,7 +195,7 @@ func TestE2E_UpdateReachesUploaded(t *testing.T) {
 	defer h.shutdown()
 
 	lbID := createTestLogbook(t, h.srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
+	_, qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
 
 	// Settle the insert row first — isolates the post-PATCH assertion
 	// from any lingering insert-row transition.
@@ -247,7 +246,7 @@ func TestE2E_DeleteReachesUploaded(t *testing.T) {
 	defer h.shutdown()
 
 	lbID := createTestLogbook(t, h.srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
+	_, qsoID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
 
 	// Settle the insert first.
 	waitForUploads(t, h.srv, qsoID, allUploaded)
@@ -284,12 +283,12 @@ func TestE2E_DeleteReachesUploaded(t *testing.T) {
 
 	// The QSO itself should be soft-deleted — the canonical GET
 	// handler must 404. The uploads endpoint is the only path that
-	// still exposes the id while the delete-forward completes.
-	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d", qsoID), nil)
-	getReq.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	// still exposes the row while the delete-forward completes.
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+qsoID, nil)
+	getReq.SetPathValue("uuid", qsoID)
 	getW := httptest.NewRecorder()
 	h.srv.handleGetQso(getW, getReq)
 	if getW.Code != http.StatusNotFound {
-		t.Fatalf("GET /v1/qso/%d after delete: status = %d, want 404", qsoID, getW.Code)
+		t.Fatalf("GET /v1/qso/%s after delete: status = %d, want 404", qsoID, getW.Code)
 	}
 }

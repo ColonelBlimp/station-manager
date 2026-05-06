@@ -197,8 +197,8 @@ func TestContactHistory_SoftDeletedHidden(t *testing.T) {
 	if len(got.Items) != 1 {
 		t.Fatalf("items = %d, want 1 (soft-deleted hidden)", len(got.Items))
 	}
-	if got.Items[0].ID != keep {
-		t.Fatalf("items[0].id = %d, want %d", got.Items[0].ID, keep)
+	if got.Items[0].UUID != keep {
+		t.Fatalf("items[0].uuid = %q, want %q", got.Items[0].UUID, keep)
 	}
 }
 

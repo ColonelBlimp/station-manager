@@ -14,8 +14,11 @@ import (
 
 // submitQsoAt is a helper that submits a single QSO with a caller-chosen
 // date and time so tests can control the newest-first sort order. Returns
-// the stored QSO id.
-func submitQsoAt(t *testing.T, srv *Server, lbID int64, call, qsoDate, timeOn, freq string) int64 {
+// the stored QSO's UUIDv7 (the canonical external identifier per ADR
+// 0016) — call sites that need the int PK can resolve it via the DB,
+// but for handler-level deletes/patches the UUID is what the route
+// expects.
+func submitQsoAt(t *testing.T, srv *Server, lbID int64, call, qsoDate, timeOn, freq string) string {
 	t.Helper()
 	body := fmt.Sprintf(
 		"<CALL:%d>%s<BAND:3>40m<MODE:3>SSB<FREQ:%d>%s<QSO_DATE:8>%s<TIME_ON:4>%s<TIME_OFF:4>%s<RST_SENT:2>59<RST_RCVD:2>59<STATION_CALLSIGN:5>G4ABC<COUNTRY:7>England<EOR>",
@@ -26,10 +29,10 @@ func submitQsoAt(t *testing.T, srv *Server, lbID int64, call, qsoDate, timeOn, f
 		t.Fatalf("submit: status = %d; body = %s", w.Code, w.Body.String())
 	}
 	var r qsoservice.SubmitResult
-	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.ID < 1 {
-		t.Fatalf("decode id from %s (err=%v)", w.Body.String(), err)
+	if err := unmarshalJSON(w.Body.String(), &r); err != nil || r.UUID == "" {
+		t.Fatalf("decode uuid from %s (err=%v)", w.Body.String(), err)
 	}
-	return r.ID
+	return r.UUID
 }
 
 // listQsoByLogbook is a test helper that sends GET /v1/logbook/{id}/qso
@@ -260,8 +263,8 @@ func TestListQso_SoftDeletedHidden(t *testing.T) {
 	if len(got.Items) != 1 {
 		t.Fatalf("items = %d, want 1 (soft-deleted hidden)", len(got.Items))
 	}
-	if got.Items[0].ID != keepID {
-		t.Fatalf("items[0].id = %d, want %d", got.Items[0].ID, keepID)
+	if got.Items[0].UUID != keepID {
+		t.Fatalf("items[0].uuid = %q, want %q", got.Items[0].UUID, keepID)
 	}
 }
 

@@ -47,3 +47,47 @@ func TestRecord_String(t *testing.T) {
 		}
 	}
 }
+
+// TestQsoToRecord_EmitsAppSmQsoID pins ADR 0016 phase 2: when a QSO
+// has a UUID, the daemon's ADIF emission carries it as
+// APP_SM_QSO_ID so re-imports and forwarder uploads round-trip the
+// canonical external identifier.
+func TestQsoToRecord_EmitsAppSmQsoID(t *testing.T) {
+	uuid := "01910d3a-7000-7abc-8def-0123456789ab"
+	q := types.Qso{
+		UUID: uuid,
+		QsoDetails: types.QsoDetails{
+			Band: "40m", Mode: "SSB", Freq: "7.050",
+			QsoDate: "20250508", TimeOn: "0845", TimeOff: "0850",
+			RstSent: "59", RstRcvd: "59",
+		},
+		ContactedStation: types.ContactedStation{Call: "M0CMC", Country: "England"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "G4ABC"},
+	}
+
+	out := ConvertQsoToAdifNoHeader(q)
+	want := "<APP_SM_QSO_ID:36>" + uuid
+	if !strings.Contains(out, want) {
+		t.Fatalf("ADIF output missing %q\nGot:\n%s", want, out)
+	}
+}
+
+// TestQsoToRecord_OmitsAppSmQsoIDWhenEmpty pins the ,omitempty
+// behaviour: a QSO with no UUID does not emit an empty
+// APP_SM_QSO_ID tag.
+func TestQsoToRecord_OmitsAppSmQsoIDWhenEmpty(t *testing.T) {
+	q := types.Qso{
+		QsoDetails: types.QsoDetails{
+			Band: "40m", Mode: "SSB", Freq: "7.050",
+			QsoDate: "20250508", TimeOn: "0845", TimeOff: "0850",
+			RstSent: "59", RstRcvd: "59",
+		},
+		ContactedStation: types.ContactedStation{Call: "M0CMC", Country: "England"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "G4ABC"},
+	}
+
+	out := ConvertQsoToAdifNoHeader(q)
+	if strings.Contains(out, "APP_SM_QSO_ID") {
+		t.Fatalf("ADIF output should omit APP_SM_QSO_ID when UUID is empty\nGot:\n%s", out)
+	}
+}

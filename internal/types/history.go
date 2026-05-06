@@ -2,6 +2,7 @@ package types
 
 type ContactHistory struct {
 	ID      int64  `json:"id"`
+	UUID    string `json:"uuid"`
 	Band    string `json:"band"`
 	Freq    string `json:"freq" boil:"freq"`
 	Mode    string `json:"mode"`

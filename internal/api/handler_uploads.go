@@ -16,14 +16,14 @@ type uploadsResponse struct {
 	Items []types.QsoUpload `json:"items"`
 }
 
-// handleListQsoUploads serves GET /v1/qso/{id}/uploads — the pull
+// handleListQsoUploads serves GET /v1/qso/{uuid}/uploads — the pull
 // counterpart to the SSE forward.* events. Clients that can't hold an
 // SSE connection (or want a cold-start snapshot) poll this endpoint
 // to see every forwarder's current status for a single QSO.
 //
 // Behaviour:
-//   - 400 on malformed id
-//   - 404 only if the QSO id has never existed in any state (never
+//   - 400 on malformed uuid
+//   - 404 only if the QSO uuid has never existed in any state (never
 //     inserted, or hard-purged by some future admin op)
 //   - 200 with {"items": [...]} for live AND soft-deleted QSOs; the
 //     delete-action row is legitimate forwarding work and its status
@@ -32,18 +32,20 @@ type uploadsResponse struct {
 func (s *Server) handleListQsoUploads(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleListQsoUploads"
 
-	id, err := parsePathID(r, "id")
+	uuid, err := parsePathUUID(r, "uuid")
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_id", err.Error(), op)
+		s.writeError(w, http.StatusBadRequest, "invalid_uuid", err.Error(), op)
 		return
 	}
 
 	// Existence probe that includes soft-deleted rows — we want to
-	// return 404 only for genuinely unknown ids, not for QSOs the
-	// operator has just deleted. The regular FetchQsoByIdWithContext
-	// would hide soft-deleted rows, turning a legitimate "show me the
-	// delete-forward status" query into a 404.
-	if _, err = s.db.FetchQsoByIDIncludingDeletedWithContext(r.Context(), id); err != nil {
+	// return 404 only for genuinely unknown UUIDs, not for QSOs the
+	// operator has just deleted. The non-deleted-only fetch would hide
+	// soft-deleted rows, turning a legitimate "show me the
+	// delete-forward status" query into a 404. The probe also
+	// resolves the local int PK, which the upload-queue join uses.
+	qso, err := s.db.FetchQsoByUUIDIncludingDeletedWithContext(r.Context(), uuid)
+	if err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
@@ -52,7 +54,7 @@ func (s *Server) handleListQsoUploads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.FetchUploadsByQsoIDWithContext(r.Context(), id)
+	rows, err := s.db.FetchUploadsByQsoIDWithContext(r.Context(), qso.ID)
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return

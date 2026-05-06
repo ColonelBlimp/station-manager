@@ -1,19 +1,19 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
-// listUploads fires GET /v1/qso/{id}/uploads against the test server.
-func listUploads(t *testing.T, srv *Server, qsoID int64) *httptest.ResponseRecorder {
+// listUploads fires GET /v1/qso/{uuid}/uploads against the test server.
+func listUploads(t *testing.T, srv *Server, qsoUUID string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/qso/%d/uploads", qsoID), nil)
-	req.SetPathValue("id", fmt.Sprintf("%d", qsoID))
+	req := httptest.NewRequest(http.MethodGet, "/v1/qso/"+qsoUUID+"/uploads", nil)
+	req.SetPathValue("uuid", qsoUUID)
 	w := httptest.NewRecorder()
 	srv.handleListQsoUploads(w, req)
 	return w
@@ -25,7 +25,7 @@ func TestListUploads_ReturnsRowsForStoredQso(t *testing.T) {
 		forwarderCfg("clublog", "clublog", true, "insert"),
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	w := listUploads(t, srv, qsoID)
 	if w.Code != http.StatusOK {
@@ -65,7 +65,7 @@ func TestListUploads_EmptyWhenNoForwardersConfigured(t *testing.T) {
 	// should return {"items":[]}, not 404.
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	w := listUploads(t, srv, qsoID)
 	if w.Code != http.StatusOK {
@@ -95,7 +95,7 @@ func TestListUploads_SoftDeletedQsoStillReturnsRows(t *testing.T) {
 		forwarderCfg("qrz", "qrz", true, "insert", "update", "delete"),
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
+	_, qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)
 
 	dw := deleteQso(t, srv, qsoID)
 	if dw.Code != http.StatusNoContent {
@@ -137,7 +137,8 @@ func TestListUploads_SoftDeletedQsoStillReturnsRows(t *testing.T) {
 func TestListUploads_UnknownQsoReturns404(t *testing.T) {
 	srv := testServer(t)
 
-	w := listUploads(t, srv, 99999)
+	// Valid-format UUIDv7 that no row in this fresh DB carries.
+	w := listUploads(t, srv, utils.NewUUIDv7())
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusNotFound, w.Body.String())
 	}
@@ -150,15 +151,15 @@ func TestListUploads_InvalidIdReturns400(t *testing.T) {
 	srv := testServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/qso/abc/uploads", nil)
-	req.SetPathValue("id", "abc")
+	req.SetPathValue("uuid", "abc")
 	w := httptest.NewRecorder()
 	srv.handleListQsoUploads(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
-	if !containsExact(w.Body.String(), `"code":"invalid_id"`) {
-		t.Fatalf("body = %q, want invalid_id code", w.Body.String())
+	if !containsExact(w.Body.String(), `"code":"invalid_uuid"`) {
+		t.Fatalf("body = %q, want invalid_uuid code", w.Body.String())
 	}
 }
 

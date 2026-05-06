@@ -120,6 +120,7 @@ func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsi
 		}
 		item := types.ContactHistory{
 			ID:      typeQso.ID,
+			UUID:    typeQso.UUID,
 			Band:    typeQso.Band,
 			Freq:    typeQso.Freq,
 			Mode:    typeQso.Mode,
@@ -298,6 +299,84 @@ func (s *Service) FetchQsoByIdWithContext(ctx context.Context, id int64) (types.
 		return types.Qso{}, errors.New(op).WithErr(err)
 	}
 
+	return qso, nil
+}
+
+// FetchQsoByUUIDWithContext fetches a QSO by its UUIDv7 (the canonical
+// external identifier per ADR 0016). Mirrors FetchQsoByIdWithContext —
+// soft-deleted rows return ErrNotFound; format validation is a quick
+// reject on obviously-malformed input so the DB doesn't see garbage.
+func (s *Service) FetchQsoByUUIDWithContext(ctx context.Context, uuid string) (types.Qso, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoByUUIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return types.Qso{}, err
+	}
+	if uuid == "" {
+		return types.Qso{}, errors.New(op).WithMsg("uuid is required")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return types.Qso{}, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	model, err := models.Qsos(qm.Where(models.QsoColumns.UUID+"=?", uuid)).One(ctx, h)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return types.Qso{}, errors.ErrNotFound
+		}
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
+
+	qso, err := adapters.QsoModelToType(model)
+	if err != nil {
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
+	return qso, nil
+}
+
+// FetchQsoByUUIDIncludingDeletedWithContext is FetchQsoByUUIDWithContext
+// without the soft-delete filter — same role as the int-PK variant for
+// the uploads / forwarder paths that need to see soft-deleted rows.
+func (s *Service) FetchQsoByUUIDIncludingDeletedWithContext(ctx context.Context, uuid string) (types.Qso, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoByUUIDIncludingDeletedWithContext"
+	if err := checkService(op, s); err != nil {
+		return types.Qso{}, err
+	}
+	if uuid == "" {
+		return types.Qso{}, errors.New(op).WithMsg("uuid is required")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return types.Qso{}, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	model := &models.Qso{}
+	err = models.NewQuery(
+		qm.Select("*"),
+		qm.From(models.TableNames.Qso),
+		qm.Where(models.QsoColumns.UUID+"=?", uuid),
+		qm.Limit(1),
+	).Bind(ctx, h, model)
+
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return types.Qso{}, errors.ErrNotFound
+		}
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
+
+	qso, err := adapters.QsoModelToType(model)
+	if err != nil {
+		return types.Qso{}, errors.New(op).WithErr(err)
+	}
 	return qso, nil
 }
 

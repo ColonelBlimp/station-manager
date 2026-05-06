@@ -41,6 +41,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 	// ---- Restore immutables ----
 	// Structural identity — set at creation, never editable.
 	merged.ID = existing.ID
+	merged.UUID = existing.UUID
 	merged.LogbookID = existing.LogbookID
 	merged.DedupeKey = existing.DedupeKey
 	merged.LoggingStation.StationCallsign = existing.LoggingStation.StationCallsign

@@ -75,10 +75,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// QSO — POST /v1/qso carries the hottest per-endpoint cap (token
 	// bucket). See docs/v2-design/api.md §6 for the threat model.
 	mux.Handle("POST /v1/qso", s.limitSubmitRate(http.HandlerFunc(s.handleSubmitQso)))
-	mux.HandleFunc("GET /v1/qso/{id}", s.handleGetQso)
-	mux.HandleFunc("PATCH /v1/qso/{id}", s.handleUpdateQso)
-	mux.HandleFunc("DELETE /v1/qso/{id}", s.handleDeleteQso)
-	mux.HandleFunc("GET /v1/qso/{id}/uploads", s.handleListQsoUploads)
+	mux.HandleFunc("GET /v1/qso/{uuid}", s.handleGetQso)
+	mux.HandleFunc("PATCH /v1/qso/{uuid}", s.handleUpdateQso)
+	mux.HandleFunc("DELETE /v1/qso/{uuid}", s.handleDeleteQso)
+	mux.HandleFunc("GET /v1/qso/{uuid}/uploads", s.handleListQsoUploads)
 
 	// Logbook CRUD
 	mux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)
