@@ -534,6 +534,27 @@ in the logbook.
 
 ---
 
+## SM Cloud — explicitly deferred
+
+**Status:** Deferred per ADR 0016 (2026-05-06). NOT a milestone.
+
+A hosted multi-tenant SM Cloud service (multi-user, multi-logbook,
+browser-accessible, off-site backup) has long been on the operator's
+mind but has zero current drivers. ADR 0016 forecloses speculative
+Postgres / auth / multi-tenancy / public-API work in v1, and commits
+two cheap-now schema prep items (globally-unique time-ordered QSO
+IDs + edit/delete audit table) so that a future cloud build is a
+forwarder-driver-shaped change rather than a data-migration
+nightmare. See ADR 0016 for the full reasoning, the foreclosure
+list, and the triggers that would reopen the question.
+
+The two prep items are scheduled to land before milestone 3; they
+are independently valuable for v1 (stable external QSO IDs +
+"what did I change?" auditing) regardless of whether SM Cloud
+ever materialises.
+
+---
+
 ## What "done" does NOT mean
 
 Each milestone being "done" means the acceptance test passes and the

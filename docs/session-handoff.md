@@ -24,7 +24,33 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-05, sessions 34-36 — station-store migration + ADIF MY_* end-to-end SHIPPED + My Station UX iterated to sub-tabs + Update button. Daemon derives `MyLat`/`MyLon` from `MyGridsquare` (4/6/8-char Maidenhead → ADIF "XDDD MM.MMM"); zones+DXCC stay operator-typed for v1. `configState.loggingStation` carries the full operator-typed MY_* set as plain class fields; `MyStationPanel.svelte` is now a **sub-tabbed surface** (identity / location / equipment / CW) reusing the InfoPanel `tab-item`/`tab-button` styling, with an **Update button** at the bottom that PUTs the full `logging_station` block via `putConfig()` and re-hydrates from the response so canonical normalisations + derived `MyLat`/`MyLon` flow back into the UI. `formatAdifRecord` emits all MY_* + `OPERATOR` + `OWNER_CALLSIGN` + `ANT_AZ` with stable order; `QsoPanel.submitQso` sources every identity field from `configState`; legacy `lib/stores/station.ts` deleted. Bearing utility (`lib/utils/bearing.ts`) ready for country-panel hookup. All Go tests pass, all SPA tests pass, `svelte-check` clean. **Sessions 34-35 committed; session 36 UX iteration just committed by operator.**
+## Current state (as of 2026-05-06, session 37 design conversation captured ADR 0016 — SM Cloud deferred with two cheap-now schema prep items committed for next session. Code state unchanged from sessions 34-36: station-store migration + ADIF MY_* end-to-end SHIPPED, My Station sub-tabs + Update button + QSO sub-tab + CAT-off default power + notification toggles all live. Daemon derives `MyLat`/`MyLon` from `MyGridsquare` (4/6/8-char Maidenhead → ADIF "XDDD MM.MMM"); zones+DXCC stay operator-typed for v1. `configState.loggingStation` carries the full operator-typed MY_* set as plain class fields; `MyStationPanel.svelte` is the sub-tabbed surface (identity / location / equipment / CW / qso) with Update button. `formatAdifRecord` emits all MY_* + `OPERATOR` + `OWNER_CALLSIGN` + `ANT_AZ` with stable order; `QsoPanel.submitQso` sources every identity field from `configState`. Bearing utility (`lib/utils/bearing.ts`) ready for country-panel hookup. **Active prep work for session 38+: globally-unique time-ordered QSO IDs (UUIDv7/ULID) + edit/delete audit table per ADR 0016.**
+
+### Session 37 work (2026-05-06) — SM Cloud deferral captured (ADR 0016)
+
+Operator surfaced the long-held intent to eventually offer **SM Cloud** — a multi-tenant hosted service for multi-user / multi-logbook upload-edit-delete-from-anywhere. Distinct from ADR 0014 (upstream forwarding among the operator's own daemons): SM Cloud is a public-facing hosted product. Operator asked: plan now, or defer?
+
+**Decision (ADR 0016, Accepted 2026-05-06): defer the build, commit two cheap-now schema decisions.**
+
+Same shape as ADR 0014 (deferred-with-prep). The build is foreclosed in v1: no Postgres migration, no user/account model, no auth flows, no multi-tenant code paths, no public-facing API, no cloud-aware SPA. The local daemon stays single-operator, SQLite-backed. When "what about the cloud?" comes up in design, the answer is "ADR 0016 — out of scope until a real driver appears."
+
+Two prep items accepted as standing requirements because each is independently justified by v1 scope **and** retroactively unsalvageable once a populated log exists:
+
+1. **Globally-unique, time-ordered QSO identifier** — UUIDv7 or ULID (impl session picks), daemon-generated at create time, never reused, becomes the canonical external identifier across API responses, ADIF exports, future edit endpoints. Local int PK can stay as sqlboiler/storage detail. UUIDv4 explicitly rejected — index locality + debuggability win for time-ordered. Once a populated log exists, retro-assigning UUIDs is doable but external references and ADIF exports still carry the old shape.
+2. **Edit/delete audit table** — separate `qso_history`-shaped table (NOT a column on `qso`, NOT in `additional_data`), append-only, capturing `qso_id` (FK via UUID), `op`, `at`, `source`, `before_image`. Operator wants "what did I change last Tuesday?" auditing the moment a manual edit happens; ADIF re-imports are notorious for silent overwrites. Audit history is the *one* thing that cannot be backfilled — once an edit happens unrecorded, the before-image is gone.
+
+**Why this isn't ADR 0014's problem.** ADR 0014's prep covered the wire shape (forwarder driver layer + threaded auth + `additional_data` provenance + namespaced `enabled` flags). It did not cover schema. SM Cloud's "two operators uploading their logs cannot collide on QSO identity" need is schema-shaped, hence a new ADR.
+
+**Documentation pass this session.** ADR 0016 created. New memory file `project_sm_cloud_deferral.md` with `MEMORY.md` index entry. `docs/v2-design/milestones.md` gets a brief deferral note after Milestone 3 so the milestone doc cross-references the ADR rather than implying SM Cloud is on the roadmap. This handoff entry. No code changes this session — pure design / documentation.
+
+**What's next (carried into session 38+):**
+
+- **Implement the two ADR 0016 prep items.** Operator said "do the globally-unique ID/provenance trail next session and it is not too much work now." Concretely: add UUID column + index to QSO table, generate at create time, plumb through API responses; create `qso_history` audit table with append-only writes from the qsoservice update / delete paths; backfill existing rows' UUIDs sortable by `created_at` so time-ordering is preserved; pin in tests.
+- Country panel UI — wire `pathInfo()` for short/long-path display + populate `antAz` on submit when remote grid is known.
+- Daemon `GET /v1/enrich/callsign` per ADR 0005 — supplies remote gridsquare automatically.
+- Optional polish: daemon-side string-format validation for zones (`MyCqZone` 1-40, `MyITUZone` 1-90, `MyDxcc` digit-only).
+
+**Resume point:** session 38 starts with the ADR 0016 implementation. Read ADR 0016 + `project_sm_cloud_deferral.md` memory before designing the schema migration; the ADR pins the foreclosed alternatives so re-litigation isn't needed.
 
 ### Session 36 work (2026-05-05) — My Station panel UX iteration: sub-tabs + Update button
 

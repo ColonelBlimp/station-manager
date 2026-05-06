@@ -86,6 +86,14 @@ ADR 0014 defers cluster / multi-daemon work explicitly. A future shape — local
 
 **Do not pre-build cluster infrastructure.** ADR 0014 explicitly forecloses on master discovery, federation routing, multi-daemon UI, etc. The shape becomes real when a real driver appears.
 
+### Future: SM Cloud (multi-tenant hosted service)
+
+ADR 0016 defers the public-facing **SM Cloud** product (multi-user / multi-logbook hosted service, browser-accessible from anywhere, off-site backup) explicitly. Distinct from upstream forwarding above: SM Cloud is a separate codebase serving unrelated operators, not a master-daemon among one operator's own machines. When the cloud is built, the local daemon talks to it via one more forwarder driver (per ADR 0014's driver-shaped layer); the cloud itself decides its own storage and auth model in its own ADR.
+
+ADR 0016 commits two **schema-shaped prep items** that are cheap now and unrecoverable later: globally-unique time-ordered QSO IDs (UUIDv7/ULID — the canonical external identifier; local int PK stays as storage detail) and a `qso_history` append-only audit table for edit/delete provenance. Both are independently valuable for v1 (stable external IDs, "what did I change?" auditing) and they make a future SM Cloud upload a one-driver change rather than a log-wide re-identification.
+
+**Do not pre-build cloud infrastructure.** ADR 0016 forecloses Postgres migration, user/account models, OAuth flows, multi-tenant code paths, public-facing API surface, cloud-aware SPA. SQLite stays the local storage; daemon stays single-operator.
+
 ## How a QSO actually flows (default deployment)
 
 1. SPA opens an EventSource against `${configState.bridgeUrl}/v1/rig/events`. In the default deployment `bridgeUrl == daemonUrl`, so this is the daemon's own HTTP server, served by `internal/bridge`.
@@ -168,6 +176,7 @@ Daemon binds on `127.0.0.1` by default (loopback only — secure for the all-on-
 - **Bridge subsystem importing storage or forwarder.** Forbidden in the other direction. Bridge knows about rigs; storage knows about QSOs; the only shared types are in `internal/types`.
 - **Daemon-as-bridge-broker.** No proxying-bridge-data-from-a-separate-bridge-process pattern. In default deployment the daemon *is* the bridge (subsystem). In split-host deployment the SPA talks to the bridge directly; daemon does not relay.
 - **Speculative cluster infrastructure.** Per ADR 0014: no master discovery, no federation routing, no cluster config schema, no multi-daemon UI, no master-daemon-specific code. Upstream forwarding is a future driver, not a topology.
+- **Speculative cloud infrastructure.** Per ADR 0016: no Postgres migration, no user/account model, no auth flows, no multi-tenant code, no public-facing API, no cloud-aware SPA. SM Cloud is a future codebase, not a v1 topology concern.
 - **Two-process default.** ADR 0012's "two processes, two origins" topology is superseded by ADR 0013. The split-host deployment is opt-in, not the default.
 
 ## Connection to existing decisions
@@ -188,6 +197,7 @@ Daemon binds on `127.0.0.1` by default (loopback only — secure for the all-on-
 - ADR 0012 — superseded; preserved as the reasoning trail of how "two processes, two origins" was considered.
 - ADR 0013 — daemon owns the bridge as an internal subsystem; this document's load-bearing decision.
 - ADR 0014 — upstream forwarding deferred; names the four prep-work items justified by v1 scope today.
+- ADR 0016 — SM Cloud deferred; names two schema prep items (globally-unique time-ordered QSO IDs + edit/delete audit table) that are cheap now and unrecoverable later.
 - `bridge.md` — bridge architecture; `internal/bridge` package shape.
 - [ui-toolkit.md](ui-toolkit.md) — UI toolkit reconsideration; depends on this topology being SPA-friendly.
 - [cat-performance.md](cat-performance.md) — bridge-side perf analysis.
