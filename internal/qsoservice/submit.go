@@ -181,7 +181,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	} else {
 		existing, err := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
 		if err == nil {
-			return SubmitResult{Status: "duplicate", ID: existing.ID}, nil
+			return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
 		}
 		if !stderr.Is(err, errors.ErrNotFound) {
 			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("dedupe check failed")
@@ -189,6 +189,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	qso.DedupeKey = dedupeKey
+	qso.UUID = utils.NewUUIDv7()
 
 	// ---- Atomic write: QSO + upload-queue rows ----
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
@@ -221,7 +222,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(refetchCtx, logbookID, dedupeKey)
 			refetchCancel()
 			if ferr == nil {
-				return SubmitResult{Status: "duplicate", ID: existing.ID}, nil
+				return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
 			}
 			// If the row isn't there on the follow-up query, something
 			// stranger is going on — fall through to surface the
@@ -252,6 +253,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 
 	s.Logger.InfoWith().
 		Int64("qso_id", qsoID).
+		Str("uuid", qso.UUID).
 		Int64("logbook_id", logbookID).
 		Str("call", call).
 		Str("freq_mhz", freqMHz).
@@ -264,7 +266,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		LogbookID: logbookID,
 	})
 
-	return SubmitResult{Status: "stored", ID: qsoID}, nil
+	return SubmitResult{Status: "stored", UUID: qso.UUID, ID: qsoID}, nil
 }
 
 // isUniqueConstraintError reports whether err is a sqlite UNIQUE-index

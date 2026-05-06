@@ -59,6 +59,7 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 
 	return models.Qso{
 		ID:             qso.ID,
+		UUID:           qso.UUID,
 		LogbookID:      qso.LogbookID,
 		Call:           qso.ContactedStation.Call,
 		Band:           qso.QsoDetails.Band,

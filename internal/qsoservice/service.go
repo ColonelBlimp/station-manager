@@ -27,8 +27,15 @@ func (s *Service) Initialize() error {
 }
 
 // SubmitResult is the outcome of a QSO submission.
+//
+// UUID is the canonical external identifier per ADR 0016 (UUIDv7,
+// time-ordered, daemon-generated at create time). ID is the local
+// SQLite primary key kept for transitional compatibility while
+// callers migrate to UUID-keyed lookups; future surface-area work
+// (PUT/DELETE by UUID, ADIF emission of APP_SM_QSO_ID) is phase 2.
 type SubmitResult struct {
 	Status string `json:"status"` // "stored" or "duplicate"
+	UUID   string `json:"uuid"`
 	ID     int64  `json:"id"`
 }
 

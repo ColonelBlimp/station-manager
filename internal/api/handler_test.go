@@ -15,7 +15,12 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
+
+// utilsIsValidUUIDv7 is an alias to keep the assertion line in
+// TestSubmitQso_UUIDInResponse short.
+var utilsIsValidUUIDv7 = utils.IsValidUUIDv7
 
 // unmarshalJSON decodes a response body string into v.
 func unmarshalJSON(body string, v any) error {
@@ -553,6 +558,43 @@ func TestSubmitQso_Duplicate(t *testing.T) {
 	}
 }
 
+// TestSubmitQso_UUIDInResponse pins the ADR 0016 prep-item: every
+// stored or duplicate response carries a canonical UUIDv7. The store
+// path returns the freshly generated UUID; the duplicate path returns
+// the UUID of the row that already exists, so re-submits resolve to
+// the same external identifier.
+func TestSubmitQso_UUIDInResponse(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	first := submitQso(t, srv, lbID, testQsoADIF, false)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first submit: status = %d; body = %s", first.Code, first.Body.String())
+	}
+	var stored qsoservice.SubmitResult
+	if err := unmarshalJSON(first.Body.String(), &stored); err != nil {
+		t.Fatalf("decode first body: %v", err)
+	}
+	if stored.UUID == "" {
+		t.Fatalf("stored response missing uuid; body = %s", first.Body.String())
+	}
+	if !utilsIsValidUUIDv7(stored.UUID) {
+		t.Fatalf("stored uuid not valid v7: %q", stored.UUID)
+	}
+
+	second := submitQso(t, srv, lbID, testQsoADIF, false)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second submit: status = %d; body = %s", second.Code, second.Body.String())
+	}
+	var dup qsoservice.SubmitResult
+	if err := unmarshalJSON(second.Body.String(), &dup); err != nil {
+		t.Fatalf("decode dup body: %v", err)
+	}
+	if dup.UUID != stored.UUID {
+		t.Fatalf("duplicate uuid mismatch: got %q, want %q", dup.UUID, stored.UUID)
+	}
+}
+
 // TestSubmitQso_ConcurrentDuplicate is the deterministic regression test
 // for the H1 race: two concurrent submits with identical dedupe-key
 // inputs both pass the pre-transaction FetchQsoByDedupeKey and race
@@ -914,6 +956,9 @@ func TestGetQso(t *testing.T) {
 	}
 	if !strings.Contains(body, fmt.Sprintf(`"logbook_id":%d`, lbID)) {
 		t.Fatalf("body = %q, want logbook_id %d", body, lbID)
+	}
+	if !strings.Contains(body, fmt.Sprintf(`"uuid":%q`, r.UUID)) {
+		t.Fatalf("body = %q, want uuid %q", body, r.UUID)
 	}
 }
 

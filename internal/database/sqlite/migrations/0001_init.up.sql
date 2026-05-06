@@ -25,6 +25,22 @@ CREATE TABLE IF NOT EXISTS qso
     modified_at     DATETIME,
     deleted_at      DATETIME,
 
+    /* Globally-unique, time-ordered external identifier (UUIDv7 per RFC 9562).
+       Daemon-generated at create time, never reused. The canonical external
+       identifier across API responses, ADIF exports, and any future
+       inter-daemon synchronisation (per ADR 0016 — SM Cloud deferred prep).
+       The integer `id` PK above stays as the local storage key; `uuid` is
+       what callers see. UNIQUE-indexed; format is the standard 36-char
+       lowercase hex form (xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx). */
+    uuid            TEXT     NOT NULL UNIQUE CHECK (
+        length(uuid) = 36 AND
+        substr(uuid, 9, 1) = '-' AND
+        substr(uuid, 14, 1) = '-' AND
+        substr(uuid, 15, 1) = '7' AND
+        substr(uuid, 19, 1) = '-' AND
+        substr(uuid, 24, 1) = '-'
+    ),
+
     call            TEXT     NOT NULL CHECK (length(trim(call)) BETWEEN 1 AND 20),
     band            TEXT     NOT NULL CHECK (length(trim(band)) <= 10),
     mode            TEXT     NOT NULL CHECK (length(trim(mode)) <= 10),

@@ -19,6 +19,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/stub"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // randomDedupeKey produces a 64-char hex string that satisfies the
@@ -109,6 +110,7 @@ func (h *testHarness) seedLogbookAndQso() int64 {
 	}
 
 	qso := types.Qso{
+		UUID:      utils.NewUUIDv7(),
 		LogbookID: lbID,
 		ContactedStation: types.ContactedStation{
 			Call:    "M0CMC",

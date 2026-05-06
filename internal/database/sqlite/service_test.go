@@ -12,6 +12,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // testService wires a Service to an in-memory sqlite database, opens it,
@@ -66,7 +67,7 @@ func testService(t *testing.T) *Service {
 // "M0CMC" and the dedupe key is computed manually so rows inserted by
 // InsertQsoTx bypass qsoservice.
 func validTestQso(logbookID int64, call, band, mode, qsoDate, timeOn string) types.Qso {
-	q := types.Qso{LogbookID: logbookID}
+	q := types.Qso{LogbookID: logbookID, UUID: utils.NewUUIDv7()}
 	q.ContactedStation.Call = call
 	q.ContactedStation.Country = "Test"
 	q.QsoDetails.Band = band

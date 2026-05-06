@@ -29,6 +29,7 @@ type Qso struct {
 	CreatedAt      time.Time  `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
 	ModifiedAt     null.Time  `boil:"modified_at" json:"modified_at,omitempty" toml:"modified_at" yaml:"modified_at,omitempty"`
 	DeletedAt      null.Time  `boil:"deleted_at" json:"deleted_at,omitempty" toml:"deleted_at" yaml:"deleted_at,omitempty"`
+	UUID           string     `boil:"uuid" json:"uuid" toml:"uuid" yaml:"uuid"`
 	Call           string     `boil:"call" json:"call" toml:"call" yaml:"call"`
 	Band           string     `boil:"band" json:"band" toml:"band" yaml:"band"`
 	Mode           string     `boil:"mode" json:"mode" toml:"mode" yaml:"mode"`
@@ -52,6 +53,7 @@ var QsoColumns = struct {
 	CreatedAt      string
 	ModifiedAt     string
 	DeletedAt      string
+	UUID           string
 	Call           string
 	Band           string
 	Mode           string
@@ -70,6 +72,7 @@ var QsoColumns = struct {
 	CreatedAt:      "created_at",
 	ModifiedAt:     "modified_at",
 	DeletedAt:      "deleted_at",
+	UUID:           "uuid",
 	Call:           "call",
 	Band:           "band",
 	Mode:           "mode",
@@ -90,6 +93,7 @@ var QsoTableColumns = struct {
 	CreatedAt      string
 	ModifiedAt     string
 	DeletedAt      string
+	UUID           string
 	Call           string
 	Band           string
 	Mode           string
@@ -108,6 +112,7 @@ var QsoTableColumns = struct {
 	CreatedAt:      "qso.created_at",
 	ModifiedAt:     "qso.modified_at",
 	DeletedAt:      "qso.deleted_at",
+	UUID:           "qso.uuid",
 	Call:           "qso.call",
 	Band:           "qso.band",
 	Mode:           "qso.mode",
@@ -130,6 +135,7 @@ var QsoWhere = struct {
 	CreatedAt      whereHelpertime_Time
 	ModifiedAt     whereHelpernull_Time
 	DeletedAt      whereHelpernull_Time
+	UUID           whereHelperstring
 	Call           whereHelperstring
 	Band           whereHelperstring
 	Mode           whereHelperstring
@@ -148,6 +154,7 @@ var QsoWhere = struct {
 	CreatedAt:      whereHelpertime_Time{field: "\"qso\".\"created_at\""},
 	ModifiedAt:     whereHelpernull_Time{field: "\"qso\".\"modified_at\""},
 	DeletedAt:      whereHelpernull_Time{field: "\"qso\".\"deleted_at\""},
+	UUID:           whereHelperstring{field: "\"qso\".\"uuid\""},
 	Call:           whereHelperstring{field: "\"qso\".\"call\""},
 	Band:           whereHelperstring{field: "\"qso\".\"band\""},
 	Mode:           whereHelperstring{field: "\"qso\".\"mode\""},
@@ -219,8 +226,8 @@ func (r *qsoR) GetQsoUploads() QsoUploadSlice {
 type qsoL struct{}
 
 var (
-	qsoAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "additional_data", "dedupe_key", "logbook_id"}
-	qsoColumnsWithoutDefault = []string{"call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "dedupe_key", "logbook_id"}
+	qsoAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "uuid", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "additional_data", "dedupe_key", "logbook_id"}
+	qsoColumnsWithoutDefault = []string{"uuid", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "dedupe_key", "logbook_id"}
 	qsoColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "additional_data"}
 	qsoPrimaryKeyColumns     = []string{"id"}
 	qsoGeneratedColumns      = []string{"id"}
