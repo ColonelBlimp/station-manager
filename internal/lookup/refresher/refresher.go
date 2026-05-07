@@ -67,8 +67,21 @@ type Service struct {
 	sem       chan struct{}
 	wg        sync.WaitGroup
 
-	started atomic.Bool
-	stopped atomic.Bool
+	// mu serialises Schedule's started/stopped check + the synchronous
+	// wg.Add inside safego.GoTracked against Stop's "set stopped, then
+	// wg.Wait" sequence. Without it, a Schedule that interleaves with
+	// a concurrent Stop can issue wg.Add(1) AFTER Stop has already
+	// observed counter == 0 inside wg.Wait — and sync.WaitGroup
+	// semantics require an Add-with-positive-delta-while-counter-zero
+	// to happen-before any concurrent Wait. The Go runtime detects
+	// the violation and panics with "sync: WaitGroup misuse: Add
+	// called concurrently with Wait." Holding mu across both the
+	// state check and the GoTracked-internal Add closes that window;
+	// Stop's mu.Lock then drains any in-flight Schedule before
+	// reaching wg.Wait, so the Wait sees a complete counter.
+	mu      sync.Mutex
+	started bool // protected by mu
+	stopped bool // protected by mu
 
 	inFlight atomic.Int64
 	dropped  atomic.Int64
@@ -93,8 +106,9 @@ func (s *Service) Initialize() error {
 //
 // Idempotent — repeat calls are no-ops once started.
 func (s *Service) Start(ctx context.Context) error {
-	const op errors.Op = "refresher.Service.Start"
-	if !s.started.CompareAndSwap(false, true) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
 		return nil
 	}
 	if ctx == nil {
@@ -108,12 +122,12 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	s.parentCtx, s.cancel = context.WithCancel(ctx)
 	s.sem = make(chan struct{}, s.MaxInFlight)
+	s.started = true
 	if s.LoggerService != nil {
 		s.LoggerService.InfoWith().
 			Int("max_in_flight", s.MaxInFlight).
 			Msg("refresher: started")
 	}
-	_ = op
 	return nil
 }
 
@@ -127,12 +141,26 @@ func (s *Service) Start(ctx context.Context) error {
 // it returns. This is intentional — the alternative (force-kill
 // after timeout) doesn't compose with goroutines, and the project's
 // daemon shutdown is operator-triggered (no SLA pressure).
+//
+// Concurrency contract: Stop holds mu briefly to flip stopped and
+// snapshot cancel, then releases it before wg.Wait. The Lock-Unlock
+// pair acts as a barrier — any Schedule that beat Stop to the lock
+// has already completed its wg.Add by the time Stop's Lock returns,
+// so wg.Wait sees the full counter. Schedules arriving after Stop's
+// Unlock observe stopped=true and drop without touching the
+// WaitGroup.
 func (s *Service) Stop() error {
-	if !s.stopped.CompareAndSwap(false, true) {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
 		return nil
 	}
-	if s.cancel != nil {
-		s.cancel()
+	s.stopped = true
+	cancel := s.cancel
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 	s.wg.Wait()
 	if s.LoggerService != nil {
@@ -157,8 +185,18 @@ func (s *Service) Stop() error {
 // Panic safety: fn is run under safego.GoTracked, which recovers
 // any panic and logs it via onPanic. The semaphore slot is released
 // in a deferred block so a panicking fn doesn't leak the slot.
+//
+// Concurrency contract: the started/stopped check, the semaphore
+// acquire, and the synchronous wg.Add inside safego.GoTracked all
+// run under mu. Stop's matching Lock waits for any in-flight
+// Schedule to release before reaching wg.Wait, so we never call
+// wg.Add(1) after Stop has observed counter == 0 in wg.Wait — the
+// race that the Go runtime would detect as "WaitGroup misuse: Add
+// called concurrently with Wait."
 func (s *Service) Schedule(fn func(ctx context.Context)) {
-	if !s.started.Load() || s.stopped.Load() {
+	s.mu.Lock()
+	if !s.started || s.stopped {
+		s.mu.Unlock()
 		s.dropped.Add(1)
 		if s.LoggerService != nil {
 			s.LoggerService.WarnWith().Msg("refresher: schedule rejected — service not running")
@@ -170,6 +208,7 @@ func (s *Service) Schedule(fn func(ctx context.Context)) {
 	case s.sem <- struct{}{}:
 		// got a slot
 	default:
+		s.mu.Unlock()
 		s.dropped.Add(1)
 		if s.LoggerService != nil {
 			s.LoggerService.WarnWith().
@@ -181,6 +220,10 @@ func (s *Service) Schedule(fn func(ctx context.Context)) {
 	}
 
 	s.inFlight.Add(1)
+	// safego.GoTracked does wg.Add(1) synchronously, then spawns
+	// the goroutine. Holding mu across this call is the load-bearing
+	// piece of the lifecycle race fix — Stop's mu.Lock can't sneak
+	// between our state check and the Add.
 	safego.GoTracked(s.parentCtx, goroutineLabel, s.onPanic, func() {
 		defer func() {
 			<-s.sem
@@ -188,6 +231,7 @@ func (s *Service) Schedule(fn func(ctx context.Context)) {
 		}()
 		fn(s.parentCtx)
 	}, false /* respawn — refresh fns are one-shot */, &s.wg)
+	s.mu.Unlock()
 }
 
 // InFlight returns the current count of in-flight refreshes. Useful

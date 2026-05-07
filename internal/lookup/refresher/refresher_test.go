@@ -2,6 +2,7 @@ package refresher
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -283,6 +284,64 @@ func TestStart_Idempotent(t *testing.T) {
 }
 
 // ---- Panic recovery ----
+
+// TestSchedule_StopRace exercises the M1 race the code-review flagged:
+// concurrent Schedule + Stop where the Schedule's started/stopped check
+// could pass just before Stop's CAS, then Schedule's wg.Add could fire
+// after Stop's wg.Wait observed counter == 0. Prior to the mu fix, the
+// Go runtime could panic with "sync: WaitGroup misuse: Add called
+// concurrently with Wait."
+//
+// The test runs many iterations (each with fresh Service + interleaved
+// Schedule and Stop) and is most useful when run with -race; pre-fix,
+// at least some iterations would either race-detect or panic outright.
+func TestSchedule_StopRace_NoWaitGroupMisuse(t *testing.T) {
+	const iterations = 100
+	const schedulesPerIter = 16
+
+	for i := 0; i < iterations; i++ {
+		s := &Service{
+			LoggerService: &logging.Service{},
+			MaxInFlight:   8,
+		}
+		if err := s.Initialize(); err != nil {
+			t.Fatalf("iter %d: Initialize: %v", i, err)
+		}
+		if err := s.Start(context.Background()); err != nil {
+			t.Fatalf("iter %d: Start: %v", i, err)
+		}
+
+		// Spray Schedule calls from several goroutines while Stop fires
+		// from another. The interleaving is what we're trying to
+		// stress-test; the exact ordering doesn't matter — only that no
+		// goroutine panics with a WaitGroup-misuse error.
+		var sprayWg sync.WaitGroup
+		for k := 0; k < schedulesPerIter; k++ {
+			sprayWg.Add(1)
+			go func() {
+				defer sprayWg.Done()
+				s.Schedule(func(ctx context.Context) {
+					// Bail immediately on ctx cancel — we want fns to
+					// be cheap so Stop drains quickly.
+					select {
+					case <-ctx.Done():
+					default:
+					}
+				})
+			}()
+		}
+
+		stopErr := make(chan error, 1)
+		go func() {
+			stopErr <- s.Stop()
+		}()
+
+		sprayWg.Wait()
+		if err := <-stopErr; err != nil {
+			t.Fatalf("iter %d: Stop returned err: %v", i, err)
+		}
+	}
+}
 
 func TestSchedule_RecoversFnPanic(t *testing.T) {
 	s := newTestService(t, 4)
