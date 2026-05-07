@@ -291,6 +291,7 @@ the rationale.
 |---|---|---|
 | `GET` | `/v1/contact-history?call=<callsign>` | Contact history for a specific callsign — prior QSOs with this station across all logbooks. Drives the "recent contacts" panel when a new QSO is being drafted. |
 | `GET` | `/v1/contest-dupe?logbook=<id>&call=<callsign>&band=<band>&mode=<mode>` | Contest-rule dupe check. Per `docs/v1-analysis/invariants.md`, this is a different concept from general ingest dedupe — contest rules vary by contest, and the semantics are "has this station already been worked on this band/mode in this logbook under the current contest rules?" |
+| `GET` | `/v1/enrich/callsign?call=<callsign>` | Enrichment pipeline (ADR 0017). Aggregates country / station / source-indicator data for the callsign. **Always 200** — transient upstream failures fall through to "empty fields, source=none" rather than non-2xx, per the `enrichment never blocks logging` invariant. The SPA fires this on Tab-out from the Callsign field. See §7a for the response shape. |
 
 ### Events (apps/logging and apps/logbook)
 
@@ -479,6 +480,71 @@ paths.
   by `Server.MaxContactHistoryResults` (default 100). Each item
   carries `uuid` so the client can deep-link rows into the
   logbook viewer.
+
+- `GET /v1/enrich/callsign?call=<callsign>` — enrichment pipeline
+  per ADR 0017 (supersedes ADR 0005). Aggregates country and
+  station data for the callsign by reading the local domain tables
+  (`country` keyed on prefix, `contacted_station` keyed on
+  callsign), firing upstream calls (hamnut for country, the
+  callsign-class chain for station) on cold misses, and merging
+  the layers at the response boundary so the SPA gets a uniform
+  shape regardless of cache state.
+
+  **Always 200** per the `enrichment never blocks logging`
+  invariant — transport / upstream failures collapse into "empty
+  fields, source=none" rather than non-2xx. The 4xx paths are
+  reserved for malformed input (`400 missing_required_param` when
+  `call` is absent; `400 invalid_field_value` when `call` fails
+  the standard 3-32 chars + at-least-one-digit check). Internal
+  failures (DB error, etc.) still surface as 5xx via the standard
+  error envelope.
+
+  **Cancellation:** `r.Context()` is propagated through to the
+  orchestrator's upstream HTTP calls. SPA-side `AbortController`
+  on Tab-out cancels in-flight upstream calls promptly.
+
+  Response body shape (`lookup.Result`):
+
+  ```json
+  {
+    "callsign": "M0CMC",
+    "country": {
+      "name": "England",
+      "prefix": "M",
+      "ccode": "GBR",
+      "continent": "EU",
+      "cq_zone": "14",
+      "itu_zone": "27",
+      "dxcc_prefix": "G"
+    },
+    "station": {
+      "call": "M0CMC",
+      "name": "Marc Veary",
+      "qth": "Birmingham",
+      "gridsquare": "IO92",
+      "country": "England",
+      "cqz": "14",
+      "ituz": "27"
+    },
+    "country_source": "country_table",
+    "station_source": "qrz"
+  }
+  ```
+
+  The `_source` indicators tell the SPA where each layer's data
+  came from — useful for the operator's "is this from the local
+  cache or did we just fetch it?" mental model:
+
+  - `country_source`: `"country_table"` (cache hit, fresh or
+    stale) | `"hamnut"` (cold-miss upstream call) | `"none"` (no
+    data — hamnut down or disabled, no cache row).
+  - `station_source`: `"contacted_station"` (cache hit) |
+    `"qrz"` / `"hamqth"` / `"qrzcq"` (the chain provider that
+    won) | `"none"` (no chain provider had a record).
+
+  See `docs/v2-design/enrichment.md` for the read-state matrix
+  (9-cell cold/stale/fresh grid), filter+merge sequencing, and
+  the async-refresh contract.
 
 ### Config (operator-relevant subset of `config.json`)
 
