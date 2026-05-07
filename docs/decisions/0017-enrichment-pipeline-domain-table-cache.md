@@ -39,6 +39,9 @@ The operator runs in Malawi where internet is unreliable; offline capability is 
 10. **`contacted_station` two-path.** Enrichment lookup writes on chain hit (full row). QSO submit upserts whatever operator-collected fields are populated on the QSO (best-effort, outside the QSO transaction per the cache/enrichment-writes-are-best-effort half of the one-fails-all-fail invariant).
 11. **Refresh data wins on conflict, no per-field tracking.** When a provider refresh runs against a row the operator previously populated via QSO submit, the refresh overwrites. Reasoning: the `qso` row preserves "what was true at QSO time" as historical truth; `contacted_station` is a "next-time pre-fill" cache, allowed to be overwritten when a more current source catches up. No data is lost at the system level.
 12. **API surface mostly carries forward from ADR 0005.** URL stays `GET /v1/enrich/callsign?call=X`, always-200 stays (per the `enrichment never blocks logging` invariant), AbortController cancellation stays. The response **body** shape changes — ADR 0005's single `source` field with values `cache | hamnut | qrz | composite | none` doesn't fit the two-layer model; the replacement is one source indicator per layer (e.g., `countrySource: "country_table" | "hamnut" | "none"`, `stationSource: "contacted_station" | "qrz" | "hamqth" | "qrzcq" | "none"`). Exact JSON shape pinned at implementation time.
+13. **Always merge country into station at return time.** On every read state — fresh hit, stale hit, cold miss — the orchestrator's last step before responding is `MergeStationFromCountry(station, country)`: hamnut country fields populate the station's denormalized `Country` / `Cont` / `CQZ` / `ITUZ` / `DXCC` columns. Filter (`FilterToCallsignFields`) runs first to zero any QRZ-bug values from a chain provider; merge runs second to fill with hamnut truth. Pairing the two means the station's country fields are deterministically either hamnut's truth or empty — never the upstream's wrong values, even when hamnut is down.
+14. **Merge uses "only when different" semantics.** `MergeStationFromCountry` overwrites a station field only when the country source has a non-empty value AND that value differs from the station's existing value. Avoids no-op writes that would bump `modified_at` without a real change, and pairs correctly with the filter step (filter zeros → merge fills) without special-casing the cold path.
+15. **Read-state matrix is documented in `docs/v2-design/enrichment.md`.** The 9 cold/stale/fresh × cold/stale/fresh combinations and their write/refresh actions live in the design doc rather than this ADR — they're operational detail derived from rules 5–11 + 13–14, and would push the ADR past the convention's "two pages ceiling."
 
 ## Alternatives considered
 
@@ -64,6 +67,12 @@ Daemon periodically pings a known endpoint, maintains an "internet up" flag. Ham
 
 Rejected. Heavier than needed for a personal-operator tool — adds a background poller, raises the question of which endpoint to probe, doesn't actually save much over implicit fall-through (one timeout per cold Tab during an outage is acceptable).
 
+### Filter-only, no merge — leave station country fields empty after stripping QRZ-bug values
+
+Strip QRZ-bug `Country` / `CQZ` / `ITUZ` / `DXCC` / `Cont` from chain results, persist the empty values, and rely on the SPA composing country from `Result.Country` and station from `Result.Station` at render time. Simpler — no `MergeStationFromCountry` helper, no async re-merge logic.
+
+Rejected. Two reasons. (a) `contacted_station` is the source of country fields for ADIF export and for the `types.Qso.ContactedStation` embed at QSO-submit time — empty country columns there break ADIF export and force every consumer to compose country from two layers. (b) The merge is the natural place to centralise "country is hamnut-exclusive on write" — without it, every consumer of `contacted_station.country` has to know to overlay hamnut's truth, which is exactly the kind of drift the canonical-DTO rule guards against. Filter alone produces empty-but-correct rows; filter + merge produces full-and-correct rows at the same orchestrator boundary.
+
 ### Negative caching for unknown prefixes/callsigns
 
 When hamnut/chain return "no record," write a marker row to `country`/`contacted_station` so subsequent Tabs on the same unknown callsign/prefix skip the upstream call until the marker goes stale.
@@ -82,6 +91,7 @@ Still rejected for the same reasons given in ADR 0005: complexity not justified 
 
 - **Schema migration.** Add `last_refreshed_at` to both `country` and `contacted_station` (`DATETIME` nullable; `NULL` means "never refreshed, treat as stale on first read"). Pre-production, so amended in place to `0001_init.up.sql` rather than chained as `0002_*.sql`.
 - **Provider abstraction.** Interface for callsign-class providers, registry, priority-chain runner. Hamnut treated as a separate "country provider" — not in the chain.
+- **Filter + merge helpers at the orchestrator boundary.** `FilterToCallsignFields` zeros QRZ-bug country fields; `MergeStationFromCountry` fills them from hamnut truth using only-when-different semantics. The two helpers run on every read path (sync return + async refresh) so the station's denormalized country fields stay aligned with hamnut.
 - **Port v1 hamnut + QRZ-lookup.** Lift v1's `internal/lookup/hamnut/` and `internal/lookup/qrz/` into v2 idioms (`internal/errors` Op constants, `internal/iocdi` wiring, `types.*` canonical DTOs).
 - **Async-refresh machinery.** Bounded goroutine pool integrated with daemon shutdown, so a stale-hit Tab doesn't leak a goroutine on `smd` exit.
 - **HTTP handler `GET /v1/enrich/callsign?call=X`** implementing the three-state read policy.
