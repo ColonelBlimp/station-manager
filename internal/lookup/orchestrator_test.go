@@ -753,6 +753,92 @@ func TestEnrich_EmptyCallsign_NoneNone(t *testing.T) {
 	}
 }
 
+// ----- panic safety (M2 regression) -----
+
+// panickingCountryProvider panics on Lookup. Pre-fix, the orchestrator
+// spawned readCountry in a bare goroutine — the panic would crash the
+// daemon. Post-fix, safego.Go recovers the panic, the deferred channel
+// send delivers a zero-value outcome, and Enrich returns with
+// CountrySource=none rather than deadlocking.
+type panickingCountryProvider struct{ name string }
+
+func (p *panickingCountryProvider) Name() string      { return p.name }
+func (p *panickingCountryProvider) Initialize() error { return nil }
+func (p *panickingCountryProvider) Lookup(_ string) (types.Country, error) {
+	panic("synthetic country panic")
+}
+func (p *panickingCountryProvider) LookupWithContext(_ context.Context, _ string) (types.Country, error) {
+	panic("synthetic country panic")
+}
+
+type panickingCallsignProvider struct{ name string }
+
+func (p *panickingCallsignProvider) Name() string      { return p.name }
+func (p *panickingCallsignProvider) Initialize() error { return nil }
+func (p *panickingCallsignProvider) Lookup(_ string) (types.ContactedStation, error) {
+	panic("synthetic chain panic")
+}
+func (p *panickingCallsignProvider) LookupWithContext(_ context.Context, _ string) (types.ContactedStation, error) {
+	panic("synthetic chain panic")
+}
+
+func TestEnrich_PanicInCountryProvider_RecoveredAndNoDeadlock(t *testing.T) {
+	db := newTestSqlite(t)
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    &panickingCountryProvider{name: "panic-country"},
+		Chain:      nil,
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &syncRefresher{},
+	}
+
+	// Bound the call so a regression that re-introduces the deadlock
+	// surfaces as a test timeout rather than hanging the suite.
+	done := make(chan lookup.Result, 1)
+	go func() { done <- o.Enrich(context.Background(), "M0CMC") }()
+
+	select {
+	case got := <-done:
+		// Country panic → CountrySource normalised to "none";
+		// station empty since no chain is wired.
+		if got.CountrySource != lookup.SourceNone {
+			t.Errorf("CountrySource = %q, want %q (panic should be recovered as no-data)",
+				got.CountrySource, lookup.SourceNone)
+		}
+		if got.StationSource != lookup.SourceNone {
+			t.Errorf("StationSource = %q, want %q", got.StationSource, lookup.SourceNone)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Enrich deadlocked — defer-send-zero pattern broken")
+	}
+}
+
+func TestEnrich_PanicInChainProvider_RecoveredAndNoDeadlock(t *testing.T) {
+	db := newTestSqlite(t)
+	o := &lookup.Orchestrator{
+		DB: db,
+		Chain: []lookup.CallsignProvider{
+			&panickingCallsignProvider{name: "panic-chain"},
+		},
+		StationTTL: time.Hour,
+		Refresher:  &syncRefresher{},
+	}
+
+	done := make(chan lookup.Result, 1)
+	go func() { done <- o.Enrich(context.Background(), "M0CMC") }()
+
+	select {
+	case got := <-done:
+		if got.StationSource != lookup.SourceNone {
+			t.Errorf("StationSource = %q, want %q (panic should be recovered as no-data)",
+				got.StationSource, lookup.SourceNone)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Enrich deadlocked — defer-send-zero pattern broken")
+	}
+}
+
 func TestEnrich_NoProviders_NoneNone(t *testing.T) {
 	db := newTestSqlite(t)
 	o := &lookup.Orchestrator{DB: db, CountryTTL: time.Hour, StationTTL: time.Hour}

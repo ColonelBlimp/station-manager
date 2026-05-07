@@ -15,7 +15,8 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
-	"github.com/mattn/go-sqlite3"
+	moderncsqlite "modernc.org/sqlite"
+	moderncsqlitelib "modernc.org/sqlite/lib"
 )
 
 func (s *Service) getOpenHandle(op errors.Op) (*sql.DB, error) {
@@ -194,32 +195,49 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	return missing, nil
 }
 
-// isTransientPingError returns true if the error message indicates a transient condition worth a short retry.
-// isUniqueConstraintError reports whether err is a sqlite UNIQUE-index
+// IsUniqueConstraintError reports whether err is a sqlite UNIQUE-index
 // violation, including through wrapping. Used by Insert/Update paths
 // that need to translate constraint failures into typed sentinels
 // (e.g. errors.ErrDuplicateName) so handlers can map them to 409
 // without string-matching the driver's message.
 //
-// Belt and braces: try the typed sqlite3.Error first (the correct
-// detection), then fall back to matching the driver's stable
-// "UNIQUE constraint failed" message. The fallback exists because
-// sqlboiler wraps errors with `friendsofgo/errors.Wrap`, and if a
-// future version ever drops Unwrap interop the typed path would
-// silently stop matching. Mirrors the same helper in
-// internal/qsoservice/submit.go; promoting one canonical copy here
-// is deferred until a third caller appears.
-func isUniqueConstraintError(err error) bool {
+// Belt and braces: try the modernc-typed *sqlite.Error first (the
+// correct detection — the daemon's registered driver is
+// modernc.org/sqlite, so this is the type sqlboiler / database/sql
+// errors actually unwrap to), then fall back to matching the driver's
+// stable "UNIQUE constraint failed" message. The fallback exists
+// because sqlboiler wraps errors with `friendsofgo/errors.Wrap` and a
+// future version that drops Unwrap interop would silently stop
+// matching the typed branch.
+//
+// Exported so internal/qsoservice can call it without duplicating the
+// detection logic — the second-caller threshold the comment in the
+// previous local copy reserved for promotion has now been crossed
+// (qsoservice.Submit uses it for race-resolution; sqlite api_context
+// uses it for InsertLogbook / UpsertLogbook duplicate-name handling).
+//
+// SQLITE_CONSTRAINT (19) covers all constraint violations; the
+// extended code SQLITE_CONSTRAINT_UNIQUE (2067) is what UNIQUE-index
+// failures specifically produce. We accept either — modernc returns
+// the extended code, but the primary code path is the documented
+// fallback for drivers that don't expose extended codes.
+func IsUniqueConstraintError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var sqliteErr sqlite3.Error
+	var sqliteErr *moderncsqlite.Error
 	if stderr.As(err, &sqliteErr) {
-		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
-			sqliteErr.Code == sqlite3.ErrConstraint
+		code := sqliteErr.Code()
+		return code == moderncsqlitelib.SQLITE_CONSTRAINT_UNIQUE ||
+			code == moderncsqlitelib.SQLITE_CONSTRAINT
 	}
 	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
+
+// isUniqueConstraintError is the unexported alias kept so call sites
+// inside this package read naturally. New external callers should use
+// the exported IsUniqueConstraintError.
+func isUniqueConstraintError(err error) bool { return IsUniqueConstraintError(err) }
 
 func isTransientPingError(err error) bool {
 	if err == nil {

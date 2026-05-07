@@ -3,12 +3,14 @@ package lookup
 import (
 	"context"
 	stderrs "errors"
+	"fmt"
 	"strings"
 	"time"
 
 	sqlsvc "github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -161,12 +163,45 @@ func (o *Orchestrator) Enrich(ctx context.Context, callsign string) Result {
 		return Result{Callsign: callsign, CountrySource: SourceNone, StationSource: SourceNone}
 	}
 
+	// The two read paths run concurrently per ADR 0017 #5. Both
+	// goroutines route through safego.Go so a panic in readCountry /
+	// readStation (or anything they call — DB row mapper, upstream
+	// HTTP body parser, future logger field) is recovered and logged
+	// instead of crashing the daemon. The api `recoverPanic`
+	// middleware doesn't reach here — it only wraps the request
+	// goroutine, not its children.
+	//
+	// Each goroutine pre-declares its outcome variable and uses a
+	// deferred channel send so a panicking readCountry / readStation
+	// still produces a zero-value result on its channel (sources will
+	// read as "" and the merge below treats them as "no data"). That
+	// keeps Enrich's `<-cCh` / `<-sCh` from deadlocking when safego's
+	// recovered panic skips the inline send.
 	cCh := make(chan countryReadResult, 1)
 	sCh := make(chan stationReadResult, 1)
-	go func() { cCh <- o.readCountry(ctx, callsign) }()
-	go func() { sCh <- o.readStation(ctx, callsign) }()
+	safego.Go(ctx, "lookup.enrich.country", o.onPanic, func() {
+		var out countryReadResult
+		defer func() { cCh <- out }()
+		out = o.readCountry(ctx, callsign)
+	}, false /* respawn — Enrich is request-scoped, one-shot */)
+	safego.Go(ctx, "lookup.enrich.station", o.onPanic, func() {
+		var out stationReadResult
+		defer func() { sCh <- out }()
+		out = o.readStation(ctx, callsign)
+	}, false)
 	c := <-cCh
 	s := <-sCh
+
+	// On panic, the source field on the recovered outcome is the zero
+	// value (""), not SourceNone. Normalise so downstream consumers
+	// (the SPA's countrySource / stationSource indicators) always see
+	// one of the documented enum values.
+	if c.source == "" {
+		c.source = SourceNone
+	}
+	if s.source == "" {
+		s.source = SourceNone
+	}
 
 	// Strip QRZ-bug country fields off the station, then re-populate
 	// from hamnut's truth (if available). After these two steps the
@@ -407,4 +442,20 @@ func (o *Orchestrator) warn(msg string, err error) {
 		return
 	}
 	o.Logger.WarnWith().Err(err).Msg(msg)
+}
+
+// onPanic is the safego panic handler for the two Enrich-spawned
+// goroutines (readCountry / readStation). Logs the recovered panic
+// with the goroutine label + stack so a daemon-wide post-mortem can
+// pin the origin. No-ops when Logger is nil so tests that skip
+// logger wiring don't blow up.
+func (o *Orchestrator) onPanic(name string, p any, stack []byte) {
+	if o.Logger == nil {
+		return
+	}
+	o.Logger.ErrorWith().
+		Str("worker", name).
+		Str("panic", fmt.Sprintf("%v", p)).
+		Bytes("stack", stack).
+		Msg("orchestrator: enrich goroutine panicked")
 }

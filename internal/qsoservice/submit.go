@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
-	"github.com/mattn/go-sqlite3"
 )
 
 // Submit validates an ADIF record, checks for duplicates, and atomically
@@ -217,7 +217,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		// lookup is bounded and pure-read. Inheriting `ctx` would let
 		// a request-deadline expiry turn a known-duplicate into a
 		// generic 500 — the M2 finding from the 2026-05-02 review.
-		if isUniqueConstraintError(err) && !force {
+		if sqlite.IsUniqueConstraintError(err) && !force {
 			refetchCtx, refetchCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(refetchCtx, logbookID, dedupeKey)
 			refetchCancel()
@@ -285,23 +285,8 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	return SubmitResult{Status: "stored", UUID: qso.UUID, ID: qsoID}, nil
 }
 
-// isUniqueConstraintError reports whether err is a sqlite UNIQUE-index
-// violation, including through wrapping. Used in the Submit race-
-// resolution path above. Scoped to this package — if a second caller
-// ever wants the same check, promote it to a helper in the sqlite
-// package where the driver dependency lives.
-//
-// Belt and braces: try the typed sqlite3.Error first (the correct
-// detection), then fall back to matching the driver's stable
-// "UNIQUE constraint failed" message. The fallback exists because
-// sqlboiler wraps errors with `friendsofgo/errors.Wrap`, and if a
-// future version ever drops Unwrap interop the typed path would
-// silently stop matching.
-func isUniqueConstraintError(err error) bool {
-	var sqliteErr sqlite3.Error
-	if stderr.As(err, &sqliteErr) {
-		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
-			sqliteErr.Code == sqlite3.ErrConstraint
-	}
-	return strings.Contains(err.Error(), "UNIQUE constraint failed")
-}
+// (isUniqueConstraintError moved to sqlite.IsUniqueConstraintError —
+// see docs/decisions/0018-sqlite-driver-modernc.md. The previous
+// local copy detected the wrong driver's typed error type — daemon
+// uses modernc.org/sqlite, not mattn/go-sqlite3 — and fell through
+// to the substring fallback at runtime.)

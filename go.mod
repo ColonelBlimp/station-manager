@@ -10,7 +10,6 @@ require (
 	github.com/friendsofgo/errors v0.9.2
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/golang-migrate/migrate/v4 v4.19.1
-	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/rs/zerolog v1.35.0
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
@@ -38,6 +37,7 @@ require (
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

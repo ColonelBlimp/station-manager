@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
@@ -222,7 +223,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 		// the client's point of view this is a duplicate-key conflict,
 		// not a daemon error — translate it so the handler maps to 409
 		// the same way the pre-check path does.
-		if isUniqueConstraintError(err) {
+		if sqlite.IsUniqueConstraintError(err) {
 			return types.Qso{}, &SubmitError{
 				Code:    "duplicate_key",
 				Message: "edit would collide with another QSO in this logbook",
