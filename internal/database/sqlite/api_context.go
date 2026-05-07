@@ -827,6 +827,261 @@ func (s *Service) UpdateCountryWithContext(ctx context.Context, country types.Co
 	return nil
 }
 
+// FetchCountryByPrefixWithContext returns the country row for an exact
+// prefix match. Distinct from FetchCountryByCallsignWithContext, which
+// does the longest-prefix-match read-path lookup against a callsign.
+// This helper exists for write-path uses (the hamnut upserter checks
+// "is there already a row for this exact prefix?") and for tests that
+// verify what was just written.
+//
+// Returns errors.ErrNotFound when no row exists for that prefix.
+func (s *Service) FetchCountryByPrefixWithContext(ctx context.Context, prefix string) (types.Country, error) {
+	const op errors.Op = "sqlite.Service.FetchCountryByPrefixWithContext"
+	if err := checkService(op, s); err != nil {
+		return types.Country{}, err
+	}
+
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return types.Country{}, errors.New(op).WithMsg("prefix cannot be empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return types.Country{}, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	model, err := models.Countries(models.CountryWhere.Prefix.EQ(prefix)).One(ctx, h)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return types.Country{}, errors.ErrNotFound
+		}
+		return types.Country{}, errors.New(op).WithErr(err)
+	}
+
+	country, err := adapters.CountryModelToType(model)
+	if err != nil {
+		return types.Country{}, errors.New(op).WithErr(err)
+	}
+	return country, nil
+}
+
+// UpsertCountryWithContext writes the hamnut result for a prefix —
+// inserts on conflict-free, full-row replaces on conflict. Sets
+// last_refreshed_at to time.Now() before write so the orchestrator's
+// staleness check sees a fresh row immediately after.
+//
+// Per ADR 0017 #2 + #4, hamnut is the only writer of country data;
+// callsign-class providers must not call this. Per ADR 0017 #11, full
+// replace is correct for country because hamnut returns full data on
+// every write — there's no operator-typed-partial-then-merge concern
+// the way contacted_station has.
+func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Country) error {
+	const op errors.Op = "sqlite.Service.UpsertCountryWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	prefix := strings.TrimSpace(country.Prefix)
+	if prefix == "" {
+		return errors.New(op).WithMsg("country.Prefix cannot be empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	country.Prefix = prefix
+	country.LastRefreshedAt = time.Now()
+
+	// Preserve the existing PK on conflict so sqlboiler's Upsert generates
+	// a stable update path; new rows let AUTOINCREMENT assign.
+	if existing, ferr := s.FetchCountryByPrefixWithContext(ctx, prefix); ferr == nil {
+		country.ID = existing.ID
+	} else if !stderr.Is(ferr, errors.ErrNotFound) {
+		return errors.New(op).WithErr(ferr)
+	}
+
+	model, err := adapters.CountryTypeToModel(country)
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	model.ModifiedAt = null.TimeFrom(time.Now())
+
+	if err = model.Upsert(
+		ctx, h,
+		true,               // updateOnConflict
+		[]string{"prefix"}, // conflictColumns
+		boil.Infer(),       // updateColumns
+		boil.Infer(),       // insertColumns
+	); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("upserting country failed")
+	}
+	return nil
+}
+
+// UpsertContactedStationWithContext writes a callsign-class enrichment
+// result OR a QSO-submit-derived snapshot to contacted_station. Both
+// write paths share this helper per ADR 0017 #10.
+//
+// Conflict policy is non-empty-wins-per-field: if the new station has
+// a value for a field, it overwrites the existing row's value; if the
+// new station has an empty field, the existing row's value is kept.
+// The merge runs in Go (read existing, merge, write back) rather than
+// in SQL because most fields live in additional_data JSON, where SQL-
+// level merging is awkward.
+//
+// last_refreshed_at is set to time.Now() on every write — both insert
+// and update — so the orchestrator's staleness check works uniformly.
+//
+// Per ADR 0017 #11, when both old and new have a value for the same
+// field, the new value wins (refresh data wins). The qso row preserves
+// the original operator-typed value as historical truth, so this is
+// not a data-loss concern.
+func (s *Service) UpsertContactedStationWithContext(ctx context.Context, station types.ContactedStation) error {
+	const op errors.Op = "sqlite.Service.UpsertContactedStationWithContext"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	call := strings.TrimSpace(station.Call)
+	if call == "" {
+		return errors.New(op).WithMsg(errMsgEmptyCallsign)
+	}
+	station.Call = call
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	existing, ferr := s.FetchContactedStationByCallsignWithContext(ctx, call)
+	switch {
+	case ferr == nil:
+		// Merge — non-empty new fields overwrite, empty new fields keep
+		// existing values. Preserve PK from existing row.
+		merged := mergeContactedStation(existing, station)
+		merged.CSID = existing.CSID
+		merged.LastRefreshedAt = time.Now()
+
+		model, mErr := adapters.ContactedStationTypeToModel(merged)
+		if mErr != nil {
+			return errors.New(op).WithErr(mErr)
+		}
+		model.ModifiedAt = null.TimeFrom(time.Now())
+		if _, uErr := model.Update(ctx, h, boil.Infer()); uErr != nil {
+			return errors.New(op).WithErr(uErr).WithMsg("updating contacted_station failed")
+		}
+		return nil
+
+	case stderr.Is(ferr, errors.ErrNotFound):
+		// Cold insert — no merge needed.
+		station.LastRefreshedAt = time.Now()
+		model, mErr := adapters.ContactedStationTypeToModel(station)
+		if mErr != nil {
+			return errors.New(op).WithErr(mErr)
+		}
+		if iErr := model.Insert(ctx, h, boil.Infer()); iErr != nil {
+			return errors.New(op).WithErr(iErr).WithMsg("inserting contacted_station failed")
+		}
+		return nil
+
+	default:
+		return errors.New(op).WithErr(ferr)
+	}
+}
+
+// mergeContactedStation returns a copy of base with each field replaced
+// by the corresponding field from incoming when incoming's field is
+// non-empty (non-zero for typed values). Implements the ADR 0017 #11
+// "refresh data wins, but only on the fields the writer actually
+// supplied" merge semantic for contacted_station upserts.
+//
+// Internal to the Upsert helper — kept here so the merge rule lives
+// next to the helper that uses it.
+func mergeContactedStation(base, incoming types.ContactedStation) types.ContactedStation {
+	merged := base
+	if incoming.Address != "" {
+		merged.Address = incoming.Address
+	}
+	if incoming.Age != "" {
+		merged.Age = incoming.Age
+	}
+	if incoming.Altitude != "" {
+		merged.Altitude = incoming.Altitude
+	}
+	// Call is the lookup key — incoming.Call must equal base.Call for a
+	// merge to make sense; the caller has already trimmed and validated
+	// it. No conditional needed.
+	merged.Call = incoming.Call
+	if incoming.Cont != "" {
+		merged.Cont = incoming.Cont
+	}
+	if incoming.ContactedOp != "" {
+		merged.ContactedOp = incoming.ContactedOp
+	}
+	if incoming.Country != "" {
+		merged.Country = incoming.Country
+	}
+	if incoming.CQZ != "" {
+		merged.CQZ = incoming.CQZ
+	}
+	if incoming.DXCC != "" {
+		merged.DXCC = incoming.DXCC
+	}
+	if incoming.Email != "" {
+		merged.Email = incoming.Email
+	}
+	if incoming.EqCall != "" {
+		merged.EqCall = incoming.EqCall
+	}
+	if incoming.Gridsquare != "" {
+		merged.Gridsquare = incoming.Gridsquare
+	}
+	if incoming.Iota != "" {
+		merged.Iota = incoming.Iota
+	}
+	if incoming.IotaIslandId != "" {
+		merged.IotaIslandId = incoming.IotaIslandId
+	}
+	if incoming.ITUZ != "" {
+		merged.ITUZ = incoming.ITUZ
+	}
+	if incoming.Lat != "" {
+		merged.Lat = incoming.Lat
+	}
+	if incoming.Lon != "" {
+		merged.Lon = incoming.Lon
+	}
+	if incoming.Name != "" {
+		merged.Name = incoming.Name
+	}
+	if incoming.QTH != "" {
+		merged.QTH = incoming.QTH
+	}
+	if incoming.Sig != "" {
+		merged.Sig = incoming.Sig
+	}
+	if incoming.SigInfo != "" {
+		merged.SigInfo = incoming.SigInfo
+	}
+	if incoming.Web != "" {
+		merged.Web = incoming.Web
+	}
+	if incoming.WwffRef != "" {
+		merged.WwffRef = incoming.WwffRef
+	}
+	return merged
+}
+
 /**********************************************************************************************************************
  * Logbook Methods
  **********************************************************************************************************************/

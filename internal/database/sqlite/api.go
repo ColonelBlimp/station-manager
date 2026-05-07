@@ -66,12 +66,20 @@ func (s *Service) UpdateContactedStation(station types.ContactedStation) error {
 	return s.UpdateContactedStationWithContext(context.Background(), station)
 }
 
+func (s *Service) UpsertContactedStation(station types.ContactedStation) error {
+	return s.UpsertContactedStationWithContext(context.Background(), station)
+}
+
 /**********************************************************************************************************************
  * Country Methods
  **********************************************************************************************************************/
 
 func (s *Service) FetchCountryByCallsign(callsign string) (types.Country, error) {
 	return s.FetchCountryByCallsignWithContext(context.Background(), callsign)
+}
+
+func (s *Service) FetchCountryByPrefix(prefix string) (types.Country, error) {
+	return s.FetchCountryByPrefixWithContext(context.Background(), prefix)
 }
 
 func (s *Service) FetchCountryByName(name string) (types.Country, error) {
@@ -84,6 +92,10 @@ func (s *Service) InsertCountry(country types.Country) (int64, error) {
 
 func (s *Service) UpdateCountry(country types.Country) error {
 	return s.UpdateCountryWithContext(context.Background(), country)
+}
+
+func (s *Service) UpsertCountry(country types.Country) error {
+	return s.UpsertCountryWithContext(context.Background(), country)
 }
 
 /**********************************************************************************************************************

@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // Country carries the country / DXCC / zone enrichment fields for the
 // contacted station. It is referenced by types.Qso as the
 // `country_details` member and travels inside the qso row's
@@ -29,4 +31,13 @@ type Country struct {
 	LongPathBearing   string `json:"long_path_bearing,omitempty"`
 	IsNewEntity       bool   `json:"is_new_entity,omitempty"` // Indicates if this QSO is with a new country for the logging station
 	LocalTime         string `json:"local_time,omitempty"`
+
+	// LastRefreshedAt is the timestamp of the most recent hamnut write
+	// to this row's storage table. Populated by the read helper; used
+	// by the enrichment orchestrator to branch fresh / stale / cold
+	// per ADR 0017's three-state read policy. Zero means "never
+	// refreshed (NULL in DB), treat as stale on first read." Carried
+	// on the type so the orchestrator gets it in one fetch round-trip
+	// alongside the country fields.
+	LastRefreshedAt time.Time `json:"last_refreshed_at,omitempty"`
 }

@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // ContactedStation carries the ADIF "contacted station" fields. It is
 // one of three structs (alongside QsoDetails and LoggingStation)
 // embedded in types.Qso, and the marshalled form lands inside the qso
@@ -38,4 +40,13 @@ type ContactedStation struct {
 	SigInfo      string `json:"sig_info,omitempty"` // information associated with the contacted station's activity or interest group
 	Web          string `json:"web,omitempty"`
 	WwffRef      string `json:"wwff_ref,omitempty"`
+
+	// LastRefreshedAt is the timestamp of the most recent write to
+	// this row's storage table — either from a callsign-class
+	// enrichment lookup (QRZ, HamQTH, …) or from the QSO-submit
+	// upsert path (per ADR 0017 #10). Populated by the read helper;
+	// used by the enrichment orchestrator to branch fresh / stale /
+	// cold per ADR 0017's three-state read policy. Zero means "never
+	// refreshed (NULL in DB), treat as stale on first read."
+	LastRefreshedAt time.Time `json:"last_refreshed_at,omitempty"`
 }

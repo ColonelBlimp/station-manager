@@ -31,6 +31,10 @@ func ContactedStationModelToType(model *models.ContactedStation) (types.Contacte
 	station.Name = model.Name
 	station.Call = model.Call
 	station.Country = model.Country
+	// last_refreshed_at lives only on the column (cache-plumbing, not
+	// part of the additional_data blob shape). Zero time when NULL,
+	// which the orchestrator treats as "never refreshed → stale."
+	station.LastRefreshedAt = model.LastRefreshedAt.Time
 
 	return station, nil
 }
@@ -49,6 +53,9 @@ func CountryModelToType(model *models.Country) (types.Country, error) {
 		TimeOffset: model.TimeOffset,
 		CQZone:     model.CQZone,
 		ITUZone:    model.ItuZone,
+		// last_refreshed_at — zero time when NULL in DB; orchestrator
+		// treats zero as "never refreshed → stale" per ADR 0017.
+		LastRefreshedAt: model.LastRefreshedAt.Time,
 	}, nil
 }
 

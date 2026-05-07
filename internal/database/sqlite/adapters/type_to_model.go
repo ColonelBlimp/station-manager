@@ -3,6 +3,7 @@ package adapters
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -91,26 +92,38 @@ func ContactedStationTypeToModel(station types.ContactedStation) (models.Contact
 	}
 
 	return models.ContactedStation{
-		ID:             station.CSID,
-		Call:           station.Call,
-		Country:        station.Country,
-		Name:           station.Name,
-		AdditionalData: jsonData,
+		ID:              station.CSID,
+		Call:            station.Call,
+		Country:         station.Country,
+		Name:            station.Name,
+		AdditionalData:  jsonData,
+		LastRefreshedAt: nullableTime(station.LastRefreshedAt),
 	}, nil
 }
 
 func CountryTypeToModel(country types.Country) (models.Country, error) {
 	return models.Country{
-		ID:         country.ID,
-		Name:       country.Name,
-		CQZone:     country.CQZone,
-		ItuZone:    country.ITUZone,
-		Continent:  country.Continent,
-		Prefix:     country.Prefix,
-		Ccode:      country.Ccode,
-		DXCCPrefix: country.DXCCPrefix,
-		TimeOffset: country.TimeOffset,
+		ID:              country.ID,
+		Name:            country.Name,
+		CQZone:          country.CQZone,
+		ItuZone:         country.ITUZone,
+		Continent:       country.Continent,
+		Prefix:          country.Prefix,
+		Ccode:           country.Ccode,
+		DXCCPrefix:      country.DXCCPrefix,
+		TimeOffset:      country.TimeOffset,
+		LastRefreshedAt: nullableTime(country.LastRefreshedAt),
 	}, nil
+}
+
+// nullableTime maps a Go zero-time to a NULL DB column and a non-zero
+// time to a populated null.Time. Adapter-internal helper for the
+// last_refreshed_at columns added in ADR 0017's enrichment pipeline.
+func nullableTime(t time.Time) null.Time {
+	if t.IsZero() {
+		return null.Time{}
+	}
+	return null.TimeFrom(t)
 }
 
 func LogbookTypeToModel(logbook types.Logbook) (models.Logbook, error) {
