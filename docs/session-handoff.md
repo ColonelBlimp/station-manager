@@ -24,7 +24,108 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-06, session 38 SHIPPED ADR 0016 prep #1 — UUIDv7 as canonical external QSO identifier across the whole API + ADIF surface. Migration `0001_init.up.sql` edited in place (pre-production) to add `qso.uuid` NOT NULL UNIQUE with strict format CHECK; `internal/utils.NewUUIDv7` generates RFC 9562 v7 from `crypto/rand`; submit response carries `uuid` (transitional `id` shim retained for one release); GET/PATCH/DELETE/uploads handlers route by `{uuid}` and validate via `IsValidUUIDv7` → `400 invalid_uuid`; `internal/qsoservice` stamps UUID at submit and preserves it through update; sqlboiler models regenerated; SPA `submitQso` returns `{kind, uuid}` and the duplicate toast logs the UUID to the dev console while showing operator-readable callsign in the visible toast; `internal/adif` emits `APP_SM_QSO_ID` on every record (omit-when-empty). Tests: full Go suite green, 351 SPA tests green, two new ADIF tests pin emission + omit semantics. Known gap: SSE event payloads in `internal/events` still carry only int `qso_id` (no live consumer yet — `bridge.svelte.ts` stubbed); they grow `qso_uuid` when the SPA wires up event consumption. Code state for everything else unchanged from sessions 34-36: station-store migration + ADIF MY_* end-to-end SHIPPED, My Station sub-tabs + Update button + QSO sub-tab + CAT-off default power + notification toggles all live. Daemon derives `MyLat`/`MyLon` from `MyGridsquare`. `configState.loggingStation` carries the full operator-typed MY_* set as plain class fields; `MyStationPanel.svelte` is the sub-tabbed surface (identity / location / equipment / CW / qso). `formatAdifRecord` emits all MY_* + `OPERATOR` + `OWNER_CALLSIGN` + `ANT_AZ` + `APP_SM_QSO_ID` with stable order; `QsoPanel.submitQso` sources every identity field from `configState`. Bearing utility (`lib/utils/bearing.ts`) ready for country-panel hookup. **Active prep work remaining for session 39+: ADR 0016 prep #2 (qso_history append-only audit table) — schema lives only in the ADR draft; no `0002_*.sql` migration yet.**
+## Current state (as of 2026-05-07, session 40 — ADR 0016 prep #2 SHIPPED. Both prep items from ADR 0016 (SM Cloud deferred-with-prep) are now shipped: prep #1 UUIDv7 as canonical QSO identifier (session 38), prep #2 `qso_history` append-only audit table (this session). New `qso_history` table appended in-place to `0001_init.up.sql` (pre-production); audit scope is UPDATE + DELETE only, INSERT not audited because origin already lives in `additional_data` per ADR 0014 prep #4. FK by `qso_uuid` (canonical external identifier per prep #1, survives any renumbering). `before_image` is the full `json.Marshal(types.Qso)` snapshot of the pre-mutation row, not a diff (negligible storage at personal-operator scale, trivial to replay). Append-only enforced both by code path (daemon never UPDATEs/DELETEs the table) and by `BEFORE UPDATE`/`BEFORE DELETE` triggers (`RAISE(ABORT, 'qso_history is append-only…')`) — belt-and-braces against manual sqlite3 sessions. The audit-row insert shares the QSO mutation's transaction under one-fails-all-fail. New `internal/enums/source/` enum mirroring `internal/enums/upload/action/` shape; `source.API = "api"` declared today (PATCH/DELETE on `/v1/qso/{uuid}`); future sources added one constant at a time. `qsoservice.Update` gained a `src source.Source` param; `qsoservice.Delete` reshaped from `Delete(ctx, id int64)` to `Delete(ctx, existing types.Qso, src source.Source)` so the handler-fetched snapshot is reused (no second DB round-trip; snapshot guaranteed to match what the operator was looking at). New helpers: `sqlite.Service.InsertQsoHistoryTx` (write), `FetchQsoHistoryByUUIDWithContext` (read, ordered `at ASC, id ASC`). New DTO: `types.QsoHistory` with raw `BeforeImage []byte` so consumers either deserialize into `types.Qso` or forward intact to SM Cloud sync. Tests cover happy path, append-only triggers, multi-edit accumulation, op/source/image guards. Full suite green. **No operator-facing endpoint shipped** — only the storage + write hooks; "show edit history for this QSO" SPA endpoint is a separate future task. Carry-over from session 38: prep #1 UUIDv7 shipped, all QSO-keyed paths route by UUID; SSE event payloads still carry only int `qso_id` (no live consumer yet — `bridge.svelte.ts` stubbed) and grow `qso_uuid` when the SPA wires up event consumption — known wire-shape gap documented in api.md §4.5. Carry-over from sessions 34-36: station-store migration + ADIF MY_* end-to-end SHIPPED, My Station sub-tabs + Update button + QSO sub-tab + CAT-off default power + notification toggles all live; `formatAdifRecord` emits all MY_* + `OPERATOR` + `OWNER_CALLSIGN` + `ANT_AZ` + `APP_SM_QSO_ID` with stable order. Bearing utility (`lib/utils/bearing.ts`) ready for country-panel hookup.
+
+### Session 40 work (2026-05-07) — ADR 0016 prep #2 SHIPPED: qso_history append-only audit table
+
+Picked up exactly where session 39 left off — the design call (option (a): audit UPDATE+DELETE only, NOT INSERT) and the schema were locked in the session 39 entry, so the work was straight implementation.
+
+**Migration (`0001_init.up.sql` + `.down.sql`).** `qso_history` table appended in place per the agreed shape: `id` AUTOINCREMENT PK, `qso_uuid` TEXT NOT NULL FK to `qso(uuid)` (UUID — not int — so audit rows survive any future renumbering or cross-daemon sync), `op` TEXT CHECK `op IN ('update','delete')`, `at` DATETIME DEFAULT `datetime('now','localtime')`, `source` TEXT NOT NULL (freetext — daemon writes typed values from the new source enum), `before_image` JSON NOT NULL CHECK `json_valid(before_image)`. `idx_qso_history_qso_uuid (qso_uuid, at)` for the lookup-by-QSO-time-ordered shape. Two `BEFORE UPDATE` / `BEFORE DELETE` triggers (`trg_qso_history_no_update` / `trg_qso_history_no_delete`) `RAISE(ABORT, 'qso_history is append-only — UPDATE/DELETE not permitted')`. Down migration drops triggers + index + table in reverse-FK order. FK uses `ON DELETE NO ACTION` because the QSO is soft-deleted, not removed — the FK row stays intact.
+
+**Source enum (`internal/enums/source/source.go`).** Mirrors `internal/enums/upload/action/`. `Source string` typed alias, `API Source = "api"` constant (`source.API`, not `source.SourceAPI` — package-qualified). `String()` + `Parse(s)` methods. Only `API` declared today; future sources (worker, importer, cli) added one constant at a time as they appear. Doc comment notes the column is freetext on the DB side, so values read back may be outside the typed set.
+
+**sqlboiler regen.** Blew away `build/db/data.db`, applied the migration to a fresh DB via `sqlite3 < 0001_init.up.sql`, then `cd internal/database/sqlite && sqlboiler sqlite3` per `sqlboiler.toml`. New `models/qso_history.go` generated. `BeforeImage` lands as `types.JSON` (from `aarondl/sqlboiler/v4/types`, imported as `boiltypes` in `api_context.go` to avoid colliding with the project's `internal/types` package).
+
+**`InsertQsoHistoryTx` helper (`api_context.go`).** Slots in next to the other `*Tx` helpers. Signature `InsertQsoHistoryTx(ctx, tx, qsoUUID, mutationOp action.Action, src source.Source, beforeImage []byte)`. Reuses `action.Action` for the op param rather than building a parallel `historyOp` enum (the string set overlaps; "build specific not generic" rule, plus `types is canonical DTO`). Validates: tx non-nil, qsoUUID non-empty, mutationOp ∈ {Update, Delete} (rejects Insert before SQL CHECK fires for clearer error), src non-empty, beforeImage non-empty. Insert via sqlboiler `model.Insert(ctx, tx, boil.Infer())` (project rule: sqlboiler default, raw SQL only with stated reason). `at` left to SQL DEFAULT so the timestamp comes from the database, not Go wall-clock.
+
+**`FetchQsoHistoryByUUIDWithContext` (`api_context.go`).** Read helper returning `[]types.QsoHistory` ordered `at ASC, id ASC`. Used by tests today; future operator-facing "show edit history" endpoint will use the same helper.
+
+**DTO (`types/qso_history.go`).** Five fields plus `BeforeImage []byte` (raw JSON — the consumer either deserializes into `types.Qso` for display or forwards intact to SM Cloud sync). Adapter `QsoHistoryModelToType` in `database/sqlite/adapters/model_to_type.go` does the model→DTO mapping (`[]byte(model.BeforeImage)`).
+
+**`qsoservice.Update` hook.** Added `src source.Source` param. Just before `tx.Commit()` (after the upload-queue insert loop), `json.Marshal(existing)` — the pre-edit snapshot, NOT `merged` — and `s.DB.InsertQsoHistoryTx(ctx, tx, existing.UUID, action.Update, src, beforeImage)`. Both potential failure points roll the tx back so the QSO update doesn't commit without its audit row.
+
+**`qsoservice.Delete` hook + signature reshape.** Resolved the open question from session 39: pass the snapshot from the handler instead of fetching inside the tx. The handler already fetches the QSO at handler_qso.go:50 to resolve UUID→ID, so reusing that result avoids a second DB round-trip and guarantees the audit row's `before_image` matches what the operator was looking at when they triggered the delete. New signature: `Delete(ctx context.Context, existing types.Qso, src source.Source) error`. Internal logic uses `existing.ID` and `existing.UUID`. Same atomicity story as Update.
+
+**Handler wiring (`handler_qso.go`).** `handleUpdateQso` passes `source.API` to `s.qso.Update`. `handleDeleteQso` passes the already-fetched `qso` (full snapshot) plus `source.API` to `s.qso.Delete`.
+
+**Tests.** Two new files:
+- `internal/database/sqlite/qso_history_test.go` — DB-level. `TestInsertQsoHistoryTx_HappyPath`, `TestInsertQsoHistoryTx_RejectsInsertOp`, `TestInsertQsoHistoryTx_RejectsEmptyArgs` (table-driven uuid/source/image guards), `TestQsoHistory_AppendOnly_TriggersFire` (UPDATE and DELETE both rejected by trigger, row survives), `TestFetchQsoHistoryByUUID_OrderedAscending` (3 rows, insertion order preserved), `TestFetchQsoHistoryByUUID_EmptyForUnknownUUID`. Includes a test-only `insertQsoHistory` helper mirroring the existing `enqueueUpload` shape.
+- `internal/api/handler_qso_history_test.go` — e2e via PATCH/DELETE. `TestE2E_PatchWritesAuditRow` (one row, op=update, source=api, snapshot is pre-edit not merged — verified by checking `comment` is empty in snapshot but PATCH set it), `TestE2E_DeleteWritesAuditRow` (one row, op=delete, source=api, snapshot has the QSO's call), `TestE2E_TwoEditsAccumulateHistory` (two PATCHes → two rows in temporal order, second snapshot's comment matches what the first PATCH set).
+
+Full suite green (cmd/smd, all internal/* packages). One micro-fix during test authoring: `types.Qso` doesn't have a `DeletedAt` field, so dropped a "snapshot DeletedAt is zero" assertion that turned out to be checking a non-existent struct field (the soft-delete column lives on the DB row, not the type).
+
+**Documentation pass.**
+- `docs/decisions/0016-sm-cloud-deferred-with-prep.md` — appended "Implementation outcome (session 40, 2026-05-07): SHIPPED" paragraph to prep #2's section. Updated the Consequences "Signed up for" bullet on `qso_history` to reflect the shipped shape (UPDATE/DELETE only scope, FK by UUID, full JSON snapshot, trigger-enforced append-only).
+- `docs/v2-design/api.md` — PATCH and DELETE bullets in §7a now note the audit-trail behaviour (one row appended in the same tx, op/source/before_image shape).
+- `docs/v2-design/milestones.md` — SM Cloud section, prep #2 flipped from NOT STARTED to SHIPPED with full implementation breakdown. Audit date bumped to 2026-05-07.
+- `memory/project_sm_cloud_deferral.md` — prep #2 entry rewritten from "NOT STARTED" to "SHIPPED 2026-05-07 (session 40)" with the full schema + helper + DTO + enum breakdown.
+- This session-handoff entry replaces the session 39 placeholder.
+
+**What's next:**
+
+- Both ADR 0016 prep items are now shipped. SM Cloud itself stays deferred per ADR 0016 — no Postgres / multi-tenancy / auth / cloud-aware UI work, just the schema readiness that the prep items provided.
+- Open threads from session 36-37, still unstarted: country panel UI (wire `pathInfo()` for short/long-path display + populate `antAz` on submit when remote grid is known); daemon `GET /v1/enrich/callsign` per ADR 0005 (supplies remote gridsquare automatically); optional polish on daemon-side validation for `MyCqZone` / `MyITUZone` / `MyDxcc` digit-only / range checks.
+- Future SM Cloud-flavoured task (NOT urgent, NOT a blocker): an operator-facing "show edit history for this QSO" endpoint + SPA panel. The storage and read helper are now in place; this would be the UI on top.
+
+### Session 39 work (2026-05-07) — ADR 0016 prep #2 (qso_history audit table) — DESIGN AGREED, no code (power outage)
+
+Operator opened the session asking what was next; offered the two carry-forward options from session 38. Operator picked prep #2 (qso_history audit table) and pinned the same in-place migration approach as session 38: amend `0001_init.up.sql` rather than introducing a `0002_*.sql`, because the project hasn't gone to production. Power went out before any edits landed.
+
+**Design call locked this session — option (a):** audit table records UPDATE + DELETE only, NOT INSERT. Reason: the ADR 0016 headline says "edit/delete provenance trail" and origin/source for the *initial* insert is already covered by `additional_data` provenance fields per ADR 0014 prep #4 (`received_from` / `originated_by`), so auditing inserts would duplicate what `additional_data` already carries. The ADR 0016 consequences-list mention of `op IN ('insert','update','delete')` is the broader phrasing; the headline shape is what we're building. CHECK constraint accordingly tightens to `op IN ('update','delete')`.
+
+**Agreed schema (to be added in-place to `0001_init.up.sql`):**
+
+```sql
+CREATE TABLE IF NOT EXISTS qso_history (
+    id           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    qso_uuid     TEXT NOT NULL,
+    op           TEXT NOT NULL CHECK (op IN ('update','delete')),
+    at           DATETIME NOT NULL DEFAULT (datetime('now','localtime')),
+    source       TEXT NOT NULL,
+    before_image JSON NOT NULL CHECK (json_valid(before_image)),
+    CONSTRAINT fk_qso_history_qso FOREIGN KEY (qso_uuid)
+        REFERENCES qso(uuid) ON DELETE NO ACTION
+);
+CREATE INDEX IF NOT EXISTS idx_qso_history_qso_uuid ON qso_history (qso_uuid, at);
+
+-- Append-only enforcement (belt + braces — daemon code never UPDATEs/DELETEs
+-- these rows; the triggers ensure that bug-introduced or schema-cleanup
+-- attempts hit a hard error rather than silently rewriting history).
+CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_update
+    BEFORE UPDATE ON qso_history
+BEGIN
+    SELECT RAISE(ABORT, 'qso_history is append-only — UPDATE not permitted');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_delete
+    BEFORE DELETE ON qso_history
+BEGIN
+    SELECT RAISE(ABORT, 'qso_history is append-only — DELETE not permitted');
+END;
+```
+
+**Why FK by qso_uuid (not qso.id):** the canonical external identifier per ADR 0016 is the UUID, and the audit history outlives any future schema reshuffle that touches the int PK; references qso(uuid) which is already UNIQUE NOT NULL.
+
+**Why before_image is full JSON snapshot (not diff):** trivial to compute (`json.Marshal(existing types.Qso)`) and trivial to reconstruct. At personal-operator scale (thousands of QSOs, dozens of edits per year) the storage cost is negligible. Diff would be a premature optimisation.
+
+**Source field is freetext (no CHECK).** First implementation passes `"api"` from the HTTP handler. Future sources (`"adif_import"` for `cmd/importer`, etc.) add labels without migration churn. Constants will live in a new `internal/enums/source/` package mirroring `internal/enums/upload/action/`.
+
+**Resume point — session 40 picks up exactly here.** The TaskList for the work was created in session 39 (#49–#54) and is still pending; reuse those tasks rather than re-creating. Steps in order:
+
+1. **Amend `0001_init.up.sql`** with the `qso_history` block above. Update `0001_init.down.sql` to drop the triggers + index + table in correct order (triggers before table; table before `qso` since `qso_history` references it).
+2. **Add `internal/enums/source/source.go`** mirroring `internal/enums/upload/action/`. v1 constants: `SourceAPI = "api"`. Type `Source string` + `String()` + `Parse(s)` for symmetry.
+3. **Regenerate sqlboiler models.** Process: blow away `build/db/data.db` if present, run the migration to a fresh DB (or open the daemon once against a fresh working dir), then `cd internal/database/sqlite && sqlboiler sqlite3` per `sqlboiler.toml`. Generated `models/qso_history.go` will appear alongside the existing models.
+4. **Add `InsertQsoHistoryTx(ctx, tx, qsoUUID, op, source, beforeImage)` on `sqlite.Service`** in `api_context.go` next to the other `*Tx` helpers (line ~1689 onwards). Default to sqlboiler's `model.Insert(ctx, tx, boil.Infer())` per the project's "sqlboiler default" rule. Note: `before_image` accepts `[]byte` (raw JSON) — sqlboiler typically maps JSON columns to `null.JSON` or `types.JSON`; the regen will tell us which. If it lands as `null.JSON`, wrap with `null.JSONFrom([]byte)`.
+5. **Hook `qsoservice.Update`:** add `source string` param; before the `tx.Commit()`, marshal `existing` (the pre-edit snapshot, NOT `merged`) with `json.Marshal` and call `s.DB.InsertQsoHistoryTx(ctx, tx, existing.UUID, "update", source, beforeImage)`. Same one-fails-all-fail tx envelope.
+6. **Hook `qsoservice.Delete`:** signature changes to `Delete(ctx, id, source string)` — but the handler currently passes `int64` only. Refactor so the handler fetches the QSO snapshot before calling Delete (it already does — `qso, err := s.db.FetchQsoByUUIDWithContext(...)` at handler_qso.go:50), and either pass that snapshot down to Delete OR have Delete itself fetch by ID inside the tx for snapshot consistency. Cleaner shape: Delete signature becomes `Delete(ctx, id, source string)` and Delete itself does `existing, err := s.DB.FetchQsoByIDTx(ctx, tx, id)` (need to add this if it doesn't exist) so the snapshot is read inside the tx — guarantees consistency under concurrent updates.
+7. **Update `handler_qso.go`** call sites to pass `source.SourceAPI` (or just `"api"` if the enum import is overkill for v1).
+8. **Tests** in `internal/qsoservice/audit_test.go` (or extend `delete_test.go` / `update_test.go`):
+   - Update writes a row: `op="update"`, `qso_uuid` matches the QSO, `before_image` round-trips back to the pre-edit `types.Qso`, `source` flows through.
+   - Delete writes a row with `op="delete"`, snapshot is the pre-delete state.
+   - Append-only triggers: direct `UPDATE qso_history SET ...` and `DELETE FROM qso_history` both error.
+   - Atomicity: if `InsertQsoHistoryTx` fails (e.g. force a `before_image` violating json_valid by passing non-JSON bytes), the QSO mutation rolls back. Symmetric with the existing `qso_upload` rollback test pattern.
+9. **Documentation pass:** ADR 0016 — append "Implementation outcome (session 40, 2026-05-XX): SHIPPED — qso_history table..." paragraph after prep #2's cloud-readiness payoff. `docs/v2-design/api.md` — note that PATCH/DELETE now write audit rows (informational, no API surface change). `docs/v2-design/milestones.md` SM Cloud section — flip prep #2 from NOT STARTED to SHIPPED. `memory/project_sm_cloud_deferral.md` — same. session-handoff: move this entry to "Session 40 work" with full implementation breakdown, replace this placeholder.
+
+**Open question deferred to implementation:** does `Delete` snapshot inside the tx (FetchQsoByIDTx — needs new helper) or accept a snapshot param from the handler (handler already has one in scope)? Lean toward inside-tx for consistency under concurrent edits, but it's a one-line preference and either works.
 
 ### Session 38 work (2026-05-06) — ADR 0016 prep #1 SHIPPED: UUIDv7 as canonical QSO identifier
 

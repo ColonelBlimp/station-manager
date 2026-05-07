@@ -204,3 +204,54 @@ CREATE INDEX IF NOT EXISTS idx_qso_upload_pending
 CREATE INDEX IF NOT EXISTS idx_qso_upload_uploaded
     ON qso_upload (forwarder_name, modified_at)
     WHERE status = 'uploaded';
+
+-- qso_history — append-only audit table for QSO mutations (ADR 0016 prep #2).
+-- Captures the pre-edit/pre-delete snapshot for every UPDATE and DELETE on a
+-- QSO. INSERTs are deliberately not audited here — initial-insert provenance
+-- already lives on qso.additional_data via the source-tagging pass from
+-- ADR 0014 prep #4. The before_image is the full json.Marshal(types.Qso) of
+-- the row prior to mutation; we keep the whole snapshot rather than a diff
+-- because at personal-operator scale the storage cost is negligible and a
+-- complete snapshot is trivial to replay or export.
+--
+-- FK is by qso_uuid (not qso.id): UUID is the canonical external identifier
+-- and survives any internal renumbering or cross-daemon synchronisation
+-- (the same shape SM Cloud will need). ON DELETE NO ACTION is intentional —
+-- audit rows must outlive their QSO; deleting a QSO soft-deletes (sets
+-- deleted_at) rather than removing the row, so the FK stays satisfied.
+--
+-- Append-only is enforced by BEFORE UPDATE / BEFORE DELETE triggers below.
+-- This is belt-and-braces on top of "the daemon never UPDATEs/DELETEs this
+-- table"; the triggers also prevent accidental damage from manual sqlite3
+-- sessions.
+CREATE TABLE IF NOT EXISTS qso_history
+(
+    id           INTEGER  NOT NULL PRIMARY KEY AUTOINCREMENT,
+    qso_uuid     TEXT     NOT NULL,
+    op           TEXT     NOT NULL CHECK (op IN ('update', 'delete')),
+    at           DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')),
+    source       TEXT     NOT NULL,
+    before_image JSON     NOT NULL CHECK (json_valid(before_image)),
+    CONSTRAINT fk_qso_history_qso FOREIGN KEY (qso_uuid)
+        REFERENCES qso (uuid) ON DELETE NO ACTION
+);
+
+-- Lookup by QSO, time-ordered — operator-facing "show edit history for this
+-- QSO" reads, plus future SM Cloud sync queries.
+CREATE INDEX IF NOT EXISTS idx_qso_history_qso_uuid
+    ON qso_history (qso_uuid, at);
+
+-- Append-only enforcement
+CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_update
+    BEFORE UPDATE
+    ON qso_history
+BEGIN
+    SELECT RAISE(ABORT, 'qso_history is append-only — UPDATE not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_delete
+    BEFORE DELETE
+    ON qso_history
+BEGIN
+    SELECT RAISE(ABORT, 'qso_history is append-only — DELETE not permitted');
+END;

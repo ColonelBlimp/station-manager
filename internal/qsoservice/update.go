@@ -11,6 +11,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
+	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
@@ -30,7 +31,14 @@ import (
 // Validation errors come back as *SubmitError. A dedupe collision is
 // reported as *SubmitError with Code "duplicate_key" so the handler maps
 // it to 409.
-func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (types.Qso, error) {
+//
+// src identifies which subsystem of the daemon initiated the edit; it
+// is recorded on the qso_history audit row written inside the same
+// transaction as the QSO update (ADR 0016 prep #2). The audit row's
+// before_image is json.Marshal(existing) — the pre-edit snapshot, not
+// the merged result — so replaying audit gives the row's history of
+// states.
+func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, src source.Source) (types.Qso, error) {
 	const op errors.Op = "qsoservice.Update"
 
 	merged := existing
@@ -236,6 +244,20 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte) (
 			_ = tx.Rollback()
 			return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}
+	}
+
+	// Append the audit row inside the same tx (ADR 0016 prep #2). The
+	// snapshot is the pre-edit state — json.Marshal(existing), not
+	// json.Marshal(merged) — so replaying audit reconstructs each
+	// state the row passed through.
+	beforeImage, err := json.Marshal(existing)
+	if err != nil {
+		_ = tx.Rollback()
+		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to marshal pre-edit snapshot")
+	}
+	if err = s.DB.InsertQsoHistoryTx(ctx, tx, existing.UUID, action.Update, src, beforeImage); err != nil {
+		_ = tx.Rollback()
+		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert qso_history row")
 	}
 
 	if err = tx.Commit(); err != nil {

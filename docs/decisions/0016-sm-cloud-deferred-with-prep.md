@@ -130,6 +130,32 @@ detection story (compare timestamps + before-images), not "last write
 wins." A cloud-side undo is possible because the local already has the
 history.
 
+**Implementation outcome (session 40, 2026-05-07): SHIPPED — `qso_history`
+table, audit scope = update + delete only.** INSERT was deliberately
+omitted from the audit scope: initial-insert provenance already lives on
+`qso.additional_data` per ADR 0014 prep #4, and a row in `qso_history`
+with `op='insert'` and a "before" snapshot is semantically empty. The
+table is keyed on the QSO's `uuid` (not the int PK) so audit rows survive
+any future renumbering or cross-daemon sync — same canonical-identifier
+shape as prep #1. The full pre-edit `types.Qso` is stored as
+`json.Marshal()` in `before_image` rather than a diff: at personal-
+operator scale the storage is negligible and a complete snapshot is
+trivial to replay. Append-only is enforced by `BEFORE UPDATE` /
+`BEFORE DELETE` triggers (`RAISE(ABORT, 'qso_history is append-only…')`)
+on top of "the daemon never UPDATEs/DELETEs this table", so a manual
+sqlite3 session can't silently tamper with history. The audit-row insert
+shares the QSO mutation's transaction under one-fails-all-fail (committed
+mutation with no audit row, or audit row with no mutation, both rejected).
+A new `internal/enums/source/` enum carries the originating subsystem;
+only `source.API = "api"` is declared today (PATCH/DELETE on
+`/v1/qso/{uuid}`); future sources are added one constant at a time.
+Migration was amended into `0001_init.up.sql` in place rather than chained
+as `0002_*.sql` because the project hasn't gone to production. Helper:
+`sqlite.Service.InsertQsoHistoryTx` (write); `FetchQsoHistoryByUUIDWithContext`
+(read, ordered by `at ASC, id ASC`). DTO: `types.QsoHistory`. Tests cover
+the happy path, append-only triggers, multi-edit accumulation, and the
+op/source/before-image guards.
+
 ## What is NOT built (foreclosed)
 
 Each of the following has zero drivers today and is explicitly out of scope
@@ -232,11 +258,16 @@ specific reason, but the default is time-ordered.
   `APP_SM_QSO_ID` or similar app-defined ADIF tag — implementation picks).
   API responses use it as the canonical QSO identifier; local int PK stays
   as a sqlboiler/storage detail.
-- **A `qso_history` audit table exists from day one.** Schema TBD at
-  implementation — minimally: `id`, `qso_id` (FK to QSO via the UUID),
-  `op` (enum: insert / update / delete), `at` (timestamp), `source`
-  (string label of origin), `before_image` (JSON snapshot or diff —
-  implementation picks). Append-only — no DELETE, no UPDATE, on this table.
+- **A `qso_history` audit table exists from day one.** Shipped session 40
+  (2026-05-07). Schema: `id`, `qso_uuid` (FK to QSO via the UUID — not
+  the int PK), `op` (`'update'` or `'delete'` — INSERT is not audited
+  because origin is already in `additional_data` per ADR 0014 prep #4),
+  `at` (timestamp, SQL DEFAULT), `source` (freetext label, daemon writes
+  values from `internal/enums/source/`), `before_image` (full JSON
+  snapshot of the pre-mutation `types.Qso`, not a diff). Append-only is
+  enforced both by code path (daemon never issues UPDATE/DELETE on this
+  table) and by `BEFORE UPDATE`/`BEFORE DELETE` triggers (`RAISE(ABORT,
+  …)`) — belt-and-braces against manual sqlite3 sessions.
 - **The decisions are pinned in this ADR before any code is written.** The
   next session implementing the migration starts from this ADR, not from
   re-litigating the choice.

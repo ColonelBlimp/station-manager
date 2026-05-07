@@ -403,8 +403,15 @@ paths.
   fields are immutable (silently restored server-side). Dedupe-key
   inputs (CALL/BAND/MODE/FREQ/QSO_DATE/TIME_ON) trigger a key
   recompute and collision check; collision → 409 `duplicate_key`.
-  No `force=true` bypass on edit.
+  No `force=true` bypass on edit. **Audit trail (ADR 0016 prep #2):**
+  every successful PATCH appends one row to `qso_history` with
+  `op='update'`, `source='api'`, and the pre-edit `types.Qso` snapshot
+  in `before_image`. The audit-row insert shares the QSO update's tx
+  under one-fails-all-fail.
 - `DELETE /v1/qso/{uuid}` — soft-delete (`deleted_at`). 204 on success.
+  Same audit-trail behaviour as PATCH: one row appended with
+  `op='delete'`, `source='api'`, pre-delete snapshot in
+  `before_image`, all in the same tx as the soft-delete.
 
 ### Logbook management
 

@@ -172,17 +172,20 @@ var QsoWhere = struct {
 
 // QsoRels is where relationship names are stored.
 var QsoRels = struct {
-	Logbook    string
-	QsoUploads string
+	Logbook      string
+	QsoHistories string
+	QsoUploads   string
 }{
-	Logbook:    "Logbook",
-	QsoUploads: "QsoUploads",
+	Logbook:      "Logbook",
+	QsoHistories: "QsoHistories",
+	QsoUploads:   "QsoUploads",
 }
 
 // qsoR is where relationships are stored.
 type qsoR struct {
-	Logbook    *Logbook       `boil:"Logbook" json:"Logbook" toml:"Logbook" yaml:"Logbook"`
-	QsoUploads QsoUploadSlice `boil:"QsoUploads" json:"QsoUploads" toml:"QsoUploads" yaml:"QsoUploads"`
+	Logbook      *Logbook        `boil:"Logbook" json:"Logbook" toml:"Logbook" yaml:"Logbook"`
+	QsoHistories QsoHistorySlice `boil:"QsoHistories" json:"QsoHistories" toml:"QsoHistories" yaml:"QsoHistories"`
+	QsoUploads   QsoUploadSlice  `boil:"QsoUploads" json:"QsoUploads" toml:"QsoUploads" yaml:"QsoUploads"`
 }
 
 // NewStruct creates a new relationship struct
@@ -204,6 +207,22 @@ func (r *qsoR) GetLogbook() *Logbook {
 	}
 
 	return r.Logbook
+}
+
+func (o *Qso) GetQsoHistories() QsoHistorySlice {
+	if o == nil {
+		return nil
+	}
+
+	return o.R.GetQsoHistories()
+}
+
+func (r *qsoR) GetQsoHistories() QsoHistorySlice {
+	if r == nil {
+		return nil
+	}
+
+	return r.QsoHistories
 }
 
 func (o *Qso) GetQsoUploads() QsoUploadSlice {
@@ -335,6 +354,20 @@ func (o *Qso) Logbook(mods ...qm.QueryMod) logbookQuery {
 	return Logbooks(queryMods...)
 }
 
+// QsoHistories retrieves all the qso_history's QsoHistories with an executor.
+func (o *Qso) QsoHistories(mods ...qm.QueryMod) qsoHistoryQuery {
+	var queryMods []qm.QueryMod
+	if len(mods) != 0 {
+		queryMods = append(queryMods, mods...)
+	}
+
+	queryMods = append(queryMods,
+		qm.Where("\"qso_history\".\"qso_uuid\"=?", o.UUID),
+	)
+
+	return QsoHistories(queryMods...)
+}
+
 // QsoUploads retrieves all the qso_upload's QsoUploads with an executor.
 func (o *Qso) QsoUploads(mods ...qm.QueryMod) qsoUploadQuery {
 	var queryMods []qm.QueryMod
@@ -454,6 +487,112 @@ func (qsoL) LoadLogbook(ctx context.Context, e boil.ContextExecutor, singular bo
 					foreign.R = &logbookR{}
 				}
 				foreign.R.Qsos = append(foreign.R.Qsos, local)
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+// LoadQsoHistories allows an eager lookup of values, cached into the
+// loaded structs of the objects. This is for a 1-M or N-M relationship.
+func (qsoL) LoadQsoHistories(ctx context.Context, e boil.ContextExecutor, singular bool, maybeQso any, mods queries.Applicator) error {
+	var slice []*Qso
+	var object *Qso
+
+	if singular {
+		var ok bool
+		object, ok = maybeQso.(*Qso)
+		if !ok {
+			object = new(Qso)
+			ok = queries.SetFromEmbeddedStruct(&object, &maybeQso)
+			if !ok {
+				return errors.New(fmt.Sprintf("failed to set %T from embedded struct %T", object, maybeQso))
+			}
+		}
+	} else {
+		s, ok := maybeQso.(*[]*Qso)
+		if ok {
+			slice = *s
+		} else {
+			ok = queries.SetFromEmbeddedStruct(&slice, maybeQso)
+			if !ok {
+				return errors.New(fmt.Sprintf("failed to set %T from embedded struct %T", slice, maybeQso))
+			}
+		}
+	}
+
+	args := make(map[any]struct{})
+	if singular {
+		if object.R == nil {
+			object.R = &qsoR{}
+		}
+		args[object.UUID] = struct{}{}
+	} else {
+		for _, obj := range slice {
+			if obj.R == nil {
+				obj.R = &qsoR{}
+			}
+			args[obj.UUID] = struct{}{}
+		}
+	}
+
+	if len(args) == 0 {
+		return nil
+	}
+
+	argsSlice := make([]any, len(args))
+	i := 0
+	for arg := range args {
+		argsSlice[i] = arg
+		i++
+	}
+
+	query := NewQuery(
+		qm.From(`qso_history`),
+		qm.WhereIn(`qso_history.qso_uuid in ?`, argsSlice...),
+	)
+	if mods != nil {
+		mods.Apply(query)
+	}
+
+	results, err := query.QueryContext(ctx, e)
+	if err != nil {
+		return errors.Wrap(err, "failed to eager load qso_history")
+	}
+
+	var resultSlice []*QsoHistory
+	if err = queries.Bind(results, &resultSlice); err != nil {
+		return errors.Wrap(err, "failed to bind eager loaded slice qso_history")
+	}
+
+	if err = results.Close(); err != nil {
+		return errors.Wrap(err, "failed to close results in eager load on qso_history")
+	}
+	if err = results.Err(); err != nil {
+		return errors.Wrap(err, "error occurred during iteration of eager loaded relations for qso_history")
+	}
+
+	if singular {
+		object.R.QsoHistories = resultSlice
+		for _, foreign := range resultSlice {
+			if foreign.R == nil {
+				foreign.R = &qsoHistoryR{}
+			}
+			foreign.R.Qso = object
+		}
+		return nil
+	}
+
+	for _, foreign := range resultSlice {
+		for _, local := range slice {
+			if local.UUID == foreign.QsoUUID {
+				local.R.QsoHistories = append(local.R.QsoHistories, foreign)
+				if foreign.R == nil {
+					foreign.R = &qsoHistoryR{}
+				}
+				foreign.R.Qso = local
 				break
 			}
 		}
@@ -612,6 +751,59 @@ func (o *Qso) SetLogbook(ctx context.Context, exec boil.ContextExecutor, insert 
 		related.R.Qsos = append(related.R.Qsos, o)
 	}
 
+	return nil
+}
+
+// AddQsoHistories adds the given related objects to the existing relationships
+// of the qso, optionally inserting them as new records.
+// Appends related to o.R.QsoHistories.
+// Sets related.R.Qso appropriately.
+func (o *Qso) AddQsoHistories(ctx context.Context, exec boil.ContextExecutor, insert bool, related ...*QsoHistory) error {
+	var err error
+	for _, rel := range related {
+		if insert {
+			rel.QsoUUID = o.UUID
+			if err = rel.Insert(ctx, exec, boil.Infer()); err != nil {
+				return errors.Wrap(err, "failed to insert into foreign table")
+			}
+		} else {
+			updateQuery := fmt.Sprintf(
+				"UPDATE \"qso_history\" SET %s WHERE %s",
+				strmangle.SetParamNames("\"", "\"", 0, []string{"qso_uuid"}),
+				strmangle.WhereClause("\"", "\"", 0, qsoHistoryPrimaryKeyColumns),
+			)
+			values := []any{o.UUID, rel.ID}
+
+			if boil.IsDebug(ctx) {
+				writer := boil.DebugWriterFrom(ctx)
+				fmt.Fprintln(writer, updateQuery)
+				fmt.Fprintln(writer, values)
+			}
+			if _, err = exec.ExecContext(ctx, updateQuery, values...); err != nil {
+				return errors.Wrap(err, "failed to update foreign table")
+			}
+
+			rel.QsoUUID = o.UUID
+		}
+	}
+
+	if o.R == nil {
+		o.R = &qsoR{
+			QsoHistories: related,
+		}
+	} else {
+		o.R.QsoHistories = append(o.R.QsoHistories, related...)
+	}
+
+	for _, rel := range related {
+		if rel.R == nil {
+			rel.R = &qsoHistoryR{
+				Qso: o,
+			}
+		} else {
+			rel.R.Qso = o
+		}
+	}
 	return nil
 }
 

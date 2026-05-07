@@ -105,6 +105,25 @@ func LogbookModelToType(model *models.Logbook) (types.Logbook, error) {
 	}, nil
 }
 
+// QsoHistoryModelToType converts a sqlite row to types.QsoHistory.
+// BeforeImage is passed through as raw JSON bytes so the consumer can
+// either deserialize into types.Qso for display or forward the
+// snapshot intact to SM Cloud sync without re-marshaling.
+func QsoHistoryModelToType(model *models.QsoHistory) (types.QsoHistory, error) {
+	const op errors.Op = "sqlite.adapters.QsoHistoryModelToType"
+	if model == nil {
+		return types.QsoHistory{}, errors.New(op).WithMsg(errMsgNilModel)
+	}
+	return types.QsoHistory{
+		ID:          model.ID,
+		QsoUUID:     model.QsoUUID,
+		Op:          model.Op,
+		At:          model.At,
+		Source:      model.Source,
+		BeforeImage: []byte(model.BeforeImage),
+	}, nil
+}
+
 // QsoUploadModelToType converts a sqlite row to types.QsoUpload.
 //
 // The model has several nullable columns (created_at, modified_at,

@@ -553,9 +553,9 @@ are independently valuable for v1 (stable external QSO IDs +
 "what did I change?" auditing) regardless of whether SM Cloud
 ever materialises.
 
-**Prep status (audited 2026-05-06):**
+**Prep status (audited 2026-05-07):**
 
-- **Prep #1 — globally-unique time-ordered QSO IDs: SHIPPED.**
+- **Prep #1 — globally-unique time-ordered QSO IDs: SHIPPED (2026-05-06).**
   UUIDv7 generated server-side at submit time, persisted on the
   `qso.uuid` column with a strict format CHECK, exposed as the
   canonical external identifier on every QSO API response, and
@@ -566,11 +566,23 @@ ever materialises.
   carry the int `qso_id` (no live consumer yet) and grow `qso_uuid`
   when the SPA wires up event consumption — see api.md §4.5 known-
   gap note.
-- **Prep #2 — qso_history append-only audit table: NOT STARTED.**
-  Scheduled for a separate session per ADR 0016. Schema lives only
-  in the ADR draft; no `0002_*.sql` migration yet. The intended
-  shape (one row per edit/delete, tracking before/after blobs +
-  actor + timestamp) is documented in ADR 0016.
+- **Prep #2 — qso_history append-only audit table: SHIPPED (2026-05-07).**
+  Separate `qso_history` table added in `0001_init.up.sql` (migration
+  amended in place — pre-production). Audit scope is `update` and
+  `delete` only; INSERT is not audited because origin already lives in
+  `qso.additional_data` per ADR 0014 prep #4. FK is by `qso_uuid`
+  (not int PK) so audit rows survive any renumbering. `before_image`
+  is the full `json.Marshal(types.Qso)` of the pre-mutation row,
+  appended in the same transaction as the QSO mutation under one-
+  fails-all-fail. Append-only is enforced by `BEFORE UPDATE` /
+  `BEFORE DELETE` triggers on top of the daemon's never-mutate code
+  path. New `internal/enums/source/` enum (`source.API = "api"`
+  declared today; further constants added one at a time as new
+  subsystems start mutating QSOs). Helpers:
+  `sqlite.Service.InsertQsoHistoryTx` / `FetchQsoHistoryByUUIDWithContext`.
+  DTO: `types.QsoHistory`. Operator-facing "show edit history for
+  this QSO" SPA endpoint is **not** in scope for prep #2 — that's a
+  separate UI task once the storage is in place.
 
 ---
 

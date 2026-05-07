@@ -11,6 +11,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -19,6 +20,7 @@ import (
 	"github.com/aarondl/sqlboiler/v4/boil"
 	"github.com/aarondl/sqlboiler/v4/queries"
 	"github.com/aarondl/sqlboiler/v4/queries/qm"
+	boiltypes "github.com/aarondl/sqlboiler/v4/types"
 )
 
 /**********************************************************************************************************************
@@ -1611,6 +1613,46 @@ func (s *Service) FetchUploadsByQsoIDWithContext(ctx context.Context, qsoID int6
 	return out, nil
 }
 
+// FetchQsoHistoryByUUIDWithContext returns every qso_history row for
+// the given QSO, ordered by `at ASC` so callers see mutations in the
+// order they happened. The QSO's UUID is the lookup key (not the
+// internal int PK) — qso_history is keyed on UUID per ADR 0016 so
+// audit rows survive any future re-numbering.
+func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID string) ([]types.QsoHistory, error) {
+	const op errors.Op = "sqlite.Service.FetchQsoHistoryByUUIDWithContext"
+	if err := checkService(op, s); err != nil {
+		return nil, err
+	}
+	if qsoUUID == "" {
+		return nil, errors.New(op).WithMsg("qsoUUID is empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	rows, err := models.QsoHistories(
+		models.QsoHistoryWhere.QsoUUID.EQ(qsoUUID),
+		qm.OrderBy("at ASC, id ASC"),
+	).All(ctx, h)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("fetch qso_history by uuid")
+	}
+
+	out := make([]types.QsoHistory, 0, len(rows))
+	for _, r := range rows {
+		h, er := adapters.QsoHistoryModelToType(r)
+		if er != nil {
+			return nil, errors.New(op).WithErr(er)
+		}
+		out = append(out, h)
+	}
+	return out, nil
+}
+
 // FetchInsertUpstreamIDWithContext returns the upstream_id recorded on
 // the successful insert for the given (qso_id, forwarder_name) pair.
 // The QRZ delete forwarder needs this value to populate LOGIDS on the
@@ -1822,6 +1864,71 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 		qsoId, forwarderName, forwarderType, action.String(), status.Pending.String(),
 	); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("upserting qso_upload row failed")
+	}
+
+	return nil
+}
+
+// InsertQsoHistoryTx appends a row to qso_history within the
+// caller-supplied tx. The row records that a QSO identified by
+// qsoUUID was about to be mutated (mutationOp is action.Update or
+// action.Delete) by src, with beforeImage as the json.Marshal of the
+// row's pre-mutation state.
+//
+// ADR 0016 prep #2 (audit trail for SM Cloud sync). The audit row
+// must share the same transaction as the QSO mutation it records — a
+// committed mutation with no audit row, or an audit row with no
+// mutation, both violate the one-fails-all-fail invariant
+// (docs/v1-analysis/invariants.md). Callers (qsoservice.Update,
+// qsoservice.Delete) are responsible for placing this call inside
+// the same tx as the QSO write.
+//
+// The `at` column is left to its SQL DEFAULT (datetime('now',
+// 'localtime')) so the snapshot timestamp comes from the database,
+// not from drift-prone Go wall-clock.
+func (s *Service) InsertQsoHistoryTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	qsoUUID string,
+	mutationOp action.Action,
+	src source.Source,
+	beforeImage []byte,
+) error {
+	const op errors.Op = "sqlite.Service.InsertQsoHistoryTx"
+	if err := checkService(op, s); err != nil {
+		return err
+	}
+	if tx == nil {
+		return errors.New(op).WithMsg("tx is nil")
+	}
+	if qsoUUID == "" {
+		return errors.New(op).WithMsg("qsoUUID is empty")
+	}
+	// qso_history.op CHECK accepts only 'update' / 'delete'; reject
+	// action.Insert here so the constraint violation surfaces as a
+	// clear Go-side error rather than a generic SQLite CHECK failure.
+	if mutationOp != action.Update && mutationOp != action.Delete {
+		return errors.New(op).WithMsgf(
+			"invalid op for qso_history: %q (must be %q or %q)",
+			mutationOp, action.Update, action.Delete,
+		)
+	}
+	if src == "" {
+		return errors.New(op).WithMsg("source is empty")
+	}
+	if len(beforeImage) == 0 {
+		return errors.New(op).WithMsg("beforeImage is empty")
+	}
+
+	row := &models.QsoHistory{
+		QsoUUID:     qsoUUID,
+		Op:          mutationOp.String(),
+		Source:      src.String(),
+		BeforeImage: boiltypes.JSON(beforeImage),
+	}
+
+	if err := row.Insert(ctx, tx, boil.Infer()); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("failed to insert qso_history row")
 	}
 
 	return nil

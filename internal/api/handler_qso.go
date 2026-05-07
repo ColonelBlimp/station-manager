@@ -8,6 +8,7 @@ import (
 	stderr "errors"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
@@ -57,7 +58,7 @@ func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.qso.Delete(r.Context(), qso.ID); err != nil {
+	if err = s.qso.Delete(r.Context(), qso, source.API); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
@@ -96,7 +97,7 @@ func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 		body = []byte("{}")
 	}
 
-	updated, err := s.qso.Update(r.Context(), existing, body)
+	updated, err := s.qso.Update(r.Context(), existing, body, source.API)
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {
 			status := http.StatusBadRequest
