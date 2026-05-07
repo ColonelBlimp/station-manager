@@ -25,57 +25,62 @@ import (
 
 // ContactedStation is an object representing the database table.
 type ContactedStation struct {
-	ID             int64      `boil:"id" json:"id" toml:"id" yaml:"id"`
-	CreatedAt      time.Time  `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
-	ModifiedAt     null.Time  `boil:"modified_at" json:"modified_at,omitempty" toml:"modified_at" yaml:"modified_at,omitempty"`
-	DeletedAt      null.Time  `boil:"deleted_at" json:"deleted_at,omitempty" toml:"deleted_at" yaml:"deleted_at,omitempty"`
-	Name           string     `boil:"name" json:"name" toml:"name" yaml:"name"`
-	Call           string     `boil:"call" json:"call" toml:"call" yaml:"call"`
-	Country        string     `boil:"country" json:"country" toml:"country" yaml:"country"`
-	AdditionalData types.JSON `boil:"additional_data" json:"additional_data" toml:"additional_data" yaml:"additional_data"`
+	ID              int64      `boil:"id" json:"id" toml:"id" yaml:"id"`
+	CreatedAt       time.Time  `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
+	ModifiedAt      null.Time  `boil:"modified_at" json:"modified_at,omitempty" toml:"modified_at" yaml:"modified_at,omitempty"`
+	DeletedAt       null.Time  `boil:"deleted_at" json:"deleted_at,omitempty" toml:"deleted_at" yaml:"deleted_at,omitempty"`
+	LastRefreshedAt null.Time  `boil:"last_refreshed_at" json:"last_refreshed_at,omitempty" toml:"last_refreshed_at" yaml:"last_refreshed_at,omitempty"`
+	Name            string     `boil:"name" json:"name" toml:"name" yaml:"name"`
+	Call            string     `boil:"call" json:"call" toml:"call" yaml:"call"`
+	Country         string     `boil:"country" json:"country" toml:"country" yaml:"country"`
+	AdditionalData  types.JSON `boil:"additional_data" json:"additional_data" toml:"additional_data" yaml:"additional_data"`
 
 	R *contactedStationR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L contactedStationL  `boil:"-" json:"-" toml:"-" yaml:"-"`
 }
 
 var ContactedStationColumns = struct {
-	ID             string
-	CreatedAt      string
-	ModifiedAt     string
-	DeletedAt      string
-	Name           string
-	Call           string
-	Country        string
-	AdditionalData string
+	ID              string
+	CreatedAt       string
+	ModifiedAt      string
+	DeletedAt       string
+	LastRefreshedAt string
+	Name            string
+	Call            string
+	Country         string
+	AdditionalData  string
 }{
-	ID:             "id",
-	CreatedAt:      "created_at",
-	ModifiedAt:     "modified_at",
-	DeletedAt:      "deleted_at",
-	Name:           "name",
-	Call:           "call",
-	Country:        "country",
-	AdditionalData: "additional_data",
+	ID:              "id",
+	CreatedAt:       "created_at",
+	ModifiedAt:      "modified_at",
+	DeletedAt:       "deleted_at",
+	LastRefreshedAt: "last_refreshed_at",
+	Name:            "name",
+	Call:            "call",
+	Country:         "country",
+	AdditionalData:  "additional_data",
 }
 
 var ContactedStationTableColumns = struct {
-	ID             string
-	CreatedAt      string
-	ModifiedAt     string
-	DeletedAt      string
-	Name           string
-	Call           string
-	Country        string
-	AdditionalData string
+	ID              string
+	CreatedAt       string
+	ModifiedAt      string
+	DeletedAt       string
+	LastRefreshedAt string
+	Name            string
+	Call            string
+	Country         string
+	AdditionalData  string
 }{
-	ID:             "contacted_station.id",
-	CreatedAt:      "contacted_station.created_at",
-	ModifiedAt:     "contacted_station.modified_at",
-	DeletedAt:      "contacted_station.deleted_at",
-	Name:           "contacted_station.name",
-	Call:           "contacted_station.call",
-	Country:        "contacted_station.country",
-	AdditionalData: "contacted_station.additional_data",
+	ID:              "contacted_station.id",
+	CreatedAt:       "contacted_station.created_at",
+	ModifiedAt:      "contacted_station.modified_at",
+	DeletedAt:       "contacted_station.deleted_at",
+	LastRefreshedAt: "contacted_station.last_refreshed_at",
+	Name:            "contacted_station.name",
+	Call:            "contacted_station.call",
+	Country:         "contacted_station.country",
+	AdditionalData:  "contacted_station.additional_data",
 }
 
 // Generated where
@@ -195,23 +200,25 @@ func (w whereHelpertypes_JSON) GTE(x types.JSON) qm.QueryMod {
 }
 
 var ContactedStationWhere = struct {
-	ID             whereHelperint64
-	CreatedAt      whereHelpertime_Time
-	ModifiedAt     whereHelpernull_Time
-	DeletedAt      whereHelpernull_Time
-	Name           whereHelperstring
-	Call           whereHelperstring
-	Country        whereHelperstring
-	AdditionalData whereHelpertypes_JSON
+	ID              whereHelperint64
+	CreatedAt       whereHelpertime_Time
+	ModifiedAt      whereHelpernull_Time
+	DeletedAt       whereHelpernull_Time
+	LastRefreshedAt whereHelpernull_Time
+	Name            whereHelperstring
+	Call            whereHelperstring
+	Country         whereHelperstring
+	AdditionalData  whereHelpertypes_JSON
 }{
-	ID:             whereHelperint64{field: "\"contacted_station\".\"id\""},
-	CreatedAt:      whereHelpertime_Time{field: "\"contacted_station\".\"created_at\""},
-	ModifiedAt:     whereHelpernull_Time{field: "\"contacted_station\".\"modified_at\""},
-	DeletedAt:      whereHelpernull_Time{field: "\"contacted_station\".\"deleted_at\""},
-	Name:           whereHelperstring{field: "\"contacted_station\".\"name\""},
-	Call:           whereHelperstring{field: "\"contacted_station\".\"call\""},
-	Country:        whereHelperstring{field: "\"contacted_station\".\"country\""},
-	AdditionalData: whereHelpertypes_JSON{field: "\"contacted_station\".\"additional_data\""},
+	ID:              whereHelperint64{field: "\"contacted_station\".\"id\""},
+	CreatedAt:       whereHelpertime_Time{field: "\"contacted_station\".\"created_at\""},
+	ModifiedAt:      whereHelpernull_Time{field: "\"contacted_station\".\"modified_at\""},
+	DeletedAt:       whereHelpernull_Time{field: "\"contacted_station\".\"deleted_at\""},
+	LastRefreshedAt: whereHelpernull_Time{field: "\"contacted_station\".\"last_refreshed_at\""},
+	Name:            whereHelperstring{field: "\"contacted_station\".\"name\""},
+	Call:            whereHelperstring{field: "\"contacted_station\".\"call\""},
+	Country:         whereHelperstring{field: "\"contacted_station\".\"country\""},
+	AdditionalData:  whereHelpertypes_JSON{field: "\"contacted_station\".\"additional_data\""},
 }
 
 // ContactedStationRels is where relationship names are stored.
@@ -231,9 +238,9 @@ func (*contactedStationR) NewStruct() *contactedStationR {
 type contactedStationL struct{}
 
 var (
-	contactedStationAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "name", "call", "country", "additional_data"}
+	contactedStationAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "last_refreshed_at", "name", "call", "country", "additional_data"}
 	contactedStationColumnsWithoutDefault = []string{"name", "call", "country"}
-	contactedStationColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "additional_data"}
+	contactedStationColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "last_refreshed_at", "additional_data"}
 	contactedStationPrimaryKeyColumns     = []string{"id"}
 	contactedStationGeneratedColumns      = []string{"id"}
 )

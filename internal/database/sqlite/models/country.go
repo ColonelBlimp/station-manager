@@ -24,107 +24,114 @@ import (
 
 // Country is an object representing the database table.
 type Country struct {
-	ID         int64     `boil:"id" json:"id" toml:"id" yaml:"id"`
-	CreatedAt  time.Time `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
-	ModifiedAt null.Time `boil:"modified_at" json:"modified_at,omitempty" toml:"modified_at" yaml:"modified_at,omitempty"`
-	DeletedAt  null.Time `boil:"deleted_at" json:"deleted_at,omitempty" toml:"deleted_at" yaml:"deleted_at,omitempty"`
-	Name       string    `boil:"name" json:"name" toml:"name" yaml:"name"`
-	CQZone     string    `boil:"cq_zone" json:"cq_zone" toml:"cq_zone" yaml:"cq_zone"`
-	ItuZone    string    `boil:"itu_zone" json:"itu_zone" toml:"itu_zone" yaml:"itu_zone"`
-	Continent  string    `boil:"continent" json:"continent" toml:"continent" yaml:"continent"`
-	Prefix     string    `boil:"prefix" json:"prefix" toml:"prefix" yaml:"prefix"`
-	Ccode      string    `boil:"ccode" json:"ccode" toml:"ccode" yaml:"ccode"`
-	DXCCPrefix string    `boil:"dxcc_prefix" json:"dxcc_prefix" toml:"dxcc_prefix" yaml:"dxcc_prefix"`
-	TimeOffset string    `boil:"time_offset" json:"time_offset" toml:"time_offset" yaml:"time_offset"`
+	ID              int64     `boil:"id" json:"id" toml:"id" yaml:"id"`
+	CreatedAt       time.Time `boil:"created_at" json:"created_at" toml:"created_at" yaml:"created_at"`
+	ModifiedAt      null.Time `boil:"modified_at" json:"modified_at,omitempty" toml:"modified_at" yaml:"modified_at,omitempty"`
+	DeletedAt       null.Time `boil:"deleted_at" json:"deleted_at,omitempty" toml:"deleted_at" yaml:"deleted_at,omitempty"`
+	LastRefreshedAt null.Time `boil:"last_refreshed_at" json:"last_refreshed_at,omitempty" toml:"last_refreshed_at" yaml:"last_refreshed_at,omitempty"`
+	Name            string    `boil:"name" json:"name" toml:"name" yaml:"name"`
+	CQZone          string    `boil:"cq_zone" json:"cq_zone" toml:"cq_zone" yaml:"cq_zone"`
+	ItuZone         string    `boil:"itu_zone" json:"itu_zone" toml:"itu_zone" yaml:"itu_zone"`
+	Continent       string    `boil:"continent" json:"continent" toml:"continent" yaml:"continent"`
+	Prefix          string    `boil:"prefix" json:"prefix" toml:"prefix" yaml:"prefix"`
+	Ccode           string    `boil:"ccode" json:"ccode" toml:"ccode" yaml:"ccode"`
+	DXCCPrefix      string    `boil:"dxcc_prefix" json:"dxcc_prefix" toml:"dxcc_prefix" yaml:"dxcc_prefix"`
+	TimeOffset      string    `boil:"time_offset" json:"time_offset" toml:"time_offset" yaml:"time_offset"`
 
 	R *countryR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L countryL  `boil:"-" json:"-" toml:"-" yaml:"-"`
 }
 
 var CountryColumns = struct {
-	ID         string
-	CreatedAt  string
-	ModifiedAt string
-	DeletedAt  string
-	Name       string
-	CQZone     string
-	ItuZone    string
-	Continent  string
-	Prefix     string
-	Ccode      string
-	DXCCPrefix string
-	TimeOffset string
+	ID              string
+	CreatedAt       string
+	ModifiedAt      string
+	DeletedAt       string
+	LastRefreshedAt string
+	Name            string
+	CQZone          string
+	ItuZone         string
+	Continent       string
+	Prefix          string
+	Ccode           string
+	DXCCPrefix      string
+	TimeOffset      string
 }{
-	ID:         "id",
-	CreatedAt:  "created_at",
-	ModifiedAt: "modified_at",
-	DeletedAt:  "deleted_at",
-	Name:       "name",
-	CQZone:     "cq_zone",
-	ItuZone:    "itu_zone",
-	Continent:  "continent",
-	Prefix:     "prefix",
-	Ccode:      "ccode",
-	DXCCPrefix: "dxcc_prefix",
-	TimeOffset: "time_offset",
+	ID:              "id",
+	CreatedAt:       "created_at",
+	ModifiedAt:      "modified_at",
+	DeletedAt:       "deleted_at",
+	LastRefreshedAt: "last_refreshed_at",
+	Name:            "name",
+	CQZone:          "cq_zone",
+	ItuZone:         "itu_zone",
+	Continent:       "continent",
+	Prefix:          "prefix",
+	Ccode:           "ccode",
+	DXCCPrefix:      "dxcc_prefix",
+	TimeOffset:      "time_offset",
 }
 
 var CountryTableColumns = struct {
-	ID         string
-	CreatedAt  string
-	ModifiedAt string
-	DeletedAt  string
-	Name       string
-	CQZone     string
-	ItuZone    string
-	Continent  string
-	Prefix     string
-	Ccode      string
-	DXCCPrefix string
-	TimeOffset string
+	ID              string
+	CreatedAt       string
+	ModifiedAt      string
+	DeletedAt       string
+	LastRefreshedAt string
+	Name            string
+	CQZone          string
+	ItuZone         string
+	Continent       string
+	Prefix          string
+	Ccode           string
+	DXCCPrefix      string
+	TimeOffset      string
 }{
-	ID:         "country.id",
-	CreatedAt:  "country.created_at",
-	ModifiedAt: "country.modified_at",
-	DeletedAt:  "country.deleted_at",
-	Name:       "country.name",
-	CQZone:     "country.cq_zone",
-	ItuZone:    "country.itu_zone",
-	Continent:  "country.continent",
-	Prefix:     "country.prefix",
-	Ccode:      "country.ccode",
-	DXCCPrefix: "country.dxcc_prefix",
-	TimeOffset: "country.time_offset",
+	ID:              "country.id",
+	CreatedAt:       "country.created_at",
+	ModifiedAt:      "country.modified_at",
+	DeletedAt:       "country.deleted_at",
+	LastRefreshedAt: "country.last_refreshed_at",
+	Name:            "country.name",
+	CQZone:          "country.cq_zone",
+	ItuZone:         "country.itu_zone",
+	Continent:       "country.continent",
+	Prefix:          "country.prefix",
+	Ccode:           "country.ccode",
+	DXCCPrefix:      "country.dxcc_prefix",
+	TimeOffset:      "country.time_offset",
 }
 
 // Generated where
 
 var CountryWhere = struct {
-	ID         whereHelperint64
-	CreatedAt  whereHelpertime_Time
-	ModifiedAt whereHelpernull_Time
-	DeletedAt  whereHelpernull_Time
-	Name       whereHelperstring
-	CQZone     whereHelperstring
-	ItuZone    whereHelperstring
-	Continent  whereHelperstring
-	Prefix     whereHelperstring
-	Ccode      whereHelperstring
-	DXCCPrefix whereHelperstring
-	TimeOffset whereHelperstring
+	ID              whereHelperint64
+	CreatedAt       whereHelpertime_Time
+	ModifiedAt      whereHelpernull_Time
+	DeletedAt       whereHelpernull_Time
+	LastRefreshedAt whereHelpernull_Time
+	Name            whereHelperstring
+	CQZone          whereHelperstring
+	ItuZone         whereHelperstring
+	Continent       whereHelperstring
+	Prefix          whereHelperstring
+	Ccode           whereHelperstring
+	DXCCPrefix      whereHelperstring
+	TimeOffset      whereHelperstring
 }{
-	ID:         whereHelperint64{field: "\"country\".\"id\""},
-	CreatedAt:  whereHelpertime_Time{field: "\"country\".\"created_at\""},
-	ModifiedAt: whereHelpernull_Time{field: "\"country\".\"modified_at\""},
-	DeletedAt:  whereHelpernull_Time{field: "\"country\".\"deleted_at\""},
-	Name:       whereHelperstring{field: "\"country\".\"name\""},
-	CQZone:     whereHelperstring{field: "\"country\".\"cq_zone\""},
-	ItuZone:    whereHelperstring{field: "\"country\".\"itu_zone\""},
-	Continent:  whereHelperstring{field: "\"country\".\"continent\""},
-	Prefix:     whereHelperstring{field: "\"country\".\"prefix\""},
-	Ccode:      whereHelperstring{field: "\"country\".\"ccode\""},
-	DXCCPrefix: whereHelperstring{field: "\"country\".\"dxcc_prefix\""},
-	TimeOffset: whereHelperstring{field: "\"country\".\"time_offset\""},
+	ID:              whereHelperint64{field: "\"country\".\"id\""},
+	CreatedAt:       whereHelpertime_Time{field: "\"country\".\"created_at\""},
+	ModifiedAt:      whereHelpernull_Time{field: "\"country\".\"modified_at\""},
+	DeletedAt:       whereHelpernull_Time{field: "\"country\".\"deleted_at\""},
+	LastRefreshedAt: whereHelpernull_Time{field: "\"country\".\"last_refreshed_at\""},
+	Name:            whereHelperstring{field: "\"country\".\"name\""},
+	CQZone:          whereHelperstring{field: "\"country\".\"cq_zone\""},
+	ItuZone:         whereHelperstring{field: "\"country\".\"itu_zone\""},
+	Continent:       whereHelperstring{field: "\"country\".\"continent\""},
+	Prefix:          whereHelperstring{field: "\"country\".\"prefix\""},
+	Ccode:           whereHelperstring{field: "\"country\".\"ccode\""},
+	DXCCPrefix:      whereHelperstring{field: "\"country\".\"dxcc_prefix\""},
+	TimeOffset:      whereHelperstring{field: "\"country\".\"time_offset\""},
 }
 
 // CountryRels is where relationship names are stored.
@@ -144,9 +151,9 @@ func (*countryR) NewStruct() *countryR {
 type countryL struct{}
 
 var (
-	countryAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "name", "cq_zone", "itu_zone", "continent", "prefix", "ccode", "dxcc_prefix", "time_offset"}
+	countryAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "last_refreshed_at", "name", "cq_zone", "itu_zone", "continent", "prefix", "ccode", "dxcc_prefix", "time_offset"}
 	countryColumnsWithoutDefault = []string{"name", "cq_zone", "itu_zone", "continent", "prefix", "ccode", "dxcc_prefix", "time_offset"}
-	countryColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at"}
+	countryColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "last_refreshed_at"}
 	countryPrimaryKeyColumns     = []string{"id"}
 	countryGeneratedColumns      = []string{"id"}
 )
