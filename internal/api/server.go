@@ -14,6 +14,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
 
@@ -26,6 +27,7 @@ type Server struct {
 	db                       *sqlite.Service
 	logger                   *logging.Service
 	hub                      *events.Hub
+	enrich                   *lookup.Orchestrator
 	limits                   *loadLimiter
 	maxBodyBytes             int64
 	protocol                 string
@@ -53,13 +55,14 @@ type Server struct {
 // protocol) because those don't change at runtime; the config-update
 // endpoint only touches operator-relevant fields (logging_station,
 // default_*_id) which startup doesn't bake into Server fields.
-func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub) *Server {
+func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator) *Server {
 	s := &Server{
 		cfg:                      cfgSvc,
 		qso:                      qso,
 		db:                       db,
 		logger:                   logger,
 		hub:                      hub,
+		enrich:                   enrich,
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		maxBodyBytes:             cfg.Server.MaxBodyBytes,
 		protocol:                 cfg.Server.Protocol,
@@ -93,6 +96,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 
 	// QSO draft support
 	mux.HandleFunc("GET /v1/contact-history", s.handleContactHistory)
+
+	// Enrichment pipeline (ADR 0017). Always-200; SPA fires this on
+	// Tab-out from the Callsign field.
+	mux.HandleFunc("GET /v1/enrich/callsign", s.handleEnrichCallsign)
 
 	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
 	// Wrapped with its own subscriber cap (NOT counted against the

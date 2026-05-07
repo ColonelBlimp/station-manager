@@ -25,6 +25,10 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/lookup"
+	"github.com/ColonelBlimp/station-manager/internal/lookup/hamnut"
+	lookupqrz "github.com/ColonelBlimp/station-manager/internal/lookup/qrz"
+	"github.com/ColonelBlimp/station-manager/internal/lookup/refresher"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -237,8 +241,32 @@ func run() error {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
+	// ---- Build enrichment pipeline (ADR 0017) ----
+	// Constructs the lookup providers (hamnut + chain entries) from
+	// operator config, the bounded async-refresh worker, and the
+	// orchestrator that ties them together. nil orchestrator means
+	// no providers were enabled — the API handler then returns
+	// empty-result responses with source=none.
+	enrichOrchestrator, lookupRefresher, err := buildEnrichment(workerCtx, cfg, cfgSvc, dbSvc, loggerSvc)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("build enrichment pipeline")
+	}
+	if lookupRefresher != nil {
+		// Stop the refresher BEFORE the deferred dbSvc.Close so
+		// in-flight refresh fns (which run DB writes) finish against
+		// a still-open handle. workerCancel above already cancelled
+		// the parent context that the refresher was Started with, so
+		// in-flight fns are seeing ctx.Done() — Stop just waits for
+		// them to drain.
+		defer func() {
+			if err := lookupRefresher.Stop(); err != nil {
+				loggerSvc.ErrorWith().Err(err).Msg("lookup refresher stop error")
+			}
+		}()
+	}
+
 	// ---- Start HTTP server ----
-	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub)
+	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -403,6 +431,103 @@ func spawnForwarderWorkers(
 			Msg("forwarder worker started")
 	}
 	return nil
+}
+
+// buildEnrichment constructs the lookup pipeline (orchestrator +
+// refresher + providers) per ADR 0017. Reads config to decide which
+// providers to instantiate; an entry with Enabled=false is skipped
+// at construction time (the orchestrator's Chain only ever sees
+// enabled providers).
+//
+// Returns (nil, nil, nil) — explicit "lookup pipeline disabled" — when
+// neither hamnut nor any chain provider is enabled. The HTTP handler
+// detects the nil orchestrator and returns empty-result responses,
+// keeping the SPA's response shape uniform.
+//
+// The refresher is Started with workerCtx so daemon shutdown
+// (workerCancel above) cancels in-flight refresh fns; Stop is
+// deferred by the caller to wait for the drain.
+func buildEnrichment(
+	workerCtx context.Context,
+	cfg config.Config,
+	cfgSvc *config.Service,
+	dbSvc *sqlite.Service,
+	loggerSvc *logging.Service,
+) (*lookup.Orchestrator, *refresher.Service, error) {
+	const op errors.Op = "smd.buildEnrichment"
+
+	var countryProvider lookup.CountryProvider
+	if cfg.Lookup.Hamnut.Enabled {
+		hamnutCfg := cfg.Lookup.Hamnut
+		hamnutSvc := hamnut.NewService(loggerSvc, cfgSvc, &hamnutCfg, nil)
+		if err := hamnutSvc.Initialize(); err != nil {
+			return nil, nil, errors.New(op).WithErr(err).WithMsg("initialize hamnut provider")
+		}
+		countryProvider = hamnutSvc
+		loggerSvc.InfoWith().Str("provider", hamnutSvc.Name()).Msg("lookup: country provider enabled")
+	}
+
+	chain := make([]lookup.CallsignProvider, 0, len(cfg.Lookup.Chain))
+	for _, entry := range cfg.Lookup.Chain {
+		if !entry.Enabled {
+			loggerSvc.InfoWith().Str("provider", entry.Name).Msg("lookup: chain entry disabled, skipping")
+			continue
+		}
+		entryCopy := entry
+		switch entry.Name {
+		case types.QRZLookupServiceName:
+			qrzSvc := lookupqrz.NewService(loggerSvc, cfgSvc, &entryCopy, nil)
+			if err := qrzSvc.Initialize(); err != nil {
+				return nil, nil, errors.New(op).WithErr(err).WithMsgf("initialize chain provider %q", entry.Name)
+			}
+			// QRZ Initialize disables itself on session-fetch failure
+			// rather than returning an error — the Enabled flag may
+			// have flipped under our feet. Skip in that case.
+			if !qrzSvc.Config.Enabled {
+				loggerSvc.WarnWith().Str("provider", entry.Name).Msg("lookup: chain provider disabled itself during init")
+				continue
+			}
+			chain = append(chain, qrzSvc)
+			loggerSvc.InfoWith().Str("provider", qrzSvc.Name()).Msg("lookup: chain provider enabled")
+		default:
+			// Unknown provider name in config. Loud failure beats
+			// silent skip — operator's config has an entry that no
+			// daemon binary knows how to wire.
+			return nil, nil, errors.New(op).WithMsgf(
+				"unknown lookup chain provider %q (no constructor wired in cmd/smd)",
+				entry.Name,
+			)
+		}
+	}
+
+	if countryProvider == nil && len(chain) == 0 {
+		loggerSvc.InfoWith().Msg("lookup: pipeline disabled (no providers enabled)")
+		return nil, nil, nil
+	}
+
+	// Refresher is needed regardless of which layer is active —
+	// stale-hit branches on either layer schedule via it.
+	ref := &refresher.Service{
+		LoggerService: loggerSvc,
+		MaxInFlight:   cfg.Lookup.RefreshMaxInFlight,
+	}
+	if err := ref.Initialize(); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("initialize refresher")
+	}
+	if err := ref.Start(workerCtx); err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("start refresher")
+	}
+
+	orch := &lookup.Orchestrator{
+		DB:         dbSvc,
+		Country:    countryProvider,
+		Chain:      chain,
+		CountryTTL: cfgSvc.CountryTTL(),
+		StationTTL: cfgSvc.StationTTL(),
+		Refresher:  ref,
+		Logger:     loggerSvc,
+	}
+	return orch, ref, nil
 }
 
 // resolveConfigPath mirrors loadConfig's precedence to determine the

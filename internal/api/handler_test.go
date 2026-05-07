@@ -95,7 +95,11 @@ func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 	// unaffected.
 	cfgSvc.SetPath(cfgSvc.WorkingDir() + "/config.json")
 
-	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub)
+	// Tests that exercise enrichment-related endpoints construct
+	// their own orchestrator via testServerWithEnrichment; the
+	// default test server passes nil so the handler returns a
+	// uniform empty-result shape.
+	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil)
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.
