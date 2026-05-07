@@ -101,13 +101,12 @@ func (s *Service) Initialize() error {
 				initErr = errors.New(op).WithMsg("application config has not been set/injected")
 				return
 			}
-			// Note: v2's config service does not yet expose a
-			// LookupServiceConfig accessor — that lands in task #62
-			// alongside the operator config schema for the provider
-			// chain. Until then, callers (or DI wiring) MUST set
-			// Config directly via NewService or struct field.
-			initErr = errors.New(op).WithMsg("Config not set; LookupConfig accessor not yet wired in config service")
-			return
+			cfg, lerr := s.ConfigService.LookupServiceConfig(ServiceName)
+			if lerr != nil {
+				initErr = errors.New(op).WithErr(lerr).WithMsg("loading hamnut config from config service")
+				return
+			}
+			s.Config = &cfg
 		}
 
 		if err := s.validateConfig(op); err != nil {

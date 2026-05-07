@@ -21,3 +21,27 @@ type LookupConfig struct {
 	HttpTimeoutSec int    `json:"timeout_sec"`
 	ViewURL        string `json:"view_url,omitempty"`
 }
+
+// EnrichmentConfig is the daemon's enrichment-pipeline configuration
+// per ADR 0017. Sits at the top level of the daemon Config under the
+// `lookup` JSON key.
+//
+// Hamnut is a single block (one country provider per daemon — country
+// source-of-truth doesn't fan out). The Chain is the operator-ordered
+// list of callsign-class providers (QRZ.com, HamQTH, QRZCQ, …); the
+// orchestrator iterates in slice order and applies first-non-empty-
+// wins per ADR 0017 #8. An empty Chain is valid — it simply means no
+// callsign-class enrichment runs, and cold-station Tabs return empty
+// station data.
+//
+// TTLs are in days (operator-friendly unit; the config Service
+// converts to time.Duration via accessors). RefreshMaxInFlight bounds
+// the async-refresh worker (refresher.Service); zero falls through
+// to the package default.
+type EnrichmentConfig struct {
+	Hamnut             LookupConfig   `json:"hamnut"`
+	Chain              []LookupConfig `json:"chain,omitempty"`
+	CountryTTLDays     int            `json:"country_ttl_days"`
+	StationTTLDays     int            `json:"station_ttl_days"`
+	RefreshMaxInFlight int            `json:"refresh_max_in_flight"`
+}

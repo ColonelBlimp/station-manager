@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -94,6 +95,14 @@ type Config struct {
 	// per the canonical-DTO project idiom — same struct travels on
 	// the wire (ConfigResponse.Station) and on disk (config.json).
 	Station types.StationConfig `json:"station"`
+
+	// Lookup holds the enrichment pipeline configuration per ADR 0017
+	// — hamnut (country source-of-truth), the callsign-class provider
+	// chain, per-table staleness TTLs, and the bound on the async-
+	// refresh worker. Empty / zero-valued fields fall through to the
+	// defaults applied in applyDefaults; an empty Chain is valid and
+	// simply disables callsign-class enrichment.
+	Lookup types.EnrichmentConfig `json:"lookup"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -180,6 +189,9 @@ func Load(path string) (Config, error) {
 
 	if err = validateForwarders(cfg.Forwarders); err != nil {
 		return cfg, fmt.Errorf("validating forwarders: %w", err)
+	}
+	if err = validateLookup(cfg.Lookup); err != nil {
+		return cfg, fmt.Errorf("validating lookup: %w", err)
 	}
 
 	return cfg, nil
@@ -383,6 +395,39 @@ func applyDefaults(cfg *Config, baseDir string) {
 			}
 		}
 	}
+
+	// Enrichment pipeline defaults (ADR 0017). Per-table TTLs differ
+	// because DXCC entities turn over rarely (long country TTL) but
+	// operator licenses / addresses change more often (shorter
+	// contacted_station TTL). RefreshMaxInFlight matches
+	// refresher.DefaultMaxInFlight — operator can tune via config.
+	if cfg.Lookup.CountryTTLDays == 0 {
+		cfg.Lookup.CountryTTLDays = 365
+	}
+	if cfg.Lookup.StationTTLDays == 0 {
+		cfg.Lookup.StationTTLDays = 90
+	}
+	if cfg.Lookup.RefreshMaxInFlight == 0 {
+		cfg.Lookup.RefreshMaxInFlight = 4
+	}
+	// Stamp the canonical Hamnut name when the operator left it empty
+	// — keeps LookupServiceConfig(name) lookups predictable without
+	// forcing the operator to type the magic string in their config.
+	if cfg.Lookup.Hamnut.Name == "" {
+		cfg.Lookup.Hamnut.Name = types.HamNutLookupServiceName
+	}
+	if cfg.Lookup.Hamnut.HttpTimeoutSec == 0 {
+		cfg.Lookup.Hamnut.HttpTimeoutSec = 10
+	}
+	// Per-chain-entry timeout default — operators rarely need to
+	// override this so the explicit zero is treated as "use the
+	// daemon default" rather than "infinite timeout."
+	for i := range cfg.Lookup.Chain {
+		c := &cfg.Lookup.Chain[i]
+		if c.HttpTimeoutSec == 0 {
+			c.HttpTimeoutSec = 10
+		}
+	}
 }
 
 // validateForwarders checks the statically decidable correctness of every
@@ -426,6 +471,72 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 				return fmt.Errorf("forwarder %q: retry.max_backoff_sec must be >= initial_backoff_sec", fc.Name)
 			}
 		}
+	}
+	return nil
+}
+
+// validateLookup checks the enrichment pipeline configuration per
+// ADR 0017. Empty Chain is valid (no callsign-class enrichment runs).
+// TTL / max-in-flight values must be non-negative; zero is valid and
+// is interpreted by downstream consumers ("never stale" for TTL,
+// "use the package default" for max-in-flight).
+//
+// Per-provider URL / UserAgent / timeout checks fire only when
+// Enabled is true — the operator can have a fully-configured-but-
+// disabled provider sitting in config without triggering errors.
+// Type-specific credential validation (QRZ wants username/password)
+// happens later when each provider is constructed at daemon startup.
+func validateLookup(lc types.EnrichmentConfig) error {
+	if lc.CountryTTLDays < 0 {
+		return fmt.Errorf("country_ttl_days must be >= 0, got %d", lc.CountryTTLDays)
+	}
+	if lc.StationTTLDays < 0 {
+		return fmt.Errorf("station_ttl_days must be >= 0, got %d", lc.StationTTLDays)
+	}
+	if lc.RefreshMaxInFlight < 0 {
+		return fmt.Errorf("refresh_max_in_flight must be >= 0, got %d", lc.RefreshMaxInFlight)
+	}
+
+	if err := validateLookupProvider("hamnut", lc.Hamnut); err != nil {
+		return err
+	}
+
+	names := map[string]struct{}{}
+	for i, p := range lc.Chain {
+		if p.Name == "" {
+			return fmt.Errorf("lookup.chain[%d]: name is empty", i)
+		}
+		if _, dup := names[p.Name]; dup {
+			return fmt.Errorf("lookup.chain[%d]: duplicate name %q", i, p.Name)
+		}
+		if p.Name == lc.Hamnut.Name {
+			return fmt.Errorf("lookup.chain[%d]: name %q collides with hamnut", i, p.Name)
+		}
+		names[p.Name] = struct{}{}
+		if err := validateLookupProvider(fmt.Sprintf("chain[%d] (%s)", i, p.Name), p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateLookupProvider runs the static checks every enabled lookup
+// provider must pass — URL non-empty, UserAgent non-empty, positive
+// timeout. Disabled providers skip these checks so an operator can
+// stash a partially-configured entry in config without breaking
+// startup.
+func validateLookupProvider(label string, p types.LookupConfig) error {
+	if !p.Enabled {
+		return nil
+	}
+	if p.URL == "" {
+		return fmt.Errorf("lookup.%s: url is empty", label)
+	}
+	if p.UserAgent == "" {
+		return fmt.Errorf("lookup.%s: useragent is empty", label)
+	}
+	if p.HttpTimeoutSec <= 0 {
+		return fmt.Errorf("lookup.%s: timeout_sec must be > 0", label)
 	}
 	return nil
 }
@@ -547,3 +658,57 @@ func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
 func (s *Service) Forwarders() []types.ForwarderConfig {
 	return s.Cfg.Forwarders
 }
+
+// Enrichment returns the enrichment pipeline configuration per
+// ADR 0017. Caller should not mutate the returned struct.
+func (s *Service) Enrichment() types.EnrichmentConfig {
+	return s.Cfg.Lookup
+}
+
+// CountryTTL returns the country-table staleness threshold as a
+// time.Duration. Operator config holds the value in days; this
+// accessor performs the conversion so consumers (the orchestrator)
+// don't have to.
+func (s *Service) CountryTTL() time.Duration {
+	return time.Duration(s.Cfg.Lookup.CountryTTLDays) * 24 * time.Hour
+}
+
+// StationTTL returns the contacted_station staleness threshold.
+func (s *Service) StationTTL() time.Duration {
+	return time.Duration(s.Cfg.Lookup.StationTTLDays) * 24 * time.Hour
+}
+
+// RefreshMaxInFlight returns the bound on concurrent async refresh
+// goroutines. Zero is interpreted by refresher.Service as "use
+// package default."
+func (s *Service) RefreshMaxInFlight() int {
+	return s.Cfg.Lookup.RefreshMaxInFlight
+}
+
+// LookupServiceConfig returns the per-provider config keyed by
+// service name. Hamnut is matched first (its Name field is stamped
+// canonical at applyDefaults time); chain entries are matched by
+// their Name. Returns ErrLookupConfigNotFound when no entry matches.
+//
+// Used by lookup-provider Initialize paths to pull their config
+// when the DI container injects a *config.Service rather than
+// constructing the provider with an explicit Config block.
+func (s *Service) LookupServiceConfig(name string) (types.LookupConfig, error) {
+	if s.Cfg.Lookup.Hamnut.Name == name {
+		return s.Cfg.Lookup.Hamnut, nil
+	}
+	for _, p := range s.Cfg.Lookup.Chain {
+		if p.Name == name {
+			return p, nil
+		}
+	}
+	return types.LookupConfig{}, ErrLookupConfigNotFound
+}
+
+// ErrLookupConfigNotFound is returned by LookupServiceConfig when
+// no provider with the given name exists in operator config. Sentinel
+// (rather than fmt.Errorf) so callers can branch on
+// errors.Is(err, ErrLookupConfigNotFound) — providers may want to
+// disable themselves cleanly rather than fail startup when the
+// operator hasn't configured them.
+var ErrLookupConfigNotFound = fmt.Errorf("lookup: provider config not found")

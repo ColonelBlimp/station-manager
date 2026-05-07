@@ -100,10 +100,12 @@ func (s *Service) Initialize() error {
 				initErr = errors.New(op).WithMsg("application config has not been set/injected")
 				return
 			}
-			// LookupServiceConfig accessor lands in task #62. Until
-			// then, callers (DI or otherwise) MUST set Config directly.
-			initErr = errors.New(op).WithMsg("Config not set; LookupConfig accessor not yet wired in config service")
-			return
+			cfg, lerr := s.ConfigService.LookupServiceConfig(ServiceName)
+			if lerr != nil {
+				initErr = errors.New(op).WithErr(lerr).WithMsg("loading QRZ config from config service")
+				return
+			}
+			s.Config = &cfg
 		}
 
 		if err := s.validateConfig(op); err != nil {
