@@ -92,11 +92,21 @@ The station refresh deliberately doesn't trigger a hamnut call — country has i
 
 **Failure handling.** Refresh fn errors are logged (or fail silently for transport-style failures) and not retried. Per ADR 0017 #7, the next Tab against the same callsign will trigger a fresh attempt.
 
+### Production implementation
+
+`internal/lookup/refresher/` provides the bounded production worker that satisfies `lookup.AsyncRefresher`. Concrete shape:
+
+- **Bounded by `MaxInFlight`.** Default 4; operator-tunable via config (task #62). Slots tracked via a buffered-channel semaphore. Schedule attempts when at capacity drop the request with a warning log + counter bump (`Dropped()` accessor) rather than queueing — under outage / Tab pile-up an unbounded queue would just delay the same outcome while hoarding memory, and ADR 0017 #7's implicit-fall-through model means the next Tab against the same key will trigger another attempt anyway.
+- **Lifecycle.** Standard project shape: `Initialize()` → `Start(ctx)` → `Stop()`. `Start` binds the worker to a parent context (typically the daemon's main lifecycle context); `Stop` cancels that context and waits for in-flight refreshes to drain. Stop is idempotent and has **no hard deadline** — refresh fns must honour `ctx` cancellation themselves; if a fn ignores `ctx`, `Stop` blocks until it returns. This is intentional — the alternative (force-kill after timeout) doesn't compose with goroutines, and daemon shutdown is operator-triggered with no SLA pressure.
+- **Panic recovery.** Each scheduled fn runs under `safego.GoTracked`; a panicking fn is recovered + logged + the semaphore slot is released via a deferred block so panic doesn't leak slots. `respawn=false` because refresh fns are one-shot — the next Tab triggers another attempt if needed.
+- **Schedule before `Start` or after `Stop` is dropped (logged + counted).** The orchestrator's stale-hit branch calls `Schedule` without coordinating lifecycle; keeping the no-op-when-not-running behaviour in the worker means the orchestrator stays simple.
+
+The orchestrator depends on the `lookup.AsyncRefresher` interface, not the concrete refresher type — tests use a synchronous stub (`syncRefresher` in `orchestrator_test.go`) that runs scheduled work immediately so behaviour is deterministic; production wires the bounded worker.
+
 ## Out of scope for this doc
 
-- **Operator config schema** — task #62. How `LookupConfig` flows into the orchestrator's `Country` and `Chain` fields, where TTLs come from, the per-provider enabled flag.
-- **HTTP handler** — task #63. Wiring `/v1/enrich/callsign?call=X` to `Orchestrator.Enrich`, response JSON shape, AbortController propagation.
-- **`AsyncRefresher` production implementation** — task #61. Bounded goroutine pool, daemon shutdown integration, in-flight count limits.
+- **Operator config schema** — task #62. How `LookupConfig` flows into the orchestrator's `Country` and `Chain` fields, where TTLs come from, the refresher's `MaxInFlight` knob, the per-provider enabled flag.
+- **HTTP handler** — task #63. Wiring `/v1/enrich/callsign?call=X` to `Orchestrator.Enrich`, response JSON shape, AbortController propagation, DI wiring of orchestrator + refresher into `cmd/smd`.
 - **QSO-submit upsert** — task #64. The second write path on `contacted_station` from `qsoservice.Submit` (ADR 0017 #10), best-effort outside the QSO transaction.
 - **SPA wiring** — deferred to a separate session. `lib/enrichment.svelte.ts`, `Callsign.onenrich`, `QsoPanel` field application.
 
@@ -110,4 +120,6 @@ The station refresh deliberately doesn't trigger a hamnut call — country has i
 - **`internal/lookup/orchestrator.go`** — `Orchestrator`, `Result`, `MergeStationFromCountry`, `IsEmpty`, source constants, `AsyncRefresher` interface.
 - **`internal/lookup/hamnut/`** — country provider against the Hamnut API.
 - **`internal/lookup/qrz/`** — callsign-class provider against the QRZ.com XML API.
+- **`internal/lookup/refresher/`** — production `AsyncRefresher` implementation: bounded goroutine pool, lifecycle, panic recovery via `internal/safego`.
+- **`internal/safego/`** — panic-recovering goroutine wrappers (`Go` / `GoTracked`); the refresher uses `GoTracked` for shutdown drain.
 - **`docs/v1-analysis/invariants.md`** — `enrichment never blocks logging` invariant; load-bearing for ADR 0017 #12 (always-200 contract).
