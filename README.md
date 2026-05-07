@@ -4,8 +4,7 @@
 
 # Station Manager
 
-**Station Manager** is a suite of modern Linux desktop applications for Amateur Radio station management. They are built using
-Go, SvelteKit with the Wails framework binding it all together. Distribution is currently via `.rpm` and `.deb` packages.
+**Station Manager** is software for Amateur Radio station management on Linux. It runs as a local daemon (`smd`, written in Go) that serves a browser SPA (Svelte 5 + Vite) for QSO logging, station configuration, and rig control. The daemon and SPA ship as a single binary; the operator points a browser at it.
 
 Why yet another piece of software for amateur radio logging, etc.? Well, what is out there just doesn't allow me to
 operate in the way I want to. Also, I don't generally use Windows, and I don't want to use Mac,
@@ -15,11 +14,11 @@ out-of-date, cost too much, and their UIs are far too busy to make them easy to 
 
 One of the other main requirements is that the software should not require an internet connection to operate.
 Here in Malawi, the internet is not always available, and when it is, it is not always reliable. So, the software should
-be able to operate without an internet connection. The application will forward QSOs to online logbooks such as QRZ.com, ClubLog,
-Station Manager (all configurable), but this is not a requirement for the software to operate.
+be able to operate without an internet connection. The application will forward QSOs to online logbooks such as QRZ.com and ClubLog (configurable), but this is not a requirement for the software to operate.
 
-The software is not aimed at contests (although it does support contesting), rather at general HF operation by SSB, CW,
-and FT8.
+The software is not aimed at contests (although it does support contesting), rather at general HF operation by SSB and CW.
+
+Design decisions, architecture notes, and the ADR log live under `docs/`.
 
 ## Computer Aided Transceiver (CAT)
 
