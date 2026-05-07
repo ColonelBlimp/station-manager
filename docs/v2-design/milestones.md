@@ -392,10 +392,15 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   cat-serial-reuse.md §7.5; uniform with `Logbook.ID int64`;
   numeric defaults (1) work cleanly. Zero blast radius (no
   consumers in code yet). Landed session 31, 2026-05-03.
-- ⏳ Daemon `GET /v1/enrich/callsign` — enrichment endpoint
-  per ADR 0005. Unlocks F2 lookup-only path. Plus the SPA-side
-  `qsoDraft.populateFromEnrichment(...)` method that the panel's
-  `handleEnrich` will call on Tab when the wrapper lands.
+- ✅ Daemon `GET /v1/enrich/callsign` — enrichment endpoint
+  per ADR 0017 (supersedes ADR 0005). Daemon-side fully shipped
+  2026-05-07: schema migration, provider abstraction, hamnut + QRZ
+  ports from v1, orchestrator with three-state read policy +
+  always-merge filter→hamnut, bounded async-refresh worker,
+  operator config schema, HTTP handler, contacted_station upsert
+  in QSO submit. Unlocks F2 lookup-only path. Pending: SPA-side
+  `lib/enrichment.svelte.ts` wrapper + `qsoDraft.populateFromEnrichment(...)`
+  method that the panel's `handleEnrich` will call on Tab.
 - ✅ Migrate `lib/stores/station.ts` MY_* fields into
   `configState.loggingStation` and ship the full ADIF MY_* set
   end-to-end. `internal/utils/maidenhead.go` derives `MyLat`/`MyLon`

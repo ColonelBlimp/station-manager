@@ -8,7 +8,7 @@ For the dominant deployment shape (single operator, one rig, one shack PC) the d
 
 - The SQLite log + upload queue (storage subsystem).
 - Forwarder workers for QRZ / ClubLog / LoTW (forwarder subsystem, driver-shaped per ADR 0014).
-- The HTTP API surface (`/v1/qso`, `/v1/config`, `/v1/lookup/{call}`, etc.).
+- The HTTP API surface (`/v1/qso`, `/v1/config`, `/v1/enrich/callsign`, etc.).
 - The embedded SPA (`//go:embed frontend/dist`, served at `/`, per ADR 0001).
 - The CAT/serial subsystem — `internal/bridge` package — which owns the serial port, AUTO-mode CAT parsing, the rigctld-compat TCP listener, the SM-native SSE (`/v1/rig/events` per ADR 0010), the current-state cache, and PTT arbitration (ADR 0013).
 
@@ -113,7 +113,7 @@ The package-boundary discipline keeps these flows clean: storage and forwarder p
 - Forwards QSOs to QRZ / ClubLog / LoTW per the driver-shaped forwarder design (forwarder subsystem; ADR 0014).
 - Hosts the SPA (`//go:embed frontend/dist`) when `cfg.Server.ServeSPA == true` (ADR 0001).
 - Hosts the bridge subsystem (`internal/bridge`) when `cfg.Bridge.Enabled == true` (ADR 0013) — owns serial, AUTO-mode CAT, rigctld-compat TCP, `/v1/rig/events`, PTT arbitration. Otherwise the bridge subsystem is wired as a no-op.
-- Exposes the REST API the SPA consumes: `/v1/qso`, `/v1/config`, `/v1/lookup/{call}`, `/v1/forward/status`, `/v1/rig/events` (when bridge subsystem enabled), etc.
+- Exposes the REST API the SPA consumes: `/v1/qso`, `/v1/config`, `/v1/enrich/callsign` (ADR 0017), `/v1/qso/{uuid}/uploads`, `/v1/rig/events` (when bridge subsystem enabled), etc.
 - Auth header threading on every request (ADR 0014); validator a no-op by default, registerable for network-deployed cases.
 
 ### Standalone bridge (`cmd/bridge`) — opt-in
