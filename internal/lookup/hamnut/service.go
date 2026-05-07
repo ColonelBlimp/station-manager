@@ -1,0 +1,253 @@
+// Package hamnut implements the lookup.CountryProvider interface
+// against the Hamnut /v1/call-signs/prefixes upstream.
+//
+// Hamnut is the country source-of-truth per ADR 0017 — country / CQ /
+// ITU / continent / DXCC fields populated on a QSO come from this
+// provider (or the country-table cache it writes through), never from
+// callsign-class providers like QRZ. The "QRZ records Malawi for an
+// English call" example in ADR 0017's Context is exactly the
+// pathology this hamnut-exclusive write rule guards against.
+//
+// The service is anonymous (no auth, no creds in LookupConfig); only
+// URL / UserAgent / HttpTimeoutSec are read.
+package hamnut
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/lookup"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
+)
+
+// ServiceName is the DI bean ID and the LookupConfig.Name value the
+// orchestrator matches on. Mirrors the v1 constant.
+const ServiceName = types.HamNutLookupServiceName
+
+// Compile-time check that Service satisfies lookup.CountryProvider.
+var _ lookup.CountryProvider = (*Service)(nil)
+
+// Service is the hamnut CountryProvider implementation.
+//
+// Two construction paths:
+//   - DI: the iocdi container injects ConfigService + LoggerService
+//     via the struct tags; Initialize then resolves the LookupConfig
+//     via ConfigService and builds the HTTP client.
+//   - Direct: callers (notably tests) supply Config and an optional
+//     *http.Client via NewService and skip the ConfigService path.
+//
+// Initialize is idempotent — safe to call multiple times.
+type Service struct {
+	ConfigService *config.Service  `di.inject:"configservice"`
+	LoggerService *logging.Service `di.inject:"loggingservice"`
+	Config        *types.LookupConfig
+	client        *http.Client
+
+	isInitialized atomic.Bool
+	initOnce      sync.Once
+}
+
+// NewService constructs a Service with the given dependencies. cfg may
+// be nil if ConfigService is set; client may be nil to use the daemon
+// default (utils.NewHTTPClient with the config's timeout). The DI
+// path uses zero-value initialization + tag injection instead and
+// shouldn't call this.
+func NewService(logger *logging.Service, cfgSvc *config.Service, cfg *types.LookupConfig, client *http.Client) *Service {
+	return &Service{
+		LoggerService: logger,
+		ConfigService: cfgSvc,
+		Config:        cfg,
+		client:        client,
+	}
+}
+
+// Name returns the stable provider identifier — used both as the DI
+// bean ID and as the value the SPA receives in the response's
+// `countrySource` field.
+func (s *Service) Name() string { return ServiceName }
+
+// Initialize wires the Service against its dependencies. Idempotent.
+// Returns an error only when the operator's config is broken
+// (missing URL, invalid URL, empty UserAgent, non-positive timeout).
+//
+// When Config.Enabled is false, the HTTP client is intentionally not
+// constructed — Lookup short-circuits with a "disabled" sentinel
+// result rather than attempting any network call.
+func (s *Service) Initialize() error {
+	const op errors.Op = "hamnut.Service.Initialize"
+	if s.isInitialized.Load() {
+		return nil
+	}
+
+	var initErr error
+	s.initOnce.Do(func() {
+		if s.LoggerService == nil {
+			initErr = errors.New(op).WithMsg("logger service has not been set/injected")
+			return
+		}
+
+		if s.Config == nil {
+			if s.ConfigService == nil {
+				initErr = errors.New(op).WithMsg("application config has not been set/injected")
+				return
+			}
+			// Note: v2's config service does not yet expose a
+			// LookupServiceConfig accessor — that lands in task #62
+			// alongside the operator config schema for the provider
+			// chain. Until then, callers (or DI wiring) MUST set
+			// Config directly via NewService or struct field.
+			initErr = errors.New(op).WithMsg("Config not set; LookupConfig accessor not yet wired in config service")
+			return
+		}
+
+		if err := s.validateConfig(op); err != nil {
+			initErr = err
+			return
+		}
+
+		if s.client == nil && s.Config.Enabled {
+			s.client = utils.NewHTTPClient(time.Duration(s.Config.HttpTimeoutSec) * time.Second)
+		}
+		if !s.Config.Enabled && s.LoggerService != nil {
+			s.LoggerService.InfoWith().Msg("Hamnut lookup is disabled in the config")
+		}
+
+		s.isInitialized.Store(true)
+	})
+
+	return initErr
+}
+
+// Lookup performs a country lookup with context.Background(). The
+// LookupWithContext form is preferred from the orchestrator since
+// SPA-side AbortController cancellation needs ctx propagation.
+func (s *Service) Lookup(callsign string) (types.Country, error) {
+	return s.LookupWithContext(context.Background(), callsign)
+}
+
+// LookupWithContext queries hamnut for the country corresponding to
+// the callsign's prefix. Returns:
+//
+//   - (Country{Name:"Unknown"}, nil) when the provider is disabled —
+//     a sentinel the orchestrator distinguishes from a real result.
+//   - (Country{}, errors.ErrNotFound) when the upstream returns 404
+//     OR a 200 with `{"found": false}` — both mean "hamnut doesn't
+//     know this prefix"; the orchestrator writes no row in either
+//     case per ADR 0017.
+//   - (Country{}, error) for transport / parse / non-2xx-non-404
+//     responses. The orchestrator's implicit-fall-through policy
+//     (ADR 0017 #7) treats these as "internet down or upstream
+//     misbehaving" and falls back to whatever the local country row
+//     says.
+//   - (Country{...}, nil) on success.
+func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types.Country, error) {
+	const op errors.Op = "hamnut.Service.LookupWithContext"
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if !s.isInitialized.Load() {
+		return types.Country{}, errors.New(op).WithMsg("service is not initialized")
+	}
+	if s.Config == nil {
+		return types.Country{}, errors.New(op).WithMsg("service config is not set")
+	}
+
+	callsign = strings.TrimSpace(callsign)
+	if !s.Config.Enabled {
+		// Sentinel: ADR 0017 #7 implicit-fall-through covers the
+		// "hamnut is down" case at the orchestrator. "Disabled" is
+		// the operator's deliberate choice — distinguished by the
+		// "Unknown" Name so the orchestrator can log/track without
+		// treating it as a transport failure.
+		return types.Country{Name: "Unknown"}, nil
+	}
+	if s.client == nil {
+		return types.Country{}, errors.New(op).WithMsg("http client is not configured")
+	}
+	if callsign == "" {
+		return types.Country{}, errors.New(op).WithMsg("callsign cannot be empty")
+	}
+
+	u, err := url.Parse(s.Config.URL)
+	if err != nil {
+		return types.Country{}, errors.New(op).WithErr(err).WithMsg("invalid Hamnut base URL")
+	}
+	q := u.Query()
+	q.Set("prefix", callsign)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return types.Country{}, errors.New(op).WithErr(err).WithMsg("failed to create HTTP GET request")
+	}
+	req.Header.Set("User-Agent", s.Config.UserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return types.Country{}, errors.New(op).WithErr(err).WithMsg("failed to perform HTTP GET request")
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return types.Country{}, errors.New(op).WithErr(errors.ErrNotFound).
+			WithMsg("prefix not found by Hamnut")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Drain a small slice of the body for the error message; we
+		// don't need the whole thing and reading it all could be
+		// expensive on a misbehaving upstream.
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return types.Country{}, errors.New(op).
+			WithMsgf("hamnut returned status %d: %s", resp.StatusCode, string(b))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return types.Country{}, errors.New(op).WithErr(err).WithMsg("failed to read response body")
+	}
+	country, err := s.unmarshalResponse(body)
+	if err != nil {
+		return types.Country{}, err
+	}
+	return country, nil
+}
+
+func (s *Service) validateConfig(op errors.Op) error {
+	if s.Config == nil {
+		return errors.New(op).WithMsg("service config is not set")
+	}
+	if !s.Config.Enabled {
+		return nil
+	}
+
+	s.Config.URL = strings.TrimSpace(s.Config.URL)
+	if s.Config.URL == "" {
+		return errors.New(op).WithMsg("hamnut URL cannot be empty when enabled")
+	}
+	u, err := url.Parse(s.Config.URL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return errors.New(op).WithErr(err).WithMsg("hamnut URL is invalid")
+	}
+
+	s.Config.UserAgent = strings.TrimSpace(s.Config.UserAgent)
+	if s.Config.UserAgent == "" {
+		return errors.New(op).WithMsg("hamnut UserAgent cannot be empty when enabled")
+	}
+
+	if s.Config.HttpTimeoutSec <= 0 {
+		return errors.New(op).WithMsg("hamnut HttpTimeoutSec must be greater than zero")
+	}
+	return nil
+}
