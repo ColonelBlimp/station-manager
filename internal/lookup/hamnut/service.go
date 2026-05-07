@@ -83,7 +83,12 @@ func (s *Service) Name() string { return ServiceName }
 // When Config.Enabled is false, the HTTP client is intentionally not
 // constructed — Lookup short-circuits with a "disabled" sentinel
 // result rather than attempting any network call.
-func (s *Service) Initialize() error {
+//
+// The ctx parameter is part of the lookup.CountryProvider interface
+// shape (so QRZ's session-key fetch can honour daemon shutdown).
+// Hamnut performs no I/O during initialization, so ctx is accepted
+// for uniformity but not used here.
+func (s *Service) Initialize(_ context.Context) error {
 	const op errors.Op = "hamnut.Service.Initialize"
 	if s.isInitialized.Load() {
 		return nil

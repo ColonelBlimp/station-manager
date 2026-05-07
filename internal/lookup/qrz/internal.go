@@ -1,6 +1,7 @@
 package qrz
 
 import (
+	"context"
 	"encoding/xml"
 	"io"
 	"net/http"
@@ -23,8 +24,17 @@ import (
 // as a transport-style failure and falls through to the local DB.
 // If this becomes a real problem, add session refresh on
 // authentication-style errors as a separate task.
-func (s *Service) requestAndSetSessionKey() error {
+//
+// ctx is the daemon-lifecycle context (propagated from Initialize).
+// Used by http.NewRequestWithContext so daemon shutdown cancels a
+// stuck handshake — review M4 (pre-fix this used http.NewRequest
+// with no context, and the only timeout was the absolute per-call
+// HttpTimeoutSec).
+func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 	const op errors.Op = "qrz.Service.requestAndSetSessionKey"
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	u, err := url.Parse(s.Config.URL)
 	if err != nil {
@@ -36,7 +46,7 @@ func (s *Service) requestAndSetSessionKey() error {
 	q.Set("agent", s.Config.UserAgent)
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("failed to create HTTP GET request")
 	}

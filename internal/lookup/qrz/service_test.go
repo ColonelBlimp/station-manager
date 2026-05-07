@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -42,7 +43,7 @@ func initializedService(t *testing.T, url string, client *http.Client) *Service 
 
 func TestInitialize_MissingLogger(t *testing.T) {
 	s := &Service{Config: &types.LookupConfig{Enabled: false}}
-	if err := s.Initialize(); err == nil {
+	if err := s.Initialize(context.Background()); err == nil {
 		t.Fatal("expected error when logger is nil")
 	}
 }
@@ -52,10 +53,10 @@ func TestInitialize_DisabledIsValid(t *testing.T) {
 		LoggerService: &logging.Service{},
 		Config:        &types.LookupConfig{Enabled: false},
 	}
-	if err := s.Initialize(); err != nil {
+	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("disabled config should initialize cleanly: %v", err)
 	}
-	if err := s.Initialize(); err != nil {
+	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("second Initialize: %v", err)
 	}
 }
@@ -75,7 +76,7 @@ func TestInitialize_RejectsBrokenConfig(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := &Service{LoggerService: &logging.Service{}, Config: c.cfg}
-			if err := s.Initialize(); err == nil {
+			if err := s.Initialize(context.Background()); err == nil {
 				t.Fatalf("expected error for %s", c.name)
 			}
 		})
@@ -106,7 +107,7 @@ func TestInitialize_SessionKeyFailureDisablesService(t *testing.T) {
 		},
 		client: srv.Client(),
 	}
-	err := s.Initialize()
+	err := s.Initialize(context.Background())
 	if err == nil {
 		t.Fatal("expected init error from auth failure")
 	}
@@ -119,6 +120,62 @@ func TestInitialize_SessionKeyFailureDisablesService(t *testing.T) {
 }
 
 // ---- Lookup happy path ----
+
+// TestInitialize_RespectsContextCancellation pins review-finding M4
+// (session-key fetch ignored ctx). A QRZ server that hangs on the
+// session request must be cancellable via the ctx passed to
+// Initialize so daemon shutdown isn't blocked on a stuck handshake.
+//
+// Pre-fix, the request was built with http.NewRequest (no context),
+// and the only timeout was the absolute HttpTimeoutSec on the
+// client. A cancelled ctx would have no effect — Initialize would
+// only return when the per-call timeout fired or the body finished.
+// Post-fix, http.NewRequestWithContext propagates ctx into the
+// transport, and a cancelled ctx returns promptly.
+func TestInitialize_RespectsContextCancellation(t *testing.T) {
+	// Server that hangs on the session-key request — never writes
+	// a body, just waits for the request's ctx to fire (which is
+	// what http.NewRequestWithContext propagates from the client).
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	s := &Service{
+		LoggerService: &logging.Service{},
+		Config: &types.LookupConfig{
+			Enabled:        true,
+			URL:            srv.URL,
+			Username:       "tester",
+			Password:       "secret",
+			UserAgent:      "smd/test",
+			HttpTimeoutSec: 60, // generous — we want the ctx to win, not the timeout
+		},
+		client: srv.Client(),
+	}
+
+	// Cancel the ctx before Initialize even starts. A correctly
+	// wired Initialize / requestAndSetSessionKey will see the
+	// cancellation immediately rather than waiting the full 60s
+	// HttpTimeoutSec.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- s.Initialize(ctx) }()
+
+	select {
+	case err := <-done:
+		// Initialize either errors (preferred — auth failure due to
+		// transport cancellation) or self-disables (also acceptable
+		// — that's the existing failure-disables-the-service contract).
+		if err == nil && s.Config.Enabled {
+			t.Fatal("Initialize neither errored nor disabled service after ctx cancellation")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Initialize ignored ctx cancellation — would have blocked daemon shutdown")
+	}
+}
 
 func TestLookup_HappyPath_ReturnsContactedStation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

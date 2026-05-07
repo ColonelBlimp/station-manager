@@ -21,7 +21,7 @@ type stubCountryProvider struct {
 }
 
 func (s *stubCountryProvider) Name() string                           { return s.name }
-func (s *stubCountryProvider) Initialize() error                      { return nil }
+func (s *stubCountryProvider) Initialize(_ context.Context) error     { return nil }
 func (s *stubCountryProvider) Lookup(_ string) (types.Country, error) { return s.result, s.err }
 func (s *stubCountryProvider) LookupWithContext(_ context.Context, _ string) (types.Country, error) {
 	return s.result, s.err
@@ -33,8 +33,8 @@ type stubCallsignProvider struct {
 	err    error
 }
 
-func (s *stubCallsignProvider) Name() string      { return s.name }
-func (s *stubCallsignProvider) Initialize() error { return nil }
+func (s *stubCallsignProvider) Name() string                       { return s.name }
+func (s *stubCallsignProvider) Initialize(_ context.Context) error { return nil }
 func (s *stubCallsignProvider) Lookup(_ string) (types.ContactedStation, error) {
 	return s.result, s.err
 }

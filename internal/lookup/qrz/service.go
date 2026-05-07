@@ -82,7 +82,15 @@ func (s *Service) Name() string { return ServiceName }
 // matches v1's "any error here and we should disable the service"
 // behaviour and matches ADR 0017's implicit-fall-through model: if
 // QRZ auth is broken at startup, the chain runner skips QRZ.
-func (s *Service) Initialize() error {
+//
+// ctx is the daemon-lifecycle context — propagated into the
+// session-key HTTP call so daemon shutdown can interrupt a stuck
+// TLS handshake or hung response read (review M4). The HTTP
+// client's per-request timeout (HttpTimeoutSec) still bounds the
+// call in absolute terms; ctx provides the orthogonal cooperative-
+// cancellation channel that the operator-triggered shutdown path
+// needs.
+func (s *Service) Initialize(ctx context.Context) error {
 	const op errors.Op = "qrz.Service.Initialize"
 	if s.isInitialized.Load() {
 		return nil
@@ -118,7 +126,7 @@ func (s *Service) Initialize() error {
 		}
 
 		if s.Config.Enabled {
-			if err := s.requestAndSetSessionKey(); err != nil {
+			if err := s.requestAndSetSessionKey(ctx); err != nil {
 				// Disable on auth failure so subsequent Lookup short-
 				// circuits cleanly. The orchestrator skips disabled
 				// providers in the chain.

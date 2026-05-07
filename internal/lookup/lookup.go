@@ -45,7 +45,17 @@ type Provider interface {
 	// validates provider-specific configuration. Idempotent — safe to
 	// call multiple times. Returns an error if the provider is
 	// misconfigured (missing creds, unreachable URL on probe, etc.).
-	Initialize() error
+	//
+	// ctx is the daemon-lifecycle context the caller threads through
+	// from cmd/smd. Providers that perform I/O during initialization
+	// (notably QRZ's session-key fetch) propagate ctx into their HTTP
+	// calls so daemon shutdown can cancel a stuck handshake;
+	// providers that do no I/O (hamnut) accept ctx for signature
+	// uniformity but don't use it. Pre-fix (review M4), the QRZ
+	// session-key path used http.NewRequest with no context — a
+	// future config-reload-during-running scenario would have no
+	// way to interrupt a hung TLS handshake.
+	Initialize(ctx context.Context) error
 }
 
 // CountryProvider supplies country / CQ-zone / ITU-zone / continent /

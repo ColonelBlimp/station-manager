@@ -460,7 +460,7 @@ func buildEnrichment(
 	if cfg.Lookup.Hamnut.Enabled {
 		hamnutCfg := cfg.Lookup.Hamnut
 		hamnutSvc := hamnut.NewService(loggerSvc, cfgSvc, &hamnutCfg, nil)
-		if err := hamnutSvc.Initialize(); err != nil {
+		if err := hamnutSvc.Initialize(workerCtx); err != nil {
 			return nil, nil, errors.New(op).WithErr(err).WithMsg("initialize hamnut provider")
 		}
 		countryProvider = hamnutSvc
@@ -477,7 +477,7 @@ func buildEnrichment(
 		switch entry.Name {
 		case types.QRZLookupServiceName:
 			qrzSvc := lookupqrz.NewService(loggerSvc, cfgSvc, &entryCopy, nil)
-			if err := qrzSvc.Initialize(); err != nil {
+			if err := qrzSvc.Initialize(workerCtx); err != nil {
 				return nil, nil, errors.New(op).WithErr(err).WithMsgf("initialize chain provider %q", entry.Name)
 			}
 			// QRZ Initialize disables itself on session-fetch failure

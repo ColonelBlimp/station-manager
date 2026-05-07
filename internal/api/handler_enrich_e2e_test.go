@@ -32,7 +32,7 @@ func wireE2EHamnut(t *testing.T, srv *httptest.Server, enabled bool) *hamnut.Ser
 		HttpTimeoutSec: 5,
 	}
 	s := hamnut.NewService(&logging.Service{}, nil, &cfg, srv.Client())
-	if err := s.Initialize(); err != nil {
+	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("hamnut Initialize: %v", err)
 	}
 	return s
@@ -50,7 +50,7 @@ func wireE2EQRZ(t *testing.T, srv *httptest.Server) *lookupqrz.Service {
 		Password:       "secret",
 	}
 	s := lookupqrz.NewService(&logging.Service{}, nil, &cfg, srv.Client())
-	if err := s.Initialize(); err != nil {
+	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("qrz Initialize: %v", err)
 	}
 	return s

@@ -782,6 +782,7 @@ shipped shapes.
 |---|---|---|
 | `Protocol` | `"unix"` | Listener type. |
 | `SocketPath` | (no default — required) | Unix path or `host:port`. |
+| `ReadHeaderTimeoutSec` | 5 | `http.Server.ReadHeaderTimeout` — slow-headers DoS guard, fixed short cap independent of `ReadTimeoutSec`. |
 | `ReadTimeoutSec` | 15 | `http.Server.ReadTimeout`. |
 | `WriteTimeoutSec` | 15 | `http.Server.WriteTimeout` (disabled per-handler for SSE). |
 | `IdleTimeoutSec` | 60 | `http.Server.IdleTimeout`. |

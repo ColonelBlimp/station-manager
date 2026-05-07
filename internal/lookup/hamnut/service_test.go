@@ -38,7 +38,7 @@ func initializedService(t *testing.T, url string, client *http.Client) *Service 
 
 func TestInitialize_MissingLogger(t *testing.T) {
 	s := &Service{Config: &types.LookupConfig{Enabled: false}}
-	if err := s.Initialize(); err == nil {
+	if err := s.Initialize(context.Background()); err == nil {
 		t.Fatal("expected error when logger is nil")
 	}
 }
@@ -48,11 +48,11 @@ func TestInitialize_DirectConfig_DisabledIsValid(t *testing.T) {
 		LoggerService: &logging.Service{},
 		Config:        &types.LookupConfig{Enabled: false},
 	}
-	if err := s.Initialize(); err != nil {
+	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("disabled config should initialize cleanly: %v", err)
 	}
 	// Idempotent.
-	if err := s.Initialize(); err != nil {
+	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("second Initialize: %v", err)
 	}
 }
@@ -70,7 +70,7 @@ func TestInitialize_RejectsBrokenConfig(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := &Service{LoggerService: &logging.Service{}, Config: c.cfg}
-			if err := s.Initialize(); err == nil {
+			if err := s.Initialize(context.Background()); err == nil {
 				t.Fatalf("expected error for %s", c.name)
 			}
 		})

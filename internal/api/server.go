@@ -135,10 +135,21 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	//   mux               — per-route handlers (with their own per-route
 	//                       middleware like limitSubmitRate / limitEventSubscribers)
 	s.httpServer = &http.Server{
-		Handler:      s.logRequests(s.limitConcurrent(s.recoverPanic(mux))),
-		ReadTimeout:  time.Duration(cfg.Server.ReadTimeoutSec) * time.Second,
-		WriteTimeout: time.Duration(cfg.Server.WriteTimeoutSec) * time.Second,
-		IdleTimeout:  time.Duration(cfg.Server.IdleTimeoutSec) * time.Second,
+		Handler: s.logRequests(s.limitConcurrent(s.recoverPanic(mux))),
+		// ReadHeaderTimeout caps the pre-handler request-header read
+		// independently of ReadTimeout (which budgets headers + body
+		// together and is operator-tunable up to longer values for
+		// slow clients). A short fixed cap here closes a
+		// slowloris-style slow-headers DoS surface — a malicious or
+		// buggy client holding the connection open in the headers
+		// phase consumes a TCP socket but no MaxConcurrentRequests
+		// slot until the handler runs, so without this cap the
+		// concurrent-request limit doesn't protect the listener
+		// itself. Review finding M3 (2026-05-07).
+		ReadHeaderTimeout: time.Duration(cfg.Server.ReadHeaderTimeoutSec) * time.Second,
+		ReadTimeout:       time.Duration(cfg.Server.ReadTimeoutSec) * time.Second,
+		WriteTimeout:      time.Duration(cfg.Server.WriteTimeoutSec) * time.Second,
+		IdleTimeout:       time.Duration(cfg.Server.IdleTimeoutSec) * time.Second,
 	}
 
 	return s

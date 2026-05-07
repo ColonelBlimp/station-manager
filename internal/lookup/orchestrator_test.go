@@ -72,8 +72,8 @@ type stubCountryProvider struct {
 	calls  int
 }
 
-func (s *stubCountryProvider) Name() string      { return s.name }
-func (s *stubCountryProvider) Initialize() error { return nil }
+func (s *stubCountryProvider) Name() string                       { return s.name }
+func (s *stubCountryProvider) Initialize(_ context.Context) error { return nil }
 func (s *stubCountryProvider) Lookup(_ string) (types.Country, error) {
 	s.calls++
 	return s.result, s.err
@@ -90,8 +90,8 @@ type stubCallsignProvider struct {
 	calls  int
 }
 
-func (s *stubCallsignProvider) Name() string      { return s.name }
-func (s *stubCallsignProvider) Initialize() error { return nil }
+func (s *stubCallsignProvider) Name() string                       { return s.name }
+func (s *stubCallsignProvider) Initialize(_ context.Context) error { return nil }
 func (s *stubCallsignProvider) Lookup(_ string) (types.ContactedStation, error) {
 	s.calls++
 	return s.result, s.err
@@ -762,8 +762,8 @@ func TestEnrich_EmptyCallsign_NoneNone(t *testing.T) {
 // CountrySource=none rather than deadlocking.
 type panickingCountryProvider struct{ name string }
 
-func (p *panickingCountryProvider) Name() string      { return p.name }
-func (p *panickingCountryProvider) Initialize() error { return nil }
+func (p *panickingCountryProvider) Name() string                       { return p.name }
+func (p *panickingCountryProvider) Initialize(_ context.Context) error { return nil }
 func (p *panickingCountryProvider) Lookup(_ string) (types.Country, error) {
 	panic("synthetic country panic")
 }
@@ -773,8 +773,8 @@ func (p *panickingCountryProvider) LookupWithContext(_ context.Context, _ string
 
 type panickingCallsignProvider struct{ name string }
 
-func (p *panickingCallsignProvider) Name() string      { return p.name }
-func (p *panickingCallsignProvider) Initialize() error { return nil }
+func (p *panickingCallsignProvider) Name() string                       { return p.name }
+func (p *panickingCallsignProvider) Initialize(_ context.Context) error { return nil }
 func (p *panickingCallsignProvider) Lookup(_ string) (types.ContactedStation, error) {
 	panic("synthetic chain panic")
 }

@@ -110,12 +110,13 @@ type ServerConfig struct {
 	// Protocol is the network protocol for the listener: "tcp"
 	// (default — needed for the embedded SPA, which browsers reach
 	// over HTTP) or "unix" for the headless-daemon deployment shape.
-	Protocol           string `json:"protocol"`
-	ReadTimeoutSec     int    `json:"read_timeout_sec"`
-	WriteTimeoutSec    int    `json:"write_timeout_sec"`
-	IdleTimeoutSec     int    `json:"idle_timeout_sec"`
-	ShutdownTimeoutSec int    `json:"shutdown_timeout_sec"`
-	MaxBodyBytes       int64  `json:"max_body_bytes"`
+	Protocol             string `json:"protocol"`
+	ReadHeaderTimeoutSec int    `json:"read_header_timeout_sec"`
+	ReadTimeoutSec       int    `json:"read_timeout_sec"`
+	WriteTimeoutSec      int    `json:"write_timeout_sec"`
+	IdleTimeoutSec       int    `json:"idle_timeout_sec"`
+	ShutdownTimeoutSec   int    `json:"shutdown_timeout_sec"`
+	MaxBodyBytes         int64  `json:"max_body_bytes"`
 
 	// DefaultPageLimit is the page size used when a list request omits
 	// ?limit. MaxPageLimit is the ceiling applied to any client-supplied
@@ -264,6 +265,15 @@ func applyDefaults(cfg *Config, baseDir string) {
 		} else {
 			cfg.SocketPath = filepath.Join(os.TempDir(), "smd.sock")
 		}
+	}
+	if cfg.Server.ReadHeaderTimeoutSec == 0 {
+		// Slow-headers DoS guard (review M3). Bounds the pre-handler
+		// exposure independently of ReadTimeout — operators may tune
+		// ReadTimeout up for slow clients, but a fixed 5s cap on
+		// headers-only protects against slowloris-style attacks
+		// regardless. See docs/v2-design/api.md §6 for the threat
+		// model (self-DoS from buggy local clients).
+		cfg.Server.ReadHeaderTimeoutSec = 5
 	}
 	if cfg.Server.ReadTimeoutSec == 0 {
 		cfg.Server.ReadTimeoutSec = 10
