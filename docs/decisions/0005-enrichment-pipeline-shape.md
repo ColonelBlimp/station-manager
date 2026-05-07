@@ -1,9 +1,19 @@
 ---
 number: 0005
 title: Enrichment pipeline — single daemon endpoint, aggregated response, cache-first orchestration
-status: Accepted
+status: Superseded by 0017
 date: 2026-05-01
 ---
+
+> **Superseded by ADR 0017 (2026-05-07).** The model in this ADR (concurrent
+> hamnut+QRZ, dedicated callsign cache, 7-day TTL) was replaced after the
+> implementation session surfaced that QRZ-class country/zone data is
+> untrustworthy and that the operator's actual mental model is "domain
+> tables (`country`, `contacted_station`) ARE the cache; internet is the
+> fallback." See ADR 0017 for the chain-of-providers + hamnut-as-country-
+> truth + domain-table-cache shape that replaces this one. The single-
+> endpoint API shape (`GET /v1/enrich/callsign?call=X`, always-200,
+> AbortController cancellation) carries forward unchanged.
 
 # 0005 — Enrichment pipeline shape
 
