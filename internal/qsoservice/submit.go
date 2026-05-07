@@ -266,6 +266,22 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		LogbookID: logbookID,
 	})
 
+	// Best-effort contacted_station upsert — the second write path
+	// per ADR 0017 #10. Outside the QSO transaction (cache writes
+	// are best-effort per the one-fails-all-fail invariant): the QSO
+	// is already committed, so a cache-write failure here logs a
+	// warning but doesn't fail the submit response.
+	//
+	// Subsequent enrichment Tabs may overwrite the country fields
+	// with hamnut's truth per ADR 0017 #11; the operator's QSO row
+	// preserves what they typed regardless.
+	if uerr := s.DB.UpsertContactedStationWithContext(ctx, qso.ContactedStation); uerr != nil {
+		s.Logger.WarnWith().
+			Err(uerr).
+			Str("call", call).
+			Msg("contacted_station upsert failed (best-effort, QSO already stored)")
+	}
+
 	return SubmitResult{Status: "stored", UUID: qso.UUID, ID: qsoID}, nil
 }
 
