@@ -18,6 +18,7 @@
     import { frequencyToBand } from '../../utils/frequency';
     import { resolveModeAndSubmode } from '../../utils/mode';
     import { submitQso as submitQsoToDaemon } from '../../api/qso';
+    import { enrichCallsign } from '../../api/enrichment';
     import { toasts } from '../../states/toasts.svelte';
 
     /*
@@ -69,30 +70,25 @@
 
     /*
         Enrichment trigger — fires when the operator Tabs out of the
-        Callsign field with a valid callsign. Per ADR 0005, the daemon's
-        `/v1/enrich/callsign?call=X` endpoint returns aggregated JSON
-        from hamnut/QRZ/etc.; the SPA's role is a thin fetch wrapper
-        (`lib/enrichment.svelte.ts`, not yet built — daemon endpoint is
-        a deferred item).
+        Callsign field with a valid callsign. Per ADR 0017, the daemon's
+        `GET /v1/enrich/callsign?call=X` endpoint always returns 200 with
+        a Result envelope (provider failures collapse to source=none,
+        empty payloads). The SPA's role is a thin fetch wrapper +
+        decision about what to populate.
 
-        Boundary is wired today: Callsign → onenrich → handleEnrich
-        calls qsoDraft.startQso() (snap dates + flip qsoStarted) and
-        will populate name/qth from the enrichment response. The
-        populate body is a TODO until the daemon endpoint and SPA
-        fetch wrapper land. Overwrite-on-new-callsign is the chosen
-        UX — a fresh callsign means a different QSO; operator can
-        re-edit if they want.
+        Today the call lands but the result is only surfaced to the
+        console — the populate-vs-display decision is the next step.
+        The startQso() flip happens unconditionally because the operator's
+        Tab is the QSO-start signal regardless of the network result;
+        an offline daemon must not block the operator.
     */
     function handleEnrich(call: string): void {
         if (!qsoDraft.qsoStarted) {
             qsoDraft.startQso();
         }
-        // TODO(/v1/enrich/callsign): fetch enrichment via
-        // lib/enrichment.svelte.ts and call qsoDraft.populateFromEnrichment(...)
-        // when that method lands alongside the fetch wrapper. e.g.
-        //   const r = await enrichCallsign(call);
-        //   qsoDraft.populateFromEnrichment(r);
-        void call;
+        void enrichCallsign(call).then((outcome) => {
+            console.log('enrich', call, outcome);
+        });
     }
 
     /*
