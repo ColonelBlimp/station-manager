@@ -94,7 +94,23 @@
         }
         void enrichCallsign(call).then((outcome) => {
             if (outcome.kind !== 'ok') return;
-            const station = outcome.result.station;
+            const r = outcome.result;
+            // Station not found in any callsign-class provider AND
+            // no cached row — the form's name/QTH won't auto-fill.
+            // Surface as a warn so the operator can distinguish
+            // "providers responded with no record" from "network is
+            // down, retry in a moment" (an operator on a flaky link
+            // would otherwise assume the latter and wait). Country
+            // status doesn't gate the toast: country comes from a
+            // longest-prefix-match, so almost any callsign hits the
+            // country layer even when the station is unknown — using
+            // station_source as the signal matches what the operator
+            // actually cares about (the QSO form auto-fill).
+            if (r.station_source === 'none') {
+                toasts.warn(`Lookup: ${call} not found`);
+                return;
+            }
+            const station = r.station;
             if (station === undefined) return;
             if (typeof station.name === 'string') {
                 qsoDraft.name = station.name;

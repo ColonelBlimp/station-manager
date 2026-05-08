@@ -188,26 +188,25 @@ class QsoDraft {
 export const qsoDraft = new QsoDraft();
 
 /**
- * RST default-fill effects. `$effect.root` is needed because these run
+ * RST default-fill effect. `$effect.root` is needed because this runs
  * at module level (outside a component lifecycle).
  *
- *   1. Mode-flip overwrite — always refill both fields when
- *      `defaultRst` changes (i.e. mode crosses the CW ↔ voice
- *      boundary). Tracks `defaultRst` only, so it does not re-fire on
- *      same-family mode changes (USB ↔ LSB).
- *   2. Manual-clear refill — refill if the operator deletes the field
- *      to empty.
+ * Mode-flip overwrite — refill both fields when `defaultRst` changes
+ * (i.e. mode crosses the CW ↔ voice boundary). Tracks `defaultRst`
+ * only, so it does not re-fire on same-family mode changes
+ * (USB ↔ LSB).
+ *
+ * Note on what's intentionally NOT here: an "if rstSent === '' refill
+ * to default" effect was removed because it interfered with normal
+ * editing — deleting digits right-to-left would snap the field back
+ * to the default the moment the last digit went, frustrating the
+ * operator. The form-level submit gate already requires non-empty
+ * RST, so an empty field can't slip through unnoticed.
  */
 $effect.root(() => {
     $effect(() => {
         const d = qsoDraft.defaultRst;
         qsoDraft.rstSent = d;
         qsoDraft.rstRcvd = d;
-    });
-    $effect(() => {
-        if (qsoDraft.rstSent === '') qsoDraft.rstSent = qsoDraft.defaultRst;
-    });
-    $effect(() => {
-        if (qsoDraft.rstRcvd === '') qsoDraft.rstRcvd = qsoDraft.defaultRst;
     });
 });
