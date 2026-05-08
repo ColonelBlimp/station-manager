@@ -51,6 +51,14 @@ station ← MergeStationFromCountry(station, country)  // fill from hamnut, only
 
 **Why only-when-different** — avoids no-op writes that would bump `modified_at` without a real change, and makes the merge composable with cached station rows that may already have correct denormalized country fields. In the fresh-fresh case, `s.Country == c.Name` is the typical state, and the merge is a no-op.
 
+## Return-time presentation derivation
+
+A small set of country fields are **derived at return time, not persisted**. The orchestrator's `Enrich` runs the derivation after filter/merge but before constructing the `Result`, so every return path (cold miss, stale hit, fresh hit) produces the same shape.
+
+**`country.local_time`** — recomputed on every Enrich call as `time.Now() shifted by country.time_offset`, RFC 3339 formatted. The persisted column is `time_offset` (a stable fact); `local_time` lives only on the wire so it's always current. `parseOffsetDuration` accepts both formats hamnut emits — the Go-duration shape (`"2h 0m"`, `"-5h 30m"`) and the RFC 3339 zone shape (`"+02:00"`). Empty or unparseable offset → empty `local_time` (no UTC default; unparseable input is a data-quality signal, not a "use zero" trigger).
+
+**Why recompute** — if `local_time` were persisted, a cache hit would return whatever moment the upstream provider responded with, off by minutes-to-hours. If it were taken from upstream on cold miss only, cache hits would return empty and the SPA's response shape would differ across cache states. Recomputing centralises the derivation and gives the SPA a uniform shape regardless of which cache state each layer landed in.
+
 ## Provider chain semantics
 
 `runChain(ctx, callsign)` iterates `Orchestrator.Chain` (`[]CallsignProvider`) in order. The chain is operator-configured priority order; the orchestrator does not re-sort.
@@ -108,7 +116,7 @@ The orchestrator depends on the `lookup.AsyncRefresher` interface, not the concr
 - **Operator config schema** — task #62. How `LookupConfig` flows into the orchestrator's `Country` and `Chain` fields, where TTLs come from, the refresher's `MaxInFlight` knob, the per-provider enabled flag.
 - **HTTP handler** — task #63. Wiring `/v1/enrich/callsign?call=X` to `Orchestrator.Enrich`, response JSON shape, AbortController propagation, DI wiring of orchestrator + refresher into `cmd/smd`.
 - **QSO-submit upsert** — task #64. The second write path on `contacted_station` from `qsoservice.Submit` (ADR 0017 #10), best-effort outside the QSO transaction.
-- **SPA wiring** — deferred to a separate session. `lib/enrichment.svelte.ts`, `Callsign.onenrich`, `QsoPanel` field application.
+- **SPA wiring** — shipped 2026-05-08, session 44. `frontend/logging/src/lib/api/enrichment.ts` is the thin fetch wrapper (discriminated outcome union: `'ok' | 'validation' | 'server' | 'network'`). `QsoPanel.handleEnrich` populates `qsoDraft.name` / `qsoDraft.qth` on `outcome.kind === 'ok'` and emits a `Lookup: <CALL> not found` warn-toast when `station_source === 'none'` (the toast gate is on station_source alone — country lookup is longest-prefix-match so almost any callsign hits the country layer; the form auto-fill is what the operator cares about). Country panel UI is the next deferred piece.
 
 ## References
 

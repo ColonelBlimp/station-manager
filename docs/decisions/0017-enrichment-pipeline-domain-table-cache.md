@@ -133,4 +133,4 @@ Still rejected for the same reasons given in ADR 0005: complexity not justified 
 - v1 `internal/lookup/hamnut/`, `internal/lookup/qrz/` — carry-forward source for the v2 provider implementations.
 - v1 `internal/database/sqlite/cache.go` (if present) — historical context on how v1 layered the cache; v2's domain-table model supersedes whatever shape this took.
 - (Future) `internal/lookup/` package in v2 — provider registry + chain runner.
-- (Future) `frontend/logging/src/lib/enrichment.svelte.ts` — SPA module that calls `/v1/enrich/callsign` (deferred to a separate session per the option-2 MVP scope).
+- `frontend/logging/src/lib/api/enrichment.ts` — SPA fetch wrapper (shipped 2026-05-08); discriminated outcome union matching `lib/api/qso.ts` shape; consumed by `QsoPanel.handleEnrich` to populate `qsoDraft.name`/`qsoDraft.qth` and emit a "not found" toast.

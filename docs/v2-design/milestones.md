@@ -398,9 +398,12 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   ports from v1, orchestrator with three-state read policy +
   always-merge filter→hamnut, bounded async-refresh worker,
   operator config schema, HTTP handler, contacted_station upsert
-  in QSO submit. Unlocks F2 lookup-only path. Pending: SPA-side
-  `lib/enrichment.svelte.ts` wrapper + `qsoDraft.populateFromEnrichment(...)`
-  method that the panel's `handleEnrich` will call on Tab.
+  in QSO submit. Unlocks F2 lookup-only path. SPA-side wiring
+  shipped 2026-05-08, session 44: `lib/api/enrichment.ts` thin fetch
+  wrapper, `QsoPanel.handleEnrich` populates `qsoDraft.name`/`qsoDraft.qth`
+  on success, "not found" warn-toast when `station_source === 'none'`.
+  Country-panel UI (consuming `Result.Country` for short/long-path
+  display) is the next deferred piece.
 - ✅ Migrate `lib/stores/station.ts` MY_* fields into
   `configState.loggingStation` and ship the full ADIF MY_* set
   end-to-end. `internal/utils/maidenhead.go` derives `MyLat`/`MyLon`
