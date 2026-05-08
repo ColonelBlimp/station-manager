@@ -604,7 +604,11 @@ pointer ids.
     field.
 
   Returns `200` with the post-write body shape. Validation errors
-  (`invalid_field_value` for malformed callsign, `invalid_json` for
+  (`invalid_field_value` for malformed callsign, malformed
+  `my_gridsquare` (must be 4/6/8-char Maidenhead),
+  `my_cq_zone` outside 1–40, `my_itu_zone` outside 1–90,
+  `my_dxcc` outside 0–522, `station.amp_multiplier` outside 0–1000,
+  or `station.default_power` outside 0–2000; `invalid_json` for
   bad body) return `400`. Disk-write or DB-write errors return
   `500 config_write_error` / `db_error` with a generic wire message
   and the full error in the structured log.
