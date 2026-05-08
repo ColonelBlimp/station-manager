@@ -89,6 +89,42 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		req.LoggingStation.MyLon = lon
 	}
 
+	// Validate MyCqZone (1-40 per CQWW), MyITUZone (1-90 per ITU
+	// R-REC-V.6), and MyDXCC (0-522 per current ARRL DXCC list; 0 is
+	// the "None" entity for maritime-mobile / non-DXCC QSOs). All
+	// three are operator-typed strings; empty stays empty (pre-setup
+	// or operator hasn't filled them in). When non-empty, malformed
+	// values must not land in config.json — they'd be emitted on
+	// every subsequent QSO's MY_* tags and rejected by ClubLog / LoTW.
+	// Daemon-side enforcement is the backstop; the My Station panel
+	// can pre-empt with a SPA-side validator for snappy feedback. The
+	// 522 cap on DXCC is the current ARRL maximum at time of writing
+	// — bump when ARRL adds a new entity (rare; once every few years).
+	req.LoggingStation.MyCqZone = strings.TrimSpace(req.LoggingStation.MyCqZone)
+	if req.LoggingStation.MyCqZone != "" {
+		if !isValidZone(req.LoggingStation.MyCqZone, 1, 40) {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				"my_cq_zone must be a number between 1 and 40", op)
+			return
+		}
+	}
+	req.LoggingStation.MyITUZone = strings.TrimSpace(req.LoggingStation.MyITUZone)
+	if req.LoggingStation.MyITUZone != "" {
+		if !isValidZone(req.LoggingStation.MyITUZone, 1, 90) {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				"my_itu_zone must be a number between 1 and 90", op)
+			return
+		}
+	}
+	req.LoggingStation.MyDXCC = strings.TrimSpace(req.LoggingStation.MyDXCC)
+	if req.LoggingStation.MyDXCC != "" {
+		if !isValidZone(req.LoggingStation.MyDXCC, 0, 522) {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				"my_dxcc must be a number between 0 and 522 (ARRL DXCC entity code; 0 = None)", op)
+			return
+		}
+	}
+
 	// Validate the amp multiplier. Negative values are nonsense; a
 	// 1000x cap is a typo guard (real linear amps top out around 50x;
 	// 1000 is well into "operator typed two extra zeros" territory).

@@ -579,6 +579,94 @@ func TestHandlePutConfig_InvalidGridsquareReturns400(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_LoggingStationZoneValidation covers the
+// CQ Zone (1-40), ITU Zone (1-90), and DXCC (0-522) range checks
+// that block malformed values from landing in config.json — they'd
+// otherwise be emitted on every QSO's MY_* tags and rejected by
+// downstream services (ClubLog, LoTW). Empty stays empty; non-empty
+// must satisfy the range.
+func TestHandlePutConfig_LoggingStationZoneValidation(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantSubstr string // substring expected in the error envelope
+	}{
+		// Valid cases — all bounds + interior values pass.
+		{name: "empty zones accepted", body: `{"logging_station": {}}`, wantStatus: http.StatusOK},
+		{name: "cq=1 accepted", body: `{"logging_station": {"my_cq_zone": "1"}}`, wantStatus: http.StatusOK},
+		{name: "cq=40 accepted", body: `{"logging_station": {"my_cq_zone": "40"}}`, wantStatus: http.StatusOK},
+		{name: "itu=1 accepted", body: `{"logging_station": {"my_itu_zone": "1"}}`, wantStatus: http.StatusOK},
+		{name: "itu=90 accepted", body: `{"logging_station": {"my_itu_zone": "90"}}`, wantStatus: http.StatusOK},
+		{name: "dxcc=0 accepted (None / maritime)", body: `{"logging_station": {"my_dxcc": "0"}}`, wantStatus: http.StatusOK},
+		{name: "dxcc=522 accepted (current ARRL max)", body: `{"logging_station": {"my_dxcc": "522"}}`, wantStatus: http.StatusOK},
+		{name: "all three valid", body: `{"logging_station": {"my_cq_zone": "14", "my_itu_zone": "27", "my_dxcc": "223"}}`, wantStatus: http.StatusOK},
+
+		// CQ Zone — out of range / malformed.
+		{name: "cq=0 rejected", body: `{"logging_station": {"my_cq_zone": "0"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_cq_zone"},
+		{name: "cq=41 rejected", body: `{"logging_station": {"my_cq_zone": "41"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_cq_zone"},
+		{name: "cq=non-numeric rejected", body: `{"logging_station": {"my_cq_zone": "37x"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_cq_zone"},
+		{name: "cq=negative rejected", body: `{"logging_station": {"my_cq_zone": "-3"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_cq_zone"},
+
+		// ITU Zone — out of range / malformed.
+		{name: "itu=0 rejected", body: `{"logging_station": {"my_itu_zone": "0"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_itu_zone"},
+		{name: "itu=91 rejected", body: `{"logging_station": {"my_itu_zone": "91"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_itu_zone"},
+		{name: "itu=non-numeric rejected", body: `{"logging_station": {"my_itu_zone": "abc"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_itu_zone"},
+
+		// DXCC — out of range / malformed.
+		{name: "dxcc=-1 rejected", body: `{"logging_station": {"my_dxcc": "-1"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_dxcc"},
+		{name: "dxcc=523 rejected", body: `{"logging_station": {"my_dxcc": "523"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_dxcc"},
+		{name: "dxcc=non-numeric rejected", body: `{"logging_station": {"my_dxcc": "USA"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_dxcc"},
+		{name: "dxcc=fractional rejected", body: `{"logging_station": {"my_dxcc": "291.5"}}`, wantStatus: http.StatusBadRequest, wantSubstr: "my_dxcc"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := testServer(t)
+			req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.handlePutConfig(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, body = %s; want %d", w.Code, w.Body.String(), tc.wantStatus)
+			}
+			if tc.wantSubstr != "" && !strings.Contains(w.Body.String(), tc.wantSubstr) {
+				t.Errorf("body = %s, want substring %q", w.Body.String(), tc.wantSubstr)
+			}
+		})
+	}
+}
+
+// TestHandlePutConfig_ZoneTrimming confirms the validators trim
+// whitespace before checking — operators copy/paste values and
+// accidental spaces shouldn't reject as "non-numeric".
+func TestHandlePutConfig_ZoneTrimming(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"my_cq_zone": "  37  ", "my_itu_zone": " 53 ", "my_dxcc": "\t291\t"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s; want 200", w.Code, w.Body.String())
+	}
+	var resp ConfigResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.LoggingStation.MyCqZone != "37" {
+		t.Errorf("MyCqZone = %q, want %q (whitespace must be trimmed)", resp.LoggingStation.MyCqZone, "37")
+	}
+	if resp.LoggingStation.MyITUZone != "53" {
+		t.Errorf("MyITUZone = %q, want %q", resp.LoggingStation.MyITUZone, "53")
+	}
+	if resp.LoggingStation.MyDXCC != "291" {
+		t.Errorf("MyDXCC = %q, want %q", resp.LoggingStation.MyDXCC, "291")
+	}
+}
+
 func readFileForTest(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
