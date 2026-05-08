@@ -19,7 +19,9 @@
     import { resolveModeAndSubmode } from '../../utils/mode';
     import { submitQso as submitQsoToDaemon } from '../../api/qso';
     import { enrichCallsign } from '../../api/enrichment';
+    import { fetchContactHistory } from '../../api/contact-history';
     import { enrichmentState } from '../../states/enrichment.svelte';
+    import { contactHistoryState } from '../../states/contactHistory.svelte';
     import { toasts } from '../../states/toasts.svelte';
 
     /*
@@ -113,6 +115,17 @@
         const showToastTimer = setTimeout(() => {
             lookingUpId = toasts.info(`Looking up ${call}...`, 0);
         }, SLOW_LOOKUP_THRESHOLD_MS);
+        // Contact-history fetch runs in parallel with enrichment.
+        // It's cheap (single indexed query, no upstream calls) and
+        // the WorkedPanel needs to populate independently of whether
+        // QRZ/hamnut respond. Failures are silent — empty
+        // history is the same operator-visible outcome as a network
+        // error here, and a toast on every flaky-link Tab would be
+        // noise.
+        void fetchContactHistory(call).then((outcome) => {
+            if (outcome.kind !== 'ok') return;
+            contactHistoryState.setResult(outcome.items);
+        });
         void enrichCallsign(call).then((outcome) => {
             clearTimeout(showToastTimer);
             if (lookingUpId !== null) {
@@ -265,10 +278,14 @@
         switch (outcome.kind) {
             case 'stored':
                 qsoDraft.clear();
-                // Country panel returns to the empty state — every
-                // QSO is a clean slate. Operator's next Tab populates
-                // the panel afresh with the new callsign's data.
+                // Country + Worked panels return to the empty state —
+                // every QSO is a clean slate. Operator's next Tab
+                // populates the panels afresh with the new callsign's
+                // data (and the freshly-stored QSO will show up in
+                // the next Worked-panel fetch if the operator re-Tabs
+                // the same call).
                 enrichmentState.clear();
+                contactHistoryState.clear();
                 if (qsoDefaults.notifyQsoStored) {
                     toasts.info(`QSO with ${submittedCall} stored.`);
                 }
@@ -336,7 +353,7 @@
         <TimeInput id="time_off" label="Time Off (UTC)" bind:value={qsoDraft.timeOff}/>
         <div class="flex flex-row space-x-2">
             <FormControls
-                onClear={() => { qsoDraft.clear(); enrichmentState.clear(); }}
+                onClear={() => { qsoDraft.clear(); enrichmentState.clear(); contactHistoryState.clear(); }}
                 onSubmit={submitQso}
                 submitDisabled={!qsoDraft.canSubmit}
             />

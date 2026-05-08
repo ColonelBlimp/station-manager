@@ -10,6 +10,7 @@
     import DetailsPanel from "./DetailsPanel.svelte";
     import MyStationPanel from "./MyStationPanel.svelte";
     import SessionPanel from "./SessionPanel.svelte";
+    import { contactHistoryState } from '../../states/contactHistory.svelte';
 
     type TabId = 'worked' | 'details' | 'station' | 'session';
 
@@ -26,13 +27,18 @@
         switch picks the matching snippet. Adding a fifth tab means:
         new TabId in the union, new entry here, new arm in iconFor +
         the panel switch at the bottom.
+
+        `tabs` is `$derived` so the Worked count auto-updates when a
+        Tab fetches contact-history and contactHistoryState.count
+        flips from 0 to N. Session count stays 0 until the
+        SessionPanel and its underlying state ship.
     */
-    const tabs: Tab[] = [
-        { id: 'worked',  title: 'Worked',     count: 0 },
+    const tabs: Tab[] = $derived([
+        { id: 'worked',  title: 'Worked',     count: contactHistoryState.count },
         { id: 'details', title: 'Details' },
         { id: 'station', title: 'My Station' },
         { id: 'session', title: 'Session',    count: 0 },
-    ];
+    ]);
 
     let activeTab: TabId = $state('worked');
 
