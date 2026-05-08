@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrs "errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -239,6 +240,15 @@ func (o *Orchestrator) Enrich(ctx context.Context, callsign string) Result {
 		o.scheduleStationRefresh(callsign)
 	}
 
+	// Recompute LocalTime at the boundary so every return path carries
+	// the daemon's current wall-clock-shifted-by-offset value. Without
+	// this, cold-miss responses retained hamnut's wire-time string
+	// (potentially seconds stale) and cache hits returned empty —
+	// neither is what the SPA needs to display "what time is it
+	// where the contacted station lives, right now." TimeOffset is
+	// the persisted source of truth; LocalTime is presentation.
+	c.data = applyLocalTime(c.data, time.Now())
+
 	return Result{
 		Callsign:      callsign,
 		Country:       c.data,
@@ -246,6 +256,60 @@ func (o *Orchestrator) Enrich(ctx context.Context, callsign string) Result {
 		CountrySource: c.source,
 		StationSource: s.source,
 	}
+}
+
+// applyLocalTime overwrites c.LocalTime with `now` shifted by
+// c.TimeOffset, formatted as RFC 3339. Returns c unchanged when
+// TimeOffset is empty or unparseable so a malformed cache row doesn't
+// fabricate a misleading time.
+//
+// Centralising the derivation here keeps the response shape uniform
+// across cache states and lets the persisted column carry only the
+// stable fact (offset) rather than a timestamp that's stale the
+// instant it lands in the row.
+func applyLocalTime(c types.Country, now time.Time) types.Country {
+	if c.TimeOffset == "" {
+		return c
+	}
+	d, ok := parseOffsetDuration(c.TimeOffset)
+	if !ok {
+		return c
+	}
+	loc := time.FixedZone("offset", int(d.Round(time.Second).Seconds()))
+	c.LocalTime = now.In(loc).Format(time.RFC3339)
+	return c
+}
+
+// parseOffsetDuration accepts the two formats hamnut emits for
+// TimeOffset and returns a signed time.Duration:
+//
+//	"2h 0m"   / "-5h 30m" — Go-duration-shaped after stripping spaces.
+//	"+02:00"  / "-08:00"  — RFC 3339 zone format.
+//
+// Returns (0, false) for empty input, unrecognised formats, or any
+// parse failure. The caller must treat false as "leave LocalTime
+// untouched" rather than substituting UTC — an unparseable offset is
+// a data-quality signal, not a default-to-UTC trigger.
+func parseOffsetDuration(s string) (time.Duration, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	if d, err := time.ParseDuration(strings.ReplaceAll(s, " ", "")); err == nil {
+		return d, true
+	}
+	if len(s) == 6 && (s[0] == '+' || s[0] == '-') {
+		hours, hErr := strconv.Atoi(s[1:3])
+		mins, mErr := strconv.Atoi(s[4:6])
+		if hErr == nil && mErr == nil && s[3] == ':' {
+			d := time.Duration(hours)*time.Hour + time.Duration(mins)*time.Minute
+			if s[0] == '-' {
+				d = -d
+			}
+			return d, true
+		}
+	}
+	return 0, false
 }
 
 // countryReadResult carries the country layer's read outcome plus

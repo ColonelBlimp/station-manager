@@ -861,3 +861,100 @@ func stderrErrTransport() error {
 type transportError struct{}
 
 func (e *transportError) Error() string { return "synthetic transport failure" }
+
+// ---- local-time recompute (cache-symmetry) ----
+
+// TestEnrich_FreshHit_LocalTimeRecomputed — cached country row carries
+// only TimeOffset; the orchestrator must compute LocalTime at return
+// time so the SPA's response shape is uniform regardless of which
+// cache state the country layer landed in.
+func TestEnrich_FreshHit_LocalTimeRecomputed(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{
+		Name:       "Malawi",
+		Prefix:     "7Q",
+		TimeOffset: "2h 0m",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	o := &lookup.Orchestrator{
+		DB:         db,
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+	}
+
+	got := o.Enrich(context.Background(), "7Q7EB")
+	if got.CountrySource != lookup.SourceCountryTable {
+		t.Fatalf("CountrySource = %q, want %q (precondition: this test exercises the cache-hit path)",
+			got.CountrySource, lookup.SourceCountryTable)
+	}
+	if got.Country.LocalTime == "" {
+		t.Fatal("LocalTime is empty on fresh-hit response — orchestrator must recompute from TimeOffset")
+	}
+	parsed, err := time.Parse(time.RFC3339, got.Country.LocalTime)
+	if err != nil {
+		t.Fatalf("LocalTime %q is not RFC 3339: %v", got.Country.LocalTime, err)
+	}
+	_, offsetSec := parsed.Zone()
+	if want := int((2 * time.Hour).Seconds()); offsetSec != want {
+		t.Errorf("LocalTime zone offset = %ds, want %ds (TimeOffset 2h 0m)", offsetSec, want)
+	}
+}
+
+// TestEnrich_ColdMiss_LocalTimeRecomputed — cold-miss path also runs
+// the recompute so the response carries the daemon's clock-shifted
+// value, not the upstream provider's potentially-stale wire timestamp.
+func TestEnrich_ColdMiss_LocalTimeRecomputed(t *testing.T) {
+	db := newTestSqlite(t)
+	hamnut := &stubCountryProvider{
+		name: "hamnut",
+		result: types.Country{
+			Name:       "Malawi",
+			Prefix:     "7Q",
+			TimeOffset: "2h 0m",
+			LocalTime:  "stale-upstream-string-orchestrator-must-replace",
+		},
+	}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    hamnut,
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+	}
+
+	got := o.Enrich(context.Background(), "7Q7EB")
+	if got.CountrySource != lookup.SourceHamnut {
+		t.Fatalf("CountrySource = %q, want %q (precondition: cold-miss path)",
+			got.CountrySource, lookup.SourceHamnut)
+	}
+	if got.Country.LocalTime == "stale-upstream-string-orchestrator-must-replace" {
+		t.Fatal("orchestrator returned upstream LocalTime verbatim; must recompute from TimeOffset")
+	}
+	if got.Country.LocalTime == "" {
+		t.Fatal("LocalTime is empty on cold-miss response with valid TimeOffset")
+	}
+	if _, err := time.Parse(time.RFC3339, got.Country.LocalTime); err != nil {
+		t.Fatalf("LocalTime %q is not RFC 3339: %v", got.Country.LocalTime, err)
+	}
+}
+
+// TestEnrich_NoTimeOffset_LocalTimeStaysEmpty — country row with no
+// TimeOffset (e.g., legacy import, missing upstream field) must NOT
+// fabricate a UTC LocalTime. Empty in → empty out.
+func TestEnrich_NoTimeOffset_LocalTimeStaysEmpty(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{
+		Name:   "Atlantis",
+		Prefix: "ZZ",
+		// TimeOffset deliberately empty.
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	o := &lookup.Orchestrator{DB: db, CountryTTL: time.Hour, StationTTL: time.Hour}
+
+	got := o.Enrich(context.Background(), "ZZ1ABC")
+	if got.Country.LocalTime != "" {
+		t.Errorf("LocalTime = %q, want empty (no TimeOffset → no fabricated time)", got.Country.LocalTime)
+	}
+}
