@@ -103,22 +103,42 @@ func runWithRespawn(ctx context.Context, name string, onPanic PanicHandler, fn f
 					return
 				}
 				panicked = true
-				if onPanic != nil {
-					onPanic(name, r, debug.Stack())
-				}
+				invokePanicHandler(name, r, onPanic)
 			}()
 			fn()
 		}()
 		if !panicked || !respawn {
 			return
 		}
+		// time.NewTimer + explicit Stop on the ctx-cancel branch so a
+		// fast-cancel during cooldown doesn't leave a live timer
+		// behind until expiry. Bounded leak (one timer per respawn,
+		// bounded by cooldown) but every other long-lived select in
+		// the daemon uses NewTimer; consistency wins over brevity.
+		t := time.NewTimer(time.Duration(respawnCooldown.Load()))
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
-		case <-time.After(time.Duration(respawnCooldown.Load())):
+		case <-t.C:
 		}
 		if ctx.Err() != nil {
 			return
 		}
 	}
+}
+
+// invokePanicHandler calls onPanic with its own deferred recover, so
+// a panic *inside* the handler (a closed-logger write, a nil-method
+// call) degrades to a silent skip instead of escaping past the outer
+// defer in runWithRespawn and crashing the daemon. The intent of
+// safego is "long-lived workers can't take the process down"; a
+// misbehaving onPanic must not be the loophole that breaks that
+// promise.
+func invokePanicHandler(name string, panicValue any, onPanic PanicHandler) {
+	if onPanic == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	onPanic(name, panicValue, debug.Stack())
 }

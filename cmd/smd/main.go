@@ -181,6 +181,15 @@ func run() error {
 		Str("level", cfg.Logging.Level).
 		Msg("logging configured")
 
+	// Non-fatal config advisories (review m4). Surfaced once after the
+	// logger boots so they land in smd.log alongside the rest of
+	// startup. Currently the only check is "tcp protocol bound to a
+	// non-loopback address" — accepted for trusted-LAN setups but
+	// worth the operator seeing.
+	for _, w := range config.Warnings(cfg) {
+		loggerSvc.WarnWith().Msg(w)
+	}
+
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve sqlite service")

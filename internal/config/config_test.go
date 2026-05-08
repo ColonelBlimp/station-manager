@@ -526,3 +526,47 @@ func TestLoad_Forwarders_ValidationErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestWarnings_NonLoopbackTCPBind covers review m4 — operator binding
+// the daemon to a non-loopback address with no auth on the API
+// surface should produce a startup advisory, not a hard failure.
+func TestWarnings_NonLoopbackTCPBind(t *testing.T) {
+	cases := []struct {
+		name     string
+		protocol string
+		socket   string
+		wantWarn bool
+	}{
+		{name: "default loopback IPv4", protocol: "tcp", socket: "127.0.0.1:8080", wantWarn: false},
+		{name: "explicit localhost", protocol: "tcp", socket: "localhost:8080", wantWarn: false},
+		{name: "loopback IPv6", protocol: "tcp", socket: "[::1]:8080", wantWarn: false},
+		{name: "wildcard bind via empty host", protocol: "tcp", socket: ":8080", wantWarn: true},
+		{name: "wildcard bind via 0.0.0.0", protocol: "tcp", socket: "0.0.0.0:8080", wantWarn: true},
+		{name: "LAN IP", protocol: "tcp", socket: "192.168.1.10:8080", wantWarn: true},
+		{name: "wildcard IPv6", protocol: "tcp", socket: "[::]:8080", wantWarn: true},
+		{name: "unix socket — not subject to bind warning", protocol: "unix", socket: "/tmp/smd.sock", wantWarn: false},
+		{name: "unrecognised hostname conservatively warned", protocol: "tcp", socket: "not-a-host:8080", wantWarn: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{}
+			cfg.Server.Protocol = tc.protocol
+			cfg.SocketPath = tc.socket
+
+			warnings := Warnings(cfg)
+
+			haveBindWarn := false
+			for _, w := range warnings {
+				if strings.Contains(w, "non-loopback") {
+					haveBindWarn = true
+					break
+				}
+			}
+			if haveBindWarn != tc.wantWarn {
+				t.Fatalf("Warnings(%q, %q) bind-warning = %v, want %v\nfull: %v",
+					tc.protocol, tc.socket, haveBindWarn, tc.wantWarn, warnings)
+			}
+		})
+	}
+}

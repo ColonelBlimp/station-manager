@@ -118,6 +118,37 @@ func TestUpsertCountry_RejectsEmptyPrefix(t *testing.T) {
 	}
 }
 
+// TestUpsertCountry_RejectsLikeWildcardPrefix covers review m5 — the
+// country-prefix is interpolated directly into a LIKE pattern by
+// FetchCountryByCallsignWithContext, so a row with '%', '_', or '\'
+// in its prefix would silently over-match every callsign on the
+// longest-prefix-match read path. The upsert path is the single
+// chokepoint that prevents such rows from ever landing.
+func TestUpsertCountry_RejectsLikeWildcardPrefix(t *testing.T) {
+	svc := testService(t)
+
+	bad := []string{
+		"M%",   // SQL LIKE wildcard
+		"M_",   // SQL LIKE single-char wildcard
+		"M\\A", // LIKE escape character
+		"%",    // wildcard alone
+		"_",    // single-char wildcard alone
+	}
+	for _, p := range bad {
+		t.Run(p, func(t *testing.T) {
+			err := svc.UpsertCountry(types.Country{Name: "TestLand", Prefix: p})
+			if err == nil {
+				t.Fatalf("expected error for prefix %q (LIKE meta-char must be rejected at the upsert gate)", p)
+			}
+		})
+	}
+
+	// And confirm valid alphanumeric prefixes still go through.
+	if err := svc.UpsertCountry(types.Country{Name: "Englandland", Prefix: "M"}); err != nil {
+		t.Fatalf("valid prefix rejected: %v", err)
+	}
+}
+
 func TestUpsertContactedStation_ColdInsertAndMerge(t *testing.T) {
 	svc := testService(t)
 	ctx := context.Background()

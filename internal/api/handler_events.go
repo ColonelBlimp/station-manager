@@ -44,10 +44,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// Long-running stream: remove the server's WriteTimeout so an idle
 	// but still-connected client isn't force-disconnected every
 	// WriteTimeoutSec. ResponseController is the std-lib-blessed way
-	// (Go 1.21+). Best-effort — if the underlying net.Conn doesn't
-	// support deadline control we just live with the timeout.
+	// (Go 1.21+).
+	//
+	// Deadline removal is sticky for the connection lifetime — net.Conn
+	// does not auto-rearm after each write, so a single
+	// SetWriteDeadline(time.Time{}) covers the whole stream. If the
+	// underlying conn doesn't support deadline control we surface the
+	// failure at info level (the connection still works, just under the
+	// regular WriteTimeout) so a future regression that breaks all
+	// long-lived streams is at least visible in logs.
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{})
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+		s.logger.InfoWith().Err(err).Msg("SSE write-deadline clear failed; stream subject to WriteTimeout")
+	}
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -84,7 +93,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				// EOF and reconnects.
 				return
 			}
-			if err := writeSSEEvent(w, evt); err != nil {
+			if err := s.writeSSEEvent(w, evt); err != nil {
 				// Client gone (broken pipe / reset). Nothing useful
 				// to log at info level; the defer unsubs us.
 				return
@@ -112,10 +121,17 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // so the single `data:` line is always well-formed. A marshal
 // failure for a known typed payload would be a programmer error;
 // treated as a non-fatal skip so one bad event doesn't kill the
-// stream for unrelated good events.
-func writeSSEEvent(w io.Writer, evt events.Event) error {
+// stream for unrelated good events. The skip is logged at warn so a
+// future regression that breaks one payload type doesn't disappear
+// silently.
+func (s *Server) writeSSEEvent(w io.Writer, evt events.Event) error {
 	data, err := json.Marshal(evt.Payload)
 	if err != nil {
+		s.logger.WarnWith().
+			Err(err).
+			Str("event", evt.Name).
+			Int64("event_id", evt.ID).
+			Msg("SSE payload marshal failed; skipping event")
 		return nil
 	}
 	_, err = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", evt.ID, evt.Name, data)

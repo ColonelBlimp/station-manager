@@ -719,6 +719,12 @@ func (s *Service) FetchCountryByCallsignWithContext(ctx context.Context, callsig
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
+	// Longest-prefix-match: <callsign> LIKE <prefix> || '%'. Bound `?`
+	// is the LHS so it is the literal-text side of LIKE. The RHS reads
+	// prefix from the country table; UpsertCountryWithContext rejects
+	// rows whose prefix contains LIKE wildcards ('%', '_') or the
+	// escape char ('\'), so the pattern is always well-formed without
+	// an explicit ESCAPE clause. See review m5 for the threat model.
 	mods := []qm.QueryMod{
 		qm.Where("? LIKE "+models.TableNames.Country+".prefix || '%'", callsign),
 		qm.OrderBy("LENGTH(" + models.TableNames.Country + ".prefix) DESC"),
@@ -879,6 +885,16 @@ func (s *Service) FetchCountryByPrefixWithContext(ctx context.Context, prefix st
 // replace is correct for country because hamnut returns full data on
 // every write — there's no operator-typed-partial-then-merge concern
 // the way contacted_station has.
+//
+// Prefix charset invariant (review m5): country.Prefix must contain
+// only ASCII alphanumerics. SQL LIKE wildcards ('%', '_') and the
+// LIKE escape char ('\') are rejected here because
+// FetchCountryByCallsignWithContext interpolates the prefix directly
+// into a LIKE pattern (`<callsign> LIKE <prefix>||'%'`). A row with a
+// wildcard in its prefix would silently over-match every callsign on
+// the longest-prefix-match read path. Hamnut's data is plain
+// alphanumeric today; this guard is defence-in-depth for any future
+// provider or admin-import write path.
 func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Country) error {
 	const op errors.Op = "sqlite.Service.UpsertCountryWithContext"
 	if err := checkService(op, s); err != nil {
@@ -887,6 +903,11 @@ func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Co
 	prefix := strings.TrimSpace(country.Prefix)
 	if prefix == "" {
 		return errors.New(op).WithMsg("country.Prefix cannot be empty")
+	}
+	if strings.ContainsAny(prefix, `%_\`) {
+		return errors.New(op).WithMsgf(
+			"country.Prefix %q contains SQL LIKE meta-character (%% _ \\); prefixes must be plain alphanumerics",
+			prefix)
 	}
 
 	h, err := s.getOpenHandle(op)

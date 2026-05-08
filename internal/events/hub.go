@@ -35,6 +35,16 @@ func NewHub() *Hub {
 // Publish never blocks on a subscriber. Publishers are daemon-
 // internal code paths (worker, qsoservice) that MUST NOT be slowed
 // by a slow HTTP client.
+//
+// No replay/backlog semantics. Once Close has been called, every
+// subsequent Publish is silently dropped — there is no buffer that
+// holds events for a future subscribe, and the hub never replays
+// historical events on reconnect. The shutdown sequence relies on
+// this: workers stop publishing before Close, so the only events
+// that can reach a "closed-hub Publish" are stragglers from a
+// race the daemon should never produce. A future "event replay
+// on reconnect" feature would need to revisit this contract — it
+// is not free to add on top of the current shape.
 func (h *Hub) Publish(name string, payload any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

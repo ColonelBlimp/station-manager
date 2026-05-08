@@ -3,8 +3,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -438,6 +441,55 @@ func applyDefaults(cfg *Config, baseDir string) {
 			c.HttpTimeoutSec = 10
 		}
 	}
+}
+
+// Warnings returns a slice of human-readable advisory messages about
+// the loaded configuration. Distinct from validate* functions which
+// return hard errors that prevent startup; warnings are non-fatal and
+// surface conditions an operator probably wants to know about but
+// might legitimately have chosen.
+//
+// Returned in load order so daemon startup can log them once after the
+// logger is initialised. Empty slice means "no advisories"; never
+// returns nil.
+func Warnings(cfg Config) []string {
+	out := make([]string, 0)
+	if cfg.Server.Protocol == "tcp" && !isLoopbackBind(cfg.SocketPath) {
+		out = append(out,
+			"server.protocol=tcp with non-loopback socket_path "+
+				strconv.Quote(cfg.SocketPath)+
+				" — daemon HTTP API has no auth and will accept QSO submits "+
+				"from any host that can reach this address. Trusted-LAN "+
+				"deployments only; otherwise bind 127.0.0.1 or use a Unix socket.")
+	}
+	return out
+}
+
+// isLoopbackBind reports whether the host portion of a host:port
+// string resolves to a loopback address. Empty host (":8080") is
+// treated as wildcard bind (NOT loopback). Hostnames that aren't
+// "localhost" are conservatively treated as non-loopback — name
+// resolution at startup may not match resolution at request time, so
+// we can't reliably classify them.
+func isLoopbackBind(socketPath string) bool {
+	host, _, err := net.SplitHostPort(socketPath)
+	if err != nil {
+		// SplitHostPort wants host:port; a Unix-socket path or a
+		// malformed entry returns an error. Configs that reach this
+		// helper have Protocol=tcp, so anything we can't parse is by
+		// definition not a recognisable loopback bind.
+		return false
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // validateForwarders checks the statically decidable correctness of every

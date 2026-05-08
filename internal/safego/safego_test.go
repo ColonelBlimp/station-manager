@@ -274,3 +274,25 @@ func TestGo_NilHandler_IsTolerated(t *testing.T) {
 		t.Fatal("goroutine did not complete within 1s")
 	}
 }
+
+// TestGo_PanickingHandler_DoesNotEscape — review m1. An onPanic that
+// itself panics must degrade to a silent skip, not bubble past
+// runWithRespawn's outer recover and crash the process. The goroutine
+// completes; the WaitGroup-tracked variant's wg.Done still fires.
+func TestGo_PanickingHandler_DoesNotEscape(t *testing.T) {
+	var wg sync.WaitGroup
+	GoTracked(context.Background(), "test",
+		func(string, any, []byte) { panic("handler-itself-panics") },
+		func() { panic("worker-panic") },
+		false, &wg)
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	select {
+	case <-done:
+		// Both panics absorbed; goroutine exited cleanly; wg.Done fired.
+	case <-time.After(time.Second):
+		t.Fatal("wg.Wait did not return within 1s — onPanic crash escaped runWithRespawn")
+	}
+}
