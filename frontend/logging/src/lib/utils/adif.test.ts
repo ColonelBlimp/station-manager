@@ -555,3 +555,42 @@ describe('formatAdifRecord — complete record (canonical spec)', () => {
         expect(adif).toBe(expected);
     });
 });
+
+describe('formatAdifRecord — Details panel fields', () => {
+    it('emits RX_PWR when set', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '100' });
+        expect(adif).toContain('<RX_PWR:3>100');
+    });
+
+    it('emits RIG when set', () => {
+        const adif = formatAdifRecord({ ...baseFields, rig: 'IC-7300 + linear' });
+        expect(adif).toContain('<RIG:16>IC-7300 + linear');
+    });
+
+    it('emits NOTES (separate from COMMENT) when set', () => {
+        const adif = formatAdifRecord({
+            ...baseFields,
+            comment: 'shared during QSO',
+            notes: 'private record',
+        });
+        expect(adif).toContain('<COMMENT:17>shared during QSO');
+        expect(adif).toContain('<NOTES:14>private record');
+    });
+
+    it('emits APP_SM_REQUEST_QSL=Y when true', () => {
+        const adif = formatAdifRecord({ ...baseFields, appSmRequestQsl: true });
+        expect(adif).toContain('<APP_SM_REQUEST_QSL:1>Y');
+    });
+
+    it('omits APP_SM_REQUEST_QSL when false (no Y/N noise for the common case)', () => {
+        const adif = formatAdifRecord({ ...baseFields, appSmRequestQsl: false });
+        expect(adif).not.toContain('APP_SM_REQUEST_QSL');
+    });
+
+    it('omits all Details fields when unset', () => {
+        const adif = formatAdifRecord(baseFields);
+        for (const tag of ['RX_PWR', 'RIG', 'NOTES', 'APP_SM_REQUEST_QSL']) {
+            expect(adif).not.toContain(tag);
+        }
+    });
+});

@@ -58,6 +58,9 @@ export interface EnrichmentStation {
     ituz?: string;
     name?: string;
     qth?: string;
+    web?: string;
+    lat?: string;
+    lon?: string;
     last_refreshed_at?: string;
     [extra: string]: unknown;
 }

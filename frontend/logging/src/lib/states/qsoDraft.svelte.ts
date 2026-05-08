@@ -66,6 +66,37 @@ class QsoDraft {
     comment: string = $state('');
 
     /**
+     * Contacted station's TX power as estimated by the operator (watts).
+     * Maps to ADIF RX_PWR. Operator-typed; QRZ doesn't reliably return
+     * this. Digit-only string ("100", not "100W"); empty omits the
+     * field on submit.
+     */
+    rxPwr: string = $state('');
+
+    /**
+     * Contacted station's rig / working conditions. Maps to ADIF RIG.
+     * Operator-typed (QRZ's per-call rig data is sparse and
+     * inconsistent — leaving it operator-only avoids stale auto-fill).
+     */
+    rig: string = $state('');
+
+    /**
+     * Operator's personal notes about this contact. Maps to ADIF NOTES
+     * — distinct from `comment` (ADIF COMMENT, things to share during
+     * the QSO). NOTES is for the operator's private record (e.g.,
+     * "had bad QSB", "first SSB QSO with this op").
+     */
+    notes: string = $state('');
+
+    /**
+     * Operator's reminder flag — "I want to request a QSL card from
+     * this contact". Custom field, not a standard ADIF QSL_* tag.
+     * Stamped onto the QSO row via APP_SM_REQUEST_QSL='Y' on submit so
+     * a future "QSOs awaiting QSL request" view can list them.
+     */
+    requestQsl: boolean = $state(false);
+
+    /**
      * RST sent to the worked station. Defaults to the current mode's
      * canonical value at construction. On mode flips between voice and
      * CW the value is overwritten (see the effects below) — the
@@ -134,6 +165,10 @@ class QsoDraft {
         this.name = '';
         this.qth = '';
         this.comment = '';
+        this.rxPwr = '';
+        this.rig = '';
+        this.notes = '';
+        this.requestQsl = false;
         this.rstSent = this.defaultRst;
         this.rstRcvd = this.defaultRst;
         const fresh = new Date();

@@ -127,6 +127,36 @@ export interface AdifQsoFields {
 
     /** ADIF ANT_AZ — short-path bearing, computed per QSO from MY_LAT/MY_LON. */
     antAz?: string;
+
+    /**
+     * ADIF RX_PWR — contacted station's TX power in watts as estimated
+     * by the operator. Digit-only string; emitted as-is. Omitted when
+     * empty.
+     */
+    rxPwr?: string;
+
+    /**
+     * ADIF RIG — contacted station's rig / working conditions, free
+     * text. Operator-typed; not auto-populated from enrichment. Omitted
+     * when empty.
+     */
+    rig?: string;
+
+    /**
+     * ADIF NOTES — operator's personal notes about this contact.
+     * Distinct from COMMENT (which is for things to share during the
+     * QSO). Omitted when empty.
+     */
+    notes?: string;
+
+    /**
+     * APP_SM_REQUEST_QSL — custom field, station-manager-specific.
+     * 'Y' when the operator wants to request a QSL card from this
+     * contact (a future "QSOs awaiting QSL request" view consumes
+     * this). Omit-when-false rather than emitting 'N' so the blob
+     * stays minimal for the common case.
+     */
+    appSmRequestQsl?: boolean;
 }
 
 function adifTag(name: string, value: string): string {
@@ -236,6 +266,26 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     }
     if (f.antAz && f.antAz.length > 0) {
         lines.push(adifTag('ANT_AZ', f.antAz));
+    }
+
+    // Contacted-station / per-QSO operator notes (Details panel).
+    // Distinct from COMMENT (above) — NOTES is operator's private
+    // record, COMMENT is for things shared during the QSO.
+    if (f.rxPwr && f.rxPwr.length > 0) {
+        lines.push(adifTag('RX_PWR', f.rxPwr));
+    }
+    if (f.rig && f.rig.length > 0) {
+        lines.push(adifTag('RIG', f.rig));
+    }
+    if (f.notes && f.notes.length > 0) {
+        lines.push(adifTag('NOTES', f.notes));
+    }
+
+    // Station-manager-specific reminder flag. Emitted only when true so
+    // the absence of the tag means "no reminder set" — saves space in
+    // additional_data for the common case.
+    if (f.appSmRequestQsl) {
+        lines.push(adifTag('APP_SM_REQUEST_QSL', 'Y'));
     }
 
     lines.push('<EOR>');

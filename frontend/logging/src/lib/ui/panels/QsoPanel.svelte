@@ -253,6 +253,12 @@
             // empty so the record is clean rather than carrying a
             // fabricated zero.
             antAz: enrichmentState.activeBearing || undefined,
+            // Per-QSO Details panel fields. Emitter omits each when
+            // empty / false; the operator can leave any of them blank.
+            rxPwr: qsoDraft.rxPwr.trim() || undefined,
+            rig: qsoDraft.rig.trim() || undefined,
+            notes: qsoDraft.notes.trim() || undefined,
+            appSmRequestQsl: qsoDraft.requestQsl,
         });
 
         const outcome = await submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID);
