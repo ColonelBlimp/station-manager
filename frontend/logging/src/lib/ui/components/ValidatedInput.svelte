@@ -6,6 +6,20 @@
         label: string;
         value: string;
         validator: (v: string) => boolean;
+        /*
+            Optional input sanitiser. When set, runs on every keystroke
+            BEFORE the validator and overwrites both the bound value
+            and the input element's text if the cleaned form differs
+            from what the operator typed. Use for "strip the characters
+            that can never be valid" — e.g., RST stripping non-digits.
+
+            Distinct from validator: validator decides display state
+            (red border / aria-invalid); transform decides what
+            actually lands in the field. Transform must be idempotent
+            (transform(transform(x)) === transform(x)) so a paste of
+            already-clean text isn't re-clobbered.
+        */
+        transform?: (raw: string) => string;
         widthClass?: string;
         inputClass?: string;
     }
@@ -15,6 +29,7 @@
         label,
         value = $bindable(''),
         validator,
+        transform,
         widthClass = 'w-full',
         inputClass = '',
         ...rest
@@ -26,7 +41,25 @@
     const handleInput = (e: Event): void => {
         const target = e.currentTarget as HTMLInputElement;
         if (!target) return;
-        invalid = !validator(target.value);
+        let next = target.value;
+        if (transform !== undefined) {
+            const cleaned = transform(next);
+            if (cleaned !== next) {
+                /*
+                    Operator typed an invalid character. Overwrite the
+                    visible input AND the bound prop so reactive
+                    consumers see the cleaned value. setSelectionRange
+                    parks the cursor at the end so the operator can
+                    keep typing without a jump back into the middle of
+                    a 2-char RST.
+                */
+                target.value = cleaned;
+                value = cleaned;
+                target.setSelectionRange(cleaned.length, cleaned.length);
+                next = cleaned;
+            }
+        }
+        invalid = !validator(next);
     };
 
     const validateAndFocus = (): void => {

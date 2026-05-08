@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	stderr "errors"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -219,6 +221,18 @@ func run() error {
 
 	loggerSvc.InfoWith().Msg("database open and migrated")
 
+	// Self-heal the "config says setup-complete and points at logbook
+	// id=N, but the DB has no row at N" failure mode. Most commonly
+	// hits when an operator nukes a dev DB while keeping their
+	// config.json — without this, QSO submit FK-violates on the first
+	// log attempt with a blank cache. cfg is captured by value above;
+	// re-snapshot here in case ensureDefaultLogbook persists a corrected
+	// DefaultLogbookID and downstream code (server) needs the fresh value.
+	if err = ensureDefaultLogbook(context.Background(), dbSvc, cfgSvc, loggerSvc); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("ensure default logbook")
+	}
+	cfg = cfgSvc.Snapshot()
+
 	// ---- Forwarder workers ----
 	// Orphan sweep: any qso_upload row left in 'in_progress' by a
 	// previous crashed run is reset to 'pending'. This makes it
@@ -358,6 +372,101 @@ func run() error {
 //
 // Load-bearing invariant: this function is the single enforcement
 // point for "at most one worker per forwarder_name" (the config
+// ensureDefaultLogbook guarantees the row at cfg.DefaultLogbookID
+// exists in the logbook table at startup. Self-heals the failure mode
+// "config marks setup_complete=true and points at logbook id=N but
+// the DB has no row at N" — most commonly hits an operator who nuked
+// a dev DB without clearing config.json's setup_complete flag.
+//
+// Three branches:
+//
+//   - DefaultLogbookID < 1: log a warn and return — config is broken
+//     in a way startup can't fix without operator input.
+//   - SetupComplete == false: return with no work. This is the genuine
+//     first-run path; PUT /v1/config will seed the row when the operator
+//     finishes setup. Pre-seeding here would race the setup handler.
+//   - Row exists at DefaultLogbookID: return (idempotent).
+//   - Row missing: insert using StationCallsign. If the assigned ID
+//     differs (rare; happens only when the operator hand-edited
+//     DefaultLogbookID to a non-1 value), persist the corrected ID
+//     back to config.json so subsequent reads stay consistent.
+//
+// Logs a warn and returns nil (rather than failing startup) when
+// StationCallsign is empty: the daemon should still come up so the
+// operator can re-submit setup; QSO submit will surface a FK-shaped
+// error until the row exists.
+func ensureDefaultLogbook(
+	ctx context.Context,
+	dbSvc *sqlite.Service,
+	cfgSvc *config.Service,
+	logger *logging.Service,
+) error {
+	const op errors.Op = "smd.ensureDefaultLogbook"
+	cfg := cfgSvc.Snapshot()
+
+	if cfg.DefaultLogbookID < 1 {
+		logger.WarnWith().
+			Int64("default_logbook_id", cfg.DefaultLogbookID).
+			Msg("startup: default_logbook_id < 1; cannot ensure default logbook exists")
+		return nil
+	}
+	if !cfg.SetupComplete {
+		return nil
+	}
+
+	if _, ferr := dbSvc.FetchLogbookByIDWithContext(ctx, cfg.DefaultLogbookID); ferr == nil {
+		return nil
+	} else if !stderr.Is(ferr, errors.ErrNotFound) {
+		return errors.New(op).WithErr(ferr).WithMsg("fetching default logbook")
+	}
+
+	callsign := strings.TrimSpace(cfg.LoggingStation.StationCallsign)
+	if callsign == "" {
+		logger.WarnWith().
+			Int64("default_logbook_id", cfg.DefaultLogbookID).
+			Msg("startup: default logbook is missing AND station_callsign is empty; QSO submit will fail until the operator re-runs setup")
+		return nil
+	}
+
+	id, err := dbSvc.InsertLogbookWithContext(ctx, types.Logbook{
+		Name:        "Default",
+		Callsign:    callsign,
+		Description: "Default logbook (auto-recreated at startup — config pointed at a missing row)",
+	})
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("seeding default logbook")
+	}
+
+	logger.InfoWith().
+		Int64("id", id).
+		Str("callsign", callsign).
+		Msg("startup: seeded default logbook (config marked setup complete but DB had no row)")
+
+	if id != cfg.DefaultLogbookID {
+		// Persist failure here is non-fatal: the daemon still comes up
+		// with the corrected ID in memory for this session, and the
+		// next startup re-runs the same self-heal. Failing startup
+		// over a config-write error (permissions, read-only fs)
+		// would be a worse outcome than logging it.
+		if uErr := cfgSvc.Update(func(c *config.Config) error {
+			c.DefaultLogbookID = id
+			return nil
+		}); uErr != nil {
+			logger.WarnWith().
+				Err(uErr).
+				Int64("from", cfg.DefaultLogbookID).
+				Int64("to", id).
+				Msg("startup: default_logbook_id corrected in memory but could not persist to config.json")
+			return nil
+		}
+		logger.InfoWith().
+			Int64("from", cfg.DefaultLogbookID).
+			Int64("to", id).
+			Msg("startup: default_logbook_id corrected after seeding")
+	}
+	return nil
+}
+
 // loader validates Name uniqueness across cfg.Forwarders before we
 // see it). ClaimPendingUploadsWithContext's documentation calls this
 // out — don't add a second spawn site without preserving that chain,

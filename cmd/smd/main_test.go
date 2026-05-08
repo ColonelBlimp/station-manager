@@ -456,3 +456,202 @@ func TestLoadConfig_FirstRunWritesDefaultInEnvDir(t *testing.T) {
 		t.Error("config.json should NOT have been written to cwd when SM_WORKING_DIR is set")
 	}
 }
+
+// ----- ensureDefaultLogbook -----
+
+// newTestDepsWithCfg is newTestDeps' sibling; returns the cfgSvc too so
+// ensureDefaultLogbook tests can inspect / mutate the snapshot. Stays
+// adjacent to keep the deps-construction shape identical.
+//
+// SetPath is called with a real temp-file path so cfgSvc.Update()
+// (which the helper-under-test invokes after correcting a drifted ID)
+// can persist back; tests that don't exercise the persist path are
+// unaffected.
+func newTestDepsWithCfg(t *testing.T, mut func(*config.Config)) (*sqlite.Service, *logging.Service, *config.Service) {
+	t.Helper()
+	tmp := t.TempDir()
+	cfg := config.DefaultConfig(tmp)
+	cfg.Datastore.Path = ":memory:"
+	if mut != nil {
+		mut(&cfg)
+	}
+	cfgSvc := config.New(cfg)
+	cfgPath := filepath.Join(tmp, "config.json")
+	if err := config.WriteJSON(cfgPath, cfg); err != nil {
+		t.Fatalf("seed config.json: %v", err)
+	}
+	cfgSvc.SetPath(cfgPath)
+	if err := cfgSvc.Initialize(); err != nil {
+		t.Fatalf("config init: %v", err)
+	}
+	logSvc := &logging.Service{
+		WorkingDir:    cfgSvc.WorkingDir(),
+		ConfigService: cfgSvc,
+	}
+	if err := logSvc.Initialize(); err != nil {
+		t.Fatalf("logging init: %v", err)
+	}
+	dbSvc := &sqlite.Service{
+		ConfigService: cfgSvc,
+		LoggerService: logSvc,
+	}
+	if err := dbSvc.Initialize(); err != nil {
+		t.Fatalf("sqlite init: %v", err)
+	}
+	dbSvc.DatabaseConfig = &types.DatastoreConfig{
+		Driver:                    "sqlite",
+		Path:                      ":memory:",
+		MaxOpenConns:              1,
+		MaxIdleConns:              1,
+		ContextTimeout:            10,
+		TransactionContextTimeout: 10,
+	}
+	if err := dbSvc.Open(); err != nil {
+		t.Fatalf("sqlite open: %v", err)
+	}
+	if err := dbSvc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = dbSvc.Close()
+		_ = logSvc.Close()
+	})
+	return dbSvc, logSvc, cfgSvc
+}
+
+// TestEnsureDefaultLogbook_SeedsRowWhenMissing covers the headline
+// failure mode: config marks setup_complete=true and points at a
+// logbook id that doesn't exist in the DB (e.g. operator nuked the
+// dev DB without clearing setup_complete). Daemon must self-heal so
+// the first QSO submit doesn't FK-violate.
+func TestEnsureDefaultLogbook_SeedsRowWhenMissing(t *testing.T) {
+	db, logger, cfgSvc := newTestDepsWithCfg(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+	})
+
+	if err := ensureDefaultLogbook(context.Background(), db, cfgSvc, logger); err != nil {
+		t.Fatalf("ensureDefaultLogbook: %v", err)
+	}
+
+	got, err := db.FetchLogbookByIDWithContext(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("logbook id=1 should exist after seeding; got %v", err)
+	}
+	if got.Callsign != "7Q5MLV" {
+		t.Errorf("seeded callsign = %q, want 7Q5MLV", got.Callsign)
+	}
+}
+
+// TestEnsureDefaultLogbook_NoOpWhenRowExists confirms the helper is
+// idempotent — running it on a healthy DB doesn't insert a duplicate
+// or change anything.
+func TestEnsureDefaultLogbook_NoOpWhenRowExists(t *testing.T) {
+	db, logger, cfgSvc := newTestDepsWithCfg(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+	})
+
+	preID, err := db.InsertLogbookWithContext(context.Background(), types.Logbook{
+		Name:     "Existing",
+		Callsign: "7Q5MLV",
+	})
+	if err != nil {
+		t.Fatalf("seed existing logbook: %v", err)
+	}
+
+	if err := ensureDefaultLogbook(context.Background(), db, cfgSvc, logger); err != nil {
+		t.Fatalf("ensureDefaultLogbook: %v", err)
+	}
+
+	got, err := db.FetchLogbookByIDWithContext(context.Background(), preID)
+	if err != nil {
+		t.Fatalf("existing logbook should still be there: %v", err)
+	}
+	if got.Name != "Existing" {
+		t.Errorf("existing logbook clobbered: name = %q, want Existing", got.Name)
+	}
+}
+
+// TestEnsureDefaultLogbook_NoOpWhenSetupIncomplete — first-run setup
+// path must not pre-seed; PUT /v1/config owns that transition. Any
+// pre-seeding here would race the setup handler.
+func TestEnsureDefaultLogbook_NoOpWhenSetupIncomplete(t *testing.T) {
+	db, logger, cfgSvc := newTestDepsWithCfg(t, func(c *config.Config) {
+		c.SetupComplete = false
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+	})
+
+	if err := ensureDefaultLogbook(context.Background(), db, cfgSvc, logger); err != nil {
+		t.Fatalf("ensureDefaultLogbook: %v", err)
+	}
+
+	if _, err := db.FetchLogbookByIDWithContext(context.Background(), 1); err == nil {
+		t.Error("logbook should NOT exist when SetupComplete=false (first-run path is PUT /v1/config's job)")
+	}
+}
+
+// TestEnsureDefaultLogbook_NoOpWhenCallsignEmpty — operator broke
+// config (setup_complete=true with an empty callsign somehow). Daemon
+// must come up with a warning rather than failing startup or seeding
+// a nonsense callsign-less row.
+func TestEnsureDefaultLogbook_NoOpWhenCallsignEmpty(t *testing.T) {
+	db, logger, cfgSvc := newTestDepsWithCfg(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 1
+		c.LoggingStation.StationCallsign = "" // explicitly broken
+	})
+
+	if err := ensureDefaultLogbook(context.Background(), db, cfgSvc, logger); err != nil {
+		t.Fatalf("ensureDefaultLogbook returned an error; should warn-and-return-nil: %v", err)
+	}
+	if _, err := db.FetchLogbookByIDWithContext(context.Background(), 1); err == nil {
+		t.Error("logbook should NOT have been seeded with an empty callsign")
+	}
+}
+
+// TestEnsureDefaultLogbook_PersistsCorrectedID — the operator
+// hand-edited DefaultLogbookID to a non-1 value, then nuked the DB.
+// AUTOINCREMENT will assign 1 on insert; helper must persist the
+// corrected ID back to config so downstream reads stay consistent.
+func TestEnsureDefaultLogbook_PersistsCorrectedID(t *testing.T) {
+	db, logger, cfgSvc := newTestDepsWithCfg(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 42 // hand-edited; DB will assign 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+	})
+
+	if err := ensureDefaultLogbook(context.Background(), db, cfgSvc, logger); err != nil {
+		t.Fatalf("ensureDefaultLogbook: %v", err)
+	}
+
+	updated := cfgSvc.Snapshot()
+	if updated.DefaultLogbookID == 42 {
+		t.Fatal("DefaultLogbookID was not corrected after seeding (still 42; AUTOINCREMENT would have assigned 1)")
+	}
+	if updated.DefaultLogbookID < 1 {
+		t.Errorf("corrected DefaultLogbookID = %d, want >= 1", updated.DefaultLogbookID)
+	}
+	if _, err := db.FetchLogbookByIDWithContext(context.Background(), updated.DefaultLogbookID); err != nil {
+		t.Errorf("logbook at corrected id %d not found: %v", updated.DefaultLogbookID, err)
+	}
+}
+
+// TestEnsureDefaultLogbook_WarnsWhenDefaultIDInvalid — config has
+// nonsense (zero or negative DefaultLogbookID). Helper warns and
+// returns nil so the daemon still starts; QSO submit will surface
+// the broken config to the operator.
+func TestEnsureDefaultLogbook_WarnsWhenDefaultIDInvalid(t *testing.T) {
+	db, logger, cfgSvc := newTestDepsWithCfg(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 0 // invalid
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+	})
+
+	if err := ensureDefaultLogbook(context.Background(), db, cfgSvc, logger); err != nil {
+		t.Fatalf("ensureDefaultLogbook returned an error; should warn-and-return-nil: %v", err)
+	}
+}

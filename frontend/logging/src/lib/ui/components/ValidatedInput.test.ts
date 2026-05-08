@@ -154,4 +154,76 @@ describe('ValidatedInput', () => {
             expect(validator).toHaveBeenCalledWith('12');
         });
     });
+
+    describe('transform prop', () => {
+        const stripNonDigits = (raw: string): string => raw.replace(/[^0-9]/g, '');
+
+        it('overwrites the input value when transform changes it', async () => {
+            const { container } = render(ValidatedInput, {
+                id: 'test-vi-t1',
+                label: 'X',
+                value: '',
+                validator: acceptDigits,
+                transform: stripNonDigits,
+            });
+            const input = container.querySelector('input') as HTMLInputElement;
+            await fireEvent.input(input, { target: { value: '5A9' } });
+            expect(input.value).toBe('59');
+        });
+
+        it('runs the validator on the transformed value, not the raw input', async () => {
+            const validator = vi.fn(acceptDigits);
+            const { container } = render(ValidatedInput, {
+                id: 'test-vi-t2',
+                label: 'X',
+                value: '',
+                validator,
+                transform: stripNonDigits,
+            });
+            const input = container.querySelector('input') as HTMLInputElement;
+            await fireEvent.input(input, { target: { value: '5A9' } });
+            expect(validator).toHaveBeenCalledWith('59');
+            expect(input.getAttribute('aria-invalid')).toBe('false');
+        });
+
+        it('parks cursor at end of cleaned text after a strip', async () => {
+            const { container } = render(ValidatedInput, {
+                id: 'test-vi-t3',
+                label: 'X',
+                value: '',
+                validator: acceptDigits,
+                transform: stripNonDigits,
+            });
+            const input = container.querySelector('input') as HTMLInputElement;
+            await fireEvent.input(input, { target: { value: '5A9' } });
+            expect(input.selectionStart).toBe(2);
+            expect(input.selectionEnd).toBe(2);
+        });
+
+        it('leaves already-clean input untouched (transform must be idempotent)', async () => {
+            const { container } = render(ValidatedInput, {
+                id: 'test-vi-t4',
+                label: 'X',
+                value: '',
+                validator: acceptDigits,
+                transform: stripNonDigits,
+            });
+            const input = container.querySelector('input') as HTMLInputElement;
+            await fireEvent.input(input, { target: { value: '599' } });
+            expect(input.value).toBe('599');
+        });
+
+        it('still validates when transform is omitted', async () => {
+            const { container } = render(ValidatedInput, {
+                id: 'test-vi-t5',
+                label: 'X',
+                value: '',
+                validator: acceptDigits,
+            });
+            const input = container.querySelector('input') as HTMLInputElement;
+            await fireEvent.input(input, { target: { value: '5A9' } });
+            expect(input.value).toBe('5A9');
+            expect(input.getAttribute('aria-invalid')).toBe('true');
+        });
+    });
 });

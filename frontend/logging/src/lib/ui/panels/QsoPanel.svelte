@@ -73,21 +73,35 @@
         Callsign field with a valid callsign. Per ADR 0017, the daemon's
         `GET /v1/enrich/callsign?call=X` endpoint always returns 200 with
         a Result envelope (provider failures collapse to source=none,
-        empty payloads). The SPA's role is a thin fetch wrapper +
-        decision about what to populate.
+        empty payloads).
 
-        Today the call lands but the result is only surfaced to the
-        console — the populate-vs-display decision is the next step.
-        The startQso() flip happens unconditionally because the operator's
-        Tab is the QSO-start signal regardless of the network result;
-        an offline daemon must not block the operator.
+        Populate policy: overwrite name/qth on every ok response. A
+        fresh Tab means the operator wants enrichment for this call;
+        if they had typed a value they wanted preserved, they would
+        not be Tabbing. They can re-edit either field after population
+        to suit personal taste (case, abbreviation, etc.).
+
+        Failure outcomes (network/server/validation) leave the form
+        untouched — the "enrichment never blocks logging" invariant.
+        No toast on enrichment failure: a flaky daemon or upstream
+        must not distract the operator from logging. The startQso()
+        flip happens unconditionally because Tab is the QSO-start
+        signal regardless of the network result.
     */
     function handleEnrich(call: string): void {
         if (!qsoDraft.qsoStarted) {
             qsoDraft.startQso();
         }
         void enrichCallsign(call).then((outcome) => {
-            console.log('enrich', call, outcome);
+            if (outcome.kind !== 'ok') return;
+            const station = outcome.result.station;
+            if (station === undefined) return;
+            if (typeof station.name === 'string') {
+                qsoDraft.name = station.name;
+            }
+            if (typeof station.qth === 'string') {
+                qsoDraft.qth = station.qth;
+            }
         });
     }
 
