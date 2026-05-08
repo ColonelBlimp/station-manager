@@ -249,6 +249,22 @@ func (o *Orchestrator) Enrich(ctx context.Context, callsign string) Result {
 	// the persisted source of truth; LocalTime is presentation.
 	c.data = applyLocalTime(c.data, time.Now())
 
+	// IsNewEntity = "operator has never logged a QSO with this
+	// country before." Determined by querying the qso table for any
+	// non-deleted row whose country column matches; the country (cache)
+	// table itself doesn't participate — it's hamnut's prefix lookup,
+	// not a worked-list. A failed lookup leaves the flag at its zero
+	// value (false) and logs a warn rather than failing Enrich; new-
+	// entity is presentation, never load-bearing for logging.
+	if c.data.Name != "" {
+		exists, hErr := o.DB.HasQsoForCountryWithContext(ctx, c.data.Name)
+		if hErr != nil {
+			o.warn("new-entity check failed", hErr)
+		} else {
+			c.data.IsNewEntity = !exists
+		}
+	}
+
 	return Result{
 		Callsign:      callsign,
 		Country:       c.data,

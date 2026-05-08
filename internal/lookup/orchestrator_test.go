@@ -2,6 +2,7 @@ package lookup_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // ----- test infrastructure -----
@@ -956,5 +958,86 @@ func TestEnrich_NoTimeOffset_LocalTimeStaysEmpty(t *testing.T) {
 	got := o.Enrich(context.Background(), "ZZ1ABC")
 	if got.Country.LocalTime != "" {
 		t.Errorf("LocalTime = %q, want empty (no TimeOffset → no fabricated time)", got.Country.LocalTime)
+	}
+}
+
+// ---- IsNewEntity ----
+
+// TestEnrich_IsNewEntity_NoPriorQso — fresh log with no QSO for this
+// country must report IsNewEntity=true so the SPA can show the
+// "new DXCC" asterisk.
+func TestEnrich_IsNewEntity_NoPriorQso(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{
+		Name:   "Malawi",
+		Prefix: "7Q",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	o := &lookup.Orchestrator{DB: db, CountryTTL: time.Hour, StationTTL: time.Hour}
+
+	got := o.Enrich(context.Background(), "7Q7EB")
+	if !got.Country.IsNewEntity {
+		t.Errorf("IsNewEntity = false, want true (no prior QSO with country=Malawi)")
+	}
+}
+
+// TestEnrich_IsNewEntity_WithPriorQso — once the operator has logged
+// any QSO whose country matches, IsNewEntity flips to false.
+func TestEnrich_IsNewEntity_WithPriorQso(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{
+		Name:   "Malawi",
+		Prefix: "7Q",
+	}); err != nil {
+		t.Fatalf("seed country: %v", err)
+	}
+	// Seed a logbook + a prior QSO with country=Malawi via raw insert
+	// (the high-level Submit path needs a fully-formed types.Qso plus
+	// service wiring; for this test we just need the row to exist).
+	if _, err := db.InsertLogbookWithContext(context.Background(), types.Logbook{
+		Name:     "Default",
+		Callsign: "7Q5MLV",
+	}); err != nil {
+		t.Fatalf("seed logbook: %v", err)
+	}
+	if _, err := db.InsertQsoWithContext(context.Background(), types.Qso{
+		LogbookID: 1,
+		UUID:      utils.NewUUIDv7(),
+		DedupeKey: strings.Repeat("a", 64),
+		QsoDetails: types.QsoDetails{
+			Band:    "20m",
+			Mode:    "SSB",
+			Freq:    "14250",
+			QsoDate: "20260507",
+			TimeOn:  "1200",
+			TimeOff: "1205",
+			RstSent: "59",
+			RstRcvd: "59",
+		},
+		ContactedStation: types.ContactedStation{
+			Call:    "7Q3ABC",
+			Country: "Malawi",
+		},
+	}); err != nil {
+		t.Fatalf("seed prior QSO: %v", err)
+	}
+
+	o := &lookup.Orchestrator{DB: db, CountryTTL: time.Hour, StationTTL: time.Hour}
+	got := o.Enrich(context.Background(), "7Q7EB")
+	if got.Country.IsNewEntity {
+		t.Errorf("IsNewEntity = true after a prior QSO with same country; want false")
+	}
+}
+
+// TestEnrich_IsNewEntity_EmptyCountry — defensive: orchestrator path
+// where the country layer returned no data must NOT flag IsNewEntity
+// (true would mislead — there is no entity to report newness for).
+func TestEnrich_IsNewEntity_EmptyCountry(t *testing.T) {
+	db := newTestSqlite(t)
+	o := &lookup.Orchestrator{DB: db, CountryTTL: time.Hour, StationTTL: time.Hour}
+	got := o.Enrich(context.Background(), "ZZ1ABC")
+	if got.Country.IsNewEntity {
+		t.Errorf("IsNewEntity = true with no country data; want false")
 	}
 }

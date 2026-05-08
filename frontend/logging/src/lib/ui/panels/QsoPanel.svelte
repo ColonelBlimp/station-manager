@@ -19,6 +19,7 @@
     import { resolveModeAndSubmode } from '../../utils/mode';
     import { submitQso as submitQsoToDaemon } from '../../api/qso';
     import { enrichCallsign } from '../../api/enrichment';
+    import { enrichmentState } from '../../states/enrichment.svelte';
     import { toasts } from '../../states/toasts.svelte';
 
     /*
@@ -88,13 +89,42 @@
         flip happens unconditionally because Tab is the QSO-start
         signal regardless of the network result.
     */
+    /*
+        SLOW_LOOKUP_THRESHOLD_MS — only show the "Looking up..."
+        toast if the daemon takes longer than this. Cache hits return
+        in <100ms; flashing a toast every Tab is noise. The threshold
+        is generous enough that a healthy local-cache hit doesn't
+        trigger it but tight enough that an operator on a slow link
+        gets feedback before they wonder if anything is happening.
+    */
+    const SLOW_LOOKUP_THRESHOLD_MS = 500;
+
     function handleEnrich(call: string): void {
         if (!qsoDraft.qsoStarted) {
             qsoDraft.startQso();
         }
+        // Sticky info-toast for slow lookups so the operator (on a
+        // flaky internet link) can distinguish "still working" from
+        // "panel didn't update because nothing happened." Delayed by
+        // SLOW_LOOKUP_THRESHOLD_MS so cache hits never see it; both
+        // the timer and the toast are cleaned up when the response
+        // lands, regardless of outcome.
+        let lookingUpId: number | null = null;
+        const showToastTimer = setTimeout(() => {
+            lookingUpId = toasts.info(`Looking up ${call}...`, 0);
+        }, SLOW_LOOKUP_THRESHOLD_MS);
         void enrichCallsign(call).then((outcome) => {
+            clearTimeout(showToastTimer);
+            if (lookingUpId !== null) {
+                toasts.dismiss(lookingUpId);
+            }
             if (outcome.kind !== 'ok') return;
             const r = outcome.result;
+            // Push to enrichment state regardless of station result —
+            // the country panel renders country info even when the
+            // station layer is empty (long-prefix-match still gives
+            // us country/zone/local-time data the operator may want).
+            enrichmentState.setResult(r);
             // Station not found in any callsign-class provider AND
             // no cached row — the form's name/QTH won't auto-fill.
             // Surface as a warn so the operator can distinguish
@@ -217,12 +247,22 @@
             myAntenna: ls.myAntenna,
             myMorseKeyType: ls.myMorseKeyType,
             myMorseKeyInfo: ls.myMorseKeyInfo,
+            // ANT_AZ — bearing for the operator's currently-selected
+            // path (short or long) from the country panel. Empty when
+            // either grid is missing; the ADIF emitter omits ANT_AZ on
+            // empty so the record is clean rather than carrying a
+            // fabricated zero.
+            antAz: enrichmentState.activeBearing || undefined,
         });
 
         const outcome = await submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID);
         switch (outcome.kind) {
             case 'stored':
                 qsoDraft.clear();
+                // Country panel returns to the empty state — every
+                // QSO is a clean slate. Operator's next Tab populates
+                // the panel afresh with the new callsign's data.
+                enrichmentState.clear();
                 if (qsoDefaults.notifyQsoStored) {
                     toasts.info(`QSO with ${submittedCall} stored.`);
                 }
@@ -290,7 +330,7 @@
         <TimeInput id="time_off" label="Time Off (UTC)" bind:value={qsoDraft.timeOff}/>
         <div class="flex flex-row space-x-2">
             <FormControls
-                onClear={() => qsoDraft.clear()}
+                onClear={() => { qsoDraft.clear(); enrichmentState.clear(); }}
                 onSubmit={submitQso}
                 submitDisabled={!qsoDraft.canSubmit}
             />

@@ -1,6 +1,22 @@
 @import "tailwindcss";
 
 /*
+    flag-icons — bundled SVG flags for the country panel. Carry-forward
+    convention from v1; offline-first to match the operator's flaky
+    internet context. Provides .fi.fi-<iso2-lowercase> classes
+    (e.g. .fi.fi-mw for Malawi); rendered as a 4:3 inline-block via
+    background-image.
+    Imported into the `components` cascade layer so Tailwind utilities
+    (in the higher-priority `utilities` layer) override the library's
+    em-based `width: 1.333em` / `line-height: 1em` defaults. Without
+    a layer the flag-icons rules are unlayered, and unlayered CSS
+    beats layered CSS regardless of import order — so flags would
+    stay stuck at ~21px regardless of the width / aspect-ratio
+    utilities applied to the host element.
+*/
+@import "flag-icons/css/flag-icons.min.css" layer(components);
+
+/*
     Design tokens — Tailwind v4 @theme block.
 
     Convention: values that ANCHOR a relationship (a width that must

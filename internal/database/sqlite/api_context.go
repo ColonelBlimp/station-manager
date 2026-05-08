@@ -207,6 +207,44 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 	return count, nil
 }
 
+// HasQsoForCountryWithContext returns true when at least one
+// non-deleted QSO row exists with `country = ?`. Used by the
+// enrichment orchestrator to decide whether to mark a country as a
+// "new entity" for the operator (no prior contact = new). Empty
+// country string returns (false, nil) without a query — an empty
+// country isn't a meaningful match against existing rows.
+//
+// Uses Exists() not Count() so the engine can short-circuit on the
+// first match. The `idx_qso_country` index covers this lookup; the
+// `deleted_at IS NULL` clause is enforced by sqlboiler's default
+// soft-delete filter, so deleted rows don't count as prior contact
+// (a deleted QSO is functionally a row the operator has decided
+// didn't happen).
+func (s *Service) HasQsoForCountryWithContext(ctx context.Context, country string) (bool, error) {
+	const op errors.Op = "sqlite.Service.HasQsoForCountryWithContext"
+	if err := checkService(op, s); err != nil {
+		return false, err
+	}
+	country = strings.TrimSpace(country)
+	if country == "" {
+		return false, nil
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return false, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	exists, err := models.Qsos(models.QsoWhere.Country.EQ(country)).Exists(ctx, h)
+	if err != nil {
+		return false, errors.New(op).WithErr(err).WithMsg("checking QSO existence by country")
+	}
+	return exists, nil
+}
+
 // SchemaVersionWithContext returns the current migration version recorded
 // in the schema_migrations table (maintained by golang-migrate). Returns
 // 0 if no migrations have been applied yet (fresh DB). The `dirty` flag
