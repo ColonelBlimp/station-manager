@@ -402,8 +402,15 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   shipped 2026-05-08, session 44: `lib/api/enrichment.ts` thin fetch
   wrapper, `QsoPanel.handleEnrich` populates `qsoDraft.name`/`qsoDraft.qth`
   on success, "not found" warn-toast when `station_source === 'none'`.
-  Country-panel UI (consuming `Result.Country` for short/long-path
-  display) is the next deferred piece.
+  Country-panel UI shipped 2026-05-08, session 45: daemon-side
+  `country.is_new_entity` populated from a QSO-log Exists query;
+  SPA `lib/states/enrichment.svelte.ts` holds the latest result +
+  short/long path selection; `CountryPanel.svelte` displays country
+  name (with `*` for new DXCC), bundled `flag-icons` SVG flag,
+  short/long path distance/bearing pair (active path in
+  `text-indigo-700`), short/long radio, and local time + offset.
+  Path selection drives ADIF `ANT_AZ` on submit; sticky
+  "Looking up..." info-toast for slow lookups.
 - ✅ Migrate `lib/stores/station.ts` MY_* fields into
   `configState.loggingStation` and ship the full ADIF MY_* set
   end-to-end. `internal/utils/maidenhead.go` derives `MyLat`/`MyLon`

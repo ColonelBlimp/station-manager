@@ -1,6 +1,6 @@
 <script lang="ts">
 </script>
 
-<div>
+<div class="flex p-2">
     Details Panel
 </div>
