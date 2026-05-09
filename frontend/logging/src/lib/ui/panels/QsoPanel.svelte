@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy } from 'svelte';
+    import { onDestroy, onMount } from 'svelte';
     import Callsign from '../components/Callsign.svelte';
     import Rst from '../components/Rst.svelte';
     import Mode from '../components/Mode.svelte';
@@ -308,6 +308,7 @@
                 // the same call).
                 enrichmentState.clear();
                 contactHistoryState.clear();
+                focusCallsign();
                 if (qsoDefaults.notifyQsoStored) {
                     toasts.info(`QSO with ${submittedCall} stored.`);
                 }
@@ -346,13 +347,45 @@
         Clear handler — shared between the FormControls Clear button
         and the ESC keyboard shortcut. Wipes the draft, enrichment
         result, and contact history so the next QSO starts from a
-        clean slate (matching the post-stored UX rule).
+        clean slate (matching the post-stored UX rule). Refocuses
+        the Callsign field so the operator can immediately start
+        typing the next call.
     */
     function clearForm(): void {
         qsoDraft.clear();
         enrichmentState.clear();
         contactHistoryState.clear();
+        focusCallsign();
     }
+
+    /*
+        focusCallsign — imperative focus on the Callsign input.
+
+        Bypasses component encapsulation by reaching for the input by
+        its stable DOM id (`call` — passed unchanged as the `id` prop
+        below). Pragmatic for a personal logging app where the
+        operator's hands stay on the keyboard between QSOs:
+        post-clear and post-stored focus restoration is what makes the
+        single-handed flow work. If a second `Callsign` instance ever
+        lands on the page, this becomes ambiguous — promote to a
+        component-exported `focus()` then.
+
+        Called by:
+          - onMount, so the cursor lands in Callsign on first render.
+          - clearForm, so ESC / the Clear button both restore focus.
+          - submitQso `case 'stored'`, so Ctrl+Enter / Submit on a
+            successful log return focus for the next QSO. Failure
+            paths (duplicate, validation, server, network) leave the
+            form populated and don't move focus — the operator
+            decides what to fix.
+    */
+    function focusCallsign(): void {
+        document.getElementById('call')?.focus();
+    }
+
+    onMount(() => {
+        focusCallsign();
+    });
 
     /*
         Window-level keyboard shortcuts.

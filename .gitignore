@@ -18,3 +18,4 @@ web/*
 frontend/logging/node_modules/
 frontend/logging/dist/*
 !frontend/logging/dist/index.html
+/smd
