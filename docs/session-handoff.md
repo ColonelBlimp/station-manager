@@ -74,7 +74,12 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 **SessionPanel Stages A–D + keyboard shortcuts + focus restoration all shipped 2026-05-09.** Operator live-tested the full flow (log → row click → edit overlay populates → save → row updates in place; ESC clears, Ctrl+Enter submits, cursor lands on Callsign at every state transition) and confirmed it works.
 
-**No specific next pickup queued.** Open carry-over items below remain candidates; operator picks priorities at next session start.
+**Next session: pick between CAT and contest-mode logging.** Operator decision deferred to next session start (2026-05-09 close). Both are major blocks of work — neither belongs at the tail-end of a long session.
+
+- **CAT integration** — ADR 0013's `internal/bridge` subsystem is the open structural addition. Daemon-side rigctld-compat TCP + SM-native event stream + AUTO-mode CAT + PTT arbitration. The SPA's `bridge.svelte.ts` is currently stubbed and `displayedState` reads from `manualState` only. Real CAT is the meaningful next phase if the operator wants logging to drive a rig.
+- **Contest-mode logging** — the daemon already exposes `GET /v1/contest-dupe`; the SPA-side contest UX (different field set, faster entry, contest-specific shortcuts) hasn't been built. Memory `project_sm_logging_app.md` mentions contest is "handled in a different place — we've not touched that area yet." Operator-facing feature work, smaller than CAT in scope.
+
+**Other near-term polish (not blocked on either):** HamQTH / QRZCQ provider chain expansion is parked at TBD (still useful as a small adjacent task, ~30-60 min for HamQTH alone).
 
 **Other open items (carry-over) — logging-app scope:**
 
