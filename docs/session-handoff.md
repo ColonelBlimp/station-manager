@@ -72,16 +72,91 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 **Resume points (for next session):**
 
-`SessionPanel` is now the only InfoPanel tab still stubbed. Tracks the operator's current operating session — date/time started, QSO count this session, maybe a stop button. Underlying state needs to land first; the panel's a thin reader.
+**SessionPanel — Stages C and D still to ship.** Stages A (daemon SMTP foundation) and B (SPA session-QSO state + 10-column table render) shipped same-day; the operator confirmed live-test of Stage B (rows landing on submit, badge ticking, F5-survival via sessionStorage). Pending:
 
-Other carry-over from session 46:
-- `?refresh=true` query param on `/v1/enrich/callsign` — operator's escape valve for "the cache is wrong" cases.
+- **Stage C — recipient input + paper-plane send button on the InfoPanel header bar.** Mockup placement: top-right of the InfoPanel chrome (right of the tab row), recipient input pre-filled from `email.Service.DefaultRecipient()` (which reads `cfg.Smtp.DefaultRecipient`), paper-plane icon next to it. New `lib/api/session-email.ts` discriminated-outcome wrapper for `POST /v1/session/email`; on click, build the ADIF body by concatenating `sessionQsosState.items.map(q => q.adif)` + a daemon-emittable header (or daemon-stamps headers — TBD), POST, toast: "Sending…" (info, sticky) → "Sent" (info) / "SMTP not configured" (error, on 503) / "SMTP send failed" (error, on 502) / network error variants. The `defaultRecipient` value isn't yet exposed via `GET /v1/config` — needs adding alongside the existing config response shape so the SPA can hydrate the input on mount. Probably a one-line addition under `ConfigResponse.Smtp` (return only `default_recipient`, not the password — keep the secret-ish fields off the wire).
+- **Stage D — edit overlay.** Independent state singleton `qsoEdit.svelte.ts` (no draft contamination per operator decision). Modal-style overlay component, dim backdrop, ESC + click-outside dismiss. On row-click in SessionPanel: `GET /v1/qso/{uuid}` (already exists in the daemon), populate the overlay with the same input components as QsoPanel but bound to the edit state. On submit: `PATCH /v1/qso/{uuid}`, update the session-list row in place via `sessionQsosState.update(uuid, ...)`. The full-row replacement preserves the cached `adif` string by re-formatting from the patched fields.
+
+**Other open items (carry-over):**
+
 - HamQTH / QRZCQ providers — chain expansion under the existing `CallsignProvider` interface.
 - "Show edit history for this QSO" SPA panel — consumes `qso_history` storage from session 40. New `/v1/qso/{uuid}/history` endpoint + a panel in InfoPanel (probably under Worked tab as a per-QSO detail view, or as a separate History tab).
-- "QSOs awaiting QSL request" view — now that `APP_SM_REQUEST_QSL` is being stamped on submit, the data is there. Needs a list endpoint + a UI surface.
-- SPA-side mirror of zone validation (snappy inline feedback in My Station panel) — daemon validation is the backstop, but operators get a red border before they hit Update.
+- "QSOs awaiting QSL request" view — `APP_SM_REQUEST_QSL` is being stamped on submit; needs a list endpoint + UI surface.
 - WorkedPanel polish — a Notes tooltip / expandable row would make per-QSO notes accessible without crowding the columns.
 - Known intermittent flake — `TestSchedule_ReleasesSlotAfterFn` in `internal/lookup/refresher/`, observed once during session 45's `-race` sweep.
+- ~~`?refresh=true` on `/v1/enrich/callsign`~~ **Closed in this session.**
+- ~~SPA-side mirror of zone validation~~ **Closed in this session.**
+
+**Future scope (no immediate plan):** Per-field encryption-at-rest for SMTP + provider passwords. Operator flagged it 2026-05-09 alongside SMTP config landing — wants a security assessment first. Plaintext in `config.json` matches the existing pattern (QRZ password etc.) for now. See `memory/project_sm_security_assessment.md`.
+
+### Session 47 continuation (2026-05-09) — InfoPanel tab-click bug fix
+
+Operator reported during live-testing: the tab icons showed `cursor-pointer` on hover but didn't respond to clicks — only the text label switched tabs. Root cause: tab structure was `<div class="tab-item">` wrapping an icon SVG and a sibling `<button class="tab-button">`; `cursor-pointer` lived on the wrapper but the click handler was on the button — so the icon area lied with the cursor and clicks there hit dead air.
+
+Fix: collapsed wrapper into the button itself. `<button role="tab" class="tab-item">` now contains both icon + label `<span>`, the entire row is one click target. Dropped the now-redundant `.tab-button { cursor-[inherit] }` rule from `app.css` (was a workaround for the old split structure). No test changes needed (no DOM tests covered this); 376 tests still pass; svelte-check + lint + format all green.
+
+### Session 47 continuation (2026-05-09) — SPA-side zone validation mirror
+
+Closes the carry-over from session 46's daemon-side validation. The daemon is the backstop; this gives operators a red border the instant they type out-of-range, without waiting for Update.
+
+- New `lib/validators/zone.ts` — `isValidCqZone` (1–40), `isValidItuZone` (1–90), `isValidDxcc` (0–522). Single `inRange(min, max)` factory; same trimmed-then-digits-only-then-range logic as the daemon's `isValidZone(s, min, max)`. Empty allowed (operator clearing the field). No silent transform — `41` shows red rather than auto-becoming `4`.
+- `lib/validators/zone.test.ts` — 26 cases mirroring the daemon's table-driven test (bounds, interior, empty/whitespace, non-numeric, fractional, negative).
+- `MyStationPanel.svelte` — three `validator={passthrough}` swapped for the new validators on the CQ Zone / ITU Zone / DXCC `<ValidatedInput>` blocks.
+
+### Session 47 continuation (2026-05-09) — `?refresh=true` on `/v1/enrich/callsign`
+
+The operator's "the cache is wrong" escape valve. A regular Tab returns cached data per ADR 0017's three-state read; `?refresh=true` bypasses both layers' caches and forces upstream calls.
+
+Daemon-side:
+- `internal/lookup/orchestrator.go` — added `EnrichRefresh(ctx, callsign)` alongside `Enrich(ctx, callsign)`. Both delegate to a private `enrich(ctx, callsign, force bool)` core. `readCountry` / `readStation` accept `force` and skip the cache fetch when true; the upstream result is treated as a cold miss so the existing writeback path overwrites the cache row. Async stale-refresh scheduling is naturally suppressed (force-mode never sets `staleHit`). On upstream failure: returns `source=none` rather than silently falling back to the cached row — the operator asked for fresh data; returning stale data would defeat the purpose.
+- `internal/api/handler_enrich.go` — `?refresh=true` parsed via strict equality (`== "true"`); anything else (`"1"`, `"TRUE"`, `"yes"`, missing) routes through cache-aware `Enrich`. Strict semantics keep the contract obvious.
+- 6 new tests across orchestrator + handler covering bypass-fresh-cache-and-overwrite, upstream-down-no-fallback, no-cache-row-cold-miss-shape, query-param-routes, default-path-unchanged, non-true-values-treated-as-default.
+
+SPA-side: not yet wired (no "Refresh" button on the country panel). Daemon is ready; one-button SPA hookup is a future micro-task.
+
+### Session 47 continuation (2026-05-09) — npm dep bumps in three stages
+
+Operator asked for a way to keep dependencies current. Settled on `npm outdated` + `npm update` plus convenience scripts:
+- New npm scripts: `deps:check` (`npm outdated || true`), `deps:update` (`npm update`).
+- New Taskfile targets: `frontend:deps:check`, `frontend:deps:update` for consistency with the existing `frontend:install` / `frontend:dev` / `frontend:build` shape.
+
+Major bumps were staged across three commits for bisectability:
+- **Stage 1 — in-range only** (`npm update`): tailwind 4.2.4→4.3.0, @tailwindcss/vite 4.2.4→4.3.0, @types/node patch, svelte-check patch. No code changes.
+- **Stage 2 — Vite 6→8 + svelte-vite-plugin 5→7 paired.** Required a clean `node_modules` + `package-lock.json` reinstall because the stale `vite-plugin-svelte-inspector@4` peer-dep from v5 created a phantom conflict during the in-place upgrade. `vite.config.ts` needed no changes; build is faster (~960ms vs ~2.1s previously).
+- **Stage 3 — TypeScript 5→6.** Surfaced one issue: TS 6 stopped tolerating the `import './styles/app.css'` side-effect import without an ambient declaration. Added `src/vite-env.d.ts` with the standard `/// <reference types="vite/client" />` (the canonical Vite scaffold pattern; brings in CSS / asset module declarations). `typescript-eslint` 8.59 is compatible with TS 6 — no lint config changes.
+
+Final state: every dep is on its latest published version; svelte-check 0 errors / 228 files; vitest 402 tests; lint + format clean.
+
+### Session 47 continuation (2026-05-09) — SessionPanel Stage A: daemon SMTP foundation
+
+Operator clarified during scope-pinning that SessionPanel is "list of session QSOs (table similar to WorkedPanel) + edit overlay + email-out as ADIF" — same UX as v1's SessionPanel (icon click → "Sending…" toast → "Sent"). Required a daemon-side SMTP service. Designed the mailer as general-purpose so future alert paths (forwarder backlog, refresher repeated failures, daemon-health probes) plug in via the same `Send` primitive — not session-email-specific. Operator flagged this explicitly (alerts use case) so the boundary is right from day one.
+
+- **`internal/types/email.go`** — new `SmtpConfig` (host/port/username/password/from/default_recipient/starttls/timeout_sec). Empty `Host` = mailer disabled; default port 587 (RFC 6409 submission); `From` required when host set.
+- **`internal/email/`** — new package. `Service` is a singleton mailer with `Send(ctx, Message)`. Connect-and-send semantics (one SMTP session per call, no pooling — at this daemon's volume the per-message handshake cost is negligible). Stdlib-only — `net/smtp` + `crypto/tls` + a hand-rolled MIME multipart envelope (text/plain body + base64-wrapped attachments per RFC 2045). `ErrMailerDisabled` (host empty), `ErrInvalidMessage` (no recipient/subject), wrapped transport errors otherwise — all mapped distinctly by the handler so operators see specific status codes.
+- **`internal/email/email_test.go`** — 9 tests with an in-process SMTP fake (just enough protocol to capture MAIL FROM / RCPT TO / DATA). Covers: nil service / empty host → `ErrMailerDisabled`; missing recipient/subject → `ErrInvalidMessage`; happy path with attachment → multipart envelope verified; no-attachment branch → plain text envelope; default recipient snapshot; dial-failure path returns wrapped error.
+- **`internal/config/config.go`** — `Smtp types.SmtpConfig` field on `Config`; defaults (port 587, timeout 30s); `validateSmtp` (host empty = ok, otherwise from + port + timeout required).
+- **`internal/api/server.go`** — `New` gained `mailer *email.Service` parameter; new route `POST /v1/session/email`.
+- **`internal/api/handler_session_email.go`** — handler. Body shape `{to, adif, subject?, filename?}`; daemon stamps subject + filename defaults from UTC now (so SPA doesn't need timezone-aware formatting). Status codes: 200 ok, 400 validation (missing required field, invalid email, malformed JSON), 503 mailer_disabled, 502 smtp_failure (transport).
+- **`internal/api/handler_session_email_test.go`** — 7 handler tests covering all status paths.
+- **`cmd/smd/main.go`** — constructs the mailer from `cfg.Smtp` after config load; passes to `api.New`.
+- Per-comment doc on `buildMimeEnvelope` pinning the assumption that unchecked `fmt.Fprintf` writes are safe because `bytes.Buffer.Write` never errors — load-bearing if the function is ever refactored to take `io.Writer` directly (streaming straight to SMTP DATA).
+
+**Memory captured:** `memory/project_sm_security_assessment.md` (and indexed in `MEMORY.md`) — secrets-at-rest encryption deferred until a proper security assessment lands. New secret fields (SMTP password, etc.) land plaintext in `config.json` matching the existing pattern (QRZ password etc.). Don't propose crypto / vault / keyring without checking memory first.
+
+### Session 47 continuation (2026-05-09) — SessionPanel Stage B: SPA session-QSO state + table render
+
+Stage A covers the daemon transport; Stage B is the panel UI without the email-trigger UI (Stage C ships that).
+
+- **`lib/states/sessionQsos.svelte.ts`** — singleton with `items: SessionQso[]` (`$state`), `count: number` (`$derived`), `add` / `update` / `clear` methods. Persists to `sessionStorage` under `sm.session.qsos` (matches `SessionTimer`'s lifecycle: F5-survival, cleared on tab close — that's what defines "session end" in the v1 carry-forward UX). Hydrates on construction; `try/catch` on every storage call so private-browsing / quota edge cases are graceful.
+- **`SessionQso` shape** — uuid (UUIDv7 from daemon's submit response), callsign, name, freqHz (raw Hz; SessionPanel formats), band, rstSent, rstRcvd, mode, timeOn, qsoDate, country, distanceKm (string for display tolerance — empty when grids unavailable), adif (full record formatted at submit time, captured for future email-out so we don't re-fetch every QSO from the daemon).
+- **`lib/utils/frequency.ts`** — promoted `formatFrequency(hz)` out of `Vfos.svelte` (second consumer landed); `Vfos.svelte` now imports it. Per the project's "build specific until a second use case shows up" rule.
+- **`lib/states/enrichment.svelte.ts`** — added `activeDistanceKm` `$derived` alongside `activeBearing`; same path-aware logic, returns km as a string. Snapshotted onto `SessionQso.distanceKm` at submit time — once the next Tab fires, this value would otherwise reset.
+- **`lib/ui/panels/SessionPanel.svelte`** — replaces the stub. 10-column table (Callsign / Name / Freq / Band / Send / Rcvd / Mode / Time On / Country / Distance), `tabular-nums` for digit alignment, newest-first via `slice().reverse()`. Empty-state message ("No QSOs logged this session.") when no rows. Read-only — Stage C will add the recipient input + send button on the InfoPanel header bar.
+- **`lib/ui/panels/QsoPanel.svelte`** — `case 'stored'` branch snapshots all 13 fields (uuid from outcome, freqHz from txFreqHz, band from `frequencyToBand`, country from `enrichmentState.result?.country?.name`, distanceKm from `enrichmentState.activeDistanceKm`, full adif string captured) into `sessionQsosState.add(...)` BEFORE the existing `qsoDraft.clear()` / `enrichmentState.clear()` wipe their sources.
+- **`lib/ui/panels/InfoPanel.svelte`** — Session badge `count` wired to `sessionQsosState.count` (was hardcoded `0`).
+- **`lib/states/sessionQsos.test.ts`** — 9 tests covering add / update / clear, count derivation, oldest-first ordering, and the sessionStorage round-trip (including a full-fidelity field round-trip).
+
+Operator live-tested Stage B (logging QSOs, watching them populate the table + badge) and confirmed it works as expected.
 
 ### Session 46 work (2026-05-08) — Details panel UI
 
