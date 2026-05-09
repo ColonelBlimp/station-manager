@@ -18,12 +18,17 @@ type stubCountryProvider struct {
 	name   string
 	result types.Country
 	err    error
+	calls  int
 }
 
-func (s *stubCountryProvider) Name() string                           { return s.name }
-func (s *stubCountryProvider) Initialize(_ context.Context) error     { return nil }
-func (s *stubCountryProvider) Lookup(_ string) (types.Country, error) { return s.result, s.err }
+func (s *stubCountryProvider) Name() string                       { return s.name }
+func (s *stubCountryProvider) Initialize(_ context.Context) error { return nil }
+func (s *stubCountryProvider) Lookup(_ string) (types.Country, error) {
+	s.calls++
+	return s.result, s.err
+}
 func (s *stubCountryProvider) LookupWithContext(_ context.Context, _ string) (types.Country, error) {
+	s.calls++
 	return s.result, s.err
 }
 
@@ -31,14 +36,17 @@ type stubCallsignProvider struct {
 	name   string
 	result types.ContactedStation
 	err    error
+	calls  int
 }
 
 func (s *stubCallsignProvider) Name() string                       { return s.name }
 func (s *stubCallsignProvider) Initialize(_ context.Context) error { return nil }
 func (s *stubCallsignProvider) Lookup(_ string) (types.ContactedStation, error) {
+	s.calls++
 	return s.result, s.err
 }
 func (s *stubCallsignProvider) LookupWithContext(_ context.Context, _ string) (types.ContactedStation, error) {
+	s.calls++
 	return s.result, s.err
 }
 
@@ -209,6 +217,117 @@ func TestEnrich_NilOrchestrator_Returns200WithEmpty(t *testing.T) {
 	}
 	if got.CountrySource != lookup.SourceNone || got.StationSource != lookup.SourceNone {
 		t.Errorf("sources = %q/%q, want none/none", got.CountrySource, got.StationSource)
+	}
+}
+
+// ---- ?refresh=true: cache-bypass routing ----
+
+// TestEnrich_RefreshTrue_BypassesFreshCache — pre-seed the country
+// table with values that differ from what the upstream stub returns.
+// A regular Enrich call would short-circuit on the fresh cache hit
+// and never call hamnut; ?refresh=true must invert that and hit
+// upstream regardless. Asserting on hamnut.calls is the cleanest
+// behavioural check at the handler boundary — the orchestrator-level
+// tests cover the writeback semantics.
+func TestEnrich_RefreshTrue_BypassesFreshCache(t *testing.T) {
+	hamnut := &stubCountryProvider{
+		name: "hamnut",
+		result: types.Country{
+			Name:   "England",
+			Prefix: "M",
+		},
+	}
+	srv := testServerWithEnrichment(t, hamnut, nil)
+
+	// Pre-seed a fresh cached row with a different name. The cache
+	// fetch on regular Enrich would return this and skip hamnut.
+	if err := srv.db.UpsertCountry(types.Country{
+		Name:   "OldName",
+		Prefix: "M",
+	}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/enrich/callsign?call=M0CMC&refresh=true", nil)
+	w := httptest.NewRecorder()
+	srv.handleEnrichCallsign(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	if hamnut.calls != 1 {
+		t.Errorf("hamnut.calls = %d, want 1 (refresh=true must bypass the fresh cache)", hamnut.calls)
+	}
+
+	var got lookup.Result
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Country.Name != "England" {
+		t.Errorf("Country.Name = %q, want England (upstream value, not cached OldName)", got.Country.Name)
+	}
+	if got.CountrySource != lookup.SourceHamnut {
+		t.Errorf("CountrySource = %q, want %q (force-refresh treats success as cold-miss)",
+			got.CountrySource, lookup.SourceHamnut)
+	}
+}
+
+// TestEnrich_RefreshOmitted_UsesCacheAsBefore — regression guard
+// for the default path: omitting refresh entirely must keep the
+// pre-existing cache-aware behaviour untouched.
+func TestEnrich_RefreshOmitted_UsesCacheAsBefore(t *testing.T) {
+	hamnut := &stubCountryProvider{
+		name:   "hamnut",
+		result: types.Country{Name: "England", Prefix: "M"},
+	}
+	srv := testServerWithEnrichment(t, hamnut, nil)
+	if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M"}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	srv.handleEnrichCallsign(w, enrichRequest("M0CMC"))
+
+	if hamnut.calls != 0 {
+		t.Errorf("hamnut.calls = %d on regular Enrich with fresh cache; should be zero", hamnut.calls)
+	}
+	var got lookup.Result
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Country.Name != "Cached" {
+		t.Errorf("Country.Name = %q, want Cached (cache-aware path)", got.Country.Name)
+	}
+}
+
+// TestEnrich_RefreshNonTrueValues_TreatedAsDefault — operator types
+// "1" / "yes" / "TRUE" in some other client; the contract is "true"
+// only. Anything else routes through the default cache-aware path.
+// Pinning this as a behavioural promise keeps the contract obvious.
+func TestEnrich_RefreshNonTrueValues_TreatedAsDefault(t *testing.T) {
+	cases := []string{"1", "TRUE", "yes", "false", ""}
+	for _, v := range cases {
+		t.Run("refresh="+v, func(t *testing.T) {
+			hamnut := &stubCountryProvider{
+				name:   "hamnut",
+				result: types.Country{Name: "England", Prefix: "M"},
+			}
+			srv := testServerWithEnrichment(t, hamnut, nil)
+			if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M"}); err != nil {
+				t.Fatalf("seed cache: %v", err)
+			}
+			url := "/v1/enrich/callsign?call=M0CMC"
+			if v != "" {
+				url += "&refresh=" + v
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			w := httptest.NewRecorder()
+			srv.handleEnrichCallsign(w, req)
+			if hamnut.calls != 0 {
+				t.Errorf("refresh=%q: hamnut.calls = %d, want 0 (only literal \"true\" forces refresh)",
+					v, hamnut.calls)
+			}
+		})
 	}
 }
 

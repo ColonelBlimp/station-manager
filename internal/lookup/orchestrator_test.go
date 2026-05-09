@@ -1041,3 +1041,191 @@ func TestEnrich_IsNewEntity_EmptyCountry(t *testing.T) {
 		t.Errorf("IsNewEntity = true with no country data; want false")
 	}
 }
+
+// ----- EnrichRefresh: cache-bypass escape valve -----
+
+// TestEnrichRefresh_BypassesFreshCache_CallsUpstreamAndOverwrites —
+// the operator's "the cache is wrong" path. A fresh country + station
+// row exists; EnrichRefresh must hit hamnut + the chain anyway, and
+// the cache rows must end up with the new upstream values.
+func TestEnrichRefresh_BypassesFreshCache_CallsUpstreamAndOverwrites(t *testing.T) {
+	db := newTestSqlite(t)
+	// Pre-seed a fresh country row with stale-looking values; the
+	// upstream stub returns DIFFERENT values so we can verify the
+	// overwrite landed.
+	if err := db.UpsertCountry(types.Country{
+		Name:   "OldName",
+		Prefix: "M",
+		CQZone: "0",
+	}); err != nil {
+		t.Fatalf("seed country: %v", err)
+	}
+	if err := db.UpsertContactedStation(types.ContactedStation{
+		Call: "M0CMC",
+		Name: "OldName",
+		QTH:  "OldQTH",
+	}); err != nil {
+		t.Fatalf("seed station: %v", err)
+	}
+
+	hamnut := &stubCountryProvider{
+		name: "hamnut",
+		result: types.Country{
+			Name:    "England",
+			Prefix:  "M",
+			CQZone:  "14",
+			ITUZone: "27",
+		},
+	}
+	qrz := &stubCallsignProvider{
+		name: "qrz",
+		result: types.ContactedStation{
+			Call:       "M0CMC",
+			Name:       "Marc Veary",
+			QTH:        "Birmingham",
+			Gridsquare: "IO92",
+		},
+	}
+	ref := &recordingRefresher{}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    hamnut,
+		Chain:      []lookup.CallsignProvider{qrz},
+		CountryTTL: time.Hour, // pre-seed is fresh — would be a cache hit on regular Enrich
+		StationTTL: time.Hour,
+		Refresher:  ref,
+	}
+
+	got := o.EnrichRefresh(context.Background(), "M0CMC")
+
+	if hamnut.calls != 1 {
+		t.Errorf("hamnut calls = %d, want 1 (force-refresh must hit upstream)", hamnut.calls)
+	}
+	if qrz.calls != 1 {
+		t.Errorf("qrz calls = %d, want 1 (force-refresh must hit upstream)", qrz.calls)
+	}
+	if got.CountrySource != lookup.SourceHamnut {
+		t.Errorf("CountrySource = %q, want %q (force-refresh treats success as cold-miss)",
+			got.CountrySource, lookup.SourceHamnut)
+	}
+	if got.StationSource != "qrz" {
+		t.Errorf("StationSource = %q, want qrz", got.StationSource)
+	}
+	if got.Country.Name != "England" {
+		t.Errorf("Country.Name = %q, want England (overwrite from upstream)", got.Country.Name)
+	}
+	if got.Station.Name != "Marc Veary" {
+		t.Errorf("Station.Name = %q, want Marc Veary (overwrite from upstream)", got.Station.Name)
+	}
+
+	// Cache must now reflect the new upstream values. Read back via
+	// FetchCountryByCallsign / FetchContactedStationByCallsign — same
+	// path the next regular Enrich would use.
+	cachedCountry, err := db.FetchCountryByCallsign("M0CMC")
+	if err != nil {
+		t.Fatalf("re-read country: %v", err)
+	}
+	if cachedCountry.Name != "England" {
+		t.Errorf("cached country Name = %q after refresh, want England", cachedCountry.Name)
+	}
+	cachedStation, err := db.FetchContactedStationByCallsign("M0CMC")
+	if err != nil {
+		t.Fatalf("re-read station: %v", err)
+	}
+	if cachedStation.Name != "Marc Veary" {
+		t.Errorf("cached station Name = %q after refresh, want Marc Veary", cachedStation.Name)
+	}
+
+	if ref.scheduled != 0 {
+		t.Errorf("refresher fired %d times on force-refresh; should be 0 (synchronous work)", ref.scheduled)
+	}
+}
+
+// TestEnrichRefresh_UpstreamDown_ReturnsNoneWithoutFallback — the
+// operator asked for fresh data; if upstream can't deliver, returning
+// the cached row silently would defeat the purpose. Both layers
+// must surface source=none rather than the seeded values.
+func TestEnrichRefresh_UpstreamDown_ReturnsNoneWithoutFallback(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{
+		Name:   "England",
+		Prefix: "M",
+	}); err != nil {
+		t.Fatalf("seed country: %v", err)
+	}
+	if err := db.UpsertContactedStation(types.ContactedStation{
+		Call: "M0CMC",
+		Name: "Cached",
+	}); err != nil {
+		t.Fatalf("seed station: %v", err)
+	}
+
+	hamnut := &stubCountryProvider{name: "hamnut", err: stderrErrTransport()}
+	qrz := &stubCallsignProvider{name: "qrz", err: stderrErrTransport()}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    hamnut,
+		Chain:      []lookup.CallsignProvider{qrz},
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &recordingRefresher{},
+	}
+
+	got := o.EnrichRefresh(context.Background(), "M0CMC")
+	if got.CountrySource != lookup.SourceNone {
+		t.Errorf("CountrySource = %q, want %q (upstream-down on force-refresh = none, not fallback to cache)",
+			got.CountrySource, lookup.SourceNone)
+	}
+	if got.StationSource != lookup.SourceNone {
+		t.Errorf("StationSource = %q, want %q", got.StationSource, lookup.SourceNone)
+	}
+	if got.Country.Name == "England" {
+		t.Errorf("Country.Name leaked through from cache on force-refresh-with-upstream-down")
+	}
+	if got.Station.Name == "Cached" {
+		t.Errorf("Station.Name leaked through from cache on force-refresh-with-upstream-down")
+	}
+}
+
+// TestEnrichRefresh_NoCacheRow_BehavesLikeColdMiss — calling
+// EnrichRefresh on a callsign that was never enriched works the
+// same as a regular cold-miss Enrich: hits upstream, writes back.
+// This is the trivial case but worth pinning so a future
+// readCountry/readStation refactor can't accidentally short-circuit
+// the no-row path under force.
+func TestEnrichRefresh_NoCacheRow_BehavesLikeColdMiss(t *testing.T) {
+	db := newTestSqlite(t)
+	hamnut := &stubCountryProvider{
+		name: "hamnut",
+		result: types.Country{
+			Name:   "England",
+			Prefix: "M",
+		},
+	}
+	qrz := &stubCallsignProvider{
+		name: "qrz",
+		result: types.ContactedStation{
+			Call: "M0CMC",
+			Name: "Marc Veary",
+		},
+	}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    hamnut,
+		Chain:      []lookup.CallsignProvider{qrz},
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &recordingRefresher{},
+	}
+
+	got := o.EnrichRefresh(context.Background(), "M0CMC")
+	if got.CountrySource != lookup.SourceHamnut {
+		t.Errorf("CountrySource = %q, want %q", got.CountrySource, lookup.SourceHamnut)
+	}
+	if got.StationSource != "qrz" {
+		t.Errorf("StationSource = %q, want qrz", got.StationSource)
+	}
+	if hamnut.calls != 1 || qrz.calls != 1 {
+		t.Errorf("expected 1 call to each upstream; hamnut=%d qrz=%d", hamnut.calls, qrz.calls)
+	}
+}

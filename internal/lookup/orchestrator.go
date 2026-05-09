@@ -159,6 +159,23 @@ func MergeStationFromCountry(s types.ContactedStation, c types.Country) types.Co
 // so the SPA always receives the same shape regardless of which
 // cache state each layer landed in.
 func (o *Orchestrator) Enrich(ctx context.Context, callsign string) Result {
+	return o.enrich(ctx, callsign, false)
+}
+
+// EnrichRefresh runs the read pipeline with the cache bypassed —
+// the operator's escape valve for "the cached row is wrong." Skips
+// the cache-fetch in both layers, goes straight to upstream (hamnut
+// for country, chain for station), and writes back on success
+// (overwriting any existing row). On upstream failure the relevant
+// layer returns source=none rather than falling back to the cached
+// row — the operator asked for fresh data, returning stale data
+// silently would defeat the purpose. Async stale-refresh scheduling
+// is suppressed (we just did the work synchronously).
+func (o *Orchestrator) EnrichRefresh(ctx context.Context, callsign string) Result {
+	return o.enrich(ctx, callsign, true)
+}
+
+func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) Result {
 	callsign = strings.TrimSpace(callsign)
 	if callsign == "" {
 		return Result{Callsign: callsign, CountrySource: SourceNone, StationSource: SourceNone}
@@ -183,12 +200,12 @@ func (o *Orchestrator) Enrich(ctx context.Context, callsign string) Result {
 	safego.Go(ctx, "lookup.enrich.country", o.onPanic, func() {
 		var out countryReadResult
 		defer func() { cCh <- out }()
-		out = o.readCountry(ctx, callsign)
+		out = o.readCountry(ctx, callsign, force)
 	}, false /* respawn — Enrich is request-scoped, one-shot */)
 	safego.Go(ctx, "lookup.enrich.station", o.onPanic, func() {
 		var out stationReadResult
 		defer func() { sCh <- out }()
-		out = o.readStation(ctx, callsign)
+		out = o.readStation(ctx, callsign, force)
 	}, false)
 	c := <-cCh
 	s := <-sCh
@@ -356,17 +373,26 @@ type stationReadResult struct {
 //	stale hit  → return cached, staleHit=true
 //	cold miss  → block on hamnut; on success return + coldMiss=true
 //	cold miss  + hamnut down/disabled → return empty, source=none
-func (o *Orchestrator) readCountry(ctx context.Context, callsign string) countryReadResult {
-	cached, err := o.DB.FetchCountryByCallsignWithContext(ctx, callsign)
-	if err == nil {
-		if !o.isStale(cached.LastRefreshedAt, o.CountryTTL) {
-			return countryReadResult{data: cached, source: SourceCountryTable}
+//
+// When force is true, the cache lookup is skipped entirely — go
+// straight to hamnut and treat the result as a cold miss. This is
+// the EnrichRefresh path: an upstream success overwrites the cache
+// row via the same writeback the cold-miss branch uses; an upstream
+// failure returns source=none rather than falling back to the
+// cached row (the operator asked for fresh data).
+func (o *Orchestrator) readCountry(ctx context.Context, callsign string, force bool) countryReadResult {
+	if !force {
+		cached, err := o.DB.FetchCountryByCallsignWithContext(ctx, callsign)
+		if err == nil {
+			if !o.isStale(cached.LastRefreshedAt, o.CountryTTL) {
+				return countryReadResult{data: cached, source: SourceCountryTable}
+			}
+			return countryReadResult{data: cached, source: SourceCountryTable, staleHit: true}
 		}
-		return countryReadResult{data: cached, source: SourceCountryTable, staleHit: true}
-	}
-	if !stderrs.Is(err, errors.ErrNotFound) {
-		o.warn("country fetch failed", err)
-		return countryReadResult{source: SourceNone}
+		if !stderrs.Is(err, errors.ErrNotFound) {
+			o.warn("country fetch failed", err)
+			return countryReadResult{source: SourceNone}
+		}
 	}
 
 	if o.Country == nil {
@@ -390,17 +416,24 @@ func (o *Orchestrator) readCountry(ctx context.Context, callsign string) country
 // readStation runs the read half of the station layer — cache lookup
 // (callsign-keyed) and, on cold miss, the synchronous chain runner.
 // Does NOT filter or merge or write — Enrich orchestrates those.
-func (o *Orchestrator) readStation(ctx context.Context, callsign string) stationReadResult {
-	cached, err := o.DB.FetchContactedStationByCallsignWithContext(ctx, callsign)
-	if err == nil {
-		if !o.isStale(cached.LastRefreshedAt, o.StationTTL) {
-			return stationReadResult{data: cached, source: SourceContactedTable}
+//
+// When force is true, the cache lookup is skipped entirely — run
+// the chain and treat the result as a cold miss. Same EnrichRefresh
+// semantics as readCountry: upstream success → writeback overwrite;
+// upstream failure → source=none, no fallback to the cached row.
+func (o *Orchestrator) readStation(ctx context.Context, callsign string, force bool) stationReadResult {
+	if !force {
+		cached, err := o.DB.FetchContactedStationByCallsignWithContext(ctx, callsign)
+		if err == nil {
+			if !o.isStale(cached.LastRefreshedAt, o.StationTTL) {
+				return stationReadResult{data: cached, source: SourceContactedTable}
+			}
+			return stationReadResult{data: cached, source: SourceContactedTable, staleHit: true}
 		}
-		return stationReadResult{data: cached, source: SourceContactedTable, staleHit: true}
-	}
-	if !stderrs.Is(err, errors.ErrNotFound) {
-		o.warn("contacted_station fetch failed", err)
-		return stationReadResult{source: SourceNone}
+		if !stderrs.Is(err, errors.ErrNotFound) {
+			o.warn("contacted_station fetch failed", err)
+			return stationReadResult{source: SourceNone}
+		}
 	}
 
 	station, source := o.runChain(ctx, callsign)

@@ -23,13 +23,20 @@ func emptyEnrichmentResult(callsign string) lookup.Result {
 // handleEnrichCallsign answers the SPA's "what do we know about this
 // callsign?" question, fronting the orchestrator pipeline per ADR 0017.
 //
-// GET /v1/enrich/callsign?call=<callsign>
+// GET /v1/enrich/callsign?call=<callsign>[&refresh=true]
 //
 // The orchestrator handles all the heavy lifting — concurrent reads
 // against the cache (country table + contacted_station table), cold-
 // miss upstream calls (hamnut for country, the callsign-class chain
 // for station), filter+merge before write-back, async refresh
 // scheduling for stale hits.
+//
+// refresh=true bypasses the cache: both layers go straight to
+// upstream and overwrite the cached rows on success. The operator's
+// escape valve for "the cache is wrong" (stale QRZ data, a
+// misclassified country prefix, etc.). Anything other than the
+// literal string "true" is treated as the default (cache-aware)
+// path — strict to keep the contract obvious.
 //
 // Response is always 200 per ADR 0017 #12: transient upstream
 // failures fold into "empty fields, source=none" rather than non-2xx.
@@ -64,6 +71,13 @@ func (s *Server) handleEnrichCallsign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := s.enrich.Enrich(r.Context(), callsign)
+	refresh := r.URL.Query().Get("refresh") == "true"
+
+	var result lookup.Result
+	if refresh {
+		result = s.enrich.EnrichRefresh(r.Context(), callsign)
+	} else {
+		result = s.enrich.Enrich(r.Context(), callsign)
+	}
 	s.writeJSON(w, http.StatusOK, result)
 }
