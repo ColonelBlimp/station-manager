@@ -79,8 +79,8 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 **Other open items (carry-over) — logging-app scope:**
 
 - HamQTH / QRZCQ providers — chain expansion under the existing `CallsignProvider` interface. Operator's tag: TBD (2026-05-09).
-- Known intermittent flake — `TestSchedule_ReleasesSlotAfterFn` in `internal/lookup/refresher/`, observed once during session 45's `-race` sweep.
-- ~~Daemon profiling for stress-test~~ **Closed in this session — see Future scope below for the unfinished follow-ups (synchronous=OFF, batched commits, substrate upgrades; all operator-side calls).**
+- ~~`TestSchedule_ReleasesSlotAfterFn` flake~~ **Closed in this session.**
+- ~~Daemon profiling for stress-test~~ **Closed in this session — 5 bugs + 1 config tuning shipped, ~75× win on operator's mixed workload. Substrate-side knobs (synchronous=OFF, batched commits, faster storage) parked under Future scope.**
 - ~~`?refresh=true` on `/v1/enrich/callsign`~~ **Closed in this session.**
 - ~~SPA-side mirror of zone validation~~ **Closed in this session.**
 - ~~SessionPanel Stage C (email-out)~~ **Closed in this session, live-tested 2026-05-09 against a real SMTP server.**
@@ -99,7 +99,7 @@ See `memory/feedback_logging_vs_logbook_scope.md` for the scope rule (operator-c
 
 - **Per-field encryption-at-rest for SMTP + provider passwords.** Operator flagged it 2026-05-09 alongside SMTP config landing — wants a security assessment first. Plaintext in `config.json` matches the existing pattern (QRZ password etc.) for now. See `memory/project_sm_security_assessment.md`.
 - **Swap to `encoding/json/v2` once it un-flags.** Parked 2026-05-09 during the profiling session. v2 is in Go 1.26.2's source tree but gated behind `GOEXPERIMENT=jsonv2` and explicitly "experimental, not subject to Go 1 compatibility promise." It's a separate package (`encoding/json/v2`), not a drop-in substitute for `encoding/json` — would need to audit every import site + set the build flag in Taskfile + any CI. Cost-benefit isn't there today: post-parser-fix profile shows JSON at ~8% of allocations, throughput is fsync-bound, ~50% JSON-cost reduction would save ~4% of total allocs and zero throughput. Revisit when v2 un-flags (likely Go 1.27 or 1.28); at that point it becomes a genuine drop-in win. The cleaner JSON-cost reduction in the meantime is **shrink `additional_data`** by stripping promoted-column fields from the marshaled blob (the model→type adapter overlays columns over the unmarshaled blob, so the blob's copy is dead weight) — also parked, lower priority since current sizes are fine for personal-scale.
-- **Daemon profiling rig.** Wired 2026-05-09 (`cfg.Server.EnableProfiling` flag, `cmd/loadgen` harness). Findings: pool=1 → pool=16 was a 9.6× win; modernc DSN syntax mismatch was hiding `busy_timeout` from pool>1; ADIF parser allocations were 70% of all alloc cost (fixed: cap 64→1 + cached `recordSetters`). Current ceiling is fsync-bound at ~1400 req/s. Future-revisit knobs: `synchronous=OFF` (drops WAL fsync, risk last-tx loss on power cut), batched commits (changes API contract), substrate (NVMe etc.). All operator-side calls.
+- **Daemon profiling rig.** Wired 2026-05-09 (`cfg.Server.EnableProfiling` flag, `cmd/loadgen` harness). Findings shipped as code + config fixes (see "Profiling expedition" continuation entry below for full chain). Net: 75× improvement on operator's mixed Tab→submit workload. Remaining future-revisit knobs (substrate-side, operator's call): `synchronous=OFF` (drops WAL fsync, risk last-tx loss on power cut), batched commits (changes API contract), faster substrate (NVMe).
 
 ### Session 47 continuation (2026-05-09) — InfoPanel tab-click bug fix
 
@@ -220,6 +220,35 @@ Bug surfaced during live-test: clicking a session row opened the overlay but eve
 Operator reported during live-test: "request QSL not being reflected" after the wire-shape fix landed. Diagnosis path: re-ran `TestSubmitQso_AppSmRequestQslSurvivesGet` with newline-separated ADIF (the exact SPA wire format) — green. Then `pgrep -af smd` showed the running daemon (PID 6446) was a `go run`-cached binary built at 07:44 today, hours before the ADIF parser fix landed. The running daemon didn't have the `AppSmRequestQsl` field on `types.Qso`, the parser plumbing, or the latest embedded SPA assets — so the flag dropped at submit and the GET returned nothing. Operator restarted via `task run:smd`; flag now reflects correctly.
 
 Lesson worth keeping in mind for future debugging: when a fix's tests pass but the running system seems unaffected, check the binary timestamp before chasing further code. `task run:smd` does `go run ./cmd/smd` which compiles a fresh binary on each task invocation, but once spawned it's pinned to that binary — code changes between invocations don't reach the running process.
+
+### Session 47 continuation (2026-05-09) — Profiling expedition: 75× win on the mixed workload
+
+What started as a "Saturday afternoon profiling jaunt" turned into a 5-bug chain. Each fix surfaced the next; each was small, mechanical, and stays out of the operator's flow. New `cmd/loadgen` harness lives at `cmd/loadgen/main.go` (submit-only or mixed mode, configurable concurrency / count / prefix; `cfg.Server.EnableProfiling` flag added behind the same gate as before).
+
+**Five real bugs fixed, in the order they surfaced:**
+
+1. **modernc DSN syntax** (`internal/database/sqlite/internal.go::getDsn`). DSN options used mattn-style flat names (`_busy_timeout=5000`); modernc.org/sqlite ignores those silently and accepts `_pragma=name(value)` syntax instead. Pool=1 had masked the bug — only the connection that ran the runtime PRAGMA had `busy_timeout` set; bumping to pool=16 for stress meant 15 of 16 conns returned SQLITE_BUSY immediately on write contention. Captured in `memory/feedback_sqlite_modernc_patterns.md` as a project-idiom rule for future PRAGMA additions.
+2. **ADIF parser allocations** (`internal/adif/parse.go`). `parseRecords` was `make([]Record, 0, 64)` — pre-allocating 64-record capacity (~190 KB per call) when the daemon's POST handler only ever uses 1. Reduced to cap 1 (multi-record bulk imports pay doubling-grow cost, negligible). Plus `buildTagSetter` was building a fresh map of closures per parse via reflection over `Record`'s fields — replaced with `recordSetters` slice computed once at package `init()` from `reflect.TypeOf(Record{})`. Net allocation reduction: **83%** on the submit hot path (8 GB → 1.4 GB over 50k QSOs); p99-max latency dropped 32%.
+3. **SQLite planner statistics** (`internal/database/sqlite/service.go::Migrate` + `Close`). `sqlite_stat1` didn't exist on the operator's DB — never analysed. Without it the planner falls back to default heuristics that pick the wrong index (chose `idx_qso_logbook_id` for queries where `idx_qso_active_call` was the right choice, because logbook_id "looks more selective" by index column count). Wired `ANALYZE` after Migrate and `PRAGMA optimize` on Close (SQLite-recommended periodic maintenance). Both non-fatal on failure.
+4. **OR-with-LIKE planner confusion** (`internal/database/sqlite/api_context.go::FetchQsoSliceByCallsignWithContext`). `(call = X OR call LIKE 'X/%')` made the planner pick wrong index without stats, then fall back to full table scan once stats were populated. Split into two single-predicate queries (exact match + portable variants) merged in Go. Each branch has a clean predicate that maps to `idx_qso_active_call`.
+5. **LIKE → GLOB for portable variants** (same file). SQLite's default LIKE is case-insensitive — even after the split, the LIKE branch still scanned because case-folding prevents index use. Switched to `GLOB 'X/*'` (case-sensitive, recognised as a sargable prefix range). Callsigns are uppercase by validator contract so the case-sensitive match is semantically correct. sqlboiler doesn't expose GLOB so used `qm.Where("call GLOB ?", ...)` raw clause.
+
+**One config tuning:**
+
+- `applyDefaults` MaxOpenConns/MaxIdleConns: 1 → 8 (`internal/config/config.go`). The "sqlite is single-writer" comment was load-bearing under the broken DSN but stale post-fix; 8 captures most of the pool=16 win without wasting fds. Doc-comment captures the cautionary tale.
+
+**Net win on the operator's actual workload (mixed mode = enrich + history + submit per iteration):**
+
+| Stage | Submit p50 | Submit thr/s | History p50 |
+|---|---:|---:|---:|
+| Original (pool=1) | 650 ms | 143 | — |
+| Pool=16 + DSN fix | 65 ms | 1400 | — |
+| Mixed-mode | 30 ms | 488 | 335 ms |
+| + ANALYZE + GLOB-split | **7.7 ms** | (dup) 11500 | **8.5 ms** |
+
+50k×100 mixed (150,000 total requests) finished in **14 seconds** post-fixes. Submit at scale: 1400 req/s on fresh inserts (fsync-bound, hardware ceiling), 11500 req/s on duplicates (dedupe fast-path skips fsync — useful indicator of read-side throughput). History at scale: holds at 8.5ms p50 with 175k+ rows in qso table, confirming the index fix scales logarithmically as expected.
+
+The runtime PRAGMA at `service.go:131` (`PRAGMA busy_timeout=5000` after Open) is now redundant with the DSN's `_pragma=busy_timeout(5000)` but kept as belt-and-braces. Doesn't hurt; runs once on the first connection at startup.
 
 ### Session 47 continuation (2026-05-09) — Keyboard shortcuts + focus restoration on QsoPanel
 
