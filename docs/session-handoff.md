@@ -80,7 +80,7 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 - HamQTH / QRZCQ providers — chain expansion under the existing `CallsignProvider` interface. Operator's tag: TBD (2026-05-09).
 - Known intermittent flake — `TestSchedule_ReleasesSlotAfterFn` in `internal/lookup/refresher/`, observed once during session 45's `-race` sweep.
-- Daemon profiling for stress-test (operator-flagged 2026-05-09): wire `net/http/pprof` behind a `cfg.Server.EnableProfiling` flag, run a Go harness firing `POST /v1/qso` flat-out, capture CPU + heap + block profiles. Top-of-mind hotspots to verify: SQLite write throughput, dedupe-index hits via `EXPLAIN QUERY PLAN`, `qso_history` audit overhead, logger fsync cadence. Operator's instinct: a few thousand QSOs/sec ceiling with possible 3× headroom hiding behind a missing index or unnecessary fsync. Deferred — not blocking, picked up as an afternoon project later.
+- ~~Daemon profiling for stress-test~~ **Closed in this session — see Future scope below for the unfinished follow-ups (synchronous=OFF, batched commits, substrate upgrades; all operator-side calls).**
 - ~~`?refresh=true` on `/v1/enrich/callsign`~~ **Closed in this session.**
 - ~~SPA-side mirror of zone validation~~ **Closed in this session.**
 - ~~SessionPanel Stage C (email-out)~~ **Closed in this session, live-tested 2026-05-09 against a real SMTP server.**
@@ -95,7 +95,11 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 See `memory/feedback_logging_vs_logbook_scope.md` for the scope rule (operator-confirmed 2026-05-09).
 
-**Future scope (no immediate plan):** Per-field encryption-at-rest for SMTP + provider passwords. Operator flagged it 2026-05-09 alongside SMTP config landing — wants a security assessment first. Plaintext in `config.json` matches the existing pattern (QRZ password etc.) for now. See `memory/project_sm_security_assessment.md`.
+**Future scope (no immediate plan):**
+
+- **Per-field encryption-at-rest for SMTP + provider passwords.** Operator flagged it 2026-05-09 alongside SMTP config landing — wants a security assessment first. Plaintext in `config.json` matches the existing pattern (QRZ password etc.) for now. See `memory/project_sm_security_assessment.md`.
+- **Swap to `encoding/json/v2` once it un-flags.** Parked 2026-05-09 during the profiling session. v2 is in Go 1.26.2's source tree but gated behind `GOEXPERIMENT=jsonv2` and explicitly "experimental, not subject to Go 1 compatibility promise." It's a separate package (`encoding/json/v2`), not a drop-in substitute for `encoding/json` — would need to audit every import site + set the build flag in Taskfile + any CI. Cost-benefit isn't there today: post-parser-fix profile shows JSON at ~8% of allocations, throughput is fsync-bound, ~50% JSON-cost reduction would save ~4% of total allocs and zero throughput. Revisit when v2 un-flags (likely Go 1.27 or 1.28); at that point it becomes a genuine drop-in win. The cleaner JSON-cost reduction in the meantime is **shrink `additional_data`** by stripping promoted-column fields from the marshaled blob (the model→type adapter overlays columns over the unmarshaled blob, so the blob's copy is dead weight) — also parked, lower priority since current sizes are fine for personal-scale.
+- **Daemon profiling rig.** Wired 2026-05-09 (`cfg.Server.EnableProfiling` flag, `cmd/loadgen` harness). Findings: pool=1 → pool=16 was a 9.6× win; modernc DSN syntax mismatch was hiding `busy_timeout` from pool>1; ADIF parser allocations were 70% of all alloc cost (fixed: cap 64→1 + cached `recordSetters`). Current ceiling is fsync-bound at ~1400 req/s. Future-revisit knobs: `synchronous=OFF` (drops WAL fsync, risk last-tx loss on power cut), batched commits (changes API contract), substrate (NVMe etc.). All operator-side calls.
 
 ### Session 47 continuation (2026-05-09) — InfoPanel tab-click bug fix
 

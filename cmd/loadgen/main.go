@@ -40,16 +40,33 @@ import (
 	"time"
 )
 
-// callsignSuffix maps an integer 0..17575 to a fixed-width 3-letter
-// base-26 suffix (000 → "AAA", 25 → "AAZ", 17575 → "ZZZ"). Beyond
-// 17575 the mapping wraps, which would produce duplicate callsigns
-// the daemon's dedupe would reject — main.go enforces the bound up
-// front so wrapping never reaches the daemon.
-func callsignSuffix(n int) string {
-	a := byte('A' + n/676)
-	b := byte('A' + (n/26)%26)
-	c := byte('A' + n%26)
-	return string([]byte{a, b, c})
+// suffixWidth picks the smallest fixed-width base-26 alphabetic suffix
+// that fits `count` distinct values. Returned width is 3 (≤17576), 4
+// (≤456976), or 5 (≤11881376). Anything above 5-wide is rejected at
+// flag-parse time — five letters is already 11M unique callsigns,
+// well past any sensible stress run.
+func suffixWidth(count int) int {
+	switch {
+	case count <= 26*26*26:
+		return 3
+	case count <= 26*26*26*26:
+		return 4
+	default:
+		return 5
+	}
+}
+
+// callsignSuffix maps an integer 0..(26^width)-1 to a fixed-width
+// alphabetic base-26 suffix. n=0/width=3 → "AAA"; n=25/width=3 →
+// "AAZ"; n=17575/width=3 → "ZZZ". Width is chosen by suffixWidth so
+// the suffix has enough capacity for the count requested.
+func callsignSuffix(n, width int) string {
+	out := make([]byte, width)
+	for i := width - 1; i >= 0; i-- {
+		out[i] = byte('A' + n%26)
+		n /= 26
+	}
+	return string(out)
 }
 
 // adifBody builds a minimal valid ADIF record for the supplied
@@ -108,14 +125,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "count must be positive")
 		os.Exit(2)
 	}
-	if *count > 26*26*26 {
-		fmt.Fprintf(os.Stderr, "count=%d exceeds the 17576 unique-callsign cap for a 3-letter suffix; raise prefix or extend code\n", *count)
+	if *count > 26*26*26*26*26 {
+		fmt.Fprintf(os.Stderr, "count=%d exceeds 11881376 (the 5-letter suffix cap)\n", *count)
 		os.Exit(2)
 	}
 	if *concurrency <= 0 {
 		fmt.Fprintln(os.Stderr, "concurrency must be positive")
 		os.Exit(2)
 	}
+	width := suffixWidth(*count)
 
 	// Single shared timestamp across the run — see adifBody comment.
 	now := time.Now().UTC()
@@ -153,7 +171,7 @@ func main() {
 				if ctx.Err() != nil {
 					return
 				}
-				call := *prefix + callsignSuffix(n)
+				call := *prefix + callsignSuffix(n, width)
 				body := adifBody(call, *stationCallsign, qsoDate, timeOn)
 
 				start := time.Now()

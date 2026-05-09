@@ -45,19 +45,38 @@ func (s *Service) getDsn() (string, error) {
 
 	s.LoggerService.InfoWith().Str("path", path).Msg("Using sqlite database file")
 
-	// Merge defaults if not provided
+	// Merge operator-supplied options (raw query-param key/values) on
+	// top of the driver-default base. Operator overrides win.
 	opts := map[string]string{}
 	maps.Copy(opts, s.DatabaseConfig.Options)
-	// Set safe defaults only if not present
-	if _, ok := opts["_busy_timeout"]; !ok {
-		opts["_busy_timeout"] = "5000"
+
+	// Driver-default PRAGMAs, applied per-connection via modernc's
+	// `_pragma=name(value)` query-param convention. Each `_pragma`
+	// runs on every new connection from the pool — load-bearing
+	// because PRAGMAs like busy_timeout are connection-scoped, so a
+	// pool > 1 needs them re-applied on every conn or only the
+	// connection that ran the runtime ExecContext PRAGMA gets them.
+	//
+	// Earlier draft used mattn-style flat option names
+	// (`_busy_timeout`, `_journal_mode`); modernc.org/sqlite ignores
+	// those silently, so under pool > 1 the un-PRAGMA'd connections
+	// returned SQLITE_BUSY immediately on write contention rather
+	// than waiting up to busy_timeout. Caught during a stress run
+	// 2026-05-09 once max_open_conns was bumped from 1 to 16.
+	pragmas := []string{
+		"busy_timeout(5000)",
+		"journal_mode(WAL)",
+		"foreign_keys(on)",
+		// synchronous=NORMAL is safe under WAL (the WAL itself is
+		// sync'd on commit; the main DB only at checkpoint) and is
+		// the SQLite-recommended default for WAL mode. Trades a
+		// small risk of losing the LAST committed transaction on a
+		// power loss against a substantial throughput improvement —
+		// acceptable for a personal logging app where the operator
+		// can re-log a single QSO if power dies mid-commit.
+		"synchronous(normal)",
 	}
-	if _, ok := opts["_journal_mode"]; !ok {
-		opts["_journal_mode"] = "WAL"
-	}
-	if _, ok := opts["_foreign_keys"]; !ok {
-		opts["_foreign_keys"] = "on"
-	}
+
 	// Shared-cache mode is essential for in-memory databases: without
 	// it each pool connection opens a private :memory: DB, so schema
 	// created on one connection is invisible to the next. Without
@@ -69,18 +88,22 @@ func (s *Service) getDsn() (string, error) {
 		}
 	}
 
-	if len(opts) == 0 {
-		return fmt.Sprintf("file:%s", path), nil
-	}
-	// Stabilize key order for determinism
+	// Stabilize key order for determinism, then assemble the DSN with
+	// repeated `_pragma=` parameters (one per pragma) plus the merged
+	// scalar options. url.Values would collapse repeated `_pragma`
+	// keys into one because Set overwrites; build the query string
+	// manually to preserve the multi-value semantic.
+	q := url.Values{}
 	keys := make([]string, 0, len(opts))
 	for k := range opts {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	q := url.Values{}
 	for _, k := range keys {
 		q.Set(k, opts[k])
+	}
+	for _, p := range pragmas {
+		q.Add("_pragma", p)
 	}
 	return fmt.Sprintf("file:%s?%s", path, q.Encode()), nil
 }
