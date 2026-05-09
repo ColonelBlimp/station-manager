@@ -37,6 +37,18 @@ tasks:
     cmds:
       - npm run build
 
+  frontend:deps:check:
+    desc: List logging-SPA npm dependencies that are behind their latest published version (in-range and major bumps both)
+    dir: frontend/logging
+    cmds:
+      - npm run deps:check
+
+  frontend:deps:update:
+    desc: Pull in-range npm dependency bumps for the logging SPA (anything compatible with the package.json semver ranges). Major bumps stay deliberate — `npm install <pkg>@latest` per their own commit.
+    dir: frontend/logging
+    cmds:
+      - npm run deps:update
+
   build:smd:
     desc: Build the daemon with a freshly built embedded SPA
     deps: [frontend:build]

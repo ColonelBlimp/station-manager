@@ -12,6 +12,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,js,svelte,svelte.ts,svelte.js,css,html,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,js,svelte,svelte.ts,svelte.js,css,html,json}\"",
+    "deps:check": "npm outdated || true",
+    "deps:update": "npm update",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui"
