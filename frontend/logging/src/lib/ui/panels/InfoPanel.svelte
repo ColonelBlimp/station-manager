@@ -45,7 +45,7 @@
     /*
         Single class helper. Active state suppresses the cursor and
         flips the colour; everything else is inherited from
-        .tab-item / .tab-button (see app.css).
+        .tab-item (see app.css).
     */
     const tabItemClass = (isActive: boolean): string =>
         isActive
@@ -144,22 +144,30 @@
     -->
     <div role="tablist" class="flex flex-row items-center space-x-24 border-b border-gray-400 pb-3">
         {#each tabs as tab (tab.id)}
-            <div class="tab-item {tabItemClass(activeTab === tab.id)}">
+            <!--
+                The whole row (icon + label) is a single <button>. A prior
+                shape wrapped a `<div>` around the icon and a sibling
+                `<button>` for the label, which made the icon hover with
+                cursor:pointer (parent class) but ignore clicks (no handler
+                reached the sibling button). Collapsing into one button
+                keeps role="tab" semantics intact and makes the entire
+                row one click target.
+            -->
+            <button
+                type="button"
+                role="tab"
+                class="tab-item {tabItemClass(activeTab === tab.id)}"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`panel-${tab.id}`}
+                onclick={() => (activeTab = tab.id)}
+            >
                 {#if tab.id === 'worked'}{@render workedIcon()}
                 {:else if tab.id === 'details'}{@render detailsIcon()}
                 {:else if tab.id === 'station'}{@render stationIcon()}
                 {:else if tab.id === 'session'}{@render sessionIcon()}
                 {/if}
-                <button
-                    type="button"
-                    role="tab"
-                    class="tab-button"
-                    aria-selected={activeTab === tab.id}
-                    aria-controls={`panel-${tab.id}`}
-                    onclick={() => (activeTab = tab.id)}
-                    >{tab.title}{tab.count !== undefined ? ` (${tab.count})` : ''}</button
-                >
-            </div>
+                <span>{tab.title}{tab.count !== undefined ? ` (${tab.count})` : ''}</span>
+            </button>
         {/each}
     </div>
 

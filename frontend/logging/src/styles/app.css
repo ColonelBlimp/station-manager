@@ -162,21 +162,17 @@
     }
 
     /*
-        Tab nav (InfoPanel and any future tabbed surface). The
-        wrapper (.tab-item) carries layout + the active/inactive
-        cursor; the button (.tab-button) inherits that cursor via
-        cursor-[inherit] so the whole row reads as one clickable
-        thing. The button needs this explicitly because the browser
-        default cursor on <button> beats a parent's cursor-pointer
-        otherwise.
+        Tab nav (InfoPanel and any future tabbed surface). `.tab-item`
+        is applied directly to the `<button role="tab">` so the whole
+        row (icon + label) is one click target — a prior shape split
+        them into a wrapper <div> + sibling <button>, which made the
+        icon hover with cursor:pointer but ignore clicks because no
+        handler reached the sibling button.
 
         Active/inactive colour state lives in the component (it's
         $state-driven), not here.
     */
     .tab-item {
         @apply flex items-center gap-1 font-semibold;
-    }
-    .tab-button {
-        @apply cursor-[inherit];
     }
 }
