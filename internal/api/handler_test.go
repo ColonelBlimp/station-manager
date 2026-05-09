@@ -98,8 +98,11 @@ func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 	// Tests that exercise enrichment-related endpoints construct
 	// their own orchestrator via testServerWithEnrichment; the
 	// default test server passes nil so the handler returns a
-	// uniform empty-result shape.
-	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil)
+	// uniform empty-result shape. Mailer is also nil — the
+	// session-email handler probes Enabled() (which a nil mailer
+	// reports as false) and returns 503 mailer_disabled, mirroring
+	// an operator who hasn't configured SMTP.
+	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil, nil)
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.

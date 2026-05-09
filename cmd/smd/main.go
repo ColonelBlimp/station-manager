@@ -19,6 +19,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/api"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
@@ -288,8 +289,16 @@ func run() error {
 		}()
 	}
 
+	// ---- Mailer ----
+	// Constructed regardless of whether SMTP is configured; the Service
+	// itself reports Enabled() based on cfg.Smtp.Host. Handlers check
+	// Enabled() and return 503 mailer_disabled when unconfigured —
+	// no startup-time error path for the "operator hasn't filled in
+	// SMTP yet" state.
+	mailerSvc := email.New(cfg.Smtp, loggerSvc)
+
 	// ---- Start HTTP server ----
-	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator)
+	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc)
 
 	errCh := make(chan error, 1)
 	go func() {

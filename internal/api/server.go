@@ -11,6 +11,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/frontend"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -28,6 +29,7 @@ type Server struct {
 	logger                   *logging.Service
 	hub                      *events.Hub
 	enrich                   *lookup.Orchestrator
+	mailer                   *email.Service
 	limits                   *loadLimiter
 	maxBodyBytes             int64
 	protocol                 string
@@ -55,7 +57,7 @@ type Server struct {
 // protocol) because those don't change at runtime; the config-update
 // endpoint only touches operator-relevant fields (logging_station,
 // default_*_id) which startup doesn't bake into Server fields.
-func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator) *Server {
+func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service) *Server {
 	s := &Server{
 		cfg:                      cfgSvc,
 		qso:                      qso,
@@ -63,6 +65,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		logger:                   logger,
 		hub:                      hub,
 		enrich:                   enrich,
+		mailer:                   mailer,
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		maxBodyBytes:             cfg.Server.MaxBodyBytes,
 		protocol:                 cfg.Server.Protocol,
@@ -100,6 +103,11 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// Enrichment pipeline (ADR 0017). Always-200; SPA fires this on
 	// Tab-out from the Callsign field.
 	mux.HandleFunc("GET /v1/enrich/callsign", s.handleEnrichCallsign)
+
+	// Session ADIF email — SessionPanel "send" button. Daemon owns
+	// SMTP creds; SPA owns the session list. Body shape and contract
+	// in handler_session_email.go.
+	mux.HandleFunc("POST /v1/session/email", s.handleSessionEmail)
 
 	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
 	// Wrapped with its own subscriber cap (NOT counted against the

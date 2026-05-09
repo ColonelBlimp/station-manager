@@ -106,6 +106,15 @@ type Config struct {
 	// defaults applied in applyDefaults; an empty Chain is valid and
 	// simply disables callsign-class enrichment.
 	Lookup types.EnrichmentConfig `json:"lookup"`
+
+	// Smtp holds the operator's SMTP submission credentials used by
+	// the daemon's general-purpose mailer (internal/email). Empty Host
+	// disables the mailer; Send returns ErrMailerDisabled and callers
+	// fold that into a user-visible "email not configured" path. The
+	// SessionPanel's "email session ADIF" button is the first consumer;
+	// future alert paths (forwarder backlog, refresher repeated
+	// failures, daemon health) plug into the same Send primitive.
+	Smtp types.SmtpConfig `json:"smtp"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -196,6 +205,9 @@ func Load(path string) (Config, error) {
 	}
 	if err = validateLookup(cfg.Lookup); err != nil {
 		return cfg, fmt.Errorf("validating lookup: %w", err)
+	}
+	if err = validateSmtp(cfg.Smtp); err != nil {
+		return cfg, fmt.Errorf("validating smtp: %w", err)
 	}
 
 	return cfg, nil
@@ -441,6 +453,21 @@ func applyDefaults(cfg *Config, baseDir string) {
 			c.HttpTimeoutSec = 10
 		}
 	}
+
+	// SMTP defaults. Port 587 is the IANA submission port (RFC 6409)
+	// — the right default for any operator running through their ISP
+	// or a hosted SMTP provider. TimeoutSec bounds the entire
+	// connect+auth+send round-trip; 30s tolerates the operator's
+	// flaky-internet baseline (per the operator-network memory).
+	// StartTLS / Host / From are NOT defaulted — they must be
+	// operator-supplied to enable the mailer; an empty Host disables
+	// it (no surprise sends to a wrong server).
+	if cfg.Smtp.Port == 0 {
+		cfg.Smtp.Port = 587
+	}
+	if cfg.Smtp.TimeoutSec == 0 {
+		cfg.Smtp.TimeoutSec = 30
+	}
 }
 
 // Warnings returns a slice of human-readable advisory messages about
@@ -599,6 +626,29 @@ func validateLookupProvider(label string, p types.LookupConfig) error {
 	}
 	if p.HttpTimeoutSec <= 0 {
 		return fmt.Errorf("lookup.%s: timeout_sec must be > 0", label)
+	}
+	return nil
+}
+
+// validateSmtp checks the SMTP block. Empty Host = mailer disabled,
+// no further checks (the operator hasn't configured email yet, which
+// is a legitimate state). When Host is set, From and Port are required
+// — From is always present in the envelope so the daemon can't send
+// without one, and Port=0 would imply "default" but RFC has no
+// universal default for SMTP submission so we require an explicit
+// value (applyDefaults stamps 587 unless the operator overrode it).
+func validateSmtp(s types.SmtpConfig) error {
+	if s.Host == "" {
+		return nil
+	}
+	if s.From == "" {
+		return fmt.Errorf("smtp.from is required when smtp.host is set")
+	}
+	if s.Port <= 0 || s.Port > 65535 {
+		return fmt.Errorf("smtp.port must be in 1..65535, got %d", s.Port)
+	}
+	if s.TimeoutSec <= 0 {
+		return fmt.Errorf("smtp.timeout_sec must be > 0, got %d", s.TimeoutSec)
 	}
 	return nil
 }
