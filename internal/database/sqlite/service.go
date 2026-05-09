@@ -161,6 +161,20 @@ func (s *Service) Close() error {
 		return nil // Idempotent
 	}
 
+	// `PRAGMA optimize` is the SQLite-recommended way to keep planner
+	// statistics fresh: it cheaply re-analyses tables that have changed
+	// significantly since the last ANALYZE, skipping ones that haven't.
+	// Run on shutdown so each daemon lifecycle leaves the DB primed for
+	// the next startup. Failure is non-fatal — we're on the way out
+	// anyway, and the next Migrate's ANALYZE is the backstop.
+	ctx, cancel := s.withDefaultTimeout(context.Background())
+	if _, err := s.handle.ExecContext(ctx, "PRAGMA optimize"); err != nil {
+		s.LoggerService.WarnWith().
+			Err(err).
+			Msg("PRAGMA optimize failed on close; planner stats may be slightly stale next startup")
+	}
+	cancel()
+
 	if err := s.handle.Close(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg(errMsgFailedClose)
 	}
@@ -225,6 +239,29 @@ func (s *Service) Migrate() error {
 	err := s.doMigrations()
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg(errMsgMigrateFailed)
+	}
+
+	// ANALYZE populates sqlite_stat1 so the query planner picks indexes
+	// based on actual selectivity rather than default heuristics. Without
+	// it the planner falls back to picking by index column count, which
+	// for a single-logbook install meant `idx_qso_logbook_id` (which
+	// matches 100% of rows and is therefore useless) was preferred over
+	// `idx_qso_active_call` (one-row selectivity). Stress run 2026-05-09
+	// confirmed: 100ms+ contact-history latency from a 125k-row scan
+	// dropped to <1ms once stats were populated. Stats persist in the
+	// database file, so this only runs at meaningful cost the first
+	// time on a freshly populated DB; subsequent restarts are
+	// near-instant.
+	//
+	// Failure is non-fatal — a daemon that refused to start because
+	// ANALYZE failed would be worse than one with stale stats. Log a
+	// warning and continue.
+	ctx, cancel := s.withDefaultTimeout(context.Background())
+	defer cancel()
+	if _, err := s.handle.ExecContext(ctx, "ANALYZE"); err != nil {
+		s.LoggerService.WarnWith().
+			Err(err).
+			Msg("ANALYZE failed after migrate; planner statistics may be stale (queries will work, just slower)")
 	}
 
 	return nil

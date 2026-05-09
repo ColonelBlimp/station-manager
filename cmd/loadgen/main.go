@@ -102,11 +102,44 @@ func adifBody(call, station, qsoDate, timeOn string) string {
 
 // result is one request's outcome. Latency is recorded regardless of
 // success so 429s and errors don't skew the percentile picture by
-// being absent.
+// being absent. endpoint tags which API path produced the result so
+// the summary can break stats out per-endpoint in mixed-workload mode.
 type result struct {
-	status  int
-	latency time.Duration
-	err     error
+	endpoint string // "submit" / "enrich" / "history"
+	status   int
+	latency  time.Duration
+	err      error
+}
+
+// doRequest runs a single HTTP call and emits a result. Centralising
+// the do-and-time pattern means each per-iteration step in mixed mode
+// stays a one-liner and the keepalive-conn drain is consistent.
+func doRequest(ctx context.Context, c *http.Client, method, url, ct, body, endpoint string, results chan<- result) {
+	var reader *bytes.Buffer
+	if body != "" {
+		reader = bytes.NewBufferString(body)
+	}
+	var req *http.Request
+	if reader != nil {
+		req, _ = http.NewRequestWithContext(ctx, method, url, reader)
+	} else {
+		req, _ = http.NewRequestWithContext(ctx, method, url, nil)
+	}
+	if ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+
+	start := time.Now()
+	resp, err := c.Do(req)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		results <- result{endpoint: endpoint, status: 0, latency: elapsed, err: err}
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	results <- result{endpoint: endpoint, status: resp.StatusCode, latency: elapsed}
 }
 
 func main() {
@@ -118,6 +151,8 @@ func main() {
 		stationCallsign = flag.String("station", "G4ABC", "STATION_CALLSIGN value (must match the target logbook's callsign)")
 		logbookID       = flag.Int("logbook", 1, "logbook ID")
 		timeoutSec      = flag.Int("request-timeout-sec", 10, "per-request timeout")
+		mode            = flag.String("mode", "submit", "workload mode: 'submit' = POST /v1/qso only; 'mixed' = enrich+history+submit per iteration (matches operator's Tab→submit flow)")
+		sseSubscribe    = flag.Bool("sse", false, "open one /v1/events SSE subscriber in the background to test event-broadcast cost under load")
 	)
 	flag.Parse()
 
@@ -131,6 +166,10 @@ func main() {
 	}
 	if *concurrency <= 0 {
 		fmt.Fprintln(os.Stderr, "concurrency must be positive")
+		os.Exit(2)
+	}
+	if *mode != "submit" && *mode != "mixed" {
+		fmt.Fprintf(os.Stderr, "mode=%q invalid; must be 'submit' or 'mixed'\n", *mode)
 		os.Exit(2)
 	}
 	width := suffixWidth(*count)
@@ -157,10 +196,38 @@ func main() {
 		},
 	}
 
-	url := fmt.Sprintf("%s/v1/qso?logbook=%d", *target, *logbookID)
+	submitURL := fmt.Sprintf("%s/v1/qso?logbook=%d", *target, *logbookID)
 
+	// Channel sizing: in mixed mode each iteration emits 3 results,
+	// so the buffer is sized 3× to absorb the extra fan-out without
+	// blocking workers.
+	resultsBuf := *concurrency * 2
+	if *mode == "mixed" {
+		resultsBuf *= 3
+	}
 	jobs := make(chan int, *concurrency*2)
-	results := make(chan result, *concurrency*2)
+	results := make(chan result, resultsBuf)
+
+	// Optional SSE subscriber. Opens a single connection to /v1/events
+	// in a background goroutine and discards the byte stream — the
+	// daemon's events.Hub does a per-subscriber write on every QSO
+	// stored, so this test surfaces broadcast cost under load. The
+	// subscriber doesn't emit results (it's not a request to measure;
+	// it's a daemon-side load contributor). Cancelled on ctx.Done.
+	if *sseSubscribe {
+		go func() {
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, *target+"/v1/events", nil)
+			req.Header.Set("Accept", "text/event-stream")
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "sse subscriber: dial failed: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			fmt.Fprintf(os.Stderr, "sse subscriber: connected (status=%d)\n", resp.StatusCode)
+			_, _ = io.Copy(io.Discard, resp.Body)
+		}()
+	}
 
 	var wg sync.WaitGroup
 	for w := 0; w < *concurrency; w++ {
@@ -172,23 +239,23 @@ func main() {
 					return
 				}
 				call := *prefix + callsignSuffix(n, width)
-				body := adifBody(call, *stationCallsign, qsoDate, timeOn)
 
-				start := time.Now()
-				req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBufferString(body))
-				req.Header.Set("Content-Type", "application/x-adif")
-
-				resp, err := httpClient.Do(req)
-				elapsed := time.Since(start)
-
-				if err != nil {
-					results <- result{status: 0, latency: elapsed, err: err}
-					continue
+				if *mode == "mixed" {
+					// Operator's Tab-flow: enrich the contacted call,
+					// fetch any prior history with that call, then
+					// submit. enrich+history hit the read paths (cache
+					// hit for repeated callsigns; cold lookup the first
+					// time) and run sequentially per worker — concurrent
+					// fan-out within a single QSO would overstate the
+					// SPA's actual behaviour, which is also sequential.
+					enrichURL := fmt.Sprintf("%s/v1/enrich/callsign?call=%s", *target, call)
+					historyURL := fmt.Sprintf("%s/v1/contact-history?call=%s", *target, call)
+					doRequest(ctx, httpClient, http.MethodGet, enrichURL, "", "", "enrich", results)
+					doRequest(ctx, httpClient, http.MethodGet, historyURL, "", "", "history", results)
 				}
-				// Drain + close so the keepalive connection can be reused.
-				_, _ = io.Copy(io.Discard, resp.Body)
-				_ = resp.Body.Close()
-				results <- result{status: resp.StatusCode, latency: elapsed}
+
+				body := adifBody(call, *stationCallsign, qsoDate, timeOn)
+				doRequest(ctx, httpClient, http.MethodPost, submitURL, "application/x-adif", body, "submit", results)
 			}
 		}()
 	}
@@ -207,12 +274,19 @@ func main() {
 
 	// Collector goroutine drains results into the slice. Using
 	// channel-then-collect rather than a shared slice + mutex keeps
-	// the per-request hot path lock-free.
+	// the per-request hot path lock-free. Live counters are kept per
+	// endpoint so the periodic ticker can show progress that's
+	// meaningful in either mode (submit-only or mixed).
 	collected := make([]result, 0, *count)
 	collectorDone := make(chan struct{})
 	go func() {
 		defer close(collectorDone)
-		var stored, dup, rate, errs, other atomic.Int64
+		var live = map[string]*atomic.Int64{
+			"submit":  {},
+			"enrich":  {},
+			"history": {},
+		}
+		var errs atomic.Int64
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		startedAt := time.Now()
@@ -220,28 +294,25 @@ func main() {
 			select {
 			case r, ok := <-results:
 				if !ok {
-					fmt.Fprintf(os.Stderr, "collected=%d stored=%d dup=%d rate=%d err=%d other=%d in %s\n",
-						len(collected), stored.Load(), dup.Load(), rate.Load(), errs.Load(), other.Load(),
+					fmt.Fprintf(os.Stderr, "collected=%d submit=%d enrich=%d history=%d err=%d in %s\n",
+						len(collected),
+						live["submit"].Load(), live["enrich"].Load(), live["history"].Load(),
+						errs.Load(),
 						time.Since(startedAt).Round(time.Millisecond))
 					return
 				}
 				collected = append(collected, r)
-				switch {
-				case r.err != nil:
+				if r.err != nil {
 					errs.Add(1)
-				case r.status == 201:
-					stored.Add(1)
-				case r.status == 200:
-					dup.Add(1)
-				case r.status == 429:
-					rate.Add(1)
-				default:
-					other.Add(1)
+				} else if c, ok := live[r.endpoint]; ok {
+					c.Add(1)
 				}
 			case <-ticker.C:
-				fmt.Fprintf(os.Stderr, "[%5s] sent=%d stored=%d dup=%d rate=%d err=%d other=%d\n",
+				fmt.Fprintf(os.Stderr, "[%5s] total=%d submit=%d enrich=%d history=%d err=%d\n",
 					time.Since(startedAt).Round(time.Second),
-					len(collected), stored.Load(), dup.Load(), rate.Load(), errs.Load(), other.Load())
+					len(collected),
+					live["submit"].Load(), live["enrich"].Load(), live["history"].Load(),
+					errs.Load())
 			}
 		}
 	}()
@@ -256,55 +327,97 @@ func main() {
 		return
 	}
 
-	latencies := make([]time.Duration, len(collected))
-	var stored, dup, rate, errs, other int
-	for i, r := range collected {
-		latencies[i] = r.latency
+	// Bucket results by endpoint for per-path stats. Submit-only mode
+	// puts everything in one bucket; mixed mode splits across three.
+	type bucket struct {
+		latencies   []time.Duration
+		ok          int // 2xx
+		errs        int
+		other       int // non-2xx (incl. 429 — broken out below for submit only)
+		rate        int // 429
+		stored, dup int // submit-specific
+	}
+	buckets := map[string]*bucket{}
+	endpointOrder := []string{"submit", "enrich", "history"}
+
+	for _, r := range collected {
+		b, ok := buckets[r.endpoint]
+		if !ok {
+			b = &bucket{}
+			buckets[r.endpoint] = b
+		}
+		b.latencies = append(b.latencies, r.latency)
 		switch {
 		case r.err != nil:
-			errs++
+			b.errs++
 		case r.status == 201:
-			stored++
+			b.ok++
+			b.stored++
 		case r.status == 200:
-			dup++
+			b.ok++
+			if r.endpoint == "submit" {
+				b.dup++
+			}
 		case r.status == 429:
-			rate++
+			b.rate++
+			b.other++
 		default:
-			other++
+			b.other++
 		}
 	}
-	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 
-	p := func(q float64) time.Duration {
+	pctile := func(latencies []time.Duration, q float64) time.Duration {
+		if len(latencies) == 0 {
+			return 0
+		}
 		idx := int(float64(len(latencies)-1) * q)
 		return latencies[idx]
 	}
 
-	totalElapsed := latencies[len(latencies)-1]
-	// Better elapsed metric: sum the wallclock window from first
-	// request start to last response end. We don't track per-request
-	// start timestamps so use total/concurrency*avg as an approximation
-	// — acceptable for an order-of-magnitude reading.
-	var sumLatency time.Duration
-	for _, l := range latencies {
-		sumLatency += l
-	}
-	avgLatency := sumLatency / time.Duration(len(latencies))
-	approxWallclock := sumLatency / time.Duration(*concurrency)
-	throughput := float64(len(collected)) / approxWallclock.Seconds()
-
 	fmt.Println()
 	fmt.Println("---- summary ----")
-	fmt.Printf("total      : %d\n", len(collected))
-	fmt.Printf("  stored   : %d (201)\n", stored)
-	fmt.Printf("  duplicate: %d (200)\n", dup)
-	fmt.Printf("  rate-lim : %d (429)\n", rate)
-	fmt.Printf("  error    : %d (transport / timeout)\n", errs)
-	fmt.Printf("  other    : %d (any non-2xx/429 status)\n", other)
-	fmt.Printf("latency p50: %s\n", p(0.50).Round(time.Microsecond))
-	fmt.Printf("latency p95: %s\n", p(0.95).Round(time.Microsecond))
-	fmt.Printf("latency p99: %s\n", p(0.99).Round(time.Microsecond))
-	fmt.Printf("latency avg: %s\n", avgLatency.Round(time.Microsecond))
-	fmt.Printf("latency max: %s\n", totalElapsed.Round(time.Microsecond))
-	fmt.Printf("throughput : ~%.1f req/sec (approx, sum/concurrency wallclock)\n", throughput)
+	fmt.Printf("mode       : %s\n", *mode)
+	fmt.Printf("total reqs : %d\n", len(collected))
+
+	// Per-endpoint detail block. Loop in stable order so the output
+	// reads the same across runs.
+	for _, ep := range endpointOrder {
+		b, ok := buckets[ep]
+		if !ok || len(b.latencies) == 0 {
+			continue
+		}
+		sort.Slice(b.latencies, func(i, j int) bool { return b.latencies[i] < b.latencies[j] })
+		var sum time.Duration
+		for _, l := range b.latencies {
+			sum += l
+		}
+		avg := sum / time.Duration(len(b.latencies))
+		// Throughput per endpoint approximated as count / (sum/conc).
+		// In mixed mode this is the per-path throughput within the
+		// shared concurrency pool — useful for spotting which path
+		// dominates a worker's time budget.
+		approxWall := sum / time.Duration(*concurrency)
+		thr := float64(len(b.latencies)) / approxWall.Seconds()
+
+		fmt.Printf("\n[%s]\n", ep)
+		fmt.Printf("  count    : %d\n", len(b.latencies))
+		if ep == "submit" {
+			fmt.Printf("  stored   : %d (201)\n", b.stored)
+			fmt.Printf("  duplicate: %d (200)\n", b.dup)
+			fmt.Printf("  rate-lim : %d (429)\n", b.rate)
+		} else {
+			fmt.Printf("  ok 2xx   : %d\n", b.ok)
+			if b.rate > 0 {
+				fmt.Printf("  rate-lim : %d (429)\n", b.rate)
+			}
+		}
+		fmt.Printf("  error    : %d (transport / timeout)\n", b.errs)
+		fmt.Printf("  other    : %d (non-2xx / non-429)\n", b.other-b.rate)
+		fmt.Printf("  p50      : %s\n", pctile(b.latencies, 0.50).Round(time.Microsecond))
+		fmt.Printf("  p95      : %s\n", pctile(b.latencies, 0.95).Round(time.Microsecond))
+		fmt.Printf("  p99      : %s\n", pctile(b.latencies, 0.99).Round(time.Microsecond))
+		fmt.Printf("  avg      : %s\n", avg.Round(time.Microsecond))
+		fmt.Printf("  max      : %s\n", b.latencies[len(b.latencies)-1].Round(time.Microsecond))
+		fmt.Printf("  throughput: ~%.1f req/sec (approx, sum/concurrency wallclock)\n", thr)
+	}
 }

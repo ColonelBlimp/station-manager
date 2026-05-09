@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	stderr "errors"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,12 +61,17 @@ func (s *Service) InsertQsoWithContext(ctx context.Context, qso types.Qso) (int6
 // rows are hidden.
 //
 // The callsign match accepts either an exact hit OR a portable-suffix
-// variant ("M0CMC/P", "M0CMC/MM", "M0CMC/DX"). The LIKE anchors on a
-// slash — `call LIKE 'M0CMC/%'` — so unrelated callsigns that happen
-// to share a prefix (e.g. "M0CMCE") are excluded. Slash is not a LIKE
-// metacharacter, so no ESCAPE clause is needed. Callers are still
-// expected to pass the base callsign in canonical form (uppercase,
-// trimmed); the handler layer does that before calling in.
+// variant ("M0CMC/P", "M0CMC/MM", "M0CMC/DX"). Implemented as two
+// separate queries (exact equality + GLOB prefix) merged in Go rather
+// than a single OR-with-LIKE: the OR confuses the SQLite planner into
+// either a full table scan or picking the wrong index, while two
+// single-predicate queries each cleanly use `idx_qso_active_call`.
+// GLOB is preferred over LIKE for the portable branch because SQLite's
+// default LIKE is case-insensitive (prevents index use); GLOB is
+// case-sensitive by default and the planner recognises `GLOB 'X/*'`
+// as a sargable prefix range. Callers pass the base callsign in
+// canonical form (uppercase, trimmed); the handler layer does that
+// before calling in.
 func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsign string, logbookID int64, limit int) ([]types.ContactHistory, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoSliceByCallsignWithContext"
 	if err := checkService(op, s); err != nil {
@@ -85,32 +91,73 @@ func (s *Service) FetchQsoSliceByCallsignWithContext(ctx context.Context, callsi
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	// Wrap the call match in Expr so the OR group is parenthesised. Without
-	// it, AND-ing additional predicates (logbook_id, the implicit
-	// deleted_at IS NULL from sqlboiler's default) would bind tighter than
-	// the OR and leak rows that don't satisfy the extra constraints.
+	// Two-query strategy — see the function-level doc comment for the
+	// "why." Each branch's WHERE has only equality / range predicates
+	// on the indexed `call` column, so the planner reliably picks
+	// `idx_qso_active_call`. The previous shape — `(call = X OR call
+	// LIKE 'X/%')` — confused the planner badly enough that it
+	// fell back to a full table scan once stats were populated
+	// (caught during the 2026-05-09 mixed-mode stress run). Splitting
+	// the OR is a deterministic fix that also reads more cleanly:
+	// each query has a single, obvious purpose.
 	//
-	// The LIKE pattern "X/%" matches portable variants only (M0CMC/P,
+	// Portable-variants branch uses GLOB instead of LIKE because
+	// SQLite's default LIKE is **case-insensitive**, which prevents
+	// the planner from using `idx_qso_active_call` for prefix matches
+	// (it would have to walk the whole index doing case folding). GLOB
+	// is case-sensitive by default and is recognised as a sargable
+	// prefix predicate — the planner translates `call GLOB 'X/*'`
+	// into a range scan `call >= 'X/' AND call < 'X0'` over the
+	// indexed column. Callsigns are uppercase by validator contract
+	// (handler upper-cases at submit; storage normalises), so the
+	// case-sensitive match is semantically correct.
+	//
+	// The "X/*" pattern matches portable variants only (M0CMC/P,
 	// M0CMC/MM, …) and excludes coincidental prefixes like M0CMCE.
-	mods := []qm.QueryMod{
-		qm.Expr(
-			models.QsoWhere.Call.EQ(callsign),
-			qm.Or2(models.QsoWhere.Call.LIKE(callsign+"/%")),
-		),
-	}
+	exactMods := []qm.QueryMod{models.QsoWhere.Call.EQ(callsign)}
+	portableMods := []qm.QueryMod{qm.Where("call GLOB ?", callsign+"/*")}
 	if logbookID > 0 {
-		mods = append(mods, models.QsoWhere.LogbookID.EQ(logbookID))
+		exactMods = append(exactMods, models.QsoWhere.LogbookID.EQ(logbookID))
+		portableMods = append(portableMods, models.QsoWhere.LogbookID.EQ(logbookID))
 	}
-	mods = append(mods, qm.OrderBy(models.QsoColumns.CreatedAt+" DESC"))
+	exactMods = append(exactMods, qm.OrderBy(models.QsoColumns.CreatedAt+" DESC"))
+	portableMods = append(portableMods, qm.OrderBy(models.QsoColumns.CreatedAt+" DESC"))
 	if limit > 0 {
-		mods = append(mods, qm.Limit(limit))
+		// Each branch is capped at the full limit independently so the
+		// merged + truncated result never returns fewer rows than the
+		// caller asked for. Worst case we fetch 2N rows and discard
+		// half — at typical N≤100 the cost is trivial vs the previous
+		// 125k-row scan.
+		exactMods = append(exactMods, qm.Limit(limit))
+		portableMods = append(portableMods, qm.Limit(limit))
 	}
-	slice, err := models.Qsos(mods...).All(ctx, h)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return nil, errors.ErrNotFound
-		}
-		return nil, errors.New(op).WithErr(err).WithMsg("Failed to fetch contact history.")
+
+	exact, err := models.Qsos(exactMods...).All(ctx, h)
+	if err != nil && !stderr.Is(err, sql.ErrNoRows) {
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to fetch contact history (exact match).")
+	}
+	portable, err := models.Qsos(portableMods...).All(ctx, h)
+	if err != nil && !stderr.Is(err, sql.ErrNoRows) {
+		return nil, errors.New(op).WithErr(err).WithMsg("Failed to fetch contact history (portable variants).")
+	}
+
+	if len(exact) == 0 && len(portable) == 0 {
+		return nil, errors.ErrNotFound
+	}
+
+	// Merge: both branches are already CreatedAt-DESC, so a stable
+	// merge by CreatedAt produces the right global order. Implemented
+	// as a sort.Slice rather than a hand-rolled merge because the
+	// total slice is small (≤ 2 × limit; typically ≤ 200 rows) and
+	// SQL stability is not guaranteed across releases.
+	slice := make(models.QsoSlice, 0, len(exact)+len(portable))
+	slice = append(slice, exact...)
+	slice = append(slice, portable...)
+	sort.SliceStable(slice, func(i, j int) bool {
+		return slice[i].CreatedAt.After(slice[j].CreatedAt)
+	})
+	if limit > 0 && len(slice) > limit {
+		slice = slice[:limit]
 	}
 
 	history := make([]types.ContactHistory, 0, len(slice))

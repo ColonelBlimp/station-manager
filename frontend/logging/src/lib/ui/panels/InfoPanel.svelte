@@ -245,7 +245,7 @@
 -->
 {#snippet paperPlaneIcon()}
     <svg
-        class="size-5"
+        class="size-5 -rotate-30"
         fill="none"
         viewBox="0 0 24 24"
         stroke-width="1.5"
@@ -276,7 +276,7 @@
         try to read it as another tab.
     -->
     <div class="flex flex-row items-center justify-between border-b border-gray-400 pb-3">
-        <div role="tablist" class="flex flex-row items-center space-x-24">
+        <div role="tablist" class="flex flex-row items-center space-x-20">
             {#each tabs as tab (tab.id)}
                 <!--
                     The whole row (icon + label) is a single <button>. A prior
@@ -303,29 +303,28 @@
                     <span>{tab.title}{tab.count !== undefined ? ` (${tab.count})` : ''}</span>
                 </button>
             {/each}
+            {#if activeTab === 'session' && configState.mailer.enabled}
+                <aside class="-ml-10 -mt-2 flex flex-row items-center gap-x-2" aria-label="Email session ADIF">
+                    <input
+                        type="email"
+                        bind:value={recipient}
+                        placeholder="recipient@example.com"
+                        class="text-sm border border-gray-300 rounded px-2 py-1 w-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                        aria-label="Recipient email address"
+                    />
+                    <button
+                        type="button"
+                        onclick={handleSend}
+                        disabled={!canSend}
+                        class="p-1.5 rounded text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 disabled:text-gray-400 disabled:hover:bg-transparent disabled:cursor-not-allowed cursor-pointer"
+                        aria-label="Send session ADIF"
+                        title={sending ? 'Sending…' : 'Send session ADIF'}
+                    >
+                        {@render paperPlaneIcon()}
+                    </button>
+                </aside>
+            {/if}
         </div>
-
-        {#if activeTab === 'session' && configState.mailer.enabled}
-            <aside class="flex flex-row items-center gap-2" aria-label="Email session ADIF">
-                <input
-                    type="email"
-                    bind:value={recipient}
-                    placeholder="recipient@example.com"
-                    class="text-sm border border-gray-300 rounded px-2 py-1 w-64 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                    aria-label="Recipient email address"
-                />
-                <button
-                    type="button"
-                    onclick={handleSend}
-                    disabled={!canSend}
-                    class="p-1.5 rounded text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 disabled:text-gray-400 disabled:hover:bg-transparent disabled:cursor-not-allowed cursor-pointer"
-                    aria-label="Send session ADIF"
-                    title={sending ? 'Sending…' : 'Send session ADIF'}
-                >
-                    {@render paperPlaneIcon()}
-                </button>
-            </aside>
-        {/if}
     </div>
 
     {#if activeTab === 'worked'}
