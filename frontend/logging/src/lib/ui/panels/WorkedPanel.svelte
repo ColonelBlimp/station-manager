@@ -44,7 +44,7 @@
     }
 </script>
 
-<div class="p-3">
+<div class="px-2">
     {#if contactHistoryState.items === null}
         <!-- No fetch yet — render nothing; the tab area stays clean.
              Pre-Tab the operator hasn't asked the question. -->
@@ -54,12 +54,12 @@
         <table class="w-full text-sm tabular-nums">
             <thead>
                 <tr class="border-b border-line text-left">
-                    <th class="px-2 py-1 font-semibold">Date</th>
-                    <th class="px-2 py-1 font-semibold">Time</th>
-                    <th class="px-2 py-1 font-semibold">Band</th>
-                    <th class="px-2 py-1 font-semibold">Mode</th>
-                    <th class="px-2 py-1 font-semibold">Sent</th>
-                    <th class="px-2 py-1 font-semibold">Rcvd</th>
+                    <th class="w-24 px-2 py-1 font-semibold">Date</th>
+                    <th class="w-16 px-2 py-1 font-semibold">Time</th>
+                    <th class="w-16 px-2 py-1 font-semibold">Band</th>
+                    <th class="w-20 px-2 py-1 font-semibold">Mode</th>
+                    <th class="w-10 px-2 py-1 font-semibold">Sent</th>
+                    <th class="w-10 px-2 py-1 font-semibold">Rcvd</th>
                     <th class="px-2 py-1 font-semibold">Notes</th>
                 </tr>
             </thead>
