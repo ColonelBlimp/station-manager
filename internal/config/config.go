@@ -354,11 +354,30 @@ func applyDefaults(cfg *Config, baseDir string) {
 		// layout used in development and any future packaged install.
 		cfg.Datastore.Path = filepath.Join(cfg.DataDir, "db", "station-manager.db")
 	}
+	// SQLite WAL allows many concurrent readers + a single writer, so
+	// a pool > 1 lets the read queries on the QSO submit path
+	// (LogbookCallsignByID, FetchQsoByDedupeKey, FetchContactedStation)
+	// run in parallel rather than queueing behind the same connection.
+	// 8 is generous for a single-operator workload (typical peak: 2-3
+	// concurrent requests when a Tab fires enrichment + contact-history
+	// while a previous submit is still committing) and captured most of
+	// the pool=16 win in stress testing 2026-05-09 (143 → ~1100 req/s
+	// at pool=8 vs ~1400 at pool=16).
+	//
+	// Earlier default of 1 came from a real concern that didn't
+	// survive scrutiny: under the prior mattn-style DSN options
+	// (`_busy_timeout` / `_journal_mode`), modernc.org/sqlite silently
+	// ignored the per-connection PRAGMAs, so a pool > 1 returned
+	// SQLITE_BUSY immediately on write contention rather than waiting
+	// up to busy_timeout. Once the DSN was fixed to use modernc's
+	// `_pragma=name(value)` syntax (every new connection inherits the
+	// PRAGMAs), the single-writer limit is enforced by SQLite itself,
+	// not by the pool size.
 	if cfg.Datastore.MaxOpenConns == 0 {
-		cfg.Datastore.MaxOpenConns = 1 // sqlite is single-writer
+		cfg.Datastore.MaxOpenConns = 8
 	}
 	if cfg.Datastore.MaxIdleConns == 0 {
-		cfg.Datastore.MaxIdleConns = 1
+		cfg.Datastore.MaxIdleConns = 8
 	}
 	if cfg.Datastore.ContextTimeout == 0 {
 		cfg.Datastore.ContextTimeout = 10

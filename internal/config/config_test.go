@@ -113,8 +113,11 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	if cfg.Datastore.Driver != types.SqliteDriverName {
 		t.Fatalf("Datastore.Driver = %q, want %q", cfg.Datastore.Driver, types.SqliteDriverName)
 	}
-	if cfg.Datastore.MaxOpenConns != 1 {
-		t.Fatalf("Datastore.MaxOpenConns = %d, want 1", cfg.Datastore.MaxOpenConns)
+	if cfg.Datastore.MaxOpenConns != 8 {
+		t.Fatalf("Datastore.MaxOpenConns = %d, want 8", cfg.Datastore.MaxOpenConns)
+	}
+	if cfg.Datastore.MaxIdleConns != 8 {
+		t.Fatalf("Datastore.MaxIdleConns = %d, want 8", cfg.Datastore.MaxIdleConns)
 	}
 
 	// Logging defaults — Level + dir + the rotated-file int knobs are
