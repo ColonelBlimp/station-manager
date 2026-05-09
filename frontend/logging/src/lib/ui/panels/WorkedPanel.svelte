@@ -44,7 +44,7 @@
     }
 </script>
 
-<div class="px-4 py-4">
+<div class="p-3">
     {#if contactHistoryState.items === null}
         <!-- No fetch yet — render nothing; the tab area stays clean.
              Pre-Tab the operator hasn't asked the question. -->
@@ -58,8 +58,9 @@
                     <th class="px-2 py-1 font-semibold">Time</th>
                     <th class="px-2 py-1 font-semibold">Band</th>
                     <th class="px-2 py-1 font-semibold">Mode</th>
-                    <th class="px-2 py-1 font-semibold">RST S</th>
-                    <th class="px-2 py-1 font-semibold">RST R</th>
+                    <th class="px-2 py-1 font-semibold">Sent</th>
+                    <th class="px-2 py-1 font-semibold">Rcvd</th>
+                    <th class="px-2 py-1 font-semibold">Notes</th>
                 </tr>
             </thead>
             <tbody>
@@ -71,6 +72,7 @@
                         <td class="px-2 py-1">{qso.mode}</td>
                         <td class="px-2 py-1">{qso.rst_sent}</td>
                         <td class="px-2 py-1">{qso.rst_rcvd}</td>
+                        <td class="px-2 py-1">{qso.notes}</td>
                     </tr>
                 {/each}
             </tbody>
