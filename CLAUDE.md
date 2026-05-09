@@ -56,6 +56,7 @@ Standard Go idioms (`gofmt`, `goimports`, Effective Go). Project-specific notes 
 - **Keep functions short and focused** on a single responsibility. Avoid deep nesting and long parameter lists.
 - **Line length 100–120 characters** is a reasonable ceiling; `gofmt` doesn't enforce it but readability suffers past that.
 - **For Svelte frontends:** prefer Svelte 5 runes (`$state`, `$derived`, `$props`) over Svelte 4 syntax. Use snippets for reusable UI chunks within components when logic is tightly coupled; reach for separate files when it isn't.
+- **SPA lint + format are wired up.** From `frontend/logging/`: `npm run lint` (eslint with type-checked TS rules), `npm run lint:fix`, `npm run format` (prettier across `src/`), `npm run format:check`. ESLint config is the modern flat format (`eslint.config.js`); prettier owns formatting via `eslint-config-prettier`. When a lint disable is genuinely warranted (e.g. svelte-eslint-parser inference gaps, intentionally non-reactive plumbing inside a `.svelte.ts` module, two-way `bind:value` patterns that look like passive `$state` mirrors but aren't), write a why-comment immediately above the `eslint-disable-next-line`. Never a bare disable.
 
 ## Project idioms
 
