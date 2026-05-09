@@ -6,6 +6,7 @@
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidMaidenhead } from '../../validators/maidenhead';
     import { passthrough } from '../../validators/passthrough';
+    import { isValidCqZone, isValidItuZone, isValidDxcc } from '../../validators/zone';
     import ValidatedInput from '../components/ValidatedInput.svelte';
 
     /*
@@ -215,7 +216,7 @@
                         id="my-cq-zone"
                         label="CQ Zone"
                         bind:value={configState.loggingStation.myCqZone}
-                        validator={passthrough}
+                        validator={isValidCqZone}
                         widthClass="w-fit"
                         inputClass="w-38"
                     />
@@ -223,7 +224,7 @@
                         id="my-itu-zone"
                         label="ITU Zone"
                         bind:value={configState.loggingStation.myItuZone}
-                        validator={passthrough}
+                        validator={isValidItuZone}
                         widthClass="w-fit"
                         inputClass="w-38"
                     />
@@ -231,7 +232,7 @@
                         id="my-dxcc"
                         label="DXCC"
                         bind:value={configState.loggingStation.myDxcc}
-                        validator={passthrough}
+                        validator={isValidDxcc}
                         widthClass="w-fit"
                         inputClass="w-38"
                     />
