@@ -11,6 +11,7 @@
     import MyStationPanel from './MyStationPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import { contactHistoryState } from '../../states/contactHistory.svelte';
+    import { sessionQsosState } from '../../states/sessionQsos.svelte';
 
     type TabId = 'worked' | 'details' | 'station' | 'session';
 
@@ -37,7 +38,7 @@
         { id: 'worked', title: 'Worked', count: contactHistoryState.count },
         { id: 'details', title: 'Details' },
         { id: 'station', title: 'My Station' },
-        { id: 'session', title: 'Session', count: 0 },
+        { id: 'session', title: 'Session', count: sessionQsosState.count },
     ]);
 
     let activeTab: TabId = $state('worked');

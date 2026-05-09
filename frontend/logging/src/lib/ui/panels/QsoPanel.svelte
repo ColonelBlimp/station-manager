@@ -22,6 +22,7 @@
     import { fetchContactHistory } from '../../api/contact-history';
     import { enrichmentState } from '../../states/enrichment.svelte';
     import { contactHistoryState } from '../../states/contactHistory.svelte';
+    import { sessionQsosState } from '../../states/sessionQsos.svelte';
     import { toasts } from '../../states/toasts.svelte';
 
     /*
@@ -277,6 +278,26 @@
         const outcome = await submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID);
         switch (outcome.kind) {
             case 'stored':
+                // Snapshot session-row fields BEFORE the clears below
+                // wipe the draft + enrichment state. country and
+                // distanceKm in particular live on enrichmentState
+                // and would otherwise be empty by the time the row
+                // renders.
+                sessionQsosState.add({
+                    uuid: outcome.uuid,
+                    callsign: submittedCall,
+                    name: qsoDraft.name.trim(),
+                    freqHz: txFreqHz,
+                    band: frequencyToBand(txFreqHz),
+                    rstSent: qsoDraft.rstSent,
+                    rstRcvd: qsoDraft.rstRcvd,
+                    mode: displayedState.mode,
+                    timeOn: qsoDraft.timeOn,
+                    qsoDate: qsoDraft.qsoDate,
+                    country: enrichmentState.result?.country?.name ?? '',
+                    distanceKm: enrichmentState.activeDistanceKm,
+                    adif,
+                });
                 qsoDraft.clear();
                 // Country + Worked panels return to the empty state —
                 // every QSO is a clean slate. Operator's next Tab

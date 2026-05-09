@@ -3,14 +3,7 @@
     import { manualState } from '../../states/manual.svelte';
     import VfoBox from './VfoBox.svelte';
     import VfoInput from './VfoInput.svelte';
-    import { frequencyToBand } from '../../utils/frequency';
-
-    function formatFrequency(hz: number): string {
-        const mhz = Math.floor(hz / 1_000_000);
-        const khz = Math.floor((hz % 1_000_000) / 1_000);
-        const hzPart = hz % 1_000;
-        return `${mhz}.${khz.toString().padStart(3, '0')}.${hzPart.toString().padStart(3, '0')}`;
-    }
+    import { frequencyToBand, formatFrequency } from '../../utils/frequency';
 </script>
 
 <!--

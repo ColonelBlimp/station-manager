@@ -44,3 +44,20 @@ export function frequencyToBand(hz: number): string {
     }
     return '';
 }
+
+/**
+ * Format a frequency in Hz as the operator-readable display string
+ * MHz.kHz.Hz (3-digit-zero-padded), e.g. 14_250_000 → "14.250.000".
+ *
+ * Lifted out of Vfos.svelte 2026-05-09 when SessionPanel needed the
+ * same display. The dot-grouped form is the SM-app convention and
+ * matches what the operator sees in the VFO box; rendering Hz raw
+ * or hand-rolling a different group separator per panel would create
+ * noise.
+ */
+export function formatFrequency(hz: number): string {
+    const mhz = Math.floor(hz / 1_000_000);
+    const khz = Math.floor((hz % 1_000_000) / 1_000);
+    const hzPart = hz % 1_000;
+    return `${mhz}.${khz.toString().padStart(3, '0')}.${hzPart.toString().padStart(3, '0')}`;
+}

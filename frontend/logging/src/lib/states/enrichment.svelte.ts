@@ -64,6 +64,20 @@ class EnrichmentState {
     });
 
     /**
+     * Distance string for the currently-selected path, in km, no
+     * unit suffix. Empty when paths is null. Snapshotted into the
+     * session-QSO record at submit time so the SessionPanel column
+     * reflects what was true at the moment of logging — once the
+     * next Tab fires, this value would otherwise reset.
+     */
+    activeDistanceKm: string = $derived.by(() => {
+        if (this.paths === null) return '';
+        const d =
+            this.path === 'short' ? this.paths.shortPathDistanceKm : this.paths.longPathDistanceKm;
+        return String(d);
+    });
+
+    /**
      * setResult — called by `QsoPanel.handleEnrich` after a successful
      * `/v1/enrich/callsign` response. Path always resets to 'short'.
      */
