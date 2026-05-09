@@ -28,6 +28,22 @@ export interface ConfigResponse {
     default_logbook: DefaultLogbookFields;
     default_rig: DefaultRigFields;
     station: StationFields;
+    mailer: MailerFields;
+}
+
+export interface MailerFields {
+    /**
+     * Whether the daemon's SMTP block is configured (Host non-empty).
+     * SessionPanel hides its email controls when false — there's no
+     * point letting the operator click a button that always 503s.
+     */
+    enabled: boolean;
+    /**
+     * Operator's pre-configured QSL-manager / default recipient. Used
+     * to pre-fill the SessionPanel recipient input. Empty string when
+     * unset; SPA falls through to "operator types it every time".
+     */
+    default_recipient?: string;
 }
 
 export interface StationFields {

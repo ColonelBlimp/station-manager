@@ -145,6 +145,21 @@ class DefaultRigView {
     port: string = $state('');
 }
 
+/**
+ * Mailer projection — daemon-managed read-only flag + default
+ * recipient. Both fields are `$state` so the SessionPanel can
+ * reactively show/hide its email controls when the operator changes
+ * SMTP config and re-fetches `/v1/config`.
+ *
+ * SMTP creds (host / port / username / password / from) are NOT
+ * exposed by the daemon — see handler_config.go MailerInfo. The SPA
+ * has no business editing them.
+ */
+class MailerView {
+    enabled: boolean = $state(false);
+    defaultRecipient: string = $state('');
+}
+
 class ConfigState {
     /** CAT-side station properties — see ADR 0009. */
     station: StationConfig = new StationConfig();
@@ -165,6 +180,7 @@ class ConfigState {
     loggingStation: LoggingStationView = new LoggingStationView();
     defaultLogbook: DefaultLogbookView = new DefaultLogbookView();
     defaultRig: DefaultRigView = new DefaultRigView();
+    mailer: MailerView = new MailerView();
 
     /**
      * Hydrate from a daemon GET/PUT /v1/config response. Each block
@@ -223,6 +239,17 @@ class ConfigState {
             this.station.ampEnabled = resp.station.amp_enabled ?? false;
             this.station.ampMultiplier = resp.station.amp_multiplier ?? 1.0;
             this.station.defaultPower = resp.station.default_power ?? 0;
+        }
+
+        // mailer projection — daemon-managed, read-only on the SPA
+        // side. Defensive guard against missing block (older daemon
+        // builds) so a bad fetch doesn't NPE the hydration path.
+        if (resp.mailer) {
+            this.mailer.enabled = resp.mailer.enabled;
+            this.mailer.defaultRecipient = resp.mailer.default_recipient ?? '';
+        } else {
+            this.mailer.enabled = false;
+            this.mailer.defaultRecipient = '';
         }
 
         this.loaded = true;

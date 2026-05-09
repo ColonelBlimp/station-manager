@@ -23,17 +23,34 @@ import (
 //     joined from the DB row at GET time.
 //   - DefaultRig: id from config.json; model/port joined from
 //     cfg.Rigs (when CAT lands; for now the joined fields stay zero).
+//   - Mailer: read-only projection of the SMTP block — only the SPA-
+//     relevant subset (enabled flag + default recipient). Host / port /
+//     username / password are deliberately not on the wire; SMTP creds
+//     are operator-side config.json material, not UI-editable.
 //
 // PUT bodies use the same shape; the handler honours only writable
 // fields (LoggingStation block, DefaultLogbook.ID, DefaultRig.ID).
-// SetupComplete is server-managed — the handler ignores any value
-// the client sends and decides the new state internally.
+// SetupComplete and Mailer are server-managed — the handler ignores
+// any values the client sends and reasserts the authoritative state
+// in the response.
 type ConfigResponse struct {
 	SetupComplete  bool                 `json:"setup_complete"`
 	LoggingStation types.LoggingStation `json:"logging_station"`
 	DefaultLogbook types.Logbook        `json:"default_logbook"`
 	DefaultRig     types.RigConfig      `json:"default_rig"`
 	Station        types.StationConfig  `json:"station"`
+	Mailer         MailerInfo           `json:"mailer"`
+}
+
+// MailerInfo is the SPA-visible subset of the SMTP config. Enabled
+// drives whether the SessionPanel renders its email controls;
+// DefaultRecipient pre-fills the recipient input. Host / port /
+// username / password / from are intentionally absent — exposing them
+// would either leak the SMTP password or invite the SPA to edit creds
+// it has no business editing.
+type MailerInfo struct {
+	Enabled          bool   `json:"enabled"`
+	DefaultRecipient string `json:"default_recipient,omitempty"`
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +250,12 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 // buildConfigResponse projects a Config snapshot into the wire shape.
 // Joins the default_logbook DB row when one exists; leaves the
 // default_rig empty until CAT lands and cfg.Rigs is populated.
+//
+// The Mailer block is sourced from the live mailer Service rather
+// than the cfg snapshot — Enabled() and DefaultRecipient() are
+// nil-safe (test wiring passes mailer=nil) and tracking the actual
+// service state means a future "reload SMTP without restart" flow
+// stays correct without a parallel branch here.
 func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (ConfigResponse, error) {
 	resp := ConfigResponse{
 		SetupComplete:  cfg.SetupComplete,
@@ -240,6 +263,10 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		DefaultLogbook: types.Logbook{ID: cfg.DefaultLogbookID},
 		DefaultRig:     types.RigConfig{ID: cfg.DefaultRigID},
 		Station:        cfg.Station,
+		Mailer: MailerInfo{
+			Enabled:          s.mailer.Enabled(),
+			DefaultRecipient: s.mailer.DefaultRecipient(),
+		},
 	}
 
 	if cfg.DefaultLogbookID > 0 {

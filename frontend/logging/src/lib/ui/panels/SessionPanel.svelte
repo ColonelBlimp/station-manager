@@ -9,10 +9,10 @@
         country and active-path distance) rather than the per-callsign
         prior-contacts view.
 
-        Stage B scope: render the table. The recipient input + send
-        icon (top-right of the InfoPanel header) and the row-click-to-
-        edit overlay land in later stages; this panel is intentionally
-        read-only for now.
+        Row click opens the QsoEditOverlay (Stage D) — a modal-style
+        independent edit form. The session list is the only entry
+        point to historical edits today; a future "logbook" view may
+        share the same overlay.
 
         Empty state: "No QSOs logged this session." Distinguished from
         WorkedPanel's `null` vs `[]` by SessionPanel using a single
@@ -21,7 +21,11 @@
         check covers it.
     */
     import { sessionQsosState } from '../../states/sessionQsos.svelte';
+    import { qsoEditState } from '../../states/qsoEdit.svelte';
+    import { fetchQso } from '../../api/qso-update';
+    import { toasts } from '../../states/toasts.svelte';
     import { formatFrequency } from '../../utils/frequency';
+    import QsoEditOverlay from '../components/QsoEditOverlay.svelte';
 
     /*
         Reverse for newest-first display without mutating the
@@ -56,9 +60,42 @@
         when no value (grids missing on either side at submit time).
     */
     const formatDistance = (d: string): string => (d === '' ? '' : `${d} km`);
+
+    /*
+        Open the edit overlay for the row's UUID. beginOpen() flips the
+        modal into a loading state immediately so the operator gets
+        instant feedback; populate() arrives after the GET resolves.
+        Failure paths (not_found / network / server) toast and reset.
+    */
+    async function openEdit(uuid: string): Promise<void> {
+        if (qsoEditState.open) return; // guard against double-click
+        qsoEditState.beginOpen(uuid);
+        const outcome = await fetchQso(uuid);
+        switch (outcome.kind) {
+            case 'ok':
+                qsoEditState.populate(outcome.qso);
+                break;
+            case 'not_found':
+                toasts.error('QSO no longer exists');
+                qsoEditState.close();
+                break;
+            case 'network':
+                toasts.error('Cannot reach daemon');
+                qsoEditState.close();
+                break;
+            case 'validation':
+                toasts.error(outcome.message);
+                qsoEditState.close();
+                break;
+            case 'server':
+                toasts.error(`Failed to load: ${outcome.message}`);
+                qsoEditState.close();
+                break;
+        }
+    }
 </script>
 
-<div class="w-full pt-3">
+<div class="px-2">
     {#if rows.length === 0}
         <p class="text-sm text-gray-500 italic px-1 py-2">No QSOs logged this session.</p>
     {:else}
@@ -79,7 +116,25 @@
             </thead>
             <tbody>
                 {#each rows as row (row.uuid)}
-                    <tr class="border-b border-gray-100 last:border-0">
+                    <!--
+                        The whole row is clickable. <tr> can't host a button
+                        role cleanly inside a <table> without breaking the
+                        table semantics, so the row uses role="button" with
+                        keyboard handlers. Hover indicates clickability;
+                        focus state borrows the row's existing border.
+                    -->
+                    <tr
+                        class="border-b border-gray-100 last:border-0 hover:bg-indigo-50 focus:bg-indigo-50 cursor-pointer"
+                        role="button"
+                        tabindex="0"
+                        onclick={() => void openEdit(row.uuid)}
+                        onkeydown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                void openEdit(row.uuid);
+                            }
+                        }}
+                    >
                         <td class="py-1 pr-4 font-semibold">{row.callsign}</td>
                         <td class="py-1 pr-4">{row.name}</td>
                         <td class="py-1 pr-4">{formatFrequency(row.freqHz)}</td>
@@ -99,3 +154,11 @@
         </table>
     {/if}
 </div>
+
+<!--
+    Edit overlay — rendered as a sibling so its fixed-position backdrop
+    sits above the rest of the UI rather than inside the panel's own
+    overflow / clipping context. The overlay self-gates on
+    qsoEditState.open so it's invisible until a row click fires.
+-->
+<QsoEditOverlay />

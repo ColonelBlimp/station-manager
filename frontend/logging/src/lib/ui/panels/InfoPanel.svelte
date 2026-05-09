@@ -12,6 +12,9 @@
     import SessionPanel from './SessionPanel.svelte';
     import { contactHistoryState } from '../../states/contactHistory.svelte';
     import { sessionQsosState } from '../../states/sessionQsos.svelte';
+    import { configState } from '../../states/config.svelte';
+    import { sendSessionEmail } from '../../api/session-email';
+    import { toasts } from '../../states/toasts.svelte';
 
     type TabId = 'worked' | 'details' | 'station' | 'session';
 
@@ -31,8 +34,8 @@
 
         `tabs` is `$derived` so the Worked count auto-updates when a
         Tab fetches contact-history and contactHistoryState.count
-        flips from 0 to N. Session count stays 0 until the
-        SessionPanel and its underlying state ship.
+        flips from 0 to N. Session count auto-updates the same way
+        when a QSO lands in the session list.
     */
     const tabs: Tab[] = $derived([
         { id: 'worked', title: 'Worked', count: contactHistoryState.count },
@@ -52,6 +55,107 @@
         isActive
             ? 'text-indigo-700 cursor-default'
             : 'text-gray-500 hover:text-gray-700 cursor-pointer';
+
+    /*
+        Session-tab email controls — recipient input + paper-plane
+        send button on the right of the tab strip. Only rendered
+        when (a) the Session tab is active and (b) the daemon's
+        mailer is enabled (configState.mailer.enabled). When the
+        operator hasn't configured SMTP, the controls are hidden
+        rather than disabled — there's nothing for the operator to
+        do here without daemon-side config, so a non-functional
+        button would be confusing.
+
+        recipient seeds from configState.mailer.defaultRecipient
+        the first time it lands non-empty, then becomes operator-
+        owned — subsequent config changes don't clobber what the
+        operator typed. The boolean guard prevents the seed from
+        repeating after the operator clears the input.
+    */
+    let recipient: string = $state('');
+    let recipientSeeded: boolean = false;
+    $effect(() => {
+        const def = configState.mailer.defaultRecipient;
+        if (!recipientSeeded && def !== '') {
+            recipient = def;
+            recipientSeeded = true;
+        }
+    });
+
+    let sending: boolean = $state(false);
+
+    /*
+        canSend — gating logic for the paper-plane button. All four
+        clauses must hold:
+          - mailer enabled (button shouldn't render otherwise but the
+            check is cheap belt-and-braces).
+          - at least one logged QSO in the session.
+          - recipient non-empty and contains '@' (daemon validates
+            strictly; this is just the obvious-typo guard so we don't
+            round-trip a 400 for an empty input).
+          - not already mid-send.
+    */
+    const canSend: boolean = $derived(
+        configState.mailer.enabled &&
+            sessionQsosState.count > 0 &&
+            recipient.trim() !== '' &&
+            recipient.includes('@') &&
+            !sending
+    );
+
+    /*
+        handleSend — orchestrate the send + toast flow.
+
+        - Push a "Sending…" info toast that sticks (ttl=0) so it
+          stays visible during a slow handshake. The operator's
+          internet is on the slow side per the network memory.
+        - Concatenate every session QSO's pre-built ADIF (each
+          already has a trailing <eor>) into one body. Order is
+          submit-order — the daemon doesn't care, but it matches
+          what the operator's QSL manager expects to see.
+        - Map the discriminated outcome to a toast level + message.
+          Sticky "Sending…" is dismissed before the result toast
+          fires either way.
+        - Don't clear sessionQsosState on success — the operator
+          may want to keep eyeballing the list during a session,
+          and a manual "Clear session" affordance is a separate
+          stage if/when it's needed.
+    */
+    async function handleSend(): Promise<void> {
+        if (!canSend) return;
+        sending = true;
+        const sendingToastId = toasts.info('Sending…', 0);
+        try {
+            const adif = sessionQsosState.items.map((q) => q.adif).join('');
+            const outcome = await sendSessionEmail({
+                to: recipient.trim(),
+                adif,
+            });
+            toasts.dismiss(sendingToastId);
+            switch (outcome.kind) {
+                case 'sent':
+                    toasts.info(`Sent to ${recipient.trim()}`);
+                    break;
+                case 'mailer_disabled':
+                    toasts.error('Email not configured (SMTP block missing)');
+                    break;
+                case 'invalid':
+                    toasts.error(outcome.message);
+                    break;
+                case 'smtp_failure':
+                    toasts.error('Email send failed; check daemon logs');
+                    break;
+                case 'server':
+                    toasts.error(`Email send failed: ${outcome.message}`);
+                    break;
+                case 'network':
+                    toasts.error('Cannot reach daemon');
+                    break;
+            }
+        } finally {
+            sending = false;
+        }
+    }
 </script>
 
 <!--
@@ -134,6 +238,28 @@
     </svg>
 {/snippet}
 
+<!--
+    Heroicon "paper-airplane" (outline) — the send-email button on
+    the Session tab. Stroke-width matches the tab icons so it sits
+    visually flush with them.
+-->
+{#snippet paperPlaneIcon()}
+    <svg
+        class="size-5"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="1.5"
+        stroke="currentColor"
+        aria-hidden="true"
+    >
+        <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5"
+        />
+    </svg>
+{/snippet}
+
 <div class="flex flex-col w-full px-6 pt-6">
     <!--
         Plain <div> with role="tablist" rather than <nav>. The
@@ -142,34 +268,64 @@
         describe different reading patterns to assistive tech.
         The W3C ARIA Authoring Practices Guide for tab patterns
         uses a <div> for the tablist for this reason.
+
+        Outer flex with `justify-between` so tab buttons sit on the
+        left and the per-tab action area (today: Session-tab email
+        controls) sits on the right. The action area is `<aside>`
+        rather than another tablist member so screen readers don't
+        try to read it as another tab.
     -->
-    <div role="tablist" class="flex flex-row items-center space-x-24 border-b border-gray-400 pb-3">
-        {#each tabs as tab (tab.id)}
-            <!--
-                The whole row (icon + label) is a single <button>. A prior
-                shape wrapped a `<div>` around the icon and a sibling
-                `<button>` for the label, which made the icon hover with
-                cursor:pointer (parent class) but ignore clicks (no handler
-                reached the sibling button). Collapsing into one button
-                keeps role="tab" semantics intact and makes the entire
-                row one click target.
-            -->
-            <button
-                type="button"
-                role="tab"
-                class="tab-item {tabItemClass(activeTab === tab.id)}"
-                aria-selected={activeTab === tab.id}
-                aria-controls={`panel-${tab.id}`}
-                onclick={() => (activeTab = tab.id)}
-            >
-                {#if tab.id === 'worked'}{@render workedIcon()}
-                {:else if tab.id === 'details'}{@render detailsIcon()}
-                {:else if tab.id === 'station'}{@render stationIcon()}
-                {:else if tab.id === 'session'}{@render sessionIcon()}
-                {/if}
-                <span>{tab.title}{tab.count !== undefined ? ` (${tab.count})` : ''}</span>
-            </button>
-        {/each}
+    <div class="flex flex-row items-center justify-between border-b border-gray-400 pb-3">
+        <div role="tablist" class="flex flex-row items-center space-x-24">
+            {#each tabs as tab (tab.id)}
+                <!--
+                    The whole row (icon + label) is a single <button>. A prior
+                    shape wrapped a `<div>` around the icon and a sibling
+                    `<button>` for the label, which made the icon hover with
+                    cursor:pointer (parent class) but ignore clicks (no handler
+                    reached the sibling button). Collapsing into one button
+                    keeps role="tab" semantics intact and makes the entire
+                    row one click target.
+                -->
+                <button
+                    type="button"
+                    role="tab"
+                    class="tab-item {tabItemClass(activeTab === tab.id)}"
+                    aria-selected={activeTab === tab.id}
+                    aria-controls={`panel-${tab.id}`}
+                    onclick={() => (activeTab = tab.id)}
+                >
+                    {#if tab.id === 'worked'}{@render workedIcon()}
+                    {:else if tab.id === 'details'}{@render detailsIcon()}
+                    {:else if tab.id === 'station'}{@render stationIcon()}
+                    {:else if tab.id === 'session'}{@render sessionIcon()}
+                    {/if}
+                    <span>{tab.title}{tab.count !== undefined ? ` (${tab.count})` : ''}</span>
+                </button>
+            {/each}
+        </div>
+
+        {#if activeTab === 'session' && configState.mailer.enabled}
+            <aside class="flex flex-row items-center gap-2" aria-label="Email session ADIF">
+                <input
+                    type="email"
+                    bind:value={recipient}
+                    placeholder="recipient@example.com"
+                    class="text-sm border border-gray-300 rounded px-2 py-1 w-64 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    aria-label="Recipient email address"
+                />
+                <button
+                    type="button"
+                    onclick={handleSend}
+                    disabled={!canSend}
+                    class="p-1.5 rounded text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 disabled:text-gray-400 disabled:hover:bg-transparent disabled:cursor-not-allowed cursor-pointer"
+                    aria-label="Send session ADIF"
+                    title={sending ? 'Sending…' : 'Send session ADIF'}
+                >
+                    {@render paperPlaneIcon()}
+                </button>
+            </aside>
+        {/if}
     </div>
 
     {#if activeTab === 'worked'}

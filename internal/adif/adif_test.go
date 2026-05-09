@@ -91,3 +91,124 @@ func TestQsoToRecord_OmitsAppSmQsoIDWhenEmpty(t *testing.T) {
 		t.Fatalf("ADIF output should omit APP_SM_QSO_ID when UUID is empty\nGot:\n%s", out)
 	}
 }
+
+// TestQsoToRecord_EmitsAppSmRequestQsl pins the request-QSL flag's
+// emission contract: when q.AppSmRequestQsl is true the daemon emits
+// <APP_SM_REQUEST_QSL:1>Y. The bool ↔ "Y" conversion happens at the
+// Qso/Record boundary so the rest of the pipeline can keep working
+// with the bool semantic.
+func TestQsoToRecord_EmitsAppSmRequestQsl(t *testing.T) {
+	q := types.Qso{
+		AppSmRequestQsl: true,
+		QsoDetails: types.QsoDetails{
+			Band: "40m", Mode: "SSB", Freq: "7.050",
+			QsoDate: "20250508", TimeOn: "0845", TimeOff: "0850",
+			RstSent: "59", RstRcvd: "59",
+		},
+		ContactedStation: types.ContactedStation{Call: "M0CMC", Country: "England"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "G4ABC"},
+	}
+
+	out := ConvertQsoToAdifNoHeader(q)
+	want := "<APP_SM_REQUEST_QSL:1>Y"
+	if !strings.Contains(out, want) {
+		t.Fatalf("ADIF output missing %q\nGot:\n%s", want, out)
+	}
+}
+
+// TestQsoToRecord_OmitsAppSmRequestQslWhenFalse pins the omit-when-
+// false rule: the SPA only emits APP_SM_REQUEST_QSL when the operator
+// affirmatively flagged it. Round-tripping false → empty string →
+// omitempty drops the field on the way out.
+func TestQsoToRecord_OmitsAppSmRequestQslWhenFalse(t *testing.T) {
+	q := types.Qso{
+		AppSmRequestQsl: false,
+		QsoDetails: types.QsoDetails{
+			Band: "40m", Mode: "SSB", Freq: "7.050",
+			QsoDate: "20250508", TimeOn: "0845", TimeOff: "0850",
+			RstSent: "59", RstRcvd: "59",
+		},
+		ContactedStation: types.ContactedStation{Call: "M0CMC", Country: "England"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "G4ABC"},
+	}
+
+	out := ConvertQsoToAdifNoHeader(q)
+	if strings.Contains(out, "APP_SM_REQUEST_QSL") {
+		t.Fatalf("ADIF output should omit APP_SM_REQUEST_QSL when false\nGot:\n%s", out)
+	}
+}
+
+// TestRecordToQso_ParsesAppSmRequestQsl pins the parser side. The
+// SPA emits <APP_SM_REQUEST_QSL:1>Y when the operator has flagged
+// the QSO; the daemon must surface that as q.AppSmRequestQsl=true so
+// the value reaches storage and the SessionPanel edit overlay sees
+// the correct initial state.
+func TestRecordToQso_ParsesAppSmRequestQsl(t *testing.T) {
+	body := []byte(
+		"<CALL:5>M0CMC<BAND:3>40m<MODE:3>SSB<FREQ:5>7.050" +
+			"<QSO_DATE:8>20250508<TIME_ON:6>084500<TIME_OFF:6>085000" +
+			"<RST_SENT:2>59<RST_RCVD:2>59<COUNTRY:7>England" +
+			"<STATION_CALLSIGN:5>G4ABC<APP_SM_REQUEST_QSL:1>Y<EOR>",
+	)
+	parsed, err := Parse(body)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(parsed.Records))
+	}
+	q := RecordToQso(parsed.Records[0], 1)
+	if !q.AppSmRequestQsl {
+		t.Errorf("AppSmRequestQsl = false, want true (parsed from <APP_SM_REQUEST_QSL:1>Y)")
+	}
+}
+
+// TestRecordToQso_AbsentAppSmRequestQslDecodesFalse pins the
+// not-present default. A QSO that didn't carry APP_SM_REQUEST_QSL
+// must decode to false — the operator didn't flag it, so the
+// edit-overlay checkbox starts unchecked.
+func TestRecordToQso_AbsentAppSmRequestQslDecodesFalse(t *testing.T) {
+	body := []byte(
+		"<CALL:5>M0CMC<BAND:3>40m<MODE:3>SSB<FREQ:5>7.050" +
+			"<QSO_DATE:8>20250508<TIME_ON:6>084500<TIME_OFF:6>085000" +
+			"<RST_SENT:2>59<RST_RCVD:2>59<COUNTRY:7>England" +
+			"<STATION_CALLSIGN:5>G4ABC<EOR>",
+	)
+	parsed, err := Parse(body)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	q := RecordToQso(parsed.Records[0], 1)
+	if q.AppSmRequestQsl {
+		t.Errorf("AppSmRequestQsl = true with field absent; want false")
+	}
+}
+
+// TestRecordToQso_RoundTripsAppSmRequestQsl exercises the full
+// round-trip: bool true → ADIF emit → ADIF parse → bool true. Catches
+// regressions where the emitter / parser drift apart on the encoding.
+func TestRecordToQso_RoundTripsAppSmRequestQsl(t *testing.T) {
+	q := types.Qso{
+		AppSmRequestQsl: true,
+		QsoDetails: types.QsoDetails{
+			Band: "40m", Mode: "SSB", Freq: "7.050",
+			QsoDate: "20250508", TimeOn: "0845", TimeOff: "0850",
+			RstSent: "59", RstRcvd: "59",
+		},
+		ContactedStation: types.ContactedStation{Call: "M0CMC", Country: "England"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "G4ABC"},
+	}
+
+	emitted := ConvertQsoToAdifNoHeader(q)
+	parsed, err := Parse([]byte(emitted))
+	if err != nil {
+		t.Fatalf("Parse round-trip: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("expected 1 record after round-trip, got %d", len(parsed.Records))
+	}
+	round := RecordToQso(parsed.Records[0], 1)
+	if !round.AppSmRequestQsl {
+		t.Errorf("AppSmRequestQsl lost in round-trip; emitted: %s", emitted)
+	}
+}

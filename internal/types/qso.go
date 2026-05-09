@@ -40,6 +40,21 @@ type Qso struct {
 
 	QrzComUploadDate   string `json:"qrzcom_qso_upload_date,omitempty"`
 	QrzComUploadStatus string `json:"qrzcom_qso_upload_status,omitempty"`
+
+	// AppSmRequestQsl is the operator's "I want to request a QSL card
+	// from this contact" flag. Custom application-extension field
+	// (ADIF APP_<programid>_<fieldname> convention). Persists via the
+	// additional_data JSON blob through the same round-trip mechanism
+	// as the embedded sub-structs — adding it here is a one-line change
+	// per the doc.go pattern.
+	//
+	// Today the ADIF parser at internal/adif/adif.go does not surface
+	// APP_SM_REQUEST_QSL into this field, so the original POST /v1/qso
+	// (ADIF body) submit path silently drops it. The PATCH /v1/qso/{uuid}
+	// edit path (JSON body) does persist it — the operator can correct
+	// missed flags via the SessionPanel edit overlay after-the-fact.
+	// Closing the parser gap is a separate task.
+	AppSmRequestQsl bool `json:"app_sm_request_qsl,omitempty"`
 	/*
 		All the below fields are compatible with the ADI format and are populated by the adapter.
 		The only exception to this is the [xx]ID/ID fields, which are required by database functions.

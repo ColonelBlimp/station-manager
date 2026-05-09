@@ -602,6 +602,110 @@ func TestSubmitQso_UUIDInResponse(t *testing.T) {
 	}
 }
 
+// TestSubmitQso_AppSmRequestQslSurvivesGet is the end-to-end pin for
+// the operator's request-QSL flag through the log → store → fetch
+// path. The SPA emits APP_SM_REQUEST_QSL=Y when the operator flagged
+// the QSO at log time; the daemon must parse it, persist it (via the
+// types.Qso JSON round-trip into additional_data), and surface it on
+// GET so the SessionPanel edit overlay opens with the checkbox already
+// checked. Closes the pre-existing parser gap that the v1 SPA's flag
+// was silently dropped at submit.
+//
+// The ADIF body uses the exact newline-separated layout the SPA's
+// formatAdifRecord emits — fields each on their own line, ending in
+// <EOR>. The parser's regex is whitespace-tolerant so this matches
+// the concatenated form too, but pinning the SPA's actual on-the-wire
+// shape is the test that catches a regression from the operator's
+// path specifically.
+func TestSubmitQso_AppSmRequestQslSurvivesGet(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	adifWithFlag := "<CALL:5>M0CMC\n" +
+		"<BAND:3>40m\n" +
+		"<MODE:3>SSB\n" +
+		"<FREQ:5>7.050\n" +
+		"<QSO_DATE:8>20250508\n" +
+		"<TIME_ON:4>0845\n" +
+		"<TIME_OFF:4>0850\n" +
+		"<RST_SENT:2>59\n" +
+		"<RST_RCVD:2>59\n" +
+		"<STATION_CALLSIGN:5>G4ABC\n" +
+		"<COUNTRY:7>England\n" +
+		"<APP_SM_REQUEST_QSL:1>Y\n" +
+		"<EOR>"
+
+	w := submitQso(t, srv, lbID, adifWithFlag, false)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("submit status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	var stored qsoservice.SubmitResult
+	if err := unmarshalJSON(w.Body.String(), &stored); err != nil {
+		t.Fatalf("decode stored: %v", err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+stored.UUID, nil)
+	getReq.SetPathValue("uuid", stored.UUID)
+	getW := httptest.NewRecorder()
+	srv.handleGetQso(getW, getReq)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("get status = %d; body = %s", getW.Code, getW.Body.String())
+	}
+
+	var got types.Qso
+	if err := unmarshalJSON(getW.Body.String(), &got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if !got.AppSmRequestQsl {
+		t.Errorf("AppSmRequestQsl = false on GET; want true (flag set in submitted ADIF)\nbody: %s",
+			getW.Body.String())
+	}
+}
+
+// TestUpdateQso_AppSmRequestQslPatchPersists pins the JSON edit path:
+// PATCH with app_sm_request_qsl: true must round-trip via the
+// additional_data blob, and a follow-up GET must see the new value.
+// Together with the submit-path test above, this proves the operator
+// can either flag at log time OR correct via the edit overlay later
+// — and both paths land at the same persisted state.
+func TestUpdateQso_AppSmRequestQslPatchPersists(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	w := submitQso(t, srv, lbID, testQsoADIF, false) // no flag in ADIF
+	if w.Code != http.StatusCreated {
+		t.Fatalf("submit status = %d; body = %s", w.Code, w.Body.String())
+	}
+	var stored qsoservice.SubmitResult
+	_ = unmarshalJSON(w.Body.String(), &stored)
+
+	patchBody := `{"app_sm_request_qsl": true}`
+	patchReq := httptest.NewRequest(http.MethodPatch, "/v1/qso/"+stored.UUID,
+		strings.NewReader(patchBody))
+	patchReq.SetPathValue("uuid", stored.UUID)
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchW := httptest.NewRecorder()
+	srv.handleUpdateQso(patchW, patchReq)
+	if patchW.Code != http.StatusOK {
+		t.Fatalf("patch status = %d; body = %s", patchW.Code, patchW.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/qso/"+stored.UUID, nil)
+	getReq.SetPathValue("uuid", stored.UUID)
+	getW := httptest.NewRecorder()
+	srv.handleGetQso(getW, getReq)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("get status = %d; body = %s", getW.Code, getW.Body.String())
+	}
+	var got types.Qso
+	_ = unmarshalJSON(getW.Body.String(), &got)
+	if !got.AppSmRequestQsl {
+		t.Errorf("AppSmRequestQsl = false after PATCH=true; round-trip broken\nbody: %s",
+			getW.Body.String())
+	}
+}
+
 // TestSubmitQso_ConcurrentDuplicate is the deterministic regression test
 // for the H1 race: two concurrent submits with identical dedupe-key
 // inputs both pass the pre-transaction FetchQsoByDedupeKey and race

@@ -12,13 +12,21 @@ import (
 // header-side USERDEFx declaration. Per ADR 0016 it carries the QSO's
 // UUIDv7 so re-imports and forwarder uploads round-trip the canonical
 // external identifier.
+//
+// AppSmRequestQsl rides via the same APP_ extension mechanism. The
+// field is a string (parser/emitter only handle strings via
+// reflection) holding "Y" when the operator wants to request a QSL
+// card; the bool ↔ string conversion happens at the QsoToRecord /
+// RecordToQso boundary so types.Qso keeps the bool semantic. Empty
+// is the absence-equivalent — omitempty drops it from emitted ADIF.
 type Record struct {
 	types.QsoDetails
 	types.ContactedStation
 	types.LoggingStation
 	QslSection
 	UserDef
-	AppSmQsoID string `adif:"app_sm_qso_id,omitempty"`
+	AppSmQsoID      string `adif:"app_sm_qso_id,omitempty"`
+	AppSmRequestQsl string `adif:"app_sm_request_qsl,omitempty"`
 }
 
 type QslSection struct {
@@ -86,11 +94,23 @@ func QsoToRecord(q types.Qso) Record {
 		SmFwrdByEmailStatus: q.SmFwrdByEmailStatus,
 	}
 	r.AppSmQsoID = q.UUID
+	if q.AppSmRequestQsl {
+		// "Y" is the project's encoding for the operator's "request a
+		// QSL" reminder flag. Parser checks for this exact value on
+		// the way back; an empty / absent field decodes to false.
+		r.AppSmRequestQsl = "Y"
+	}
 	return r
 }
 
 // RecordToQso converts a parsed ADIF Record into a types.Qso, setting the
 // given logbookID. QSL and user-defined fields are mapped where possible.
+//
+// AppSmRequestQsl maps "Y" → true, anything else → false. The strict
+// equality means a malformed value ("y", "1", "true") decodes to false
+// — defensive default that matches the project's "operator-set true
+// only when the field is exactly Y" convention used by the existing
+// SPA emitter.
 func RecordToQso(rec Record, logbookID int64) types.Qso {
 	q := types.Qso{
 		LogbookID:        logbookID,
@@ -111,6 +131,7 @@ func RecordToQso(rec Record, logbookID int64) types.Qso {
 		SmQsoUploadStatus:   rec.UserDef.SmQsoUploadStatus,
 		SmFwrdByEmailDate:   rec.UserDef.SmFwrdByEmailDate,
 		SmFwrdByEmailStatus: rec.UserDef.SmFwrdByEmailStatus,
+		AppSmRequestQsl:     rec.AppSmRequestQsl == "Y",
 	}
 	return q
 }

@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // TestHandleGetConfig_PreSetup covers the first-boot shape: setup
@@ -664,6 +666,115 @@ func TestHandlePutConfig_ZoneTrimming(t *testing.T) {
 	}
 	if resp.LoggingStation.MyDXCC != "291" {
 		t.Errorf("MyDXCC = %q, want %q", resp.LoggingStation.MyDXCC, "291")
+	}
+}
+
+// TestHandleGetConfig_MailerDisabled covers the default test wiring:
+// nil mailer → Enabled() reports false, no recipient on the wire.
+// The SessionPanel uses this flag to hide its email controls when
+// SMTP isn't configured.
+func TestHandleGetConfig_MailerDisabled(t *testing.T) {
+	srv := testServer(t) // nil mailer
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.Mailer.Enabled {
+		t.Error("Mailer.Enabled = true with nil mailer; want false")
+	}
+	if resp.Mailer.DefaultRecipient != "" {
+		t.Errorf("Mailer.DefaultRecipient = %q with nil mailer; want empty",
+			resp.Mailer.DefaultRecipient)
+	}
+}
+
+// TestHandleGetConfig_MailerEnabled exercises the populated path: a
+// real Service with Host set surfaces enabled=true and the configured
+// default recipient. SMTP creds (host, port, username, password, from)
+// must NOT appear anywhere in the wire payload — exposing them would
+// either leak the password or invite SPA edits to fields it doesn't own.
+func TestHandleGetConfig_MailerEnabled(t *testing.T) {
+	srv := testServerWithMailer(t, types.SmtpConfig{
+		Host:             "smtp.example.org",
+		Port:             587,
+		Username:         "operator",
+		Password:         "secret-token-do-not-leak",
+		From:             "operator@example.org",
+		DefaultRecipient: "qsl@example.org",
+		StartTLS:         true,
+		TimeoutSec:       30,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, "secret-token-do-not-leak") {
+		t.Fatalf("password leaked into wire payload: %s", body)
+	}
+	if strings.Contains(body, "smtp.example.org") {
+		t.Fatalf("host leaked into wire payload: %s", body)
+	}
+	if strings.Contains(body, "operator@example.org") {
+		t.Fatalf("from-address leaked into wire payload: %s", body)
+	}
+
+	var resp ConfigResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !resp.Mailer.Enabled {
+		t.Error("Mailer.Enabled = false with a configured mailer; want true")
+	}
+	if resp.Mailer.DefaultRecipient != "qsl@example.org" {
+		t.Errorf("Mailer.DefaultRecipient = %q, want qsl@example.org",
+			resp.Mailer.DefaultRecipient)
+	}
+}
+
+// TestHandlePutConfig_MailerBlockIgnored confirms the Mailer field is
+// server-managed: a client sending mailer.enabled=true with a recipient
+// must NOT mutate the SMTP config (which lives in config.json, not the
+// SPA-writable surface) and the response must reflect the actual mailer
+// state, not the request body.
+func TestHandlePutConfig_MailerBlockIgnored(t *testing.T) {
+	srv := testServer(t) // nil mailer → Enabled() = false
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ"}, "mailer": {"enabled": true, "default_recipient": "spoofed@example.com"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp.Mailer.Enabled {
+		t.Error("Mailer.Enabled was set from PUT body; the field must be server-managed")
+	}
+	if resp.Mailer.DefaultRecipient == "spoofed@example.com" {
+		t.Errorf("Mailer.DefaultRecipient was honoured from PUT body (%q); must be ignored",
+			resp.Mailer.DefaultRecipient)
 	}
 }
 
