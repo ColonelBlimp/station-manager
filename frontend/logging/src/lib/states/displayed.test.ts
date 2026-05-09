@@ -31,7 +31,11 @@ describe('displayedState (ADR 0009 four-object decomposition)', () => {
         // Reset all four singletons to their structural defaults so each
         // test starts from a known baseline. This mirrors Vfos.test.ts's
         // beforeEach so the conventions stay aligned.
-        try { localStorage.clear(); } catch { /* noop */ }
+        try {
+            localStorage.clear();
+        } catch {
+            /* noop */
+        }
 
         catState.rigIdentity = '';
         catState.vfoA = 14_250_000;

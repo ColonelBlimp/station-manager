@@ -69,8 +69,9 @@ export interface EnrichmentResult {
     callsign: string;
     country?: EnrichmentCountry;
     station?: EnrichmentStation;
-    country_source: 'hamnut' | 'cache' | 'none' | string;
-    station_source: 'cache' | 'none' | string;
+    country_source: 'hamnut' | 'cache' | 'none';
+    /** Provider name (e.g. "qrzlookupservice"), "cache", or "none". */
+    station_source: string;
 }
 
 export type EnrichOutcome =
@@ -88,10 +89,9 @@ interface DaemonError {
 export async function enrichCallsign(callsign: string): Promise<EnrichOutcome> {
     let response: Response;
     try {
-        response = await fetch(
-            `/v1/enrich/callsign?call=${encodeURIComponent(callsign)}`,
-            { method: 'GET' }
-        );
+        response = await fetch(`/v1/enrich/callsign?call=${encodeURIComponent(callsign)}`, {
+            method: 'GET',
+        });
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { kind: 'network', message };
@@ -107,7 +107,11 @@ export async function enrichCallsign(callsign: string): Promise<EnrichOutcome> {
     if (response.ok) {
         const result = body as EnrichmentResult | null;
         if (result === null) {
-            return { kind: 'server', code: 'unparseable_response', message: 'enrichment response was not valid JSON' };
+            return {
+                kind: 'server',
+                code: 'unparseable_response',
+                message: 'enrichment response was not valid JSON',
+            };
         }
         return { kind: 'ok', result };
     }

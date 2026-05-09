@@ -1,19 +1,19 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
-    import Callsign from "../components/Callsign.svelte";
-    import Rst from "../components/Rst.svelte";
-    import Mode from "../components/Mode.svelte";
-    import Vfos from "../components/Vfos.svelte";
+    import Callsign from '../components/Callsign.svelte';
+    import Rst from '../components/Rst.svelte';
+    import Mode from '../components/Mode.svelte';
+    import Vfos from '../components/Vfos.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
     import { qsoDefaults } from '../../states/qsoDefaults.svelte';
     import { qsoDraft } from '../../states/qsoDraft.svelte';
-    import TextInput from "../components/TextInput.svelte";
-    import Comment from "../components/Comment.svelte";
-    import DateInput from "../components/DateInput.svelte";
-    import TimeInput from "../components/TimeInput.svelte";
-    import FormControls from "../components/FormControls.svelte";
+    import TextInput from '../components/TextInput.svelte';
+    import Comment from '../components/Comment.svelte';
+    import DateInput from '../components/DateInput.svelte';
+    import TimeInput from '../components/TimeInput.svelte';
+    import FormControls from '../components/FormControls.svelte';
     import { formatAdifRecord } from '../../utils/adif';
     import { frequencyToBand } from '../../utils/frequency';
     import { resolveModeAndSubmode } from '../../utils/mode';
@@ -43,17 +43,19 @@
         displayedState/manualState), not a draft field — keeping it out
         of qsoDraft preserves the ADR 0009 ownership boundary.
     */
+    // Two-way bind across two reactive stores: read from displayedState
+    // (rig-mirror or manualState, picked by the ADR 0009 flag rule);
+    // operator writes route back into manualState only when `editable`,
+    // so a CAT-driven mode change while the rig is live can't clobber
+    // the snapshot kept for the disconnect path. `let mode = $state(...)`
+    // + mirror-effect is the standard Svelte 5 idiom for this — a plain
+    // $derived would be read-only and break the <Mode bind:value>.
+    // eslint-disable-next-line svelte/prefer-writable-derived
     let mode = $state(displayedState.mode);
     $effect(() => {
-        // Mirror displayedState → local binding when the live source
-        // changes (operator switching CAT on, rig pushing a new mode).
         mode = displayedState.mode;
     });
     $effect(() => {
-        // Mirror operator edits → manualState. Guarded on `editable`
-        // so a programmatic mode change while CAT is live doesn't
-        // clobber manualState (kept stable for the snapshot-on-disconnect
-        // story in ADR 0009).
         if (displayedState.editable) {
             manualState.mode = mode;
         }
@@ -197,12 +199,10 @@
     async function submitQso(): Promise<void> {
         if (!qsoDraft.canSubmit) return;
 
-        const selectedHz = displayedState.selectedVfo === 'A'
-            ? displayedState.vfoA
-            : displayedState.vfoB;
-        const otherHz = displayedState.selectedVfo === 'A'
-            ? displayedState.vfoB
-            : displayedState.vfoA;
+        const selectedHz =
+            displayedState.selectedVfo === 'A' ? displayedState.vfoA : displayedState.vfoB;
+        const otherHz =
+            displayedState.selectedVfo === 'A' ? displayedState.vfoB : displayedState.vfoA;
 
         const txFreqHz = displayedState.split ? otherHz : selectedHz;
         const rxFreqHz = displayedState.split ? selectedHz : undefined;
@@ -336,24 +336,39 @@
 -->
 <div class="flex flex-col px-6">
     <div class="flex flex-row space-x-2 pt-4">
-        <Callsign id="call" label="Callsign" bind:value={qsoDraft.callsign} onenrich={handleEnrich}/>
-        <Rst id="rst_sent" label="RST Sent" bind:value={qsoDraft.rstSent}/>
-        <Rst id="rst_rcvd" label="RST Rcvd" bind:value={qsoDraft.rstRcvd}/>
-        <Mode id="mode" label="Mode" bind:value={mode} list={modes} disabled={!displayedState.editable}/>
-        <Vfos/>
+        <Callsign
+            id="call"
+            label="Callsign"
+            bind:value={qsoDraft.callsign}
+            onenrich={handleEnrich}
+        />
+        <Rst id="rst_sent" label="RST Sent" bind:value={qsoDraft.rstSent} />
+        <Rst id="rst_rcvd" label="RST Rcvd" bind:value={qsoDraft.rstRcvd} />
+        <Mode
+            id="mode"
+            label="Mode"
+            bind:value={mode}
+            list={modes}
+            disabled={!displayedState.editable}
+        />
+        <Vfos />
     </div>
     <div class="flex flex-row space-x-2 mt-2">
-        <TextInput id="name" label="Name" bind:value={qsoDraft.name}/>
-        <TextInput id="qth" label="QTH" widthClass="w-46" bind:value={qsoDraft.qth}/>
-        <Comment id="comment" label="Comment" bind:value={qsoDraft.comment}/>
+        <TextInput id="name" label="Name" bind:value={qsoDraft.name} />
+        <TextInput id="qth" label="QTH" widthClass="w-46" bind:value={qsoDraft.qth} />
+        <Comment id="comment" label="Comment" bind:value={qsoDraft.comment} />
     </div>
     <div class="flex flex-row space-x-2 -mt-2">
-        <DateInput id="qso_date" label="Date" bind:value={qsoDraft.qsoDate}/>
-        <TimeInput id="time_on" label="Time On (UTC)" bind:value={qsoDraft.timeOn}/>
-        <TimeInput id="time_off" label="Time Off (UTC)" bind:value={qsoDraft.timeOff}/>
+        <DateInput id="qso_date" label="Date" bind:value={qsoDraft.qsoDate} />
+        <TimeInput id="time_on" label="Time On (UTC)" bind:value={qsoDraft.timeOn} />
+        <TimeInput id="time_off" label="Time Off (UTC)" bind:value={qsoDraft.timeOff} />
         <div class="flex flex-row space-x-2">
             <FormControls
-                onClear={() => { qsoDraft.clear(); enrichmentState.clear(); contactHistoryState.clear(); }}
+                onClear={() => {
+                    qsoDraft.clear();
+                    enrichmentState.clear();
+                    contactHistoryState.clear();
+                }}
                 onSubmit={submitQso}
                 submitDisabled={!qsoDraft.canSubmit}
             />

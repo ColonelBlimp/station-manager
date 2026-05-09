@@ -18,11 +18,13 @@ import FormControls from './FormControls.svelte';
 describe('FormControls', () => {
     afterEach(() => cleanup());
 
-    function setup(props: {
-        onClear?: () => void;
-        onSubmit?: () => void;
-        submitDisabled?: boolean;
-    } = {}) {
+    function setup(
+        props: {
+            onClear?: () => void;
+            onSubmit?: () => void;
+            submitDisabled?: boolean;
+        } = {}
+    ) {
         const { container } = render(FormControls, {
             onClear: props.onClear,
             onSubmit: props.onSubmit,

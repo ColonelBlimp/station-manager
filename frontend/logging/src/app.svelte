@@ -1,11 +1,11 @@
 <script lang="ts">
-    import LoggingCard from "./lib/ui/cards/LoggingCard.svelte";
-    import Toasts from "./lib/ui/Toasts.svelte";
-    import {fetchConfig, putConfig} from "./lib/api/config";
-    import {configState} from "./lib/states/config.svelte";
-    import {toasts} from "./lib/states/toasts.svelte";
-    import {onMount} from "svelte";
-    import {isValidCallsign} from "./lib/validators/callsign";
+    import LoggingCard from './lib/ui/cards/LoggingCard.svelte';
+    import Toasts from './lib/ui/Toasts.svelte';
+    import { fetchConfig, putConfig } from './lib/api/config';
+    import { configState } from './lib/states/config.svelte';
+    import { toasts } from './lib/states/toasts.svelte';
+    import { onMount } from 'svelte';
+    import { isValidCallsign } from './lib/validators/callsign';
 
     // Local form state for the setup card. Lives here (not in
     // configState) because configState mirrors the DAEMON's view —
@@ -104,7 +104,7 @@
         {@render main_app()}
     {/if}
 {/if}
-<Toasts/>
+<Toasts />
 
 <!--
     h-140 / w-fit | w-200 are the whole-app shell dimensions — single use,
@@ -119,7 +119,7 @@
 -->
 {#snippet main_app()}
     <main class="rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
-        <LoggingCard/>
+        <LoggingCard />
     </main>
 {/snippet}
 
@@ -128,34 +128,38 @@
         <h1 class="text-center font-semibold text-2xl">Welcome to Station Manager</h1>
         <div class="py-4">
             <p>
-                For Station Manager to work, the <i>default log book</i> needs to be initialised.  All this
-                requires is a callsign.  Don't worry if you are not sure which callsign to enter; it is
-                generally recommended that the <i>default log book</i> be associated with you personal callsign.
+                For Station Manager to work, the <i>default log book</i> needs to be initialised.
+                All this requires is a callsign. Don't worry if you are not sure which callsign to
+                enter; it is generally recommended that the <i>default log book</i> be associated with
+                you personal callsign.
             </p>
-            <p>If you use QRZ.com, then the callsign entered here should be the same as the callsign for the QRZ.com log book
-                to which the QSOs will be forwarded (forwarding of QSOs is configurable and not enabled by default).
+            <p>
+                If you use QRZ.com, then the callsign entered here should be the same as the
+                callsign for the QRZ.com log book to which the QSOs will be forwarded (forwarding of
+                QSOs is configurable and not enabled by default).
             </p>
         </div>
         <div class="flex flex-col items-center">
-                <div class="flex flex-row items-center space-x-4">
-                    <label class="input-label" for="callsign">Callsign</label>
-                    <input
-                        id="callsign"
-                        type="text"
-                        placeholder="Callsign"
-                        class="input-base uppercase w-38"
-                        title="The Default log book's callsign."
-                        bind:value={callsign}
-                        disabled={saving}
-                        autocomplete="off"
-                        spellcheck="false"
-                    />
-                    <button
-                        onclick={putCallsign}
-                        disabled={callsign.trim() === '' || saving}
-                        class="h-9 cursor-pointer rounded-md bg-focus p-2.5 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
-                    >{saving ? 'Saving…' : 'Save'}</button>
-                </div>
+            <div class="flex flex-row items-center space-x-4">
+                <label class="input-label" for="callsign">Callsign</label>
+                <input
+                    id="callsign"
+                    type="text"
+                    placeholder="Callsign"
+                    class="input-base uppercase w-38"
+                    title="The Default log book's callsign."
+                    bind:value={callsign}
+                    disabled={saving}
+                    autocomplete="off"
+                    spellcheck="false"
+                />
+                <button
+                    onclick={putCallsign}
+                    disabled={callsign.trim() === '' || saving}
+                    class="h-9 cursor-pointer rounded-md bg-focus p-2.5 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
+                    >{saving ? 'Saving…' : 'Save'}</button
+                >
+            </div>
         </div>
     </main>
 {/snippet}

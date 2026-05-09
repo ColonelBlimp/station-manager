@@ -91,12 +91,7 @@ export function gridToDecimal(grid: string): DecimalCoords | null {
  * Initial great-circle bearing from (lat1, lon1) to (lat2, lon2),
  * normalised to [0, 360) and rounded to 0.1°.
  */
-export function calculateBearing(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number,
-): number {
+export function calculateBearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const lat1Rad = toRadians(lat1);
     const lon1Rad = toRadians(lon1);
     const lat2Rad = toRadians(lat2);
@@ -117,12 +112,7 @@ export function calculateBearing(
  * using the haversine formula and Earth radius 6371 km. The result is
  * Math.ceil-rounded to match v1's behaviour.
  */
-export function haversineKm(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number,
-): number {
+export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const lat1Rad = toRadians(lat1);
     const lat2Rad = toRadians(lat2);
     const dLat = toRadians(lat2 - lat1);
@@ -130,10 +120,7 @@ export function haversineKm(
 
     const a =
         Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1Rad) *
-            Math.cos(lat2Rad) *
-            Math.sin(dLon / 2) *
-            Math.sin(dLon / 2);
+        Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return Math.ceil(EARTH_RADIUS_KM * c);
 }
@@ -149,20 +136,10 @@ export function pathInfo(localGrid: string, remoteGrid: string): PathInfo | null
         return null;
     }
 
-    const shortPathBearing = calculateBearing(
-        local.lat,
-        local.lon,
-        remote.lat,
-        remote.lon,
-    );
+    const shortPathBearing = calculateBearing(local.lat, local.lon, remote.lat, remote.lon);
     const longPathBearing = Math.round(((shortPathBearing + 180) % 360) * 10) / 10;
 
-    const shortPathDistanceKm = haversineKm(
-        local.lat,
-        local.lon,
-        remote.lat,
-        remote.lon,
-    );
+    const shortPathDistanceKm = haversineKm(local.lat, local.lon, remote.lat, remote.lon);
     const earthCircumferenceKm = 2 * Math.PI * EARTH_RADIUS_KM;
     const longPathDistanceKm = Math.ceil(earthCircumferenceKm - shortPathDistanceKm);
 

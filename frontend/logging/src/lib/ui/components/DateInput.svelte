@@ -25,7 +25,7 @@
     }: Props = $props();
 </script>
 
-<div class="{widthClass}">
+<div class={widthClass}>
     <label for={id} class="input-label">{label}</label>
     <div class="mt-1">
         <input

@@ -22,8 +22,8 @@ export interface ContactHistory {
     band: string;
     freq: string;
     mode: string;
-    qso_date: string;   // ADIF YYYYMMDD
-    time_on: string;    // ADIF HHMM
+    qso_date: string; // ADIF YYYYMMDD
+    time_on: string; // ADIF HHMM
     name: string;
     country: string;
     call: string;
@@ -51,10 +51,9 @@ interface DaemonOk {
 export async function fetchContactHistory(callsign: string): Promise<ContactHistoryOutcome> {
     let response: Response;
     try {
-        response = await fetch(
-            `/v1/contact-history?call=${encodeURIComponent(callsign)}`,
-            { method: 'GET' }
-        );
+        response = await fetch(`/v1/contact-history?call=${encodeURIComponent(callsign)}`, {
+            method: 'GET',
+        });
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { kind: 'network', message };

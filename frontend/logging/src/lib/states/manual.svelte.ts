@@ -34,12 +34,7 @@
  * writes also persist via the localStorage mirror.
  */
 
-import {
-    DEFAULT_VFO_HZ,
-    DEFAULT_MODE,
-    DEFAULT_SUB_MODE,
-    DEFAULT_SELECTED_VFO,
-} from './cat.svelte';
+import { DEFAULT_VFO_HZ, DEFAULT_MODE, DEFAULT_SUB_MODE, DEFAULT_SELECTED_VFO } from './cat.svelte';
 
 const KEY_PREFIX = 'sm.manual.';
 

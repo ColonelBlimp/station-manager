@@ -67,7 +67,12 @@
         <div class={enrichmentState.result === null ? 'hidden' : ''}>
             <!-- Country name + new-DXCC marker -->
             <div class="text-lg font-bold mb-2">
-                {enrichmentState.result?.country?.name ?? ''}{#if enrichmentState.result?.country?.is_new_entity}<span title="New DXCC entity"> *</span>{/if}
+                {enrichmentState.result?.country?.name ??
+                    ''}{#if enrichmentState.result?.country?.is_new_entity}<span
+                        title="New DXCC entity"
+                    >
+                        *</span
+                    >{/if}
             </div>
 
             <!-- Flag — flag-icons CSS class; ccode is ISO 3166-1 alpha-2
@@ -144,9 +149,13 @@
             {#if enrichmentState.result?.country?.local_time}
                 <div class="text-sm">
                     <span class="font-semibold">Local time:</span>
-                    <span class="ml-1 tabular-nums {activeClass}">{formatLocalTimeHHMM(enrichmentState.result.country.local_time)}</span>
+                    <span class="ml-1 tabular-nums {activeClass}"
+                        >{formatLocalTimeHHMM(enrichmentState.result.country.local_time)}</span
+                    >
                     {#if enrichmentState.result.country.time_offset}
-                        <span class="ml-1 text-ink">({enrichmentState.result.country.time_offset})</span>
+                        <span class="ml-1 text-ink"
+                            >({enrichmentState.result.country.time_offset})</span
+                        >
                     {/if}
                 </div>
             {/if}

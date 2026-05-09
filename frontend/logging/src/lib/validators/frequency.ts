@@ -33,8 +33,8 @@
  * at the form layer.
  */
 
-const FREQ_MIN_HZ = 100_000;          // 100 kHz
-const FREQ_MAX_HZ = 30_000_000_000;   // 30 GHz
+const FREQ_MIN_HZ = 100_000; // 100 kHz
+const FREQ_MAX_HZ = 30_000_000_000; // 30 GHz
 
 const DISPLAY_PATTERN = /^(\d{1,5})\.(\d{1,3})\.(\d{1,3})$/;
 const DECIMAL_PATTERN = /^(\d{1,5})(?:\.(\d{1,6}))?$/;

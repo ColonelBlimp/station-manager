@@ -185,9 +185,7 @@ describe('Callsign', () => {
                 // intentionally no onenrich
             });
             const input = container.querySelector('input') as HTMLInputElement;
-            await expect(
-                fireEvent.keyDown(input, { key: 'Tab' }),
-            ).resolves.not.toThrow();
+            await expect(fireEvent.keyDown(input, { key: 'Tab' })).resolves.not.toThrow();
         });
     });
 });

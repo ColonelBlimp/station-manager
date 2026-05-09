@@ -1,8 +1,8 @@
 <script lang="ts">
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
-    import VfoBox from "./VfoBox.svelte";
-    import VfoInput from "./VfoInput.svelte";
+    import VfoBox from './VfoBox.svelte';
+    import VfoInput from './VfoInput.svelte';
     import { frequencyToBand } from '../../utils/frequency';
 
     function formatFrequency(hz: number): string {
@@ -54,7 +54,7 @@
             {action}
             disabled={!displayedState.editable}
             {isSelected}
-            onSelect={() => manualState.selectedVfo = vfo}
+            onSelect={() => (manualState.selectedVfo = vfo)}
         />
         <VfoInput
             id={`vfo-${vfo.toLowerCase()}`}
@@ -62,7 +62,7 @@
             band={frequencyToBand(frequency)}
             disabled={!displayedState.editable}
             {tabindex}
-            onCommit={(hz) => {
+            onCommit={(hz: number) => {
                 if (vfo === 'A') manualState.vfoA = hz;
                 else manualState.vfoB = hz;
             }}

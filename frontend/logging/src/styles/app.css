@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /*
     flag-icons — bundled SVG flags for the country panel. Carry-forward
@@ -14,7 +14,7 @@
     stay stuck at ~21px regardless of the width / aspect-ratio
     utilities applied to the host element.
 */
-@import "flag-icons/css/flag-icons.min.css" layer(components);
+@import 'flag-icons/css/flag-icons.min.css' layer(components);
 
 /*
     Design tokens — Tailwind v4 @theme block.
@@ -48,9 +48,9 @@
         share a single width (vfo-w) so the box footprint is stable
         regardless of split mode.
     */
-    --spacing-vfo-w:        3.25rem;    /* 52px */
-    --spacing-vfo-half:     1.0625rem;  /* 17px — split-on row height */
-    --spacing-vfo-full:     2.125rem;   /* 34px — split-off row height; = 2 × vfo-half */
+    --spacing-vfo-w: 3.25rem; /* 52px */
+    --spacing-vfo-half: 1.0625rem; /* 17px — split-on row height */
+    --spacing-vfo-full: 2.125rem; /* 34px — split-off row height; = 2 × vfo-half */
 
     /*
         Input row reserved height. Includes label + input + a planned
@@ -59,7 +59,7 @@
         constant; until then it's reserving space so the layout doesn't
         shift when the slot eventually appears.
     */
-    --spacing-input-slot:   4.375rem;   /* 70px */
+    --spacing-input-slot: 4.375rem; /* 70px */
 
     /*
         Semantic colour palette. Each token is currently mapped to a
@@ -69,27 +69,31 @@
 
         Surfaces / chrome:
     */
-    --color-surface:           #fff;                          /* tw white */
-    --color-surface-muted:     oklch(92.8% .006 264.531);     /* tw gray-200 — placeholder panels */
-    --color-surface-disabled:  oklch(96.7% .003 264.542);     /* tw gray-100 — disabled input bg */
-    --color-line:              oklch(87.2% .01 258.338);      /* tw gray-300 — input outline */
-    --color-line-soft:         oklch(92.8% .006 264.531);     /* tw gray-200 — card border */
-    --color-ink:               oklch(21% .034 264.665);       /* tw gray-900 — body text */
+    --color-surface: #fff; /* tw white */
+    --color-surface-muted: oklch(92.8% 0.006 264.531); /* tw gray-200 — placeholder panels */
+    --color-surface-disabled: oklch(96.7% 0.003 264.542); /* tw gray-100 — disabled input bg */
+    --color-line: oklch(87.2% 0.01 258.338); /* tw gray-300 — input outline */
+    --color-line-soft: oklch(92.8% 0.006 264.531); /* tw gray-200 — card border */
+    --color-ink: oklch(21% 0.034 264.665); /* tw gray-900 — body text */
 
     /*
         Status / interaction:
     */
-    --color-focus:             oklch(51.1% .262 276.966);     /* tw indigo-600 — input focus outline + accent */
-    --color-focus-ring:        oklch(58.5% .233 277.117);     /* tw indigo-500 — button-style focus-visible ring */
-    --color-invalid:           oklch(57.7% .245 27.325);      /* tw red-600 — invalid-input outline */
+    --color-focus: oklch(51.1% 0.262 276.966); /* tw indigo-600 — input focus outline + accent */
+    --color-focus-ring: oklch(
+        58.5% 0.233 277.117
+    ); /* tw indigo-500 — button-style focus-visible ring */
+    --color-invalid: oklch(57.7% 0.245 27.325); /* tw red-600 — invalid-input outline */
 
     /*
         VFO state colours (Vfos / VfoBox specific):
     */
-    --color-vfo-rx:            oklch(62.7% .194 149.214);     /* tw green-600 — RX label / active receive */
-    --color-vfo-tx:            oklch(41% .159 10.272);        /* tw rose-900 — TX label / selected non-split */
-    --color-vfo-label:         oklch(48.8% .243 264.376);     /* tw blue-700 — VFO-X label background */
-    --color-vfo-inactive:      oklch(55.1% .027 264.364);     /* tw gray-500 — non-selected box (split-off) */
+    --color-vfo-rx: oklch(62.7% 0.194 149.214); /* tw green-600 — RX label / active receive */
+    --color-vfo-tx: oklch(41% 0.159 10.272); /* tw rose-900 — TX label / selected non-split */
+    --color-vfo-label: oklch(48.8% 0.243 264.376); /* tw blue-700 — VFO-X label background */
+    --color-vfo-inactive: oklch(
+        55.1% 0.027 264.364
+    ); /* tw gray-500 — non-selected box (split-off) */
 }
 
 @layer base {

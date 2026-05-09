@@ -17,7 +17,9 @@ import VfoInput from './VfoInput.svelte';
 describe('VfoInput', () => {
     afterEach(() => cleanup());
 
-    function setup(initialProps: { value?: string; band?: string; onCommit?: (hz: number) => void } = {}) {
+    function setup(
+        initialProps: { value?: string; band?: string; onCommit?: (hz: number) => void } = {}
+    ) {
         const onCommit = initialProps.onCommit ?? vi.fn();
         const { container } = render(VfoInput, {
             id: 'test-vfo',

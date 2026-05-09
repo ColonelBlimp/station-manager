@@ -116,8 +116,8 @@ describe('Vfos', () => {
             const inputs = container.querySelectorAll('input');
 
             expect(inputs).toHaveLength(2);
-            expect((inputs[0] as HTMLInputElement).value).toBe('14.250.000');
-            expect((inputs[1] as HTMLInputElement).value).toBe('7.100.000');
+            expect(inputs[0].value).toBe('14.250.000');
+            expect(inputs[1].value).toBe('7.100.000');
         });
     });
 
@@ -164,8 +164,8 @@ describe('Vfos', () => {
             const inputs = container.querySelectorAll('input');
 
             expect(inputs).toHaveLength(2);
-            expect((inputs[0] as HTMLInputElement).value).toBe('7.100.000');
-            expect((inputs[1] as HTMLInputElement).value).toBe('14.250.000');
+            expect(inputs[0].value).toBe('7.100.000');
+            expect(inputs[1].value).toBe('14.250.000');
         });
     });
 
@@ -173,7 +173,7 @@ describe('Vfos', () => {
         it('shows the band name next to each VFO when in-band', () => {
             manualState.selectedVfo = 'A';
             manualState.vfoA = 14_250_000; // 20m
-            manualState.vfoB = 7_100_000;  // 40m
+            manualState.vfoB = 7_100_000; // 40m
             const { container } = render(Vfos);
             const text = container.textContent ?? '';
 
@@ -183,12 +183,12 @@ describe('Vfos', () => {
 
         it('shows no band name for an out-of-band frequency', () => {
             manualState.selectedVfo = 'A';
-            manualState.vfoA = 5_000_000;  // between 80m (3.5–4.0 MHz) and 60m (5.25–5.45 MHz) — out of band
-            manualState.vfoB = 7_100_000;  // 40m
+            manualState.vfoA = 5_000_000; // between 80m (3.5–4.0 MHz) and 60m (5.25–5.45 MHz) — out of band
+            manualState.vfoB = 7_100_000; // 40m
             const { container } = render(Vfos);
             const text = container.textContent ?? '';
 
-            expect(text).toContain('40m');     // vfoB still shows its band
+            expect(text).toContain('40m'); // vfoB still shows its band
             expect(text).not.toContain('20m'); // vfoA is out of band; no band text
             expect(text).not.toContain('60m');
             expect(text).not.toContain('80m');
@@ -510,8 +510,8 @@ describe('Vfos', () => {
         it('enables inputs when CAT is off (default)', () => {
             const { container } = render(Vfos);
             const inputs = container.querySelectorAll('input');
-            expect((inputs[0] as HTMLInputElement).disabled).toBe(false);
-            expect((inputs[1] as HTMLInputElement).disabled).toBe(false);
+            expect(inputs[0].disabled).toBe(false);
+            expect(inputs[1].disabled).toBe(false);
         });
 
         it('disables inputs when CAT is enabled, bridge connected, and rig responding', () => {
@@ -520,8 +520,8 @@ describe('Vfos', () => {
             bridgeState.rigResponding = true;
             const { container } = render(Vfos);
             const inputs = container.querySelectorAll('input');
-            expect((inputs[0] as HTMLInputElement).disabled).toBe(true);
-            expect((inputs[1] as HTMLInputElement).disabled).toBe(true);
+            expect(inputs[0].disabled).toBe(true);
+            expect(inputs[1].disabled).toBe(true);
         });
 
         it('keeps inputs enabled when CAT is enabled but bridge is disconnected', () => {
@@ -530,7 +530,7 @@ describe('Vfos', () => {
             bridgeState.rigResponding = false;
             const { container } = render(Vfos);
             const inputs = container.querySelectorAll('input');
-            expect((inputs[0] as HTMLInputElement).disabled).toBe(false);
+            expect(inputs[0].disabled).toBe(false);
         });
 
         it('keeps inputs enabled when CAT is enabled and bridge connected but rig not responding', () => {
@@ -539,7 +539,7 @@ describe('Vfos', () => {
             bridgeState.rigResponding = false; // rig off
             const { container } = render(Vfos);
             const inputs = container.querySelectorAll('input');
-            expect((inputs[0] as HTMLInputElement).disabled).toBe(false);
+            expect(inputs[0].disabled).toBe(false);
         });
     });
 });

@@ -23,11 +23,7 @@
         submitDisabled?: boolean;
     }
 
-    let {
-        onClear,
-        onSubmit,
-        submitDisabled = false,
-    }: Props = $props();
+    let { onClear, onSubmit, submitDisabled = false }: Props = $props();
 </script>
 
 <div class="w-69.5 flex justify-end items-end space-x-2">
@@ -36,12 +32,15 @@
         type="button"
         tabindex={-1}
         onclick={() => onClear?.()}
-        class="h-9 w-18.5 cursor-pointer rounded-md bg-surface px-2.5 py-1.5 text-base font-semibold ring-1 shadow-sm ring-line ring-inset hover:bg-surface-disabled focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Clear
+        class="h-9 w-18.5 cursor-pointer rounded-md bg-surface px-2.5 py-1.5 text-base font-semibold ring-1 shadow-sm ring-line ring-inset hover:bg-surface-disabled focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+        >Clear
     </button>
     <button
         id="log-qso-btn"
         type="button"
         onclick={() => onSubmit?.()}
         disabled={submitDisabled}
-        class="h-9 cursor-pointer rounded-md bg-focus p-2.5 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed">Log Contact</button>
+        class="h-9 cursor-pointer rounded-md bg-focus p-2.5 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
+        >Log Contact</button
+    >
 </div>

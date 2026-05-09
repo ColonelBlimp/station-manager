@@ -51,12 +51,28 @@
     title={interactive ? 'Select VFO' : null}
     onclick={handleClick}
     onkeydown={handleKeydown}
-    class="flex flex-col font-medium text-xs text-white outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded {interactive ? 'cursor-pointer hover:brightness-110' : disabled ? 'cursor-not-allowed' : 'cursor-default'}"
+    class="flex flex-col font-medium text-xs text-white outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded {interactive
+        ? 'cursor-pointer hover:brightness-110'
+        : disabled
+          ? 'cursor-not-allowed'
+          : 'cursor-default'}"
 >
     {#if isSplit}
-        <div class="text-center w-vfo-w h-vfo-half rounded-t {action === 'RX' ? 'bg-vfo-rx/80' : 'bg-vfo-tx/80'}">{action}</div>
+        <div
+            class="text-center w-vfo-w h-vfo-half rounded-t {action === 'RX'
+                ? 'bg-vfo-rx/80'
+                : 'bg-vfo-tx/80'}"
+        >
+            {action}
+        </div>
         <div class="text-center w-vfo-w h-vfo-half rounded-b bg-vfo-label/90">{label}</div>
     {:else}
-        <div class="flex w-vfo-w h-vfo-full rounded {action === 'RX' ? 'bg-vfo-tx/80' : 'bg-vfo-inactive/80'} items-center pl-2">{label}</div>
+        <div
+            class="flex w-vfo-w h-vfo-full rounded {action === 'RX'
+                ? 'bg-vfo-tx/80'
+                : 'bg-vfo-inactive/80'} items-center pl-2"
+        >
+            {label}
+        </div>
     {/if}
 </div>

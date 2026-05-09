@@ -43,6 +43,10 @@ class ToastsState {
 export const toastsState = new ToastsState();
 
 let nextId = 1;
+// Plain Map by design — `timers` is internal plumbing for clearTimeout
+// cleanup and is never read from a template / $derived / $effect. Using
+// SvelteMap here would add unused reactivity machinery.
+// eslint-disable-next-line svelte/prefer-svelte-reactivity
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
 /*

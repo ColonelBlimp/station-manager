@@ -145,12 +145,15 @@ class QsoDraft {
      * set (defaults). Frequency is always set (VFO defaults).
      */
     canSubmit: boolean = $derived(
-        this.callsign.trim() !== '' && isValidCallsign(this.callsign) &&
-        this.rstSent.trim() !== '' && isValidRst(this.rstSent) &&
-        this.rstRcvd.trim() !== '' && isValidRst(this.rstRcvd) &&
-        this.qsoDate !== '' &&
-        this.timeOn !== '' &&
-        this.timeOff !== ''
+        this.callsign.trim() !== '' &&
+            isValidCallsign(this.callsign) &&
+            this.rstSent.trim() !== '' &&
+            isValidRst(this.rstSent) &&
+            this.rstRcvd.trim() !== '' &&
+            isValidRst(this.rstRcvd) &&
+            this.qsoDate !== '' &&
+            this.timeOn !== '' &&
+            this.timeOff !== ''
     );
 
     /**

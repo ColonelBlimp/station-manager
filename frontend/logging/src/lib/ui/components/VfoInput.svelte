@@ -15,14 +15,7 @@
         tabindex?: number;
         onCommit?: (hz: number) => void;
     }
-    let {
-        id,
-        value,
-        band,
-        disabled = false,
-        tabindex = 0,
-        onCommit,
-    }: Props = $props();
+    let { id, value, band, disabled = false, tabindex = 0, onCommit }: Props = $props();
 
     let editValue = $state('');
     let editing = $state(false);
@@ -82,7 +75,7 @@
         {id}
         bind:this={inputElement}
         value={editing ? editValue : value}
-        disabled={disabled}
+        {disabled}
         {tabindex}
         class="input-base {invalid ? 'invalid-input' : ''}"
         aria-invalid={invalid}

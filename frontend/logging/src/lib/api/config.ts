@@ -116,7 +116,9 @@ export async function fetchConfig(): Promise<ConfigOutcome> {
 }
 
 export async function putConfig(
-    payload: Partial<Pick<ConfigResponse, 'logging_station' | 'default_logbook' | 'default_rig' | 'station'>>
+    payload: Partial<
+        Pick<ConfigResponse, 'logging_station' | 'default_logbook' | 'default_rig' | 'station'>
+    >
 ): Promise<ConfigOutcome> {
     let response: Response;
     try {

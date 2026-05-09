@@ -39,8 +39,8 @@ describe('Mode', () => {
     it('option value equals option label (single-string list shape)', () => {
         const { container } = setup({ list: ['USB', 'CW'] });
         const options = container.querySelectorAll('option');
-        expect((options[0] as HTMLOptionElement).value).toBe('USB');
-        expect((options[1] as HTMLOptionElement).value).toBe('CW');
+        expect(options[0].value).toBe('USB');
+        expect(options[1].value).toBe('CW');
     });
 
     it('reflects the initial value as the selected option', () => {

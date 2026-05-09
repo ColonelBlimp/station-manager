@@ -19,9 +19,12 @@
 
     function levelClass(level: 'info' | 'warn' | 'error'): string {
         switch (level) {
-            case 'info': return 'toast-info';
-            case 'warn': return 'toast-warn';
-            case 'error': return 'toast-error';
+            case 'info':
+                return 'toast-info';
+            case 'warn':
+                return 'toast-warn';
+            case 'error':
+                return 'toast-error';
         }
     }
 
@@ -40,9 +43,12 @@
     */
     function levelLabel(level: 'info' | 'warn' | 'error'): string {
         switch (level) {
-            case 'info': return 'Info: ';
-            case 'warn': return 'Warning: ';
-            case 'error': return 'Error: ';
+            case 'info':
+                return 'Info: ';
+            case 'warn':
+                return 'Warning: ';
+            case 'error':
+                return 'Error: ';
         }
     }
 </script>

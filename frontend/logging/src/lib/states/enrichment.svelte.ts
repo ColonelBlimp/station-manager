@@ -59,9 +59,7 @@ class EnrichmentState {
      */
     activeBearing: string = $derived.by(() => {
         if (this.paths === null) return '';
-        const b = this.path === 'short'
-            ? this.paths.shortPathBearing
-            : this.paths.longPathBearing;
+        const b = this.path === 'short' ? this.paths.shortPathBearing : this.paths.longPathBearing;
         return b.toFixed(1);
     });
 

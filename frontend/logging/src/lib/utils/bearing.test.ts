@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-    calculateBearing,
-    gridToDecimal,
-    haversineKm,
-    pathInfo,
-} from './bearing';
+import { calculateBearing, gridToDecimal, haversineKm, pathInfo } from './bearing';
 
 describe('gridToDecimal', () => {
     it('returns null for empty input', () => {
@@ -131,8 +126,8 @@ describe('pathInfo', () => {
         const p = pathInfo('JN58td', 'FN31pr');
         expect(p).not.toBeNull();
         // Either spb + 180 ≡ lpb (mod 360) or lpb + 180 ≡ spb (mod 360).
-        const a = ((p!.shortPathBearing + 180) % 360);
-        const b = ((p!.longPathBearing + 180) % 360);
+        const a = (p!.shortPathBearing + 180) % 360;
+        const b = (p!.longPathBearing + 180) % 360;
         const diffA = Math.abs(a - p!.longPathBearing);
         const diffB = Math.abs(b - p!.shortPathBearing);
         expect(Math.min(diffA, diffB)).toBeLessThanOrEqual(0.2);
@@ -151,12 +146,8 @@ describe('pathInfo', () => {
     it('miles match km via 0.621371 ceil-rounded', () => {
         const p = pathInfo('JN58td', 'FN31pr');
         expect(p).not.toBeNull();
-        expect(p!.shortPathDistanceMiles).toBe(
-            Math.ceil(p!.shortPathDistanceKm * 0.621371),
-        );
-        expect(p!.longPathDistanceMiles).toBe(
-            Math.ceil(p!.longPathDistanceKm * 0.621371),
-        );
+        expect(p!.shortPathDistanceMiles).toBe(Math.ceil(p!.shortPathDistanceKm * 0.621371));
+        expect(p!.longPathDistanceMiles).toBe(Math.ceil(p!.longPathDistanceKm * 0.621371));
     });
 
     it('produces sensible bearings for JN58td→FN31pr (Munich→New England)', () => {

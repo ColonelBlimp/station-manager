@@ -1,6 +1,4 @@
 <script lang="ts">
 </script>
 
-<div>
-    Session Panel
-</div>
+<div>Session Panel</div>

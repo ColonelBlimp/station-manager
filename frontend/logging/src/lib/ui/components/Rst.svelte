@@ -9,12 +9,7 @@
         widthClass?: string;
     }
 
-    let {
-        id,
-        label,
-        value = $bindable(''),
-        widthClass = 'w-16',
-    }: Props = $props();
+    let { id, label, value = $bindable(''), widthClass = 'w-16' }: Props = $props();
 
     /*
         RST is digits only — readability/strength (and tone for CW).

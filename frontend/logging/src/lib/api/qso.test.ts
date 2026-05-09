@@ -12,7 +12,10 @@ function mockFetchJSON(status: number, body: unknown): void {
         status,
         headers: { 'Content-Type': 'application/json' },
     });
-    vi.stubGlobal('fetch', vi.fn(async () => response));
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(() => Promise.resolve(response))
+    );
 }
 
 const STORED_UUID = '01910d3a-7000-7abc-8def-0123456789ab';
@@ -21,8 +24,12 @@ const DUPLICATE_UUID = '01910d3a-7001-7def-9123-0123456789cd';
 describe('submitQso', () => {
     it('posts to /v1/qso with the logbook query and application/x-adif body', async () => {
         const fetchSpy = vi.fn(
-            async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-                new Response(JSON.stringify({ status: 'stored', uuid: STORED_UUID, id: 42 }), { status: 201 }),
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(
+                    new Response(JSON.stringify({ status: 'stored', uuid: STORED_UUID, id: 42 }), {
+                        status: 201,
+                    })
+                )
         );
         vi.stubGlobal('fetch', fetchSpy);
 
@@ -34,7 +41,9 @@ describe('submitQso', () => {
         const init = call[1];
         expect(url).toBe('/v1/qso?logbook=1');
         expect(init?.method).toBe('POST');
-        expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/x-adif');
+        expect((init?.headers as Record<string, string>)['Content-Type']).toBe(
+            'application/x-adif'
+        );
         expect(init?.body).toBe(ADIF);
     });
 
@@ -84,9 +93,10 @@ describe('submitQso', () => {
     });
 
     it('returns kind=network when fetch throws', async () => {
-        vi.stubGlobal('fetch', vi.fn(async () => {
-            throw new TypeError('Failed to fetch');
-        }));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+        );
         const out = await submitQso(ADIF, 1);
         expect(out).toEqual({ kind: 'network', message: 'Failed to fetch' });
     });
@@ -96,7 +106,10 @@ describe('submitQso', () => {
             status: 502,
             headers: { 'Content-Type': 'text/plain' },
         });
-        vi.stubGlobal('fetch', vi.fn(async () => response));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
         const out = await submitQso(ADIF, 1);
         expect(out).toEqual({
             kind: 'server',

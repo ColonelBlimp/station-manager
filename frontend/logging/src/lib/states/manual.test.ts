@@ -15,11 +15,19 @@ import { manualState } from './manual.svelte';
 
 describe('manualState persistence (ADR 0011)', () => {
     beforeEach(() => {
-        try { localStorage.clear(); } catch { /* noop */ }
+        try {
+            localStorage.clear();
+        } catch {
+            /* noop */
+        }
     });
 
     afterEach(() => {
-        try { localStorage.clear(); } catch { /* noop */ }
+        try {
+            localStorage.clear();
+        } catch {
+            /* noop */
+        }
     });
 
     describe('mirror writes to localStorage', () => {
@@ -56,15 +64,16 @@ describe('manualState persistence (ADR 0011)', () => {
         it('uses the sm.manual.* key namespace', () => {
             manualState.vfoA = 14_300_000;
             flushSync();
-            const keys = Object.keys(localStorage).filter(k => k.startsWith('sm.manual.'));
+            const keys = Object.keys(localStorage).filter((k) => k.startsWith('sm.manual.'));
             expect(keys).toContain('sm.manual.vfoA');
         });
     });
 
     describe('storage failure handling', () => {
         it('does not throw when localStorage.setItem fails', () => {
-            const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
-                .mockImplementation(() => { throw new Error('quota exceeded'); });
+            const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+                throw new Error('quota exceeded');
+            });
             try {
                 expect(() => {
                     manualState.vfoA = 21_300_000;

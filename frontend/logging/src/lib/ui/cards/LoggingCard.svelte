@@ -1,8 +1,8 @@
 <script lang="ts">
-    import QsoPanel from "../panels/QsoPanel.svelte";
-    import CountryPanel from "../panels/CountryPanel.svelte";
-    import SessionTimer from "../components/SessionTimer.svelte";
-    import InfoPanel from "../panels/InfoPanel.svelte";
+    import QsoPanel from '../panels/QsoPanel.svelte';
+    import CountryPanel from '../panels/CountryPanel.svelte';
+    import SessionTimer from '../components/SessionTimer.svelte';
+    import InfoPanel from '../panels/InfoPanel.svelte';
 </script>
 
 <!--
@@ -15,24 +15,18 @@
     <div class="flex flex-row items-center w-72.5">
         <h1 class="text-xl font-bold tracking-tight">Logging Mode:</h1>
     </div>
-    <div class="flex w-40">
-
-    </div>
-    <div class="flex w-40">
-
-    </div>
-    <div class="flex w-full">
-
-    </div>
+    <div class="flex w-40"></div>
+    <div class="flex w-40"></div>
+    <div class="flex w-full"></div>
     <div class="flex text-sm font-semibold w-48">
         <div class="w-24">Session Time:</div>
-        <div class="text-right w-17"><SessionTimer/></div>
+        <div class="text-right w-17"><SessionTimer /></div>
     </div>
 </header>
 <div class="flex">
-    <QsoPanel/>
-    <CountryPanel/>
+    <QsoPanel />
+    <CountryPanel />
 </div>
 <div class="flex">
-    <InfoPanel/>
+    <InfoPanel />
 </div>

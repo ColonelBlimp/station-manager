@@ -49,9 +49,7 @@ class DisplayedState {
      * actively reporting. Reads switch to catState when true.
      */
     isLive: boolean = $derived(
-        configState.station.enabled
-        && bridgeState.connected
-        && bridgeState.rigResponding,
+        configState.station.enabled && bridgeState.connected && bridgeState.rigResponding
     );
 
     /**
@@ -67,9 +65,7 @@ class DisplayedState {
     vfoB: number = $derived(this.isLive ? catState.vfoB : manualState.vfoB);
     mode: string = $derived(this.isLive ? catState.mode : manualState.mode);
     subMode: string = $derived(this.isLive ? catState.subMode : manualState.subMode);
-    selectedVfo: 'A' | 'B' = $derived(
-        this.isLive ? catState.selectedVfo : manualState.selectedVfo,
-    );
+    selectedVfo: 'A' | 'B' = $derived(this.isLive ? catState.selectedVfo : manualState.selectedVfo);
     rigIdentity: string = $derived(this.isLive ? catState.rigIdentity : '');
 
     /**
@@ -78,9 +74,7 @@ class DisplayedState {
      * not live, derived from frequency divergence in manualState.
      */
     split: boolean = $derived(
-        this.isLive
-            ? (catState.splitOverride ?? false)
-            : (manualState.vfoA !== manualState.vfoB),
+        this.isLive ? (catState.splitOverride ?? false) : manualState.vfoA !== manualState.vfoB
     );
 
     /**
@@ -91,9 +85,7 @@ class DisplayedState {
      * that field — moved to configState as a "set once" preference
      * (session 36, 2026-05-05).
      */
-    rawPower: number = $derived(
-        this.isLive ? catState.power : configState.station.defaultPower,
-    );
+    rawPower: number = $derived(this.isLive ? catState.power : configState.station.defaultPower);
 
     /**
      * Effective radiated power = raw × amp multiplier when the amp
@@ -103,7 +95,7 @@ class DisplayedState {
     effectivePower: number = $derived(
         configState.station.ampEnabled
             ? this.rawPower * configState.station.ampMultiplier
-            : this.rawPower,
+            : this.rawPower
     );
 }
 

@@ -9,13 +9,7 @@
         onenrich?: (callsign: string) => void;
     }
 
-    let {
-        id,
-        label,
-        value = $bindable(''),
-        widthClass = 'w-38',
-        onenrich,
-    }: Props = $props();
+    let { id, label, value = $bindable(''), widthClass = 'w-38', onenrich }: Props = $props();
 
     let invalid = $state(false);
     let inputElement: HTMLInputElement;

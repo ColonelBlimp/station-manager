@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-    _resetForTests,
-    dismissToast,
-    pushToast,
-    toasts,
-    toastsState,
-} from './toasts.svelte';
+import { _resetForTests, dismissToast, pushToast, toasts, toastsState } from './toasts.svelte';
 
 beforeEach(() => {
     vi.useFakeTimers();
