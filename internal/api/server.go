@@ -5,6 +5,7 @@ import (
 	stderr "errors"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"time"
 
@@ -124,6 +125,36 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
+
+	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default
+	// because pprof exposes goroutine state, heap dumps, allocation
+	// profiles, and a CPU-profile endpoint that can be used as a DoS
+	// vector (`/debug/pprof/profile?seconds=N` blocks for the full
+	// duration). Operators flip it on for stress / soak tests then
+	// flip it back off. Lives outside /v1/* — it's a development
+	// affordance, not a stable API contract, and isn't documented in
+	// api.md. The handler registrations mirror what
+	// `net/http/pprof.init()` does on http.DefaultServeMux, but
+	// targeted at our mux so DefaultServeMux stays untouched.
+	//
+	// Method-specificity (GET on every entry, POST extra on symbol)
+	// is load-bearing under Go 1.22 ServeMux conflict detection: the
+	// SPA registers as `GET /`, which would clash with method-less
+	// `/debug/pprof/` (the latter matches every method, neither is a
+	// strict subset of the other → panic at register time). Making
+	// pprof routes GET-only puts them inside `GET /`'s method-set,
+	// resolving the conflict. POST /debug/pprof/symbol is registered
+	// alongside GET because `go tool pprof`'s batched-address-
+	// resolution flow uses POST.
+	if cfg.Server.EnableProfiling {
+		mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+		mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("POST /debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+		logger.WarnWith().Msg("server: pprof endpoints mounted at /debug/pprof/* — disable in production")
+	}
 
 	// SPA — served at the root. Anything not matched by /v1/* falls
 	// through to the SPA's index.html so client-side routing handles

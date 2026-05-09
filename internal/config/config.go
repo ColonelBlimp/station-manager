@@ -182,6 +182,17 @@ type ServerConfig struct {
 	// Unix-socket (browsers can only reach TCP listeners).
 	// See docs/v2-design/frontend-spa.md.
 	ServeSPA *bool `json:"serve_spa,omitempty"`
+
+	// EnableProfiling mounts the stdlib net/http/pprof handlers at
+	// /debug/pprof/* when true. Off by default — pprof exposes
+	// goroutine state, heap dumps, and CPU profiles that are
+	// load-bearing forensic data for an attacker (they can also
+	// serve as a DoS vector via /debug/pprof/profile?seconds=N).
+	// Operator opts in for stress / soak tests; flip back off when
+	// done. The /debug/* prefix lives outside the /v1/* API surface
+	// and isn't documented in api.md — it's a development affordance,
+	// not a stable contract.
+	EnableProfiling bool `json:"enable_profiling,omitempty"`
 }
 
 // Load reads a JSON config file and returns a populated Config with defaults
