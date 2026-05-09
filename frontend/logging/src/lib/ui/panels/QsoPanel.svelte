@@ -23,6 +23,7 @@
     import { enrichmentState } from '../../states/enrichment.svelte';
     import { contactHistoryState } from '../../states/contactHistory.svelte';
     import { sessionQsosState } from '../../states/sessionQsos.svelte';
+    import { qsoEditState } from '../../states/qsoEdit.svelte';
     import { toasts } from '../../states/toasts.svelte';
 
     /*
@@ -340,7 +341,53 @@
                 break;
         }
     }
+
+    /*
+        Clear handler — shared between the FormControls Clear button
+        and the ESC keyboard shortcut. Wipes the draft, enrichment
+        result, and contact history so the next QSO starts from a
+        clean slate (matching the post-stored UX rule).
+    */
+    function clearForm(): void {
+        qsoDraft.clear();
+        enrichmentState.clear();
+        contactHistoryState.clear();
+    }
+
+    /*
+        Window-level keyboard shortcuts.
+
+          - ESC          → Clear (same as the FormControls Clear button).
+          - Ctrl+Enter   → Submit (same as Log QSO; metaKey supports Cmd
+                           on macOS so the shortcut feels native there).
+
+        Both are no-ops when the QsoEditOverlay is open — the overlay's
+        own ESC handler should win that case (otherwise pressing ESC
+        to dismiss the overlay would also wipe the live draft beneath
+        it). Submit is gated on `qsoDraft.canSubmit` to mirror the
+        button's disabled state — Ctrl+Enter doesn't bypass validation.
+
+        preventDefault on Ctrl+Enter as belt-and-braces against any
+        future surrounding <form> default; not strictly needed today
+        because QsoPanel renders no <form> element.
+    */
+    function handleKeydown(e: KeyboardEvent): void {
+        if (qsoEditState.open) return;
+
+        if (e.key === 'Escape') {
+            clearForm();
+            return;
+        }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            if (qsoDraft.canSubmit) {
+                void submitQso();
+            }
+        }
+    }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <!--
     Panel owns the layout — outer column with `px-6` horizontal padding,
@@ -385,11 +432,7 @@
         <TimeInput id="time_off" label="Time Off (UTC)" bind:value={qsoDraft.timeOff} />
         <div class="flex flex-row space-x-2">
             <FormControls
-                onClear={() => {
-                    qsoDraft.clear();
-                    enrichmentState.clear();
-                    contactHistoryState.clear();
-                }}
+                onClear={clearForm}
                 onSubmit={submitQso}
                 submitDisabled={!qsoDraft.canSubmit}
             />

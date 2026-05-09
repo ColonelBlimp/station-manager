@@ -72,20 +72,23 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 **Resume points (for next session):**
 
-**SessionPanel — Stages C and D still to ship.** Stages A (daemon SMTP foundation) and B (SPA session-QSO state + 10-column table render) shipped same-day; the operator confirmed live-test of Stage B (rows landing on submit, badge ticking, F5-survival via sessionStorage). Pending:
+**SessionPanel Stages A–D all shipped.** Operator live-tested the full flow (log → row click → edit overlay populates → save → row updates in place) and confirmed it works after a clean daemon restart with the latest binary.
 
-- **Stage C — recipient input + paper-plane send button on the InfoPanel header bar.** Mockup placement: top-right of the InfoPanel chrome (right of the tab row), recipient input pre-filled from `email.Service.DefaultRecipient()` (which reads `cfg.Smtp.DefaultRecipient`), paper-plane icon next to it. New `lib/api/session-email.ts` discriminated-outcome wrapper for `POST /v1/session/email`; on click, build the ADIF body by concatenating `sessionQsosState.items.map(q => q.adif)` + a daemon-emittable header (or daemon-stamps headers — TBD), POST, toast: "Sending…" (info, sticky) → "Sent" (info) / "SMTP not configured" (error, on 503) / "SMTP send failed" (error, on 502) / network error variants. The `defaultRecipient` value isn't yet exposed via `GET /v1/config` — needs adding alongside the existing config response shape so the SPA can hydrate the input on mount. Probably a one-line addition under `ConfigResponse.Smtp` (return only `default_recipient`, not the password — keep the secret-ish fields off the wire).
-- **Stage D — edit overlay.** Independent state singleton `qsoEdit.svelte.ts` (no draft contamination per operator decision). Modal-style overlay component, dim backdrop, ESC + click-outside dismiss. On row-click in SessionPanel: `GET /v1/qso/{uuid}` (already exists in the daemon), populate the overlay with the same input components as QsoPanel but bound to the edit state. On submit: `PATCH /v1/qso/{uuid}`, update the session-list row in place via `sessionQsosState.update(uuid, ...)`. The full-row replacement preserves the cached `adif` string by re-formatting from the patched fields.
+**Next pickup is keyboard shortcuts on the QsoPanel.** Operator's ask 2026-05-09: ESC = Clear (same as the existing Clear button), Ctrl+Enter = Log QSO (same as Submit). Both should respect the existing gates — Submit only fires when `qsoDraft.canSubmit` is true. Likely shape: a `svelte:window onkeydown` in QsoPanel.svelte that branches on `e.key === 'Escape'` / `(e.ctrlKey && e.key === 'Enter')`, with the same suppress-while-overlay-open guard the QsoEditOverlay's ESC handler uses (don't fire Clear / Submit if `qsoEditState.open` — the overlay's ESC owns that case).
 
 **Other open items (carry-over):**
 
 - HamQTH / QRZCQ providers — chain expansion under the existing `CallsignProvider` interface.
 - "Show edit history for this QSO" SPA panel — consumes `qso_history` storage from session 40. New `/v1/qso/{uuid}/history` endpoint + a panel in InfoPanel (probably under Worked tab as a per-QSO detail view, or as a separate History tab).
-- "QSOs awaiting QSL request" view — `APP_SM_REQUEST_QSL` is being stamped on submit; needs a list endpoint + UI surface.
+- "QSOs awaiting QSL request" view — `APP_SM_REQUEST_QSL` now persists end-to-end (session 47 continuation); needs a list endpoint + UI surface.
 - WorkedPanel polish — a Notes tooltip / expandable row would make per-QSO notes accessible without crowding the columns.
 - Known intermittent flake — `TestSchedule_ReleasesSlotAfterFn` in `internal/lookup/refresher/`, observed once during session 45's `-race` sweep.
+- Daemon profiling for stress-test (operator-flagged 2026-05-09): wire `net/http/pprof` behind a `cfg.Server.EnableProfiling` flag, run a Go harness firing `POST /v1/qso` flat-out, capture CPU + heap + block profiles. Top-of-mind hotspots to verify: SQLite write throughput, dedupe-index hits via `EXPLAIN QUERY PLAN`, `qso_history` audit overhead, logger fsync cadence. Operator's instinct: a few thousand QSOs/sec ceiling with possible 3× headroom hiding behind a missing index or unnecessary fsync. Deferred — not blocking, picked up as an afternoon project later.
 - ~~`?refresh=true` on `/v1/enrich/callsign`~~ **Closed in this session.**
 - ~~SPA-side mirror of zone validation~~ **Closed in this session.**
+- ~~SessionPanel Stage C (email-out)~~ **Closed in this session.**
+- ~~SessionPanel Stage D (edit overlay)~~ **Closed in this session.**
+- ~~APP_SM_REQUEST_QSL parser gap (operator flag silently dropped on submit)~~ **Closed in this session.**
 
 **Future scope (no immediate plan):** Per-field encryption-at-rest for SMTP + provider passwords. Operator flagged it 2026-05-09 alongside SMTP config landing — wants a security assessment first. Plaintext in `config.json` matches the existing pattern (QRZ password etc.) for now. See `memory/project_sm_security_assessment.md`.
 
@@ -157,6 +160,57 @@ Stage A covers the daemon transport; Stage B is the panel UI without the email-t
 - **`lib/states/sessionQsos.test.ts`** — 9 tests covering add / update / clear, count derivation, oldest-first ordering, and the sessionStorage round-trip (including a full-fidelity field round-trip).
 
 Operator live-tested Stage B (logging QSOs, watching them populate the table + badge) and confirmed it works as expected.
+
+### Session 47 continuation (2026-05-09) — SessionPanel Stage C: email-out
+
+Stage A landed the daemon SMTP transport; Stage C wires the SPA's send button on the InfoPanel header so operators can email the session ADIF to their QSL manager.
+
+- **`internal/api/handler_config.go`** — `ConfigResponse` gained a `Mailer MailerInfo` block. `MailerInfo` is the SPA-visible subset only (`enabled` bool + `default_recipient` string); host/port/username/password/from are deliberately NOT on the wire — exposing them would leak the SMTP password or invite SPA-side edits to credentials it doesn't own. Server-managed (PUT body's `mailer` block is ignored). Sourced from the live `email.Service` rather than the cfg snapshot so a future "reload SMTP without restart" flow stays correct without a parallel branch.
+- **`internal/api/handler_config_test.go`** — 3 new tests: nil mailer surface, configured mailer surface (with grep-asserts that password/host/from never leak into the JSON body), PUT body's `mailer` block ignored.
+- **`lib/api/config.ts`** — `ConfigResponse` extended with `MailerFields { enabled, default_recipient? }`.
+- **`lib/states/config.svelte.ts`** — new `MailerView` class (`enabled` + `defaultRecipient`, both `$state` so the SessionPanel can reactively show/hide the email controls). `applyResponse` hydrates it with defensive fallback for older daemon builds without the block.
+- **`lib/api/session-email.ts`** — discriminated-outcome wrapper for `POST /v1/session/email`. Outcomes: `sent | mailer_disabled | invalid | smtp_failure | server | network`. Mirrors `lib/api/qso.ts` and `lib/api/config.ts` conventions.
+- **`lib/api/session-email.test.ts`** — 10 tests covering all status paths + body-shape passthrough for optional `subject` / `filename`.
+- **`lib/ui/panels/InfoPanel.svelte`** — recipient `<input type="email">` + paper-plane button on the right of the tab strip (rendered only when Session is active AND `configState.mailer.enabled`). `recipient` seeds once via `$effect` from `configState.mailer.defaultRecipient` then becomes operator-owned (subsequent config changes don't clobber the operator's typing). Send flow: sticky "Sending…" info toast → on response, dismiss the sticky and push `Sent to <recipient>` (info) / error variants per outcome (`Email not configured` / `Email send failed; check daemon logs` / `Cannot reach daemon`). ADIF body built from `sessionQsosState.items.map(q => q.adif).join('')` — the per-row `adif` string captured at submit time avoids a re-fetch from the daemon.
+- **`canSend`** gating: `mailer enabled && session count > 0 && recipient non-empty + contains @ && !sending`. Belt-and-braces — the button is hidden entirely when mailer disabled, the input is empty-by-default before the seed lands, the `@` check is the obvious-typo guard so a 400 round-trip isn't paid for whitespace-only input.
+
+### Session 47 continuation (2026-05-09) — SessionPanel Stage D: edit overlay
+
+Stage D is the SessionPanel's row-click edit flow. Independent state singleton per the operator's "completely independent of the draft" rule — a half-finished edit must never bleed into the in-progress draft.
+
+- **`lib/states/qsoEdit.svelte.ts`** — singleton class with `$state` working-copy fields (uuid, callsign, name, qth, country, comment, mode, freq, freqRx, band, rstSent, rstRcvd, qsoDate, qsoDateOff, timeOn, timeOff, rig, rxPwr, notes, requestQsl) + lifecycle flags (open, loading, saving). `populate()` hydrates from a daemon GET response and converts ADIF canonical formats (YYYYMMDD → YYYY-MM-DD, HHMM → HH:MM) for the form components. `beginOpen(uuid)` flips open=true + loading=true so the modal renders instantly with a spinner while the GET resolves. `close()` resets every field — defence against a stale value leaking into the next open(). `toPatchBody()` emits the editable subset.
+- **`lib/states/qsoEdit.test.ts`** — 11 tests covering populate/beginOpen/close/toPatchBody, the date+time format conversions, and the missing-fields default path.
+- **`lib/api/qso-update.ts`** — `fetchQso(uuid)` + `patchQso(uuid, body)` discriminated-outcome wrappers. Outcomes include `not_found` (404), `duplicate` (409), `validation` (400), `server` (5xx), `network`.
+- **`lib/api/qso-update.test.ts`** — 13 tests covering all status paths for both fetch + patch.
+- **`lib/ui/components/QsoEditOverlay.svelte`** — modal-style component. Dim backdrop (`fixed inset-0 z-50 bg-black/40`), ESC + click-outside + Cancel button dismiss, `role="dialog"` + `aria-modal="true"`. Form layout matches QsoPanel + DetailsPanel content: row 1 Callsign / RST Sent / RST Rcvd / Mode / VFO-A+VFO-B; row 2 Name / QTH / Comment; row 3 Date / Time On / Time Off; row 4 Rig (textarea) / Power (digit-strip) / Request QSL checkbox; row 5 Notes (textarea, full width). VFO pair uses `VfoBox` + `VfoInput` with MHz↔Hz conversion shims local to the file (qsoEditState holds MHz strings; VfoInput speaks Hz). On Save: PATCH → on `ok` update the matching session-list row in place via `sessionQsosState.update` and close; on failure stay open so the operator can retry without retyping. Modal width: 56rem to fit the wider top row.
+- **`lib/ui/panels/SessionPanel.svelte`** — rows now `role="button"` clickable (Enter/Space keyboard parity), open the overlay via `fetchQso → populate`. Renders `<QsoEditOverlay />` as a sibling so the fixed-position backdrop sits above the panel's own clipping context. Network/not_found errors toast; double-click guarded.
+
+### Session 47 continuation (2026-05-09) — APP_SM_REQUEST_QSL plumbed end-to-end + types.Qso JSON-tagged
+
+Closes the pre-existing parser gap that the SPA's request-QSL flag was silently dropped on the original POST /v1/qso path. Two plumbing changes:
+
+- **`internal/types/qso.go`** — new `AppSmRequestQsl bool` top-level field with `json:"app_sm_request_qsl,omitempty"`. Round-trips via `additional_data` through the existing `json.Marshal(qso)` adapter; no other adapter changes needed. JSON-only path for the edit overlay even before the ADIF parser fix landed.
+- **`internal/adif/adif.go`** — `Record` gained `AppSmRequestQsl string \`adif:"app_sm_request_qsl,omitempty"\``. `QsoToRecord` encodes `bool true → "Y"` (matches the project's existing `Y`/`N` convention used by `SmQsoUploadStatus` etc. — string is the only kind the reflection-based parser/emitter handles); `RecordToQso` decodes `"Y" → true`, anything else → false (strict equality, defensive default).
+- **5 unit tests in `adif_test.go`** — emit-when-true, omit-when-false, parse-`Y`-as-true, absent-as-false, full bool→ADIF→bool round-trip.
+- **2 integration tests in `handler_test.go`** — `TestSubmitQso_AppSmRequestQslSurvivesGet` (POST with newline-separated SPA-format ADIF carrying `<APP_SM_REQUEST_QSL:1>Y` → GET returns `app_sm_request_qsl: true`) and `TestUpdateQso_AppSmRequestQslPatchPersists` (PATCH with `{"app_sm_request_qsl": true}` → GET returns `true`). Both round-trip paths green.
+
+End-to-end flow now works: SPA emits flag in ADIF → daemon parses → persists via additional_data → GET surfaces it → SPA edit overlay populates the checkbox correctly. Operator can also correct the flag after-the-fact via the edit overlay (PATCH path was already JSON-shaped).
+
+### Session 47 continuation (2026-05-09) — Wire-shape bug: types.Qso JSON is FLAT, not nested
+
+Bug surfaced during live-test: clicking a session row opened the overlay but every field rendered blank. Root cause: `types.Qso` embeds `QsoDetails` / `ContactedStation` / `LoggingStation` / `Qsl` as **anonymous structs**, and Go's `encoding/json` promotes anonymous-struct fields to the top level on marshal. The daemon's GET response is therefore flat — `call`, `band`, `freq`, etc. all appear as siblings of `uuid`, NOT nested under `contacted_station` / `qso_details`. The SPA's `DaemonQsoForEdit` interface assumed nested. Every field read as `undefined`, populate set every working-copy field to empty.
+
+- **`lib/states/qsoEdit.svelte.ts`** — flattened `DaemonQsoForEdit` interface; rewrote `populate()` and `toPatchBody()` to use top-level keys. Doc-comment now pins the wire shape with the cautionary tale so a future contributor doesn't repeat it.
+- **`lib/states/qsoEdit.test.ts`** — fixture rewritten with flat shape; doc note about the trap.
+- **`lib/api/qso-update.test.ts`** — fixture + assertions updated to flat shape.
+
+**Why unit tests didn't catch it before:** my test fixtures used the same incorrect nested shape my code expected, so populate-of-nested-data into nested-expecting code looked correct. The Go-side integration test (`TestSubmitQso_AppSmRequestQslSurvivesGet`) tested the daemon's flat response correctly, but didn't run through the SPA's parsing — that gap is what the wire-shape fixture mismatch exploited. Tightened: after this fix, all SPA tests use the actual daemon wire shape.
+
+### Session 47 continuation (2026-05-09) — Stale daemon binary diagnostic
+
+Operator reported during live-test: "request QSL not being reflected" after the wire-shape fix landed. Diagnosis path: re-ran `TestSubmitQso_AppSmRequestQslSurvivesGet` with newline-separated ADIF (the exact SPA wire format) — green. Then `pgrep -af smd` showed the running daemon (PID 6446) was a `go run`-cached binary built at 07:44 today, hours before the ADIF parser fix landed. The running daemon didn't have the `AppSmRequestQsl` field on `types.Qso`, the parser plumbing, or the latest embedded SPA assets — so the flag dropped at submit and the GET returned nothing. Operator restarted via `task run:smd`; flag now reflects correctly.
+
+Lesson worth keeping in mind for future debugging: when a fix's tests pass but the running system seems unaffected, check the binary timestamp before chasing further code. `task run:smd` does `go run ./cmd/smd` which compiles a fresh binary on each task invocation, but once spawned it's pinned to that binary — code changes between invocations don't reach the running process.
 
 ### Session 46 work (2026-05-08) — Details panel UI
 
