@@ -153,6 +153,15 @@ func TestSchedule_ReleasesSlotAfterFn(t *testing.T) {
 	// pair completing — the 3rd / 4th may both see "at capacity"
 	// and drop, which is correct bound behaviour but not what this
 	// test is exercising.
+	//
+	// Synchronisation note (closes the historical -race flake): the
+	// fn body sends `done` BEFORE the goroutine's deferred slot
+	// release runs (the defer that does `<-s.sem` + `inFlight--`
+	// fires after fn returns). So receiving on `done` only proves
+	// the fn body finished, not that the slot is released. If the
+	// next batch's Schedule beats the deferred release, it sees a
+	// full semaphore and drops — that's the race. waitInFlight(0)
+	// blocks until the deferred release has run.
 	s := newTestService(t, 2)
 
 	var ran atomic.Int64
@@ -167,6 +176,7 @@ func TestSchedule_ReleasesSlotAfterFn(t *testing.T) {
 	for range 2 {
 		<-done
 	}
+	waitInFlight(t, s, 0)
 	if s.Dropped() != 0 {
 		t.Errorf("after first batch: Dropped() = %d, want 0", s.Dropped())
 	}
@@ -180,12 +190,34 @@ func TestSchedule_ReleasesSlotAfterFn(t *testing.T) {
 	for range 2 {
 		<-done
 	}
+	waitInFlight(t, s, 0)
 	if s.Dropped() != 0 {
 		t.Errorf("after second batch: Dropped() = %d, want 0 (slots must release)", s.Dropped())
 	}
 	if got := ran.Load(); got != 4 {
 		t.Errorf("ran = %d, want 4", got)
 	}
+}
+
+// waitInFlight polls Service.InFlight() until it equals want or the
+// deadline expires. Used between batches in tests that need the
+// goroutine's deferred slot release (which decrements inFlight) to
+// observably complete before the next Schedule, since the fn body's
+// completion signal alone doesn't synchronise that.
+//
+// 1s deadline is generous for a CI host — the deferred release is
+// O(microseconds) on a healthy runtime; only an OS-level scheduler
+// stall would push past 1s.
+func waitInFlight(t *testing.T, s *Service, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if s.InFlight() == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("InFlight() did not reach %d within 1s; got %d", want, s.InFlight())
 }
 
 // ---- Lifecycle ----

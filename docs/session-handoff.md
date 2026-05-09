@@ -76,20 +76,24 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 **No specific next pickup queued.** Open carry-over items below remain candidates; operator picks priorities at next session start.
 
-**Other open items (carry-over):**
+**Other open items (carry-over) — logging-app scope:**
 
-- HamQTH / QRZCQ providers — chain expansion under the existing `CallsignProvider` interface.
-- "Show edit history for this QSO" SPA panel — consumes `qso_history` storage from session 40. New `/v1/qso/{uuid}/history` endpoint + a panel in InfoPanel (probably under Worked tab as a per-QSO detail view, or as a separate History tab).
-- "QSOs awaiting QSL request" view — `APP_SM_REQUEST_QSL` now persists end-to-end (session 47 continuation); needs a list endpoint + UI surface.
-- WorkedPanel polish — a Notes tooltip / expandable row would make per-QSO notes accessible without crowding the columns.
+- HamQTH / QRZCQ providers — chain expansion under the existing `CallsignProvider` interface. Operator's tag: TBD (2026-05-09).
 - Known intermittent flake — `TestSchedule_ReleasesSlotAfterFn` in `internal/lookup/refresher/`, observed once during session 45's `-race` sweep.
 - Daemon profiling for stress-test (operator-flagged 2026-05-09): wire `net/http/pprof` behind a `cfg.Server.EnableProfiling` flag, run a Go harness firing `POST /v1/qso` flat-out, capture CPU + heap + block profiles. Top-of-mind hotspots to verify: SQLite write throughput, dedupe-index hits via `EXPLAIN QUERY PLAN`, `qso_history` audit overhead, logger fsync cadence. Operator's instinct: a few thousand QSOs/sec ceiling with possible 3× headroom hiding behind a missing index or unnecessary fsync. Deferred — not blocking, picked up as an afternoon project later.
 - ~~`?refresh=true` on `/v1/enrich/callsign`~~ **Closed in this session.**
 - ~~SPA-side mirror of zone validation~~ **Closed in this session.**
-- ~~SessionPanel Stage C (email-out)~~ **Closed in this session.**
+- ~~SessionPanel Stage C (email-out)~~ **Closed in this session, live-tested 2026-05-09 against a real SMTP server.**
 - ~~SessionPanel Stage D (edit overlay)~~ **Closed in this session.**
 - ~~APP_SM_REQUEST_QSL parser gap (operator flag silently dropped on submit)~~ **Closed in this session.**
 - ~~Keyboard shortcuts (ESC=Clear, Ctrl+Enter=Log) + focus restoration~~ **Closed in this session.**
+
+**Parked — logbook-app scope (do NOT add to `frontend/logging/`):**
+
+- "QSOs awaiting QSL request" view — `APP_SM_REQUEST_QSL` persists end-to-end, but listing / filtering historical contacts by it is a logbook concern, not a logging-app feature.
+- Edit-history viewer over `qso_history` — consuming the audit table from session 40 is a logbook concern. Daemon endpoint `GET /v1/qso/{uuid}/history` doesn't exist yet either; build daemon-side once, surface in the logbook app when it lands.
+
+See `memory/feedback_logging_vs_logbook_scope.md` for the scope rule (operator-confirmed 2026-05-09).
 
 **Future scope (no immediate plan):** Per-field encryption-at-rest for SMTP + provider passwords. Operator flagged it 2026-05-09 alongside SMTP config landing — wants a security assessment first. Plaintext in `config.json` matches the existing pattern (QRZ password etc.) for now. See `memory/project_sm_security_assessment.md`.
 
