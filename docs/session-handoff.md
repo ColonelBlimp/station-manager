@@ -72,9 +72,9 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 **Resume points (for next session):**
 
-**SessionPanel Stages A–D all shipped.** Operator live-tested the full flow (log → row click → edit overlay populates → save → row updates in place) and confirmed it works after a clean daemon restart with the latest binary.
+**SessionPanel Stages A–D + keyboard shortcuts + focus restoration all shipped 2026-05-09.** Operator live-tested the full flow (log → row click → edit overlay populates → save → row updates in place; ESC clears, Ctrl+Enter submits, cursor lands on Callsign at every state transition) and confirmed it works.
 
-**Next pickup is keyboard shortcuts on the QsoPanel.** Operator's ask 2026-05-09: ESC = Clear (same as the existing Clear button), Ctrl+Enter = Log QSO (same as Submit). Both should respect the existing gates — Submit only fires when `qsoDraft.canSubmit` is true. Likely shape: a `svelte:window onkeydown` in QsoPanel.svelte that branches on `e.key === 'Escape'` / `(e.ctrlKey && e.key === 'Enter')`, with the same suppress-while-overlay-open guard the QsoEditOverlay's ESC handler uses (don't fire Clear / Submit if `qsoEditState.open` — the overlay's ESC owns that case).
+**No specific next pickup queued.** Open carry-over items below remain candidates; operator picks priorities at next session start.
 
 **Other open items (carry-over):**
 
@@ -89,6 +89,7 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 - ~~SessionPanel Stage C (email-out)~~ **Closed in this session.**
 - ~~SessionPanel Stage D (edit overlay)~~ **Closed in this session.**
 - ~~APP_SM_REQUEST_QSL parser gap (operator flag silently dropped on submit)~~ **Closed in this session.**
+- ~~Keyboard shortcuts (ESC=Clear, Ctrl+Enter=Log) + focus restoration~~ **Closed in this session.**
 
 **Future scope (no immediate plan):** Per-field encryption-at-rest for SMTP + provider passwords. Operator flagged it 2026-05-09 alongside SMTP config landing — wants a security assessment first. Plaintext in `config.json` matches the existing pattern (QRZ password etc.) for now. See `memory/project_sm_security_assessment.md`.
 
@@ -211,6 +212,22 @@ Bug surfaced during live-test: clicking a session row opened the overlay but eve
 Operator reported during live-test: "request QSL not being reflected" after the wire-shape fix landed. Diagnosis path: re-ran `TestSubmitQso_AppSmRequestQslSurvivesGet` with newline-separated ADIF (the exact SPA wire format) — green. Then `pgrep -af smd` showed the running daemon (PID 6446) was a `go run`-cached binary built at 07:44 today, hours before the ADIF parser fix landed. The running daemon didn't have the `AppSmRequestQsl` field on `types.Qso`, the parser plumbing, or the latest embedded SPA assets — so the flag dropped at submit and the GET returned nothing. Operator restarted via `task run:smd`; flag now reflects correctly.
 
 Lesson worth keeping in mind for future debugging: when a fix's tests pass but the running system seems unaffected, check the binary timestamp before chasing further code. `task run:smd` does `go run ./cmd/smd` which compiles a fresh binary on each task invocation, but once spawned it's pinned to that binary — code changes between invocations don't reach the running process.
+
+### Session 47 continuation (2026-05-09) — Keyboard shortcuts + focus restoration on QsoPanel
+
+Operator's ask after Stage D landed: keyboard-driven workflow so hands stay on the keyboard between QSOs (the single-handed pile-up flow). Two paired changes — keyboard shortcuts that match the FormControls buttons, plus focus restoration to Callsign at every form-resetting transition.
+
+- **`lib/ui/panels/QsoPanel.svelte`** — extracted `clearForm()` so the FormControls Clear button and the keyboard shortcut share one path (was previously inlined in the `onClear` prop). Added `<svelte:window onkeydown={handleKeydown} />`:
+  - **ESC** → `clearForm()` (no-op while `qsoEditState.open` so the overlay's own ESC handler wins; without that guard, ESC-to-dismiss-overlay would also wipe the live draft beneath it).
+  - **Ctrl+Enter / Cmd+Enter** → `submitQso()` (gated on `qsoDraft.canSubmit` to mirror the button's disabled state — the shortcut doesn't bypass validation; macOS gets Cmd via `metaKey` for native feel).
+  - `preventDefault` on Ctrl+Enter as belt-and-braces against any future surrounding `<form>`.
+- **Focus helper** — new `focusCallsign()` reaches for the input by its stable `id="call"` (passed unchanged as the prop). Doc-comment notes this bypasses component encapsulation pragmatically (it's a personal logging app, the operator's flow matters more than strict encapsulation here) and the conditions under which it would need to be promoted to a component-exported `focus()` (a second Callsign instance ever lands on the page). Called from three places:
+  - `onMount` — cursor lands in Callsign on first render of the panel.
+  - `clearForm` — ESC and the Clear button both restore focus after the wipes.
+  - `submitQso` `case 'stored'` — Ctrl+Enter and the Submit button both restore focus after the post-stored clears, ready for the next QSO.
+- **Failure paths intentionally don't move focus.** Duplicate / validation / server / network outcomes leave the form populated and let the operator decide what to fix; auto-snapping back to Callsign would be wrong when the operator may want to inspect what they typed.
+
+`svelte-check`, lint, all 445 tests, SPA + daemon builds — green. Operator live-tested and confirmed.
 
 ### Session 46 work (2026-05-08) — Details panel UI
 
