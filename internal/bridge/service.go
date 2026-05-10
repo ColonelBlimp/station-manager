@@ -3,25 +3,17 @@ package bridge
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/serial"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// stubEventInterval is how often the M3a.1 stub emitter publishes a
-// hardcoded rig-state event. Package-level var so tests can dial it
-// down without waiting seconds. Replaced in M3a.2 by the real
-// serial+CAT pipeline; this whole stub lives behind a config flag
-// that defaults off once real rig data is wired.
-var stubEventInterval = 5 * time.Second
-
 // Service is the bridge subsystem (ADR 0013, ADR 0019). Owns the
-// internal pub/sub hub for rig events; in v1 (M3a.1) the publisher
-// is a stub goroutine emitting hardcoded events on a ticker so the
-// SSE pipeline can be exercised end-to-end before the real rig
-// integration lands in M3a.2.
+// internal pub/sub hub for rig events and (when Enabled) the
+// serial+CAT pipeline goroutine that decodes AUTO-mode rig pushes
+// into typed events.
 //
 // Lifecycle: Initialize() validates config; Start(ctx) spawns the
 // publisher goroutine; Stop() cancels and waits. All idempotent per
@@ -36,6 +28,13 @@ type Service struct {
 	cfg    types.BridgeConfig
 	logger *logging.Service
 	hub    *hub
+
+	// openClient produces the serial client the pipeline reads from
+	// and writes to. Defaults to a thin wrapper around serial.Open;
+	// in-package tests substitute a fakeSerial to drive scenarios
+	// without real hardware. Field rather than package-level var so
+	// parallel tests don't race for ownership of a global hook.
+	openClient func(serial.Config) (serial.Client, error)
 
 	mu      sync.Mutex
 	started bool
@@ -64,6 +63,9 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		logger:   logger,
 		hub:      newHub(),
 		stopDone: make(chan struct{}),
+		openClient: func(c serial.Config) (serial.Client, error) {
+			return serial.Open(c)
+		},
 	}
 }
 
@@ -107,12 +109,7 @@ func (s *Service) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.wg.Add(1)
-	go s.runStubEmitter(runCtx)
-	s.logger.InfoWith().
-		Str("port", s.cfg.Serial.Port).
-		Int("baud", s.cfg.Serial.Baud).
-		Str("driver", s.cfg.Cat.Driver).
-		Msg("bridge: subsystem started (M3a.1 stub emitter — real rig pipeline lands in M3a.2)")
+	go s.runPipeline(runCtx)
 	return nil
 }
 
@@ -161,37 +158,4 @@ func (s *Service) Enabled() bool {
 // clean empty stream rather than a hang.
 func (s *Service) Subscribe() (<-chan Event, func()) {
 	return s.hub.subscribe()
-}
-
-// runStubEmitter is the M3a.1 placeholder for the real serial+CAT
-// pipeline. Emits a hardcoded rig-state event every stubEventInterval
-// so curl can exercise the SSE plumbing end-to-end before M3a.2
-// replaces this with real rig data.
-//
-// When M3a.2 lands, this goroutine is replaced by the
-// serial→cat-decode→hub.publish chain. Same hub.publish call site;
-// the decode loop just fills in real values instead of hardcoded
-// ones.
-func (s *Service) runStubEmitter(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(stubEventInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.hub.publish(Event{
-				Name: EventRigState,
-				Payload: RigStatePayload{
-					RigIdentity: "stub-rig",
-					VfoA:        14250000,
-					VfoB:        14250000,
-					Mode:        "USB",
-					SelectedVfo: "A",
-					Power:       100,
-				},
-			})
-		}
-	}
 }

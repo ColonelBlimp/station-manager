@@ -14,22 +14,20 @@ import (
 )
 
 // newHandlerTestService is a service preconfigured for handler tests
-// with a tight stub-event interval. Returns the service plus a
-// daemon-shutdown channel the handler will observe.
+// with a fakeSerial driving a steady trickle of identity pushes.
+// Returns the service, the fake (so individual tests can feed extra
+// events), and a daemon-shutdown channel the handler will observe.
 //
 // Uses an uninitialised &logging.Service{} — same noop-logger pattern
 // as service_test.go's newTestService.
-func newHandlerTestService(t *testing.T) (*Service, chan struct{}) {
+func newHandlerTestService(t *testing.T) (*Service, *fakeSerial, chan struct{}) {
 	t.Helper()
-	prev := stubEventInterval
-	stubEventInterval = 20 * time.Millisecond
-	t.Cleanup(func() { stubEventInterval = prev })
-
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
+	fake := installFakeSerial(s)
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -39,7 +37,7 @@ func newHandlerTestService(t *testing.T) (*Service, chan struct{}) {
 	t.Cleanup(func() { _ = s.Stop() })
 
 	shutdownCh := make(chan struct{})
-	return s, shutdownCh
+	return s, fake, shutdownCh
 }
 
 // TestHTTPHandler_ServesSSEHeaders confirms the handler sets the
@@ -47,7 +45,7 @@ func newHandlerTestService(t *testing.T) (*Service, chan struct{}) {
 // without these, browsers won't treat the response as an event
 // stream and EventSource will fail to parse anything.
 func TestHTTPHandler_ServesSSEHeaders(t *testing.T) {
-	s, shutdownCh := newHandlerTestService(t)
+	s, _, shutdownCh := newHandlerTestService(t)
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
@@ -74,11 +72,12 @@ func TestHTTPHandler_ServesSSEHeaders(t *testing.T) {
 	}
 }
 
-// TestHTTPHandler_StreamsStubEvents confirms a connected client
-// receives the M3a.1 stub events in proper SSE wire format. Reads
-// one event off the stream and checks the event-type and data lines.
-func TestHTTPHandler_StreamsStubEvents(t *testing.T) {
-	s, shutdownCh := newHandlerTestService(t)
+// TestHTTPHandler_StreamsPipelineEvents confirms a connected client
+// receives a real pipeline-decoded rig-state event in proper SSE
+// wire format. Feeds an FT-710 ID push through the fakeSerial and
+// reads the SSE event off the response stream.
+func TestHTTPHandler_StreamsPipelineEvents(t *testing.T) {
+	s, fake, shutdownCh := newHandlerTestService(t)
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
@@ -90,6 +89,9 @@ func TestHTTPHandler_StreamsStubEvents(t *testing.T) {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
+
+	// FT-710 ID 0800 → "FT-710" via the rigdef value-mapping.
+	fake.feedLine([]byte("ID0800"))
 
 	// Read the SSE stream line-by-line until we see one full event
 	// frame (event: + data: + blank line). Bounded by ctx timeout.
@@ -103,8 +105,8 @@ func TestHTTPHandler_StreamsStubEvents(t *testing.T) {
 		case strings.HasPrefix(line, "data: "):
 			sawData = true
 			payload := strings.TrimPrefix(line, "data: ")
-			if !strings.Contains(payload, `"rigIdentity":"stub-rig"`) {
-				t.Errorf("data payload missing stub-rig marker: %q", payload)
+			if !strings.Contains(payload, `"rigIdentity":"FT-710"`) {
+				t.Errorf("data payload missing FT-710 marker: %q", payload)
 			}
 		case line == "":
 			if sawEvent && sawData {
@@ -124,7 +126,7 @@ func TestHTTPHandler_StreamsStubEvents(t *testing.T) {
 // handler holds shutdown open until the graceful timeout. This test
 // closes shutdownCh and asserts the handler returns promptly.
 func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
-	s, shutdownCh := newHandlerTestService(t)
+	s, fake, shutdownCh := newHandlerTestService(t)
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
@@ -137,8 +139,9 @@ func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Read at least the first event so we know the handler is in
-	// the select loop.
+	// Drive at least one event through so we know the handler is in
+	// the select loop with an active subscription.
+	fake.feedLine([]byte("ID0800"))
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		if strings.HasPrefix(scanner.Text(), "event: rig-state") {

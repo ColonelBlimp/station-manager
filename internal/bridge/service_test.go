@@ -70,10 +70,6 @@ func TestEnabled_Reports_Cfg(t *testing.T) {
 // TestStop_ClosesHub_AndDrainsSubscribers — this test only asserts
 // the silence.
 func TestStart_Disabled_NoPublisher(t *testing.T) {
-	prev := stubEventInterval
-	stubEventInterval = 20 * time.Millisecond
-	t.Cleanup(func() { stubEventInterval = prev })
-
 	s := newTestService(t, types.BridgeConfig{Enabled: false})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -89,26 +85,23 @@ func TestStart_Disabled_NoPublisher(t *testing.T) {
 	select {
 	case <-ch:
 		t.Error("disabled bridge published event; want silence")
-	case <-time.After(stubEventInterval * 5):
+	case <-time.After(100 * time.Millisecond):
 		// expected — no events ever arrive when disabled
 	}
 }
 
-// TestStart_Enabled_PublishesStubEvents covers the M3a.1 happy path:
-// cfg.Enabled=true → Start spawns the stub publisher → Subscribe
-// receives a stub rig-state event within stubEventInterval. Validates
-// the SSE pipeline can be exercised end-to-end before the real rig
-// integration lands in M3a.2.
-func TestStart_Enabled_PublishesStubEvents(t *testing.T) {
-	prev := stubEventInterval
-	stubEventInterval = 20 * time.Millisecond
-	t.Cleanup(func() { stubEventInterval = prev })
-
+// TestStart_Enabled_PublishesPipelineEvents covers the M3a.2 happy
+// path end-to-end via the fakeSerial harness: cfg.Enabled=true →
+// Start spawns the pipeline goroutine → fed line decodes through
+// cat → mapStatusToPayload → hub → Subscribe receives the typed
+// rig-state event.
+func TestStart_Enabled_PublishesPipelineEvents(t *testing.T) {
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	})
+	fake := installFakeSerial(s)
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -119,6 +112,8 @@ func TestStart_Enabled_PublishesStubEvents(t *testing.T) {
 
 	ch, unsub := s.Subscribe()
 	defer unsub()
+
+	fake.feedLine([]byte("ID0800"))
 
 	select {
 	case evt, ok := <-ch:
@@ -132,22 +127,23 @@ func TestStart_Enabled_PublishesStubEvents(t *testing.T) {
 		if !ok {
 			t.Fatalf("event payload type = %T, want RigStatePayload", evt.Payload)
 		}
-		if payload.RigIdentity != "stub-rig" {
-			t.Errorf("stub event RigIdentity = %q, want %q", payload.RigIdentity, "stub-rig")
+		if payload.RigIdentity != "FT-710" {
+			t.Errorf("RigIdentity = %q, want %q", payload.RigIdentity, "FT-710")
 		}
-	case <-time.After(stubEventInterval * 5):
-		t.Fatal("no stub event received within 5x stubEventInterval")
+	case <-time.After(time.Second):
+		t.Fatal("no pipeline event received within 1s")
 	}
 }
 
 // TestStart_Idempotent confirms a second Start is a no-op (no second
-// publisher goroutine spawned, no panic, no double-cancel surprises).
+// pipeline goroutine spawned, no panic, no double-cancel surprises).
 func TestStart_Idempotent(t *testing.T) {
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	})
+	installFakeSerial(s)
 	_ = s.Initialize()
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatalf("first Start: %v", err)
@@ -159,20 +155,17 @@ func TestStart_Idempotent(t *testing.T) {
 }
 
 // TestStop_ClosesHub_AndDrainsSubscribers confirms Stop is the
-// canonical shutdown path: publisher goroutine exits, hub closes,
+// canonical shutdown path: pipeline goroutine exits, hub closes,
 // any open subscriber's channel signals close (ok=false from
 // channel-receive). SSE handlers observe this as "stream ended" and
 // return.
 func TestStop_ClosesHub_AndDrainsSubscribers(t *testing.T) {
-	prev := stubEventInterval
-	stubEventInterval = 20 * time.Millisecond
-	t.Cleanup(func() { stubEventInterval = prev })
-
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	})
+	installFakeSerial(s)
 	_ = s.Initialize()
 	_ = s.Start(context.Background())
 
