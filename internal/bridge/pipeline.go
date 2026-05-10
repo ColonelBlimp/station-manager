@@ -21,12 +21,21 @@ import (
 // can dial it down without waiting half a minute.
 var livenessTimeout = 30 * time.Second
 
-// initCommandName is the rigdef command-table entry that puts the
-// rig into AUTO-mode push state and asks for its identity. Both
-// shipping rigdefs (yaesu-ft710, yaesu-ftdx10) define it; future
-// rigdefs that lack it will surface a loud bridge-error at startup
-// rather than running mute (see runPipeline).
+// initCommandName is the rigdef command-table entry that arms the
+// rig's AUTO-mode push state. For Yaesu/Kenwood that's `AI1;` — sent
+// once at pipeline startup and silent on the wire (no response
+// expected). Both shipping rigdefs define it; rigdefs that lack it
+// surface a loud bridge-error at startup.
 const initCommandName = "INIT"
+
+// readCommandName is the rigdef command-table entry that requests a
+// full identity + state snapshot. Sent on each new SSE-open via
+// TriggerBootstrap so a freshly-connected SPA tab gets current rig
+// state without waiting for the operator to wiggle the dial (per ADR
+// 0019 active-snapshot model). For Yaesu/Kenwood that's
+// `ID;FA;FB;ST;VS;MD0;MD1;PC;` — 8 framed responses the readLoop
+// decodes and publishes as a sequence of partial rig-state events.
+const readCommandName = "READ"
 
 // runPipeline replaces M3a.1's runStubEmitter with the real
 // serial+CAT pipeline. Opens the serial port via s.openClient,
@@ -60,12 +69,29 @@ func (s *Service) runPipeline(ctx context.Context) {
 		s.logger.ErrorWith().
 			Str("driver", s.cfg.Cat.Driver).
 			Msg("bridge: unknown CAT driver; pipeline not started")
+		s.publishBridgeError("unknown CAT driver " + s.cfg.Cat.Driver + "; check bridge.cat.driver in config")
 		return
 	}
 
 	serialCfg, err := buildSerialConfig(s.cfg.Serial, def.Serial)
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Msg("bridge: serial config build failed; pipeline not started")
+		s.publishBridgeError("serial config invalid: " + errMessage(err))
+		return
+	}
+
+	// Pre-encode the bootstrap (READ) command before opening the
+	// port. If the rigdef lacks READ, fail fast — silent bootstrap
+	// would mean SPA tabs see empty fields until the operator
+	// wiggles the dial.
+	readBytes, err := cat.Encode(def, readCommandName)
+	if err != nil {
+		s.logger.ErrorWith().
+			Err(err).
+			Str("driver", def.ID).
+			Str("command", readCommandName).
+			Msg("bridge: rigdef has no READ command; pipeline not started")
+		s.publishBridgeError("rigdef " + def.ID + " has no READ command; cannot bootstrap SPA subscribers")
 		return
 	}
 
@@ -76,9 +102,16 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("port", serialCfg.PortName).
 			Int("baud", serialCfg.BaudRate).
 			Msg("bridge: serial open failed; pipeline not started")
+		s.publishBridgeError("serial open failed on " + serialCfg.PortName + ": " + errMessage(err))
 		return
 	}
-	defer func() { _ = client.Close() }()
+	defer func() {
+		_ = client.Close()
+		s.mu.Lock()
+		s.activeClient = nil
+		s.bootstrapBytes = nil
+		s.mu.Unlock()
+	}()
 
 	initBytes, err := cat.Encode(def, initCommandName)
 	if err != nil {
@@ -87,6 +120,7 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("driver", def.ID).
 			Str("command", initCommandName).
 			Msg("bridge: rigdef has no INIT command; pipeline not started")
+		s.publishBridgeError("rigdef " + def.ID + " has no INIT command; cannot arm AUTO mode")
 		return
 	}
 	if err := client.WriteCommandBytes(ctx, initBytes); err != nil {
@@ -94,8 +128,17 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Err(err).
 			Str("driver", def.ID).
 			Msg("bridge: failed to send INIT; pipeline not started")
+		s.publishBridgeError("failed to arm AUTO mode on " + def.ID + ": " + errMessage(err))
 		return
 	}
+
+	// Stash the live client + pre-encoded bootstrap bytes so the SSE
+	// handler can fire READ on each new Subscribe via TriggerBootstrap.
+	// The defer above clears them on pipeline exit.
+	s.mu.Lock()
+	s.activeClient = client
+	s.bootstrapBytes = readBytes
+	s.mu.Unlock()
 
 	s.logger.InfoWith().
 		Str("port", serialCfg.PortName).
@@ -111,6 +154,7 @@ func (s *Service) runPipeline(ctx context.Context) {
 // client without going through the open/init dance.
 func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition) {
 	announcedDisconnect := false
+	identityVerified := false
 	for {
 		readCtx, cancel := context.WithTimeout(ctx, livenessTimeout)
 		line, err := client.ReadResponseBytes(readCtx)
@@ -143,12 +187,29 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		status, decErr := cat.Decode(def, line)
 		if decErr != nil {
 			// ErrNoMatch is normal — rig pushes lines for tags we
-			// don't have a parser for (or stray bytes during link
-			// startup). Log at debug-level via the trace helper would
-			// flood; silent skip is the correct treatment per the
-			// codec doc.
+			// don't have a parser for (S-meter, waterfall, etc.).
+			// Silent skip per the codec doc; logging would flood.
 			continue
 		}
+
+		// Identity verification fires once per pipeline lifecycle on
+		// the first IDENTITY response (typically arrives in response
+		// to the bootstrap READ on the first SSE-open, or to the
+		// initial INIT if any rig replies to AI1;). Mismatch is an
+		// operator-actionable misconfiguration — `bridge.cat.driver`
+		// names a different rig than the one actually wired up.
+		if !identityVerified {
+			if v, ok := status["IDENTITY"]; ok {
+				identityVerified = true
+				switch {
+				case v == "":
+					s.publishBridgeError("rig identity unrecognised; configured driver " + def.ID + " does not know this rig's ID code — check bridge.cat.driver matches the connected rig")
+				case v != def.Model:
+					s.publishBridgeError("rig identity mismatch; configured driver " + def.ID + " (" + def.Model + ") but rig identifies as " + v)
+				}
+			}
+		}
+
 		payload, hasFields := mapStatusToPayload(status)
 		if !hasFields {
 			continue
@@ -164,6 +225,19 @@ func (s *Service) publishDisconnect(reason string) {
 	s.hub.publish(Event{
 		Name:    EventRigDisconnected,
 		Payload: RigDisconnectedPayload{Reason: reason},
+	})
+}
+
+// publishBridgeError emits one bridge-error event for an
+// operator-actionable failure (port permission denied, unknown
+// driver, rigdef missing INIT/READ, identity mismatch, etc.). The
+// SPA toasts the message via ADR 0008. NOT used for transient
+// retries or per-frame protocol hiccups — those stay logged-only so
+// the toast stream doesn't flood.
+func (s *Service) publishBridgeError(message string) {
+	s.hub.publish(Event{
+		Name:    EventBridgeError,
+		Payload: BridgeErrorPayload{Message: message},
 	})
 }
 

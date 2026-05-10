@@ -41,6 +41,23 @@ type Service struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 
+	// activeClient is the live serial client owned by runPipeline.
+	// Set once the port opens, cleared on pipeline exit. Used by
+	// TriggerBootstrap so the SSE handler can write the rigdef's
+	// READ command without owning its own client. Mu-guarded for
+	// the pipeline-goroutine ↔ handler-goroutines race.
+	//
+	// Writes via this field are safe per serial.Client's contract
+	// (WriteCommandBytes serialises through the port's writeMu).
+	// Reads aren't done through this field — readLoop owns reads via
+	// its own closure variable.
+	activeClient serial.Client
+
+	// bootstrapBytes is the pre-encoded READ command (per rigdef)
+	// that TriggerBootstrap writes on each new SSE-open. Cached on
+	// the Service so each Subscribe doesn't repeat cat.Encode.
+	bootstrapBytes []byte
+
 	// stopOnce + stopDone serialise concurrent Stop calls so the
 	// "Stop returned, therefore stopped" contract holds for every
 	// caller. The first Stop runs the teardown work and closes
@@ -158,4 +175,30 @@ func (s *Service) Enabled() bool {
 // clean empty stream rather than a hang.
 func (s *Service) Subscribe() (<-chan Event, func()) {
 	return s.hub.subscribe()
+}
+
+// TriggerBootstrap writes the rigdef's READ command to the rig so a
+// freshly-connected SSE subscriber gets a current identity + state
+// snapshot rather than waiting for the operator to wiggle the dial
+// (per ADR 0019 active-snapshot model). Called by the SSE handler
+// immediately after Subscribe.
+//
+// Safe-by-design no-op when the pipeline isn't running (bridge
+// disabled, pipeline mid-shutdown, pipeline never started after a
+// terminal serial error). The SSE stream still works in that case;
+// the SPA's catState just shows defaults until the rig pushes
+// naturally on operator action.
+//
+// Errors from the underlying write are returned but don't break the
+// SSE connection — a bootstrap failure for one subscriber doesn't
+// affect the hub fan-out for others.
+func (s *Service) TriggerBootstrap(ctx context.Context) error {
+	s.mu.Lock()
+	cl := s.activeClient
+	bb := s.bootstrapBytes
+	s.mu.Unlock()
+	if cl == nil || len(bb) == 0 {
+		return nil
+	}
+	return cl.WriteCommandBytes(ctx, bb)
 }

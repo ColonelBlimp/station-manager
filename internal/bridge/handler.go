@@ -58,6 +58,19 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 		ch, unsub := s.Subscribe()
 		defer unsub()
 
+		// Bootstrap poll: ask the rig for an identity + state
+		// snapshot so this freshly-connected SPA tab populates
+		// catState immediately rather than waiting for the
+		// operator to wiggle the dial (per ADR 0019). The poll's
+		// responses flow back through readLoop and fan out to
+		// every subscriber — existing subscribers see a redundant
+		// state refresh ($state proxy merges idempotently). Errors
+		// here are logged but don't break the SSE stream — the SPA
+		// just sees defaults until the rig pushes naturally.
+		if err := s.TriggerBootstrap(r.Context()); err != nil {
+			s.logger.WarnWith().Err(err).Msg("bridge: bootstrap poll failed; SSE stream continues")
+		}
+
 		keepalive := time.NewTicker(sseKeepAliveInterval)
 		defer keepalive.Stop()
 

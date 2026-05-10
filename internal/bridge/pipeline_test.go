@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	stderr "errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,12 +53,12 @@ func TestPipeline_SendsINIT(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if writes := fake.recordedWrites(); len(writes) > 0 {
-			// FT-710 INIT is "AI1;ID;" — serial.Port appends the
-			// configured delimiter (';') if missing; the rigdef
-			// already terminates with ';' so the command lands
-			// verbatim.
-			if !bytes.Equal(writes[0], []byte("AI1;ID;")) {
-				t.Errorf("first write = %q, want %q", writes[0], "AI1;ID;")
+			// FT-710 INIT is "AI1;" (M3a.3 onwards — see
+			// internal/cat/rigs/yaesu-ft710.json). INIT arms AUTO
+			// push mode; the identity + state snapshot is fetched
+			// separately via READ on each SSE-open.
+			if !bytes.Equal(writes[0], []byte("AI1;")) {
+				t.Errorf("first write = %q, want %q", writes[0], "AI1;")
 			}
 			return
 		}
@@ -376,6 +377,272 @@ func TestPipeline_OpenFailureExitsCleanly(t *testing.T) {
 	}
 	if err := s.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
+	}
+}
+
+// TestPipeline_TriggerBootstrap_WritesReadCommand covers the M3a.3
+// bootstrap-on-SSE-open contract: TriggerBootstrap writes the
+// rigdef's READ command via the active client. The READ wire shape
+// is "ID;FA;FB;ST;VS;MD0;MD1;PC;" for both Yaesu rigdefs.
+func TestPipeline_TriggerBootstrap_WritesReadCommand(t *testing.T) {
+	s, fake := newPipelineTestService(t)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	// Wait for the pipeline to have stashed activeClient (i.e. INIT
+	// has been written and the read loop is running). The simplest
+	// proxy is to wait for the INIT write to land.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := s.TriggerBootstrap(context.Background()); err != nil {
+		t.Fatalf("TriggerBootstrap: %v", err)
+	}
+
+	// Wait for the second write (the READ command).
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	writes := fake.recordedWrites()
+	if len(writes) < 2 {
+		t.Fatalf("expected at least 2 writes (INIT + READ), got %d", len(writes))
+	}
+	if !bytes.Equal(writes[1], []byte("ID;FA;FB;ST;VS;MD0;MD1;PC;")) {
+		t.Errorf("second write = %q, want %q", writes[1], "ID;FA;FB;ST;VS;MD0;MD1;PC;")
+	}
+}
+
+// TestPipeline_TriggerBootstrap_NoOpWhenPipelineNotRunning covers
+// the safe-by-design contract: calling TriggerBootstrap on a Service
+// whose pipeline hasn't started (or has exited) returns nil silently
+// rather than panicking on a nil client.
+func TestPipeline_TriggerBootstrap_NoOpWhenPipelineNotRunning(t *testing.T) {
+	s := New(types.BridgeConfig{Enabled: false}, &logging.Service{})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	if err := s.TriggerBootstrap(context.Background()); err != nil {
+		t.Errorf("TriggerBootstrap on disabled bridge returned err: %v", err)
+	}
+}
+
+// TestPipeline_BridgeError_UnknownDriver covers the operator-typo
+// path: bridge.cat.driver names a rig that's not in the embedded
+// rigdb. Pipeline publishes a bridge-error event with the bad
+// driver name in the message and exits cleanly.
+func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-no-such-rig"},
+	}, &logging.Service{})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	installFakeSerial(s)
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	select {
+	case evt, ok := <-ch:
+		if !ok {
+			t.Fatal("subscriber channel closed before bridge-error")
+		}
+		if evt.Name != EventBridgeError {
+			t.Errorf("evt.Name = %q, want %q", evt.Name, EventBridgeError)
+		}
+		p, ok := evt.Payload.(BridgeErrorPayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want BridgeErrorPayload", evt.Payload)
+		}
+		if !strings.Contains(p.Message, "yaesu-no-such-rig") {
+			t.Errorf("message = %q, want substring %q", p.Message, "yaesu-no-such-rig")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no bridge-error event within 1s")
+	}
+}
+
+// TestPipeline_BridgeError_OpenFailure covers the port-not-available
+// path (operator typo'd the device, permission denied, etc.):
+// openClient returns an error → bridge-error event with the cause →
+// pipeline exits cleanly.
+func TestPipeline_BridgeError_OpenFailure(t *testing.T) {
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "/dev/no-such-port", Baud: 38400},
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+	}, &logging.Service{})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	s.openClient = func(_ serial.Config) (serial.Client, error) {
+		return nil, errOpenFailed
+	}
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	select {
+	case evt, ok := <-ch:
+		if !ok {
+			t.Fatal("subscriber channel closed before bridge-error")
+		}
+		if evt.Name != EventBridgeError {
+			t.Errorf("evt.Name = %q, want %q", evt.Name, EventBridgeError)
+		}
+		p, ok := evt.Payload.(BridgeErrorPayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want BridgeErrorPayload", evt.Payload)
+		}
+		if !strings.Contains(p.Message, "/dev/no-such-port") {
+			t.Errorf("message = %q, want it to mention the bad port", p.Message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no bridge-error event within 1s")
+	}
+}
+
+// TestPipeline_IdentityVerified_NoErrorOnMatch covers the happy path:
+// rig ID 0800 maps to "FT-710" via the FT-710 rigdef, which matches
+// def.Model. No bridge-error fires; the IDENTITY arrives as a
+// normal rig-state event.
+func TestPipeline_IdentityVerified_NoErrorOnMatch(t *testing.T) {
+	s, fake := newPipelineTestService(t)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	fake.feedLine([]byte("ID0800")) // FT-710's known ID
+
+	// First event should be the rig-state with the identity. No
+	// bridge-error should follow.
+	select {
+	case evt := <-ch:
+		if evt.Name != EventRigState {
+			t.Errorf("first event = %q, want %q", evt.Name, EventRigState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no event within 1s")
+	}
+
+	// Drain a short window to confirm no bridge-error follows.
+	select {
+	case evt := <-ch:
+		if evt.Name == EventBridgeError {
+			t.Errorf("unexpected bridge-error after identity match: %+v", evt.Payload)
+		}
+	case <-time.After(100 * time.Millisecond):
+		// expected — no follow-up event
+	}
+}
+
+// TestPipeline_IdentityVerified_ErrorOnUnrecognised covers the
+// operator-wired-wrong-driver path: rig responds with an ID code
+// the configured rigdef doesn't have a value mapping for. The
+// IDENTITY tag decodes to empty string (cat decoder's
+// no-match-in-mapping behaviour) and the bridge fires a bridge-error
+// telling the operator their bridge.cat.driver is wrong.
+func TestPipeline_IdentityVerified_ErrorOnUnrecognised(t *testing.T) {
+	s, fake := newPipelineTestService(t) // configured for yaesu-ft710
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	// Feed an ID code that's NOT in FT-710's value mapping
+	// (FT-710's rigdef knows only 0800 → "FT-710").
+	fake.feedLine([]byte("ID9999"))
+
+	// Expect a bridge-error within the read loop's first iteration.
+	// The rig-state event for the (empty) IDENTITY is suppressed
+	// because mapStatusToPayload skips empty values, so we don't
+	// see a redundant rig-state alongside the bridge-error.
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Name == EventBridgeError {
+				p := evt.Payload.(BridgeErrorPayload)
+				if !strings.Contains(p.Message, "unrecognised") {
+					t.Errorf("message = %q, want it to mention 'unrecognised'", p.Message)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("no bridge-error within 1s")
+		}
+	}
+}
+
+// TestPipeline_IdentityVerified_OnceOnly covers the dedup rule:
+// repeated IDENTITY pushes (e.g. multiple bootstrap polls) only
+// produce one bridge-error if there's a problem. Otherwise the
+// SPA would be flooded.
+func TestPipeline_IdentityVerified_OnceOnly(t *testing.T) {
+	s, fake := newPipelineTestService(t)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	fake.feedLine([]byte("ID9999")) // first unrecognised
+	fake.feedLine([]byte("ID9999")) // second — should NOT fire again
+	fake.feedLine([]byte("ID9999")) // third — same
+
+	bridgeErrors := 0
+	deadline := time.After(300 * time.Millisecond)
+loop:
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Name == EventBridgeError {
+				bridgeErrors++
+			}
+		case <-deadline:
+			break loop
+		}
+	}
+	if bridgeErrors != 1 {
+		t.Errorf("got %d bridge-error events, want exactly 1 (identity-verify dedup)", bridgeErrors)
 	}
 }
 

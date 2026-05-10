@@ -10,11 +10,19 @@ import (
 // all pass against the real codec AND against referenceEncode (frozen
 // v1 logic in reference_test.go).
 //
-// Command names and templates follow v1's battle-tested defaults: three
-// burst categories (INIT, READ, PLAYBACK) rather than per-field commands.
-// The rig parses the burst into its constituent ';'-terminated commands
-// and emits a response for each; the decoder then consumes them as
-// separate framed lines.
+// Command names and templates follow the project's three-burst convention
+// (INIT, READ, PLAYBACK) rather than per-field commands. The rig parses
+// the burst into its constituent ';'-terminated commands and emits a
+// response for each; the decoder then consumes them as separate framed
+// lines.
+//
+// INIT arms AUTO-mode push state (`AI1;`) with no response expected.
+// READ requests a full identity + state snapshot (`ID;FA;FB;ST;VS;MD0;MD1;PC;`)
+// — used by the bridge subsystem (M3a.3+) on each new SSE-open so a fresh
+// SPA tab sees current rig state without waiting for the operator to
+// wiggle the dial. The two are deliberately separated: INIT runs once per
+// pipeline lifecycle (pipeline startup), READ runs once per SSE
+// subscriber connect.
 type encodeCase struct {
 	name    string
 	rigID   string
@@ -26,10 +34,10 @@ type encodeCase struct {
 
 var encodeCases = []encodeCase{
 	// --- Plain burst templates (no args) ---
-	{name: "INIT on FTdx10", rigID: "yaesu-ftdx10", cmdName: "INIT", want: "AI1;ID;"},
-	{name: "READ on FTdx10", rigID: "yaesu-ftdx10", cmdName: "READ", want: "FA;FB;ST;VS;MD0;MD1;PC;"},
-	{name: "INIT on FT-710", rigID: "yaesu-ft710", cmdName: "INIT", want: "AI1;ID;"},
-	{name: "READ on FT-710", rigID: "yaesu-ft710", cmdName: "READ", want: "FA;FB;ST;VS;MD0;MD1;PC;"},
+	{name: "INIT on FTdx10", rigID: "yaesu-ftdx10", cmdName: "INIT", want: "AI1;"},
+	{name: "READ on FTdx10", rigID: "yaesu-ftdx10", cmdName: "READ", want: "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
+	{name: "INIT on FT-710", rigID: "yaesu-ft710", cmdName: "INIT", want: "AI1;"},
+	{name: "READ on FT-710", rigID: "yaesu-ft710", cmdName: "READ", want: "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
 
 	// --- Template with %s arg (PLAYBACK) ---
 	{name: "PLAYBACK channel 5 FTdx10", rigID: "yaesu-ftdx10", cmdName: "PLAYBACK", args: []any{"5"}, want: "PB05;"},

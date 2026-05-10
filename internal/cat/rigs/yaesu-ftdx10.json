@@ -22,8 +22,8 @@
     "listener_read_timeout_ms": 8
   },
   "commands": [
-    {"name": "INIT",     "cmd": "AI1;ID;"},
-    {"name": "READ",     "cmd": "FA;FB;ST;VS;MD0;MD1;PC;"},
+    {"name": "INIT",     "cmd": "AI1;"},
+    {"name": "READ",     "cmd": "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
     {"name": "PLAYBACK", "cmd": "PB0%s;"}
   ],
   "states": [

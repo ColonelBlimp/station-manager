@@ -11,11 +11,13 @@
 //
 // Typical live-rig workflow:
 //
-//	catcli -device /dev/ttyUSB0 -rig yaesu-ftdx10 -init -listen
+//	catcli -device /dev/ttyUSB0 -rig yaesu-ftdx10 -init -read -listen
 //
-// Sends the rig's INIT burst (AI1;ID;) to enable push-state broadcasts,
-// then streams decoded state updates to stdout as the operator turns
-// knobs and changes bands.
+// Sends the rig's INIT burst (AI1;) to arm AUTO-mode push state, then
+// the READ burst (ID;FA;FB;ST;VS;MD0;MD1;PC;) to fetch a full identity
+// + state snapshot, then streams decoded state updates to stdout as the
+// operator turns knobs and changes bands. The same INIT/READ pair the
+// bridge subsystem uses (M3a.3+) — see internal/bridge/pipeline.go.
 package main
 
 import (
@@ -47,7 +49,8 @@ func main() {
 	listen := flag.Bool("listen", false, "listen-only mode: print incoming lines until interrupted")
 	readTimeout := flag.Duration("read-timeout", 2*time.Second, "read timeout per response")
 	rigID := flag.String("rig", "", "rig id (e.g. yaesu-ftdx10); enables cat.Decode of responses")
-	initBurst := flag.Bool("init", false, "send the rig's INIT command at startup (requires -rig)")
+	initBurst := flag.Bool("init", false, "send the rig's INIT command at startup — arms AUTO-mode push state (requires -rig)")
+	readBurst := flag.Bool("read", false, "send the rig's READ command after init — fetches an identity+state snapshot (requires -rig)")
 
 	flag.Parse()
 
@@ -68,6 +71,9 @@ func main() {
 
 	if *initBurst && !haveRig {
 		log.Fatalf("-init requires -rig")
+	}
+	if *readBurst && !haveRig {
+		log.Fatalf("-read requires -rig")
 	}
 
 	port, err := serial.Open(cfg)
@@ -90,7 +96,13 @@ func main() {
 		if err := sendNamedCommand(port, def, "INIT", *readTimeout); err != nil {
 			log.Fatalf("send INIT: %v", err)
 		}
-		log.Printf("INIT sent; expect push-state broadcasts if rig is in AI mode")
+		log.Printf("INIT sent; AUTO-mode push state armed (no response expected)")
+	}
+	if *readBurst {
+		if err := sendNamedCommand(port, def, "READ", *readTimeout); err != nil {
+			log.Fatalf("send READ: %v", err)
+		}
+		log.Printf("READ sent; expect 8 framed responses (ID/FA/FB/ST/VS/MD0/MD1/PC)")
 	}
 
 	switch {

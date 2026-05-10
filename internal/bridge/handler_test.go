@@ -169,3 +169,138 @@ func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
 		t.Fatal("stream did not end within 1s of shutdownCh close")
 	}
 }
+
+// TestHTTPHandler_BootstrapFiresOnSubscribe covers the M3a.3
+// bootstrap-on-SSE-open contract from the SSE-handler side: a fresh
+// HTTP connection writes the rigdef's READ command to the rig
+// promptly after subscribing. The fake's recorded writes show
+// INIT first (pipeline startup), then the READ from the bootstrap
+// trigger.
+func TestHTTPHandler_BootstrapFiresOnSubscribe(t *testing.T) {
+	s, fake, shutdownCh := newHandlerTestService(t)
+	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
+	t.Cleanup(srv.Close)
+
+	// Wait for the pipeline's INIT write so we can distinguish it
+	// from the bootstrap READ that fires on SSE-open.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(fake.recordedWrites()) < 1 {
+		t.Fatal("pipeline did not send INIT within 1s")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Now the bootstrap READ should land. Wait for the second write.
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	writes := fake.recordedWrites()
+	if len(writes) < 2 {
+		t.Fatalf("expected at least 2 writes (INIT + bootstrap READ), got %d", len(writes))
+	}
+	if string(writes[1]) != "ID;FA;FB;ST;VS;MD0;MD1;PC;" {
+		t.Errorf("bootstrap write = %q, want %q", writes[1], "ID;FA;FB;ST;VS;MD0;MD1;PC;")
+	}
+}
+
+// TestHTTPHandler_FanOutToMultipleSubscribers covers the M3a.3
+// multi-subscriber acceptance: 5 concurrent SSE clients all see the
+// same rig-state event when one rig push fires. Validates the
+// existing hub.publish fan-out under realistic concurrency rather
+// than as an isolated unit.
+func TestHTTPHandler_FanOutToMultipleSubscribers(t *testing.T) {
+	s, fake, shutdownCh := newHandlerTestService(t)
+	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
+	t.Cleanup(srv.Close)
+
+	const numClients = 5
+	type result struct {
+		idx    int
+		sawEvt bool
+		err    error
+	}
+	results := make(chan result, numClients)
+
+	// Spin up N concurrent SSE clients. Each opens a connection,
+	// scans for the FA frequency push we'll feed below, and reports.
+	for i := 0; i < numClients; i++ {
+		idx := i
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				results <- result{idx: idx, err: err}
+				return
+			}
+			defer resp.Body.Close()
+
+			scanner := bufio.NewScanner(resp.Body)
+			for scanner.Scan() {
+				line := scanner.Text()
+				// Looking for the data line carrying our test
+				// frequency. Each subscriber should see it because
+				// the hub fans out to all.
+				if strings.Contains(line, `"vfoA":21074000`) {
+					results <- result{idx: idx, sawEvt: true}
+					return
+				}
+			}
+			results <- result{idx: idx, err: scanner.Err()}
+		}()
+	}
+
+	// Give all clients time to connect + subscribe before we feed
+	// the test event. Bootstrap READ writes from each subscribe
+	// will happen but produce no responses (fake doesn't auto-reply).
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		// At least N+1 writes means N bootstrap READs landed (plus
+		// the pipeline's startup INIT).
+		if len(fake.recordedWrites()) >= numClients+1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Feed one frequency push; every subscriber should see it.
+	fake.feedLine([]byte("FA021074000"))
+
+	// Collect results.
+	saw := 0
+	for i := 0; i < numClients; i++ {
+		select {
+		case r := <-results:
+			if r.err != nil {
+				t.Errorf("client %d error: %v", r.idx, r.err)
+			}
+			if r.sawEvt {
+				saw++
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("client %d did not finish within 3s", i)
+		}
+	}
+	if saw != numClients {
+		t.Errorf("only %d of %d clients saw the broadcast event", saw, numClients)
+	}
+}
