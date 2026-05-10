@@ -8,6 +8,8 @@ supersedes: 0012
 
 # 0013 — Daemon owns the bridge as an internal subsystem
 
+> **2026-05-10 note.** This ADR settled the bridge's *topology* (single-binary subsystem by default; split-host opt-in). It deliberately did not settle the bridge's *internal v1 design* — cache strategy, frontend choices, PTT model, multi-rig posture. ADR 0019 (2026-05-10) settled those. This ADR remains accepted; ADR 0019 sits on top, not in tension. Read both together for the complete picture.
+
 ## Context
 
 ADR 0012 was drafted earlier the same day to fix a drift where the SPA was about to call the daemon's origin for a bridge-owned endpoint. 0012 codified "the bridge is a separate process, distinct origin" as the load-bearing topology. Within hours of that ADR landing, the operator stepped back to question whether the topology it was protecting is the topology actually being run.

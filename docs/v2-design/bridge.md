@@ -1,5 +1,16 @@
 # Station Manager v2 — Serial / CAT Bridge Design
 
+> **2026-05-10 banner — read this first.** ADR 0019 ([`../decisions/0019-bridge-subsystem-v1-design.md`](../decisions/0019-bridge-subsystem-v1-design.md)) is the canonical v1 internal design. **v1 is read-only** — rig pushes state, bridge filters and forwards to SPA, SPA displays. NO PTT and NO inbound command path in v1. ADR 0019 supersedes parts of this document:
+>
+> - **§3 (SM-internal Unix-socket multiplexer)** — parked, not v1. Will revisit when a non-browser in-house client (FT8 stack, future CAT control SPA) needs it.
+> - **§4 frontend list** — v1 ships ONE frontend (SSE for the logging SPA). rigctld-compat TCP is parked; NDJSON Unix socket is parked. Both build when their drivers appear.
+> - **§6 (YAGNI question)** — answered by ADR 0013 (bridge IS built, as a subsystem) and ADR 0019 (with the v1 internal shape: read-only).
+> - **§3e PTT safety + §4 PTT convention** — **deferred along with the rest of PTT.** v1 has no PTT awareness because the SPA doesn't assert PTT in v1. When the inbound command path lands later, the disconnect-safety-release rule from §3e fires for real (it's the right design, just not v1).
+> - **§7 performance discussion** — still canonical (and reaffirmed by ADR 0019).
+> - **§2 AUTO-mode CAT assumption** — still canonical.
+>
+> Treat the *protocol shape* (AUTO-mode push-state) as canonical via §2. Treat the *wire shape* (`/v1/rig/events` SSE, three event types) as canonical via ADR 0010 (cache section revised by ADR 0019). Treat the *internal design* (read-only, stateless filter, poll-on-SSE-open, no cache, no PTT) as canonical only via ADR 0019. The PTT safety net design from §3e is canonical but deferred — it lands when the inbound command path does.
+
 **Status:** Draft, last revised 2026-04-20 during a design re-examination session. **Read with the 2026-05-02 topology decisions in mind:** [ADR 0013](../decisions/0013-daemon-owns-bridge-as-subsystem.md) settles that the bridge is an internal subsystem of the daemon binary in the default deployment (`internal/bridge` package, registered into the daemon's HTTP server, gated by a `bridge.enabled` config flag). [topology.md](topology.md) was rewritten the same day to reflect that. The split-host deployment (separately-built `cmd/bridge` binary using the same `internal/bridge` package) remains supported as an opt-in. **Several "is the bridge a separate process?" assumptions in this document predate ADR 0013**; treat the *protocol shape*, *frontend list*, *AUTO-mode CAT assumption*, and *PTT safety rules* in this document as canonical, but treat the *deployment shape* as superseded by ADR 0013 / topology.md.
 
 The 2026-04-20 revision also re-examined whether the bridge needs to exist at all (§6 below). [ADR 0010](../decisions/0010-rig-sse-wire-shape.md) and [ADR 0013](../decisions/0013-daemon-owns-bridge-as-subsystem.md) effectively answer "yes, build the bridge as a subsystem" — the SPA needs the rig SSE for live VFO display regardless of whether other in-house clients exist. The §6 YAGNI question is therefore closed for v2: build it, but as a daemon subsystem, not as its own binary by default.

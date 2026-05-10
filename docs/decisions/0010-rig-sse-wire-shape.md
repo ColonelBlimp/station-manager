@@ -1,19 +1,21 @@
 ---
 number: 0010
 title: Rig SSE wire shape — single endpoint, three event types, passive liveness via rig data flow
-status: Accepted (revised twice on 2026-05-02 — see revision notes)
+status: Accepted (revised three times — see revision notes)
 date: 2026-05-01
 ---
 
 # 0010 — Rig SSE wire shape
 
-> **2026-05-02 revision notes.**
+> **Revision notes.**
 >
-> *First revision (morning, ADR 0012):* this ADR originally deferred the question "which Go process answers `GET /v1/rig/events`" to `bridge.md` / `topology.md`. ADR 0012 promoted that to a named decision: bridge serves the endpoint, daemon does not.
+> *First revision (2026-05-02, ADR 0012):* this ADR originally deferred the question "which Go process answers `GET /v1/rig/events`" to `bridge.md` / `topology.md`. ADR 0012 promoted that to a named decision: bridge serves the endpoint, daemon does not.
 >
-> *Second revision (same day, ADR 0013):* ADR 0012 was superseded within hours. The dominant deployment is single-operator-on-the-shack-PC; forcing a separate bridge process there is ceremony for the case the operator actually lives in. ADR 0013 collapses the bridge into the daemon binary as an internal subsystem. **In the default deployment the daemon hosts `/v1/rig/events` directly, with the bridge subsystem providing the underlying data.** The split-host deployment (network-deployed daemon with no bridge, separate bridge process on the rig host) is preserved as an opt-in via subsystem disable-flagging.
+> *Second revision (2026-05-02, ADR 0013):* ADR 0012 was superseded within hours. The dominant deployment is single-operator-on-the-shack-PC; forcing a separate bridge process there is ceremony for the case the operator actually lives in. ADR 0013 collapses the bridge into the daemon binary as an internal subsystem. **In the default deployment the daemon hosts `/v1/rig/events` directly, with the bridge subsystem providing the underlying data.** The split-host deployment (network-deployed daemon with no bridge, separate bridge process on the rig host) is preserved as an opt-in via subsystem disable-flagging.
 >
-> The wire shape below — three event types, deltas, passive liveness — is unchanged across both revisions. Only the host changed: ambiguous → bridge process → daemon (with bridge subsystem). The SPA composes the URL as `${configState.bridgeUrl}/v1/rig/events`, where `bridgeUrl` defaults to `daemonUrl` in the single-binary deployment and is operator-overridable for the split-host case.
+> *Third revision (2026-05-10, ADR 0019):* the **"Bridge-side current-state cache" section below is removed** (revised by ADR 0019). The v1 bridge is a stateless filter — no cache, no delta computation. SPA-side `catState` (Svelte 5 `$state` proxy) provides the value-persistence the cache was solving for; snapshot-on-connect is now an active CAT poll at SSE-open time, not a cached send. **The wire shape on `/v1/rig/events` is unchanged** — same three event types, same payload format, same merge-into-`catState` semantic on the SPA side. Only the bridge's internal implementation changed. The "Bridge-side current-state cache" subsection below is preserved for the reasoning trail of why a cache was originally proposed and why it was later dropped; treat it as historical, not current.
+>
+> The wire shape below — three event types, deltas, passive liveness — is unchanged across all three revisions. Only the host (ambiguous → bridge process → daemon with bridge subsystem) and the cache strategy (cached → stateless) have changed. The SPA composes the URL as `${configState.bridgeUrl}/v1/rig/events`, where `bridgeUrl` defaults to `daemonUrl` in the single-binary deployment and is operator-overridable for the split-host case.
 
 ## Context
 
@@ -101,6 +103,8 @@ There is no `rig-reconnected` event. The first `rig-state` event after a `rig-di
 This keeps the protocol to three events instead of four. Since `rig-state` always merges into `catState`, the merge naturally re-populates whatever fields the rig is now reporting.
 
 ### Bridge-side current-state cache
+
+> **Superseded by ADR 0019 (2026-05-10).** The v1 bridge is stateless. No cache. Snapshot-on-connect is now an active CAT poll at SSE-open time. SPA's `catState` provides the value-persistence the cache was solving for. The text below is preserved as the reasoning trail of why the cache was originally proposed; it does NOT describe the current implementation.
 
 The bridge maintains an internal cache of the last-known rig state. It serves three purposes:
 

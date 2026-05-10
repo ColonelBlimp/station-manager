@@ -167,6 +167,10 @@ If an operator triggers voice-keyer mid-WSJT-X-transmission they get a clean rej
 
 ### Two-frontend bridge shape
 
+> **2026-05-10 ordering qualifier (ADR 0019).** Two frontends is the *eventual* canonical shape. **v1 ships ONE frontend** — SSE on `/v1/rig/events` for the logging SPA — because the SPA is the only first-class CAT consumer today. rigctld-compat TCP and NDJSON Unix-socket frontends are deferred until a real driver appears (third-party app needing bridge-mediated CAT, or a non-browser in-house client like the FT8 stack or a CAT control SPA). The invariant remains correct as a long-term shape; the v1 path is one frontend, then the second when its consumer materialises.
+>
+> ADR 0010 settled the SM-native event stream as **SSE over the daemon's HTTP server**, not NDJSON over Unix socket. The §"Serial/CAT bridge SM-native frontend: NDJSON over Unix socket" entry below is the pre-ADR-0010 thinking; treat it as historical for the SPA path. NDJSON over Unix socket may still ship later as a separate frontend for non-browser in-house clients (their drivers determine).
+
 The serial/CAT bridge has **two frontends on one internal pipeline**:
 
 1. **rigctld-compat TCP** for third-party interop (WSJT-X, JTDX, anything speaking "Hamlib Net rigctl"). Zero config change required on their side — they already support "Hamlib Net rigctl" as a rig type.

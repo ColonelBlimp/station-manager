@@ -522,30 +522,152 @@ over the Unix socket API.
 
 ---
 
-## Milestone 3 — Bridges and external integration
+## Milestone 3 — Bridge subsystem + external integration
 
-**Goal:** External tools can feed QSOs into the daemon without going
-through a SPA.
+**Goal:** The daemon's bridge subsystem (CAT/serial) ships, the SPA
+displays live rig state, and external tools can feed QSOs into the
+daemon without going through a SPA.
 
-### Scope
+The original M3 framing (a separate `cmd/sm-serial-bridge` binary
+with two frontends) is obsolete per ADR 0013 (2026-05-02) and ADR
+0019 (2026-05-10): the bridge is a daemon subsystem (`internal/bridge`),
+the v1 shape is read-only, and only one frontend ships in v1. The
+sub-milestones below break the work down by concrete artifact.
 
-- `cmd/udp-bridge` — generic UDP-to-daemon bridge. Listens on UDP
-  for ADIF-formatted payloads and POSTs them to the daemon.
-- `cmd/sm-serial-bridge` — the serial/CAT bridge with two frontends
-  (rigctld-compat TCP + SM-native event stream). Rig control is a
-  client concern, not a daemon concern.
+---
+
+### Milestone 3a — Bridge subsystem v1 (read-only, SPA-only)
+
+**Goal:** The logging SPA displays live rig state — frequency, mode,
+VFO, etc. — pushed by the rig via AUTO-mode CAT through the daemon's
+new `internal/bridge` subsystem over SSE at `/v1/rig/events`. v1 is
+read-only: SPA observes; no commands flow back from SPA to rig.
+Settled by ADR 0010 (wire shape) + ADR 0013 (topology) + ADR 0019
+(internal v1 design).
+
+#### M3a.1 — Package skeleton + config + SSE plumbing
+
+- New `internal/bridge/` package with `Service` lifecycle (`Initialize`
+  → `Start(ctx)` → `Stop()`), DI-wired via `internal/iocdi`.
+- Config additions: `Bridge.Enabled` (default `true`), `Bridge.Serial.Port`,
+  `Bridge.Serial.Baud`, `Bridge.Cat.Driver` (yaesu-ft710 / yaesu-ftdx10 /
+  future).
+- HTTP route `GET /v1/rig/events` registered on the daemon's mux when
+  `Bridge.Enabled: true`. Initially emits hardcoded stub events for
+  pipeline verification.
+- Package-boundary tests: assert `internal/storage` and
+  `internal/forwarder` don't import `internal/bridge` (per ADR 0013's
+  package-graph discipline).
+- DI wiring in `cmd/smd/main.go`.
+
+**Acceptance:** `curl -N http://localhost:8080/v1/rig/events` shows the
+stub events when `bridge.enabled: true`; route doesn't exist when
+`false`. Daemon starts/stops cleanly in both configurations.
+
+#### M3a.2 — Serial + CAT pipeline
+
+- `internal/bridge/Service.Start(ctx)` opens the serial port via
+  `internal/serial` and starts an AUTO-mode read loop.
+- Bytes from serial → `internal/cat` decoder → structured events on an
+  internal Go channel.
+- 30s data-flow timeout → emit `rig-disconnected` (per ADR 0010 passive
+  liveness).
+- Field filter: forward only SPA-relevant fields (vfoA, vfoB, mode,
+  subMode, selectedVfo, splitOverride, power); drop waterfall /
+  S-meter / etc.
+- Stub-rig test harness: in-memory or PTY-pair Yaesu emulator that
+  emits AUTO-mode pushes on cue, lets us integration-test without
+  rig hardware.
+
+**Acceptance:** stub rig pushes a frequency change → bridge's internal
+channel receives a typed event. 30s of stub silence → `rig-disconnected`
+event.
+
+#### M3a.3 — Pipeline → SSE + bootstrap poll + error events
+
+- Wire M3a.2's internal channel to M3a.1's SSE handler.
+- `http.Flusher.Flush()` after each event write.
+- **Bootstrap poll on SSE-open** (ADR 0019): on each new SSE connection,
+  send a CAT poll command (Yaesu/Kenwood `IF;`, Icom CI-V equivalent)
+  via `internal/cat`, forward response as the first SSE event.
+- `bridge-error` event emission for operator-actionable conditions
+  (port permission denied, rig identification failed, baud-rate
+  mismatch). NOT for transient retries.
+- Multi-subscriber fan-out tested with 5+ concurrent SSE clients.
+
+**Acceptance:** stub rig + multiple concurrent `curl -N` clients all
+see the bootstrap event then live updates. Permission-denied test
+produces a clean `bridge-error` with operator-readable reason.
+
+#### M3a.4 — SPA consumer + live rig test
+
+- Replace `frontend/logging/src/lib/states/bridge.svelte.ts` stub
+  with a real EventSource consumer (read-only).
+- Three event listeners: `rig-state` (merge into `catState`),
+  `rig-disconnected` (toast + `rigResponding=false`), `bridge-error`
+  (toast).
+- `bridgeState.connected` from `EventSource.readyState`;
+  `bridgeState.rigResponding` from event sequence.
+- EventSource construction conditional on
+  `configState.station.enabled`. Browser handles auto-reconnect.
+- Vitest tests against a stub `EventSource` (jsdom).
+- **Live rig test:** operator's actual Yaesu connected, SPA open; dial
+  turn → SPA's VFO display updates live; mode change → SPA reflects;
+  power-cycle the rig → values marked stale via existing `editable`
+  derivation, repopulate when rig comes back.
+
+**Acceptance:** end-to-end live test passes. Operator confirms.
+
+---
+
+### What's NOT in M3a (per ADR 0019)
+
+- **PTT and inbound command path** — bridge has no PTT awareness in
+  v1; SPA doesn't send commands TO the rig in v1. Built whole when a
+  driver appears (FT8 stack TX cycles, future voice keyer, etc.).
+- **rigctld-compat TCP frontend** — deferred until a third-party app
+  (WSJT-X / fldigi sharing the rig with logging app) needs bridge
+  mediation.
+- **NDJSON Unix-socket frontend** — deferred until a non-browser
+  in-house client (FT8 stack, future CAT control SPA) needs CAT.
+- **Bridge-side state cache** — bridge is stateless; SPA's `catState`
+  provides value-persistence.
+- **Periodic active polling for liveness** — passive 30s data-flow
+  timeout only; active polling is a future improvement.
+- **Multi-rig implementation** — internal API is rig-ID-aware from day
+  one; HTTP route singular for v1, grows to `/v1/rig/{id}/events`
+  later.
+- **Persistent rig state across daemon restart** — rig itself
+  remembers; bridge re-establishes on startup.
+
+---
+
+### Milestone 3b — External integration (deferred)
+
+Original M3's other items, none currently scheduled:
+
+- `cmd/udp-bridge` — generic UDP-to-daemon bridge. Listens on UDP for
+  ADIF-formatted payloads and POSTs them to the daemon. Useful for
+  WSJT-X/JTDX log integration.
 - `cmd/importer` — ADIF bulk import CLI. Reads an ADIF file and
-  submits each record via `POST /v1/qso`.
-- Multi-rig awareness: `types.Qso` carries a rig identifier, the
-  daemon API accepts it, the bridge populates it.
+  submits each record via `POST /v1/qso`. Useful for migrating from
+  v1 logs or other logging software.
+- Multi-rig awareness in the daemon API: `types.Qso` carries a rig
+  identifier, the daemon API accepts it, the bridge populates it.
+  Only meaningful once multi-rig hardware is in scope (M3a.* design
+  is rig-ID-aware but the daemon-side wiring is single-rig).
 
-### Acceptance test
+---
 
-Start the daemon and the serial bridge. Tune the rig. Observe
-frequency/mode updates on the bridge's event stream. Submit a QSO
-via the logging app with rig state auto-populated. Import a
-historical ADIF file via `cmd/importer` and verify all records appear
-in the logbook.
+### M3 acceptance test (whole milestone)
+
+For M3a alone: see M3a.4 acceptance.
+
+For M3 as a whole (when M3b lands too): start the daemon. Tune the
+rig — observe live updates in the SPA. Submit a QSO with the SPA;
+rig state auto-populates from `displayedState`. Run `cmd/udp-bridge`
+alongside, send an ADIF UDP packet, see it land in the logbook. Run
+`cmd/importer` against a historical ADIF file, verify records appear.
 
 ---
 
