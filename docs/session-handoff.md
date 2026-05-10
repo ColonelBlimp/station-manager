@@ -74,12 +74,47 @@ Operator asked for prettier and eslint coverage on TS/JS/Svelte files, with type
 
 **SessionPanel Stages A–D + keyboard shortcuts + focus restoration all shipped 2026-05-09.** Operator live-tested the full flow (log → row click → edit overlay populates → save → row updates in place; ESC clears, Ctrl+Enter submits, cursor lands on Callsign at every state transition) and confirmed it works.
 
-**Next session: pick between CAT and contest-mode logging.** Operator decision deferred to next session start (2026-05-09 close). Both are major blocks of work — neither belongs at the tail-end of a long session.
+**Operator's roadmap (settled end of 2026-05-09):**
 
-- **CAT integration** — ADR 0013's `internal/bridge` subsystem is the open structural addition. Daemon-side rigctld-compat TCP + SM-native event stream + AUTO-mode CAT + PTT arbitration. The SPA's `bridge.svelte.ts` is currently stubbed and `displayedState` reads from `manualState` only. Real CAT is the meaningful next phase if the operator wants logging to drive a rig.
-- **Contest-mode logging** — the daemon already exposes `GET /v1/contest-dupe`; the SPA-side contest UX (different field set, faster entry, contest-specific shortcuts) hasn't been built. Memory `project_sm_logging_app.md` mentions contest is "handled in a different place — we've not touched that area yet." Operator-facing feature work, smaller than CAT in scope.
+1. Get `smd` daemon working robustly (current focus — recent profiling expedition was step one)
+2. Logging SPA polish + completion (mostly there; ongoing visual / UX iteration)
+3. Logbook SPA (separate client; not yet started — see `feedback_logging_vs_logbook_scope.md` for the scope split)
+4. FT8 stack — depends on CAT being in place
+5. FT8 SPA — separate client for the FT8 workflow
 
-**Other near-term polish (not blocked on either):** HamQTH / QRZCQ provider chain expansion is parked at TBD (still useful as a small adjacent task, ~30-60 min for HamQTH alone).
+CAT/bridge is the next major implementation block in service of the FT8 path. Contest-mode networking is parked indefinitely as a future consideration.
+
+**Next session: sketch the CAT/bridge milestone breakdown.** Reasoning: CAT unblocks FT8 (precise TX cycle timing) and incidentally improves logging-SPA UX (live VFO/mode reads). Contest mode is parked — see topology discussion in this section.
+
+**Topology design discussion (recorded in `memory/project_sm_field_master_topology.md`):**
+
+Operator clarified the eventual shape is **multi-station contest** (N slaves each with rig + writer; 1 master aggregator), not just single-station portable. The N=1 case is the degenerate special case. Current implementation target is the N=1 shape; the multi-station design isn't being built now but stays in the back of the mind so we don't paint into a corner.
+
+Settled architectural decision: **CAT stays in-process — `cmd/bridge` is NOT shipped ahead of need.** ADR 0013's split-host opt-in was designed for the rig-at-one-location-operator-at-another shape; neither single-station nor multi-station contest needs it (rig + daemon co-located on every writer in both shapes). Keep the architectural option. Invest zero effort until a remote-station driver appears.
+
+Open future work (NOT for current implementation; flagged for awareness):
+
+- Cross-host `/v1/qso` auth — needed when a slave forwards to a master.
+- Real-time dupe-query API for contest mode — slave→master "has anyone on the team worked K1ABC?" Likely a mix of pull (`GET /v1/contest-dupe` extended for cross-host) + SSE push (master→slaves so each slave mirrors the team log locally).
+- Offline resilience for dupe-checking — slave keeps logging when network drops, falls back to local-only dupe check, reconciles on reconnect.
+
+The "where will CAT sit?" decision tree:
+
+| Layer | Already in tree | Open work |
+|---|---|---|
+| `internal/cat/` | ✅ codec + per-rig DB (yaesu-ft710, yaesu-ftdx10) | — |
+| `internal/serial/` | ✅ transport layer + buffer pool | — |
+| `internal/bridge/` | ❌ doesn't exist yet | **the new subsystem** |
+| `internal/api/` | ✅ HTTP plumbing | new handler(s) for `/v1/rig/events` SSE + any HTTP shape |
+| `cmd/smd/main.go` | ✅ DI wiring | bridge service registration |
+| `frontend/logging/src/lib/states/bridge.svelte.ts` | ✅ stubbed | wire to consume `/v1/rig/events` |
+
+Captured durable context in `memory/project_sm_field_master_topology.md` (single-writer field + read-only master + CAT placement + simpler-than-cloud rationale + auth gap on cross-host `/v1/qso` flagged as open work).
+
+**Other open items (not blocked on CAT or contest):**
+
+- **HamQTH / QRZCQ provider chain expansion** — TBD per operator (still useful as a small adjacent task, ~30-60 min for HamQTH alone).
+- **Cross-host `/v1/qso` auth** — open design work for whenever the field→master forwarder lands. Today the endpoint is unauthenticated (loopback-only). Cross-host needs at minimum a shared secret per forwarder pair.
 
 **Other open items (carry-over) — logging-app scope:**
 
