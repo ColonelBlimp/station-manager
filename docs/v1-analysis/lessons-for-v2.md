@@ -310,7 +310,7 @@ This section is more speculative than the rest of the document — it's a first 
 - ✅ Proper upload-queue API exposed to clients (`GET /v1/qso/{id}/uploads` + SSE `forward.*` events). Shipped milestone 1c.
 - ✅ Logbook-management API surface (`GET/POST/PATCH/DELETE /v1/logbook`). Shipped milestone 1b.
 - 🚧 `frontend/logging/` — Svelte 5 SPA, embedded into the daemon. Replaces the original "smclient + three Wails apps" plan per ADR 0001 (2026-04-30). The SPA talks directly to the daemon from the browser via `fetch()` / `EventSource`, so a Go HTTP client (`smclient`) is no longer needed and was never created.
-- ⏳ `internal/bridge` package per ADR 0013 — daemon subsystem providing rig SSE, rigctld-compat TCP, AUTO-mode CAT, PTT arbitration. Replaces the originally-planned standalone bridge binary; default deployment is single-binary. Split-host shape (`cmd/bridge` as a separate binary) is opt-in.
+- 🚧 `internal/bridge` package per ADR 0013 + ADR 0019 — daemon subsystem providing rig SSE on `/v1/rig/events`. **v1 is read-only** (rig pushes state via AUTO-mode CAT, bridge filters and forwards to the logging SPA; no PTT, no inbound command path, no rigctld-compat TCP, no NDJSON Unix-socket frontend). M3a.1 + M3a.2 + M3a.3 shipped 2026-05-10; M3a.4 (SPA `bridge.svelte.ts` consumer + live rig test) is the next milestone. Default deployment is single-binary; split-host `cmd/bridge` is opt-in and parked. Eventual feature set (rigctld TCP, PTT, etc.) builds when its drivers appear.
 - ⏳ A `wsjtx-bridge` client binary that translates WSJT-X UDP → daemon HTTP (separate from the serial/CAT bridge; they run alongside each other). Milestone 3.
 
 **Changed substantially in v2 (revised per ADR 0001, 2026-04-30):**

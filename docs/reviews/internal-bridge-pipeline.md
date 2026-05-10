@@ -1,5 +1,37 @@
 # `internal/bridge` code review — pipeline + bootstrap (2026-05-10)
 
+> **Status (2026-05-10):** all 10 findings addressed in the same session.
+> See `docs/session-handoff.md` "Session 49 continuation" for the
+> resolution of each, including the lazy-start design attempt for #2
+> that was implemented end-to-end and reverted in favour of an
+> eager-spawn + hub-cached `bridge-error` design.
+>
+> Quick close-out:
+> - **#1** Substantive: `SplitOverride bool → *bool`. Pinned by
+>   `TestPipeline_DecodesSplitOff`.
+> - **#2** Substantive: hub `lastBridgeError` cache replays startup
+>   errors to late subscribers. Pinned by
+>   `TestHub_CachesBridgeErrorForLateSubscriber`. ADR 0019 + ADR 0010
+>   updated to document the cache exception.
+> - **#3** Substantive: pipeline-exit defer reordered (clear
+>   `activeClient` under mu BEFORE `client.Close()`).
+> - **#4** Substantive: INIT + READ encoded BEFORE `s.openClient` for
+>   fast-fail symmetry on missing rigdef commands.
+> - **#5** Polish: `time.Sleep(20ms)` → poll on `recordedWrites()`.
+> - **#6** Polish: boundary test reverse-direction → `filepath.WalkDir`.
+> - **#7** Polish: `delimiterFromString` errors on empty input rather
+>   than relying on `serial.newPort`'s private `\r` fallback.
+> - **#8** Polish: `Service.stopped` flag; `Start`-after-`Stop` no-ops.
+>   Pinned by `TestStart_AfterStop_NoOps`.
+> - **#9** Polish: per-pipeline-instance identity-verify scope
+>   doc-commented inline.
+> - **#10** Future affordance: debug-level decode log left as future
+>   work (silent skip matches the codec doc).
+>
+> 37 bridge tests pass; race-detector hammer (`-count=10`) clean;
+> `go vet` clean. The findings below are preserved as the reasoning
+> trail.
+
 Scope: `internal/bridge` package as it stands at commit `35aeda9` —
 covers the M3a.2 serial+CAT pipeline and the M3a.3 bootstrap-on-SSE-open
 work that landed on top. Supersedes

@@ -2,6 +2,8 @@
 
 **Status:** rewritten 2026-05-02 to reflect ADR 0013 (daemon owns the bridge as an internal subsystem) and ADR 0014 (upstream forwarding deferred). Supersedes the 2026-04-30 version of this doc, which described a two-process daemon-and-bridge-as-peers topology. The architectural separation that prior version protected (log/forward must not couple with rig state) is preserved at the **package-import graph** rather than the process boundary; see ADR 0013 for the reasoning.
 
+> **2026-05-10 banner — bridge v1 scope.** This document lists the bridge subsystem's *eventual* feature set (rigctld-compat TCP, current-state cache, PTT arbitration, etc.). [ADR 0019](../decisions/0019-bridge-subsystem-v1-design.md) settled the **v1 internal scope as much narrower**: read-only stateless filter (no rig-state cache — the only hub-cached slot is for `bridge-error` replay to late subscribers per the M3a.3 implementation), one frontend (SSE on `/v1/rig/events` for the logging SPA only), no PTT awareness, no inbound command path. rigctld-compat TCP and NDJSON Unix-socket frontends are deferred until a real driver appears. M3a.1 + M3a.2 + M3a.3 shipped 2026-05-10; M3a.4 (SPA consumer + live rig test) closes M3a. The topology described below is the *long-term* shape — read it alongside ADR 0019 for what's actually built today.
+
 ## Default topology — single-binary, single-origin
 
 For the dominant deployment shape (single operator, one rig, one shack PC) the daemon is one binary that owns:

@@ -547,6 +547,8 @@ Settled by ADR 0010 (wire shape) + ADR 0013 (topology) + ADR 0019
 
 #### M3a.1 — Package skeleton + config + SSE plumbing
 
+**Status: ✅ SHIPPED (session 48, 2026-05-10).**
+
 - New `internal/bridge/` package with `Service` lifecycle (`Initialize`
   → `Start(ctx)` → `Stop()`), DI-wired via `internal/iocdi`.
 - Config additions: `Bridge.Enabled` (default `true`), `Bridge.Serial.Port`,
@@ -565,6 +567,8 @@ stub events when `bridge.enabled: true`; route doesn't exist when
 `false`. Daemon starts/stops cleanly in both configurations.
 
 #### M3a.2 — Serial + CAT pipeline
+
+**Status: ✅ SHIPPED (session 49, 2026-05-10).**
 
 - `internal/bridge/Service.Start(ctx)` opens the serial port via
   `internal/serial` and starts an AUTO-mode read loop.
@@ -585,14 +589,28 @@ event.
 
 #### M3a.3 — Pipeline → SSE + bootstrap poll + error events
 
+**Status: ✅ SHIPPED (session 49, 2026-05-10).**
+
 - Wire M3a.2's internal channel to M3a.1's SSE handler.
 - `http.Flusher.Flush()` after each event write.
 - **Bootstrap poll on SSE-open** (ADR 0019): on each new SSE connection,
-  send a CAT poll command (Yaesu/Kenwood `IF;`, Icom CI-V equivalent)
-  via `internal/cat`, forward response as the first SSE event.
+  send a CAT poll command via `internal/cat`, forward response as
+  framed events. *Implementation note:* uses each rigdef's `READ`
+  command (single-name dispatch via `cat.Encode(def, "READ")`); for
+  Yaesu rigdefs that's `ID;FA;FB;ST;VS;MD0;MD1;PC;` — 8 framed
+  responses, each decoded and published as a partial `rig-state`. The
+  ADR 0019 example `IF;` was illustrative; the rigdef-driven shape
+  works identically for the SPA's catState merge. INIT redefined to
+  `AI1;` only (arms AUTO push state; identity now folded into READ).
 - `bridge-error` event emission for operator-actionable conditions
-  (port permission denied, rig identification failed, baud-rate
-  mismatch). NOT for transient retries.
+  (port permission denied, unknown driver, missing INIT/READ in
+  rigdef, INIT write failure, identity mismatch — once per
+  pipeline-instance). NOT for transient retries.
+- **Hub-cached startup bridge-errors** (review #2): `hub.lastBridgeError`
+  caches the most recent `EventBridgeError`; new subscribers receive
+  it as their first event so a SPA tab opening AFTER a startup
+  failure (typo'd driver, permission denied) still gets the toast.
+  Per-Service-instance lifetime; never cleared within a Service.
 - Multi-subscriber fan-out tested with 5+ concurrent SSE clients.
 
 **Acceptance:** stub rig + multiple concurrent `curl -N` clients all

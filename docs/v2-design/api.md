@@ -26,7 +26,7 @@
 | Future `frontend/config/` | 2+ | Configuration editor. Reads/writes operator config via daemon `GET/PUT /v1/config` (replacing the v1 edit-the-file workflow). Not yet built. | Optional. |
 | `cmd/importer` | 2 | ADIF bulk import from historical logs. One-shot CLI, submits N QSOs and exits. | No. |
 | `cmd/udp-bridge` | 3 | Generic UDP-to-daemon bridge. Listens on UDP for ADIF-formatted payloads and forwards them to the daemon's submit endpoint. Not WSJT-X-specific. | No. |
-| `internal/bridge` (daemon subsystem) | 2 | Rig-control subsystem per ADR 0013. Hosts `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT, PTT arbitration. In-process by default; split-host (`cmd/bridge`) is opt-in. Not a daemon-API consumer in the same sense — it's part of the same binary. | Producer. |
+| `internal/bridge` (daemon subsystem) | 2 | Rig-control subsystem per ADR 0013 + ADR 0019. Hosts `/v1/rig/events` SSE for the logging SPA. **v1 is read-only** — rig pushes state via AUTO-mode CAT, bridge filters and forwards. NOT in v1: PTT, inbound command path, rigctld-compat TCP, NDJSON Unix-socket frontend, persistent rig-state cache (one hub-cached slot for `bridge-error` replay to late subscribers is the only exception). M3a.1+M3a.2+M3a.3 shipped 2026-05-10; M3a.4 (SPA consumer) is the next milestone. In-process by default; split-host (`cmd/bridge`) is opt-in and parked. Not a daemon-API consumer in the same sense — it's part of the same binary. | Producer. |
 
 ### Non-consumers (deliberate exclusions)
 

@@ -68,6 +68,15 @@ Concretely:
   Kenwood `IF;` for VFO+mode+status, Icom CI-V equivalent), waits for
   the response, decodes it, emits as the first SSE event. Then
   continues passive forwarding. No state held between connections.
+  *Implementation update (M3a.3, 2026-05-10):* the bootstrap is
+  rigdef-driven via `cat.Encode(def, "READ")` rather than a hardcoded
+  `IF;`. For both shipping Yaesu rigdefs that's
+  `ID;FA;FB;ST;VS;MD0;MD1;PC;` (8 framed responses, each decoded as a
+  partial `rig-state` event the SPA's `catState` merge handles
+  identically to a single composite IF response). `INIT` was
+  redefined to `AI1;` only — arming AUTO push state, with identity
+  folded into `READ`. The architectural intent ("active poll on
+  connect") is unchanged.
 - **Last-known values persistence is SPA-side.** ADR 0010 had the bridge
   cache "survive `rig-disconnected`" so the SPA could show last-known
   values. The SPA already does this — `catState` is a Svelte 5 `$state`
@@ -80,6 +89,23 @@ This is a revision of ADR 0010's "Bridge-side current-state cache"
 section. The wire shape on `/v1/rig/events` is unchanged (same three
 event types, same payload format, same merge-into-`catState` semantic);
 the bridge's *internal* implementation no longer maintains a cache.
+
+*Implementation update (M3a.3, 2026-05-10):* the hub holds one cached
+slot — `lastBridgeError *Event` — that replays the most recent
+`EventBridgeError` to every new subscriber as their first event.
+This is a deliberate exception to "no cache": rig state is not
+cached (the rule above stands), but operator-actionable bridge
+errors fired before any SSE client connected (e.g. typo'd
+`bridge.cat.driver` at daemon startup) need to reach the SPA tab
+that opens later. Without the cache, startup-time `bridge-error`
+events fire to zero subscribers and the operator gets blank UI with
+no signal. Considered alternative (lazy-start the pipeline on first
+Subscribe) was implemented end-to-end and reverted: a one-shot
+spawn latch meant tab refresh after a startup-failure saw blank
+UI, and "daemon holds the rig from start" matches operator
+expectation better than "rig acquired only when SPA happens to be
+open." Cache lifetime is per-Service-instance (fresh hub per daemon
+restart); never cleared within a Service's lifetime.
 
 ### One SSE frontend, others deferred
 
