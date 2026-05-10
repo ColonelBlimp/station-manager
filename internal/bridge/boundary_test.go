@@ -3,6 +3,7 @@ package bridge_test
 import (
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,12 +73,15 @@ func TestPackageBoundary_NoStorageOrForwarderImports(t *testing.T) {
 // internal/bridge. Catches the failure mode where rig-state
 // knowledge leaks into log/forward (or any other) code.
 //
-// Walks every directory under internal/ at depth 1, skipping
-// internal/bridge itself + the rig-side allowlist (cat, serial —
-// these are bridge dependencies but the dependency goes the other
-// way: bridge imports them). Generalised from a hard-coded
-// {sqlite, forwarding, qsoservice} list per the 2026-05-10 review
-// (#5) so a future internal/X package gets enforcement for free.
+// Walks every directory under internal/ to unbounded depth via
+// filepath.WalkDir, skipping internal/bridge itself + the rig-side
+// allowlist (cat, serial — these are bridge dependencies but the
+// dependency goes the other way: bridge imports them). Generalised
+// from a hard-coded {sqlite, forwarding, qsoservice} list per the
+// 2026-05-10 review (#5); switched to WalkDir per the
+// internal-bridge-pipeline.md review (#6) so a future package
+// nested four-or-more levels deep is still covered without manual
+// loop-extension.
 //
 // Allowlist entries should be rare; each one is a deliberate "this
 // package is on the rig-side of the boundary, importing bridge is
@@ -108,40 +112,17 @@ func TestReverseBoundary_NoBridgeImportsFromOtherInternalPackages(t *testing.T) 
 		if _, skip := allowlist[base]; skip {
 			continue
 		}
-		// Walk recursively so sub-packages (e.g.
-		// internal/forwarding/qrz) are covered too.
-		matches, err := filepath.Glob(filepath.Join(dir, "**/*.go"))
-		if err != nil {
-			t.Fatalf("glob %s: %v", dir, err)
-		}
-		// Glob with ** isn't standard; fall back to manual walk.
-		topMatches, err := filepath.Glob(filepath.Join(dir, "*.go"))
-		if err != nil {
-			t.Fatalf("glob %s top: %v", dir, err)
-		}
-		matches = append(matches, topMatches...)
-		// Sub-directories one level deep.
-		subdirs, err := filepath.Glob(filepath.Join(dir, "*/"))
-		if err == nil {
-			for _, sub := range subdirs {
-				subMatches, _ := filepath.Glob(filepath.Join(sub, "*.go"))
-				matches = append(matches, subMatches...)
-				// One more level (e.g. internal/forwarding/qrz/...)
-				subSubdirs, _ := filepath.Glob(filepath.Join(sub, "*/"))
-				for _, sub2 := range subSubdirs {
-					sub2Matches, _ := filepath.Glob(filepath.Join(sub2, "*.go"))
-					matches = append(matches, sub2Matches...)
-				}
-			}
-		}
-
-		for _, path := range matches {
-			if strings.HasSuffix(path, "_test.go") {
-				continue
-			}
-			f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				t.Fatalf("parse %s: %v", path, err)
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, perr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if perr != nil {
+				t.Errorf("parse %s: %v", path, perr)
+				return nil
 			}
 			for _, imp := range f.Imports {
 				pkg := strings.Trim(imp.Path.Value, `"`)
@@ -149,6 +130,10 @@ func TestReverseBoundary_NoBridgeImportsFromOtherInternalPackages(t *testing.T) 
 					t.Errorf("%s: forbidden import %q (ADR 0013 package boundary — only the api wiring layer + rig-side packages may import internal/bridge)", path, pkg)
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
 		}
 	}
 }

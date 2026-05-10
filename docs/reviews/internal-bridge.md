@@ -1,5 +1,11 @@
 # `internal/bridge` code review (session, 2026-05-10)
 
+> **Superseded by [`internal-bridge-pipeline.md`](internal-bridge-pipeline.md).**
+> All eight findings below were resolved by commit `35aeda9`. The
+> follow-up review re-walks the package against the current pipeline +
+> bootstrap implementation; read it for the live findings. This file
+> is preserved as the historical record of the M3a.1-stub state.
+
 Scope: `internal/bridge` package and its direct dependencies as wired
 into `cmd/smd` + `internal/api`. Reviewed at commit `d3ac8cf`
 ("Introduce bridge subsystem (ADR 0013, ADR 0019)").

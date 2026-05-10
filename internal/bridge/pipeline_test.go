@@ -168,7 +168,7 @@ func TestPipeline_DecodesModeAndSplit(t *testing.T) {
 			switch {
 			case p.Mode == "USB":
 				got["mode"] = true
-			case p.SplitOverride:
+			case p.SplitOverride != nil && *p.SplitOverride:
 				got["split"] = true
 			case p.SelectedVfo == "B":
 				got["vfo"] = true
@@ -178,6 +178,39 @@ func TestPipeline_DecodesModeAndSplit(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("only saw %v of 4 expected events", got)
 		}
+	}
+}
+
+// TestPipeline_DecodesSplitOff covers the substantive bug from the
+// 2026-05-10 internal-bridge-pipeline review (#1): a rig push of
+// `ST0` (split OFF) must reach the SPA on the wire, not be silently
+// dropped by JSON `omitempty`. With SplitOverride as *bool, the
+// payload carries `splitOverride: false` so the SPA's catState merge
+// updates correctly. Pre-fix the field collapsed to nothing on the
+// wire because `bool false` is `omitempty`-equivalent to "not set".
+func TestPipeline_DecodesSplitOff(t *testing.T) {
+	s, fake := newPipelineTestService(t)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	fake.feedLine([]byte("ST0"))
+
+	select {
+	case evt := <-ch:
+		p := evt.Payload.(RigStatePayload)
+		if p.SplitOverride == nil {
+			t.Fatal("SplitOverride is nil; want non-nil pointer carrying false")
+		}
+		if *p.SplitOverride {
+			t.Errorf("SplitOverride = true, want false (rig pushed ST0)")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no rig-state event within 1s")
 	}
 }
 
@@ -313,9 +346,23 @@ func TestPipeline_TerminalSerialErrorEmitsDisconnect(t *testing.T) {
 	ch, unsub := s.Subscribe()
 	defer unsub()
 
-	// Give the pipeline a moment to enter ReadResponseBytes (it has
-	// to send INIT first, which races against Close on a busy CI).
-	time.Sleep(20 * time.Millisecond)
+	// Wait for the pipeline's INIT write to land before we Close —
+	// a loaded CI agent can take longer than a fixed sleep would
+	// allow, and Close-before-INIT would surface as a bridge-error
+	// (INIT-write failed) rather than the rig-disconnected this
+	// test asserts. Poll on recordedWrites mirrors the pattern
+	// other pipeline tests use. Per internal-bridge-pipeline.md
+	// review #5.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(fake.recordedWrites()) < 1 {
+		t.Fatal("pipeline did not send INIT within 1s")
+	}
 	if err := fake.Close(); err != nil {
 		t.Fatalf("fake.Close: %v", err)
 	}
@@ -334,8 +381,9 @@ func TestPipeline_TerminalSerialErrorEmitsDisconnect(t *testing.T) {
 }
 
 // TestPipeline_UnknownDriverExitsCleanly covers the misconfigured-
-// driver path: cat.Lookup returns ok=false, the pipeline logs and
-// exits without panicking. Stop still works.
+// driver path: cat.Lookup returns ok=false, the pipeline logs +
+// publishes bridge-error and exits without panicking. Stop still
+// works.
 func TestPipeline_UnknownDriverExitsCleanly(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
@@ -446,7 +494,9 @@ func TestPipeline_TriggerBootstrap_NoOpWhenPipelineNotRunning(t *testing.T) {
 // TestPipeline_BridgeError_UnknownDriver covers the operator-typo
 // path: bridge.cat.driver names a rig that's not in the embedded
 // rigdb. Pipeline publishes a bridge-error event with the bad
-// driver name in the message and exits cleanly.
+// driver name in the message and exits cleanly. Subscribe-after-
+// Start works because the hub caches the bridge-error and replays
+// it to the late subscriber.
 func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
@@ -458,13 +508,13 @@ func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 	}
 	installFakeSerial(s)
 
-	ch, unsub := s.Subscribe()
-	defer unsub()
-
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
 
 	select {
 	case evt, ok := <-ch:
@@ -486,6 +536,70 @@ func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 	}
 }
 
+// TestHub_CachesBridgeErrorForLateSubscriber pins the cache contract
+// from review #2: startup-time bridge-errors (unknown driver, port
+// permission, etc.) fire while no SSE client is connected, but a
+// SPA tab opening later still receives the cached error as its
+// first event so the operator gets the toast.
+//
+// Eager-start: pipeline goroutine spawns at Service.Start, runs
+// cat.Lookup, fails, calls publishBridgeError, exits. Late
+// subscribe replays the cached event.
+func TestHub_CachesBridgeErrorForLateSubscriber(t *testing.T) {
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Cat:     types.BridgeCatConfig{Driver: "unknown-on-purpose"},
+	}, &logging.Service{})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	installFakeSerial(s)
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	// Give the eager-spawn goroutine time to fail and publish the
+	// bridge-error before we subscribe. Without this sleep the
+	// race is undefined; with it, we deterministically test the
+	// late-subscribe-sees-cached-error path.
+	time.Sleep(50 * time.Millisecond)
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	select {
+	case evt, ok := <-ch:
+		if !ok {
+			t.Fatal("subscriber channel closed before cached bridge-error")
+		}
+		if evt.Name != EventBridgeError {
+			t.Errorf("evt.Name = %q, want %q", evt.Name, EventBridgeError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late subscriber did not see cached bridge-error within 1s")
+	}
+
+	// Second late subscriber should also see the cached error —
+	// the cache isn't consumed by Subscribe.
+	ch2, unsub2 := s.Subscribe()
+	defer unsub2()
+
+	select {
+	case evt, ok := <-ch2:
+		if !ok {
+			t.Fatal("second subscriber channel closed before cached bridge-error")
+		}
+		if evt.Name != EventBridgeError {
+			t.Errorf("second subscriber evt.Name = %q, want %q", evt.Name, EventBridgeError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second late subscriber did not see cached bridge-error within 1s")
+	}
+}
+
 // TestPipeline_BridgeError_OpenFailure covers the port-not-available
 // path (operator typo'd the device, permission denied, etc.):
 // openClient returns an error → bridge-error event with the cause →
@@ -503,13 +617,13 @@ func TestPipeline_BridgeError_OpenFailure(t *testing.T) {
 		return nil, errOpenFailed
 	}
 
-	ch, unsub := s.Subscribe()
-	defer unsub()
-
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
 
 	select {
 	case evt, ok := <-ch:

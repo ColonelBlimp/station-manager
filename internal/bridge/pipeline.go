@@ -80,10 +80,21 @@ func (s *Service) runPipeline(ctx context.Context) {
 		return
 	}
 
-	// Pre-encode the bootstrap (READ) command before opening the
-	// port. If the rigdef lacks READ, fail fast — silent bootstrap
-	// would mean SPA tabs see empty fields until the operator
-	// wiggles the dial.
+	// Pre-encode INIT and READ before touching hardware. Both encodes
+	// are pure (no I/O); if either rigdef entry is missing, fail fast
+	// without acquiring the port. Encode-after-open would mean a
+	// permission-denied stall on a misconfigured rigdef. Reordered
+	// per internal-bridge-pipeline.md review #4.
+	initBytes, err := cat.Encode(def, initCommandName)
+	if err != nil {
+		s.logger.ErrorWith().
+			Err(err).
+			Str("driver", def.ID).
+			Str("command", initCommandName).
+			Msg("bridge: rigdef has no INIT command; pipeline not started")
+		s.publishBridgeError("rigdef " + def.ID + " has no INIT command; cannot arm AUTO mode")
+		return
+	}
 	readBytes, err := cat.Encode(def, readCommandName)
 	if err != nil {
 		s.logger.ErrorWith().
@@ -106,23 +117,20 @@ func (s *Service) runPipeline(ctx context.Context) {
 		return
 	}
 	defer func() {
-		_ = client.Close()
+		// Clear activeClient under mu BEFORE closing the port. This
+		// makes the invariant "if a TriggerBootstrap caller captured
+		// a non-nil cl, the underlying port is still open"
+		// enforceable by ordering rather than incidental. A late
+		// caller that races us takes the mu, sees nil, returns the
+		// no-op branch — no chance of writing to a closed port.
+		// Reordered per internal-bridge-pipeline.md review #3.
 		s.mu.Lock()
 		s.activeClient = nil
 		s.bootstrapBytes = nil
 		s.mu.Unlock()
+		_ = client.Close()
 	}()
 
-	initBytes, err := cat.Encode(def, initCommandName)
-	if err != nil {
-		s.logger.ErrorWith().
-			Err(err).
-			Str("driver", def.ID).
-			Str("command", initCommandName).
-			Msg("bridge: rigdef has no INIT command; pipeline not started")
-		s.publishBridgeError("rigdef " + def.ID + " has no INIT command; cannot arm AUTO mode")
-		return
-	}
 	if err := client.WriteCommandBytes(ctx, initBytes); err != nil {
 		s.logger.ErrorWith().
 			Err(err).
@@ -198,6 +206,14 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		// initial INIT if any rig replies to AI1;). Mismatch is an
 		// operator-actionable misconfiguration — `bridge.cat.driver`
 		// names a different rig than the one actually wired up.
+		//
+		// Scope is per-pipeline-instance, NOT per-physical-rig: a
+		// hot-swap (park rig 1, plug in rig 2 on the same port
+		// without restarting the daemon) won't re-verify against
+		// the new identity. Acceptable for v1 — cable yank surfaces
+		// as a terminal serial error and the pipeline exits, so a
+		// daemon restart is already the recovery path. Per the
+		// 2026-05-10 internal-bridge-pipeline review (#9).
 		if !identityVerified {
 			if v, ok := status["IDENTITY"]; ok {
 				identityVerified = true
@@ -298,7 +314,11 @@ func mapStatusToPayload(status cat.Status) (RigStatePayload, bool) {
 		populated = true
 	}
 	if v, ok := status["SPLIT"]; ok && v != "" {
-		p.SplitOverride = strings.EqualFold(v, "ON")
+		// *bool rather than bool: the rig pushing OFF must not be
+		// indistinguishable on the wire from "not pushed this frame"
+		// — see RigStatePayload doc-comment.
+		split := strings.EqualFold(v, "ON")
+		p.SplitOverride = &split
 		populated = true
 	}
 	if v, ok := status["TXPWR"]; ok && v != "" {
@@ -402,12 +422,18 @@ func stopBitsFromInt(n int) (bugst.StopBits, error) {
 }
 
 // delimiterFromString extracts the single-byte line delimiter from
-// the rigdef's string form. Empty string defaults to '\r' to match
-// serial.newPort's fallback. Multi-byte delimiters aren't supported
-// by serial.Port today, so a longer string is a config error.
+// the rigdef's string form. The bridge requires every rigdef to
+// declare an explicit delimiter — leaving it empty would lean on a
+// serial-package-private fallback (zero byte → '\r'), which is the
+// kind of cross-package contract that drifts silently. Per the
+// 2026-05-10 internal-bridge-pipeline review (#7), an empty value
+// is a rigdef config error and surfaces loudly at startup. Both
+// shipping rigdefs declare ';' so this branch is unreachable for
+// supported drivers; it guards against a future rigdef that forgets
+// the field.
 func delimiterFromString(s string) (byte, error) {
 	if s == "" {
-		return 0, nil // serial.newPort defaults zero to '\r'
+		return 0, stderr.New("bridge: rigdef serial.line_delimiter is required (no implicit default)")
 	}
 	if len(s) != 1 {
 		return 0, stderr.New("bridge: line_delimiter must be a single byte, got " + strconv.Quote(s))

@@ -25,6 +25,23 @@ type hub struct {
 	subs      map[int64]chan Event
 	nextSubID int64
 	closed    bool
+
+	// lastBridgeError caches the most recent EventBridgeError so a
+	// subscriber that connects AFTER the pipeline emitted the error
+	// (typical case: daemon starts with a typo'd driver, fails
+	// immediately, SPA tab opens 30s later) still sees the toast.
+	// Without the cache, startup-time bridge-errors fire to zero
+	// subscribers and the operator gets blank UI with no signal.
+	//
+	// Scope is per-Service-instance (hub is owned by Service, fresh
+	// hub on daemon restart). New cache entry overwrites previous;
+	// no clearing within a Service's lifetime — once a bridge-error
+	// is observed it stays observable, on the principle that
+	// "operator-actionable error" is more valuable to surface than
+	// to forget. Per the 2026-05-10 internal-bridge-pipeline review
+	// (#2): chosen over lazy-start because operators expect the
+	// daemon to hold the rig from start.
+	lastBridgeError *Event
 }
 
 func newHub() *hub {
@@ -43,6 +60,12 @@ func (h *hub) publish(evt Event) {
 	defer h.mu.Unlock()
 	if h.closed {
 		return
+	}
+	// Cache bridge-error events so late subscribers (SPA tab opening
+	// after a startup failure) still see the toast.
+	if evt.Name == EventBridgeError {
+		cp := evt
+		h.lastBridgeError = &cp
 	}
 	for id, ch := range h.subs {
 		select {
@@ -76,6 +99,16 @@ func (h *hub) subscribe() (<-chan Event, func()) {
 	id := h.nextSubID
 	h.nextSubID++
 	h.subs[id] = ch
+
+	// Replay the cached bridge-error (if any) to the new subscriber
+	// as their first event. Non-blocking send is safe: the channel
+	// was just allocated with cap=64 so the buffer is empty.
+	if h.lastBridgeError != nil {
+		select {
+		case ch <- *h.lastBridgeError:
+		default:
+		}
+	}
 
 	unsub := func() {
 		h.mu.Lock()

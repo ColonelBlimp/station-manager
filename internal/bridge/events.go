@@ -56,6 +56,15 @@ type Event struct {
 // Frequency in Hz; mode/subMode follow ADIF naming; power in raw rig
 // watts (the SPA applies the amp multiplier when it derives
 // effectivePower per ADR 0009).
+//
+// SplitOverride is *bool rather than bool so the wire can distinguish
+// "rig pushed split=OFF" (`splitOverride: false`) from "rig didn't
+// push split this frame" (field omitted). The plain-bool form
+// collapses the OFF case into the omitted case via `omitempty`,
+// which would silently drop a legitimate state change. Other fields
+// (VfoA, VfoB, Power) stay non-pointer because 0 is never a
+// legitimate rig value for them — `omitempty` correctly treats 0 as
+// "not pushed."
 type RigStatePayload struct {
 	RigIdentity   string `json:"rigIdentity,omitempty"`
 	VfoA          int64  `json:"vfoA,omitempty"`
@@ -63,7 +72,7 @@ type RigStatePayload struct {
 	Mode          string `json:"mode,omitempty"`
 	SubMode       string `json:"subMode,omitempty"`
 	SelectedVfo   string `json:"selectedVfo,omitempty"`
-	SplitOverride bool   `json:"splitOverride,omitempty"`
+	SplitOverride *bool  `json:"splitOverride,omitempty"`
 	Power         int    `json:"power,omitempty"`
 }
 

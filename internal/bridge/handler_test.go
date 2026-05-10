@@ -81,7 +81,7 @@ func TestHTTPHandler_StreamsPipelineEvents(t *testing.T) {
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
 	resp, err := srv.Client().Do(req)
@@ -89,6 +89,24 @@ func TestHTTPHandler_StreamsPipelineEvents(t *testing.T) {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
+
+	// Wait for the handler to subscribe + bootstrap before feeding.
+	// Do() returns as soon as response headers are flushed (which
+	// happens BEFORE Subscribe in the handler), so feedLine could
+	// otherwise race the registration and publish to zero
+	// subscribers. The bootstrap READ write landing in fake.writes
+	// (writes[0]=INIT from pipeline startup, writes[1]=READ from
+	// bootstrap) proves Subscribe completed.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(fake.recordedWrites()) < 2 {
+		t.Fatal("handler did not subscribe + bootstrap within 1s")
+	}
 
 	// FT-710 ID 0800 → "FT-710" via the rigdef value-mapping.
 	fake.feedLine([]byte("ID0800"))
@@ -139,6 +157,19 @@ func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
+	// Wait for the handler to subscribe + bootstrap (writes[0]=INIT,
+	// writes[1]=bootstrap READ) before feeding — Do() returns as
+	// soon as headers flush, which precedes Subscribe in the
+	// handler. Without this gate, feedLine can race the
+	// subscription and publish to zero subscribers.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
 	// Drive at least one event through so we know the handler is in
 	// the select loop with an active subscription.
 	fake.feedLine([]byte("ID0800"))
@@ -181,8 +212,9 @@ func TestHTTPHandler_BootstrapFiresOnSubscribe(t *testing.T) {
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
-	// Wait for the pipeline's INIT write so we can distinguish it
-	// from the bootstrap READ that fires on SSE-open.
+	// Pipeline spawns eagerly at Start, so INIT is sent before any
+	// HTTP GET. Wait for it so we can distinguish INIT (writes[0])
+	// from the bootstrap READ that fires on SSE-open (writes[1]).
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if len(fake.recordedWrites()) >= 1 {
@@ -215,6 +247,9 @@ func TestHTTPHandler_BootstrapFiresOnSubscribe(t *testing.T) {
 	writes := fake.recordedWrites()
 	if len(writes) < 2 {
 		t.Fatalf("expected at least 2 writes (INIT + bootstrap READ), got %d", len(writes))
+	}
+	if string(writes[0]) != "AI1;" {
+		t.Errorf("first write = %q, want %q (INIT)", writes[0], "AI1;")
 	}
 	if string(writes[1]) != "ID;FA;FB;ST;VS;MD0;MD1;PC;" {
 		t.Errorf("bootstrap write = %q, want %q", writes[1], "ID;FA;FB;ST;VS;MD0;MD1;PC;")

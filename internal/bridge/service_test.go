@@ -201,6 +201,39 @@ func TestStop_Idempotent(t *testing.T) {
 	}
 }
 
+// TestStart_AfterStop_NoOps pins the post-Stop terminal-state rule
+// per the 2026-05-10 internal-bridge-pipeline review (#8). A Stop()
+// call on a never-Start()ed Service marks the lifecycle as stopped;
+// any subsequent Start() returns silently rather than spinning up a
+// pipeline that has nowhere to publish (hub is closed, Subscribe
+// returns an already-closed channel). No realistic call site does
+// this, but the lifecycle pattern says all transitions should be
+// sane.
+func TestStart_AfterStop_NoOps(t *testing.T) {
+	s := newTestService(t, types.BridgeConfig{Enabled: false})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Errorf("Start after Stop: %v", err)
+	}
+	// Subscribe should return a closed channel; if Start lied and
+	// spun up a pipeline, the channel might be open.
+	ch, unsub := s.Subscribe()
+	defer unsub()
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Error("post-Stop+Start Subscribe yielded an event; want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("post-Stop+Start Subscribe channel neither closed nor delivered")
+	}
+}
+
 // TestSubscribe_AfterStop_ReturnsClosedChannel covers the late-
 // subscriber edge case: a SPA tab loads against a daemon that's mid-
 // shutdown, opens an EventSource, the bridge has already stopped.

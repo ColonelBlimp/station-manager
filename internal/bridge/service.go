@@ -17,13 +17,22 @@ import (
 //
 // Lifecycle: Initialize() validates config; Start(ctx) spawns the
 // publisher goroutine; Stop() cancels and waits. All idempotent per
-// the project's service-lifecycle pattern.
+// the project's service-lifecycle pattern. The pipeline holds the
+// rig's serial port for the daemon's full lifetime — operators
+// expect "smd is running, rig is connected" not "rig only acquired
+// when a SPA tab happens to be open."
+//
+// Startup-time bridge-error events (unknown driver, port permission
+// denied, etc.) fire to a hub-cached slot in addition to current
+// subscribers, so a SPA tab opening AFTER the pipeline failed at
+// startup still sees the toast. See hub.lastBridgeError.
 //
 // When cfg.Enabled is false, Initialize/Start/Stop are still safe to
 // call but no goroutine is spawned and no events are published.
-// Subscribe() returns an already-closed channel so SSE handlers exit
-// cleanly. This is the master-smd / headless deployment shape — the
-// daemon binary still embeds the bridge subsystem but it stays inert.
+// Subscribe() returns a real (but never-published-to) channel. SSE
+// handlers see an empty stream — correct behaviour for the master-
+// smd / headless deployment shape where the daemon binary embeds
+// the bridge subsystem but it stays inert.
 type Service struct {
 	cfg    types.BridgeConfig
 	logger *logging.Service
@@ -38,11 +47,12 @@ type Service struct {
 
 	mu      sync.Mutex
 	started bool
+	stopped bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 
 	// activeClient is the live serial client owned by runPipeline.
-	// Set once the port opens, cleared on pipeline exit. Used by
+	// Set after the port opens, cleared on pipeline exit. Used by
 	// TriggerBootstrap so the SSE handler can write the rigdef's
 	// READ command without owning its own client. Mu-guarded for
 	// the pipeline-goroutine ↔ handler-goroutines race.
@@ -103,15 +113,27 @@ func (s *Service) Initialize() error {
 // lifecycle context — when it's cancelled (or Stop is called), the
 // subsystem stops publishing and waits for in-flight work to finish.
 //
+// The pipeline goroutine spawns eagerly so the rig's serial port is
+// held for the daemon's full lifetime. Startup-time bridge-error
+// events that fire before any SSE client connects are cached by the
+// hub and replayed to the first late subscriber, so a SPA tab
+// opening after a config typo still sees the toast.
+//
 // Idempotent — repeat calls are no-ops once started.
 //
 // When cfg.Enabled is false, Start succeeds without spawning anything.
 // The hub is still active so Subscribe doesn't error, but no events
-// will ever flow. SSE handlers see an empty stream — correct behaviour
-// for "bridge disabled".
+// will ever flow. SSE handlers see an empty stream.
+//
+// Stop-before-Start puts the Service in a terminal state — a
+// subsequent Start returns silently rather than spinning up a
+// pipeline that has nowhere to publish (hub is closed).
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopped {
+		return nil
+	}
 	if s.started {
 		return nil
 	}
@@ -143,6 +165,7 @@ func (s *Service) Stop() error {
 
 		s.mu.Lock()
 		cancel := s.cancel
+		s.stopped = true
 		s.mu.Unlock()
 
 		if cancel != nil {
@@ -169,10 +192,14 @@ func (s *Service) Enabled() bool {
 // channel + idempotent unsubscribe. Channel closes on unsubscribe,
 // slow-subscriber eviction, or Service.Stop.
 //
+// If the hub has cached a startup-time bridge-error (e.g. unknown
+// driver, port permission denied that fired before this subscriber
+// connected), it is replayed as the new subscriber's first event so
+// the SPA tab still toasts the operator-actionable message.
+//
 // Subscribing to a stopped (or never-started) Service returns an
 // already-closed channel so the SSE handler's range loop exits
-// immediately — SPA tab opening against a disabled bridge gets a
-// clean empty stream rather than a hang.
+// immediately.
 func (s *Service) Subscribe() (<-chan Event, func()) {
 	return s.hub.subscribe()
 }
