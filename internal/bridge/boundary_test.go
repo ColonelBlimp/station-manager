@@ -66,28 +66,75 @@ func TestPackageBoundary_NoStorageOrForwarderImports(t *testing.T) {
 	}
 }
 
-// TestReverseBoundary_NoBridgeImportsFromStorageOrForwarder is the
-// other direction of ADR 0013's discipline: storage / forwarder /
-// qsoservice MUST NOT import internal/bridge. Catches the failure
-// mode where rig-state knowledge leaks into log/forward code.
+// TestReverseBoundary_NoBridgeImportsFromOtherInternalPackages
+// enforces the other direction of ADR 0013's discipline: no
+// internal/* package outside the rig-side allowlist may import
+// internal/bridge. Catches the failure mode where rig-state
+// knowledge leaks into log/forward (or any other) code.
 //
-// We walk the relevant package directories and look for
-// `internal/bridge` in their imports. Test files excluded.
-func TestReverseBoundary_NoBridgeImportsFromStorageOrForwarder(t *testing.T) {
+// Walks every directory under internal/ at depth 1, skipping
+// internal/bridge itself + the rig-side allowlist (cat, serial —
+// these are bridge dependencies but the dependency goes the other
+// way: bridge imports them). Generalised from a hard-coded
+// {sqlite, forwarding, qsoservice} list per the 2026-05-10 review
+// (#5) so a future internal/X package gets enforcement for free.
+//
+// Allowlist entries should be rare; each one is a deliberate "this
+// package is on the rig-side of the boundary, importing bridge is
+// fine" decision. Add to the allowlist only when adding a real
+// rig-side dependency, not as a workaround for an accidental
+// import that should be refactored.
+func TestReverseBoundary_NoBridgeImportsFromOtherInternalPackages(t *testing.T) {
 	bridgePkg := "github.com/ColonelBlimp/station-manager/internal/bridge"
 
-	dirs := []string{
-		"../database/sqlite",
-		"../forwarding",
-		"../qsoservice",
+	// Packages that are intentionally on the rig-side of the
+	// boundary. internal/api is allowed to import bridge because
+	// it's the HTTP-server wiring layer that registers the
+	// /v1/rig/events route — the one shared-imports exception ADR
+	// 0013 names.
+	allowlist := map[string]struct{}{
+		"bridge": {}, // self
+		"api":    {}, // HTTP wiring layer registers the SSE route
+	}
+
+	entries, err := filepath.Glob("../*")
+	if err != nil {
+		t.Fatalf("glob internal/*: %v", err)
 	}
 
 	fset := token.NewFileSet()
-	for _, dir := range dirs {
-		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	for _, dir := range entries {
+		base := filepath.Base(dir)
+		if _, skip := allowlist[base]; skip {
+			continue
+		}
+		// Walk recursively so sub-packages (e.g.
+		// internal/forwarding/qrz) are covered too.
+		matches, err := filepath.Glob(filepath.Join(dir, "**/*.go"))
 		if err != nil {
 			t.Fatalf("glob %s: %v", dir, err)
 		}
+		// Glob with ** isn't standard; fall back to manual walk.
+		topMatches, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil {
+			t.Fatalf("glob %s top: %v", dir, err)
+		}
+		matches = append(matches, topMatches...)
+		// Sub-directories one level deep.
+		subdirs, err := filepath.Glob(filepath.Join(dir, "*/"))
+		if err == nil {
+			for _, sub := range subdirs {
+				subMatches, _ := filepath.Glob(filepath.Join(sub, "*.go"))
+				matches = append(matches, subMatches...)
+				// One more level (e.g. internal/forwarding/qrz/...)
+				subSubdirs, _ := filepath.Glob(filepath.Join(sub, "*/"))
+				for _, sub2 := range subSubdirs {
+					sub2Matches, _ := filepath.Glob(filepath.Join(sub2, "*.go"))
+					matches = append(matches, sub2Matches...)
+				}
+			}
+		}
+
 		for _, path := range matches {
 			if strings.HasSuffix(path, "_test.go") {
 				continue
@@ -99,7 +146,7 @@ func TestReverseBoundary_NoBridgeImportsFromStorageOrForwarder(t *testing.T) {
 			for _, imp := range f.Imports {
 				pkg := strings.Trim(imp.Path.Value, `"`)
 				if pkg == bridgePkg || strings.HasPrefix(pkg, bridgePkg+"/") {
-					t.Errorf("%s: forbidden import %q (ADR 0013 package boundary — storage/forwarder/qsoservice MUST NOT import bridge)", path, pkg)
+					t.Errorf("%s: forbidden import %q (ADR 0013 package boundary — only the api wiring layer + rig-side packages may import internal/bridge)", path, pkg)
 				}
 			}
 		}

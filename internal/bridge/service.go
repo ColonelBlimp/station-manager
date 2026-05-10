@@ -39,9 +39,19 @@ type Service struct {
 
 	mu      sync.Mutex
 	started bool
-	stopped bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+
+	// stopOnce + stopDone serialise concurrent Stop calls so the
+	// "Stop returned, therefore stopped" contract holds for every
+	// caller. The first Stop runs the teardown work and closes
+	// stopDone; subsequent (concurrent) Stops wait on stopDone before
+	// returning. Without this the second concurrent caller could see
+	// stopped=true and return while the first caller's wg.Wait /
+	// hub.close were still in flight, breaking the idempotency
+	// contract documented in Stop's doc-comment.
+	stopOnce sync.Once
+	stopDone chan struct{}
 }
 
 // New constructs a Service from the operator's bridge config and a
@@ -50,9 +60,10 @@ type Service struct {
 // edits — same pattern as internal/email.
 func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 	return &Service{
-		cfg:    cfg,
-		logger: logger,
-		hub:    newHub(),
+		cfg:      cfg,
+		logger:   logger,
+		hub:      newHub(),
+		stopDone: make(chan struct{}),
 	}
 }
 
@@ -107,25 +118,29 @@ func (s *Service) Start(ctx context.Context) error {
 
 // Stop cancels the parent context, waits for in-flight goroutines,
 // and closes the hub so any open SSE subscribers see a clean stream
-// end. Idempotent.
+// end. Idempotent under both sequential and concurrent calls — the
+// first Stop runs the teardown; subsequent callers (whether
+// sequential or racing) wait until the first has finished, then
+// return nil. "Stop returned, therefore stopped" holds for every
+// caller.
 func (s *Service) Stop() error {
-	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		return nil
-	}
-	s.stopped = true
-	cancel := s.cancel
-	s.mu.Unlock()
+	s.stopOnce.Do(func() {
+		defer close(s.stopDone)
 
-	if cancel != nil {
-		cancel()
-	}
-	s.wg.Wait()
-	s.hub.close()
-	if s.logger != nil {
-		s.logger.InfoWith().Msg("bridge: subsystem stopped")
-	}
+		s.mu.Lock()
+		cancel := s.cancel
+		s.mu.Unlock()
+
+		if cancel != nil {
+			cancel()
+		}
+		s.wg.Wait()
+		s.hub.close()
+		if s.logger != nil {
+			s.logger.InfoWith().Msg("bridge: subsystem stopped")
+		}
+	})
+	<-s.stopDone
 	return nil
 }
 

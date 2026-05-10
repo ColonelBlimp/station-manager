@@ -19,19 +19,17 @@ import (
 //
 // Uses an uninitialised &logging.Service{} — same noop-logger pattern
 // as service_test.go's newTestService.
-func newHandlerTestService(t *testing.T) (*Service, chan struct{}, *logging.Service) {
+func newHandlerTestService(t *testing.T) (*Service, chan struct{}) {
 	t.Helper()
 	prev := stubEventInterval
 	stubEventInterval = 20 * time.Millisecond
 	t.Cleanup(func() { stubEventInterval = prev })
 
-	logSvc := &logging.Service{}
-
 	s := New(types.BridgeConfig{
 		Enabled: true,
 		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
-	}, logSvc)
+	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -41,7 +39,7 @@ func newHandlerTestService(t *testing.T) (*Service, chan struct{}, *logging.Serv
 	t.Cleanup(func() { _ = s.Stop() })
 
 	shutdownCh := make(chan struct{})
-	return s, shutdownCh, logSvc
+	return s, shutdownCh
 }
 
 // TestHTTPHandler_ServesSSEHeaders confirms the handler sets the
@@ -49,8 +47,8 @@ func newHandlerTestService(t *testing.T) (*Service, chan struct{}, *logging.Serv
 // without these, browsers won't treat the response as an event
 // stream and EventSource will fail to parse anything.
 func TestHTTPHandler_ServesSSEHeaders(t *testing.T) {
-	s, shutdownCh, logSvc := newHandlerTestService(t)
-	srv := httptest.NewServer(s.HTTPHandler(shutdownCh, logSvc))
+	s, shutdownCh := newHandlerTestService(t)
+	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -80,8 +78,8 @@ func TestHTTPHandler_ServesSSEHeaders(t *testing.T) {
 // receives the M3a.1 stub events in proper SSE wire format. Reads
 // one event off the stream and checks the event-type and data lines.
 func TestHTTPHandler_StreamsStubEvents(t *testing.T) {
-	s, shutdownCh, logSvc := newHandlerTestService(t)
-	srv := httptest.NewServer(s.HTTPHandler(shutdownCh, logSvc))
+	s, shutdownCh := newHandlerTestService(t)
+	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -126,8 +124,8 @@ func TestHTTPHandler_StreamsStubEvents(t *testing.T) {
 // handler holds shutdown open until the graceful timeout. This test
 // closes shutdownCh and asserts the handler returns promptly.
 func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
-	s, shutdownCh, logSvc := newHandlerTestService(t)
-	srv := httptest.NewServer(s.HTTPHandler(shutdownCh, logSvc))
+	s, shutdownCh := newHandlerTestService(t)
+	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())

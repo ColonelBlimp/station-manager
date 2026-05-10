@@ -136,8 +136,15 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// EventSource. The bridge.Service.HTTPHandler closure subscribes
 	// to the bridge's internal hub for each new SSE connection;
 	// disconnect-safety + multi-subscriber fan-out are handled there.
+	//
+	// Wrapped with limitEventSubscribers — same cap (MaxEventSubscribers,
+	// default 16) as /v1/events. Without this, a misbehaving client
+	// could open unlimited rig SSE connections; limitConcurrent doesn't
+	// apply to SSE by design (long-lived). The two SSE endpoints share
+	// the cap because both consume the same "long-lived subscriber
+	// slot" resource.
 	if br != nil && br.Enabled() {
-		mux.Handle("GET /v1/rig/events", br.HTTPHandler(s.shutdownCh, logger))
+		mux.Handle("GET /v1/rig/events", s.limitEventSubscribers(br.HTTPHandler(s.shutdownCh)))
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

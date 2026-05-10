@@ -64,9 +64,11 @@ func TestEnabled_Reports_Cfg(t *testing.T) {
 
 // TestStart_Disabled_NoPublisher covers the master-smd / headless
 // shape: cfg.Enabled=false → Start succeeds without spawning the
-// publisher goroutine, Subscribe returns a still-open channel that
-// will close cleanly on Stop. SSE handlers see an empty stream until
-// they disconnect.
+// publisher goroutine. With no publisher, the subscriber channel
+// stays silent until the test deferred-cleanup runs Stop. The
+// channel-closes-on-Stop path is covered separately by
+// TestStop_ClosesHub_AndDrainsSubscribers — this test only asserts
+// the silence.
 func TestStart_Disabled_NoPublisher(t *testing.T) {
 	prev := stubEventInterval
 	stubEventInterval = 20 * time.Millisecond
@@ -84,18 +86,11 @@ func TestStart_Disabled_NoPublisher(t *testing.T) {
 	ch, unsub := s.Subscribe()
 	defer unsub()
 
-	// With Enabled=false no publisher exists, so the channel never
-	// receives a stub event. Wait a few intervals — should stay
-	// silent.
 	select {
-	case evt := <-ch:
-		if evt.Name != "" {
-			t.Errorf("disabled bridge published event %q; want silence", evt.Name)
-		}
-		// channel-closed on Stop is fine; that path is tested in
-		// TestStop_ClosesHub_AndDrainsSubscribers below.
+	case <-ch:
+		t.Error("disabled bridge published event; want silence")
 	case <-time.After(stubEventInterval * 5):
-		// Expected — no events ever arrive when disabled.
+		// expected — no events ever arrive when disabled
 	}
 }
 

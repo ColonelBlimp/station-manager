@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
 // sseKeepAliveInterval matches the existing /v1/events handler — 30s
@@ -26,10 +24,11 @@ var sseKeepAliveInterval = 30 * time.Second
 // shutdownCh (daemon Shutdown), otherwise an idle subscriber holds
 // graceful shutdown open until the timeout fires.
 //
-// Logger is used for the rare write-deadline-clear failure (which
-// doesn't break the connection, just leaves it subject to the
-// regular WriteTimeout) — same pattern as the /v1/events handler.
-func (s *Service) HTTPHandler(shutdownCh <-chan struct{}, logger *logging.Service) http.Handler {
+// The handler logs the rare write-deadline-clear failure via
+// s.logger (the Service's own logger, set in New) — no separate
+// logger parameter; there's no scenario where a different logger
+// would legitimately be passed.
+func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -42,7 +41,7 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}, logger *logging.Servic
 		// WriteTimeoutSec. Same pattern as /v1/events.
 		rc := http.NewResponseController(w)
 		if err := rc.SetWriteDeadline(time.Time{}); err != nil {
-			logger.InfoWith().Err(err).Msg("rig SSE write-deadline clear failed; stream subject to WriteTimeout")
+			s.logger.InfoWith().Err(err).Msg("rig SSE write-deadline clear failed; stream subject to WriteTimeout")
 		}
 
 		h := w.Header()
@@ -79,7 +78,7 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}, logger *logging.Servic
 					// EventSource auto-reconnects.
 					return
 				}
-				if err := writeSSEEvent(w, evt); err != nil {
+				if err := s.writeSSEEvent(w, evt); err != nil {
 					// Client gone (broken pipe). Defer unsub fires.
 					return
 				}
@@ -99,13 +98,17 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}, logger *logging.Servic
 // Mirrors the /v1/events handler's writeSSEEvent but typed for
 // bridge.Event. Marshal failure for a known typed payload would be
 // a programmer error; treated as a non-fatal skip so one bad event
-// doesn't kill the stream for unrelated good events.
-func writeSSEEvent(w io.Writer, evt Event) error {
+// doesn't kill the stream for unrelated good events. The skip is
+// logged at warn so a future regression that breaks one payload
+// type doesn't disappear silently — same pattern as the /v1/events
+// writeSSEEvent.
+func (s *Service) writeSSEEvent(w io.Writer, evt Event) error {
 	data, err := json.Marshal(evt.Payload)
 	if err != nil {
-		// Skip silently — payload types are programmer-controlled.
-		// A future regression that breaks one payload type
-		// shouldn't disappear; the publisher logs separately.
+		s.logger.WarnWith().
+			Err(err).
+			Str("event", string(evt.Name)).
+			Msg("rig SSE payload marshal failed; skipping event")
 		return nil
 	}
 	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Name, data)

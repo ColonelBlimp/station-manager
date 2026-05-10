@@ -10,10 +10,13 @@
 // expand it (FT8 stack, click-to-tune from SPA, third-party app
 // needing rigctld-compat TCP, multi-rig hardware, etc.).
 //
-// Package boundary discipline (ADR 0013): internal/storage and
-// internal/forwarder MUST NOT import internal/bridge, and vice
-// versa. The boundary is enforced by a static-import test in this
-// package's test files; CI catches violations.
+// Package boundary discipline (ADR 0013): the storage package
+// (internal/database/sqlite), the forwarder package
+// (internal/forwarding), and the QSO log-write orchestration
+// package (internal/qsoservice) MUST NOT import internal/bridge,
+// and vice versa. The boundary is enforced by a static-import test
+// in this package's test files (boundary_test.go); CI catches
+// violations.
 //
 // Lifetime: constructed by cmd/smd, started after Initialize, drained
 // on Stop. The Service exposes Subscribe() for SSE handlers and
