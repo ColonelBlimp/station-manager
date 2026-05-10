@@ -115,6 +115,14 @@ type Config struct {
 	// future alert paths (forwarder backlog, refresher repeated
 	// failures, daemon health) plug into the same Send primitive.
 	Smtp types.SmtpConfig `json:"smtp"`
+
+	// Bridge configures the serial/CAT bridge subsystem (ADR 0013 +
+	// ADR 0019). Enabled gates the whole subsystem: false = no serial
+	// port acquisition, no `/v1/rig/events` route. The master-smd /
+	// headless deployment shape sets it to false; the field-laptop /
+	// any-host-with-a-rig deployment sets it to true with serial +
+	// driver populated.
+	Bridge types.BridgeConfig `json:"bridge"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -219,6 +227,10 @@ func Load(path string) (Config, error) {
 	}
 	if err = validateSmtp(cfg.Smtp); err != nil {
 		return cfg, fmt.Errorf("validating smtp: %w", err)
+	}
+
+	if err = validateBridge(cfg.Bridge); err != nil {
+		return cfg, fmt.Errorf("validating bridge: %w", err)
 	}
 
 	return cfg, nil
@@ -498,6 +510,18 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.Smtp.TimeoutSec == 0 {
 		cfg.Smtp.TimeoutSec = 30
 	}
+
+	// Bridge defaults. Mirrors the SmtpConfig pattern: Enabled is
+	// the kill-switch; missing required sub-fields when Enabled=true
+	// are caught at validateBridge below, not silently defaulted.
+	// Serial.Baud is the one field with a sensible default (38400 is
+	// the common Yaesu/Icom/Kenwood setting; operators on faster
+	// rigs override). Serial.Port and Cat.Driver MUST be operator-
+	// supplied when Enabled=true — there's no sane default that's
+	// hardware-correct.
+	if cfg.Bridge.Serial.Baud == 0 {
+		cfg.Bridge.Serial.Baud = 38400
+	}
 }
 
 // Warnings returns a slice of human-readable advisory messages about
@@ -679,6 +703,30 @@ func validateSmtp(s types.SmtpConfig) error {
 	}
 	if s.TimeoutSec <= 0 {
 		return fmt.Errorf("smtp.timeout_sec must be > 0, got %d", s.TimeoutSec)
+	}
+	return nil
+}
+
+// validateBridge checks the bridge subsystem block. Enabled=false
+// means the subsystem doesn't acquire a serial port and `/v1/rig/events`
+// isn't registered — disabled config is always valid (master smd /
+// headless deployments). Enabled=true means the operator wants the
+// bridge running, which requires Serial.Port AND Cat.Driver to be
+// non-empty — there's no sane default for either (hardware-specific).
+// Surfaces missing required sub-fields loudly at startup rather than
+// failing later with a SQLITE_BUSY-style obscure error.
+func validateBridge(b types.BridgeConfig) error {
+	if !b.Enabled {
+		return nil
+	}
+	if b.Serial.Port == "" {
+		return fmt.Errorf("bridge.serial.port is required when bridge.enabled is true")
+	}
+	if b.Serial.Baud <= 0 {
+		return fmt.Errorf("bridge.serial.baud must be > 0, got %d", b.Serial.Baud)
+	}
+	if b.Cat.Driver == "" {
+		return fmt.Errorf("bridge.cat.driver is required when bridge.enabled is true")
 	}
 	return nil
 }

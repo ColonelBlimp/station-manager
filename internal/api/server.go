@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/frontend"
+	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
@@ -31,6 +32,7 @@ type Server struct {
 	hub                      *events.Hub
 	enrich                   *lookup.Orchestrator
 	mailer                   *email.Service
+	bridge                   *bridge.Service
 	limits                   *loadLimiter
 	maxBodyBytes             int64
 	protocol                 string
@@ -58,7 +60,7 @@ type Server struct {
 // protocol) because those don't change at runtime; the config-update
 // endpoint only touches operator-relevant fields (logging_station,
 // default_*_id) which startup doesn't bake into Server fields.
-func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service) *Server {
+func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service) *Server {
 	s := &Server{
 		cfg:                      cfgSvc,
 		qso:                      qso,
@@ -67,6 +69,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		hub:                      hub,
 		enrich:                   enrich,
 		mailer:                   mailer,
+		bridge:                   br,
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		maxBodyBytes:             cfg.Server.MaxBodyBytes,
 		protocol:                 cfg.Server.Protocol,
@@ -125,6 +128,17 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
+
+	// Rig SSE — opt-in via cfg.Bridge.Enabled (ADR 0013 + ADR 0019).
+	// When the bridge subsystem is disabled (master smd / headless
+	// deployments without a rig) the route is not registered, so
+	// clients see 404 → SPA fallthrough rather than a stalled
+	// EventSource. The bridge.Service.HTTPHandler closure subscribes
+	// to the bridge's internal hub for each new SSE connection;
+	// disconnect-safety + multi-subscriber fan-out are handled there.
+	if br != nil && br.Enabled() {
+		mux.Handle("GET /v1/rig/events", br.HTTPHandler(s.shutdownCh, logger))
+	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default
 	// because pprof exposes goroutine state, heap dumps, allocation

@@ -1,0 +1,238 @@
+package bridge
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+)
+
+// newTestService builds a Service ready for Initialize/Start. Tests
+// that need to exercise the disabled path pass cfg.Enabled=false.
+//
+// Uses an uninitialised &logging.Service{} — its InfoWith / WarnWith
+// / ErrorWith methods all return a noop logger when ConfigService is
+// nil, so Service code paths that emit log lines run without writing
+// anywhere. Same pattern as internal/lookup/refresher tests.
+func newTestService(t *testing.T, cfg types.BridgeConfig) *Service {
+	t.Helper()
+	return New(cfg, &logging.Service{})
+}
+
+// TestInitialize_MissingLogger covers the dependency check. A Service
+// constructed without a logger fails Initialize loudly rather than
+// nil-panicking later when the publisher goroutine tries to log.
+func TestInitialize_MissingLogger(t *testing.T) {
+	s := &Service{cfg: types.BridgeConfig{Enabled: true}}
+	if err := s.Initialize(); err == nil {
+		t.Fatal("expected error when logger is nil")
+	}
+}
+
+// TestInitialize_Idempotent confirms the project's "all lifecycle
+// methods idempotent" rule — Initialize twice is the same as once.
+func TestInitialize_Idempotent(t *testing.T) {
+	s := newTestService(t, types.BridgeConfig{Enabled: false})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("first Initialize: %v", err)
+	}
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("second Initialize: %v", err)
+	}
+}
+
+// TestEnabled_Reports_Cfg confirms the kill-switch is honoured. The
+// HTTP wiring layer branches on this to decide whether to register
+// `/v1/rig/events` — a wrong answer here means either a dangling
+// route or a missing one.
+func TestEnabled_Reports_Cfg(t *testing.T) {
+	on := newTestService(t, types.BridgeConfig{Enabled: true})
+	if !on.Enabled() {
+		t.Error("Enabled() = false with cfg.Enabled=true")
+	}
+	off := newTestService(t, types.BridgeConfig{Enabled: false})
+	if off.Enabled() {
+		t.Error("Enabled() = true with cfg.Enabled=false")
+	}
+	var nilSvc *Service
+	if nilSvc.Enabled() {
+		t.Error("Enabled() on nil receiver should be false")
+	}
+}
+
+// TestStart_Disabled_NoPublisher covers the master-smd / headless
+// shape: cfg.Enabled=false → Start succeeds without spawning the
+// publisher goroutine, Subscribe returns a still-open channel that
+// will close cleanly on Stop. SSE handlers see an empty stream until
+// they disconnect.
+func TestStart_Disabled_NoPublisher(t *testing.T) {
+	prev := stubEventInterval
+	stubEventInterval = 20 * time.Millisecond
+	t.Cleanup(func() { stubEventInterval = prev })
+
+	s := newTestService(t, types.BridgeConfig{Enabled: false})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	// With Enabled=false no publisher exists, so the channel never
+	// receives a stub event. Wait a few intervals — should stay
+	// silent.
+	select {
+	case evt := <-ch:
+		if evt.Name != "" {
+			t.Errorf("disabled bridge published event %q; want silence", evt.Name)
+		}
+		// channel-closed on Stop is fine; that path is tested in
+		// TestStop_ClosesHub_AndDrainsSubscribers below.
+	case <-time.After(stubEventInterval * 5):
+		// Expected — no events ever arrive when disabled.
+	}
+}
+
+// TestStart_Enabled_PublishesStubEvents covers the M3a.1 happy path:
+// cfg.Enabled=true → Start spawns the stub publisher → Subscribe
+// receives a stub rig-state event within stubEventInterval. Validates
+// the SSE pipeline can be exercised end-to-end before the real rig
+// integration lands in M3a.2.
+func TestStart_Enabled_PublishesStubEvents(t *testing.T) {
+	prev := stubEventInterval
+	stubEventInterval = 20 * time.Millisecond
+	t.Cleanup(func() { stubEventInterval = prev })
+
+	s := newTestService(t, types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+	})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	select {
+	case evt, ok := <-ch:
+		if !ok {
+			t.Fatal("subscriber channel closed before any event")
+		}
+		if evt.Name != EventRigState {
+			t.Errorf("first event Name = %q, want %q", evt.Name, EventRigState)
+		}
+		payload, ok := evt.Payload.(RigStatePayload)
+		if !ok {
+			t.Fatalf("event payload type = %T, want RigStatePayload", evt.Payload)
+		}
+		if payload.RigIdentity != "stub-rig" {
+			t.Errorf("stub event RigIdentity = %q, want %q", payload.RigIdentity, "stub-rig")
+		}
+	case <-time.After(stubEventInterval * 5):
+		t.Fatal("no stub event received within 5x stubEventInterval")
+	}
+}
+
+// TestStart_Idempotent confirms a second Start is a no-op (no second
+// publisher goroutine spawned, no panic, no double-cancel surprises).
+func TestStart_Idempotent(t *testing.T) {
+	s := newTestService(t, types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+	})
+	_ = s.Initialize()
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	_ = s.Stop()
+}
+
+// TestStop_ClosesHub_AndDrainsSubscribers confirms Stop is the
+// canonical shutdown path: publisher goroutine exits, hub closes,
+// any open subscriber's channel signals close (ok=false from
+// channel-receive). SSE handlers observe this as "stream ended" and
+// return.
+func TestStop_ClosesHub_AndDrainsSubscribers(t *testing.T) {
+	prev := stubEventInterval
+	stubEventInterval = 20 * time.Millisecond
+	t.Cleanup(func() { stubEventInterval = prev })
+
+	s := newTestService(t, types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "/dev/null", Baud: 38400},
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+	})
+	_ = s.Initialize()
+	_ = s.Start(context.Background())
+
+	ch, _ := s.Subscribe()
+
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// Drain any in-flight events; eventually the channel must close.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, ok := <-ch
+		if !ok {
+			return // expected: channel closed
+		}
+	}
+	t.Fatal("subscriber channel did not close within 1s of Stop")
+}
+
+// TestStop_Idempotent confirms a second Stop is harmless. Important
+// for shutdown paths where deferred Stop interleaves with explicit
+// Stop on signal.
+func TestStop_Idempotent(t *testing.T) {
+	s := newTestService(t, types.BridgeConfig{Enabled: false})
+	_ = s.Initialize()
+	_ = s.Start(context.Background())
+	if err := s.Stop(); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+}
+
+// TestSubscribe_AfterStop_ReturnsClosedChannel covers the late-
+// subscriber edge case: a SPA tab loads against a daemon that's mid-
+// shutdown, opens an EventSource, the bridge has already stopped.
+// The subscriber gets an already-closed channel; the SSE handler's
+// range loop exits immediately rather than hanging.
+func TestSubscribe_AfterStop_ReturnsClosedChannel(t *testing.T) {
+	s := newTestService(t, types.BridgeConfig{Enabled: false})
+	_ = s.Initialize()
+	_ = s.Start(context.Background())
+	_ = s.Stop()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Error("post-Stop Subscribe channel yielded an event; want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("post-Stop Subscribe channel neither closed nor delivered")
+	}
+}

@@ -1,0 +1,182 @@
+package bridge
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+)
+
+// stubEventInterval is how often the M3a.1 stub emitter publishes a
+// hardcoded rig-state event. Package-level var so tests can dial it
+// down without waiting seconds. Replaced in M3a.2 by the real
+// serial+CAT pipeline; this whole stub lives behind a config flag
+// that defaults off once real rig data is wired.
+var stubEventInterval = 5 * time.Second
+
+// Service is the bridge subsystem (ADR 0013, ADR 0019). Owns the
+// internal pub/sub hub for rig events; in v1 (M3a.1) the publisher
+// is a stub goroutine emitting hardcoded events on a ticker so the
+// SSE pipeline can be exercised end-to-end before the real rig
+// integration lands in M3a.2.
+//
+// Lifecycle: Initialize() validates config; Start(ctx) spawns the
+// publisher goroutine; Stop() cancels and waits. All idempotent per
+// the project's service-lifecycle pattern.
+//
+// When cfg.Enabled is false, Initialize/Start/Stop are still safe to
+// call but no goroutine is spawned and no events are published.
+// Subscribe() returns an already-closed channel so SSE handlers exit
+// cleanly. This is the master-smd / headless deployment shape — the
+// daemon binary still embeds the bridge subsystem but it stays inert.
+type Service struct {
+	cfg    types.BridgeConfig
+	logger *logging.Service
+	hub    *hub
+
+	mu      sync.Mutex
+	started bool
+	stopped bool
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+}
+
+// New constructs a Service from the operator's bridge config and a
+// logger. Config is read once and snapshotted; runtime PUT /v1/config
+// changes don't reach an existing Service. Operator restart picks up
+// edits — same pattern as internal/email.
+func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
+	return &Service{
+		cfg:    cfg,
+		logger: logger,
+		hub:    newHub(),
+	}
+}
+
+// Initialize validates dependencies. Idempotent. Required by the
+// project's service-lifecycle pattern; today the only check is
+// "logger present" (config was already validated by config.Load via
+// validateBridge, so we don't re-check here).
+func (s *Service) Initialize() error {
+	const op errors.Op = "bridge.Service.Initialize"
+	if s.logger == nil {
+		return errors.New(op).WithMsg("logger service has not been set")
+	}
+	return nil
+}
+
+// Start binds the subsystem to a parent context and (when Enabled)
+// spawns the publisher goroutine. ctx is typically the daemon's main
+// lifecycle context — when it's cancelled (or Stop is called), the
+// subsystem stops publishing and waits for in-flight work to finish.
+//
+// Idempotent — repeat calls are no-ops once started.
+//
+// When cfg.Enabled is false, Start succeeds without spawning anything.
+// The hub is still active so Subscribe doesn't error, but no events
+// will ever flow. SSE handlers see an empty stream — correct behaviour
+// for "bridge disabled".
+func (s *Service) Start(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
+		return nil
+	}
+	s.started = true
+	if !s.cfg.Enabled {
+		s.logger.InfoWith().Msg("bridge: subsystem disabled (bridge.enabled=false); no rig acquired, no events emitted")
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.wg.Add(1)
+	go s.runStubEmitter(runCtx)
+	s.logger.InfoWith().
+		Str("port", s.cfg.Serial.Port).
+		Int("baud", s.cfg.Serial.Baud).
+		Str("driver", s.cfg.Cat.Driver).
+		Msg("bridge: subsystem started (M3a.1 stub emitter — real rig pipeline lands in M3a.2)")
+	return nil
+}
+
+// Stop cancels the parent context, waits for in-flight goroutines,
+// and closes the hub so any open SSE subscribers see a clean stream
+// end. Idempotent.
+func (s *Service) Stop() error {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return nil
+	}
+	s.stopped = true
+	cancel := s.cancel
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	s.wg.Wait()
+	s.hub.close()
+	if s.logger != nil {
+		s.logger.InfoWith().Msg("bridge: subsystem stopped")
+	}
+	return nil
+}
+
+// Enabled reports whether the bridge subsystem is configured to run.
+// Used by api.Server to decide whether to register `/v1/rig/events`.
+// Nil-safe (returns false on a nil receiver).
+func (s *Service) Enabled() bool {
+	return s != nil && s.cfg.Enabled
+}
+
+// Subscribe registers a new SSE subscriber. Returns the receive-only
+// channel + idempotent unsubscribe. Channel closes on unsubscribe,
+// slow-subscriber eviction, or Service.Stop.
+//
+// Subscribing to a stopped (or never-started) Service returns an
+// already-closed channel so the SSE handler's range loop exits
+// immediately — SPA tab opening against a disabled bridge gets a
+// clean empty stream rather than a hang.
+func (s *Service) Subscribe() (<-chan Event, func()) {
+	return s.hub.subscribe()
+}
+
+// runStubEmitter is the M3a.1 placeholder for the real serial+CAT
+// pipeline. Emits a hardcoded rig-state event every stubEventInterval
+// so curl can exercise the SSE plumbing end-to-end before M3a.2
+// replaces this with real rig data.
+//
+// When M3a.2 lands, this goroutine is replaced by the
+// serial→cat-decode→hub.publish chain. Same hub.publish call site;
+// the decode loop just fills in real values instead of hardcoded
+// ones.
+func (s *Service) runStubEmitter(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(stubEventInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.hub.publish(Event{
+				Name: EventRigState,
+				Payload: RigStatePayload{
+					RigIdentity: "stub-rig",
+					VfoA:        14250000,
+					VfoB:        14250000,
+					Mode:        "USB",
+					SelectedVfo: "A",
+					Power:       100,
+				},
+			})
+		}
+	}
+}

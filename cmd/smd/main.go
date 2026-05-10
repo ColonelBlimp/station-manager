@@ -17,6 +17,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/api"
+	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
@@ -297,8 +298,26 @@ func run() error {
 	// SMTP yet" state.
 	mailerSvc := email.New(cfg.Smtp, loggerSvc)
 
+	// ---- Bridge subsystem (ADR 0013 + ADR 0019) ----
+	// Always constructed; the Service reports Enabled() from
+	// cfg.Bridge.Enabled. When disabled (master smd / headless host
+	// without a rig) Start() is a no-op and the api package skips
+	// route registration. Started before the HTTP server so the
+	// stub event emitter (M3a.1) is publishing by the time SSE
+	// subscribers connect; stopped after server.Shutdown so any
+	// in-flight SSE handlers see the hub close cleanly.
+	bridgeSvc := bridge.New(cfg.Bridge, loggerSvc)
+	if err := bridgeSvc.Initialize(); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("bridge: Initialize failed")
+		os.Exit(1)
+	}
+	if err := bridgeSvc.Start(workerCtx); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("bridge: Start failed")
+		os.Exit(1)
+	}
+
 	// ---- Start HTTP server ----
-	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc)
+	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -325,6 +344,14 @@ func run() error {
 	// and no new DB work is started against the about-to-close handle.
 	// Each worker finishes its current processRow then returns from Run.
 	workerCancel()
+
+	// Stop the bridge subsystem. Cancels the publisher goroutine,
+	// waits for it to exit, closes the hub so any open SSE
+	// subscribers see a clean stream end. Order matters relative to
+	// server.Shutdown: stop publishing first, then drain readers.
+	if err := bridgeSvc.Stop(); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("bridge: Stop error")
+	}
 
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

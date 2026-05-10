@@ -102,7 +102,7 @@ func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 	// session-email handler probes Enabled() (which a nil mailer
 	// reports as false) and returns 503 mailer_disabled, mirroring
 	// an operator who hasn't configured SMTP.
-	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil, nil)
+	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil, nil, nil)
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.
