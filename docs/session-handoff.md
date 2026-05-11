@@ -90,7 +90,52 @@ Future affordance (1):
 - `go vet ./...` clean.
 - 37 bridge tests pass; both ADR 0013 boundary tests (forward + reverse) still green.
 
-**M3a.4 SHIPPED (session 50, 2026-05-11) — M3a is now closed.** See the Session 50 subsection below for the full work record. The next pick-up point is **rig-specific mode → ADIF translation** (DATA-U / DATA-L / CW-U / CW-L / RTTY-U/L / FM-N / AM-N etc., none of which map 1:1 to the daemon's strict ADIF main-mode enum). Full design context in `docs/v2-design/cat-serial-reuse.md §8` — the operator's decision was "build a per-rig translation layer in the rigdef JSON, defer the design to a follow-up session." That session's open questions: where does the operator override the protocol when the rig reports DATA-U and they're actually running FT8 (writable dropdown beside the read-only CAT display? "current protocol" toggle outside the QSO form?); whether CW-U vs CW-L should carry through as a SUBMODE refinement or collapse to plain CW; whether the table belongs in each rigdef (per-rig) or a shared CAT-mode catalogue (per-family).
+**Rig-specific mode → ADIF translation SHIPPED (session 51, 2026-05-11) — the M3a.4 follow-up that was parked is now closed.** See the Session 51 subsection below for the full work record. The bridge stays a pure pass-through (rig literal on the wire); the SPA resolves to ADIF (MODE, SUBMODE) pairs via per-rig mappings stored in two layers (rigdef-shipped defaults + operator overrides in config.json), merged daemon-side at `/v1/config` GET time. New My Station → Mode Mappings sub-tab edits the override layer. **Bonus:** the daemon's `internal/enums/modes` enum became data-driven via an embedded `adif-modes.json` catalogue + optional `$SM_WORKING_DIR/modes.json` operator override, so future ADIF spec growth doesn't strictly require a daemon binary release. The natural next picks-up point is **continuing live operator testing on the FTdx10** — confirm the Mode Mappings panel renders correctly with the operator's config, FT8 QSOs log with the correct ADIF MODE=FT8, the default mappings cover the operator's common modes.
+
+### Session 51 work (2026-05-11) — Rig-mode → ADIF translation shipped; daemon enum is now data-driven
+
+Five-stage work that closes the mode-mapping gap surfaced during M3a.4 live testing. Architecture as settled with the operator: bridge stays pure (rig literal on the wire); SPA resolves; per-rig translation table in a layered shape (rigdef-shipped defaults + operator overrides in config.json, merged at the daemon).
+
+**Stage 1 — modes catalogue refactor (`internal/enums/modes`):**
+
+- New embedded `adif-modes.json` baseline shipping the full ADIF 3.x main-mode list (~50 entries: FT8 / FT4 / FST4 / Q65 / JS8 / JT65 / MSK144 / MT63 / OLIVIA etc. promoted from MFSK submodes to first-class main modes per current spec) + the submode→parent map (USB/LSB/PSK31/PSK63/C4FM/DMR/etc.).
+- `modes.go` rewritten to load the catalogue from JSON via `go:embed` at package init; new `LoadOverride(workingDir)` merges an optional `$SM_WORKING_DIR/modes.json` operator override on top (additive for main_modes, override-wins for submodes). The hardcoded Go enum is gone — `IsValidMode` / `IsValidSubMode` / `GetModeBySubmode` query the loaded set; the `Mode` / `SubMode` type wrappers + the 10 common-mode `const` references stay for typed call sites. New `MainModes()` / `SubModes()` snapshot helpers.
+- `cmd/smd/main.go` calls `modes.LoadOverride(cfg.DataDir)` at startup; malformed override is loud-fatal so syntax errors surface at boot rather than as silent validation rejections later.
+- Existing tests updated (FT8/FT4/FST4 moved from "valid submode" to "valid main mode" expectations) + new `TestLoadOverride` covering missing/malformed/extend/override-wins paths. All Go tests green.
+
+**Stage 2 — daemon types + config merge + `/v1/config` exposure:**
+
+- `types.ModeMapping{Mode, SubMode}` (operator-friendly ADIF pair) added to `internal/types`. `cat.RigDefinition.ModeMappings` switched from a cat-local type to `types.ModeMapping` (cat now imports types — fine since types is dependency-free). `types.BridgeConfig.ModeMappings map[string]map[string]types.ModeMapping` adds the operator-override layer (outer key = driver id, inner key = rig literal mode string).
+- Both Yaesu rigdefs (`yaesu-ftdx10.json`, `yaesu-ft710.json`) gained a `mode_mappings` block with shipped defaults: USB → SSB+USB, LSB → SSB+LSB, CW-U/CW-L → CW (no submode — ADIF doesn't refine sideband for CW), FM/FM-N/DATA-FM/DATA-FM-N → FM, AM/AM-N → AM, RTTY-L/RTTY-U → RTTY, DATA-L/DATA-U → FT8 (most common digital protocol; operator overrides via the Mode Mappings UI when running something else), PSK → PSK+PSK31.
+- `config.validateBridge` validates mode_mappings unconditionally (operator may configure mappings ahead of enabling CAT): non-empty Mode in the daemon's catalogue, SubMode in the catalogue or empty.
+- `internal/api/handler_config.go` `BridgeInfo` block grows three fields: `Driver` (rig id), `RigModes` (the rigdef's MAINMODE value_mappings.value list, the SPA uses it to render rows in Mode Mappings sub-tab), `ModeMappings` (merged view: rigdef defaults overlaid with operator overrides for the configured driver). New `bridgeInfoFor(cfg)` helper consolidates the construction; old `rigNameForDriver` deleted as its caller moved. New `cat.RigModes(def)` helper extracts the unique rig-mode strings from a rigdef's MAINMODE markers.
+- PUT `/v1/config` accepts updates to `bridge.mode_mappings`: validates each pair (400 with rig-key context on invalid Mode / SubMode), diffs against the rigdef's shipped defaults so only operator-deviations get persisted to config.json. Diff approach means future rigdef updates pick up unchanged keys for the operator automatically; keys the operator has changed stay sticky.
+
+**Stage 3 — SPA configState hydration + displayedState mode resolution:**
+
+- `lib/api/config.ts` `BridgeFields` grows `driver?: string`, `rig_modes?: string[]`, `mode_mappings?: Record<string, AdifModePair>`. New `AdifModePair` interface mirrors the daemon's ModeMapping shape.
+- `configState.bridge` is a new sub-state (`BridgeView` class with `driver`, `rigModes`, `modeMappings`) — additive next to the existing `configState.station.enabled` / `.rigName` which are still hydrated from the same wire-level `bridge` block but stay in their historical position to avoid a wider refactor. `configState.applyResponse` hydrates the new fields.
+- `displayedState.mode` and `.subMode` now produce **ADIF-resolved** values: when CAT is live they look up `catState.mode` in `configState.bridge.modeMappings` and return the mapping's `(Mode, SubMode)` pair (missing-mapping falls through with `catState.mode` literal so the issue surfaces visibly); when CAT is off they run the operator-friendly `manualState.mode` through `resolveModeAndSubmode` so callers always get an ADIF pair regardless of which side is in charge.
+- `lib/utils/mode.ts` `SUBMODE_TO_MODE` table tightened to match the daemon's catalogue: FT8/FT4/FST4/FST4W/Q65/OLIVIA/CONTESTIA/DOMINOEX/FSQ/JS8/MT63/THOR/THROB/HFSK/HHELL/PKT removed (they're ADIF main modes now); USB/LSB/PSK31/PSK63/etc. + DIGITALVOICE/HELL family submodes stay. `resolveModeAndSubmode('FT8')` now produces `{mode: 'FT8', subMode: ''}` instead of the old `{MFSK, FT8}`.
+- `QsoPanel.svelte`: mode dropdown local var derives from `displayedState.subMode || displayedState.mode` (operator-friendly view — shows "USB" for SSB+USB, "FT8" for FT8); dynamic modes list includes the current value if it's outside the baseline 9 entries so a custom mapping (e.g. operator's My Station table mapping DATA-U → "JS8") still displays. QSO submit no longer calls `resolveModeAndSubmode` since `displayedState.mode` / `.subMode` are already ADIF.
+- Existing `mode.test.ts` updated (FT8/FT4 pass-through expectations); new `displayed.test.ts` cases covering CAT-live mapping lookup, missing-mapping fallthrough, CAT-off resolveModeAndSubmode passthrough. 467/467 SPA tests green.
+
+**Stage 4 — My Station → Mode Mappings sub-tab:**
+
+- New `'modes'` section in `MyStationPanel.svelte`'s sub-tab list, slotted between Equipment and CW. Persists active-section to sessionStorage like the others.
+- Local edit state `editingModes: Record<string, {mode, submode}>` keyed by rig mode string. Snapshots from `configState.bridge.modeMappings` when the operator navigates INTO the tab — that way an external config refresh doesn't stomp in-progress edits. Refreshes from the daemon's response on successful save.
+- Table renders one row per `configState.bridge.rigModes` entry: rig literal in a monospace cell on the left, two free-text inputs for ADIF MODE and SUBMODE on the right. Inputs are free-text (not select) because the daemon's catalogue is ~50 main modes + 20 submodes — a dropdown would either be cluttered or arbitrarily curated. Validation happens daemon-side on save; toast surfaces field-named 400s.
+- "Update" button: builds the PUT payload (drops rows where Mode is blank — daemon's diff layer treats those as "back to rigdef default"), calls `putConfig({bridge: {enabled, driver, mode_mappings}})`, hydrates from response on success, toasts on validation/server/network failure. `putConfig`'s payload type widened to include `'bridge'`.
+- Friendly empty-state when bridge isn't configured (`rigModes.length === 0`) — short paragraph explaining the table populates once CAT is enabled with a recognised driver.
+
+**Stage 5 — verification + doc sweep:**
+
+- Full Go test suite green. `go vet` clean. `go build ./...` clean.
+- Full SPA test suite green (467/467 across 27 files). ESLint clean. svelte-check clean (238 files). `npm run build` clean.
+- `docs/v2-design/cat-serial-reuse.md §8` updated — the parked rig-mode-translation entry is now marked SHIPPED with the architecture-as-built captured.
+- This session-handoff entry.
+
+**Resume points for next session:** continue live operator testing on the real FTdx10 with the new Mode Mappings panel. Confirm: the panel populates with the rigdef's shipped defaults; editing DATA-U/L from FT8 → PSK31 (or whatever) round-trips through PUT /v1/config; QSO submit with CAT live carries the resolved ADIF MODE/SUBMODE correctly. If anything's off, fix in-session. Otherwise the bridge subsystem v1 and its operator-config surface are both done — natural next pieces are M3b external integration (`cmd/udp-bridge`, `cmd/importer`, multi-rig daemon-side wiring) but those are operator-priority dependent.
 
 ### Session 50 work (2026-05-11) — M3a.4 (SPA bridge consumer + live rig test) shipped; M3a closed
 

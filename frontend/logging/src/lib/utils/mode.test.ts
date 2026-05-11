@@ -10,12 +10,12 @@ describe('resolveModeAndSubmode', () => {
         expect(resolveModeAndSubmode('LSB')).toEqual({ mode: 'SSB', subMode: 'LSB' });
     });
 
-    it('maps FT8 → MODE=MFSK, SUBMODE=FT8', () => {
-        expect(resolveModeAndSubmode('FT8')).toEqual({ mode: 'MFSK', subMode: 'FT8' });
+    it('passes FT8 through as a main mode (ADIF 3.x promotes FT8 from MFSK submode to main mode)', () => {
+        expect(resolveModeAndSubmode('FT8')).toEqual({ mode: 'FT8', subMode: '' });
     });
 
-    it('maps FT4 → MODE=MFSK, SUBMODE=FT4', () => {
-        expect(resolveModeAndSubmode('FT4')).toEqual({ mode: 'MFSK', subMode: 'FT4' });
+    it('passes FT4 through as a main mode (ADIF 3.x same as FT8)', () => {
+        expect(resolveModeAndSubmode('FT4')).toEqual({ mode: 'FT4', subMode: '' });
     });
 
     it('maps PSK31 → MODE=PSK, SUBMODE=PSK31', () => {
@@ -45,7 +45,7 @@ describe('resolveModeAndSubmode', () => {
 
     it('uppercases and trims input', () => {
         expect(resolveModeAndSubmode('  usb  ')).toEqual({ mode: 'SSB', subMode: 'USB' });
-        expect(resolveModeAndSubmode('Ft8')).toEqual({ mode: 'MFSK', subMode: 'FT8' });
+        expect(resolveModeAndSubmode('Ft8')).toEqual({ mode: 'FT8', subMode: '' });
     });
 
     it('returns empty mode for empty input', () => {

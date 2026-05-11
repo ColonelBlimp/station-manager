@@ -88,7 +88,7 @@
         ARIA pattern as InfoPanel's outer tabs (tablist / tab /
         tabpanel) so screen readers see the nesting correctly.
     */
-    type SectionId = 'identity' | 'location' | 'equipment' | 'cw' | 'qso';
+    type SectionId = 'identity' | 'location' | 'equipment' | 'modes' | 'cw' | 'qso';
 
     interface Section {
         id: SectionId;
@@ -99,6 +99,7 @@
         { id: 'identity', title: 'Identity' },
         { id: 'location', title: 'Location' },
         { id: 'equipment', title: 'Equipment' },
+        { id: 'modes', title: 'Mode Mappings' },
         { id: 'cw', title: 'CW' },
         { id: 'qso', title: 'QSO' },
     ];
@@ -113,7 +114,14 @@
         tab) when the stored value is missing or unrecognised.
     */
     const ACTIVE_SECTION_KEY = 'sm.myStation.activeSection';
-    const VALID_SECTIONS: readonly SectionId[] = ['identity', 'location', 'equipment', 'cw', 'qso'];
+    const VALID_SECTIONS: readonly SectionId[] = [
+        'identity',
+        'location',
+        'equipment',
+        'modes',
+        'cw',
+        'qso',
+    ];
 
     function loadActiveSection(): SectionId {
         try {
@@ -128,6 +136,82 @@
     }
 
     let activeSection: SectionId = $state(loadActiveSection());
+
+    /*
+        Local editing state for the Mode Mappings sub-tab. Snapped
+        from configState.bridge.modeMappings each time the operator
+        navigates INTO the tab — that way an external config refresh
+        doesn't stomp in-progress edits while the operator is mid-
+        change. On successful save the snap is taken from the
+        daemon's response (which has the merged view post-write).
+    */
+    interface EditablePair {
+        mode: string;
+        submode: string;
+    }
+    let editingModes: Record<string, EditablePair> = $state({});
+    let savingModes: boolean = $state(false);
+
+    function snapModeMappings(): void {
+        const fresh: Record<string, EditablePair> = {};
+        for (const rigStr of configState.bridge.rigModes) {
+            const m = configState.bridge.modeMappings[rigStr];
+            fresh[rigStr] = { mode: m?.mode ?? '', submode: m?.submode ?? '' };
+        }
+        editingModes = fresh;
+    }
+
+    $effect(() => {
+        if (activeSection === 'modes') {
+            snapModeMappings();
+        }
+    });
+
+    async function saveModeMappings(): Promise<void> {
+        if (savingModes) return;
+        savingModes = true;
+        try {
+            const payload: Record<string, { mode: string; submode?: string }> = {};
+            for (const [rigStr, pair] of Object.entries(editingModes)) {
+                const mode = pair.mode.trim();
+                if (mode === '') continue; // skip blanks; operator can clear an override by emptying mode
+                const submode = pair.submode.trim();
+                payload[rigStr] = submode ? { mode, submode } : { mode };
+            }
+            const outcome = await putConfig({
+                bridge: {
+                    enabled: configState.station.enabled,
+                    driver: configState.bridge.driver,
+                    mode_mappings: payload,
+                },
+            });
+            switch (outcome.kind) {
+                case 'ok':
+                    configState.applyResponse(outcome.config);
+                    snapModeMappings();
+                    if (qsoDefaults.notifyConfigSaved) {
+                        toasts.info('Mode mappings updated.');
+                    }
+                    break;
+                case 'validation':
+                    console.warn(`[mode-mappings save] ${outcome.code}: ${outcome.message}`);
+                    toasts.error(outcome.message);
+                    break;
+                case 'server':
+                    console.error(`[mode-mappings save] ${outcome.code}: ${outcome.message}`);
+                    toasts.error('Could not save mode mappings. Try again.');
+                    break;
+                case 'network':
+                    console.error(
+                        `[mode-mappings save] daemon unreachable: ${outcome.message}`,
+                    );
+                    toasts.error('Cannot reach the daemon — check it is running.');
+                    break;
+            }
+        } finally {
+            savingModes = false;
+        }
+    }
 
     $effect(() => {
         try {
@@ -376,6 +460,77 @@
                         </p>
                     </div>
                 </div>
+            </div>
+        {:else if activeSection === 'modes'}
+            <div id="my-station-modes" role="tabpanel" class="flex flex-col space-y-3 pt-3">
+                {#if configState.bridge.rigModes.length === 0}
+                    <p class="text-sm opacity-70">
+                        No CAT rig is configured. Mode mappings translate the rig's pushed mode
+                        strings into ADIF MODE / SUBMODE values; the table populates once
+                        <code>bridge.enabled</code> is set in <code>config.json</code> and the
+                        daemon recognises the configured driver.
+                    </p>
+                {:else}
+                    <p class="text-xs opacity-70 max-w-2xl">
+                        Translation table for <strong>{configState.station.rigName}</strong>: each
+                        row maps a rig-pushed mode string (left) to an ADIF MODE plus optional
+                        SUBMODE (right). The shipped defaults are sensible for common usage; change
+                        any row when you're operating a different protocol (e.g. running PSK31 on
+                        DATA-U instead of FT8). Empty MODE clears the operator override so the
+                        rigdef's shipped default applies; daemon-side validation rejects unknown
+                        ADIF values with a toast.
+                    </p>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead class="text-xs uppercase opacity-70">
+                                <tr>
+                                    <th class="text-left py-1 pr-4">Rig mode</th>
+                                    <th class="text-left py-1 pr-4">ADIF MODE</th>
+                                    <th class="text-left py-1">ADIF SUBMODE</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {#each configState.bridge.rigModes as rigStr (rigStr)}
+                                    <tr>
+                                        <td class="py-1 pr-4 font-mono">{rigStr}</td>
+                                        <td class="py-1 pr-4">
+                                            <input
+                                                id={`mode-map-${rigStr}-mode`}
+                                                type="text"
+                                                class="input-base w-32"
+                                                placeholder="MODE"
+                                                bind:value={editingModes[rigStr].mode}
+                                                autocomplete="off"
+                                                spellcheck="false"
+                                            />
+                                        </td>
+                                        <td class="py-1">
+                                            <input
+                                                id={`mode-map-${rigStr}-submode`}
+                                                type="text"
+                                                class="input-base w-32"
+                                                placeholder="(optional)"
+                                                bind:value={editingModes[rigStr].submode}
+                                                autocomplete="off"
+                                                spellcheck="false"
+                                            />
+                                        </td>
+                                    </tr>
+                                {/each}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="flex justify-end">
+                        <button
+                            type="button"
+                            onclick={saveModeMappings}
+                            disabled={savingModes}
+                            class="h-9 cursor-pointer rounded-md bg-focus px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {savingModes ? 'Saving…' : 'Update'}
+                        </button>
+                    </div>
+                {/if}
             </div>
         {:else if activeSection === 'cw'}
             <div id="my-station-cw" role="tabpanel" class="flex flex-col space-y-1 pt-3">

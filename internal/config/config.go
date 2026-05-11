@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -716,6 +717,24 @@ func validateSmtp(s types.SmtpConfig) error {
 // Surfaces missing required sub-fields loudly at startup rather than
 // failing later with a SQLITE_BUSY-style obscure error.
 func validateBridge(b types.BridgeConfig) error {
+	// ModeMappings are validated unconditionally — operators may
+	// configure mappings ahead of enabling CAT, and bad entries
+	// should surface at startup regardless of whether the bridge
+	// will actually run. Empty map is always fine.
+	for driver, perRig := range b.ModeMappings {
+		for rigStr, mm := range perRig {
+			if mm.Mode == "" {
+				return fmt.Errorf("bridge.mode_mappings[%s][%s]: mode must not be empty", driver, rigStr)
+			}
+			if !modes.IsValidMode(mm.Mode) {
+				return fmt.Errorf("bridge.mode_mappings[%s][%s]: mode %q is not a known ADIF main mode", driver, rigStr, mm.Mode)
+			}
+			if mm.SubMode != "" && !modes.IsValidSubMode(mm.SubMode) {
+				return fmt.Errorf("bridge.mode_mappings[%s][%s]: submode %q is not a known ADIF submode", driver, rigStr, mm.SubMode)
+			}
+		}
+	}
+
 	if !b.Enabled {
 		return nil
 	}

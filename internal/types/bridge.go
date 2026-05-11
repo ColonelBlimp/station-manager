@@ -20,6 +20,33 @@ type BridgeConfig struct {
 	Enabled bool               `json:"enabled"`
 	Serial  BridgeSerialConfig `json:"serial,omitempty"`
 	Cat     BridgeCatConfig    `json:"cat,omitempty"`
+
+	// ModeMappings is the operator-override layer for the per-rig
+	// translation table that turns rig-pushed mode strings (e.g.
+	// "DATA-U") into ADIF (MODE, SUBMODE) pairs. Outer key is the rig
+	// driver id (e.g. "yaesu-ftdx10"); inner key is the rig literal
+	// mode string. Shipped defaults live inside each rigdef JSON
+	// under `mode_mappings` and are merged with this override at
+	// `/v1/config` GET time — operator's entry wins on key collision.
+	//
+	// The split (shipped defaults vs operator overrides) means a
+	// daemon upgrade picks up new shipped mappings without touching
+	// the operator's edits; the operator can change any value without
+	// risking the next upgrade overwriting it.
+	ModeMappings map[string]map[string]ModeMapping `json:"mode_mappings,omitempty"`
+}
+
+// ModeMapping pairs an ADIF MODE with an optional SUBMODE refinement.
+// The wire shape used both in rigdef shipped defaults (decoded by
+// `internal/cat`) and in operator overrides on config.json. Mode is
+// validated against the daemon's loaded `internal/enums/modes`
+// catalogue (which is itself data-driven via the embedded
+// `adif-modes.json` + an optional `$SM_WORKING_DIR/modes.json`
+// operator override). SubMode, when non-empty, is validated against
+// the same catalogue's submode set.
+type ModeMapping struct {
+	Mode    string `json:"mode"`
+	SubMode string `json:"submode,omitempty"`
 }
 
 // BridgeSerialConfig is the serial-port end of the rig connection.

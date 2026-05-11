@@ -2,11 +2,13 @@ package api
 
 import (
 	stderr "errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -56,22 +58,43 @@ type MailerInfo struct {
 }
 
 // BridgeInfo is the SPA-visible subset of the bridge subsystem config.
+//
 // Enabled mirrors the operator's persisted intent (drives the SPA's
 // configState.station.enabled and the three-flag isLive rule per ADR
-// 0009). RigName is the rigdef's human-readable name (e.g. "Yaesu
-// FTdx10") resolved from cat.Lookup(Bridge.Cat.Driver) — the SPA
-// shows it in the My Station Equipment panel and uses it as the
-// ADIF MY_RIG fallback so logged QSOs carry a descriptive rig string
-// when the operator hasn't typed their own. Empty when the bridge is
-// disabled or the configured driver is unknown.
+// 0009).
 //
-// Port / baud / driver stay off the wire because they're hardware-
-// config concerns the SPA has no business reading or editing; the
-// operator owns them via config.json directly (matching the
+// Driver is the configured rig-driver id (e.g. "yaesu-ftdx10") —
+// resolved from cfg.Bridge.Cat.Driver, used by the SPA to key into
+// per-rig sub-maps (Mode Mappings).
+//
+// RigName is the rigdef's human-readable name (e.g. "Yaesu FTdx10")
+// resolved from cat.Lookup(Driver) — the SPA shows it in the My
+// Station Equipment panel and uses it as the ADIF MY_RIG fallback.
+//
+// RigModes is the set of unique mode strings the configured rigdef's
+// MAINMODE parser can produce (e.g. ["LSB","USB","CW-U","DATA-U",...])
+// — used by the SPA's My Station → Mode Mappings sub-tab to render
+// one row per rig mode.
+//
+// ModeMappings is the merged view (rigdef defaults + operator
+// overrides from cfg.Bridge.ModeMappings) for the configured driver
+// only — the SPA sees a single keyed-by-rig-string table without
+// needing to know about other drivers' mappings.
+//
+// Empty / nil values mean either the bridge is disabled, the
+// configured driver is unknown, or no overrides are set — all
+// reachable states; the SPA handles them gracefully.
+//
+// Port / baud stay off the wire because they're hardware-config
+// concerns the SPA has no business reading or editing; the operator
+// owns them via config.json directly (matching the
 // SMTP-creds-not-on-the-wire decision above).
 type BridgeInfo struct {
-	Enabled bool   `json:"enabled"`
-	RigName string `json:"rig_name,omitempty"`
+	Enabled      bool                         `json:"enabled"`
+	Driver       string                       `json:"driver,omitempty"`
+	RigName      string                       `json:"rig_name,omitempty"`
+	RigModes     []string                     `json:"rig_modes,omitempty"`
+	ModeMappings map[string]types.ModeMapping `json:"mode_mappings,omitempty"`
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +224,44 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		seededLogbookID = id
 	}
 
+	// Mode-mapping overrides: diff against the rigdef's shipped
+	// defaults so only operator-deviated entries get persisted.
+	// Future rigdef updates can change defaults the operator never
+	// touched without their overrides locking in the old values.
+	// Skipped entirely when the request body doesn't carry a bridge
+	// block (req.Bridge.Driver == "" — operator's PUT was about
+	// something else like logging_station).
+	var nextBridgeOverrides map[string]types.ModeMapping
+	if req.Bridge.Driver != "" && req.Bridge.ModeMappings != nil {
+		def, ok := cat.Lookup(req.Bridge.Driver)
+		if !ok {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				"bridge.driver does not match a known rigdef", op)
+			return
+		}
+		nextBridgeOverrides = make(map[string]types.ModeMapping)
+		for rigStr, mm := range req.Bridge.ModeMappings {
+			// Validate first — both sides of the pair must be
+			// catalogue-known. validateBridge re-checks on persist
+			// (defence in depth) but we surface a 400 here with
+			// the offending key for a friendlier error path.
+			if mm.Mode == "" || !modes.IsValidMode(mm.Mode) {
+				s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+					fmt.Sprintf("bridge.mode_mappings[%s].mode %q is not a known ADIF main mode", rigStr, mm.Mode), op)
+				return
+			}
+			if mm.SubMode != "" && !modes.IsValidSubMode(mm.SubMode) {
+				s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+					fmt.Sprintf("bridge.mode_mappings[%s].submode %q is not a known ADIF submode", rigStr, mm.SubMode), op)
+				return
+			}
+			shipped, shippedOk := def.ModeMappings[rigStr]
+			if !shippedOk || shipped != mm {
+				nextBridgeOverrides[rigStr] = mm
+			}
+		}
+	}
+
 	if err := s.cfg.Update(func(cfg *config.Config) error {
 		// Operator-writable fields. Server-managed fields
 		// (SetupComplete, DefaultLogbookID/RigID — except via the
@@ -222,6 +283,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			if cfg.LoggingStation.OwnerCallsign == "" {
 				cfg.LoggingStation.OwnerCallsign = incomingCall
+			}
+		}
+		if req.Bridge.Driver != "" && req.Bridge.ModeMappings != nil {
+			if cfg.Bridge.ModeMappings == nil {
+				cfg.Bridge.ModeMappings = make(map[string]map[string]types.ModeMapping)
+			}
+			if len(nextBridgeOverrides) > 0 {
+				cfg.Bridge.ModeMappings[req.Bridge.Driver] = nextBridgeOverrides
+			} else {
+				delete(cfg.Bridge.ModeMappings, req.Bridge.Driver)
 			}
 		}
 		return nil
@@ -277,20 +348,47 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 // nil-safe (test wiring passes mailer=nil) and tracking the actual
 // service state means a future "reload SMTP without restart" flow
 // stays correct without a parallel branch here.
-// rigNameForDriver resolves the rigdef's human-readable Name for the
-// configured driver id. Empty string when the driver is unset or the
-// id doesn't match a registered rigdef (treating unknown / missing as
-// "no name" rather than erroring — validateBridge already enforces
-// the driver-required-when-enabled rule loudly at startup).
-func rigNameForDriver(driver string) string {
-	if driver == "" {
-		return ""
+// bridgeInfoFor builds the BridgeInfo response block. Resolves the
+// configured driver's rigdef (when present) to populate RigName,
+// RigModes, and the merged ModeMappings (rigdef shipped defaults +
+// operator overrides from cfg.Bridge.ModeMappings — operator's value
+// wins per-rig-string on collision).
+//
+// Pure construction; safe to call with any Config snapshot.
+func bridgeInfoFor(cfg config.Config) BridgeInfo {
+	info := BridgeInfo{
+		Enabled: cfg.Bridge.Enabled,
+		Driver:  cfg.Bridge.Cat.Driver,
 	}
-	def, ok := cat.Lookup(driver)
+	if cfg.Bridge.Cat.Driver == "" {
+		return info
+	}
+	def, ok := cat.Lookup(cfg.Bridge.Cat.Driver)
 	if !ok {
-		return ""
+		// Unknown driver — leave Driver set so the SPA can flag a
+		// config issue, but skip the rigdef-derived fields.
+		return info
 	}
-	return def.Name
+	info.RigName = def.Name
+	info.RigModes = cat.RigModes(def)
+
+	// Merge mode mappings: rigdef defaults first, then operator
+	// overrides on top. Operator's entry wins per-rig-string on
+	// collision; entries the operator hasn't touched stay at the
+	// shipped default.
+	merged := make(map[string]types.ModeMapping, len(def.ModeMappings))
+	for k, v := range def.ModeMappings {
+		merged[k] = v
+	}
+	if perDriver, ok := cfg.Bridge.ModeMappings[cfg.Bridge.Cat.Driver]; ok {
+		for k, v := range perDriver {
+			merged[k] = v
+		}
+	}
+	if len(merged) > 0 {
+		info.ModeMappings = merged
+	}
+	return info
 }
 
 func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (ConfigResponse, error) {
@@ -300,7 +398,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		DefaultLogbook: types.Logbook{ID: cfg.DefaultLogbookID},
 		DefaultRig:     types.RigConfig{ID: cfg.DefaultRigID},
 		Station:        cfg.Station,
-		Bridge:         BridgeInfo{Enabled: cfg.Bridge.Enabled, RigName: rigNameForDriver(cfg.Bridge.Cat.Driver)},
+		Bridge:         bridgeInfoFor(cfg),
 		Mailer: MailerInfo{
 			Enabled:          s.mailer.Enabled(),
 			DefaultRecipient: s.mailer.DefaultRecipient(),

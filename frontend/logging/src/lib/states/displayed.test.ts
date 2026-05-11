@@ -152,6 +152,56 @@ describe('displayedState (ADR 0009 four-object decomposition)', () => {
             expect(displayedState.selectedVfo).toBe('A');
         });
 
+        it('mode/subMode resolve via mode_mappings table when live (rig literal → ADIF pair)', () => {
+            configState.station.enabled = true;
+            bridgeState.connected = true;
+            bridgeState.rigResponding = true;
+
+            // Rig is pushing "DATA-U"; operator's mapping says that's FT8.
+            configState.bridge.modeMappings = {
+                'DATA-U': { mode: 'FT8' },
+                USB: { mode: 'SSB', submode: 'USB' },
+            };
+            catState.mode = 'DATA-U';
+            catState.subMode = 'DATA-U';
+
+            expect(displayedState.mode).toBe('FT8');
+            expect(displayedState.subMode).toBe('');
+
+            // Switch the rig to USB; the SSB+USB pair flows through.
+            catState.mode = 'USB';
+            catState.subMode = 'USB';
+            expect(displayedState.mode).toBe('SSB');
+            expect(displayedState.subMode).toBe('USB');
+        });
+
+        it('mode passes through rig literal when no mapping entry exists (operator must add one)', () => {
+            configState.station.enabled = true;
+            bridgeState.connected = true;
+            bridgeState.rigResponding = true;
+
+            configState.bridge.modeMappings = {};
+            catState.mode = 'DATA-U';
+
+            // No mapping → daemon-side QSO submit would 400; SPA passes
+            // the literal through so the failure surface stays visible.
+            expect(displayedState.mode).toBe('DATA-U');
+            expect(displayedState.subMode).toBe('');
+        });
+
+        it('mode/subMode resolve via resolveModeAndSubmode when CAT is off (manualState passthrough)', () => {
+            // Operator picks "USB" in the dropdown — the operator-friendly
+            // value resolves to ADIF MODE=SSB SUBMODE=USB.
+            manualState.mode = 'USB';
+            expect(displayedState.mode).toBe('SSB');
+            expect(displayedState.subMode).toBe('USB');
+
+            // Operator picks "FT8" — ADIF MODE=FT8 (main mode in ADIF 3.x).
+            manualState.mode = 'FT8';
+            expect(displayedState.mode).toBe('FT8');
+            expect(displayedState.subMode).toBe('');
+        });
+
         it('rigIdentity reads from catState when live, empty string otherwise', () => {
             // Not live → empty regardless of catState
             catState.rigIdentity = 'IC-7300';

@@ -16,7 +16,6 @@
     import FormControls from '../components/FormControls.svelte';
     import { formatAdifRecord } from '../../utils/adif';
     import { frequencyToBand } from '../../utils/frequency';
-    import { resolveModeAndSubmode } from '../../utils/mode';
     import { submitQso as submitQsoToDaemon } from '../../api/qso';
     import { enrichCallsign } from '../../api/enrichment';
     import { fetchContactHistory } from '../../api/contact-history';
@@ -34,34 +33,50 @@
     */
     const DEFAULT_LOGBOOK_ID = 1;
 
-    const modes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
+    /*
+        Operator-friendly mode list for the dropdown. These are the
+        names operators say at the mic (USB, FT8, PSK31, CW) — the
+        ADIF main-vs-submode split happens inside displayedState's
+        derivations via resolveModeAndSubmode. List grows / shrinks
+        with operator preference; if a rig pushes a mode mapped to a
+        value outside this list (e.g. operator's My Station mapping
+        says DATA-U → "JS8" and JS8 isn't in baseModes), the dynamic
+        `modes` $derived below adds it so the dropdown can display
+        the live value when CAT is in charge.
+    */
+    const baseModes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
     /*
-        Mode dropdown is operator-edit territory: writes go to manualState
-        (per ADR 0009 static ownership), reads come from displayedState
-        which picks catState vs manualState based on the three-flag rule.
-        Disabled when CAT is live so the rig owns the mode field. Mode
-        stays a panel-local because it is a CAT-state concern (mirrors
-        displayedState/manualState), not a draft field — keeping it out
-        of qsoDraft preserves the ADR 0009 ownership boundary.
+        Operator-friendly view of the current mode for the dropdown:
+        SUBMODE wins over MODE when present (so a {SSB, USB} pair
+        shows as "USB" not "SSB"; an {FT8, ''} pair shows as "FT8").
+        This collapses the ADIF MODE/SUBMODE pair back into the
+        single string the operator picks from.
     */
     // Two-way bind across two reactive stores: read from displayedState
-    // (rig-mirror or manualState, picked by the ADR 0009 flag rule);
-    // operator writes route back into manualState only when `editable`,
-    // so a CAT-driven mode change while the rig is live can't clobber
-    // the snapshot kept for the disconnect path. `let mode = $state(...)`
-    // + mirror-effect is the standard Svelte 5 idiom for this — a plain
-    // $derived would be read-only and break the <Mode bind:value>.
+    // (which already produces ADIF values via either the rig-mode
+    // mapping lookup or resolveModeAndSubmode of manualState's friendly
+    // pick); operator writes route back into manualState's friendly
+    // form only when `editable`, so a CAT-driven mode change while the
+    // rig is live can't clobber the snapshot kept for the disconnect
+    // path. `let mode = $state(...)` + mirror-effect is the standard
+    // Svelte 5 idiom for this — a plain $derived would be read-only
+    // and break the <Mode bind:value>.
     // eslint-disable-next-line svelte/prefer-writable-derived
-    let mode = $state(displayedState.mode);
+    let mode = $state(displayedState.subMode || displayedState.mode);
     $effect(() => {
-        mode = displayedState.mode;
+        mode = displayedState.subMode || displayedState.mode;
     });
     $effect(() => {
         if (displayedState.editable) {
             manualState.mode = mode;
         }
     });
+
+    // Dynamically include the current value in the dropdown options
+    // so a CAT-pushed mode the operator's friendly list doesn't
+    // already contain (e.g. mapping points at "JS8") still displays.
+    const modes = $derived(baseModes.includes(mode) ? baseModes : [...baseModes, mode]);
 
     /*
         QSO timer ticker. Lifecycle and pre-QSO/active branching live
@@ -216,11 +231,14 @@
         // simply don't appear in the record.
         const ls = configState.loggingStation;
 
-        // Operators and rigs speak in submode names (USB, FT8, PSK31).
-        // ADIF requires MODE to be the parent family (SSB, MFSK, PSK)
-        // with the submode value carried in SUBMODE. Resolve here so
-        // the daemon's strict MODE-enum validation accepts the record.
-        const resolved = resolveModeAndSubmode(displayedState.mode, displayedState.subMode);
+        // displayedState.mode / .subMode are already ADIF-resolved
+        // — when CAT is live they come from the per-rig mode-mappings
+        // table (rigdef defaults + operator overrides merged at the
+        // daemon); when CAT is off they come from
+        // resolveModeAndSubmode running inside displayedState over
+        // the operator's manualState pick. Either way the values
+        // here are the ones the QSO record should carry.
+        const resolved = { mode: displayedState.mode, subMode: displayedState.subMode };
 
         // Captured before submit so the post-store toast can name the
         // contact even after qsoDraft.clear() has wiped the form.

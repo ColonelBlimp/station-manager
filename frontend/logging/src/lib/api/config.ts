@@ -43,14 +43,38 @@ export interface BridgeFields {
      */
     enabled: boolean;
     /**
+     * Rig-driver id (e.g. "yaesu-ftdx10"). Used SPA-side to key into
+     * per-rig sub-maps (Mode Mappings). Empty when bridge is disabled
+     * or unconfigured.
+     */
+    driver?: string;
+    /**
      * Rigdef's human-readable name (e.g. "Yaesu FTdx10") resolved
-     * daemon-side from `bridge.cat.driver`. Empty when the bridge is
-     * disabled or the driver is unknown. Used by the SPA's My Station
-     * Equipment panel and as the ADIF MY_RIG fallback so logged QSOs
-     * carry a descriptive rig string when the operator hasn't typed
-     * their own.
+     * daemon-side from the driver. Used by My Station Equipment panel
+     * + ADIF MY_RIG fallback.
      */
     rig_name?: string;
+    /**
+     * Mode strings the configured rigdef can push (e.g. ["LSB","USB",
+     * "CW-U","DATA-U",...]). Used to render one row per rig mode in
+     * the My Station → Mode Mappings sub-tab.
+     */
+    rig_modes?: string[];
+    /**
+     * Merged view of the rigdef's shipped defaults + the operator's
+     * overrides for the configured driver. Keyed by rig mode string;
+     * value is an ADIF (MODE, SUBMODE) pair. The SPA consumes this
+     * for displayedState mode resolution (catState.mode → ADIF MODE)
+     * and for the Mode Mappings sub-tab's edit form.
+     */
+    mode_mappings?: Record<string, AdifModePair>;
+}
+
+export interface AdifModePair {
+    /** ADIF MODE (e.g. "SSB", "CW", "FT8"). Always non-empty. */
+    mode: string;
+    /** ADIF SUBMODE (e.g. "USB", "PSK31"). Empty when no refinement. */
+    submode?: string;
 }
 
 export interface MailerFields {
@@ -155,7 +179,10 @@ export async function fetchConfig(): Promise<ConfigOutcome> {
 
 export async function putConfig(
     payload: Partial<
-        Pick<ConfigResponse, 'logging_station' | 'default_logbook' | 'default_rig' | 'station'>
+        Pick<
+            ConfigResponse,
+            'logging_station' | 'default_logbook' | 'default_rig' | 'station' | 'bridge'
+        >
     >
 ): Promise<ConfigOutcome> {
     let response: Response;

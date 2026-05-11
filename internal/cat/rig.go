@@ -1,5 +1,7 @@
 package cat
 
+import "github.com/ColonelBlimp/station-manager/internal/types"
+
 // RigDefinition is the shape of a rig-database entry. Ships as an embedded
 // rigs/*.json file or (once implemented) via an operator-registered external
 // directory. Contains everything SM knows about a supported rig: identity,
@@ -8,52 +10,18 @@ package cat
 // and is NOT part of a RigDefinition — it lives in the operator's own
 // config alongside the rig id.
 type RigDefinition struct {
-	ID           string                 `json:"id"`
-	Name         string                 `json:"name"`
-	Manufacturer string                 `json:"manufacturer"`
-	Model        string                 `json:"model"`
-	Family       string                 `json:"family"`
-	Description  string                 `json:"description,omitempty"`
-	Terminator   string                 `json:"terminator"`
-	Serial       RigSerial              `json:"serial"`
-	Timing       RigTiming              `json:"timing"`
-	Commands     []Command              `json:"commands"`
-	States       []State                `json:"states"`
-	ModeMappings map[string]ModeMapping `json:"mode_mappings,omitempty"`
-}
-
-// ModeMapping translates one rig-pushed mode string (e.g. "DATA-U" or
-// "CW-U" — the value side of a MAINMODE/SUBMODE rigdef value_mapping)
-// into an operator-friendly mode plus an optional explicit submode
-// refinement. Ships per-rig in RigDefinition.ModeMappings; operator
-// overrides live in their config.json under bridge.mode_mappings and
-// are merged in at /v1/config GET time (rigdef provides defaults;
-// operator's value wins when present).
-//
-// Mode is the operator-friendly value the SPA's mode dropdown shows
-// (USB, LSB, CW, FM, AM, RTTY, FT8, FT4, PSK31, etc.) — same list
-// the operator picks from when CAT is off. The ADIF main-vs-submode
-// split is resolved at QSO-submit time via the existing
-// resolveModeAndSubmode utility (e.g. Mode="FT8" → ADIF MODE=MFSK
-// SUBMODE=FT8; Mode="USB" → ADIF MODE=SSB SUBMODE=USB; Mode="CW" →
-// ADIF MODE=CW SUBMODE=""). Validated server-side: either a valid
-// ADIF main mode (enums/modes.IsValidMode) or a known submode
-// (enums/modes.IsValidSubMode).
-//
-// SubMode is for the rare case where the operator wants an explicit
-// refinement on top of the dropdown value (e.g. Mode="CW" SubMode=
-// "CW-N" for narrow CW, once the daemon's submode enum grows to
-// include such variants). Empty for almost all defaults.
-//
-// Defaults (shipped in each rigdef): unambiguous Yaesu strings map
-// to their obvious dropdown value (LSB→LSB, USB→USB, CW-U/CW-L→CW,
-// FM/FM-N→FM, etc.). The ambiguous DATA-U/DATA-L cases default to
-// FT8 since that's the most common digital protocol today; operator
-// changes the override via the My Station → Mode Mappings sub-tab
-// when running something else.
-type ModeMapping struct {
-	Mode    string `json:"mode"`
-	SubMode string `json:"submode,omitempty"`
+	ID           string                       `json:"id"`
+	Name         string                       `json:"name"`
+	Manufacturer string                       `json:"manufacturer"`
+	Model        string                       `json:"model"`
+	Family       string                       `json:"family"`
+	Description  string                       `json:"description,omitempty"`
+	Terminator   string                       `json:"terminator"`
+	Serial       RigSerial                    `json:"serial"`
+	Timing       RigTiming                    `json:"timing"`
+	Commands     []Command                    `json:"commands"`
+	States       []State                      `json:"states"`
+	ModeMappings map[string]types.ModeMapping `json:"mode_mappings,omitempty"`
 }
 
 // RigSerial carries serial-port defaults for the rig. Values are in
@@ -115,4 +83,31 @@ type Marker struct {
 type ValueMapping struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+}
+
+// RigModes returns the unique rig-mode strings the rigdef's MAINMODE
+// parser can produce. Pulled from the value_mappings of the State
+// whose Marker tag is "MAINMODE" — that's the canonical "what mode
+// can this rig push" set. Used by the daemon's /v1/config to populate
+// the SPA's Mode Mappings sub-tab (one row per returned string).
+// Returns nil when the rigdef has no MAINMODE marker (defensive — a
+// rigdef without one is still valid CAT but has nothing to translate).
+func RigModes(def RigDefinition) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, st := range def.States {
+		for _, mk := range st.Markers {
+			if mk.Tag != "MAINMODE" {
+				continue
+			}
+			for _, vm := range mk.ValueMappings {
+				if _, ok := seen[vm.Value]; ok {
+					continue
+				}
+				seen[vm.Value] = struct{}{}
+				out = append(out, vm.Value)
+			}
+		}
+	}
+	return out
 }

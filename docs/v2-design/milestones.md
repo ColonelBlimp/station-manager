@@ -665,10 +665,18 @@ produces a clean `bridge-error` with operator-readable reason.
   display updates live; mode change → SPA reflects; rig
   identity "Yaesu FTdx10" + power 50W populate Equipment panel
   read-only; QSO submission carries MY_RIG + TX_PWR correctly.
-- **Parked work:** rig-specific mode → ADIF translation (DATA-U /
-  DATA-L / CW-U / CW-L / RTTY-U/L / FM-N / AM-N etc.) deferred to
-  a follow-up session — full design context in
-  `docs/v2-design/cat-serial-reuse.md §8`.
+- **Rig-mode → ADIF translation (the M3a.4 follow-up):** SHIPPED
+  session 51 (2026-05-11). Two-layer architecture (rigdef-shipped
+  defaults in each `internal/cat/rigs/*.json` under `mode_mappings`
+  + operator overrides in `config.json` under `bridge.mode_mappings`,
+  merged at `/v1/config` GET time). Bridge stays pure pass-through
+  (rig literal on the wire); SPA resolves via
+  `displayedState.mode` / `.subMode` derivations. New My Station →
+  Mode Mappings sub-tab edits the override layer.
+- **Side-effect win:** daemon's `internal/enums/modes` enum became
+  data-driven via embedded `adif-modes.json` + optional
+  `$SM_WORKING_DIR/modes.json` operator override. Future ADIF
+  spec growth no longer strictly requires a daemon binary release.
 
 **Acceptance:** ✅ end-to-end live test passed, operator confirmed.
 **M3a (bridge subsystem v1) closed.**

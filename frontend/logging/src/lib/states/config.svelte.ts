@@ -43,7 +43,7 @@
  *     default_rig_id. Empty until CAT lands.
  */
 
-import type { ConfigResponse } from '../api/config';
+import type { AdifModePair, ConfigResponse } from '../api/config';
 
 class StationConfig {
     /**
@@ -165,6 +165,44 @@ class DefaultRigView {
 }
 
 /**
+ * Bridge subsystem facets exposed to the SPA via `/v1/config`. Hosts
+ * the bits that don't fit cleanly under StationConfig (the rig
+ * driver id and the rigdef's mode list + merged mode mappings).
+ *
+ * Historical note: `station.enabled` and `station.rigName` are
+ * conceptually bridge fields too but live on StationConfig for
+ * compatibility with code written before this sub-state existed.
+ * Moving them would be a wider refactor with no behavioural change.
+ */
+class BridgeView {
+    /**
+     * Rigdef driver id (e.g. "yaesu-ftdx10"). Used as the lookup key
+     * into per-rig sub-maps (Mode Mappings) and as the persistence
+     * key when the SPA PUTs mode_mappings overrides back to the
+     * daemon. Empty when bridge is disabled or unconfigured.
+     */
+    driver: string = $state('');
+
+    /**
+     * Set of rig-pushed mode strings the configured rigdef's
+     * MAINMODE parser can produce. Stable for the lifetime of a
+     * daemon (rigdef-derived). One row per entry in the My Station
+     * → Mode Mappings sub-tab.
+     */
+    rigModes: string[] = $state([]);
+
+    /**
+     * Merged mode-mapping table for the configured driver — rigdef
+     * shipped defaults overlaid with operator overrides from
+     * config.json. Keyed by rig literal string; value is an ADIF
+     * (MODE, SUBMODE) pair. Consumed by displayedState's mode/
+     * subMode derivation when CAT is live, and by the Mode Mappings
+     * sub-tab as the edit-form's initial values.
+     */
+    modeMappings: Record<string, AdifModePair> = $state({});
+}
+
+/**
  * Mailer projection — daemon-managed read-only flag + default
  * recipient. Both fields are `$state` so the SessionPanel can
  * reactively show/hide its email controls when the operator changes
@@ -199,6 +237,7 @@ class ConfigState {
     loggingStation: LoggingStationView = new LoggingStationView();
     defaultLogbook: DefaultLogbookView = new DefaultLogbookView();
     defaultRig: DefaultRigView = new DefaultRigView();
+    bridge: BridgeView = new BridgeView();
     mailer: MailerView = new MailerView();
 
     /**
@@ -265,6 +304,9 @@ class ConfigState {
 
         this.station.enabled = resp.bridge?.enabled ?? false;
         this.station.rigName = resp.bridge?.rig_name ?? '';
+        this.bridge.driver = resp.bridge?.driver ?? '';
+        this.bridge.rigModes = resp.bridge?.rig_modes ?? [];
+        this.bridge.modeMappings = resp.bridge?.mode_mappings ?? {};
 
         // mailer projection — daemon-managed, read-only on the SPA
         // side. Defensive guard against missing block (older daemon

@@ -41,6 +41,7 @@ import { catState } from './cat.svelte';
 import { manualState } from './manual.svelte';
 import { configState } from './config.svelte';
 import { bridgeState } from './bridge.svelte';
+import { resolveModeAndSubmode } from '../utils/mode';
 
 class DisplayedState {
     /**
@@ -63,8 +64,52 @@ class DisplayedState {
 
     vfoA: number = $derived(this.isLive ? catState.vfoA : manualState.vfoA);
     vfoB: number = $derived(this.isLive ? catState.vfoB : manualState.vfoB);
-    mode: string = $derived(this.isLive ? catState.mode : manualState.mode);
-    subMode: string = $derived(this.isLive ? catState.subMode : manualState.subMode);
+
+    /**
+     * ADIF MODE — the validated main-mode string the QSO submit will
+     * carry. Resolution depends on which source is in charge:
+     *
+     *   - CAT live: `catState.mode` is the rig literal (e.g.
+     *     "DATA-U"); we look it up in `configState.bridge.modeMappings`
+     *     (merged rigdef defaults + operator overrides). Missing
+     *     entries pass the rig string through unchanged — daemon-
+     *     side validation will 400 the QSO submit, surfacing the gap
+     *     to the operator (fix: add a row in My Station → Mode
+     *     Mappings).
+     *   - CAT off: operator's dropdown pick lives in `manualState.mode`
+     *     as an operator-friendly string (e.g. "USB", "FT8"). We run
+     *     it through `resolveModeAndSubmode` to produce the canonical
+     *     ADIF MODE (e.g. "USB" → "SSB"; "FT8" → "FT8").
+     *
+     * Either way, the value at this property is already-resolved ADIF
+     * — the QSO submit can use it directly without another resolve.
+     */
+    mode: string = $derived.by(() => {
+        if (this.isLive) {
+            const m = configState.bridge.modeMappings[catState.mode];
+            return m?.mode ?? catState.mode;
+        }
+        const resolved = resolveModeAndSubmode(manualState.mode, manualState.subMode);
+        return resolved.mode;
+    });
+
+    /**
+     * ADIF SUBMODE — paired with `mode` above. Comes from the same
+     * mapping entry when CAT is live, and from the same
+     * `resolveModeAndSubmode` invocation as `mode` when CAT is off.
+     * Empty when the chosen mode has no submode refinement (CW, FM,
+     * FT8 are themselves ADIF main modes; USB / LSB / PSK31 etc.
+     * resolve as submodes of SSB / PSK).
+     */
+    subMode: string = $derived.by(() => {
+        if (this.isLive) {
+            const m = configState.bridge.modeMappings[catState.mode];
+            return m?.submode ?? '';
+        }
+        const resolved = resolveModeAndSubmode(manualState.mode, manualState.subMode);
+        return resolved.subMode;
+    });
+
     selectedVfo: 'A' | 'B' = $derived(this.isLive ? catState.selectedVfo : manualState.selectedVfo);
     rigIdentity: string = $derived(this.isLive ? catState.rigIdentity : '');
 

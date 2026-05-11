@@ -21,27 +21,23 @@
     parents; if a new submode lands daemon-side, mirror it here.
 */
 
+/*
+    Mirrors the daemon's embedded `adif-modes.json` submodes section.
+    Entries that ADIF 3.x promotes to main modes (FT8, FT4, FST4, Q65,
+    JS8, JT*, MSK144, MT63, OLIVIA, etc.) live in the daemon's
+    main_modes list and are NOT in this table — they pass through
+    `resolveModeAndSubmode` as MODE=value SUBMODE='' (the
+    pass-through branch below).
+*/
 const SUBMODE_TO_MODE: Record<string, string> = {
     // SSB sidebands
     USB: 'SSB',
     LSB: 'SSB',
 
-    // MFSK family (WSJT-X et al.)
-    FT4: 'MFSK',
-    FT8: 'MFSK',
-    FST4: 'MFSK',
-    FST4W: 'MFSK',
-    Q65: 'MFSK',
-    OLIVIA: 'MFSK',
-    CONTESTIA: 'MFSK',
-    DOMINOEX: 'MFSK',
-    FSQ: 'MFSK',
-    JS8: 'MFSK',
+    // MFSK family (WSJT-X et al.) — only the ones that ARE submodes
+    // of MFSK in ADIF 3.x.
     MFSK16: 'MFSK',
     MFSK8: 'MFSK',
-    MT63: 'MFSK',
-    THOR: 'MFSK',
-    THROB: 'MFSK',
 
     // PSK family
     PSK10: 'PSK',
@@ -64,12 +60,9 @@ const SUBMODE_TO_MODE: Record<string, string> = {
     HELL80: 'HELL',
     FMHELL: 'HELL',
     FSKHELL: 'HELL',
-    HFSK: 'HELL',
-    HHELL: 'HELL',
     PSKHELL: 'HELL',
 
     // Packet family
-    PKT: 'PACKET',
     APRS: 'PACKET',
 };
 
