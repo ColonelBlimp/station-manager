@@ -154,7 +154,7 @@
                 <button
                     type="button"
                     role="tab"
-                    class="tab-button text-sm"
+                    class="tab-button text-sm {activeSection === section.id ? '' : 'cursor-pointer'}"
                     aria-selected={activeSection === section.id}
                     aria-controls={`my-station-${section.id}`}
                     onclick={() => (activeSection = section.id)}>{section.title}</button

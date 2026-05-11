@@ -1,7 +1,7 @@
 ---
 number: 0010
 title: Rig SSE wire shape — single endpoint, three event types, passive liveness via rig data flow
-status: Accepted (revised three times — see revision notes)
+status: Accepted (revised four times — see revision notes)
 date: 2026-05-01
 ---
 
@@ -18,6 +18,11 @@ date: 2026-05-01
 > *Fourth revision (2026-05-10, M3a.3 implementation):* two implementation-level clarifications that don't change the architectural shape but matter for SPA wiring (M3a.4):
 > 1. **`splitOverride` is wire-presence-significant.** The Go bridge implementation uses `*bool` so the SPA can distinguish "rig didn't push split this frame" (field omitted from JSON) from "rig pushed split=OFF" (`"splitOverride": false`). Pre-fix the bridge had `bool` + `omitempty` which collapsed the two cases on the wire. The SPA's `bridge.svelte.ts` consumer should treat field-presence as the merge gate, not field-truthiness — `splitOverride: false` IS a meaningful update.
 > 2. **`bridge-error` events have a hub-side cache.** The hub holds one cached `bridge-error` slot and replays it to every new subscriber as their first event. This means a SPA tab opening AFTER a startup-time bridge-error (typo'd `bridge.cat.driver`, port permission denied, etc.) still receives the toast. Per-Service-instance lifetime; never cleared within a Service. This is a deliberate exception to ADR 0019's "no cache" stance — rig state stays uncached, but operator-actionable errors are too valuable to forget. Documented in ADR 0019's revised cache section.
+>
+> *Fifth revision (2026-05-11, M3a.4 implementation):* SPA-side wiring landed; the wire-shape itself is unchanged but three implementation details earned their place in the reasoning trail:
+> 1. **The three-flag rule's first flag (`configState.station.enabled`) is now daemon-authoritative.** Originally framed as "operator config" in the SPA, the SPA had no UI toggle and no daemon mirror; the EventSource never opened. Fix: `/v1/config` response gained a `bridge` block with `enabled: boolean` (mirrored daemon-side from `cfg.Bridge.Enabled`), SPA hydrates into `configState.station.enabled` via `applyResponse`. Operator's only way to flip CAT on/off is `config.json` + daemon restart, matching ADR 0003's "operator owns config.json directly" pattern for SMTP creds / hardware config.
+> 2. **`/v1/config` also surfaces `bridge.rig_name`** — the rigdef's human-readable name (e.g. "Yaesu FTdx10") resolved daemon-side from `cat.Lookup(Bridge.Cat.Driver).Name`. SPA mirrors into `configState.station.rigName`; `displayedState.rigName = isLive ? rigName : ''` is read by My Station Equipment panel (read-only display when CAT live) and used as the ADIF MY_RIG fallback. This is distinct from `catState.rigIdentity` (the IDENTITY-tag-mapped value the rig actually reports, e.g. "FTdx10") — `rigName` is the operator's chosen driver's name, `rigIdentity` is what the wire says. Both useful; `rigName` is the human-readable one.
+> 3. **Daemon middleware needs `Unwrap()`.** `internal/api/middleware.go`'s `responseRecorder` wraps `http.ResponseWriter` for access-log instrumentation. Without `Unwrap() http.ResponseWriter`, `http.ResponseController.SetWriteDeadline(time.Time{})` in SSE handlers can't traverse the wrapper to clear the server's `WriteTimeout`, and SSE connections are force-closed every `WriteTimeoutSec` seconds (30s by default). Symptom: SPA reconnects silently but frequency pushes that arrived during the reconnect gap are lost. Pinned by the unbounded SSE durations in live-test logs post-fix (~85s observed; pre-fix every connection was exactly 30007ms).
 >
 > The wire shape below — three event types, deltas, passive liveness — is unchanged across all four revisions. Only the host (ambiguous → bridge process → daemon with bridge subsystem) and the cache strategy (cached → stateless → stateless-except-for-bridge-error) have changed. The SPA composes the URL as `${configState.bridgeUrl}/v1/rig/events`, where `bridgeUrl` defaults to `daemonUrl` in the single-binary deployment and is operator-overridable for the split-host case.
 

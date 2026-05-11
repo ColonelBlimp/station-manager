@@ -107,6 +107,51 @@ expectation better than "rig acquired only when SPA happens to be
 open." Cache lifetime is per-Service-instance (fresh hub per daemon
 restart); never cleared within a Service's lifetime.
 
+*Implementation update (M3a.4 / M3a closure, 2026-05-11):* the SPA's
+`bridge.svelte.ts` consumer landed and the bridge subsystem v1 is
+**closed**. Two daemon-side gaps surfaced during live testing on the
+FTdx10 and were closed in the same session:
+
+1. **CAT-enabled is daemon-authoritative.** The original ADR-0010
+   three-flag rule listed `configState.station.enabled` as "operator
+   wants CAT" without specifying its source. The SPA had no UI toggle
+   and no daemon mirror, so the EventSource never opened. Closed by
+   exposing `bridge.enabled` in the `/v1/config` response
+   (`BridgeInfo.Enabled`); SPA hydrates into
+   `configState.station.enabled` via `applyResponse`. Operator's
+   only way to flip CAT on/off is `config.json` + daemon restart,
+   matching ADR 0003's "operator owns config.json directly" pattern.
+
+2. **Rigdef name surfacing.** Operator wanted the My Station →
+   Equipment panel to display the rig's human-readable name when
+   CAT is live, and ADIF MY_RIG to fall back to it when the
+   operator hasn't typed their own value. Closed by exposing
+   `bridge.rig_name` in the `/v1/config` response (resolved
+   daemon-side from `cat.Lookup(Bridge.Cat.Driver).Name`, e.g.
+   "Yaesu FTdx10"); SPA mirrors into `configState.station.rigName`
+   and derives `displayedState.rigName = isLive ? rigName : ''`.
+   Distinct from `catState.rigIdentity` (IDENTITY-tag-mapped value
+   the rig reports, e.g. "FTdx10"): `rigName` is the operator's
+   chosen driver's name; `rigIdentity` is what the wire confirms.
+
+A daemon-side bug also surfaced: `responseRecorder` in
+`internal/api/middleware.go` lacked `Unwrap() http.ResponseWriter`,
+so `http.ResponseController.SetWriteDeadline(time.Time{})` in the
+bridge handler couldn't traverse the access-log middleware and
+returned `ErrNotSupported`. Effect: the server's `WriteTimeout=30s`
+killed every SSE stream every 30 seconds. Fixed by adding the
+single-line `Unwrap` method. Pinned by post-fix unbounded SSE
+durations in live-test logs.
+
+Parked: rig-specific mode → ADIF translation (DATA-U / CW-U /
+RTTY-U etc. don't map 1:1 to the daemon's strict ADIF main-mode
+enum). Operator decision: per-rig translation table in each
+rigdef JSON, design deferred to a follow-up session. Full context
+in `docs/v2-design/cat-serial-reuse.md §8`. The wire shape on
+`/v1/rig/events` is unaffected — the mode-mapping work happens
+inside the bridge, *before* the rig-state event is emitted, so the
+SPA only ever sees ADIF-valid pairs once the work lands.
+
 ### One SSE frontend, others deferred
 
 - **Ship `/v1/rig/events` SSE only.** The logging SPA's `bridge.svelte.ts`

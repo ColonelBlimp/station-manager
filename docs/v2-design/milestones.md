@@ -619,22 +619,59 @@ produces a clean `bridge-error` with operator-readable reason.
 
 #### M3a.4 — SPA consumer + live rig test
 
-- Replace `frontend/logging/src/lib/states/bridge.svelte.ts` stub
-  with a real EventSource consumer (read-only).
-- Three event listeners: `rig-state` (merge into `catState`),
-  `rig-disconnected` (toast + `rigResponding=false`), `bridge-error`
-  (toast).
-- `bridgeState.connected` from `EventSource.readyState`;
-  `bridgeState.rigResponding` from event sequence.
-- EventSource construction conditional on
-  `configState.station.enabled`. Browser handles auto-reconnect.
-- Vitest tests against a stub `EventSource` (jsdom).
-- **Live rig test:** operator's actual Yaesu connected, SPA open; dial
-  turn → SPA's VFO display updates live; mode change → SPA reflects;
-  power-cycle the rig → values marked stale via existing `editable`
-  derivation, repopulate when rig comes back.
+**Status: ✅ SHIPPED (session 50, 2026-05-11).**
 
-**Acceptance:** end-to-end live test passes. Operator confirms.
+- `frontend/logging/src/lib/states/bridge.svelte.ts` is a real
+  EventSource consumer wired to `/v1/rig/events`, replacing the
+  M3a.1 stub.
+- Three event listeners as designed: `rig-state` (field-by-field
+  merge into `catState`; `*bool` `splitOverride` preserved via
+  explicit existence check so the OFF case survives), `rig-disconnected`
+  (warn toast + `rigResponding=false`), `bridge-error` (error toast).
+- `bridgeState.connected` mirrors `EventSource.readyState` via
+  `open`/`error` event listeners; `bridgeState.rigResponding` flips
+  true on every `rig-state` (implicit reconnect per ADR 0009),
+  false on `rig-disconnected` or transport `error`.
+- `startBridge()` / `stopBridge()` lifecycle: app onMount calls
+  `startBridge()` after `fetchConfig()` settles; an internal
+  `$effect.root` tracks `configState.station.enabled` and
+  opens/closes the EventSource accordingly. `configState.station.enabled`
+  is now hydrated from `/v1/config` response's `bridge.enabled`
+  (daemon-authoritative per ADR 0003) — the operator flips CAT
+  on/off via `config.json` + daemon restart, no SPA toggle needed.
+- 19 Vitest cases against a FakeEventSource (lifecycle, connected
+  flag, full+partial merge, splitOverride OFF regression,
+  disconnected toast, bridge-error toast, JSON-parse fault
+  tolerance). Total SPA suite: 464 tests across 27 files green.
+- **Daemon-side fixes surfaced during live testing:**
+  - `responseRecorder.Unwrap()` added in `internal/api/middleware.go`
+    so `http.ResponseController.SetWriteDeadline(time.Time{})` can
+    reach the underlying conn and disable the deadline. Without
+    this the server's `WriteTimeout=30s` killed every SSE stream
+    every 30 seconds; band-change rig pushes during the reconnect
+    gap were lost.
+  - `BridgeInfo.RigName` exposed via `/v1/config`, resolved daemon-side
+    from `cat.Lookup(Bridge.Cat.Driver).Name` (e.g. "Yaesu FTdx10").
+    SPA mirrors it into `configState.station.rigName`;
+    `displayedState.rigName` derives `isLive ? rigName : ''`.
+    Used by the My Station Equipment panel's Rig field (read-only
+    when CAT live) and as the ADIF MY_RIG fallback so logged QSOs
+    carry the descriptive rig string when the operator hasn't typed
+    their own.
+  - My Station Equipment panel's Default TX Power field reads
+    `catState.power` read-only when CAT live; operator's typed
+    default editable when off.
+- **Live test confirmed:** dial turn on the FTdx10 → SPA's VFO
+  display updates live; mode change → SPA reflects; rig
+  identity "Yaesu FTdx10" + power 50W populate Equipment panel
+  read-only; QSO submission carries MY_RIG + TX_PWR correctly.
+- **Parked work:** rig-specific mode → ADIF translation (DATA-U /
+  DATA-L / CW-U / CW-L / RTTY-U/L / FM-N / AM-N etc.) deferred to
+  a follow-up session — full design context in
+  `docs/v2-design/cat-serial-reuse.md §8`.
+
+**Acceptance:** ✅ end-to-end live test passed, operator confirmed.
+**M3a (bridge subsystem v1) closed.**
 
 ---
 
