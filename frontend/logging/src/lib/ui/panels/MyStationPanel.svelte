@@ -31,6 +31,28 @@
         saving = true;
         try {
             const ls = configState.loggingStation;
+
+            // Mode-mappings payload — only included when the operator
+            // has visited the Mode Mappings sub-tab (which is what
+            // populates editingModes via snapModeMappings). Omitting
+            // the field on the PUT keeps the daemon's existing
+            // override map untouched; sending an empty object would
+            // clear all overrides. Blank-MODE rows are dropped here
+            // so the daemon's diff layer treats them as "revert to
+            // rigdef default".
+            let modeMappingsPayload:
+                | Record<string, { mode: string; submode?: string }>
+                | undefined;
+            if (Object.keys(editingModes).length > 0) {
+                modeMappingsPayload = {};
+                for (const [rigStr, pair] of Object.entries(editingModes)) {
+                    const mode = pair.mode.trim();
+                    if (mode === '') continue;
+                    const submode = pair.submode.trim();
+                    modeMappingsPayload[rigStr] = submode ? { mode, submode } : { mode };
+                }
+            }
+
             const outcome = await putConfig({
                 logging_station: {
                     station_callsign: ls.stationCallsign,
@@ -56,10 +78,27 @@
                     amp_multiplier: configState.station.ampMultiplier,
                     default_power: configState.station.defaultPower,
                 },
+                ...(modeMappingsPayload !== undefined && {
+                    bridge: {
+                        enabled: configState.station.enabled,
+                        driver: configState.bridge.driver,
+                        mode_mappings: modeMappingsPayload,
+                    },
+                }),
             });
             switch (outcome.kind) {
                 case 'ok':
                     configState.applyResponse(outcome.config);
+                    // Re-snap editingModes from the daemon's response
+                    // so the panel reflects the merged post-save view
+                    // (operator's overrides + any daemon-side
+                    // normalisation). Only re-snap when we actually
+                    // sent mode_mappings — otherwise leave editingModes
+                    // alone (operator may have unsaved edits we
+                    // shouldn't overwrite from an Identity-only save).
+                    if (modeMappingsPayload !== undefined) {
+                        snapModeMappings();
+                    }
                     if (qsoDefaults.notifyConfigSaved) {
                         toasts.info('Station updated.');
                     }
@@ -150,7 +189,6 @@
         submode: string;
     }
     let editingModes: Record<string, EditablePair> = $state({});
-    let savingModes: boolean = $state(false);
 
     function snapModeMappings(): void {
         const fresh: Record<string, EditablePair> = {};
@@ -174,52 +212,6 @@
             snapModeMappings();
         }
     });
-
-    async function saveModeMappings(): Promise<void> {
-        if (savingModes) return;
-        savingModes = true;
-        try {
-            const payload: Record<string, { mode: string; submode?: string }> = {};
-            for (const [rigStr, pair] of Object.entries(editingModes)) {
-                const mode = pair.mode.trim();
-                if (mode === '') continue; // skip blanks; operator can clear an override by emptying mode
-                const submode = pair.submode.trim();
-                payload[rigStr] = submode ? { mode, submode } : { mode };
-            }
-            const outcome = await putConfig({
-                bridge: {
-                    enabled: configState.station.enabled,
-                    driver: configState.bridge.driver,
-                    mode_mappings: payload,
-                },
-            });
-            switch (outcome.kind) {
-                case 'ok':
-                    configState.applyResponse(outcome.config);
-                    snapModeMappings();
-                    if (qsoDefaults.notifyConfigSaved) {
-                        toasts.info('Mode mappings updated.');
-                    }
-                    break;
-                case 'validation':
-                    console.warn(`[mode-mappings save] ${outcome.code}: ${outcome.message}`);
-                    toasts.error(outcome.message);
-                    break;
-                case 'server':
-                    console.error(`[mode-mappings save] ${outcome.code}: ${outcome.message}`);
-                    toasts.error('Could not save mode mappings. Try again.');
-                    break;
-                case 'network':
-                    console.error(
-                        `[mode-mappings save] daemon unreachable: ${outcome.message}`,
-                    );
-                    toasts.error('Cannot reach the daemon — check it is running.');
-                    break;
-            }
-        } finally {
-            savingModes = false;
-        }
-    }
 
     $effect(() => {
         try {

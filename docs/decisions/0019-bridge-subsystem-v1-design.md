@@ -143,14 +143,35 @@ killed every SSE stream every 30 seconds. Fixed by adding the
 single-line `Unwrap` method. Pinned by post-fix unbounded SSE
 durations in live-test logs.
 
-Parked: rig-specific mode → ADIF translation (DATA-U / CW-U /
-RTTY-U etc. don't map 1:1 to the daemon's strict ADIF main-mode
-enum). Operator decision: per-rig translation table in each
-rigdef JSON, design deferred to a follow-up session. Full context
-in `docs/v2-design/cat-serial-reuse.md §8`. The wire shape on
-`/v1/rig/events` is unaffected — the mode-mapping work happens
-inside the bridge, *before* the rig-state event is emitted, so the
-SPA only ever sees ADIF-valid pairs once the work lands.
+*Implementation update (session 51, 2026-05-11) — rig-mode → ADIF
+translation shipped:* the M3a.4 parked work landed end-to-end.
+**Final architecture differs from the original "happens inside the
+bridge" plan above:** the bridge stays a pure pass-through (rig
+literal on the wire — no mapping logic added there); the SPA
+resolves to ADIF (MODE, SUBMODE) pairs via a per-rig translation
+table sourced from rigdef shipped defaults (`internal/cat/rigs/*.json`
+`mode_mappings` block) merged with operator overrides
+(`config.json` `bridge.mode_mappings`) at the daemon's
+`/v1/config` GET. Operator's My Station → Mode Mappings sub-tab
+edits the override layer.
+
+Rationale for SPA-side resolution (operator decision): keeps the
+bridge dumb (consistent with the v1 stateless-filter rule above);
+keeps interpretation as a UI/operator-config concern; allows the
+operator to change the protocol assignment for ambiguous modes
+(DATA-U → FT8 / PSK31 / RTTY-D) via the UI rather than restarting
+the bridge to pick up a new mapping. The wire shape on
+`/v1/rig/events` is unaffected — same three event types, same
+payload format; the `mode` field on `rig-state` carries the rig
+literal as before, and the SPA's `displayedState` derivations
+consume the merged mappings table to produce ADIF MODE / SUBMODE.
+
+Side-effect of the same session: the daemon's `internal/enums/modes`
+package was refactored from a hardcoded Go enum to a data-driven
+catalogue (embedded `adif-modes.json` baseline + optional operator
+override at `$SM_WORKING_DIR/modes.json`). ADIF spec growth no
+longer strictly requires a daemon binary release — operators can
+extend the override file ahead of an upgrade.
 
 ### One SSE frontend, others deferred
 
