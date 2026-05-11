@@ -42,6 +42,25 @@ type hub struct {
 	// (#2): chosen over lazy-start because operators expect the
 	// daemon to hold the rig from start.
 	lastBridgeError *Event
+
+	// lastRigDisconnected caches the most recent EventRigDisconnected
+	// for the same late-subscriber reason as lastBridgeError, with
+	// one critical difference: rig-disconnected auto-recovers. When
+	// the rig starts pushing data again the pipeline emits
+	// EventRigState (implicit reconnect per ADR 0009 — the SPA's
+	// rigResponding flips back to true on any rig-state); a cached
+	// disconnect at that point would be stale and misleading. So
+	// publish clears the cache on EventRigState arrival.
+	//
+	// Without this cache, the operator's second / refreshed SPA tab
+	// never sees the "Rig disconnected" toast for an off-rig that
+	// never came up — the pipeline's announcedDisconnect dedup flag
+	// fires the disconnect exactly once per silent-window, the first
+	// subscriber gets it (or misses it if not yet subscribed), and
+	// every later subscriber gets nothing because no new event ever
+	// fires while the rig stays silent. The SPA's bridgeState shows
+	// `rigResponding=false` but the toast notification is absent.
+	lastRigDisconnected *Event
 }
 
 func newHub() *hub {
@@ -66,6 +85,19 @@ func (h *hub) publish(evt Event) {
 	if evt.Name == EventBridgeError {
 		cp := evt
 		h.lastBridgeError = &cp
+	}
+	// Cache rig-disconnected so late subscribers see the toast even
+	// after the pipeline's once-per-silent-window dedup has fired.
+	// Clear it on rig-state arrival: a successful rig push is the
+	// implicit-reconnect signal (per ADR 0009), so a cached
+	// disconnect would be stale and would misleadingly toast new
+	// subscribers when the rig is actually fine.
+	switch evt.Name {
+	case EventRigDisconnected:
+		cp := evt
+		h.lastRigDisconnected = &cp
+	case EventRigState:
+		h.lastRigDisconnected = nil
 	}
 	for id, ch := range h.subs {
 		select {
@@ -106,6 +138,17 @@ func (h *hub) subscribe() (<-chan Event, func()) {
 	if h.lastBridgeError != nil {
 		select {
 		case ch <- *h.lastBridgeError:
+		default:
+		}
+	}
+	// Replay the cached rig-disconnected too. Order doesn't matter
+	// for the SPA's merge semantics: both events touch different
+	// bridgeState facets (bridge-error → toast only; rig-disconnected
+	// → toast + rigResponding=false), so a second slot in the
+	// cap-64 buffer is also safe.
+	if h.lastRigDisconnected != nil {
+		select {
+		case ch <- *h.lastRigDisconnected:
 		default:
 		}
 	}

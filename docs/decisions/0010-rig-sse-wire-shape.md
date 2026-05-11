@@ -1,7 +1,7 @@
 ---
 number: 0010
 title: Rig SSE wire shape — single endpoint, three event types, passive liveness via rig data flow
-status: Accepted (revised four times — see revision notes)
+status: Accepted (revised six times — see revision notes)
 date: 2026-05-01
 ---
 
@@ -24,7 +24,14 @@ date: 2026-05-01
 > 2. **`/v1/config` also surfaces `bridge.rig_name`** — the rigdef's human-readable name (e.g. "Yaesu FTdx10") resolved daemon-side from `cat.Lookup(Bridge.Cat.Driver).Name`. SPA mirrors into `configState.station.rigName`; `displayedState.rigName = isLive ? rigName : ''` is read by My Station Equipment panel (read-only display when CAT live) and used as the ADIF MY_RIG fallback. This is distinct from `catState.rigIdentity` (the IDENTITY-tag-mapped value the rig actually reports, e.g. "FTdx10") — `rigName` is the operator's chosen driver's name, `rigIdentity` is what the wire says. Both useful; `rigName` is the human-readable one.
 > 3. **Daemon middleware needs `Unwrap()`.** `internal/api/middleware.go`'s `responseRecorder` wraps `http.ResponseWriter` for access-log instrumentation. Without `Unwrap() http.ResponseWriter`, `http.ResponseController.SetWriteDeadline(time.Time{})` in SSE handlers can't traverse the wrapper to clear the server's `WriteTimeout`, and SSE connections are force-closed every `WriteTimeoutSec` seconds (30s by default). Symptom: SPA reconnects silently but frequency pushes that arrived during the reconnect gap are lost. Pinned by the unbounded SSE durations in live-test logs post-fix (~85s observed; pre-fix every connection was exactly 30007ms).
 >
-> The wire shape below — three event types, deltas, passive liveness — is unchanged across all four revisions. Only the host (ambiguous → bridge process → daemon with bridge subsystem) and the cache strategy (cached → stateless → stateless-except-for-bridge-error) have changed. The SPA composes the URL as `${configState.bridgeUrl}/v1/rig/events`, where `bridgeUrl` defaults to `daemonUrl` in the single-binary deployment and is operator-overridable for the split-host case.
+> *Sixth revision (2026-05-12, daemon-error-codes + SPA i18n):* `rig-disconnected` and `bridge-error` payloads switched from human-readable strings to machine-readable codes + substitution details. **Backwards-incompatible wire change** for these two event types only — coordinated SPA + daemon upgrade since the bridge subsystem has a single in-tree consumer.
+> - `rig-disconnected` was `{reason: string}`; is now `{code: RigDisconnectedCode, details?: map[string]string}`. Codes: `rig_no_data`, `serial_port_error`.
+> - `bridge-error` was `{message: string}`; is now `{code: BridgeErrorCode, details?: map[string]string}`. Codes: `unknown_driver`, `serial_config_invalid`, `missing_init_command`, `missing_read_command`, `serial_open_failed`, `init_write_failed`, `identity_unrecognised`, `identity_mismatch`.
+> - SPA's `lib/i18n/` catalogue keys off the code (`bridge.disconnected.<code>` / `bridge.error.<code>`) and substitutes `{name}` placeholders from `details`. Operator-facing wording lives entirely in the catalogue (`lib/i18n/en.ts`), so retuning a toast is a single-file edit with no daemon restart. Triggered by the operator's Tumbuka / Chichewa localization roadmap — i18n is no longer hypothetical.
+> - `rig-state` payload is **unchanged** (still partial-merge with the existing field set + `*bool` SplitOverride semantics).
+> - Hub-cache semantics also evolved (parallel work): `lastBridgeError` cache from M3a.3 is now joined by a `lastRigDisconnected` cache. Both replay to late subscribers; bridge-error never clears within a Service lifetime, rig-disconnected clears on any subsequent rig-state (auto-recovery, since rig-back-online is the implicit-reconnect signal per ADR 0009).
+>
+> The wire shape below — three event types, deltas, passive liveness — is unchanged in **architecture** across all six revisions; the payload shapes of two of the three events changed in revision 6 to support i18n. Only the host (ambiguous → bridge process → daemon with bridge subsystem) and the cache strategy (cached → stateless → stateless-except-for-cached-error-and-disconnect) have changed. The SPA composes the URL as `${configState.bridgeUrl}/v1/rig/events`, where `bridgeUrl` defaults to `daemonUrl` in the single-binary deployment and is operator-overridable for the split-host case.
 
 ## Context
 

@@ -76,14 +76,82 @@ type RigStatePayload struct {
 	Power         int    `json:"power,omitempty"`
 }
 
-// RigDisconnectedPayload carries the human-readable reason the bridge
-// concluded the rig is gone. SPA toasts it via ADR 0008.
+// RigDisconnectedCode names a category of "the rig stopped talking"
+// the daemon publishes. The SPA's i18n catalogue keys the localized
+// toast template off this code and substitutes the per-instance
+// values from Details (e.g. {"error": "i/o timeout"}).
+//
+// Daemon log lines stay in technical English (operator-debugging
+// audience); operator-facing toast wording lives in the SPA
+// catalogue (operator-using-the-app audience). Two different
+// audiences, two different ownership lanes — keeps both layers
+// independently tunable, and gives the SPA a clean i18n hook for
+// future localizations (Tumbuka, Chichewa).
+type RigDisconnectedCode string
+
+const (
+	// RigCodeNoData — pipeline read timed out (rig went quiet for
+	// the liveness window; typically the rig is powered off or
+	// disconnected mid-flight).
+	RigCodeNoData RigDisconnectedCode = "rig_no_data"
+	// RigCodeSerialError — terminal serial-port error (ErrClosed,
+	// EIO, cable yank). Details: {"error": "<go err string>"}.
+	RigCodeSerialError RigDisconnectedCode = "serial_port_error"
+)
+
+// BridgeErrorCode names a category of "the bridge can't start /
+// can't talk to this rig" condition. Same i18n flow as
+// RigDisconnectedCode: SPA catalogue keys off the code, substitutes
+// per-instance values from Details.
+type BridgeErrorCode string
+
+const (
+	// BridgeErrCodeUnknownDriver — `bridge.cat.driver` doesn't match
+	// any rigdef. Details: {"driver": "<configured value>"}.
+	BridgeErrCodeUnknownDriver BridgeErrorCode = "unknown_driver"
+	// BridgeErrCodeSerialConfigInvalid — rigdef serial-config block
+	// couldn't be translated to a serial.Config. Details:
+	// {"error": "<reason>"}.
+	BridgeErrCodeSerialConfigInvalid BridgeErrorCode = "serial_config_invalid"
+	// BridgeErrCodeMissingInit — rigdef has no INIT command, so we
+	// can't arm AUTO push state. Details: {"driver": "<id>"}.
+	BridgeErrCodeMissingInit BridgeErrorCode = "missing_init_command"
+	// BridgeErrCodeMissingRead — rigdef has no READ command, so we
+	// can't bootstrap on SSE-open. Details: {"driver": "<id>"}.
+	BridgeErrCodeMissingRead BridgeErrorCode = "missing_read_command"
+	// BridgeErrCodeSerialOpenFailed — serial.Open returned an error
+	// (permission, device-not-found, etc.). Details: {"port", "error"}.
+	BridgeErrCodeSerialOpenFailed BridgeErrorCode = "serial_open_failed"
+	// BridgeErrCodeInitWriteFailed — INIT byte-write failed. Details:
+	// {"driver", "error"}.
+	BridgeErrCodeInitWriteFailed BridgeErrorCode = "init_write_failed"
+	// BridgeErrCodeIdentityUnrecognised — rig responded with an ID
+	// code the configured rigdef doesn't map. Details: {"driver"}.
+	BridgeErrCodeIdentityUnrecognised BridgeErrorCode = "identity_unrecognised"
+	// BridgeErrCodeIdentityMismatch — rig identified as a different
+	// model than the configured driver expects. Details: {"driver",
+	// "expected", "actual"}.
+	BridgeErrCodeIdentityMismatch BridgeErrorCode = "identity_mismatch"
+)
+
+// RigDisconnectedPayload carries the disconnect category + key/value
+// substitution details. The SPA looks up `bridge.disconnected.<Code>`
+// in its i18n catalogue and substitutes named placeholders from
+// Details (e.g. template "Lost the serial connection ({error})" +
+// details {"error": "i/o timeout"} → "Lost the serial connection
+// (i/o timeout)").
+//
+// Wire shape evolved (was {Reason string}) so the SPA can own
+// operator-facing wording centrally + future-proof i18n. Coordinated
+// upgrade with the SPA's bridge.svelte.ts consumer.
 type RigDisconnectedPayload struct {
-	Reason string `json:"reason"`
+	Code    RigDisconnectedCode `json:"code"`
+	Details map[string]string   `json:"details,omitempty"`
 }
 
-// BridgeErrorPayload carries an operator-actionable error message.
-// SPA toasts it via ADR 0008.
+// BridgeErrorPayload carries an operator-actionable error code +
+// substitution details. Same i18n flow as RigDisconnectedPayload.
 type BridgeErrorPayload struct {
-	Message string `json:"message"`
+	Code    BridgeErrorCode   `json:"code"`
+	Details map[string]string `json:"details,omitempty"`
 }

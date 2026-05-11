@@ -137,6 +137,48 @@ Five-stage work that closes the mode-mapping gap surfaced during M3a.4 live test
 
 **Resume points for next session:** continue live operator testing on the real FTdx10 with the new Mode Mappings panel. Confirm: the panel populates with the rigdef's shipped defaults; editing DATA-U/L from FT8 → PSK31 (or whatever) round-trips through PUT /v1/config; QSO submit with CAT live carries the resolved ADIF MODE/SUBMODE correctly. If anything's off, fix in-session. Otherwise the bridge subsystem v1 and its operator-config surface are both done — natural next pieces are M3b external integration (`cmd/udp-bridge`, `cmd/importer`, multi-rig daemon-side wiring) but those are operator-priority dependent.
 
+#### Parked design conversation — callsign stacking (pile-up workflow)
+
+Operator (session 51) proposed a feature: a queue of partial / full callsigns the operator types while listening to a pile-up. `+` pushes to the queue; submit or ESC pulls the next one onto the Callsign input. Replaces a paper queue. SPA-only feature; no daemon work; per-session ephemeral (sessionStorage tier).
+
+Design state (mid-conversation when paused for the daemon startup issue):
+
+- **Ordering: FIFO confirmed** — first heard / first written, first to work. `+` pushes to the bottom; submit/ESC pulls from the top.
+- **Visual placement: 3 options outlined, not yet chosen.** Layout change so explicit operator approval needed:
+  1. Horizontal pill row directly beneath the Callsign input — compact, single line wrapping, leftmost chip is the next-to-load. Clicking a chip jumps it to the front. Doesn't take vertical space from the form.
+  2. New InfoPanel tab "Queue" — vertical list with chip + remove button per row. Uses panel space that's currently visible for Country/Worked/Details. More room for queue management (manual reorder, in-place edit of partials).
+  3. Sidebar column right of QsoPanel — always visible, biggest layout change. Best for heavy contest sessions but squeezes the card width.
+- **Open: partial completion mechanic.** Operator hears "G4..." then later "G4ABC" — do they replace the queued partial, or work the partial first and let the contacted station complete it on the air? Pile-up reality is usually the latter (call "?G4" and let them complete it).
+- **Open: persistence scope.** sessionStorage survives F5 but resets on tab close. Probably right (operator wants fresh stack each session), but worth confirming whether daemon restart / hard reload should preserve.
+- **Open: keybindings.** `+` to push, ESC to advance/clear, submit to advance — but is there a way to skip without losing? Probably need a "delete current" key.
+- **Aligns with:** keyboard-first feedback memory; enrichment pipeline already has `Callsign.onenrich` (Tab) so partials → fulls retrigger lookup cleanly.
+
+Pick up the conversation by confirming the visual placement (option 1, 2, or 3) and the partial-completion mechanic, then sketch the implementation.
+
+#### Daemon-side error codes + SPA i18n machinery — SHIPPED session 51 continuation (2026-05-12)
+
+Originally parked as a "if string-tuning gets annoying" refactor; promoted to ship-now when the operator declared Tumbuka and Chichewa as planned localization targets. Single-user-single-language is no longer the steady-state assumption; the i18n machinery now has a real driver.
+
+**Wire-shape change** (backwards-incompatible, coordinated SPA + daemon upgrade):
+
+- `EventRigDisconnected` payload: `{reason: string}` → `{code: RigDisconnectedCode, details?: map[string]string}`. Codes: `rig_no_data`, `serial_port_error`.
+- `EventBridgeError` payload: `{message: string}` → `{code: BridgeErrorCode, details?: map[string]string}`. Codes: `unknown_driver`, `serial_config_invalid`, `missing_init_command`, `missing_read_command`, `serial_open_failed`, `init_write_failed`, `identity_unrecognised`, `identity_mismatch`.
+- Daemon `publishDisconnect` / `publishBridgeError` signatures now `(code, details)`; all 10 call sites in `internal/bridge/pipeline.go` updated to pass typed codes + named substitution details. Daemon log lines stay technical English (operator-debugging audience; not localized).
+
+**New SPA i18n machinery**:
+
+- `frontend/logging/src/lib/i18n/index.ts` — `t(key, details?)` render helper + `setLocale` / `getLocale`. ~50 LOC, no external dependency (i18next/svelte-i18n would be overkill for SM's string surface). Fallback chain: current locale → English baseline → `[missing: key]` sentinel.
+- `frontend/logging/src/lib/i18n/en.ts` — master catalogue, 10 keys for the bridge codes (8 errors + 2 disconnects). Templates use `{name}` placeholders substituted from details. Operator retunes wording by editing this file; HMR picks it up; no daemon restart needed.
+- `frontend/logging/src/lib/states/bridge.svelte.ts` — toast handlers now call `t(\`bridge.disconnected.${code}\`, details)` and `t(\`bridge.error.${code}\`, details)`. The hardcoded "Rig disconnected: " and "Bridge: " prefixes are gone — those moved into the catalogue templates.
+
+**Locale selector**: hardcoded to 'en' for now. Wire it into `configState.station.locale` when Tumbuka (`tum.ts`) and Chichewa (`ny.ts`) catalogues are added — operator picks via a Settings UI; persists via `/v1/config`. Don't ship the selector before the second catalogue exists.
+
+**Tests**: `i18n.test.ts` covers render, placeholder substitution, missing-key fallback, locale switching. `bridge.test.ts` fixtures updated to use new payload shape; substring assertions pin stable parts of templates rather than exact wording so the operator can retune `en.ts` without breaking tests. `pipeline_test.go` fixtures assert codes + details rather than message-string substrings. 474/474 SPA tests + full Go suite green.
+
+**Adding a new locale** (when ready): drop `lib/i18n/tum.ts` (or `ny.ts`), register it in the `catalogues` map in `index.ts`, ship a Settings UI for the operator to pick it. Missing keys fall back to English silently. No daemon work needed.
+
+**Future Phase B** (parked again, not now): the same code-and-i18n pattern can extend to non-bridge toasts (config errors, QSO submit feedback, enrichment, email send, etc.). Do it incrementally as each surface is touched, not in one big PR.
+
 ### Session 50 work (2026-05-11) — M3a.4 (SPA bridge consumer + live rig test) shipped; M3a closed
 
 The bridge's last sub-milestone. The SPA's `bridge.svelte.ts` stub became a real EventSource consumer; daemon-side fixes surfaced during live testing closed two gaps (30s SSE cutoff, rig-name visibility); My Station Equipment panel now mirrors CAT-live rig + power values. Operator confirmed live on the FTdx10 — VFO updates on dial, mode reflects, identity/power populate read-only, QSO ADIF carries MY_RIG and TX_PWR correctly.

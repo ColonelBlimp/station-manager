@@ -44,6 +44,7 @@
 
 import { catState } from './cat.svelte';
 import { configState } from './config.svelte';
+import { t } from '../i18n';
 import { toasts } from './toasts.svelte';
 
 class BridgeState {
@@ -66,11 +67,13 @@ interface RigStatePayload {
 }
 
 interface RigDisconnectedPayload {
-    reason: string;
+    code: string;
+    details?: Record<string, string>;
 }
 
 interface BridgeErrorPayload {
-    message: string;
+    code: string;
+    details?: Record<string, string>;
 }
 
 let activeSource: EventSource | null = null;
@@ -127,8 +130,12 @@ function openSource(): void {
             return;
         }
         bridgeState.rigResponding = false;
-        const reason = payload.reason || 'unknown reason';
-        toasts.warn(`Rig disconnected: ${reason}`);
+        // Daemon sends a machine-readable code + per-instance details
+        // (e.g. {"code":"rig_no_data"} or {"code":"serial_port_error",
+        // "details":{"error":"i/o timeout"}}). The i18n catalogue
+        // keyed by `bridge.disconnected.<code>` owns the operator-
+        // facing wording + future localizations (Tumbuka, Chichewa).
+        toasts.warn(t(`bridge.disconnected.${payload.code}`, payload.details));
     });
 
     src.addEventListener('bridge-error', (ev: MessageEvent<string>) => {
@@ -139,8 +146,7 @@ function openSource(): void {
             console.warn('[bridge] bridge-error JSON parse failed', e);
             return;
         }
-        const message = payload.message || 'unknown bridge error';
-        toasts.error(`Bridge: ${message}`);
+        toasts.error(t(`bridge.error.${payload.code}`, payload.details));
     });
 }
 

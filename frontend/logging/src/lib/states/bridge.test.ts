@@ -269,29 +269,42 @@ describe('bridge SSE consumer — rig-disconnected', () => {
         expect(bridgeState.rigResponding).toBe(true);
     });
 
-    it('flips rigResponding=false and toasts at warn level', () => {
+    it('flips rigResponding=false and toasts at warn level (renders i18n template)', () => {
         currentSource().emit(
             'rig-disconnected',
-            JSON.stringify({ reason: 'liveness timeout' }),
+            JSON.stringify({ code: 'rig_no_data' }),
         );
         expect(bridgeState.rigResponding).toBe(false);
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('warn');
-        expect(toastsState.items[0].message).toContain('liveness timeout');
+        // Rendered from the en catalogue's bridge.disconnected.rig_no_data
+        // template. The exact wording is in lib/i18n/en.ts and is
+        // operator-tunable; the test pins a stable substring rather than
+        // the full wording so a friendly retune doesn't break the test.
+        expect(toastsState.items[0].message).toContain('rig has gone quiet');
     });
 
     it('leaves connected=true (transport still up; rig went away)', () => {
         expect(bridgeState.connected).toBe(true);
-        currentSource().emit('rig-disconnected', JSON.stringify({ reason: 'closed' }));
+        currentSource().emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
         expect(bridgeState.connected).toBe(true);
     });
 
     it('a subsequent rig-state event flips rigResponding back to true', () => {
         const src = currentSource();
-        src.emit('rig-disconnected', JSON.stringify({ reason: 'closed' }));
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
         expect(bridgeState.rigResponding).toBe(false);
         src.emit('rig-state', JSON.stringify({ vfoA: 14_250_000 }));
         expect(bridgeState.rigResponding).toBe(true);
+    });
+
+    it('substitutes details into the template for serial_port_error', () => {
+        currentSource().emit(
+            'rig-disconnected',
+            JSON.stringify({ code: 'serial_port_error', details: { error: 'i/o timeout' } }),
+        );
+        // Template: 'Lost the serial connection to the rig ({error})'
+        expect(toastsState.items[0].message).toContain('i/o timeout');
     });
 });
 
@@ -303,20 +316,27 @@ describe('bridge SSE consumer — bridge-error', () => {
         currentSource().fireOpen();
     });
 
-    it('toasts at error level with the message', () => {
+    it('toasts at error level using the i18n template + substituted details', () => {
         currentSource().emit(
             'bridge-error',
-            JSON.stringify({ message: 'serial port permission denied' }),
+            JSON.stringify({
+                code: 'serial_open_failed',
+                details: { port: '/dev/ttyUSB0', error: 'permission denied' },
+            }),
         );
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('error');
-        expect(toastsState.items[0].message).toContain('serial port permission denied');
+        expect(toastsState.items[0].message).toContain('/dev/ttyUSB0');
+        expect(toastsState.items[0].message).toContain('permission denied');
     });
 
     it('does not change bridgeState flags', () => {
         const connectedBefore = bridgeState.connected;
         const respondingBefore = bridgeState.rigResponding;
-        currentSource().emit('bridge-error', JSON.stringify({ message: 'unknown driver' }));
+        currentSource().emit(
+            'bridge-error',
+            JSON.stringify({ code: 'unknown_driver', details: { driver: 'yaesu-foo' } }),
+        );
         expect(bridgeState.connected).toBe(connectedBefore);
         expect(bridgeState.rigResponding).toBe(respondingBefore);
     });

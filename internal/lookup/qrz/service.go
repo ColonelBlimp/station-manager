@@ -127,11 +127,27 @@ func (s *Service) Initialize(ctx context.Context) error {
 
 		if s.Config.Enabled {
 			if err := s.requestAndSetSessionKey(ctx); err != nil {
-				// Disable on auth failure so subsequent Lookup short-
-				// circuits cleanly. The orchestrator skips disabled
-				// providers in the chain.
+				// Soft-disable on session-fetch failure (network
+				// timeout, DNS failure, QRZ.com itself down, or
+				// invalid credentials). The "Enrichment never blocks
+				// logging" invariant says external-service failures
+				// must not prevent the operator from logging — and
+				// blocking daemon startup is an even stronger break
+				// of that rule than blocking a single Lookup. So we
+				// log loudly, flip Enabled=false (Lookup short-
+				// circuits cleanly), and return nil so the daemon
+				// continues starting. cmd/smd checks Config.Enabled
+				// after Initialize and skips the provider when
+				// false. Operator sees the warning in the log; if
+				// it's credentials they fix config.json; if it's
+				// network they wait for it to come back (a future
+				// retry-on-first-lookup or periodic-reconnect path
+				// can revive the provider without a daemon restart,
+				// but that's a separate piece of work).
 				s.Config.Enabled = false
-				initErr = errors.New(op).WithErr(err).WithMsg("QRZ session key fetch failed; service disabled")
+				s.LoggerService.WarnWith().
+					Err(err).
+					Msg("QRZ session key fetch failed; service disabled (operator can still log QSOs; check credentials or network)")
 				return
 			}
 		} else {

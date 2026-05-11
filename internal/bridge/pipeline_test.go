@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	stderr "errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -244,8 +243,8 @@ func TestPipeline_LivenessTimeoutEmitsDisconnect(t *testing.T) {
 		if !ok {
 			t.Fatalf("payload type = %T, want RigDisconnectedPayload", evt.Payload)
 		}
-		if p.Reason == "" {
-			t.Error("disconnect Reason is empty; want a human-readable string")
+		if p.Code != RigCodeNoData {
+			t.Errorf("disconnect Code = %q, want %q", p.Code, RigCodeNoData)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no disconnect event within 1s")
@@ -528,8 +527,11 @@ func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 		if !ok {
 			t.Fatalf("payload type = %T, want BridgeErrorPayload", evt.Payload)
 		}
-		if !strings.Contains(p.Message, "yaesu-no-such-rig") {
-			t.Errorf("message = %q, want substring %q", p.Message, "yaesu-no-such-rig")
+		if p.Code != BridgeErrCodeUnknownDriver {
+			t.Errorf("Code = %q, want %q", p.Code, BridgeErrCodeUnknownDriver)
+		}
+		if p.Details["driver"] != "yaesu-no-such-rig" {
+			t.Errorf("Details[driver] = %q, want %q", p.Details["driver"], "yaesu-no-such-rig")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no bridge-error event within 1s")
@@ -600,6 +602,87 @@ func TestHub_CachesBridgeErrorForLateSubscriber(t *testing.T) {
 	}
 }
 
+// TestHub_CachesRigDisconnectedForLateSubscriber pins the parallel
+// cache contract for rig-disconnected: when the pipeline's
+// announcedDisconnect dedup fires the event exactly once per
+// silent-window, every later subscriber should still see the toast.
+// Without the cache the second SPA tab gets no notification of an
+// off rig.
+//
+// Drives the hub directly (rather than the pipeline) so the test
+// stays focused on the cache semantics and doesn't depend on the
+// 30s liveness timeout firing.
+func TestHub_CachesRigDisconnectedForLateSubscriber(t *testing.T) {
+	h := newHub()
+	defer h.close()
+
+	disconnect := Event{Name: EventRigDisconnected, Payload: RigDisconnectedPayload{Code: RigCodeNoData}}
+	h.publish(disconnect)
+
+	// First late subscriber sees the cached event as its first frame.
+	ch1, unsub1 := h.subscribe()
+	defer unsub1()
+	select {
+	case evt, ok := <-ch1:
+		if !ok {
+			t.Fatal("first subscriber channel closed before cached rig-disconnected")
+		}
+		if evt.Name != EventRigDisconnected {
+			t.Errorf("evt.Name = %q, want %q", evt.Name, EventRigDisconnected)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first late subscriber did not see cached rig-disconnected within 1s")
+	}
+
+	// Second late subscriber also sees it — cache is not consumed.
+	ch2, unsub2 := h.subscribe()
+	defer unsub2()
+	select {
+	case evt, ok := <-ch2:
+		if !ok {
+			t.Fatal("second subscriber channel closed before cached rig-disconnected")
+		}
+		if evt.Name != EventRigDisconnected {
+			t.Errorf("second subscriber evt.Name = %q, want %q", evt.Name, EventRigDisconnected)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second late subscriber did not see cached rig-disconnected within 1s")
+	}
+}
+
+// TestHub_ClearsRigDisconnectedCacheOnRigState pins the auto-recovery
+// invariant: when the rig starts pushing data again, EventRigState
+// publication clears the cached disconnect so subscribers that connect
+// AFTER recovery don't see a stale toast for a rig that is fine.
+//
+// Distinct from bridge-error (which is never cleared on the principle
+// that operator-actionable errors should stay observable) because
+// rig-disconnected describes transient state that the
+// implicit-reconnect flow (ADR 0009) naturally resolves.
+func TestHub_ClearsRigDisconnectedCacheOnRigState(t *testing.T) {
+	h := newHub()
+	defer h.close()
+
+	// Disconnect, then a rig push (rig came back online).
+	h.publish(Event{Name: EventRigDisconnected, Payload: RigDisconnectedPayload{Code: RigCodeNoData}})
+	h.publish(Event{Name: EventRigState, Payload: RigStatePayload{VfoA: 14_250_000}})
+
+	// A subscriber connecting now should NOT see the stale
+	// disconnect — the rig is back. The subscriber channel should
+	// stay quiet (no replay).
+	ch, unsub := h.subscribe()
+	defer unsub()
+	select {
+	case evt, ok := <-ch:
+		if !ok {
+			t.Fatal("subscriber channel closed unexpectedly")
+		}
+		t.Fatalf("expected no cached event after recovery, got %q", evt.Name)
+	case <-time.After(50 * time.Millisecond):
+		// expected — no replay; rig is fine, no toast for late subscriber.
+	}
+}
+
 // TestPipeline_BridgeError_OpenFailure covers the port-not-available
 // path (operator typo'd the device, permission denied, etc.):
 // openClient returns an error → bridge-error event with the cause →
@@ -637,8 +720,11 @@ func TestPipeline_BridgeError_OpenFailure(t *testing.T) {
 		if !ok {
 			t.Fatalf("payload type = %T, want BridgeErrorPayload", evt.Payload)
 		}
-		if !strings.Contains(p.Message, "/dev/no-such-port") {
-			t.Errorf("message = %q, want it to mention the bad port", p.Message)
+		if p.Code != BridgeErrCodeSerialOpenFailed {
+			t.Errorf("Code = %q, want %q", p.Code, BridgeErrCodeSerialOpenFailed)
+		}
+		if p.Details["port"] != "/dev/no-such-port" {
+			t.Errorf("Details[port] = %q, want it to mention the bad port", p.Details["port"])
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no bridge-error event within 1s")
@@ -713,8 +799,8 @@ func TestPipeline_IdentityVerified_ErrorOnUnrecognised(t *testing.T) {
 		case evt := <-ch:
 			if evt.Name == EventBridgeError {
 				p := evt.Payload.(BridgeErrorPayload)
-				if !strings.Contains(p.Message, "unrecognised") {
-					t.Errorf("message = %q, want it to mention 'unrecognised'", p.Message)
+				if p.Code != BridgeErrCodeIdentityUnrecognised {
+					t.Errorf("Code = %q, want %q", p.Code, BridgeErrCodeIdentityUnrecognised)
 				}
 				return
 			}

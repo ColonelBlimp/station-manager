@@ -108,12 +108,17 @@ func TestInitialize_SessionKeyFailureDisablesService(t *testing.T) {
 		client: srv.Client(),
 	}
 	err := s.Initialize(context.Background())
-	if err == nil {
-		t.Fatal("expected init error from auth failure")
+	// New contract (2026-05-12): session-fetch failure is a soft
+	// disable, not a hard error. The "Enrichment never blocks
+	// logging" invariant says external-service failures (network
+	// timeout, DNS failure, QRZ.com down, or bad credentials) must
+	// not prevent the operator from starting the daemon or logging
+	// QSOs. Initialize logs a warning, flips Enabled=false, and
+	// returns nil so the cmd/smd startup path continues. The
+	// orchestrator skips disabled providers in the chain.
+	if err != nil {
+		t.Fatalf("expected nil err on session-fetch failure (soft-disable contract); got %v", err)
 	}
-	// Per the doc-comment contract, a session-fetch failure flips
-	// Enabled to false so subsequent Lookup short-circuits via the
-	// disabled sentinel rather than re-attempting auth.
 	if s.Config.Enabled {
 		t.Fatal("Config.Enabled should be false after session-fetch failure")
 	}

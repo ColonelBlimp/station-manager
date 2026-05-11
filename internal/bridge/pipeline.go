@@ -69,14 +69,14 @@ func (s *Service) runPipeline(ctx context.Context) {
 		s.logger.ErrorWith().
 			Str("driver", s.cfg.Cat.Driver).
 			Msg("bridge: unknown CAT driver; pipeline not started")
-		s.publishBridgeError("unknown CAT driver " + s.cfg.Cat.Driver + "; check bridge.cat.driver in config")
+		s.publishBridgeError(BridgeErrCodeUnknownDriver, map[string]string{"driver": s.cfg.Cat.Driver})
 		return
 	}
 
 	serialCfg, err := buildSerialConfig(s.cfg.Serial, def.Serial)
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Msg("bridge: serial config build failed; pipeline not started")
-		s.publishBridgeError("serial config invalid: " + errMessage(err))
+		s.publishBridgeError(BridgeErrCodeSerialConfigInvalid, map[string]string{"error": errMessage(err)})
 		return
 	}
 
@@ -92,7 +92,7 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("driver", def.ID).
 			Str("command", initCommandName).
 			Msg("bridge: rigdef has no INIT command; pipeline not started")
-		s.publishBridgeError("rigdef " + def.ID + " has no INIT command; cannot arm AUTO mode")
+		s.publishBridgeError(BridgeErrCodeMissingInit, map[string]string{"driver": def.ID})
 		return
 	}
 	readBytes, err := cat.Encode(def, readCommandName)
@@ -102,7 +102,7 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("driver", def.ID).
 			Str("command", readCommandName).
 			Msg("bridge: rigdef has no READ command; pipeline not started")
-		s.publishBridgeError("rigdef " + def.ID + " has no READ command; cannot bootstrap SPA subscribers")
+		s.publishBridgeError(BridgeErrCodeMissingRead, map[string]string{"driver": def.ID})
 		return
 	}
 
@@ -113,7 +113,7 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("port", serialCfg.PortName).
 			Int("baud", serialCfg.BaudRate).
 			Msg("bridge: serial open failed; pipeline not started")
-		s.publishBridgeError("serial open failed on " + serialCfg.PortName + ": " + errMessage(err))
+		s.publishBridgeError(BridgeErrCodeSerialOpenFailed, map[string]string{"port": serialCfg.PortName, "error": errMessage(err)})
 		return
 	}
 	defer func() {
@@ -136,7 +136,7 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Err(err).
 			Str("driver", def.ID).
 			Msg("bridge: failed to send INIT; pipeline not started")
-		s.publishBridgeError("failed to arm AUTO mode on " + def.ID + ": " + errMessage(err))
+		s.publishBridgeError(BridgeErrCodeInitWriteFailed, map[string]string{"driver": def.ID, "error": errMessage(err)})
 		return
 	}
 
@@ -178,7 +178,7 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			// successful read implicitly clears the disconnected flag.
 			if stderr.Is(err, context.DeadlineExceeded) {
 				if !announcedDisconnect {
-					s.publishDisconnect("no CAT data received within timeout window")
+					s.publishDisconnect(RigCodeNoData, nil)
 					announcedDisconnect = true
 				}
 				continue
@@ -186,7 +186,7 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			// Terminal serial error (ErrClosed, EIO, etc.). Emit and
 			// exit; the bridge can't recover from a closed port
 			// without re-opening, which is M3a.3-and-beyond territory.
-			s.publishDisconnect("serial port error: " + errMessage(err))
+			s.publishDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(err)})
 			return
 		}
 
@@ -219,9 +219,9 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				identityVerified = true
 				switch {
 				case v == "":
-					s.publishBridgeError("rig identity unrecognised; configured driver " + def.ID + " does not know this rig's ID code — check bridge.cat.driver matches the connected rig")
+					s.publishBridgeError(BridgeErrCodeIdentityUnrecognised, map[string]string{"driver": def.ID})
 				case v != def.Model:
-					s.publishBridgeError("rig identity mismatch; configured driver " + def.ID + " (" + def.Model + ") but rig identifies as " + v)
+					s.publishBridgeError(BridgeErrCodeIdentityMismatch, map[string]string{"driver": def.ID, "expected": def.Model, "actual": v})
 				}
 			}
 		}
@@ -235,25 +235,29 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 }
 
 // publishDisconnect emits one rig-disconnected event with the given
-// human-readable reason. Centralised so the wire shape (and the
-// payload's Reason field) only has one call site.
-func (s *Service) publishDisconnect(reason string) {
+// machine-readable code + per-instance substitution details (e.g.
+// {"error": "i/o timeout"} for the serial-port-error code). The SPA
+// looks the code up in its i18n catalogue and renders the localised
+// template with the details. Centralised so the wire shape has only
+// one call site.
+func (s *Service) publishDisconnect(code RigDisconnectedCode, details map[string]string) {
 	s.hub.publish(Event{
 		Name:    EventRigDisconnected,
-		Payload: RigDisconnectedPayload{Reason: reason},
+		Payload: RigDisconnectedPayload{Code: code, Details: details},
 	})
 }
 
 // publishBridgeError emits one bridge-error event for an
 // operator-actionable failure (port permission denied, unknown
 // driver, rigdef missing INIT/READ, identity mismatch, etc.). The
-// SPA toasts the message via ADR 0008. NOT used for transient
-// retries or per-frame protocol hiccups — those stay logged-only so
-// the toast stream doesn't flood.
-func (s *Service) publishBridgeError(message string) {
+// SPA's i18n catalogue keys off code + substitutes details into the
+// localised template. NOT used for transient retries or per-frame
+// protocol hiccups — those stay logged-only so the toast stream
+// doesn't flood.
+func (s *Service) publishBridgeError(code BridgeErrorCode, details map[string]string) {
 	s.hub.publish(Event{
 		Name:    EventBridgeError,
-		Payload: BridgeErrorPayload{Message: message},
+		Payload: BridgeErrorPayload{Code: code, Details: details},
 	})
 }
 
