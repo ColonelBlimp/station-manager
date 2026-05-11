@@ -173,6 +173,43 @@ override at `$SM_WORKING_DIR/modes.json`). ADIF spec growth no
 longer strictly requires a daemon binary release — operators can
 extend the override file ahead of an upgrade.
 
+*Implementation update (session 51 continuation, 2026-05-12) —
+daemon error codes + SPA i18n + hub-cache extension:* three
+related changes shipped together.
+
+1. **Wire-shape change for `rig-disconnected` and `bridge-error`**
+   (backwards-incompatible, coordinated SPA + daemon upgrade since
+   the subsystem has a single in-tree consumer). Payloads are now
+   `{code, details?}` rather than `{reason}` / `{message}`. The
+   SPA's new `lib/i18n/` catalogue keyed by `bridge.disconnected.<code>`
+   / `bridge.error.<code>` renders the operator-facing wording —
+   operator retunes toasts by editing a single English-baseline
+   file, no daemon restart needed. Triggered by the operator's
+   declared Tumbuka / Chichewa localization roadmap; i18n is no
+   longer hypothetical. `rig-state` payload is unchanged.
+2. **Hub cache extended to `rig-disconnected`** to fix the
+   only-first-SPA-sees-the-toast issue: the pipeline's
+   `announcedDisconnect` dedup flag fires the event exactly once
+   per silent-window, so a second / refreshed SPA tab that
+   subscribed AFTER the first emission got nothing. The hub now
+   caches `lastRigDisconnected` paralleling `lastBridgeError` and
+   replays it to every new subscriber. Distinct from the
+   bridge-error cache: `lastRigDisconnected` clears on the next
+   `EventRigState` arrival (auto-recovery, since a successful rig
+   push is the implicit-reconnect signal per ADR 0009 — a cached
+   disconnect would be stale and would misleadingly toast new
+   subscribers when the rig is actually fine).
+3. **Daemon-side QRZ `Initialize` soft-disable.** Pre-fix, a
+   session-fetch failure (DNS timeout / QRZ.com down / wrong
+   credentials) returned a hard error that aborted `cmd/smd` at
+   startup — directly violating the load-bearing invariant
+   "Enrichment never blocks logging." Now Initialize logs a
+   warning, flips `Config.Enabled = false`, and returns nil; the
+   daemon proceeds with QRZ skipped in the chain. The operator can
+   start the daemon and log QSOs while QRZ is unreachable. Not
+   strictly a bridge change but discovered while reading bridge
+   startup logs; same session.
+
 ### One SSE frontend, others deferred
 
 - **Ship `/v1/rig/events` SSE only.** The logging SPA's `bridge.svelte.ts`
