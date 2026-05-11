@@ -116,5 +116,22 @@
         {"tag": "TXPWR", "index": 0, "length": 3}
       ]
     }
-  ]
+  ],
+  "mode_mappings": {
+    "LSB":        {"mode": "SSB",  "submode": "LSB"},
+    "USB":        {"mode": "SSB",  "submode": "USB"},
+    "CW-U":       {"mode": "CW"},
+    "CW-L":       {"mode": "CW"},
+    "FM":         {"mode": "FM"},
+    "FM-N":       {"mode": "FM"},
+    "AM":         {"mode": "AM"},
+    "AM-N":       {"mode": "AM"},
+    "RTTY-L":     {"mode": "RTTY"},
+    "RTTY-U":     {"mode": "RTTY"},
+    "DATA-L":     {"mode": "FT8"},
+    "DATA-U":     {"mode": "FT8"},
+    "DATA-FM":    {"mode": "FM"},
+    "DATA-FM-N":  {"mode": "FM"},
+    "PSK":        {"mode": "PSK",  "submode": "PSK31"}
+  }
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
+	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
@@ -192,6 +193,16 @@ func run() error {
 	// worth the operator seeing.
 	for _, w := range config.Warnings(cfg) {
 		loggerSvc.WarnWith().Msg(w)
+	}
+
+	// Optional ADIF modes override: $SM_WORKING_DIR/modes.json layered
+	// on top of the embedded baseline (`internal/enums/modes/adif-modes.json`).
+	// Missing file is a no-op; malformed file is loud-and-fatal — an
+	// operator who hand-edits this file should see the syntax error at
+	// startup rather than silent IsValidMode rejections later.
+	if err := modes.LoadOverride(cfg.DataDir); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("modes: override load failed")
+		return errors.New(op).WithErr(err).WithMsg("load modes override")
 	}
 
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)

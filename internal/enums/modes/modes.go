@@ -1,11 +1,53 @@
-// Package modes defines the ADIF main-mode and sub-mode constants used by
-// Station Manager, along with the sub-mode → main-mode mapping table.
+// Package modes defines the ADIF main-mode and sub-mode catalogue used by
+// Station Manager.
+//
+// The catalogue is data-driven: an embedded baseline file
+// (`adif-modes.json`, loaded at package init via go:embed) defines the
+// shipped main modes and submode→parent mapping; an optional operator
+// override at `$SM_WORKING_DIR/modes.json` extends or overrides the
+// baseline at daemon startup (callers invoke `LoadOverride(workingDir)`).
+//
+// The data-driven shape exists so an ADIF spec update doesn't strictly
+// require a code change: operators can add new modes via the override
+// file immediately; when a new daemon binary ships with the wider
+// baseline, the override entries become redundant but never break.
+//
+// Validation contract (unchanged across the refactor):
+//   - IsValidMode(s) — s is a known ADIF main mode (case-insensitive, trimmed)
+//   - IsValidSubMode(s) — s is a known ADIF submode
+//   - GetModeBySubmode(s) — parent main mode for a submode, plus ok
 package modes
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 
+	_ "embed"
+)
+
+// Mode is the typed wrapper for ADIF main-mode strings. Kept as a
+// distinct type so call sites that thread modes through can use
+// modes.Mode rather than `string` for readability; the underlying
+// value is always the uppercase ADIF MODE string.
 type Mode string
 
+func (m Mode) String() string { return string(m) }
+
+// SubMode is the typed wrapper for ADIF submode strings, paralleling
+// Mode. Same uppercase contract.
+type SubMode string
+
+func (s SubMode) String() string { return string(s) }
+
+// Common ADIF main mode constants. Kept for the rare call sites that
+// want a typed compile-time reference (e.g. `if m == modes.SSB`).
+// Adding a new constant here is NOT required for IsValidMode to
+// accept the value — validation is driven by adif-modes.json. These
+// just save callers from re-typing the strings.
 const (
 	AM           Mode = "AM"
 	CW           Mode = "CW"
@@ -19,88 +61,185 @@ const (
 	PACKET       Mode = "PACKET"
 )
 
-// IsValidMode returns true if s is one of the supported ADIF main modes used by this app.
-func IsValidMode(s string) bool {
-	switch Mode(strings.ToUpper(strings.TrimSpace(s))) {
-	case AM, CW, FM, RTTY, SSB, DIGITALVOICE, MFSK, PSK, HELL, PACKET:
-		return true
-	default:
-		return false
-	}
-}
-
-type SubMode string
-
+// Common ADIF submode constants. Same rationale as the Mode constants
+// above — typed references for the few call sites that want them.
 const (
 	USB SubMode = "USB"
 	LSB SubMode = "LSB"
 )
 
-// submodeToMode maps common ADIF submodes to their parent main mode.
-var submodeToMode = map[string]Mode{
-	// DIGITALVOICE family
-	"C4FM":   DIGITALVOICE,
-	"DMR":    DIGITALVOICE,
-	"DSTAR":  DIGITALVOICE,
-	"FREEDV": DIGITALVOICE,
-	"M17":    DIGITALVOICE,
-
-	// MFSK family (WSJT-X and other MFSK-based)
-	"FT4":       MFSK,
-	"FT8":       MFSK,
-	"FST4":      MFSK,
-	"FST4W":     MFSK,
-	"Q65":       MFSK,
-	"OLIVIA":    MFSK,
-	"CONTESTIA": MFSK,
-	"DOMINOEX":  MFSK,
-	"FSQ":       MFSK,
-	"JS8":       MFSK,
-	"MFSK16":    MFSK,
-	"MFSK8":     MFSK,
-	"MT63":      MFSK,
-	"THOR":      MFSK,
-	"THROB":     MFSK,
-
-	// PSK family
-	"PSK10":  PSK,
-	"PSK31":  PSK,
-	"PSK63":  PSK,
-	"PSK125": PSK,
-	"QPSK31": PSK,
-	"QPSK63": PSK,
-	"BPSK31": PSK,
-	"BPSK63": PSK,
-
-	// Hellschreiber family
-	"HELL80":  HELL,
-	"FMHELL":  HELL,
-	"FSKHELL": HELL,
-	"HFSK":    HELL,
-	"HHELL":   HELL,
-	"PSKHELL": HELL,
-
-	// Packet family
-	"PKT":  PACKET,
-	"APRS": PACKET,
-
-	// SSB sidebands as submodes
-	"LSB": SSB,
-	"USB": SSB,
+// catalogue is the on-disk shape of adif-modes.json (and the optional
+// operator override file). MainModes is a flat list; SubModes maps
+// the submode → parent main mode.
+type catalogue struct {
+	Version   string            `json:"version,omitempty"`
+	Comment   string            `json:"comment,omitempty"`
+	MainModes []string          `json:"main_modes"`
+	SubModes  map[string]string `json:"submodes"`
 }
 
-// IsValidSubMode returns true if the string corresponds to a known ADIF submode handled by this app.
-func IsValidSubMode(s string) bool {
-	_, ok := submodeToMode[strings.ToUpper(strings.TrimSpace(s))]
+//go:embed adif-modes.json
+var embeddedCatalogueJSON []byte
+
+// mu guards the loaded sets so concurrent reads from request handlers
+// don't race against a LoadOverride call. In practice LoadOverride
+// runs once at daemon startup and the sets are read-mostly thereafter,
+// but the mutex makes the contract explicit.
+var (
+	mu              sync.RWMutex
+	mainModeSet     map[string]struct{}
+	submodeToParent map[string]string
+)
+
+func init() {
+	cat, err := parseCatalogue(embeddedCatalogueJSON)
+	if err != nil {
+		// An embedded asset that fails to parse is a programmer error
+		// caught at first run; loud panic is the right surface.
+		panic(fmt.Sprintf("modes: embedded adif-modes.json invalid: %v", err))
+	}
+	mu.Lock()
+	mainModeSet = make(map[string]struct{}, len(cat.MainModes))
+	submodeToParent = make(map[string]string, len(cat.SubModes))
+	applyCatalogue(cat)
+	mu.Unlock()
+}
+
+// LoadOverride loads an operator's modes.json from workingDir if
+// present. The file's main_modes are unioned into the loaded set;
+// submodes are merged with operator values winning on key collision.
+// Missing file is not an error (returns nil) — most operators won't
+// have an override. Malformed file is an error (caller decides
+// whether to fail startup or log+continue with embedded only).
+//
+// Safe to call multiple times; each call merges additively on top of
+// the previous state. The mutex makes concurrent reads from request
+// handlers safe during a reload (handlers see either the pre- or
+// post-merge state, never a half-applied one).
+func LoadOverride(workingDir string) error {
+	path := filepath.Join(workingDir, "modes.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("modes: read override %s: %w", path, err)
+	}
+	cat, err := parseCatalogue(data)
+	if err != nil {
+		return fmt.Errorf("modes: parse override %s: %w", path, err)
+	}
+	mu.Lock()
+	applyCatalogue(cat)
+	mu.Unlock()
+	return nil
+}
+
+func parseCatalogue(data []byte) (*catalogue, error) {
+	var cat catalogue
+	if err := json.Unmarshal(data, &cat); err != nil {
+		return nil, err
+	}
+	return &cat, nil
+}
+
+// applyCatalogue is mu-locked by the caller. Adds main_modes to the
+// set and merges submodes (later writes win — operator override beats
+// embedded entry of the same key).
+func applyCatalogue(cat *catalogue) {
+	for _, m := range cat.MainModes {
+		key := strings.ToUpper(strings.TrimSpace(m))
+		if key == "" {
+			continue
+		}
+		mainModeSet[key] = struct{}{}
+	}
+	for k, v := range cat.SubModes {
+		key := strings.ToUpper(strings.TrimSpace(k))
+		val := strings.ToUpper(strings.TrimSpace(v))
+		if key == "" || val == "" {
+			continue
+		}
+		submodeToParent[key] = val
+	}
+}
+
+// IsValidMode reports whether s is a known ADIF main mode in the
+// loaded catalogue. Case-insensitive, whitespace-trimmed.
+func IsValidMode(s string) bool {
+	key := strings.ToUpper(strings.TrimSpace(s))
+	if key == "" {
+		return false
+	}
+	mu.RLock()
+	_, ok := mainModeSet[key]
+	mu.RUnlock()
 	return ok
 }
 
-// GetModeBySubmode returns the parent main mode for a given ADIF submode.
-// The bool return indicates whether a mapping was found.
-func GetModeBySubmode(s string) (Mode, bool) {
-	m, ok := submodeToMode[strings.ToUpper(strings.TrimSpace(s))]
-	return m, ok
+// IsValidSubMode reports whether s is a known ADIF submode in the
+// loaded catalogue. Case-insensitive, whitespace-trimmed.
+func IsValidSubMode(s string) bool {
+	key := strings.ToUpper(strings.TrimSpace(s))
+	if key == "" {
+		return false
+	}
+	mu.RLock()
+	_, ok := submodeToParent[key]
+	mu.RUnlock()
+	return ok
 }
 
-func (m Mode) String() string    { return string(m) }
-func (m SubMode) String() string { return string(m) }
+// GetModeBySubmode returns the parent main mode for a submode. The
+// bool return is false if the submode is unknown.
+func GetModeBySubmode(s string) (Mode, bool) {
+	key := strings.ToUpper(strings.TrimSpace(s))
+	if key == "" {
+		return "", false
+	}
+	mu.RLock()
+	parent, ok := submodeToParent[key]
+	mu.RUnlock()
+	if !ok {
+		return "", false
+	}
+	return Mode(parent), true
+}
+
+// MainModes returns a sorted snapshot of the loaded main-mode set.
+// Useful for the /v1/config response so the SPA can populate the
+// Mode Mappings sub-tab's MODE dropdown.
+func MainModes() []string {
+	mu.RLock()
+	out := make([]string, 0, len(mainModeSet))
+	for m := range mainModeSet {
+		out = append(out, m)
+	}
+	mu.RUnlock()
+	sortStrings(out)
+	return out
+}
+
+// SubModes returns a sorted snapshot of the loaded submode keys. The
+// daemon exposes these via /v1/config so the SPA's Mode Mappings
+// sub-tab can populate the SUBMODE dropdown.
+func SubModes() []string {
+	mu.RLock()
+	out := make([]string, 0, len(submodeToParent))
+	for k := range submodeToParent {
+		out = append(out, k)
+	}
+	mu.RUnlock()
+	sortStrings(out)
+	return out
+}
+
+// sortStrings is a tiny local sort to avoid pulling sort just for two
+// callers. Insertion sort is fine — the lists are O(50).
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
+}
