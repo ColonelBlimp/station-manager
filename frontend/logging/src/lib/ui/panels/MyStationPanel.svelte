@@ -161,7 +161,15 @@
         editingModes = fresh;
     }
 
-    $effect(() => {
+    // $effect.pre runs BEFORE the DOM patches that follow a state
+    // change. That ordering matters here: clicking the Mode Mappings
+    // tab sets activeSection='modes', the template re-renders the
+    // `{:else if activeSection === 'modes'}` branch, and the
+    // `bind:value={editingModes[rigStr].mode}` inputs need a non-
+    // undefined entry for every rigStr they iterate over. A plain
+    // $effect would populate editingModes AFTER the failed render —
+    // $effect.pre lands the population before the template binds.
+    $effect.pre(() => {
         if (activeSection === 'modes') {
             snapModeMappings();
         }
@@ -248,6 +256,7 @@
     </div>
 
     <div class="flex h-full">
+        <div class="flex w-200">
         {#if activeSection === 'identity'}
             <div id="my-station-identity" role="tabpanel" class="flex flex-col space-y-1 pt-3">
                 <div class="flex space-x-4">
@@ -462,75 +471,61 @@
                 </div>
             </div>
         {:else if activeSection === 'modes'}
-            <div id="my-station-modes" role="tabpanel" class="flex flex-col space-y-3 pt-3">
-                {#if configState.bridge.rigModes.length === 0}
-                    <p class="text-sm opacity-70">
-                        No CAT rig is configured. Mode mappings translate the rig's pushed mode
-                        strings into ADIF MODE / SUBMODE values; the table populates once
-                        <code>bridge.enabled</code> is set in <code>config.json</code> and the
-                        daemon recognises the configured driver.
-                    </p>
-                {:else}
-                    <p class="text-xs opacity-70 max-w-2xl">
+            <div class="flex w-full p-2">
+                <div class="flex flex-col w-110 overflow-hidden">
+                    <ul role="list" class="flex flex-col space-y-3 h-52 p-2 overflow-y-scroll">
+                        {#each configState.bridge.rigModes as rigStr (rigStr)}
+                            {#if editingModes[rigStr]}
+                        <li class="flex items-center space-x-4 text-sm border border-gray-300 rounded-md px-6 py-3">
+                            <div class="w-22 font-semibold">{rigStr}</div>
+                            <span>:</span>
+                            <div>
+                                <input
+                                    id={`mode-map-${rigStr}-mode`}
+                                    type="text"
+                                    class="input-base w-30"
+                                    placeholder="MODE"
+                                    bind:value={editingModes[rigStr].mode}
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                />
+                            </div>
+                            <div>
+                                <input
+                                    id={`mode-map-${rigStr}-submode`}
+                                    type="text"
+                                    class="input-base w-30"
+                                    placeholder="(optional)"
+                                    bind:value={editingModes[rigStr].submode}
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                />
+                            </div>
+                        </li>
+                            {/if}
+                        {/each}
+                    </ul>
+                </div>
+                <div class="flex-col p-4 w-80">
+                    {#if configState.bridge.rigModes.length === 0}
+                        <p class="text-sm opacity-70">
+                            No CAT rig is configured. Mode mappings translate a rig defined MODE
+                            into an ADIF MODE / SUBMODE values; the table populates once
+                            <code>bridge.enabled</code> is set in <code>config.json</code> and the
+                            application recognises the configured driver.
+                        </p>
+                    {:else}
+                    <p class="text-xs opacity-70">
                         Translation table for <strong>{configState.station.rigName}</strong>: each
-                        row maps a rig-pushed mode string (left) to an ADIF MODE plus optional
-                        SUBMODE (right). The shipped defaults are sensible for common usage; change
+                        row maps a rig defined MODE (left) to an ADIF MODE (centre) plus an optional
+                        ADIF SUBMODE (right). The defaults are sensible for common usage; change
                         any row when you're operating a different protocol (e.g. running PSK31 on
                         DATA-U instead of FT8). Empty MODE clears the operator override so the
-                        rigdef's shipped default applies; daemon-side validation rejects unknown
-                        ADIF values with a toast.
+                        default mappings applies; validation rejects unknown ADIF values with an
+                        error message.
                     </p>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-sm">
-                            <thead class="text-xs uppercase opacity-70">
-                                <tr>
-                                    <th class="text-left py-1 pr-4">Rig mode</th>
-                                    <th class="text-left py-1 pr-4">ADIF MODE</th>
-                                    <th class="text-left py-1">ADIF SUBMODE</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {#each configState.bridge.rigModes as rigStr (rigStr)}
-                                    <tr>
-                                        <td class="py-1 pr-4 font-mono">{rigStr}</td>
-                                        <td class="py-1 pr-4">
-                                            <input
-                                                id={`mode-map-${rigStr}-mode`}
-                                                type="text"
-                                                class="input-base w-32"
-                                                placeholder="MODE"
-                                                bind:value={editingModes[rigStr].mode}
-                                                autocomplete="off"
-                                                spellcheck="false"
-                                            />
-                                        </td>
-                                        <td class="py-1">
-                                            <input
-                                                id={`mode-map-${rigStr}-submode`}
-                                                type="text"
-                                                class="input-base w-32"
-                                                placeholder="(optional)"
-                                                bind:value={editingModes[rigStr].submode}
-                                                autocomplete="off"
-                                                spellcheck="false"
-                                            />
-                                        </td>
-                                    </tr>
-                                {/each}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="flex justify-end">
-                        <button
-                            type="button"
-                            onclick={saveModeMappings}
-                            disabled={savingModes}
-                            class="h-9 cursor-pointer rounded-md bg-focus px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {savingModes ? 'Saving…' : 'Update'}
-                        </button>
-                    </div>
-                {/if}
+                    {/if}
+                </div>
             </div>
         {:else if activeSection === 'cw'}
             <div id="my-station-cw" role="tabpanel" class="flex flex-col space-y-1 pt-3">
@@ -638,7 +633,7 @@
                 </div>
             </div>
         {/if}
-
+        </div>
         <!--
         Update button sits outside the tab content so it persists across
         section switches and saves the panel as a whole. PUT roundtrips
@@ -646,7 +641,7 @@
         re-applied so derived fields (my_lat / my_lon) and normalised
         forms (canonical gridsquare casing) flow back into the UI.
     -->
-        <div class="flex w-full h-52 justify-end items-end pt-3">
+        <div class="flex w-32 h-52 justify-end items-end">
             <button
                 id="my-station-update-btn"
                 type="button"
