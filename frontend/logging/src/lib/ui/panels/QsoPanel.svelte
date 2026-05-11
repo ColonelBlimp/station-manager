@@ -258,7 +258,13 @@
             myItuZone: ls.myItuZone,
             myDxcc: ls.myDxcc,
             myName: ls.myName,
-            myRig: ls.myRig,
+            // MY_RIG falls back to the rigdef's human-readable name
+            // (configState.station.rigName, resolved daemon-side from
+            // bridge.cat.driver and exposed via /v1/config). The
+            // operator's My Station → My Rig text override stays
+            // authoritative; when both are empty MY_RIG is omitted
+            // from the ADIF record.
+            myRig: ls.myRig || displayedState.rigName,
             myAntenna: ls.myAntenna,
             myMorseKeyType: ls.myMorseKeyType,
             myMorseKeyInfo: ls.myMorseKeyInfo,

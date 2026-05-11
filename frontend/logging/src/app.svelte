@@ -3,6 +3,7 @@
     import Toasts from './lib/ui/Toasts.svelte';
     import { fetchConfig, putConfig } from './lib/api/config';
     import { configState } from './lib/states/config.svelte';
+    import { startBridge } from './lib/states/bridge.svelte';
     import { toasts } from './lib/states/toasts.svelte';
     import { onMount } from 'svelte';
     import { isValidCallsign } from './lib/validators/callsign';
@@ -64,6 +65,11 @@
     // paths (network, server) leave configState.loaded=true with the
     // stub defaults so the UI doesn't hang on a half-rendered shell;
     // the operator gets a toast telling them what's wrong.
+    //
+    // After config settles, startBridge() wires the SSE consumer for
+    // /v1/rig/events. It tracks configState.station.enabled and
+    // opens/closes the EventSource accordingly — no-op while CAT is
+    // disabled, automatic open when the operator toggles CAT on.
     onMount(async (): Promise<void> => {
         const outcome = await fetchConfig();
         switch (outcome.kind) {
@@ -86,6 +92,7 @@
                 configState.markLoaded();
                 break;
         }
+        startBridge();
     });
 </script>
 

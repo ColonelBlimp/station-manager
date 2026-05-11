@@ -28,7 +28,29 @@ export interface ConfigResponse {
     default_logbook: DefaultLogbookFields;
     default_rig: DefaultRigFields;
     station: StationFields;
+    bridge: BridgeFields;
     mailer: MailerFields;
+}
+
+export interface BridgeFields {
+    /**
+     * Whether the daemon's bridge subsystem is enabled. The SPA
+     * mirrors this into configState.station.enabled so the three-flag
+     * isLive rule (ADR 0009) reflects the operator's persisted intent.
+     * Flipping bridge.enabled in config.json + restarting the daemon
+     * is how CAT is turned on/off — same "operator owns config.json
+     * directly" pattern as the SMTP-creds / hardware-config blocks.
+     */
+    enabled: boolean;
+    /**
+     * Rigdef's human-readable name (e.g. "Yaesu FTdx10") resolved
+     * daemon-side from `bridge.cat.driver`. Empty when the bridge is
+     * disabled or the driver is unknown. Used by the SPA's My Station
+     * Equipment panel and as the ADIF MY_RIG fallback so logged QSOs
+     * carry a descriptive rig string when the operator hasn't typed
+     * their own.
+     */
+    rig_name?: string;
 }
 
 export interface MailerFields {

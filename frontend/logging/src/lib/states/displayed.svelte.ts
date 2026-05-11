@@ -69,6 +69,16 @@ class DisplayedState {
     rigIdentity: string = $derived(this.isLive ? catState.rigIdentity : '');
 
     /**
+     * Rigdef name resolved daemon-side from `bridge.cat.driver` (e.g.
+     * "Yaesu FTdx10"). Distinct from `rigIdentity` (which is the
+     * IDENTITY value the rig hardware reports through CAT, e.g.
+     * "FTdx10"): rigName is the operator's chosen driver's human-
+     * readable name and is always available once `/v1/config` has
+     * hydrated. Empty when CAT is not live.
+     */
+    rigName: string = $derived(this.isLive ? configState.station.rigName : '');
+
+    /**
      * Split state. When live, uses the rig's reported splitOverride
      * (defaulting to false if the rig hasn't reported one yet). When
      * not live, derived from frequency divergence in manualState.

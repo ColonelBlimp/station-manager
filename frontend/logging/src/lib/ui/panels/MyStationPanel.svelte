@@ -1,6 +1,8 @@
 <script lang="ts">
     import { putConfig } from '../../api/config';
+    import { catState } from '../../states/cat.svelte';
     import { configState } from '../../states/config.svelte';
+    import { displayedState } from '../../states/displayed.svelte';
     import { qsoDefaults } from '../../states/qsoDefaults.svelte';
     import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
@@ -294,14 +296,37 @@
         {:else if activeSection === 'equipment'}
             <div id="my-station-equipment" role="tabpanel" class="flex flex-col space-y-3 pt-3">
                 <div class="flex space-x-4">
-                    <ValidatedInput
-                        id="my-rig"
-                        label="Rig"
-                        bind:value={configState.loggingStation.myRig}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
+                    <!--
+                        Rig field: when CAT is live the rigdef's
+                        human-readable name (e.g. "Yaesu FTdx10",
+                        resolved daemon-side from bridge.cat.driver)
+                        wins and the field is read-only. When CAT is
+                        off the operator's typed value is editable and
+                        round-trips via PUT /v1/config. The two
+                        branches keep the visual layout identical;
+                        only the data source and readonly state differ.
+                    -->
+                    {#if displayedState.isLive}
+                        <ValidatedInput
+                            id="my-rig"
+                            label="Rig"
+                            value={displayedState.rigName}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38 bg-surface-disabled cursor-default"
+                            readonly
+                            title="From CAT — change driver via config.json"
+                        />
+                    {:else}
+                        <ValidatedInput
+                            id="my-rig"
+                            label="Rig"
+                            bind:value={configState.loggingStation.myRig}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                    {/if}
                     <ValidatedInput
                         id="my-antenna"
                         label="Antenna"
@@ -312,13 +337,14 @@
                     />
 
                     <!--
-                    Default TX power is the fallback used by ADIF TX_PWR
-                    emission when CAT is unavailable. CAT-reported power
-                    from the rig overrides this when the bridge is
-                    connected. 0 means "not set" — TX_PWR is omitted from
-                    the QSO record. Persisted in config.json via the
-                    station block.
-                -->
+                        Default TX power: CAT-reported power wins when
+                        the bridge is live (read-only display, no
+                        round-trip — the live value is transient). When
+                        CAT is off the operator's persisted default
+                        feeds ADIF TX_PWR; 0 means "not set" → TX_PWR
+                        omitted from the QSO record. Persisted in
+                        config.json via the station block.
+                    -->
                     <div class="flex flex-col w-64">
                         <label for="default-power" class="input-label">Default TX power (W)</label>
                         <input
@@ -327,8 +353,21 @@
                             step="1"
                             min="0"
                             max="2000"
-                            class="input-base w-38 mt-1"
-                            bind:value={configState.station.defaultPower}
+                            class="input-base w-38 mt-1 {displayedState.isLive
+                                ? 'bg-surface-disabled cursor-default'
+                                : ''}"
+                            value={displayedState.isLive
+                                ? catState.power
+                                : configState.station.defaultPower}
+                            readonly={displayedState.isLive}
+                            title={displayedState.isLive ? 'From CAT (PC)' : ''}
+                            oninput={(e) => {
+                                if (!displayedState.isLive) {
+                                    configState.station.defaultPower = Number(
+                                        e.currentTarget.value,
+                                    );
+                                }
+                            }}
                         />
                         <p class="text-xs opacity-70 mt-1 max-w-md">
                             Used only when CAT is unavailable. When CAT is connected, the rig's

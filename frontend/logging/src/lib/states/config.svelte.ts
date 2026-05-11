@@ -46,8 +46,27 @@
 import type { ConfigResponse } from '../api/config';
 
 class StationConfig {
-    /** Whether CAT is enabled in operator config. SPA-only, in-memory. */
+    /**
+     * Whether CAT is enabled in operator config. Hydrated from
+     * `/v1/config` response's `bridge.enabled` field — the daemon's
+     * bridge subsystem flag is the single source of truth. Operator
+     * flips it via `config.json` + daemon restart (matching the
+     * SMTP-creds / hardware-config "operator owns config.json
+     * directly" pattern). Combined with bridgeState.connected +
+     * bridgeState.rigResponding into displayedState.isLive per ADR
+     * 0009's three-flag rule.
+     */
     enabled: boolean = $state(false);
+
+    /**
+     * Rigdef's human-readable name resolved daemon-side (e.g. "Yaesu
+     * FTdx10"). Empty when the bridge is disabled or the configured
+     * driver is unknown. Hydrated from `/v1/config` response's
+     * `bridge.rig_name`. The My Station Equipment panel displays it
+     * read-only when CAT is live; QsoPanel uses it as the ADIF MY_RIG
+     * fallback when the operator hasn't typed their own value.
+     */
+    rigName: string = $state('');
 
     /**
      * Whether the linear-amp multiplier is applied to rig power on
@@ -233,13 +252,19 @@ class ConfigState {
         this.defaultRig.port = resp.default_rig.port ?? '';
 
         // station block — daemon-persisted amp config. CAT-enabled
-        // (this.station.enabled) stays SPA-only and is not touched
-        // here; only the amp pair round-trips.
+        // (this.station.enabled) is hydrated below from resp.bridge.enabled
+        // — the daemon's bridge subsystem flag is the single source of
+        // truth for "is the operator running CAT?". Defensive guard on
+        // resp.bridge against older daemon builds that pre-date the
+        // BridgeInfo wire field.
         if (resp.station) {
             this.station.ampEnabled = resp.station.amp_enabled ?? false;
             this.station.ampMultiplier = resp.station.amp_multiplier ?? 1.0;
             this.station.defaultPower = resp.station.default_power ?? 0;
         }
+
+        this.station.enabled = resp.bridge?.enabled ?? false;
+        this.station.rigName = resp.bridge?.rig_name ?? '';
 
         // mailer projection — daemon-managed, read-only on the SPA
         // side. Defensive guard against missing block (older daemon

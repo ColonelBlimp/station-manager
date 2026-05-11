@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -39,6 +40,7 @@ type ConfigResponse struct {
 	DefaultLogbook types.Logbook        `json:"default_logbook"`
 	DefaultRig     types.RigConfig      `json:"default_rig"`
 	Station        types.StationConfig  `json:"station"`
+	Bridge         BridgeInfo           `json:"bridge"`
 	Mailer         MailerInfo           `json:"mailer"`
 }
 
@@ -51,6 +53,25 @@ type ConfigResponse struct {
 type MailerInfo struct {
 	Enabled          bool   `json:"enabled"`
 	DefaultRecipient string `json:"default_recipient,omitempty"`
+}
+
+// BridgeInfo is the SPA-visible subset of the bridge subsystem config.
+// Enabled mirrors the operator's persisted intent (drives the SPA's
+// configState.station.enabled and the three-flag isLive rule per ADR
+// 0009). RigName is the rigdef's human-readable name (e.g. "Yaesu
+// FTdx10") resolved from cat.Lookup(Bridge.Cat.Driver) — the SPA
+// shows it in the My Station Equipment panel and uses it as the
+// ADIF MY_RIG fallback so logged QSOs carry a descriptive rig string
+// when the operator hasn't typed their own. Empty when the bridge is
+// disabled or the configured driver is unknown.
+//
+// Port / baud / driver stay off the wire because they're hardware-
+// config concerns the SPA has no business reading or editing; the
+// operator owns them via config.json directly (matching the
+// SMTP-creds-not-on-the-wire decision above).
+type BridgeInfo struct {
+	Enabled bool   `json:"enabled"`
+	RigName string `json:"rig_name,omitempty"`
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +277,22 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 // nil-safe (test wiring passes mailer=nil) and tracking the actual
 // service state means a future "reload SMTP without restart" flow
 // stays correct without a parallel branch here.
+// rigNameForDriver resolves the rigdef's human-readable Name for the
+// configured driver id. Empty string when the driver is unset or the
+// id doesn't match a registered rigdef (treating unknown / missing as
+// "no name" rather than erroring — validateBridge already enforces
+// the driver-required-when-enabled rule loudly at startup).
+func rigNameForDriver(driver string) string {
+	if driver == "" {
+		return ""
+	}
+	def, ok := cat.Lookup(driver)
+	if !ok {
+		return ""
+	}
+	return def.Name
+}
+
 func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (ConfigResponse, error) {
 	resp := ConfigResponse{
 		SetupComplete:  cfg.SetupComplete,
@@ -263,6 +300,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		DefaultLogbook: types.Logbook{ID: cfg.DefaultLogbookID},
 		DefaultRig:     types.RigConfig{ID: cfg.DefaultRigID},
 		Station:        cfg.Station,
+		Bridge:         BridgeInfo{Enabled: cfg.Bridge.Enabled, RigName: rigNameForDriver(cfg.Bridge.Cat.Driver)},
 		Mailer: MailerInfo{
 			Enabled:          s.mailer.Enabled(),
 			DefaultRecipient: s.mailer.DefaultRecipient(),
