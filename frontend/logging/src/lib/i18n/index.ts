@@ -67,7 +67,7 @@ export function t(key: string, details?: Record<string, string>): string {
     const template =
         catalogues[currentLocale]?.[key] ?? catalogues.en[key] ?? `[missing: ${key}]`;
     if (!details) return template;
-    return template.replace(/\{(\w+)\}/g, (_match, name: string) =>
+    return template.replace(/{(\w+)}/g, (_match, name: string) =>
         details[name] !== undefined ? details[name] : `{${name}}`,
     );
 }
