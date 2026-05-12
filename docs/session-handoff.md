@@ -92,6 +92,43 @@ Future affordance (1):
 
 **Rig-specific mode → ADIF translation SHIPPED (session 51, 2026-05-11) — the M3a.4 follow-up that was parked is now closed.** See the Session 51 subsection below for the full work record. The bridge stays a pure pass-through (rig literal on the wire); the SPA resolves to ADIF (MODE, SUBMODE) pairs via per-rig mappings stored in two layers (rigdef-shipped defaults + operator overrides in config.json), merged daemon-side at `/v1/config` GET time. New My Station → Mode Mappings sub-tab edits the override layer. **Bonus:** the daemon's `internal/enums/modes` enum became data-driven via an embedded `adif-modes.json` catalogue + optional `$SM_WORKING_DIR/modes.json` operator override, so future ADIF spec growth doesn't strictly require a daemon binary release. The natural next picks-up point is **continuing live operator testing on the FTdx10** — confirm the Mode Mappings panel renders correctly with the operator's config, FT8 QSOs log with the correct ADIF MODE=FT8, the default mappings cover the operator's common modes.
 
+**`cmd/smd` code-review cleanup SHIPPED (session 52, 2026-05-12).** Focused re-review at `docs/reviews/cmd-smd-2026-05-12.md` produced 0 critical, 3 major, 4 medium, 5 minor findings — all closed in three commits over the session. Only behavioural change: bridge `Initialize`/`Start` failures now return wrapped errors instead of `os.Exit(1)`, so deferred cleanup (DB close, logger close, refresher stop, worker drain) actually runs on bridge-startup failure. Everything else is reader-correctness / hygiene — swapped doc-comments untangled, `doc.go` rewritten against ADR 0001 + ADR 0013 + ADR 0017, `defaultConfigPath()` helper extracted, lifecycle-shape variance documented in `run()`'s doc, named returns on `loadConfig`, process-lifetime globals annotated.
+
+### Session 52 work (2026-05-12) — `cmd/smd` code-review cleanup (12 findings closed)
+
+Narrow review pass — `cmd/smd/main.go`, `cmd/smd/doc.go`, `cmd/smd/main_test.go` only. Counts: 0 critical / 3 major / 4 medium / 5 minor. All addressed in one session, three commits. Review document: `docs/reviews/cmd-smd-2026-05-12.md`.
+
+**Major (3):**
+
+- **M1 — `os.Exit(1)` in bridge init/start bypasses deferred cleanup.** The bridge subsystem block at the M3a.1 wiring site was using `os.Exit(1)` on `Initialize` or `Start` failure, which violated `run()`'s own anti-pattern preamble. By that point the DB is open, lookup refresher is started, forwarder workers are running, and the logger is flushable — `os.Exit` skipped all of those. Fix: return wrapped errors via `errors.New(op).WithErr(err).WithMsg(...)`; add `defer bridgeSvc.Stop()` (idempotent via `sync.Once`) so the error-return path tears the bridge down too. Happy-path teardown still uses the explicit `bridgeSvc.Stop()` call in the shutdown sequence; the defer is a no-op then.
+- **M2 — Doc-comment surgery.** A prior merge had swapped two doc blocks: the long block above `ensureDefaultLogbook` opened describing `spawnForwarderWorkers` and switched subjects mid-paragraph; the block above `spawnForwarderWorkers` was the severed tail of the original spawn doc (started mid-sentence with `// loader validates Name uniqueness…`). Untangled both — each function now has its own intact doc.
+- **M3 — `doc.go` two ADRs out of date.** Original copy still claimed "Unix domain socket" only, listed "Wails desktop apps, wsjtx-bridge, importer-style CLIs" as the client surface, and said rig control lives in a separate process. Rewritten against ADR 0001 (browser SPA embedded in daemon, served at `GET /` when `Protocol=tcp && ServeSPA=true`), ADR 0013 (bridge runs as in-process daemon subsystem in the default deployment; package-import-graph boundary), and ADR 0017 (enrichment pipeline). Now also mentions the mailer and lookup pipeline that the old copy didn't acknowledge.
+
+**Medium (4):**
+
+- **Med1 — Deferred close callbacks assigning to outer `err`.** Logger and DB close defers used `if err = …` instead of `if err := …`. `run()` returns `runErr` not `err`, so output was unaffected today, but it left a footgun if the return signature ever changed. Aligned with the refresher-Stop defer (which already uses `:=`).
+- **Med2 — Hand-wired enrichment pipeline.** Orchestrator + refresher + providers are constructed inside `buildEnrichment` via struct literal, not through `iocdi`. Added a doc paragraph explaining why: instantiation is gated by `cfg.Lookup.Hamnut.Enabled` and `cfg.Lookup.Chain[i].Enabled` with a Name → concrete-type dispatch in the chain loop, neither of which the container expresses cleanly. The "grep for container.Register won't surface these" line is the discoverability pointer.
+- **Med3 — Asymmetric lifecycle shapes.** `run()`'s doc now lists each subsystem (DB / forwarders / bridge / refresher+providers / mailer / hub) and the rationale for its lifecycle pattern — DB splits Initialize from Open because the DSN depends on the loaded config; forwarders are per-config-entry N so don't fit DI; bridge takes the loaded `cfg.Bridge` snapshot which isn't available at `container.Build` time; mailer gates internally via `Enabled()` from `cfg.Smtp.Host`; hub is a fan-out primitive, not a service.
+- **Med4 — Process-lifetime globals annotated.** `qrz.UserAgent`, `adif.ProgramVersion`, `iocdi.SetLiteralProvider` all get `intentionally process-lifetime` notes so a future reader doesn't suspect missing restore-on-exit cleanup.
+
+**Minor (5):**
+
+- **Min1 — Duplicated precedence ladder.** `loadConfig` and `resolveConfigPath` both implemented "explicit flag → SM_WORKING_DIR → cwd." Extracted `defaultConfigPath()` helper; both functions route through it. Adding a third tier (e.g. `XDG_CONFIG_HOME`) is now a one-place change. Side benefit: `loadConfig` shrank from 30 → 14 lines by collapsing two near-identical env/cwd branches into one. Tiny correctness improvement: env branch now uses `filepath.Join` instead of string concat (no double-slash if the env var ends with `/`).
+- **Min2 — Double `workerCancel` reads as redundant.** Both the `defer workerCancel()` and the explicit call in shutdown are load-bearing — defer covers error-return path; explicit call participates in ordered teardown (must run before `server.Shutdown` and the WG drain). Added a one-line comment so future readers don't suspect cruft.
+- **Min3 — Named returns on `loadConfig`.** Signature is now `(cfg config.Config, firstRunPath string, err error)`. Reader doesn't have to descend into the body to learn what the string means.
+- **Min4 — `hub.Close()` has no timeout.** Reviewer suggested wrapping in the same `select { <-done / <-ctx.Done() }` pattern used for worker drain. Inspected the implementation: `hub.Close` holds `h.mu` only briefly for a synchronous "close every subscriber channel" loop, no wg.Wait, no drain — non-blocking by construction. Added a comment explaining the assumption so a future Close-that-drains rewrite gets reviewed against it.
+- **Min5 — `ShutdownTimeoutSec=0` defence.** `applyDefaults` sets it to 10 today, so it won't trigger in practice — but a hand-edited config or a future schema where defaults are missed would make `ctx.Done()` fire immediately and spam-log "workers did not drain within shutdown timeout" on every clean shutdown. Defensive `if shutdownTimeout <= 0 { shutdownTimeout = 10 * time.Second }` floor.
+
+**Verification:**
+
+- `go build ./...` clean.
+- `go vet ./cmd/smd/...` clean.
+- `go test ./cmd/smd/...` green (the full spawn-worker + ensureDefaultLogbook + loadConfig matrices all still pass — `loadConfig`'s named-returns refactor preserves the public signature shape so test call sites needed no changes).
+
+**Doc footprint:** review document, this session-handoff entry. No ADR, CLAUDE.md, or memory changes — the work is hygiene; no architectural rule moved.
+
+**Next picks-up point unchanged from session 51:** continue live operator testing on the FTdx10 with the i18n + Mode Mappings panel; callsign-stacking design conversation (parked, FIFO confirmed, right-drawer placement now discussed but not implemented).
+
 ### Session 51 work (2026-05-11) — Rig-mode → ADIF translation shipped; daemon enum is now data-driven
 
 Five-stage work that closes the mode-mapping gap surfaced during M3a.4 live testing. Architecture as settled with the operator: bridge stays pure (rig literal on the wire); SPA resolves; per-rig translation table in a layered shape (rigdef-shipped defaults + operator overrides in config.json, merged at the daemon).
