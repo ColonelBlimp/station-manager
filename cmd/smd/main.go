@@ -296,6 +296,12 @@ func run() error {
 	// cancelled at shutdown, thus Run's select can observe it; each worker
 	// then finishes its current processRow and exits.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
+	// Defer covers the error-return path between here and the
+	// explicit workerCancel() in the happy-path shutdown sequence
+	// below — that explicit call has to run before server.Shutdown
+	// and the WG drain (it's part of the ordered teardown), not at
+	// function return. context.CancelFunc is safe to call twice;
+	// the second call is a no-op.
 	defer workerCancel()
 
 	// workerWG tracks live forwarder workers so shutdown can wait for
@@ -404,6 +410,15 @@ func run() error {
 	}
 
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
+	// config.applyDefaults sets ShutdownTimeoutSec=10 today, but a
+	// hand-edited config.json with the field at zero (or omitted on
+	// a future schema where applyDefaults misses it) would make
+	// ctx.Done() fire immediately and spam-log "workers did not drain
+	// within shutdown timeout" on every clean shutdown. Floor it so
+	// the drain-reporting select stays meaningful.
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 10 * time.Second
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
@@ -433,6 +448,12 @@ func run() error {
 	// have stopped by here — workers drained above, handlers finished
 	// under server.Shutdown. Close the hub so any still-connected SSE
 	// subscribers see a clean channel-close and return.
+	//
+	// Deliberately untimed: hub.Close holds the hub mutex only for a
+	// brief synchronous "close every subscriber channel" loop and does
+	// not wait on subscriber goroutines. If that ever changes, wrap
+	// this in the same `select { <-done / <-ctx.Done() }` pattern
+	// used for the worker drain above.
 	hub.Close()
 
 	return runErr
@@ -745,6 +766,21 @@ func buildEnrichment(
 	return orch, ref, nil
 }
 
+// defaultConfigPath returns smd's default config.json location when no
+// explicit --config flag was supplied. SM_WORKING_DIR is preferred;
+// otherwise the current working directory. Shared by loadConfig
+// (initial resolution) and resolveConfigPath (post-load path-record
+// for PUT /v1/config rewrites) so the two precedence ladders cannot
+// drift — adding a third tier (e.g. XDG_CONFIG_HOME) is a one-place
+// change.
+func defaultConfigPath() string {
+	if dir := os.Getenv("SM_WORKING_DIR"); dir != "" {
+		return filepath.Join(dir, "config.json")
+	}
+	cwd, _ := os.Getwd()
+	return filepath.Join(cwd, "config.json")
+}
+
 // resolveConfigPath mirrors loadConfig's precedence to determine the
 // on-disk path that holds the config we just loaded. Used to populate
 // cfgSvc.Path so /v1/config PUT can atomically rewrite the same file.
@@ -757,45 +793,30 @@ func resolveConfigPath(flagPath, firstRunPath string) string {
 	if flagPath != "" {
 		return flagPath
 	}
-	if dir := os.Getenv("SM_WORKING_DIR"); dir != "" {
-		return filepath.Join(dir, "config.json")
-	}
-	cwd, _ := os.Getwd()
-	return filepath.Join(cwd, "config.json")
+	return defaultConfigPath()
 }
 
-// loadConfig resolves and loads the daemon's configuration. The second
-// return value is the path that was newly written on a first-run seed
-// (empty when an existing config was loaded) — the caller emits a
-// structured log line for it once the logger is initialised, so the
-// first-run event lands in smd.log alongside the rest of startup.
-func loadConfig(path string) (config.Config, string, error) {
+// loadConfig resolves and loads the daemon's configuration. The named
+// firstRunPath return is non-empty only when a default config was
+// just seeded to disk — the caller emits a structured log line for
+// it once the logger is initialised, so the first-run event lands in
+// smd.log alongside the rest of startup. firstRunPath is empty when
+// an existing config was loaded.
+func loadConfig(path string) (cfg config.Config, firstRunPath string, err error) {
 	// Explicit path: operator chose it, surface a not-found as an error
 	// rather than silently writing a default file at an arbitrary
 	// location they didn't pick.
 	if path != "" {
-		cfg, err := config.Load(path)
+		cfg, err = config.Load(path)
 		return cfg, "", err
 	}
 
-	// Try SM_WORKING_DIR/config.json, then ./config.json
-	if dir := os.Getenv("SM_WORKING_DIR"); dir != "" {
-		candidate := dir + "/config.json"
-		if _, err := os.Stat(candidate); err == nil {
-			cfg, err := config.Load(candidate)
-			return cfg, "", err
-		}
-		return firstRunWrite(candidate, dir)
-	}
-
-	cwd, _ := os.Getwd()
-	cwdCandidate := filepath.Join(cwd, "config.json")
-	if _, err := os.Stat(cwdCandidate); err == nil {
-		cfg, err := config.Load(cwdCandidate)
+	candidate := defaultConfigPath()
+	if _, statErr := os.Stat(candidate); statErr == nil {
+		cfg, err = config.Load(candidate)
 		return cfg, "", err
 	}
-
-	return firstRunWrite(cwdCandidate, cwd)
+	return firstRunWrite(candidate, filepath.Dir(candidate))
 }
 
 // firstRunWrite seeds a default config.json at the resolved candidate
