@@ -79,6 +79,30 @@ func main() {
 // happy path AND the failure path. The alternative — ad-hoc fatal()
 // calls peppered through startup — left open handles when startup
 // failed midway (see review L4).
+//
+// Subsystem lifecycle shapes intentionally diverge — CLAUDE.md's
+// canonical Initialize → Start → Stop applies where it earns its keep:
+//
+//   - DB (sqlite): Initialize via container.Build, manual Open after
+//     working-dir resolution, defer Close. Open is split from
+//     Initialize because the on-disk DSN depends on cfg, which is
+//     loaded between container construction and Open.
+//   - Forwarders: per-config-entry, not singleton — constructed inside
+//     spawnForwarderWorkers, run under safego.GoTracked, drained via
+//     ctx cancel + WaitGroup. Doesn't fit DI (config-driven N).
+//   - Bridge: manual New + Initialize + Start + Stop. Hand-wired
+//     because the constructor takes the loaded cfg.Bridge snapshot,
+//     and Start needs workerCtx (not available at container.Build
+//     time). See "Bridge subsystem" section below.
+//   - Refresher + lookup providers: hand-wired inside buildEnrichment
+//     because operator config gates which providers exist — see
+//     buildEnrichment's own doc for the rationale.
+//   - Mailer: no Initialize / Start / Stop. The Service reports
+//     Enabled() from cfg.Smtp.Host; handlers gate via Enabled() and
+//     return 503 mailer_disabled otherwise. Lifecycle would be ceremony.
+//   - Hub: constructed inline (events.NewHub), no Initialize / Start,
+//     manual Close after publishers drain. It's a fan-out primitive,
+//     not a service.
 func run() error {
 	const op errors.Op = "smd.run"
 
@@ -94,6 +118,10 @@ func run() error {
 	//     the client + app).
 	//   - adif.ProgramVersion is emitted as PROGRAMVERSION in ADIF
 	//     export headers.
+	// Both are package globals; intentionally process-lifetime — set
+	// once at daemon boot and not restored, since smd is a single-shot
+	// binary. Tests that import this package must reset these if they
+	// care about isolation.
 	qrz.UserAgent = "station-manager/" + Version
 	adif.ProgramVersion = Version
 
@@ -135,7 +163,11 @@ func run() error {
 		return errors.New(op).WithErr(err).WithMsg("register qso service")
 	}
 
-	// The logging service's WorkingDir string field is resolved via LiteralProvider.
+	// The logging service's WorkingDir string field is resolved via
+	// LiteralProvider. SetLiteralProvider writes to an iocdi package
+	// global (atomic.Value); intentionally process-lifetime — the
+	// container shares this provider with any other iocdi consumer in
+	// the process, which is fine for a single-shot daemon binary.
 	iocdi.SetLiteralProvider(func(id string, targetType reflect.Type) (any, bool, error) {
 		if id == "workingdir" && targetType.Kind() == reflect.String {
 			return cfgSvc.WorkingDir(), true, nil
@@ -158,7 +190,7 @@ func run() error {
 	// dbSvc close below, so later defers can still use the logger).
 	defer func() {
 		loggerSvc.InfoWith().Msg("smd stopped")
-		if err = loggerSvc.Close(); err != nil {
+		if err := loggerSvc.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", err)
 		}
 	}()
@@ -223,7 +255,7 @@ func run() error {
 	// Registered AFTER Open succeeds, so that we never double-close or close a
 	// handle we didn't open.
 	defer func() {
-		if err = dbSvc.Close(); err != nil {
+		if err := dbSvc.Close(); err != nil {
 			loggerSvc.ErrorWith().Err(err).Msg("database close error")
 		}
 	}()
@@ -619,6 +651,17 @@ func spawnForwarderWorkers(
 // The refresher is Started with workerCtx so daemon shutdown
 // (workerCancel above) cancels in-flight refresh fns; Stop is
 // deferred by the caller to wait for the drain.
+//
+// Intentionally hand-wired outside the iocdi container: which providers
+// to instantiate is a runtime decision read from operator config
+// (cfg.Lookup.Hamnut.Enabled, cfg.Lookup.Chain[i].Enabled, and the
+// provider Name discriminator inside the chain loop). DI registration
+// would have to model "instantiate iff config flag X" plus a Name →
+// concrete-type dispatch — neither shape the container expresses well.
+// The orchestrator and refresher itself are then trivial struct
+// literals, so promoting just those to DI would split the pipeline
+// across two construction sites for no benefit. A grep for
+// container.Register won't surface these; this comment is the pointer.
 func buildEnrichment(
 	workerCtx context.Context,
 	cfg config.Config,
