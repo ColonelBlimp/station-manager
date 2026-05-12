@@ -135,7 +135,6 @@
                 placeholder="Email"
                 value={enrichmentState.result?.station?.email ?? ''}
                 readonly
-                tabindex={-1}
                 class="input-base mt-1 bg-surface-disabled cursor-default"
             />
         </div>
@@ -148,7 +147,6 @@
                     placeholder="Web site"
                     value={enrichmentState.result?.station?.web ?? ''}
                     readonly
-                    tabindex={-1}
                     class="input-base bg-surface-disabled cursor-default"
                 />
                 <button

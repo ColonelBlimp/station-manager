@@ -20,12 +20,15 @@
         invalid = !isValidCallsign(target.value);
     };
 
-    const validateAndFocus = (): void => {
+    // Mark invalid on blur but do NOT fight the operator's focus
+    // choice. Forced refocus traps keyboard users who deliberately
+    // Shift+Tab back out of the form (e.g. realising mid-typo they
+    // want to abandon the QSO entry), and the red-border + aria-invalid
+    // signals are sufficient to communicate the problem. The submit
+    // button is the load-bearing guard against logging an invalid
+    // callsign.
+    const validateOnBlur = (): void => {
         invalid = !isValidCallsign(value);
-        if (invalid && inputElement) {
-            inputElement.focus();
-            inputElement.select();
-        }
     };
 
     const handleKeydown = (e: KeyboardEvent): void => {
@@ -46,7 +49,7 @@
             class="input-base uppercase {invalid ? 'invalid-input' : ''}"
             aria-invalid={invalid}
             oninput={handleInput}
-            onblur={validateAndFocus}
+            onblur={validateOnBlur}
             onkeydown={handleKeydown}
             type="text"
             autocomplete="off"

@@ -73,24 +73,46 @@
     push) because no in-place movement is calmer when the operator's
     attention is on the QSO form.
 
-    `aria-live="polite"` so screen readers announce new toasts without
-    interrupting the operator's current focus context. role="status" is
-    the right WAI-ARIA mapping for non-critical informational regions.
+    Accessibility: the outer container is presentational — no aria-live,
+    no role. Each toast carries its own live-region semantics via role
+    (alert for errors → assertive announce; status for info/warn →
+    polite announce). This avoids the "interactive children inside an
+    aria-live region" anti-pattern (a child <button> in a live region
+    has unspecified behaviour across NVDA / VoiceOver / Orca) and lets
+    severity drive announce-urgency without a separate aria-live attr.
 -->
 <div
     class="fixed top-1.25 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50 pointer-events-none"
-    aria-live="polite"
-    role="status"
 >
     {#each toastsState.items as toast (toast.id)}
-        <button
-            type="button"
-            class="toast-base {levelClass(toast.level)} pointer-events-auto"
-            onclick={() => dismissToast(toast.id)}
+        <!--
+            Toast itself is non-interactive — role=alert / role=status
+            so the message text is the announced content (no aria-label
+            override). The dismiss button is a sibling child with its
+            own accessible name; screen readers announce the message
+            first, then encounter the button as a discrete control.
+        -->
+        <div
+            class="toast-base {levelClass(toast.level)} pointer-events-auto flex flex-row items-start gap-2"
+            role={toast.level === 'error' ? 'alert' : 'status'}
             transition:fade={{ duration: 150 }}
-            aria-label={`Dismiss ${toast.level} notification`}
         >
-            <strong>{levelLabel(toast.level)}</strong>{toast.message}
-        </button>
+            <span class="flex-1">
+                <strong>{levelLabel(toast.level)}</strong>{toast.message}
+            </span>
+            <button
+                type="button"
+                class="text-current opacity-70 hover:opacity-100 cursor-pointer leading-none px-1 -my-0.5 self-start"
+                aria-label="Dismiss notification"
+                onclick={() => dismissToast(toast.id)}
+            >
+                <!--
+                    × glyph as visual affordance. Text is hidden from
+                    AT via aria-hidden because the aria-label on the
+                    parent button already names the control.
+                -->
+                <span aria-hidden="true">×</span>
+            </button>
+        </div>
     {/each}
 </div>

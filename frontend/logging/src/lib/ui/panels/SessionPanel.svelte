@@ -112,29 +112,22 @@
                     <th class="py-1 pr-4">Time On</th>
                     <th class="py-1 pr-4">Country</th>
                     <th class="py-1 pr-4">Distance</th>
+                    <th class="py-1 pr-4 sr-only">Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {#each rows as row (row.uuid)}
                     <!--
-                        The whole row is clickable. <tr> can't host a button
-                        role cleanly inside a <table> without breaking the
-                        table semantics, so the row uses role="button" with
-                        keyboard handlers. Hover indicates clickability;
-                        focus state borrows the row's existing border.
+                        Edit affordance lives in a trailing cell rather
+                        than as a role-on-row. role="button" on <tr>
+                        overrode the implicit row semantics, so screen
+                        readers stopped announcing cell-by-cell and the
+                        gridcell relationship was lost. Inline button
+                        per row preserves proper table semantics; the
+                        explicit Edit control is also a clearer
+                        keyboard target than a row-wide hit area.
                     -->
-                    <tr
-                        class="border-b border-gray-100 last:border-0 hover:bg-indigo-50 focus:bg-indigo-50 cursor-pointer"
-                        role="button"
-                        tabindex="0"
-                        onclick={() => void openEdit(row.uuid)}
-                        onkeydown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                void openEdit(row.uuid);
-                            }
-                        }}
-                    >
+                    <tr class="border-b border-gray-100 last:border-0 hover:bg-indigo-50">
                         <td class="py-1 pr-4 font-semibold">{row.callsign}</td>
                         <td class="py-1 pr-4">{row.name}</td>
                         <td class="py-1 pr-4">{formatFrequency(row.freqHz)}</td>
@@ -148,6 +141,16 @@
                         </td>
                         <td class="py-1 pr-4">{row.country}</td>
                         <td class="py-1 pr-4">{formatDistance(row.distanceKm)}</td>
+                        <td class="py-1 pr-2">
+                            <button
+                                type="button"
+                                class="text-indigo-700 hover:text-indigo-900 cursor-pointer underline underline-offset-2"
+                                aria-label={`Edit QSO with ${row.callsign}`}
+                                onclick={() => void openEdit(row.uuid)}
+                            >
+                                Edit
+                            </button>
+                        </td>
                     </tr>
                 {/each}
             </tbody>

@@ -146,7 +146,19 @@
                 QSOs is configurable and not enabled by default).
             </p>
         </div>
-        <div class="flex flex-col items-center">
+        <!--
+            Wrapped in a <form> so Enter on the Callsign input submits
+            via the same path as clicking Save. preventDefault keeps the
+            browser from issuing the synthetic GET that the absence of
+            a method/action would otherwise trigger.
+        -->
+        <form
+            class="flex flex-col items-center"
+            onsubmit={(e) => {
+                e.preventDefault();
+                void putCallsign();
+            }}
+        >
             <div class="flex flex-row items-center space-x-4">
                 <label class="input-label" for="callsign">Callsign</label>
                 <input
@@ -161,12 +173,12 @@
                     spellcheck="false"
                 />
                 <button
-                    onclick={putCallsign}
+                    type="submit"
                     disabled={callsign.trim() === '' || saving}
                     class="h-9 cursor-pointer rounded-md bg-focus p-2.5 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
                     >{saving ? 'Saving…' : 'Save'}</button
                 >
             </div>
-        </div>
+        </form>
     </main>
 {/snippet}

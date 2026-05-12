@@ -6,7 +6,10 @@ import Callsign from './Callsign.svelte';
  * Callsign component. Domain-specific input with three behaviours
  * beyond plain text entry:
  *   - Validation via isValidCallsign (real-time as the operator types)
- *   - Focus-trap on blur when the value is invalid AND non-empty
+ *   - Invalid flag set on blur (red border + aria-invalid stay); focus
+ *     is NOT trapped — operator can Shift+Tab away from a half-typed
+ *     callsign to abandon the QSO entry. The submit button is the
+ *     load-bearing guard against logging an invalid callsign.
  *   - Tab → onenrich callback (Tab only, not Shift+Tab) when value is
  *     valid + non-empty; uppercase-normalized to the callback
  *   - Uppercase visual styling via the `uppercase` Tailwind class
@@ -14,7 +17,7 @@ import Callsign from './Callsign.svelte';
  * Per the project's validator-presence convention, an empty value is
  * treated as "not invalid" — the validator has no objection to absence;
  * required-ness is enforced at the form layer when the QSO draft store
- * lands. Callsign therefore does NOT trap focus on empty blur.
+ * lands.
  */
 
 describe('Callsign', () => {
@@ -78,24 +81,30 @@ describe('Callsign', () => {
         });
     });
 
-    describe('focus-trap on blur', () => {
-        it('refocuses the input when blurring with an invalid non-empty value', async () => {
-            const { input } = setup({ value: 'M0' }); // invalid
-            await fireEvent.blur(input);
-            expect(document.activeElement).toBe(input);
-        });
+    describe('blur behaviour', () => {
+        // I18 — Callsign used to forcibly refocus on invalid blur,
+        // trapping keyboard users who wanted to leave the form. New
+        // contract: invalid flag is set on blur, focus is respected.
 
-        it('selects the input contents when refocusing after invalid blur', async () => {
+        it('sets aria-invalid on blur with an invalid non-empty value', async () => {
             const { input } = setup({ value: 'M0' });
             await fireEvent.blur(input);
-            // selectionStart/End should span the whole value
-            expect(input.selectionStart).toBe(0);
-            expect(input.selectionEnd).toBe(input.value.length);
+            expect(input.getAttribute('aria-invalid')).toBe('true');
         });
 
-        it('does not trap focus when blurring with an empty value', async () => {
+        it('does not refocus on blur with an invalid value (no focus trap)', async () => {
+            const { input } = setup({ value: 'M0' });
+            const sibling = document.createElement('button');
+            document.body.appendChild(sibling);
+            input.focus();
+            sibling.focus();
+            await fireEvent.blur(input);
+            expect(document.activeElement).toBe(sibling);
+            sibling.remove();
+        });
+
+        it('does not refocus on blur with an empty value', async () => {
             const { input } = setup({ value: '' });
-            // Focus a sibling element to give blur somewhere to go
             const sibling = document.createElement('button');
             document.body.appendChild(sibling);
             input.focus();
@@ -105,7 +114,7 @@ describe('Callsign', () => {
             sibling.remove();
         });
 
-        it('does not trap focus when blurring with a valid value', async () => {
+        it('does not refocus on blur with a valid value', async () => {
             const { input } = setup({ value: 'M0ABC' });
             const sibling = document.createElement('button');
             document.body.appendChild(sibling);

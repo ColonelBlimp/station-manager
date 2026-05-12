@@ -47,6 +47,50 @@
     let activeTab: TabId = $state('worked');
 
     /*
+        WAI-ARIA tabs keyboard contract:
+          - ArrowLeft / ArrowRight cycle between tabs (wraps at ends).
+          - Home / End jump to first / last.
+          - Roving tabindex: the active tab is tabindex=0, the others
+            tabindex=-1, so a single Tab from the previous focusable
+            lands on the active tab; further movement uses arrows.
+          - Auto-activation: arrow movement also changes activeTab so
+            the panel content follows focus. The reviewer's WAI-ARIA
+            pattern reference allows either auto- or manual-activation;
+            auto-activation matches operator expectation for a small
+            fixed tab set.
+    */
+    function moveTab(delta: number): void {
+        const idx = tabs.findIndex((t) => t.id === activeTab);
+        const next = (idx + delta + tabs.length) % tabs.length;
+        activeTab = tabs[next].id;
+        const btn = document.getElementById(`tab-${tabs[next].id}`);
+        btn?.focus();
+    }
+
+    function handleTabKeydown(e: KeyboardEvent): void {
+        switch (e.key) {
+            case 'ArrowRight':
+                e.preventDefault();
+                moveTab(1);
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                moveTab(-1);
+                break;
+            case 'Home':
+                e.preventDefault();
+                activeTab = tabs[0].id;
+                document.getElementById(`tab-${tabs[0].id}`)?.focus();
+                break;
+            case 'End':
+                e.preventDefault();
+                activeTab = tabs[tabs.length - 1].id;
+                document.getElementById(`tab-${tabs[tabs.length - 1].id}`)?.focus();
+                break;
+        }
+    }
+
+    /*
         Single class helper. Active state suppresses the cursor and
         flips the colour; everything else is inherited from
         .tab-item (see app.css).
@@ -288,12 +332,15 @@
                     row one click target.
                 -->
                 <button
+                    id={`tab-${tab.id}`}
                     type="button"
                     role="tab"
                     class="tab-item {tabItemClass(activeTab === tab.id)}"
                     aria-selected={activeTab === tab.id}
                     aria-controls={`panel-${tab.id}`}
+                    tabindex={activeTab === tab.id ? 0 : -1}
                     onclick={() => (activeTab = tab.id)}
+                    onkeydown={handleTabKeydown}
                 >
                     {#if tab.id === 'worked'}{@render workedIcon()}
                     {:else if tab.id === 'details'}{@render detailsIcon()}
@@ -328,12 +375,12 @@
     </div>
 
     {#if activeTab === 'worked'}
-        <div id="panel-worked" role="tabpanel"><WorkedPanel /></div>
+        <div id="panel-worked" role="tabpanel" aria-labelledby="tab-worked"><WorkedPanel /></div>
     {:else if activeTab === 'details'}
-        <div id="panel-details" role="tabpanel"><DetailsPanel /></div>
+        <div id="panel-details" role="tabpanel" aria-labelledby="tab-details"><DetailsPanel /></div>
     {:else if activeTab === 'station'}
-        <div id="panel-station" role="tabpanel"><MyStationPanel /></div>
+        <div id="panel-station" role="tabpanel" aria-labelledby="tab-station"><MyStationPanel /></div>
     {:else if activeTab === 'session'}
-        <div id="panel-session" role="tabpanel"><SessionPanel /></div>
+        <div id="panel-session" role="tabpanel" aria-labelledby="tab-session"><SessionPanel /></div>
     {/if}
 </div>

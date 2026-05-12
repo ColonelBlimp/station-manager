@@ -242,6 +242,45 @@
         isActive
             ? 'text-indigo-700 cursor-default'
             : 'text-gray-500 hover:text-gray-700 cursor-pointer';
+
+    /*
+        WAI-ARIA tabs keyboard contract — same shape as InfoPanel.
+        ArrowLeft/Right cycle (wrap), Home/End jump to ends, roving
+        tabindex on the buttons. Auto-activation: focus and selection
+        move together since the tab set is small and the operator
+        always wants to see the section they're focusing.
+    */
+    function moveSection(delta: number): void {
+        const idx = sections.findIndex((s) => s.id === activeSection);
+        const next = (idx + delta + sections.length) % sections.length;
+        activeSection = sections[next].id;
+        document.getElementById(`my-station-tab-${sections[next].id}`)?.focus();
+    }
+
+    function handleSectionKeydown(e: KeyboardEvent): void {
+        switch (e.key) {
+            case 'ArrowRight':
+                e.preventDefault();
+                moveSection(1);
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                moveSection(-1);
+                break;
+            case 'Home':
+                e.preventDefault();
+                activeSection = sections[0].id;
+                document.getElementById(`my-station-tab-${sections[0].id}`)?.focus();
+                break;
+            case 'End':
+                e.preventDefault();
+                activeSection = sections[sections.length - 1].id;
+                document
+                    .getElementById(`my-station-tab-${sections[sections.length - 1].id}`)
+                    ?.focus();
+                break;
+        }
+    }
 </script>
 
 <div class="flex flex-col p-2">
@@ -252,12 +291,15 @@
         {#each sections as section (section.id)}
             <div class="tab-item {sectionItemClass(activeSection === section.id)}">
                 <button
+                    id={`my-station-tab-${section.id}`}
                     type="button"
                     role="tab"
                     class="tab-button text-sm {activeSection === section.id ? '' : 'cursor-pointer'}"
                     aria-selected={activeSection === section.id}
                     aria-controls={`my-station-${section.id}`}
-                    onclick={() => (activeSection = section.id)}>{section.title}</button
+                    tabindex={activeSection === section.id ? 0 : -1}
+                    onclick={() => (activeSection = section.id)}
+                    onkeydown={handleSectionKeydown}>{section.title}</button
                 >
             </div>
         {/each}
@@ -266,7 +308,12 @@
     <div class="flex h-full">
         <div class="flex w-200">
         {#if activeSection === 'identity'}
-            <div id="my-station-identity" role="tabpanel" class="flex flex-col space-y-1 pt-3">
+            <div
+                id="my-station-identity"
+                role="tabpanel"
+                aria-labelledby="my-station-tab-identity"
+                class="flex flex-col space-y-1 pt-3"
+            >
                 <div class="flex space-x-4">
                     <ValidatedInput
                         id="station-callsign"
@@ -305,7 +352,12 @@
                 </div>
             </div>
         {:else if activeSection === 'location'}
-            <div id="my-station-location" role="tabpanel" class="flex flex-col pt-3">
+            <div
+                id="my-station-location"
+                role="tabpanel"
+                aria-labelledby="my-station-tab-location"
+                class="flex flex-col pt-3"
+            >
                 <div class="flex space-x-4">
                     <ValidatedInput
                         id="my-gridsquare"
@@ -395,7 +447,12 @@
                 </div>
             </div>
         {:else if activeSection === 'equipment'}
-            <div id="my-station-equipment" role="tabpanel" class="flex flex-col space-y-3 pt-3">
+            <div
+                id="my-station-equipment"
+                role="tabpanel"
+                aria-labelledby="my-station-tab-equipment"
+                class="flex flex-col space-y-3 pt-3"
+            >
                 <div class="flex space-x-4">
                     <!--
                         Rig field: when CAT is live the rigdef's
@@ -479,7 +536,12 @@
                 </div>
             </div>
         {:else if activeSection === 'modes'}
-            <div class="flex w-full p-2">
+            <div
+                id="my-station-modes"
+                role="tabpanel"
+                aria-labelledby="my-station-tab-modes"
+                class="flex w-full p-2"
+            >
                 <div class="flex flex-col w-110 overflow-hidden">
                     <ul role="list" class="flex flex-col space-y-3 h-52 p-2 overflow-y-scroll">
                         {#each configState.bridge.rigModes as rigStr (rigStr)}
@@ -536,7 +598,12 @@
                 </div>
             </div>
         {:else if activeSection === 'cw'}
-            <div id="my-station-cw" role="tabpanel" class="flex flex-col space-y-1 pt-3">
+            <div
+                id="my-station-cw"
+                role="tabpanel"
+                aria-labelledby="my-station-tab-cw"
+                class="flex flex-col space-y-1 pt-3"
+            >
                 <div class="flex space-x-4">
                     <ValidatedInput
                         id="my-morse-key-type"
@@ -557,7 +624,12 @@
                 </div>
             </div>
         {:else if activeSection === 'qso'}
-            <div id="my-station-qso" role="tabpanel" class="flex flex-row space-x-4 pt-3">
+            <div
+                id="my-station-qso"
+                role="tabpanel"
+                aria-labelledby="my-station-tab-qso"
+                class="flex flex-row space-x-4 pt-3"
+            >
                 <div class="flex flex-col space-y-4">
                     <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">Misc</h4>
                     <!--
