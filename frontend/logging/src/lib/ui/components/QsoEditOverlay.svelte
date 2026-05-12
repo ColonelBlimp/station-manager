@@ -127,10 +127,15 @@
     async function handleSave(): Promise<void> {
         if (qsoEditState.saving) return;
         qsoEditState.saving = true;
-        const uuid = qsoEditState.uuid;
-        const body = qsoEditState.toPatchBody();
 
         try {
+            // Build inside the try so a throw from toPatchBody (rare
+            // but possible for malformed-draft edge cases) still hits
+            // the finally and clears `saving` — otherwise the Save
+            // button would stay disabled until the overlay was
+            // dismissed and reopened.
+            const uuid = qsoEditState.uuid;
+            const body = qsoEditState.toPatchBody();
             const outcome = await patchQso(uuid, body);
             switch (outcome.kind) {
                 case 'ok': {

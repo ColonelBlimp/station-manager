@@ -159,8 +159,20 @@ export interface AdifQsoFields {
     appSmRequestQsl?: boolean;
 }
 
+// Reused across every tag emit; module-scope so we don't allocate one
+// per call. TextEncoder is always UTF-8 per spec.
+const adifUtf8 = new TextEncoder();
+
+// ADIF length prefixes are byte counts (the daemon parser slices by
+// byte at internal/adif/parse.go), not UTF-16 code units. JS
+// `string.length` returns code units, which under-counts every
+// non-ASCII character (e.g. "José" is length 4 in JS but 5 bytes in
+// UTF-8). A wrong prefix causes the daemon to truncate the value or
+// break the next tag boundary outright, corrupting QSOs for operators
+// whose name / qth / comment / my_country (e.g. "Côte d'Ivoire")
+// contains accented characters. Encode + measure.
 function adifTag(name: string, value: string): string {
-    return `<${name}:${value.length}>${value}`;
+    return `<${name}:${adifUtf8.encode(value).byteLength}>${value}`;
 }
 
 function freqMhz(hz: number): string {

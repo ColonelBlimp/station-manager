@@ -66,7 +66,18 @@ export async function fetchQso(uuid: string): Promise<FetchQsoOutcome> {
     }
 
     if (response.ok) {
-        return { kind: 'ok', qso: body as DaemonQsoForEdit };
+        // Guard against a 200 OK with an unparseable / non-object body
+        // — without this the overlay would land on { qso: null } and
+        // crash on the first field read. Treat as malformed server
+        // response.
+        if (body === null || typeof body !== 'object') {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: 'daemon returned a non-JSON or empty body for GET /v1/qso/{uuid}',
+            };
+        }
+        return { kind: 'ok', qso: body };
     }
 
     const err = body as DaemonError | null;
@@ -105,7 +116,16 @@ export async function patchQso(
     }
 
     if (response.ok) {
-        return { kind: 'ok', qso: respBody as DaemonQsoForEdit };
+        // Same malformed-body guard as fetchQso above — a 200 with a
+        // null body would bypass every subsequent field read.
+        if (respBody === null || typeof respBody !== 'object') {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: 'daemon returned a non-JSON or empty body for PATCH /v1/qso/{uuid}',
+            };
+        }
+        return { kind: 'ok', qso: respBody };
     }
 
     const err = respBody as DaemonError | null;

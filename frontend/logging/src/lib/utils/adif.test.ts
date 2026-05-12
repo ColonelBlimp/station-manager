@@ -594,3 +594,38 @@ describe('formatAdifRecord — Details panel fields', () => {
         }
     });
 });
+
+describe('formatAdifRecord — UTF-8 length prefixes', () => {
+    // The daemon parser at internal/adif/parse.go slices by BYTE, not
+    // by UTF-16 code unit. JS string.length under-counts every
+    // non-ASCII character (codepoints in the U+0080+ range need 2+
+    // UTF-8 bytes). A wrong prefix corrupts the value and breaks the
+    // next tag boundary. These tests pin the byte-counted contract.
+
+    it('emits byte length for an accented NAME', () => {
+        // "José" — UTF-16 code units: 4. UTF-8 bytes: J(1)+o(1)+s(1)+é(2) = 5.
+        const adif = formatAdifRecord({ ...baseFields, name: 'José' });
+        expect(adif).toContain('<NAME:5>José');
+    });
+
+    it('emits byte length for an accented MY_COUNTRY', () => {
+        // "Côte d'Ivoire" — UTF-16: 13. UTF-8: ô is 2 bytes, rest ASCII → 14.
+        const adif = formatAdifRecord({ ...baseFields, myCountry: "Côte d'Ivoire" });
+        expect(adif).toContain("<MY_COUNTRY:14>Côte d'Ivoire");
+    });
+
+    it('emits byte length for a multibyte COMMENT', () => {
+        // Mix of 2-byte (ñ) and 3-byte (CJK 漢字) codepoints.
+        // UTF-16 code units: 9 (every glyph is BMP).
+        // UTF-8 bytes: M(1)+a(1)+ñ(2)+a(1)+n(1)+a(1)+ (1)+漢(3)+字(3) = 14.
+        const adif = formatAdifRecord({ ...baseFields, comment: 'Mañana 漢字' });
+        expect(adif).toContain('<COMMENT:14>Mañana 漢字');
+    });
+
+    it('still produces correct lengths for pure ASCII', () => {
+        // Regression guard: the UTF-8 path must agree with JS .length
+        // for ASCII-only inputs.
+        const adif = formatAdifRecord({ ...baseFields, name: 'Bob' });
+        expect(adif).toContain('<NAME:3>Bob');
+    });
+});

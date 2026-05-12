@@ -208,6 +208,16 @@ async function parseOutcome(response: Response): Promise<ConfigOutcome> {
     }
 
     if (response.ok) {
+        // Guard against a 200 OK with an unparseable / non-object body
+        // — without this the caller would deref `config.logging_station`
+        // on null and crash. Treat as a server-side malformed response.
+        if (body === null || typeof body !== 'object') {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: 'daemon returned a non-JSON or empty body for /v1/config',
+            };
+        }
         return { kind: 'ok', config: body as ConfigResponse };
     }
 

@@ -71,11 +71,22 @@ export async function submitQso(adif: string, logbookID: number): Promise<Submit
 
     if (response.ok) {
         const ok = body as DaemonOk | null;
-        const uuid = ok?.uuid ?? '';
-        if (ok?.status === 'duplicate') {
-            return { kind: 'duplicate', uuid };
+        // The uuid is load-bearing — every downstream consumer
+        // (sessionQsos, the edit overlay, the email-out flow) keys off
+        // it. A 200 with a missing or empty uuid (proxy interference,
+        // daemon regression) would propagate phantom empty IDs and
+        // corrupt the session list silently. Downgrade to malformed.
+        if (!ok || typeof ok.uuid !== 'string' || ok.uuid === '') {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: 'daemon returned a successful submit without a uuid',
+            };
         }
-        return { kind: 'stored', uuid };
+        if (ok.status === 'duplicate') {
+            return { kind: 'duplicate', uuid: ok.uuid };
+        }
+        return { kind: 'stored', uuid: ok.uuid };
     }
 
     const err = body as DaemonError | null;
