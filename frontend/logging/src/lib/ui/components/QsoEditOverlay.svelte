@@ -90,14 +90,115 @@
     const vfoBBand: string = $derived(vfoBHz > 0 ? frequencyToBand(vfoBHz) : '');
 
     /*
-        ESC handler — keydown rather than keyup so the overlay closes on
-        the very first ESC press without waiting for release. Bound at
-        document level via svelte:window so the overlay catches it
-        regardless of where focus is inside the form.
+        Focus-trap plumbing. `dialogEl` is bound to the inner card so
+        we can query its focusable descendants; `previouslyFocused`
+        captures whatever the operator was on before the overlay opened
+        (typically the SessionPanel row that triggered the open) so
+        focus can be restored on close. `wasOpen` and `initialFocused`
+        are plain `let` — no reactive consumer, just per-effect-run
+        snapshots — so they avoid the `$state` overhead.
+    */
+    let dialogEl: HTMLDivElement | undefined = $state();
+    let previouslyFocused: HTMLElement | null = null;
+    let wasOpen = false;
+    let initialFocused = false;
+
+    /*
+        Modal-dialog focus management:
+          - On the open transition (false → true) snapshot the active
+            element so we can restore on close.
+          - Once the form has rendered (open && !loading) focus the
+            first input. Gated by `initialFocused` so a later loading
+            flip doesn't re-yank focus from wherever the operator
+            has moved it.
+          - On the close transition (true → false) restore focus.
+    */
+    $effect(() => {
+        const open = qsoEditState.open;
+        const loading = qsoEditState.loading;
+
+        if (open && !wasOpen) {
+            previouslyFocused = document.activeElement as HTMLElement | null;
+            initialFocused = false;
+        }
+        if (open && !loading && !initialFocused) {
+            const first = dialogEl?.querySelector<HTMLElement>(
+                'input:not([disabled]),textarea:not([disabled]),select:not([disabled])'
+            );
+            first?.focus();
+            initialFocused = true;
+        }
+        if (!open && wasOpen) {
+            previouslyFocused?.focus();
+            previouslyFocused = null;
+            initialFocused = false;
+        }
+        wasOpen = open;
+    });
+
+    /*
+        Collect every focusable descendant of the dialog card. Used by
+        the Tab trap below to find first/last focus targets. Excludes
+        `tabindex="-1"` elements (the backdrop carries that as the
+        click-target sentinel, not a focusable role).
+    */
+    function focusableInDialog(): HTMLElement[] {
+        if (!dialogEl) return [];
+        const sel =
+            'a[href],button:not([disabled]),input:not([disabled]),' +
+            'select:not([disabled]),textarea:not([disabled]),' +
+            '[tabindex]:not([tabindex="-1"])';
+        return Array.from(dialogEl.querySelectorAll<HTMLElement>(sel));
+    }
+
+    /*
+        Window-level keydown for ESC (dismiss) and Tab (focus trap).
+
+        ESC uses stopImmediatePropagation rather than stopPropagation
+        because every <svelte:window> in the SPA registers its handler
+        on the same target — `stopPropagation` would not stop a sibling
+        window handler (notably QsoPanel.handleKeydown, which clears
+        the live draft on ESC). The contract is "this overlay owns
+        ESC while it is open." QsoPanel's `if (qsoEditState.open) return`
+        guard is preserved as belt-and-braces against listener-
+        registration-order surprises.
+
+        Tab is trapped on the boundaries: shift+Tab from the first
+        focusable wraps to the last, Tab from the last wraps to the
+        first, and if focus has somehow escaped the dialog (rare, but
+        possible if external code stole focus) it is pulled back to
+        the first focusable.
     */
     function handleKeydown(e: KeyboardEvent): void {
-        if (e.key === 'Escape' && qsoEditState.open && !qsoEditState.saving) {
-            qsoEditState.close();
+        if (!qsoEditState.open) return;
+
+        if (e.key === 'Escape') {
+            if (!qsoEditState.saving) {
+                qsoEditState.close();
+            }
+            e.stopImmediatePropagation();
+            return;
+        }
+
+        if (e.key === 'Tab') {
+            const focusables = focusableInDialog();
+            if (focusables.length === 0) return;
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const active = document.activeElement as HTMLElement | null;
+
+            if (active && dialogEl && !dialogEl.contains(active)) {
+                e.preventDefault();
+                first.focus();
+                return;
+            }
+            if (e.shiftKey && active === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && active === last) {
+                e.preventDefault();
+                first.focus();
+            }
         }
     }
 
@@ -230,6 +331,7 @@
         tabindex="-1"
     >
         <div
+            bind:this={dialogEl}
             class="bg-white rounded-lg shadow-2xl w-[56rem] max-w-[95vw] max-h-[95vh] overflow-y-auto p-6"
             role="document"
         >
