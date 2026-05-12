@@ -69,4 +69,18 @@ describe('Mode', () => {
         const { container } = setup();
         expect(container.textContent ?? '').toContain('Mode');
     });
+
+    // Pins the C5 fix: when enabled (CAT off, operator drives mode
+    // manually) the select must be keyboard-reachable. When disabled
+    // (CAT live, rig drives mode) it skips the tab order so the row
+    // doesn't add dead stops between RST and the VFO pair.
+    it('is keyboard-reachable (tabindex=0) when enabled', () => {
+        const { select } = setup();
+        expect(select.tabIndex).toBe(0);
+    });
+
+    it('is tab-skipped (tabindex=-1) when disabled', () => {
+        const { select } = setup({ disabled: true });
+        expect(select.tabIndex).toBe(-1);
+    });
 });

@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { untrack } from 'svelte';
     import { putConfig } from '../../api/config';
     import { catState } from '../../states/cat.svelte';
     import { configState } from '../../states/config.svelte';
@@ -207,10 +208,25 @@
     // undefined entry for every rigStr they iterate over. A plain
     // $effect would populate editingModes AFTER the failed render —
     // $effect.pre lands the population before the template binds.
+    //
+    // Tracked dependency: ONLY activeSection. snapModeMappings reads
+    // configState.bridge.rigModes + .modeMappings, so calling it inside
+    // the effect would make those reactive deps of this effect — any
+    // future actor that mutates bridge config (a periodic /v1/config
+    // refresh, an SSE-driven applyResponse, a second-tab PUT) would
+    // re-fire this effect and silently wipe whatever the operator had
+    // typed into the Mode Mappings tab. untrack() isolates the snap
+    // call so it doesn't bind those reads as deps. The lastSection
+    // gate restricts re-snaps to the INTO-modes transition; a re-run
+    // of this effect while already on the modes tab (currently no such
+    // trigger exists, but the gate is cheap defence) does nothing.
+    let lastSection: SectionId | undefined;
     $effect.pre(() => {
-        if (activeSection === 'modes') {
-            snapModeMappings();
+        const section = activeSection;
+        if (section === 'modes' && lastSection !== 'modes') {
+            untrack(() => snapModeMappings());
         }
+        lastSection = section;
     });
 
     $effect(() => {
