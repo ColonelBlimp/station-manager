@@ -1,8 +1,39 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: open.** Findings unaddressed at time of writing. Conducted
-by three parallel agents covering (a) Svelte 5 rune discipline with
-emphasis on `$effect`, (b) the pure-TypeScript layer
+**Status: IN PROGRESS (session 53, 2026-05-12).**
+**Closed:** all 5 critical (C1, C2, C3, C4, C5), 11 of 17 important
+(I3, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19, I20 — note:
+I20 reviewer-numbered, kept). **Deferred / pushback:**
+- **I1** — derived-via-effect anti-pattern in `QsoPanel`. The
+  callback-based fix the reviewer proposes was already considered and
+  rejected in session 47 with a documented why-comment + line-disable
+  (memory note: `feedback_svelte_empty_script_block`-adjacent; see
+  the rationale on `QsoPanel.svelte:46`). The two-effect mirror is the
+  load-bearing idiom for two-way bind across two reactive stores
+  under ADR 0009's "writes only when editable" gate. Push back rather
+  than change; the existing why-comment is the answer.
+- **I4** — InfoPanel seed effect re-runs forever. Reviewer's own
+  verdict: "Functionally fine; acceptable as-is." Skipped.
+- **I10** — `contact-history.ts` `logbook_not_found` 404 collapse.
+  Reviewer's own note: "Today the SPA never sends `?logbook=` so
+  this is dead." Maintenance-only; revisit when logbook filtering
+  ships.
+- **I17** — color-only invalid signal. Requires refactoring
+  validators from `boolean` → `string | null` across
+  `callsign.ts` / `maidenhead.ts` / `zone.ts` and extending
+  `ValidatedInput` to render an error message. Separate
+  architectural commit, not a11y polish.
+**Remaining (next session):**
+- **I2, I5, I6** — architectural sweep: shared `signalAware()`
+  AbortController helper, shared `isShape<T>()` runtime-validation
+  helper for API response bodies, `_disposeForTests()` exports on
+  the three module-level `$effect.root` modules
+  (`qsoDraft` / `qsoDefaults` / `manual`). Single commit covers the
+  three systemic diagnoses from the review.
+- **All 11 Nit findings** (N1–N11) — polish, batched whenever an
+  adjacent piece of work surfaces one.
+Conducted by three parallel agents covering (a) Svelte 5 rune
+discipline with emphasis on `$effect`, (b) the pure-TypeScript layer
 (`lib/{api,utils,validators,i18n}`), and (c) the UI layer
 (`lib/ui/` + top-level `app.svelte`/`main.ts`).
 
