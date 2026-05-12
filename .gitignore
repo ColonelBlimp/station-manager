@@ -6,8 +6,6 @@ build/
 !build/db/.gitkeep
 !build/log/.gitkeep
 .task
-apps/*
-web/*
 /internal/cat/config.json
 
 /logging

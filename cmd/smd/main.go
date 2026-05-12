@@ -319,13 +319,20 @@ func run() error {
 	// in-flight SSE handlers see the hub close cleanly.
 	bridgeSvc := bridge.New(cfg.Bridge, loggerSvc)
 	if err := bridgeSvc.Initialize(); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("bridge: Initialize failed")
-		os.Exit(1)
+		return errors.New(op).WithErr(err).WithMsg("initialize bridge")
 	}
 	if err := bridgeSvc.Start(workerCtx); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("bridge: Start failed")
-		os.Exit(1)
+		return errors.New(op).WithErr(err).WithMsg("start bridge")
 	}
+	// Defer covers the error-return path between here and the explicit
+	// Stop in the happy-path shutdown sequence below. Stop is idempotent
+	// (sync.Once), so the explicit call running first turns this defer
+	// into a no-op on the happy path.
+	defer func() {
+		if err := bridgeSvc.Stop(); err != nil {
+			loggerSvc.ErrorWith().Err(err).Msg("bridge: deferred stop error")
+		}
+	}()
 
 	// ---- Start HTTP server ----
 	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc)
@@ -399,26 +406,6 @@ func run() error {
 	return runErr
 }
 
-// spawnForwarderWorkers constructs one worker per enabled forwarder
-// in cfg and launches each under safego.Go with respawn=true. A panic
-// inside a worker's Run path is recovered, logged via the daemon
-// logger, and the worker is respawned so that a transient panic doesn't
-// permanently disable a destination — see forwarding.md §9.
-//
-// Retry config resolution: operator's `retry` block wins if present;
-// otherwise the forwarder package's own registered DefaultRetry is
-// used (tuned to the upstream's tolerances — see each package's
-// DefaultRetry var for rationale). A type with no registered default
-// AND no explicit config retry is a setup error and fails startup
-// loudly.
-//
-// Disabled entries are skipped (no goroutine spawned, no queue rows
-// processed). If forwarding.Build rejects a config, startup fails —
-// better to refuse to run than silently drop a destination the
-// operator thought was active.
-//
-// Load-bearing invariant: this function is the single enforcement
-// point for "at most one worker per forwarder_name" (the config
 // ensureDefaultLogbook guarantees the row at cfg.DefaultLogbookID
 // exists in the logbook table at startup. Self-heals the failure mode
 // "config marks setup_complete=true and points at logbook id=N but
@@ -514,6 +501,26 @@ func ensureDefaultLogbook(
 	return nil
 }
 
+// spawnForwarderWorkers constructs one worker per enabled forwarder
+// in cfg and launches each under safego.Go with respawn=true. A panic
+// inside a worker's Run path is recovered, logged via the daemon
+// logger, and the worker is respawned so that a transient panic doesn't
+// permanently disable a destination — see forwarding.md §9.
+//
+// Retry config resolution: operator's `retry` block wins if present;
+// otherwise the forwarder package's own registered DefaultRetry is
+// used (tuned to the upstream's tolerances — see each package's
+// DefaultRetry var for rationale). A type with no registered default
+// AND no explicit config retry is a setup error and fails startup
+// loudly.
+//
+// Disabled entries are skipped (no goroutine spawned, no queue rows
+// processed). If forwarding.Build rejects a config, startup fails —
+// better to refuse to run than silently drop a destination the
+// operator thought was active.
+//
+// Load-bearing invariant: this function is the single enforcement
+// point for "at most one worker per forwarder_name" (the config
 // loader validates Name uniqueness across cfg.Forwarders before we
 // see it). ClaimPendingUploadsWithContext's documentation calls this
 // out — don't add a second spawn site without preserving that chain,
