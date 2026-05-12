@@ -128,6 +128,7 @@
     <main class="rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
         <LoggingCard />
     </main>
+    <div class="absolute bottom-0 right-0">Drawer</div>
 {/snippet}
 
 {#snippet setup()}

@@ -34,6 +34,17 @@ describe('isValidCallsign', () => {
         expect(isValidCallsign('M0')).toBe(false);
     });
 
+    // Length-boundary regressions. Daemon parity is 3-32; pre-2026-05-12
+    // the SPA was 3-20 which silently rejected long special-event calls
+    // the daemon would accept (review I11).
+    it('accepts a 30-character callsign (within daemon limit)', () => {
+        expect(isValidCallsign('M0AB' + 'C'.repeat(26))).toBe(true);
+    });
+
+    it('rejects a 33-character callsign (past daemon limit)', () => {
+        expect(isValidCallsign('M0AB' + 'C'.repeat(29))).toBe(false);
+    });
+
     it('rejects pure-letter input (no digit)', () => {
         expect(isValidCallsign('ABCDE')).toBe(false);
     });

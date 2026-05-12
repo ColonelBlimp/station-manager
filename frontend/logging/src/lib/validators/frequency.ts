@@ -33,6 +33,12 @@
  * at the form layer.
  */
 
+// daemon parity: no daemon counterpart. The daemon does not range-
+// check FREQ at submit time (ADIF accepts any value); this validator
+// is a SPA-side UX guard so a typo like "14250" without units (14.25
+// kHz, below 100 kHz) gets a red border instead of silently logging
+// out-of-amateur-band. Re-check this comment if a daemon-side range
+// check ever lands.
 const FREQ_MIN_HZ = 100_000; // 100 kHz
 const FREQ_MAX_HZ = 30_000_000_000; // 30 GHz
 

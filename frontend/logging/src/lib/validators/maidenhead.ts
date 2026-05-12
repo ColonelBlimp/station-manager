@@ -18,6 +18,9 @@
  * other validators in this directory). Whitespace-only is treated as
  * empty.
  */
+// daemon parity: internal/utils/maidenhead.go → maidenheadPattern.
+// Both regexes are character-identical; keep them in step manually
+// (no shared source). When updating one, search-replace the other.
 const GRID_PATTERN = /^[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2})?)?$/;
 
 export const isValidMaidenhead = (value: string): boolean => {

@@ -87,14 +87,34 @@ class ManualState {
 
 export const manualState = new ManualState();
 
-// Per-field effects mirror writes to localStorage. Each effect tracks
-// only its own field, so writes to other fields don't cause spurious
-// re-saves. $effect.root is needed because this is module-level
-// (outside a component lifecycle).
+// Per-field effects mirror operator-edits to localStorage. Each
+// effect tracks only its own field, so writes to other fields don't
+// cause spurious re-saves. $effect.root is needed because this is
+// module-level (outside a component lifecycle).
+//
+// Per-effect first-run latch: each $effect fires once on module-load
+// with the just-hydrated value, which would re-save the loaded value
+// back to the same key — pointless I/O on every page load. Latching
+// inside each effect body (rather than via a shared module flag) is
+// required because sync code after $effect.root() runs before the
+// inner effects fire, so a top-level flag would already be true on
+// first run.
+function mirrorField<T>(read: () => T, field: string): void {
+    let firstRun = true;
+    $effect(() => {
+        const v = read();
+        if (firstRun) {
+            firstRun = false;
+            return;
+        }
+        save(field, v);
+    });
+}
+
 $effect.root(() => {
-    $effect(() => save('vfoA', manualState.vfoA));
-    $effect(() => save('vfoB', manualState.vfoB));
-    $effect(() => save('mode', manualState.mode));
-    $effect(() => save('subMode', manualState.subMode));
-    $effect(() => save('selectedVfo', manualState.selectedVfo));
+    mirrorField(() => manualState.vfoA, 'vfoA');
+    mirrorField(() => manualState.vfoB, 'vfoB');
+    mirrorField(() => manualState.mode, 'mode');
+    mirrorField(() => manualState.subMode, 'subMode');
+    mirrorField(() => manualState.selectedVfo, 'selectedVfo');
 });

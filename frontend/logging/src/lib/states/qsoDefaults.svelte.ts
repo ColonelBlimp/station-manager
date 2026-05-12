@@ -72,12 +72,34 @@ class QsoDefaults {
 
 export const qsoDefaults = new QsoDefaults();
 
-// Module-level $effect mirrors writes to localStorage. $effect.root
-// is the canonical pattern here (see manual.svelte.ts) — needed
-// because $effect can't be used at the top level of a module without
-// a root context.
+// Module-level $effect mirrors operator-edits to localStorage.
+// $effect.root is the canonical pattern here (see manual.svelte.ts) —
+// needed because $effect can't be used at the top level of a module
+// without a root context.
+//
+// Per-effect first-run latch: each $effect fires once on module-load
+// with the just-hydrated value. Writing it back to the same key it
+// came from is pointless I/O on every page load and noise in unit
+// tests (storage spies see writes before the test has done anything).
+// The first-run flag latches inside each effect body, so a single
+// shared flag isn't enough — sync code after $effect.root() runs
+// before the inner effects fire, so a top-level `initialized = true`
+// after the root would be true by the time the first effect body
+// reads it.
+function mirrorString<T extends string | boolean>(read: () => T, key: string): void {
+    let firstRun = true;
+    $effect(() => {
+        const v = read();
+        if (firstRun) {
+            firstRun = false;
+            return;
+        }
+        saveString(key, typeof v === 'string' ? v : String(v));
+    });
+}
+
 $effect.root(() => {
-    $effect(() => saveString(QSO_RANDOM_KEY, qsoDefaults.qsoRandom));
-    $effect(() => saveString(NOTIFY_QSO_STORED_KEY, String(qsoDefaults.notifyQsoStored)));
-    $effect(() => saveString(NOTIFY_CONFIG_SAVED_KEY, String(qsoDefaults.notifyConfigSaved)));
+    mirrorString(() => qsoDefaults.qsoRandom, QSO_RANDOM_KEY);
+    mirrorString(() => qsoDefaults.notifyQsoStored, NOTIFY_QSO_STORED_KEY);
+    mirrorString(() => qsoDefaults.notifyConfigSaved, NOTIFY_CONFIG_SAVED_KEY);
 });

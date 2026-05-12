@@ -40,6 +40,14 @@ export interface EnrichmentCountry {
     last_refreshed_at?: string;
 }
 
+// Daemon parity: internal/types/contacted_station.go → ContactedStation.
+// Every JSON-tagged field on the Go struct is mirrored here so a typo
+// like `station.gridsqure` is a compile-time error rather than a silent
+// `unknown`. The prior `[extra: string]: unknown` index signature was
+// removed because it defeated typo detection: any property access
+// resolved to `unknown` instead of "this field doesn't exist."
+// Forward-compat for future daemon fields is already covered by
+// structural typing — extra JSON keys are silently ignored on reads.
 export interface EnrichmentStation {
     csid?: number;
     address?: string;
@@ -55,14 +63,17 @@ export interface EnrichmentStation {
     eq_call?: string;
     gridsquare?: string;
     iota?: string;
+    iota_island_id?: string;
     ituz?: string;
     name?: string;
     qth?: string;
+    sig?: string;
+    sig_info?: string;
     web?: string;
+    wwff_ref?: string;
     lat?: string;
     lon?: string;
     last_refreshed_at?: string;
-    [extra: string]: unknown;
 }
 
 export interface EnrichmentResult {
