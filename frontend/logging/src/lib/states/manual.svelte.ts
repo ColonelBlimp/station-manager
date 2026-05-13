@@ -111,10 +111,24 @@ function mirrorField<T>(read: () => T, field: string): void {
     });
 }
 
-$effect.root(() => {
+let rootDispose: (() => void) | null = $effect.root(() => {
     mirrorField(() => manualState.vfoA, 'vfoA');
     mirrorField(() => manualState.vfoB, 'vfoB');
     mirrorField(() => manualState.mode, 'mode');
     mirrorField(() => manualState.subMode, 'subMode');
     mirrorField(() => manualState.selectedVfo, 'selectedVfo');
 });
+
+/**
+ * Test-time teardown. Production code never calls this (module
+ * lifetime = page lifetime). Vitest cases that exercise this state
+ * module call it between cases so the per-field localStorage-mirror
+ * effects don't leak listeners across cases. Mirrors
+ * `bridge.svelte.ts → stopBridge()`.
+ */
+export function _disposeForTests(): void {
+    if (rootDispose) {
+        rootDispose();
+        rootDispose = null;
+    }
+}

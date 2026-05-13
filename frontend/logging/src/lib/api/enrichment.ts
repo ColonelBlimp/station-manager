@@ -21,6 +21,8 @@
     of submitQso in lib/api/qso.ts.
 */
 
+import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+
 export interface EnrichmentCountry {
     id?: number;
     name?: string;
@@ -89,6 +91,7 @@ export type EnrichOutcome =
     | { kind: 'ok'; result: EnrichmentResult }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
+    | { kind: 'aborted'; message: string }
     | { kind: 'network'; message: string };
 
 interface DaemonError {
@@ -97,37 +100,32 @@ interface DaemonError {
     op?: string;
 }
 
-export async function enrichCallsign(callsign: string): Promise<EnrichOutcome> {
-    let response: Response;
-    try {
-        response = await fetch(`/v1/enrich/callsign?call=${encodeURIComponent(callsign)}`, {
-            method: 'GET',
-        });
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+export async function enrichCallsign(
+    callsign: string,
+    signal?: AbortSignal
+): Promise<EnrichOutcome> {
+    const fetched = await safeFetch(
+        `/v1/enrich/callsign?call=${encodeURIComponent(callsign)}`,
+        { method: 'GET', signal }
+    );
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-
-    let body: EnrichmentResult | DaemonError | null;
-    try {
-        body = (await response.json()) as EnrichmentResult | DaemonError;
-    } catch {
-        body = null;
-    }
+    const response = fetched.response;
+    const body = await readJsonBody(response);
 
     if (response.ok) {
-        const result = body as EnrichmentResult | null;
-        if (result === null) {
+        if (!isPlainObject(body)) {
             return {
                 kind: 'server',
                 code: 'unparseable_response',
                 message: 'enrichment response was not valid JSON',
             };
         }
-        return { kind: 'ok', result };
+        return { kind: 'ok', result: body as unknown as EnrichmentResult };
     }
 
-    const err = body as DaemonError | null;
+    const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
     if (response.status >= 500) {

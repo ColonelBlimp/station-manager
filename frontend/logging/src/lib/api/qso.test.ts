@@ -101,6 +101,33 @@ describe('submitQso', () => {
         expect(out).toEqual({ kind: 'network', message: 'Failed to fetch' });
     });
 
+    it('returns kind=aborted when AbortSignal cancels the request', async () => {
+        const abortErr = new Error('aborted');
+        abortErr.name = 'AbortError';
+        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(abortErr)));
+
+        const ctrl = new AbortController();
+        const out = await submitQso(ADIF, 1, ctrl.signal);
+        expect(out).toEqual({ kind: 'aborted', message: 'aborted' });
+    });
+
+    it('passes the AbortSignal through to fetch', async () => {
+        const fetchSpy = vi.fn(
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(
+                    new Response(JSON.stringify({ status: 'stored', uuid: STORED_UUID }), {
+                        status: 201,
+                    })
+                )
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        const ctrl = new AbortController();
+        await submitQso(ADIF, 1, ctrl.signal);
+        const [, init] = fetchSpy.mock.calls[0];
+        expect(init?.signal).toBe(ctrl.signal);
+    });
+
     it('falls back to a synthesised error envelope when the body is unparseable', async () => {
         const response = new Response('not json', {
             status: 502,

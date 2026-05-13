@@ -125,10 +125,10 @@
     and inherit unrelated layout rules.
 -->
 {#snippet main_app()}
-    <main class="rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
+    <main class="relative rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
         <LoggingCard />
+        <div class="absolute top-0 -right-36 w-32 h-166 rounded-xl border border-gray-200 pt-2 px-3">Drawer</div>
     </main>
-    <div class="absolute bottom-0 right-0">Drawer</div>
 {/snippet}
 
 {#snippet setup()}

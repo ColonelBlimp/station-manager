@@ -94,7 +94,7 @@ Future affordance (1):
 
 **`cmd/smd` code-review cleanup SHIPPED (session 52, 2026-05-12).** Focused re-review at `docs/reviews/cmd-smd-2026-05-12.md` produced 0 critical, 3 major, 4 medium, 5 minor findings — all closed in three commits over the session. Only behavioural change: bridge `Initialize`/`Start` failures now return wrapped errors instead of `os.Exit(1)`, so deferred cleanup (DB close, logger close, refresher stop, worker drain) actually runs on bridge-startup failure. Everything else is reader-correctness / hygiene — swapped doc-comments untangled, `doc.go` rewritten against ADR 0001 + ADR 0013 + ADR 0017, `defaultConfigPath()` helper extracted, lifecycle-shape variance documented in `run()`'s doc, named returns on `loadConfig`, process-lifetime globals annotated.
 
-**`frontend/logging` code review — 5/5 critical + 11/17 important closed (session 53, 2026-05-12; IN PROGRESS).** Multi-agent review at `docs/reviews/frontend-logging-2026-05-12.md` produced 5 critical, 17 important, 11 nit findings. Closed: every critical (real wire-protocol UTF-8 bug, overlay focus trap + ESC contract, Mode tabindex regression, mode-mapping clobber via untrack), the I7/I8/I12 API/UI bug cluster, and the a11y cluster (I13/I14/I15/I16/I18/I19/I20). Quick batch (I11/I3/I9 + validator-parity comments) also landed: Callsign max bumped 20→32 to match daemon, hydration-writeback double-fire suppressed via per-effect first-run latch in `qsoDefaults` + `manual`, `EnrichmentStation` index signature dropped (typos like `station.gridsqure` now compile-error). **Outstanding:** architectural sweep — I2 (`_disposeForTests`), I5 (AbortController helper), I6 (`isShape<T>` boundary guard); reviewer expects this as a single coherent commit covering the three systemic diagnoses. I1 pushed back (reviewer didn't see the session-47 prior decision on the QsoPanel mode-mirror pattern). I4 + I10 declined per reviewer's own "acceptable as-is" / "dead today" notes. I17 (color-only invalid signal) deferred as its own commit — requires refactoring validators from `boolean` → `string | null` across `callsign.ts`, `maidenhead.ts`, `zone.ts` and extending `ValidatedInput`. All 11 nits left for polish. Test surface grew from 478 to 498 cases (focus-trap, ESC stopImmediatePropagation, Mode-tabindex roving, mode-mapping clobber regression, tablist keyboard nav, Callsign length boundaries). Two operator-visible behavioural changes shipped after explicit confirmation: Toasts dismiss is X-button-only (was whole-toast click) and SessionPanel edit affordance is a trailing-cell Edit button (was whole-row click) — both flagged for review and approved keep-as-is.
+**`frontend/logging` code review — 5/5 critical + 14/17 important closed (session 53 → 54, 2026-05-12 → 2026-05-13; IN PROGRESS, only nits remain).** Multi-agent review at `docs/reviews/frontend-logging-2026-05-12.md` produced 5 critical, 17 important, 11 nit findings. Closed: every critical (real wire-protocol UTF-8 bug, overlay focus trap + ESC contract, Mode tabindex regression, mode-mapping clobber via untrack), the I7/I8/I12 API/UI bug cluster, and the a11y cluster (I13/I14/I15/I16/I18/I19/I20). Quick batch (I11/I3/I9 + validator-parity comments) also landed: Callsign max bumped 20→32 to match daemon, hydration-writeback double-fire suppressed via per-effect first-run latch in `qsoDefaults` + `manual`, `EnrichmentStation` index signature dropped (typos like `station.gridsqure` now compile-error). **Outstanding:** architectural sweep — I2 (`_disposeForTests`), I5 (AbortController helper), I6 (`isShape<T>` boundary guard); reviewer expects this as a single coherent commit covering the three systemic diagnoses. I1 pushed back (reviewer didn't see the session-47 prior decision on the QsoPanel mode-mirror pattern). I4 + I10 declined per reviewer's own "acceptable as-is" / "dead today" notes. I17 (color-only invalid signal) deferred as its own commit — requires refactoring validators from `boolean` → `string | null` across `callsign.ts`, `maidenhead.ts`, `zone.ts` and extending `ValidatedInput`. All 11 nits left for polish. Test surface grew from 478 to 498 cases (focus-trap, ESC stopImmediatePropagation, Mode-tabindex roving, mode-mapping clobber regression, tablist keyboard nav, Callsign length boundaries). Two operator-visible behavioural changes shipped after explicit confirmation: Toasts dismiss is X-button-only (was whole-toast click) and SessionPanel edit affordance is a trailing-cell Edit button (was whole-row click) — both flagged for review and approved keep-as-is.
 
 ### Session 53 work (2026-05-12) — `frontend/logging` code-review pass (16 findings closed, 6 commits)
 
@@ -129,6 +129,42 @@ Commits (in order):
 **Verification across all six commits:** 498/498 tests pass (was 474 pre-session; +24), `svelte-check` 0 errors / 0 warnings / 243 files, lint clean throughout. New test files: `QsoEditOverlay.test.ts` (8), `MyStationPanel.test.ts` (8). Updated test files: `adif.test.ts` (+4 UTF-8 cases), `Mode.test.ts` (+2 tabindex cases), `Callsign.test.ts` (rewritten focus-trap block + 2 length boundaries).
 
 **Next pickup:** architectural sweep (I2 + I5 + I6). User explicitly approved this as the next batch. Document this session before continuing.
+
+### Session 54 work (2026-05-13) — I2 + I5 + I6 architectural sweep (1 commit, three systemic diagnoses closed)
+
+Picked up the explicitly-approved architectural sweep that session 53 documented but didn't start. Single coherent commit, no behaviour change for current callers.
+
+**New `lib/api/_helpers.ts`** — three primitives the previous boilerplate was repeating across six wrappers:
+
+- `safeFetch(input, init)` — wraps `fetch` and classifies the exception. Returns `FetchOutcome = { ok: true, response } | { ok: false, kind: 'aborted', message } | { ok: false, kind: 'network', message }`. Abort detection is belt-and-braces: error name (`AbortError` from manual abort, `TimeoutError` from `AbortSignal.timeout()`) plus `signal.aborted` fallback for polyfills that surface a generic TypeError after abort.
+- `readJsonBody(response)` — wraps `response.json()`, returns `unknown | null` rather than throwing. Every caller wanted to downgrade an unparseable body to a synthesised error envelope, not propagate `SyntaxError`.
+- `isPlainObject(value)` — narrows `unknown` to `Record<string, unknown>` for non-null, non-array objects. Arrays excluded by design — every daemon envelope is `{...}`, never `[...]`.
+- `isShape<T>(value, requiredKeys)` — composite guard: object + every required key present. Presence-only; per-endpoint semantic checks (e.g. uuid non-empty string) stay at the call site because the right downgrade differs per endpoint.
+
+**Six API helpers updated.** All accept an optional `signal?: AbortSignal` parameter and surface a `kind: 'aborted'` outcome arm. Calls without a signal behave exactly as before. Body envelope handling refactored through `safeFetch` + `readJsonBody` + `isPlainObject` — no blind `as` casts on response bodies.
+
+- `config.ts` — fetchConfig + putConfig
+- `qso.ts` — submitQso
+- `qso-update.ts` — fetchQso + patchQso
+- `enrichment.ts` — enrichCallsign
+- `contact-history.ts` — fetchContactHistory
+- `session-email.ts` — sendSessionEmail
+
+**Three state modules got `_disposeForTests()`.** Each captures the `$effect.root` dispose function and exports a teardown matching `bridge.svelte.ts → stopBridge()`. Production behaviour unchanged (module lifetime = page lifetime); tests that exercise these singletons can now cleanly tear down between cases without the brittle workaround in `Vfos.test.ts:344-362`.
+
+- `qsoDraft.svelte.ts`
+- `qsoDefaults.svelte.ts`
+- `manual.svelte.ts`
+
+**No call-site changes.** Every existing caller in `app.svelte`, `QsoPanel.svelte`, `QsoEditOverlay.svelte`, `SessionPanel.svelte`, `InfoPanel.svelte`, `MyStationPanel.svelte` was already non-exhaustive on `outcome.kind` (no `satisfies never` enforcement), so the new `'aborted'` arm doesn't break compile and falls through the same way `'network'` did before. When a future call site wants cancellation, it passes `signal` and adds an arm.
+
+**Tests:** new `_helpers.test.ts` (17 cases covering all four primitives — abort/timeout/network classification, generic-TypeError fallback via signal.aborted, init-passthrough, isPlainObject/isShape edge cases). `qso.test.ts` gains end-to-end abort wire-through (2 cases — aborted-kind classification and signal-passthrough to fetch). Total: **517/517 passing** (+19 from 498), svelte-check 0/0, lint clean.
+
+**Doc footprint:** this entry, review document Status block bumped (16/17 important closed, three primitives + abort param documented). No ADR (additive helpers, no architectural decision moved).
+
+**Verification gaps still open from the review** (called out as work-not-done, not deferred): `api/enrichment.ts` outcome tests, `api/config.ts` outcome tests, `api/contact-history.ts` outcome tests, `utils/frequency.formatFrequency` tests. Highest-priority among these is enrichment per the project's "test error path first for enrichment code" rule.
+
+**Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
 ### Session 52 work (2026-05-12) — `cmd/smd` code-review cleanup (12 findings closed)
 

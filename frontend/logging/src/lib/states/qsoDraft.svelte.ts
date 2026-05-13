@@ -241,10 +241,23 @@ export const qsoDraft = new QsoDraft();
  * operator. The form-level submit gate already requires non-empty
  * RST, so an empty field can't slip through unnoticed.
  */
-$effect.root(() => {
+let rootDispose: (() => void) | null = $effect.root(() => {
     $effect(() => {
         const d = qsoDraft.defaultRst;
         qsoDraft.rstSent = d;
         qsoDraft.rstRcvd = d;
     });
 });
+
+/**
+ * Test-time teardown. Production code never calls this (module
+ * lifetime = page lifetime). Vitest cases that exercise this state
+ * module call it between cases so the singleton `$effect.root` doesn't
+ * leak listeners across tests. Mirrors `bridge.svelte.ts → stopBridge()`.
+ */
+export function _disposeForTests(): void {
+    if (rootDispose) {
+        rootDispose();
+        rootDispose = null;
+    }
+}

@@ -23,16 +23,19 @@
                        same logbook on the dedupe key.
       - 'validation' — 4xx other than 404/409.
       - 'server'     — 5xx; daemon logged a stack-tagged error.
+      - 'aborted'    — caller cancelled via AbortSignal before a response.
       - 'network'    — fetch threw before a Response.
 */
 
 import type { DaemonQsoForEdit } from '../states/qsoEdit.svelte';
+import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
 
 export type FetchQsoOutcome =
     | { kind: 'ok'; qso: DaemonQsoForEdit }
     | { kind: 'not_found'; message: string }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
+    | { kind: 'aborted'; message: string }
     | { kind: 'network'; message: string };
 
 export type PatchQsoOutcome =
@@ -41,6 +44,7 @@ export type PatchQsoOutcome =
     | { kind: 'duplicate'; message: string }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
+    | { kind: 'aborted'; message: string }
     | { kind: 'network'; message: string };
 
 interface DaemonError {
@@ -49,28 +53,20 @@ interface DaemonError {
     op?: string;
 }
 
-export async function fetchQso(uuid: string): Promise<FetchQsoOutcome> {
-    let response: Response;
-    try {
-        response = await fetch(`/v1/qso/${encodeURIComponent(uuid)}`);
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+export async function fetchQso(uuid: string, signal?: AbortSignal): Promise<FetchQsoOutcome> {
+    const fetched = await safeFetch(`/v1/qso/${encodeURIComponent(uuid)}`, { signal });
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-
-    let body: unknown;
-    try {
-        body = await response.json();
-    } catch {
-        body = null;
-    }
+    const response = fetched.response;
+    const body = await readJsonBody(response);
 
     if (response.ok) {
         // Guard against a 200 OK with an unparseable / non-object body
         // — without this the overlay would land on { qso: null } and
         // crash on the first field read. Treat as malformed server
         // response.
-        if (body === null || typeof body !== 'object') {
+        if (!isPlainObject(body)) {
             return {
                 kind: 'server',
                 code: 'malformed_response',
@@ -80,7 +76,7 @@ export async function fetchQso(uuid: string): Promise<FetchQsoOutcome> {
         return { kind: 'ok', qso: body };
     }
 
-    const err = body as DaemonError | null;
+    const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
     if (response.status === 404) {
@@ -94,31 +90,25 @@ export async function fetchQso(uuid: string): Promise<FetchQsoOutcome> {
 
 export async function patchQso(
     uuid: string,
-    body: DaemonQsoForEdit
+    body: DaemonQsoForEdit,
+    signal?: AbortSignal
 ): Promise<PatchQsoOutcome> {
-    let response: Response;
-    try {
-        response = await fetch(`/v1/qso/${encodeURIComponent(uuid)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+    const fetched = await safeFetch(`/v1/qso/${encodeURIComponent(uuid)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+    });
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-
-    let respBody: unknown;
-    try {
-        respBody = await response.json();
-    } catch {
-        respBody = null;
-    }
+    const response = fetched.response;
+    const respBody = await readJsonBody(response);
 
     if (response.ok) {
         // Same malformed-body guard as fetchQso above — a 200 with a
         // null body would bypass every subsequent field read.
-        if (respBody === null || typeof respBody !== 'object') {
+        if (!isPlainObject(respBody)) {
             return {
                 kind: 'server',
                 code: 'malformed_response',
@@ -128,7 +118,7 @@ export async function patchQso(
         return { kind: 'ok', qso: respBody };
     }
 
-    const err = respBody as DaemonError | null;
+    const err = isPlainObject(respBody) ? (respBody as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
     if (response.status === 404) {

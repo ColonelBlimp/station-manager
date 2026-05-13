@@ -98,8 +98,22 @@ function mirrorString<T extends string | boolean>(read: () => T, key: string): v
     });
 }
 
-$effect.root(() => {
+let rootDispose: (() => void) | null = $effect.root(() => {
     mirrorString(() => qsoDefaults.qsoRandom, QSO_RANDOM_KEY);
     mirrorString(() => qsoDefaults.notifyQsoStored, NOTIFY_QSO_STORED_KEY);
     mirrorString(() => qsoDefaults.notifyConfigSaved, NOTIFY_CONFIG_SAVED_KEY);
 });
+
+/**
+ * Test-time teardown. Production code never calls this (module
+ * lifetime = page lifetime). Vitest cases that exercise this state
+ * module call it between cases so the localStorage-mirror effects
+ * don't leak listeners and spuriously fire on later cases.
+ * Mirrors `bridge.svelte.ts → stopBridge()`.
+ */
+export function _disposeForTests(): void {
+    if (rootDispose) {
+        rootDispose();
+        rootDispose = null;
+    }
+}

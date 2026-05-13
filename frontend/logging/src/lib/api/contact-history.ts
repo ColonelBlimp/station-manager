@@ -16,6 +16,8 @@
     can land alongside the contest panel when that ships.
 */
 
+import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+
 export interface ContactHistory {
     id: number;
     uuid: string;
@@ -36,6 +38,7 @@ export type ContactHistoryOutcome =
     | { kind: 'ok'; items: ContactHistory[] }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
+    | { kind: 'aborted'; message: string }
     | { kind: 'network'; message: string };
 
 interface DaemonError {
@@ -44,34 +47,33 @@ interface DaemonError {
     op?: string;
 }
 
-interface DaemonOk {
-    items: ContactHistory[];
-}
-
-export async function fetchContactHistory(callsign: string): Promise<ContactHistoryOutcome> {
-    let response: Response;
-    try {
-        response = await fetch(`/v1/contact-history?call=${encodeURIComponent(callsign)}`, {
-            method: 'GET',
-        });
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+export async function fetchContactHistory(
+    callsign: string,
+    signal?: AbortSignal
+): Promise<ContactHistoryOutcome> {
+    const fetched = await safeFetch(
+        `/v1/contact-history?call=${encodeURIComponent(callsign)}`,
+        { method: 'GET', signal }
+    );
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-
-    let body: DaemonOk | DaemonError | null;
-    try {
-        body = (await response.json()) as DaemonOk | DaemonError;
-    } catch {
-        body = null;
-    }
+    const response = fetched.response;
+    const body = await readJsonBody(response);
 
     if (response.ok) {
-        const ok = body as DaemonOk | null;
-        return { kind: 'ok', items: ok?.items ?? [] };
+        // 200 with an unparseable body is a daemon regression — every
+        // success path on this endpoint emits at least `{items: []}`.
+        // Empty array on a missing `items` field preserves the same
+        // "no contacts" outcome the panel renders for a fresh callsign.
+        const items =
+            isPlainObject(body) && Array.isArray(body.items)
+                ? (body.items as ContactHistory[])
+                : [];
+        return { kind: 'ok', items };
     }
 
-    const err = body as DaemonError | null;
+    const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
     if (response.status >= 500) {

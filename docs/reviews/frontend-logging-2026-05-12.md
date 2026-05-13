@@ -1,9 +1,9 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: IN PROGRESS (session 53, 2026-05-12).**
-**Closed:** all 5 critical (C1, C2, C3, C4, C5), 11 of 17 important
-(I3, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19, I20 — note:
-I20 reviewer-numbered, kept). **Deferred / pushback:**
+**Status: IN PROGRESS (session 53 → 54, 2026-05-12 → 2026-05-13).**
+**Closed:** all 5 critical (C1, C2, C3, C4, C5), 14 of 17 important
+(I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19,
+I20 — note: I20 reviewer-numbered, kept). **Deferred / pushback:**
 - **I1** — derived-via-effect anti-pattern in `QsoPanel`. The
   callback-based fix the reviewer proposes was already considered and
   rejected in session 47 with a documented why-comment + line-disable
@@ -23,13 +23,28 @@ I20 reviewer-numbered, kept). **Deferred / pushback:**
   `callsign.ts` / `maidenhead.ts` / `zone.ts` and extending
   `ValidatedInput` to render an error message. Separate
   architectural commit, not a11y polish.
-**Remaining (next session):**
-- **I2, I5, I6** — architectural sweep: shared `signalAware()`
-  AbortController helper, shared `isShape<T>()` runtime-validation
-  helper for API response bodies, `_disposeForTests()` exports on
-  the three module-level `$effect.root` modules
-  (`qsoDraft` / `qsoDefaults` / `manual`). Single commit covers the
-  three systemic diagnoses from the review.
+
+**Session 54 (2026-05-13) — I2 + I5 + I6 architectural sweep landed
+in a single commit:**
+- New `lib/api/_helpers.ts` exports `safeFetch()` (classifies
+  abort vs network), `readJsonBody()` (safe `response.json()`),
+  `isPlainObject()` (primitive object guard), and `isShape<T>()`
+  (object + required-key presence check).
+- All six API helpers (`config`, `qso`, `qso-update`, `enrichment`,
+  `contact-history`, `session-email`) now accept an optional
+  `signal?: AbortSignal` parameter and surface a `kind: 'aborted'`
+  outcome arm. Calls without a signal behave exactly as before.
+- Body envelope handling refactored through the shared helpers — no
+  behavioural change to existing outcomes, but body parsing is now
+  consistent across the wrappers (no more blind casts).
+- `qsoDraft.svelte.ts`, `qsoDefaults.svelte.ts`, `manual.svelte.ts`
+  each capture their `$effect.root` dispose function and export a
+  `_disposeForTests()` (matching `bridge.svelte.ts → stopBridge()`).
+  Production behaviour unchanged.
+- New `_helpers.test.ts` covers the primitives directly; `qso.test.ts`
+  gains end-to-end abort wire-through tests. Total: 517/517 passing.
+
+**Remaining:**
 - **All 11 Nit findings** (N1–N11) — polish, batched whenever an
   adjacent piece of work surfaces one.
 Conducted by three parallel agents covering (a) Svelte 5 rune

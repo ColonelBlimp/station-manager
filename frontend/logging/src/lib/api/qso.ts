@@ -23,21 +23,21 @@
                        surfaces the message; draft is preserved.
       - 'server'     — 5xx; daemon logged a stack-tagged error. Caller
                        shows a generic retry message; draft is preserved.
+      - 'aborted'    — caller cancelled via AbortSignal before a response.
+                       Draft preserved; UI should treat this as "no-op."
       - 'network'    — fetch threw before a Response (daemon unreachable,
                        DNS, CORS preflight failure). Draft preserved.
 */
+
+import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+
 export type SubmitOutcome =
     | { kind: 'stored'; uuid: string }
     | { kind: 'duplicate'; uuid: string }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
+    | { kind: 'aborted'; message: string }
     | { kind: 'network'; message: string };
-
-interface DaemonOk {
-    status: 'stored' | 'duplicate';
-    uuid: string;
-    id?: number;
-}
 
 interface DaemonError {
     code: string;
@@ -45,51 +45,47 @@ interface DaemonError {
     op?: string;
 }
 
-export async function submitQso(adif: string, logbookID: number): Promise<SubmitOutcome> {
-    let response: Response;
-    try {
-        response = await fetch(`/v1/qso?logbook=${encodeURIComponent(String(logbookID))}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-adif' },
-            body: adif,
-        });
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+export async function submitQso(
+    adif: string,
+    logbookID: number,
+    signal?: AbortSignal
+): Promise<SubmitOutcome> {
+    const fetched = await safeFetch(`/v1/qso?logbook=${encodeURIComponent(String(logbookID))}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-adif' },
+        body: adif,
+        signal,
+    });
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-
-    // Body may not parse if the daemon emits an unexpected payload (or
-    // a proxy rewrites the response). Treat an unparseable body as a
-    // server error rather than throwing — the caller has nothing
-    // actionable to do with a JSON parse exception.
-    let body: DaemonOk | DaemonError | null;
-    try {
-        body = (await response.json()) as DaemonOk | DaemonError;
-    } catch {
-        body = null;
-    }
+    const response = fetched.response;
+    const body = await readJsonBody(response);
 
     if (response.ok) {
-        const ok = body as DaemonOk | null;
         // The uuid is load-bearing — every downstream consumer
         // (sessionQsos, the edit overlay, the email-out flow) keys off
         // it. A 200 with a missing or empty uuid (proxy interference,
         // daemon regression) would propagate phantom empty IDs and
         // corrupt the session list silently. Downgrade to malformed.
-        if (!ok || typeof ok.uuid !== 'string' || ok.uuid === '') {
+        if (
+            !isPlainObject(body) ||
+            typeof body.uuid !== 'string' ||
+            body.uuid === ''
+        ) {
             return {
                 kind: 'server',
                 code: 'malformed_response',
                 message: 'daemon returned a successful submit without a uuid',
             };
         }
-        if (ok.status === 'duplicate') {
-            return { kind: 'duplicate', uuid: ok.uuid };
+        if (body.status === 'duplicate') {
+            return { kind: 'duplicate', uuid: body.uuid };
         }
-        return { kind: 'stored', uuid: ok.uuid };
+        return { kind: 'stored', uuid: body.uuid };
     }
 
-    const err = body as DaemonError | null;
+    const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
     if (response.status >= 500) {

@@ -25,9 +25,12 @@
                              failed; check daemon logs" — the cause is in
                              the daemon log, not on the wire.
       - 'server'           — 5xx other than 502; daemon-internal failure.
+      - 'aborted'          — caller cancelled via AbortSignal before a response.
       - 'network'          — fetch threw before a Response (daemon
                              unreachable).
 */
+
+import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
 
 export interface SessionEmailRequest {
     to: string;
@@ -44,11 +47,8 @@ export type SessionEmailOutcome =
     | { kind: 'invalid'; code: string; message: string }
     | { kind: 'smtp_failure'; message: string }
     | { kind: 'server'; code: string; message: string }
+    | { kind: 'aborted'; message: string }
     | { kind: 'network'; message: string };
-
-interface DaemonOk {
-    status: 'sent';
-}
 
 interface DaemonError {
     code: string;
@@ -56,35 +56,30 @@ interface DaemonError {
     op?: string;
 }
 
-export async function sendSessionEmail(req: SessionEmailRequest): Promise<SessionEmailOutcome> {
-    let response: Response;
-    try {
-        response = await fetch('/v1/session/email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(req),
-        });
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+export async function sendSessionEmail(
+    req: SessionEmailRequest,
+    signal?: AbortSignal
+): Promise<SessionEmailOutcome> {
+    const fetched = await safeFetch('/v1/session/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+        signal,
+    });
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-
-    // Body may not parse if the daemon emits an unexpected payload.
-    // Treat an unparseable body as a server error rather than throwing
-    // — the caller has nothing actionable to do with a JSON parse
-    // exception. mirrors the qso.ts wrapper convention.
-    let body: DaemonOk | DaemonError | null;
-    try {
-        body = (await response.json()) as DaemonOk | DaemonError;
-    } catch {
-        body = null;
-    }
+    const response = fetched.response;
 
     if (response.ok) {
         return { kind: 'sent' };
     }
 
-    const err = body as DaemonError | null;
+    // Body may not parse if the daemon emits an unexpected payload.
+    // Treat an unparseable body as a synthesised error envelope — the
+    // caller has nothing actionable to do with a JSON parse exception.
+    const body = await readJsonBody(response);
+    const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
 

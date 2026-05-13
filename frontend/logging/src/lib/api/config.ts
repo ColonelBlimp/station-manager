@@ -14,6 +14,7 @@
       - 'validation' — 4xx with a daemon-emitted code (e.g.
                        'invalid_field_value' for malformed callsign).
       - 'server'     — 5xx; daemon logged a stack-tagged error.
+      - 'aborted'    — caller cancelled via AbortSignal before a response.
       - 'network'    — fetch threw before a Response.
 
     Field shapes mirror the daemon's `ConfigResponse` (handler_config.go).
@@ -21,6 +22,8 @@
     JSON tags omit empty strings — so the wire payload may not include
     a populated field when its value is empty.
 */
+
+import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
 
 export interface ConfigResponse {
     setup_complete: boolean;
@@ -158,6 +161,7 @@ export type ConfigOutcome =
     | { kind: 'ok'; config: ConfigResponse }
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
+    | { kind: 'aborted'; message: string }
     | { kind: 'network'; message: string };
 
 interface DaemonError {
@@ -166,15 +170,12 @@ interface DaemonError {
     op?: string;
 }
 
-export async function fetchConfig(): Promise<ConfigOutcome> {
-    let response: Response;
-    try {
-        response = await fetch('/v1/config');
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+export async function fetchConfig(signal?: AbortSignal): Promise<ConfigOutcome> {
+    const fetched = await safeFetch('/v1/config', { signal });
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-    return parseOutcome(response);
+    return parseOutcome(fetched.response);
 }
 
 export async function putConfig(
@@ -183,45 +184,39 @@ export async function putConfig(
             ConfigResponse,
             'logging_station' | 'default_logbook' | 'default_rig' | 'station' | 'bridge'
         >
-    >
+    >,
+    signal?: AbortSignal
 ): Promise<ConfigOutcome> {
-    let response: Response;
-    try {
-        response = await fetch('/v1/config', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'network', message };
+    const fetched = await safeFetch('/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal,
+    });
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
     }
-    return parseOutcome(response);
+    return parseOutcome(fetched.response);
 }
 
 async function parseOutcome(response: Response): Promise<ConfigOutcome> {
-    let body: ConfigResponse | DaemonError | null;
-    try {
-        body = (await response.json()) as ConfigResponse | DaemonError;
-    } catch {
-        body = null;
-    }
+    const body = await readJsonBody(response);
 
     if (response.ok) {
         // Guard against a 200 OK with an unparseable / non-object body
         // — without this the caller would deref `config.logging_station`
         // on null and crash. Treat as a server-side malformed response.
-        if (body === null || typeof body !== 'object') {
+        if (!isPlainObject(body)) {
             return {
                 kind: 'server',
                 code: 'malformed_response',
                 message: 'daemon returned a non-JSON or empty body for /v1/config',
             };
         }
-        return { kind: 'ok', config: body as ConfigResponse };
+        return { kind: 'ok', config: body as unknown as ConfigResponse };
     }
 
-    const err = body as DaemonError | null;
+    const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
     if (response.status >= 500) {
