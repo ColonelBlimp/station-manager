@@ -72,9 +72,12 @@ const DefaultHTTPTimeout = 30 * time.Second
 const maxResponseBytes = 1 << 20 // 1 MiB
 
 // UserAgent is the User-Agent header this forwarder sends. QRZ's
-// developer guide requires a UA of ≤128 chars; the default embeds
-// the daemon version once cmd/smd overrides this var at startup
-// (stage 8). Until then the "dev" fallback keeps tests hermetic.
+// developer guide requires a UA of ≤128 chars. cmd/smd overrides
+// this var at startup with the daemon's global Config.UserAgent
+// (which the operator may set in config.json; the daemon
+// auto-populates it with the ldflags-injected build version on
+// first run). The "dev" fallback here keeps in-package tests
+// hermetic — they get a non-empty UA without needing to wire one in.
 var UserAgent = "station-manager/dev"
 
 // DefaultRetry is the retry policy the daemon uses when a QRZ

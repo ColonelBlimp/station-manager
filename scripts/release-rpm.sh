@@ -33,7 +33,12 @@ echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
 
 echo "── [2/3] Building daemon → build/bin/smd ──"
 mkdir -p build/bin
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o build/bin/smd ./cmd/smd
+# -X main.Version injects the build version into cmd/smd's `var Version`
+# which feeds both the User-Agent header on outbound HTTP and the
+# PROGRAMVERSION field on ADIF exports.
+CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X main.Version=${VERSION}" \
+    -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → build/release/ ──"
 mkdir -p build/release

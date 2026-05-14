@@ -126,26 +126,32 @@ func run() error {
 	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
 	flag.Parse()
 
-	// ---- Propagate build version to package-level vars ----
-	// These packages expose a mutable var with a "dev" default so tests
-	// stay hermetic; main.go injects the ldflags-bound Version so real
-	// daemon runs report their build version correctly.
-	//   - qrz.UserAgent goes on the User-Agent header of every QRZ API
-	//     call (QRZ's developer guide asks for ≤128 chars identifying
-	//     the client + app).
-	//   - adif.ProgramVersion is emitted as PROGRAMVERSION in ADIF
-	//     export headers.
-	// Both are package globals; intentionally process-lifetime — set
-	// once at daemon boot and not restored, since smd is a single-shot
-	// binary. Tests that import this package must reset these if they
+	// ---- Propagate build version to ADIF emission ----
+	// adif.ProgramVersion is emitted as PROGRAMVERSION in ADIF export
+	// headers. Package global; process-lifetime, set once at daemon
+	// boot. Tests that import the adif package must reset it if they
 	// care about isolation.
-	qrz.UserAgent = "station-manager/" + Version
 	adif.ProgramVersion = Version
 
 	// ---- Load configuration ----
 	cfg, firstRunPath, err := loadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+
+	// ---- Resolve global User-Agent ----
+	// Single value used by every outbound HTTP caller (forwarders,
+	// lookup providers). The operator may override in config.json;
+	// when empty (fresh first-run, or operator cleared the field) we
+	// fill it from the ldflags-injected build version and persist so
+	// the value lands on disk and is visible to the operator. Fail
+	// loudly if the final value is empty — every callsite assumes a
+	// non-empty UA and would otherwise send a blank header.
+	if strings.TrimSpace(cfg.UserAgent) == "" {
+		cfg.UserAgent = "station-manager/" + Version
+	}
+	if cfg.UserAgent == "" {
+		return fmt.Errorf("global UserAgent resolved to empty string; cannot start daemon (build version=%q)", Version)
 	}
 
 	// ---- Build DI container ----
@@ -155,6 +161,18 @@ func run() error {
 	// existing config we re-resolve via the same precedence used in
 	// loadConfig.
 	cfgSvc.SetPath(resolveConfigPath(*configPath, firstRunPath))
+	// Persist the resolved UserAgent (no-op when the operator
+	// already set it explicitly; writes the daemon default otherwise
+	// so the operator sees it on disk and can override later).
+	if err := cfgSvc.Update(func(c *config.Config) error {
+		c.UserAgent = cfg.UserAgent
+		return nil
+	}); err != nil {
+		return fmt.Errorf("persisting resolved UserAgent: %w", err)
+	}
+	// Forwarder package var — every QRZ forwarder POST stamps this
+	// on the User-Agent header. Set after the UA is final.
+	qrz.UserAgent = cfg.UserAgent
 
 	container := iocdi.New()
 
@@ -713,6 +731,7 @@ func buildEnrichment(
 	if cfg.Lookup.Hamnut.Enabled {
 		hamnutCfg := cfg.Lookup.Hamnut
 		hamnutSvc := hamnut.NewService(loggerSvc, cfgSvc, &hamnutCfg, nil)
+		hamnutSvc.UserAgent = cfg.UserAgent
 		if err := hamnutSvc.Initialize(workerCtx); err != nil {
 			return nil, nil, errors.New(op).WithErr(err).WithMsg("initialize hamnut provider")
 		}
@@ -730,6 +749,7 @@ func buildEnrichment(
 		switch entry.Name {
 		case types.QRZLookupServiceName:
 			qrzSvc := lookupqrz.NewService(loggerSvc, cfgSvc, &entryCopy, nil)
+			qrzSvc.UserAgent = cfg.UserAgent
 			if err := qrzSvc.Initialize(workerCtx); err != nil {
 				return nil, nil, errors.New(op).WithErr(err).WithMsgf("initialize chain provider %q", entry.Name)
 			}

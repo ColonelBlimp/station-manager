@@ -28,6 +28,17 @@ type Config struct {
 	// utils.WorkingDir() at daemon startup.
 	DataDir string `json:"data_dir"`
 
+	// UserAgent is the single User-Agent header value the daemon sends
+	// on every outbound HTTP call (callsign lookups, forwarders). One
+	// knob applies to every external dependency — there's no reason
+	// the QRZ forwarder, the QRZ lookup, and the hamnut lookup should
+	// identify themselves to upstream services differently. The daemon
+	// fills this on first-run startup with `station-manager/<version>`
+	// (Version is ldflags-injected at build time); operators may
+	// override in config.json. Daemon fails loudly at startup if this
+	// is empty after Load + first-run-fill — see cmd/smd/main.go.
+	UserAgent string `json:"useragent"`
+
 	// SocketPath is the absolute path to the Unix domain socket the daemon
 	// binds its HTTP API to.
 	SocketPath string `json:"socket_path"`
@@ -265,6 +276,23 @@ func DefaultConfig(dataDir string) Config {
 			Type:        "qrz",
 			Enabled:     false,
 			Credentials: json.RawMessage(`{"api_key": ""}`),
+		},
+	}
+	// Symmetric: a disabled QRZ lookup chain entry, prepopulated with
+	// the canonical QRZ XML endpoint and a placeholder credential
+	// pair. Operator fills in username + password and flips
+	// enabled=true. Same DefaultConfig-not-applyDefaults rationale as
+	// the forwarder above. Hamnut stays empty by default — country
+	// enrichment is the operator's decision and hamnut requires a URL
+	// that's not a public well-known value.
+	cfg.Lookup.Chain = []types.LookupConfig{
+		{
+			Name:           types.QRZLookupServiceName,
+			Enabled:        false,
+			URL:            "https://xmldata.qrz.com/xml/current",
+			Username:       "",
+			Password:       "",
+			HttpTimeoutSec: 10,
 		},
 	}
 	applyDefaults(&cfg, dataDir)
@@ -686,12 +714,11 @@ func validateLookupProvider(label string, p types.LookupConfig) error {
 	if p.URL == "" {
 		return fmt.Errorf("lookup.%s: url is empty", label)
 	}
-	if p.UserAgent == "" {
-		return fmt.Errorf("lookup.%s: useragent is empty", label)
-	}
 	if p.HttpTimeoutSec <= 0 {
 		return fmt.Errorf("lookup.%s: timeout_sec must be > 0", label)
 	}
+	// User-Agent is checked at provider Initialize time (sourced from
+	// the daemon's global Config.UserAgent, not per-provider config).
 	return nil
 }
 

@@ -30,8 +30,21 @@ func TestDefaultConfig_LookupDefaults(t *testing.T) {
 	if cfg.Lookup.Hamnut.HttpTimeoutSec != 10 {
 		t.Errorf("Hamnut.HttpTimeoutSec = %d, want 10", cfg.Lookup.Hamnut.HttpTimeoutSec)
 	}
-	if len(cfg.Lookup.Chain) != 0 {
-		t.Errorf("default chain should be empty, got %d entries", len(cfg.Lookup.Chain))
+	if len(cfg.Lookup.Chain) != 1 {
+		t.Fatalf("default chain should have one prepopulated entry, got %d", len(cfg.Lookup.Chain))
+	}
+	qrz := cfg.Lookup.Chain[0]
+	if qrz.Name != types.QRZLookupServiceName {
+		t.Errorf("default chain[0].Name = %q, want %q", qrz.Name, types.QRZLookupServiceName)
+	}
+	if qrz.Enabled {
+		t.Error("default chain[0].Enabled = true, want false (template entry, operator opts in)")
+	}
+	if qrz.URL != "https://xmldata.qrz.com/xml/current" {
+		t.Errorf("default chain[0].URL = %q, want canonical QRZ XML endpoint", qrz.URL)
+	}
+	if qrz.HttpTimeoutSec != 10 {
+		t.Errorf("default chain[0].HttpTimeoutSec = %d, want 10", qrz.HttpTimeoutSec)
 	}
 }
 
@@ -118,7 +131,6 @@ func TestValidateLookup_EnabledHamnutMissingURL(t *testing.T) {
 		Hamnut: types.LookupConfig{
 			Name:           "hamnutlookupservice",
 			Enabled:        true,
-			UserAgent:      "x",
 			HttpTimeoutSec: 1,
 		},
 	}
@@ -128,20 +140,10 @@ func TestValidateLookup_EnabledHamnutMissingURL(t *testing.T) {
 	}
 }
 
-func TestValidateLookup_EnabledChainEntryMissingUserAgent(t *testing.T) {
-	lc := types.EnrichmentConfig{
-		Chain: []types.LookupConfig{{
-			Name:           "qrzlookupservice",
-			Enabled:        true,
-			URL:            "https://example.com",
-			HttpTimeoutSec: 1,
-		}},
-	}
-	err := validateLookup(lc)
-	if err == nil || !strings.Contains(err.Error(), "useragent is empty") {
-		t.Errorf("expected useragent-empty error, got %v", err)
-	}
-}
+// User-Agent is no longer a per-provider LookupConfig field; the
+// global Config.UserAgent feeds every provider at construction time
+// and the non-empty check fires inside each Service.Initialize. See
+// hamnut + qrz lookup service tests for the corresponding coverage.
 
 func TestValidateLookup_RejectsDuplicateChainName(t *testing.T) {
 	lc := types.EnrichmentConfig{
@@ -305,14 +307,19 @@ func TestLoad_ValidLookupBlock(t *testing.T) {
 }
 
 func TestLoad_RejectsInvalidLookupBlock(t *testing.T) {
+	// Empty URL on an enabled hamnut block — exercises the
+	// Load → validateLookup → validateLookupProvider path
+	// end-to-end. UserAgent is no longer a per-provider field, so
+	// the previously-tested "empty useragent" case lives on the
+	// Service.Initialize side now (see hamnut + qrz lookup tests).
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.json")
 	content := `{
 		"lookup": {
 			"hamnut": {
 				"enabled": true,
-				"url": "https://api.hamnut.example/v1/call-signs/prefixes",
-				"useragent": ""
+				"url": "",
+				"timeout_sec": 5
 			}
 		}
 	}`
@@ -320,6 +327,6 @@ func TestLoad_RejectsInvalidLookupBlock(t *testing.T) {
 		t.Fatalf("writing config: %v", err)
 	}
 	if _, err := Load(cfgFile); err == nil {
-		t.Fatal("expected validation error for empty UserAgent on enabled hamnut")
+		t.Fatal("expected validation error for empty URL on enabled hamnut")
 	}
 }

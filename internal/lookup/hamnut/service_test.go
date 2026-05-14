@@ -25,10 +25,10 @@ func initializedService(t *testing.T, url string, client *http.Client) *Service 
 			Name:           ServiceName,
 			Enabled:        true,
 			URL:            url,
-			UserAgent:      "smd/test",
 			HttpTimeoutSec: 5,
 		},
-		client: client,
+		UserAgent: "smd/test",
+		client:    client,
 	}
 	s.isInitialized.Store(true)
 	return s
@@ -59,17 +59,18 @@ func TestInitialize_DirectConfig_DisabledIsValid(t *testing.T) {
 
 func TestInitialize_RejectsBrokenConfig(t *testing.T) {
 	cases := []struct {
-		name string
-		cfg  *types.LookupConfig
+		name      string
+		cfg       *types.LookupConfig
+		userAgent string
 	}{
-		{"empty URL", &types.LookupConfig{Enabled: true, URL: "", UserAgent: "a", HttpTimeoutSec: 1}},
-		{"invalid URL", &types.LookupConfig{Enabled: true, URL: "::nope", UserAgent: "a", HttpTimeoutSec: 1}},
-		{"empty UserAgent", &types.LookupConfig{Enabled: true, URL: "http://x", UserAgent: "", HttpTimeoutSec: 1}},
-		{"zero timeout", &types.LookupConfig{Enabled: true, URL: "http://x", UserAgent: "a", HttpTimeoutSec: 0}},
+		{"empty URL", &types.LookupConfig{Enabled: true, URL: "", HttpTimeoutSec: 1}, "a"},
+		{"invalid URL", &types.LookupConfig{Enabled: true, URL: "::nope", HttpTimeoutSec: 1}, "a"},
+		{"empty UserAgent", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1}, ""},
+		{"zero timeout", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 0}, "a"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := &Service{LoggerService: &logging.Service{}, Config: c.cfg}
+			s := &Service{LoggerService: &logging.Service{}, Config: c.cfg, UserAgent: c.userAgent}
 			if err := s.Initialize(context.Background()); err == nil {
 				t.Fatalf("expected error for %s", c.name)
 			}
@@ -241,7 +242,10 @@ func TestLookup_EmptyCallsign_Errors(t *testing.T) {
 }
 
 func TestService_NotInitialized_Errors(t *testing.T) {
-	s := &Service{Config: &types.LookupConfig{Enabled: true, URL: "http://x", UserAgent: "a", HttpTimeoutSec: 1}}
+	s := &Service{
+		Config:    &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1},
+		UserAgent: "a",
+	}
 	if _, err := s.Lookup("M0CMC"); err == nil {
 		t.Fatal("expected error when not initialized")
 	}

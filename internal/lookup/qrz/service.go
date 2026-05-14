@@ -52,7 +52,12 @@ type Service struct {
 	ConfigService *config.Service  `di.inject:"configservice"`
 	LoggerService *logging.Service `di.inject:"loggingservice"`
 	Config        *types.LookupConfig
-	client        *http.Client
+	// UserAgent is the per-request User-Agent header value. Sourced
+	// from the daemon's global Config.UserAgent at construction time
+	// (see cmd/smd/main.go). Fails Initialize loudly when empty if
+	// Config.Enabled is true.
+	UserAgent string
+	client    *http.Client
 
 	isInitialized atomic.Bool
 	initOnce      sync.Once
@@ -217,14 +222,14 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 	q := u.Query()
 	q.Set("s", s.sessionKey)
 	q.Set("callsign", callsign)
-	q.Set("agent", s.Config.UserAgent)
+	q.Set("agent", s.UserAgent)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("failed to create HTTP GET request")
 	}
-	req.Header.Set("User-Agent", s.Config.UserAgent)
+	req.Header.Set("User-Agent", s.UserAgent)
 	req.Header.Set("Accept", "application/xml")
 
 	resp, err := s.client.Do(req)

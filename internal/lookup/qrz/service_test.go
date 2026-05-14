@@ -29,9 +29,9 @@ func initializedService(t *testing.T, url string, client *http.Client) *Service 
 			URL:            url,
 			Username:       "tester",
 			Password:       "secret",
-			UserAgent:      "smd/test",
 			HttpTimeoutSec: 5,
 		},
+		UserAgent:  "smd/test",
 		client:     client,
 		sessionKey: "test-session-key",
 	}
@@ -63,19 +63,20 @@ func TestInitialize_DisabledIsValid(t *testing.T) {
 
 func TestInitialize_RejectsBrokenConfig(t *testing.T) {
 	cases := []struct {
-		name string
-		cfg  *types.LookupConfig
+		name      string
+		cfg       *types.LookupConfig
+		userAgent string
 	}{
-		{"empty URL", &types.LookupConfig{Enabled: true, URL: "", UserAgent: "a", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}},
-		{"invalid URL", &types.LookupConfig{Enabled: true, URL: "::nope", UserAgent: "a", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}},
-		{"empty UserAgent", &types.LookupConfig{Enabled: true, URL: "http://x", UserAgent: "", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}},
-		{"zero timeout", &types.LookupConfig{Enabled: true, URL: "http://x", UserAgent: "a", HttpTimeoutSec: 0, Username: "abc", Password: "abcde"}},
-		{"short username", &types.LookupConfig{Enabled: true, URL: "http://x", UserAgent: "a", HttpTimeoutSec: 1, Username: "ab", Password: "abcde"}},
-		{"short password", &types.LookupConfig{Enabled: true, URL: "http://x", UserAgent: "a", HttpTimeoutSec: 1, Username: "abc", Password: "abc"}},
+		{"empty URL", &types.LookupConfig{Enabled: true, URL: "", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, "a"},
+		{"invalid URL", &types.LookupConfig{Enabled: true, URL: "::nope", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, "a"},
+		{"empty UserAgent", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, ""},
+		{"zero timeout", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 0, Username: "abc", Password: "abcde"}, "a"},
+		{"short username", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1, Username: "ab", Password: "abcde"}, "a"},
+		{"short password", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1, Username: "abc", Password: "abc"}, "a"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := &Service{LoggerService: &logging.Service{}, Config: c.cfg}
+			s := &Service{LoggerService: &logging.Service{}, Config: c.cfg, UserAgent: c.userAgent}
 			if err := s.Initialize(context.Background()); err == nil {
 				t.Fatalf("expected error for %s", c.name)
 			}
@@ -102,10 +103,10 @@ func TestInitialize_SessionKeyFailureDisablesService(t *testing.T) {
 			URL:            srv.URL,
 			Username:       "tester",
 			Password:       "wrong",
-			UserAgent:      "smd/test",
 			HttpTimeoutSec: 5,
 		},
-		client: srv.Client(),
+		UserAgent: "smd/test",
+		client:    srv.Client(),
 	}
 	err := s.Initialize(context.Background())
 	// New contract (2026-05-12): session-fetch failure is a soft
@@ -153,10 +154,10 @@ func TestInitialize_RespectsContextCancellation(t *testing.T) {
 			URL:            srv.URL,
 			Username:       "tester",
 			Password:       "secret",
-			UserAgent:      "smd/test",
 			HttpTimeoutSec: 60, // generous — we want the ctx to win, not the timeout
 		},
-		client: srv.Client(),
+		UserAgent: "smd/test",
+		client:    srv.Client(),
 	}
 
 	// Cancel the ctx before Initialize even starts. A correctly

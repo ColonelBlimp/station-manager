@@ -51,7 +51,12 @@ type Service struct {
 	ConfigService *config.Service  `di.inject:"configservice"`
 	LoggerService *logging.Service `di.inject:"loggingservice"`
 	Config        *types.LookupConfig
-	client        *http.Client
+	// UserAgent is the per-request User-Agent header value. Sourced
+	// from the daemon's global Config.UserAgent at construction time
+	// (see cmd/smd/main.go). Fails Initialize loudly when empty if
+	// Config.Enabled is true.
+	UserAgent string
+	client    *http.Client
 
 	isInitialized atomic.Bool
 	initOnce      sync.Once
@@ -195,7 +200,7 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 	if err != nil {
 		return types.Country{}, errors.New(op).WithErr(err).WithMsg("failed to create HTTP GET request")
 	}
-	req.Header.Set("User-Agent", s.Config.UserAgent)
+	req.Header.Set("User-Agent", s.UserAgent)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.client.Do(req)
@@ -245,9 +250,9 @@ func (s *Service) validateConfig(op errors.Op) error {
 		return errors.New(op).WithErr(err).WithMsg("hamnut URL is invalid")
 	}
 
-	s.Config.UserAgent = strings.TrimSpace(s.Config.UserAgent)
-	if s.Config.UserAgent == "" {
-		return errors.New(op).WithMsg("hamnut UserAgent cannot be empty when enabled")
+	s.UserAgent = strings.TrimSpace(s.UserAgent)
+	if s.UserAgent == "" {
+		return errors.New(op).WithMsg("hamnut UserAgent cannot be empty when enabled (daemon should have set it from Config.UserAgent at construction)")
 	}
 
 	if s.Config.HttpTimeoutSec <= 0 {

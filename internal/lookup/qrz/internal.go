@@ -43,14 +43,14 @@ func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 	q := u.Query()
 	q.Set("username", s.Config.Username)
 	q.Set("password", s.Config.Password)
-	q.Set("agent", s.Config.UserAgent)
+	q.Set("agent", s.UserAgent)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("failed to create HTTP GET request")
 	}
-	req.Header.Set("User-Agent", s.Config.UserAgent)
+	req.Header.Set("User-Agent", s.UserAgent)
 	req.Header.Set("Accept", "application/xml")
 
 	resp, err := s.client.Do(req)
@@ -186,9 +186,9 @@ func (s *Service) validateConfig(op errors.Op) error {
 		return errors.New(op).WithErr(err).WithMsg("QRZ URL is invalid")
 	}
 
-	s.Config.UserAgent = strings.TrimSpace(s.Config.UserAgent)
-	if s.Config.UserAgent == "" {
-		return errors.New(op).WithMsg("QRZ UserAgent cannot be empty when enabled")
+	s.UserAgent = strings.TrimSpace(s.UserAgent)
+	if s.UserAgent == "" {
+		return errors.New(op).WithMsg("QRZ UserAgent cannot be empty when enabled (daemon should have set it from Config.UserAgent at construction)")
 	}
 	if s.Config.HttpTimeoutSec <= 0 {
 		return errors.New(op).WithMsg("QRZ HttpTimeoutSec must be greater than zero")

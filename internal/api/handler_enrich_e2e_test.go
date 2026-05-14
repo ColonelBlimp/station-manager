@@ -28,10 +28,10 @@ func wireE2EHamnut(t *testing.T, srv *httptest.Server, enabled bool) *hamnut.Ser
 		Name:           hamnut.ServiceName,
 		Enabled:        enabled,
 		URL:            srv.URL,
-		UserAgent:      "smd/e2e",
 		HttpTimeoutSec: 5,
 	}
 	s := hamnut.NewService(&logging.Service{}, nil, &cfg, srv.Client())
+	s.UserAgent = "smd/e2e"
 	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("hamnut Initialize: %v", err)
 	}
@@ -44,12 +44,12 @@ func wireE2EQRZ(t *testing.T, srv *httptest.Server) *lookupqrz.Service {
 		Name:           lookupqrz.ServiceName,
 		Enabled:        true,
 		URL:            srv.URL,
-		UserAgent:      "smd/e2e",
 		HttpTimeoutSec: 5,
 		Username:       "tester",
 		Password:       "secret",
 	}
 	s := lookupqrz.NewService(&logging.Service{}, nil, &cfg, srv.Client())
+	s.UserAgent = "smd/e2e"
 	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("qrz Initialize: %v", err)
 	}
