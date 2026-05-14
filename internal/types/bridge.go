@@ -18,8 +18,8 @@ package types
 // yaesu-ftdx10 today; more as `internal/cat` grows).
 type BridgeConfig struct {
 	Enabled bool               `json:"enabled"`
-	Serial  BridgeSerialConfig `json:"serial,omitempty"`
-	Cat     BridgeCatConfig    `json:"cat,omitempty"`
+	Serial  BridgeSerialConfig `json:"serial"`
+	Cat     BridgeCatConfig    `json:"cat"`
 
 	// ModeMappings is the operator-override layer for the per-rig
 	// translation table that turns rig-pushed mode strings (e.g.
@@ -57,7 +57,7 @@ type ModeMapping struct {
 // definition in `internal/cat/rigs/*.json` — they're
 // protocol-determined and not operator-configurable.
 type BridgeSerialConfig struct {
-	Port string `json:"port,omitempty"`
+	Port string `json:"port"`
 }
 
 // BridgeCatConfig is the CAT-protocol end. Driver picks the per-rig
@@ -65,5 +65,5 @@ type BridgeSerialConfig struct {
 // driver = subsystem cannot decode rig pushes; treated as a config
 // error at startup when Enabled is true.
 type BridgeCatConfig struct {
-	Driver string `json:"driver,omitempty"`
+	Driver string `json:"driver"`
 }
