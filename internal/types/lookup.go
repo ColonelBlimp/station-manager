@@ -20,8 +20,8 @@ type LookupConfig struct {
 	Name           string `json:"name"`
 	Enabled        bool   `json:"enabled"`
 	URL            string `json:"url"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
 	HttpTimeoutSec int    `json:"timeout_sec"`
 	ViewURL        string `json:"view_url,omitempty"`
 }
