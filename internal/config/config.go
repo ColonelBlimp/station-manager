@@ -252,6 +252,21 @@ func DefaultConfig(dataDir string) Config {
 	cfg.Logging.WithTimestamp = true
 	cfg.Logging.FileLogging = true
 	cfg.Logging.LogFileCompress = true
+	// Seed a disabled QRZ forwarder template so the operator can
+	// fill in their API key and flip enabled=true without having to
+	// reverse-engineer the schema. Stays disabled by default —
+	// uploads to QRZ won't happen until the operator opts in. Lives
+	// in DefaultConfig (not applyDefaults) so a deletion by the
+	// operator survives daemon restarts: applyDefaults only fills
+	// per-entry zero-valued tunables, it never adds new entries.
+	cfg.Forwarders = []types.ForwarderConfig{
+		{
+			Name:        "qrz",
+			Type:        "qrz",
+			Enabled:     false,
+			Credentials: json.RawMessage(`{"api_key": ""}`),
+		},
+	}
 	applyDefaults(&cfg, dataDir)
 	return cfg
 }

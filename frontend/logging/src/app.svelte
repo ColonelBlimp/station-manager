@@ -17,6 +17,16 @@
     let callsign: string = $state('');
     let saving: boolean = $state(false);
 
+    // Focus the welcome-page callsign input the moment it enters the
+    // DOM. The setup snippet renders behind the
+    // {#if !configState.setupComplete} gate, so a script-level
+    // onMount focus call would fire before the input exists. A node
+    // action runs at the right moment: when the {#if} branch becomes
+    // truthy and the input mounts.
+    function autofocus(node: HTMLInputElement) {
+        node.focus();
+    }
+
     const putCallsign = async (): Promise<void> => {
         // Normalise the same way the daemon does (TrimSpace +
         // ToUpper) so what the operator sees in the toast on
@@ -173,6 +183,7 @@
                     disabled={saving}
                     autocomplete="off"
                     spellcheck="false"
+                    use:autofocus
                 />
                 <button
                     type="submit"
