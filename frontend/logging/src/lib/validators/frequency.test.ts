@@ -104,27 +104,27 @@ describe('parseFrequency', () => {
 });
 
 describe('isValidFrequency', () => {
-    it('returns true for empty string (presence is form-level)', () => {
-        expect(isValidFrequency('')).toBe(true);
+    it('returns null for empty string (presence is form-level)', () => {
+        expect(isValidFrequency('')).toBeNull();
     });
 
-    it('returns true for whitespace-only', () => {
-        expect(isValidFrequency('   ')).toBe(true);
+    it('returns null for whitespace-only', () => {
+        expect(isValidFrequency('   ')).toBeNull();
     });
 
-    it('returns true for a valid display-format frequency', () => {
-        expect(isValidFrequency('14.250.000')).toBe(true);
+    it('returns null for a valid display-format frequency', () => {
+        expect(isValidFrequency('14.250.000')).toBeNull();
     });
 
-    it('returns true for a valid decimal MHz', () => {
-        expect(isValidFrequency('14.250')).toBe(true);
+    it('returns null for a valid decimal MHz', () => {
+        expect(isValidFrequency('14.250')).toBeNull();
     });
 
-    it('returns false for malformed input', () => {
-        expect(isValidFrequency('14.')).toBe(false);
+    it('returns the i18n key for malformed input', () => {
+        expect(isValidFrequency('14.')).toBe('validators.frequency');
     });
 
-    it('returns false for out-of-range', () => {
-        expect(isValidFrequency('99999')).toBe(false);
+    it('returns the i18n key for out-of-range', () => {
+        expect(isValidFrequency('99999')).toBe('validators.frequency');
     });
 });

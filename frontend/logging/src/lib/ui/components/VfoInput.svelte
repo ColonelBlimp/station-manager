@@ -31,7 +31,7 @@
     function handleInput(e: Event): void {
         const target = e.currentTarget as HTMLInputElement;
         editValue = target.value;
-        invalid = !isValidFrequency(editValue);
+        invalid = isValidFrequency(editValue) !== null;
     }
 
     function commit(): void {

@@ -24,7 +24,7 @@
         const normalised = callsign.trim().toUpperCase();
         if (normalised === '' || saving) return;
 
-        if (!isValidCallsign(normalised)) {
+        if (isValidCallsign(normalised) !== null) {
             toasts.error('Invalid callsign format');
             saving = false;
             return;

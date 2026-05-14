@@ -13,14 +13,24 @@ const CALLSIGN_PATTERN = new RegExp(
     `^(?!\\/)(?!.*\\/$)(?!.*\\/\\/)(?=.*[A-Z])(?=.*\\d)[A-Z0-9/]{${CALLSIGN_MIN},${CALLSIGN_MAX}}$`
 );
 
-export const isValidCallsign = (value: string): boolean => {
+/**
+ * Returns null when valid (including empty — presence is enforced at
+ * the form layer) and the i18n key `'validators.callsign'` when
+ * malformed.
+ *
+ * The string-or-null contract is shared across all validators in this
+ * directory so `ValidatedInput` (and `Callsign`, which uses this
+ * validator directly) can render an inline error message via
+ * `t(key)` and wire `aria-describedby` for screen readers.
+ */
+export const isValidCallsign = (value: string): string | null => {
     const trimmed = value.trim().toUpperCase();
     if (trimmed === '') {
-        return true;
+        return null;
     }
     const len = trimmed.length;
     if (len < CALLSIGN_MIN || len > CALLSIGN_MAX) {
-        return false;
+        return 'validators.callsign';
     }
-    return CALLSIGN_PATTERN.test(trimmed);
+    return CALLSIGN_PATTERN.test(trimmed) ? null : 'validators.callsign';
 };

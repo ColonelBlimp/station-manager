@@ -146,11 +146,11 @@ class QsoDraft {
      */
     canSubmit: boolean = $derived(
         this.callsign.trim() !== '' &&
-            isValidCallsign(this.callsign) &&
+            isValidCallsign(this.callsign) === null &&
             this.rstSent.trim() !== '' &&
-            isValidRst(this.rstSent) &&
+            isValidRst(this.rstSent) === null &&
             this.rstRcvd.trim() !== '' &&
-            isValidRst(this.rstRcvd) &&
+            isValidRst(this.rstRcvd) === null &&
             this.qsoDate !== '' &&
             this.timeOn !== '' &&
             this.timeOff !== ''

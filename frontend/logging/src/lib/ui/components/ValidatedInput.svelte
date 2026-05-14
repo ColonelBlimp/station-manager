@@ -1,11 +1,20 @@
 <script lang="ts">
     import type { HTMLInputAttributes } from 'svelte/elements';
+    import { t } from '../../i18n';
 
     interface Props extends Omit<HTMLInputAttributes, 'value' | 'class' | 'oninput' | 'onblur'> {
         id: string;
         label: string;
         value: string;
-        validator: (v: string) => boolean;
+        /*
+            Returns null when the value is valid (including empty —
+            presence is enforced at the form layer) and an i18n key
+            (e.g. `'validators.callsign'`) when malformed. The key is
+            rendered via the `t()` helper into operator-facing text in
+            the error <p> below the input, and `aria-describedby` is
+            wired so screen readers announce the error too.
+        */
+        validator: (v: string) => string | null;
         /*
             Optional input sanitiser. When set, runs on every keystroke
             BEFORE the validator and overwrites both the bound value
@@ -14,10 +23,10 @@
             that can never be valid" — e.g., RST stripping non-digits.
 
             Distinct from validator: validator decides display state
-            (red border / aria-invalid); transform decides what
-            actually lands in the field. Transform must be idempotent
-            (transform(transform(x)) === transform(x)) so a paste of
-            already-clean text isn't re-clobbered.
+            (red border / aria-invalid / error message); transform
+            decides what actually lands in the field. Transform must
+            be idempotent (transform(transform(x)) === transform(x))
+            so a paste of already-clean text isn't re-clobbered.
         */
         transform?: (raw: string) => string;
         widthClass?: string;
@@ -35,8 +44,10 @@
         ...rest
     }: Props = $props();
 
-    let invalid = $state(false);
+    let errorKey = $state<string | null>(null);
     let inputElement: HTMLInputElement;
+
+    const errorId = $derived(`${id}-err`);
 
     const handleInput = (e: Event): void => {
         const target = e.currentTarget as HTMLInputElement;
@@ -59,12 +70,12 @@
                 next = cleaned;
             }
         }
-        invalid = !validator(next);
+        errorKey = validator(next);
     };
 
     const validateAndFocus = (): void => {
-        invalid = !validator(value);
-        if (invalid && inputElement) {
+        errorKey = validator(value);
+        if (errorKey !== null && inputElement) {
             inputElement.focus();
             inputElement.select();
         }
@@ -78,8 +89,9 @@
             {id}
             bind:this={inputElement}
             bind:value
-            class="input-base {inputClass} {invalid ? 'invalid-input' : ''}"
-            aria-invalid={invalid}
+            class="input-base {inputClass} {errorKey !== null ? 'invalid-input' : ''}"
+            aria-invalid={errorKey !== null}
+            aria-describedby={errorKey !== null ? errorId : undefined}
             oninput={handleInput}
             onblur={validateAndFocus}
             type="text"
@@ -87,5 +99,8 @@
             spellcheck="false"
             {...rest}
         />
+        {#if errorKey !== null}
+            <p id={errorId} class="input-error" role="alert">{t(errorKey)}</p>
+        {/if}
     </div>
 </div>

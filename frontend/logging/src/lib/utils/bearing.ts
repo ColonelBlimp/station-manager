@@ -56,7 +56,7 @@ export interface PathInfo {
  */
 export function gridToDecimal(grid: string): DecimalCoords | null {
     const trimmed = grid.trim().toUpperCase();
-    if (trimmed === '' || !isValidMaidenhead(trimmed)) {
+    if (trimmed === '' || isValidMaidenhead(trimmed) !== null) {
         return null;
     }
 

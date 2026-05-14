@@ -22,20 +22,25 @@
 
 const DIGITS_ONLY = /^[0-9]+$/;
 
+/**
+ * Build a range validator returning null when valid (including empty)
+ * and `i18nKey` when the input is non-numeric or out of [min, max].
+ * See `passthrough.ts` for the shared `string | null` contract.
+ */
 const inRange =
-    (min: number, max: number) =>
-    (value: string): boolean => {
+    (min: number, max: number, i18nKey: string) =>
+    (value: string): string | null => {
         const trimmed = value.trim();
         if (trimmed === '') {
-            return true;
+            return null;
         }
         if (!DIGITS_ONLY.test(trimmed)) {
-            return false;
+            return i18nKey;
         }
         const n = parseInt(trimmed, 10);
-        return n >= min && n <= max;
+        return n >= min && n <= max ? null : i18nKey;
     };
 
-export const isValidCqZone = inRange(1, 40);
-export const isValidItuZone = inRange(1, 90);
-export const isValidDxcc = inRange(0, 522);
+export const isValidCqZone = inRange(1, 40, 'validators.cq_zone');
+export const isValidItuZone = inRange(1, 90, 'validators.itu_zone');
+export const isValidDxcc = inRange(0, 522, 'validators.dxcc');

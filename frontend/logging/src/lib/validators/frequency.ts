@@ -76,7 +76,13 @@ export function parseFrequency(value: string): number | null {
     return null;
 }
 
-export function isValidFrequency(value: string): boolean {
-    if (value.trim() === '') return true;
-    return parseFrequency(value) !== null;
+/**
+ * Returns null when valid (including empty) and the i18n key
+ * `'validators.frequency'` when the input doesn't parse or is out of
+ * the 100 kHz – 30 GHz range. See `passthrough.ts` for the shared
+ * `string | null` contract.
+ */
+export function isValidFrequency(value: string): string | null {
+    if (value.trim() === '') return null;
+    return parseFrequency(value) !== null ? null : 'validators.frequency';
 }

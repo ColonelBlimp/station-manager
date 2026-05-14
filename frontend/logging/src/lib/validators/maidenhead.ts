@@ -23,10 +23,15 @@
 // (no shared source). When updating one, search-replace the other.
 const GRID_PATTERN = /^[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2})?)?$/;
 
-export const isValidMaidenhead = (value: string): boolean => {
+/**
+ * Returns null when valid (including empty) and the i18n key
+ * `'validators.maidenhead'` when malformed. See `passthrough.ts` for
+ * the shared `string | null` contract.
+ */
+export const isValidMaidenhead = (value: string): string | null => {
     const trimmed = value.trim().toUpperCase();
     if (trimmed === '') {
-        return true;
+        return null;
     }
-    return GRID_PATTERN.test(trimmed);
+    return GRID_PATTERN.test(trimmed) ? null : 'validators.maidenhead';
 };

@@ -16,7 +16,14 @@ import ValidatedInput from './ValidatedInput.svelte';
  *   - HTML attributes spread through `...rest` (e.g. maxlength)
  */
 
-const acceptDigits = (v: string): boolean => v.trim() === '' || /^\d+$/.test(v.trim());
+// Test fixture mirrors the production validator contract: returns null
+// when valid (including empty — presence is form-level) and an i18n
+// key when malformed. We borrow `'validators.rst'` rather than
+// inventing a key so the rendered error text resolves through the
+// real catalogue (avoids `[missing: ...]` sentinel noise in test
+// output).
+const acceptDigits = (v: string): string | null =>
+    v.trim() === '' || /^\d+$/.test(v.trim()) ? null : 'validators.rst';
 
 describe('ValidatedInput', () => {
     afterEach(() => cleanup());
@@ -128,7 +135,10 @@ describe('ValidatedInput', () => {
 
     describe('validator invocation', () => {
         it('calls the validator on input', async () => {
-            const validator = vi.fn((v: string) => v === '' || /^\d+$/.test(v));
+            const validator = vi.fn(
+                (v: string): string | null =>
+                    v === '' || /^\d+$/.test(v) ? null : 'validators.rst'
+            );
             const { container } = render(ValidatedInput, {
                 id: 'test-vi-v',
                 label: 'X',
@@ -141,7 +151,10 @@ describe('ValidatedInput', () => {
         });
 
         it('calls the validator on blur (focus-trap path)', async () => {
-            const validator = vi.fn((v: string) => v === '' || /^\d+$/.test(v));
+            const validator = vi.fn(
+                (v: string): string | null =>
+                    v === '' || /^\d+$/.test(v) ? null : 'validators.rst'
+            );
             const { container } = render(ValidatedInput, {
                 id: 'test-vi-vb',
                 label: 'X',
@@ -152,6 +165,50 @@ describe('ValidatedInput', () => {
             validator.mockClear();
             await fireEvent.blur(input);
             expect(validator).toHaveBeenCalledWith('12');
+        });
+    });
+
+    describe('error message rendering (I17)', () => {
+        it('renders the rendered i18n string in a <p id="{id}-err"> when invalid', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: 'abc' } });
+            const err = container.querySelector('#test-vi-err');
+            expect(err).not.toBeNull();
+            expect(err?.tagName).toBe('P');
+            // 'validators.rst' resolves to the English catalogue entry
+            // — same text the operator sees in production. Tests don't
+            // assert the exact wording (that's the catalogue's job)
+            // beyond a content-not-empty check.
+            expect(err?.textContent ?? '').toContain('RST');
+        });
+
+        it('wires aria-describedby to the error id when invalid', async () => {
+            const { input } = setup();
+            await fireEvent.input(input, { target: { value: 'abc' } });
+            expect(input.getAttribute('aria-describedby')).toBe('test-vi-err');
+        });
+
+        it('omits the error <p> and aria-describedby when valid', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: '123' } });
+            expect(container.querySelector('#test-vi-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
+        });
+
+        it('omits the error <p> for empty input (presence is form-level)', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: '' } });
+            expect(container.querySelector('#test-vi-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
+        });
+
+        it('removes the error <p> once the operator corrects the input', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: 'abc' } });
+            expect(container.querySelector('#test-vi-err')).not.toBeNull();
+            await fireEvent.input(input, { target: { value: '12' } });
+            expect(container.querySelector('#test-vi-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
         });
     });
 

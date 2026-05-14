@@ -47,4 +47,21 @@ export const en: Record<string, string> = {
         'The connected rig\'s ID is not recognised by driver "{driver}" — check bridge.cat.driver matches your rig',
     'bridge.error.identity_mismatch':
         'Configured driver is "{driver}" ({expected}), but the rig identifies as "{actual}"',
+
+    // ─── Form-input validators ────────────────────────────────────
+    // Returned by SPA-side validators in `lib/validators/*` when an
+    // input fails the local format check. Operator sees this inline
+    // under the input (rendered by `ValidatedInput` and `Callsign`)
+    // with `aria-describedby` wiring so screen readers announce it
+    // too. Keep wording short — the field's own red border carries
+    // the "something's wrong" cue, the message answers "what shape
+    // does this expect."
+
+    'validators.callsign': 'Callsign must be 3–32 characters with letters and digits (slash allowed)',
+    'validators.maidenhead': 'Grid square must be 4, 6, or 8 characters (e.g. IO91vl)',
+    'validators.cq_zone': 'CQ Zone must be between 1 and 40',
+    'validators.itu_zone': 'ITU Zone must be between 1 and 90',
+    'validators.dxcc': 'DXCC entity must be between 0 and 522',
+    'validators.rst': 'RST must be 2 or 3 digits',
+    'validators.frequency': 'Frequency must be 100 kHz – 30 GHz (e.g. 14.250.000 or 14.250)',
 };

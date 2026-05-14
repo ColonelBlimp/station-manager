@@ -131,6 +131,16 @@
     .invalid-input {
         @apply outline-invalid focus:outline-invalid;
     }
+    .input-error {
+        /*
+            Inline error message rendered by ValidatedInput / Callsign
+            when the validator returns a non-null i18n key. Paired with
+            aria-describedby so screen readers announce it alongside
+            the red border. Compact spacing — single line fits under
+            most input rows without nudging the layout grid.
+        */
+        @apply mt-1 text-xs text-invalid;
+    }
     .textarea-base {
         @apply text-sm px-2.5 py-1.5 outline-1 -outline-offset-1 outline-line rounded-md resize-none focus:outline-2 focus:-outline-offset-2 focus:outline-focus;
     }

@@ -1,10 +1,10 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: IN PROGRESS (session 53 → 58, 2026-05-12 → 2026-05-14).**
-**Closed:** all 5 critical (C1, C2, C3, C4, C5), 14 of 17 important
-(I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19,
-I20 — note: I20 reviewer-numbered, kept), **all 4 verification gaps**
-(enrichment / contact-history / config API outcome tests +
+**Status: IN PROGRESS (session 53 → 59, 2026-05-12 → 2026-05-14).**
+**Closed:** all 5 critical (C1, C2, C3, C4, C5), 15 of 17 important
+(I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I17, I18,
+I19, I20 — note: I20 reviewer-numbered, kept), **all 4 verification
+gaps** (enrichment / contact-history / config API outcome tests +
 `formatFrequency` utility tests).
 
 **Deferred / pushback:**
@@ -22,11 +22,19 @@ I20 — note: I20 reviewer-numbered, kept), **all 4 verification gaps**
   Reviewer's own note: "Today the SPA never sends `?logbook=` so
   this is dead." Maintenance-only; revisit when logbook filtering
   ships.
-- **I17** — color-only invalid signal. Requires refactoring
-  validators from `boolean` → `string | null` across
-  `callsign.ts` / `maidenhead.ts` / `zone.ts` and extending
-  `ValidatedInput` to render an error message. Separate
-  architectural commit, not a11y polish.
+- ~~**I17** — color-only invalid signal.~~ **CLOSED session 59
+  (2026-05-14).** All five validators flipped to
+  `(v: string) => string | null` (the named three plus `rst.ts` /
+  `frequency.ts` / `passthrough.ts` as collateral for the prop
+  type change). `ValidatedInput` + `Callsign` now render a paired
+  `<p id="{id}-err" role="alert">` with the rendered i18n string
+  and wire `aria-describedby`. New `validators.*` namespace in
+  `lib/i18n/en.ts` (callsign / maidenhead / cq_zone / itu_zone /
+  dxcc / rst / frequency). New `.input-error` utility in
+  `styles/app.css`. Consumer-side boolean-semantics fixes at
+  `qsoDraft.canSubmit`, `bearing.gridToDecimal`,
+  `VfoInput.handleInput`, `app.svelte::putCallsign`. 11 new tests
+  (5 in ValidatedInput, 6 in Callsign). Total: 580/580 passing.
 
 **Session 54 (2026-05-13) — I2 + I5 + I6 architectural sweep landed
 in a single commit:**
@@ -60,6 +68,22 @@ on 5xx with daemon envelope, synthesised `unknown_error` fallback for
 unparseable error bodies, `kind=network` on fetch reject, `kind=aborted`
 on AbortError, and AbortSignal passthrough to `fetch`. Total:
 527/527 passing (+10), svelte-check 0/0, lint clean.
+
+**Session 59 (2026-05-14) — I17 closed.** Validators flipped from
+`boolean` to `string | null` (null = valid, i18n key = malformed);
+last architectural item from the original review. All 5 validator
+modules updated (named three plus rst/frequency/passthrough as
+collateral for the prop type change). `ValidatedInput` + `Callsign`
+render the resolved i18n string in a paired `<p id="{id}-err"
+role="alert">` and wire `aria-describedby` so the invalid signal is
+no longer color-only. New `validators.*` namespace in `lib/i18n/en.ts`,
+new `.input-error` utility in `styles/app.css`. Consumer-side
+boolean-semantics fixes at `qsoDraft.canSubmit` (`isValidX(x)` →
+`isValidX(x) === null`), `bearing.gridToDecimal`,
+`VfoInput.handleInput`, and `app.svelte::putCallsign`. 11 new tests
+(5 in ValidatedInput, 6 in Callsign) covering the error-rendering +
+aria-describedby contracts. Total: 580/580 passing (+11),
+svelte-check 0/0/249, lint clean.
 
 **Session 58 (2026-05-14) — `utils/frequency.formatFrequency` tests
 landed.** Appended a `describe('formatFrequency', ...)` block (10
@@ -495,13 +519,16 @@ edit affordance into a trailing cell with an inline button instead
 of role-on-row.
 
 **I17. `ValidatedInput` / `Callsign` show invalid via red border
-only.** `ValidatedInput.svelte:62,82` and `Callsign.svelte:46`
+only.** ~~`ValidatedInput.svelte:62,82` and `Callsign.svelte:46`
 toggle `invalid-input` and `aria-invalid` but render no inline
 error text and no `aria-describedby`. Color-only signal. Validators
 return `boolean`, so there's no message to render even if a slot
 existed. Refactor path: validators return `string | null`
 (i18n key + details); add an error slot to `ValidatedInput` that
-renders `<p id="{id}-err">` and points `aria-describedby` at it.
+renders `<p id="{id}-err">` and points `aria-describedby` at it.~~
+**CLOSED session 59 (2026-05-14)** along the recommended refactor
+path. See the session 59 entry near the top of this document for
+the full work record.
 
 **I18. `Callsign.validateAndFocus` refocuses on every blur**
 including Shift+Tab and direction-reverse exits. An operator who

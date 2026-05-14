@@ -166,6 +166,38 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 59 work (2026-05-14) — I17 closed: validators return string|null, inline error messages
+
+I17 was the last open architectural item from the frontend code review (4 verification gaps closed sessions 55–58; I17 deferred as a real refactor). The validator contract changes from `(v: string) => boolean` to `(v: string) => string | null`: null when valid (including empty — presence stays form-level), an i18n key string when malformed. `ValidatedInput` and `Callsign` render the resolved key in a paired `<p id="{id}-err" role="alert">` and wire `aria-describedby` to it, so the operator-visible signal is no longer color-only.
+
+**Files touched:**
+
+- **`lib/i18n/en.ts`** — new `validators.*` namespace (callsign / maidenhead / cq_zone / itu_zone / dxcc / rst / frequency). Wording is short — the red border carries "something's wrong", the message answers "what shape does this expect."
+- **All 5 validator modules** flipped to `string | null`. `passthrough.ts` returns `null` unconditionally. `zone.ts`'s `inRange` factory now takes an `i18nKey` arg so the three exports each carry their own key. The five validator test files had assertions flipped (`toBe(true)` → `toBeNull()`, `toBe(false)` → `toBe('validators.<name>')`); no behavioural test changes.
+- **`ValidatedInput.svelte`** — prop type narrowed; internal `invalid` boolean replaced with `errorKey: string | null` $state; new `errorId = $derived(\`${id}-err\`)` (must be `$derived` because `id` is a reactive prop, not a const at module scope); renders `<p>` + `aria-describedby` conditionally on `errorKey !== null`. Five new test cases (`error message rendering (I17)`): `<p>` renders with rendered i18n text, `aria-describedby` wires up, both clear once valid, omitted for empty, drops on correction. Test fixture `acceptDigits` updated to return `string | null`; it borrows `'validators.rst'` as a real catalogue key so the rendered text isn't a `[missing: ...]` sentinel.
+- **`Callsign.svelte`** — same treatment as ValidatedInput (uses `isValidCallsign` directly). Six new test cases including a blur-path variant. The session-53 I18 "blur does not refocus" contract is preserved.
+- **`styles/app.css`** — new `.input-error` utility class (`mt-1 text-xs text-invalid`), paired with the existing `.invalid-input` outline rule. Compact spacing so single-line messages fit under most input rows without nudging the grid.
+
+**Consumer fixes (drive-by — boolean → null/non-null semantics):**
+
+- `lib/states/qsoDraft.svelte.ts::canSubmit` — three guards changed from `isValidX(...)` to `isValidX(...) === null`.
+- `lib/utils/bearing.ts::gridToDecimal` — `!isValidMaidenhead(trimmed)` → `isValidMaidenhead(trimmed) !== null`.
+- `lib/ui/components/VfoInput.svelte::handleInput` — `!isValidFrequency(editValue)` → `isValidFrequency(editValue) !== null`.
+- `app.svelte::putCallsign` — same flip for the setup-card validation guard.
+
+Surfaced by the test sweep — bearing / VfoInput / enrichment-paths-derivation all failed because the truthy-string return inverted the boolean intent at non-component call sites. `qsoDraft.canSubmit` was the svelte-check failure (`string | boolean | null` not assignable to `boolean`).
+
+**Pushback / scope notes:**
+
+- The 11+ `passthrough` call sites in MyStationPanel are untouched: `passthrough` returns `null` (valid), same observable behaviour as before.
+- The reviewer's "i18n key + details" phrasing left details optional. No current validator needs details — failures are binary per validator (CQ Zone is out of range; the operator can see what they typed). If a future validator needs detail substitution, widen the validator return type to `string | { key: string; details: Record<string, string> }` per-call without disrupting existing callers.
+
+**Verification:** 580/580 SPA tests passing (+11 from 569 — 5 new in ValidatedInput, 6 new in Callsign), svelte-check 0 errors / 249 files, eslint clean.
+
+**Doc footprint:** this entry, review document I17 entry marked CLOSED, Status block bumped to 15 of 17 important. No ADR (no architectural decision moved — the validator-shape choice was prescribed by the review). No CLAUDE.md / memory updates: the validator-presence convention stays unchanged (validators don't enforce presence — empty is null/valid, form layer gates required-ness).
+
+**Remaining from the review:** 11 nits (N1–N11) only. All criticals, all four verification gaps, and 15 of 17 important findings now closed.
+
 ### Session 58 work (2026-05-14) — `utils/frequency.formatFrequency` tests landed
 
 Last of the four verification gaps from session 54. Existing `lib/utils/frequency.test.ts` already covered `frequencyToBand`; appended a `formatFrequency` describe block to the same file rather than splitting. No production change.

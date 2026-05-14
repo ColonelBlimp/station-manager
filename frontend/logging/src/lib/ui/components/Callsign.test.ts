@@ -197,4 +197,55 @@ describe('Callsign', () => {
             await expect(fireEvent.keyDown(input, { key: 'Tab' })).resolves.not.toThrow();
         });
     });
+
+    describe('error message rendering (I17)', () => {
+        it('renders the rendered i18n string in a <p id="{id}-err"> when invalid', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: 'M0' } });
+            const err = container.querySelector('#test-call-err');
+            expect(err).not.toBeNull();
+            expect(err?.tagName).toBe('P');
+            // 'validators.callsign' resolves through the English
+            // catalogue — content assertion stays loose (catalogue
+            // owns exact wording) but non-empty.
+            expect((err?.textContent ?? '').length).toBeGreaterThan(0);
+            expect(err?.textContent ?? '').toContain('Callsign');
+        });
+
+        it('wires aria-describedby to the error id when invalid', async () => {
+            const { input } = setup();
+            await fireEvent.input(input, { target: { value: 'M0' } });
+            expect(input.getAttribute('aria-describedby')).toBe('test-call-err');
+        });
+
+        it('omits the error <p> and aria-describedby when valid', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: 'M0ABC' } });
+            expect(container.querySelector('#test-call-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
+        });
+
+        it('omits the error <p> for empty input (presence is form-level)', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: '' } });
+            expect(container.querySelector('#test-call-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
+        });
+
+        it('removes the error <p> once the operator corrects the input', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: 'M0' } });
+            expect(container.querySelector('#test-call-err')).not.toBeNull();
+            await fireEvent.input(input, { target: { value: 'M0ABC' } });
+            expect(container.querySelector('#test-call-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
+        });
+
+        it('also renders the error on blur with an invalid non-empty value', async () => {
+            const { container, input } = setup({ value: 'M0' });
+            await fireEvent.blur(input);
+            expect(container.querySelector('#test-call-err')).not.toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBe('test-call-err');
+        });
+    });
 });
