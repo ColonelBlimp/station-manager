@@ -166,6 +166,29 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 55 work (2026-05-14) — `api/enrichment.ts` outcome tests landed
+
+Highest-priority of the four verification gaps from session 54 (per the project rule "test the error path first for enrichment code"). One new test file, no production code change, no architectural shift.
+
+**New `lib/api/enrichment.test.ts` (10 cases):**
+
+- GET URL construction — uses `M0XYZ/P` to exercise `encodeURIComponent` (the `/` proves the encoder is actually firing; bare `M0XYZ` wouldn't).
+- `kind=ok` happy path with full `EnrichmentResult` (callsign, country, station, hamnut + qrzlookupservice sources).
+- `kind=ok` always-200 contract per ADR 0017 #12 — `country_source: 'none'` + `station_source: 'none'` + no country/station object surfaces as a normal `ok` arm, not a separate failure branch. This was the load-bearing case worth pinning because the daemon's "always-200 on provider failure" decision is a contract the SPA can't see in the type system.
+- `kind=server` with synthesised `unparseable_response` code when a 200 body isn't a JSON object (daemon/proxy fault, not a client mistake — surfaces as `server`).
+- `kind=validation` on 400 with daemon `code` + `message` envelope.
+- `kind=server` on 500 with daemon `code` + `message` envelope.
+- Synthesised `unknown_error` + `HTTP 502` fallback when an error body isn't parseable.
+- `kind=network` on fetch reject (TypeError).
+- `kind=aborted` on AbortError (manual abort).
+- AbortSignal passthrough — verifies the signal handed to `enrichCallsign` reaches `fetch`.
+
+**Verification:** 527/527 SPA tests passing (+10 from 517), svelte-check 0 errors / 246 files, eslint clean.
+
+**Doc footprint:** this entry, review document Status block + new "Session 55" block. No ADR (test-only change), no CLAUDE.md / memory updates (no rule moved).
+
+**Remaining verification gaps from the review:** `api/config.ts` outcome tests, `api/contact-history.ts` outcome tests, `utils/frequency.formatFrequency` tests. I17 (validators boolean → string|null) and the 11 nits (N1–N11) still outstanding per session 54.
+
 ### Session 52 work (2026-05-12) — `cmd/smd` code-review cleanup (12 findings closed)
 
 Narrow review pass — `cmd/smd/main.go`, `cmd/smd/doc.go`, `cmd/smd/main_test.go` only. Counts: 0 critical / 3 major / 4 medium / 5 minor. All addressed in one session, three commits. Review document: `docs/reviews/cmd-smd-2026-05-12.md`.

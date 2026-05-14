@@ -1,9 +1,17 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: IN PROGRESS (session 53 → 54, 2026-05-12 → 2026-05-13).**
+**Status: IN PROGRESS (session 53 → 55, 2026-05-12 → 2026-05-14).**
 **Closed:** all 5 critical (C1, C2, C3, C4, C5), 14 of 17 important
 (I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19,
-I20 — note: I20 reviewer-numbered, kept). **Deferred / pushback:**
+I20 — note: I20 reviewer-numbered, kept).
+
+**Verification gaps from the original review** (test-coverage debt
+called out as work-not-done, not deferred): `api/enrichment.ts`
+outcome tests **CLOSED session 55 (2026-05-14)**; `api/config.ts`,
+`api/contact-history.ts`, and `utils/frequency.formatFrequency` tests
+still open.
+
+**Deferred / pushback:**
 - **I1** — derived-via-effect anti-pattern in `QsoPanel`. The
   callback-based fix the reviewer proposes was already considered and
   rejected in session 47 with a documented why-comment + line-disable
@@ -43,6 +51,19 @@ in a single commit:**
   Production behaviour unchanged.
 - New `_helpers.test.ts` covers the primitives directly; `qso.test.ts`
   gains end-to-end abort wire-through tests. Total: 517/517 passing.
+
+**Session 55 (2026-05-14) — `api/enrichment.ts` outcome tests
+landed.** New `enrichment.test.ts` (10 cases) closes the
+highest-priority verification gap. Covers: GET URL with
+`encodeURIComponent` (portable suffix `/P` proves the encoder fires),
+`kind=ok` happy path with full payload, `kind=ok` always-200 contract
+(country_source/station_source `none`, no country/station — ADR 0017
+#12), `kind=server unparseable_response` when 200 body isn't a JSON
+object, `kind=validation` on 400 with daemon envelope, `kind=server`
+on 5xx with daemon envelope, synthesised `unknown_error` fallback for
+unparseable error bodies, `kind=network` on fetch reject, `kind=aborted`
+on AbortError, and AbortSignal passthrough to `fetch`. Total:
+527/527 passing (+10), svelte-check 0/0, lint clean.
 
 **Remaining:**
 - **All 11 Nit findings** (N1–N11) — polish, batched whenever an
@@ -536,11 +557,13 @@ These tests should exist but don't. Highest priority first.
    `MY_COUNTRY="Côte d'Ivoire"`. Decode the produced ADIF with the
    same byte-counted slicing the daemon uses.
 
-3. **`api/enrichment.ts` outcome tests.** Per the project rule
+3. **`api/enrichment.ts` outcome tests.** ~~Per the project rule
    *"test error path first for enrichment code"* this is the
-   highest-priority API test gap. Cover empty result, populated
-   with country only, populated with country+station, 400
-   validation, 500 server, network failure, unparseable response.
+   highest-priority API test gap.~~ **CLOSED session 55 (2026-05-14)
+   — `enrichment.test.ts` ships with 10 cases covering all five
+   outcome arms, ADR 0017 #12 always-200 contract, `unparseable_response`
+   server downgrade, synthesised `unknown_error` body fallback, and
+   AbortSignal passthrough.**
 
 4. **`api/config.ts` outcome tests.** Both `fetchConfig` and
    `putConfig`; cover the parse-failure path (I7) and the daemon's

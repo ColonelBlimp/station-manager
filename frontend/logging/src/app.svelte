@@ -7,6 +7,7 @@
     import { toasts } from './lib/states/toasts.svelte';
     import { onMount } from 'svelte';
     import { isValidCallsign } from './lib/validators/callsign';
+    import StackingDrawer from "./lib/ui/cards/StackingDrawer.svelte";
 
     // Local form state for the setup card. Lives here (not in
     // configState) because configState mirrors the DAEMON's view —
@@ -127,7 +128,7 @@
 {#snippet main_app()}
     <main class="relative rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
         <LoggingCard />
-        <div class="absolute top-0 -right-36 w-32 h-166 rounded-xl border border-gray-200 pt-2 px-3">Drawer</div>
+        <StackingDrawer/>
     </main>
 {/snippet}
 
