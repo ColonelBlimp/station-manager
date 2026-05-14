@@ -25,7 +25,7 @@ func newPipelineTestService(t *testing.T) (*Service, *fakeSerial) {
 	t.Helper()
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
@@ -386,7 +386,7 @@ func TestPipeline_TerminalSerialErrorEmitsDisconnect(t *testing.T) {
 func TestPipeline_UnknownDriverExitsCleanly(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
 		Cat:     types.BridgeCatConfig{Driver: "no-such-rig"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
@@ -409,7 +409,7 @@ func TestPipeline_UnknownDriverExitsCleanly(t *testing.T) {
 func TestPipeline_OpenFailureExitsCleanly(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
@@ -499,7 +499,7 @@ func TestPipeline_TriggerBootstrap_NoOpWhenPipelineNotRunning(t *testing.T) {
 func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-no-such-rig"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
@@ -550,7 +550,7 @@ func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 func TestHub_CachesBridgeErrorForLateSubscriber(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
 		Cat:     types.BridgeCatConfig{Driver: "unknown-on-purpose"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
@@ -690,7 +690,7 @@ func TestHub_ClearsRigDisconnectedCacheOnRigState(t *testing.T) {
 func TestPipeline_BridgeError_OpenFailure(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "/dev/no-such-port", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "/dev/no-such-port"},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
@@ -857,7 +857,6 @@ func TestBuildSerialConfig_FromYaesuRigDef(t *testing.T) {
 	}
 	cfg, err := buildSerialConfig(types.BridgeSerialConfig{
 		Port: "/dev/ttyUSB0",
-		Baud: 38400,
 	}, def.Serial)
 	if err != nil {
 		t.Fatalf("buildSerialConfig: %v", err)
@@ -865,8 +864,8 @@ func TestBuildSerialConfig_FromYaesuRigDef(t *testing.T) {
 	if cfg.PortName != "/dev/ttyUSB0" {
 		t.Errorf("PortName = %q, want %q", cfg.PortName, "/dev/ttyUSB0")
 	}
-	if cfg.BaudRate != 38400 {
-		t.Errorf("BaudRate = %d, want 38400", cfg.BaudRate)
+	if cfg.BaudRate != def.Serial.BaudRate {
+		t.Errorf("BaudRate = %d, want %d (from rigdef)", cfg.BaudRate, def.Serial.BaudRate)
 	}
 	if cfg.DataBits != 8 {
 		t.Errorf("DataBits = %d, want 8", cfg.DataBits)

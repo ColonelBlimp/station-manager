@@ -24,7 +24,7 @@ func newHandlerTestService(t *testing.T) (*Service, *fakeSerial, chan struct{}) 
 	t.Helper()
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake", Baud: 38400},
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
 		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	fake := installFakeSerial(s)

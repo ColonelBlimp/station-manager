@@ -527,17 +527,12 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Smtp.TimeoutSec = 30
 	}
 
-	// Bridge defaults. Mirrors the SmtpConfig pattern: Enabled is
-	// the kill-switch; missing required sub-fields when Enabled=true
-	// are caught at validateBridge below, not silently defaulted.
-	// Serial.Baud is the one field with a sensible default (38400 is
-	// the common Yaesu/Icom/Kenwood setting; operators on faster
-	// rigs override). Serial.Port and Cat.Driver MUST be operator-
-	// supplied when Enabled=true — there's no sane default that's
-	// hardware-correct.
-	if cfg.Bridge.Serial.Baud == 0 {
-		cfg.Bridge.Serial.Baud = 38400
-	}
+	// Bridge has no defaults to backfill — Serial.Port and Cat.Driver
+	// MUST be operator-supplied when Enabled=true (no sane default is
+	// hardware-correct), and every other serial parameter (baud rate,
+	// data bits, parity, stop bits, line delimiter, timeouts) comes
+	// from the rigdef at `internal/cat/rigs/*.json`. validateBridge
+	// below enforces the Enabled=true → Port+Driver requirement.
 }
 
 // Warnings returns a slice of human-readable advisory messages about
@@ -755,9 +750,6 @@ func validateBridge(b types.BridgeConfig) error {
 	}
 	if b.Serial.Port == "" {
 		return fmt.Errorf("bridge.serial.port is required when bridge.enabled is true")
-	}
-	if b.Serial.Baud <= 0 {
-		return fmt.Errorf("bridge.serial.baud must be > 0, got %d", b.Serial.Baud)
 	}
 	if b.Cat.Driver == "" {
 		return fmt.Errorf("bridge.cat.driver is required when bridge.enabled is true")

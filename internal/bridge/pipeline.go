@@ -359,13 +359,13 @@ func vfoLabelToTag(label string) string {
 }
 
 // buildSerialConfig assembles a serial.Config from the operator's
-// per-rig overrides (port, baud) and the rigdef's protocol-determined
-// defaults (data bits, parity, stop bits, line delimiter, read
-// timeout). The translation from rigdef-JSON-friendly forms (parity
-// as a string, line delimiter as a single-character string, stop bits
-// as an int) to serial.Config's typed fields lives here rather than
-// in cat or serial — cat is pure codec, serial is pure I/O, and the
-// JSON↔enum translation is the bridge's glue work.
+// device-node choice (port) and the rigdef's protocol-determined
+// settings (baud rate, data bits, parity, stop bits, line delimiter,
+// read timeout). The translation from rigdef-JSON-friendly forms
+// (parity as a string, line delimiter as a single-character string,
+// stop bits as an int) to serial.Config's typed fields lives here
+// rather than in cat or serial — cat is pure codec, serial is pure
+// I/O, and the JSON↔enum translation is the bridge's glue work.
 func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) (serial.Config, error) {
 	parity, err := parityFromString(rigSerial.Parity)
 	if err != nil {
@@ -381,7 +381,7 @@ func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) 
 	}
 	return serial.Config{
 		PortName:      brCfg.Port,
-		BaudRate:      brCfg.Baud,
+		BaudRate:      rigSerial.BaudRate,
 		DataBits:      rigSerial.DataBits,
 		Parity:        parity,
 		StopBits:      stopBits,

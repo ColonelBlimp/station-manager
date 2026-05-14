@@ -85,10 +85,11 @@ type MailerInfo struct {
 // configured driver is unknown, or no overrides are set — all
 // reachable states; the SPA handles them gracefully.
 //
-// Port / baud stay off the wire because they're hardware-config
-// concerns the SPA has no business reading or editing; the operator
-// owns them via config.json directly (matching the
-// SMTP-creds-not-on-the-wire decision above).
+// Port stays off the wire because it's a hardware-config concern
+// the SPA has no business reading or editing; the operator owns it
+// via config.json directly (matching the SMTP-creds-not-on-the-wire
+// decision above). Baud + other serial parameters live in the
+// rigdef and aren't surfaceable anyway.
 type BridgeInfo struct {
 	Enabled      bool                         `json:"enabled"`
 	Driver       string                       `json:"driver,omitempty"`

@@ -50,13 +50,14 @@ type ModeMapping struct {
 }
 
 // BridgeSerialConfig is the serial-port end of the rig connection.
-// Path is the device node (`/dev/ttyUSB0`, COM3, etc.); Baud the line
-// speed. Other serial parameters (data bits, parity, stop bits) come
-// from the per-driver definition in `internal/cat/rigs/*.json` —
-// they're protocol-determined, not operator-configurable.
+// Port is the device node (`/dev/ttyUSB0`, COM3, etc.) — operator-
+// specific to their hardware layout, can't be encoded in a rigdef.
+// Every other serial parameter (baud rate, data bits, parity, stop
+// bits, line delimiter, timeouts) comes from the per-driver
+// definition in `internal/cat/rigs/*.json` — they're
+// protocol-determined and not operator-configurable.
 type BridgeSerialConfig struct {
 	Port string `json:"port,omitempty"`
-	Baud int    `json:"baud,omitempty"`
 }
 
 // BridgeCatConfig is the CAT-protocol end. Driver picks the per-rig
