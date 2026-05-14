@@ -1,15 +1,15 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: IN PROGRESS (session 53 → 55, 2026-05-12 → 2026-05-14).**
+**Status: IN PROGRESS (session 53 → 56, 2026-05-12 → 2026-05-14).**
 **Closed:** all 5 critical (C1, C2, C3, C4, C5), 14 of 17 important
 (I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19,
 I20 — note: I20 reviewer-numbered, kept).
 
 **Verification gaps from the original review** (test-coverage debt
 called out as work-not-done, not deferred): `api/enrichment.ts`
-outcome tests **CLOSED session 55 (2026-05-14)**; `api/config.ts`,
-`api/contact-history.ts`, and `utils/frequency.formatFrequency` tests
-still open.
+outcome tests **CLOSED session 55 (2026-05-14)**; `api/contact-history.ts`
+outcome tests **CLOSED session 56 (2026-05-14)**; `api/config.ts` and
+`utils/frequency.formatFrequency` tests still open.
 
 **Deferred / pushback:**
 - **I1** — derived-via-effect anti-pattern in `QsoPanel`. The
@@ -64,6 +64,22 @@ on 5xx with daemon envelope, synthesised `unknown_error` fallback for
 unparseable error bodies, `kind=network` on fetch reject, `kind=aborted`
 on AbortError, and AbortSignal passthrough to `fetch`. Total:
 527/527 passing (+10), svelte-check 0/0, lint clean.
+
+**Session 56 (2026-05-14) — `api/contact-history.ts` outcome tests
+landed.** New `contact-history.test.ts` (14 cases). Endpoint-specific
+divergence from enrichment: contact-history's wrapper deliberately
+downgrades a malformed 200 body to `kind=ok, items=[]` rather than
+synthesising a `server` error, so three of the cases pin the
+structural-fallback contract (non-JSON 200, 200 without `items`,
+200 with non-array `items`). Other coverage: GET URL `encodeURIComponent`
+via `M0XYZ/P`, happy path with two rows, `items: []` "never worked them",
+`kind=validation` for 400 `missing_required_param` / 400
+`invalid_field_value` / 404 `logbook_not_found` (404 < 500 routes to
+validation; SPA call path is dead per I10 but daemon emits the status),
+`kind=server` on 5xx, synthesised `unknown_error` + `HTTP 502`
+fallback, `kind=network` on fetch reject, `kind=aborted` on
+AbortError, and AbortSignal passthrough. Total: 541/541 passing (+14),
+svelte-check 0/0/248, lint clean.
 
 **Remaining:**
 - **All 11 Nit findings** (N1–N11) — polish, batched whenever an
@@ -569,9 +585,19 @@ These tests should exist but don't. Highest priority first.
    `putConfig`; cover the parse-failure path (I7) and the daemon's
    `invalid_field_value` 400 shape.
 
-5. **`api/contact-history.ts` outcome tests.** Empty `items`
+5. **`api/contact-history.ts` outcome tests.** ~~Empty `items`
    preservation; special chars in callsign URL-encoded
-   (`call=K1ABC%2FP`).
+   (`call=K1ABC%2FP`).~~ **CLOSED session 56 (2026-05-14) —
+   `contact-history.test.ts` ships with 14 cases. Covers
+   `encodeURIComponent` via `M0XYZ/P`, `kind=ok, items=[]` for
+   "never worked them", the three structural-fallback contracts
+   (non-JSON 200 / no `items` field / non-array `items` all
+   downgrade to `kind=ok, items=[]` per source intent),
+   `kind=validation` for `missing_required_param` /
+   `invalid_field_value` / `logbook_not_found`, `kind=server` on
+   5xx, synthesised `unknown_error` + `HTTP 502` fallback,
+   `kind=network` on fetch reject, `kind=aborted` on AbortError,
+   AbortSignal passthrough.**
 
 6. **QsoPanel mode round-trip stability** (I1). Pin the
    round-trip invariant the eslint-disable rationale assumes. If

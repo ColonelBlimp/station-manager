@@ -166,6 +166,30 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 56 work (2026-05-14) — `api/contact-history.ts` outcome tests landed
+
+Second of the three remaining verification gaps from session 54. Single test file, no production change. Followed the session 55 enrichment-test pattern with two endpoint-specific divergences (called out below). State-holder coverage already existed at `lib/states/contactHistory.test.ts`; this fills in the wire-level outcome surface.
+
+**New `lib/api/contact-history.test.ts` (14 cases):**
+
+- GET URL construction — `M0XYZ/P` exercises `encodeURIComponent` (the `/` makes encoder presence observable).
+- `kind=ok` happy path with two rows.
+- `kind=ok` with `items: []` — pins the daemon's "no prior contacts is 200 + empty array, NOT 404" contract.
+- Three structural-fallback cases all surface as `kind=ok, items=[]`: 200 with non-JSON body, 200 with no `items` field, 200 with non-array `items`. This is the **endpoint-specific divergence from enrichment**: contact-history's wrapper deliberately downgrades a "daemon regression" 200 body to the same empty-list outcome the panel already renders, matching the source comment ("every success path on this endpoint emits at least `{items: []}`"). Pinning all three keeps the contract from drifting silently.
+- `kind=validation` for 400 `missing_required_param`, 400 `invalid_field_value`, and 404 `logbook_not_found`. The 404 case is the **other divergence**: the SPA wrapper currently never sends `?logbook=`, but the daemon emits this status, and 404 < 500 routes through the validation arm. Test covers the daemon contract even though the SPA call path is dead today (per session 53 I10 verdict).
+- `kind=server` on 500 with daemon `code` + `message` envelope.
+- Synthesised `unknown_error` + `HTTP 502` fallback when an error body isn't parseable.
+- `kind=network` on fetch reject (TypeError).
+- `kind=aborted` on AbortError + AbortSignal passthrough.
+
+**Notable absence vs enrichment:** no `unparseable_response` synthesised-error case. Contact-history's wrapper doesn't synthesise a `server` error for a malformed 200 — it intentionally absorbs the case as `items: []`. Three of the fourteen tests pin this directly.
+
+**Verification:** 541/541 SPA tests passing (+14 from 527), svelte-check 0 errors / 248 files, eslint clean.
+
+**Doc footprint:** this entry. No ADR (test-only change), no CLAUDE.md / memory updates (no rule moved).
+
+**Remaining verification gaps from the review:** `api/config.ts` outcome tests, `utils/frequency.formatFrequency` tests. I17 (validators boolean → string|null) and the 11 nits (N1–N11) still outstanding per session 54.
+
 ### Session 55 work (2026-05-14) — `api/enrichment.ts` outcome tests landed
 
 Highest-priority of the four verification gaps from session 54 (per the project rule "test the error path first for enrichment code"). One new test file, no production code change, no architectural shift.
