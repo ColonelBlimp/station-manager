@@ -166,6 +166,28 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 57 work (2026-05-14) — `api/config.ts` outcome tests landed
+
+Third of the three remaining verification gaps from session 54. Single test file, no production change. Covers both `fetchConfig` (GET) and `putConfig` (PUT with payload) — the latter is the more operator-visible path (Save button click) and gets its own duplicated parseOutcome coverage rather than relying on the shared internal helper, since regression there is louder.
+
+**New `lib/api/config.test.ts` (18 cases):**
+
+- `fetchConfig` request shape — URL `/v1/config`, no explicit method (asserts `init.method === undefined` so a future "helpful" default-to-GET in the wrapper would surface as a contract change).
+- `kind=ok` happy path with a minimal-but-valid `ConfigResponse` fixture (most fields elided via `omitempty`, matching how real daemon payloads look).
+- `kind=server malformed_response` for two distinct unparseable-200 shapes: non-JSON body and a JSON array. The array case pins that `isPlainObject` excludes arrays even though `JSON.parse('[1,2,3]')` succeeds — daemon contract for `/v1/config` is always `{...}`. This is the I7 parse-failure guard the review called out: without it, a daemon regression crashes the caller at the first `config.logging_station` dereference.
+- `kind=validation` on 400 (daemon `invalid_field_value` — session 46's zone/callsign validation work).
+- `kind=server` on 500 (daemon `db_error`).
+- Synthesised `unknown_error` + `HTTP 502` fallback for unparseable error body.
+- `kind=network` / `kind=aborted` + signal passthrough.
+- `putConfig` request shape — URL `/v1/config`, `method: 'PUT'`, `Content-Type: application/json`, body is bit-for-bit `JSON.stringify(payload)`. Bit-for-bit pin keeps a future "preprocess the payload" from silently drifting the wire format.
+- `putConfig` parseOutcome coverage: `kind=ok` 200, `kind=validation` 400 (callsign validation), `kind=server` 500 (`config_write_failed`), `kind=server malformed_response` on `200 "null"` body, `kind=network`, `kind=aborted`, signal passthrough.
+
+**Verification:** 559/559 SPA tests passing (+18 from 541), svelte-check 0 errors / 249 files, eslint clean.
+
+**Doc footprint:** this entry, review document Status block + verification-gap #4 marked CLOSED. No ADR (test-only change), no CLAUDE.md / memory updates (no rule moved).
+
+**Remaining verification gaps from the review:** `utils/frequency.formatFrequency` tests only. I17 (validators boolean → string|null) and the 11 nits (N1–N11) still outstanding per session 54.
+
 ### Session 56 work (2026-05-14) — `api/contact-history.ts` outcome tests landed
 
 Second of the three remaining verification gaps from session 54. Single test file, no production change. Followed the session 55 enrichment-test pattern with two endpoint-specific divergences (called out below). State-holder coverage already existed at `lib/states/contactHistory.test.ts`; this fills in the wire-level outcome surface.

@@ -1,6 +1,6 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: IN PROGRESS (session 53 → 56, 2026-05-12 → 2026-05-14).**
+**Status: IN PROGRESS (session 53 → 57, 2026-05-12 → 2026-05-14).**
 **Closed:** all 5 critical (C1, C2, C3, C4, C5), 14 of 17 important
 (I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19,
 I20 — note: I20 reviewer-numbered, kept).
@@ -8,7 +8,8 @@ I20 — note: I20 reviewer-numbered, kept).
 **Verification gaps from the original review** (test-coverage debt
 called out as work-not-done, not deferred): `api/enrichment.ts`
 outcome tests **CLOSED session 55 (2026-05-14)**; `api/contact-history.ts`
-outcome tests **CLOSED session 56 (2026-05-14)**; `api/config.ts` and
+outcome tests **CLOSED session 56 (2026-05-14)**; `api/config.ts`
+outcome tests **CLOSED session 57 (2026-05-14)**;
 `utils/frequency.formatFrequency` tests still open.
 
 **Deferred / pushback:**
@@ -64,6 +65,22 @@ on 5xx with daemon envelope, synthesised `unknown_error` fallback for
 unparseable error bodies, `kind=network` on fetch reject, `kind=aborted`
 on AbortError, and AbortSignal passthrough to `fetch`. Total:
 527/527 passing (+10), svelte-check 0/0, lint clean.
+
+**Session 57 (2026-05-14) — `api/config.ts` outcome tests landed.**
+New `config.test.ts` (18 cases) covers both `fetchConfig` (GET) and
+`putConfig` (PUT) end-to-end. `putConfig` gets its own parseOutcome
+coverage rather than relying on the shared internal helper — the
+Save-button path is louder when it regresses. Highlights: the I7
+parse-failure guard is pinned via two unparseable-200 shapes
+(non-JSON body and a JSON array — the array case proves
+`isPlainObject` excludes arrays even though JSON.parse succeeds),
+`putConfig` body is bit-for-bit `JSON.stringify(payload)` so a future
+"helpful preprocessing" can't drift the wire format silently,
+`kind=validation` covers daemon `invalid_field_value` (session 46
+zone/callsign validation), `kind=server` covers `db_error` /
+`config_write_failed`, plus `kind=network` / `kind=aborted` / signal
+passthrough on both functions. Total: 559/559 passing (+18),
+svelte-check 0/0/249, lint clean.
 
 **Session 56 (2026-05-14) — `api/contact-history.ts` outcome tests
 landed.** New `contact-history.test.ts` (14 cases). Endpoint-specific
@@ -581,9 +598,17 @@ These tests should exist but don't. Highest priority first.
    server downgrade, synthesised `unknown_error` body fallback, and
    AbortSignal passthrough.**
 
-4. **`api/config.ts` outcome tests.** Both `fetchConfig` and
+4. **`api/config.ts` outcome tests.** ~~Both `fetchConfig` and
    `putConfig`; cover the parse-failure path (I7) and the daemon's
-   `invalid_field_value` 400 shape.
+   `invalid_field_value` 400 shape.~~ **CLOSED session 57 (2026-05-14)
+   — `config.test.ts` ships with 18 cases. Both functions covered
+   end-to-end; the I7 parse-failure guard pinned via two
+   unparseable-200 shapes (non-JSON body and a JSON array, the latter
+   proving `isPlainObject` excludes arrays); `putConfig` body
+   serialisation pinned bit-for-bit; `kind=validation` for
+   `invalid_field_value`; `kind=server` for `db_error` /
+   `config_write_failed`; transport arms + AbortSignal passthrough on
+   both functions.**
 
 5. **`api/contact-history.ts` outcome tests.** ~~Empty `items`
    preservation; special chars in callsign URL-encoded
