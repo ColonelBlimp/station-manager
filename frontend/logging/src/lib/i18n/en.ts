@@ -64,4 +64,12 @@ export const en: Record<string, string> = {
     'validators.dxcc': 'DXCC entity must be between 0 and 522',
     'validators.rst': 'RST must be 2 or 3 digits',
     'validators.frequency': 'Frequency must be 100 kHz – 30 GHz (e.g. 14.250.000 or 14.250)',
+
+    // ─── Worked panel ─────────────────────────────────────────────
+    // Shown in the WorkedPanel tab when the contact-history fetch
+    // returned an empty list — i.e. "I checked and there's no prior
+    // QSO with this station." Distinct from the pre-Tab state, which
+    // renders nothing rather than this message.
+
+    'worked.empty': 'No prior contacts with this station.',
 };

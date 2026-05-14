@@ -23,6 +23,7 @@
         digit columns aligned at small sizes.
     */
     import { contactHistoryState } from '../../states/contactHistory.svelte';
+    import { t } from '../../i18n';
 
     /*
         Format ADIF YYYYMMDD as YYYY-MM-DD for display. Cheap; no
@@ -49,7 +50,7 @@
         <!-- No fetch yet — render nothing; the tab area stays clean.
              Pre-Tab the operator hasn't asked the question. -->
     {:else if contactHistoryState.items.length === 0}
-        <p class="text-sm text-ink">No prior contacts with this callsign.</p>
+        <p class="text-sm text-ink">{t('worked.empty')}</p>
     {:else}
         <table class="w-full text-sm tabular-nums">
             <thead>

@@ -367,53 +367,55 @@ func TestLoadConfig_EnvVarPath(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_CwdFallback(t *testing.T) {
-	t.Setenv("SM_WORKING_DIR", "")
+// TestLoadConfig_CwdFallback removed 2026-05-14. The cwd-as-fallback
+// behaviour it exercised was a regression vector — a stray config.json
+// in $HOME (the systemd unit's default cwd) silently preempted the
+// real install at SM_WORKING_DIR. defaultConfigPath now delegates to
+// utils.WorkingDir(); explicit --config remains for per-invocation
+// overrides.
 
-	cwd := t.TempDir()
-	t.Chdir(cwd)
-	writeConfigJSON(t, filepath.Join(cwd, "config.json"))
+func TestLoadConfig_FirstRunWritesDefaultInWorkingDir(t *testing.T) {
+	// Empty path, SM_WORKING_DIR pointing at a fresh tempdir, no
+	// cwd config. Expectation: loadConfig seeds <workdir>/config.json
+	// with DefaultConfig(<workdir>), then loads it back. After the
+	// call the file MUST exist on disk — the "discoverable,
+	// hand-editable" first-run write property.
+	//
+	// Replaces the pre-2026-05-14 TestLoadConfig_FirstRunWritesDefaultInCwd
+	// which exercised the (now removed) cwd-fallback. The deployed
+	// daemon is at /usr/bin/smd with SM_WORKING_DIR set via the
+	// systemd unit (or via utils.WorkingDir's XDG fallback); no
+	// daemon use case ever seeds into cwd, so the test follows.
+	workdir := t.TempDir()
+	t.Setenv("SM_WORKING_DIR", workdir)
 
-	cfg, firstRunPath, err := loadConfig("")
-	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
-	}
-	if cfg.DataDir != cwd {
-		t.Errorf("DataDir = %q, want %q", cfg.DataDir, cwd)
-	}
-	if firstRunPath != "" {
-		t.Errorf("firstRunPath = %q, want empty when cwd config already existed", firstRunPath)
-	}
-}
-
-func TestLoadConfig_FirstRunWritesDefaultInCwd(t *testing.T) {
-	// Empty path, unset env, cwd has no config.json. Expectation:
-	// loadConfig seeds ./config.json with DefaultConfig(cwd), then
-	// loads it back. After the call the file MUST exist on disk —
-	// that's the "discoverable, hand-editable" property the first-run
-	// write delivers.
-	t.Setenv("SM_WORKING_DIR", "")
-
-	cwd := t.TempDir()
-	t.Chdir(cwd)
+	// Chdir away to confirm the resolution does NOT touch cwd.
+	otherCwd := t.TempDir()
+	t.Chdir(otherCwd)
 
 	cfg, firstRunPath, err := loadConfig("")
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if cfg.DataDir != cwd {
-		t.Errorf("DataDir = %q, want %q (from os.Getwd)", cfg.DataDir, cwd)
+	if cfg.DataDir != workdir {
+		t.Errorf("DataDir = %q, want %q (from SM_WORKING_DIR)", cfg.DataDir, workdir)
 	}
 	if cfg.Datastore.Driver == "" {
 		t.Error("DefaultConfig should populate Datastore.Driver")
 	}
 
-	written := filepath.Join(cwd, "config.json")
+	written := filepath.Join(workdir, "config.json")
 	if _, err := os.Stat(written); err != nil {
-		t.Fatalf("config.json was not written to cwd: %v", err)
+		t.Fatalf("config.json was not written to workdir: %v", err)
 	}
 	if firstRunPath != written {
 		t.Errorf("firstRunPath = %q, want %q", firstRunPath, written)
+	}
+
+	// Cwd MUST NOT have grown a stray config.json — that was the
+	// 2026-05-14 trap that motivated this refactor.
+	if _, err := os.Stat(filepath.Join(otherCwd, "config.json")); err == nil {
+		t.Errorf("stray config.json appeared in cwd %q despite SM_WORKING_DIR set", otherCwd)
 	}
 
 	// Reload from the file directly — proves the written content is
@@ -422,8 +424,8 @@ func TestLoadConfig_FirstRunWritesDefaultInCwd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading written config: %v", err)
 	}
-	if reloaded.DataDir != cwd {
-		t.Errorf("reloaded DataDir = %q, want %q", reloaded.DataDir, cwd)
+	if reloaded.DataDir != workdir {
+		t.Errorf("reloaded DataDir = %q, want %q", reloaded.DataDir, workdir)
 	}
 }
 

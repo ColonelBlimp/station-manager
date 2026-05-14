@@ -134,22 +134,11 @@ func run() error {
 	// care about isolation.
 	adif.ProgramVersion = Version
 
-	// ---- Ensure the working directory exists ----
-	// Has to happen BEFORE loadConfig — the on-first-run config seed
-	// writes config.json into this directory, and the UA-persist step
-	// after loadConfig rewrites the file. Without this, package
-	// installs that point SM_WORKING_DIR at a not-yet-created path
-	// (the systemd unit's `%h/.local/share/station-manager` on first
-	// run, for example) hit ENOENT on every write. utils.WorkingDir
-	// honours --config's parent dir implicitly by reading the same
-	// SM_WORKING_DIR env var the flag resolution uses; for an explicit
-	// --config flag pointing somewhere else, that path's parent is
-	// the operator's responsibility.
-	if _, werr := utils.WorkingDir(); werr != nil {
-		return fmt.Errorf("resolving working directory: %w", werr)
-	}
-
 	// ---- Load configuration ----
+	// defaultConfigPath calls utils.WorkingDir as part of its
+	// resolution, which MkdirAll-creates the directory before any
+	// write — covers the systemd-unit-points-at-uncreated-path
+	// first-run case without a separate explicit call here.
 	cfg, firstRunPath, err := loadConfig(*configPath)
 	if err != nil {
 		return err
@@ -826,15 +815,25 @@ func buildEnrichment(
 	return orch, ref, nil
 }
 
-// defaultConfigPath returns smd's default config.json location when no
-// explicit --config flag was supplied. SM_WORKING_DIR is preferred;
-// otherwise the current working directory. Shared by loadConfig
-// (initial resolution) and resolveConfigPath (post-load path-record
-// for PUT /v1/config rewrites) so the two precedence ladders cannot
-// drift — adding a third tier (e.g. XDG_CONFIG_HOME) is a one-place
-// change.
+// defaultConfigPath returns smd's default config.json location when
+// no explicit --config flag was supplied. The canonical resolver is
+// utils.WorkingDir(): it respects SM_WORKING_DIR; otherwise falls
+// back to $XDG_DATA_HOME/station-manager when the binary is
+// installed under a system path (the systemd-managed deployment
+// case); otherwise the binary's own directory (portable/dev use).
+//
+// Earlier this function preferred a config.json sitting in the cwd,
+// but that was a footgun: the systemd unit starts the daemon with
+// cwd=$HOME by default, so a stray config.json in $HOME (left over
+// from a misconfigured `smd import` run, for example) would silently
+// take precedence over the real install. Operators who genuinely want
+// a per-invocation override pass --config explicitly.
+//
+// Shared by loadConfig (initial resolution) and resolveConfigPath
+// (post-load path-record for PUT /v1/config rewrites) so the two
+// precedence ladders cannot drift.
 func defaultConfigPath() string {
-	if dir := os.Getenv("SM_WORKING_DIR"); dir != "" {
+	if dir, err := utils.WorkingDir(); err == nil {
 		return filepath.Join(dir, "config.json")
 	}
 	cwd, _ := os.Getwd()
