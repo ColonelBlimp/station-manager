@@ -19,6 +19,8 @@ be able to operate without an internet connection. The application will forward 
 The software is not currently aimed at contesting (although it does support it), rather at general HF operation by SSB and CW. There are
 plans to support serious contesting, including multiple distributed stations, etc.
 
+Install and first-run setup: see [`docs/install.md`](docs/install.md).
+
 Design decisions, architecture notes, and the ADR log live under `docs/`.
 
 ## Computer Aided Transceiver (CAT)

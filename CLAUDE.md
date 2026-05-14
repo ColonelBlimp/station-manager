@@ -23,6 +23,7 @@ Read these before making non-trivial design choices. They are the reference, not
 - **`docs/decisions/`** — append-only ADR log. One file per decision, numbered, with `status` field. Captures the reasoning trail (alternatives considered, why each lost, what would change the answer) for decisions that get revisited. Format and lifecycle in `docs/decisions/README.md`; copy `template.md` to start a new one. Use this when a choice has plausible alternatives that were genuinely weighed; skip it for routine code-level choices or one-obvious-answer decisions.
 - **`docs/session-handoff.md`** — rolling cross-session state. Read at session start; update at session end.
 - **`docs/keyboard-shortcuts.md`** — running inventory of every keyboard shortcut wired up in the SPA. Source-of-truth for the user-facing manual; update in the same commit as any code change that adds, removes, or rebinds a shortcut.
+- **`docs/install.md`** — operator-facing install and first-run setup guide. Update when packaging, the unit file, the data-dir path, or the first-run flow changes; this is the doc a new user is expected to read end-to-end.
 
 ## Load-bearing invariants (headlines)
 
