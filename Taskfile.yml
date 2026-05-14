@@ -55,6 +55,16 @@ tasks:
     cmds:
       - go build -o build/bin/smd ./cmd/smd
 
+  rpm:dev:
+    desc: |
+      Build a development RPM ready for local install. Output:
+      build/release/station-manager-dev.x86_64.rpm. Internal version
+      string is "dev" (also injected as cmd/smd's Version → daemon
+      User-Agent and ADIF PROGRAMVERSION). Install with
+      `sudo dnf install -y build/release/station-manager-dev.x86_64.rpm`.
+    cmds:
+      - scripts/dev-rpm.sh
+
   test:
     desc: Run tests with race detector and -short
     cmds:
