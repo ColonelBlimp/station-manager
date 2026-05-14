@@ -285,13 +285,22 @@ func DefaultConfig(dataDir string) Config {
 			Credentials: json.RawMessage(`{"api_key": ""}`),
 		},
 	}
+	// Hamnut country provider — disabled by default, prepopulated
+	// with the canonical public endpoint. Operator flips enabled=true
+	// to activate; nothing else needs editing for the common case.
+	// applyDefaults below still fills Name + HttpTimeoutSec but the
+	// URL is set here so it survives a deletion-and-restart cycle.
+	cfg.Lookup.Hamnut = types.LookupConfig{
+		Name:           types.HamNutLookupServiceName,
+		Enabled:        false,
+		URL:            "https://api.hamnut.com/v1/call-signs/prefixes",
+		HttpTimeoutSec: 10,
+	}
 	// Symmetric: a disabled QRZ lookup chain entry, prepopulated with
 	// the canonical QRZ XML endpoint and a placeholder credential
 	// pair. Operator fills in username + password and flips
 	// enabled=true. Same DefaultConfig-not-applyDefaults rationale as
-	// the forwarder above. Hamnut stays empty by default — country
-	// enrichment is the operator's decision and hamnut requires a URL
-	// that's not a public well-known value.
+	// the forwarder above.
 	cfg.Lookup.Chain = []types.LookupConfig{
 		{
 			Name:           types.QRZLookupServiceName,
@@ -300,6 +309,11 @@ func DefaultConfig(dataDir string) Config {
 			Username:       "",
 			Password:       "",
 			HttpTimeoutSec: 10,
+			// Profile URL prefix — the SPA concatenates the
+			// uppercased callsign onto the end (e.g.
+			// "https://www.qrz.com/db/M0CMC"). Trailing slash is
+			// load-bearing; v1 had the same comment in defaults.go.
+			ViewURL: "https://www.qrz.com/db/",
 		},
 	}
 	applyDefaults(&cfg, dataDir)
