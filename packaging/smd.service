@@ -1,0 +1,18 @@
+[Unit]
+Description=Station Manager daemon (smd)
+Documentation=https://github.com/ColonelBlimp/station-manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The daemon resolves its working directory via $SM_WORKING_DIR — see
+# internal/utils.WorkingDir(). Without this, the executable-dir fallback
+# would land in /usr/bin/, which is read-only and wrong for user data.
+Environment=SM_WORKING_DIR=%h/.local/share/station-manager
+ExecStart=/usr/bin/smd
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

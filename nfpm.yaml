@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+#
+# Station Manager v2 RPM spec.
+#
+# The v2 daemon is a single statically-linked Go binary that serves the
+# browser SPA embedded inside it. No GUI toolkit dependencies — the
+# operator's browser is the UI. Compare against v1's nfpm.yaml on the
+# v1 branch (three Wails binaries, GTK + WebKit depends, desktop +
+# icon + XDG menu files) to see what the v2 package no longer needs.
+#
+# Build via scripts/release-rpm.sh, which sets VERSION and invokes
+# nfpm. The package name is intentionally identical to v1 so
+# `dnf install station-manager-<v2>.rpm` replaces the v1 install.
+
+name: station-manager
+arch: amd64
+platform: linux
+version: "${VERSION}"
+maintainer: "ColonelBlimp"
+description: "Amateur Radio QSO logger daemon (smd) — single-binary HTTP service serving an embedded browser SPA"
+homepage: "https://github.com/ColonelBlimp/station-manager"
+license: "MIT"
+
+contents:
+  - src: build/bin/smd
+    dst: /usr/bin/smd
+    file_info:
+      mode: 0755
+
+  - src: packaging/smd.service
+    dst: /usr/lib/systemd/user/smd.service
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/postinstall.sh

@@ -775,6 +775,51 @@ alongside, send an ADIF UDP packet, see it land in the logbook. Run
 
 ---
 
+## Pre-dogfooding — getting v2 onto the operator's daily-driver machine
+
+**Status:** Not a milestone in the formal sense — this is the
+operational glue that lets the operator stop running v1 and start
+running v2 day-to-day. Three stages:
+
+- **Stage 1 — ADIF importer (`smd import <file.adi>`). SHIPPED 2026-05-14.**
+  One-shot subcommand that brings the operator's 4233 historical QRZ
+  Logbook QSOs into the v2 daemon via the canonical
+  `qsoservice.Submit` path (validation + atomic write + audit table
+  all inherited). Stamps the QRZ `qso_upload` row pre-success using
+  the source ADIF's `app_qrzlog_logid` so future PATCH/DELETE
+  forwarder flows can target the right upstream record. No HTTP
+  endpoint — that would be permanent code surface for an operation
+  that runs maybe 5 times in its lifetime. Live test confirmed
+  4230 stored / 2 in-file duplicates / 1 source-data error (a single
+  bad `rst_rcvd=4657` violating the daemon's length check) on
+  ~5 seconds wall-clock.
+
+- **Stage 2 — RPM packaging via `nfpm`. SHIPPED 2026-05-14.**
+  Single-binary RPM (`station-manager-<ver>.x86_64.rpm`) containing
+  `/usr/bin/smd` + `/usr/lib/systemd/user/smd.service` + a
+  print-only postinstall scriptlet. Same package name as v1 so
+  `dnf install` replaces the existing v1 install cleanly. Built via
+  `scripts/release-rpm.sh <version>` (SPA build → static Go build →
+  nfpm pack). Dramatically simpler than v1's RPM — no GTK/WebKit
+  depends, no Wails binaries, no desktop/icon/XDG-menu files (the
+  browser SPA is embedded in the daemon binary and served at
+  `GET /`).
+
+- **Stage 3 — Install day.** Next session in the operator's normal
+  workflow. Sequence: backup `~/.local/share/station-manager/` →
+  `dnf remove station-manager` (clears v1) → `dnf install build/release/station-manager-<ver>.x86_64.rpm`
+  → `systemctl --user daemon-reload && systemctl --user enable --now smd`
+  → `loginctl enable-linger "$USER"` → first-run setup at
+  `http://127.0.0.1:8080` → `smd import ~/Downloads/qrz-export.adi`.
+
+The reason this sits between Milestone 3 and SM Cloud rather than
+inside any milestone is simple: it's not new product capability,
+it's the path from "v2 is correct in tests" to "v2 is what runs on
+the rig." Once Stage 3 completes, ongoing work proceeds against a
+real daily-use logbook.
+
+---
+
 ## SM Cloud — explicitly deferred
 
 **Status:** Deferred per ADR 0016 (2026-05-06). NOT a milestone.

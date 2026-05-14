@@ -166,6 +166,37 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 62 work (2026-05-14) — Stage 2 of pre-dogfooding: RPM packaging
+
+Single binary + systemd `--user` unit, packaged as `station-manager-<ver>.x86_64.rpm`. Same package name as v1 so `dnf install` replaces the existing `station-manager-0.0.0~local-1` cleanly via file-list swap. v2's package is dramatically simpler than v1's — no GTK/WebKit depends, no three Wails binaries, no `.desktop` / icon / XDG-menu files. The browser SPA is embedded in the daemon binary via `//go:embed` and served at `GET /`, so the operator's browser is the UI.
+
+**Files (all NEW):**
+
+- **`nfpm.yaml`** (repo root). Two `contents:` entries — `build/bin/smd` → `/usr/bin/smd` (0755) and `packaging/smd.service` → `/usr/lib/systemd/user/smd.service` (0644). Postinstall scriptlet wired via `scripts.postinstall`. `${VERSION}` placeholder filled by the build script.
+- **`packaging/smd.service`**. Type=simple, `ExecStart=/usr/bin/smd`, `Environment=SM_WORKING_DIR=%h/.local/share/station-manager`, `Restart=on-failure` + `RestartSec=5s`, `WantedBy=default.target`. The `SM_WORKING_DIR` env is essential — without it, `utils.WorkingDir()`'s executable-dir fallback would land in `/usr/bin/`, which is read-only and wrong for user data.
+- **`packaging/postinstall.sh`**. RPM scriptlet runs as root, so it cannot do user-context systemd (`systemctl --user`) or `loginctl enable-linger` — both need a target user, and the right answer is "the operator," not "root." Prints next-step instructions instead: `systemctl --user daemon-reload && systemctl --user enable --now smd`, `loginctl enable-linger "$USER"`, default URL `http://127.0.0.1:8080`, and the data/log/config paths under `~/.local/share/station-manager/`.
+- **`scripts/release-rpm.sh`**. Three-step build: (1) `npm run build` in `frontend/logging/` so `dist/` is current for `//go:embed`; (2) `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o build/bin/smd ./cmd/smd` (modernc-sqlite is pure Go, so the binary is fully static — `file` confirms `statically linked`, `ldd` says `not a dynamic executable`); (3) `VERSION="$1" nfpm pkg -f nfpm.yaml -p rpm -t build/release/`. Single positional arg is the version tag.
+
+**Verification (built `station-manager-0.0.0~stage2-1.x86_64.rpm`, 7.9 MB):**
+
+- `rpm -qlp` lists exactly the two expected files (`/usr/bin/smd`, `/usr/lib/systemd/user/smd.service`) — no stray content.
+- `rpm -qp --scripts` shows the postinstall scriptlet embedded verbatim.
+- Modes correct: binary `-rwxr-xr-x root:root`, unit `-rw-r--r-- root:root`.
+- Binary inside is 21 MB statically linked, smd's `--help` reports the expected `--config` flag.
+- Metadata correct: `Name: station-manager`, `License: MIT`, `Packager: ColonelBlimp`, summary matches `nfpm.yaml`.
+
+**Key design choices:**
+
+- **No `depends:`.** v2 has zero runtime deps (Go binary, modernc-sqlite pure-Go, browser SPA embedded). Empty depends keeps the package minimal and avoids stale GTK/WebKit pins from v1.
+- **No Taskfile/Makefile.** v1's Taskfile existed mostly to wrangle the multi-module workspace. v2 has a single `go.mod`; a 30-line bash script is enough. No new tooling to install.
+- **`CGO_ENABLED=0` + `-trimpath` + `-ldflags="-s -w"`** for a fully static, reproducible, strip-debug-info binary. 21 MB stripped is about as small as the daemon + embedded SPA gets.
+- **`%h/.local/share/station-manager`, not `/var/lib/station-manager`.** This is a `--user` service running per-operator; everything lives under their home directory. Matches the path the operator named in session 61's stage-3 plan.
+- **Postinstall is print-only.** An RPM scriptlet can't enable a user service or call `loginctl enable-linger` (root scriptlet, wrong user). Best the package can do is tell the operator the two commands to run; they're short and a one-time cost.
+
+**Stage 3 (install day) is now ready to run** whenever the operator wants to cut over. Sequence: backup `~/.local/share/station-manager/` → `dnf remove station-manager` (clears v1) → `dnf install build/release/station-manager-<ver>.x86_64.rpm` → `systemctl --user daemon-reload && systemctl --user enable --now smd` → `loginctl enable-linger "$USER"` → first-run setup at `http://127.0.0.1:8080` → `smd import ~/Downloads/qrz-export.adi`.
+
+**Doc footprint:** this entry; new "Pre-dogfooding" section in `docs/v2-design/milestones.md` covering stages 1–3.
+
 ### Session 61 work (2026-05-14) — ADIF importer subcommand (`smd import`)
 
 Stage 1 of the pre-dogfooding work. New `smd import <file.adi>` subcommand brings 4233 historical QSOs from QRZ Logbook into the v2 daemon. **No new HTTP endpoint** — discussed and rejected in conversation as over-engineering for a one-shot operation. The subcommand drives the canonical `qsoservice.Submit` path directly (validation + atomic write + audit table all inherited) and stamps the QRZ `qso_upload` row pre-success with the LOGID from the source ADIF.
