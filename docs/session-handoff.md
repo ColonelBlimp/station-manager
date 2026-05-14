@@ -166,6 +166,28 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 58 work (2026-05-14) — `utils/frequency.formatFrequency` tests landed
+
+Last of the four verification gaps from session 54. Existing `lib/utils/frequency.test.ts` already covered `frequencyToBand`; appended a `formatFrequency` describe block to the same file rather than splitting. No production change.
+
+**Added to `lib/utils/frequency.test.ts` (10 cases, total file now 22):**
+
+- The doc-comment example pinned (`14_250_000 → "14.250.000"`) so the comment can't silently drift from the code.
+- Zero-padding correctness via the smallest-non-zero case: `5 → "0.000.005"`. Both pad sites exercised (`kHz=0 → "000"`, `Hz=5 → "005"`).
+- `0 → "0.000.000"`.
+- HF watering-hole spot-checks: 40m/20m/6m FT8 — `7.074.000`, `14.074.000`, `50.313.000`.
+- 1 MHz boundary in both directions: `1_000_000 → "1.000.000"` and `999_999 → "0.999.999"`.
+- Mid-value padding: `14_050_000 → "14.050.000"` (kHz tens) and `14_250_007 → "14.250.007"` (Hz tens).
+- 23cm microwave: `1_296_000_000 → "1296.000.000"`. Pins that the MHz field is NOT padded or truncated — only kHz/Hz get `padStart(3)`. Guards against a future "always pad MHz to 4 digits" refactor that would break HF rendering.
+- Single-Hz precision: `1_800_001 → "1.800.001"` (smallest representable rig-CAT step).
+- Structural invariant: across magnitudes from 0 to 1 GHz, output always splits to exactly three dot-separated groups. Consumer parsers (e.g. SessionPanel display) rely on this regardless of magnitude.
+
+**Verification:** 569/569 SPA tests passing (+10 from 559), svelte-check 0 errors / 249 files, eslint clean.
+
+**Doc footprint:** this entry, review document Status block + verification-gap #6 (the frequency entry) marked CLOSED. No ADR (test-only change), no CLAUDE.md / memory updates (no rule moved).
+
+**All four verification gaps from the review are now closed.** Remaining open from session 54: I17 (validators boolean → string|null + ValidatedInput error rendering — own commit, architectural) and the 11 nits (N1–N11 — polish, batch with adjacent work).
+
 ### Session 57 work (2026-05-14) — `api/config.ts` outcome tests landed
 
 Third of the three remaining verification gaps from session 54. Single test file, no production change. Covers both `fetchConfig` (GET) and `putConfig` (PUT with payload) — the latter is the more operator-visible path (Save button click) and gets its own duplicated parseOutcome coverage rather than relying on the shared internal helper, since regression there is louder.

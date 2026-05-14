@@ -1,16 +1,11 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: IN PROGRESS (session 53 → 57, 2026-05-12 → 2026-05-14).**
+**Status: IN PROGRESS (session 53 → 58, 2026-05-12 → 2026-05-14).**
 **Closed:** all 5 critical (C1, C2, C3, C4, C5), 14 of 17 important
 (I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I18, I19,
-I20 — note: I20 reviewer-numbered, kept).
-
-**Verification gaps from the original review** (test-coverage debt
-called out as work-not-done, not deferred): `api/enrichment.ts`
-outcome tests **CLOSED session 55 (2026-05-14)**; `api/contact-history.ts`
-outcome tests **CLOSED session 56 (2026-05-14)**; `api/config.ts`
-outcome tests **CLOSED session 57 (2026-05-14)**;
-`utils/frequency.formatFrequency` tests still open.
+I20 — note: I20 reviewer-numbered, kept), **all 4 verification gaps**
+(enrichment / contact-history / config API outcome tests +
+`formatFrequency` utility tests).
 
 **Deferred / pushback:**
 - **I1** — derived-via-effect anti-pattern in `QsoPanel`. The
@@ -65,6 +60,20 @@ on 5xx with daemon envelope, synthesised `unknown_error` fallback for
 unparseable error bodies, `kind=network` on fetch reject, `kind=aborted`
 on AbortError, and AbortSignal passthrough to `fetch`. Total:
 527/527 passing (+10), svelte-check 0/0, lint clean.
+
+**Session 58 (2026-05-14) — `utils/frequency.formatFrequency` tests
+landed.** Appended a `describe('formatFrequency', ...)` block (10
+cases) to the existing `frequency.test.ts` rather than splitting.
+Pins the doc-comment example (`14_250_000 → "14.250.000"`),
+zero-padding correctness via the smallest non-zero case
+(`5 → "0.000.005"`), HF watering-hole spot-checks, the 1 MHz
+boundary in both directions, mid-value kHz/Hz tens padding, and the
+microwave case (`1_296_000_000 → "1296.000.000"`) which guards
+against a future "always pad MHz to 4 digits" refactor that would
+break HF rendering. Also a structural invariant across five
+magnitudes: output always splits to exactly three dot-separated
+groups. Total: 569/569 passing (+10), svelte-check 0/0/249, lint
+clean. **All four verification gaps now closed.**
 
 **Session 57 (2026-05-14) — `api/config.ts` outcome tests landed.**
 New `config.test.ts` (18 cases) covers both `fetchConfig` (GET) and
@@ -642,7 +651,14 @@ These tests should exist but don't. Highest priority first.
 9. **Callsign max-length boundary** (I11). 30-char input — fails
    on the current MAX=20.
 
-10. **`utils/frequency.formatFrequency`** has no tests at all.
+10. **`utils/frequency.formatFrequency`** ~~has no tests at all.~~
+    **CLOSED session 58 (2026-05-14) — appended a 10-case
+    `formatFrequency` describe block to the existing
+    `frequency.test.ts`. Pins the doc-comment example, zero-padding
+    correctness, HF watering-hole spot-checks, the 1 MHz boundary,
+    mid-value kHz/Hz tens padding, microwave (1296 MHz) MHz-field
+    width invariance, single-Hz precision, and the three-group
+    structural invariant across five magnitudes.**
 
 ---
 
