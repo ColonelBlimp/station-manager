@@ -20,6 +20,13 @@
     few years; the same comment lives on the daemon-side handler).
 */
 
+// `^[0-9]+$` is deliberately stricter than the daemon's
+// `strconv.ParseInt` (which accepts a leading `+`). Operator workflow
+// today is "type a small positive integer"; a leading `+14` is almost
+// certainly a paste artefact and surfacing it as a red border is the
+// safer default. If a use case for `+`-prefixed values ever turns
+// up, widen this regex (and the daemon's behaviour stays compatible
+// because ParseInt already accepts both).
 const DIGITS_ONLY = /^[0-9]+$/;
 
 /**

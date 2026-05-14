@@ -117,4 +117,20 @@ describe('formatFrequency', () => {
             expect(formatFrequency(hz).split('.')).toHaveLength(3);
         }
     });
+
+    it('coerces a negative value to "0.000.000" (defensive — never produced by CAT)', () => {
+        // N4 guard. Pre-fix, hz=-1 produced "-1.-01.-01" — would break
+        // every dot-group consumer downstream. The clamp keeps the
+        // three-group shape stable even on nonsensical input.
+        expect(formatFrequency(-1)).toBe('0.000.000');
+        expect(formatFrequency(-14_250_000)).toBe('0.000.000');
+    });
+
+    it('floors a fractional Hz value before formatting', () => {
+        // CAT delivers integer Hz; a fractional value (e.g. via accidental
+        // math elsewhere) used to leak NaN into the padded segments.
+        // Now floored to the nearest non-negative integer.
+        expect(formatFrequency(14_250_000.7)).toBe('14.250.000');
+        expect(formatFrequency(14_250_000.999)).toBe('14.250.000');
+    });
 });

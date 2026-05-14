@@ -45,16 +45,29 @@ interface DaemonError {
     op?: string;
 }
 
+export interface SubmitOptions {
+    /**
+     * When true, append `?force=1` so the daemon bypasses dedupe and
+     * stores the QSO even if a matching row already exists. The
+     * doc-comment above promises this knob; this is its wire seam.
+     * Default false — operator confirms the duplicate intentionally.
+     */
+    force?: boolean;
+    signal?: AbortSignal;
+}
+
 export async function submitQso(
     adif: string,
     logbookID: number,
-    signal?: AbortSignal
+    options: SubmitOptions = {}
 ): Promise<SubmitOutcome> {
-    const fetched = await safeFetch(`/v1/qso?logbook=${encodeURIComponent(String(logbookID))}`, {
+    const params = new URLSearchParams({ logbook: String(logbookID) });
+    if (options.force) params.set('force', '1');
+    const fetched = await safeFetch(`/v1/qso?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-adif' },
         body: adif,
-        signal,
+        signal: options.signal,
     });
     if (!fetched.ok) {
         return { kind: fetched.kind, message: fetched.message };

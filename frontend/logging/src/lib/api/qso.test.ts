@@ -107,7 +107,7 @@ describe('submitQso', () => {
         vi.stubGlobal('fetch', vi.fn(() => Promise.reject(abortErr)));
 
         const ctrl = new AbortController();
-        const out = await submitQso(ADIF, 1, ctrl.signal);
+        const out = await submitQso(ADIF, 1, { signal: ctrl.signal });
         expect(out).toEqual({ kind: 'aborted', message: 'aborted' });
     });
 
@@ -123,9 +123,44 @@ describe('submitQso', () => {
         vi.stubGlobal('fetch', fetchSpy);
 
         const ctrl = new AbortController();
-        await submitQso(ADIF, 1, ctrl.signal);
+        await submitQso(ADIF, 1, { signal: ctrl.signal });
         const [, init] = fetchSpy.mock.calls[0];
         expect(init?.signal).toBe(ctrl.signal);
+    });
+
+    it('omits ?force when force is unset (default)', async () => {
+        const fetchSpy = vi.fn(
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(
+                    new Response(JSON.stringify({ status: 'stored', uuid: STORED_UUID }), {
+                        status: 201,
+                    })
+                )
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await submitQso(ADIF, 1);
+        const [url] = fetchSpy.mock.calls[0];
+        expect(url).toBe('/v1/qso?logbook=1');
+    });
+
+    it('appends ?force=1 when force:true is passed', async () => {
+        // N3 — the doc-comment promises this knob as the "retry on
+        // duplicate after operator confirms" wire seam. Daemon parity:
+        // internal/api/handler_qso.go::force accepts truthy "1"/"true"/etc.
+        const fetchSpy = vi.fn(
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(
+                    new Response(JSON.stringify({ status: 'stored', uuid: STORED_UUID }), {
+                        status: 201,
+                    })
+                )
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await submitQso(ADIF, 1, { force: true });
+        const [url] = fetchSpy.mock.calls[0];
+        expect(url).toBe('/v1/qso?logbook=1&force=1');
     });
 
     it('falls back to a synthesised error envelope when the body is unparseable', async () => {

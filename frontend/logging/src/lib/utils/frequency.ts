@@ -56,8 +56,14 @@ export function frequencyToBand(hz: number): string {
  * noise.
  */
 export function formatFrequency(hz: number): string {
-    const mhz = Math.floor(hz / 1_000_000);
-    const khz = Math.floor((hz % 1_000_000) / 1_000);
-    const hzPart = hz % 1_000;
+    // Rig CAT delivers non-negative integer Hz, so negative or
+    // fractional inputs are nonsense — but `Math.floor` + `%` against
+    // them produces a "-1.-01.-01" / NaN-padded mess that's worse than
+    // a sentinel. Coerce to a non-negative integer; the dot-grouped
+    // shape stays parseable for SessionPanel + any future consumer.
+    const safe = Math.max(0, Math.floor(hz));
+    const mhz = Math.floor(safe / 1_000_000);
+    const khz = Math.floor((safe % 1_000_000) / 1_000);
+    const hzPart = safe % 1_000;
     return `${mhz}.${khz.toString().padStart(3, '0')}.${hzPart.toString().padStart(3, '0')}`;
 }

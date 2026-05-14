@@ -67,6 +67,12 @@ export function t(key: string, details?: Record<string, string>): string {
     const template =
         catalogues[currentLocale]?.[key] ?? catalogues.en[key] ?? `[missing: ${key}]`;
     if (!details) return template;
+    // `\w+` is [A-Za-z0-9_], so hyphens and other punctuation in
+    // placeholder names won't match — `{client-id}` would render
+    // literally instead of substituting. All current daemon
+    // `details` keys are snake_case (`{driver}`, `{error}`,
+    // `{port}`), so this is fine today; widen the character class
+    // if a future event ever ships hyphenated keys.
     return template.replace(/{(\w+)}/g, (_match, name: string) =>
         details[name] !== undefined ? details[name] : `{${name}}`,
     );

@@ -141,7 +141,13 @@ export function pathInfo(localGrid: string, remoteGrid: string): PathInfo | null
 
     const shortPathDistanceKm = haversineKm(local.lat, local.lon, remote.lat, remote.lon);
     const earthCircumferenceKm = 2 * Math.PI * EARTH_RADIUS_KM;
-    const longPathDistanceKm = Math.ceil(earthCircumferenceKm - shortPathDistanceKm);
+    // For grids that are nearly antipodal, haversine + floating-point
+    // rounding can push `shortPathDistanceKm` a hair above the great-
+    // circle limit (≈20,015 km), which then produces a small negative
+    // `longPathDistanceKm`. Clamp to zero — a 0 km long-path display
+    // is correct for the antipode, and the dot-format consumer never
+    // sees a sign-flipped value.
+    const longPathDistanceKm = Math.max(0, Math.ceil(earthCircumferenceKm - shortPathDistanceKm));
 
     return {
         shortPathBearing,
@@ -149,6 +155,6 @@ export function pathInfo(localGrid: string, remoteGrid: string): PathInfo | null
         shortPathDistanceKm,
         shortPathDistanceMiles: Math.ceil(shortPathDistanceKm * KM_TO_MILES),
         longPathDistanceKm,
-        longPathDistanceMiles: Math.ceil(longPathDistanceKm * KM_TO_MILES),
+        longPathDistanceMiles: Math.max(0, Math.ceil(longPathDistanceKm * KM_TO_MILES)),
     };
 }

@@ -15,10 +15,7 @@
     <div class="flex flex-row items-center w-72.5">
         <h1 class="text-xl font-bold tracking-tight">Logging Mode:</h1>
     </div>
-    <div class="flex w-40"></div>
-    <div class="flex w-40"></div>
-    <div class="flex w-full"></div>
-    <div class="flex text-sm font-semibold w-48">
+    <div class="flex text-sm font-semibold w-48 ml-auto">
         <div class="w-24">Session Time:</div>
         <div class="text-right w-17"><SessionTimer /></div>
     </div>

@@ -166,6 +166,38 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 60 work (2026-05-14) — 8 of 11 nits closed, review fully resolved on intent
+
+Final cleanup pass on the frontend-logging code review (`docs/reviews/frontend-logging-2026-05-12.md`). N1 and N11 were reviewer-marked acceptable-as-is; N5 was flagged "take or leave" and skipped per the project's "build specific not generic" rule. The remaining eight all landed.
+
+**N2 — i18n placeholder regex constraint documented.** `lib/i18n/index.ts:70` — added a 6-line comment noting that `{(\w+)}` only matches `[A-Za-z0-9_]`, so a future `{client-id}` would render literally instead of substituting. All daemon `details` keys are snake_case today; comment flags the constraint for when that changes.
+
+**N3 — `submitQso` gains `force?: boolean`.** Doc-comment promised "caller decides whether to offer `?force=1` retry" but the wrapper had no parameter to pass it. Signature changed from `(adif, logbookID, signal?)` to `(adif, logbookID, options: SubmitOptions = {})` with `{ force?, signal? }`. Daemon support verified at `internal/api/handler_qso.go:236` (accepts truthy `1`/`true`). Only one production call site (`QsoPanel.svelte:303`); the empty-options default keeps it working unchanged. Two test changes: existing AbortSignal cases updated to the new options shape; two new cases pin the wire seam (`?force` omitted when unset, `?logbook=1&force=1` when `force:true`).
+
+**N4 — `formatFrequency` guards negative / fractional Hz.** `utils/frequency.ts` previously produced `"-1.-01.-01"` for `hz < 0` and NaN-padded segments for fractional input. Now coerces via `Math.max(0, Math.floor(hz))` — keeps the three-group dot shape stable on nonsense input (which CAT never produces, but the function is now safe for ad-hoc consumers). Two new tests in `frequency.test.ts` pin the clamp.
+
+**N6 — `DaemonQsoForEdit` type moved to API layer.** Previously defined in `lib/states/qsoEdit.svelte.ts` and imported into `lib/api/qso-update.ts` — the API wrapper had a reactive-state-module dependency for a wire shape that has nothing to do with reactivity. Type now lives in `qso-update.ts` (where the fetch/PATCH helpers consume it); `qsoEdit.svelte.ts` re-exports it via `export type { DaemonQsoForEdit } from '../api/qso-update'` plus an import-for-local-use line so internal references stay typed. The test file's `import { type DaemonQsoForEdit }` still works via the re-export. Net: API layer no longer drags state-module dependencies.
+
+**N7 — zone `DIGITS_ONLY` strictness documented.** `validators/zone.ts:23` — added a 5-line comment noting the deliberate stricter behaviour vs daemon's `strconv.ParseInt` (which accepts a leading `+`). Operator workflow today is "type a small positive integer"; a leading `+14` is almost certainly a paste artefact. The daemon side stays compatible because ParseInt accepts both.
+
+**N8 — long-path distance clamped at zero.** `utils/bearing.ts:144` — haversine + FP rounding can push antipodal-grid `shortPathDistanceKm` a hair above the great-circle limit, producing a small negative `longPathDistanceKm`. Wrapped both the km and miles values in `Math.max(0, …)` so the dot-format consumer never sees a sign-flipped value.
+
+**N9 — `LoggingCard` spacer divs collapsed.** `LoggingCard.svelte:14-25` — three empty `<div class="flex w-...">` spacers replaced with `ml-auto` on the Session Time block. Net: 6 lines deleted, same visual layout, intent (push the timer right) now matches what the markup says.
+
+**N10 — InfoPanel tab icon picker as `Record<TabId, Snippet>`.** `InfoPanel.svelte:345-349` — 4-arm `{#if/else if}` chain replaced with `{@const tabIcons: Record<TabId, Snippet> = {...}}` + `{@render tabIcons[tab.id]()}`. New `import type { Snippet } from 'svelte'`. The lookup re-builds per iteration (4 tabs, trivial cost) but the data-driven intent is now explicit and adding a fifth tab won't require touching the render block.
+
+**Skipped:**
+
+- **N1** — RST mode-flip refill. Reviewer's own verdict: "Acceptable as-is."
+- **N5** — `adif.ts` operator-station if-cascade. Reviewer flagged "take or leave"; collapsing 25+ if-blocks into a table-driven loop is exactly the kind of premature abstraction the [feedback_design_patterns] memory warns against — leaving the specific repetition.
+- **N11** — `SessionTimer` `setInterval` at module lifetime. Reviewer note: "consistent with QsoPanel's ticker; future component tests will need to mock timers." Future cost flagged, not a defect.
+
+**Verification:** 584/584 SPA tests passing (+4 from 580: 2 new `submitQso` force cases, 2 new `formatFrequency` guard cases), svelte-check 0 errors / 249 files, eslint clean.
+
+**Doc footprint:** this entry, review doc Status block bumped to **review FULLY RESOLVED ON INTENT** (everything actioned or explicitly reviewer-deferred), each closed nit marked CLOSED inline. No ADR (no architectural decision moved), no CLAUDE.md / memory updates (no new rule).
+
+**Review state:** ALL critical findings, ALL 17 important findings, and 8 of 11 nits closed (the other 3 explicitly accepted-as-is per the reviewer's own verdicts). The review is done.
+
 ### Session 59 work (2026-05-14) — I17 closed: validators return string|null, inline error messages
 
 I17 was the last open architectural item from the frontend code review (4 verification gaps closed sessions 55–58; I17 deferred as a real refactor). The validator contract changes from `(v: string) => boolean` to `(v: string) => string | null`: null when valid (including empty — presence stays form-level), an i18n key string when malformed. `ValidatedInput` and `Callsign` render the resolved key in a paired `<p id="{id}-err" role="alert">` and wire `aria-describedby` to it, so the operator-visible signal is no longer color-only.

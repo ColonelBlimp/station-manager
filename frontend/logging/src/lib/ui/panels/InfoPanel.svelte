@@ -15,6 +15,7 @@
     import { configState } from '../../states/config.svelte';
     import { sendSessionEmail } from '../../api/session-email';
     import { toasts } from '../../states/toasts.svelte';
+    import type { Snippet } from 'svelte';
 
     type TabId = 'worked' | 'details' | 'station' | 'session';
 
@@ -331,6 +332,12 @@
                     keeps role="tab" semantics intact and makes the entire
                     row one click target.
                 -->
+                {@const tabIcons: Record<TabId, Snippet> = {
+                    worked: workedIcon,
+                    details: detailsIcon,
+                    station: stationIcon,
+                    session: sessionIcon,
+                }}
                 <button
                     id={`tab-${tab.id}`}
                     type="button"
@@ -342,11 +349,7 @@
                     onclick={() => (activeTab = tab.id)}
                     onkeydown={handleTabKeydown}
                 >
-                    {#if tab.id === 'worked'}{@render workedIcon()}
-                    {:else if tab.id === 'details'}{@render detailsIcon()}
-                    {:else if tab.id === 'station'}{@render stationIcon()}
-                    {:else if tab.id === 'session'}{@render sessionIcon()}
-                    {/if}
+                    {@render tabIcons[tab.id]()}
                     <span>{tab.title}{tab.count !== undefined ? ` (${tab.count})` : ''}</span>
                 </button>
             {/each}

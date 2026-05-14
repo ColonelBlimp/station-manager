@@ -1,11 +1,14 @@
 # `frontend/logging` — code review (2026-05-12)
 
-**Status: IN PROGRESS (session 53 → 59, 2026-05-12 → 2026-05-14).**
-**Closed:** all 5 critical (C1, C2, C3, C4, C5), 15 of 17 important
-(I2, I3, I5, I6, I7, I8, I9, I11, I12, I13, I14, I15, I16, I17, I18,
-I19, I20 — note: I20 reviewer-numbered, kept), **all 4 verification
-gaps** (enrichment / contact-history / config API outcome tests +
-`formatFrequency` utility tests).
+**Status: FULLY RESOLVED ON INTENT (session 53 → 60, 2026-05-12 →
+2026-05-14).** All 5 critical (C1–C5), all 17 important (I1–I20 with
+the I20 reviewer-numbering quirk; I1/I4/I10 reviewer-deferred per
+their own notes), all 4 verification gaps (enrichment /
+contact-history / config API outcome tests + `formatFrequency`
+utility tests), and 8 of 11 nits closed in session 60. The
+remaining 3 nits (N1 / N5 / N11) are explicitly accepted-as-is per
+the reviewer's own verdicts or skipped per the project's
+"build specific not generic" rule.
 
 **Deferred / pushback:**
 - **I1** — derived-via-effect anti-pattern in `QsoPanel`. The
@@ -68,6 +71,23 @@ on 5xx with daemon envelope, synthesised `unknown_error` fallback for
 unparseable error bodies, `kind=network` on fetch reject, `kind=aborted`
 on AbortError, and AbortSignal passthrough to `fetch`. Total:
 527/527 passing (+10), svelte-check 0/0, lint clean.
+
+**Session 60 (2026-05-14) — 8 nits closed; review fully resolved.**
+N2 (i18n placeholder regex comment), N3 (`submitQso` gains
+`force?: boolean` + options shape — daemon support verified at
+`internal/api/handler_qso.go:236`, two new wire-seam tests),
+N4 (`formatFrequency` clamps negative/fractional via
+`Math.max(0, Math.floor(hz))` + two guard tests), N6
+(`DaemonQsoForEdit` moved from `lib/states/qsoEdit.svelte.ts` to
+`lib/api/qso-update.ts` — API layer no longer drags reactive-state
+dependencies; re-export keeps existing call sites working),
+N7 (zone `DIGITS_ONLY` strict-vs-daemon-ParseInt drift documented),
+N8 (long-path km + miles clamped at 0 for antipodal grids),
+N9 (LoggingCard spacer divs collapsed to `ml-auto`),
+N10 (InfoPanel icon picker via `Record<TabId, Snippet>` lookup).
+Skipped: N1 (reviewer-acceptable), N5 (take-or-leave, premature
+abstraction), N11 (future-cost note only). Total: 584/584 passing
+(+4 from 579), svelte-check 0/0/249, lint clean.
 
 **Session 59 (2026-05-14) — I17 closed.** Validators flipped from
 `boolean` to `string | null` (null = valid, i18n key = malformed);
@@ -562,54 +582,72 @@ primitive. Swap both to `<ValidatedInput transform={stripNonDigits}>`.
 **N1.** `qsoDraft.svelte.ts:244-250` — module-level `$effect.root`
 overwrites RST on mode-flip with no operator-typed override. Comment
 acknowledges the tradeoff; flagged only as a candidate for `$derived`
-if the operator-override policy ever changes. Acceptable as-is.
+if the operator-override policy ever changes. **Accepted as-is per
+reviewer verdict (skipped session 60).**
 
-**N2.** `i18n/index.ts:70` — substitution regex `\{(\w+)\}` rejects
-hyphenated keys. All daemon details keys are snake_case today.
-One-line code comment noting the constraint would prevent a future
-`{client-id}` from silently breaking.
+**N2.** ~~`i18n/index.ts:70` — substitution regex `\{(\w+)\}` rejects
+hyphenated keys.~~ **CLOSED session 60.** Added a 6-line comment
+noting the `\w+` constraint vs hyphenated names; all daemon `details`
+keys are snake_case today.
 
-**N3.** `api/qso.ts:48` — `submitQso` doc comment promises "caller
+**N3.** ~~`api/qso.ts:48` — `submitQso` doc comment promises "caller
 decides whether to offer `?force=1` retry" but the wrapper has no
-parameter to pass it. Add `{ force?: boolean }`.
+parameter to pass it.~~ **CLOSED session 60.** Signature changed to
+`submitQso(adif, logbookID, options: SubmitOptions = {})` with
+`{ force?, signal? }`. Daemon support verified at
+`internal/api/handler_qso.go:236`. Existing call sites unaffected
+(empty options default); existing signal-passthrough tests updated;
+two new tests pin the `?force=1` wire seam.
 
-**N4.** `utils/frequency.ts:58-63` — `formatFrequency` mishandles
-negative or fractional Hz (produces `'-1.-01.-01'` for `hz < 0`). In
-practice frequencies are always non-negative integer Hz, but a
-guard plus the missing co-located test would close the gap.
+**N4.** ~~`utils/frequency.ts:58-63` — `formatFrequency` mishandles
+negative or fractional Hz.~~ **CLOSED session 60.** Coerce via
+`Math.max(0, Math.floor(hz))`; two new guard tests in
+`frequency.test.ts`.
 
 **N5.** `utils/adif.ts` operator-station section is a 60-line
 if-cascade of `if (f.X && f.X.length > 0) lines.push(...)` repeated
 25+ times. A small table-driven loop would halve the file. Squarely
-in "build specific not generic" territory — take or leave.
+in "build specific not generic" territory — take or leave. **Skipped
+session 60** per the project's "build specific not generic" rule —
+collapsing the specific repetition into a table-driven generic is
+exactly the kind of premature abstraction
+[feedback_design_patterns] warns against.
 
-**N6.** `api/qso-update.ts:29` — cross-package type import from a
-`.svelte.ts` state module. Layering nit; `type`-only import so no
-runtime drag, but inverting the dependency (define the type in the
-api layer, import into state) would let the API layer stand without
-a reactive-state dependency.
+**N6.** ~~`api/qso-update.ts:29` — cross-package type import from a
+`.svelte.ts` state module.~~ **CLOSED session 60.**
+`DaemonQsoForEdit` interface moved from
+`lib/states/qsoEdit.svelte.ts` to `lib/api/qso-update.ts`;
+`qsoEdit.svelte.ts` re-exports via `export type { ... } from`. API
+layer no longer drags a reactive-state dependency.
 
-**N7.** `validators/zone.ts:35` — strict regex rejects leading `+`;
-daemon's `strconv.ParseInt` accepts it. Operator pastes `+14` for
-CQ zone → SPA rejects, daemon accepts. Minor parity drift; either
-allow leading `+` or document the deliberate stricter SPA behavior.
+**N7.** ~~`validators/zone.ts:35` — strict regex rejects leading `+`;
+daemon's `strconv.ParseInt` accepts it.~~ **CLOSED session 60.** Kept
+the strict SPA regex (a leading `+` is almost certainly a paste
+artefact); added a 5-line comment noting the deliberate stricter
+behaviour vs daemon parity. Daemon stays compatible because
+ParseInt accepts both forms.
 
-**N8.** `utils/bearing.ts:144` — long-path distance can produce a
-small negative for antipodal grids. `Math.max(0, ...)` is a
-one-liner. Rare in ham practice; edge case.
+**N8.** ~~`utils/bearing.ts:144` — long-path distance can produce a
+small negative for antipodal grids.~~ **CLOSED session 60.** Wrapped
+both `longPathDistanceKm` and `longPathDistanceMiles` with
+`Math.max(0, …)`.
 
-**N9.** `LoggingCard.svelte:14-32` — three empty spacer divs for
-layout. Consider `grow` or `justify-between`. Cosmetic.
+**N9.** ~~`LoggingCard.svelte:14-32` — three empty spacer divs for
+layout.~~ **CLOSED session 60.** Replaced with `ml-auto` on the
+Session Time block; 6 lines deleted, same visual layout.
 
-**N10.** `InfoPanel.svelte:280-304` — per-tab icon picker uses a
-4-arm `{#if/else if}` chain inside an each. A
-`Record<TabId, Snippet>` map makes the data-driven intent explicit.
+**N10.** ~~`InfoPanel.svelte:280-304` — per-tab icon picker uses a
+4-arm `{#if/else if}` chain inside an each.~~ **CLOSED session 60.**
+Replaced with `{@const tabIcons: Record<TabId, Snippet> = {...}}`
+inside the `{#each}` + `{@render tabIcons[tab.id]()}`. Added
+`import type { Snippet } from 'svelte'`.
 
 **N11.** `SessionTimer.svelte` — `setInterval` runs from script
 body (module lifetime) rather than inside `$effect` (component
 lifetime). `onDestroy` clears it correctly. Pattern is consistent
 with QsoPanel's ticker; future component tests will need to mock
-timers.
+timers. **Accepted as-is per reviewer verdict (skipped session 60)
+— future test-mock cost, not a defect.**
 
 ---
 

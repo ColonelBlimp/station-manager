@@ -27,8 +27,60 @@
       - 'network'    — fetch threw before a Response.
 */
 
-import type { DaemonQsoForEdit } from '../states/qsoEdit.svelte';
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+
+/**
+ * Subset of `types.Qso` the SPA populates from `GET /v1/qso/{uuid}`
+ * and patches via `PATCH /v1/qso/{uuid}`. Mirrors what the edit
+ * overlay exposes — callsign, name, QTH, comment, RST pair, mode,
+ * frequency, date, times, Details-panel fields (rig, rx_pwr, notes),
+ * and the operator's APP_SM_REQUEST_QSL flag. Country is
+ * read-back-required (daemon rejects empty country); other
+ * enrichment-derived fields aren't surfaced because the overlay's
+ * purpose is "fix the obvious typo," not "rewrite arbitrary tags".
+ *
+ * Wire shape is FLAT: `types.Qso` embeds `QsoDetails`,
+ * `ContactedStation`, `LoggingStation`, and `Qsl` as anonymous structs,
+ * and Go's encoding/json promotes their fields to the top level on
+ * marshal. So `call`, `band`, `freq`, etc. all appear as siblings of
+ * `uuid`, NOT nested under `contacted_station` / `qso_details`. The
+ * PATCH body shape is the same (qsoservice.Update calls
+ * `json.Unmarshal(body, &merged)` against the flat struct). An earlier
+ * nested-shape draft in `qsoEdit.svelte.ts` silently failed populate()
+ * because the interface didn't match the wire — every field read as
+ * undefined, the form rendered blank.
+ */
+export interface DaemonQsoForEdit {
+    uuid?: string;
+    /**
+     * APP_SM_REQUEST_QSL flag — operator's reminder to request a QSL
+     * card. Top-level on types.Qso because it's a station-manager
+     * application-extension field, not an embedded sub-struct's field.
+     */
+    app_sm_request_qsl?: boolean;
+
+    // ContactedStation — promoted from the embedded struct.
+    call?: string;
+    name?: string;
+    qth?: string;
+    country?: string;
+
+    // QsoDetails — promoted from the embedded struct.
+    rst_sent?: string;
+    rst_rcvd?: string;
+    mode?: string;
+    freq?: string;
+    freq_rx?: string;
+    band?: string;
+    qso_date?: string;
+    qso_date_off?: string;
+    time_on?: string;
+    time_off?: string;
+    comment?: string;
+    rig?: string;
+    rx_pwr?: string;
+    notes?: string;
+}
 
 export type FetchQsoOutcome =
     | { kind: 'ok'; qso: DaemonQsoForEdit }
