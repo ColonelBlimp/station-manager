@@ -229,10 +229,10 @@ func buildMimeEnvelope(from string, msg Message) []byte {
 	boundary := fmt.Sprintf("sm-mime-%d", time.Now().UnixNano())
 
 	// RFC 5322 envelope headers.
-	fmt.Fprintf(&buf, "From: %s\r\n", from)
-	fmt.Fprintf(&buf, "To: %s\r\n", msg.To)
-	fmt.Fprintf(&buf, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", msg.Subject))
-	fmt.Fprintf(&buf, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
+	_, _ = fmt.Fprintf(&buf, "From: %s\r\n", from)
+	_, _ = fmt.Fprintf(&buf, "To: %s\r\n", msg.To)
+	_, _ = fmt.Fprintf(&buf, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", msg.Subject))
+	_, _ = fmt.Fprintf(&buf, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	buf.WriteString("MIME-Version: 1.0\r\n")
 
 	if len(msg.Attachments) == 0 {
@@ -243,10 +243,10 @@ func buildMimeEnvelope(from string, msg Message) []byte {
 		return buf.Bytes()
 	}
 
-	fmt.Fprintf(&buf, "Content-Type: multipart/mixed; boundary=\"%s\"\r\n\r\n", boundary)
+	_, _ = fmt.Fprintf(&buf, "Content-Type: multipart/mixed; boundary=\"%s\"\r\n\r\n", boundary)
 
 	// Body part.
-	fmt.Fprintf(&buf, "--%s\r\n", boundary)
+	_, _ = fmt.Fprintf(&buf, "--%s\r\n", boundary)
 	buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 	buf.WriteString("Content-Transfer-Encoding: 8bit\r\n\r\n")
 	buf.WriteString(msg.Body)
@@ -260,15 +260,15 @@ func buildMimeEnvelope(from string, msg Message) []byte {
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
-		fmt.Fprintf(&buf, "--%s\r\n", boundary)
-		fmt.Fprintf(&buf, "Content-Type: %s; name=%q\r\n", ct, att.Filename)
-		fmt.Fprintf(&buf, "Content-Disposition: attachment; filename=%q\r\n", att.Filename)
+		_, _ = fmt.Fprintf(&buf, "--%s\r\n", boundary)
+		_, _ = fmt.Fprintf(&buf, "Content-Type: %s; name=%q\r\n", ct, att.Filename)
+		_, _ = fmt.Fprintf(&buf, "Content-Disposition: attachment; filename=%q\r\n", att.Filename)
 		buf.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
 		writeBase64Wrapped(&buf, att.Body)
 		buf.WriteString("\r\n")
 	}
 
-	fmt.Fprintf(&buf, "--%s--\r\n", boundary)
+	_, _ = fmt.Fprintf(&buf, "--%s--\r\n", boundary)
 	return buf.Bytes()
 }
 
