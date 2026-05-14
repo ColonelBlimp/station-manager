@@ -182,19 +182,19 @@ func TestSend_NilService_ReturnsErrMailerDisabled(t *testing.T) {
 	}
 }
 
-func TestSend_EmptyHost_ReturnsErrMailerDisabled(t *testing.T) {
-	s := New(types.SmtpConfig{}, nil)
+func TestSend_DisabledMailer_ReturnsErrMailerDisabled(t *testing.T) {
+	s := New(types.SmtpConfig{}, nil) // Enabled=false (zero value)
 	err := s.Send(context.Background(), Message{To: "a@b", Subject: "x"})
 	if !stderrs.Is(err, ErrMailerDisabled) {
 		t.Errorf("err = %v, want ErrMailerDisabled", err)
 	}
 	if s.Enabled() {
-		t.Errorf("Enabled() = true, want false for empty host")
+		t.Errorf("Enabled() = true, want false when SmtpConfig.Enabled is false")
 	}
 }
 
 func TestSend_MissingRecipient_ReturnsErrInvalidMessage(t *testing.T) {
-	s := New(types.SmtpConfig{Host: "x", Port: 25, From: "f@x", TimeoutSec: 5}, nil)
+	s := New(types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5}, nil)
 	err := s.Send(context.Background(), Message{Subject: "x", Body: "y"})
 	if !stderrs.Is(err, ErrInvalidMessage) {
 		t.Errorf("err = %v, want ErrInvalidMessage", err)
@@ -202,7 +202,7 @@ func TestSend_MissingRecipient_ReturnsErrInvalidMessage(t *testing.T) {
 }
 
 func TestSend_MissingSubject_ReturnsErrInvalidMessage(t *testing.T) {
-	s := New(types.SmtpConfig{Host: "x", Port: 25, From: "f@x", TimeoutSec: 5}, nil)
+	s := New(types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5}, nil)
 	err := s.Send(context.Background(), Message{To: "a@b", Body: "y"})
 	if !stderrs.Is(err, ErrInvalidMessage) {
 		t.Errorf("err = %v, want ErrInvalidMessage", err)
@@ -219,6 +219,7 @@ func TestSend_HappyPath_DeliversToFakeServer(t *testing.T) {
 
 	host, port := fake.hostPort()
 	s := New(types.SmtpConfig{
+		Enabled:    true,
 		Host:       host,
 		Port:       port,
 		From:       "daemon@example.com",
@@ -284,7 +285,7 @@ func TestSend_NoAttachments_ProducesPlainTextEnvelope(t *testing.T) {
 	t.Cleanup(fake.close)
 	host, port := fake.hostPort()
 	s := New(types.SmtpConfig{
-		Host: host, Port: port, From: "f@x", TimeoutSec: 5,
+		Enabled: true, Host: host, Port: port, From: "f@x", TimeoutSec: 5,
 	}, nil)
 
 	err := s.Send(context.Background(), Message{
@@ -314,6 +315,7 @@ func TestSend_NoAttachments_ProducesPlainTextEnvelope(t *testing.T) {
 // reads this at mount to pre-fill the recipient input.
 func TestSend_DefaultRecipient_SnapshottedFromConfig(t *testing.T) {
 	s := New(types.SmtpConfig{
+		Enabled:          true,
 		Host:             "x",
 		Port:             25,
 		From:             "f@x",
@@ -345,6 +347,7 @@ func TestSend_DialFailure_ReturnsWrappedError(t *testing.T) {
 	_ = l.Close()
 
 	s := New(types.SmtpConfig{
+		Enabled:    true,
 		Host:       "127.0.0.1",
 		Port:       addr.Port,
 		From:       "f@x",

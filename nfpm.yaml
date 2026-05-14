@@ -32,5 +32,9 @@ contents:
     file_info:
       mode: 0644
 
-scripts:
-  postinstall: packaging/postinstall.sh
+# No postinstall scriptlet. An RPM scriptlet runs as root and so
+# can't `systemctl --user enable`, `loginctl enable-linger`, or do
+# anything else that needs the operator's session — those are the
+# only actions worth taking. Echoing instructions during `dnf
+# install` is just noise; docs/install.md is the canonical setup
+# guide.

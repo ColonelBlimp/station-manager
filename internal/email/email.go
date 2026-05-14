@@ -44,10 +44,10 @@ import (
 // ServiceName is the DI bean ID for the mailer (used by internal/iocdi).
 const ServiceName = "email"
 
-// ErrMailerDisabled is returned by Send when the SMTP block is
-// unconfigured (Host empty). Callers check with errors.Is and surface
+// ErrMailerDisabled is returned by Send when the operator's SMTP
+// block has Enabled=false. Callers check with errors.Is and surface
 // "email not configured" to the operator.
-var ErrMailerDisabled = stderrs.New("mailer disabled (smtp.host is empty)")
+var ErrMailerDisabled = stderrs.New("mailer disabled (smtp.enabled is false)")
 
 // ErrInvalidMessage is returned for malformed callers (no recipient,
 // no subject, etc.). Distinct from transport errors so handlers can
@@ -103,7 +103,7 @@ func New(cfg types.SmtpConfig, logger *logging.Service) *Service {
 // clearer error, though Send itself is also safe to call (returns
 // ErrMailerDisabled).
 func (s *Service) Enabled() bool {
-	return s != nil && s.cfg.Host != ""
+	return s != nil && s.cfg.Enabled
 }
 
 // DefaultRecipient returns the operator's pre-configured recipient
@@ -117,8 +117,8 @@ func (s *Service) DefaultRecipient() string {
 }
 
 // Send delivers msg via the configured SMTP server. Returns
-// ErrMailerDisabled if Host is unset, ErrInvalidMessage for malformed
-// input, or a wrapped transport error otherwise.
+// ErrMailerDisabled if smtp.enabled is false, ErrInvalidMessage for
+// malformed input, or a wrapped transport error otherwise.
 //
 // Connect-and-send semantics: every call opens a fresh SMTP session
 // (DIAL → STARTTLS → AUTH → MAIL FROM → RCPT TO → DATA → QUIT) and
@@ -132,7 +132,7 @@ func (s *Service) DefaultRecipient() string {
 func (s *Service) Send(ctx context.Context, msg Message) error {
 	const op errors.Op = "email.Send"
 
-	if s == nil || s.cfg.Host == "" {
+	if s == nil || !s.cfg.Enabled {
 		return ErrMailerDisabled
 	}
 	if msg.To == "" {

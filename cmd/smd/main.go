@@ -37,6 +37,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // Version is the daemon build version, served by /v1/version. Override
@@ -133,6 +134,21 @@ func run() error {
 	// care about isolation.
 	adif.ProgramVersion = Version
 
+	// ---- Ensure the working directory exists ----
+	// Has to happen BEFORE loadConfig — the on-first-run config seed
+	// writes config.json into this directory, and the UA-persist step
+	// after loadConfig rewrites the file. Without this, package
+	// installs that point SM_WORKING_DIR at a not-yet-created path
+	// (the systemd unit's `%h/.local/share/station-manager` on first
+	// run, for example) hit ENOENT on every write. utils.WorkingDir
+	// honours --config's parent dir implicitly by reading the same
+	// SM_WORKING_DIR env var the flag resolution uses; for an explicit
+	// --config flag pointing somewhere else, that path's parent is
+	// the operator's responsibility.
+	if _, werr := utils.WorkingDir(); werr != nil {
+		return fmt.Errorf("resolving working directory: %w", werr)
+	}
+
 	// ---- Load configuration ----
 	cfg, firstRunPath, err := loadConfig(*configPath)
 	if err != nil {
@@ -164,11 +180,18 @@ func run() error {
 	// Persist the resolved UserAgent (no-op when the operator
 	// already set it explicitly; writes the daemon default otherwise
 	// so the operator sees it on disk and can override later).
-	if err := cfgSvc.Update(func(c *config.Config) error {
+	// Soft-failure to match the first-run seed pattern: a read-only
+	// working dir is degraded but not fatal — the daemon still serves
+	// QSOs with the in-memory UA value, the operator just doesn't see
+	// it persisted in config.json. Stderr is the only available
+	// channel here (structured logger isn't built yet).
+	if uerr := cfgSvc.Update(func(c *config.Config) error {
 		c.UserAgent = cfg.UserAgent
 		return nil
-	}); err != nil {
-		return fmt.Errorf("persisting resolved UserAgent: %w", err)
+	}); uerr != nil {
+		_, _ = fmt.Fprintf(os.Stderr,
+			"smd: could not persist resolved UserAgent to config.json: %v (continuing with in-memory value %q)\n",
+			uerr, cfg.UserAgent)
 	}
 	// Forwarder package var — every QRZ forwarder POST stamps this
 	// on the User-Agent header. Set after the UA is final.

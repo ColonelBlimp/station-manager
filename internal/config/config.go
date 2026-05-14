@@ -263,6 +263,13 @@ func DefaultConfig(dataDir string) Config {
 	cfg.Logging.WithTimestamp = true
 	cfg.Logging.FileLogging = true
 	cfg.Logging.LogFileCompress = true
+	// StartTLS on by default — submission-port (587) practice and the
+	// safer choice on any non-loopback SMTP server. Operators who run
+	// a local fake (cleartext over loopback to a test smtp sink) flip
+	// this to false. Lives in DefaultConfig (not applyDefaults) so an
+	// explicit operator false doesn't get silently rewritten on every
+	// load — same rationale as the Logging.* booleans above.
+	cfg.Smtp.StartTLS = true
 	// Seed a disabled QRZ forwarder template so the operator can
 	// fill in their API key and flip enabled=true without having to
 	// reverse-engineer the schema. Stays disabled by default —
@@ -545,9 +552,9 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// or a hosted SMTP provider. TimeoutSec bounds the entire
 	// connect+auth+send round-trip; 30s tolerates the operator's
 	// flaky-internet baseline (per the operator-network memory).
-	// StartTLS / Host / From are NOT defaulted — they must be
-	// operator-supplied to enable the mailer; an empty Host disables
-	// it (no surprise sends to a wrong server).
+	// Host / From / Username / Password / DefaultRecipient stay empty
+	// — the operator fills them. Enabled stays false (zero value) so
+	// no surprise sends happen until the operator opts in.
 	if cfg.Smtp.Port == 0 {
 		cfg.Smtp.Port = 587
 	}
@@ -722,19 +729,23 @@ func validateLookupProvider(label string, p types.LookupConfig) error {
 	return nil
 }
 
-// validateSmtp checks the SMTP block. Empty Host = mailer disabled,
-// no further checks (the operator hasn't configured email yet, which
-// is a legitimate state). When Host is set, From and Port are required
-// — From is always present in the envelope so the daemon can't send
-// without one, and Port=0 would imply "default" but RFC has no
-// universal default for SMTP submission so we require an explicit
-// value (applyDefaults stamps 587 unless the operator overrode it).
+// validateSmtp checks the SMTP block. Enabled=false = mailer
+// disabled, no further checks (the operator hasn't configured email
+// yet, which is a legitimate state). When Enabled, Host + From +
+// Port + TimeoutSec must all be valid — Host is the submission
+// server, From is always present in the envelope so the daemon
+// can't send without one, Port=0 would imply "default" but RFC has
+// no universal default for SMTP submission (applyDefaults stamps
+// 587 unless the operator overrode it).
 func validateSmtp(s types.SmtpConfig) error {
-	if s.Host == "" {
+	if !s.Enabled {
 		return nil
 	}
+	if s.Host == "" {
+		return fmt.Errorf("smtp.host is required when smtp.enabled is true")
+	}
 	if s.From == "" {
-		return fmt.Errorf("smtp.from is required when smtp.host is set")
+		return fmt.Errorf("smtp.from is required when smtp.enabled is true")
 	}
 	if s.Port <= 0 || s.Port > 65535 {
 		return fmt.Errorf("smtp.port must be in 1..65535, got %d", s.Port)

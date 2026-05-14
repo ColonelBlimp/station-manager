@@ -705,6 +705,7 @@ func TestHandleGetConfig_MailerDisabled(t *testing.T) {
 // either leak the password or invite SPA edits to fields it doesn't own.
 func TestHandleGetConfig_MailerEnabled(t *testing.T) {
 	srv := testServerWithMailer(t, types.SmtpConfig{
+		Enabled:          true,
 		Host:             "smtp.example.org",
 		Port:             587,
 		Username:         "operator",

@@ -42,8 +42,10 @@ func TestSessionEmail_MailerDisabled_Returns503(t *testing.T) {
 	}
 }
 
-func TestSessionEmail_MailerEmptyHost_Returns503(t *testing.T) {
-	// Service constructed but Host empty → still disabled.
+func TestSessionEmail_MailerConfiguredButDisabled_Returns503(t *testing.T) {
+	// Service constructed with a real mailer but Enabled=false → 503
+	// (distinct from the nil-Service path above which exercises the
+	// same response from a different code branch).
 	srv := testServerWithMailer(t, types.SmtpConfig{From: "f@x", Port: 587, TimeoutSec: 5})
 
 	body := `{"to":"a@b","adif":"<call:5>K1ABC<eor>"}`
@@ -59,7 +61,7 @@ func TestSessionEmail_MailerEmptyHost_Returns503(t *testing.T) {
 // ---- input validation ----
 
 func TestSessionEmail_MissingTo_Returns400(t *testing.T) {
-	srv := testServerWithMailer(t, types.SmtpConfig{Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
+	srv := testServerWithMailer(t, types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
 
 	body := `{"adif":"<call:5>K1ABC<eor>"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
@@ -75,7 +77,7 @@ func TestSessionEmail_MissingTo_Returns400(t *testing.T) {
 }
 
 func TestSessionEmail_MissingAdif_Returns400(t *testing.T) {
-	srv := testServerWithMailer(t, types.SmtpConfig{Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
+	srv := testServerWithMailer(t, types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
 
 	body := `{"to":"a@b"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
@@ -88,7 +90,7 @@ func TestSessionEmail_MissingAdif_Returns400(t *testing.T) {
 }
 
 func TestSessionEmail_ToWithoutAt_Returns400(t *testing.T) {
-	srv := testServerWithMailer(t, types.SmtpConfig{Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
+	srv := testServerWithMailer(t, types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
 
 	body := `{"to":"not-an-email","adif":"<call:5>K1ABC<eor>"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
@@ -104,7 +106,7 @@ func TestSessionEmail_ToWithoutAt_Returns400(t *testing.T) {
 }
 
 func TestSessionEmail_MalformedJson_Returns400(t *testing.T) {
-	srv := testServerWithMailer(t, types.SmtpConfig{Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
+	srv := testServerWithMailer(t, types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(`{not-json`))
 	w := httptest.NewRecorder()
@@ -124,6 +126,7 @@ func TestSessionEmail_SmtpDialFailure_Returns502(t *testing.T) {
 	// Point at a closed port — Dial will fail, handler routes the
 	// transport error to 502 smtp_failure.
 	srv := testServerWithMailer(t, types.SmtpConfig{
+		Enabled:    true,
 		Host:       "127.0.0.1",
 		Port:       1, // privileged + nothing listening
 		From:       "f@x",
