@@ -289,12 +289,13 @@ connected `curl` event stream.
 
 ## Milestone 2 — Browser SPA clients
 
-**Status: 🚧 IN PROGRESS (as of 2026-05-03).** Original scope was
-"Wails thin clients"; per ADR 0001 (2026-04-30) the client apps are
-now browser SPAs (Svelte 5 + Vite + Tailwind v4) embedded in the
-daemon binary via `//go:embed` and served by the daemon at `GET /`
-when `Protocol=tcp && ServeSPA=true`. The original Wails-era scope
-is preserved at the bottom of this section as the historical record.
+**Status: 🚧 IN PROGRESS — close to done (as of 2026-05-14).** Original
+scope was "Wails thin clients"; per ADR 0001 (2026-04-30) the client
+apps are now browser SPAs (Svelte 5 + Vite + Tailwind v4) embedded in
+the daemon binary via `//go:embed` and served by the daemon at
+`GET /` when `Protocol=tcp && ServeSPA=true`. The original Wails-era
+scope is preserved at the bottom of this section as the historical
+record.
 
 The logging SPA (`frontend/logging/`) scaffold landed 2026-04-30 and
 QSO-entry UX shipped through session 28 (2026-05-02): callsign /
@@ -305,6 +306,22 @@ Session 30 (2026-05-03) wired submit to `POST /v1/qso` end-to-end
 via `lib/api/qso.ts`, built the toast system per ADR 0008, added
 the daemon HTTP access log, and logged the first real QSO through
 the v2 stack (7Q5MLV @ 14.250 MHz USB).
+
+**What's left in M2 (as of 2026-05-14):**
+
+- CAT-handover toast (one `toasts.info(...)` call; awaits the live
+  bridge transition).
+- Three deferred keyboard shortcuts: F2 lookup-only, Ctrl+\ VFO
+  swap, `?` help overlay. Other ADR 0007 shortcuts (ESC, Ctrl/Cmd+
+  Enter, Tab→enrichment, Enter/Space on activatable elements) are
+  shipped — see `docs/keyboard-shortcuts.md` for the live inventory.
+- Logbook + config SPAs (deferred — not blocking on M2 closeout).
+
+Everything else listed under "Scope" below is shipped; the code-
+review tail (sessions 53–60) cleaned up the last architectural
+debt on the logging SPA. Natural next step is **live operator
+dogfooding on the FTdx10** — full stack works in isolation, just
+hasn't been run through a real-rig session since M3a closed.
 
 ### Scope (revised per ADR 0001)
 
@@ -465,19 +482,43 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
   `calculateBearing`, `haversineKm`, `pathInfo` — for the
   country panel's short/long path display. Landed sessions
   34-35, 2026-05-05.
-- ⏳ `internal/bridge` package per ADR 0013 — daemon subsystem
-  for `/v1/rig/events` SSE, rigctld-compat TCP, AUTO-mode CAT,
-  PTT arbitration. Replaces the parked `cmd/logging/` Gio CAT
-  loop.
-- ⏳ Real `EventSource` consumer in `bridge.svelte.ts` — populates
-  catState from SSE.
-- ⏳ CAT-handover toast — toast plumbing exists; awaits the bridge
-  so there's a transition to fire on (one `toasts.info(...)` call).
-- ⏳ Keyboard shortcuts per ADR 0007 — F2 lookup-only, Ctrl+\\ VFO
-  swap, Ctrl+Enter submit, ? help overlay.
+- ✅ `internal/bridge` package per ADR 0013 — shipped end-to-end
+  via M3a (sessions 48–51). v1 is read-only (no rigctld-compat TCP,
+  no PTT — those are out of M3a per ADR 0019). See the M3a
+  sub-sections below for the full work record. Cross-listed here
+  because the M2 plan originally bundled it; the package and the
+  SSE consumer are the foundation the SPA's live-rig display sits on.
+- ✅ Real `EventSource` consumer in `bridge.svelte.ts` — populates
+  catState from SSE. Shipped session 50 (M3a.4, 2026-05-11).
+- ⏳ CAT-handover toast — toast plumbing exists; awaits a chosen
+  trigger event from the bridge (likely first `rig-state` after a
+  fresh subscribe, gated on a "haven't toasted yet this session"
+  flag). One `toasts.info(...)` call when settled.
+- 🟡 Keyboard shortcuts per ADR 0007 — **partially shipped, partially
+  deferred.** Live in the SPA today: ESC clears the QSO form,
+  Ctrl/Cmd+Enter submits, Tab in Callsign triggers enrichment +
+  starts the QSO timer, Enter/Space on VFO box / SessionPanel row /
+  overlay backdrop, Enter / ESC inside VFO frequency input, ESC in
+  the QSO Edit Overlay. Deferred: F2 lookup-only (enrichment
+  without starting the QSO timer), Ctrl+\ VFO swap, `?` help
+  overlay. Full inventory lives in `docs/keyboard-shortcuts.md`.
 - ⏳ Logbook and config SPAs — deferred. Single `frontend/logging/`
   bundle covers the operator's primary workflow; logbook /
   config become separate routes or separate SPAs when needed.
+- ✅ InfoPanel + tabbed surface (Worked / Details / My Station /
+  Session). Shipped sessions 42–46. Each tab feeds from existing
+  daemon endpoints (`/v1/contact-history`, `/v1/qso/*`, enrichment).
+  WAI-ARIA tablist keyboard nav (ArrowLeft/Right/Home/End +
+  roving tabindex) added in the session-53 code-review pass.
+- ✅ QSO Edit Overlay — modal edit for any session-list QSO via
+  `GET /v1/qso/{uuid}` + `PATCH /v1/qso/{uuid}`. Focus trap and
+  ESC contract per the session-53 code-review pass.
+- ✅ Session email-out — `POST /v1/session/email-out` ships the
+  in-memory session's ADIF to a recipient via the daemon's mailer
+  (when `mailer.enabled`). Surfaced in SessionPanel.
+- ✅ Frontend code review closed (sessions 53–60). All 5 critical,
+  all 17 important, 8 of 11 nits closed (3 reviewer-accepted-as-is).
+  See `docs/reviews/frontend-logging-2026-05-12.md`.
 - 🗑 Text-file fallback — re-evaluated. The SPA is served BY the
   daemon (single-origin embed); SPA-side offline mode is
   incoherent (no daemon → no SPA load). Daemon-side QSO write
