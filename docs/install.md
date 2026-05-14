@@ -143,8 +143,14 @@ can patch the source ADIF and re-import. Re-imports are idempotent —
 already-stored QSOs return as `duplicate`, not as errors.
 
 The importer is the same binary as the daemon — there's no separate
-package. Run it from any shell while the daemon is stopped or
-running; it opens its own database connection.
+package. **Stop the daemon first** (`systemctl --user stop smd`) so
+the two processes aren't racing on the same SQLite file, then run the
+import, then restart. The import itself takes seconds.
+
+You don't need to set `SM_WORKING_DIR` in your shell. When run from
+`/usr/bin/smd` (the installed location), the binary resolves its
+working directory via the same XDG fallback the daemon uses, so it
+finds your real `config.json` and database automatically.
 
 By default, imported QSOs land in your **default logbook** — the
 one first-run setup seeded from your callsign. To target a
@@ -170,9 +176,17 @@ logbook app); if you need one, hit `POST /v1/logbook` directly with
 | Logs | `~/.local/share/station-manager/log/` |
 
 The data directory is set by the systemd unit via the
-`SM_WORKING_DIR` environment variable. The daemon will create the
+`SM_WORKING_DIR` environment variable. When running `smd` directly
+(e.g. `smd import`) without that env var, the binary falls back to
+`$XDG_DATA_HOME/station-manager` (default `~/.local/share/station-manager/`)
+as long as it's installed under a system path — so the daemon and
+the importer always see the same files. The daemon will create the
 directory and seed a default `config.json` on first start if
-neither exists.
+neither exists. That default `config.json` is a complete template:
+every operator-editable field is present, with sensible empty
+defaults or canonical public URLs (QRZ XML endpoint, hamnut endpoint,
+QRZ web-profile prefix) prefilled. Edit the fields you care about
+and restart the daemon.
 
 ---
 

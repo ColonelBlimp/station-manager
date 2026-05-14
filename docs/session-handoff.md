@@ -166,6 +166,75 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 63 work (2026-05-14) — Install-day shakeout: config templates, UA refactor, working-dir fix, dev RPM workflow
+
+Long session driven by real install-day friction on the operator's machine. Two install cycles, two real bugs surfaced and fixed, a handful of UX-polish config-template additions, one structural refactor (global UserAgent), and the dev RPM workflow itself. Net effect: a freshly-installed daemon now produces a complete, hand-editable `config.json` that exposes every operator-touchable knob, and the import + daemon binaries pick the right working dir without any shell-side env setup.
+
+**Bug fixes (both surfaced live, both required RPM rebuild + reinstall to verify):**
+
+1. **`utils.WorkingDir()` never called at startup → daemon crash-looped on first install.** The systemd unit set `SM_WORKING_DIR=%h/.local/share/station-manager`, but nothing in `cmd/smd/main.go` actually called `WorkingDir()` to MkdirAll-create that path before `loadConfig` tried to seed `config.json` into it. The existing first-run write tolerated the failure ("continuing with in-memory defaults"); my new `cfgSvc.Update(UserAgent)` line then hit the same missing-dir error and treated it as fatal, producing a permanent crash loop. Fix: `defaultConfigPath()` now delegates to `utils.WorkingDir()` (which does the MkdirAll), and the UA-persist call softened to log-and-continue matching the seed pattern.
+2. **`defaultConfigPath()` cwd-first preference picked up stray `$HOME/config.json`.** First attempt at the working-dir refactor preferred a cwd-local `config.json` over `utils.WorkingDir()`. The systemd unit defaults cwd to `$HOME` (no `WorkingDirectory=` override), so a leftover `~/config.json` from an earlier misconfigured `smd import` run silently preempted the real install. CAT stopped working because the stray config had `bridge.enabled=false`. Operator caught it ("CAT does not seem to be working (it was)?"); cwd preference removed entirely — `utils.WorkingDir()` is now the canonical resolver, full stop. The dev-workflow benefit (run `./smd` from a repo dir with config beside the binary) is preserved via `utils.WorkingDir`'s exec-dir fallback for non-system-path binaries; system-path binaries (`/usr/bin/smd`) always resolve to XDG. `TestLoadConfig_CwdFallback` deleted (premise no longer applies); `TestLoadConfig_FirstRunWritesDefaultInCwd` renamed to `_InWorkingDir` and rewritten to use `SM_WORKING_DIR` explicitly, plus a new assertion that no stray `config.json` lands in cwd.
+
+Both bugs are the canonical "deployment-shape regression that unit tests can't see" — they require `dnf install` → `systemctl --user start` → real filesystem + env from the unit. Logged as concrete motivation in `project_sm_cd_pipeline_planned` memory; future CD pipeline work has a 5-8-case post-install acceptance test surface staked out.
+
+**Config templates — every operator-editable field now visible in the rendered `config.json`:**
+
+The principle the operator drove home over the session: a fresh `config.json` should show every knob you might need to touch, with sensible empty defaults and an explicit `enabled` flag, so editing is "pattern-match and fill in" rather than "read the schema source to remember what fields exist." Specific changes:
+
+- **SMTP block — explicit `enabled` field + omitempty stripped from every operator-fillable field.** `SmtpConfig.Enabled bool` is now the kill-switch (replaces the implicit "empty Host = disabled" convention). `Service.Enabled()` and `Send()` gate on `cfg.Enabled`. `ErrMailerDisabled` message updated. `StartTLS` defaults to `true` in DefaultConfig (matches the doc-comment intent — was previously omitempty-hidden when false). Validation: enabled→requires Host+From+Port+TimeoutSec; disabled→no further checks. Rendered shape: `{enabled, host, port=587, username, password, from, default_recipient, starttls=true, timeout_sec=30}`. ~10 test sites updated to add `Enabled: true` where they previously implied enable-via-Host.
+- **QRZ forwarder template** in `DefaultConfig.Forwarders`: disabled QRZ entry with empty `api_key` so the operator only fills in credentials + flips `enabled`. Validation passes (statically decidable), disabled entries skipped at startup (`cmd/smd/main.go:617`).
+- **Hamnut lookup template**: prepopulated with canonical URL `https://api.hamnut.com/v1/call-signs/prefixes` (v1's value, recovered from `git show v1.0.0:internal/config/defaults.go`). Operator just flips `enabled` for the common case.
+- **QRZ lookup chain template**: prepopulated with canonical XML endpoint `https://xmldata.qrz.com/xml/current`, `view_url` set to `https://www.qrz.com/db/` (trailing slash; SPA concatenates the callsign; matches v1's `QrzViewUrl` default), empty `username` / `password`. Operator fills credentials, flips `enabled`.
+- **Bridge block — `serial.port` and `cat.driver` rendered as empty strings** instead of being `omitempty`-hidden inside `serial: {}` / `cat: {}` placeholder objects. `BridgeConfig.{Serial,Cat}` and the inner `Port` / `Driver` fields lost their `omitempty` tags; rendered shape now `{enabled: false, serial: {port: ""}, cat: {driver: ""}}` so a fresh install advertises the two fields you need to fill in.
+- **LookupConfig — `username` / `password` rendered as empty strings** (omitempty stripped). Hamnut shows them empty even though it doesn't use them; the operator can ignore them there.
+
+**Global UserAgent refactor (operator-driven structural change):**
+
+The operator noticed the QRZ forwarder hardcoded `station-manager/dev` while the lookup providers each took a per-provider `useragent` from `LookupConfig`. Two asymmetries: forwarder vs lookup (one hardcoded, the others operator-configurable), and within lookup (per-provider when in practice every provider speaks for the same daemon). Per their direction: collapse to ONE global `Config.UserAgent` at the top level of `config.json`.
+
+Schema changes:
+- `Config.UserAgent string \`json:"useragent"\`` added at the top of `Config`.
+- `LookupConfig.UserAgent` removed entirely (no `omitempty` adjustment needed — gone).
+- `validateLookupProvider` no longer checks UA (moved to Service.Initialize per provider).
+- Provider Service structs (`hamnut.Service`, `lookup/qrz.Service`) gained a `UserAgent string` field; `s.Config.UserAgent` reads switched to `s.UserAgent`; Initialize fails loudly when empty for enabled providers.
+
+Plumbing in `cmd/smd/main.go`:
+- Post-Load: if `cfg.UserAgent` is empty, fill with `"station-manager/" + Version` (ldflags-injected build version). Persist via `cfgSvc.Update`. Fail loudly if the resolved UA ends up empty (shouldn't happen — defense in depth).
+- After resolution: set `qrz.UserAgent` (forwarder package var) from `cfg.UserAgent`, closing the stage-8 TODO in the forwarder's doc comment. Pass `cfg.UserAgent` to each lookup Service via the new struct field at construction.
+
+Build-time wiring:
+- `scripts/release-rpm.sh` and `scripts/dev-rpm.sh` now inject `-X main.Version=$VERSION` via `-ldflags`. Production builds carry the real version in their UA; dev builds carry `station-manager/dev`. The previously-broken `var Version = "dev"` ldflags hookup at `cmd/smd/main.go:44` is now actually used.
+
+Migration note: existing operator configs with `useragent` inside `lookup.hamnut` or `lookup.chain[i]` get silently ignored on load (unknown JSON field). For the single-user dev install that's the entire user base today, this is a non-issue.
+
+**Dev RPM workflow (operator-driven):**
+
+The operator was rebuilding/reinstalling 5+ times in the session and asked for a fixed-filename dev artifact so the install command stays the same across iterations. New deliverables:
+
+- **`scripts/dev-rpm.sh`** — fixed-version (`dev`), fixed-output (`build/release/station-manager-dev.x86_64.rpm`). Same SPA→Go→nfpm pipeline as `release-rpm.sh` but no version argument to invent each time.
+- **`Taskfile.yml` → `rpm:dev` task** — delegates to the script (existing Taskfile convention: tasks are thin wrappers over `scripts/*.sh` so anyone without `task` installed can run the bash directly). Listed via `task --list`.
+- **`packaging/postinstall.sh` removed; `nfpm.yaml` `scripts.postinstall` dropped.** The scriptlet only echoed instructions during `dnf install`; an RPM scriptlet can't do anything actually useful (runs as root, can't touch the operator's systemd user instance). `docs/install.md` is the canonical setup guide; the scriptlet was noise.
+
+**Misc UX fixes:**
+
+- **Welcome-page callsign field autofocus.** First-run setup's input lacked focus on mount. Added a tiny Svelte 5 action `use:autofocus` (fires when the element mounts — exactly when the `{#if !configState.setupComplete}` branch becomes true). Three-line change in `app.svelte`. The setup snippet is gated behind a fetch, so a script-level `onMount` focus call wouldn't have worked.
+- **`bridge.serial.baud` removed from config schema.** The operator spotted the redundancy: rigdef declares `baud_rate` (per-rig protocol setting), bridge config also had `Baud` (operator-supplied). `buildSerialConfig` was reading the config one and ignoring the rigdef one entirely — silently wrong for any future non-38400 rig because `applyDefaults` stamped 38400 on the config-side. Removed `BridgeSerialConfig.Baud`, `buildSerialConfig` now sources `BaudRate` from `rigSerial.BaudRate`, the 38400 default and `>0` validation deleted, 10 test sites updated. New rigdefs (Icom at 9600, etc.) just declare their baud in the JSON and it flows through.
+- **WorkedPanel "no prior contacts" message moved to i18n + reworded.** Was hardcoded `"No prior contacts with this callsign."` — operator wanted "with this station" (correct framing: the panel is keyed by callsign but the operator's mental model is "the station I'm working"). New i18n key `worked.empty` in `lib/i18n/en.ts`, WorkedPanel imports `t` and renders `{t('worked.empty')}`. First non-bridge-error consumer of the i18n system.
+
+**Doc footprint:**
+
+- This entry.
+- `docs/install.md` — §5 (ADIF import) loses the `SET SM_WORKING_DIR` env-setting requirement (no longer needed); §6 (locations) clarifies the XDG-fallback behaviour.
+- `project_sm_cd_pipeline_planned.md` — updated with the two concrete deployment-shape incidents and a starter list of post-install acceptance test cases.
+- No ADR — every change was operator-directed; no plausible-alternatives-weighed decision worth the formal log.
+
+**Verification:** all Go tests pass (`go test ./...`); SPA `npm run check` 0/0/0, `npm test` 584/584. Two operator-confirmed live tests this session (`task rpm:dev` cycle; daemon serves SPA, opens serial port for CAT, logs to right path).
+
+**Next-session pickups:**
+
+- CD pipeline planning is now real (operator surfaced it this session as direct consequence of the deployment-shape bugs). When started, the test inventory in `project_sm_cd_pipeline_planned.md` plus the two named incidents are the starting brief.
+- Stage 3 (install day) effectively happened across this session; operator's machine is now running v2 with CAT confirmed live earlier (though it was loading the wrong config for part of the session due to the bug). Real ADIF import still to happen on the right database (was blocked all session by the cwd-fallback bug; the cleanup command in the last fix should clear the path).
+
 ### Session 62 work (2026-05-14) — Stage 2 of pre-dogfooding: RPM packaging
 
 Single binary + systemd `--user` unit, packaged as `station-manager-<ver>.x86_64.rpm`. Same package name as v1 so `dnf install` replaces the existing `station-manager-0.0.0~local-1` cleanly via file-list swap. v2's package is dramatically simpler than v1's — no GTK/WebKit depends, no three Wails binaries, no `.desktop` / icon / XDG-menu files. The browser SPA is embedded in the daemon binary via `//go:embed` and served at `GET /`, so the operator's browser is the UI.
