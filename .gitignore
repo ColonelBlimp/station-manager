@@ -16,4 +16,7 @@ build/
 frontend/logging/node_modules/
 frontend/logging/dist/*
 !frontend/logging/dist/index.html
+# Stray repo-root node_modules (e.g. vitest cache left behind by running
+# from the wrong cwd) — Go project, never legitimate here.
+/node_modules/
 /smd
