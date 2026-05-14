@@ -166,6 +166,43 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 61 work (2026-05-14) — ADIF importer subcommand (`smd import`)
+
+Stage 1 of the pre-dogfooding work. New `smd import <file.adi>` subcommand brings 4233 historical QSOs from QRZ Logbook into the v2 daemon. **No new HTTP endpoint** — discussed and rejected in conversation as over-engineering for a one-shot operation. The subcommand drives the canonical `qsoservice.Submit` path directly (validation + atomic write + audit table all inherited) and stamps the QRZ `qso_upload` row pre-success with the LOGID from the source ADIF.
+
+**Files touched:**
+
+- **`cmd/smd/import.go`** (NEW). `runImport(args []string) error` — minimal DI container (config + logging + sqlite + qsoservice + events.Hub; no HTTP, no forwarder workers, no bridge, no enrichment), parses the ADIF file, iterates records, per record: `normalizeImportedMode(&rec)` → `qsoservice.Submit` → if `app_qrzlog_logid` + `qrzcom_qso_upload_status=Y` present AND QRZ forwarder is configured, `MarkUploadSuccessWithContext` to stamp the qso_upload row pre-success. Prints `{stored, duplicate, errors}` summary; exit 1 if errors > 0.
+- **`cmd/smd/main.go`** — subcommand dispatch at the top of `main()`. `os.Args[1] == "import"` branches to `runImport(os.Args[2:])` before the daemon's `flag.Parse()`. Shape future-proof for additional subcommands.
+- **`cmd/smd/import_test.go`** (NEW). 5 integration tests (real sqlite, no mocks per project convention): happy path, dry-run skips DB, idempotency (same file re-imported → all duplicate), MY_\* preservation (operator's current config does NOT overwrite historical record values), QRZ LOGID stamping (qso_upload row gets correct upstream_id + uploaded status).
+- **`internal/adif/adif.go`** — added `AppQrzlogLogid string \`adif:"app_qrzlog_logid,omitempty"\`` to `Record`. The QRZ-app-specific LOGID was being silently dropped by the parser (no struct field). Now captured, used by the importer, omitted from non-import emit paths via `omitempty`. Same pattern as the existing `AppSmQsoID` / `AppSmRequestQsl`.
+
+**Key design choices (locked in conversation, captured for posterity):**
+
+- **No new HTTP endpoint.** Operator pushback was correct — `POST /v1/qso/import` would be permanent code surface (handler + tests + api.md entry + error paths) for an operation that runs maybe 5 times in its lifetime. Subcommand on the existing binary is dramatically smaller.
+- **Caller-supplied MY_\* fields win.** `qsoservice.Submit` already does this (it overlays only `StationCallsign` from the record onto `qso.LoggingStation`; the other MY_\* fields flow via `adif.RecordToQso` as-is). No code change needed in qsoservice — verified by reading the function before building. The test pins the contract.
+- **`normalizeImportedMode` handles `MODE=USB` (QRZ shorthand).** QRZ Logbook exports submodes as MODE (e.g. `MODE=USB` instead of `MODE=SSB SUBMODE=USB`). Strict ADIF validation rejects the shorthand. Pre-Submit normalisation: if MODE is recognised as a submode, swap → `MODE=<parent> SUBMODE=<original>`. Lives in the importer because the live SPA submit path never sees this corruption.
+- **`MarkUploadSuccessWithContext`, not `MarkUploadSuccessWithAdifStampWithContext`.** The latter stamps today's date onto the QSO row; for imports we want the historical `qrzcom_qso_upload_date` from the source. `RecordToQso` already preserves those fields onto the QSO row, so the importer only needs to touch the qso_upload row (status + upstream_id).
+- **Operator's existing v1 `station-manager` RPM `nfpm.yaml` shape.** Confirmed packaging via `nfpm` is the project's pattern. v2 RPM will be one binary (`smd`) + systemd `--user` unit + `loginctl enable-linger` instructions for boot-time auto-start. Same package name (`station-manager`) so `dnf install` replaces v1's `station-manager-0.0.0~local-1` via file-list swap.
+
+**Live test against `build/20260514-7q5mlv.adi` (4233 records):**
+
+- 4230 stored, 2 duplicate (in-file dupes), 1 error (single bad record with `rst_rcvd=4657` violating the daemon's `length(rst_rcvd) <= 3` CHECK constraint — likely a typo in the source, not a daemon bug).
+- All 4230 stored QSOs have `qso_upload` rows pre-stamped (`status=uploaded`, `upstream_id` populated with the QRZ LOGID).
+- MY_\* fields preserved per-record where present: `my_gridsquare` on every record (the historical Malawi `KH78an`, NOT current config), `my_antenna` on 2340/2342, `my_rig` on 1181/1181.
+- Historical `qrzcom_qso_upload_date` preserved (`20240617`, not today's date).
+- Throughput ~930 records/sec on the operator's machine. The whole import runs in ~5 seconds.
+
+**Pre-dogfooding sequencing (recap):**
+
+1. **Stage 1 — Importer.** ✅ This session. Test surface green; live test confirms the canonical path.
+2. **Stage 2 — RPM with `nfpm.yaml`.** Next session. One binary, systemd `--user` unit, `loginctl enable-linger` documented in post-install.
+3. **Stage 3 — Install day.** Same sitting as stage 2's first install: backup `~/.local/share/station-manager/` → `dnf remove station-manager` → `dnf install station-manager-<ver>.rpm` → `systemctl --user daemon-reload && systemctl --user enable --now smd` → first-run setup → `smd import ~/Downloads/qrz-export.adi`.
+
+**Verification:** all Go tests pass (full `go test -race ./...`); SPA tests unaffected (no JS changes). 5 new tests in `cmd/smd/import_test.go`. Live import survives 4233 real records.
+
+**Doc footprint:** this entry. `docs/v2-design/milestones.md` should grow a brief "pre-dogfooding" section pointing at this work — deferred to the stage-2 session so the section lands with the RPM work too.
+
 ### Session 60 work (2026-05-14) — 8 of 11 nits closed, review fully resolved on intent
 
 Final cleanup pass on the frontend-logging code review (`docs/reviews/frontend-logging-2026-05-12.md`). N1 and N11 were reviewer-marked acceptable-as-is; N5 was flagged "take or leave" and skipped per the project's "build specific not generic" rule. The remaining eight all landed.

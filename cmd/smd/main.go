@@ -67,6 +67,23 @@ func main() {
 		}
 	}()
 
+	// Subcommand dispatch. Currently only one — `smd import <file.adi>` —
+	// but inserted here as a switch so future subcommands (export,
+	// migrate, etc.) drop in without restructuring. Argv shape:
+	//   smd                              → daemon (run())
+	//   smd --config <path>              → daemon with flag (run())
+	//   smd import [flags] <file.adi>    → one-shot import (runImport())
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "import":
+			if err := runImport(os.Args[2:]); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
+				os.Exit(ExitError)
+			}
+			return
+		}
+	}
+
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
 		os.Exit(ExitError)

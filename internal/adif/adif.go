@@ -19,6 +19,13 @@ import (
 // card; the bool ↔ string conversion happens at the QsoToRecord /
 // RecordToQso boundary so types.Qso keeps the bool semantic. Empty
 // is the absence-equivalent — omitempty drops it from emitted ADIF.
+//
+// AppQrzlogLogid carries QRZ Logbook's per-QSO LOGID, surfaced on
+// every record QRZ exports. The importer (cmd/smd import) stashes it
+// into the QRZ qso_upload row's upstream_id so future PATCH/DELETE
+// forwarder flows can target the right QRZ record. Empty on every
+// non-import path — it never appears on records the SPA submits to
+// `POST /v1/qso`, so omitempty drops it from the emitted ADIF.
 type Record struct {
 	types.QsoDetails
 	types.ContactedStation
@@ -27,6 +34,7 @@ type Record struct {
 	UserDef
 	AppSmQsoID      string `adif:"app_sm_qso_id,omitempty"`
 	AppSmRequestQsl string `adif:"app_sm_request_qsl,omitempty"`
+	AppQrzlogLogid  string `adif:"app_qrzlog_logid,omitempty"`
 }
 
 type QslSection struct {
