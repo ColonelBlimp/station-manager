@@ -35,6 +35,8 @@ The library handles modifier-key exact-matching, cross-platform Ctrl/Cmd normali
 | `Enter` | Within a field: commit (e.g. VfoInput frequency) | — | Yes (already implemented per-component) |
 | `Escape` | Within a field: revert/cancel current edit (no commit). Outside fields: clear in-progress QSO draft | — | Yes |
 | `Ctrl+Enter` | Submit current QSO (when draft is valid) | — | Yes |
+| `F2` | Lookup-only: enrichment + contact-history fetch for the typed callsign, without starting the QSO timer (added 2026-05-15) | — | Yes (function key — no typing collision; the in-field firing is the whole point) |
+| `F3` | Mirror the TimerControls Start / Stop button that is currently enabled. Gated three-state: no lookup → no-op; lookup done + not started → Start; running → Stop (added 2026-05-15) | — | Yes (function key) |
 | `Ctrl+\` | Swap `selectedVfo` (A ↔ B) | **Yes** (writes `catState`) | Yes (modifier-keyed) |
 | `?` | Show keyboard help overlay | — | **No** (bare key — operators typing `?` in callsign field shouldn't trigger) |
 
@@ -42,7 +44,9 @@ This is the **initial** map — the bare minimum for at-speed logging. First rev
 
 **Key choices that aren't obvious:**
 
-- **`Ctrl+\` for VFO swap.** Backslash is unbound in browsers and OS shortcuts across Linux/macOS/Windows; near Enter for left-hand reachability. Alternatives considered: `Alt+V` (Alt opens View menu in some browsers), `Ctrl+Tab` (browser tab cycling), `F2` (reserved for future contest macros).
+- **`Ctrl+\` for VFO swap.** Backslash is unbound in browsers and OS shortcuts across Linux/macOS/Windows; near Enter for left-hand reachability. Alternatives considered: `Alt+V` (Alt opens View menu in some browsers), `Ctrl+Tab` (browser tab cycling), an F-key (F1/F4–F12 reserved for future contest macros; F2/F3 now taken by lookup-only and the timer-toggle respectively).
+- **`F2` for lookup-only.** Function key, no typing collision so it fires in-field — which is the whole point (the operator's hands are in the Callsign input when they want to peek before committing). Distinct from Tab semantically: Tab commits (timer starts), F2 peeks (timer stays paired-ticking). Added 2026-05-15 amendment.
+- **`F3` for timer toggle.** Adjacent to F2 for muscle-memory; mirrors the explicit Start / Stop buttons added to TimerControls in the same amendment. Gating is non-trivial: Start is enabled only after a lookup has fired for the typed callsign (Tab or F2), so F3-while-stopped fires Start; otherwise F3 in the no-lookup state is a no-op. Added 2026-05-15 amendment.
 - **`Ctrl+Enter` for QSO submit.** Standard "commit" shortcut across many apps (Slack, GitHub, etc.); muscle memory likely.
 - **`Escape` overloaded by context.** In a field: revert. Outside fields: clear draft. Both are "back out of the current thing" — consistent enough that the overload reads naturally.
 
@@ -75,7 +79,7 @@ A separate `<KeyboardHelp/>` component (planned), bound to `?`, lists all shortc
 
 ### Reserved key real estate
 
-- **F-keys (F1–F12) reserved for future contest macros.** N1MM-style logging uses F-keys for canned messages ("CQ TEST", "TU 73", "QRZ?"). Out of scope for v1; explicitly not bound now so the namespace is preserved.
+- **F-keys (F1, F4–F12) reserved for future contest macros.** N1MM-style logging uses F-keys for canned messages ("CQ TEST", "TU 73", "QRZ?"). Out of scope for v1; explicitly not bound now so the namespace is preserved. **F2 and F3 are the operating-flow exceptions** (amendment 2026-05-15): F2 is lookup-only, F3 is the timer toggle. Both are operating-flow primitives distinct from contest macros, taken before macros land, and will not be reclaimed if the macro system needs to keep those keys free — they're load-bearing for the pile-up workflow.
 - **Plain letter keys (a-z, 0-9) reserved for typing.** Never bind to a global shortcut — too easy to collide with in-field input.
 - **`Ctrl+1..9, Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+L, Ctrl+P, Ctrl+S` reserved by browsers.** Don't try to override; some browsers prevent it, others swallow it inconsistently.
 

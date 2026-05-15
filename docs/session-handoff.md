@@ -166,6 +166,46 @@ Picked up the explicitly-approved architectural sweep that session 53 documented
 
 **Remaining from the review:** I17 (validators boolean → string|null + ValidatedInput error rendering — own commit), all 11 nits (N1–N11 — polish, batch with adjacent work).
 
+### Session 64 work (2026-05-15) — F2 lookup-only + TimerControls start/stop + F3 toggle
+
+Three related shortcut / affordance changes landed together. **F2** (lookup-only enrichment without starting the QSO timer) per ADR 0007 amendment. **TimerControls** Start / Stop buttons (reverses the earlier "considered and dropped" decision in `frontend-spa.md`) with a three-state gate. **F3** as the focus-independent equivalent that mirrors the button gates exactly.
+
+**State machine the buttons / F3 implement:**
+
+1. No callsign typed OR no lookup done for current callsign → both buttons disabled, F3 is a no-op.
+2. Callsign typed + F2 lookup done (or post-Stop) → Start enabled, Stop disabled. F3 fires Start.
+3. Tab pressed OR Start clicked OR F3-while-stopped+ready → Stop enabled, Start disabled. F3 fires Stop.
+
+The gate `lookupDone` is a `$derived` comparison: `qsoDraft.lookupCallsign === normalize(qsoDraft.callsign)`. Editing the callsign field auto-invalidates the gate without any extra plumbing. Re-typing the original value re-enables it (cheap undo-typo).
+
+**Implementation:**
+
+- New `qsoDraft.lookupCallsign: string` ($state). Set synchronously inside `runLookup(call)` so the gate flips before any network response — enrichment is allowed to fail (the "Enrichment never blocks logging" invariant) and the operator must still be able to commit.
+- New `qsoDraft.stopQso()`: symmetric to `startQso()` — resnaps the three time fields to current UTC and flips `qsoStarted=false`. Typed fields stay.
+- `qsoDraft.clear()` extended to reset `lookupCallsign = ''`.
+- Extracted the enrichment + contact-history fetch body of `handleEnrich` into a new `runLookup(call)` helper. `handleEnrich(call)` now reads as `qsoDraft.startQso(); runLookup(call)` — splitting the timer-start side effect from the lookup work is what makes F2's semantics possible.
+- New `handleLookupShortcut()` reads `qsoDraft.callsign`, validates via `isValidCallsign` (same gate Tab uses inside `Callsign.svelte`), uppercases, and calls `runLookup`. Empty or invalid callsign is a silent no-op — the Callsign component's own inline error UI is enough.
+- F2 case added to `handleKeydown`: gated on `!qsoEditState.open`, `e.preventDefault()` to defang any browser-level binding. Fires regardless of focus context per ADR 0007's in-field policy — function key, no typing-collision risk.
+- F3 case added to `handleKeydown`: reads the same `startEnabled` / `stopEnabled` derived gates the buttons read, fires whichever is active. No-op when both are disabled.
+- `TimerControls.svelte` (operator-added skeleton; this session wired the props): now accepts `startDisabled` / `stopDisabled` / `onStart` / `onStop`. Pre-derived disabled flags from the parent — the three-state machine lives in QsoPanel.
+
+**Doc updates:**
+
+- `docs/keyboard-shortcuts.md` — new F2 + F3 rows in the Global section; new TimerControls row in Component activation table.
+- `docs/decisions/0007-keyboard-shortcuts.md` — F2 + F3 added to the shortcut map; "Key choices that aren't obvious" gains F2 and F3 entries; "Reserved key real estate" updated to F-keys (F1, F4–F12) reserved for future contest macros with F2 / F3 documented as the operating-flow exceptions.
+- `docs/v2-design/milestones.md` — F2 removed from the M2 deferred-shortcuts list.
+- `docs/v2-design/frontend-spa.md` — Start/Stop button section flipped from "considered and dropped" to "landed 2026-05-15" with the gate semantics explained. Timer transitions list grew Start-button / Stop-button rows.
+
+**Verification:**
+
+- `svelte-check` clean (250 files, 0 errors, 0 warnings).
+- `npm run lint` clean.
+- `npm test` — 584/584 pass across 34 files. No new unit tests for the TimerControls gate logic — characterisation tests against the derived gate would mostly re-state the derivation; the live test on the dev SPA covers the real workflow.
+
+**Deferred shortcuts remaining** (per ADR 0007): `Ctrl+\` VFO swap, `?` help overlay. Both still parked.
+
+---
+
 ### Session 63 work (2026-05-14) — Install-day shakeout: config templates, UA refactor, working-dir fix, dev RPM workflow
 
 Long session driven by real install-day friction on the operator's machine. Two install cycles, two real bugs surfaced and fixed, a handful of UX-polish config-template additions, one structural refactor (global UserAgent), and the dev RPM workflow itself. Net effect: a freshly-installed daemon now produces a complete, hand-editable `config.json` that exposes every operator-touchable knob, and the import + daemon binaries pick the right working dir without any shell-side env setup.

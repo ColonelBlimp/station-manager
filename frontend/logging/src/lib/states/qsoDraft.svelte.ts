@@ -8,12 +8,15 @@
  *
  * **Reactivity rule (per the patterns memory).** Every form-bound field
  * uses `$state` because Svelte 5 `bind:value={...}` requires a reactive
- * source on the parent side. The lifecycle flag `qsoStarted` is a plain
- * field — it is read only by imperative function bodies (`tick`,
- * `startQso`), never by a template, `$derived`, or `$effect`. Future
- * enrichment-populated fields (gridsquare, dxcc, country, cqZone,
- * ituZone…) default to plain unless a `bind:value` lands; that's the
- * leverage the module gives us as ADIF coverage grows.
+ * source on the parent side. `qsoStarted` is also `$state` — it gates
+ * the TimerControls Start/Stop button enable state (via QsoPanel's
+ * `stopEnabled`/`startEnabled` $derived) and the F3 toggle shortcut.
+ * `lookupCallsign` is `$state` for the same reason — it feeds the
+ * `lookupDone` derived alongside `callsign`. Future enrichment-
+ * populated fields (gridsquare, dxcc, country, cqZone, ituZone…)
+ * default to plain unless a `bind:value` lands or a reactive consumer
+ * appears; that's the leverage the module gives us as ADIF coverage
+ * grows.
  *
  * **Lifecycle (settled session 28, captured here on the lift).**
  *   - Pre-QSO  (`qsoStarted === false`): `qsoDate`, `timeOn`, and
@@ -127,7 +130,25 @@ class QsoDraft {
      * callsign. Read only by imperative method bodies; no reactive
      * consumer, so plain field (no `$state` overhead).
      */
-    qsoStarted: boolean = false;
+    qsoStarted: boolean = $state(false);
+
+    /**
+     * The normalized callsign (uppercased + trimmed) that `runLookup`
+     * last fired for. Empty until F2 / Tab fires an enrichment+history
+     * fetch. Compared against the current `callsign` in QsoPanel's
+     * `lookupDone` derived: when they match, the Start button (and F3
+     * while stopped) is enabled; when they don't, Start is disabled.
+     *
+     * Editing the callsign field naturally invalidates the gate
+     * without any extra plumbing — the comparison fails the moment
+     * the field diverges from the looked-up value. Re-typing the
+     * original value back in re-enables the gate (cheap undo-typo).
+     *
+     * Stays set after `stopQso()` — Stop returns to "lookup done,
+     * not started," from which Start is the natural next step. Only
+     * `clear()` and a successful submit fully reset it.
+     */
+    lookupCallsign: string = $state('');
 
     /**
      * Default RST for the current mode — re-evaluates when
@@ -164,6 +185,7 @@ class QsoDraft {
      */
     clear(): void {
         this.qsoStarted = false;
+        this.lookupCallsign = '';
         this.callsign = '';
         this.name = '';
         this.qth = '';
@@ -195,6 +217,26 @@ class QsoDraft {
         this.timeOn = freshTime;
         this.timeOff = freshTime;
         this.qsoStarted = true;
+    }
+
+    /**
+     * Stop button / F3 toggle / explicit abandon — revert to pre-QSO
+     * paired-ticking state WITHOUT clearing typed fields (callsign /
+     * name / RST / etc.). Symmetric to `startQso()`: resnap the three
+     * time fields to current UTC so the operator sees an instant
+     * "fresh start from now" rather than a stale pinned snapshot
+     * lingering until the next 1s tick. The next paired tick
+     * (qsoStarted=false branch) keeps all three advancing in lockstep
+     * until the operator decides to commit (Tab / Start) or clear
+     * (ESC / Clear button).
+     */
+    stopQso(): void {
+        const fresh = new Date();
+        this.qsoDate = formatUtcDate(fresh);
+        const freshTime = formatUtcTime(fresh);
+        this.timeOn = freshTime;
+        this.timeOff = freshTime;
+        this.qsoStarted = false;
     }
 
     /**

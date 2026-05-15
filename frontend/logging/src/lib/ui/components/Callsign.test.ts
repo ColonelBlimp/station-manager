@@ -247,5 +247,51 @@ describe('Callsign', () => {
             expect(container.querySelector('#test-call-err')).not.toBeNull();
             expect(input.getAttribute('aria-describedby')).toBe('test-call-err');
         });
+
+        it('renders the error <p> as screen-reader-only (no visible text)', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: 'M0' } });
+            const err = container.querySelector('#test-call-err');
+            // The red border is the visual cue; the message is for AT only.
+            expect(err?.classList.contains('sr-only')).toBe(true);
+            expect(err?.classList.contains('input-error')).toBe(false);
+        });
+
+        it('clears the error state when value is programmatically reset to empty (ESC path)', async () => {
+            // Reproduces the bug: operator types "M0", presses ESC →
+            // qsoDraft.clear() flips bind:value to ''. Pre-fix, errorKey
+            // was a $state mutated only by oninput/onblur, so the
+            // programmatic clear left the red border + sr-only message
+            // stuck. Post-fix (errorKey is $derived(isValidCallsign(value))),
+            // the change to value re-runs validation automatically.
+            const { container, input, rerender } = renderWithRerender({ value: 'M0' });
+            expect(input.getAttribute('aria-invalid')).toBe('true');
+            expect(container.querySelector('#test-call-err')).not.toBeNull();
+            await rerender({ value: '' });
+            expect(input.getAttribute('aria-invalid')).toBe('false');
+            expect(input.classList.contains('invalid-input')).toBe(false);
+            expect(container.querySelector('#test-call-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
+        });
     });
 });
+
+function renderWithRerender(props: { value: string }) {
+    const result = render(Callsign, {
+        id: 'test-call',
+        label: 'Callsign',
+        value: props.value,
+    });
+    const input = result.container.querySelector('input') as HTMLInputElement;
+    return {
+        container: result.container,
+        input,
+        rerender: async (next: { value: string }) => {
+            await result.rerender({
+                id: 'test-call',
+                label: 'Callsign',
+                value: next.value,
+            });
+        },
+    };
+}

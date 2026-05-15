@@ -150,7 +150,14 @@ describe('ValidatedInput', () => {
             expect(validator).toHaveBeenCalledWith('12');
         });
 
-        it('calls the validator on blur (focus-trap path)', async () => {
+        it('does not re-call the validator on blur (errorKey is $derived and already up-to-date)', async () => {
+            // Pre-refactor, the blur path re-ran the validator. Post-
+            // refactor, validation is a $derived of `value` — the
+            // verdict is current the moment `value` settles, and blur
+            // just consults it for the focus-trap decision. Re-running
+            // would be redundant work. The focus-trap tests above cover
+            // the behavioural contract (does it trap focus on invalid
+            // blur); this test pins the mechanism shift.
             const validator = vi.fn(
                 (v: string): string | null =>
                     v === '' || /^\d+$/.test(v) ? null : 'validators.rst'
@@ -164,7 +171,7 @@ describe('ValidatedInput', () => {
             const input = container.querySelector('input') as HTMLInputElement;
             validator.mockClear();
             await fireEvent.blur(input);
-            expect(validator).toHaveBeenCalledWith('12');
+            expect(validator).not.toHaveBeenCalled();
         });
     });
 
@@ -208,6 +215,45 @@ describe('ValidatedInput', () => {
             expect(container.querySelector('#test-vi-err')).not.toBeNull();
             await fireEvent.input(input, { target: { value: '12' } });
             expect(container.querySelector('#test-vi-err')).toBeNull();
+            expect(input.getAttribute('aria-describedby')).toBeNull();
+        });
+
+        it('renders the error <p> as screen-reader-only (no visible text)', async () => {
+            const { container, input } = setup();
+            await fireEvent.input(input, { target: { value: 'abc' } });
+            const err = container.querySelector('#test-vi-err');
+            // The red border is the visual cue; the message is for AT only.
+            expect(err?.classList.contains('sr-only')).toBe(true);
+            expect(err?.classList.contains('input-error')).toBe(false);
+        });
+
+        it('clears the error state when value is programmatically reset to empty', async () => {
+            // Same regression as the Callsign field: parent state
+            // resets the bound value (e.g. qsoDraft.clear() via ESC).
+            // Pre-fix, errorKey was a $state mutated by handlers only,
+            // so programmatic resets left the red border + sr-only
+            // message stuck. Post-fix (errorKey is $derived(validator(value)))
+            // the change reactively re-runs validation.
+            const validator = (v: string): string | null =>
+                v === '' || /^\d+$/.test(v) ? null : 'validators.rst';
+            const result = render(ValidatedInput, {
+                id: 'test-vi-reset',
+                label: 'X',
+                value: 'abc',
+                validator,
+            });
+            const input = result.container.querySelector('input') as HTMLInputElement;
+            expect(input.getAttribute('aria-invalid')).toBe('true');
+            expect(result.container.querySelector('#test-vi-reset-err')).not.toBeNull();
+            await result.rerender({
+                id: 'test-vi-reset',
+                label: 'X',
+                value: '',
+                validator,
+            });
+            expect(input.getAttribute('aria-invalid')).toBe('false');
+            expect(input.classList.contains('invalid-input')).toBe(false);
+            expect(result.container.querySelector('#test-vi-reset-err')).toBeNull();
             expect(input.getAttribute('aria-describedby')).toBeNull();
         });
     });

@@ -430,11 +430,13 @@ The QSO entry panel maintains three time-related fields — `qsoDate`, `timeOn`,
 **Transitions:**
 
 - **Tab on a valid callsign** (Callsign's `onenrich` callback) — snap all three fields to current UTC (closes the up-to-60-second staleness window from the paired ticker), then set `qsoStarted = true`. Subsequent Tabs are no-ops on the timer; only the first Tab pins.
+- **TimerControls Start button** or **F3 while stopped + lookup-done** — equivalent to Tab's `startQso()` call, just without re-running enrichment. Used after F2 (lookup-only) when the operator decides to commit.
+- **TimerControls Stop button** or **F3 while running** — set `qsoStarted = false`; resnap all three fields to current UTC so paired-ticking resumes from "now" rather than the pinned snapshot moment. Typed callsign / name / RST stay; this is "abandon the timer," not "clear the form."
 - **Clear** or **Submit** — set `qsoStarted = false`; snap all three fields to current UTC. The paired ticker resumes naturally.
 
 **60-second tick rate matches HH:MM display granularity.** Manual edits to a tick-driven field get clobbered on the next minute boundary, which gives the operator up to 59 seconds to type and submit / Tab to the next field — plenty for back-logging.
 
-**Start/Stop button affordances were considered and dropped.** The lookup-only F2 path (per the planned `onlookup` callback on Callsign) covers the DX-pile-up "look up the call but don't commit yet" case without needing a separate stop. "Abandon a QSO without clearing" isn't a real workflow — operators either log or clear.
+**Start/Stop button affordances landed 2026-05-15** (reverses the earlier "considered and dropped" decision). The buttons live in `TimerControls.svelte` next to the time fields. Three-state gate: both disabled until a lookup has run for the typed callsign (`qsoDraft.lookupCallsign === normalize(qsoDraft.callsign)`); Start enabled only in the post-F2 "lookup done, not started" state; Stop enabled only while running. Editing the callsign after a lookup auto-disables Start (the gate's a `$derived` comparison). F3 is the keyboard equivalent that mirrors the same gates. The original "operators either log or clear" framing was wrong — the F2-then-decide workflow specifically benefits from an explicit "commit the lookup" affordance separate from Tab.
 
 ## Session timer model (settled 2026-05-02)
 

@@ -26,7 +26,7 @@
     let { onClear, onSubmit, submitDisabled = false }: Props = $props();
 </script>
 
-<div class="w-69.5 flex justify-end items-end space-x-2">
+<div class="flex justify-end items-end space-x-2 pl-4">
     <button
         id="clear-qso-btn"
         type="button"

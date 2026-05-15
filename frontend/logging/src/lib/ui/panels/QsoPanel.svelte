@@ -24,6 +24,8 @@
     import { sessionQsosState } from '../../states/sessionQsos.svelte';
     import { qsoEditState } from '../../states/qsoEdit.svelte';
     import { toasts } from '../../states/toasts.svelte';
+    import { isValidCallsign } from '../../validators/callsign';
+    import TimerControls from "../components/TimerControls.svelte";
 
     /*
         Hardcoded until a logbook switcher lands. The daemon seeds a
@@ -91,6 +93,35 @@
     onDestroy(() => clearInterval(tickerId));
 
     /*
+        TimerControls gating. The Start / Stop buttons are NOT a
+        pure `qsoStarted` toggle — there's an intermediate state
+        ("F2 has run a lookup for this callsign, operator hasn't
+        committed yet") that Start must be enabled in and Stop
+        disabled in. Three-state machine:
+
+          1. No callsign typed OR no lookup done for current callsign
+             → both buttons disabled (nothing to start, nothing to
+             stop).
+          2. Callsign typed + F2 lookup done (or post-Stop)
+             → Start enabled, Stop disabled. Operator can commit.
+          3. Tab pressed OR Start clicked OR F3 while stopped+ready
+             → Stop enabled, Start disabled. Timer running.
+
+        `lookupDone` compares the normalized typed callsign against
+        `qsoDraft.lookupCallsign` (the call F2 / Tab last fired for).
+        Editing the callsign field auto-invalidates the gate the
+        moment the comparison fails; re-typing the original value
+        back in re-enables it. F3 mirrors the button gates exactly —
+        no lookup done → F3 is a silent no-op while stopped.
+    */
+    const lookupDone = $derived(
+        qsoDraft.lookupCallsign !== '' &&
+            qsoDraft.lookupCallsign === qsoDraft.callsign.trim().toUpperCase()
+    );
+    const startEnabled = $derived(lookupDone && !qsoDraft.qsoStarted);
+    const stopEnabled = $derived(qsoDraft.qsoStarted);
+
+    /*
         Enrichment trigger — fires when the operator Tabs out of the
         Callsign field with a valid callsign. Per ADR 0017, the daemon's
         `GET /v1/enrich/callsign?call=X` endpoint always returns 200 with
@@ -120,10 +151,28 @@
     */
     const SLOW_LOOKUP_THRESHOLD_MS = 500;
 
-    function handleEnrich(call: string): void {
-        if (!qsoDraft.qsoStarted) {
-            qsoDraft.startQso();
-        }
+    /*
+        runLookup — pure enrichment + contact-history fetch, no
+        QSO-timer side effect. Shared between Tab (handleEnrich, which
+        also calls startQso) and F2 (handleLookupShortcut, which does
+        not). Splitting these is what makes F2's "look up the call
+        but don't commit yet" semantics possible — the operator in a
+        pile-up can scan station info before deciding whether the
+        contact is worth the timer flip.
+    */
+    function runLookup(call: string): void {
+        // Record the looked-up callsign synchronously, before any
+        // fetch returns. The TimerControls Start-button gate (and F3
+        // while stopped) is derived from `qsoDraft.lookupCallsign ===
+        // current normalized callsign`, so setting it here is what
+        // flips Start from disabled → enabled after F2 / Tab. We
+        // don't wait for the network because: (a) cache hits return
+        // in <100ms and the operator can't react that fast anyway;
+        // (b) enrichment is allowed to fail — the "Enrichment never
+        // blocks logging" invariant means the operator should still
+        // be able to commit (press Start, or hit Tab/F3) even if
+        // QRZ/hamnut are down.
+        qsoDraft.lookupCallsign = call;
         // Sticky info-toast for slow lookups so the operator (on a
         // flaky internet link) can distinguish "still working" from
         // "panel didn't update because nothing happened." Delayed by
@@ -181,6 +230,13 @@
                 qsoDraft.qth = station.qth;
             }
         });
+    }
+
+    function handleEnrich(call: string): void {
+        if (!qsoDraft.qsoStarted) {
+            qsoDraft.startQso();
+        }
+        runLookup(call);
     }
 
     /*
@@ -412,21 +468,57 @@
     });
 
     /*
+        handleLookupShortcut — F2's lookup-only path. Reads the
+        currently-typed callsign, validates it the same way the
+        Callsign component does on Tab, and fires runLookup WITHOUT
+        starting the QSO. The pile-up workflow: operator types a
+        call, hits F2 to scan station info / DXCC / contact history,
+        decides whether to commit. Tab is the commit signal; F2 is
+        the peek signal.
+
+        Empty or invalid callsign → silent no-op. The Callsign
+        component's own inline error UI is enough; an extra toast
+        would be noise in the at-speed pile-up case this shortcut
+        exists for.
+    */
+    function handleLookupShortcut(): void {
+        const trimmed = qsoDraft.callsign.trim();
+        if (trimmed === '' || isValidCallsign(trimmed) !== null) return;
+        runLookup(trimmed.toUpperCase());
+    }
+
+    /*
         Window-level keyboard shortcuts.
 
           - ESC          → Clear (same as the FormControls Clear button).
           - Ctrl+Enter   → Submit (same as Log QSO; metaKey supports Cmd
                            on macOS so the shortcut feels native there).
+          - F2           → Lookup-only: enrichment + contact-history
+                           fetch for the typed callsign without
+                           starting the QSO timer (ADR 0007 amendment).
+                           Function key, never collides with typing,
+                           so it fires regardless of focus.
+          - F3           → Mirror whichever TimerControls button is
+                           currently enabled. Stop if running; Start
+                           if stopped + lookup-done; silent no-op
+                           otherwise (no callsign + lookup, nothing
+                           to start). Function key, no typing
+                           collision, fires regardless of focus.
 
-        Both are no-ops when the QsoEditOverlay is open — the overlay's
-        own ESC handler should win that case (otherwise pressing ESC
-        to dismiss the overlay would also wipe the live draft beneath
-        it). Submit is gated on `qsoDraft.canSubmit` to mirror the
-        button's disabled state — Ctrl+Enter doesn't bypass validation.
+        All are no-ops when the QsoEditOverlay is open — the
+        overlay's own ESC handler should win that case (otherwise
+        pressing ESC to dismiss the overlay would also wipe the live
+        draft beneath it). Submit is gated on `qsoDraft.canSubmit` to
+        mirror the button's disabled state — Ctrl+Enter doesn't
+        bypass validation.
 
         preventDefault on Ctrl+Enter as belt-and-braces against any
         future surrounding <form> default; not strictly needed today
-        because QsoPanel renders no <form> element.
+        because QsoPanel renders no <form> element. preventDefault on
+        F2 / F3 defangs any browser-level binding (some browsers map
+        F2 to in-page rename / focus-bookmarks-bar; F3 is "find next"
+        in most browsers — we explicitly want the timer toggle, not
+        find-next).
     */
     function handleKeydown(e: KeyboardEvent): void {
         if (qsoEditState.open) return;
@@ -439,6 +531,25 @@
             e.preventDefault();
             if (qsoDraft.canSubmit) {
                 void submitQso();
+            }
+            return;
+        }
+        if (e.key === 'F2') {
+            e.preventDefault();
+            handleLookupShortcut();
+            return;
+        }
+        if (e.key === 'F3') {
+            e.preventDefault();
+            // Mirror the button gates exactly: F3 is the
+            // focus-independent equivalent of clicking whichever
+            // TimerControls button is currently enabled. If neither
+            // is enabled (no lookup done yet), F3 is a silent no-op
+            // — same as clicking a disabled button.
+            if (stopEnabled) {
+                qsoDraft.stopQso();
+            } else if (startEnabled) {
+                qsoDraft.startQso();
             }
         }
     }
@@ -487,7 +598,13 @@
         <DateInput id="qso_date" label="Date" bind:value={qsoDraft.qsoDate} />
         <TimeInput id="time_on" label="Time On (UTC)" bind:value={qsoDraft.timeOn} />
         <TimeInput id="time_off" label="Time Off (UTC)" bind:value={qsoDraft.timeOff} />
-        <div class="flex flex-row space-x-2">
+        <TimerControls
+            startDisabled={!startEnabled}
+            stopDisabled={!stopEnabled}
+            onStart={() => qsoDraft.startQso()}
+            onStop={() => qsoDraft.stopQso()}
+        />
+        <div class="flex flex-row">
             <FormControls
                 onClear={clearForm}
                 onSubmit={submitQso}

@@ -44,37 +44,59 @@
         ...rest
     }: Props = $props();
 
-    let errorKey = $state<string | null>(null);
     let inputElement: HTMLInputElement;
 
+    /*
+        Validation as a $derived of `value`, not a $state mutated by
+        oninput/onblur. Critical for clear-via-ESC and any other
+        programmatic value reset: when a parent's state resets the
+        bound value to '' (e.g. qsoDraft.clear() in QsoPanel), a
+        $state errorKey driven by handlers would never see that
+        change and the red border + sr-only error <p> would stay
+        stuck on the last invalid value. The $derived form reruns
+        whenever `value` changes from any source.
+
+        Validators return null on empty (presence is a form-layer
+        concern) so the post-clear state is naturally clean.
+    */
+    const errorKey = $derived(validator(value));
     const errorId = $derived(`${id}-err`);
 
     const handleInput = (e: Event): void => {
+        /*
+            With validation now $derived, the only job left for
+            oninput is applying the optional `transform` mutation:
+            strip the characters that can never be valid before they
+            propagate into `value` via bind:value. When no transform
+            is supplied, bind:value flows on its own — handleInput is
+            a no-op and could be omitted, but keeping the unconditional
+            wiring lets us add a transform later without re-attaching
+            the handler.
+        */
+        if (transform === undefined) return;
         const target = e.currentTarget as HTMLInputElement;
         if (!target) return;
-        let next = target.value;
-        if (transform !== undefined) {
-            const cleaned = transform(next);
-            if (cleaned !== next) {
-                /*
-                    Operator typed an invalid character. Overwrite the
-                    visible input AND the bound prop so reactive
-                    consumers see the cleaned value. setSelectionRange
-                    parks the cursor at the end so the operator can
-                    keep typing without a jump back into the middle of
-                    a 2-char RST.
-                */
-                target.value = cleaned;
-                value = cleaned;
-                target.setSelectionRange(cleaned.length, cleaned.length);
-                next = cleaned;
-            }
+        const cleaned = transform(target.value);
+        if (cleaned !== target.value) {
+            /*
+                Operator typed an invalid character. Overwrite the
+                visible input AND the bound prop so reactive
+                consumers see the cleaned value. setSelectionRange
+                parks the cursor at the end so the operator can keep
+                typing without a jump back into the middle of a
+                2-char RST.
+            */
+            target.value = cleaned;
+            value = cleaned;
+            target.setSelectionRange(cleaned.length, cleaned.length);
         }
-        errorKey = validator(next);
     };
 
     const validateAndFocus = (): void => {
-        errorKey = validator(value);
+        // errorKey is up-to-date via $derived — no need to recompute.
+        // Blur only needs to act on the existing verdict: trap focus
+        // when invalid so the operator must fix the field before
+        // moving on.
         if (errorKey !== null && inputElement) {
             inputElement.focus();
             inputElement.select();
@@ -99,8 +121,15 @@
             spellcheck="false"
             {...rest}
         />
+        <!--
+            Error message kept in the DOM (when errorKey is non-null)
+            so screen readers announce it via aria-describedby, but
+            visually hidden — the red border on the input is the only
+            visible cue. role="alert" keeps it in the polite-but-
+            urgent ARIA live region.
+        -->
         {#if errorKey !== null}
-            <p id={errorId} class="input-error" role="alert">{t(errorKey)}</p>
+            <p id={errorId} class="sr-only" role="alert">{t(errorKey)}</p>
         {/if}
     </div>
 </div>

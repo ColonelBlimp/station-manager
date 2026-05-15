@@ -311,10 +311,11 @@ the v2 stack (7Q5MLV @ 14.250 MHz USB).
 
 - CAT-handover toast (one `toasts.info(...)` call; awaits the live
   bridge transition).
-- Three deferred keyboard shortcuts: F2 lookup-only, Ctrl+\ VFO
-  swap, `?` help overlay. Other ADR 0007 shortcuts (ESC, Ctrl/Cmd+
-  Enter, Tab→enrichment, Enter/Space on activatable elements) are
-  shipped — see `docs/keyboard-shortcuts.md` for the live inventory.
+- Two deferred keyboard shortcuts: Ctrl+\ VFO swap, `?` help
+  overlay. F2 lookup-only shipped 2026-05-15. Other ADR 0007
+  shortcuts (ESC, Ctrl/Cmd+Enter, Tab→enrichment, Enter/Space on
+  activatable elements) are shipped — see
+  `docs/keyboard-shortcuts.md` for the live inventory.
 - Logbook + config SPAs (deferred — not blocking on M2 closeout).
 
 Everything else listed under "Scope" below is shipped; the code-
@@ -494,14 +495,15 @@ hasn't been run through a real-rig session since M3a closed.
   trigger event from the bridge (likely first `rig-state` after a
   fresh subscribe, gated on a "haven't toasted yet this session"
   flag). One `toasts.info(...)` call when settled.
-- 🟡 Keyboard shortcuts per ADR 0007 — **partially shipped, partially
+- 🟡 Keyboard shortcuts per ADR 0007 — **mostly shipped, two
   deferred.** Live in the SPA today: ESC clears the QSO form,
   Ctrl/Cmd+Enter submits, Tab in Callsign triggers enrichment +
-  starts the QSO timer, Enter/Space on VFO box / SessionPanel row /
-  overlay backdrop, Enter / ESC inside VFO frequency input, ESC in
-  the QSO Edit Overlay. Deferred: F2 lookup-only (enrichment
-  without starting the QSO timer), Ctrl+\ VFO swap, `?` help
-  overlay. Full inventory lives in `docs/keyboard-shortcuts.md`.
+  starts the QSO timer, F2 runs enrichment + contact-history fetch
+  WITHOUT starting the QSO timer (lookup-only, shipped 2026-05-15),
+  Enter/Space on VFO box / SessionPanel row / overlay backdrop,
+  Enter / ESC inside VFO frequency input, ESC in the QSO Edit
+  Overlay. Deferred: Ctrl+\ VFO swap, `?` help overlay. Full
+  inventory lives in `docs/keyboard-shortcuts.md`.
 - ⏳ Logbook and config SPAs — deferred. Single `frontend/logging/`
   bundle covers the operator's primary workflow; logbook /
   config become separate routes or separate SPAs when needed.
