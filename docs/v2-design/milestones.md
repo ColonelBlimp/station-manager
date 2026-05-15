@@ -388,12 +388,15 @@ hasn't been run through a real-rig session since M3a closed.
   2026-05-04.
 - ✅ `qsoDraft` state-module lift — QSO draft fields moved out of
   `QsoPanel.svelte` into `lib/states/qsoDraft.svelte.ts`. Singleton
-  `QsoDraft` class with 9 form-bound `$state` fields, plain
-  `qsoStarted` flag, `$derived` `defaultRst` / `canSubmit`, and
-  methods `clear()` / `startQso()` / `tick()`. Reactivity audit
-  locks the rule for future enrichment fields: form-bound (`bind:value`)
-  ⇒ `$state`; submit-only (populated by `populateFromEnrichment`
-  when ADR 0005's endpoint lands) ⇒ plain class field. RST
+  `QsoDraft` class with form-bound `$state` fields, `$state`
+  `qsoStarted` + `lookupCallsign` lifecycle flags (both feed
+  reactive consumers — see `frontend-spa.md`'s QSO-draft section),
+  `$derived` `defaultRst` / `canSubmit`, and methods `clear()` /
+  `startQso()` / `stopQso()` / `tick()`. Reactivity audit locks
+  the rule for future enrichment fields: form-bound (`bind:value`)
+  or read by `$derived` / `$effect` / templates ⇒ `$state`;
+  submit-only data without reactive consumers ⇒ plain class
+  field. RST
   default-fill clarified: always-overwrite on CW ↔ voice mode
   transition (the earlier "operator-typed sticks" rule was
   reversed because `'59'` is meaningless on CW), plus
