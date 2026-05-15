@@ -306,7 +306,7 @@
     </div>
 
     <div class="flex h-full">
-        <div class="flex w-200">
+        <div class="flex w-198">
         {#if activeSection === 'identity'}
             <div
                 id="my-station-identity"
