@@ -13,11 +13,10 @@ tasks:
       - go vet ./...
 
   build:
-    desc: Compile the whole module and build the daemon + logging-app binaries
+    desc: Compile the whole module and build the daemon binary
     cmds:
       - go build ./...
       - go build -o build/bin/smd ./cmd/smd
-      - go build -o build/bin/logging ./cmd/logging
 
   frontend:install:
     desc: Install logging-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
@@ -107,12 +106,6 @@ tasks:
     deps: [build]
     cmds:
       - ./build/bin/smd
-
-  run:logging:
-    desc: Build and run the logging app only, using SM_WORKING_DIR from .env
-    cmds:
-      - go build -o build/bin/logging ./cmd/logging
-      - ./build/bin/logging
 
   run:smd:
     desc: |

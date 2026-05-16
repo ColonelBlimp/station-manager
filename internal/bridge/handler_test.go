@@ -157,14 +157,26 @@ func TestHTTPHandler_ShutdownChClosesStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Wait for the handler to subscribe + bootstrap (writes[0]=INIT,
-	// writes[1]=bootstrap READ) before feeding — Do() returns as
-	// soon as headers flush, which precedes Subscribe in the
-	// handler. Without this gate, feedLine can race the
-	// subscription and publish to zero subscribers.
+	// Wait for the handler to subscribe + bootstrap before feeding —
+	// Do() returns as soon as headers flush, which precedes Subscribe
+	// in the handler. Without this gate, feedLine can race the
+	// subscription and publish to zero subscribers (then the scanner
+	// below hangs forever waiting for a rig-state that already came
+	// and went).
+	//
+	// Write log shape post-2026-05-16:
+	//   writes[0] = INIT          (runPipeline startup)
+	//   writes[1] = post-INIT READ (runPipeline — fresh snapshot every cycle)
+	//   writes[2] = bootstrap READ (TriggerBootstrap, fires AFTER Subscribe)
+	//
+	// Waiting for writes >= 3 proves both Subscribe + bootstrap have
+	// completed. (Pre-2026-05-16 this was writes >= 2 because
+	// runPipeline only wrote INIT at startup and the bootstrap READ
+	// was the second write; the post-INIT READ added in the
+	// supervisor work shifted the count.)
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 2 {
+		if len(fake.recordedWrites()) >= 3 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
