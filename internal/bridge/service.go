@@ -68,6 +68,22 @@ type Service struct {
 	// the Service so each Subscribe doesn't repeat cat.Encode.
 	bootstrapBytes []byte
 
+	// lastPublishedExitKey is the dedup token for the supervisor's
+	// retry loop. Each exit-causing publish (publishExitBridgeError /
+	// publishExitDisconnect) compares against this key and suppresses
+	// the publish if it matches — so the operator sees ONE toast per
+	// failure cycle even when the supervisor retries the same failed
+	// open every 1–30s. Key is "<event-name>:<code>".
+	//
+	// runSupervisor clears the key when a pipeline run survives past
+	// supervisorSteadyStateThreshold so the next failure surfaces
+	// freshly. A different error code in mid-cycle (e.g. open succeeds
+	// but INIT-write fails) also surfaces, because the key changes.
+	//
+	// Mu-guarded — publish helpers run on the pipeline goroutine while
+	// runSupervisor reads/clears from its own context.
+	lastPublishedExitKey string
+
 	// stopOnce + stopDone serialise concurrent Stop calls so the
 	// "Stop returned, therefore stopped" contract holds for every
 	// caller. The first Stop runs the teardown work and closes
@@ -148,7 +164,7 @@ func (s *Service) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.wg.Add(1)
-	go s.runPipeline(runCtx)
+	go s.runSupervisor(runCtx)
 	return nil
 }
 

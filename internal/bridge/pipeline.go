@@ -21,6 +21,41 @@ import (
 // can dial it down without waiting half a minute.
 var livenessTimeout = 30 * time.Second
 
+// Supervisor backoff bounds. Package vars so tests can dial them
+// down to milliseconds without sleeping for real seconds. Defaults
+// match the operator's mental model: a first retry within "I just
+// glanced at the screen" time, capping at the same 30s window the
+// liveness timeout uses (so the worst-case retry cadence is the
+// same as the worst-case no-data detection cadence).
+var (
+	supervisorInitialBackoff       = 1 * time.Second
+	supervisorMaxBackoff           = 30 * time.Second
+	supervisorSteadyStateThreshold = 10 * time.Second
+)
+
+// pipelineExitClass tells runSupervisor what to do after runPipeline
+// returns. Classified at the failure site rather than divined from
+// the exit code, so retry policy lives at the call site (where the
+// "is this fixable by trying again?" judgement is local) instead of
+// being a giant switch in the supervisor.
+type pipelineExitClass int
+
+const (
+	// exitContextCancelled — parent ctx done (Service.Stop or daemon
+	// shutdown). Supervisor returns silently.
+	exitContextCancelled pipelineExitClass = iota
+	// exitPermanent — config / rigdef errors that retrying can't fix
+	// (unknown driver, missing INIT, identity mismatch on first
+	// match, etc.). Supervisor publishes the existing bridge-error
+	// once via the dedup helper, then exits without retrying.
+	exitPermanent
+	// exitTransient — runtime failures that may resolve themselves
+	// (port file not yet present, INIT write to a powered-off rig,
+	// terminal serial error from a cable yank). Supervisor sleeps
+	// with backoff and re-enters runPipeline.
+	exitTransient
+)
+
 // initCommandName is the rigdef command-table entry that arms the
 // rig's AUTO-mode push state. For Yaesu/Kenwood that's `AI1;` — sent
 // once at pipeline startup and silent on the wire (no response
@@ -37,47 +72,50 @@ const initCommandName = "INIT"
 // decodes and publishes as a sequence of partial rig-state events.
 const readCommandName = "READ"
 
-// runPipeline replaces M3a.1's runStubEmitter with the real
-// serial+CAT pipeline. Opens the serial port via s.openClient,
-// looks up the rig def via cat.Lookup, sends the rigdef's INIT
-// command, then loops decoding push lines and publishing typed
-// events to the hub.
+// runPipeline opens the serial port via s.openClient, looks up the
+// rig def via cat.Lookup, sends the rigdef's INIT command, then
+// loops decoding push lines and publishing typed events to the hub.
+// Returns a classified exit so runSupervisor can decide whether to
+// retry (transient runtime fault), give up (operator-actionable
+// permanent error), or terminate (parent ctx cancelled).
 //
 // Termination semantics:
 //
-//   - Parent ctx cancelled (Service.Stop / daemon shutdown): exit
-//     silently. SSE subscribers see the hub close cleanly.
+//   - Parent ctx cancelled (Service.Stop / daemon shutdown):
+//     exitContextCancelled, no publish (deliberate shutdown).
 //   - 30s without a line from the rig: publish rig-disconnected
-//     once, keep waiting. If data resumes, subsequent rig-state
-//     events implicitly tell the SPA the rig is alive again
-//     (bridge.svelte.ts flips rigResponding=true on any rig-state
-//     arrival per ADR 0009).
+//     once and keep waiting in the read loop. If data resumes,
+//     subsequent rig-state events implicitly tell the SPA the rig
+//     is alive again (bridge.svelte.ts flips rigResponding=true on
+//     any rig-state arrival per ADR 0009).
 //   - Terminal serial error (port closed/EIO/permission revoked):
-//     publish rig-disconnected with the error reason, exit. SSE
-//     subscribers stay connected; the next operator action (rig
-//     power-cycle + daemon restart, or — once M3a.3 lands —
-//     bridge-error event surfacing) closes the loop.
-//   - Initial open or rig-def lookup failure: log loudly and exit.
-//     M3a.3 promotes these to bridge-error events; for M3a.2 they're
-//     logged-and-bail (the daemon stays up; the bridge just doesn't
-//     stream).
-func (s *Service) runPipeline(ctx context.Context) {
-	defer s.wg.Done()
-
+//     publish rig-disconnected with the error reason, return
+//     exitTransient. The supervisor reopens the port after a
+//     backoff sleep — covers cable yank / power-spike recovery
+//     during a session.
+//   - Initial open failure / INIT write to a powered-off rig:
+//     publish bridge-error, return exitTransient. The supervisor
+//     retries with backoff so first-boot ordering (daemon up
+//     before rig) self-heals when the operator switches on.
+//   - Config / rigdef errors (unknown driver, missing INIT/READ,
+//     bad serial config): publish bridge-error, return
+//     exitPermanent. The supervisor gives up — retrying won't fix
+//     an operator typo.
+func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	def, ok := cat.Lookup(s.cfg.Cat.Driver)
 	if !ok {
 		s.logger.ErrorWith().
 			Str("driver", s.cfg.Cat.Driver).
 			Msg("bridge: unknown CAT driver; pipeline not started")
-		s.publishBridgeError(BridgeErrCodeUnknownDriver, map[string]string{"driver": s.cfg.Cat.Driver})
-		return
+		s.publishExitBridgeError(BridgeErrCodeUnknownDriver, map[string]string{"driver": s.cfg.Cat.Driver})
+		return exitPermanent
 	}
 
 	serialCfg, err := buildSerialConfig(s.cfg.Serial, def.Serial)
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Msg("bridge: serial config build failed; pipeline not started")
-		s.publishBridgeError(BridgeErrCodeSerialConfigInvalid, map[string]string{"error": errMessage(err)})
-		return
+		s.publishExitBridgeError(BridgeErrCodeSerialConfigInvalid, map[string]string{"error": errMessage(err)})
+		return exitPermanent
 	}
 
 	// Pre-encode INIT and READ before touching hardware. Both encodes
@@ -92,8 +130,8 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("driver", def.ID).
 			Str("command", initCommandName).
 			Msg("bridge: rigdef has no INIT command; pipeline not started")
-		s.publishBridgeError(BridgeErrCodeMissingInit, map[string]string{"driver": def.ID})
-		return
+		s.publishExitBridgeError(BridgeErrCodeMissingInit, map[string]string{"driver": def.ID})
+		return exitPermanent
 	}
 	readBytes, err := cat.Encode(def, readCommandName)
 	if err != nil {
@@ -102,8 +140,8 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("driver", def.ID).
 			Str("command", readCommandName).
 			Msg("bridge: rigdef has no READ command; pipeline not started")
-		s.publishBridgeError(BridgeErrCodeMissingRead, map[string]string{"driver": def.ID})
-		return
+		s.publishExitBridgeError(BridgeErrCodeMissingRead, map[string]string{"driver": def.ID})
+		return exitPermanent
 	}
 
 	client, err := s.openClient(serialCfg)
@@ -113,8 +151,11 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Str("port", serialCfg.PortName).
 			Int("baud", serialCfg.BaudRate).
 			Msg("bridge: serial open failed; pipeline not started")
-		s.publishBridgeError(BridgeErrCodeSerialOpenFailed, map[string]string{"port": serialCfg.PortName, "error": errMessage(err)})
-		return
+		s.publishExitBridgeError(BridgeErrCodeSerialOpenFailed, map[string]string{"port": serialCfg.PortName, "error": errMessage(err)})
+		// Port file may appear later (FTdx10 / FT-710 with built-in
+		// USB CAT exposes /dev/ttyUSBn only when powered on) — let
+		// the supervisor retry.
+		return exitTransient
 	}
 	defer func() {
 		// Clear activeClient under mu BEFORE closing the port. This
@@ -136,8 +177,11 @@ func (s *Service) runPipeline(ctx context.Context) {
 			Err(err).
 			Str("driver", def.ID).
 			Msg("bridge: failed to send INIT; pipeline not started")
-		s.publishBridgeError(BridgeErrCodeInitWriteFailed, map[string]string{"driver": def.ID, "error": errMessage(err)})
-		return
+		s.publishExitBridgeError(BridgeErrCodeInitWriteFailed, map[string]string{"driver": def.ID, "error": errMessage(err)})
+		// INIT write to a powered-off rig fails at the serial layer
+		// — same recovery shape as a missing port file, supervisor
+		// retries until the rig is alive.
+		return exitTransient
 	}
 
 	// Stash the live client + pre-encoded bootstrap bytes so the SSE
@@ -154,13 +198,71 @@ func (s *Service) runPipeline(ctx context.Context) {
 		Str("driver", def.ID).
 		Msg("bridge: pipeline started; AUTO-mode CAT data flow active")
 
-	s.readLoop(ctx, client, def)
+	return s.readLoop(ctx, client, def)
+}
+
+// runSupervisor wraps runPipeline in a retry loop so the bridge
+// self-heals across the two operator-visible startup orderings (PC
+// up first then rig, or rig down then up) AND across mid-session
+// disruptions (power spike, cable reseat). Per the discussion behind
+// this change: auto-recovery is load-bearing — a live SPA mid-QSO
+// cannot require a daemon restart to reconnect to the rig.
+//
+// Backoff: starts at supervisorInitialBackoff (1s), doubles per
+// failed attempt, caps at supervisorMaxBackoff (30s — same window as
+// livenessTimeout). Resets to the initial value if the previous
+// pipeline run survived past supervisorSteadyStateThreshold (10s),
+// so a flaky session retries fast after a brief disconnect rather
+// than waiting out the last cap.
+//
+// Toast dedup: the publishExit* helpers track the last published
+// error key on Service. A retry that fails for the same reason
+// publishes nothing; a retry that fails for a different reason
+// (e.g. open succeeded then INIT-write failed) publishes once. The
+// supervisor clears the key after a steady-state pipeline run.
+func (s *Service) runSupervisor(ctx context.Context) {
+	defer s.wg.Done()
+
+	backoff := supervisorInitialBackoff
+
+	for {
+		startTime := time.Now()
+		exit := s.runPipeline(ctx)
+
+		switch exit {
+		case exitContextCancelled:
+			return
+		case exitPermanent:
+			return
+		}
+
+		// exitTransient: reset backoff (and dedup) if the previous
+		// pipeline ran long enough to count as a successful session
+		// interrupted by a fault — that operator should see the new
+		// failure cleanly, not have it suppressed against an old key
+		// from minutes ago.
+		if time.Since(startTime) > supervisorSteadyStateThreshold {
+			backoff = supervisorInitialBackoff
+			s.clearLastPublishedExitKey()
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > supervisorMaxBackoff {
+			backoff = supervisorMaxBackoff
+		}
+	}
 }
 
 // readLoop is the steady-state read+decode+publish loop. Split from
 // runPipeline so tests can drive it directly with a pre-opened fake
 // client without going through the open/init dance.
-func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition) {
+func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition) pipelineExitClass {
 	announcedDisconnect := false
 	identityVerified := false
 	for {
@@ -171,7 +273,7 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		if err != nil {
 			// Parent ctx cancel — deliberate shutdown.
 			if ctx.Err() != nil {
-				return
+				return exitContextCancelled
 			}
 			// Read deadline expired (no data within livenessTimeout).
 			// Emit rig-disconnected once and keep waiting; the next
@@ -183,11 +285,14 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				}
 				continue
 			}
-			// Terminal serial error (ErrClosed, EIO, etc.). Emit and
-			// exit; the bridge can't recover from a closed port
-			// without re-opening, which is M3a.3-and-beyond territory.
-			s.publishDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(err)})
-			return
+			// Terminal serial error (ErrClosed, EIO, cable yank,
+			// power spike). Publish via the supervisor-aware dedup
+			// helper, then return exitTransient so the supervisor
+			// reopens the port. Recovery is automatic — operator
+			// reseats cable / powers rig back on, supervisor's next
+			// open attempt succeeds and the session resumes.
+			s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(err)})
+			return exitTransient
 		}
 
 		announcedDisconnect = false
@@ -259,6 +364,55 @@ func (s *Service) publishBridgeError(code BridgeErrorCode, details map[string]st
 		Name:    EventBridgeError,
 		Payload: BridgeErrorPayload{Code: code, Details: details},
 	})
+}
+
+// publishExitBridgeError is publishBridgeError with supervisor-aware
+// dedup. Used at exit-causing sites in runPipeline so the supervisor's
+// retry loop doesn't flood the SPA with identical toasts while it
+// repeatedly tries to reopen a missing port or re-INIT a powered-off
+// rig. Mid-loop publishes (identity mismatch — the rig answered but
+// with the wrong ID) keep using publishBridgeError directly because
+// they're a one-shot per pipeline run, not a retry-driven repeat.
+func (s *Service) publishExitBridgeError(code BridgeErrorCode, details map[string]string) {
+	key := "bridge-error:" + string(code)
+	s.mu.Lock()
+	if s.lastPublishedExitKey == key {
+		s.mu.Unlock()
+		return
+	}
+	s.lastPublishedExitKey = key
+	s.mu.Unlock()
+	s.publishBridgeError(code, details)
+}
+
+// publishExitDisconnect is publishDisconnect with supervisor-aware
+// dedup. Used by readLoop's terminal-serial-error site. The 30s
+// no-data publishDisconnect call inside readLoop is separately
+// deduped by its own announcedDisconnect flag (one per pipeline
+// instance, not across supervisor retries) — that's the correct
+// scope there: a single quiet-rig event per session, with implicit
+// recovery on the next decoded line.
+func (s *Service) publishExitDisconnect(code RigDisconnectedCode, details map[string]string) {
+	key := "rig-disconnected:" + string(code)
+	s.mu.Lock()
+	if s.lastPublishedExitKey == key {
+		s.mu.Unlock()
+		return
+	}
+	s.lastPublishedExitKey = key
+	s.mu.Unlock()
+	s.publishDisconnect(code, details)
+}
+
+// clearLastPublishedExitKey resets the supervisor's dedup state.
+// Called from runSupervisor when a pipeline run survives past
+// supervisorSteadyStateThreshold so the operator sees the NEXT
+// failure cleanly rather than having it suppressed against a key
+// set in a previous failure cycle minutes ago.
+func (s *Service) clearLastPublishedExitKey() {
+	s.mu.Lock()
+	s.lastPublishedExitKey = ""
+	s.mu.Unlock()
 }
 
 // mapStatusToPayload filters a cat.Decode tag map down to the
