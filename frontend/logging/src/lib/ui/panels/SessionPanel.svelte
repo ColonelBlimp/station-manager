@@ -127,7 +127,7 @@
                         explicit Edit control is also a clearer
                         keyboard target than a row-wide hit area.
                     -->
-                    <tr class="border-b border-gray-100 last:border-0 hover:bg-indigo-50">
+                    <tr class="border-b border-line-soft last:border-0">
                         <td class="py-1 pr-4 font-semibold">{row.callsign}</td>
                         <td class="py-1 pr-4">{row.name}</td>
                         <td class="py-1 pr-4">{formatFrequency(row.freqHz)}</td>
@@ -144,7 +144,7 @@
                         <td class="py-1 pr-2">
                             <button
                                 type="button"
-                                class="text-indigo-700 hover:text-indigo-900 cursor-pointer underline underline-offset-2"
+                                class="font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer"
                                 aria-label={`Edit QSO with ${row.callsign}`}
                                 onclick={() => void openEdit(row.uuid)}
                             >

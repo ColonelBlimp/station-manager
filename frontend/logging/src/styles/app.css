@@ -73,7 +73,7 @@
     --color-surface-muted: oklch(92.8% 0.006 264.531); /* tw gray-200 — placeholder panels */
     --color-surface-disabled: oklch(96.7% 0.003 264.542); /* tw gray-100 — disabled input bg */
     --color-line: oklch(87.2% 0.01 258.338); /* tw gray-300 — input outline */
-    --color-line-soft: oklch(92.8% 0.006 264.531); /* tw gray-200 — card border */
+    --color-line-soft: oklch(87.2% 0.01 258.338); /* tw gray-200 — card border */
     --color-ink: oklch(21% 0.034 264.665); /* tw gray-900 — body text */
 
     /*
