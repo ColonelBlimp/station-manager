@@ -121,7 +121,7 @@ Each Wails app imports from the root module via its full path (`github.com/Colon
 
 ### 7. Gio UI toolkit replaces Wails; all apps stay in the root module
 
-> **Superseded 2026-04-30 by ADR 0001 (browser SPA, Svelte 5 + Vite).** The Gio path was abandoned 9 days after this decision. The v2 client apps are now browser SPAs embedded in the daemon via `//go:embed`. `cmd/giospike/` is a parked spike; `cmd/logging/` (the Gio logging app skeleton) is parked, not deleted, until SPA feature parity is reached. The decision text below is preserved as the historical record. The current shape: `frontend/logging/` (Svelte 5 + Vite + Tailwind v4) is the active client; the daemon serves it at `GET /` when `Protocol=tcp && ServeSPA=true`. See ADR 0001 and `frontend-spa.md`.
+> **Superseded 2026-04-30 by ADR 0001 (browser SPA, Svelte 5 + Vite); Gio code deleted 2026-05-16.** The Gio path was abandoned 9 days after this decision. The v2 client apps are now browser SPAs embedded in the daemon via `//go:embed`. `cmd/giospike/` (the 2026-04-21 spike) and `cmd/logging/` (the Gio logging app skeleton) were both **deleted from the tree on 2026-05-16** — they broke CI (the runner doesn't have the Gio Linux system libs), and the Svelte 5 SPA has been the active client for ~2 weeks. Git history preserves the code; retrieve via `git show <commit>:cmd/logging/<file>` if ever needed. `go.mod`'s `gioui.org` direct + indirect deps tidied out the same day. The decision text below is preserved as the historical record. The current shape: `frontend/logging/` (Svelte 5 + Vite + Tailwind v4) is the active client; the daemon serves it at `GET /` when `Protocol=tcp && ServeSPA=true`. See ADR 0001 and `frontend-spa.md`.
 
 **Decision:** The v2 client apps — `logging`, `logbook`, `config`, plus any future siblings — are **pure-Go Gio applications**, not Wails web-view applications. They live under `cmd/` in the root module, alongside `cmd/smd` and `cmd/catcli`, and are built with `go build ./cmd/<name>`. The `apps/` directory originally reserved for Wails apps is **not created** in v2; it has no role.
 
@@ -136,7 +136,7 @@ Each Wails app imports from the root module via its full path (`github.com/Colon
 
 **Alternative considered:** keep Wails as originally planned. Rejected on the spike's outcome plus the operator's preference to avoid a JS/webview stack for a Go-centric single-user desktop tool. Gio's tradeoff (non-trivial Linux C build deps) is less painful than Wails' tradeoff (a second toolchain, bindings generation, an embedded browser runtime) for this project.
 
-**Related:** `project_sm_ui_toolkit` memory. `docs/session-handoff.md` session 17 block. `cmd/giospike/main.go` as the working reference (deleted when the real logging app lands).
+**Related:** `project_sm_ui_toolkit` memory. `docs/session-handoff.md` session 17 block. `cmd/giospike/main.go` was the working reference until ADR 0001 won; deleted 2026-05-16. Git history (`git log --all --full-history -- cmd/giospike/`) preserves the spike.
 
 ---
 
@@ -196,7 +196,7 @@ station-manager/
 
 Each item has a reason for not being in milestone 1. Listing them explicitly so that future sessions don't reintroduce them by accident or wonder why they aren't there.
 
-- **`cmd/logging`, `cmd/logbook`, `cmd/config`** — the three v2 client apps (originally Gio per decision #7; **superseded 2026-04-30 by ADR 0001 — these are now browser SPAs at `frontend/logging/` etc., embedded in the daemon binary**). `cmd/logging/` exists as a parked Gio skeleton; `cmd/logbook/` and `cmd/config/` were never created as Gio apps. Milestone 2+. (The docs originally placed these under `apps/logging/` etc. because they were going to be Wails apps with their own `go.mod`; decision #7 collapsed them back into `cmd/`; ADR 0001 then moved them to `frontend/<name>/` Svelte SPAs.)
+- **`cmd/logging`, `cmd/logbook`, `cmd/config`** — the three v2 client apps (originally Gio per decision #7; **superseded 2026-04-30 by ADR 0001 — these are now browser SPAs at `frontend/logging/` etc., embedded in the daemon binary**). The Gio `cmd/logging/` skeleton was **deleted 2026-05-16** when CI started gating builds and the parked Gio system deps proved more expensive to maintain than the parked code was worth; git history retains it. `cmd/logbook/` and `cmd/config/` were never created as Gio apps. The Svelte SPAs at `frontend/logging/` are the active line; `frontend/logbook/` is a parked scaffold per `feedback_logging_vs_logbook_scope` (QSL-awaiting view, edit-history viewer, search etc.).
 
 - **`internal/serial`, `internal/cat`, `internal/ptt`** — rig control. These stay on the v1 branch until a v2 consumer is being built. Rig control is a *client* concern per the narrow-daemon-scope invariant (see `docs/v1-analysis/invariants.md`). The daemon does not own the rig. Carrying these packages into `internal/` before their consumer exists would clutter the v2 tree with unused code. They come back in milestone 3+ as dependencies of the `cmd/sm-serial-bridge` binary, or of a future dedicated rig-control client.
 
@@ -204,7 +204,7 @@ Each item has a reason for not being in milestone 1. Listing them explicitly so 
 
 - **`internal/listeners/` and `internal/listeners/handlers/wsjtx/`** — dead code. Never ran in a working configuration (see `docs/v1-analysis/bug-inventory.md` → "WSJT-X UDP listener is dead code"). V2's WSJT-X ingest plan is completely different: a separate `cmd/wsjtx-bridge` client that translates WSJT-X UDP → daemon HTTP, scheduled for milestone 3+. Nothing in the v1 `internal/listeners` framework carries forward.
 
-- **`internal/audio/`** — status pending. Was part of the FT8 pipeline in v1; needs a reverse-dependency check after FT8 was removed in the v1.0.0 cleanup. If no non-FT8 consumer remains, don't carry forward. If something uses it (voice keyer? SSB playback? general WAV handling?), it comes back when *that* something is being built, not speculatively.
+- **`internal/audio/`** — confirmed absent from v2 main (not present as of 2026-05-16). Was part of the FT8 pipeline in v1; the v1.0.0 cleanup removed it and nothing reintroduced it. **ADR 0021 brings FT8 back into v2 as `internal/ft8/`** (currently a scaffold) — when its decoder pipeline lands, it'll need an audio-capture layer; whether that's a separate `internal/audio/` shared subsystem or a sub-package under `internal/ft8/audio/` is an open design question to settle then. The principle stands: only build it when a consumer needs it.
 
 - **Multi-destination forwarder fan-out redesign.** The hardcoded QRZ forwarder comes over as-is for milestone 1 (one destination, works). The redesign (`ForwarderConfig` with enable/disable, action filter, per-destination credentials, fan-out at ingest) is a milestone-2-or-later task. See `docs/v1-analysis/bug-inventory.md` → "Hardcoded QRZ forwarder" and `docs/v1-analysis/design-decisions-log.md` → same.
 
@@ -237,7 +237,9 @@ station-manager/
 │   ├── api/                      # daemon HTTP handlers
 │   ├── qsoservice/               # domain layer
 │   ├── adif/                     # ADIF parser/writer
-│   ├── cat/                      # CAT controller (parked with cmd/logging)
+│   ├── bridge/                   # daemon CAT/SSE subsystem (ADR 0013/0019/0020)
+│   ├── cat/                      # CAT controller — active, consumed by bridge + (eventually) ft8
+│   ├── ft8/                      # FT8 subsystem (ADR 0021) — scaffold as of 2026-05-16
 │   ├── config/                   # JSON config loader
 │   ├── database/sqlite/          # storage
 │   ├── enums/                    # band/mode/upload-status enums
@@ -250,7 +252,7 @@ station-manager/
 │   ├── iocdi/                    # home-grown DI
 │   ├── logging/                  # zerolog wrapper
 │   ├── safego/                   # panic-recovering goroutine spawn
-│   ├── serial/                   # serial driver (parked with cmd/logging)
+│   ├── serial/                   # serial driver — active, consumed by bridge + (eventually) ft8
 │   ├── types/                    # types.Qso etc., ADIF-aligned
 │   └── utils/                    # helpers
 └── docs/
@@ -306,7 +308,7 @@ The current `main` branch (as of 2026-04-15, at commit `66e0af3`) still contains
 - `internal/adapters/` (and its `converters/` subtree) — relocates with server-side database cluster
 - `internal/listeners/handlers/wsjtx/` — dead code
 - `internal/listeners/` — verify no other consumers first, then delete
-- `internal/audio/` — reverse-dependency check first; delete if no non-FT8 consumer remains
+- `internal/audio/` — already absent from v2 main as of 2026-05-16 (v1.0.0 cleanup removed it). When FT8's audio-capture layer lands per ADR 0021, decide then whether to recreate `internal/audio/` as a shared subsystem or nest it under `internal/ft8/audio/`.
 - The existing root `go.mod` is kept but pruned of any dependencies that were only needed by deleted packages
 
 **To be created in the restructure commit:**

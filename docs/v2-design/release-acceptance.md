@@ -1,6 +1,9 @@
 # v2 design — release acceptance
 
-**Status:** initial draft 2026-05-16. Scopes the **release-tag cadence only** — the "is `vX.Y.Z` ready to cut?" gate. Per-commit / per-merge gating (an "always-releasable main" CI rule) is a separate question, parked until the pipeline runner is chosen.
+**Status:** initial draft 2026-05-16; per-commit CI gate added same day. Scopes both:
+
+1. The **release-tag cadence** — "is `vX.Y.Z` ready to cut?" gate (this document's original scope).
+2. The **per-commit CI gate** — "is main always releasable?" rule, shipped 2026-05-16 at `.github/workflows/ci.yml`. The CI workflow runs on every push to main and covers Gates 1–3 + 5a from the list below; Gates 4, 5, 6, 7, 8 remain manual (need real hardware, a clean VM, or real upstream credentials). Local mirror of the CI gate: `task ci:local`.
 
 ## Purpose
 
@@ -126,7 +129,10 @@ Tested every release even if not exercised, because the value of a rollback path
 - Cross-platform (Windows, macOS) — Linux RPM is the only supported package.
 - Mobile / responsive layouts — desktop-only.
 
-## Current gaps (spec calls for, not yet automated)
+## Current gaps (spec calls for, not yet fully automated)
+
+**Update 2026-05-16:** Gates 1–3 + 5a are now automated by `.github/workflows/ci.yml` on every push to main. Gates 4 (clean-VM install smoke), 5 (upgrade smoke), 6 (end-to-end QSO), 7 (bridge live test), 8 (forwarder live test) remain manual — each needs real hardware, a scratch VM, or real upstream credentials. The gaps below describe the manual half.
+
 
 These are deliberate parking lots. None of them block tagging today — the operator runs them by hand. They are listed here so the future CD pipeline knows what to mechanise.
 
