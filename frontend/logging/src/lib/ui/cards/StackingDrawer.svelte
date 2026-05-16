@@ -30,11 +30,10 @@
 
 {#if callsignStack.items.length > 0}
     <div
-        class="absolute top-0 -right-36 w-32 h-166 rounded-xl border border-line-soft pt-2 px-3 overflow-y-auto"
-    >
-        <div class="flex flex-row items-center justify-between mb-2">
-            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                Stack ({callsignStack.count})
+        class="absolute top-0 -right-37 w-33 h-166 rounded-xl border border-line-soft px-3 overflow-y-auto">
+        <div class="flex flex-row items-center justify-between">
+            <h2 class="text-xs font-semibold text-orange-600 uppercase tracking-tight mt-2.5">
+                Call Stack ({callsignStack.count})
             </h2>
             <button
                 type="button"
@@ -46,9 +45,9 @@
                 <span aria-hidden="true">×</span>
             </button>
         </div>
-        <ul class="flex flex-col gap-1">
+        <ul class="flex flex-col gap-1 -mt-2">
             {#each callsignStack.items as call, index (call)}
-                <li>
+                <li class="flex items-center">
                     <button
                         type="button"
                         class="w-full text-left px-2 py-1 rounded font-mono text-sm hover:bg-gray-100 cursor-pointer"
