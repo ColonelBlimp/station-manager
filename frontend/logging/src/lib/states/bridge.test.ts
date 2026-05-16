@@ -404,6 +404,27 @@ describe('bridge SSE consumer — implicit reconnect + flash suppression', () =>
         expect(toastsState.items[0].message).toContain('i/o timeout');
     });
 
+    it('dismisses the visible sticky warn toast when CAT is disabled mid-disconnect (regression M1)', () => {
+        const src = currentSource();
+        // Drive into state C: a disconnect has fired and the
+        // suppression window has elapsed, so the sticky warn toast is
+        // on screen.
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        vi.advanceTimersByTime(800);
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0].level).toBe('warn');
+        expect(toastsState.items[0].ttl).toBe(0); // sticky — never auto-expires
+
+        // Operator disables CAT (or any other path that calls
+        // closeSource): the sticky warn must be dismissed, not just
+        // dropped from the module-local tracker. Without the dismiss
+        // the toast would persist forever in the queue with no way
+        // for the operator to clear it short of a page reload.
+        configState.station.enabled = false;
+        flushSync();
+        expect(toastsState.items).toHaveLength(0);
+    });
+
     it('handles disconnect → reconnect → disconnect → reconnect cycles', () => {
         const src = currentSource();
 

@@ -98,10 +98,18 @@ type Service struct {
 
 	// Timeout snapshot — captured at New from cfg.Timeouts with
 	// package-var fallback for any zero/unset values. Read at runtime
-	// by runSupervisor and readLoop. Per-Service so future multi-rig
-	// can tune per rig, and so tests can override either via package-
-	// var dialing (legacy pattern, applied at New time) or by
-	// overwriting these fields directly after construction.
+	// by runSupervisor and readLoop, both running on goroutines spawned
+	// by Start. Per-Service so future multi-rig can tune per rig.
+	//
+	// **Mutate ONLY before Start is called.** The supervisor goroutine
+	// reads these fields without holding a lock, so post-Start mutation
+	// would race under `-race`. Tests that want to dial timings down
+	// have two safe entry points: (a) set the package-level defaults
+	// (livenessTimeout, supervisorInitialBackoff, etc.) before calling
+	// New — the values flow through resolveTimeout into these fields
+	// at construction; (b) overwrite these fields directly between New
+	// and Start when the test owns both lifecycle boundaries. Neither
+	// pattern races the supervisor.
 	livenessTimeout                time.Duration
 	supervisorInitialBackoff       time.Duration
 	supervisorMaxBackoff           time.Duration

@@ -238,14 +238,26 @@ function closeSource(): void {
     bridgeState.connected = false;
     bridgeState.rigResponding = false;
     // Drop both disconnect-toast trackers so a future startBridge
-    // after a stopBridge doesn't carry stale state. Cancel the
-    // pending timer too — without this it would fire after
-    // closeSource and push a warn for an event no longer relevant.
+    // after a stopBridge doesn't carry stale state.
+    //
+    // State B (timer pending, toast not yet pushed): cancel the
+    // timer — without this it would fire after closeSource and push
+    // a warn for an event no longer relevant.
     if (pendingDisconnectTimerId !== null) {
         clearTimeout(pendingDisconnectTimerId);
         pendingDisconnectTimerId = null;
     }
-    pendingDisconnectToastId = null;
+    // State C (warn toast visible): dismiss it explicitly. Sticky
+    // (ttl=0) toasts never auto-expire, so clearing the id alone
+    // would leave the toast on screen forever after CAT is disabled
+    // / SPA closes the EventSource — operator sees a phantom
+    // "disconnect" message with no way to clear it short of a page
+    // reload. The dismiss is idempotent (no-op if the operator has
+    // already manually clicked the × on the toast).
+    if (pendingDisconnectToastId !== null) {
+        toasts.dismiss(pendingDisconnectToastId);
+        pendingDisconnectToastId = null;
+    }
 }
 
 /**
