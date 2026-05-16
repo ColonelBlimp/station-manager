@@ -95,3 +95,41 @@ Promoted the four package-level timeout vars to operator config under `bridge.ti
 **Validation:** Each value must be 0 (default) or between 50 ms and 3 600 000 ms (1 hour); `backoff_initial_ms` must not exceed `backoff_max_ms`. Caught at daemon startup via `validateBridge`.
 
 **Test pattern preserved.** Tests dial the package vars before `Service.New` runs — `New` snapshots package vars into Service fields when the cfg.Timeouts value is zero, so the existing `livenessTimeout = N * time.Millisecond` test idiom keeps working. New `TestServiceNew_SnapshotsConfiguredTimeouts` covers the config-override path; new `TestValidateBridge_TimeoutRangeChecks` covers the range checks.
+
+## Revision — 2026-05-16 (session 66): SPA-side flash suppression for brief outages
+
+Lowering `liveness_ms` from 30s to a smaller default (5s, or 10s if the operator dials it back up) didn't eliminate the operator-visible "flash" — it shifted the boundary. With `liveness_ms=10000` and a 10s rig-off cycle, the daemon detects no-data within milliseconds of the rig coming back; `rig-disconnected` and `rig-state` SSE events arrive in adjacent event-loop ticks, Svelte renders the warn toast between them, and the reconnect handler immediately replaces it with the info toast. Operator sees a fleeting warn then an info — technically correct, UX-noisy for blips the operator caused intentionally (intentionally cycling the rig, brief power spikes).
+
+**Decision:** SPA-side timer-based flash suppression in `bridge.svelte.ts`. On `rig-disconnected`, the warn toast push is **scheduled** via `setTimeout(..., FLASH_SUPPRESS_MS)` rather than pushed immediately. If `rig-state` arrives within that window, the rig-state handler `clearTimeout`s the scheduled push and skips the reconnect info too — no UI churn at all for the suppressed cycle. If the window elapses without recovery, the warn pushes normally (sticky `ttl=0`) and a later `rig-state` triggers the existing dismiss + reconnect-info path.
+
+`FLASH_SUPPRESS_MS = 800` is a module-level constant in `bridge.svelte.ts`. Sized to comfortably exceed the probe round-trip + SSE delivery latency on local serial (typically <200ms), with headroom for slower setups; below 1s so genuine outages still surface visibly within ~1.5s of the daemon's detection.
+
+**Three-state machine on the SPA side:**
+
+| State | Meaning | `pendingDisconnectTimerId` | `pendingDisconnectToastId` |
+| ----- | ------- | -------------------------- | -------------------------- |
+| **A** | idle — no known disconnect | `null` | `null` |
+| **B** | disconnect scheduled, warn NOT yet pushed | set | `null` |
+| **C** | warn toast visible on screen | `null` | set |
+
+Transitions:
+
+- `rig-disconnected` in A → B (schedule timer)
+- `rig-disconnected` in B → B (cancel prior timer, schedule new — latest payload wins)
+- `rig-disconnected` in C → B (dismiss visible toast, schedule new)
+- Timer fires in B → C (push the warn)
+- `rig-state` in A → A (no-op; existing partial-payload merge proceeds)
+- `rig-state` in B → A (cancel timer; no toasts surface — suppressed cycle)
+- `rig-state` in C → A (dismiss warn, push `bridge.reconnected` info toast)
+
+`closeSource()` clears both pending fields and the timer; without this a deferred warn would fire after the EventSource closed, pushing a stale toast for an event no longer relevant.
+
+**Alternatives considered:**
+
+- **Do nothing.** Accept the flash. Rejected because the flash is operator-confusing — they didn't disconnect anything, the rig was off for 1s, why are toasts flickering?
+- **Lower `liveness_ms` to ~1s.** Shrinks the flash window but doesn't eliminate it (any rig-off duration close to `liveness_ms` flashes). Also causes more false-positive flashes during legitimate idle (operator on a phone call). Rejected — symptomatic, doesn't address the root cause.
+- **Server-side suppression.** Daemon could delay publishing `rig-disconnected` for a short window, cancelling if data resumed. Considered but rejected because it complicates the daemon's hot path for a UX concern best handled where the UX lives. SPA already owns the toast subsystem and the timer machinery is trivial.
+
+**Verified live on the FTdx10.** Brief rig-off + on (≤1s, simulated power blip) produces no SPA toasts. Genuine outage (10s+ rig-off with the daemon's `liveness_ms=10000`) surfaces the warn toast around 10.8s after the rig went off, persists until the rig comes back, replaced by "Rig reconnected." info.
+
+**Tests:** `bridge.test.ts` uses `vi.useFakeTimers()` for the disconnect describe block; new test `SUPPRESSES the flash when rig-state arrives within the suppression window` proves the suppressed-cycle path; existing tests updated to advance timers past the window when they want to assert on the visible toast.
