@@ -574,3 +574,21 @@ operating use to inform the cadence.
   every writer's host; bridge subsystem activates per-host based on
   config; this ADR's design works identically whether the host is a
   single-station portable or one slave of a multi-station contest crew.
+
+## Revision — 2026-05-16: pipeline supervisor (ADR 0020)
+
+The "Accepted costs" line stating "No persistent state across daemon
+restart" is narrowed by ADR 0020. Runtime transient faults
+(`/dev/ttyUSBn` not yet present at boot, terminal serial error from a
+cable yank or power spike) now self-heal: a supervisor goroutine
+wraps `runPipeline` and reopens the port with exponential backoff,
+re-sending INIT each cycle so AUTO mode is re-armed. The cost line
+now reads more accurately as "no persistent state across **daemon**
+restart" — operator restart of the daemon is still the only path that
+discards rig state; the rig itself power-cycling no longer is.
+
+The "Triggers to revisit" entry for "daemon restart frequency makes
+'no remembered state' annoying" is correspondingly less likely to
+fire, since one common source of daemon restarts (rig glitched
+mid-session) is eliminated. See ADR 0020 for the supervisor design
+and the alternatives weighed.

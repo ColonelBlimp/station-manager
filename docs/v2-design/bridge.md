@@ -253,11 +253,9 @@ Per-rig: device path, baud, CAT driver (yaesu/icom/kenwood), socket path. Format
 
 ### 8.5. USB cable yank / reconnect behaviour
 
-If a cable is yanked mid-session, what does the bridge do? Options:
+**Resolved (2026-05-16, ADR 0020):** retry loop. The pipeline goroutine sits behind a supervisor (`internal/bridge/runSupervisor`) that classifies each exit as permanent / transient / context-cancelled and re-enters `runPipeline` after an exponential backoff (1s start, 30s cap) on transient faults. Covers both the first-boot ordering case (FTdx10's `/dev/ttyUSBn` only appears when the rig is powered on) and the mid-session disruption case (power spike, USB reseat, rig auto-reset). INIT (`AI1;`) re-fires on every supervisor restart so AUTO mode is re-armed; the SPA's `bridge.svelte.ts` flips `rigResponding=true` automatically on the first decoded line per ADR 0009.
 
-- Fail-fast, let systemd/user restart. Simple, lossy.
-- Retry loop, rig reappears on same path. Complex, preserves endpoint connections.
-- Expose a status event on the NDJSON stream ("rig disconnected") so clients can react. Middle ground.
+Toast flood across retries is prevented by a `Service.lastPublishedExitKey` dedup token that suppresses identical exit-causing publishes until the supervisor clears it (after a 10s steady-state pipeline run). The existing `rig-disconnected` event on the NDJSON-equivalent SSE stream still surfaces — clients react the same way they already do; the supervisor is invisible to them other than the recovery just happening.
 
 ### 8.6. Repo placement
 

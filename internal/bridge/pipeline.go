@@ -230,31 +230,40 @@ func (s *Service) runSupervisor(ctx context.Context) {
 		exit := s.runPipeline(ctx)
 
 		switch exit {
-		case exitContextCancelled:
+		case exitContextCancelled, exitPermanent:
 			return
-		case exitPermanent:
+		case exitTransient:
+			// Reset backoff (and dedup) if the previous pipeline ran
+			// long enough to count as a successful session interrupted
+			// by a fault — that operator should see the new failure
+			// cleanly, not have it suppressed against an old key from
+			// minutes ago.
+			if time.Since(startTime) > supervisorSteadyStateThreshold {
+				backoff = supervisorInitialBackoff
+				s.clearLastPublishedExitKey()
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+
+			backoff *= 2
+			if backoff > supervisorMaxBackoff {
+				backoff = supervisorMaxBackoff
+			}
+		default:
+			// Unreachable today — every runPipeline return goes
+			// through one of the three named classes. Guard against
+			// a future fourth class being added without a matching
+			// supervisor branch (silent fall-through would spin the
+			// loop with no backoff). Log and bail rather than retry
+			// with unknown policy.
+			s.logger.ErrorWith().
+				Int("class", int(exit)).
+				Msg("bridge: supervisor saw unexpected pipelineExitClass; exiting to avoid undefined retry behaviour")
 			return
-		}
-
-		// exitTransient: reset backoff (and dedup) if the previous
-		// pipeline ran long enough to count as a successful session
-		// interrupted by a fault — that operator should see the new
-		// failure cleanly, not have it suppressed against an old key
-		// from minutes ago.
-		if time.Since(startTime) > supervisorSteadyStateThreshold {
-			backoff = supervisorInitialBackoff
-			s.clearLastPublishedExitKey()
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-
-		backoff *= 2
-		if backoff > supervisorMaxBackoff {
-			backoff = supervisorMaxBackoff
 		}
 	}
 }
