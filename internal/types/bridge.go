@@ -17,9 +17,10 @@ package types
 // match the JSON files under `internal/cat/rigs/` (yaesu-ft710,
 // yaesu-ftdx10 today; more as `internal/cat` grows).
 type BridgeConfig struct {
-	Enabled bool               `json:"enabled"`
-	Serial  BridgeSerialConfig `json:"serial"`
-	Cat     BridgeCatConfig    `json:"cat"`
+	Enabled  bool                 `json:"enabled"`
+	Serial   BridgeSerialConfig   `json:"serial"`
+	Cat      BridgeCatConfig      `json:"cat"`
+	Timeouts BridgeTimeoutsConfig `json:"timeouts,omitempty"`
 
 	// ModeMappings is the operator-override layer for the per-rig
 	// translation table that turns rig-pushed mode strings (e.g.
@@ -66,4 +67,38 @@ type BridgeSerialConfig struct {
 // error at startup when Enabled is true.
 type BridgeCatConfig struct {
 	Driver string `json:"driver"`
+}
+
+// BridgeTimeoutsConfig surfaces the supervisor + readLoop tuning
+// vars that were previously package-level defaults inside
+// `internal/bridge`. Zero = "use the built-in default" so an
+// operator's existing config.json keeps working without edits;
+// non-zero values override per-Service.
+//
+// All values in milliseconds for round-trip clarity in JSON. The
+// daemon snapshots them at `bridge.Service.New` time — runtime
+// PUT /v1/config changes don't reach a running Service. Operator
+// restart picks up edits, same pattern as the rest of BridgeConfig.
+//
+// LivenessMs is the read-deadline window in `readLoop`. Shorter =
+// faster disconnect detection on rigs whose serial port doesn't
+// surface a kernel-level USB-detach error (e.g. FTdx10 — the device
+// node persists and reads simply go silent). Longer = fewer
+// false-positive disconnect events during legitimate idle. Default
+// 5000ms (5s) since 2026-05-16; was 30000ms (30s) prior. The
+// no-data branch's INIT+READ probe means even a false-positive
+// disconnect self-recovers within milliseconds if the rig is alive.
+//
+// BackoffInitialMs / BackoffMaxMs bound the supervisor's
+// exponential retry after a transient pipeline exit. Doubled each
+// failed attempt, capped at Max. Default 1000 / 30000 (1s / 30s).
+//
+// SteadyStateThresholdMs is how long a runPipeline must survive
+// before the supervisor counts it as "interrupted steady state"
+// and resets the backoff + dedup token. Default 10000ms (10s).
+type BridgeTimeoutsConfig struct {
+	LivenessMs             int `json:"liveness_ms,omitempty"`
+	BackoffInitialMs       int `json:"backoff_initial_ms,omitempty"`
+	BackoffMaxMs           int `json:"backoff_max_ms,omitempty"`
+	SteadyStateThresholdMs int `json:"steady_state_threshold_ms,omitempty"`
 }

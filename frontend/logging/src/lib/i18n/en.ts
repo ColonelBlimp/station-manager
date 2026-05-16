@@ -25,6 +25,15 @@ export const en: Record<string, string> = {
     'bridge.disconnected.rig_no_data': 'The rig has gone quiet — is it powered on?',
     'bridge.disconnected.serial_port_error': 'Lost the serial connection to the rig ({error})',
 
+    // ─── Bridge: implicit reconnect (SPA-derived, not a daemon event)
+    // Fired by bridge.svelte.ts on the first rig-state after a
+    // rig-disconnected — gives the operator symmetric closure to the
+    // warn-level disconnect toast. Not keyed by a daemon code because
+    // the daemon doesn't emit a reconnect event; recovery is implicit
+    // per ADR 0009.
+
+    'bridge.reconnected': 'Rig reconnected.',
+
     // ─── Bridge: bridge-error events ──────────────────────────────
     // Daemon sends EventBridgeError with one of these codes; SPA
     // renders via `bridge.error.<code>`. All are operator-actionable

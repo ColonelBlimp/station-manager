@@ -14,19 +14,26 @@ import (
 	bugst "go.bug.st/serial"
 )
 
-// livenessTimeout is the data-flow silence window after which the
-// bridge concludes the rig is unresponsive and emits a single
-// rig-disconnected event (per ADR 0010 passive liveness, ADR 0019
-// "passive 30s data-flow timeout only"). Package-level var so tests
-// can dial it down without waiting half a minute.
-var livenessTimeout = 30 * time.Second
+// livenessTimeout is the default data-flow silence window after
+// which the bridge concludes the rig is unresponsive and emits a
+// rig-disconnected event (per ADR 0010 passive liveness). Operators
+// can override per-deployment via `bridge.timeouts.liveness_ms` in
+// config.json — Service.New snapshots the override at construction
+// time. Defaults to 5s (changed from 30s on 2026-05-16): on rigs
+// whose USB-serial layer doesn't surface kernel disconnects when the
+// rig is powered off (FTdx10 family), 30s was too long to notice a
+// short rig-off / rig-on cycle. The no-data branch's INIT+READ probe
+// makes false-positives during legitimate idle self-recovering, so a
+// shorter default is safe.
+//
+// Still a package-level var so tests can dial it down (read by
+// Service.New when cfg.Timeouts.LivenessMs is zero).
+var livenessTimeout = 5 * time.Second
 
-// Supervisor backoff bounds. Package vars so tests can dial them
-// down to milliseconds without sleeping for real seconds. Defaults
-// match the operator's mental model: a first retry within "I just
-// glanced at the screen" time, capping at the same 30s window the
-// liveness timeout uses (so the worst-case retry cadence is the
-// same as the worst-case no-data detection cadence).
+// Supervisor backoff defaults. Package vars so tests can dial them
+// down to milliseconds without sleeping for real seconds. Operators
+// override via `bridge.timeouts.{backoff_initial_ms,backoff_max_ms,
+// steady_state_threshold_ms}` in config.json.
 var (
 	supervisorInitialBackoff       = 1 * time.Second
 	supervisorMaxBackoff           = 30 * time.Second
@@ -184,6 +191,24 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		return exitTransient
 	}
 
+	// Pull a fresh snapshot immediately by sending READ right after
+	// INIT. Without this, a supervisor-driven pipeline restart while
+	// the SPA's EventSource stays connected leaves catState blank
+	// until the operator wiggles a dial — no new SSE-open means no
+	// TriggerBootstrap to fire READ. With this, every pipeline cycle
+	// (initial OR recovered) pulls a snapshot the alive rig answers
+	// immediately, and rigResponding flips true on the first decoded
+	// rig-state. Write failure is logged-only (not a bridge-error):
+	// if the port is genuinely bad, the readLoop will surface it as
+	// a terminal-read error within milliseconds; if it's a transient
+	// flake, the readLoop probe re-issues READ on the next timeout.
+	if err := client.WriteCommandBytes(ctx, readBytes); err != nil {
+		s.logger.WarnWith().
+			Err(err).
+			Str("driver", def.ID).
+			Msg("bridge: post-INIT READ snapshot write failed; relying on readLoop probe")
+	}
+
 	// Stash the live client + pre-encoded bootstrap bytes so the SSE
 	// handler can fire READ on each new Subscribe via TriggerBootstrap.
 	// The defer above clears them on pipeline exit.
@@ -198,7 +223,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		Str("driver", def.ID).
 		Msg("bridge: pipeline started; AUTO-mode CAT data flow active")
 
-	return s.readLoop(ctx, client, def)
+	return s.readLoop(ctx, client, def, initBytes, readBytes)
 }
 
 // runSupervisor wraps runPipeline in a retry loop so the bridge
@@ -223,7 +248,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 func (s *Service) runSupervisor(ctx context.Context) {
 	defer s.wg.Done()
 
-	backoff := supervisorInitialBackoff
+	backoff := s.supervisorInitialBackoff
 
 	for {
 		startTime := time.Now()
@@ -238,8 +263,8 @@ func (s *Service) runSupervisor(ctx context.Context) {
 			// by a fault — that operator should see the new failure
 			// cleanly, not have it suppressed against an old key from
 			// minutes ago.
-			if time.Since(startTime) > supervisorSteadyStateThreshold {
-				backoff = supervisorInitialBackoff
+			if time.Since(startTime) > s.supervisorSteadyStateThreshold {
+				backoff = s.supervisorInitialBackoff
 				s.clearLastPublishedExitKey()
 			}
 
@@ -250,8 +275,8 @@ func (s *Service) runSupervisor(ctx context.Context) {
 			}
 
 			backoff *= 2
-			if backoff > supervisorMaxBackoff {
-				backoff = supervisorMaxBackoff
+			if backoff > s.supervisorMaxBackoff {
+				backoff = s.supervisorMaxBackoff
 			}
 		default:
 			// Unreachable today — every runPipeline return goes
@@ -270,12 +295,14 @@ func (s *Service) runSupervisor(ctx context.Context) {
 
 // readLoop is the steady-state read+decode+publish loop. Split from
 // runPipeline so tests can drive it directly with a pre-opened fake
-// client without going through the open/init dance.
-func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition) pipelineExitClass {
+// client without going through the open/init dance. Accepts the
+// pre-encoded INIT and READ bytes so the no-data probe can re-issue
+// them without re-encoding.
+func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition, initBytes, readBytes []byte) pipelineExitClass {
 	announcedDisconnect := false
 	identityVerified := false
 	for {
-		readCtx, cancel := context.WithTimeout(ctx, livenessTimeout)
+		readCtx, cancel := context.WithTimeout(ctx, s.livenessTimeout)
 		line, err := client.ReadResponseBytes(readCtx)
 		cancel()
 
@@ -285,12 +312,35 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				return exitContextCancelled
 			}
 			// Read deadline expired (no data within livenessTimeout).
-			// Emit rig-disconnected once and keep waiting; the next
-			// successful read implicitly clears the disconnected flag.
+			// Emit rig-disconnected once and probe the rig — re-send
+			// INIT (re-arms AUTO mode in case the rig was off when
+			// the original INIT went out and has since been powered
+			// on) followed by READ (forces an immediate state-snapshot
+			// response from an alive rig). Without the probe, an
+			// operator who boots the daemon before the rig then
+			// switches the rig on later would sit in permanent silence
+			// — the rig never received the original INIT, so AUTO
+			// mode is never armed, and the rig pushes nothing. The
+			// probe makes "switch the rig on" the only operator
+			// action needed for recovery.
 			if stderr.Is(err, context.DeadlineExceeded) {
 				if !announcedDisconnect {
 					s.publishDisconnect(RigCodeNoData, nil)
 					announcedDisconnect = true
+				}
+				if werr := client.WriteCommandBytes(ctx, initBytes); werr != nil {
+					if ctx.Err() != nil {
+						return exitContextCancelled
+					}
+					s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(werr)})
+					return exitTransient
+				}
+				if werr := client.WriteCommandBytes(ctx, readBytes); werr != nil {
+					if ctx.Err() != nil {
+						return exitContextCancelled
+					}
+					s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(werr)})
+					return exitTransient
 				}
 				continue
 			}

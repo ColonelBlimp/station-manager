@@ -76,3 +76,22 @@ Periodically send a poll command (e.g. `ID;`) to detect rig presence even when t
 - ADR 0019 — `bridge-subsystem-v1-design.md` (the v1 design this amends; the "no persistent state across daemon restart" cost narrows)
 - `internal/bridge/pipeline.go` — `runSupervisor`, `runPipeline`, dedup helpers
 - `internal/bridge/supervisor_test.go` — coverage for open-retry, terminal-read-retry, permanent-no-retry, dedup-across-retries
+
+## Revision — 2026-05-16 (session 66): timeouts promoted to config, liveness default lowered
+
+Promoted the four package-level timeout vars to operator config under `bridge.timeouts.*`, executing the "Promote to config if friction emerges" trigger noted in this ADR's Accepted Costs. Friction surfaced during dogfooding the supervisor on the real FTdx10: that rig's USB-serial layer keeps `/dev/ttyUSBn` open when the rig is powered off (reads simply go silent, no kernel-level disconnect), so the 30s `livenessTimeout` was the only signal the daemon had to detect rig-off. For any rig-off duration shorter than ~25s, the disconnect was detected nearly simultaneously with the recovery — the warn toast appeared and was instantly replaced by the reconnect info toast (operator-visible "flash" only).
+
+**Config keys** under `bridge.timeouts` (all optional, all milliseconds; zero or omitted = use built-in default):
+
+| Key                          | Default | Replaces                              |
+| ---------------------------- | ------- | ------------------------------------- |
+| `liveness_ms`                | 5000    | `livenessTimeout` (was 30s)           |
+| `backoff_initial_ms`         | 1000    | `supervisorInitialBackoff` (was 1s)   |
+| `backoff_max_ms`             | 30000   | `supervisorMaxBackoff` (was 30s)      |
+| `steady_state_threshold_ms`  | 10000   | `supervisorSteadyStateThreshold` (10s)|
+
+**Default `liveness_ms` lowered from 30000 to 5000.** Safe because the no-data branch's INIT+READ probe means a false-positive disconnect during legitimate idle self-recovers within milliseconds (the probe's READ pulls a snapshot from an alive rig, `rig-state` arrives, SPA's reconnect handler dismisses the warn and fires the info — same flash UX as a real short outage, but acceptable as a tradeoff for catching real outages faster). Operators who want fewer false-positive flashes can dial back up via `bridge.timeouts.liveness_ms`.
+
+**Validation:** Each value must be 0 (default) or between 50 ms and 3 600 000 ms (1 hour); `backoff_initial_ms` must not exceed `backoff_max_ms`. Caught at daemon startup via `validateBridge`.
+
+**Test pattern preserved.** Tests dial the package vars before `Service.New` runs — `New` snapshots package vars into Service fields when the cfg.Timeouts value is zero, so the existing `livenessTimeout = N * time.Millisecond` test idiom keeps working. New `TestServiceNew_SnapshotsConfiguredTimeouts` covers the config-override path; new `TestValidateBridge_TimeoutRangeChecks` covers the range checks.

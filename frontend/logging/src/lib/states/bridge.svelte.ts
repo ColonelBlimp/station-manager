@@ -79,6 +79,44 @@ interface BridgeErrorPayload {
 let activeSource: EventSource | null = null;
 let rootDispose: (() => void) | null = null;
 
+/*
+    Disconnect-toast state machine.
+
+    Three states:
+      A. idle — neither timer nor toast pending (no known disconnect).
+      B. scheduled — `pendingDisconnectTimerId` is set, the warn toast
+         has NOT yet been pushed. A fast reconnect at this stage
+         cancels the timer and produces no UI churn at all.
+      C. visible — `pendingDisconnectToastId` is set, the warn toast
+         IS on screen. A reconnect here dismisses the warn and pushes
+         the positive "Rig reconnected" info toast.
+
+    Why the schedule-then-push design: when the daemon's
+    `liveness_ms` is close to the operator's actual rig-off duration
+    (common operator pattern: switch rig off, switch back on within
+    seconds), the rig-disconnected SSE event and the rig-state SSE
+    event arrive within milliseconds of each other. Pushing the warn
+    immediately produced an operator-visible flash — Svelte renders
+    the warn between the two SSE messages, then the reconnect
+    handler replaces it with the info. The flash is technically
+    correct ("disconnect happened, then reconnect") but UX-noisy for
+    blips the operator caused intentionally.
+
+    The suppression window (FLASH_SUPPRESS_MS) is the upper bound on
+    "how fast can probe round-trip + rig-state delivery be." For an
+    alive rig on local serial + loopback SSE it's typically <200ms;
+    800ms gives headroom for slower setups while still surfacing
+    genuine outages within ~1s of detection.
+
+    Module-local rather than $state on BridgeState because these are
+    bookkeeping handles, not state the rest of the SPA should react
+    to. Survive EventSource churn (browser auto-reconnect) because
+    openSource is the only producer.
+*/
+const FLASH_SUPPRESS_MS = 800;
+let pendingDisconnectTimerId: ReturnType<typeof setTimeout> | null = null;
+let pendingDisconnectToastId: number | null = null;
+
 /**
  * Construct the EventSource and wire its listeners. Idempotent: calling
  * with an existing open source is a no-op.
@@ -119,6 +157,24 @@ function openSource(): void {
         }
         mergeRigState(payload);
         bridgeState.rigResponding = true;
+
+        // State B → A: a disconnect was scheduled but never
+        // surfaced. The reconnect beat the suppression window — the
+        // operator never saw a disconnect toast, so they don't need
+        // a "reconnected" toast either. Cancel quietly, no UI churn.
+        if (pendingDisconnectTimerId !== null) {
+            clearTimeout(pendingDisconnectTimerId);
+            pendingDisconnectTimerId = null;
+            return;
+        }
+        // State C → A: a disconnect toast IS visible. Dismiss it
+        // and surface the positive "Rig reconnected" toast for
+        // symmetric operator closure.
+        if (pendingDisconnectToastId !== null) {
+            toasts.dismiss(pendingDisconnectToastId);
+            pendingDisconnectToastId = null;
+            toasts.info(t('bridge.reconnected'));
+        }
     });
 
     src.addEventListener('rig-disconnected', (ev: MessageEvent<string>) => {
@@ -130,12 +186,37 @@ function openSource(): void {
             return;
         }
         bridgeState.rigResponding = false;
+
+        // Cancel any prior scheduled push (state B): replacing one
+        // pending disconnect with another — the new one wins, latest
+        // payload is what surfaces if/when the timer fires.
+        if (pendingDisconnectTimerId !== null) {
+            clearTimeout(pendingDisconnectTimerId);
+            pendingDisconnectTimerId = null;
+        }
+        // Dismiss any visible disconnect toast (state C): replacing
+        // with the newer one. Avoids stacking duplicate warns.
+        if (pendingDisconnectToastId !== null) {
+            toasts.dismiss(pendingDisconnectToastId);
+            pendingDisconnectToastId = null;
+        }
+
+        // Schedule the warn push after the suppression window. If
+        // rig-state arrives within FLASH_SUPPRESS_MS, the rig-state
+        // handler cancels this timer and nothing ever renders. ttl=0
+        // (sticky) — the toast stays until reconnect or operator
+        // manual dismiss, so it's not invisible to an operator who
+        // happens to look away briefly.
+        //
         // Daemon sends a machine-readable code + per-instance details
-        // (e.g. {"code":"rig_no_data"} or {"code":"serial_port_error",
-        // "details":{"error":"i/o timeout"}}). The i18n catalogue
-        // keyed by `bridge.disconnected.<code>` owns the operator-
-        // facing wording + future localizations (Tumbuka, Chichewa).
-        toasts.warn(t(`bridge.disconnected.${payload.code}`, payload.details));
+        // (e.g. {"code":"rig_no_data"}). The i18n catalogue keyed by
+        // `bridge.disconnected.<code>` owns the operator-facing
+        // wording + future localizations.
+        const msg = t(`bridge.disconnected.${payload.code}`, payload.details);
+        pendingDisconnectTimerId = setTimeout(() => {
+            pendingDisconnectTimerId = null;
+            pendingDisconnectToastId = toasts.warn(msg, 0);
+        }, FLASH_SUPPRESS_MS);
     });
 
     src.addEventListener('bridge-error', (ev: MessageEvent<string>) => {
@@ -156,6 +237,15 @@ function closeSource(): void {
     activeSource = null;
     bridgeState.connected = false;
     bridgeState.rigResponding = false;
+    // Drop both disconnect-toast trackers so a future startBridge
+    // after a stopBridge doesn't carry stale state. Cancel the
+    // pending timer too — without this it would fire after
+    // closeSource and push a warn for an event no longer relevant.
+    if (pendingDisconnectTimerId !== null) {
+        clearTimeout(pendingDisconnectTimerId);
+        pendingDisconnectTimerId = null;
+    }
+    pendingDisconnectToastId = null;
 }
 
 /**

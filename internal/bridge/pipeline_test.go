@@ -427,10 +427,18 @@ func TestPipeline_OpenFailureExitsCleanly(t *testing.T) {
 	}
 }
 
-// TestPipeline_TriggerBootstrap_WritesReadCommand covers the M3a.3
+// TestPipeline_TriggerBootstrap_WritesReadCommand covers the
 // bootstrap-on-SSE-open contract: TriggerBootstrap writes the
-// rigdef's READ command via the active client. The READ wire shape
-// is "ID;FA;FB;ST;VS;MD0;MD1;PC;" for both Yaesu rigdefs.
+// rigdef's READ command via the active client. Wire shape is
+// "ID;FA;FB;ST;VS;MD0;MD1;PC;" for both Yaesu rigdefs.
+//
+// As of 2026-05-16, runPipeline ALSO sends READ at startup right
+// after INIT (so supervisor-driven recovery pulls a fresh snapshot
+// without waiting for an SSE-open). That makes writes[0]=INIT and
+// writes[1]=READ before TriggerBootstrap fires; the per-bootstrap
+// READ becomes writes[2]. This test asserts that the TriggerBootstrap
+// call genuinely causes the additional READ — not that READ merely
+// appears somewhere in the write log.
 func TestPipeline_TriggerBootstrap_WritesReadCommand(t *testing.T) {
 	s, fake := newPipelineTestService(t)
 	if err := s.Start(context.Background()); err != nil {
@@ -438,36 +446,39 @@ func TestPipeline_TriggerBootstrap_WritesReadCommand(t *testing.T) {
 	}
 	defer func() { _ = s.Stop() }()
 
-	// Wait for the pipeline to have stashed activeClient (i.e. INIT
-	// has been written and the read loop is running). The simplest
-	// proxy is to wait for the INIT write to land.
+	// Wait for runPipeline's INIT + post-INIT READ to land. Without
+	// this gate, the test could fire TriggerBootstrap before
+	// runPipeline finishes its pair of writes, making the
+	// "TriggerBootstrap added a new write" assertion meaningless.
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	if err := s.TriggerBootstrap(context.Background()); err != nil {
-		t.Fatalf("TriggerBootstrap: %v", err)
-	}
-
-	// Wait for the second write (the READ command).
-	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if len(fake.recordedWrites()) >= 2 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	if len(fake.recordedWrites()) < 2 {
+		t.Fatalf("runPipeline did not write INIT + READ within 1s; got %d writes", len(fake.recordedWrites()))
+	}
+
+	if err := s.TriggerBootstrap(context.Background()); err != nil {
+		t.Fatalf("TriggerBootstrap: %v", err)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.recordedWrites()) >= 3 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	writes := fake.recordedWrites()
-	if len(writes) < 2 {
-		t.Fatalf("expected at least 2 writes (INIT + READ), got %d", len(writes))
+	if len(writes) < 3 {
+		t.Fatalf("expected 3 writes (INIT + startup READ + bootstrap READ), got %d", len(writes))
 	}
-	if !bytes.Equal(writes[1], []byte("ID;FA;FB;ST;VS;MD0;MD1;PC;")) {
-		t.Errorf("second write = %q, want %q", writes[1], "ID;FA;FB;ST;VS;MD0;MD1;PC;")
+	if !bytes.Equal(writes[2], []byte("ID;FA;FB;ST;VS;MD0;MD1;PC;")) {
+		t.Errorf("TriggerBootstrap write = %q, want %q", writes[2], "ID;FA;FB;ST;VS;MD0;MD1;PC;")
 	}
 }
 

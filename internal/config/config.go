@@ -797,6 +797,41 @@ func validateBridge(b types.BridgeConfig) error {
 		}
 	}
 
+	// Timeout overrides — validated unconditionally so a malformed
+	// value surfaces at startup regardless of Enabled. All four are
+	// optional (zero = use the daemon's built-in default); a positive
+	// value must fall in a sane range that catches operator typos
+	// (extra/missing zero) without being so strict that legitimate
+	// operator tuning is rejected.
+	const (
+		minTimeoutMs = 50      // below this the daemon would thrash on retries
+		maxTimeoutMs = 3600000 // above 1h almost certainly a typo
+	)
+	checkTimeout := func(label string, v int) error {
+		if v == 0 {
+			return nil
+		}
+		if v < minTimeoutMs || v > maxTimeoutMs {
+			return fmt.Errorf("%s = %d: must be 0 (default) or between %d and %d milliseconds", label, v, minTimeoutMs, maxTimeoutMs)
+		}
+		return nil
+	}
+	if err := checkTimeout("bridge.timeouts.liveness_ms", b.Timeouts.LivenessMs); err != nil {
+		return err
+	}
+	if err := checkTimeout("bridge.timeouts.backoff_initial_ms", b.Timeouts.BackoffInitialMs); err != nil {
+		return err
+	}
+	if err := checkTimeout("bridge.timeouts.backoff_max_ms", b.Timeouts.BackoffMaxMs); err != nil {
+		return err
+	}
+	if err := checkTimeout("bridge.timeouts.steady_state_threshold_ms", b.Timeouts.SteadyStateThresholdMs); err != nil {
+		return err
+	}
+	if b.Timeouts.BackoffInitialMs > 0 && b.Timeouts.BackoffMaxMs > 0 && b.Timeouts.BackoffInitialMs > b.Timeouts.BackoffMaxMs {
+		return fmt.Errorf("bridge.timeouts.backoff_initial_ms (%d) must not exceed backoff_max_ms (%d)", b.Timeouts.BackoffInitialMs, b.Timeouts.BackoffMaxMs)
+	}
+
 	if !b.Enabled {
 		return nil
 	}

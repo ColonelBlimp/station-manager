@@ -252,7 +252,13 @@ describe('bridge SSE consumer — rig-state merge', () => {
 });
 
 describe('bridge SSE consumer — rig-disconnected', () => {
+    // The disconnect handler schedules the warn toast 800ms in the
+    // future to suppress the flash UX when rig-state arrives close
+    // behind rig-disconnected. Use fake timers so tests can deterministically
+    // step past the suppression window when they want to assert on
+    // the visible toast.
     beforeEach(() => {
+        vi.useFakeTimers();
         startBridge();
         configState.station.enabled = true;
         flushSync();
@@ -261,15 +267,25 @@ describe('bridge SSE consumer — rig-disconnected', () => {
         expect(bridgeState.rigResponding).toBe(true);
     });
 
-    it('flips rigResponding=false and toasts at warn level (renders i18n template)', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('flips rigResponding=false immediately, surfaces warn toast after the suppression window', () => {
         currentSource().emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        // rigResponding flips synchronously.
         expect(bridgeState.rigResponding).toBe(false);
+        // Toast push is deferred — no visible toast before the
+        // suppression window elapses.
+        expect(toastsState.items).toHaveLength(0);
+
+        vi.advanceTimersByTime(800);
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('warn');
-        // Rendered from the en catalogue's bridge.disconnected.rig_no_data
-        // template. The exact wording is in lib/i18n/en.ts and is
-        // operator-tunable; the test pins a stable substring rather than
-        // the full wording so a friendly retune doesn't break the test.
+        // ttl=0 — sticky until reconnect (or operator manual
+        // dismiss). The default 6s warn TTL was too short for
+        // realistic disconnect windows.
+        expect(toastsState.items[0].ttl).toBe(0);
         expect(toastsState.items[0].message).toContain('rig has gone quiet');
     });
 
@@ -287,13 +303,126 @@ describe('bridge SSE consumer — rig-disconnected', () => {
         expect(bridgeState.rigResponding).toBe(true);
     });
 
-    it('substitutes details into the template for serial_port_error', () => {
+    it('substitutes details into the template for serial_port_error (after suppression window)', () => {
         currentSource().emit(
             'rig-disconnected',
             JSON.stringify({ code: 'serial_port_error', details: { error: 'i/o timeout' } })
         );
+        vi.advanceTimersByTime(800);
         // Template: 'Lost the serial connection to the rig ({error})'
         expect(toastsState.items[0].message).toContain('i/o timeout');
+    });
+});
+
+describe('bridge SSE consumer — implicit reconnect + flash suppression', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        startBridge();
+        configState.station.enabled = true;
+        flushSync();
+        currentSource().fireOpen();
+        currentSource().emit('rig-state', JSON.stringify({ vfoA: 14_250_000 }));
+        expect(bridgeState.rigResponding).toBe(true);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('full disconnect cycle: after suppression window, rig-state replaces warn with info', () => {
+        const src = currentSource();
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        // Past the suppression window — warn is visible.
+        vi.advanceTimersByTime(800);
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0].level).toBe('warn');
+
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_300_000 }));
+        // Warn dismissed, info reconnect surfaced.
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0].level).toBe('info');
+        expect(toastsState.items[0].message.toLowerCase()).toContain('reconnected');
+    });
+
+    it('SUPPRESSES the flash when rig-state arrives within the suppression window', () => {
+        const src = currentSource();
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        // Inside the suppression window — no toast pushed yet.
+        vi.advanceTimersByTime(200);
+        expect(toastsState.items).toHaveLength(0);
+
+        // Rig recovers fast — scheduled warn is cancelled, no
+        // reconnect info either (no visible disconnect to "reconnect
+        // from"). End result: no UI churn at all.
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_300_000 }));
+        expect(toastsState.items).toHaveLength(0);
+
+        // Advancing past what would have been the original push
+        // moment confirms the timer was cancelled, not just deferred.
+        vi.advanceTimersByTime(1000);
+        expect(toastsState.items).toHaveLength(0);
+    });
+
+    it('does not re-toast on subsequent steady-state rig-state events', () => {
+        const src = currentSource();
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        vi.advanceTimersByTime(800);
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_300_000 }));
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0].level).toBe('info');
+
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_310_000 }));
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_320_000 }));
+        src.emit('rig-state', JSON.stringify({ mode: 'USB' }));
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0].level).toBe('info');
+    });
+
+    it('does not emit a reconnect toast on a rig-state with no prior disconnect', () => {
+        const baseCount = toastsState.items.length;
+        currentSource().emit('rig-state', JSON.stringify({ vfoA: 14_999_999 }));
+        expect(toastsState.items.length).toBe(baseCount);
+    });
+
+    it('latest disconnect wins when a new disconnect replaces a pending one', () => {
+        const src = currentSource();
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        // Inside suppression — first disconnect not yet visible.
+        vi.advanceTimersByTime(200);
+        expect(toastsState.items).toHaveLength(0);
+
+        // Second disconnect arrives with a different code — cancels
+        // the first scheduled push, schedules its own.
+        src.emit(
+            'rig-disconnected',
+            JSON.stringify({ code: 'serial_port_error', details: { error: 'i/o timeout' } })
+        );
+        vi.advanceTimersByTime(800);
+        expect(toastsState.items).toHaveLength(1);
+        // The visible toast carries the LATER disconnect's message,
+        // not the earlier one.
+        expect(toastsState.items[0].message).toContain('i/o timeout');
+    });
+
+    it('handles disconnect → reconnect → disconnect → reconnect cycles', () => {
+        const src = currentSource();
+
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        vi.advanceTimersByTime(800);
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_300_000 }));
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0].level).toBe('info');
+
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        vi.advanceTimersByTime(800);
+        // Two items now: the prior info toast (kept) + the new warn.
+        expect(toastsState.items).toHaveLength(2);
+        expect(toastsState.items[toastsState.items.length - 1].level).toBe('warn');
+
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_310_000 }));
+        // Warn dismissed, second info added — both items are info now.
+        expect(toastsState.items).toHaveLength(2);
+        expect(toastsState.items.every((it) => it.level === 'info')).toBe(true);
     });
 });
 

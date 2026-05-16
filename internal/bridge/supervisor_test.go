@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -301,4 +302,125 @@ func waitForFirstWrite(f *fakeSerial, want []byte, within time.Duration) bool {
 		time.Sleep(2 * time.Millisecond)
 	}
 	return false
+}
+
+// TestServiceNew_SnapshotsConfiguredTimeouts covers the wiring from
+// cfg.Timeouts.* (operator-supplied milliseconds) through resolveTimeout
+// to the Service's per-instance Duration fields. Non-zero values
+// override the package-var defaults; zero values fall through to the
+// package var. Snapshot is taken at New, so a runtime config edit
+// doesn't reach a running Service — matches the BridgeConfig pattern.
+func TestServiceNew_SnapshotsConfiguredTimeouts(t *testing.T) {
+	t.Run("non-zero values override the package-var defaults", func(t *testing.T) {
+		s := New(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{
+				LivenessMs:             7000,
+				BackoffInitialMs:       500,
+				BackoffMaxMs:           60000,
+				SteadyStateThresholdMs: 15000,
+			},
+		}, &logging.Service{})
+
+		if got, want := s.livenessTimeout, 7*time.Second; got != want {
+			t.Errorf("livenessTimeout = %v, want %v", got, want)
+		}
+		if got, want := s.supervisorInitialBackoff, 500*time.Millisecond; got != want {
+			t.Errorf("supervisorInitialBackoff = %v, want %v", got, want)
+		}
+		if got, want := s.supervisorMaxBackoff, 60*time.Second; got != want {
+			t.Errorf("supervisorMaxBackoff = %v, want %v", got, want)
+		}
+		if got, want := s.supervisorSteadyStateThreshold, 15*time.Second; got != want {
+			t.Errorf("supervisorSteadyStateThreshold = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("zero values fall through to the package-var defaults", func(t *testing.T) {
+		s := New(types.BridgeConfig{}, &logging.Service{})
+
+		if got, want := s.livenessTimeout, livenessTimeout; got != want {
+			t.Errorf("livenessTimeout = %v, want %v (package default)", got, want)
+		}
+		if got, want := s.supervisorInitialBackoff, supervisorInitialBackoff; got != want {
+			t.Errorf("supervisorInitialBackoff = %v, want %v (package default)", got, want)
+		}
+		if got, want := s.supervisorMaxBackoff, supervisorMaxBackoff; got != want {
+			t.Errorf("supervisorMaxBackoff = %v, want %v (package default)", got, want)
+		}
+		if got, want := s.supervisorSteadyStateThreshold, supervisorSteadyStateThreshold; got != want {
+			t.Errorf("supervisorSteadyStateThreshold = %v, want %v (package default)", got, want)
+		}
+	})
+}
+
+// TestReadLoop_ProbeReissuesINITAndREADOnNoData covers the
+// operator-reported scenario from session 66: daemon up before rig,
+// device node persists across rig power-state (some USB-serial
+// adapters do this), openClient succeeds but INIT lands on dead
+// air. When the rig is powered on later, the readLoop's no-data
+// probe must re-send INIT (to arm AUTO mode on the now-alive rig)
+// followed by READ (to force an immediate snapshot). Without the
+// probe the rig stays silent forever — AUTO never arms because the
+// rig never received the original INIT.
+//
+// Drives readLoop directly with a tight livenessTimeout so the test
+// completes in well under a second. Asserts that within a few
+// livenessTimeout windows, INIT and READ both appear at least twice
+// (the runPipeline-time pair is bypassed by the direct readLoop
+// call, so two appearances proves probe-driven re-issue).
+func TestReadLoop_ProbeReissuesINITAndREADOnNoData(t *testing.T) {
+	prev := livenessTimeout
+	livenessTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { livenessTimeout = prev })
+
+	s, fake := newPipelineTestService(t)
+	// Don't call Start — drive readLoop directly so we can assert
+	// purely on probe-driven writes, without the runPipeline startup
+	// INIT+READ pair muddying the counts.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	initBytes := []byte("AI1;")
+	readBytes := []byte("ID;FA;FB;ST;VS;MD0;MD1;PC;")
+
+	def, ok := cat.Lookup("yaesu-ft710")
+	if !ok {
+		t.Fatal("rigdef yaesu-ft710 not found")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.readLoop(ctx, fake, def, initBytes, readBytes)
+	}()
+
+	// Wait long enough for at least three timeout windows: one
+	// initial no-data + two probe cycles. Each cycle writes INIT and
+	// READ once.
+	deadline := time.Now().Add(livenessTimeout*6 + 50*time.Millisecond)
+	var initCount, readCount int
+	for time.Now().Before(deadline) {
+		writes := fake.recordedWrites()
+		initCount, readCount = 0, 0
+		for _, w := range writes {
+			if bytes.Equal(w, initBytes) {
+				initCount++
+			} else if bytes.Equal(w, readBytes) {
+				readCount++
+			}
+		}
+		if initCount >= 2 && readCount >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if initCount < 2 {
+		t.Errorf("expected probe to re-issue INIT at least twice; got %d INIT writes (writes=%v)", initCount, fake.recordedWrites())
+	}
+	if readCount < 2 {
+		t.Errorf("expected probe to re-issue READ at least twice; got %d READ writes (writes=%v)", readCount, fake.recordedWrites())
+	}
 }

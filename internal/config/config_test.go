@@ -474,6 +474,66 @@ func TestLoad_Forwarders_DefaultsApplied(t *testing.T) {
 	}
 }
 
+// TestValidateBridge_TimeoutRangeChecks covers the range-validation
+// added with the per-deployment timeout knobs. Zero values mean "use
+// daemon default" and always pass. Out-of-band positive values are
+// rejected with a message naming the field, so a config-file typo is
+// caught at startup rather than going silently into the wrong setting.
+func TestValidateBridge_TimeoutRangeChecks(t *testing.T) {
+	t.Run("all zeros pass (defaults used)", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Enabled: false,
+		})
+		if err != nil {
+			t.Fatalf("zero timeouts should be accepted: %v", err)
+		}
+	})
+
+	t.Run("rejects below-min liveness_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{LivenessMs: 10},
+		})
+		if err == nil || !strings.Contains(err.Error(), "liveness_ms") {
+			t.Errorf("expected error naming liveness_ms; got %v", err)
+		}
+	})
+
+	t.Run("rejects above-max backoff_max_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{BackoffMaxMs: 9_000_000},
+		})
+		if err == nil || !strings.Contains(err.Error(), "backoff_max_ms") {
+			t.Errorf("expected error naming backoff_max_ms; got %v", err)
+		}
+	})
+
+	t.Run("rejects backoff_initial_ms > backoff_max_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{
+				BackoffInitialMs: 5000,
+				BackoffMaxMs:     1000,
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "must not exceed") {
+			t.Errorf("expected error about initial > max; got %v", err)
+		}
+	})
+
+	t.Run("accepts in-range values", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{
+				LivenessMs:             5000,
+				BackoffInitialMs:       1000,
+				BackoffMaxMs:           30000,
+				SteadyStateThresholdMs: 10000,
+			},
+		})
+		if err != nil {
+			t.Errorf("in-range timeouts should be accepted: %v", err)
+		}
+	})
+}
+
 func TestLoad_Forwarders_ValidationErrors(t *testing.T) {
 	cases := []struct {
 		name    string

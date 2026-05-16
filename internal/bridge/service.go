@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -94,6 +95,17 @@ type Service struct {
 	// contract documented in Stop's doc-comment.
 	stopOnce sync.Once
 	stopDone chan struct{}
+
+	// Timeout snapshot — captured at New from cfg.Timeouts with
+	// package-var fallback for any zero/unset values. Read at runtime
+	// by runSupervisor and readLoop. Per-Service so future multi-rig
+	// can tune per rig, and so tests can override either via package-
+	// var dialing (legacy pattern, applied at New time) or by
+	// overwriting these fields directly after construction.
+	livenessTimeout                time.Duration
+	supervisorInitialBackoff       time.Duration
+	supervisorMaxBackoff           time.Duration
+	supervisorSteadyStateThreshold time.Duration
 }
 
 // New constructs a Service from the operator's bridge config and a
@@ -109,7 +121,23 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		openClient: func(c serial.Config) (serial.Client, error) {
 			return serial.Open(c)
 		},
+		livenessTimeout:                resolveTimeout(cfg.Timeouts.LivenessMs, livenessTimeout),
+		supervisorInitialBackoff:       resolveTimeout(cfg.Timeouts.BackoffInitialMs, supervisorInitialBackoff),
+		supervisorMaxBackoff:           resolveTimeout(cfg.Timeouts.BackoffMaxMs, supervisorMaxBackoff),
+		supervisorSteadyStateThreshold: resolveTimeout(cfg.Timeouts.SteadyStateThresholdMs, supervisorSteadyStateThreshold),
 	}
+}
+
+// resolveTimeout converts a config-supplied milliseconds value to a
+// time.Duration, falling back to the package-level default when the
+// config value is zero (the operator omitted the key — daemon picks
+// the built-in default). Centralised so the four call sites in New
+// stay terse.
+func resolveTimeout(cfgMs int, defaultDur time.Duration) time.Duration {
+	if cfgMs > 0 {
+		return time.Duration(cfgMs) * time.Millisecond
+	}
+	return defaultDur
 }
 
 // Initialize validates dependencies. Idempotent. Required by the
