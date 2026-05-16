@@ -22,10 +22,8 @@ export const en: Record<string, string> = {
     // Daemon sends EventRigDisconnected with one of these codes;
     // SPA renders via `bridge.disconnected.<code>`.
 
-    'bridge.disconnected.rig_no_data':
-        'The rig has gone quiet — is it powered on?',
-    'bridge.disconnected.serial_port_error':
-        'Lost the serial connection to the rig ({error})',
+    'bridge.disconnected.rig_no_data': 'The rig has gone quiet — is it powered on?',
+    'bridge.disconnected.serial_port_error': 'Lost the serial connection to the rig ({error})',
 
     // ─── Bridge: bridge-error events ──────────────────────────────
     // Daemon sends EventBridgeError with one of these codes; SPA
@@ -41,8 +39,7 @@ export const en: Record<string, string> = {
     'bridge.error.missing_read_command':
         'Driver "{driver}" has no read command — cannot fetch initial rig state',
     'bridge.error.serial_open_failed': 'Could not open serial port "{port}": {error}',
-    'bridge.error.init_write_failed':
-        'Could not enable push-state on driver "{driver}": {error}',
+    'bridge.error.init_write_failed': 'Could not enable push-state on driver "{driver}": {error}',
     'bridge.error.identity_unrecognised':
         'The connected rig\'s ID is not recognised by driver "{driver}" — check bridge.cat.driver matches your rig',
     'bridge.error.identity_mismatch':
@@ -57,7 +54,8 @@ export const en: Record<string, string> = {
     // the "something's wrong" cue, the message answers "what shape
     // does this expect."
 
-    'validators.callsign': 'Callsign must be 3–32 characters with letters and digits (slash allowed)',
+    'validators.callsign':
+        'Callsign must be 3–32 characters with letters and digits (slash allowed)',
     'validators.maidenhead': 'Grid square must be 4, 6, or 8 characters (e.g. IO91vl)',
     'validators.cq_zone': 'CQ Zone must be between 1 and 40',
     'validators.itu_zone': 'ITU Zone must be between 1 and 90',

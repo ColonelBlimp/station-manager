@@ -354,7 +354,10 @@
                 </button>
             {/each}
             {#if activeTab === 'session' && configState.mailer.enabled}
-                <aside class="-ml-10 -mt-2 flex flex-row items-center gap-x-2" aria-label="Email session ADIF">
+                <aside
+                    class="-ml-10 -mt-2 flex flex-row items-center gap-x-2"
+                    aria-label="Email session ADIF"
+                >
                     <input
                         type="email"
                         bind:value={recipient}
@@ -382,7 +385,9 @@
     {:else if activeTab === 'details'}
         <div id="panel-details" role="tabpanel" aria-labelledby="tab-details"><DetailsPanel /></div>
     {:else if activeTab === 'station'}
-        <div id="panel-station" role="tabpanel" aria-labelledby="tab-station"><MyStationPanel /></div>
+        <div id="panel-station" role="tabpanel" aria-labelledby="tab-station">
+            <MyStationPanel />
+        </div>
     {:else if activeTab === 'session'}
         <div id="panel-session" role="tabpanel" aria-labelledby="tab-session"><SessionPanel /></div>
     {/if}

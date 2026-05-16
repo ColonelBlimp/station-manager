@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
-import {
-    _activeSourceForTests,
-    bridgeState,
-    startBridge,
-    stopBridge,
-} from './bridge.svelte';
+import { _activeSourceForTests, bridgeState, startBridge, stopBridge } from './bridge.svelte';
 import { catState, DEFAULT_VFO_HZ, DEFAULT_MODE } from './cat.svelte';
 import { configState } from './config.svelte';
 import { _resetForTests as resetToasts, toastsState } from './toasts.svelte';
@@ -193,7 +188,7 @@ describe('bridge SSE consumer — rig-state merge', () => {
                 selectedVfo: 'A',
                 splitOverride: false,
                 power: 100,
-            }),
+            })
         );
         expect(catState.rigIdentity).toBe('FT-710');
         expect(catState.vfoA).toBe(14_250_000);
@@ -207,10 +202,7 @@ describe('bridge SSE consumer — rig-state merge', () => {
 
     it('partial payload preserves prior catState values', () => {
         // Seed catState with one round.
-        currentSource().emit(
-            'rig-state',
-            JSON.stringify({ vfoA: 14_250_000, mode: 'USB' }),
-        );
+        currentSource().emit('rig-state', JSON.stringify({ vfoA: 14_250_000, mode: 'USB' }));
         expect(catState.vfoA).toBe(14_250_000);
         expect(catState.mode).toBe('USB');
 
@@ -270,10 +262,7 @@ describe('bridge SSE consumer — rig-disconnected', () => {
     });
 
     it('flips rigResponding=false and toasts at warn level (renders i18n template)', () => {
-        currentSource().emit(
-            'rig-disconnected',
-            JSON.stringify({ code: 'rig_no_data' }),
-        );
+        currentSource().emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
         expect(bridgeState.rigResponding).toBe(false);
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('warn');
@@ -301,7 +290,7 @@ describe('bridge SSE consumer — rig-disconnected', () => {
     it('substitutes details into the template for serial_port_error', () => {
         currentSource().emit(
             'rig-disconnected',
-            JSON.stringify({ code: 'serial_port_error', details: { error: 'i/o timeout' } }),
+            JSON.stringify({ code: 'serial_port_error', details: { error: 'i/o timeout' } })
         );
         // Template: 'Lost the serial connection to the rig ({error})'
         expect(toastsState.items[0].message).toContain('i/o timeout');
@@ -322,7 +311,7 @@ describe('bridge SSE consumer — bridge-error', () => {
             JSON.stringify({
                 code: 'serial_open_failed',
                 details: { port: '/dev/ttyUSB0', error: 'permission denied' },
-            }),
+            })
         );
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('error');
@@ -335,7 +324,7 @@ describe('bridge SSE consumer — bridge-error', () => {
         const respondingBefore = bridgeState.rigResponding;
         currentSource().emit(
             'bridge-error',
-            JSON.stringify({ code: 'unknown_driver', details: { driver: 'yaesu-foo' } }),
+            JSON.stringify({ code: 'unknown_driver', details: { driver: 'yaesu-foo' } })
         );
         expect(bridgeState.connected).toBe(connectedBefore);
         expect(bridgeState.rigResponding).toBe(respondingBefore);

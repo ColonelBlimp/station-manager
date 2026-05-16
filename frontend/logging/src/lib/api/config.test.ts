@@ -67,7 +67,10 @@ describe('fetchConfig', () => {
             status: 200,
             headers: { 'Content-Type': 'text/plain' },
         });
-        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
 
         const out = await fetchConfig();
         expect(out).toEqual({
@@ -117,7 +120,10 @@ describe('fetchConfig', () => {
             status: 502,
             headers: { 'Content-Type': 'text/plain' },
         });
-        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
 
         const out = await fetchConfig();
         expect(out).toEqual({
@@ -139,7 +145,10 @@ describe('fetchConfig', () => {
     it('returns kind=aborted when AbortSignal cancels the request', async () => {
         const abortErr = new Error('aborted');
         abortErr.name = 'AbortError';
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(abortErr)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(abortErr))
+        );
 
         const ctrl = new AbortController();
         const out = await fetchConfig(ctrl.signal);
@@ -178,9 +187,7 @@ describe('putConfig', () => {
         const [url, init] = fetchSpy.mock.calls[0];
         expect(url).toBe('/v1/config');
         expect(init?.method).toBe('PUT');
-        expect((init?.headers as Record<string, string>)['Content-Type']).toBe(
-            'application/json'
-        );
+        expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
         // Bit-for-bit body assertion: the wrapper does not transform
         // the payload (no key-stripping, no field renaming). Pinning
         // this keeps a future "helpful preprocessing" from silently
@@ -229,7 +236,10 @@ describe('putConfig', () => {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
         });
-        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
 
         const out = await putConfig({});
         expect(out).toEqual({
@@ -251,7 +261,10 @@ describe('putConfig', () => {
     it('returns kind=aborted when AbortSignal cancels the request', async () => {
         const abortErr = new Error('aborted');
         abortErr.name = 'AbortError';
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(abortErr)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(abortErr))
+        );
 
         const ctrl = new AbortController();
         const out = await putConfig({}, ctrl.signal);

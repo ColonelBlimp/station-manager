@@ -113,7 +113,10 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
  * (e.g. `qso.ts` checks `typeof ok.uuid === 'string' && ok.uuid !== ''`)
  * because the right downgrade differs per endpoint.
  */
-export function isShape<T>(value: unknown, requiredKeys: readonly (keyof T & string)[]): value is T {
+export function isShape<T>(
+    value: unknown,
+    requiredKeys: readonly (keyof T & string)[]
+): value is T {
     if (!isPlainObject(value)) return false;
     for (const key of requiredKeys) {
         if (!(key in value)) return false;

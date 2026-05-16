@@ -83,14 +83,20 @@ describe('readJsonBody', () => {
 describe('safeFetch', () => {
     it('returns ok=true with the Response on a successful fetch', async () => {
         const response = new Response('hi', { status: 200 });
-        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
 
         const out = await safeFetch('/anywhere');
         expect(out).toEqual({ ok: true, response });
     });
 
     it('returns kind=network when fetch rejects with a generic TypeError', async () => {
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+        );
 
         const out = await safeFetch('/anywhere');
         expect(out).toEqual({ ok: false, kind: 'network', message: 'Failed to fetch' });
@@ -102,7 +108,10 @@ describe('safeFetch', () => {
         // platform polyfill's exact class hierarchy.
         const abortErr = new Error('aborted by caller');
         abortErr.name = 'AbortError';
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(abortErr)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(abortErr))
+        );
 
         const out = await safeFetch('/anywhere');
         expect(out).toEqual({ ok: false, kind: 'aborted', message: 'aborted by caller' });
@@ -111,7 +120,10 @@ describe('safeFetch', () => {
     it('returns kind=aborted on TimeoutError (AbortSignal.timeout)', async () => {
         const timeoutErr = new Error('timed out');
         timeoutErr.name = 'TimeoutError';
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(timeoutErr)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(timeoutErr))
+        );
 
         const out = await safeFetch('/anywhere');
         expect(out).toEqual({ ok: false, kind: 'aborted', message: 'timed out' });
@@ -123,7 +135,10 @@ describe('safeFetch', () => {
         // classifier so the caller still sees `aborted`.
         const ctrl = new AbortController();
         ctrl.abort();
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('generic'))));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('generic')))
+        );
 
         const out = await safeFetch('/anywhere', { signal: ctrl.signal });
         expect(out).toEqual({ ok: false, kind: 'aborted', message: 'generic' });

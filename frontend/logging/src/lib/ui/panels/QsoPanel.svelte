@@ -25,7 +25,8 @@
     import { qsoEditState } from '../../states/qsoEdit.svelte';
     import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
-    import TimerControls from "../components/TimerControls.svelte";
+    import { callsignStack } from '../../states/callsignStack.svelte';
+    import TimerControls from '../components/TimerControls.svelte';
 
     /*
         Hardcoded until a logbook switcher lands. The daemon seeds a
@@ -488,22 +489,82 @@
     }
 
     /*
+        handleStack — Shift+Enter (and the Callsign icon click). Push
+        the currently-typed callsign onto callsignStack and reuse the
+        existing Clear flow to reset the per-callsign draft state.
+
+        Symmetric with the operator's existing ESC muscle memory:
+        "set aside this contact and start fresh." Identical effect on
+        the draft + enrichment + history; only the side effect of
+        pushing the call onto the stack differs.
+
+        Validation matches F2 / Tab — empty or invalid is a silent
+        no-op. The icon affordance in Callsign fires this same handler
+        via the onstack callback, so both keyboard and mouse paths go
+        through one place.
+    */
+    function handleStack(): void {
+        const trimmed = qsoDraft.callsign.trim();
+        if (trimmed === '' || isValidCallsign(trimmed) !== null) return;
+        callsignStack.push(trimmed.toUpperCase());
+        clearForm();
+    }
+
+    /*
+        loadPopped — shared tail for the three pop affordances
+        (Shift+Up, Shift+Down, click an entry in StackingDrawer; the
+        click path lives in StackingDrawer itself but mirrors this
+        behaviour). Writes the popped call into qsoDraft.callsign and
+        focuses the input so the operator can immediately Tab / F2.
+
+        Pop is destructive overwrite of qsoDraft.callsign by design —
+        if there was a half-typed call in the field, it's lost. The
+        operator who wants to preserve it must Shift+Enter first. The
+        "no undo" rule keeps the verb count at two (stack / pop) and
+        avoids a swap semantics that would surprise more often than
+        it would help. Other draft fields are untouched.
+    */
+    function loadPopped(call: string | undefined): void {
+        if (call === undefined) return;
+        qsoDraft.callsign = call;
+        focusCallsign();
+    }
+
+    function handlePopTop(): void {
+        loadPopped(callsignStack.popTop());
+    }
+
+    function handlePopBottom(): void {
+        loadPopped(callsignStack.popBottom());
+    }
+
+    /*
         Window-level keyboard shortcuts.
 
-          - ESC          → Clear (same as the FormControls Clear button).
-          - Ctrl+Enter   → Submit (same as Log QSO; metaKey supports Cmd
-                           on macOS so the shortcut feels native there).
-          - F2           → Lookup-only: enrichment + contact-history
-                           fetch for the typed callsign without
-                           starting the QSO timer (ADR 0007 amendment).
-                           Function key, never collides with typing,
-                           so it fires regardless of focus.
-          - F3           → Mirror whichever TimerControls button is
-                           currently enabled. Stop if running; Start
-                           if stopped + lookup-done; silent no-op
-                           otherwise (no callsign + lookup, nothing
-                           to start). Function key, no typing
-                           collision, fires regardless of focus.
+          - ESC               → Clear (same as the FormControls Clear button).
+          - Ctrl/Cmd+Enter    → Submit (same as Log QSO; metaKey supports Cmd
+                                on macOS so the shortcut feels native there).
+          - Shift+Enter       → Stack: push current callsign onto the
+                                pile-up stack and reset the per-callsign
+                                draft (same effect as ESC, plus the
+                                push). Empty / invalid is a silent no-op.
+          - Shift+ArrowUp     → Pop the newest stacked callsign into
+                                the Callsign field. No-op when the
+                                stack is empty.
+          - Shift+ArrowDown   → Pop the oldest stacked callsign into
+                                the Callsign field. No-op when the
+                                stack is empty.
+          - F2                → Lookup-only: enrichment + contact-history
+                                fetch for the typed callsign without
+                                starting the QSO timer (ADR 0007 amendment).
+                                Function key, never collides with typing,
+                                so it fires regardless of focus.
+          - F3                → Mirror whichever TimerControls button is
+                                currently enabled. Stop if running; Start
+                                if stopped + lookup-done; silent no-op
+                                otherwise (no callsign + lookup, nothing
+                                to start). Function key, no typing
+                                collision, fires regardless of focus.
 
         All are no-ops when the QsoEditOverlay is open — the
         overlay's own ESC handler should win that case (otherwise
@@ -512,13 +573,19 @@
         mirror the button's disabled state — Ctrl+Enter doesn't
         bypass validation.
 
+        Shift+Enter is matched explicitly without Ctrl/Meta so the
+        order of the Ctrl/Meta-Enter and Shift-Enter branches doesn't
+        matter — they're disjoint.
+
         preventDefault on Ctrl+Enter as belt-and-braces against any
         future surrounding <form> default; not strictly needed today
         because QsoPanel renders no <form> element. preventDefault on
         F2 / F3 defangs any browser-level binding (some browsers map
         F2 to in-page rename / focus-bookmarks-bar; F3 is "find next"
         in most browsers — we explicitly want the timer toggle, not
-        find-next).
+        find-next). preventDefault on Shift+ArrowUp/Down stops the
+        browser's native shift-select-line scroll from firing
+        alongside the pop.
     */
     function handleKeydown(e: KeyboardEvent): void {
         if (qsoEditState.open) return;
@@ -532,6 +599,21 @@
             if (qsoDraft.canSubmit) {
                 void submitQso();
             }
+            return;
+        }
+        if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            handleStack();
+            return;
+        }
+        if (e.shiftKey && e.key === 'ArrowUp') {
+            e.preventDefault();
+            handlePopTop();
+            return;
+        }
+        if (e.shiftKey && e.key === 'ArrowDown') {
+            e.preventDefault();
+            handlePopBottom();
             return;
         }
         if (e.key === 'F2') {
@@ -577,6 +659,7 @@
             label="Callsign"
             bind:value={qsoDraft.callsign}
             onenrich={handleEnrich}
+            onstack={handleStack}
         />
         <Rst id="rst_sent" label="RST Sent" bind:value={qsoDraft.rstSent} />
         <Rst id="rst_rcvd" label="RST Rcvd" bind:value={qsoDraft.rstRcvd} />

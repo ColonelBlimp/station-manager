@@ -8,9 +8,26 @@
         value: string;
         widthClass?: string;
         onenrich?: (callsign: string) => void;
+        /*
+            Pile-up stack push. When provided, a small stack glyph
+            renders at the input's trailing edge — clicking it fires
+            this callback. The keyboard equivalent (Shift+Enter) lives
+            window-level in QsoPanel and does not depend on this prop;
+            the icon is purely the mouse-discoverable affordance.
+            Validation + the actual stack push are QsoPanel's job —
+            the icon just signals operator intent.
+        */
+        onstack?: () => void;
     }
 
-    let { id, label, value = $bindable(''), widthClass = 'w-38', onenrich }: Props = $props();
+    let {
+        id,
+        label,
+        value = $bindable(''),
+        widthClass = 'w-38',
+        onenrich,
+        onstack,
+    }: Props = $props();
 
     let inputElement: HTMLInputElement;
 
@@ -41,12 +58,14 @@
 
 <div class="{widthClass} input-row">
     <label for={id} class="input-label">{label}</label>
-    <div class="mt-1">
+    <div class="mt-1 relative">
         <input
             {id}
             bind:this={inputElement}
             bind:value
-            class="input-base uppercase {errorKey !== null ? 'invalid-input' : ''}"
+            class="input-base uppercase {onstack !== undefined ? 'pr-7' : ''} {errorKey !== null
+                ? 'invalid-input'
+                : ''}"
             aria-invalid={errorKey !== null}
             aria-describedby={errorKey !== null ? errorId : undefined}
             onkeydown={handleKeydown}
@@ -54,6 +73,25 @@
             autocomplete="off"
             spellcheck="false"
         />
+        <!--
+            Pile-up stack push affordance. Mouse-only — tabindex={-1}
+            keeps it out of the operator's tab order (the keyboard
+            path is Shift+Enter, handled window-level in QsoPanel).
+            Three-bar glyph reads as a stack/list icon; the title
+            attribute names the shortcut for discoverability.
+        -->
+        {#if onstack !== undefined}
+            <button
+                type="button"
+                class="absolute inset-y-0 right-1 flex items-center text-xs text-gray-400 hover:text-gray-700 cursor-pointer leading-none px-1"
+                aria-label="Stack callsign"
+                title="Stack callsign (Shift+Enter)"
+                tabindex={-1}
+                onclick={onstack}
+            >
+                <span aria-hidden="true">≡</span>
+            </button>
+        {/if}
         <!--
             Error message kept in the DOM (when errorKey is non-null)
             so screen readers announce it via aria-describedby, but

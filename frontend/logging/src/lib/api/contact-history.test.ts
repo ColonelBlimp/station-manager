@@ -80,7 +80,10 @@ describe('fetchContactHistory', () => {
             status: 200,
             headers: { 'Content-Type': 'text/plain' },
         });
-        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
 
         const out = await fetchContactHistory('M0XYZ');
         expect(out).toEqual({ kind: 'ok', items: [] });
@@ -157,7 +160,10 @@ describe('fetchContactHistory', () => {
             status: 502,
             headers: { 'Content-Type': 'text/plain' },
         });
-        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
 
         const out = await fetchContactHistory('M0XYZ');
         expect(out).toEqual({
@@ -179,7 +185,10 @@ describe('fetchContactHistory', () => {
     it('returns kind=aborted when AbortSignal cancels the request', async () => {
         const abortErr = new Error('aborted');
         abortErr.name = 'AbortError';
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(abortErr)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(abortErr))
+        );
 
         const ctrl = new AbortController();
         const out = await fetchContactHistory('M0XYZ', ctrl.signal);

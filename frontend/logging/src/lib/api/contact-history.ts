@@ -51,10 +51,10 @@ export async function fetchContactHistory(
     callsign: string,
     signal?: AbortSignal
 ): Promise<ContactHistoryOutcome> {
-    const fetched = await safeFetch(
-        `/v1/contact-history?call=${encodeURIComponent(callsign)}`,
-        { method: 'GET', signal }
-    );
+    const fetched = await safeFetch(`/v1/contact-history?call=${encodeURIComponent(callsign)}`, {
+        method: 'GET',
+        signal,
+    });
     if (!fetched.ok) {
         return { kind: fetched.kind, message: fetched.message };
     }

@@ -86,7 +86,9 @@ describe('MyStationPanel — mode-mappings clobber regression (C1)', () => {
         await tick();
 
         // Click the Mode Mappings tab.
-        const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="tab"]'));
+        const tabs = Array.from(
+            container.querySelectorAll<HTMLButtonElement>('button[role="tab"]')
+        );
         const modesTab = tabs.find((b) => b.textContent?.includes('Mode Mappings'));
         expect(modesTab).toBeDefined();
         await fireEvent.click(modesTab!);
@@ -123,7 +125,9 @@ describe('MyStationPanel — tablist keyboard nav (I15)', () => {
         const { container } = render(MyStationPanel);
         await tick();
 
-        const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="tab"]'));
+        const tabs = Array.from(
+            container.querySelectorAll<HTMLButtonElement>('button[role="tab"]')
+        );
         const activeTabs = tabs.filter((b) => b.tabIndex === 0);
         const inactiveTabs = tabs.filter((b) => b.tabIndex === -1);
         expect(activeTabs.length).toBe(1);

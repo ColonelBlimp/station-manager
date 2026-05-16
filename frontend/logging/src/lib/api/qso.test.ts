@@ -104,7 +104,10 @@ describe('submitQso', () => {
     it('returns kind=aborted when AbortSignal cancels the request', async () => {
         const abortErr = new Error('aborted');
         abortErr.name = 'AbortError';
-        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(abortErr)));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(abortErr))
+        );
 
         const ctrl = new AbortController();
         const out = await submitQso(ADIF, 1, { signal: ctrl.signal });

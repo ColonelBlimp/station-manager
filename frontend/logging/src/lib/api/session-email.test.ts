@@ -22,9 +22,7 @@ describe('sendSessionEmail', () => {
     it('posts JSON to /v1/session/email', async () => {
         const fetchSpy = vi.fn(
             (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-                Promise.resolve(
-                    new Response(JSON.stringify({ status: 'sent' }), { status: 200 })
-                )
+                Promise.resolve(new Response(JSON.stringify({ status: 'sent' }), { status: 200 }))
         );
         vi.stubGlobal('fetch', fetchSpy);
 
@@ -132,9 +130,7 @@ describe('sendSessionEmail', () => {
     it('passes optional subject + filename through to the body', async () => {
         const fetchSpy = vi.fn(
             (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-                Promise.resolve(
-                    new Response(JSON.stringify({ status: 'sent' }), { status: 200 })
-                )
+                Promise.resolve(new Response(JSON.stringify({ status: 'sent' }), { status: 200 }))
         );
         vi.stubGlobal('fetch', fetchSpy);
 

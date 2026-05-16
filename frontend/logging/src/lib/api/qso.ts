@@ -81,11 +81,7 @@ export async function submitQso(
         // it. A 200 with a missing or empty uuid (proxy interference,
         // daemon regression) would propagate phantom empty IDs and
         // corrupt the session list silently. Downgrade to malformed.
-        if (
-            !isPlainObject(body) ||
-            typeof body.uuid !== 'string' ||
-            body.uuid === ''
-        ) {
+        if (!isPlainObject(body) || typeof body.uuid !== 'string' || body.uuid === '') {
             return {
                 kind: 'server',
                 code: 'malformed_response',

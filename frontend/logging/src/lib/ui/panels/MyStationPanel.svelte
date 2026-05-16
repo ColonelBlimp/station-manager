@@ -41,9 +41,7 @@
             // clear all overrides. Blank-MODE rows are dropped here
             // so the daemon's diff layer treats them as "revert to
             // rigdef default".
-            let modeMappingsPayload:
-                | Record<string, { mode: string; submode?: string }>
-                | undefined;
+            let modeMappingsPayload: Record<string, { mode: string; submode?: string }> | undefined;
             if (Object.keys(editingModes).length > 0) {
                 modeMappingsPayload = {};
                 for (const [rigStr, pair] of Object.entries(editingModes)) {
@@ -294,7 +292,9 @@
                     id={`my-station-tab-${section.id}`}
                     type="button"
                     role="tab"
-                    class="tab-button text-sm {activeSection === section.id ? '' : 'cursor-pointer'}"
+                    class="tab-button text-sm {activeSection === section.id
+                        ? ''
+                        : 'cursor-pointer'}"
                     aria-selected={activeSection === section.id}
                     aria-controls={`my-station-${section.id}`}
                     tabindex={activeSection === section.id ? 0 : -1}
@@ -307,154 +307,154 @@
 
     <div class="flex h-full">
         <div class="flex w-198">
-        {#if activeSection === 'identity'}
-            <div
-                id="my-station-identity"
-                role="tabpanel"
-                aria-labelledby="my-station-tab-identity"
-                class="flex flex-col space-y-1 pt-3"
-            >
-                <div class="flex space-x-4">
-                    <ValidatedInput
-                        id="station-callsign"
-                        label="Station Callsign"
-                        bind:value={configState.loggingStation.stationCallsign}
-                        validator={isValidCallsign}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="owner-callsign"
-                        label="Owner's Callsign"
-                        bind:value={configState.loggingStation.ownerCallsign}
-                        validator={isValidCallsign}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                </div>
-                <div class="flex space-x-4">
-                    <ValidatedInput
-                        id="operator"
-                        label="Operator"
-                        bind:value={configState.loggingStation.operator}
-                        validator={isValidCallsign}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-name"
-                        label="Operator Name"
-                        bind:value={configState.loggingStation.myName}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                </div>
-            </div>
-        {:else if activeSection === 'location'}
-            <div
-                id="my-station-location"
-                role="tabpanel"
-                aria-labelledby="my-station-tab-location"
-                class="flex flex-col pt-3"
-            >
-                <div class="flex space-x-4">
-                    <ValidatedInput
-                        id="my-gridsquare"
-                        label="Grid Square"
-                        bind:value={configState.loggingStation.myGridsquare}
-                        validator={isValidMaidenhead}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-cq-zone"
-                        label="CQ Zone"
-                        bind:value={configState.loggingStation.myCqZone}
-                        validator={isValidCqZone}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-itu-zone"
-                        label="ITU Zone"
-                        bind:value={configState.loggingStation.myItuZone}
-                        validator={isValidItuZone}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-dxcc"
-                        label="DXCC"
-                        bind:value={configState.loggingStation.myDxcc}
-                        validator={isValidDxcc}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                </div>
-                <div class="flex space-x-4">
-                    <ValidatedInput
-                        id="my-street"
-                        label="Street"
-                        bind:value={configState.loggingStation.myStreet}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-city"
-                        label="City"
-                        bind:value={configState.loggingStation.myCity}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-postal-code"
-                        label="Postal Code"
-                        bind:value={configState.loggingStation.myPostalCode}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-country"
-                        label="Country"
-                        bind:value={configState.loggingStation.myCountry}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                </div>
-                <div class="flex space-x-4">
-                    <ValidatedInput
-                        id="my-altitude"
-                        label="Altitude (m)"
-                        bind:value={configState.loggingStation.myAltitude}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <!-- Daemon-derived from Grid Square; read-only mirror. -->
-                    <div class="w-38">
-                        <span class="input-label">Latitude</span>
-                        <p class="mt-2">{configState.loggingStation.myLat || '—'}</p>
+            {#if activeSection === 'identity'}
+                <div
+                    id="my-station-identity"
+                    role="tabpanel"
+                    aria-labelledby="my-station-tab-identity"
+                    class="flex flex-col space-y-1 pt-3"
+                >
+                    <div class="flex space-x-4">
+                        <ValidatedInput
+                            id="station-callsign"
+                            label="Station Callsign"
+                            bind:value={configState.loggingStation.stationCallsign}
+                            validator={isValidCallsign}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="owner-callsign"
+                            label="Owner's Callsign"
+                            bind:value={configState.loggingStation.ownerCallsign}
+                            validator={isValidCallsign}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
                     </div>
-                    <div class="w-38">
-                        <span class="input-label">Longitude</span>
-                        <p class="mt-2">{configState.loggingStation.myLon || '—'}</p>
+                    <div class="flex space-x-4">
+                        <ValidatedInput
+                            id="operator"
+                            label="Operator"
+                            bind:value={configState.loggingStation.operator}
+                            validator={isValidCallsign}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-name"
+                            label="Operator Name"
+                            bind:value={configState.loggingStation.myName}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
                     </div>
                 </div>
-            </div>
-        {:else if activeSection === 'equipment'}
-            <div
-                id="my-station-equipment"
-                role="tabpanel"
-                aria-labelledby="my-station-tab-equipment"
-                class="flex flex-col space-y-3 pt-3"
-            >
-                <div class="flex space-x-4">
-                    <!--
+            {:else if activeSection === 'location'}
+                <div
+                    id="my-station-location"
+                    role="tabpanel"
+                    aria-labelledby="my-station-tab-location"
+                    class="flex flex-col pt-3"
+                >
+                    <div class="flex space-x-4">
+                        <ValidatedInput
+                            id="my-gridsquare"
+                            label="Grid Square"
+                            bind:value={configState.loggingStation.myGridsquare}
+                            validator={isValidMaidenhead}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-cq-zone"
+                            label="CQ Zone"
+                            bind:value={configState.loggingStation.myCqZone}
+                            validator={isValidCqZone}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-itu-zone"
+                            label="ITU Zone"
+                            bind:value={configState.loggingStation.myItuZone}
+                            validator={isValidItuZone}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-dxcc"
+                            label="DXCC"
+                            bind:value={configState.loggingStation.myDxcc}
+                            validator={isValidDxcc}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                    </div>
+                    <div class="flex space-x-4">
+                        <ValidatedInput
+                            id="my-street"
+                            label="Street"
+                            bind:value={configState.loggingStation.myStreet}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-city"
+                            label="City"
+                            bind:value={configState.loggingStation.myCity}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-postal-code"
+                            label="Postal Code"
+                            bind:value={configState.loggingStation.myPostalCode}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-country"
+                            label="Country"
+                            bind:value={configState.loggingStation.myCountry}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                    </div>
+                    <div class="flex space-x-4">
+                        <ValidatedInput
+                            id="my-altitude"
+                            label="Altitude (m)"
+                            bind:value={configState.loggingStation.myAltitude}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <!-- Daemon-derived from Grid Square; read-only mirror. -->
+                        <div class="w-38">
+                            <span class="input-label">Latitude</span>
+                            <p class="mt-2">{configState.loggingStation.myLat || '—'}</p>
+                        </div>
+                        <div class="w-38">
+                            <span class="input-label">Longitude</span>
+                            <p class="mt-2">{configState.loggingStation.myLon || '—'}</p>
+                        </div>
+                    </div>
+                </div>
+            {:else if activeSection === 'equipment'}
+                <div
+                    id="my-station-equipment"
+                    role="tabpanel"
+                    aria-labelledby="my-station-tab-equipment"
+                    class="flex flex-col space-y-3 pt-3"
+                >
+                    <div class="flex space-x-4">
+                        <!--
                         Rig field: when CAT is live the rigdef's
                         human-readable name (e.g. "Yaesu FTdx10",
                         resolved daemon-side from bridge.cat.driver)
@@ -464,37 +464,37 @@
                         branches keep the visual layout identical;
                         only the data source and readonly state differ.
                     -->
-                    {#if displayedState.isLive}
+                        {#if displayedState.isLive}
+                            <ValidatedInput
+                                id="my-rig"
+                                label="Rig"
+                                value={displayedState.rigName}
+                                validator={passthrough}
+                                widthClass="w-fit"
+                                inputClass="w-38 bg-surface-disabled cursor-default"
+                                readonly
+                                title="From CAT — change driver via config.json"
+                            />
+                        {:else}
+                            <ValidatedInput
+                                id="my-rig"
+                                label="Rig"
+                                bind:value={configState.loggingStation.myRig}
+                                validator={passthrough}
+                                widthClass="w-fit"
+                                inputClass="w-38"
+                            />
+                        {/if}
                         <ValidatedInput
-                            id="my-rig"
-                            label="Rig"
-                            value={displayedState.rigName}
-                            validator={passthrough}
-                            widthClass="w-fit"
-                            inputClass="w-38 bg-surface-disabled cursor-default"
-                            readonly
-                            title="From CAT — change driver via config.json"
-                        />
-                    {:else}
-                        <ValidatedInput
-                            id="my-rig"
-                            label="Rig"
-                            bind:value={configState.loggingStation.myRig}
+                            id="my-antenna"
+                            label="Antenna"
+                            bind:value={configState.loggingStation.myAntenna}
                             validator={passthrough}
                             widthClass="w-fit"
                             inputClass="w-38"
                         />
-                    {/if}
-                    <ValidatedInput
-                        id="my-antenna"
-                        label="Antenna"
-                        bind:value={configState.loggingStation.myAntenna}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
 
-                    <!--
+                        <!--
                         Default TX power: CAT-reported power wins when
                         the bridge is live (read-only display, no
                         round-trip — the live value is transient). When
@@ -503,216 +503,224 @@
                         omitted from the QSO record. Persisted in
                         config.json via the station block.
                     -->
-                    <div class="flex flex-col w-64">
-                        <label for="default-power" class="input-label">Default TX power (W)</label>
-                        <input
-                            id="default-power"
-                            type="number"
-                            step="1"
-                            min="0"
-                            max="2000"
-                            class="input-base w-38 mt-1 {displayedState.isLive
-                                ? 'bg-surface-disabled cursor-default'
-                                : ''}"
-                            value={displayedState.isLive
-                                ? catState.power
-                                : configState.station.defaultPower}
-                            readonly={displayedState.isLive}
-                            title={displayedState.isLive ? 'From CAT (PC)' : ''}
-                            oninput={(e) => {
-                                if (!displayedState.isLive) {
-                                    configState.station.defaultPower = Number(
-                                        e.currentTarget.value,
-                                    );
-                                }
-                            }}
-                        />
-                        <p class="text-xs opacity-70 mt-1 max-w-md">
-                            Used only when CAT is unavailable. When CAT is connected, the rig's
-                            reported power overrides this. Set to 0 to omit ADIF TX_PWR from QSO
-                            records.
-                        </p>
+                        <div class="flex flex-col w-64">
+                            <label for="default-power" class="input-label"
+                                >Default TX power (W)</label
+                            >
+                            <input
+                                id="default-power"
+                                type="number"
+                                step="1"
+                                min="0"
+                                max="2000"
+                                class="input-base w-38 mt-1 {displayedState.isLive
+                                    ? 'bg-surface-disabled cursor-default'
+                                    : ''}"
+                                value={displayedState.isLive
+                                    ? catState.power
+                                    : configState.station.defaultPower}
+                                readonly={displayedState.isLive}
+                                title={displayedState.isLive ? 'From CAT (PC)' : ''}
+                                oninput={(e) => {
+                                    if (!displayedState.isLive) {
+                                        configState.station.defaultPower = Number(
+                                            e.currentTarget.value
+                                        );
+                                    }
+                                }}
+                            />
+                            <p class="text-xs opacity-70 mt-1 max-w-md">
+                                Used only when CAT is unavailable. When CAT is connected, the rig's
+                                reported power overrides this. Set to 0 to omit ADIF TX_PWR from QSO
+                                records.
+                            </p>
+                        </div>
                     </div>
                 </div>
-            </div>
-        {:else if activeSection === 'modes'}
-            <div
-                id="my-station-modes"
-                role="tabpanel"
-                aria-labelledby="my-station-tab-modes"
-                class="flex w-full p-2"
-            >
-                <div class="flex flex-col w-110 overflow-hidden">
-                    <ul role="list" class="flex flex-col space-y-3 h-52 p-2 overflow-y-scroll">
-                        {#each configState.bridge.rigModes as rigStr (rigStr)}
-                            {#if editingModes[rigStr]}
-                        <li class="flex items-center space-x-4 text-sm border border-gray-300 rounded-md px-6 py-3">
-                            <div class="w-22 font-semibold">{rigStr}</div>
-                            <span>:</span>
-                            <div>
-                                <input
-                                    id={`mode-map-${rigStr}-mode`}
-                                    type="text"
-                                    class="input-base w-30"
-                                    placeholder="MODE"
-                                    bind:value={editingModes[rigStr].mode}
-                                    autocomplete="off"
-                                    spellcheck="false"
-                                />
-                            </div>
-                            <div>
-                                <input
-                                    id={`mode-map-${rigStr}-submode`}
-                                    type="text"
-                                    class="input-base w-30"
-                                    placeholder="(optional)"
-                                    bind:value={editingModes[rigStr].submode}
-                                    autocomplete="off"
-                                    spellcheck="false"
-                                />
-                            </div>
-                        </li>
-                            {/if}
-                        {/each}
-                    </ul>
+            {:else if activeSection === 'modes'}
+                <div
+                    id="my-station-modes"
+                    role="tabpanel"
+                    aria-labelledby="my-station-tab-modes"
+                    class="flex w-full p-2"
+                >
+                    <div class="flex flex-col w-110 overflow-hidden">
+                        <ul role="list" class="flex flex-col space-y-3 h-52 p-2 overflow-y-scroll">
+                            {#each configState.bridge.rigModes as rigStr (rigStr)}
+                                {#if editingModes[rigStr]}
+                                    <li
+                                        class="flex items-center space-x-4 text-sm border border-gray-300 rounded-md px-6 py-3"
+                                    >
+                                        <div class="w-22 font-semibold">{rigStr}</div>
+                                        <span>:</span>
+                                        <div>
+                                            <input
+                                                id={`mode-map-${rigStr}-mode`}
+                                                type="text"
+                                                class="input-base w-30"
+                                                placeholder="MODE"
+                                                bind:value={editingModes[rigStr].mode}
+                                                autocomplete="off"
+                                                spellcheck="false"
+                                            />
+                                        </div>
+                                        <div>
+                                            <input
+                                                id={`mode-map-${rigStr}-submode`}
+                                                type="text"
+                                                class="input-base w-30"
+                                                placeholder="(optional)"
+                                                bind:value={editingModes[rigStr].submode}
+                                                autocomplete="off"
+                                                spellcheck="false"
+                                            />
+                                        </div>
+                                    </li>
+                                {/if}
+                            {/each}
+                        </ul>
+                    </div>
+                    <div class="flex-col p-4 w-80">
+                        {#if configState.bridge.rigModes.length === 0}
+                            <p class="text-sm opacity-70">
+                                No CAT rig is configured. Mode mappings translate a rig defined MODE
+                                into an ADIF MODE / SUBMODE values; the table populates once
+                                <code>bridge.enabled</code> is set in <code>config.json</code> and the
+                                application recognises the configured driver.
+                            </p>
+                        {:else}
+                            <p class="text-xs opacity-70">
+                                Translation table for <strong>{configState.station.rigName}</strong
+                                >: each row maps a rig defined MODE (left) to an ADIF MODE (centre)
+                                plus an optional ADIF SUBMODE (right). The defaults are sensible for
+                                common usage; change any row when you're operating a different
+                                protocol (e.g. running PSK31 on DATA-U instead of FT8). Empty MODE
+                                clears the operator override so the default mappings applies;
+                                validation rejects unknown ADIF values with an error message.
+                            </p>
+                        {/if}
+                    </div>
                 </div>
-                <div class="flex-col p-4 w-80">
-                    {#if configState.bridge.rigModes.length === 0}
-                        <p class="text-sm opacity-70">
-                            No CAT rig is configured. Mode mappings translate a rig defined MODE
-                            into an ADIF MODE / SUBMODE values; the table populates once
-                            <code>bridge.enabled</code> is set in <code>config.json</code> and the
-                            application recognises the configured driver.
-                        </p>
-                    {:else}
-                    <p class="text-xs opacity-70">
-                        Translation table for <strong>{configState.station.rigName}</strong>: each
-                        row maps a rig defined MODE (left) to an ADIF MODE (centre) plus an optional
-                        ADIF SUBMODE (right). The defaults are sensible for common usage; change
-                        any row when you're operating a different protocol (e.g. running PSK31 on
-                        DATA-U instead of FT8). Empty MODE clears the operator override so the
-                        default mappings applies; validation rejects unknown ADIF values with an
-                        error message.
-                    </p>
-                    {/if}
+            {:else if activeSection === 'cw'}
+                <div
+                    id="my-station-cw"
+                    role="tabpanel"
+                    aria-labelledby="my-station-tab-cw"
+                    class="flex flex-col space-y-1 pt-3"
+                >
+                    <div class="flex space-x-4">
+                        <ValidatedInput
+                            id="my-morse-key-type"
+                            label="Morse Key Type"
+                            bind:value={configState.loggingStation.myMorseKeyType}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                        <ValidatedInput
+                            id="my-morse-key-info"
+                            label="Morse Key Info"
+                            bind:value={configState.loggingStation.myMorseKeyInfo}
+                            validator={passthrough}
+                            widthClass="w-fit"
+                            inputClass="w-38"
+                        />
+                    </div>
                 </div>
-            </div>
-        {:else if activeSection === 'cw'}
-            <div
-                id="my-station-cw"
-                role="tabpanel"
-                aria-labelledby="my-station-tab-cw"
-                class="flex flex-col space-y-1 pt-3"
-            >
-                <div class="flex space-x-4">
-                    <ValidatedInput
-                        id="my-morse-key-type"
-                        label="Morse Key Type"
-                        bind:value={configState.loggingStation.myMorseKeyType}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                    <ValidatedInput
-                        id="my-morse-key-info"
-                        label="Morse Key Info"
-                        bind:value={configState.loggingStation.myMorseKeyInfo}
-                        validator={passthrough}
-                        widthClass="w-fit"
-                        inputClass="w-38"
-                    />
-                </div>
-            </div>
-        {:else if activeSection === 'qso'}
-            <div
-                id="my-station-qso"
-                role="tabpanel"
-                aria-labelledby="my-station-tab-qso"
-                class="flex flex-row space-x-4 pt-3"
-            >
-                <div class="flex flex-col space-y-4">
-                    <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">Misc</h4>
-                    <!--
+            {:else if activeSection === 'qso'}
+                <div
+                    id="my-station-qso"
+                    role="tabpanel"
+                    aria-labelledby="my-station-tab-qso"
+                    class="flex flex-row space-x-4 pt-3"
+                >
+                    <div class="flex flex-col space-y-4">
+                        <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
+                            Misc
+                        </h4>
+                        <!--
                     QSO_RANDOM tri-state: 'off' omits the field from every
                     ADIF record (default); 'Y' / 'N' force the value on
                     every QSO. localStorage-persisted via qsoDefaults.
                 -->
-                    <div class="flex flex-col">
-                        <label for="qso-random" class="input-label">QSO Random</label>
-                        <select
-                            id="qso-random"
-                            class="input-base w-38 mt-1"
-                            bind:value={qsoDefaults.qsoRandom}
-                        >
-                            <option value="off">Don't emit</option>
-                            <option value="Y">Y (random)</option>
-                            <option value="N">N (scheduled)</option>
-                        </select>
-                    </div>
+                        <div class="flex flex-col">
+                            <label for="qso-random" class="input-label">QSO Random</label>
+                            <select
+                                id="qso-random"
+                                class="input-base w-38 mt-1"
+                                bind:value={qsoDefaults.qsoRandom}
+                            >
+                                <option value="off">Don't emit</option>
+                                <option value="Y">Y (random)</option>
+                                <option value="N">N (scheduled)</option>
+                            </select>
+                        </div>
 
-                    <!--
+                        <!--
                     Linear-amp pair. Daemon-persisted (config.json
                     station block); applied to TX power on QSO submit
                     via displayedState.effectivePower when ampEnabled is
                     true. Multiplier is meaningful only with the toggle on.
                 -->
-                    <div class="flex items-center space-x-2 w-56">
-                        <input
-                            id="amp-enabled"
-                            type="checkbox"
-                            bind:checked={configState.station.ampEnabled}
-                        />
-                        <label for="amp-enabled" class="text-sm">Use linear amp multiplier</label>
+                        <div class="flex items-center space-x-2 w-56">
+                            <input
+                                id="amp-enabled"
+                                type="checkbox"
+                                bind:checked={configState.station.ampEnabled}
+                            />
+                            <label for="amp-enabled" class="text-sm"
+                                >Use linear amp multiplier</label
+                            >
+                        </div>
+                        <div class="flex flex-col">
+                            <label for="amp-multiplier" class="input-label">Amp multiplier</label>
+                            <input
+                                id="amp-multiplier"
+                                type="number"
+                                step="1"
+                                min="0"
+                                max="1000"
+                                class="input-base w-fit mt-1"
+                                bind:value={configState.station.ampMultiplier}
+                                disabled={!configState.station.ampEnabled}
+                            />
+                        </div>
                     </div>
-                    <div class="flex flex-col">
-                        <label for="amp-multiplier" class="input-label">Amp multiplier</label>
-                        <input
-                            id="amp-multiplier"
-                            type="number"
-                            step="1"
-                            min="0"
-                            max="1000"
-                            class="input-base w-fit mt-1"
-                            bind:value={configState.station.ampMultiplier}
-                            disabled={!configState.station.ampEnabled}
-                        />
-                    </div>
-                </div>
-                <div class="flex flex-col space-y-4">
-                    <!--
+                    <div class="flex flex-col space-y-4">
+                        <!--
                     Notification toggles. Errors / duplicates always toast
                     regardless of these flags — see qsoDefaults.svelte.ts
                     for the rationale. Mute the chatty info toasts here
                     when they become noise during a high-rate run.
                 -->
-                    <div class="flex flex-col space-y-1 w-56">
-                        <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
-                            Notifications
-                        </h4>
-                        <div class="flex items-center space-x-2">
-                            <input
-                                id="notify-qso-stored"
-                                type="checkbox"
-                                bind:checked={qsoDefaults.notifyQsoStored}
-                            />
-                            <label for="notify-qso-stored" class="text-sm"
-                                >Toast on QSO stored</label
-                            >
-                        </div>
-                        <div class="flex items-center space-x-2">
-                            <input
-                                id="notify-config-saved"
-                                type="checkbox"
-                                bind:checked={qsoDefaults.notifyConfigSaved}
-                            />
-                            <label for="notify-config-saved" class="text-sm"
-                                >Toast on My Station updated</label
-                            >
+                        <div class="flex flex-col space-y-1 w-56">
+                            <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
+                                Notifications
+                            </h4>
+                            <div class="flex items-center space-x-2">
+                                <input
+                                    id="notify-qso-stored"
+                                    type="checkbox"
+                                    bind:checked={qsoDefaults.notifyQsoStored}
+                                />
+                                <label for="notify-qso-stored" class="text-sm"
+                                    >Toast on QSO stored</label
+                                >
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <input
+                                    id="notify-config-saved"
+                                    type="checkbox"
+                                    bind:checked={qsoDefaults.notifyConfigSaved}
+                                />
+                                <label for="notify-config-saved" class="text-sm"
+                                    >Toast on My Station updated</label
+                                >
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-        {/if}
+            {/if}
         </div>
         <!--
         Update button sits outside the tab content so it persists across

@@ -104,10 +104,10 @@ export async function enrichCallsign(
     callsign: string,
     signal?: AbortSignal
 ): Promise<EnrichOutcome> {
-    const fetched = await safeFetch(
-        `/v1/enrich/callsign?call=${encodeURIComponent(callsign)}`,
-        { method: 'GET', signal }
-    );
+    const fetched = await safeFetch(`/v1/enrich/callsign?call=${encodeURIComponent(callsign)}`, {
+        method: 'GET',
+        signal,
+    });
     if (!fetched.ok) {
         return { kind: fetched.kind, message: fetched.message };
     }

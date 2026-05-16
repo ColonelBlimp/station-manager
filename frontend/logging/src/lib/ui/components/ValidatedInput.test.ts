@@ -135,9 +135,8 @@ describe('ValidatedInput', () => {
 
     describe('validator invocation', () => {
         it('calls the validator on input', async () => {
-            const validator = vi.fn(
-                (v: string): string | null =>
-                    v === '' || /^\d+$/.test(v) ? null : 'validators.rst'
+            const validator = vi.fn((v: string): string | null =>
+                v === '' || /^\d+$/.test(v) ? null : 'validators.rst'
             );
             const { container } = render(ValidatedInput, {
                 id: 'test-vi-v',
@@ -158,9 +157,8 @@ describe('ValidatedInput', () => {
             // would be redundant work. The focus-trap tests above cover
             // the behavioural contract (does it trap focus on invalid
             // blur); this test pins the mechanism shift.
-            const validator = vi.fn(
-                (v: string): string | null =>
-                    v === '' || /^\d+$/.test(v) ? null : 'validators.rst'
+            const validator = vi.fn((v: string): string | null =>
+                v === '' || /^\d+$/.test(v) ? null : 'validators.rst'
             );
             const { container } = render(ValidatedInput, {
                 id: 'test-vi-vb',

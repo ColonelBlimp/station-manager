@@ -64,8 +64,7 @@ export function getLocale(): string {
  * Resolution: current locale → English baseline → `[missing: key]`.
  */
 export function t(key: string, details?: Record<string, string>): string {
-    const template =
-        catalogues[currentLocale]?.[key] ?? catalogues.en[key] ?? `[missing: ${key}]`;
+    const template = catalogues[currentLocale]?.[key] ?? catalogues.en[key] ?? `[missing: ${key}]`;
     if (!details) return template;
     // `\w+` is [A-Za-z0-9_], so hyphens and other punctuation in
     // placeholder names won't match — `{client-id}` would render
@@ -74,6 +73,6 @@ export function t(key: string, details?: Record<string, string>): string {
     // `{port}`), so this is fine today; widen the character class
     // if a future event ever ships hyphenated keys.
     return template.replace(/{(\w+)}/g, (_match, name: string) =>
-        details[name] !== undefined ? details[name] : `{${name}}`,
+        details[name] !== undefined ? details[name] : `{${name}}`
     );
 }
