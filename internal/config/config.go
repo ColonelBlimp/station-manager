@@ -135,6 +135,13 @@ type Config struct {
 	// any-host-with-a-rig deployment sets it to true with serial +
 	// driver populated.
 	Bridge types.BridgeConfig `json:"bridge"`
+
+	// Ft8 configures the FT8 subsystem (ADR 0021). v1 scaffold —
+	// Enabled defaults false; the decoder pipeline lands as the
+	// Fortran-port work commits in subsequent sessions. Operator
+	// opts in by setting `ft8.enabled: true` once a working
+	// decoder is in place.
+	Ft8 types.Ft8Config `json:"ft8"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -243,6 +250,9 @@ func Load(path string) (Config, error) {
 
 	if err = validateBridge(cfg.Bridge); err != nil {
 		return cfg, fmt.Errorf("validating bridge: %w", err)
+	}
+	if err = validateFt8(cfg.Ft8); err != nil {
+		return cfg, fmt.Errorf("validating ft8: %w", err)
 	}
 
 	return cfg, nil
@@ -841,6 +851,16 @@ func validateBridge(b types.BridgeConfig) error {
 	if b.Cat.Driver == "" {
 		return fmt.Errorf("bridge.cat.driver is required when bridge.enabled is true")
 	}
+	return nil
+}
+
+// validateFt8 checks the FT8 subsystem block. v1 scaffold — the
+// only field is Enabled, which is a plain bool so there's nothing
+// to range-check today. As the implementation lands (audio device
+// selection, frequency lists, decode policy, etc.), validation
+// grows alongside the schema. Kept as a separate function for
+// symmetry with validateBridge so future fields slot in cleanly.
+func validateFt8(_ types.Ft8Config) error {
 	return nil
 }
 
