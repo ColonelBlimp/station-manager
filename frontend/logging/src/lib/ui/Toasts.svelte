@@ -93,16 +93,16 @@
             first, then encounter the button as a discrete control.
         -->
         <div
-            class="toast-base {levelClass(toast.level)} pointer-events-auto flex flex-row items-start gap-2"
+            class="toast-base {levelClass(toast.level)} pointer-events-auto relative"
             role={toast.level === 'error' ? 'alert' : 'status'}
             transition:fade={{ duration: 150 }}
         >
-            <span class="flex-1">
+            <span class="block pr-4">
                 <strong>{levelLabel(toast.level)}</strong>{toast.message}
             </span>
             <button
                 type="button"
-                class="text-current opacity-70 hover:opacity-100 cursor-pointer leading-none px-1 -my-0.5 self-start"
+                class="absolute top-0.5 right-1.5 text-current opacity-70 hover:opacity-100 cursor-pointer leading-none"
                 aria-label="Dismiss notification"
                 onclick={() => dismissToast(toast.id)}
             >

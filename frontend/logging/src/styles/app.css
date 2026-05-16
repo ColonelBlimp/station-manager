@@ -152,12 +152,13 @@
         error=rose) per the ADR; promote to @theme tokens if reused
         elsewhere.
 
-        max-w-sm caps the toast's width so a long daemon error message
-        wraps inside the toast rather than stretching across the
-        viewport. text-left because messages are sentences, not labels.
+        whitespace-nowrap keeps each toast on a single line so the
+        message reads at a glance; toast width grows to fit content
+        rather than wrapping inside a fixed clamp. text-left because
+        messages are sentences, not labels.
     */
     .toast-base {
-        @apply max-w-sm px-3 py-2 rounded text-sm text-left
+        @apply px-3 py-2 rounded text-sm text-left whitespace-nowrap
         border shadow-md cursor-pointer
         focus:outline-2 focus:outline-focus;
     }
