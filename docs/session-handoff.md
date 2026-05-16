@@ -41,7 +41,9 @@ Driver: parallel FT8 strand starting alongside SM polish makes silent regression
 
 Continuous **Delivery**, not Deployment — every commit answers "could this tag ship cleanly?"; the operator still triggers actual releases manually via `git tag` + `scripts/release-rpm.sh`. Gates 4–8 from `docs/v2-design/release-acceptance.md` (install smoke on clean VM, end-to-end QSO, bridge live test) need real hardware and stay manual for now.
 
-**Next:** ADR 0021 capturing the FT8 architectural decision (lives at `internal/ft8/` inside SM as a subsystem; reverses the prior extraction decision; consumes `internal/errors` + `internal/logging` + `internal/cat` + `internal/serial` + `internal/qsoservice`; WSJTX v.3.0.0.1 fork at `/home/mveary/Development/wsjtx` is the Fortran spec; exact-port philosophy). Then scaffold `internal/ft8/` package skeleton with same package-boundary discipline as `internal/bridge`.
+**ADR 0021 shipped** (same continuation): `docs/decisions/0021-ft8-as-sm-subsystem.md` — FT8 returns to SM as `internal/ft8/` (reverses prior extraction); five-section ADR with three alternatives weighed (separate library, separate process, stay extracted) and a full Triggers-to-revisit list. Memory `project_ft8_library.md` rewritten to reflect the in-SM decision; `MEMORY.md` index hook updated.
+
+**Next:** scaffold `internal/ft8/` package skeleton with same package-boundary discipline as `internal/bridge` — `Service` lifecycle (Initialize/Start/Stop), DI wiring in `cmd/smd/main.go`, BridgeConfig-style `Ft8Config` block in `internal/types/`, AST-walk boundary tests enforcing import discipline, doc.go pointing at ADR 0021. Then start the Fortran-port content itself.
 
 ### Session 66 (2026-05-16) — Bridge auto-recovery: supervisor + probe + flash suppression (ADR 0020)
 
