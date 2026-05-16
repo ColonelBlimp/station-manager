@@ -97,24 +97,19 @@ jobs:
 
       # `npm ci` (above) populates frontend/logging/node_modules/, which
       # contains third-party packages shipping their own Go code (e.g.
-      # flatted's Golang variant). Filter them out of go list so a
-      # broken npm dep with broken Go code can't fail our build for an
-      # unrelated reason.
-      - name: Enumerate Go packages (excluding npm-vendored)
-        id: pkgs
-        run: |
-          pkgs=$(go list ./... | grep -v /node_modules/)
-          {
-            echo 'pkgs<<EOF'
-            echo "$pkgs"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
+      # flatted's Golang variant). Filter them out at each call site so
+      # a broken npm dep with broken Go code can't fail our build for an
+      # unrelated reason. The `$(...)` substitution runs in bash inside
+      # the step, so word-splitting on the multi-line list works as
+      # expected — unlike a `${{ steps.foo.outputs.bar }}` expansion,
+      # which would inline the raw newlines into the shell command and
+      # the shell would interpret each line after the first as its own
+      # command. (Caught by CI run on first push of session 66.)
       - name: go vet
-        run: go vet ${{ steps.pkgs.outputs.pkgs }}
+        run: go vet $(go list ./... | grep -v /node_modules/)
 
       - name: go test (race detector)
-        run: go test -race -timeout 5m ${{ steps.pkgs.outputs.pkgs }}
+        run: go test -race -timeout 5m $(go list ./... | grep -v /node_modules/)
 
       - name: Build daemon (verifies SPA embed)
         run: go build -o /tmp/smd ./cmd/smd
