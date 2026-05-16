@@ -60,10 +60,22 @@ tasks:
       Build a development RPM ready for local install. Output:
       build/release/station-manager-dev.x86_64.rpm. Internal version
       string is "dev" (also injected as cmd/smd's Version → daemon
-      User-Agent and ADIF PROGRAMVERSION). Install with
-      `sudo dnf install -y build/release/station-manager-dev.x86_64.rpm`.
+      User-Agent and ADIF PROGRAMVERSION). For a one-command
+      build→install→restart, use `task deploy:local:dev` instead.
     cmds:
       - scripts/dev-rpm.sh
+
+  deploy:local:dev:
+    desc: |
+      One-command local-dogfood update: builds the dev RPM, stops the
+      user-level smd daemon (if running), reinstalls the RPM via
+      `sudo rpm -Uvh --replacepkgs` (handles the same-NVR case the
+      "dev" version string forces), runs systemd daemon-reload, and
+      starts smd back up. Final step checks systemctl is-active and
+      points you at journalctl on failure. Sudo prompts for the
+      package install only — systemctl commands run as your user.
+    cmds:
+      - bash scripts/deploy-local-dev.sh
 
   test:
     desc: Run tests with race detector and -short
