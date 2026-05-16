@@ -1,48 +1,123 @@
 name: CI
 
+# Continuous Delivery gate (NOT Continuous Deployment): every push to main
+# answers the question "if I tagged this commit right now, would the
+# release artifact be sound?" Releases themselves are operator-driven
+# (`git tag` + scripts/release-rpm.sh). Trunk-based workflow — there are
+# no feature branches — so the gate must fire on every push to main.
+#
+# Failure modes the gate is designed to catch (see project memory
+# `project_sm_cd_pipeline_planned`):
+#
+#   - SPA bundle stale relative to daemon embed (go:embed pulls dist/).
+#   - SPA test / lint / svelte-check regression silently broke a
+#     dogfooded screen.
+#   - Go test / vet / fmt regression on any package.
+#   - Daemon binary fails to build with the fresh SPA bundle embedded.
+#
+# Gates 4–8 from docs/v2-design/release-acceptance.md (install smoke,
+# end-to-end QSO, bridge live test, etc.) need real hardware or a clean
+# VM and stay manual for now; this workflow covers gates 1–3 + the
+# SPA-test layer.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+# Cancel any in-flight run for the same ref when a new push lands —
+# rapid commits on main shouldn't queue up stale runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-test:
+  releasability:
+    name: Releasability gate
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          # actions/setup-go caches GOMODCACHE + GOCACHE automatically.
 
-      - name: Install Gio Linux dependencies
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/logging/package.json
+          cache: npm
+          cache-dependency-path: frontend/logging/package-lock.json
+
+      # ─── SPA gate ───────────────────────────────────────────────
+      # Run SPA-side checks BEFORE the Go build so the daemon embed
+      # picks up a fresh, verified dist/. Fast-fail order: lint and
+      # type-check are cheapest, then tests, then build.
+
+      - name: SPA install
+        working-directory: frontend/logging
+        run: npm ci
+
+      - name: SPA lint
+        working-directory: frontend/logging
+        run: npm run lint
+
+      - name: SPA type-check
+        working-directory: frontend/logging
+        run: npx svelte-check --fail-on-warnings
+
+      - name: SPA tests
+        working-directory: frontend/logging
+        run: npx vitest run
+
+      - name: SPA build (produces dist/ for daemon embed)
+        working-directory: frontend/logging
+        run: npm run build
+
+      # ─── Go gate ────────────────────────────────────────────────
+      # gofmt is run as a check (-l lists files needing format; we
+      # fail if the list is non-empty). vet + race-detector tests
+      # next, then the daemon-build smoke that proves the SPA embed
+      # actually compiles in.
+
+      - name: gofmt check
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libvulkan-dev \
-            libgles2-mesa-dev \
-            libegl1-mesa-dev \
-            libffi-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxcursor-dev \
-            libxfixes-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxi-dev \
-            libxxf86vm-dev
+          drift=$(gofmt -l ./cmd/ ./internal/)
+          if [ -n "$drift" ]; then
+            echo "::error::gofmt drift detected:"
+            echo "$drift"
+            exit 1
+          fi
 
-      - name: Vet
-        run: go vet ./...
+      # `npm ci` (above) populates frontend/logging/node_modules/, which
+      # contains third-party packages shipping their own Go code (e.g.
+      # flatted's Golang variant). Filter them out of go list so a
+      # broken npm dep with broken Go code can't fail our build for an
+      # unrelated reason.
+      - name: Enumerate Go packages (excluding npm-vendored)
+        id: pkgs
+        run: |
+          pkgs=$(go list ./... | grep -v /node_modules/)
+          {
+            echo 'pkgs<<EOF'
+            echo "$pkgs"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Build
-        run: go build ./...
+      - name: go vet
+        run: go vet ${{ steps.pkgs.outputs.pkgs }}
 
-      - name: Test
-        run: go test -race ./...
+      - name: go test (race detector)
+        run: go test -race -timeout 5m ${{ steps.pkgs.outputs.pkgs }}
+
+      - name: Build daemon (verifies SPA embed)
+        run: go build -o /tmp/smd ./cmd/smd
+
+      - name: Build all cmd/ binaries (catcli, loadgen, etc.)
+        run: go build ./cmd/...

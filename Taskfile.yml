@@ -114,3 +114,29 @@ tasks:
     desc: Tidy go.mod and go.sum
     cmds:
       - go mod tidy
+
+  ci:lint:
+    desc: |
+      Static analysis of .github/workflows/*.yml via actionlint —
+      catches YAML typos, bad action versions, shell-script smell
+      inside `run:` blocks. Install once with:
+        go install github.com/rhysd/actionlint/cmd/actionlint@latest
+    cmds:
+      - actionlint
+
+  ci:local:
+    desc: |
+      Local mirror of .github/workflows/ci.yml — runs every gate the
+      "releasability" CI job runs (SPA lint/type-check/test/build, Go
+      gofmt/vet/race-test, daemon embed-build). Answers "would CI pass
+      right now?" without pushing. Set SKIP_NPM_CI=1 to reuse existing
+      node_modules during tight iteration.
+    cmds:
+      - bash scripts/ci-local.sh
+
+  ci:
+    desc: |
+      Full CI check — actionlint over the workflow YAML, then the
+      local mirror of the workflow itself. Use before pushing when
+      you've touched anything that could affect releasability.
+    deps: [ci:lint, ci:local]

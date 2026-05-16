@@ -29,17 +29,17 @@ import (
 // A Service must be initialized via Initialize() before use and closed with Close().
 // It is safe for concurrent use by multiple goroutines.
 type Service struct {
-	WorkingDir        string          `di.inject:"workingdir"`
-	ConfigService     *config.Service `di.inject:"configservice"`
-	LoggingConfig     *types.LoggingConfig
-	fileWriter        *lumberjack.Logger
-	logger            atomic.Pointer[zerolog.Logger]
-	isInitialized     atomic.Bool
-	initOnce          sync.Once
-	initErr           error
-	mu                sync.RWMutex // guards isInitialized transitions and fileWriter close
-	activeOps         atomic.Int32 // Track active logging operations
-	wg                sync.WaitGroup
+	WorkingDir    string          `di.inject:"workingdir"`
+	ConfigService *config.Service `di.inject:"configservice"`
+	LoggingConfig *types.LoggingConfig
+	fileWriter    *lumberjack.Logger
+	logger        atomic.Pointer[zerolog.Logger]
+	isInitialized atomic.Bool
+	initOnce      sync.Once
+	initErr       error
+	mu            sync.RWMutex // guards isInitialized transitions and fileWriter close
+	activeOps     atomic.Int32 // Track active logging operations
+	wg            sync.WaitGroup
 
 	// debugMu guards activeOpLocations. Separate from mu so the debug
 	// tracking path does not contend with event-creation paths that
