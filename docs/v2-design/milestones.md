@@ -783,8 +783,9 @@ alongside, send an ADIF UDP packet, see it land in the logbook. Run
 ## Milestone 4 — FT8 subsystem
 
 **Goal:** Station Manager decodes and transmits FT8 in-process via the
-`internal/ft8` subsystem. Decode parity with WSJT-X v.3.0.0.1 first;
-layered improvements only after parity is established and provable.
+`internal/ft8` subsystem. Decode parity with WSJT-X (whatever current
+distro `jt9` reports for a given WAV) first; layered improvements only
+after parity is established and provable.
 
 The architecture, package boundaries, and reversal of the prior
 out-of-tree extraction are settled in ADR 0021. This milestone breaks
@@ -805,12 +806,14 @@ What's safe and what isn't:
 - ✅ **Running `jt9` / `ft8sim` as subprocess oracles for testing.**
   Tool use doesn't infect callers (same legal shape as compiling with
   GCC). The M4.1 parity gate operates entirely at this level.
-- ✅ **Implementing from the published protocol specification.** Joe
-  Taylor's QEX July/August 2020 paper "The FT4 and FT8 Communication
-  Protocols" gives the LDPC(174,91) generator matrix, Costas sequence,
-  symbol mapping, and frame structure. Steve Franke's companion papers
-  cover the demodulator. The WSJT-X user docs cover sequencing and
-  message packing. Read these.
+- ✅ **Implementing from the published protocol specification.** Franke
+  (K9AN), Somerville (G4WJS), and Taylor (K1JT), "The FT4 and FT8
+  Communication Protocols," QEX July/August 2020 — free PDF at
+  <https://wsjt.sourceforge.io/FT4_FT8_QEX.pdf> — gives the LDPC(174,91)
+  generator matrix, Costas sequence, symbol mapping, and frame
+  structure. Steve Franke's companion papers cover the demodulator.
+  The WSJT-X user docs cover sequencing and message packing. Read
+  these.
 - ✅ **Mathematical constants (Costas array, LDPC parity matrix,
   CRC14 polynomial)** cited from the paper. Facts aren't copyrightable;
   reference the paper, don't copy a Fortran array literal.
