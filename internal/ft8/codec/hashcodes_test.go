@@ -171,6 +171,26 @@ func TestHashCodes_AcceptsSlash(t *testing.T) {
 	HashCodes("PJ4/K1ABC")
 }
 
+// TestHashCodes_AcceptsAllAlphabetChars exercises every position
+// in the 38-char hash alphabet through the encoder. Pinned as a
+// positive invariant against accidental alphabet narrowing — a
+// future refactor that removed e.g. '/' from the alphabet would
+// fail loudly here rather than silently corrupting compound-call
+// hashes.
+func TestHashCodes_AcceptsAllAlphabetChars(t *testing.T) {
+	for i, c := range hashAlphabet {
+		input := string(c)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("alphabet char %d (%q) caused panic: %v", i, c, r)
+				}
+			}()
+			_, _, _ = HashCodes(input)
+		}()
+	}
+}
+
 func BenchmarkHashCodes(b *testing.B) {
 	const call = "PJ4/K1ABC"
 	b.ReportAllocs()

@@ -18,23 +18,23 @@ func TestPack_KnownVectors(t *testing.T) {
 		bits []byte
 		want []byte
 	}{
-		{"all_zero_byte", bits("00000000"), []byte{0x00}},
-		{"all_one_byte", bits("11111111"), []byte{0xFF}},
-		{"msb_only", bits("10000000"), []byte{0x80}},
-		{"lsb_only", bits("00000001"), []byte{0x01}},
-		{"alternating_starting_high", bits("10101010"), []byte{0xAA}},
-		{"alternating_starting_low", bits("01010101"), []byte{0x55}},
+		{"all_zero_byte", bitsFrom("00000000"), []byte{0x00}},
+		{"all_one_byte", bitsFrom("11111111"), []byte{0xFF}},
+		{"msb_only", bitsFrom("10000000"), []byte{0x80}},
+		{"lsb_only", bitsFrom("00000001"), []byte{0x01}},
+		{"alternating_starting_high", bitsFrom("10101010"), []byte{0xAA}},
+		{"alternating_starting_low", bitsFrom("01010101"), []byte{0x55}},
 		{
 			// 9 bits → 2 bytes; trailing 7 low bits of byte 1 are zero
 			name: "nine_bits_msb_set",
-			bits: bits("100000000"),
+			bits: bitsFrom("100000000"),
 			want: []byte{0x80, 0x00},
 		},
 		{
 			// 9 bits where only the 9th is set: byte 0 = 0x00,
 			// byte 1's MSB carries the 9th bit → 0x80
 			name: "ninth_bit_set",
-			bits: bits("000000001"),
+			bits: bitsFrom("000000001"),
 			want: []byte{0x00, 0x80},
 		},
 		{
@@ -93,25 +93,25 @@ func TestUnpack_KnownVectors(t *testing.T) {
 		n      int
 		want   []byte
 	}{
-		{"all_zero_byte", []byte{0x00}, 8, bits("00000000")},
-		{"all_one_byte", []byte{0xFF}, 8, bits("11111111")},
-		{"msb_only", []byte{0x80}, 8, bits("10000000")},
-		{"lsb_only", []byte{0x01}, 8, bits("00000001")},
-		{"alternating_high", []byte{0xAA}, 8, bits("10101010")},
-		{"alternating_low", []byte{0x55}, 8, bits("01010101")},
+		{"all_zero_byte", []byte{0x00}, 8, bitsFrom("00000000")},
+		{"all_one_byte", []byte{0xFF}, 8, bitsFrom("11111111")},
+		{"msb_only", []byte{0x80}, 8, bitsFrom("10000000")},
+		{"lsb_only", []byte{0x01}, 8, bitsFrom("00000001")},
+		{"alternating_high", []byte{0xAA}, 8, bitsFrom("10101010")},
+		{"alternating_low", []byte{0x55}, 8, bitsFrom("01010101")},
 		{
 			// n=9 across 2 bytes; second byte's MSB is the 9th bit
 			name:   "nine_bits",
 			packed: []byte{0xFF, 0x80},
 			n:      9,
-			want:   bits("111111111"),
+			want:   bitsFrom("111111111"),
 		},
 		{
 			// n=7 from a single byte truncates the last bit
 			name:   "seven_bits_truncate_trailing",
 			packed: []byte{0xFF},
 			n:      7,
-			want:   bits("1111111"),
+			want:   bitsFrom("1111111"),
 		},
 		{
 			// n=77 — the FT8 message size, recovered from 10 packed bytes
@@ -157,12 +157,12 @@ func TestPackUnpack_RoundTrip(t *testing.T) {
 		{},
 		{0},
 		{1},
-		bits("10101010"),
-		bits("11111111"),
-		bits("00000000"),
-		bits("100000000"), // 9 bits (1 high + 8 zeros)
-		bits("11111111111111111111111111111111111111111111111111111111111111111111111111111"), // 77 ones
-		bits("00000000000000000000000000100000010011011111110011011100100010100001010000001"), // QEX example
+		bitsFrom("10101010"),
+		bitsFrom("11111111"),
+		bitsFrom("00000000"),
+		bitsFrom("100000000"), // 9 bits (1 high + 8 zeros)
+		bitsFrom("11111111111111111111111111111111111111111111111111111111111111111111111111111"), // 77 ones
+		bitsFrom("00000000000000000000000000100000010011011111110011011100100010100001010000001"), // QEX example
 	}
 	for i, in := range cases {
 		got := Unpack(Pack(in), len(in))
@@ -197,7 +197,7 @@ func TestUnpackPack_RoundTrip(t *testing.T) {
 // but lives here too so this file is self-contained (tests in the
 // same package share helpers but having the helper next to its
 // callers reads better).
-func bits(s string) []byte {
+func bitsFrom(s string) []byte {
 	out := make([]byte, len(s))
 	for i, c := range s {
 		switch c {
@@ -230,7 +230,7 @@ func FuzzPackUnpackRoundTrip(f *testing.F) {
 		{1, 0, 1, 0, 1, 0, 1, 0},    // exactly 8 bits
 		{1, 0, 1, 0, 1, 0, 1, 0, 1}, // 9 bits — crosses byte boundary
 		make([]byte, 77),            // FT8 message size
-		bits("00000000000000000000000000100000010011011111110011011100100010100001010000001"),
+		bitsFrom("00000000000000000000000000100000010011011111110011011100100010100001010000001"),
 	}
 	for _, s := range seeds {
 		f.Add(s)

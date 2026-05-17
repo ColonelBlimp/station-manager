@@ -62,7 +62,7 @@ var crc14Vectors = []struct {
 func TestCRC14_SpecVectors(t *testing.T) {
 	for _, tc := range crc14Vectors {
 		t.Run(tc.name, func(t *testing.T) {
-			got := CRC14(bits(tc.bitsStr))
+			got := CRC14(bitsFrom(tc.bitsStr))
 			if got != tc.expected {
 				t.Errorf("CRC14(%s): got %d (0x%04x), want %d (0x%04x)",
 					tc.name, got, got, tc.expected, tc.expected)
@@ -76,7 +76,7 @@ func TestCRC14_OutputIs14Bits(t *testing.T) {
 	// Belt-and-braces invariant — catches an off-by-one in the
 	// final pack-into-uint16 that no specific vector might trigger.
 	for _, tc := range crc14Vectors {
-		got := CRC14(bits(tc.bitsStr))
+		got := CRC14(bitsFrom(tc.bitsStr))
 		if got >= (1 << 14) {
 			t.Errorf("%s: CRC14 result %d (0x%04x) exceeds 14 bits", tc.name, got, got)
 		}
