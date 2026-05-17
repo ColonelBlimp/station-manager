@@ -86,6 +86,7 @@
         switch (outcome.kind) {
             case 'ok':
                 configState.applyResponse(outcome.config);
+                void configState.refreshLogbookCount();
                 break;
             case 'validation':
                 console.warn(`[config fetch] ${outcome.code}: ${outcome.message}`);

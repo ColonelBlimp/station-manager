@@ -561,7 +561,7 @@ The setup snippet hosts the first-run dialog: a single callsign input + Save but
 
 ## Cards vs panels — naming convention (locked 2026-05-03)
 
-- **`lib/ui/cards/`** — page-level outer shells. `LoggingCard.svelte` is the first occupant: has its own border + dimensions + header strip; hosts everything else. One per route/view. Future Logbook view, Config view → their own cards.
+- **`lib/ui/cards/`** — page-level outer shells. `LoggingCard.svelte` is the first occupant: has its own border + dimensions + header strip; hosts everything else. One per route/view. Future Logbook view, Config view → their own cards. The header strip carries the default logbook name suffixed with the live QSO count (`Logbook: <name> ({count})`, `Intl.NumberFormat` thousands separator) — hydrated from `GET /v1/logbook/{id}/count` on app boot and refreshed via `configState.refreshLogbookCount()` after every successful submit. Session 67 (2026-05-17).
 - **`lib/ui/panels/`** — content blocks placed inside a card. No independent card-chrome; they fill a slot. `QsoPanel`, `CountryPanel`, `InfoPanel`, plus the four InfoPanel tab-content panels (`WorkedPanel` — shipped session 46, table of prior QSOs with the Tabbed callsign + tab-strip badge count; `DetailsPanel` — shipped session 46, mixes operator-typed Power/Rig/Notes/Request-QSL with read-only Email/Web/Zones from enrichment + a QRZ.com lookup link; `MyStationPanel` — shipped sessions 34–36, five sub-tabs of operator config; `SessionPanel` — still stub).
 - **`lib/ui/components/`** — form primitives. Callsign, VfoBox, Rst, etc.
 

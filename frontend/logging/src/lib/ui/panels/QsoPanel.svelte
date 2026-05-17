@@ -390,6 +390,11 @@
                 enrichmentState.clear();
                 contactHistoryState.clear();
                 focusCallsign();
+                // Refresh the default-logbook QSO count so the
+                // LoggingCard header reflects the new row. Fire-and-forget
+                // — a refresh failure leaves the previous count visible
+                // until the next submit succeeds.
+                void configState.refreshLogbookCount();
                 if (qsoDefaults.notifyQsoStored) {
                     toasts.info(`QSO with ${submittedCall} stored.`);
                 }

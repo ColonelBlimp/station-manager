@@ -44,6 +44,7 @@
  */
 
 import type { AdifModePair, ConfigResponse } from '../api/config';
+import { fetchLogbookCount } from '../api/logbook';
 
 class StationConfig {
     /**
@@ -156,6 +157,13 @@ class DefaultLogbookView {
     name: string = $state('');
     callsign: string = $state('');
     description: string = $state('');
+
+    // Total non-deleted QSO rows in this logbook. Hydrated from
+    // /v1/logbook/{id}/count after the config loads, and refreshed
+    // after each successful QSO submit. Starts at 0; consumers should
+    // render it once configState.loaded is true (a zero on a hydrated
+    // logbook is a real "empty book" answer, not a pre-fetch placeholder).
+    qsoCount: number = $state(0);
 }
 
 class DefaultRigView {
@@ -325,6 +333,22 @@ class ConfigState {
     /** Mark the fetch as settled even on failure so consumers can render fallbacks. */
     markLoaded(): void {
         this.loaded = true;
+    }
+
+    /**
+     * Refresh `defaultLogbook.qsoCount` from the daemon. Fire-and-forget:
+     * callers don't await this; transient failures (network blip, daemon
+     * restart) leave the previously-rendered count visible until the
+     * next refresh succeeds. Skips the fetch when no default logbook is
+     * configured yet (id === 0 means pre-setup).
+     */
+    async refreshLogbookCount(): Promise<void> {
+        const id = this.defaultLogbook.id;
+        if (id === 0) return;
+        const outcome = await fetchLogbookCount(id);
+        if (outcome.kind === 'ok') {
+            this.defaultLogbook.qsoCount = outcome.count;
+        }
     }
 }
 

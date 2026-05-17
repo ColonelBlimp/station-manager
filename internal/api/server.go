@@ -97,6 +97,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	mux.HandleFunc("PATCH /v1/logbook/{id}", s.handleUpdateLogbook)
 	mux.HandleFunc("DELETE /v1/logbook/{id}", s.handleDeleteLogbook)
 	mux.HandleFunc("GET /v1/logbook/{id}/qso", s.handleListQsoByLogbook)
+	mux.HandleFunc("GET /v1/logbook/{id}/count", s.handleLogbookCount)
 
 	// Contest
 	mux.HandleFunc("GET /v1/contest-dupe", s.handleContestDupe)

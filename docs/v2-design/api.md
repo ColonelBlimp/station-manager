@@ -276,6 +276,7 @@ This section is the starting point for review, not the final shape. URLs, method
 | `PATCH` | `/v1/logbook/:id` | Edit logbook metadata (name, callsign, contest association, etc.). |
 | `DELETE` | `/v1/logbook/:id` | Soft-delete a logbook. |
 | `GET` | `/v1/logbook/:id/qso` | List QSOs in a logbook. Forward-cursor pagination via `?after=<cursor>&limit=<N>`. |
+| `GET` | `/v1/logbook/:id/count` | Total non-deleted QSO count for a logbook. Drives the LoggingCard header badge; refetched after each successful submit. |
 
 ADIF export is **not** a daemon endpoint. Clients that need an
 ADIF file (session email, full-logbook export, migration) page
@@ -439,6 +440,20 @@ paths.
   `next_cursor` is JSON `null` on the last page.
 - Soft-deleted rows are always hidden. Opt-in visibility is deferred
   until the logbook-app needs it.
+
+### Logbook QSO count
+
+- `GET /v1/logbook/{id}/count` — total non-deleted QSO rows for a
+  logbook. No pagination, no filters: a single integer is the whole
+  point. 404 `logbook_not_found` for an unknown id, mirroring the
+  list endpoint so an empty count vs missing logbook stays
+  distinguishable.
+- Response: `{"logbook_id": <int64>, "count": <int64>}`.
+- The SPA hydrates the LoggingCard header from this on boot (after
+  `/v1/config` resolves) and refetches on every successful `POST
+  /v1/qso` so the displayed count tracks reality without polling.
+  Soft-deleted rows are excluded — the same definition the list
+  endpoint uses, so `count` and a full pagination walk agree.
 
 ### Contest dupe
 
