@@ -990,8 +990,32 @@ can depend on, not a direct sibling-to-sibling import.
 
 ### M4.1 — WAV-file decode (parity with `jt9 -8`)
 
-**Status: 🚧 NOT STARTED.** Subsystem scaffold landed 2026-05-16
-(lifecycle, boundary tests, DI wiring); decoder work begins here.
+**Status: 🚧 IN PROGRESS.** Layer 1 (algorithmic primitives) **shipped 2026-05-17**:
+all nine encode-side message-codec primitives complete in
+`internal/ft8/codec/`, ~85 tests pinned against the public-domain
+QEX ref [14] reference programs, all benchmarks zero- or one-
+allocation. Layer 2 (message-format packing per QEX Table 1 i3.n3
+types) is the natural next step. Layers 3+4 (signal-processing
+pipeline + WAV-corpus tests) and the LDPC decoder remain.
+
+| Layer 1 primitive | File | ns/op | allocs |
+|---|---|---|---|
+| `Pack` / `Unpack` (bit-per-byte ↔ packed-byte) | `bits.go` | — | 0 |
+| `CRC14` (polynomial 0x6757) | `crc14.go` | 973 | 0 |
+| `CallsignC28` (standard call → 28 bits) | `callsign.go` | 34–46 | 0 |
+| LDPC(174,91) matrices + `LDPCEncode` | `ldpc.go`, `qexref14/` | 4123 | 1 |
+| `Grid4ToG15` (4-char grid / reserved / report) | `grid.go` | 4–9 | 0 |
+| `Grid6ToG25` (6-char grid) | `grid.go` | 4.6 | 0 |
+| `HashCodes` (h10/h12/h22) + `HashedCallC28` | `hashcodes.go` | 50 | 0 |
+| `FreeTextToF71` (13-char free text → 71 bits) | `freetext.go` | 150 | 1 |
+| `CallsignC58` (nonstandard / compound call) | `nonstdcall.go` | 48 | 0 |
+
+The codec package was renamed from `internal/ft8/decoder` →
+`internal/ft8/codec` mid-sequence (when it became clear the same
+primitives serve both encode and decode paths). The `jt9` parity-
+oracle wrapper that briefly lived inside the package now lives in
+`cmd/ft8-corpus-prep/` per the layered test architecture above —
+no test-time dependency on WSJT-X.
 
 **Goal:** Read an FT8 WAV file from disk, run the full decode pipeline
 end-to-end, emit decoded `{message, snr, time_offset, freq_offset}`

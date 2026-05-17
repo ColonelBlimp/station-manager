@@ -177,6 +177,51 @@ M4.1's Layer 1 (algorithmic primitives, see milestones.md M4 design preamble —
 
 **Next:** remaining Layer 1 leaves — `grid6_to_g25` (6-char Maidenhead, base-24 extension on top of grid4), `hashcodes`, free text `f71`, nonstandard call `c58`. Same shape as the primitives shipped this session (build the public-domain reference, generate vectors, implement in Go, pin invariants). Then Layer 2 (message-format packing per QEX Table 1 i3/n3 types — assembles the full 77-bit info word from primitives + the round-trip tests that come with it). Then the LDPC decoder (belief propagation + OSD fallback; bigger algorithm, possible CGO point depending on benchmarks).
 
+### Session 68 continuation (2026-05-17) — M4.1 Layer 1 COMPLETE
+
+Closed out Layer 1 by shipping the four remaining string-primitive leaves in the same commit-by-commit rhythm + code-review iteration as the earlier ones.
+
+**Primitives landed this continuation:**
+
+7. **Grid g25** (`grid.go`, sharing the file with g15) — `Grid6ToG25(string) uint32`, strict 6-char Maidenhead `[A-R][A-R][0-9][0-9][A-X][A-X]` per `grid6_to_g25.f90`. NO reserved-token multiplexing (that's g15's job). 6 spec vectors covering origin (AA00AA), max (RR99XX), and real worldwide subsquare-precision grids. **~4.6 ns/op, 0 allocs.**
+8. **Hashcodes** (`hashcodes.go`) — `HashCodes(string) (h10, h12, h22 uint32)` returns all three widths from a single base-38 polynomial × magic-prime (47055833459) product, mod 2^64, top-N-bit projection per width. `HashedCallC28(string) uint32` is the convenience wrapper adding `nTokens` for c28 hash-slot encoding. 8 spec vectors + nested-consistency test (h10 == h12>>2, h12 == h22>>10) + range invariants. **~50 ns/op, 0 allocs.**
+9. **Free text f71** (`freetext.go`) — `FreeTextToF71(string) []byte` returns 71 bits in bit-per-byte form. Algorithm uses `math/bits.Mul64` for two-word (hi:lo) accumulator since 42^13 ≈ 9.27 × 10^20 overflows uint64. 8 spec vectors + all-alphabet-positions positive test + whitespace-asymmetry doc note. Strict char validation (Fortran ref is lenient with unknown chars; SM panics — silent substitution produces messages different from operator input, worse failure mode). **~150 ns/op, 1 alloc.**
+10. **Callsign c58** (`nonstdcall.go`) — `CallsignC58(string) uint64`, base-38 polynomial that fits cleanly in single uint64 (38^11 ≈ 2.39 × 10^17 < 2^58). LEFT-justifies (trailing-space padding) — different from f71's right-justify and from CallsignC28's right-justify. 10 spec vectors covering compound calls (PJ4/K1ABC, M/K1ABC, VK7ABC/P, K1ABC/QRP), special-event call (YW18FIFA), standard calls, and empty. Padding-asymmetry property test. **~48 ns/op, 0 allocs.**
+
+**Cross-cutting work:**
+
+- **Helper rename `bits()` → `bitsFrom()`** across all test files when `math/bits` import in freetext.go collided with the existing test helper. Mechanical sed; ~30 call sites in bits_test.go, crc14_test.go.
+- **Padding-asymmetry doc** authored canonically in `nonstdcall.go`'s `CallsignC58` docstring (4-primitive table showing which way each justifies and why — different Fortran storage shapes). Breadcrumb references added in `callsign.go`, `hashcodes.go`, `freetext.go` so a future reader landing on any one finds the canonical table.
+- **doc.go "Slot widths and machine-word fits" section** added per the final review — table tying each primitive's slot width to its algorithm + machine-word fit. Explains the f71-vs-c58 implementation asymmetry as a spec consequence: 38^11 fits in uint64, 42^13 doesn't.
+- **`f71HiBits` constant hoisted** to file-level const block alongside the other f71 constants (was buried inside the function body).
+- **All-alphabet positive tests** for hashcodes + nonstdcall (mirrors the freetext one). Pins each primitive's alphabet contract against accidental narrowing.
+- **callsign.go op-pattern completion** — the output-range-guard panic on line 156 was the lone holdout from the prior `const op = ...` lift; now also uses `op + ": ..."`.
+
+**Layer 1 final tally:**
+
+| Primitive | ns/op | allocs |
+|---|---|---|
+| Pack / Unpack | — | 0 |
+| CRC14 | 973 | 0 |
+| CallsignC28 | 34–46 | 0 |
+| LDPC matrices + encode | 4123 | 1 |
+| Grid g15 | 4–9 | 0 |
+| Grid g25 | 4.6 | 0 |
+| Hashcodes | 50 | 0 |
+| Free text f71 | 150 | 1 |
+| Callsign c58 | 48 | 0 |
+
+~85 tests across 11 test files. All green under `-race`. `go vet ./...` clean. Full repo build clean. Layer-2-and-beyond work doesn't need to revisit Layer 1 — every primitive is spec-pinned and review-hardened.
+
+**Docs updated this continuation:**
+
+- `docs/v2-design/milestones.md` § M4.1 — status flipped from "NOT STARTED" to "IN PROGRESS — Layer 1 complete," with the per-primitive table inline; package-rename note added.
+- `CLAUDE.md` — `internal/ft8 subsystem` status updated from "SCAFFOLD ONLY" to "Layer 1 complete in `internal/ft8/codec/`" with the primitive list and pointer to milestones.md for detail.
+- Memory `project_ft8_library.md` — new "Layer 1 status (2026-05-17): COMPLETE" paragraph with primitive inventory + reference programs used as oracles + package-rename note.
+- This entry.
+
+**Next:** Layer 2 — message-format packing per QEX Table 1's eight i3.n3 message types. Assembles the Layer 1 primitives into 77-bit message bodies (e.g. Type 1 Std Msg = `c28 r1 c28 r1 R1 g15` + 3 type bits = 77; Type 0.0 Free Text = `f71` + 6 type bits = 77; Type 4 NonStd Call = `h12 c58 h1 r2 c1` + type bits = 77). First step where Layer 1 primitives finally compose into something operator-meaningful. Layer 2 also unlocks round-trip tests (encoder ↔ decoder of the message-format layer) — both directions tractable without the signal-processing pipeline. Worth a brief design pass before diving in (which message types ship first, how the bit-builder API looks, etc.).
+
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 
 LoggingCard header now suffixes the default-logbook name with the live QSO count: `Logbook: <name> ({count})`. Operator-driven — surfaced the gap that the SPA had no visibility into the persistent logbook size; only the session count (`Session (N)` in InfoPanel) was visible.
