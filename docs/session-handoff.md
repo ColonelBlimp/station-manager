@@ -115,6 +115,44 @@ Test fixtures live at `internal/ft8/decoder/testdata/{synthetic,realsignals}/` o
 
 **Next:** revised Step 1 — CRC14 implementation under `internal/ft8/decoder/crc14.go`, with test vectors pinned from the public-domain `gen_crc14` reference program in QEX ref [14]. Smallest leaf-algorithm to start. Per the layered architecture, this is a Layer 1 test that always runs in CI with zero external state.
 
+### Session 68 continuation (2026-05-17) — Forwarder enqueue rule reworked (ADR 0022); INFO logging for contacts + forwarding; LDPC test pass
+
+Dogfood incident drove the main work: operator logged 3B8IDX while the QRZ forwarder was disabled, enabled QRZ + restarted, nothing forwarded. Root cause in `internal/qsoservice/forwarders.go:shouldEnqueue` — the `Enabled` flag was dropping `qso_upload` rows at submit time, contradicting `forwarding.md` §8 which says rows accumulate at `pending` until re-enable + restart. Code and design doc disagreed; the design doc was right.
+
+**ADR 0022 landed (Accepted):** *Forwarder enqueue is gated by config presence, not by the Enabled flag; retrospective backfill is operator-driven.* Three coupled rules:
+
+1. **Enqueue gated by config presence.** A forwarder defined in `config.json` — even with `enabled: false` — accumulates `qso_upload` rows. A forwarder absent from `config.json` does not. `shouldEnqueue` filters only on `action_filter` now; `Enabled` check removed.
+2. **`Enabled` is purely a worker-lifecycle flag.** Disabled → no worker goroutine; rows pile at `pending`. Re-enable + restart spawns the worker, which drains on first tick.
+3. **Retrospective backfill is operator-driven.** Adding a new forwarder after QSOs already exist does NOT auto-enqueue old QSOs. The future logbook app owns a "mark for upload to X" UI (per the existing `feedback_logging_vs_logbook_scope` rule); auto-backfill was rejected because it would remove operator consent for retrospective uploads (ham-radio practice treats "which QSOs go where" as per-QSO judgement).
+
+Three alternatives weighed and rejected in the ADR: status-quo (keep the bug, just rewrite docs to match — rejected because the doc was right), always-enqueue + auto-backfill-at-startup (rejected — flooding QRZ with a year of logged QSOs the moment the operator adds the forwarder is the opposite operator-surprise from the original bug), and always-enqueue + on-add backfill (same consent problem, plus requires durable "added since last run" bookkeeping). A `POST /v1/qso/{id}/forward` endpoint is the right shape for the future logbook app and was deferred there, not built standalone.
+
+**Code change in this session:**
+
+- `internal/qsoservice/forwarders.go` — `shouldEnqueue` filters only on `action_filter`. Doc-comment rewritten to cite ADR 0022.
+- `internal/qsoservice/forwarders_test.go` (new) — 4 tests, including the load-bearing `TestShouldEnqueue_DisabledForwarderStillEnqueues`.
+- `internal/config/config.go` `DefaultConfig.Forwarders` — disabled-QRZ template removed; default ships `forwarders: nil`. Operators add destinations they actually want (no setup picker yet; future work). This is the corollary ADR 0022 calls out: "defined in config.json" now carries real operator intent, not "the binary shipped with it."
+- `internal/api/handler_forwarders_test.go` — `TestSubmit_DisabledForwarder_Skipped` renamed to `…StillEnqueues`, assertion flipped (2 rows, not 1).
+- `internal/api/handler_uploads_test.go` — `TestListUploads_EmptyWhenNoForwardersConfigured` now uses `serverWithForwarders(t)` explicitly (zero forwarders) instead of `testServer(t)` (whose `DefaultConfig` is no longer empty-by-accident — explicit is self-documenting).
+- `docs/v2-design/forwarding-implementation.md` §4.4 — `shouldEnqueue` snippet updated to match the new function body, with ADR 0022 cross-reference.
+- `docs/install.md` §4 — "Forwarders" bullet under "Optional but recommended" reworded: no longer "off by default" (which was true because of the disabled template); now "no forwarders are configured by default — add an entry to `forwarders` in `config.json`."
+- New memory `project_sm_forwarder_enqueue_policy.md` indexed in `MEMORY.md`, cross-linked to `feedback_logging_vs_logbook_scope` + `project_sm_operator_network`.
+
+**3B8IDX recovery:** the existing dogfood QSO had no `qso_upload` row (it pre-dated the code fix), so the going-forward change couldn't save it. Manual SQL one-liner (idempotent — `INSERT … SELECT … WHERE NOT EXISTS`) inserted the missing row against the operator's DB; the worker picked it up on next tick after restart. Operator confirmed end-to-end working post-commit.
+
+**INFO logging shipped alongside the bug fix** (operator-requested, second-class concern that surfaced from the same incident — "we didn't see anything happen"):
+
+- `internal/qsoservice/submit.go:254` `"QSO stored"` log — added `qso_date` + `time_on` alongside the existing call/freq/band/mode.
+- `internal/qsoservice/update.go:268` `"QSO updated"` log — same two fields added.
+- `internal/qsoservice/delete.go:84` `"QSO soft-deleted"` log — was id-only; gained `call`, `qso_date`, `time_on`.
+- `internal/forwarding/worker/worker.go` — three new log lines: INFO `"forwarding: submit"` before `fwd.Submit(...)` (forwarder, qso_id, action, call); INFO `"forwarding: success"` (adds upstream_id); WARN `"forwarding: terminal failure"` (adds err) — both inside `persistOutcome` which gained a `call` parameter. INFO `"forwarding: transient — will retry"` and WARN `"forwarding: retry budget exhausted"` inside `markTransientFromForwarder` which also gained `call`. Transient retries log at INFO (operator wants visibility of progress on a flaky network — see `project_sm_operator_network`); terminal/exhausted log at WARN for log-scanning visibility. The "log all forwarding actions under INFO" instruction is interpreted as "emit at INFO+ levels, with failures escalating to WARN."
+
+**Side work this continuation — LDPC code review + tests** on `internal/ft8/decoder/ldpc.go` (the public-domain QEX ref [14] generator + parity matrix loader from session 68 earlier today). Code itself was clean; 12 new tests added in `ldpc_test.go` covering parser edge cases (long row, too-many rows, too-many columns, row index zero, synthetic happy-path for both parsers), `isBitLine` table-driven, `errAt` format. The load-bearing addition: `TestLDPCMatricesAreConsistent` — proves `H · [info ‖ G·info] = 0 mod 2` for every unit-vector info word, which by linearity covers all info words. This is the only test that ties the two matrix files together as a coherent code; per-matrix structural tests (column weight, row weight, index range) check each in isolation and could pass while encoder output silently failed its own decoder. Pins the QEX §3 codeword ordering `[info(91) | parity(83)]`. All 12 pass under `-race`.
+
+**Test posture:** full `go test -count=1 ./...` green; `go vet` clean; `gofmt` clean. Operator committed + dogfooded; QRZ forwarding observed working end-to-end against the recovered 3B8IDX row.
+
+**Next:** continues to be revised Step 1 of M4.1 (CRC14 implementation per the session-68 plan, unchanged by this work).
+
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 
 LoggingCard header now suffixes the default-logbook name with the live QSO count: `Logbook: <name> ({count})`. Operator-driven — surfaced the gap that the SPA had no visibility into the persistent logbook size; only the session count (`Session (N)` in InfoPanel) was visible.
