@@ -24,7 +24,9 @@ That's five SM-internal packages of dependency. A separate library that "depends
 
 ## Decision
 
-The FT8 work returns to Station Manager as `internal/ft8/`, running in-process inside `cmd/smd`. The package follows the same daemon-subsystem pattern as `internal/bridge` (ADR 0013, ADR 0019) — same `Initialize` / `Start(ctx)` / `Stop()` lifecycle, same package-boundary discipline, same enabled-flag gating. WSJT-X v.3.0.0.1 at `/home/mveary/Development/wsjtx` is the Fortran specification; the porting philosophy is **exact port first**, then layered improvements once decode parity with WSJT-X is established.
+The FT8 work returns to Station Manager as `internal/ft8/`, running in-process inside `cmd/smd`. The package follows the same daemon-subsystem pattern as `internal/bridge` (ADR 0013, ADR 0019) — same `Initialize` / `Start(ctx)` / `Stop()` lifecycle, same package-boundary discipline, same enabled-flag gating. The implementation is built **from the FT8 protocol specification** (Joe Taylor's QEX 2020 paper and companion academic references — see the *Licensing constraint* section below for why this matters and what's safe vs not), then validated for decode parity against WSJT-X's `jt9` binary used as a black-box test oracle. Goal: same or better decode results than WSJT-X under the same conditions.
+
+**Note on revision:** an earlier draft of this section read "WSJT-X v.3.0.0.1 ... is the Fortran specification; the porting philosophy is exact port first." That framing was withdrawn 2026-05-17 once the GPL v3 vs MIT licence gap was surfaced — line-by-line translation of GPL source produces derivative work even across languages, which would force-relicense SM. The current wording reflects the corrected position; full reasoning in the *Licensing constraint* section.
 
 The previous extracted repo becomes a reference and stops being the active line of work. The leftover `internal/ft8*` directories in this repo (from the original pre-extraction attempt) are stale and will be replaced.
 
@@ -71,6 +73,65 @@ Continue the work in the separate repo, paper over the integration coupling with
 - **`internal/safego` may need extending** if FT8's worker pattern doesn't fit the existing helpers. Cheap follow-up.
 - **Reverses a prior decision.** Future contributors reading the leftover `internal/ft8*` directories and the still-extant separate repo will be confused. This ADR is the disambiguation point; the leftover directories and memory entries get rewritten in the same commit set that this ADR lands in.
 
+## Licensing constraint
+
+**Added 2026-05-17 (session 68 continuation), after WSJT-X's GPL v3 vs
+Station Manager's MIT licence gap was surfaced as a load-bearing
+constraint that this ADR's original text understated.**
+
+WSJT-X is GPL v3. Station Manager is MIT. The two licences are
+incompatible: any work derivative of WSJT-X must itself be GPL v3,
+which would force-relicense Station Manager. The original framing of
+"exact port first" in this ADR's *Decision* section, taken literally,
+would have produced a derivative work — line-by-line translations from
+Fortran to Go are derivative under standard copyright doctrine even
+though the target language differs. That framing is hereby revised.
+
+The implementation must be **GPL-clean**:
+
+- **Implementation source is the protocol specification, not the
+  Fortran sources.** Joe Taylor's QEX July/August 2020 paper "The FT4
+  and FT8 Communication Protocols" describes the LDPC(174,91)
+  generator matrix, the Costas sync sequence, the symbol mapping, and
+  the frame structure with enough fidelity to implement from. Steve
+  Franke's companion QEX papers cover the demodulator. The WSJT-X user
+  docs cover sequencing and message packing. These are the canonical
+  references.
+- **WSJT-X source files (`*.f90`, `*.cpp`, `*.h`) are not consulted
+  for implementation guidance.** Reading them for general orientation
+  isn't strictly prohibited but is discouraged — the line between
+  "understood the structure" and "copied the expression" is the kind
+  of grey area that's safest to avoid entirely on a permissively-
+  licensed project.
+- **WSJT-X binaries (`jt9`, `ft8sim`) are tools we exec for testing.**
+  Tool use does not create derivative works (same legal shape as
+  compiling code with GCC). The M4.1 parity gate operates entirely at
+  this level — feed a WAV through both decoders, diff the output.
+- **WSJT-X assets (sample WAVs, dictionaries, message files) are not
+  bundled in this repo.** They're part of the GPL distribution.
+  Operator-recorded WAVs (own copyright, MIT/CC0-released) are the
+  long-term clean test-corpus source; in the interim, the parity gate
+  reads from `$FT8_TEST_CORPUS` pointing at the operator's local
+  WSJT-X install.
+- **CGO dependencies must be permissively licensed.** This excludes
+  **FFTW3** (GPL v2) despite it being the WSJT-X reference; KissFFT
+  or PocketFFT (both BSD-3) replace it. PortAudio is MIT-equivalent
+  and stays in scope. Any future CGO dependency gets its licence
+  checked before vendoring.
+- **Mathematical constants (Costas array, LDPC parity matrix, CRC14
+  polynomial)** are facts and not copyrightable, so citing them from
+  the paper is fine. Don't copy a specific Fortran array literal
+  byte-for-byte — derive from the spec.
+
+When in doubt the rule is: the only WSJT-X artifacts that touch this
+codebase are the binaries we exec for testing and the academic papers
+we cite. Source files in the fork are off-limits as implementation
+reference material.
+
+This constraint is incorporated by reference into every M4 sub-
+milestone — see `docs/v2-design/milestones.md` § Milestone 4 design
+preamble, *Licensing constraint*.
+
 ## Triggers to revisit
 
 - **CPU starvation in real operating use.** If a heavy FT8 decode window measurably slows log/forward or makes the SPA feel unresponsive, the `cmd/ft8d` split-process variant becomes the right answer. Build it whole, mirror the bridge's `cmd/bridge` shape, ship the option as opt-in just like ADR 0013 did for the bridge.
@@ -85,6 +146,8 @@ Continue the work in the separate repo, paper over the integration coupling with
 - ADR 0019 — `bridge-subsystem-v1-design.md` (the in-process-default + opt-in-split-host pattern this ADR mirrors)
 - ADR 0020 — `bridge-pipeline-supervisor.md` (the lifecycle pattern any long-running goroutine subsystem follows)
 - `docs/v2-design/milestones.md` § Milestone 4 — the concrete six-sub-milestone breakdown of this ADR's work (M4.1 WAV-decode parity → M4.6 SPA panel), with CGO commitment formalised in the design preamble.
+- **Joe Taylor (K1JT), Steven Franke (K9AN), Bill Somerville (G4WJS): "The FT4 and FT8 Communication Protocols," QEX July/August 2020.** The canonical protocol specification — implementation source-of-truth per the *Licensing constraint* section. Open-access via ARRL's QEX archive.
+- WSJT-X user documentation — sequencing, message-packing, and on-air-practice reference. Distributed with the WSJT-X package.
 - `docs/v1-analysis/invariants.md` — "Narrow daemon scope": FT8 decoding must not couple to log/forward subsystems. Satisfied here by package-boundary import discipline (same as the bridge).
 - `docs/session-handoff.md` parked follow-ups — inbound CAT command path is the trigger that unblocks FT8's TX side; until that ships, FT8 is decode-only.
 - Memory `project_ft8_library.md` — updated in the same commit as this ADR landing; reflects the in-SM reversal and the WSJTX fork as Fortran reference.

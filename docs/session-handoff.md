@@ -48,7 +48,33 @@ Design pass, no code changes. The FT8 work that opens with ADR 0021's "scaffold 
 
 **Explicitly not in M4:** other digital modes (JT9/JT65/FT4/MSK144), WSPR, fox-and-hounds, multi-rig FT8/SO2R, contest auto-CQ macros, decode-history persistence.
 
-**Next:** start M4.1. First in-code decision is the LDPC implementation route (CGO-bind from a hand-port of `bpdecode174_91.f90` to C vs vendor an existing C LDPC) — that's a session-on-its-own conversation, ideally with the porter having read both options end-to-end first.
+**Next:** start M4.1. First in-code decision is the FFT choice (KissFFT vs PocketFFT — see licensing continuation below for why FFTW3 is out) and the LDPC implementation route. Read Taylor 2020 first; that's the implementation spec.
+
+### Session 68 continuation (2026-05-17) — FT8 licensing course-correction
+
+After "yes, write it" landed the M4 milestones, the operator flagged the GPL v3 (WSJT-X) vs MIT (SM) licence gap. The M4 plan as originally written used "exact port first" language that, taken literally, would have produced derivative work of WSJT-X — line-by-line translation of GPL Fortran to Go is derivative under standard copyright doctrine even across languages, which would force-relicense SM. Course corrections landed across five docs in this continuation, before any FT8 implementation code goes near the repo.
+
+**Survey done first:** WSJT-X fork at `/home/mveary/Development/wsjtx` is source-only (unbuilt — no `build/`, no `CMakeCache.txt`). Distro `jt9` exists at `/usr/bin/jt9` from the Fedora `wsjtx-3.0.1-1.fc44.x86_64` package and runs cleanly. One FT8 sample WAV bundled at `samples/FT8/210703_133430.wav` (2021-07-03 off-air capture). COPYING confirms GPL v3.
+
+**Rules established (load-bearing for all M4 work):**
+
+- **Implementation source = published academic specs**, not the Fortran. Joe Taylor's QEX July/August 2020 paper "The FT4 and FT8 Communication Protocols" (LDPC(174,91) generator matrix, Costas sync sequence, symbol mapping, frame structure) + Steve Franke's companion papers + the WSJT-X user docs.
+- **WSJT-X source files (`*.f90`, `*.cpp`, `*.h`) are off-limits** as implementation reference. Reading for general orientation is discouraged — the line between "understood the structure" and "copied the expression" is the kind of grey area to avoid on a permissively-licensed project.
+- **WSJT-X binaries (`jt9`, `ft8sim`) are tools we exec for testing** — tool use doesn't create derivative works (same legal shape as compiling with GCC). The M4.1 parity gate operates entirely at this level.
+- **No WSJT-X assets bundled in SM repo.** Test corpus is operator-supplied locally via `$FT8_TEST_CORPUS`. CI skips parity tests when neither `jt9` nor the corpus is available on the host.
+- **CGO dependencies must be permissively licensed.** **FFTW3 is excluded** (GPL v2 even though WSJT-X uses it) — KissFFT or PocketFFT (both BSD-3) replace it; benchmark in M4.1 to pick. PortAudio is MIT-equivalent and stays. Any future CGO dep gets its licence checked before vendoring.
+- **Mathematical constants** (Costas array, LDPC parity matrix, CRC14 polynomial) are facts; cite the paper, don't copy a Fortran array literal byte-for-byte.
+
+**Docs updated:**
+
+- `docs/v2-design/milestones.md` § Milestone 4 — design preamble reframed: new *Licensing constraint* section at the top, *Implementation source* replaces *Porting philosophy*, CGO bullet swaps FFTW3 → KissFFT/PocketFFT and rephrases the LDPC route as clean-room from Taylor 2020. M4.1 scope verbs changed from "port X" to "implement X from spec." M4.1 test corpus reframed: no WAVs in repo, `$FT8_TEST_CORPUS` env-var discovery, CI skips when unconfigured. M4.4 encoder language similarly reframed. M4.5 state-machine reference cites WSJT-X user docs + on-air practice, not the Fortran.
+- `docs/decisions/0021-ft8-as-sm-subsystem.md` — new *Licensing constraint* section before *Triggers to revisit*; *Decision* section rewritten with explicit note that "exact port first" was withdrawn; *References* gains the Taylor 2020 QEX paper + WSJT-X user docs as canonical specs.
+- Memory `project_ft8_library.md` — description field rewritten; new "LICENSING — load-bearing" section captures all six rules with the rule-of-thumb summary; CGO bullet updated to KissFFT/PocketFFT.
+- `CLAUDE.md` — `internal/ft8 subsystem` paragraph rewritten with the licensing constraint inline (full rules linked to ADR 0021 + milestones.md to keep CLAUDE.md headline-level).
+
+**No code touched.** The scaffold from session 66 (Service lifecycle, boundary tests, DI wiring) stays as-is; the course-correction is entirely about ensuring the first real M4.1 commit goes in spec-implementation shape, not source-translation shape.
+
+**Next (revised):** start M4.1. First in-code decision is FFT library (KissFFT vs PocketFFT — both BSD-3, benchmark them on FT8 access patterns). Reading list before writing: Taylor 2020 QEX paper. The WSJT-X fork can be deleted from the local machine if it isn't being used for anything else — distro `jt9` is sufficient as the parity oracle.
 
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 

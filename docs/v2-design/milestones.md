@@ -793,42 +793,89 @@ M3a sub-divided the bridge work.
 
 ### Design preamble
 
-**Porting philosophy: exact port first.** The Fortran reference at
-`/home/mveary/Development/wsjtx` is the specification. Each sub-
-milestone ports a slice of that reference into Go (with CGO where
-appropriate — see below) and proves parity against the WSJT-X
-binaries before moving on. Departures from the reference are explicit
-decisions with rationale captured in commit messages or follow-up
-ADRs, never silent drift. Goal: same or better decode results than
-WSJT-X under the same conditions.
+**Licensing constraint (load-bearing — applies to every code decision below).**
+WSJT-X is GPL v3; Station Manager is MIT. The two licences are
+incompatible — any derivative work of WSJT-X must itself be GPL v3,
+which would force-relicense SM. The implementation must therefore be
+**GPL-clean**: built from the protocol specification rather than from
+the GPL source.
+
+What's safe and what isn't:
+
+- ✅ **Running `jt9` / `ft8sim` as subprocess oracles for testing.**
+  Tool use doesn't infect callers (same legal shape as compiling with
+  GCC). The M4.1 parity gate operates entirely at this level.
+- ✅ **Implementing from the published protocol specification.** Joe
+  Taylor's QEX July/August 2020 paper "The FT4 and FT8 Communication
+  Protocols" gives the LDPC(174,91) generator matrix, Costas sequence,
+  symbol mapping, and frame structure. Steve Franke's companion papers
+  cover the demodulator. The WSJT-X user docs cover sequencing and
+  message packing. Read these.
+- ✅ **Mathematical constants (Costas array, LDPC parity matrix,
+  CRC14 polynomial)** cited from the paper. Facts aren't copyrightable;
+  reference the paper, don't copy a Fortran array literal.
+- ❌ **Translating Fortran sources to Go.** Even line-by-line rewrites
+  in another language are derivative works under standard copyright
+  doctrine. Don't open `*.f90` files looking for "how does WSJT-X do
+  X" with intent to translate.
+- ❌ **Bundling WSJT-X assets (sample WAVs, dictionaries, message
+  files) in this repo.** They're GPL distribution; shipping them inside
+  an MIT repo is the contamination route. Operator-recorded WAVs (own
+  copyright, MIT/CC0 release) are the long-term clean source.
+- ❌ **Linking against FFTW3.** FFTW is GPL v2 (or commercial); CGO-
+  linking pulls SM into GPL. Use a BSD-licensed FFT — see the CGO
+  bullet below.
+
+When in doubt, the rule is: **the only WSJT-X artifacts that touch this
+codebase are the binaries we exec for testing and the academic papers
+we cite.** Source files in the fork are off-limits as an implementation
+reference.
+
+**Implementation source: protocol specification.** The FT8 protocol is
+fully documented in publicly-published academic papers (Taylor 2020 in
+QEX; companion papers by Franke and Taylor in earlier QEX issues).
+Implementation works against those papers — not against the Fortran
+sources, per the licensing constraint above. Departures from the
+specification are explicit decisions captured in commit messages or
+follow-up ADRs, never silent drift. Goal: same or better decode results
+than WSJT-X under the same conditions, validated by the M4.1 parity gate.
 
 **CGO commitment.** FT8's signal-processing budget inside a 15-second
 slot is tight enough that pure-Go alternatives don't carry their weight
 — prior research showed measurable wins from native FFT and LDPC
 implementations that we can't ignore at this scale. The subsystem
-binds:
+binds permissively-licensed C libraries only (the licensing constraint
+forecloses GPL-licensed dependencies):
 
-- **FFTW3** for FFT (the WSJT-X reference uses it; pure-Go FFT
-  libraries like `gonum/fft` benchmark slower under the access
-  patterns the decoder hits)
-- **LDPC(174,91) decoder** — either CGO-bound from a C port of
-  WSJT-X's `bpdecode174_91.f90` or hand-ported to C. Decided in
-  M4.1 once the porter has read both options end-to-end.
-- **Audio backend (portaudio likely)** — decided in M4.2 when audio
-  actually lands. ALSA-direct is a Linux-only fallback if portaudio
-  proves painful.
+- **BSD-licensed FFT** — KissFFT (BSD-3) or PocketFFT (BSD-3) for the
+  decoder's FFT stages. Both are well-trodden in scientific computing
+  with stable C APIs. **FFTW3 is excluded** despite being the WSJT-X
+  reference — its GPL v2 licence would contaminate SM. Specific choice
+  between KissFFT and PocketFFT decided in M4.1 after benchmarking
+  both against the FT8 access patterns.
+- **LDPC(174,91) decoder** — clean-room implementation from Taylor's
+  2020 paper, written in C and CGO-bound (or written in Go directly if
+  benchmarks show no measurable difference; the original CGO motivation
+  is FFT throughput, not LDPC).
+- **Audio backend (portaudio leaning)** — PortAudio is MIT-equivalent.
+  Decided in M4.2 when audio actually lands; ALSA-direct is a Linux-
+  only fallback if portaudio proves painful.
 
 Costs accepted (per ADR 0021): cross-compilation complexity, larger
 binary, build-time dependency on the CGO toolchain. Caught early by
 the CD pipeline (per `project_sm_cd_pipeline_planned` memory) — a CGO
 break fails the gate immediately.
 
-**Test oracle: `jt9 -8`.** Exact-port-first needs a falsifiable parity
-claim. The strategy: a corpus of FT8 WAV files (bundled WSJT-X test
-samples plus operator-recorded captures) lives at
-`internal/ft8/testdata/`; CI runs both the SM decoder and `jt9 -8`
-against the corpus and diffs the decoded message lines. M4.1 establishes
-this gate; every subsequent milestone keeps it green.
+**Test oracle: `jt9 -8`.** Spec-implementation needs a falsifiable
+parity claim. The strategy: feed an FT8 WAV through both the SM decoder
+and `jt9 -8`, diff the decoded message lines. M4.1 establishes the gate;
+every subsequent milestone keeps it green. The corpus does NOT live in
+the repo — see the licensing constraint above. Instead the test reads
+from an operator-supplied directory (`$FT8_TEST_CORPUS` env var or a
+config path); CI skips parity tests when neither `jt9` is on `$PATH` nor
+the corpus is configured. Distro `jt9` from a packaged WSJT-X install
+(`/usr/bin/jt9` on Fedora; `apt install wsjtx` on Debian) is sufficient
+— no need to build the upstream fork.
 
 **Package boundary discipline.** Per ADR 0021 inheriting ADR 0013:
 `internal/ft8` may import `internal/errors`, `internal/logging`,
@@ -873,38 +920,56 @@ input. No audio capture, no rig, no TX, no storage, no SPA.
 
 #### Scope
 
-- CGO bindings: FFTW3 + LDPC(174,91) decoder. Vendor C sources or
-  link against system libraries — decided in this milestone's first
-  commit set after the porter has assessed cross-compile impact.
-- Port `ft8_downsample.f90` — audio resample to baseband.
-- Port coarse sync — search for FT8 sync tones across the 15s window.
-- Port fine sync + frequency estimation.
-- Port demod — soft-symbol generation.
-- Port LDPC(174,91) decode + CRC14 check.
-- Port message decoder — callsign1/callsign2/locator/report unpacking.
+- CGO bindings: BSD-licensed FFT (KissFFT or PocketFFT — pick one in
+  this milestone's first commit set after a small benchmark on FT8
+  access patterns) + LDPC(174,91) decoder. Vendor C sources or link
+  against system libraries — decided alongside the FFT pick after
+  assessing cross-compile impact.
+- Implement audio resample to baseband, per spec.
+- Implement coarse sync — search for the Costas sync sequence across
+  the 15s window (sync pattern from Taylor 2020).
+- Implement fine sync + frequency estimation.
+- Implement demodulator — soft-symbol generation from baseband.
+- Implement LDPC(174,91) decode + CRC14 check, generator matrix from
+  Taylor 2020.
+- Implement message decoder — callsign1/callsign2/locator/report
+  unpacking per the message-formats section of the WSJT-X user docs.
 - CLI entrypoint: `smd ft8 decode <file.wav>` subcommand. Prints one
-  decoded line per detected message, format matches `jt9 -8` closely
-  enough for the diff gate.
-- Test corpus at `internal/ft8/testdata/` — bundled WSJT-X test WAVs
-  (license check first) plus a handful of operator-recorded slots
-  covering clean / noisy / multi-station-collision cases.
-- CI gate: `task ft8:parity` (or similar) runs SM decoder + `jt9 -8`
-  over the corpus, diffs message lines, fails on mismatch beyond a
-  documented floating-point tolerance.
+  decoded line per detected message, format compatible with `jt9 -8`
+  output closely enough for the diff gate.
+- Test harness: a Go test that invokes `jt9 -8 <wav>` via `os/exec`,
+  parses the output to a normalised `{message, snr, dt, freq}` struct,
+  runs the SM decoder over the same file, diffs. Skips gracefully when
+  `jt9` isn't on `$PATH` (CI on hosts without WSJT-X installed must
+  not break the build).
+- Test corpus discovery: harness reads `$FT8_TEST_CORPUS` (env var) or
+  a configured path; iterates every `*.wav` under it. **No WAVs in the
+  repo** (per the licensing constraint above) — corpus is operator-
+  supplied locally, either from their existing WSJT-X install's
+  `samples/FT8/` directory used in place, or from off-air captures
+  they record themselves.
+- CI gate: `task ft8:parity` runs the harness; passes trivially when
+  the corpus isn't configured (so the gate is a no-op on contributors'
+  machines without WSJT-X), runs the diff when it is.
 
 #### Acceptance
 
 ```
-# Decode a known WAV
-./smd ft8 decode internal/ft8/testdata/clean-cq-iv3-band.wav
+# Decode a known WAV (operator-supplied)
+./smd ft8 decode ~/wsjtx-samples/FT8/210703_133430.wav
 # Expected: same decoded messages jt9 -8 produces against the same file
 
-# CI parity gate
+# Local parity gate (operator has WSJT-X installed + corpus configured)
+FT8_TEST_CORPUS=~/wsjtx-samples/FT8 task ft8:parity
+# Expected: 0 mismatches across every WAV in the corpus
+
+# CI parity gate (contributor without WSJT-X)
 task ft8:parity
-# Expected: 0 mismatches across the bundled corpus
+# Expected: skipped (jt9 not on PATH); other gates still run
 ```
 
-When the parity gate is green against the seed corpus, M4.1 is done.
+When the parity gate is green against the operator's seed corpus,
+M4.1 is done.
 
 ---
 
@@ -1028,8 +1093,9 @@ duration, releases. Manual send only — no auto-sequencing yet.
 
 - Inbound CAT command path lands first (separate work item; not part
   of M4.4). FT8 consumes the resulting CAT write surface.
-- Port FT8 message encoder: `genft8.f90`, `encode174_91.f90`,
-  `gen_ft8wave.f90` (tone synthesis from the encoded symbols).
+- Implement FT8 message encoder + LDPC encoder + tone synthesis from
+  encoded symbols, all per Taylor 2020 spec. Same licensing constraint
+  as the decoder — no source-translation from the `.f90` files.
 - Audio output device — same backend choice as M4.2's input; opened
   for playback at TX time.
 - PTT key/unkey via the inbound CAT path. Driver-specific PTT command
@@ -1068,9 +1134,11 @@ station" milestone.
 
 #### Scope
 
-- Port the WSJT-X FT8 QSO state machine: CQ → reply → R+report →
-  RR73 → 73, with the standard timeout-and-retry behaviour for missing
-  responses.
+- Implement the standard FT8 QSO state machine: CQ → reply → R+report →
+  RR73 → 73, with operator-tunable timeout-and-retry behaviour. The
+  state-machine shape is documented in the WSJT-X user docs and on-air
+  practice (no Fortran source consulted — see the licensing constraint
+  in the M4 design preamble).
 - Per-QSO state object: callsign, locator, our report, their report,
   current state, last-heard-at timestamp.
 - Auto-reply policy (operator config): `always` / `call-once-then-stop`
