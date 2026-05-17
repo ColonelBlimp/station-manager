@@ -229,3 +229,111 @@ func BenchmarkGrid4ToG15(b *testing.B) {
 		})
 	}
 }
+
+// =====================================================================
+// Grid6ToG25 tests
+// =====================================================================
+
+// Grid6ToG25 test vectors generated 2026-05-17 using the public-
+// domain `grid6_to_g25` reference program from QEX ref [14] (built
+// from `grid6_to_g25.f90`). Per QEX paper §9 the reference is in
+// the public domain; the g25 values below are facts produced by
+// running it against chosen inputs.
+//
+// Coverage: encoder origin (AA00AA), encoder maximum (RR99XX),
+// and several real-world subsquare-precision grids spanning
+// continents.
+var grid6Vectors = []struct {
+	name  string
+	input string
+	want  uint32
+}{
+	{"grid_origin_AA00AA", "AA00AA", 0},
+	{"grid_max_RR99XX", "RR99XX", 18662399},
+	{"grid_IO91NP_London", "IO91NP", 9153543},
+	{"grid_FN20UV_NewYork", "FN20UV", 5944821},
+	{"grid_JN94BC_Vienna", "JN94BC", 10134170},
+	{"grid_EM48DH_StLouis", "EM48DH", 4866127},
+}
+
+func TestGrid6ToG25_SpecVectors(t *testing.T) {
+	for _, tc := range grid6Vectors {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Grid6ToG25(tc.input)
+			if got != tc.want {
+				t.Errorf("Grid6ToG25(%q): got %d (0x%07x), want %d (0x%07x)",
+					tc.input, got, got, tc.want, tc.want)
+			}
+		})
+	}
+}
+
+func TestGrid6ToG25_OutputFitsIn25Bits(t *testing.T) {
+	for _, tc := range grid6Vectors {
+		got := Grid6ToG25(tc.input)
+		if got >= (1 << G25Bits) {
+			t.Errorf("%s: Grid6ToG25(%q)=%d exceeds 25 bits", tc.name, tc.input, got)
+		}
+	}
+}
+
+func TestGrid6ToG25_RejectsInvalidInputs(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"too_short_4char", "IO91"},
+		{"too_short_5char", "IO91N"},
+		{"too_long_7char", "IO91NPP"},
+		{"empty", ""},
+		{"lowercase", "io91np"},
+		{"field_out_of_range_S", "SO91NP"}, // field caps at R
+		{"square_letter_position", "IOA1NP"},
+		{"subsquare_out_of_range_Y", "IO91NY"}, // subsquare caps at X
+		{"subsquare_out_of_range_Z", "IO91NZ"},
+		{"subsquare_position_digit", "IO91N1"},
+		{"shape_4char_pad_2digits", "RR7300"}, // last two are digits not letters
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("Grid6ToG25(%q) should panic; did not", tc.input)
+				}
+			}()
+			Grid6ToG25(tc.input)
+		})
+	}
+}
+
+func TestIsGrid6(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"AA00AA", true},
+		{"RR99XX", true}, // upper bound on every position
+		{"IO91NP", true},
+		{"", false},
+		{"IO91", false},    // too short
+		{"IO91NPP", false}, // too long
+		{"io91np", false},  // case
+		{"SO91NP", false},  // field out of range
+		{"IO91NY", false},  // subsquare out of range
+		{"IO91N1", false},  // subsquare must be letter
+		{"IOAB91", false},  // wrong shape entirely
+	}
+	for _, tc := range cases {
+		if got := isGrid6(tc.in); got != tc.want {
+			t.Errorf("isGrid6(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func BenchmarkGrid6ToG25(b *testing.B) {
+	const w = "IO91NP"
+	b.ReportAllocs()
+	for range b.N {
+		_ = Grid6ToG25(w)
+	}
+}

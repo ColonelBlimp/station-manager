@@ -132,3 +132,60 @@ func isGrid4(s string) bool {
 		s[2] >= '0' && s[2] <= '9' &&
 		s[3] >= '0' && s[3] <= '9'
 }
+
+// G25Bits is the width of the FT8 6-character Maidenhead grid code
+// per QEX paper Table 2.
+const G25Bits = 25
+
+// Grid6ToG25 packs a 6-character Maidenhead grid locator into a
+// 25-bit code per QEX paper Table 2 and the public-domain
+// `grid6_to_g25.f90` reference in ref [14]. The 6-char grid extends
+// the 4-char grid (encoded by Grid4ToG15) with two subfield letters
+// for finer geographic resolution:
+//
+//	chars 1,2: [A-R] (18 letters) — field
+//	chars 3,4: [0-9] (10 digits)  — square
+//	chars 5,6: [A-X] (24 letters) — subsquare
+//
+// Output range: [0, 18*18*10*10*24*24) = [0, 18,662,400), which
+// fits comfortably in 25 bits (2^25 = 33,554,432).
+//
+// Unlike g15, the g25 slot has NO reserved-token or signed-report
+// multiplexing — it's strictly a 6-char grid encoder. Reserved
+// words / reports / shorter grids are not valid inputs.
+//
+// Case-sensitive: callers must upper-case before invocation.
+// Panics on length other than 6 or any character outside its
+// position-specific alphabet — these are call-site bugs (the
+// message-packer should have validated the grid format upstream).
+//
+// Returns uint32 even though the result fits in 25 bits — uint16
+// is too narrow, and the upper 7 bits are always zero for any
+// in-range input.
+func Grid6ToG25(w string) uint32 {
+	const op = "codec.Grid6ToG25"
+	if !isGrid6(w) {
+		panic(op + ": input " + strconv.Quote(w) + " is not a 6-char Maidenhead grid ([A-R][A-R][0-9][0-9][A-X][A-X])")
+	}
+	v := int(w[0]-'A')*18*10*10*24*24 +
+		int(w[1]-'A')*10*10*24*24 +
+		int(w[2]-'0')*10*24*24 +
+		int(w[3]-'0')*24*24 +
+		int(w[4]-'A')*24 +
+		int(w[5]-'A')
+	return uint32(v)
+}
+
+// isGrid6 reports whether s matches the 6-char Maidenhead grid
+// pattern: [A-R][A-R][0-9][0-9][A-X][A-X].
+func isGrid6(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	return s[0] >= 'A' && s[0] <= 'R' &&
+		s[1] >= 'A' && s[1] <= 'R' &&
+		s[2] >= '0' && s[2] <= '9' &&
+		s[3] >= '0' && s[3] <= '9' &&
+		s[4] >= 'A' && s[4] <= 'X' &&
+		s[5] >= 'A' && s[5] <= 'X'
+}
