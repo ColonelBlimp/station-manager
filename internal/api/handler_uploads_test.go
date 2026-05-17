@@ -63,8 +63,8 @@ func TestListUploads_ReturnsRowsForStoredQso(t *testing.T) {
 func TestListUploads_EmptyWhenNoForwardersConfigured(t *testing.T) {
 	// No forwarders → ingest inserts no qso_upload rows. The handler
 	// should return {"items":[]}, not 404. Explicit `forwarders: []`
-	// because DefaultConfig still ships a (disabled) QRZ template which,
-	// post-ADR-0022, would enqueue a row.
+	// makes the test's intent self-documenting rather than relying on
+	// DefaultConfig's current empty default (per ADR 0022).
 	srv := serverWithForwarders(t) // zero forwarders
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 	_, qsoID := submitAndGetID(t, srv, lbID, testQsoADIF)

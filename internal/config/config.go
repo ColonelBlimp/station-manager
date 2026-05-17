@@ -280,21 +280,14 @@ func DefaultConfig(dataDir string) Config {
 	// explicit operator false doesn't get silently rewritten on every
 	// load — same rationale as the Logging.* booleans above.
 	cfg.Smtp.StartTLS = true
-	// Seed a disabled QRZ forwarder template so the operator can
-	// fill in their API key and flip enabled=true without having to
-	// reverse-engineer the schema. Stays disabled by default —
-	// uploads to QRZ won't happen until the operator opts in. Lives
-	// in DefaultConfig (not applyDefaults) so a deletion by the
-	// operator survives daemon restarts: applyDefaults only fills
-	// per-entry zero-valued tunables, it never adds new entries.
-	cfg.Forwarders = []types.ForwarderConfig{
-		{
-			Name:        "qrz",
-			Type:        "qrz",
-			Enabled:     false,
-			Credentials: json.RawMessage(`{"api_key": ""}`),
-		},
-	}
+	// No default forwarder entries per ADR 0022: "defined in
+	// config.json" carries operator intent ("I want this destination"),
+	// so the daemon must not pre-populate the slice. Operators add
+	// destinations they actually want, either by hand or via a future
+	// setup affordance. The pre-ADR-0022 disabled-QRZ template lived
+	// here as a UX convenience but produced the 3B8IDX bug class
+	// (rows enqueued for destinations the operator never chose to use).
+	cfg.Forwarders = nil
 	// Hamnut country provider — disabled by default, prepopulated
 	// with the canonical public endpoint. Operator flips enabled=true
 	// to activate; nothing else needs editing for the common case.

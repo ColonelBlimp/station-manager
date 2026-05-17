@@ -102,7 +102,10 @@ accessible from the My Station tab in the SPA:
   and mode directly from a connected transceiver (Yaesu FT-710 and
   FTdx10 are the two tested drivers).
 - **Forwarders** (QRZ Logbook, etc.) if you want QSOs uploaded to
-  online services. Forwarding is off by default.
+  online services. No forwarders are configured by default — add an
+  entry to the `forwarders` array in `config.json` for each destination
+  you want, then restart the daemon. A first-run setup affordance for
+  this in the SPA is future work; see ADR 0022.
 
 ---
 
