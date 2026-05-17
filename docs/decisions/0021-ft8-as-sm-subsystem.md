@@ -122,11 +122,40 @@ The implementation must be **GPL-clean**:
   polynomial)** are facts and not copyrightable, so citing them from
   the paper is fine. Don't copy a specific Fortran array literal
   byte-for-byte — derive from the spec.
+- **The public-domain reference tarball at QEX paper reference [14]
+  is a distinct bucket from the GPL WSJT-X tree** and is explicitly
+  available for reuse. Reference [14] is
+  `ft4_ft8_protocols.tgz` from
+  `http://physics.princeton.edu/pulsar/k1jt/`; Section 9 of the paper
+  carves it out from the GPL: *"With the exception of code contained
+  in reference [14], source code for our implementations of FT4,
+  FT8, and MSK144 is not in the public domain."* The tarball contains
+  the LDPC matrices (`generator.dat`, `parity.dat`), short reference
+  programs for the source-encoding chain (`gen_crc14`,
+  `std_call_to_c28`, `nonstd_to_c58`, `hashcodes`, `grid4_to_g15`,
+  `grid6_to_g25`, `free_text_to_f71`), and lookup tables. These can
+  be vendored, ported, or used as algorithm references freely.
 
 When in doubt the rule is: the only WSJT-X artifacts that touch this
-codebase are the binaries we exec for testing and the academic papers
-we cite. Source files in the fork are off-limits as implementation
-reference material.
+codebase are the binaries we exec for testing, the academic papers we
+cite, and the public-domain reference tarball at reference [14]. The
+GPL WSJT-X source tree is off-limits as implementation reference
+material.
+
+**Protocol-level constraint: no robotic operation.** Section 9 of the
+QEX paper imposes a condition on implementations using the names "FT4"
+or "FT8": *"Robotic or unattended QSOs must be explicitly
+disallowed... Any implementation of these or similar protocols that
+allows robotic, unattended, or non-conforming multi-streaming
+operation shall not use the names 'FT4' or 'FT8' and must be made
+incompatible by some means, such as using different Costas arrays for
+synchronization."* SM wants bit-compatible FT8, so accepts the
+constraint: every QSO must begin with a human-initiated TX action.
+Auto-sequencing within a QSO is fine (click Engage on a decoded
+callsign, then the state machine steps through CQ → reply → R+report
+→ RR73 → 73 hands-free); auto-call-watch loops that originate new
+QSOs without operator action are not. This requirement lands in M4.5's
+scope as a protocol-level invariant, not a UX preference.
 
 This constraint is incorporated by reference into every M4 sub-
 milestone — see `docs/v2-design/milestones.md` § Milestone 4 design

@@ -817,11 +817,27 @@ What's safe and what isn't:
 - ✅ **Mathematical constants (Costas array, LDPC parity matrix,
   CRC14 polynomial)** cited from the paper. Facts aren't copyrightable;
   reference the paper, don't copy a Fortran array literal.
-- ❌ **Translating Fortran sources to Go.** Even line-by-line rewrites
-  in another language are derivative works under standard copyright
-  doctrine. Don't open `*.f90` files looking for "how does WSJT-X do
-  X" with intent to translate.
-- ❌ **Bundling WSJT-X assets (sample WAVs, dictionaries, message
+- ✅ **Using the public-domain reference tarball** at reference [14]
+  of the QEX paper: `ft4_ft8_protocols.tgz` from
+  `http://physics.princeton.edu/pulsar/k1jt/`. The paper authors
+  explicitly carve this out from the GPL: *"With the exception of
+  code contained in reference [14], source code for our
+  implementations of FT4, FT8, and MSK144 is not in the public
+  domain."* The tarball contains `generator.dat` + `parity.dat` (the
+  LDPC(174,91) matrices, directly usable), plus short reference
+  programs `gen_crc14`, `std_call_to_c28`, `nonstd_to_c58`,
+  `hashcodes`, `grid4_to_g15`, `grid6_to_g25`, `free_text_to_f71`
+  (source-encoding algorithms, usable as algorithm references and/or
+  vendored directly), plus lookup tables `states_provinces.txt`,
+  `arrl_rac_sections.txt`. **This is a distinct bucket from the GPL
+  WSJT-X tree** — reading and reusing it is explicitly invited.
+- ❌ **Translating Fortran sources from the GPL WSJT-X tree to Go.**
+  Even line-by-line rewrites in another language are derivative works
+  under standard copyright doctrine. Don't open `*.f90` files from
+  the WSJT-X main source tree looking for "how does WSJT-X do X" with
+  intent to translate. (The reference [14] tarball is in a different
+  bucket — see the ✅ bullet above.)
+- ❌ **Bundling GPL WSJT-X assets (sample WAVs, dictionaries, message
   files) in this repo.** They're GPL distribution; shipping them inside
   an MIT repo is the contamination route. Operator-recorded WAVs (own
   copyright, MIT/CC0 release) are the long-term clean source.
@@ -830,9 +846,24 @@ What's safe and what isn't:
   bullet below.
 
 When in doubt, the rule is: **the only WSJT-X artifacts that touch this
-codebase are the binaries we exec for testing and the academic papers
-we cite.** Source files in the fork are off-limits as an implementation
+codebase are the binaries we exec for testing, the academic papers we
+cite, and the public-domain reference tarball at QEX paper reference
+[14].** The GPL WSJT-X source tree is off-limits as an implementation
 reference.
+
+**Protocol-level constraint: no robotic operation.** Section 9 of the
+QEX paper imposes a condition on implementations that use the names
+"FT4" or "FT8": *"Robotic or unattended QSOs must be explicitly
+disallowed... Any implementation of these or similar protocols that
+allows robotic, unattended, or non-conforming multi-streaming
+operation shall not use the names 'FT4' or 'FT8' and must be made
+incompatible by some means, such as using different Costas arrays for
+synchronization."* We want bit-compatible FT8, therefore we accept the
+constraint. Concretely: every QSO must involve a human-initiated TX
+action. Auto-sequencing within a QSO (step from CQ → reply → R+report
+→ RR73 → 73 hands-free once the operator clicks Engage) is fine and
+matches WSJT-X's behaviour; auto-CQ-call-watch loops with no human in
+the loop are not. M4.5's scope reflects this.
 
 **Implementation source: protocol specification.** The FT8 protocol is
 fully documented in publicly-published academic papers (Taylor 2020 in
@@ -879,6 +910,26 @@ config path); CI skips parity tests when neither `jt9` is on `$PATH` nor
 the corpus is configured. Distro `jt9` from a packaged WSJT-X install
 (`/usr/bin/jt9` on Fedora; `apt install wsjtx` on Debian) is sufficient
 — no need to build the upstream fork.
+
+> **Naming note: `jt9` the binary vs JT9 the protocol.** The decoder
+> CLI `jt9` is WSJT-X's general decoder, historically named after the
+> JT9 mode but extended over time to handle FT8, FT4, JT65, MSK144,
+> FST4, Q65, and others. The `-8` flag selects FT8 mode. Station
+> Manager is FT8-only — JT9-the-protocol is out of scope (different
+> timing, different modulation, different sensitivity). Wherever this
+> doc says "`jt9`" we mean the binary in FT8 mode (`jt9 -8`), not the
+> JT9 protocol.
+
+**Decode-threshold targets (Table 5 of the QEX paper).** The M4.1 parity
+gate has a measurable goal beyond "matches `jt9 -8` byte-for-byte":
+WSJT-X's FT8 sensitivity on AWGN is −19.6 dB SNR (block detection +
+belief-propagation only) and −20.8 dB SNR (BP + ordered-statistics
+decoding fallback). These are measured in 2500 Hz bandwidth. SM's
+decoder should land at or near the −19.6 dB threshold for M4.1; OSD
+fallback (the extra ~1 dB) can be a later refinement if BP-only proves
+insufficient. Decode-probability-vs-SNR curves can be measured against
+operator-recorded WAVs at known SNRs, or against `ft8sim`-generated
+WAVs at specified SNRs.
 
 **Package boundary discipline.** Per ADR 0021 inheriting ADR 0013:
 `internal/ft8` may import `internal/errors`, `internal/logging`,
@@ -1142,6 +1193,16 @@ station" milestone.
   state-machine shape is documented in the WSJT-X user docs and on-air
   practice (no Fortran source consulted — see the licensing constraint
   in the M4 design preamble).
+- **Human-initiated TX is a protocol-level requirement.** Per the M4
+  design preamble's *Protocol-level constraint: no robotic operation*
+  (which derives from QEX paper Section 9), every QSO must begin with
+  a human action — operator clicks Engage on a decoded callsign, or
+  manually enters a TX message. Auto-sequencing within the QSO is
+  fine (step CQ → reply → R+report → RR73 → 73 hands-free once
+  engaged); auto-call-watch loops that initiate new QSOs without
+  operator action are not. The UI surfaces an Engage button per
+  decode, not a "work everything you can" toggle. This is not a UX
+  preference — it's a condition on calling our implementation FT8.
 - Per-QSO state object: callsign, locator, our report, their report,
   current state, last-heard-at timestamp.
 - Auto-reply policy (operator config): `always` / `call-once-then-stop`

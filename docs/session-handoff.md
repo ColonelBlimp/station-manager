@@ -65,6 +65,20 @@ Design pass, no code changes. Two intertwined outcomes: M4 milestones scoped int
 
 **Next:** start M4.1. Read Taylor 2020 first — that's the implementation spec. First in-code decision is FFT library (KissFFT vs PocketFFT, both BSD-3, benchmark them on FT8 access patterns). The local WSJT-X source checkout can be deleted if it isn't being used for anything else — distro `jt9` is sufficient as the parity oracle, and the source tree is off-limits as a reference anyway.
 
+### Session 68 continuation (2026-05-17) — Post-paper-read doc updates
+
+Operator read Taylor 2020 (the QEX paper at <https://wsjt.sourceforge.io/FT4_FT8_QEX.pdf>); three protocol-level findings landed across the docs before any code commits:
+
+1. **Public-domain carve-out from the GPL rule.** Section 9 of the paper: *"With the exception of code contained in reference [14], source code for our implementations of FT4, FT8, and MSK144 is not in the public domain."* Reference [14] = `ft4_ft8_protocols.tgz` from `http://physics.princeton.edu/pulsar/k1jt/`. Contains: LDPC matrices (`generator.dat`, `parity.dat`), short reference programs for the source-encoding chain (`gen_crc14`, `std_call_to_c28`, `nonstd_to_c58`, `hashcodes`, `grid4_to_g15`, `grid6_to_g25`, `free_text_to_f71`), and lookup tables. These can be vendored, ported, or used as algorithm references directly — a distinct bucket from the GPL WSJT-X main source tree.
+2. **Protocol-level no-robotic-QSOs requirement.** Section 9 of the paper: implementations using the names "FT4"/"FT8" must explicitly disallow robotic/unattended QSOs. SM accepts the constraint — every QSO begins with a human-initiated TX action (operator clicks Engage on a decoded callsign). Auto-sequencing within a QSO is fine; auto-call-watch loops are not. Lands in M4.5 as a protocol invariant, not a UX preference.
+3. **Decode-threshold targets pinned.** Table 5 of the paper: FT8 on AWGN reaches −19.6 dB SNR (BP only) / −20.8 dB SNR (BP+OSD) in 2500 Hz bandwidth. M4.1's parity gate now has a measurable goal beyond "matches `jt9 -8` byte-for-byte": land at or near −19.6 dB; OSD fallback (the extra ~1 dB) is a later refinement if BP-only proves insufficient.
+
+**Bonus clarification landed:** the `jt9` binary is WSJT-X's general decoder CLI, not the JT9 protocol. `jt9 -8` selects FT8 mode. SM is FT8-only; JT9-the-protocol is out of scope (different timing, different modulation, different sensitivity). The naming overlap was worth pinning in the docs to prevent future confusion.
+
+**Docs updated:** `docs/v2-design/milestones.md` M4 design preamble (new ✅ bullet for the public-domain tarball; new ❌ bullet narrowed to the GPL tree explicitly; new "Protocol-level constraint: no robotic operation" subsection; new "Naming note" subsection on `jt9`-the-binary vs JT9-the-protocol; new "Decode-threshold targets" subsection); milestones.md M4.5 scope (new bullet on human-initiated TX as a protocol-level requirement); ADR 0021 *Licensing constraint* section (parallel additions); memory `project_ft8_library.md` (parallel additions); CLAUDE.md (one paragraph rewritten).
+
+**Net effect on the implementation plan:** the LDPC step is much cheaper (matrices come from `generator.dat` / `parity.dat` directly; we don't reverse-engineer them from the paper's prose). The source-encoding step is similarly cheaper (vendor or port the small reference programs). The signal-processing chain (FFT, sync detection, demod, soft-symbol generation) is the only part that has to be fully clean-implemented from the paper's algorithmic descriptions. That collapses the M4.1 risk surface meaningfully.
+
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 
 LoggingCard header now suffixes the default-logbook name with the live QSO count: `Logbook: <name> ({count})`. Operator-driven — surfaced the gap that the SPA had no visibility into the persistent logbook size; only the session count (`Session (N)` in InfoPanel) was visible.
