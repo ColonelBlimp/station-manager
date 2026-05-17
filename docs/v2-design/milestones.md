@@ -780,6 +780,394 @@ alongside, send an ADIF UDP packet, see it land in the logbook. Run
 
 ---
 
+## Milestone 4 — FT8 subsystem
+
+**Goal:** Station Manager decodes and transmits FT8 in-process via the
+`internal/ft8` subsystem. Decode parity with WSJT-X v.3.0.0.1 first;
+layered improvements only after parity is established and provable.
+
+The architecture, package boundaries, and reversal of the prior
+out-of-tree extraction are settled in ADR 0021. This milestone breaks
+that decision down into independently-exercisable slices, mirroring how
+M3a sub-divided the bridge work.
+
+### Design preamble
+
+**Porting philosophy: exact port first.** The Fortran reference at
+`/home/mveary/Development/wsjtx` is the specification. Each sub-
+milestone ports a slice of that reference into Go (with CGO where
+appropriate — see below) and proves parity against the WSJT-X
+binaries before moving on. Departures from the reference are explicit
+decisions with rationale captured in commit messages or follow-up
+ADRs, never silent drift. Goal: same or better decode results than
+WSJT-X under the same conditions.
+
+**CGO commitment.** FT8's signal-processing budget inside a 15-second
+slot is tight enough that pure-Go alternatives don't carry their weight
+— prior research showed measurable wins from native FFT and LDPC
+implementations that we can't ignore at this scale. The subsystem
+binds:
+
+- **FFTW3** for FFT (the WSJT-X reference uses it; pure-Go FFT
+  libraries like `gonum/fft` benchmark slower under the access
+  patterns the decoder hits)
+- **LDPC(174,91) decoder** — either CGO-bound from a C port of
+  WSJT-X's `bpdecode174_91.f90` or hand-ported to C. Decided in
+  M4.1 once the porter has read both options end-to-end.
+- **Audio backend (portaudio likely)** — decided in M4.2 when audio
+  actually lands. ALSA-direct is a Linux-only fallback if portaudio
+  proves painful.
+
+Costs accepted (per ADR 0021): cross-compilation complexity, larger
+binary, build-time dependency on the CGO toolchain. Caught early by
+the CD pipeline (per `project_sm_cd_pipeline_planned` memory) — a CGO
+break fails the gate immediately.
+
+**Test oracle: `jt9 -8`.** Exact-port-first needs a falsifiable parity
+claim. The strategy: a corpus of FT8 WAV files (bundled WSJT-X test
+samples plus operator-recorded captures) lives at
+`internal/ft8/testdata/`; CI runs both the SM decoder and `jt9 -8`
+against the corpus and diffs the decoded message lines. M4.1 establishes
+this gate; every subsequent milestone keeps it green.
+
+**Package boundary discipline.** Per ADR 0021 inheriting ADR 0013:
+`internal/ft8` may import `internal/errors`, `internal/logging`,
+`internal/types`, `internal/cat`, `internal/serial`, and
+`internal/qsoservice` (FT8 is a consumer — decoded QSOs flow via
+`qsoservice.Submit`). It MUST NOT import `internal/bridge`; bridge
+MUST NOT import ft8. If a later milestone needs bridge state inside
+FT8 (likely at M4.3 — see below), the route is a neutral package both
+can depend on, not a direct sibling-to-sibling import.
+`boundary_test.go` in both packages defends this; CI catches drift.
+
+**Defaults for open questions** (so they don't block writing code):
+
+- **Decode concurrency:** single-threaded faithful port at M4.1. Fan-
+  out only if M4.2 measurements show the 15s budget is tight under
+  the operator's actual workload. Matches "build specific, not generic"
+  — premature concurrency is harder to debug than slow code.
+- **Decoded-message persistence:** in-memory ring buffer for v1.
+  Historical "who did I hear when" is logbook-app territory per the
+  logging-vs-logbook scope memory; v1 keeps just enough state to feed
+  the M4.6 SPA panel.
+- **Time sync:** assume NTP-correct host. The daemon measures and
+  surfaces the slot-offset (how late the slot fired relative to UTC)
+  as a status field; if it drifts >500ms the operator sees a warning
+  but the decoder keeps trying. No active clock-correction in v1.
+- **TX dependency:** M4.4 is gated on the inbound CAT command path
+  landing (parked follow-up flagged in ADR 0021). Until that ships,
+  PTT can't be keyed from the FT8 subsystem and TX work is a no-op
+  to attempt. M4.1–M4.3 are unblocked.
+
+---
+
+### M4.1 — WAV-file decode (parity with `jt9 -8`)
+
+**Status: 🚧 NOT STARTED.** Subsystem scaffold landed 2026-05-16
+(lifecycle, boundary tests, DI wiring); decoder work begins here.
+
+**Goal:** Read an FT8 WAV file from disk, run the full decode pipeline
+end-to-end, emit decoded `{message, snr, time_offset, freq_offset}`
+records that match what WSJT-X's `jt9 -8` produces against the same
+input. No audio capture, no rig, no TX, no storage, no SPA.
+
+#### Scope
+
+- CGO bindings: FFTW3 + LDPC(174,91) decoder. Vendor C sources or
+  link against system libraries — decided in this milestone's first
+  commit set after the porter has assessed cross-compile impact.
+- Port `ft8_downsample.f90` — audio resample to baseband.
+- Port coarse sync — search for FT8 sync tones across the 15s window.
+- Port fine sync + frequency estimation.
+- Port demod — soft-symbol generation.
+- Port LDPC(174,91) decode + CRC14 check.
+- Port message decoder — callsign1/callsign2/locator/report unpacking.
+- CLI entrypoint: `smd ft8 decode <file.wav>` subcommand. Prints one
+  decoded line per detected message, format matches `jt9 -8` closely
+  enough for the diff gate.
+- Test corpus at `internal/ft8/testdata/` — bundled WSJT-X test WAVs
+  (license check first) plus a handful of operator-recorded slots
+  covering clean / noisy / multi-station-collision cases.
+- CI gate: `task ft8:parity` (or similar) runs SM decoder + `jt9 -8`
+  over the corpus, diffs message lines, fails on mismatch beyond a
+  documented floating-point tolerance.
+
+#### Acceptance
+
+```
+# Decode a known WAV
+./smd ft8 decode internal/ft8/testdata/clean-cq-iv3-band.wav
+# Expected: same decoded messages jt9 -8 produces against the same file
+
+# CI parity gate
+task ft8:parity
+# Expected: 0 mismatches across the bundled corpus
+```
+
+When the parity gate is green against the seed corpus, M4.1 is done.
+
+---
+
+### M4.2 — Continuous live audio + slot scheduling
+
+**Status: 🚧 NOT STARTED.** Unblocks when M4.1 is green.
+
+**Goal:** The daemon captures live audio, schedules decode windows
+aligned to UTC 15-second boundaries, and feeds each window through
+M4.1's pipeline. Decodes scroll continuously while the daemon runs.
+Still no rig coordination, no TX.
+
+#### Decisions to land in this milestone's design pass
+
+- **Audio backend** — portaudio (CGO, matches WSJT-X) vs ALSA-direct
+  (Linux-only, lighter). Default recommendation is portaudio; revisit
+  only if cross-compile to non-Linux ever becomes a requirement.
+- **Audio device enumeration + selection** — config schema and the
+  startup-time check that the configured device exists and is
+  capturing at the expected sample rate.
+
+#### Scope
+
+- Audio capture service: device enumeration, open device at decode
+  sample rate, ring-buffer the incoming PCM.
+- 15s slot scheduler: fires at UTC second boundaries (0, 15, 30, 45);
+  hands the preceding slot's PCM to a decode worker.
+- Bounded decode-worker pool via `internal/safego` (extend if needed
+  per the ADR 0021 follow-up note). Single worker is fine if M4.1's
+  decode latency comfortably fits under 15s on the operator's
+  hardware; pool size becomes a config field once measurements demand
+  it.
+- Slot-offset metric: how late did the slot worker actually fire
+  relative to UTC. Exposed via `GET /v1/ft8/status` (new endpoint —
+  light, no SSE yet).
+- Lifecycle: `Service.Start(ctx)` spawns capture + scheduler; `Stop()`
+  drains pending decodes and closes the audio device.
+- Config: `Ft8.AudioDevice`, `Ft8.SampleRate`, `Ft8.SlotOffsetWarnMs`
+  (default 500).
+
+#### Acceptance
+
+```
+# With the rig manually tuned to a busy FT8 frequency:
+./smd                                              # daemon running, ft8.enabled=true
+journalctl --user -u smd -f | grep ft8.decode      # decodes scroll live
+
+# Slot timing health
+curl http://localhost:8080/v1/ft8/status
+# Expected: {"slot_offset_ms":42,"last_decode_count":7,...}
+# slot_offset_ms stays under 500 for a clean run
+```
+
+Continuous decoding for a 10-minute window with no dropped slots, no
+audio-buffer overruns, slot offset under 500ms throughout. Then done.
+
+---
+
+### M4.3 — Rig-aware decode (read-only)
+
+**Status: 🚧 NOT STARTED.** Unblocks when M4.2 is green.
+
+**Goal:** FT8 decodes are tagged with the current band and dial
+frequency from the bridge. Operator can change band on the rig and
+FT8 decodes immediately reflect the new context without restart.
+Still RX-only.
+
+#### Scope
+
+- **Cross-subsystem signalling** without breaking the bridge↔ft8 no-
+  import rule. Two options to weigh in the M4.3 design pass:
+  1. Neutral pubsub package (`internal/rigstate` or similar) that
+     bridge publishes to and ft8 subscribes to. Both subsystems
+     depend on the neutral package; neither depends on the other.
+  2. Channel injected at construction time via the DI container —
+     `cmd/smd/main.go` wires the producer end (bridge) and the
+     consumer end (ft8) without either knowing about the other.
+  Default lean: option 1, because the neutral package can grow other
+  consumers (future inbound-CAT path, future contest module) without
+  retrofitting wiring everywhere.
+- FT8 dial-frequency config (`Ft8.DialFrequencyHz` per band, or a
+  derived "use bridge's reported VFO-A") with the standard +1500Hz
+  audio-offset convention applied to decoded freq_offsets.
+- Decoded message DTO grows `band` and `dial_freq_hz` fields,
+  populated at decode time from the latest bridge-reported state.
+- Status endpoint surfaces the current rig context FT8 is decoding
+  against (band, dial freq, mode — sanity check that operator is in
+  USB and on a known FT8 channel).
+
+#### Acceptance
+
+```
+# Daemon running with rig tuned to 14.074 MHz (20m FT8)
+curl http://localhost:8080/v1/ft8/status
+# Expected: band=20m, dial_freq_hz=14074000
+
+# Change band on the rig to 40m FT8 (7.074 MHz)
+curl http://localhost:8080/v1/ft8/status
+# Expected: band=40m, dial_freq_hz=7074000 — no daemon restart needed
+
+# Decodes from that point on carry the new band tag
+```
+
+---
+
+### M4.4 — TX path (manual send)
+
+**Status: 🚧 NOT STARTED. BLOCKED on inbound CAT command path.**
+
+The bridge subsystem is read-only in v1 (ADR 0019). FT8 TX requires
+the daemon to key PTT — which means writing to the rig over CAT —
+which means the inbound CAT command path must exist. That path is
+parked per ADR 0021's references; it unblocks both FT8 TX and any
+future voice-keyer / contest-helper work.
+
+**Goal:** Operator types an FT8 message, clicks send, the daemon
+encodes it, transmits via the audio output, keys PTT for the slot
+duration, releases. Manual send only — no auto-sequencing yet.
+
+#### Scope (when unblocked)
+
+- Inbound CAT command path lands first (separate work item; not part
+  of M4.4). FT8 consumes the resulting CAT write surface.
+- Port FT8 message encoder: `genft8.f90`, `encode174_91.f90`,
+  `gen_ft8wave.f90` (tone synthesis from the encoded symbols).
+- Audio output device — same backend choice as M4.2's input; opened
+  for playback at TX time.
+- PTT key/unkey via the inbound CAT path. Driver-specific PTT command
+  comes from the rigdef.
+- TX slot scheduling: alternating RX/TX 15s slots, operator-configurable
+  odd-or-even.
+- Manual-send API: `POST /v1/ft8/tx` with `{"message":"CQ G4ABC IO91"}`,
+  queues for the next available TX slot.
+- Safety interlock: refuse TX if audio level is unconfigured, if power
+  is above the operator's stated ceiling, or if the rig isn't on a
+  known FT8 channel. Better to no-op than to splatter.
+
+#### Acceptance
+
+```
+# Queue a manual TX
+curl -X POST http://localhost:8080/v1/ft8/tx \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"CQ G4ABC IO91"}'
+# Expected: 202 Accepted, body indicates next TX slot
+
+# Watch a second receiver (another FT8 station nearby, or a WebSDR):
+# the CQ is heard cleanly at the right slot boundary
+```
+
+---
+
+### M4.5 — QSO state machine (auto-sequencing)
+
+**Status: 🚧 NOT STARTED.** Unblocks when M4.4 is green.
+
+**Goal:** With auto-sequence enabled, the operator clicks a decoded CQ
+and the FT8 stack runs the full exchange hands-free. Completed QSOs
+land in the logbook via `qsoservice.Submit`. First "complete FT8
+station" milestone.
+
+#### Scope
+
+- Port the WSJT-X FT8 QSO state machine: CQ → reply → R+report →
+  RR73 → 73, with the standard timeout-and-retry behaviour for missing
+  responses.
+- Per-QSO state object: callsign, locator, our report, their report,
+  current state, last-heard-at timestamp.
+- Auto-reply policy (operator config): `always` / `call-once-then-stop`
+  / `never` (M4.4 manual-send is the `never` path).
+- On QSO completion: synthesise `types.Qso` from the conversation —
+  callsign, mode=FT8, band/freq from M4.3 context, our + their
+  reports, start/end times, locator → grid — and submit via
+  `qsoservice.Submit`. One-fails-all-fail applies: a DB failure means
+  the QSO didn't happen and the operator sees an error.
+- SSE event stream: `GET /v1/ft8/events` emits `ft8.decode`,
+  `ft8.qso.started`, `ft8.qso.state-changed`, `ft8.qso.completed`,
+  `ft8.tx.started`, `ft8.tx.completed`.
+
+#### Acceptance
+
+```
+# Operator opens the FT8 panel in the SPA (M4.6, but the SSE stream
+# is testable now via curl):
+curl -N http://localhost:8080/v1/ft8/events
+# Expected: live event stream
+
+# Operator clicks a decoded CQ in the SPA (or POSTs an "engage"
+# command in the interim), state machine runs the exchange, QSO
+# appears via:
+curl http://localhost:8080/v1/qso/{uuid}
+# Expected: a complete FT8 QSO row in the logbook
+```
+
+A real on-air QSO worked hands-free, end-to-end, logged correctly.
+
+---
+
+### M4.6 — SPA panel
+
+**Status: 🚧 NOT STARTED.** Unblocks when M4.5 is green (or in
+parallel with M4.5 once `ft8.decode` events flow).
+
+**Goal:** Operator runs an FT8 session entirely from the browser. The
+SPA shows live decodes, lets the operator click a CQ to engage, shows
+QSO-in-progress state, and surfaces decoded-callsign context (worked
+before / new entity) the same way the country panel does for SSB/CW.
+
+#### Scope
+
+- New top-level FT8 surface — likely a sibling card to `LoggingCard`,
+  routed via a tab or top-level mode toggle (decided in the M4.6
+  design pass when the visual hierarchy is clearer).
+- Live decode list: consumes `/v1/ft8/events`, displays
+  `{time, snr, freq_offset, message}` rows. Auto-scrolling with a
+  pause-on-hover affordance.
+- Decoded-callsign coloring: new entity / new band / worked before,
+  matching the country panel's existing convention.
+- Click-to-call: clicking a decoded CQ engages the QSO state machine
+  for that station (POSTs to a `/v1/ft8/engage` endpoint that wraps
+  the M4.5 state machine).
+- QSO-in-progress indicator: which station, current state, time in
+  state, next expected transmission.
+- TX queue display: what's queued, what's transmitting now, slot
+  countdown.
+- Per-panel sub-tabs if the surface grows: decodes / QSO / settings.
+
+#### Acceptance
+
+The operator works a full FT8 session — multiple QSOs, band changes,
+manual TX experiments — without ever opening a terminal or touching
+`smd` directly. The QSOs appear in the daemon logbook with the right
+ADIF fields populated.
+
+---
+
+### What's NOT in Milestone 4 (per ADR 0021)
+
+- **Other digital modes.** JT9, JT65, FT4, MSK144 are siblings in the
+  WSJT-X codebase but out of scope for v1. The decoder architecture
+  should make adding them straightforward later; don't pre-build for
+  them now.
+- **WSPR.** Different protocol, different tooling. Separate decision
+  if ever needed.
+- **Fox-and-hounds DXpedition mode.** Not a hobbyist-DXing concern at
+  the operator's current operating profile.
+- **Multi-rig FT8 / SO2R.** Single-rig v1 matches the rest of the
+  daemon's current capability ceiling.
+- **Contest auto-CQ macros.** Contest tooling is a separate future
+  initiative; FT8 in v1 is general-purpose operating.
+- **Decode-history persistence.** Logbook-app territory per the
+  logging-vs-logbook scope memory.
+
+### M4 acceptance test (whole milestone)
+
+When M4.6 is shipped: the operator runs `smd` on the daily-driver
+machine, opens the SPA in a browser, switches to the FT8 surface,
+sees live decodes, works a station hands-free, and the QSO appears
+in the logbook with band + mode + reports populated. No terminal, no
+`jt9`, no WSJT-X side-by-side.
+
+---
+
 ## Pre-dogfooding — getting v2 onto the operator's daily-driver machine
 
 **Status:** Not a milestone in the formal sense — this is the

@@ -84,6 +84,7 @@ Continue the work in the separate repo, paper over the integration coupling with
 - ADR 0013 — `daemon-owns-bridge-as-subsystem.md` (the subsystem-pattern precedent and the package-boundary discipline; same shape applies here)
 - ADR 0019 — `bridge-subsystem-v1-design.md` (the in-process-default + opt-in-split-host pattern this ADR mirrors)
 - ADR 0020 — `bridge-pipeline-supervisor.md` (the lifecycle pattern any long-running goroutine subsystem follows)
+- `docs/v2-design/milestones.md` § Milestone 4 — the concrete six-sub-milestone breakdown of this ADR's work (M4.1 WAV-decode parity → M4.6 SPA panel), with CGO commitment formalised in the design preamble.
 - `docs/v1-analysis/invariants.md` — "Narrow daemon scope": FT8 decoding must not couple to log/forward subsystems. Satisfied here by package-boundary import discipline (same as the bridge).
 - `docs/session-handoff.md` parked follow-ups — inbound CAT command path is the trigger that unblocks FT8's TX side; until that ships, FT8 is decode-only.
 - Memory `project_ft8_library.md` — updated in the same commit as this ADR landing; reflects the in-SM reversal and the WSJTX fork as Fortran reference.
