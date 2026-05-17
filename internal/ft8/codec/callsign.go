@@ -92,12 +92,13 @@ const (
 // is too small (28 bits don't fit), and the 4 high bits will be
 // zero for any in-range input.
 func CallsignC28(call string) uint32 {
+	const op = "codec.CallsignC28"
 	if len(call) < 3 || len(call) > 6 {
-		panic("codec.CallsignC28: callsign length must be 3..6 (real FT8 std calls are prefix+digit+suffix), got len " + strconv.Itoa(len(call)))
+		panic(op + ": callsign length must be 3..6 (real FT8 std calls are prefix+digit+suffix), got len " + strconv.Itoa(len(call)))
 	}
 	for i := range len(call) {
 		if strings.IndexByte(callsignAlphaPos1, call[i]) < 0 {
-			panic("codec.CallsignC28: character at index " + strconv.Itoa(i) + " (" + string(call[i]) + ") not in std-call alphabet (space + 0-9 + A-Z)")
+			panic(op + ": character at index " + strconv.Itoa(i) + " (" + string(call[i]) + ") not in std-call alphabet (space + 0-9 + A-Z)")
 		}
 	}
 
