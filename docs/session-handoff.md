@@ -220,7 +220,64 @@ Closed out Layer 1 by shipping the four remaining string-primitive leaves in the
 - Memory `project_ft8_library.md` — new "Layer 1 status (2026-05-17): COMPLETE" paragraph with primitive inventory + reference programs used as oracles + package-rename note.
 - This entry.
 
-**Next:** Layer 2 — message-format packing per QEX Table 1's eight i3.n3 message types. Assembles the Layer 1 primitives into 77-bit message bodies (e.g. Type 1 Std Msg = `c28 r1 c28 r1 R1 g15` + 3 type bits = 77; Type 0.0 Free Text = `f71` + 6 type bits = 77; Type 4 NonStd Call = `h12 c58 h1 r2 c1` + type bits = 77). First step where Layer 1 primitives finally compose into something operator-meaningful. Layer 2 also unlocks round-trip tests (encoder ↔ decoder of the message-format layer) — both directions tractable without the signal-processing pipeline. Worth a brief design pass before diving in (which message types ship first, how the bit-builder API looks, etc.).
+**Next:** Layer 2 — message-format packing per QEX Table 1's eight i3.n3 message types. Provisional plan below; designed end-of-session-68 but execution deferred to next session at operator's natural break-point. Pick up at Phase 1.
+
+#### Layer 2 — message-format packing plan (provisional, written 2026-05-17, exec next session)
+
+**Goal:** Compose Layer 1 primitives into 77-bit message bodies that go through CRC14 + LDPCEncode. Round-trip tests (`string → encode → decode → same string`) become possible at this level — both directions tractable without any signal-processing.
+
+**Message-type inventory** (QEX paper Table 1; bit layout sums to 74 + 3-bit i3 header for types i3≥1, or 71 + 6-bit i3.n3 header for types i3=0):
+
+| Type | Purpose | Layout | Layer 1 deps |
+|---|---|---|---|
+| 1 | Std Msg (~90% of traffic) | `c28 r1 c28 r1 R1 g15` + i3 | `CallsignC28` + `Grid4ToG15` |
+| 0.0 | Free Text | `f71` + i3.n3 | `FreeTextToF71` |
+| 4 | NonStd Call | `h12 c58 h1 r2 c1` + i3 | `HashCodes` + `CallsignC58` |
+| 2 | EU VHF (/P) | `c28 p1 c28 p1 R1 g15` + i3 | `CallsignC28` + `Grid4ToG15` |
+| 5 | EU VHF (hashes + g25) | `h12 h22 R1 r3 s11 g25` + i3 | `HashCodes` + `Grid6ToG25` + new s11 |
+| 0.1 | DXpedition | `c28 c28 h10 r5` + i3.n3 | + new r5 |
+| 0.3/0.4 | Field Day | `c28 c28 R1 n4 k3 S7` + i3.n3 | + new k3, S7, n4 + ARRL sections lookup |
+| 3 | RTTY RU | `t1 c28 c28 R1 r3 s13` + i3.n3 | + new s13 + states_provinces lookup |
+| 0.5 | Telemetry | `t71` + i3.n3 | + new t71 |
+
+**Phase plan:**
+
+- **Phase 1 — Foundation** (small, before any message type):
+  - `BitBuilder` utility: `Append(value uint64, bits int)` accumulating into `[]byte` bit-per-byte; lean toward method-chained idiom.
+  - **Verify `jt9code` output** (77-bit body? full 174-bit codeword? message bits or symbols?) — determines whether we have a direct Layer-2 oracle or have to chain LDPC-decode first. ~5 minute check.
+  - Vendor remaining QEX ref [14] lookup tables: `states_provinces.txt` + `arrl_rac_sections.txt` into `internal/ft8/codec/qexref14/`. Embed at init.
+
+- **Phase 2 — Canonical pattern via Type 1 (Std Msg):**
+  - `Message` representation — concrete struct with a type field + discriminated content (Go-idiomatic, easy to inspect, simpler test fixtures than interface).
+  - Top-level `ParseMessage(s string) (Message, error)` that classifies and routes; `FormatMessage(m Message) string` reverse.
+  - Type 1 encode + decode + spec vectors via jt9code + round-trip suite. Pattern other types follow.
+
+- **Phase 3 — Common types** (priority order): Type 0.0 (free text), Type 4 (nonstd), Type 2 (EU VHF /P), Type 5 (EU VHF hashes).
+
+- **Phase 4 — Specialty types, defer until needed:** Type 0.1 (DXpedition), 0.3/0.4 (Field Day, needs S7 lookup), 3 (RTTY RU, needs states_provinces lookup), 0.5 (Telemetry).
+
+Phases 1–3 cover ~99% of real on-air FT8 traffic.
+
+**Open design questions to settle in Phase 1/2:**
+
+1. **BitBuilder API shape** — lean: method-chained `bb.Append(c28, 28).Append(r1, 1)...`.
+2. **Message-type representation** — lean: concrete struct, not interface.
+3. **`jt9code` as Layer 2 oracle** — must verify it gives 77-bit message bits. If only codewords, alternative is `ft8sim` → real audio → `jt9 -8` chain.
+4. **Lookup-table parse format** — `//go:embed` + parse at init, expose lookup functions. Same pattern as LDPC matrices.
+5. **Error vs panic at message layer** — lean: `return (Message, error)` since input is user data here, not internal-invariant-violated bits. (Layer 1 panics; Layer 2 errors.)
+
+**Round-trip test shape** (per type, table-driven):
+
+```go
+{"K1JT W9XYZ EN37", "00...01101...0011...", "K1JT W9XYZ EN37"},
+{"CQ G4ABC IO91", "...", "CQ G4ABC IO91"},
+```
+
+For each: `ParseMessage(in) → enc → 77 bits` (compare to expected body); `decode(body) → Message → FormatMessage → string` (compare to expected re-formatted string). Both halves must match.
+
+**Scope estimate:** per type ~150-300 lines (encode + decode + tests + spec vectors). Phases 1–3 ≈ 1500-2000 lines net.
+
+**Start point next session:** Phase 1 — BitBuilder + jt9code-output verification + lookup-table vendoring. Smallest sensible first commit, unblocks everything else.
 
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 
