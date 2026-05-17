@@ -62,8 +62,7 @@ var crc14Vectors = []struct {
 func TestCRC14_SpecVectors(t *testing.T) {
 	for _, tc := range crc14Vectors {
 		t.Run(tc.name, func(t *testing.T) {
-			bits := parseBitString(t, tc.bitsStr)
-			got := CRC14(bits)
+			got := CRC14(bits(tc.bitsStr))
 			if got != tc.expected {
 				t.Errorf("CRC14(%s): got %d (0x%04x), want %d (0x%04x)",
 					tc.name, got, got, tc.expected, tc.expected)
@@ -77,8 +76,7 @@ func TestCRC14_OutputIs14Bits(t *testing.T) {
 	// Belt-and-braces invariant — catches an off-by-one in the
 	// final pack-into-uint16 that no specific vector might trigger.
 	for _, tc := range crc14Vectors {
-		bits := parseBitString(t, tc.bitsStr)
-		got := CRC14(bits)
+		got := CRC14(bits(tc.bitsStr))
 		if got >= (1 << 14) {
 			t.Errorf("%s: CRC14 result %d (0x%04x) exceeds 14 bits", tc.name, got, got)
 		}
@@ -100,28 +98,24 @@ func TestCRC14_RejectsInvalidBits(t *testing.T) {
 			t.Error("CRC14(byte > 1) should panic; did not")
 		}
 	}()
-	bits := make([]byte, MessageBits)
-	bits[42] = 2
-	CRC14(bits)
+	msg := make([]byte, MessageBits)
+	msg[42] = 2
+	CRC14(msg)
 }
 
-// parseBitString turns a 77-character string of '0'/'1' into the
-// bit-per-byte form CRC14 expects. Fails the test on bad input.
-func parseBitString(t *testing.T, s string) []byte {
-	t.Helper()
-	if len(s) != MessageBits {
-		t.Fatalf("test bit-string must be %d chars; got %d", MessageBits, len(s))
+// BenchmarkCRC14 pins current throughput. Real decoding produces
+// hundreds-to-thousands of CRC candidates per 15-second frame, so a
+// baseline now makes any future "is a table-driven variant worth
+// the complexity?" question answerable with data rather than
+// guesswork.
+func BenchmarkCRC14(b *testing.B) {
+	msg := make([]byte, MessageBits)
+	for i := range msg {
+		msg[i] = byte(i & 1)
 	}
-	out := make([]byte, MessageBits)
-	for i, c := range s {
-		switch c {
-		case '0':
-			out[i] = 0
-		case '1':
-			out[i] = 1
-		default:
-			t.Fatalf("test bit-string char %d (%q) is not '0' or '1'", i, c)
-		}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_ = CRC14(msg)
 	}
-	return out
 }
