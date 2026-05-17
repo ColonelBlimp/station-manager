@@ -39,9 +39,11 @@ const (
 // bit-per-byte form (each byte 0 or 1), 71 bytes long, MSB-first.
 //
 // Algorithm: right-justify the input to 13 chars (pad left with
-// spaces), then walk the chars left-to-right computing the base-42
-// polynomial accumulator = accumulator*42 + alphabet_index(char).
-// 42^13 ≈ 9.27 × 10^20 fits in 71 bits with ~2.5× headroom.
+// spaces — see CallsignC58's docs for the padding-asymmetry note
+// across all the string primitives in this package), then walk the
+// chars left-to-right computing the base-42 polynomial accumulator
+// = accumulator*42 + alphabet_index(char). 42^13 ≈ 9.27 × 10^20
+// fits in 71 bits with ~2.5× headroom.
 //
 // The accumulator overflows uint64 around iteration 12, so the
 // implementation carries a two-word (hi:lo) accumulator and uses

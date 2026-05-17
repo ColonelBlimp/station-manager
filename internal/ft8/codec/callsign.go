@@ -58,7 +58,9 @@ const (
 // bits of the result.
 //
 // The input is right-justified to 6 characters internally (so 3..6
-// char callsigns are all handled). Per-position alphabet validation
+// char callsigns are all handled — see CallsignC58's docs for the
+// padding-asymmetry note across all the string primitives in this
+// package). Per-position alphabet validation
 // is NOT performed: the reference algorithm intentionally allows
 // out-of-position-alphabet characters to produce negative indices,
 // and the c28 arithmetic absorbs them — that's how short callsigns
@@ -153,7 +155,7 @@ func CallsignC28(call string) uint32 {
 	// int compare per call is negligible vs. catching a corruption
 	// at the boundary.
 	if n28 < 0 || n28 >= 1<<CallsignBits {
-		panic("codec.CallsignC28: internal arithmetic regression, n28=" + strconv.Itoa(n28) + " out of [0, 2^28)")
+		panic(op + ": internal arithmetic regression, n28=" + strconv.Itoa(n28) + " out of [0, 2^28)")
 	}
 	return uint32(n28)
 }

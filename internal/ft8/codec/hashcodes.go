@@ -50,10 +50,12 @@ const (
 // together — callers extract whichever width their message slot
 // uses and ignore the rest.
 //
-// Algorithm: pad callsign to 11 chars (right-pad with spaces),
-// build a base-38 integer over the alphabet (" 0-9A-Z/"), multiply
-// by hashPrime modulo 2^64, then right-shift by (64-N) to extract
-// the top N bits for each width.
+// Algorithm: pad callsign to 11 chars (right-pad with spaces — see
+// CallsignC58's docs for the padding-asymmetry note across all the
+// string primitives in this package), build a base-38 integer over
+// the alphabet (" 0-9A-Z/"), multiply by hashPrime modulo 2^64,
+// then right-shift by (64-N) to extract the top N bits for each
+// width.
 //
 // Used by message types that reference a non-standard callsign by
 // hash (rather than carrying its full 28- or 58-bit code), e.g.
