@@ -9,7 +9,7 @@ import (
 )
 
 // TestInitialize_RequiresLogger covers the only validation
-// Initialize currently does — same pattern as the bridge's
+// Initialize currently does — the same pattern as the bridge's
 // Initialize. A nil logger surfaces as a clear op-tagged error
 // rather than blowing up later when the first log call dereferences
 // it.
@@ -59,7 +59,7 @@ func TestStart_Enabled_PlaceholderGoroutineExitsOnStop(t *testing.T) {
 	}
 }
 
-// TestLifecycle_Idempotent covers the "Stop returned, therefore
+// TestLifecycle_Idempotent covers the "Stop returned, therefore,
 // stopped" contract under repeat calls. Mirrors the bridge's
 // equivalent test — important enough that both subsystems pin it
 // explicitly rather than relying on the sync.Once / sync.Mutex

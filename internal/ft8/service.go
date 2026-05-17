@@ -10,9 +10,13 @@ import (
 )
 
 // Service is the FT8 subsystem (per ADR 0021). v1 is a SCAFFOLD —
-// the Fortran-port decoder pipeline lands in subsequent sessions.
-// What's here is the lifecycle skeleton and the package-boundary
-// discipline so future commits have somewhere to land cleanly.
+// the decoder pipeline lands in subsequent sessions as a spec-
+// implementation against the QEX 2020 protocol paper (Franke /
+// Somerville / Taylor; see ADR 0021 § Licensing constraint and
+// docs/v2-design/milestones.md § Milestone 4 for why the WSJT-X
+// Fortran source tree is not the reference). What's here is the
+// lifecycle skeleton and the package-boundary discipline so future
+// commits have somewhere to land cleanly.
 //
 // Lifecycle: Initialize() validates config; Start(ctx) spawns the
 // subsystem goroutines; Stop() cancels and waits. All idempotent
@@ -21,7 +25,7 @@ import (
 // When cfg.Enabled is false, Initialize/Start/Stop are still safe to
 // call but no goroutine is spawned and no audio devices are
 // acquired. This is the default — FT8 stays opt-in for v1 while the
-// implementation matures against the WSJT-X v.3.0.0.1 reference.
+// implementation matures.
 //
 // Once decoder work lands, the goroutine spawned by Start owns the
 // audio capture → DSP → decode pipeline. Until then it's a stub
@@ -40,7 +44,7 @@ type Service struct {
 	wg      sync.WaitGroup
 
 	// stopOnce + stopDone serialise concurrent Stop calls so the
-	// "Stop returned, therefore stopped" contract holds for every
+	// "Stop returned, therefore, stopped" contract holds for every
 	// caller. Mirrors the pattern in internal/bridge.Service.
 	stopOnce sync.Once
 	stopDone chan struct{}
@@ -49,7 +53,7 @@ type Service struct {
 // New constructs a Service from the operator's FT8 config and a
 // logger. Config is read once and snapshotted; runtime PUT /v1/config
 // changes don't reach an existing Service. Operator restart picks
-// up edits — same pattern as internal/bridge and internal/email.
+// up edits — the same pattern as internal/bridge and internal/email.
 func New(cfg types.Ft8Config, logger *logging.Service) *Service {
 	return &Service{
 		cfg:      cfg,
@@ -113,7 +117,7 @@ func (s *Service) Start(ctx context.Context) error {
 // and returns. Idempotent under both sequential and concurrent
 // calls — the first Stop runs the teardown; subsequent callers
 // (whether sequential or racing) wait until the first has
-// finished, then return nil. "Stop returned, therefore stopped"
+// finished, then return nil. "Stop returned, therefore, stopped"
 // holds for every caller.
 func (s *Service) Stop() error {
 	s.stopOnce.Do(func() {
@@ -146,14 +150,16 @@ func (s *Service) Enabled() bool {
 
 // runPlaceholder is the v1 stub goroutine — it does nothing except
 // wait for ctx cancellation. Exists so Stop's wg.Wait() has
-// something to wait on and the lifecycle contract is exercised
+// something to wait on, and the lifecycle contract is exercised
 // end-to-end even before the real decoder lands.
 //
 // **Replace at the same commit that introduces the first real
 // worker** (audio capture loop / decoder pool / etc.). When that
-// happens this method either grows into the real supervisor or is
+//
+//	happens, this method either grows into the real supervisor or is
+//
 // deleted in favour of a `go s.runSupervisor(ctx)`-style entry,
-// matching whatever shape the Fortran-port work settles on.
+// matching whatever shape the spec-implementation work settles on.
 func (s *Service) runPlaceholder(ctx context.Context) {
 	defer s.wg.Done()
 	<-ctx.Done()

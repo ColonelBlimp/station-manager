@@ -900,16 +900,42 @@ binary, build-time dependency on the CGO toolchain. Caught early by
 the CD pipeline (per `project_sm_cd_pipeline_planned` memory) — a CGO
 break fails the gate immediately.
 
-**Test oracle: `jt9 -8`.** Spec-implementation needs a falsifiable
-parity claim. The strategy: feed an FT8 WAV through both the SM decoder
-and `jt9 -8`, diff the decoded message lines. M4.1 establishes the gate;
-every subsequent milestone keeps it green. The corpus does NOT live in
-the repo — see the licensing constraint above. Instead the test reads
-from an operator-supplied directory (`$FT8_TEST_CORPUS` env var or a
-config path); CI skips parity tests when neither `jt9` is on `$PATH` nor
-the corpus is configured. Distro `jt9` from a packaged WSJT-X install
-(`/usr/bin/jt9` on Fedora; `apt install wsjtx` on Debian) is sufficient
-— no need to build the upstream fork.
+**Test architecture: five layers, ordered from "always runs" to "one-shot helper."** Spec-implementation needs falsifiable correctness claims at every level — algorithmic primitives, end-to-end consistency, real-signal robustness. A single "diff against `jt9 -8`" gate is both too strict (locks us into WSJT-X's implementation-specific metrics like exact SNR/DT/freq) and too coarse (a single end-to-end miss tells you nothing about which stage is wrong). The layered shape replaces it:
+
+| Layer | What it proves | Runs in CI? | Needs jt9? | Needs ft8sim? |
+|---|---|---|---|---|
+| 1. **Spec vectors** — known input → known output for each algorithm (CRC14, LDPC encode/decode, callsign/locator packing, hash codes) | Each piece matches the FT8 spec | ✅ Always | ❌ | ❌ |
+| 2. **Round-trip** — SM encoder → SM decoder, verify the message survives | Encoder + decoder are mutually consistent | ✅ Always | ❌ | ❌ |
+| 3. **Synthetic signals** — `ft8sim`-generated WAV with known truth → SM decoder, verify it decodes the known message | Decoder pipeline works end-to-end against signals with construction-truth | 🟡 Locally / when fixtures present | ❌ | At corpus prep only |
+| 4. **Real off-air signals** — operator-recorded WAV → SM decoder, compared to a `.expected` fixture file listing the known messages | Decoder works under real-world conditions | 🟡 Locally / when fixtures present | ❌ at test time | ❌ |
+| 5. **Corpus prep helper** — `cmd/ft8-corpus-prep`: one-shot CLI that runs `jt9 -8` over a directory of WAVs and writes the `.expected` files used by Layer 4 | Generates Layer 4 fixtures | ❌ Never | ✅ One-time | ✅ Optional |
+
+**Critical property: jt9 is not a test-time dependency.** It enters only at Layer 5 — a developer-only CLI tool (`cmd/ft8-corpus-prep`) that runs once when adding new real-signal fixtures. The output `.expected` files become regular test fixtures and Layer 4 tests then run with zero external dependencies. CI machines without WSJT-X installed see Layers 1+2 run normally and Layers 3+4 skip cleanly when fixtures aren't present.
+
+**Why this is better than the original "exact parity against jt9" framing:**
+
+- **Layers 1+2 always run** in CI, with zero external state. Every algorithmic regression is caught the moment it lands.
+- **The parity claim is "we decode the same messages"**, not "we produce byte-identical output to jt9." Implementation-specific signal-processing details (SNR estimator choice, DT calculation method, frequency-bin resolution) are ours to pick without forcing WSJT-X parity on them. WSJT-X bugs are not bugs we must replicate.
+- **Each layer pinpoints a different failure mode.** A Layer 1 failure means "this algorithm is wrong." A Layer 2 failure means "encoder and decoder disagree." A Layer 3 failure means "the demodulator can't handle clean signals." A Layer 4 failure means "real-world conditions break us." Cleaner debugging surface than a monolithic end-to-end gate.
+- **Test fixtures are operator-supplied locally**, not bundled in the repo (per the licensing constraint). Both synthetic (Layer 3) and real (Layer 4) fixtures live on the operator's machine; tests iterate the configured directories and skip when empty.
+
+**Fixture layout:**
+
+```
+internal/ft8/decoder/testdata/
+├── synthetic/             # Layer 3 — ft8sim-generated WAVs
+│   ├── README.md          # how to regenerate
+│   ├── cq_known_snr-10.wav
+│   ├── cq_known_snr-10.wav.expected
+│   └── ...
+└── realsignals/           # Layer 4 — operator-recorded WAVs
+    ├── README.md
+    ├── 210703_133430.wav
+    ├── 210703_133430.wav.expected
+    └── ...
+```
+
+Each `.expected` file is plain text, one message per line — only the *messages* (callsigns, locators, reports) which are protocol-level facts. No SNR/DT/Freq metadata, since those are implementation-specific.
 
 > **Naming note: `jt9` the binary vs JT9 the protocol.** The decoder
 > CLI `jt9` is WSJT-X's general decoder, historically named after the
@@ -943,7 +969,7 @@ can depend on, not a direct sibling-to-sibling import.
 
 **Defaults for open questions** (so they don't block writing code):
 
-- **Decode concurrency:** single-threaded faithful port at M4.1. Fan-
+- **Decode concurrency:** single-threaded implementation at M4.1. Fan-
   out only if M4.2 measurements show the 15s budget is tight under
   the operator's actual workload. Matches "build specific, not generic"
   — premature concurrency is harder to debug than slow code.
@@ -989,41 +1015,71 @@ input. No audio capture, no rig, no TX, no storage, no SPA.
 - Implement message decoder — callsign1/callsign2/locator/report
   unpacking per the message-formats section of the WSJT-X user docs.
 - CLI entrypoint: `smd ft8 decode <file.wav>` subcommand. Prints one
-  decoded line per detected message, format compatible with `jt9 -8`
-  output closely enough for the diff gate.
-- Test harness: a Go test that invokes `jt9 -8 <wav>` via `os/exec`,
-  parses the output to a normalised `{message, snr, dt, freq}` struct,
-  runs the SM decoder over the same file, diffs. Skips gracefully when
-  `jt9` isn't on `$PATH` (CI on hosts without WSJT-X installed must
-  not break the build).
-- Test corpus discovery: harness reads `$FT8_TEST_CORPUS` (env var) or
-  a configured path; iterates every `*.wav` under it. **No WAVs in the
-  repo** (per the licensing constraint above) — corpus is operator-
-  supplied locally, either from their existing WSJT-X install's
-  `samples/FT8/` directory used in place, or from off-air captures
-  they record themselves.
-- CI gate: `task ft8:parity` runs the harness; passes trivially when
-  the corpus isn't configured (so the gate is a no-op on contributors'
-  machines without WSJT-X), runs the diff when it is.
+  decoded message per line to stdout. The output is for human
+  inspection and ad-hoc diff against `jt9 -8`; tests don't depend on
+  exact format compatibility.
+- **Layer 1 (spec vectors).** A `*_test.go` per algorithmic primitive
+  (CRC14, LDPC encode/decode, callsign packing, locator packing,
+  hash codes, message packing/unpacking). Each test pins known
+  inputs to known outputs derived from the QEX paper and/or computed
+  once via the public-domain reference programs in QEX ref [14]
+  (`gen_crc14`, `std_call_to_c28`, `nonstd_to_c58`, `hashcodes`,
+  `grid4_to_g15`, `grid6_to_g25`, `free_text_to_f71`). These tests
+  always run in CI; no external state, no fixtures, no skipping.
+- **Layer 2 (round-trip).** A `*_test.go` that exercises SM's
+  encoder + decoder end-to-end at the bit/symbol/baseband level: an
+  arbitrary message goes in, comes out unchanged. Catches any
+  encoder/decoder disagreement on the protocol. Always runs.
+- **Layer 3 (synthetic).** Tests iterate `internal/ft8/decoder/testdata/synthetic/`;
+  for each `<name>.wav` they run SM's decoder and assert the decoded
+  message matches `<name>.wav.expected`. Skip cleanly when the
+  directory is empty. Operators generate fixtures locally by running
+  `ft8sim` with chosen message + SNR; the resulting `.expected`
+  file is the message they handed to `ft8sim`.
+- **Layer 4 (real signals).** Same iteration shape as Layer 3 but
+  over `internal/ft8/decoder/testdata/realsignals/`. Fixtures here
+  are operator-recorded WAVs paired with `.expected` files written
+  by `cmd/ft8-corpus-prep`.
+- **Corpus prep (Layer 5).** `cmd/ft8-corpus-prep` already exists
+  (moved in Step-0 of M4.1 from an earlier `internal/ft8/parity/`
+  experiment). Current shape: `ft8-corpus-prep <file.wav>` runs
+  `jt9 -8` and prints decoded messages. Grows to
+  `-in DIR -out DIR` (walk + write `.expected` files) as Layer 4
+  fixtures land.
+- **No WAVs in the repo.** Per the licensing constraint above, both
+  the synthetic and real-signal fixture directories live on operator
+  machines (or are git-ignored at the testdata path). Tests skip
+  when fixtures aren't present; CI without WSJT-X still passes
+  Layers 1+2.
 
 #### Acceptance
 
 ```
-# Decode a known WAV (operator-supplied)
-./smd ft8 decode ~/wsjtx-samples/FT8/210703_133430.wav
-# Expected: same decoded messages jt9 -8 produces against the same file
+# Layer 1+2 — always available, always run
+go test -race ./internal/ft8/decoder/...
+# Expected: all algorithmic + round-trip tests pass
 
-# Local parity gate (operator has WSJT-X installed + corpus configured)
-FT8_TEST_CORPUS=~/wsjtx-samples/FT8 task ft8:parity
-# Expected: 0 mismatches across every WAV in the corpus
+# Layer 3 — operator has generated synthetic fixtures
+ls internal/ft8/decoder/testdata/synthetic/*.wav | wc -l   # > 0
+go test -race ./internal/ft8/decoder/... -run TestSyntheticCorpus
+# Expected: every WAV decoded to the message in its .expected file
 
-# CI parity gate (contributor without WSJT-X)
-task ft8:parity
-# Expected: skipped (jt9 not on PATH); other gates still run
+# Layer 4 — operator has recorded + prepped real fixtures
+ls internal/ft8/decoder/testdata/realsignals/*.wav | wc -l   # > 0
+go test -race ./internal/ft8/decoder/... -run TestRealSignalCorpus
+# Expected: every WAV decoded; messages match the .expected files
+
+# Layer 5 — adding a new real-signal fixture (developer task)
+go run ./cmd/ft8-corpus-prep ~/recordings/250517_133430.wav \
+    > internal/ft8/decoder/testdata/realsignals/250517_133430.wav.expected
+cp ~/recordings/250517_133430.wav internal/ft8/decoder/testdata/realsignals/
+# Then re-run Layer 4 test — new fixture is in scope automatically
 ```
 
-When the parity gate is green against the operator's seed corpus,
-M4.1 is done.
+When Layers 1+2 are green, Layer 3 is green against a small seed
+corpus of synthetic WAVs covering clean / noisy / multi-station
+cases, and Layer 4 is green against at least the bundled WSJT-X
+sample (`210703_133430.wav` decoded correctly), M4.1 is done.
 
 ---
 

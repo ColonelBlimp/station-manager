@@ -79,6 +79,42 @@ Operator read Taylor 2020 (the QEX paper at <https://wsjt.sourceforge.io/FT4_FT8
 
 **Net effect on the implementation plan:** the LDPC step is much cheaper (matrices come from `generator.dat` / `parity.dat` directly; we don't reverse-engineer them from the paper's prose). The source-encoding step is similarly cheaper (vendor or port the small reference programs). The signal-processing chain (FFT, sync detection, demod, soft-symbol generation) is the only part that has to be fully clean-implemented from the paper's algorithmic descriptions. That collapses the M4.1 risk surface meaningfully.
 
+### Session 68 continuation (2026-05-17) — M4.1 test architecture revised to layered model; parity package moved to `cmd/ft8-corpus-prep/`
+
+Operator surfaced an architectural concern after Step 1 of M4.1 landed: the initial test scaffolding put `jt9` invocation inside an `internal/ft8/parity/` Go package and asserted strict byte-identical parity against `jt9 -8`. Two problems with that framing:
+
+1. **Strict parity is the wrong claim.** What we actually want is "we decode the same MESSAGES" (protocol correctness); not "we produce identical SNR/DT/Freq metadata to WSJT-X" (mimics implementation-specific signal-processing choices and locks us into replicating any WSJT-X bugs).
+2. **`jt9` shouldn't be a test-time dependency.** Having a Go package in the production import graph that wraps `jt9` invited future code to silently depend on WSJT-X being installed on operator machines. The boundary test I added helped but the package location itself smelled wrong.
+
+**Revised architecture — five-layer test model:**
+
+| Layer | What it proves | Runs in CI? | Needs jt9? |
+|---|---|---|---|
+| 1. Spec vectors (CRC14, LDPC, callsign/locator/hash packing) | Each algorithm matches spec | ✅ Always | ❌ |
+| 2. Round-trip (SM encoder ↔ SM decoder) | Mutually consistent | ✅ Always | ❌ |
+| 3. Synthetic WAVs (`ft8sim`-generated, known truth) | End-to-end decode against construction-truth | 🟡 When fixtures present | ❌ at test time |
+| 4. Real off-air WAVs (operator-recorded + `.expected` fixtures) | Real-world robustness | 🟡 When fixtures present | ❌ at test time |
+| 5. `cmd/ft8-corpus-prep` (one-shot CLI generates L4 fixtures) | N/A — developer tool | ❌ Never | ✅ One-time |
+
+Critical property: **`jt9` is never a test-time dependency.** It enters only at Layer 5, when a developer runs `cmd/ft8-corpus-prep` to add new real-signal fixtures. The output `.expected` files become regular Layer 4 fixtures, and Layer 4 tests run with zero external dependencies thereafter. CI machines without WSJT-X installed pass Layers 1+2 normally and skip 3+4 cleanly.
+
+Test fixtures live at `internal/ft8/decoder/testdata/{synthetic,realsignals}/` on the operator's machine — not in the repo (per the licensing constraint). `.expected` files are plain text, one decoded message per line; only protocol-level facts (callsigns, locators, reports) — no implementation-specific metadata.
+
+**Code changes this continuation:**
+
+- `internal/ft8/parity/` (created earlier this session, 4 files) **deleted entirely**.
+- New `cmd/ft8-corpus-prep/` (4 files: `doc.go` + `jt9.go` + `jt9_test.go` + `main.go`) wraps `jt9` as a developer CLI tool. Current behaviour: `ft8-corpus-prep <file.wav>` runs `jt9 -8` and prints decoded messages one per line. Grows to `-in DIR -out DIR` (walk + write `.expected` files) when Layer 4 fixtures arrive.
+- Smoke test green: `go run ./cmd/ft8-corpus-prep ~/Development/wsjtx/samples/FT8/210703_133430.wav` prints the 14 expected decoded messages.
+- Wider `internal/ft8` boundary tests still pass; full `cmd/...` build clean.
+
+**Doc updates this continuation:**
+
+- `docs/v2-design/milestones.md` § Milestone 4 design preamble — *Test oracle: `jt9 -8`* section replaced with *Test architecture: five layers* (table + per-layer description + fixture layout + why-better-than-strict-parity rationale). M4.1 Scope rewritten with per-layer bullets. M4.1 Acceptance rewritten with per-layer commands.
+- `docs/decisions/0021-ft8-as-sm-subsystem.md` *Decision* section — refined the "validated against jt9 oracle" sentence to point at the layered architecture and the *jt9-is-never-a-test-time-dependency* invariant.
+- Memory `project_ft8_library.md` — testing rule rewritten to reflect the layered model and the L5-only role for `jt9`.
+
+**Next:** revised Step 1 — CRC14 implementation under `internal/ft8/decoder/crc14.go`, with test vectors pinned from the public-domain `gen_crc14` reference program in QEX ref [14]. Smallest leaf-algorithm to start. Per the layered architecture, this is a Layer 1 test that always runs in CI with zero external state.
+
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 
 LoggingCard header now suffixes the default-logbook name with the live QSO count: `Logbook: <name> ({count})`. Operator-driven — surfaced the gap that the SPA had no visibility into the persistent logbook size; only the session count (`Session (N)` in InfoPanel) was visible.
