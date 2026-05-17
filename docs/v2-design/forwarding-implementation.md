@@ -300,16 +300,19 @@ for _, fwd := range s.Config.Forwarders() {
 
 ```go
 func shouldEnqueue(fc types.ForwarderConfig, act action.Action) bool {
-    if !fc.Enabled {
-        return false
-    }
     return slices.Contains(fc.ActionFilter, act.String())
 }
 ```
 
-Disabled forwarders and those whose `action_filter` excludes this action
-get skipped. Zero configured forwarders ⇒ the loop is a no-op and only
-the QSO row is committed.
+Per ADR 0022, presence in `config.json` is what gates enqueue — the
+caller's `s.Config.Forwarders()` range loop only iterates defined
+forwarders. `Enabled` is a worker-lifecycle signal, not an enqueue
+gate: rows accumulate at `pending` for disabled forwarders and drain
+on the worker's first tick after re-enable + restart, matching the
+behaviour documented in `forwarding.md` §8. Forwarders whose
+`action_filter` excludes the current action are skipped here; zero
+configured forwarders ⇒ the loop is a no-op and only the QSO row is
+committed.
 
 ### 4.5 The worker loop
 

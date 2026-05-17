@@ -269,6 +269,8 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 		Int64("qso_id", merged.ID).
 		Int64("logbook_id", merged.LogbookID).
 		Str("call", merged.ContactedStation.Call).
+		Str("qso_date", merged.QsoDetails.QsoDate).
+		Str("time_on", merged.QsoDetails.TimeOn).
 		Str("freq_mhz", merged.QsoDetails.Freq).
 		Str("band", merged.QsoDetails.Band).
 		Str("mode", merged.QsoDetails.Mode).

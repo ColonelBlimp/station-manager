@@ -81,7 +81,12 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 		return errors.New(op).WithErr(err).WithMsg("failed to commit transaction")
 	}
 
-	s.Logger.InfoWith().Int64("qso_id", existing.ID).Msg("QSO soft-deleted")
+	s.Logger.InfoWith().
+		Int64("qso_id", existing.ID).
+		Str("call", existing.ContactedStation.Call).
+		Str("qso_date", existing.QsoDetails.QsoDate).
+		Str("time_on", existing.QsoDetails.TimeOn).
+		Msg("QSO soft-deleted")
 
 	s.Hub.Publish(events.NameQsoDeleted, events.QsoDeletedPayload{
 		QsoID:     existing.ID,

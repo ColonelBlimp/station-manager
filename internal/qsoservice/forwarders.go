@@ -9,13 +9,16 @@ import (
 
 // shouldEnqueue reports whether a configured forwarder should receive a
 // qso_upload row for the given QSO lifecycle action. Used at each
-// ingest site (submit, update, delete) to filter out disabled
-// destinations and those whose action_filter excludes this action.
+// ingest site (submit, update, delete) to filter out destinations whose
+// action_filter excludes this action.
 //
-// See docs/v2-design/forwarding.md §6.
+// Per ADR 0022, the Enabled flag is purely a worker-lifecycle signal —
+// disabled forwarders accumulate `pending` rows that drain when the
+// operator re-enables them and restarts. Presence in config.json is
+// what gates enqueue; the caller's `s.Config.Forwarders()` loop
+// already only iterates defined forwarders.
+//
+// See docs/v2-design/forwarding.md §6, §8, and ADR 0022.
 func shouldEnqueue(fc types.ForwarderConfig, act action.Action) bool {
-	if !fc.Enabled {
-		return false
-	}
 	return slices.Contains(fc.ActionFilter, act.String())
 }

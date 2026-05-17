@@ -195,8 +195,17 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 		return
 	}
 
+	call := qso.ContactedStation.Call
+
+	w.logger.InfoWith().
+		Str("forwarder", w.cfg.Name).
+		Int64("qso_id", row.QsoID).
+		Str("action", row.Action).
+		Str("call", call).
+		Msg("forwarding: submit")
+
 	res := w.fwd.Submit(ctx, qso, act, priorUpstreamID)
-	w.persistOutcome(ctx, row, res)
+	w.persistOutcome(ctx, row, call, res)
 }
 
 // resolvePriorUpstreamID fetches the upstream_id recorded on the prior
@@ -302,16 +311,33 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 // queue-row transition. Terminal transitions (uploaded / failed)
 // publish the corresponding forward.* event on the hub after the
 // DB write succeeds — markSuccess and markFailed own that emit.
-func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, res forwarding.Result) {
+//
+// call is the contacted-station callsign for log lines; persistOutcome
+// itself doesn't otherwise touch the QSO row.
+func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, call string, res forwarding.Result) {
 	switch res.Outcome {
 	case forwarding.OutcomeSuccess:
+		w.logger.InfoWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("qso_id", row.QsoID).
+			Str("action", row.Action).
+			Str("call", call).
+			Str("upstream_id", res.UpstreamID).
+			Msg("forwarding: success")
 		w.markSuccess(ctx, row, res.UpstreamID)
 
 	case forwarding.OutcomeTerminal:
+		w.logger.WarnWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("qso_id", row.QsoID).
+			Str("action", row.Action).
+			Str("call", call).
+			Err(res.Err).
+			Msg("forwarding: terminal failure")
 		w.markFailed(ctx, row, errText(res.Err))
 
 	case forwarding.OutcomeTransient:
-		w.markTransientFromForwarder(ctx, row, res.Err)
+		w.markTransientFromForwarder(ctx, row, call, res.Err)
 
 	default:
 		// Unknown outcome from the forwarder — treat as terminal so we
@@ -330,14 +356,31 @@ func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, res fo
 
 // markTransientFromForwarder records a transient forwarder outcome,
 // promoting to 'failed' when the retry budget is exhausted.
-func (w *Worker) markTransientFromForwarder(ctx context.Context, row types.QsoUpload, cause error) {
+func (w *Worker) markTransientFromForwarder(ctx context.Context, row types.QsoUpload, call string, cause error) {
 	nextAttempts := row.Attempts + 1
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
+		w.logger.WarnWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("qso_id", row.QsoID).
+			Str("action", row.Action).
+			Str("call", call).
+			Int64("attempts", nextAttempts).
+			Err(cause).
+			Msg("forwarding: retry budget exhausted")
 		w.markFailed(ctx, row, errText(cause))
 		return
 	}
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
 	nextAt := time.Now().Add(delay).Unix()
+	w.logger.InfoWith().
+		Str("forwarder", w.cfg.Name).
+		Int64("qso_id", row.QsoID).
+		Str("action", row.Action).
+		Str("call", call).
+		Int64("attempts", nextAttempts).
+		Dur("delay", delay).
+		Err(cause).
+		Msg("forwarding: transient — will retry")
 	w.markTransientRetry(ctx, row, nextAt, errText(cause))
 }
 

@@ -64,10 +64,15 @@ func TestSubmit_EnqueuesRowsForEnabledForwarders(t *testing.T) {
 	}
 }
 
-func TestSubmit_DisabledForwarder_Skipped(t *testing.T) {
+func TestSubmit_DisabledForwarder_StillEnqueues(t *testing.T) {
+	// Per ADR 0022: presence in config.json gates enqueue; Enabled is
+	// purely a worker-lifecycle signal. A disabled forwarder MUST still
+	// receive a qso_upload row so the queue is drained on the worker's
+	// first tick after re-enable + restart. Pre-ADR-0022 this test
+	// pinned the opposite (and-was-the-bug) behaviour.
 	srv := serverWithForwarders(t,
 		forwarderCfg("qrz", "qrz", true, "insert"),
-		forwarderCfg("clublog", "clublog", false, "insert"), // enabled=false
+		forwarderCfg("clublog", "clublog", false, "insert"), // enabled=false → STILL enqueues
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
@@ -77,11 +82,15 @@ func TestSubmit_DisabledForwarder_Skipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch uploads: %v", err)
 	}
-	if len(uploads) != 1 {
-		t.Fatalf("len = %d, want 1 (disabled forwarder should be skipped)", len(uploads))
+	if len(uploads) != 2 {
+		t.Fatalf("len = %d, want 2 (both enabled and disabled forwarders enqueue per ADR 0022)", len(uploads))
 	}
-	if uploads[0].ForwarderName != "qrz" {
-		t.Fatalf("forwarder_name = %q, want qrz", uploads[0].ForwarderName)
+	seen := map[string]bool{}
+	for _, u := range uploads {
+		seen[u.ForwarderName] = true
+	}
+	if !seen["qrz"] || !seen["clublog"] {
+		t.Fatalf("forwarder_names = %v, want both qrz and clublog", seen)
 	}
 }
 

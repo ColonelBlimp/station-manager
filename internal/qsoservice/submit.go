@@ -256,6 +256,8 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Str("uuid", qso.UUID).
 		Int64("logbook_id", logbookID).
 		Str("call", call).
+		Str("qso_date", qsoDate).
+		Str("time_on", timeOn).
 		Str("freq_mhz", freqMHz).
 		Str("band", band).
 		Str("mode", mode).
