@@ -152,6 +152,59 @@ func parseParity(raw string, m *ParityMatrix) error {
 	return nil
 }
 
+// LDPCEncode produces the 174-bit FT8 LDPC codeword for a 91-bit
+// info word. The codeword has systematic form:
+//
+//	codeword[0..91)   = info[0..91)            (the message+CRC bits)
+//	codeword[91..174) = parity[0..83)          (computed FEC bits)
+//
+// where parity[i] = XOR over j of (G[i][j] AND info[j]) — the standard
+// matrix-vector multiplication over GF(2). The ordering matches QEX
+// paper §3 ("83 bits are appended for forward error correction,
+// creating a 174-bit codeword") and the convention asserted by
+// TestLDPCMatricesAreConsistent.
+//
+// Inputs and outputs use one-bit-per-byte form (each byte 0 or 1)
+// to match the project's bit-vector convention; callers convert
+// to/from packed form via Pack and Unpack as needed.
+//
+// Panics if info is not exactly InfoBits long or contains a byte
+// outside {0, 1}. The 91-bit invariant is upstream-guaranteed by
+// the message-packer (77-bit message + 14-bit CRC); a panic here
+// signals a bug at the call site, not user data.
+//
+// The implementation iterates row-by-row through the dense generator
+// matrix; for each parity-bit row i, the inner loop sums G[i][j]·info[j]
+// over all 91 info bits. Inner access pattern is contiguous in the
+// row-major matrix storage — cache-friendly without any explicit
+// optimisation. A correctness-first implementation; faster variants
+// (bit-packed AND/XOR, SIMD) become worthwhile only if the inner
+// decoder's iteration count makes encode time visible in profiling.
+func LDPCEncode(info []byte) []byte {
+	if len(info) != InfoBits {
+		panic("decoder.LDPCEncode: info must be exactly " + strconv.Itoa(InfoBits) + " bits, got " + strconv.Itoa(len(info)))
+	}
+	for i, b := range info {
+		if b > 1 {
+			panic("decoder.LDPCEncode: info bit at index " + strconv.Itoa(i) + " is not 0 or 1")
+		}
+	}
+
+	codeword := make([]byte, CodewordBits)
+	copy(codeword[:InfoBits], info)
+
+	for i := range ParityBits {
+		var bit byte
+		row := &ldpcGenerator[i]
+		for j := range InfoBits {
+			bit ^= row[j] & info[j]
+		}
+		codeword[InfoBits+i] = bit
+	}
+
+	return codeword
+}
+
 // isBitLine reports whether every char in s is '0' or '1' (and s is
 // non-empty).
 func isBitLine(s string) bool {

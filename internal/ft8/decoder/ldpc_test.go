@@ -269,6 +269,196 @@ func TestLdpcErr_Format(t *testing.T) {
 	}
 }
 
+// =====================================================================
+// LDPC encoder tests
+// =====================================================================
+
+func TestLDPCEncode_OutputDimensions(t *testing.T) {
+	info := make([]byte, InfoBits)
+	c := LDPCEncode(info)
+	if got, want := len(c), CodewordBits; got != want {
+		t.Errorf("codeword length: got %d, want %d", got, want)
+	}
+}
+
+func TestLDPCEncode_ZeroInputZeroOutput(t *testing.T) {
+	// Encoding the all-zero info word produces the all-zero
+	// codeword — for any linear code, c = G·0 = 0 in both halves.
+	info := make([]byte, InfoBits)
+	c := LDPCEncode(info)
+	for i, b := range c {
+		if b != 0 {
+			t.Errorf("zero-info codeword: bit %d = %d, want 0", i, b)
+		}
+	}
+}
+
+func TestLDPCEncode_InfoBitsCopiedToPrefix(t *testing.T) {
+	// Systematic form: codeword[0..91] must literally equal info.
+	// Use a non-trivial info word so a bug that always writes zero
+	// (or always writes the input verbatim) is distinguishable from
+	// a correct copy.
+	info := make([]byte, InfoBits)
+	for i := range info {
+		info[i] = byte(i & 1) // alternating 0101...
+	}
+	c := LDPCEncode(info)
+	for i := range InfoBits {
+		if c[i] != info[i] {
+			t.Errorf("codeword[%d] = %d, want info[%d] = %d", i, c[i], i, info[i])
+		}
+	}
+}
+
+// TestLDPCEncode_OutputBitsAreBinary catches a future regression
+// where the encoder's XOR/AND arithmetic accidentally produces a
+// byte > 1 (e.g. dropping the AND and writing the product as int).
+func TestLDPCEncode_OutputBitsAreBinary(t *testing.T) {
+	info := make([]byte, InfoBits)
+	for i := range info {
+		info[i] = byte(i & 1)
+	}
+	c := LDPCEncode(info)
+	for i, b := range c {
+		if b > 1 {
+			t.Errorf("codeword[%d] = %d, must be 0 or 1", i, b)
+		}
+	}
+}
+
+// TestLDPCEncode_CodewordPassesParityCheck is the cross-validation
+// that the encoder produces codewords consistent with the parity
+// matrix. By linearity it's sufficient to check unit-vector info
+// words (TestLDPCMatricesAreConsistent does this for the matrices
+// directly); here we exercise the encoder end-to-end for several
+// arbitrary info words — including patterns the unit-vector test
+// doesn't directly cover.
+func TestLDPCEncode_CodewordPassesParityCheck(t *testing.T) {
+	cases := []struct {
+		name string
+		info []byte
+	}{
+		{"zero", make([]byte, InfoBits)},
+		{"all_ones", repeatByte(1, InfoBits)},
+		{"alternating_01", alternating(InfoBits, 0, 1)},
+		{"alternating_10", alternating(InfoBits, 1, 0)},
+		{"only_first_bit", oneAt(InfoBits, 0)},
+		{"only_last_bit", oneAt(InfoBits, InfoBits-1)},
+		{"only_middle_bit", oneAt(InfoBits, InfoBits/2)},
+		// Pseudo-random pattern: deterministic, not all-zero, exercises
+		// many G rows simultaneously.
+		{"pseudo_random_pattern", patternBits(InfoBits, 0x9E3779B9)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := LDPCEncode(tc.info)
+			// Syndrome = H · c (mod 2). For each codeword bit that's
+			// 1, XOR 1 into the rows where that column has a 1.
+			var syndrome [ParityBits]byte
+			for col := range CodewordBits {
+				if c[col] == 0 {
+					continue
+				}
+				for _, row := range ldpcParity[col] {
+					syndrome[row] ^= 1
+				}
+			}
+			for r, s := range syndrome {
+				if s != 0 {
+					t.Errorf("syndrome[%d] = %d, want 0 (codeword fails H·c=0)", r, s)
+				}
+			}
+		})
+	}
+}
+
+func TestLDPCEncode_RejectsWrongLength(t *testing.T) {
+	cases := []struct {
+		name string
+		n    int
+	}{
+		{"too_short", InfoBits - 1},
+		{"too_long", InfoBits + 1},
+		{"empty", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("LDPCEncode(len=%d) should panic; did not", tc.n)
+				}
+			}()
+			LDPCEncode(make([]byte, tc.n))
+		})
+	}
+}
+
+func TestLDPCEncode_RejectsInvalidBit(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("LDPCEncode(byte > 1) should panic; did not")
+		}
+	}()
+	info := make([]byte, InfoBits)
+	info[42] = 2
+	LDPCEncode(info)
+}
+
+func BenchmarkLDPCEncode(b *testing.B) {
+	info := make([]byte, InfoBits)
+	for i := range info {
+		info[i] = byte(i & 1)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_ = LDPCEncode(info)
+	}
+}
+
+// --- small bit-vector helpers, test-only ---
+
+func repeatByte(v byte, n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = v
+	}
+	return out
+}
+
+func alternating(n int, first, second byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		if i%2 == 0 {
+			out[i] = first
+		} else {
+			out[i] = second
+		}
+	}
+	return out
+}
+
+func oneAt(n, idx int) []byte {
+	out := make([]byte, n)
+	out[idx] = 1
+	return out
+}
+
+// patternBits produces a deterministic bit sequence by hashing the
+// position with a fixed multiplier. Not cryptographic; just a way
+// to get a pseudo-random pattern that doesn't depend on the random
+// package and is reproducible across runs.
+func patternBits(n int, mul uint32) []byte {
+	out := make([]byte, n)
+	state := uint32(1)
+	for i := range out {
+		state = state*mul + 0xDEADBEEF
+		out[i] = byte((state >> 31) & 1)
+	}
+	return out
+}
+
 // TestLDPCMatricesAreConsistent is the load-bearing cross-check
 // between generator.dat and parity.dat: any 91-bit info word u,
 // extended with parity = G·u into a 174-bit codeword, must satisfy
