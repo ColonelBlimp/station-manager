@@ -1,9 +1,11 @@
-package decoder
+package codec
 
 import (
 	_ "embed"
 	"strconv"
 	"strings"
+
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
 // LDPC(174,91) code dimensions per QEX paper §3:
@@ -75,10 +77,10 @@ var (
 
 func init() {
 	if err := parseGenerator(generatorRaw, &ldpcGenerator); err != nil {
-		panic("decoder: parsing embedded generator.dat: " + err.Error())
+		panic("codec: parsing embedded generator.dat: " + err.Error())
 	}
 	if err := parseParity(parityRaw, &ldpcParity); err != nil {
-		panic("decoder: parsing embedded parity.dat: " + err.Error())
+		panic("codec: parsing embedded parity.dat: " + err.Error())
 	}
 }
 
@@ -89,6 +91,7 @@ func init() {
 // A "data line" is any non-empty line whose every character is '0'
 // or '1'. Header lines mix prose and are skipped.
 func parseGenerator(raw string, m *GeneratorMatrix) error {
+	const op errors.Op = "codec.parseGenerator"
 	rowCount := 0
 	for lineNo, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -96,10 +99,10 @@ func parseGenerator(raw string, m *GeneratorMatrix) error {
 			continue
 		}
 		if rowCount >= ParityBits {
-			return errAt(lineNo+1, "more than "+strconv.Itoa(ParityBits)+" data rows in generator.dat")
+			return errors.New(op).WithMsgf("line %d: more than %d data rows in generator.dat", lineNo+1, ParityBits)
 		}
 		if len(line) != InfoBits {
-			return errAt(lineNo+1, "data row has "+strconv.Itoa(len(line))+" cols, want "+strconv.Itoa(InfoBits))
+			return errors.New(op).WithMsgf("line %d: data row has %d cols, want %d", lineNo+1, len(line), InfoBits)
 		}
 		for c := range InfoBits {
 			m[rowCount][c] = line[c] - '0'
@@ -107,7 +110,7 @@ func parseGenerator(raw string, m *GeneratorMatrix) error {
 		rowCount++
 	}
 	if rowCount != ParityBits {
-		return errAt(0, "expected "+strconv.Itoa(ParityBits)+" data rows in generator.dat, got "+strconv.Itoa(rowCount))
+		return errors.New(op).WithMsgf("expected %d data rows in generator.dat, got %d", ParityBits, rowCount)
 	}
 	return nil
 }
@@ -119,6 +122,7 @@ func parseGenerator(raw string, m *GeneratorMatrix) error {
 // internally so the rest of the code uses 0-based indexing
 // consistently.
 func parseParity(raw string, m *ParityMatrix) error {
+	const op errors.Op = "codec.parseParity"
 	colCount := 0
 	for lineNo, line := range strings.Split(raw, "\n") {
 		fields := strings.Fields(line)
@@ -129,25 +133,25 @@ func parseParity(raw string, m *ParityMatrix) error {
 		// (defensive against any prose row with exactly 3 fields).
 		idx := [LDPCParityColumnDensity]uint8{}
 		isData := true
-		for k, f := range fields {
+		for i, f := range fields {
 			n, err := strconv.Atoi(f)
 			if err != nil || n < 1 || n > ParityBits {
 				isData = false
 				break
 			}
-			idx[k] = uint8(n - 1) // file is 1-based; convert to 0-based
+			idx[i] = uint8(n - 1) // file is 1-based; convert to 0-based
 		}
 		if !isData {
 			continue
 		}
 		if colCount >= CodewordBits {
-			return errAt(lineNo+1, "more than "+strconv.Itoa(CodewordBits)+" data columns in parity.dat")
+			return errors.New(op).WithMsgf("line %d: more than %d data columns in parity.dat", lineNo+1, CodewordBits)
 		}
 		m[colCount] = idx
 		colCount++
 	}
 	if colCount != CodewordBits {
-		return errAt(0, "expected "+strconv.Itoa(CodewordBits)+" data columns in parity.dat, got "+strconv.Itoa(colCount))
+		return errors.New(op).WithMsgf("expected %d data columns in parity.dat, got %d", CodewordBits, colCount)
 	}
 	return nil
 }
@@ -182,11 +186,11 @@ func parseParity(raw string, m *ParityMatrix) error {
 // decoder's iteration count makes encode time visible in profiling.
 func LDPCEncode(info []byte) []byte {
 	if len(info) != InfoBits {
-		panic("decoder.LDPCEncode: info must be exactly " + strconv.Itoa(InfoBits) + " bits, got " + strconv.Itoa(len(info)))
+		panic("codec.LDPCEncode: info must be exactly " + strconv.Itoa(InfoBits) + " bits, got " + strconv.Itoa(len(info)))
 	}
 	for i, b := range info {
 		if b > 1 {
-			panic("decoder.LDPCEncode: info bit at index " + strconv.Itoa(i) + " is not 0 or 1")
+			panic("codec.LDPCEncode: info bit at index " + strconv.Itoa(i) + " is not 0 or 1")
 		}
 	}
 
@@ -217,21 +221,4 @@ func isBitLine(s string) bool {
 		}
 	}
 	return true
-}
-
-// errAt constructs a parse-error string with optional line context.
-type ldpcErr struct {
-	line int
-	msg  string
-}
-
-func (e *ldpcErr) Error() string {
-	if e.line == 0 {
-		return e.msg
-	}
-	return "line " + strconv.Itoa(e.line) + ": " + e.msg
-}
-
-func errAt(line int, msg string) error {
-	return &ldpcErr{line: line, msg: msg}
 }

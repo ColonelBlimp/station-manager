@@ -1,4 +1,4 @@
-package decoder
+package codec
 
 import (
 	"bytes"
@@ -221,7 +221,7 @@ func zeros(n int) []byte {
 // including partial-byte boundaries — exactly the cases hand-written
 // vectors are most likely to miss.
 //
-// Run locally with: go test -fuzz=FuzzPackUnpackRoundTrip -fuzztime=10s ./internal/ft8/decoder/
+// Run locally with: go test -fuzz=FuzzPackUnpackRoundTrip -fuzztime=10s ./internal/ft8/codec/
 func FuzzPackUnpackRoundTrip(f *testing.F) {
 	seeds := [][]byte{
 		{},

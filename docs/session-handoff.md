@@ -98,7 +98,7 @@ Operator surfaced an architectural concern after Step 1 of M4.1 landed: the init
 
 Critical property: **`jt9` is never a test-time dependency.** It enters only at Layer 5, when a developer runs `cmd/ft8-corpus-prep` to add new real-signal fixtures. The output `.expected` files become regular Layer 4 fixtures, and Layer 4 tests run with zero external dependencies thereafter. CI machines without WSJT-X installed pass Layers 1+2 normally and skip 3+4 cleanly.
 
-Test fixtures live at `internal/ft8/decoder/testdata/{synthetic,realsignals}/` on the operator's machine — not in the repo (per the licensing constraint). `.expected` files are plain text, one decoded message per line; only protocol-level facts (callsigns, locators, reports) — no implementation-specific metadata.
+Test fixtures live at `internal/ft8/codec/testdata/{synthetic,realsignals}/` on the operator's machine — not in the repo (per the licensing constraint). `.expected` files are plain text, one decoded message per line; only protocol-level facts (callsigns, locators, reports) — no implementation-specific metadata.
 
 **Code changes this continuation:**
 
@@ -113,7 +113,7 @@ Test fixtures live at `internal/ft8/decoder/testdata/{synthetic,realsignals}/` o
 - `docs/decisions/0021-ft8-as-sm-subsystem.md` *Decision* section — refined the "validated against jt9 oracle" sentence to point at the layered architecture and the *jt9-is-never-a-test-time-dependency* invariant.
 - Memory `project_ft8_library.md` — testing rule rewritten to reflect the layered model and the L5-only role for `jt9`.
 
-**Next:** revised Step 1 — CRC14 implementation under `internal/ft8/decoder/crc14.go`, with test vectors pinned from the public-domain `gen_crc14` reference program in QEX ref [14]. Smallest leaf-algorithm to start. Per the layered architecture, this is a Layer 1 test that always runs in CI with zero external state.
+**Next:** revised Step 1 — CRC14 implementation under `internal/ft8/codec/crc14.go`, with test vectors pinned from the public-domain `gen_crc14` reference program in QEX ref [14]. Smallest leaf-algorithm to start. Per the layered architecture, this is a Layer 1 test that always runs in CI with zero external state.
 
 ### Session 68 continuation (2026-05-17) — Forwarder enqueue rule reworked (ADR 0022); INFO logging for contacts + forwarding; LDPC test pass
 
@@ -147,11 +147,35 @@ Three alternatives weighed and rejected in the ADR: status-quo (keep the bug, ju
 - `internal/qsoservice/delete.go:84` `"QSO soft-deleted"` log — was id-only; gained `call`, `qso_date`, `time_on`.
 - `internal/forwarding/worker/worker.go` — three new log lines: INFO `"forwarding: submit"` before `fwd.Submit(...)` (forwarder, qso_id, action, call); INFO `"forwarding: success"` (adds upstream_id); WARN `"forwarding: terminal failure"` (adds err) — both inside `persistOutcome` which gained a `call` parameter. INFO `"forwarding: transient — will retry"` and WARN `"forwarding: retry budget exhausted"` inside `markTransientFromForwarder` which also gained `call`. Transient retries log at INFO (operator wants visibility of progress on a flaky network — see `project_sm_operator_network`); terminal/exhausted log at WARN for log-scanning visibility. The "log all forwarding actions under INFO" instruction is interpreted as "emit at INFO+ levels, with failures escalating to WARN."
 
-**Side work this continuation — LDPC code review + tests** on `internal/ft8/decoder/ldpc.go` (the public-domain QEX ref [14] generator + parity matrix loader from session 68 earlier today). Code itself was clean; 12 new tests added in `ldpc_test.go` covering parser edge cases (long row, too-many rows, too-many columns, row index zero, synthetic happy-path for both parsers), `isBitLine` table-driven, `errAt` format. The load-bearing addition: `TestLDPCMatricesAreConsistent` — proves `H · [info ‖ G·info] = 0 mod 2` for every unit-vector info word, which by linearity covers all info words. This is the only test that ties the two matrix files together as a coherent code; per-matrix structural tests (column weight, row weight, index range) check each in isolation and could pass while encoder output silently failed its own decoder. Pins the QEX §3 codeword ordering `[info(91) | parity(83)]`. All 12 pass under `-race`.
+**Side work this continuation — LDPC code review + tests** on `internal/ft8/codec/ldpc.go` (the public-domain QEX ref [14] generator + parity matrix loader from session 68 earlier today). Code itself was clean; 12 new tests added in `ldpc_test.go` covering parser edge cases (long row, too-many rows, too-many columns, row index zero, synthetic happy-path for both parsers), `isBitLine` table-driven, `errAt` format. The load-bearing addition: `TestLDPCMatricesAreConsistent` — proves `H · [info ‖ G·info] = 0 mod 2` for every unit-vector info word, which by linearity covers all info words. This is the only test that ties the two matrix files together as a coherent code; per-matrix structural tests (column weight, row weight, index range) check each in isolation and could pass while encoder output silently failed its own decoder. Pins the QEX §3 codeword ordering `[info(91) | parity(83)]`. All 12 pass under `-race`.
 
 **Test posture:** full `go test -count=1 ./...` green; `go vet` clean; `gofmt` clean. Operator committed + dogfooded; QRZ forwarding observed working end-to-end against the recovered 3B8IDX row.
 
 **Next:** continues to be revised Step 1 of M4.1 (CRC14 implementation per the session-68 plan, unchanged by this work).
+
+### Session 68 continuation (2026-05-17) — M4.1 Layer 1 primitives sequence + `decoder` → `codec` rename
+
+M4.1's Layer 1 (algorithmic primitives, see milestones.md M4 design preamble — *Test architecture: five layers*) ran in a tight commit-by-commit rhythm this session:
+
+1. **CRC14** (`crc14.go`) — bit-by-bit polynomial division, 0x6757, matching `gen_crc14.f90` reference. 7 spec vectors from running the reference + invariant tests + benchmark + fuzz target. **~970 ns/op, 0 allocs.**
+2. **Bit pack/unpack** (`bits.go`) — `Pack` / `Unpack` MSB-first conversion between bit-per-byte and packed-byte forms. 20 tests + `FuzzPackUnpackRoundTrip`. The shared `bits(s)` test helper consolidates string-of-'0'/'1' parsing.
+3. **Callsign c28** (`callsign.go`) — `CallsignC28(string) uint32`, per `std_call_to_c28.f90`. 10 spec vectors covering 3–6 char calls (M1A through PJ4ABC, including 7Q5MLV for Malawi). Important subtlety surfaced + documented: short calls produce c28 values that overlap the 22-bit hash range (e.g. M1A → 6,050,834 < stdCallOffset); the protocol disambiguates via the message-type tag, not by range. Zone field on each vector + per-vector zone assertion pins this. Length tightened to 3..6 (was 1..6) per review.
+4. **LDPC matrices** (`qexref14/`, `ldpc.go`) — `generator.dat` + `parity.dat` vendored from the public-domain QEX ref [14] tarball with a per-directory README explaining the §9 carve-out. `//go:embed` loaders run at `init()`; matrix dimensions, sparsity invariants, and parser edge cases pinned by tests. **Load-bearing: `TestLDPCMatricesAreConsistent`** — proves `H·[info‖G·info]=0` for all unit-vector info words (by linearity, all info words). Without this, encoder + parity matrix could be inconsistent and the rest of the LDPC pipeline silently broken.
+5. **LDPC encode** (`ldpc.go`) — `LDPCEncode(info []byte) []byte`, systematic encoding `c = [info(91) || G·info(83)]`. Row-major iteration over the dense generator for cache locality. `TestLDPCEncode_CodewordPassesParityCheck` cross-validates encoder output against the parity matrix across 8 input patterns. **~4.4 µs/encode, 1 alloc (output slice).**
+6. **Grid g15** (`grid.go`) — `Grid4ToG15(string) uint16`, multiplexes 4-char Maidenhead grid / reserved tokens (empty/RRR/RR73/73) / signed reports per `grid4_to_g15.f90`. RR73 short-circuit explicit (would otherwise miscode as the impossible grid "RR73"). Strict report shape `[+-]\d{1,2}` rejects non-canonical forms like `+002` and `+9999`. Documented `±N`/reserved-token collisions (-34 ↔ "", -33 ↔ "RRR", etc.; +0 ↔ -0) pinned by `TestGrid4ToG15_DocumentedCollisions`.
+
+**Package rename: `internal/ft8/decoder` → `internal/ft8/codec`.** Surfaced during the grid-packing review — the package contained only encode-side primitives (CRC14, callsign packing, grid packing, LDPC encode) but was named "decoder," misleading anyone reading it cold. The shared primitives (bit packing, FEC matrices, CRC) genuinely serve both directions; the rename to `codec` makes that explicit. Future signal-processing code (FFT, sync, demod) lives in this package too; only audio I/O and tone synthesis split out (TBD when M4.2 lands). Mechanical rename: 12 files moved, `package` declarations updated, panic strings + op tags updated, `doc.go` rewritten, all doc paths in milestones.md + this file updated. All callers were tests; zero external import sites.
+
+**Code-review-driven hardening landed across the session:**
+
+- `internal/errors` op-tagged pattern in `ldpc.go` (was bespoke `ldpcErr` type — replaced for grep-for-conventions consistency)
+- `TestCallsignC28_PropertyAlwaysAboveSpecialTokens` (5000 random inputs, fuzz-style property check)
+- All primitives have benchmarks; all are zero-alloc except `LDPCEncode` (1 alloc for output slice)
+- `TestLDPCMatricesAreConsistent` (the cross-matrix consistency check) + `TestLDPCEncode_CodewordPassesParityCheck` (encoder output passes parity for arbitrary info) — together prove the LDPC pipeline correctness without any external oracle
+
+**Test posture (M4.1 Layer 1):** 56 tests across `internal/ft8/codec/` all green under `-race`. `go vet ./...` clean. Full repo build clean.
+
+**Next:** remaining Layer 1 leaves — `grid6_to_g25` (6-char Maidenhead, base-24 extension on top of grid4), `hashcodes`, free text `f71`, nonstandard call `c58`. Same shape as the primitives shipped this session (build the public-domain reference, generate vectors, implement in Go, pin invariants). Then Layer 2 (message-format packing per QEX Table 1 i3/n3 types — assembles the full 77-bit info word from primitives + the round-trip tests that come with it). Then the LDPC decoder (belief propagation + OSD fallback; bigger algorithm, possible CGO point depending on benchmarks).
 
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 

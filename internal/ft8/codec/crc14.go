@@ -1,4 +1,4 @@
-package decoder
+package codec
 
 import "strconv"
 
@@ -65,11 +65,11 @@ var crc14Poly = [crc14RegBits]byte{1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1}
 // call site, not bad input data.
 func CRC14(msg []byte) uint16 {
 	if len(msg) != MessageBits {
-		panic("decoder.CRC14: message must be exactly 77 bits")
+		panic("codec.CRC14: message must be exactly 77 bits")
 	}
 	for i, b := range msg {
 		if b > 1 {
-			panic("decoder.CRC14: message bit at index " + strconv.Itoa(i) + " is not 0 or 1")
+			panic("codec.CRC14: message bit at index " + strconv.Itoa(i) + " is not 0 or 1")
 		}
 	}
 
@@ -90,7 +90,12 @@ func CRC14(msg []byte) uint16 {
 	// Iteration 0 redundantly reloads r[crc14RegBits-1] (already
 	// there from initialisation) before the first XOR test —
 	// preserved here so loop indices match the Fortran reference
-	// exactly.
+	// exactly. The final iteration's cyclic shift moves the old
+	// r[0] (which is 0 if the XOR fired this iteration) into
+	// r[crc14RegBits-1]; this is harmless because the next iteration
+	// would have overwritten that cell with mc[i+14], and there
+	// is no next iteration — the value lands beyond CRCBits and
+	// is never read by the final pack-into-uint16.
 	for i := range crc14PaddedBits - crc14RegBits + 1 {
 		r[crc14RegBits-1] = mc[i+crc14RegBits-1]
 		if r[0] == 1 {

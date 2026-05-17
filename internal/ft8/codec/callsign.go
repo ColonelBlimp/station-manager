@@ -1,4 +1,4 @@
-package decoder
+package codec
 
 import (
 	"strconv"
@@ -66,8 +66,12 @@ const (
 //
 // Validation that DOES happen:
 //
-//   - Length must be 1..6 (zero-length panics, longer would silently
-//     truncate). Empty input is a bug at the call site.
+//   - Length must be 3..6 (the FT8 standard-callsign length range).
+//     Real std calls are prefix(1-2 chars) + digit + suffix(1-3 chars)
+//     = 3-6 chars total. Inputs shorter than 3 produce arithmetic
+//     values that don't correspond to any real callsign and are
+//     almost certainly call-site bugs; rejecting them noisily is
+//     better than silently producing meaningless c28 values.
 //   - Every character must appear in the broadest alphabet
 //     (callsignAlphaPos1 = space + 0-9 + A-Z). Characters outside
 //     it (lowercase letters, punctuation, non-ASCII) signal a bug
@@ -88,12 +92,12 @@ const (
 // is too small (28 bits don't fit), and the 4 high bits will be
 // zero for any in-range input.
 func CallsignC28(call string) uint32 {
-	if len(call) == 0 || len(call) > 6 {
-		panic("decoder.CallsignC28: callsign length must be 1..6, got len " + strconv.Itoa(len(call)))
+	if len(call) < 3 || len(call) > 6 {
+		panic("codec.CallsignC28: callsign length must be 3..6 (real FT8 std calls are prefix+digit+suffix), got len " + strconv.Itoa(len(call)))
 	}
 	for i := range len(call) {
 		if strings.IndexByte(callsignAlphaPos1, call[i]) < 0 {
-			panic("decoder.CallsignC28: character at index " + strconv.Itoa(i) + " (" + string(call[i]) + ") not in std-call alphabet (space + 0-9 + A-Z)")
+			panic("codec.CallsignC28: character at index " + strconv.Itoa(i) + " (" + string(call[i]) + ") not in std-call alphabet (space + 0-9 + A-Z)")
 		}
 	}
 
@@ -148,7 +152,7 @@ func CallsignC28(call string) uint32 {
 	// int compare per call is negligible vs. catching a corruption
 	// at the boundary.
 	if n28 < 0 || n28 >= 1<<CallsignBits {
-		panic("decoder.CallsignC28: internal arithmetic regression, n28=" + strconv.Itoa(n28) + " out of [0, 2^28)")
+		panic("codec.CallsignC28: internal arithmetic regression, n28=" + strconv.Itoa(n28) + " out of [0, 2^28)")
 	}
 	return uint32(n28)
 }

@@ -1,4 +1,4 @@
-package decoder
+package codec
 
 import (
 	"strconv"
@@ -257,15 +257,6 @@ func TestIsBitLine(t *testing.T) {
 		if got := isBitLine(tc.in); got != tc.want {
 			t.Errorf("isBitLine(%q) = %v, want %v", tc.in, got, tc.want)
 		}
-	}
-}
-
-func TestLdpcErr_Format(t *testing.T) {
-	if got, want := errAt(0, "boom").Error(), "boom"; got != want {
-		t.Errorf("line=0: got %q, want %q", got, want)
-	}
-	if got, want := errAt(7, "boom").Error(), "line 7: boom"; got != want {
-		t.Errorf("line=7: got %q, want %q", got, want)
 	}
 }
 

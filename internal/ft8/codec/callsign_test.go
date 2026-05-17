@@ -1,6 +1,9 @@
-package decoder
+package codec
 
-import "testing"
+import (
+	"math/rand/v2"
+	"testing"
+)
 
 // c28 zones the test vectors land in. Documented behaviour per
 // QEX paper Table 7 (nominal layout) and CallsignC28's algorithm
@@ -117,13 +120,29 @@ func TestCallsignC28_ZoneMatchesVector(t *testing.T) {
 	}
 }
 
-func TestCallsignC28_RejectsEmptyInput(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("CallsignC28(\"\") should panic; did not")
-		}
-	}()
-	CallsignC28("")
+func TestCallsignC28_RejectsTooShortInput(t *testing.T) {
+	// FT8 std calls are 3-6 chars (prefix + digit + suffix).
+	// Lengths 0..2 are rejected because the c28 they'd produce
+	// doesn't correspond to any real callsign.
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"empty", ""},
+		{"one_char", "K"},
+		{"two_char_letter_letter", "MO"},
+		{"two_char_letter_digit", "K1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("CallsignC28(%q) should panic; did not", tc.in)
+				}
+			}()
+			CallsignC28(tc.in)
+		})
+	}
 }
 
 func TestCallsignC28_RejectsOversizedInput(t *testing.T) {
@@ -185,6 +204,35 @@ func TestCallsignC28_EmbeddedSpaceIsDeterministic(t *testing.T) {
 	}
 	// Don't pin the specific value — that's an algorithm artifact,
 	// not a contract. Determinism is the contract.
+}
+
+// TestCallsignC28_PropertyAlwaysAboveSpecialTokens is the property
+// version of TestCallsignC28_OutputAboveSpecialTokens: it generates
+// many random 3-6 char inputs from the pos-1 alphabet and asserts
+// that NONE of them produce a c28 below nTokens (which would mean
+// leaking into the special-token reserved range).
+//
+// The vector-based test pins this for hand-picked cases; this one
+// stress-tests the contract across the full in-contract input space.
+// Deterministic seed so failures are reproducible across runs.
+func TestCallsignC28_PropertyAlwaysAboveSpecialTokens(t *testing.T) {
+	r := rand.New(rand.NewPCG(0xDEAD7E57, 0xBABE7A55))
+	const trials = 5000
+	alphabet := callsignAlphaPos1
+
+	for trial := range trials {
+		length := 3 + r.IntN(4) // 3..6 inclusive
+		buf := make([]byte, length)
+		for j := range buf {
+			buf[j] = alphabet[r.IntN(len(alphabet))]
+		}
+		call := string(buf)
+		got := CallsignC28(call)
+		if got < nTokens {
+			t.Errorf("trial %d: CallsignC28(%q) = %d, below nTokens %d (leaked into special-token range)",
+				trial, call, got, nTokens)
+		}
+	}
 }
 
 func BenchmarkCallsignC28(b *testing.B) {

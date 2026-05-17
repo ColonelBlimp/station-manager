@@ -1,4 +1,4 @@
-package decoder
+package codec
 
 import "strconv"
 
@@ -33,12 +33,18 @@ const (
 //     a base-(18,18,10,10) integer in [0, maxGrid4).
 //   - Reserved tokens "" / "RRR" / "RR73" / "73": fixed values
 //     maxGrid4+1..maxGrid4+4.
-//   - Signed signal report "±NN" (e.g. "-11", "+02"): encoded as
-//     maxGrid4 + (N + g15ReportBias). The FT8 protocol uses reports
-//     in [-30, +99] dB; values outside that range are NOT rejected
-//     by this function but may collide with reserved-token slots
-//     (n=-34..-31 maps to the same stored value as ""/RRR/RR73/73)
-//     — bounds-checking belongs at the message-pack layer above.
+//   - Signed signal report "±N" or "±NN" (sign + 1 or 2 digits,
+//     e.g. "-11", "+02", "+2"): encoded as maxGrid4 + (N + g15ReportBias).
+//     The FT8 protocol uses reports in [-30, +99] dB; values outside
+//     that range are NOT rejected by this function but may collide
+//     with reserved-token slots (n=-34..-31 maps to the same stored
+//     value as ""/RRR/RR73/73; +0 and -0 map to the same value) —
+//     bounds-checking belongs at the message-pack layer above.
+//     Forms like "+002" (zero-padding past 2 digits) and "+9999"
+//     (out-of-range magnitude) are rejected by the shape check —
+//     accept ONLY the canonical sign-plus-1-or-2-digits form so a
+//     buggy caller doesn't silently squeak through with a non-
+//     canonical encoding.
 //
 // Special case: the string "RR73" matches the 4-char-grid letter/
 // letter/digit/digit pattern, but the reference algorithm
@@ -53,7 +59,7 @@ const (
 // Returns uint16 even though the result fits in 15 bits — uint8 is
 // too narrow, and the upper bit will be zero for any in-range input.
 func Grid4ToG15(w string) uint16 {
-	const op = "decoder.Grid4ToG15"
+	const op = "codec.Grid4ToG15"
 
 	// 4-char Maidenhead path. RR73 is short-circuited to its
 	// reserved token rather than encoded as a grid even though it
@@ -78,20 +84,41 @@ func Grid4ToG15(w string) uint16 {
 		return g15_73
 	}
 
-	// Signed report path: must start with '+' or '-' and parse as an
-	// integer. Anything else falls through to the panic.
-	if len(w) >= 2 && (w[0] == '+' || w[0] == '-') {
-		n, err := strconv.Atoi(w)
-		if err == nil {
-			g15 := maxGrid4 + n + g15ReportBias
-			if g15 < 0 || g15 >= 1<<G15Bits {
-				panic(op + ": report " + strconv.Quote(w) + " produces out-of-range g15 " + strconv.Itoa(g15))
-			}
-			return uint16(g15)
+	// Signed report path: canonical shape is sign + 1 or 2 digits
+	// ('+', '-' followed by [0-9]{1,2}). Looser forms — leading
+	// zeros past 2 digits (+002), out-of-range magnitudes (+9999) —
+	// are rejected at the shape check rather than slipping through
+	// to Atoi and producing a value that may or may not survive
+	// the output-range guard. The output-range guard remains as a
+	// belt-and-braces secondary check for any future change that
+	// loosens the shape rule.
+	if isSignedReport(w) {
+		n, _ := strconv.Atoi(w) // safe: shape pre-validated
+		g15 := maxGrid4 + n + g15ReportBias
+		if g15 < 0 || g15 >= 1<<G15Bits {
+			panic(op + ": report " + strconv.Quote(w) + " produces out-of-range g15 " + strconv.Itoa(g15))
 		}
+		return uint16(g15)
 	}
 
-	panic(op + ": input " + strconv.Quote(w) + " is not a 4-char grid (A-R/A-R/0-9/0-9), reserved token (\"\", \"RRR\", \"RR73\", \"73\"), or signed report (\"±NN\")")
+	panic(op + ": input " + strconv.Quote(w) + " is not a 4-char grid (A-R/A-R/0-9/0-9), reserved token (\"\", \"RRR\", \"RR73\", \"73\"), or signed report (sign + 1-or-2 digits)")
+}
+
+// isSignedReport reports whether s matches the canonical signal-
+// report shape: '+' or '-' followed by 1 or 2 ASCII digits.
+func isSignedReport(s string) bool {
+	if len(s) != 2 && len(s) != 3 {
+		return false
+	}
+	if s[0] != '+' && s[0] != '-' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isGrid4 reports whether s matches the 4-char Maidenhead grid

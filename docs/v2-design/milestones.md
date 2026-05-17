@@ -922,7 +922,7 @@ break fails the gate immediately.
 **Fixture layout:**
 
 ```
-internal/ft8/decoder/testdata/
+internal/ft8/codec/testdata/
 ├── synthetic/             # Layer 3 — ft8sim-generated WAVs
 │   ├── README.md          # how to regenerate
 │   ├── cq_known_snr-10.wav
@@ -1030,14 +1030,14 @@ input. No audio capture, no rig, no TX, no storage, no SPA.
   encoder + decoder end-to-end at the bit/symbol/baseband level: an
   arbitrary message goes in, comes out unchanged. Catches any
   encoder/decoder disagreement on the protocol. Always runs.
-- **Layer 3 (synthetic).** Tests iterate `internal/ft8/decoder/testdata/synthetic/`;
+- **Layer 3 (synthetic).** Tests iterate `internal/ft8/codec/testdata/synthetic/`;
   for each `<name>.wav` they run SM's decoder and assert the decoded
   message matches `<name>.wav.expected`. Skip cleanly when the
   directory is empty. Operators generate fixtures locally by running
   `ft8sim` with chosen message + SNR; the resulting `.expected`
   file is the message they handed to `ft8sim`.
 - **Layer 4 (real signals).** Same iteration shape as Layer 3 but
-  over `internal/ft8/decoder/testdata/realsignals/`. Fixtures here
+  over `internal/ft8/codec/testdata/realsignals/`. Fixtures here
   are operator-recorded WAVs paired with `.expected` files written
   by `cmd/ft8-corpus-prep`.
 - **Corpus prep (Layer 5).** `cmd/ft8-corpus-prep` already exists
@@ -1056,23 +1056,23 @@ input. No audio capture, no rig, no TX, no storage, no SPA.
 
 ```
 # Layer 1+2 — always available, always run
-go test -race ./internal/ft8/decoder/...
+go test -race ./internal/ft8/codec/...
 # Expected: all algorithmic + round-trip tests pass
 
 # Layer 3 — operator has generated synthetic fixtures
-ls internal/ft8/decoder/testdata/synthetic/*.wav | wc -l   # > 0
-go test -race ./internal/ft8/decoder/... -run TestSyntheticCorpus
+ls internal/ft8/codec/testdata/synthetic/*.wav | wc -l   # > 0
+go test -race ./internal/ft8/codec/... -run TestSyntheticCorpus
 # Expected: every WAV decoded to the message in its .expected file
 
 # Layer 4 — operator has recorded + prepped real fixtures
-ls internal/ft8/decoder/testdata/realsignals/*.wav | wc -l   # > 0
-go test -race ./internal/ft8/decoder/... -run TestRealSignalCorpus
+ls internal/ft8/codec/testdata/realsignals/*.wav | wc -l   # > 0
+go test -race ./internal/ft8/codec/... -run TestRealSignalCorpus
 # Expected: every WAV decoded; messages match the .expected files
 
 # Layer 5 — adding a new real-signal fixture (developer task)
 go run ./cmd/ft8-corpus-prep ~/recordings/250517_133430.wav \
-    > internal/ft8/decoder/testdata/realsignals/250517_133430.wav.expected
-cp ~/recordings/250517_133430.wav internal/ft8/decoder/testdata/realsignals/
+    > internal/ft8/codec/testdata/realsignals/250517_133430.wav.expected
+cp ~/recordings/250517_133430.wav internal/ft8/codec/testdata/realsignals/
 # Then re-run Layer 4 test — new fixture is in scope automatically
 ```
 

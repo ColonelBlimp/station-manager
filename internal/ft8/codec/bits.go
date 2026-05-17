@@ -1,4 +1,4 @@
-package decoder
+package codec
 
 import "strconv"
 
@@ -35,7 +35,7 @@ func Pack(bits []byte) []byte {
 	out := make([]byte, (len(bits)+7)/8)
 	for i, b := range bits {
 		if b > 1 {
-			panic("decoder.Pack: bit at index " + strconv.Itoa(i) + " is not 0 or 1")
+			panic("codec.Pack: bit at index " + strconv.Itoa(i) + " is not 0 or 1")
 		}
 		if b == 1 {
 			out[i/8] |= 1 << (7 - i%8)
@@ -53,10 +53,10 @@ func Pack(bits []byte) []byte {
 // bit width); passing a wrong n is a call-site bug, not bad data.
 func Unpack(packed []byte, n int) []byte {
 	if n < 0 {
-		panic("decoder.Unpack: negative bit count " + strconv.Itoa(n))
+		panic("codec.Unpack: negative bit count " + strconv.Itoa(n))
 	}
 	if n > 8*len(packed) {
-		panic("decoder.Unpack: requested " + strconv.Itoa(n) + " bits but only " + strconv.Itoa(8*len(packed)) + " available")
+		panic("codec.Unpack: requested " + strconv.Itoa(n) + " bits but only " + strconv.Itoa(8*len(packed)) + " available")
 	}
 	out := make([]byte, n)
 	for i := range n {

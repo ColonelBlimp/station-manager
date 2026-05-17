@@ -1,4 +1,4 @@
-package decoder
+package codec
 
 import "testing"
 
@@ -117,16 +117,74 @@ func TestGrid4ToG15_RejectsInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestGrid4ToG15_ReportOverflowPanics(t *testing.T) {
-	// A 3-or-more-digit positive report exceeds the 15-bit range
-	// (+335 + bias = 370, plus maxGrid4 = 32770 > 32768). The
-	// output-range guard must catch this.
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Grid4ToG15(\"+999\") should panic on 15-bit overflow; did not")
-		}
-	}()
-	Grid4ToG15("+999")
+func TestGrid4ToG15_DocumentedCollisions(t *testing.T) {
+	// grid.go documents that reports -34..-31 collide with the four
+	// reserved tokens via the +35 bias arithmetic. Pin each pairing
+	// explicitly so any future change to g15ReportBias is forced
+	// through an explicit doc + test update. This also pins the
+	// signed-zero collision (+0 and -0 both map to maxGrid4+35).
+	cases := []struct {
+		name     string
+		report   string
+		reserved uint16
+	}{
+		{"minus_34_collides_with_empty", "-34", g15Empty},
+		{"minus_33_collides_with_RRR", "-33", g15RRR},
+		{"minus_32_collides_with_RR73", "-32", g15RR73},
+		{"minus_31_collides_with_73", "-31", g15_73},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Grid4ToG15(tc.report)
+			if got != tc.reserved {
+				t.Errorf("Grid4ToG15(%q) = %d; expected to collide with reserved %d", tc.report, got, tc.reserved)
+			}
+		})
+	}
+
+	// Signed-zero collision: +0 and -0 both encode to maxGrid4 + bias.
+	if g1, g2 := Grid4ToG15("+0"), Grid4ToG15("-0"); g1 != g2 {
+		t.Errorf("expected +0 and -0 to collide; got %d vs %d", g1, g2)
+	}
+}
+
+func TestGrid4ToG15_RejectsNonCanonicalReports(t *testing.T) {
+	// The strict report shape is sign + 1 or 2 digits. Looser forms
+	// that Atoi alone would accept must be rejected so a buggy
+	// caller can't slip in a non-canonical encoding.
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"plus_002_leading_zero_padding", "+002"},
+		{"plus_9999_overflow_magnitude", "+9999"},
+		{"plus_only_no_digits", "+"},
+		{"plus_sign_with_letter", "+A"},
+		{"plus_sign_with_three_digits", "+123"},
+		{"trailing_whitespace", "+02 "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("Grid4ToG15(%q) should panic on non-canonical report shape; did not", tc.in)
+				}
+			}()
+			Grid4ToG15(tc.in)
+		})
+	}
+}
+
+func TestGrid4ToG15_AcceptsOneDigitReport(t *testing.T) {
+	// "+2" is canonical (sign + 1 digit). Reference reports
+	// gen_crc14 produces 32437 for "+2" (same as for "+02" because
+	// Atoi reads both as the integer 2).
+	if got, want := Grid4ToG15("+2"), uint16(32437); got != want {
+		t.Errorf("Grid4ToG15(\"+2\") = %d, want %d", got, want)
+	}
+	if got, want := Grid4ToG15("-2"), uint16(32433); got != want {
+		t.Errorf("Grid4ToG15(\"-2\") = %d, want %d", got, want)
+	}
 }
 
 func TestIsGrid4(t *testing.T) {
