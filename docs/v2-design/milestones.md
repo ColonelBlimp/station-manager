@@ -995,20 +995,42 @@ all nine encode-side message-codec primitives complete in
 `internal/ft8/codec/`, ~85 tests pinned against the public-domain
 QEX ref [14] reference programs, all benchmarks zero- or one-
 allocation. Layer 2 (message-format packing per QEX Table 1 i3.n3
-types) is the natural next step. Layers 3+4 (signal-processing
-pipeline + WAV-corpus tests) and the LDPC decoder remain.
+types) is mid-flight: **Phase 1 (BitBuilder utility) shipped
+2026-05-18; Phase 2B (Type 1 encoder) + Phase 2C (Type 1 decoder
++ round-trip + encoder routing fix) shipped 2026-05-19**. Type 1
+("Std Msg") now round-trips long-format std callsigns (5-char-
+1-prefix and 6-char-2-prefix) bit-for-bit through `EncodeMessage`
+→ `DecodeMessage` → `EncodeMessage`. Short callsigns (3–4 char
+and 5-char-2-prefix) route through `HashedCallC28` and decode
+to a sentinel error (`ErrCallsignNeedsHashLookup`) — the FT8
+service layer's running 22-bit hash table (Phase 4) will resolve
+those. Phase 3 (Types 2 / 4 / 5 / 0.0 — EU VHF /P, NonStd Call,
+EU VHF hashes, Free Text) is next; Phase 4 covers the specialty
+types (Field Day, RTTY RU, DXpedition, Telemetry) + the hash table.
+Layers 3+4 (signal-processing pipeline + WAV-corpus tests) and the
+LDPC decoder remain.
 
 | Layer 1 primitive | File | ns/op | allocs |
 |---|---|---|---|
 | `Pack` / `Unpack` (bit-per-byte ↔ packed-byte) | `bits.go` | — | 0 |
 | `CRC14` (polynomial 0x6757) | `crc14.go` | 973 | 0 |
-| `CallsignC28` (standard call → 28 bits) | `callsign.go` | 34–46 | 0 |
+| `CallsignC28` (standard call → 28 bits) + `C28ToCallsign` inverse | `callsign.go` | 34–46 | 0 |
 | LDPC(174,91) matrices + `LDPCEncode` | `ldpc.go`, `qexref14/` | 4123 | 1 |
-| `Grid4ToG15` (4-char grid / reserved / report) | `grid.go` | 4–9 | 0 |
+| `Grid4ToG15` (4-char grid / reserved / report) + `G15ToGrid4` inverse | `grid.go` | 4–9 | 0 |
 | `Grid6ToG25` (6-char grid) | `grid.go` | 4.6 | 0 |
 | `HashCodes` (h10/h12/h22) + `HashedCallC28` | `hashcodes.go` | 50 | 0 |
 | `FreeTextToF71` (13-char free text → 71 bits) | `freetext.go` | 150 | 1 |
 | `CallsignC58` (nonstandard / compound call) | `nonstdcall.go` | 48 | 0 |
+
+Phase 2 additions:
+
+| Layer 2 component | File | Notes |
+|---|---|---|
+| `BitBuilder` | `bitbuilder.go` | MSB-first composer; chainable `Append` + `AppendBits`; ~271 ns for a 77-bit Type 1 build |
+| `Message` + `MessageType` | `message.go` | Concrete struct discriminated by `Type`; 10 enum values declared, only `MessageTypeStd` packs/unpacks today |
+| `EncodeMessage` + `encodeStd` + `stdCallToC28` | `encode.go` | Type 1 packer; routes short calls through `HashedCallC28` per QEX §A |
+| `DecodeMessage` + `decodeStd` + `readBitsUint64` | `decode.go` | Type 1 unpacker; sentinels for Hash22 + Token surfaces |
+| `C28Kind` + `G15Kind` discriminators | `callsign.go`, `grid.go` | Route-B kind enums for the multi-modal c28/g15 partition spaces |
 
 The codec package was renamed from `internal/ft8/decoder` →
 `internal/ft8/codec` mid-sequence (when it became clear the same
