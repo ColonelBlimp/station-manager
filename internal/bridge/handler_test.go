@@ -94,17 +94,27 @@ func TestHTTPHandler_StreamsPipelineEvents(t *testing.T) {
 	// Do() returns as soon as response headers are flushed (which
 	// happens BEFORE Subscribe in the handler), so feedLine could
 	// otherwise race the registration and publish to zero
-	// subscribers. The bootstrap READ write landing in fake.writes
-	// (writes[0]=INIT from pipeline startup, writes[1]=READ from
-	// bootstrap) proves Subscribe completed.
+	// subscribers.
+	//
+	// Write log shape post-2026-05-16 (supervisor work):
+	//   writes[0] = INIT          (runPipeline startup)
+	//   writes[1] = post-INIT READ (runPipeline — fresh snapshot every cycle)
+	//   writes[2] = bootstrap READ (TriggerBootstrap, fires AFTER Subscribe)
+	//
+	// Waiting for writes >= 3 proves both Subscribe + bootstrap have
+	// completed. Pre-2026-05-16 this was writes >= 2 because
+	// runPipeline only wrote INIT at startup; the post-INIT READ added
+	// in the supervisor work shifted the count, but this test was
+	// missed during that refactor (see TestHTTPHandler_ShutdownChClosesStream
+	// for the matched update).
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 2 {
+		if len(fake.recordedWrites()) >= 3 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if len(fake.recordedWrites()) < 2 {
+	if len(fake.recordedWrites()) < 3 {
 		t.Fatal("handler did not subscribe + bootstrap within 1s")
 	}
 
