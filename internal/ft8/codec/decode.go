@@ -129,8 +129,9 @@ func callsignKindError(kind C28Kind, field string) error {
 		return fmt.Errorf("%w: %s", ErrCallsignIsToken, field)
 	case C28KindHash22:
 		return fmt.Errorf("%w: %s", ErrCallsignNeedsHashLookup, field)
+	default:
+		panic("codec.DecodeMessage: " + field + " decoded to unknown C28Kind — C28ToCallsign contract regression")
 	}
-	panic("codec.DecodeMessage: " + field + " decoded to C28KindUnknown — C28ToCallsign contract regression")
 }
 
 // readBitsUint64 extracts a bit-field from the bit-per-byte buffer,
