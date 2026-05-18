@@ -16,6 +16,8 @@ reference tarball published alongside the QEX paper:
 |---|---|
 | `generator.dat` | LDPC(174,91) generator matrix — 83 rows × 91 columns, ASCII '0'/'1' format. Row *i* specifies which message bits contribute (XOR'd modulo 2) to parity bit *i*. |
 | `parity.dat` | LDPC(174,91) sparse parity-check matrix — 83 rows × 174 columns. The data section lists 174 lines (one per column), each containing 3 1-based row indices where that column has a 1. |
+| `arrl_rac_sections.txt` | ARRL / RAC Field Day section abbreviations (84 entries: 83 sections + `"DX "` catch-all). Fortran-90 `data csec/ ... /` statement format with 3-character right-padded strings; consumed by Type 0.3 / 0.4 (Field Day) message packing per QEX Table 1. |
+| `states_provinces.txt` | US states + Canadian provinces + DC (64 entries). Fortran-90 `data cmult/ ... /` statement format with 3-character right-padded strings; consumed by Type 3 (RTTY Roundup) message packing per QEX Table 1. |
 
 ## Licensing
 
@@ -43,9 +45,16 @@ implementation reference for Station Manager — see ADR 0021's
 The matrices are load-bearing data: the LDPC encoder/decoder cannot
 function without them, and they are not algorithmically reconstructible
 from a brief textual description (they're hand-crafted by the FT8
-designers for good distance properties at this code rate). Vendoring
-avoids any runtime dependency on the operator having downloaded
-reference [14] separately.
+designers for good distance properties at this code rate).
+
+The two lookup tables (`arrl_rac_sections.txt`, `states_provinces.txt`)
+are similarly load-bearing for Phase 4 message types — without them,
+Type 0.3 / 0.4 (Field Day) and Type 3 (RTTY Roundup) packing cannot
+emit the section / state code. They're vendored ahead of Phase 4 to
+keep the QEX ref [14] bucket complete in one place.
+
+Vendoring all four files avoids any runtime dependency on the operator
+having downloaded reference [14] separately.
 
 ## Provenance verification
 
@@ -55,3 +64,8 @@ invariants in `../ldpc_test.go`:
 - `generator.dat` is 83 rows × 91 columns of '0'/'1' characters.
 - `parity.dat` is sparse 83×174: each column has exactly 3 ones; each
   row has 6 or 7 ones.
+
+The lookup tables are vendored verbatim from the tarball (Fortran-90
+`data` statement format). They have no Go consumer yet — `//go:embed`
+loaders + parsers land alongside the Type 0.3 / 0.4 and Type 3
+encoders in Phase 4 of the Layer 2 plan.
