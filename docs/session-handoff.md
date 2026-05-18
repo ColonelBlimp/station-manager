@@ -240,17 +240,24 @@ Closed out Layer 1 by shipping the four remaining string-primitive leaves in the
 | 3 | RTTY RU | `t1 c28 c28 R1 r3 s13` + i3.n3 | + new s13 + states_provinces lookup |
 | 0.5 | Telemetry | `t71` + i3.n3 | + new t71 |
 
+**Oracle policy (load-bearing — reconciles this plan with the layered test architecture in `milestones.md` § Milestone 4 design preamble).** Layer 2, like Layer 1, runs in CI with zero external state — *jt9 is not a Layer-1 or Layer-2 dependency* and never has been since the session-68 architectural restructure. Concretely:
+
+- **Spec-vector source: QEX paper Table 1.** Each i3.n3 message type's bit layout is specified deterministically in the paper. Vectors for "this message string packs to these 77 bits" can be derived by hand or by a small Go test helper that walks the documented layout. The paper is the spec; the spec is what we implement against.
+- **Reference-program source (where one exists in QEX ref [14]):** the public-domain tarball at QEX paper reference [14] is fair game per the licensing constraint and is the same source we used for Layer 1's nine primitives. The first job in Phase 1 is **survey the tarball** for a message-packer reference (likely a `pack77`-style program). If one ships, it's the spec-vector oracle for Layer 2 — same shape as Layer 1's use of `std_call_to_c28` / `hashcodes` / etc.
+- **Round-trip is internal to SM.** Encoder ↔ decoder consistency requires no external oracle by definition.
+- **WSJT-X binaries (`jt9`, `jt9code`, `ft8sim`) are NOT consulted at this layer.** They are confined to Layer 5 (`cmd/ft8-corpus-prep`, a developer-only CLI used once to seed Layer 4 fixtures). An earlier draft of this plan asked to "verify jt9code output" as a Phase 1 task — that wording predates the session-68 layered architecture and is the wrong question. The right question is the QEX ref [14] survey above.
+
 **Phase plan:**
 
 - **Phase 1 — Foundation** (small, before any message type):
-  - `BitBuilder` utility: `Append(value uint64, bits int)` accumulating into `[]byte` bit-per-byte; lean toward method-chained idiom.
-  - **Verify `jt9code` output** (77-bit body? full 174-bit codeword? message bits or symbols?) — determines whether we have a direct Layer-2 oracle or have to chain LDPC-decode first. ~5 minute check.
-  - Vendor remaining QEX ref [14] lookup tables: `states_provinces.txt` + `arrl_rac_sections.txt` into `internal/ft8/codec/qexref14/`. Embed at init.
+  - **Survey QEX ref [14] tarball** for a Layer-2 message-packer reference (analogous to Layer 1's `std_call_to_c28` / `hashcodes` / etc.). If one ships, it becomes the spec-vector oracle (run locally, capture outputs as test fixtures, mirror the Layer 1 pattern). If not, vectors derive from QEX paper Table 1's deterministic bit layouts. ~5–15 minute check; gates the vector-generation approach for Phase 2.
+  - `BitBuilder` utility: `Append(value uint64, bits int)` accumulating into `[]byte` bit-per-byte; lean toward method-chained idiom. Purely additive; no oracle dependency.
+  - Vendor remaining QEX ref [14] lookup tables: `states_provinces.txt` + `arrl_rac_sections.txt` into `internal/ft8/codec/qexref14/`. Embed at init. Only needed by Phase 4 types but cheap to vendor now alongside the survey.
 
 - **Phase 2 — Canonical pattern via Type 1 (Std Msg):**
   - `Message` representation — concrete struct with a type field + discriminated content (Go-idiomatic, easy to inspect, simpler test fixtures than interface).
   - Top-level `ParseMessage(s string) (Message, error)` that classifies and routes; `FormatMessage(m Message) string` reverse.
-  - Type 1 encode + decode + spec vectors via jt9code + round-trip suite. Pattern other types follow.
+  - Type 1 encode + decode + spec vectors (from the Phase 1 oracle choice — QEX ref [14] reference if one exists, else hand-derived from Table 1) + round-trip suite. Pattern other types follow.
 
 - **Phase 3 — Common types** (priority order): Type 0.0 (free text), Type 4 (nonstd), Type 2 (EU VHF /P), Type 5 (EU VHF hashes).
 
@@ -262,7 +269,7 @@ Phases 1–3 cover ~99% of real on-air FT8 traffic.
 
 1. **BitBuilder API shape** — lean: method-chained `bb.Append(c28, 28).Append(r1, 1)...`.
 2. **Message-type representation** — lean: concrete struct, not interface.
-3. **`jt9code` as Layer 2 oracle** — must verify it gives 77-bit message bits. If only codewords, alternative is `ft8sim` → real audio → `jt9 -8` chain.
+3. **Layer 2 vector source** — does QEX ref [14] ship a `pack77`-style reference? If yes, use it (same shape as Layer 1's nine primitives). If no, derive vectors from QEX paper Table 1's deterministic bit layouts. Decided by the Phase 1 survey. *(Not "jt9code as Layer 2 oracle" — that was the wrong framing per the oracle policy above.)*
 4. **Lookup-table parse format** — `//go:embed` + parse at init, expose lookup functions. Same pattern as LDPC matrices.
 5. **Error vs panic at message layer** — lean: `return (Message, error)` since input is user data here, not internal-invariant-violated bits. (Layer 1 panics; Layer 2 errors.)
 
@@ -273,11 +280,11 @@ Phases 1–3 cover ~99% of real on-air FT8 traffic.
 {"CQ G4ABC IO91", "...", "CQ G4ABC IO91"},
 ```
 
-For each: `ParseMessage(in) → enc → 77 bits` (compare to expected body); `decode(body) → Message → FormatMessage → string` (compare to expected re-formatted string). Both halves must match.
+For each: `ParseMessage(in) → enc → 77 bits` (compare to expected body); `decode(body) → Message → FormatMessage → string` (compare to expected re-formatted string). Both halves must match. The 77-bit expected values come from the Phase 1 oracle (ref-[14] program output if available, else hand-derived from Table 1).
 
 **Scope estimate:** per type ~150-300 lines (encode + decode + tests + spec vectors). Phases 1–3 ≈ 1500-2000 lines net.
 
-**Start point next session:** Phase 1 — BitBuilder + jt9code-output verification + lookup-table vendoring. Smallest sensible first commit, unblocks everything else.
+**Start point next session:** Phase 1 — QEX ref [14] survey + BitBuilder + lookup-table vendoring. Smallest sensible first commit, unblocks everything else.
 
 ### Session 67 (2026-05-17) — Logbook QSO-count badge wired end-to-end
 
