@@ -169,3 +169,130 @@ func CallsignC28(call string) uint32 {
 	}
 	return uint32(n28)
 }
+
+// C28Kind discriminates which partition of the c28 value space a
+// decoded c28 falls into per QEX paper Table 7. C28ToCallsign
+// returns the Kind alongside the recovered string so callers can
+// dispatch on it.
+type C28Kind int
+
+const (
+	// C28KindUnknown is the zero value. C28ToCallsign never returns
+	// it on real input; useful as a default for code holding a Kind
+	// variable before assignment.
+	C28KindUnknown C28Kind = iota
+
+	// C28KindToken indicates c28 ∈ [0, nTokens) — a special message
+	// token (CQ, DE, QRZ, or "CQ <suffix>"). C28ToCallsign currently
+	// returns "" for this kind; token-name decoding lands alongside
+	// ParseMessage in Phase 2D.
+	C28KindToken
+
+	// C28KindHash22 indicates c28 ∈ [nTokens, stdCallOffset) — a
+	// 22-bit callsign hash. C28ToCallsign returns ""; original-call
+	// recovery requires a running hash table populated from prior
+	// decodes (the FT8 service layer's responsibility, not the
+	// codec's). Per QEX §A, short std calls (3-4 char and 5-char-2-
+	// prefix calls) also produce values in this range via
+	// HashedCallC28 — their recovery uses the same hash table.
+	C28KindHash22
+
+	// C28KindStdCall indicates c28 ∈ [stdCallOffset, 2^28) — a
+	// standard amateur callsign produced via CallsignC28 with all
+	// non-negative per-position indices. Only "long-format" std
+	// calls (5-char-1-prefix and 6-char-2-prefix) land here cleanly;
+	// other shapes produce hash-range values and must go through
+	// HashedCallC28. C28ToCallsign returns the recovered callsign.
+	C28KindStdCall
+)
+
+// C28ToCallsign decodes a c28 value back to its string form by
+// inverting CallsignC28. The C28Kind discriminator tells the caller
+// which partition of the c28 value space the input occupied per
+// QEX paper Table 7. Only C28KindStdCall yields a non-empty
+// recovered string from this function alone — C28KindToken and
+// C28KindHash22 callers need additional state (token table or
+// 22-bit hash table) to recover the original message fragment.
+//
+// For C28KindStdCall, the inverse is a straightforward mixed-base
+// divmod against the per-position alphabet sizes. The std-call
+// range [stdCallOffset, 2^28) guarantees all forward indices were
+// non-negative (the negative-index cases that arise from short-call
+// right-padding produce values below stdCallOffset, in the hash
+// range), so no shift is needed and each extracted index lands
+// directly in [0, posSize) for the corresponding alphabet lookup.
+//
+// The returned callsign is the 6-char right-padded form with
+// leading spaces stripped. For tuples that don't correspond to a
+// real callsign shape (e.g. wire bits decoded from a corrupted
+// message), the string is the arithmetic inverse of the bits and
+// may look like a non-callsign — the codec doesn't classify shapes.
+//
+// Trailing spaces in the recovered string are preserved (the pos4..6
+// alphabet includes space, so trailing spaces are valid characters
+// at those positions, not padding). Such strings will NOT round-trip
+// through CallsignC28 because that function rejects space characters
+// in the input — they originate only from corrupted wire input or
+// hand-constructed bit patterns, not from real-callsign encodings.
+func C28ToCallsign(c28 uint32) (string, C28Kind) {
+	if c28 < nTokens {
+		return "", C28KindToken
+	}
+	if c28 < stdCallOffset {
+		return "", C28KindHash22
+	}
+	return c28ToStdCallsign(c28), C28KindStdCall
+}
+
+// c28ToStdCallsign inverts CallsignC28 for c28 ∈ [stdCallOffset, 2^28).
+// Precondition: caller has verified c28 is in the std-call partition;
+// otherwise the divmod produces bytes that may index out of the
+// per-position alphabets and the array indexing will panic.
+func c28ToStdCallsign(c28 uint32) string {
+	const op = "codec.C28ToCallsign"
+
+	// The forward computes
+	//   n28 = stdCallOffset + m1*i1 + m2*i2 + m3*i3 + m4*i4 + m5*i5 + i6
+	// where m_k is the product of the per-position alphabet sizes
+	// for positions k+1..6. The mixed-base divmod recovers each i_k
+	// in turn by dividing by the corresponding alphabet size from
+	// position 6 backward. Constants here mirror the forward's m_k
+	// chain by referring to the alphabet sizes directly so any
+	// alphabet edit propagates to both directions at compile time.
+	const (
+		a2Sz = len(callsignAlphaPos2) // 36
+		a3Sz = len(callsignAlphaPos3) // 10
+		a4Sz = stdCallAlphaSz         // 27
+	)
+
+	x := int(c28) - stdCallOffset
+
+	i6 := x % a4Sz
+	x /= a4Sz
+	i5 := x % a4Sz
+	x /= a4Sz
+	i4 := x % a4Sz
+	x /= a4Sz
+	i3 := x % a3Sz
+	x /= a3Sz
+	i2 := x % a2Sz
+	i1 := x / a2Sz
+
+	// Belt-and-braces: c28 in std-call range guarantees i1 < 37.
+	// (i1 < 0 is unreachable since x >= 0 by partition.) An
+	// out-of-range value here would indicate the precondition was
+	// violated by the caller.
+	if i1 >= len(callsignAlphaPos1) {
+		panic(op + ": i1=" + strconv.Itoa(i1) + " ≥ 37 for c28=" + strconv.FormatUint(uint64(c28), 10))
+	}
+
+	var padded [6]byte
+	padded[0] = callsignAlphaPos1[i1]
+	padded[1] = callsignAlphaPos2[i2]
+	padded[2] = callsignAlphaPos3[i3]
+	padded[3] = callsignAlphaPos4[i4]
+	padded[4] = callsignAlphaPos4[i5]
+	padded[5] = callsignAlphaPos4[i6]
+
+	return strings.TrimLeft(string(padded[:]), " ")
+}

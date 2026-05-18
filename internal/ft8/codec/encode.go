@@ -3,6 +3,7 @@ package codec
 import (
 	stderrors "errors"
 	"fmt"
+	"strconv"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
@@ -76,9 +77,9 @@ func encodeStd(m Message) ([]byte, error) {
 	}
 
 	var b BitBuilder
-	b.Append(uint64(CallsignC28(m.Call1)), CallsignBits).
+	b.Append(uint64(stdCallToC28(m.Call1)), CallsignBits).
 		Append(boolBit(m.Rover1), 1).
-		Append(uint64(CallsignC28(m.Call2)), CallsignBits).
+		Append(uint64(stdCallToC28(m.Call2)), CallsignBits).
 		Append(boolBit(m.Rover2), 1).
 		Append(boolBit(m.AckBit), 1).
 		Append(uint64(Grid4ToG15(m.Grid)), G15Bits).
@@ -87,10 +88,55 @@ func encodeStd(m Message) ([]byte, error) {
 		// Belt-and-braces: the field widths are constants and the
 		// total is fixed at compile time. A regression in any width
 		// constant lands here rather than corrupting the wire.
-		panic("codec.encodeStd: assembled bit count is not 77 — width constants out of sync")
+		panic("codec.encodeStd: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
 	}
 	return b.Bits(), nil
 }
+
+// stdCallToC28 picks between CallsignC28 and HashedCallC28 based on
+// whether the call has "long-format" std-call shape per QEX paper
+// §A. Only long-format calls produce c28 values in the std-call
+// range [stdCallOffset, 2^28) that round-trip cleanly via
+// CallsignC28 ↔ C28ToCallsign. Other shapes (3-char, 4-char, and
+// 5-char-2-prefix calls) produce values in the hash range either
+// directly (via HashedCallC28) or via CallsignC28's negative-index
+// arithmetic — but the latter doesn't correspond to the call's
+// actual 22-bit hash, so a receiver doing hash-table lookup would
+// never find the call. Routing short calls through HashedCallC28
+// produces the hash-range c28 the receiver expects.
+//
+// Long-format shapes:
+//   - 5 chars: [letter][digit][letter]{3}            (e.g. G4ABC)
+//   - 6 chars: [alnum]{2}[digit][letter]{3} with ≥1  (e.g. AB1CDE, 2E0XYZ)
+//     letter in the 2-char prefix
+//
+// All other std-call-shape inputs route through HashedCallC28.
+// Precondition: caller has passed validateStdCallsign so the input
+// matches some std-call shape.
+func stdCallToC28(call string) uint32 {
+	if isLongFormatStdCallsign(call) {
+		return CallsignC28(call)
+	}
+	return HashedCallC28(call)
+}
+
+// isLongFormatStdCallsign reports whether s is a std-call shape
+// that produces a c28 value in the std-call range (rather than the
+// hash range). See stdCallToC28 for the shape catalog.
+func isLongFormatStdCallsign(s string) bool {
+	switch len(s) {
+	case 5:
+		// 1-char prefix: [letter][digit][letter]{3}
+		return isLetter(s[0]) && isDigit(s[1]) && allLetters(s[2:])
+	case 6:
+		// 2-char prefix: [alnum]{2} ≥1-letter + [digit] + [letter]{3}
+		return allAlnum(s[:2]) && hasLetter(s[:2]) && isDigit(s[2]) && allLetters(s[3:])
+	}
+	return false
+}
+
+func isLetter(c byte) bool { return c >= 'A' && c <= 'Z' }
+func isDigit(c byte) bool  { return c >= '0' && c <= '9' }
 
 // boolBit converts a Go bool to its 1-bit numeric form for BitBuilder.
 func boolBit(v bool) uint64 {
@@ -199,6 +245,15 @@ func allLetters(s string) bool {
 // explicitly delegates upward — without it, "-34" stores to the
 // same g15 slot as "" (blank), and the wire receiver would decode
 // the report as a blank message.
+//
+// Lenient shape for signed reports: accepts "+0", "+00", "-0", "+2",
+// "+02" interchangeably — all valid forms per the shape predicate
+// (sign + 1-or-2 digits). The encoder produces the same g15 value
+// for these equivalent inputs (e.g. "+0", "+00", "-0" all encode to
+// the +0 slot; the protocol has only one "zero report" cell). On
+// the receive side, G15ToGrid4 always canonicalises to the 2-digit
+// form ("+00"), so a UI that re-displays decoded values will show
+// "+00" even if the operator typed "+0".
 func validateG15Slot(g string) error {
 	const op errors.Op = "codec.validateG15Slot"
 	switch g {
@@ -220,19 +275,9 @@ func validateG15Slot(g string) error {
 
 // signedReportValue parses a pre-validated signed-report string
 // ("+02", "-11") into its integer value. isSignedReport must have
-// returned true; otherwise the result is undefined.
+// returned true; otherwise the result is the strconv.Atoi error
+// path (ignored — the precondition rules this out).
 func signedReportValue(s string) int {
-	// Hand-parse rather than strconv.Atoi: the preconditions are
-	// pinned by isSignedReport, so we don't need the broader-parse
-	// semantics, and a 2-digit ASCII loop is unambiguous about its
-	// 0..99 magnitude cap.
-	neg := s[0] == '-'
-	n := 0
-	for i := 1; i < len(s); i++ { // i starts at 1 — `range len(s)` would start at 0
-		n = n*10 + int(s[i]-'0')
-	}
-	if neg {
-		return -n
-	}
+	n, _ := strconv.Atoi(s) // precondition: isSignedReport(s) == true
 	return n
 }

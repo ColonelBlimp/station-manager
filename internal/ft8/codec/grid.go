@@ -104,6 +104,125 @@ func Grid4ToG15(w string) uint16 {
 	panic(op + ": input " + strconv.Quote(w) + " is not a 4-char grid (A-R/A-R/0-9/0-9), reserved token (\"\", \"RRR\", \"RR73\", \"73\"), or signed report (sign + 1-or-2 digits)")
 }
 
+// G15Kind discriminates the three sub-slots multiplexed into the
+// 15-bit g15 field per QEX paper Table 2. G15ToGrid4 returns the
+// Kind alongside the decoded string so callers can act on the
+// distinction (e.g. show "RR73" as a sign-off vs. show "-11" as a
+// report vs. show "FN20" as a grid).
+type G15Kind int
+
+const (
+	// G15KindUnknown is the zero value; never returned by G15ToGrid4
+	// on real input.
+	G15KindUnknown G15Kind = iota
+
+	// G15KindGrid4 indicates g15 ∈ [0, maxGrid4) — a 4-char
+	// Maidenhead locator. G15ToGrid4 returns the locator string
+	// ("FN20", "IO91", etc.).
+	G15KindGrid4
+
+	// G15KindReserved indicates g15 ∈ {maxGrid4+1..maxGrid4+4} — one
+	// of the reserved message words. G15ToGrid4 returns "" / "RRR" /
+	// "RR73" / "73".
+	G15KindReserved
+
+	// G15KindReport indicates g15 ∈ (maxGrid4+4, 2^15) — a signed
+	// signal report. G15ToGrid4 returns the canonical "+NN" / "-NN"
+	// form. Only reports in the FT8 protocol band [-30, +99] are
+	// produced by Grid4ToG15; values outside that band (e.g. from a
+	// corrupted wire decode) still round-trip through here but the
+	// returned string may fall outside the protocol-valid band.
+	G15KindReport
+)
+
+// G15ToGrid4 inverts Grid4ToG15. The G15Kind discriminator tells
+// the caller which sub-slot of the multi-modal g15 field the value
+// occupied per QEX paper Table 2.
+//
+// Decoding is a partition check followed by per-partition arithmetic:
+//   - g15 < maxGrid4: 4-char Maidenhead via base-(18,18,10,10) divmod.
+//   - g15 == maxGrid4+1..4: lookup in the reserved-token table.
+//   - otherwise: signed report via (g15 - maxGrid4 - g15ReportBias).
+//
+// Wire-input asymmetry: Grid4ToG15 produces reports only in the
+// protocol band [-30, +99] dB and never produces g15 == maxGrid4
+// (the slot between the 4-char-grid range and the reserved-tokens
+// run, which is unassigned). But this inverse accepts any 15-bit
+// value, so a corrupted wire decode landing at e.g. g15 == maxGrid4
+// surfaces as a "-35" report — outside the protocol band. Callers
+// that care about protocol validity (vs. wire validity) re-check
+// the returned Report value against [reportMin, reportMax].
+//
+// Out-of-range g15 (>= 2^15) panics — the upper 1 bit of a uint16
+// would have to be set, which is a programmer bug since the slot is
+// 15 bits wide.
+func G15ToGrid4(g15 uint16) (string, G15Kind) {
+	const op = "codec.G15ToGrid4"
+	if g15 >= 1<<G15Bits {
+		panic(op + ": g15=" + strconv.Itoa(int(g15)) + " outside [0, 2^15) — caller should have masked to 15 bits before decoding")
+	}
+
+	if g15 < maxGrid4 {
+		// Base-(18,18,10,10) divmod inverse of Grid4ToG15's
+		// arithmetic. The forward sets v = (c0-'A')*18*10*10 +
+		// (c1-'A')*10*10 + (c2-'0')*10 + (c3-'0'); the inverse
+		// recovers each character by successive division.
+		v := int(g15)
+		c3 := v % 10
+		v /= 10
+		c2 := v % 10
+		v /= 10
+		c1 := v % 18
+		c0 := v / 18
+		grid := []byte{
+			byte('A' + c0),
+			byte('A' + c1),
+			byte('0' + c2),
+			byte('0' + c3),
+		}
+		return string(grid), G15KindGrid4
+	}
+
+	switch g15 {
+	case g15Empty:
+		return "", G15KindReserved
+	case g15RRR:
+		return "RRR", G15KindReserved
+	case g15RR73:
+		return "RR73", G15KindReserved
+	case g15_73:
+		return "73", G15KindReserved
+	}
+
+	// Signed report. Forward stored = maxGrid4 + n + g15ReportBias,
+	// so n = stored - maxGrid4 - g15ReportBias.
+	n := int(g15) - maxGrid4 - g15ReportBias
+	return formatSignedReport(n), G15KindReport
+}
+
+// formatSignedReport renders a signed integer in the FT8 signal-
+// report canonical form: sign + 2 digits with a leading zero for
+// magnitudes 0-9 ("+02", "-22"). Matches the WSJT-X display
+// convention. Values outside [-99, +99] (which Grid4ToG15 won't
+// generate but a corrupted wire decode could) produce a 3-digit
+// magnitude.
+func formatSignedReport(n int) string {
+	sign := byte('+')
+	mag := n
+	if n < 0 {
+		sign = '-'
+		mag = -n
+	}
+	if mag < 10 {
+		return string([]byte{sign, '0', byte('0' + mag)})
+	}
+	if mag < 100 {
+		return string([]byte{sign, byte('0' + mag/10), byte('0' + mag%10)})
+	}
+	// Out-of-protocol range (3+ digits magnitude). Spell out fully.
+	return string(sign) + strconv.Itoa(mag)
+}
+
 // isSignedReport reports whether s matches the canonical signal-
 // report shape: '+' or '-' followed by 1 or 2 ASCII digits.
 func isSignedReport(s string) bool {

@@ -158,11 +158,15 @@ func TestEncodeMessage_Type1_LayoutMatchesQEXTable1(t *testing.T) {
 
 			// Independent re-assembly via Layer 1 primitives — each
 			// field expanded MSB-first into the position QEX Table 1
-			// specifies.
+			// specifies. Uses stdCallToC28 (not CallsignC28 directly)
+			// because the encoder routes 3-4 char and 5-char-2-prefix
+			// calls through HashedCallC28; bypassing the routing in
+			// the expected output would mis-spec the test post the
+			// Phase 2C encoder fix.
 			want := make([]byte, 0, MessageBits)
-			want = append(want, bitsOfValue(uint64(CallsignC28(tc.msg.Call1)), CallsignBits)...)
+			want = append(want, bitsOfValue(uint64(stdCallToC28(tc.msg.Call1)), CallsignBits)...)
 			want = append(want, boolBitByte(tc.msg.Rover1))
-			want = append(want, bitsOfValue(uint64(CallsignC28(tc.msg.Call2)), CallsignBits)...)
+			want = append(want, bitsOfValue(uint64(stdCallToC28(tc.msg.Call2)), CallsignBits)...)
 			want = append(want, boolBitByte(tc.msg.Rover2))
 			want = append(want, boolBitByte(tc.msg.AckBit))
 			want = append(want, bitsOfValue(uint64(Grid4ToG15(tc.msg.Grid)), G15Bits)...)
