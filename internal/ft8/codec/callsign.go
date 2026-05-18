@@ -58,13 +58,15 @@ const (
 // bits of the result.
 //
 // The input is right-justified to 6 characters internally (so 3..6
-// char callsigns are all handled — see CallsignC58's docs for the
-// padding-asymmetry note across all the string primitives in this
-// package). Per-position alphabet validation
+// char callsigns are all handled). Per-position alphabet validation
 // is NOT performed: the reference algorithm intentionally allows
 // out-of-position-alphabet characters to produce negative indices,
 // and the c28 arithmetic absorbs them — that's how short callsigns
 // encode their length implicitly via the indexing scheme.
+//
+// Right-justifies with leading spaces (matches Fortran's adjustr).
+// See CallsignC58's padding-asymmetry doc block for the comparative
+// layout across all four codec string primitives.
 //
 // Validation that DOES happen:
 //
@@ -84,11 +86,16 @@ const (
 //
 //   - Verify the input matches the standard-callsign format
 //     ([A-Z0-9]{1,2} + [0-9] + [A-Z]{1,3}, at least one letter in
-//     the prefix). Calls that don't match the format go through the
-//     nonstandard c58 encoder (`nonstd_to_c58.f90` analogue, to be
-//     implemented), not this function.
+//     the prefix). Calls that don't match the format go through
+//     CallsignC58 instead.
 //   - Convert to uppercase. This function is case-sensitive; "g4abc"
 //     panics, "G4ABC" works.
+//   - Strip trailing whitespace. Leading spaces are absorbed by the
+//     right-justify pad (they're indistinguishable from omission),
+//     but a trailing space is content — `CallsignC28("K1JT ")`
+//     produces a different c28 than `CallsignC28("K1JT")` because
+//     the trailing space shifts the call one position left in the
+//     padded layout.
 //
 // Returns uint32 even though the result fits in 28 bits — uint16
 // is too small (28 bits don't fit), and the 4 high bits will be
@@ -130,10 +137,13 @@ func CallsignC28(call string) uint32 {
 	// product of the alphabet sizes of all positions *after* N.
 	// Named with matching indices so the expression below reads
 	// "weight for position N times index for position N" without
-	// off-by-one mental gymnastics.
+	// off-by-one mental gymnastics. Using len(alphabet) rather than
+	// literal sizes couples the weights to the alphabets at compile
+	// time — an alphabet edit that wasn't reflected here would still
+	// compile but produce wrong c28 values; this way it can't drift.
 	const (
-		m1 = 36 * 10 * stdCallAlphaSz * stdCallAlphaSz * stdCallAlphaSz
-		m2 = 10 * stdCallAlphaSz * stdCallAlphaSz * stdCallAlphaSz
+		m1 = len(callsignAlphaPos2) * len(callsignAlphaPos3) * stdCallAlphaSz * stdCallAlphaSz * stdCallAlphaSz
+		m2 = len(callsignAlphaPos3) * stdCallAlphaSz * stdCallAlphaSz * stdCallAlphaSz
 		m3 = stdCallAlphaSz * stdCallAlphaSz * stdCallAlphaSz
 		m4 = stdCallAlphaSz * stdCallAlphaSz
 		m5 = stdCallAlphaSz
