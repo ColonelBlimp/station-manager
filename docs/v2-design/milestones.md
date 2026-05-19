@@ -997,18 +997,20 @@ QEX ref [14] reference programs, all benchmarks zero- or one-
 allocation. Layer 2 (message-format packing per QEX Table 1 i3.n3
 types) is mid-flight: **Phase 1 (BitBuilder utility) shipped
 2026-05-18; Phase 2B (Type 1 encoder) + Phase 2C (Type 1 decoder
-+ round-trip + encoder routing fix) shipped 2026-05-19**. Type 1
-("Std Msg") now round-trips long-format std callsigns (5-char-
-1-prefix and 6-char-2-prefix) bit-for-bit through `EncodeMessage`
-→ `DecodeMessage` → `EncodeMessage`. Short callsigns (3–4 char
-and 5-char-2-prefix) route through `HashedCallC28` and decode
-to a sentinel error (`ErrCallsignNeedsHashLookup`) — the FT8
-service layer's running 22-bit hash table (Phase 4) will resolve
-those. Phase 3 (Types 2 / 4 / 5 / 0.0 — EU VHF /P, NonStd Call,
-EU VHF hashes, Free Text) is next; Phase 4 covers the specialty
-types (Field Day, RTTY RU, DXpedition, Telemetry) + the hash table.
-Layers 3+4 (signal-processing pipeline + WAV-corpus tests) and the
-LDPC decoder remain.
++ round-trip + encoder routing fix) + Phase 2D (token codec +
+`FormatMessage` / `ParseMessage` text layer + bit-faithful decode
+of Type 1 tokens) shipped 2026-05-19**. Type 1 ("Std Msg") now
+round-trips long-format std callsigns AND CQ/DE/QRZ/`CQ <suffix>`
+tokens bit-for-bit AND text-for-text through ParseMessage →
+EncodeMessage → DecodeMessage → FormatMessage. Short callsigns
+(3–4 char and 5-char-2-prefix) route through `HashedCallC28` and
+decode to a sentinel error (`ErrCallsignNeedsHashLookup`) — the
+FT8 service layer's running 22-bit hash table (Phase 4) will
+resolve those. Phase 3 (Types 2 / 4 / 5 / 0.0 — EU VHF /P, NonStd
+Call, EU VHF hashes, Free Text) is next; Phase 4 covers the
+specialty types (Field Day, RTTY RU, DXpedition, Telemetry) + the
+hash table. Layers 3+4 (signal-processing pipeline + WAV-corpus
+tests) and the LDPC decoder remain.
 
 | Layer 1 primitive | File | ns/op | allocs |
 |---|---|---|---|
@@ -1028,8 +1030,11 @@ Phase 2 additions:
 |---|---|---|
 | `BitBuilder` | `bitbuilder.go` | MSB-first composer; chainable `Append` + `AppendBits`; ~271 ns for a 77-bit Type 1 build |
 | `Message` + `MessageType` | `message.go` | Concrete struct discriminated by `Type`; 10 enum values declared, only `MessageTypeStd` packs/unpacks today |
-| `EncodeMessage` + `encodeStd` + `stdCallToC28` | `encode.go` | Type 1 packer; routes short calls through `HashedCallC28` per QEX §A |
-| `DecodeMessage` + `decodeStd` + `readBitsUint64` | `decode.go` | Type 1 unpacker; sentinels for Hash22 + Token surfaces |
+| `EncodeMessage` + `encodeStd` + `type1CallToC28` + `stdCallToC28` | `encode.go` | Type 1 packer; routes Call1/Call2 through `TokenToC28` first, then `stdCallToC28` (short calls via `HashedCallC28` per QEX §A); `validateType1Rover` blocks token+rover combinations; `slices.Clone` on return detaches BitBuilder storage |
+| `DecodeMessage` + `decodeStd` + `type1CallFromC28` + `readBitsUint64` | `decode.go` | Type 1 unpacker; bit-faithful (accepts token+rover wire pattern, semantic gates run at format/encode); `ErrTokenInGap` for spec-violating wire values |
+| `TokenToC28` + `C28ToToken` | `token.go` | CQ-token partition per QEX Table 7; unified formula `c28 = 1003 + base27(left-space-padded 4-char suffix)` with `(T, bool)` returns; intra-row + inter-row gaps surface as `(_, false)` |
+| `FormatMessage` + `formatStd` | `format.go` | Type 1 text rendering; rover `/R`, ack-R fused with reports (`R-09`) + separated from grids (`R IO91`) |
+| `ParseMessage` + `parseStd` + classifier | `parse.go` | Text → Message; dispatches CQ / `CQ <suffix>` / DE / QRZ / plain pair; `consumeCall` strips `/R`; `consumeGridField` recognises R-fused vs. R-separated ack |
 | `C28Kind` + `G15Kind` discriminators | `callsign.go`, `grid.go` | Route-B kind enums for the multi-modal c28/g15 partition spaces |
 
 The codec package was renamed from `internal/ft8/decoder` →
