@@ -136,6 +136,93 @@ func TestParseMessage_EmptyReturnsSentinel(t *testing.T) {
 	}
 }
 
+// ---- Free Text classifier + parsing (Phase 3A Step C) ----------------------
+
+// TestParseMessage_FreeText_Dispatch pins the out-of-alphabet
+// classifier rule: '.' or '?' in the input routes to Type 0.0,
+// regardless of what else is in the input. Per the Phase 3A Step A
+// design choice #3.
+func TestParseMessage_FreeText_Dispatch(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want Message
+	}{
+		{"period_alone", "HELLO.", Message{Type: MessageTypeFreeText, FreeText: "HELLO."}},
+		{"question_alone", "TEST?", Message{Type: MessageTypeFreeText, FreeText: "TEST?"}},
+		{"period_with_spaces", "TNX 73.", Message{Type: MessageTypeFreeText, FreeText: "TNX 73."}},
+		{"max_length_with_dot", "ABCDEFGHIJKL.", Message{Type: MessageTypeFreeText, FreeText: "ABCDEFGHIJKL."}},
+		// Leading/trailing whitespace is trimmed; internal whitespace
+		// preserved.
+		{"trim_outer_whitespace", "  HELLO.  ", Message{Type: MessageTypeFreeText, FreeText: "HELLO."}},
+		// Lowercase normalises through the same path.
+		{"lowercase_normalises", "hello.", Message{Type: MessageTypeFreeText, FreeText: "HELLO."}},
+		// A trigger char anywhere in the input dispatches to Free Text,
+		// even if the rest looks like a structured Type 1 message.
+		// Operator's call: punctuation is the explicit Free Text signal.
+		{"callsign_shape_with_dot", "K1JT FN20.", Message{Type: MessageTypeFreeText, FreeText: "K1JT FN20."}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseMessage(tc.text)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v", tc.text, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseMessage(%q):\n got=%+v\nwant=%+v", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseMessage_FreeText_RejectsOversized pins the validateFreeText
+// gate inside parseFreeText. Inputs with a trigger char but more than
+// 13 chars after trimming surface a parse error.
+func TestParseMessage_FreeText_RejectsOversized(t *testing.T) {
+	oversized := []string{
+		"ABCDEFGHIJKLM.",    // 14 chars
+		"HELLO WORLD?",      // 12 chars — should succeed
+		"K1ABC G4ABC FN20.", // 17 chars — too long
+	}
+	for _, text := range oversized {
+		t.Run(text, func(t *testing.T) {
+			_, err := ParseMessage(text)
+			// "HELLO WORLD?" is exactly 12 chars and should succeed.
+			if text == "HELLO WORLD?" {
+				if err != nil {
+					t.Errorf("ParseMessage(%q): unexpected err %v (12 chars should succeed)", text, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Errorf("ParseMessage(%q) = nil err, want validation error (oversized Free Text)", text)
+			}
+		})
+	}
+}
+
+// TestParseMessage_NoTriggerStaysStructured verifies that inputs
+// without '.' or '?' route through structured parsing, NOT Free
+// Text. "HELLO" alone (no trigger, doesn't parse as Type 1) errors
+// per the Phase 3A design choice #3 (no implicit Free Text fallback).
+func TestParseMessage_NoTriggerStaysStructured(t *testing.T) {
+	// These would be valid Free Text if the parser fell back, but
+	// per design #3 they error because the operator didn't signal
+	// Free Text via a trigger char.
+	cases := []string{
+		"HELLO", // single token, in-alphabet, but no trigger
+		"73 OM", // looks like Free Text but no trigger char
+		"FB 73", // ham shorthand without punctuation
+	}
+	for _, text := range cases {
+		t.Run(text, func(t *testing.T) {
+			if _, err := ParseMessage(text); err == nil {
+				t.Errorf("ParseMessage(%q) = nil err; per design #3 an input without '.' or '?' that doesn't parse as Type 1 should error rather than silently dispatching to Free Text", text)
+			}
+		})
+	}
+}
+
 // ---- Full text → struct → bits → struct → text round-trip ------------------
 
 // TestFormatParse_RoundTrip is the headline Phase 2D test: every
@@ -162,6 +249,12 @@ func TestFormatParse_RoundTrip(t *testing.T) {
 		"G4ABC/R K1ABC FN20",
 		"G4ABC K1ABC/R FN20",
 		"G4ABC/R K1ABC/R FN20",
+		// Type 0.0 Free Text — `.` and `?` triggers
+		"HELLO.",
+		"73 OM.",
+		"TNX BOB 73.",
+		"WHAT?",
+		"K1JT?",
 	}
 	for _, text := range cases {
 		t.Run(text, func(t *testing.T) {

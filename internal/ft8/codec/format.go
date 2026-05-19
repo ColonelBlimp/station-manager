@@ -28,9 +28,22 @@ func FormatMessage(m Message) (string, error) {
 	switch m.Type {
 	case MessageTypeStd:
 		return formatStd(m)
+	case MessageTypeFreeText:
+		return formatFreeText(m)
 	default:
 		return "", fmt.Errorf("%w: %d", ErrUnsupportedMessageType, m.Type)
 	}
+}
+
+// formatFreeText renders a Type 0.0 message. The text payload IS the
+// rendered output — no field separators, no embellishments. Validation
+// mirrors encodeFreeText's gate so any Message that round-trips
+// through one round-trips through the other.
+func formatFreeText(m Message) (string, error) {
+	if err := validateFreeText(m.FreeText); err != nil {
+		return "", err
+	}
+	return m.FreeText, nil
 }
 
 // formatStd renders a Type 1 message. See FormatMessage's doc for

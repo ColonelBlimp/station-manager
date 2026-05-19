@@ -24,8 +24,10 @@ var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recogn
 // FormatMessage; together they form the text-layer above the
 // bit-level codec.
 //
-// Phase 2D scope: Type 1 ("Std Msg") only. Recognises the canonical
-// Type 1 patterns:
+// Currently supported types: Type 1 ("Std Msg", Phase 2D) and
+// Type 0.0 ("Free Text", Phase 3A).
+//
+// Type 1 patterns recognised:
 //
 //	<call1> <call2>                  - 2-field, blank g15 slot
 //	<call1> <call2> <field>          - 3-field
@@ -39,16 +41,55 @@ var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recogn
 // <field> accepts a 4-char grid, a signed report ("+02", "-11"), a
 // reserved token ("RRR", "RR73", "73"), or an R-fused report ("R-09").
 //
-// Inputs are upper-cased and whitespace-collapsed internally; the
-// caller doesn't need to pre-normalise. Anything that fails to match
-// returns ErrUnrecognisedFormat or a per-field validation error.
+// Free Text dispatch: per the Phase 3A out-of-alphabet rule, the
+// presence of '.' or '?' (characters in the f71 alphabet but NOT in
+// the std-callsign alphabet) signals operator intent for Type 0.0.
+// Such inputs route to parseFreeText, which preserves internal
+// whitespace as message content (trimmed of leading/trailing only).
+// Inputs that look structured but don't parse (e.g. "HELLO" with no
+// trigger char and no second callsign) still return an error —
+// strict structured-or-Free-Text choice.
+//
+// Inputs are upper-cased internally; the caller doesn't need to
+// pre-normalise. Anything that fails to match returns
+// ErrUnrecognisedFormat, ErrEmptyMessage, or a per-field validation
+// error.
 func ParseMessage(text string) (Message, error) {
 	normalised := normalizeText(text)
-	tokens := strings.Fields(normalised)
-	if len(tokens) == 0 {
+
+	// Empty / whitespace-only check first.
+	trimmed := strings.TrimSpace(normalised)
+	if trimmed == "" {
 		return Message{}, ErrEmptyMessage
 	}
+
+	// Free Text dispatch: '.' and '?' are unique to the f71 alphabet
+	// (not present in the std-callsign / rover / signed-report
+	// alphabet that structured Type 1 parsing uses). Their presence
+	// is the operator's unambiguous Free Text signal. Inputs without
+	// these chars try structured first; if structured fails they
+	// error out rather than silently falling back — see the
+	// Phase 3A Step A design rationale.
+	if strings.ContainsAny(trimmed, ".?") {
+		return parseFreeText(trimmed)
+	}
+
+	tokens := strings.Fields(normalised)
 	return parseStd(tokens)
+}
+
+// parseFreeText validates and packages a Type 0.0 message. The input
+// has already passed the classifier (contains '.' or '?' so the
+// operator clearly intended Free Text); validateFreeText shares the
+// same gate as the encoder so any text that parses also encodes.
+func parseFreeText(text string) (Message, error) {
+	if err := validateFreeText(text); err != nil {
+		return Message{}, err
+	}
+	return Message{
+		Type:     MessageTypeFreeText,
+		FreeText: text,
+	}, nil
 }
 
 // normalizeText upper-cases ASCII letters and is a no-op for other

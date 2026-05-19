@@ -119,13 +119,56 @@ func TestFormatMessage_Type1_BasicShapes(t *testing.T) {
 	}
 }
 
+// TestFormatMessage_FreeText pins Type 0.0 rendering. The text
+// payload IS the output — no embellishments, no separators.
+func TestFormatMessage_FreeText(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+		want string
+	}{
+		{"hello_period", Message{Type: MessageTypeFreeText, FreeText: "HELLO."}, "HELLO."},
+		{"hello_question", Message{Type: MessageTypeFreeText, FreeText: "HELLO?"}, "HELLO?"},
+		{"max_length", Message{Type: MessageTypeFreeText, FreeText: "ABCDEFGHIJKLM"}, "ABCDEFGHIJKLM"},
+		{"single_char", Message{Type: MessageTypeFreeText, FreeText: "?"}, "?"},
+		{"with_spaces", Message{Type: MessageTypeFreeText, FreeText: "73 OM."}, "73 OM."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FormatMessage(tc.msg)
+			if err != nil {
+				t.Fatalf("FormatMessage: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("FormatMessage(%+v) = %q, want %q", tc.msg, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatMessage_FreeText_RejectsBadInput verifies that format
+// validates with the same gate as the encoder — any Message that
+// won't encode also won't format.
+func TestFormatMessage_FreeText_RejectsBadInput(t *testing.T) {
+	cases := []Message{
+		{Type: MessageTypeFreeText, FreeText: ""},
+		{Type: MessageTypeFreeText, FreeText: "ABCDEFGHIJKLMN"}, // too long
+		{Type: MessageTypeFreeText, FreeText: "hello"},          // lowercase
+		{Type: MessageTypeFreeText, FreeText: "A_B"},            // out-of-alphabet
+	}
+	for _, msg := range cases {
+		if _, err := FormatMessage(msg); err == nil {
+			t.Errorf("FormatMessage(%+v) = nil err, want validation error", msg)
+		}
+	}
+}
+
 // TestFormatMessage_UnsupportedType pins the rollout sentinel for
 // types whose formatter hasn't landed.
 func TestFormatMessage_UnsupportedType(t *testing.T) {
 	cases := []MessageType{
 		MessageTypeEUVHFP,
 		MessageTypeNonStdCall,
-		MessageTypeFreeText,
 		MessageTypeTelemetry,
 	}
 	for _, mt := range cases {
