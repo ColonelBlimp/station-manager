@@ -152,6 +152,91 @@ func BenchmarkFreeTextToF71(b *testing.B) {
 	}
 }
 
+// ---- F71ToFreeText (Layer 1 inverse) ---------------------------------------
+
+// TestF71ToFreeText_SpecVectors pins the inverse against the same
+// reference-produced bit strings that drive TestFreeTextToF71_SpecVectors,
+// asserting that the recovered text matches the original input (leading
+// spaces excluded — see F71ToFreeText doc).
+//
+// Encoder pads with leading spaces, so inputs that didn't start with a
+// space round-trip cleanly. The "empty_all_zeros" case is the edge: a
+// 13-space encoding decodes to the empty string after TrimLeft.
+func TestF71ToFreeText_SpecVectors(t *testing.T) {
+	for _, tc := range freeTextVectors {
+		t.Run(tc.name, func(t *testing.T) {
+			bits := FreeTextToF71(tc.in)
+			got := F71ToFreeText(bits)
+			if got != tc.in {
+				t.Errorf("F71ToFreeText(FreeTextToF71(%q)) = %q, want %q", tc.in, got, tc.in)
+			}
+		})
+	}
+}
+
+// TestF71ToFreeText_RoundTrip covers a wider input range to exercise
+// the divmod arithmetic across the f71 alphabet. Each input must
+// round-trip text-identity through encode + decode.
+func TestF71ToFreeText_RoundTrip(t *testing.T) {
+	cases := []string{
+		"A",             // length 1
+		"Z",             // length 1, opposite end of letter range
+		"0",             // single digit
+		"9",             // digit boundary
+		"?",             // last alphabet entry
+		"+",             // mid-punctuation
+		"+0",            // 2 chars
+		"K1JT",          // length 4 callsign-style
+		"FOOBAR",        // length 6
+		"73 OM",         // short ham-style message
+		"HELLO WORLD",   // length 11 with space
+		"+99 -30",       // signs + digits + space
+		"TEST/123",      // slash
+		"ABCDEFGHIJKLM", // full 13 letters
+		"  HELLO",       // leading spaces (lost on round-trip — see below)
+		"HELLO     ",    // trailing spaces (preserved)
+		"HE  LO",        // internal spaces (preserved)
+	}
+	for _, in := range cases {
+		// The "  HELLO" entry intentionally tests the leading-space-lost
+		// behaviour documented on F71ToFreeText. Adjust the expected
+		// output to match.
+		want := in
+		for len(want) > 0 && want[0] == ' ' {
+			want = want[1:]
+		}
+		t.Run(in, func(t *testing.T) {
+			bits := FreeTextToF71(in)
+			got := F71ToFreeText(bits)
+			if got != want {
+				t.Errorf("F71ToFreeText(FreeTextToF71(%q)) = %q, want %q", in, got, want)
+			}
+		})
+	}
+}
+
+// TestF71ToFreeText_PanicsOnBadLength verifies the length guard.
+func TestF71ToFreeText_PanicsOnBadLength(t *testing.T) {
+	for _, n := range []int{0, 1, 70, 72, 77} {
+		t.Run(string(rune('0'+n%10)), func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("F71ToFreeText(len=%d) should panic; did not", n)
+				}
+			}()
+			F71ToFreeText(make([]byte, n))
+		})
+	}
+}
+
+func BenchmarkF71ToFreeText(b *testing.B) {
+	bits := FreeTextToF71("TNX BOB 73 GL")
+	b.ReportAllocs()
+	for range b.N {
+		_ = F71ToFreeText(bits)
+	}
+}
+
 // bitsToString turns a bit-per-byte slice into a string of '0'/'1'
 // chars. Inverse of grid_test.go's `bitsFrom()` helper.
 func bitsToString(b []byte) string {

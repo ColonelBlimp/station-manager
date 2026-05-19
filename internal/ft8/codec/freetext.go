@@ -119,3 +119,78 @@ func FreeTextToF71(text string) []byte {
 	}
 	return out
 }
+
+// F71ToFreeText inverts FreeTextToF71. Reads the 71-bit code in
+// bit-per-byte form (MSB-first per the package convention), recovers
+// the 13-char base-42 representation, and returns the message text
+// with leading spaces trimmed.
+//
+// Why "leading" not "trailing": FreeTextToF71 right-justifies via the
+// Fortran-style adjustr pad — short inputs sit at the right of the
+// 13-char buffer with spaces on the LEFT. The inverse recovers the
+// 13-char buffer as `<padding-spaces><user-content>`; trimming the
+// leading run of spaces recovers the user-typed content. Internal
+// and trailing spaces (genuine message content per the forward
+// function's doc) are preserved.
+//
+// One inherent asymmetry of the encoding: leading spaces in the
+// original input are indistinguishable from padding and are NOT
+// recovered. Round-trip is text-identity for any input without
+// leading spaces, which covers normal Free Text usage.
+//
+// Panics on inputs not exactly 71 bits, on bit values outside {0, 1},
+// or on a (hi:lo) word whose high part exceeds f71HiBits (= 7) — the
+// last would indicate corruption upstream of this function (a Layer 2
+// decoder reading from a malformed 77-bit body should already have
+// guarded the 71-bit slot to 71 bits before calling here).
+func F71ToFreeText(f71 []byte) string {
+	const op = "codec.F71ToFreeText"
+	if len(f71) != F71Bits {
+		panic(op + ": input must be " + strconv.Itoa(F71Bits) + " bits, got " + strconv.Itoa(len(f71)))
+	}
+
+	// Reconstruct the two-word (hi:lo) accumulator from the bit-per-
+	// byte buffer. hi takes the top f71HiBits = 7 bits; lo takes the
+	// next 64 bits. Each byte masked with &1 defends any future raw-
+	// bit caller from smuggling non-bit-valued bytes through (matches
+	// readBitsUint64's defensive masking in decode.go).
+	var hi, lo uint64
+	for i := range f71HiBits {
+		hi = (hi << 1) | uint64(f71[i]&1)
+	}
+	for i := range 64 {
+		lo = (lo << 1) | uint64(f71[f71HiBits+i]&1)
+	}
+
+	// Range guard: hi must fit in f71HiBits. The 71-bit slot's
+	// shape guarantees this by construction; a violation would
+	// indicate the caller wrote bits past the slot's width upstream.
+	if hi >= (1 << f71HiBits) {
+		panic(op + ": hi=" + strconv.FormatUint(hi, 10) + " exceeds " + strconv.Itoa(f71HiBits) + " bits — caller wrote past the f71 slot")
+	}
+
+	// Recover 13 base-42 digits via repeated divmod from right to
+	// left. The forward computed acc = acc*42 + digit[i] processing
+	// digits left-to-right; the inverse strips the rightmost digit
+	// each iteration (= acc mod 42) and shrinks (acc /= 42) until
+	// all 13 are recovered. The recovered digits feed back into the
+	// 13-char buffer right-to-left.
+	//
+	// 128-bit / 64-bit divide: math/bits.Div64(remHi, lo, divisor)
+	// requires remHi < divisor to avoid overflow. We split hi first
+	// (hi may be up to 7 bits = 127 initially, larger than divisor
+	// 42) into qHi + rHi, then use rHi as the high-word input to
+	// Div64. After a few iterations hi shrinks to 0 and the split
+	// becomes a no-op.
+	var padded [f71MessageLen]byte
+	for k := f71MessageLen - 1; k >= 0; k-- {
+		qHi := hi / f71AlphabetSize
+		rHi := hi % f71AlphabetSize
+		qLo, r := bits.Div64(rHi, lo, f71AlphabetSize)
+		hi = qHi
+		lo = qLo
+		padded[k] = f71Alphabet[r]
+	}
+
+	return strings.TrimLeft(string(padded[:]), " ")
+}

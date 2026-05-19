@@ -105,4 +105,20 @@ type Message struct {
 	// the encoder hands the string straight to Grid4ToG15 which
 	// routes it. For Type 5 (EU VHF hashes+g25) use Grid6 instead.
 	Grid string
+
+	// FreeText is the 1-13 character payload for Type 0.0 (Free Text)
+	// per QEX paper Table 1. Encoded into the 71-bit f71 slot via
+	// FreeTextToF71's base-42 polynomial.
+	//
+	// Operator-typed content must already be normalised: uppercase,
+	// each character in the f71 alphabet (space + 0-9 + A-Z + + - . / ?),
+	// length ≤ 13. EncodeMessage rejects out-of-shape input rather than
+	// silently padding or substituting.
+	//
+	// On round-trip through EncodeMessage → DecodeMessage, leading
+	// spaces are lost (the encoder right-justifies via Fortran-style
+	// adjustr — see F71ToFreeText's doc). Internal and trailing
+	// spaces survive. The lost-leading-space asymmetry is inherent
+	// to the encoding, not a codec bug.
+	FreeText string
 }

@@ -74,11 +74,46 @@ func DecodeMessage(bits []byte) (Message, error) {
 	// type dispatch happens before any per-type field decoding.
 	i3 := readBitsUint64(bits, i3Offset, i3Width)
 	switch i3 {
+	case i3Zero:
+		return decodeI3Zero(bits)
 	case i3Std:
 		return decodeStd(bits)
 	default:
 		return Message{}, fmt.Errorf("%w: i3=%d", ErrUnknownMessageType, i3)
 	}
+}
+
+// decodeI3Zero sub-dispatches the i3=0 message-type family on the n3
+// field (3 bits immediately above f71, at offset MessageBits - i3Width
+// - n3FieldBits). Phase 3A handles n3=0 (Free Text); the other n3
+// values (1 = DXpedition, 3/4 = Field Day variants, 5 = Telemetry)
+// land in Phase 4 and currently return ErrUnknownMessageType.
+func decodeI3Zero(bits []byte) (Message, error) {
+	n3Offset := MessageBits - i3Width - n3FieldBits
+	n3 := readBitsUint64(bits, n3Offset, n3FieldBits)
+	switch n3 {
+	case n3FreeText:
+		return decodeFreeText(bits)
+	default:
+		return Message{}, fmt.Errorf("%w: i3=0 n3=%d", ErrUnknownMessageType, n3)
+	}
+}
+
+// decodeFreeText inverts encodeFreeText. Bit layout per QEX Table 1:
+//
+//	f71(FreeText) | n3=0 | i3=0
+//	     71          3      3
+//
+// The 71-bit f71 slot decodes via F71ToFreeText which already trims
+// leading spaces (the encoder right-justifies). The recovered text
+// goes straight into Message.FreeText.
+func decodeFreeText(bits []byte) (Message, error) {
+	// f71 occupies bits[0..70].
+	text := F71ToFreeText(bits[:F71Bits])
+	return Message{
+		Type:     MessageTypeFreeText,
+		FreeText: text,
+	}, nil
 }
 
 // decodeStd inverts encodeStd. Bit layout per QEX Table 1:

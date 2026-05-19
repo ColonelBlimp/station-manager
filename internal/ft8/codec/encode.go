@@ -14,6 +14,22 @@ import (
 // other message types land alongside their encoders.
 const i3Std = 1
 
+// QEX Table 1 i3.n3 tags for the i3=0 message-type family. n3
+// occupies bits 71..73 (the 3 bits immediately above f71's 71-bit
+// payload); i3=0 occupies bits 74..76. The family multiplexes:
+//
+//	n3 = 0: Free Text (Type 0.0)         — implemented
+//	n3 = 1: DXpedition (Type 0.1)        — Phase 4
+//	n3 = 3: Field Day Class A-F (0.3)    — Phase 4
+//	n3 = 4: Field Day (0.4)              — Phase 4
+//	n3 = 5: Telemetry (0.5)              — Phase 4
+//	n3 = 2, 6, 7 are unassigned per QEX paper Table 1.
+const (
+	i3Zero      = 0
+	n3FreeText  = 0
+	n3FieldBits = 3
+)
+
 // FT8 signal-report range per QEX paper §A: "numerical signal
 // reports of the form ±nn in the range -30 to +99 dB". Outside this
 // band, Grid4ToG15's stored value either collides with the reserved
@@ -53,6 +69,8 @@ func EncodeMessage(m Message) ([]byte, error) {
 	switch m.Type {
 	case MessageTypeStd:
 		return encodeStd(m)
+	case MessageTypeFreeText:
+		return encodeFreeText(m)
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrUnsupportedMessageType, m.Type)
 	}
@@ -105,12 +123,82 @@ func encodeStd(m Message) ([]byte, error) {
 	return slices.Clone(b.Bits()), nil
 }
 
+// encodeFreeText packs a Type 0.0 (Free Text) body per QEX Table 1:
+//
+//	f71(FreeText) | n3=0 | i3=0
+//	     71          3      3   = 77 bits
+//
+// Validates the FreeText shape (length 1..13, all chars in the f71
+// alphabet) up front so FreeTextToF71's panic on bad input never
+// fires from this path. An empty FreeText is rejected — the wire's
+// 13-space encoding would round-trip to the empty string per
+// F71ToFreeText's leading-space trim, but the operator semantic is
+// "no Free Text message to send."
+func encodeFreeText(m Message) ([]byte, error) {
+	if err := validateFreeText(m.FreeText); err != nil {
+		return nil, err
+	}
+	f71Bits := FreeTextToF71(m.FreeText)
+	var b BitBuilder
+	b.AppendBits(f71Bits).
+		Append(n3FreeText, n3FieldBits).
+		Append(i3Zero, i3Width)
+	if b.Len() != MessageBits {
+		// Belt-and-braces — width constants out of sync would land here.
+		panic("codec.encodeFreeText: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
+	}
+	return slices.Clone(b.Bits()), nil
+}
+
+// validateFreeText enforces the FreeText slot's shape upstream of
+// the FreeTextToF71 primitive so its panic path stays reserved for
+// genuine programmer bugs.
+//
+// Rules:
+//   - Length 1..13. Empty is rejected (see encodeFreeText doc).
+//   - Each character must be in the f71 alphabet (space + 0-9 + A-Z
+//   - + - . / ?). Lower-case and other punctuation are rejected;
+//     callers normalise upstream.
+func validateFreeText(text string) error {
+	const op errors.Op = "codec.validateFreeText"
+	if len(text) == 0 {
+		return errors.New(op).WithMsgf("FreeText is empty; Type 0.0 carries a 1-13 character payload")
+	}
+	if len(text) > f71MessageLen {
+		return errors.New(op).WithMsgf("FreeText %q has length %d, want 1..%d", text, len(text), f71MessageLen)
+	}
+	for i := range len(text) {
+		if !isF71Char(text[i]) {
+			return errors.New(op).WithMsgf("FreeText %q contains invalid character %q at index %d (alphabet: space + 0-9 + A-Z + + - . / ?)", text, string(text[i]), i)
+		}
+	}
+	return nil
+}
+
+// isF71Char reports whether c is in the f71 alphabet (the 42-char
+// free-text alphabet from FreeTextToF71). Mirrors strings.IndexByte
+// over f71Alphabet but avoids the import + helper for one-byte
+// membership checks in tight validation loops.
+func isF71Char(c byte) bool {
+	switch {
+	case c == ' ':
+		return true
+	case c >= '0' && c <= '9':
+		return true
+	case c >= 'A' && c <= 'Z':
+		return true
+	case c == '+', c == '-', c == '.', c == '/', c == '?':
+		return true
+	}
+	return false
+}
+
 // type1CallToC28 routes a Type 1 Call1/Call2 string to its c28 value.
 // Dispatches to TokenToC28 first (so "CQ", "DE", "QRZ", "CQ NNN",
 // "CQ XXXX" land in the [0, nTokens) token partition); falls through
 // to stdCallToC28 for actual callsigns.
 //
-// Precondition: caller has passed validateType1Call so the input is
+// Precondition: the caller has passed validateType1Call, so the input is
 // either a recognised token or a std-callsign-shape input.
 func type1CallToC28(call string) uint32 {
 	if c28, ok := TokenToC28(call); ok {

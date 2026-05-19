@@ -373,8 +373,13 @@ func TestDecodeMessage_RejectsShortBody(t *testing.T) {
 // Phase 2C only implements i3=1; the other tags return the
 // unsupported-type sentinel.
 func TestDecodeMessage_RejectsUnknownI3(t *testing.T) {
+	// i3=0 (the i3.n3 = 0.x family) and i3=1 (Std) are implemented;
+	// the rest stay unsupported until their packers land. The i3=0
+	// path further sub-dispatches on n3; that sub-dispatch's
+	// unknown-n3 rejection is pinned by
+	// TestDecodeMessage_FreeText_DispatchesOnN3.
 	for i3 := 0; i3 < 8; i3++ {
-		if i3 == i3Std {
+		if i3 == i3Std || i3 == i3Zero {
 			continue
 		}
 		bits := make([]byte, MessageBits)
@@ -543,6 +548,139 @@ func TestDecodeMessage_TokenGapReturnsError(t *testing.T) {
 				t.Errorf("DecodeMessage(c28=%d) err=%v, want ErrTokenInGap", gap, err)
 			}
 		})
+	}
+}
+
+// ---- Type 0.0 Free Text round-trip (Phase 3A) ------------------------------
+
+// TestDecodeMessage_FreeText_RoundTrip covers Type 0.0 ("Free Text")
+// end-to-end through EncodeMessage → DecodeMessage. Inputs cover the
+// f71 alphabet, length spread (1..13), the leading-space-lost
+// asymmetry, and the n3=0 / i3=0 dispatch path.
+func TestDecodeMessage_FreeText_RoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string // round-tripped text (== in for inputs without leading spaces)
+	}{
+		{"short_HELLO", "HELLO", "HELLO"},
+		{"with_period", "HELLO.", "HELLO."},
+		{"with_question", "TEST?", "TEST?"},
+		{"73_OM", "73 OM", "73 OM"},
+		{"reference_example", "TNX BOB 73 GL", "TNX BOB 73 GL"},
+		{"max_13_letters", "ABCDEFGHIJKLM", "ABCDEFGHIJKLM"},
+		{"max_13_digits", "1234567890123", "1234567890123"},
+		{"slash_punct", "TEST/123", "TEST/123"},
+		{"signs", "+99 -30", "+99 -30"},
+		{"trailing_space_preserved", "HELLO ", "HELLO "},
+		{"internal_space_preserved", "HE  LO", "HE  LO"},
+		// Leading-space-lost path: encoder absorbs leading spaces into
+		// the adjustr pad; decoder's trim doesn't distinguish them
+		// from padding. Pinned as documented behaviour.
+		{"leading_space_lost", "  HELLO", "HELLO"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bits, err := EncodeMessage(Message{Type: MessageTypeFreeText, FreeText: tc.in})
+			if err != nil {
+				t.Fatalf("EncodeMessage: %v", err)
+			}
+			if len(bits) != MessageBits {
+				t.Fatalf("len(bits) = %d, want %d", len(bits), MessageBits)
+			}
+			msg, err := DecodeMessage(bits)
+			if err != nil {
+				t.Fatalf("DecodeMessage: %v", err)
+			}
+			if msg.Type != MessageTypeFreeText {
+				t.Errorf("Type = %d, want %d (MessageTypeFreeText)", msg.Type, MessageTypeFreeText)
+			}
+			if msg.FreeText != tc.want {
+				t.Errorf("FreeText = %q, want %q", msg.FreeText, tc.want)
+			}
+			// Triple-check: re-encode the recovered Message and assert
+			// the bits match. (Only stable for inputs whose recovered
+			// text round-trips losslessly — leading-space-lost cases
+			// can't re-encode to the original bits.)
+			if tc.in == tc.want {
+				rebits, err := EncodeMessage(msg)
+				if err != nil {
+					t.Fatalf("EncodeMessage(decoded): %v", err)
+				}
+				if !slices.Equal(rebits, bits) {
+					t.Errorf("re-encode bits differ from first encode")
+				}
+			}
+		})
+	}
+}
+
+// TestEncodeMessage_FreeText_BitLayout pins the n3=0 / i3=0 layout
+// at the trailing 6 bits of the 77-bit body. A regression in the
+// width constants or BitBuilder append order would surface here.
+func TestEncodeMessage_FreeText_BitLayout(t *testing.T) {
+	bits, err := EncodeMessage(Message{Type: MessageTypeFreeText, FreeText: "HELLO"})
+	if err != nil {
+		t.Fatalf("EncodeMessage: %v", err)
+	}
+	// bits[71..73] should be n3 = 000.
+	for i := 71; i <= 73; i++ {
+		if bits[i] != 0 {
+			t.Errorf("n3 bit[%d] = %d, want 0 (Free Text n3=0)", i, bits[i])
+		}
+	}
+	// bits[74..76] should be i3 = 000.
+	for i := 74; i <= 76; i++ {
+		if bits[i] != 0 {
+			t.Errorf("i3 bit[%d] = %d, want 0 (Free Text i3=0)", i, bits[i])
+		}
+	}
+}
+
+// TestEncodeMessage_FreeText_BadInput covers the validation rejections.
+func TestEncodeMessage_FreeText_BadInput(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"empty", ""},
+		{"too_long_14", "ABCDEFGHIJKLMN"},
+		{"too_long_50", "ABCDEFGHIJKLMABCDEFGHIJKLMABCDEFGHIJKLMABCDEFGHIJK"},
+		{"lowercase", "hello"},
+		{"exclamation_not_in_alphabet", "HELLO!"},
+		{"comma", "A,B"},
+		{"underscore", "A_B"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncodeMessage(Message{Type: MessageTypeFreeText, FreeText: tc.text}); err == nil {
+				t.Errorf("EncodeMessage(FreeText=%q) = nil err, want validation error", tc.text)
+			}
+		})
+	}
+}
+
+// TestDecodeMessage_FreeText_DispatchesOnN3 verifies the i3=0 sub-
+// dispatch: n3=0 → Free Text decode, other n3 values → unknown type
+// sentinel (Phase 4 will land 0.1 / 0.3 / 0.4 / 0.5).
+func TestDecodeMessage_FreeText_DispatchesOnN3(t *testing.T) {
+	for n3 := uint64(0); n3 < 8; n3++ {
+		bits := make([]byte, MessageBits)
+		// Write n3 into bits[71..73] MSB-first.
+		bits[71] = byte((n3 >> 2) & 1)
+		bits[72] = byte((n3 >> 1) & 1)
+		bits[73] = byte(n3 & 1)
+		// i3 = 0 at bits[74..76] (already 0 from make).
+		_, err := DecodeMessage(bits)
+		if n3 == 0 {
+			if err != nil {
+				t.Errorf("DecodeMessage(i3=0, n3=0) err=%v, want nil (Free Text decodes)", err)
+			}
+		} else {
+			if !errors.Is(err, ErrUnknownMessageType) {
+				t.Errorf("DecodeMessage(i3=0, n3=%d) err=%v, want ErrUnknownMessageType", n3, err)
+			}
+		}
 	}
 }
 
