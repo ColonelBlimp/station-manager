@@ -175,6 +175,46 @@ func TestGrid4ToG15_RejectsNonCanonicalReports(t *testing.T) {
 	}
 }
 
+// TestG15ToGrid4_ThreeDigitReportBranch pins the 3-digit-magnitude
+// path of formatSignedReport (grid.go ~line 222). The path is
+// unreachable via Grid4ToG15 (which only emits reports in the FT8
+// protocol band [-30, +99]), but G15ToGrid4 accepts any 15-bit
+// value — so a corrupted-wire g15 in the high report band [32500,
+// 32768) produces a 3-digit positive report. The branch existed
+// from the start; this test pins it so a "no callers, delete it"
+// refactor surfaces the wire-corruption decode case as the
+// rationale.
+//
+// Negative 3-digit reports are not reachable through G15ToGrid4
+// (the formula n = g15 - maxGrid4 - 35 caps n ≥ -30 for g15 ≥
+// maxGrid4+5), so this test exercises positive magnitudes only.
+func TestG15ToGrid4_ThreeDigitReportBranch(t *testing.T) {
+	cases := []struct {
+		g15  uint16
+		want string
+	}{
+		// n = g15 - maxGrid4 - g15ReportBias
+		// g15=32535: n=100 → "+100"
+		{uint16(maxGrid4 + g15ReportBias + 100), "+100"},
+		// g15=32612: n=177 → "+177"
+		{uint16(maxGrid4 + g15ReportBias + 177), "+177"},
+		// g15=32767 (max 15-bit): n=332 → "+332" (highest reachable
+		// 3-digit value through the decode path).
+		{(1 << G15Bits) - 1, "+332"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.want, func(t *testing.T) {
+			got, kind := G15ToGrid4(tc.g15)
+			if kind != G15KindReport {
+				t.Errorf("G15ToGrid4(%d).kind = %v, want G15KindReport", tc.g15, kind)
+			}
+			if got != tc.want {
+				t.Errorf("G15ToGrid4(%d) = %q, want %q", tc.g15, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGrid4ToG15_AcceptsOneDigitReport(t *testing.T) {
 	// "+2" is canonical (sign + 1 digit). Reference reports
 	// gen_crc14 produces 32437 for "+2" (same as for "+02" because

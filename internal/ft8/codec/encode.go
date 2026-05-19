@@ -3,6 +3,7 @@ package codec
 import (
 	stderrors "errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -66,10 +67,16 @@ func EncodeMessage(m Message) ([]byte, error) {
 // primitive is invoked, so the primitives' panics indicate genuine
 // internal bugs (not bad user data).
 func encodeStd(m Message) ([]byte, error) {
-	if err := validateStdCallsign(m.Call1, "Call1"); err != nil {
+	if err := validateType1Call(m.Call1, "Call1"); err != nil {
 		return nil, err
 	}
-	if err := validateStdCallsign(m.Call2, "Call2"); err != nil {
+	if err := validateType1Rover(m.Call1, m.Rover1, "Call1"); err != nil {
+		return nil, err
+	}
+	if err := validateType1Call(m.Call2, "Call2"); err != nil {
+		return nil, err
+	}
+	if err := validateType1Rover(m.Call2, m.Rover2, "Call2"); err != nil {
 		return nil, err
 	}
 	if err := validateG15Slot(m.Grid); err != nil {
@@ -77,9 +84,9 @@ func encodeStd(m Message) ([]byte, error) {
 	}
 
 	var b BitBuilder
-	b.Append(uint64(stdCallToC28(m.Call1)), CallsignBits).
+	b.Append(uint64(type1CallToC28(m.Call1)), CallsignBits).
 		Append(boolBit(m.Rover1), 1).
-		Append(uint64(stdCallToC28(m.Call2)), CallsignBits).
+		Append(uint64(type1CallToC28(m.Call2)), CallsignBits).
 		Append(boolBit(m.Rover2), 1).
 		Append(boolBit(m.AckBit), 1).
 		Append(uint64(Grid4ToG15(m.Grid)), G15Bits).
@@ -90,7 +97,26 @@ func encodeStd(m Message) ([]byte, error) {
 		// constant lands here rather than corrupting the wire.
 		panic("codec.encodeStd: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
 	}
-	return b.Bits(), nil
+	// Detach from the BitBuilder's internal storage. BitBuilder.Bits()
+	// aliases its backing array (see bitbuilder.go); returning the
+	// aliased slice would couple our output's mutability to any
+	// future BitBuilder pooling. The clone is 77 bytes — invisible
+	// next to the LDPC encode that follows on the same hot path.
+	return slices.Clone(b.Bits()), nil
+}
+
+// type1CallToC28 routes a Type 1 Call1/Call2 string to its c28 value.
+// Dispatches to TokenToC28 first (so "CQ", "DE", "QRZ", "CQ NNN",
+// "CQ XXXX" land in the [0, nTokens) token partition); falls through
+// to stdCallToC28 for actual callsigns.
+//
+// Precondition: caller has passed validateType1Call so the input is
+// either a recognised token or a std-callsign-shape input.
+func type1CallToC28(call string) uint32 {
+	if c28, ok := TokenToC28(call); ok {
+		return c28
+	}
+	return stdCallToC28(call)
 }
 
 // stdCallToC28 picks between CallsignC28 and HashedCallC28 based on
@@ -144,6 +170,55 @@ func boolBit(v bool) uint64 {
 		return 1
 	}
 	return 0
+}
+
+// validateType1Rover rejects the nonsensical combination of a token
+// in a Type 1 Call slot with the matching rover bit set. The /R
+// suffix means "rover callsign" — tokens (CQ, DE, QRZ, "CQ ...")
+// aren't callsigns, so the rover bit on a token slot would have
+// no text-layer rendering and no semantic meaning.
+//
+// The bit-level wire format DOES allow the combination (a remote
+// encoder, malformed corpus, or post-LDPC corruption could produce
+// it on a 77-bit body), and DecodeMessage stays bit-faithful — it
+// will return Message{Call1: "CQ", Rover1: true, ...} for such a
+// wire input rather than erroring. This validator is the encode-
+// side + format-side gate that prevents OUR encoder from emitting
+// the combination and our formatter from rendering it. The
+// asymmetry (decode accepts, encode/format reject) is intentional:
+// the codec layer is bit-faithful; semantic guards run at encode
+// and format boundaries.
+func validateType1Rover(call string, rover bool, field string) error {
+	const op errors.Op = "codec.validateType1Rover"
+	if !rover {
+		return nil
+	}
+	if _, isTok := TokenToC28(call); isTok {
+		return errors.New(op).WithMsgf("%s = %q is a token; rover bit cannot be set on a non-callsign", field, call)
+	}
+	return nil
+}
+
+// validateType1Call accepts either a recognised token (per QEX paper
+// Table 7) or a standard amateur callsign in the Call1/Call2 slot of
+// a Type 1 message. Type 1's c28 slots are multi-modal — both shapes
+// land in the same 28-bit field on the wire, distinguished only by
+// the c28 partition the value falls into. Routing happens in
+// type1CallToC28; this validator is the shape gate.
+//
+// Returned errors are tagged with the field name (Call1 / Call2)
+// and mention both acceptable forms, so the caller sees one error
+// covering both rejection paths instead of having to choose between
+// "not a callsign" and "not a token".
+func validateType1Call(call, field string) error {
+	const op errors.Op = "codec.validateType1Call"
+	if _, ok := TokenToC28(call); ok {
+		return nil
+	}
+	if err := validateStdCallsign(call, field); err == nil {
+		return nil
+	}
+	return errors.New(op).WithMsgf("%s = %q is neither a recognised token (DE, QRZ, CQ, CQ NNN, CQ X..XXXX) nor a standard amateur callsign (prefix + digit + suffix, 3-6 chars)", field, call)
 }
 
 // validateStdCallsign rejects callsigns that CallsignC28 would

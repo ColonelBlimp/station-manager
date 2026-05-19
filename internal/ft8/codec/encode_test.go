@@ -310,6 +310,36 @@ func TestEncodeMessage_Type1_BadCallsign(t *testing.T) {
 	}
 }
 
+// TestEncodeMessage_RejectsTokenWithRover pins the encode-side
+// rover guard. Symmetric with TestFormatMessage_RejectsTokenWithRover
+// — both gates must reject the same nonsensical combinations so a
+// Message that one rejects can't sneak through the other.
+//
+// The wire format DOES allow a token+rover bit pattern; DecodeMessage
+// returns it bit-faithfully. The encoder rejecting it is the
+// semantic gate that prevents OUR sender from emitting one. See
+// validateType1Rover's doc for the full asymmetry rationale.
+func TestEncodeMessage_RejectsTokenWithRover(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+	}{
+		{"cq_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
+		{"de_with_rover1", Message{Type: MessageTypeStd, Call1: "DE", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
+		{"qrz_with_rover1", Message{Type: MessageTypeStd, Call1: "QRZ", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
+		{"cq_dx_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ DX", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
+		{"cq_100_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ 100", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
+		{"token_in_call2_with_rover2", Message{Type: MessageTypeStd, Call1: "K1JT", Call2: "CQ", Rover2: true, Grid: "FN20"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncodeMessage(tc.msg); err == nil {
+				t.Errorf("EncodeMessage(%+v) = nil err, want validation error (token+rover)", tc.msg)
+			}
+		})
+	}
+}
+
 // TestEncodeMessage_Type1_BadGrid covers the g15-slot validation
 // paths. Grid4ToG15 panics on unrecognised input — Layer 2 turns
 // those into errors before invoking the primitive.

@@ -38,12 +38,16 @@ var ErrUnknownMessageType = errors.New("codec: unknown or unsupported message ty
 // this sentinel.
 var ErrCallsignNeedsHashLookup = errors.New("codec: c28 is a 22-bit hash; original callsign needs hash-table lookup")
 
-// ErrCallsignIsToken is returned when a Type 1 message carries a
-// c28 in the special-token partition [0, nTokens). Token decoding
-// (CQ / DE / QRZ / "CQ <suffix>") lands in Phase 2D alongside
-// ParseMessage / FormatMessage; Phase 2C's codec stops at this
-// sentinel.
-var ErrCallsignIsToken = errors.New("codec: c28 is a special token; token decoding not yet implemented")
+// ErrTokenInGap is returned when a Type 1 message carries a c28 in
+// the special-token partition [0, nTokens) but at a codepoint that
+// doesn't correspond to a defined token per QEX paper Table 7 —
+// either an inter-row gap (c28 = 1003 / 1030 / 1732..1759 /
+// 20686..21442 / 532444..nTokens-1) or an intra-row gap inside the
+// CQ-letters range whose 4-char base-27 decode produces an embedded
+// or trailing space. The encoder never emits these values, so a
+// gap c28 on the wire signals a corrupted message that slipped past
+// LDPC + CRC14, or a remote encoder violating the spec.
+var ErrTokenInGap = errors.New("codec: c28 lands in the token partition but on a gap codepoint")
 
 // DecodeMessage parses a 77-bit FT8 message body (bit-per-byte form,
 // MSB-first per the package convention) into a Message struct,
@@ -53,11 +57,15 @@ var ErrCallsignIsToken = errors.New("codec: c28 is a special token; token decodi
 // caller-supplied bit data. Specifically:
 //   - ErrShortBody for any input not exactly 77 bits.
 //   - ErrUnknownMessageType when the i3 tag doesn't match a
-//     known type whose decoder has landed (Phase 2C: only i3=1).
+//     known type whose decoder has landed (Phase 2D: only i3=1).
 //   - ErrCallsignNeedsHashLookup when a c28 slot is in the hash
 //     partition; the caller's hash-table layer (FT8 service) resolves it.
-//   - ErrCallsignIsToken when a c28 slot is a special token;
-//     token decoding lands in Phase 2D.
+//   - ErrTokenInGap when a c28 slot is in the token partition but on
+//     a gap codepoint (the wire is carrying a spec-violating value).
+//
+// Valid tokens (DE / QRZ / CQ / "CQ NNN" / "CQ XXXX") decode into
+// Call1 / Call2 as their string form — the Message struct holds a
+// token-call and a callsign-call in the same slot.
 func DecodeMessage(bits []byte) (Message, error) {
 	if len(bits) != MessageBits {
 		return Message{}, fmt.Errorf("%w: got %d", ErrShortBody, len(bits))
@@ -77,6 +85,16 @@ func DecodeMessage(bits []byte) (Message, error) {
 //
 //	c28(Call1) | r1 | c28(Call2) | r1 | R1 | g15 | i3=1
 //	   28        1       28        1    1    15     3
+//
+// Decode is bit-faithful: every legal 77-bit body produces a
+// Message, including spec-violating combinations the encoder
+// refuses (e.g. token c28 with the matching rover bit set — a
+// remote encoder bug, malformed corpus, or post-LDPC corruption
+// could plant this on the wire). The returned Message captures
+// what the bits said; the semantic gate at FormatMessage /
+// EncodeMessage rejects the same Message on the way back out.
+// See validateType1Rover for the asymmetry rationale and
+// TestDecodeMessage_TokenWithRoverIsBitFaithful for the pin.
 func decodeStd(bits []byte) (Message, error) {
 	c28First := uint32(readBitsUint64(bits, 0, CallsignBits))
 	rover1 := bits[28] == 1
@@ -85,12 +103,12 @@ func decodeStd(bits []byte) (Message, error) {
 	ack := bits[58] == 1
 	g15 := uint16(readBitsUint64(bits, 59, G15Bits))
 
-	call1, kind1 := C28ToCallsign(c28First)
-	if err := callsignKindError(kind1, "Call1"); err != nil {
+	call1, err := type1CallFromC28(c28First, "Call1")
+	if err != nil {
 		return Message{}, err
 	}
-	call2, kind2 := C28ToCallsign(c28Second)
-	if err := callsignKindError(kind2, "Call2"); err != nil {
+	call2, err := type1CallFromC28(c28Second, "Call2")
+	if err != nil {
 		return Message{}, err
 	}
 
@@ -115,20 +133,31 @@ func decodeStd(bits []byte) (Message, error) {
 	}, nil
 }
 
-// callsignKindError translates a non-StdCall C28Kind into the
-// appropriate sentinel-wrapped error, with the field name tagged.
-// Returns nil for C28KindStdCall. C28KindUnknown is impossible per
-// C28ToCallsign's contract; hitting it means an internal regression
-// — panic per the package convention rather than absorbing as a
-// wire-decode error.
-func callsignKindError(kind C28Kind, field string) error {
+// type1CallFromC28 recovers the Type 1 Call1/Call2 string from a c28
+// value, dispatching on C28Kind. Inverse of type1CallToC28.
+//
+//   - StdCall partition: returns the recovered callsign.
+//   - Token partition: looks up the token text via C28ToToken; if the
+//     c28 lands in a gap codepoint, returns ErrTokenInGap (the wire is
+//     carrying a spec-violating value).
+//   - Hash22 partition: returns ErrCallsignNeedsHashLookup so the
+//     FT8 service layer can resolve via its running hash table.
+//
+// C28KindUnknown is impossible per C28ToCallsign's contract; hitting
+// it means an internal regression — panic per the package convention.
+func type1CallFromC28(c28 uint32, field string) (string, error) {
+	call, kind := C28ToCallsign(c28)
 	switch kind {
 	case C28KindStdCall:
-		return nil
+		return call, nil
 	case C28KindToken:
-		return fmt.Errorf("%w: %s", ErrCallsignIsToken, field)
+		token, ok := C28ToToken(c28)
+		if !ok {
+			return "", fmt.Errorf("%w: %s c28=%d", ErrTokenInGap, field, c28)
+		}
+		return token, nil
 	case C28KindHash22:
-		return fmt.Errorf("%w: %s", ErrCallsignNeedsHashLookup, field)
+		return "", fmt.Errorf("%w: %s", ErrCallsignNeedsHashLookup, field)
 	default:
 		panic("codec.DecodeMessage: " + field + " decoded to unknown C28Kind — C28ToCallsign contract regression")
 	}

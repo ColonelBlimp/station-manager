@@ -3,6 +3,7 @@ package codec
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -387,12 +388,12 @@ func TestDecodeMessage_RejectsUnknownI3(t *testing.T) {
 	}
 }
 
-// TestDecodeMessage_TokenReturnsTokenError covers the C28KindToken
-// path: a Type 1 message with c28 in the token range surfaces
-// ErrCallsignIsToken. Phase 2D adds token decoding. Both slots are
-// exercised so a future regression that swaps the c28 reads in
-// decodeStd surfaces here rather than only when Call1 has a token.
-func TestDecodeMessage_TokenReturnsTokenError(t *testing.T) {
+// TestDecodeMessage_TokenDecodesIntoCall covers the C28KindToken
+// path post-Phase-2D: a Type 1 message with a valid token c28
+// surfaces the token string in Call1 / Call2 instead of erroring.
+// Both slots are exercised so a future regression that swaps the
+// c28 reads in decodeStd surfaces here.
+func TestDecodeMessage_TokenDecodesIntoCall(t *testing.T) {
 	g4abc := CallsignC28("G4ABC")
 
 	writeC28 := func(bits []byte, offset int, c28 uint32) {
@@ -402,26 +403,144 @@ func TestDecodeMessage_TokenReturnsTokenError(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		tokenSlot int // 0 for Call1, 1 for Call2
+		name         string
+		tokenSlot    int    // 0 for Call1, 1 for Call2
+		tokenC28     uint32 // c28 value of the token
+		wantTokenStr string // expected decoded token text
 	}{
-		{"token_in_Call1", 0},
-		{"token_in_Call2", 1},
+		{"cq_in_Call1", 0, 2, "CQ"},
+		{"cq_in_Call2", 1, 2, "CQ"},
+		{"de_in_Call1", 0, 0, "DE"},
+		{"qrz_in_Call1", 0, 1, "QRZ"},
+		{"cq_dx_in_Call1", 0, 1135, "CQ DX"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bits := make([]byte, MessageBits)
 			if tc.tokenSlot == 0 {
-				writeC28(bits, 0, 2) // CQ token
+				writeC28(bits, 0, tc.tokenC28)
 				writeC28(bits, 29, g4abc)
 			} else {
 				writeC28(bits, 0, g4abc)
-				writeC28(bits, 29, 2)
+				writeC28(bits, 29, tc.tokenC28)
 			}
 			// i3 = 1 at bits[74..76]
 			bits[76] = 1
-			if _, err := DecodeMessage(bits); !errors.Is(err, ErrCallsignIsToken) {
-				t.Errorf("DecodeMessage(%s) err=%v, want ErrCallsignIsToken", tc.name, err)
+			msg, err := DecodeMessage(bits)
+			if err != nil {
+				t.Fatalf("DecodeMessage(%s): %v", tc.name, err)
+			}
+			gotSlot := msg.Call1
+			otherSlot := msg.Call2
+			if tc.tokenSlot == 1 {
+				gotSlot = msg.Call2
+				otherSlot = msg.Call1
+			}
+			if gotSlot != tc.wantTokenStr {
+				t.Errorf("DecodeMessage(%s) token slot = %q, want %q", tc.name, gotSlot, tc.wantTokenStr)
+			}
+			if otherSlot != "G4ABC" {
+				t.Errorf("DecodeMessage(%s) callsign slot = %q, want %q", tc.name, otherSlot, "G4ABC")
+			}
+		})
+	}
+}
+
+// TestDecodeMessage_TokenWithRoverIsBitFaithful pins the
+// decode-side policy for the spec-violating "token c28 + rover bit
+// set" wire pattern. The codec layer is bit-faithful — it decodes
+// the wire pattern into a Message as-is rather than erroring. The
+// SAME Message, fed back to EncodeMessage or FormatMessage, will
+// be rejected by validateType1Rover.
+//
+// Three properties get pinned here so the documented asymmetry
+// survives future refactors:
+//
+//  1. DecodeMessage accepts the wire pattern (no error).
+//  2. The returned Message has the token in the slot AND the rover
+//     bit set — both ride along faithfully.
+//  3. The returned Message is NOT round-trippable: FormatMessage
+//     and EncodeMessage both reject it. That asymmetry IS the
+//     point — the codec doesn't enforce semantics, the layer
+//     above does.
+func TestDecodeMessage_TokenWithRoverIsBitFaithful(t *testing.T) {
+	g4abc := CallsignC28("G4ABC")
+
+	writeC28 := func(bits []byte, offset int, c28 uint32) {
+		for i := range CallsignBits {
+			bits[offset+i] = byte((c28 >> (CallsignBits - 1 - i)) & 1)
+		}
+	}
+
+	// Wire pattern: c28(Call1)=CQ token (=2), rover1=1, c28(Call2)=
+	// G4ABC, rover2=0, R1=0, g15=FN20, i3=1.
+	bits := make([]byte, MessageBits)
+	writeC28(bits, 0, 2)
+	bits[28] = 1 // rover1 = 1 (the spec-violating part)
+	writeC28(bits, 29, g4abc)
+	// Write g15(FN20) at bits[59..73].
+	fn20 := Grid4ToG15("FN20")
+	for i := range G15Bits {
+		bits[59+i] = byte((fn20 >> (G15Bits - 1 - i)) & 1)
+	}
+	bits[76] = 1 // i3 = 001
+
+	// Property 1: decode succeeds.
+	msg, err := DecodeMessage(bits)
+	if err != nil {
+		t.Fatalf("DecodeMessage(token+rover bits): %v (decode should be bit-faithful)", err)
+	}
+
+	// Property 2: the rover bit and the token both survive.
+	if msg.Call1 != "CQ" {
+		t.Errorf("Call1 = %q, want %q", msg.Call1, "CQ")
+	}
+	if !msg.Rover1 {
+		t.Error("Rover1 = false, want true (wire had rover bit set)")
+	}
+	if msg.Call2 != "G4ABC" {
+		t.Errorf("Call2 = %q, want %q", msg.Call2, "G4ABC")
+	}
+
+	// Property 3: the resulting Message is rejected by both
+	// outbound gates.
+	if _, err := FormatMessage(msg); err == nil {
+		t.Error("FormatMessage(token+rover Message) = nil err, want validation rejection")
+	}
+	if _, err := EncodeMessage(msg); err == nil {
+		t.Error("EncodeMessage(token+rover Message) = nil err, want validation rejection")
+	}
+}
+
+// TestDecodeMessage_TokenGapReturnsError covers the gap-codepoint
+// path: a Type 1 message with c28 in the token partition but on a
+// gap codepoint (no defined token) surfaces ErrTokenInGap. The
+// encoder never emits these values; the wire is carrying a
+// spec-violating value (e.g. corruption that LDPC+CRC let through,
+// or a remote encoder bug).
+func TestDecodeMessage_TokenGapReturnsError(t *testing.T) {
+	g4abc := CallsignC28("G4ABC")
+
+	writeC28 := func(bits []byte, offset int, c28 uint32) {
+		for i := range CallsignBits {
+			bits[offset+i] = byte((c28 >> (CallsignBits - 1 - i)) & 1)
+		}
+	}
+
+	gaps := []uint32{
+		1003,   // inter-row gap (bare-CQ slot, unused)
+		1030,   // inter-row gap after CQ Z
+		1057,   // intra-row gap inside CQ AA..ZZ ("  B ")
+		532444, // first c28 past CQ ZZZZ (large reserved gap)
+	}
+	for _, gap := range gaps {
+		t.Run("gap_"+strconv.FormatUint(uint64(gap), 10), func(t *testing.T) {
+			bits := make([]byte, MessageBits)
+			writeC28(bits, 0, gap)
+			writeC28(bits, 29, g4abc)
+			bits[76] = 1
+			if _, err := DecodeMessage(bits); !errors.Is(err, ErrTokenInGap) {
+				t.Errorf("DecodeMessage(c28=%d) err=%v, want ErrTokenInGap", gap, err)
 			}
 		})
 	}
