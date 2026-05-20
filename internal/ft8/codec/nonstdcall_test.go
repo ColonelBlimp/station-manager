@@ -157,6 +157,54 @@ func TestCallsignC58_LeftJustifyAsymmetry(t *testing.T) {
 	}
 }
 
+// TestC58ToCallsign_RoundTripsSpecVectors confirms that the inverse
+// recovers every spec-vector input. The forward primitive is pinned
+// against the public-domain reference; the inverse's correctness
+// reduces to "the forward then inverse is identity for valid inputs."
+// Trailing-space-loss is inherent to CallsignC58's padding (a 4-char
+// callsign is stored as `K1JT       ` and trims back to `K1JT`).
+func TestC58ToCallsign_RoundTripsSpecVectors(t *testing.T) {
+	for _, tc := range c58Vectors {
+		t.Run(tc.name, func(t *testing.T) {
+			got := C58ToCallsign(tc.want)
+			if got != tc.call {
+				t.Errorf("C58ToCallsign(%d) = %q, want %q", tc.want, got, tc.call)
+			}
+		})
+	}
+}
+
+// TestC58ToCallsign_TrailingSpacesLost pins the documented asymmetry:
+// CallsignC58 left-justifies with trailing spaces, so a round-trip of
+// "K1JT   " (with explicit trailing spaces under 11 chars) recovers
+// to "K1JT" — the trailing spaces are indistinguishable from the
+// padding the forward primitive inserts.
+func TestC58ToCallsign_TrailingSpacesLost(t *testing.T) {
+	c58 := CallsignC58("K1JT")
+	got := C58ToCallsign(c58)
+	if got != "K1JT" {
+		t.Errorf("C58ToCallsign(CallsignC58(%q)) = %q, want %q", "K1JT", got, "K1JT")
+	}
+	c58Padded := CallsignC58("K1JT   ")
+	gotPadded := C58ToCallsign(c58Padded)
+	if gotPadded != "K1JT" {
+		t.Errorf("trailing-space loss broken: %q recovered to %q, want %q", "K1JT   ", gotPadded, "K1JT")
+	}
+}
+
+// TestC58ToCallsign_PanicsOnOverflow pins the upper-bit guard: c58
+// values ≥ 2^58 are not legal wire values (the bit-extraction at the
+// message layer masks to 58 bits, but a direct caller could pass an
+// arbitrary uint64).
+func TestC58ToCallsign_PanicsOnOverflow(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("C58ToCallsign(1 << 58) should panic, did not")
+		}
+	}()
+	C58ToCallsign(1 << 58)
+}
+
 func BenchmarkCallsignC58(b *testing.B) {
 	const call = "PJ4/K1ABC"
 	b.ReportAllocs()

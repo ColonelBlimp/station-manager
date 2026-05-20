@@ -5,32 +5,9 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
-)
-
-// QEX Table 1 i3 tags. Three-bit value written into the lowest 3
-// bits of the 77-bit message body. Tags for unimplemented types land
-// alongside their encoders.
-const (
-	i3Std    = 1 // Type 1 (Std Msg)
-	i3EUVHFP = 2 // Type 2 (EU VHF /P)
-)
-
-// QEX Table 1 i3.n3 tags for the i3=0 message-type family. n3
-// occupies bits 71..73 (the 3 bits immediately above f71's 71-bit
-// payload); i3=0 occupies bits 74..76. The family multiplexes:
-//
-//	n3 = 0: Free Text (Type 0.0)         — implemented
-//	n3 = 1: DXpedition (Type 0.1)        — Phase 4
-//	n3 = 3: Field Day Class A-F (0.3)    — Phase 4
-//	n3 = 4: Field Day (0.4)              — Phase 4
-//	n3 = 5: Telemetry (0.5)              — Phase 4
-//	n3 = 2, 6, 7 are unassigned per QEX paper Table 1.
-const (
-	i3Zero      = 0
-	n3FreeText  = 0
-	n3FieldBits = 3
 )
 
 // FT8 signal-report range per QEX paper §A: "numerical signal
@@ -74,6 +51,8 @@ func EncodeMessage(m Message) ([]byte, error) {
 		return encodeStd(m)
 	case MessageTypeEUVHFP:
 		return encodeEUVHFP(m)
+	case MessageTypeNonStdCall:
+		return encodeNonStdCall(m)
 	case MessageTypeFreeText:
 		return encodeFreeText(m)
 	default:
@@ -182,6 +161,197 @@ func validateType2Call(call, field string) error {
 		return errors.New(op).WithMsgf("%s = %q is a token (CQ / DE / QRZ / CQ <suffix>); tokens are not valid in Type 2 (EU VHF /P)", field, call)
 	}
 	return validateStdCallsign(call, field)
+}
+
+// encodeNonStdCall packs a Type 4 (NonStd Call) body per QEX Table 1:
+//
+//	h12(hash) | c58(nonstd) | h1 | r2 | c1 | i3=4
+//	   12          58          1    2    1    3   = 77 bits
+//
+// Field semantics:
+//   - h12: 12-bit hash of the std-callsign side (or zero when c1=1).
+//   - c58: 58-bit packing of the nonstandard callsign (up to 11 chars,
+//     compound prefixes / suffixes, special-event calls).
+//   - h1: 0 = hash is Call1, 1 = hash is Call2. The encoder picks this
+//     from which call has std-callsign shape.
+//   - r2: encodes the trailing token (Grid field) — blank / RRR / RR73 / 73.
+//   - c1: 1 = Call1 is CQ and h12 is ignored on the wire. Set from
+//     Call1 == "CQ".
+//
+// Shape rules enforced by validateType4Calls (see its doc): exactly
+// one std + one nonstd, OR Call1 == "CQ" + Call2 nonstd; no
+// CQ-with-suffix (the c1 flag is 1 bit, no room for "CQ <suffix>");
+// Grid restricted to {"", "RRR", "RR73", "73"}.
+func encodeNonStdCall(m Message) ([]byte, error) {
+	const op errors.Op = "codec.encodeNonStdCall"
+	if err := validateType4Calls(m); err != nil {
+		return nil, err
+	}
+
+	var h12 uint32
+	var c58 uint64
+	var h1 uint64
+	var c1 uint64
+	if m.Call1 == "CQ" {
+		// c1=1: Call1 is CQ, h12 is ignored on the wire (encode as
+		// zero by convention so two identical CQ-from-nonstd messages
+		// produce identical wire output). c58 carries Call2 (the
+		// nonstd side); h1 stays 0 (hash slot is nominally Call1).
+		c1 = 1
+		h12 = 0
+		c58 = CallsignC58(m.Call2)
+		h1 = 0
+	} else if isStdCallsignShape(m.Call1) {
+		// Call1 is std → goes through h12; Call2 is nonstd → c58.
+		// h1 = 0 (hash is the first callsign).
+		_, h12, _ = HashCodes(m.Call1)
+		c58 = CallsignC58(m.Call2)
+		h1 = 0
+	} else {
+		// Call2 is std → goes through h12; Call1 is nonstd → c58.
+		// h1 = 1 (hash is the second callsign).
+		_, h12, _ = HashCodes(m.Call2)
+		c58 = CallsignC58(m.Call1)
+		h1 = 1
+	}
+
+	r2, ok := gridToR2(m.Grid)
+	if !ok {
+		// validateType4Calls already constrained Grid; this is belt-
+		// and-braces. A regression in the validator would surface
+		// here rather than as garbled wire bits.
+		return nil, errors.New(op).WithMsgf("Grid %q does not map to an r2 token (validator regression)", m.Grid)
+	}
+
+	var b BitBuilder
+	b.Append(uint64(h12), h12Bits).
+		Append(c58, C58Bits).
+		Append(h1, h1Bits).
+		Append(uint64(r2), r2Bits).
+		Append(c1, c1Bits).
+		Append(i3NonStdCall, i3Width)
+	if b.Len() != MessageBits {
+		panic("codec.encodeNonStdCall: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
+	}
+	return slices.Clone(b.Bits()), nil
+}
+
+// validateType4Calls enforces the Type 4 shape rules. See
+// encodeNonStdCall's doc for the rule list.
+func validateType4Calls(m Message) error {
+	const op errors.Op = "codec.validateType4Calls"
+
+	// Grid: must be empty or one of the three reserved tokens. Type
+	// 4 has no grid / signed-report slot.
+	if _, ok := gridToR2(m.Grid); !ok {
+		return errors.New(op).WithMsgf("Grid = %q is not a valid Type 4 token; allowed values are \"\", \"RRR\", \"RR73\", \"73\"", m.Grid)
+	}
+
+	// CQ-from-nonstd: Call1 == "CQ" exactly. Type 4's c1 flag is one
+	// bit — no "CQ <suffix>" support.
+	if m.Call1 == "CQ" {
+		if isType4ValidNonStdCall(m.Call2) {
+			return nil
+		}
+		return errors.New(op).WithMsgf("Call2 = %q is not a valid Type 4 nonstandard callsign", m.Call2)
+	}
+	if strings.HasPrefix(m.Call1, "CQ ") {
+		return errors.New(op).WithMsgf("Call1 = %q has a CQ-with-suffix form; Type 4 supports only bare \"CQ\" in Call1 (the c1 wire flag is 1 bit)", m.Call1)
+	}
+	if _, isTok := TokenToC28(m.Call1); isTok {
+		return errors.New(op).WithMsgf("Call1 = %q is a Type 1 token; Type 4 supports only bare \"CQ\" or a callsign", m.Call1)
+	}
+	if _, isTok := TokenToC28(m.Call2); isTok {
+		return errors.New(op).WithMsgf("Call2 = %q is a Type 1 token; tokens are not valid in Type 4", m.Call2)
+	}
+
+	// Normal path: exactly one std + one nonstd. Both-std should be
+	// Type 1; both-nonstd is ambiguous (the encoder has no rule for
+	// picking which side is c58 vs h12).
+	std1 := isStdCallsignShape(m.Call1)
+	std2 := isStdCallsignShape(m.Call2)
+	if std1 && std2 {
+		return errors.New(op).WithMsgf("both Call1 = %q and Call2 = %q are standard callsigns; use Type 1 (Std Msg) instead", m.Call1, m.Call2)
+	}
+	if !std1 && !std2 {
+		return errors.New(op).WithMsgf("both Call1 = %q and Call2 = %q are nonstandard; Type 4 requires exactly one std + one nonstd callsign", m.Call1, m.Call2)
+	}
+
+	nonstd := m.Call2
+	if std2 {
+		nonstd = m.Call1
+	}
+	if !isType4ValidNonStdCall(nonstd) {
+		return errors.New(op).WithMsgf("nonstandard callsign %q does not fit the c58 alphabet (1-11 chars, alphabet: space + 0-9 + A-Z + /)", nonstd)
+	}
+
+	stdCall := m.Call1
+	if std2 {
+		stdCall = m.Call2
+	}
+	if err := validateStdCallsign(stdCall, "std callsign"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// isType4ValidNonStdCall reports whether s fits the c58 alphabet
+// (length 1..11; characters in " 0-9A-Z/"). Used by Type 4's
+// validator to gate inputs upstream of CallsignC58's panic path.
+func isType4ValidNonStdCall(s string) bool {
+	if len(s) == 0 || len(s) > nonstdCallLen {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c == ' ':
+		case c >= '0' && c <= '9':
+		case c >= 'A' && c <= 'Z':
+		case c == '/':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// gridToR2 maps the Grid string to the 2-bit r2 wire value for Type 4.
+// The same string set Type 1 uses for the g15 reserved-token slot,
+// minus the grid / signed-report forms (which Type 4 has no slot for).
+//
+// Returns (r2Value, ok). ok=false signals a Grid value that doesn't
+// fit Type 4; callers (validator + encoder) treat it as a validation
+// failure.
+func gridToR2(grid string) (uint8, bool) {
+	switch grid {
+	case "":
+		return r2Blank, true
+	case "RRR":
+		return r2RRR, true
+	case "RR73":
+		return r2RR73, true
+	case "73":
+		return r2_73, true
+	}
+	return 0, false
+}
+
+// r2ToGrid is the inverse of gridToR2. Returns the canonical string
+// form for the 2-bit r2 wire value. Panics for r2 ≥ 4 (the wire layer
+// masks to 2 bits, so this only fires on internal misuse).
+func r2ToGrid(r2 uint8) string {
+	switch r2 {
+	case r2Blank:
+		return ""
+	case r2RRR:
+		return "RRR"
+	case r2RR73:
+		return "RR73"
+	case r2_73:
+		return "73"
+	}
+	panic("codec.r2ToGrid: r2=" + strconv.Itoa(int(r2)) + " exceeds 2 bits")
 }
 
 // encodeFreeText packs a Type 0.0 (Free Text) body per QEX Table 1:

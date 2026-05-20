@@ -94,3 +94,35 @@ func CallsignC58(call string) uint64 {
 	}
 	return n58
 }
+
+// C58ToCallsign is the Layer 1 inverse of CallsignC58. Given a 58-bit
+// code, recover the original callsign string. Used by the Type 4
+// (NonStd Call) decoder to surface the c58 side of the wire as text.
+//
+// Algorithm: walk right-to-left over the 11 character positions,
+// extracting each alphabet index via divmod by 38. Trim trailing
+// spaces to undo CallsignC58's left-justified-with-trailing-spaces
+// padding (see the padding-asymmetry note in CallsignC58's doc).
+//
+// Panics on inputs ≥ 2^58 — the wire layer guards the bit width
+// upstream so this only fires on internal misuse.
+//
+// Returns the empty string for c58=0 (the all-spaces encoding). The
+// QEX paper doesn't reserve any c58 codepoints, so every input in
+// [0, 2^58) maps to a recoverable string, but some of those strings
+// will not be syntactically valid callsigns (e.g. "/////" or pure
+// digits) — the Layer 1 primitive is bit-faithful; syntactic
+// validation is the message-layer's concern.
+func C58ToCallsign(c58 uint64) string {
+	const op = "codec.C58ToCallsign"
+	if c58 >= (1 << C58Bits) {
+		panic(op + ": c58=" + strconv.FormatUint(c58, 10) + " exceeds " + strconv.Itoa(C58Bits) + " bits")
+	}
+	var chars [nonstdCallLen]byte
+	n := c58
+	for i := nonstdCallLen - 1; i >= 0; i-- {
+		chars[i] = hashAlphabet[n%hashAlphabetSize]
+		n /= hashAlphabetSize
+	}
+	return strings.TrimRight(string(chars[:]), " ")
+}

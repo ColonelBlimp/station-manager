@@ -124,4 +124,18 @@ type Message struct {
 	// spaces survive. The lost-leading-space asymmetry is inherent
 	// to the encoding, not a codec bug.
 	FreeText string
+
+	// Hash12 holds the 12-bit hash value (the h12 wire field) for
+	// Type 4 (NonStd Call) messages when the receiver-side hash
+	// table hasn't resolved it to a callsign string. The hashed
+	// Call slot then holds the WSJT-X "<...>" sentinel; Phase 4's
+	// hash table fills the resolved string in once it sees the
+	// callsign on a later decode and the wire-level h12 matches.
+	//
+	// Zero on encoded messages (the caller supplied the original
+	// callsign string, so the encoder computes h12 fresh from
+	// HashCodes) and on decoded messages where the hash has already
+	// been resolved. Non-zero only on decoded Type 4 messages whose
+	// hash side is still unresolved.
+	Hash12 uint16
 }

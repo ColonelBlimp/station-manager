@@ -2,11 +2,6 @@ package codec
 
 import "strconv"
 
-// MessageBits is the number of information bits in an FT8 message.
-// Per QEX paper §2: "FT4 and FT8 transmissions always convey
-// exactly 77 bits of user information."
-const MessageBits = 77
-
 // CRCBits is the FT8 cyclic redundancy check size. Per QEX paper §3:
 // "A 14-bit cyclic redundancy check (CRC) is appended to each 77-bit
 // information packet to create a 91-bit message-plus-CRC word."

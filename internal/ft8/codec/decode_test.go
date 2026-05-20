@@ -371,11 +371,11 @@ func TestDecodeMessage_RejectsShortBody(t *testing.T) {
 
 // TestDecodeMessage_RejectsUnknownI3 verifies the i3-tag dispatch.
 // Implemented: i3=0 (i3.n3 = 0.x family), i3=1 (Std Msg),
-// i3=2 (EU VHF /P). The remaining tags return the unsupported-type
-// sentinel until their packers land.
+// i3=2 (EU VHF /P), i3=4 (NonStd Call). The remaining tags return
+// the unsupported-type sentinel until their packers land.
 func TestDecodeMessage_RejectsUnknownI3(t *testing.T) {
 	for i3 := 0; i3 < 8; i3++ {
-		if i3 == i3Std || i3 == i3Zero || i3 == i3EUVHFP {
+		if i3 == i3Std || i3 == i3Zero || i3 == i3EUVHFP || i3 == i3NonStdCall {
 			continue
 		}
 		bits := make([]byte, MessageBits)

@@ -6,16 +6,6 @@ import (
 	"strconv"
 )
 
-// i3Width is the width of the i3 message-type tag in bits per QEX
-// paper Table 1; i3Offset is the bit position of the i3 tag's MSB
-// within the 77-bit body (i3 lives in the lowest 3 bits). Named so
-// a future width change is a one-line edit and the layout reads as
-// "i3 spans [i3Offset, MessageBits)" at the call sites.
-const (
-	i3Width  = 3
-	i3Offset = MessageBits - i3Width
-)
-
 // ErrShortBody is returned by DecodeMessage when the input bit
 // buffer is the wrong length. FT8 message bodies are exactly 77
 // bits per QEX paper §2; the codec layer doesn't strip CRC or
@@ -80,6 +70,8 @@ func DecodeMessage(bits []byte) (Message, error) {
 		return decodeStd(bits)
 	case i3EUVHFP:
 		return decodeEUVHFP(bits)
+	case i3NonStdCall:
+		return decodeNonStdCall(bits)
 	default:
 		return Message{}, fmt.Errorf("%w: i3=%d", ErrUnknownMessageType, i3)
 	}
@@ -233,6 +225,64 @@ func type2CallFromC28(c28 uint32, field string) (string, error) {
 	default:
 		panic("codec.decodeEUVHFP: " + field + " decoded to unknown C28Kind — C28ToCallsign contract regression")
 	}
+}
+
+// hashedCallSentinel is the WSJT-X-convention placeholder used when a
+// Type 4 (NonStd Call) hash slot hasn't been resolved to a string by
+// Phase 4's hash table. Operators familiar with WSJT-X output see this
+// for first-decoded messages from new stations, and `<W9XYZ>` (real
+// callsign in angle brackets) once the table has the resolution.
+const hashedCallSentinel = "<...>"
+
+// decodeNonStdCall inverts encodeNonStdCall. Bit layout per QEX Table 1:
+//
+//	h12 | c58 | h1 | r2 | c1 | i3=4
+//	 12    58    1    2    1    3
+//
+// Returns a Message with:
+//   - The nonstd side (Call1 or Call2 depending on h1) fully recovered
+//     via C58ToCallsign.
+//   - The hashed side set to hashedCallSentinel ("<...>") and the raw
+//     12-bit hash exposed as Message.Hash12. Phase 4's hash table fills
+//     the string in when the lookup is available.
+//   - Grid populated from r2 (one of "", "RRR", "RR73", "73").
+//   - Type = MessageTypeNonStdCall.
+//
+// When c1=1, Call1 is "CQ" and the h12 wire bits are ignored per QEX
+// Table 2; Hash12 stays zero.
+func decodeNonStdCall(bits []byte) (Message, error) {
+	h12 := uint16(readBitsUint64(bits, 0, h12Bits))
+	c58 := readBitsUint64(bits, h12Bits, C58Bits)
+	h1 := bits[h12Bits+C58Bits]
+	r2 := uint8(readBitsUint64(bits, h12Bits+C58Bits+h1Bits, r2Bits))
+	c1 := bits[h12Bits+C58Bits+h1Bits+r2Bits]
+
+	nonstd := C58ToCallsign(c58)
+	grid := r2ToGrid(r2)
+
+	msg := Message{
+		Type: MessageTypeNonStdCall,
+		Grid: grid,
+	}
+	switch {
+	case c1 == 1:
+		// Call1 is CQ; h12 wire bits are ignored. Call2 holds the
+		// nonstd side regardless of h1.
+		msg.Call1 = "CQ"
+		msg.Call2 = nonstd
+		msg.Hash12 = 0
+	case h1 == 0:
+		// Hash is the first callsign; nonstd is the second.
+		msg.Call1 = hashedCallSentinel
+		msg.Call2 = nonstd
+		msg.Hash12 = h12
+	default:
+		// Hash is the second callsign; nonstd is the first.
+		msg.Call1 = nonstd
+		msg.Call2 = hashedCallSentinel
+		msg.Hash12 = h12
+	}
+	return msg, nil
 }
 
 // type1CallFromC28 recovers the Type 1 Call1/Call2 string from a c28
