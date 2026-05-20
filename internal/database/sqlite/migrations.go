@@ -8,7 +8,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
-	"github.com/golang-migrate/migrate/v4/database/sqlite3"
+	migratesqlite "github.com/golang-migrate/migrate/v4/database/sqlite"
 	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
@@ -22,10 +22,10 @@ func GetMigrationDrivers(handle *sql.DB) (source.Driver, database.Driver, error)
 	if err != nil {
 		return nil, nil, errors.New(op).WithErr(err).WithMsg("iofs.New")
 	}
-	dbDriver, err := sqlite3.WithInstance(handle, &sqlite3.Config{})
+	dbDriver, err := migratesqlite.WithInstance(handle, &migratesqlite.Config{})
 	if err != nil {
 		_ = srcDriver.Close()
-		return nil, nil, errors.New(op).WithErr(err).WithMsg("sqlite3.WithInstance")
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("migratesqlite.WithInstance")
 	}
 	return srcDriver, dbDriver, nil
 }
