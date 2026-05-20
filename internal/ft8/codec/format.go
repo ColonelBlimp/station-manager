@@ -28,6 +28,8 @@ func FormatMessage(m Message) (string, error) {
 	switch m.Type {
 	case MessageTypeStd:
 		return formatStd(m)
+	case MessageTypeEUVHFP:
+		return formatEUVHFP(m)
 	case MessageTypeFreeText:
 		return formatFreeText(m)
 	default:
@@ -75,6 +77,39 @@ func formatStd(m Message) (string, error) {
 	call2 := m.Call2
 	if m.Suffix2 {
 		call2 += "/R"
+	}
+
+	field := formatGridField(m.Grid, m.AckBit)
+	if field == "" {
+		return call1 + " " + call2, nil
+	}
+	return call1 + " " + call2 + " " + field, nil
+}
+
+// formatEUVHFP renders a Type 2 (EU VHF /P) message. Mirrors formatStd
+// but emits /P (portable) instead of /R (rover) for the Suffix bit —
+// the wire slot is shared between the two types and the rendered
+// character is chosen by the Type discriminator. Validation runs
+// through validateType2Call, which rejects tokens (Type 2's c28
+// partition is std-callsign-only per QEX Table 7).
+func formatEUVHFP(m Message) (string, error) {
+	if err := validateType2Call(m.Call1, "Call1"); err != nil {
+		return "", err
+	}
+	if err := validateType2Call(m.Call2, "Call2"); err != nil {
+		return "", err
+	}
+	if err := validateG15Slot(m.Grid); err != nil {
+		return "", err
+	}
+
+	call1 := m.Call1
+	if m.Suffix1 {
+		call1 += "/P"
+	}
+	call2 := m.Call2
+	if m.Suffix2 {
+		call2 += "/P"
 	}
 
 	field := formatGridField(m.Grid, m.AckBit)

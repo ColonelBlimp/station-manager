@@ -295,3 +295,209 @@ func TestDecodeMessage_Type2_HashCallSurfaces(t *testing.T) {
 		t.Errorf("DecodeMessage(Type 2 wire with hash c28) err=%v, want ErrCallsignNeedsHashLookup", err)
 	}
 }
+
+// TestFormatMessage_Type2_BasicShapes pins the human-readable
+// output for the Type 2 (EU VHF /P) layouts. Mirrors the Type 1
+// formatter test, with /P in place of /R.
+func TestFormatMessage_Type2_BasicShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+		want string
+	}{
+		{
+			"plain_pair_grid",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Grid: "JO22"},
+			"G4ABC P9XYZ JO22",
+		},
+		{
+			"plain_pair_no_grid",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ"},
+			"G4ABC P9XYZ",
+		},
+		{
+			"suffix1_set",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, Grid: "JO22"},
+			"G4ABC/P P9XYZ JO22",
+		},
+		{
+			"suffix2_set",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix2: true, Grid: "JO22"},
+			"G4ABC P9XYZ/P JO22",
+		},
+		{
+			"both_suffix_set",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, Suffix2: true, Grid: "JO22"},
+			"G4ABC/P P9XYZ/P JO22",
+		},
+		{
+			"report",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Grid: "-11"},
+			"G4ABC P9XYZ -11",
+		},
+		{
+			"ack_report",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", AckBit: true, Grid: "-09"},
+			"G4ABC P9XYZ R-09",
+		},
+		{
+			"ack_grid",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", AckBit: true, Grid: "JO22"},
+			"G4ABC P9XYZ R JO22",
+		},
+		{
+			"reserved_rr73",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Grid: "RR73"},
+			"G4ABC P9XYZ RR73",
+		},
+		{
+			"suffix1_with_ack",
+			Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, AckBit: true, Grid: "JO22"},
+			"G4ABC/P P9XYZ R JO22",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FormatMessage(tc.msg)
+			if err != nil {
+				t.Fatalf("FormatMessage: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("FormatMessage(%+v) = %q, want %q", tc.msg, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatMessage_Type2_RejectsToken verifies that the format path
+// shares the validateType2Call gate: tokens in either call slot
+// reject. Symmetric with the encoder's token-rejection guard.
+func TestFormatMessage_Type2_RejectsToken(t *testing.T) {
+	cases := []Message{
+		{Type: MessageTypeEUVHFP, Call1: "CQ", Call2: "G4ABC", Grid: "JO22"},
+		{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "CQ", Grid: "JO22"},
+		{Type: MessageTypeEUVHFP, Call1: "DE", Call2: "G4ABC", Grid: "JO22"},
+		{Type: MessageTypeEUVHFP, Call1: "QRZ", Call2: "G4ABC", Grid: "JO22"},
+	}
+	for _, msg := range cases {
+		if _, err := FormatMessage(msg); err == nil {
+			t.Errorf("FormatMessage(%+v) = nil err, want token-rejection error", msg)
+		}
+	}
+}
+
+// TestParseMessage_Type2_BasicShapes pins the parse-side classifier
+// dispatch. Inputs containing /P route to parseEUVHFP; the recovered
+// Message has Type == MessageTypeEUVHFP and the /P-bearing call has
+// its Suffix bit set.
+func TestParseMessage_Type2_BasicShapes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Message
+	}{
+		{"G4ABC/P P9XYZ JO22", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, Grid: "JO22"}},
+		{"G4ABC P9XYZ/P JO22", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix2: true, Grid: "JO22"}},
+		{"G4ABC/P P9XYZ/P JO22", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, Suffix2: true, Grid: "JO22"}},
+		{"G4ABC/P P9XYZ", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true}},
+		{"G4ABC/P P9XYZ -11", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, Grid: "-11"}},
+		{"G4ABC/P P9XYZ R-09", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, AckBit: true, Grid: "-09"}},
+		{"G4ABC/P P9XYZ R JO22", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, AckBit: true, Grid: "JO22"}},
+		{"G4ABC/P P9XYZ RR73", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, Grid: "RR73"}},
+		// Lowercase input is upper-cased upstream — same round-trip
+		// guarantee Type 1 provides.
+		{"g4abc/p p9xyz jo22", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "P9XYZ", Suffix1: true, Grid: "JO22"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := ParseMessage(tc.in)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseMessage(%q) = %+v, want %+v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseMessage_Type2_RejectsMixedRoverAndPortable pins the
+// per-call suffix gate: a single message cannot mix /R and /P on
+// its two callsigns — the wire bit slot is single-Type. The
+// classifier routes to parseEUVHFP on the /P trigger, and the
+// per-call validator rejects any /R it then finds.
+func TestParseMessage_Type2_RejectsMixedRoverAndPortable(t *testing.T) {
+	cases := []string{
+		"K1ABC/R G4ABC/P JO22",
+		"K1ABC/P G4ABC/R JO22",
+		"K1ABC/R G4ABC/P R JO22",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			if _, err := ParseMessage(in); err == nil {
+				t.Errorf("ParseMessage(%q) = nil err, want mixed /R + /P rejection", in)
+			}
+		})
+	}
+}
+
+// TestParseMessage_Type2_RejectsTokenStart pins the early-reject
+// gate for Type 1 tokens at the head of a Type 2 input. parseEUVHFP
+// catches CQ / DE / QRZ specifically so the error message names the
+// token rather than failing further down with a length-mismatch
+// callsign error.
+func TestParseMessage_Type2_RejectsTokenStart(t *testing.T) {
+	cases := []string{
+		"CQ G4ABC/P JO22",
+		"CQ DX G4ABC/P JO22",
+		"DE G4ABC/P JO22",
+		"QRZ G4ABC/P JO22",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			if _, err := ParseMessage(in); err == nil {
+				t.Errorf("ParseMessage(%q) = nil err, want token-rejection error", in)
+			}
+		})
+	}
+}
+
+// TestType2_TextRoundTrip verifies the full text-layer loop:
+// ParseMessage → EncodeMessage → DecodeMessage → FormatMessage
+// returns the original input. Each transition is independently
+// tested elsewhere; this test is the integration point.
+func TestType2_TextRoundTrip(t *testing.T) {
+	cases := []string{
+		"G4ABC/P P9XYZ JO22",
+		"G4ABC P9XYZ/P JO22",
+		"G4ABC/P P9XYZ/P JO22",
+		"G4ABC/P P9XYZ",
+		"G4ABC/P P9XYZ -11",
+		"G4ABC/P P9XYZ R-09",
+		"G4ABC/P P9XYZ R JO22",
+		"G4ABC/P P9XYZ RR73",
+		"G4ABC/P P9XYZ/P R IO91",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			parsed, err := ParseMessage(in)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v", in, err)
+			}
+			bits, err := EncodeMessage(parsed)
+			if err != nil {
+				t.Fatalf("EncodeMessage: %v", err)
+			}
+			decoded, err := DecodeMessage(bits)
+			if err != nil {
+				t.Fatalf("DecodeMessage: %v", err)
+			}
+			got, err := FormatMessage(decoded)
+			if err != nil {
+				t.Fatalf("FormatMessage: %v", err)
+			}
+			if got != in {
+				t.Errorf("round-trip(%q) = %q, want %q", in, got, in)
+			}
+		})
+	}
+}

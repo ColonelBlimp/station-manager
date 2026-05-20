@@ -14,18 +14,19 @@ import (
 var ErrEmptyMessage = stderrors.New("codec: empty message")
 
 // ErrUnrecognisedFormat is returned by ParseMessage when the input
-// doesn't match any known Type 1 layout (the only type Phase 2D
-// recognises). Distinguishes "we don't know how to parse this" from
-// "we know it's a Type X message that hasn't been implemented".
-var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recognised Type 1 message layout")
+// doesn't match any known message layout (Type 1 / Type 2 / Free Text
+// at the time of writing). Distinguishes "we don't know how to parse
+// this" from "we know it's a Type X message that hasn't been
+// implemented".
+var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recognised message layout")
 
 // ParseMessage parses the human-readable FT8 text form of a message
 // into a Message struct ready to feed EncodeMessage. Inverse of
 // FormatMessage; together they form the text-layer above the
 // bit-level codec.
 //
-// Currently supported types: Type 1 ("Std Msg", Phase 2D) and
-// Type 0.0 ("Free Text", Phase 3A).
+// Currently supported types: Type 1 ("Std Msg", Phase 2D), Type 2
+// ("EU VHF /P", Phase 3B), and Type 0.0 ("Free Text", Phase 3A).
 //
 // Type 1 patterns recognised:
 //
@@ -41,6 +42,11 @@ var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recogn
 // <field> accepts a 4-char grid, a signed report ("+02", "-11"), a
 // reserved token ("RRR", "RR73", "73"), or an R-fused report ("R-09").
 //
+// Type 2 patterns recognised (mirror Type 1 but with /P portable
+// suffix in place of /R, and no token escape in Call1):
+//
+//	<call1>[/P] <call2>[/P] [<field>]
+//
 // Free Text dispatch: per the Phase 3A out-of-alphabet rule, the
 // presence of '.' or '?' (characters in the f71 alphabet but NOT in
 // the std-callsign alphabet) signals operator intent for Type 0.0.
@@ -49,6 +55,12 @@ var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recogn
 // Inputs that look structured but don't parse (e.g. "HELLO" with no
 // trigger char and no second callsign) still return an error —
 // strict structured-or-Free-Text choice.
+//
+// Type 2 dispatch is symmetric: presence of "/P" as the trailing two
+// characters of any whitespace-separated token routes to parseEUVHFP.
+// /P is unique to Type 2 (Type 1 uses /R), so the trigger is
+// unambiguous. Mixed /R + /P in a single input is rejected by the
+// per-call validator inside parseEUVHFP.
 //
 // Inputs are upper-cased internally; the caller doesn't need to
 // pre-normalise. Anything that fails to match returns
@@ -64,17 +76,29 @@ func ParseMessage(text string) (Message, error) {
 	}
 
 	// Free Text dispatch: '.' and '?' are unique to the f71 alphabet
-	// (not present in the std-callsign / rover / signed-report
-	// alphabet that structured Type 1 parsing uses). Their presence
-	// is the operator's unambiguous Free Text signal. Inputs without
-	// these chars try structured first; if structured fails they
-	// error out rather than silently falling back — see the
-	// Phase 3A Step A design rationale.
+	// (not present in the std-callsign / suffix / signed-report
+	// alphabet that structured parsing uses). Their presence is the
+	// operator's unambiguous Free Text signal. Inputs without these
+	// chars try structured first; if structured fails they error out
+	// rather than silently falling back — see the Phase 3A Step A
+	// design rationale.
 	if strings.ContainsAny(trimmed, ".?") {
 		return parseFreeText(trimmed)
 	}
 
 	tokens := strings.Fields(normalised)
+
+	// Type 2 (EU VHF /P) dispatch: any field token with a /P suffix
+	// signals Type 2. /P is unique to Type 2 — Type 1's per-call
+	// suffix is /R, handled inside consumeCall further down. The
+	// pre-scan is one HasSuffix check per token; structurally
+	// symmetric with the . / ? Free Text trigger above.
+	for _, tok := range tokens {
+		if strings.HasSuffix(tok, "/P") {
+			return parseEUVHFP(tokens)
+		}
+	}
+
 	return parseStd(tokens)
 }
 
@@ -90,6 +114,89 @@ func parseFreeText(text string) (Message, error) {
 		Type:     MessageTypeFreeText,
 		FreeText: text,
 	}, nil
+}
+
+// parseEUVHFP parses the Type 2 (EU VHF /P) layout. Mirrors
+// parsePlainStd's two-callsign + grid-field shape, but the
+// per-callsign suffix is /P (portable) rather than /R (rover),
+// and the c28 partition is std-callsign-only — tokens (CQ / DE /
+// QRZ / "CQ <suffix>") are not valid in Type 2 per QEX Table 7.
+//
+// Reaches here only when the classifier has already seen at least
+// one /P-suffixed token. A /R-suffixed token in the same input is
+// caught by consumePortableCall as a mixed /R + /P error (the
+// wire bit slot is single-Type per message).
+func parseEUVHFP(tokens []string) (Message, error) {
+	const op errors.Op = "codec.ParseMessage"
+	if len(tokens) < 2 {
+		return Message{}, errors.New(op).WithMsgf("Type 2 (EU VHF /P) message has only %d field(s); need at least two callsigns", len(tokens))
+	}
+	// Reject Type 1 token starters (CQ / DE / QRZ / "CQ <suffix>") up
+	// front so the error message is specific. validateStdCallsign
+	// would otherwise reject these on length, with a less informative
+	// "callsign too short" diagnostic.
+	if isType1TokenStart(tokens[0]) {
+		return Message{}, errors.New(op).WithMsgf("Type 2 (EU VHF /P) input begins with token %q; tokens are not valid in Type 2", tokens[0])
+	}
+	call1, suffix1, rest, err := consumePortableCall(tokens)
+	if err != nil {
+		return Message{}, err
+	}
+	call2, suffix2, fieldTokens, err := consumePortableCall(rest)
+	if err != nil {
+		return Message{}, err
+	}
+	grid, ack, err := consumeGridField(fieldTokens)
+	if err != nil {
+		return Message{}, err
+	}
+	return Message{
+		Type:    MessageTypeEUVHFP,
+		Call1:   call1,
+		Call2:   call2,
+		Suffix1: suffix1,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
+	}, nil
+}
+
+// isType1TokenStart reports whether the first field of a parsed input
+// is a Type 1 c28 token. Used by parseEUVHFP to reject token-bearing
+// inputs explicitly, since Type 2 has no token partition. The check
+// covers the single-token forms (CQ / DE / QRZ) plus the "CQ <suffix>"
+// two-token form (whose first field is "CQ").
+func isType1TokenStart(first string) bool {
+	switch first {
+	case "CQ", "DE", "QRZ":
+		return true
+	}
+	return false
+}
+
+// consumePortableCall is the Type 2 analogue of consumeCall. Strips
+// the trailing /P portable suffix and reports it via the returned
+// suffix bool. If the call carries /R instead, that's a mixed Type 1
+// + Type 2 input — the bit slot is single-Type per message — and
+// surfaces as an explicit error rather than a generic callsign-shape
+// rejection.
+func consumePortableCall(tokens []string) (string, bool, []string, error) {
+	const op errors.Op = "codec.ParseMessage"
+	if len(tokens) == 0 {
+		return "", false, nil, errors.New(op).WithMsgf("missing callsign field")
+	}
+	raw := tokens[0]
+	suffix := false
+	if strings.HasSuffix(raw, "/P") {
+		suffix = true
+		raw = raw[:len(raw)-2]
+	} else if strings.HasSuffix(raw, "/R") {
+		return "", false, nil, errors.New(op).WithMsgf("callsign %q has /R suffix in a Type 2 (EU VHF /P) context; mixed /R + /P is not a valid single-Type wire shape", tokens[0])
+	}
+	if err := validateStdCallsign(raw, "callsign"); err != nil {
+		return "", false, nil, err
+	}
+	return raw, suffix, tokens[1:], nil
 }
 
 // normalizeText upper-cases ASCII letters and is a no-op for other
