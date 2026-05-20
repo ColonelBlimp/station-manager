@@ -26,7 +26,8 @@ var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recogn
 // bit-level codec.
 //
 // Currently supported types: Type 1 ("Std Msg", Phase 2D), Type 2
-// ("EU VHF /P", Phase 3B), and Type 0.0 ("Free Text", Phase 3A).
+// ("EU VHF /P", Phase 3B), Type 4 ("NonStd Call", Phase 3C), and
+// Type 0.0 ("Free Text", Phase 3A).
 //
 // Type 1 patterns recognised:
 //
@@ -47,20 +48,26 @@ var ErrUnrecognisedFormat = stderrors.New("codec: input doesn't match any recogn
 //
 //	<call1>[/P] <call2>[/P] [<field>]
 //
-// Free Text dispatch: per the Phase 3A out-of-alphabet rule, the
-// presence of '.' or '?' (characters in the f71 alphabet but NOT in
-// the std-callsign alphabet) signals operator intent for Type 0.0.
-// Such inputs route to parseFreeText, which preserves internal
-// whitespace as message content (trimmed of leading/trailing only).
-// Inputs that look structured but don't parse (e.g. "HELLO" with no
-// trigger char and no second callsign) still return an error —
-// strict structured-or-Free-Text choice.
+// Type 4 patterns recognised:
 //
-// Type 2 dispatch is symmetric: presence of "/P" as the trailing two
-// characters of any whitespace-separated token routes to parseEUVHFP.
-// /P is unique to Type 2 (Type 1 uses /R), so the trigger is
-// unambiguous. Mixed /R + /P in a single input is rejected by the
-// per-call validator inside parseEUVHFP.
+//	<hashed> <nonstd> [<token>]      - angle-bracket display form
+//	<nonstd> <hashed> [<token>]      - hashed-second variant
+//	CQ <nonstd> [<token>]            - c1=1 wire form
+//
+// where <hashed> is a std callsign wrapped in angle brackets
+// (display convention for the h12 wire field; parser strips
+// brackets), <nonstd> is a compound or special-event callsign in
+// the c58 alphabet, and <token> is one of "RRR", "RR73", "73"
+// (mapped to the 2-bit r2 wire field).
+//
+// Classifier dispatch order:
+//
+//  1. Free Text — presence of '.' or '?' (chars unique to the f71
+//     alphabet).
+//  2. Type 4 — angle brackets present, OR any token has a non-
+//     trailing slash, OR a trailing slash that isn't /R or /P.
+//  3. Type 2 — any token has a /P trailing suffix.
+//  4. Type 1 — default for unambiguous std-callsign-shaped inputs.
 //
 // Inputs are upper-cased internally; the caller doesn't need to
 // pre-normalise. Anything that fails to match returns
@@ -88,6 +95,17 @@ func ParseMessage(text string) (Message, error) {
 
 	tokens := strings.Fields(normalised)
 
+	// Type 4 (NonStd Call) dispatch: angle brackets or a slash in a
+	// position that isn't the Type 1 /R or Type 2 /P trailing suffix
+	// signal a nonstd callsign. Checked before Type 2 so a compound
+	// nonstd ending in /P (e.g., "PJ4/K1ABC/P") routes to Type 4
+	// rather than Type 2 (Type 2's c28 partition is std-callsign-only).
+	for _, tok := range tokens {
+		if isType4Trigger(tok) {
+			return parseNonStdCall(tokens)
+		}
+	}
+
 	// Type 2 (EU VHF /P) dispatch: any field token with a /P suffix
 	// signals Type 2. /P is unique to Type 2 — Type 1's per-call
 	// suffix is /R, handled inside consumeCall further down. The
@@ -100,6 +118,38 @@ func ParseMessage(text string) (Message, error) {
 	}
 
 	return parseStd(tokens)
+}
+
+// isType4Trigger reports whether a parsed field-token signals a
+// Type 4 (NonStd Call) message. Triggers:
+//
+//   - Angle brackets ('<' or '>') — WSJT-X hashed-call display form.
+//   - A '/' that isn't the Type 1 /R or Type 2 /P trailing suffix
+//     (covers mid-position slashes like "PJ4/K1ABC" and non-/R/non-/P
+//     trailing suffixes like "/M", "/MM", "/AM", "/QRP").
+//   - Length > 6 with no slash — special-event calls like
+//     "YW18FIFA" have no slash but exceed the std-callsign max
+//     length per QEX paper §A (prefix 1-2 + digit + suffix 1-3 =
+//     6 chars). /R-suffixed std calls can be 7-8 chars (caught by
+//     the slash branch above, which routes them back to Type 1).
+func isType4Trigger(tok string) bool {
+	if strings.ContainsAny(tok, "<>") {
+		return true
+	}
+	idx := strings.IndexByte(tok, '/')
+	if idx < 0 {
+		return len(tok) > 6
+	}
+	// A slash exists. If it's the trailing two characters AND the
+	// suffix is /R or /P, treat as Type 1 / Type 2; otherwise it's
+	// nonstd-call territory.
+	if idx == len(tok)-2 {
+		suffix := tok[idx:]
+		if suffix == "/R" || suffix == "/P" {
+			return false
+		}
+	}
+	return true
 }
 
 // parseFreeText validates and packages a Type 0.0 message. The input
@@ -197,6 +247,62 @@ func consumePortableCall(tokens []string) (string, bool, []string, error) {
 		return "", false, nil, err
 	}
 	return raw, suffix, tokens[1:], nil
+}
+
+// parseNonStdCall parses the Type 4 (NonStd Call) layout. Two
+// callsign tokens (in either order — std-shaped is the hashed side,
+// nonstd-shaped is the c58 side) optionally followed by one of the
+// four r2 trailing tokens ("", "RRR", "RR73", "73"). The CQ-from-
+// nonstd form is "CQ <nonstd> [<token>]".
+//
+// Reaches here only when isType4Trigger has fired for at least one
+// field token. The encoder downstream of this parser enforces the
+// full shape rules (exactly one std + one nonstd, etc.) — this
+// parser strips brackets uniformly and routes; the encoder
+// validates.
+func parseNonStdCall(tokens []string) (Message, error) {
+	const op errors.Op = "codec.ParseMessage"
+	if len(tokens) < 2 {
+		return Message{}, errors.New(op).WithMsgf("Type 4 (NonStd Call) message has only %d field(s); need at least two callsigns", len(tokens))
+	}
+	if len(tokens) > 3 {
+		return Message{}, errors.New(op).WithMsgf("Type 4 (NonStd Call) message has %d fields; max is two callsigns + one trailing token", len(tokens))
+	}
+
+	call1 := stripAngleBrackets(tokens[0])
+	call2 := stripAngleBrackets(tokens[1])
+
+	grid := ""
+	if len(tokens) == 3 {
+		raw := tokens[2]
+		if _, ok := gridToR2(raw); !ok {
+			return Message{}, errors.New(op).WithMsgf("Type 4 trailing token %q is not valid; allowed values are \"RRR\", \"RR73\", \"73\"", raw)
+		}
+		grid = raw
+	}
+
+	return Message{
+		Type:  MessageTypeNonStdCall,
+		Call1: call1,
+		Call2: call2,
+		Grid:  grid,
+	}, nil
+}
+
+// stripAngleBrackets removes a matched pair of '<' / '>' from the
+// outer ends of s. Used by parseNonStdCall to undo the WSJT-X display
+// convention for hashed callsigns. The literal "<...>" sentinel is
+// passed through unchanged so a parser → encode cycle on a decoded
+// unresolved-hash Message surfaces as a validation error at the
+// encode step rather than as a corrupted "..." callsign.
+func stripAngleBrackets(s string) string {
+	if s == hashedCallSentinel {
+		return s
+	}
+	if len(s) >= 2 && s[0] == '<' && s[len(s)-1] == '>' {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 // normalizeText upper-cases ASCII letters and is a no-op for other

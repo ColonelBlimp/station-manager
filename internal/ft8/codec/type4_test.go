@@ -342,3 +342,262 @@ func TestDecodeMessage_Type4_NotUnknown(t *testing.T) {
 		t.Error("DecodeMessage(Type 4 wire) returned ErrUnknownMessageType, want successful decode")
 	}
 }
+
+// ---- Text layer (Phase 3C Step C) -----------------------------------------
+
+// TestFormatMessage_Type4_BasicShapes pins the human-readable output
+// for Type 4 layouts. The std side (plain string) gets bracketed in
+// the output; the nonstd side emits verbatim; the trailing token
+// renders verbatim or is omitted when blank.
+func TestFormatMessage_Type4_BasicShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+		want string
+	}{
+		{
+			"std_call1_nonstd_call2_rrr",
+			Message{Type: MessageTypeNonStdCall, Call1: "W9XYZ", Call2: "PJ4/K1ABC", Grid: "RRR"},
+			"<W9XYZ> PJ4/K1ABC RRR",
+		},
+		{
+			"nonstd_call1_std_call2_rr73",
+			Message{Type: MessageTypeNonStdCall, Call1: "PJ4/K1ABC", Call2: "W9XYZ", Grid: "RR73"},
+			"PJ4/K1ABC <W9XYZ> RR73",
+		},
+		{
+			"cq_from_nonstd_rrr",
+			Message{Type: MessageTypeNonStdCall, Call1: "CQ", Call2: "PJ4/K1ABC", Grid: "RRR"},
+			"CQ PJ4/K1ABC RRR",
+		},
+		{
+			"cq_from_nonstd_blank",
+			Message{Type: MessageTypeNonStdCall, Call1: "CQ", Call2: "YW18FIFA"},
+			"CQ YW18FIFA",
+		},
+		{
+			"std_nonstd_73",
+			Message{Type: MessageTypeNonStdCall, Call1: "K1ABC", Call2: "YW18FIFA", Grid: "73"},
+			"<K1ABC> YW18FIFA 73",
+		},
+		{
+			"std_nonstd_blank_grid",
+			Message{Type: MessageTypeNonStdCall, Call1: "G4ABC", Call2: "M/K1ABC"},
+			"<G4ABC> M/K1ABC",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FormatMessage(tc.msg)
+			if err != nil {
+				t.Fatalf("FormatMessage: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("FormatMessage(%+v) = %q, want %q", tc.msg, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatMessage_Type4_SentinelAndPreBracketed pins the decoder-
+// output lifecycle: an unresolved-hash decode produces a Message with
+// the "<...>" sentinel; a Phase-4-resolved decode produces a Message
+// with a pre-bracketed string ("<W9XYZ>"). The formatter emits both
+// forms verbatim — bracket wrapping only fires on plain std-shaped
+// strings (the encoder-input case).
+func TestFormatMessage_Type4_SentinelAndPreBracketed(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+		want string
+	}{
+		{
+			"sentinel_call1",
+			Message{Type: MessageTypeNonStdCall, Call1: "<...>", Call2: "PJ4/K1ABC", Grid: "RRR"},
+			"<...> PJ4/K1ABC RRR",
+		},
+		{
+			"sentinel_call2",
+			Message{Type: MessageTypeNonStdCall, Call1: "PJ4/K1ABC", Call2: "<...>", Grid: "RR73"},
+			"PJ4/K1ABC <...> RR73",
+		},
+		{
+			"prebracketed_call1",
+			Message{Type: MessageTypeNonStdCall, Call1: "<W9XYZ>", Call2: "PJ4/K1ABC", Grid: "RRR"},
+			"<W9XYZ> PJ4/K1ABC RRR",
+		},
+		{
+			"prebracketed_call2",
+			Message{Type: MessageTypeNonStdCall, Call1: "PJ4/K1ABC", Call2: "<W9XYZ>", Grid: "RR73"},
+			"PJ4/K1ABC <W9XYZ> RR73",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FormatMessage(tc.msg)
+			if err != nil {
+				t.Fatalf("FormatMessage: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("FormatMessage(%+v) = %q, want %q", tc.msg, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatMessage_Type4_Rejects pins the format-side validator. The
+// format gate is laxer than encode's (accepts sentinel + pre-bracketed
+// forms) but still catches empty slots, broken bracketing, illegal
+// trailing tokens.
+func TestFormatMessage_Type4_Rejects(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+	}{
+		{"empty_call1", Message{Type: MessageTypeNonStdCall, Call2: "PJ4/K1ABC", Grid: "RRR"}},
+		{"empty_call2", Message{Type: MessageTypeNonStdCall, Call1: "W9XYZ", Grid: "RRR"}},
+		{"illegal_grid_grid_locator", Message{Type: MessageTypeNonStdCall, Call1: "W9XYZ", Call2: "PJ4/K1ABC", Grid: "FN20"}},
+		{"illegal_grid_signed_report", Message{Type: MessageTypeNonStdCall, Call1: "W9XYZ", Call2: "PJ4/K1ABC", Grid: "-11"}},
+		{"broken_bracket_call1", Message{Type: MessageTypeNonStdCall, Call1: "<abc>", Call2: "PJ4/K1ABC", Grid: "RRR"}},
+		{"lowercase_call1", Message{Type: MessageTypeNonStdCall, Call1: "w9xyz", Call2: "PJ4/K1ABC", Grid: "RRR"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := FormatMessage(tc.msg); err == nil {
+				t.Errorf("FormatMessage(%+v) = nil err, want validation error", tc.msg)
+			}
+		})
+	}
+}
+
+// TestParseMessage_Type4_BasicShapes pins the classifier dispatch for
+// Type 4 inputs. Angle brackets are stripped uniformly; the resulting
+// Message holds plain strings.
+func TestParseMessage_Type4_BasicShapes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Message
+	}{
+		{"<W9XYZ> PJ4/K1ABC RRR", Message{Type: MessageTypeNonStdCall, Call1: "W9XYZ", Call2: "PJ4/K1ABC", Grid: "RRR"}},
+		{"PJ4/K1ABC <W9XYZ> RR73", Message{Type: MessageTypeNonStdCall, Call1: "PJ4/K1ABC", Call2: "W9XYZ", Grid: "RR73"}},
+		{"CQ PJ4/K1ABC", Message{Type: MessageTypeNonStdCall, Call1: "CQ", Call2: "PJ4/K1ABC"}},
+		{"CQ PJ4/K1ABC 73", Message{Type: MessageTypeNonStdCall, Call1: "CQ", Call2: "PJ4/K1ABC", Grid: "73"}},
+		{"<K1ABC> YW18FIFA 73", Message{Type: MessageTypeNonStdCall, Call1: "K1ABC", Call2: "YW18FIFA", Grid: "73"}},
+		{"<G4ABC> M/K1ABC", Message{Type: MessageTypeNonStdCall, Call1: "G4ABC", Call2: "M/K1ABC"}},
+		// Lowercase normalised upstream.
+		{"<w9xyz> pj4/k1abc rrr", Message{Type: MessageTypeNonStdCall, Call1: "W9XYZ", Call2: "PJ4/K1ABC", Grid: "RRR"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := ParseMessage(tc.in)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseMessage(%q) = %+v, want %+v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseMessage_Type4_RejectsBadShape pins parse-side rejections.
+// Includes too-few/too-many tokens, illegal trailing tokens, and
+// shapes the encoder's downstream validator can't accept.
+func TestParseMessage_Type4_RejectsBadShape(t *testing.T) {
+	cases := []string{
+		"<W9XYZ> PJ4/K1ABC FN20",      // grid locator illegal in Type 4 r2 slot
+		"<W9XYZ> PJ4/K1ABC -11",       // signed report illegal in r2 slot
+		"<W9XYZ>",                     // too few tokens
+		"<W9XYZ> PJ4/K1ABC RRR EXTRA", // too many tokens
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			if _, err := ParseMessage(in); err == nil {
+				t.Errorf("ParseMessage(%q) = nil err, want rejection", in)
+			}
+		})
+	}
+}
+
+// TestType4_TextRoundTrip exercises the parse → encode → decode →
+// format chain. The hashed side becomes the "<...>" sentinel on
+// decode because the codec layer doesn't run Phase 4's hash table,
+// so the formatted output differs from the input on the hash side:
+// "<W9XYZ>" becomes "<...>". The nonstd side, the CQ flag, and the
+// trailing token all round-trip exactly.
+func TestType4_TextRoundTrip(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // sentinel-form expected output
+	}{
+		{"<W9XYZ> PJ4/K1ABC RRR", "<...> PJ4/K1ABC RRR"},
+		{"PJ4/K1ABC <W9XYZ> RR73", "PJ4/K1ABC <...> RR73"},
+		{"<K1ABC> YW18FIFA 73", "<...> YW18FIFA 73"},
+		{"<G4ABC> M/K1ABC", "<...> M/K1ABC"},
+		// CQ path: c1=1, h12 wire ignored, hash side stays "CQ".
+		{"CQ PJ4/K1ABC", "CQ PJ4/K1ABC"},
+		{"CQ YW18FIFA RRR", "CQ YW18FIFA RRR"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			parsed, err := ParseMessage(tc.in)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v", tc.in, err)
+			}
+			bits, err := EncodeMessage(parsed)
+			if err != nil {
+				t.Fatalf("EncodeMessage: %v", err)
+			}
+			decoded, err := DecodeMessage(bits)
+			if err != nil {
+				t.Fatalf("DecodeMessage: %v", err)
+			}
+			got, err := FormatMessage(decoded)
+			if err != nil {
+				t.Fatalf("FormatMessage: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("round-trip(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseMessage_ClassifierOrder pins the dispatch ordering:
+// Free Text trigger → Type 4 trigger → Type 2 trigger → Type 1.
+// The cases pick shapes near the classification boundaries to verify
+// the more-specific trigger wins.
+func TestParseMessage_ClassifierOrder(t *testing.T) {
+	cases := []struct {
+		in   string
+		want MessageType
+	}{
+		// Plain std pair → Type 1.
+		{"K1ABC G4ABC FN20", MessageTypeStd},
+		// Plain std + /R → Type 1.
+		{"K1ABC/R G4ABC FN20", MessageTypeStd},
+		// Plain std + /P → Type 2.
+		{"K1ABC/P G4ABC JO22", MessageTypeEUVHFP},
+		// Angle brackets → Type 4.
+		{"<W9XYZ> PJ4/K1ABC RRR", MessageTypeNonStdCall},
+		// Mid-position slash → Type 4.
+		{"K1ABC PJ4/K1ABC RRR", MessageTypeNonStdCall},
+		// Non-/R-non-/P trailing slash → Type 4.
+		{"K1ABC PJ4/K1ABC/M RRR", MessageTypeNonStdCall},
+		// Compound nonstd + /P at the end → Type 4 (mid-slash beats /P trigger).
+		{"K1ABC PJ4/K1ABC/P RRR", MessageTypeNonStdCall},
+		// Period in any token → Free Text.
+		{"HELLO.", MessageTypeFreeText},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := ParseMessage(tc.in)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v", tc.in, err)
+			}
+			if got.Type != tc.want {
+				t.Errorf("ParseMessage(%q).Type = %d, want %d", tc.in, got.Type, tc.want)
+			}
+		})
+	}
+}

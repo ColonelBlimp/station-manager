@@ -167,7 +167,6 @@ func TestFormatMessage_FreeText_RejectsBadInput(t *testing.T) {
 // types whose formatter hasn't landed.
 func TestFormatMessage_UnsupportedType(t *testing.T) {
 	cases := []MessageType{
-		MessageTypeNonStdCall,
 		MessageTypeTelemetry,
 	}
 	for _, mt := range cases {

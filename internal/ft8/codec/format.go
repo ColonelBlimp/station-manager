@@ -1,6 +1,10 @@
 package codec
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+)
 
 // FormatMessage renders a Message struct as its on-air human-readable
 // FT8 text form. Inverse of ParseMessage; together they form the
@@ -30,6 +34,8 @@ func FormatMessage(m Message) (string, error) {
 		return formatStd(m)
 	case MessageTypeEUVHFP:
 		return formatEUVHFP(m)
+	case MessageTypeNonStdCall:
+		return formatNonStdCall(m)
 	case MessageTypeFreeText:
 		return formatFreeText(m)
 	default:
@@ -117,6 +123,78 @@ func formatEUVHFP(m Message) (string, error) {
 		return call1 + " " + call2, nil
 	}
 	return call1 + " " + call2 + " " + field, nil
+}
+
+// formatNonStdCall renders a Type 4 (NonStd Call) message. The
+// hashed side renders bracketed (WSJT-X convention); the nonstd side
+// renders verbatim; the optional trailing token (Grid field) is one
+// of "", "RRR", "RR73", "73".
+//
+// Three call-slot shapes are accepted, covering the round-trip
+// lifecycle:
+//
+//   - Std-shaped string ("W9XYZ"): operator-typed-encode case;
+//     formatter wraps in angle brackets.
+//   - "<...>" sentinel: decoder-output case for an unresolved hash;
+//     formatter emits verbatim.
+//   - Pre-bracketed std-shaped string ("<W9XYZ>"): decoder-output
+//     case for a Phase-4-resolved hash; formatter emits verbatim.
+//
+// Plus "CQ" in Call1 for the c1=1 (CQ-from-nonstd) case, and any
+// nonstd c58-alphabet callsign in the non-hashed slot.
+//
+// The format-side validator is laxer than encode's — encode requires
+// a real callsign string in the hashed slot (to compute h12 from
+// HashCodes); format just renders whatever shape the Message holds.
+// A decoded Message with `Call1="<...>"` round-trips through
+// formatNonStdCall but would fail at encodeNonStdCall (Phase 4's
+// hash-table lookup resolves it before re-encoding).
+func formatNonStdCall(m Message) (string, error) {
+	const op errors.Op = "codec.formatNonStdCall"
+
+	if _, ok := gridToR2(m.Grid); !ok {
+		return "", errors.New(op).WithMsgf("Grid = %q is not a valid Type 4 token; allowed values are \"\", \"RRR\", \"RR73\", \"73\"", m.Grid)
+	}
+
+	call1, err := renderType4Call(m.Call1, "Call1")
+	if err != nil {
+		return "", err
+	}
+	call2, err := renderType4Call(m.Call2, "Call2")
+	if err != nil {
+		return "", err
+	}
+
+	if m.Grid == "" {
+		return call1 + " " + call2, nil
+	}
+	return call1 + " " + call2 + " " + m.Grid, nil
+}
+
+// renderType4Call maps a Message call slot to its display form for
+// Type 4 output. See formatNonStdCall's doc for the accepted shapes.
+func renderType4Call(call, field string) (string, error) {
+	const op errors.Op = "codec.formatNonStdCall"
+	if call == "" {
+		return "", errors.New(op).WithMsgf("%s is empty", field)
+	}
+	if call == hashedCallSentinel || call == "CQ" {
+		return call, nil
+	}
+	if len(call) >= 2 && call[0] == '<' && call[len(call)-1] == '>' {
+		inner := call[1 : len(call)-1]
+		if !isStdCallsignShape(inner) {
+			return "", errors.New(op).WithMsgf("%s = %q is bracketed but inner content %q is not a standard callsign", field, call, inner)
+		}
+		return call, nil
+	}
+	if isStdCallsignShape(call) {
+		return "<" + call + ">", nil
+	}
+	if isType4ValidNonStdCall(call) {
+		return call, nil
+	}
+	return "", errors.New(op).WithMsgf("%s = %q is not a valid Type 4 call form (expected CQ, <hashed>, std callsign, or nonstd callsign)", field, call)
 }
 
 // formatGridField renders the g15 slot's text form with the AckBit
