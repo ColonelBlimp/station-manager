@@ -1000,22 +1000,29 @@ types) is mid-flight: **Phase 1 (BitBuilder utility) shipped
 + round-trip + encoder routing fix) + Phase 2D (token codec +
 `FormatMessage` / `ParseMessage` text layer + bit-faithful decode
 of Type 1 tokens) + Phase 3A (Type 0.0 Free Text + F71ToFreeText
-Layer 1 inverse + i3.n3 sub-dispatch) shipped 2026-05-19**. Type 1
-("Std Msg") now round-trips long-format std callsigns AND CQ/DE/
-QRZ/`CQ <suffix>` tokens bit-for-bit AND text-for-text. Type 0.0
-("Free Text") round-trips 1-13 character payloads in the 42-symbol
-f71 alphabet through the same pipeline; parser classifier dispatches
-to Free Text on the presence of `.` or `?` (chars unique to f71,
-not present in std-callsign / signed-report / rover alphabets).
+Layer 1 inverse + i3.n3 sub-dispatch) shipped 2026-05-19; Phase 3B
+(Type 2 EU VHF /P encoder / decoder / format / parse + Suffix1/2
+rename + /P classifier branch) shipped 2026-05-20**. Type 1 ("Std
+Msg") now round-trips long-format std callsigns AND CQ/DE/
+QRZ/`CQ <suffix>` tokens bit-for-bit AND text-for-text. Type 2
+("EU VHF /P") round-trips standard-callsign pairs with the /P
+portable suffix on either or both calls; tokens are not valid in
+Type 2's c28 partition per QEX Table 7 (rejected at encode + format,
+surfaced as `ErrTokenInGap` at decode). Type 0.0 ("Free Text")
+round-trips 1-13 character payloads in the 42-symbol f71 alphabet
+through the same pipeline; parser classifier dispatches to Free
+Text on the presence of `.` or `?` (chars unique to f71, not
+present in std-callsign / signed-report / suffix alphabets), and
+to Type 2 on the presence of any `/P` token suffix.
 Short callsigns (3–4 char and 5-char-2-prefix) route through
 `HashedCallC28` and decode to a sentinel error
 (`ErrCallsignNeedsHashLookup`) — the FT8 service layer's running
-22-bit hash table (Phase 4) will resolve those. Phase 3B (Type 2 EU
-VHF /P) is next, followed by Phase 3C (Type 4 NonStd Call) and
-Phase 3D (Type 5 EU VHF hashes); Phase 4 covers the specialty types
-(0.1 DXpedition, 0.3/0.4 Field Day, 3 RTTY Roundup, 0.5 Telemetry)
-+ the hash table. Layers 3+4 (signal-processing pipeline + WAV-
-corpus tests) and the LDPC decoder remain.
+22-bit hash table (Phase 4) will resolve those. Phase 3C (Type 4
+NonStd Call) is next, followed by Phase 3D (Type 5 EU VHF hashes);
+Phase 4 covers the specialty types (0.1 DXpedition, 0.3/0.4
+Field Day, 3 RTTY Roundup, 0.5 Telemetry) + the hash table.
+Layers 3+4 (signal-processing pipeline + WAV-corpus tests) and
+the LDPC decoder remain.
 
 | Layer 1 primitive | File | ns/op | allocs |
 |---|---|---|---|
@@ -1034,15 +1041,17 @@ Phase 2 additions:
 | Layer 2 component | File | Notes |
 |---|---|---|
 | `BitBuilder` | `bitbuilder.go` | MSB-first composer; chainable `Append` + `AppendBits`; ~271 ns for a 77-bit Type 1 build |
-| `Message` + `MessageType` | `message.go` | Concrete struct discriminated by `Type`; 10 enum values declared, `MessageTypeStd` (Phase 2) + `MessageTypeFreeText` (Phase 3A) implemented |
-| `EncodeMessage` + `encodeStd` + `type1CallToC28` + `stdCallToC28` | `encode.go` | Type 1 packer; routes Call1/Call2 through `TokenToC28` first, then `stdCallToC28` (short calls via `HashedCallC28` per QEX §A); `validateType1Rover` blocks token+rover combinations; `slices.Clone` on return detaches BitBuilder storage |
+| `Message` + `MessageType` | `message.go` | Concrete struct discriminated by `Type`; 10 enum values declared, `MessageTypeStd` (Phase 2) + `MessageTypeFreeText` (Phase 3A) + `MessageTypeEUVHFP` (Phase 3B) implemented. Per-callsign `Suffix1`/`Suffix2` boolean fields are type-neutral — Type 1 renders /R, Type 2 renders /P |
+| `EncodeMessage` + `encodeStd` + `type1CallToC28` + `stdCallToC28` | `encode.go` | Type 1 packer; routes Call1/Call2 through `TokenToC28` first, then `stdCallToC28` (short calls via `HashedCallC28` per QEX §A); `validateType1Suffix` blocks token+suffix combinations; `slices.Clone` on return detaches BitBuilder storage |
+| `encodeEUVHFP` + `validateType2Call` | `encode.go` | Type 2 packer (Phase 3B); `c28 + suffix + c28 + suffix + R1 + g15 + i3=2` = 77 bits; uses `stdCallToC28` directly (no token routing — tokens not valid in Type 2 per QEX Table 7); `validateType2Call` explicitly rejects tokens for a clear diagnostic |
 | `encodeFreeText` + `validateFreeText` + `isF71Char` | `encode.go` | Type 0.0 packer; `f71 + n3=0 + i3=0` = 77 bits via `BitBuilder.AppendBits`; validates 1-13 char range + f71 alphabet upstream of the primitive |
-| `DecodeMessage` + `decodeStd` + `type1CallFromC28` + `readBitsUint64` | `decode.go` | Type 1 unpacker; bit-faithful (accepts token+rover wire pattern, semantic gates run at format/encode); `ErrTokenInGap` for spec-violating wire values |
+| `DecodeMessage` + `decodeStd` + `type1CallFromC28` + `readBitsUint64` | `decode.go` | Type 1 unpacker; bit-faithful (accepts token+suffix wire pattern, semantic gates run at format/encode); `ErrTokenInGap` for spec-violating wire values |
+| `decodeEUVHFP` + `type2CallFromC28` | `decode.go` | Type 2 unpacker (Phase 3B); rejects token-range c28 values as `ErrTokenInGap` (asymmetric with Type 1 — tokens are not legal Type 2 wire values per QEX Table 7); hash-range surfaces `ErrCallsignNeedsHashLookup` like Type 1 |
 | `decodeI3Zero` + `decodeFreeText` | `decode.go` | Type 0.0 unpacker; sub-dispatches the i3=0 family on n3 (Phase 3A wires n3=0 only; 1/3/4/5 return `ErrUnknownMessageType` until Phase 4) |
 | `TokenToC28` + `C28ToToken` | `token.go` | CQ-token partition per QEX Table 7; unified formula `c28 = 1003 + base27(left-space-padded 4-char suffix)` with `(T, bool)` returns; intra-row + inter-row gaps surface as `(_, false)` |
 | `F71ToFreeText` | `freetext.go` | Layer 1 inverse of `FreeTextToF71`; 128-bit divmod via `math/bits.Div64` (two-step split to handle 7-bit `hi` cleanly against the 42 divisor); trims leading spaces per `adjustr` padding asymmetry |
-| `FormatMessage` + `formatStd` + `formatFreeText` | `format.go` | Type 1 + Type 0.0 text rendering; rover `/R`, ack-R fused with reports (`R-09`) + separated from grids (`R IO91`); Type 0.0 emits the FreeText payload as-is |
-| `ParseMessage` + `parseStd` + `parseFreeText` + classifier | `parse.go` | Text → Message; classifier routes on `.`/`?` (Free Text trigger) before tokenising for Type 1; `consumeCall` strips `/R`; `consumeGridField` recognises R-fused vs. R-separated ack; strict structured-or-Free-Text (no implicit fallback) per Phase 3A design choice #3 |
+| `FormatMessage` + `formatStd` + `formatEUVHFP` + `formatFreeText` | `format.go` | Type 1 + Type 2 + Type 0.0 text rendering. Type 1 renders `/R`; Type 2 renders `/P`; both share `formatGridField` (ack-R fused with reports `R-09`, separated from grids `R IO91`). Type 0.0 emits the FreeText payload as-is |
+| `ParseMessage` + `parseStd` + `parseEUVHFP` + `parseFreeText` + classifier | `parse.go` | Text → Message; classifier routes on `.`/`?` (Free Text trigger) first, then on `/P` suffix presence (Type 2 trigger), else Type 1; `consumeCall` strips `/R` for Type 1, `consumePortableCall` strips `/P` and rejects mixed `/R + /P` for Type 2; `consumeGridField` recognises R-fused vs. R-separated ack (shared); strict structured-or-Free-Text (no implicit fallback) per Phase 3A design choice #3 |
 | `C28Kind` + `G15Kind` discriminators | `callsign.go`, `grid.go` | Route-B kind enums for the multi-modal c28/g15 partition spaces |
 
 The codec package was renamed from `internal/ft8/decoder` →
