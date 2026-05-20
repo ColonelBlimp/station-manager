@@ -308,3 +308,48 @@ func isGrid6(s string) bool {
 		s[4] >= 'A' && s[4] <= 'X' &&
 		s[5] >= 'A' && s[5] <= 'X'
 }
+
+// maxGrid6 is the first non-grid g25 value. 18*18*10*10*24*24 =
+// 18,662,400; valid g25 codes occupy [0, maxGrid6).
+const maxGrid6 = 18 * 18 * 10 * 10 * 24 * 24
+
+// G25ToGrid6 inverts Grid6ToG25. Inverse of the base-(18,18,10,10,24,24)
+// arithmetic: successive divmod recovers each character from the
+// rightmost subsquare letter to the leftmost field letter.
+//
+// Wire-input asymmetry: Grid6ToG25 only ever produces values in
+// [0, maxGrid6), so any well-formed wire decode lands in that range.
+// Values outside [0, maxGrid6) — possible on a corrupted post-LDPC
+// body whose g25 slot's upper bits got flipped — panic, matching the
+// G15ToGrid4 contract for upper-bit-set inputs (this is a wire
+// corruption that LDPC+CRC14 should have caught, not a runtime data
+// error this layer can recover from).
+//
+// The slot has no reserved-token or signed-report multiplexing (see
+// Grid6ToG25), so every in-range value is a 6-char grid; the
+// returned string is always 6 characters.
+func G25ToGrid6(g25 uint32) string {
+	const op = "codec.G25ToGrid6"
+	if g25 >= maxGrid6 {
+		panic(op + ": g25=" + strconv.Itoa(int(g25)) + " is outside [0, " + strconv.Itoa(maxGrid6) + ") — corrupted wire input or upper bits unmasked")
+	}
+	v := int(g25)
+	c5 := v % 24
+	v /= 24
+	c4 := v % 24
+	v /= 24
+	c3 := v % 10
+	v /= 10
+	c2 := v % 10
+	v /= 10
+	c1 := v % 18
+	c0 := v / 18
+	return string([]byte{
+		byte('A' + c0),
+		byte('A' + c1),
+		byte('0' + c2),
+		byte('0' + c3),
+		byte('A' + c4),
+		byte('A' + c5),
+	})
+}

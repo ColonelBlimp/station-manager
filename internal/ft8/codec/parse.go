@@ -2,6 +2,7 @@ package codec
 
 import (
 	stderrors "errors"
+	"strconv"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -85,15 +86,30 @@ func ParseMessage(text string) (Message, error) {
 	// Free Text dispatch: '.' and '?' are unique to the f71 alphabet
 	// (not present in the std-callsign / suffix / signed-report
 	// alphabet that structured parsing uses). Their presence is the
-	// operator's unambiguous Free Text signal. Inputs without these
-	// chars try structured first; if structured fails they error out
-	// rather than silently falling back — see the Phase 3A Step A
-	// design rationale.
-	if strings.ContainsAny(trimmed, ".?") {
+	// operator's unambiguous Free Text signal — UNLESS the input also
+	// contains angle brackets, which are not in the f71 alphabet but
+	// ARE in the structured-message hashed-call display form
+	// (Type 4 / Type 5 "<call>" and the "<...>" sentinel both contain
+	// dots inside brackets). Inputs without a Free Text trigger char
+	// try structured first; if structured fails they error out rather
+	// than silently falling back — see the Phase 3A Step A design
+	// rationale.
+	if strings.ContainsAny(trimmed, ".?") && !strings.ContainsAny(trimmed, "<>") {
 		return parseFreeText(trimmed)
 	}
 
 	tokens := strings.Fields(normalised)
+
+	// Type 5 (EU VHF hashes+g25) dispatch: BOTH first two tokens are
+	// angle-bracketed (the wire hashes both sides, so WSJT-X display
+	// brackets both) AND the last token is a 6-char Maidenhead grid.
+	// Type 4 has at most one bracketed call AND no 6-char grid, so the
+	// dual-bracket + g25-grid combination is unambiguous. Checked
+	// before Type 4 so a Type 5 input isn't mis-routed to Type 4's
+	// single-bracket parser.
+	if isType5Trigger(tokens) {
+		return parseEUVHFHash(tokens)
+	}
 
 	// Type 4 (NonStd Call) dispatch: angle brackets or a slash in a
 	// position that isn't the Type 1 /R or Type 2 /P trailing suffix
@@ -150,6 +166,109 @@ func isType4Trigger(tok string) bool {
 		}
 	}
 	return true
+}
+
+// isType5Trigger reports whether the parsed token stream signals a
+// Type 5 (EU VHF hashes+g25) message. Trigger: tokens[0] and tokens[1]
+// both have outer angle brackets AND tokens[len-1] is a 6-char
+// Maidenhead grid. Type 4 (NonStd Call) carries at most one bracketed
+// call and no 6-char grid, so this combination unambiguously routes
+// to Type 5 before the Type 4 trigger fires.
+//
+// Minimum length 4 (two bracketed calls + report+serial + grid6);
+// the AckBit prefix adds a fifth "R" token.
+func isType5Trigger(tokens []string) bool {
+	if len(tokens) < 4 {
+		return false
+	}
+	if !isAngleBracketed(tokens[0]) || !isAngleBracketed(tokens[1]) {
+		return false
+	}
+	return isGrid6(tokens[len(tokens)-1])
+}
+
+// isAngleBracketed reports whether s is wrapped in outer '<' / '>'
+// (length ≥ 2 and the literal sentinel "<...>" both qualify).
+func isAngleBracketed(s string) bool {
+	return len(s) >= 2 && s[0] == '<' && s[len(s)-1] == '>'
+}
+
+// parseEUVHFHash parses the Type 5 layout per the format produced by
+// formatEUVHFHash:
+//
+//	<call1> <call2> [R ]rrSSSS GRID6
+//
+// where rr is the 2-digit display form of Report3 (52..59) and SSSS
+// is the zero-padded serial (s11 max 2047 fits in 4 decimal digits).
+// The 4- and 5-token layouts (with/without ack "R") are the two
+// recognised shapes.
+//
+// Reaches here only when isType5Trigger has fired, so tokens[0] and
+// tokens[1] are guaranteed bracketed and tokens[len-1] is a 6-char
+// grid; this parser strips brackets, splits report+serial, validates,
+// and packages the Message.
+func parseEUVHFHash(tokens []string) (Message, error) {
+	const op errors.Op = "codec.ParseMessage"
+	if len(tokens) < 4 || len(tokens) > 5 {
+		return Message{}, errors.New(op).WithMsgf("Type 5 (EU VHF hashes+g25) message has %d field(s); want 4 or 5", len(tokens))
+	}
+
+	call1 := stripAngleBrackets(tokens[0])
+	call2 := stripAngleBrackets(tokens[1])
+	grid6 := tokens[len(tokens)-1]
+
+	ack := false
+	bodyIdx := 2
+	if len(tokens) == 5 {
+		if tokens[2] != "R" {
+			return Message{}, errors.New(op).WithMsgf("Type 5 message of 5 fields must have \"R\" ack at index 2, got %q", tokens[2])
+		}
+		ack = true
+		bodyIdx = 3
+	}
+
+	report, serial, err := splitReportSerial(tokens[bodyIdx])
+	if err != nil {
+		return Message{}, err
+	}
+
+	return Message{
+		Type:    MessageTypeEUVHFHash,
+		Call1:   call1,
+		Call2:   call2,
+		AckBit:  ack,
+		Report3: report,
+		Serial:  serial,
+		Grid6:   grid6,
+	}, nil
+}
+
+// splitReportSerial splits the fused "rrSSSS" body token (e.g.
+// "570007") into its r3 code and s11 serial. The 2-char report prefix
+// is the 2-digit form of Report3 ("52".."59"); the trailing 1..4
+// digits (s11 max 2047 → 4 decimal digits max) are the serial.
+// Inputs shorter than 3 chars or with a non-digit report prefix are
+// rejected — the trigger guarantees Type 5 routing got here for a
+// reason, but the body's exact shape still needs validation.
+func splitReportSerial(tok string) (uint8, uint16, error) {
+	const op errors.Op = "codec.ParseMessage"
+	if len(tok) < 3 || len(tok) > 6 {
+		return 0, 0, errors.New(op).WithMsgf("Type 5 report+serial token %q has length %d, want 3..6 (2-digit report + 1-4 digit serial)", tok, len(tok))
+	}
+	for i := range len(tok) {
+		if tok[i] < '0' || tok[i] > '9' {
+			return 0, 0, errors.New(op).WithMsgf("Type 5 report+serial token %q has non-digit char %q at index %d", tok, string(tok[i]), i)
+		}
+	}
+	reportInt, _ := strconv.Atoi(tok[:2])
+	if reportInt < r3Bias+r3Min || reportInt > r3Bias+r3Max {
+		return 0, 0, errors.New(op).WithMsgf("Type 5 report %q is outside the QEX display range [%d, %d]", tok[:2], r3Bias+r3Min, r3Bias+r3Max)
+	}
+	serialInt, _ := strconv.Atoi(tok[2:])
+	if serialInt > s11Max {
+		return 0, 0, errors.New(op).WithMsgf("Type 5 serial %q exceeds s11 max %d", tok[2:], s11Max)
+	}
+	return uint8(reportInt - r3Bias), uint16(serialInt), nil
 }
 
 // parseFreeText validates and packages a Type 0.0 message. The input

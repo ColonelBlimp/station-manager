@@ -2,6 +2,7 @@ package codec
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
@@ -34,6 +35,8 @@ func FormatMessage(m Message) (string, error) {
 		return formatStd(m)
 	case MessageTypeEUVHFP:
 		return formatEUVHFP(m)
+	case MessageTypeEUVHFHash:
+		return formatEUVHFHash(m)
 	case MessageTypeNonStdCall:
 		return formatNonStdCall(m)
 	case MessageTypeFreeText:
@@ -195,6 +198,82 @@ func renderType4Call(call, field string) (string, error) {
 		return call, nil
 	}
 	return "", errors.New(op).WithMsgf("%s = %q is not a valid Type 4 call form (expected CQ, <hashed>, std callsign, or nonstd callsign)", field, call)
+}
+
+// formatEUVHFHash renders a Type 5 (EU VHF hashes+g25) message. The
+// canonical form per QEX paper Table 1 example is:
+//
+//	<call1> <call2> [R ]<report><serial> <grid6>
+//
+// e.g. "<G4ABC> <PA9XYZ> R 570007 JO22DB" — both calls bracketed
+// (the wire carries hashes for both sides, so WSJT-X convention
+// brackets the display form whether or not the call is resolved),
+// optional R ack prefix, report+serial concatenated as one token
+// (report = "52".."59" two chars, serial zero-padded to 4 chars),
+// then the 6-char grid.
+//
+// Call rendering parallels Type 4's renderType4Call: a "<...>"
+// sentinel passes through verbatim (unresolved hash), a pre-bracketed
+// std call passes through (resolved hash from Phase 4), and a bare
+// std-callsign string gets bracketed.
+func formatEUVHFHash(m Message) (string, error) {
+	if err := validateType5Report(m.Report3); err != nil {
+		return "", err
+	}
+	if err := validateType5Serial(m.Serial); err != nil {
+		return "", err
+	}
+	if err := validateType5Grid(m.Grid6); err != nil {
+		return "", err
+	}
+	call1, err := renderType5Call(m.Call1, "Call1")
+	if err != nil {
+		return "", err
+	}
+	call2, err := renderType5Call(m.Call2, "Call2")
+	if err != nil {
+		return "", err
+	}
+
+	// Report + serial fuse into one token. Report displays as
+	// "52".."59" (two chars); serial zero-pads to 4 chars (s11 max
+	// 2047 fits in 4 decimal digits).
+	reportStr := strconv.Itoa(int(m.Report3) + r3Bias)
+	serialStr := strconv.Itoa(int(m.Serial))
+	for len(serialStr) < 4 {
+		serialStr = "0" + serialStr
+	}
+	body := reportStr + serialStr
+
+	if m.AckBit {
+		return call1 + " " + call2 + " R " + body + " " + m.Grid6, nil
+	}
+	return call1 + " " + call2 + " " + body + " " + m.Grid6, nil
+}
+
+// renderType5Call maps a Message call slot to its Type 5 display form.
+// Mirrors renderType4Call's three-shape acceptance (sentinel,
+// pre-bracketed, bare std) but always emits the bracketed form (Type
+// 5 hashes both sides on the wire, so WSJT-X display brackets both).
+func renderType5Call(call, field string) (string, error) {
+	const op errors.Op = "codec.formatEUVHFHash"
+	if call == "" {
+		return "", errors.New(op).WithMsgf("%s is empty", field)
+	}
+	if call == hashedCallSentinel {
+		return call, nil
+	}
+	if len(call) >= 2 && call[0] == '<' && call[len(call)-1] == '>' {
+		inner := call[1 : len(call)-1]
+		if !isStdCallsignShape(inner) {
+			return "", errors.New(op).WithMsgf("%s = %q is bracketed but inner content %q is not a standard callsign", field, call, inner)
+		}
+		return call, nil
+	}
+	if isStdCallsignShape(call) {
+		return "<" + call + ">", nil
+	}
+	return "", errors.New(op).WithMsgf("%s = %q is not a valid Type 5 call form (expected <hashed sentinel>, std callsign, or pre-bracketed std callsign)", field, call)
 }
 
 // formatGridField renders the g15 slot's text form with the AckBit

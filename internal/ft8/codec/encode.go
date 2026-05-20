@@ -51,6 +51,8 @@ func EncodeMessage(m Message) ([]byte, error) {
 		return encodeStd(m)
 	case MessageTypeEUVHFP:
 		return encodeEUVHFP(m)
+	case MessageTypeEUVHFHash:
+		return encodeEUVHFHash(m)
 	case MessageTypeNonStdCall:
 		return encodeNonStdCall(m)
 	case MessageTypeFreeText:
@@ -145,6 +147,114 @@ func encodeEUVHFP(m Message) ([]byte, error) {
 		panic("codec.encodeEUVHFP: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
 	}
 	return slices.Clone(b.Bits()), nil
+}
+
+// encodeEUVHFHash packs a Type 5 (EU VHF hashes+g25) body per QEX
+// Table 1:
+//
+//	h12(Call1) | h22(Call2) | R1(AckBit) | r3(Report3) | s11(Serial) | g25(Grid6) | i3=5
+//	     12          22           1            3              11          25         3   = 77 bits
+//
+// Both callsigns are hashed on the wire (not packed in full), so the
+// receiver needs Phase 4's running hash table to resolve either side
+// back to a string. The grid field is a strict 6-character Maidenhead
+// locator — no reserved-token or signed-report multiplexing (those
+// only exist in the g15 slot used by Types 1/2).
+//
+// The R1 ack bit and r3 report code carry the QSO state across the
+// exchange: the contact runs Call1 → Call2 with progressive ack and
+// signal-report values per VHF contest convention.
+//
+// Validation is upstream of every Layer 1 primitive: Call1/Call2 must
+// be valid std-callsign shape (HashCodes' alphabet is forgiving but
+// the message-level contract is std-shape only on the wire — Phase 4's
+// hash table is populated from std-shape calls); Report3 must be
+// 0..7; Serial must be 0..2047; Grid6 must be 6-char Maidenhead.
+func encodeEUVHFHash(m Message) ([]byte, error) {
+	if err := validateType5Call(m.Call1, "Call1"); err != nil {
+		return nil, err
+	}
+	if err := validateType5Call(m.Call2, "Call2"); err != nil {
+		return nil, err
+	}
+	if err := validateType5Report(m.Report3); err != nil {
+		return nil, err
+	}
+	if err := validateType5Serial(m.Serial); err != nil {
+		return nil, err
+	}
+	if err := validateType5Grid(m.Grid6); err != nil {
+		return nil, err
+	}
+
+	_, h12, _ := HashCodes(m.Call1)
+	_, _, h22 := HashCodes(m.Call2)
+
+	var b BitBuilder
+	b.Append(uint64(h12), h12Bits).
+		Append(uint64(h22), HashBits22).
+		Append(boolBit(m.AckBit), 1).
+		Append(uint64(m.Report3), r3Bits).
+		Append(uint64(m.Serial), s11Bits).
+		Append(uint64(Grid6ToG25(m.Grid6)), G25Bits).
+		Append(i3EUVHFHash, i3Width)
+	if b.Len() != MessageBits {
+		panic("codec.encodeEUVHFHash: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
+	}
+	return slices.Clone(b.Bits()), nil
+}
+
+// validateType5Call enforces the Type 5 hashed-call shape. The wire
+// slot is a hash, so any string the hashcode alphabet accepts would
+// technically encode, but the protocol-level expectation is a
+// standard amateur callsign (Phase 4's hash table only resolves
+// std-shaped calls). Rejecting non-std inputs at encode time keeps
+// the encoder's contract tight with the receiver's hash-resolution
+// path.
+//
+// Tokens (CQ / DE / QRZ / "CQ <suffix>") are not valid Type 5
+// callsigns — Type 5's hashed slots carry contest-exchange identities,
+// not directed-call markers.
+func validateType5Call(call, field string) error {
+	const op errors.Op = "codec.validateType5Call"
+	if _, ok := TokenToC28(call); ok {
+		return errors.New(op).WithMsgf("%s = %q is a token (CQ / DE / QRZ / CQ <suffix>); tokens are not valid in Type 5 (EU VHF hashes+g25)", field, call)
+	}
+	return validateStdCallsign(call, field)
+}
+
+// validateType5Report bounds Report3 per QEX Table 2. Values outside
+// [r3Min, r3Max] either silently wrap on the 3-bit slot or shift garbage
+// into adjacent fields if BitBuilder.Append's overflow guard didn't
+// catch them — the validator runs first so the diagnostic names the
+// field, not the wire offset.
+func validateType5Report(r uint8) error {
+	const op errors.Op = "codec.validateType5Report"
+	if r > r3Max {
+		return errors.New(op).WithMsgf("Report3 = %d is outside [%d, %d] (QEX r3 slot is %d bits; values map to display 52..59)", r, r3Min, r3Max, r3Bits)
+	}
+	return nil
+}
+
+// validateType5Serial bounds Serial per QEX Table 2 (s11 = 0..2047).
+func validateType5Serial(s uint16) error {
+	const op errors.Op = "codec.validateType5Serial"
+	if s > s11Max {
+		return errors.New(op).WithMsgf("Serial = %d is outside [0, %d] (QEX s11 slot is %d bits)", s, s11Max, s11Bits)
+	}
+	return nil
+}
+
+// validateType5Grid enforces the strict 6-char Maidenhead shape on
+// Grid6. Grid6ToG25 panics on out-of-shape input — this validator
+// surfaces the same rejection with a useful error rather than the
+// primitive's panic path.
+func validateType5Grid(g string) error {
+	const op errors.Op = "codec.validateType5Grid"
+	if !isGrid6(g) {
+		return errors.New(op).WithMsgf("Grid6 = %q is not a 6-char Maidenhead locator ([A-R][A-R][0-9][0-9][A-X][A-X])", g)
+	}
+	return nil
 }
 
 // validateType2Call enforces the Type 2 c28 shape: a standard amateur

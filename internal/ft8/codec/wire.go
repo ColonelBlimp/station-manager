@@ -28,6 +28,7 @@ const (
 	i3Zero       = 0 // i3=0 family (n3 sub-dispatch; Phase 3A wires n3=0 only)
 	i3Std        = 1 // Type 1 (Std Msg)
 	i3EUVHFP     = 2 // Type 2 (EU VHF /P)
+	i3EUVHFHash  = 3 // Type 5 (EU VHF hashes+g25)
 	i3NonStdCall = 4 // Type 4 (NonStd Call)
 )
 
@@ -69,3 +70,28 @@ const (
 	r2RR73  = 2
 	r2_73   = 3
 )
+
+// Type 5 (EU VHF hashes+g25) bit-field widths per QEX Table 1 layout:
+//
+//	h12 h22 R1 r3 s11 g25 i3=5
+//	 12  22  1  3  11  25   3   = 77 bits
+//
+// h12Bits + HashBits22 (hashcodes.go) + r3Bits + s11Bits + G25Bits
+// (grid.go) + i3Width = 12+22+1+3+11+25+3 = 77.
+const (
+	r3Bits  = 3
+	s11Bits = 11
+)
+
+// r3 maps a 3-bit code (0..7) to a 2-digit signal report string per
+// QEX paper Table 2 ("Values 0 – 7 encode a signal report displayed
+// as 52, 53, … 59"). r3Bias = 52 lifts the code to its display value.
+const (
+	r3Min  = 0
+	r3Max  = 7
+	r3Bias = 52
+)
+
+// s11Max bounds the Type 5 serial-number slot — 11 bits → 0..2047
+// per QEX Table 2 ("Serial number 0 – 2047").
+const s11Max = (1 << s11Bits) - 1

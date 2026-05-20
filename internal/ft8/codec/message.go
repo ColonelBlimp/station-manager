@@ -126,16 +126,42 @@ type Message struct {
 	FreeText string
 
 	// Hash12 holds the 12-bit hash value (the h12 wire field) for
-	// Type 4 (NonStd Call) messages when the receiver-side hash
-	// table hasn't resolved it to a callsign string. The hashed
-	// Call slot then holds the WSJT-X "<...>" sentinel; Phase 4's
-	// hash table fills the resolved string in once it sees the
-	// callsign on a later decode and the wire-level h12 matches.
+	// Type 4 (NonStd Call) and Type 5 (EU VHF hashes+g25) messages
+	// when the receiver-side hash table hasn't resolved it to a
+	// callsign string. The hashed Call slot then holds the WSJT-X
+	// "<...>" sentinel; Phase 4's hash table fills the resolved
+	// string in once it sees the callsign on a later decode and the
+	// wire-level h12 matches.
 	//
 	// Zero on encoded messages (the caller supplied the original
 	// callsign string, so the encoder computes h12 fresh from
 	// HashCodes) and on decoded messages where the hash has already
-	// been resolved. Non-zero only on decoded Type 4 messages whose
-	// hash side is still unresolved.
+	// been resolved. Non-zero only on decoded Type 4 / Type 5
+	// messages whose hash side is still unresolved.
 	Hash12 uint16
+
+	// Hash22 holds the 22-bit hash value (the h22 wire field) for
+	// Type 5 (EU VHF hashes+g25) messages — the second callsign
+	// hashes to 22 bits in this layout (vs Type 4's 12-bit h12).
+	// Same Phase-4-resolution contract as Hash12.
+	Hash22 uint32
+
+	// Grid6 is the 6-character Maidenhead grid for Type 5 (EU VHF
+	// hashes+g25). Distinct from Grid (the multi-modal g15 slot
+	// shared by Types 1/2) because the g25 wire slot is strictly
+	// a 6-char grid — no reserved-token or signed-report
+	// multiplexing. Encoded via Grid6ToG25.
+	Grid6 string
+
+	// Report3 is the 3-bit signal-report code (0..7) for Type 5,
+	// rendered as the 2-digit form "52".."59" per QEX paper
+	// Table 2. Other types (3, 0.3, 0.4) reuse the same r3 slot
+	// width but display ranges differ; FormatMessage handles per-
+	// type rendering. Zero on types that don't carry a report.
+	Report3 uint8
+
+	// Serial is the contest-style serial number for Type 5 (s11
+	// slot, 0..2047). Reused by other contest types when they
+	// land. Zero on types that don't carry a serial.
+	Serial uint16
 }

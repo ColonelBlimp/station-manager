@@ -70,6 +70,8 @@ func DecodeMessage(bits []byte) (Message, error) {
 		return decodeStd(bits)
 	case i3EUVHFP:
 		return decodeEUVHFP(bits)
+	case i3EUVHFHash:
+		return decodeEUVHFHash(bits)
 	case i3NonStdCall:
 		return decodeNonStdCall(bits)
 	default:
@@ -283,6 +285,45 @@ func decodeNonStdCall(bits []byte) (Message, error) {
 		msg.Hash12 = h12
 	}
 	return msg, nil
+}
+
+// decodeEUVHFHash inverts encodeEUVHFHash. Bit layout per QEX Table 1:
+//
+//	h12 | h22 | R1 | r3 | s11 | g25 | i3=5
+//	 12    22    1    3    11    25     3
+//
+// Both call slots are hashes on the wire — the codec layer has no
+// way to recover the original strings on its own, so Call1 and Call2
+// surface as the WSJT-X "<...>" sentinel and the raw 12-bit and
+// 22-bit hash values land in Message.Hash12 / Message.Hash22. Phase
+// 4's running hash table fills the strings in when a prior decode
+// has seen the underlying calls and their hashes match.
+//
+// Grid6, Report3, Serial, and AckBit fully decode from the wire — no
+// hash-table dependency.
+func decodeEUVHFHash(bits []byte) (Message, error) {
+	h12 := uint16(readBitsUint64(bits, 0, h12Bits))
+	h22 := uint32(readBitsUint64(bits, h12Bits, HashBits22))
+	off := h12Bits + HashBits22
+	ack := bits[off] == 1
+	off++
+	r3 := uint8(readBitsUint64(bits, off, r3Bits))
+	off += r3Bits
+	serial := uint16(readBitsUint64(bits, off, s11Bits))
+	off += s11Bits
+	g25 := uint32(readBitsUint64(bits, off, G25Bits))
+
+	return Message{
+		Type:    MessageTypeEUVHFHash,
+		Call1:   hashedCallSentinel,
+		Call2:   hashedCallSentinel,
+		Hash12:  h12,
+		Hash22:  h22,
+		AckBit:  ack,
+		Report3: r3,
+		Serial:  serial,
+		Grid6:   G25ToGrid6(g25),
+	}, nil
 }
 
 // type1CallFromC28 recovers the Type 1 Call1/Call2 string from a c28

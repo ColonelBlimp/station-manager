@@ -254,12 +254,12 @@ func TestEncodeMessage_Type1_ZeroValueFlags(t *testing.T) {
 // implemented (i.e. no longer returns ErrUnsupportedMessageType).
 func TestEncodeMessage_UnsupportedType(t *testing.T) {
 	// MessageTypeStd (Phase 2), MessageTypeEUVHFP (Phase 3B),
-	// MessageTypeNonStdCall (Phase 3C), and MessageTypeFreeText
-	// (Phase 3A) are implemented; the remaining types stay
-	// unsupported until Phase 3D and Phase 4 land their packers.
+	// MessageTypeNonStdCall (Phase 3C), MessageTypeEUVHFHash
+	// (Phase 3D), and MessageTypeFreeText (Phase 3A) are implemented;
+	// the remaining types stay unsupported until Phase 4 lands the
+	// rest of the Type 0.x family + Type 3 RTTY RU packers.
 	cases := []MessageType{
 		MessageTypeRTTYRU,
-		MessageTypeEUVHFHash,
 		MessageTypeDXpedition,
 		MessageTypeFieldDayANSI,
 		MessageTypeFieldDayRTTY,
