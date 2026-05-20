@@ -225,12 +225,18 @@ func (t *HashTable) Resolve(m Message) Message {
 				m.Hash22 = 0
 			}
 		}
+	default:
+		// Intentional no-op for non-hash-bearing Types (Std / EU VHF /P /
+		// Free Text / specialty 0.x). Unlike the encode/decode/format
+		// switches in this package, an unhandled Type here isn't a wire
+		// error — it just means there are no sentinels to resolve. New
+		// Phase 4 types that carry hash slots add their case above.
 	}
 	return m
 }
 
 // isInsertableCallsign is the gate for Insert: true means HashCodes
-// will accept the string and it isn't a token / sentinel. False
+// will accept the string, and it isn't a token / sentinel. False
 // strings are silently dropped at Insert time.
 func isInsertableCallsign(s string) bool {
 	if s == "" || s == hashedCallSentinel {

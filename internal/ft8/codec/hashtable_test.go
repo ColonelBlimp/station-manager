@@ -9,10 +9,10 @@ import (
 // get a zero-sized table that drops every Insert).
 func TestNewHashTable_DefaultCapacity(t *testing.T) {
 	t.Parallel()
-	for _, cap := range []int{0, -1, -100} {
-		ht := NewHashTable(cap)
+	for _, capacity := range []int{0, -1, -100} {
+		ht := NewHashTable(capacity)
 		if got := ht.cap; got != DefaultHashTableCapacity {
-			t.Errorf("NewHashTable(%d).cap = %d, want %d", cap, got, DefaultHashTableCapacity)
+			t.Errorf("NewHashTable(%d).cap = %d, want %d", capacity, got, DefaultHashTableCapacity)
 		}
 	}
 }
