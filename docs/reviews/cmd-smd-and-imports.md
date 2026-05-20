@@ -279,6 +279,13 @@ import. If keeping the substring fallback is still desired as a
 safety net, that's fine — but the typed-error path should actually
 match the driver in use.
 
+**Status:** primary fix landed when ADR 0018 was written; the
+migrations dual-driver concern (paragraph above) was closed
+2026-05-20 by swapping `migrations.go` to
+`migrate/v4/database/sqlite` (pure Go, modernc-backed). `mattn/go-
+sqlite3` is no longer in the dep graph and `CGO_ENABLED=0 go build
+./...` succeeds. See ADR 0018 § Consequences for the swap detail.
+
 ---
 
 ## Minor findings
