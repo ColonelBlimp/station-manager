@@ -28,9 +28,9 @@ func TestParseMessage_Type1_BasicShapes(t *testing.T) {
 		{"K1ABC G4ABC RR73", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Grid: "RR73"}},
 		{"K1ABC G4ABC 73", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Grid: "73"}},
 		{"K1ABC G4ABC", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC"}},
-		{"K1ABC/R G4ABC FN20", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"K1ABC G4ABC/R FN20", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Rover2: true, Grid: "FN20"}},
-		{"K1ABC/R G4ABC/R FN20", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Rover1: true, Rover2: true, Grid: "FN20"}},
+		{"K1ABC/R G4ABC FN20", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"K1ABC G4ABC/R FN20", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Suffix2: true, Grid: "FN20"}},
+		{"K1ABC/R G4ABC/R FN20", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Suffix1: true, Suffix2: true, Grid: "FN20"}},
 		{"K1ABC G4ABC R", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", AckBit: true}},
 	}
 	for _, tc := range cases {

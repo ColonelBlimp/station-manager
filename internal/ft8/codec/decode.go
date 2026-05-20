@@ -78,6 +78,8 @@ func DecodeMessage(bits []byte) (Message, error) {
 		return decodeI3Zero(bits)
 	case i3Std:
 		return decodeStd(bits)
+	case i3EUVHFP:
+		return decodeEUVHFP(bits)
 	default:
 		return Message{}, fmt.Errorf("%w: i3=%d", ErrUnknownMessageType, i3)
 	}
@@ -123,18 +125,18 @@ func decodeFreeText(bits []byte) (Message, error) {
 //
 // Decode is bit-faithful: every legal 77-bit body produces a
 // Message, including spec-violating combinations the encoder
-// refuses (e.g. token c28 with the matching rover bit set — a
+// refuses (e.g. token c28 with the matching suffix bit set — a
 // remote encoder bug, malformed corpus, or post-LDPC corruption
 // could plant this on the wire). The returned Message captures
 // what the bits said; the semantic gate at FormatMessage /
 // EncodeMessage rejects the same Message on the way back out.
-// See validateType1Rover for the asymmetry rationale and
-// TestDecodeMessage_TokenWithRoverIsBitFaithful for the pin.
+// See validateType1Suffix for the asymmetry rationale and
+// TestDecodeMessage_TokenWithSuffixIsBitFaithful for the pin.
 func decodeStd(bits []byte) (Message, error) {
 	c28First := uint32(readBitsUint64(bits, 0, CallsignBits))
-	rover1 := bits[28] == 1
+	suffix1 := bits[28] == 1
 	c28Second := uint32(readBitsUint64(bits, 29, CallsignBits))
-	rover2 := bits[57] == 1
+	suffix2 := bits[57] == 1
 	ack := bits[58] == 1
 	g15 := uint16(readBitsUint64(bits, 59, G15Bits))
 
@@ -158,14 +160,79 @@ func decodeStd(bits []byte) (Message, error) {
 	}
 
 	return Message{
-		Type:   MessageTypeStd,
-		Call1:  call1,
-		Call2:  call2,
-		Rover1: rover1,
-		Rover2: rover2,
-		AckBit: ack,
-		Grid:   grid,
+		Type:    MessageTypeStd,
+		Call1:   call1,
+		Call2:   call2,
+		Suffix1: suffix1,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
 	}, nil
+}
+
+// decodeEUVHFP inverts encodeEUVHFP. Bit layout per QEX Table 1:
+//
+//	c28(Call1) | p1 | c28(Call2) | p1 | R1 | g15 | i3=2
+//	   28        1       28        1    1    15     3
+//
+// Same wire shape as Type 1, but token-range c28 values (i.e. c28 <
+// stdCallOffset) are NOT valid in Type 2: the QEX Table 7 token
+// partition is specific to Type 1. A token-range c28 on a Type-2
+// wire is a spec-violating value (corrupted message that slipped past
+// LDPC + CRC14, or a remote encoder bug) and surfaces as
+// ErrTokenInGap — symmetric with the Type 1 path's handling of
+// genuine token-partition gaps.
+//
+// Hash-range c28 values surface as ErrCallsignNeedsHashLookup per
+// the same protocol-layer hash-table contract Type 1 uses.
+func decodeEUVHFP(bits []byte) (Message, error) {
+	c28First := uint32(readBitsUint64(bits, 0, CallsignBits))
+	suffix1 := bits[28] == 1
+	c28Second := uint32(readBitsUint64(bits, 29, CallsignBits))
+	suffix2 := bits[57] == 1
+	ack := bits[58] == 1
+	g15 := uint16(readBitsUint64(bits, 59, G15Bits))
+
+	call1, err := type2CallFromC28(c28First, "Call1")
+	if err != nil {
+		return Message{}, err
+	}
+	call2, err := type2CallFromC28(c28Second, "Call2")
+	if err != nil {
+		return Message{}, err
+	}
+
+	grid, kind := G15ToGrid4(g15)
+	if kind == G15KindUnknown {
+		panic("codec.decodeEUVHFP: g15=" + strconv.Itoa(int(g15)) + " decoded to G15KindUnknown — G15ToGrid4 contract regression")
+	}
+
+	return Message{
+		Type:    MessageTypeEUVHFP,
+		Call1:   call1,
+		Call2:   call2,
+		Suffix1: suffix1,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
+	}, nil
+}
+
+// type2CallFromC28 recovers a Type 2 Call1/Call2 string. Mirrors
+// type1CallFromC28 but rejects token-partition c28 values (illegal
+// in Type 2 per QEX Table 7).
+func type2CallFromC28(c28 uint32, field string) (string, error) {
+	call, kind := C28ToCallsign(c28)
+	switch kind {
+	case C28KindStdCall:
+		return call, nil
+	case C28KindToken:
+		return "", fmt.Errorf("%w: %s c28=%d (tokens are not valid in Type 2)", ErrTokenInGap, field, c28)
+	case C28KindHash22:
+		return "", fmt.Errorf("%w: %s", ErrCallsignNeedsHashLookup, field)
+	default:
+		panic("codec.decodeEUVHFP: " + field + " decoded to unknown C28Kind — C28ToCallsign contract regression")
+	}
 }
 
 // type1CallFromC28 recovers the Type 1 Call1/Call2 string from a c28

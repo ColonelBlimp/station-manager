@@ -82,11 +82,14 @@ type Message struct {
 	Call1 string
 	Call2 string
 
-	// Rover flags (r1) per call. Type 2 EU VHF /P uses these to
-	// signal /P "rover" operation on either side; other types treat
-	// them as reserved zero.
-	Rover1 bool
-	Rover2 bool
+	// Suffix1/Suffix2 hold the per-callsign 1-bit suffix flag that
+	// Types 1 and 2 share at the same bit offset but interpret
+	// differently: Type 1 calls this slot "r1" and renders it as /R
+	// (rover); Type 2 calls it "p1" and renders it as /P (portable).
+	// FormatMessage decides /R vs /P from the Type discriminator.
+	// Other types treat these bits as reserved zero.
+	Suffix1 bool
+	Suffix2 bool
 
 	// Acknowledgment bit (R1) per QEX Table 1 — used by Type 1
 	// (Std Msg), Type 2 (EU VHF /P), Type 3 (RTTY RU), Type 0.3 /

@@ -159,7 +159,7 @@ func parseCQ(tokens []string) (Message, error) {
 		return Message{}, errors.New(op).WithMsgf("CQ message is missing the second callsign")
 	}
 
-	call2, rover2, fieldTokens, err := consumeCall(rest)
+	call2, suffix2, fieldTokens, err := consumeCall(rest)
 	if err != nil {
 		return Message{}, err
 	}
@@ -169,12 +169,12 @@ func parseCQ(tokens []string) (Message, error) {
 	}
 
 	msg := Message{
-		Type:   MessageTypeStd,
-		Call1:  call1,
-		Call2:  call2,
-		Rover2: rover2,
-		AckBit: ack,
-		Grid:   grid,
+		Type:    MessageTypeStd,
+		Call1:   call1,
+		Call2:   call2,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
 	}
 	return msg, nil
 }
@@ -189,7 +189,7 @@ func parseDirected(tokens []string) (Message, error) {
 	if len(tokens) < 2 {
 		return Message{}, errors.New(op).WithMsgf("%s message is missing the second callsign", tokens[0])
 	}
-	call2, rover2, fieldTokens, err := consumeCall(tokens[1:])
+	call2, suffix2, fieldTokens, err := consumeCall(tokens[1:])
 	if err != nil {
 		return Message{}, err
 	}
@@ -198,12 +198,12 @@ func parseDirected(tokens []string) (Message, error) {
 		return Message{}, err
 	}
 	return Message{
-		Type:   MessageTypeStd,
-		Call1:  tokens[0],
-		Call2:  call2,
-		Rover2: rover2,
-		AckBit: ack,
-		Grid:   grid,
+		Type:    MessageTypeStd,
+		Call1:   tokens[0],
+		Call2:   call2,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
 	}, nil
 }
 
@@ -214,11 +214,11 @@ func parsePlainStd(tokens []string) (Message, error) {
 	if len(tokens) < 2 {
 		return Message{}, errors.New(op).WithMsgf("message has only %d field(s); need at least two callsigns", len(tokens))
 	}
-	call1, rover1, rest, err := consumeCall(tokens)
+	call1, suffix1, rest, err := consumeCall(tokens)
 	if err != nil {
 		return Message{}, err
 	}
-	call2, rover2, fieldTokens, err := consumeCall(rest)
+	call2, suffix2, fieldTokens, err := consumeCall(rest)
 	if err != nil {
 		return Message{}, err
 	}
@@ -231,39 +231,41 @@ func parsePlainStd(tokens []string) (Message, error) {
 		// means a token-shaped first field that the classifier
 		// missed. Reject explicitly so we don't silently produce
 		// a token in Call1 with a path other than parseCQ /
-		// parseDirected (which gate rover usage and CQ-suffix logic).
+		// parseDirected (which gate suffix usage and CQ-suffix logic).
 		return Message{}, errors.New(op).WithMsgf("first field %q is a token; CQ / DE / QRZ have dedicated parse paths", call1)
 	}
 	return Message{
-		Type:   MessageTypeStd,
-		Call1:  call1,
-		Call2:  call2,
-		Rover1: rover1,
-		Rover2: rover2,
-		AckBit: ack,
-		Grid:   grid,
+		Type:    MessageTypeStd,
+		Call1:   call1,
+		Call2:   call2,
+		Suffix1: suffix1,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
 	}, nil
 }
 
 // consumeCall pulls a callsign (with optional "/R" suffix) off the
-// head of tokens and returns (call, rover, remaining-tokens, error).
-// The /R rover suffix encodes to a Rover1/Rover2 bit and is stripped
-// from the callsign string before validation.
+// head of tokens and returns (call, suffix, remaining-tokens, error).
+// The /R rover suffix encodes to a Suffix1/Suffix2 bit and is stripped
+// from the callsign string before validation. (Type 1 only — Type 2's
+// /P parser is parseEUVHFP, which uses a similar pattern but recognises
+// /P instead of /R.)
 func consumeCall(tokens []string) (string, bool, []string, error) {
 	const op errors.Op = "codec.ParseMessage"
 	if len(tokens) == 0 {
 		return "", false, nil, errors.New(op).WithMsgf("missing callsign field")
 	}
 	raw := tokens[0]
-	rover := false
+	suffix := false
 	if strings.HasSuffix(raw, "/R") {
-		rover = true
+		suffix = true
 		raw = raw[:len(raw)-2]
 	}
 	if err := validateStdCallsign(raw, "callsign"); err != nil {
 		return "", false, nil, err
 	}
-	return raw, rover, tokens[1:], nil
+	return raw, suffix, tokens[1:], nil
 }
 
 // consumeGridField parses the trailing 0..2 tokens as the g15 slot

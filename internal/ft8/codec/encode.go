@@ -9,10 +9,13 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
-// QEX Table 1 i3 tag for Type 1 (Std Msg). Three-bit value written
-// into the lowest 3 bits of the 77-bit message body. The tags for
-// other message types land alongside their encoders.
-const i3Std = 1
+// QEX Table 1 i3 tags. Three-bit value written into the lowest 3
+// bits of the 77-bit message body. Tags for unimplemented types land
+// alongside their encoders.
+const (
+	i3Std    = 1 // Type 1 (Std Msg)
+	i3EUVHFP = 2 // Type 2 (EU VHF /P)
+)
 
 // QEX Table 1 i3.n3 tags for the i3=0 message-type family. n3
 // occupies bits 71..73 (the 3 bits immediately above f71's 71-bit
@@ -69,6 +72,8 @@ func EncodeMessage(m Message) ([]byte, error) {
 	switch m.Type {
 	case MessageTypeStd:
 		return encodeStd(m)
+	case MessageTypeEUVHFP:
+		return encodeEUVHFP(m)
 	case MessageTypeFreeText:
 		return encodeFreeText(m)
 	default:
@@ -78,8 +83,8 @@ func EncodeMessage(m Message) ([]byte, error) {
 
 // encodeStd packs a Type 1 (Std Msg) body per QEX Table 1:
 //
-//	c28(Call1) | r1(Rover1) | c28(Call2) | r1(Rover2) | R1(AckBit) | g15(Grid) | i3=1
-//	    28          1            28          1            1            15        3   = 77 bits
+//	c28(Call1) | r1(Suffix1) | c28(Call2) | r1(Suffix2) | R1(AckBit) | g15(Grid) | i3=1
+//	    28          1             28           1             1           15        3   = 77 bits
 //
 // Validation runs over all caller-supplied fields before any Layer 1
 // primitive is invoked, so the primitives' panics indicate genuine
@@ -88,13 +93,13 @@ func encodeStd(m Message) ([]byte, error) {
 	if err := validateType1Call(m.Call1, "Call1"); err != nil {
 		return nil, err
 	}
-	if err := validateType1Rover(m.Call1, m.Rover1, "Call1"); err != nil {
+	if err := validateType1Suffix(m.Call1, m.Suffix1, "Call1"); err != nil {
 		return nil, err
 	}
 	if err := validateType1Call(m.Call2, "Call2"); err != nil {
 		return nil, err
 	}
-	if err := validateType1Rover(m.Call2, m.Rover2, "Call2"); err != nil {
+	if err := validateType1Suffix(m.Call2, m.Suffix2, "Call2"); err != nil {
 		return nil, err
 	}
 	if err := validateG15Slot(m.Grid); err != nil {
@@ -103,9 +108,9 @@ func encodeStd(m Message) ([]byte, error) {
 
 	var b BitBuilder
 	b.Append(uint64(type1CallToC28(m.Call1)), CallsignBits).
-		Append(boolBit(m.Rover1), 1).
+		Append(boolBit(m.Suffix1), 1).
 		Append(uint64(type1CallToC28(m.Call2)), CallsignBits).
-		Append(boolBit(m.Rover2), 1).
+		Append(boolBit(m.Suffix2), 1).
 		Append(boolBit(m.AckBit), 1).
 		Append(uint64(Grid4ToG15(m.Grid)), G15Bits).
 		Append(i3Std, 3)
@@ -121,6 +126,62 @@ func encodeStd(m Message) ([]byte, error) {
 	// future BitBuilder pooling. The clone is 77 bytes — invisible
 	// next to the LDPC encode that follows on the same hot path.
 	return slices.Clone(b.Bits()), nil
+}
+
+// encodeEUVHFP packs a Type 2 (EU VHF /P) body per QEX Table 1:
+//
+//	c28(Call1) | p1(Suffix1) | c28(Call2) | p1(Suffix2) | R1(AckBit) | g15(Grid) | i3=2
+//	    28          1             28           1             1           15        3   = 77 bits
+//
+// Structurally identical to Type 1 — same widths, same offsets — but
+// the c28 partition is restricted to standard callsigns: tokens
+// (CQ / DE / QRZ / "CQ <suffix>") are NOT valid in Type 2 per QEX
+// paper Table 7 (the token partition is specific to Type 1's c28).
+// The per-callsign 1-bit slot is named "p1" in Table 1 and renders
+// as /P (portable), distinct from Type 1's "r1" (/R rover); the bit
+// itself is stored in the same Suffix1/Suffix2 fields and FormatMessage
+// disambiguates by Type.
+func encodeEUVHFP(m Message) ([]byte, error) {
+	if err := validateType2Call(m.Call1, "Call1"); err != nil {
+		return nil, err
+	}
+	if err := validateType2Call(m.Call2, "Call2"); err != nil {
+		return nil, err
+	}
+	if err := validateG15Slot(m.Grid); err != nil {
+		return nil, err
+	}
+
+	var b BitBuilder
+	b.Append(uint64(stdCallToC28(m.Call1)), CallsignBits).
+		Append(boolBit(m.Suffix1), 1).
+		Append(uint64(stdCallToC28(m.Call2)), CallsignBits).
+		Append(boolBit(m.Suffix2), 1).
+		Append(boolBit(m.AckBit), 1).
+		Append(uint64(Grid4ToG15(m.Grid)), G15Bits).
+		Append(i3EUVHFP, 3)
+	if b.Len() != MessageBits {
+		// Belt-and-braces: width-constant regression lands here, not
+		// on the wire. See encodeStd's panic for the rationale.
+		panic("codec.encodeEUVHFP: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
+	}
+	return slices.Clone(b.Bits()), nil
+}
+
+// validateType2Call enforces the Type 2 c28 shape: a standard amateur
+// callsign with no token escape. Type 1's `type1CallToC28` routes
+// CQ / DE / QRZ / "CQ <suffix>" through the token partition; Type 2
+// has no such partition and rejects those inputs.
+//
+// Returned errors are tagged with the field name (Call1 / Call2) so
+// the caller can locate the bad input without inspecting the error
+// chain.
+func validateType2Call(call, field string) error {
+	const op errors.Op = "codec.validateType2Call"
+	if _, ok := TokenToC28(call); ok {
+		return errors.New(op).WithMsgf("%s = %q is a token (CQ / DE / QRZ / CQ <suffix>); tokens are not valid in Type 2 (EU VHF /P)", field, call)
+	}
+	return validateStdCallsign(call, field)
 }
 
 // encodeFreeText packs a Type 0.0 (Free Text) body per QEX Table 1:
@@ -260,29 +321,29 @@ func boolBit(v bool) uint64 {
 	return 0
 }
 
-// validateType1Rover rejects the nonsensical combination of a token
-// in a Type 1 Call slot with the matching rover bit set. The /R
+// validateType1Suffix rejects the nonsensical combination of a token
+// in a Type 1 Call slot with the matching suffix bit set. The /R
 // suffix means "rover callsign" — tokens (CQ, DE, QRZ, "CQ ...")
-// aren't callsigns, so the rover bit on a token slot would have
+// aren't callsigns, so the suffix bit on a token slot would have
 // no text-layer rendering and no semantic meaning.
 //
 // The bit-level wire format DOES allow the combination (a remote
 // encoder, malformed corpus, or post-LDPC corruption could produce
 // it on a 77-bit body), and DecodeMessage stays bit-faithful — it
-// will return Message{Call1: "CQ", Rover1: true, ...} for such a
+// will return Message{Call1: "CQ", Suffix1: true, ...} for such a
 // wire input rather than erroring. This validator is the encode-
 // side + format-side gate that prevents OUR encoder from emitting
 // the combination and our formatter from rendering it. The
 // asymmetry (decode accepts, encode/format reject) is intentional:
 // the codec layer is bit-faithful; semantic guards run at encode
 // and format boundaries.
-func validateType1Rover(call string, rover bool, field string) error {
-	const op errors.Op = "codec.validateType1Rover"
-	if !rover {
+func validateType1Suffix(call string, suffix bool, field string) error {
+	const op errors.Op = "codec.validateType1Suffix"
+	if !suffix {
 		return nil
 	}
 	if _, isTok := TokenToC28(call); isTok {
-		return errors.New(op).WithMsgf("%s = %q is a token; rover bit cannot be set on a non-callsign", field, call)
+		return errors.New(op).WithMsgf("%s = %q is a token; suffix bit cannot be set on a non-callsign", field, call)
 	}
 	return nil
 }

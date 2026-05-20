@@ -273,13 +273,13 @@ func TestDecodeMessage_RoundTripLongCalls(t *testing.T) {
 		{
 			"rover_and_ack_set",
 			Message{
-				Type:   MessageTypeStd,
-				Call1:  "G4ABC",
-				Call2:  "K1ABC",
-				Rover1: true,
-				Rover2: true,
-				AckBit: true,
-				Grid:   "FN20",
+				Type:    MessageTypeStd,
+				Call1:   "G4ABC",
+				Call2:   "K1ABC",
+				Suffix1: true,
+				Suffix2: true,
+				AckBit:  true,
+				Grid:    "FN20",
 			},
 		},
 		{
@@ -370,16 +370,12 @@ func TestDecodeMessage_RejectsShortBody(t *testing.T) {
 }
 
 // TestDecodeMessage_RejectsUnknownI3 verifies the i3-tag dispatch.
-// Phase 2C only implements i3=1; the other tags return the
-// unsupported-type sentinel.
+// Implemented: i3=0 (i3.n3 = 0.x family), i3=1 (Std Msg),
+// i3=2 (EU VHF /P). The remaining tags return the unsupported-type
+// sentinel until their packers land.
 func TestDecodeMessage_RejectsUnknownI3(t *testing.T) {
-	// i3=0 (the i3.n3 = 0.x family) and i3=1 (Std) are implemented;
-	// the rest stay unsupported until their packers land. The i3=0
-	// path further sub-dispatches on n3; that sub-dispatch's
-	// unknown-n3 rejection is pinned by
-	// TestDecodeMessage_FreeText_DispatchesOnN3.
 	for i3 := 0; i3 < 8; i3++ {
-		if i3 == i3Std || i3 == i3Zero {
+		if i3 == i3Std || i3 == i3Zero || i3 == i3EUVHFP {
 			continue
 		}
 		bits := make([]byte, MessageBits)
@@ -451,12 +447,12 @@ func TestDecodeMessage_TokenDecodesIntoCall(t *testing.T) {
 	}
 }
 
-// TestDecodeMessage_TokenWithRoverIsBitFaithful pins the
-// decode-side policy for the spec-violating "token c28 + rover bit
+// TestDecodeMessage_TokenWithSuffixIsBitFaithful pins the
+// decode-side policy for the spec-violating "token c28 + suffix bit
 // set" wire pattern. The codec layer is bit-faithful — it decodes
 // the wire pattern into a Message as-is rather than erroring. The
 // SAME Message, fed back to EncodeMessage or FormatMessage, will
-// be rejected by validateType1Rover.
+// be rejected by validateType1Suffix.
 //
 // Three properties get pinned here so the documented asymmetry
 // survives future refactors:
@@ -468,7 +464,7 @@ func TestDecodeMessage_TokenDecodesIntoCall(t *testing.T) {
 //     and EncodeMessage both reject it. That asymmetry IS the
 //     point — the codec doesn't enforce semantics, the layer
 //     above does.
-func TestDecodeMessage_TokenWithRoverIsBitFaithful(t *testing.T) {
+func TestDecodeMessage_TokenWithSuffixIsBitFaithful(t *testing.T) {
 	g4abc := CallsignC28("G4ABC")
 
 	writeC28 := func(bits []byte, offset int, c28 uint32) {
@@ -477,11 +473,11 @@ func TestDecodeMessage_TokenWithRoverIsBitFaithful(t *testing.T) {
 		}
 	}
 
-	// Wire pattern: c28(Call1)=CQ token (=2), rover1=1, c28(Call2)=
-	// G4ABC, rover2=0, R1=0, g15=FN20, i3=1.
+	// Wire pattern: c28(Call1)=CQ token (=2), suffix1=1, c28(Call2)=
+	// G4ABC, suffix2=0, R1=0, g15=FN20, i3=1.
 	bits := make([]byte, MessageBits)
 	writeC28(bits, 0, 2)
-	bits[28] = 1 // rover1 = 1 (the spec-violating part)
+	bits[28] = 1 // suffix1 = 1 (the spec-violating part)
 	writeC28(bits, 29, g4abc)
 	// Write g15(FN20) at bits[59..73].
 	fn20 := Grid4ToG15("FN20")
@@ -493,15 +489,15 @@ func TestDecodeMessage_TokenWithRoverIsBitFaithful(t *testing.T) {
 	// Property 1: decode succeeds.
 	msg, err := DecodeMessage(bits)
 	if err != nil {
-		t.Fatalf("DecodeMessage(token+rover bits): %v (decode should be bit-faithful)", err)
+		t.Fatalf("DecodeMessage(token+suffix bits): %v (decode should be bit-faithful)", err)
 	}
 
-	// Property 2: the rover bit and the token both survive.
+	// Property 2: the suffix bit and the token both survive.
 	if msg.Call1 != "CQ" {
 		t.Errorf("Call1 = %q, want %q", msg.Call1, "CQ")
 	}
-	if !msg.Rover1 {
-		t.Error("Rover1 = false, want true (wire had rover bit set)")
+	if !msg.Suffix1 {
+		t.Error("Suffix1 = false, want true (wire had suffix bit set)")
 	}
 	if msg.Call2 != "G4ABC" {
 		t.Errorf("Call2 = %q, want %q", msg.Call2, "G4ABC")

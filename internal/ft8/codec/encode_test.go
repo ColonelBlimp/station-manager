@@ -10,7 +10,7 @@ import (
 // EncodeMessage assembles a Type 1 (Std Msg) body in the exact bit
 // layout QEX paper Table 1 specifies:
 //
-//	c28(Call1) | r1(Rover1) | c28(Call2) | r1(Rover2) | R1(AckBit) | g15(Grid) | i3=1
+//	c28(Call1) | r1(Suffix1) | c28(Call2) | r1(Suffix2) | R1(AckBit) | g15(Grid) | i3=1
 //	    28          1            28          1            1            15        3
 //
 // The expected bits are constructed by re-using the Layer 1 codec
@@ -36,23 +36,23 @@ func TestEncodeMessage_Type1_LayoutMatchesQEXTable1(t *testing.T) {
 			},
 		},
 		{
-			name: "rover1_set",
+			name: "suffix1_set",
 			msg: Message{
-				Type:   MessageTypeStd,
-				Call1:  "K1JT",
-				Call2:  "G4ABC",
-				Rover1: true,
-				Grid:   "FN20",
+				Type:    MessageTypeStd,
+				Call1:   "K1JT",
+				Call2:   "G4ABC",
+				Suffix1: true,
+				Grid:    "FN20",
 			},
 		},
 		{
-			name: "rover2_set",
+			name: "suffix2_set",
 			msg: Message{
-				Type:   MessageTypeStd,
-				Call1:  "K1JT",
-				Call2:  "G4ABC",
-				Rover2: true,
-				Grid:   "FN20",
+				Type:    MessageTypeStd,
+				Call1:   "K1JT",
+				Call2:   "G4ABC",
+				Suffix2: true,
+				Grid:    "FN20",
 			},
 		},
 		{
@@ -68,13 +68,13 @@ func TestEncodeMessage_Type1_LayoutMatchesQEXTable1(t *testing.T) {
 		{
 			name: "all_rover_and_ack_set",
 			msg: Message{
-				Type:   MessageTypeStd,
-				Call1:  "K1JT",
-				Call2:  "G4ABC",
-				Rover1: true,
-				Rover2: true,
-				AckBit: true,
-				Grid:   "FN20",
+				Type:    MessageTypeStd,
+				Call1:   "K1JT",
+				Call2:   "G4ABC",
+				Suffix1: true,
+				Suffix2: true,
+				AckBit:  true,
+				Grid:    "FN20",
 			},
 		},
 		{
@@ -165,9 +165,9 @@ func TestEncodeMessage_Type1_LayoutMatchesQEXTable1(t *testing.T) {
 			// Phase 2C encoder fix.
 			want := make([]byte, 0, MessageBits)
 			want = append(want, bitsOfValue(uint64(stdCallToC28(tc.msg.Call1)), CallsignBits)...)
-			want = append(want, boolBitByte(tc.msg.Rover1))
+			want = append(want, boolBitByte(tc.msg.Suffix1))
 			want = append(want, bitsOfValue(uint64(stdCallToC28(tc.msg.Call2)), CallsignBits)...)
-			want = append(want, boolBitByte(tc.msg.Rover2))
+			want = append(want, boolBitByte(tc.msg.Suffix2))
 			want = append(want, boolBitByte(tc.msg.AckBit))
 			want = append(want, bitsOfValue(uint64(Grid4ToG15(tc.msg.Grid)), G15Bits)...)
 			want = append(want, bitsOfValue(i3Std, 3)...)
@@ -189,13 +189,13 @@ func TestEncodeMessage_Type1_BitPositions(t *testing.T) {
 	// them out by index without ambiguity. The c28/g15 values come
 	// from real inputs to keep them inside the documented ranges.
 	msg := Message{
-		Type:   MessageTypeStd,
-		Call1:  "K1JT",
-		Call2:  "G4ABC",
-		Rover1: true,
-		Rover2: true,
-		AckBit: true,
-		Grid:   "FN20",
+		Type:    MessageTypeStd,
+		Call1:   "K1JT",
+		Call2:   "G4ABC",
+		Suffix1: true,
+		Suffix2: true,
+		AckBit:  true,
+		Grid:    "FN20",
 	}
 	got, err := EncodeMessage(msg)
 	if err != nil {
@@ -204,17 +204,17 @@ func TestEncodeMessage_Type1_BitPositions(t *testing.T) {
 
 	// Per Table 1 the layout puts:
 	//   bits[0..27]  = c28(Call1)
-	//   bits[28]     = Rover1 (= 1)
+	//   bits[28]     = Suffix1 (= 1)
 	//   bits[29..56] = c28(Call2)
-	//   bits[57]     = Rover2 (= 1)
+	//   bits[57]     = Suffix2 (= 1)
 	//   bits[58]     = AckBit (= 1)
 	//   bits[59..73] = g15(Grid)
 	//   bits[74..76] = i3 = 001 MSB-first
 	if got[28] != 1 {
-		t.Errorf("Rover1 at bits[28] = %d, want 1", got[28])
+		t.Errorf("Suffix1 at bits[28] = %d, want 1", got[28])
 	}
 	if got[57] != 1 {
-		t.Errorf("Rover2 at bits[57] = %d, want 1", got[57])
+		t.Errorf("Suffix2 at bits[57] = %d, want 1", got[57])
 	}
 	if got[58] != 1 {
 		t.Errorf("AckBit at bits[58] = %d, want 1", got[58])
@@ -238,10 +238,10 @@ func TestEncodeMessage_Type1_ZeroValueFlags(t *testing.T) {
 		t.Fatalf("EncodeMessage: %v", err)
 	}
 	if got[28] != 0 {
-		t.Errorf("Rover1 (unset) at bits[28] = %d, want 0", got[28])
+		t.Errorf("Suffix1 (unset) at bits[28] = %d, want 0", got[28])
 	}
 	if got[57] != 0 {
-		t.Errorf("Rover2 (unset) at bits[57] = %d, want 0", got[57])
+		t.Errorf("Suffix2 (unset) at bits[57] = %d, want 0", got[57])
 	}
 	if got[58] != 0 {
 		t.Errorf("AckBit (unset) at bits[58] = %d, want 0", got[58])
@@ -253,11 +253,11 @@ func TestEncodeMessage_Type1_ZeroValueFlags(t *testing.T) {
 // behaviour so tests during Phase 3/4 can assert their type is now
 // implemented (i.e. no longer returns ErrUnsupportedMessageType).
 func TestEncodeMessage_UnsupportedType(t *testing.T) {
-	// MessageTypeStd (Phase 2) and MessageTypeFreeText (Phase 3A) are
-	// implemented; the remaining types stay unsupported until Phase
-	// 3B / 3C / 3D and Phase 4 land their packers.
+	// MessageTypeStd (Phase 2), MessageTypeEUVHFP (Phase 3B), and
+	// MessageTypeFreeText (Phase 3A) are implemented; the remaining
+	// types stay unsupported until Phase 3C / 3D and Phase 4 land
+	// their packers.
 	cases := []MessageType{
-		MessageTypeEUVHFP,
 		MessageTypeRTTYRU,
 		MessageTypeNonStdCall,
 		MessageTypeEUVHFHash,
@@ -312,26 +312,26 @@ func TestEncodeMessage_Type1_BadCallsign(t *testing.T) {
 	}
 }
 
-// TestEncodeMessage_RejectsTokenWithRover pins the encode-side
-// rover guard. Symmetric with TestFormatMessage_RejectsTokenWithRover
+// TestEncodeMessage_RejectsTokenWithSuffix pins the encode-side
+// rover guard. Symmetric with TestFormatMessage_RejectsTokenWithSuffix
 // — both gates must reject the same nonsensical combinations so a
 // Message that one rejects can't sneak through the other.
 //
-// The wire format DOES allow a token+rover bit pattern; DecodeMessage
+// The wire format DOES allow a token+suffix bit pattern; DecodeMessage
 // returns it bit-faithfully. The encoder rejecting it is the
 // semantic gate that prevents OUR sender from emitting one. See
-// validateType1Rover's doc for the full asymmetry rationale.
-func TestEncodeMessage_RejectsTokenWithRover(t *testing.T) {
+// validateType1Suffix's doc for the full asymmetry rationale.
+func TestEncodeMessage_RejectsTokenWithSuffix(t *testing.T) {
 	cases := []struct {
 		name string
 		msg  Message
 	}{
-		{"cq_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"de_with_rover1", Message{Type: MessageTypeStd, Call1: "DE", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"qrz_with_rover1", Message{Type: MessageTypeStd, Call1: "QRZ", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"cq_dx_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ DX", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"cq_100_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ 100", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"token_in_call2_with_rover2", Message{Type: MessageTypeStd, Call1: "K1JT", Call2: "CQ", Rover2: true, Grid: "FN20"}},
+		{"cq_with_suffix1", Message{Type: MessageTypeStd, Call1: "CQ", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"de_with_suffix1", Message{Type: MessageTypeStd, Call1: "DE", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"qrz_with_suffix1", Message{Type: MessageTypeStd, Call1: "QRZ", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"cq_dx_with_suffix1", Message{Type: MessageTypeStd, Call1: "CQ DX", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"cq_100_with_suffix1", Message{Type: MessageTypeStd, Call1: "CQ 100", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"token_in_call2_with_suffix2", Message{Type: MessageTypeStd, Call1: "K1JT", Call2: "CQ", Suffix2: true, Grid: "FN20"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

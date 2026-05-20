@@ -17,7 +17,7 @@ import "fmt"
 //	"<Call1> <Call2>"                       - empty Grid slot, no AckBit
 //	"CQ <Call2> <field>"                    - Call1 = CQ token
 //	"CQ <suffix> <Call2> <field>"           - Call1 = "CQ <suffix>" token
-//	"<Call1>/R <Call2>"                     - Rover1 suffix
+//	"<Call1>/R <Call2>"                     - Suffix1 set (Type 1 renders as /R)
 //	"<Call1> <Call2> R<report>"             - AckBit set with signed report
 //	"<Call1> <Call2> R <Grid>"              - AckBit set with locator
 //
@@ -49,19 +49,19 @@ func formatFreeText(m Message) (string, error) {
 // formatStd renders a Type 1 message. See FormatMessage's doc for
 // the output shapes. Validation mirrors encodeStd's gate so any
 // Message that round-trips through one round-trips through the
-// other; see validateType1Rover's doc for the wire-vs-text-layer
-// asymmetry on token+rover combinations.
+// other; see validateType1Suffix's doc for the wire-vs-text-layer
+// asymmetry on token+suffix combinations.
 func formatStd(m Message) (string, error) {
 	if err := validateType1Call(m.Call1, "Call1"); err != nil {
 		return "", err
 	}
-	if err := validateType1Rover(m.Call1, m.Rover1, "Call1"); err != nil {
+	if err := validateType1Suffix(m.Call1, m.Suffix1, "Call1"); err != nil {
 		return "", err
 	}
 	if err := validateType1Call(m.Call2, "Call2"); err != nil {
 		return "", err
 	}
-	if err := validateType1Rover(m.Call2, m.Rover2, "Call2"); err != nil {
+	if err := validateType1Suffix(m.Call2, m.Suffix2, "Call2"); err != nil {
 		return "", err
 	}
 	if err := validateG15Slot(m.Grid); err != nil {
@@ -69,11 +69,11 @@ func formatStd(m Message) (string, error) {
 	}
 
 	call1 := m.Call1
-	if m.Rover1 {
+	if m.Suffix1 {
 		call1 += "/R"
 	}
 	call2 := m.Call2
-	if m.Rover2 {
+	if m.Suffix2 {
 		call2 += "/R"
 	}
 

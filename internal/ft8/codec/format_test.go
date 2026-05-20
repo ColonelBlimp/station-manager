@@ -86,18 +86,18 @@ func TestFormatMessage_Type1_BasicShapes(t *testing.T) {
 			"K1ABC G4ABC",
 		},
 		{
-			"rover1_set",
-			Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Rover1: true, Grid: "FN20"},
+			"suffix1_set",
+			Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Suffix1: true, Grid: "FN20"},
 			"K1ABC/R G4ABC FN20",
 		},
 		{
-			"rover2_set",
-			Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Rover2: true, Grid: "FN20"},
+			"suffix2_set",
+			Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Suffix2: true, Grid: "FN20"},
 			"K1ABC G4ABC/R FN20",
 		},
 		{
 			"both_rovers_set",
-			Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Rover1: true, Rover2: true, Grid: "FN20"},
+			Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "G4ABC", Suffix1: true, Suffix2: true, Grid: "FN20"},
 			"K1ABC/R G4ABC/R FN20",
 		},
 		{
@@ -181,18 +181,18 @@ func TestFormatMessage_UnsupportedType(t *testing.T) {
 	}
 }
 
-// TestFormatMessage_RejectsTokenWithRover pins the validation guard:
-// a token in Call1/Call2 with the rover bit set is nonsensical (the
+// TestFormatMessage_RejectsTokenWithSuffix pins the validation guard:
+// a token in Call1/Call2 with the suffix bit set is nonsensical (the
 // /R suffix means "rover callsign" — tokens aren't callsigns).
-func TestFormatMessage_RejectsTokenWithRover(t *testing.T) {
+func TestFormatMessage_RejectsTokenWithSuffix(t *testing.T) {
 	cases := []struct {
 		name string
 		msg  Message
 	}{
-		{"cq_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"de_with_rover1", Message{Type: MessageTypeStd, Call1: "DE", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"cq_dx_with_rover1", Message{Type: MessageTypeStd, Call1: "CQ DX", Call2: "G4ABC", Rover1: true, Grid: "FN20"}},
-		{"cq_token_in_call2_with_rover2", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "CQ", Rover2: true, Grid: "FN20"}},
+		{"cq_with_suffix1", Message{Type: MessageTypeStd, Call1: "CQ", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"de_with_suffix1", Message{Type: MessageTypeStd, Call1: "DE", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"cq_dx_with_suffix1", Message{Type: MessageTypeStd, Call1: "CQ DX", Call2: "G4ABC", Suffix1: true, Grid: "FN20"}},
+		{"cq_token_in_call2_with_suffix2", Message{Type: MessageTypeStd, Call1: "K1ABC", Call2: "CQ", Suffix2: true, Grid: "FN20"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
