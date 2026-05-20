@@ -1009,7 +1009,12 @@ shipped 2026-05-20; Phase 3D (Type 5 EU VHF hashes+g25 encoder /
 decoder / format / parse + `G25ToGrid6` Layer 1 inverse + new
 `Message.Hash22` / `Report3` / `Serial` / `Grid6` fields + Free
 Text classifier tightening to exclude angle-bracket inputs +
-Type 5 classifier dispatch ahead of Type 4) shipped 2026-05-20**.
+Type 5 classifier dispatch ahead of Type 4) shipped 2026-05-20;
+**Phase 4 hash table (receiver-side running callsign-hash table —
+`internal/ft8/codec/hashtable.go` with bounded FIFO + LRU-on-
+reinsert eviction, `Insert` / `LookupH22` / `LookupH12` /
+`LookupH10` / `Observe(Message)` / `Resolve(Message) Message`)
+shipped 2026-05-20**.
 Type 1 ("Std Msg") now round-trips long-format std callsigns AND
 CQ/DE/QRZ/`CQ <suffix>` tokens bit-for-bit AND text-for-text.
 Type 2 ("EU VHF /P") round-trips standard-callsign pairs with the
@@ -1040,10 +1045,16 @@ presence of any `/P` token suffix; Type 1 by default.
 Short callsigns (3–4 char and 5-char-2-prefix) route through
 `HashedCallC28` and decode to a sentinel error
 (`ErrCallsignNeedsHashLookup`) — the FT8 service layer's running
-22-bit hash table (Phase 4) will resolve those.
-Phase 4 covers the specialty types (0.1 DXpedition, 0.3/0.4
-Field Day, 3 RTTY Roundup, 0.5 Telemetry) + the receiver-side
-running 12/22-bit hash table.
+22-bit hash table will resolve those once the decoder path is
+updated to surface a sentinel + raw `Hash22` (deferred follow-up
+inside Phase 4; the `HashTable.LookupH22` primitive is ready).
+The Phase 4 hash table itself shipped 2026-05-20:
+`HashTable.Insert` / `Observe(Message)` for receiver-loop ingest,
+`LookupH10` / `LookupH12` / `LookupH22` for direct hash queries,
+and `Resolve(Message) Message` for type-aware sentinel
+replacement (Type 4 via Hash12; Type 5 via Hash12+Hash22).
+Phase 4 still covers the specialty message types (0.1 DXpedition,
+0.3/0.4 Field Day, 3 RTTY Roundup, 0.5 Telemetry).
 Layers 3+4 (signal-processing pipeline + WAV-corpus tests) and
 the LDPC decoder remain.
 
@@ -1081,6 +1092,7 @@ Phase 2 additions:
 | `FormatMessage` + `formatStd` + `formatEUVHFP` + `formatNonStdCall` + `formatEUVHFHash` + `formatFreeText` | `format.go` | Type 1 + Type 2 + Type 4 + Type 5 + Type 0.0 text rendering. Type 1 renders `/R`; Type 2 renders `/P`; both share `formatGridField` (ack-R fused with reports `R-09`, separated from grids `R IO91`). Type 4 angle-brackets the hashed side (`renderType4Call` accepts std-shape, `"<...>"` sentinel, and pre-bracketed forms); format-side validator laxer than encode's to accept decoded-message shapes. Type 5 brackets BOTH calls (`renderType5Call`, same sentinel + pre-bracketed acceptance) and fuses report+serial into one token (e.g. `570007` = report 5 → display 57 + serial 7 → "0007"). Type 0.0 emits the FreeText payload as-is |
 | `ParseMessage` + `parseStd` + `parseEUVHFP` + `parseNonStdCall` + `parseEUVHFHash` + `parseFreeText` + classifier | `parse.go` | Text → Message; classifier dispatch order: Free Text (`.`/`?` AND no angle brackets — Phase 3D refinement) → Type 5 (both first two tokens bracketed AND last token is a 6-char Maidenhead grid) → Type 4 (angle brackets / mid-slash / non-/R-non-/P trailing slash / token > 6 chars without slash) → Type 2 (`/P` suffix) → Type 1; `consumeCall` strips `/R` for Type 1, `consumePortableCall` strips `/P` for Type 2, `stripAngleBrackets` strips outer `<>` for Types 4/5; `splitReportSerial` splits the fused `rrSSSS` token for Type 5; `consumeGridField` recognises R-fused vs. R-separated ack (shared between Type 1/2); strict structured-or-Free-Text (no implicit fallback) per Phase 3A design choice #3 |
 | `C28Kind` + `G15Kind` discriminators | `callsign.go`, `grid.go` | Route-B kind enums for the multi-modal c28/g15 partition spaces |
+| `HashTable` (`Insert` / `LookupH22` / `LookupH12` / `LookupH10` / `Observe` / `Resolve` / `Len`) | `hashtable.go` | Phase 4 receiver-side running callsign-hash table per QEX §6. Bounded capacity (default 100, WSJT-X convention) with FIFO eviction of the oldest entry on overflow + LRU-on-reinsert (re-Inserting a present callsign moves it to MRU). Newest-wins on hash collision via newest-to-oldest lookup iteration; collision rates at cap=100 are h22≈0.002% / h12≈2.4% / h10≈10%. Insert silently filters non-callsigns (empty, `<...>` sentinel, tokens via `TokenToC28`, out-of-alphabet, > 11 chars) and trims whitespace. Observe walks Call1/Call2 of a decoded Message and Inserts each. Resolve takes a Message and returns a copy with sentinel call slots replaced — Type 4 uses Hash12 → whichever slot is sentinel; Type 5 uses Hash12 → Call1 and Hash22 → Call2; resolved hash fields are zeroed; other Types return unchanged. Thread-safe via `sync.RWMutex` |
 
 The codec package was renamed from `internal/ft8/decoder` →
 `internal/ft8/codec` mid-sequence (when it became clear the same
