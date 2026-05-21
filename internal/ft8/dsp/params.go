@@ -123,8 +123,9 @@ var Icos7 = [7]uint8{3, 1, 4, 0, 6, 5, 2}
 var GrayMap = [8]uint8{0, 1, 3, 2, 5, 6, 4, 7}
 
 // GrayUnmap is the inverse of GrayMap — tone number → 3-bit binary
-// value. Used by the soft demodulator to map per-tone correlation
-// magnitudes back to bit positions in the codeword.
+// value, per QEX paper Table 3 column 1 (Channel Symbol) ↔ column 2
+// (FT8 Bits). Used by the soft demodulator to map per-tone
+// correlation magnitudes back to bit positions in the codeword.
 //
 //	tone  bits
 //	 0    → 000 (0)
@@ -132,7 +133,7 @@ var GrayMap = [8]uint8{0, 1, 3, 2, 5, 6, 4, 7}
 //	 2    → 011 (3)
 //	 3    → 010 (2)
 //	 4    → 110 (6)
-//	 5    → 111 (7)
+//	 5    → 100 (4)
 //	 6    → 101 (5)
-//	 7    → 100 (4)
-var GrayUnmap = [8]uint8{0, 1, 3, 2, 6, 7, 5, 4}
+//	 7    → 111 (7)
+var GrayUnmap = [8]uint8{0, 1, 3, 2, 6, 4, 5, 7}
