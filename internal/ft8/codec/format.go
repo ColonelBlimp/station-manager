@@ -3,6 +3,7 @@ package codec
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
@@ -35,6 +36,8 @@ func FormatMessage(m Message) (string, error) {
 		return formatStd(m)
 	case MessageTypeEUVHFP:
 		return formatEUVHFP(m)
+	case MessageTypeRTTYRU:
+		return formatRTTYRoundup(m)
 	case MessageTypeEUVHFHash:
 		return formatEUVHFHash(m)
 	case MessageTypeNonStdCall:
@@ -134,6 +137,75 @@ func formatEUVHFP(m Message) (string, error) {
 		return call1 + " " + call2, nil
 	}
 	return call1 + " " + call2 + " " + field, nil
+}
+
+// formatRTTYRoundup renders a Type 3 (RTTY Roundup) message per
+// QEX paper Table 1. The canonical rendered shape is:
+//
+//	[TU; ]<Call1> <Call2> [R ]<3-digit-report> <exchange>
+//
+// where:
+//   - "TU; " prefix appears when m.TU is true.
+//   - "R " precedes the report when m.AckBit is true (ack flag).
+//   - <3-digit-report> follows the QEX Table 2 r3 mapping for Type 3:
+//     "5" + (Report3 + r3DisplayBiasType3) + "9", e.g. Report3=5 →
+//     "579", Report3=7 → "599".
+//   - <exchange> is either a 4-digit zero-padded serial ("0007") or
+//     a state/province abbreviation ("NY", "NWT"); the exchange form
+//     is selected by which Message field is set (StateProvince
+//     non-empty → state form, else serial form).
+//
+// Validation mirrors encodeRTTYRoundup's gates so any Message that
+// round-trips through one round-trips through the other.
+func formatRTTYRoundup(m Message) (string, error) {
+	const op errors.Op = "codec.formatRTTYRoundup"
+	if err := validateType1Call(m.Call1, "Call1"); err != nil {
+		return "", err
+	}
+	if err := validateType1Call(m.Call2, "Call2"); err != nil {
+		return "", err
+	}
+	if err := validateRTTYReport(m.Report3); err != nil {
+		return "", err
+	}
+	if m.StateProvince != "" {
+		if m.Serial != 0 {
+			return "", errors.New(op).WithMsgf("ambiguous exchange: both Serial=%d and StateProvince=%q are set; pick one form", m.Serial, m.StateProvince)
+		}
+		if _, ok := StateToS13(m.StateProvince); !ok {
+			return "", errors.New(op).WithMsgf("StateProvince = %q is not in the QEX ref [14] states_provinces.txt lookup table", m.StateProvince)
+		}
+	} else {
+		if m.Serial > s13SerialMax {
+			return "", errors.New(op).WithMsgf("Serial = %d is outside [0, %d]", m.Serial, s13SerialMax)
+		}
+	}
+
+	var b strings.Builder
+	if m.TU {
+		b.WriteString("TU; ")
+	}
+	b.WriteString(m.Call1)
+	b.WriteByte(' ')
+	b.WriteString(m.Call2)
+	b.WriteByte(' ')
+	if m.AckBit {
+		b.WriteString("R ")
+	}
+	// 3-digit report: "5" + (r3+bias) + "9", e.g. r3=5 → "579".
+	b.WriteByte('5')
+	b.WriteByte('0' + m.Report3 + r3DisplayBiasType3)
+	b.WriteByte('9')
+	b.WriteByte(' ')
+	if m.StateProvince != "" {
+		b.WriteString(m.StateProvince)
+	} else {
+		// Zero-padded 4-digit serial — matches the WSJT-X RTTY RU
+		// display convention even though the underlying field
+		// technically goes up to 7999.
+		fmt.Fprintf(&b, "%04d", m.Serial)
+	}
+	return b.String(), nil
 }
 
 // formatNonStdCall renders a Type 4 (NonStd Call) message. The

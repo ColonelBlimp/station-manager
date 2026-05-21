@@ -24,15 +24,14 @@ const (
 
 // Implemented i3 tag values. Per QEX paper Table 1 column 1 ("Type
 // i3.n3"), the dotted-number IS the wire i3 for top-level types —
-// Type N. → i3=N. Tags for unimplemented types (i3=3 RTTY RU, plus
-// i3=6/7 which are unassigned per QEX Table 1) land alongside their
-// encoders when they ship.
+// Type N. → i3=N. i3=6/7 are unassigned per QEX Table 1.
 const (
-	i3Zero       = 0 // i3=0 family (n3 sub-dispatch; Phase 3A wires n3=0 only)
-	i3Std        = 1 // Type 1 (Std Msg)
-	i3EUVHFP     = 2 // Type 2 (EU VHF /P)
-	i3NonStdCall = 4 // Type 4 (NonStd Call)
-	i3EUVHFHash  = 5 // Type 5 (EU VHF hashes+g25)
+	i3Zero        = 0 // i3=0 family (n3 sub-dispatch; Phase 3A wires n3=0 only)
+	i3Std         = 1 // Type 1 (Std Msg)
+	i3EUVHFP      = 2 // Type 2 (EU VHF /P)
+	i3RTTYRoundup = 3 // Type 3 (RTTY RU)
+	i3NonStdCall  = 4 // Type 4 (NonStd Call)
+	i3EUVHFHash   = 5 // Type 5 (EU VHF hashes+g25)
 )
 
 // QEX Table 1 i3.n3 tags for the i3=0 message-type family. n3
@@ -98,3 +97,40 @@ const (
 // s11Max bounds the Type 5 serial-number slot — 11 bits → 0..2047
 // per QEX Table 2 ("Serial number 0 – 2047").
 const s11Max = (1 << s11Bits) - 1
+
+// Type 3 (RTTY Roundup) bit-field widths per QEX Table 1 layout:
+//
+//	t1 c28 c28 R1 r3 s13 i3=3
+//	 1  28  28  1  3  13   3   = 77 bits
+//
+// CallsignBits + R1(1) + r3Bits already exist as constants used by
+// other types; the t1 prefix bit and the s13 exchange slot are
+// Type 3-specific.
+const (
+	t1Bits  = 1
+	s13Bits = 13
+)
+
+// Type 3 s13 (exchange) partitioning per QEX Appendix A "s13" entry:
+//
+//	[0, s13SerialMax]              → serial number (8000 values)
+//	[s13StateBase, s13StateBase+N) → state/province at index s13 - s13StateBase
+//	others                         → unassigned (decoder returns ErrInvalidS13)
+//
+// "Values 0 – 7999 convey a serial number; values 8001 – 8065
+// encode the abbreviations for US states and Canadian provinces
+// by means of lookup table states_provinces.txt included in
+// reference [14]." (QEX paper Appendix A.) The mapping uses
+// 1-based offset (state[0] at s13=8001), so s13=8000 itself is
+// an unassigned codepoint.
+const (
+	s13SerialMax = 7999 // inclusive — serial range is [0, 7999]
+	s13StateBase = 8001 // s13 = s13StateBase + state_index
+)
+
+// r3 mapping for Type 3 per QEX Table 2 r3 row: "Values 0 – 7
+// encode a signal report displayed as ... 529, 539, … 599 (type 3)".
+// The 3-digit form is "5" + (r3+2) + "9": r3=0 → "529", r3=5 → "579",
+// r3=7 → "599". r3Min/r3Max from the Type 5 block above bound the
+// 3-bit field width; this constant is the per-Type display bias.
+const r3DisplayBiasType3 = 2 // middle digit = r3 + r3DisplayBiasType3

@@ -20,7 +20,6 @@ const (
 	MessageTypeEUVHFP
 
 	// MessageTypeRTTYRU is QEX Table 1 Type 3 ("RTTY Roundup").
-	// Phase 4.
 	MessageTypeRTTYRU
 
 	// MessageTypeNonStdCall is QEX Table 1 Type 4 ("NonStd Call").
@@ -161,7 +160,23 @@ type Message struct {
 	Report3 uint8
 
 	// Serial is the contest-style serial number for Type 5 (s11
-	// slot, 0..2047). Reused by other contest types when they
-	// land. Zero on types that don't carry a serial.
+	// slot, 0..2047) and Type 3 (s13 slot serial form, 0..7999).
+	// Per-type validators bound the range. Zero on types that
+	// don't carry a serial.
 	Serial uint16
+
+	// TU is the t1 prefix bit for Type 3 (RTTY Roundup). 1 = the
+	// rendered text begins with "TU;" per the WSJT-X convention
+	// for ack'ing the prior exchange. Zero on other types.
+	TU bool
+
+	// StateProvince is the Type 3 (RTTY Roundup) state/province
+	// exchange form. When non-empty, the encoder uses the state
+	// form of the s13 slot (one of the 65 US states / Canadian
+	// provinces from the QEX ref [14] states_provinces.txt
+	// lookup table). When empty, the encoder uses the serial
+	// form via the Serial field. Decoded Type 3 messages populate
+	// either Serial (s13 ∈ [0, 7999]) or StateProvince (s13 ∈
+	// [8001, 8065]) but never both.
+	StateProvince string
 }

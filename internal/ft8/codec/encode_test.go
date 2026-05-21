@@ -249,16 +249,13 @@ func TestEncodeMessage_Type1_ZeroValueFlags(t *testing.T) {
 
 // TestEncodeMessage_UnsupportedType returns the sentinel for any
 // MessageType whose packer hasn't landed yet. Pins the rollout
-// behaviour so tests during Phase 3/4 can assert their type is now
+// behaviour so tests during Phase 4 can assert their type is now
 // implemented (i.e. no longer returns ErrUnsupportedMessageType).
 func TestEncodeMessage_UnsupportedType(t *testing.T) {
-	// MessageTypeStd (Phase 2), MessageTypeEUVHFP (Phase 3B),
-	// MessageTypeNonStdCall (Phase 3C), MessageTypeEUVHFHash
-	// (Phase 3D), and MessageTypeFreeText (Phase 3A) are implemented;
-	// the remaining types stay unsupported until Phase 4 lands the
-	// rest of the Type 0.x family + Type 3 RTTY RU packers.
+	// Implemented packers: Std, EUVHFP, RTTYRU, NonStdCall, EUVHFHash,
+	// FreeText. The Phase 4 i3=0 family (DXpedition, Field Day,
+	// Telemetry) stays unsupported until those packers land.
 	cases := []MessageType{
-		MessageTypeRTTYRU,
 		MessageTypeDXpedition,
 		MessageTypeFieldDayANSI,
 		MessageTypeFieldDayRTTY,

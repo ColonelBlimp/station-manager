@@ -50,6 +50,15 @@ var ErrTokenInGap = errors.New("codec: c28 lands in the token partition but on a
 // keeps the decoder safe to call on untrusted wire bytes.
 var ErrInvalidGrid6 = errors.New("codec: Type 5 g25 lands in the unmapped upper range — no valid 6-char Maidenhead grid")
 
+// ErrInvalidS13 is returned by Type 3 decode when the s13 exchange
+// slot lands in a gap codepoint — s13 = 8000 (between the serial
+// range [0, 7999] and the state range [8001, 8065]) or s13 in
+// [s13StateBase + len(rttyRoundupStates), 1<<s13Bits) (above the
+// state range). Symmetric with ErrInvalidGrid6: the encoder never
+// produces these values, so they signal post-LDPC corruption or
+// hostile input. Decoder returns the error rather than panicking.
+var ErrInvalidS13 = errors.New("codec: Type 3 s13 lands in an unassigned codepoint — no valid serial or state/province")
+
 // DecodeMessage parses a 77-bit FT8 message body (bit-per-byte form,
 // MSB-first per the package convention) into a Message struct,
 // inverting EncodeMessage.
@@ -81,6 +90,8 @@ func DecodeMessage(bits []byte) (Message, error) {
 		return decodeStd(bits)
 	case i3EUVHFP:
 		return decodeEUVHFP(bits)
+	case i3RTTYRoundup:
+		return decodeRTTYRoundup(bits)
 	case i3EUVHFHash:
 		return decodeEUVHFHash(bits)
 	case i3NonStdCall:
@@ -219,6 +230,58 @@ func decodeEUVHFP(bits []byte) (Message, error) {
 		Suffix2: suffix2,
 		AckBit:  ack,
 		Grid:    grid,
+	}, nil
+}
+
+// decodeRTTYRoundup inverts encodeRTTYRoundup. Bit layout per QEX
+// Table 1:
+//
+//	t1 | c28(Call1) | c28(Call2) | R1 | r3 | s13 | i3=3
+//	 1      28           28        1    3    13     3
+//
+// Per QEX Table 2 c28 accepts std callsigns and tokens (CQ / DE /
+// QRZ / "CQ <suffix>"), same dispatch as Type 1 / Type 2. The s13
+// exchange slot is multi-modal: serial 0..7999 or state/province
+// abbreviation. An s13 in the unassigned gap codepoints (8000, or
+// > 8065) surfaces as ErrInvalidS13 — the encoder never produces
+// those values so they signal post-LDPC corruption or hostile input.
+func decodeRTTYRoundup(bits []byte) (Message, error) {
+	off := 0
+	tu := bits[off] == 1
+	off += t1Bits
+	c28First := uint32(readBitsUint64(bits, off, CallsignBits))
+	off += CallsignBits
+	c28Second := uint32(readBitsUint64(bits, off, CallsignBits))
+	off += CallsignBits
+	ack := bits[off] == 1
+	off++
+	r3 := uint8(readBitsUint64(bits, off, r3Bits))
+	off += r3Bits
+	s13 := uint16(readBitsUint64(bits, off, s13Bits))
+
+	call1, err := type1CallFromC28(c28First, "Call1")
+	if err != nil {
+		return Message{}, err
+	}
+	call2, err := type1CallFromC28(c28Second, "Call2")
+	if err != nil {
+		return Message{}, err
+	}
+
+	serial, state, kind := S13ToExchange(s13)
+	if kind == S13KindUnassigned {
+		return Message{}, fmt.Errorf("%w: s13=%d", ErrInvalidS13, s13)
+	}
+
+	return Message{
+		Type:          MessageTypeRTTYRU,
+		Call1:         call1,
+		Call2:         call2,
+		TU:            tu,
+		AckBit:        ack,
+		Report3:       r3,
+		Serial:        serial,
+		StateProvince: state,
 	}, nil
 }
 

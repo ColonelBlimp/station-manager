@@ -51,6 +51,8 @@ func EncodeMessage(m Message) ([]byte, error) {
 		return encodeStd(m)
 	case MessageTypeEUVHFP:
 		return encodeEUVHFP(m)
+	case MessageTypeRTTYRU:
+		return encodeRTTYRoundup(m)
 	case MessageTypeEUVHFHash:
 		return encodeEUVHFHash(m)
 	case MessageTypeNonStdCall:
@@ -153,6 +155,89 @@ func encodeEUVHFP(m Message) ([]byte, error) {
 		panic("codec.encodeEUVHFP: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
 	}
 	return slices.Clone(b.Bits()), nil
+}
+
+// encodeRTTYRoundup packs a Type 3 (RTTY Roundup) body per QEX
+// Table 1:
+//
+//	t1(TU) | c28(Call1) | c28(Call2) | R1(AckBit) | r3(Report3) | s13 | i3=3
+//	   1        28           28           1             3           13     3   = 77 bits
+//
+// Unlike Type 1 / Type 2 the call slots have NO per-call suffix bits
+// — there are no r1/p1 fields between calls — so Suffix1 and Suffix2
+// on the Message are ignored by this packer. The TU bool maps to the
+// t1 prefix bit (1 = render "TU;" at the start of the displayed text
+// per the WSJT-X RTTY Roundup convention).
+//
+// The s13 slot is multi-modal per QEX Appendix A: serial 0..7999 or
+// state/province abbreviation. Encoder picks the form: non-empty
+// Message.StateProvince → state form via StateToS13; empty →
+// serial form via SerialToS13(Message.Serial). Setting both fields
+// is a caller bug; the encoder errors with a "pick one" diagnostic.
+//
+// Per QEX Table 2 the c28 field accepts standard callsigns AND
+// tokens (CQ / DE / QRZ / "CQ <suffix>"), same as Type 1 / Type 2.
+// validateType1Call gates both shapes for both call slots.
+func encodeRTTYRoundup(m Message) ([]byte, error) {
+	const op errors.Op = "codec.encodeRTTYRoundup"
+	if err := validateType1Call(m.Call1, "Call1"); err != nil {
+		return nil, err
+	}
+	if err := validateType1Call(m.Call2, "Call2"); err != nil {
+		return nil, err
+	}
+	if err := validateRTTYReport(m.Report3); err != nil {
+		return nil, err
+	}
+
+	// Exchange-slot validation: exactly one of {Serial, StateProvince}
+	// must be the active form. Both set is ambiguous (operator forgot
+	// to clear one); neither set is fine — Serial=0 with empty
+	// StateProvince is a valid "serial #0" message.
+	if m.StateProvince != "" {
+		if m.Serial != 0 {
+			return nil, errors.New(op).WithMsgf("ambiguous exchange: both Serial=%d and StateProvince=%q are set; pick one form", m.Serial, m.StateProvince)
+		}
+	}
+
+	var s13 uint16
+	if m.StateProvince != "" {
+		v, ok := StateToS13(m.StateProvince)
+		if !ok {
+			return nil, errors.New(op).WithMsgf("StateProvince = %q is not in the QEX ref [14] states_provinces.txt lookup table", m.StateProvince)
+		}
+		s13 = v
+	} else {
+		v, ok := SerialToS13(m.Serial)
+		if !ok {
+			return nil, errors.New(op).WithMsgf("Serial = %d is outside [0, %d] (QEX s13 slot serial form is bounded at 7999)", m.Serial, s13SerialMax)
+		}
+		s13 = v
+	}
+
+	var b BitBuilder
+	b.Append(boolBit(m.TU), t1Bits).
+		Append(uint64(type1CallToC28(m.Call1)), CallsignBits).
+		Append(uint64(type1CallToC28(m.Call2)), CallsignBits).
+		Append(boolBit(m.AckBit), 1).
+		Append(uint64(m.Report3), r3Bits).
+		Append(uint64(s13), s13Bits).
+		Append(i3RTTYRoundup, i3Width)
+	if b.Len() != MessageBits {
+		panic("codec.encodeRTTYRoundup: assembled bit count is " + strconv.Itoa(b.Len()) + ", want " + strconv.Itoa(MessageBits) + " — width constants out of sync")
+	}
+	return slices.Clone(b.Bits()), nil
+}
+
+// validateRTTYReport bounds Report3 per QEX Table 2 ("Values 0 –
+// 7"). Same range as Type 5's r3 — different display mapping per
+// Type but identical wire bounds.
+func validateRTTYReport(r uint8) error {
+	const op errors.Op = "codec.validateRTTYReport"
+	if r < r3Min || r > r3Max {
+		return errors.New(op).WithMsgf("Report3 = %d is outside [%d, %d] (QEX r3 slot is %d bits)", r, r3Min, r3Max, r3Bits)
+	}
+	return nil
 }
 
 // encodeEUVHFHash packs a Type 5 (EU VHF hashes+g25) body per QEX

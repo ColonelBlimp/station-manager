@@ -133,6 +133,15 @@ func ParseMessage(text string) (Message, error) {
 		}
 	}
 
+	// Type 3 (RTTY Roundup) dispatch: "TU;" first-token prefix OR a
+	// "5N9" 3-digit report token (N ∈ 2..9). Neither shape overlaps
+	// with Type 1 (whose g15 field is a 4-char grid / signed report /
+	// reserved token — none match "5N9") or any other type, so the
+	// trigger is unambiguous.
+	if isType3Trigger(tokens) {
+		return parseRTTYRoundup(tokens)
+	}
+
 	// Try Type 1 (Std Msg) — the default for std-callsign-shaped
 	// inputs. If parseStd fails AND the input fits the Free Text
 	// constraints (≤ 13 chars, all chars in the f71 alphabet), fall
@@ -434,6 +443,143 @@ func parsePlainEUVHFP(tokens []string) (Message, error) {
 		Suffix2: suffix2,
 		AckBit:  ack,
 		Grid:    grid,
+	}, nil
+}
+
+// isType3Trigger reports whether the parsed token stream signals a
+// Type 3 (RTTY Roundup) message. Two unambiguous markers:
+//
+//   - "TU;" as the first token — Type 3's t1 prefix bit is the
+//     only Type that renders this string. Other Types' parsers
+//     would error on it.
+//   - Any "5N9" 3-digit report token (N ∈ 2..9). Per QEX Table 2
+//     r3 row, Type 3 reports display as 529, 539, …, 599 — a
+//     shape that doesn't overlap with Type 1's g15 field
+//     (4-char grids never look like "5N9"; signed reports always
+//     carry a leading +/-; reserved tokens are letter-strings).
+func isType3Trigger(tokens []string) bool {
+	if len(tokens) > 0 && tokens[0] == "TU;" {
+		return true
+	}
+	for _, tok := range tokens {
+		if isType3Report(tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// isType3Report reports whether tok matches the Type 3 r3 display
+// form "5N9" where N is one of the digits 2..9 (mapping to
+// Report3 = 0..7 via the r3DisplayBiasType3 offset).
+func isType3Report(tok string) bool {
+	if len(tok) != 3 {
+		return false
+	}
+	if tok[0] != '5' || tok[2] != '9' {
+		return false
+	}
+	n := tok[1]
+	return n >= '2' && n <= '9'
+}
+
+// parseRTTYRoundup parses the Type 3 layout per formatRTTYRoundup's
+// output shape:
+//
+//	[TU; ]<call1> <call2> [R ]<5N9> <exchange>
+//
+// where call1 / call2 are full c28 (std callsign OR token per QEX
+// Table 2), R is the optional ack flag, the 3-digit report carries
+// r3, and exchange is either a digit string (serial 0..7999) or
+// a state/province abbreviation from the QEX ref [14] lookup table.
+//
+// Type 3 has no per-call suffix slots, so /R and /P in call tokens
+// surface as a "not a valid std callsign" error from validateType1Call
+// rather than as wire-format suffix bits.
+func parseRTTYRoundup(tokens []string) (Message, error) {
+	const op errors.Op = "codec.ParseMessage"
+
+	tu := false
+	if len(tokens) > 0 && tokens[0] == "TU;" {
+		tu = true
+		tokens = tokens[1:]
+	}
+	if len(tokens) < 4 {
+		return Message{}, errors.New(op).WithMsgf("Type 3 (RTTY RU) message has only %d field(s) after stripping optional \"TU;\"; need <call1> <call2> [R] <report> <exchange>", len(tokens))
+	}
+
+	// Pull Call1 (token-aware: 1 or 2 tokens depending on CQ-suffix).
+	var call1 string
+	var rest []string
+	if tokens[0] == "CQ" && isCQSuffix(tokens[1]) {
+		call1 = "CQ " + tokens[1]
+		rest = tokens[2:]
+	} else {
+		call1 = tokens[0]
+		rest = tokens[1:]
+	}
+	if err := validateType1Call(call1, "Call1"); err != nil {
+		return Message{}, err
+	}
+
+	// Call2 (no suffix possible in Type 3).
+	if len(rest) < 3 {
+		return Message{}, errors.New(op).WithMsgf("Type 3 message is missing call2 / report / exchange after %q", call1)
+	}
+	call2 := rest[0]
+	rest = rest[1:]
+	if err := validateType1Call(call2, "Call2"); err != nil {
+		return Message{}, err
+	}
+
+	// Optional "R" ack flag.
+	ack := false
+	if rest[0] == "R" {
+		ack = true
+		rest = rest[1:]
+	}
+
+	// Must have report + exchange remaining.
+	if len(rest) != 2 {
+		return Message{}, errors.New(op).WithMsgf("Type 3 message has %d unexpected trailing field(s) after report+exchange should be the last two", len(rest))
+	}
+	reportTok := rest[0]
+	exchangeTok := rest[1]
+
+	if !isType3Report(reportTok) {
+		return Message{}, errors.New(op).WithMsgf("Type 3 report %q is not in the QEX r3 display form \"5N9\" (N ∈ 2..9)", reportTok)
+	}
+	r3 := uint8(reportTok[1]-'0') - r3DisplayBiasType3
+
+	// Exchange: digits → serial; else → state/province lookup.
+	var serial uint16
+	var state string
+	if allDigits(exchangeTok) {
+		// 1..4 digit positive serial 0..7999.
+		var v uint64
+		for i := range len(exchangeTok) {
+			v = v*10 + uint64(exchangeTok[i]-'0')
+		}
+		if v > s13SerialMax {
+			return Message{}, errors.New(op).WithMsgf("Type 3 serial %q (%d) is outside [0, %d]", exchangeTok, v, s13SerialMax)
+		}
+		serial = uint16(v)
+	} else {
+		if _, ok := StateToS13(exchangeTok); !ok {
+			return Message{}, errors.New(op).WithMsgf("Type 3 exchange %q is neither a digit-only serial nor a recognised state/province abbreviation", exchangeTok)
+		}
+		state = exchangeTok
+	}
+
+	return Message{
+		Type:          MessageTypeRTTYRU,
+		Call1:         call1,
+		Call2:         call2,
+		TU:            tu,
+		AckBit:        ack,
+		Report3:       r3,
+		Serial:        serial,
+		StateProvince: state,
 	}, nil
 }
 
