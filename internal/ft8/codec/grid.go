@@ -317,21 +317,22 @@ const maxGrid6 = 18 * 18 * 10 * 10 * 24 * 24
 // arithmetic: successive divmod recovers each character from the
 // rightmost subsquare letter to the leftmost field letter.
 //
-// Wire-input asymmetry: Grid6ToG25 only ever produces values in
-// [0, maxGrid6), so any well-formed wire decode lands in that range.
-// Values outside [0, maxGrid6) — possible on a corrupted post-LDPC
-// body whose g25 slot's upper bits got flipped — panic, matching the
-// G15ToGrid4 contract for upper-bit-set inputs (this is a wire
-// corruption that LDPC+CRC14 should have caught, not a runtime data
-// error this layer can recover from).
+// **Wire-input asymmetry.** The 25-bit g25 slot has 2^25 =
+// 33,554,432 codepoints, but only [0, maxGrid6) = 18,662,400
+// codepoints map to valid 6-char Maidenhead grids — 14,892,032
+// codepoints (44%) are unmapped. Grid6ToG25 only ever produces
+// values in the mapped range, so a clean round-trip never sees an
+// out-of-range value, but a corrupted post-LDPC body, fuzz input,
+// or hostile remote CAN deliver an out-of-range g25. Per
+// finding #4, the function MUST NOT panic on such input — that
+// would crash any caller that decodes untrusted wire bytes.
 //
-// The slot has no reserved-token or signed-report multiplexing (see
-// Grid6ToG25), so every in-range value is a 6-char grid; the
-// returned string is always 6 characters.
-func G25ToGrid6(g25 uint32) string {
-	const op = "codec.G25ToGrid6"
+// Returns ("", false) for g25 ≥ maxGrid6; ok=true otherwise. The
+// slot has no reserved-token or signed-report multiplexing (see
+// Grid6ToG25), so every in-range value is a 6-char grid.
+func G25ToGrid6(g25 uint32) (string, bool) {
 	if g25 >= maxGrid6 {
-		panic(op + ": g25=" + strconv.Itoa(int(g25)) + " is outside [0, " + strconv.Itoa(maxGrid6) + ") — corrupted wire input or upper bits unmasked")
+		return "", false
 	}
 	v := int(g25)
 	c5 := v % 24
@@ -351,5 +352,5 @@ func G25ToGrid6(g25 uint32) string {
 		byte('0' + c3),
 		byte('A' + c4),
 		byte('A' + c5),
-	})
+	}), true
 }

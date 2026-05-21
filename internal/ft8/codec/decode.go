@@ -39,6 +39,17 @@ var ErrCallsignNeedsHashLookup = errors.New("codec: c28 is a 22-bit hash; origin
 // LDPC + CRC14, or a remote encoder violating the spec.
 var ErrTokenInGap = errors.New("codec: c28 lands in the token partition but on a gap codepoint")
 
+// ErrInvalidGrid6 is returned by Type 5 decode when the g25 wire
+// slot lands in the unmapped upper range [maxGrid6, 2^25). The
+// 25-bit field has 33,554,432 codepoints but only 18,662,400 map
+// to valid 6-char Maidenhead grids; the remaining 44% (~14.9M
+// codepoints) are unmapped. The encoder never produces an
+// unmapped value, so a g25 in that range on the wire signals
+// corruption that slipped past LDPC + CRC14 or hostile input.
+// Returning this error (rather than panicking — finding #4)
+// keeps the decoder safe to call on untrusted wire bytes.
+var ErrInvalidGrid6 = errors.New("codec: Type 5 g25 lands in the unmapped upper range — no valid 6-char Maidenhead grid")
+
 // DecodeMessage parses a 77-bit FT8 message body (bit-per-byte form,
 // MSB-first per the package convention) into a Message struct,
 // inverting EncodeMessage.
@@ -295,6 +306,11 @@ func decodeEUVHFHash(bits []byte) (Message, error) {
 	off += s11Bits
 	g25 := uint32(readBitsUint64(bits, off, G25Bits))
 
+	grid6, ok := G25ToGrid6(g25)
+	if !ok {
+		return Message{}, fmt.Errorf("%w: g25=%d", ErrInvalidGrid6, g25)
+	}
+
 	return Message{
 		Type:    MessageTypeEUVHFHash,
 		Call1:   hashedCallSentinel,
@@ -304,7 +320,7 @@ func decodeEUVHFHash(bits []byte) (Message, error) {
 		AckBit:  ack,
 		Report3: r3,
 		Serial:  serial,
-		Grid6:   G25ToGrid6(g25),
+		Grid6:   grid6,
 	}, nil
 }
 

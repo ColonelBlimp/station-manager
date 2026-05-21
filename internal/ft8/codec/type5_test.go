@@ -451,7 +451,8 @@ func TestParseMessage_ClassifierOrder_Type5(t *testing.T) {
 
 // TestG25ToGrid6_RoundTrip pins the Layer 1 inverse against Grid6ToG25
 // over a representative set of 6-char grids covering each character
-// position's alphabet extremes.
+// position's alphabet extremes. Every encoded value is in-range so
+// ok must be true.
 func TestG25ToGrid6_RoundTrip(t *testing.T) {
 	cases := []string{
 		"AA00AA",
@@ -464,11 +465,85 @@ func TestG25ToGrid6_RoundTrip(t *testing.T) {
 	for _, grid := range cases {
 		t.Run(grid, func(t *testing.T) {
 			g25 := Grid6ToG25(grid)
-			got := G25ToGrid6(g25)
+			got, ok := G25ToGrid6(g25)
+			if !ok {
+				t.Fatalf("G25ToGrid6(Grid6ToG25(%q)) ok=false; want true (encoded values are always in-range)", grid)
+			}
 			if got != grid {
 				t.Errorf("G25ToGrid6(Grid6ToG25(%q)) = %q, want %q", grid, got, grid)
 			}
 		})
+	}
+}
+
+// TestG25ToGrid6_RejectsOutOfRange is the regression pin for
+// finding #4: g25 values in the unmapped upper range [maxGrid6,
+// 2^25) must return (_, false) rather than panic. The 25-bit
+// wire slot has codepoints that don't correspond to any 6-char
+// Maidenhead grid; corruption / fuzz / hostile input can put a
+// g25 in that range and the decoder must surface a clean error.
+func TestG25ToGrid6_RejectsOutOfRange(t *testing.T) {
+	cases := []uint32{
+		maxGrid6,             // first out-of-range
+		maxGrid6 + 1,         // just past
+		(1 << G25Bits) - 1,   // top of 25-bit field
+		maxGrid6 + (1 << 22), // mid-range invalid
+	}
+	for _, g25 := range cases {
+		got, ok := G25ToGrid6(g25)
+		if ok {
+			t.Errorf("G25ToGrid6(%d) ok=true (got %q); want false for g25 >= maxGrid6 (%d)", g25, got, maxGrid6)
+		}
+		if got != "" {
+			t.Errorf("G25ToGrid6(%d) = %q; want empty string when ok=false", g25, got)
+		}
+	}
+}
+
+// TestDecodeMessage_Type5_RejectsInvalidGrid6 is the end-to-end
+// regression pin for finding #4: a Type 5 wire body with an
+// out-of-range g25 must return ErrInvalidGrid6 from DecodeMessage,
+// NOT panic. Earlier the underlying G25ToGrid6 panicked on out-
+// of-range input, crashing any caller that decoded untrusted wire
+// bytes (fuzz / corruption / hostile remote).
+func TestDecodeMessage_Type5_RejectsInvalidGrid6(t *testing.T) {
+	// Build a Type 5 body with valid h12 / h22 / r3 / s11 / R1 / i3
+	// but plant an out-of-range g25 just above maxGrid6.
+	bits := make([]byte, MessageBits)
+	off := 0
+	// h12: 12 bits of zero (any value works for this test)
+	off += h12Bits
+	// h22: 22 bits of zero
+	off += HashBits22
+	// R1: 0
+	off++
+	// r3: 0
+	off += r3Bits
+	// s11: 0
+	off += s11Bits
+	// g25 = maxGrid6 (first out-of-range codepoint), MSB-first
+	g25 := uint32(maxGrid6)
+	for i := range G25Bits {
+		bits[off+i] = byte((g25 >> (G25Bits - 1 - i)) & 1)
+	}
+	off += G25Bits
+	// i3 = 5 (101 MSB-first per the renumber from task #50)
+	bits[off+0] = 1
+	bits[off+1] = 0
+	bits[off+2] = 1
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DecodeMessage panicked on out-of-range g25: %v — finding #4 says it must return an error instead", r)
+		}
+	}()
+
+	_, err := DecodeMessage(bits)
+	if err == nil {
+		t.Fatal("DecodeMessage(Type 5 wire with g25=maxGrid6) = nil err, want ErrInvalidGrid6")
+	}
+	if !errors.Is(err, ErrInvalidGrid6) {
+		t.Errorf("DecodeMessage(Type 5 wire with g25=maxGrid6) err=%v, want ErrInvalidGrid6", err)
 	}
 }
 
