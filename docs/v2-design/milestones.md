@@ -1473,45 +1473,190 @@ sample (`210703_133430.wav` decoded correctly), M4.1 is done.
 
 ### M4.2 — Continuous live audio + slot scheduling
 
-**Status: 🚧 NOT STARTED.** Unblocks when M4.1 is green.
+**Status: 🚧 IN PROGRESS.** Session 82 (2026-05-22) shipped Phase A
+(audio capture) + Phase B (UTC slot scheduler) end-to-end, validated
+live on the FTdx10. Phases C (Service wiring), D (status endpoint),
+and E (10-minute acceptance) are the remaining chunks.
 
 **Goal:** The daemon captures live audio, schedules decode windows
 aligned to UTC 15-second boundaries, and feeds each window through
 M4.1's pipeline. Decodes scroll continuously while the daemon runs.
 Still no rig coordination, no TX.
 
-#### Decisions to land in this milestone's design pass
+#### Phase breakdown
 
-- **Audio backend** — portaudio (CGO, matches WSJT-X) vs ALSA-direct
-  (Linux-only, lighter). Default recommendation is portaudio; revisit
-  only if cross-compile to non-Linux ever becomes a requirement.
-- **Audio device enumeration + selection** — config schema and the
-  startup-time check that the configured device exists and is
-  capturing at the expected sample rate.
+- **Phase A — audio capture skeleton.** ✅ SHIPPED 2026-05-22.
+- **Phase B — UTC slot scheduler.** ✅ SHIPPED 2026-05-22.
+- **Phase C — FT8 Service wiring.** 🚧 NEXT.
+- **Phase D — `GET /v1/ft8/status` endpoint.** 🚧 Follows Phase C.
+- **Phase E — 10-minute live acceptance run.** 🚧 Final gate.
 
-#### Scope
+#### Decisions landed during Phases A + B (Session 82)
 
-- Audio capture service: device enumeration, open device at decode
-  sample rate, ring-buffer the incoming PCM.
-- 15s slot scheduler: fires at UTC second boundaries (0, 15, 30, 45);
-  hands the preceding slot's PCM to a decode worker.
-- Bounded decode-worker pool via `internal/safego` (extend if needed
-  per the ADR 0021 follow-up note). Single worker is fine if M4.1's
-  decode latency comfortably fits under 15s on the operator's
-  hardware; pool size becomes a config field once measurements demand
-  it.
-- Slot-offset metric: how late did the slot worker actually fire
-  relative to UTC. Exposed via `GET /v1/ft8/status` (new endpoint —
-  light, no SSE yet).
-- Lifecycle: `Service.Start(ctx)` spawns capture + scheduler; `Stop()`
-  drains pending decodes and closes the audio device.
-- Config: `Ft8.AudioDevice`, `Ft8.SampleRate`, `Ft8.SlotOffsetWarnMs`
-  (default 500).
+- **Audio backend = miniaudio via `github.com/gen2brain/malgo`.**
+  Both libraries are public-domain (Unlicense), safer than MIT for
+  binary redistribution. PortAudio was the doc's earlier leaning;
+  malgo was picked because station-manager-v1's audio package
+  (which the operator already uses successfully on this hardware)
+  is built on it, so v1's `Capture` shape ported cleanly. ALSA-direct
+  remains the Linux-only fallback if malgo ever proves painful.
+- **CGO is back, but isolated.** Session 80's anti-CGO finding
+  applied to hot-path scalar math; audio capture is the opposite
+  regime (low-frequency callbacks delivering big buffers — CGO
+  overhead amortises well). Capture lives in `internal/audio/capture/`
+  so the existing `internal/audio` package (FFT/WAV/etc.) stays
+  CGO-free.
+- **Audio device config = single string field** following the
+  `BridgeSerialConfig.Port` precedent. Operator supplies the device
+  name (e.g. `"PCM2903C Audio CODEC Analog Stereo"`) seen in the
+  `ft8-capture-probe -list` output; empty = system default.
+- **Sample rate handling = miniaudio's built-in resampler.** The
+  FTdx10's USB CODEC is natively 48 kHz stereo; miniaudio
+  downsamples to 12 kHz mono on the C side. Validated clean on
+  live RF; Go-side decimation is a future tweak if quality ever
+  bites.
+- **Slot handoff = channel, not callback.** `Scheduler.Slots() <-chan
+  Slot` decouples worker-pool and concurrency choices in Phase C.
+- **Failure policy = fail-soft** (saved to `project_ft8_failsoft`
+  memory). Audio device fails to open / capture stops mid-session /
+  decode panics → log warn, noop. Daemon and other subsystems stay
+  up. Mirrors the "enrichment never blocks logging" invariant.
 
-#### Acceptance
+#### Phase A — audio capture skeleton (SHIPPED 2026-05-22)
+
+New `internal/audio/capture/` subpackage. `Capture` type with
+`New / Init / ListDevices / Start(ctx) / Stop / Close`, `Samples()
+<-chan []float32` for buffered consumption, `SetCallback` for
+low-latency direct-from-callback processing. Lock-free callback
+path via `atomic.Pointer`, CAS-protected Start, TOCTOU-safe
+`safeSend`, `DroppedChunks() int64` metric, `closeOnce`-guarded
+channel teardown.
+
+`DefaultConfig()` returns FT8 canonical: 12 kHz, mono, float32,
+`DeviceIndex=-1` (system default), `BufferSize=512` (~43 ms callback
+period at 12 kHz).
+
+Errors API uses v2's `internal/errors` (`.WithErr`/`.WithMsgf`).
+
+New `cmd/ft8-capture-probe` developer binary:
 
 ```
-# With the rig manually tuned to a busy FT8 frequency:
+# List capture devices
+go run ./cmd/ft8-capture-probe -list
+
+# Capture 15 s from device N at 12 kHz mono, decode FT8 messages
+go run ./cmd/ft8-capture-probe -device=N
+```
+
+**Phase A live validation result** (FTdx10 on a busy 20 m FT8
+frequency): 179 712 samples in 14.98 s, peak amplitude 0.0927
+(-21 dBFS), dropped chunks=0, **14 decoded messages** including
+`7Q6UJ DO7TTR JN58` (operator's own country prefix). End-to-end
+audio→messages works on real RF.
+
+#### Phase B — UTC slot scheduler (SHIPPED 2026-05-22)
+
+New `internal/ft8/ring.go` — wrapping float32 ring at `dsp.NMAX`
+(180 000) with `Append([]float32)`, `Snapshot() []float32`,
+`Filled() int64`. Internal to `internal/ft8`. Snapshot linearises
+oldest → newest in chronological order; the head is zero-padded
+until Filled ≥ Cap.
+
+New `internal/ft8/scheduler.go` — `Scheduler{source, log, out,
+dropped}`:
+
+- Reads `<-chan []float32` (typically `capture.Capture.Samples()`),
+  drains into the ring continuously in `Run(ctx)`.
+- `time.Timer` aimed at `nextSlotBoundary(time.Now().UTC())` — the
+  next UTC :00/:15/:30/:45.
+- On fire: snapshots the ring, emits `Slot{StartUTC, OffsetMs,
+  Samples}` on `Slots() <-chan Slot` (cap-1 buffered).
+- Cold-start skip: no emission until the ring is full
+  (`Filled >= Cap`). Avoids surfacing half-zero slots that would
+  poison the decode floor.
+- Channel-full → increments `Dropped()` and logs warn. Healthy run
+  expects zero drops.
+
+```go
+sch := ft8.NewScheduler(capture.Samples(), s.log)
+go func() { _ = sch.Run(ctx) }()
+for slot := range sch.Slots() {
+    results := ft8.Decode(slot.Samples, ft8.DecodeOptions{...})
+    // log / submit / publish
+}
+```
+
+Test coverage: table-driven `nextSlotBoundary` (mid-slot, boundary-
+exact, minute / hour / day rollover, non-UTC normalisation); ring
+unit tests (write-below-cap, wrap, overflow-single, overflow-massive,
+snapshot-independence); integration tests waiting for real UTC
+boundaries (`-short` skip).
+
+Extended `cmd/ft8-capture-probe` with `-scheduler`, `-slots N`,
+`-subtraction-passes` flags. SIGINT-safe shutdown.
+
+**Phase B live validation result** (FTdx10): 4 consecutive slots at
+`offset=0ms` on every fire, 180 000 samples each, peak 0.116-0.123
+throughout, 0 dropped slots, 0 capture drops, decode 3.6-4.1 s per
+slot (single worker has ~3× headroom on this hardware). Slot 1 and
+Slot 2 captured the same `7Q6UJ ↔ S52TW` QSO in opposite directions
+with sync ≥ 10, confirming live timing alignment is real.
+
+Low-sync (< 6) CRC14 false-positive noise still surfaces a few
+garbage decodes per slot (`WG67F-6E?1K-?`, `9LR4PQD6VRRL3`, etc.) —
+deferred as a future sync-threshold tuning pass.
+
+#### Phase C — FT8 Service wiring (next)
+
+Replace `internal/ft8/Service.Start`'s placeholder goroutine with
+the real chain:
+
+- New `types.Ft8AudioConfig{Device string}` (single field, mirrors
+  `BridgeSerialConfig.Port`). Added under `types.Ft8Config.Audio`.
+- `Service.Start(ctx)` enumerates devices (`capture.New(...).Init`
+  then `ListDevices`), picks the first matching `cfg.Audio.Device`
+  (exact match; empty → -1 default). On any capture-open failure:
+  log warn + return nil (fail-soft per `project_ft8_failsoft`).
+- Spawn `Scheduler.Run` via `safego.GoTracked`.
+- Spawn decode worker via `safego.GoTracked`: `for slot := range
+  sch.Slots()` → `ft8.Decode(slot.Samples, DecodeOptions{HashTable:
+  s.hashTable, ...})` → `s.log.InfoWith().…Msg("ft8.decode")` per
+  result.
+- Long-lived `codec.HashTable` allocated at Service scope so hash
+  resolution spans slots (per ADR 0021's M4.1 design intent).
+- `Stop()` cancels the run context, drains the in-flight slot,
+  calls `capture.Close()`.
+
+Config additions on `Ft8Config`: `Audio.Device string`,
+`SlotOffsetWarnMs int` (default 500), `SubtractionPasses int`
+(default 0, exposed but not raised yet).
+
+Decision deferred to Phase C kickoff: should we surface `Slot` /
+`DecodedMessage` events on the SPA-facing SSE stream now, or wait
+for M4.6? Current lean: journal-only for M4.2; SSE in M4.6.
+
+#### Phase D — `GET /v1/ft8/status` endpoint
+
+Minimal JSON:
+
+```json
+{
+  "enabled": true,
+  "audio_device": "PCM2903C Audio CODEC Analog Stereo",
+  "slot_offset_ms": 0,
+  "last_slot_at": "2026-05-22T16:45:30Z",
+  "last_decode_count": 6,
+  "dropped_slots": 0,
+  "subtraction_passes": 0
+}
+```
+
+Read-only; mirrors `/v1/bridge/status`-style endpoints.
+
+#### Phase E — Acceptance (final M4.2 gate)
+
+```
+# Rig manually tuned to a busy FT8 frequency:
 ./smd                                              # daemon running, ft8.enabled=true
 journalctl --user -u smd -f | grep ft8.decode      # decodes scroll live
 
@@ -1522,7 +1667,8 @@ curl http://localhost:8080/v1/ft8/status
 ```
 
 Continuous decoding for a 10-minute window with no dropped slots, no
-audio-buffer overruns, slot offset under 500ms throughout. Then done.
+audio-buffer overruns, slot offset under 500 ms throughout. Then
+M4.2 closes.
 
 ---
 
