@@ -102,7 +102,30 @@ type DecodeOptions struct {
 	// still bounded and only paid on candidates that have already
 	// failed every cheaper attempt.
 	FineFrequencyOffsets []float64
+
+	// OSDOrder controls the Ordered Statistics Decoding fallback
+	// applied when LDPC's belief propagation fails to converge or
+	// its CRC doesn't validate. Per Taylor 2020 §6 OSD adds ~1 dB
+	// of SNR sensitivity over BP alone.
+	//
+	//   - DefaultOSDOrder (i.e. 0 in the zero-value case → OSD enabled
+	//     at order 1) — single-bit MRB flip search. ~91 trials per
+	//     candidate that BP fails. Documented sensitivity floor.
+	//   - Explicit 0 → no OSD fallback (BP only).
+	//   - 1 → order-1 (same as default).
+	//   - 2 → order-2 (pair flips, ~4095 trials, expensive — measure
+	//     before committing in batch workloads).
+	//
+	// The zero-value case (field left unset) maps to DefaultOSDOrder
+	// so callers who don't care still get the sensitivity gain. Pass
+	// a sentinel like -1 to disable explicitly.
+	OSDOrder int
 }
+
+// DefaultOSDOrder is the OSD search depth applied when
+// DecodeOptions.OSDOrder is unset (zero value). Order-1 is the
+// canonical sensitivity-vs-cost sweet spot.
+const DefaultOSDOrder = 1
 
 // DefaultFineTimingOffsets is the retry sequence applied when
 // DecodeOptions.FineTimingOffsets is nil. Tuned empirically on the
@@ -160,6 +183,19 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 	maxIters := opts.LDPCMaxIterations
 	if maxIters <= 0 {
 		maxIters = codec.LDPCMaxIterationsDefault
+	}
+
+	// OSD order resolution. Zero value → default (order 1). Negative
+	// → disabled (BP-only). Clamp positive values at OSDMaxOrder=2.
+	osdOrder := opts.OSDOrder
+	if osdOrder == 0 {
+		osdOrder = DefaultOSDOrder
+	}
+	if osdOrder < 0 {
+		osdOrder = 0
+	}
+	if osdOrder > codec.OSDMaxOrder {
+		osdOrder = codec.OSDMaxOrder
 	}
 
 	spec := dsp.Spectrogram(samples)
@@ -251,7 +287,7 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 				if llrs == nil {
 					continue
 				}
-				msgBits, ok := codec.LDPCDecode(llrs, maxIters)
+				msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder)
 				if !ok {
 					continue
 				}

@@ -183,16 +183,18 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 		//   - Phase 1 FFT caching (Session 80): no change.
 		//   - Phase 2 FFT plans: no change.
 		//   - Fine-timing retry (Session 80): cap2 4→6, cap3 7→11.
-		//   - Fine-frequency retry (Session 80): cap1 1→3, cap3
-		//     11→13. cap1's `VE1WT K4GBI 73` (lost post-finding-#4)
-		//     recovered — was a sub-bin frequency offset, not a
-		//     time offset as initially assumed.
-		// Bump further when OSD / K-scale tuning land.
+		//   - Fine-frequency retry (Session 80): cap1 1→3, cap3 11→13.
+		//   - OSD order-1 fallback (Session 80): cap1 3→8, cap2 6→13,
+		//     cap3 13→20. Biggest sensitivity jump of the session —
+		//     Taylor 2020 §6's documented ~1 dB SNR gain from OSD
+		//     materialises here. Total: 22 → 41 of 48 (46% → 85%
+		//     WSJT-X parity).
+		// Bump further when K-scale tuning lands.
 		minDecodes int
 	}{
-		{"ft8_cap1.wav", 11, 3},
-		{"ft8_cap2.wav", 14, 6},
-		{"ft8_cap3.wav", 23, 13},
+		{"ft8_cap1.wav", 11, 8},
+		{"ft8_cap2.wav", 14, 13},
+		{"ft8_cap3.wav", 23, 20},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

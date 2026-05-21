@@ -261,6 +261,30 @@ func LDPCDecode(llrs []float64, maxIterations int) ([]byte, bool) {
 	return out, true
 }
 
+// LDPCDecodeWithOSD tries Belief Propagation first via LDPCDecode;
+// if BP fails to converge or its CRC doesn't validate, falls back
+// to Ordered Statistics Decoding (OSDDecode) at the given order.
+// Use this entry point when the caller wants the BP-then-OSD
+// sensitivity gain documented in Taylor 2020 §6 (~1 dB on AWGN).
+//
+//   - osdOrder = 0: no OSD fallback. Behaves identically to LDPCDecode.
+//   - osdOrder = 1: order-1 OSD (single-bit flips, ~91 trials).
+//   - osdOrder = 2: order-2 OSD (paired flips, ~4095 trials).
+//
+// Returns the recovered 77-bit message + true on success; nil, false
+// when neither BP nor OSD finds a CRC14-valid codeword.
+//
+// Panics if len(llrs) != CodewordBits.
+func LDPCDecodeWithOSD(llrs []float64, maxIterations, osdOrder int) ([]byte, bool) {
+	if msg, ok := LDPCDecode(llrs, maxIterations); ok {
+		return msg, true
+	}
+	if osdOrder <= 0 {
+		return nil, false
+	}
+	return OSDDecode(llrs, osdOrder)
+}
+
 // packBitsMSBFirst converts a bit-per-byte slice to a uint16,
 // MSB-first. Input length must be ≤ 16; len > 16 is a programmer
 // bug, not user data. Used by the CRC validation path where the
