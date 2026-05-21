@@ -5,50 +5,57 @@ import (
 	"testing"
 )
 
-// c28 zones the test vectors land in. Documented behaviour per
-// QEX paper Table 7 (nominal layout) and CallsignC28's algorithm
-// notes (short calls overlap with hash range — disambiguated by
-// the message-type tag, not by c28 range).
-const (
-	zoneHashOverlap = "hash-range overlap (short call; disambiguated by i3/n3 message-type tag)"
-	zoneStdCall     = "true std-call range (>= stdCallOffset)"
-)
+// c28 zone tag. Per QEX paper Appendix A Table 7 every std-shape
+// callsign lands in the std-call partition [stdCallOffset, 2^28);
+// the hash range [nTokens, stdCallOffset) is reserved for non-std
+// callsigns (compound calls, special-event calls) per Table 2.
+const zoneStdCall = "std-call range (>= stdCallOffset)"
 
-// CallsignC28 test vectors generated 2026-05-17 using the
-// public-domain `std_call_to_c28` reference program from the QEX
-// paper's reference [14] tarball (built locally from
-// `std_call_to_c28.f90`). Per QEX paper §9 the reference is in the
-// public domain; the c28 values below are facts produced by running
-// it against chosen inputs.
+// CallsignC28 spec-vector regression suite. Vectors are computed
+// analytically from CallsignC28's digit-position-3 alignment
+// algorithm (see callsign.go); the algorithm itself is fixed by
+// QEX paper Appendix A and Table 7. Values for 3-char, 4-char,
+// and 5-char-2-prefix calls were REGENERATED for finding #1 —
+// the earlier vectors were artefacts of the QEX ref [14]
+// `std_call_to_c28.f90` reference program, which uses Fortran
+// `adjustr` (right-justify only) and is incomplete: it doesn't
+// handle the digit-alignment needed for short calls and 5-char-
+// 2-prefix calls. The QEX paper Appendix A is the authoritative
+// spec ("28 bits are enough to encode any standard call sign
+// uniquely"), not the gap in the reference program.
 //
 // Coverage:
 //
-//   - 3-char (M1A) — minimum FT8 std-call length
-//   - 4-char (K1JT) — Joe Taylor's call; verifies short-call padding
-//   - 5-char (G4ABC, K1ABC, W9XYZ, VK7MO, F5RXL) — common length
-//   - 6-char (7Q5MLV, 9V1ABC, PJ4ABC) — max length, all with
-//     2-char prefixes including digit-led
+//   - 3-char (M1A, G3X) — minimum FT8 std-call length, 1-char prefix
+//   - 4-char (K1JT) — 1-char prefix; Joe Taylor's call
+//   - 5-char 1-prefix (G4ABC, K1ABC, W9XYZ, F5RXL) — common length
+//   - 5-char 2-prefix (VK7MO, AB1CD) — needs digit alignment
+//     distinct from adjustr; Phase 2C's spec-incorrect routing
+//     sent these through HashedCallC28
+//   - 6-char (7Q5MLV, 9V1ABC, PJ4ABC) — max length, 2-char prefix
+//     including digit-led
 //
 // 7Q5MLV is a Malawian call (operator's country); 9V1ABC has a
 // digit-led 2-char prefix; PJ4ABC produces the largest c28 in this
 // set, near the top of the std-call range.
 //
-// The zone column pins the documented hash-range-overlap behaviour
-// for short calls (M1A, K1JT) as an asserted property rather than
-// a paragraph in the doc.
+// All vectors land in zoneStdCall — the post-fix invariant is
+// uniform: no std-shape call leaks into the hash range.
 var callsignVectors = []struct {
 	name string
 	call string
 	want uint32
 	zone string
 }{
-	{"M1A_three_char", "M1A", 6050834, zoneHashOverlap},
-	{"K1JT_four_char", "K1JT", 6040944, zoneHashOverlap},
+	{"M1A_three_char", "M1A", 10608568, zoneStdCall},
+	{"G3X_three_char", "G3X", 9483721, zoneStdCall},
+	{"K1JT_four_char", "K1JT", 10222009, zoneStdCall},
 	{"G4ABC_five_char", "G4ABC", 9486694, zoneStdCall},
 	{"K1ABC_five_char", "K1ABC", 10214965, zoneStdCall},
 	{"W9XYZ_five_char", "W9XYZ", 12751800, zoneStdCall},
-	{"VK7MO_five_char", "VK7MO", 12339580, zoneStdCall},
 	{"F5RXL_five_char", "F5RXL", 9322543, zoneStdCall},
+	{"VK7MO_five_char_2prefix", "VK7MO", 237090319, zoneStdCall},
+	{"AB1CD_five_char_2prefix", "AB1CD", 86389684, zoneStdCall},
 	{"7Q5MLV_six_char_malawi", "7Q5MLV", 68170754, zoneStdCall},
 	{"9V1ABC_six_char_digit_prefix", "9V1ABC", 83238895, zoneStdCall},
 	{"PJ4ABC_six_char_letter_prefix", "PJ4ABC", 194310064, zoneStdCall},
@@ -78,28 +85,24 @@ func TestCallsignC28_OutputFitsIn28Bits(t *testing.T) {
 	}
 }
 
-func TestCallsignC28_OutputAboveSpecialTokens(t *testing.T) {
-	// Every std-call c28 must be above the reserved special-tokens
-	// range (>= nTokens). Short callsigns can produce values that
-	// fall INSIDE the 22-bit hash range due to the algorithm's
-	// negative-index handling — that's intentional and not a
-	// collision: the FT8 protocol disambiguates std-calls from
-	// hashes via the message-type tag (i3/n3 bits) at the message
-	// level, not by c28 range. So the only invariant we can pin
-	// here is "stays out of the special-tokens space."
+func TestCallsignC28_OutputInStdCallRange(t *testing.T) {
+	// Per QEX paper Appendix A Table 7, every std-shape callsign
+	// packs into the std-call partition [stdCallOffset, 2^28).
+	// The pre-finding-#1 invariant ("stays out of the special-token
+	// space") was a weaker bound that admitted hash-range overlap
+	// for short calls; the spec-correct invariant is tighter.
 	for _, tc := range callsignVectors {
 		got := CallsignC28(tc.call)
-		if got < nTokens {
-			t.Errorf("%s: CallsignC28(%q)=%d below nTokens %d — leaked into special-token range", tc.name, tc.call, got, nTokens)
+		if got < stdCallOffset {
+			t.Errorf("%s: CallsignC28(%q)=%d below stdCallOffset %d — leaked out of std-call range, violates QEX Appendix A Table 7", tc.name, tc.call, got, stdCallOffset)
 		}
 	}
 }
 
 func TestCallsignC28_ZoneMatchesVector(t *testing.T) {
-	// Per-vector zone assertion: each vector lands in the c28 zone
-	// declared next to it. Pins the documented hash-overlap behaviour
-	// as a test property, so adding a new vector with a wrong zone
-	// label fails CI instead of silently going against the doc.
+	// Per-vector zone assertion. Per finding #1 every std-shape
+	// call lands in zoneStdCall; a vector that doesn't is either
+	// mis-declared or a regression in the digit-alignment algorithm.
 	for _, tc := range callsignVectors {
 		t.Run(tc.name, func(t *testing.T) {
 			got := CallsignC28(tc.call)
@@ -108,7 +111,7 @@ func TestCallsignC28_ZoneMatchesVector(t *testing.T) {
 			case got >= stdCallOffset:
 				actualZone = zoneStdCall
 			case got >= nTokens:
-				actualZone = zoneHashOverlap
+				actualZone = "ILLEGAL (hash-range overlap; QEX Appendix A says std calls pack into [stdCallOffset, 2^28))"
 			default:
 				actualZone = "ILLEGAL (below nTokens — leaked into special-token range)"
 			}
@@ -187,50 +190,71 @@ func TestCallsignC28_RejectsNonAlphabetChars(t *testing.T) {
 	}
 }
 
-func TestCallsignC28_EmbeddedSpaceIsDeterministic(t *testing.T) {
-	// Embedded spaces pass alphabet validation (space is in
-	// callsignAlphaPos1) and produce a deterministic c28. Whether
-	// such a "call" is a valid FT8 std call is the caller's
-	// concern — this function's contract is "any char in the
-	// pos-1 alphabet works." This test pins the determinism so an
-	// accidental contract change (e.g. someone adds embedded-space
-	// rejection) trips CI rather than silently corrupting calls
-	// with stray whitespace upstream.
-	const call = "K1 BC"
-	a := CallsignC28(call)
-	b := CallsignC28(call)
-	if a != b {
-		t.Errorf("CallsignC28(%q) not deterministic: got %d then %d", call, a, b)
-	}
-	// Don't pin the specific value — that's an algorithm artifact,
-	// not a contract. Determinism is the contract.
+func TestCallsignC28_RejectsEmbeddedSpace(t *testing.T) {
+	// Std-shape callsigns per QEX §A don't contain embedded spaces.
+	// Under digit-position-3 alignment (finding #1), CallsignC28's
+	// alphabet check rejects space along with other non-[0-9A-Z]
+	// chars; callers must strip whitespace upstream. The old "pos-1
+	// alphabet includes space" laxness was a side-effect of the
+	// pre-fix negative-index handling and produced indistinguishable
+	// c28 values for spaced and unspaced variants — a bug in the
+	// caller's input now surfaces as a panic instead of silent
+	// corruption.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("CallsignC28(\"K1 BC\") should panic on embedded space; did not")
+		}
+	}()
+	CallsignC28("K1 BC")
 }
 
-// TestCallsignC28_PropertyAlwaysAboveSpecialTokens is the property
-// version of TestCallsignC28_OutputAboveSpecialTokens: it generates
-// many random 3-6 char inputs from the pos-1 alphabet and asserts
-// that NONE of them produce a c28 below nTokens (which would mean
-// leaking into the special-token reserved range).
+// TestCallsignC28_PropertyAllStdShapesInStdRange is the property
+// version of TestCallsignC28_OutputInStdCallRange: it generates
+// random valid std-shape callsigns per QEX paper §A (prefix 1-2
+// chars with ≥1 letter + 1 digit + suffix 1-3 letters) and pins
+// that EVERY such call lands in the std-call range [stdCallOffset,
+// 2^28). A regression that re-introduces hash-range overlap for
+// any std-shape input fails here.
 //
-// The vector-based test pins this for hand-picked cases; this one
-// stress-tests the contract across the full in-contract input space.
 // Deterministic seed so failures are reproducible across runs.
-func TestCallsignC28_PropertyAlwaysAboveSpecialTokens(t *testing.T) {
+func TestCallsignC28_PropertyAllStdShapesInStdRange(t *testing.T) {
 	r := rand.New(rand.NewPCG(0xDEAD7E57, 0xBABE7A55))
 	const trials = 5000
-	alphabet := callsignAlphaPos1
+	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	const digits = "0123456789"
+	const alnum = letters + digits
+
+	randByte := func(s string) byte { return s[r.IntN(len(s))] }
 
 	for trial := range trials {
-		length := 3 + r.IntN(4) // 3..6 inclusive
-		buf := make([]byte, length)
-		for j := range buf {
-			buf[j] = alphabet[r.IntN(len(alphabet))]
+		// Prefix: 1 or 2 chars, at least one letter.
+		var prefix []byte
+		if r.IntN(2) == 0 {
+			// 1-char prefix: must be letter.
+			prefix = []byte{randByte(letters)}
+		} else {
+			// 2-char prefix: alnum, retry if both are digits.
+			for {
+				c1, c2 := randByte(alnum), randByte(alnum)
+				if (c1 >= 'A' && c1 <= 'Z') || (c2 >= 'A' && c2 <= 'Z') {
+					prefix = []byte{c1, c2}
+					break
+				}
+			}
 		}
-		call := string(buf)
+		digit := randByte(digits)
+		// Suffix: 1, 2, or 3 letters.
+		suffixLen := 1 + r.IntN(3)
+		suffix := make([]byte, suffixLen)
+		for j := range suffix {
+			suffix[j] = randByte(letters)
+		}
+		call := string(prefix) + string(digit) + string(suffix)
+
 		got := CallsignC28(call)
-		if got < nTokens {
-			t.Errorf("trial %d: CallsignC28(%q) = %d, below nTokens %d (leaked into special-token range)",
-				trial, call, got, nTokens)
+		if got < stdCallOffset {
+			t.Errorf("trial %d: CallsignC28(%q) = %d below stdCallOffset %d — std-shape call leaked into hash partition, violates QEX Appendix A Table 7",
+				trial, call, got, stdCallOffset)
 		}
 	}
 }

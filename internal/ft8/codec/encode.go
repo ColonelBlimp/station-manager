@@ -134,9 +134,9 @@ func encodeEUVHFP(m Message) ([]byte, error) {
 	}
 
 	var b BitBuilder
-	b.Append(uint64(stdCallToC28(m.Call1)), CallsignBits).
+	b.Append(uint64(CallsignC28(m.Call1)), CallsignBits).
 		Append(boolBit(m.Suffix1), 1).
-		Append(uint64(stdCallToC28(m.Call2)), CallsignBits).
+		Append(uint64(CallsignC28(m.Call2)), CallsignBits).
 		Append(boolBit(m.Suffix2), 1).
 		Append(boolBit(m.AckBit), 1).
 		Append(uint64(Grid4ToG15(m.Grid)), G15Bits).
@@ -537,61 +537,18 @@ func isF71Char(c byte) bool {
 // type1CallToC28 routes a Type 1 Call1/Call2 string to its c28 value.
 // Dispatches to TokenToC28 first (so "CQ", "DE", "QRZ", "CQ NNN",
 // "CQ XXXX" land in the [0, nTokens) token partition); falls through
-// to stdCallToC28 for actual callsigns.
+// to CallsignC28 for actual standard callsigns.
 //
 // Precondition: the caller has passed validateType1Call, so the input is
-// either a recognised token or a std-callsign-shape input.
+// either a recognised token or a std-callsign-shape input. Per QEX
+// Appendix A, every std-shape callsign packs into the [stdCallOffset,
+// 2^28) range — short calls don't go through HashedCallC28.
 func type1CallToC28(call string) uint32 {
 	if c28, ok := TokenToC28(call); ok {
 		return c28
 	}
-	return stdCallToC28(call)
+	return CallsignC28(call)
 }
-
-// stdCallToC28 picks between CallsignC28 and HashedCallC28 based on
-// whether the call has "long-format" std-call shape per QEX paper
-// §A. Only long-format calls produce c28 values in the std-call
-// range [stdCallOffset, 2^28) that round-trip cleanly via
-// CallsignC28 ↔ C28ToCallsign. Other shapes (3-char, 4-char, and
-// 5-char-2-prefix calls) produce values in the hash range either
-// directly (via HashedCallC28) or via CallsignC28's negative-index
-// arithmetic — but the latter doesn't correspond to the call's
-// actual 22-bit hash, so a receiver doing hash-table lookup would
-// never find the call. Routing short calls through HashedCallC28
-// produces the hash-range c28 the receiver expects.
-//
-// Long-format shapes:
-//   - 5 chars: [letter][digit][letter]{3}            (e.g. G4ABC)
-//   - 6 chars: [alnum]{2}[digit][letter]{3} with ≥1  (e.g. AB1CDE, 2E0XYZ)
-//     letter in the 2-char prefix
-//
-// All other std-call-shape inputs route through HashedCallC28.
-// Precondition: caller has passed validateStdCallsign so the input
-// matches some std-call shape.
-func stdCallToC28(call string) uint32 {
-	if isLongFormatStdCallsign(call) {
-		return CallsignC28(call)
-	}
-	return HashedCallC28(call)
-}
-
-// isLongFormatStdCallsign reports whether s is a std-call shape
-// that produces a c28 value in the std-call range (rather than the
-// hash range). See stdCallToC28 for the shape catalog.
-func isLongFormatStdCallsign(s string) bool {
-	switch len(s) {
-	case 5:
-		// 1-char prefix: [letter][digit][letter]{3}
-		return isLetter(s[0]) && isDigit(s[1]) && allLetters(s[2:])
-	case 6:
-		// 2-char prefix: [alnum]{2} ≥1-letter + [digit] + [letter]{3}
-		return allAlnum(s[:2]) && hasLetter(s[:2]) && isDigit(s[2]) && allLetters(s[3:])
-	}
-	return false
-}
-
-func isLetter(c byte) bool { return c >= 'A' && c <= 'Z' }
-func isDigit(c byte) bool  { return c >= '0' && c <= '9' }
 
 // boolBit converts a Go bool to its 1-bit numeric form for BitBuilder.
 func boolBit(v bool) uint64 {
@@ -677,19 +634,21 @@ func validateStdCallsign(call, field string) error {
 	return nil
 }
 
-// isStdCallsignShape reports whether s matches the FT8 standard-
-// callsign format per QEX paper §A:
+// stdCallPrefixLen reports the prefix length (1 or 2) of a std-shape
+// FT8 callsign per QEX paper §A:
 //
 //	[A-Z0-9]{1,2} + [0-9] + [A-Z]{1,3}
 //
 // with the constraint that at least one of the 1-2 prefix chars is
-// a letter. Length-3..6 and per-character alphabet are pre-checks;
-// this function only verifies the shape after those pass.
+// a letter. Returns 0 if the input doesn't match either prefix
+// length. The prefix length determines the digit's position (input
+// index 1 for 1-char prefix, index 2 for 2-char prefix) which
+// CallsignC28 uses to align the call to field position 3.
 //
-// Non-std calls (/P, /M, compound prefixes, etc.) return false here
-// and are routed to CallsignC58 by Layer 2 — they do not produce a
+// Non-std calls (/P, /M, compound prefixes, etc.) return 0 and are
+// routed to CallsignC58 by Layer 2 — they do not produce a
 // Type 1 message.
-func isStdCallsignShape(s string) bool {
+func stdCallPrefixLen(s string) int {
 	// Try prefix length 1 (must be a letter), then length 2 (>=1 letter).
 	for prefixLen := 1; prefixLen <= 2; prefixLen++ {
 		if len(s) < prefixLen+2 || len(s) > prefixLen+4 {
@@ -707,9 +666,16 @@ func isStdCallsignShape(s string) bool {
 		if len(suffix) < 1 || len(suffix) > 3 || !allLetters(suffix) {
 			continue
 		}
-		return true
+		return prefixLen
 	}
-	return false
+	return 0
+}
+
+// isStdCallsignShape reports whether s matches the FT8 standard-
+// callsign format. Thin wrapper around stdCallPrefixLen for callers
+// that only need the boolean answer.
+func isStdCallsignShape(s string) bool {
+	return stdCallPrefixLen(s) > 0
 }
 
 func allAlnum(s string) bool {

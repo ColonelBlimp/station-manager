@@ -30,21 +30,28 @@ const (
 	callsignAlphaPos4 = " ABCDEFGHIJKLMNOPQRSTUVWXYZ"           // 27 chars (used at positions 4, 5, 6)
 )
 
-// c28 nominal-range boundaries per QEX paper Table 7. The 28-bit
-// callsign code space is conceptually partitioned:
+// c28 range boundaries per QEX paper Appendix A Table 7. The 28-bit
+// callsign code space is partitioned into three disjoint regions:
 //
-//	[0, nTokens)                  → reserved for CQ / DE / QRZ +
-//	                                "CQ <suffix>" message words
-//	[nTokens, nTokens+max22)      → 22-bit hashes of non-standard calls
+//	[0, nTokens)                  → CQ / DE / QRZ + "CQ <suffix>"
+//	                                message-word tokens (Table 7
+//	                                rows 1..7)
+//	[nTokens, nTokens+max22)      → 22-bit hashes for non-standard
+//	                                callsigns (Table 7 "22-bit hash
+//	                                codes" row)
 //	[nTokens+max22, 2^28)         → standard amateur callsigns
+//	                                (Table 7 "Standard call signs"
+//	                                row)
 //
-// CallsignC28 emits values nominally from the third range, but
-// for short callsigns (3..4 chars) the algorithm's negative-index
-// handling can produce values that land INSIDE the 22-bit hash
-// range. That's not a collision: the FT8 protocol disambiguates
-// std-calls from hash codes via the message-type tag (i3/n3 bits)
-// in the surrounding 77-bit message, not by c28 range. The hash
-// encoder and the special-token encoder land in subsequent commits.
+// Per QEX Appendix A: "28 bits are enough to encode any standard
+// call sign uniquely." Every std-shape callsign (3..6 chars,
+// 1..2-char prefix + 1 digit + 1..3-char suffix) packs into the
+// third range via CallsignC28 with digit-position-3 alignment.
+// The 22-bit hash range is reserved for non-standard calls that
+// don't fit the std-call form (compound calls like PJ4/K1ABC,
+// special-event calls like YW18FIFA); those land here via
+// HashedCallC28 when they need to be referenced from a Type 1
+// c28 slot after a prior Type 4 has carried the full c58 spelling.
 const (
 	nTokens        = 2063592 // QEX Table 7: pre-callsign-space tokens
 	max22          = 1 << 22 // QEX Table 7: 22-bit hash range size (4194304)
@@ -53,74 +60,104 @@ const (
 )
 
 // CallsignC28 packs a standard amateur callsign into its 28-bit
-// code per QEX paper §A and the public-domain `std_call_to_c28.f90`
-// reference in QEX ref [14]. Returns the c28 value in the low 28
-// bits of the result.
+// code per QEX paper Appendix A and Table 7. Returns a value in
+// the std-call range [stdCallOffset, 2^28) for any valid std-shape
+// callsign of length 3..6.
 //
-// The input is right-justified to 6 characters internally (so 3..6
-// char callsigns are all handled). Per-position alphabet validation
-// is NOT performed: the reference algorithm intentionally allows
-// out-of-position-alphabet characters to produce negative indices,
-// and the c28 arithmetic absorbs them — that's how short callsigns
-// encode their length implicitly via the indexing scheme.
+// **Digit-position-3 alignment.** The std c28 packer's per-position
+// alphabets are:
 //
-// Right-justifies with leading spaces (matches Fortran's adjustr).
-// See CallsignC58's padding-asymmetry doc block for the comparative
-// layout across all four codec string primitives.
+//	pos 1: space + digit + letter   (37 chars)
+//	pos 2: digit + letter           (36 chars)
+//	pos 3: digit                    (10 chars)
+//	pos 4..6: space + letter        (27 chars)
 //
-// Validation that DOES happen:
+// Only pos 3 holds a digit, so the call's single digit must land
+// at field index 2 (0-indexed) regardless of whether the prefix is
+// 1 or 2 chars. The function detects the digit position in the
+// input (must be at input index 1 for a 1-char prefix or 2 for a
+// 2-char prefix per QEX §A) and left-pads with (2 - digitIdx)
+// spaces so the digit aligns to field pos 3, then right-pads to
+// 6 chars. Examples:
 //
-//   - Length must be 3..6 (the FT8 standard-callsign length range).
-//     Real std calls are prefix(1-2 chars) + digit + suffix(1-3 chars)
-//     = 3-6 chars total. Inputs shorter than 3 produce arithmetic
-//     values that don't correspond to any real callsign and are
-//     almost certainly call-site bugs; rejecting them noisily is
-//     better than silently producing meaningless c28 values.
-//   - Every character must appear in the broadest alphabet
-//     (callsignAlphaPos1 = space + 0-9 + A-Z). Characters outside
-//     it (lowercase letters, punctuation, non-ASCII) signal a bug
-//     at the call site — the caller should have validated callsign
-//     format upstream.
+//	"K1JT"   → " K1JT "    (1-char prefix, 1 leading + 1 trailing)
+//	"G3X"    → " G3X  "    (1-char prefix, 1 leading + 2 trailing)
+//	"K1ABC"  → " K1ABC"    (1-char prefix, 1 leading + 0 trailing)
+//	"AB1CDE" → "AB1CDE"    (2-char prefix, 0 padding)
+//	"AB1CD"  → "AB1CD "    (2-char prefix, 0 leading + 1 trailing)
+//	"VK7MO"  → "VK7MO "    (2-char prefix, 5-char call, 1 trailing)
 //
-// What the caller must do upstream:
+// With this alignment every position holds a character from its
+// alphabet — no negative-index arithmetic, no hash-range overlap.
+// Every std-shape input produces a value ≥ stdCallOffset, decoded
+// cleanly by C28ToCallsign.
 //
-//   - Verify the input matches the standard-callsign format
-//     ([A-Z0-9]{1,2} + [0-9] + [A-Z]{1,3}, at least one letter in
-//     the prefix). Calls that don't match the format go through
-//     CallsignC58 instead.
-//   - Convert to uppercase. This function is case-sensitive; "g4abc"
-//     panics, "G4ABC" works.
-//   - Strip trailing whitespace. Leading spaces are absorbed by the
-//     right-justify pad (they're indistinguishable from omission),
-//     but a trailing space is content — `CallsignC28("K1JT ")`
-//     produces a different c28 than `CallsignC28("K1JT")` because
-//     the trailing space shifts the call one position left in the
-//     padded layout.
+// **Why this matters.** The public-domain `std_call_to_c28.f90`
+// reference in QEX ref [14] uses Fortran's `adjustr` (right-justify
+// only) and is incomplete: it only handles 5-char-1-prefix and
+// 6-char-2-prefix shapes. Shorter calls and 5-char-2-prefix calls
+// produce negative per-position indices under adjustr, yielding
+// arithmetic byproducts that land inside the 22-bit hash range.
+// That contradicts QEX Appendix A's invariant that "28 bits are
+// enough to encode any standard call sign uniquely". The
+// digit-aligned algorithm here pins to the QEX paper's spec, not
+// the reference program's gap.
+//
+// Validation:
+//
+//   - Length must be 3..6 (FT8 std-call range).
+//   - Every character must be [0-9A-Z] (uppercase).
+//   - Exactly one digit, at input index 1 or 2 (prefix len 1 or 2).
+//
+// All three checks panic on violation. Callers are expected to have
+// passed validateStdCallsign upstream; the panics catch contract
+// breaches rather than turning into silent wire corruption.
 //
 // Returns uint32 even though the result fits in 28 bits — uint16
-// is too small (28 bits don't fit), and the 4 high bits will be
-// zero for any in-range input.
+// is too small, and the 4 high bits are zero for any in-range
+// input.
 func CallsignC28(call string) uint32 {
 	const op = "codec.CallsignC28"
 	if len(call) < 3 || len(call) > 6 {
 		panic(op + ": callsign length must be 3..6 (real FT8 std calls are prefix+digit+suffix), got len " + strconv.Itoa(len(call)))
 	}
+
+	// Per-character alphabet check: every char must be uppercase
+	// ASCII letter or digit. Non-[0-9A-Z] inputs (lowercase, space,
+	// punctuation) are caller-side bugs — std callsigns don't
+	// contain such chars by definition. Panic so the caller learns
+	// of the contract violation rather than getting silent corruption.
 	for i := range len(call) {
-		if strings.IndexByte(callsignAlphaPos1, call[i]) < 0 {
-			panic(op + ": character at index " + strconv.Itoa(i) + " (" + string(call[i]) + ") not in std-call alphabet (space + 0-9 + A-Z)")
+		c := call[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
+			panic(op + ": character at index " + strconv.Itoa(i) + " (" + string(c) + ") not in std-call alphabet (0-9, A-Z); call=" + call)
 		}
 	}
 
-	// Right-justify to 6 chars with leading spaces. The reference
-	// uses Fortran's adjustr; this is the same shape.
+	// Determine the std-shape prefix length (1 or 2). The prefix
+	// length identifies which char is the "decimal digit between
+	// prefix and suffix" per QEX §A — distinct from any digits that
+	// may appear inside a 2-char prefix (e.g. "9V1ABC" or "7Q5MLV"
+	// where the prefix's first char is itself a digit). Without
+	// this distinction, multi-digit inputs would be ambiguous.
+	prefixLen := stdCallPrefixLen(call)
+	if prefixLen == 0 {
+		panic(op + ": " + call + " is not a valid std-callsign shape (need 1-2 char prefix with ≥1 letter, then digit, then 1-3 letter suffix); pre-validate via validateStdCallsign")
+	}
+	digitIdx := prefixLen
+
+	// Left-pad so the digit lands at field index 2, then right-pad
+	// to length 6 with spaces. leadingSpaces is either 1 (1-char
+	// prefix) or 0 (2-char prefix).
 	var padded [6]byte
 	for i := range padded {
 		padded[i] = ' '
 	}
-	copy(padded[6-len(call):], call)
+	leadingSpaces := 2 - digitIdx
+	copy(padded[leadingSpaces:], call)
 
-	// Per-position lookups. Out-of-position-alphabet characters
-	// return -1; that's intentional per the reference (see doc above).
+	// Per-position lookups. With digit-aligned padding every position
+	// holds a char from its alphabet, so all indices are non-negative.
 	i1 := strings.IndexByte(callsignAlphaPos1, padded[0])
 	i2 := strings.IndexByte(callsignAlphaPos2, padded[1])
 	i3 := strings.IndexByte(callsignAlphaPos3, padded[2])
@@ -128,19 +165,17 @@ func CallsignC28(call string) uint32 {
 	i5 := strings.IndexByte(callsignAlphaPos4, padded[4])
 	i6 := strings.IndexByte(callsignAlphaPos4, padded[5])
 
-	// Compute c28 in signed int — i2..i4 may be -1 by design.
-	// The arithmetic absorbs the negatives; the final value always
-	// lands in [0, 2^28) for any input that passed the alpha-pos1
-	// validation above.
-	//
+	if i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0 || i5 < 0 || i6 < 0 {
+		// Unreachable given the alignment + alphabet checks above;
+		// defensive panic catches any future regression in the
+		// alignment math before it corrupts wire output.
+		panic(op + ": alignment regression, negative alphabet index for call=" + call + " padded=" + string(padded[:]))
+	}
+
 	// mN is the weight applied to position N's index — i.e. the
 	// product of the alphabet sizes of all positions *after* N.
-	// Named with matching indices so the expression below reads
-	// "weight for position N times index for position N" without
-	// off-by-one mental gymnastics. Using len(alphabet) rather than
-	// literal sizes couples the weights to the alphabets at compile
-	// time — an alphabet edit that wasn't reflected here would still
-	// compile but produce wrong c28 values; this way it can't drift.
+	// Using len(alphabet) rather than literal sizes couples the
+	// weights to the alphabets at compile time.
 	const (
 		m1 = len(callsignAlphaPos2) * len(callsignAlphaPos3) * stdCallAlphaSz * stdCallAlphaSz * stdCallAlphaSz
 		m2 = len(callsignAlphaPos3) * stdCallAlphaSz * stdCallAlphaSz * stdCallAlphaSz
@@ -157,15 +192,12 @@ func CallsignC28(call string) uint32 {
 		m5*i5 +
 		m6*i6
 
-	// Belt-and-braces output-range guard. The documented invariant
-	// is n28 in [0, 2^28); a regression that produced a negative or
-	// out-of-range value would silently wrap through uint32(n28) and
-	// corrupt downstream message packing, which is exactly the class
-	// of bug that's a nightmare to chase in FT8 decode output. One
-	// int compare per call is negligible vs. catching a corruption
-	// at the boundary.
-	if n28 < 0 || n28 >= 1<<CallsignBits {
-		panic(op + ": internal arithmetic regression, n28=" + strconv.Itoa(n28) + " out of [0, 2^28)")
+	// Belt-and-braces output-range guard. With digit alignment and
+	// all-non-negative indices, n28 is provably in [stdCallOffset,
+	// 2^28). A regression here would corrupt wire packing silently —
+	// one int compare per call is negligible vs catching that early.
+	if n28 < stdCallOffset || n28 >= 1<<CallsignBits {
+		panic(op + ": internal arithmetic regression, n28=" + strconv.Itoa(n28) + " out of [stdCallOffset, 2^28)")
 	}
 	return uint32(n28)
 }
@@ -192,48 +224,43 @@ const (
 	// 22-bit callsign hash. C28ToCallsign returns ""; original-call
 	// recovery requires a running hash table populated from prior
 	// decodes (the FT8 service layer's responsibility, not the
-	// codec's). Per QEX §A, short std calls (3-4 char and 5-char-2-
-	// prefix calls) also produce values in this range via
-	// HashedCallC28 — their recovery uses the same hash table.
+	// codec's). Per QEX Appendix A Table 7 this range is reserved
+	// for hashes of NON-STANDARD callsigns (compound calls like
+	// PJ4/K1ABC, special-event calls like YW18FIFA) — standard calls
+	// of any length 3..6 pack into the C28KindStdCall range, not
+	// here.
 	C28KindHash22
 
 	// C28KindStdCall indicates c28 ∈ [stdCallOffset, 2^28) — a
-	// standard amateur callsign produced via CallsignC28 with all
-	// non-negative per-position indices. Only "long-format" std
-	// calls (5-char-1-prefix and 6-char-2-prefix) land here cleanly;
-	// other shapes produce hash-range values and must go through
-	// HashedCallC28. C28ToCallsign returns the recovered callsign.
+	// standard amateur callsign. Per QEX Appendix A "28 bits are
+	// enough to encode any standard call sign uniquely"; every
+	// std-shape input (1..2 char prefix + 1 digit + 1..3 char suffix,
+	// length 3..6) lands here via CallsignC28's digit-position-3
+	// alignment. C28ToCallsign returns the recovered callsign.
 	C28KindStdCall
 )
 
 // C28ToCallsign decodes a c28 value back to its string form by
 // inverting CallsignC28. The C28Kind discriminator tells the caller
 // which partition of the c28 value space the input occupied per
-// QEX paper Table 7. Only C28KindStdCall yields a non-empty
-// recovered string from this function alone — C28KindToken and
-// C28KindHash22 callers need additional state (token table or
+// QEX paper Appendix A Table 7. Only C28KindStdCall yields a non-
+// empty recovered string from this function alone — C28KindToken
+// and C28KindHash22 callers need additional state (token table or
 // 22-bit hash table) to recover the original message fragment.
 //
-// For C28KindStdCall, the inverse is a straightforward mixed-base
-// divmod against the per-position alphabet sizes. The std-call
-// range [stdCallOffset, 2^28) guarantees all forward indices were
-// non-negative (the negative-index cases that arise from short-call
-// right-padding produce values below stdCallOffset, in the hash
-// range), so no shift is needed and each extracted index lands
-// directly in [0, posSize) for the corresponding alphabet lookup.
+// For C28KindStdCall, the inverse is a mixed-base divmod against
+// the per-position alphabet sizes, recovering the 6-char padded
+// form. CallsignC28 uses digit-position-3 alignment (left-pad to
+// align the digit, then right-pad to length 6), so the padded form
+// may have leading and/or trailing space padding; the returned
+// string strips both via TrimSpace.
 //
-// The returned callsign is the 6-char right-padded form with
-// leading spaces stripped. For tuples that don't correspond to a
-// real callsign shape (e.g. wire bits decoded from a corrupted
-// message), the string is the arithmetic inverse of the bits and
-// may look like a non-callsign — the codec doesn't classify shapes.
-//
-// Trailing spaces in the recovered string are preserved (the pos4..6
-// alphabet includes space, so trailing spaces are valid characters
-// at those positions, not padding). Such strings will NOT round-trip
-// through CallsignC28 because that function rejects space characters
-// in the input — they originate only from corrupted wire input or
-// hand-constructed bit patterns, not from real-callsign encodings.
+// For c28 values not produced by a real CallsignC28 encode (hand-
+// built bit patterns, corrupted wire), the divmod still yields a
+// 6-char string but the digit may not land at position 3 and the
+// shape may not be a valid std-callsign. The codec is bit-faithful:
+// it returns whatever the arithmetic produces. Format-layer
+// validation rejects out-of-shape recovered calls.
 func C28ToCallsign(c28 uint32) (string, C28Kind) {
 	if c28 < nTokens {
 		return "", C28KindToken
@@ -294,5 +321,8 @@ func c28ToStdCallsign(c28 uint32) string {
 	padded[4] = callsignAlphaPos4[i5]
 	padded[5] = callsignAlphaPos4[i6]
 
-	return strings.TrimLeft(string(padded[:]), " ")
+	// Both leading and trailing spaces are alignment padding (digit-
+	// position-3 alignment produces padding on either side or both);
+	// trim them to recover the operator-visible callsign.
+	return strings.TrimSpace(string(padded[:]))
 }

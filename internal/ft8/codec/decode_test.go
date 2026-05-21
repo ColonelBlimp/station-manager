@@ -37,21 +37,36 @@ func TestC28ToCallsign_Partitions(t *testing.T) {
 }
 
 // TestC28ToCallsign_StdCall_RoundTrip verifies that CallsignC28 →
-// C28ToCallsign recovers the original callsign exactly, for the
-// long-format std-call shapes (5-char-1-prefix and 6-char-2-prefix).
+// C28ToCallsign recovers the original callsign exactly, for every
+// std-shape callsign length and prefix structure per QEX paper §A.
+// Per Appendix A Table 7, all std-shape calls pack into the
+// [stdCallOffset, 2^28) range and round-trip cleanly — no length
+// or prefix-shape carve-outs (the Phase 2C "short calls go through
+// HashedCallC28" workaround was a spec-incorrect routing decision
+// inherited from the ref [14] reference program's incomplete
+// digit alignment, fixed in finding #1).
 func TestC28ToCallsign_StdCall_RoundTrip(t *testing.T) {
 	cases := []string{
+		// 3-char (1-char prefix + digit + 1-char suffix)
+		"M1A", "G3X", "K9Z",
+		// 4-char-1-prefix
+		"K1JT", "W2AB", "G4XY",
+		// 4-char-2-prefix
+		"AB1C", "2E0X",
 		// 5-char-1-prefix: [letter][digit][letter]{3}
 		"G4ABC", "K1ABC", "W1ABC", "F5RXL", "K1JTR",
+		// 5-char-2-prefix (the case Phase 2C deliberately routed
+		// through HashedCallC28 — now packs correctly per QEX §A)
+		"VK7MO", "AB1CD", "2E0XY", "JA1XY",
 		// 6-char-2-prefix: [alnum]{2}≥1-letter [digit] [letter]{3}
 		"AB1CDE", "2E0XYZ", "9V1BCD", "KH1ABC", "JA1XYZ", "ZZ0ZZZ",
-		// NB: VK7MO is 5-char-2-prefix (VK + 7 + MO) — routes
-		// through HashedCallC28, not CallsignC28; covered by the
-		// stdCallToC28 routing tests, not here.
 	}
 	for _, call := range cases {
 		t.Run(call, func(t *testing.T) {
 			c28 := CallsignC28(call)
+			if c28 < stdCallOffset {
+				t.Errorf("CallsignC28(%q) = %d below stdCallOffset (%d) — landed in token or hash partition, violates QEX Appendix A invariant", call, c28, stdCallOffset)
+			}
 			got, kind := C28ToCallsign(c28)
 			if kind != C28KindStdCall {
 				t.Fatalf("C28ToCallsign(%d).kind = %v, want C28KindStdCall", c28, kind)
@@ -69,15 +84,16 @@ func TestC28ToCallsign_StdCall_RoundTrip(t *testing.T) {
 // pins the arithmetic, not the realism.
 func TestC28ToCallsign_StdCall_PartitionBoundary(t *testing.T) {
 	// At stdCallOffset all indices are 0: pos1=' ', pos2='0',
-	// pos3='0', pos4..6=' '. Padded " 00   "; TrimLeft strips the
-	// one leading space; result has trailing spaces (they're valid
-	// alphabet entries at pos4..6, not padding).
+	// pos3='0', pos4..6=' '. Padded " 00   "; TrimSpace strips
+	// both the leading and trailing space padding (under digit-
+	// position-3 alignment the inverse symmetrically removes
+	// alignment padding from both sides).
 	got, kind := C28ToCallsign(stdCallOffset)
 	if kind != C28KindStdCall {
 		t.Errorf("c28=stdCallOffset kind=%v, want StdCall", kind)
 	}
-	if got != "00   " {
-		t.Errorf("c28=stdCallOffset call=%q, want %q", got, "00   ")
+	if got != "00" {
+		t.Errorf("c28=stdCallOffset call=%q, want %q", got, "00")
 	}
 
 	// At max c28 (= 2^28-1) all indices are alphabet-max:
@@ -172,72 +188,50 @@ func TestG15ToGrid4_PanicsOutOfRange(t *testing.T) {
 	G15ToGrid4(0x8000)
 }
 
-// ---- stdCallToC28 (Phase 2C encoder fix) -----------------------------------
+// ---- CallsignC28 std-range invariant (finding #1) --------------------------
 
-// TestStdCallToC28_RoutingBasedOnShape pins down the routing
-// decision: long-format calls go through CallsignC28, others
-// through HashedCallC28. The choice is load-bearing for
-// round-trippability and for hash-table lookup at the receiver.
-func TestStdCallToC28_RoutingBasedOnShape(t *testing.T) {
-	cases := []struct {
-		name     string
-		call     string
-		wantPath string // "callsign" or "hash"
-	}{
-		// Long-format (5-char-1-prefix): routes through CallsignC28.
-		{"5char_1prefix_G4ABC", "G4ABC", "callsign"},
-		{"5char_1prefix_K1JTR", "K1JTR", "callsign"},
-		{"5char_1prefix_W9XYZ", "W9XYZ", "callsign"},
-		// Long-format (6-char-2-prefix): routes through CallsignC28.
-		{"6char_2prefix_KH1ABC", "KH1ABC", "callsign"},
-		{"6char_2prefix_2E0XYZ", "2E0XYZ", "callsign"},
-		{"6char_2prefix_9V1BCD", "9V1BCD", "callsign"},
-		// Short formats: route through HashedCallC28 — produce the
-		// real 22-bit hash + nTokens, not the negative-index
-		// arithmetic byproduct of CallsignC28.
-		{"3char_G3X", "G3X", "hash"},
-		{"4char_1prefix_K1JT", "K1JT", "hash"},
-		{"4char_2prefix_AB1C", "AB1C", "hash"},
-		{"5char_2prefix_AB1CD", "AB1CD", "hash"},
+// TestCallsignC28_AllStdShapesLandInStdRange is the regression
+// pin for finding #1: per QEX paper Appendix A Table 7, every
+// standard-shape callsign of any length 3..6 must pack into the
+// [stdCallOffset, 2^28) range. The earlier Phase 2C routing layer
+// dispatched short calls to HashedCallC28 instead, producing values
+// in the [nTokens, stdCallOffset) range — that contradicts the
+// QEX invariant "28 bits are enough to encode any standard call
+// sign uniquely" and broke first-contact interop because the
+// receiver couldn't decode a short call without prior hash-table
+// state.
+//
+// This test fails fast if CallsignC28 ever drifts back into the
+// hash partition for any std-shape input.
+func TestCallsignC28_AllStdShapesLandInStdRange(t *testing.T) {
+	// Calls below cover every std-shape length/prefix combination
+	// per QEX paper §A: 1-char prefix (3-5 chars) and 2-char prefix
+	// (4-6 chars), with letter-letter, letter-digit, and digit-letter
+	// 2-char prefixes.
+	calls := []string{
+		// 3-char (1-char prefix)
+		"M1A", "G3X", "K9Z",
+		// 4-char-1-prefix
+		"K1JT", "W2AB",
+		// 4-char-2-prefix
+		"AB1C", "2E0X",
+		// 5-char-1-prefix
+		"G4ABC", "K1ABC", "W9XYZ", "F5RXL",
+		// 5-char-2-prefix
+		"VK7MO", "AB1CD", "JA1XY",
+		// 6-char-2-prefix (incl. digit-led prefix)
+		"AB1CDE", "2E0XYZ", "9V1BCD", "KH1ABC", "7Q5MLV", "PJ4ABC",
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := stdCallToC28(tc.call)
-			switch tc.wantPath {
-			case "callsign":
-				want := CallsignC28(tc.call)
-				if got != want {
-					t.Errorf("stdCallToC28(%q) = %d, want CallsignC28 result %d", tc.call, got, want)
-				}
-				if got < stdCallOffset {
-					t.Errorf("stdCallToC28(%q) = %d should be in std-call range [stdCallOffset, 2^28)", tc.call, got)
-				}
-			case "hash":
-				want := HashedCallC28(tc.call)
-				if got != want {
-					t.Errorf("stdCallToC28(%q) = %d, want HashedCallC28 result %d", tc.call, got, want)
-				}
-				if got < nTokens || got >= stdCallOffset {
-					t.Errorf("stdCallToC28(%q) = %d should be in hash range [nTokens, stdCallOffset)", tc.call, got)
-				}
+	for _, call := range calls {
+		t.Run(call, func(t *testing.T) {
+			c28 := CallsignC28(call)
+			if c28 < stdCallOffset {
+				t.Errorf("CallsignC28(%q) = %d below stdCallOffset (%d) — short std call leaked into hash partition, violates QEX Appendix A Table 7 \"Standard call signs\" range invariant", call, c28, stdCallOffset)
+			}
+			if c28 >= 1<<CallsignBits {
+				t.Errorf("CallsignC28(%q) = %d exceeds 2^28 — std-call range upper bound violated", call, c28)
 			}
 		})
-	}
-}
-
-// TestStdCallToC28_K1JTUsesActualHash pins the specific failure mode
-// that motivated the Phase 2C encoder fix: K1JT MUST NOT encode via
-// CallsignC28's negative-index byproduct (6040944), which would be
-// indistinguishable from A1JT, B1JT, etc. The correct encoding is
-// HashedCallC28("K1JT") = 4159881 — K1JT's actual 22-bit hash with
-// the nTokens bias.
-func TestStdCallToC28_K1JTUsesActualHash(t *testing.T) {
-	got := stdCallToC28("K1JT")
-	if got != 4159881 {
-		t.Errorf("stdCallToC28(%q) = %d, want %d (HashedCallC28 path)", "K1JT", got, 4159881)
-	}
-	if got == 6040944 {
-		t.Errorf("stdCallToC28(%q) = 6040944 — that's CallsignC28's negative-index byproduct, NOT K1JT's real hash. Encoder fix regressed.", "K1JT")
 	}
 }
 
@@ -338,25 +332,70 @@ func TestDecodeMessage_RoundTripLongCalls(t *testing.T) {
 	}
 }
 
-// TestDecodeMessage_ShortCallReturnsHashError documents the Phase
-// 2C limitation: a Type 1 message with a short callsign (encoded
-// via HashedCallC28) decodes to ErrCallsignNeedsHashLookup. The
-// FT8 service layer (Phase 4) will catch this sentinel and resolve
-// the call via its running hash table.
-func TestDecodeMessage_ShortCallReturnsHashError(t *testing.T) {
-	msg := Message{
-		Type:  MessageTypeStd,
-		Call1: "K1JT", // 4-char short call → HashedCallC28 → hash range
-		Call2: "G4ABC",
-		Grid:  "FN20",
+// TestDecodeMessage_ShortStdCallRoundTrips is the regression pin
+// for finding #1: a Type 1 message with a short std callsign (e.g.
+// K1JT, G3X, M1A) must Encode → Decode losslessly, with no
+// hash-table dependency. Per QEX Appendix A every std-shape
+// callsign packs into c28 directly; the receiver recovers the
+// call from the wire bits alone.
+func TestDecodeMessage_ShortStdCallRoundTrips(t *testing.T) {
+	cases := []Message{
+		{Type: MessageTypeStd, Call1: "K1JT", Call2: "G4ABC", Grid: "FN20"},
+		{Type: MessageTypeStd, Call1: "G3X", Call2: "K1ABC", Grid: "IO91"},
+		{Type: MessageTypeStd, Call1: "M1A", Call2: "W9XYZ", Grid: "FN20"},
+		{Type: MessageTypeStd, Call1: "VK7MO", Call2: "K1JT", Grid: "QF22"},
+		{Type: MessageTypeStd, Call1: "AB1CD", Call2: "G3X", Grid: "FN42"},
 	}
-	bits, err := EncodeMessage(msg)
-	if err != nil {
-		t.Fatalf("EncodeMessage: %v", err)
+	for _, msg := range cases {
+		t.Run(msg.Call1+"_"+msg.Call2, func(t *testing.T) {
+			bits, err := EncodeMessage(msg)
+			if err != nil {
+				t.Fatalf("EncodeMessage: %v", err)
+			}
+			got, err := DecodeMessage(bits)
+			if err != nil {
+				t.Fatalf("DecodeMessage: %v — short std calls must NOT require hash-table state per QEX Appendix A Table 7", err)
+			}
+			if got.Call1 != msg.Call1 {
+				t.Errorf("Call1 round-trip: got %q, want %q", got.Call1, msg.Call1)
+			}
+			if got.Call2 != msg.Call2 {
+				t.Errorf("Call2 round-trip: got %q, want %q", got.Call2, msg.Call2)
+			}
+		})
 	}
-	_, err = DecodeMessage(bits)
+}
+
+// TestDecodeMessage_HashRangeC28StillNeedsLookup pins that the
+// ErrCallsignNeedsHashLookup sentinel still fires for c28 values
+// genuinely in the hash partition [nTokens, stdCallOffset). The
+// hash range exists for non-standard callsigns (compound calls
+// transmitted via Type 4 c58, then referenced via h22 in later
+// Type 1 c28 slots); finding #1 removed short-std-call routing
+// from the hash range, but didn't remove the hash partition itself.
+func TestDecodeMessage_HashRangeC28StillNeedsLookup(t *testing.T) {
+	// Plant a hash-range c28 directly. nTokens=2063592,
+	// stdCallOffset=6257896; 3000000 is mid-partition.
+	hashC28 := uint32(3000000)
+	bits := make([]byte, MessageBits)
+	for i := range CallsignBits {
+		bits[i] = byte((hashC28 >> (CallsignBits - 1 - i)) & 1)
+	}
+	for i := range CallsignBits {
+		bits[29+i] = byte((CallsignC28("G4ABC") >> (CallsignBits - 1 - i)) & 1)
+	}
+	g15 := Grid4ToG15("FN20")
+	for i := range G15Bits {
+		bits[59+i] = byte((g15 >> (G15Bits - 1 - i)) & 1)
+	}
+	// i3 = 1 (Type 1) — top 3 bits via the existing layout.
+	bits[74] = 0
+	bits[75] = 0
+	bits[76] = 1
+
+	_, err := DecodeMessage(bits)
 	if !errors.Is(err, ErrCallsignNeedsHashLookup) {
-		t.Errorf("DecodeMessage(short-call msg) err=%v, want ErrCallsignNeedsHashLookup", err)
+		t.Errorf("DecodeMessage(hash-range c28) err=%v, want ErrCallsignNeedsHashLookup", err)
 	}
 }
 
