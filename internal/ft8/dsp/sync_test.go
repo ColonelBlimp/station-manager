@@ -221,7 +221,7 @@ func TestSync_RejectsInvalidSpec(t *testing.T) {
 // architecture) or a fallback relative path to the operator's
 // sibling go-ft8 research repo.
 func TestSync_RealCapture_SmokeTest(t *testing.T) {
-	var wavPath string
+	wavPath := ""
 	if env := os.Getenv("FT8_TEST_CORPUS"); env != "" {
 		p := filepath.Join(env, "ft8_cap1.wav")
 		if _, err := os.Stat(p); err == nil {
@@ -229,13 +229,15 @@ func TestSync_RealCapture_SmokeTest(t *testing.T) {
 		}
 	}
 	if wavPath == "" {
-		fallback := filepath.Join("..", "..", "..", "..", "go-ft8", "testdata", "ft8_cap1.wav")
-		if _, err := os.Stat(fallback); err == nil {
-			wavPath = fallback
+		// Vendored fixture is one level up at internal/ft8/testdata/.
+		// See internal/ft8/testdata/README.md for provenance.
+		vendored := filepath.Join("..", "testdata", "ft8_cap1.wav")
+		if _, err := os.Stat(vendored); err == nil {
+			wavPath = vendored
 		}
 	}
 	if wavPath == "" {
-		t.Skip("no FT8 capture fixture available; set FT8_TEST_CORPUS or have go-ft8 sibling repo present")
+		t.Skip("no FT8 capture fixture available; set FT8_TEST_CORPUS or vendor internal/ft8/testdata/")
 	}
 
 	data, err := audio.ReadWAV(wavPath)

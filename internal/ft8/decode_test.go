@@ -149,21 +149,9 @@ func TestDecode_SyntheticRoundTrip(t *testing.T) {
 //
 // Skipped gracefully when the fixture is missing.
 func TestDecode_RealCapture_SmokeTest(t *testing.T) {
-	var wavPath string
-	if env := os.Getenv("FT8_TEST_CORPUS"); env != "" {
-		p := filepath.Join(env, "ft8_cap1.wav")
-		if _, err := os.Stat(p); err == nil {
-			wavPath = p
-		}
-	}
+	wavPath := resolveCapturePath(t, "ft8_cap1.wav")
 	if wavPath == "" {
-		fallback := filepath.Join("..", "..", "..", "go-ft8", "testdata", "ft8_cap1.wav")
-		if _, err := os.Stat(fallback); err == nil {
-			wavPath = fallback
-		}
-	}
-	if wavPath == "" {
-		t.Skip("no FT8 capture fixture available; set FT8_TEST_CORPUS or have go-ft8 sibling repo present")
+		t.Skip("no FT8 capture fixture available; set FT8_TEST_CORPUS or vendor testdata/")
 	}
 
 	data, err := audio.ReadWAV(wavPath)
@@ -187,4 +175,30 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 	// signal that the sensitivity needs tuning (sync threshold,
 	// L_j scale K, fine-frequency search, etc.) and informs the
 	// next-session work.
+}
+
+// resolveCapturePath returns the path to a vendored or operator-
+// supplied FT8 capture fixture, or "" if none is reachable.
+//
+// Resolution order:
+//  1. $FT8_TEST_CORPUS/<name> — operator override for pointing tests
+//     at a larger corpus outside the repo.
+//  2. Vendored fixture in this package's testdata/ — the default
+//     CI-friendly path. See internal/ft8/testdata/README.md for the
+//     three fixtures' provenance.
+//
+// Returns "" when neither resolves; callers should t.Skip on that.
+func resolveCapturePath(t *testing.T, name string) string {
+	t.Helper()
+	if env := os.Getenv("FT8_TEST_CORPUS"); env != "" {
+		p := filepath.Join(env, name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	vendored := filepath.Join("testdata", name)
+	if _, err := os.Stat(vendored); err == nil {
+		return vendored
+	}
+	return ""
 }
