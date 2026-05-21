@@ -272,10 +272,19 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		var foundMsg codec.Message
 		decoded := false
 
-		// Outer loop: fine-frequency retries. Inner loop:
-		// fine-timing retries at the current frequency. Both
-		// loops short-circuit on first successful decode — easy
-		// candidates pay only the coarse-coarse cost.
+		// Outer loop: fine-frequency retries. Inner loop: fine-
+		// timing retries at the current frequency. Each combination
+		// runs BP, falling back to OSD on BP failure. Both loops
+		// short-circuit on first successful decode — easy candidates
+		// pay only the coarse-coarse cost.
+		//
+		// Empirical note (Session 80): OSD-at-every-variant catches
+		// ~16 more decodes across the 3 fixtures than OSD-only-at-
+		// coarse would, because the LLRs differ per variant and OSD
+		// recovery is variant-specific. The cost is per-variant
+		// osdMRBSetup allocation; we optimise that via the codec
+		// package's reusable OSDScratch instead of by running OSD
+		// less often.
 	freqRetry:
 		for _, fOffset := range fineFreqOffsets {
 			baseband := dsp.DownsampleFromSpectrumWithPlan(spectrum, c.Freq+fOffset, inversePlan)
