@@ -26,6 +26,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ericlagergren/decimal v0.0.0-20190420051523-6335edbaa640 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
+	github.com/gen2brain/malgo v0.11.25 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/gofrs/uuid v4.2.0+incompatible // indirect
