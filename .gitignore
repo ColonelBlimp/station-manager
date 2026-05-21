@@ -27,3 +27,4 @@ config.json
 # Local reference materials (papers, specs, datasheets). ARRL-copyright
 # QEX paper etc. lives here for Claude / operator reference; not committed.
 /references/
+*.test

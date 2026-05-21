@@ -162,59 +162,60 @@ func TestDecode_SyntheticRoundTrip(t *testing.T) {
 }
 
 // TestDecode_RealCapture_SmokeTest exercises the full Decode
-// pipeline on a real WSJT-X-recorded capture (ft8_cap1.wav from
-// the operator's go-ft8 testdata) when the fixture is present.
-// Logs whatever Decode returns — this is the diagnostic moment
-// that tells us whether our clean-room spec implementation finds
-// real FT8 signals, and how the count compares to WSJT-X's 11
-// decodes from the same audio.
+// pipeline on each of the three vendored WSJT-X captures. Each
+// capture has a known WSJT-X-2.7.0 main-loop decode count (cap1=11,
+// cap2=14, cap3=23 per testdata/README.md); we record SM's count
+// alongside as a regression baseline. Drops below baseline fail
+// the test; sensitivity improvements that lift the count above
+// baseline are bumped in via this test's floor constants.
 //
-// Skipped gracefully when the fixture is missing.
+// Skipped per-capture when the fixture is missing.
 func TestDecode_RealCapture_SmokeTest(t *testing.T) {
-	wavPath := resolveCapturePath(t, "ft8_cap1.wav")
-	if wavPath == "" {
-		t.Skip("no FT8 capture fixture available; set FT8_TEST_CORPUS or vendor testdata/")
+	cases := []struct {
+		// name is the WAV file vendored under testdata/.
+		name string
+		// wsjtxDecodes is WSJT-X 2.7.0 main-loop's decode count on
+		// this capture, from testdata/README.md. Reference only —
+		// we don't expect parity with a clean-room implementation.
+		wsjtxDecodes int
+		// minDecodes is SM's regression-floor baseline. Captured
+		// post-Phase-1-optimization (Session 80, commit 7f0cab02):
+		// the FFT-caching change doesn't affect decode count, only
+		// runtime. Bump when sensitivity improvements (OSD, fine-
+		// freq, fine-timing, K-scale) land.
+		minDecodes int
+	}{
+		{"ft8_cap1.wav", 11, 1},
+		{"ft8_cap2.wav", 14, 4},
+		{"ft8_cap3.wav", 23, 7},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wavPath := resolveCapturePath(t, tc.name)
+			if wavPath == "" {
+				t.Skipf("fixture %s not available; set FT8_TEST_CORPUS or vendor testdata/", tc.name)
+			}
+			data, err := audio.ReadWAV(wavPath)
+			if err != nil {
+				t.Fatalf("ReadWAV(%q): %v", wavPath, err)
+			}
+			if data.SampleRate != dsp.Fs {
+				t.Fatalf("sample rate = %d, want %g", data.SampleRate, dsp.Fs)
+			}
+			if data.Channels != 1 {
+				t.Fatalf("channels = %d, want 1 (mono)", data.Channels)
+			}
 
-	data, err := audio.ReadWAV(wavPath)
-	if err != nil {
-		t.Fatalf("ReadWAV(%q): %v", wavPath, err)
-	}
-	if data.SampleRate != dsp.Fs {
-		t.Fatalf("sample rate = %d, want %g", data.SampleRate, dsp.Fs)
-	}
-	if data.Channels != 1 {
-		t.Fatalf("channels = %d, want 1 (mono)", data.Channels)
-	}
-
-	results := Decode(data.Samples, DecodeOptions{})
-	t.Logf("ft8_cap1.wav: decoded %d messages (WSJT-X 2.7.0 finds 11)", len(results))
-	for i, d := range results {
-		t.Logf("  [%d] %7.2f Hz  %+5.2f s  sync=%5.2f  %q", i, d.Freq, d.DT, d.SyncPower, d.Text)
-	}
-	// **Regression floor** — finding #3 from the post-Session-78
-	// review: the previous version of this test only t.Logf'd the
-	// count, so a regression to zero would still pass. Pin the
-	// current decode count as a minimum threshold; bump when
-	// sensitivity improvements land.
-	//
-	// The 1 baseline = the post-finding-#4 result on ft8_cap1.wav:
-	// `SV2SIH ES2AJ -16` at 1862.5 Hz. Before finding #4 fixed the
-	// float-leaky sync dedup, there was a spurious second decode
-	// (`VE1WT K4GBI 73` at 1309.4 Hz DT=-0.32 with weak sync power
-	// 3.58) that survived only because float-arithmetic rounding
-	// let it past the dedup window. Its stronger near-twin
-	// (DT=-0.40, sync 8.00) is what's left after integer dedup,
-	// and the coarse-DT misalignment prevents it from decoding —
-	// fine-timing alignment is the next-session work that should
-	// recover it.
-	//
-	// WSJT-X 2.7.0 finds 11 in this file; our 1/11 baseline is the
-	// floor that sensitivity work will lift.
-	const ft8Cap1MinDecodes = 1
-	if len(results) < ft8Cap1MinDecodes {
-		t.Errorf("ft8_cap1.wav decoded %d messages; baseline floor is %d. A drop below baseline indicates a regression in the audio→messages pipeline.",
-			len(results), ft8Cap1MinDecodes)
+			results := Decode(data.Samples, DecodeOptions{})
+			t.Logf("%s: decoded %d messages (WSJT-X 2.7.0 finds %d)", tc.name, len(results), tc.wsjtxDecodes)
+			for i, d := range results {
+				t.Logf("  [%d] %7.2f Hz  %+5.2f s  sync=%5.2f  %q", i, d.Freq, d.DT, d.SyncPower, d.Text)
+			}
+			if len(results) < tc.minDecodes {
+				t.Errorf("%s decoded %d messages; baseline floor is %d. A drop below baseline indicates a regression in the audio→messages pipeline.",
+					tc.name, len(results), tc.minDecodes)
+			}
+		})
 	}
 }
 
@@ -246,10 +247,15 @@ func resolveCapturePath(t testing.TB, name string) string {
 }
 
 // BenchmarkDecode_RealCapture profiles the full Decode pipeline on
-// a real WSJT-X capture. The hot path here is the budget question
-// for live decoding: every 15-s FT8 slot, we get exactly 15 s to
-// run this whole chain. The decoded-result count is incidental; the
-// per-op time is what matters.
+// each of the three vendored FT8 captures. The hot path is the
+// budget question for live decoding: every 15-s FT8 slot, we get
+// exactly 15 s to run this whole chain.
+//
+// The three captures have progressively more traffic per WSJT-X's
+// own decode counts (cap1=11 signals, cap2=14, cap3=23) — running
+// all three confirms the per-candidate cost model holds across
+// different busy-band conditions, not just the single-fixture
+// happy path.
 //
 // Run with:
 //
@@ -260,17 +266,22 @@ func resolveCapturePath(t testing.TB, name string) string {
 //
 // Skipped when no fixture is reachable.
 func BenchmarkDecode_RealCapture(b *testing.B) {
-	wavPath := resolveCapturePath(b, "ft8_cap1.wav")
-	if wavPath == "" {
-		b.Skip("no FT8 capture fixture available")
-	}
-	data, err := audio.ReadWAV(wavPath)
-	if err != nil {
-		b.Fatalf("ReadWAV: %v", err)
-	}
-	b.ResetTimer()
-	b.ReportAllocs()
-	for range b.N {
-		_ = Decode(data.Samples, DecodeOptions{})
+	captures := []string{"ft8_cap1.wav", "ft8_cap2.wav", "ft8_cap3.wav"}
+	for _, name := range captures {
+		b.Run(name, func(b *testing.B) {
+			wavPath := resolveCapturePath(b, name)
+			if wavPath == "" {
+				b.Skipf("fixture %s not available", name)
+			}
+			data, err := audio.ReadWAV(wavPath)
+			if err != nil {
+				b.Fatalf("ReadWAV: %v", err)
+			}
+			b.ResetTimer()
+			b.ReportAllocs()
+			for range b.N {
+				_ = Decode(data.Samples, DecodeOptions{})
+			}
+		})
 	}
 }
