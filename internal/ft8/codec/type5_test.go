@@ -89,8 +89,8 @@ func TestEncodeMessage_Type5_LayoutMatchesQEXTable1(t *testing.T) {
 			for i := range G25Bits {
 				want = append(want, byte((g25>>(G25Bits-1-i))&1))
 			}
-			// i3 = 3 → bits 011 MSB-first.
-			want = append(want, 0, 1, 1)
+			// i3 = 5 → bits 101 MSB-first.
+			want = append(want, 1, 0, 1)
 
 			if !slices.Equal(got, want) {
 				t.Errorf("layout mismatch\n got=%v\nwant=%v", got, want)
@@ -99,10 +99,10 @@ func TestEncodeMessage_Type5_LayoutMatchesQEXTable1(t *testing.T) {
 	}
 }
 
-// TestEncodeMessage_Type5_I3TagIs3 pins the i3 tag at the wire's
-// lowest 3 bits to 3 (011 MSB-first). A regression that swapped tag
+// TestEncodeMessage_Type5_I3TagIs5 pins the i3 tag at the wire's
+// lowest 3 bits to 5 (101 MSB-first). A regression that swapped tag
 // values across Type 1/2/3/4/5 would land here.
-func TestEncodeMessage_Type5_I3TagIs3(t *testing.T) {
+func TestEncodeMessage_Type5_I3TagIs5(t *testing.T) {
 	got, err := EncodeMessage(Message{
 		Type:    MessageTypeEUVHFHash,
 		Call1:   "G4ABC",
@@ -114,8 +114,8 @@ func TestEncodeMessage_Type5_I3TagIs3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeMessage: %v", err)
 	}
-	if got[74] != 0 || got[75] != 1 || got[76] != 1 {
-		t.Errorf("i3 bits at 74..76 = %d %d %d, want 0 1 1 (i3=3)", got[74], got[75], got[76])
+	if got[74] != 1 || got[75] != 0 || got[76] != 1 {
+		t.Errorf("i3 bits at 74..76 = %d %d %d, want 1 0 1 (i3=5)", got[74], got[75], got[76])
 	}
 }
 
@@ -195,7 +195,7 @@ func TestType5_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestDecodeMessage_Type5_NotUnknown sanity-checks that i3=3 dispatch
+// TestDecodeMessage_Type5_NotUnknown sanity-checks that i3=5 dispatch
 // is wired up (DecodeMessage routes to decodeEUVHFHash rather than
 // returning ErrUnknownMessageType).
 func TestDecodeMessage_Type5_NotUnknown(t *testing.T) {

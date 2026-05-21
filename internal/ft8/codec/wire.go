@@ -22,14 +22,17 @@ const (
 	i3Offset = MessageBits - i3Width
 )
 
-// Implemented i3 tag values. Tags for unimplemented types land
-// alongside their encoders when they ship.
+// Implemented i3 tag values. Per QEX paper Table 1 column 1 ("Type
+// i3.n3"), the dotted-number IS the wire i3 for top-level types —
+// Type N. → i3=N. Tags for unimplemented types land alongside their
+// encoders when they ship.
 const (
-	i3Zero       = 0 // i3=0 family (n3 sub-dispatch; Phase 3A wires n3=0 only)
-	i3Std        = 1 // Type 1 (Std Msg)
-	i3EUVHFP     = 2 // Type 2 (EU VHF /P)
-	i3EUVHFHash  = 3 // Type 5 (EU VHF hashes+g25)
-	i3NonStdCall = 4 // Type 4 (NonStd Call)
+	i3Zero        = 0 // i3=0 family (n3 sub-dispatch; Phase 3A wires n3=0 only)
+	i3Std         = 1 // Type 1 (Std Msg)
+	i3EUVHFP      = 2 // Type 2 (EU VHF /P)
+	i3RTTYRoundup = 3 // Type 3 (RTTY RU)
+	i3NonStdCall  = 4 // Type 4 (NonStd Call)
+	i3EUVHFHash   = 5 // Type 5 (EU VHF hashes+g25)
 )
 
 // QEX Table 1 i3.n3 tags for the i3=0 message-type family. n3
