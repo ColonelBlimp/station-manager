@@ -85,7 +85,7 @@ func codewordFromMessage(msg []byte) []byte {
 // must not panic on nil or empty input. Before the fix, Decode
 // passed nil straight to Spectrogram which panics on nil.
 func TestDecode_NilAudioReturnsNil(t *testing.T) {
-	for name, audio := range map[string][]float32{
+	for name, sample := range map[string][]float32{
 		"nil_slice":   nil,
 		"empty_slice": {},
 	} {
@@ -95,7 +95,7 @@ func TestDecode_NilAudioReturnsNil(t *testing.T) {
 					t.Errorf("Decode(%s) panicked: %v — want nil return", name, r)
 				}
 			}()
-			if got := Decode(audio, DecodeOptions{}); got != nil {
+			if got := Decode(sample, DecodeOptions{}); got != nil {
 				t.Errorf("Decode(%s) = %v, want nil", name, got)
 			}
 		})
