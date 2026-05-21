@@ -62,17 +62,71 @@ type DecodeOptions struct {
 	// Provide a HashTable to retain these messages.
 	HashTable *codec.HashTable
 
-	// FineTimingDisabled turns off the within-symbol fine-timing
-	// retry path. When false (default), candidates whose coarse-DT
-	// LDPC attempt fails get retried at ±5 ms and ±10 ms shifts —
-	// recovers borderline decodes where the sync detector's 40 ms
-	// quantisation puts the symbol-extraction window a few baseband
-	// samples off the true TX alignment. The retry is cheap (only
-	// runs on failed candidates) and bounded (5 attempts max). Set
-	// true for strict-coarse-only behaviour, e.g. when benchmarking
-	// against a sync-detector baseline.
-	FineTimingDisabled bool
+	// FineTimingOffsets configures the per-candidate fine-timing
+	// retry sequence applied when a candidate's coarse-DT LDPC
+	// attempt fails. Values are DT offsets in SECONDS added to the
+	// sync detector's coarse DT. The 0.0 coarse value is implicit
+	// and always tried first — entries here are the additional
+	// retry steps.
+	//
+	// Resolution rules:
+	//   - nil → DefaultFineTimingOffsets (4 retries at ±5/±10 ms).
+	//   - non-nil empty slice → no retries (coarse-only behaviour;
+	//     useful for benchmarking against a sync-detector baseline).
+	//   - non-nil populated slice → exactly the offsets given.
+	//
+	// Empirical context for the default values: at Fs2 = 200 Hz
+	// baseband, the ±5/±10 ms shifts correspond to ±1 and ±2
+	// baseband samples — well within the 32-sample demod symbol
+	// window, so no cross-symbol leakage. On the three vendored
+	// fixtures the default sequence adds +6 decodes over coarse-
+	// only (12 → 18). See Session-80 doc-sweep for cost/benefit.
+	FineTimingOffsets []float64
+
+	// FineFrequencyOffsets configures the per-candidate fine-
+	// frequency retry sequence applied when ALL fine-timing
+	// attempts at the coarse frequency fail. Values are Hz offsets
+	// added to the sync detector's coarse Freq. The 0.0 coarse
+	// frequency is implicit — entries here are the additional
+	// retry frequencies.
+	//
+	// Resolution rules:
+	//   - nil → DefaultFineFrequencyOffsets (4 retries at ±0.5/±1 bin).
+	//   - non-nil empty slice → no frequency retries (fine-timing-only).
+	//   - non-nil populated slice → exactly the offsets given.
+	//
+	// Each frequency retry triggers a fresh Downsample + full
+	// fine-timing sequence at the new frequency. Cost scales as
+	// (len(FineFrequencyOffsets) + 1) × (len(FineTimingOffsets) +
+	// 1) demod attempts per failed candidate — substantial, but
+	// still bounded and only paid on candidates that have already
+	// failed every cheaper attempt.
+	FineFrequencyOffsets []float64
 }
+
+// DefaultFineTimingOffsets is the retry sequence applied when
+// DecodeOptions.FineTimingOffsets is nil. Tuned empirically on the
+// three vendored real-WAV fixtures; expose as a package var (not
+// a const) so power-users can override globally if desired.
+//
+// At Fs2 = 200 Hz baseband: ±0.005 s = ±1 sample, ±0.010 s = ±2
+// samples — both within the 32-sample demod symbol window.
+var DefaultFineTimingOffsets = []float64{-0.005, 0.005, -0.010, 0.010}
+
+// DefaultFineFrequencyOffsets is the retry sequence applied to a
+// candidate's frequency when ALL fine-timing attempts at the
+// coarse frequency fail. Values are frequency offsets in HZ added
+// to the sync detector's coarse Freq. Tuned empirically on the
+// three vendored real-WAV fixtures.
+//
+// The Sync detector quantises frequency to spectrogram-bin spacing
+// (df = Fs / NFFT1 = 12000 / 3840 = 3.125 Hz). A transmitter that
+// sits half a bin off (~1.56 Hz) gets bucketed to whichever side
+// it falls on, and the demod's per-symbol FFT then sees the tone
+// straddling two bins instead of landing cleanly in one. The
+// ±1.5625 Hz (= df/2) and ±3.125 Hz (= df) retries pull the
+// candidate's reference frequency to the correct side of the bin.
+var DefaultFineFrequencyOffsets = []float64{-1.5625, 1.5625, -3.125, 3.125}
 
 // Decode runs the full FT8 audio → messages pipeline on a 15-second
 // audio slot:
@@ -150,49 +204,65 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		cand dsp.Candidate
 		msg  codec.Message
 	}
-	// Fine-timing retry offsets in seconds. Tried in order; the
-	// first one that produces a successful LDPC+CRC+parse wins.
-	// 0.0 (coarse DT) goes first, so cases where coarse alignment
-	// already works pay no extra cost. At Fs2=200 Hz baseband the
-	// shifts correspond to ±1 and ±2 baseband samples — within
-	// the 32-sample demod symbol window, no cross-symbol leakage.
-	//
-	// Empirically (3 fixtures, Session 80 measurement):
-	//   - ±5ms: cap1=1, cap2=6, cap3=9  (+5 decodes vs no fine-timing)
-	//   - ±5+±10ms: cap1=1, cap2=6, cap3=11 (+6 decodes total)
-	// The ±10ms retries DO matter — cap3 picked up two extra
-	// decodes (`5Z4VJ YB1RUS OI33` at sync 8.03 and `CQ SP4MSY
-	// KO13` at sync 4.19) that ±5ms alone didn't recover.
-	fineOffsets := []float64{0, -0.005, 0.005, -0.010, 0.010}
-	if opts.FineTimingDisabled {
-		fineOffsets = fineOffsets[:1] // coarse only
+	// Fine-timing retry sequence resolution: nil → defaults;
+	// non-nil → caller's exact list (possibly empty for coarse
+	// only). The 0.0 coarse value is prepended in either case so
+	// candidates whose coarse alignment already works pay no
+	// extra cost.
+	tweaks := opts.FineTimingOffsets
+	if tweaks == nil {
+		tweaks = DefaultFineTimingOffsets
 	}
+	fineOffsets := make([]float64, 0, len(tweaks)+1)
+	fineOffsets = append(fineOffsets, 0)
+	fineOffsets = append(fineOffsets, tweaks...)
+
+	// Fine-frequency retry sequence — same resolution rules as
+	// FineTimingOffsets. The 0.0 coarse Freq is implicit and tried
+	// first; entries here are additional retry frequencies in Hz.
+	// Each frequency retry triggers a fresh Downsample (different
+	// f0 → different baseband samples), then re-runs the full
+	// fine-timing sequence at that frequency.
+	freqTweaks := opts.FineFrequencyOffsets
+	if freqTweaks == nil {
+		freqTweaks = DefaultFineFrequencyOffsets
+	}
+	fineFreqOffsets := make([]float64, 0, len(freqTweaks)+1)
+	fineFreqOffsets = append(fineFreqOffsets, 0)
+	fineFreqOffsets = append(fineFreqOffsets, freqTweaks...)
 
 	var raw []pending
 	for _, c := range cands {
-		baseband := dsp.DownsampleFromSpectrumWithPlan(spectrum, c.Freq, inversePlan)
-		if baseband == nil {
-			continue
-		}
-
 		var foundMsg codec.Message
 		decoded := false
-		for _, dOffset := range fineOffsets {
-			llrs := dsp.DemodulateWithPlan(baseband, c.DT+dOffset, symPlan)
-			if llrs == nil {
+
+		// Outer loop: fine-frequency retries. Inner loop:
+		// fine-timing retries at the current frequency. Both
+		// loops short-circuit on first successful decode — easy
+		// candidates pay only the coarse-coarse cost.
+	freqRetry:
+		for _, fOffset := range fineFreqOffsets {
+			baseband := dsp.DownsampleFromSpectrumWithPlan(spectrum, c.Freq+fOffset, inversePlan)
+			if baseband == nil {
 				continue
 			}
-			msgBits, ok := codec.LDPCDecode(llrs, maxIters)
-			if !ok {
-				continue
+			for _, dOffset := range fineOffsets {
+				llrs := dsp.DemodulateWithPlan(baseband, c.DT+dOffset, symPlan)
+				if llrs == nil {
+					continue
+				}
+				msgBits, ok := codec.LDPCDecode(llrs, maxIters)
+				if !ok {
+					continue
+				}
+				msg, err := codec.DecodeMessage(msgBits)
+				if err != nil {
+					continue
+				}
+				foundMsg = msg
+				decoded = true
+				break freqRetry // first (freq, dt) combination that works wins
 			}
-			msg, err := codec.DecodeMessage(msgBits)
-			if err != nil {
-				continue
-			}
-			foundMsg = msg
-			decoded = true
-			break // first offset that works wins
 		}
 		if decoded {
 			raw = append(raw, pending{c, foundMsg})

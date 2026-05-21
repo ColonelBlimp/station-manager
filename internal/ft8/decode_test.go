@@ -182,15 +182,17 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 		// time as sensitivity improvements land:
 		//   - Phase 1 FFT caching (Session 80): no change.
 		//   - Phase 2 FFT plans: no change.
-		//   - Fine-timing retry (Session 80): cap2 4→6, cap3 7→11
-		//     via within-symbol-window ±5/±10 ms DT shifts on
-		//     coarse-LDPC failures.
-		// Bump further when OSD / fine-frequency / K-scale land.
+		//   - Fine-timing retry (Session 80): cap2 4→6, cap3 7→11.
+		//   - Fine-frequency retry (Session 80): cap1 1→3, cap3
+		//     11→13. cap1's `VE1WT K4GBI 73` (lost post-finding-#4)
+		//     recovered — was a sub-bin frequency offset, not a
+		//     time offset as initially assumed.
+		// Bump further when OSD / K-scale tuning land.
 		minDecodes int
 	}{
-		{"ft8_cap1.wav", 11, 1},
+		{"ft8_cap1.wav", 11, 3},
 		{"ft8_cap2.wav", 14, 6},
-		{"ft8_cap3.wav", 23, 11},
+		{"ft8_cap3.wav", 23, 13},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
