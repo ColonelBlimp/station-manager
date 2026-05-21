@@ -98,23 +98,23 @@ func TestParseMessage_WhitespaceCollapsing(t *testing.T) {
 
 // TestParseMessage_Rejects covers the error paths.
 func TestParseMessage_Rejects(t *testing.T) {
+	// Inputs here must fail BOTH structured parse AND the Free Text
+	// fallback (finding #3). The fallback accepts any input ≤ 13
+	// chars composed entirely of f71-alphabet chars, so the rejection
+	// cases below are inputs that violate one of those: out-of-alphabet
+	// chars, or oversized after a structured-shape failure.
 	cases := []struct {
 		name string
 		text string
 	}{
 		{"empty", ""},
 		{"whitespace_only", "   \t\n"},
-		{"cq_alone", "CQ"},
-		{"cq_suffix_no_call2", "CQ DX"},
-		{"de_alone", "DE"},
-		{"qrz_alone", "QRZ"},
-		{"one_callsign", "K1ABC"},
-		{"call_with_garbage", "K1AB! G4ABC FN20"},
-		{"too_many_fields", "K1ABC G4ABC FN20 EXTRA"},
-		{"r_separates_report", "K1ABC G4ABC R -11"},      // report must fuse with R
-		{"bare_r_alone_with_grid", "K1ABC G4ABC X FN20"}, // X is not a valid ack prefix
-		{"unknown_token_at_head", "FOO G4ABC FN20"},
-		{"bad_grid_value", "K1ABC G4ABC GARBAGE"},
+		{"call_with_garbage", "K1AB! G4ABC FN20"},        // '!' not in f71 alphabet
+		{"too_many_fields", "K1ABC G4ABC FN20 EXTRA"},    // 22 chars > Free Text max 13
+		{"r_separates_report", "K1ABC G4ABC R -11"},      // 17 chars > 13
+		{"bare_r_alone_with_grid", "K1ABC G4ABC X FN20"}, // 18 chars > 13
+		{"unknown_token_at_head", "FOO G4ABC FN20"},      // 14 chars > 13
+		{"bad_grid_value", "K1ABC G4ABC GARBAGE"},        // 19 chars > 13
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,23 +201,41 @@ func TestParseMessage_FreeText_RejectsOversized(t *testing.T) {
 	}
 }
 
-// TestParseMessage_NoTriggerStaysStructured verifies that inputs
-// without '.' or '?' route through structured parsing, NOT Free
-// Text. "HELLO" alone (no trigger, doesn't parse as Type 1) errors
-// per the Phase 3A design choice #3 (no implicit Free Text fallback).
-func TestParseMessage_NoTriggerStaysStructured(t *testing.T) {
-	// These would be valid Free Text if the parser fell back, but
-	// per design #3 they error because the operator didn't signal
-	// Free Text via a trigger char.
-	cases := []string{
-		"HELLO", // single token, in-alphabet, but no trigger
-		"73 OM", // looks like Free Text but no trigger char
-		"FB 73", // ham shorthand without punctuation
+// TestParseMessage_FreeText_NoTriggerFallback is the regression pin
+// for finding #3: per QEX paper Table 1 the Type 0.0 example is
+// "TNX BOB 73 GL", which contains no '.' or '?' — so the eager
+// trigger-char dispatch wouldn't fire. The parser must fall back
+// to Free Text when structured Type 1 parse fails AND the input
+// is f71-compatible (≤ 13 chars, all chars in f71 alphabet).
+//
+// The earlier "Phase 3A design choice #3" (no implicit fallback)
+// was spec-incorrect — Free Text without punctuation IS valid per
+// the QEX paper.
+func TestParseMessage_FreeText_NoTriggerFallback(t *testing.T) {
+	cases := []struct {
+		text string
+		want string
+	}{
+		{"TNX BOB 73 GL", "TNX BOB 73 GL"}, // QEX Table 1 canonical example
+		{"HELLO", "HELLO"},                 // single token, in-alphabet
+		{"73 OM", "73 OM"},                 // ham shorthand without punctuation
+		{"FB 73", "FB 73"},                 // ham shorthand
+		{"TNX 73", "TNX 73"},
+		{"CQ", "CQ"},   // bare CQ doesn't fit "CQ <call>"; treated as Free Text
+		{"DE", "DE"},   // bare DE
+		{"QRZ", "QRZ"}, // bare QRZ
 	}
-	for _, text := range cases {
-		t.Run(text, func(t *testing.T) {
-			if _, err := ParseMessage(text); err == nil {
-				t.Errorf("ParseMessage(%q) = nil err; per design #3 an input without '.' or '?' that doesn't parse as Type 1 should error rather than silently dispatching to Free Text", text)
+	for _, tc := range cases {
+		t.Run(tc.text, func(t *testing.T) {
+			got, err := ParseMessage(tc.text)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v — expected Free Text fallback per QEX Table 1", tc.text, err)
+			}
+			if got.Type != MessageTypeFreeText {
+				t.Errorf("ParseMessage(%q).Type = %d, want MessageTypeFreeText", tc.text, got.Type)
+			}
+			if got.FreeText != tc.want {
+				t.Errorf("ParseMessage(%q).FreeText = %q, want %q", tc.text, got.FreeText, tc.want)
 			}
 		})
 	}
@@ -249,12 +267,18 @@ func TestFormatParse_RoundTrip(t *testing.T) {
 		"G4ABC/R K1ABC FN20",
 		"G4ABC K1ABC/R FN20",
 		"G4ABC/R K1ABC/R FN20",
-		// Type 0.0 Free Text — `.` and `?` triggers
+		// Type 0.0 Free Text — `.` and `?` eager triggers
 		"HELLO.",
 		"73 OM.",
 		"TNX BOB 73.",
 		"WHAT?",
 		"K1JT?",
+		// Type 0.0 Free Text — no-trigger fallback (finding #3).
+		// QEX Table 1 canonical example plus operator shorthand.
+		"TNX BOB 73 GL",
+		"73 OM",
+		"FB 73",
+		"HELLO",
 	}
 	for _, text := range cases {
 		t.Run(text, func(t *testing.T) {

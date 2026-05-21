@@ -133,7 +133,24 @@ func ParseMessage(text string) (Message, error) {
 		}
 	}
 
-	return parseStd(tokens)
+	// Try Type 1 (Std Msg) — the default for std-callsign-shaped
+	// inputs. If parseStd fails AND the input fits the Free Text
+	// constraints (≤ 13 chars, all chars in the f71 alphabet), fall
+	// back to Type 0.0. Per QEX paper Table 1, the Type 0.0 example
+	// "TNX BOB 73 GL" contains no '.' or '?' so the eager Free Text
+	// trigger above wouldn't fire — without this fallback, valid
+	// Free Text inputs without those marker chars would error out
+	// (finding #3). The fallback is conservative: it only applies
+	// when no structured-message classifier triggered AND parseStd
+	// failed AND the input is genuinely f71-shaped.
+	msg, err := parseStd(tokens)
+	if err == nil {
+		return msg, nil
+	}
+	if validateFreeText(trimmed) == nil {
+		return parseFreeText(trimmed)
+	}
+	return Message{}, err
 }
 
 // isType4Trigger reports whether a parsed field-token signals a
@@ -271,10 +288,17 @@ func splitReportSerial(tok string) (uint8, uint16, error) {
 	return uint8(reportInt - r3Bias), uint16(serialInt), nil
 }
 
-// parseFreeText validates and packages a Type 0.0 message. The input
-// has already passed the classifier (contains '.' or '?' so the
-// operator clearly intended Free Text); validateFreeText shares the
-// same gate as the encoder so any text that parses also encodes.
+// parseFreeText validates and packages a Type 0.0 message.
+// Reached via two paths:
+//
+//   - Eager dispatch when the input contains '.' or '?' (chars
+//     unique to the f71 alphabet — unambiguous Free Text signal).
+//   - Fallback after structured Type 1 parse fails AND the input
+//     fits the f71 constraints (finding #3 — handles QEX Table 1's
+//     Type 0.0 example "TNX BOB 73 GL", which has no trigger char).
+//
+// validateFreeText shares the same gate as the encoder so any text
+// that parses also encodes.
 func parseFreeText(text string) (Message, error) {
 	if err := validateFreeText(text); err != nil {
 		return Message{}, err
