@@ -841,9 +841,19 @@ What's safe and what isn't:
   files) in this repo.** They're GPL distribution; shipping them inside
   an MIT repo is the contamination route. Operator-recorded WAVs (own
   copyright, MIT/CC0 release) are the long-term clean source.
-- ❌ **Linking against FFTW3.** FFTW is GPL v2 (or commercial); CGO-
-  linking pulls SM into GPL. Use a BSD-licensed FFT — see the CGO
-  bullet below.
+- ⚠️ **Linking against FFTW3 — nuanced.** FFTW3 is GPL v2 (or commercial).
+  CGO bindings against system `libfftw3f` (the operator's own
+  `fftw.go` + `fftw_wrapper.c` in go-ft8/research/ are clean
+  MIT-able binding code) DO NOT contaminate the SM source. **The GPL
+  trigger fires at BINARY DISTRIBUTION** — a binary built with FFTW3
+  linkage inherits GPL v2 when shipped to third parties. For
+  personal-use builds where the operator is the sole user (per
+  `user_profile` memory), the GPL trigger is dormant and FFTW3 use is
+  technically permissible. SM's conservative policy preference is
+  still **permissively-licensed CGO alternatives** (KissFFT BSD-3,
+  PocketFFT Apache 2.0) for any CGO build path that might ever
+  ship publicly — that keeps the binary-redistribution option open
+  without forcing GPL on downstream consumers.
 
 When in doubt, the rule is: **the only WSJT-X artifacts that touch this
 codebase are the binaries we exec for testing, the academic papers we
@@ -881,12 +891,19 @@ implementations that we can't ignore at this scale. The subsystem
 binds permissively-licensed C libraries only (the licensing constraint
 forecloses GPL-licensed dependencies):
 
-- **BSD-licensed FFT** — KissFFT (BSD-3) or PocketFFT (BSD-3) for the
-  decoder's FFT stages. Both are well-trodden in scientific computing
-  with stable C APIs. **FFTW3 is excluded** despite being the WSJT-X
-  reference — its GPL v2 licence would contaminate SM. Specific choice
-  between KissFFT and PocketFFT decided in M4.1 after benchmarking
-  both against the FT8 access patterns.
+- **Permissively-licensed FFT preferred** — KissFFT (BSD-3) or
+  PocketFFT (Apache 2.0) for any CGO FFT path. Both are well-trodden
+  in scientific computing with stable C APIs. **FFTW3 is the WSJT-X
+  reference but its GPL v2 linkage requirement is a binary-
+  distribution constraint** (the GPL doesn't contaminate SM's source —
+  see the licensing section above for the nuance); the conservative
+  policy is to prefer BSD/Apache alternatives so SM's binary
+  redistribution options stay open. For personal-use builds where the
+  operator is the only user, FFTW3 is permissible. Specific choice
+  between KissFFT and PocketFFT is empirical — but as Session 80's
+  CGO experiment showed, **scalar CGO transition overhead dominates
+  this workload regardless of which FFT library sits on the C side**;
+  the library choice only matters once SIMD-batched BP lands.
 - **LDPC(174,91) decoder** — clean-room implementation from Taylor's
   2020 paper, written in C and CGO-bound (or written in Go directly if
   benchmarks show no measurable difference; the original CGO motivation
@@ -1280,7 +1297,7 @@ Session 78 DSP-layer additions (the audio → messages signal-processing pipelin
 |---|---|---|
 | `LDPCDecodeBP` + `LDPCDecode` | `internal/ft8/codec/ldpc_decode.go` | Sum-product belief-propagation decoder per QEX §6 (tanh product-rule with prefix/suffix accumulation for O(1) excluded-variable updates; numerical clamping at 1−1e−15 keeps atanh finite). Default 50 iterations; per-iter syndrome-zero early exit. `LDPCDecode` adds the CRC14 gate (per QEX §6's "decoded codeword's 77-bit CRC matches" criterion) — returns the recovered 77-bit message body iff BP converged AND CRC matched. ~35 µs clean / 70 µs with 5-bit errors on operator's i3-10100F. OSD (Ordered Statistics Decoding) explicitly deferred — Taylor §6 says BP catches the vast majority; OSD adds ~1 dB |
 | `audio.ReadWAV` | `internal/audio/wav.go` | WAV file reader at new neutral `internal/audio/` package (peer of internal/cat/serial). Supports PCM 8-bit unsigned, PCM 16-bit signed, IEEE float 32-bit. Adversarial-chunk-size defence via `io.LimitReader`. Single `Data{SampleRate, Channels, Samples []float32}` exported struct. The shape FT8 expects: 12 kHz mono PCM16 |
-| `audio.FFT` + `audio.IFFT` | `internal/audio/fft.go` | Pure-Go mixed-radix Cooley-Tukey radix-2/3/5 covering every 5-smooth FT8 size (192000/180000/3840/3200/1920). Operator-authored (ported MIT-clean from go-ft8/research/fft.go). Pure stdlib (math + math/cmplx) — no CGO, no gonum dependency. Performance: ~400 µs at N=1920, ~870 µs at N=3840 — about 20-50× slower than FFTW3 but well within FT8's 15-second slot budget. **The operator's go-ft8/research/fftw.go + fftw_wrapper.c were excluded** since they bind to FFTW3 which is GPL v2 (same licence-exclusion that dropped mattn/go-sqlite3) |
+| `audio.FFT` + `audio.IFFT` | `internal/audio/fft.go` | Pure-Go mixed-radix Cooley-Tukey radix-2/3/5 covering every 5-smooth FT8 size (192000/180000/3840/3200/1920). Operator-authored (ported MIT-clean from go-ft8/research/fft.go). Pure stdlib (math + math/cmplx) — no CGO, no gonum dependency. Performance: ~400 µs at N=1920, ~870 µs at N=3840 — about 20-50× slower than FFTW3 but well within FT8's 15-second slot budget. **The operator's go-ft8/research/fftw.go + fftw_wrapper.c are clean MIT-able binding code** (no FFTW3 source vendored; `#include <fftw3.h>` + `-lfftw3f` linkage only) and could move into SM if desired — they're not vendored here by policy preference rather than legal necessity. The GPL v2 trigger on FFTW3 fires at binary distribution, not in source; for personal-use builds where the operator is the only user, FFTW3 use is permissible. Session 80's CGO experiment showed that scalar CGO transition overhead dominates this workload anyway, so the FFT library choice is largely moot until SIMD-batched BP lands (see the licensing section + Session 80 entry for the full nuance) |
 | `dsp` params | `internal/ft8/dsp/params.go` | FT8 protocol constants from QEX paper + ft8_params.f90: Fs=12000, NSPS=1920, NN=79, NMAX=180000, NFFT1=3840, NH1=1920, NSTEP=480, NHSYM=372, NDOWN=60, NFFT2=3200, NFFT1DS=192000, Fs2=200, Baud=6.25, SpectrogramScale=1/300 (WSJT-X parity convention), Icos7={3,1,4,0,6,5,2}, GrayMap, GrayUnmap. **Session 78 fix:** GrayUnmap had positions 5 and 7 swapped (latent bug carried verbatim from go-ft8/research/constants.go) — fixed against QEX paper Table 3 and pinned by `TestGrayMapInversesGrayUnmap` + `TestGrayMapMatchesQEXTable3` regression tests |
 | `dsp.Spectrogram` | `internal/ft8/dsp/spectrogram.go` | `Spectrogram(audio []float32) [][]float64` — slides a 1920-sample window at NSTEP=480 stride across 12 kHz audio, FFTs each window (zero-padded to 3840) via audio.FFT, output `power[t][f]` for t∈[0,372), f∈[0,1920). Single contiguous backing array (~5.4 MB at canonical sizes) sliced into row views for cache-friendly access by the Costas correlator. 310 ms per full 15-s slot |
 | `dsp.Sync` + `dsp.Candidate` + `dsp.SyncOptions` | `internal/ft8/dsp/sync.go` | **Clean-room Costas-sync detector** per QEX §4 + textbook matched-filter signal processing. First attempt was a port of go-ft8/research/sync8.go which itself ports WSJT-X's GPL `lib/ft8/sync8.f90`; operator caught and rejected; redone clean-room from scratch. 21-position Costas template (3 blocks × 7 tones), score = mean in-pattern Costas-tone power / mean out-of-pattern tone power across the same time slots, descending-sync sort, proximity-based dedup (1 freq bin × 2 time-steps). **Deliberately skipped** (deferred to clean-room reinvention if sensitivity demands): triple-block scoring (sync8's t_a/t_b/t_c separation), BC-only fallback for late signals, 40th-percentile noise-floor normalization, narrow vs wide time-lag search split, operator-frequency priority placement. On real ft8_cap1.wav → 100 candidates with sensible peaks at FT8-band frequencies |
