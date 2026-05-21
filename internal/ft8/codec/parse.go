@@ -285,27 +285,110 @@ func parseFreeText(text string) (Message, error) {
 	}, nil
 }
 
-// parseEUVHFP parses the Type 2 (EU VHF /P) layout. Mirrors
-// parsePlainStd's two-callsign + grid-field shape, but the
-// per-callsign suffix is /P (portable) rather than /R (rover),
-// and the c28 partition is std-callsign-only — tokens (CQ / DE /
-// QRZ / "CQ <suffix>") are not valid in Type 2 per QEX Table 7.
+// parseEUVHFP dispatches Type 2 (EU VHF /P) inputs based on the
+// first token. Per QEX Table 2 the c28 field (used in BOTH Type 1
+// and Type 2 Call slots) accepts standard callsigns AND tokens
+// (CQ / DE / QRZ / "CQ <suffix>"), so Type 2 has the same token-
+// prefixed layouts as Type 1, just with /P suffixes on the std
+// calls instead of /R. The earlier carve-out that rejected tokens
+// in Type 2 was spec-incorrect — finding #2.
 //
-// Reaches here only when the classifier has already seen at least
-// one /P-suffixed token. A /R-suffixed token in the same input is
-// caught by consumePortableCall as a mixed /R + /P error (the
-// wire bit slot is single-Type per message).
+// Reaches here only when the classifier has seen a /P-suffixed
+// token somewhere in the input. A /R-suffixed token in the same
+// input is caught by consumePortableCall as a mixed /R + /P error
+// (the wire bit slot is single-Type per message).
 func parseEUVHFP(tokens []string) (Message, error) {
+	switch tokens[0] {
+	case "CQ":
+		return parseCQEUVHFP(tokens)
+	case "DE", "QRZ":
+		return parseDirectedEUVHFP(tokens)
+	}
+	return parsePlainEUVHFP(tokens)
+}
+
+// parseCQEUVHFP handles Type 2 messages starting with CQ — the
+// Type 2 mirror of parseCQ. Layouts:
+//
+//	"CQ <call2/P> [<field>]"
+//	"CQ <suffix> <call2/P> [<field>]"
+//
+// The /P suffix may attach to Call2 (the responding portable
+// station); the CQ token itself cannot take /P (validateType2Suffix
+// would reject Suffix1=true on a token at encode/format time).
+func parseCQEUVHFP(tokens []string) (Message, error) {
+	const op errors.Op = "codec.ParseMessage"
+	if len(tokens) < 2 {
+		return Message{}, errors.New(op).WithMsgf("CQ (Type 2) message has only %d field(s); need at least \"CQ <callsign/P>\"", len(tokens))
+	}
+
+	hasSuffix := len(tokens) >= 3 && isCQSuffix(tokens[1])
+	var call1 string
+	var rest []string
+	if hasSuffix {
+		call1 = "CQ " + tokens[1]
+		rest = tokens[2:]
+	} else {
+		call1 = "CQ"
+		rest = tokens[1:]
+	}
+	if len(rest) == 0 {
+		return Message{}, errors.New(op).WithMsgf("CQ (Type 2) message is missing the second callsign")
+	}
+
+	call2, suffix2, fieldTokens, err := consumePortableCall(rest)
+	if err != nil {
+		return Message{}, err
+	}
+	grid, ack, err := consumeGridField(fieldTokens)
+	if err != nil {
+		return Message{}, err
+	}
+	return Message{
+		Type:    MessageTypeEUVHFP,
+		Call1:   call1,
+		Call2:   call2,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
+	}, nil
+}
+
+// parseDirectedEUVHFP handles DE / QRZ as Call1 for Type 2 — the
+// Type 2 mirror of parseDirected.
+//
+//	"DE <call2/P> [<field>]"
+//	"QRZ <call2/P> [<field>]"
+func parseDirectedEUVHFP(tokens []string) (Message, error) {
+	const op errors.Op = "codec.ParseMessage"
+	if len(tokens) < 2 {
+		return Message{}, errors.New(op).WithMsgf("%s (Type 2) message is missing the second callsign", tokens[0])
+	}
+	call2, suffix2, fieldTokens, err := consumePortableCall(tokens[1:])
+	if err != nil {
+		return Message{}, err
+	}
+	grid, ack, err := consumeGridField(fieldTokens)
+	if err != nil {
+		return Message{}, err
+	}
+	return Message{
+		Type:    MessageTypeEUVHFP,
+		Call1:   tokens[0],
+		Call2:   call2,
+		Suffix2: suffix2,
+		AckBit:  ack,
+		Grid:    grid,
+	}, nil
+}
+
+// parsePlainEUVHFP handles "<call1/P> <call2/P> [<field>]" — the
+// canonical non-token Type 2 layout, e.g. "G4ABC/P PA9XYZ JO22"
+// per QEX Table 1's example.
+func parsePlainEUVHFP(tokens []string) (Message, error) {
 	const op errors.Op = "codec.ParseMessage"
 	if len(tokens) < 2 {
 		return Message{}, errors.New(op).WithMsgf("Type 2 (EU VHF /P) message has only %d field(s); need at least two callsigns", len(tokens))
-	}
-	// Reject Type 1 token starters (CQ / DE / QRZ / "CQ <suffix>") up
-	// front so the error message is specific. validateStdCallsign
-	// would otherwise reject these on length, with a less informative
-	// "callsign too short" diagnostic.
-	if isType1TokenStart(tokens[0]) {
-		return Message{}, errors.New(op).WithMsgf("Type 2 (EU VHF /P) input begins with token %q; tokens are not valid in Type 2", tokens[0])
 	}
 	call1, suffix1, rest, err := consumePortableCall(tokens)
 	if err != nil {
@@ -328,19 +411,6 @@ func parseEUVHFP(tokens []string) (Message, error) {
 		AckBit:  ack,
 		Grid:    grid,
 	}, nil
-}
-
-// isType1TokenStart reports whether the first field of a parsed input
-// is a Type 1 c28 token. Used by parseEUVHFP to reject token-bearing
-// inputs explicitly, since Type 2 has no token partition. The check
-// covers the single-token forms (CQ / DE / QRZ) plus the "CQ <suffix>"
-// two-token form (whose first field is "CQ").
-func isType1TokenStart(first string) bool {
-	switch first {
-	case "CQ", "DE", "QRZ":
-		return true
-	}
-	return false
 }
 
 // consumePortableCall is the Type 2 analogue of consumeCall. Strips

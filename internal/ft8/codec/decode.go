@@ -169,13 +169,12 @@ func decodeStd(bits []byte) (Message, error) {
 //	c28(Call1) | p1 | c28(Call2) | p1 | R1 | g15 | i3=2
 //	   28        1       28        1    1    15     3
 //
-// Same wire shape as Type 1, but token-range c28 values (i.e. c28 <
-// stdCallOffset) are NOT valid in Type 2: the QEX Table 7 token
-// partition is specific to Type 1. A token-range c28 on a Type-2
-// wire is a spec-violating value (corrupted message that slipped past
-// LDPC + CRC14, or a remote encoder bug) and surfaces as
-// ErrTokenInGap — symmetric with the Type 1 path's handling of
-// genuine token-partition gaps.
+// Per QEX Table 2 the c28 field has the same partitioning in Type 2
+// as in Type 1: std callsign, recognised token (CQ / DE / QRZ /
+// "CQ <suffix>"), or a 22-bit hash. Token-bearing Type 2 wires
+// ("CQ G4ABC/P JO22" and similar) are valid and round-trip
+// cleanly; the earlier carve-out that returned ErrTokenInGap for
+// any token-range Type 2 c28 was spec-incorrect (finding #2).
 //
 // Hash-range c28 values surface as ErrCallsignNeedsHashLookup per
 // the same protocol-layer hash-table contract Type 1 uses.
@@ -187,11 +186,11 @@ func decodeEUVHFP(bits []byte) (Message, error) {
 	ack := bits[58] == 1
 	g15 := uint16(readBitsUint64(bits, 59, G15Bits))
 
-	call1, err := type2CallFromC28(c28First, "Call1")
+	call1, err := type1CallFromC28(c28First, "Call1")
 	if err != nil {
 		return Message{}, err
 	}
-	call2, err := type2CallFromC28(c28Second, "Call2")
+	call2, err := type1CallFromC28(c28Second, "Call2")
 	if err != nil {
 		return Message{}, err
 	}
@@ -210,23 +209,6 @@ func decodeEUVHFP(bits []byte) (Message, error) {
 		AckBit:  ack,
 		Grid:    grid,
 	}, nil
-}
-
-// type2CallFromC28 recovers a Type 2 Call1/Call2 string. Mirrors
-// type1CallFromC28 but rejects token-partition c28 values (illegal
-// in Type 2 per QEX Table 7).
-func type2CallFromC28(c28 uint32, field string) (string, error) {
-	call, kind := C28ToCallsign(c28)
-	switch kind {
-	case C28KindStdCall:
-		return call, nil
-	case C28KindToken:
-		return "", fmt.Errorf("%w: %s c28=%d (tokens are not valid in Type 2)", ErrTokenInGap, field, c28)
-	case C28KindHash22:
-		return "", fmt.Errorf("%w: %s", ErrCallsignNeedsHashLookup, field)
-	default:
-		panic("codec.decodeEUVHFP: " + field + " decoded to unknown C28Kind — C28ToCallsign contract regression")
-	}
 }
 
 // hashedCallSentinel is the WSJT-X-convention placeholder used when a

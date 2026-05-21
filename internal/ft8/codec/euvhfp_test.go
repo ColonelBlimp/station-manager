@@ -146,35 +146,71 @@ func TestEncodeMessage_Type2_I3TagIs2(t *testing.T) {
 	}
 }
 
-// TestEncodeMessage_Type2_RejectsToken verifies the validateType2Call
-// gate: QEX Table 7 tokens (CQ / DE / QRZ / "CQ <suffix>") are NOT
-// valid in Type 2's c28 slots. The encoder rejects them rather than
-// silently routing through TokenToC28 (which would produce wire output
-// indistinguishable from Type 1 except for the i3 tag).
-func TestEncodeMessage_Type2_RejectsToken(t *testing.T) {
+// TestEncodeMessage_Type2_AcceptsToken is the regression pin for
+// finding #2: per QEX paper Table 2, the c28 field — used in BOTH
+// Type 1 and Type 2 Call slots — accepts "Standard callsign, CQ,
+// DE, QRZ, or 22-bit hash". The earlier validateType2Call carve-
+// out that rejected tokens contradicted Table 2. Token-bearing
+// Type 2 messages like "CQ G4ABC/P JO22" are valid and round-trip.
+func TestEncodeMessage_Type2_AcceptsToken(t *testing.T) {
 	cases := []struct {
 		name string
 		msg  Message
 	}{
-		{"cq_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "CQ", Call2: "G4ABC", Grid: "JO22"}},
-		{"de_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "DE", Call2: "G4ABC", Grid: "JO22"}},
-		{"qrz_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "QRZ", Call2: "G4ABC", Grid: "JO22"}},
-		{"cq_dx_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "CQ DX", Call2: "G4ABC", Grid: "JO22"}},
-		{"cq_100_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "CQ 100", Call2: "G4ABC", Grid: "JO22"}},
-		{"cq_in_call2", Message{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "CQ", Grid: "JO22"}},
+		{"cq_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "CQ", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"de_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "DE", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"qrz_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "QRZ", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"cq_dx_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "CQ DX", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"cq_100_in_call1", Message{Type: MessageTypeEUVHFP, Call1: "CQ 100", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := EncodeMessage(tc.msg); err == nil {
-				t.Errorf("EncodeMessage(%+v) = nil err, want validation error (token in Type 2)", tc.msg)
+			bits, err := EncodeMessage(tc.msg)
+			if err != nil {
+				t.Fatalf("EncodeMessage: %v — Type 2 c28 must accept tokens per QEX Table 2", err)
+			}
+			got, err := DecodeMessage(bits)
+			if err != nil {
+				t.Fatalf("DecodeMessage: %v", err)
+			}
+			if got.Type != MessageTypeEUVHFP {
+				t.Errorf("decoded Type = %d, want MessageTypeEUVHFP", got.Type)
+			}
+			if got.Call1 != tc.msg.Call1 {
+				t.Errorf("Call1 round-trip: got %q, want %q", got.Call1, tc.msg.Call1)
+			}
+			if got.Call2 != tc.msg.Call2 {
+				t.Errorf("Call2 round-trip: got %q, want %q", got.Call2, tc.msg.Call2)
+			}
+			if got.Suffix2 != tc.msg.Suffix2 {
+				t.Errorf("Suffix2 round-trip: got %v, want %v", got.Suffix2, tc.msg.Suffix2)
 			}
 		})
 	}
 }
 
+// TestEncodeMessage_Type2_RejectsSuffixOnToken pins the encode-side
+// guard: validateType2Suffix rejects Suffix1=true when Call1 is a
+// token (tokens like CQ / DE / QRZ are not callsigns and cannot
+// take /P portable). Symmetric with Type 1's /R-on-token gate.
+func TestEncodeMessage_Type2_RejectsSuffixOnToken(t *testing.T) {
+	cases := []Message{
+		{Type: MessageTypeEUVHFP, Call1: "CQ", Suffix1: true, Call2: "G4ABC", Grid: "JO22"},
+		{Type: MessageTypeEUVHFP, Call1: "DE", Suffix1: true, Call2: "G4ABC", Grid: "JO22"},
+		{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "CQ", Suffix2: true, Grid: "JO22"},
+	}
+	for _, msg := range cases {
+		if _, err := EncodeMessage(msg); err == nil {
+			t.Errorf("EncodeMessage(%+v) = nil err, want validateType2Suffix rejection", msg)
+		}
+	}
+}
+
 // TestEncodeMessage_Type2_RejectsBadCallsign verifies the std-callsign
-// shape gate. Mirrors the Type 1 rejection set; Type 2 is stricter
-// (no token escape), so the same bad-shape inputs fail here as well.
+// shape gate. Mirrors the Type 1 rejection set; bad-shape callsigns
+// (lowercase, wrong length, bad grid) fail at validateStdCallsign or
+// validateG15Slot — these are not tokens, so the validateType1Call
+// fallthrough to validateStdCallsign rejects them.
 func TestEncodeMessage_Type2_RejectsBadCallsign(t *testing.T) {
 	cases := []Message{
 		{Type: MessageTypeEUVHFP, Call1: "g4abc", Call2: "P9XYZ", Grid: "JO22"},   // lowercase
@@ -234,15 +270,13 @@ func TestType2_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestDecodeMessage_Type2_RejectsTokenInWire pins the asymmetry
-// versus Type 1: Type 1's decoder accepts token-range c28 values
-// bit-faithfully (the bit pattern IS legal Type 1); Type 2's decoder
-// rejects them as ErrTokenInGap because tokens are not legal in
-// Type 2's c28 partition per QEX Table 7. A token-range c28 on a
-// Type 2 wire is a spec-violating value (post-LDPC corruption or a
-// remote encoder bug).
-func TestDecodeMessage_Type2_RejectsTokenInWire(t *testing.T) {
-	// Manually plant a token c28 (CQ = 2) in Call1 of a Type 2 body.
+// TestDecodeMessage_Type2_AcceptsTokenInWire is the regression pin
+// for finding #2: per QEX Table 2, a token (CQ / DE / QRZ / "CQ
+// <suffix>") in a Type 2 c28 slot is valid. The decoder must
+// recover the token name, not return ErrTokenInGap. This test
+// plants the wire bits directly to verify the decode path
+// independently of the encoder.
+func TestDecodeMessage_Type2_AcceptsTokenInWire(t *testing.T) {
 	bits := make([]byte, MessageBits)
 	writeC28 := func(offset int, c28 uint32) {
 		for i := range CallsignBits {
@@ -255,6 +289,8 @@ func TestDecodeMessage_Type2_RejectsTokenInWire(t *testing.T) {
 	}
 	writeC28(0, tokenCQ)               // Call1 = CQ (token)
 	writeC28(29, CallsignC28("G4ABC")) // Call2 = G4ABC
+	// /P bit for Call2.
+	bits[57] = 1
 	g15 := Grid4ToG15("JO22")
 	for i := range G15Bits {
 		bits[59+i] = byte((g15 >> (G15Bits - 1 - i)) & 1)
@@ -262,9 +298,21 @@ func TestDecodeMessage_Type2_RejectsTokenInWire(t *testing.T) {
 	// i3 = 2.
 	bits[75] = 1
 
-	_, err := DecodeMessage(bits)
-	if !errors.Is(err, ErrTokenInGap) {
-		t.Errorf("DecodeMessage(Type 2 wire with token c28) err=%v, want ErrTokenInGap", err)
+	got, err := DecodeMessage(bits)
+	if err != nil {
+		t.Fatalf("DecodeMessage(Type 2 wire with token c28): %v — tokens are valid in Type 2 c28 per QEX Table 2", err)
+	}
+	if got.Type != MessageTypeEUVHFP {
+		t.Errorf("decoded Type = %d, want MessageTypeEUVHFP", got.Type)
+	}
+	if got.Call1 != "CQ" {
+		t.Errorf("Call1 = %q, want %q", got.Call1, "CQ")
+	}
+	if got.Call2 != "G4ABC" {
+		t.Errorf("Call2 = %q, want %q", got.Call2, "G4ABC")
+	}
+	if !got.Suffix2 {
+		t.Errorf("Suffix2 = false, want true (/P bit was planted)")
 	}
 }
 
@@ -369,19 +417,45 @@ func TestFormatMessage_Type2_BasicShapes(t *testing.T) {
 	}
 }
 
-// TestFormatMessage_Type2_RejectsToken verifies that the format path
-// shares the validateType2Call gate: tokens in either call slot
-// reject. Symmetric with the encoder's token-rejection guard.
-func TestFormatMessage_Type2_RejectsToken(t *testing.T) {
+// TestFormatMessage_Type2_RendersToken is the regression pin for
+// finding #2 at the format layer: token-bearing Type 2 messages
+// render with the token verbatim plus the /P-suffix-as-set rendering
+// rules. Tokens themselves never carry /P (validateType2Suffix gates
+// that combination); the /P appears only on the std-callsign slot.
+func TestFormatMessage_Type2_RendersToken(t *testing.T) {
+	cases := []struct {
+		msg  Message
+		want string
+	}{
+		{Message{Type: MessageTypeEUVHFP, Call1: "CQ", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}, "CQ G4ABC/P JO22"},
+		{Message{Type: MessageTypeEUVHFP, Call1: "DE", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}, "DE G4ABC/P JO22"},
+		{Message{Type: MessageTypeEUVHFP, Call1: "QRZ", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}, "QRZ G4ABC/P JO22"},
+		{Message{Type: MessageTypeEUVHFP, Call1: "CQ DX", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}, "CQ DX G4ABC/P JO22"},
+		{Message{Type: MessageTypeEUVHFP, Call1: "CQ 100", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}, "CQ 100 G4ABC/P JO22"},
+	}
+	for _, tc := range cases {
+		got, err := FormatMessage(tc.msg)
+		if err != nil {
+			t.Errorf("FormatMessage(%+v): %v", tc.msg, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("FormatMessage(%+v) = %q, want %q", tc.msg, got, tc.want)
+		}
+	}
+}
+
+// TestFormatMessage_Type2_RejectsSuffixOnToken pins the format-side
+// guard: validateType2Suffix rejects /P on a token, mirroring the
+// encode-side gate.
+func TestFormatMessage_Type2_RejectsSuffixOnToken(t *testing.T) {
 	cases := []Message{
-		{Type: MessageTypeEUVHFP, Call1: "CQ", Call2: "G4ABC", Grid: "JO22"},
-		{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "CQ", Grid: "JO22"},
-		{Type: MessageTypeEUVHFP, Call1: "DE", Call2: "G4ABC", Grid: "JO22"},
-		{Type: MessageTypeEUVHFP, Call1: "QRZ", Call2: "G4ABC", Grid: "JO22"},
+		{Type: MessageTypeEUVHFP, Call1: "CQ", Suffix1: true, Call2: "G4ABC", Grid: "JO22"},
+		{Type: MessageTypeEUVHFP, Call1: "G4ABC", Call2: "CQ", Suffix2: true, Grid: "JO22"},
 	}
 	for _, msg := range cases {
 		if _, err := FormatMessage(msg); err == nil {
-			t.Errorf("FormatMessage(%+v) = nil err, want token-rejection error", msg)
+			t.Errorf("FormatMessage(%+v) = nil err, want validateType2Suffix rejection", msg)
 		}
 	}
 }
@@ -440,22 +514,33 @@ func TestParseMessage_Type2_RejectsMixedRoverAndPortable(t *testing.T) {
 	}
 }
 
-// TestParseMessage_Type2_RejectsTokenStart pins the early-reject
-// gate for Type 1 tokens at the head of a Type 2 input. parseEUVHFP
-// catches CQ / DE / QRZ specifically so the error message names the
-// token rather than failing further down with a length-mismatch
-// callsign error.
-func TestParseMessage_Type2_RejectsTokenStart(t *testing.T) {
-	cases := []string{
-		"CQ G4ABC/P JO22",
-		"CQ DX G4ABC/P JO22",
-		"DE G4ABC/P JO22",
-		"QRZ G4ABC/P JO22",
+// TestParseMessage_Type2_AcceptsTokenStart is the regression pin
+// for finding #2 at the parse layer: token-prefixed Type 2 inputs
+// ("CQ G4ABC/P JO22", "DE G4ABC/P JO22", "QRZ G4ABC/P JO22",
+// "CQ DX G4ABC/P JO22") must parse to MessageTypeEUVHFP with the
+// token in Call1, the /P-bearing std call in Call2, and the
+// matching Suffix2 bit. The classifier routes to parseEUVHFP on
+// the /P trigger; parseEUVHFP dispatches by first-token to
+// parseCQEUVHFP / parseDirectedEUVHFP / parsePlainEUVHFP.
+func TestParseMessage_Type2_AcceptsTokenStart(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Message
+	}{
+		{"CQ G4ABC/P JO22", Message{Type: MessageTypeEUVHFP, Call1: "CQ", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"CQ DX G4ABC/P JO22", Message{Type: MessageTypeEUVHFP, Call1: "CQ DX", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"CQ 100 G4ABC/P JO22", Message{Type: MessageTypeEUVHFP, Call1: "CQ 100", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"DE G4ABC/P JO22", Message{Type: MessageTypeEUVHFP, Call1: "DE", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
+		{"QRZ G4ABC/P JO22", Message{Type: MessageTypeEUVHFP, Call1: "QRZ", Call2: "G4ABC", Suffix2: true, Grid: "JO22"}},
 	}
-	for _, in := range cases {
-		t.Run(in, func(t *testing.T) {
-			if _, err := ParseMessage(in); err == nil {
-				t.Errorf("ParseMessage(%q) = nil err, want token-rejection error", in)
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := ParseMessage(tc.in)
+			if err != nil {
+				t.Fatalf("ParseMessage(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseMessage(%q) = %+v, want %+v", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -465,6 +550,10 @@ func TestParseMessage_Type2_RejectsTokenStart(t *testing.T) {
 // ParseMessage → EncodeMessage → DecodeMessage → FormatMessage
 // returns the original input. Each transition is independently
 // tested elsewhere; this test is the integration point.
+//
+// Token-prefixed cases ("CQ ... /P ...") were added with finding
+// #2 — QEX Table 2 c28 accepts tokens in Type 2, so token-bearing
+// Type 2 messages must round-trip end-to-end.
 func TestType2_TextRoundTrip(t *testing.T) {
 	cases := []string{
 		"G4ABC/P P9XYZ JO22",
@@ -476,6 +565,14 @@ func TestType2_TextRoundTrip(t *testing.T) {
 		"G4ABC/P P9XYZ R JO22",
 		"G4ABC/P P9XYZ RR73",
 		"G4ABC/P P9XYZ/P R IO91",
+		// Token-prefixed (finding #2)
+		"CQ G4ABC/P JO22",
+		"CQ DX G4ABC/P JO22",
+		"CQ 100 G4ABC/P JO22",
+		"DE G4ABC/P JO22",
+		"QRZ G4ABC/P JO22",
+		"CQ G4ABC/P -11",
+		"CQ G4ABC/P R JO22",
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {

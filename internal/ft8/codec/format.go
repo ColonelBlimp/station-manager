@@ -98,14 +98,22 @@ func formatStd(m Message) (string, error) {
 // formatEUVHFP renders a Type 2 (EU VHF /P) message. Mirrors formatStd
 // but emits /P (portable) instead of /R (rover) for the Suffix bit —
 // the wire slot is shared between the two types and the rendered
-// character is chosen by the Type discriminator. Validation runs
-// through validateType2Call, which rejects tokens (Type 2's c28
-// partition is std-callsign-only per QEX Table 7).
+// character is chosen by the Type discriminator. Per QEX Table 2
+// the c28 field accepts both std callsigns and tokens (CQ / DE /
+// QRZ / "CQ <suffix>"); validateType2Call shares its body with
+// validateType1Call, and validateType2Suffix gates /P on a token
+// the same way Type 1 gates /R.
 func formatEUVHFP(m Message) (string, error) {
 	if err := validateType2Call(m.Call1, "Call1"); err != nil {
 		return "", err
 	}
+	if err := validateType2Suffix(m.Call1, m.Suffix1, "Call1"); err != nil {
+		return "", err
+	}
 	if err := validateType2Call(m.Call2, "Call2"); err != nil {
+		return "", err
+	}
+	if err := validateType2Suffix(m.Call2, m.Suffix2, "Call2"); err != nil {
 		return "", err
 	}
 	if err := validateG15Slot(m.Grid); err != nil {

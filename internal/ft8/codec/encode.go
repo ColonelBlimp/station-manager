@@ -114,19 +114,25 @@ func encodeStd(m Message) ([]byte, error) {
 //	c28(Call1) | p1(Suffix1) | c28(Call2) | p1(Suffix2) | R1(AckBit) | g15(Grid) | i3=2
 //	    28          1             28           1             1           15        3   = 77 bits
 //
-// Structurally identical to Type 1 — same widths, same offsets — but
-// the c28 partition is restricted to standard callsigns: tokens
-// (CQ / DE / QRZ / "CQ <suffix>") are NOT valid in Type 2 per QEX
-// paper Table 7 (the token partition is specific to Type 1's c28).
-// The per-callsign 1-bit slot is named "p1" in Table 1 and renders
-// as /P (portable), distinct from Type 1's "r1" (/R rover); the bit
-// itself is stored in the same Suffix1/Suffix2 fields and FormatMessage
-// disambiguates by Type.
+// Structurally and semantically identical to Type 1 at the c28
+// level — per QEX Table 2 the c28 field accepts standard callsign,
+// CQ, DE, QRZ, or a 22-bit hash, in both Type 1 and Type 2. The
+// per-callsign 1-bit slot is named "p1" in Table 1 and renders as
+// /P (portable), distinct from Type 1's "r1" (/R rover); the bit
+// itself is stored in the same Suffix1/Suffix2 fields and the
+// formatter disambiguates by Type. validateType2Suffix rejects /P
+// on a token (symmetric with Type 1's /R-on-token gate).
 func encodeEUVHFP(m Message) ([]byte, error) {
 	if err := validateType2Call(m.Call1, "Call1"); err != nil {
 		return nil, err
 	}
+	if err := validateType2Suffix(m.Call1, m.Suffix1, "Call1"); err != nil {
+		return nil, err
+	}
 	if err := validateType2Call(m.Call2, "Call2"); err != nil {
+		return nil, err
+	}
+	if err := validateType2Suffix(m.Call2, m.Suffix2, "Call2"); err != nil {
 		return nil, err
 	}
 	if err := validateG15Slot(m.Grid); err != nil {
@@ -134,9 +140,9 @@ func encodeEUVHFP(m Message) ([]byte, error) {
 	}
 
 	var b BitBuilder
-	b.Append(uint64(CallsignC28(m.Call1)), CallsignBits).
+	b.Append(uint64(type1CallToC28(m.Call1)), CallsignBits).
 		Append(boolBit(m.Suffix1), 1).
-		Append(uint64(CallsignC28(m.Call2)), CallsignBits).
+		Append(uint64(type1CallToC28(m.Call2)), CallsignBits).
 		Append(boolBit(m.Suffix2), 1).
 		Append(boolBit(m.AckBit), 1).
 		Append(uint64(Grid4ToG15(m.Grid)), G15Bits).
@@ -257,20 +263,36 @@ func validateType5Grid(g string) error {
 	return nil
 }
 
-// validateType2Call enforces the Type 2 c28 shape: a standard amateur
-// callsign with no token escape. Type 1's `type1CallToC28` routes
-// CQ / DE / QRZ / "CQ <suffix>" through the token partition; Type 2
-// has no such partition and rejects those inputs.
+// validateType2Call enforces the Type 2 c28 shape. Per QEX paper
+// Table 2 the c28 field — used in BOTH Type 1 and Type 2 — accepts
+// "Standard callsign, CQ, DE, QRZ, or 22-bit hash", so a Type 2 Call
+// slot has the same shape rules as Type 1: recognised token OR std
+// callsign. The earlier carve-out ("tokens are not valid in Type 2")
+// was spec-incorrect — finding #2.
 //
 // Returned errors are tagged with the field name (Call1 / Call2) so
 // the caller can locate the bad input without inspecting the error
 // chain.
 func validateType2Call(call, field string) error {
-	const op errors.Op = "codec.validateType2Call"
-	if _, ok := TokenToC28(call); ok {
-		return errors.New(op).WithMsgf("%s = %q is a token (CQ / DE / QRZ / CQ <suffix>); tokens are not valid in Type 2 (EU VHF /P)", field, call)
+	return validateType1Call(call, field)
+}
+
+// validateType2Suffix is the Type 2 mirror of validateType1Suffix.
+// The p1 bit slot (rendered as /P "portable") is meaningless on a
+// token: tokens like CQ / DE / QRZ aren't callsigns, so a /P
+// portable flag on a token has no rendering and no semantic. The
+// validator rejects the combination at encode + format boundaries;
+// the decoder stays bit-faithful per the same asymmetry rationale
+// as Type 1's /R suffix gate.
+func validateType2Suffix(call string, suffix bool, field string) error {
+	const op errors.Op = "codec.validateType2Suffix"
+	if !suffix {
+		return nil
 	}
-	return validateStdCallsign(call, field)
+	if _, isTok := TokenToC28(call); isTok {
+		return errors.New(op).WithMsgf("%s = %q is a token; /P suffix bit cannot be set on a non-callsign", field, call)
+	}
+	return nil
 }
 
 // encodeNonStdCall packs a Type 4 (NonStd Call) body per QEX Table 1:
