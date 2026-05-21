@@ -1010,53 +1010,88 @@ decoder / format / parse + `G25ToGrid6` Layer 1 inverse + new
 `Message.Hash22` / `Report3` / `Serial` / `Grid6` fields + Free
 Text classifier tightening to exclude angle-bracket inputs +
 Type 5 classifier dispatch ahead of Type 4) shipped 2026-05-20;
-**Phase 4 hash table (receiver-side running callsign-hash table —
+Phase 4 hash table (receiver-side running callsign-hash table —
 `internal/ft8/codec/hashtable.go` with bounded FIFO + LRU-on-
 reinsert eviction, `Insert` / `LookupH22` / `LookupH12` /
 `LookupH10` / `Observe(Message)` / `Resolve(Message) Message`)
-shipped 2026-05-20**.
-Type 1 ("Std Msg") now round-trips long-format std callsigns AND
+shipped 2026-05-20; **session 77 (2026-05-21) spec-correctness
+sweep + Type 3 RTTY Roundup SHIPPED** — six-commit chain landing
+(i) the **i3=5 mis-assignment fix** (Phase 3D had shipped Type 5
+at wire i3=3 instead of the QEX-Table-1-mandated i3=5; constants
+renumbered + test pins updated, i3=3 freed for Type 3 RTTY RU);
+(ii) **finding #1** — `CallsignC28` rewritten with digit-
+position-3 alignment so EVERY std-shape callsign packs into the
+`[stdCallOffset, 2^28)` range per QEX Appendix A Table 7's
+"Standard call signs" row ("28 bits are enough to encode any
+standard call sign uniquely") — short-call `HashedCallC28`
+routing dropped; spec-vectors regenerated (M1A 10,608,568, K1JT
+10,222,009, VK7MO 237,090,319, G3X 9,483,721, AB1CD 86,389,684);
+(iii) **finding #2** — Type 2 c28 now accepts tokens (CQ / DE /
+QRZ / "CQ <suffix>") per QEX Table 2's universal c28 definition;
+`validateType2Call` delegates to `validateType1Call`; new
+`validateType2Suffix` gates /P on a token; `parseEUVHFP`
+refactored into dispatcher + `parseCQEUVHFP` / `parseDirectedEUVHFP`
+/ `parsePlainEUVHFP` mirroring `parseStd`; "CQ G4ABC/P JO22"
+round-trips end-to-end; (iv) **finding #3** — Free Text parser
+now falls back to Type 0.0 when structured parse fails AND
+`validateFreeText` accepts (so QEX Table 1's canonical example
+"TNX BOB 73 GL" with no `.`/`?` trigger parses correctly);
+(v) **finding #4** — `G25ToGrid6` signature changed from
+`(uint32) string` to `(uint32) (string, bool)` so out-of-range
+g25 (~44% of 25-bit codepoints) returns `("", false)` instead of
+panicking; `decodeEUVHFHash` wraps as new `ErrInvalidGrid6`;
+(vi) **Type 3 RTTY Roundup end-to-end** — new `rttyroundup.go`
+Layer 1 primitive for the multi-modal s13 exchange slot
+(serial 0..7999 OR state/province from the 65-entry QEX ref [14]
+`states_provinces.txt` lookup; `S13Kind` enum + `SerialToS13` /
+`StateToS13` / `S13ToExchange` API), new `Message.TU` (t1 prefix)
++ `Message.StateProvince` fields, new `encodeRTTYRoundup` /
+`decodeRTTYRoundup` / `formatRTTYRoundup` / `parseRTTYRoundup`,
+new `ErrInvalidS13` sentinel for unassigned s13 codepoints,
+classifier trigger `isType3Trigger` on `"TU;"` first-token OR
+`"5N9"` 3-digit report token (N ∈ 2..9). Type 3's r3 displays
+per QEX Table 2 as "5"+(r3+2)+"9" (r3=0 → 529, r3=7 → 599).
+Type 1 ("Std Msg") now round-trips std callsigns of any length
+3..6 (incl. short calls K1JT / G3X / M1A / VK7MO / AB1CD that
+previously errored as `ErrCallsignNeedsHashLookup`) AND
 CQ/DE/QRZ/`CQ <suffix>` tokens bit-for-bit AND text-for-text.
-Type 2 ("EU VHF /P") round-trips standard-callsign pairs with the
-/P portable suffix on either or both calls; tokens are not valid
-in Type 2's c28 partition per QEX Table 7 (rejected at encode +
-format, surfaced as `ErrTokenInGap` at decode). Type 4 ("NonStd
-Call") round-trips one-hashed-side + one-nonstd-c58-side pairs,
-plus the CQ-from-nonstd form (c1=1); the hashed side's bits
-resolve only at the Phase 4 hash-table layer, so decode surfaces
-a `<...>` sentinel in the call slot + the raw 12-bit hash in
-`Message.Hash12`. Type 5 ("EU VHF hashes+g25") round-trips
-contest-style exchanges where BOTH callsigns hash to the wire
-(h12 + h22) plus an `AckBit`, 3-bit `Report3` (display 52..59
-per QEX Table 2), 11-bit `Serial` (0..2047), and 6-character
-`Grid6` Maidenhead locator; both call sides surface as `<...>`
-sentinels post-decode with `Message.Hash12` and `Message.Hash22`
-carrying the raw hash values. Type 0.0 ("Free Text") round-trips
-1-13 character payloads in the 42-symbol f71 alphabet through the
-same pipeline.
+Type 2 ("EU VHF /P") round-trips std-callsign pairs AND tokens
+with the /P portable suffix on either or both call slots.
+Type 3 ("RTTY Roundup") round-trips with TU prefix + R ack +
+token-aware Call1 + serial-or-state exchange forms. Type 4
+("NonStd Call") round-trips one-hashed-side + one-nonstd-c58-side
+pairs plus the CQ-from-nonstd form; the hashed side surfaces as
+`<...>` sentinel + raw `Hash12`. Type 5 ("EU VHF hashes+g25")
+round-trips contest-style exchanges where BOTH callsigns hash to
+the wire (h12 + h22) plus `AckBit`, `Report3`, `Serial`, `Grid6`.
+Type 0.0 ("Free Text") round-trips 1-13 character f71-alphabet
+payloads via both eager `.`/`?` trigger and the no-trigger
+fallback.
 Parser classifier dispatch order: Free Text on the presence of
-`.` or `?` (AND absence of angle brackets — Phase 3D refinement
-so the Type-4/5 hashed-call display form doesn't trip the Free
-Text trigger); Type 5 on both first two tokens being
-angle-bracketed AND the last token being a 6-char Maidenhead grid;
-Type 4 on angle brackets / mid-slash / non-/R-non-/P trailing
-slash / token longer than 6 chars without slash; Type 2 on the
-presence of any `/P` token suffix; Type 1 by default.
-Short callsigns (3–4 char and 5-char-2-prefix) route through
-`HashedCallC28` and decode to a sentinel error
-(`ErrCallsignNeedsHashLookup`) — the FT8 service layer's running
-22-bit hash table will resolve those once the decoder path is
-updated to surface a sentinel + raw `Hash22` (deferred follow-up
-inside Phase 4; the `HashTable.LookupH22` primitive is ready).
+`.` or `?` (AND absence of angle brackets); Type 5 on both first
+two tokens being angle-bracketed AND the last token being a
+6-char Maidenhead grid; Type 4 on angle brackets / mid-slash /
+non-/R-non-/P trailing slash / token longer than 6 chars without
+slash; Type 2 on the presence of any `/P` token suffix; Type 3
+on `"TU;"` first-token OR `"5N9"` 3-digit report token; Type 1
+by default; Free Text no-trigger fallback if Type 1 fails AND
+input fits f71 constraints.
 The Phase 4 hash table itself shipped 2026-05-20:
 `HashTable.Insert` / `Observe(Message)` for receiver-loop ingest,
 `LookupH10` / `LookupH12` / `LookupH22` for direct hash queries,
 and `Resolve(Message) Message` for type-aware sentinel
 replacement (Type 4 via Hash12; Type 5 via Hash12+Hash22).
-Phase 4 still covers the specialty message types (0.1 DXpedition,
-0.3/0.4 Field Day, 3 RTTY Roundup, 0.5 Telemetry).
+Phase 4 remaining scope: Type 0.1 (DXpedition, `c28 c28 h10 r5`),
+Type 0.3 (Field Day ARRL, `c28 c28 R1 n4 k3 S7`), Type 0.4 (Field
+Day RAC, same shape as 0.3), Type 0.5 (Telemetry, `t71`).
 Layers 3+4 (signal-processing pipeline + WAV-corpus tests) and
 the LDPC decoder remain.
+Deferred follow-up still open: Type 1's `decodeStd` continues to
+return `ErrCallsignNeedsHashLookup` for c28 values in the
+`[nTokens, stdCallOffset)` hash partition. After finding #1 the
+partition only holds legitimate non-std-call hashes (Type 4 c58 →
+later h22 reference); the symmetric "surface `<...>` + `Hash22`,
+let `Resolve` handle it" path is still unshipped.
 
 | Layer 1 primitive | File | ns/op | allocs |
 |---|---|---|---|
@@ -1065,7 +1100,7 @@ the LDPC decoder remain.
 | `CallsignC28` (standard call → 28 bits) + `C28ToCallsign` inverse | `callsign.go` | 34–46 | 0 |
 | LDPC(174,91) matrices + `LDPCEncode` | `ldpc.go`, `qexref14/` | 4123 | 1 |
 | `Grid4ToG15` (4-char grid / reserved / report) + `G15ToGrid4` inverse | `grid.go` | 4–9 | 0 |
-| `Grid6ToG25` (6-char grid) + `G25ToGrid6` inverse (Phase 3D) | `grid.go` | 4.6 | 0 |
+| `Grid6ToG25` (6-char grid) + `G25ToGrid6 (uint32) (string, bool)` inverse (Phase 3D; signature widened session 77 finding #4 — out-of-range g25 returns `("", false)` rather than panicking, decoder wraps as `ErrInvalidGrid6`) | `grid.go` | 4.6 | 0 |
 | `HashCodes` (h10/h12/h22) + `HashedCallC28` | `hashcodes.go` | 50 | 0 |
 | `FreeTextToF71` (13-char free text → 71 bits) | `freetext.go` | 150 | 1 |
 | `CallsignC58` (nonstandard / compound call) + `C58ToCallsign` inverse | `nonstdcall.go` | 48 | 0 |
@@ -1075,23 +1110,26 @@ Phase 2 additions:
 | Layer 2 component | File | Notes |
 |---|---|---|
 | `BitBuilder` | `bitbuilder.go` | MSB-first composer; chainable `Append` + `AppendBits`; ~271 ns for a 77-bit Type 1 build |
-| `Message` + `MessageType` | `message.go` | Concrete struct discriminated by `Type`; 10 enum values declared, `MessageTypeStd` (Phase 2) + `MessageTypeFreeText` (Phase 3A) + `MessageTypeEUVHFP` (Phase 3B) + `MessageTypeNonStdCall` (Phase 3C) + `MessageTypeEUVHFHash` (Phase 3D) implemented. Per-callsign `Suffix1`/`Suffix2` boolean fields are type-neutral — Type 1 renders /R, Type 2 renders /P. `Hash12 uint16` carries the raw 12-bit hash for decoded Type 4 + Type 5 messages whose hash side is unresolved; `Hash22 uint32` carries the 22-bit hash for Type 5's second-callsign slot. `Report3 uint8` (0..7, displayed 52..59) + `Serial uint16` (0..2047) + `Grid6 string` (6-char Maidenhead) carry the Type 5 contest-exchange payload |
-| `wire.go` | `wire.go` | Layer 2 wire-format constants centralised (Phase 3C → Phase 3D): `MessageBits`, `i3Width` / `i3Offset`, i3 tag values (`i3Std` / `i3EUVHFP` / `i3EUVHFHash` / `i3NonStdCall` / `i3Zero`), n3 family (`n3FreeText` / `n3FieldBits`), Type 4 widths (`h12Bits` / `h1Bits` / `r2Bits` / `c1Bits`), Type 4 r2 token codes (`r2Blank` / `r2RRR` / `r2RR73` / `r2_73`), Type 5 widths (`r3Bits` / `s11Bits`) + Type 5 report bias (`r3Bias`=52) + serial cap (`s11Max`=2047). Per-primitive Layer 1 widths stay with their primitive files (`HashBits22` in hashcodes.go, `G25Bits` in grid.go) |
-| `EncodeMessage` + `encodeStd` + `type1CallToC28` + `stdCallToC28` | `encode.go` | Type 1 packer; routes Call1/Call2 through `TokenToC28` first, then `stdCallToC28` (short calls via `HashedCallC28` per QEX §A); `validateType1Suffix` blocks token+suffix combinations; `slices.Clone` on return detaches BitBuilder storage |
-| `encodeEUVHFP` + `validateType2Call` | `encode.go` | Type 2 packer (Phase 3B); `c28 + suffix + c28 + suffix + R1 + g15 + i3=2` = 77 bits; uses `stdCallToC28` directly (no token routing — tokens not valid in Type 2 per QEX Table 7); `validateType2Call` explicitly rejects tokens for a clear diagnostic |
-| `encodeNonStdCall` + `validateType4Calls` + `isType4ValidNonStdCall` + `gridToR2` / `r2ToGrid` | `encode.go` | Type 4 packer (Phase 3C); `h12 + c58 + h1 + r2 + c1 + i3=4` = 77 bits; std-vs-nonstd shape detection picks h1; `Call1 == "CQ"` sets c1 (h12 wire bits ignored); validator enforces exactly-one-std + one-nonstd OR CQ + nonstd, rejects CQ-with-suffix and Type 1 tokens, restricts Grid to `{"", "RRR", "RR73", "73"}` |
-| `encodeEUVHFHash` + `validateType5Call` + `validateType5Report` + `validateType5Serial` + `validateType5Grid` | `encode.go` | Type 5 packer (Phase 3D); `h12 + h22 + R1 + r3 + s11 + g25 + i3=3` = 77 bits; both callsigns go through `HashCodes` (h12 from Call1, h22 from Call2); validator enforces std-callsign-only on both calls (tokens rejected), Report3 in [0,7], Serial in [0,2047], Grid6 as strict 6-char Maidenhead |
+| `Message` + `MessageType` | `message.go` | Concrete struct discriminated by `Type`; 10 enum values declared; **implemented (post-session-77):** `MessageTypeStd` + `MessageTypeFreeText` + `MessageTypeEUVHFP` + `MessageTypeRTTYRU` + `MessageTypeNonStdCall` + `MessageTypeEUVHFHash`. Per-callsign `Suffix1`/`Suffix2` boolean fields are type-neutral — Type 1 renders /R, Type 2 renders /P, Types 3/4/5 don't use them. `Hash12 uint16` carries the raw 12-bit hash for decoded Type 4 + Type 5 messages; `Hash22 uint32` for Type 5's second-callsign slot. `Report3 uint8` (0..7) is reused across Types 3 + 5 with different display mappings; `Serial uint16` is reused across Types 3 + 5 with per-Type max (2047 for Type 5 s11, 7999 for Type 3 s13 serial form). `Grid6 string` carries Type 5 Maidenhead. **Session 77 additions:** `TU bool` (Type 3 t1 prefix slot) + `StateProvince string` (Type 3 s13 state-form exchange) |
+| `wire.go` | `wire.go` | Layer 2 wire-format constants centralised: `MessageBits`, `i3Width` / `i3Offset`, i3 tag values (`i3Std` / `i3EUVHFP` / `i3RTTYRoundup` / `i3NonStdCall` / `i3EUVHFHash` / `i3Zero` — per QEX Table 1 column "Type i3.n3" the dotted-number IS the wire i3 for top-level types; **session-77 fix** corrected `i3EUVHFHash` from 3 to 5), n3 family (`n3FreeText` / `n3FieldBits`), Type 4 widths (`h12Bits` / `h1Bits` / `r2Bits` / `c1Bits`), Type 4 r2 token codes, Type 5 widths (`r3Bits` / `s11Bits`) + bias (`r3Bias`=52, Type 5 displays "52".."59"). **Session 77 additions for Type 3:** `t1Bits` / `s13Bits`, `s13SerialMax`=7999, `s13StateBase`=8001, `r3DisplayBiasType3`=2 (Type 3 displays "529".."599"). Per-primitive Layer 1 widths stay with their primitive files (`HashBits22` in hashcodes.go, `G25Bits` in grid.go) |
+| `EncodeMessage` + `encodeStd` + `type1CallToC28` | `encode.go` | Type 1 packer; routes Call1/Call2 through `TokenToC28` first, then `CallsignC28` directly (post-session-77 finding #1 — `CallsignC28` uses digit-position-3 alignment so every std-shape call packs into the `[stdCallOffset, 2^28)` range per QEX Appendix A Table 7); `validateType1Suffix` blocks token+suffix combinations; `slices.Clone` on return detaches BitBuilder storage |
+| `encodeEUVHFP` + `validateType2Call` + `validateType2Suffix` | `encode.go` | Type 2 packer; `c28 + suffix + c28 + suffix + R1 + g15 + i3=2` = 77 bits; routes Call1/Call2 through `type1CallToC28` (post-session-77 finding #2 — Type 2 c28 accepts tokens per QEX Table 2's universal "Standard callsign, CQ, DE, QRZ, or 22-bit hash" definition); `validateType2Call` delegates to `validateType1Call`; new `validateType2Suffix` rejects /P portable bit on a token |
+| `encodeRTTYRoundup` + `validateRTTYReport` | `encode.go` | Type 3 packer (session 77); `t1 + c28 + c28 + R1 + r3 + s13 + i3=3` = 77 bits. Token-aware c28 via `type1CallToC28`; no per-call suffix slots; exclusive choice between Serial (0..7999) and StateProvince (lookup in `rttyRoundupStates`); `validateRTTYReport` bounds Report3 ∈ [0,7] |
+| `encodeNonStdCall` + `validateType4Calls` + `isType4ValidNonStdCall` + `gridToR2` / `r2ToGrid` | `encode.go` | Type 4 packer; `h12 + c58 + h1 + r2 + c1 + i3=4` = 77 bits; std-vs-nonstd shape detection picks h1; `Call1 == "CQ"` sets c1 (h12 wire bits ignored); validator enforces exactly-one-std + one-nonstd OR CQ + nonstd, rejects CQ-with-suffix and Type 1 tokens, restricts Grid to `{"", "RRR", "RR73", "73"}` |
+| `encodeEUVHFHash` + `validateType5Call` + `validateType5Report` + `validateType5Serial` + `validateType5Grid` | `encode.go` | Type 5 packer; `h12 + h22 + R1 + r3 + s11 + g25 + i3=5` = 77 bits (i3 corrected session 77); both callsigns go through `HashCodes` (h12 from Call1, h22 from Call2); validator enforces std-callsign-only on both calls (tokens rejected), Report3 in [0,7], Serial in [0,2047], Grid6 as strict 6-char Maidenhead |
 | `encodeFreeText` + `validateFreeText` + `isF71Char` | `encode.go` | Type 0.0 packer; `f71 + n3=0 + i3=0` = 77 bits via `BitBuilder.AppendBits`; validates 1-13 char range + f71 alphabet upstream of the primitive |
-| `DecodeMessage` + `decodeStd` + `type1CallFromC28` + `readBitsUint64` | `decode.go` | Type 1 unpacker; bit-faithful (accepts token+suffix wire pattern, semantic gates run at format/encode); `ErrTokenInGap` for spec-violating wire values |
-| `decodeEUVHFP` + `type2CallFromC28` | `decode.go` | Type 2 unpacker (Phase 3B); rejects token-range c28 values as `ErrTokenInGap` (asymmetric with Type 1 — tokens are not legal Type 2 wire values per QEX Table 7); hash-range surfaces `ErrCallsignNeedsHashLookup` like Type 1 |
-| `decodeNonStdCall` + `type2CallFromC28`'s sibling | `decode.go` | Type 4 unpacker (Phase 3C); recovers c58 side fully via `C58ToCallsign`, surfaces raw `Hash12` value + `hashedCallSentinel` (`"<...>"`) on the hash side until Phase 4's table resolves it. CQ-from-nonstd path (c1=1) zeroes `Hash12` per spec |
-| `decodeEUVHFHash` | `decode.go` | Type 5 unpacker (Phase 3D); both call slots surface as `hashedCallSentinel` (`"<...>"`) with raw `Hash12` + `Hash22` in `Message` for Phase 4's table to resolve; Grid6 fully recovers via `G25ToGrid6`; AckBit / Report3 / Serial all decode straight from the wire |
+| `DecodeMessage` + `decodeStd` + `type1CallFromC28` + `readBitsUint64` | `decode.go` | Type 1 unpacker; bit-faithful (accepts token+suffix wire pattern, semantic gates run at format/encode); `ErrTokenInGap` for spec-violating wire values; `ErrCallsignNeedsHashLookup` for c28 in the hash partition (post-finding-#1 only holds legitimate non-std-call hashes — short std calls now decode losslessly) |
+| `decodeEUVHFP` | `decode.go` | Type 2 unpacker (post-session-77 finding #2 — uses `type1CallFromC28` since Type 1 and Type 2 c28 partitions are identical per QEX Table 2; obsolete `type2CallFromC28` removed); hash-range c28 surfaces `ErrCallsignNeedsHashLookup` like Type 1 |
+| `decodeRTTYRoundup` | `decode.go` | Type 3 unpacker (session 77); routes c28 via `type1CallFromC28`; `S13ToExchange` populates either Serial (0..7999) or StateProvince (from `rttyRoundupStates` lookup); new `ErrInvalidS13` for unassigned s13 codepoints (8000, > 8065) |
+| `decodeNonStdCall` | `decode.go` | Type 4 unpacker; recovers c58 side fully via `C58ToCallsign`, surfaces raw `Hash12` value + `hashedCallSentinel` (`"<...>"`) on the hash side until Phase 4's table resolves it. CQ-from-nonstd path (c1=1) zeroes `Hash12` per spec |
+| `decodeEUVHFHash` | `decode.go` | Type 5 unpacker; both call slots surface as `hashedCallSentinel` (`"<...>"`) with raw `Hash12` + `Hash22` in `Message` for Phase 4's table to resolve; Grid6 recovers via `G25ToGrid6` (post-session-77 finding #4 — now returns `(string, bool)`, decoder wraps as `ErrInvalidGrid6` instead of panicking on out-of-range); AckBit / Report3 / Serial decode straight from the wire |
 | `decodeI3Zero` + `decodeFreeText` | `decode.go` | Type 0.0 unpacker; sub-dispatches the i3=0 family on n3 (Phase 3A wires n3=0 only; 1/3/4/5 return `ErrUnknownMessageType` until Phase 4) |
 | `TokenToC28` + `C28ToToken` | `token.go` | CQ-token partition per QEX Table 7; unified formula `c28 = 1003 + base27(left-space-padded 4-char suffix)` with `(T, bool)` returns; intra-row + inter-row gaps surface as `(_, false)` |
-| `F71ToFreeText` | `freetext.go` | Layer 1 inverse of `FreeTextToF71`; 128-bit divmod via `math/bits.Div64` (two-step split to handle 7-bit `hi` cleanly against the 42 divisor); trims leading spaces per `adjustr` padding asymmetry |
-| `FormatMessage` + `formatStd` + `formatEUVHFP` + `formatNonStdCall` + `formatEUVHFHash` + `formatFreeText` | `format.go` | Type 1 + Type 2 + Type 4 + Type 5 + Type 0.0 text rendering. Type 1 renders `/R`; Type 2 renders `/P`; both share `formatGridField` (ack-R fused with reports `R-09`, separated from grids `R IO91`). Type 4 angle-brackets the hashed side (`renderType4Call` accepts std-shape, `"<...>"` sentinel, and pre-bracketed forms); format-side validator laxer than encode's to accept decoded-message shapes. Type 5 brackets BOTH calls (`renderType5Call`, same sentinel + pre-bracketed acceptance) and fuses report+serial into one token (e.g. `570007` = report 5 → display 57 + serial 7 → "0007"). Type 0.0 emits the FreeText payload as-is |
-| `ParseMessage` + `parseStd` + `parseEUVHFP` + `parseNonStdCall` + `parseEUVHFHash` + `parseFreeText` + classifier | `parse.go` | Text → Message; classifier dispatch order: Free Text (`.`/`?` AND no angle brackets — Phase 3D refinement) → Type 5 (both first two tokens bracketed AND last token is a 6-char Maidenhead grid) → Type 4 (angle brackets / mid-slash / non-/R-non-/P trailing slash / token > 6 chars without slash) → Type 2 (`/P` suffix) → Type 1; `consumeCall` strips `/R` for Type 1, `consumePortableCall` strips `/P` for Type 2, `stripAngleBrackets` strips outer `<>` for Types 4/5; `splitReportSerial` splits the fused `rrSSSS` token for Type 5; `consumeGridField` recognises R-fused vs. R-separated ack (shared between Type 1/2); strict structured-or-Free-Text (no implicit fallback) per Phase 3A design choice #3 |
-| `C28Kind` + `G15Kind` discriminators | `callsign.go`, `grid.go` | Route-B kind enums for the multi-modal c28/g15 partition spaces |
+| `F71ToFreeText` | `freetext.go` | Layer 1 inverse of `FreeTextToF71`; 128-bit divmod via `math/bits.Div64`; trims leading spaces per `adjustr` padding asymmetry |
+| `S13ToExchange` + `SerialToS13` + `StateToS13` + `rttyRoundupStates` | `rttyroundup.go` | Type 3 Layer 1 multi-modal s13 exchange primitive (session 77). `rttyRoundupStates` table verbatim from QEX ref [14] `states_provinces.txt` (65 entries). `S13Kind` enum: `Serial / State / Unassigned`. Round-trip via `(SerialToS13 \| StateToS13)` forward + `S13ToExchange` inverse. The Type 3 r3 display ("5"+(r3+2)+"9") is rendered in `formatRTTYRoundup`, not in this primitive |
+| `FormatMessage` + `formatStd` + `formatEUVHFP` + `formatRTTYRoundup` + `formatNonStdCall` + `formatEUVHFHash` + `formatFreeText` | `format.go` | Type 1 + 2 + 3 + 4 + 5 + 0.0 text rendering. Type 1 renders `/R`; Type 2 renders `/P`; both share `formatGridField` (ack-R fused with reports `R-09`, separated from grids `R IO91`). Type 3 (session 77) renders `[TU; ]<call1> <call2> [R ]5N9 <exchange>` with 4-digit zero-padded serial or state code. Type 4 angle-brackets the hashed side; Type 5 brackets BOTH calls and fuses report+serial into one token. Type 0.0 emits the FreeText payload as-is |
+| `ParseMessage` + `parseStd` + `parseEUVHFP` + `parseRTTYRoundup` + `parseNonStdCall` + `parseEUVHFHash` + `parseFreeText` + classifier | `parse.go` | Text → Message; classifier dispatch order: Free Text (`.`/`?` AND no angle brackets) → Type 5 (dual `<>` + g25 grid trailing) → Type 4 (any bracket / mid-slash / non-/R-non-/P trailing slash / > 6 chars no slash) → Type 2 (`/P` suffix) → Type 3 (`"TU;"` first-token OR `"5N9"` 3-digit report token, N ∈ 2..9) → Type 1; **post-session-77 finding #3:** Free Text fallback after Type 1 fails if input ≤ 13 chars and all chars in f71 alphabet (handles "TNX BOB 73 GL"). `parseEUVHFP` is now a dispatcher mirroring `parseStd`'s shape (post-session-77 finding #2): `parseCQEUVHFP` / `parseDirectedEUVHFP` / `parsePlainEUVHFP` |
+| `C28Kind` + `G15Kind` + `S13Kind` discriminators | `callsign.go`, `grid.go`, `rttyroundup.go` | Route-B kind enums for the multi-modal c28 / g15 / s13 partition spaces |
 | `HashTable` (`Insert` / `LookupH22` / `LookupH12` / `LookupH10` / `Observe` / `Resolve` / `Len`) | `hashtable.go` | Phase 4 receiver-side running callsign-hash table per QEX §6. Bounded capacity (default 100, WSJT-X convention) with FIFO eviction of the oldest entry on overflow + LRU-on-reinsert (re-Inserting a present callsign moves it to MRU). Newest-wins on hash collision via newest-to-oldest lookup iteration; collision rates at cap=100 are h22≈0.002% / h12≈2.4% / h10≈10%. Insert silently filters non-callsigns (empty, `<...>` sentinel, tokens via `TokenToC28`, out-of-alphabet, > 11 chars) and trims whitespace. Observe walks Call1/Call2 of a decoded Message and Inserts each. Resolve takes a Message and returns a copy with sentinel call slots replaced — Type 4 uses Hash12 → whichever slot is sentinel; Type 5 uses Hash12 → Call1 and Hash22 → Call2; resolved hash fields are zeroed; other Types return unchanged. Thread-safe via `sync.RWMutex` |
 
 The codec package was renamed from `internal/ft8/decoder` →
