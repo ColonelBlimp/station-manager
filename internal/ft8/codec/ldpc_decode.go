@@ -210,3 +210,65 @@ func syndromeZero(codeword []byte) bool {
 // itoaCodewordBits is the precomputed string form of CodewordBits.
 // Used by panic messages in the hot path to avoid a strconv import.
 const itoaCodewordBits = "174"
+
+// LDPCDecode is the headline decode entry point: run BP on 174 LLRs,
+// extract the systematic 91-bit info word from the recovered codeword,
+// split it into the 77-bit message body + 14-bit received CRC, and
+// validate the CRC over the message. Returns the 77-bit message body
+// (bit-per-byte form) and an ok flag that's true iff BP converged
+// AND the CRC matched.
+//
+// Combined-pass acceptance per QEX paper §6 ("If the decoder returns
+// a codeword whose 77-bit decoded CRC matches the decoded CRC, the
+// algorithm terminates and the decoded message is unpacked and
+// displayed to the user."). Both gates are required:
+//
+//   - BP convergence (zero parity-check syndrome) means the recovered
+//     bits ARE a valid LDPC codeword. Without it the first 91 bits
+//     are likely garbage even if a few happen to form a self-consistent
+//     CRC pair.
+//   - CRC validation catches the case where BP converged to a
+//     valid-but-wrong codeword (LDPC's decision space has many
+//     codewords; the CRC is the semantic-layer tiebreaker).
+//
+// On ok=false the returned slice is nil. Callers that want the BP
+// hard-decision regardless of CRC for diagnostic / OSD post-processing
+// should call LDPCDecodeBP directly.
+//
+// Panics if len(llrs) != CodewordBits (the BP layer's contract).
+func LDPCDecode(llrs []float64, maxIterations int) ([]byte, bool) {
+	codeword, converged := LDPCDecodeBP(llrs, maxIterations)
+	if !converged {
+		return nil, false
+	}
+
+	// Systematic LDPC: the first InfoBits (91) bits of the codeword
+	// are the message+CRC; the remaining 83 are computed parity.
+	msg := codeword[:MessageBits]
+	rxCRC := codeword[MessageBits:InfoBits]
+
+	expected := CRC14(msg)
+	received := packBitsMSBFirst(rxCRC)
+
+	if expected != received {
+		return nil, false
+	}
+
+	// Return a copy of the message slice so the caller can hold onto it
+	// independently of the BP decoder's internal buffer.
+	out := make([]byte, MessageBits)
+	copy(out, msg)
+	return out, true
+}
+
+// packBitsMSBFirst converts a bit-per-byte slice to a uint16,
+// MSB-first. Input length must be ≤ 16; len > 16 is a programmer
+// bug, not user data. Used by the CRC validation path where the
+// 14-bit field is in bit-per-byte form.
+func packBitsMSBFirst(bits []byte) uint16 {
+	var v uint16
+	for _, b := range bits {
+		v = (v << 1) | uint16(b)
+	}
+	return v
+}

@@ -236,6 +236,151 @@ func codewordToLLRs(cw []byte, mag float64) []float64 {
 	return llrs
 }
 
+// TestLDPCDecode_FullRoundTrip exercises the headline encode→decode
+// chain end-to-end: take a 77-bit message body, append the CRC14,
+// LDPC-encode, convert to LLRs, then LDPCDecode and verify the
+// recovered message matches. This is the path that real
+// FT8 traffic will follow once the signal-processing pipeline
+// produces real LLRs.
+func TestLDPCDecode_FullRoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  [MessageBits]byte
+	}{
+		{"all_zero_message", [MessageBits]byte{}},
+		{"random_seed_1", randomMessage(1, 2)},
+		{"random_seed_42", randomMessage(42, 43)},
+		{"random_seed_99", randomMessage(99, 100)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 77-bit msg → 14-bit CRC → 91-bit info → 174-bit codeword.
+			info := make([]byte, InfoBits)
+			copy(info[:MessageBits], tc.msg[:])
+			crc := CRC14(tc.msg[:])
+			for i := range CRCBits {
+				info[MessageBits+i] = byte((crc >> (CRCBits - 1 - i)) & 1)
+			}
+			cw := LDPCEncode(info)
+
+			llrs := codewordToLLRs(cw, 5.0)
+			got, ok := LDPCDecode(llrs, LDPCMaxIterationsDefault)
+			if !ok {
+				t.Fatal("LDPCDecode returned ok=false on clean encoded codeword")
+			}
+			if len(got) != MessageBits {
+				t.Fatalf("len(got) = %d, want %d", len(got), MessageBits)
+			}
+			for i := range MessageBits {
+				if got[i] != tc.msg[i] {
+					t.Errorf("decoded msg bit %d = %d, want %d", i, got[i], tc.msg[i])
+					break
+				}
+			}
+		})
+	}
+}
+
+// TestLDPCDecode_RecoversFromSmallErrors verifies the full pipeline
+// (LDPC + CRC) absorbs a few channel errors and still returns the
+// correct message — confirmation that BP's correction capacity
+// translates to end-to-end recovery, not just bit-level recovery.
+func TestLDPCDecode_RecoversFromSmallErrors(t *testing.T) {
+	msg := randomMessage(11, 12)
+	info := make([]byte, InfoBits)
+	copy(info[:MessageBits], msg[:])
+	crc := CRC14(msg[:])
+	for i := range CRCBits {
+		info[MessageBits+i] = byte((crc >> (CRCBits - 1 - i)) & 1)
+	}
+	cw := LDPCEncode(info)
+	llrs := codewordToLLRs(cw, 5.0)
+	// Flip 5 LLR signs at spaced positions — BP corrects all five.
+	for _, p := range []int{3, 41, 88, 137, 170} {
+		llrs[p] = -llrs[p]
+	}
+
+	got, ok := LDPCDecode(llrs, LDPCMaxIterationsDefault)
+	if !ok {
+		t.Fatal("LDPCDecode returned ok=false after 5-bit recoverable error")
+	}
+	for i := range MessageBits {
+		if got[i] != msg[i] {
+			t.Errorf("decoded msg bit %d = %d, want %d", i, got[i], msg[i])
+			break
+		}
+	}
+}
+
+// TestLDPCDecode_RejectsCRCMismatch verifies that a codeword whose
+// LDPC structure is valid but whose embedded CRC doesn't match the
+// 77-bit message body returns ok=false. We construct this case by
+// flipping CRC bits inside the info word BEFORE LDPC-encoding, so
+// the resulting codeword is structurally valid (BP will converge)
+// but the CRC14 over the message bits won't match the embedded
+// (corrupted) CRC.
+func TestLDPCDecode_RejectsCRCMismatch(t *testing.T) {
+	msg := randomMessage(31, 32)
+	info := make([]byte, InfoBits)
+	copy(info[:MessageBits], msg[:])
+	crc := CRC14(msg[:])
+	for i := range CRCBits {
+		info[MessageBits+i] = byte((crc >> (CRCBits - 1 - i)) & 1)
+	}
+	// Flip one CRC bit so the wire-CRC no longer matches the
+	// computed CRC. LDPC-encode after the flip so the codeword is
+	// structurally valid (encoder doesn't care about CRC contents).
+	info[MessageBits] ^= 1
+	cw := LDPCEncode(info)
+	llrs := codewordToLLRs(cw, 5.0)
+
+	got, ok := LDPCDecode(llrs, LDPCMaxIterationsDefault)
+	if ok {
+		t.Error("LDPCDecode returned ok=true on a CRC-mismatched codeword; want false")
+	}
+	if got != nil {
+		t.Error("LDPCDecode returned non-nil msg on ok=false; want nil per contract")
+	}
+}
+
+// TestLDPCDecode_RejectsBPFailure verifies that uncorrectable input
+// (BP can't converge to any valid codeword) returns ok=false WITHOUT
+// running the CRC check on garbage bits.
+func TestLDPCDecode_RejectsBPFailure(t *testing.T) {
+	msg := randomMessage(51, 52)
+	info := make([]byte, InfoBits)
+	copy(info[:MessageBits], msg[:])
+	crc := CRC14(msg[:])
+	for i := range CRCBits {
+		info[MessageBits+i] = byte((crc >> (CRCBits - 1 - i)) & 1)
+	}
+	cw := LDPCEncode(info)
+	llrs := codewordToLLRs(cw, 5.0)
+	// Flip every other bit — far beyond correction capacity.
+	for i := 0; i < CodewordBits; i += 2 {
+		llrs[i] = -llrs[i]
+	}
+
+	got, ok := LDPCDecode(llrs, 10)
+	if ok {
+		t.Error("LDPCDecode returned ok=true on uncorrectable input; want false")
+	}
+	if got != nil {
+		t.Error("LDPCDecode returned non-nil msg on ok=false; want nil per contract")
+	}
+}
+
+// randomMessage deterministically generates a 77-bit message
+// payload. Same shape as randomInfo but sized for the message slot.
+func randomMessage(seed1, seed2 uint64) [MessageBits]byte {
+	r := rand.New(rand.NewPCG(seed1, seed2))
+	var b [MessageBits]byte
+	for i := range b {
+		b[i] = byte(r.UintN(2))
+	}
+	return b
+}
+
 // BenchmarkLDPCDecodeBP_CleanCodeword measures the BP decoder cost
 // on a converging input. Each iteration over 83 checks × ~6.3
 // variables/check × ~3 tanh/atanh ops per (check, variable) ≈ 1500
