@@ -1,7 +1,5 @@
 package codec
 
-import "math"
-
 // LDPC decoder via belief propagation per QEX paper §6.
 //
 // Input: 174 log-likelihood ratios (LLRs), one per codeword bit. The
@@ -115,12 +113,12 @@ func LDPCDecodeBP(llrs []float64, maxIterations int) ([]byte, bool) {
 			// for each outgoing message is O(1) instead of O(n).
 			prefix[0] = 1.0
 			for k := range n {
-				t := math.Tanh(mVtoC[vars[k]][poss[k]] / 2)
+				t := tanh(mVtoC[vars[k]][poss[k]] / 2)
 				prefix[k+1] = prefix[k] * t
 			}
 			suffix[n] = 1.0
 			for k := n - 1; k >= 0; k-- {
-				t := math.Tanh(mVtoC[vars[k]][poss[k]] / 2)
+				t := tanh(mVtoC[vars[k]][poss[k]] / 2)
 				suffix[k] = suffix[k+1] * t
 			}
 			for k := range n {
@@ -130,7 +128,7 @@ func LDPCDecodeBP(llrs []float64, maxIterations int) ([]byte, bool) {
 				} else if p < -llrClamp {
 					p = -llrClamp
 				}
-				mCtoV[c][k] = 2 * math.Atanh(p)
+				mCtoV[c][k] = 2 * atanh(p)
 			}
 		}
 
