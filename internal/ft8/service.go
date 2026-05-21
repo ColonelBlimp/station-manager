@@ -9,14 +9,31 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// Service is the FT8 subsystem (per ADR 0021). v1 is a SCAFFOLD —
-// the decoder pipeline lands in subsequent sessions as a spec-
-// implementation against the QEX 2020 protocol paper (Franke /
-// Somerville / Taylor; see ADR 0021 § Licensing constraint and
-// docs/v2-design/milestones.md § Milestone 4 for why the WSJT-X
-// Fortran source tree is not the reference). What's here is the
-// lifecycle skeleton and the package-boundary discipline so future
-// commits have somewhere to land cleanly.
+// Service is the FT8 subsystem (per ADR 0021). The bit-level codec
+// and DSP pipeline ARE implemented as of Session 78 — see
+// internal/ft8/codec, internal/ft8/dsp, and the Decode function in
+// decode.go. What this Service does NOT yet wire is the live audio
+// capture loop (M4.2 milestone): the goroutine spawned by Start
+// remains a placeholder that just waits for cancellation. Operators
+// who enable ft8.enabled=true in config get a loud Warn log at
+// startup saying so.
+//
+// **What works today** (call ft8.Decode() directly): WAV file →
+// decoded messages, end-to-end, via the entire spec-based pipeline.
+// **What doesn't yet work** (M4.2): live audio capture, 15-second
+// slot scheduling, QSO submission, rig-aware decode windowing. The
+// Service's Start currently runs a placeholder so the lifecycle
+// contract is exercised end-to-end; M4.2 replaces it with the live
+// audio loop that calls Decode on each captured slot and forwards
+// successful decodes to qsoservice.
+//
+// **Why the placeholder approach** instead of refusing to Start
+// when Enabled=true: the lifecycle scaffold (Initialize → Start →
+// Stop with idempotency + race-tightening) is the harder part of
+// the service contract to get right and was settled before the
+// decoder existed. Replacing the placeholder goroutine with the
+// real audio capture loop is a one-line change in Start once M4.2
+// is ready; the surrounding plumbing stays.
 //
 // Lifecycle: Initialize() validates config; Start(ctx) spawns the
 // subsystem goroutines; Stop() cancels and waits. All idempotent
@@ -25,14 +42,7 @@ import (
 // When cfg.Enabled is false, Initialize/Start/Stop are still safe to
 // call but no goroutine is spawned and no audio devices are
 // acquired. This is the default — FT8 stays opt-in for v1 while the
-// implementation matures.
-//
-// Once decoder work lands, the goroutine spawned by Start owns the
-// audio capture → DSP → decode pipeline. Until then it's a stub
-// goroutine that just waits for ctx cancellation so the lifecycle
-// contract is exercised end-to-end and Stop's wg.Wait() has
-// something concrete to wait on. Replace the stub at the same
-// commit that introduces the first real worker.
+// audio-capture work matures.
 type Service struct {
 	cfg    types.Ft8Config
 	logger *logging.Service
@@ -109,7 +119,16 @@ func (s *Service) Start(ctx context.Context) error {
 	s.cancel = cancel
 	s.wg.Add(1)
 	go s.runPlaceholder(runCtx)
-	s.logger.InfoWith().Msg("ft8: subsystem started (SCAFFOLD — decoder pipeline not yet wired; see ADR 0021)")
+	// Loud warning, not info: the service has Enabled=true in
+	// config so operators expect decoding to happen, but live
+	// audio capture is not wired yet (parked behind M4.2). The
+	// goroutine spawned above is a placeholder that waits for
+	// cancellation — no audio capture, no decode, no QSO submit.
+	// The Decode() function in internal/ft8/decode.go works
+	// end-to-end against captured WAV files; that's reachable
+	// via the test suite and via direct Go calls but not via the
+	// service lifecycle until M4.2 lands.
+	s.logger.WarnWith().Msg("ft8: subsystem started with ft8.enabled=true BUT live audio capture is NOT wired (M4.2 work). The placeholder goroutine running here does no decoding. Use ft8.Decode() directly on captured WAV files until M4.2 lands.")
 	return nil
 }
 

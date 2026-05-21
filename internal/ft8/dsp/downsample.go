@@ -58,8 +58,14 @@ const downsamplerTaperBins = 100
 // f0: candidate centre frequency in Hz. Typically 200..2900 (the
 // FT8 working passband).
 //
-// Returns nil if f0 is outside the audio band [0, Fs/2] or if the
-// passband extraction would index out-of-bounds.
+// Returns nil if f0 is outside the audio band [0, Fs/2].
+//
+// **Edge-of-band behaviour:** if the requested passband extends
+// past the spectrum's edge (e.g. f0 very close to DC or Nyquist),
+// the missing bins are filled with zeros and the function returns
+// a baseband slice rather than refusing. This is friendlier than
+// nil — callers that probe near the edges still get a usable
+// result with the out-of-band content as silence.
 func Downsample(audio []float32, f0 float64) []complex128 {
 	if f0 <= 0 || f0 >= Fs/2 {
 		return nil

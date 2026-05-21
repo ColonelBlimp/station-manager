@@ -80,6 +80,28 @@ func codewordFromMessage(msg []byte) []byte {
 	return codec.LDPCEncode(info)
 }
 
+// TestDecode_NilAudioReturnsNil pins finding #6: Decode's doc
+// claims nil-on-malformed-audio behaviour, and the implementation
+// must not panic on nil or empty input. Before the fix, Decode
+// passed nil straight to Spectrogram which panics on nil.
+func TestDecode_NilAudioReturnsNil(t *testing.T) {
+	for name, audio := range map[string][]float32{
+		"nil_slice":   nil,
+		"empty_slice": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Decode(%s) panicked: %v — want nil return", name, r)
+				}
+			}()
+			if got := Decode(audio, DecodeOptions{}); got != nil {
+				t.Errorf("Decode(%s) = %v, want nil", name, got)
+			}
+		})
+	}
+}
+
 // TestDecode_SyntheticRoundTrip is the headline integration test:
 // encode a known message bit-pattern to FT8 audio, feed it through
 // the full Decode pipeline, verify the recovered message bits
@@ -170,11 +192,30 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 	for i, d := range results {
 		t.Logf("  [%d] %7.2f Hz  %+5.2f s  sync=%5.2f  %q", i, d.Freq, d.DT, d.SyncPower, d.Text)
 	}
-	// We don't t.Error on count — this is a diagnostic test, not a
-	// pass/fail gate. Zero decodes on the first try is a useful
-	// signal that the sensitivity needs tuning (sync threshold,
-	// L_j scale K, fine-frequency search, etc.) and informs the
-	// next-session work.
+	// **Regression floor** — finding #3 from the post-Session-78
+	// review: the previous version of this test only t.Logf'd the
+	// count, so a regression to zero would still pass. Pin the
+	// current decode count as a minimum threshold; bump when
+	// sensitivity improvements land.
+	//
+	// The 1 baseline = the post-finding-#4 result on ft8_cap1.wav:
+	// `SV2SIH ES2AJ -16` at 1862.5 Hz. Before finding #4 fixed the
+	// float-leaky sync dedup, there was a spurious second decode
+	// (`VE1WT K4GBI 73` at 1309.4 Hz DT=-0.32 with weak sync power
+	// 3.58) that survived only because float-arithmetic rounding
+	// let it past the dedup window. Its stronger near-twin
+	// (DT=-0.40, sync 8.00) is what's left after integer dedup,
+	// and the coarse-DT misalignment prevents it from decoding —
+	// fine-timing alignment is the next-session work that should
+	// recover it.
+	//
+	// WSJT-X 2.7.0 finds 11 in this file; our 1/11 baseline is the
+	// floor that sensitivity work will lift.
+	const ft8Cap1MinDecodes = 1
+	if len(results) < ft8Cap1MinDecodes {
+		t.Errorf("ft8_cap1.wav decoded %d messages; baseline floor is %d. A drop below baseline indicates a regression in the audio→messages pipeline.",
+			len(results), ft8Cap1MinDecodes)
+	}
 }
 
 // resolveCapturePath returns the path to a vendored or operator-

@@ -203,67 +203,84 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 		return nil
 	}
 
-	// Scan every (centreBin, dtSteps) candidate, computing score.
-	var cands []Candidate
+	// Internal candidate carrier that keeps the integer bin + step
+	// coordinates alongside the score, so the dedup pass can compare
+	// integers (exact thresholds) rather than re-derived floats
+	// (rounding can let exact-boundary near-dupes survive). The
+	// public Candidate carries the float Hz/s shape; we convert at
+	// the API edge.
+	type intCand struct {
+		centreBin int
+		dtSteps   int
+		score     float64
+	}
+
+	var rawCands []intCand
 	for centreBin := binLow; centreBin <= binHigh; centreBin++ {
 		for dtSteps := -syncSearchHalfSteps; dtSteps <= syncSearchHalfSteps; dtSteps++ {
 			score := scoreCandidate(spec, centreBin, dtSteps, nominalStartStep)
 			if score >= opts.MinScore {
-				cands = append(cands, Candidate{
-					Freq:      float64(centreBin) * df,
-					DT:        float64(dtSteps) * tstep,
-					SyncPower: score,
-				})
+				rawCands = append(rawCands, intCand{centreBin, dtSteps, score})
 			}
 		}
 	}
 
-	if len(cands) == 0 {
+	if len(rawCands) == 0 {
 		return nil
 	}
 
 	// Descending sort by score.
-	sort.Slice(cands, func(i, j int) bool {
-		return cands[i].SyncPower > cands[j].SyncPower
+	sort.Slice(rawCands, func(i, j int) bool {
+		return rawCands[i].score > rawCands[j].score
 	})
 
-	// Near-duplicate suppression. Walk in descending-score order;
-	// for each candidate keep, mark all later candidates within
-	// the dedup window as suppressed.
-	keep := make([]bool, len(cands))
-	for i := range cands {
+	// Near-duplicate suppression in integer coordinate space. Walk
+	// in descending-score order; for each survivor, mark all later
+	// candidates within the dedup window as suppressed. Comparing
+	// `abs(binA - binB) <= syncDedupFreqBins` is exact — no float
+	// rounding can let boundary-case dupes through.
+	keep := make([]bool, len(rawCands))
+	for i := range keep {
 		keep[i] = true
 	}
-	const (
-		dedupHz  = float64(syncDedupFreqBins) * df
-		dedupSec = float64(syncDedupTimeSteps) * tstep
-	)
-	for i := 0; i < len(cands); i++ {
+	for i := 0; i < len(rawCands); i++ {
 		if !keep[i] {
 			continue
 		}
-		for j := i + 1; j < len(cands); j++ {
+		for j := i + 1; j < len(rawCands); j++ {
 			if !keep[j] {
 				continue
 			}
-			if math.Abs(cands[i].Freq-cands[j].Freq) <= dedupHz &&
-				math.Abs(cands[i].DT-cands[j].DT) <= dedupSec {
+			if abs(rawCands[i].centreBin-rawCands[j].centreBin) <= syncDedupFreqBins &&
+				abs(rawCands[i].dtSteps-rawCands[j].dtSteps) <= syncDedupTimeSteps {
 				keep[j] = false
 			}
 		}
 	}
 
 	out := make([]Candidate, 0, opts.MaxCand)
-	for i, c := range cands {
+	for i, rc := range rawCands {
 		if !keep[i] {
 			continue
 		}
-		out = append(out, c)
+		out = append(out, Candidate{
+			Freq:      float64(rc.centreBin) * df,
+			DT:        float64(rc.dtSteps) * tstep,
+			SyncPower: rc.score,
+		})
 		if len(out) >= opts.MaxCand {
 			break
 		}
 	}
 	return out
+}
+
+// abs returns |x| for an int (no math.Abs for ints in stdlib).
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // scoreCandidate returns the matched-filter SNR ratio for a

@@ -196,6 +196,52 @@ func TestSync_NearDuplicateSuppression(t *testing.T) {
 	}
 }
 
+// TestSync_DedupAtExactBoundary pins finding #4: the dedup window
+// uses integer coordinate (bin index, time-step index) comparisons,
+// not float Hz/seconds derived from them. A float comparison at
+// exactly the dedup threshold can let near-duplicates survive due
+// to rounding — e.g. before the fix, ft8_cap1.wav produced two
+// candidates at 1862.50 Hz exactly two time-steps apart (DT=-0.60
+// and DT=-0.68), even though the documented dedup window is 2
+// time-steps.
+//
+// Synthesise two Costas patterns at the same bin, exactly
+// syncDedupTimeSteps apart in time. Confirm only one candidate
+// survives the dedup pass.
+func TestSync_DedupAtExactBoundary(t *testing.T) {
+	spec := makeSyntheticSpec()
+	// Strong injection at dtSteps=0; weaker at dtSteps=syncDedupTimeSteps.
+	injectCostas(spec, 480, 0, 50.0)
+	injectCostas(spec, 480, syncDedupTimeSteps, 30.0)
+
+	cands := Sync(spec, SyncOptions{})
+	if len(cands) == 0 {
+		t.Fatal("Sync returned no candidates")
+	}
+
+	// Count candidates within the dedup window of the injection
+	// point (1 bin × syncDedupTimeSteps). Should be exactly 1 —
+	// the stronger one wins; the boundary-distant one is suppressed.
+	const (
+		df    = Fs / float64(NFFT1)
+		tstep = float64(NSTEP) / Fs
+	)
+	wantFreq := 480 * df
+	near := 0
+	for _, c := range cands {
+		if math.Abs(c.Freq-wantFreq) <= df &&
+			math.Abs(c.DT) <= float64(syncDedupTimeSteps)*tstep {
+			near++
+		}
+	}
+	if near != 1 {
+		t.Errorf("got %d candidates within dedup window of boundary-spaced injections; want exactly 1 (stronger wins, boundary-distant suppressed)", near)
+		for i, c := range cands {
+			t.Logf("  [%d] freq=%g dt=%g power=%g", i, c.Freq, c.DT, c.SyncPower)
+		}
+	}
+}
+
 // TestSync_RejectsInvalidSpec verifies the validSpec guard.
 func TestSync_RejectsInvalidSpec(t *testing.T) {
 	cases := [][][]float64{

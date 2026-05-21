@@ -65,9 +65,15 @@ type DecodeOptions struct {
 // is the structural validator that separates genuine signals from
 // noise.
 //
-// Returns a fresh slice; nil for malformed audio (passed through
-// from Spectrogram's contract).
+// Returns a fresh slice; returns nil for nil or empty audio
+// (rather than panicking — finding #6 from the post-Session-78
+// review fixed the contract mismatch where the doc claimed nil
+// behaviour but dsp.Spectrogram(nil) panicked).
 func Decode(audio []float32, opts DecodeOptions) []DecodedMessage {
+	if len(audio) == 0 {
+		return nil
+	}
+
 	maxIters := opts.LDPCMaxIterations
 	if maxIters <= 0 {
 		maxIters = codec.LDPCMaxIterationsDefault
