@@ -69,10 +69,21 @@ const (
 	SymbolDataStart2 = 43
 	SymbolDataEnd2   = 71 // inclusive
 
-	// DemodScale is the empirical K constant from Taylor 2020 §6.
-	// First-cut value 1.0 — tune later if LDPC sensitivity needs it.
-	DemodScale = 1.0
 )
+
+// DefaultLLRScale is the empirical K constant from Taylor 2020 §6's
+// L_j formula. The paper says "K is adjusted empirically" — for SM
+// the first-cut value 1.0 means the demod returns raw differences
+// of in-pattern vs out-of-pattern tone magnitudes. Callers can
+// override via Demodulate's scale parameter (or via
+// DecodeOptions.LLRScale at the top level) to scale LLRs to match
+// the BP decoder's expected magnitude range; per-candidate
+// noise-floor-aware scaling is a documented future move.
+//
+// **Why a var (and not a const):** lets power-users override the
+// default globally without recompiling. Mutate at program start
+// before any decode begins.
+var DefaultLLRScale = 1.0
 
 // Demodulate computes 174 LLRs for one Sync candidate from its
 // 200-Hz complex baseband signal. The output feeds directly into
@@ -92,20 +103,27 @@ const (
 // dt (a programmer-side bug — the upstream pipeline should never
 // hand a too-short baseband to the demodulator).
 //
+// scale is the K constant from Taylor 2020 §6's L_j formula —
+// scales every output LLR by this multiplier. Pass DefaultLLRScale
+// (= 1.0) for spec-baseline behaviour; pass a tuned value to scale
+// LLRs against the noise floor (e.g. ~1.0/noise_estimate per
+// candidate) when sensitivity tuning calls for it.
+//
 // Builds an ad-hoc audio.Plan internally for the 58 per-symbol
 // FFTs of size SymbolFFTSize=32. Callers running many Demodulate
 // calls per slot (fine-timing retries × many candidates) should
 // use DemodulateWithPlan with a shared Plan to amortise the
 // twiddle-table construction.
-func Demodulate(baseband []complex128, dt float64) []float64 {
-	return DemodulateWithPlan(baseband, dt, nil)
+func Demodulate(baseband []complex128, dt float64, scale float64) []float64 {
+	return DemodulateWithPlan(baseband, dt, nil, scale)
 }
 
 // DemodulateWithPlan is the Plan-reuse variant of Demodulate. If
 // symPlan is non-nil it must have been constructed for size
 // SymbolFFTSize (Plan.FFT panics on a size mismatch). If nil, an
-// ad-hoc plan is built per call.
-func DemodulateWithPlan(baseband []complex128, dt float64, symPlan *audio.Plan) []float64 {
+// ad-hoc plan is built per call. scale is the K constant — see
+// Demodulate's doc.
+func DemodulateWithPlan(baseband []complex128, dt float64, symPlan *audio.Plan, scale float64) []float64 {
 	// Symbol start samples in baseband: each channel symbol n
 	// begins at sample nominalStart + dtSamples + n*SymbolFFTSize.
 	const nominalStartSamples = int(nominalTXStartSeconds * Fs2) // 100
@@ -167,7 +185,7 @@ func DemodulateWithPlan(baseband []complex128, dt float64, symPlan *audio.Plan) 
 						}
 					}
 				}
-				out[llrIdx] = DemodScale * (max0 - max1)
+				out[llrIdx] = scale * (max0 - max1)
 				llrIdx++
 			}
 		}

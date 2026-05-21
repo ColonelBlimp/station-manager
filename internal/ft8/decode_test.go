@@ -102,6 +102,34 @@ func TestDecode_NilAudioReturnsNil(t *testing.T) {
 	}
 }
 
+// TestDecode_LLRScale_ZeroEqualsDefault pins the resolution rule
+// for DecodeOptions.LLRScale: a zero-value field must produce the
+// same decode set as explicitly passing dsp.DefaultLLRScale. This
+// is the contract that lets callers leave the field unset without
+// silently changing the demodulator's behaviour.
+func TestDecode_LLRScale_ZeroEqualsDefault(t *testing.T) {
+	wavPath := resolveCapturePath(t, "ft8_cap1.wav")
+	if wavPath == "" {
+		t.Skip("no FT8 capture fixture available")
+	}
+	data, err := audio.ReadWAV(wavPath)
+	if err != nil {
+		t.Fatalf("ReadWAV: %v", err)
+	}
+
+	zeroResults := Decode(data.Samples, DecodeOptions{})
+	explicitResults := Decode(data.Samples, DecodeOptions{LLRScale: dsp.DefaultLLRScale})
+
+	if len(zeroResults) != len(explicitResults) {
+		t.Fatalf("decode count differs: zero-value=%d, explicit=%d", len(zeroResults), len(explicitResults))
+	}
+	for i := range zeroResults {
+		if zeroResults[i].Text != explicitResults[i].Text {
+			t.Errorf("decode[%d] differs: zero=%q explicit=%q", i, zeroResults[i].Text, explicitResults[i].Text)
+		}
+	}
+}
+
 // TestDecode_SyntheticRoundTrip is the headline integration test:
 // encode a known message bit-pattern to FT8 audio, feed it through
 // the full Decode pipeline, verify the recovered message bits

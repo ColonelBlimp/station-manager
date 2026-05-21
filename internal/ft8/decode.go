@@ -120,6 +120,22 @@ type DecodeOptions struct {
 	// so callers who don't care still get the sensitivity gain. Pass
 	// a sentinel like -1 to disable explicitly.
 	OSDOrder int
+
+	// LLRScale is the K constant from Taylor 2020 §6's L_j formula
+	// — every demodulator output LLR is multiplied by this scale.
+	// The paper says "K is adjusted empirically"; SM's default
+	// (1.0, via dsp.DefaultLLRScale) returns raw differences of
+	// in-pattern vs out-of-pattern tone magnitudes.
+	//
+	// Resolution rules:
+	//   - 0 (zero value) → dsp.DefaultLLRScale (= 1.0).
+	//   - Any non-zero value → applied as-is.
+	//
+	// Per-candidate noise-floor-aware scaling (compute K per
+	// candidate from the demodulator's noise estimate) is a
+	// documented future sensitivity move. Until that lands, this
+	// is a single global knob — set once per Decode call.
+	LLRScale float64
 }
 
 // DefaultOSDOrder is the OSD search depth applied when
@@ -196,6 +212,15 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 	}
 	if osdOrder > codec.OSDMaxOrder {
 		osdOrder = codec.OSDMaxOrder
+	}
+
+	// LLR scale resolution. Zero value → dsp.DefaultLLRScale (= 1.0,
+	// the spec-baseline K from Taylor 2020 §6). Any non-zero value
+	// is applied as-is, including negatives (which flip every LLR's
+	// sign — not useful but technically valid).
+	llrScale := opts.LLRScale
+	if llrScale == 0 {
+		llrScale = dsp.DefaultLLRScale
 	}
 
 	spec := dsp.Spectrogram(samples)
@@ -292,7 +317,7 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 				continue
 			}
 			for _, dOffset := range fineOffsets {
-				llrs := dsp.DemodulateWithPlan(baseband, c.DT+dOffset, symPlan)
+				llrs := dsp.DemodulateWithPlan(baseband, c.DT+dOffset, symPlan, llrScale)
 				if llrs == nil {
 					continue
 				}

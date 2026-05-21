@@ -63,7 +63,7 @@ func makeSyntheticBaseband(t *testing.T, codeword []byte) []complex128 {
 func TestDemodulate_OutputLength(t *testing.T) {
 	// All-zero baseband: demodulator runs but outputs zeros.
 	bb := make([]complex128, NFFT2)
-	llrs := Demodulate(bb, 0)
+	llrs := Demodulate(bb, 0, DefaultLLRScale)
 	if len(llrs) != DemodLLRCount {
 		t.Errorf("len(llrs) = %d, want %d", len(llrs), DemodLLRCount)
 	}
@@ -105,7 +105,7 @@ func TestDemodulate_CleanSignalProducesSignedLLRs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			baseband := makeSyntheticBaseband(t, tc.codeword)
-			llrs := Demodulate(baseband, 0)
+			llrs := Demodulate(baseband, 0, DefaultLLRScale)
 			if len(llrs) != DemodLLRCount {
 				t.Fatalf("len(llrs) = %d, want %d", len(llrs), DemodLLRCount)
 			}
@@ -127,7 +127,7 @@ func TestDemodulate_RejectsShortBaseband(t *testing.T) {
 	// 100 samples — way too short to cover any meaningful symbol
 	// extraction.
 	bb := make([]complex128, 100)
-	llrs := Demodulate(bb, 0)
+	llrs := Demodulate(bb, 0, DefaultLLRScale)
 	if llrs != nil {
 		t.Errorf("Demodulate returned non-nil from short baseband; want nil")
 	}
@@ -166,7 +166,7 @@ func TestDemodulate_FullPipelineRoundTrip(t *testing.T) {
 			baseband := makeSyntheticBaseband(t, codeword)
 
 			// Demodulate → LLRs.
-			llrs := Demodulate(baseband, 0)
+			llrs := Demodulate(baseband, 0, DefaultLLRScale)
 			if len(llrs) != codec.CodewordBits {
 				t.Fatalf("len(llrs) = %d, want %d", len(llrs), codec.CodewordBits)
 			}
@@ -226,7 +226,7 @@ func TestDemodulate_HandlesDTOffset(t *testing.T) {
 		}
 	}
 
-	llrs := Demodulate(baseband, dt)
+	llrs := Demodulate(baseband, dt, DefaultLLRScale)
 	if len(llrs) != DemodLLRCount {
 		t.Fatalf("len(llrs) = %d, want %d", len(llrs), DemodLLRCount)
 	}
@@ -250,7 +250,7 @@ func BenchmarkDemodulate(b *testing.B) {
 	baseband := makeSyntheticBaseband(&testing.T{}, codeword)
 	b.ResetTimer()
 	for range b.N {
-		_ = Demodulate(baseband, 0)
+		_ = Demodulate(baseband, 0, DefaultLLRScale)
 	}
 }
 
