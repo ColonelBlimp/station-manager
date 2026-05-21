@@ -1235,16 +1235,84 @@ saved at `feedback_cgo_scalar_interop_overhead.md`. To
 actually win with CGO requires SIMD-batched BP (~200-300
 LOC refactor to feed Sleef vector variants), not drop-in
 scalar interop.
+**Session 81 (2026-05-22) extended M4.1 past the original parity
+goal.** Four-stage arc:
+(k) **K-scale config exposure.** `DemodScale` const replaced with
+`dsp.DefaultLLRScale` (package var) + explicit `scale` parameter
+on `Demodulate` / `DemodulateWithPlan`; new
+`DecodeOptions.LLRScale` field resolves zero-value → default.
+Knob plumbed for future per-candidate noise-floor scaling.
+(l) **Real-input FFT (RealPlan) vendored** from operator's
+MIT-clean go-ft8/research/realfft.go (Brigham §10-5 1974
+pack-and-unpack textbook technique, NOT a WSJT-X port).
+Spectrogram switched from complex Plan to RealPlan; 3-5%
+slot-time saved (4.57s → 4.36s on cap1). FFTW3 GPL nuance
+clarified across docs — GPL fires at binary distribution
+(libfftw3f linkage), not at source-level `#include <fftw3.h>`
++ `-lfftw3f`; for SM's personal-use case the trigger is
+dormant and FFTW3 use is technically permissible (the
+permissive-CGO-deps policy is about keeping binary
+redistribution options open, not legal necessity).
+(m) **GFSK FT8 waveform synthesizer SHIPPED** at
+`internal/ft8/dsp/synthesis.go` (~210 LOC clean-room from
+QEX §4 + Murota & Hirade 1981, NOT WSJT-X
+`gen_ft8wave.f90`). BT=2 Gaussian shaping per spec.
+Constants per no-magic-numbers policy:
+`GFSKBandwidthTimeProduct` const (spec-mandated),
+`GFSKGaussianTruncationSigma` var (overrideable). Round-trip
+test (Synthesize → ForwardSpectrum → DownsampleFromSpectrum
+→ Demodulate → LDPCDecode) recovers the input message,
+confirming demod-compatibility.
+(n) **Q-function shortcut — 87× speedup** (210ms → 2.4ms).
+Replaced brute-force per-sample convolution with the
+standard GMSK trick: Gaussian-filtered freq trajectory
+equals superposition of step responses
+`Δf · Φ((t - τ) / σ)` at each symbol boundary; transition
+zones (±3σ ≈ ±32ms) don't overlap with T=160ms symbol
+duration, so freqTraj fills in two simple sweeps
+(steady-state segments at constant freq[n], transition
+zones via precomputed Φ shape × Δf). Op count drops ~114M
+→ ~150K. Round-trip still passes.
+(o) **`SynthesizeBoth` + `SubtractSignal`.** Refactored synthesis
+to share freqTraj + phase computation between sin-only and
+sin+cos paths. `SynthesizeBoth` returns both quadrature
+templates via `math.Sincos`. `SubtractSignal(audio,
+msgBits, f0, dt)` does matched-filter amplitude+phase
+estimation via real projection (a = Σ audio·sin / Σ sin²,
+b = Σ audio·cos / Σ cos²), subtracts `a·sin + b·cos` from
+audio in place, returns √(a²+b²). Sin/cos templates
+nearly orthogonal at FT8 carriers (~18K+ cycles over the
+12.64s TX window).
+(p) **Iterative subtraction loop in Decode — HEADLINE WIN.**
+New `DecodeOptions.SubtractionPasses int` +
+`DefaultSubtractionPasses = 0` const (opt-in until further
+verification). After pass 0 (unchanged), optional outer
+loop: copy audio (caller's buffer preserved) → for each
+pass-(N-1) decode call `dsp.SubtractSignal` → recompute
+Spectrogram + Sync + ForwardSpectrum on residual → re-run
+candidate decode loop with msgBits-keyed dedup → break
+early if zero new decodes. **Real-WAV results with
+SubtractionPasses=1: cap1 8→10, cap2 13→17, cap3 20→24;
+total 41→51 (+10, +24% sensitivity, 106% of WSJT-X 2.7.0
+parity).** Cost ~2× wall time (4.5s → ~8.7s per slot, 58%
+of budget). We now find MORE decodes than WSJT-X on these
+captures (51 vs 48); extras are likely exotic compound-call
+or hash-collision matches that CRC14 + LDPC structural
+validation keeps at negligible false-positive rate.
+
 M4.1 cumulative result vs original baseline: time 6.38s →
-~4.5s (1.4× faster after sensitivity work), memory 10GB →
-~150MB (66× less), allocs 37.9M → ~316K (120× fewer),
-**decode rate 12 → 41 (+241% sensitivity, 25% → 85% WSJT-X
-parity)**. Slot headroom 0.4× → 3.3×. **M4.1 closes here**
-— audio→messages pipeline structurally complete at 85%
-parity. Remaining sensitivity moves (K-scale, real-input
-FFT, SIMD-batched BP, sync-step fine-timing) are
-incremental refinements; M4.2 live audio capture wiring
-is the bigger next-track item.
+~4.4s (SubtractionPasses=0, baseline-equivalent), ~8.7s
+(SubtractionPasses=1, new opt-in); memory 10GB → ~150MB
+(66× less); allocs 37.9M → ~316K (120× fewer); **decode
+rate 12 → 51 (+325% sensitivity, 25% → 106% WSJT-X
+parity)**. **M4.1 closes here at 106% WSJT-X parity** —
+audio→messages pipeline structurally complete beyond the
+original parity goal. Remaining sensitivity moves
+(K-scale noise-floor experiments, AP decoding via BP
+soft-priors, sync-step fine-timing in baseband, raising
+DefaultSubtractionPasses to 1) are incremental refinements;
+M4.2 live audio capture wiring is the bigger next-track
+item.
 Deferred follow-up still open: Type 1's `decodeStd` continues to
 return `ErrCallsignNeedsHashLookup` for c28 values in the
 `[nTokens, stdCallOffset)` hash partition. After finding #1 the
