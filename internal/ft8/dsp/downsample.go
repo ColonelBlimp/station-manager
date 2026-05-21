@@ -87,16 +87,33 @@ func Downsample(audio []float32, f0 float64) []complex128 {
 //
 // Returned slice is safe to read concurrently — Downsample's
 // per-candidate work only reads from it.
+//
+// Builds an ad-hoc audio.Plan internally; callers that decode many
+// slots in succession should use ForwardSpectrumWithPlan with a
+// shared Plan (size NFFT1DS) to amortise the ~9 MB twiddle/workspace
+// allocation across slots.
 func ForwardSpectrum(audio []float32) []complex128 {
+	return ForwardSpectrumWithPlan(audio, nil)
+}
+
+// ForwardSpectrumWithPlan is the Plan-reuse variant of
+// ForwardSpectrum. If plan is non-nil it must have been constructed
+// for size NFFT1DS (Plan.FFT panics on a size mismatch). If plan is
+// nil, an ad-hoc plan is built per call (same cost as
+// ForwardSpectrum itself).
+func ForwardSpectrumWithPlan(samples []float32, plan *audio.Plan) []complex128 {
 	timeIn := make([]complex128, NFFT1DS)
-	n := len(audio)
+	n := len(samples)
 	if n > NMAX {
 		n = NMAX
 	}
 	for i := 0; i < n; i++ {
-		timeIn[i] = complex(float64(audio[i]), 0)
+		timeIn[i] = complex(float64(samples[i]), 0)
 	}
 	// timeIn[n..NFFT1DS] stays zero.
+	if plan != nil {
+		return plan.FFT(timeIn)
+	}
 	return audioFFT(timeIn)
 }
 
@@ -114,7 +131,19 @@ func ForwardSpectrum(audio []float32) []complex128 {
 // cuts the receive-pipeline's CPU time by ~78% and allocations by
 // ~100× on a typical 100-candidate slot, because the 192000-point
 // forward FFT no longer runs once per candidate.
+//
+// Builds an ad-hoc audio.Plan internally for the inverse FFT;
+// callers running this many times per slot should use
+// DownsampleFromSpectrumWithPlan with a shared Plan (size NFFT2).
 func DownsampleFromSpectrum(spectrum []complex128, f0 float64) []complex128 {
+	return DownsampleFromSpectrumWithPlan(spectrum, f0, nil)
+}
+
+// DownsampleFromSpectrumWithPlan is the Plan-reuse variant of
+// DownsampleFromSpectrum. If inversePlan is non-nil it must have
+// been constructed for size NFFT2 (Plan.IFFT panics on a size
+// mismatch). If nil, an ad-hoc plan is built per call.
+func DownsampleFromSpectrumWithPlan(spectrum []complex128, f0 float64, inversePlan *audio.Plan) []complex128 {
 	if f0 <= 0 || f0 >= Fs/2 {
 		return nil
 	}
@@ -156,6 +185,9 @@ func DownsampleFromSpectrum(spectrum []complex128, f0 float64) []complex128 {
 	applyHannTaper(out, downsamplerTaperBins)
 
 	// Inverse FFT → time-domain complex baseband at 200 Hz.
+	if inversePlan != nil {
+		return inversePlan.IFFT(out)
+	}
 	return audioIFFT(out)
 }
 

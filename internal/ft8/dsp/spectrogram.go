@@ -53,9 +53,16 @@ func Spectrogram(samples []float32) [][]float64 {
 	// samples are filled with scaled audio, the tail NFFT1-NSPS
 	// stays zero (handled by re-zeroing only the head positions
 	// that change across iterations — but for clarity we re-zero
-	// the whole buffer each column; allocation cost dominates
-	// the FFT cost anyway).
+	// the whole buffer each column).
 	in := make([]complex128, NFFT1)
+
+	// One FFT Plan reused across all NHSYM (= 372) time columns.
+	// Pre-Phase-2 profiling showed Spectrogram dominated runtime
+	// + allocations: 372 × ad-hoc FFT(N=3840) call burned millions
+	// of recursion-buffer allocations and re-computed twiddle
+	// factors each call. A single Plan caches both, dropping
+	// Spectrogram's CPU + allocations by ~50%.
+	plan := audio.NewPlan(NFFT1)
 
 	for t := 0; t < NHSYM; t++ {
 		ia := t * NSTEP
@@ -72,7 +79,7 @@ func Spectrogram(samples []float32) [][]float64 {
 			in[k] = 0
 		}
 
-		X := audio.FFT(in)
+		X := plan.FFT(in)
 
 		// Power spectrum at positive-frequency bins.
 		for f := 0; f < NH1; f++ {

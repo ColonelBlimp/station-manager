@@ -1,6 +1,7 @@
 package ft8
 
 import (
+	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/codec"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/dsp"
 )
@@ -86,8 +87,8 @@ type DecodeOptions struct {
 // (rather than panicking — finding #6 from the post-Session-78
 // review fixed the contract mismatch where the doc claimed nil
 // behaviour but dsp.Spectrogram(nil) panicked).
-func Decode(audio []float32, opts DecodeOptions) []DecodedMessage {
-	if len(audio) == 0 {
+func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
+	if len(samples) == 0 {
 		return nil
 	}
 
@@ -96,20 +97,32 @@ func Decode(audio []float32, opts DecodeOptions) []DecodedMessage {
 		maxIters = codec.LDPCMaxIterationsDefault
 	}
 
-	spec := dsp.Spectrogram(audio)
+	spec := dsp.Spectrogram(samples)
 	cands := dsp.Sync(spec, opts.Sync)
 	if len(cands) == 0 {
 		return nil
 	}
 
+	// Build the two FFT plans this slot needs ONCE up-front:
+	//
+	//   - forwardPlan (NFFT1DS = 192000): for the one-shot audio →
+	//     spectrum FFT used by ForwardSpectrum.
+	//   - inversePlan (NFFT2 = 3200): reused across every candidate's
+	//     IFFT in DownsampleFromSpectrumWithPlan. ~100 candidates ×
+	//     one IFFT each in a typical slot.
+	//
+	// Plan construction is non-trivial (twiddle table + 2× workspace
+	// allocation, plus N math.Sincos calls). Hoisting both out of
+	// the per-candidate loop is the Phase-2 follow-on win after
+	// caching the forward FFT itself.
+	forwardPlan := audio.NewPlan(dsp.NFFT1DS)
+	inversePlan := audio.NewPlan(dsp.NFFT2)
+
 	// Compute the audio's 192k forward FFT ONCE for this slot. Every
 	// candidate downsamples the same audio at a different centre
 	// frequency, so the forward FFT is identical across them — only
-	// the bin extraction + IFFT vary per candidate. Profiling on a
-	// 100-candidate slot showed 77.9% of CPU time was being spent
-	// recomputing this same FFT; caching it cuts decode wall time
-	// roughly 75% and allocations ~100×.
-	spectrum := dsp.ForwardSpectrum(audio)
+	// the bin extraction + IFFT vary per candidate.
+	spectrum := dsp.ForwardSpectrumWithPlan(samples, forwardPlan)
 
 	// **Pass 1:** decode every candidate that survives the structural
 	// validators (LDPC + CRC14 + DecodeMessage). Accumulate raw
@@ -123,7 +136,7 @@ func Decode(audio []float32, opts DecodeOptions) []DecodedMessage {
 	}
 	var raw []pending
 	for _, c := range cands {
-		baseband := dsp.DownsampleFromSpectrum(spectrum, c.Freq)
+		baseband := dsp.DownsampleFromSpectrumWithPlan(spectrum, c.Freq, inversePlan)
 		if baseband == nil {
 			continue
 		}
