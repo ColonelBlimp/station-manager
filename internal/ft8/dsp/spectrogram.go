@@ -49,28 +49,27 @@ func Spectrogram(samples []float32) [][]float64 {
 		out[t] = backing[t*NH1 : (t+1)*NH1]
 	}
 
-	// Reusable FFT input buffer sized to NFFT1; the head NSPS
-	// samples are filled with scaled audio, the tail NFFT1-NSPS
-	// stays zero (handled by re-zeroing only the head positions
-	// that change across iterations — but for clarity we re-zero
-	// the whole buffer each column).
-	in := make([]complex128, NFFT1)
+	// Reusable real-input FFT scratch sized to NFFT1; the head
+	// NSPS samples are filled with scaled audio, the tail
+	// NFFT1-NSPS stays zero (the RealPlan zero-pads internally
+	// when len(input) < N, but we keep a single backing buffer
+	// re-filled per iteration for clarity).
+	in := make([]float32, NFFT1)
 
-	// One FFT Plan reused across all NHSYM (= 372) time columns.
-	// Pre-Phase-2 profiling showed Spectrogram dominated runtime
-	// + allocations: 372 × ad-hoc FFT(N=3840) call burned millions
-	// of recursion-buffer allocations and re-computed twiddle
-	// factors each call. A single Plan caches both, dropping
-	// Spectrogram's CPU + allocations by ~50%.
-	plan := audio.NewPlan(NFFT1)
+	// One real-FFT Plan reused across all NHSYM (= 372) time
+	// columns. RealPlan halves both compute time and allocation
+	// vs the complex-Plan path (operator-authored algorithm
+	// adapted into internal/audio/realfft.go from the standard
+	// pack-and-unpack textbook technique).
+	plan := audio.NewRealPlan(NFFT1)
 
 	for t := 0; t < NHSYM; t++ {
 		ia := t * NSTEP
-		// Scaled real → complex input, zero-padded tail.
+		// Scaled real input, zero-padded tail.
 		for k := 0; k < NSPS; k++ {
 			idx := ia + k
 			if idx < len(samples) {
-				in[k] = complex(float64(samples[idx])*SpectrogramScale, 0)
+				in[k] = samples[idx] * SpectrogramScale
 			} else {
 				in[k] = 0
 			}
@@ -81,7 +80,9 @@ func Spectrogram(samples []float32) [][]float64 {
 
 		X := plan.FFT(in)
 
-		// Power spectrum at positive-frequency bins.
+		// Power spectrum at positive-frequency bins. RealPlan
+		// returns NH1+1 bins; we read NH1 (= NFFT1/2 = 1920), the
+		// same range Spectrogram has always exposed to callers.
 		for f := 0; f < NH1; f++ {
 			re := real(X[f])
 			im := imag(X[f])
