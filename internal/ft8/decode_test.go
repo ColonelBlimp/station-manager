@@ -178,16 +178,19 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 		// this capture, from testdata/README.md. Reference only —
 		// we don't expect parity with a clean-room implementation.
 		wsjtxDecodes int
-		// minDecodes is SM's regression-floor baseline. Captured
-		// post-Phase-1-optimization (Session 80, commit 7f0cab02):
-		// the FFT-caching change doesn't affect decode count, only
-		// runtime. Bump when sensitivity improvements (OSD, fine-
-		// freq, fine-timing, K-scale) land.
+		// minDecodes is SM's regression-floor baseline. Bumped over
+		// time as sensitivity improvements land:
+		//   - Phase 1 FFT caching (Session 80): no change.
+		//   - Phase 2 FFT plans: no change.
+		//   - Fine-timing retry (Session 80): cap2 4→6, cap3 7→11
+		//     via within-symbol-window ±5/±10 ms DT shifts on
+		//     coarse-LDPC failures.
+		// Bump further when OSD / fine-frequency / K-scale land.
 		minDecodes int
 	}{
 		{"ft8_cap1.wav", 11, 1},
-		{"ft8_cap2.wav", 14, 4},
-		{"ft8_cap3.wav", 23, 7},
+		{"ft8_cap2.wav", 14, 6},
+		{"ft8_cap3.wav", 23, 11},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

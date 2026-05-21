@@ -61,6 +61,17 @@ type DecodeOptions struct {
 	// sentinel and the message drops out of the returned slice.
 	// Provide a HashTable to retain these messages.
 	HashTable *codec.HashTable
+
+	// FineTimingDisabled turns off the within-symbol fine-timing
+	// retry path. When false (default), candidates whose coarse-DT
+	// LDPC attempt fails get retried at ±5 ms and ±10 ms shifts —
+	// recovers borderline decodes where the sync detector's 40 ms
+	// quantisation puts the symbol-extraction window a few baseband
+	// samples off the true TX alignment. The retry is cheap (only
+	// runs on failed candidates) and bounded (5 attempts max). Set
+	// true for strict-coarse-only behaviour, e.g. when benchmarking
+	// against a sync-detector baseline.
+	FineTimingDisabled bool
 }
 
 // Decode runs the full FT8 audio → messages pipeline on a 15-second
@@ -117,6 +128,11 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 	// caching the forward FFT itself.
 	forwardPlan := audio.NewPlan(dsp.NFFT1DS)
 	inversePlan := audio.NewPlan(dsp.NFFT2)
+	// Per-symbol FFT plan for the demodulator's 58 small (size=32)
+	// FFTs per call. With fine-timing retries enabled, we may call
+	// Demodulate up to 5× per failed candidate; without plan reuse
+	// that's 58 × 5 × 100 = 29,000 Plan constructions per slot.
+	symPlan := audio.NewPlan(dsp.SymbolFFTSize)
 
 	// Compute the audio's 192k forward FFT ONCE for this slot. Every
 	// candidate downsamples the same audio at a different centre
@@ -134,25 +150,53 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		cand dsp.Candidate
 		msg  codec.Message
 	}
+	// Fine-timing retry offsets in seconds. Tried in order; the
+	// first one that produces a successful LDPC+CRC+parse wins.
+	// 0.0 (coarse DT) goes first, so cases where coarse alignment
+	// already works pay no extra cost. At Fs2=200 Hz baseband the
+	// shifts correspond to ±1 and ±2 baseband samples — within
+	// the 32-sample demod symbol window, no cross-symbol leakage.
+	//
+	// Empirically (3 fixtures, Session 80 measurement):
+	//   - ±5ms: cap1=1, cap2=6, cap3=9  (+5 decodes vs no fine-timing)
+	//   - ±5+±10ms: cap1=1, cap2=6, cap3=11 (+6 decodes total)
+	// The ±10ms retries DO matter — cap3 picked up two extra
+	// decodes (`5Z4VJ YB1RUS OI33` at sync 8.03 and `CQ SP4MSY
+	// KO13` at sync 4.19) that ±5ms alone didn't recover.
+	fineOffsets := []float64{0, -0.005, 0.005, -0.010, 0.010}
+	if opts.FineTimingDisabled {
+		fineOffsets = fineOffsets[:1] // coarse only
+	}
+
 	var raw []pending
 	for _, c := range cands {
 		baseband := dsp.DownsampleFromSpectrumWithPlan(spectrum, c.Freq, inversePlan)
 		if baseband == nil {
 			continue
 		}
-		llrs := dsp.Demodulate(baseband, c.DT)
-		if llrs == nil {
-			continue
+
+		var foundMsg codec.Message
+		decoded := false
+		for _, dOffset := range fineOffsets {
+			llrs := dsp.DemodulateWithPlan(baseband, c.DT+dOffset, symPlan)
+			if llrs == nil {
+				continue
+			}
+			msgBits, ok := codec.LDPCDecode(llrs, maxIters)
+			if !ok {
+				continue
+			}
+			msg, err := codec.DecodeMessage(msgBits)
+			if err != nil {
+				continue
+			}
+			foundMsg = msg
+			decoded = true
+			break // first offset that works wins
 		}
-		msgBits, ok := codec.LDPCDecode(llrs, maxIters)
-		if !ok {
-			continue
+		if decoded {
+			raw = append(raw, pending{c, foundMsg})
 		}
-		msg, err := codec.DecodeMessage(msgBits)
-		if err != nil {
-			continue
-		}
-		raw = append(raw, pending{c, msg})
 	}
 
 	// **Pass 2 (optional):** if the caller supplied a HashTable,

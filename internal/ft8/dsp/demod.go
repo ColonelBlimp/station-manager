@@ -91,7 +91,21 @@ const (
 // baseband is too short for all symbol extractions at the given
 // dt (a programmer-side bug — the upstream pipeline should never
 // hand a too-short baseband to the demodulator).
+//
+// Builds an ad-hoc audio.Plan internally for the 58 per-symbol
+// FFTs of size SymbolFFTSize=32. Callers running many Demodulate
+// calls per slot (fine-timing retries × many candidates) should
+// use DemodulateWithPlan with a shared Plan to amortise the
+// twiddle-table construction.
 func Demodulate(baseband []complex128, dt float64) []float64 {
+	return DemodulateWithPlan(baseband, dt, nil)
+}
+
+// DemodulateWithPlan is the Plan-reuse variant of Demodulate. If
+// symPlan is non-nil it must have been constructed for size
+// SymbolFFTSize (Plan.FFT panics on a size mismatch). If nil, an
+// ad-hoc plan is built per call.
+func DemodulateWithPlan(baseband []complex128, dt float64, symPlan *audio.Plan) []float64 {
 	// Symbol start samples in baseband: each channel symbol n
 	// begins at sample nominalStart + dtSamples + n*SymbolFFTSize.
 	const nominalStartSamples = int(nominalTXStartSeconds * Fs2) // 100
@@ -116,7 +130,12 @@ func Demodulate(baseband []complex128, dt float64) []float64 {
 			// Per-symbol FFT.
 			window := make([]complex128, SymbolFFTSize)
 			copy(window, baseband[symStart:symStart+SymbolFFTSize])
-			spectrum := audio.FFT(window)
+			var spectrum []complex128
+			if symPlan != nil {
+				spectrum = symPlan.FFT(window)
+			} else {
+				spectrum = audio.FFT(window)
+			}
 
 			// Tone magnitudes at bins 0..7 (one per FSK tone).
 			var mag [TonesPerSymbol]float64
