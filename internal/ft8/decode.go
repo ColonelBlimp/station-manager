@@ -27,7 +27,7 @@ type DecodedMessage struct {
 	Message codec.Message
 
 	// Text is the formatted operator-facing rendering of Message
-	// (e.g. "K1JT W9XYZ FN20"). Pre-computed during decode so
+	// (e.g. "K1JT W9XYZ FN20"). Pre-computed during decoding, so
 	// callers don't have to re-run FormatMessage themselves.
 	Text string
 }

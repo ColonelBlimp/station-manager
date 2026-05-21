@@ -34,7 +34,7 @@ func synthesizeFT8Audio(t *testing.T, codeword []byte, f0 float64) []float32 {
 		t.Fatalf("codeword length %d, want %d", len(codeword), codec.CodewordBits)
 	}
 
-	audio := make([]float32, dsp.NMAX)
+	out := make([]float32, dsp.NMAX)
 	nominalStart := int(0.5 * dsp.Fs) // 6000 samples = 0.5 s
 
 	codewordIdx := 0
@@ -60,11 +60,11 @@ func synthesizeFT8Audio(t *testing.T, codeword []byte, f0 float64) []float32 {
 		freq := f0 + float64(tone)*dsp.Baud
 		symStart := nominalStart + chanSym*dsp.NSPS
 		for k := 0; k < dsp.NSPS; k++ {
-			t := float64(symStart+k) / dsp.Fs
-			audio[symStart+k] = float32(math.Sin(2 * math.Pi * freq * t))
+			sampleT := float64(symStart+k) / dsp.Fs
+			out[symStart+k] = float32(math.Sin(2 * math.Pi * freq * sampleT))
 		}
 	}
-	return audio
+	return out
 }
 
 // codewordFromMessage builds the 174-bit FT8 codeword for an
