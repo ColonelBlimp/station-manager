@@ -111,9 +111,9 @@ func TestDecode_SyntheticRoundTrip(t *testing.T) {
 	// codeword from it and synthesize audio at 1500 Hz (default
 	// FT8 working centre).
 	codeword := codewordFromMessage(msgBits)
-	audio := synthesizeFT8Audio(t, codeword, 1500.0)
+	samples := synthesizeFT8Audio(t, codeword, 1500.0)
 
-	results := Decode(audio, DecodeOptions{})
+	results := Decode(samples, DecodeOptions{})
 	if len(results) == 0 {
 		t.Fatal("Decode returned no messages for synthetic signal")
 	}
