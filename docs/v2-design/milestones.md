@@ -1081,11 +1081,48 @@ The Phase 4 hash table itself shipped 2026-05-20:
 `LookupH10` / `LookupH12` / `LookupH22` for direct hash queries,
 and `Resolve(Message) Message` for type-aware sentinel
 replacement (Type 4 via Hash12; Type 5 via Hash12+Hash22).
-Phase 4 remaining scope: Type 0.1 (DXpedition, `c28 c28 h10 r5`),
-Type 0.3 (Field Day ARRL, `c28 c28 R1 n4 k3 S7`), Type 0.4 (Field
-Day RAC, same shape as 0.3), Type 0.5 (Telemetry, `t71`).
-Layers 3+4 (signal-processing pipeline + WAV-corpus tests) and
-the LDPC decoder remain.
+Phase 4 specialty codec types (0.1 DXpedition / 0.3+0.4 Field Day
+/ 0.5 Telemetry) deferred 2026-05-21 — operator confirmed they
+aren't needed for personal use; can return when needed.
+**Session 78 (2026-05-21 afternoon) — DSP pipeline + real-WAV FT8
+decoding SHIPPED end-to-end.** Nine commits built the audio →
+messages signal-processing chain in clean-room spec-based Go:
+LDPC belief-propagation decoder + CRC14 gate (per QEX §6),
+new `internal/audio/` package (WAV reader + pure-Go mixed-radix
+FFT covering all 5-smooth FT8 sizes), new `internal/ft8/dsp/`
+sub-package (params + spectrogram + Costas-sync detector +
+baseband downsampler + soft demodulator per Taylor §6's L_j),
+top-level `Decode` entry point in `internal/ft8/decode.go`
+wiring WAV → Spectrogram → Sync → per-candidate (Downsample
+→ Demodulate → LDPCDecode → DecodeMessage → FormatMessage).
+**Real WAV decoding works:** `internal/ft8/testdata/ft8_cap1.wav`
+(operator-recorded capture, WSJT-X 2.7.0 finds 11 signals)
+yields 2 decoded messages from SM's pipeline — `SV2SIH ES2AJ -16`
+at 1862.5 Hz and `VE1WT K4GBI 73` at 1309.4 Hz. The 2/11
+sensitivity gap is the next-session topic — OSD (LDPC fallback),
+fine-frequency search around sync candidates, fine-timing
+alignment within symbol windows, K-scale tuning in the
+demodulator are each a session-sized chunk.
+**Notable: Costas-sync detector clean-room redo.** First attempt
+was a port of go-ft8/research/sync8.go which itself ports
+WSJT-X's GPL `lib/ft8/sync8.f90`. Operator caught the
+derivation immediately and rejected it; redone from QEX paper
+§4 + textbook matched-filter signal processing. Result is a
+deliberately simpler detector — 21-position Costas template,
+mean-in-pattern / mean-out-of-pattern ratio score; skipped the
+sync8.f90 tunings (triple-block scoring, BC-only fallback,
+40th-percentile normalization, narrow/wide search split,
+QSO-priority placement) — all available as future clean-room
+reinventions if sensitivity demands.
+**Side discovery — GrayUnmap latent bug.** Positions 5 and 7
+were swapped in `internal/ft8/dsp/params.go` (carried verbatim
+from go-ft8/research/constants.go where it was dormant). Caught
+during demodulator testing; fixed against QEX paper Table 3 and
+pinned by `internal/ft8/dsp/params_test.go`'s
+`TestGrayMapInversesGrayUnmap` + `TestGrayMapMatchesQEXTable3`.
+M4.1 is now structurally complete (WAV → messages works end-
+to-end on real audio). Sensitivity tuning + M4.2 live audio
+are the next-milestone topics.
 Deferred follow-up still open: Type 1's `decodeStd` continues to
 return `ErrCallsignNeedsHashLookup` for c28 values in the
 `[nTokens, stdCallOffset)` hash partition. After finding #1 the
@@ -1131,6 +1168,21 @@ Phase 2 additions:
 | `ParseMessage` + `parseStd` + `parseEUVHFP` + `parseRTTYRoundup` + `parseNonStdCall` + `parseEUVHFHash` + `parseFreeText` + classifier | `parse.go` | Text → Message; classifier dispatch order: Free Text (`.`/`?` AND no angle brackets) → Type 5 (dual `<>` + g25 grid trailing) → Type 4 (any bracket / mid-slash / non-/R-non-/P trailing slash / > 6 chars no slash) → Type 2 (`/P` suffix) → Type 3 (`"TU;"` first-token OR `"5N9"` 3-digit report token, N ∈ 2..9) → Type 1; **post-session-77 finding #3:** Free Text fallback after Type 1 fails if input ≤ 13 chars and all chars in f71 alphabet (handles "TNX BOB 73 GL"). `parseEUVHFP` is now a dispatcher mirroring `parseStd`'s shape (post-session-77 finding #2): `parseCQEUVHFP` / `parseDirectedEUVHFP` / `parsePlainEUVHFP` |
 | `C28Kind` + `G15Kind` + `S13Kind` discriminators | `callsign.go`, `grid.go`, `rttyroundup.go` | Route-B kind enums for the multi-modal c28 / g15 / s13 partition spaces |
 | `HashTable` (`Insert` / `LookupH22` / `LookupH12` / `LookupH10` / `Observe` / `Resolve` / `Len`) | `hashtable.go` | Phase 4 receiver-side running callsign-hash table per QEX §6. Bounded capacity (default 100, WSJT-X convention) with FIFO eviction of the oldest entry on overflow + LRU-on-reinsert (re-Inserting a present callsign moves it to MRU). Newest-wins on hash collision via newest-to-oldest lookup iteration; collision rates at cap=100 are h22≈0.002% / h12≈2.4% / h10≈10%. Insert silently filters non-callsigns (empty, `<...>` sentinel, tokens via `TokenToC28`, out-of-alphabet, > 11 chars) and trims whitespace. Observe walks Call1/Call2 of a decoded Message and Inserts each. Resolve takes a Message and returns a copy with sentinel call slots replaced — Type 4 uses Hash12 → whichever slot is sentinel; Type 5 uses Hash12 → Call1 and Hash22 → Call2; resolved hash fields are zeroed; other Types return unchanged. Thread-safe via `sync.RWMutex` |
+
+Session 78 DSP-layer additions (the audio → messages signal-processing pipeline):
+
+| DSP component | File | Notes |
+|---|---|---|
+| `LDPCDecodeBP` + `LDPCDecode` | `internal/ft8/codec/ldpc_decode.go` | Sum-product belief-propagation decoder per QEX §6 (tanh product-rule with prefix/suffix accumulation for O(1) excluded-variable updates; numerical clamping at 1−1e−15 keeps atanh finite). Default 50 iterations; per-iter syndrome-zero early exit. `LDPCDecode` adds the CRC14 gate (per QEX §6's "decoded codeword's 77-bit CRC matches" criterion) — returns the recovered 77-bit message body iff BP converged AND CRC matched. ~35 µs clean / 70 µs with 5-bit errors on operator's i3-10100F. OSD (Ordered Statistics Decoding) explicitly deferred — Taylor §6 says BP catches the vast majority; OSD adds ~1 dB |
+| `audio.ReadWAV` | `internal/audio/wav.go` | WAV file reader at new neutral `internal/audio/` package (peer of internal/cat/serial). Supports PCM 8-bit unsigned, PCM 16-bit signed, IEEE float 32-bit. Adversarial-chunk-size defence via `io.LimitReader`. Single `Data{SampleRate, Channels, Samples []float32}` exported struct. The shape FT8 expects: 12 kHz mono PCM16 |
+| `audio.FFT` + `audio.IFFT` | `internal/audio/fft.go` | Pure-Go mixed-radix Cooley-Tukey radix-2/3/5 covering every 5-smooth FT8 size (192000/180000/3840/3200/1920). Operator-authored (ported MIT-clean from go-ft8/research/fft.go). Pure stdlib (math + math/cmplx) — no CGO, no gonum dependency. Performance: ~400 µs at N=1920, ~870 µs at N=3840 — about 20-50× slower than FFTW3 but well within FT8's 15-second slot budget. **The operator's go-ft8/research/fftw.go + fftw_wrapper.c were excluded** since they bind to FFTW3 which is GPL v2 (same licence-exclusion that dropped mattn/go-sqlite3) |
+| `dsp` params | `internal/ft8/dsp/params.go` | FT8 protocol constants from QEX paper + ft8_params.f90: Fs=12000, NSPS=1920, NN=79, NMAX=180000, NFFT1=3840, NH1=1920, NSTEP=480, NHSYM=372, NDOWN=60, NFFT2=3200, NFFT1DS=192000, Fs2=200, Baud=6.25, SpectrogramScale=1/300 (WSJT-X parity convention), Icos7={3,1,4,0,6,5,2}, GrayMap, GrayUnmap. **Session 78 fix:** GrayUnmap had positions 5 and 7 swapped (latent bug carried verbatim from go-ft8/research/constants.go) — fixed against QEX paper Table 3 and pinned by `TestGrayMapInversesGrayUnmap` + `TestGrayMapMatchesQEXTable3` regression tests |
+| `dsp.Spectrogram` | `internal/ft8/dsp/spectrogram.go` | `Spectrogram(audio []float32) [][]float64` — slides a 1920-sample window at NSTEP=480 stride across 12 kHz audio, FFTs each window (zero-padded to 3840) via audio.FFT, output `power[t][f]` for t∈[0,372), f∈[0,1920). Single contiguous backing array (~5.4 MB at canonical sizes) sliced into row views for cache-friendly access by the Costas correlator. 310 ms per full 15-s slot |
+| `dsp.Sync` + `dsp.Candidate` + `dsp.SyncOptions` | `internal/ft8/dsp/sync.go` | **Clean-room Costas-sync detector** per QEX §4 + textbook matched-filter signal processing. First attempt was a port of go-ft8/research/sync8.go which itself ports WSJT-X's GPL `lib/ft8/sync8.f90`; operator caught and rejected; redone clean-room from scratch. 21-position Costas template (3 blocks × 7 tones), score = mean in-pattern Costas-tone power / mean out-of-pattern tone power across the same time slots, descending-sync sort, proximity-based dedup (1 freq bin × 2 time-steps). **Deliberately skipped** (deferred to clean-room reinvention if sensitivity demands): triple-block scoring (sync8's t_a/t_b/t_c separation), BC-only fallback for late signals, 40th-percentile noise-floor normalization, narrow vs wide time-lag search split, operator-frequency priority placement. On real ft8_cap1.wav → 100 candidates with sensible peaks at FT8-band frequencies |
+| `dsp.Downsample` | `internal/ft8/dsp/downsample.go` | `Downsample(audio []float32, f0 float64) []complex128` — FFT-based mix to baseband and decimate from 12 kHz to 200 Hz. Forward 192000-point FFT of zero-padded audio, extract 3200 bins centred on f0 (with Hann edge taper), inverse 3200-point FFT → 16 seconds of complex baseband at 200 Hz. The bin extraction IS the anti-alias filter (no explicit FIR design needed given the FFT in hand). 58 ms per call |
+| `dsp.Demodulate` | `internal/ft8/dsp/demod.go` | `Demodulate(baseband []complex128, dt float64) []float64` — produces 174 LLRs per Taylor 2020 §6's L_j formula. For each of 58 data symbols (channel symbols 7..35 and 43..71): extract 32 baseband samples, 32-point FFT, take magnitudes at the 8 FSK tone bins, compute per-bit `L_j = max{\|C_i\| : bit=0} − max{\|C_i\| : bit=1}` over Gray-demapped tone partitions. LDPC-literature sign convention (positive ⟹ bit-is-0) so output feeds LDPCDecode directly. K scale defaults to 1.0 (per Taylor §6 "adjusted empirically" — tunable knob if sensitivity work surfaces it) |
+| `ft8.Decode` + `ft8.DecodedMessage` + `ft8.DecodeOptions` | `internal/ft8/decode.go` | Top-level entry point wiring the full pipeline: WAV → Spectrogram → Sync → per-candidate (Downsample → Demodulate → LDPCDecode → DecodeMessage → FormatMessage). Returns `[]DecodedMessage{Freq, DT, SyncPower, Message, Text}` for every successful decode. Candidates that fail at any stage are silently dropped — the sync detector is permissive (typically 100/slot for a busy band) and the LDPC + CRC chain is the structural validator that separates real signals from noise |
+| `testdata/ft8_cap{1,2,3}.wav` + README | `internal/ft8/testdata/` | Operator-recorded FT8 captures vendored from go-ft8/testdata (operator-owned recordings, not WSJT-X GPL samples; ~360 KB each, ~1 MB total). README documents provenance (7Q5MLV's station), file format (12 kHz mono PCM16), and WSJT-X 2.7.0 decode counts (cap1=11, cap2=14, cap3=23). Tests resolve via `$FT8_TEST_CORPUS` env override → `testdata/` fallback; skip-on-missing per the L4 (real-signal) test layer |
 
 The codec package was renamed from `internal/ft8/decoder` →
 `internal/ft8/codec` mid-sequence (when it became clear the same
