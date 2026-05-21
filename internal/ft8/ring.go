@@ -13,8 +13,8 @@ type sampleRing struct {
 }
 
 // newSampleRing allocates a ring of the given capacity.
-func newSampleRing(cap int) *sampleRing {
-	return &sampleRing{buf: make([]float32, cap)}
+func newSampleRing(size int) *sampleRing {
+	return &sampleRing{buf: make([]float32, size)}
 }
 
 // Cap returns the ring capacity.
@@ -33,22 +33,22 @@ func (r *sampleRing) Append(src []float32) {
 	if n == 0 {
 		return
 	}
-	cap := len(r.buf)
-	if n >= cap {
-		// Source is at least one full ring — copy only the most recent cap samples
-		// into the buffer starting at position 0, and reset the write head.
-		copy(r.buf, src[n-cap:])
+	size := len(r.buf)
+	if n >= size {
+		// Source is at least one full ring — copy only the most recent
+		// size samples into the buffer starting at position 0, and
+		// reset the write head.
+		copy(r.buf, src[n-size:])
 		r.w = 0
 		r.filled += int64(n)
 		return
 	}
-	// Fits in one or two contiguous segments.
 	end := r.w + n
-	if end <= cap {
+	if end <= size {
 		copy(r.buf[r.w:end], src)
-		r.w = end % cap
+		r.w = end % size
 	} else {
-		first := cap - r.w
+		first := size - r.w
 		copy(r.buf[r.w:], src[:first])
 		copy(r.buf[:n-first], src[first:])
 		r.w = n - first
@@ -61,11 +61,11 @@ func (r *sampleRing) Append(src []float32) {
 // fewer than Cap() samples have been appended, the head of the
 // returned slice is zero-padded.
 func (r *sampleRing) Snapshot() []float32 {
-	cap := len(r.buf)
-	out := make([]float32, cap)
+	size := len(r.buf)
+	out := make([]float32, size)
 	// The sample at index w is the oldest (next to be overwritten);
-	// linearise from w forward, wrapping at cap.
+	// linearise from w forward, wrapping at the buffer end.
 	copy(out, r.buf[r.w:])
-	copy(out[cap-r.w:], r.buf[:r.w])
+	copy(out[size-r.w:], r.buf[:r.w])
 	return out
 }
