@@ -75,12 +75,48 @@ var (
 	ldpcParity    ParityMatrix
 )
 
+// ldpcCheckRows[c] lists the variable (codeword-bit) indices that
+// participate in parity check c. Row weight is 6 or 7 per QEX
+// paper §3 (the parity matrix is sparse with variable row density).
+// Built at init by transposing ldpcParity's sparse column-major
+// form into a sparse row-major form — used by the BP decoder to
+// iterate over the variables in each check.
+var ldpcCheckRows [ParityBits][]uint16
+
+// ldpcVarPos[v][k] gives the position of variable v inside
+// ldpcCheckRows[ldpcParity[v][k]] — i.e. the index where v appears
+// in the check-row list for v's k-th check. Used by the BP decoder
+// to read check→variable messages from variable v's perspective
+// without scanning the check's variable list each time.
+var ldpcVarPos [CodewordBits][LDPCParityColumnDensity]uint8
+
+// ldpcCheckPos[c][j] gives the slot in ldpcParity[ldpcCheckRows[c][j]]
+// where row c appears — the inverse of ldpcVarPos. Used by the BP
+// decoder to read variable→check messages from check c's perspective
+// without scanning v's 3 check slots each time. Slot is in [0, 3).
+var ldpcCheckPos [ParityBits][]uint8
+
 func init() {
 	if err := parseGenerator(generatorRaw, &ldpcGenerator); err != nil {
 		panic("codec: parsing embedded generator.dat: " + err.Error())
 	}
 	if err := parseParity(parityRaw, &ldpcParity); err != nil {
 		panic("codec: parsing embedded parity.dat: " + err.Error())
+	}
+	buildLDPCGraphIndices()
+}
+
+// buildLDPCGraphIndices populates ldpcCheckRows, ldpcVarPos, and
+// ldpcCheckPos from the parsed ldpcParity matrix. Runs once at init;
+// total work is proportional to the 522 ones in the parity matrix.
+func buildLDPCGraphIndices() {
+	for v := range CodewordBits {
+		for k := range LDPCParityColumnDensity {
+			c := ldpcParity[v][k]
+			ldpcVarPos[v][k] = uint8(len(ldpcCheckRows[c]))
+			ldpcCheckPos[c] = append(ldpcCheckPos[c], uint8(k))
+			ldpcCheckRows[c] = append(ldpcCheckRows[c], uint16(v))
+		}
 	}
 }
 

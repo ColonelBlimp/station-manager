@@ -1,0 +1,212 @@
+package codec
+
+import "math"
+
+// LDPC decoder via belief propagation per QEX paper §6.
+//
+// Input: 174 log-likelihood ratios (LLRs), one per codeword bit. The
+// convention matches WSJT-X: **positive LLR ⟹ bit-is-0 favoured;
+// negative ⟹ bit-is-1 favoured**. The soft demodulator estimates
+// these from observed channel-symbol correlations (see Taylor 2020
+// §6 for the L_j formula).
+//
+// Output: the 174-bit hard-decided codeword and a converged flag.
+// The first InfoBits (91) bits of the codeword are the systematic
+// information word (77-bit message + 14-bit CRC). On converged=true
+// the codeword satisfies the parity-check equations (zero syndrome);
+// callers chain CRC14 verification to gate semantic acceptance.
+//
+// **Algorithm.** Standard sum-product BP on the bipartite graph
+// defined by ldpcParity:
+//
+//   - Initialize variable→check messages from input LLRs.
+//   - For each iteration:
+//     1. Check→variable update via the tanh product rule:
+//        m_c→v = 2·atanh(∏_{v'∈N(c)\{v}} tanh(m_v'→c / 2)).
+//        Computed efficiently per check via prefix/suffix products
+//        so each excluded-variable case is O(1) instead of O(|N(c)|).
+//        Each tanh-product is clamped to [-(1-ε), 1-ε] before atanh
+//        to keep numerics finite when tanh(m/2) → ±1.
+//     2. Variable→check update via the standard sum form:
+//        m_v→c = LLR_in[v] + ∑_{c'∈N(v)\{c}} m_c'→v.
+//        Computed via "total minus excluded" using the per-variable
+//        posterior LLR.
+//     3. Hard-decide and check the syndrome. If syndrome = 0,
+//        terminate early with converged=true.
+//   - After maxIterations without convergence, return the current
+//     hard-decision with converged=false. Callers can chain OSD
+//     for the harder cases (Taylor 2020 §6 — not implemented in
+//     this commit; BP alone catches the vast majority of decodes
+//     and is the right starting point per the AWGN thresholds in
+//     QEX Table 5).
+//
+// **What this function does NOT do.** The soft-demodulator producing
+// the LLRs is a separate piece (FT8 channel symbol → 3 soft bits per
+// symbol via Taylor 2020 §6's L_j formula). CRC14 validation lives
+// at the message-extraction layer (LDPCDecode wrapper, future). This
+// function is the pure BP step.
+
+// LDPCMaxIterationsDefault is the default iteration cap for
+// LDPCDecodeBP — Taylor 2020 §6 says "in practice we find that
+// most received signals are decoded with just a few iterations of
+// the BP algorithm". 50 is a safety bound; convergence almost
+// always happens by iteration ~5 on real signals.
+const LDPCMaxIterationsDefault = 50
+
+// llrClamp bounds the tanh-product magnitude before atanh to keep
+// the BP update numerically finite. tanh approaches ±1 asymptotically
+// — at m≈18 the value is within 2^-26 of 1 and atanh(±1) = ±Inf,
+// poisoning subsequent iterations. ε = 1e-15 ≈ 2^-50 is well below
+// the float64 precision floor for FT8-scale LLR magnitudes.
+const llrClamp = 1.0 - 1e-15
+
+// LDPCDecodeBP runs belief-propagation decoding on a 174-element
+// slice of soft decisions and returns the recovered codeword + a
+// flag indicating whether the parity-check equations were satisfied
+// (zero syndrome) at termination.
+//
+// The codeword is in bit-per-byte form (each byte 0 or 1), matching
+// the project convention. Even when converged=false the returned
+// slice is the current hard-decision — useful for OSD post-processing
+// or for inspection.
+//
+// Panics if len(llrs) != CodewordBits. The 174-element contract is
+// upstream-guaranteed by the demodulator; a length mismatch here is
+// a programmer bug, not user data.
+func LDPCDecodeBP(llrs []float64, maxIterations int) ([]byte, bool) {
+	if len(llrs) != CodewordBits {
+		panic("codec.LDPCDecodeBP: llrs must be exactly " + itoaCodewordBits + " long")
+	}
+	if maxIterations <= 0 {
+		maxIterations = LDPCMaxIterationsDefault
+	}
+
+	// Variable→check messages: one per (variable, check-slot) edge.
+	// Each variable has exactly LDPCParityColumnDensity (=3) edges.
+	var mVtoC [CodewordBits][LDPCParityColumnDensity]float64
+	for v := range CodewordBits {
+		for k := range LDPCParityColumnDensity {
+			mVtoC[v][k] = llrs[v]
+		}
+	}
+
+	// Check→variable messages, sized per check (row weight varies 6-7).
+	mCtoV := make([][]float64, ParityBits)
+	for c := range ParityBits {
+		mCtoV[c] = make([]float64, len(ldpcCheckRows[c]))
+	}
+
+	decided := make([]byte, CodewordBits)
+	// Pre-allocate prefix/suffix scratch buffers sized to the max row
+	// weight (7 per QEX paper §3). Re-used across all checks within
+	// each iteration to keep the hot loop allocation-free.
+	const maxRowWeight = 8
+	var prefix, suffix [maxRowWeight + 1]float64
+
+	for iter := 0; iter < maxIterations; iter++ {
+		// --- Check-to-variable update -----------------------------
+		for c := range ParityBits {
+			vars := ldpcCheckRows[c]
+			poss := ldpcCheckPos[c]
+			n := len(vars)
+
+			// Prefix/suffix products of tanh(m/2) over all variables
+			// in this check, so the "excluded variable" product needed
+			// for each outgoing message is O(1) instead of O(n).
+			prefix[0] = 1.0
+			for k := range n {
+				t := math.Tanh(mVtoC[vars[k]][poss[k]] / 2)
+				prefix[k+1] = prefix[k] * t
+			}
+			suffix[n] = 1.0
+			for k := n - 1; k >= 0; k-- {
+				t := math.Tanh(mVtoC[vars[k]][poss[k]] / 2)
+				suffix[k] = suffix[k+1] * t
+			}
+			for k := range n {
+				p := prefix[k] * suffix[k+1]
+				if p > llrClamp {
+					p = llrClamp
+				} else if p < -llrClamp {
+					p = -llrClamp
+				}
+				mCtoV[c][k] = 2 * math.Atanh(p)
+			}
+		}
+
+		// --- Variable-to-check update + hard decision -------------
+		// posterior[v] = llrs[v] + ∑_{c ∈ N(v)} m_c→v
+		// m_v→c = posterior[v] - m_c→v  (for the specific c)
+		for v := range CodewordBits {
+			post := llrs[v]
+			for k := range LDPCParityColumnDensity {
+				c := ldpcParity[v][k]
+				varSlot := ldpcVarPos[v][k]
+				post += mCtoV[c][varSlot]
+			}
+			if post < 0 {
+				decided[v] = 1
+			} else {
+				decided[v] = 0
+			}
+			for k := range LDPCParityColumnDensity {
+				c := ldpcParity[v][k]
+				varSlot := ldpcVarPos[v][k]
+				mVtoC[v][k] = post - mCtoV[c][varSlot]
+			}
+		}
+
+		// --- Syndrome check ---------------------------------------
+		if syndromeZero(decided) {
+			return decided, true
+		}
+	}
+
+	return decided, false
+}
+
+// computeSyndrome returns the 83-bit parity-check syndrome of a 174-
+// bit codeword candidate. The syndrome is all-zero iff the candidate
+// is a valid LDPC codeword. Used by BP convergence checks and by
+// any external caller wanting to verify a codeword's structural
+// validity independent of the message-level CRC14.
+//
+// Output bits are in bit-per-byte form (each byte 0 or 1), length
+// ParityBits (83). Panics if codeword length is wrong.
+func computeSyndrome(codeword []byte) [ParityBits]byte {
+	if len(codeword) != CodewordBits {
+		panic("codec.computeSyndrome: codeword must be exactly " + itoaCodewordBits + " long")
+	}
+	var syn [ParityBits]byte
+	for v := range CodewordBits {
+		if codeword[v] == 0 {
+			continue
+		}
+		for k := range LDPCParityColumnDensity {
+			syn[ldpcParity[v][k]] ^= 1
+		}
+	}
+	return syn
+}
+
+// syndromeZero is an early-exit variant: checks each parity equation
+// against the hard-decided codeword on the fly and returns false the
+// moment any check fails. Used in the BP iteration's per-iter
+// convergence test where most iterations either converge or fail on
+// the first check — full syndrome computation is wasted work.
+func syndromeZero(codeword []byte) bool {
+	for c := range ParityBits {
+		var bit byte
+		for _, v := range ldpcCheckRows[c] {
+			bit ^= codeword[v]
+		}
+		if bit != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// itoaCodewordBits is the precomputed string form of CodewordBits.
+// Used by panic messages in the hot path to avoid a strconv import.
+const itoaCodewordBits = "174"
