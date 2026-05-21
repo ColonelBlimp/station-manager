@@ -93,7 +93,7 @@
             first, then encounter the button as a discrete control.
         -->
         <div
-            class="toast-base {levelClass(toast.level)} pointer-events-auto relative"
+            class="toast-base {levelClass(toast.level)} relative"
             role={toast.level === 'error' ? 'alert' : 'status'}
             transition:fade={{ duration: 150 }}
         >

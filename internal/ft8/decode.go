@@ -136,12 +136,51 @@ type DecodeOptions struct {
 	// documented future sensitivity move. Until that lands, this
 	// is a single global knob — set once per Decode call.
 	LLRScale float64
+
+	// SubtractionPasses controls the number of EXTRA iterative
+	// decode passes performed after the first (pass 0). Each extra
+	// pass: (1) copy-and-subtract every signal decoded so far from a
+	// working audio buffer via dsp.SubtractSignal, (2) recompute
+	// Spectrogram + Sync + ForwardSpectrum on the residual, (3) run
+	// the candidate decode loop again, deduplicating by message
+	// body against the running set. Loops break early when a pass
+	// adds zero new decodes.
+	//
+	// Per QEX paper §6: "successful decoders subtract decoded
+	// signals from the audio so weaker signals beneath can be
+	// decoded" — the canonical way to reveal weak signals that were
+	// masked by stronger ones in their frequency neighbourhood.
+	//
+	// Resolution rules:
+	//   - 0 (zero value) → no extra passes — Decode runs as the
+	//     pre-subtraction baseline did. **Today's default until
+	//     real-capture sensitivity gains justify enabling.**
+	//   - 1 → one extra pass after the initial decode (commonly
+	//     enough; per WSJT-X experience most reveals happen in the
+	//     second pass).
+	//   - 2+ → diminishing returns; cost scales with the per-pass
+	//     decode budget (~600 ms each at SM's current performance).
+	//   - Negative → treated as 0.
+	//
+	// Cost: each extra pass costs ~600-800 ms (Spectrogram + Sync +
+	// ForwardSpectrum + candidate loop + subtraction overhead) plus
+	// the subtraction calls themselves (~7 ms × number of decoded
+	// signals). At 4.5 s baseline + 1 extra pass, total stays well
+	// under the 15-second slot budget.
+	SubtractionPasses int
 }
 
 // DefaultOSDOrder is the OSD search depth applied when
 // DecodeOptions.OSDOrder is unset (zero value). Order-1 is the
 // canonical sensitivity-vs-cost sweet spot.
 const DefaultOSDOrder = 1
+
+// DefaultSubtractionPasses is the number of EXTRA iterative
+// subtraction passes applied when DecodeOptions.SubtractionPasses
+// is unset (zero value). Currently 0 — subtraction is opt-in until
+// real-capture sensitivity gains are measured. To enable, the
+// caller explicitly sets DecodeOptions.SubtractionPasses ≥ 1.
+const DefaultSubtractionPasses = 0
 
 // DefaultFineTimingOffsets is the retry sequence applied when
 // DecodeOptions.FineTimingOffsets is nil. Tuned empirically on the
@@ -261,9 +300,15 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 	// Resolve pass. Messages may carry sentinel call slots ("<...>")
 	// + Hash22Call1/Hash22Call2 fields when c28 landed in the hash
 	// partition.
+	//
+	// msgBits is retained alongside the parsed Message for two
+	// reasons: (1) the iterative-subtraction loop below needs them
+	// to call dsp.SubtractSignal, (2) they form the dedup key when
+	// later passes might re-decode the same signal off the residual.
 	type pending struct {
-		cand dsp.Candidate
-		msg  codec.Message
+		cand    dsp.Candidate
+		msg     codec.Message
+		msgBits []byte
 	}
 	// Fine-timing retry sequence resolution: nil → defaults;
 	// non-nil → caller's exact list (possibly empty for coarse
@@ -295,6 +340,7 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 	var raw []pending
 	for _, c := range cands {
 		var foundMsg codec.Message
+		var foundBits []byte
 		decoded := false
 
 		// Outer loop: fine-frequency retries. Inner loop: fine-
@@ -330,12 +376,112 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 					continue
 				}
 				foundMsg = msg
+				foundBits = msgBits
 				decoded = true
 				break freqRetry // first (freq, dt) combination that works wins
 			}
 		}
 		if decoded {
-			raw = append(raw, pending{c, foundMsg})
+			raw = append(raw, pending{c, foundMsg, foundBits})
+		}
+	}
+
+	// **Iterative-subtraction passes (optional).** Per QEX §6, after
+	// a successful decode, subtracting the synthesized waveform from
+	// the audio can reveal weaker signals that were masked by the
+	// stronger one's spectral footprint. Each extra pass: (1)
+	// subtract every pass-(N-1) decode from a working audio buffer,
+	// (2) recompute Spectrogram + Sync + ForwardSpectrum on the
+	// residual, (3) re-run the candidate decode loop, deduplicating
+	// by msgBits-as-key against the running raw set.
+	//
+	// Loops break early when a pass adds zero new decodes (no point
+	// in further passes if the previous one didn't reveal anything).
+	subPasses := opts.SubtractionPasses
+	if subPasses < 0 {
+		subPasses = 0
+	}
+	if subPasses > 0 && len(raw) > 0 {
+		// Copy samples so caller's buffer is preserved.
+		working := make([]float32, len(samples))
+		copy(working, samples)
+
+		// Seen-set keyed by 77-bit message body. Populated from pass 0
+		// before the first subtraction; updated per pass.
+		seen := make(map[string]bool, len(raw))
+		for _, p := range raw {
+			seen[string(p.msgBits)] = true
+		}
+
+		// Track what to subtract next iteration. Starts as everything
+		// from pass 0.
+		toSubtract := make([]pending, len(raw))
+		copy(toSubtract, raw)
+
+		for pass := 1; pass <= subPasses; pass++ {
+			// Subtract every pass-(N-1) decode from the working audio.
+			for _, p := range toSubtract {
+				dsp.SubtractSignal(working, p.msgBits, p.cand.Freq, p.cand.DT)
+			}
+
+			// Recompute the pipeline on the residual.
+			passSpec := dsp.Spectrogram(working)
+			passCands := dsp.Sync(passSpec, opts.Sync)
+			if len(passCands) == 0 {
+				break
+			}
+			passSpectrum := dsp.ForwardSpectrumWithPlan(working, forwardPlan)
+
+			var passRaw []pending
+			for _, c := range passCands {
+				var foundMsg codec.Message
+				var foundBits []byte
+				decoded := false
+
+			freqRetryPass:
+				for _, fOffset := range fineFreqOffsets {
+					baseband := dsp.DownsampleFromSpectrumWithPlan(passSpectrum, c.Freq+fOffset, inversePlan)
+					if baseband == nil {
+						continue
+					}
+					for _, dOffset := range fineOffsets {
+						llrs := dsp.DemodulateWithPlan(baseband, c.DT+dOffset, symPlan, llrScale)
+						if llrs == nil {
+							continue
+						}
+						msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder)
+						if !ok {
+							continue
+						}
+						msg, err := codec.DecodeMessage(msgBits)
+						if err != nil {
+							continue
+						}
+						foundMsg = msg
+						foundBits = msgBits
+						decoded = true
+						break freqRetryPass
+					}
+				}
+				if !decoded {
+					continue
+				}
+				// Dedup against everything seen so far (raw + earlier
+				// candidates in this pass).
+				key := string(foundBits)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				passRaw = append(passRaw, pending{c, foundMsg, foundBits})
+			}
+
+			if len(passRaw) == 0 {
+				// No new decodes — further passes won't help.
+				break
+			}
+			raw = append(raw, passRaw...)
+			toSubtract = passRaw
 		}
 	}
 
