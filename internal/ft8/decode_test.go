@@ -228,8 +228,9 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 //     CI-friendly path. See internal/ft8/testdata/README.md for the
 //     three fixtures' provenance.
 //
-// Returns "" when neither resolves; callers should t.Skip on that.
-func resolveCapturePath(t *testing.T, name string) string {
+// Returns "" when neither resolves; callers should Skip on that.
+// Accepts testing.TB so both tests and benchmarks can call it.
+func resolveCapturePath(t testing.TB, name string) string {
 	t.Helper()
 	if env := os.Getenv("FT8_TEST_CORPUS"); env != "" {
 		p := filepath.Join(env, name)
@@ -242,4 +243,34 @@ func resolveCapturePath(t *testing.T, name string) string {
 		return vendored
 	}
 	return ""
+}
+
+// BenchmarkDecode_RealCapture profiles the full Decode pipeline on
+// a real WSJT-X capture. The hot path here is the budget question
+// for live decoding: every 15-s FT8 slot, we get exactly 15 s to
+// run this whole chain. The decoded-result count is incidental; the
+// per-op time is what matters.
+//
+// Run with:
+//
+//	go test -bench BenchmarkDecode_RealCapture -benchtime 5x \
+//	  -cpuprofile cpu.prof -memprofile mem.prof ./internal/ft8/
+//	go tool pprof -top -cum cpu.prof
+//	go tool pprof -top -alloc_space mem.prof
+//
+// Skipped when no fixture is reachable.
+func BenchmarkDecode_RealCapture(b *testing.B) {
+	wavPath := resolveCapturePath(b, "ft8_cap1.wav")
+	if wavPath == "" {
+		b.Skip("no FT8 capture fixture available")
+	}
+	data, err := audio.ReadWAV(wavPath)
+	if err != nil {
+		b.Fatalf("ReadWAV: %v", err)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		_ = Decode(data.Samples, DecodeOptions{})
+	}
 }
