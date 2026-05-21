@@ -1123,6 +1123,63 @@ pinned by `internal/ft8/dsp/params_test.go`'s
 M4.1 is now structurally complete (WAV → messages works end-
 to-end on real audio). Sensitivity tuning + M4.2 live audio
 are the next-milestone topics.
+
+**Session 80 (2026-05-21 late evening) — performance + sensitivity
+overhaul.** ~28-commit day arc closed with 18.5× speedup on the
+pipeline and decode rate 12 → 22 across the three vendored
+fixtures (46% of WSJT-X parity, up from 25%). Six commits, in
+order: (1) Phase 1 — cache forward FFT in Decode (profiling
+showed 77.9% of CPU was a 192k FFT running 100× per slot with
+identical input). New `dsp.ForwardSpectrum` + `dsp.Downsample
+FromSpectrum` API; 6.38s→0.69s. (2) Multi-capture validation:
+extended benchmark + smoke test across all 3 fixtures with per-
+capture decode floors; surfaced that cap1's 1/11 number was
+misleadingly hostile (cap2=4/14, cap3=7/23 are truer baseline).
+(3) Phase 2 — `audio.Plan` with precomputed master twiddle
+table + alternating workspace buffers (wsA/wsB); recursion
+alternates buffer roles at each level for zero per-level
+allocations. Net allocation per `Plan.FFT(x)` is exactly one
+slice. Spectrogram constructs one Plan up-front and reuses
+across all 372 sliding FFTs; 0.69s→0.36s, allocs 4.5M→35K
+(126× fewer). `audio.FFT`/`audio.IFFT` retained as back-compat
+ad-hoc-Plan wrappers. (4) Plan-threading: added `WithPlan`
+variants for `ForwardSpectrum`, `DownsampleFromSpectrum`,
+`Demodulate`; Decode constructs 3 plans per slot. Cumulative
+Phase 1+2: 18.5× faster, 157× less memory, 1083× fewer allocs;
+44× under 15-s slot budget. (5) Fine-timing retry — when a
+candidate's coarse-DT LDPC attempt fails, retry at `c.DT+
+dOffset` for `dOffset ∈ {0, ±5ms, ±10ms}` (= 0, ±1, ±2 baseband
+samples at Fs2=200, within the 32-sample demod symbol window).
+First success wins. **+6 decodes**: cap2 4→6, cap3 7→11.
+Empirically both ±5ms AND ±10ms matter — cap3 picks up
+`5Z4VJ YB1RUS OI33` and `CQ SP4MSY KO13` from ±10ms shifts
+alone. Cost 344ms→870ms. (6) Fine-frequency retry — outer
+freq-retry loop wraps inner fine-timing loop; each freq retry
+triggers fresh DownsampleFromSpectrumWithPlan at `c.Freq +
+fOffset` for `fOffset ∈ {0, ±1.5625, ±3.125}` Hz (= 0, ±0.5
+bin, ±1 bin) then re-runs full fine-timing. Labelled `break
+freqRetry` short-circuits. **+4 decodes**: cap1 1→3
+(**`VE1WT K4GBI 73` recovered — was a sub-bin freq offset,
+NOT the DT offset I'd predicted; lesson: sub-bin freq drift is
+operationally more common than sub-step DT drift on real
+captures**), cap3 11→13. Cost 870ms→3.5s (still 4.3× under
+budget). Plus a magic-numbers→config refactor (operator-
+caught mid-implementation): `DecodeOptions.FineTimingOffsets`
++ `FineFrequencyOffsets` (nil → defaults, non-nil-empty →
+disable, non-nil populated → exact override), with
+`DefaultFineTimingOffsets` + `DefaultFineFrequencyOffsets`
+package vars carrying empirical doc comments per
+`feedback_no_magic_numbers.md`. Smoke-test floors locked:
+cap1=3, cap2=6, cap3=13.
+M4.1 cumulative result vs original baseline: time 6.38s→3.5s
+(1.8× faster with sensitivity work), memory 10GB→150MB (67×
+less), allocs 37.9M→300K (126× fewer), decode rate 12→22
+(+83% sensitivity, 46% of WSJT-X parity). Slot headroom
+0.4×→4.3×. Next-session candidates: OSD as LDPC fallback
+(Taylor 2020 §6 claims ~1dB SNR — biggest remaining
+sensitivity prize), K-scale tuning in demod, sync-step
+baseband fine-timing (lower priority since fine-freq turned
+out to recover VE1WT), or M4.2 live audio capture wiring.
 Deferred follow-up still open: Type 1's `decodeStd` continues to
 return `ErrCallsignNeedsHashLookup` for c28 values in the
 `[nTokens, stdCallOffset)` hash partition. After finding #1 the
