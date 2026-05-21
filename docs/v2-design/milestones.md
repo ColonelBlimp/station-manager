@@ -1171,15 +1171,63 @@ disable, non-nil populated → exact override), with
 package vars carrying empirical doc comments per
 `feedback_no_magic_numbers.md`. Smoke-test floors locked:
 cap1=3, cap2=6, cap3=13.
-M4.1 cumulative result vs original baseline: time 6.38s→3.5s
-(1.8× faster with sensitivity work), memory 10GB→150MB (67×
-less), allocs 37.9M→300K (126× fewer), decode rate 12→22
-(+83% sensitivity, 46% of WSJT-X parity). Slot headroom
-0.4×→4.3×. Next-session candidates: OSD as LDPC fallback
-(Taylor 2020 §6 claims ~1dB SNR — biggest remaining
-sensitivity prize), K-scale tuning in demod, sync-step
-baseband fine-timing (lower priority since fine-freq turned
-out to recover VE1WT), or M4.2 live audio capture wiring.
+After fine-freq landed (22/48 = 46% parity), Session 80
+continued with three more stages that brought decode parity
+to 85%:
+(h) **OSD (Ordered Statistics Decoding) as LDPC fallback** at
+`internal/ft8/codec/ldpc_osd.go` (~230 LOC, clean-room from
+Fossorier & Lin 1995). Algorithm: sort codeword positions
+by |LLR| descending, permute H matrix's columns by
+reliability, Gauss-Jordan over GF(2) right-to-left so
+pivots land on the 83 LEAST-reliable independent columns
+(parity), leaving the 91 most-reliable as the MRB (info
+bits). Hard-decide MRB → re-encode parity → check CRC14.
+Order-1 search flips each MRB bit individually (~91
+trials). H stored bit-packed as `[83][3]uint64` for fast
+row XOR. `OSDDecode(llrs, order)` + `LDPCDecodeWithOSD`
+wrapper + `DecodeOptions.OSDOrder` (default 1). **Decode
+rate jumped 22 → 41 (+19 decodes, 46%→85% parity)**. Cost
+870 ms → ~4.5 s per slot. Smoke-test floors bumped to
+cap1=8/cap2=13/cap3=20.
+(i) **OSD allocation pool** — post-OSD profile showed
+`osdMRBSetup` allocating ~50 KB per call × ~2125 calls per
+slot. Initially restructured to "OSD-only-at-coarse" but
+that lost 16 decodes (41→25); reverted. Correct fix:
+`osdScratch` type holding all fixed-size buffers, pooled
+via `sync.Pool`. Flat `parityDepsBuf []uint8` replaces
+slice-of-slices. **Per-slot allocs 968K → 316K (-67%) with
+zero sensitivity change.**
+(j) **CGO KissFFT + Sleef experiment — measured, reverted,
+learned.** Vendored KissFFT (BSD-3) + linked Sleef
+(Boost license via Fedora sleef-devel) behind `-tags
+ft8cgo`. Hit intermittent SIGSEGV from
+`runtime.SetFinalizer` racing with active cgo calls;
+fixed by `runtime.KeepAlive(p)` + slice keepalives.
+Benchmarked: **2.7× SLOWER than pure-Go.** Scalar cgo
+overhead (~200 ns/call) dominates ~143K per-symbol N=32
+FFTs + ~3M tanh/atanh calls per slot. Big-FFT wins
+(N=192000, ~3ms compute) get swamped by the tiny-FFT
+overhead. Reverted entirely. Three small artifacts kept
+that survived cleanly: `internal/audio/itoa.go` (util
+extracted from fft.go during the file split),
+`internal/ft8/codec/transc.go` (`tanh`/`atanh` indirection
+— costs nothing, leaves swap point for future
+SIMD-batched experiments), `ldpc_decode.go` using the
+indirection (`math` import dropped). Cautionary tale
+saved at `feedback_cgo_scalar_interop_overhead.md`. To
+actually win with CGO requires SIMD-batched BP (~200-300
+LOC refactor to feed Sleef vector variants), not drop-in
+scalar interop.
+M4.1 cumulative result vs original baseline: time 6.38s →
+~4.5s (1.4× faster after sensitivity work), memory 10GB →
+~150MB (66× less), allocs 37.9M → ~316K (120× fewer),
+**decode rate 12 → 41 (+241% sensitivity, 25% → 85% WSJT-X
+parity)**. Slot headroom 0.4× → 3.3×. **M4.1 closes here**
+— audio→messages pipeline structurally complete at 85%
+parity. Remaining sensitivity moves (K-scale, real-input
+FFT, SIMD-batched BP, sync-step fine-timing) are
+incremental refinements; M4.2 live audio capture wiring
+is the bigger next-track item.
 Deferred follow-up still open: Type 1's `decodeStd` continues to
 return `ErrCallsignNeedsHashLookup` for c28 values in the
 `[nTokens, stdCallOffset)` hash partition. After finding #1 the
