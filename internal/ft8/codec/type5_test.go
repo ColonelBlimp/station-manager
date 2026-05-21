@@ -147,7 +147,7 @@ func TestEncodeMessage_Type5_Rejects(t *testing.T) {
 }
 
 // TestType5_RoundTrip exercises Encode→Decode equivalence. Both call
-// slots decode to the "<...>" sentinel + the matching Hash12 / Hash22
+// slots decode to the "<...>" sentinel + the matching Hash12 / Hash22Call2
 // values; the report, serial, grid, and ack all round-trip exactly.
 func TestType5_RoundTrip(t *testing.T) {
 	cases := []Message{
@@ -176,8 +176,8 @@ func TestType5_RoundTrip(t *testing.T) {
 			if got.Hash12 != uint16(wantH12) {
 				t.Errorf("Hash12 = %d, want %d", got.Hash12, wantH12)
 			}
-			if got.Hash22 != wantH22 {
-				t.Errorf("Hash22 = %d, want %d", got.Hash22, wantH22)
+			if got.Hash22Call2 != wantH22 {
+				t.Errorf("Hash22 = %d, want %d", got.Hash22Call2, wantH22)
 			}
 			if got.AckBit != in.AckBit {
 				t.Errorf("AckBit = %t, want %t", got.AckBit, in.AckBit)

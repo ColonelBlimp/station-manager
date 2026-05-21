@@ -43,6 +43,23 @@ type DecodeOptions struct {
 	// LDPCMaxIterations bounds the belief-propagation decoder.
 	// Default (when zero): codec.LDPCMaxIterationsDefault (50).
 	LDPCMaxIterations int
+
+	// HashTable, if non-nil, is used to Observe each decoded
+	// Message (populating the table with newly-seen plaintext
+	// callsigns from this slot) and then Resolve any sentinel-
+	// bearing Messages (swapping in real callsigns from the
+	// table). Callers should reuse the same table across Decode
+	// invocations on consecutive slots — FT8 protocol design
+	// relies on cross-slot state: one Type 4 transmission of
+	// "PJ4/K1ABC" seeds resolution of many later Type 1/2/3
+	// references that carry just the 22-bit hash.
+	//
+	// Without a HashTable, hash-bearing Type 1/2/3 messages still
+	// decode (the codec produces Call1/Call2 = "<...>" sentinel +
+	// Hash22Call1/Hash22Call2) but FormatMessage rejects the
+	// sentinel and the message drops out of the returned slice.
+	// Provide a HashTable to retain these messages.
+	HashTable *codec.HashTable
 }
 
 // Decode runs the full FT8 audio → messages pipeline on a 15-second
@@ -85,9 +102,18 @@ func Decode(audio []float32, opts DecodeOptions) []DecodedMessage {
 		return nil
 	}
 
-	var out []DecodedMessage
+	// **Pass 1:** decode every candidate that survives the structural
+	// validators (LDPC + CRC14 + DecodeMessage). Accumulate raw
+	// Messages alongside their sync metadata for the post-decode
+	// Resolve pass. Messages may carry sentinel call slots ("<...>")
+	// + Hash22Call1/Hash22Call2 fields when c28 landed in the hash
+	// partition.
+	type pending struct {
+		cand dsp.Candidate
+		msg  codec.Message
+	}
+	var raw []pending
 	for _, c := range cands {
-		// Mix the candidate down to baseband and demodulate.
 		baseband := dsp.Downsample(audio, c.Freq)
 		if baseband == nil {
 			continue
@@ -96,32 +122,51 @@ func Decode(audio []float32, opts DecodeOptions) []DecodedMessage {
 		if llrs == nil {
 			continue
 		}
-
-		// LDPC + CRC14 → 77-bit message body.
 		msgBits, ok := codec.LDPCDecode(llrs, maxIters)
 		if !ok {
 			continue
 		}
-
-		// Parse the bits into a Message struct.
 		msg, err := codec.DecodeMessage(msgBits)
 		if err != nil {
 			continue
 		}
+		raw = append(raw, pending{c, msg})
+	}
 
-		// Render to operator-facing text. Failures here would be
-		// strange (we just decoded the message from its own bits)
-		// but skip rather than crash.
-		text, err := codec.FormatMessage(msg)
+	// **Pass 2 (optional):** if the caller supplied a HashTable,
+	// Observe every decoded Message first (populating the table
+	// with all plaintext callsigns we just saw this slot), then
+	// Resolve each Message (swapping sentinels for real callsigns
+	// using the now-populated table + any cross-slot state the
+	// caller has accumulated). The two-pass shape ensures a Type 4
+	// transmission in this slot can resolve a Type 1 hash reference
+	// also in this slot, regardless of the order they appeared in
+	// the sync candidate list.
+	if opts.HashTable != nil {
+		for _, p := range raw {
+			opts.HashTable.Observe(p.msg)
+		}
+		for i := range raw {
+			raw[i].msg = opts.HashTable.Resolve(raw[i].msg)
+		}
+	}
+
+	// **Pass 3:** format each Message to its operator-facing text.
+	// Messages with unresolved sentinel slots (no HashTable, or the
+	// table didn't know the call yet) fail FormatMessage and drop
+	// out here — fixing that requires either a richer "render with
+	// sentinel inline" formatter or eventual table population.
+	out := make([]DecodedMessage, 0, len(raw))
+	for _, p := range raw {
+		text, err := codec.FormatMessage(p.msg)
 		if err != nil {
 			continue
 		}
-
 		out = append(out, DecodedMessage{
-			Freq:      c.Freq,
-			DT:        c.DT,
-			SyncPower: c.SyncPower,
-			Message:   msg,
+			Freq:      p.cand.Freq,
+			DT:        p.cand.DT,
+			SyncPower: p.cand.SyncPower,
+			Message:   p.msg,
 			Text:      text,
 		})
 	}

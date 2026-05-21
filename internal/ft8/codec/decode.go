@@ -20,13 +20,12 @@ var ErrShortBody = errors.New("codec: message body must be 77 bits")
 // silently mis-decoding.
 var ErrUnknownMessageType = errors.New("codec: unknown or unsupported message type")
 
-// ErrCallsignNeedsHashLookup is returned when a Type 1 message
-// carries a c28 in the 22-bit hash partition [nTokens, stdCallOffset).
-// The codec layer cannot recover the original callsign on its own —
-// the FT8 service layer maintains a running hash table populated by
-// prior decodes and resolves the lookup. Phase 2C's codec stops at
-// this sentinel.
-var ErrCallsignNeedsHashLookup = errors.New("codec: c28 is a 22-bit hash; original callsign needs hash-table lookup")
+// (ErrCallsignNeedsHashLookup removed by finding #2 — hash-partition
+// c28 is now a valid wire state per QEX Table 2, not an error.
+// type1CallFromC28 returns the WSJT-X "<...>" sentinel and the raw
+// 22-bit hash; decoders populate Message.Hash22Call1 / Hash22Call2,
+// and HashTable.Resolve substitutes the real callsign once the
+// table has seen it via a prior Type 4 (NonStdCall) decode.)
 
 // ErrTokenInGap is returned when a Type 1 message carries a c28 in
 // the special-token partition [0, nTokens) but at a codepoint that
@@ -67,15 +66,18 @@ var ErrInvalidS13 = errors.New("codec: Type 3 s13 lands in an unassigned codepoi
 // caller-supplied bit data. Specifically:
 //   - ErrShortBody for any input not exactly 77 bits.
 //   - ErrUnknownMessageType when the i3 tag doesn't match a
-//     known type whose decoder has landed (Phase 2D: only i3=1).
-//   - ErrCallsignNeedsHashLookup when a c28 slot is in the hash
-//     partition; the caller's hash-table layer (FT8 service) resolves it.
+//     known type whose decoder has landed.
 //   - ErrTokenInGap when a c28 slot is in the token partition but on
 //     a gap codepoint (the wire is carrying a spec-violating value).
 //
 // Valid tokens (DE / QRZ / CQ / "CQ NNN" / "CQ XXXX") decode into
-// Call1 / Call2 as their string form — the Message struct holds a
-// token-call and a callsign-call in the same slot.
+// Call1 / Call2 as their string form. **Hash-partition c28 values**
+// (compound and special-event callsigns referenced by their 22-bit
+// hash per QEX Table 2) decode into Call1/Call2 as the WSJT-X
+// "<...>" sentinel string with the raw 22-bit hash exposed via
+// Message.Hash22Call1 / Hash22Call2; downstream callers run
+// HashTable.Resolve to substitute the real callsign once the table
+// has seen it.
 func DecodeMessage(bits []byte) (Message, error) {
 	if len(bits) != MessageBits {
 		return Message{}, fmt.Errorf("%w: got %d", ErrShortBody, len(bits))
@@ -156,11 +158,11 @@ func decodeStd(bits []byte) (Message, error) {
 	ack := bits[58] == 1
 	g15 := uint16(readBitsUint64(bits, 59, G15Bits))
 
-	call1, err := type1CallFromC28(c28First, "Call1")
+	call1, h22Call1, err := type1CallFromC28(c28First, "Call1")
 	if err != nil {
 		return Message{}, err
 	}
-	call2, err := type1CallFromC28(c28Second, "Call2")
+	call2, h22Call2, err := type1CallFromC28(c28Second, "Call2")
 	if err != nil {
 		return Message{}, err
 	}
@@ -176,13 +178,15 @@ func decodeStd(bits []byte) (Message, error) {
 	}
 
 	return Message{
-		Type:    MessageTypeStd,
-		Call1:   call1,
-		Call2:   call2,
-		Suffix1: suffix1,
-		Suffix2: suffix2,
-		AckBit:  ack,
-		Grid:    grid,
+		Type:        MessageTypeStd,
+		Call1:       call1,
+		Call2:       call2,
+		Suffix1:     suffix1,
+		Suffix2:     suffix2,
+		AckBit:      ack,
+		Grid:        grid,
+		Hash22Call1: h22Call1,
+		Hash22Call2: h22Call2,
 	}, nil
 }
 
@@ -198,8 +202,10 @@ func decodeStd(bits []byte) (Message, error) {
 // cleanly; the earlier carve-out that returned ErrTokenInGap for
 // any token-range Type 2 c28 was spec-incorrect (finding #2).
 //
-// Hash-range c28 values surface as ErrCallsignNeedsHashLookup per
-// the same protocol-layer hash-table contract Type 1 uses.
+// Hash-range c28 values decode as the "<...>" sentinel with the raw
+// 22-bit hash in Message.Hash22Call1 / Hash22Call2, same as Type 1
+// — HashTable.Resolve substitutes the real callsign downstream once
+// the table has seen a prior Type 4 reference.
 func decodeEUVHFP(bits []byte) (Message, error) {
 	c28First := uint32(readBitsUint64(bits, 0, CallsignBits))
 	suffix1 := bits[28] == 1
@@ -208,11 +214,11 @@ func decodeEUVHFP(bits []byte) (Message, error) {
 	ack := bits[58] == 1
 	g15 := uint16(readBitsUint64(bits, 59, G15Bits))
 
-	call1, err := type1CallFromC28(c28First, "Call1")
+	call1, h22Call1, err := type1CallFromC28(c28First, "Call1")
 	if err != nil {
 		return Message{}, err
 	}
-	call2, err := type1CallFromC28(c28Second, "Call2")
+	call2, h22Call2, err := type1CallFromC28(c28Second, "Call2")
 	if err != nil {
 		return Message{}, err
 	}
@@ -223,13 +229,15 @@ func decodeEUVHFP(bits []byte) (Message, error) {
 	}
 
 	return Message{
-		Type:    MessageTypeEUVHFP,
-		Call1:   call1,
-		Call2:   call2,
-		Suffix1: suffix1,
-		Suffix2: suffix2,
-		AckBit:  ack,
-		Grid:    grid,
+		Type:        MessageTypeEUVHFP,
+		Call1:       call1,
+		Call2:       call2,
+		Suffix1:     suffix1,
+		Suffix2:     suffix2,
+		AckBit:      ack,
+		Grid:        grid,
+		Hash22Call1: h22Call1,
+		Hash22Call2: h22Call2,
 	}, nil
 }
 
@@ -259,11 +267,11 @@ func decodeRTTYRoundup(bits []byte) (Message, error) {
 	off += r3Bits
 	s13 := uint16(readBitsUint64(bits, off, s13Bits))
 
-	call1, err := type1CallFromC28(c28First, "Call1")
+	call1, h22Call1, err := type1CallFromC28(c28First, "Call1")
 	if err != nil {
 		return Message{}, err
 	}
-	call2, err := type1CallFromC28(c28Second, "Call2")
+	call2, h22Call2, err := type1CallFromC28(c28Second, "Call2")
 	if err != nil {
 		return Message{}, err
 	}
@@ -282,6 +290,8 @@ func decodeRTTYRoundup(bits []byte) (Message, error) {
 		Report3:       r3,
 		Serial:        serial,
 		StateProvince: state,
+		Hash22Call1:   h22Call1,
+		Hash22Call2:   h22Call2,
 	}, nil
 }
 
@@ -351,7 +361,7 @@ func decodeNonStdCall(bits []byte) (Message, error) {
 // Both call slots are hashes on the wire — the codec layer has no
 // way to recover the original strings on its own, so Call1 and Call2
 // surface as the WSJT-X "<...>" sentinel and the raw 12-bit and
-// 22-bit hash values land in Message.Hash12 / Message.Hash22. Phase
+// 22-bit hash values land in Message.Hash12 / Message.Hash22Call2. Phase
 // 4's running hash table fills the strings in when a prior decode
 // has seen the underlying calls and their hashes match.
 //
@@ -375,43 +385,51 @@ func decodeEUVHFHash(bits []byte) (Message, error) {
 	}
 
 	return Message{
-		Type:    MessageTypeEUVHFHash,
-		Call1:   hashedCallSentinel,
-		Call2:   hashedCallSentinel,
-		Hash12:  h12,
-		Hash22:  h22,
-		AckBit:  ack,
-		Report3: r3,
-		Serial:  serial,
-		Grid6:   grid6,
+		Type:        MessageTypeEUVHFHash,
+		Call1:       hashedCallSentinel,
+		Call2:       hashedCallSentinel,
+		Hash12:      h12,
+		Hash22Call2: h22,
+		AckBit:      ack,
+		Report3:     r3,
+		Serial:      serial,
+		Grid6:       grid6,
 	}, nil
 }
 
-// type1CallFromC28 recovers the Type 1 Call1/Call2 string from a c28
-// value, dispatching on C28Kind. Inverse of type1CallToC28.
+// type1CallFromC28 recovers a c28 wire value into its Call1/Call2
+// string form, dispatching on C28Kind. Inverse of type1CallToC28.
 //
-//   - StdCall partition: returns the recovered callsign.
-//   - Token partition: looks up the token text via C28ToToken; if the
-//     c28 lands in a gap codepoint, returns ErrTokenInGap (the wire is
-//     carrying a spec-violating value).
-//   - Hash22 partition: returns ErrCallsignNeedsHashLookup so the
-//     FT8 service layer can resolve via its running hash table.
+//   - StdCall partition: returns (callsign, 0, nil).
+//   - Token partition: returns (tokenString, 0, nil); if the c28
+//     lands in a gap codepoint, returns ("", 0, ErrTokenInGap) (the
+//     wire is carrying a spec-violating value).
+//   - Hash22 partition: returns (hashedCallSentinel, hashValue,
+//     nil) where hashValue is the raw 22-bit hash (c28 - nTokens).
+//     The caller populates Message.Hash22Call1 or .Hash22Call2 with
+//     hashValue so HashTable.Resolve can substitute the real
+//     callsign once the hash table has seen it. Per QEX Table 2 c28
+//     can legitimately carry a 22-bit hash (compound and special-
+//     event callsigns) so this is a valid wire state, not an error.
 //
 // C28KindUnknown is impossible per C28ToCallsign's contract; hitting
 // it means an internal regression — panic per the package convention.
-func type1CallFromC28(c28 uint32, field string) (string, error) {
+func type1CallFromC28(c28 uint32, field string) (string, uint32, error) {
 	call, kind := C28ToCallsign(c28)
 	switch kind {
 	case C28KindStdCall:
-		return call, nil
+		return call, 0, nil
 	case C28KindToken:
 		token, ok := C28ToToken(c28)
 		if !ok {
-			return "", fmt.Errorf("%w: %s c28=%d", ErrTokenInGap, field, c28)
+			return "", 0, fmt.Errorf("%w: %s c28=%d", ErrTokenInGap, field, c28)
 		}
-		return token, nil
+		return token, 0, nil
 	case C28KindHash22:
-		return "", fmt.Errorf("%w: %s", ErrCallsignNeedsHashLookup, field)
+		// c28 is in [nTokens, stdCallOffset); the raw 22-bit hash
+		// is (c28 - nTokens) ∈ [0, 2^22). Return the WSJT-X sentinel
+		// and the hash so the caller can populate Hash22Call1/2.
+		return hashedCallSentinel, c28 - nTokens, nil
 	default:
 		panic("codec.DecodeMessage: " + field + " decoded to unknown C28Kind — C28ToCallsign contract regression")
 	}

@@ -139,11 +139,33 @@ type Message struct {
 	// messages whose hash side is still unresolved.
 	Hash12 uint16
 
-	// Hash22 holds the 22-bit hash value (the h22 wire field) for
-	// Type 5 (EU VHF hashes+g25) messages — the second callsign
-	// hashes to 22 bits in this layout (vs Type 4's 12-bit h12).
-	// Same Phase-4-resolution contract as Hash12.
-	Hash22 uint32
+	// Hash22Call1 holds the 22-bit hash value when Call1 is a
+	// hash-partition c28 (Types 1/2/3 — Std Msg, EU VHF /P, RTTY
+	// Roundup). When non-zero, Call1 carries the WSJT-X "<...>"
+	// sentinel and the receiver's running hash table can resolve
+	// the real callsign via HashTable.Resolve / LookupH22.
+	//
+	// Zero on encoded messages (the caller supplied the callsign
+	// string directly) and on decoded messages where Call1 was a
+	// standard callsign or a recognised token. Non-zero only when
+	// Call1's c28 landed in the 22-bit-hash partition
+	// [nTokens, stdCallOffset) — used by stations referencing a
+	// previously-transmitted compound or special-event callsign.
+	Hash22Call1 uint32
+
+	// Hash22Call2 holds the 22-bit hash value for Call2 in two
+	// distinct cases:
+	//
+	//   - Type 5 (EU VHF hashes+g25): Call2 ALWAYS hashes to 22
+	//     bits on the wire (the h22 field per QEX Table 1). Same
+	//     Phase-4-resolution contract as Hash12.
+	//   - Types 1/2/3 (Std Msg, EU VHF /P, RTTY RU): Call2 is a
+	//     hash-partition c28 — same semantics as Hash22Call1 but
+	//     for the second call slot.
+	//
+	// Zero on encoded messages and on decoded messages where
+	// Call2 was a standard callsign or a recognised token.
+	Hash22Call2 uint32
 
 	// Grid6 is the 6-character Maidenhead grid for Type 5 (EU VHF
 	// hashes+g25). Distinct from Grid (the multi-modal g15 slot

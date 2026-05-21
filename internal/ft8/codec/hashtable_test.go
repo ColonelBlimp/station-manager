@@ -267,7 +267,7 @@ func TestHashTable_Resolve_Type4_Call2Sentinel(t *testing.T) {
 
 // TestHashTable_Resolve_Type5_BothSentinels is the Type 5 path: both
 // call slots arrive as sentinels and the table resolves each via its
-// own width (Call1↔Hash12, Call2↔Hash22).
+// own width (Call1↔Hash12, Call2↔Hash22Call2).
 func TestHashTable_Resolve_Type5_BothSentinels(t *testing.T) {
 	t.Parallel()
 	ht := NewHashTable(DefaultHashTableCapacity)
@@ -278,14 +278,14 @@ func TestHashTable_Resolve_Type5_BothSentinels(t *testing.T) {
 	_, _, h22 := HashCodes("PA9XYZ")
 
 	in := Message{
-		Type:    MessageTypeEUVHFHash,
-		Call1:   hashedCallSentinel,
-		Call2:   hashedCallSentinel,
-		Hash12:  uint16(h12),
-		Hash22:  h22,
-		Report3: 5,
-		Serial:  7,
-		Grid6:   "JO22DB",
+		Type:        MessageTypeEUVHFHash,
+		Call1:       hashedCallSentinel,
+		Call2:       hashedCallSentinel,
+		Hash12:      uint16(h12),
+		Hash22Call2: h22,
+		Report3:     5,
+		Serial:      7,
+		Grid6:       "JO22DB",
 	}
 	out := ht.Resolve(in)
 	if out.Call1 != "G4ABC" {
@@ -294,8 +294,8 @@ func TestHashTable_Resolve_Type5_BothSentinels(t *testing.T) {
 	if out.Call2 != "PA9XYZ" {
 		t.Errorf("Call2 = %q, want PA9XYZ", out.Call2)
 	}
-	if out.Hash12 != 0 || out.Hash22 != 0 {
-		t.Errorf("Hash12/Hash22 = %d/%d, want 0/0", out.Hash12, out.Hash22)
+	if out.Hash12 != 0 || out.Hash22Call2 != 0 {
+		t.Errorf("Hash12/Hash22Call2 = %d/%d, want 0/0", out.Hash12, out.Hash22Call2)
 	}
 }
 
@@ -310,14 +310,14 @@ func TestHashTable_Resolve_Type5_PartialResolution(t *testing.T) {
 	_, h12, _ := HashCodes("G4ABC")
 
 	in := Message{
-		Type:    MessageTypeEUVHFHash,
-		Call1:   hashedCallSentinel,
-		Call2:   hashedCallSentinel,
-		Hash12:  uint16(h12),
-		Hash22:  0xDEAD, // unknown
-		Report3: 0,
-		Serial:  0,
-		Grid6:   "AA00AA",
+		Type:        MessageTypeEUVHFHash,
+		Call1:       hashedCallSentinel,
+		Call2:       hashedCallSentinel,
+		Hash12:      uint16(h12),
+		Hash22Call2: 0xDEAD, // unknown to the table
+		Report3:     0,
+		Serial:      0,
+		Grid6:       "AA00AA",
 	}
 	out := ht.Resolve(in)
 	if out.Call1 != "G4ABC" {
@@ -326,8 +326,8 @@ func TestHashTable_Resolve_Type5_PartialResolution(t *testing.T) {
 	if out.Call2 != hashedCallSentinel {
 		t.Errorf("Call2 = %q, want sentinel (unresolved)", out.Call2)
 	}
-	if out.Hash22 != 0xDEAD {
-		t.Errorf("Hash22 = %d, want 0xDEAD (preserved for retry)", out.Hash22)
+	if out.Hash22Call2 != 0xDEAD {
+		t.Errorf("Hash22Call2 = %d, want 0xDEAD (preserved for retry)", out.Hash22Call2)
 	}
 }
 
@@ -352,12 +352,10 @@ func TestHashTable_Resolve_EmptyTable(t *testing.T) {
 	}
 }
 
-// TestHashTable_Resolve_NonHashType_Untouched pins that Resolve is a
-// no-op for Types that don't carry hash slots in the current codec
-// (Type 1, Type 2, Type 0.0). Adding new hash-bearing types in later
-// phases will extend the Resolve switch; this test guards against
-// silent breakage.
-func TestHashTable_Resolve_NonHashType_Untouched(t *testing.T) {
+// TestHashTable_Resolve_PlaintextTypesUntouched pins that Resolve
+// is a no-op for messages whose Call slots are already plaintext —
+// no sentinels, no hash fields. Resolve only touches sentinels.
+func TestHashTable_Resolve_PlaintextTypesUntouched(t *testing.T) {
 	t.Parallel()
 	ht := NewHashTable(DefaultHashTableCapacity)
 	ht.Insert("K1JT")
@@ -372,5 +370,118 @@ func TestHashTable_Resolve_NonHashType_Untouched(t *testing.T) {
 		if got != m {
 			t.Errorf("Resolve(%+v) mutated; got %+v", m, got)
 		}
+	}
+}
+
+// TestHashTable_Resolve_Type1_Call1Sentinel pins finding #2's new
+// Resolve branch for Type 1 (Std Msg). When a remote station's
+// compound callsign was previously seen via Type 4 (NonStdCall),
+// the table has it. Subsequent Type 1 references arrive with Call1
+// as the "<...>" sentinel + the raw 22-bit hash in Hash22Call1;
+// Resolve substitutes the real callsign and zeros the hash field.
+func TestHashTable_Resolve_Type1_Call1Sentinel(t *testing.T) {
+	t.Parallel()
+	ht := NewHashTable(DefaultHashTableCapacity)
+	ht.Insert("PJ4/K1ABC")
+	_, _, h22 := HashCodes("PJ4/K1ABC")
+
+	in := Message{
+		Type:        MessageTypeStd,
+		Call1:       hashedCallSentinel,
+		Call2:       "7Q5MLV",
+		Hash22Call1: h22,
+		Grid:        "KH56",
+	}
+	out := ht.Resolve(in)
+	if out.Call1 != "PJ4/K1ABC" {
+		t.Errorf("Call1 = %q, want PJ4/K1ABC (resolved from table)", out.Call1)
+	}
+	if out.Hash22Call1 != 0 {
+		t.Errorf("Hash22Call1 = %d, want 0 (zeroed on successful resolve)", out.Hash22Call1)
+	}
+	if out.Call2 != "7Q5MLV" {
+		t.Errorf("Call2 = %q, want 7Q5MLV (untouched plaintext)", out.Call2)
+	}
+}
+
+// TestHashTable_Resolve_Type2_Call2Sentinel pins the Call2-side
+// resolution path for Type 2 (EU VHF /P).
+func TestHashTable_Resolve_Type2_Call2Sentinel(t *testing.T) {
+	t.Parallel()
+	ht := NewHashTable(DefaultHashTableCapacity)
+	ht.Insert("YW18FIFA")
+	_, _, h22 := HashCodes("YW18FIFA")
+
+	in := Message{
+		Type:        MessageTypeEUVHFP,
+		Call1:       "G4ABC",
+		Call2:       hashedCallSentinel,
+		Hash22Call2: h22,
+		Grid:        "JO22",
+	}
+	out := ht.Resolve(in)
+	if out.Call2 != "YW18FIFA" {
+		t.Errorf("Call2 = %q, want YW18FIFA (resolved)", out.Call2)
+	}
+	if out.Hash22Call2 != 0 {
+		t.Errorf("Hash22Call2 = %d, want 0 (zeroed on successful resolve)", out.Hash22Call2)
+	}
+}
+
+// TestHashTable_Resolve_Type3_BothSidesSentinel pins the case where
+// BOTH call slots in a Type 3 (RTTY Roundup) message are hash
+// references — both compound calls, both previously transmitted
+// via Type 4.
+func TestHashTable_Resolve_Type3_BothSidesSentinel(t *testing.T) {
+	t.Parallel()
+	ht := NewHashTable(DefaultHashTableCapacity)
+	ht.Insert("PJ4/K1ABC")
+	ht.Insert("V44/G4ABC")
+	_, _, h22A := HashCodes("PJ4/K1ABC")
+	_, _, h22B := HashCodes("V44/G4ABC")
+
+	in := Message{
+		Type:        MessageTypeRTTYRU,
+		Call1:       hashedCallSentinel,
+		Call2:       hashedCallSentinel,
+		Hash22Call1: h22A,
+		Hash22Call2: h22B,
+		Report3:     5,
+		Serial:      42,
+	}
+	out := ht.Resolve(in)
+	if out.Call1 != "PJ4/K1ABC" {
+		t.Errorf("Call1 = %q, want PJ4/K1ABC", out.Call1)
+	}
+	if out.Call2 != "V44/G4ABC" {
+		t.Errorf("Call2 = %q, want V44/G4ABC", out.Call2)
+	}
+	if out.Hash22Call1 != 0 || out.Hash22Call2 != 0 {
+		t.Errorf("Hash22Call1/Call2 = %d/%d, want 0/0", out.Hash22Call1, out.Hash22Call2)
+	}
+}
+
+// TestHashTable_Resolve_Type1_UnknownHashPreserved pins the cold-
+// table case: a Type 1 sentinel whose Hash22Call1 isn't in the
+// table stays as the sentinel; the hash field is preserved so the
+// caller can retry after more Observe calls.
+func TestHashTable_Resolve_Type1_UnknownHashPreserved(t *testing.T) {
+	t.Parallel()
+	ht := NewHashTable(DefaultHashTableCapacity)
+	// Table is empty — no callsign matches any hash.
+
+	in := Message{
+		Type:        MessageTypeStd,
+		Call1:       hashedCallSentinel,
+		Call2:       "G4ABC",
+		Hash22Call1: 0xDEAD,
+		Grid:        "FN20",
+	}
+	out := ht.Resolve(in)
+	if out.Call1 != hashedCallSentinel {
+		t.Errorf("Call1 = %q, want sentinel (unresolved, table cold)", out.Call1)
+	}
+	if out.Hash22Call1 != 0xDEAD {
+		t.Errorf("Hash22Call1 = %d, want 0xDEAD (preserved for retry)", out.Hash22Call1)
 	}
 }

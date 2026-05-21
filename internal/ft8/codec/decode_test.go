@@ -366,17 +366,28 @@ func TestDecodeMessage_ShortStdCallRoundTrips(t *testing.T) {
 	}
 }
 
-// TestDecodeMessage_HashRangeC28StillNeedsLookup pins that the
-// ErrCallsignNeedsHashLookup sentinel still fires for c28 values
-// genuinely in the hash partition [nTokens, stdCallOffset). The
-// hash range exists for non-standard callsigns (compound calls
-// transmitted via Type 4 c58, then referenced via h22 in later
-// Type 1 c28 slots); finding #1 removed short-std-call routing
-// from the hash range, but didn't remove the hash partition itself.
-func TestDecodeMessage_HashRangeC28StillNeedsLookup(t *testing.T) {
-	// Plant a hash-range c28 directly. nTokens=2063592,
-	// stdCallOffset=6257896; 3000000 is mid-partition.
+// TestDecodeMessage_HashRangeC28SurfacesSentinel pins finding #2's
+// new behaviour: c28 values in the 22-bit hash partition
+// [nTokens, stdCallOffset) are a VALID wire state per QEX Table 2
+// (compound and special-event callsigns referenced by their 22-bit
+// hash). The decoder surfaces them as the WSJT-X "<...>" sentinel
+// in Call1/Call2 with the raw 22-bit hash exposed via
+// Message.Hash22Call1 / Hash22Call2 — downstream callers pass the
+// Message to HashTable.Resolve to substitute the real callsign
+// once the table has seen a prior Type 4 (NonStdCall) decode
+// carrying the full c58 spelling.
+//
+// Before finding #2, this test pinned the old behaviour where the
+// decoder returned ErrCallsignNeedsHashLookup with no hash value
+// exposed — which made downstream resolution impossible. The
+// pre-finding-#2 codec dropped every compound-call follow-up
+// transmission silently.
+func TestDecodeMessage_HashRangeC28SurfacesSentinel(t *testing.T) {
+	// Plant a hash-range c28 in Call1. nTokens=2063592,
+	// stdCallOffset=6257896; 3000000 is mid-partition. The raw
+	// 22-bit hash value is c28 - nTokens = 936408.
 	hashC28 := uint32(3000000)
+	const wantHash22 = 936408
 	bits := make([]byte, MessageBits)
 	for i := range CallsignBits {
 		bits[i] = byte((hashC28 >> (CallsignBits - 1 - i)) & 1)
@@ -393,9 +404,21 @@ func TestDecodeMessage_HashRangeC28StillNeedsLookup(t *testing.T) {
 	bits[75] = 0
 	bits[76] = 1
 
-	_, err := DecodeMessage(bits)
-	if !errors.Is(err, ErrCallsignNeedsHashLookup) {
-		t.Errorf("DecodeMessage(hash-range c28) err=%v, want ErrCallsignNeedsHashLookup", err)
+	msg, err := DecodeMessage(bits)
+	if err != nil {
+		t.Fatalf("DecodeMessage(hash-range c28): unexpected err = %v", err)
+	}
+	if msg.Call1 != hashedCallSentinel {
+		t.Errorf("Call1 = %q, want %q (WSJT-X sentinel)", msg.Call1, hashedCallSentinel)
+	}
+	if msg.Hash22Call1 != wantHash22 {
+		t.Errorf("Hash22Call1 = %d, want %d (raw 22-bit hash = c28 - nTokens)", msg.Hash22Call1, wantHash22)
+	}
+	if msg.Call2 != "G4ABC" {
+		t.Errorf("Call2 = %q, want G4ABC (untouched plaintext)", msg.Call2)
+	}
+	if msg.Hash22Call2 != 0 {
+		t.Errorf("Hash22Call2 = %d, want 0 (Call2 was plaintext, no hash)", msg.Hash22Call2)
 	}
 }
 

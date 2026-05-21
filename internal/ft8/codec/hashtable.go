@@ -187,17 +187,22 @@ func (t *HashTable) Observe(m Message) {
 //   - Type 4 (NonStd Call): a single hash slot. Whichever of Call1
 //     or Call2 is the sentinel "<...>" is resolved via Hash12.
 //   - Type 5 (EU VHF hashes+g25): both call slots are sentinels.
-//     Call1 resolves via Hash12, Call2 via Hash22.
-//   - All other Types: returned unchanged (no hash-bearing slots in
-//     the current codec — Type 1's hash-partition c28 errors out at
-//     decode time today, so no sentinels surface for resolution).
+//     Call1 resolves via Hash12, Call2 via Hash22Call2.
+//   - Types 1/2/3 (Std Msg, EU VHF /P, RTTY Roundup): either
+//     Call1 or Call2 (or both) may be a "<...>" sentinel when the
+//     c28 wire value landed in the 22-bit hash partition (compound
+//     or special-event callsigns referenced by hash per QEX
+//     Table 2). Call1 resolves via Hash22Call1, Call2 via
+//     Hash22Call2.
+//   - Free Text and other no-hash Types: returned unchanged.
 //
-// On successful resolution the corresponding Hash12 / Hash22 field
-// is zeroed so a downstream observer can't accidentally re-resolve
-// or tell a resolved-from-hash call apart from one that decoded
-// plaintext. If the table doesn't yet hold the callsign for a given
-// hash, that slot stays as the sentinel and the Hash field stays
-// non-zero — caller can retry after more Observe calls.
+// On successful resolution the corresponding Hash12 / Hash22Call1 /
+// Hash22Call2 field is zeroed so a downstream observer can't
+// accidentally re-resolve or tell a resolved-from-hash call apart
+// from one that decoded plaintext. If the table doesn't yet hold
+// the callsign for a given hash, that slot stays as the sentinel
+// and the Hash field stays non-zero — caller can retry after more
+// Observe calls populate the table.
 func (t *HashTable) Resolve(m Message) Message {
 	switch m.Type {
 	case MessageTypeNonStdCall:
@@ -220,17 +225,33 @@ func (t *HashTable) Resolve(m Message) Message {
 			}
 		}
 		if m.Call2 == hashedCallSentinel {
-			if call, ok := t.LookupH22(m.Hash22); ok {
+			if call, ok := t.LookupH22(m.Hash22Call2); ok {
 				m.Call2 = call
-				m.Hash22 = 0
+				m.Hash22Call2 = 0
+			}
+		}
+	case MessageTypeStd, MessageTypeEUVHFP, MessageTypeRTTYRU:
+		// Types 1/2/3: either Call slot may independently be a
+		// hash-partition c28 reference. Resolve each side via its
+		// own Hash22Call* field.
+		if m.Call1 == hashedCallSentinel && m.Hash22Call1 != 0 {
+			if call, ok := t.LookupH22(m.Hash22Call1); ok {
+				m.Call1 = call
+				m.Hash22Call1 = 0
+			}
+		}
+		if m.Call2 == hashedCallSentinel && m.Hash22Call2 != 0 {
+			if call, ok := t.LookupH22(m.Hash22Call2); ok {
+				m.Call2 = call
+				m.Hash22Call2 = 0
 			}
 		}
 	default:
-		// Intentional no-op for non-hash-bearing Types (Std / EU VHF /P /
-		// Free Text / specialty 0.x). Unlike the encode/decode/format
-		// switches in this package, an unhandled Type here isn't a wire
-		// error — it just means there are no sentinels to resolve. New
-		// Phase 4 types that carry hash slots add their case above.
+		// Intentional no-op for non-hash-bearing Types (Free Text,
+		// specialty 0.x family). Unlike the encode/decode/format
+		// switches in this package, an unhandled Type here isn't a
+		// wire error — it just means there are no sentinels to
+		// resolve.
 	}
 	return m
 }

@@ -1,7 +1,6 @@
 package codec
 
 import (
-	"errors"
 	"slices"
 	"testing"
 )
@@ -316,16 +315,18 @@ func TestDecodeMessage_Type2_AcceptsTokenInWire(t *testing.T) {
 	}
 }
 
-// TestDecodeMessage_Type2_HashCallSurfaces verifies the hash-partition
-// path: a Type 2 c28 in the [nTokens, stdCallOffset) range surfaces
-// ErrCallsignNeedsHashLookup just like Type 1. The FT8 service layer's
-// hash table resolves the actual callsign post-decode.
+// TestDecodeMessage_Type2_HashCallSurfaces verifies finding #2's
+// behaviour for Type 2: a c28 in the [nTokens, stdCallOffset) hash
+// partition decodes as the "<...>" sentinel with the raw 22-bit
+// hash exposed via Hash22Call1 / Hash22Call2. Symmetric with the
+// Type 1 path verified in TestDecodeMessage_HashRangeC28SurfacesSentinel.
 func TestDecodeMessage_Type2_HashCallSurfaces(t *testing.T) {
 	bits := make([]byte, MessageBits)
-	// Plant a hash-range c28 (mid-partition) in Call1. The hash range
-	// is [nTokens, stdCallOffset) per callsign.go; nTokens = 2063592,
-	// stdCallOffset = nTokens + 2^22, so 3000000 is safely inside.
+	// Plant a hash-range c28 (mid-partition) in Call1. nTokens=2063592;
+	// 3000000 is safely inside the hash partition. Raw hash22 value
+	// is c28 - nTokens = 936408.
 	hashC28 := uint32(3000000)
+	const wantHash22 = 936408
 	for i := range CallsignBits {
 		bits[i] = byte((hashC28 >> (CallsignBits - 1 - i)) & 1)
 	}
@@ -338,9 +339,18 @@ func TestDecodeMessage_Type2_HashCallSurfaces(t *testing.T) {
 	}
 	bits[75] = 1 // i3 = 2
 
-	_, err := DecodeMessage(bits)
-	if !errors.Is(err, ErrCallsignNeedsHashLookup) {
-		t.Errorf("DecodeMessage(Type 2 wire with hash c28) err=%v, want ErrCallsignNeedsHashLookup", err)
+	msg, err := DecodeMessage(bits)
+	if err != nil {
+		t.Fatalf("DecodeMessage(Type 2 wire with hash c28): unexpected err = %v", err)
+	}
+	if msg.Call1 != hashedCallSentinel {
+		t.Errorf("Call1 = %q, want %q", msg.Call1, hashedCallSentinel)
+	}
+	if msg.Hash22Call1 != wantHash22 {
+		t.Errorf("Hash22Call1 = %d, want %d", msg.Hash22Call1, wantHash22)
+	}
+	if msg.Call2 != "G4ABC" {
+		t.Errorf("Call2 = %q, want G4ABC", msg.Call2)
 	}
 }
 
