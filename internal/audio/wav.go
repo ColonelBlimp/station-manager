@@ -1,6 +1,6 @@
-// Package audio provides audio file I/O and (later) live capture/playback
-// for the FT8 subsystem. The WAV reader is the only piece in this commit;
-// live audio capture lands when M4.2 brings in portaudio.
+// Package audio provides audio file I/O, FFT primitives, and live
+// capture (the CGO miniaudio path lives in the audio/capture subpackage)
+// for the FT8 subsystem. ReadWAV/WriteWAV are the file-I/O pair.
 //
 // The package is a neutral peer of internal/ft8 and internal/bridge —
 // it has no dependency on any FT8 or bridge specifics and stays open
@@ -9,6 +9,7 @@
 package audio
 
 import (
+	"bufio"
 	"encoding/binary"
 	stderrors "errors"
 	"io"
@@ -184,6 +185,90 @@ outer:
 		Channels:   channels,
 		Samples:    samples,
 	}, nil
+}
+
+// WriteWAV writes d to a 16-bit signed PCM WAV file at path — the
+// inverse of ReadWAV's 16-bit branch and the format the existing FT8
+// fixtures (ft8_cap*.wav) use. Float32 samples are clamped to
+// [-1.0, 1.0] and scaled by 32767 (so exactly +1.0 maps to the int16
+// ceiling rather than wrapping). Channel interleaving is taken from
+// d.Samples verbatim; the caller owns the mono/stereo decision.
+//
+// Float32-source captures lose sub-int16 precision in the round-trip,
+// which is inaudible and irrelevant to FT8 decoding (WSJT-X itself
+// stores slots as 16-bit) — the win is a fixture identical in format
+// to the baked-in corpus, decodable by the same ReadWAV path.
+func WriteWAV(path string, d *Data) error {
+	const op errors.Op = "audio.WriteWAV"
+
+	if d == nil {
+		return errors.New(op).WithMsg("nil audio data")
+	}
+	channels := d.Channels
+	if channels == 0 {
+		channels = 1
+	}
+
+	const bitsPerSample = 16
+	const bytesPerSample = bitsPerSample / 8
+	dataSize := len(d.Samples) * bytesPerSample
+	byteRate := d.SampleRate * uint32(channels) * bytesPerSample
+	blockAlign := channels * bytesPerSample
+
+	f, err := os.Create(path)
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	w := bufio.NewWriter(f)
+
+	// RIFF/WAVE container + canonical 16-byte PCM "fmt " chunk + "data".
+	hdr := []any{
+		[]byte("RIFF"),
+		uint32(36 + dataSize), // chunk size: everything after this field
+		[]byte("WAVE"),
+		[]byte("fmt "),
+		uint32(16),                // PCM fmt chunk body size
+		uint16(wavAudioFormatPCM), // audioFormat = 1
+		channels,
+		d.SampleRate,
+		byteRate,
+		blockAlign,
+		uint16(bitsPerSample),
+		[]byte("data"),
+		uint32(dataSize),
+	}
+	for _, field := range hdr {
+		if b, ok := field.([]byte); ok {
+			if _, err := w.Write(b); err != nil {
+				return errors.New(op).WithErr(err)
+			}
+			continue
+		}
+		if err := binary.Write(w, binary.LittleEndian, field); err != nil {
+			return errors.New(op).WithErr(err)
+		}
+	}
+
+	var buf [2]byte
+	for _, s := range d.Samples {
+		v := int32(math.Round(float64(s) * 32767.0))
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		binary.LittleEndian.PutUint16(buf[:], uint16(int16(v)))
+		if _, err := w.Write(buf[:]); err != nil {
+			return errors.New(op).WithErr(err)
+		}
+	}
+
+	if err := w.Flush(); err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	return nil
 }
 
 // convertWAVSamples converts the raw PCM byte payload to normalised

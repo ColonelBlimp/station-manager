@@ -406,3 +406,70 @@ func TestConvertWAVSamples_PCM8_Range(t *testing.T) {
 		t.Errorf("byte 255 → %g, want > 0.9 (PCM8 near-max)", samples[2])
 	}
 }
+
+// --------------- WriteWAV ------------------------------------------------------
+
+// TestWriteWAV_RoundTrip pins WriteWAV as the inverse of ReadWAV's 16-bit
+// branch: a float32 buffer written then read back matches within one int16
+// LSB, with the header fields and file size preserved.
+func TestWriteWAV_RoundTrip(t *testing.T) {
+	in := &Data{SampleRate: 12000, Channels: 1, Samples: make([]float32, 4096)}
+	for i := range in.Samples {
+		in.Samples[i] = float32(0.8 * math.Sin(2*math.Pi*1500*float64(i)/12000))
+	}
+	// Endpoints exercise the clamp branches (+1.0 must hit the int16 ceiling
+	// rather than wrapping to -32768).
+	in.Samples[0], in.Samples[1] = 1.0, -1.0
+
+	path := filepath.Join(t.TempDir(), "rt.wav")
+	if err := WriteWAV(path, in); err != nil {
+		t.Fatalf("WriteWAV: %v", err)
+	}
+
+	out, err := ReadWAV(path)
+	if err != nil {
+		t.Fatalf("ReadWAV: %v", err)
+	}
+	if out.SampleRate != 12000 || out.Channels != 1 || len(out.Samples) != len(in.Samples) {
+		t.Fatalf("header/len mismatch: rate=%d ch=%d n=%d", out.SampleRate, out.Channels, len(out.Samples))
+	}
+
+	const oneLSB = 1.0/32767.0 + 1e-6
+	for i := range in.Samples {
+		if d := math.Abs(float64(in.Samples[i] - out.Samples[i])); d > oneLSB {
+			t.Fatalf("sample %d: round-trip error %g > 1 LSB", i, d)
+		}
+	}
+
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if want := int64(44 + len(in.Samples)*2); st.Size() != want {
+		t.Errorf("file size = %d, want %d (44-byte header + 2 bytes/sample)", st.Size(), want)
+	}
+}
+
+func TestWriteWAV_NilData(t *testing.T) {
+	if err := WriteWAV(filepath.Join(t.TempDir(), "nil.wav"), nil); err == nil {
+		t.Error("WriteWAV(nil) = nil err, want error")
+	}
+}
+
+// TestWriteWAV_DefaultsMonoOnZeroChannels guards the convenience default:
+// a Data with Channels==0 (e.g. hand-built from a capture buffer) writes
+// as mono rather than producing a zero-blockAlign header.
+func TestWriteWAV_DefaultsMonoOnZeroChannels(t *testing.T) {
+	in := &Data{SampleRate: 12000, Channels: 0, Samples: []float32{0, 0.5, -0.5}}
+	path := filepath.Join(t.TempDir(), "mono.wav")
+	if err := WriteWAV(path, in); err != nil {
+		t.Fatalf("WriteWAV: %v", err)
+	}
+	out, err := ReadWAV(path)
+	if err != nil {
+		t.Fatalf("ReadWAV: %v", err)
+	}
+	if out.Channels != 1 {
+		t.Errorf("Channels = %d, want 1 (defaulted)", out.Channels)
+	}
+}

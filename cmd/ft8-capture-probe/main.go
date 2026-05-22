@@ -21,6 +21,11 @@
 //	# boundary), live FT8 decode for each
 //	ft8-capture-probe -scheduler -slots=4 -device=1
 //
+//	# Capture 3 UTC-aligned slots to newcap_slot{1,2,3}.wav (16-bit PCM
+//	# mono 12 kHz — same format as the testdata fixtures, decodable by
+//	# jt9 and ft8.Decode alike) for offline refinement work
+//	ft8-capture-probe -scheduler -slots=3 -out=newcap -device=1
+//
 // This binary validates M4.2 Phases A + B (capture + scheduler) before
 // the daemon FT8 service is wired. It is not part of smd and is safe
 // to leave in cmd/ as a developer probe.
@@ -36,6 +41,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/audio/capture"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 )
@@ -50,6 +56,7 @@ func main() {
 		schedulerOn = flag.Bool("scheduler", false, "run the slot scheduler instead of single-shot capture")
 		slotsToRun  = flag.Int("slots", 4, "number of slots to run in -scheduler mode")
 		subPasses   = flag.Int("subtraction-passes", 0, "ft8.DecodeOptions.SubtractionPasses (0=fast, 1=sensitive)")
+		outPath     = flag.String("out", "", "write captured audio to WAV (single-shot: exact path; scheduler: <out>_slotN.wav). Empty = no save.")
 	)
 	flag.Parse()
 
@@ -69,11 +76,11 @@ func main() {
 	}
 
 	if *schedulerOn {
-		runSchedulerMode(c, cfg, *slotsToRun, *decode, *subPasses)
+		runSchedulerMode(c, cfg, *slotsToRun, *decode, *subPasses, *outPath)
 		return
 	}
 
-	runSingleShot(c, cfg, *duration, *decode, *subPasses)
+	runSingleShot(c, cfg, *duration, *decode, *subPasses, *outPath)
 }
 
 func runListDevices(c *capture.Capture) {
@@ -87,7 +94,7 @@ func runListDevices(c *capture.Capture) {
 	}
 }
 
-func runSingleShot(c *capture.Capture, cfg capture.Config, duration time.Duration, decode bool, subPasses int) {
+func runSingleShot(c *capture.Capture, cfg capture.Config, duration time.Duration, decode bool, subPasses int, outPath string) {
 	fmt.Printf("Capturing %s from device=%d @ %d Hz mono float32\n",
 		duration, cfg.DeviceIndex, cfg.SampleRate)
 
@@ -135,6 +142,10 @@ collect:
 		fmt.Fprintln(os.Stderr, "WARNING: peak amplitude is very low — input may be muted or unconnected")
 	}
 
+	if outPath != "" {
+		saveWAV(outPath, collected, cfg)
+	}
+
 	if !decode {
 		return
 	}
@@ -150,7 +161,7 @@ collect:
 	printDecodes(results)
 }
 
-func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, decode bool, subPasses int) {
+func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, decode bool, subPasses int, outPath string) {
 	if cfg.SampleRate != 12000 {
 		fatal("scheduler mode requires -rate=12000 (FT8 canonical), got %d", cfg.SampleRate)
 	}
@@ -194,6 +205,10 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, de
 			slot.StartUTC.Format("15:04:05"),
 			slot.OffsetMs, len(slot.Samples), peak)
 
+		if outPath != "" {
+			saveWAV(fmt.Sprintf("%s_slot%d.wav", outPath, collected), slot.Samples, cfg)
+		}
+
 		if decode {
 			t0 := time.Now()
 			results := ft8.Decode(slot.Samples, ft8.DecodeOptions{SubtractionPasses: subPasses})
@@ -221,6 +236,23 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, de
 		fmt.Fprintln(os.Stderr,
 			"WARNING: slots were dropped — decode consumer is slower than the slot cadence")
 	}
+}
+
+// saveWAV writes the captured buffer as a 16-bit PCM WAV matching the
+// testdata fixture format. A failed write is a warning, not fatal — the
+// probe's primary job (capture + decode reporting) still completed.
+func saveWAV(path string, samples []float32, cfg capture.Config) {
+	d := &audio.Data{
+		SampleRate: cfg.SampleRate,
+		Channels:   uint16(cfg.Channels),
+		Samples:    samples,
+	}
+	if err := audio.WriteWAV(path, d); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: write %s: %v\n", path, err)
+		return
+	}
+	fmt.Printf("  wrote %s (%d samples, %.2f s)\n",
+		path, len(samples), float64(len(samples))/float64(cfg.SampleRate))
 }
 
 func printDecodes(results []ft8.DecodedMessage) {
