@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/codec"
+	"github.com/ColonelBlimp/station-manager/internal/ft8/dsp"
 )
 
 func main() {
@@ -24,9 +26,12 @@ func main() {
 		osdOrder  = flag.Int("osd-order", 0, "DecodeOptions.OSDOrder (0=default order-1, -1=disable BP-only, 2=order-2)")
 		llrScale  = flag.Float64("llr-scale", 0, "DecodeOptions.LLRScale (0=default 1.0)")
 		ldpcIters = flag.Int("ldpc-iters", 0, "DecodeOptions.LDPCMaxIterations (0=default 50)")
+		maxCand   = flag.Int("max-cand", 0, "DecodeOptions.Sync.MaxCand sync candidate cap (0=default 100)")
 		useHash   = flag.Bool("hashtable", false, "use a fresh per-file codec.HashTable (retains hash-bearing Type 1/2/3 messages)")
 		oracle    = flag.Bool("oracle", false, "run jt9 -8 (WSJT-X) as black-box ground truth; show SM-vs-jt9 parity")
 		msgs      = flag.Bool("msgs", false, "list each decoded message per file")
+		diff      = flag.Bool("diff", false, "with -oracle: show jt9 decodes marked found/MISS by SM (sorted by SNR) + SM-only extras")
+		cands     = flag.Bool("candidates", false, "dump the sync candidate list (freq/dt/power) per file — diagnoses sync vs demod misses")
 		runs      = flag.Int("runs", 1, "decode each file N times; report the fastest wall time")
 		mem       = flag.Bool("mem", false, "report heap bytes allocated per decode (first run, TotalAlloc delta)")
 	)
@@ -53,6 +58,7 @@ func main() {
 		OSDOrder:          *osdOrder,
 		LLRScale:          *llrScale,
 		LDPCMaxIterations: *ldpcIters,
+		Sync:              dsp.SyncOptions{MaxCand: *maxCand},
 	}
 
 	oracleOK := *oracle
@@ -66,7 +72,7 @@ func main() {
 	printConfig(opts, *runs, *useHash)
 	printHeader(oracleOK, *mem)
 
-	var smTotal, jt9Total int
+	var smTotal, jt9Total, matchTotal int
 	for _, f := range files {
 		data, err := audio.ReadWAV(f)
 		if err != nil {
@@ -99,22 +105,33 @@ func main() {
 			}
 		}
 
-		jt9Count := -1
+		var oracleDecodes []oracleDecode
+		var c cmp
+		haveOracle := false
 		if oracleOK {
-			jt9Count = runOracle(f)
-			if jt9Count >= 0 {
-				jt9Total += jt9Count
+			oracleDecodes = runOracle(f)
+			if oracleDecodes != nil {
+				haveOracle = true
+				c = compareToOracle(results, oracleDecodes)
+				jt9Total += len(oracleDecodes)
+				matchTotal += c.matched
 			}
 		}
 		smTotal += len(results)
 
-		printRow(displayName(f), len(results), jt9Count, best, allocBytes, oracleOK, *mem)
+		printRow(displayName(f), len(results), len(oracleDecodes), c, best, allocBytes, haveOracle, *mem)
 		if *msgs {
 			printMessages(results)
 		}
+		if *diff && haveOracle {
+			printDiff(results, oracleDecodes)
+		}
+		if *cands {
+			printCandidates(data.Samples, opts.Sync)
+		}
 	}
 
-	printTotals(smTotal, jt9Total, oracleOK)
+	printTotals(smTotal, jt9Total, matchTotal, oracleOK)
 }
 
 // withHashTable returns opts with a fresh single-slot HashTable attached
@@ -128,18 +145,28 @@ func withHashTable(opts ft8.DecodeOptions, use bool) ft8.DecodeOptions {
 	return opts
 }
 
+// oracleDecode is one decoded message parsed from jt9 -8 stdout.
+type oracleDecode struct {
+	snr  int
+	freq int
+	msg  string
+}
+
 // runOracle runs `jt9 -8 <wav>` in a throwaway working directory and
-// returns the number of decoded-message lines (those carrying the ` ~ `
-// decode marker; the trailing <DecodeFinished> line is excluded).
-// Returns -1 on failure.
-func runOracle(wav string) int {
+// returns the decoded messages (lines carrying the ` ~ ` decode marker;
+// the trailing <DecodeFinished> line is excluded). Returns nil on
+// failure. jt9 stdout lines look like:
+//
+//	000000  11  0.8 1353 ~  F1RCQ YO3OBB RR73
+//	HHMMSS snr  dt  freq ~  message...
+func runOracle(wav string) []oracleDecode {
 	abs, err := filepath.Abs(wav)
 	if err != nil {
-		return -1
+		return nil
 	}
 	tmp, err := os.MkdirTemp("", "ft8-eval-jt9-")
 	if err != nil {
-		return -1
+		return nil
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 
@@ -151,14 +178,95 @@ func runOracle(wav string) int {
 	out, err := cmd.Output()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: jt9 on %s: %v\n", filepath.Base(wav), err)
-		return -1
+		return nil
 	}
-	n := 0
+
+	var decodes []oracleDecode
 	sc := bufio.NewScanner(strings.NewReader(string(out)))
 	for sc.Scan() {
-		if strings.Contains(sc.Text(), " ~ ") {
+		line := sc.Text()
+		marker := strings.Index(line, " ~ ")
+		if marker < 0 {
+			continue
+		}
+		fields := strings.Fields(line[:marker])
+		d := oracleDecode{snr: 0, freq: 0}
+		if len(fields) >= 4 {
+			d.snr = atoiOr(fields[1], 0)
+			d.freq = atoiOr(fields[3], 0)
+		}
+		d.msg = strings.TrimSpace(line[marker+len(" ~ "):])
+		decodes = append(decodes, d)
+	}
+	return decodes
+}
+
+// printDiff aligns SM's decodes with jt9's by message key (the first two
+// tokens — the two callsigns / "CQ CALL"), the stable identifier for a
+// transmission across the report/grid noise that differs between
+// decoders. jt9's decodes are listed weakest-SNR-first so the
+// sensitivity story (are misses all weak, or spread?) is obvious;
+// SM-only extras follow.
+func printDiff(sm []ft8.DecodedMessage, oracle []oracleDecode) {
+	smKeys := map[string]bool{}
+	for _, r := range sm {
+		smKeys[msgKey(r.Text)] = true
+	}
+	oracleKeys := map[string]bool{}
+	for _, d := range oracle {
+		oracleKeys[msgKey(d.msg)] = true
+	}
+
+	sorted := append([]oracleDecode(nil), oracle...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].snr < sorted[j].snr })
+
+	miss := 0
+	for _, d := range sorted {
+		mark := "  ✓ "
+		if !smKeys[msgKey(d.msg)] {
+			mark = "✗ MISS"
+			miss++
+		}
+		fmt.Printf("      %s  snr=%4d  %5d Hz   %q\n", mark, d.snr, d.freq, d.msg)
+	}
+	for _, r := range sm {
+		if !oracleKeys[msgKey(r.Text)] {
+			fmt.Printf("      SM+    sync=%5.2f  %4.0f Hz   %q\n", r.SyncPower, r.Freq, r.Text)
+		}
+	}
+	fmt.Printf("      (jt9=%d, SM-missed=%d, SM-only=%d)\n", len(oracle), miss, countSMOnly(sm, oracleKeys))
+}
+
+// msgKey is the first two whitespace tokens, uppercased — the two
+// callsigns (or "CQ CALL") that identify a transmission. Robust to
+// trailing report/grid differences between decoders. Falls back to the
+// whole normalized string for non-standard (free-text/telemetry) forms.
+func msgKey(s string) string {
+	f := strings.Fields(strings.ToUpper(s))
+	switch {
+	case len(f) >= 2:
+		return f[0] + " " + f[1]
+	case len(f) == 1:
+		return f[0]
+	default:
+		return ""
+	}
+}
+
+func countSMOnly(sm []ft8.DecodedMessage, oracleKeys map[string]bool) int {
+	n := 0
+	for _, r := range sm {
+		if !oracleKeys[msgKey(r.Text)] {
 			n++
 		}
+	}
+	return n
+}
+
+func atoiOr(s string, def int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
 	}
 	return n
 }
@@ -213,10 +321,44 @@ func printConfig(opts ft8.DecodeOptions, runs int, useHash bool) {
 		opts.SubtractionPasses, opts.OSDOrder, opts.LLRScale, opts.LDPCMaxIterations, useHash, runs)
 }
 
+// cmp is the honest comparison of an SM decode set against the oracle:
+// matched = jt9 decodes SM also found, missed = jt9 decodes SM didn't,
+// smOnly = SM decodes jt9 didn't (false-positive proxy).
+type cmp struct{ matched, missed, smOnly int }
+
+// compareToOracle matches by msgKey (first two tokens — the callsigns).
+func compareToOracle(sm []ft8.DecodedMessage, oracle []oracleDecode) cmp {
+	smKeys := map[string]bool{}
+	for _, r := range sm {
+		smKeys[msgKey(r.Text)] = true
+	}
+	oracleKeys := map[string]bool{}
+	for _, d := range oracle {
+		oracleKeys[msgKey(d.msg)] = true
+	}
+	var c cmp
+	for _, d := range oracle {
+		if smKeys[msgKey(d.msg)] {
+			c.matched++
+		} else {
+			c.missed++
+		}
+	}
+	for _, r := range sm {
+		if !oracleKeys[msgKey(r.Text)] {
+			c.smOnly++
+		}
+	}
+	return c
+}
+
 func printHeader(oracle, mem bool) {
+	// With the oracle, "match" (real decodes matched to jt9) is the
+	// honest score; "sm" stays visible so false-positive inflation
+	// (sm > match) is obvious. parity = match / jt9.
 	line := fmt.Sprintf("%-26s %5s", "file", "sm")
 	if oracle {
-		line += fmt.Sprintf(" %5s %7s", "jt9", "parity")
+		line += fmt.Sprintf(" %5s %5s %5s %6s %7s", "jt9", "match", "miss", "extra", "parity")
 	}
 	line += fmt.Sprintf(" %9s", "time")
 	if mem {
@@ -226,26 +368,34 @@ func printHeader(oracle, mem bool) {
 	fmt.Println(strings.Repeat("-", len(line)))
 }
 
-func printRow(name string, sm, jt9 int, dur time.Duration, allocBytes uint64, oracle, mem bool) {
+func printRow(name string, sm, jt9 int, c cmp, dur time.Duration, allocBytes uint64, oracle, mem bool) {
 	line := fmt.Sprintf("%-26s %5d", name, sm)
 	if oracle {
-		par := "-"
+		par := "n/a"
 		if jt9 > 0 {
-			par = fmt.Sprintf("%d%%", sm*100/jt9)
-		} else if jt9 == 0 {
-			par = "n/a"
+			par = fmt.Sprintf("%d%%", c.matched*100/jt9)
 		}
-		jt9s := "-"
-		if jt9 >= 0 {
-			jt9s = fmt.Sprintf("%d", jt9)
-		}
-		line += fmt.Sprintf(" %5s %7s", jt9s, par)
+		line += fmt.Sprintf(" %5d %5d %5d %6d %7s", jt9, c.matched, c.missed, c.smOnly, par)
 	}
 	line += fmt.Sprintf(" %9s", dur.Round(time.Millisecond))
 	if mem {
 		line += fmt.Sprintf(" %8.1fM", float64(allocBytes)/(1<<20))
 	}
 	fmt.Println(line)
+}
+
+// printCandidates dumps the sync stage's output (the same Spectrogram +
+// Sync that Decode runs first), sorted by frequency. Lets us see whether
+// a missed signal even produced a candidate (sync gap) or produced one
+// that the demod/LDPC stage then failed to decode (downstream gap).
+func printCandidates(samples []float32, opts dsp.SyncOptions) {
+	spec := dsp.Spectrogram(samples)
+	cs := dsp.Sync(spec, opts)
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].Freq < cs[j].Freq })
+	fmt.Printf("      sync candidates: %d\n", len(cs))
+	for _, c := range cs {
+		fmt.Printf("        %7.2f Hz  %+.2f s  power=%6.2f\n", c.Freq, c.DT, c.SyncPower)
+	}
 }
 
 func printMessages(results []ft8.DecodedMessage) {
@@ -255,10 +405,11 @@ func printMessages(results []ft8.DecodedMessage) {
 	}
 }
 
-func printTotals(sm, jt9 int, oracle bool) {
+func printTotals(sm, jt9, match int, oracle bool) {
 	fmt.Println()
 	if oracle && jt9 > 0 {
-		fmt.Printf("TOTAL  sm=%d  jt9=%d  parity=%d%%\n", sm, jt9, sm*100/jt9)
+		fmt.Printf("TOTAL  sm=%d  jt9=%d  match=%d  parity=%d%%  (sm-only/false+=%d)\n",
+			sm, jt9, match, match*100/jt9, sm-match)
 		return
 	}
 	fmt.Printf("TOTAL  sm=%d\n", sm)
