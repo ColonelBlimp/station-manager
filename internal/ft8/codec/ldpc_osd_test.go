@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"math"
 	"math/rand/v2"
 	"testing"
 )
@@ -207,5 +208,56 @@ func BenchmarkOSDDecode_Order1(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		_, _ = OSDDecode(llrs, 1)
+	}
+}
+
+// --------------- B2: soft-distance gate -------------------------------------
+
+// TestSoftDistanceNorm pins the reliability-weighted normalised soft
+// distance used by the B2 OSD acceptance gate. Convention: positive LLR
+// ⟹ hard bit 0, negative ⟹ hard bit 1.
+func TestSoftDistanceNorm(t *testing.T) {
+	llrs := []float64{4, -3, 2, -1} // hard decisions 0,1,0,1; Σ|llr| = 10
+	cases := []struct {
+		name     string
+		codeword []byte
+		want     float64
+	}{
+		{"agree_all", []byte{0, 1, 0, 1}, 0.0},
+		{"disagree_at_largest", []byte{1, 1, 0, 1}, 0.4},  // |4|/10
+		{"disagree_two_largest", []byte{1, 0, 0, 1}, 0.7}, // (4+3)/10
+		{"disagree_all", []byte{1, 0, 1, 0}, 1.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := softDistanceNorm(llrs, tc.codeword); math.Abs(got-tc.want) > 1e-9 {
+				t.Errorf("softDistanceNorm = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// All-zero LLRs: no reliability anywhere → 0, not a divide-by-zero.
+	if got := softDistanceNorm([]float64{0, 0}, []byte{1, 1}); got != 0 {
+		t.Errorf("zero-LLR distance = %v, want 0", got)
+	}
+}
+
+func TestOSDAccept(t *testing.T) {
+	llrs := []float64{4, -3, 2, -1}
+	near := []byte{0, 1, 0, 1} // distance 0
+	far := []byte{1, 0, 1, 0}  // distance 1.0
+
+	// maxNormDist <= 0 disables the gate: accept anything.
+	if !osdAccept(llrs, far, 0) {
+		t.Error("maxNormDist=0 (disabled) should accept the far codeword")
+	}
+	if !osdAccept(llrs, far, -1) {
+		t.Error("maxNormDist<0 (disabled) should accept the far codeword")
+	}
+	// A tight ceiling accepts the near codeword, rejects the far one.
+	if !osdAccept(llrs, near, 0.06) {
+		t.Error("near codeword should pass the gate")
+	}
+	if osdAccept(llrs, far, 0.06) {
+		t.Error("far codeword should fail the gate")
 	}
 }

@@ -167,7 +167,46 @@ type DecodeOptions struct {
 	// the subtraction calls themselves (~7 ms × number of decoded
 	// signals). At 4.5 s baseline + 1 extra pass, total stays well
 	// under the 15-second slot budget.
+	//
+	// NOTE (2026-05 corpus measurement): against the jt9 3.0.1 oracle,
+	// subtraction passes added ZERO oracle-matched decodes and only
+	// manufactured false positives. Default stays 0; revisit only if a
+	// future demod improvement makes pass-0 strong enough that
+	// subtraction reveals genuinely-masked weak signals.
 	SubtractionPasses int
+
+	// MinSyncPower is the sync-power acceptance floor (B1) applied to
+	// the FINAL decode set: a decoded candidate whose SyncPower is
+	// below this is dropped. Low-SyncPower decodes are overwhelmingly
+	// CRC14-survivor false positives (an OSD bit-flip search finds a
+	// codeword that passes the 1-in-16384 CRC at a low-confidence
+	// candidate).
+	//
+	// Resolution rules:
+	//   - 0 (zero value) → DefaultMinSyncPower (3.0).
+	//   - Negative → no floor (keep every CRC-valid decode).
+	//   - Positive → exact floor.
+	//
+	// This is a blunt first-stage filter; it cannot separate the false
+	// positives that happen to land above the floor from real decodes
+	// at the same SyncPower. The OSD soft-distance gate (B2) handles
+	// those. See DefaultMinSyncPower for the tuning rationale.
+	MinSyncPower float64
+
+	// OSDMaxNormDist is the OSD soft-distance acceptance ceiling (B2):
+	// an OSD-produced codeword is accepted only if its reliability-
+	// weighted normalised soft distance to the received LLRs is at or
+	// below this (see codec.softDistanceNorm). It targets the false
+	// positives that survive the MinSyncPower floor — CRC14-lottery
+	// codewords from OSD's bit-flip search that disagree with the
+	// received signal at high-reliability bit positions. BP-converged
+	// decodes are NOT gated (they're trustworthy).
+	//
+	// Resolution rules:
+	//   - 0 (zero value) → DefaultOSDMaxNormDist.
+	//   - Negative → no gate (accept any CRC-valid OSD codeword).
+	//   - Positive → exact ceiling, in [0,1].
+	OSDMaxNormDist float64
 }
 
 // DefaultOSDOrder is the OSD search depth applied when
@@ -181,6 +220,35 @@ const DefaultOSDOrder = 1
 // real-capture sensitivity gains are measured. To enable, the
 // caller explicitly sets DecodeOptions.SubtractionPasses ≥ 1.
 const DefaultSubtractionPasses = 0
+
+// DefaultMinSyncPower is the default sync-power acceptance floor (B1).
+// Decoded candidates with SyncPower below this are dropped as likely
+// CRC14-survivor false positives. dsp.SyncDefaultMinScore (1.5) is the
+// candidate-generation threshold; this is a stricter floor applied to
+// the FINAL decode set.
+//
+// Tuned on the 2026-05 live + vendored corpus (jt9 3.0.1 oracle): at
+// 3.0, false positives dropped with ZERO loss of oracle-matched
+// decodes; above ~3.5, real decodes start to be lost. The bulk of
+// remaining false positives sit above this floor (sync-overlapping
+// real decodes) and need the OSD soft-distance gate (B2) instead.
+const DefaultMinSyncPower = 3.0
+
+// DefaultOSDMaxNormDist is the default OSD soft-distance acceptance
+// ceiling (B2), applied when DecodeOptions.OSDMaxNormDist is unset. An
+// OSD codeword is rejected when its normalised soft distance to the
+// received LLRs exceeds this (see codec.softDistanceNorm).
+//
+// Tuned on the 2026-05 live + vendored corpus (jt9 3.0.1 oracle): OSD
+// recovers ~20 real decodes but produces the bulk of SM's false
+// positives (CRC14-lottery survivors from its bit-flip search). The
+// soft-distance band that separates them is compressed near zero —
+// because OSD builds its codeword from the most-reliable bits, its
+// output always agrees with high-confidence positions, so the
+// discriminating signal lives in the low-reliability tail. At 0.06 the
+// gate cut corpus-wide false positives 44→18 with ZERO loss of
+// oracle-matched decodes; below ~0.05 real decodes start to be lost.
+const DefaultOSDMaxNormDist = 0.06
 
 // DefaultFineTimingOffsets is the retry sequence applied when
 // DecodeOptions.FineTimingOffsets is nil. Tuned empirically on the
@@ -260,6 +328,32 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 	llrScale := opts.LLRScale
 	if llrScale == 0 {
 		llrScale = dsp.DefaultLLRScale
+	}
+
+	// Sync-power acceptance floor (B1). Decoded candidates below this
+	// SyncPower are dropped from the output — they are overwhelmingly
+	// CRC14-survivor false positives (OSD bit-flip search produces them
+	// at low-confidence candidates). Zero value → DefaultMinSyncPower;
+	// negative → no floor. Tuned on the 2026-05 live corpus: a floor of
+	// 3.0 removed false positives with zero loss of oracle-matched
+	// decodes. See DecodeOptions.MinSyncPower.
+	minSync := opts.MinSyncPower
+	if minSync == 0 {
+		minSync = DefaultMinSyncPower
+	}
+	if minSync < 0 {
+		minSync = 0
+	}
+
+	// OSD soft-distance acceptance ceiling (B2). Zero value →
+	// DefaultOSDMaxNormDist; negative → no gate. See
+	// DecodeOptions.OSDMaxNormDist and codec.softDistanceNorm.
+	osdMaxNormDist := opts.OSDMaxNormDist
+	if osdMaxNormDist == 0 {
+		osdMaxNormDist = DefaultOSDMaxNormDist
+	}
+	if osdMaxNormDist < 0 {
+		osdMaxNormDist = 0
 	}
 
 	spec := dsp.Spectrogram(samples)
@@ -367,7 +461,7 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 				if llrs == nil {
 					continue
 				}
-				msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder)
+				msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder, osdMaxNormDist)
 				if !ok {
 					continue
 				}
@@ -449,7 +543,7 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 						if llrs == nil {
 							continue
 						}
-						msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder)
+						msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder, osdMaxNormDist)
 						if !ok {
 							continue
 						}
@@ -510,6 +604,9 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 	// sentinel inline" formatter or eventual table population.
 	out := make([]DecodedMessage, 0, len(raw))
 	for _, p := range raw {
+		if p.cand.SyncPower < minSync {
+			continue // B1: sync-power floor — drop low-confidence false positives.
+		}
 		text, err := codec.FormatMessage(p.msg)
 		if err != nil {
 			continue

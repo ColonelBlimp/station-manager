@@ -273,14 +273,18 @@ func LDPCDecode(llrs []float64, maxIterations int) ([]byte, bool) {
 // when neither BP nor OSD finds a CRC14-valid codeword.
 //
 // Panics if len(llrs) != CodewordBits.
-func LDPCDecodeWithOSD(llrs []float64, maxIterations, osdOrder int) ([]byte, bool) {
+// osdMaxNormDist is the B2 soft-distance acceptance ceiling for OSD
+// codewords (see osdDecode / softDistanceNorm); <= 0 disables the gate.
+// BP decodes are NOT gated — BP convergence + CRC is trustworthy; the
+// false positives come from OSD's bit-flip search.
+func LDPCDecodeWithOSD(llrs []float64, maxIterations, osdOrder int, osdMaxNormDist float64) ([]byte, bool) {
 	if msg, ok := LDPCDecode(llrs, maxIterations); ok {
 		return msg, true
 	}
 	if osdOrder <= 0 {
 		return nil, false
 	}
-	return OSDDecode(llrs, osdOrder)
+	return osdDecode(llrs, osdOrder, osdMaxNormDist)
 }
 
 // packBitsMSBFirst converts a bit-per-byte slice to a uint16,

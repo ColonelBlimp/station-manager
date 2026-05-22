@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
@@ -22,18 +23,21 @@ import (
 
 func main() {
 	var (
-		subPasses = flag.Int("subtraction-passes", 0, "DecodeOptions.SubtractionPasses (0=fast baseline, 1=sensitive)")
-		osdOrder  = flag.Int("osd-order", 0, "DecodeOptions.OSDOrder (0=default order-1, -1=disable BP-only, 2=order-2)")
-		llrScale  = flag.Float64("llr-scale", 0, "DecodeOptions.LLRScale (0=default 1.0)")
-		ldpcIters = flag.Int("ldpc-iters", 0, "DecodeOptions.LDPCMaxIterations (0=default 50)")
-		maxCand   = flag.Int("max-cand", 0, "DecodeOptions.Sync.MaxCand sync candidate cap (0=default 100)")
-		useHash   = flag.Bool("hashtable", false, "use a fresh per-file codec.HashTable (retains hash-bearing Type 1/2/3 messages)")
-		oracle    = flag.Bool("oracle", false, "run jt9 -8 (WSJT-X) as black-box ground truth; show SM-vs-jt9 parity")
-		msgs      = flag.Bool("msgs", false, "list each decoded message per file")
-		diff      = flag.Bool("diff", false, "with -oracle: show jt9 decodes marked found/MISS by SM (sorted by SNR) + SM-only extras")
-		cands     = flag.Bool("candidates", false, "dump the sync candidate list (freq/dt/power) per file — diagnoses sync vs demod misses")
-		runs      = flag.Int("runs", 1, "decode each file N times; report the fastest wall time")
-		mem       = flag.Bool("mem", false, "report heap bytes allocated per decode (first run, TotalAlloc delta)")
+		subPasses  = flag.Int("subtraction-passes", 0, "DecodeOptions.SubtractionPasses (0=fast baseline, 1=sensitive)")
+		osdOrder   = flag.Int("osd-order", 0, "DecodeOptions.OSDOrder (0=default order-1, -1=disable BP-only, 2=order-2)")
+		llrScale   = flag.Float64("llr-scale", 0, "DecodeOptions.LLRScale (0=default 1.0)")
+		ldpcIters  = flag.Int("ldpc-iters", 0, "DecodeOptions.LDPCMaxIterations (0=default 50)")
+		maxCand    = flag.Int("max-cand", 0, "DecodeOptions.Sync.MaxCand sync candidate cap (0=default 100)")
+		minSync    = flag.Float64("min-sync", 0, "DecodeOptions.MinSyncPower floor (0=default 3.0, negative=no floor, positive=exact)")
+		osdMaxDist = flag.Float64("osd-maxdist", 0, "DecodeOptions.OSDMaxNormDist gate (B2): OSD soft-distance ceiling in (0,1]. 0=default, negative=no gate")
+		useHash    = flag.Bool("hashtable", false, "use a fresh per-file codec.HashTable (retains hash-bearing Type 1/2/3 messages)")
+		oracle     = flag.Bool("oracle", false, "run jt9 -8 (WSJT-X) as black-box ground truth; show SM-vs-jt9 parity")
+		msgs       = flag.Bool("msgs", false, "list each decoded message per file")
+		diff       = flag.Bool("diff", false, "with -oracle: show jt9 decodes marked found/MISS by SM (sorted by SNR) + SM-only extras")
+		cands      = flag.Bool("candidates", false, "dump the sync candidate list (freq/dt/power) per file — diagnoses sync vs demod misses")
+		runs       = flag.Int("runs", 1, "decode each file N times; report the fastest wall time")
+		mem        = flag.Bool("mem", false, "report heap bytes allocated per decode (first run, TotalAlloc delta)")
+		jobs       = flag.Int("jobs", 1, "decode files concurrently with N workers (count-only sweeps; forced to 1 with -mem or -runs>1)")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -58,6 +62,8 @@ func main() {
 		OSDOrder:          *osdOrder,
 		LLRScale:          *llrScale,
 		LDPCMaxIterations: *ldpcIters,
+		MinSyncPower:      *minSync,
+		OSDMaxNormDist:    *osdMaxDist,
 		Sync:              dsp.SyncOptions{MaxCand: *maxCand},
 	}
 
@@ -69,69 +75,108 @@ func main() {
 		}
 	}
 
-	printConfig(opts, *runs, *useHash)
+	// -mem and -runs timing demand a quiet CPU; force serial when either
+	// is in play. Otherwise decode files concurrently — Decode is
+	// single-threaded and CPU-bound, so count-only sweeps scale with cores.
+	jobN := *jobs
+	if jobN < 1 || *mem || *runs > 1 {
+		jobN = 1
+	}
+
+	printConfig(opts, *runs, *useHash, jobN)
 	printHeader(oracleOK, *mem)
 
+	results := make([]fileResult, len(files))
+	sem := make(chan struct{}, jobN)
+	var wg sync.WaitGroup
+	for i, f := range files {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, f string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			results[i] = evalFile(f, opts, oracleOK, *useHash, *runs, *mem)
+		}(i, f)
+	}
+	wg.Wait()
+
 	var smTotal, jt9Total, matchTotal int
-	for _, f := range files {
-		data, err := audio.ReadWAV(f)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: read %s: %v\n", f, err)
+	for _, r := range results {
+		if r.skipped {
 			continue
 		}
-
-		var results []ft8.DecodedMessage
-		best := time.Duration(1<<63 - 1)
-		var allocBytes uint64
-		for r := 0; r < *runs; r++ {
-			var before runtime.MemStats
-			if *mem && r == 0 {
-				runtime.GC()
-				runtime.ReadMemStats(&before)
-			}
-			t0 := time.Now()
-			res := ft8.Decode(data.Samples, withHashTable(opts, *useHash))
-			elapsed := time.Since(t0)
-			if *mem && r == 0 {
-				var after runtime.MemStats
-				runtime.ReadMemStats(&after)
-				allocBytes = after.TotalAlloc - before.TotalAlloc
-			}
-			if elapsed < best {
-				best = elapsed
-			}
-			if r == 0 {
-				results = res
-			}
+		smTotal += len(r.decodes)
+		if r.haveOracle {
+			jt9Total += len(r.oracle)
+			matchTotal += r.cmp.matched
 		}
-
-		var oracleDecodes []oracleDecode
-		var c cmp
-		haveOracle := false
-		if oracleOK {
-			oracleDecodes = runOracle(f)
-			if oracleDecodes != nil {
-				haveOracle = true
-				c = compareToOracle(results, oracleDecodes)
-				jt9Total += len(oracleDecodes)
-				matchTotal += c.matched
-			}
-		}
-		smTotal += len(results)
-
-		printRow(displayName(f), len(results), len(oracleDecodes), c, best, allocBytes, haveOracle, *mem)
+		printRow(r.name, len(r.decodes), len(r.oracle), r.cmp, r.best, r.allocBytes, r.haveOracle, *mem)
 		if *msgs {
-			printMessages(results)
+			printMessages(r.decodes)
 		}
-		if *diff && haveOracle {
-			printDiff(results, oracleDecodes)
+		if *diff && r.haveOracle {
+			printDiff(r.decodes, r.oracle)
 		}
 		if *cands {
-			printCandidates(data.Samples, opts.Sync)
+			printCandidates(r.samples, opts.Sync)
 		}
 	}
 
 	printTotals(smTotal, jt9Total, matchTotal, oracleOK)
+}
+
+// fileResult is one file's evaluation, computed (possibly concurrently)
+// then printed in input order.
+type fileResult struct {
+	name       string
+	samples    []float32
+	decodes    []ft8.DecodedMessage
+	oracle     []oracleDecode
+	cmp        cmp
+	haveOracle bool
+	best       time.Duration
+	allocBytes uint64
+	skipped    bool
+}
+
+func evalFile(f string, opts ft8.DecodeOptions, oracleOK, useHash bool, runs int, mem bool) fileResult {
+	data, err := audio.ReadWAV(f)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: read %s: %v\n", f, err)
+		return fileResult{name: displayName(f), skipped: true}
+	}
+
+	r := fileResult{name: displayName(f), samples: data.Samples, best: time.Duration(1<<63 - 1)}
+	for run := 0; run < runs; run++ {
+		var before runtime.MemStats
+		if mem && run == 0 {
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+		}
+		t0 := time.Now()
+		res := ft8.Decode(data.Samples, withHashTable(opts, useHash))
+		elapsed := time.Since(t0)
+		if mem && run == 0 {
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+			r.allocBytes = after.TotalAlloc - before.TotalAlloc
+		}
+		if elapsed < r.best {
+			r.best = elapsed
+		}
+		if run == 0 {
+			r.decodes = res
+		}
+	}
+
+	if oracleOK {
+		if od := runOracle(f); od != nil {
+			r.oracle = od
+			r.cmp = compareToOracle(r.decodes, od)
+			r.haveOracle = true
+		}
+	}
+	return r
 }
 
 // withHashTable returns opts with a fresh single-slot HashTable attached
@@ -316,9 +361,9 @@ func displayName(p string) string {
 	return filepath.Join(dir, filepath.Base(p))
 }
 
-func printConfig(opts ft8.DecodeOptions, runs int, useHash bool) {
-	fmt.Printf("DecodeOptions: subtraction_passes=%d osd_order=%d llr_scale=%g ldpc_iters=%d hashtable=%v  (runs=%d)\n\n",
-		opts.SubtractionPasses, opts.OSDOrder, opts.LLRScale, opts.LDPCMaxIterations, useHash, runs)
+func printConfig(opts ft8.DecodeOptions, runs int, useHash bool, jobs int) {
+	fmt.Printf("DecodeOptions: subtraction_passes=%d osd_order=%d osd_maxdist=%g llr_scale=%g ldpc_iters=%d min_sync=%g hashtable=%v  (runs=%d jobs=%d)\n\n",
+		opts.SubtractionPasses, opts.OSDOrder, opts.OSDMaxNormDist, opts.LLRScale, opts.LDPCMaxIterations, opts.MinSyncPower, useHash, runs, jobs)
 }
 
 // cmp is the honest comparison of an SM decode set against the oracle:

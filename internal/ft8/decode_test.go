@@ -211,27 +211,26 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 	cases := []struct {
 		// name is the WAV file vendored under testdata/.
 		name string
-		// wsjtxDecodes is WSJT-X 2.7.0 main-loop's decode count on
-		// this capture, from testdata/README.md. Reference only —
-		// we don't expect parity with a clean-room implementation.
-		wsjtxDecodes int
-		// minDecodes is SM's regression-floor baseline. Bumped over
-		// time as sensitivity improvements land:
-		//   - Phase 1 FFT caching (Session 80): no change.
-		//   - Phase 2 FFT plans: no change.
-		//   - Fine-timing retry (Session 80): cap2 4→6, cap3 7→11.
-		//   - Fine-frequency retry (Session 80): cap1 1→3, cap3 11→13.
-		//   - OSD order-1 fallback (Session 80): cap1 3→8, cap2 6→13,
-		//     cap3 13→20. Biggest sensitivity jump of the session —
-		//     Taylor 2020 §6's documented ~1 dB SNR gain from OSD
-		//     materialises here. Total: 22 → 41 of 48 (46% → 85%
-		//     WSJT-X parity).
-		// Bump further when K-scale tuning lands.
+		// jt9Decodes is the WSJT-X 3.0.1 `jt9 -8` one-shot CLI decode
+		// count (the parity oracle used by cmd/ft8-eval). Reference
+		// only — clean-room parity isn't expected. (The old "11/14/23"
+		// figures here were the WSJT-X *GUI* multi-pass count; the
+		// jt9 -8 CLI one-shot is the apples-to-apples oracle.)
+		jt9Decodes int
+		// minDecodes is SM's regression-floor baseline.
+		//   - OSD order-1 fallback (Session 80) drove cap1→8, cap2→13,
+		//     cap3→20 (raw decode counts, default DecodeOptions).
+		//   - B1 sync-power floor (DefaultMinSyncPower=3.0) + B2 OSD
+		//     soft-distance gate (DefaultOSDMaxNormDist=0.06), 2026-05:
+		//     both drop false positives only. Against the jt9 3.0.1
+		//     oracle the removed decodes were ALL false positives (zero
+		//     oracle-matched loss). Post-B1+B2 raw SM counts: cap1 8→4,
+		//     cap2 13→8, cap3 20→17. The floors below are these counts.
 		minDecodes int
 	}{
-		{"ft8_cap1.wav", 11, 8},
-		{"ft8_cap2.wav", 14, 13},
-		{"ft8_cap3.wav", 23, 20},
+		{"ft8_cap1.wav", 7, 4},
+		{"ft8_cap2.wav", 11, 8},
+		{"ft8_cap3.wav", 18, 17},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,7 +250,7 @@ func TestDecode_RealCapture_SmokeTest(t *testing.T) {
 			}
 
 			results := Decode(data.Samples, DecodeOptions{})
-			t.Logf("%s: decoded %d messages (WSJT-X 2.7.0 finds %d)", tc.name, len(results), tc.wsjtxDecodes)
+			t.Logf("%s: decoded %d messages (jt9 3.0.1 -8 finds %d)", tc.name, len(results), tc.jt9Decodes)
 			for i, d := range results {
 				t.Logf("  [%d] %7.2f Hz  %+5.2f s  sync=%5.2f  %q", i, d.Freq, d.DT, d.SyncPower, d.Text)
 			}

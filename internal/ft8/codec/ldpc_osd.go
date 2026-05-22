@@ -337,6 +337,50 @@ func osdReencodeAndCheck(s *osdScratch) ([]byte, bool) {
 // Returns the recovered message + true iff a CRC14-valid candidate
 // is found; nil, false otherwise.
 func OSDDecode(llrs []float64, order int) ([]byte, bool) {
+	return osdDecode(llrs, order, 0) // 0 → no soft-distance gate (B2 off)
+}
+
+// softDistanceNorm is the reliability-weighted soft distance between
+// the received LLRs and a candidate codeword, normalised to [0,1]: the
+// sum of |LLR| over positions where the codeword bit disagrees with the
+// received hard decision, divided by the total |LLR|. A genuine
+// codeword disagrees only at low-reliability (small |LLR|) positions →
+// small distance; a CRC14-lottery false positive (an OSD bit-flip that
+// happens to pass the 1-in-16384 CRC) disagrees at high-reliability
+// positions too → large distance. The B2 acceptance gate rejects OSD
+// codewords above a threshold. (Standard OSD practice — Fossorier-Lin.)
+func softDistanceNorm(llrs []float64, codeword []byte) float64 {
+	var disagree, total float64
+	for i, l := range llrs {
+		a := math.Abs(l)
+		total += a
+		var hard byte // LDPC convention: l<0 ⟹ bit 1, else bit 0.
+		if l < 0 {
+			hard = 1
+		}
+		if hard != codeword[i] {
+			disagree += a
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return disagree / total
+}
+
+// osdAccept applies the B2 soft-distance gate. maxNormDist <= 0 disables
+// the gate (accept any CRC-valid codeword). Otherwise accept only when
+// the normalised soft distance is within the threshold.
+func osdAccept(llrs []float64, codeword []byte, maxNormDist float64) bool {
+	return maxNormDist <= 0 || softDistanceNorm(llrs, codeword) <= maxNormDist
+}
+
+// osdDecode is OSDDecode with the B2 soft-distance gate. maxNormDist is
+// the normalised-soft-distance ceiling for accepting a CRC-valid OSD
+// codeword; <= 0 disables the gate. When a CRC-valid codeword fails the
+// gate the search CONTINUES (a later, more reliable trial may yet pass)
+// rather than returning the likely false positive.
+func osdDecode(llrs []float64, order int, maxNormDist float64) ([]byte, bool) {
 	if len(llrs) != CodewordBits {
 		return nil, false
 	}
@@ -365,7 +409,7 @@ func OSDDecode(llrs []float64, order int) ([]byte, bool) {
 	}
 
 	// Order-0: try the unmodified MRB hard decision.
-	if msg, ok := osdReencodeAndCheck(s); ok {
+	if msg, ok := osdReencodeAndCheck(s); ok && osdAccept(llrs, s.codeword, maxNormDist) {
 		return msg, true
 	}
 	if order == 0 {
@@ -378,7 +422,7 @@ func OSDDecode(llrs []float64, order int) ([]byte, bool) {
 	// reliability ordering of the trials.
 	for flipIdx := len(s.infoBits) - 1; flipIdx >= 0; flipIdx-- {
 		s.infoBits[flipIdx] ^= 1
-		if msg, ok := osdReencodeAndCheck(s); ok {
+		if msg, ok := osdReencodeAndCheck(s); ok && osdAccept(llrs, s.codeword, maxNormDist) {
 			return msg, true
 		}
 		s.infoBits[flipIdx] ^= 1 // restore
@@ -392,7 +436,7 @@ func OSDDecode(llrs []float64, order int) ([]byte, bool) {
 		s.infoBits[i] ^= 1
 		for j := i - 1; j >= 0; j-- {
 			s.infoBits[j] ^= 1
-			if msg, ok := osdReencodeAndCheck(s); ok {
+			if msg, ok := osdReencodeAndCheck(s); ok && osdAccept(llrs, s.codeword, maxNormDist) {
 				return msg, true
 			}
 			s.infoBits[j] ^= 1

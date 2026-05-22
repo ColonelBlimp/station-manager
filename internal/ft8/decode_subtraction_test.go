@@ -40,26 +40,27 @@ func TestDecode_SubtractionPreservesZeroBehaviour(t *testing.T) {
 	}
 }
 
-// TestDecode_SubtractionDoesNotDecreaseCounts is the regression
-// floor: enabling iterative subtraction must NEVER decrease the
-// decode count. Each capture is tested independently; if even one
-// regresses, the subtraction's amplitude estimation or audio
-// mutation is broken.
+// TestDecode_SubtractionDoesNotDecreaseCounts pins the invariant that
+// enabling iterative subtraction must NEVER decrease the decode count
+// relative to no subtraction: each extra pass only ADDS dedup'd
+// candidates, it must not drop pass-0 decodes. Asserted relatively
+// (SubtractionPasses=1 vs =0 on the same capture) rather than against
+// hardcoded floors — the absolute counts move with unrelated tuning
+// (e.g. the B1 sync-power floor), but the relative invariant holds
+// regardless.
+//
+// NOTE: against the jt9 3.0.1 oracle, the decodes subtraction adds are
+// false positives (zero oracle-matched gain) — see
+// memory/project_ft8_refinement. Subtraction stays default-off; this
+// test only guards that the feature, when enabled, doesn't regress the
+// base decode set.
 func TestDecode_SubtractionDoesNotDecreaseCounts(t *testing.T) {
-	captures := []struct {
-		name string
-		base int
-	}{
-		{"ft8_cap1.wav", 8},
-		{"ft8_cap2.wav", 13},
-		{"ft8_cap3.wav", 20},
-	}
 	if testing.Short() {
 		t.Skip("slow full-pipeline FT8 decode; covered by the non-race CI step")
 	}
-	for _, tc := range captures {
-		t.Run(tc.name, func(t *testing.T) {
-			wavPath := resolveCapturePath(t, tc.name)
+	for _, name := range []string{"ft8_cap1.wav", "ft8_cap2.wav", "ft8_cap3.wav"} {
+		t.Run(name, func(t *testing.T) {
+			wavPath := resolveCapturePath(t, name)
 			if wavPath == "" {
 				t.Skip("no FT8 capture fixture available")
 			}
@@ -68,14 +69,12 @@ func TestDecode_SubtractionDoesNotDecreaseCounts(t *testing.T) {
 				t.Fatalf("ReadWAV: %v", err)
 			}
 
-			results := Decode(data.Samples, DecodeOptions{SubtractionPasses: 1})
-			t.Logf("%s: SubtractionPasses=1 decoded %d messages (baseline %d)", tc.name, len(results), tc.base)
-			for i, r := range results {
-				t.Logf("  [%d] %.2f Hz  %+.2f s  sync=%.2f  %q", i, r.Freq, r.DT, r.SyncPower, r.Text)
-			}
-			if len(results) < tc.base {
-				t.Errorf("%s: decode count %d < baseline %d (subtraction regressed sensitivity)",
-					tc.name, len(results), tc.base)
+			base := Decode(data.Samples, DecodeOptions{SubtractionPasses: 0})
+			sub := Decode(data.Samples, DecodeOptions{SubtractionPasses: 1})
+			t.Logf("%s: SubtractionPasses 0 → %d, 1 → %d", name, len(base), len(sub))
+			if len(sub) < len(base) {
+				t.Errorf("%s: subtraction DECREASED count: passes=1 → %d < passes=0 → %d",
+					name, len(sub), len(base))
 			}
 		})
 	}
