@@ -15,6 +15,9 @@ import (
 // regression contract; this test re-verifies that contract through
 // the SubtractionPasses=0 path specifically.
 func TestDecode_SubtractionPreservesZeroBehaviour(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow full-pipeline FT8 decode; covered by the non-race CI step")
+	}
 	wavPath := resolveCapturePath(t, "ft8_cap1.wav")
 	if wavPath == "" {
 		t.Skip("no FT8 capture fixture available")
@@ -50,6 +53,9 @@ func TestDecode_SubtractionDoesNotDecreaseCounts(t *testing.T) {
 		{"ft8_cap1.wav", 8},
 		{"ft8_cap2.wav", 13},
 		{"ft8_cap3.wav", 20},
+	}
+	if testing.Short() {
+		t.Skip("slow full-pipeline FT8 decode; covered by the non-race CI step")
 	}
 	for _, tc := range captures {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,6 +93,9 @@ func TestDecode_SubtractionDoesNotDecreaseCounts(t *testing.T) {
 // faces noisier audio; the test pins that the mechanism WORKS
 // when the inputs are well-behaved.
 func TestDecode_SubtractionRevealsMaskedSignal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow full-pipeline FT8 decode; covered by the non-race CI step")
+	}
 	msgA := make([]byte, codec.MessageBits)
 	for i := range msgA {
 		msgA[i] = byte((i * 7) % 2) // pattern A

@@ -226,7 +226,7 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, de
 	// Wait for Run to clean up.
 	<-runDone
 
-	if err := c.Stop(); err != nil && err != capture.ErrNotRunning {
+	if err := c.Stop(); err != nil && !errors.Is(err, capture.ErrNotRunning) {
 		_, _ = fmt.Fprintf(os.Stderr, "warning: stop: %v\n", err)
 	}
 

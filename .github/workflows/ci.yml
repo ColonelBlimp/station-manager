@@ -108,8 +108,23 @@ jobs:
       - name: go vet
         run: go vet $(go list ./... | grep -v /node_modules/)
 
-      - name: go test (race detector)
-        run: go test -race -timeout 5m $(go list ./... | grep -v /node_modules/)
+      # Race detector run in -short mode: catches data races in the
+      # concurrency-bearing code (scheduler, ring, capture, services,
+      # forwarder workers) fast. The slow full-pipeline FT8 decode tests
+      # skip under -short — running a ~3-minute sequential CPU pipeline
+      # under -race adds no race-detection value and used to blow the
+      # 5-minute budget (and starve neighbouring packages' timing-
+      # sensitive tests of CPU). Those decode tests run in the non-race
+      # step below instead.
+      - name: go test (race detector, -short)
+        run: go test -race -short -timeout 5m $(go list ./... | grep -v /node_modules/)
+
+      # Full run without the race detector: exercises the slow FT8
+      # decode sensitivity-floor tests (real-capture decodes, synthetic
+      # round-trips) that -short skips above. Generous timeout — these
+      # are CPU-heavy but ~7x faster than under -race.
+      - name: go test (full, no race)
+        run: go test -timeout 12m $(go list ./... | grep -v /node_modules/)
 
       - name: Build daemon (verifies SPA embed)
         run: go build -o /tmp/smd ./cmd/smd

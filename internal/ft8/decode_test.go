@@ -108,6 +108,9 @@ func TestDecode_NilAudioReturnsNil(t *testing.T) {
 // is the contract that lets callers leave the field unset without
 // silently changing the demodulator's behaviour.
 func TestDecode_LLRScale_ZeroEqualsDefault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow full-pipeline FT8 decode; covered by the non-race CI step")
+	}
 	wavPath := resolveCapturePath(t, "ft8_cap1.wav")
 	if wavPath == "" {
 		t.Skip("no FT8 capture fixture available")
@@ -146,6 +149,9 @@ func TestDecode_LLRScale_ZeroEqualsDefault(t *testing.T) {
 //     parse layer's correctness (separately tested in
 //     internal/ft8/codec).
 func TestDecode_SyntheticRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow full-pipeline FT8 decode; covered by the non-race CI step")
+	}
 	// A simple Type 1 (Std Msg) message: K1JT calls G4ABC, grid IO91.
 	in := codec.Message{
 		Type:  codec.MessageTypeStd,
@@ -199,6 +205,9 @@ func TestDecode_SyntheticRoundTrip(t *testing.T) {
 //
 // Skipped per-capture when the fixture is missing.
 func TestDecode_RealCapture_SmokeTest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow full-pipeline FT8 decode; covered by the non-race CI step")
+	}
 	cases := []struct {
 		// name is the WAV file vendored under testdata/.
 		name string
