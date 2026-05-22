@@ -39,6 +39,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -243,6 +244,12 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, de
 // testdata fixture format. A failed write is a warning, not fatal — the
 // probe's primary job (capture + decode reporting) still completed.
 func saveWAV(path string, samples []float32, cfg capture.Config) {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "warning: mkdir %s: %v\n", dir, err)
+			return
+		}
+	}
 	d := &audio.Data{
 		SampleRate: cfg.SampleRate,
 		Channels:   uint16(cfg.Channels),
