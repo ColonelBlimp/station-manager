@@ -1313,6 +1313,16 @@ soft-priors, sync-step fine-timing in baseband, raising
 DefaultSubtractionPasses to 1) are incremental refinements;
 M4.2 live audio capture wiring is the bigger next-track
 item.
+
+> **⚠ CORRECTION (Session 83, 2026-05-22): the "106% WSJT-X parity"
+> figure above was FALSE-POSITIVE-INFLATED.** It counted raw decode
+> output, which includes low-confidence CRC14-lottery survivors (garbage
+> messages). Measuring `match`-to-oracle (decodes that jt9 3.0.1 ALSO
+> finds) instead of raw count, real parity is **~54%** (corpus: SM
+> match=90 of jt9=180). The iterative-subtraction "+10 decodes" were
+> entirely false positives — matched count is identical at
+> SubtractionPasses 0 and 1. See the **M4.1 refinement** subsection
+> below; subtraction stays default-off.
 Deferred follow-up still open: Type 1's `decodeStd` continues to
 return `ErrCallsignNeedsHashLookup` for c28 values in the
 `[nTokens, stdCallOffset)` hash partition. After finding #1 the
@@ -1468,6 +1478,87 @@ When Layers 1+2 are green, Layer 3 is green against a small seed
 corpus of synthetic WAVs covering clean / noisy / multi-station
 cases, and Layer 4 is green against at least the bundled WSJT-X
 sample (`210703_133430.wav` decoded correctly), M4.1 is done.
+
+---
+
+### M4.1 refinement (Session 83, 2026-05-22) — honest metric, false-positive gates, stage-level diagnosis
+
+After M4.2 Phase A/B (Session 82), the focus turned to decode QUALITY against
+**real captures** (operator-recorded 10m + 20m slots) using **WSJT-X 3.0.1
+`jt9 -8`** as a black-box oracle. The key correction: parity must be measured
+as **`match`-to-oracle** (decodes jt9 also finds), not raw decode count —
+SM's raw output is inflated by low-confidence CRC14-lottery false positives.
+
+**Honest baseline:** corpus (3 vendored + 6 new live WAVs) SM `match`=90 of
+jt9=180 = **~54% real parity**, with **52 false positives**. (The Session-81
+"106% parity" was raw count incl. garbage.)
+
+**Two new developer tools (the workbench):**
+- `cmd/ft8-eval` — runs `ft8.Decode` on WAV files/dirs with every tuning knob
+  as a flag, `-jobs N` parallel, `-oracle` (shells `jt9 -8`) + `-diff`, and the
+  honest `match/miss/extra` table. `cmd/ft8-capture-probe -out` + new
+  `internal/audio.WriteWAV` persist live captures for repeatable measurement.
+- `cmd/ft8-stage-probe` — **clean-room** stage-level diagnostic: synthesise a
+  KNOWN message (via `dsp.Synthesize`) + calibrated AWGN (WSJT-X 2500 Hz SNR
+  convention), score each stage; demod scored by **bit-errors / 174** (LLR
+  hard-decisions vs the known codeword). Built INSTEAD of instrumenting GPL jt9
+  — see the clean-room note below.
+
+**SHIPPED — false-positive gates (52 → 18 false positives, ZERO real lost):**
+- **B1** `DecodeOptions.MinSyncPower` (default `DefaultMinSyncPower = 3.0`):
+  drop final decodes below a sync-power floor. 52 → 44.
+- **B2** `DecodeOptions.OSDMaxNormDist` (default `DefaultOSDMaxNormDist = 0.06`):
+  OSD soft-distance acceptance gate (`codec.softDistanceNorm` / `osdAccept`) —
+  reject an OSD codeword when its reliability-weighted normalised distance to
+  the received LLRs exceeds the ceiling. Gates ONLY the OSD path (BP+CRC is
+  trusted; OSD's bit-flip search is ~96% of the false positives — confirmed by
+  OSD-off → match 70 + false+ 2). 44 → 18. The discriminating band is
+  compressed near zero (OSD builds codewords from the most-reliable bits, so
+  its output always agrees with high-confidence positions); knee at 0.06, below
+  0.05 loses real decodes. **OSD order-2 is poison** (match −8, false+ ×10).
+- Smoke floors updated 8/13/20 → 4/8/17 (removed = all false positives).
+  `TestDecode_SubtractionDoesNotDecreaseCounts` rewritten to a relative
+  invariant (`sub1 >= sub0`). New unit tests `TestSoftDistanceNorm` /
+  `TestOSDAccept`.
+
+**STAGE-LEVEL DIAGNOSIS (`ft8-stage-probe` SNR sweeps):**
+- **Sync is not the bottleneck** — 100% candidate detection by −22 dB, below
+  where SM can decode.
+- **Clean on-grid demod is fine** — decode threshold ~−18 dB vs WSJT-X's
+  published ~−21 dB single-shot, so ~2-3 dB behind on clean AWGN, entirely in
+  demod-errors → decoder. OSD does the heavy lifting (−18 dB: BP 8% vs OSD 92%).
+- **ADJACENT-SIGNAL INTERFERENCE is the dominant real-capture failure mode.**
+  A +6 dB neighbour 6 Hz away pins demod at ~51/174 bit-errors at EVERY SNR;
+  10 Hz → 80-90 errors, 0% decode even at −6 dB. `demod@true == demod@cand`, so
+  it is NOT a centering problem — the neighbour's tones fall inside the
+  target's 8 tone-bins (6.25 Hz spacing; a 32-pt symbol FFT cannot resolve a
+  6-16 Hz neighbour). This explains the missed STRONG signals in dense real
+  slots (e.g. the 2112/2118 Hz pair, both missed) and why clean synthetic
+  signals decode but busy real slots don't.
+- **Per-symbol LLR noise normalization is a DEAD END** (implemented + measured
+  + reverted). Off-tone-bin noise estimator made it worse (rectangular-window
+  sidelobes scale the "noise" with signal strength → down-weights the cleanest
+  symbols); in-band estimator helped raw BP slightly but WRECKED OSD (its
+  most-reliable-basis selection depends on the absolute LLR magnitude
+  *ordering*, which per-symbol rescaling scrambles). `max0−max1` already
+  self-normalises per symbol. **Do not re-attempt LLR-magnitude normalization.**
+
+**The lever for further sensitivity = effective iterative subtraction**
+(decode the stronger member of an interfering pair → accurately re-synthesise
+and subtract → re-decode the neighbour). SM's current subtraction adds only
+false positives; the harness can test the decode-then-subtract loop on two
+known signals. AP (a-priori) decoding is the second lever — jt9's `a1`-marked
+weak-CQ decodes (seen on the 20m capture) are AP-assisted and SM has none.
+
+**GPL/clean-room note.** Instrumenting jt9 to compare intermediate stages is
+legal to RUN (GPL v3 triggers on *distribution*, not private modify/run;
+numeric stage data is not copyrightable) but would **break SM's clean-room
+firewall** — placing the instrumentation requires READING WSJT-X's GPL source,
+and a single developer who reads the GPL reference then writes the MIT
+implementation is the classic clean-room contamination, putting SM's
+MIT-distributability (the whole point of the § Licensing constraint) at risk.
+`ft8-stage-probe` (synthetic known-signal) + the ref [14] public-domain
+programs are the sanctioned substitutes.
 
 ---
 
