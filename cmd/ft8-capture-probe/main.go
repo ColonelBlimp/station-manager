@@ -33,6 +33,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -123,8 +124,8 @@ collect:
 		}
 	}
 
-	if err := c.Stop(); err != nil && err != capture.ErrNotRunning {
-		fmt.Fprintf(os.Stderr, "warning: stop: %v\n", err)
+	if err := c.Stop(); err != nil && !errors.Is(err, capture.ErrNotRunning) {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: stop: %v\n", err)
 	}
 
 	peak := peakAmplitude(collected)
@@ -136,10 +137,10 @@ collect:
 	fmt.Printf("Dropped chunks: %d\n", dropped)
 
 	if dropped > 0 {
-		fmt.Fprintln(os.Stderr, "WARNING: chunks were dropped — consumer was too slow")
+		_, _ = fmt.Fprintln(os.Stderr, "WARNING: chunks were dropped — consumer was too slow")
 	}
 	if peak < 0.001 {
-		fmt.Fprintln(os.Stderr, "WARNING: peak amplitude is very low — input may be muted or unconnected")
+		_, _ = fmt.Fprintln(os.Stderr, "WARNING: peak amplitude is very low — input may be muted or unconnected")
 	}
 
 	if outPath != "" {
@@ -150,7 +151,7 @@ collect:
 		return
 	}
 	if cfg.SampleRate != 12000 {
-		fmt.Fprintf(os.Stderr, "Skipping decode: ft8.Decode expects 12 kHz audio (got %d)\n", cfg.SampleRate)
+		_, _ = fmt.Fprintf(os.Stderr, "Skipping decode: ft8.Decode expects 12 kHz audio (got %d)\n", cfg.SampleRate)
 		return
 	}
 
@@ -180,7 +181,7 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, de
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Fprintln(os.Stderr, "\nsignal received — shutting down…")
+		_, _ = fmt.Fprintln(os.Stderr, "\nsignal received — shutting down…")
 		cancel()
 	}()
 
@@ -226,14 +227,14 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, de
 	<-runDone
 
 	if err := c.Stop(); err != nil && err != capture.ErrNotRunning {
-		fmt.Fprintf(os.Stderr, "warning: stop: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "warning: stop: %v\n", err)
 	}
 
 	dropped := sch.Dropped()
 	fmt.Printf("\nScheduler done: %d slot(s) processed, %d dropped, capture-drops=%d\n",
 		collected, dropped, c.DroppedChunks())
 	if dropped > 0 {
-		fmt.Fprintln(os.Stderr,
+		_, _ = fmt.Fprintln(os.Stderr,
 			"WARNING: slots were dropped — decode consumer is slower than the slot cadence")
 	}
 }
@@ -248,7 +249,7 @@ func saveWAV(path string, samples []float32, cfg capture.Config) {
 		Samples:    samples,
 	}
 	if err := audio.WriteWAV(path, d); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: write %s: %v\n", path, err)
+		_, _ = fmt.Fprintf(os.Stderr, "warning: write %s: %v\n", path, err)
 		return
 	}
 	fmt.Printf("  wrote %s (%d samples, %.2f s)\n",
@@ -274,6 +275,6 @@ func peakAmplitude(samples []float32) float64 {
 }
 
 func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
 }
