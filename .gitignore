@@ -29,4 +29,4 @@ config.json
 # QEX paper etc. lives here for Claude / operator reference; not committed.
 /references/
 *.test
-ft8-capture-probe
+/ft8-eval
