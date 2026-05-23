@@ -288,6 +288,72 @@ Net −169 lines. Default baseline 66/144 unchanged. Two commits behind operator
 - Wall-clock per slot: ~5-7s @ MaxCand=100 (within 15s budget)
 - All tests green; race-short suite green
 
+### Session 85 (2026-05-23, post-second-power-cut) — Forensic tool built; bit-level codec verified bit-exact; SubtractSignal root-caused as broken (freq-offset → phase-drift, not in-channel masking)
+
+Operator wanted to start with the Gray-mapping/bit-order forensic from session 84's handoff. Built `cmd/ft8-forensic/` and ran per-signal forensics on `20m_slot1.wav`.
+
+**Forensic tool (`cmd/ft8-forensic/main.go`, uncommitted):** Takes `-wav PATH -msg "TEXT" -freq HZ -dt SEC`. Builds expected 174-bit codeword INDEPENDENTLY (`ParseMessage → EncodeMessage → CRC14 → LDPCEncode`). Extracts actual 174 LLRs from audio (`ForwardSpectrum → Downsample → Demodulate`, bypassing sync). Compares per-bit and reports per-region (body / CRC / parity) and per-symbol disagreement patterns + avg|LLR| at agreement vs disagreement. Optional `-subtract-msg/-freq/-dt` does a SubtractSignal first.
+
+**Headline #1 — bit-level codec is bit-exact.**
+
+| Signal | SNR | Match? | Agree% | avg-disagree mag |
+|---|---|---|---|---|
+| UT7AM PE9JAN -10 | −7 dB | ✓ | **100%** | **0** |
+| PA9R SV9TLU -13 | +0 dB | ✓ | 96% | 3.25 |
+| CQ A61FJ LL74 | −7 dB | ✓ | 91% | 7.6 |
+| OH6IH IU7KEG JN81 | −7 dB | ✗ | 81% | **63.7** |
+
+`UT7AM PE9JAN -10` shows **100% agreement on a real-audio decode** — every bit including all 83 parity bits. This rules out the entire bit-level codec bug hypothesis class: Gray mapping, CRC14 polynomial/bit-feed order, LDPC generator matrix + row ordering, sample alignment, payload-symbol indexing, MSB-first bit-order — all verified correct. Our encoder produces bit-exact codewords matching real WSJT-X transmissions. **Don't re-dig this class.**
+
+**Headline #2 — `dsp.SubtractSignal` is structurally broken (different cause than Session 84 thought).**
+
+Plan was to test the "subtract strong neighbour first, then re-decode the weaker neighbour" hypothesis. Tried subtracting CQ DX (1824 Hz, +4 dB) before forensicing OH6IH (1868 Hz, −7 dB). Result: **disagreement pattern UNCHANGED.** Same 33/174 disagreements at same positions with same magnitudes.
+
+Diagnostic: subtract CQ DX from itself, then forensic CQ DX. **LLR magnitudes barely dropped: 134.1 → 132.3 (1.4% reduction). CQ DX is essentially still fully present in the residual.** SubtractSignal doesn't actually subtract signals.
+
+**Root cause:** SubtractSignal generates sin+cos templates at the candidate's NOMINAL freq (snapped to the 3.125 Hz sync grid). Real signals are at that freq PLUS a residual offset (±1.5 Hz post-grid). For Δf = 0.5 Hz × 12.64 s window = 6.3 complete phase rotations between template and actual signal. The matched-filter integrates over many cycles of mismatch → estimated `a, b` come out as tiny under-estimates → subtraction barely removes anything. For CQ DX the estimated amp came out as 0.0117 — well under the actual signal amplitude.
+
+**Session 84's "subtraction is structurally broken" was CORRECT but the diagnosis was wrong.** Session 84 attributed the failure to "in-channel pair masking" (matched filter can't separate tone-overlapping signals). The real root cause is **freq-offset → phase-drift → under-estimated amplitude** — present even for SINGLE signals, regardless of neighbours.
+
+**Two failure modes for misses, confirmed per-signal:**
+
+1. **Adjacent-signal interference (confident-wrong, magnitudes 60-200+).** OH6IH next to strong CQ DX 44 Hz away. Demod confidently reads wrong tones where CQ DX's high tones leak into OH6IH's low-tone bins. Whole-symbol confusions (sym 19: expected 000 got 111; sym 70: expected 111 got 000) with LLR mag 150-200.
+2. **Sensitivity floor (noise-wrong, magnitudes 1-8).** YO3JR DL9PN 73 (-13 dB isolated): 91% agree, all disagreements low-magnitude noise. LDPC+OSD can't recover at marginal SNR.
+
+**What this means for multi-pass subtraction (jt9's likely approach):**
+The current subtraction can't be used as the foundation. Two valid fixes — both real engineering, multi-session:
+- **Sub-bin freq estimation before subtraction.** Use Costas anchors to estimate the strong signal's precise freq, synthesise at that freq, subtract. Phase drift drops to <0.1 rad → subtraction works.
+- **Per-symbol phase-tracked subtraction.** Segment into 160 ms windows, estimate amp+phase per symbol, subtract per segment. Δf=0.5 Hz → 0.5 rad/symbol — manageable.
+
+**The revised "fundamental thing we missed":** Not a bit-level bug. Not "subtraction can't separate in-channel pairs." It's that **subtraction can't even remove a SINGLE signal** because the matched filter assumes constant phase across the TX window. This breaks the entire multi-pass-subtraction approach to adjacent-signal handling. jt9 presumably does some form of phase-tracked or fine-freq-estimated subtraction we don't.
+
+**Working-tree state at SECOND power-cut interruption:**
+- `cmd/ft8-forensic/main.go` (new, uncommitted): the forensic tool. Builds clean.
+- Untracked by-products from jt9 invocations in the session: `decoded.txt`, `jt9_wisdom.dat`, `timer.out` (can be deleted/gitignored).
+
+**Three concrete next-session options (operator decision pending):**
+
+1. **Stop, commit the forensic tool + findings.** We learned a lot. Subprocess-jt9 architectural option still open.
+2. **Try sub-bin freq estimation.** Estimate CQ DX's precise freq from Costas anchors, synthesise at that freq, subtract, retest. If subtraction now actually removes CQ DX, multi-pass-subtraction becomes viable. Real engineering work.
+3. **Step back to architectural choices.** Given that closing the gap requires real engineering, subprocess-jt9 becomes more attractive as the pragmatic answer.
+
+**Reproduction commands for the next session:**
+```
+go build -o /tmp/sm-ft8-forensic ./cmd/ft8-forensic/
+
+# Bit-level codec verification (must be 100%):
+/tmp/sm-ft8-forensic -wav captures/20m_slot1.wav -msg "UT7AM PE9JAN -10" -freq 465 -dt 0.1
+
+# Strong-signal miss (will show 81% agreement, confident-wrong pattern):
+/tmp/sm-ft8-forensic -wav captures/20m_slot1.wav -msg "OH6IH IU7KEG JN81" -freq 1868 -dt 0.2
+
+# Demonstrate SubtractSignal is broken (LLRs barely change):
+/tmp/sm-ft8-forensic -wav captures/20m_slot1.wav -msg "CQ DX S56GD JN65" -freq 1824 -dt 0.2 \
+  -subtract-msg "CQ DX S56GD JN65" -subtract-freq 1824 -subtract-dt 0.2
+```
+
+Memory `project_ft8_refinement` has the full numbers + forensic details. Clean-room policy unchanged.
+
 ### Session 83 (2026-05-22 continuation) — FT8 decode REFINEMENT: honest metric, false-positive gates (B1+B2), stage-level diagnosis. **Headline: the "106% WSJT-X parity" claim was false-positive-inflated; real parity is ~54%.**
 
 Big arc. Deferred M4.2 Phase C; spent the session refining decode QUALITY against real captures using the jt9 3.0.1 oracle. Everything below is committed.
