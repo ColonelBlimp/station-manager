@@ -250,6 +250,44 @@ Picked up "explore ALL solutions to the cap problem" directive. Round complete. 
 
 Memory `project_ft8_refinement` has the full numbers + the next-session option list. The diagnostic instrumentation is the durable infrastructure to evaluate ANY future precision/throughput experiment.
 
+**SESSION 84 FINAL — coherent demod attempted + reverted, failed experiments pruned, ~45% parity is the honest current ceiling for in-process work (2026-05-23).**
+
+Followed option (1) — coherent demod. Three implementation passes (single global Costas-anchor phase / per-block linear interpolation / intra-block Δφ + linear extrapolation). All three catastrophic: 0–1 matches vs 66 baseline. Coherent demod is a real lever per Taylor 2020 §6 but the implementation needs more debugging than a session could fit.
+
+**Operator reframe (2026-05-23): "the codebase is getting more complicated for no gain."** Sharp and correct. Pattern: every hypothesis got code + opt-in flag, the measurement ruled it out, the code stayed. Accreted complexity for negative results.
+
+**Failed-experiment revert SHIPPED.** Pruned from tree:
+- Coherent demod (`DemodulateCoherent` + `CoherentDemod` field + `-coherent` flag) — uncommitted, ~190 lines, the worst offender
+- `ScoreVariantNormalised` + `collectNormalisedCandidates` (~100 lines) + `ScoreVariant` enum + flag
+- `parseScoreVariant` + `-score-variant` + `-min-score` flags in ft8-eval
+
+Net −169 lines. Default baseline 66/144 unchanged. Two commits behind operator.
+
+**Kept (paid for themselves):**
+- LLR-quality early-exit gate (`LLRQualityFloor=0.2`, `meanAbsLLR`) — the one measured win
+- Diagnostic instrumentation (`SyncStats`, `DecodeStats`, `CandidateStat`, `LDPCStats`, `LDPCDecodeBPWithStats`, `LDPCDecodeWithOSDStats`, three distribution printouts) — scaffolding for future forensic work
+- `SearchHalfSpanSec` knob
+- Synthetic fixtures, `ft8-stage-probe`, `ft8-eval`
+
+**Operator's working hypothesis (2026-05-23):** *"I still think there is something fundamental that we have missed, or done wrong."* The strong-signal misses are the smoking gun — we miss decodes at −1, −4, +2 dB SNR (jt9 gets them). A true sensitivity floor would miss only weak signals, not strong ones. Worth honouring.
+
+**Forensic investigation recipe (for the next session that returns to in-process decoder work):** Pick ONE strong-signal jt9-decoded message SM misses (e.g. `OH6IH IU7KEG JN81` at −8 dB on 20m_slot1). Trace what happens to it in every stage of OUR pipeline — sync candidate present? expected codeword vs actual LLR signs? BP syndrome trajectory? — and find where the chain breaks. Bulk-distribution analysis has hit its limit; per-instance forensics is the cheaper next step. Bug candidates: Gray-mapping bit-order, LDPC parity-check matrix row ordering, CRC14 bit-feed order, sample boundary alignment, payload-symbol indexing, missing AP-decoding feature. Full recipe + bug-candidate list in memory `project_ft8_refinement`.
+
+**Clean-room policy reaffirmed (operator, 2026-05-23):**
+- WSJT-X source: OFF-LIMITS as implementation reference (operator has local copy of WSJT-X but doesn't read Fortran; discipline of not actively referencing it for SM holds going forward).
+- ft8_lib: OFF-LIMITS (decision earlier this session).
+- QEX paper + ref [14] public-domain tarball: the only permitted implementation sources.
+- SM stays MIT-licensed. Architectural options for closing the parity gap have been discussed but no decision committed — future sessions should not pre-commit.
+
+**M4.2 Phase C (FT8 Service wiring) status:** still pending. Decision on wiring architecture intentionally deferred — operator wants to explore the fundamental-bug question first.
+
+**Current state at session end:**
+- Tree clean (two revert commits ahead of session start)
+- Default baseline 66/144 match-to-oracle on live corpus (~45% vs jt9 -8)
+- Vendored fixtures: 13/18 matched on cap3 (72%)
+- Wall-clock per slot: ~5-7s @ MaxCand=100 (within 15s budget)
+- All tests green; race-short suite green
+
 ### Session 83 (2026-05-22 continuation) — FT8 decode REFINEMENT: honest metric, false-positive gates (B1+B2), stage-level diagnosis. **Headline: the "106% WSJT-X parity" claim was false-positive-inflated; real parity is ~54%.**
 
 Big arc. Deferred M4.2 Phase C; spent the session refining decode QUALITY against real captures using the jt9 3.0.1 oracle. Everything below is committed.
