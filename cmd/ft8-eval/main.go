@@ -39,6 +39,7 @@ func main() {
 		runs       = flag.Int("runs", 1, "decode each file N times; report the fastest wall time")
 		mem        = flag.Bool("mem", false, "report heap bytes allocated per decode (first run, TotalAlloc delta)")
 		jobs       = flag.Int("jobs", 1, "decode files concurrently with N workers (count-only sweeps; forced to 1 with -mem or -runs>1)")
+		stats      = flag.Bool("stats", false, "collect + print per-file sync/decode diagnostics (cap displacement, coarse-vs-retry, wasted retry budget on failed candidates)")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -96,7 +97,7 @@ func main() {
 		go func(i int, f string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i] = evalFile(f, opts, oracleOK, *useHash, *runs, *mem)
+			results[i] = evalFile(f, opts, oracleOK, *useHash, *runs, *mem, *stats)
 		}(i, f)
 	}
 	wg.Wait()
@@ -124,6 +125,10 @@ func main() {
 	}
 
 	printTotals(smTotal, jt9Total, matchTotal, oracleOK)
+
+	if *stats {
+		printStatsSummary(results)
+	}
 }
 
 // fileResult is one file's evaluation, computed (possibly concurrently)
@@ -138,9 +143,10 @@ type fileResult struct {
 	best       time.Duration
 	allocBytes uint64
 	skipped    bool
+	stats      *ft8.DecodeStats
 }
 
-func evalFile(f string, opts ft8.DecodeOptions, oracleOK, useHash bool, runs int, mem bool) fileResult {
+func evalFile(f string, opts ft8.DecodeOptions, oracleOK, useHash bool, runs int, mem, collectStats bool) fileResult {
 	data, err := audio.ReadWAV(f)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: read %s: %v\n", f, err)
@@ -154,8 +160,17 @@ func evalFile(f string, opts ft8.DecodeOptions, oracleOK, useHash bool, runs int
 			runtime.GC()
 			runtime.ReadMemStats(&before)
 		}
+		// Fresh DecodeStats per run when -stats is set; only the
+		// first run's stats are retained on the fileResult (decodes
+		// are deterministic over runs, so run-0 is representative).
+		runOpts := withHashTable(opts, useHash)
+		var localStats *ft8.DecodeStats
+		if collectStats {
+			localStats = &ft8.DecodeStats{}
+			runOpts.Stats = localStats
+		}
 		t0 := time.Now()
-		res := ft8.Decode(data.Samples, withHashTable(opts, useHash))
+		res := ft8.Decode(data.Samples, runOpts)
 		elapsed := time.Since(t0)
 		if mem && run == 0 {
 			var after runtime.MemStats
@@ -167,6 +182,7 @@ func evalFile(f string, opts ft8.DecodeOptions, oracleOK, useHash bool, runs int
 		}
 		if run == 0 {
 			r.decodes = res
+			r.stats = localStats
 		}
 	}
 
@@ -365,6 +381,198 @@ func displayName(p string) string {
 func printConfig(opts ft8.DecodeOptions, runs int, useHash bool, jobs int) {
 	fmt.Printf("DecodeOptions: subtraction_passes=%d osd_order=%d osd_maxdist=%g llr_scale=%g ldpc_iters=%d min_sync=%g sync_half_span=%g hashtable=%v  (runs=%d jobs=%d)\n\n",
 		opts.SubtractionPasses, opts.OSDOrder, opts.OSDMaxNormDist, opts.LLRScale, opts.LDPCMaxIterations, opts.MinSyncPower, opts.Sync.SearchHalfSpanSec, useHash, runs, jobs)
+}
+
+// printStatsSummary prints the per-file diagnostic table when -stats
+// is set. Columns:
+//
+//	sync_raw / sync_ded / cap : pipeline funnel through the sync stage
+//	dec / @coarse / @retry    : decoded candidates split by where success landed
+//	failed / fail_attempts    : retry budget burned on candidates that never decoded
+//
+// "@coarse" = decode landed at (FreqIdxUsed=0, TimeIdxUsed=0); "@retry"
+// = decode needed at least one fine retry on either axis.
+func printStatsSummary(results []fileResult) {
+	fmt.Println()
+	fmt.Println("=== Decode-pipeline diagnostics (per-file) ===")
+	fmt.Printf("%-28s %8s %8s %5s | %5s %8s %7s | %7s %16s\n",
+		"file", "sync_raw", "sync_ded", "cap", "dec", "@coarse", "@retry", "failed", "fail_attempts(avg)")
+	fmt.Println(strings.Repeat("-", 110))
+
+	var totalRaw, totalDed, totalCap, totalDec, totalCoarse, totalRetry, totalFailed, totalFailAttempts int
+
+	for _, r := range results {
+		if r.skipped || r.stats == nil {
+			continue
+		}
+		s := r.stats
+		var dec, coarse, retry, failed, failAttemptsSum int
+		for _, c := range s.Candidates {
+			if c.Decoded {
+				dec++
+				if c.FreqIdxUsed == 0 && c.TimeIdxUsed == 0 {
+					coarse++
+				} else {
+					retry++
+				}
+			} else {
+				failed++
+				failAttemptsSum += c.Attempts
+			}
+		}
+		avgFail := 0.0
+		if failed > 0 {
+			avgFail = float64(failAttemptsSum) / float64(failed)
+		}
+		fmt.Printf("%-28s %8d %8d %5d | %5d %8d %7d | %7d %16.1f\n",
+			r.name, s.RawSyncCandidates, s.AfterDedup, s.AfterCap,
+			dec, coarse, retry, failed, avgFail)
+
+		totalRaw += s.RawSyncCandidates
+		totalDed += s.AfterDedup
+		totalCap += s.AfterCap
+		totalDec += dec
+		totalCoarse += coarse
+		totalRetry += retry
+		totalFailed += failed
+		totalFailAttempts += failAttemptsSum
+	}
+
+	fmt.Println(strings.Repeat("-", 110))
+	avgFailTotal := 0.0
+	if totalFailed > 0 {
+		avgFailTotal = float64(totalFailAttempts) / float64(totalFailed)
+	}
+	fmt.Printf("%-28s %8d %8d %5d | %5d %8d %7d | %7d %16.1f\n",
+		"TOTAL", totalRaw, totalDed, totalCap,
+		totalDec, totalCoarse, totalRetry, totalFailed, avgFailTotal)
+	fmt.Printf("\nDedup collapse: %d raw → %d deduped (%.1f%% suppressed); cap drops: %d deduped → %d capped\n",
+		totalRaw, totalDed, percentSuppressed(totalRaw, totalDed), totalDed, totalCap)
+	fmt.Printf("Retry economics: %d decoded total; %d at coarse (%.0f%%), %d needed retry (%.0f%%); failed candidates burned %d attempts total (avg %.1f / failed)\n",
+		totalDec, totalCoarse, pct(totalCoarse, totalDec), totalRetry, pct(totalRetry, totalDec),
+		totalFailAttempts, avgFailTotal)
+
+	printLLRDistribution(results)
+}
+
+// printLLRDistribution shows the BestMeanAbsLLR distribution for
+// decoded vs failed candidates. The separation between the two
+// distributions is what determines whether an LLR-quality early-exit
+// gate is viable, and at what threshold. We want failed-candidate
+// p90 << decoded-candidate p10 for a clean gate.
+func printLLRDistribution(results []fileResult) {
+	var decodedLLRs, failedLLRs []float64
+	for _, r := range results {
+		if r.skipped || r.stats == nil {
+			continue
+		}
+		for _, c := range r.stats.Candidates {
+			if c.Decoded {
+				decodedLLRs = append(decodedLLRs, c.BestMeanAbsLLR)
+			} else {
+				failedLLRs = append(failedLLRs, c.BestMeanAbsLLR)
+			}
+		}
+	}
+	if len(decodedLLRs) == 0 && len(failedLLRs) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("=== LLR-quality distribution (mean(|LLR|) per candidate's best attempt) ===")
+	fmt.Printf("%-24s %7s %10s %10s %10s %10s %10s %10s\n",
+		"population", "n", "min", "p10", "p50", "p90", "max", "mean")
+	fmt.Println(strings.Repeat("-", 100))
+	printLLRRow("decoded candidates", decodedLLRs)
+	printLLRRow("failed candidates", failedLLRs)
+
+	// Headline separation read: if failed-p90 < decoded-p10, an
+	// early-exit gate at any value in that gap would skip BP+OSD on
+	// most failed attempts without losing any real decodes.
+	if len(decodedLLRs) > 0 && len(failedLLRs) > 0 {
+		decodedSorted := append([]float64(nil), decodedLLRs...)
+		sort.Float64s(decodedSorted)
+		failedSorted := append([]float64(nil), failedLLRs...)
+		sort.Float64s(failedSorted)
+		failedP90 := percentile(failedSorted, 0.90)
+		decodedP10 := percentile(decodedSorted, 0.10)
+		decodedMin := decodedSorted[0]
+		gap := decodedP10 - failedP90
+		fmt.Printf("\nSeparation: failed_p90=%.3f  decoded_p10=%.3f  gap=%.3f  decoded_min=%.3f\n",
+			failedP90, decodedP10, gap, decodedMin)
+		if gap > 0 {
+			fmt.Printf("→ Clean gate exists at any threshold in (%.3f, %.3f); use just below decoded_min=%.3f to preserve every observed decode\n",
+				failedP90, decodedP10, decodedMin)
+		} else {
+			fmt.Println("→ Distributions overlap; an absolute mean(|LLR|) gate would cost real decodes. Need a normalised statistic or different invariant.")
+		}
+
+		// How many failed candidates fall below the decoded_min?
+		// That's the "obviously skippable" set — the lowest hanging
+		// fruit for any LLR-based gate.
+		var belowMin int
+		for _, v := range failedSorted {
+			if v < decodedMin {
+				belowMin++
+			} else {
+				break
+			}
+		}
+		fmt.Printf("Lowest hanging fruit: %d failed candidates (%.1f%%) have mean(|LLR|) < decoded_min=%.3f — these could be skipped pre-BP at zero real-decode cost\n",
+			belowMin, pct(belowMin, len(failedSorted)), decodedMin)
+	}
+}
+
+func printLLRRow(label string, values []float64) {
+	if len(values) == 0 {
+		fmt.Printf("%-24s %7d  (no samples)\n", label, 0)
+		return
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	mean := sum / float64(len(values))
+	fmt.Printf("%-24s %7d %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f\n",
+		label, len(values),
+		sorted[0],
+		percentile(sorted, 0.10),
+		percentile(sorted, 0.50),
+		percentile(sorted, 0.90),
+		sorted[len(sorted)-1],
+		mean)
+}
+
+// percentile returns the p-th percentile (p in [0,1]) of an already-
+// sorted slice via nearest-rank. Falls back to min/max at the ends.
+func percentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if p <= 0 {
+		return sorted[0]
+	}
+	if p >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	idx := int(p * float64(len(sorted)-1))
+	return sorted[idx]
+}
+
+func percentSuppressed(raw, ded int) float64 {
+	if raw == 0 {
+		return 0
+	}
+	return float64(raw-ded) * 100.0 / float64(raw)
+}
+
+func pct(num, denom int) float64 {
+	if denom == 0 {
+		return 0
+	}
+	return float64(num) * 100.0 / float64(denom)
 }
 
 // cmp is the honest comparison of an SM decode set against the oracle:

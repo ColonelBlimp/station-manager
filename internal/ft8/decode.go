@@ -207,6 +207,71 @@ type DecodeOptions struct {
 	//   - Negative → no gate (accept any CRC-valid OSD codeword).
 	//   - Positive → exact ceiling, in [0,1].
 	OSDMaxNormDist float64
+
+	// Stats, when non-nil, is populated by Decode with per-candidate
+	// retry diagnostics covering the main pass. Zero-cost when nil.
+	// Used by ft8-eval -stats to investigate the candidate-cap /
+	// retry-budget tradeoff. Sub-pass (iterative subtraction) work
+	// is NOT recorded; subtraction is queued for removal anyway.
+	Stats *DecodeStats
+}
+
+// DecodeStats holds per-candidate diagnostic counts for one Decode
+// call. Populated only when DecodeOptions.Stats is non-nil.
+type DecodeStats struct {
+	// Sync-stage counts (mirrored from dsp.SyncStats so callers see
+	// the whole pipeline through one struct).
+	RawSyncCandidates int // pre-dedup, above MinScore
+	AfterDedup        int // post near-duplicate suppression
+	AfterCap          int // final candidates handed to demod
+
+	// Per-candidate records, length == AfterCap. Records are in the
+	// same order as the candidates handed to the decode loop (sync-
+	// power descending after dedup).
+	Candidates []CandidateStat
+}
+
+// CandidateStat records what happened to a single candidate during
+// the main decode pass.
+type CandidateStat struct {
+	Freq      float64 // candidate centre frequency (Hz)
+	DT        float64 // candidate time offset (s)
+	SyncPower float64 // matched-filter SNR ratio from sync
+
+	// Decoded reports whether the candidate produced a valid
+	// (LDPC + CRC + parsable) message. False means every (freq,
+	// timing) retry combo was exhausted without success.
+	Decoded bool
+
+	// FreqIdxUsed / TimeIdxUsed are the positions in the resolved
+	// fine-freq / fine-timing retry sequences where the successful
+	// decode landed. Index 0 = the implicit 0.0 coarse value; index
+	// ≥ 1 = a fine retry. Both zero ⇒ decoded at coarse-coarse.
+	// Meaningful only when Decoded is true.
+	FreqIdxUsed int
+	TimeIdxUsed int
+
+	// Attempts is the total number of (freq, timing) demod attempts
+	// that actually ran for this candidate before exit. For decoded
+	// candidates this is (FreqIdxUsed * len(timing) + TimeIdxUsed + 1).
+	// For failed candidates it is the full retry budget that ran
+	// (some attempts may early-exit if downsample/demod returns nil).
+	Attempts int
+
+	// BestMeanAbsLLR is the maximum value of mean(|LLR|) seen across
+	// all this candidate's demod attempts (across the freq×timing
+	// retry grid). Higher = LLR distribution was "more confident" at
+	// the best attempt. Used to calibrate the LLR-quality early-exit
+	// gate: plot distributions of Decoded=true vs Decoded=false
+	// candidates and find where they separate.
+	BestMeanAbsLLR float64
+
+	// SuccessMeanAbsLLR is the mean(|LLR|) for the attempt that
+	// actually decoded, populated only when Decoded is true. May be
+	// lower than BestMeanAbsLLR if a different retry combo produced
+	// stronger LLRs but didn't decode (e.g. due to BP convergence
+	// quirks). Diagnostic-only.
+	SuccessMeanAbsLLR float64
 }
 
 // DefaultOSDOrder is the OSD search depth applied when
@@ -249,6 +314,25 @@ const DefaultMinSyncPower = 3.0
 // gate cut corpus-wide false positives 44→18 with ZERO loss of
 // oracle-matched decodes; below ~0.05 real decodes start to be lost.
 const DefaultOSDMaxNormDist = 0.06
+
+// meanAbsLLR returns the mean of |x| over the slice. Used by the
+// per-candidate LLR-quality measurement (diagnostic only at present;
+// the early-exit gate consumes the same statistic). Returns 0 for an
+// empty slice. Single pass, no allocations.
+func meanAbsLLR(llrs []float64) float64 {
+	if len(llrs) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, v := range llrs {
+		if v < 0 {
+			sum -= v
+		} else {
+			sum += v
+		}
+	}
+	return sum / float64(len(llrs))
+}
 
 // DefaultFineTimingOffsets is the retry sequence applied when
 // DecodeOptions.FineTimingOffsets is nil. Tuned empirically on the
@@ -356,8 +440,23 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		osdMaxNormDist = 0
 	}
 
+	// If the caller asked for diagnostics, attach a transient stats
+	// sink to the sync options so dsp.Sync populates the pre-dedup,
+	// post-dedup and post-cap counts. The original caller's opts is
+	// passed by value, so this assignment is scoped to Decode.
+	var syncStats *dsp.SyncStats
+	if opts.Stats != nil {
+		syncStats = &dsp.SyncStats{}
+		opts.Sync.Stats = syncStats
+	}
+
 	spec := dsp.Spectrogram(samples)
 	cands := dsp.Sync(spec, opts.Sync)
+	if opts.Stats != nil && syncStats != nil {
+		opts.Stats.RawSyncCandidates = syncStats.RawAboveThreshold
+		opts.Stats.AfterDedup = syncStats.AfterDedup
+		opts.Stats.AfterCap = syncStats.AfterCap
+	}
 	if len(cands) == 0 {
 		return nil
 	}
@@ -436,6 +535,14 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		var foundMsg codec.Message
 		var foundBits []byte
 		decoded := false
+		// Diagnostic counters per candidate. attempts counts demod
+		// runs (entries into the inner-loop body); freqIdxUsed and
+		// timeIdxUsed capture the position in the resolved retry
+		// sequences where success landed; bestMeanAbsLLR tracks the
+		// largest mean(|LLR|) observed across all attempts (for the
+		// LLR-quality early-exit calibration).
+		var attempts, freqIdxUsed, timeIdxUsed int
+		var bestMeanAbsLLR, successMeanAbsLLR float64
 
 		// Outer loop: fine-frequency retries. Inner loop: fine-
 		// timing retries at the current frequency. Each combination
@@ -451,15 +558,24 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		// package's reusable OSDScratch instead of by running OSD
 		// less often.
 	freqRetry:
-		for _, fOffset := range fineFreqOffsets {
+		for fIdx, fOffset := range fineFreqOffsets {
 			baseband := dsp.DownsampleFromSpectrumWithPlan(spectrum, c.Freq+fOffset, inversePlan)
 			if baseband == nil {
 				continue
 			}
-			for _, dOffset := range fineOffsets {
+			for tIdx, dOffset := range fineOffsets {
 				llrs := dsp.DemodulateWithPlan(baseband, c.DT+dOffset, symPlan, llrScale)
 				if llrs == nil {
 					continue
+				}
+				attempts++
+				// Diagnostic-only LLR-quality measurement (Phase 1
+				// of the early-exit work): mean of |LLR| across the
+				// 174 codeword bits. Single pass; negligible cost.
+				// Used to calibrate the future early-exit gate.
+				meanAbs := meanAbsLLR(llrs)
+				if opts.Stats != nil && meanAbs > bestMeanAbsLLR {
+					bestMeanAbsLLR = meanAbs
 				}
 				msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder, osdMaxNormDist)
 				if !ok {
@@ -472,11 +588,29 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 				foundMsg = msg
 				foundBits = msgBits
 				decoded = true
+				freqIdxUsed = fIdx
+				timeIdxUsed = tIdx
+				if opts.Stats != nil {
+					successMeanAbsLLR = meanAbs
+				}
 				break freqRetry // first (freq, dt) combination that works wins
 			}
 		}
 		if decoded {
 			raw = append(raw, pending{c, foundMsg, foundBits})
+		}
+		if opts.Stats != nil {
+			opts.Stats.Candidates = append(opts.Stats.Candidates, CandidateStat{
+				Freq:              c.Freq,
+				DT:                c.DT,
+				SyncPower:         c.SyncPower,
+				Decoded:           decoded,
+				FreqIdxUsed:       freqIdxUsed,
+				TimeIdxUsed:       timeIdxUsed,
+				Attempts:          attempts,
+				BestMeanAbsLLR:    bestMeanAbsLLR,
+				SuccessMeanAbsLLR: successMeanAbsLLR,
+			})
 		}
 	}
 

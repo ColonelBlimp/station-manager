@@ -163,6 +163,29 @@ type SyncOptions struct {
 	// SyncDefaultSearchHalfSpanSec. Internally quantised to the
 	// nearest spectrogram step (40 ms).
 	SearchHalfSpanSec float64
+
+	// Stats, when non-nil, is populated by Sync with stage-level
+	// counts (raw above-threshold, post-dedup, post-cap). Useful for
+	// the candidate-cap / retry-budget diagnostic work; zero-cost
+	// when nil.
+	Stats *SyncStats
+}
+
+// SyncStats holds per-call counts for the sync stage. All fields
+// are populated by Sync when SyncOptions.Stats is non-nil.
+type SyncStats struct {
+	// RawAboveThreshold is the count of (freq, time) cells whose
+	// matched-filter score met opts.MinScore — i.e. the raw count
+	// BEFORE near-duplicate suppression.
+	RawAboveThreshold int
+
+	// AfterDedup is the count remaining after near-duplicate
+	// suppression but BEFORE the MaxCand truncation.
+	AfterDedup int
+
+	// AfterCap is the final candidate count returned, equal to
+	// min(AfterDedup, MaxCand).
+	AfterCap int
 }
 
 // Sync detects FT8 sync candidates in a precomputed spectrogram.
@@ -244,6 +267,10 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 		}
 	}
 
+	if opts.Stats != nil {
+		opts.Stats.RawAboveThreshold = len(rawCands)
+	}
+
 	if len(rawCands) == 0 {
 		return nil
 	}
@@ -277,6 +304,16 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 		}
 	}
 
+	if opts.Stats != nil {
+		dedupedCount := 0
+		for _, k := range keep {
+			if k {
+				dedupedCount++
+			}
+		}
+		opts.Stats.AfterDedup = dedupedCount
+	}
+
 	out := make([]Candidate, 0, opts.MaxCand)
 	for i, rc := range rawCands {
 		if !keep[i] {
@@ -290,6 +327,9 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 		if len(out) >= opts.MaxCand {
 			break
 		}
+	}
+	if opts.Stats != nil {
+		opts.Stats.AfterCap = len(out)
 	}
 	return out
 }

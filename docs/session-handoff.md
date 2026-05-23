@@ -165,6 +165,53 @@ Then (after the cap/budget question is settled) the rest-of-pipeline list from e
 
 Durable detail: memory `project_ft8_refinement` (full numbers + the next-session option list).
 
+**SESSION 84 LATEST — diagnostic instrumentation SHIPPED, live-corpus data collected, decision pending at SECOND power cut.**
+
+Continued from "explore all solutions before moving on." Operator picked diagnostic-first. The instrumentation, data, and proposed remediation framing all landed before the second power cut.
+
+**Code shipped (uncommitted at power cut):**
+- `dsp.SyncStats` + `*SyncStats` field on `dsp.SyncOptions` (populated by `Sync()`)
+- `ft8.DecodeStats` + `CandidateStat` types + `*DecodeStats` field on `ft8.DecodeOptions` (populated by `Decode()`'s main pass; sub-pass for subtraction NOT instrumented — subtraction queued for removal)
+- `cmd/ft8-eval -stats` flag + `printStatsSummary()` per-file diagnostic table
+- All builds + short tests green
+
+**Live-corpus diagnostic numbers (6 files, B1+B2 defaults active):**
+
+At **MaxCand=100**:
+- Sync funnel: raw 55,761 → deduped 10,654 (**80.9% suppressed**) → capped 600
+- Decoded 106 = 59 at coarse-coarse + 47 needed retry (**44% of real decodes need retries**)
+- Failed 494 candidates × **avg 23.3 / 25 max attempts each** = 11,525 wasted demod runs/slot
+
+At **MaxCand=200**:
+- Decoded 123, +17 raw vs cap=100 but **only +2 oracle-matched** (+15 false positives)
+- Failed 1,077 × 23.1 = 24,900 wasted demod runs (+13,375 over cap=100 for +2 matches)
+- **~6,700 wasted demod runs per real match recovered** at the higher cap
+
+**Key insights from the data:**
+
+1. **Failed candidates burn 93% of max retry budget.** No early-exit; the retry loop always runs the full 5×5 grid on hopeless candidates. This is THE structural waste.
+2. **The +2 cap=200 matches are in the lower half of sync-power ranking** (positions 100-199). They need to SURVIVE the cap, not get more retry budget.
+3. **44% of real decodes need retries** — can't eliminate retries wholesale via simple "low-confidence skip" rule.
+4. **Dedup already suppresses 80.9% of raw** — tightening unlikely to free meaningful cap slots.
+
+**Two-lever framing (orthogonal, can ship either or both):**
+
+- **LLR-quality early-exit = throughput lever.** Between demod and BP, one-pass statistic over the 174 LLRs (e.g. fraction with `|LLR| > threshold`). If LLRs are noise-floor, skip BP+OSD entirely. ~5 µs filter before multi-ms LDPC. Direct attack on the 11,525 wasted runs/slot. Calibration: log LLR stat for every success + every failure, plot, threshold at separation.
+- **Percentile-normalised sync = precision lever (operator's proposal).** Restructure sync per operator points 7-10: per-freq-bin collapse → local-neighbourhood normalisation → threshold normalised at 1.3 → final dedup. Likely recovers the +2 matches without raising cap. Doesn't touch slot wall. Bigger reshape, more calibration knobs.
+
+**Next-session pickup (operator decision pending):**
+- Pick which lever to ship first.
+- Claude's recommendation: **LLR-quality early-exit first** (biggest measured throughput win, simpler change, calibration is empirical-by-data, doesn't risk regression on existing 66 matches). Then percentile sync as a separate, measurable intervention.
+- Operator's interest is real for percentile sync — they proposed the algorithm and it's structurally more interesting work. Either order defensible.
+
+**Working-tree state at second power-cut:**
+- `internal/ft8/dsp/sync.go`: SyncStats struct + Stats field + Sync() population (knob `SearchHalfSpanSec` already committed in e876c524).
+- `internal/ft8/decode.go`: DecodeStats + CandidateStat types + Stats field + per-candidate populate code.
+- `cmd/ft8-eval/main.go`: `-stats` flag + `printStatsSummary()`.
+- `docs/session-handoff.md`: this update.
+
+Reproduction: `go build -o /tmp/sm-ft8-eval ./cmd/ft8-eval/ && /tmp/sm-ft8-eval -oracle -jobs 6 -stats captures/*.wav` (add `-max-cand 200` for the second cell).
+
 ### Session 83 (2026-05-22 continuation) — FT8 decode REFINEMENT: honest metric, false-positive gates (B1+B2), stage-level diagnosis. **Headline: the "106% WSJT-X parity" claim was false-positive-inflated; real parity is ~54%.**
 
 Big arc. Deferred M4.2 Phase C; spent the session refining decode QUALITY against real captures using the jt9 3.0.1 oracle. Everything below is committed.
