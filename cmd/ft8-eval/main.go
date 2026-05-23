@@ -28,6 +28,7 @@ func main() {
 		llrScale   = flag.Float64("llr-scale", 0, "DecodeOptions.LLRScale (0=default 1.0)")
 		ldpcIters  = flag.Int("ldpc-iters", 0, "DecodeOptions.LDPCMaxIterations (0=default 50)")
 		maxCand    = flag.Int("max-cand", 0, "DecodeOptions.Sync.MaxCand sync candidate cap (0=default 100)")
+		syncHalf   = flag.Float64("sync-half-span", 0, "DecodeOptions.Sync.SearchHalfSpanSec time-offset search half-span in seconds (0=default 2.0)")
 		minSync    = flag.Float64("min-sync", 0, "DecodeOptions.MinSyncPower floor (0=default 3.0, negative=no floor, positive=exact)")
 		osdMaxDist = flag.Float64("osd-maxdist", 0, "DecodeOptions.OSDMaxNormDist gate (B2): OSD soft-distance ceiling in (0,1]. 0=default, negative=no gate")
 		useHash    = flag.Bool("hashtable", false, "use a fresh per-file codec.HashTable (retains hash-bearing Type 1/2/3 messages)")
@@ -64,7 +65,7 @@ func main() {
 		LDPCMaxIterations: *ldpcIters,
 		MinSyncPower:      *minSync,
 		OSDMaxNormDist:    *osdMaxDist,
-		Sync:              dsp.SyncOptions{MaxCand: *maxCand},
+		Sync:              dsp.SyncOptions{MaxCand: *maxCand, SearchHalfSpanSec: *syncHalf},
 	}
 
 	oracleOK := *oracle
@@ -362,8 +363,8 @@ func displayName(p string) string {
 }
 
 func printConfig(opts ft8.DecodeOptions, runs int, useHash bool, jobs int) {
-	fmt.Printf("DecodeOptions: subtraction_passes=%d osd_order=%d osd_maxdist=%g llr_scale=%g ldpc_iters=%d min_sync=%g hashtable=%v  (runs=%d jobs=%d)\n\n",
-		opts.SubtractionPasses, opts.OSDOrder, opts.OSDMaxNormDist, opts.LLRScale, opts.LDPCMaxIterations, opts.MinSyncPower, useHash, runs, jobs)
+	fmt.Printf("DecodeOptions: subtraction_passes=%d osd_order=%d osd_maxdist=%g llr_scale=%g ldpc_iters=%d min_sync=%g sync_half_span=%g hashtable=%v  (runs=%d jobs=%d)\n\n",
+		opts.SubtractionPasses, opts.OSDOrder, opts.OSDMaxNormDist, opts.LLRScale, opts.LDPCMaxIterations, opts.MinSyncPower, opts.Sync.SearchHalfSpanSec, useHash, runs, jobs)
 }
 
 // cmp is the honest comparison of an SM decode set against the oracle:

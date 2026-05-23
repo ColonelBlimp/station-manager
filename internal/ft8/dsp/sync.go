@@ -112,11 +112,13 @@ const (
 	SyncDefaultFreqLow  = 200.0
 	SyncDefaultFreqHigh = 2900.0
 
-	// syncSearchHalfSteps bounds the time-offset search. ±50
-	// spectrogram steps = ±2 s search window. Operators tuned to
-	// the slot expect ~±0.5 s drift; wider search catches late-
-	// arriving signals at the cost of more candidates to rank.
-	syncSearchHalfSteps = 50
+	// SyncDefaultSearchHalfSpanSec bounds the time-offset search
+	// (one side of the symmetric ±range around nominal TX start)
+	// when SyncOptions.SearchHalfSpanSec is zero. ±2.0 s covers the
+	// usual operator-clock-drift envelope; widen to catch slow
+	// transmitters at the cost of ~24%/step extra sync probes per
+	// 0.5 s of widening. Tunable per call.
+	SyncDefaultSearchHalfSpanSec = 2.0
 
 	// syncDedupFreqBins is the frequency-proximity threshold for
 	// near-dupe suppression in spectrogram bins (1 bin = 3.125 Hz).
@@ -155,6 +157,12 @@ type SyncOptions struct {
 	FreqLow, FreqHigh float64
 	MinScore          float64
 	MaxCand           int
+
+	// SearchHalfSpanSec bounds the symmetric time-offset search
+	// around nominal TX start, in seconds. Zero → use
+	// SyncDefaultSearchHalfSpanSec. Internally quantised to the
+	// nearest spectrogram step (40 ms).
+	SearchHalfSpanSec float64
 }
 
 // Sync detects FT8 sync candidates in a precomputed spectrogram.
@@ -187,6 +195,17 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 	)
 	nominalStartStep := int(math.Floor(nominalTXStartSeconds / tstep))
 
+	// Resolve the time-offset search half-span (seconds) → integer
+	// spectrogram steps. Zero option value → default.
+	halfSpanSec := opts.SearchHalfSpanSec
+	if halfSpanSec <= 0 {
+		halfSpanSec = SyncDefaultSearchHalfSpanSec
+	}
+	searchHalfSteps := int(math.Round(halfSpanSec / tstep))
+	if searchHalfSteps < 1 {
+		searchHalfSteps = 1
+	}
+
 	// Frequency bin range.
 	binLow := int(math.Round(opts.FreqLow / df))
 	if binLow < 0 {
@@ -217,7 +236,7 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 
 	var rawCands []intCand
 	for centreBin := binLow; centreBin <= binHigh; centreBin++ {
-		for dtSteps := -syncSearchHalfSteps; dtSteps <= syncSearchHalfSteps; dtSteps++ {
+		for dtSteps := -searchHalfSteps; dtSteps <= searchHalfSteps; dtSteps++ {
 			score := scoreCandidate(spec, centreBin, dtSteps, nominalStartStep)
 			if score >= opts.MinScore {
 				rawCands = append(rawCands, intCand{centreBin, dtSteps, score})
