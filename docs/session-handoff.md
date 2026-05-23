@@ -92,9 +92,78 @@ Other realisations from the walkthrough (recorded in memory `project_ft8_refinem
 - The user's pipeline mental model (load → candidate search → refine→demod→LDPC→unpack→SNR→subtract) maps cleanly onto SM with two gaps: (a) our refinement is brute-force retry, not analytic; (b) we have no per-decode SNR estimate, while jt9 emits one.
 - The Costas array (21 known-tone symbols at positions 0..6, 36..42, 72..78) is the natural anchor for analytic freq peaking — parabolic interp across the known-tone bin + neighbours gives sub-0.1 Hz precision in one pass.
 
-Power came back? Resume the sweep first.
+Power came back. Sweep ran; flavour A shipped; flavour A reverted. Continued in the next block.
 
-Durable detail: `docs/v2-design/milestones.md` § M4.1 refinement continued (Session 84) + memory `project_ft8_refinement`.
+**SESSION 84 EVEN LATER — flavour A round-trip + sync/cap diagnosis (post-power-cut continuation).**
+
+**Freq sweep ran.** Single signal across one 3.125 Hz sync bin, varying SNR:
+
+| SNR | Aligned (0 / 3.125 Hz) | Mid-bin (1.25-1.75 Hz) | Gap |
+|---|---|---|---|
+| −16 dB | 100% | 90-100% | OSD absorbs |
+| **−18 dB** | **90-100%** | **60-70%** | **~30 pp** |
+| −20 dB | 35-40% | 0-25% | ~30 pp |
+| −22 dB | 0% | 0% | LDPC floor |
+
+Mechanism: `demodErr@cand` climbs 10 → 17 bit-errors per 174-bit codeword at mid-bin, which walks BP+OSD past their recovery range exactly at threshold SNR. Clean clean-AWGN win signal.
+
+**Flavour A shipped (`DefaultFineFrequencyOffsets = {-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0}`)**, measured both corpora vs jt9 3.0.1 oracle:
+
+| Corpus | Baseline match | Flavour A match | Δ FP | Δ time |
+|---|---|---|---|---|
+| Vendored cap1+2+3 | 13/18 (cap3) | 13/18 (cap3) | −1 (one FP gone) | 1.8× |
+| **Live corpus (3×20m+3×10m)** | **66/144** | **66/144** | **+5 FPs** | **~1.9×** |
+
+**Flavour A reverted.** Match-to-oracle UNCHANGED on every live slot. The +30 pp clean-AWGN win didn't transfer. Reason: real-capture misses are dominated by adjacent-signal masking (Session 83/84 finding), not freq quantisation — and the missed signals include STRONG (−1/−4/+2 dB) decodes that aren't quantisation-bound at all. **Lesson stored:** clean-AWGN synthetic gains are necessary but not sufficient; validate against the live corpus before committing.
+
+**Precision corrections (operator caught me twice):**
+1. I wrote "Sync — Same as WSJT-X" in a capability table. WRONG. We only know paper-spec compliance; what `jt9`'s source does is out of clean-room reach. Honest claim: we implement Costas matched-filter per QEX 2020; behavioral cross-check (`ft8-eval -candidates` vs jt9 output) shows our sync produces candidates at the freq/dt of jt9-decoded signals we miss. Sync isn't the gap on cases checked.
+2. I cited "published WSJT-X tolerance ±2.5 s" without a source. The QEX paper doesn't specify a numeric receiver-side time-search range; I was guessing.
+
+**Sync window knob shipped.** `dsp.SyncOptions.SearchHalfSpanSec` (default 2.0 s; was hard-coded `syncSearchHalfSteps = 50`). `cmd/ft8-eval` gets `-sync-half-span N`. Default unchanged.
+
+**Sync-window experiment (±2.0 vs ±2.5 s):** NULL RESULT for clock-drift hypothesis. ±2.5 s LOST a match on `live_slot3` (`CQ YD2ADB OI52` @ −18 dB). Mechanism: wider grid (108k vs 87k cells) at MaxCand=100 pushed marginal noise candidates ahead of the weak real signal in ranking. **Sync stage finds the same signals; cap squeezes them.**
+
+**MaxCand cap sweep:**
+
+| MaxCand | Match (±2.0 s) | FP | Max slot time | Slot-wall OK? |
+|---|---|---|---|---|
+| 100 (default) | 66 | 13 | 6.9 s | ✅ |
+| 150 | 67 | 18 | 12.9 s | ✅ (tight) |
+| **200** | **68** | 19 | **16.7 s** | ⚠ over 15s |
+| 300 | 68 | 20 | 20.7 s | ⚠ |
+| 500 | 68 | 20 | 34.4 s | ⚠ |
+
+**Findings:**
+1. **MaxCand=100 IS biting.** +2 matches at MaxCand=200, both on `20m_slot1` (densest slot — exactly where cap displacement hurts).
+2. **Saturation at MaxCand≈200.** 200/300/500 all return 68 matches.
+3. **Sync window × cap interaction explained.** At MaxCand≥200, ±2.0 s and ±2.5 s return identical 68 matches. The ±2.5 s "lost a match" at MaxCand=100 was cap squeeze, not sync sensitivity.
+4. **Cost is the constraint.** MaxCand=200 blows the 15 s slot wall (16.7 s on dense 20m). Can't just raise the default.
+5. **FP ratio degrades with cap.** match/FP: 5.08 (100) → 3.58 (200) → 3.40 (300). Scraping the bottom of the candidate list at high caps.
+
+**Structural insight: the cap was masking a budget problem.** Each candidate runs the full retry loop (up to 25 fine-freq × fine-timing attempts). Doubling the cap roughly doubles per-slot time because all the new candidates burn the full retry budget. The fix isn't "raise the cap" — it's "stop giving low-confidence candidates the same retry budget as high-confidence ones."
+
+**Working-tree state at end of session:** `internal/ft8/dsp/sync.go` + `cmd/ft8-eval/main.go` have the `SearchHalfSpanSec` knob plumbed (default 2.0 s, behaviour unchanged). Uncommitted — operator's call when to land it.
+
+**Next-session pickup (operator directive: "explore ALL solutions to this issue before moving on to the rest of the pipeline"):**
+
+Options to evaluate for the candidate-cap / retry-budget issue, in rough cost-to-test order:
+
+1. **Diagnostic first — measure how many existing decodes need fine retry vs decode at coarse.** If most decode at coarse, the optimization is "stop wasting cycles on candidates that don't need it" rather than "make retry cheaper." Cheap to add: log per-candidate which retry step the decode landed at.
+2. **Tiered retry budget** — top-N by sync score get full fine-freq+timing retry; remainder get coarse-only. Test bet: most of the +2 matches at MaxCand=200 already resolve at coarse, so this should recover them at near-zero cost.
+3. **Cap by sync-score floor instead of N** — accept all candidates with `SyncPower ≥ T`. Removes the arbitrary 100; lets dense slots breathe; sparse slots stay cheap. Needs the score distribution data first.
+4. **Adaptive cap with per-slot time guard** — sort by sync score, run full retry until budget elapses, then degrade.
+5. **Cheaper fine-retry** — share downsample work between freq retries; early-exit when LDPC pre-converges; etc. Smaller per-step wins.
+6. **Re-rank by cheaper-than-sync-score signal** — peek at first-symbol demod confidence to filter obvious noise from the retry pool.
+
+Then (after the cap/budget question is settled) the rest-of-pipeline list from earlier:
+
+- Delete subtraction code (Session 84 ruling).
+- Coherent demod (`cmplx.Abs` at `dsp/demod.go:161` drops phase; +2-3 dB).
+- AP decoding (LDPC prior-LLR injection from `HashTable`).
+- Symbol windowing (rectangular sidelobes → Hann/Hamming).
+
+Durable detail: memory `project_ft8_refinement` (full numbers + the next-session option list).
 
 ### Session 83 (2026-05-22 continuation) — FT8 decode REFINEMENT: honest metric, false-positive gates (B1+B2), stage-level diagnosis. **Headline: the "106% WSJT-X parity" claim was false-positive-inflated; real parity is ~54%.**
 
