@@ -29,7 +29,7 @@ func main() {
 		ldpcIters  = flag.Int("ldpc-iters", 0, "DecodeOptions.LDPCMaxIterations (0=default 50)")
 		maxCand    = flag.Int("max-cand", 0, "DecodeOptions.Sync.MaxCand sync candidate cap (0=default 100)")
 		syncHalf   = flag.Float64("sync-half-span", 0, "DecodeOptions.Sync.SearchHalfSpanSec time-offset search half-span in seconds (0=default 2.0)")
-		scoreVar   = flag.String("score-variant", "ratio", "DecodeOptions.Sync.ScoreVariant: ratio (default in-pattern/out-of-pattern) | local-peak (neighbour-differences, penalises adjacent-bin energy) | normalised (ratio divided by per-freq-bin median baseline)")
+		scoreVar   = flag.String("score-variant", "ratio", "DecodeOptions.Sync.ScoreVariant: ratio (default in-pattern/out-of-pattern) | normalised (ratio divided by per-freq-bin median baseline)")
 		minScore   = flag.Float64("min-score", 0, "DecodeOptions.Sync.MinScore candidate-generation threshold (0=default 1.5; appropriate value depends on score variant)")
 		minSync    = flag.Float64("min-sync", 0, "DecodeOptions.MinSyncPower floor (0=default 3.0, negative=no floor, positive=exact)")
 		osdMaxDist = flag.Float64("osd-maxdist", 0, "DecodeOptions.OSDMaxNormDist gate (B2): OSD soft-distance ceiling in (0,1]. 0=default, negative=no gate")
@@ -393,8 +393,6 @@ func parseScoreVariant(s string) dsp.ScoreVariant {
 	switch s {
 	case "ratio", "":
 		return dsp.ScoreVariantRatio
-	case "local-peak", "localpeak", "local":
-		return dsp.ScoreVariantLocalPeak
 	case "normalised", "normalized", "norm", "percentile":
 		return dsp.ScoreVariantNormalised
 	default:

@@ -164,16 +164,6 @@ const (
 	// against broadband noise.
 	ScoreVariantRatio ScoreVariant = 0
 
-	// ScoreVariantLocalPeak compares each Costas tone to its 4
-	// immediate neighbours in (freq, time): sub-tone freq bin below,
-	// sub-tone freq bin above, same bin one symbol earlier, same bin
-	// one symbol later. Score = mean of (expected − neighbour)
-	// differences. Penalises adjacent-bin energy — directly attacks
-	// the adjacent-signal interference failure mode. Inspired by the
-	// scoring approach in Kārlis Goba's MIT-licensed ft8_lib (re-
-	// implemented in our coordinate system, not transliterated).
-	ScoreVariantLocalPeak ScoreVariant = 1
-
 	// ScoreVariantNormalised runs the same ratio scorer as
 	// ScoreVariantRatio but then divides each cell's score by the
 	// MEDIAN ratio score in its frequency-band neighbourhood (per-
@@ -186,7 +176,7 @@ const (
 	// normalisation score is dimensionless (still self-normalising
 	// against broadband noise via the underlying ratio) AND adapted
 	// to local band conditions.
-	ScoreVariantNormalised ScoreVariant = 2
+	ScoreVariantNormalised ScoreVariant = 1
 )
 
 // SyncOptions configures the Costas-sync detector. Zero-valued
@@ -293,13 +283,9 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 	case ScoreVariantNormalised:
 		rawCands = collectNormalisedCandidates(spec, binLow, binHigh, searchHalfSteps, nominalStartStep, opts.MinScore)
 	default:
-		scorer := scoreCandidate
-		if opts.ScoreVariant == ScoreVariantLocalPeak {
-			scorer = scoreCandidateLocalPeak
-		}
 		for centreBin := binLow; centreBin <= binHigh; centreBin++ {
 			for dtSteps := -searchHalfSteps; dtSteps <= searchHalfSteps; dtSteps++ {
-				score := scorer(spec, centreBin, dtSteps, nominalStartStep)
+				score := scoreCandidate(spec, centreBin, dtSteps, nominalStartStep)
 				if score >= opts.MinScore {
 					rawCands = append(rawCands, intCand{centreBin, dtSteps, score})
 				}
@@ -554,83 +540,6 @@ func collectNormalisedCandidates(spec [][]float64, binLow, binHigh, searchHalfSt
 		}
 	}
 	return cands
-}
-
-// scoreCandidateLocalPeak is the alternative matched-filter score
-// inspired by Kārlis Goba's ft8_lib (MIT). For each of the 21 Costas
-// symbols, the expected tone is compared to its 4 immediate
-// neighbours in (freq, time) space:
-//
-//   - one sub-tone freq bin below (centreBin + 2*sm − 1)
-//   - one sub-tone freq bin above (centreBin + 2*sm + 1)
-//   - same bin one symbol earlier (t − SpectrogramStepsPerSymbol)
-//   - same bin one symbol later   (t + SpectrogramStepsPerSymbol)
-//
-// Each in-bounds comparison contributes (expected − neighbour) to a
-// running sum; the final score is sum / count. A real Costas tone
-// stands out from all 4 neighbours → large positive score. Adjacent
-// signals dump energy into the freq-bin neighbours → score depressed.
-// Persistent carriers dump energy into the time neighbours → score
-// also depressed. Penalises exactly the spectral patterns associated
-// with adjacent-signal interference, which is the dominant real-
-// capture failure mode in our corpus (see Session 83 diagnosis).
-//
-// Frequency neighbours are SUB-TONE bins (3.125 Hz away), not the
-// next FT8 tone (6.25 Hz away). This matches the source approach:
-// it tests whether the tone is a peak at the FFT-bin granularity,
-// not whether neighbouring Costas-alphabet tones are also loud.
-//
-// The score is on a different scale from scoreCandidate: it's a raw
-// power delta in the spectrogram's amplitude units (post-
-// SpectrogramScale = 1/300 normalisation), centred on zero for noise
-// and growing with signal-to-neighbour contrast. Threshold values
-// from the ratio scorer don't transfer.
-func scoreCandidateLocalPeak(spec [][]float64, centreBin, dtSteps, nominalStartStep int) float64 {
-	var sum float64
-	var count int
-
-	for block := 0; block < NumCostasBlocks; block++ {
-		blockStartSym := block * CostasBlockStrideSymbols
-		for symInBlock := 0; symInBlock < CostasTonesPerBlock; symInBlock++ {
-			channelSym := blockStartSym + symInBlock
-			// Use the first of the 4 quarter-symbol steps that cover
-			// this symbol — matches the "single block per symbol"
-			// view of the source approach.
-			t := dtSteps + nominalStartStep + channelSym*SpectrogramStepsPerSymbol
-			if t < 0 || t >= NHSYM {
-				continue
-			}
-			sm := int(Icos7[symInBlock])
-			inBin := centreBin + SpectrogramOversampleFreq*sm
-			expected := spec[t][inBin]
-
-			// Sub-tone freq neighbour below.
-			if inBin-1 >= 0 {
-				sum += expected - spec[t][inBin-1]
-				count++
-			}
-			// Sub-tone freq neighbour above.
-			if inBin+1 < NH1 {
-				sum += expected - spec[t][inBin+1]
-				count++
-			}
-			// Time neighbour, one symbol earlier.
-			if t-SpectrogramStepsPerSymbol >= 0 {
-				sum += expected - spec[t-SpectrogramStepsPerSymbol][inBin]
-				count++
-			}
-			// Time neighbour, one symbol later.
-			if t+SpectrogramStepsPerSymbol < NHSYM {
-				sum += expected - spec[t+SpectrogramStepsPerSymbol][inBin]
-				count++
-			}
-		}
-	}
-
-	if count == 0 {
-		return 0
-	}
-	return sum / float64(count)
 }
 
 // validSpec checks the spectrogram has the expected dimensions
