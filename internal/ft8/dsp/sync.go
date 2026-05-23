@@ -151,34 +151,6 @@ type Candidate struct {
 	SyncPower float64
 }
 
-// ScoreVariant selects the per-candidate matched-filter scoring
-// formula used by Sync. Different formulas have different sensitivity
-// properties — see scoreCandidate (ratio) and scoreCandidateLocalPeak
-// (local-peakness) for the per-variant rationale.
-type ScoreVariant int
-
-const (
-	// ScoreVariantRatio (default) compares in-pattern Costas-tone
-	// power to the mean of the other 6 Costas-alphabet tones at the
-	// same time slots: score = mean(in) / mean(out). Self-normalises
-	// against broadband noise.
-	ScoreVariantRatio ScoreVariant = 0
-
-	// ScoreVariantNormalised runs the same ratio scorer as
-	// ScoreVariantRatio but then divides each cell's score by the
-	// MEDIAN ratio score in its frequency-band neighbourhood (per-
-	// freq-bin median across all time offsets in the search range).
-	// Candidates rank by "how much do I stand out from my local
-	// frequency band," not by absolute ratio. Addresses the precision
-	// problem visible in the cap-displacement diagnostic: real weak
-	// signals in clean parts of the band were being outranked by
-	// noise candidates in louder parts of the band. The post-
-	// normalisation score is dimensionless (still self-normalising
-	// against broadband noise via the underlying ratio) AND adapted
-	// to local band conditions.
-	ScoreVariantNormalised ScoreVariant = 1
-)
-
 // SyncOptions configures the Costas-sync detector. Zero-valued
 // fields use the SyncDefault* constants documented in this file.
 type SyncOptions struct {
@@ -191,11 +163,6 @@ type SyncOptions struct {
 	// SyncDefaultSearchHalfSpanSec. Internally quantised to the
 	// nearest spectrogram step (40 ms).
 	SearchHalfSpanSec float64
-
-	// ScoreVariant selects the matched-filter scoring formula. Zero
-	// value = ScoreVariantRatio (current default, preserves existing
-	// behaviour). See ScoreVariant constants.
-	ScoreVariant ScoreVariant
 
 	// Stats, when non-nil, is populated by Sync with stage-level
 	// counts (raw above-threshold, post-dedup, post-cap). Useful for
@@ -279,16 +246,11 @@ func Sync(spec [][]float64, opts SyncOptions) []Candidate {
 	}
 
 	var rawCands []intCand
-	switch opts.ScoreVariant {
-	case ScoreVariantNormalised:
-		rawCands = collectNormalisedCandidates(spec, binLow, binHigh, searchHalfSteps, nominalStartStep, opts.MinScore)
-	default:
-		for centreBin := binLow; centreBin <= binHigh; centreBin++ {
-			for dtSteps := -searchHalfSteps; dtSteps <= searchHalfSteps; dtSteps++ {
-				score := scoreCandidate(spec, centreBin, dtSteps, nominalStartStep)
-				if score >= opts.MinScore {
-					rawCands = append(rawCands, intCand{centreBin, dtSteps, score})
-				}
+	for centreBin := binLow; centreBin <= binHigh; centreBin++ {
+		for dtSteps := -searchHalfSteps; dtSteps <= searchHalfSteps; dtSteps++ {
+			score := scoreCandidate(spec, centreBin, dtSteps, nominalStartStep)
+			if score >= opts.MinScore {
+				rawCands = append(rawCands, intCand{centreBin, dtSteps, score})
 			}
 		}
 	}
@@ -437,109 +399,6 @@ func scoreCandidate(spec [][]float64, centreBin, dtSteps, nominalStartStep int) 
 		return 0
 	}
 	return inMean / noiseMean
-}
-
-// collectNormalisedCandidates implements the ScoreVariantNormalised
-// pipeline. Two-pass:
-//
-//  1. Score every (centreBin, dtSteps) cell with the ratio scorer
-//     (same formula as ScoreVariantRatio).
-//  2. For each freq bin, compute the MEDIAN raw score across all
-//     time offsets in the search range — that's the "local baseline"
-//     for that frequency. Then divide each cell's raw score by its
-//     freq bin's baseline. Cells with normalised score >= MinScore
-//     become candidates. The stored score IS the normalised value.
-//
-// Median (not mean) is used so a single strong real signal at a freq
-// bin doesn't pump the baseline up and suppress weaker signals at
-// the same freq. The median across ~100 time offsets is dominated by
-// noise-floor cells regardless of a few signal-bearing peaks.
-//
-// Cost: scoring every cell is the same O(N) work the single-pass
-// path does. Per-freq median is sort + middle pick (~log of search-
-// span entries per bin). Total overhead is modest compared to BP/OSD
-// downstream.
-func collectNormalisedCandidates(spec [][]float64, binLow, binHigh, searchHalfSteps, nominalStartStep int, minScore float64) []intCand {
-	width := binHigh - binLow + 1
-	if width <= 0 {
-		return nil
-	}
-	height := 2*searchHalfSteps + 1
-
-	// Pass 1: raw scores indexed [centreBin-binLow][dtSteps+searchHalfSteps].
-	rawScores := make([][]float64, width)
-	for i := range rawScores {
-		rawScores[i] = make([]float64, height)
-	}
-	for centreBin := binLow; centreBin <= binHigh; centreBin++ {
-		row := rawScores[centreBin-binLow]
-		for dtSteps := -searchHalfSteps; dtSteps <= searchHalfSteps; dtSteps++ {
-			row[dtSteps+searchHalfSteps] = scoreCandidate(spec, centreBin, dtSteps, nominalStartStep)
-		}
-	}
-
-	// Pass 2: per-freq-bin median (the local baseline). Sort a copy
-	// of each row and take the middle element. Robust to a few
-	// signal-bearing high scores within the bin's own time offsets.
-	perBinMedian := make([]float64, width)
-	scratch := make([]float64, height)
-	for i, row := range rawScores {
-		copy(scratch, row)
-		sort.Float64s(scratch)
-		perBinMedian[i] = scratch[height/2]
-	}
-
-	// Pass 2b: smooth the per-bin baseline over a ±baselineSmoothBins
-	// frequency window (excluding the centre bin). A single bin's
-	// median is itself a noisy estimator; the local-band noise floor
-	// is more stable when averaged over the neighbourhood. Excluding
-	// the centre means the bin's own (potentially signal-pumped)
-	// median doesn't dominate its own baseline.
-	const baselineSmoothBins = 16 // ±16 bins = ±50 Hz at 3.125 Hz/bin
-	baseline := make([]float64, width)
-	for i := 0; i < width; i++ {
-		var sum float64
-		var count int
-		lo := i - baselineSmoothBins
-		if lo < 0 {
-			lo = 0
-		}
-		hi := i + baselineSmoothBins
-		if hi >= width {
-			hi = width - 1
-		}
-		for j := lo; j <= hi; j++ {
-			if j == i {
-				continue
-			}
-			sum += perBinMedian[j]
-			count++
-		}
-		if count > 0 {
-			baseline[i] = sum / float64(count)
-		}
-	}
-
-	// Pass 3: normalise and threshold.
-	var cands []intCand
-	for binIdx := 0; binIdx < width; binIdx++ {
-		b := baseline[binIdx]
-		if b <= 0 {
-			// Degenerate baseline (all-zero or negative scores in
-			// this freq bin). Skip — normalisation isn't meaningful.
-			continue
-		}
-		row := rawScores[binIdx]
-		centreBin := binLow + binIdx
-		for j, raw := range row {
-			score := raw / b
-			if score >= minScore {
-				dtSteps := j - searchHalfSteps
-				cands = append(cands, intCand{centreBin, dtSteps, score})
-			}
-		}
-	}
-	return cands
 }
 
 // validSpec checks the spectrogram has the expected dimensions
