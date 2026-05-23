@@ -6,9 +6,12 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/internal/audio"
+	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/codec"
 	"github.com/ColonelBlimp/station-manager/internal/ft8/dsp"
 )
@@ -18,44 +21,107 @@ func main() {
 		msgText  = flag.String("msg", "CQ K1JT FN20", "FT8 message to synthesise (parsed via codec.ParseMessage)")
 		freq     = flag.Float64("freq", 1500, "carrier frequency in Hz")
 		dt       = flag.Float64("dt", 0, "time offset in seconds")
+		gain1    = flag.Float64("gain1", 1.0, "amplitude scale for the primary signal (1.0 = unit)")
 		snr      = flag.Float64("snr", -15, "target SNR in dB (WSJT-X 2500 Hz convention); single-condition mode")
 		sweep    = flag.String("sweep", "", "SNR sweep \"lo:hi:step\" in dB; overrides -snr and prints a per-stage table")
 		trials   = flag.Int("trials", 1, "noise realisations per condition (averaged in sweep mode)")
 		seed     = flag.Uint64("seed", 1, "base RNG seed for the noise (reproducible)")
 		osdOrder = flag.Int("osd-order", 1, "OSD search order for the decode stage")
-		interf   = flag.Float64("interferer", 0, "if non-zero, add a strong second signal this many Hz from f0")
+		interf   = flag.Float64("interferer", 0, "same-msg masker N Hz from f0 (legacy; ignored when -msg2 is set)")
+		msg2Text = flag.String("msg2", "", "second FT8 message; non-empty enables two-signal subtraction-test mode")
+		freq2    = flag.Float64("freq2", 0, "second-signal carrier frequency in Hz (only used when -msg2 is set)")
+		gain2    = flag.Float64("gain2", 1.0, "amplitude scale for the second signal relative to primary")
+		subtract = flag.Bool("subtract", false, "in two-signal mode, also run Decode with SubtractionPasses=1 and report")
+		outWAV   = flag.String("out", "", "write the synthesised audio to this 12 kHz mono 16-bit WAV path (single condition only)")
 	)
 	flag.Parse()
 
-	m, err := codec.ParseMessage(*msgText)
-	if err != nil {
-		fatal("parse %q: %v", *msgText, err)
-	}
-	msgBits, err := codec.EncodeMessage(m)
-	if err != nil {
-		fatal("encode %q: %v", *msgText, err)
-	}
-	codeword := knownCodeword(msgBits)
+	msgBits, codeword, formattedText := mustEncode(*msgText)
 
 	cfg := condition{
 		msgBits:    msgBits,
 		codeword:   codeword,
-		text:       *msgText,
+		text:       formattedText,
 		freq:       *freq,
 		dt:         *dt,
+		gain:       *gain1,
 		osdOrder:   *osdOrder,
 		interferer: *interf,
 	}
 
+	if *msg2Text != "" {
+		msg2Bits, _, msg2Formatted := mustEncode(*msg2Text)
+		cfg.msg2Bits = msg2Bits
+		cfg.msg2Text = msg2Formatted
+		cfg.freq2 = *freq2
+		cfg.gain2 = *gain2
+		cfg.testSubtract = *subtract
+		if cfg.interferer != 0 {
+			fmt.Fprintln(os.Stderr, "note: -interferer ignored because -msg2 is set")
+			cfg.interferer = 0
+		}
+	}
+
 	if *sweep == "" {
+		if *outWAV != "" {
+			if err := saveSynth(cfg, *snr, *seed, *outWAV); err != nil {
+				fatal("write WAV: %v", err)
+			}
+			fmt.Printf("wrote %s  (msg=%q f=%.1f Hz, msg2=%q f2=%.1f Hz, snr=%.1f dB, seed=%d)\n",
+				*outWAV, cfg.text, cfg.freq, cfg.msg2Text, cfg.freq2, *snr, *seed)
+		}
 		runSingle(cfg, *snr, *seed)
 		return
+	}
+	if *outWAV != "" {
+		fmt.Fprintln(os.Stderr, "note: -out ignored in sweep mode")
 	}
 	lo, hi, step, err := parseSweep(*sweep)
 	if err != nil {
 		fatal("%v", err)
 	}
+	if cfg.msg2Bits != nil {
+		runSubtractionSweep(cfg, lo, hi, step, *trials, *seed)
+		return
+	}
 	runSweep(cfg, lo, hi, step, *trials, *seed)
+}
+
+// saveSynth writes the synthesised audio for one (snr, seed) realisation
+// to a 12 kHz mono 16-bit-PCM WAV. The audio is fully reproducible from
+// (msg, freq, gain, msg2, freq2, gain2, snr, seed) so this WAV plus its
+// parameters can be regenerated later if needed.
+func saveSynth(c condition, snr float64, seed uint64, path string) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	samples := buildAudio(c, snr, seed)
+	return audio.WriteWAV(path, &audio.Data{
+		SampleRate: uint32(dsp.Fs),
+		Channels:   1,
+		Samples:    samples,
+	})
+}
+
+// mustEncode parses, encodes, and round-trip-formats an FT8 message.
+// Exits on failure — bad input here is a CLI-usage error, not a
+// runtime condition worth recovering from.
+func mustEncode(text string) (msgBits, codeword []byte, formatted string) {
+	m, err := codec.ParseMessage(text)
+	if err != nil {
+		fatal("parse %q: %v", text, err)
+	}
+	msgBits, err = codec.EncodeMessage(m)
+	if err != nil {
+		fatal("encode %q: %v", text, err)
+	}
+	formatted, err = codec.FormatMessage(m)
+	if err != nil {
+		fatal("format %q: %v", text, err)
+	}
+	return msgBits, knownCodeword(msgBits), formatted
 }
 
 // condition is everything fixed across noise realisations / SNRs.
@@ -65,8 +131,18 @@ type condition struct {
 	text       string
 	freq       float64
 	dt         float64
+	gain       float64 // amplitude scale for the primary signal
 	osdOrder   int
-	interferer float64 // Hz offset of an added strong second signal; 0 = none
+	interferer float64 // Hz offset of an added strong same-msg masker; 0 = none (ignored when msg2 set)
+
+	// Two-signal subtraction mode (msg2 != nil). msg2 carries a
+	// genuinely different message so that subtraction's correctness
+	// can be scored from which messages survive.
+	msg2Bits     []byte
+	msg2Text     string
+	freq2        float64
+	gain2        float64
+	testSubtract bool // run a second Decode pass with SubtractionPasses=1
 }
 
 // stageResult is the per-stage outcome of one decode attempt.
@@ -85,10 +161,16 @@ type stageResult struct {
 
 func runSingle(c condition, snr float64, seed uint64) {
 	audio := buildAudio(c, snr, seed)
+	// Working buffer for Decode() — ft8.Decode is allowed to mutate
+	// via subtraction passes, and evalStages also depends on a stable
+	// view of audio. Use audio for stage analysis; pass a copy to
+	// Decode runs.
 	r := evalStages(c, audio)
 
-	fmt.Printf("msg: %q  f0=%.1f Hz  dt=%.2f s  SNR=%.0f dB  seed=%d", c.text, c.freq, c.dt, snr, seed)
-	if c.interferer != 0 {
+	fmt.Printf("msg: %q  f0=%.1f Hz  dt=%.2f s  gain=%.2f  SNR=%.0f dB  seed=%d", c.text, c.freq, c.dt, c.gain, snr, seed)
+	if c.msg2Bits != nil {
+		fmt.Printf("\nmsg2:%q  f0=%.1f Hz  gain=%.2f  (Δf=%+.1f Hz)", c.msg2Text, c.freq2, c.gain2, c.freq2-c.freq)
+	} else if c.interferer != 0 {
 		fmt.Printf("  interferer=%+.0f Hz", c.interferer)
 	}
 	fmt.Println()
@@ -110,6 +192,131 @@ func runSingle(c condition, snr float64, seed uint64) {
 		fmt.Printf(" → got %q (WRONG)", r.decodedText)
 	}
 	fmt.Println()
+
+	if c.msg2Bits != nil {
+		printSubtractionRun(c, audio)
+	}
+}
+
+// printSubtractionRun runs the full ft8.Decode pipeline on the
+// two-signal audio with subtraction OFF, and (when c.testSubtract is
+// set) with SubtractionPasses=1 — and reports which of the two known
+// messages were found in each pass, plus the count of any extra
+// (unexpected) decodes. Each Decode call gets its own audio copy
+// because Decode may mutate its working buffer.
+func printSubtractionRun(c condition, audio []float32) {
+	fmt.Println()
+	fmt.Println("subtraction test (ft8.Decode):")
+	fmt.Printf("  targets: A=%q @ %.1f Hz  B=%q @ %.1f Hz\n", c.text, c.freq, c.msg2Text, c.freq2)
+
+	base := decodeAndScore(c, audio, 0)
+	fmt.Printf("  passes=0: A=%s  B=%s  extras=%d  total=%d\n",
+		yn(base.foundA), yn(base.foundB), base.extras, base.total)
+	for _, x := range base.extraTexts {
+		fmt.Printf("            extra: %q\n", x)
+	}
+
+	if c.testSubtract {
+		sub := decodeAndScore(c, audio, 1)
+		fmt.Printf("  passes=1: A=%s  B=%s  extras=%d  total=%d", yn(sub.foundA), yn(sub.foundB), sub.extras, sub.total)
+		// Δ helps the reader judge whether subtraction actually helped.
+		dB := boolToInt(sub.foundB) - boolToInt(base.foundB)
+		dA := boolToInt(sub.foundA) - boolToInt(base.foundA)
+		dE := sub.extras - base.extras
+		fmt.Printf("   Δ(A,B,extras)=(%+d,%+d,%+d)\n", dA, dB, dE)
+		for _, x := range sub.extraTexts {
+			fmt.Printf("            extra: %q\n", x)
+		}
+	}
+}
+
+// decodeScore is the per-Decode-run outcome in two-signal mode.
+type decodeScore struct {
+	foundA     bool
+	foundB     bool
+	total      int
+	extras     int
+	extraTexts []string
+}
+
+// decodeAndScore runs ft8.Decode on a copy of audio and tallies which
+// of the two known target messages were recovered, plus any extra
+// (unexpected) decodes — those are the "false positives" the
+// subtraction loop is meant to avoid producing.
+func decodeAndScore(c condition, audio []float32, subPasses int) decodeScore {
+	working := make([]float32, len(audio))
+	copy(working, audio)
+	out := ft8.Decode(working, ft8.DecodeOptions{SubtractionPasses: subPasses})
+
+	score := decodeScore{total: len(out)}
+	for _, d := range out {
+		switch d.Text {
+		case c.text:
+			score.foundA = true
+		case c.msg2Text:
+			score.foundB = true
+		default:
+			score.extras++
+			score.extraTexts = append(score.extraTexts, d.Text)
+		}
+	}
+	return score
+}
+
+// runSubtractionSweep is the two-signal counterpart to runSweep. At
+// each SNR it averages decodeAndScore over `trials` noise realisations
+// and prints A%/B%/extras for passes=0 and (if requested) passes=1.
+func runSubtractionSweep(c condition, lo, hi, step float64, trials int, seed uint64) {
+	fmt.Printf("msg A: %q @ %.1f Hz  (gain %.2f)\n", c.text, c.freq, c.gain)
+	fmt.Printf("msg B: %q @ %.1f Hz  (gain %.2f, Δf=%+.1f Hz)\n", c.msg2Text, c.freq2, c.gain2, c.freq2-c.freq)
+	fmt.Printf("trials=%d  subtract=%v\n", trials, c.testSubtract)
+	header := "  SNR   A0%%   B0%%  extra0"
+	if c.testSubtract {
+		header += "   A1%%   B1%%  extra1"
+	}
+	fmt.Println(header)
+	fmt.Println(strings.Repeat("-", len(header)+2))
+
+	for snr := lo; snr <= hi+1e-9; snr += step {
+		var a0, b0, a1, b1 int
+		var sumExtra0, sumExtra1 float64
+		for t := 0; t < trials; t++ {
+			audio := buildAudio(c, snr, seed+uint64(t)*1009)
+			s0 := decodeAndScore(c, audio, 0)
+			if s0.foundA {
+				a0++
+			}
+			if s0.foundB {
+				b0++
+			}
+			sumExtra0 += float64(s0.extras)
+			if c.testSubtract {
+				s1 := decodeAndScore(c, audio, 1)
+				if s1.foundA {
+					a1++
+				}
+				if s1.foundB {
+					b1++
+				}
+				sumExtra1 += float64(s1.extras)
+			}
+		}
+		tf := float64(trials)
+		line := fmt.Sprintf("%5.0f  %4.0f%%  %4.0f%%  %5.2f",
+			snr, pct(a0, trials), pct(b0, trials), sumExtra0/tf)
+		if c.testSubtract {
+			line += fmt.Sprintf("   %4.0f%%  %4.0f%%  %5.2f",
+				pct(a1, trials), pct(b1, trials), sumExtra1/tf)
+		}
+		fmt.Println(line)
+	}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func runSweep(c condition, lo, hi, step float64, trials int, seed uint64) {
@@ -150,16 +357,40 @@ func runSweep(c condition, lo, hi, step float64, trials int, seed uint64) {
 	}
 }
 
-// buildAudio synthesises the known message at (freq, dt), optionally adds
-// a strong interferer, and adds calibrated AWGN for the target SNR.
+// buildAudio synthesises the known message at (freq, dt), optionally
+// adds a second signal (same-msg masker via -interferer OR distinct
+// msg2 via two-signal mode), and adds calibrated AWGN for the target
+// SNR. SNR is referenced to the PRIMARY signal at gain=1.0; gain1 != 1
+// shifts the effective SNR of the primary by 20·log10(gain1).
 func buildAudio(c condition, snr float64, seed uint64) []float32 {
+	gain1 := c.gain
+	if gain1 == 0 {
+		gain1 = 1.0
+	}
 	sig := dsp.Synthesize(c.msgBits, c.freq, c.dt)
 	if sig == nil {
 		fatal("Synthesize returned nil (bad msgBits length?)")
 	}
-	if c.interferer != 0 {
-		// A second, ~6 dB stronger signal carrying a different message,
-		// to test demod robustness against an adjacent strong neighbour.
+	if gain1 != 1.0 {
+		for i := range sig {
+			sig[i] *= float32(gain1)
+		}
+	}
+	switch {
+	case c.msg2Bits != nil:
+		// Two-signal mode: a distinct message at (freq2, dt) with its
+		// own amplitude. Both signals share the slot timing.
+		other := dsp.Synthesize(c.msg2Bits, c.freq2, c.dt)
+		if other == nil {
+			fatal("Synthesize msg2 returned nil")
+		}
+		for i := range sig {
+			sig[i] += float32(c.gain2) * other[i]
+		}
+	case c.interferer != 0:
+		// Legacy mode: a same-msg masker ~6 dB stronger; useful for
+		// adjacent-signal-interference demod stress tests but NOT
+		// suitable for scoring subtraction (identical msg bits).
 		other := dsp.Synthesize(c.msgBits, c.freq+c.interferer, c.dt)
 		const interfererGain = 2.0 // ~+6 dB
 		for i := range sig {

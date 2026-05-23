@@ -1543,12 +1543,12 @@ jt9=180 = **~54% real parity**, with **52 false positives**. (The Session-81
   *ordering*, which per-symbol rescaling scrambles). `max0−max1` already
   self-normalises per symbol. **Do not re-attempt LLR-magnitude normalization.**
 
-**The lever for further sensitivity = effective iterative subtraction**
-(decode the stronger member of an interfering pair → accurately re-synthesise
-and subtract → re-decode the neighbour). SM's current subtraction adds only
-false positives; the harness can test the decode-then-subtract loop on two
-known signals. AP (a-priori) decoding is the second lever — jt9's `a1`-marked
-weak-CQ decodes (seen on the 20m capture) are AP-assisted and SM has none.
+**At session-83 end the working hypothesis was that effective iterative
+subtraction was the next sensitivity lever.** Session 84 (next subsection)
+ruled that out with two-signal synthetic experiments: matched-filter
+subtraction cannot separate in-channel pairs even when the synth template is
+bit-perfect, and AP (a-priori) decoding plus coherent demod are the real
+levers — see Session 84 update below.
 
 **GPL/clean-room note.** Instrumenting jt9 to compare intermediate stages is
 legal to RUN (GPL v3 triggers on *distribution*, not private modify/run;
@@ -1559,6 +1559,77 @@ implementation is the classic clean-room contamination, putting SM's
 MIT-distributability (the whole point of the § Licensing constraint) at risk.
 `ft8-stage-probe` (synthetic known-signal) + the ref [14] public-domain
 programs are the sanctioned substitutes.
+
+#### M4.1 refinement continued (Session 84, 2026-05-23) — subtraction structurally ruled out
+
+Session 83's stage diagnosis fingered iterative subtraction as the most
+promising remaining lever. Session 84 built the apparatus to test it
+cleanly — and the verdict is **the matched-filter subtraction in
+`dsp.SubtractSignal` cannot work in the regime that matters**.
+
+**Tool extended.** `cmd/ft8-stage-probe` gained a two-signal mode
+(`-msg2`, `-freq2`, `-gain2`, `-subtract`, `-out`): synthesises two
+genuinely-distinct known messages + AWGN; runs `ft8.Decode` at
+`SubtractionPasses=0` and `=1`; scores "A found / B found / extras" per
+trial against the known target text. Audio is fully deterministic from
+its parameters; verified byte-identical re-runs. 16 canonical fixtures
+shipped at `captures/synthetic/` with `regen.sh` + `README.md` — the
+permanent regression yardstick.
+
+**Sweep matrix (4 cells × 10 trials each):**
+
+| Configuration | Δf=10 | Δf=20 | Δf=30 | Δf=40 | Δf=50/60/200 |
+|---|---|---|---|---|---|
+| Equal gain (A=B=1), SNR=-6 | A 10% / B 70% | A 100% / B 70% | both 100% | both 100% | both 100% @50 |
+| A 2× B, SNR=-6 | A 100% / B 0% | A 100% / B 0% | A 100% / B 0% | A 100% / B 0% | both 100% @60 |
+| A 4× B, SNR=-6 | A 100% / B 0% | A 100% / B 0% | A 100% / B 0% | A 100% / B 0% | — |
+| A 2× B, SNR=-2 (louder) | A 100% / B 0% | A 100% / B 0% | A 100% / B 0% | A 100% / B 0% | — |
+
+**Three honest conclusions:**
+
+1. **Masking scales with relative loudness, not just Δf.** Equal-gain
+   pairs clear at 30 Hz; A=2× B masks B at 30 Hz; A=4× B masks B even at
+   40 Hz. The "effective channel width" widens as one signal gets louder.
+2. **SNR doesn't punch through.** -6 → -2 dB (4 dB louder) recovered B
+   at zero spacings. The limit is structural (tone-bin energy overlap),
+   not noise-floor-limited.
+3. **Subtraction NEVER helps and consistently adds false positives.**
+   12 cells × 10 trials with A's bits known EXACTLY (perfect synth
+   template) — zero new B-decodes recovered; FPs added in 7 of 12 cells.
+   Matched-filter projection cannot separate in-channel signals: when
+   A and B share tone-bin space, the estimator's `a/b` coefficients
+   absorb energy from both, so subtracting `a·sin_A + b·cos_A` also
+   removes part of B's signal.
+
+**Audio-quality angle (revisited).** Also a dead end for the current
+bottleneck. Already proved Session 83 (`jt9` decodes 29 from
+`live_slot1.wav` vs SM's 11 matched — same bytes; audio is fine). 16-bit
+12 kHz PCM gives ~96 dB headroom on a 50 dB-range signal; the gap is
+the decoder. The ONE audio-side bet that would matter is I/Q (complex
+baseband) capture from an SDR for coherent demod — but the FTdx10 has
+no I/Q output. Critically: **the complex baseband is already present
+internally** post `dsp.Downsample`; SM just throws the phase away at
+`dsp/demod.go:161` (`cmplx.Abs`). Coherent demod can happen from
+existing audio, no rig change needed.
+
+**Recommended next actions (queued, not started):**
+
+- **Delete the subtraction code.** Per CLAUDE.md "no half-finished
+  implementations": remove `DecodeOptions.SubtractionPasses`, the pass
+  loop in `internal/ft8/decode.go`, `dsp.SubtractSignal` /
+  `SynthesizeBoth` if unused elsewhere, and the three subtraction tests.
+  Synthetic fixtures stay as the decoder-progress yardstick.
+- **Coherent demodulation.** Highest-impact lever — single-file rewrite
+  of `dsp/demod.go` to use complex amplitudes (track carrier phase
+  across the 79 symbols, compute LLRs from complex tone-bin amplitudes
+  instead of magnitudes). Expected gain ~2-3 dB matched to Session 83's
+  clean-AWGN diagnosis. Validation: `captures/synthetic/` should
+  improve at Δf 30/40 Hz with gain-asymmetric pairs; `ft8-eval` corpus
+  match-to-oracle should climb from ~54%.
+- **AP decoding.** Second lever — `internal/ft8/codec/ldpc_decode.go`
+  needs an optional `priorLLR []float64` parameter so callsign-hash
+  matches from the running `HashTable` can seed bit priors. jt9's
+  `a1`-marked weak-CQ decodes are AP-assisted; SM has none.
 
 ---
 

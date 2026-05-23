@@ -31,8 +31,27 @@
 //	# Sweep SNR to find SM's per-stage thresholds (averaged over trials)
 //	ft8-stage-probe -sweep=-26:-6:2 -trials=20
 //
-//	# Add a strong interferer 50 Hz away (dense-slot interference test)
+//	# Add a strong same-msg masker 50 Hz away (dense-slot demod stress)
 //	ft8-stage-probe -snr=-12 -interferer=50
+//
+// **Two-signal subtraction mode** — synthesise two distinct messages
+// at nearby frequencies and ask whether iterative subtraction can
+// recover both. Score is per-message presence (found / missed) plus
+// the count of any extra unexpected decodes ("false positives" from
+// the subtraction residue or CRC14 lottery):
+//
+//	# A and B at +10 Hz spacing, single SNR
+//	ft8-stage-probe \
+//	    -msg "CQ K1JT FN20" -freq 1500 \
+//	    -msg2 "CQ G0ABC IO91" -freq2 1510 \
+//	    -snr=-12 -subtract
+//
+//	# Sweep SNR with subtraction on/off; A0%/B0% = no-subtraction,
+//	# A1%/B1% = SubtractionPasses=1.
+//	ft8-stage-probe \
+//	    -msg "CQ K1JT FN20" -freq 1500 \
+//	    -msg2 "CQ G0ABC IO91" -freq2 1510 \
+//	    -sweep=-22:-4:2 -trials=10 -subtract
 //
 // Developer tool, not part of smd; peer of ft8-eval (corpus-level) and
 // ft8-capture-probe (live audio).
