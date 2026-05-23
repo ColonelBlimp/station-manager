@@ -29,8 +29,11 @@ func main() {
 		ldpcIters  = flag.Int("ldpc-iters", 0, "DecodeOptions.LDPCMaxIterations (0=default 50)")
 		maxCand    = flag.Int("max-cand", 0, "DecodeOptions.Sync.MaxCand sync candidate cap (0=default 100)")
 		syncHalf   = flag.Float64("sync-half-span", 0, "DecodeOptions.Sync.SearchHalfSpanSec time-offset search half-span in seconds (0=default 2.0)")
+		scoreVar   = flag.String("score-variant", "ratio", "DecodeOptions.Sync.ScoreVariant: ratio (default in-pattern/out-of-pattern) | local-peak (neighbour-differences, penalises adjacent-bin energy) | normalised (ratio divided by per-freq-bin median baseline)")
+		minScore   = flag.Float64("min-score", 0, "DecodeOptions.Sync.MinScore candidate-generation threshold (0=default 1.5; appropriate value depends on score variant)")
 		minSync    = flag.Float64("min-sync", 0, "DecodeOptions.MinSyncPower floor (0=default 3.0, negative=no floor, positive=exact)")
 		osdMaxDist = flag.Float64("osd-maxdist", 0, "DecodeOptions.OSDMaxNormDist gate (B2): OSD soft-distance ceiling in (0,1]. 0=default, negative=no gate")
+		llrFloor   = flag.Float64("llr-floor", 0, "DecodeOptions.LLRQualityFloor: per-attempt mean(|LLR|) early-exit threshold. 0=default 0.2, negative=disabled, positive=exact")
 		useHash    = flag.Bool("hashtable", false, "use a fresh per-file codec.HashTable (retains hash-bearing Type 1/2/3 messages)")
 		oracle     = flag.Bool("oracle", false, "run jt9 -8 (WSJT-X) as black-box ground truth; show SM-vs-jt9 parity")
 		msgs       = flag.Bool("msgs", false, "list each decoded message per file")
@@ -66,7 +69,13 @@ func main() {
 		LDPCMaxIterations: *ldpcIters,
 		MinSyncPower:      *minSync,
 		OSDMaxNormDist:    *osdMaxDist,
-		Sync:              dsp.SyncOptions{MaxCand: *maxCand, SearchHalfSpanSec: *syncHalf},
+		LLRQualityFloor:   *llrFloor,
+		Sync: dsp.SyncOptions{
+			MaxCand:           *maxCand,
+			SearchHalfSpanSec: *syncHalf,
+			MinScore:          *minScore,
+			ScoreVariant:      parseScoreVariant(*scoreVar),
+		},
 	}
 
 	oracleOK := *oracle
@@ -378,9 +387,25 @@ func displayName(p string) string {
 	return filepath.Join(dir, filepath.Base(p))
 }
 
+// parseScoreVariant maps the -score-variant flag value to the dsp
+// enum. Unknown values fall back to ratio with a stderr warning.
+func parseScoreVariant(s string) dsp.ScoreVariant {
+	switch s {
+	case "ratio", "":
+		return dsp.ScoreVariantRatio
+	case "local-peak", "localpeak", "local":
+		return dsp.ScoreVariantLocalPeak
+	case "normalised", "normalized", "norm", "percentile":
+		return dsp.ScoreVariantNormalised
+	default:
+		fmt.Fprintf(os.Stderr, "warning: unknown -score-variant %q; using ratio\n", s)
+		return dsp.ScoreVariantRatio
+	}
+}
+
 func printConfig(opts ft8.DecodeOptions, runs int, useHash bool, jobs int) {
-	fmt.Printf("DecodeOptions: subtraction_passes=%d osd_order=%d osd_maxdist=%g llr_scale=%g ldpc_iters=%d min_sync=%g sync_half_span=%g hashtable=%v  (runs=%d jobs=%d)\n\n",
-		opts.SubtractionPasses, opts.OSDOrder, opts.OSDMaxNormDist, opts.LLRScale, opts.LDPCMaxIterations, opts.MinSyncPower, opts.Sync.SearchHalfSpanSec, useHash, runs, jobs)
+	fmt.Printf("DecodeOptions: subtraction_passes=%d osd_order=%d osd_maxdist=%g llr_scale=%g llr_floor=%g ldpc_iters=%d min_sync=%g sync_half_span=%g hashtable=%v  (runs=%d jobs=%d)\n\n",
+		opts.SubtractionPasses, opts.OSDOrder, opts.OSDMaxNormDist, opts.LLRScale, opts.LLRQualityFloor, opts.LDPCMaxIterations, opts.MinSyncPower, opts.Sync.SearchHalfSpanSec, useHash, runs, jobs)
 }
 
 // printStatsSummary prints the per-file diagnostic table when -stats
@@ -453,6 +478,73 @@ func printStatsSummary(results []fileResult) {
 		totalFailAttempts, avgFailTotal)
 
 	printLLRDistribution(results)
+	printBPDistribution(results)
+}
+
+// printBPDistribution shows BP-exit syndrome-weight distributions for
+// decoded vs failed candidates and the BP-converged-but-CRC-failed
+// rate. The big question this answers: are failed candidates failing
+// because BP never gets close (high min syndrome weight) or because
+// BP converges to wrong codewords (CRC failures despite convergence)?
+// That choice determines what a BP-internal early-exit should look
+// like.
+func printBPDistribution(results []fileResult) {
+	var decodedMinSW, failedMinSW []float64
+	var totalBPAttempts, totalConverged, totalCRCValid, totalOSDInvoked int
+	for _, r := range results {
+		if r.skipped || r.stats == nil {
+			continue
+		}
+		for _, c := range r.stats.Candidates {
+			if c.MinBPSyndromeWeight >= 0 {
+				if c.Decoded {
+					decodedMinSW = append(decodedMinSW, float64(c.MinBPSyndromeWeight))
+				} else {
+					failedMinSW = append(failedMinSW, float64(c.MinBPSyndromeWeight))
+				}
+			}
+			totalBPAttempts += c.BPAttempts
+			totalConverged += c.BPConvergeCount
+			totalCRCValid += c.BPCRCValidCount
+			totalOSDInvoked += c.OSDInvokedCount
+		}
+	}
+	if len(decodedMinSW) == 0 && len(failedMinSW) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("=== BP-exit syndrome weight distribution (per candidate's best attempt) ===")
+	fmt.Printf("%-24s %7s %10s %10s %10s %10s %10s %10s\n",
+		"population", "n", "min", "p10", "p50", "p90", "max", "mean")
+	fmt.Println(strings.Repeat("-", 100))
+	printLLRRow("decoded candidates", decodedMinSW)
+	printLLRRow("failed candidates", failedMinSW)
+
+	fmt.Println()
+	fmt.Printf("BP/OSD path counts (across all retry attempts):\n")
+	fmt.Printf("  total BP attempts:           %d\n", totalBPAttempts)
+	fmt.Printf("  BP converged:                %d  (%.1f%% of attempts)\n", totalConverged, pct(totalConverged, totalBPAttempts))
+	fmt.Printf("  BP converged + CRC valid:    %d  (%.1f%% of attempts; %.1f%% of converged)\n",
+		totalCRCValid, pct(totalCRCValid, totalBPAttempts), pct(totalCRCValid, totalConverged))
+	fmt.Printf("  OSD invoked:                 %d  (%.1f%% of attempts)\n", totalOSDInvoked, pct(totalOSDInvoked, totalBPAttempts))
+	fmt.Printf("  BP-only (no OSD needed):     %d  (%.1f%% of attempts)\n",
+		totalBPAttempts-totalOSDInvoked, pct(totalBPAttempts-totalOSDInvoked, totalBPAttempts))
+
+	// What fraction of failed candidates EVER got BP to converge?
+	// And of those, what fraction had ≥ 1 CRC-valid attempt? "BP
+	// converged but CRC failed" is the signature of close-but-wrong
+	// alignment (often near-aliased copies of a real decode).
+	if len(failedMinSW) > 0 {
+		failedConvergedCount := 0
+		for _, v := range failedMinSW {
+			if v == 0 {
+				failedConvergedCount++
+			}
+		}
+		fmt.Printf("\nAmong %d FAILED candidates: %d (%.1f%%) had BP converge at least once (always to a CRC-invalid codeword).\n",
+			len(failedMinSW), failedConvergedCount, pct(failedConvergedCount, len(failedMinSW)))
+	}
 }
 
 // printLLRDistribution shows the BestMeanAbsLLR distribution for

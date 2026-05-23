@@ -212,6 +212,44 @@ At **MaxCand=200**:
 
 Reproduction: `go build -o /tmp/sm-ft8-eval ./cmd/ft8-eval/ && /tmp/sm-ft8-eval -oracle -jobs 6 -stats captures/*.wav` (add `-max-cand 200` for the second cell).
 
+**SESSION 84 LATEST 2 — diagnostic round completed; three cap-budget levers ruled out; cap-100 is approximately Pareto-optimal on the live corpus.**
+
+Picked up "explore ALL solutions to the cap problem" directive. Round complete. The infrastructure shipped along the way is solid; the remediation attempts are measured-rejected.
+
+**LLR-quality early-exit SHIPPED (default-on).** `DecodeOptions.LLRQualityFloor` with `DefaultLLRQualityFloor=0.2` (well below `decoded_min=0.416` on live corpus). Mean(|LLR|) of demod output below floor → skip BP+OSD. 66/144 match preserved exactly, FPs unchanged, ~5% wall-clock saved.
+
+**ft8_lib sync comparison.** Reviewed Kārlis Goba's MIT-licensed `ft8_lib` at operator's request. Confirmed clean-room-safe (MIT, independent of WSJT-X). Their score formula uses 4-neighbour differences (penalises adjacent-bin energy). Reimplemented in our coordinate system as `ScoreVariantLocalPeak`. Measured: lost 39 matches (66→27). Cause: their score lacks the ratio scorer's self-normalisation against band-noise. Rejected as sole replacement; kept as opt-in flag. **Policy question pending: is ft8_lib a permitted reference alongside QEX + ref [14], or inspiration-only?**
+
+**BP instrumentation SHIPPED.** `codec.LDPCStats` + `LDPCDecodeBPWithStats` + `LDPCDecodeWithOSDStats`. `CandidateStat` extended with BP fields. `ft8-eval -stats` now shows BP-syndrome-weight distribution + BP/OSD path counts. **Headline finding: BP converges on 0.4% of attempts (51/11,957); OSD invoked on 99.6%.** OSD does essentially all the recovery work and most of OSD's work is wasted (0.47% hit rate). The slot wall is OSD-bound, not BP-bound. BP syndrome weight distributions overlap heavily between decoded/failed — no clean gating threshold.
+
+**Percentile-normalised sync (operator's original points 7-10).** Implemented as `ScoreVariantNormalised`. Per-freq-bin median (or p25) + ±W-bin smoothing window. Tested at ±25/±50/±200 Hz windows. **Identical match count to ratio at every variant** (66/144 at cap=100, 68/144 at cap=200). The hypothesis "real weak signals are being ranked down by absolute-power bias" doesn't hold on this corpus. Rejected; kept as opt-in flag.
+
+**Cap-budget honest summary:** the +2 matches at MaxCand=200 are genuinely marginal signals at the natural ranking floor — not victims of bias correctable by re-ranking. The slot wall at cap=200 is OSD-bound and OSD doesn't gate cleanly. To recover those +2: either accept the trade or do OSD cost reduction (the band-aid path).
+
+**Diagnostic numbers on the live corpus** (B1+B2 defaults, B1=3.0 + B2=0.06):
+
+| Variant | Cap=100 match | Cap=200 match | Notes |
+|---|---|---|---|
+| Ratio (baseline) | 66 | 68 | Default; current production |
+| LLR-floor=0.2 | 66 | — | Default-on now; gate preserves matches |
+| Local-peak | 27 (best) | — | Rejected — lost self-normalisation |
+| Normalised (smoothed) | 66 | 68 | No change — corpus lacks band variation |
+
+**Working-tree state at end of session (uncommitted):**
+- `internal/ft8/dsp/sync.go`: `SyncStats`, `ScoreVariant` enum (Ratio/LocalPeak/Normalised), `scoreCandidateLocalPeak`, `collectNormalisedCandidates`, `intCand` package-scoped.
+- `internal/ft8/decode.go`: `DecodeStats`, `CandidateStat` with LLR + BP fields, `LLRQualityFloor` + `DefaultLLRQualityFloor=0.2`, retry-loop diagnostics, `meanAbsLLR`.
+- `internal/ft8/codec/ldpc_decode.go`: `LDPCStats`, `LDPCDecodeBPWithStats`, `LDPCDecodeWithOSDStats`, `ldpcDecodeBPCore` refactor.
+- `cmd/ft8-eval/main.go`: `-llr-floor`, `-score-variant`, `-min-score`, `-stats` flags + three distribution printouts.
+- All tests green; race-short suite green.
+
+**Three forward options (operator decision pending):**
+
+1. **Pivot to other failure modes** — coherent demod (drop `cmplx.Abs` at `dsp/demod.go:161`, ~2-3 dB), AP decoding (HashTable → LDPC prior LLRs; jt9 marks AP decodes with `a1`), symbol windowing (Hann vs rectangular sidelobes). These attack the STRONG-signal misses (−1/−4/+2 dB) which aren't cap-displaced. Claude's recommendation.
+2. **OSD cost reduction** — make cap-200 affordable. Likely 2-3× wins in Go-level alloc reduction (Session 80 found OSD allocs ~37% of decode time).
+3. **Per-attempt BP/LLR signal hunt** — instrument per-attempt rather than per-candidate. Smaller scope.
+
+Memory `project_ft8_refinement` has the full numbers + the next-session option list. The diagnostic instrumentation is the durable infrastructure to evaluate ANY future precision/throughput experiment.
+
 ### Session 83 (2026-05-22 continuation) — FT8 decode REFINEMENT: honest metric, false-positive gates (B1+B2), stage-level diagnosis. **Headline: the "106% WSJT-X parity" claim was false-positive-inflated; real parity is ~54%.**
 
 Big arc. Deferred M4.2 Phase C; spent the session refining decode QUALITY against real captures using the jt9 3.0.1 oracle. Everything below is committed.

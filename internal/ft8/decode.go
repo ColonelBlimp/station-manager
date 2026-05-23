@@ -208,6 +208,31 @@ type DecodeOptions struct {
 	//   - Positive → exact ceiling, in [0,1].
 	OSDMaxNormDist float64
 
+	// LLRQualityFloor is the per-attempt LLR-quality early-exit
+	// threshold (the "noise-floor gate"). After demod produces 174
+	// LLRs, the candidate's mean(|LLR|) is computed in one pass; if
+	// it falls below this floor, the attempt is skipped before BP /
+	// OSD run. Cheap (~5 µs per attempt) compared to BP+OSD (~3-5 ms),
+	// so a hit rate of even a few percent pays back many times over.
+	//
+	// Resolution rules:
+	//   - 0 (zero value) → DefaultLLRQualityFloor (currently 0.2;
+	//     calibrated below the lowest mean(|LLR|) observed for any
+	//     decoded candidate on the live corpus, with ~2× safety
+	//     margin so future weak decodes are preserved).
+	//   - Negative → gate disabled (no skipping; matches pre-gate
+	//     behaviour).
+	//   - Positive → exact floor; the operator picks the value.
+	//
+	// Calibration trail: on the 6-file live corpus the lowest mean(|
+	// LLR|) for any decoded candidate was 0.416; ~9% of failed
+	// candidates fall below this. The gate's win is small but free
+	// — strictly preserves every observed decode. Bigger budget
+	// reclamation has to come from BP-internal early-exit (separate
+	// work), since the bulk of failed candidates have signal-strength
+	// LLRs but fail inside LDPC for other reasons.
+	LLRQualityFloor float64
+
 	// Stats, when non-nil, is populated by Decode with per-candidate
 	// retry diagnostics covering the main pass. Zero-cost when nil.
 	// Used by ft8-eval -stats to investigate the candidate-cap /
@@ -272,6 +297,35 @@ type CandidateStat struct {
 	// stronger LLRs but didn't decode (e.g. due to BP convergence
 	// quirks). Diagnostic-only.
 	SuccessMeanAbsLLR float64
+
+	// BPAttempts is the number of LDPC + OSD attempts that actually
+	// ran for this candidate (i.e. passed the LLR-quality gate, if
+	// active). Equals Attempts when the LLR gate is disabled.
+	BPAttempts int
+
+	// MinBPSyndromeWeight is the lowest BP-exit syndrome weight seen
+	// across all BPAttempts. Zero ⇔ BP converged on at least one
+	// attempt. Higher values (toward 83 max) ⇒ BP never got close to
+	// a valid codeword. Sentinel -1 = no BP attempt ran (every retry
+	// was gated by the LLR floor).
+	MinBPSyndromeWeight int
+
+	// BPConvergeCount is the number of attempts where BP found a
+	// zero-syndrome codeword (regardless of whether the CRC matched).
+	// BP converging but CRC failing is a strong indicator of a
+	// signal close to but not quite at the right alignment.
+	BPConvergeCount int
+
+	// BPCRCValidCount is the number of attempts where BP converged
+	// AND the embedded CRC14 matched. Successful decodes have this
+	// ≥ 1; the first such attempt is the one that ends the retry
+	// loop via the "first success wins" short-circuit.
+	BPCRCValidCount int
+
+	// OSDInvokedCount is the number of attempts that fell through to
+	// the OSD fallback (BP failed or BP+CRC mismatch). OSD is far
+	// more expensive than BP, so this is the budget hot-spot.
+	OSDInvokedCount int
 }
 
 // DefaultOSDOrder is the OSD search depth applied when
@@ -298,6 +352,15 @@ const DefaultSubtractionPasses = 0
 // remaining false positives sit above this floor (sync-overlapping
 // real decodes) and need the OSD soft-distance gate (B2) instead.
 const DefaultMinSyncPower = 3.0
+
+// DefaultLLRQualityFloor is the per-attempt mean(|LLR|) early-exit
+// threshold applied when DecodeOptions.LLRQualityFloor is the zero
+// value. Calibrated against the live corpus: the lowest mean(|LLR|)
+// observed for any decoded candidate was 0.416, so 0.2 sits well
+// below that with ~2× safety margin. ~9% of failed retry attempts
+// in the live corpus fall below this floor at default DecodeOptions
+// and are gated cheaply.
+const DefaultLLRQualityFloor = 0.2
 
 // DefaultOSDMaxNormDist is the default OSD soft-distance acceptance
 // ceiling (B2), applied when DecodeOptions.OSDMaxNormDist is unset. An
@@ -440,6 +503,16 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		osdMaxNormDist = 0
 	}
 
+	// LLR-quality early-exit floor. Zero → default; negative → disabled
+	// (no gate); positive → exact value. See DefaultLLRQualityFloor.
+	llrQualityFloor := opts.LLRQualityFloor
+	if llrQualityFloor == 0 {
+		llrQualityFloor = DefaultLLRQualityFloor
+	}
+	if llrQualityFloor < 0 {
+		llrQualityFloor = 0
+	}
+
 	// If the caller asked for diagnostics, attach a transient stats
 	// sink to the sync options so dsp.Sync populates the pre-dedup,
 	// post-dedup and post-cap counts. The original caller's opts is
@@ -543,6 +616,11 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		// LLR-quality early-exit calibration).
 		var attempts, freqIdxUsed, timeIdxUsed int
 		var bestMeanAbsLLR, successMeanAbsLLR float64
+		// BP-level aggregates across all attempts that pass the LLR
+		// gate. minBPSyndromeWeight uses -1 as the "no BP ran yet"
+		// sentinel because zero is a meaningful value (BP converged).
+		minBPSyndromeWeight := -1
+		var bpAttempts, bpConvergeCount, bpCRCValidCount, osdInvokedCount int
 
 		// Outer loop: fine-frequency retries. Inner loop: fine-
 		// timing retries at the current frequency. Each combination
@@ -569,15 +647,44 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 					continue
 				}
 				attempts++
-				// Diagnostic-only LLR-quality measurement (Phase 1
-				// of the early-exit work): mean of |LLR| across the
-				// 174 codeword bits. Single pass; negligible cost.
-				// Used to calibrate the future early-exit gate.
+				// LLR-quality early-exit gate. Compute mean(|LLR|)
+				// over the 174 codeword bits in a single pass; if
+				// it falls below the calibrated floor, skip BP+OSD
+				// for this attempt — the LLRs are noise-floor
+				// magnitudes and no LDPC + OSD run will recover a
+				// valid codeword. See DefaultLLRQualityFloor for
+				// the calibration rationale.
 				meanAbs := meanAbsLLR(llrs)
 				if opts.Stats != nil && meanAbs > bestMeanAbsLLR {
 					bestMeanAbsLLR = meanAbs
 				}
-				msgBits, ok := codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder, osdMaxNormDist)
+				if llrQualityFloor > 0 && meanAbs < llrQualityFloor {
+					continue
+				}
+				// Use the diagnostic-instrumented LDPC entry point
+				// only when stats are requested. The cost of the
+				// non-stats fast path stays unchanged.
+				var msgBits []byte
+				var ok bool
+				if opts.Stats != nil {
+					var ldpcStats codec.LDPCStats
+					msgBits, ok, ldpcStats = codec.LDPCDecodeWithOSDStats(llrs, maxIters, osdOrder, osdMaxNormDist)
+					bpAttempts++
+					if minBPSyndromeWeight < 0 || ldpcStats.BPSyndromeWeight < minBPSyndromeWeight {
+						minBPSyndromeWeight = ldpcStats.BPSyndromeWeight
+					}
+					if ldpcStats.BPConverged {
+						bpConvergeCount++
+					}
+					if ldpcStats.BPCRCValid {
+						bpCRCValidCount++
+					}
+					if ldpcStats.OSDInvoked {
+						osdInvokedCount++
+					}
+				} else {
+					msgBits, ok = codec.LDPCDecodeWithOSD(llrs, maxIters, osdOrder, osdMaxNormDist)
+				}
 				if !ok {
 					continue
 				}
@@ -601,15 +708,20 @@ func Decode(samples []float32, opts DecodeOptions) []DecodedMessage {
 		}
 		if opts.Stats != nil {
 			opts.Stats.Candidates = append(opts.Stats.Candidates, CandidateStat{
-				Freq:              c.Freq,
-				DT:                c.DT,
-				SyncPower:         c.SyncPower,
-				Decoded:           decoded,
-				FreqIdxUsed:       freqIdxUsed,
-				TimeIdxUsed:       timeIdxUsed,
-				Attempts:          attempts,
-				BestMeanAbsLLR:    bestMeanAbsLLR,
-				SuccessMeanAbsLLR: successMeanAbsLLR,
+				Freq:                c.Freq,
+				DT:                  c.DT,
+				SyncPower:           c.SyncPower,
+				Decoded:             decoded,
+				FreqIdxUsed:         freqIdxUsed,
+				TimeIdxUsed:         timeIdxUsed,
+				Attempts:            attempts,
+				BestMeanAbsLLR:      bestMeanAbsLLR,
+				SuccessMeanAbsLLR:   successMeanAbsLLR,
+				BPAttempts:          bpAttempts,
+				MinBPSyndromeWeight: minBPSyndromeWeight,
+				BPConvergeCount:     bpConvergeCount,
+				BPCRCValidCount:     bpCRCValidCount,
+				OSDInvokedCount:     osdInvokedCount,
 			})
 		}
 	}

@@ -72,6 +72,16 @@ const llrClamp = 1.0 - 1e-15
 // upstream-guaranteed by the demodulator; a length mismatch here is
 // a programmer bug, not user data.
 func LDPCDecodeBP(llrs []float64, maxIterations int) ([]byte, bool) {
+	codeword, converged, _ := ldpcDecodeBPCore(llrs, maxIterations)
+	return codeword, converged
+}
+
+// ldpcDecodeBPCore is the shared BP implementation behind
+// LDPCDecodeBP (legacy 2-return signature) and LDPCDecodeBPWithStats
+// (3-return signature including the iteration count). Returns the
+// final hard-decided codeword, the convergence flag, and the number
+// of iterations actually run.
+func ldpcDecodeBPCore(llrs []float64, maxIterations int) (codeword []byte, converged bool, itersRun int) {
 	if len(llrs) != CodewordBits {
 		panic("codec.LDPCDecodeBP: llrs must be exactly " + itoaCodewordBits + " long")
 	}
@@ -156,11 +166,11 @@ func LDPCDecodeBP(llrs []float64, maxIterations int) ([]byte, bool) {
 
 		// --- Syndrome check ---------------------------------------
 		if syndromeZero(decided) {
-			return decided, true
+			return decided, true, iter + 1
 		}
 	}
 
-	return decided, false
+	return decided, false, maxIterations
 }
 
 // computeSyndrome returns the 83-bit parity-check syndrome of a 174-
@@ -257,6 +267,89 @@ func LDPCDecode(llrs []float64, maxIterations int) ([]byte, bool) {
 	out := make([]byte, MessageBits)
 	copy(out, msg)
 	return out, true
+}
+
+// LDPCStats reports per-call diagnostics from a single LDPC + OSD
+// decode attempt. Populated by LDPCDecodeWithOSDStats. Used for
+// calibrating BP early-exit / give-up heuristics.
+type LDPCStats struct {
+	// BPIterations is the number of BP iterations actually run.
+	// Equals the maxIterations argument when BP didn't converge.
+	BPIterations int
+
+	// BPSyndromeWeight is the count of unsatisfied parity-check
+	// equations at BP exit. Zero ⇔ BPConverged is true.
+	BPSyndromeWeight int
+
+	// BPConverged is true when BP found a hard-decided codeword
+	// whose syndrome is all-zero.
+	BPConverged bool
+
+	// BPCRCValid is true when BPConverged is true AND the codeword's
+	// embedded CRC14 matches the CRC computed over its 77-bit message
+	// field. Meaningful only when BPConverged is true.
+	BPCRCValid bool
+
+	// OSDInvoked is true when BP failed (either no convergence, or
+	// CRC mismatch) and the OSD fallback was actually run.
+	OSDInvoked bool
+}
+
+// LDPCDecodeBPWithStats is the diagnostic-instrumented variant of
+// LDPCDecodeBP. Returns the same (codeword, converged) pair plus the
+// iteration count consumed and the final syndrome weight at exit.
+// On convergence the syndrome weight is zero by construction. On
+// non-convergence the weight is the count of violated parity checks
+// at the iteration cap — closer to zero means BP got closer to a
+// valid codeword.
+//
+// Panics if len(llrs) != CodewordBits.
+func LDPCDecodeBPWithStats(llrs []float64, maxIterations int) (codeword []byte, converged bool, iters int, syndromeWeight int) {
+	codeword, converged, iters = ldpcDecodeBPCore(llrs, maxIterations)
+	if !converged {
+		syn := computeSyndrome(codeword)
+		for _, b := range syn {
+			if b != 0 {
+				syndromeWeight++
+			}
+		}
+	}
+	return codeword, converged, iters, syndromeWeight
+}
+
+// LDPCDecodeWithOSDStats is the diagnostic-instrumented variant of
+// LDPCDecodeWithOSD. Returns the same (msg, ok) pair plus a fully-
+// populated LDPCStats. Zero-cost compared to LDPCDecodeWithOSD on
+// the success path; the stats fields just record outcomes that the
+// non-stats variant would discard.
+func LDPCDecodeWithOSDStats(llrs []float64, maxIterations, osdOrder int, osdMaxNormDist float64) ([]byte, bool, LDPCStats) {
+	var stats LDPCStats
+	codeword, converged, iters, syndromeWeight := LDPCDecodeBPWithStats(llrs, maxIterations)
+	stats.BPIterations = iters
+	stats.BPSyndromeWeight = syndromeWeight
+	stats.BPConverged = converged
+
+	if converged {
+		// BP succeeded — try the CRC. If it matches, we're done.
+		msg := codeword[:MessageBits]
+		rxCRC := codeword[MessageBits:InfoBits]
+		expected := CRC14(msg)
+		received := packBitsMSBFirst(rxCRC)
+		if expected == received {
+			stats.BPCRCValid = true
+			out := make([]byte, MessageBits)
+			copy(out, msg)
+			return out, true, stats
+		}
+		// BP-converged-but-CRC-failed → fall through to OSD if enabled.
+	}
+
+	if osdOrder <= 0 {
+		return nil, false, stats
+	}
+	stats.OSDInvoked = true
+	msg, ok := osdDecode(llrs, osdOrder, osdMaxNormDist)
+	return msg, ok, stats
 }
 
 // LDPCDecodeWithOSD tries Belief Propagation first via LDPCDecode;
