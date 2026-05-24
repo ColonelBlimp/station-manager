@@ -47,7 +47,7 @@ func TestFind_FixtureCounts(t *testing.T) {
 		{"10cq_clean.wav", 10, 0, 36},
 		{"10cq_snr-16dB.wav", 10, 0, 65},
 		{"10cq_snr-20dB.wav", 10, 0, 60},
-		{"10cq_snr-22dB.wav", 10, 0, 60},
+		{"10cq_snr-22dB.wav", 10, 0, 59},
 	}
 
 	for _, tc := range fixtures {

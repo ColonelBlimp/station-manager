@@ -95,6 +95,20 @@ type Candidate struct {
 	Verify *CostasVerify
 }
 
+// rawCandidate is the internal pipeline candidate used inside Find.
+// It carries the spectrogram-grid coordinates (centreBin, rawDtSteps)
+// as integers so dedup, NMS, and any other adjacency check work in
+// exact integer space — no float-precision noise at the suppression
+// boundary the way `math.Abs(Freq[i]-Freq[j]) <= 6.25` was hitting.
+// At the API edge rawCandidate is converted to Candidate by
+// multiplying out to physical (Freq, DT).
+type rawCandidate struct {
+	centreBin  int           // spectrogram freq bin index
+	rawDtSteps int           // matched-filter raw dt step (pre-physical correction)
+	score      float64       // stage-1 matched-filter ratio
+	verify     *CostasVerify // populated by stage-2 verifier
+}
+
 // Stage-1 generator settings: a very low sanity floor and a generous
 // topK cap. The threshold is just above the matched-filter noise
 // floor (ratio = 1.0 means signal energy equals out-of-pattern
@@ -200,15 +214,15 @@ func Find(samples []float32) []Candidate {
 	}
 
 	// ---- Stage 1: spectrogram sweep, no NMS. ----
-	var stage1 []Candidate
+	var stage1 []rawCandidate
 	for centreBin := binLow; centreBin <= binHigh; centreBin++ {
 		for dtSteps := dtStepsMin; dtSteps <= dtStepsMax; dtSteps++ {
 			score := costasScore(spec, centreBin, dtSteps, nominalStartStep)
 			if score >= stage1ScoreThreshold {
-				stage1 = append(stage1, Candidate{
-					Freq:  float64(centreBin) * df,
-					DT:    float64(dtSteps)*tstep + dtPhysicalOffsetSec,
-					Score: score,
+				stage1 = append(stage1, rawCandidate{
+					centreBin:  centreBin,
+					rawDtSteps: dtSteps,
+					score:      score,
 				})
 			}
 		}
@@ -219,16 +233,18 @@ func Find(samples []float32) []Candidate {
 
 	// Cap stage-1 set going into verification, descending by stage-1 score.
 	sort.Slice(stage1, func(i, j int) bool {
-		return stage1[i].Score > stage1[j].Score
+		return stage1[i].score > stage1[j].score
 	})
 	if len(stage1) > stage1TopK {
 		stage1 = stage1[:stage1TopK]
 	}
 
 	// ---- Stage 2: per-anchor Costas verification. ----
-	verified := make([]Candidate, 0, len(stage1))
+	verified := make([]rawCandidate, 0, len(stage1))
 	for _, c := range stage1 {
-		v := verifyCostas(samples, c.Freq, c.DT, c.Score)
+		freq := float64(c.centreBin) * df
+		physicalDT := float64(c.rawDtSteps)*tstep + dtPhysicalOffsetSec
+		v := verifyCostas(samples, freq, physicalDT, c.score)
 		// Categorical gate only. Pattern-incoherent junk gets cut
 		// here; GeoContrast steers the ranking (sort key below)
 		// rather than acting as a hard floor.
@@ -246,7 +262,7 @@ func Find(samples []float32) []Candidate {
 			continue
 		}
 		vCopy := v
-		c.Verify = &vCopy
+		c.verify = &vCopy
 		verified = append(verified, c)
 	}
 	if len(verified) == 0 {
@@ -255,7 +271,7 @@ func Find(samples []float32) []Candidate {
 
 	// ---- Rank by verifier metrics. ----
 	sort.Slice(verified, func(i, j int) bool {
-		a, b := verified[i].Verify, verified[j].Verify
+		a, b := verified[i].verify, verified[j].verify
 		if a.GeoContrast != b.GeoContrast {
 			return a.GeoContrast > b.GeoContrast
 		}
@@ -268,18 +284,18 @@ func Find(samples []float32) []Candidate {
 		return a.Stage1Score > b.Stage1Score
 	})
 
-	// ---- Final NMS on physical (Freq, DT). ----
+	// ---- Final NMS in INTEGER bin/step space. ----
 	//
-	// Time suppression at 3 spectrogram steps (= 120 ms) rather than
-	// 2 — the half-symbol structural alias of a real signal sits at
-	// exactly 2 steps offset and would otherwise survive NMS via
-	// float-precision noise at the ≤ 2·tstep boundary. 3 steps
-	// cleanly catches it without affecting legitimate signals
-	// (operator clock drift between FT8 stations is ±5-10 ms, never
-	// approaching 120 ms).
+	// Comparing centreBin and rawDtSteps as integers removes the
+	// float-boundary precision issue that earlier blocked the
+	// 2-step suppression window. Keeping the time suppression at 3
+	// steps for now (this commit isolates the precision fix; width
+	// retuning is a separate concern). The 2-bin freq window is
+	// safe — distinct FT8 signals occupy 50 Hz (16 bins) apart at
+	// minimum.
 	const (
-		freqSuppressHz = 2 * df    // ±2 bins (= 6.25 Hz)
-		timeSuppressS  = 3 * tstep // ±3 steps (= 120 ms)
+		freqSuppressBins  = 2 // ±2 spectrogram bins (= 6.25 Hz)
+		timeSuppressSteps = 3 // ±3 spectrogram steps (= 120 ms)
 	)
 	keep := make([]bool, len(verified))
 	for i := range keep {
@@ -293,19 +309,32 @@ func Find(samples []float32) []Candidate {
 			if !keep[j] {
 				continue
 			}
-			if math.Abs(verified[i].Freq-verified[j].Freq) <= freqSuppressHz &&
-				math.Abs(verified[i].DT-verified[j].DT) <= timeSuppressS {
+			dbin := verified[i].centreBin - verified[j].centreBin
+			if dbin < 0 {
+				dbin = -dbin
+			}
+			dstep := verified[i].rawDtSteps - verified[j].rawDtSteps
+			if dstep < 0 {
+				dstep = -dstep
+			}
+			if dbin <= freqSuppressBins && dstep <= timeSuppressSteps {
 				keep[j] = false
 			}
 		}
 	}
 
+	// ---- Convert surviving rawCandidates to public type, cap. ----
 	out := make([]Candidate, 0, stage2MaxResults)
 	for i, c := range verified {
 		if !keep[i] {
 			continue
 		}
-		out = append(out, c)
+		out = append(out, Candidate{
+			Freq:   float64(c.centreBin) * df,
+			DT:     float64(c.rawDtSteps)*tstep + dtPhysicalOffsetSec,
+			Score:  c.score,
+			Verify: c.verify,
+		})
 		if len(out) >= stage2MaxResults {
 			break
 		}
