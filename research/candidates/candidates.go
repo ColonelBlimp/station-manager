@@ -174,7 +174,17 @@ func Find(samples []float32) []Candidate {
 	)
 
 	nominalStartStep := int(math.Floor(0.5 / tstep))
+
+	// Compute raw dt-step search bounds so the PHYSICAL DT range is
+	// symmetric at ±searchHalfSpanS. The matched-filter peak sits
+	// dtPhysicalOffsetSteps steps below physical zero (see
+	// verify.go for the structural reason), so the raw loop bounds
+	// must shift by that amount or the physical range becomes
+	// asymmetric (e.g. [-1.88, +2.12] s for the previous symmetric
+	// raw [-50, +50] loop).
 	halfSpanSteps := int(math.Round(searchHalfSpanS / tstep))
+	dtStepsMin := -halfSpanSteps - dtPhysicalOffsetSteps // raw step at physical -searchHalfSpanS
+	dtStepsMax := halfSpanSteps - dtPhysicalOffsetSteps  // raw step at physical +searchHalfSpanS
 
 	halfFFT := len(spec[0])
 	binLow := int(math.Round(freqLowHz / df))
@@ -192,7 +202,7 @@ func Find(samples []float32) []Candidate {
 	// ---- Stage 1: spectrogram sweep, no NMS. ----
 	var stage1 []Candidate
 	for centreBin := binLow; centreBin <= binHigh; centreBin++ {
-		for dtSteps := -halfSpanSteps; dtSteps <= halfSpanSteps; dtSteps++ {
+		for dtSteps := dtStepsMin; dtSteps <= dtStepsMax; dtSteps++ {
 			score := costasScore(spec, centreBin, dtSteps, nominalStartStep)
 			if score >= stage1ScoreThreshold {
 				stage1 = append(stage1, Candidate{

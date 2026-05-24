@@ -73,20 +73,28 @@ type CostasVerify struct {
 // constants — the research tree is firewalled from internal/ft8/*.
 const synthSlotStartSec = 0.5
 
+// dtPhysicalOffsetSteps is the integer offset, in spectrogram
+// steps, between the matched filter's peak and a physically-on-time
+// signal's true TX start. Structural to the 3,840-sample (=
+// 2-symbol) FFT window: the 4-column block whose FFTs each fully
+// cover symbol 0 starts at column 9 rather than column 12 (= floor
+// (0.5 / tstep)), so a physically-on-time signal peaks at dtSteps
+// = -dtPhysicalOffsetSteps in stage 1.
+//
+// Held as an integer constant so the Find loop can compute its raw
+// dt-step bounds symmetrically in physical-DT terms without any
+// float-to-integer rounding (3 × tstep is exactly representable as
+// a multiple of tstep, but constructing the bounds via division
+// would introduce ULP drift at the boundary).
+const dtPhysicalOffsetSteps = 3
+
 // dtPhysicalOffsetSec is added to the stage-1 matched filter's
 // reported DT to convert it into the physical "relative to 0.5 s
 // nominal TX start" frame.
 //
-// Origin: the matched filter's 3,840-sample FFT window spans two
-// FT8 symbols, so the 4-column block whose FFTs each fully cover
-// symbol 0 starts at spectrogram column 9, not column 12 (= floor
-// (0.5 / tstep)). A physically-on-time signal therefore peaks at
-// dtSteps = -3 in stage 1. Adding 3 × tstep = 0.120 s reconciles
-// the two frames; stage 2 then operates in the physical frame.
-//
 // Positive constant by construction — added, never subtracted, so
 // the sign cannot be confused. See costasScore + Find for the use.
-const dtPhysicalOffsetSec = 3 * float64(nstep) / fs // = +0.120 s
+const dtPhysicalOffsetSec = float64(dtPhysicalOffsetSteps) * float64(nstep) / fs // = +0.120 s
 
 // verifyCostas runs the stage-2 alias-aware verifier on one
 // candidate at (freq, dt). dt must be the PHYSICAL DT — i.e. the
