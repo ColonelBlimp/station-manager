@@ -80,6 +80,23 @@ func TestFind_FixtureCounts(t *testing.T) {
 	}
 }
 
+// TestFind_RejectsShortBuffer pins the input-length contract: Find
+// must reject buffers shorter than the documented 15-second slot
+// (nmax = 180,000 samples). Previously it accepted len >= nn*nsps =
+// 151,680, then silently produced zero candidates because the
+// stage-2 verifier needs txStart + nn*nsps = 157,680 samples to
+// align. Silent no-candidate output for "accepted" inputs is the
+// kind of failure mode tests must catch.
+func TestFind_RejectsShortBuffer(t *testing.T) {
+	for _, n := range []int{0, 1000, nn * nsps, nmax - 1} {
+		got := Find(make([]float32, n))
+		if got != nil {
+			t.Errorf("Find(len=%d) returned %d candidates, want nil (buffer < nmax = %d)",
+				n, len(got), nmax)
+		}
+	}
+}
+
 // scoreFixture mirrors the find-candidates CLI's greedy matcher so the
 // test counts match the operator-visible output. For each truth signal
 // it picks the closest unmatched candidate within tolerance; any

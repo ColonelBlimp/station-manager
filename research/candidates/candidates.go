@@ -22,6 +22,7 @@ const (
 	fs    = 12000.0   // sample rate
 	nsps  = 1920      // samples per symbol (160 ms at fs)
 	nn    = 79        // total channel symbols per transmission
+	nmax  = 180000    // samples per full 15-second FT8 slot (= 15 × fs)
 	baud  = fs / nsps // 6.25 Hz — symbol rate and 8-FSK tone spacing
 	nfft1 = 2 * nsps  // 3840-point spectrogram FFT → 3.125 Hz bins (freq oversampled 2×)
 	nstep = nsps / 4  // 480-sample column step → 40 ms (time oversampled 4×)
@@ -170,7 +171,13 @@ const stage2MaxResults = 100
 //  8. Final non-max suppression on physical (Freq, DT).
 //  9. Cap to stage2MaxResults.
 func Find(samples []float32) []Candidate {
-	if len(samples) < nn*nsps {
+	// Require the documented 15-second slot. The stage-2 verifier
+	// indexes audio up to txStart + nn*nsps where txStart = 6000 +
+	// dt*fs, so any caller passing a buffer shorter than nmax would
+	// see every candidate silently rejected inside verifyCostas
+	// (and Find return an empty list with no diagnostic). Enforce
+	// the documented contract instead.
+	if len(samples) < nmax {
 		return nil
 	}
 	spec := spectrogram(samples)
@@ -408,10 +415,15 @@ func spectrogram(samples []float32) [][]float64 {
 // tone 7) are guaranteed no in-pattern energy, giving a cleaner
 // noise reference than restricting to icos7 alone.
 //
-// **Input contract.** spec must have at least one row; every row
-// must have len ≥ centreBin + freqOversample*maxToneIdx + 1. centreBin
-// must be ≥ 0. Find enforces these via its binLow/binHigh bracketing;
-// the bounds guard below is defensive for any other caller.
+// **Input contract.** spec must be a rectangular grid — every row
+// the same length, len ≥ centreBin + freqOversample*maxToneIdx + 1.
+// centreBin must be ≥ 0. Find enforces both via its binLow/binHigh
+// bracketing AND its sole producer (spectrogram in this file)
+// which writes uniform-width rows by construction. The width check
+// below validates spec[0] only — it is consistency with the
+// spectrogram producer, NOT a defensive guard against ragged input
+// from other callers. A ragged spec would still panic on a
+// shorter-than-spec[0] row.
 //
 // **Slot-edge handling.** Anchor cells whose time slot falls outside
 // the spectrogram are skipped — graceful degradation at the slot
