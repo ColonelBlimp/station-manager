@@ -188,6 +188,79 @@ func verifyCostas(samples []float32, freq, dt float64, stage1Score float64) Cost
 	return v
 }
 
+// Refinement-grid parameters. Two passes — coarse first to locate
+// the rough peak around the supplied stage-1 coordinate, then fine
+// to polish — give sub-bin frequency and sub-step DT precision at
+// 17 additional verify calls per survivor. Cost is bounded
+// (refinement runs only on candidates that already survived NMS,
+// typically tens per slot, not thousands).
+//
+// Coarse step sizes are roughly one spectrogram bin / one
+// spectrogram step (3 Hz, 40 ms), so the 3×3 coarse grid covers ±
+// one bin / step. Fine step sizes are about a third of the coarse,
+// giving final precision near 1 Hz / 10 ms.
+const (
+	refineCoarseFreqStepHz = 3.0   // Hz — coarse-grid freq step
+	refineCoarseDTStepSec  = 0.040 // s — coarse-grid DT step
+	refineFineFreqStepHz   = 1.0   // Hz — fine-grid freq step
+	refineFineDTStepSec    = 0.010 // s — fine-grid DT step
+	refineGridHalfSpan     = 1     // ±1 step each axis → 3×3 grids
+)
+
+// refineCandidate searches a small (df, ddt) grid around the
+// supplied (freq, dt) for the position that maximises the
+// verifier's GeoContrast. Two passes: coarse (3×3 = 9 positions
+// at refineCoarseFreqStepHz / refineCoarseDTStepSec spacing) then
+// fine (3×3 around the coarse peak at refineFine* spacing). Returns
+// the refined (freq, dt) and the updated CostasVerify at that
+// position.
+//
+// Cost: 17 verify calls per survivor (8 coarse around the centre
+// + 8 fine around the coarse peak; the centre point is shared).
+// Intended to run only on the small set of post-NMS survivors.
+//
+// On-grid synthetic signals see the peak at the supplied (freq, dt)
+// already; refinement finds the same position and the (freq, dt)
+// returned are unchanged. For real captures (off-grid) the peak
+// shifts toward the actual transmitter frequency and timing.
+func refineCandidate(samples []float32, freq, dt, stage1Score float64) (float64, float64, CostasVerify) {
+	bestFreq, bestDT := freq, dt
+	bestV := verifyCostas(samples, freq, dt, stage1Score)
+
+	// Coarse pass.
+	for dfi := -refineGridHalfSpan; dfi <= refineGridHalfSpan; dfi++ {
+		for ddti := -refineGridHalfSpan; ddti <= refineGridHalfSpan; ddti++ {
+			if dfi == 0 && ddti == 0 {
+				continue
+			}
+			f := freq + float64(dfi)*refineCoarseFreqStepHz
+			d := dt + float64(ddti)*refineCoarseDTStepSec
+			v := verifyCostas(samples, f, d, stage1Score)
+			if v.GeoContrast > bestV.GeoContrast {
+				bestFreq, bestDT, bestV = f, d, v
+			}
+		}
+	}
+
+	// Fine pass — search around the coarse peak.
+	coarseFreq, coarseDT := bestFreq, bestDT
+	for dfi := -refineGridHalfSpan; dfi <= refineGridHalfSpan; dfi++ {
+		for ddti := -refineGridHalfSpan; ddti <= refineGridHalfSpan; ddti++ {
+			if dfi == 0 && ddti == 0 {
+				continue
+			}
+			f := coarseFreq + float64(dfi)*refineFineFreqStepHz
+			d := coarseDT + float64(ddti)*refineFineDTStepSec
+			v := verifyCostas(samples, f, d, stage1Score)
+			if v.GeoContrast > bestV.GeoContrast {
+				bestFreq, bestDT, bestV = f, d, v
+			}
+		}
+	}
+
+	return bestFreq, bestDT, bestV
+}
+
 // goertzelMulti runs 8 Goertzel recursions in parallel over one
 // NSPS-sample window of audio, returning |X(f_k)|² for each of the
 // 8 FT8 tones.

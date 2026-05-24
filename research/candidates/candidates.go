@@ -168,8 +168,11 @@ const stage2MaxResults = 100
 //     ranking, not the gate.
 //  7. Ranked tie-break: GeoContrast desc → WinsTotal desc →
 //     MinBlockContrast desc → Stage1Score desc.
-//  8. Final non-max suppression on physical (Freq, DT).
-//  9. Cap to stage2MaxResults.
+//  8. Final non-max suppression in integer (centreBin, rawDtSteps) space.
+//  9. Local refinement of survivors via refineCandidate (sub-bin freq
+//     and sub-step DT).
+//
+// 10. Cap to stage2MaxResults.
 func Find(samples []float32) []Candidate {
 	// Require the documented 15-second slot. The stage-2 verifier
 	// indexes audio up to txStart + nn*nsps where txStart = 6000 +
@@ -330,17 +333,34 @@ func Find(samples []float32) []Candidate {
 		}
 	}
 
-	// ---- Convert surviving rawCandidates to public type, cap. ----
+	// ---- Refine survivors locally; convert to public type; cap. ----
+	//
+	// Each post-NMS survivor is the spectrogram-quantised position of
+	// a candidate. Stage-2 verifier was evaluated at that quantised
+	// coordinate, but the actual signal in real captures sits at a
+	// sub-bin/sub-step offset. refineCandidate walks a small (df,
+	// ddt) grid around the supplied position and returns the
+	// physical (freq, dt) where GeoContrast peaks, along with the
+	// updated Verify record at that position.
+	//
+	// For our synthetic on-grid fixtures the peak is at the supplied
+	// position already, so refinement is a no-op for them. The
+	// per-survivor cost (~17 verify calls) is fine: refinement runs
+	// only on at most stage2MaxResults candidates, post-gate, post-NMS.
 	out := make([]Candidate, 0, stage2MaxResults)
 	for i, c := range verified {
 		if !keep[i] {
 			continue
 		}
+		initialFreq := float64(c.centreBin) * df
+		initialDT := float64(c.rawDtSteps)*tstep + dtPhysicalOffsetSec
+		refFreq, refDT, refV := refineCandidate(samples, initialFreq, initialDT, c.score)
+		refVCopy := refV
 		out = append(out, Candidate{
-			Freq:   float64(c.centreBin) * df,
-			DT:     float64(c.rawDtSteps)*tstep + dtPhysicalOffsetSec,
+			Freq:   refFreq,
+			DT:     refDT,
 			Score:  c.score,
-			Verify: c.verify,
+			Verify: &refVCopy,
 		})
 		if len(out) >= stage2MaxResults {
 			break

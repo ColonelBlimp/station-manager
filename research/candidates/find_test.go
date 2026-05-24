@@ -80,6 +80,58 @@ func TestFind_FixtureCounts(t *testing.T) {
 	}
 }
 
+// TestRefineCandidate_ConvergesTowardTruth pins the F7 refinement
+// behaviour: starting at an offset position from a known real
+// signal in 10cq_clean.wav, refineCandidate must converge closer to
+// the true (freq, dt) and produce a higher GeoContrast than the
+// offset starting position. Without this test refinement could
+// silently no-op or wander away — the fixtures are all on-grid so
+// the four-fixture regression doesn't catch it.
+func TestRefineCandidate_ConvergesTowardTruth(t *testing.T) {
+	wavPath := filepath.Join("..", "10cq_clean.wav")
+	data, err := audio.ReadWAV(wavPath)
+	if err != nil {
+		t.Fatalf("read wav: %v", err)
+	}
+
+	// CQ K1JT FN20 is in the manifest at freq=500 Hz, dt=0 s. Probe
+	// refinement starting from a deliberately-offset position.
+	const (
+		trueFreq    = 500.0
+		trueDT      = 0.0
+		startFreq   = 502.0 // 2 Hz off
+		startDT     = 0.030 // 30 ms off
+		stage1Score = 1.0   // placeholder — refinement doesn't use it
+	)
+
+	startV := verifyCostas(data.Samples, startFreq, startDT, stage1Score)
+	refFreq, refDT, refV := refineCandidate(data.Samples, startFreq, startDT, stage1Score)
+
+	// Refined position must be closer to truth on both axes.
+	startFreqErr := math.Abs(startFreq - trueFreq)
+	refFreqErr := math.Abs(refFreq - trueFreq)
+	startDTErr := math.Abs(startDT - trueDT)
+	refDTErr := math.Abs(refDT - trueDT)
+	if refFreqErr >= startFreqErr {
+		t.Errorf("freq did not converge: start err %.3f Hz → refined err %.3f Hz",
+			startFreqErr, refFreqErr)
+	}
+	if refDTErr >= startDTErr {
+		t.Errorf("dt did not converge: start err %.4f s → refined err %.4f s",
+			startDTErr, refDTErr)
+	}
+
+	// And the refined GeoContrast must beat the starting GeoContrast
+	// (otherwise refinement returned the wrong coordinate).
+	if refV.GeoContrast <= startV.GeoContrast {
+		t.Errorf("GeoContrast did not improve: start %.4f → refined %.4f",
+			startV.GeoContrast, refV.GeoContrast)
+	}
+
+	t.Logf("start (%.2f Hz, %+.3f s) geo=%.3f", startFreq, startDT, startV.GeoContrast)
+	t.Logf("refined (%.4f Hz, %+.4f s) geo=%.3f", refFreq, refDT, refV.GeoContrast)
+}
+
 // TestFind_RejectsShortBuffer pins the input-length contract: Find
 // must reject buffers shorter than the documented 15-second slot
 // (nmax = 180,000 samples). Previously it accepted len >= nn*nsps =
