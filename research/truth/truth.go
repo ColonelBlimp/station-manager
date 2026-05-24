@@ -1,0 +1,98 @@
+// Package truth defines the ground-truth manifest format that
+// accompanies a synthetic FT8 WAV fixture. The manifest records the
+// exact (text, freq, dt) of every signal injected into the audio so
+// downstream tools (find-candidates, future decoders) can score
+// their output without needing to actually decode anything — a
+// match within tolerance against a known signal is a true positive,
+// any extra detection is a false positive, any known signal with
+// no nearby detection is a miss.
+//
+// File-on-disk convention: a manifest named "<base>.truth.json"
+// sits next to "<base>.wav". The matching helper PathFor turns a
+// WAV path into its manifest path.
+//
+// The package is stdlib-only by design — both research code AND
+// SM-side tools (cmd/ft8-gen10cq) read/write the same format, so
+// the shared schema lives in one place that neither side has to
+// duplicate.
+package truth
+
+import (
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// Manifest is the on-disk ground-truth record for a synthetic FT8
+// fixture WAV.
+type Manifest struct {
+	// Wav is the WAV filename this manifest describes (basename only,
+	// for portability — the manifest is meant to live alongside the WAV).
+	Wav string `json:"wav"`
+
+	// SampleRate is the WAV's sample rate in Hz.
+	SampleRate uint32 `json:"sample_rate"`
+
+	// Signals is the ordered list of FT8 transmissions injected into
+	// the audio. Order is purely for human readability — scoring
+	// against the manifest doesn't assume any ordering.
+	Signals []Signal `json:"signals"`
+}
+
+// Signal records one ground-truth FT8 transmission.
+type Signal struct {
+	// Text is the operator-facing message text (e.g. "CQ K1JT FN20").
+	Text string `json:"text"`
+
+	// FreqHz is the carrier centre frequency in Hz.
+	FreqHz float64 `json:"freq_hz"`
+
+	// DTSec is the time offset in seconds relative to the nominal
+	// 0.5 s TX start within the 15 s slot.
+	DTSec float64 `json:"dt_s"`
+}
+
+// PathFor returns the manifest path for a given .wav file. Strips
+// the .wav extension (if present) and appends .truth.json. Examples:
+//
+//	"research/10cq_clean.wav" → "research/10cq_clean.truth.json"
+//	"foo.bar"                 → "foo.bar.truth.json"
+func PathFor(wavPath string) string {
+	ext := filepath.Ext(wavPath)
+	if strings.EqualFold(ext, ".wav") {
+		return strings.TrimSuffix(wavPath, ext) + ".truth.json"
+	}
+	return wavPath + ".truth.json"
+}
+
+// Write serialises m to path as indented JSON.
+func Write(path string, m *Manifest) error {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o644)
+}
+
+// Read loads a manifest from path. Returns (nil, nil) when the file
+// does not exist so callers can treat "no manifest" as a soft case
+// (e.g. WAVs that weren't synthesised by ft8-gen10cq carry no truth).
+// Other I/O or JSON errors are returned to the caller.
+func Read(path string) (*Manifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}

@@ -32,3 +32,5 @@ config.json
 /ft8-eval
 /ft8-stage-probe
 /ft8-capture-probe
+/ft8-gen10cq
+/find-candidates
