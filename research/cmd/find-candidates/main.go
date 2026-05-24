@@ -42,16 +42,35 @@ import (
 const expectedSampleRate = 12000
 
 // Ground-truth match tolerances. A detected candidate is considered
-// a match for a truth signal if both axes are within bounds. Sized
-// generously vs the sync grid (3.125 Hz freq, 40 ms time): half-bin
-// quantisation alone could put a perfect detection up to 1.56 Hz /
-// 20 ms off the truth value, so ±2 Hz / ±0.1 s leaves comfortable
-// headroom for the basic detector without admitting genuinely
-// wrong-position detections.
+// a match for a truth signal if both axes are within bounds. Tolerance
+// is per truth-source — synthetic manifests have signals exactly on
+// the synth grid, while jt9-oracle manifests carry signals quantised
+// by jt9's own conventions (freq to ~1 Hz, dt to ~0.1 s) plus the
+// real signal's ±5-10 ms operator clock drift.
+//
+//   - Synthetic: ±2 Hz × ±0.1 s. Half-bin quantisation could put a
+//     perfect detection up to ~1.56 Hz / 20 ms off the synth value,
+//     so 2/0.1 leaves comfortable headroom.
+//   - jt9-oracle: ±5 Hz × ±0.3 s. Covers jt9's ~1 Hz freq quantisation
+//     plus our spectrogram's 3.125 Hz bin spacing, and jt9's 0.1 s dt
+//     quantisation plus a few hundred ms of operator clock drift.
 const (
-	freqMatchTolHz = 2.0
-	dtMatchTolS    = 0.1
+	syntheticFreqTolHz  = 2.0
+	syntheticDTMatchTol = 0.1
+	jt9FreqMatchTolHz   = 5.0
+	jt9DTMatchTolS      = 0.3
 )
+
+// tolerancesFor returns the (freqTol, dtTol) match tolerances
+// appropriate for the supplied truth manifest's source. Nil manifest
+// or unspecified source fall back to synthetic — that's what every
+// pre-Source-field manifest in the repo has.
+func tolerancesFor(manifest *truth.Manifest) (float64, float64) {
+	if manifest != nil && manifest.Source != nil && *manifest.Source == "jt9-oracle" {
+		return jt9FreqMatchTolHz, jt9DTMatchTolS
+	}
+	return syntheticFreqTolHz, syntheticDTMatchTol
+}
 
 func main() {
 	dir := flag.String("dir", "research", "directory containing .wav files (non-recursive)")
@@ -109,7 +128,11 @@ func main() {
 		if err != nil {
 			log.Printf("  read truth %q: %v — scoring skipped", truthPath, err)
 		} else if manifest != nil {
-			fmt.Printf("  truth manifest: %s (%d signals)\n", truthPath, len(manifest.Signals))
+			source := "synthetic"
+			if manifest.Source != nil && *manifest.Source != "" {
+				source = *manifest.Source
+			}
+			fmt.Printf("  truth manifest: %s (%d signals, source=%q)\n", truthPath, len(manifest.Signals), source)
 		} else {
 			fmt.Println("  truth manifest: (none)")
 		}
@@ -138,6 +161,12 @@ func printCandidates(cands []candidates.Candidate, manifest *truth.Manifest) {
 		return
 	}
 
+	// Source-aware match tolerance. Synthetic fixtures use the tight
+	// ±2 Hz × ±0.1 s window; jt9-oracle truth uses the looser ±5 Hz
+	// × ±0.3 s window that accommodates jt9's freq/dt quantisation
+	// plus operator clock drift on real captures.
+	freqTol, dtTol := tolerancesFor(manifest)
+
 	// Greedy match: for each truth signal walk the detection list and
 	// pick the closest unmatched one within tolerance. Squared
 	// (df, ddt) is fine for ranking since both axes share the same
@@ -159,7 +188,7 @@ func printCandidates(cands []candidates.Candidate, manifest *truth.Manifest) {
 			}
 			df := c.Freq - ts.FreqHz
 			ddt := c.DT - ts.DTSec
-			if math.Abs(df) > freqMatchTolHz || math.Abs(ddt) > dtMatchTolS {
+			if math.Abs(df) > freqTol || math.Abs(ddt) > dtTol {
 				continue
 			}
 			d := df*df + ddt*ddt
@@ -190,7 +219,7 @@ func printCandidates(cands []candidates.Candidate, manifest *truth.Manifest) {
 				i+1, c.Freq, c.DT, c.Score, verifyStr, ts.Text, df, ddt)
 		} else {
 			fmt.Printf("    %2d. freq=%8.2f Hz  dt=%+.3f s  s1=%.2f  %s  FP  no match within %.1f Hz x %.2f s\n",
-				i+1, c.Freq, c.DT, c.Score, verifyStr, freqMatchTolHz, dtMatchTolS)
+				i+1, c.Freq, c.DT, c.Score, verifyStr, freqTol, dtTol)
 		}
 	}
 
