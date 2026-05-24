@@ -26,8 +26,10 @@ import (
 	"strings"
 )
 
-// Manifest is the on-disk ground-truth record for a synthetic FT8
-// fixture WAV.
+// Manifest is the on-disk ground-truth record for an FT8 fixture WAV
+// — either a synthetic fixture (where signals are known by
+// construction) or a real capture (where signals come from running
+// a decoder oracle like jt9 against the audio).
 type Manifest struct {
 	// Wav is the WAV filename this manifest describes (basename only,
 	// for portability — the manifest is meant to live alongside the WAV).
@@ -35,6 +37,16 @@ type Manifest struct {
 
 	// SampleRate is the WAV's sample rate in Hz.
 	SampleRate uint32 `json:"sample_rate"`
+
+	// Source records where the ground-truth signal list came from.
+	// Known values: "synthetic" (signals injected by ft8-gen10cq or
+	// similar), "jt9-oracle" (signals parsed from jt9 -8 stdout on a
+	// real capture), "manual" (operator-labelled). Nil/empty means
+	// unspecified, treated as "synthetic" by older tooling that
+	// pre-dates this field. Allows downstream matchers to apply
+	// looser tolerances for oracle-derived truth (jt9 quantises freq
+	// to ~1 Hz, dt to ~0.1 s).
+	Source *string `json:"source,omitempty"`
 
 	// SNRDB records the per-signal SNR (in dB, relative to a 2,500 Hz
 	// noise bandwidth — the WSJT-X convention) of any AWGN that was
