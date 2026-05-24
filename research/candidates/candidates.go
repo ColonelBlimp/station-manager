@@ -261,9 +261,17 @@ func Find(samples []float32) []Candidate {
 	})
 
 	// ---- Final NMS on physical (Freq, DT). ----
+	//
+	// Time suppression at 3 spectrogram steps (= 120 ms) rather than
+	// 2 — the half-symbol structural alias of a real signal sits at
+	// exactly 2 steps offset and would otherwise survive NMS via
+	// float-precision noise at the ≤ 2·tstep boundary. 3 steps
+	// cleanly catches it without affecting legitimate signals
+	// (operator clock drift between FT8 stations is ±5-10 ms, never
+	// approaching 120 ms).
 	const (
-		freqSuppressHz = 2 * df    // ±2 bins
-		timeSuppressS  = 2 * tstep // ±2 steps
+		freqSuppressHz = 2 * df    // ±2 bins (= 6.25 Hz)
+		timeSuppressS  = 3 * tstep // ±3 steps (= 120 ms)
 	)
 	keep := make([]bool, len(verified))
 	for i := range keep {
