@@ -39,12 +39,17 @@ import "math"
 // the constructor does the table + half-plan setup once, then
 // each FFT call reuses both.
 //
-// **Allocation cost.** Each FFT call allocates exactly one slice
-// — the returned result of length N/2+1. The packed-input scratch
-// is owned by the RealPlan (pooled across calls) and the half-
-// size complex FFT's internal workspace is owned by the half-Plan.
-// For Spectrogram's 372 × FFT(N=3840) per slot, RealPlan trims
-// both compute time and allocation count vs the complex-Plan path.
+// **Allocation cost.** Each FFT call allocates two slices: the
+// half-size complex Plan's returned result (length N/2) and the
+// real-FFT's returned result (length N/2+1). The packed-input
+// scratch and the half-Plan's workspace are owned by the RealPlan
+// and pooled across calls. For Spectrogram's 372 × FFT(N=3840)
+// per slot, RealPlan trims both compute time and allocation count
+// vs the complex-Plan path. If single-allocation performance ever
+// matters, the fix is to add an in-place FFT method on the
+// underlying Plan and route through it; today's two-allocation
+// shape is the cost of keeping Plan.FFT's "returns a fresh slice"
+// contract.
 //
 // **Thread safety.** Not safe for concurrent use; the underlying
 // half-size Plan + packed-input scratch are shared mutable state.
@@ -74,16 +79,31 @@ type RealPlan struct {
 	zScratch []complex128
 }
 
-// NewRealPlan builds a RealPlan for size n. n must be even and
-// n/2 must be 5-smooth (factors of 2, 3, 5 only) — the standard
-// Plan size constraint applied to the half-size internal FFT.
-// Non-conforming sizes panic.
+// NewRealPlan builds a RealPlan for size n. Accepted sizes:
+//
+//   - n = 0 or n = 1: trivial case (FFT returns the input verbatim
+//     with a zero imaginary part). The half-Plan is not built.
+//   - n = 2: special case (the inner unpack loop runs zero
+//     iterations, so the twiddle table can be empty).
+//   - n ≥ 4, n % 4 == 0, and n/2 is 5-smooth (factors of 2, 3, 5
+//     only): the production path. The n%4 == 0 constraint exists
+//     because the unpack twiddle table is sized n/4 and the
+//     k == N/4 special case requires N/4 to be integral.
+//
+// Anything else panics. Notably: even sizes like 6, 10, 18, 30 (n/2
+// is 5-smooth but n%4 != 0) are rejected here — leaving them
+// allowed would let FFT pass the constructor and panic later with
+// an index-out-of-range when the inner loop reaches a k that the
+// twiddle table cannot cover.
 func NewRealPlan(n int) *RealPlan {
 	if n <= 1 {
 		return &RealPlan{n: n}
 	}
 	if n%2 != 0 {
 		panic("audio.NewRealPlan: size must be even; got " + itoa(n))
+	}
+	if n != 2 && n%4 != 0 {
+		panic("audio.NewRealPlan: size must be 0, 1, 2, or a multiple of 4; got " + itoa(n))
 	}
 	half := n / 2
 	quarter := half / 2
@@ -116,8 +136,10 @@ func NewRealPlan(n int) *RealPlan {
 // from `Plan.FFT(real-padded-with-zeros)` to `RealPlan.FFT(real)`
 // sees the same X[k] for k in [0, n/2].
 //
-// Panics if p.n <= 1 (trivial sizes); the contract requires a
-// real input that maps to at least one output bin.
+// Trivial sizes (p.n = 0 or 1) return a length-p.n slice carrying
+// the input verbatim as the real part of complex128 — they do not
+// panic. See NewRealPlan's contract for the full set of accepted
+// sizes.
 func (p *RealPlan) FFT(x []float32) []complex128 {
 	if p.n <= 1 {
 		// Degenerate cases — return single element for n=1, empty for n=0.

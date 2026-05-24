@@ -148,6 +148,44 @@ func TestRealPlan_EdgeCases(t *testing.T) {
 	}
 }
 
+// TestRealPlan_RejectsNonMultipleOf4 pins that even sizes whose
+// half is 5-smooth but which themselves are not multiples of 4 are
+// rejected by the constructor — they would otherwise pass and
+// panic later inside FFT (the unpack twiddle table only has n/4
+// entries and the k==N/4 special case is only valid when N/4 is
+// integral).
+func TestRealPlan_RejectsNonMultipleOf4(t *testing.T) {
+	for _, n := range []int{6, 10, 18, 30, 50, 54, 90} {
+		t.Run("N="+itoa(n), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("NewRealPlan(%d) should panic (n%%4 != 0); did not", n)
+				}
+			}()
+			_ = NewRealPlan(n)
+		})
+	}
+}
+
+// TestRealPlan_AcceptsN2 pins that n=2 is the one even-non-multiple-of-4
+// size that's safe — its inner unpack loop runs zero iterations so
+// the twiddle table can be empty. Matches the constructor's contract.
+func TestRealPlan_AcceptsN2(t *testing.T) {
+	p := NewRealPlan(2)
+	out := p.FFT([]float32{3.0, 1.0})
+	if len(out) != 2 {
+		t.Fatalf("n=2: got length %d, want 2", len(out))
+	}
+	// For real input [3, 1], the 2-point DFT is X[0] = 4, X[1] = 2.
+	const tol = 1e-6
+	if math.Abs(real(out[0])-4.0) > tol || math.Abs(imag(out[0])) > tol {
+		t.Errorf("n=2 X[0]: got %v, want 4+0i", out[0])
+	}
+	if math.Abs(real(out[1])-2.0) > tol || math.Abs(imag(out[1])) > tol {
+		t.Errorf("n=2 X[1]: got %v, want 2+0i", out[1])
+	}
+}
+
 // BenchmarkRealPlan_FFT_N3840 measures the per-call cost at the
 // spectrogram's hot-path size. Compare to BenchmarkPlan_FFT (the
 // complex-Plan-with-zero-imaginary path Spectrogram used to take).
