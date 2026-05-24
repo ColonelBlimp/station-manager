@@ -95,37 +95,38 @@ type Candidate struct {
 	Verify *CostasVerify
 }
 
-// Stage-1 generator settings: a loose threshold and topK cap keep
-// the spectrogram pass cheap while passing plenty of candidates into
-// stage 2. The verifier — not the generator — does the precision work.
+// Stage-1 generator settings: a very low sanity floor and a generous
+// topK cap. The threshold is just above the matched-filter noise
+// floor (ratio = 1.0 means signal energy equals out-of-pattern
+// energy); anything below is uncorrelated with the Costas pattern by
+// construction. stage1TopK caps how many candidates feed into the
+// stage-2 verifier — sized loose enough that all in-band signals
+// down to the FT8 sensitivity floor pass through.
+//
+// Why 10000: at -22 dB on a 10-CQ fixture the weakest real has
+// s1=1.406; the surrounding noise produces several thousand other
+// candidates with s1 >= 1.0. A topK of 500 (the earlier value)
+// silently cuts marginal reals out of the verifier queue. 10000 is
+// effectively "verify everything above the sanity floor" for our
+// test corpus; the verifier itself is the precision lever.
 const (
-	stage1ScoreThreshold = 1.5 // matched-filter ratio floor (loose)
-	stage1TopK           = 500 // verifier accepts at most this many per slot
+	stage1ScoreThreshold = 1.0   // matched-filter ratio floor (sanity only)
+	stage1TopK           = 10000 // verifier accepts at most this many per slot
 )
 
-// Stage-2 gate: hybrid floor combining categorical wins (to reject
-// obvious noise/junk and pattern-incoherent candidates) with a
-// continuous GeoContrast cut (the real precision lever — wins alone
-// can't separate reals from FPs at SNRs near the protocol's
-// decoding floor, since both can land at ~10/21 wins).
-//
-// Calibrated 2026-05-24 against the synthetic SNR sweep at clean,
-// −16, −20 and −22 dB:
-//
-//   - WinsTotal/WinsPerBlock collapse as discriminators below ~−20 dB
-//     (real signals at −20 dB can hit 10/21; FPs can reach 10/21).
-//   - GeoContrast cleanly separates reals from FPs at every tested
-//     SNR. The narrowest gap (−22 dB on surviving reals) is
-//     0.81 vs 0.71 — set the floor at 0.85 to keep margin.
-//
-// Recall stays at 100% of stage-1-surviving reals from clean down
-// to −22 dB; FP count drops to zero on all four fixtures. The
-// signals lost at −22 dB are stage-1 losses (the spectrogram pass
-// doesn't see them), not gate losses.
+// Stage-2 gate: categorical-only. WinsTotal + WinsPerBlock catch
+// pattern-incoherent junk; the GeoContrast metric is retained as a
+// RANKING signal (see the sort key below) rather than as a hard
+// floor. The previous hard floor at GeoContrast >= 0.85 was
+// non-monotonic with SNR: it rejected real -22 dB signals (geo
+// ~0.81) while admitting strong random aliases at clean (geo
+// 1.24). A floor that drifts the wrong way across operating
+// conditions is worse than no floor — rely on ranking + topK to
+// surface real signals and let downstream demod/LDPC reject any
+// FPs that survive into the output tail.
 const (
-	sanityWinsTotal    = 8    // minimum WinsTotal out of 21 anchors
-	sanityWinsPerBlock = 1    // minimum WinsBlock[b] out of 7 anchors each
-	sanityGeoContrast  = 0.85 // minimum GeoContrast — the primary FP rejector
+	sanityWinsTotal    = 8 // minimum WinsTotal out of 21 anchors
+	sanityWinsPerBlock = 1 // minimum WinsBlock[b] out of 7 anchors each
 )
 
 // Final cap after ranking + NMS.
@@ -147,8 +148,9 @@ const stage2MaxResults = 100
 //  4. Top-stage1TopK by stage-1 score cap going into stage 2.
 //  5. Stage-2 verification: per-symbol DTFT (Goertzel-batched 8-tone)
 //     at each Costas anchor → win counts + log contrast.
-//  6. Hybrid gate: WinsTotal ≥ sanityWinsTotal AND every WinsBlock[b]
-//     ≥ sanityWinsPerBlock AND GeoContrast ≥ sanityGeoContrast.
+//  6. Categorical gate: WinsTotal ≥ sanityWinsTotal AND every
+//     WinsBlock[b] ≥ sanityWinsPerBlock. GeoContrast steers the
+//     ranking, not the gate.
 //  7. Ranked tie-break: GeoContrast desc → WinsTotal desc →
 //     MinBlockContrast desc → Stage1Score desc.
 //  8. Final non-max suppression on physical (Freq, DT).
@@ -217,10 +219,9 @@ func Find(samples []float32) []Candidate {
 	verified := make([]Candidate, 0, len(stage1))
 	for _, c := range stage1 {
 		v := verifyCostas(samples, c.Freq, c.DT, c.Score)
-		// Hybrid gate. WinsTotal + WinsPerBlock catch obvious
-		// pattern-incoherent candidates; GeoContrast handles the
-		// precision split between weak reals and high-win FPs (the
-		// regime where wins alone overlap).
+		// Categorical gate only. Pattern-incoherent junk gets cut
+		// here; GeoContrast steers the ranking (sort key below)
+		// rather than acting as a hard floor.
 		if v.WinsTotal < sanityWinsTotal {
 			continue
 		}
@@ -232,9 +233,6 @@ func Find(samples []float32) []Candidate {
 			}
 		}
 		if !blockOk {
-			continue
-		}
-		if v.GeoContrast < sanityGeoContrast {
 			continue
 		}
 		vCopy := v

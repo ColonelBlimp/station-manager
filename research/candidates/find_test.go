@@ -37,10 +37,17 @@ func TestFind_FixtureCounts(t *testing.T) {
 		wantMissed   int
 		wantSpurious int
 	}{
-		{"10cq_clean.wav", 10, 0, 1},
-		{"10cq_snr-16dB.wav", 10, 0, 0},
-		{"10cq_snr-20dB.wav", 10, 0, 0},
-		{"10cq_snr-22dB.wav", 7, 3, 0},
+		// After step-2 recalibration (drop GeoContrast hard floor;
+		// stage 1 threshold 1.0, topK 10000): recall reaches 10/10
+		// across every fixture down to -22 dB. The spurious counts
+		// are the FP tail the ranking puts below the reals — those
+		// candidates exist by design (precision is now downstream's
+		// job, not the gate's). Don't tighten these without revisiting
+		// the recalibration plan.
+		{"10cq_clean.wav", 10, 0, 36},
+		{"10cq_snr-16dB.wav", 10, 0, 65},
+		{"10cq_snr-20dB.wav", 10, 0, 60},
+		{"10cq_snr-22dB.wav", 10, 0, 60},
 	}
 
 	for _, tc := range fixtures {
