@@ -44,10 +44,14 @@ func TestFind_FixtureCounts(t *testing.T) {
 		// candidates exist by design (precision is now downstream's
 		// job, not the gate's). Don't tighten these without revisiting
 		// the recalibration plan.
-		{"10cq_clean.wav", 10, 0, 36},
-		{"10cq_snr-16dB.wav", 10, 0, 65},
-		{"10cq_snr-20dB.wav", 10, 0, 60},
-		{"10cq_snr-22dB.wav", 10, 0, 59},
+		//
+		// Updated 2026-05-24 for the wider ±2.5 s search window +
+		// per-anchor bounds handling: spurious counts grew (15-20%
+		// more candidates in the search), recall unchanged.
+		{"10cq_clean.wav", 10, 0, 45},
+		{"10cq_snr-16dB.wav", 10, 0, 79},
+		{"10cq_snr-20dB.wav", 10, 0, 68},
+		{"10cq_snr-22dB.wav", 10, 0, 61},
 	}
 
 	for _, tc := range fixtures {

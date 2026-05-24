@@ -191,7 +191,7 @@ func Find(samples []float32) []Candidate {
 	const (
 		freqLowHz       = 200.0
 		freqHighHz      = 2900.0
-		searchHalfSpanS = 2.0
+		searchHalfSpanS = 2.5
 
 		df    = fs / nfft1          // 3.125 Hz per freq bin
 		tstep = float64(nstep) / fs // 0.04 s per time column
@@ -263,6 +263,13 @@ func Find(samples []float32) []Candidate {
 		}
 		blockOk := true
 		for b := 0; b < numCostasBlocks; b++ {
+			// Per-block win floor applies only to blocks where at
+			// least one anchor was accessible — partial-coverage
+			// candidates near the slot edges legitimately have
+			// fully-empty blocks, and shouldn't be rejected for that.
+			if v.AccessibleBlock[b] == 0 {
+				continue
+			}
 			if v.WinsBlock[b] < sanityWinsPerBlock {
 				blockOk = false
 				break

@@ -65,6 +65,15 @@ type CostasVerify struct {
 	// generated this candidate. Carried through for the final
 	// tie-break in the ranker.
 	Stage1Score float64
+
+	// AccessibleBlock[b] is the number of Costas anchors in block b
+	// whose audio window fit inside the input buffer at the verifier's
+	// chosen (freq, dt). For signals with |dt| > ~0.5 s some anchors
+	// fall outside the slot audio — they are skipped in scoring
+	// rather than dragging the whole candidate to zero. Sum across
+	// blocks gives the total anchor count that actually contributed
+	// to the aggregates. Always ≤ costasSymbolsPerBlock (= 7) per block.
+	AccessibleBlock [3]int
 }
 
 // synthSlotStartSec is the FT8 nominal TX start offset within the
@@ -111,16 +120,18 @@ const dtPhysicalOffsetSec = float64(dtPhysicalOffsetSteps) * float64(nstep) / fs
 //   - LogContrast: log(expected / max-other) per anchor, summed.
 //   - GeoContrast, MinBlockContrast: derived aggregates.
 //
-// Returns a zero-valued CostasVerify when the candidate's TX
-// window falls outside the audio buffer.
+// Anchors whose audio window falls outside the buffer (signals with
+// |dt| > ~0.5 s sit close to the slot edges) are skipped rather than
+// dragging the whole candidate to zero — v.AccessibleBlock[b]
+// records how many of block b's 7 anchors were actually scored, and
+// the per-block contrast aggregates divide by the accessible count
+// rather than the ideal 7. Returns the zero CostasVerify only when
+// NO anchors are accessible.
 func verifyCostas(samples []float32, freq, dt float64, stage1Score float64) CostasVerify {
 	var v CostasVerify
 	v.Stage1Score = stage1Score
 
 	txStart := int(math.Round((synthSlotStartSec + dt) * fs))
-	if txStart < 0 || txStart+nn*nsps > len(samples) {
-		return v
-	}
 
 	// Precompute the 8 Goertzel coefficients c_k = 2·cos(2π·f_k/Fs).
 	// Same coefficients for every anchor — only the audio window
@@ -137,6 +148,13 @@ func verifyCostas(samples []float32, freq, dt float64, stage1Score float64) Cost
 		for symInBlock := 0; symInBlock < costasSymbolsPerBlock; symInBlock++ {
 			channelSym := block*costasBlockStride + symInBlock
 			symStart := txStart + channelSym*nsps
+			// Per-anchor bounds check: skip anchors whose NSPS-sample
+			// window falls outside the audio buffer. Whole-candidate
+			// rejection here would lose every early-arrival or
+			// late-arrival signal at the slot edges.
+			if symStart < 0 || symStart+nsps > len(samples) {
+				continue
+			}
 			expectedTone := int(icos7[symInBlock])
 
 			energies := goertzelMulti(samples, symStart, nsps, coeffs)
@@ -153,6 +171,7 @@ func verifyCostas(samples []float32, freq, dt float64, stage1Score float64) Cost
 
 			anchorIdx := block*costasSymbolsPerBlock + symInBlock
 			v.WinningTone[anchorIdx] = uint8(winnerTone)
+			v.AccessibleBlock[block]++
 
 			if winnerTone == expectedTone {
 				v.WinsTotal++
@@ -175,13 +194,25 @@ func verifyCostas(samples []float32, freq, dt float64, stage1Score float64) Cost
 		v.LogContrastTotal += v.LogContrastBlock[block]
 	}
 
-	v.GeoContrast = math.Exp(v.LogContrastTotal / float64(numCostasBlocks*costasSymbolsPerBlock))
+	// Aggregates divide by ACCESSIBLE anchor counts so partial-coverage
+	// candidates aren't artificially down-weighted vs. full-coverage.
+	accessibleTotal := v.AccessibleBlock[0] + v.AccessibleBlock[1] + v.AccessibleBlock[2]
+	if accessibleTotal == 0 {
+		return v
+	}
+	v.GeoContrast = math.Exp(v.LogContrastTotal / float64(accessibleTotal))
 	minBlock := math.Inf(1)
 	for b := 0; b < numCostasBlocks; b++ {
-		bc := math.Exp(v.LogContrastBlock[b] / float64(costasSymbolsPerBlock))
+		if v.AccessibleBlock[b] == 0 {
+			continue
+		}
+		bc := math.Exp(v.LogContrastBlock[b] / float64(v.AccessibleBlock[b]))
 		if bc < minBlock {
 			minBlock = bc
 		}
+	}
+	if math.IsInf(minBlock, 1) {
+		minBlock = 0
 	}
 	v.MinBlockContrast = minBlock
 
