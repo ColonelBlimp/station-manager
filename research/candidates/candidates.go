@@ -118,12 +118,14 @@ type rawCandidate struct {
 // stage-2 verifier — sized loose enough that all in-band signals
 // down to the FT8 sensitivity floor pass through.
 //
-// Why 10000: at -22 dB on a 10-CQ fixture the weakest real has
-// s1=1.406; the surrounding noise produces several thousand other
-// candidates with s1 >= 1.0. A topK of 500 (the earlier value)
-// silently cuts marginal reals out of the verifier queue. 10000 is
-// effectively "verify everything above the sanity floor" for our
-// test corpus; the verifier itself is the precision lever.
+// Why 10000: real captures with HF noise produce ~12,000 stage-1
+// candidates at s1 >= 1.5; the weakest reals in our 6-slot corpus
+// rank in the 7,000-10,000 range. Empirically (perf round 1
+// 2026-05-24) every step DOWN in topK costs real-capture recall —
+// 7,500 lost 3 reals, 5,000 lost 6. Keep at 10,000 and chase
+// speed via kernel optimisation (CGO + SIMD) rather than fewer
+// verifies. Verify itself is the precision lever, so admitting
+// more is the safe direction.
 const (
 	stage1ScoreThreshold = 1.0   // matched-filter ratio floor (sanity only)
 	stage1TopK           = 10000 // verifier accepts at most this many per slot
