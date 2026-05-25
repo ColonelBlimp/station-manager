@@ -10,21 +10,29 @@ import (
 	"github.com/ColonelBlimp/station-manager/research/demod"
 	"github.com/ColonelBlimp/station-manager/research/ldpc"
 	"github.com/ColonelBlimp/station-manager/research/truth"
+	"github.com/ColonelBlimp/station-manager/research/unpack"
 )
 
 // Decoder baseline. These are a floor, not exact golden counts —
-// the purpose is to catch regressions in the BP+OSD+CRC pipeline
-// while leaving room for future upgrades (coherent demod, AP
-// decoding, OSD order > 2) to raise the matched counts without
-// test churn.
+// the purpose is to catch regressions in the BP+OSD+CRC+Unpack
+// pipeline while leaving room for future upgrades (coherent demod,
+// AP decoding, OSD order > 2, more Layer-2 message types) to raise
+// the matched counts without test churn.
 //
 // History:
-//   - 2026-05-25 BP-only + incoherent demod: 88/144 (61.1%), 1 extra.
-//   - 2026-05-25 BP + OSD-2 + incoherent demod: 96/144 (66.7%), 2 extras.
-//     -20 dB synthetic went 3→6; real-capture matched went 88→96.
-//     One additional extra on live_slot3 (now 2 total). The extras
-//     remain inconclusive without Layer-2 unpacking — could be
-//     slot-bleed signals jt9 didn't decode, or rare CRC false accepts.
+//   - 2026-05-25 BP-only + incoherent demod, freq/dt match only:
+//     88/144 (61.1%), 1 extra.
+//   - 2026-05-25 BP + OSD-2 + incoherent demod, freq/dt match only:
+//     96/144 (66.7%), 2 extras. OSD-2 lifted -20 dB synthetic 3→6 and
+//     real-capture matched 88→96.
+//   - 2026-05-25 BP + OSD-2 + incoherent demod + Layer-2 (Type-1)
+//     unpack, matched by TEXT+freq/dt: 95/144 (66.0%), 3 extras.
+//     One previously-matched decode reclassified as extra because
+//     its message type is i3=4 (nonstandard callsign, not yet
+//     implemented). The 3 extras break down as:
+//     2× confirmed jt9-misses (slot-bleed signals; both texts
+//     match standing exchanges visible in live_slot2 truth)
+//     1× Type-4 message (unsupported until c58 decoder lands)
 //
 // Two strictness tiers:
 //
@@ -43,33 +51,33 @@ const (
 	// Synthetic SNR sweep — gen10cq produces 10 CQ signals per fixture.
 	syntheticTruthPerFixture = 10
 
-	// Strict tier: clean and -16 dB decode at 100% — both BP-only
-	// and BP+OSD-2 land here trivially.
+	// Strict tier: clean and -16 dB decode at 100% with exact
+	// text match — every synthetic signal is "CQ <CALL> <GRID>"
+	// (Type 1) which the unpacker handles fully.
 	syntheticCleanMatchedExact = 10
 	synthetic16dBMatchedExact  = 10
 	syntheticStrictExtraExact  = 0
 
 	// Floor tier: -20 / -22 dB are the marginal-SNR regime.
-	// BP-only got 3/10 at -20 dB; BP+OSD-2 reaches 6/10. -22 dB
-	// is still 0/10 — below OSD-2's reach without further upgrades
-	// (order >2, AP, or coherent demod).
 	synthetic20dBMatchedFloor = 6
 	synthetic22dBMatchedFloor = 0
 
-	// Real-capture corpus aggregate vs jt9-oracle truth:
-	//   96 / 144 matched (66.7% decode parity) under BP + OSD-2
-	//    2 extras (live_slot3 — inconclusive, see history above)
+	// Real-capture corpus aggregate vs jt9-oracle truth, with
+	// text-based matching:
+	//   95 / 144 matched (66.0% decode parity)
+	//    3 extras (2× confirmed jt9-misses + 1× Type-4 unsupported)
 	realCaptureTruthTotal   = 144
-	realCaptureMatchedFloor = 96
-	realCaptureExtraCeiling = 2
+	realCaptureMatchedFloor = 95
+	realCaptureExtraCeiling = 3
 )
 
 // realCaptureSlots pins per-slot expectations. Per-slot baselines
 // are tracked because aggregate-only floors can hide a per-slot
 // regression (e.g., one slot collapses, another improves, total
-// stays flat). The extras ceiling is 0 everywhere except live_slot3
-// where the observed extras are the known outlier (BP-only saw 1;
-// BP+OSD-2 sees 2 — see the history at the top of the file).
+// stays flat). live_slot1 carries one Type-4 unsupported extra
+// (will resolve when c58/nonstandard-call unpacking lands);
+// live_slot3 carries two confirmed jt9-miss extras (slot-bleed
+// signals from continuing QSOs visible in live_slot2 truth).
 var realCaptureSlots = []struct {
 	wav        string
 	truthN     int
@@ -77,18 +85,28 @@ var realCaptureSlots = []struct {
 	maxExtra   int
 }{
 	{"../../../captures/20m_slot1.wav", 21, 18, 0},
-	{"../../../captures/20m_slot2.wav", 32, 20, 0},
+	{"../../../captures/20m_slot2.wav", 32, 19, 1}, // 1× Type-4 unsupported
 	{"../../../captures/20m_slot3.wav", 17, 11, 0},
 	{"../../../captures/live_slot1.wav", 29, 16, 0},
 	{"../../../captures/live_slot2.wav", 23, 18, 0},
-	{"../../../captures/live_slot3.wav", 22, 13, 2},
+	{"../../../captures/live_slot3.wav", 22, 13, 2}, // 2× confirmed jt9-misses
 }
 
-// runPipeline is the test-side mirror of main.go's decodeAll +
-// scoring. Kept inline (rather than calling decodeAll directly)
-// because decodeAll prints, which would flood test output. Match
-// logic mirrors score() but returns counts instead of printing.
-func runPipeline(t *testing.T, wavPath string) (matched, missed, extra int) {
+// runPipeline runs the full research-tree pipeline (candidates →
+// demod → LLRs → ldpc.Decode → unpack) and scores against the
+// truth manifest by TEXT + (freq, dt). A match requires:
+//
+//   - The decode's CRC passed.
+//   - Unpack succeeded (text is well-formed).
+//   - The unpacked text equals the truth-entry text exactly.
+//   - The decode's (freq, dt) is within source-aware tolerance of
+//     the truth entry.
+//
+// Returns counts (matched, missed, extra) and a classification of
+// CRC-passes for diagnostic display. "matched" = text+location;
+// "extra" = any CRC-pass not claimed by a truth entry (including
+// unsupported message types and parse failures).
+func runPipeline(t *testing.T, wavPath string) (matched, missed, extra, unsupported, malformed int) {
 	t.Helper()
 
 	data, err := audio.ReadWAV(wavPath)
@@ -108,6 +126,9 @@ func runPipeline(t *testing.T, wavPath string) (matched, missed, extra int) {
 	type rec struct {
 		freq, dt float64
 		crcPass  bool
+		text     string
+		unpackOK bool
+		msgType  uint8
 	}
 	records := make([]rec, len(cands))
 	for i, c := range cands {
@@ -117,8 +138,17 @@ func runPipeline(t *testing.T, wavPath string) (matched, missed, extra int) {
 		for k := 0; k < 174; k++ {
 			input[k] = llrs[k]
 		}
-		_, stats := ldpc.Decode(input)
-		records[i] = rec{freq: c.Freq, dt: c.DT, crcPass: stats.ConvergedCRC}
+		result, stats := ldpc.Decode(input)
+		r := rec{freq: c.Freq, dt: c.DT, crcPass: stats.ConvergedCRC}
+		if r.crcPass {
+			ur, uerr := unpack.Unpack(result.Info)
+			r.msgType = ur.MsgType
+			if uerr == nil {
+				r.text = ur.Text
+				r.unpackOK = true
+			}
+		}
+		records[i] = r
 	}
 
 	freqTol, dtTol := syntheticFreqTolHz, syntheticDTMatchTol
@@ -138,7 +168,10 @@ func runPipeline(t *testing.T, wavPath string) (matched, missed, extra int) {
 		bestIdx := -1
 		bestDistSq := math.Inf(1)
 		for di, r := range records {
-			if !r.crcPass || matchedDecode[di] >= 0 {
+			if !r.crcPass || !r.unpackOK || matchedDecode[di] >= 0 {
+				continue
+			}
+			if r.text != ts.Text {
 				continue
 			}
 			df := r.freq - ts.FreqHz
@@ -165,27 +198,34 @@ func runPipeline(t *testing.T, wavPath string) (matched, missed, extra int) {
 	}
 	missed = len(manifest.Signals) - matched
 	for di, r := range records {
-		if r.crcPass && matchedDecode[di] < 0 {
-			extra++
+		if !r.crcPass || matchedDecode[di] >= 0 {
+			continue
+		}
+		extra++
+		if !r.unpackOK {
+			if r.msgType != 1 {
+				unsupported++
+			} else {
+				malformed++
+			}
 		}
 	}
-	return matched, missed, extra
+	return
 }
 
 // TestSyntheticBaseline pins the four synthetic-fixture outcomes
-// recorded 2026-05-25 (BP-only + incoherent demod).
+// recorded 2026-05-25 with text+location matching:
 //
-//	clean / -16 dB: strict 10/10 matched, 0 extras
-//	-20 dB:         floor matched >= 3 (BP-only baseline)
-//	-22 dB:         floor matched >= 0 (BP-only baseline; OSD-2 should raise)
+//	clean / -16 dB: strict 10/10 matched (text), 0 extras
+//	-20 dB:         floor matched >= 6 (BP+OSD-2 baseline)
+//	-22 dB:         floor matched >= 0 (BP+OSD-2 baseline)
 //
 // Full results are logged before assertions so failures surface
-// the whole table at once (Go's testing.T buffers t.Logf and
-// flushes on test failure).
+// the whole table at once.
 func TestSyntheticBaseline(t *testing.T) {
 	type result struct {
-		name                   string
-		matched, missed, extra int
+		name                                           string
+		matched, missed, extra, unsupported, malformed int
 	}
 	runs := []struct {
 		name string
@@ -198,15 +238,14 @@ func TestSyntheticBaseline(t *testing.T) {
 	}
 	results := make([]result, len(runs))
 	for i, r := range runs {
-		m, mi, e := runPipeline(t, r.wav)
-		results[i] = result{r.name, m, mi, e}
+		m, mi, e, u, mal := runPipeline(t, r.wav)
+		results[i] = result{r.name, m, mi, e, u, mal}
 	}
 
-	// Always log the table — visible with -v and on any failure.
-	t.Log("synthetic baseline (BP + OSD-2 + incoherent demod):")
-	t.Logf("  %-8s %8s %8s %8s", "snr", "matched", "missed", "extra")
+	t.Log("synthetic baseline (BP + OSD-2 + incoherent demod + Type-1 unpack):")
+	t.Logf("  %-8s %8s %8s %8s %8s %8s", "snr", "matched", "missed", "extra", "unsupp", "malform")
 	for _, r := range results {
-		t.Logf("  %-8s %8d %8d %8d", r.name, r.matched, r.missed, r.extra)
+		t.Logf("  %-8s %8d %8d %8d %8d %8d", r.name, r.matched, r.missed, r.extra, r.unsupported, r.malformed)
 	}
 
 	// Strict: clean and -16 dB.
@@ -230,6 +269,15 @@ func TestSyntheticBaseline(t *testing.T) {
 	if got := results[3].matched; got < synthetic22dBMatchedFloor {
 		t.Errorf("-22dB matched = %d, want >= %d (floor)", got, synthetic22dBMatchedFloor)
 	}
+
+	// Synthetic fixtures should never produce malformed payloads
+	// (CRC-pass + parse-fail on Type 1). If this fires, either Unpack
+	// is broken or CRC14 is letting garbage through.
+	for _, r := range results {
+		if r.malformed > 0 {
+			t.Errorf("%s: %d malformed payload(s) on synthetic — Unpack or CRC bug", r.name, r.malformed)
+		}
+	}
 }
 
 // TestRealCaptureBaseline pins per-slot and aggregate decode parity
@@ -248,42 +296,45 @@ func TestRealCaptureBaseline(t *testing.T) {
 	}
 
 	type result struct {
-		name                   string
-		truthN                 int
-		matched, missed, extra int
-		minMatched             int
-		maxExtra               int
+		name                                           string
+		truthN                                         int
+		matched, missed, extra, unsupported, malformed int
+		minMatched                                     int
+		maxExtra                                       int
 	}
 	results := make([]result, len(realCaptureSlots))
 	for i, fx := range realCaptureSlots {
-		m, mi, e := runPipeline(t, fx.wav)
+		m, mi, e, u, mal := runPipeline(t, fx.wav)
 		results[i] = result{
-			name:       filepath.Base(fx.wav),
-			truthN:     fx.truthN,
-			matched:    m,
-			missed:     mi,
-			extra:      e,
-			minMatched: fx.minMatched,
-			maxExtra:   fx.maxExtra,
+			name:        filepath.Base(fx.wav),
+			truthN:      fx.truthN,
+			matched:     m,
+			missed:      mi,
+			extra:       e,
+			unsupported: u,
+			malformed:   mal,
+			minMatched:  fx.minMatched,
+			maxExtra:    fx.maxExtra,
 		}
 	}
 
-	totalMatched, totalExtra := 0, 0
+	totalMatched, totalExtra, totalUnsupp, totalMalformed := 0, 0, 0, 0
 	for _, r := range results {
 		totalMatched += r.matched
 		totalExtra += r.extra
+		totalUnsupp += r.unsupported
+		totalMalformed += r.malformed
 	}
 
-	// Always log the table — visible with -v and on any failure.
-	t.Log("real-capture baseline (BP + OSD-2 + incoherent demod):")
-	t.Logf("  %-22s %6s %8s %7s %6s   %-12s %-12s",
-		"slot", "truth", "matched", "missed", "extra", "min matched", "max extra")
+	t.Log("real-capture baseline (BP + OSD-2 + incoherent demod + Type-1 unpack):")
+	t.Logf("  %-22s %6s %8s %7s %6s %7s %8s   %-12s %-12s",
+		"slot", "truth", "matched", "missed", "extra", "unsupp", "malform", "min matched", "max extra")
 	for _, r := range results {
-		t.Logf("  %-22s %6d %8d %7d %6d   %-12d %-12d",
-			r.name, r.truthN, r.matched, r.missed, r.extra, r.minMatched, r.maxExtra)
+		t.Logf("  %-22s %6d %8d %7d %6d %7d %8d   %-12d %-12d",
+			r.name, r.truthN, r.matched, r.missed, r.extra, r.unsupported, r.malformed, r.minMatched, r.maxExtra)
 	}
-	t.Logf("  %-22s %6d %8d %7s %6d   %-12d %-12d",
-		"TOTAL", realCaptureTruthTotal, totalMatched, "—", totalExtra,
+	t.Logf("  %-22s %6d %8d %7s %6d %7d %8d   %-12d %-12d",
+		"TOTAL", realCaptureTruthTotal, totalMatched, "—", totalExtra, totalUnsupp, totalMalformed,
 		realCaptureMatchedFloor, realCaptureExtraCeiling)
 
 	// Per-slot assertions — floor on matched, ceiling on extras.
@@ -302,5 +353,13 @@ func TestRealCaptureBaseline(t *testing.T) {
 	}
 	if totalExtra > realCaptureExtraCeiling {
 		t.Errorf("total extra = %d, want <= %d", totalExtra, realCaptureExtraCeiling)
+	}
+
+	// Malformed payloads on real captures should be ~zero. Any non-
+	// zero count indicates either a CRC false-accept producing bad
+	// bits or an Unpack regression. Track separately so a sudden
+	// uptick is loud.
+	if totalMalformed > 0 {
+		t.Errorf("total malformed = %d, want 0 (CRC false-accept or Unpack bug)", totalMalformed)
 	}
 }

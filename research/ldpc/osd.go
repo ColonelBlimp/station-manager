@@ -5,8 +5,8 @@ import (
 	"sort"
 )
 
-// osdOrder is the test-pattern enumeration depth. Order 2 means we
-// enumerate:
+// This file implements Fossorier-Lin Ordered Statistics Decoding
+// at order 2. The enumeration depth covers:
 //
 //	  1 codeword from the MRB hard decision   (OSD-0)
 //	 91 single-bit flips of the MRB           (OSD-1)
@@ -15,9 +15,10 @@ import (
 //	4187 total candidate codewords per OSD call.
 //
 // Order 3 would add C(91,3) = 121,485 more — roughly 30× the work
-// for diminishing returns. Order 2 is the standard cost-conscious
-// FT8 setting and the operator's directive for the first cut.
-const osdOrder = 2
+// for diminishing returns at FT8 SNRs. Order 2 is the standard
+// cost-conscious FT8 setting; raise it only after coherent demod
+// has been measured (and not before — see operator directive in
+// docs/session-handoff.md, Session 88 area).
 
 // osd runs Fossorier-Lin Ordered Statistics Decoding (order=2) on
 // the supplied posterior LLRs. Called by Decode when belief
@@ -130,29 +131,35 @@ func osd(posterior [codewordBits]float64) (Result, bool, int) {
 		}
 	}
 
-	// OSD-0: MRB hard-decision as-is.
+	// Test-pattern enumeration. `info` starts at the MRB hard
+	// decision and is mutated in place — each iteration flips its
+	// trial bits, calls scoreOne, then unflips before moving on.
+	// This keeps `info` synchronised with mrbHard between trials
+	// without the 91-byte array copy that a re-assignment would
+	// cost (saves ~4186 copies over the full enumeration).
 	info = mrbHard
+
+	// OSD-0: MRB hard-decision as-is.
 	scoreOne()
 
 	// OSD-1: single-bit flips.
-	if osdOrder >= 1 {
-		for f1 := 0; f1 < infoBits; f1++ {
-			info = mrbHard
-			info[f1] ^= 1
-			scoreOne()
-		}
+	for f1 := 0; f1 < infoBits; f1++ {
+		info[f1] ^= 1
+		scoreOne()
+		info[f1] ^= 1
 	}
 
-	// OSD-2: pair flips.
-	if osdOrder >= 2 {
-		for f1 := 0; f1 < infoBits; f1++ {
-			for f2 := f1 + 1; f2 < infoBits; f2++ {
-				info = mrbHard
-				info[f1] ^= 1
-				info[f2] ^= 1
-				scoreOne()
-			}
+	// OSD-2: pair flips. Outer flip is "set then restore"; the inner
+	// loop walks the second bit through positions > f1 (so each
+	// unordered pair is visited exactly once).
+	for f1 := 0; f1 < infoBits; f1++ {
+		info[f1] ^= 1
+		for f2 := f1 + 1; f2 < infoBits; f2++ {
+			info[f2] ^= 1
+			scoreOne()
+			info[f2] ^= 1
 		}
+		info[f1] ^= 1
 	}
 
 	// Check CRC on the ML candidate.

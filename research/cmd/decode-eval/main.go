@@ -43,6 +43,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/research/demod"
 	"github.com/ColonelBlimp/station-manager/research/ldpc"
 	"github.com/ColonelBlimp/station-manager/research/truth"
+	"github.com/ColonelBlimp/station-manager/research/unpack"
 )
 
 const expectedSampleRate = 12000
@@ -66,9 +67,13 @@ func tolerancesFor(manifest *truth.Manifest) (float64, float64) {
 // matching and per-candidate reporting. CRCPass=true is the
 // load-bearing acceptance flag; everything else is diagnostic.
 type decodeRecord struct {
-	cand    candidates.Candidate
-	stats   ldpc.Stats
-	crcPass bool
+	cand      candidates.Candidate
+	stats     ldpc.Stats
+	crcPass   bool
+	text      string // populated when crcPass && unpackOK
+	unpackOK  bool   // Unpack returned no error
+	unpackErr string // error string when unpackOK=false (for diagnostic display)
+	msgType   uint8  // i3 from Unpack
 }
 
 func main() {
@@ -168,59 +173,90 @@ func main() {
 	}
 }
 
-// decodeAll runs the demod + LLRs + ldpc.Decode chain on every
-// candidate. Returns one decodeRecord per candidate, in the same
-// order Find produced them.
+// decodeAll runs the demod + LLRs + ldpc.Decode + unpack chain on
+// every candidate. Returns one decodeRecord per candidate, in the
+// same order Find produced them. CRC-passing decodes also have
+// their text unpacked so the caller can classify by message content.
 func decodeAll(samples []float32, cands []candidates.Candidate) []decodeRecord {
 	out := make([]decodeRecord, len(cands))
 	for i, c := range cands {
 		energies := demod.Demod(samples, c.Freq, c.DT)
 		llrs := demod.LLRs(energies)
 
-		// demod.LLRs returns [174]float64; ldpc.Decode wants the same
-		// shape. Both are fixed-size by FT8 protocol; the conversion
-		// is a direct copy.
 		var input [174]float64
 		for k := 0; k < 174; k++ {
 			input[k] = llrs[k]
 		}
-		_, stats := ldpc.Decode(input)
+		result, stats := ldpc.Decode(input)
 
-		out[i] = decodeRecord{
+		rec := decodeRecord{
 			cand:    c,
 			stats:   stats,
 			crcPass: stats.ConvergedCRC,
 		}
+		if rec.crcPass {
+			ur, uerr := unpack.Unpack(result.Info)
+			rec.msgType = ur.MsgType
+			if uerr == nil {
+				rec.text = ur.Text
+				rec.unpackOK = true
+			} else {
+				rec.unpackErr = uerr.Error()
+			}
+		}
+		out[i] = rec
 	}
 	return out
 }
 
 // score matches CRC-passing decodes against the truth manifest by
-// (freq, dt) proximity and reports matched/missed/extra. Returns the
-// counts so main can aggregate corpus totals.
+// TEXT equality + (freq, dt) proximity, then classifies any
+// unmatched CRC-passes by message-content category. Reports counts
+// so main can aggregate corpus totals.
 //
-// Greedy nearest-neighbour matching — each truth signal claims the
-// closest unclaimed CRC-pass within tolerance. Decodes left unclaimed
-// are "extra"; truth entries left unmatched are "missed".
+// A "match" requires BOTH the unpacked text and the (freq, dt) to
+// align with the same truth entry — same standard jt9 uses.
+// Unmatched CRC-passes fall into:
+//
+//	extraTextValid:   unpack succeeded, text is well-formed, but no
+//	                  truth entry has this text within tolerance.
+//	                  Candidates: jt9-miss or rare CRC false-accept.
+//	extraMalformed:   CRC passed but Unpack returned a parse error
+//	                  on a SUPPORTED message type. Should be ~zero.
+//	extraUnsupported: CRC passed and Unpack rejected as i3 != 1.
+//	                  Real captures will have these — Type 4 (nonstandard
+//	                  callsign) etc. — until more types are implemented.
 func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matched, missed, extra int) {
-	crcPasses := 0
+	crcPasses, unpackOK, unsupported, malformed := 0, 0, 0, 0
 	for _, r := range records {
-		if r.crcPass {
-			crcPasses++
+		if !r.crcPass {
+			continue
+		}
+		crcPasses++
+		if r.unpackOK {
+			unpackOK++
+		} else if r.msgType != 1 && r.msgType != 0 {
+			// Non-Type-1 — unpacker hasn't implemented this type yet.
+			unsupported++
+		} else {
+			malformed++
 		}
 	}
-	fmt.Printf("  candidates: %d (CRC-pass: %d)\n", len(records), crcPasses)
+	fmt.Printf("  candidates: %d  (CRC-pass: %d, unpack-OK: %d, unsupported-type: %d, malformed: %d)\n",
+		len(records), crcPasses, unpackOK, unsupported, malformed)
 
 	if manifest == nil {
-		// No scoring possible without truth — just dump CRC-passes
-		// when verbose.
 		if verbose {
 			for i, r := range records {
 				if !r.crcPass {
 					continue
 				}
-				fmt.Printf("    %2d. freq=%8.2f dt=%+.3f s1=%.2f  iters=%d  CRC PASS\n",
-					i+1, r.cand.Freq, r.cand.DT, r.cand.Score, r.stats.Iterations)
+				if r.unpackOK {
+					fmt.Printf("    %2d. freq=%8.2f dt=%+.3f → %q\n", i+1, r.cand.Freq, r.cand.DT, r.text)
+				} else {
+					fmt.Printf("    %2d. freq=%8.2f dt=%+.3f  unpack-failed (i3=%d): %s\n",
+						i+1, r.cand.Freq, r.cand.DT, r.msgType, r.unpackErr)
+				}
 			}
 		}
 		return 0, 0, crcPasses
@@ -237,14 +273,20 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 		matchedTruth[i] = -1
 	}
 
+	// Match by TEXT + (freq, dt). A decode whose text doesn't equal
+	// the truth text can't claim that truth entry, even if it's at
+	// the right position — that's a wrong decode at the right place.
 	for ti, ts := range manifest.Signals {
 		bestIdx := -1
 		bestDistSq := math.Inf(1)
 		for di, r := range records {
-			if !r.crcPass {
+			if !r.crcPass || !r.unpackOK {
 				continue
 			}
 			if matchedDecode[di] >= 0 {
+				continue
+			}
+			if r.text != ts.Text {
 				continue
 			}
 			df := r.cand.Freq - ts.FreqHz
@@ -294,8 +336,14 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 					df := r.cand.Freq - ts.FreqHz
 					ddt := r.cand.DT - ts.DTSec
 					tag = fmt.Sprintf(" OK %q (df=%+.2f Hz ddt=%+.3f s)", ts.Text, df, ddt)
+				} else if !r.unpackOK {
+					if r.msgType != 1 {
+						tag = fmt.Sprintf(" UNSUPPORTED type i3=%d", r.msgType)
+					} else {
+						tag = fmt.Sprintf(" MALFORMED: %s", r.unpackErr)
+					}
 				} else {
-					tag = " EXTRA (no truth match within tolerance)"
+					tag = fmt.Sprintf(" EXTRA %q (no truth-text match within tolerance)", r.text)
 				}
 			} else if r.stats.ConvergedParity {
 				tag = fmt.Sprintf(" parity-only iters=%d", r.stats.Iterations)
