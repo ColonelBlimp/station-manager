@@ -9,6 +9,29 @@
 // configuration if matched goes up without text-extra or malformed
 // regressing and runtime stays acceptable.
 //
+// **Status: measured negative on the real-capture corpus (Session 92,
+// 2026-05-25).** All 30 cells of the (stage1 ∈ {1.0, 0.8, 0.6}) ×
+// (wins ∈ {8..4}) × (perBlock ∈ {1, 0}) cube produced identical
+// outcomes: matched=96, text-extra=2, malformed=0, CRC-pass=98.
+// Candidate count saturated at 600 = `stage2MaxResults` × 6 slots
+// the moment any gate relaxed, but no admitted candidate produced
+// a CRC pass — the LLRs at those (freq, dt) positions are too noisy
+// for BP+OSD-2 to converge regardless of how generous the gate is.
+//
+// What this empirically falsified: the working hypothesis that the
+// 7 finder-recall misses (5 WINS_LOW + 2 STAGE1_LOW at their
+// truth-nearest bin) were candidate-phase problems. They're
+// decoder problems. Relaxing the gates costs runtime (584 → 600
+// verifies/slot) and yields zero new decodes.
+//
+// The harness is retained because (a) the result is the artifact —
+// the next session that proposes a gate tweak should re-run rather
+// than re-argue from first principles, (b) the next planned cap
+// sweep (stage2MaxResults ∈ {100, 200, 500}) plugs into the same
+// harness with one new dimension, and (c) any future change to
+// demod or LDPC may shift the result and the harness becomes the
+// regression detector for that shift.
+//
 // Usage:
 //
 //	go run ./research/cmd/sweep-gates             # walks captures/

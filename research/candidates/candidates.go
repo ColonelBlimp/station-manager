@@ -155,6 +155,13 @@ const stage2MaxResults = 100
 // touching production code. Adoption of any non-default Gates is
 // gated on text-level decode measurement (matched up, extras stable
 // or down, malformed == 0) — see research/cmd/sweep-gates.
+//
+// **Status (Session 92, 2026-05-25)**: every cell of the full
+// (stage1 × wins × perBlock) cube measured identical to the default
+// on real captures (matched=96, extras=2, malformed=0, CRC=98).
+// Relaxation admits more candidates but no extra CRC passes — the
+// finder-recall misses are decoder-bound, not gate-bound. Keep
+// production at DefaultGates until the demod or LDPC paths change.
 type Gates struct {
 	// Stage1Threshold is the matched-filter SNR ratio floor at stage 1.
 	// Candidates with score below this are discarded before stage-2
