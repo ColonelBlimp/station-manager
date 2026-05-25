@@ -151,15 +151,15 @@ func estimateNoise(energies [dataSymbolCount][ft8ToneCount]float64) float64 {
 // zero — keeps the result finite even when metric magnitudes are
 // large enough that raw exp() would overflow.
 func logSumExp4(x [4]float64) float64 {
-	max := x[0]
+	maximum := x[0]
 	for i := 1; i < 4; i++ {
-		if x[i] > max {
-			max = x[i]
+		if x[i] > maximum {
+			maximum = x[i]
 		}
 	}
 	sum := 0.0
 	for i := 0; i < 4; i++ {
-		sum += math.Exp(x[i] - max)
+		sum += math.Exp(x[i] - maximum)
 	}
-	return max + math.Log(sum)
+	return maximum + math.Log(sum)
 }
