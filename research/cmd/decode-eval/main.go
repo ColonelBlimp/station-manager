@@ -106,7 +106,7 @@ func main() {
 
 	// Cross-fixture totals — printed at the end for a single-line summary
 	// across the whole corpus.
-	var totalTruth, totalMatched, totalMissed, totalExtra, totalCrcPass int
+	var totalTruth, totalMatched, totalMissed, totalTextExtra, totalUnsupported, totalMalformed, totalCrcPass int
 
 	for _, wavPath := range wavs {
 		data, err := audio.ReadWAV(wavPath)
@@ -145,13 +145,15 @@ func main() {
 		cands := candidates.Find(data.Samples)
 		records := decodeAll(data.Samples, cands)
 
-		matched, missed, extra := score(records, manifest, *verbose)
+		matched, missed, textExtra, unsupported, malformed := score(records, manifest, *verbose)
 
 		if manifest != nil {
 			totalTruth += len(manifest.Signals)
 			totalMatched += matched
 			totalMissed += missed
-			totalExtra += extra
+			totalTextExtra += textExtra
+			totalUnsupported += unsupported
+			totalMalformed += malformed
 		}
 		for _, r := range records {
 			if r.crcPass {
@@ -166,7 +168,9 @@ func main() {
 	fmt.Printf("  CRC-pass decodes: %d\n", totalCrcPass)
 	fmt.Printf("  matched:          %d\n", totalMatched)
 	fmt.Printf("  missed:           %d\n", totalMissed)
-	fmt.Printf("  extra:            %d\n", totalExtra)
+	fmt.Printf("  text-extra:       %d  (CRC+unpack-OK, no truth text match)\n", totalTextExtra)
+	fmt.Printf("  unsupported:      %d  (CRC pass, i3 != 1 — unpacker doesn't cover yet)\n", totalUnsupported)
+	fmt.Printf("  malformed:        %d  (CRC pass, supported type, parse error — should be 0)\n", totalMalformed)
 	if totalTruth > 0 {
 		fmt.Printf("  decode parity:    %d / %d (%.1f%%)\n",
 			totalMatched, totalTruth, 100*float64(totalMatched)/float64(totalTruth))
@@ -211,23 +215,29 @@ func decodeAll(samples []float32, cands []candidates.Candidate) []decodeRecord {
 
 // score matches CRC-passing decodes against the truth manifest by
 // TEXT equality + (freq, dt) proximity, then classifies any
-// unmatched CRC-passes by message-content category. Reports counts
-// so main can aggregate corpus totals.
+// unmatched CRC-passes into three disjoint categories so the
+// caller can track them independently. Reports counts so main can
+// aggregate corpus totals.
 //
 // A "match" requires BOTH the unpacked text and the (freq, dt) to
 // align with the same truth entry — same standard jt9 uses.
-// Unmatched CRC-passes fall into:
+// Unmatched CRC-passes fall into one of:
 //
-//	extraTextValid:   unpack succeeded, text is well-formed, but no
-//	                  truth entry has this text within tolerance.
-//	                  Candidates: jt9-miss or rare CRC false-accept.
-//	extraMalformed:   CRC passed but Unpack returned a parse error
-//	                  on a SUPPORTED message type. Should be ~zero.
-//	extraUnsupported: CRC passed and Unpack rejected as i3 != 1.
-//	                  Real captures will have these — Type 4 (nonstandard
-//	                  callsign) etc. — until more types are implemented.
-func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matched, missed, extra int) {
-	crcPasses, unpackOK, unsupported, malformed := 0, 0, 0, 0
+//	textExtra:   unpack succeeded, text is well-formed, but no truth
+//	             entry has this text within tolerance. Candidates:
+//	             jt9-miss or rare CRC false-accept. Hard regression
+//	             counter — tracked separately so coherent-demod / OSD
+//	             changes can be A/B'd without losing visibility.
+//	unsupported: CRC passed and Unpack rejected as i3 != 1. Real
+//	             captures contain these (Type 4 etc.) until more
+//	             message types are implemented. Informational —
+//	             tracked separately so it can't mask a real regression.
+//	malformed:   CRC passed but Unpack returned a parse error on a
+//	             SUPPORTED message type. Should be exactly zero; any
+//	             non-zero count means CRC false-accept on supported
+//	             type or an Unpack regression.
+func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matched, missed, textExtra, unsupported, malformed int) {
+	crcPasses, unpackOK := 0, 0
 	for _, r := range records {
 		if !r.crcPass {
 			continue
@@ -235,17 +245,28 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 		crcPasses++
 		if r.unpackOK {
 			unpackOK++
-		} else if r.msgType != 1 && r.msgType != 0 {
-			// Non-Type-1 — unpacker hasn't implemented this type yet.
-			unsupported++
-		} else {
-			malformed++
 		}
 	}
-	fmt.Printf("  candidates: %d  (CRC-pass: %d, unpack-OK: %d, unsupported-type: %d, malformed: %d)\n",
-		len(records), crcPasses, unpackOK, unsupported, malformed)
+	fmt.Printf("  candidates: %d  (CRC-pass: %d, unpack-OK: %d)\n",
+		len(records), crcPasses, unpackOK)
 
 	if manifest == nil {
+		// No manifest → can't match by text, so every CRC-pass is
+		// "textExtra" by default (or unsupported/malformed by classification).
+		for _, r := range records {
+			if !r.crcPass {
+				continue
+			}
+			if !r.unpackOK {
+				if r.msgType != 1 {
+					unsupported++
+				} else {
+					malformed++
+				}
+			} else {
+				textExtra++
+			}
+		}
 		if verbose {
 			for i, r := range records {
 				if !r.crcPass {
@@ -259,7 +280,7 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 				}
 			}
 		}
-		return 0, 0, crcPasses
+		return 0, 0, textExtra, unsupported, malformed
 	}
 
 	freqTol, dtTol := tolerancesFor(manifest)
@@ -314,15 +335,23 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 	}
 	missed = len(manifest.Signals) - matched
 
-	extra = 0
 	for di, r := range records {
-		if r.crcPass && matchedDecode[di] < 0 {
-			extra++
+		if !r.crcPass || matchedDecode[di] >= 0 {
+			continue
+		}
+		if !r.unpackOK {
+			if r.msgType != 1 {
+				unsupported++
+			} else {
+				malformed++
+			}
+		} else {
+			textExtra++
 		}
 	}
 
-	fmt.Printf("  truth: %d matched, %d missed, %d extra (CRC-pass off-target)\n",
-		matched, missed, extra)
+	fmt.Printf("  truth: %d matched, %d missed   |   text-extra %d, unsupported %d, malformed %d\n",
+		matched, missed, textExtra, unsupported, malformed)
 
 	if verbose {
 		for i, r := range records {
@@ -369,5 +398,5 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 		}
 	}
 
-	return matched, missed, extra
+	return matched, missed, textExtra, unsupported, malformed
 }

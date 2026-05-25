@@ -63,33 +63,55 @@ const (
 	synthetic22dBMatchedFloor = 0
 
 	// Real-capture corpus aggregate vs jt9-oracle truth, with
-	// text-based matching:
+	// text-based matching. Each unmatched CRC-pass is classified
+	// into exactly one of textExtra / unsupported / malformed —
+	// these are disjoint counters tracked independently so the
+	// next decoder change (coherent demod) can be A/B'd without
+	// either category masking the other.
+	//
 	//   95 / 144 matched (66.0% decode parity)
-	//    3 extras (2× confirmed jt9-misses + 1× Type-4 unsupported)
-	realCaptureTruthTotal   = 144
-	realCaptureMatchedFloor = 95
-	realCaptureExtraCeiling = 3
+	//    2 textExtra   — confirmed jt9-misses on live_slot3
+	//                    ("DN9GLA SV2AJX KN10", "9A2KS SK7WS RR73");
+	//                    both are real continuing exchanges from
+	//                    QSOs visible in live_slot2 truth.
+	//    1 unsupported — 1× Type-4 (nonstandard call, i3=4) on 20m_slot2;
+	//                    will become matched once c58 unpacker lands.
+	//                    NOT a decoder failure.
+	//    0 malformed   — strictly enforced; non-zero would indicate
+	//                    CRC false-accept on supported type or an
+	//                    Unpack regression.
+	realCaptureTruthTotal         = 144
+	realCaptureMatchedFloor       = 95
+	realCaptureTextExtraCeiling   = 2
+	realCaptureUnsupportedCeiling = 1
+	// malformed must be exactly 0 — asserted directly, no constant needed.
 )
 
 // realCaptureSlots pins per-slot expectations. Per-slot baselines
 // are tracked because aggregate-only floors can hide a per-slot
 // regression (e.g., one slot collapses, another improves, total
-// stays flat). live_slot1 carries one Type-4 unsupported extra
-// (will resolve when c58/nonstandard-call unpacking lands);
-// live_slot3 carries two confirmed jt9-miss extras (slot-bleed
-// signals from continuing QSOs visible in live_slot2 truth).
+// stays flat). textExtra and unsupported are tracked separately
+// — coherent demod work shouldn't be allowed to grow textExtra
+// silently even if unsupported drops, or vice versa.
+//
+// Known classifications in the current corpus:
+//   - 20m_slot2: 1× Type-4 unsupported (jt9 reports the call as
+//     a nonstandard form; c58 decoder will resolve this once landed)
+//   - live_slot3: 2× confirmed jt9-misses, both real signals
+//     observable as continuations of QSOs in live_slot2's truth
 var realCaptureSlots = []struct {
-	wav        string
-	truthN     int
-	minMatched int
-	maxExtra   int
+	wav            string
+	truthN         int
+	minMatched     int
+	maxTextExtra   int
+	maxUnsupported int
 }{
-	{"../../../captures/20m_slot1.wav", 21, 18, 0},
-	{"../../../captures/20m_slot2.wav", 32, 19, 1}, // 1× Type-4 unsupported
-	{"../../../captures/20m_slot3.wav", 17, 11, 0},
-	{"../../../captures/live_slot1.wav", 29, 16, 0},
-	{"../../../captures/live_slot2.wav", 23, 18, 0},
-	{"../../../captures/live_slot3.wav", 22, 13, 2}, // 2× confirmed jt9-misses
+	{"../../../captures/20m_slot1.wav", 21, 18, 0, 0},
+	{"../../../captures/20m_slot2.wav", 32, 19, 0, 1}, // 1× Type-4 unsupported
+	{"../../../captures/20m_slot3.wav", 17, 11, 0, 0},
+	{"../../../captures/live_slot1.wav", 29, 16, 0, 0},
+	{"../../../captures/live_slot2.wav", 23, 18, 0, 0},
+	{"../../../captures/live_slot3.wav", 22, 13, 2, 0}, // 2× confirmed jt9-misses
 }
 
 // runPipeline runs the full research-tree pipeline (candidates →
@@ -102,11 +124,12 @@ var realCaptureSlots = []struct {
 //   - The decode's (freq, dt) is within source-aware tolerance of
 //     the truth entry.
 //
-// Returns counts (matched, missed, extra) and a classification of
-// CRC-passes for diagnostic display. "matched" = text+location;
-// "extra" = any CRC-pass not claimed by a truth entry (including
-// unsupported message types and parse failures).
-func runPipeline(t *testing.T, wavPath string) (matched, missed, extra, unsupported, malformed int) {
+// Returns disjoint counters: matched / missed / textExtra /
+// unsupported / malformed. Every CRC-pass falls into exactly one
+// of matched / textExtra / unsupported / malformed (sum equals
+// CRC-pass count). Independent counters so future decoder changes
+// can be A/B'd without one category masking another.
+func runPipeline(t *testing.T, wavPath string) (matched, missed, textExtra, unsupported, malformed int) {
 	t.Helper()
 
 	data, err := audio.ReadWAV(wavPath)
@@ -201,13 +224,14 @@ func runPipeline(t *testing.T, wavPath string) (matched, missed, extra, unsuppor
 		if !r.crcPass || matchedDecode[di] >= 0 {
 			continue
 		}
-		extra++
 		if !r.unpackOK {
 			if r.msgType != 1 {
 				unsupported++
 			} else {
 				malformed++
 			}
+		} else {
+			textExtra++
 		}
 	}
 	return
@@ -224,8 +248,8 @@ func runPipeline(t *testing.T, wavPath string) (matched, missed, extra, unsuppor
 // the whole table at once.
 func TestSyntheticBaseline(t *testing.T) {
 	type result struct {
-		name                                           string
-		matched, missed, extra, unsupported, malformed int
+		name                                               string
+		matched, missed, textExtra, unsupported, malformed int
 	}
 	runs := []struct {
 		name string
@@ -238,28 +262,31 @@ func TestSyntheticBaseline(t *testing.T) {
 	}
 	results := make([]result, len(runs))
 	for i, r := range runs {
-		m, mi, e, u, mal := runPipeline(t, r.wav)
-		results[i] = result{r.name, m, mi, e, u, mal}
+		m, mi, te, u, mal := runPipeline(t, r.wav)
+		results[i] = result{r.name, m, mi, te, u, mal}
 	}
 
 	t.Log("synthetic baseline (BP + OSD-2 + incoherent demod + Type-1 unpack):")
-	t.Logf("  %-8s %8s %8s %8s %8s %8s", "snr", "matched", "missed", "extra", "unsupp", "malform")
+	t.Logf("  %-8s %8s %8s %10s %8s %8s", "snr", "matched", "missed", "textExtra", "unsupp", "malform")
 	for _, r := range results {
-		t.Logf("  %-8s %8d %8d %8d %8d %8d", r.name, r.matched, r.missed, r.extra, r.unsupported, r.malformed)
+		t.Logf("  %-8s %8d %8d %10d %8d %8d", r.name, r.matched, r.missed, r.textExtra, r.unsupported, r.malformed)
 	}
 
-	// Strict: clean and -16 dB.
-	if got := results[0].matched; got != syntheticCleanMatchedExact {
-		t.Errorf("clean matched = %d, want %d (strict)", got, syntheticCleanMatchedExact)
-	}
-	if got := results[0].extra; got != syntheticStrictExtraExact {
-		t.Errorf("clean extra = %d, want %d (strict)", got, syntheticStrictExtraExact)
-	}
-	if got := results[1].matched; got != synthetic16dBMatchedExact {
-		t.Errorf("-16dB matched = %d, want %d (strict)", got, synthetic16dBMatchedExact)
-	}
-	if got := results[1].extra; got != syntheticStrictExtraExact {
-		t.Errorf("-16dB extra = %d, want %d (strict)", got, syntheticStrictExtraExact)
+	// Strict: clean and -16 dB. All synthetic signals are Type 1, so
+	// any unsupported/malformed/textExtra at these SNRs is a bug.
+	for i, snr := range []string{"clean", "-16dB"} {
+		exact := syntheticCleanMatchedExact
+		if i == 1 {
+			exact = synthetic16dBMatchedExact
+		}
+		r := results[i]
+		if r.matched != exact {
+			t.Errorf("%s matched = %d, want %d (strict)", snr, r.matched, exact)
+		}
+		if r.textExtra+r.unsupported+r.malformed != syntheticStrictExtraExact {
+			t.Errorf("%s total extras = %d (text=%d unsupp=%d malf=%d), want %d (strict)",
+				snr, r.textExtra+r.unsupported+r.malformed, r.textExtra, r.unsupported, r.malformed, syntheticStrictExtraExact)
+		}
 	}
 
 	// Floor: -20 dB and -22 dB.
@@ -296,70 +323,82 @@ func TestRealCaptureBaseline(t *testing.T) {
 	}
 
 	type result struct {
-		name                                           string
-		truthN                                         int
-		matched, missed, extra, unsupported, malformed int
-		minMatched                                     int
-		maxExtra                                       int
+		name                                               string
+		truthN                                             int
+		matched, missed, textExtra, unsupported, malformed int
+		minMatched                                         int
+		maxTextExtra                                       int
+		maxUnsupported                                     int
 	}
 	results := make([]result, len(realCaptureSlots))
 	for i, fx := range realCaptureSlots {
-		m, mi, e, u, mal := runPipeline(t, fx.wav)
+		m, mi, te, u, mal := runPipeline(t, fx.wav)
 		results[i] = result{
-			name:        filepath.Base(fx.wav),
-			truthN:      fx.truthN,
-			matched:     m,
-			missed:      mi,
-			extra:       e,
-			unsupported: u,
-			malformed:   mal,
-			minMatched:  fx.minMatched,
-			maxExtra:    fx.maxExtra,
+			name:           filepath.Base(fx.wav),
+			truthN:         fx.truthN,
+			matched:        m,
+			missed:         mi,
+			textExtra:      te,
+			unsupported:    u,
+			malformed:      mal,
+			minMatched:     fx.minMatched,
+			maxTextExtra:   fx.maxTextExtra,
+			maxUnsupported: fx.maxUnsupported,
 		}
 	}
 
-	totalMatched, totalExtra, totalUnsupp, totalMalformed := 0, 0, 0, 0
+	totalMatched, totalTextExtra, totalUnsupp, totalMalformed := 0, 0, 0, 0
 	for _, r := range results {
 		totalMatched += r.matched
-		totalExtra += r.extra
+		totalTextExtra += r.textExtra
 		totalUnsupp += r.unsupported
 		totalMalformed += r.malformed
 	}
 
 	t.Log("real-capture baseline (BP + OSD-2 + incoherent demod + Type-1 unpack):")
-	t.Logf("  %-22s %6s %8s %7s %6s %7s %8s   %-12s %-12s",
-		"slot", "truth", "matched", "missed", "extra", "unsupp", "malform", "min matched", "max extra")
+	t.Logf("  %-22s %6s %8s %7s %10s %7s %8s   %-10s %-10s %-10s",
+		"slot", "truth", "matched", "missed", "textExtra", "unsupp", "malform", "minMatch", "maxTextEx", "maxUnsupp")
 	for _, r := range results {
-		t.Logf("  %-22s %6d %8d %7d %6d %7d %8d   %-12d %-12d",
-			r.name, r.truthN, r.matched, r.missed, r.extra, r.unsupported, r.malformed, r.minMatched, r.maxExtra)
+		t.Logf("  %-22s %6d %8d %7d %10d %7d %8d   %-10d %-10d %-10d",
+			r.name, r.truthN, r.matched, r.missed, r.textExtra, r.unsupported, r.malformed,
+			r.minMatched, r.maxTextExtra, r.maxUnsupported)
 	}
-	t.Logf("  %-22s %6d %8d %7s %6d %7d %8d   %-12d %-12d",
-		"TOTAL", realCaptureTruthTotal, totalMatched, "—", totalExtra, totalUnsupp, totalMalformed,
-		realCaptureMatchedFloor, realCaptureExtraCeiling)
+	t.Logf("  %-22s %6d %8d %7s %10d %7d %8d   %-10d %-10d %-10s",
+		"TOTAL", realCaptureTruthTotal, totalMatched, "—", totalTextExtra, totalUnsupp, totalMalformed,
+		realCaptureMatchedFloor, realCaptureTextExtraCeiling, "—")
 
-	// Per-slot assertions — floor on matched, ceiling on extras.
+	// Per-slot assertions — floor on matched, ceiling on each
+	// extras category separately so a regression in one can't be
+	// masked by an improvement in another.
 	for _, r := range results {
 		if r.matched < r.minMatched {
 			t.Errorf("%s: matched = %d, want >= %d", r.name, r.matched, r.minMatched)
 		}
-		if r.extra > r.maxExtra {
-			t.Errorf("%s: extra = %d, want <= %d", r.name, r.extra, r.maxExtra)
+		if r.textExtra > r.maxTextExtra {
+			t.Errorf("%s: textExtra = %d, want <= %d", r.name, r.textExtra, r.maxTextExtra)
+		}
+		if r.unsupported > r.maxUnsupported {
+			t.Errorf("%s: unsupported = %d, want <= %d", r.name, r.unsupported, r.maxUnsupported)
+		}
+		if r.malformed > 0 {
+			t.Errorf("%s: malformed = %d, want 0 (CRC false-accept or Unpack bug)", r.name, r.malformed)
 		}
 	}
 
-	// Aggregate assertions.
+	// Aggregate assertions — each category tracked independently.
 	if totalMatched < realCaptureMatchedFloor {
 		t.Errorf("total matched = %d, want >= %d", totalMatched, realCaptureMatchedFloor)
 	}
-	if totalExtra > realCaptureExtraCeiling {
-		t.Errorf("total extra = %d, want <= %d", totalExtra, realCaptureExtraCeiling)
+	if totalTextExtra > realCaptureTextExtraCeiling {
+		t.Errorf("total textExtra = %d, want <= %d (likely CRC false-accept or coherent-demod regression)",
+			totalTextExtra, realCaptureTextExtraCeiling)
 	}
-
-	// Malformed payloads on real captures should be ~zero. Any non-
-	// zero count indicates either a CRC false-accept producing bad
-	// bits or an Unpack regression. Track separately so a sudden
-	// uptick is loud.
+	if totalUnsupp > realCaptureUnsupportedCeiling {
+		t.Errorf("total unsupported = %d, want <= %d (a new message type appeared in the corpus?)",
+			totalUnsupp, realCaptureUnsupportedCeiling)
+	}
 	if totalMalformed > 0 {
-		t.Errorf("total malformed = %d, want 0 (CRC false-accept or Unpack bug)", totalMalformed)
+		t.Errorf("total malformed = %d, want 0 (CRC false-accept on supported type or Unpack regression)",
+			totalMalformed)
 	}
 }
