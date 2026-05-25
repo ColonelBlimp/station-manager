@@ -33,6 +33,14 @@ import (
 //     2× confirmed jt9-misses (slot-bleed signals; both texts
 //     match standing exchanges visible in live_slot2 truth)
 //     1× Type-4 message (unsupported until c58 decoder lands)
+//   - 2026-05-25 Linear-coherent demod measured: 95/144, do-no-harm
+//     at RMS threshold 0.4. Synthetic -22 dB gained +1.
+//   - 2026-05-25 Piecewise-coherent demod measured (Session 91):
+//     85/144 — NEGATIVE result, ruled out as default path.
+//   - 2026-05-25 + Type-4 (c58 nonstandard callsign) unpack:
+//     96/144 (66.7%), 2 extras, 0 unsupported. The 20m_slot2 i3=4
+//     decode now produces "<...> KU8AT 73"-style text and matches
+//     truth.
 //
 // Two strictness tiers:
 //
@@ -63,27 +71,23 @@ const (
 	synthetic22dBMatchedFloor = 0
 
 	// Real-capture corpus aggregate vs jt9-oracle truth, with
-	// text-based matching. Each unmatched CRC-pass is classified
-	// into exactly one of textExtra / unsupported / malformed —
-	// these are disjoint counters tracked independently so the
-	// next decoder change (coherent demod) can be A/B'd without
-	// either category masking the other.
+	// text-based matching + Type-1 + Type-4 unpack (Session 91).
 	//
-	//   95 / 144 matched (66.0% decode parity)
+	//   96 / 144 matched (66.7% decode parity)
 	//    2 textExtra   — confirmed jt9-misses on live_slot3
 	//                    ("DN9GLA SV2AJX KN10", "9A2KS SK7WS RR73");
 	//                    both are real continuing exchanges from
 	//                    QSOs visible in live_slot2 truth.
-	//    1 unsupported — 1× Type-4 (nonstandard call, i3=4) on 20m_slot2;
-	//                    will become matched once c58 unpacker lands.
-	//                    NOT a decoder failure.
+	//    0 unsupported — Type-4 unpacker now covers the only known
+	//                    non-Type-1 message in the corpus. If a new
+	//                    type appears (i3 ∈ {0, 2, 3, 5}), this rises.
 	//    0 malformed   — strictly enforced; non-zero would indicate
 	//                    CRC false-accept on supported type or an
 	//                    Unpack regression.
 	realCaptureTruthTotal         = 144
-	realCaptureMatchedFloor       = 95
+	realCaptureMatchedFloor       = 96
 	realCaptureTextExtraCeiling   = 2
-	realCaptureUnsupportedCeiling = 1
+	realCaptureUnsupportedCeiling = 0
 	// malformed must be exactly 0 — asserted directly, no constant needed.
 )
 
@@ -107,7 +111,7 @@ var realCaptureSlots = []struct {
 	maxUnsupported int
 }{
 	{"../../../captures/20m_slot1.wav", 21, 18, 0, 0},
-	{"../../../captures/20m_slot2.wav", 32, 19, 0, 1}, // 1× Type-4 unsupported
+	{"../../../captures/20m_slot2.wav", 32, 20, 0, 0}, // Type-4 now matched (Session 91)
 	{"../../../captures/20m_slot3.wav", 17, 11, 0, 0},
 	{"../../../captures/live_slot1.wav", 29, 16, 0, 0},
 	{"../../../captures/live_slot2.wav", 23, 18, 0, 0},

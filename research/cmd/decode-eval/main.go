@@ -92,7 +92,12 @@ func main() {
 	// Doppler / GFSK transitions over 12.6 s). Lower thresholds
 	// admit fewer candidates without losing the marginal-SNR
 	// synthetic win that motivates having coherent at all.
-	coherentRMSThresh := flag.Float64("coherent-rms-threshold", 0.4, "phaseFitRMS (radians) above which a candidate falls back to incoherent demod")
+	coherentRMSThresh := flag.Float64("coherent-rms-threshold", 0.4, "phaseFitRMS (radians) above which a candidate falls back to incoherent demod (linear coherent path only)")
+	// Piecewise-coherent demod was measured in Session 91 and ruled
+	// out as a default-path option (85 matched vs 95 incoherent on
+	// real captures). The flag has been removed. The primitives
+	// (research/demod.DemodCoherentPiecewise + fitCostasPhasePiecewise)
+	// remain available for future research; see piecewise.go header.
 	slopeDiag := flag.Bool("slope-rms-diag", false, "one-shot diagnostic: dump per-candidate (slope, RMSResid) + buckets + cross-tab to decide between freq-refinement and piecewise phase. Skips normal decode-eval output.")
 	flag.Parse()
 
@@ -124,7 +129,7 @@ func main() {
 
 	mode := "incoherent"
 	if *coherent {
-		mode = fmt.Sprintf("coherent (RMS threshold %.3g rad)", *coherentRMSThresh)
+		mode = fmt.Sprintf("coherent-linear (RMS threshold %.3g rad)", *coherentRMSThresh)
 	}
 	fmt.Printf("Found %d .wav file(s) in %s/, demod = %s\n\n", len(wavs), *dir, mode)
 

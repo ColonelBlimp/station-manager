@@ -2,6 +2,163 @@ package demod
 
 import "math"
 
+// PIECEWISE-PHASE COHERENT DEMOD — RESEARCH DIAGNOSTIC
+//
+// This file's exported surface (PhaseFitPiecewise, fitCostasPhasePiecewise,
+// DemodCoherentPiecewise, piecewiseFallback) is kept as a research
+// diagnostic. **The piecewise approach was measured and ruled out
+// as a default-path coherent variant in Session 91 (2026-05-25):**
+//
+//	Real-capture corpus (144 truth, threshold 0.4 max-block-RMS + 0.3 bridge-delta):
+//	  incoherent    : 95 matched / 2 textExtra / 98 CRC-pass
+//	  coherent-linear: 95 matched / 2 textExtra / 98 CRC-pass  (22 used coherent)
+//	  coherent-piecewise: 85 matched / 2 textExtra / 87 CRC-pass (37 used coherent)
+//
+// Piecewise admitted 15 more candidates to the coherent path than the
+// linear gate did, but those extra candidates didn't decode — net loss
+// of 10 matched and 11 CRC-passes. The hypothesis: piecewise's
+// per-block fits and bridge sanity checks confirm anchor-to-anchor
+// consistency, but the linear interpolation BETWEEN anchors within a
+// 30-sym bridge fails the same way the single-line-global linear
+// model failed — real-capture phase dynamics inside the bridge
+// aren't actually linear, and confident-but-wrong predictions
+// degrade LLRs enough to break LDPC.
+//
+// The CLI's -coherent-piecewise flag has been removed. The primitives
+// stay here so future research (e.g., AP-style anchor priors, or a
+// signal-conditional gate) can experiment without re-deriving the
+// algorithm or rebuilding the kernel. The Session-90 endpoint-state
+// bug-class fix is preserved as code documentation.
+
+// predictPiecewisePhase returns the predicted phase at FT8 data
+// symbol channelSym using anchor-to-anchor linear interpolation
+// across the appropriate Costas bridge.
+//
+// Anchor index map (load-bearing, anchor-indexed not sym-indexed):
+//
+//	AnchorPhases[6]  = phase at sym 6  (last anchor of block 0)
+//	AnchorPhases[7]  = phase at sym 36 (first anchor of block 1)
+//	AnchorPhases[13] = phase at sym 42 (last anchor of block 1)
+//	AnchorPhases[14] = phase at sym 72 (first anchor of block 2)
+//
+// Data syms 7..35 sit on bridge 0→1; data syms 43..71 sit on
+// bridge 1→2. The intermediate Costas anchors at sym 0..6, 36..42,
+// 72..78 don't carry data, so this function is only meaningful for
+// channelSym in the bridge ranges.
+func predictPiecewisePhase(fit PhaseFitPiecewise, channelSym int) float64 {
+	switch {
+	case channelSym >= 7 && channelSym <= 35:
+		frac := float64(channelSym-6) / float64(36-6)
+		return (1-frac)*fit.AnchorPhases[6] + frac*fit.AnchorPhases[7]
+	case channelSym >= 43 && channelSym <= 71:
+		frac := float64(channelSym-42) / float64(72-42)
+		return (1-frac)*fit.AnchorPhases[13] + frac*fit.AnchorPhases[14]
+	}
+	return 0
+}
+
+// DemodCoherentPiecewise is the piecewise-phase analogue of
+// DemodCoherent. It runs the same Ahat/σ² scaling and metric
+// formula as the linear coherent path, but predicts data-symbol
+// phases by bridge interpolation between Costas anchors rather
+// than from a single global linear model.
+//
+// Behaviour on phase-fit failure: returns an all-zero metric matrix
+// and the failed PhaseFitPiecewise. The caller MUST inspect the
+// fit (via piecewiseFallback) before consuming metrics — same
+// contract as DemodCoherent. Production callers should fall back
+// to incoherent (or linear coherent) when piecewiseFallback is true.
+//
+// Cost: comparable to DemodCoherent, dominated by 21 Costas-anchor
+// + 58 data-symbol Goertzel calls. The piecewise fit adds two
+// per-block LS passes vs the linear path's single global fit; both
+// are negligible compared to the Goertzel work.
+func DemodCoherentPiecewise(samples []float32, freqHz, dtSec float64) ([dataSymbolCount][ft8ToneCount]float64, PhaseFitPiecewise) {
+	var out [dataSymbolCount][ft8ToneCount]float64
+
+	fit := fitCostasPhasePiecewise(samples, freqHz, dtSec)
+	if piecewiseFallback(fit) {
+		return out, fit
+	}
+
+	// Goertzel coefficients + unit delays — same as DemodCoherent.
+	var coeffs [ft8ToneCount]float64
+	var unitDelays [ft8ToneCount]complex128
+	for k := 0; k < ft8ToneCount; k++ {
+		fk := freqHz + float64(k)*baud
+		omega := 2 * math.Pi * fk / fs
+		coeffs[k] = 2 * math.Cos(omega)
+		unitDelays[k] = complex(math.Cos(omega), math.Sin(omega))
+	}
+
+	txStart := int(math.Round((synthSlotStartSec + dtSec) * fs))
+
+	// First pass: estimate Ahat and σ² from Costas anchors.
+	// Each anchor's predicted phase IS fit.AnchorPhases[i] (the
+	// fit's whole point is that those values fit the linear model
+	// of their block, which IS the prediction at that sym).
+	var ahatSum, sigmaSqSum float64
+	var ahatN, sigmaN int
+	for i := 0; i < costasAnchors; i++ {
+		if fit.AnchorWeights[i] == 0 {
+			continue
+		}
+		sym := costasSym[i]
+		expectedTone := costasExpectedTone[i]
+		symStart := txStart + sym*nsps
+		if symStart < 0 || symStart+nsps > len(samples) {
+			continue
+		}
+		x := goertzelMultiComplex(samples, symStart, nsps, coeffs, unitDelays)
+
+		phaseAtSym := fit.AnchorPhases[i]
+
+		rotExp := rotateClockwise(x[expectedTone], phaseAtSym)
+		ahatSum += real(rotExp)
+		ahatN++
+
+		for k := 0; k < ft8ToneCount; k++ {
+			if k == int(expectedTone) {
+				continue
+			}
+			rotK := rotateClockwise(x[k], phaseAtSym)
+			sigmaSqSum += real(rotK) * real(rotK)
+			sigmaN++
+		}
+	}
+
+	if ahatN == 0 || sigmaN == 0 {
+		return out, fit
+	}
+
+	ahat := ahatSum / float64(ahatN)
+	sigmaSq := sigmaSqSum / float64(sigmaN)
+	const eps = 1e-12
+	alpha := ahat / (sigmaSq + eps)
+
+	// Second pass: emit metrics for the 58 data symbols. Bridge
+	// interpolation supplies the predicted phase at each data
+	// symbol's window.
+	dataIdx := 0
+	for channelSym := 0; channelSym < nn; channelSym++ {
+		if isCostas(channelSym) {
+			continue
+		}
+		symStart := txStart + channelSym*nsps
+		if symStart >= 0 && symStart+nsps <= len(samples) {
+			x := goertzelMultiComplex(samples, symStart, nsps, coeffs, unitDelays)
+			phaseAtSym := predictPiecewisePhase(fit, channelSym)
+			for k := 0; k < ft8ToneCount; k++ {
+				rot := rotateClockwise(x[k], phaseAtSym)
+				out[dataIdx][k] = alpha * real(rot)
+			}
+		}
+		dataIdx++
+	}
+
+	return out, fit
+}
+
 // LocalBlockFit captures a linear `phase(sym) = Phi0 + Slope·sym`
 // fit to a single Costas block's 7 anchors. The fit is used both
 // for the max-block-RMS fallback signal and as the bridge sanity

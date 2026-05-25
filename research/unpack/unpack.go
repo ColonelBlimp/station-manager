@@ -5,17 +5,17 @@
 //
 // Layered message types (i3 = last 3 bits of the 77-bit payload):
 //
-//	i3 = 1  Standard:        c28 p1 c28 p1 R1 g15      (this package)
-//	i3 = 2  EU VHF contest:  c28 p1 c28 p1 R1 g25      (TODO; uses 6-char grid)
-//	i3 = 3  ARRL RTTY:                                 (TODO)
-//	i3 = 4  Nonstandard call:  h1 c58 c58 r3 ... etc.  (TODO; needs hashtable)
-//	i3 = 5  Telemetry:         t71                     (TODO)
-//	i3 = 0  Special / free text                        (TODO)
+//	i3 = 1  Standard:         c28 p1 c28 p1 R1 g15      (implemented)
+//	i3 = 2  EU VHF contest:   c28 p1 c28 p1 R1 g25      (TODO; 6-char grid)
+//	i3 = 3  ARRL RTTY:                                  (TODO)
+//	i3 = 4  Nonstandard call: h12 c58 h1 r2 c1          (implemented; hashed call shown as "<...>")
+//	i3 = 5  Telemetry:        t71                       (TODO)
+//	i3 = 0  Special / free text                         (TODO)
 //
-// Current corpus is entirely Type 1, so that's the only type
-// implemented in this first cut. Other types return an
-// "unsupported" error; the caller (decode-eval) classifies these as
-// "valid-CRC but unknown-type" rather than "malformed."
+// Types 1 and 4 cover the full real-capture corpus (Sessions 88-91).
+// Other types return an "unsupported" error; the caller
+// (decode-eval) classifies these as "valid-CRC but unknown-type"
+// rather than "malformed."
 //
 // Imports stdlib only — by rule the research tree must not depend
 // on internal/ft8/*. The encoding tables (c28 charsets, NTOKENS /
@@ -50,6 +50,9 @@ func Unpack(info [91]uint8) (Result, error) {
 	switch i3 {
 	case 1:
 		text, err := unpackType1(info[:77])
+		return Result{Text: text, MsgType: i3}, err
+	case 4:
+		text, err := unpackType4(info[:77])
 		return Result{Text: text, MsgType: i3}, err
 	default:
 		return Result{MsgType: i3}, fmt.Errorf("unpack: i3=%d not implemented", i3)
@@ -124,6 +127,73 @@ func unpackType1(p []uint8) (string, error) {
 	} else if r1 == 1 {
 		// R1 set but g15 blank — empty "R" report. Rare; emit "R" alone.
 		sb.WriteString(" R")
+	}
+	return sb.String(), nil
+}
+
+// unpackType4 decodes the 77-bit payload of a Type 4 (nonstandard
+// callsign) message per QEX paper §2. Layout MSB-first:
+//
+//	bits[0..11]  h12 — 12-bit hash of the OTHER callsign (the
+//	                   standard one in a "<call> nonstd ..." exchange).
+//	                   Displayed as "<...>" since this offline decoder
+//	                   has no running hashtable to resolve it.
+//	bits[12..69] c58 — 58-bit nonstandard callsign (up to 11 chars).
+//	bits[70]     h1  — flag: 0 = hashed call is FIRST, 1 = SECOND.
+//	bits[71..72] r2  — 0=blank, 1=RRR, 2=RR73, 3=73.
+//	bits[73]     c1  — flag: 1 = message is "CQ <nonstd>" (h12 ignored).
+//	bits[74..76] i3  — message type (always 4 for this path).
+//
+// Output format mirrors jt9:
+//
+//	c1=1            → "CQ <nonstd>"
+//	c1=0, h1=0      → "<...> <nonstd>" + " r2"
+//	c1=0, h1=1      → "<nonstd> <...>" + " r2"
+//
+// where r2 is appended only when non-blank.
+func unpackType4(p []uint8) (string, error) {
+	if len(p) != 77 {
+		return "", fmt.Errorf("unpack: type4 expects 77-bit payload, got %d", len(p))
+	}
+	// h12 ignored except for the placeholder; we don't have a hashtable.
+	c58 := bitsToUint(p[12:70])
+	h1 := p[70]
+	r2 := uint8(bitsToUint(p[71:73]))
+	c1Flag := p[73]
+
+	nonstd := decodeC58(c58)
+	if nonstd == "" {
+		nonstd = "<empty>"
+	}
+
+	var r2Text string
+	switch r2 {
+	case 0:
+		r2Text = ""
+	case 1:
+		r2Text = "RRR"
+	case 2:
+		r2Text = "RR73"
+	case 3:
+		r2Text = "73"
+	}
+
+	var sb strings.Builder
+	switch {
+	case c1Flag == 1:
+		sb.WriteString("CQ ")
+		sb.WriteString(nonstd)
+	case h1 == 0:
+		sb.WriteString("<...>")
+		sb.WriteByte(' ')
+		sb.WriteString(nonstd)
+	default:
+		sb.WriteString(nonstd)
+		sb.WriteString(" <...>")
+	}
+	if r2Text != "" {
+		sb.WriteByte(' ')
+		sb.WriteString(r2Text)
 	}
 	return sb.String(), nil
 }
