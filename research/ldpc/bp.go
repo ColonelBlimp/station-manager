@@ -76,6 +76,33 @@ func Decode(llrs [codewordBits]float64) (Result, Stats) {
 		}
 	}
 
+	// BP exhausted maxIter without a CRC-clean codeword. Fall through
+	// to OSD-2 on the BP-final posterior LLRs — those carry the
+	// extrinsic accumulation from every iteration and are strictly
+	// more informative than channel LLRs alone, even when BP didn't
+	// converge.
+	var posterior [codewordBits]float64
+	for v := 0; v < codewordBits; v++ {
+		posterior[v] = llrs[v]
+		for k := 0; k < 3; k++ {
+			c := hColumns[v][k]
+			i := varEdgeRowPos[v][k]
+			posterior[v] += cToV[c][i]
+		}
+	}
+	osdResult, osdOK, osdExplored := osd(posterior)
+	stats.UsedOSD = true
+	stats.OSDCandidatesExplored = osdExplored
+	if osdOK {
+		// OSD returns a parity-clean codeword by construction (it
+		// systematically encodes from the MRB) and has already
+		// verified CRC14 internally before returning success.
+		result.Codeword = osdResult.Codeword
+		result.Info = osdResult.Info
+		stats.ConvergedParity = true
+		stats.ConvergedCRC = true
+		stats.FinalSyndromeWeight = 0
+	}
 	return result, stats
 }
 

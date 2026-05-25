@@ -199,6 +199,17 @@ type Stats struct {
 	// FinalSyndromeWeight is the syndrome Hamming weight at the
 	// terminating iteration (zero on parity-clean decodes).
 	FinalSyndromeWeight int
+
+	// UsedOSD reports whether the OSD-2 fallback ran. True iff BP
+	// alone failed to reach syndrome=0 + CRC pass within maxIter,
+	// regardless of whether OSD itself then succeeded.
+	UsedOSD bool
+
+	// OSDCandidatesExplored is the count of test-pattern codewords
+	// OSD-2 scored before returning. For order 2 over a (174, 91)
+	// code this is 1 + 91 + 91*90/2 = 4187 if OSD ran to completion.
+	// Zero if OSD did not run (BP succeeded).
+	OSDCandidatesExplored int
 }
 
 // Result carries the hard-decided bits from a decode attempt. Info
