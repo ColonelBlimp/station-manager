@@ -149,6 +149,36 @@ const (
 // Final cap after ranking + NMS.
 const stage2MaxResults = 100
 
+// Gates parameterises the stage-1 and stage-2 gate floors. Find()
+// uses DefaultGates which mirrors the production values; FindWithGates
+// lets sweep harnesses drive these floors externally without
+// touching production code. Adoption of any non-default Gates is
+// gated on text-level decode measurement (matched up, extras stable
+// or down, malformed == 0) — see research/cmd/sweep-gates.
+type Gates struct {
+	// Stage1Threshold is the matched-filter SNR ratio floor at stage 1.
+	// Candidates with score below this are discarded before stage-2
+	// verification runs. Production default 1.0.
+	Stage1Threshold float64
+
+	// SanityWinsTotal is the stage-2 floor for total Costas-anchor wins
+	// (out of 21). Candidates below this fail the gate. Production
+	// default 8.
+	SanityWinsTotal int
+
+	// SanityWinsPerBlock is the stage-2 per-Costas-block wins floor
+	// (out of 7 each). A candidate must hit this floor in every
+	// accessible block. Production default 1.
+	SanityWinsPerBlock int
+}
+
+// DefaultGates mirrors the production gate values. Find() uses this.
+var DefaultGates = Gates{
+	Stage1Threshold:    stage1ScoreThreshold,
+	SanityWinsTotal:    sanityWinsTotal,
+	SanityWinsPerBlock: sanityWinsPerBlock,
+}
+
 // Find returns verified sync candidates detected in a 15-second FT8
 // audio slot. Input must be 12 kHz mono float32 samples covering
 // the full slot (180,000 samples). Every returned candidate has a
@@ -176,6 +206,14 @@ const stage2MaxResults = 100
 //
 // 10. Cap to stage2MaxResults.
 func Find(samples []float32) []Candidate {
+	return FindWithGates(samples, DefaultGates)
+}
+
+// FindWithGates is the gate-parameterised variant of Find. The pipeline
+// is identical except the three gate floors come from the supplied
+// Gates rather than the package defaults. Used by sweep harnesses;
+// production callers should use Find() directly.
+func FindWithGates(samples []float32, gates Gates) []Candidate {
 	// Require the documented 15-second slot. The stage-2 verifier
 	// indexes audio up to txStart + nn*nsps where txStart = 6000 +
 	// dt*fs, so any caller passing a buffer shorter than nmax would
@@ -230,7 +268,7 @@ func Find(samples []float32) []Candidate {
 	for centreBin := binLow; centreBin <= binHigh; centreBin++ {
 		for dtSteps := dtStepsMin; dtSteps <= dtStepsMax; dtSteps++ {
 			score := costasScore(spec, centreBin, dtSteps, nominalStartStep)
-			if score >= stage1ScoreThreshold {
+			if score >= gates.Stage1Threshold {
 				stage1 = append(stage1, rawCandidate{
 					centreBin:  centreBin,
 					rawDtSteps: dtSteps,
@@ -260,7 +298,7 @@ func Find(samples []float32) []Candidate {
 		// Categorical gate only. Pattern-incoherent junk gets cut
 		// here; GeoContrast steers the ranking (sort key below)
 		// rather than acting as a hard floor.
-		if v.WinsTotal < sanityWinsTotal {
+		if v.WinsTotal < gates.SanityWinsTotal {
 			continue
 		}
 		blockOk := true
@@ -272,7 +310,7 @@ func Find(samples []float32) []Candidate {
 			if v.AccessibleBlock[b] == 0 {
 				continue
 			}
-			if v.WinsBlock[b] < sanityWinsPerBlock {
+			if v.WinsBlock[b] < gates.SanityWinsPerBlock {
 				blockOk = false
 				break
 			}
@@ -309,9 +347,21 @@ func Find(samples []float32) []Candidate {
 	// float-boundary precision issue that earlier blocked the
 	// 2-step suppression window. Keeping the time suppression at 3
 	// steps for now (this commit isolates the precision fix; width
-	// retuning is a separate concern). The 2-bin freq window is
-	// safe — distinct FT8 signals occupy 50 Hz (16 bins) apart at
-	// minimum.
+	// retuning is a separate concern). The 2-bin freq window
+	// dedupes adjacent-bin grid aliases of the same strong signal
+	// — its sidelobes leak ±2 bins under the rectangular window
+	// and show high gate metrics at those neighbours.
+	//
+	// Session 92 (2026-05-25) tested ±1 bin to see if it would
+	// recover two suspected PASS_GATE-pair misses (PE1NPS / HG60IPA
+	// at 2253 Hz vs OM3DX at 2259 Hz, two truth bins apart). It did
+	// not: the suppressor sits 1 bin from the target's best
+	// in-tolerance lattice point, which is itself a sidelobe of
+	// the OM3DX signal — the weak signals (PE1NPS / HG60IPA)
+	// genuinely have wins < 8 at their own bin (721), so the
+	// problem is WINS_LOW at the real-signal bin, not over-wide
+	// NMS. Test result: matched flat 96→96, text-extra +1, CRC +1
+	// (extra near-bin candidate decoded to garbage). Reverted.
 	const (
 		freqSuppressBins  = 2 // ±2 spectrogram bins (= 6.25 Hz)
 		timeSuppressSteps = 3 // ±3 spectrogram steps (= 120 ms)
