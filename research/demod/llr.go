@@ -163,3 +163,45 @@ func logSumExp4(x [4]float64) float64 {
 	}
 	return maximum + math.Log(sum)
 }
+
+// LLRsCoherent converts pre-scaled coherent metrics from DemodCoherent
+// into 174 bit LLRs. Differs from LLRs only in that it skips the
+// per-candidate alpha estimation — the metrics fed in are already
+// scaled by Ahat/σ² inside DemodCoherent, so this function just
+// runs the same logsumexp partition + ±llrClamp as the incoherent
+// path.
+//
+// Sign convention is the same as LLRs: positive output LLR ⇒ bit 0
+// more likely, negative ⇒ bit 1.
+//
+// The input metrics are signed (unlike LLRs's unsigned |X|² energies),
+// but logsumexp handles signed inputs without modification — large
+// negative metrics fold into the partition's log-sum-exp at their
+// natural weight.
+func LLRsCoherent(metrics [dataSymbolCount][ft8ToneCount]float64) [codewordBits]float64 {
+	var out [codewordBits]float64
+	for i := 0; i < dataSymbolCount; i++ {
+		for j := 0; j < bitsPerSymbol; j++ {
+			mask := uint8(1) << uint(bitsPerSymbol-1-j) // MSB first
+			var bit0, bit1 [4]float64
+			n0, n1 := 0, 0
+			for t := 0; t < ft8ToneCount; t++ {
+				if GrayUnmap[t]&mask == 0 {
+					bit0[n0] = metrics[i][t]
+					n0++
+				} else {
+					bit1[n1] = metrics[i][t]
+					n1++
+				}
+			}
+			llr := logSumExp4(bit0) - logSumExp4(bit1)
+			if llr > llrClamp {
+				llr = llrClamp
+			} else if llr < -llrClamp {
+				llr = -llrClamp
+			}
+			out[i*bitsPerSymbol+j] = llr
+		}
+	}
+	return out
+}

@@ -117,11 +117,6 @@ func fitCostasPhase(samples []float32, freqHz, dtSec float64) PhaseFit {
 
 	txStart := int(math.Round((synthSlotStartSec + dtSec) * fs))
 
-	// γ = 2π · baud · t_start(sym=0) — the coefficient of the
-	// tone-only phase term inherited from the carrier being on for
-	// t_start(0) seconds before sym 0's window opens.
-	gamma := 2 * math.Pi * baud * (synthSlotStartSec + dtSec)
-
 	const eps = 1e-12
 
 	for i := 0; i < costasAnchors; i++ {
@@ -157,10 +152,8 @@ func fitCostasPhase(samples []float32, freqHz, dtSec float64) PhaseFit {
 		weight := math.Max(0, logContrast)
 
 		raw := cmplx.Phase(expectedX)
-		corrected := raw - gamma*float64(tone)
-
 		fit.rawPhases[i] = raw
-		fit.correctedPhases[i] = corrected
+		fit.correctedPhases[i] = raw // no γ·tone correction — see model derivation in fn doc
 		fit.weights[i] = weight
 		fit.AccessibleAnchors++
 	}
@@ -262,4 +255,145 @@ func wrapPi(theta float64) float64 {
 		t += 2 * math.Pi
 	}
 	return t
+}
+
+// DemodCoherent extracts coherent soft metrics for the 58 FT8 data
+// symbols, using a phase reference fitted from the 21 Costas anchors.
+//
+// Algorithm:
+//
+//  1. Fit a linear phase model φ(sym) = Phi0 + Slope·sym to the
+//     Costas anchors via fitCostasPhase. Returns PhaseFit; caller
+//     checks PhaseFit.RMSResid against a threshold to decide
+//     whether to use these metrics or fall back to incoherent demod.
+//
+//  2. Estimate Ahat (signal amplitude after phase rotation) as the
+//     mean Re(rotated Costas-expected-tone) across all anchors, and
+//     σ² (post-rotation noise variance) as the mean squared
+//     Re(rotated non-expected tones). Both use the SAME phase model
+//     the data symbols will use, so any bias inherent in the model
+//     affects calibration and decoding consistently.
+//
+//  3. For each data symbol at channel-symbol position s (s ∈
+//     7..35, 43..71), compute complex Goertzel at all 8 FT8 tones.
+//     For each tone k:
+//
+//     rotated_k = X[k] · exp(-j · (Phi0 + Slope·s + γ·k))
+//     metric[k] = (Ahat / σ²) · Re(rotated_k)
+//
+//     The metric is signed: positive when the tone is at the
+//     reference phase (= candidate tone matches transmitted),
+//     near-zero for tones the transmitter didn't use at this
+//     symbol, and negative if the tone is anti-phase (rare in
+//     practice, indicative of phase drift the linear model
+//     didn't capture).
+//
+// On phase-fit failure (RMSResid = +Inf or AccessibleAnchors < 3),
+// returns an all-zero metric matrix and the failed PhaseFit. The
+// caller MUST inspect PhaseFit before using metrics.
+//
+// The scaling factor (Ahat / σ²) is what makes these metrics
+// directly feedable into logsumexp without additional alpha
+// estimation — it's the matched-filter output normalised by noise
+// variance, which is what coherent-AWGN likelihood theory wants.
+func DemodCoherent(samples []float32, freqHz, dtSec float64) ([dataSymbolCount][ft8ToneCount]float64, PhaseFit) {
+	var out [dataSymbolCount][ft8ToneCount]float64
+
+	fit := fitCostasPhase(samples, freqHz, dtSec)
+
+	if fit.AccessibleAnchors < 3 || math.IsInf(fit.RMSResid, 1) {
+		return out, fit
+	}
+
+	var coeffs [ft8ToneCount]float64
+	var unitDelays [ft8ToneCount]complex128
+	for k := 0; k < ft8ToneCount; k++ {
+		fk := freqHz + float64(k)*baud
+		omega := 2 * math.Pi * fk / fs
+		coeffs[k] = 2 * math.Cos(omega)
+		unitDelays[k] = complex(math.Cos(omega), math.Sin(omega))
+	}
+
+	txStart := int(math.Round((synthSlotStartSec + dtSec) * fs))
+
+	// First pass over Costas anchors to estimate Ahat (signal amplitude
+	// at expected tone after rotation) and σ² (noise variance of
+	// non-expected-tone real components after rotation). All tones at
+	// a given sym use the SAME predicted phase (Phi0 + Slope·s); there
+	// is no per-tone phase correction (see fitCostasPhase model doc).
+	var ahatSum, sigmaSqSum float64
+	var ahatN, sigmaN int
+	for i := 0; i < costasAnchors; i++ {
+		if fit.weights[i] == 0 {
+			continue
+		}
+		sym := costasSym[i]
+		expectedTone := costasExpectedTone[i]
+		symStart := txStart + sym*nsps
+		if symStart < 0 || symStart+nsps > len(samples) {
+			continue
+		}
+		x := goertzelMultiComplex(samples, symStart, nsps, coeffs, unitDelays)
+
+		phaseAtSym := fit.Phi0 + fit.Slope*float64(sym)
+
+		// Re(rotated) at the expected tone is the signal component.
+		rotExp := rotateClockwise(x[expectedTone], phaseAtSym)
+		ahatSum += real(rotExp)
+		ahatN++
+
+		// Re(rotated) at the 7 non-expected tones is the noise component.
+		for k := 0; k < ft8ToneCount; k++ {
+			if k == int(expectedTone) {
+				continue
+			}
+			rotK := rotateClockwise(x[k], phaseAtSym)
+			sigmaSqSum += real(rotK) * real(rotK)
+			sigmaN++
+		}
+	}
+
+	if ahatN == 0 || sigmaN == 0 {
+		return out, fit
+	}
+
+	ahat := ahatSum / float64(ahatN)
+	sigmaSq := sigmaSqSum / float64(sigmaN)
+
+	const eps = 1e-12
+	alpha := ahat / (sigmaSq + eps)
+
+	// Second pass: emit coherent metrics for the 58 data symbols.
+	// All 8 tones at a given channel symbol use the same predicted
+	// phase (Phi0 + Slope·channelSym); no per-tone correction.
+	dataIdx := 0
+	for channelSym := 0; channelSym < nn; channelSym++ {
+		if isCostas(channelSym) {
+			continue
+		}
+		symStart := txStart + channelSym*nsps
+		if symStart >= 0 && symStart+nsps <= len(samples) {
+			x := goertzelMultiComplex(samples, symStart, nsps, coeffs, unitDelays)
+			phaseAtSym := fit.Phi0 + fit.Slope*float64(channelSym)
+			for k := 0; k < ft8ToneCount; k++ {
+				rot := rotateClockwise(x[k], phaseAtSym)
+				out[dataIdx][k] = alpha * real(rot)
+			}
+		}
+		dataIdx++
+	}
+
+	return out, fit
+}
+
+// rotateClockwise multiplies a complex value by e^{-jθ}, i.e.
+// rotates by -θ. Inlined to avoid a cmplx.Exp call (which goes
+// through cmplx.Cot internally and is ~10× slower than
+// hand-written sincos for this hot path).
+func rotateClockwise(x complex128, theta float64) complex128 {
+	cosT := math.Cos(theta)
+	sinT := math.Sin(theta)
+	xr, xi := real(x), imag(x)
+	// (xr + j·xi) · (cosT - j·sinT) = (xr·cosT + xi·sinT) + j·(xi·cosT - xr·sinT)
+	return complex(xr*cosT+xi*sinT, xi*cosT-xr*sinT)
 }
