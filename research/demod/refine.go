@@ -1,3 +1,44 @@
+// Phase-coherent frequency refinement for FT8 candidates.
+//
+// **Status: research artifact, NOT on the default decode path.**
+// Session 92 (2026-05-25) wired PhaseRefineFreq into decode-eval as
+// `-refine-freq`, measured against the 144-signal real-capture
+// corpus, and ruled it out as a parity lever:
+//
+//	mode                       matched  text-extra  CRC-pass
+//	------------------------   -------  ----------  --------
+//	incoherent baseline             96           2        98
+//	-refine-freq                    96           4       100
+//	-coherent                       96           2        98
+//	-coherent -refine-freq          96           3        99
+//
+// Diagnostics over 315 refined-OK candidates (of 584 total):
+//   - |dfTotal| median 0.692 Hz; 40% hit the 3 Hz maxCorrection cap.
+//   - Phase-RMS median 1.325 (init) → 1.292 (final) — ~2.5% reduction.
+//     If freq offset were the cause of the high slope, RMS would
+//     collapse toward zero after refinement. It doesn't.
+//   - Final RMS median 1.292 is still 3× the coherent threshold (0.4).
+//     Refined candidates are NOT becoming coherent-eligible.
+//
+// What this falsifies: Session 90's working hypothesis that real-signal
+// candidates were sitting off-bin and refinement would re-center them.
+// The high slope/RMS in those candidates is not dominated by frequency
+// offset — it's the same adjacent-signal cross-contamination Session 84
+// identified for matched-filter subtraction, which corrupts the Costas
+// anchor phases such that the linear-model slope estimate is noise
+// rather than signal carrier. Refinement chases the noise and lands
+// somewhere worse, admitting +1 to +2 text-extras.
+//
+// The primitive is retained because (a) it is correct on synthetic
+// AWGN-only signals (TestPhaseRefineFreq_RecoversKnownOffset), which
+// makes it useful for controlled experiments, and (b) the
+// slope-to-freq-offset bridge (slopeToFreqOffsetHz) is a reusable
+// piece of the DTFT-vs-mix-and-integrate convention work and
+// documents that derivation in one place.
+//
+// Do not re-wire into decode-eval without new evidence — the
+// corpus measurement is documented above and the slope/RMS
+// diagnostic (Session 90) explains why the hypothesis fails.
 package demod
 
 import "math"

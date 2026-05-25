@@ -93,11 +93,14 @@ func main() {
 	// admit fewer candidates without losing the marginal-SNR
 	// synthetic win that motivates having coherent at all.
 	coherentRMSThresh := flag.Float64("coherent-rms-threshold", 0.4, "phaseFitRMS (radians) above which a candidate falls back to incoherent demod (linear coherent path only)")
-	// Piecewise-coherent demod was measured in Session 91 and ruled
-	// out as a default-path option (85 matched vs 95 incoherent on
-	// real captures). The flag has been removed. The primitives
-	// (research/demod.DemodCoherentPiecewise + fitCostasPhasePiecewise)
-	// remain available for future research; see piecewise.go header.
+	// Piecewise-coherent demod (Session 91) and phase-coherent freq
+	// refinement (Session 92) were both measured and ruled out as
+	// default-path options on real captures. The flags have been
+	// removed to keep decode-eval modes focused on baseline +
+	// viable experiments. The primitives remain available for
+	// future research: DemodCoherentPiecewise + fitCostasPhasePiecewise
+	// in piecewise.go, PhaseRefineFreq in refine.go — each header
+	// documents the measured-negative result.
 	slopeDiag := flag.Bool("slope-rms-diag", false, "one-shot diagnostic: dump per-candidate (slope, RMSResid) + buckets + cross-tab to decide between freq-refinement and piecewise phase. Skips normal decode-eval output.")
 	flag.Parse()
 
