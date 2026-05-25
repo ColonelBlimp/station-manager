@@ -74,11 +74,25 @@ type decodeRecord struct {
 	unpackOK  bool   // Unpack returned no error
 	unpackErr string // error string when unpackOK=false (for diagnostic display)
 	msgType   uint8  // i3 from Unpack
+
+	// Coherent-path diagnostics. Populated only when the coherent
+	// flag is set; zero/false otherwise.
+	phaseFitRMS float64 // RMSResid of the Costas phase fit
+	fellBack    bool    // coherent attempted but RMSResid > threshold → used incoherent
 }
 
 func main() {
 	dir := flag.String("dir", "research", "directory containing .wav files (non-recursive)")
 	verbose := flag.Bool("v", false, "print per-candidate decode detail")
+	coherent := flag.Bool("coherent", false, "use coherent demod (Costas-anchor phase fit) with per-candidate incoherent fallback")
+	// Default 0.4 — empirically the largest threshold that does no
+	// harm to real-capture matched count vs incoherent baseline.
+	// Higher thresholds trigger the "confident on noise" failure
+	// mode (linear phase model doesn't hold for HF multipath /
+	// Doppler / GFSK transitions over 12.6 s). Lower thresholds
+	// admit fewer candidates without losing the marginal-SNR
+	// synthetic win that motivates having coherent at all.
+	coherentRMSThresh := flag.Float64("coherent-rms-threshold", 0.4, "phaseFitRMS (radians) above which a candidate falls back to incoherent demod")
 	flag.Parse()
 
 	entries, err := os.ReadDir(*dir)
@@ -102,11 +116,17 @@ func main() {
 		log.Fatalf("no .wav files found in %q", *dir)
 	}
 
-	fmt.Printf("Found %d .wav file(s) in %s/\n\n", len(wavs), *dir)
+	mode := "incoherent"
+	if *coherent {
+		mode = fmt.Sprintf("coherent (RMS threshold %.3g rad)", *coherentRMSThresh)
+	}
+	fmt.Printf("Found %d .wav file(s) in %s/, demod = %s\n\n", len(wavs), *dir, mode)
 
 	// Cross-fixture totals — printed at the end for a single-line summary
 	// across the whole corpus.
 	var totalTruth, totalMatched, totalMissed, totalTextExtra, totalUnsupported, totalMalformed, totalCrcPass int
+	var totalCoherentUsed, totalFallback int
+	var rmsValues []float64
 
 	for _, wavPath := range wavs {
 		data, err := audio.ReadWAV(wavPath)
@@ -143,7 +163,7 @@ func main() {
 		}
 
 		cands := candidates.Find(data.Samples)
-		records := decodeAll(data.Samples, cands)
+		records := decodeAll(data.Samples, cands, *coherent, *coherentRMSThresh)
 
 		matched, missed, textExtra, unsupported, malformed := score(records, manifest, *verbose)
 
@@ -155,10 +175,27 @@ func main() {
 			totalUnsupported += unsupported
 			totalMalformed += malformed
 		}
+		fixtureCoh, fixtureFallback := 0, 0
 		for _, r := range records {
 			if r.crcPass {
 				totalCrcPass++
 			}
+			if *coherent {
+				if r.fellBack {
+					fixtureFallback++
+				} else {
+					fixtureCoh++
+				}
+				if !r.fellBack && !math.IsInf(r.phaseFitRMS, 1) {
+					rmsValues = append(rmsValues, r.phaseFitRMS)
+				}
+			}
+		}
+		if *coherent {
+			fmt.Printf("  coherent: %d candidates used coherent path, %d fell back to incoherent\n",
+				fixtureCoh, fixtureFallback)
+			totalCoherentUsed += fixtureCoh
+			totalFallback += fixtureFallback
 		}
 		fmt.Println()
 	}
@@ -175,29 +212,72 @@ func main() {
 		fmt.Printf("  decode parity:    %d / %d (%.1f%%)\n",
 			totalMatched, totalTruth, 100*float64(totalMatched)/float64(totalTruth))
 	}
+	if *coherent {
+		fmt.Println()
+		fmt.Println("--- coherent path stats ---")
+		fmt.Printf("  coherent used:    %d candidates\n", totalCoherentUsed)
+		fmt.Printf("  fallback to inc:  %d candidates (RMSResid > %g)\n", totalFallback, *coherentRMSThresh)
+		if len(rmsValues) > 0 {
+			sort.Float64s(rmsValues)
+			minRMS := rmsValues[0]
+			maxRMS := rmsValues[len(rmsValues)-1]
+			medianRMS := rmsValues[len(rmsValues)/2]
+			p90RMS := rmsValues[len(rmsValues)*9/10]
+			fmt.Printf("  RMSResid dist:    min=%.3f median=%.3f p90=%.3f max=%.3f (over %d coherent-decoded candidates)\n",
+				minRMS, medianRMS, p90RMS, maxRMS, len(rmsValues))
+		}
+	}
 }
 
 // decodeAll runs the demod + LLRs + ldpc.Decode + unpack chain on
 // every candidate. Returns one decodeRecord per candidate, in the
-// same order Find produced them. CRC-passing decodes also have
-// their text unpacked so the caller can classify by message content.
-func decodeAll(samples []float32, cands []candidates.Candidate) []decodeRecord {
+// same order Find produced them.
+//
+// When useCoherent is true, each candidate is first run through
+// DemodCoherent + the Costas-anchor phase fit. If the phase fit's
+// RMSResid is below rmsThresh, the coherent LLRs are used; otherwise
+// the candidate falls back to incoherent (Demod + LLRs) — the
+// fallback decision is per-candidate, so a slot can use coherent
+// on its strong signals and incoherent on its marginal ones in the
+// same pass.
+//
+// The record's phaseFitRMS / fellBack fields reflect the coherent
+// attempt's outcome and let the caller summarise distribution +
+// fallback count.
+func decodeAll(samples []float32, cands []candidates.Candidate, useCoherent bool, rmsThresh float64) []decodeRecord {
 	out := make([]decodeRecord, len(cands))
 	for i, c := range cands {
-		energies := demod.Demod(samples, c.Freq, c.DT)
-		llrs := demod.LLRs(energies)
-
 		var input [174]float64
-		for k := 0; k < 174; k++ {
-			input[k] = llrs[k]
-		}
-		result, stats := ldpc.Decode(input)
+		rec := decodeRecord{cand: c}
 
-		rec := decodeRecord{
-			cand:    c,
-			stats:   stats,
-			crcPass: stats.ConvergedCRC,
+		if useCoherent {
+			metrics, fit := demod.DemodCoherent(samples, c.Freq, c.DT)
+			rec.phaseFitRMS = fit.RMSResid
+			if math.IsInf(fit.RMSResid, 1) || fit.RMSResid > rmsThresh {
+				rec.fellBack = true
+				energies := demod.Demod(samples, c.Freq, c.DT)
+				llrs := demod.LLRs(energies)
+				for k := 0; k < 174; k++ {
+					input[k] = llrs[k]
+				}
+			} else {
+				llrs := demod.LLRsCoherent(metrics)
+				for k := 0; k < 174; k++ {
+					input[k] = llrs[k]
+				}
+			}
+		} else {
+			energies := demod.Demod(samples, c.Freq, c.DT)
+			llrs := demod.LLRs(energies)
+			for k := 0; k < 174; k++ {
+				input[k] = llrs[k]
+			}
 		}
+
+		result, stats := ldpc.Decode(input)
+		rec.stats = stats
+		rec.crcPass = stats.ConvergedCRC
+
 		if rec.crcPass {
 			ur, uerr := unpack.Unpack(result.Info)
 			rec.msgType = ur.MsgType

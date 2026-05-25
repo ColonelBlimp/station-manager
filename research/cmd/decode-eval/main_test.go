@@ -114,6 +114,12 @@ var realCaptureSlots = []struct {
 	{"../../../captures/live_slot3.wav", 22, 13, 2, 0}, // 2× confirmed jt9-misses
 }
 
+// coherentRMSThreshold is the phaseFitRMS ceiling above which a
+// candidate falls back to incoherent demod. Measured 2026-05-25
+// (see history block at top of file): 0.4 is the largest "do no
+// harm" threshold on the real-capture corpus.
+const coherentRMSThreshold = 0.4
+
 // runPipeline runs the full research-tree pipeline (candidates →
 // demod → LLRs → ldpc.Decode → unpack) and scores against the
 // truth manifest by TEXT + (freq, dt). A match requires:
@@ -130,6 +136,17 @@ var realCaptureSlots = []struct {
 // CRC-pass count). Independent counters so future decoder changes
 // can be A/B'd without one category masking another.
 func runPipeline(t *testing.T, wavPath string) (matched, missed, textExtra, unsupported, malformed int) {
+	matched, missed, textExtra, unsupported, malformed, _, _ = runPipelineMode(t, wavPath, false)
+	return
+}
+
+// runPipelineMode is the parameterised form of runPipeline. If
+// useCoherent is true, each candidate first tries DemodCoherent;
+// fallback to incoherent happens when PhaseFit.RMSResid >
+// coherentRMSThreshold. Returns the same five disjoint counters
+// plus two coherent-mode diagnostics (coherentCount, fallbackCount)
+// which the caller can use for A/B comparison.
+func runPipelineMode(t *testing.T, wavPath string, useCoherent bool) (matched, missed, textExtra, unsupported, malformed, coherentCount, fallbackCount int) {
 	t.Helper()
 
 	data, err := audio.ReadWAV(wavPath)
@@ -155,11 +172,29 @@ func runPipeline(t *testing.T, wavPath string) (matched, missed, textExtra, unsu
 	}
 	records := make([]rec, len(cands))
 	for i, c := range cands {
-		energies := demod.Demod(data.Samples, c.Freq, c.DT)
-		llrs := demod.LLRs(energies)
 		var input [174]float64
-		for k := 0; k < 174; k++ {
-			input[k] = llrs[k]
+		if useCoherent {
+			metrics, fit := demod.DemodCoherent(data.Samples, c.Freq, c.DT)
+			if math.IsInf(fit.RMSResid, 1) || fit.RMSResid > coherentRMSThreshold {
+				fallbackCount++
+				energies := demod.Demod(data.Samples, c.Freq, c.DT)
+				llrs := demod.LLRs(energies)
+				for k := 0; k < 174; k++ {
+					input[k] = llrs[k]
+				}
+			} else {
+				coherentCount++
+				llrs := demod.LLRsCoherent(metrics)
+				for k := 0; k < 174; k++ {
+					input[k] = llrs[k]
+				}
+			}
+		} else {
+			energies := demod.Demod(data.Samples, c.Freq, c.DT)
+			llrs := demod.LLRs(energies)
+			for k := 0; k < 174; k++ {
+				input[k] = llrs[k]
+			}
 		}
 		result, stats := ldpc.Decode(input)
 		r := rec{freq: c.Freq, dt: c.DT, crcPass: stats.ConvergedCRC}
@@ -399,6 +434,96 @@ func TestRealCaptureBaseline(t *testing.T) {
 	}
 	if totalMalformed > 0 {
 		t.Errorf("total malformed = %d, want 0 (CRC false-accept on supported type or Unpack regression)",
+			totalMalformed)
+	}
+}
+
+// TestRealCaptureBaseline_Coherent pins the coherent-demod regression
+// guard: at the calibrated threshold (coherentRMSThreshold = 0.4),
+// the coherent path must achieve AT LEAST the incoherent baseline
+// (matched ≥ 95, malformed = 0) on the real-capture corpus.
+//
+// Measurement history (recorded 2026-05-25, after step 4 coherent
+// wiring):
+//   - Threshold 0.4: 95 matched / 2 textExtra / 0 malformed —
+//     same as incoherent baseline. About 22 of ~584 candidates
+//     used coherent; the rest fell back. Do-no-harm result.
+//   - Higher thresholds (≥ 0.5) progressively degrade matched
+//     due to the "confident on noise" failure mode — the linear
+//     phase model breaks down for real-capture HF multipath /
+//     Doppler / GFSK across 12.6 s.
+//   - Synthetic -22 dB: coherent picks up +1 (1/10 vs 0/10 inc).
+//     Real captures: no net change.
+//
+// This test pins "no real-capture regression vs incoherent." A
+// future model improvement (piecewise phase per Costas block,
+// frequency tracking) should keep this passing AND raise
+// matched > 95 — that would be the visible coherent win.
+//
+// Skipped under -short like TestRealCaptureBaseline.
+func TestRealCaptureBaseline_Coherent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping coherent real-capture baseline under -short")
+	}
+
+	type result struct {
+		name                                               string
+		truthN                                             int
+		matched, missed, textExtra, unsupported, malformed int
+		coherentCount, fallbackCount                       int
+	}
+	results := make([]result, len(realCaptureSlots))
+	for i, fx := range realCaptureSlots {
+		m, mi, te, u, mal, ch, fb := runPipelineMode(t, fx.wav, true)
+		results[i] = result{
+			name:          filepath.Base(fx.wav),
+			truthN:        fx.truthN,
+			matched:       m,
+			missed:        mi,
+			textExtra:     te,
+			unsupported:   u,
+			malformed:     mal,
+			coherentCount: ch,
+			fallbackCount: fb,
+		}
+	}
+
+	totalMatched, totalTextExtra, totalUnsupp, totalMalformed := 0, 0, 0, 0
+	totalCoherent, totalFallback := 0, 0
+	for _, r := range results {
+		totalMatched += r.matched
+		totalTextExtra += r.textExtra
+		totalUnsupp += r.unsupported
+		totalMalformed += r.malformed
+		totalCoherent += r.coherentCount
+		totalFallback += r.fallbackCount
+	}
+
+	t.Logf("real-capture coherent baseline (threshold %.3g):", coherentRMSThreshold)
+	t.Logf("  %-22s %6s %8s %7s %10s %7s %8s %8s %9s",
+		"slot", "truth", "matched", "missed", "textExtra", "unsupp", "malform", "coh-used", "fellback")
+	for _, r := range results {
+		t.Logf("  %-22s %6d %8d %7d %10d %7d %8d %8d %9d",
+			r.name, r.truthN, r.matched, r.missed, r.textExtra, r.unsupported, r.malformed,
+			r.coherentCount, r.fallbackCount)
+	}
+	t.Logf("  %-22s %6d %8d %7s %10d %7d %8d %8d %9d",
+		"TOTAL", realCaptureTruthTotal, totalMatched, "—", totalTextExtra, totalUnsupp, totalMalformed,
+		totalCoherent, totalFallback)
+
+	// Pin "no regression vs incoherent."
+	if totalMatched < realCaptureMatchedFloor {
+		t.Errorf("coherent matched = %d, want >= %d (no regression vs incoherent)",
+			totalMatched, realCaptureMatchedFloor)
+	}
+	if totalTextExtra > realCaptureTextExtraCeiling {
+		t.Errorf("coherent textExtra = %d, want <= %d", totalTextExtra, realCaptureTextExtraCeiling)
+	}
+	if totalUnsupp > realCaptureUnsupportedCeiling {
+		t.Errorf("coherent unsupported = %d, want <= %d", totalUnsupp, realCaptureUnsupportedCeiling)
+	}
+	if totalMalformed > 0 {
+		t.Errorf("coherent malformed = %d, want 0 (CRC false-accept on supported type or coherent regression)",
 			totalMalformed)
 	}
 }
