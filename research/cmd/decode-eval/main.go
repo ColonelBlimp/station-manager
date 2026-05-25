@@ -93,7 +93,13 @@ func main() {
 	// admit fewer candidates without losing the marginal-SNR
 	// synthetic win that motivates having coherent at all.
 	coherentRMSThresh := flag.Float64("coherent-rms-threshold", 0.4, "phaseFitRMS (radians) above which a candidate falls back to incoherent demod")
+	slopeDiag := flag.Bool("slope-rms-diag", false, "one-shot diagnostic: dump per-candidate (slope, RMSResid) + buckets + cross-tab to decide between freq-refinement and piecewise phase. Skips normal decode-eval output.")
 	flag.Parse()
+
+	if *slopeDiag {
+		runSlopeRMSDiag(*dir)
+		return
+	}
 
 	entries, err := os.ReadDir(*dir)
 	if err != nil {

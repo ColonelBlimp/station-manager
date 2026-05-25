@@ -77,6 +77,15 @@ type PhaseFit struct {
 	weights         [costasAnchors]float64
 }
 
+// PhaseFitFor is the exported entry point to fitCostasPhase, for
+// diagnostic callers (decode-eval's slope-vs-RMS pass) that want
+// the phase-fit results independent of whether they're running
+// the coherent demod path. Internal coherent decode uses
+// fitCostasPhase directly.
+func PhaseFitFor(samples []float32, freqHz, dtSec float64) PhaseFit {
+	return fitCostasPhase(samples, freqHz, dtSec)
+}
+
 // fitCostasPhase extracts complex Goertzel amplitudes at the 21
 // Costas anchors of the candidate at (freqHz, dtSec), estimates a
 // per-anchor weight from expected-vs-other-tone log-contrast, and
