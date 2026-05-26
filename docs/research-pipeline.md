@@ -40,6 +40,7 @@ This document is the high-level orientation for future sessions that need to und
   │  - Gray-code bit assignment        │   → [174]float64 LLRs
   │  - Winsorized noise (10% trim)     │ research/demod/calibration.go
   │  - Optional Costas-anchor calib.   │ LLRsCalibrated(energies, noise)
+  │  - Optional surgical row erasure   │ LLRsSoftened(energies, T1, T2, c)
   └─────────────┬──────────────────────┘
                 │
                 ▼
@@ -97,11 +98,12 @@ Real-capture corpus (6 WAVs, 144 jt9-oracle-confirmed signals):
 | BP + OSD | ~600 candidates | 96 CRC-clean codewords | OSD-2 rescues ~8 marginal cases beyond BP-alone |
 | Unpack | 96 CRC-clean | 96 text records | Type 1+4 covered; Type 0/2/3/5 skipped (none in current corpus) |
 | **+ Iterative cancellation (2-iter coherent-adaptive, Session 94)** | 96 + new candidates | **107 total decodes** | +11 unmasked from adjacent-signal subtraction |
-| **+ Winsorized noise (Session 95)** | as above | **108 total decodes** | +1 from QRM-robust noise estimator |
+| **+ Winsorized noise (Session 95, corrected)** | as above | **109 total decodes** | +2 net (+1 pass-1 baseline, +1 subtraction effectiveness) |
+| **+ Surgical row-level LLR erasure (Session 96)** | as above | **110 total decodes** | +1 additional matched, -1 text-extra |
 
-## Where the 36 remaining unmatched signals live
+## Where the 34 remaining unmatched signals live
 
-After all current pipeline stages including 2-iter coherent-adaptive cancellation + Winsorized noise (Sessions 94-95), 144 − 108 = 36 signals are not recovered:
+After all current pipeline stages including 2-iter coherent-adaptive cancellation + Winsorized noise + surgical row-level LLR erasure (Sessions 94-96), 144 − 110 = 34 signals are not recovered:
 
 - **7 fail at Stage 1** (candidate detection)
   - Classification per Session 92's on-lattice probe:
@@ -109,10 +111,10 @@ After all current pipeline stages including 2-iter coherent-adaptive cancellatio
     - 2 signals: STAGE1_LOW — stage-1 matched-filter score below threshold of 1.0 (measured 0.68 and 0.74).
   - Session 92 gate-relaxation sweep + Session 93 cap-sweep both confirmed: lowering gates admits these signals but they STILL don't produce CRC-clean decodes downstream. So even fixing the finder gap wouldn't lift parity for these 7 — they're decoder-limited via the LLRs they'd produce.
 
-- **29 fail at Stage 4** (LDPC decode)
+- **27 fail at Stage 4** (LDPC decode)
   - Candidate detection works, demod produces LLRs, BP fails, OSD-2's 4187-codeword enumeration contains zero CRC-passing codewords.
   - Per Session 93's OSD instrumentation: these are *fundamentally information-limited* given current LLR quality + OSD-2 search depth.
-  - Session 95's Winsorized noise estimator already rescued 1 from this bucket; the remaining 29 are deeper.
+  - Session 95's Winsorized noise estimator already rescued 1 from this bucket; Session 96's surgical row-level LLR erasure rescued 1 more; the remaining 27 are deeper.
 
 ## Per-stage CPU budget
 
