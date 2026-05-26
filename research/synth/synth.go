@@ -175,6 +175,62 @@ func gfskPulse(sampleOffset int) float64 {
 	return 0.5 * (math.Erf(b) - math.Erf(a))
 }
 
+// synthesizeInstFreq builds the per-sample instantaneous-frequency-
+// offset array (in tone units, i.e. multiples of `baud`) for the
+// supplied codeword and dt, plus the output-buffer index range
+// [rangeStart, rangeEnd) the signal occupies. Shared by Synthesize
+// (real output) and SynthesizeComplex (complex output) so the
+// GFSK pulse-summation + edge-clamping logic isn't duplicated.
+//
+// instFreqTones is nil iff the TX window doesn't fit in nsamples
+// at all (rangeStart >= rangeEnd) — callers should short-circuit.
+func synthesizeInstFreq(codeword [codewordBits]uint8, dt float64, nsamples int) (rangeStart, rangeEnd int, instFreqTones []float64) {
+	symbols := codewordToSymbols(codeword)
+
+	txStartSample := int(math.Round((synthSlotStartSec + dt) * fs))
+	pulseHalfSpanSamples := pulseHalfSpanSym * nsps
+
+	// Pre-compute the pulse over its full support so we don't
+	// re-call erfc for every sample.
+	pulseSpanSamples := 2*pulseHalfSpanSamples + 1
+	pulse := make([]float64, pulseSpanSamples)
+	for n := -pulseHalfSpanSamples; n <= pulseHalfSpanSamples; n++ {
+		pulse[n+pulseHalfSpanSamples] = gfskPulse(n)
+	}
+
+	rangeStart = txStartSample - pulseHalfSpanSamples
+	rangeEnd = txStartSample + nn*nsps + pulseHalfSpanSamples
+	if rangeStart < 0 {
+		rangeStart = 0
+	}
+	if rangeEnd > nsamples {
+		rangeEnd = nsamples
+	}
+	if rangeStart >= rangeEnd {
+		return rangeStart, rangeEnd, nil
+	}
+
+	instFreqTones = make([]float64, rangeEnd-rangeStart)
+	for symIdx := 0; symIdx < nn; symIdx++ {
+		toneVal := float64(symbols[symIdx])
+		symCentreSample := txStartSample + symIdx*nsps + nsps/2
+
+		pulseStart := symCentreSample - pulseHalfSpanSamples
+		pulseEnd := symCentreSample + pulseHalfSpanSamples
+		if pulseStart < rangeStart {
+			pulseStart = rangeStart
+		}
+		if pulseEnd > rangeEnd-1 {
+			pulseEnd = rangeEnd - 1
+		}
+		for s := pulseStart; s <= pulseEnd; s++ {
+			offset := s - symCentreSample + pulseHalfSpanSamples
+			instFreqTones[s-rangeStart] += toneVal * pulse[offset]
+		}
+	}
+	return rangeStart, rangeEnd, instFreqTones
+}
+
 // Synthesize generates a 12 kHz mono float32 audio buffer of an
 // FT8 transmission for the supplied codeword at the given centre
 // frequency and DT offset.
@@ -209,79 +265,12 @@ func gfskPulse(sampleOffset int) float64 {
 // × 79) but with a fixed pulse width (~4 symbols at BT=2) this
 // runs in well under 1 ms per call.
 func Synthesize(codeword [codewordBits]uint8, freq, dt float64, nsamples int, amplitude, initialPhase float64) []float32 {
-	symbols := codewordToSymbols(codeword)
-
-	// TX window placement in the output buffer.
-	txStartSample := int(math.Round((synthSlotStartSec + dt) * fs))
-
-	// Each symbol's pulse extends ±pulseHalfSpanSym symbols around
-	// the symbol's centre. Total signal duration in samples
-	// includes the tail beyond the nominal nn-symbol window.
-	pulseHalfSpanSamples := pulseHalfSpanSym * nsps
-
-	// Pre-compute the pulse over its full support so we don't
-	// re-call erfc for every sample. The pulse is symmetric so we
-	// only store the non-negative half plus the value at 0.
-	pulseSpanSamples := 2*pulseHalfSpanSamples + 1
-	pulse := make([]float64, pulseSpanSamples)
-	for n := -pulseHalfSpanSamples; n <= pulseHalfSpanSamples; n++ {
-		pulse[n+pulseHalfSpanSamples] = gfskPulse(n)
-	}
-
-	// Instantaneous frequency offset from `freq` at each sample,
-	// in units of `baud` Hz. Build by accumulating per-symbol
-	// contributions weighted by the shaping pulse.
-	//
-	// instFreq[i] = Σ_n symbol[n] × pulse(i - n·nsps - nsps/2)
-	//
-	// Note the +nsps/2 offset — each symbol's pulse is centred at
-	// its midpoint, not its start. Without this offset the
-	// transmitted frequency would be biased by half a symbol.
+	rangeStart, rangeEnd, instFreqTones := synthesizeInstFreq(codeword, dt, nsamples)
 	signal := make([]float32, nsamples)
-
-	// Working range in the OUTPUT buffer: TX window plus the
-	// pulse-tail span on either side. Clamp to [0, nsamples).
-	rangeStart := txStartSample - pulseHalfSpanSamples
-	rangeEnd := txStartSample + nn*nsps + pulseHalfSpanSamples
-	if rangeStart < 0 {
-		rangeStart = 0
-	}
-	if rangeEnd > nsamples {
-		rangeEnd = nsamples
-	}
-	if rangeStart >= rangeEnd {
+	if instFreqTones == nil {
 		return signal
 	}
 
-	// Compute instantaneous frequency offset (in tone units, i.e.,
-	// multiples of `baud`) for every sample in the working range.
-	instFreqTones := make([]float64, rangeEnd-rangeStart)
-	for symIdx := 0; symIdx < nn; symIdx++ {
-		toneVal := float64(symbols[symIdx])
-		symCentreSample := txStartSample + symIdx*nsps + nsps/2
-
-		// Compute the range of output samples this symbol's pulse
-		// covers, clamped to the working range.
-		pulseStart := symCentreSample - pulseHalfSpanSamples
-		pulseEnd := symCentreSample + pulseHalfSpanSamples
-		if pulseStart < rangeStart {
-			pulseStart = rangeStart
-		}
-		if pulseEnd > rangeEnd-1 {
-			pulseEnd = rangeEnd - 1
-		}
-		for s := pulseStart; s <= pulseEnd; s++ {
-			offset := s - symCentreSample + pulseHalfSpanSamples
-			instFreqTones[s-rangeStart] += toneVal * pulse[offset]
-		}
-	}
-
-	// Integrate frequency to phase. Sample-rate-normalized:
-	// phase[k] - phase[k-1] = 2π × (freq + baud × instFreqTones[k]) / fs.
-	// Initial phase comes from `initialPhase` — subtraction callers
-	// calibrate this against the real signal's Costas-anchor phase
-	// so the synth aligns with the audio's phase trajectory. Standalone
-	// callers (tests, candidate detection) pass 0.
 	phase := initialPhase
 	dPhaseCentre := 2 * math.Pi * freq / fs
 	dPhasePerTone := 2 * math.Pi * baud / fs
@@ -289,7 +278,39 @@ func Synthesize(codeword [codewordBits]uint8, freq, dt float64, nsamples int, am
 		phase += dPhaseCentre + dPhasePerTone*instFreqTones[k]
 		signal[rangeStart+k] = float32(amplitude * math.Sin(phase))
 	}
+	return signal
+}
 
+// SynthesizeComplex generates the analytic-envelope form of the
+// same FT8 transmission Synthesize would produce: each sample is
+// `amplitude · (cos(phase) + j·sin(phase))` at the integrated
+// phase. The imaginary part of the returned slice is identical to
+// the float32 slice Synthesize returns (modulo float32 rounding)
+// so callers can treat one as a strict refinement of the other.
+//
+// Used by per-symbol calibration paths that need to apply a time-
+// varying complex multiplier c(t) to the synth before subtracting
+// it from real audio. The multiplication `c(t) · z(t)` rotates and
+// scales the analytic envelope; `imag(c · z) = |c| · sin(phase +
+// arg(c))` gives the calibrated real-valued waveform. This avoids
+// the Hilbert-transform machinery the real-only Synthesize would
+// otherwise need to support phase-shift modulation.
+//
+// All other parameters match Synthesize.
+func SynthesizeComplex(codeword [codewordBits]uint8, freq, dt float64, nsamples int, amplitude, initialPhase float64) []complex128 {
+	rangeStart, rangeEnd, instFreqTones := synthesizeInstFreq(codeword, dt, nsamples)
+	signal := make([]complex128, nsamples)
+	if instFreqTones == nil {
+		return signal
+	}
+
+	phase := initialPhase
+	dPhaseCentre := 2 * math.Pi * freq / fs
+	dPhasePerTone := 2 * math.Pi * baud / fs
+	for k := 0; k < rangeEnd-rangeStart; k++ {
+		phase += dPhaseCentre + dPhasePerTone*instFreqTones[k]
+		signal[rangeStart+k] = complex(amplitude*math.Cos(phase), amplitude*math.Sin(phase))
+	}
 	return signal
 }
 

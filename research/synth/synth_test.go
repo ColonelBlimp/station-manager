@@ -175,6 +175,79 @@ func TestSynthesize_CandidateDetected(t *testing.T) {
 	}
 }
 
+// TestSynthesizeComplex_ImagMatchesReal pins the contract that
+// SynthesizeComplex's imaginary part equals Synthesize's float32
+// output sample-for-sample (modulo float32 rounding). The two
+// functions share the same instFreq + phase integration, so this
+// is a regression guard against the two emitters drifting apart.
+func TestSynthesizeComplex_ImagMatchesReal(t *testing.T) {
+	const (
+		freq         = 1500.0
+		dt           = 0.0
+		nsamples     = 180000
+		amplitude    = 0.3
+		initialPhase = 0.7 // arbitrary non-zero to exercise the phase path
+		tol          = 1e-6
+	)
+	var cw [codewordBits]uint8
+	for i := range cw {
+		cw[i] = uint8((i*37 + 11) % 2)
+	}
+	real := Synthesize(cw, freq, dt, nsamples, amplitude, initialPhase)
+	cmplx := SynthesizeComplex(cw, freq, dt, nsamples, amplitude, initialPhase)
+	if len(real) != len(cmplx) {
+		t.Fatalf("length mismatch: real=%d complex=%d", len(real), len(cmplx))
+	}
+	mismatches := 0
+	for k := range real {
+		got := float32(imag(cmplx[k]))
+		want := real[k]
+		diff := math.Abs(float64(got - want))
+		if diff > tol {
+			mismatches++
+			if mismatches <= 5 {
+				t.Errorf("sample %d: imag=%.8f, real=%.8f, diff=%.2e",
+					k, got, want, diff)
+			}
+		}
+	}
+	if mismatches > 0 {
+		t.Fatalf("%d/%d samples mismatched", mismatches, len(real))
+	}
+}
+
+// TestSynthesizeComplex_MagnitudeAtCarrier verifies the complex
+// envelope's magnitude approximates the configured amplitude
+// inside the TX window. The envelope's modulus is |amp · e^(jφ)|
+// = amp regardless of phase — sample-by-sample. A failure here
+// would point at a cos/sin sign mismatch or amplitude scaling bug.
+func TestSynthesizeComplex_MagnitudeAtCarrier(t *testing.T) {
+	const (
+		freq         = 1500.0
+		dt           = 0.0
+		nsamples     = 180000
+		amplitude    = 0.3
+		initialPhase = 0.0
+	)
+	var cw [codewordBits]uint8
+	for i := range cw {
+		cw[i] = uint8((i*37 + 11) % 2)
+	}
+	z := SynthesizeComplex(cw, freq, dt, nsamples, amplitude, initialPhase)
+
+	// Sample magnitudes in the interior of the TX window (avoid
+	// pulse-edge taper). Symbol 40 sits at sample 0.5*fs + 40*nsps
+	// = 6000 + 76800 = 82800. We'll check a 1920-sample symbol's
+	// worth of samples there.
+	for k := 82800; k < 82800+nsps; k++ {
+		mag := math.Sqrt(real(z[k])*real(z[k]) + imag(z[k])*imag(z[k]))
+		if mag < 0.99*amplitude || mag > 1.01*amplitude {
+			t.Errorf("sample %d: |z|=%.6f, want ≈ %.4f", k, mag, amplitude)
+			return
+		}
+	}
+}
+
 // TestSynthesize_DTShifts pins the dt-handling: synthesising at
 // different DT offsets should produce candidates at the corresponding
 // physical-DT positions in the slot. Catches sign errors in the
