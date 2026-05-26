@@ -464,11 +464,14 @@ func subtractPerSymbolInPlace(audio []float32, d decoded) bool {
 
 // dispatchSubtract routes to the appropriate per-mode subtraction
 // function. At most one of the boolean flags is true per the upstream
-// mutual-exclusion check.
+// mutual-exclusion check. The coherent-adaptive path's returned bestDelta
+// is discarded here; callers that want to cache it for iter 2+ should
+// invoke cancelCoherentAdaptiveInPlace directly.
 func dispatchSubtract(audio []float32, d decoded, perSymbol, perBlock, coherentAdaptive bool) bool {
 	switch {
 	case coherentAdaptive:
-		return cancelCoherentAdaptiveInPlace(audio, d)
+		_, ok := cancelCoherentAdaptiveInPlace(audio, d)
+		return ok
 	case perSymbol:
 		return subtractPerSymbolInPlace(audio, d)
 	case perBlock:
@@ -476,6 +479,34 @@ func dispatchSubtract(audio []float32, d decoded, perSymbol, perBlock, coherentA
 	default:
 		return subtractInPlace(audio, d)
 	}
+}
+
+// dispatchSubtractIterative is the iterative-aware variant: for the
+// coherent-adaptive path, it consults a per-signal best-delta cache —
+// broad search in iter 1, tight search around the cached delta in iter
+// 2+. Other modes ignore the cache.
+//
+// The cache key is the decoded text (sufficient since each signal has
+// unique text within a slot under FT8 semantics). Maps callers can pass
+// the same cache across iterations to track best-delta convergence.
+func dispatchSubtractIterative(audio []float32, d decoded, perSymbol, perBlock, coherentAdaptive bool, deltaCache map[string]int) bool {
+	if !coherentAdaptive {
+		return dispatchSubtract(audio, d, perSymbol, perBlock, coherentAdaptive)
+	}
+	if cached, ok := deltaCache[d.text]; ok {
+		newDelta, ok := cancelCoherentAdaptiveAroundDelta(audio, d, cached)
+		if !ok {
+			return false
+		}
+		deltaCache[d.text] = newDelta
+		return true
+	}
+	newDelta, ok := cancelCoherentAdaptiveInPlace(audio, d)
+	if !ok {
+		return false
+	}
+	deltaCache[d.text] = newDelta
+	return true
 }
 
 // probeWAVIterative runs the operator's 2026-05-26 iterative algorithm:
@@ -518,6 +549,13 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 		allDecoded[key{r.text}] = r
 	}
 
+	// deltaCache holds the best-delta found during iter-1's broad timing
+	// search per signal text, so iter 2+ can do a tight ±2 sample search
+	// around the cached value instead of repeating the full ±20 broad
+	// search. Cache is per-WAV (signals are unique within a slot in FT8).
+	// Used only by the coherent-adaptive path; other modes ignore it.
+	deltaCache := map[string]int{}
+
 	var lastIterNew int
 	for iter := 1; iter <= maxIter; iter++ {
 		// Rebuild residual fresh from original audio minus all decoded so far.
@@ -527,7 +565,7 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 			if d.rmsResid >= rmsThresh {
 				continue
 			}
-			dispatchSubtract(residual, d, perSymbol, perBlock, coherentAdaptive)
+			dispatchSubtractIterative(residual, d, perSymbol, perBlock, coherentAdaptive, deltaCache)
 			subtracted++
 		}
 
@@ -546,7 +584,7 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 			allDecoded[key{r.text}] = r
 			newThisIter++
 			if r.rmsResid < rmsThresh {
-				dispatchSubtract(residual, r, perSymbol, perBlock, coherentAdaptive)
+				dispatchSubtractIterative(residual, r, perSymbol, perBlock, coherentAdaptive, deltaCache)
 			}
 		}
 		fmt.Printf("  iter %d: %d candidates, %d decodes, %d new\n",

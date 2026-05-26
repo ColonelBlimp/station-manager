@@ -30,6 +30,7 @@ package main
 import (
 	"math"
 	"math/cmplx"
+	"runtime"
 	"sync"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
@@ -63,7 +64,20 @@ const (
 	// boundaries move relative to symbol boundaries and the reference
 	// becomes structurally wrong — the LPF can't absorb that.
 	timingSearchHalf = 20
-	timingSearchStep = 1
+
+	// timingSearchStep is the delta granularity. Step=2 cuts the search
+	// from 41 deltas to 21 with negligible accuracy loss — the residual-
+	// energy surface is smooth at this scale because the LPF absorbs
+	// sub-sample shifts via the constant-phase component of c(t).
+	timingSearchStep = 2
+
+	// timingTightHalf / timingTightStep bound the re-refinement search
+	// in iter 2+: ±2 samples in steps of 1 (5 deltas total) around the
+	// best delta found in iter 1. Iter 1 has done the broad search; iter 2+
+	// only needs a small correction in case residual audio shifts the
+	// optimum by a sample or two.
+	timingTightHalf = 2
+	timingTightStep = 1
 )
 
 var (
@@ -73,12 +87,31 @@ var (
 	fftPlan     *audio.Plan
 	fftPlanOnce sync.Once
 
+	// planPool holds per-goroutine FFT plans. audio.Plan is documented as
+	// NOT safe for concurrent use, so parallel timing search uses one
+	// plan per active goroutine. sync.Pool's lazy construction means
+	// plans only exist when needed; idle goroutines release back to the
+	// pool.
+	planPool = sync.Pool{
+		New: func() any { return audio.NewPlan(fftN) },
+	}
+
 	// inputBufPool reuses zero-padded complex input buffers across LPF
 	// calls. fftN is large (~3 MB) and the per-signal cost of allocating
 	// fresh ones (42 calls × ~3 MB = ~125 MB) is GC-visible.
 	inputBufPool = sync.Pool{
 		New: func() any {
 			b := make([]complex128, fftN)
+			return &b
+		},
+	}
+
+	// cRawPool reuses the demodulated-product buffer (180k complex128 =
+	// 2.88 MB). Each timing-search delta needs its own; pooling across
+	// the parallel fan-out avoids allocating one per worker call.
+	cRawPool = sync.Pool{
+		New: func() any {
+			b := make([]complex128, nSamples)
 			return &b
 		},
 	}
@@ -93,7 +126,10 @@ func getFFTPlan() *audio.Plan {
 }
 
 // getHannKernelFFT returns the FFT of the centered Hann window of length
-// hannN, zero-padded to fftN. Computed once and reused across all LPF calls.
+// hannN, zero-padded to fftN. Computed once and reused across all LPF
+// calls. The result is purely a function of the input (Hann window),
+// not of the Plan instance used to compute it, so it's safe to share
+// across all per-goroutine plans.
 func getHannKernelFFT() []complex128 {
 	hannKernelFFTOnce.Do(func() {
 		plan := getFFTPlan()
@@ -114,8 +150,10 @@ func getHannKernelFFT() []complex128 {
 // Output length equals input length; result is centered (zero-phase) by
 // shifting the convolution output by hannN/2 to compensate for the kernel
 // being placed at index 0 in the FFT buffer.
-func convolveLPF(signal []complex128) []complex128 {
-	plan := getFFTPlan()
+//
+// The plan is caller-supplied so the parallel timing-search can hold
+// one Plan per goroutine (audio.Plan is not concurrent-safe).
+func convolveLPF(plan *audio.Plan, signal []complex128) []complex128 {
 	kernelFFT := getHannKernelFFT()
 
 	padPtr := inputBufPool.Get().(*[]complex128)
@@ -149,12 +187,12 @@ func convolveLPF(signal []complex128) []complex128 {
 // convolveLPFReal is convolveLPF specialised to real-valued input. Used
 // for computing the overlap-weight mask (binary 1/0 indicator convolved
 // with the Hann window).
-func convolveLPFReal(mask []float64) []float64 {
+func convolveLPFReal(plan *audio.Plan, mask []float64) []float64 {
 	cmask := make([]complex128, len(mask))
 	for i := range mask {
 		cmask[i] = complex(mask[i], 0)
 	}
-	result := convolveLPF(cmask)
+	result := convolveLPF(plan, cmask)
 	out := make([]float64, len(mask))
 	for i := range out {
 		out[i] = real(result[i])
@@ -162,23 +200,43 @@ func convolveLPFReal(mask []float64) []float64 {
 	return out
 }
 
-// cancelCoherentAdaptiveInPlace removes signal d from audio via adaptive
-// coherent cancellation. Searches ±timingSearchHalf samples for the dt
-// that minimises post-subtract residual energy, re-estimates c(t) at
-// that dt, then subtracts. Returns true on success.
+// cancelCoherentAdaptiveInPlace is the broad-search variant — full ±20
+// delta search at step=2. Used in iter 1 of the outer iterative loop;
+// returns the best delta found so iter 2+ can do a tight search around
+// it via cancelCoherentAdaptiveAroundDelta.
 //
 // The audio buffer is modified in place over the TX-window range only.
 // Samples outside the TX window are untouched.
-func cancelCoherentAdaptiveInPlace(audio []float32, d decoded) bool {
-	if len(audio) != nSamples {
-		return false
+func cancelCoherentAdaptiveInPlace(audio []float32, d decoded) (bestDelta int, ok bool) {
+	return cancelCoherentAdaptiveSearched(audio, d, -timingSearchHalf, timingSearchHalf, timingSearchStep)
+}
+
+// cancelCoherentAdaptiveAroundDelta is the tight-search variant — ±2
+// delta search at step=1, centered on a previously-found best delta.
+// Used in iter 2+ of the outer iterative loop: the broad search from
+// iter 1 found the right neighborhood; subsequent iterations only need
+// small corrections in case residual audio drift shifts the optimum.
+func cancelCoherentAdaptiveAroundDelta(audio []float32, d decoded, centerDelta int) (bestDelta int, ok bool) {
+	return cancelCoherentAdaptiveSearched(audio, d,
+		centerDelta-timingTightHalf, centerDelta+timingTightHalf, timingTightStep)
+}
+
+// cancelCoherentAdaptiveSearched does the cancellation with a configurable
+// delta search range. The variants above are thin wrappers.
+//
+// Parameter is `audioBuf` not `audio` to avoid shadowing the imported
+// audio package, which we need inside this function to look up
+// `audio.Plan` from the goroutine-local plan pool.
+func cancelCoherentAdaptiveSearched(audioBuf []float32, d decoded, deltaMin, deltaMax, deltaStep int) (bestDelta int, ok bool) {
+	if len(audioBuf) != nSamples {
+		return 0, false
 	}
 
 	txStartSample := int(math.Round((0.5 + d.dt) * float64(expectedSampleRate)))
 	txEndSample := txStartSample + txSymbolCount*nspsLocal
-	if txStartSample < 0 || txEndSample > len(audio) {
+	if txStartSample < 0 || txEndSample > len(audioBuf) {
 		// Edge-DT signals don't fit cleanly. Skip rather than under-handle.
-		return false
+		return 0, false
 	}
 
 	// Overlap-normalisation weight. Constant across delta search; small
@@ -189,57 +247,94 @@ func cancelCoherentAdaptiveInPlace(audio []float32, d decoded) bool {
 	for i := txStartSample; i < txEndSample; i++ {
 		insideMask[i] = 1.0
 	}
-	weight := convolveLPFReal(insideMask)
+	mainPlan := planPool.Get().(*audio.Plan)
+	defer planPool.Put(mainPlan)
+	weight := convolveLPFReal(mainPlan, insideMask)
 
-	// Pre-allocate cRaw buffer reused across delta search.
-	cRaw := make([]complex128, nSamples)
+	// --- Pass 1: timing search, parallel across deltas ---
+	// Build the delta list up front so we can fan out across goroutines.
+	var deltas []int
+	for delta := deltaMin; delta <= deltaMax; delta += deltaStep {
+		deltas = append(deltas, delta)
+	}
 
-	// --- Pass 1: timing search ---
-	bestDelta := 0
-	bestResidual := math.Inf(1)
+	type result struct {
+		residEnergy float64
+	}
+	results := make([]result, len(deltas))
 
-	for delta := -timingSearchHalf; delta <= timingSearchHalf; delta += timingSearchStep {
-		dt := d.dt + float64(delta)/float64(expectedSampleRate)
-		zR := synth.SynthesizeComplex(d.codeword, d.preciseFreq, dt, len(audio), 1.0, 0.0)
+	// Limit concurrency to NumCPU so the Plan pool's working set stays
+	// bounded. Each goroutine acquires its own Plan from the pool.
+	maxParallel := runtime.NumCPU()
+	if maxParallel > len(deltas) {
+		maxParallel = len(deltas)
+	}
+	sem := make(chan struct{}, maxParallel)
+	var wg sync.WaitGroup
+	for idx, delta := range deltas {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx, delta int) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		// Demod: audio × conj(zR), masked to TX window.
-		for i := range cRaw {
-			cRaw[i] = 0
-		}
-		for i := txStartSample; i < txEndSample; i++ {
-			cRaw[i] = complex(float64(audio[i]), 0) * cmplx.Conj(zR[i])
-		}
+			plan := planPool.Get().(*audio.Plan)
+			defer planPool.Put(plan)
 
-		cFiltered := convolveLPF(cRaw)
+			dt := d.dt + float64(delta)/float64(expectedSampleRate)
+			zR := synth.SynthesizeComplex(d.codeword, d.preciseFreq, dt, len(audioBuf), 1.0, 0.0)
 
-		// Score residual energy across the TX window.
-		var residEnergy float64
-		for i := txStartSample; i < txEndSample; i++ {
-			if weight[i] < 1e-6 {
-				continue
+			cRawPtr := cRawPool.Get().(*[]complex128)
+			defer cRawPool.Put(cRawPtr)
+			cRaw := *cRawPtr
+			for i := range cRaw {
+				cRaw[i] = 0
 			}
-			cN := cFiltered[i] / complex(weight[i], 0)
-			recon := 2 * real(cN*zR[i])
-			diff := float64(audio[i]) - recon
-			residEnergy += diff * diff
-		}
-		if residEnergy < bestResidual {
-			bestResidual = residEnergy
-			bestDelta = delta
+			for i := txStartSample; i < txEndSample; i++ {
+				cRaw[i] = complex(float64(audioBuf[i]), 0) * cmplx.Conj(zR[i])
+			}
+
+			cFiltered := convolveLPF(plan, cRaw)
+
+			var residEnergy float64
+			for i := txStartSample; i < txEndSample; i++ {
+				if weight[i] < 1e-6 {
+					continue
+				}
+				cN := cFiltered[i] / complex(weight[i], 0)
+				recon := 2 * real(cN*zR[i])
+				diff := float64(audioBuf[i]) - recon
+				residEnergy += diff * diff
+			}
+			results[idx] = result{residEnergy: residEnergy}
+		}(idx, delta)
+	}
+	wg.Wait()
+
+	bestDelta = deltas[0]
+	bestResidual := math.Inf(1)
+	for i, r := range results {
+		if r.residEnergy < bestResidual {
+			bestResidual = r.residEnergy
+			bestDelta = deltas[i]
 		}
 	}
+	_ = bestResidual
 
 	// --- Pass 2: re-estimate c(t) at chosen delta + subtract ---
 	bestDt := d.dt + float64(bestDelta)/float64(expectedSampleRate)
-	zR := synth.SynthesizeComplex(d.codeword, d.preciseFreq, bestDt, len(audio), 1.0, 0.0)
+	zR := synth.SynthesizeComplex(d.codeword, d.preciseFreq, bestDt, len(audioBuf), 1.0, 0.0)
 
+	cRawPtr := cRawPool.Get().(*[]complex128)
+	defer cRawPool.Put(cRawPtr)
+	cRaw := *cRawPtr
 	for i := range cRaw {
 		cRaw[i] = 0
 	}
 	for i := txStartSample; i < txEndSample; i++ {
-		cRaw[i] = complex(float64(audio[i]), 0) * cmplx.Conj(zR[i])
+		cRaw[i] = complex(float64(audioBuf[i]), 0) * cmplx.Conj(zR[i])
 	}
-	cFiltered := convolveLPF(cRaw)
+	cFiltered := convolveLPF(mainPlan, cRaw)
 
 	for i := txStartSample; i < txEndSample; i++ {
 		if weight[i] < 1e-6 {
@@ -247,8 +342,8 @@ func cancelCoherentAdaptiveInPlace(audio []float32, d decoded) bool {
 		}
 		cN := cFiltered[i] / complex(weight[i], 0)
 		recon := 2 * real(cN*zR[i])
-		audio[i] -= float32(recon)
+		audioBuf[i] -= float32(recon)
 	}
 
-	return true
+	return bestDelta, true
 }
