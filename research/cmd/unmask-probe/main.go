@@ -92,6 +92,7 @@ func main() {
 	perBlock := flag.Bool("per-block", false, "use per-block calibration: 3 weighted-LS coefficients (one per Costas block) interpolated across the TX window. Averages 7 anchors per block to suppress noise while still allowing block-level trajectory variation. Hypothesised middle ground between single-c and per-symbol.")
 	coherentAdaptive := flag.Bool("coherent-adaptive", false, "use adaptive coherent cancellation: per-sample demod → Hann LPF → reconstruct → subtract, with timing refinement (±20 sample search). Generalises single-c / per-block / per-symbol — channel estimation bandwidth is set by the LPF length (N=12000 = ~1.4 Hz) rather than by anchor count. Per 2026-05-26 design discussion.")
 	iterations := flag.Int("iterations", 1, "iterative detect-decode-subtract passes (1-3). Each iteration rebuilds residual fresh from original audio minus all decoded signals so far. Convergence: stop when no new decodes. Capped at 3 per operator directive.")
+	calibrateCostas := flag.Bool("calibrate-costas", false, "scale LLRs using a Costas-anchor-derived noise level (research/demod.EstimateCostasCalibration) instead of the data-symbol-derived plain/Winsorized noise floor. Uses LLRsCalibrated. Falls back to standard LLRs when fewer than 3 Costas anchors are accessible.")
 	verbose := flag.Bool("v", false, "print per-decode detail")
 	flag.Parse()
 
@@ -148,9 +149,9 @@ func main() {
 		fmt.Printf("=== %s ===\n", wav)
 		var newMatched, newExtra, lostMatched, subtracted int
 		if *iterations > 1 {
-			newMatched, newExtra, lostMatched, subtracted = probeWAVIterative(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *iterations, *verbose)
+			newMatched, newExtra, lostMatched, subtracted = probeWAVIterative(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *calibrateCostas, *iterations, *verbose)
 		} else {
-			newMatched, newExtra, lostMatched, subtracted = probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *verbose)
+			newMatched, newExtra, lostMatched, subtracted = probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *calibrateCostas, *verbose)
 		}
 		corpNewMatched += newMatched
 		corpNewExtra += newExtra
@@ -182,7 +183,7 @@ func main() {
 // builds the residual, runs the pass-2 decode, and classifies the
 // new/lost decodes against the truth manifest. Returns the four
 // corpus-aggregate counters.
-func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive, calibrateCostas, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -197,7 +198,7 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 
 	// Pass 1.
 	cands1 := candidates.Find(data.Samples)
-	records1 := decodeAll(data.Samples, cands1)
+	records1 := decodeAll(data.Samples, cands1, calibrateCostas)
 	fmt.Printf("  pass 1: %d candidates → %d CRC-pass decodes\n", len(cands1), len(records1))
 
 	// Filter to clean decodes.
@@ -233,7 +234,7 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 
 	// Pass 2 on residual.
 	cands2 := candidates.Find(residual)
-	records2 := decodeAll(residual, cands2)
+	records2 := decodeAll(residual, cands2, calibrateCostas)
 	fmt.Printf("  pass 2: %d candidates → %d CRC-pass decodes\n", len(cands2), len(records2))
 
 	// Classify diff: new (in pass 2 not pass 1), lost (in pass 1 not pass 2).
@@ -289,11 +290,24 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 // decodeAll runs the full decode pipeline (Find result → demod →
 // LLRs → ldpc.Decode → unpack) and returns one `decoded` per
 // CRC-passing candidate with non-empty unpack text.
-func decodeAll(samples []float32, cands []candidates.Candidate) []decoded {
+func decodeAll(samples []float32, cands []candidates.Candidate, calibrateCostas bool) []decoded {
 	var out []decoded
 	for _, c := range cands {
 		energies := demod.Demod(samples, c.Freq, c.DT)
-		llrs := demod.LLRs(energies)
+		var llrs [codewordBits]float64
+		if calibrateCostas {
+			// Costas-anchor-derived noise scale. Falls back to the
+			// data-symbol Winsorized estimate when fewer than 3
+			// anchors are accessible (noiseLevel returns 0).
+			_, noiseLevel := demod.EstimateCostasCalibration(samples, c.Freq, c.DT)
+			if noiseLevel > 0 {
+				llrs = demod.LLRsCalibrated(energies, noiseLevel)
+			} else {
+				llrs = demod.LLRs(energies)
+			}
+		} else {
+			llrs = demod.LLRs(energies)
+		}
 		var input [codewordBits]float64
 		for k := 0; k < codewordBits; k++ {
 			input[k] = llrs[k]
@@ -522,7 +536,7 @@ func dispatchSubtractIterative(audio []float32, d decoded, perSymbol, perBlock, 
 // Within-pass interleaving: as each candidate decodes successfully, it is
 // immediately subtracted from the residual so subsequent candidates in
 // the same pass see the cleaner version. The operator-proposed structure.
-func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, maxIter int, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive, calibrateCostas bool, maxIter int, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -537,7 +551,7 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 	// Pass-1 baseline: decode without any subtraction. Used to classify
 	// new-vs-lost against the final iterative decoded set.
 	pass1Cands := candidates.Find(data.Samples)
-	pass1Records := decodeAll(data.Samples, pass1Cands)
+	pass1Records := decodeAll(data.Samples, pass1Cands, calibrateCostas)
 	fmt.Printf("  baseline pass 1: %d CRC-pass decodes\n", len(pass1Records))
 
 	// Iterative loop.
@@ -571,7 +585,7 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 
 		// Find + decode on this residual.
 		cands := candidates.Find(residual)
-		records := decodeAll(residual, cands)
+		records := decodeAll(residual, cands, calibrateCostas)
 
 		// Identify and add new decodes; interleave-subtract as we go for
 		// any newly-decoded clean signals so later candidates in this pass
