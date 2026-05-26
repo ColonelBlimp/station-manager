@@ -90,8 +90,14 @@ func main() {
 	topSubtract := flag.Int("top", 1, "subtract up to this many of the cleanest signals per WAV")
 	perSymbol := flag.Bool("per-symbol", false, "use per-symbol phase-tracked calibration: 21 per-anchor (amp, phase) ratios, linearly interpolated. Measured-flat-or-negative vs single-c on this corpus — per-anchor SNR is too low for the interpolation to outperform global averaging.")
 	perBlock := flag.Bool("per-block", false, "use per-block calibration: 3 weighted-LS coefficients (one per Costas block) interpolated across the TX window. Averages 7 anchors per block to suppress noise while still allowing block-level trajectory variation. Hypothesised middle ground between single-c and per-symbol.")
+	coherentAdaptive := flag.Bool("coherent-adaptive", false, "use adaptive coherent cancellation: per-sample demod → Hann LPF → reconstruct → subtract, with timing refinement (±20 sample search). Generalises single-c / per-block / per-symbol — channel estimation bandwidth is set by the LPF length (N=12000 = ~1.4 Hz) rather than by anchor count. Per 2026-05-26 design discussion.")
+	iterations := flag.Int("iterations", 1, "iterative detect-decode-subtract passes (1-3). Each iteration rebuilds residual fresh from original audio minus all decoded signals so far. Convergence: stop when no new decodes. Capped at 3 per operator directive.")
 	verbose := flag.Bool("v", false, "print per-decode detail")
 	flag.Parse()
+
+	if *iterations < 1 || *iterations > 3 {
+		log.Fatalf("-iterations %d outside allowed range 1-3", *iterations)
+	}
 
 	entries, err := os.ReadDir(*dir)
 	if err != nil {
@@ -115,19 +121,37 @@ func main() {
 	var corpNewMatched, corpNewExtra, corpLostMatched, corpSubtracted int
 
 	mode := "global single-c"
+	modeCount := 0
+	if *perSymbol {
+		modeCount++
+	}
+	if *perBlock {
+		modeCount++
+	}
+	if *coherentAdaptive {
+		modeCount++
+	}
+	if modeCount > 1 {
+		log.Fatal("specify at most one of -per-symbol / -per-block / -coherent-adaptive")
+	}
 	switch {
-	case *perSymbol && *perBlock:
-		log.Fatal("specify at most one of -per-symbol / -per-block")
 	case *perSymbol:
 		mode = "per-symbol phase-tracked"
 	case *perBlock:
 		mode = "per-block (3-point) calibration"
+	case *coherentAdaptive:
+		mode = "coherent adaptive (LPF N=12000, ±20 timing search)"
 	}
-	fmt.Printf("subtraction mode: %s\n\n", mode)
+	fmt.Printf("subtraction mode: %s, iterations: %d\n\n", mode, *iterations)
 
 	for _, wav := range wavs {
 		fmt.Printf("=== %s ===\n", wav)
-		newMatched, newExtra, lostMatched, subtracted := probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *verbose)
+		var newMatched, newExtra, lostMatched, subtracted int
+		if *iterations > 1 {
+			newMatched, newExtra, lostMatched, subtracted = probeWAVIterative(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *iterations, *verbose)
+		} else {
+			newMatched, newExtra, lostMatched, subtracted = probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *verbose)
+		}
 		corpNewMatched += newMatched
 		corpNewExtra += newExtra
 		corpLostMatched += lostMatched
@@ -158,7 +182,7 @@ func main() {
 // builds the residual, runs the pass-2 decode, and classifies the
 // new/lost decodes against the truth manifest. Returns the four
 // corpus-aggregate counters.
-func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -200,15 +224,7 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 	residual := make([]float32, len(data.Samples))
 	copy(residual, data.Samples)
 	for _, c := range clean {
-		var ok bool
-		switch {
-		case perSymbol:
-			ok = subtractPerSymbolInPlace(residual, c)
-		case perBlock:
-			ok = subtractPerBlockInPlace(residual, c)
-		default:
-			ok = subtractInPlace(residual, c)
-		}
+		ok := dispatchSubtract(residual, c, perSymbol, perBlock, coherentAdaptive)
 		if !ok {
 			continue
 		}
@@ -444,6 +460,156 @@ func subtractPerSymbolInPlace(audio []float32, d decoded) bool {
 		audio[k] -= float32(calibrated)
 	}
 	return true
+}
+
+// dispatchSubtract routes to the appropriate per-mode subtraction
+// function. At most one of the boolean flags is true per the upstream
+// mutual-exclusion check.
+func dispatchSubtract(audio []float32, d decoded, perSymbol, perBlock, coherentAdaptive bool) bool {
+	switch {
+	case coherentAdaptive:
+		return cancelCoherentAdaptiveInPlace(audio, d)
+	case perSymbol:
+		return subtractPerSymbolInPlace(audio, d)
+	case perBlock:
+		return subtractPerBlockInPlace(audio, d)
+	default:
+		return subtractInPlace(audio, d)
+	}
+}
+
+// probeWAVIterative runs the operator's 2026-05-26 iterative algorithm:
+// max N passes of (Find on fresh residual → decode each candidate →
+// interleaved subtract if clean), with convergence on "no new decodes
+// this pass." Reports new vs lost matched against the truth manifest
+// over all passes combined.
+//
+// Fresh-residual rebuild each pass: residual is rebuilt from the original
+// audio minus the entire decoded-set-so-far, NOT cumulatively-subtracted
+// across passes. This prevents subtraction errors from compounding.
+//
+// Within-pass interleaving: as each candidate decodes successfully, it is
+// immediately subtracted from the residual so subsequent candidates in
+// the same pass see the cleaner version. The operator-proposed structure.
+func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, maxIter int, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+	data, err := audio.ReadWAV(wavPath)
+	if err != nil {
+		log.Printf("  read wav: %v — skipping", err)
+		return
+	}
+	if data.SampleRate != expectedSampleRate || data.Channels != 1 {
+		log.Printf("  rate=%d channels=%d — skipping", data.SampleRate, data.Channels)
+		return
+	}
+	manifest, _ := truth.Read(truth.PathFor(wavPath))
+
+	// Pass-1 baseline: decode without any subtraction. Used to classify
+	// new-vs-lost against the final iterative decoded set.
+	pass1Cands := candidates.Find(data.Samples)
+	pass1Records := decodeAll(data.Samples, pass1Cands)
+	fmt.Printf("  baseline pass 1: %d CRC-pass decodes\n", len(pass1Records))
+
+	// Iterative loop.
+	type key struct {
+		text string
+	}
+	allDecoded := map[key]decoded{}
+	for _, r := range pass1Records {
+		allDecoded[key{r.text}] = r
+	}
+
+	var lastIterNew int
+	for iter := 1; iter <= maxIter; iter++ {
+		// Rebuild residual fresh from original audio minus all decoded so far.
+		residual := make([]float32, len(data.Samples))
+		copy(residual, data.Samples)
+		for _, d := range allDecoded {
+			if d.rmsResid >= rmsThresh {
+				continue
+			}
+			dispatchSubtract(residual, d, perSymbol, perBlock, coherentAdaptive)
+			subtracted++
+		}
+
+		// Find + decode on this residual.
+		cands := candidates.Find(residual)
+		records := decodeAll(residual, cands)
+
+		// Identify and add new decodes; interleave-subtract as we go for
+		// any newly-decoded clean signals so later candidates in this pass
+		// see the cleaner version.
+		newThisIter := 0
+		for _, r := range records {
+			if _, exists := allDecoded[key{r.text}]; exists {
+				continue
+			}
+			allDecoded[key{r.text}] = r
+			newThisIter++
+			if r.rmsResid < rmsThresh {
+				dispatchSubtract(residual, r, perSymbol, perBlock, coherentAdaptive)
+			}
+		}
+		fmt.Printf("  iter %d: %d candidates, %d decodes, %d new\n",
+			iter, len(cands), len(records), newThisIter)
+		lastIterNew = newThisIter
+		if newThisIter == 0 {
+			break
+		}
+	}
+	_ = lastIterNew
+
+	// Classify allDecoded against pass1 (for new) and against truth (for matched).
+	for _, d := range allDecoded {
+		_, inPass1 := containsByKey(pass1Records, d)
+		matched := matchesTruth(d, manifest)
+		switch {
+		case inPass1 && matched:
+			// Already counted as part of baseline — neither new nor lost.
+		case inPass1 && !matched:
+			// Pass-1 had it but truth doesn't — pass-1 text-extra, not from iteration.
+		case !inPass1 && matched:
+			newMatched++
+			if verbose {
+				fmt.Printf("    NEW MATCHED: %q at freq=%.2f, dt=%+.3f\n", d.text, d.freq, d.dt)
+			}
+		case !inPass1 && !matched:
+			newExtra++
+			if verbose {
+				fmt.Printf("    NEW EXTRA:   %q at freq=%.2f, dt=%+.3f\n", d.text, d.freq, d.dt)
+			}
+		}
+	}
+	// Lost = pass1-matched signals NOT in allDecoded. Should always be 0
+	// since allDecoded starts with pass1Records and grows.
+	pass1Texts := map[string]bool{}
+	for _, r := range pass1Records {
+		pass1Texts[r.text] = true
+	}
+	for _, r := range pass1Records {
+		if !matchesTruth(r, manifest) {
+			continue
+		}
+		if _, exists := allDecoded[key{r.text}]; !exists {
+			lostMatched++
+		}
+	}
+
+	fmt.Printf("  outcome: %d new-matched, %d new-extra, %d lost-matched\n",
+		newMatched, newExtra, lostMatched)
+	return newMatched, newExtra, lostMatched, subtracted
+}
+
+// containsByKey reports whether a `decoded` matching d (by text + freq + dt
+// proximity) exists in records.
+func containsByKey(records []decoded, d decoded) (decoded, bool) {
+	for _, r := range records {
+		if r.text == d.text &&
+			math.Abs(r.freq-d.freq) <= jt9FreqTolHz &&
+			math.Abs(r.dt-d.dt) <= jt9DTTolSec {
+			return r, true
+		}
+	}
+	return decoded{}, false
 }
 
 // subtractPerBlockInPlace is the middle ground between subtractInPlace
