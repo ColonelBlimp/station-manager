@@ -86,6 +86,43 @@ func PhaseFitFor(samples []float32, freqHz, dtSec float64) PhaseFit {
 	return fitCostasPhase(samples, freqHz, dtSec)
 }
 
+// CostasAnchorAmplitudes returns the complex DTFT amplitudes at the
+// 21 Costas-anchor positions (channel symbols 0-6, 36-42, 72-78) for
+// the signal at (freqHz, dtSec), evaluated at each anchor's expected
+// tone from icos7. Inaccessible anchors (audio window outside the
+// buffer) return zero in the slot AND in the accessible mask.
+//
+// Used by the subtraction probe to calibrate synth-vs-real complex
+// amplitude (amplitude + phase ratio per anchor → weighted average →
+// global amplitude × initial-phase calibration for the synth).
+func CostasAnchorAmplitudes(samples []float32, freqHz, dtSec float64) (amps [costasAnchors]complex128, accessible [costasAnchors]bool) {
+	// Goertzel coefficients + unit delays for the 8 tones at
+	// (freqHz + k · baud). Same convention as fitCostasPhase.
+	var coeffs [ft8ToneCount]float64
+	var unitDelays [ft8ToneCount]complex128
+	for k := 0; k < ft8ToneCount; k++ {
+		fk := freqHz + float64(k)*baud
+		omega := 2 * math.Pi * fk / fs
+		coeffs[k] = 2 * math.Cos(omega)
+		unitDelays[k] = complex(math.Cos(omega), math.Sin(omega))
+	}
+
+	txStart := int(math.Round((synthSlotStartSec + dtSec) * fs))
+
+	for i := 0; i < costasAnchors; i++ {
+		sym := costasSym[i]
+		tone := costasExpectedTone[i]
+		symStart := txStart + sym*nsps
+		if symStart < 0 || symStart+nsps > len(samples) {
+			continue
+		}
+		x := goertzelMultiComplex(samples, symStart, nsps, coeffs, unitDelays)
+		amps[i] = x[tone]
+		accessible[i] = true
+	}
+	return amps, accessible
+}
+
 // fitCostasPhase extracts complex Goertzel amplitudes at the 21
 // Costas anchors of the candidate at (freqHz, dtSec), estimates a
 // per-anchor weight from expected-vs-other-tone log-contrast, and
