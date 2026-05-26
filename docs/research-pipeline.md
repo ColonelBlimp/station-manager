@@ -38,7 +38,8 @@ This document is the high-level orientation for future sessions that need to und
   │ Stage 3: LLR COMPUTATION           │ research/demod/llr.go
   │  - Log-sum-exp 8-FSK demap         │ LLRs(energies)
   │  - Gray-code bit assignment        │   → [174]float64 LLRs
-  │  - Per-candidate alpha scaling     │
+  │  - Winsorized noise (10% trim)     │ research/demod/calibration.go
+  │  - Optional Costas-anchor calib.   │ LLRsCalibrated(energies, noise)
   └─────────────┬──────────────────────┘
                 │
                 ▼
@@ -95,11 +96,12 @@ Real-capture corpus (6 WAVs, 144 jt9-oracle-confirmed signals):
 | BP | ~600 candidates | ~88 parity-clean codewords | BP fails on signals with noisy LLRs |
 | BP + OSD | ~600 candidates | 96 CRC-clean codewords | OSD-2 rescues ~8 marginal cases beyond BP-alone |
 | Unpack | 96 CRC-clean | 96 text records | Type 1+4 covered; Type 0/2/3/5 skipped (none in current corpus) |
-| **+ Iterative cancellation (2-iter coherent-adaptive)** | 96 + new candidates | **107 total decodes** | +11 unmasked from adjacent-signal subtraction |
+| **+ Iterative cancellation (2-iter coherent-adaptive, Session 94)** | 96 + new candidates | **107 total decodes** | +11 unmasked from adjacent-signal subtraction |
+| **+ Winsorized noise (Session 95)** | as above | **108 total decodes** | +1 from QRM-robust noise estimator |
 
-## Where the 37 remaining unmatched signals live
+## Where the 36 remaining unmatched signals live
 
-After all current pipeline stages including 2-iter coherent-adaptive cancellation, 144 − 107 = 37 signals are not recovered:
+After all current pipeline stages including 2-iter coherent-adaptive cancellation + Winsorized noise (Sessions 94-95), 144 − 108 = 36 signals are not recovered:
 
 - **7 fail at Stage 1** (candidate detection)
   - Classification per Session 92's on-lattice probe:
@@ -107,9 +109,10 @@ After all current pipeline stages including 2-iter coherent-adaptive cancellatio
     - 2 signals: STAGE1_LOW — stage-1 matched-filter score below threshold of 1.0 (measured 0.68 and 0.74).
   - Session 92 gate-relaxation sweep + Session 93 cap-sweep both confirmed: lowering gates admits these signals but they STILL don't produce CRC-clean decodes downstream. So even fixing the finder gap wouldn't lift parity for these 7 — they're decoder-limited via the LLRs they'd produce.
 
-- **30 fail at Stage 4** (LDPC decode)
+- **29 fail at Stage 4** (LDPC decode)
   - Candidate detection works, demod produces LLRs, BP fails, OSD-2's 4187-codeword enumeration contains zero CRC-passing codewords.
   - Per Session 93's OSD instrumentation: these are *fundamentally information-limited* given current LLR quality + OSD-2 search depth.
+  - Session 95's Winsorized noise estimator already rescued 1 from this bucket; the remaining 29 are deeper.
 
 ## Per-stage CPU budget
 
@@ -156,6 +159,7 @@ Compute optimisations don't change which signals decode — only how fast we get
 - `stage2MaxResults` candidate cap (Session 93): {100, 200, 500} all flat.
 - OSD CRC-pass rescue (Finding 2, Session 93): raw + normalised metric distributions overlap; no threshold separates rescuable from CRC-lottery.
 - Matched-filter subtraction at lattice-snapped frequency (Session 84, corrected by Session 89-94): the original ruling was on a misdiagnosed root cause; coherent-adaptive cancellation with sub-bin freq + per-sample channel-gain estimation does work (+11 matched).
+- Costas-anchor LLR calibration (Session 95): measured-neutral on this corpus. The Winsorized data-symbol estimator already handles the QRM/leakage vulnerability it was meant to attack, and the smaller Costas anchor sample pool (147 vs 406) adds variance. Retained as research scaffolding (`LLRsCalibrated` + `EstimateCostasCalibration` + `-calibrate-costas` flag, default off).
 
 ## References
 
