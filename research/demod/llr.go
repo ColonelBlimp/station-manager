@@ -217,6 +217,90 @@ func logSumExp4(x [4]float64) float64 {
 	return maximum + math.Log(sum)
 }
 
+// LLRsSoftened is the surgical-erasure variant of LLRs: it computes
+// the same Gray-code partition + logsumexp LLRs from the energy matrix,
+// then applies an ASYMMETRIC clamp — pathological rows (rows whose
+// energy distribution suggests an unreliable symbol) get their LLRs
+// capped at ±softClamp, while clean rows keep the standard ±llrClamp.
+//
+// A row is flagged pathological when EITHER of two thresholds fires:
+//
+//   - Ambiguous winner: (top1 - top2) / noise < t1
+//     Detects rows where two tones are close enough that the
+//     demodulator might pick the wrong one — adjacent-signal
+//     interference, near-collision in the channel.
+//   - Whole row weak: top1 / noise < t2
+//     Detects rows where even the winning tone is barely above
+//     noise — symbol falling at the GFSK taper edge of the TX
+//     window, or at a fading null.
+//
+// Operator-suggested defaults (2026-05-26): t1=1.0, t2=2.0,
+// softClamp=5.0. Sweep candidates if tuning needed: softClamp ∈
+// {3, 5, 7, 10}; T1/T2 ∈ {0.75/1.5, 1.0/2.0, 1.25/2.5}.
+//
+// Rationale: rather than the multiplicative-reliability variant
+// (which scales metric values pre-logsumexp and affects EVERY row
+// even at reliability=1), this approach is surgical — only suspect
+// rows have their LLR magnitudes capped. Clean rows are untouched.
+// Reduces the risk of CRC-lottery accepts that softening clean
+// rows could introduce.
+//
+// Sign convention and Gray-code partition are identical to LLRs.
+func LLRsSoftened(energies [dataSymbolCount][ft8ToneCount]float64, t1, t2, softClamp float64) [codewordBits]float64 {
+	noise := math.Max(estimateNoise(energies), llrEps)
+	alpha := 1.0 / noise
+
+	var out [codewordBits]float64
+	var metric [ft8ToneCount]float64
+	for i := 0; i < dataSymbolCount; i++ {
+		// Find top1 (max) and top2 (second-max) tone energies.
+		top1 := energies[i][0]
+		top2 := -math.MaxFloat64
+		for t := 1; t < ft8ToneCount; t++ {
+			e := energies[i][t]
+			if e > top1 {
+				top2 = top1
+				top1 = e
+			} else if e > top2 {
+				top2 = e
+			}
+		}
+		// Pathological: ambiguous winner OR whole row weak.
+		ambiguous := (top1-top2)/noise < t1
+		weak := top1/noise < t2
+		rowClamp := llrClamp
+		if ambiguous || weak {
+			rowClamp = softClamp
+		}
+
+		for t := 0; t < ft8ToneCount; t++ {
+			metric[t] = alpha * energies[i][t]
+		}
+		for j := 0; j < bitsPerSymbol; j++ {
+			mask := uint8(1) << uint(bitsPerSymbol-1-j) // MSB first
+			var bit0, bit1 [4]float64
+			n0, n1 := 0, 0
+			for t := 0; t < ft8ToneCount; t++ {
+				if GrayUnmap[t]&mask == 0 {
+					bit0[n0] = metric[t]
+					n0++
+				} else {
+					bit1[n1] = metric[t]
+					n1++
+				}
+			}
+			llr := logSumExp4(bit0) - logSumExp4(bit1)
+			if llr > rowClamp {
+				llr = rowClamp
+			} else if llr < -rowClamp {
+				llr = -rowClamp
+			}
+			out[i*bitsPerSymbol+j] = llr
+		}
+	}
+	return out
+}
+
 // LLRsCalibrated is the Costas-anchor-calibrated variant of LLRs:
 // instead of estimating the noise scale from data-symbol loser tones
 // (which can be contaminated by adjacent-signal leakage, QRM, or

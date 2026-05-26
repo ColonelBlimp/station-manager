@@ -84,6 +84,17 @@ type decoded struct {
 	preciseFreq float64
 }
 
+// llrConfig collects the LLR-mode flags so they can be threaded
+// through the probe entry points without exploding the parameter
+// lists. At most one of `costas` / `soft` is true.
+type llrConfig struct {
+	soft      bool
+	t1        float64
+	t2        float64
+	softClamp float64
+	costas    bool
+}
+
 func main() {
 	dir := flag.String("dir", "captures", "directory containing .wav files (non-recursive)")
 	rmsThresh := flag.Float64("rms", 1.0, "subtract decodes with phase-fit RMSResid below this threshold")
@@ -93,11 +104,18 @@ func main() {
 	coherentAdaptive := flag.Bool("coherent-adaptive", false, "use adaptive coherent cancellation: per-sample demod → Hann LPF → reconstruct → subtract, with timing refinement (±20 sample search). Generalises single-c / per-block / per-symbol — channel estimation bandwidth is set by the LPF length (N=12000 = ~1.4 Hz) rather than by anchor count. Per 2026-05-26 design discussion.")
 	iterations := flag.Int("iterations", 1, "iterative detect-decode-subtract passes (1-3). Each iteration rebuilds residual fresh from original audio minus all decoded signals so far. Convergence: stop when no new decodes. Capped at 3 per operator directive.")
 	calibrateCostas := flag.Bool("calibrate-costas", false, "scale LLRs using a Costas-anchor-derived noise level (research/demod.EstimateCostasCalibration) instead of the data-symbol-derived plain/Winsorized noise floor. Uses LLRsCalibrated. Falls back to standard LLRs when fewer than 3 Costas anchors are accessible.")
+	llrSoft := flag.Bool("llr-soft", false, "apply surgical row-level softening (research/demod.LLRsSoftened): pathological symbol rows (ambiguous winner OR whole-row weak) get their LLRs capped at a lower threshold than the standard ±20. Mutually exclusive with -calibrate-costas in this first cut.")
+	llrT1 := flag.Float64("llr-t1", 1.0, "ambiguous-winner threshold for -llr-soft. A row is pathological if (top1-top2)/noise < T1.")
+	llrT2 := flag.Float64("llr-t2", 2.0, "weak-row threshold for -llr-soft. A row is also pathological if top1/noise < T2.")
+	llrSoftClamp := flag.Float64("llr-soft-clamp", 5.0, "|LLR| ceiling applied to pathological rows by -llr-soft. Standard non-pathological clamp stays at ±20. Sweep candidates: {3, 5, 7, 10}.")
 	verbose := flag.Bool("v", false, "print per-decode detail")
 	flag.Parse()
 
 	if *iterations < 1 || *iterations > 3 {
 		log.Fatalf("-iterations %d outside allowed range 1-3", *iterations)
+	}
+	if *llrSoft && *calibrateCostas {
+		log.Fatal("-llr-soft and -calibrate-costas are mutually exclusive in this first cut")
 	}
 
 	entries, err := os.ReadDir(*dir)
@@ -145,13 +163,21 @@ func main() {
 	}
 	fmt.Printf("subtraction mode: %s, iterations: %d\n\n", mode, *iterations)
 
+	llrCfg := llrConfig{
+		soft:      *llrSoft,
+		t1:        *llrT1,
+		t2:        *llrT2,
+		softClamp: *llrSoftClamp,
+		costas:    *calibrateCostas,
+	}
+
 	for _, wav := range wavs {
 		fmt.Printf("=== %s ===\n", wav)
 		var newMatched, newExtra, lostMatched, subtracted int
 		if *iterations > 1 {
-			newMatched, newExtra, lostMatched, subtracted = probeWAVIterative(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *calibrateCostas, *iterations, *verbose)
+			newMatched, newExtra, lostMatched, subtracted = probeWAVIterative(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, llrCfg, *iterations, *verbose)
 		} else {
-			newMatched, newExtra, lostMatched, subtracted = probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, *calibrateCostas, *verbose)
+			newMatched, newExtra, lostMatched, subtracted = probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, llrCfg, *verbose)
 		}
 		corpNewMatched += newMatched
 		corpNewExtra += newExtra
@@ -183,7 +209,7 @@ func main() {
 // builds the residual, runs the pass-2 decode, and classifies the
 // new/lost decodes against the truth manifest. Returns the four
 // corpus-aggregate counters.
-func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive, calibrateCostas, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, llr llrConfig, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -198,7 +224,7 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 
 	// Pass 1.
 	cands1 := candidates.Find(data.Samples)
-	records1 := decodeAll(data.Samples, cands1, calibrateCostas)
+	records1 := decodeAll(data.Samples, cands1, llr)
 	fmt.Printf("  pass 1: %d candidates → %d CRC-pass decodes\n", len(cands1), len(records1))
 
 	// Filter to clean decodes.
@@ -234,7 +260,7 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 
 	// Pass 2 on residual.
 	cands2 := candidates.Find(residual)
-	records2 := decodeAll(residual, cands2, calibrateCostas)
+	records2 := decodeAll(residual, cands2, llr)
 	fmt.Printf("  pass 2: %d candidates → %d CRC-pass decodes\n", len(cands2), len(records2))
 
 	// Classify diff: new (in pass 2 not pass 1), lost (in pass 1 not pass 2).
@@ -290,12 +316,15 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 // decodeAll runs the full decode pipeline (Find result → demod →
 // LLRs → ldpc.Decode → unpack) and returns one `decoded` per
 // CRC-passing candidate with non-empty unpack text.
-func decodeAll(samples []float32, cands []candidates.Candidate, calibrateCostas bool) []decoded {
+func decodeAll(samples []float32, cands []candidates.Candidate, llr llrConfig) []decoded {
 	var out []decoded
 	for _, c := range cands {
 		energies := demod.Demod(samples, c.Freq, c.DT)
 		var llrs [codewordBits]float64
-		if calibrateCostas {
+		switch {
+		case llr.soft:
+			llrs = demod.LLRsSoftened(energies, llr.t1, llr.t2, llr.softClamp)
+		case llr.costas:
 			// Costas-anchor-derived noise scale. Falls back to the
 			// data-symbol Winsorized estimate when fewer than 3
 			// anchors are accessible (noiseLevel returns 0).
@@ -305,7 +334,7 @@ func decodeAll(samples []float32, cands []candidates.Candidate, calibrateCostas 
 			} else {
 				llrs = demod.LLRs(energies)
 			}
-		} else {
+		default:
 			llrs = demod.LLRs(energies)
 		}
 		var input [codewordBits]float64
@@ -536,7 +565,7 @@ func dispatchSubtractIterative(audio []float32, d decoded, perSymbol, perBlock, 
 // Within-pass interleaving: as each candidate decodes successfully, it is
 // immediately subtracted from the residual so subsequent candidates in
 // the same pass see the cleaner version. The operator-proposed structure.
-func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive, calibrateCostas bool, maxIter int, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, llr llrConfig, maxIter int, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -551,7 +580,7 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 	// Pass-1 baseline: decode without any subtraction. Used to classify
 	// new-vs-lost against the final iterative decoded set.
 	pass1Cands := candidates.Find(data.Samples)
-	pass1Records := decodeAll(data.Samples, pass1Cands, calibrateCostas)
+	pass1Records := decodeAll(data.Samples, pass1Cands, llr)
 	fmt.Printf("  baseline pass 1: %d CRC-pass decodes\n", len(pass1Records))
 
 	// Iterative loop.
@@ -585,7 +614,7 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 
 		// Find + decode on this residual.
 		cands := candidates.Find(residual)
-		records := decodeAll(residual, cands, calibrateCostas)
+		records := decodeAll(residual, cands, llr)
 
 		// Identify and add new decodes; interleave-subtract as we go for
 		// any newly-decoded clean signals so later candidates in this pass
