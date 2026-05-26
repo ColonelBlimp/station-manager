@@ -272,6 +272,56 @@ func TestLLRsSoftened_WeakRowGetsSoftened(t *testing.T) {
 	}
 }
 
+// TestLLRsSoftened_ParameterValidation pins the input-validation
+// added 2026-05-26 per code review: arbitrary user-supplied
+// parameters (NaN, negative, oversized) must not produce garbage
+// output. Function silently clamps to safe range rather than
+// returning an error, so callers don't need to validate themselves.
+func TestLLRsSoftened_ParameterValidation(t *testing.T) {
+	// Energy matrix with rows that should all pass the gate cleanly
+	// at any sane parameter setting — one tone dominates, others at
+	// noise floor. With clean rows, LLRsSoftened should never apply
+	// the soft clamp.
+	var energies [dataSymbolCount][ft8ToneCount]float64
+	for i := 0; i < dataSymbolCount; i++ {
+		energies[i][0] = 100.0
+		for tn := 1; tn < ft8ToneCount; tn++ {
+			energies[i][tn] = 1.0
+		}
+	}
+
+	// Each of these inputs would, if not validated, produce garbage:
+	cases := []struct {
+		name              string
+		t1, t2, softClamp float64
+	}{
+		{"NaN T1", math.NaN(), 2.0, 5.0},
+		{"NaN T2", 1.0, math.NaN(), 5.0},
+		{"NaN softClamp", 1.0, 2.0, math.NaN()},
+		{"negative softClamp", 1.0, 2.0, -5.0},
+		{"negative T1", -1.0, 2.0, 5.0},
+		{"negative T2", 1.0, -2.0, 5.0},
+		{"oversized softClamp", 1.0, 2.0, 100.0},
+		{"all zero", 0, 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			llrs := LLRsSoftened(energies, c.t1, c.t2, c.softClamp)
+			for i, v := range llrs {
+				if math.IsNaN(v) || math.IsInf(v, 0) {
+					t.Errorf("bit %d: LLR=%v (NaN/Inf — validation should have caught the bad input)", i, v)
+					return
+				}
+				if math.Abs(v) > llrClamp+1e-9 {
+					t.Errorf("bit %d: |LLR|=%g exceeds llrClamp=%g — softClamp should be silently capped at llrClamp",
+						i, v, llrClamp)
+					return
+				}
+			}
+		})
+	}
+}
+
 // TestEstimateCostasCalibration_ReturnsZeroForExtremeDT pins the
 // (0, 0) early-return when fewer than 3 anchors are accessible.
 // Requires |dt| beyond the TX window's reach.

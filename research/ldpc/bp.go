@@ -118,6 +118,17 @@ func Decode(llrs [codewordBits]float64) (Result, Stats) {
 		stats.ConvergedParity = true
 		stats.ConvergedCRC = true
 		stats.FinalSyndromeWeight = 0
+	} else {
+		// BP exhausted maxIter AND OSD failed: honor the documented
+		// contract by populating Result.Info from the BP-final hard
+		// decision (the first 91 bits of Codeword). Callers gate on
+		// Stats.ConvergedCRC to decide whether Info is meaningful;
+		// without this copy, callers reading Info on a failed decode
+		// would see the zero-value rather than the best-effort BP
+		// hard decision. Per code review 2026-05-26.
+		for i := 0; i < infoBits; i++ {
+			result.Info[i] = result.Codeword[i]
+		}
 	}
 	return result, stats
 }

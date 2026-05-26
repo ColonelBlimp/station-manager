@@ -247,6 +247,27 @@ func logSumExp4(x [4]float64) float64 {
 //
 // Sign convention and Gray-code partition are identical to LLRs.
 func LLRsSoftened(energies [dataSymbolCount][ft8ToneCount]float64, t1, t2, softClamp float64) [codewordBits]float64 {
+	// Parameter validation per code review 2026-05-26. The function
+	// is callable from external research code with arbitrary inputs;
+	// a negative softClamp would flip the asymmetric clamp logic
+	// (max-pin negative, min-pin positive) and produce garbage output.
+	// NaN thresholds would cause every row to be flagged pathological
+	// (any comparison with NaN is false, so the < T1 and < T2 paths
+	// both fire). Silently clamp to the safe range — preserves caller
+	// flexibility without producing meaningless output on bad input.
+	if math.IsNaN(t1) || t1 < 0 {
+		t1 = 0
+	}
+	if math.IsNaN(t2) || t2 < 0 {
+		t2 = 0
+	}
+	if math.IsNaN(softClamp) || softClamp < 0 {
+		softClamp = 0
+	}
+	if softClamp > llrClamp {
+		softClamp = llrClamp
+	}
+
 	noise := math.Max(estimateNoise(energies), llrEps)
 	alpha := 1.0 / noise
 

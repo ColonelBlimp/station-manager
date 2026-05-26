@@ -166,6 +166,44 @@ func TestUnpack_Type1RoundTrip(t *testing.T) {
 	}
 }
 
+// TestUnpack_Type1RoverSuffix pins the Type-1 r1 suffix flag rendering
+// as "/R" (rover), not "/P" (which is Type 2 EU VHF portable). Per
+// QEX paper §2 Table 1. Earlier versions of this file incorrectly
+// rendered Type 1's r1 bit as "/P" — corrected 2026-05-26 per code
+// review. Pins the correct suffix so the regression doesn't
+// reappear if someone "fixes" /R back to /P.
+func TestUnpack_Type1RoverSuffix(t *testing.T) {
+	// Reuse the K1JT c28 encoding from TestUnpack_Type1RoundTrip.
+	c28K1JT := c28NTokens + c28MAX22 +
+		36*10*27*27*27*0 +
+		10*27*27*27*20 +
+		27*27*27*1 +
+		27*27*10 +
+		27*20 +
+		0
+	g15FN20 := uint16(10320)
+
+	// Build payload with r1=1 on the SECOND callsign (rover suffix).
+	// c28(CQ=2) r1(0) c28(K1JT) r1(1) R1(0) g15(FN20) i3(1).
+	var info [91]uint8
+	writeBits(info[0:28], uint64(2))
+	info[28] = 0
+	writeBits(info[29:57], uint64(c28K1JT))
+	info[57] = 1 // r1 set: K1JT/R
+	info[58] = 0
+	writeBits(info[59:74], uint64(g15FN20))
+	writeBits(info[74:77], uint64(1)) // i3 = 1
+
+	got, err := Unpack(info)
+	if err != nil {
+		t.Fatalf("Unpack error: %v", err)
+	}
+	want := "CQ K1JT/R FN20"
+	if got.Text != want {
+		t.Errorf("Unpack text = %q, want %q (NOT /P — see QEX paper §2 Table 1)", got.Text, want)
+	}
+}
+
 // writeBits stores a uint64 into a bit slice MSB-first. Reverse of
 // bitsToUint — used by tests to construct synthetic payloads.
 func writeBits(dst []uint8, v uint64) {

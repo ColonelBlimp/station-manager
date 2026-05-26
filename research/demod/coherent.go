@@ -130,18 +130,23 @@ func CostasAnchorAmplitudes(samples []float32, freqHz, dtSec float64) (amps [cos
 //
 //	phase(sym) = Phi0 + Slope · sym
 //
-// after subtracting the known tone-dependent term γ · tone (with
-// γ = 2π · baud · (0.5+dtSec)) from each anchor's measured phase.
-// This tone-correction step is what allows a SINGLE global linear
-// fit across all 21 anchors instead of three per-block fits — the
-// cross term β · tone · sym vanishes for FT8 (β = 2π · baud · T_sym
-// = 2π · 1 ≡ 0 mod 2π), and the residual γ · tone term is known
-// from icos7 so it can be subtracted before fitting.
+// directly to each anchor's measured raw phase (no tone-dependent
+// correction term). Earlier versions of this code subtracted a
+// γ · tone term (γ = 2π · baud · (0.5+dtSec)) before fitting, on
+// the theory that the cumulative tone integral contributed a
+// known tone-dependent phase offset. That derivation was WRONG
+// for FT8: the cumulative tone integral vanishes modulo 2π for
+// FT8's parameters (β = 2π · baud · T_sym = 2π · 1 ≡ 0 mod 2π),
+// so there is no residual γ · tone term to subtract — the raw
+// per-anchor phase IS the model's predicted phase. The clean-
+// fixture integration test confirmed this: γ · tone version gave
+// RMSResid 1.85 rad / 38 LLRs at clamp; correct (no correction)
+// version gives 0.02 rad / 174 LLRs at clamp.
 //
 // Pass 1 estimates an initial slope from within-block
 // consecutive-anchor phase differences (1-symbol gaps avoid 2π
 // wrap ambiguity for any realistic carrier offset). Pass 2 uses
-// that estimate to unwrap each anchor's corrected phase, then runs
+// that estimate to unwrap each anchor's phase, then runs
 // closed-form weighted least squares to refine.
 //
 // Inaccessible anchors (audio window outside the buffer) get weight
@@ -324,8 +329,12 @@ func wrapPi(theta float64) float64 {
 //     7..35, 43..71), compute complex Goertzel at all 8 FT8 tones.
 //     For each tone k:
 //
-//     rotated_k = X[k] · exp(-j · (Phi0 + Slope·s + γ·k))
+//     rotated_k = X[k] · exp(-j · (Phi0 + Slope·s))
 //     metric[k] = (Ahat / σ²) · Re(rotated_k)
+//
+//     No γ·k tone-dependent term — that correction was on the
+//     fitCostasPhase side and was determined wrong for FT8 (the
+//     β cross-term vanishes mod 2π); see fitCostasPhase doc-comment.
 //
 //     The metric is signed: positive when the tone is at the
 //     reference phase (= candidate tone matches transmitted),

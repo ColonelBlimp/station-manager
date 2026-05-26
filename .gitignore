@@ -34,3 +34,6 @@ config.json
 /ft8-capture-probe
 /ft8-gen10cq
 /find-candidates
+/decode-eval
+/sweep-gates
+/synth-subtract-probe
