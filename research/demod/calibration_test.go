@@ -180,6 +180,98 @@ func TestEstimateCostasCalibration_HandlesEdgeDT(t *testing.T) {
 	}
 }
 
+// TestLLRsSoftened_CleanFixtureMatchesLLRs pins that LLRsSoftened
+// produces output identical to LLRs on a clean-SNR fixture: the
+// softening must NOT touch non-pathological rows, only clamp the
+// pathological ones. With the clean fixture's high SNR, no rows
+// should be flagged pathological.
+func TestLLRsSoftened_CleanFixtureMatchesLLRs(t *testing.T) {
+	wavPath := filepath.Join("..", "10cq_clean.wav")
+	data, err := audio.ReadWAV(wavPath)
+	if err != nil {
+		t.Fatalf("read wav %s: %v", wavPath, err)
+	}
+	// Energies at a known-good position from the clean fixture (any
+	// strong CQ signal). Use (900 Hz, 0 dt) which works for the
+	// existing high-confidence test.
+	energies := Demod(data.Samples, 900.0, 0.0)
+	baseline := LLRs(energies)
+	softened := LLRsSoftened(energies, 1.0, 2.0, 5.0)
+
+	for i, want := range baseline {
+		got := softened[i]
+		if math.Abs(got-want) > 1e-9 {
+			t.Errorf("clean row %d: LLRsSoftened=%g, LLRs=%g (softened should not touch clean rows)", i, got, want)
+		}
+	}
+}
+
+// TestLLRsSoftened_PathologicalRowsClamped pins that a synthetic
+// pathological row (all 8 tones equal — ambiguous and weak) has its
+// LLRs capped at ±softClamp while a baseline-style row (one strong
+// tone) keeps full ±llrClamp confidence.
+func TestLLRsSoftened_PathologicalRowsClamped(t *testing.T) {
+	var energies [dataSymbolCount][ft8ToneCount]float64
+	// Row 0: pathological (all tones equal at noise level 1.0).
+	for t2 := 0; t2 < ft8ToneCount; t2++ {
+		energies[0][t2] = 1.0
+	}
+	// Rows 1..57: clean (one strong tone at value 100, others at 1).
+	for i := 1; i < dataSymbolCount; i++ {
+		energies[i][0] = 100.0
+		for t2 := 1; t2 < ft8ToneCount; t2++ {
+			energies[i][t2] = 1.0
+		}
+	}
+	const softClamp = 5.0
+	llrs := LLRsSoftened(energies, 1.0, 2.0, softClamp)
+
+	// Row 0's 3 LLRs (indices 0..2) must be within ±softClamp.
+	for j := 0; j < bitsPerSymbol; j++ {
+		if math.Abs(llrs[j]) > softClamp+1e-9 {
+			t.Errorf("pathological row 0 bit %d: |LLR|=%g exceeds soft clamp %g", j, llrs[j], softClamp)
+		}
+	}
+	// Rows 1+ should saturate at ±llrClamp (=20) for strong-tone-dominated rows.
+	// Just sample a few middle indices to verify.
+	for j := 0; j < bitsPerSymbol; j++ {
+		idx := 10*bitsPerSymbol + j // row 10
+		if math.Abs(llrs[idx]) < softClamp+1e-9 {
+			t.Errorf("clean row 10 bit %d: |LLR|=%g is within softClamp — clean row should NOT be softened", j, llrs[idx])
+		}
+	}
+}
+
+// TestLLRsSoftened_WeakRowGetsSoftened pins the T2 (weak-row)
+// criterion: a row whose strongest tone barely beats the noise
+// floor gets softened even if its top1-top2 contrast is decent.
+func TestLLRsSoftened_WeakRowGetsSoftened(t *testing.T) {
+	var energies [dataSymbolCount][ft8ToneCount]float64
+	// Make a noise floor: most rows at level 1.0 across all tones.
+	// Row 0: weak — top1 just above noise, others below. top1/noise
+	// ratio is 1.5, which is < T2=2.0 so should trigger weak-row
+	// pathological flag. top1-top2 = 1.5 - 0.1 = 1.4 > T1=1.0 so
+	// would NOT trigger ambiguous-winner alone — confirms T2 path
+	// is independent.
+	energies[0][0] = 1.5
+	for t2 := 1; t2 < ft8ToneCount; t2++ {
+		energies[0][t2] = 0.1
+	}
+	// Filler rows: uniform 1.0 to set the noise estimate to ~1.0.
+	for i := 1; i < dataSymbolCount; i++ {
+		for t2 := 0; t2 < ft8ToneCount; t2++ {
+			energies[i][t2] = 1.0
+		}
+	}
+	const softClamp = 5.0
+	llrs := LLRsSoftened(energies, 1.0, 2.0, softClamp)
+	for j := 0; j < bitsPerSymbol; j++ {
+		if math.Abs(llrs[j]) > softClamp+1e-9 {
+			t.Errorf("weak row 0 bit %d: |LLR|=%g exceeds soft clamp %g — T2 weak-row gate should have fired", j, llrs[j], softClamp)
+		}
+	}
+}
+
 // TestEstimateCostasCalibration_ReturnsZeroForExtremeDT pins the
 // (0, 0) early-return when fewer than 3 anchors are accessible.
 // Requires |dt| beyond the TX window's reach.
