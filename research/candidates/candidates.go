@@ -177,6 +177,14 @@ type Gates struct {
 	// (out of 7 each). A candidate must hit this floor in every
 	// accessible block. Production default 1.
 	SanityWinsPerBlock int
+
+	// Stage2MaxResults caps the number of candidates Find returns
+	// after ranking + NMS. Production default 100. The cap-sweep
+	// harness raises this to test whether the binding constraint
+	// on parity is "rank > 100 real signals are dropped" — a
+	// different question from gate relaxation. Set to 0 to use
+	// the package default (matches DefaultGates behaviour).
+	Stage2MaxResults int
 }
 
 // DefaultGates mirrors the production gate values. Find() uses this.
@@ -184,6 +192,7 @@ var DefaultGates = Gates{
 	Stage1Threshold:    stage1ScoreThreshold,
 	SanityWinsTotal:    sanityWinsTotal,
 	SanityWinsPerBlock: sanityWinsPerBlock,
+	Stage2MaxResults:   stage2MaxResults,
 }
 
 // Find returns verified sync candidates detected in a 15-second FT8
@@ -412,8 +421,13 @@ func FindWithGates(samples []float32, gates Gates) []Candidate {
 	// For our synthetic on-grid fixtures the peak is at the supplied
 	// position already, so refinement is a no-op for them. The
 	// per-survivor cost (~17 verify calls) is fine: refinement runs
-	// only on at most stage2MaxResults candidates, post-gate, post-NMS.
-	out := make([]Candidate, 0, stage2MaxResults)
+	// only on at most gates.Stage2MaxResults candidates, post-gate,
+	// post-NMS.
+	maxResults := gates.Stage2MaxResults
+	if maxResults <= 0 {
+		maxResults = stage2MaxResults
+	}
+	out := make([]Candidate, 0, maxResults)
 	for i, c := range verified {
 		if !keep[i] {
 			continue
@@ -428,7 +442,7 @@ func FindWithGates(samples []float32, gates Gates) []Candidate {
 			Score:  c.score,
 			Verify: &refVCopy,
 		})
-		if len(out) >= stage2MaxResults {
+		if len(out) >= maxResults {
 			break
 		}
 	}

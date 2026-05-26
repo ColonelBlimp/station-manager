@@ -20,6 +20,14 @@ import "math"
 func Decode(llrs [codewordBits]float64) (Result, Stats) {
 	var stats Stats
 	stats.BestSyndromeWeight = parityRows + 1 // sentinel — every real value beats this
+	// +Inf sentinels for OSD metric fields. Meaning: "no measurement
+	// taken." Either OSD didn't run (UsedOSD=false) or it ran and
+	// found no CRC-passing candidate (UsedOSD=true, CRCPassingCount=0).
+	// Callers should gate on UsedOSD before consuming OSDBestCRCMetric
+	// or OSDMLMetric.
+	stats.OSDBestCRCMetric = math.Inf(1)
+	stats.OSDBestCRCNormMetric = math.Inf(1)
+	stats.OSDMLMetric = math.Inf(1)
 
 	// Message state. vToC[v][k] = message from variable v along its
 	// k-th edge (to check c = hColumns[v][k]). cToV[c][i] = message
@@ -90,9 +98,17 @@ func Decode(llrs [codewordBits]float64) (Result, Stats) {
 			posterior[v] += cToV[c][i]
 		}
 	}
-	osdResult, osdOK, osdExplored := osd(posterior)
+	osdResult, osdOK, diag := osd(posterior)
 	stats.UsedOSD = true
-	stats.OSDCandidatesExplored = osdExplored
+	stats.OSDCandidatesExplored = diag.explored
+	stats.OSDCRCPassingCount = diag.crcPassCount
+	stats.OSDBestCRCMetric = diag.bestCRCMetric
+	stats.OSDBestCRCHamming = diag.bestCRCHamming
+	if diag.bestCRCHamming > 0 {
+		stats.OSDBestCRCNormMetric = diag.bestCRCMetric / float64(diag.bestCRCHamming)
+	}
+	stats.OSDMLMetric = diag.mlMetric
+	stats.OSDMLCRCPass = diag.mlCRCPass
 	if osdOK {
 		// OSD returns a parity-clean codeword by construction (it
 		// systematically encodes from the MRB) and has already

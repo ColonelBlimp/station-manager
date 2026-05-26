@@ -210,6 +210,64 @@ type Stats struct {
 	// code this is 1 + 91 + 91*90/2 = 4187 if OSD ran to completion.
 	// Zero if OSD did not run (BP succeeded).
 	OSDCandidatesExplored int
+
+	// OSDCRCPassingCount is the number of test-pattern codewords in
+	// the OSD enumeration whose 91-bit info word passed CRC14. Zero
+	// when OSD didn't run; can be zero even when OSD ran (genuinely
+	// no CRC pass anywhere in the 4187-codeword neighbourhood).
+	// Diagnostic: distinguishes "OSD found no CRC-clean codeword at
+	// all" from "OSD found one but it wasn't the ML candidate."
+	OSDCRCPassingCount int
+
+	// OSDBestCRCMetric is the soft-distance metric Σ|posterior_i|
+	// (over flipped bits) of the LOWEST-metric CRC-passing
+	// candidate seen by OSD. +Inf when OSDCRCPassingCount == 0.
+	// Calibration target: distribution of this value across known
+	// real decodes vs random CRC-lottery passes tells us where to
+	// set a soft-distance ceiling if the return policy ever shifts
+	// to "best CRC-passing within ceiling" (research findings
+	// #2 from the 2026-05-26 code review).
+	OSDBestCRCMetric float64
+
+	// OSDBestCRCNormMetric is OSDBestCRCMetric divided by the
+	// Hamming distance (number of flipped bits) of that same
+	// candidate — i.e. the average |posterior| at flipped
+	// positions. +Inf when OSDCRCPassingCount == 0 OR when the
+	// best-CRC candidate happens to have zero flips (degenerate;
+	// the ML hard decision was already CRC-clean — in which case
+	// OSDMLCRCPass is also true and OSD wouldn't have failed).
+	//
+	// Rationale: a real decode at marginal SNR flips bits at
+	// LOW-|posterior| (uncertain) positions, so normalised metric
+	// is small. A CRC-lottery accept flips bits at random
+	// positions including high-|posterior| ones, so normalised
+	// metric is larger. If the populations separate cleaner on
+	// the normalised axis than on the raw axis, this becomes the
+	// gate.
+	OSDBestCRCNormMetric float64
+
+	// OSDBestCRCHamming is the Hamming distance (number of bit
+	// positions where the codeword differs from the BP-final hard
+	// decision) of the best-CRC-passing candidate. Diagnostic
+	// pair for OSDBestCRCMetric / OSDBestCRCNormMetric — tells
+	// the reader whether the rescue is "many small flips" (low
+	// SNR signal) or "few large flips" (high-SNR signal that BP
+	// missed by a hair).
+	OSDBestCRCHamming int
+
+	// OSDMLCRCPass is true iff the ML (lowest-metric) OSD candidate
+	// passed CRC14 — i.e. the current return policy succeeded.
+	// When false but OSDCRCPassingCount > 0, OSD's current policy
+	// is throwing away a CRC-clean codeword that a relaxed policy
+	// would accept.
+	OSDMLCRCPass bool
+
+	// OSDMLMetric is the soft-distance metric of the ML candidate
+	// OSD actually returned (or would have returned on failure).
+	// Set only when OSD ran. Pair with OSDBestCRCMetric to see how
+	// far apart "what OSD picked" and "what would have been CRC-
+	// clean" sit in metric space.
+	OSDMLMetric float64
 }
 
 // Result carries the hard-decided bits from a decode attempt. Info

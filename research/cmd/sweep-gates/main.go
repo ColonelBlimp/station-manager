@@ -100,6 +100,7 @@ type cellResult struct {
 
 func main() {
 	dir := flag.String("dir", "captures", "directory containing .wav files (non-recursive)")
+	capSweep := flag.Bool("cap-sweep", false, "sweep Stage2MaxResults ∈ {100,200,500} at default other gates, instead of the (stage1 × wins × perBlock) cube")
 	flag.Parse()
 
 	slots, err := loadSlots(*dir)
@@ -108,6 +109,37 @@ func main() {
 	}
 	if len(slots) == 0 {
 		log.Fatalf("no usable .wav files in %q", *dir)
+	}
+
+	// Baseline (DefaultGates) first as the comparison anchor — both
+	// sweep modes share it.
+	baselineCell := runCell(slots, candidates.DefaultGates)
+	printHeader()
+	printRow(baselineCell, "baseline")
+
+	if *capSweep {
+		// Cap-only sweep: hold gates at default, raise Stage2MaxResults.
+		// Answers the question "are good-but-rank-50+ candidates being
+		// dropped by the 100-cap" — distinct from gate relaxation
+		// (which admits low-quality candidates). Session 92's gate
+		// sweep showed flat results at 600 candidates per corpus with
+		// relaxed gates; this re-asks the question at strict gates.
+		fmt.Printf("cap-sweep mode: 3 caps × %d slots = %d (Find + decode) runs\n\n",
+			len(slots), 3*len(slots))
+		caps := []int{100, 200, 500}
+		var cells []cellResult
+		for _, capN := range caps {
+			g := candidates.DefaultGates
+			g.Stage2MaxResults = capN
+			if g == candidates.DefaultGates {
+				continue // baseline already printed
+			}
+			c := runCell(slots, g)
+			cells = append(cells, c)
+			printRow(c, fmt.Sprintf("cap=%d", capN))
+		}
+		printAdoption(cells, baselineCell)
+		return
 	}
 
 	winsTotalLevels := []int{8, 7, 6, 5, 4}
@@ -120,11 +152,6 @@ func main() {
 		len(winsTotalLevels)*len(winsPerBlockLevels)*len(s1Levels)*len(slots),
 	)
 
-	// Baseline (DefaultGates) first as the comparison anchor.
-	baselineCell := runCell(slots, candidates.DefaultGates)
-	printHeader()
-	printRow(baselineCell, "baseline")
-
 	var cells []cellResult
 	for _, s1 := range s1Levels {
 		for _, wt := range winsTotalLevels {
@@ -133,6 +160,7 @@ func main() {
 					Stage1Threshold:    s1,
 					SanityWinsTotal:    wt,
 					SanityWinsPerBlock: wpb,
+					Stage2MaxResults:   candidates.DefaultGates.Stage2MaxResults,
 				}
 				// Skip the cell that IS the baseline (avoid double-count).
 				if g == candidates.DefaultGates {
@@ -145,15 +173,21 @@ func main() {
 		}
 	}
 
-	// Summary: filter to cells that meet the adoption criteria —
-	// matched > baseline AND extras + malformed do not regress.
+	printAdoption(cells, baselineCell)
+}
+
+// printAdoption filters the swept cells against the adoption rule
+// — matched up AND extras/malformed not regressed — and prints the
+// surviving rows. Shared between the gate-cube and cap-sweep modes
+// so both honour the same operator-stated adoption criteria.
+func printAdoption(cells []cellResult, baseline cellResult) {
 	fmt.Println()
 	fmt.Println("=== Configurations meeting adoption criteria (matched↑, extras/malformed not regressed) ===")
 	any := false
 	for _, c := range cells {
-		if c.matched > baselineCell.matched &&
-			c.textExtra <= baselineCell.textExtra &&
-			c.malformed <= baselineCell.malformed {
+		if c.matched > baseline.matched &&
+			c.textExtra <= baseline.textExtra &&
+			c.malformed <= baseline.malformed {
 			any = true
 			printRow(c, "★")
 		}

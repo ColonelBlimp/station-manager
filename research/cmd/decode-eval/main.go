@@ -36,6 +36,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"sort"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
@@ -102,7 +103,20 @@ func main() {
 	// in piecewise.go, PhaseRefineFreq in refine.go — each header
 	// documents the measured-negative result.
 	slopeDiag := flag.Bool("slope-rms-diag", false, "one-shot diagnostic: dump per-candidate (slope, RMSResid) + buckets + cross-tab to decide between freq-refinement and piecewise phase. Skips normal decode-eval output.")
+	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to this file (use `go tool pprof` to analyse)")
 	flag.Parse()
+
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			log.Fatalf("create cpuprofile: %v", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatalf("start cpuprofile: %v", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	if *slopeDiag {
 		runSlopeRMSDiag(*dir)
@@ -142,6 +156,14 @@ func main() {
 	var totalCoherentUsed, totalFallback int
 	var rmsValues []float64
 
+	// OSD diagnostic samples — collected for every BP-failed candidate
+	// that hit OSD. Answers the "Finding 2" calibration question
+	// raised in the 2026-05-26 review: when OSD's ML candidate fails
+	// CRC, how often is there a better CRC-clean candidate in the
+	// same OSD-2 enumeration, and where would a soft-distance gate
+	// have to sit to admit those without admitting CRC-lottery noise?
+	var osdSamples []osdSample
+
 	for _, wavPath := range wavs {
 		data, err := audio.ReadWAV(wavPath)
 		if err != nil {
@@ -180,6 +202,39 @@ func main() {
 		records := decodeAll(data.Samples, cands, *coherent, *coherentRMSThresh)
 
 		matched, missed, textExtra, unsupported, malformed := score(records, manifest, *verbose)
+
+		// Collect OSD diagnostics for every BP-failed candidate.
+		// `nearTruth` is gated on (freq, dt) proximity only — text
+		// match is irrelevant here, since we want to know whether a
+		// real-signal candidate position would have decoded under a
+		// relaxed return policy.
+		freqTol, dtTol := tolerancesFor(manifest)
+		for _, r := range records {
+			if !r.stats.UsedOSD {
+				continue
+			}
+			nearTruth := false
+			if manifest != nil {
+				for _, ts := range manifest.Signals {
+					if math.Abs(r.cand.Freq-ts.FreqHz) <= freqTol &&
+						math.Abs(r.cand.DT-ts.DTSec) <= dtTol {
+						nearTruth = true
+						break
+					}
+				}
+			}
+			osdSamples = append(osdSamples, osdSample{
+				freq:              r.cand.Freq,
+				dt:                r.cand.DT,
+				mlCRCPass:         r.stats.OSDMLCRCPass,
+				crcPassCount:      r.stats.OSDCRCPassingCount,
+				mlMetric:          r.stats.OSDMLMetric,
+				bestCRCMetric:     r.stats.OSDBestCRCMetric,
+				bestCRCNormMetric: r.stats.OSDBestCRCNormMetric,
+				bestCRCHamming:    r.stats.OSDBestCRCHamming,
+				nearTruth:         nearTruth,
+			})
+		}
 
 		if manifest != nil {
 			totalTruth += len(manifest.Signals)
@@ -226,6 +281,8 @@ func main() {
 		fmt.Printf("  decode parity:    %d / %d (%.1f%%)\n",
 			totalMatched, totalTruth, 100*float64(totalMatched)/float64(totalTruth))
 	}
+	printOSDDiagnostics(osdSamples)
+
 	if *coherent {
 		fmt.Println()
 		fmt.Println("--- coherent path stats ---")
@@ -239,6 +296,196 @@ func main() {
 			p90RMS := rmsValues[len(rmsValues)*9/10]
 			fmt.Printf("  RMSResid dist:    min=%.3f median=%.3f p90=%.3f max=%.3f (over %d coherent-decoded candidates)\n",
 				minRMS, medianRMS, p90RMS, maxRMS, len(rmsValues))
+		}
+	}
+}
+
+// osdSample is one OSD invocation's diagnostic record — captured for
+// every candidate whose BP failed and dropped through to OSD. Fields
+// mirror the new fields on ldpc.Stats (added 2026-05-26 instrument
+// pass) plus the candidate's position and a near-truth label so the
+// summary can split "OSD on a real signal" from "OSD on noise."
+type osdSample struct {
+	freq              float64
+	dt                float64
+	mlCRCPass         bool    // did OSD's current return policy accept this?
+	crcPassCount      int     // CRC-passing candidates anywhere in the 4187 enumeration
+	mlMetric          float64 // metric of the ML candidate OSD returned
+	bestCRCMetric     float64 // metric of the lowest-metric CRC-passing candidate, +Inf if none
+	bestCRCNormMetric float64 // bestCRCMetric / Hamming-distance — average per-flip metric
+	bestCRCHamming    int     // Hamming distance of the best-CRC-passing candidate
+	nearTruth         bool    // candidate position within tolerance of any truth signal
+}
+
+// printOSDDiagnostics aggregates the per-call samples into the
+// decision table for the Finding 2 review: how many failed-BP
+// candidates have a CRC-clean codeword in their OSD enumeration that
+// OSD currently discards because it's not the ML?
+//
+// Buckets in the summary:
+//
+//	ml-passed       OSD's current return policy succeeded.
+//	no-crc-pass     OSD ran but no CRC-clean candidate anywhere.
+//	ml-failed-but   OSD's ML failed CRC, yet a different candidate in
+//	                the same enumeration WAS CRC-clean — the population
+//	                a relaxed return policy could rescue.
+//
+// Each bucket is split (near-truth | noise) so we can see whether the
+// "ml-failed-but" cases cluster around real signals (where rescue
+// would be a parity lift) or random positions (CRC-lottery cost).
+func printOSDDiagnostics(samples []osdSample) {
+	if len(samples) == 0 {
+		return
+	}
+	// Detect whether the build's OSD ran with per-candidate CRC
+	// instrumentation. When built without `-tags osdinstr` the
+	// enumeration's inner CRC check is compile-time-eliminated; we'd
+	// then report every ml-failed OSD as "no CRC pass" by default,
+	// which is misleading. Short-circuit with a clear note instead.
+	anyInstr := false
+	for _, s := range samples {
+		if s.crcPassCount > 0 {
+			anyInstr = true
+			break
+		}
+	}
+	fmt.Println()
+	fmt.Println("--- OSD CRC-pass instrumentation (Finding 2 calibration) ---")
+	if !anyInstr {
+		fmt.Printf("  OSD invocations:       %d\n", len(samples))
+		fmt.Println("  (per-candidate CRC instrumentation OFF — rebuild with `-tags osdinstr`")
+		fmt.Println("   to populate the rescuable / normMetric / separation-sweep buckets.)")
+		return
+	}
+
+	var (
+		total                                        = len(samples)
+		mlPassedNear, mlPassedNoise                  int
+		noCRCNear, noCRCNoise                        int
+		mlFailedButNear, mlFailedButNoise            int
+		mlMetricsRescuable, bestCRCMetrics           []float64
+		mlMetricsRescuableNoise, bestCRCMetricsNoise []float64
+	)
+
+	for _, s := range samples {
+		switch {
+		case s.mlCRCPass:
+			if s.nearTruth {
+				mlPassedNear++
+			} else {
+				mlPassedNoise++
+			}
+		case s.crcPassCount == 0:
+			if s.nearTruth {
+				noCRCNear++
+			} else {
+				noCRCNoise++
+			}
+		default:
+			// ML failed, but at least one CRC-clean candidate exists.
+			if s.nearTruth {
+				mlFailedButNear++
+				mlMetricsRescuable = append(mlMetricsRescuable, s.mlMetric)
+				bestCRCMetrics = append(bestCRCMetrics, s.bestCRCMetric)
+			} else {
+				mlFailedButNoise++
+				mlMetricsRescuableNoise = append(mlMetricsRescuableNoise, s.mlMetric)
+				bestCRCMetricsNoise = append(bestCRCMetricsNoise, s.bestCRCMetric)
+			}
+		}
+	}
+
+	fmt.Printf("  OSD invocations:       %d\n", total)
+	fmt.Printf("  ml-passed:             %d   (near-truth %d / noise %d)\n",
+		mlPassedNear+mlPassedNoise, mlPassedNear, mlPassedNoise)
+	fmt.Printf("  no CRC pass in 4187:   %d   (near-truth %d / noise %d)\n",
+		noCRCNear+noCRCNoise, noCRCNear, noCRCNoise)
+	fmt.Printf("  ml-failed-but-rescuable: %d (near-truth %d / noise %d)\n",
+		mlFailedButNear+mlFailedButNoise, mlFailedButNear, mlFailedButNoise)
+
+	dump := func(label string, mls, bests []float64) {
+		if len(mls) == 0 {
+			return
+		}
+		sortedML := append([]float64(nil), mls...)
+		sortedBest := append([]float64(nil), bests...)
+		sort.Float64s(sortedML)
+		sort.Float64s(sortedBest)
+		fmt.Printf("    %s (n=%d):\n", label, len(mls))
+		fmt.Printf("      mlMetric        min=%.2f  median=%.2f  p90=%.2f  max=%.2f\n",
+			sortedML[0], sortedML[len(sortedML)/2], sortedML[len(sortedML)*9/10], sortedML[len(sortedML)-1])
+		fmt.Printf("      bestCRCMetric   min=%.2f  median=%.2f  p90=%.2f  max=%.2f\n",
+			sortedBest[0], sortedBest[len(sortedBest)/2], sortedBest[len(sortedBest)*9/10], sortedBest[len(sortedBest)-1])
+	}
+	dump("rescuable / near-truth", mlMetricsRescuable, bestCRCMetrics)
+	dump("rescuable / noise", mlMetricsRescuableNoise, bestCRCMetricsNoise)
+
+	// Normalised-metric distributions + Hamming distance for the
+	// rescuable buckets, plus a separation-table sweep that simulates
+	// "accept best CRC-passing candidate when bestCRCNormMetric <= T"
+	// at a range of T values. The operator's decision (whether to
+	// flip OSD's return policy) hinges on whether any T separates
+	// near-truth wins from noise admits.
+	var (
+		normNear, normNoise       []float64
+		hammingNear, hammingNoise []int
+	)
+	for _, s := range samples {
+		if s.mlCRCPass || s.crcPassCount == 0 {
+			continue
+		}
+		if s.nearTruth {
+			normNear = append(normNear, s.bestCRCNormMetric)
+			hammingNear = append(hammingNear, s.bestCRCHamming)
+		} else {
+			normNoise = append(normNoise, s.bestCRCNormMetric)
+			hammingNoise = append(hammingNoise, s.bestCRCHamming)
+		}
+	}
+	dumpNorm := func(label string, norms []float64, hams []int) {
+		if len(norms) == 0 {
+			return
+		}
+		sortedN := append([]float64(nil), norms...)
+		sort.Float64s(sortedN)
+		// Compute Hamming distance stats from a sorted int copy.
+		sortedH := append([]int(nil), hams...)
+		sort.Ints(sortedH)
+		fmt.Printf("    %s (n=%d):\n", label, len(norms))
+		fmt.Printf("      normMetric (= metric / hamming):\n")
+		fmt.Printf("        min=%.3f  median=%.3f  p90=%.3f  max=%.3f\n",
+			sortedN[0], sortedN[len(sortedN)/2], sortedN[len(sortedN)*9/10], sortedN[len(sortedN)-1])
+		fmt.Printf("      hammingDist:\n")
+		fmt.Printf("        min=%d  median=%d  p90=%d  max=%d\n",
+			sortedH[0], sortedH[len(sortedH)/2], sortedH[len(sortedH)*9/10], sortedH[len(sortedH)-1])
+	}
+	dumpNorm("rescuable / near-truth (normalised)", normNear, hammingNear)
+	dumpNorm("rescuable / noise (normalised)", normNoise, hammingNoise)
+
+	if len(normNear) > 0 && len(normNoise) > 0 {
+		// Separation sweep: for each candidate ceiling T (on the
+		// normalised axis), count how many near-truth rescues land
+		// below T (the lift if the policy ships) and how many noise
+		// admits land below T (the FP cost). The "best T" is whatever
+		// gives lift >> cost; if no T does, the normalised axis
+		// doesn't separate the populations either.
+		thresholds := []float64{0.2, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0}
+		fmt.Println("    separation sweep on normMetric (= metric / hamming):")
+		fmt.Println("      T       near-truth-admitted    noise-admitted")
+		for _, T := range thresholds {
+			var nNear, nNoise int
+			for _, v := range normNear {
+				if v <= T {
+					nNear++
+				}
+			}
+			for _, v := range normNoise {
+				if v <= T {
+					nNoise++
+				}
+			}
+			fmt.Printf("      %5.2f   %3d / %3d              %3d / %3d\n",
+				T, nNear, len(normNear), nNoise, len(normNoise))
 		}
 	}
 }

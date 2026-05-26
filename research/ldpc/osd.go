@@ -20,13 +20,78 @@ import (
 // has been measured (and not before — see operator directive in
 // docs/session-handoff.md, Session 88 area).
 
+// osdDiag carries OSD-side diagnostics out of `osd` to populate the
+// public Stats. Bundles the existing `explored` count with the
+// CRC-pass instrumentation added 2026-05-26: how many of the
+// 4187 enumerated candidates passed CRC14, the metric (raw + the
+// Hamming distance for a per-flip normalisation) of the best
+// CRC-passing one, the ML metric, and whether the ML itself
+// passed CRC.
+//
+// The instrumentation does NOT change the return policy — OSD still
+// returns success iff the ML candidate passes CRC. The diagnostics
+// were added to answer the calibration question raised by the
+// 2026-05-26 code review: when the ML candidate fails CRC, is there
+// a better (lower-metric) CRC-clean candidate elsewhere in the same
+// OSD-2 neighbourhood that a relaxed return policy would accept?
+//
+// **Measured result on the real-capture corpus (2026-05-26):
+// negative.** 495 OSD invocations decomposed: 9 ml-passed (current
+// policy already wins; 8 near-truth, 1 noise), 379 no-CRC-pass in
+// the 4187-enumeration (29 near-truth — the OSD-3 / AP territory),
+// 107 ml-failed-but-rescuable (13 near-truth, 94 noise). The 13
+// rescuable near-truth candidates are indistinguishable from the
+// 94 noise CRC-lottery passes on both the raw soft-distance axis
+// AND the normalised metric/Hamming-distance axis — distributions
+// overlap with noise actually sitting LOWER than near-truth
+// (median norm 0.89 vs 2.23). No threshold separates them.
+//
+// Verdict: OSD's current ML-only return policy is already extracting
+// the cleanly-decodable rescues; the 41-signal found-but-not-decoded
+// gap is dominated by OSD-2-unreachable cases (29) plus lottery-
+// indistinguishable cases (13). Next levers must come from a
+// fundamentally different signal source (OSD-3 enumeration depth
+// or AP prior-LLR injection from a callsign hashtable) rather than
+// post-hoc CRC re-ranking.
+//
+// The diagnostic fields are RETAINED — the result is the artifact;
+// any future proposal to relax the return policy should re-run this
+// pass and compare. decode-eval's `printOSDDiagnostics` renders the
+// separation table.
+type osdDiag struct {
+	// explored is the test-pattern enumeration count (≤ 4187 for OSD-2).
+	explored int
+
+	// crcPassCount is the number of enumerated candidates whose
+	// 91-bit info word passed CRC14.
+	crcPassCount int
+
+	// bestCRCMetric is the soft-distance metric Σ|posterior_i| of
+	// the LOWEST-metric CRC-passing candidate, or +Inf if none.
+	bestCRCMetric float64
+
+	// bestCRCHamming is the Hamming distance from the BP-final hard
+	// decision of the best-CRC-passing candidate. Zero when
+	// crcPassCount == 0.
+	bestCRCHamming int
+
+	// mlMetric is the soft-distance metric of the ML (best-by-metric)
+	// candidate — what `osd` actually returns regardless of CRC.
+	mlMetric float64
+
+	// mlCRCPass reports whether the ML candidate itself passed CRC.
+	// True iff the current "ML-only CRC check" return policy yielded
+	// a successful decode.
+	mlCRCPass bool
+}
+
 // osd runs Fossorier-Lin Ordered Statistics Decoding (order=2) on
 // the supplied posterior LLRs. Called by Decode when belief
 // propagation alone fails to produce a CRC-clean codeword.
 //
 // Returns the recovered Result, a success boolean (true iff a
-// CRC-passing codeword was found), and the number of candidate
-// codewords explored. On failure, the returned Result is zero —
+// CRC-passing codeword was found), and an osdDiag with enumeration
+// + CRC-pass statistics. On failure, the returned Result is zero —
 // the caller should not consult it.
 //
 // Algorithm:
@@ -50,14 +115,15 @@ import (
 //
 // Cost: ~4187 candidates × (83×91 GF(2) matvec + 174-bit metric +
 // one CRC14) per OSD call. Well under 10 ms in practice.
-func osd(posterior [codewordBits]float64) (Result, bool, int) {
+func osd(posterior [codewordBits]float64) (Result, bool, osdDiag) {
+	diag := osdDiag{bestCRCMetric: math.Inf(1), mlMetric: math.Inf(1)}
 	perm := reliabilityPerm(posterior)
 
 	hp, mrbCols, parityCols, ok := osdReduce(perm)
 	if !ok {
 		// Should never happen for FT8 LDPC (H has full row rank 83).
 		// Defensive only.
-		return Result{}, false, 0
+		return Result{}, false, diag
 	}
 
 	// MRB hard-decision from posterior LLR signs.
@@ -93,10 +159,28 @@ func osd(posterior [codewordBits]float64) (Result, bool, int) {
 		bestMetric = math.Inf(1)
 		bestCw     [codewordBits]uint8
 		explored   int
+
+		// CRC-pass instrumentation (added 2026-05-26, gated by
+		// `osdinstr` build tag — see osd_instr_{off,on}.go).
+		// crcPassCount + bestCRCMetric/bestCRCHamming track the
+		// lowest-metric CRC-passing candidate across the 4187-codeword
+		// enumeration so the diag struct can report it. The hot-path
+		// extraction of infoCheck and the crc14Matches call live
+		// inside scoreOne's gated block; these accumulators are
+		// declared at the outer scope because the diag assignment
+		// at end of osd reads them unconditionally (zero / +Inf
+		// when instrumentation is off).
+		crcPassCount   int
+		bestCRCMetric  = math.Inf(1)
+		bestCRCHamming int
 	)
 
 	// scoreOne mutates cwPerm/cwOrig/explored as a side effect and
-	// updates bestMetric/bestCw on improvement.
+	// updates bestMetric/bestCw on improvement. Also tracks the
+	// best CRC-passing metric for diagnostics — the CRC check adds
+	// ~18% to per-candidate cost but the absolute runtime (~1s per
+	// corpus run) is acceptable and the data is only useful to
+	// collect once.
 	scoreOne := func() {
 		explored++
 
@@ -128,6 +212,37 @@ func osd(posterior [codewordBits]float64) (Result, bool, int) {
 		if m < bestMetric {
 			bestMetric = m
 			bestCw = cwOrig
+		}
+
+		// CRC-pass instrumentation. First 91 bits of cwOrig are the
+		// systematic info word; check CRC14 and track the lowest
+		// metric among passes. Does not affect bestCw / bestMetric.
+		//
+		// Build-tag-gated (see osd_instr_{off,on}.go): the per-
+		// candidate CRC14 call costs ~12% of total runtime on the
+		// real-capture corpus; production runs default to OFF and
+		// pay nothing. The compiler eliminates the entire block
+		// (including the Hamming-distance second pass and the
+		// infoCheck array allocation) when osdInstrEnabled is the
+		// const false.
+		if osdInstrEnabled {
+			var hammingDist int
+			for i := 0; i < codewordBits; i++ {
+				if cwOrig[i] != hardOrig[i] {
+					hammingDist++
+				}
+			}
+			var infoCheck [infoBits]uint8
+			for i := 0; i < infoBits; i++ {
+				infoCheck[i] = cwOrig[i]
+			}
+			if crc14Matches(infoCheck) {
+				crcPassCount++
+				if m < bestCRCMetric {
+					bestCRCMetric = m
+					bestCRCHamming = hammingDist
+				}
+			}
 		}
 	}
 
@@ -162,16 +277,28 @@ func osd(posterior [codewordBits]float64) (Result, bool, int) {
 		info[f1] ^= 1
 	}
 
-	// Check CRC on the ML candidate.
+	// Populate diag with the final enumeration stats. mlMetric is
+	// the metric of bestCw — what OSD's current return policy uses.
+	diag.explored = explored
+	diag.crcPassCount = crcPassCount
+	diag.bestCRCMetric = bestCRCMetric
+	diag.bestCRCHamming = bestCRCHamming
+	diag.mlMetric = bestMetric
+
+	// Check CRC on the ML candidate. Current return policy: success
+	// iff the ML (lowest-metric) candidate is CRC-clean. The
+	// instrumentation above records when this policy throws away a
+	// CRC-clean codeword that's NOT the ML.
 	var infoOut [infoBits]uint8
 	for i := 0; i < infoBits; i++ {
 		infoOut[i] = bestCw[i]
 	}
 	if !crc14Matches(infoOut) {
-		return Result{}, false, explored
+		return Result{}, false, diag
 	}
+	diag.mlCRCPass = true
 
-	return Result{Info: infoOut, Codeword: bestCw}, true, explored
+	return Result{Info: infoOut, Codeword: bestCw}, true, diag
 }
 
 // reliabilityPerm returns a permutation of 0..173 ordered by
