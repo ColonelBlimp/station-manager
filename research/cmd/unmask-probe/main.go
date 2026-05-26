@@ -88,7 +88,8 @@ func main() {
 	dir := flag.String("dir", "captures", "directory containing .wav files (non-recursive)")
 	rmsThresh := flag.Float64("rms", 1.0, "subtract decodes with phase-fit RMSResid below this threshold")
 	topSubtract := flag.Int("top", 1, "subtract up to this many of the cleanest signals per WAV")
-	perSymbol := flag.Bool("per-symbol", false, "use per-symbol phase-tracked calibration instead of global single-c. Interpolates (amp, phase) ratios across the 21 Costas anchors so subtraction handles non-linear phase trajectories real captures actually exhibit.")
+	perSymbol := flag.Bool("per-symbol", false, "use per-symbol phase-tracked calibration: 21 per-anchor (amp, phase) ratios, linearly interpolated. Measured-flat-or-negative vs single-c on this corpus — per-anchor SNR is too low for the interpolation to outperform global averaging.")
+	perBlock := flag.Bool("per-block", false, "use per-block calibration: 3 weighted-LS coefficients (one per Costas block) interpolated across the TX window. Averages 7 anchors per block to suppress noise while still allowing block-level trajectory variation. Hypothesised middle ground between single-c and per-symbol.")
 	verbose := flag.Bool("v", false, "print per-decode detail")
 	flag.Parse()
 
@@ -114,14 +115,19 @@ func main() {
 	var corpNewMatched, corpNewExtra, corpLostMatched, corpSubtracted int
 
 	mode := "global single-c"
-	if *perSymbol {
+	switch {
+	case *perSymbol && *perBlock:
+		log.Fatal("specify at most one of -per-symbol / -per-block")
+	case *perSymbol:
 		mode = "per-symbol phase-tracked"
+	case *perBlock:
+		mode = "per-block (3-point) calibration"
 	}
 	fmt.Printf("subtraction mode: %s\n\n", mode)
 
 	for _, wav := range wavs {
 		fmt.Printf("=== %s ===\n", wav)
-		newMatched, newExtra, lostMatched, subtracted := probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *verbose)
+		newMatched, newExtra, lostMatched, subtracted := probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *verbose)
 		corpNewMatched += newMatched
 		corpNewExtra += newExtra
 		corpLostMatched += lostMatched
@@ -152,7 +158,7 @@ func main() {
 // builds the residual, runs the pass-2 decode, and classifies the
 // new/lost decodes against the truth manifest. Returns the four
 // corpus-aggregate counters.
-func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -195,9 +201,12 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, ver
 	copy(residual, data.Samples)
 	for _, c := range clean {
 		var ok bool
-		if perSymbol {
+		switch {
+		case perSymbol:
 			ok = subtractPerSymbolInPlace(residual, c)
-		} else {
+		case perBlock:
+			ok = subtractPerBlockInPlace(residual, c)
+		default:
 			ok = subtractInPlace(residual, c)
 		}
 		if !ok {
@@ -425,6 +434,110 @@ func subtractPerSymbolInPlace(audio []float32, d decoded) bool {
 				cursor++
 			}
 			a, b := points[cursor], points[cursor+1]
+			frac := float64(k-a.sampleCentre) / float64(b.sampleCentre-a.sampleCentre)
+			amp = a.amp + frac*(b.amp-a.amp)
+			phase = a.phase + frac*(b.phase-a.phase)
+		}
+		cosP := math.Cos(phase)
+		sinP := math.Sin(phase)
+		calibrated := amp * (cosP*imag(zSynth[k]) + sinP*real(zSynth[k]))
+		audio[k] -= float32(calibrated)
+	}
+	return true
+}
+
+// subtractPerBlockInPlace is the middle ground between subtractInPlace
+// (global single-c, 21-anchor weighted average) and subtractPerSymbol
+// (per-anchor calibration, 21 noisy points). It computes a separate
+// weighted-LS calibration per Costas block (each averaging 7 anchors,
+// √7 SNR improvement vs per-anchor), then linearly interpolates
+// between the 3 block centres across the TX window.
+//
+// Same complex-multiplier model + sample-by-sample application as
+// subtractPerSymbolInPlace; the only difference is the number and
+// noise level of calibration points (3 cleaner ones vs 21 noisier).
+//
+// Returns false if fewer than 2 blocks have at least 3 accessible
+// anchors each (insufficient for the interpolation).
+func subtractPerBlockInPlace(audio []float32, d decoded) bool {
+	zSynth := synth.SynthesizeComplex(d.codeword, d.preciseFreq, d.dt, len(audio), 1.0, 0.0)
+	synthReal := make([]float32, len(zSynth))
+	for k := range zSynth {
+		synthReal[k] = float32(imag(zSynth[k]))
+	}
+	xReal, accReal := demod.CostasAnchorAmplitudes(audio, d.preciseFreq, d.dt)
+	xSynth, accSynth := demod.CostasAnchorAmplitudes(synthReal, d.preciseFreq, d.dt)
+
+	type blockCalib struct {
+		sampleCentre int
+		amp          float64
+		phase        float64
+	}
+	var blocks []blockCalib
+
+	txStartSample := int(math.Round((0.5 + d.dt) * float64(expectedSampleRate)))
+	const (
+		nsps      = 1920
+		blockSize = 7 // anchors per Costas block
+	)
+	for block := 0; block < 3; block++ {
+		var num complex128
+		var den float64
+		accessible := 0
+		for j := 0; j < blockSize; j++ {
+			i := block*blockSize + j
+			if !accReal[i] || !accSynth[i] {
+				continue
+			}
+			num += xReal[i] * cmplx.Conj(xSynth[i])
+			den += real(xSynth[i])*real(xSynth[i]) + imag(xSynth[i])*imag(xSynth[i])
+			accessible++
+		}
+		if accessible < 3 || den == 0 {
+			continue
+		}
+		c := num / complex(den, 0)
+		// Block centre at its midpoint anchor (sym 3 within the block).
+		midAnchor := costasSymPos(block*blockSize + 3)
+		blocks = append(blocks, blockCalib{
+			sampleCentre: txStartSample + midAnchor*nsps + nsps/2,
+			amp:          cmplx.Abs(c),
+			phase:        cmplx.Phase(c),
+		})
+	}
+	if len(blocks) < 2 {
+		return false
+	}
+	// Unwrap phases between adjacent blocks.
+	for i := 1; i < len(blocks); i++ {
+		diff := blocks[i].phase - blocks[i-1].phase
+		for diff > math.Pi {
+			blocks[i].phase -= 2 * math.Pi
+			diff -= 2 * math.Pi
+		}
+		for diff <= -math.Pi {
+			blocks[i].phase += 2 * math.Pi
+			diff += 2 * math.Pi
+		}
+	}
+
+	first := blocks[0]
+	last := blocks[len(blocks)-1]
+	cursor := 0
+	for k := 0; k < len(audio); k++ {
+		var amp, phase float64
+		switch {
+		case k <= first.sampleCentre:
+			amp = first.amp
+			phase = first.phase
+		case k >= last.sampleCentre:
+			amp = last.amp
+			phase = last.phase
+		default:
+			for cursor+1 < len(blocks) && blocks[cursor+1].sampleCentre <= k {
+				cursor++
+			}
+			a, b := blocks[cursor], blocks[cursor+1]
 			frac := float64(k-a.sampleCentre) / float64(b.sampleCentre-a.sampleCentre)
 			amp = a.amp + frac*(b.amp-a.amp)
 			phase = a.phase + frac*(b.phase-a.phase)
