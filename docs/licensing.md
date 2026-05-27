@@ -34,7 +34,7 @@ rely on it staying MIT for the work they're doing now.
 FT8 was designed by Steve Franke (K9AN), Bill Somerville (G4WJS), and
 Joe Taylor (K1JT) — a remarkable protocol that makes reliable QSOs
 possible at signal levels far below conventional readability. SM
-exists to log and forward QSOs the operator makes using that
+facilitates logging and forwarding QSOs the operator makes using that
 protocol; the protocol itself, and the deep DSP and coding-theory
 work behind it, is theirs.
 
@@ -167,8 +167,8 @@ in detail. The short version for this document's purpose:
   unencumbered.
 
 - **If CGO acceleration is ever wanted**, the preferred path is a
-  permissively-licensed FFT library — KissFFT (BSD-3) or PocketFFT
-  (Apache-2.0). FFTW3 is a documented option for forks willing to
+  permissively-licensed FFT library — KissFFT or PocketFFT (both
+  BSD-3-Clause). FFTW3 is a documented option for forks willing to
   inherit GPL on their binaries; SM's upstream releases will not.
 
 ---

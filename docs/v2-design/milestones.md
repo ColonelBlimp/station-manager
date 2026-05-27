@@ -851,7 +851,7 @@ What's safe and what isn't:
   `user_profile` memory), the GPL trigger is dormant and FFTW3 use is
   technically permissible. SM's conservative policy preference is
   still **permissively-licensed CGO alternatives** (KissFFT BSD-3,
-  PocketFFT Apache 2.0) for any CGO build path that might ever
+  PocketFFT BSD-3) for any CGO build path that might ever
   ship publicly — that keeps the binary-redistribution option open
   without forcing GPL on downstream consumers.
 
@@ -891,8 +891,8 @@ implementations that we can't ignore at this scale. The subsystem
 binds permissively-licensed C libraries only (the licensing constraint
 forecloses GPL-licensed dependencies):
 
-- **Permissively-licensed FFT preferred** — KissFFT (BSD-3) or
-  PocketFFT (Apache 2.0) for any CGO FFT path. Both are well-trodden
+- **Permissively-licensed FFT preferred** — KissFFT or PocketFFT
+  (both BSD-3) for any CGO FFT path. Both are well-trodden
   in scientific computing with stable C APIs. **FFTW3 is the WSJT-X
   reference but its GPL v2 linkage requirement is a binary-
   distribution constraint** (the GPL doesn't contaminate SM's source —
