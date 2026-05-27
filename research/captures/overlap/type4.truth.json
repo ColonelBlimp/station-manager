@@ -1,0 +1,17 @@
+{
+  "wav": "type4.wav",
+  "sample_rate": 12000,
+  "source": "synthetic",
+  "signals": [
+    {
+      "text": "CQ W1AW FN31",
+      "freq_hz": 1500,
+      "dt_s": 0
+    },
+    {
+      "text": "W1AW PJ4/K1ABC RR73",
+      "freq_hz": 1700,
+      "dt_s": 0
+    }
+  ]
+}

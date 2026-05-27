@@ -81,7 +81,25 @@ func DefaultMultiPassOptions() MultiPassOptions {
 //
 // The returned slice is in pass-order: pass-1 decodes first (in
 // candidate-score order), then pass-2 decodes that survived dedup.
+//
+// Hash table: callers needing Type 4 hash resolution or h22 lookups
+// in Type 1 should use MultiPassDecodeWithHashes and pass a
+// persistent *CallsignHashTable.
 func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
+	return MultiPassDecodeWithHashes(audio, opts, nil)
+}
+
+// MultiPassDecodeWithHashes runs MultiPassDecode with the supplied
+// hash table available for Type 4 / hashed-Type-1 resolution. The
+// table accumulates: every successfully-decoded callsign (standard
+// or nonstandard) is registered for future references — both within
+// the same call (Type 1 decoded first can populate a hash that
+// Type 4 looks up later in the same slot) and across calls (the
+// next slot's table starts with everything we've ever decoded).
+//
+// nil ht is equivalent to MultiPassDecode (no hash resolution; Type
+// 4 messages surface their h12 as a "<...N>" placeholder).
+func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *CallsignHashTable) []DecodeRecord {
 	opts = applyMultiPassDefaults(opts)
 
 	// Mutable audio buffer; subtraction happens in place between
@@ -126,7 +144,7 @@ func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
 			}
 			var payload [LDPCPayloadBits]uint8
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
-			ur := Unpack77(payload)
+			ur := Unpack77WithHashes(payload, ht)
 			if !ur.OK {
 				continue
 			}
@@ -152,6 +170,7 @@ func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
 				DecodeMethod: br.DecodeMethod,
 				Pass:         pass,
 			})
+			registerCallsigns(ht, ur.Text)
 		}
 
 		// Dedup pass-N decodes against everything already accepted
@@ -171,6 +190,75 @@ func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
 		}
 	}
 	return accepted
+}
+
+// registerCallsigns walks the decoded message text and registers any
+// callsign-shaped tokens in the hash table. Generous on what counts:
+// space-separated tokens with at least one digit (the FT8 callsign
+// shape requirement) get registered. Spurious additions are
+// inexpensive (the hash table just maps hashes to strings) and
+// harmless on lookup — a real h12 in a future decode will index a
+// legitimately-decoded callsign with extremely high probability.
+//
+// Skips the "<...N>" hash placeholder (which itself contains digits)
+// because that's a marker for unresolved hashes, not a callsign.
+//
+// Skips "CQ", "DE", "QRZ", "RRR", "RR73", "73", "R", and pure
+// numeric reports ("+05", "-12") that lack the call-shape signature.
+func registerCallsigns(ht *CallsignHashTable, text string) {
+	if ht == nil || text == "" {
+		return
+	}
+	for _, tok := range stringFields(text) {
+		if !looksLikeCallsign(tok) {
+			continue
+		}
+		ht.Add(tok)
+	}
+}
+
+// stringFields is strings.Fields without an extra import — splits on
+// whitespace.
+func stringFields(s string) []string {
+	var out []string
+	start := -1
+	for i, c := range s {
+		if c == ' ' || c == '\t' {
+			if start >= 0 {
+				out = append(out, s[start:i])
+				start = -1
+			}
+		} else if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+// looksLikeCallsign filters tokens to plausible callsign shapes:
+// contains at least one letter AND at least one digit; not a known
+// non-callsign keyword; not a "<...>" placeholder.
+func looksLikeCallsign(tok string) bool {
+	if tok == "" || tok[0] == '<' {
+		return false
+	}
+	switch tok {
+	case "CQ", "DE", "QRZ", "R", "RRR", "RR73", "73":
+		return false
+	}
+	hasLetter, hasDigit := false, false
+	for _, c := range tok {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			hasLetter = true
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		}
+	}
+	return hasLetter && hasDigit
 }
 
 // measureCandidateSNR runs the M2 per-symbol fit path on the candidate

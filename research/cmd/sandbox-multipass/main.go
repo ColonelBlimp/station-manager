@@ -68,7 +68,8 @@ func main() {
 	fmt.Printf("  %d samples @ %d Hz; %d truth signals; max-passes=%d\n\n",
 		len(data.Samples), data.SampleRate, len(manifest.Signals), opts.MaxPasses)
 
-	decodes := sandbox.MultiPassDecode(data.Samples, opts)
+	ht := sandbox.NewCallsignHashTable()
+	decodes := sandbox.MultiPassDecodeWithHashes(data.Samples, opts, ht)
 
 	// Group by pass.
 	byPass := map[int][]sandbox.DecodeRecord{}

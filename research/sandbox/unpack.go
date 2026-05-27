@@ -68,7 +68,10 @@ type UnpackResult struct {
 }
 
 // Unpack77 decodes the 77-bit FT8 payload (msg91[0:77] from
-// BPDecode) into a human-readable message string.
+// BPDecode) into a human-readable message string. Type 4 messages
+// and any Type 1/2 with hashed callsigns will surface placeholders
+// for the hashed addressee. Use Unpack77WithHashes to resolve them
+// via a CallsignHashTable.
 //
 // Dispatch is on the trailing 3 bits of the payload (i3); for the
 // i3=0 family the 3 bits immediately preceding i3 (n3) select the
@@ -77,20 +80,31 @@ type UnpackResult struct {
 // Currently implemented:
 //   - i3=1, i3=2 (Type 1, Type 2 — standard QSO with /R or /P suffix)
 //   - i3=0 / n3=0 (Type 0.0 free text)
+//   - i3=4 (Type 4, nonstandard callsigns)
 //
 // Deferred:
-//   - i3=4 (Type 4, nonstandard callsigns) — needs the rolling
-//     callsign hash table to resolve the 12-bit hash field.
 //   - Other i3=0 sub-types (DXpedition, Field Day, telemetry) and
 //     i3=3/5 (contest exchanges) — implement when surfaced by a
 //     fixture that contains them.
 func Unpack77(payload [LDPCPayloadBits]uint8) UnpackResult {
+	return Unpack77WithHashes(payload, nil)
+}
+
+// Unpack77WithHashes is the hash-aware variant: it resolves Type 4
+// h12 addressees and Type 1/2 h22 hash placeholders from the
+// supplied CallsignHashTable. Pass nil for the table to fall back
+// to the placeholder behaviour of Unpack77.
+//
+// The table is read-only inside this call; callers (e.g.
+// MultiPassDecode) are responsible for Add'ing newly-decoded
+// callsigns back to the table for future references.
+func Unpack77WithHashes(payload [LDPCPayloadBits]uint8, ht *CallsignHashTable) UnpackResult {
 	bits := payload[:]
 	i3 := int(extractBits(bits, 74, 3))
 
 	switch i3 {
 	case 1, 2:
-		return unpackType12(bits, i3)
+		return unpackType12(bits, i3, ht)
 	case 0:
 		n3 := int(extractBits(bits, 71, 3))
 		if n3 == 0 {
@@ -101,10 +115,7 @@ func Unpack77(payload [LDPCPayloadBits]uint8) UnpackResult {
 			Detail: fmt.Sprintf("unsupported i3=0 sub-type n3=%d", n3),
 		}
 	case 4:
-		return UnpackResult{
-			I3:     4,
-			Detail: "Type 4 (nonstandard callsigns) — needs hash table",
-		}
+		return unpackType4(bits, ht)
 	default:
 		return UnpackResult{
 			I3:     i3,
@@ -135,7 +146,7 @@ func extractBits(bits []uint8, offset, n int) uint64 {
 //
 // p1/p2 interpretation is suffix "/R" when i3=1, "/P" when i3=2.
 // r1=1 prefixes the grid/report with "R " (e.g. "R FN20", "R-12").
-func unpackType12(bits []uint8, i3 int) UnpackResult {
+func unpackType12(bits []uint8, i3 int, ht *CallsignHashTable) UnpackResult {
 	c28a := uint32(extractBits(bits, 0, 28))
 	p1 := bits[28]
 	c28b := uint32(extractBits(bits, 29, 28))
@@ -148,8 +159,8 @@ func unpackType12(bits []uint8, i3 int) UnpackResult {
 		suffix = "/P"
 	}
 
-	call1, ok1 := unpackCallsign28(c28a)
-	call2, ok2 := unpackCallsign28(c28b)
+	call1, ok1 := unpackCallsign28WithHashes(c28a, ht)
+	call2, ok2 := unpackCallsign28WithHashes(c28b, ht)
 	grid, okG := unpackGrid15(g15)
 
 	res := UnpackResult{I3: i3}
@@ -182,13 +193,22 @@ func unpackType12(bits []uint8, i3 int) UnpackResult {
 // decoded text and an OK flag — OK is false for hash-placeholder
 // values that cannot be resolved without the rolling hash table.
 func unpackCallsign28(n uint32) (string, bool) {
+	return unpackCallsign28WithHashes(n, nil)
+}
+
+// unpackCallsign28WithHashes is the hash-aware variant: hash-
+// placeholder c28 values (NTOKENS ≤ n < NTOKENS+MAX22) are looked
+// up in the supplied hash table. Returns OK=true when the table
+// resolves the hash; OK=false (with a <...> placeholder) otherwise.
+func unpackCallsign28WithHashes(n uint32, ht *CallsignHashTable) (string, bool) {
 	switch {
 	case n < ntokens:
 		return decodeCallsignToken(n)
 	case n < callBase:
-		// 22-bit hash placeholder — surface as <…hash> until a hash
-		// table is wired in. Marks the candidate as a partial decode.
 		hash22 := n - ntokens
+		if call, ok := ht.LookupH22(hash22); ok {
+			return call, true
+		}
 		return fmt.Sprintf("<...%d>", hash22), false
 	default:
 		return decodeStandardCall(n - callBase), true
@@ -300,6 +320,91 @@ func unpackGrid15(n uint32) (string, bool) {
 		return fmt.Sprintf("%+03d", db), true
 	}
 	return fmt.Sprintf("<grid15 reserved %d>", n), false
+}
+
+// unpackType4 decodes the Type 4 message layout (nonstandard
+// callsigns):
+//
+//	bits  0..11   h12  (12-bit hash of the addressee callsign)
+//	bits 12..69   c58  (58-bit free-form callsign of the sender)
+//	bit  70       h1   (0 = "no hash flip", 1 = swap interpretation;
+//	                    matches the WSJT-X type-4 spec)
+//	bits 71..72   r2   (2-bit report: 0=blank, 1=RRR, 2=RR73, 3=73)
+//	bit  73       c1   (0: addressee, then sender; 1: swapped order)
+//	bits 74..76   i3   (= 4)
+//
+// The h12 addressee is resolved against the supplied hash table; on
+// miss, surfaces as "<…h12>" placeholder (decode OK=false). The
+// c58 callsign is always decoded from bits (never hashed).
+//
+// Output text shape: "<addressee> <sender> <report>". Empty report
+// is omitted.
+//
+// h1 semantics per QEX paper § 7: when h1=1, the "<...>" hashed-call
+// placeholder in the output is placed in front of the c58 call
+// regardless of c1. Treated as informational here; the actual
+// output sequence follows c1.
+func unpackType4(bits []uint8, ht *CallsignHashTable) UnpackResult {
+	h12 := uint32(extractBits(bits, 0, 12))
+	c58 := extractBits(bits, 12, 58)
+	_ = bits[70] // h1; reserved for future semantic refinements
+	r2 := int(extractBits(bits, 71, 2))
+	c1 := bits[73]
+
+	addressee, okAddr := ht.LookupH12(h12)
+	if !okAddr {
+		addressee = fmt.Sprintf("<...%d>", h12)
+	}
+	sender := decodeC58(c58)
+
+	var reportText string
+	switch r2 {
+	case 0:
+		reportText = ""
+	case 1:
+		reportText = "RRR"
+	case 2:
+		reportText = "RR73"
+	case 3:
+		reportText = "73"
+	}
+
+	var text string
+	if c1 == 0 {
+		text = addressee + " " + sender
+	} else {
+		text = sender + " " + addressee
+	}
+	if reportText != "" {
+		text += " " + reportText
+	}
+
+	res := UnpackResult{
+		Text: text,
+		I3:   4,
+		OK:   okAddr,
+	}
+	if !okAddr {
+		res.Detail = fmt.Sprintf("Type 4: h12=%d not in hash table", h12)
+	}
+	return res
+}
+
+// decodeC58 inverts the 58-bit nonstandard-callsign encoding from
+// QEX ref [14] nonstd_to_c58.f90:
+//
+//	n58 = Σ char_index[i] × 38^(10−i)
+//
+// for an 11-character base-38 string (space-padded). Trailing spaces
+// are trimmed on output.
+func decodeC58(n58 uint64) string {
+	var chars [11]byte
+	for i := 10; i >= 0; i-- {
+		idx := int(n58 % 38)
+		chars[i] = c58Alphabet[idx]
+		n58 /= 38
+	}
+	return strings.TrimRight(string(chars[:]), " ")
 }
 
 // unpackFreeText decodes a Type 0.0 free-text message. The 71 message

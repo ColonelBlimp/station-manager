@@ -42,17 +42,32 @@ const (
 	defaultSource = "synthetic"
 )
 
-// signalSpec defines one overlapping signal in a fixture.
+// signalSpec defines one signal in a fixture. signalKind selects
+// between Type 1 (standard CQ-style) and Type 4 (nonstandard
+// callsign with hashed addressee).
+type signalKind int
+
+const (
+	kindType1 signalKind = iota
+	kindType4
+)
+
 type signalSpec struct {
+	Kind signalKind
+
+	// Type 1 fields.
 	Call1, Call2 string
 	Grid         string
-	FreqHz       float64
-	DtSec        float64
-	// RelativeDB is the signal's amplitude in dB relative to the
-	// strongest signal in this fixture (the strongest is at 0 dB).
-	// Used to set the relative power level for "strong + weak"
-	// fixtures.
-	RelativeDB float64
+
+	// Type 4 fields.
+	Type4Addressee string
+	Type4Sender    string
+	Type4Report    sandbox.PackType4Report
+	Type4Swap      bool
+
+	// Common shape.
+	FreqHz, DtSec float64
+	RelativeDB    float64
 }
 
 // fixtureSpec defines one fixture's signal layout + AWGN level.
@@ -93,11 +108,26 @@ func main() {
 		{
 			Name: "overlap-C",
 			Signals: []signalSpec{
-				{Call1: "CQ", Call2: "K1JT", Grid: "FN20", FreqHz: 1500.0, DtSec: 0.0, RelativeDB: 0},
-				{Call1: "CQ", Call2: "W1AW", Grid: "FN31", FreqHz: 1500.0, DtSec: 0.05, RelativeDB: -12},
+				{Kind: kindType1, Call1: "CQ", Call2: "K1JT", Grid: "FN20", FreqHz: 1500.0, DtSec: 0.0, RelativeDB: 0},
+				{Kind: kindType1, Call1: "CQ", Call2: "W1AW", Grid: "FN31", FreqHz: 1500.0, DtSec: 0.05, RelativeDB: -12},
 			},
 			NoiseDB:   math.Inf(-1),
 			NoiseSeed: 3,
+		},
+		{
+			// type4 fixture: a Type 1 signal that pre-populates the
+			// hash table with W1AW, then a Type 4 signal addressing
+			// "W1AW PJ4/K1ABC RR73". Validates that h12 is resolved
+			// from a prior same-slot decode and that the c58 sender
+			// callsign survives round-trip through synth + decode.
+			Name: "type4",
+			Signals: []signalSpec{
+				{Kind: kindType1, Call1: "CQ", Call2: "W1AW", Grid: "FN31", FreqHz: 1500.0, DtSec: 0.0, RelativeDB: 0},
+				{Kind: kindType4, Type4Addressee: "W1AW", Type4Sender: "PJ4/K1ABC", Type4Report: sandbox.PackType4RR73,
+					FreqHz: 1700.0, DtSec: 0.0, RelativeDB: 0},
+			},
+			NoiseDB:   math.Inf(-1),
+			NoiseSeed: 4,
 		},
 	}
 
@@ -119,9 +149,26 @@ func generateFixture(f fixtureSpec, outdir string) error {
 
 	// Synthesize each signal at the right amplitude.
 	for _, sig := range f.Signals {
-		payload, err := sandbox.PackType1(sig.Call1, sig.Call2, sig.Grid)
-		if err != nil {
-			return fmt.Errorf("pack %s/%s/%s: %w", sig.Call1, sig.Call2, sig.Grid, err)
+		var (
+			payload [sandbox.LDPCPayloadBits]uint8
+			text    string
+			err     error
+		)
+		switch sig.Kind {
+		case kindType1:
+			payload, err = sandbox.PackType1(sig.Call1, sig.Call2, sig.Grid)
+			if err != nil {
+				return fmt.Errorf("pack type 1 %s/%s/%s: %w", sig.Call1, sig.Call2, sig.Grid, err)
+			}
+			text = sig.Call1 + " " + sig.Call2 + " " + sig.Grid
+		case kindType4:
+			payload, err = sandbox.PackType4(sig.Type4Addressee, sig.Type4Sender, sig.Type4Report, sig.Type4Swap)
+			if err != nil {
+				return fmt.Errorf("pack type 4 %s/%s: %w", sig.Type4Addressee, sig.Type4Sender, err)
+			}
+			text = type4ExpectedText(sig)
+		default:
+			return fmt.Errorf("unknown signal kind %d", sig.Kind)
 		}
 		info := sandbox.PayloadToInfo91(payload)
 		cw := sandbox.EncodeLDPC(info)
@@ -138,7 +185,6 @@ func generateFixture(f fixtureSpec, outdir string) error {
 			audio[n] += float32(amp) * cosSynth[n]
 		}
 
-		text := sig.Call1 + " " + sig.Call2 + " " + sig.Grid
 		manifest.Signals = append(manifest.Signals, truth.Signal{
 			Text:   text,
 			FreqHz: sig.FreqHz,
@@ -251,6 +297,27 @@ func writeWAV(path string, samples []float32, sampleRate uint32) error {
 		}
 	}
 	return nil
+}
+
+// type4ExpectedText returns the truth-manifest text for a Type 4
+// signal, mirroring what unpackType4 will produce when the addressee
+// is resolved in the hash table.
+func type4ExpectedText(sig signalSpec) string {
+	var text string
+	if sig.Type4Swap {
+		text = sig.Type4Sender + " " + sig.Type4Addressee
+	} else {
+		text = sig.Type4Addressee + " " + sig.Type4Sender
+	}
+	switch sig.Type4Report {
+	case sandbox.PackType4RRR:
+		text += " RRR"
+	case sandbox.PackType4RR73:
+		text += " RR73"
+	case sandbox.PackType4_73:
+		text += " 73"
+	}
+	return text
 }
 
 func stringPtr(s string) *string { return &s }

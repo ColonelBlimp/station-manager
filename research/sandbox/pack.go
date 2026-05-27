@@ -187,6 +187,72 @@ func PayloadToInfo91(payload [LDPCPayloadBits]uint8) [LDPCInfoBits]uint8 {
 	return info
 }
 
+// PackType4Report selects the 2-bit r2 token used in Type 4 messages.
+type PackType4Report int
+
+const (
+	PackType4Blank PackType4Report = 0
+	PackType4RRR   PackType4Report = 1
+	PackType4RR73  PackType4Report = 2
+	PackType4_73   PackType4Report = 3
+)
+
+// PackC58 encodes any callsign string (up to 11 chars from the base-
+// 38 alphabet " 0-9A-Z/") as the 58-bit FT8 nonstandard-callsign
+// integer per nonstd_to_c58.f90. Returns the bit pattern as an
+// integer (caller stuffs it into a 58-bit field).
+func PackC58(callsign string) (uint64, error) {
+	// Left-justify: trim leading spaces, then right-pad to 11.
+	callsign = strings.TrimLeft(callsign, " ")
+	if len(callsign) > 11 {
+		return 0, &PackError{"nonstandard callsign exceeds 11 chars: " + callsign}
+	}
+	for len(callsign) < 11 {
+		callsign += " "
+	}
+	var n58 uint64
+	for i := 0; i < 11; i++ {
+		idx := strings.IndexByte(c58Alphabet, callsign[i])
+		if idx < 0 {
+			return 0, &PackError{"unknown c58 alphabet char: " + string(callsign[i])}
+		}
+		n58 = n58*38 + uint64(idx)
+	}
+	return n58, nil
+}
+
+// PackType4 builds the 77-bit Type 4 payload referencing an
+// addressee callsign by its 12-bit hash + the sender's nonstandard
+// callsign in c58 form. report is one of the 4 valid r2 tokens.
+// swap = true puts the sender before the addressee in the output
+// text (sets c1 = 1).
+//
+// Layout (matches unpackType4):
+//
+//	bits  0..11   h12 = HashCallsign(addressee).H12
+//	bits 12..69   c58 = PackC58(sender)
+//	bit  70       h1  = 0 (informational only in current spec)
+//	bits 71..72   r2
+//	bit  73       c1  = swap ? 1 : 0
+//	bits 74..76   i3  = 4
+func PackType4(addressee, sender string, report PackType4Report, swap bool) ([LDPCPayloadBits]uint8, error) {
+	var payload [LDPCPayloadBits]uint8
+	_, h12, _ := HashCallsign(addressee)
+	c58, err := PackC58(sender)
+	if err != nil {
+		return payload, fmt.Errorf("sender c58: %w", err)
+	}
+	writeBitsToPayload(payload[:], 0, 12, uint64(h12))
+	writeBitsToPayload(payload[:], 12, 58, c58)
+	// bit 70 = h1 = 0 (already zero)
+	writeBitsToPayload(payload[:], 71, 2, uint64(report))
+	if swap {
+		payload[73] = 1
+	}
+	writeBitsToPayload(payload[:], 74, 3, 4) // i3 = 4
+	return payload, nil
+}
+
 // alphaIndex returns the position of c within alphabet, or an error
 // if c isn't in alphabet.
 func alphaIndex(alphabet string, c byte) (int, error) {
