@@ -337,8 +337,13 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 	}
 
 	// Run Unpack77 on every BP-OK candidate so we can compare the
-	// decoded text to the truth-manifest string.
+	// decoded text to the truth-manifest string. Also run the encoder
+	// round-trip: EncodeLDPC(cw[0:91]) must equal cw exactly, which
+	// validates generator-matrix interpretation, systematic-code
+	// orientation, and CRC placement all in one comparison.
 	decodedText := make([]string, len(cands))
+	roundTripOK := make([]bool, len(cands))
+	toneMatchOK := make([]bool, len(cands))
 	for i, br := range bpResults {
 		if !br.OK {
 			continue
@@ -350,6 +355,24 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 			decodedText[i] = ur.Text
 		} else {
 			decodedText[i] = "[unpack: " + ur.Detail + "]"
+		}
+
+		// Acceptance test 1: cw' = EncodeLDPC(cw[0:91]) must equal cw.
+		var info [sandbox.LDPCInfoBits]uint8
+		copy(info[:], br.Codeword[:sandbox.LDPCInfoBits])
+		reCw := sandbox.EncodeLDPC(info)
+		roundTripOK[i] = reCw == br.Codeword
+
+		// Acceptance test 2 (data positions) + (Costas positions): the
+		// re-encoded tones from the BP-decoded codeword should match
+		// the SymbolGrid argmax. Costas positions should match always
+		// (BP-OK ⇒ nsync=21 plus encoder writes literal Costas tones);
+		// data-symbol positions may drift on noisy fixtures where BP
+		// corrected channel-induced errors.
+		reTones := sandbox.CodewordToTones(reCw)
+		grid, err := sandbox.ExtractSymbols(ch, refined[i])
+		if err == nil {
+			toneMatchOK[i] = countToneMismatches(reTones, grid) == 0
 		}
 	}
 
@@ -431,8 +454,96 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 	// BP outcomes on spurious. Healthy: most should be syndrome-fail.
 	fmt.Printf("\n  spurious BP outcomes: %d syndrome-fail, %d syndrome-clean-CRC-fail, %d OK\n",
 		bpStats.syndromeFail, bpStats.syndromeOnly, bpStats.ok)
+
+	// Encoder round-trip across all BP-OK candidates. The "load-bearing"
+	// acceptance test of the encoder milestone: EncodeLDPC(cw[0:91])
+	// must equal cw exactly for every successful decode.
+	rtOK, fullToneOK, rtTotal := 0, 0, 0
+	totalCostasMismatch, totalDataMismatch := 0, 0
+	for i, br := range bpResults {
+		if !br.OK {
+			continue
+		}
+		rtTotal++
+		if roundTripOK[i] {
+			rtOK++
+		}
+		if toneMatchOK[i] {
+			fullToneOK++
+		}
+		// Per-candidate Costas vs data mismatch breakdown.
+		var info [sandbox.LDPCInfoBits]uint8
+		copy(info[:], br.Codeword[:sandbox.LDPCInfoBits])
+		reTones := sandbox.CodewordToTones(sandbox.EncodeLDPC(info))
+		grid, err := sandbox.ExtractSymbols(ch, refined[i])
+		if err == nil {
+			cm, dm := splitToneMismatches(reTones, grid)
+			totalCostasMismatch += cm
+			totalDataMismatch += dm
+		}
+	}
+	fmt.Printf("\n  encoder round-trip:\n")
+	fmt.Printf("    cw' == cw:                 %d/%d\n", rtOK, rtTotal)
+	fmt.Printf("    full 79-tone match:        %d/%d\n", fullToneOK, rtTotal)
+	fmt.Printf("    Costas mismatches (≤21):   %d total across %d candidates\n",
+		totalCostasMismatch, rtTotal)
+	fmt.Printf("    data mismatches (≤58):     %d total across %d candidates (BP-corrected bits)\n",
+		totalDataMismatch, rtTotal)
+
 	_ = medianAbsLLRs
 	_ = decisiveBits
+}
+
+// countToneMismatches returns the number of positions (0..78) where
+// the re-encoded tone differs from the SymbolGrid argmax.
+func countToneMismatches(reTones [79]int, grid *sandbox.SymbolGrid) int {
+	n := 0
+	for s := 0; s < 79; s++ {
+		max := 0
+		maxP := grid.Tones[s][0]
+		for m := 1; m < 8; m++ {
+			if grid.Tones[s][m] > maxP {
+				maxP = grid.Tones[s][m]
+				max = m
+			}
+		}
+		if max != reTones[s] {
+			n++
+		}
+	}
+	return n
+}
+
+// splitToneMismatches separates the mismatch count into Costas
+// positions (21 anchors at blocks 0/36/72) and data positions (the
+// remaining 58). Costas mismatches on a BP-OK candidate would
+// indicate an encoder/Costas placement bug; data mismatches reflect
+// channel-induced bit errors that BP corrected during decode.
+func splitToneMismatches(reTones [79]int, grid *sandbox.SymbolGrid) (costas, data int) {
+	costasSet := map[int]bool{}
+	for _, blockStart := range [3]int{0, 36, 72} {
+		for k := 0; k < 7; k++ {
+			costasSet[blockStart+k] = true
+		}
+	}
+	for s := 0; s < 79; s++ {
+		max := 0
+		maxP := grid.Tones[s][0]
+		for m := 1; m < 8; m++ {
+			if grid.Tones[s][m] > maxP {
+				maxP = grid.Tones[s][m]
+				max = m
+			}
+		}
+		if max != reTones[s] {
+			if costasSet[s] {
+				costas++
+			} else {
+				data++
+			}
+		}
+	}
+	return
 }
 
 // bpResultLabel formats a BPResult into a compact status string for
