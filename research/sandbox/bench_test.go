@@ -99,6 +99,51 @@ func BenchmarkNewChannelizer(b *testing.B) {
 	}
 }
 
+// BenchmarkMultiPassDecode_Clean measures the full two-pass decoder
+// on the clean fixture: pass 1 finds all 10 truth signals, pass 2
+// runs on the residual and finds 0 (the 10cq fixture has no
+// overlapping signals — multi-pass is exercising the no-regression
+// path).
+func BenchmarkMultiPassDecode_Clean(b *testing.B) {
+	samples := loadFixtureSamples(b, "../10cq_clean.wav")
+	opts := DefaultMultiPassOptions()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = MultiPassDecode(samples, opts)
+	}
+}
+
+// BenchmarkMultiPassDecode_SNR20dB exercises multi-pass under the
+// OSD-heavy workload. Each pass invokes BP+OSD on every candidate;
+// pass 2 re-runs Prepare/Spectrogram/Find on the subtracted residual.
+func BenchmarkMultiPassDecode_SNR20dB(b *testing.B) {
+	samples := loadFixtureSamples(b, "../10cq_snr-20dB.wav")
+	opts := DefaultMultiPassOptions()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = MultiPassDecode(samples, opts)
+	}
+}
+
+// BenchmarkSynthesizeAudio_OneSignal measures the audio-rate GFSK
+// synthesis cost for a single signal placed in a 15 s buffer at
+// 12 kHz. Times the cos+sin generation + Gaussian filter convolution
+// for 79 symbols × 1920 samples = 151,680 signal samples.
+func BenchmarkSynthesizeAudio_OneSignal(b *testing.B) {
+	var tones [ft8SymbolCount]int
+	for i := range tones {
+		tones[i] = i % 8
+	}
+	bufLen := 12000 * 15 // 15-second buffer
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _, _, _ = SynthesizeAudio(tones, 1500.0, 0.0, audioRateHz, bufLen)
+	}
+}
+
 // BenchmarkChannelizerPrepare measures the single 192k-point real
 // FFT that the Channelizer does once per slot. Independent of
 // candidate count — runs exactly once per Prepare call.

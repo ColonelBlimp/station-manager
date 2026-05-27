@@ -41,3 +41,5 @@ config.json
 /jt9_wisdom.dat
 /timer.out
 /sandbox-validate
+/sandbox-make-overlap
+/sandbox-multipass
