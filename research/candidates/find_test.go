@@ -109,7 +109,9 @@ func TestRefineCandidate_ConvergesTowardTruth(t *testing.T) {
 	)
 
 	startV := verifyCostas(data.Samples, startFreq, startDT, stage1Score)
-	refFreq, refDT, refV := refineCandidate(data.Samples, startFreq, startDT, stage1Score)
+	// Use DefaultGates' RefinementDefault mode here: this test pins
+	// the pre-Session-96 GeoContrast-only convergence semantics.
+	refFreq, refDT, refV := refineCandidate(data.Samples, startFreq, startDT, stage1Score, DefaultGates)
 
 	// Refined position must be closer to truth on both axes.
 	startFreqErr := math.Abs(startFreq - trueFreq)

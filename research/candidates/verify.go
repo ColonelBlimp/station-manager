@@ -269,9 +269,30 @@ const (
 // already; refinement finds the same position and the (freq, dt)
 // returned are unchanged. For real captures (off-grid) the peak
 // shifts toward the actual transmitter frequency and timing.
-func refineCandidate(samples []float32, freq, dt, stage1Score float64) (float64, float64, CostasVerify) {
+//
+// **Gate-awareness (Session 96):** when `gates.RefinementMode` is
+// `RefinementGateAware`, a refined position only replaces the best
+// if it BOTH improves GeoContrast AND still passes `passesCostasGate`
+// at `gates`. Preserves the invariant that every returned candidate's
+// Verify passes the gate. The pre-refine (freq, dt) is the initial
+// best; if no gate-passing neighbour improves GeoContrast, the
+// initial position is returned. RefinementDefault preserves the
+// pre-Session-96 behaviour (GeoContrast-only). RefinementStrictDrop
+// is enforced at the Find caller (post-refinement filter), not here.
+func refineCandidate(samples []float32, freq, dt, stage1Score float64, gates Gates) (float64, float64, CostasVerify) {
 	bestFreq, bestDT := freq, dt
 	bestV := verifyCostas(samples, freq, dt, stage1Score)
+
+	gateAware := gates.RefinementMode == RefinementGateAware
+	accept := func(v *CostasVerify) bool {
+		if v.GeoContrast <= bestV.GeoContrast {
+			return false
+		}
+		if gateAware && !passesCostasGate(v, gates) {
+			return false
+		}
+		return true
+	}
 
 	// Coarse pass.
 	for dfi := -refineGridHalfSpan; dfi <= refineGridHalfSpan; dfi++ {
@@ -282,7 +303,7 @@ func refineCandidate(samples []float32, freq, dt, stage1Score float64) (float64,
 			f := freq + float64(dfi)*refineCoarseFreqStepHz
 			d := dt + float64(ddti)*refineCoarseDTStepSec
 			v := verifyCostas(samples, f, d, stage1Score)
-			if v.GeoContrast > bestV.GeoContrast {
+			if accept(&v) {
 				bestFreq, bestDT, bestV = f, d, v
 			}
 		}
@@ -298,7 +319,7 @@ func refineCandidate(samples []float32, freq, dt, stage1Score float64) (float64,
 			f := coarseFreq + float64(dfi)*refineFineFreqStepHz
 			d := coarseDT + float64(ddti)*refineFineDTStepSec
 			v := verifyCostas(samples, f, d, stage1Score)
-			if v.GeoContrast > bestV.GeoContrast {
+			if accept(&v) {
 				bestFreq, bestDT, bestV = f, d, v
 			}
 		}

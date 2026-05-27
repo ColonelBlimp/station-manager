@@ -108,6 +108,7 @@ func main() {
 	llrT1 := flag.Float64("llr-t1", 1.0, "ambiguous-winner threshold for -llr-soft. A row is pathological if (top1-top2)/noise < T1.")
 	llrT2 := flag.Float64("llr-t2", 2.0, "weak-row threshold for -llr-soft. A row is also pathological if top1/noise < T2.")
 	llrSoftClamp := flag.Float64("llr-soft-clamp", 5.0, "|LLR| ceiling applied to pathological rows by -llr-soft. Standard non-pathological clamp stays at ±20. Sweep candidates: {3, 5, 7, 10}.")
+	refineMode := flag.String("refinement", "default", "candidate-refinement mode in research/candidates.FindWithGates. One of: 'default' (GeoContrast-only; Session-96 measurement kept this as the production default after gate-aware showed config-dependent trade-offs), 'gate-aware' (only accept refined positions that still pass the categorical gate; preserves invariant but trades baseline matched for production-config matched), 'strict-drop' (current refinement, drop candidate if refined Verify fails gate; A/B only).")
 	verbose := flag.Bool("v", false, "print per-decode detail")
 	flag.Parse()
 
@@ -116,6 +117,18 @@ func main() {
 	}
 	if *llrSoft && *calibrateCostas {
 		log.Fatal("-llr-soft and -calibrate-costas are mutually exclusive in this first cut")
+	}
+
+	var refinementMode candidates.RefinementMode
+	switch *refineMode {
+	case "default":
+		refinementMode = candidates.RefinementDefault
+	case "gate-aware":
+		refinementMode = candidates.RefinementGateAware
+	case "strict-drop":
+		refinementMode = candidates.RefinementStrictDrop
+	default:
+		log.Fatalf("-refinement %q: must be one of default / gate-aware / strict-drop", *refineMode)
 	}
 
 	entries, err := os.ReadDir(*dir)
@@ -175,9 +188,9 @@ func main() {
 		fmt.Printf("=== %s ===\n", wav)
 		var newMatched, newExtra, lostMatched, subtracted int
 		if *iterations > 1 {
-			newMatched, newExtra, lostMatched, subtracted = probeWAVIterative(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, llrCfg, *iterations, *verbose)
+			newMatched, newExtra, lostMatched, subtracted = probeWAVIterative(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, llrCfg, refinementMode, *iterations, *verbose)
 		} else {
-			newMatched, newExtra, lostMatched, subtracted = probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, llrCfg, *verbose)
+			newMatched, newExtra, lostMatched, subtracted = probeWAV(wav, *rmsThresh, *topSubtract, *perSymbol, *perBlock, *coherentAdaptive, llrCfg, refinementMode, *verbose)
 		}
 		corpNewMatched += newMatched
 		corpNewExtra += newExtra
@@ -209,7 +222,7 @@ func main() {
 // builds the residual, runs the pass-2 decode, and classifies the
 // new/lost decodes against the truth manifest. Returns the four
 // corpus-aggregate counters.
-func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, llr llrConfig, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, llr llrConfig, refinementMode candidates.RefinementMode, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -222,8 +235,11 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 
 	manifest, _ := truth.Read(truth.PathFor(wavPath))
 
+	findGates := candidates.DefaultGates
+	findGates.RefinementMode = refinementMode
+
 	// Pass 1.
-	cands1 := candidates.Find(data.Samples)
+	cands1 := candidates.FindWithGates(data.Samples, findGates)
 	records1 := decodeAll(data.Samples, cands1, llr)
 	fmt.Printf("  pass 1: %d candidates → %d CRC-pass decodes\n", len(cands1), len(records1))
 
@@ -259,7 +275,7 @@ func probeWAV(wavPath string, rmsThresh float64, topSubtract int, perSymbol, per
 	}
 
 	// Pass 2 on residual.
-	cands2 := candidates.Find(residual)
+	cands2 := candidates.FindWithGates(residual, findGates)
 	records2 := decodeAll(residual, cands2, llr)
 	fmt.Printf("  pass 2: %d candidates → %d CRC-pass decodes\n", len(cands2), len(records2))
 
@@ -565,7 +581,7 @@ func dispatchSubtractIterative(audio []float32, d decoded, perSymbol, perBlock, 
 // Within-pass interleaving: as each candidate decodes successfully, it is
 // immediately subtracted from the residual so subsequent candidates in
 // the same pass see the cleaner version. The operator-proposed structure.
-func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, llr llrConfig, maxIter int, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
+func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSymbol, perBlock, coherentAdaptive bool, llr llrConfig, refinementMode candidates.RefinementMode, maxIter int, verbose bool) (newMatched, newExtra, lostMatched, subtracted int) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Printf("  read wav: %v — skipping", err)
@@ -577,9 +593,12 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 	}
 	manifest, _ := truth.Read(truth.PathFor(wavPath))
 
+	findGates := candidates.DefaultGates
+	findGates.RefinementMode = refinementMode
+
 	// Pass-1 baseline: decode without any subtraction. Used to classify
 	// new-vs-lost against the final iterative decoded set.
-	pass1Cands := candidates.Find(data.Samples)
+	pass1Cands := candidates.FindWithGates(data.Samples, findGates)
 	pass1Records := decodeAll(data.Samples, pass1Cands, llr)
 	fmt.Printf("  baseline pass 1: %d CRC-pass decodes\n", len(pass1Records))
 
@@ -613,7 +632,7 @@ func probeWAVIterative(wavPath string, rmsThresh float64, topSubtract int, perSy
 		}
 
 		// Find + decode on this residual.
-		cands := candidates.Find(residual)
+		cands := candidates.FindWithGates(residual, findGates)
 		records := decodeAll(residual, cands, llr)
 
 		// Identify and add new decodes; interleave-subtract as we go for

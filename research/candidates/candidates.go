@@ -185,9 +185,85 @@ type Gates struct {
 	// different question from gate relaxation. Set to 0 to use
 	// the package default (matches DefaultGates behaviour).
 	Stage2MaxResults int
+
+	// RefinementMode controls how refineCandidate interacts with the
+	// stage-2 categorical gate. Default behaviour preserved as the
+	// zero value (RefinementDefault).
+	//
+	// Background: the stage-2 gate filters candidates pre-refinement
+	// on WinsTotal + per-block wins. refineCandidate then optimises
+	// GeoContrast in a 3×3 + 3×3 grid around each survivor. Per the
+	// Session-96 measurement (`TestRefinementGate_DoesNotInvalidate`
+	// in refinement_gate_test.go), 54.6% of returned candidates have
+	// refined positions where the (newly recomputed) Verify no longer
+	// passes the gate — refinement drifts to higher-GeoContrast but
+	// lower-WinsTotal positions for marginal candidates.
+	//
+	// Three modes:
+	//   - RefinementDefault: GeoContrast-only optimisation; can drift
+	//     off-gate. Original Session-94 behaviour, kept for A/B.
+	//   - RefinementGateAware: refine only within positions that still
+	//     pass the gate; fall back to the pre-refine position if no
+	//     gate-passing neighbour improves GeoContrast. Preserves the
+	//     invariant that every returned candidate passes the gate.
+	//   - RefinementStrictDrop: current refinement, then drop candidates
+	//     whose refined Verify fails the gate. Filtering policy change,
+	//     not just an invariant repair.
+	RefinementMode RefinementMode
+}
+
+// RefinementMode is the enum for Gates.RefinementMode. See the field's
+// doc-comment for the per-mode semantics and Session-96 measurement
+// context.
+type RefinementMode int
+
+const (
+	// RefinementDefault is the original GeoContrast-only refinement
+	// (zero value, no change in default behaviour).
+	RefinementDefault RefinementMode = iota
+	// RefinementGateAware refines only within gate-passing positions.
+	RefinementGateAware
+	// RefinementStrictDrop drops candidates whose refined Verify fails the gate.
+	RefinementStrictDrop
+)
+
+// passesCostasGate reports whether `v` satisfies the categorical gate
+// at `gates` (WinsTotal floor + per-block wins floor with accessible-
+// block exemption). Extracted from FindWithGates 2026-05-26 so the
+// pre- and post-refinement gate-check paths cannot drift apart.
+//
+// The accessible-block exemption (per-block floor applies only to
+// blocks where at least one anchor was accessible) is load-bearing
+// for slot-edge candidates and must not be omitted.
+func passesCostasGate(v *CostasVerify, gates Gates) bool {
+	if v == nil {
+		return false
+	}
+	if v.WinsTotal < gates.SanityWinsTotal {
+		return false
+	}
+	for b := 0; b < numCostasBlocks; b++ {
+		if v.AccessibleBlock[b] == 0 {
+			continue
+		}
+		if v.WinsBlock[b] < gates.SanityWinsPerBlock {
+			return false
+		}
+	}
+	return true
 }
 
 // DefaultGates mirrors the production gate values. Find() uses this.
+//
+// Session 96 (2026-05-26): RefinementMode kept at RefinementDefault
+// (zero value, GeoContrast-only refinement) after operator-directed
+// A/B sweep. RefinementGateAware was prototyped and measured: +1
+// matched / +3 extras at the production config (2-iter coherent-
+// adaptive + LLR-softening) but -1 matched / -1 extras at the bare
+// decode-eval baseline. Net trade-off config-dependent; the
+// empirically-cleaner default was kept. RefinementGateAware and
+// RefinementStrictDrop are exposed as A/B options via the gates
+// field for future measurement runs.
 var DefaultGates = Gates{
 	Stage1Threshold:    stage1ScoreThreshold,
 	SanityWinsTotal:    sanityWinsTotal,
@@ -314,24 +390,7 @@ func FindWithGates(samples []float32, gates Gates) []Candidate {
 		// Categorical gate only. Pattern-incoherent junk gets cut
 		// here; GeoContrast steers the ranking (sort key below)
 		// rather than acting as a hard floor.
-		if v.WinsTotal < gates.SanityWinsTotal {
-			continue
-		}
-		blockOk := true
-		for b := 0; b < numCostasBlocks; b++ {
-			// Per-block win floor applies only to blocks where at
-			// least one anchor was accessible — partial-coverage
-			// candidates near the slot edges legitimately have
-			// fully-empty blocks, and shouldn't be rejected for that.
-			if v.AccessibleBlock[b] == 0 {
-				continue
-			}
-			if v.WinsBlock[b] < gates.SanityWinsPerBlock {
-				blockOk = false
-				break
-			}
-		}
-		if !blockOk {
+		if !passesCostasGate(&v, gates) {
 			continue
 		}
 		vCopy := v
@@ -434,7 +493,19 @@ func FindWithGates(samples []float32, gates Gates) []Candidate {
 		}
 		initialFreq := float64(c.centreBin) * df
 		initialDT := float64(c.rawDtSteps)*tstep + dtPhysicalOffsetSec
-		refFreq, refDT, refV := refineCandidate(samples, initialFreq, initialDT, c.score)
+		refFreq, refDT, refV := refineCandidate(samples, initialFreq, initialDT, c.score, gates)
+
+		// RefinementStrictDrop policy: post-refinement gate filter.
+		// If the refined Verify no longer satisfies the gate that
+		// admitted this candidate pre-refinement, drop it entirely.
+		// Distinct from RefinementGateAware (which keeps the candidate
+		// but rolls back to the gate-passing initial position when no
+		// refined neighbour improves under gate). Per Session-96
+		// 2026-05-26 design discussion.
+		if gates.RefinementMode == RefinementStrictDrop && !passesCostasGate(&refV, gates) {
+			continue
+		}
+
 		refVCopy := refV
 		out = append(out, Candidate{
 			Freq:   refFreq,
