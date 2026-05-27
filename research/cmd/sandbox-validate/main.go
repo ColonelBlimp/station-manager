@@ -344,6 +344,13 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 	decodedText := make([]string, len(cands))
 	roundTripOK := make([]bool, len(cands))
 	toneMatchOK := make([]bool, len(cands))
+	snrMetrics := make([]sandbox.SNRMetrics, len(cands))
+	// SNR measurement uses a narrower extraction than refinement:
+	// 100 Hz isolates the 8 FT8 tones (which span 50 Hz starting at
+	// tone 0) and excludes any signal 100 Hz away — important on
+	// dense fixtures like 10cq where adjacent signals at ±100 Hz
+	// would otherwise leak into the residual and floor the SNR.
+	const snrBandwidthHz = 100.0
 	for i, br := range bpResults {
 		if !br.OK {
 			continue
@@ -374,11 +381,37 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 		if err == nil {
 			toneMatchOK[i] = countToneMismatches(reTones, grid) == 0
 		}
+
+		// M2: synthesize the clean reference, channelize the audio at
+		// the refined freq using the SNR-specific narrower bandwidth,
+		// slice the symbol-aligned window, fit / subtract / SNR.
+		//
+		// Centering the slice at the candidate's freq puts tone 0 at
+		// baseband DC; the 8 FT8 tones occupy baseband [0, +43.75].
+		// A 100 Hz slice covers [−50, +50] — fully captures the tones
+		// and excludes ±100 Hz neighbours (relevant on dense fixtures).
+		ref := sandbox.SynthesizeBaseband(reTones, snrBandwidthHz)
+		bb, err := ch.Extract(refined[i].FreqHz, snrBandwidthHz)
+		if err != nil {
+			continue
+		}
+		startSample := int(math.Round((refined[i].DtSec + 0.5) * snrBandwidthHz))
+		endSample := startSample + len(ref)
+		if startSample < 0 || endSample > len(bb) {
+			continue
+		}
+		// Per-symbol fit absorbs accumulated phase drift across the
+		// 12.6-second slot — a single complex scale would be killed
+		// by even a 0.05 Hz freq residual (>180° over the slot).
+		samplesPerSymbol := int(math.Round(snrBandwidthHz * 0.16))
+		snrMetrics[i] = sandbox.MeasureSNRPerSymbol(
+			bb[startSample:endSample], ref, samplesPerSymbol, snrBandwidthHz,
+		)
 	}
 
 	// Truth-vs-detection table.
-	fmt.Printf("  %-30s  %-10s  %-9s  %-8s  %-7s  %-14s  %s\n",
-		"truth signal", "refined Hz", "sync", "nsync/21", "BP iter", "BP result", "decoded text")
+	fmt.Printf("  %-30s  %-10s  %-8s  %-7s  %-14s  %-8s  %s\n",
+		"truth signal", "refined Hz", "nsync/21", "BP iter", "BP result", "SNR(dB)", "decoded text")
 	hits, missed := 0, 0
 	usedCoarse := make([]bool, len(cands))
 	for _, sig := range manifest.Signals {
@@ -395,7 +428,7 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 			}
 		}
 		if best < 0 {
-			fmt.Printf("  %-30s  %-10s  %-9s  %-8s  %-7s  %-14s  MISS\n",
+			fmt.Printf("  %-30s  %-10s  %-8s  %-7s  %-14s  %-8s  MISS\n",
 				sig.Text, "—", "—", "—", "—", "—")
 			missed++
 			continue
@@ -415,8 +448,12 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 				match = "✗ MISMATCH"
 			}
 		}
-		fmt.Printf("  %-30s  %9.2f   %9.2e   %4d/21   %4d    %-14s  %s %s\n",
-			sig.Text, r.FreqHz, r.Sync, nsyncs[best], bpr.Iterations, bpStatus, text, match)
+		snrStr := "—"
+		if bpr.OK {
+			snrStr = fmt.Sprintf("%+6.1f", snrMetrics[best].SNR2500DB)
+		}
+		fmt.Printf("  %-30s  %9.2f   %4d/21   %4d    %-14s  %-8s  %s %s\n",
+			sig.Text, r.FreqHz, nsyncs[best], bpr.Iterations, bpStatus, snrStr, text, match)
 		hits++
 	}
 
