@@ -21,10 +21,16 @@
 //	go run ./research/cmd/sandbox-validate -wav research/10cq_clean.wav
 //	go run ./research/cmd/sandbox-validate -wav research/10cq_clean.wav -bw 200
 //	go run ./research/cmd/sandbox-validate -wav research/10cq_clean.wav -peaks
+//	go run ./research/cmd/sandbox-validate -wav research/10cq_clean.wav -scan
 //
 // -peaks prints the top 10 baseband FFT bins per signal for visual
 // inspection of the 8-FSK tone pattern (tones live at multiples of
 // 6.25 Hz = 100 baseband-FFT bins).
+//
+// -scan instead exercises the full candidate-finder pipeline:
+// spectrogram → coarse FindCandidates → RefineCandidate per coarse
+// hit. Scores detections against the truth manifest and shows the
+// coarse-to-refined drift on each axis.
 //
 // Import rules: research code may use internal/audio + research/*
 // (and stdlib) but MUST NOT import internal/ft8/* — sandbox work is
@@ -63,6 +69,9 @@ func main() {
 	bandwidthHz := flag.Float64("bw", 200.0, "channelizer bandwidth in Hz")
 	emptyHz := flag.Float64("empty", 2500.0, "control frequency where no signal is expected")
 	showPeaks := flag.Bool("peaks", false, "print top-10 baseband FFT bins per signal")
+	scan := flag.Bool("scan", false, "run FindCandidates + RefineCandidate instead of per-truth probing")
+	threshold := flag.Float64("thresh", 3.0, "FindCandidates score threshold (scan mode)")
+	dfsweep := flag.Float64("dfsweep", 0, "override RefineOptions.DFSweepRangeHz (Hz); 0 = default")
 	flag.Parse()
 
 	data, err := audio.ReadWAV(*wavPath)
@@ -98,6 +107,11 @@ func main() {
 
 	if err := ch.Prepare(data.Samples); err != nil {
 		log.Fatalf("prepare: %v", err)
+	}
+
+	if *scan {
+		runScan(ch, data.Samples, manifest, *threshold, *dfsweep)
+		return
 	}
 
 	// One ComplexPlan for the per-signal baseband-FFT, sized to the
@@ -253,4 +267,113 @@ func printTopBins(work []complex128, binHzBB float64, topN int) {
 		}
 		fmt.Printf("        bin %4d  %+7.2f Hz  mag=%.2e%s\n", p.bin, hz, p.mag, toneTag)
 	}
+}
+
+// runScan runs the full sandbox candidate-detection pipeline on the
+// supplied audio: spectrogram → FindCandidates → RefineCandidate per
+// coarse hit. Matches every coarse and refined candidate against the
+// truth manifest and prints a per-signal table showing the drift the
+// refinement step applied.
+//
+// Match tolerances: coarse ±5 Hz / ±0.1 s (loose enough to absorb the
+// 3.125 Hz × 40 ms grid snapping); refined ±1 Hz / ±0.05 s (tight
+// enough that the refinement step has to actually improve over coarse
+// to count).
+func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifest, threshold, dfsweepOverride float64) {
+	const (
+		coarseFreqTol  = 5.0
+		coarseDtTol    = 0.1
+		refinedFreqTol = 1.0
+		refinedDtTol   = 0.05
+	)
+
+	spec := sandbox.Spectrogram(samples)
+	if spec == nil {
+		log.Fatal("spectrogram returned no frames")
+	}
+	fmt.Printf("  spectrogram: %d frames × %d bins\n", len(spec), len(spec[0]))
+
+	findOpts := sandbox.DefaultSearchOptions()
+	findOpts.Threshold = threshold
+	cands := sandbox.FindCandidates(spec, findOpts)
+	fmt.Printf("  coarse candidates (thresh=%.2f): %d\n", threshold, len(cands))
+	for i, c := range cands {
+		if i >= 15 {
+			fmt.Printf("    ... %d more\n", len(cands)-15)
+			break
+		}
+		fmt.Printf("    %2d. freq=%8.2f Hz  dt=%+.3f s  sync=%.2f\n", i+1, c.FreqHz, c.DtSec, c.Sync)
+	}
+	fmt.Println()
+
+	refineOpts := sandbox.DefaultRefineOptions()
+	if dfsweepOverride > 0 {
+		refineOpts.DFSweepRangeHz = dfsweepOverride
+	}
+	fmt.Printf("  refine: df sweep ±%.2f Hz step %.2f Hz\n\n", refineOpts.DFSweepRangeHz, refineOpts.DFSweepStepHz)
+	refined := make([]sandbox.Candidate, len(cands))
+	for i, c := range cands {
+		r, err := sandbox.RefineCandidate(ch, c, refineOpts)
+		if err != nil {
+			log.Printf("    refine failed @ coarse=%.2f Hz / %.3f s: %v", c.FreqHz, c.DtSec, err)
+			refined[i] = c
+			continue
+		}
+		refined[i] = r
+	}
+
+	// Truth-vs-detection table.
+	fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-10s\n",
+		"truth signal", "coarse Hz", "refined Hz", "Δf Hz", "Δdt s", "sync")
+	hits, missed := 0, 0
+	usedCoarse := make([]bool, len(cands))
+	for _, sig := range manifest.Signals {
+		best := -1
+		for i, r := range refined {
+			if usedCoarse[i] {
+				continue
+			}
+			if absF(r.CoarseFreqHz-sig.FreqHz) <= coarseFreqTol &&
+				absF(r.CoarseDtSec-sig.DTSec) <= coarseDtTol {
+				if best < 0 || r.Sync > refined[best].Sync {
+					best = i
+				}
+			}
+		}
+		if best < 0 {
+			fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-10s  MISS\n",
+				sig.Text, "—", "—", "—", "—", "—")
+			missed++
+			continue
+		}
+		r := refined[best]
+		usedCoarse[best] = true
+		df := r.FreqHz - sig.FreqHz
+		ddt := r.DtSec - sig.DTSec
+		verdict := "OK"
+		if absF(df) > refinedFreqTol || absF(ddt) > refinedDtTol {
+			verdict = "drift"
+		}
+		fmt.Printf("  %-30s  %9.2f   %9.2f   %+8.3f   %+8.4f   %9.2e   %s\n",
+			sig.Text, r.CoarseFreqHz, r.FreqHz, df, ddt, r.Sync, verdict)
+		hits++
+	}
+
+	// Unmatched detections (spurious).
+	spurious := 0
+	for i, used := range usedCoarse {
+		if used {
+			continue
+		}
+		spurious++
+		_ = i
+	}
+	fmt.Printf("\n  truth: %d matched, %d missed, %d spurious\n", hits, missed, spurious)
+}
+
+func absF(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
