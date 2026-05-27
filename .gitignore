@@ -37,3 +37,6 @@ config.json
 /decode-eval
 /sweep-gates
 /synth-subtract-probe
+/decoded.txt
+/jt9_wisdom.dat
+/timer.out
