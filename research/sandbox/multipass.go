@@ -62,10 +62,17 @@ type MultiPassOptions struct {
 	// a customised BPOptions when tuning OSD AcceptDistanceRatio,
 	// MaxIterations, etc.
 	BP BPOptions
+
+	// Search is the candidate-scanner tuning. Defaults from
+	// DefaultSearchOptions; bump MaxResults to surface low-score
+	// truth candidates that would otherwise be capped out by the
+	// default top-50.
+	Search SearchOptions
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
-// ±5 Hz × ±0.5 s merge window, default quality gate, default BP+OSD.
+// ±5 Hz × ±0.5 s merge window, default quality gate, default BP+OSD,
+// default candidate scanner.
 func DefaultMultiPassOptions() MultiPassOptions {
 	return MultiPassOptions{
 		MaxPasses:   2,
@@ -74,6 +81,7 @@ func DefaultMultiPassOptions() MultiPassOptions {
 		AudioRate:   audioRateHz,
 		Gate:        DefaultAcceptDecodeOptions(),
 		BP:          DefaultBPOptions(),
+		Search:      DefaultSearchOptions(),
 	}
 }
 
@@ -127,7 +135,10 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 	if bpOpts.MaxIterations == 0 {
 		bpOpts = DefaultBPOptions()
 	}
-	findOpts := DefaultSearchOptions()
+	findOpts := opts.Search
+	if findOpts.MaxResults == 0 {
+		findOpts = DefaultSearchOptions()
+	}
 
 	var accepted []DecodeRecord
 	for pass := 1; pass <= opts.MaxPasses; pass++ {

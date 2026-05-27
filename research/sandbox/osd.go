@@ -35,6 +35,14 @@ type OSDOptions struct {
 	// synthetic fixtures but also rejects marginal real-capture
 	// recoveries. 0.0 falls back to the legacy const (0.05).
 	AcceptDistanceRatio float64
+
+	// MaxCandidates caps the total number of candidates OSD will
+	// evaluate. 0 means unlimited (full order enumeration). Useful
+	// for keeping order-3 runtime bounded — full order-3 is ~125k
+	// candidates vs order-2's ~4k. Candidates are explored in
+	// "least-reliable-bit-first" order within each successive order,
+	// so a cap evaluates the most-likely-to-succeed patterns first.
+	MaxCandidates int
 }
 
 // DefaultOSDOptions returns the baseline: OSD enabled at order 2,
@@ -70,7 +78,15 @@ func DefaultOSDOptions() OSDOptions {
 //     · If CRC passes, compute soft distance Σ |LLR_v| · [cw_v ≠
 //     hard(LLR_v)] and track minimum.
 //  5. Return minimum-soft-distance CRC-valid candidate.
-func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64) (cw [LDPCCodewordBits]uint8, ok bool, dmin float64) {
+//
+// Enumeration order within each OSD order: least-reliable-bit first.
+// MRB is sorted descending by |LLR|, so MRB[90] is the least reliable
+// info bit and most likely to be wrong. Order-1 iterates i from 90 to
+// 0; order-2 iterates the second index j from i-1 to 0; order-3 a
+// further nested k from j-1 to 0. With a candidate cap, this
+// exploration order maximises the chance of finding the right
+// codeword within the budget.
+func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64, maxCands int) (cw [LDPCCodewordBits]uint8, ok bool, dmin float64) {
 	if acceptRatio <= 0 {
 		acceptRatio = osdAcceptDistanceRatio
 	}
@@ -229,9 +245,18 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64) (cw 
 	var bestCW [LDPCCodewordBits]uint8
 	found := false
 
+	attempts := 0
+	budgetReached := func() bool {
+		if maxCands <= 0 {
+			return false
+		}
+		return attempts >= maxCands
+	}
+
 	// trial evaluates a flip pattern given the resulting (info, parity)
 	// in permuted coords. Checks CRC; if valid, updates bestCW/bestDist.
 	trial := func(info, parity []uint8) {
+		attempts++
 		// De-permute to natural order to check CRC and compute distance.
 		var cw [LDPCCodewordBits]uint8
 		for i, p := range perm {
@@ -263,39 +288,90 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64) (cw 
 	// Order 0: the un-flipped hard decision.
 	trial(info0, parity0)
 
-	// Order 1: flip one MRB bit at a time. Incremental parity update.
+	// Reusable per-trial buffers. Allocating outside the loops avoids
+	// per-attempt GC pressure on the order-3 path.
+	infoN := make([]uint8, LDPCInfoBits)
+	parity1 := make([]uint8, LDPCParityRows)
+	parity2 := make([]uint8, LDPCParityRows)
+	parity3 := make([]uint8, LDPCParityRows)
+
+	// Order 1: flip one MRB bit. Iterate i from least-reliable (90)
+	// down to most-reliable (0) so the most-promising flips happen
+	// first under a candidate cap.
 	if order >= 1 {
-		info1 := make([]uint8, LDPCInfoBits)
-		parity1 := make([]uint8, LDPCParityRows)
-		for i := 0; i < LDPCInfoBits; i++ {
-			copy(info1, info0)
-			info1[i] ^= 1
+	order1:
+		for i := LDPCInfoBits - 1; i >= 0; i-- {
+			if budgetReached() {
+				break order1
+			}
+			copy(infoN, info0)
+			infoN[i] ^= 1
 			for r := 0; r < LDPCParityRows; r++ {
 				parity1[r] = parity0[r] ^ Acol[i][r]
 			}
-			trial(info1, parity1)
+			trial(infoN, parity1)
 		}
 	}
 
-	// Order 2: flip two MRB bits. Incremental: starting from order-1
-	// state for first flip i, flipping a second bit j XORs Acol[j] in.
+	// Order 2: flip two MRB bits. Outer i from 90 down; inner j from
+	// i-1 down so triples (i, j) with high i+j (= least reliable
+	// pair) are evaluated first.
 	if order >= 2 {
-		info2 := make([]uint8, LDPCInfoBits)
-		parity1 := make([]uint8, LDPCParityRows)
-		parity2 := make([]uint8, LDPCParityRows)
-		for i := 0; i < LDPCInfoBits; i++ {
-			// Build parity1 for first flip i.
+	order2:
+		for i := LDPCInfoBits - 1; i >= 1; i-- {
+			if budgetReached() {
+				break order2
+			}
 			for r := 0; r < LDPCParityRows; r++ {
 				parity1[r] = parity0[r] ^ Acol[i][r]
 			}
-			for j := i + 1; j < LDPCInfoBits; j++ {
-				copy(info2, info0)
-				info2[i] ^= 1
-				info2[j] ^= 1
+			for j := i - 1; j >= 0; j-- {
+				if budgetReached() {
+					break order2
+				}
+				copy(infoN, info0)
+				infoN[i] ^= 1
+				infoN[j] ^= 1
 				for r := 0; r < LDPCParityRows; r++ {
 					parity2[r] = parity1[r] ^ Acol[j][r]
 				}
-				trial(info2, parity2)
+				trial(infoN, parity2)
+			}
+		}
+	}
+
+	// Order 3: flip three MRB bits. 125k candidates at order 3 only;
+	// total order-3-and-below = ~125k. Per-candidate cost is roughly
+	// the same as order-2 with incremental parity update.
+	if order >= 3 {
+	order3:
+		for i := LDPCInfoBits - 1; i >= 2; i-- {
+			if budgetReached() {
+				break order3
+			}
+			for r := 0; r < LDPCParityRows; r++ {
+				parity1[r] = parity0[r] ^ Acol[i][r]
+			}
+			for j := i - 1; j >= 1; j-- {
+				if budgetReached() {
+					break order3
+				}
+				for r := 0; r < LDPCParityRows; r++ {
+					parity2[r] = parity1[r] ^ Acol[j][r]
+				}
+				for k := j - 1; k >= 0; k-- {
+					if budgetReached() {
+						break order3
+					}
+					copy(infoN, info0)
+					infoN[i] ^= 1
+					infoN[j] ^= 1
+					infoN[k] ^= 1
+					for r := 0; r < LDPCParityRows; r++ {
+						parity3[r] = parity2[r] ^ Acol[k][r]
+					}
+					trial(infoN, parity3)
+				}
 			}
 		}
 	}

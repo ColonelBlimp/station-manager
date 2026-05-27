@@ -117,13 +117,25 @@ type SearchOptions struct {
 // (one full symbol width minus an epsilon — wider than the worst-case
 // mainlobe-leakage ±2-frame twin, narrower than the symbol duration
 // so distinct co-channel transmissions don't merge).
+//
+// MaxResults = 200: calibrated against the real-capture corpus
+// (captures/{20m,live}_slot*.wav, 144 jt9-truth signals) via the
+// coverage diagnostic. The original 50 was tuned on synthetic 10cq
+// fixtures with 10 truth signals; on real captures with 20-30 active
+// stations + noise peaks, the top-50 was dominated by spurious matched-
+// filter peaks and weak real signals got capped out (79.9% of misses
+// were "candidate exists but rank > MaxResults"). Bumping to 200 lifts
+// recall from 42/144 → 72/144 with stable ~75% precision and ~4.7s
+// per-slot wall time (under the 15s budget with comfortable margin).
+// 500 is available as an opt-in "deep search" for offline analysis;
+// not enabled by default at 10s/slot.
 func DefaultSearchOptions() SearchOptions {
 	return SearchOptions{
 		MinFreqHz:  100,
 		MaxFreqHz:  3000,
 		MaxDTSec:   2.0,
 		Threshold:  3.0,
-		MaxResults: 50,
+		MaxResults: 200,
 		NMSFreqHz:  12.5,
 		NMSDTSec:   0.12,
 	}
@@ -172,23 +184,23 @@ func FindCandidates(spec [][]float64, opts SearchOptions) []Candidate {
 		return nil
 	}
 
-	// Global median noise estimate. Sampling every 19th cell over the
-	// whole spectrogram keeps the cost negligible (~37k samples for a
-	// 372×1920 spec) while giving a stable estimate. The stride 19 is
-	// coprime with nfft/2 = 1920 so it doesn't alias to a regular
-	// frequency grid.
-	median := estimateMedianPower(spec, 19)
-	if median <= 0 {
-		// Pathological: completely silent spectrogram. Skip rather than
-		// divide by zero — there are no candidates to find.
-		return nil
-	}
-	normFactor := float64(len(costasBlockStarts)*len(costasArray)) * median
+	// Per-frequency-bin column medians: median over time of each
+	// freq bin's power. Used as the basis for local-window noise
+	// estimation at each candidate's freq. Builds once per slot;
+	// per-candidate cost is then O(window) median lookup.
+	//
+	// Local noise (rather than global median) prevents weak signals
+	// in crowded sub-bands from being depressed by neighbours: each
+	// candidate's score is normalised against its own freq region's
+	// noise floor, not a global mean elevated by every signal in the
+	// spectrogram.
+	colMedian := estimateColumnMedians(spec)
 
 	// Score every (freqBin, dtFrame) in the search window. We allocate
 	// up-front rather than streaming because we need a global sort for
 	// NMS — the time savings of streaming are not worth the bookkeeping.
 	var raw []Candidate
+	const localWindowBins = 10 // ±31.25 Hz window for local noise
 	for dtFrame := 0; dtFrame <= maxDTFrame; dtFrame++ {
 		for freqBin := minBin; freqBin <= maxBin; freqBin++ {
 			sum := 0.0
@@ -199,6 +211,11 @@ func FindCandidates(spec [][]float64, opts SearchOptions) []Candidate {
 					sum += spec[symFrame][toneBin]
 				}
 			}
+			localNoise := estimateLocalNoise(colMedian, freqBin, localWindowBins)
+			if localNoise <= 0 {
+				continue
+			}
+			normFactor := float64(len(costasBlockStarts)*len(costasArray)) * localNoise
 			score := sum / normFactor
 			if score >= opts.Threshold {
 				freqHz := float64(freqBin) * fs / nfft
@@ -248,9 +265,76 @@ func applyOptionDefaults(opts SearchOptions) SearchOptions {
 	return opts
 }
 
+// estimateColumnMedians returns one value per spectrogram frequency
+// bin: the median over time of that bin's power. Cost is O(halfFFT ×
+// nFrames × log(nFrames)) — ~7M ops for a typical 1920×372 spec, well
+// under 100 ms.
+//
+// Used by estimateLocalNoise to feed per-candidate local noise
+// estimates that don't include the candidate's own signal energy.
+func estimateColumnMedians(spec [][]float64) []float64 {
+	if len(spec) == 0 {
+		return nil
+	}
+	halfFFT := len(spec[0])
+	out := make([]float64, halfFFT)
+	col := make([]float64, len(spec))
+	for f := 0; f < halfFFT; f++ {
+		for t := 0; t < len(spec); t++ {
+			col[t] = spec[t][f]
+		}
+		sort.Float64s(col)
+		out[f] = col[len(col)/2]
+	}
+	return out
+}
+
+// estimateLocalNoise computes the local noise floor at a candidate's
+// freqBin: median of colMedian within ±windowBins, excluding the
+// candidate's own Costas-tone bins (offsets 0, 2, 4, 6, 8, 10, 12, 14
+// relative to freqBin — the 8 FT8 tones).
+//
+// Returns a value useful as the denominator in the Costas matched-
+// filter score. Median-of-medians is robust to other signals leaking
+// into the window — at worst, one or two nearby signals shift the
+// median by a small amount; the bulk of the window's median values
+// still reflect the local noise floor.
+func estimateLocalNoise(colMedian []float64, freqBin, windowBins int) float64 {
+	halfFFT := len(colMedian)
+	lo := freqBin - windowBins
+	if lo < 0 {
+		lo = 0
+	}
+	hi := freqBin + windowBins
+	if hi >= halfFFT {
+		hi = halfFFT - 1
+	}
+	// Exclude the candidate's own 8 Costas tone bins (offsets
+	// 0, 2, 4, 6, 8, 10, 12, 14 from freqBin).
+	vals := make([]float64, 0, hi-lo+1)
+	for f := lo; f <= hi; f++ {
+		isToneBin := false
+		off := f - freqBin
+		if off >= 0 && off <= 14 && off%2 == 0 {
+			isToneBin = true
+		}
+		if !isToneBin {
+			vals = append(vals, colMedian[f])
+		}
+	}
+	if len(vals) == 0 {
+		return 0
+	}
+	sort.Float64s(vals)
+	return vals[len(vals)/2]
+}
+
 // estimateMedianPower returns the median of every stride-th power
 // sample across the whole spectrogram. Stride is coprime with the
 // bin count to avoid systematic sampling bias.
+//
+// Retained for compatibility/fallback; FindCandidates now uses
+// estimateLocalNoise for per-candidate scoring.
 func estimateMedianPower(spec [][]float64, stride int) float64 {
 	if stride < 1 {
 		stride = 1

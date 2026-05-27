@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/research/sandbox"
@@ -79,6 +80,10 @@ func main() {
 	dir := flag.String("dir", "captures", "directory of real-capture WAVs with truth manifests")
 	singlePass := flag.Bool("single", false, "use single-pass instead of multi-pass")
 	sweep := flag.Bool("sweep", false, "OSD gate sweep across the grid (multi-pass only)")
+	osd3sweep := flag.Bool("osd3-sweep", false, "OSD order+budget sweep on real captures")
+	coverage := flag.Bool("coverage", false, "candidate-coverage diagnostic: bucket each truth signal by why it was missed (single-pass only)")
+	coverageMP := flag.Bool("coverage-mp", false, "multi-pass coverage with per-failed-candidate decoder diagnostics")
+	maxResultsSweep := flag.Bool("maxresults-sweep", false, "sweep SearchOptions.MaxResults to test the bucket-B hypothesis")
 	flag.Parse()
 
 	wavs, err := listWAVs(*dir)
@@ -91,6 +96,22 @@ func main() {
 
 	if *sweep {
 		runSweep(wavs, *dir)
+		return
+	}
+	if *osd3sweep {
+		runOSD3Sweep(wavs)
+		return
+	}
+	if *coverage {
+		runCoverage(wavs)
+		return
+	}
+	if *coverageMP {
+		runCoverageMultiPass(wavs)
+		return
+	}
+	if *maxResultsSweep {
+		runMaxResultsSweep(wavs)
 		return
 	}
 
@@ -457,4 +478,1053 @@ func looksLikeType4(text string) bool {
 		}
 	}
 	return false
+}
+
+// runOSD3Sweep evaluates OSD order+budget configurations on the real-
+// capture corpus. Holds gate at defaults; varies only OSD.Order and
+// OSD.MaxCandidates. Reports matched / extras / OSD count / wall time
+// per config so the operator can decide whether to ship OSD-3 (and
+// at what budget) as the real-capture default.
+func runOSD3Sweep(wavs []string) {
+	type sweepCfg struct {
+		Order int
+		Cap   int // 0 = unlimited
+		Label string
+	}
+	cfgs := []sweepCfg{
+		{2, 0, "order=2 (current baseline)"},
+		{3, 5000, "order=3, cap=5k"},
+		{3, 10000, "order=3, cap=10k"},
+		{3, 25000, "order=3, cap=25k"},
+		{3, 50000, "order=3, cap=50k"},
+		{3, 0, "order=3, no cap (~125k)"},
+	}
+
+	type sweepResult struct {
+		Cfg          sweepCfg
+		Matched      int
+		Extras       int
+		BPCount      int
+		OSDCount     int
+		Pass1, Pass2 int
+		TotalTruth   int
+		WallTime     time.Duration
+	}
+
+	fmt.Printf("=== OSD order/budget sweep: %d configs × %d captures ===\n\n",
+		len(cfgs), len(wavs))
+	var results []sweepResult
+	for i, cfg := range cfgs {
+		opts := sandbox.DefaultMultiPassOptions()
+		opts.BP.OSD.Order = cfg.Order
+		opts.BP.OSD.MaxCandidates = cfg.Cap
+
+		ht := sandbox.NewCallsignHashTable()
+		var agg sweepResult
+		agg.Cfg = cfg
+		start := time.Now()
+		for _, w := range wavs {
+			r := processCapture(w, opts, ht)
+			agg.Matched += r.Matched
+			agg.Extras += r.Extra
+			agg.BPCount += r.BPCount
+			agg.OSDCount += r.OSDCount
+			agg.Pass1 += r.Pass1
+			agg.Pass2 += r.Pass2
+			agg.TotalTruth += r.Truth
+		}
+		agg.WallTime = time.Since(start)
+		results = append(results, agg)
+		fmt.Printf("  [%d/%d] %-30s  matched=%d extras=%d OSD=%d  %.2fs\n",
+			i+1, len(cfgs), cfg.Label,
+			agg.Matched, agg.Extras, agg.OSDCount, agg.WallTime.Seconds())
+	}
+
+	// Final summary table.
+	fmt.Printf("\n=== Summary ===\n")
+	fmt.Printf("%-30s  %-8s %-6s %-7s %-7s %-7s %-8s\n",
+		"config", "matched", "FP", "BP", "OSD", "Pass2", "wall")
+	fmt.Println(strings.Repeat("-", 80))
+	for _, r := range results {
+		fmt.Printf("%-30s  %3d/%-3d  %4d  %4d   %4d    %4d    %5.2fs\n",
+			r.Cfg.Label, r.Matched, r.TotalTruth, r.Extras,
+			r.BPCount, r.OSDCount, r.Pass2, r.WallTime.Seconds())
+	}
+
+	// Decision summary.
+	base := results[0]
+	fmt.Printf("\n=== Decision criteria (vs %s) ===\n", base.Cfg.Label)
+	for _, r := range results[1:] {
+		dMatched := r.Matched - base.Matched
+		dExtras := r.Extras - base.Extras
+		dWall := r.WallTime - base.WallTime
+		perSlot := r.WallTime.Seconds() / float64(len(wavs))
+		fmt.Printf("  %-30s  Δmatched=%+d  Δextras=%+d  Δwall=%+.1fs  per-slot=%.2fs%s\n",
+			r.Cfg.Label, dMatched, dExtras, dWall.Seconds(), perSlot,
+			budgetTag(perSlot))
+	}
+}
+
+// budgetTag flags configs that exceed the 15-second per-slot budget.
+func budgetTag(perSlot float64) string {
+	if perSlot >= 15.0 {
+		return "  ⚠ exceeds 15s slot budget"
+	}
+	if perSlot >= 10.0 {
+		return "  (tight: > 10s per slot)"
+	}
+	return ""
+}
+
+// candidateFate records what happened to one coarse candidate across
+// the decode pipeline. Used by the coverage diagnostic to classify
+// each truth signal into a bucket explaining why we missed it.
+type candidateFate struct {
+	Rank         int     // 1-indexed position in the pre-NMS sorted list
+	FreqHz       float64 // refined freq if decoded, else coarse
+	DtSec        float64 // refined dt if decoded, else coarse
+	Sync         float64
+	InTopN       bool // rank ≤ defaultMaxResults
+	SurvivedNMS  bool // appeared in the default-NMS post list
+	BPDecoded    bool // BP+CRC succeeded (regardless of method)
+	GateOK       bool // accepted by AcceptDecode
+	DecodeMethod string
+	Text         string // unpacked text on successful decode; empty otherwise
+}
+
+// truthBucket tags one truth signal by the reason it was missed (or
+// MATCHED). See runCoverage for the bucket definitions.
+type truthBucket int
+
+const (
+	bucketMATCHED truthBucket = iota
+	bucketA1                  // no candidate within LOOSE
+	bucketA2                  // candidate within LOOSE but not NORMAL
+	bucketB                   // candidate within NORMAL but pre-NMS rank > MaxResults
+	bucketC                   // candidate within NORMAL and in top-N, but killed by NMS
+	bucketD                   // candidate survived NMS but BP+OSD failed
+	bucketE                   // BP-OK but gate rejected
+)
+
+func (b truthBucket) String() string {
+	switch b {
+	case bucketMATCHED:
+		return "MATCHED"
+	case bucketA1:
+		return "A1 (no cand near truth)"
+	case bucketA2:
+		return "A2 (cand only at loose tol)"
+	case bucketB:
+		return "B (cand rank > MaxResults)"
+	case bucketC:
+		return "C (cand killed by NMS)"
+	case bucketD:
+		return "D (BP+OSD failed)"
+	case bucketE:
+		return "E (decoded but gate rejected)"
+	}
+	return "?"
+}
+
+// candidateDiag holds the per-candidate decoder diagnostics that
+// feed the D/E bucket analysis. Populated whenever a candidate
+// reaches BPDecode.
+type candidateDiag struct {
+	Rank         int // rank in the pre-NMS sorted list
+	Pass         int // 1 or 2
+	FreqHz       float64
+	DtSec        float64
+	Sync         float64
+	InTopN       bool
+	SurvivedNMS  bool
+	BPDecoded    bool   // BP+CRC succeeded (any method)
+	GateOK       bool   // accepted by AcceptDecode
+	DecodeMethod string // "BP", "OSD-N", "fail"
+	BPIterations int
+	NSync        int
+	ToneAgree    int
+	HardErrors   int
+	MedianAbsLLR float64
+	Text         string // unpacked text if BPDecoded && GateOK
+}
+
+// runCoverageMultiPass is the multi-pass-aware coverage diagnostic.
+// Runs both passes of the standard pipeline with instrumentation;
+// classifies each truth by its eventual fate (MATCHED-pass1,
+// MATCHED-pass2, or one of the miss buckets).
+//
+// For each candidate that reaches BPDecode, records per-candidate
+// diagnostics (nsync, toneAgree, hardErrors, etc.) so we can read
+// out the D/E populations' decoder-side properties.
+func runCoverageMultiPass(wavs []string) {
+	const (
+		looseFreqHz  = 20.0
+		looseDtSec   = 1.0
+		normalFreqHz = 10.0
+		normalDtSec  = 0.5
+	)
+
+	fmt.Printf("=== Multi-pass coverage @ MaxResults=%d ===\n",
+		sandbox.DefaultSearchOptions().MaxResults)
+	fmt.Printf("Tolerances: normal ±%.0f Hz / ±%.2f s, loose ±%.0f Hz / ±%.2f s\n\n",
+		normalFreqHz, normalDtSec, looseFreqHz, looseDtSec)
+
+	type bucketCounts struct {
+		MatchedPass1 int
+		MatchedPass2 int
+		A1, A2, B, C int
+		D            int // BP+OSD failed
+		Egate        int // BP-OK but gate rejected (true gate-tuning candidate)
+		Eother       int // BP-OK + gate-OK but decoded text matched neither this truth nor any other (extra-near-truth)
+		Eoverlap     int // BP-OK + gate-OK + decoded text matches a DIFFERENT truth
+		Extras       int
+	}
+	var totals bucketCounts
+	totalTruth := 0
+
+	// Aggregate D/E diagnostics for histogram output.
+	var allDDiag, allEDiag []candidateDiag
+
+	for _, wavPath := range wavs {
+		name := filepath.Base(strings.TrimSuffix(wavPath, ".wav"))
+		data, err := audio.ReadWAV(wavPath)
+		if err != nil {
+			log.Printf("read %q: %v", wavPath, err)
+			continue
+		}
+		manifest, err := truth.Read(truth.PathFor(wavPath))
+		if err != nil || manifest == nil {
+			log.Printf("no truth for %q", wavPath)
+			continue
+		}
+		totalTruth += len(manifest.Signals)
+
+		bc, dDiag, eDiag := analyseCaptureMP(data.Samples, manifest, looseFreqHz, looseDtSec, normalFreqHz, normalDtSec)
+		allDDiag = append(allDDiag, dDiag...)
+		allEDiag = append(allEDiag, eDiag...)
+		totals.MatchedPass1 += bc.MatchedPass1
+		totals.MatchedPass2 += bc.MatchedPass2
+		totals.A1 += bc.A1
+		totals.A2 += bc.A2
+		totals.B += bc.B
+		totals.C += bc.C
+		totals.D += bc.D
+		totals.Egate += bc.Egate
+		totals.Eother += bc.Eother
+		totals.Eoverlap += bc.Eoverlap
+		totals.Extras += bc.Extras
+
+		totalE := bc.Egate + bc.Eother + bc.Eoverlap
+		fmt.Printf("%-12s truth=%3d  M1=%3d M2=%2d  A1=%2d A2=%2d  B=%2d C=%2d  D=%2d E=%2d(g%d/o%d/x%d)  extras=%2d\n",
+			name, len(manifest.Signals),
+			bc.MatchedPass1, bc.MatchedPass2,
+			bc.A1, bc.A2, bc.B, bc.C, bc.D, totalE,
+			bc.Egate, bc.Eoverlap, bc.Eother, bc.Extras)
+	}
+	fmt.Println(strings.Repeat("-", 95))
+	totalE := totals.Egate + totals.Eother + totals.Eoverlap
+	fmt.Printf("%-12s truth=%3d  M1=%3d M2=%2d  A1=%2d A2=%2d  B=%2d C=%2d  D=%2d E=%2d(g%d/o%d/x%d)  extras=%2d\n",
+		"TOTAL", totalTruth,
+		totals.MatchedPass1, totals.MatchedPass2,
+		totals.A1, totals.A2, totals.B, totals.C, totals.D, totalE,
+		totals.Egate, totals.Eoverlap, totals.Eother, totals.Extras)
+
+	totalMatched := totals.MatchedPass1 + totals.MatchedPass2
+	totalMissed := totals.A1 + totals.A2 + totals.B + totals.C + totals.D + totalE
+	fmt.Println()
+	fmt.Printf("Recall: %d / %d  (%.1f%%)\n", totalMatched, totalTruth,
+		100*float64(totalMatched)/float64(totalTruth))
+	fmt.Printf("  MATCHED-pass1: %3d  (%.1f%% of truth)\n",
+		totals.MatchedPass1, 100*float64(totals.MatchedPass1)/float64(totalTruth))
+	fmt.Printf("  MATCHED-pass2: %3d  (%.1f%% of truth)\n",
+		totals.MatchedPass2, 100*float64(totals.MatchedPass2)/float64(totalTruth))
+	fmt.Printf("Missed: %d / %d  (%.1f%% of truth)\n", totalMissed, totalTruth,
+		100*float64(totalMissed)/float64(totalTruth))
+	if totalMissed > 0 {
+		for _, b := range []struct {
+			name  string
+			count int
+		}{
+			{"A1 (no candidate near truth)", totals.A1},
+			{"A2 (cand at LOOSE not NORMAL)", totals.A2},
+			{"B (rank > MaxResults)", totals.B},
+			{"C (NMS-killed)", totals.C},
+			{"D (BP+OSD failed)", totals.D},
+			{"E-gate (BP-OK, gate rejected)", totals.Egate},
+			{"E-overlap (decoded to OTHER truth)", totals.Eoverlap},
+			{"E-other (decoded to non-truth text)", totals.Eother},
+		} {
+			fmt.Printf("  %-33s  %3d  (%.1f%% of missed)\n",
+				b.name, b.count, 100*float64(b.count)/float64(totalMissed))
+		}
+	}
+
+	// D and E diagnostics: per-candidate decoder properties on the
+	// failed truth-near candidates.
+	fmt.Printf("\n=== Diagnostics on bucket D (BP+OSD failed at decode) ===\n")
+	printDiagHistogram(allDDiag)
+	fmt.Printf("\n=== Diagnostics on bucket E (decoded but gate rejected) ===\n")
+	printDiagHistogram(allEDiag)
+}
+
+func printDiagHistogram(diags []candidateDiag) {
+	if len(diags) == 0 {
+		fmt.Println("  (no candidates in this bucket)")
+		return
+	}
+	fmt.Printf("  count = %d\n", len(diags))
+	// Decode method distribution.
+	methods := map[string]int{}
+	for _, d := range diags {
+		methods[d.DecodeMethod]++
+	}
+	fmt.Printf("  decode methods:\n")
+	for m, n := range methods {
+		if m == "" {
+			m = "(not attempted)"
+		}
+		fmt.Printf("    %-14s %d\n", m, n)
+	}
+	// Quick stats: nsync, hardErrors, BPIterations.
+	var nsyncs, hardErrs, bpIters []int
+	var medLLRs []float64
+	for _, d := range diags {
+		nsyncs = append(nsyncs, d.NSync)
+		hardErrs = append(hardErrs, d.HardErrors)
+		bpIters = append(bpIters, d.BPIterations)
+		medLLRs = append(medLLRs, d.MedianAbsLLR)
+	}
+	fmt.Printf("  nsync         min=%d median=%d max=%d\n", minInt(nsyncs), medianInt(nsyncs), maxInt(nsyncs))
+	fmt.Printf("  hardErrors    min=%d median=%d max=%d\n", minInt(hardErrs), medianInt(hardErrs), maxInt(hardErrs))
+	fmt.Printf("  BP iters      min=%d median=%d max=%d\n", minInt(bpIters), medianInt(bpIters), maxInt(bpIters))
+	fmt.Printf("  median|LLR|   min=%.2e median=%.2e max=%.2e\n", minFloat(medLLRs), medianFloat(medLLRs), maxFloat(medLLRs))
+}
+
+func minInt(xs []int) int {
+	if len(xs) == 0 {
+		return 0
+	}
+	m := xs[0]
+	for _, x := range xs {
+		if x < m {
+			m = x
+		}
+	}
+	return m
+}
+func maxInt(xs []int) int {
+	if len(xs) == 0 {
+		return 0
+	}
+	m := xs[0]
+	for _, x := range xs {
+		if x > m {
+			m = x
+		}
+	}
+	return m
+}
+func medianInt(xs []int) int {
+	if len(xs) == 0 {
+		return 0
+	}
+	s := make([]int, len(xs))
+	copy(s, xs)
+	sort.Ints(s)
+	return s[len(s)/2]
+}
+func minFloat(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	m := xs[0]
+	for _, x := range xs {
+		if x < m {
+			m = x
+		}
+	}
+	return m
+}
+func maxFloat(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	m := xs[0]
+	for _, x := range xs {
+		if x > m {
+			m = x
+		}
+	}
+	return m
+}
+func medianFloat(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	s := make([]float64, len(xs))
+	copy(s, xs)
+	sort.Float64s(s)
+	return s[len(s)/2]
+}
+
+// analyseCaptureMP runs the multi-pass pipeline with full
+// instrumentation and classifies each truth signal.
+//
+// Returns: bucket counts (with E split into gate / overlap / other),
+// diagnostic records for buckets D and E (combined) so we can
+// characterise the decode-failure modes.
+func analyseCaptureMP(audio []float32, manifest *truth.Manifest,
+	looseFreqHz, looseDtSec, normalFreqHz, normalDtSec float64,
+) (bc struct {
+	MatchedPass1, MatchedPass2 int
+	A1, A2, B, C, D            int
+	Egate, Eother, Eoverlap    int
+	Extras                     int
+}, dDiag, eDiag []candidateDiag) {
+
+	const coverageMaxResults = 10000
+	defaultMaxResults := sandbox.DefaultSearchOptions().MaxResults
+
+	ch, err := sandbox.NewChannelizer()
+	if err != nil {
+		return
+	}
+	defer ch.Close()
+
+	// Pre-populate hash table from truth manifest (mirrors
+	// processCapture).
+	ht := sandbox.NewCallsignHashTable()
+	for _, sig := range manifest.Signals {
+		for _, tok := range strings.Fields(sig.Text) {
+			if looksLikeCall(tok) {
+				ht.Add(tok)
+			}
+		}
+	}
+
+	rOpts := sandbox.DefaultRefineOptions()
+	bpOpts := sandbox.DefaultBPOptions()
+	gate := sandbox.DefaultAcceptDecodeOptions()
+
+	working := make([]float32, len(audio))
+	copy(working, audio)
+
+	// Cumulative diagnostic records across passes.
+	allFates := []candidateDiag{}
+	matchedPass1Set := map[int]bool{} // fate-index of matched-pass1 candidates
+	matchedPass2Set := map[int]bool{}
+
+	type decodeOut struct {
+		text   string
+		freqHz float64
+		dtSec  float64
+		cw     [sandbox.LDPCCodewordBits]uint8
+		pass   int
+	}
+	var allDecodes []decodeOut
+
+	for pass := 1; pass <= 2; pass++ {
+		if err := ch.Prepare(working); err != nil {
+			break
+		}
+		spec := sandbox.Spectrogram(working)
+		if spec == nil {
+			break
+		}
+		// Pre-NMS list with deep ranking (for B / C / A bucket
+		// assignment). Records every candidate's pre-NMS rank.
+		rawOpts := sandbox.DefaultSearchOptions()
+		rawOpts.MaxResults = coverageMaxResults
+		rawOpts.NMSFreqHz = 0.0001
+		rawOpts.NMSDTSec = 0.0001
+		rawOpts.Threshold = 0.01
+		rawCands := sandbox.FindCandidates(spec, rawOpts)
+		preRank := map[[2]float64]int{}
+		for i, c := range rawCands {
+			preRank[[2]float64{c.FreqHz, c.DtSec}] = i + 1
+		}
+		// Post-NMS top-N — what the operational pipeline actually
+		// decodes. Pre-NMS rank can be > MaxResults for some of
+		// these (NMS pruning brings up lower-ranked survivors), so
+		// we decode this list regardless of pre-NMS rank.
+		postOpts := sandbox.DefaultSearchOptions()
+		postOpts.MaxResults = defaultMaxResults
+		postCands := sandbox.FindCandidates(spec, postOpts)
+		postSet := map[[2]float64]bool{}
+		for _, c := range postCands {
+			postSet[[2]float64{c.FreqHz, c.DtSec}] = true
+		}
+
+		// Record fates for the pre-NMS list (rank info for ALL
+		// candidates), without decoding the ones that won't enter
+		// the actual pipeline.
+		for i, c := range rawCands {
+			f := candidateDiag{
+				Rank:        i + 1,
+				Pass:        pass,
+				FreqHz:      c.FreqHz,
+				DtSec:       c.DtSec,
+				Sync:        c.Sync,
+				InTopN:      i < defaultMaxResults,
+				SurvivedNMS: postSet[[2]float64{c.FreqHz, c.DtSec}],
+			}
+			// Only candidates that will enter the actual decode
+			// pipeline get instrumented for D/E. Others are pre-
+			// classified as rank-only.
+			if !f.SurvivedNMS {
+				allFates = append(allFates, f)
+				continue
+			}
+			r, err := sandbox.RefineCandidate(ch, c, rOpts)
+			if err != nil {
+				allFates = append(allFates, f)
+				continue
+			}
+			grid, err := sandbox.ExtractSymbols(ch, r)
+			if err != nil {
+				allFates = append(allFates, f)
+				continue
+			}
+			llrs := sandbox.SoftLLRs(grid)
+			br := sandbox.BPDecode(llrs, bpOpts)
+			f.DecodeMethod = br.DecodeMethod
+			f.BPIterations = br.Iterations
+			f.NSync = sandbox.HardSyncScore(grid)
+			f.MedianAbsLLR = medianAbsLLR(llrs[:])
+			if !br.OK {
+				f.HardErrors = sandbox.HardErrorsCount(br.Codeword, llrs)
+				allFates = append(allFates, f)
+				continue
+			}
+			f.BPDecoded = true
+			f.HardErrors = sandbox.HardErrorsCount(br.Codeword, llrs)
+			f.ToneAgree = sandbox.ToneAgreementCount(br.Codeword, grid)
+			var payload [sandbox.LDPCPayloadBits]uint8
+			copy(payload[:], br.Message91[:sandbox.LDPCPayloadBits])
+			ur := sandbox.Unpack77WithHashes(payload, ht)
+			if !ur.OK {
+				allFates = append(allFates, f)
+				continue
+			}
+			gateOK, _ := sandbox.AcceptDecode(br.DecodeMethod, f.NSync, grid, br.Codeword,
+				f.HardErrors, 1000.0, gate)
+			f.GateOK = gateOK
+			if gateOK {
+				f.Text = ur.Text
+				f.FreqHz = r.FreqHz
+				f.DtSec = r.DtSec
+				allDecodes = append(allDecodes, decodeOut{
+					text:   ur.Text,
+					freqHz: r.FreqHz,
+					dtSec:  r.DtSec,
+					cw:     br.Codeword,
+					pass:   pass,
+				})
+				// Register decoded callsigns for Type 4 / hash use.
+				for _, tok := range strings.Fields(ur.Text) {
+					if looksLikeCall(tok) {
+						ht.Add(tok)
+					}
+				}
+			}
+			allFates = append(allFates, f)
+		}
+		// Between passes: subtract pass-N decodes from working audio.
+		if pass < 2 {
+			for _, d := range allDecodes {
+				if d.pass != pass {
+					continue
+				}
+				tones := sandbox.CodewordToTones(d.cw)
+				cosSynth, sinSynth, sigStart, sigLen := sandbox.SynthesizeAudio(
+					tones, d.freqHz, d.dtSec, 12000, len(working))
+				sps := int(12000 * 0.16)
+				working = sandbox.FitAndSubtractAudio(working, cosSynth, sinSynth, sigStart, sigLen, sps)
+			}
+		}
+	}
+
+	// Classify each truth.
+	for _, sig := range manifest.Signals {
+		// Is the truth MATCHED in pass 1 or pass 2?
+		matchedPass := 0
+		for _, d := range allDecodes {
+			if d.text != sig.Text {
+				continue
+			}
+			if math.Abs(d.freqHz-sig.FreqHz) <= looseFreqHz &&
+				math.Abs(d.dtSec-sig.DTSec) <= looseDtSec {
+				matchedPass = d.pass
+				break
+			}
+		}
+		if matchedPass == 1 {
+			bc.MatchedPass1++
+			continue
+		}
+		if matchedPass == 2 {
+			bc.MatchedPass2++
+			continue
+		}
+		// Not matched — classify by best-fate near candidate.
+		// Collect all pass-1 candidates within LOOSE tolerance, then
+		// filter to NORMAL. Pick the one with the highest-priority
+		// fate (closest-to-success):
+		//   priority E > D > C > B
+		// Records the chosen candidate's diagnostics in dDiag/eDiag
+		// for the bucket histogram.
+		var anyLoose, anyNormal bool
+		bestPriority := -1
+		var bestFate candidateDiag
+		bestBucket := 0
+		for _, f := range allFates {
+			if f.Pass != 1 {
+				continue
+			}
+			df := math.Abs(f.FreqHz - sig.FreqHz)
+			ddt := math.Abs(f.DtSec - sig.DTSec)
+			if df > looseFreqHz || ddt > looseDtSec {
+				continue
+			}
+			anyLoose = true
+			if df > normalFreqHz || ddt > normalDtSec {
+				continue
+			}
+			anyNormal = true
+			// Determine this candidate's bucket.
+			var thisBucket, thisPriority int
+			switch {
+			case !f.SurvivedNMS && !f.InTopN:
+				thisBucket = 4 // B
+				thisPriority = 1
+			case !f.SurvivedNMS && f.InTopN:
+				thisBucket = 5 // C
+				thisPriority = 2
+			case f.SurvivedNMS && !f.BPDecoded:
+				thisBucket = 6 // D
+				thisPriority = 3
+			default: // BP-OK but didn't match truth → gate rejected for this truth
+				thisBucket = 7 // E
+				thisPriority = 4
+			}
+			if thisPriority > bestPriority {
+				bestPriority = thisPriority
+				bestFate = f
+				bestBucket = thisBucket
+			}
+		}
+		if !anyLoose {
+			bc.A1++
+			continue
+		}
+		if !anyNormal {
+			bc.A2++
+			continue
+		}
+		switch bestBucket {
+		case 4:
+			bc.B++
+		case 5:
+			bc.C++
+		case 6:
+			bc.D++
+			dDiag = append(dDiag, bestFate)
+		case 7:
+			// Split E by why the decode didn't yield this truth's text.
+			eDiag = append(eDiag, bestFate)
+			switch {
+			case !bestFate.GateOK:
+				// Decoder reached a CRC-valid codeword but the gate
+				// rejected it. The truly actionable gate-tuning case.
+				bc.Egate++
+			case textMatchesAnyTruth(bestFate.Text, manifest, sig.Text, looseFreqHz, looseDtSec, bestFate.FreqHz, bestFate.DtSec):
+				// Decoded to a DIFFERENT truth's text — overlap, not
+				// a real "missed" decode. Truth was masked by an
+				// adjacent station the decoder grabbed instead.
+				bc.Eoverlap++
+			default:
+				// Decoded to non-truth text — extra-near-truth (the
+				// candidate is a real decode of something not in the
+				// truth manifest, or a spurious codeword).
+				bc.Eother++
+			}
+		}
+	}
+
+	// Extras: decoded candidates that don't match any truth.
+	for _, d := range allDecodes {
+		matched := false
+		for _, sig := range manifest.Signals {
+			if d.text == sig.Text &&
+				math.Abs(d.freqHz-sig.FreqHz) <= looseFreqHz &&
+				math.Abs(d.dtSec-sig.DTSec) <= looseDtSec {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			bc.Extras++
+		}
+	}
+
+	_ = matchedPass1Set
+	_ = matchedPass2Set
+	return bc, dDiag, eDiag
+}
+
+// textMatchesAnyTruth returns true if decodeText matches a truth
+// signal in the manifest OTHER THAN excludeText (used to identify
+// "decoded a different truth" — overlap rather than real failure).
+func textMatchesAnyTruth(decodeText string, manifest *truth.Manifest, excludeText string,
+	looseFreqHz, looseDtSec, candFreqHz, candDtSec float64,
+) bool {
+	for _, sig := range manifest.Signals {
+		if sig.Text == excludeText {
+			continue
+		}
+		if sig.Text != decodeText {
+			continue
+		}
+		// Decoded text matches a different truth signal; check the
+		// candidate is also near that truth (otherwise the match is
+		// coincidental — same text but different freq/dt).
+		if math.Abs(candFreqHz-sig.FreqHz) <= looseFreqHz &&
+			math.Abs(candDtSec-sig.DTSec) <= looseDtSec {
+			return true
+		}
+	}
+	return false
+}
+
+func medianAbsLLR(llrs []float64) float64 {
+	abs := make([]float64, len(llrs))
+	for i, l := range llrs {
+		a := l
+		if a < 0 {
+			a = -a
+		}
+		abs[i] = a
+	}
+	sort.Float64s(abs)
+	return abs[len(abs)/2]
+}
+
+// runMaxResultsSweep tests the bucket-B-dominant hypothesis from the
+// coverage diagnostic: if 80% of truth signals have a candidate within
+// ±10 Hz / ±0.5 s but their score ranks below the top-50 cap, raising
+// MaxResults should lift recall substantially.
+//
+// Sweep over MaxResults values; record matched / extras / runtime.
+// Decision: if matched scales with MaxResults at acceptable runtime,
+// ship a higher default. If matched plateaus, bucket B candidates
+// don't actually decode and we need scanner score-quality work.
+func runMaxResultsSweep(wavs []string) {
+	caps := []int{50, 100, 200, 500, 1000}
+	fmt.Printf("=== MaxResults sweep: %d configs × %d captures ===\n\n",
+		len(caps), len(wavs))
+
+	type res struct {
+		MaxResults int
+		Matched    int
+		Extras     int
+		Total      int
+		Wall       time.Duration
+	}
+	var results []res
+
+	for _, m := range caps {
+		opts := sandbox.DefaultMultiPassOptions()
+		opts.Search.MaxResults = m
+		ht := sandbox.NewCallsignHashTable()
+		start := time.Now()
+		matched, extras, total := 0, 0, 0
+		for _, w := range wavs {
+			r := processCapture(w, opts, ht)
+			matched += r.Matched
+			extras += r.Extra
+			total += r.Truth
+		}
+		results = append(results, res{m, matched, extras, total, time.Since(start)})
+		fmt.Printf("  MaxResults=%-4d  matched=%3d/%-3d  extras=%2d  wall=%.2fs (%.2fs/slot)\n",
+			m, matched, total, extras, time.Since(start).Seconds(),
+			time.Since(start).Seconds()/float64(len(wavs)))
+	}
+
+	fmt.Println()
+	base := results[0]
+	for _, r := range results[1:] {
+		fmt.Printf("  Δ vs MaxResults=50: matched %+d, extras %+d, wall %+.1fs%s\n",
+			r.Matched-base.Matched, r.Extras-base.Extras,
+			(r.Wall - base.Wall).Seconds(),
+			budgetTag(r.Wall.Seconds()/float64(len(wavs))))
+	}
+}
+
+// aggBuckets is a per-capture or aggregate count of truth signals by
+// bucket. Index by truthBucket enum value.
+type aggBuckets struct {
+	Counts [7]int
+}
+
+// runCoverage runs the candidate-coverage diagnostic on the supplied
+// real-capture corpus. For each truth signal, identifies which
+// pipeline stage was responsible for missing it.
+//
+// The diagnostic runs FindCandidates with NMS effectively disabled
+// (NMSFreqHz=0, NMSDTSec=0) AND with the default MaxResults bumped
+// to 500 — this gives us the pre-NMS sorted candidate list with
+// enough depth to see bucket B (truth-near candidates ranked below
+// MaxResults). It then applies the default NMS manually to identify
+// which candidates would have survived in the standard pipeline.
+// Surviving candidates are decoded as in normal multi-pass; the
+// resulting text + gate status feed the per-truth bucket assignment.
+func runCoverage(wavs []string) {
+	const (
+		looseFreqHz  = 20.0
+		looseDtSec   = 1.0
+		normalFreqHz = 10.0
+		normalDtSec  = 0.5
+		// Default MaxResults in DefaultSearchOptions = 200 (new default
+		// after the 2026-05-27 calibration); bucket B counts truth-
+		// near candidates whose pre-NMS rank exceeds this.
+		defaultMaxResults = 200
+		// We sweep up to this many candidates per slot when building
+		// the diagnostic list. Set high so even low-scored truth-near
+		// candidates appear — the goal here is to find out IF the
+		// matched filter sees them at all, not to budget runtime.
+		coverageMaxResults = 10000
+	)
+
+	fmt.Printf("=== Coverage diagnostic across %d captures ===\n", len(wavs))
+	fmt.Printf("Tolerances: tight ±5/±0.25s, normal ±%.0f/±%.2fs, loose ±%.0f/±%.2fs\n\n",
+		normalFreqHz, normalDtSec, looseFreqHz, looseDtSec)
+
+	var totals aggBuckets
+	totalTruth := 0
+
+	for _, wavPath := range wavs {
+		name := filepath.Base(strings.TrimSuffix(wavPath, ".wav"))
+		data, err := audio.ReadWAV(wavPath)
+		if err != nil {
+			log.Printf("read %q: %v", wavPath, err)
+			continue
+		}
+		manifest, err := truth.Read(truth.PathFor(wavPath))
+		if err != nil || manifest == nil {
+			log.Printf("no truth manifest beside %q", wavPath)
+			continue
+		}
+		totalTruth += len(manifest.Signals)
+
+		fates := gatherCandidateFates(data.Samples, manifest, coverageMaxResults, defaultMaxResults)
+
+		// Pre-build a map of decoded text → fate index so the
+		// "already-decoded" check is O(1) per truth.
+		decodedByText := map[string][]int{}
+		for i, f := range fates {
+			if f.GateOK && f.Text != "" {
+				decodedByText[f.Text] = append(decodedByText[f.Text], i)
+			}
+		}
+
+		var caps aggBuckets
+		for _, sig := range manifest.Signals {
+			b := classifyTruth(sig, fates, decodedByText,
+				looseFreqHz, looseDtSec, normalFreqHz, normalDtSec, defaultMaxResults)
+			caps.Counts[b]++
+			totals.Counts[b]++
+		}
+		printBucketRow(name, len(manifest.Signals), caps)
+	}
+	fmt.Println(strings.Repeat("-", 70))
+	printBucketRow("TOTAL", totalTruth, totals)
+
+	// Headline summary.
+	fmt.Println()
+	for b := bucketMATCHED; b <= bucketE; b++ {
+		pct := 0.0
+		if totalTruth > 0 {
+			pct = 100 * float64(totals.Counts[b]) / float64(totalTruth)
+		}
+		fmt.Printf("  %-32s  %4d  %5.1f%%\n", b.String(), totals.Counts[b], pct)
+	}
+}
+
+func printBucketRow(name string, truthCount int, ab aggBuckets) {
+	fmt.Printf("%-12s truth=%3d  M=%3d  A1=%2d  A2=%2d  B=%2d  C=%2d  D=%2d  E=%2d\n",
+		name, truthCount,
+		ab.Counts[bucketMATCHED], ab.Counts[bucketA1], ab.Counts[bucketA2],
+		ab.Counts[bucketB], ab.Counts[bucketC], ab.Counts[bucketD], ab.Counts[bucketE])
+}
+
+// gatherCandidateFates runs the full pipeline with NMS disabled +
+// expanded MaxResults, recording every candidate's fate (rank,
+// NMS-survival, decode result). Returned slice is sorted by pre-NMS
+// rank (descending by Sync).
+func gatherCandidateFates(samples []float32, manifest *truth.Manifest,
+	maxResults, defaultMax int) []candidateFate {
+	_ = manifest // currently unused but reserved for per-truth-aware diagnostics
+
+	ch, err := sandbox.NewChannelizer()
+	if err != nil {
+		return nil
+	}
+	defer ch.Close()
+	if err := ch.Prepare(samples); err != nil {
+		return nil
+	}
+	spec := sandbox.Spectrogram(samples)
+	if spec == nil {
+		return nil
+	}
+
+	// Pre-NMS: run FindCandidates with NMS effectively disabled,
+	// expanded MaxResults, AND a very low score threshold — so any
+	// real signal the matched filter can detect makes it into the
+	// list even if it scores below the default 3.0 cutoff. Bucket A1
+	// then truly means "the matched-filter score at this freq/dt is
+	// indistinguishable from noise."
+	rawOpts := sandbox.DefaultSearchOptions()
+	rawOpts.MaxResults = maxResults
+	rawOpts.NMSFreqHz = 0.0001 // not exactly zero (avoid false coincidence)
+	rawOpts.NMSDTSec = 0.0001
+	rawOpts.Threshold = 0.01 // near-zero — find anything detectable
+	rawCands := sandbox.FindCandidates(spec, rawOpts)
+
+	// Post-NMS: run again with the default settings to identify which
+	// candidates survived. We compare by (FreqHz, DtSec) which should
+	// match exactly since both calls use the same spectrogram.
+	postOpts := sandbox.DefaultSearchOptions()
+	postOpts.MaxResults = defaultMax
+	postCands := sandbox.FindCandidates(spec, postOpts)
+	survivedSet := map[[2]float64]bool{}
+	for _, c := range postCands {
+		survivedSet[[2]float64{c.FreqHz, c.DtSec}] = true
+	}
+
+	// For each pre-NMS candidate, run the decode pipeline and record
+	// its fate. Use the same gates as multipass to make the bucket
+	// assignment consistent with the normal run.
+	rOpts := sandbox.DefaultRefineOptions()
+	bpOpts := sandbox.DefaultBPOptions()
+	gate := sandbox.DefaultAcceptDecodeOptions()
+	ht := sandbox.NewCallsignHashTable()
+	// Pre-populate the hash table with truth-manifest callsigns so
+	// Type 4 references can resolve (mirrors processCapture).
+	for _, sig := range manifest.Signals {
+		for _, tok := range strings.Fields(sig.Text) {
+			if looksLikeCall(tok) {
+				ht.Add(tok)
+			}
+		}
+	}
+
+	fates := make([]candidateFate, len(rawCands))
+	for i, c := range rawCands {
+		f := candidateFate{
+			Rank:        i + 1,
+			FreqHz:      c.FreqHz,
+			DtSec:       c.DtSec,
+			Sync:        c.Sync,
+			InTopN:      i < defaultMax,
+			SurvivedNMS: survivedSet[[2]float64{c.FreqHz, c.DtSec}],
+		}
+		// Only run decode on candidates that would have survived in
+		// the normal pipeline. Saves runtime on the tail-of-rank
+		// candidates that wouldn't be decoded anyway.
+		if !f.SurvivedNMS || !f.InTopN {
+			fates[i] = f
+			continue
+		}
+		r, err := sandbox.RefineCandidate(ch, c, rOpts)
+		if err != nil {
+			fates[i] = f
+			continue
+		}
+		grid, err := sandbox.ExtractSymbols(ch, r)
+		if err != nil {
+			fates[i] = f
+			continue
+		}
+		llrs := sandbox.SoftLLRs(grid)
+		br := sandbox.BPDecode(llrs, bpOpts)
+		f.DecodeMethod = br.DecodeMethod
+		if !br.OK {
+			fates[i] = f
+			continue
+		}
+		f.BPDecoded = true
+		var payload [sandbox.LDPCPayloadBits]uint8
+		copy(payload[:], br.Message91[:sandbox.LDPCPayloadBits])
+		ur := sandbox.Unpack77WithHashes(payload, ht)
+		if !ur.OK {
+			fates[i] = f
+			continue
+		}
+		// Quality gate.
+		nsync := sandbox.HardSyncScore(grid)
+		hardErrs := sandbox.HardErrorsCount(br.Codeword, llrs)
+		// Skip the SNR check in coverage mode for speed; pass +inf
+		// so MinSNR2500DB doesn't reject. (The other 4 checks remain.)
+		gateOK, _ := sandbox.AcceptDecode(br.DecodeMethod, nsync, grid, br.Codeword,
+			hardErrs, 1000.0, gate)
+		f.GateOK = gateOK
+		if gateOK {
+			f.Text = ur.Text
+			f.FreqHz = r.FreqHz
+			f.DtSec = r.DtSec
+		}
+		fates[i] = f
+	}
+	return fates
+}
+
+func classifyTruth(sig truth.Signal, fates []candidateFate,
+	decodedByText map[string][]int,
+	looseFreqHz, looseDtSec, normalFreqHz, normalDtSec float64,
+	defaultMaxResults int) truthBucket {
+	// MATCHED: any decoded fate with matching text within LOOSE tolerance.
+	if idxs, ok := decodedByText[sig.Text]; ok {
+		for _, i := range idxs {
+			f := fates[i]
+			if math.Abs(f.FreqHz-sig.FreqHz) <= looseFreqHz &&
+				math.Abs(f.DtSec-sig.DTSec) <= looseDtSec {
+				return bucketMATCHED
+			}
+		}
+	}
+	// Find nearest pre-NMS candidate within LOOSE.
+	bestIdx := -1
+	bestScore := math.Inf(1)
+	for i, f := range fates {
+		df := f.FreqHz - sig.FreqHz
+		ddt := f.DtSec - sig.DTSec
+		if math.Abs(df) > looseFreqHz || math.Abs(ddt) > looseDtSec {
+			continue
+		}
+		score := df*df + ddt*ddt*1e4
+		if score < bestScore {
+			bestScore = score
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 {
+		return bucketA1
+	}
+	best := fates[bestIdx]
+	if math.Abs(best.FreqHz-sig.FreqHz) > normalFreqHz ||
+		math.Abs(best.DtSec-sig.DTSec) > normalDtSec {
+		return bucketA2
+	}
+	if !best.InTopN {
+		return bucketB
+	}
+	if !best.SurvivedNMS {
+		return bucketC
+	}
+	if !best.BPDecoded {
+		return bucketD
+	}
+	// BP-OK but gate rejected (or wrong text).
+	return bucketE
 }
