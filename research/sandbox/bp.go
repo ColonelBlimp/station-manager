@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
@@ -23,6 +24,12 @@ type BPOptions struct {
 	// in BP but small enough that tanh(LLR/2) ≈ ±1 doesn't overflow
 	// double-precision atanh on combine.
 	ClampMagnitude float64
+
+	// OSD configures the Ordered Statistics Decoder fallback. When
+	// BP fails to find a CRC-valid codeword within MaxIterations and
+	// OSD.Enable is true, OSD runs on the channel LLRs and its result
+	// is reported in BPResult.
+	OSD OSDOptions
 }
 
 // DefaultBPOptions returns the baseline tuning.
@@ -31,6 +38,7 @@ func DefaultBPOptions() BPOptions {
 		MaxIterations:  30,
 		TargetMedian:   5.0,
 		ClampMagnitude: 20.0,
+		OSD:            DefaultOSDOptions(),
 	}
 }
 
@@ -62,6 +70,11 @@ type BPResult struct {
 	// Codeword holds all 174 hard-decision bits from the final BP
 	// iteration. Useful for diagnostic comparisons even when OK=false.
 	Codeword [LDPCCodewordBits]uint8
+
+	// DecodeMethod records the path that produced this result:
+	// "BP" when BP alone reached CRC-valid, "OSD-N" when OSD order N
+	// finished the job, "fail" when neither did.
+	DecodeMethod string
 }
 
 // BPDecode runs sum-product belief propagation on a 174-element soft
@@ -139,8 +152,13 @@ func BPDecode(channelLLRs [LDPCCodewordBits]float64, opts BPOptions) BPResult {
 			if VerifyCRC14(res.Message91) {
 				res.OK = true
 				res.CRCValid = true
+				res.DecodeMethod = "BP"
+				return res
 			}
-			return res
+			// Syndrome-clean but CRC-invalid: this codeword exists in
+			// the LDPC code's null space but isn't the right one. Fall
+			// through to OSD — OSD may still find a CRC-valid neighbour.
+			break
 		}
 
 		// 3. Update check-to-variable messages using v→c built on the fly.
@@ -183,11 +201,31 @@ func BPDecode(channelLLRs [LDPCCodewordBits]float64, opts BPOptions) BPResult {
 		}
 	}
 
-	// Loop exhausted without syndrome-clean — return best-effort
-	// final state for diagnostics.
-	res.Iterations = opts.MaxIterations
+	// Loop exhausted without CRC-valid — capture best-effort state
+	// before optionally falling through to OSD.
+	if res.Iterations == 0 {
+		res.Iterations = opts.MaxIterations
+	}
 	copy(res.Codeword[:], hard[:])
 	copy(res.Message91[:], hard[:LDPCInfoBits])
+
+	// OSD fallback: try Ordered Statistics Decoding on the channel
+	// LLRs. Per the maxosd convention, this is the "BP + OSD with
+	// channel LLRs" mode (WSJT-X maxosd = 0).
+	if opts.OSD.Enable {
+		osdCW, ok, _ := runOSD(channelLLRs, opts.OSD.Order)
+		if ok {
+			res.OK = true
+			res.SyndromeClean = true // by construction; OSD outputs are codewords
+			res.CRCValid = true
+			res.Codeword = osdCW
+			copy(res.Message91[:], osdCW[:LDPCInfoBits])
+			res.DecodeMethod = fmt.Sprintf("OSD-%d", opts.OSD.Order)
+			return res
+		}
+	}
+
+	res.DecodeMethod = "fail"
 	return res
 }
 
