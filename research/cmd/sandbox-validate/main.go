@@ -313,6 +313,10 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 	fmt.Printf("  refine: df sweep ±%.2f Hz step %.2f Hz\n\n", refineOpts.DFSweepRangeHz, refineOpts.DFSweepStepHz)
 	refined := make([]sandbox.Candidate, len(cands))
 	nsyncs := make([]int, len(cands))
+	medianAbsLLRs := make([]float64, len(cands))
+	decisiveBits := make([]int, len(cands))
+	bpResults := make([]sandbox.BPResult, len(cands))
+	bpOpts := sandbox.DefaultBPOptions()
 	for i, c := range cands {
 		r, err := sandbox.RefineCandidate(ch, c, refineOpts)
 		if err != nil {
@@ -327,11 +331,31 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 			continue
 		}
 		nsyncs[i] = sandbox.HardSyncScore(grid)
+		llrs := sandbox.SoftLLRs(grid)
+		medianAbsLLRs[i], decisiveBits[i] = summariseLLRs(llrs[:])
+		bpResults[i] = sandbox.BPDecode(llrs, bpOpts)
+	}
+
+	// Run Unpack77 on every BP-OK candidate so we can compare the
+	// decoded text to the truth-manifest string.
+	decodedText := make([]string, len(cands))
+	for i, br := range bpResults {
+		if !br.OK {
+			continue
+		}
+		var payload [sandbox.LDPCPayloadBits]uint8
+		copy(payload[:], br.Message91[:sandbox.LDPCPayloadBits])
+		ur := sandbox.Unpack77(payload)
+		if ur.OK {
+			decodedText[i] = ur.Text
+		} else {
+			decodedText[i] = "[unpack: " + ur.Detail + "]"
+		}
 	}
 
 	// Truth-vs-detection table.
-	fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-9s  %s\n",
-		"truth signal", "coarse Hz", "refined Hz", "Δf Hz", "Δdt s", "sync", "nsync/21")
+	fmt.Printf("  %-30s  %-10s  %-9s  %-8s  %-7s  %-14s  %s\n",
+		"truth signal", "refined Hz", "sync", "nsync/21", "BP iter", "BP result", "decoded text")
 	hits, missed := 0, 0
 	usedCoarse := make([]bool, len(cands))
 	for _, sig := range manifest.Signals {
@@ -348,45 +372,79 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 			}
 		}
 		if best < 0 {
-			fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-9s  %s  MISS\n",
-				sig.Text, "—", "—", "—", "—", "—", "—")
+			fmt.Printf("  %-30s  %-10s  %-9s  %-8s  %-7s  %-14s  MISS\n",
+				sig.Text, "—", "—", "—", "—", "—")
 			missed++
 			continue
 		}
 		r := refined[best]
 		usedCoarse[best] = true
-		df := r.FreqHz - sig.FreqHz
-		ddt := r.DtSec - sig.DTSec
-		verdict := "OK"
-		if absF(df) > refinedFreqTol || absF(ddt) > refinedDtTol {
-			verdict = "drift"
+		_ = refinedDtTol
+		_ = refinedFreqTol
+		bpr := bpResults[best]
+		bpStatus := bpResultLabel(bpr)
+		text := decodedText[best]
+		match := ""
+		if bpr.OK {
+			if text == sig.Text {
+				match = "✓"
+			} else {
+				match = "✗ MISMATCH"
+			}
 		}
-		fmt.Printf("  %-30s  %9.2f   %9.2f   %+8.3f   %+8.4f   %9.2e   %4d/21   %s\n",
-			sig.Text, r.CoarseFreqHz, r.FreqHz, df, ddt, r.Sync, nsyncs[best], verdict)
+		fmt.Printf("  %-30s  %9.2f   %9.2e   %4d/21   %4d    %-14s  %s %s\n",
+			sig.Text, r.FreqHz, r.Sync, nsyncs[best], bpr.Iterations, bpStatus, text, match)
 		hits++
 	}
 
-	// Unmatched detections (spurious). Summarise their nsync values
-	// alongside the matched truths' to see the hard-sync gap.
+	// Unmatched detections (spurious): how many fail BP outright vs
+	// reach a clean syndrome but miss CRC vs decode successfully.
 	spurious := 0
 	spuriousNsyncBuckets := [22]int{}
+	bpStats := struct{ syndromeFail, syndromeOnly, ok int }{}
 	for i, used := range usedCoarse {
 		if used {
 			continue
 		}
 		spurious++
 		spuriousNsyncBuckets[nsyncs[i]]++
+		switch {
+		case bpResults[i].OK:
+			bpStats.ok++
+		case bpResults[i].SyndromeClean:
+			bpStats.syndromeOnly++
+		default:
+			bpStats.syndromeFail++
+		}
 	}
 	fmt.Printf("\n  truth: %d matched, %d missed, %d spurious\n", hits, missed, spurious)
 
-	// Histogram of spurious nsync (where the matched-filter accepted
-	// a candidate but its symbol-domain sync says "no FT8 signal here").
+	// Histogram of spurious nsync.
 	fmt.Printf("\n  spurious nsync histogram:\n")
 	for n := 21; n >= 0; n-- {
 		if spuriousNsyncBuckets[n] == 0 {
 			continue
 		}
 		fmt.Printf("    %2d/21: %d\n", n, spuriousNsyncBuckets[n])
+	}
+
+	// BP outcomes on spurious. Healthy: most should be syndrome-fail.
+	fmt.Printf("\n  spurious BP outcomes: %d syndrome-fail, %d syndrome-clean-CRC-fail, %d OK\n",
+		bpStats.syndromeFail, bpStats.syndromeOnly, bpStats.ok)
+	_ = medianAbsLLRs
+	_ = decisiveBits
+}
+
+// bpResultLabel formats a BPResult into a compact status string for
+// the per-candidate table.
+func bpResultLabel(r sandbox.BPResult) string {
+	switch {
+	case r.OK:
+		return "OK (CRC ✓)"
+	case r.SyndromeClean:
+		return "synd ✓ CRC ✗"
+	default:
+		return "synd ✗"
 	}
 }
 
@@ -395,4 +453,39 @@ func absF(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// summariseLLRs returns the median of |LLR| and the count of "decisive"
+// bits where |LLR| exceeds half of the candidate's own maximum |LLR|.
+// Both metrics are scale-invariant in opposite directions: the median
+// is in raw LLR units (varying across SNR), the decisive-bit count is
+// a fraction of the candidate's own peak (comparable across SNR).
+func summariseLLRs(llrs []float64) (float64, int) {
+	if len(llrs) == 0 {
+		return 0, 0
+	}
+	absVals := make([]float64, len(llrs))
+	maxAbs := 0.0
+	for i, l := range llrs {
+		a := l
+		if a < 0 {
+			a = -a
+		}
+		absVals[i] = a
+		if a > maxAbs {
+			maxAbs = a
+		}
+	}
+	sort.Float64s(absVals)
+	median := absVals[len(absVals)/2]
+	decisive := 0
+	if maxAbs > 0 {
+		thresh := maxAbs * 0.5
+		for _, a := range absVals {
+			if a >= thresh {
+				decisive++
+			}
+		}
+	}
+	return median, decisive
 }
