@@ -131,15 +131,15 @@ func ToneAgreementCount(cw [LDPCCodewordBits]uint8, grid *SymbolGrid) int {
 	tones := CodewordToTones(cw)
 	n := 0
 	for s := 0; s < ft8SymbolCount; s++ {
-		max := 0
+		maximum := 0
 		maxV := grid.Tones[s][0]
 		for m := 1; m < ft8TonesPerSymbol; m++ {
 			if grid.Tones[s][m] > maxV {
 				maxV = grid.Tones[s][m]
-				max = m
+				maximum = m
 			}
 		}
-		if max == tones[s] {
+		if maximum == tones[s] {
 			n++
 		}
 	}
