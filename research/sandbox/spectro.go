@@ -1,7 +1,9 @@
 package sandbox
 
 import (
-	"github.com/ColonelBlimp/station-manager/internal/audio"
+	"fmt"
+
+	"github.com/ColonelBlimp/station-manager/research/sandbox/pfft"
 )
 
 // FT8 protocol parameters per the QEX 2020 paper §4. Re-declared per
@@ -34,12 +36,23 @@ const (
 //
 // The Nyquist bin (X[nfft/2]) is dropped — for FT8 at 12 kHz the
 // candidate search tops out well below the Nyquist at 6000 Hz.
+//
+// FFT backend: PocketFFT via research/sandbox/pfft (BSD 3-Clause).
+// Per Session 97 bench results, ~6× faster than internal/audio on
+// the per-slot forward FFT path. The plan is built once per call
+// and reused across all frames; plan-create failure on nfft=3840
+// is essentially impossible (no large prime factors), so the function
+// panics rather than complicate the signature with an error return.
 func Spectrogram(samples []float32) [][]float64 {
 	if len(samples) < nsps {
 		return nil
 	}
 
-	plan := audio.NewRealPlan(nfft)
+	plan, err := pfft.NewRealPlan(nfft)
+	if err != nil {
+		panic(fmt.Sprintf("sandbox.Spectrogram: pfft.NewRealPlan(%d): %v", nfft, err))
+	}
+	defer plan.Close()
 	halfFFT := nfft / 2
 
 	nFrames := 0
@@ -53,17 +66,31 @@ func Spectrogram(samples []float32) [][]float64 {
 	backing := make([]float64, nFrames*halfFFT)
 	spec := make([][]float64, nFrames)
 
-	// Reused buffer: front half receives nsps audio samples per frame;
-	// back half stays at the zero value the make() established at
-	// allocation, providing the zero-padding for the 2× oversampled FFT.
-	chunk := make([]float32, nfft)
+	// Reused buffer for in-place FFT. Front nsps positions receive the
+	// audio (widened to float64); back nfft-nsps positions are re-zeroed
+	// each frame because the previous frame's FFT output overwrote them.
+	chunk := make([]float64, nfft)
 
 	for t := 0; t < nFrames; t++ {
-		copy(chunk[:nsps], samples[t*nstep:t*nstep+nsps])
-		X := plan.FFT(chunk)
+		base := t * nstep
+		for i := 0; i < nsps; i++ {
+			chunk[i] = float64(samples[base+i])
+		}
+		for i := nsps; i < nfft; i++ {
+			chunk[i] = 0
+		}
+		if err := plan.Forward(chunk); err != nil {
+			panic(fmt.Sprintf("sandbox.Spectrogram: plan.Forward: %v", err))
+		}
+
+		// FFTPack packed real-FFT layout: chunk[0]=Re(X[0]) (DC); for
+		// k in [1, nfft/2-1]: chunk[2k-1]=Re(X[k]), chunk[2k]=Im(X[k]);
+		// chunk[nfft-1]=Re(X[nfft/2]) (Nyquist). We drop the Nyquist bin.
 		row := backing[t*halfFFT : (t+1)*halfFFT]
-		for f := 0; f < halfFFT; f++ {
-			re, im := real(X[f]), imag(X[f])
+		row[0] = chunk[0] * chunk[0]
+		for f := 1; f < halfFFT; f++ {
+			re := chunk[2*f-1]
+			im := chunk[2*f]
 			row[f] = re*re + im*im
 		}
 		spec[t] = row
