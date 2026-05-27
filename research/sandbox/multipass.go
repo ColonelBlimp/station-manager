@@ -49,18 +49,24 @@ type MultiPassOptions struct {
 	// AudioRate is the audio buffer's sample rate. Default 12000 Hz
 	// matches the FT8 convention.
 	AudioRate float64
+
+	// Gate is the post-decode quality gate (nsync/SNR/tone-
+	// agreement/hard-error checks). Applied after BPDecode+Unpack77
+	// succeed; CRC-passing decodes that fail the gate are rejected.
+	// Defaults from DefaultAcceptDecodeOptions; set field-by-field
+	// to override.
+	Gate AcceptDecodeOptions
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
-// ±5 Hz × ±0.5 s merge window (loose enough to absorb refinement
-// jitter, tight enough that two genuinely different signals don't
-// collide).
+// ±5 Hz × ±0.5 s merge window, default quality gate.
 func DefaultMultiPassOptions() MultiPassOptions {
 	return MultiPassOptions{
 		MaxPasses:   2,
 		FreqMergeHz: 5.0,
 		DtMergeSec:  0.5,
 		AudioRate:   audioRateHz,
+		Gate:        DefaultAcceptDecodeOptions(),
 	}
 }
 
@@ -124,6 +130,20 @@ func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
 			if !ur.OK {
 				continue
 			}
+			// Post-decode quality gate. Reject CRC-passing codewords
+			// that fail the nsync / tone-agreement / SNR / hard-error
+			// checks — these are the OSD CRC-lottery and tone-aliased-
+			// Costas-hit cases that have a valid LDPC+CRC but don't
+			// actually correspond to an FT8 signal in the audio.
+			nsync := HardSyncScore(grid)
+			hardErrs := HardErrorsCount(br.Codeword, llrs)
+			snr := measureCandidateSNR(ch, r, br.Codeword)
+			if ok, _ := AcceptDecode(
+				br.DecodeMethod, nsync, grid, br.Codeword,
+				hardErrs, snr, opts.Gate,
+			); !ok {
+				continue
+			}
 			passDecodes = append(passDecodes, DecodeRecord{
 				FreqHz:       r.FreqHz,
 				DtSec:        r.DtSec,
@@ -151,6 +171,28 @@ func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
 		}
 	}
 	return accepted
+}
+
+// measureCandidateSNR runs the M2 per-symbol fit path on the candidate
+// to produce its 2500 Hz-bandwidth SNR estimate. Reuses the channelizer
+// at 100 Hz BW (tight isolation that excludes ±100 Hz neighbours on
+// dense fixtures).
+func measureCandidateSNR(ch *Channelizer, r Candidate, cw [LDPCCodewordBits]uint8) float64 {
+	const snrBandwidthHz = 100.0
+	tones := CodewordToTones(cw)
+	ref := SynthesizeBaseband(tones, snrBandwidthHz)
+	bb, err := ch.Extract(r.FreqHz, snrBandwidthHz)
+	if err != nil {
+		return -1000 // sentinel: very negative SNR (will fail any gate)
+	}
+	startSample := int((r.DtSec + nominalStartSec) * snrBandwidthHz)
+	endSample := startSample + len(ref)
+	if startSample < 0 || endSample > len(bb) {
+		return -1000
+	}
+	sps := int(snrBandwidthHz * ft8SymbolPeriod)
+	m := MeasureSNRPerSymbol(bb[startSample:endSample], ref, sps, snrBandwidthHz)
+	return m.SNR2500DB
 }
 
 // subtractDecodeFromAudio synthesises the decode's audio-rate signal
