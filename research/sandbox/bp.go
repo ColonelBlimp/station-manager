@@ -213,7 +213,7 @@ func BPDecode(channelLLRs [LDPCCodewordBits]float64, opts BPOptions) BPResult {
 	// LLRs. Per the maxosd convention, this is the "BP + OSD with
 	// channel LLRs" mode (WSJT-X maxosd = 0).
 	if opts.OSD.Enable {
-		osdCW, ok, _ := runOSD(channelLLRs, opts.OSD.Order)
+		osdCW, ok, _ := runOSD(channelLLRs, opts.OSD.Order, opts.OSD.AcceptDistanceRatio)
 		if ok {
 			res.OK = true
 			res.SyndromeClean = true // by construction; OSD outputs are codewords

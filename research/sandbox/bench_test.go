@@ -262,6 +262,6 @@ func BenchmarkOSDDecode_Order2(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _, _ = runOSD(llrs, 2)
+		_, _, _ = runOSD(llrs, 2, 0)
 	}
 }

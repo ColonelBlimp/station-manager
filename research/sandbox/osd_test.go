@@ -13,7 +13,7 @@ func TestRunOSD_StrongLLRsDecodeOrderZero(t *testing.T) {
 	for i := range llrs {
 		llrs[i] = 5.0
 	}
-	cw, ok, _ := runOSD(llrs, 0)
+	cw, ok, _ := runOSD(llrs, 0, 0)
 	if !ok {
 		t.Fatal("runOSD returned ok=false on strong all-zero LLRs")
 	}
@@ -52,7 +52,7 @@ func TestRunOSD_OrderTwoCorrectsMRBFlips(t *testing.T) {
 	llrs[7] = -0.5
 	llrs[91] = -0.5
 
-	cw, ok, _ := runOSD(llrs, 2)
+	cw, ok, _ := runOSD(llrs, 2, 0)
 	if !ok {
 		t.Fatal("runOSD order 2 failed on a 2-MRB-flip case")
 	}
@@ -89,7 +89,7 @@ func TestRunOSD_GaussianEliminationProducesValidCodewords(t *testing.T) {
 
 	// Re-implement the order-0 path inline to access the candidate's
 	// codeword regardless of CRC. We can verify the syndrome on it.
-	cw, _, _ := runOSD(llrs, 0)
+	cw, _, _ := runOSD(llrs, 0, 0)
 	// Note: runOSD only returns codewords where the CRC passes. For
 	// a structural test we need to check the syndrome of the BEST
 	// candidate (not necessarily CRC-valid). Skip if we got nothing:

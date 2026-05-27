@@ -28,12 +28,19 @@ type OSDOptions struct {
 	// errors in the most-reliable positions but the cost grows roughly
 	// as 91^order.
 	Order int
+
+	// AcceptDistanceRatio is the cap on soft-distance / Σ|LLR| for a
+	// CRC-passing OSD candidate to be accepted. Lower values reject
+	// more (tighter): 0.05 rejects most CRC-lottery codewords on
+	// synthetic fixtures but also rejects marginal real-capture
+	// recoveries. 0.0 falls back to the legacy const (0.05).
+	AcceptDistanceRatio float64
 }
 
 // DefaultOSDOptions returns the baseline: OSD enabled at order 2,
 // matching the WSJT-X default for FT8.
 func DefaultOSDOptions() OSDOptions {
-	return OSDOptions{Enable: true, Order: 2}
+	return OSDOptions{Enable: true, Order: 2, AcceptDistanceRatio: 0.05}
 }
 
 // runOSD performs Ordered Statistics Decoding on the supplied
@@ -63,7 +70,10 @@ func DefaultOSDOptions() OSDOptions {
 //     · If CRC passes, compute soft distance Σ |LLR_v| · [cw_v ≠
 //     hard(LLR_v)] and track minimum.
 //  5. Return minimum-soft-distance CRC-valid candidate.
-func runOSD(llrs [LDPCCodewordBits]float64, order int) (cw [LDPCCodewordBits]uint8, ok bool, dmin float64) {
+func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64) (cw [LDPCCodewordBits]uint8, ok bool, dmin float64) {
+	if acceptRatio <= 0 {
+		acceptRatio = osdAcceptDistanceRatio
+	}
 	// --- Step 1: reliability ordering ---
 	type rankEntry struct {
 		origIdx int
@@ -316,7 +326,7 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int) (cw [LDPCCodewordBits]uin
 			}
 			totalAbs += a
 		}
-		if bestDist > totalAbs*osdAcceptDistanceRatio {
+		if bestDist > totalAbs*acceptRatio {
 			found = false
 		}
 	}

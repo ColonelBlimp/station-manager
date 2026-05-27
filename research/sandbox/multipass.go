@@ -56,10 +56,16 @@ type MultiPassOptions struct {
 	// Defaults from DefaultAcceptDecodeOptions; set field-by-field
 	// to override.
 	Gate AcceptDecodeOptions
+
+	// BP is the BPDecode tuning, including OSD fallback policy. Set
+	// to DefaultBPOptions in the zero-value MultiPassOptions; pass
+	// a customised BPOptions when tuning OSD AcceptDistanceRatio,
+	// MaxIterations, etc.
+	BP BPOptions
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
-// ±5 Hz × ±0.5 s merge window, default quality gate.
+// ±5 Hz × ±0.5 s merge window, default quality gate, default BP+OSD.
 func DefaultMultiPassOptions() MultiPassOptions {
 	return MultiPassOptions{
 		MaxPasses:   2,
@@ -67,6 +73,7 @@ func DefaultMultiPassOptions() MultiPassOptions {
 		DtMergeSec:  0.5,
 		AudioRate:   audioRateHz,
 		Gate:        DefaultAcceptDecodeOptions(),
+		BP:          DefaultBPOptions(),
 	}
 }
 
@@ -113,7 +120,13 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 	}
 	defer ch.Close()
 	rOpts := DefaultRefineOptions()
-	bpOpts := DefaultBPOptions()
+	bpOpts := opts.BP
+	// Zero-value BP defaults to DefaultBPOptions (defensive: callers
+	// that constructed MultiPassOptions{} directly without using
+	// DefaultMultiPassOptions still get a working decoder).
+	if bpOpts.MaxIterations == 0 {
+		bpOpts = DefaultBPOptions()
+	}
 	findOpts := DefaultSearchOptions()
 
 	var accepted []DecodeRecord
