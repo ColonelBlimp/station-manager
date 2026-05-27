@@ -312,6 +312,7 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 	}
 	fmt.Printf("  refine: df sweep ±%.2f Hz step %.2f Hz\n\n", refineOpts.DFSweepRangeHz, refineOpts.DFSweepStepHz)
 	refined := make([]sandbox.Candidate, len(cands))
+	nsyncs := make([]int, len(cands))
 	for i, c := range cands {
 		r, err := sandbox.RefineCandidate(ch, c, refineOpts)
 		if err != nil {
@@ -320,11 +321,17 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 			continue
 		}
 		refined[i] = r
+		grid, err := sandbox.ExtractSymbols(ch, r)
+		if err != nil {
+			log.Printf("    symbols failed @ refined=%.2f Hz / %.3f s: %v", r.FreqHz, r.DtSec, err)
+			continue
+		}
+		nsyncs[i] = sandbox.HardSyncScore(grid)
 	}
 
 	// Truth-vs-detection table.
-	fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-10s\n",
-		"truth signal", "coarse Hz", "refined Hz", "Δf Hz", "Δdt s", "sync")
+	fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-9s  %s\n",
+		"truth signal", "coarse Hz", "refined Hz", "Δf Hz", "Δdt s", "sync", "nsync/21")
 	hits, missed := 0, 0
 	usedCoarse := make([]bool, len(cands))
 	for _, sig := range manifest.Signals {
@@ -341,8 +348,8 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 			}
 		}
 		if best < 0 {
-			fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-10s  MISS\n",
-				sig.Text, "—", "—", "—", "—", "—")
+			fmt.Printf("  %-30s  %-10s  %-10s  %-10s  %-10s  %-9s  %s  MISS\n",
+				sig.Text, "—", "—", "—", "—", "—", "—")
 			missed++
 			continue
 		}
@@ -354,21 +361,33 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 		if absF(df) > refinedFreqTol || absF(ddt) > refinedDtTol {
 			verdict = "drift"
 		}
-		fmt.Printf("  %-30s  %9.2f   %9.2f   %+8.3f   %+8.4f   %9.2e   %s\n",
-			sig.Text, r.CoarseFreqHz, r.FreqHz, df, ddt, r.Sync, verdict)
+		fmt.Printf("  %-30s  %9.2f   %9.2f   %+8.3f   %+8.4f   %9.2e   %4d/21   %s\n",
+			sig.Text, r.CoarseFreqHz, r.FreqHz, df, ddt, r.Sync, nsyncs[best], verdict)
 		hits++
 	}
 
-	// Unmatched detections (spurious).
+	// Unmatched detections (spurious). Summarise their nsync values
+	// alongside the matched truths' to see the hard-sync gap.
 	spurious := 0
+	spuriousNsyncBuckets := [22]int{}
 	for i, used := range usedCoarse {
 		if used {
 			continue
 		}
 		spurious++
-		_ = i
+		spuriousNsyncBuckets[nsyncs[i]]++
 	}
 	fmt.Printf("\n  truth: %d matched, %d missed, %d spurious\n", hits, missed, spurious)
+
+	// Histogram of spurious nsync (where the matched-filter accepted
+	// a candidate but its symbol-domain sync says "no FT8 signal here").
+	fmt.Printf("\n  spurious nsync histogram:\n")
+	for n := 21; n >= 0; n-- {
+		if spuriousNsyncBuckets[n] == 0 {
+			continue
+		}
+		fmt.Printf("    %2d/21: %d\n", n, spuriousNsyncBuckets[n])
+	}
 }
 
 func absF(x float64) float64 {
