@@ -50,13 +50,21 @@ type AcceptDecodeOptions struct {
 	MaxHardErrors int
 
 	// MinNSyncOSDExperimental / MinToneAgreeOSDExperimental are
-	// stricter thresholds applied to OSD-path decodes from the deeper
-	// cascade stages (N=3, N1Norm, BestOfN). The cascade by construction
-	// surfaces candidates that N=1 and N=2 alone couldn't crack — these
-	// are more likely to be marginal real signals OR cascade-stage
-	// CRC-lottery wins. Tighter gating on the experimental-stage OSD
-	// path tries to reject the lottery wins without losing marginal-
-	// but-real recoveries.
+	// optional stricter thresholds applied to OSD-path decodes from
+	// the deeper cascade stages (N=3, N1Norm, BestOfN). When > the
+	// standard OSD thresholds, the gate uses the stricter values for
+	// experimental-stage decodes; when 0 (the default), no extra
+	// tightening is applied — experimental decodes go through the
+	// standard OSD gate.
+	//
+	// Session 103 swept these against the 6-capture corpus and found:
+	// experimental-only tightening at 13/55 cuts 4 extras (23 → 19)
+	// at the cost of 1 cascade-recovered truth (111 → 110), because
+	// the marginal-real and CRC-lottery populations sit too close in
+	// nsync/tone-agree space to separate cleanly. The lever produces
+	// small Pareto-improving moves but cannot reach 111/<23 without
+	// truth loss. Defaulted OFF pending operator decision on which
+	// precision/recall point to accept.
 	//
 	// N=2 is intentionally excluded from the experimental tier — it's
 	// the paper-prescribed (QEX § 6) block-detection sensitivity lift
@@ -64,7 +72,7 @@ type AcceptDecodeOptions struct {
 	// population; tightening N=2's OSD gate empirically costs as many
 	// truths as it saves. N=3, N1Norm, and BestOfN are operator-
 	// declared experimental cascade additions; their OSD path is the
-	// natural place to be stricter.
+	// natural place to be stricter when the operator opts in.
 	//
 	// BP-path decodes are not affected by these thresholds, regardless
 	// of source — BP's internal acceptance test (clean syndrome + CRC +
@@ -93,13 +101,17 @@ type AcceptDecodeOptions struct {
 //   - MaxHardErrors = 36 — 20% of 174 bits.
 func DefaultAcceptDecodeOptions() AcceptDecodeOptions {
 	return AcceptDecodeOptions{
-		MinNSyncBP:                  8,
-		MinNSyncOSD:                 11,
-		MinToneAgreeOSD:             50,
-		MinSNR2500DB:                -25.0,
-		MaxHardErrors:               36,
-		MinNSyncOSDExperimental:     13,
-		MinToneAgreeOSDExperimental: 55,
+		MinNSyncBP:      8,
+		MinNSyncOSD:     11,
+		MinToneAgreeOSD: 50,
+		MinSNR2500DB:    -25.0,
+		MaxHardErrors:   36,
+		// Experimental-stage tightening defaulted OFF (0). Set to
+		// 13/55 to enable the Session-103-measured Pareto-improving
+		// 111/23 → 110/19 configuration. See AcceptDecodeOptions
+		// godoc for the empirical sweep results.
+		MinNSyncOSDExperimental:     0,
+		MinToneAgreeOSDExperimental: 0,
 	}
 }
 
