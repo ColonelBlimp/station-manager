@@ -110,3 +110,151 @@ func HardBits(llrs [FT8CodewordBits]float64) [FT8CodewordBits]uint8 {
 	}
 	return bits
 }
+
+// SoftLLRsN2 computes a 174-bit LLR vector using N=2 block detection
+// per QEX 2020 paper § 6: adjacent pairs of data symbols' complex N=1
+// correlations (SymbolGrid.Amps) are coherently combined into 64 N=2
+// block correlations, magnitudes-squared are taken, and max-log demap
+// produces 6 bit LLRs per pair.
+//
+// Phase-coherence assumption: each block spans 2 × 0.160 s = 0.32 s.
+// The paper notes block detection requires phase stability over the
+// block length and "is said to be noncoherent because phase continuity
+// between sequences is not assumed". This is a strictly stronger
+// channel-coherence demand than N=1; it pays off when met.
+//
+// Pairing layout: data symbols are split by the middle Costas anchor
+// block (positions 36-42) into two contiguous halves of 29 symbols
+// each (dataSymbolIndices[0..28] = positions 7..35;
+// dataSymbolIndices[29..57] = positions 43..71). Pairs form
+// non-overlapping adjacent couples within each half: (0,1), (2,3),
+// ..., (26,27) and (29,30), ..., (55,56). Each half's leftover
+// symbol (d=28, d=57) falls back to N=1 LLRs — a clean 3 bits per
+// leftover for 6 total of the 174.
+//
+// Pairs are NOT formed across the middle Costas gap: bridging d=28
+// (position 35) and d=29 (position 43) would require phase coherence
+// over 1.12 s, beyond what the N=2 block-detection assumption can
+// reasonably claim.
+//
+// Output convention matches SoftLLRs: positive LLR favours bit 0.
+// Output scale is in |C|² units (power), consistent with the existing
+// SoftLLRs; BP's median-LLR normalisation handles the per-set scale
+// difference.
+//
+// Per-pair complexity is 64 complex sums + 64 magnitudes + 6 × 64
+// scans = O(384) operations. Across 28 pairs × 2 halves this is well
+// below 25 k ops total — negligible against the cost of a candidate's
+// channelize + refine + symbol-FFT path.
+func SoftLLRsN2(grid *SymbolGrid) [FT8CodewordBits]float64 {
+	var llrs [FT8CodewordBits]float64
+	pairHalfLLRs(grid, &llrs, 0, 29)
+	pairHalfLLRs(grid, &llrs, 29, 58)
+	return llrs
+}
+
+// pairHalfLLRs fills the LLR slots for data-symbol indices in [start, end)
+// using non-overlapping N=2 pairs (with the trailing odd symbol, if any,
+// falling back to N=1). Operates in place on llrs.
+func pairHalfLLRs(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, start, end int) {
+	d := start
+	for ; d+1 < end; d += 2 {
+		fillPairLLRsN2(grid, llrs, d, d+1)
+	}
+	if d < end {
+		fillSymbolLLRsN1(grid, llrs, d)
+	}
+}
+
+// fillPairLLRsN2 computes the 64 N=2 block correlations C_{m1,m2} =
+// Amps[s1][m1] + Amps[s2][m2], their magnitudes-squared, and the
+// max-log bit LLRs for the 6 codeword bits owned by the pair
+// (d1, d2). Writes into codeword bit positions 3·d1..3·d1+2 and
+// 3·d2..3·d2+2.
+func fillPairLLRsN2(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2 int) {
+	s1 := dataSymbolIndices[d1]
+	s2 := dataSymbolIndices[d2]
+
+	var mag2 [8][8]float64
+	for m1 := 0; m1 < 8; m1++ {
+		a1 := grid.Amps[s1][m1]
+		for m2 := 0; m2 < 8; m2++ {
+			c := a1 + grid.Amps[s2][m2]
+			re, im := real(c), imag(c)
+			mag2[m1][m2] = re*re + im*im
+		}
+	}
+
+	// First symbol's 3 bits: bit at position bitPos of inverseGrayMap[m1].
+	// codeword bit cbi = 3·d1 + (2 - bitPos) so bitPos=2 → MSB → cbi = 3·d1.
+	for bitPos := 2; bitPos >= 0; bitPos-- {
+		max0 := -math.MaxFloat64
+		max1 := -math.MaxFloat64
+		for m1 := 0; m1 < 8; m1++ {
+			bitval := (inverseGrayMap[m1] >> bitPos) & 1
+			for m2 := 0; m2 < 8; m2++ {
+				p := mag2[m1][m2]
+				if bitval == 0 {
+					if p > max0 {
+						max0 = p
+					}
+				} else {
+					if p > max1 {
+						max1 = p
+					}
+				}
+			}
+		}
+		cbi := 3*d1 + (2 - bitPos)
+		llrs[cbi] = max0 - max1
+	}
+
+	// Second symbol's 3 bits.
+	for bitPos := 2; bitPos >= 0; bitPos-- {
+		max0 := -math.MaxFloat64
+		max1 := -math.MaxFloat64
+		for m2 := 0; m2 < 8; m2++ {
+			bitval := (inverseGrayMap[m2] >> bitPos) & 1
+			for m1 := 0; m1 < 8; m1++ {
+				p := mag2[m1][m2]
+				if bitval == 0 {
+					if p > max0 {
+						max0 = p
+					}
+				} else {
+					if p > max1 {
+						max1 = p
+					}
+				}
+			}
+		}
+		cbi := 3*d2 + (2 - bitPos)
+		llrs[cbi] = max0 - max1
+	}
+}
+
+// fillSymbolLLRsN1 writes the 3 N=1 LLRs for data-symbol index d into
+// llrs. Used for the trailing leftover symbol in each half-frame when
+// the half-symbol count is odd. Replicates SoftLLRs's per-symbol logic
+// in place, scoped to one symbol.
+func fillSymbolLLRsN1(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d int) {
+	sym := dataSymbolIndices[d]
+	powers := grid.Tones[sym]
+	for bitPos := 2; bitPos >= 0; bitPos-- {
+		max0 := -math.MaxFloat64
+		max1 := -math.MaxFloat64
+		for tone := 0; tone < 8; tone++ {
+			if (inverseGrayMap[tone]>>bitPos)&1 == 0 {
+				if powers[tone] > max0 {
+					max0 = powers[tone]
+				}
+			} else {
+				if powers[tone] > max1 {
+					max1 = powers[tone]
+				}
+			}
+		}
+		cbi := 3*d + (2 - bitPos)
+		llrs[cbi] = max0 - max1
+	}
+}

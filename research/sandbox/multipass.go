@@ -161,10 +161,24 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			if err != nil {
 				continue
 			}
+			// Per QEX § 6: try N=1 first, then N=2 if N=1 fails. BPDecode
+			// internally falls back to OSD on BP failure, so each !br.OK
+			// here means BP+OSD failed on that LLR set. The N=2 set has
+			// a different shape (coherent within 0.32 s pairs of data
+			// symbols) and can recover signals where N=1 alone doesn't
+			// converge.
 			llrs := SoftLLRs(grid)
 			br := BPDecode(llrs, bpOpts)
+			usedN2 := false
 			if !br.OK {
-				continue
+				llrs2 := SoftLLRsN2(grid)
+				br2 := BPDecode(llrs2, bpOpts)
+				if !br2.OK {
+					continue
+				}
+				br = br2
+				llrs = llrs2
+				usedN2 = true
 			}
 			var payload [LDPCPayloadBits]uint8
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
@@ -177,6 +191,12 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			// checks — these are the OSD CRC-lottery and tone-aliased-
 			// Costas-hit cases that have a valid LDPC+CRC but don't
 			// actually correspond to an FT8 signal in the audio.
+			//
+			// hardErrs uses whichever LLR set produced the accepted
+			// codeword; the gate's MaxHardErrors threshold was tuned
+			// against N=1 LLRs but the metric remains directly
+			// interpretable for N=2 (count of sign-disagreement bits
+			// between channel LLRs and recovered codeword).
 			nsync := HardSyncScore(grid)
 			hardErrs := HardErrorsCount(br.Codeword, llrs)
 			snr := measureCandidateSNR(ch, r, br.Codeword)
@@ -186,12 +206,16 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			); !ok {
 				continue
 			}
+			method := br.DecodeMethod
+			if usedN2 {
+				method = method + "-N2"
+			}
 			passDecodes = append(passDecodes, DecodeRecord{
 				FreqHz:       r.FreqHz,
 				DtSec:        r.DtSec,
 				Text:         ur.Text,
 				Codeword:     br.Codeword,
-				DecodeMethod: br.DecodeMethod,
+				DecodeMethod: method,
 				Pass:         pass,
 			})
 			registerCallsigns(ht, ur.Text)
