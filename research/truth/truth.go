@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -121,3 +122,56 @@ func Read(path string) (*Manifest, error) {
 	}
 	return &m, nil
 }
+
+// NormalizeText canonicalises an FT8 message string for matching
+// between manifest truth text and decoder output. The two sources
+// agree on bit-level content but disagree on cosmetic formatting:
+//
+//   - jt9-oracle manifests sometimes carry trailing decoder-confidence
+//     annotations ("a1", "b2", etc.) that leak in from `jt9 -8` stdout
+//     parsing — these are not part of the FT8 message and the
+//     sandbox decoder never emits them.
+//   - R-prefixed signal reports appear in two forms: `R-09` (no space,
+//     compact) and `R -09` (space-separated). Both denote the same
+//     ADIF-style report; the originating side just differs.
+//   - Trailing whitespace and runs of internal whitespace differ
+//     across sources and carry no semantic content.
+//
+// NormalizeText pipes:
+//
+//  1. trim leading/trailing whitespace
+//  2. strip the jt9 trailing annotation if present
+//  3. collapse runs of internal whitespace to a single space
+//  4. fuse `R -09` / `R +08` into `R-09` / `R+08`
+//
+// Use on BOTH sides of a text-equality comparison; report code
+// should always print the *raw* input text so audits can see the
+// original formatting.
+//
+// Adding new normalizations: only add when a concrete observed
+// mismatch on a real fixture justifies it. The intent is to absorb
+// known formatting variance, not to make the matcher loose.
+func NormalizeText(text string) string {
+	s := strings.TrimSpace(text)
+	if m := jt9AnnotationRE.FindStringIndex(s); m != nil {
+		s = strings.TrimSpace(s[:m[0]])
+	}
+	s = whitespaceCollapseRE.ReplaceAllString(s, " ")
+	s = rReportRE.ReplaceAllString(s, "R$1")
+	return s
+}
+
+var (
+	// jt9AnnotationRE matches the trailing annotation jt9-oracle parsing
+	// occasionally leaves on the manifest text field (e.g. "... a1",
+	// "... b2"). Letter + 1–2 digits, anchored at end of string.
+	jt9AnnotationRE = regexp.MustCompile(`\s+[a-z][0-9]{1,2}$`)
+
+	// whitespaceCollapseRE matches runs of any whitespace for
+	// collapsing-to-single-space.
+	whitespaceCollapseRE = regexp.MustCompile(`\s+`)
+
+	// rReportRE matches the FT8 R-prefixed report when it has a space
+	// after the R; the replacement fuses to the compact form.
+	rReportRE = regexp.MustCompile(`R ([+-]\d+)`)
+)

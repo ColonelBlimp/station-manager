@@ -68,6 +68,15 @@ type MultiPassOptions struct {
 	// truth candidates that would otherwise be capped out by the
 	// default top-50.
 	Search SearchOptions
+
+	// UseAsymmetricSlice toggles the channelizer's FT8-tuned asymmetric
+	// admittance mode for this decode run. When true, the driver calls
+	// Channelizer.SetAsymmetricFT8Slice(true) before the first pass;
+	// every Extract during the run admits [-1.5·baud, +8.5·baud) only,
+	// rejecting adjacent-channel main lobes outside the tone band.
+	// Output rate and ExtractSymbols' 32-samples-per-symbol contract
+	// are preserved. Default false = current symmetric behaviour.
+	UseAsymmetricSlice bool
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -127,6 +136,7 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 		return nil
 	}
 	defer ch.Close()
+	ch.SetAsymmetricFT8Slice(opts.UseAsymmetricSlice)
 	rOpts := DefaultRefineOptions()
 	bpOpts := opts.BP
 	// Zero-value BP defaults to DefaultBPOptions (defensive: callers

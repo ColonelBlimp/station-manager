@@ -31,17 +31,29 @@ save() {
   echo "  $OUTDIR/$out"
 }
 
+save_clean() {
+  snr="$1"; seed="$2"; out="$3"
+  "$PROBE" \
+    -msg "CQ K1JT FN20" -freq 1500 \
+    -snr="$snr" -seed="$seed" \
+    -out="$OUTDIR/$out" \
+    > /dev/null
+  echo "  $OUTDIR/$out"
+}
+
 echo "Equal gain (A=1.0, B=1.0) — Gap 1"
 save 1510 1.0 1.0 -6 1 eq_dF10_SNR-6_seed1.wav
 save 1520 1.0 1.0 -6 1 eq_dF20_SNR-6_seed1.wav
 save 1530 1.0 1.0 -6 1 eq_dF30_SNR-6_seed1.wav
 save 1540 1.0 1.0 -6 1 eq_dF40_SNR-6_seed1.wav
 save 1550 1.0 1.0 -6 1 eq_dF50_SNR-6_seed1.wav
+save 1560 1.0 1.0 -6 1 eq_dF60_SNR-6_seed1.wav
 
 echo "A 2x stronger than B — original Session 84 finding"
 save 1510 2.0 1.0 -6 1 a2x_dF10_SNR-6_seed1.wav
 save 1520 2.0 1.0 -6 1 a2x_dF20_SNR-6_seed1.wav
 save 1540 2.0 1.0 -6 1 a2x_dF40_SNR-6_seed1.wav
+save 1550 2.0 1.0 -6 1 a2x_dF50_SNR-6_seed1.wav
 save 1560 2.0 1.0 -6 1 a2x_dF60_SNR-6_seed1.wav
 
 echo "A 4x stronger than B — Gap 2"
@@ -53,6 +65,11 @@ echo "A 2x B, louder SNR (-2 dB) — Gap 3"
 save 1510 2.0 1.0 -2 1 a2x_dF10_SNR-2_seed1.wav
 save 1520 2.0 1.0 -2 1 a2x_dF20_SNR-2_seed1.wav
 save 1540 2.0 1.0 -2 1 a2x_dF40_SNR-2_seed1.wav
+
+echo "Single clean signal (Session 101 channelizer A/B step 1)"
+save_clean +0 1 clean_SNR+0_seed1.wav
+save_clean -6 1 clean_SNR-6_seed1.wav
+save_clean -12 1 clean_SNR-12_seed1.wav
 
 echo
 echo "wrote $(ls -1 "$OUTDIR"/*.wav 2>/dev/null | wc -l) WAVs to $OUTDIR/"
