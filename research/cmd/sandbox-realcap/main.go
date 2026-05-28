@@ -29,6 +29,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"time"
@@ -84,7 +86,11 @@ func main() {
 	coverage := flag.Bool("coverage", false, "candidate-coverage diagnostic: bucket each truth signal by why it was missed (single-pass only)")
 	coverageMP := flag.Bool("coverage-mp", false, "multi-pass coverage with per-failed-candidate decoder diagnostics")
 	maxResultsSweep := flag.Bool("maxresults-sweep", false, "sweep SearchOptions.MaxResults to test the bucket-B hypothesis")
-	nmsDiag := flag.Bool("nms-diag", false, "NMS box sweep: pre-NMS raw count, truth survival in top-200, dropped-near-truth vs dropped-no-truth, same-freq-diff-dt truth pairs")
+	nmsDiag := flag.Bool("nms-diag", false, "NMS variant sweep (baseline + K=2 per-freq variants): pre-NMS raw count, truth survival, dropped-near-truth vs dropped-no-truth, same-freq-diff-dt truth pairs (uses -nms-cap)")
+	nmsCap := flag.Int("nms-cap", 200, "MaxResults cap applied after NMS in -nms-diag (200 is the operational default; 500 = deep-search variant)")
+	searchK2M := flag.Bool("search-k2m", false, "use K=2 medium NMS (tight 6.25Hz × 0.08s, group 12.5Hz, K=2) for the default / -maxresults-sweep decode paths")
+	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file (default-mode runs only)")
+	memProfile := flag.String("memprofile", "", "write heap profile to file at exit (default-mode runs only)")
 	flag.Parse()
 
 	wavs, err := listWAVs(*dir)
@@ -112,17 +118,20 @@ func main() {
 		return
 	}
 	if *maxResultsSweep {
-		runMaxResultsSweep(wavs)
+		runMaxResultsSweep(wavs, *searchK2M)
 		return
 	}
 	if *nmsDiag {
-		runNMSDiagnostic(wavs)
+		runNMSDiagnostic(wavs, *nmsCap)
 		return
 	}
 
 	opts := sandbox.DefaultMultiPassOptions()
 	if *singlePass {
 		opts.MaxPasses = 1
+	}
+	if *searchK2M {
+		opts.Search.K2Medium = true
 	}
 
 	// Persistent hash table across all captures — simulates the
@@ -1223,10 +1232,14 @@ func medianAbsLLR(llrs []float64) float64 {
 // Decision: if matched scales with MaxResults at acceptable runtime,
 // ship a higher default. If matched plateaus, bucket B candidates
 // don't actually decode and we need scanner score-quality work.
-func runMaxResultsSweep(wavs []string) {
+func runMaxResultsSweep(wavs []string, k2Medium bool) {
 	caps := []int{50, 100, 200, 500, 1000}
-	fmt.Printf("=== MaxResults sweep: %d configs × %d captures ===\n\n",
-		len(caps), len(wavs))
+	mode := "standard NMS"
+	if k2Medium {
+		mode = "K=2 medium NMS"
+	}
+	fmt.Printf("=== MaxResults sweep (%s): %d configs × %d captures ===\n\n",
+		mode, len(caps), len(wavs))
 
 	type res struct {
 		MaxResults int
@@ -1240,6 +1253,7 @@ func runMaxResultsSweep(wavs []string) {
 	for _, m := range caps {
 		opts := sandbox.DefaultMultiPassOptions()
 		opts.Search.MaxResults = m
+		opts.Search.K2Medium = k2Medium
 		ht := sandbox.NewCallsignHashTable()
 		start := time.Now()
 		matched, extras, total := 0, 0, 0
@@ -1534,17 +1548,18 @@ func classifyTruth(sig truth.Signal, fates []candidateFate,
 	return bucketE
 }
 
-// runNMSDiagnostic measures how NMS box dimensions interact with the
-// pre-NMS candidate pool: how many cells survive each box's
-// suppression, how many of those that fall inside a tighter box are
-// actually within truth tolerance, and how often the corpus contains
-// two truths at the same nominal frequency but different dt (the case
-// per-freq top-K timing-peak selection would buy).
+// runNMSDiagnostic measures how NMS variants interact with the
+// pre-NMS candidate pool: how many cells survive each variant's
+// suppression, how many truth signals retain a kept candidate, and
+// how often the corpus contains two truths at the same nominal
+// frequency but different dt (the case per-freq K=2 timing-peak
+// selection would buy).
 //
 // Approach: for each capture, run FindCandidatesRaw once (sorted by
-// score, no NMS, no cap). For each NMS box variant, re-run
-// SuppressOverlaps on the same raw list with MaxResults = 200 (the
-// current operational cap) and tally:
+// score, no NMS, no cap). For each variant — two standard NMS box
+// sizes plus three K=2 per-freq-group variants — re-run the
+// corresponding suppressor on the same raw list with MaxResults =
+// nmsCap and tally:
 //
 //   - post-NMS count (after cap)
 //   - truth signals whose nearest surviving candidate is within
@@ -1554,39 +1569,69 @@ func classifyTruth(sig truth.Signal, fates []candidateFate,
 //
 // Plus a corpus-wide count of same-freq-different-dt truth pairs
 // (|Δf| < 3.125 Hz AND |Δdt| > 0.2 s).
-func runNMSDiagnostic(wavs []string) {
-	type box struct {
-		name   string
-		freqHz float64
-		dtSec  float64
+//
+// K=2 variants admit up to 2 candidates per freq group, suppressing
+// only tight near-duplicates of already-kept candidates — the design
+// probe for "two timing peaks per freq bin, tight near-dupe
+// suppression only".
+func runNMSDiagnostic(wavs []string, nmsCap int) {
+	type variant struct {
+		name  string
+		apply func(raw []sandbox.Candidate, capN int) []sandbox.Candidate
 	}
-	boxes := []box{
-		{"±12.5Hz × ±0.12s  (current)", 12.5, 0.12},
-		{"±6.25Hz × ±0.12s  (freq -1 step)", 6.25, 0.12},
-		{"±6.25Hz × ±0.08s  (freq+time -1)", 6.25, 0.08},
-		{"±3.125Hz × ±0.08s (max-tight)", 3.125, 0.08},
+	variants := []variant{
+		{
+			name: "nms baseline   ±12.5Hz × ±0.12s",
+			apply: func(raw []sandbox.Candidate, capN int) []sandbox.Candidate {
+				return sandbox.SuppressOverlaps(raw, 12.5, 0.12, capN)
+			},
+		},
+		{
+			name: "nms F-tight    ±6.25Hz × ±0.12s",
+			apply: func(raw []sandbox.Candidate, capN int) []sandbox.Candidate {
+				return sandbox.SuppressOverlaps(raw, 6.25, 0.12, capN)
+			},
+		},
+		{
+			name: "nms F-narrow   ±3.125Hz × ±0.12s",
+			apply: func(raw []sandbox.Candidate, capN int) []sandbox.Candidate {
+				return sandbox.SuppressOverlaps(raw, 3.125, 0.12, capN)
+			},
+		},
+		{
+			name: "K=2 tight  d=3.125×0.04 grp=6.25",
+			apply: func(raw []sandbox.Candidate, capN int) []sandbox.Candidate {
+				return sandbox.SuppressOverlapsK2(raw, 3.125, 0.04, 6.25, 2, capN)
+			},
+		},
+		{
+			name: "K=2 medium d=6.25×0.08 grp=12.5",
+			apply: func(raw []sandbox.Candidate, capN int) []sandbox.Candidate {
+				return sandbox.SuppressOverlapsK2(raw, 6.25, 0.08, 12.5, 2, capN)
+			},
+		},
 	}
+	labels := []string{"base", "F-t ", "F-n ", "k2-t", "k2-m"}
 
-	type boxAgg struct {
+	type varAgg struct {
 		postNMS          int
-		truthSurvived    int // truth signals with a kept candidate in tolerance
-		droppedNearTruth int // dropped cells within truth tolerance of any truth
-		droppedNoTruth   int // dropped cells with no truth within tolerance
+		truthSurvived    int
+		droppedNearTruth int
+		droppedNoTruth   int
 	}
-	aggs := make([]boxAgg, len(boxes))
+	aggs := make([]varAgg, len(variants))
 
 	var totalRaw int
 	var totalTruth int
 	var totalPairs int
 
-	fmt.Printf("=== NMS box diagnostic on %d captures (MaxResults=200) ===\n\n", len(wavs))
+	fmt.Printf("=== NMS variant diagnostic on %d captures (MaxResults=%d) ===\n\n", len(wavs), nmsCap)
 	fmt.Printf("%-15s %7s %5s", "capture", "raw", "truth")
-	boxLabels := []string{"curr", "F-1", "FT-1", "tight"}
-	for _, lbl := range boxLabels {
-		fmt.Printf(" %5s/200 %5s-srv", lbl, lbl)
+	for _, lbl := range labels {
+		fmt.Printf("  %4s/%-3d %4s-srv", lbl, nmsCap, lbl)
 	}
 	fmt.Println()
-	fmt.Println(strings.Repeat("-", 15+1+7+1+5+1+(12)*len(boxes)))
+	fmt.Println(strings.Repeat("-", 15+1+7+1+5+1+(14)*len(variants)))
 
 	for _, w := range wavs {
 		data, err := audio.ReadWAV(w)
@@ -1617,19 +1662,15 @@ func runNMSDiagnostic(wavs []string) {
 			strings.TrimSuffix(filepath.Base(w), ".wav"),
 			len(raw), len(manifest.Signals))
 
-		for i, b := range boxes {
-			kept := sandbox.SuppressOverlaps(raw, b.freqHz, b.dtSec, 200)
+		for i, v := range variants {
+			kept := v.apply(raw, nmsCap)
 			aggs[i].postNMS += len(kept)
 
-			// Mark indices in raw that are in the kept set (by score
-			// + freq + dt identity — kept candidates are originals
-			// from raw, identity is exact).
 			keptSet := make(map[float64]bool, len(kept))
 			for _, k := range kept {
 				keptSet[k.Sync*1e7+k.FreqHz*1e3+k.DtSec] = true
 			}
 
-			// Truth survival.
 			survived := 0
 			for _, sig := range manifest.Signals {
 				for _, k := range kept {
@@ -1642,8 +1683,6 @@ func runNMSDiagnostic(wavs []string) {
 			}
 			aggs[i].truthSurvived += survived
 
-			// Dropped-near-truth vs dropped-no-truth among the raw
-			// candidates that are NOT in kept.
 			for _, c := range raw {
 				key := c.Sync*1e7 + c.FreqHz*1e3 + c.DtSec
 				if keptSet[key] {
@@ -1664,35 +1703,34 @@ func runNMSDiagnostic(wavs []string) {
 				}
 			}
 
-			fmt.Printf(" %9d %9d", len(kept), survived)
+			fmt.Printf(" %8d %8d", len(kept), survived)
 		}
 		fmt.Println()
 	}
 
-	fmt.Println(strings.Repeat("-", 15+1+7+1+5+1+(12)*len(boxes)))
+	fmt.Println(strings.Repeat("-", 15+1+7+1+5+1+(14)*len(variants)))
 	fmt.Printf("\nTotals: raw=%d, truth=%d, same-freq-diff-dt truth pairs=%d (Δf<3.125Hz, Δdt>0.2s)\n",
 		totalRaw, totalTruth, totalPairs)
 
-	fmt.Printf("\n%-35s %12s %12s %14s %14s\n",
-		"box", "post-NMS", "truth-surv", "dropped-near", "dropped-clean")
-	fmt.Println(strings.Repeat("-", 92))
-	for i, b := range boxes {
-		fmt.Printf("%-35s %12d %5d / %d %14d %14d\n",
-			b.name, aggs[i].postNMS, aggs[i].truthSurvived, totalTruth,
+	fmt.Printf("\n%-40s %10s %14s %14s %14s\n",
+		"variant", "post-NMS", "truth-surv", "dropped-near", "dropped-clean")
+	fmt.Println(strings.Repeat("-", 100))
+	for i, v := range variants {
+		fmt.Printf("%-40s %10d  %4d / %3d   %14d %14d\n",
+			v.name, aggs[i].postNMS, aggs[i].truthSurvived, totalTruth,
 			aggs[i].droppedNearTruth, aggs[i].droppedNoTruth)
 	}
 
 	fmt.Println()
 	fmt.Println("Reading the table:")
-	fmt.Println("  post-NMS     = candidates surviving NMS+cap (lower = tighter, more cells dropped)")
-	fmt.Println("  truth-surv   = # of jt9-truth signals with a surviving candidate in ±5Hz×±0.5s tolerance")
-	fmt.Println("  dropped-near = candidates suppressed within truth tolerance (could be alias OR lost real signal)")
+	fmt.Println("  post-NMS      = candidates surviving NMS+cap (capped at nmsCap)")
+	fmt.Println("  truth-surv    = # of jt9-truth signals with a surviving candidate in ±5Hz×±0.5s tolerance")
+	fmt.Println("  dropped-near  = candidates suppressed within truth tolerance (alias OR lost real signal)")
 	fmt.Println("  dropped-clean = candidates suppressed with no truth nearby (correct alias/noise suppression)")
 	fmt.Println()
-	fmt.Println("What to look for: tightening boxes should keep truth-surv flat or UP while dropped-clean falls;")
-	fmt.Println("if truth-surv drops, the tightening went too far and started losing real signal aliases that")
-	fmt.Println("themselves had a higher-scoring partner; if dropped-near rises, that suggests genuine adjacent")
-	fmt.Println("real signals being separated rather than aliases being kept.")
+	fmt.Println("K=2 variants admit up to 2 candidates per freq group; tight box only suppresses true near-dupes.")
+	fmt.Println("If K=2 truth-surv > baseline truth-surv: the per-freq quota recovered real signal masked by NMS.")
+	fmt.Println("If K=2 dropped-clean ≪ baseline: K=2 is admitting alias clusters baseline correctly dropped.")
 }
 
 // countSameFreqDiffDtTruth counts truth-pair occurrences where two

@@ -102,6 +102,15 @@ type SearchOptions struct {
 	// claiming multiple adjacent candidates.
 	NMSFreqHz float64
 	NMSDTSec  float64
+
+	// K2Medium switches the NMS pass to the K=2 per-freq-group variant
+	// with the "medium" parameter set (tight box 6.25 Hz × 0.08 s,
+	// freq group 12.5 Hz, K=2). Designed to admit up to two distinct
+	// candidates per freq group — covers the case where two stations
+	// transmit at the same nominal carrier with offset start times —
+	// while suppressing only true near-duplicates of an already-kept
+	// candidate. When true, NMSFreqHz / NMSDTSec are ignored.
+	K2Medium bool
 }
 
 // DefaultSearchOptions returns the baseline tuning used when zero-value
@@ -112,23 +121,37 @@ type SearchOptions struct {
 // 10×–1000× range; on real captures the typical FT8 signal scores
 // 5×–50× depending on SNR.
 //
-// NMSFreqHz = 12.5 Hz suppresses any lower-scoring cell within ±4 bins
-// (twice the tone spacing); NMSDTSec = 0.12 s = 3 spectrogram frames
-// (one full symbol width minus an epsilon — wider than the worst-case
-// mainlobe-leakage ±2-frame twin, narrower than the symbol duration
-// so distinct co-channel transmissions don't merge).
+// K2Medium defaults to true: NMS uses the per-freq-group K=2 variant
+// (tight box 6.25 Hz × 0.08 s, freq group 12.5 Hz, K=2) rather than
+// the simple-box SuppressOverlaps. The K=2 path admits up to two
+// candidates per freq group — covering the case where two stations
+// transmit at the same nominal carrier with offset start times —
+// while suppressing only true near-duplicates. Real-capture parity
+// at cap=200 lifts from 86/144 → 94/144 (Session 101, 2026-05-28)
+// at +6% wall time. The post-NMS candidate count is self-bounded by
+// the per-freq quota at ~240/slot regardless of MaxResults, so
+// runtime is dominated by the cap floor rather than the cap value.
+// Set K2Medium=false to fall back to the simple-box NMS at
+// NMSFreqHz / NMSDTSec.
 //
-// MaxResults = 200: calibrated against the real-capture corpus
-// (captures/{20m,live}_slot*.wav, 144 jt9-truth signals) via the
-// coverage diagnostic. The original 50 was tuned on synthetic 10cq
-// fixtures with 10 truth signals; on real captures with 20-30 active
-// stations + noise peaks, the top-50 was dominated by spurious matched-
-// filter peaks and weak real signals got capped out (79.9% of misses
-// were "candidate exists but rank > MaxResults"). Bumping to 200 lifts
-// recall from 42/144 → 72/144 with stable ~75% precision and ~4.7s
-// per-slot wall time (under the 15s budget with comfortable margin).
-// 500 is available as an opt-in "deep search" for offline analysis;
-// not enabled by default at 10s/slot.
+// NMSFreqHz = 12.5 Hz / NMSDTSec = 0.12 s parameterise the simple-box
+// NMS path used when K2Medium=false. They are not consulted in the
+// default K=2-medium configuration. Diagnostic runs in -nms-diag mode
+// at every cap from 200..750 confirmed these values are at or near
+// optimal for the simple-box variant — tightening freq below 12.5 Hz
+// or dt below 0.12 s monotonically lowers truth survival regardless
+// of cap, because narrower boxes admit alias clusters that crowd out
+// real signals in the cap-bound region.
+//
+// MaxResults = 200: original calibration was against the simple-box
+// variant where the cap binds hard. Under K=2 medium the candidate
+// pool self-bounds at ~240/slot, so MaxResults acts as a ceiling
+// rather than the active throttle — parity plateaus at 94/144 from
+// MaxResults ≥ 100 upward. The 200 value is retained for headroom
+// against future decoder enhancements (AP, OSD-3) that may benefit
+// from re-ranking a slightly larger pool. Wall-time per slot at
+// (K=2 medium, MaxResults=200) is ~8.9 s — comfortably under the
+// 15 s slot budget with ~6 s headroom for decoder-side work.
 func DefaultSearchOptions() SearchOptions {
 	return SearchOptions{
 		MinFreqHz:  100,
@@ -138,6 +161,7 @@ func DefaultSearchOptions() SearchOptions {
 		MaxResults: 200,
 		NMSFreqHz:  12.5,
 		NMSDTSec:   0.12,
+		K2Medium:   true,
 	}
 }
 
@@ -162,6 +186,9 @@ func DefaultSearchOptions() SearchOptions {
 func FindCandidates(spec [][]float64, opts SearchOptions) []Candidate {
 	opts = applyOptionDefaults(opts)
 	raw := FindCandidatesRaw(spec, opts)
+	if opts.K2Medium {
+		return SuppressOverlapsK2(raw, 6.25, 0.08, 12.5, 2, opts.MaxResults)
+	}
 	return SuppressOverlaps(raw, opts.NMSFreqHz, opts.NMSDTSec, opts.MaxResults)
 }
 
@@ -388,6 +415,55 @@ candLoop:
 		for _, k := range kept {
 			if absF(c.FreqHz-k.FreqHz) <= nmsFreqHz && absF(c.DtSec-k.DtSec) <= nmsDTSec {
 				continue candLoop
+			}
+		}
+		kept = append(kept, c)
+		if len(kept) >= maxKeep {
+			break
+		}
+	}
+	return kept
+}
+
+// SuppressOverlapsK2 is a tight-dedup + per-freq-group top-K NMS
+// variant. It admits up to K candidates in the same freq group,
+// suppressing only tight near-duplicates of already-kept candidates.
+//
+// Designed for the case where two real transmissions share a nominal
+// frequency but differ in dt (one starts earlier than the other) —
+// the standard NMS box would drop the second; K=2 here lets both
+// through provided they don't sit on top of each other in dt as well.
+//
+// Parameters:
+//
+//	tightFreqHz / tightDtSec: a candidate is suppressed if any already-
+//	  kept candidate sits within this box. Set narrow (~mainlobe width)
+//	  so true near-duplicates die but distinct-dt-same-freq pairs survive.
+//	groupFreqHz: candidates within this freq distance of a kept one
+//	  share a per-freq-group quota. The group widens beyond the tight
+//	  box to catch small carrier drift between two same-nominal-freq
+//	  transmissions.
+//	K: per-group cap; once K candidates fall in the same freq group,
+//	  further candidates in that group are suppressed even if outside
+//	  the tight box.
+//	maxKeep: overall result cap.
+func SuppressOverlapsK2(cands []Candidate, tightFreqHz, tightDtSec, groupFreqHz float64, K, maxKeep int) []Candidate {
+	if len(cands) == 0 || K <= 0 || maxKeep <= 0 {
+		return nil
+	}
+	kept := make([]Candidate, 0, maxKeep)
+candLoop:
+	for _, c := range cands {
+		groupCount := 0
+		for _, k := range kept {
+			if absF(c.FreqHz-k.FreqHz) <= tightFreqHz && absF(c.DtSec-k.DtSec) <= tightDtSec {
+				continue candLoop
+			}
+			if absF(c.FreqHz-k.FreqHz) <= groupFreqHz {
+				groupCount++
+				if groupCount >= K {
+					continue candLoop
+				}
 			}
 		}
 		kept = append(kept, c)
