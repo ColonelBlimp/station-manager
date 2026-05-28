@@ -1046,7 +1046,10 @@ func analyseCaptureMP(audio []float32, manifest *truth.Manifest,
 				allFates = append(allFates, f)
 				continue
 			}
-			gateOK, _ := sandbox.AcceptDecode(br.DecodeMethod, f.NSync, grid, br.Codeword,
+			// Coverage diagnostic path: uses LLRMetric=N1 since this
+			// codepath only runs the N=1 LLR set. The cascade-aware
+			// tightening lives in MultiPassDecode.
+			gateOK, _ := sandbox.AcceptDecode(br.DecodeMethod, sandbox.LLRMetricN1, f.NSync, grid, br.Codeword,
 				f.HardErrors, 1000.0, gate)
 			f.GateOK = gateOK
 			if gateOK {
@@ -1511,7 +1514,9 @@ func gatherCandidateFates(samples []float32, manifest *truth.Manifest,
 		hardErrs := sandbox.HardErrorsCount(br.Codeword, llrs)
 		// Skip the SNR check in coverage mode for speed; pass +inf
 		// so MinSNR2500DB doesn't reject. (The other 4 checks remain.)
-		gateOK, _ := sandbox.AcceptDecode(br.DecodeMethod, nsync, grid, br.Codeword,
+		// LLRMetric=N1 since this codepath only computes the N=1 LLR
+		// set; the cascade-aware tightening applies in MultiPassDecode.
+		gateOK, _ := sandbox.AcceptDecode(br.DecodeMethod, sandbox.LLRMetricN1, nsync, grid, br.Codeword,
 			hardErrs, 1000.0, gate)
 		f.GateOK = gateOK
 		if gateOK {

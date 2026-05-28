@@ -48,6 +48,30 @@ type AcceptDecodeOptions struct {
 	// codeword bits) suggests BP wandered to a far codeword that's
 	// unlikely to be the truth even if it passes CRC.
 	MaxHardErrors int
+
+	// MinNSyncOSDExperimental / MinToneAgreeOSDExperimental are
+	// stricter thresholds applied to OSD-path decodes from the deeper
+	// cascade stages (N=3, N1Norm, BestOfN). The cascade by construction
+	// surfaces candidates that N=1 and N=2 alone couldn't crack — these
+	// are more likely to be marginal real signals OR cascade-stage
+	// CRC-lottery wins. Tighter gating on the experimental-stage OSD
+	// path tries to reject the lottery wins without losing marginal-
+	// but-real recoveries.
+	//
+	// N=2 is intentionally excluded from the experimental tier — it's
+	// the paper-prescribed (QEX § 6) block-detection sensitivity lift
+	// and its truths overlap heavily with the marginal-real signal
+	// population; tightening N=2's OSD gate empirically costs as many
+	// truths as it saves. N=3, N1Norm, and BestOfN are operator-
+	// declared experimental cascade additions; their OSD path is the
+	// natural place to be stricter.
+	//
+	// BP-path decodes are not affected by these thresholds, regardless
+	// of source — BP's internal acceptance test (clean syndrome + CRC +
+	// soft-distance) is already strict enough that promoting BP-grade
+	// wins from any cascade stage stays cheap. The lever is OSD-only.
+	MinNSyncOSDExperimental     int
+	MinToneAgreeOSDExperimental int
 }
 
 // DefaultAcceptDecodeOptions returns the baseline tuning, calibrated
@@ -69,11 +93,13 @@ type AcceptDecodeOptions struct {
 //   - MaxHardErrors = 36 — 20% of 174 bits.
 func DefaultAcceptDecodeOptions() AcceptDecodeOptions {
 	return AcceptDecodeOptions{
-		MinNSyncBP:      8,
-		MinNSyncOSD:     11,
-		MinToneAgreeOSD: 50,
-		MinSNR2500DB:    -25.0,
-		MaxHardErrors:   36,
+		MinNSyncBP:                  8,
+		MinNSyncOSD:                 11,
+		MinToneAgreeOSD:             50,
+		MinSNR2500DB:                -25.0,
+		MaxHardErrors:               36,
+		MinNSyncOSDExperimental:     13,
+		MinToneAgreeOSDExperimental: 55,
 	}
 }
 
@@ -83,6 +109,12 @@ func DefaultAcceptDecodeOptions() AcceptDecodeOptions {
 // Inputs:
 //
 //   - method: BPResult.DecodeMethod ("BP", "OSD-N", "fail")
+//   - llrMetric: which LLR-generation variant produced the decode
+//     ("N1", "N2", "N3", "N1Norm", "BestOfN"). When method is OSD-N
+//     and the source is non-N=1, the stricter MinNSyncOSDNonN1 /
+//     MinToneAgreeOSDNonN1 thresholds apply. BP-path decodes are
+//     not affected by source. Empty string treated as N=1 for
+//     backwards-compatibility with non-cascade-aware callers.
 //   - nsync: HardSyncScore(grid) — Costas tone-agreement count, 0..21
 //   - grid: the SymbolGrid, used for the OSD tone-agreement check
 //   - cw: the decoded 174-bit codeword
@@ -91,6 +123,7 @@ func DefaultAcceptDecodeOptions() AcceptDecodeOptions {
 //   - opts: the AcceptDecodeOptions thresholds
 func AcceptDecode(
 	method string,
+	llrMetric string,
 	nsync int,
 	grid *SymbolGrid,
 	cw [LDPCCodewordBits]uint8,
@@ -106,12 +139,27 @@ func AcceptDecode(
 	}
 	isOSD := strings.HasPrefix(method, "OSD")
 	if isOSD {
-		if nsync < opts.MinNSyncOSD {
-			return false, fmt.Sprintf("OSD nsync %d < %d", nsync, opts.MinNSyncOSD)
+		minNSync := opts.MinNSyncOSD
+		minToneAgree := opts.MinToneAgreeOSD
+		// Experimental cascade stages (N=3, N1Norm, BestOfN) get the
+		// stricter OSD threshold; N=1 and N=2 stay at the standard
+		// OSD gate. N=2 is excluded because it's the paper-prescribed
+		// block-detection lift and its truths overlap too closely with
+		// the marginal-real population for tightening to win.
+		if isExperimentalLLRMetric(llrMetric) {
+			if opts.MinNSyncOSDExperimental > minNSync {
+				minNSync = opts.MinNSyncOSDExperimental
+			}
+			if opts.MinToneAgreeOSDExperimental > minToneAgree {
+				minToneAgree = opts.MinToneAgreeOSDExperimental
+			}
+		}
+		if nsync < minNSync {
+			return false, fmt.Sprintf("OSD nsync %d < %d (metric=%s)", nsync, minNSync, llrMetric)
 		}
 		toneAgree := ToneAgreementCount(cw, grid)
-		if toneAgree < opts.MinToneAgreeOSD {
-			return false, fmt.Sprintf("OSD tone-agree %d/79 < %d", toneAgree, opts.MinToneAgreeOSD)
+		if toneAgree < minToneAgree {
+			return false, fmt.Sprintf("OSD tone-agree %d/79 < %d (metric=%s)", toneAgree, minToneAgree, llrMetric)
 		}
 	} else {
 		if nsync < opts.MinNSyncBP {
@@ -119,6 +167,21 @@ func AcceptDecode(
 		}
 	}
 	return true, ""
+}
+
+// isExperimentalLLRMetric reports whether the LLR-metric source is
+// one of the operator-declared "experimental" cascade stages — N=3,
+// N1Norm, BestOfN — that get the stricter OSD gate. N=1 and N=2 are
+// the paper-prescribed core (§ 6 N=1 + N=2 block detection) and use
+// the standard gate. Empty metric string (legacy non-cascade-aware
+// callers) is treated as non-experimental.
+func isExperimentalLLRMetric(metric string) bool {
+	switch metric {
+	case LLRMetricN3, LLRMetricN1Norm, LLRMetricBestOfN:
+		return true
+	default:
+		return false
+	}
 }
 
 // ToneAgreementCount returns the count (0..79) of symbol positions

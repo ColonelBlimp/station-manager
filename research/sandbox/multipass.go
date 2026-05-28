@@ -101,6 +101,15 @@ type MultiPassOptions struct {
 	// Output rate and ExtractSymbols' 32-samples-per-symbol contract
 	// are preserved. Default false = current symmetric behaviour.
 	UseAsymmetricSlice bool
+
+	// EnableBestOfN gates the per-bit best-of-{N=1,N=2,N=3} cascade
+	// stage (pass 5). Default false: the cascade ends at N1Norm.
+	// Session 103 corpus measurement showed BestOfN produces zero
+	// matched-truth lift in symmetric mode and only +1 truth in
+	// asymmetric — kept as an experimental opt-in rather than the
+	// operative default. SoftLLRsBestOfN + sanity tests + attribution
+	// plumbing stay in the tree; this flag is the production gate.
+	EnableBestOfN bool
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -241,7 +250,7 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 							br = br4
 							llrs = llrs4
 							llrMetric = LLRMetricN1Norm
-						} else {
+						} else if opts.EnableBestOfN {
 							llrs5 := SoftLLRsBestOfN(grid)
 							br5 := BPDecode(llrs5, bpOpts)
 							if !br5.OK {
@@ -250,6 +259,8 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 							br = br5
 							llrs = llrs5
 							llrMetric = LLRMetricBestOfN
+						} else {
+							continue
 						}
 					}
 				}
@@ -275,7 +286,7 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			hardErrs := HardErrorsCount(br.Codeword, llrs)
 			snr := measureCandidateSNR(ch, r, br.Codeword)
 			if ok, _ := AcceptDecode(
-				br.DecodeMethod, nsync, grid, br.Codeword,
+				br.DecodeMethod, llrMetric, nsync, grid, br.Codeword,
 				hardErrs, snr, opts.Gate,
 			); !ok {
 				continue
