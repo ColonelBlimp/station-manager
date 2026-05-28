@@ -45,23 +45,25 @@ func SynthesizeAudio(
 	cosOut = make([]float32, audioLen)
 	sinOut = make([]float32, audioLen)
 
-	// Piecewise instantaneous-frequency trace at audio rate.
-	freq := make([]float64, signalLen)
-	for n := 0; n < signalLen; n++ {
-		freq[n] = carrierHz + float64(tones[n/sps])*refineToneSpacingHz
+	// Per-symbol freq lookup (79 entries instead of materializing a
+	// length-signalLen array). freq[n] in the original is segFreq[n/sps].
+	var segFreq [ft8SymbolCount]float64
+	for s := 0; s < ft8SymbolCount; s++ {
+		segFreq[s] = carrierHz + float64(tones[s])*refineToneSpacingHz
 	}
 
-	// Gaussian filter (same BT=2.0 kernel as SynthesizeBaseband, just
-	// re-sampled to audio rate). σ = √(ln 2) / (2πB), B = 12.5 Hz.
+	// Gaussian kernel (same BT=2.0 as SynthesizeBaseband, sampled at
+	// audio rate). σ = √(ln 2) / (2πB), B = 12.5 Hz.
 	sigma := math.Sqrt(math.Ln2) / (2 * math.Pi * gfskFilterB)
 	sigmaSamples := sigma * audioRate
 	halfLen := int(math.Ceil(3 * sigmaSamples))
 	if halfLen < 1 {
 		halfLen = 1
 	}
-	h := make([]float64, 2*halfLen+1)
+	kernelLen := 2*halfLen + 1
+	h := make([]float64, kernelLen)
 	hSum := 0.0
-	for k := 0; k <= 2*halfLen; k++ {
+	for k := 0; k < kernelLen; k++ {
 		x := float64(k-halfLen) / sigmaSamples
 		h[k] = math.Exp(-0.5 * x * x)
 		hSum += h[k]
@@ -69,29 +71,81 @@ func SynthesizeAudio(
 	for k := range h {
 		h[k] /= hSum
 	}
-
-	// Convolve freq with h, edge-clamping at signal boundaries.
-	smooth := make([]float64, signalLen)
-	for n := 0; n < signalLen; n++ {
-		acc := 0.0
-		for k := 0; k <= 2*halfLen; k++ {
-			idx := n + k - halfLen
-			if idx < 0 {
-				idx = 0
-			} else if idx >= signalLen {
-				idx = signalLen - 1
-			}
-			acc += h[k] * freq[idx]
-		}
-		smooth[n] = acc
+	// cumH[k] = Σ h[0..k-1]; cumH[0] = 0, cumH[kernelLen] = 1.
+	// Gives the kernel mass over taps [a, b) as cumH[b] - cumH[a].
+	cumH := make([]float64, kernelLen+1)
+	for k := 0; k < kernelLen; k++ {
+		cumH[k+1] = cumH[k] + h[k]
 	}
 
-	// Integrate phase, emit cos+sin at audio rate within the signal
-	// time window.
+	// The naive smooth[n] = Σ_k h[k] · freq[clamp(n+k-halfLen)] is
+	// O(signalLen × kernelLen). But freq is piecewise-constant in
+	// segments of width sps (79 segments total), so the convolution
+	// reduces to a sum over only the segments the kernel overlaps —
+	// at most 2 (kernelLen=763 < sps=1920) plus optional edge-clamp
+	// contributions. The exact identity is:
+	//
+	//   smooth[n] = Σ_s segFreq[s] · (cumH[overlapHi_s] - cumH[overlapLo_s])
+	//             + (edge-clamp contributions from segFreq[0] / segFreq[end])
+	//
+	// Each kernel tap that maps to signal index < 0 uses segFreq[0]
+	// (edge clamp); each tap that maps to >= signalLen uses
+	// segFreq[end]. Their masses are cumH[lowClampCount] and
+	// cumH[highClampCount] respectively.
 	phase := 0.0
 	dPhase := 2 * math.Pi / audioRate
+	lastSegIdx := ft8SymbolCount - 1
 	for n := 0; n < signalLen; n++ {
-		phase += dPhase * smooth[n]
+		// Signal-domain range covered by the kernel (before clamping).
+		sigLo := n - halfLen     // inclusive
+		sigHi := n + halfLen + 1 // exclusive
+
+		smoothN := 0.0
+		kStart := 0 // first non-clamped kernel tap index
+		if sigLo < 0 {
+			clampLen := -sigLo
+			smoothN += segFreq[0] * cumH[clampLen]
+			sigLo = 0
+			kStart = clampLen
+		}
+		kEnd := kernelLen // exclusive; last non-clamped tap index + 1
+		if sigHi > signalLen {
+			clampLen := sigHi - signalLen
+			smoothN += segFreq[lastSegIdx] * cumH[clampLen]
+			sigHi = signalLen
+			kEnd = kernelLen - clampLen
+		}
+		// Active region: signal indices [sigLo, sigHi) ↔ kernel taps
+		// [kStart, kEnd). Iterate segments that overlap [sigLo, sigHi).
+		sStart := sigLo / sps
+		sEnd := (sigHi - 1) / sps
+		for s := sStart; s <= sEnd; s++ {
+			segLo := s * sps
+			segHi := segLo + sps
+			if segLo < sigLo {
+				segLo = sigLo
+			}
+			if segHi > sigHi {
+				segHi = sigHi
+			}
+			// Map segment's [segLo, segHi) signal indices back to
+			// kernel-tap indices: tap = signalIdx - (n-halfLen).
+			kLo := segLo - (n - halfLen)
+			kHi := segHi - (n - halfLen)
+			// Sanity-clip to the active tap window (no-op in practice
+			// once the active region is right, but defensive).
+			if kLo < kStart {
+				kLo = kStart
+			}
+			if kHi > kEnd {
+				kHi = kEnd
+			}
+			if kHi > kLo {
+				smoothN += segFreq[s] * (cumH[kHi] - cumH[kLo])
+			}
+		}
+
+		phase += dPhase * smoothN
 		idx := signalStart + n
 		if idx < 0 || idx >= audioLen {
 			continue

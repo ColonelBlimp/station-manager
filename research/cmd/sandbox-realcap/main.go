@@ -134,6 +134,32 @@ func main() {
 		opts.Search.K2Medium = true
 	}
 
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			log.Fatalf("create cpuprofile: %v", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatalf("start cpuprofile: %v", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+	if *memProfile != "" {
+		defer func() {
+			f, err := os.Create(*memProfile)
+			if err != nil {
+				log.Printf("create memprofile: %v", err)
+				return
+			}
+			defer f.Close()
+			runtime.GC()
+			if err := pprof.WriteHeapProfile(f); err != nil {
+				log.Printf("write memprofile: %v", err)
+			}
+		}()
+	}
+
 	// Persistent hash table across all captures — simulates the
 	// operational "heard in earlier slots" memory.
 	ht := sandbox.NewCallsignHashTable()
