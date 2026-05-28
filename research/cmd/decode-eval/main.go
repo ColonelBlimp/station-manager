@@ -638,9 +638,19 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 	// Match by TEXT + (freq, dt). A decode whose text doesn't equal
 	// the truth text can't claim that truth entry, even if it's at
 	// the right position — that's a wrong decode at the right place.
+	//
+	// Text comparison runs through truth.NormalizeText so manifest-
+	// formatting variance (jt9-oracle trailing confidence annotations
+	// like "a1", "R-09" vs "R -09" report convention) doesn't produce
+	// phantom mismatches. Raw text is preserved in records[]; only the
+	// comparison is normalized. Affects historical research/demod
+	// parity figures (96/109/110 in project_research_decoder were
+	// under-counted by a similar magnitude to the sandbox baseline
+	// correction 94 → 107 / 144).
 	for ti, ts := range manifest.Signals {
 		bestIdx := -1
 		bestDistSq := math.Inf(1)
+		tsNorm := truth.NormalizeText(ts.Text)
 		for di, r := range records {
 			if !r.crcPass || !r.unpackOK {
 				continue
@@ -648,7 +658,7 @@ func score(records []decodeRecord, manifest *truth.Manifest, verbose bool) (matc
 			if matchedDecode[di] >= 0 {
 				continue
 			}
-			if r.text != ts.Text {
+			if truth.NormalizeText(r.text) != tsNorm {
 				continue
 			}
 			df := r.cand.Freq - ts.FreqHz

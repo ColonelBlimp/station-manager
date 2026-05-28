@@ -87,18 +87,23 @@ func main() {
 		fmt.Println()
 	}
 
-	// Truth match.
+	// Truth match. Text comparison goes through truth.NormalizeText on
+	// both sides so manifest-formatting variance (jt9-oracle trailing
+	// confidence annotations, "R-09" vs "R -09" report convention)
+	// doesn't produce phantom mismatches. Raw text is preserved for
+	// the report output above; only the comparison is normalized.
 	matched := 0
 	missed := 0
 	matchedTruth := make([]bool, len(manifest.Signals))
 	for _, d := range decodes {
+		dText := truth.NormalizeText(d.Text)
 		for ti, sig := range manifest.Signals {
 			if matchedTruth[ti] {
 				continue
 			}
 			if math.Abs(d.FreqHz-sig.FreqHz) <= *freqTol &&
 				math.Abs(d.DtSec-sig.DTSec) <= *dtTol &&
-				d.Text == sig.Text {
+				dText == truth.NormalizeText(sig.Text) {
 				matchedTruth[ti] = true
 				matched++
 				break
@@ -127,13 +132,17 @@ func main() {
 	}
 
 	// False positives: decodes whose text isn't in the truth manifest.
+	// Keyed by NormalizeText for consistency with the truth-matching
+	// loop above — without it, a decode of "R-09" against a manifest
+	// holding "R -09" would be double-counted (missed in truth match,
+	// counted as false positive).
 	falsePositives := 0
 	truthTexts := map[string]bool{}
 	for _, sig := range manifest.Signals {
-		truthTexts[sig.Text] = true
+		truthTexts[truth.NormalizeText(sig.Text)] = true
 	}
 	for _, d := range decodes {
-		if !truthTexts[d.Text] {
+		if !truthTexts[truth.NormalizeText(d.Text)] {
 			falsePositives++
 		}
 	}

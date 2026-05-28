@@ -22,14 +22,38 @@ type DecodeRecord struct {
 	Codeword [LDPCCodewordBits]uint8
 
 	// DecodeMethod is "BP" / "OSD-N" / "fail" — propagated from the
-	// BP layer.
+	// BP layer. The LLR-metric (N=1, N=2, N=3, ...) used to produce
+	// this decode is recorded separately in LLRMetric.
 	DecodeMethod string
+
+	// LLRMetric records which LLR-generation strategy successfully fed
+	// BP+OSD to produce this decode. Set to one of the LLRMetric*
+	// constants (LLRMetricN1, LLRMetricN2, LLRMetricN3, ...). The
+	// cascade tries them in increasing-block-N order; first metric
+	// whose LLRs yield a CRC-passing codeword is recorded.
+	//
+	// Per-metric attribution lets the corpus harness count which
+	// metric uniquely recovered which truth — the load-bearing signal
+	// for deciding whether to add further metrics (bit-normalized,
+	// best-of-N) to the cascade.
+	LLRMetric string
 
 	// Pass records which decoder pass produced this record (1 or 2).
 	// Multi-pass diagnostics: pass 2 decodes only exist when the
 	// subtract-and-redecode loop recovered an overlap.
 	Pass int
 }
+
+// LLRMetric* constants name the LLR-generation strategies the cascade
+// can use. Keep these stable — the corpus harness uses string equality
+// to attribute decodes per-metric.
+const (
+	LLRMetricN1      = "N1"
+	LLRMetricN2      = "N2"
+	LLRMetricN3      = "N3"
+	LLRMetricN1Norm  = "N1Norm"
+	LLRMetricBestOfN = "BestOfN"
+)
 
 // MultiPassOptions tunes the multi-pass loop. Zero-value falls back
 // to defaults.
@@ -171,24 +195,64 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			if err != nil {
 				continue
 			}
-			// Per QEX § 6: try N=1 first, then N=2 if N=1 fails. BPDecode
-			// internally falls back to OSD on BP failure, so each !br.OK
-			// here means BP+OSD failed on that LLR set. The N=2 set has
-			// a different shape (coherent within 0.32 s pairs of data
-			// symbols) and can recover signals where N=1 alone doesn't
-			// converge.
+			// Cascade through LLR-generation variants in increasing-
+			// model-complexity order. BPDecode internally falls back to
+			// OSD on BP failure, so each !br.OK here means BP+OSD
+			// failed on that LLR set. First metric whose LLRs decode to
+			// a CRC-pass wins; we record which in llrMetric so the
+			// corpus harness can attribute lifts.
+			//
+			//   1. N=1     — single-symbol max-log demap (QEX § 6)
+			//   2. N=2     — 2-symbol block detection, 0.32 s coherence
+			//   3. N=3     — 3-symbol block detection, 0.48 s coherence
+			//   4. N1Norm  — per-symbol noise-normalized N=1 (BP scale
+			//                invariance failure mode; see
+			//                qex-derivation.md § 8). Last in cascade
+			//                because it shares N=1's coherence model;
+			//                higher-N block detection takes precedence
+			//                when N=1 fails. Empirically measured.
+			//   5. BestOfN — per-bit max-|LLR| selection across
+			//                {N=1, N=2, N=3}. Produces an LLR vector
+			//                that no single source can produce. Last
+			//                in cascade because it costs 3 metric
+			//                generations per invocation. See
+			//                qex-derivation.md § 9.
 			llrs := SoftLLRs(grid)
 			br := BPDecode(llrs, bpOpts)
-			usedN2 := false
+			llrMetric := LLRMetricN1
 			if !br.OK {
 				llrs2 := SoftLLRsN2(grid)
 				br2 := BPDecode(llrs2, bpOpts)
-				if !br2.OK {
-					continue
+				if br2.OK {
+					br = br2
+					llrs = llrs2
+					llrMetric = LLRMetricN2
+				} else {
+					llrs3 := SoftLLRsN3(grid)
+					br3 := BPDecode(llrs3, bpOpts)
+					if br3.OK {
+						br = br3
+						llrs = llrs3
+						llrMetric = LLRMetricN3
+					} else {
+						llrs4 := SoftLLRsN1BitNormalized(grid)
+						br4 := BPDecode(llrs4, bpOpts)
+						if br4.OK {
+							br = br4
+							llrs = llrs4
+							llrMetric = LLRMetricN1Norm
+						} else {
+							llrs5 := SoftLLRsBestOfN(grid)
+							br5 := BPDecode(llrs5, bpOpts)
+							if !br5.OK {
+								continue
+							}
+							br = br5
+							llrs = llrs5
+							llrMetric = LLRMetricBestOfN
+						}
+					}
 				}
-				br = br2
-				llrs = llrs2
-				usedN2 = true
 			}
 			var payload [LDPCPayloadBits]uint8
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
@@ -216,16 +280,13 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			); !ok {
 				continue
 			}
-			method := br.DecodeMethod
-			if usedN2 {
-				method = method + "-N2"
-			}
 			passDecodes = append(passDecodes, DecodeRecord{
 				FreqHz:       r.FreqHz,
 				DtSec:        r.DtSec,
 				Text:         ur.Text,
 				Codeword:     br.Codeword,
-				DecodeMethod: method,
+				DecodeMethod: br.DecodeMethod,
+				LLRMetric:    llrMetric,
 				Pass:         pass,
 			})
 			registerCallsigns(ht, ur.Text)

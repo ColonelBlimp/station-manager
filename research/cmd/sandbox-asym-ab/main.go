@@ -54,6 +54,18 @@ type modeResult struct {
 	methods  map[string]int
 	matchMap []bool          // matched[i] = true if expected[i] was hit
 	margins  []marginMetrics // per-expected[] margin diagnostic; len == len(expected)
+
+	// llrMetricByTruth records the LLR metric ("N1", "N2", "N3", ...)
+	// of the decode that matched expected[i]. Empty string if the truth
+	// was not matched. Used by the corpus aggregate to surface which
+	// metric uniquely recovers which truths.
+	llrMetricByTruth []string
+
+	// llrMetricCounts is a histogram of the LLR metric used by every
+	// decode in this run, regardless of whether the decode matched a
+	// truth. Useful for understanding cascade utilisation independent
+	// of correctness.
+	llrMetricCounts map[string]int
 }
 
 // marginMetrics captures the per-truth LLR-margin signal at the known
@@ -182,6 +194,17 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		corpusTotalTruths                   int
 		transMissToMatch, transMatchToMiss  int
 		asymOnlyExtras                      []extraDump
+		// Per-LLR-metric attribution: count matched truths whose decode
+		// succeeded via each metric. Indexed by mode label → metric →
+		// count. Captured during the per-capture loop and totalled here
+		// for the corpus aggregate.
+		symMetricMatched  = map[string]int{}
+		asymMetricMatched = map[string]int{}
+		// Per-metric truths recovered ONLY by N=k (where lower-N
+		// variants would have failed). Records the truth text + freq
+		// for the writeup-quality table.
+		symUniqueByMetric  = map[string][]string{}
+		asymUniqueByMetric = map[string][]string{}
 	)
 
 	for _, w := range matches {
@@ -248,6 +271,36 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		corpusAsymExtras += asym.extras
 		corpusTotalTruths += len(exp)
 
+		// Per-metric attribution. The "unique to N=k" lists capture
+		// truths recovered ONLY by N=k that lower-N variants didn't
+		// crack — the load-bearing signal for "did adding N=k earn
+		// its keep". We don't have a separate "would-have-failed-at-
+		// N=1" run, so we approximate: a truth is "uniquely recovered
+		// by N=k" if its winning decode's LLRMetric was N=k. This
+		// double-counts cases where N=1 would have also worked under
+		// a different candidate refinement (rare in practice).
+		captureBase := filepath.Base(w)
+		for i := range exp {
+			if sym.matchMap[i] && sym.llrMetricByTruth[i] != "" {
+				symMetricMatched[sym.llrMetricByTruth[i]]++
+				if sym.llrMetricByTruth[i] != sandbox.LLRMetricN1 {
+					symUniqueByMetric[sym.llrMetricByTruth[i]] = append(
+						symUniqueByMetric[sym.llrMetricByTruth[i]],
+						fmt.Sprintf("%s %.1f Hz %q", captureBase, exp[i].freqHz, exp[i].text),
+					)
+				}
+			}
+			if asym.matchMap[i] && asym.llrMetricByTruth[i] != "" {
+				asymMetricMatched[asym.llrMetricByTruth[i]]++
+				if asym.llrMetricByTruth[i] != sandbox.LLRMetricN1 {
+					asymUniqueByMetric[asym.llrMetricByTruth[i]] = append(
+						asymUniqueByMetric[asym.llrMetricByTruth[i]],
+						fmt.Sprintf("%s %.1f Hz %q", captureBase, exp[i].freqHz, exp[i].text),
+					)
+				}
+			}
+		}
+
 		if dumpExtras {
 			// Collect asym-only extras: asym decodes that (i) don't match
 			// any truth, AND (ii) don't appear in the symmetric decode set
@@ -292,25 +345,72 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		fmt.Println("  verdict: NEUTRAL (no parity change)")
 	}
 
+	// Per-LLR-metric attribution table. Surfaces which block-N variant
+	// recovered which truths, and which truths were uniquely cracked
+	// by higher-N variants (i.e. the cascade was load-bearing for those
+	// truths). N=1 = primary; N=2/N=3 are the cascade-recovered set.
+	fmt.Println()
+	fmt.Println("  per-LLR-metric matched truth count:")
+	fmt.Printf("    %-16s  %-6s  %-6s  %-6s  %-7s  %-8s\n", "mode", "N=1", "N=2", "N=3", "N1Norm", "BestOfN")
+	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d\n", "symmetric",
+		symMetricMatched[sandbox.LLRMetricN1],
+		symMetricMatched[sandbox.LLRMetricN2],
+		symMetricMatched[sandbox.LLRMetricN3],
+		symMetricMatched[sandbox.LLRMetricN1Norm],
+		symMetricMatched[sandbox.LLRMetricBestOfN])
+	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d\n", "asymmetric-FT8",
+		asymMetricMatched[sandbox.LLRMetricN1],
+		asymMetricMatched[sandbox.LLRMetricN2],
+		asymMetricMatched[sandbox.LLRMetricN3],
+		asymMetricMatched[sandbox.LLRMetricN1Norm],
+		asymMetricMatched[sandbox.LLRMetricBestOfN])
+
+	for _, metric := range []string{sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN} {
+		if len(symUniqueByMetric[metric]) > 0 || len(asymUniqueByMetric[metric]) > 0 {
+			fmt.Printf("\n  truths recovered via %s (cascade-load-bearing):\n", metric)
+			if len(symUniqueByMetric[metric]) > 0 {
+				fmt.Printf("    symmetric (n=%d):\n", len(symUniqueByMetric[metric]))
+				for _, t := range symUniqueByMetric[metric] {
+					fmt.Printf("      %s\n", t)
+				}
+			}
+			if len(asymUniqueByMetric[metric]) > 0 {
+				fmt.Printf("    asymmetric (n=%d):\n", len(asymUniqueByMetric[metric]))
+				for _, t := range asymUniqueByMetric[metric] {
+					fmt.Printf("      %s\n", t)
+				}
+			}
+		}
+	}
+
 	if dumpExtras && len(asymOnlyExtras) > 0 {
 		fmt.Println()
 		fmt.Printf("=== ASYMMETRIC-ONLY EXTRAS (n=%d) ===\n", len(asymOnlyExtras))
 		fmt.Println("  (decodes asymmetric produced that symmetric did not, and that don't match any truth)")
-		fmt.Printf("  %-16s  %8s  %7s  %5s  %-10s  %3s  %-40s  near-truth\n",
-			"capture", "freq(Hz)", "dt(s)", "pass", "method", "—", "text")
+		fmt.Printf("  %-16s  %8s  %7s  %5s  %-7s  %-10s  %-40s  near-truth\n",
+			"capture", "freq(Hz)", "dt(s)", "pass", "metric", "method", "text")
 		near := 0
+		byMetric := map[string]int{}
 		for _, e := range asymOnlyExtras {
 			tag := "—"
 			if e.nearTruth {
 				tag = fmt.Sprintf("≈ %.0f Hz: %s", e.nearestHz, e.nearestText)
 				near++
 			}
-			fmt.Printf("  %-16s  %8.2f  %+7.3f  %5d  %-10s  %3s  %-40s  %s\n",
+			byMetric[e.decode.LLRMetric]++
+			fmt.Printf("  %-16s  %8.2f  %+7.3f  %5d  %-7s  %-10s  %-40s  %s\n",
 				e.capture, e.decode.FreqHz, e.decode.DtSec, e.decode.Pass,
-				e.decode.DecodeMethod, "", truncate(e.decode.Text, 40), tag)
+				e.decode.LLRMetric, e.decode.DecodeMethod, truncate(e.decode.Text, 40), tag)
 		}
 		fmt.Printf("\n  near-truth extras: %d / %d (within ±20 Hz of a truth position)\n",
 			near, len(asymOnlyExtras))
+		fmt.Printf("  extras by LLR metric:")
+		for _, m := range []string{sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN} {
+			if byMetric[m] > 0 {
+				fmt.Printf(" %s=%d", m, byMetric[m])
+			}
+		}
+		fmt.Println()
 	}
 }
 
@@ -404,9 +504,11 @@ func runOnce(
 	freqTol, dtTol float64,
 ) modeResult {
 	res := modeResult{
-		label:    label,
-		methods:  map[string]int{},
-		matchMap: make([]bool, len(exp)),
+		label:            label,
+		methods:          map[string]int{},
+		matchMap:         make([]bool, len(exp)),
+		llrMetricByTruth: make([]string, len(exp)),
+		llrMetricCounts:  map[string]int{},
 	}
 	ht := sandbox.NewCallsignHashTable()
 	res.decodes = sandbox.MultiPassDecodeWithHashes(audioSamples, opts, ht)
@@ -419,6 +521,7 @@ func runOnce(
 	// preserved for the report dump.
 	for _, d := range res.decodes {
 		res.methods[d.DecodeMethod]++
+		res.llrMetricCounts[d.LLRMetric]++
 		matched := false
 		decodeText := truth.NormalizeText(d.Text)
 		for i, e := range exp {
@@ -429,6 +532,7 @@ func runOnce(
 				math.Abs(d.DtSec-e.dtSec) <= dtTol &&
 				decodeText == truth.NormalizeText(e.text) {
 				res.matchMap[i] = true
+				res.llrMetricByTruth[i] = d.LLRMetric
 				res.matched++
 				matched = true
 				break
