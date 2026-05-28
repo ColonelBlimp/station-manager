@@ -84,6 +84,7 @@ func main() {
 	coverage := flag.Bool("coverage", false, "candidate-coverage diagnostic: bucket each truth signal by why it was missed (single-pass only)")
 	coverageMP := flag.Bool("coverage-mp", false, "multi-pass coverage with per-failed-candidate decoder diagnostics")
 	maxResultsSweep := flag.Bool("maxresults-sweep", false, "sweep SearchOptions.MaxResults to test the bucket-B hypothesis")
+	nmsDiag := flag.Bool("nms-diag", false, "NMS box sweep: pre-NMS raw count, truth survival in top-200, dropped-near-truth vs dropped-no-truth, same-freq-diff-dt truth pairs")
 	flag.Parse()
 
 	wavs, err := listWAVs(*dir)
@@ -112,6 +113,10 @@ func main() {
 	}
 	if *maxResultsSweep {
 		runMaxResultsSweep(wavs)
+		return
+	}
+	if *nmsDiag {
+		runNMSDiagnostic(wavs)
 		return
 	}
 
@@ -1527,4 +1532,182 @@ func classifyTruth(sig truth.Signal, fates []candidateFate,
 	}
 	// BP-OK but gate rejected (or wrong text).
 	return bucketE
+}
+
+// runNMSDiagnostic measures how NMS box dimensions interact with the
+// pre-NMS candidate pool: how many cells survive each box's
+// suppression, how many of those that fall inside a tighter box are
+// actually within truth tolerance, and how often the corpus contains
+// two truths at the same nominal frequency but different dt (the case
+// per-freq top-K timing-peak selection would buy).
+//
+// Approach: for each capture, run FindCandidatesRaw once (sorted by
+// score, no NMS, no cap). For each NMS box variant, re-run
+// SuppressOverlaps on the same raw list with MaxResults = 200 (the
+// current operational cap) and tally:
+//
+//   - post-NMS count (after cap)
+//   - truth signals whose nearest surviving candidate is within
+//     ±5 Hz × ±0.5 s
+//   - dropped candidates within truth tolerance of some truth signal
+//   - dropped candidates not within tolerance of any truth signal
+//
+// Plus a corpus-wide count of same-freq-different-dt truth pairs
+// (|Δf| < 3.125 Hz AND |Δdt| > 0.2 s).
+func runNMSDiagnostic(wavs []string) {
+	type box struct {
+		name   string
+		freqHz float64
+		dtSec  float64
+	}
+	boxes := []box{
+		{"±12.5Hz × ±0.12s  (current)", 12.5, 0.12},
+		{"±6.25Hz × ±0.12s  (freq -1 step)", 6.25, 0.12},
+		{"±6.25Hz × ±0.08s  (freq+time -1)", 6.25, 0.08},
+		{"±3.125Hz × ±0.08s (max-tight)", 3.125, 0.08},
+	}
+
+	type boxAgg struct {
+		postNMS          int
+		truthSurvived    int // truth signals with a kept candidate in tolerance
+		droppedNearTruth int // dropped cells within truth tolerance of any truth
+		droppedNoTruth   int // dropped cells with no truth within tolerance
+	}
+	aggs := make([]boxAgg, len(boxes))
+
+	var totalRaw int
+	var totalTruth int
+	var totalPairs int
+
+	fmt.Printf("=== NMS box diagnostic on %d captures (MaxResults=200) ===\n\n", len(wavs))
+	fmt.Printf("%-15s %7s %5s", "capture", "raw", "truth")
+	boxLabels := []string{"curr", "F-1", "FT-1", "tight"}
+	for _, lbl := range boxLabels {
+		fmt.Printf(" %5s/200 %5s-srv", lbl, lbl)
+	}
+	fmt.Println()
+	fmt.Println(strings.Repeat("-", 15+1+7+1+5+1+(12)*len(boxes)))
+
+	for _, w := range wavs {
+		data, err := audio.ReadWAV(w)
+		if err != nil || data.SampleRate != expectedSampleRate || data.Channels != 1 {
+			log.Printf("skip %q", w)
+			continue
+		}
+		manifest, err := truth.Read(truth.PathFor(w))
+		if err != nil || manifest == nil {
+			log.Printf("no truth for %q", w)
+			continue
+		}
+
+		spec := sandbox.Spectrogram(data.Samples)
+		if spec == nil {
+			continue
+		}
+		opts := sandbox.DefaultSearchOptions()
+		raw := sandbox.FindCandidatesRaw(spec, opts)
+		totalRaw += len(raw)
+		totalTruth += len(manifest.Signals)
+
+		// Count same-freq-different-dt truth pairs in this capture.
+		pairs := countSameFreqDiffDtTruth(manifest.Signals, 3.125, 0.2)
+		totalPairs += pairs
+
+		fmt.Printf("%-15s %7d %5d",
+			strings.TrimSuffix(filepath.Base(w), ".wav"),
+			len(raw), len(manifest.Signals))
+
+		for i, b := range boxes {
+			kept := sandbox.SuppressOverlaps(raw, b.freqHz, b.dtSec, 200)
+			aggs[i].postNMS += len(kept)
+
+			// Mark indices in raw that are in the kept set (by score
+			// + freq + dt identity — kept candidates are originals
+			// from raw, identity is exact).
+			keptSet := make(map[float64]bool, len(kept))
+			for _, k := range kept {
+				keptSet[k.Sync*1e7+k.FreqHz*1e3+k.DtSec] = true
+			}
+
+			// Truth survival.
+			survived := 0
+			for _, sig := range manifest.Signals {
+				for _, k := range kept {
+					if math.Abs(k.FreqHz-sig.FreqHz) <= freqMatchTolHz &&
+						math.Abs(k.DtSec-sig.DTSec) <= dtMatchTolS {
+						survived++
+						break
+					}
+				}
+			}
+			aggs[i].truthSurvived += survived
+
+			// Dropped-near-truth vs dropped-no-truth among the raw
+			// candidates that are NOT in kept.
+			for _, c := range raw {
+				key := c.Sync*1e7 + c.FreqHz*1e3 + c.DtSec
+				if keptSet[key] {
+					continue
+				}
+				nearTruth := false
+				for _, sig := range manifest.Signals {
+					if math.Abs(c.FreqHz-sig.FreqHz) <= freqMatchTolHz &&
+						math.Abs(c.DtSec-sig.DTSec) <= dtMatchTolS {
+						nearTruth = true
+						break
+					}
+				}
+				if nearTruth {
+					aggs[i].droppedNearTruth++
+				} else {
+					aggs[i].droppedNoTruth++
+				}
+			}
+
+			fmt.Printf(" %9d %9d", len(kept), survived)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println(strings.Repeat("-", 15+1+7+1+5+1+(12)*len(boxes)))
+	fmt.Printf("\nTotals: raw=%d, truth=%d, same-freq-diff-dt truth pairs=%d (Δf<3.125Hz, Δdt>0.2s)\n",
+		totalRaw, totalTruth, totalPairs)
+
+	fmt.Printf("\n%-35s %12s %12s %14s %14s\n",
+		"box", "post-NMS", "truth-surv", "dropped-near", "dropped-clean")
+	fmt.Println(strings.Repeat("-", 92))
+	for i, b := range boxes {
+		fmt.Printf("%-35s %12d %5d / %d %14d %14d\n",
+			b.name, aggs[i].postNMS, aggs[i].truthSurvived, totalTruth,
+			aggs[i].droppedNearTruth, aggs[i].droppedNoTruth)
+	}
+
+	fmt.Println()
+	fmt.Println("Reading the table:")
+	fmt.Println("  post-NMS     = candidates surviving NMS+cap (lower = tighter, more cells dropped)")
+	fmt.Println("  truth-surv   = # of jt9-truth signals with a surviving candidate in ±5Hz×±0.5s tolerance")
+	fmt.Println("  dropped-near = candidates suppressed within truth tolerance (could be alias OR lost real signal)")
+	fmt.Println("  dropped-clean = candidates suppressed with no truth nearby (correct alias/noise suppression)")
+	fmt.Println()
+	fmt.Println("What to look for: tightening boxes should keep truth-surv flat or UP while dropped-clean falls;")
+	fmt.Println("if truth-surv drops, the tightening went too far and started losing real signal aliases that")
+	fmt.Println("themselves had a higher-scoring partner; if dropped-near rises, that suggests genuine adjacent")
+	fmt.Println("real signals being separated rather than aliases being kept.")
+}
+
+// countSameFreqDiffDtTruth counts truth-pair occurrences where two
+// signals share a frequency within freqTolHz AND are separated in dt
+// by more than dtMinSec. This is the case where per-freq top-K timing-
+// peak selection (with K ≥ 2) would buy something.
+func countSameFreqDiffDtTruth(signals []truth.Signal, freqTolHz, dtMinSec float64) int {
+	n := 0
+	for i := 0; i < len(signals); i++ {
+		for j := i + 1; j < len(signals); j++ {
+			if math.Abs(signals[i].FreqHz-signals[j].FreqHz) < freqTolHz &&
+				math.Abs(signals[i].DTSec-signals[j].DTSec) > dtMinSec {
+				n++
+			}
+		}
+	}
+	return n
 }

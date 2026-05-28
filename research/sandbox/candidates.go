@@ -161,6 +161,20 @@ func DefaultSearchOptions() SearchOptions {
 // even one Costas window.
 func FindCandidates(spec [][]float64, opts SearchOptions) []Candidate {
 	opts = applyOptionDefaults(opts)
+	raw := FindCandidatesRaw(spec, opts)
+	return SuppressOverlaps(raw, opts.NMSFreqHz, opts.NMSDTSec, opts.MaxResults)
+}
+
+// FindCandidatesRaw runs the Costas matched filter and returns the
+// score-sorted list of every (freqBin, dtFrame) cell above Threshold —
+// with NO non-maximum suppression and NO MaxResults cap applied.
+//
+// Used by diagnostics that need to inspect the pre-NMS candidate
+// population (e.g. measuring how NMS box dimensions affect truth-
+// signal survival vs alias suppression). FindCandidates is the
+// normal-path entry that follows up with SuppressOverlaps.
+func FindCandidatesRaw(spec [][]float64, opts SearchOptions) []Candidate {
+	opts = applyOptionDefaults(opts)
 
 	if len(spec) <= costasSpanFrames {
 		return nil
@@ -232,8 +246,7 @@ func FindCandidates(spec [][]float64, opts SearchOptions) []Candidate {
 	}
 
 	sort.Slice(raw, func(i, j int) bool { return raw[i].Sync > raw[j].Sync })
-
-	return suppressOverlaps(raw, opts.NMSFreqHz, opts.NMSDTSec, opts.MaxResults)
+	return raw
 }
 
 // applyOptionDefaults replaces zero-value fields with the values from
@@ -357,12 +370,15 @@ func estimateMedianPower(spec [][]float64, stride int) float64 {
 	return sample[len(sample)/2]
 }
 
-// suppressOverlaps walks the score-sorted candidate list and keeps the
+// SuppressOverlaps walks the score-sorted candidate list and keeps the
 // highest-scoring cells whose freq/time neighbourhoods don't overlap
 // any already-kept candidate. Linear in the kept list × the candidate
 // list; for ≤ 50 results across thousands of candidates this is
 // negligible compared to the matched-filter cost.
-func suppressOverlaps(cands []Candidate, nmsFreqHz, nmsDTSec float64, maxKeep int) []Candidate {
+//
+// Exported so diagnostics can re-run NMS at alternate box dimensions
+// against the same FindCandidatesRaw output.
+func SuppressOverlaps(cands []Candidate, nmsFreqHz, nmsDTSec float64, maxKeep int) []Candidate {
 	if len(cands) == 0 {
 		return nil
 	}
