@@ -729,7 +729,7 @@ converge:
   (plus the auxiliaries: 33 total).
 - **AP3** — hypothesise both callsign fields (c28_1 and c28_2) are
   known, e.g., a contest exchange between two pre-identified
-  stations. Pins ~61 of 174 codeword bits. The strongest AP form
+  stations. Pins ~62 of 174 codeword bits. The strongest AP form
   but requires both call-side identities to be known a priori.
 
 Each form is implemented as an LLR-injection: the prior is added
@@ -759,7 +759,7 @@ The values derive from the FT8 token-range layout documented in
   decoders. The sandbox's `decodeCQAbcd` matches this convention
   via right-trim of trailing 'A' chars.
 
-For each variant, AP-CQ pins 33 of 174 codeword bits:
+For each variant, AP-CQ pins 34 of 174 codeword bits:
 
 - bits 0..27: c28_1 = variant value (28 bits)
 - bit 28: p1 = 0 (CQ-form messages don't carry rover-suffix flags)
@@ -839,7 +839,7 @@ AP-CQ recovered **0** of the 9 sym CQ-format misses on the working
 corpus. Of the 9: 4 are "CQ <modifier>" forms (DX×2, COTA,
 unknown short call), 5 are bare "CQ <call> <grid>". With c28_1
 pinned to each hypothesis in turn and OSD's flip search
-suppressed on the 33 pinned positions, neither BP nor OSD-2
+suppressed on the 34 pinned positions, neither BP nor OSD-2
 returned a CRC-valid codeword for any of these candidates.
 
 Two mechanisms explain the null result:
@@ -855,7 +855,7 @@ Two mechanisms explain the null result:
    c28_1 (28 bits) + p1/p2/r1/i3 (5 bits) pinned, BP/OSD must
    still recover 43 unknown payload bits (c28_2 + g15) + 14 CRC
    + 83 parity. On the working corpus the channel LLRs at the
-   c28_2 / g15 positions are weak enough that 33 bits of prior
+   c28_2 / g15 positions are weak enough that 34 bits of prior
    leverage isn't sufficient — BP/OSD with pin returns
    `ok=false` (the pin correctly blocks the OSD-flipped garbage,
    but no legitimate CQ codeword is reachable either).
@@ -870,7 +870,7 @@ The Session 104 conclusion: **the priors-only AP-CQ approach is
 empirically insufficient on this corpus, even with correct OSD
 plumbing.** The OSD pin machinery itself is correct and
 load-bearing infrastructure for any future AP work — but the
-parity wall on this corpus needs more leverage than 33 bits can
+parity wall on this corpus needs more leverage than 34 bits can
 provide.
 
 ### 10.6 AP3 as the natural follow-on
@@ -912,3 +912,182 @@ shipped today is the prerequisite that landed.
   candidates instead of ~4k. Compatible with the pin machinery
   shipped today (order-3 loops gate on `pinnedMRB[k]` already).
   Not measured against the corpus this session.
+
+## 11. AP3 — both callsigns hypothesised from CallsignHashTable (QEX § 7 AP3)
+
+### 11.1 What QEX § 7 prescribes
+
+AP3 is the strongest of the three AP families described in QEX § 7.
+Where AP-CQ / AP2 hypothesises only the first callsign field
+(c28_1 = some token or known callsign), AP3 hypothesises **both**
+callsign fields: c28_1 AND c28_2. The hypothesis source is a
+running record of callsigns the decoder has previously seen — the
+sandbox's `CallsignHashTable` is the natural feed, populated
+incrementally as each successful decode adds caller and addressee.
+
+The leverage of AP3 over AP2 is the doubling of pinned systematic
+bits: AP-CQ pins 28 + 6 = 34 bits; AP3 pins 28 + 28 + 6 = 62 bits.
+After AP3 the remaining unknown payload + parity bits drop from 43
++ 14 + 83 = 140 to 15 + 14 + 83 = 112 — a 20% reduction in the
+channel-driven bit count. The QEX paper identifies AP3 as the
+specific AP form responsible for the bulk of jt9's marginal
+recovery in active QSO scenarios where the call-pair is known
+from prior exchanges.
+
+### 11.2 Pin layout
+
+Bit positions traced to the PackType1 layout in `pack.go` (which
+itself derives from QEX § 4):
+
+```
+bits  0..27   c28_1   (caller in non-CQ messages; CQ token for CQs)
+bit  28       p1 = 0  (rover-suffix flag for call 1)
+bits 29..56   c28_2   (callee/addressee)
+bit  57       p2 = 0  (rover-suffix flag for call 2)
+bit  58       r1 = 0  (roger flag)
+bits 59..73   g15     (unknown — channel-driven)
+bits 74..76   i3 = 1  (Type 1 message)
+bits 77..90   CRC14   (depends on g15 + payload → unknown)
+bits 91..173  parity  (depends on info + CRC → unknown)
+```
+
+Total pinned: 62 bits. `ap3PinMask()` in `metrics.go` materialises
+this as a `[174]bool` for `BPDecodeWithPin`.
+
+### 11.3 Hypothesis enumeration
+
+The hypothesis space is the cross product (c28_1 candidates) ×
+(c28_2 candidates), where:
+
+- **c28_1 candidates**: bare-CQ token (numeric value 2) ∪ up to K
+  callsigns from the hash table. CQ in c28_1 covers the case
+  "this might be a CQ message we missed via the AP-CQ stage."
+- **c28_2 candidates**: up to K callsigns from the hash table. CQ
+  never appears in c28_2 (no station addresses "CQ").
+
+K is `MultiPassOptions.AP3MaxCallsigns`, default 8. Self-pairs
+(c1.callsign == c2.callsign) are filtered. Worst-case pair count
+per failed candidate is `(1 + K) × K`; at K=8 with no callsign
+filtering, that's 72 BP+OSD runs per candidate. Hash table
+snapshots are unordered (Go map iteration); the K selected on a
+given run is arbitrary. Future refinement could LRU-rank or score
+by candidate freq proximity.
+
+`enumerateAP3HypothesisPairs(ht, maxK)` returns the materialised
+`[]ap3HypothesisPair{c28_1, c28_2, call1, call2}` slice. Empty
+hash table returns nil — AP3 is a no-op on the first slot of a
+session.
+
+### 11.4 Cascade integration
+
+AP3 is the **last cascade stage**, running after AP-CQ has failed.
+`runCascade` orchestrates:
+
+```
+N=1 → N=2 → N=3 → N1Norm → BestOfN → AP-CQ → AP3
+```
+
+Each AP3 hypothesis builds `softLLRsAP3WithMag(grid, mag, c1, c2)`
+and calls `BPDecodeWithPin(llrs, bpOpts, &ap3PinMask)`. First
+BP-OK wins. The `cascadeOutcome` carries `TextGuard = "<call1>
+<call2>"` for standard-call hypotheses, or `"CQ"` for CQ-family
+hypotheses; the outer loop rejects post-Unpack77 if the text
+doesn't start with the guard.
+
+The cascade extract during Session 104 also fixed an inconsistency
+the old inlined code had: the `EnableBestOfN`-then-APCQ branch
+used `BPDecode` (no pin) while the `EnableBestOfN=false`-then-APCQ
+branch used `BPDecodeWithPin`. The refactor unifies both paths
+under the pinned variant.
+
+### 11.5 Corpus measurement (Session 104)
+
+Config: K=8, mag=apCQMagnitude (default 10).
+
+| Mode  | Matched / Extras | Δ vs 111/23 baseline | AP3-attributed |
+|-------|------------------|----------------------|----------------|
+| Sym   | **111 / 23**     | unchanged            | 0 matched, 0 shadow |
+| Asym  | **115 / 25**     | unchanged            | 0 matched, 0 shadow |
+
+**AP3 recovered zero truths and produced zero shadow rejects**
+on the working corpus. BP+OSD-with-pin returned `ok=false` on
+every AP3 hypothesis attempted across every failed candidate
+across all six captures.
+
+**Runtime cost: ~3.5 s/slot baseline → ~38 s/slot (~11×).** Full
+corpus run (6 captures × sym+asym = 12 slot-decodes) jumped from
+~30 s to **7 m 38 s**. The cost is dominated by the (1+K)×K
+inner-loop of BP+OSD-with-pin calls per failed candidate.
+
+Saved audit artefact: `research/sandbox/reports/ap3-2026-05-29.txt`.
+
+### 11.6 Why AP3 produced nothing on this corpus
+
+Even with 62 of 174 codeword bits pinned via priors + OSD pin,
+BP/OSD couldn't converge to a CRC-passing codeword for any
+AP3-attempted candidate. Three converging factors explain the
+null result:
+
+1. **Channel-noise-bound at the unknown bits.** The g15 (15 bits)
+   + CRC14 (14 bits) + parity (83 bits) = 112 channel-driven bits
+   carry weak LLRs on the failed candidates. The 62 pinned bits
+   give BP a strong anchor at the systematic layer but the parity
+   constraints relate every codeword bit to several others — if
+   the parity bits' LLRs are too weak/noisy, BP can't satisfy
+   the parity equations even with perfect c28_1 + c28_2.
+
+2. **The QEX § 7 narrow recovery band.** The paper notes AP forms
+   are most effective when channel SNR is just below BP threshold
+   — the marginal-recovery zone. On a corpus where pipeline
+   misses sit well below threshold (which our shadow audit + the
+   sandbox cascade's null results across all priors-only stages
+   confirms is our regime), AP3's leverage isn't enough to bridge
+   the gap.
+
+3. **Hash sampling lottery.** With K=8 and unordered map iteration,
+   the 8 callsigns drawn on any given AP3 invocation are an
+   arbitrary subset of the live hash. If the *right* (c1, c2)
+   pair for a given failed candidate isn't in the K=8 sample,
+   AP3 has no chance regardless of how strong the priors are.
+   This is fixable (LRU + freq-proximity ranking) but only
+   matters if mechanism (1) doesn't dominate — and the empirical
+   measurement says it does.
+
+### 11.7 Why AP3 is parked
+
+`EnableAP3` defaults false; the code stays in tree alongside
+`EnableBestOfN` and `EnableAPCQ` as opt-in experimental. The
+durable artefacts of the AP3 effort:
+
+- The cascade refactor (`runCascade`) is cleaner than the
+  pre-Session-104 nested if-else and supports further stages
+  with minimal noise.
+- `CallsignHashTable.Callsigns()` is reusable for any future
+  consumer that needs an enumeration snapshot (logbook UI, audit
+  tools, multi-pass restart loops).
+- `applyAP3PriorsForC28s` + `ap3PinMask` + the AP3 LLR generator
+  are reusable for AP3 variants (LRU-ranked hash, paired
+  hypothesis injection from external context, etc.).
+- `LLRMetricAP3` attribution flows through the existing audit
+  pipeline (shadow rejects, per-metric matched tables).
+
+The mechanism Session 104 surfaced — priors-only AP isn't enough
+leverage on this corpus — is the load-bearing finding. Any future
+revival needs either a fundamentally different signal stage (the
+language conversation in the Session 104 wrap notes Go's lack of
+SIMD-batched BP as the structural bottleneck) or a stronger
+hypothesis source than systematic-bit pinning.
+
+### 11.8 What this section does NOT cover
+
+- **Multi-pass restart loop** — an explicit Pass-3 that re-tries
+  pass-1 + pass-2 failures with the fully-populated hash table.
+  Implementation-trivial extension of the current cascade; not
+  shipped because the per-candidate AP3 already returned nothing,
+  so multiplying its budget would just multiply its runtime.
+- **LRU + freq-proximity hash ranking** — the optimisation that
+  would improve hypothesis sampling. Not shipped for the same
+  reason as above.
+- **OSD-3 + AP3** — already compatible via the pin machinery, but
+  not measured. Would be even slower than OSD-2 AP3 — Go runtime
+  budget conversation has to happen first.

@@ -117,6 +117,9 @@ func main() {
 	maxHardErrors := flag.Int("max-hard-errors", -1, "override AcceptDecodeOptions.MaxHardErrors (default -1 = use sandbox default of 36)")
 	enableAPCQ := flag.Bool("enable-apcq", false, "enable AP-CQ a priori decoding pass at end of cascade (QEX § 7 AP2 specialised to c28_1=CQ token)")
 	apcqMag := flag.Float64("apcq-mag", 0, "override AP-CQ pinning magnitude (0 = package default ~10)")
+	enableAP3 := flag.Bool("enable-ap3", false, "enable AP3 (QEX § 7 AP3) — pin both c28_1 and c28_2 from CallsignHashTable; runs after AP-CQ failure")
+	ap3Mag := flag.Float64("ap3-mag", 0, "override AP3 pinning magnitude (0 = package default ~10)")
+	ap3MaxK := flag.Int("ap3-max-k", 0, "AP3 hash-callsign cap per side (0 = default 8). Worst-case BP runs per failed candidate = (1+K)×K.")
 	dumpMissed := flag.Bool("dump-missed", false, "in corpus mode, list every truth not matched by accepted decodes in either mode, with text + capture (used to answer 'which oracle misses are CQ-shaped?')")
 	flag.Parse()
 
@@ -139,6 +142,15 @@ func main() {
 	}
 	if *apcqMag > 0 {
 		opts.APCQMag = *apcqMag
+	}
+	if *enableAP3 {
+		opts.EnableAP3 = true
+	}
+	if *ap3Mag > 0 {
+		opts.AP3Mag = *ap3Mag
+	}
+	if *ap3MaxK > 0 {
+		opts.AP3MaxCallsigns = *ap3MaxK
 	}
 
 	if *dirPath != "" {
@@ -444,23 +456,25 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 	// truths). N=1 = primary; N=2/N=3 are the cascade-recovered set.
 	fmt.Println()
 	fmt.Println("  per-LLR-metric matched truth count:")
-	fmt.Printf("    %-16s  %-6s  %-6s  %-6s  %-7s  %-8s  %-6s\n", "mode", "N=1", "N=2", "N=3", "N1Norm", "BestOfN", "APCQ")
-	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d\n", "symmetric",
+	fmt.Printf("    %-16s  %-6s  %-6s  %-6s  %-7s  %-8s  %-6s  %-6s\n", "mode", "N=1", "N=2", "N=3", "N1Norm", "BestOfN", "APCQ", "AP3")
+	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d  %6d\n", "symmetric",
 		symMetricMatched[sandbox.LLRMetricN1],
 		symMetricMatched[sandbox.LLRMetricN2],
 		symMetricMatched[sandbox.LLRMetricN3],
 		symMetricMatched[sandbox.LLRMetricN1Norm],
 		symMetricMatched[sandbox.LLRMetricBestOfN],
-		symMetricMatched[sandbox.LLRMetricAPCQ])
-	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d\n", "asymmetric-FT8",
+		symMetricMatched[sandbox.LLRMetricAPCQ],
+		symMetricMatched[sandbox.LLRMetricAP3])
+	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d  %6d\n", "asymmetric-FT8",
 		asymMetricMatched[sandbox.LLRMetricN1],
 		asymMetricMatched[sandbox.LLRMetricN2],
 		asymMetricMatched[sandbox.LLRMetricN3],
 		asymMetricMatched[sandbox.LLRMetricN1Norm],
 		asymMetricMatched[sandbox.LLRMetricBestOfN],
-		asymMetricMatched[sandbox.LLRMetricAPCQ])
+		asymMetricMatched[sandbox.LLRMetricAPCQ],
+		asymMetricMatched[sandbox.LLRMetricAP3])
 
-	for _, metric := range []string{sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ} {
+	for _, metric := range []string{sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ, sandbox.LLRMetricAP3} {
 		if len(symUniqueByMetric[metric]) > 0 || len(asymUniqueByMetric[metric]) > 0 {
 			fmt.Printf("\n  truths recovered via %s (cascade-load-bearing):\n", metric)
 			if len(symUniqueByMetric[metric]) > 0 {
@@ -500,7 +514,7 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		fmt.Printf("\n  near-truth extras: %d / %d (within ±20 Hz of a truth position)\n",
 			near, len(asymOnlyExtras))
 		fmt.Printf("  extras by LLR metric:")
-		for _, m := range []string{sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ} {
+		for _, m := range []string{sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ, sandbox.LLRMetricAP3} {
 			if byMetric[m] > 0 {
 				fmt.Printf(" %s=%d", m, byMetric[m])
 			}
@@ -664,6 +678,7 @@ func printShadowAudit(
 	metricKeys := []string{
 		sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3,
 		sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ,
+		sandbox.LLRMetricAP3,
 	}
 	fmt.Println("  by LLR metric:")
 	fmt.Printf("    %-10s  %6s  %6s\n", "metric", "sym", "asym")

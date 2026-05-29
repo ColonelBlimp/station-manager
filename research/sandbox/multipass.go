@@ -55,6 +55,7 @@ const (
 	LLRMetricN1Norm  = "N1Norm"
 	LLRMetricBestOfN = "BestOfN"
 	LLRMetricAPCQ    = "APCQ"
+	LLRMetricAP3     = "AP3"
 )
 
 // MultiPassOptions tunes the multi-pass loop. Zero-value falls back
@@ -116,7 +117,7 @@ type MultiPassOptions struct {
 	// EnableAPCQ gates the AP-CQ a priori decoding stage that runs
 	// after every other cascade pass has failed. Implements the QEX
 	// § 7 AP2 specialisation: hypothesise the candidate as a Type-1
-	// CQ message, inject ±APCQMag priors at the 33 codeword positions
+	// CQ message, inject ±APCQMag priors at the 34 codeword positions
 	// pinned by that hypothesis (c28_1=CQ, p1=p2=r1=0, i3=1), and
 	// re-run BP+OSD on the augmented LLR vector. Only fires when
 	// standard cascade has failed — the AP path can only help, never
@@ -133,6 +134,35 @@ type MultiPassOptions struct {
 	// channel more aggressively; smaller values let BP override more
 	// easily when the candidate is not actually a CQ message.
 	APCQMag float64
+
+	// EnableAP3 gates the AP3 a priori decoding stage that runs after
+	// AP-CQ has failed. AP3 enumerates (c28_1, c28_2) hypothesis
+	// pairs drawn from the running CallsignHashTable: c28_1 from the
+	// CQ family ∪ hash callsigns, c28_2 from hash callsigns. Each
+	// hypothesis pins 62 codeword bits (vs AP-CQ's 34) via
+	// BPDecodeWithPin and the ap3PinMask.
+	//
+	// Per-candidate cost is O(K²) BP runs where K = AP3MaxCallsigns.
+	// Default false: AP3 is the most expensive cascade stage and
+	// produces no work on an empty hash table. The hash-feeding loop
+	// gives AP3 its leverage — pass-1 decodes populate the table,
+	// pass-2 candidates inherit a populated hash.
+	EnableAP3 bool
+
+	// AP3Mag overrides the AP3 per-bit pinning magnitude (default 0
+	// = use apCQMagnitude). Tunable via the corpus harness.
+	AP3Mag float64
+
+	// AP3MaxCallsigns caps the number of hash-table callsigns AP3
+	// considers as c28_1 / c28_2 candidates. 0 falls back to a
+	// sensible default (8). Hash-table snapshots are unordered, so
+	// the K chosen are arbitrary; future refinement could LRU-rank
+	// or score by candidate freq proximity.
+	//
+	// Worst-case hypothesis count per failed candidate is
+	// (CQ-family-size + K) × K — at K=8 with 4 CQ-family entries
+	// that's 96 BP runs.
+	AP3MaxCallsigns int
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -251,116 +281,29 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			if err != nil {
 				continue
 			}
-			// Cascade through LLR-generation variants in increasing-
-			// model-complexity order. BPDecode internally falls back to
-			// OSD on BP failure, so each !br.OK here means BP+OSD
-			// failed on that LLR set. First metric whose LLRs decode to
-			// a CRC-pass wins; we record which in llrMetric so the
-			// corpus harness can attribute lifts.
-			//
-			//   1. N=1     — single-symbol max-log demap (QEX § 6)
-			//   2. N=2     — 2-symbol block detection, 0.32 s coherence
-			//   3. N=3     — 3-symbol block detection, 0.48 s coherence
-			//   4. N1Norm  — per-symbol noise-normalized N=1 (BP scale
-			//                invariance failure mode; see
-			//                qex-derivation.md § 8). Last in cascade
-			//                because it shares N=1's coherence model;
-			//                higher-N block detection takes precedence
-			//                when N=1 fails. Empirically measured.
-			//   5. BestOfN — per-bit max-|LLR| selection across
-			//                {N=1, N=2, N=3}. Produces an LLR vector
-			//                that no single source can produce. Last
-			//                in cascade because it costs 3 metric
-			//                generations per invocation. See
-			//                qex-derivation.md § 9.
-			llrs := SoftLLRs(grid)
-			br := BPDecode(llrs, bpOpts)
-			llrMetric := LLRMetricN1
-			if !br.OK {
-				llrs2 := SoftLLRsN2(grid)
-				br2 := BPDecode(llrs2, bpOpts)
-				if br2.OK {
-					br = br2
-					llrs = llrs2
-					llrMetric = LLRMetricN2
-				} else {
-					llrs3 := SoftLLRsN3(grid)
-					br3 := BPDecode(llrs3, bpOpts)
-					if br3.OK {
-						br = br3
-						llrs = llrs3
-						llrMetric = LLRMetricN3
-					} else {
-						llrs4 := SoftLLRsN1BitNormalized(grid)
-						br4 := BPDecode(llrs4, bpOpts)
-						if br4.OK {
-							br = br4
-							llrs = llrs4
-							llrMetric = LLRMetricN1Norm
-						} else if opts.EnableBestOfN {
-							llrs5 := SoftLLRsBestOfN(grid)
-							br5 := BPDecode(llrs5, bpOpts)
-							if br5.OK {
-								br = br5
-								llrs = llrs5
-								llrMetric = LLRMetricBestOfN
-							} else if opts.EnableAPCQ {
-								ok := false
-								for _, c28v := range apCQValueOrder {
-									llrs6 := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v)
-									br6 := BPDecode(llrs6, bpOpts)
-									if br6.OK {
-										br = br6
-										llrs = llrs6
-										llrMetric = LLRMetricAPCQ
-										ok = true
-										break
-									}
-								}
-								if !ok {
-									continue
-								}
-							} else {
-								continue
-							}
-						} else if opts.EnableAPCQ {
-							ok := false
-							pin := apCQPinMask()
-							for _, c28v := range apCQValueOrder {
-								llrs6 := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v)
-								br6 := BPDecodeWithPin(llrs6, bpOpts, &pin)
-								if br6.OK {
-									br = br6
-									llrs = llrs6
-									llrMetric = LLRMetricAPCQ
-									ok = true
-									break
-								}
-							}
-							if !ok {
-								continue
-							}
-						} else {
-							continue
-						}
-					}
-				}
+			co, ok := runCascade(grid, opts, bpOpts, ht)
+			if !ok {
+				continue
 			}
+			br := co.BR
+			llrs := co.LLRs
+			llrMetric := co.Metric
 			var payload [LDPCPayloadBits]uint8
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
 			ur := Unpack77WithHashes(payload, ht)
 			if !ur.OK {
 				continue
 			}
-			// AP-CQ correctness guard: OSD-2 can flip MRB bits even when
-			// AP priors pin them strongly (the flip search is unaware of
-			// the priors). If the recovered codeword's c28_1 was flipped
-			// out of the CQ hypothesis, the unpacked text won't start
-			// with "CQ" — reject and let the next candidate take over.
-			// Without this guard, AP-CQ produces standard-callsign-shape
-			// CRC-lottery extras that the gate then has to filter; the
-			// guard catches them at the source.
-			if llrMetric == LLRMetricAPCQ && !strings.HasPrefix(ur.Text, "CQ") {
+			// AP-form correctness guard: OSD-2 can flip MRB bits even
+			// with priors pinned (the OSD pin shipped Session 104 now
+			// holds AP-pinned bits, but the guard remains as a defence
+			// in depth — a wrongly-hypothesised AP can still yield
+			// CRC-valid codewords that BP converged to with weak channel
+			// agreement). co.TextGuard is non-empty when the winning
+			// stage was an AP form; its value is the expected text
+			// prefix (e.g. "CQ" for AP-CQ, "K1JT W1ABC" for AP3 with
+			// standard-call c28_1).
+			if co.TextGuard != "" && !strings.HasPrefix(ur.Text, co.TextGuard) {
 				continue
 			}
 			// Post-decode quality gate. Reject CRC-passing codewords
@@ -573,4 +516,187 @@ func applyMultiPassDefaults(opts MultiPassOptions) MultiPassOptions {
 		opts.AudioRate = d.AudioRate
 	}
 	return opts
+}
+
+// cascadeOutcome bundles the result of a successful cascade stage.
+// Metric records which LLR-generation strategy (or AP form) produced
+// the decode; TextGuard, when non-empty, is the expected prefix of
+// the unpacked text — used by the outer loop to reject AP candidates
+// whose decoded text diverges from the hypothesis.
+type cascadeOutcome struct {
+	BR        BPResult
+	LLRs      [FT8CodewordBits]float64
+	Metric    string
+	TextGuard string
+}
+
+// runCascade is the per-candidate LLR-generation cascade. Each stage
+// produces a 174-bit LLR vector; the first one whose BP+OSD decodes
+// to a CRC-passing codeword wins. Stages in order:
+//
+//  1. N=1     — single-symbol max-log demap (QEX § 6)
+//  2. N=2     — 2-symbol block detection, 0.32 s coherence (QEX § 6)
+//  3. N=3     — 3-symbol block detection, 0.48 s coherence (QEX § 6)
+//  4. N1Norm  — per-symbol noise-normalized N=1 (qex-derivation.md § 8)
+//  5. BestOfN — per-bit max-|LLR| selection, opt-in via EnableBestOfN
+//     (qex-derivation.md § 9)
+//  6. AP-CQ   — c28_1 ∈ {bare CQ, CQ DX, CQ COTA, CQ POTA}, 34 pinned
+//     bits; opt-in via EnableAPCQ (qex-derivation.md § 10)
+//  7. AP3     — (c28_1, c28_2) drawn from CallsignHashTable + CQ family;
+//     62 pinned bits; opt-in via EnableAP3
+//
+// Stages 1-5 use unpinned BP. Stages 6-7 use BPDecodeWithPin so OSD's
+// MRB bit-flip search cannot undo the priors.
+//
+// Returns (outcome, true) on first success; (zero, false) when all
+// stages fail.
+func runCascade(
+	grid *SymbolGrid,
+	opts MultiPassOptions,
+	bpOpts BPOptions,
+	ht *CallsignHashTable,
+) (cascadeOutcome, bool) {
+	llrs := SoftLLRs(grid)
+	br := BPDecode(llrs, bpOpts)
+	if br.OK {
+		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1}, true
+	}
+
+	llrs = SoftLLRsN2(grid)
+	br = BPDecode(llrs, bpOpts)
+	if br.OK {
+		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN2}, true
+	}
+
+	llrs = SoftLLRsN3(grid)
+	br = BPDecode(llrs, bpOpts)
+	if br.OK {
+		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN3}, true
+	}
+
+	llrs = SoftLLRsN1BitNormalized(grid)
+	br = BPDecode(llrs, bpOpts)
+	if br.OK {
+		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1Norm}, true
+	}
+
+	if opts.EnableBestOfN {
+		llrs = SoftLLRsBestOfN(grid)
+		br = BPDecode(llrs, bpOpts)
+		if br.OK {
+			return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricBestOfN}, true
+		}
+	}
+
+	if opts.EnableAPCQ {
+		pin := apCQPinMask()
+		for _, c28v := range apCQValueOrder {
+			l := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v)
+			b := BPDecodeWithPin(l, bpOpts, &pin)
+			if b.OK {
+				return cascadeOutcome{BR: b, LLRs: l, Metric: LLRMetricAPCQ, TextGuard: "CQ"}, true
+			}
+		}
+	}
+
+	if opts.EnableAP3 {
+		pairs := enumerateAP3HypothesisPairs(ht, opts.AP3MaxCallsigns)
+		if len(pairs) > 0 {
+			pin := ap3PinMask()
+			for _, p := range pairs {
+				l := softLLRsAP3WithMag(grid, opts.AP3Mag, p.c28_1, p.c28_2)
+				b := BPDecodeWithPin(l, bpOpts, &pin)
+				if !b.OK {
+					continue
+				}
+				guard := p.call1 + " " + p.call2
+				if p.c28_1 < ntokens {
+					// c28_1 was a CQ-family token; the unpacked text
+					// starts with "CQ" (possibly "CQ XX" for modifier
+					// forms). The text guard tightens to "CQ" — the
+					// specific modifier isn't part of the hypothesised
+					// pair.
+					guard = "CQ"
+				}
+				return cascadeOutcome{BR: b, LLRs: l, Metric: LLRMetricAP3, TextGuard: guard}, true
+			}
+		}
+	}
+
+	return cascadeOutcome{}, false
+}
+
+// ap3HypothesisPair carries one (c28_1, c28_2) AP3 hypothesis with
+// the originating callsign strings preserved for the text guard.
+type ap3HypothesisPair struct {
+	c28_1, c28_2 uint32
+	call1, call2 string
+}
+
+// enumerateAP3HypothesisPairs builds the AP3 hypothesis list from the
+// hash table. c28_1 candidates: bare "CQ" + up to maxK callsigns from
+// the table. c28_2 candidates: the same callsign set (CQ never
+// appears as an addressee/callee). Self-pairs (c1 == c2) are skipped
+// — no station addresses itself.
+//
+// maxK <= 0 falls back to 8. Per-candidate AP3 cost is
+// O((1 + min(maxK, N)) × min(maxK, N)) BP runs where N is the live
+// hash size; the cap protects against AP3 dominating runtime when
+// the table is large.
+func enumerateAP3HypothesisPairs(ht *CallsignHashTable, maxK int) []ap3HypothesisPair {
+	if ht == nil {
+		return nil
+	}
+	if maxK <= 0 {
+		maxK = 8
+	}
+	calls := ht.Callsigns()
+	if len(calls) == 0 {
+		return nil
+	}
+	if len(calls) > maxK {
+		calls = calls[:maxK]
+	}
+
+	// Build packed (c28, callsign) sides. Drop entries whose callsign
+	// can't be packed (e.g. unresolved hash placeholders that slipped
+	// past registerCallsigns).
+	type side struct {
+		c28 uint32
+		s   string
+	}
+	pack := func(callsign string) (uint32, bool) {
+		v, err := PackCallsign28(callsign)
+		if err != nil {
+			return 0, false
+		}
+		return v, true
+	}
+
+	c1Set := []side{{2, "CQ"}} // bare-CQ token, always included
+	for _, c := range calls {
+		if v, ok := pack(c); ok {
+			c1Set = append(c1Set, side{v, c})
+		}
+	}
+	var c2Set []side
+	for _, c := range calls {
+		if v, ok := pack(c); ok {
+			c2Set = append(c2Set, side{v, c})
+		}
+	}
+	if len(c2Set) == 0 {
+		return nil
+	}
+
+	pairs := make([]ap3HypothesisPair, 0, len(c1Set)*len(c2Set))
+	for _, a := range c1Set {
+		for _, b := range c2Set {
+			if a.s == b.s {
+				continue
+			}
+			pairs = append(pairs, ap3HypothesisPair{a.c28, b.c28, a.s, b.s})
+		}
+	}
+	return pairs
 }

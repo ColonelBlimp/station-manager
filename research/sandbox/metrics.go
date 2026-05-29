@@ -657,7 +657,7 @@ func fillSymbolLLRsN1(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d int) {
 // special "CQ" token — the format every fixture with truth text
 // starting with "CQ " conforms to.
 //
-// Knowable bits under the AP-CQ hypothesis (33 of 174 codeword bits,
+// Knowable bits under the AP-CQ hypothesis (34 of 174 codeword bits,
 // all in the systematic-payload prefix; bit positions traced to the
 // PackType1 layout documented in pack.go and QEX § 4):
 //
@@ -689,7 +689,7 @@ const apCQMagnitude = 10.0
 // SoftLLRsAPCQ builds an LLR vector for the AP-CQ hypothesis: the
 // candidate decodes to a Type-1 "CQ <call> <grid>" message. The
 // vector starts from the N=1 channel LLRs and ADDs a ±apCQMagnitude
-// prior at each of the 33 codeword positions pinned by the
+// prior at each of the 34 codeword positions pinned by the
 // hypothesis. Adding (rather than replacing) keeps the channel
 // information active: strong channel disagreement at a known
 // position can still flip the bit if the channel LLR overpowers the
@@ -722,7 +722,7 @@ func softLLRsAPCQWithMag(grid *SymbolGrid, mag float64, c28Value uint32) [FT8Cod
 	return llrs
 }
 
-// applyAPCQPriorsForC28 mutates llrs at the 33 codeword positions
+// applyAPCQPriorsForC28 mutates llrs at the 34 codeword positions
 // pinned by an AP-CQ-family hypothesis. mag is the magnitude
 // added/subtracted from the channel LLR at each known position
 // (positive for bit 0, negative for bit 1, per the LDPC sign
@@ -793,6 +793,88 @@ const (
 // each in turn on a given candidate; first BP-OK wins.
 var apCQValueOrder = [...]uint32{
 	apCQValueBare, apCQValueDX, apCQValueCOTA, apCQValuePOTA,
+}
+
+// ── AP3 — QEX § 7 AP3 (both callsigns hypothesised) ─────────────────
+//
+// AP3 is the strongest of the QEX § 7 AP forms. Where AP2 / AP-CQ
+// hypothesises only c28_1 (34 pinned bits), AP3 additionally
+// hypothesises c28_2 — the called callsign. The hypothesis comes
+// from the running CallsignHashTable: any callsign the decoder has
+// recently seen is a plausible call2 for a failed candidate. Total
+// pinned bits: 28 (c28_1) + 28 (c28_2) + 6 (p1, p2, r1, i3=3) = 62
+// out of 174 — roughly double AP-CQ's leverage. Only 15 g15 + 14
+// CRC + 83 parity bits remain channel-driven.
+//
+// AP3 enumerates hypothesis pairs (c1, c2) and tries each via BP+OSD
+// with the 61-bit pin mask. First success wins. Total cost per
+// failed candidate is O(K²) BP runs where K is the hash-table-snapshot
+// cap; bounded via MultiPassOptions.AP3MaxCallsigns.
+
+// applyAP3PriorsForC28s pins both c28_1 and c28_2 plus the AP-CQ
+// auxiliary bits (p1, p2, r1, i3) to a Type-1 message hypothesis.
+// Magnitude is added to channel LLRs at the 61 known positions; sign
+// reflects the hypothesised bit value (positive favours bit 0).
+func applyAP3PriorsForC28s(llrs *[FT8CodewordBits]float64, mag float64, c28_1, c28_2 uint32) {
+	// Bits 0..27 = c28_1 (28 bits MSB-first)
+	const c28Bits = 28
+	for i := 0; i < c28Bits; i++ {
+		bit := uint8((c28_1 >> (c28Bits - 1 - i)) & 1)
+		llrs[i] += signedPrior(bit, mag)
+	}
+	// bit 28 = p1 = 0
+	llrs[28] += signedPrior(0, mag)
+	// bits 29..56 = c28_2 (28 bits MSB-first)
+	for i := 0; i < c28Bits; i++ {
+		bit := uint8((c28_2 >> (c28Bits - 1 - i)) & 1)
+		llrs[29+i] += signedPrior(bit, mag)
+	}
+	// bit 57 = p2 = 0, bit 58 = r1 = 0
+	llrs[57] += signedPrior(0, mag)
+	llrs[58] += signedPrior(0, mag)
+	// bits 74..76 = i3 = 1 (Type 1)
+	const i3Value uint32 = 1
+	const i3Bits = 3
+	for i := 0; i < i3Bits; i++ {
+		bit := uint8((i3Value >> (i3Bits - 1 - i)) & 1)
+		llrs[74+i] += signedPrior(bit, mag)
+	}
+}
+
+// softLLRsAP3WithMag generates the AP3-augmented LLR vector for a
+// given (c28_1, c28_2) hypothesis pair. mag<=0 falls back to
+// apCQMagnitude (same default as AP-CQ — the pin strength is the
+// same per-bit; AP3 just pins more bits).
+func softLLRsAP3WithMag(grid *SymbolGrid, mag float64, c28_1, c28_2 uint32) [FT8CodewordBits]float64 {
+	if mag <= 0 {
+		mag = apCQMagnitude
+	}
+	llrs := SoftLLRs(grid)
+	applyAP3PriorsForC28s(&llrs, mag, c28_1, c28_2)
+	return llrs
+}
+
+// ap3PinMask returns the 62-position pin mask: c28_1 (0..27) +
+// p1 (28) + c28_2 (29..56) + p2 (57) + r1 (58) + i3 (74..76).
+//
+// Passed to BPDecodeWithPin so OSD's MRB bit-flip search will not
+// undo AP3 priors — same mechanism as apCQPinMask, just covering
+// more bits.
+func ap3PinMask() [FT8CodewordBits]bool {
+	var m [FT8CodewordBits]bool
+	for i := 0; i < 28; i++ { // c28_1
+		m[i] = true
+	}
+	m[28] = true               // p1
+	for i := 29; i < 57; i++ { // c28_2
+		m[i] = true
+	}
+	m[57] = true // p2
+	m[58] = true // r1
+	m[74] = true // i3 MSB
+	m[75] = true // i3 middle
+	m[76] = true // i3 LSB
+	return m
 }
 
 // apCQPinMask returns the [LDPCCodewordBits]bool mask of codeword

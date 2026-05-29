@@ -84,3 +84,32 @@ func (t *CallsignHashTable) Size() int {
 	defer t.mu.RUnlock()
 	return len(t.byH12)
 }
+
+// Callsigns returns a snapshot of every distinct callsign registered
+// in the table. No order is guaranteed (map iteration). Safe on a
+// nil receiver — returns nil.
+//
+// Used by AP3 hypothesis enumeration: each pair (c1, c2) of returned
+// callsigns becomes a candidate c28_1/c28_2 hypothesis pinned via
+// the AP3 priors during the cascade's final stage.
+func (t *CallsignHashTable) Callsigns() []string {
+	if t == nil {
+		return nil
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.byH12) == 0 {
+		return nil
+	}
+	// De-duplicate via the h22 dimension too — distinct hashes may
+	// converge on the same callsign string in pathological cases.
+	seen := make(map[string]struct{}, len(t.byH12))
+	for _, c := range t.byH12 {
+		seen[c] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for c := range seen {
+		out = append(out, c)
+	}
+	return out
+}

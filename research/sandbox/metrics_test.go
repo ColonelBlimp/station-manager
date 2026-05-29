@@ -614,7 +614,7 @@ func buildNoiselessGrid(trueTones [58]int) *SymbolGrid {
 // Running on an all-zero LLR input means the assertion targets only
 // the prior contribution (no channel data to disentangle).
 //
-// The 33 known bits are: c28_1 (0..27) = CQ token value 2; p1 (28),
+// The 34 known bits are: c28_1 (0..27) = CQ token value 2; p1 (28),
 // p2 (57), r1 (58) = 0; i3 (74..76) = 1. All bit positions traced to
 // PackType1 + PackCallsign28; magnitude is the apCQMagnitude constant.
 func TestApplyAPCQPriors_KnownBitsAndValues(t *testing.T) {
@@ -733,5 +733,220 @@ func TestSoftLLRsAPCQ_NoiselessCQDecodesViaBP(t *testing.T) {
 	}
 	if ur.Text != "CQ K1JT FN20" {
 		t.Errorf("AP-CQ noiseless decode: text=%q, want %q", ur.Text, "CQ K1JT FN20")
+	}
+}
+
+// TestApplyAP3PriorsForC28s_KnownBitsAndValues pins the 62 codeword
+// positions AP3 touches plus the values it injects. Runs on an
+// all-zero LLR input so only the prior contribution shows.
+//
+// The 62 known bits are: c28_1 (0..27), p1 (28), c28_2 (29..56),
+// p2 (57), r1 (58), i3 (74..76). Bit positions traced to
+// PackType1 + PackCallsign28.
+func TestApplyAP3PriorsForC28s_KnownBitsAndValues(t *testing.T) {
+	var llrs [FT8CodewordBits]float64
+	// Hypothesise c28_1 = 2 (bare CQ token) and c28_2 = some
+	// arbitrary value with both 0 and 1 bits to exercise sign
+	// propagation. 7 = 0b111 → bits 54, 55, 56 = 1 in MSB-first
+	// 28-bit encoding (LSBs of c28_2 sit at the high indices).
+	const c1 uint32 = 2
+	const c2 uint32 = 7
+	applyAP3PriorsForC28s(&llrs, apCQMagnitude, c1, c2)
+
+	// c28_1 = 2 (...000010 in 28 bits MSB-first): bit 26 = 1, rest 0.
+	for i := 0; i < 28; i++ {
+		want := +apCQMagnitude
+		if i == 26 {
+			want = -apCQMagnitude
+		}
+		if llrs[i] != want {
+			t.Errorf("c28_1 bit %d: got %+f, want %+f", i, llrs[i], want)
+		}
+	}
+	// p1 = 0 at bit 28
+	if llrs[28] != +apCQMagnitude {
+		t.Errorf("p1 (bit 28): got %+f, want %+f", llrs[28], +apCQMagnitude)
+	}
+	// c28_2 = 7 (...000111 in 28 bits MSB-first): bits 54, 55, 56 = 1.
+	for i := 0; i < 28; i++ {
+		want := +apCQMagnitude
+		if i >= 25 {
+			want = -apCQMagnitude
+		}
+		if llrs[29+i] != want {
+			t.Errorf("c28_2 bit %d (codeword bit %d): got %+f, want %+f",
+				i, 29+i, llrs[29+i], want)
+		}
+	}
+	// p2 = 0 at bit 57, r1 = 0 at bit 58
+	for _, pos := range []int{57, 58} {
+		if llrs[pos] != +apCQMagnitude {
+			t.Errorf("zero-bit pin at %d: got %+f, want %+f",
+				pos, llrs[pos], +apCQMagnitude)
+		}
+	}
+	// i3 = 1 in 3 bits MSB-first: llrs[74,75] = +mag, llrs[76] = -mag
+	if llrs[74] != +apCQMagnitude || llrs[75] != +apCQMagnitude {
+		t.Errorf("i3 MSB+middle: got %+f, %+f; want %+f each",
+			llrs[74], llrs[75], +apCQMagnitude)
+	}
+	if llrs[76] != -apCQMagnitude {
+		t.Errorf("i3 LSB: got %+f, want %+f", llrs[76], -apCQMagnitude)
+	}
+	// Unknown bits (g15 at 59..73, CRC at 77..90, parity at 91..173)
+	// must remain zero.
+	for i := 59; i <= 73; i++ {
+		if llrs[i] != 0 {
+			t.Errorf("g15 bit %d: got %+f, want 0", i, llrs[i])
+		}
+	}
+	for i := 77; i < FT8CodewordBits; i++ {
+		if llrs[i] != 0 {
+			t.Errorf("CRC/parity bit %d: got %+f, want 0", i, llrs[i])
+		}
+	}
+}
+
+// TestAp3PinMask_62Positions counts the pin mask entries. AP3 must
+// pin exactly 28 (c28_1) + 1 (p1) + 28 (c28_2) + 1 (p2) + 1 (r1) +
+// 3 (i3) = 62 codeword positions.
+func TestAp3PinMask_62Positions(t *testing.T) {
+	m := ap3PinMask()
+	count := 0
+	for _, b := range m {
+		if b {
+			count++
+		}
+	}
+	if count != 62 {
+		t.Errorf("ap3PinMask: %d positions pinned; want 62", count)
+	}
+}
+
+// TestApCQPinMask_34Positions counts the AP-CQ pin entries. AP-CQ
+// must pin exactly 28 (c28_1) + 1 (p1) + 1 (p2) + 1 (r1) + 3 (i3) =
+// 34 codeword positions. (Earlier Session 104 prose referred to
+// "33 bits" — off by one against the actual count, since i3 is 3
+// bits not 2; the implementation has always pinned the full 34.)
+func TestApCQPinMask_34Positions(t *testing.T) {
+	m := apCQPinMask()
+	count := 0
+	for _, b := range m {
+		if b {
+			count++
+		}
+	}
+	if count != 34 {
+		t.Errorf("apCQPinMask: %d positions pinned; want 34", count)
+	}
+}
+
+// TestSoftLLRsAP3_NoiselessKnownPair_DecodesViaBP pins the round-trip
+// behaviour: a noiseless symbol grid encoding "K1JT W1ABC FN20" with
+// the matching (K1JT, W1ABC) hypothesis must decode via BP. Mirrors
+// TestSoftLLRsAPCQ_NoiselessCQDecodesViaBP but with both call slots
+// hypothesised instead of one.
+func TestSoftLLRsAP3_NoiselessKnownPair_DecodesViaBP(t *testing.T) {
+	payload, err := PackType1("K1JT", "W1ABC", "FN20")
+	if err != nil {
+		t.Fatalf("PackType1: %v", err)
+	}
+	info := PayloadToInfo91(payload)
+	cw := EncodeLDPC(info)
+	tones := CodewordToTones(cw)
+	var dataTones [58]int
+	for d := 0; d < 58; d++ {
+		dataTones[d] = tones[dataSymbolIndices[d]]
+	}
+	grid := buildNoiselessGrid(dataTones)
+
+	c1, err := PackCallsign28("K1JT")
+	if err != nil {
+		t.Fatalf("pack K1JT: %v", err)
+	}
+	c2, err := PackCallsign28("W1ABC")
+	if err != nil {
+		t.Fatalf("pack W1ABC: %v", err)
+	}
+	llrs := softLLRsAP3WithMag(grid, 0, c1, c2)
+	br := BPDecode(llrs, DefaultBPOptions())
+	if !br.OK {
+		t.Fatalf("BPDecode on AP3 noiseless fixture: not OK (method=%s, iters=%d)",
+			br.DecodeMethod, br.Iterations)
+	}
+	var pay [LDPCPayloadBits]uint8
+	copy(pay[:], br.Message91[:LDPCPayloadBits])
+	ur := Unpack77WithHashes(pay, nil)
+	if !ur.OK {
+		t.Fatalf("Unpack77 on AP3 decoded payload: not OK")
+	}
+	if ur.Text != "K1JT W1ABC FN20" {
+		t.Errorf("AP3 noiseless decode: text=%q, want %q", ur.Text, "K1JT W1ABC FN20")
+	}
+}
+
+// TestEnumerateAP3HypothesisPairs_EmptyTable verifies the enumerator
+// returns nil on an empty hash table. AP3 must be a no-op when the
+// hash has nothing to feed it.
+func TestEnumerateAP3HypothesisPairs_EmptyTable(t *testing.T) {
+	ht := NewCallsignHashTable()
+	pairs := enumerateAP3HypothesisPairs(ht, 8)
+	if len(pairs) != 0 {
+		t.Errorf("enumerateAP3HypothesisPairs on empty hash: got %d pairs, want 0",
+			len(pairs))
+	}
+}
+
+// TestEnumerateAP3HypothesisPairs_TwoCalls verifies the cross product
+// generation: with calls {K1JT, W1ABC} in the hash, the AP3
+// enumerator should produce (CQ, K1JT), (CQ, W1ABC), (K1JT, W1ABC),
+// (W1ABC, K1JT) — total 4 pairs (3 c28_1 candidates × 2 c28_2
+// candidates minus the 2 self-pairs).
+func TestEnumerateAP3HypothesisPairs_TwoCalls(t *testing.T) {
+	ht := NewCallsignHashTable()
+	ht.Add("K1JT")
+	ht.Add("W1ABC")
+	pairs := enumerateAP3HypothesisPairs(ht, 8)
+	if len(pairs) != 4 {
+		t.Errorf("enumerateAP3HypothesisPairs: got %d pairs, want 4", len(pairs))
+		for i, p := range pairs {
+			t.Logf("  pair[%d]: c1=%s, c2=%s", i, p.call1, p.call2)
+		}
+	}
+	// Pin the structural invariants: CQ appears in c1 slot, never c2;
+	// no self-pairs.
+	cqInC1 := false
+	for _, p := range pairs {
+		if p.call1 == "CQ" {
+			cqInC1 = true
+		}
+		if p.call2 == "CQ" {
+			t.Errorf("CQ appeared in c2 slot in pair (%s, %s)", p.call1, p.call2)
+		}
+		if p.call1 == p.call2 {
+			t.Errorf("self-pair (%s, %s) was not filtered", p.call1, p.call2)
+		}
+	}
+	if !cqInC1 {
+		t.Errorf("CQ never appeared as c1 candidate; expected at least one pair")
+	}
+}
+
+// TestEnumerateAP3HypothesisPairs_RespectsMaxK pins that the K cap
+// limits hash callsigns considered.
+func TestEnumerateAP3HypothesisPairs_RespectsMaxK(t *testing.T) {
+	ht := NewCallsignHashTable()
+	// Add 10 valid callsigns.
+	for _, c := range []string{"K1A", "K1B", "K1C", "K1D", "K1E", "K1F", "K1G", "K1H", "K1I", "K1J"} {
+		ht.Add(c)
+	}
+	pairs := enumerateAP3HypothesisPairs(ht, 3)
+	// With K=3: 3 c1 candidates from hash + 1 CQ = 4; 3 c2 candidates.
+	// Total = 4 × 3 = 12, minus self-pairs (where same call is both
+	// c1 and c2). The hash returns an unordered subset of 3 — so
+	// up to 3 self-pairs are removed. Pair count must be in [9, 12].
+	if len(pairs) < 9 || len(pairs) > 12 {
+		t.Errorf("enumerateAP3HypothesisPairs with K=3 on 10-call hash: %d pairs, want 9-12",
+			len(pairs))
 	}
 }
