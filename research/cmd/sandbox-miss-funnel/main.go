@@ -101,6 +101,17 @@ type truthFate struct {
 	nmsNote string
 }
 
+// candScore records one post-NMS candidate plus its truth-proximity
+// label. Drives the score-audit summary that answers "does the
+// matched-filter score actually separate real signals from aliases?"
+type candScore struct {
+	capture   string
+	freqHz    float64
+	dtSec     float64
+	sync      float64
+	nearTruth bool
+}
+
 func main() {
 	dir := flag.String("dir", "captures", "directory of .wav files with paired .truth.json manifests (sequential jt9 oracle order, alphabetical fixture order)")
 	freqTol := flag.Float64("ftol", 5.0, "freq tolerance for stage matching (Hz). Matches sandbox-asym-ab default.")
@@ -139,6 +150,7 @@ func main() {
 	ht := sandbox.NewCallsignHashTable()
 
 	var fates []truthFate
+	var scores []candScore
 	for _, w := range matches {
 		m, err := truth.Read(truth.PathFor(w))
 		if err != nil {
@@ -196,9 +208,176 @@ func main() {
 			}
 			fates = append(fates, tf)
 		}
+
+		// Score audit: label every post-NMS candidate as near-truth or
+		// alias and record its matched-filter score (Candidate.Sync).
+		// Aggregated across the corpus, the two distributions show
+		// whether the front-end's admission criterion actually separates
+		// signal from alias on its own.
+		for _, c := range postNMS {
+			scores = append(scores, candScore{
+				capture:   filepath.Base(w),
+				freqHz:    c.FreqHz,
+				dtSec:     c.DtSec,
+				sync:      c.Sync,
+				nearTruth: signalAnyNear(m.Signals, c.FreqHz, c.DtSec, *freqTol, *dtTol),
+			})
+		}
 	}
 
 	printReport(fates, *magnitudeLLR)
+	printScoreAudit(scores)
+}
+
+// signalAnyNear is the truth-list flavour of anyNear: returns true
+// if any truth.Signal in the slice lies within (freqTol, dtTol) of
+// the given (freqHz, dtSec) coordinate.
+func signalAnyNear(signals []truth.Signal, freqHz, dtSec, freqTol, dtTol float64) bool {
+	for _, s := range signals {
+		if near(freqHz, dtSec, s.FreqHz, s.DTSec, freqTol, dtTol) {
+			return true
+		}
+	}
+	return false
+}
+
+// printScoreAudit answers the question "does Candidate.Sync (the
+// matched-filter score that drives front-end admission) actually
+// separate signal-bearing candidates from aliases?" Two populations:
+//
+//   - near-truth: post-NMS candidates within (freqTol, dtTol) of any
+//     truth signal in the same WAV's manifest
+//   - alias: everything else (post-NMS candidates with no truth in
+//     proximity)
+//
+// If the two distributions overlap heavily, Sync alone can't separate
+// signal from alias — admission ranking is the front-end weak point.
+// If they're cleanly separated, Sync is doing its job and any
+// remaining miss / extra problem lives downstream (refinement,
+// channelizer, demod).
+func printScoreAudit(scores []candScore) {
+	if len(scores) == 0 {
+		return
+	}
+	var nearVals, aliasVals []float64
+	for _, s := range scores {
+		if s.nearTruth {
+			nearVals = append(nearVals, s.sync)
+		} else {
+			aliasVals = append(aliasVals, s.sync)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("=== FRONT-END SCORE AUDIT (Candidate.Sync, post-NMS) ===")
+	fmt.Printf("  scope:     all post-NMS candidates across the corpus (n=%d)\n", len(scores))
+	fmt.Printf("  labelling: near-truth = within (ftol, dttol) of any manifest signal\n")
+	fmt.Println()
+
+	fmt.Printf("  population        count    min     p25     p50     p75     max\n")
+	printStats("near-truth", nearVals)
+	printStats("alias", aliasVals)
+	fmt.Println()
+
+	// Coarse histogram. Bin width 2.0 covers the typical Sync range
+	// of 3..50 in ~24 bins; the tail beyond 50 lumps into one final
+	// bucket.
+	const binWidth = 2.0
+	const maxBin = 50.0
+	histo := buildHisto(nearVals, aliasVals, binWidth, maxBin)
+	fmt.Printf("  histogram (bin width = %.1f):\n", binWidth)
+	fmt.Printf("    sync range       near-truth   alias\n")
+	for _, row := range histo {
+		fmt.Printf("    %-15s  %10d   %5d\n", row.label, row.near, row.alias)
+	}
+	fmt.Println()
+
+	// Overlap summary. The fraction of aliases scoring above
+	// near-truth's p25 quantifies how much "the alias pool sits at
+	// or above the signal pool's quartile floor". A high fraction
+	// indicates the front-end scoring isn't a discriminative signal
+	// on its own.
+	if len(nearVals) > 0 && len(aliasVals) > 0 {
+		sortedNear := append([]float64(nil), nearVals...)
+		sort.Float64s(sortedNear)
+		nearP25 := sortedNear[len(sortedNear)/4]
+		nearP50 := sortedNear[len(sortedNear)/2]
+		aboveP25 := 0
+		aboveP50 := 0
+		for _, v := range aliasVals {
+			if v >= nearP25 {
+				aboveP25++
+			}
+			if v >= nearP50 {
+				aboveP50++
+			}
+		}
+		fmt.Println("  overlap summary:")
+		fmt.Printf("    aliases scoring ≥ near-truth p25 (%.1f): %d / %d (%.0f%%)\n",
+			nearP25, aboveP25, len(aliasVals), 100*float64(aboveP25)/float64(len(aliasVals)))
+		fmt.Printf("    aliases scoring ≥ near-truth p50 (%.1f): %d / %d (%.0f%%)\n",
+			nearP50, aboveP50, len(aliasVals), 100*float64(aboveP50)/float64(len(aliasVals)))
+	}
+}
+
+func printStats(label string, vals []float64) {
+	if len(vals) == 0 {
+		fmt.Printf("    %-15s  %5d   (no values)\n", label, 0)
+		return
+	}
+	sorted := append([]float64(nil), vals...)
+	sort.Float64s(sorted)
+	min := sorted[0]
+	max := sorted[len(sorted)-1]
+	p25 := sorted[len(sorted)/4]
+	p50 := sorted[len(sorted)/2]
+	p75 := sorted[3*len(sorted)/4]
+	fmt.Printf("    %-15s  %5d   %5.1f   %5.1f   %5.1f   %5.1f   %5.1f\n",
+		label, len(vals), min, p25, p50, p75, max)
+}
+
+type histoRow struct {
+	label string
+	near  int
+	alias int
+}
+
+// buildHisto bins near-truth and alias scores into the same set of
+// bins for side-by-side comparison.
+func buildHisto(near, alias []float64, binWidth, maxBin float64) []histoRow {
+	if binWidth <= 0 {
+		return nil
+	}
+	nBins := int(maxBin/binWidth) + 1 // last bin is the overflow tail
+	rows := make([]histoRow, nBins)
+	for i := 0; i < nBins-1; i++ {
+		lo := float64(i) * binWidth
+		hi := lo + binWidth
+		rows[i].label = fmt.Sprintf("%4.1f-%4.1f", lo, hi)
+	}
+	rows[nBins-1].label = fmt.Sprintf("    ≥%4.1f", maxBin)
+
+	for _, v := range near {
+		idx := int(v / binWidth)
+		if idx >= nBins-1 {
+			idx = nBins - 1
+		}
+		if idx < 0 {
+			idx = 0
+		}
+		rows[idx].near++
+	}
+	for _, v := range alias {
+		idx := int(v / binWidth)
+		if idx >= nBins-1 {
+			idx = nBins - 1
+		}
+		if idx < 0 {
+			idx = 0
+		}
+		rows[idx].alias++
+	}
+	return rows
 }
 
 // refineCandidates runs RefineCandidate over a slice of post-cap
