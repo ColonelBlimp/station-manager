@@ -123,6 +123,7 @@ func main() {
 	ap3MaxK := flag.Int("ap3-max-k", 0, "AP3 hash-callsign cap per side (0 = default 8). Worst-case BP runs per failed candidate = (1+K)×K.")
 	dumpMissed := flag.Bool("dump-missed", false, "in corpus mode, list every truth not matched by accepted decodes in either mode, with text + capture (used to answer 'which oracle misses are CQ-shaped?')")
 	strict := flag.Bool("strict", false, "strict-parity mode (clean-room report § Behavioral Findings): forces all experimental decode-recovery features off (AP-CQ, AP3, BestOfN). Scoring is against the sequential jt9-default truth manifests; deep-mode recoveries are intentionally not admitted. Calibration knobs (sync gate, candidate-search breadth) keep their defaults at this scaffold stage.")
+	searchThreshold := flag.Float64("search-threshold", 0, "override SearchOptions.Threshold (matched-filter score floor at candidate finder). 0 = package default (3.0). Clean-room report calibrates `near 1.8` for the six-file oracle corpus; measure before adopting.")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -153,6 +154,9 @@ func main() {
 	}
 	if *ap3MaxK > 0 {
 		opts.AP3MaxCallsigns = *ap3MaxK
+	}
+	if *searchThreshold > 0 {
+		opts.Search.Threshold = *searchThreshold
 	}
 
 	if *strict {
