@@ -163,6 +163,21 @@ type MultiPassOptions struct {
 	// (CQ-family-size + K) × K — at K=8 with 4 CQ-family entries
 	// that's 96 BP runs.
 	AP3MaxCallsigns int
+
+	// MagnitudeLLR selects the QEX § 6 spec-aligned demap domain.
+	// Default false = power-domain (existing sandbox behaviour,
+	// LLR = max{|C|²}_{x=0} − max{|C|²}_{x=1}). True = magnitude
+	// domain (paper-prescribed, LLR = max{|C|}_{x=0} − max{|C|}_{x=1}),
+	// applied uniformly to N=1, N=2, N=3, N1Norm, and BestOfN.
+	//
+	// Power vs magnitude is NOT a constant-factor transform on the
+	// demap *difference*: L_pow = (a+b)·L_mag where a,b are the two
+	// max-magnitudes; (a+b) varies per symbol with signal+noise, so
+	// BP's global noise normalisation cannot absorb it. See
+	// qex-derivation.md § 3.1.1 for the math.
+	//
+	// A/B mode added 2026-05-29; not yet a strict-mode default.
+	MagnitudeLLR bool
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -556,32 +571,33 @@ func runCascade(
 	bpOpts BPOptions,
 	ht *CallsignHashTable,
 ) (cascadeOutcome, bool) {
-	llrs := SoftLLRs(grid)
+	mm := opts.MagnitudeLLR
+	llrs := SoftLLRs(grid, mm)
 	br := BPDecode(llrs, bpOpts)
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1}, true
 	}
 
-	llrs = SoftLLRsN2(grid)
+	llrs = SoftLLRsN2(grid, mm)
 	br = BPDecode(llrs, bpOpts)
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN2}, true
 	}
 
-	llrs = SoftLLRsN3(grid)
+	llrs = SoftLLRsN3(grid, mm)
 	br = BPDecode(llrs, bpOpts)
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN3}, true
 	}
 
-	llrs = SoftLLRsN1BitNormalized(grid)
+	llrs = SoftLLRsN1BitNormalized(grid, mm)
 	br = BPDecode(llrs, bpOpts)
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1Norm}, true
 	}
 
 	if opts.EnableBestOfN {
-		llrs = SoftLLRsBestOfN(grid)
+		llrs = SoftLLRsBestOfN(grid, mm)
 		br = BPDecode(llrs, bpOpts)
 		if br.OK {
 			return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricBestOfN}, true
@@ -591,7 +607,7 @@ func runCascade(
 	if opts.EnableAPCQ {
 		pin := apCQPinMask()
 		for _, c28v := range apCQValueOrder {
-			l := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v)
+			l := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v, mm)
 			b := BPDecodeWithPin(l, bpOpts, &pin)
 			if b.OK {
 				return cascadeOutcome{BR: b, LLRs: l, Metric: LLRMetricAPCQ, TextGuard: "CQ"}, true
@@ -604,7 +620,7 @@ func runCascade(
 		if len(pairs) > 0 {
 			pin := ap3PinMask()
 			for _, p := range pairs {
-				l := softLLRsAP3WithMag(grid, opts.AP3Mag, p.c28_1, p.c28_2)
+				l := softLLRsAP3WithMag(grid, opts.AP3Mag, p.c28_1, p.c28_2, mm)
 				b := BPDecodeWithPin(l, bpOpts, &pin)
 				if !b.OK {
 					continue

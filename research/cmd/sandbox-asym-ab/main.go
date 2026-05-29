@@ -124,6 +124,8 @@ func main() {
 	dumpMissed := flag.Bool("dump-missed", false, "in corpus mode, list every truth not matched by accepted decodes in either mode, with text + capture (used to answer 'which oracle misses are CQ-shaped?')")
 	strict := flag.Bool("strict", false, "strict-parity mode (clean-room report § Behavioral Findings): forces all experimental decode-recovery features off (AP-CQ, AP3, BestOfN). Scoring is against the sequential jt9-default truth manifests; deep-mode recoveries are intentionally not admitted. Calibration knobs (sync gate, candidate-search breadth) keep their defaults at this scaffold stage.")
 	searchThreshold := flag.Float64("search-threshold", 0, "override SearchOptions.Threshold (matched-filter score floor at candidate finder). 0 = package default (3.0). Clean-room report calibrates `near 1.8` for the six-file oracle corpus; measure before adopting.")
+	magnitudeLLR := flag.Bool("magnitude-llr", false, "explicitly enable QEX § 6 magnitude-domain demap in non-strict mode (in strict mode it's the default). LLR = max|C|_{x=0} − max|C|_{x=1}, the paper-prescribed form. Has no effect when -legacy-power-llr is also set (legacy wins).")
+	legacyPowerLLR := flag.Bool("legacy-power-llr", false, "force the legacy power-domain demap (LLR = max|C|²_{x=0} − max|C|²_{x=1}) even in strict mode. Use for A/B comparison against the pre-2026-05-29 baseline. Off-spec per QEX § 6.")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -158,6 +160,24 @@ func main() {
 	if *searchThreshold > 0 {
 		opts.Search.Threshold = *searchThreshold
 	}
+	// LLR domain precedence (clearest case wins):
+	//   -legacy-power-llr  → force power (off-spec; A/B against pre-2026-05-29 baseline)
+	//   -magnitude-llr     → force magnitude
+	//   -strict (no flags) → magnitude (QEX § 6 spec-aligned; baseline 113/144)
+	//   no flags at all    → power (preserve historical non-strict default)
+	switch {
+	case *legacyPowerLLR:
+		opts.MagnitudeLLR = false
+	case *magnitudeLLR:
+		opts.MagnitudeLLR = true
+	case *strict:
+		opts.MagnitudeLLR = true
+	default:
+		opts.MagnitudeLLR = false
+	}
+	if *strict && *legacyPowerLLR {
+		fmt.Fprintln(os.Stderr, "note: -strict + -legacy-power-llr → power-domain demap (A/B mode; off-spec per QEX § 6)")
+	}
 
 	if *strict {
 		// Strict mode forces all experimental decode-recovery features
@@ -177,7 +197,7 @@ func main() {
 		opts.EnableAPCQ = false
 		opts.EnableAP3 = false
 		opts.EnableBestOfN = false
-		printStrictBanner()
+		printStrictBanner(opts.MagnitudeLLR)
 	}
 
 	if *dirPath != "" {
@@ -202,10 +222,15 @@ func main() {
 // and is excluded from strict scoring. `-strict` therefore runs
 // symmetric only; without `-strict`, the A/B comparison still
 // surfaces the asym deltas as deep-mode data.
-func printStrictBanner() {
+func printStrictBanner(magnitudeMode bool) {
 	fmt.Println("=== STRICT-PARITY MODE ===")
 	fmt.Println("  channelizer: symmetric only (asymmetric = deep-mode recovery)")
 	fmt.Println("  experimental knobs disabled: AP-CQ, AP3, BestOfN")
+	if magnitudeMode {
+		fmt.Println("  LLR domain: magnitude (QEX § 6 spec-aligned; -legacy-power-llr to A/B)")
+	} else {
+		fmt.Println("  LLR domain: POWER (legacy/off-spec; -legacy-power-llr override active)")
+	}
 	fmt.Println("  scoring: sequential jt9-default truth manifests")
 	fmt.Println("  calibration knobs (sync gate, candidate-search breadth): defaults — TBD")
 	fmt.Println()
@@ -1130,7 +1155,7 @@ func computeMargins(audioSamples []float32, asym bool, exp []expected) []marginM
 		if err != nil {
 			continue
 		}
-		llrs := sandbox.SoftLLRs(grid)
+		llrs := sandbox.SoftLLRs(grid, false)
 		out[i] = scoreMargin(llrs, trueCW, bpOpts)
 	}
 	return out

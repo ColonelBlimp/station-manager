@@ -1,0 +1,133 @@
+=== STRICT-PARITY MODE ===
+  channelizer: symmetric only (asymmetric = deep-mode recovery)
+  experimental knobs disabled: AP-CQ, AP3, BestOfN
+  LLR domain: magnitude (QEX § 6 spec-aligned; -legacy-power-llr to A/B)
+  scoring: sequential jt9-default truth manifests
+  calibration knobs (sync gate, candidate-search breadth): defaults — TBD
+
+=== 20m_slot1.wav (21 truths) ===
+  sym  matched=16 extras= 4 total=20
+
+=== 20m_slot2.wav (32 truths) ===
+  sym  matched=25 extras= 4 total=29
+
+=== 20m_slot3.wav (17 truths) ===
+  sym  matched=13 extras= 4 total=17
+
+=== live_slot1.wav (29 truths) ===
+  sym  matched=21 extras= 2 total=23
+
+=== live_slot2.wav (23 truths) ===
+  sym  matched=19 extras= 5 total=24
+
+=== live_slot3.wav (22 truths) ===
+  sym  matched=19 extras= 4 total=23
+
+=== CORPUS AGGREGATE ===
+  total truths: 144 across 6 captures
+  mode                matched     extras
+  symmetric           113/144     23
+
+  per-LLR-metric matched truth count:
+    mode              N=1     N=2     N=3     N1Norm   BestOfN   APCQ    AP3   
+    symmetric            103       6       0        4         0       0       0
+
+  truths recovered via N2 (cascade-load-bearing):
+    symmetric (n=6):
+      20m_slot2.wav 1880.0 Hz "SP0DZ ER3CT R-04"
+      20m_slot2.wav 2276.0 Hz "CQ IZ1HJU JN44                        a1"
+      20m_slot3.wav 2335.0 Hz "CQ UB6OAK KN88"
+      live_slot2.wav 1900.0 Hz "KP4JFR EA3ACA JN01"
+      live_slot2.wav 1577.0 Hz "DN9BT UR5WAI R-09"
+      live_slot3.wav 1360.0 Hz "IQ0RU LZ4VR KN13"
+
+  truths recovered via N1Norm (cascade-load-bearing):
+    symmetric (n=4):
+      20m_slot2.wav 1207.0 Hz "4S6ARW RA6AR R-17"
+      20m_slot2.wav 1445.0 Hz "PD2AVE UF4S -16"
+      live_slot3.wav 1576.0 Hz "UR5WAI DN9BT RR73"
+      live_slot3.wav 1454.0 Hz "PU8DAS ZR1JT 73"
+
+=== SHADOW-REJECT AUDIT ===
+  total shadow rejects:  sym=31   asym=0
+  by reason:
+    reason                 sym    asym
+    hard-errors             28       0
+    snr                      3       0
+  by LLR metric:
+    metric         sym    asym
+    N1              14       0
+    N2               8       0
+    N3               3       0
+    N1Norm           6       0
+  would-recover (truth missed but shadow-reject carries truth text + freq):
+    sym:  1 truth(s) the gate dropped
+      live_slot2.wav    1487.00 Hz  dt=+0.200  metric=N1       method=BP      reason="snr -25.4 dB < -25.0 dB"  truth="PD0LBY OH7NW +08"
+    asym: 0 truth(s) the gate dropped
+
+=== SHADOW REJECTS (symmetric, n=31) ===
+  capture           freq(Hz)    dt(s)   pass  metric   method   nsync   tone   hErr  snr(dB)  text                                      reason
+  20m_slot1.wav       411.90   +0.805      1  N2       OSD-2        6     33     38    -18.7  HW0JWR U69IWH/R R RC19                    hard-errors 38 > 36
+  20m_slot1.wav       574.50   +1.470      1  N1Norm   OSD-2        6     42     41    -15.4  KL3EUU J2 ZY MI31                         hard-errors 41 > 36
+  20m_slot1.wav      2466.62   -0.375      1  N3       OSD-2        3     32     38    -13.8  LH7CTI 9Y3JLR R DB36                      hard-errors 38 > 36
+  20m_slot2.wav       531.65   +1.040      1  N1       OSD-2        3     34     40    -12.8  0G8WVH X27K H/P RN98                      hard-errors 40 > 36
+  20m_slot2.wav      1784.17   -0.145      1  N1Norm   OSD-2        6     33     41    -18.7  IF1KT/P 8Z6ZQK AE73                       hard-errors 41 > 36
+  20m_slot3.wav       506.45   +0.845      2  N1       OSD-2       11     43     42    -10.9  475OOV/R CF2ESW FF08                      hard-errors 42 > 36
+  20m_slot3.wav       636.98   +0.960      2  N1       OSD-2       14     48     37     -8.7  LA6OCA DK9GJ JN38                         hard-errors 37 > 36
+  20m_slot3.wav      1786.40   +0.075      1  N2       OSD-2        4     35     44    -10.3  TW8EIQ YW9BIM R IN77                      hard-errors 44 > 36
+  20m_slot3.wav      1853.83   +0.740      1  N3       OSD-2        5     33     41    -17.1  9C1 AH 6U1FYH CR12                        hard-errors 41 > 36
+  20m_slot3.wav      2352.82   +0.355      1  N1       OSD-2        5     35     47    -17.6  1L6KIJ 169QPP EL95                        hard-errors 47 > 36
+  live_slot1.wav     1765.83   +0.025      2  N1       OSD-2        4     32     49    -11.6  Z17JYX XM7NNR/R JA49                      hard-errors 49 > 36
+  live_slot1.wav     2074.30   +0.045      1  N1       OSD-2        2     32     43    -11.3  WT3TWO/P WY7VOS +140                      hard-errors 43 > 36
+  live_slot1.wav     2095.65   -0.450      1  N1Norm   OSD-2        3     30     45    -19.1  6J7A2EQH6X2 SV3CNX RRR                    hard-errors 45 > 36
+  live_slot1.wav     2185.38   +0.780      1  N1       BP          18     67     12    -28.2  CQ LZ1BT KN12                             snr -28.2 dB < -25.0 dB [truth]
+  live_slot1.wav     2222.07   +0.080      1  N2       OSD-2        3     33     43    -12.7  AY9EGZ/P ZE4VCH/P R +326                  hard-errors 43 > 36
+  live_slot2.wav      362.60   +1.335      2  N2       OSD-2        3     33     39    -14.8  IW0CQG/R 4Q1UPS R QO44                    hard-errors 39 > 36
+  live_slot2.wav      362.60   +1.335      1  N1       OSD-2        3     32     38    -14.8  XX3TCA/R 166AIR/R IQ99                    hard-errors 38 > 36
+  live_slot2.wav      389.02   +1.235      2  N2       OSD-2        5     28     48     -9.9  H79LZF OZ5GET/R R PH65                    hard-errors 48 > 36
+  live_slot2.wav      406.75   +1.085      2  N2       OSD-2        8     34     48     -2.7  S44AVQ/R 3U5ZBH/R EF85                    hard-errors 48 > 36
+  live_slot2.wav      425.30   +0.930      1  N1       OSD-2        2     31     47    -14.4  3G0RTC/P 2P6JDX/P FR70                    hard-errors 47 > 36
+  live_slot2.wav      473.27   -0.135      1  N2       OSD-2        4     32     41    -24.8  S22VSL 601MKH/P RL99                      hard-errors 41 > 36
+  live_slot2.wav      504.12   +0.185      1  N1       OSD-2       13     51     37     -7.4  YD2ADB RZ3ZY -15                          hard-errors 37 > 36
+  live_slot2.wav     1016.42   +0.425      1  N1       OSD-2        4     36     41    -12.9  9R1ALB/R G44DOC/R MI84                    hard-errors 41 > 36
+  live_slot2.wav     1182.28   +0.060      2  N1Norm   OSD-2        7     39     40    -18.6  4R1BYU/P 562VOS CG92                      hard-errors 40 > 36
+  live_slot2.wav     1305.12   +0.045      1  N3       OSD-2        4     32     46    -12.6  AY0PEW B38JPI/P PJ28                      hard-errors 46 > 36
+  live_slot2.wav     1487.00   +0.165      1  N1       BP          16     73      2    -25.4  PD0LBY OH7NW +08                          snr -25.4 dB < -25.0 dB [truth]
+  live_slot2.wav     1487.00   +0.165      2  N1       BP          16     73      2    -25.4  PD0LBY OH7NW +08                          snr -25.4 dB < -25.0 dB [truth]
+  live_slot2.wav     2082.75   +0.010      2  N1       OSD-2        7     35     45    -17.3  684LZE/R Z49YTO/R IM86                    hard-errors 45 > 36
+  live_slot3.wav      134.68   +1.465      1  N1Norm   OSD-2        5     37     37    -21.6  WM8XTC LC1MAL/R HE69                      hard-errors 37 > 36
+  live_slot3.wav     1766.12   +0.985      2  N1Norm   OSD-2        5     35     42    -16.9  NR0UUU/P HN2SNO/P R RB68                  hard-errors 42 > 36
+  live_slot3.wav     2018.75   +0.790      1  N2       OSD-2        2     33     40    -16.2  CY8GGR/R 0I7YII/R R NL48                  hard-errors 40 > 36
+
+=== MISSED TRUTHS (symmetric, n=31; CQ-format=10) ===
+    20m_slot1.wav      381.00 Hz  dt=+0.500  "<...> RG5A KN93"
+  * 20m_slot1.wav     1824.00 Hz  dt=+0.200  "CQ DX S56GD JN65"
+    20m_slot1.wav     2619.00 Hz  dt=+0.900  "<...> EA3NT JN01"
+    20m_slot1.wav     1994.00 Hz  dt=+2.400  "<...> SV0TPN +01"
+    20m_slot1.wav     1714.00 Hz  dt=+0.200  "OH5CLQ DK7ZT -13"
+  * 20m_slot2.wav     2593.00 Hz  dt=+0.300  "CQ TC19TC"
+    20m_slot2.wav     1137.00 Hz  dt=+0.500  "<...> DG2EBG R-21"
+    20m_slot2.wav      689.00 Hz  dt=+0.300  "<...> DG6JW/T"
+  * 20m_slot2.wav     2024.00 Hz  dt=+0.900  "CQ COTA IK7NXU JN81"
+  * 20m_slot2.wav     2546.00 Hz  dt=-0.200  "CQ UZ5DM KN28                         a1"
+  * 20m_slot2.wav     1621.00 Hz  dt=+0.200  "CQ F1THK JN02                         a1"
+  * 20m_slot2.wav     2250.00 Hz  dt=+0.200  "CQ PD5MVH JO22                        a1"
+  * 20m_slot3.wav     1824.00 Hz  dt=+0.200  "CQ DX S56GD JN65"
+    20m_slot3.wav     1995.00 Hz  dt=+0.800  "<DG6JW/T> SV0TPN +01"
+    20m_slot3.wav     2619.00 Hz  dt=+0.600  "<...> EA3NT JN01"
+    20m_slot3.wav      381.00 Hz  dt=+0.500  "<...> RG5A R-19"
+  * live_slot1.wav    1164.00 Hz  dt=-1.000  "CQ DJ3HW JO30"
+    live_slot1.wav     323.00 Hz  dt=+0.200  "<...> UX0KR KO30"
+  * live_slot1.wav    1880.00 Hz  dt=+0.200  "CQ YD2ADB OI52                        a1"
+    live_slot1.wav    1936.00 Hz  dt=+0.100  "<...> 9A5CRZ JN75"
+    live_slot1.wav    2253.00 Hz  dt=+0.100  "PE1NPS <...> +02"
+    live_slot1.wav     404.00 Hz  dt=+0.300  "<...> US5ZBR KN57"
+    live_slot1.wav    2465.00 Hz  dt=-1.000  "HA6MG DL1BBO R-23"
+    live_slot1.wav    1895.00 Hz  dt=+0.200  "UX2SB DO6LSM JO44"
+    live_slot2.wav    1415.00 Hz  dt=+0.200  "YL2GJX <...> +06"
+    live_slot2.wav    1177.00 Hz  dt=+0.100  "F4LNM <...> -12"
+    live_slot2.wav    1487.00 Hz  dt=+0.200  "PD0LBY OH7NW +08"
+  * live_slot2.wav    1535.00 Hz  dt=+0.100  "CQ R7YZ LN04"
+    live_slot3.wav     323.00 Hz  dt=+0.200  "<...> UX0KR KO30"
+    live_slot3.wav    2253.00 Hz  dt=+0.100  "<...> HG60IPA RR73"
+    live_slot3.wav     404.00 Hz  dt=+0.300  "<...> US5ZBR KN57"

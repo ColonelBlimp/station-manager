@@ -73,7 +73,7 @@ func benchPipelineFull(b *testing.B, samples []float32) {
 			if err != nil {
 				continue
 			}
-			llrs := SoftLLRs(grid)
+			llrs := SoftLLRs(grid, false)
 			br := BPDecode(llrs, bpOpts)
 			if br.OK {
 				var payload [LDPCPayloadBits]uint8

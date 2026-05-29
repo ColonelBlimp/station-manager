@@ -21,7 +21,7 @@ func TestSoftLLRsN2_NoiselessRoundTrip(t *testing.T) {
 	}
 
 	grid := buildNoiselessGrid(trueTones)
-	llrs := SoftLLRsN2(grid)
+	llrs := SoftLLRsN2(grid, false)
 
 	// Reconstruct expected codeword from trueTones using the same Gray
 	// map and bit-ordering convention SoftLLRs(N1) uses.
@@ -52,7 +52,7 @@ func TestSoftLLRsN2_SignConvention(t *testing.T) {
 	// all 174 LLRs should be > 0.
 	var tones0 [58]int
 	g0 := buildNoiselessGrid(tones0)
-	l0 := SoftLLRsN2(g0)
+	l0 := SoftLLRsN2(g0, false)
 	for i, l := range l0 {
 		if l <= 0 {
 			t.Errorf("tone-0 grid: llr[%d] = %g, expected > 0", i, l)
@@ -66,7 +66,7 @@ func TestSoftLLRsN2_SignConvention(t *testing.T) {
 		tones7[d] = 7
 	}
 	g7 := buildNoiselessGrid(tones7)
-	l7 := SoftLLRsN2(g7)
+	l7 := SoftLLRsN2(g7, false)
 	for i, l := range l7 {
 		if l >= 0 {
 			t.Errorf("tone-7 grid: llr[%d] = %g, expected < 0", i, l)
@@ -85,8 +85,8 @@ func TestSoftLLRsN2_LeftoverFallback(t *testing.T) {
 	}
 	grid := buildNoiselessGrid(trueTones)
 
-	n1 := SoftLLRs(grid)
-	n2 := SoftLLRsN2(grid)
+	n1 := SoftLLRs(grid, false)
+	n2 := SoftLLRsN2(grid, false)
 
 	// Bits 84..86 belong to d=28 (leftover of half 1).
 	// Bits 171..173 belong to d=57 (leftover of half 2).
@@ -112,7 +112,7 @@ func TestSoftLLRsN3_NoiselessRoundTrip(t *testing.T) {
 		trueTones[d] = d % 8
 	}
 	grid := buildNoiselessGrid(trueTones)
-	llrs := SoftLLRsN3(grid)
+	llrs := SoftLLRsN3(grid, false)
 
 	var expected [FT8CodewordBits]uint8
 	for d := 0; d < 58; d++ {
@@ -138,7 +138,7 @@ func TestSoftLLRsN3_NoiselessRoundTrip(t *testing.T) {
 func TestSoftLLRsN3_SignConvention(t *testing.T) {
 	var tones0 [58]int
 	g0 := buildNoiselessGrid(tones0)
-	l0 := SoftLLRsN3(g0)
+	l0 := SoftLLRsN3(g0, false)
 	for i, l := range l0 {
 		if l <= 0 {
 			t.Errorf("tone-0 grid: llr[%d] = %g, expected > 0", i, l)
@@ -150,7 +150,7 @@ func TestSoftLLRsN3_SignConvention(t *testing.T) {
 		tones7[d] = 7
 	}
 	g7 := buildNoiselessGrid(tones7)
-	l7 := SoftLLRsN3(g7)
+	l7 := SoftLLRsN3(g7, false)
 	for i, l := range l7 {
 		if l >= 0 {
 			t.Errorf("tone-7 grid: llr[%d] = %g, expected < 0", i, l)
@@ -170,8 +170,8 @@ func TestSoftLLRsN3_LeftoverFallback(t *testing.T) {
 	}
 	grid := buildNoiselessGrid(trueTones)
 
-	n1 := SoftLLRs(grid)
-	n3 := SoftLLRsN3(grid)
+	n1 := SoftLLRs(grid, false)
+	n3 := SoftLLRsN3(grid, false)
 
 	for _, d := range []int{27, 28, 56, 57} {
 		for off := 0; off < 3; off++ {
@@ -197,7 +197,7 @@ func TestSoftLLRsN1BitNormalized_NoiselessRoundTrip(t *testing.T) {
 		trueTones[d] = d % 8
 	}
 	grid := buildNoiselessGrid(trueTones)
-	llrs := SoftLLRsN1BitNormalized(grid)
+	llrs := SoftLLRsN1BitNormalized(grid, false)
 
 	var expected [FT8CodewordBits]uint8
 	for d := 0; d < 58; d++ {
@@ -225,7 +225,7 @@ func TestSoftLLRsN1BitNormalized_NoiselessRoundTrip(t *testing.T) {
 func TestSoftLLRsN1BitNormalized_SignConvention(t *testing.T) {
 	var tones0 [58]int
 	g0 := buildNoiselessGrid(tones0)
-	l0 := SoftLLRsN1BitNormalized(g0)
+	l0 := SoftLLRsN1BitNormalized(g0, false)
 	for i, l := range l0 {
 		if l <= 0 {
 			t.Errorf("tone-0 grid: llr[%d] = %g, expected > 0", i, l)
@@ -237,7 +237,7 @@ func TestSoftLLRsN1BitNormalized_SignConvention(t *testing.T) {
 		tones7[d] = 7
 	}
 	g7 := buildNoiselessGrid(tones7)
-	l7 := SoftLLRsN1BitNormalized(g7)
+	l7 := SoftLLRsN1BitNormalized(g7, false)
 	for i, l := range l7 {
 		if l >= 0 {
 			t.Errorf("tone-7 grid: llr[%d] = %g, expected < 0", i, l)
@@ -280,8 +280,8 @@ func TestSoftLLRsN1BitNormalized_ScalesByInverseSigma2(t *testing.T) {
 		}
 	}
 
-	rawN1 := SoftLLRs(g)
-	normalized := SoftLLRsN1BitNormalized(g)
+	rawN1 := SoftLLRs(g, false)
+	normalized := SoftLLRsN1BitNormalized(g, false)
 
 	const tol = 1e-9
 	for i := 0; i < FT8CodewordBits; i++ {
@@ -342,8 +342,8 @@ func TestSoftLLRsN1BitNormalized_RobustToStrongInterferer(t *testing.T) {
 		}
 	}
 
-	llrs := SoftLLRsN1BitNormalized(g)
-	rawN1 := SoftLLRs(g)
+	llrs := SoftLLRsN1BitNormalized(g, false)
+	rawN1 := SoftLLRs(g, false)
 
 	// Sign: tone 0 → bits 000 → all LLRs > 0.
 	for i, l := range llrs {
@@ -408,7 +408,7 @@ func TestSoftLLRsBestOfN_NoiselessRoundTrip(t *testing.T) {
 		trueTones[d] = d % 8
 	}
 	grid := buildNoiselessGrid(trueTones)
-	llrs := SoftLLRsBestOfN(grid)
+	llrs := SoftLLRsBestOfN(grid, false)
 
 	var expected [FT8CodewordBits]uint8
 	for d := 0; d < 58; d++ {
@@ -434,7 +434,7 @@ func TestSoftLLRsBestOfN_NoiselessRoundTrip(t *testing.T) {
 func TestSoftLLRsBestOfN_SignConvention(t *testing.T) {
 	var tones0 [58]int
 	g0 := buildNoiselessGrid(tones0)
-	l0 := SoftLLRsBestOfN(g0)
+	l0 := SoftLLRsBestOfN(g0, false)
 	for i, l := range l0 {
 		if l <= 0 {
 			t.Errorf("tone-0 grid: llr[%d] = %g, expected > 0", i, l)
@@ -446,7 +446,7 @@ func TestSoftLLRsBestOfN_SignConvention(t *testing.T) {
 		tones7[d] = 7
 	}
 	g7 := buildNoiselessGrid(tones7)
-	l7 := SoftLLRsBestOfN(g7)
+	l7 := SoftLLRsBestOfN(g7, false)
 	for i, l := range l7 {
 		if l >= 0 {
 			t.Errorf("tone-7 grid: llr[%d] = %g, expected < 0", i, l)
@@ -483,10 +483,10 @@ func TestSoftLLRsBestOfN_LowerNTiebreak(t *testing.T) {
 	}
 	grid := buildNoiselessGrid(trueTones)
 
-	llrs, src := SoftLLRsBestOfNWithSource(grid)
-	n1 := SoftLLRs(grid)
-	n2 := SoftLLRsN2(grid)
-	n3 := SoftLLRsN3(grid)
+	llrs, src := SoftLLRsBestOfNWithSource(grid, false)
+	n1 := SoftLLRs(grid, false)
+	n2 := SoftLLRsN2(grid, false)
+	n3 := SoftLLRsN3(grid, false)
 
 	for i := 0; i < FT8CodewordBits; i++ {
 		var want float64
@@ -558,7 +558,7 @@ func TestSoftLLRsBestOfN_SourceAttributionNotDegenerate(t *testing.T) {
 		}
 	}
 
-	_, src := SoftLLRsBestOfNWithSource(g)
+	_, src := SoftLLRsBestOfNWithSource(g, false)
 
 	counts := [4]int{}
 	for _, s := range src {
@@ -719,7 +719,7 @@ func TestSoftLLRsAPCQ_NoiselessCQDecodesViaBP(t *testing.T) {
 	}
 	grid := buildNoiselessGrid(dataTones)
 
-	llrs := SoftLLRsAPCQ(grid)
+	llrs := SoftLLRsAPCQ(grid, false)
 	br := BPDecode(llrs, DefaultBPOptions())
 	if !br.OK {
 		t.Fatalf("BPDecode on AP-CQ clean fixture: not OK (method=%s, iters=%d)", br.DecodeMethod, br.Iterations)
@@ -868,7 +868,7 @@ func TestSoftLLRsAP3_NoiselessKnownPair_DecodesViaBP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack W1ABC: %v", err)
 	}
-	llrs := softLLRsAP3WithMag(grid, 0, c1, c2)
+	llrs := softLLRsAP3WithMag(grid, 0, c1, c2, false)
 	br := BPDecode(llrs, DefaultBPOptions())
 	if !br.OK {
 		t.Fatalf("BPDecode on AP3 noiseless fixture: not OK (method=%s, iters=%d)",

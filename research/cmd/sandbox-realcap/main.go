@@ -1025,7 +1025,7 @@ func analyseCaptureMP(audio []float32, manifest *truth.Manifest,
 				allFates = append(allFates, f)
 				continue
 			}
-			llrs := sandbox.SoftLLRs(grid)
+			llrs := sandbox.SoftLLRs(grid, false)
 			br := sandbox.BPDecode(llrs, bpOpts)
 			f.DecodeMethod = br.DecodeMethod
 			f.BPIterations = br.Iterations
@@ -1494,7 +1494,7 @@ func gatherCandidateFates(samples []float32, manifest *truth.Manifest,
 			fates[i] = f
 			continue
 		}
-		llrs := sandbox.SoftLLRs(grid)
+		llrs := sandbox.SoftLLRs(grid, false)
 		br := sandbox.BPDecode(llrs, bpOpts)
 		f.DecodeMethod = br.DecodeMethod
 		if !br.OK {

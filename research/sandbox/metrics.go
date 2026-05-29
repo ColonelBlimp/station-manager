@@ -63,16 +63,24 @@ func init() {
 //  3. Max-log approximation:
 //     LLR(bit) = max{power[t] : t with bit=0} - max{power[t] : t with bit=1}.
 //
-// No noise normalisation is applied here — LLRs are in the same units
-// as SymbolGrid.Tones (power). Downstream consumers that need an
-// absolute scale (e.g. LDPC belief propagation) should normalise by
-// an estimate of the per-symbol noise variance. The raw LLRs are
-// sufficient for hard-decision conversion and BER measurement.
+// magnitudeMode selects the demap domain:
+//
+//   - false: power domain (default for back-compat) — LLR = max0 − max1
+//     where the maxes are over |C|² values.
+//   - true: magnitude domain (QEX § 6 spec-aligned) — LLR =
+//     √max0 − √max1, equivalent to max(|C|, x=0) − max(|C|, x=1)
+//     because √ is monotonic over [0, ∞). See qex-derivation.md
+//     § 3.1.1 for the math and the rationale.
+//
+// No noise normalisation is applied here — LLRs are in either |C|²
+// units (power mode) or |C| units (magnitude mode). Downstream
+// consumers that need an absolute scale (e.g. LDPC belief propagation)
+// should normalise by an estimate of the per-symbol noise variance.
 //
 // Output ordering: codeword bit cbi corresponds to data symbol
 // dataSymbolIndices[cbi/3], with cbi%3 == 0 being the MSB of that
 // symbol's bit triplet (per FT8 spec).
-func SoftLLRs(grid *SymbolGrid) [FT8CodewordBits]float64 {
+func SoftLLRs(grid *SymbolGrid, magnitudeMode bool) [FT8CodewordBits]float64 {
 	var llrs [FT8CodewordBits]float64
 	for d := 0; d < 58; d++ {
 		sym := dataSymbolIndices[d]
@@ -94,10 +102,26 @@ func SoftLLRs(grid *SymbolGrid) [FT8CodewordBits]float64 {
 			}
 			// codeword bit: 3*d for MSB, 3*d+1 for middle, 3*d+2 for LSB.
 			cbi := 3*d + (2 - bitPos)
-			llrs[cbi] = max0 - max1
+			llrs[cbi] = demapDiff(max0, max1, magnitudeMode)
 		}
 	}
 	return llrs
+}
+
+// demapDiff returns the LLR for one bit, given the two max-power
+// values from the max-log demap (max0 over tones with bit=0, max1
+// over tones with bit=1). When magnitudeMode is false the result is
+// (max0 − max1) in |C|² units; when true the sqrt is applied first,
+// yielding the QEX § 6 spec form (max|C|_{x=0} − max|C|_{x=1}).
+//
+// Monotonicity: √ over [0, ∞) preserves argmax, so √max(P) = max(√P)
+// for non-negative P. Doing the sqrt once at the end is cheaper than
+// sqrt-ing every comparison.
+func demapDiff(max0, max1 float64, magnitudeMode bool) float64 {
+	if magnitudeMode {
+		return math.Sqrt(max0) - math.Sqrt(max1)
+	}
+	return max0 - max1
 }
 
 // HardBits converts soft LLRs to a hard-decision codeword: bit 0 when
@@ -149,23 +173,23 @@ func HardBits(llrs [FT8CodewordBits]float64) [FT8CodewordBits]uint8 {
 // scans = O(384) operations. Across 28 pairs × 2 halves this is well
 // below 25 k ops total — negligible against the cost of a candidate's
 // channelize + refine + symbol-FFT path.
-func SoftLLRsN2(grid *SymbolGrid) [FT8CodewordBits]float64 {
+func SoftLLRsN2(grid *SymbolGrid, magnitudeMode bool) [FT8CodewordBits]float64 {
 	var llrs [FT8CodewordBits]float64
-	pairHalfLLRs(grid, &llrs, 0, 29)
-	pairHalfLLRs(grid, &llrs, 29, 58)
+	pairHalfLLRs(grid, &llrs, 0, 29, magnitudeMode)
+	pairHalfLLRs(grid, &llrs, 29, 58, magnitudeMode)
 	return llrs
 }
 
 // pairHalfLLRs fills the LLR slots for data-symbol indices in [start, end)
 // using non-overlapping N=2 pairs (with the trailing odd symbol, if any,
 // falling back to N=1). Operates in place on llrs.
-func pairHalfLLRs(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, start, end int) {
+func pairHalfLLRs(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, start, end int, magnitudeMode bool) {
 	d := start
 	for ; d+1 < end; d += 2 {
-		fillPairLLRsN2(grid, llrs, d, d+1)
+		fillPairLLRsN2(grid, llrs, d, d+1, magnitudeMode)
 	}
 	if d < end {
-		fillSymbolLLRsN1(grid, llrs, d)
+		fillSymbolLLRsN1(grid, llrs, d, magnitudeMode)
 	}
 }
 
@@ -174,7 +198,7 @@ func pairHalfLLRs(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, start, end i
 // max-log bit LLRs for the 6 codeword bits owned by the pair
 // (d1, d2). Writes into codeword bit positions 3·d1..3·d1+2 and
 // 3·d2..3·d2+2.
-func fillPairLLRsN2(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2 int) {
+func fillPairLLRsN2(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2 int, magnitudeMode bool) {
 	s1 := dataSymbolIndices[d1]
 	s2 := dataSymbolIndices[d2]
 
@@ -209,7 +233,7 @@ func fillPairLLRsN2(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2 int
 			}
 		}
 		cbi := 3*d1 + (2 - bitPos)
-		llrs[cbi] = max0 - max1
+		llrs[cbi] = demapDiff(max0, max1, magnitudeMode)
 	}
 
 	// Second symbol's 3 bits.
@@ -232,7 +256,7 @@ func fillPairLLRsN2(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2 int
 			}
 		}
 		cbi := 3*d2 + (2 - bitPos)
-		llrs[cbi] = max0 - max1
+		llrs[cbi] = demapDiff(max0, max1, magnitudeMode)
 	}
 }
 
@@ -282,10 +306,10 @@ func fillPairLLRsN2(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2 int
 // research/sandbox/qex-derivation.md § 7.3 from first principles
 // (the rejected 8 triples + 2 pairs + 1 leftover layout is recorded
 // there).
-func SoftLLRsN3(grid *SymbolGrid) [FT8CodewordBits]float64 {
+func SoftLLRsN3(grid *SymbolGrid, magnitudeMode bool) [FT8CodewordBits]float64 {
 	var llrs [FT8CodewordBits]float64
-	tripleHalfLLRs(grid, &llrs, 0, 29)
-	tripleHalfLLRs(grid, &llrs, 29, 58)
+	tripleHalfLLRs(grid, &llrs, 0, 29, magnitudeMode)
+	tripleHalfLLRs(grid, &llrs, 29, 58, magnitudeMode)
 	return llrs
 }
 
@@ -296,13 +320,13 @@ func SoftLLRsN3(grid *SymbolGrid) [FT8CodewordBits]float64 {
 // For a half of 29 symbols this produces 9 triples covering 27
 // symbols and 2 trailing N=1 fallback symbols. Mirrors the shape of
 // pairHalfLLRs for N=2.
-func tripleHalfLLRs(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, start, end int) {
+func tripleHalfLLRs(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, start, end int, magnitudeMode bool) {
 	d := start
 	for ; d+2 < end; d += 3 {
-		fillTripleLLRsN3(grid, llrs, d, d+1, d+2)
+		fillTripleLLRsN3(grid, llrs, d, d+1, d+2, magnitudeMode)
 	}
 	for ; d < end; d++ {
-		fillSymbolLLRsN1(grid, llrs, d)
+		fillSymbolLLRsN1(grid, llrs, d, magnitudeMode)
 	}
 }
 
@@ -316,7 +340,7 @@ func tripleHalfLLRs(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, start, end
 // scans the full 512-entry mag2 array once per bit position per symbol;
 // the m_owner switch (m1 for d1's bits, m2 for d2's, m3 for d3's) is
 // the only structural difference between the three symbol blocks.
-func fillTripleLLRsN3(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2, d3 int) {
+func fillTripleLLRsN3(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2, d3 int, magnitudeMode bool) {
 	s1 := dataSymbolIndices[d1]
 	s2 := dataSymbolIndices[d2]
 	s3 := dataSymbolIndices[d3]
@@ -334,9 +358,9 @@ func fillTripleLLRsN3(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d1, d2, 
 		}
 	}
 
-	fillTripleBits(llrs, &mag2, d1, 0)
-	fillTripleBits(llrs, &mag2, d2, 1)
-	fillTripleBits(llrs, &mag2, d3, 2)
+	fillTripleBits(llrs, &mag2, d1, 0, magnitudeMode)
+	fillTripleBits(llrs, &mag2, d2, 1, magnitudeMode)
+	fillTripleBits(llrs, &mag2, d3, 2, magnitudeMode)
 }
 
 // fillTripleBits writes the 3 LLRs owned by the symbol at position
@@ -348,6 +372,7 @@ func fillTripleBits(
 	llrs *[FT8CodewordBits]float64,
 	mag2 *[8][8][8]float64,
 	dataIdx, ownerPos int,
+	magnitudeMode bool,
 ) {
 	for bitPos := 2; bitPos >= 0; bitPos-- {
 		max0 := -math.MaxFloat64
@@ -378,7 +403,7 @@ func fillTripleBits(
 			}
 		}
 		cbi := 3*dataIdx + (2 - bitPos)
-		llrs[cbi] = max0 - max1
+		llrs[cbi] = demapDiff(max0, max1, magnitudeMode)
 	}
 }
 
@@ -424,7 +449,7 @@ func fillTripleBits(
 // Per-symbol complexity: identical to SoftLLRs (24 power scans) + 8
 // power-summing + 2 max-tracking + 3 multiplications. Negligible
 // overhead vs N=1 baseline.
-func SoftLLRsN1BitNormalized(grid *SymbolGrid) [FT8CodewordBits]float64 {
+func SoftLLRsN1BitNormalized(grid *SymbolGrid, magnitudeMode bool) [FT8CodewordBits]float64 {
 	var llrs [FT8CodewordBits]float64
 	for d := 0; d < 58; d++ {
 		sym := dataSymbolIndices[d]
@@ -446,7 +471,7 @@ func SoftLLRsN1BitNormalized(grid *SymbolGrid) [FT8CodewordBits]float64 {
 				}
 			}
 			cbi := 3*d + (2 - bitPos)
-			llrs[cbi] = max0 - max1
+			llrs[cbi] = demapDiff(max0, max1, magnitudeMode)
 		}
 
 		// Per-symbol noise estimate + bit-LLR scaling.
@@ -534,8 +559,8 @@ func meanOfSixLowest(powers [8]float64) float64 {
 // Provenance: §9 of research/sandbox/qex-derivation.md. Not QEX-
 // prescribed; first-principles derivation from log-likelihood
 // max-selection algebra.
-func SoftLLRsBestOfN(grid *SymbolGrid) [FT8CodewordBits]float64 {
-	llrs, _ := SoftLLRsBestOfNWithSource(grid)
+func SoftLLRsBestOfN(grid *SymbolGrid, magnitudeMode bool) [FT8CodewordBits]float64 {
+	llrs, _ := SoftLLRsBestOfNWithSource(grid, magnitudeMode)
 	return llrs
 }
 
@@ -567,10 +592,10 @@ func SoftLLRsBestOfN(grid *SymbolGrid) [FT8CodewordBits]float64 {
 // Degenerate case: when a source's median |LLR| is zero (e.g., the
 // trivial all-zero grid), that source's LLRs pass through unscaled —
 // avoids divide-by-zero while leaving the selection well-defined.
-func SoftLLRsBestOfNWithSource(grid *SymbolGrid) (llrs [FT8CodewordBits]float64, source [FT8CodewordBits]uint8) {
-	n1 := SoftLLRs(grid)
-	n2 := SoftLLRsN2(grid)
-	n3 := SoftLLRsN3(grid)
+func SoftLLRsBestOfNWithSource(grid *SymbolGrid, magnitudeMode bool) (llrs [FT8CodewordBits]float64, source [FT8CodewordBits]uint8) {
+	n1 := SoftLLRs(grid, magnitudeMode)
+	n2 := SoftLLRsN2(grid, magnitudeMode)
+	n3 := SoftLLRsN3(grid, magnitudeMode)
 
 	// Scale each source by its median |LLR| so the selection
 	// magnitudes are rank-equivalent across N=1, N=2, N=3.
@@ -625,7 +650,7 @@ func scaleByMedianAbs(llrs [FT8CodewordBits]float64) [FT8CodewordBits]float64 {
 // llrs. Used for the trailing leftover symbol in each half-frame when
 // the half-symbol count is odd. Replicates SoftLLRs's per-symbol logic
 // in place, scoped to one symbol.
-func fillSymbolLLRsN1(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d int) {
+func fillSymbolLLRsN1(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d int, magnitudeMode bool) {
 	sym := dataSymbolIndices[d]
 	powers := grid.Tones[sym]
 	for bitPos := 2; bitPos >= 0; bitPos-- {
@@ -643,7 +668,7 @@ func fillSymbolLLRsN1(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d int) {
 			}
 		}
 		cbi := 3*d + (2 - bitPos)
-		llrs[cbi] = max0 - max1
+		llrs[cbi] = demapDiff(max0, max1, magnitudeMode)
 	}
 }
 
@@ -702,8 +727,8 @@ const apCQMagnitude = 10.0
 // Consumed by the multipass cascade as the last (opt-in) pass; gated
 // behind MultiPassOptions.EnableAPCQ to avoid CRC-lottery extras
 // when the AP hypothesis is wrong.
-func SoftLLRsAPCQ(grid *SymbolGrid) [FT8CodewordBits]float64 {
-	return softLLRsAPCQWithMag(grid, 0, apCQValueBare)
+func SoftLLRsAPCQ(grid *SymbolGrid, magnitudeMode bool) [FT8CodewordBits]float64 {
+	return softLLRsAPCQWithMag(grid, 0, apCQValueBare, magnitudeMode)
 }
 
 // softLLRsAPCQWithMag is the magnitude-tunable form. mag<=0 falls back
@@ -713,11 +738,11 @@ func SoftLLRsAPCQ(grid *SymbolGrid) [FT8CodewordBits]float64 {
 // so the operator can sweep both pinning strength and CQ-form
 // hypothesis via MultiPassOptions.APCQMag without re-deriving the bit
 // layout.
-func softLLRsAPCQWithMag(grid *SymbolGrid, mag float64, c28Value uint32) [FT8CodewordBits]float64 {
+func softLLRsAPCQWithMag(grid *SymbolGrid, mag float64, c28Value uint32, magnitudeMode bool) [FT8CodewordBits]float64 {
 	if mag <= 0 {
 		mag = apCQMagnitude
 	}
-	llrs := SoftLLRs(grid)
+	llrs := SoftLLRs(grid, magnitudeMode)
 	applyAPCQPriorsForC28(&llrs, mag, c28Value)
 	return llrs
 }
@@ -845,11 +870,11 @@ func applyAP3PriorsForC28s(llrs *[FT8CodewordBits]float64, mag float64, c28_1, c
 // given (c28_1, c28_2) hypothesis pair. mag<=0 falls back to
 // apCQMagnitude (same default as AP-CQ — the pin strength is the
 // same per-bit; AP3 just pins more bits).
-func softLLRsAP3WithMag(grid *SymbolGrid, mag float64, c28_1, c28_2 uint32) [FT8CodewordBits]float64 {
+func softLLRsAP3WithMag(grid *SymbolGrid, mag float64, c28_1, c28_2 uint32, magnitudeMode bool) [FT8CodewordBits]float64 {
 	if mag <= 0 {
 		mag = apCQMagnitude
 	}
-	llrs := SoftLLRs(grid)
+	llrs := SoftLLRs(grid, magnitudeMode)
 	applyAP3PriorsForC28s(&llrs, mag, c28_1, c28_2)
 	return llrs
 }

@@ -331,7 +331,7 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 			continue
 		}
 		nsyncs[i] = sandbox.HardSyncScore(grid)
-		llrs := sandbox.SoftLLRs(grid)
+		llrs := sandbox.SoftLLRs(grid, false)
 		medianAbsLLRs[i], decisiveBits[i] = summariseLLRs(llrs[:])
 		bpResults[i] = sandbox.BPDecode(llrs, bpOpts)
 	}

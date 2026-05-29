@@ -83,7 +83,7 @@ Paragraph-by-paragraph from §6 *Symbol Detection and Decoding*:
 | Candidate spectral analysis | "spectral analysis"; form unspecified | `candidates.go::FindCandidates` — power-spectrogram, Costas-anchor sum across 21 anchor cells, local-noise denominator (column-median window, tone bins excluded), NMS, MaxResults=200 cap | Compatible. Paper is agnostic on form; sandbox's choice is defensible. |
 | Within-symbol coherent matched filter (sync) | 32-sample complex inner product per symbol per tone, magnitude per symbol, sum across the 21 Costas anchors | `refine.go::costasBasebandScore` — exactly this shape, written "coherent within a symbol; incoherent across symbols" | Matches. |
 | Within-symbol coherent matched filter (data symbols) | Same 32-sample complex inner product, eight tone outputs `C_m` per symbol | `symbols.go::ExtractSymbols` — 32-point complex FFT per symbol on the 200 Hz baseband, `Amps[s][m]` holds the complex `C_m`, `Tones[s][m] = |C_m|²` holds the power | Matches at the N=1 stage. |
-| Bit LLR via max-log on magnitudes | `K (max\|C_i\|_{x=1} − max\|C_i\|_{x=0})` over the M^N=8 N=1 correlations | `metrics.go::SoftLLRs` — `max{power}_{x=0} − max{power}_{x=1}` (sign convention flipped vs paper, scale on `\|C\|²` not `\|C\|`) | Cosmetic difference. Power-vs-magnitude is a monotone transform; BP's noise-variance normalisation absorbs the constant-factor scale; sign convention is internal. Not a real gap. |
+| Bit LLR via max-log on magnitudes | `K (max\|C_i\|_{x=1} − max\|C_i\|_{x=0})` over the M^N=8 N=1 correlations | `metrics.go::SoftLLRs` — `max{power}_{x=0} − max{power}_{x=1}` (sign convention flipped vs paper, scale on `\|C\|²` not `\|C\|`) | **SPEC-DERIVATION ERROR** (refuted 2026-05-29; see § 3.1.1). Power vs magnitude is NOT a constant-factor transform on the demap *difference*. Sign convention is internal (fine). |
 | **N=2 / N=3 block detection** | Combine pairs/triples of adjacent N=1 complex outputs into 64 (N=2) / 512 (N=3) longer-block complex correlations, magnitudes, max-log demap to a fresh LLR set | **Not implemented.** Sandbox only ever computes the N=1 LLR set. | **Headline gap.** Paper-measured ~+0.5–0.7 dB AWGN. |
 | Decode attempt cascade | N=1 BP → N=2 BP → N=3 BP, each with optional OSD fall-back, CRC accept | Single N=1 LLR set fed to BP, then OSD on failure | Same gap as above. |
 | Multi-pass subtract | `g(t) = LPF[s(t)·r*(t)]`, subtract `2·Re[g(t)·r(t)]` | `subtract.go` — per-symbol 2-parameter (a·cos + b·sin) LSQ fit in the audio domain, per-symbol subtraction | Different shape, same purpose. Sandbox's per-symbol fit is more local; paper's LPF-smoothed `g(t)` is a single message-wide channel response. Worth measuring eventually; not the headline. |
@@ -97,9 +97,87 @@ Paragraph-by-paragraph from §6 *Symbol Detection and Decoding*:
   what §6 describes for the N=1 stage.
 - Candidate scanner's local-noise denominator is a defensible
   implementation choice within the paper's "spectral analysis" latitude.
-- Power-vs-magnitude difference in `SoftLLRs` is cosmetic; the
-  paper-prescribed `K` factor is the same empirical scale BP's noise
-  variance handles.
+
+### 3.1.1 Spec-derivation error: power-vs-magnitude IS NOT cosmetic (refuted 2026-05-29)
+
+An earlier version of this section claimed: *"Power-vs-magnitude
+difference in SoftLLRs is cosmetic; the paper-prescribed K factor is
+the same empirical scale BP's noise variance handles."*
+
+That claim was wrong. The math:
+
+Let `a = max_{x=1} |C_i|` and `b = max_{x=0} |C_i|` (correlation
+magnitudes, the QEX domain). Then:
+
+- **QEX magnitude LLR:** `L_mag = K · (a − b)`
+- **Sandbox power LLR:** `L_pow = K' · (a² − b²) = K' · (a + b) · (a − b)`
+
+The ratio `L_pow / L_mag = K'(a + b) / K`. The factor `(a + b)` is
+**not** a global constant — it varies symbol-by-symbol with signal
+strength, noise floor, and adjacent-channel interference. Strong
+symbols (large a, b) have a larger `(a + b)` multiplier than weak
+symbols; the per-symbol relative weighting inside the LLR vector is
+different between the two domains.
+
+BP's noise-variance normalisation absorbs **one global scale** per
+LLR vector, not a per-bit varying scale. The argmax (which tone
+wins for each bit) is unchanged between domains because `x²` is
+monotone over [0, ∞), so hard decisions agree — but BP's
+message-passing dynamics depend on the LLR *magnitudes*, not just
+their signs. Per-bit varying multipliers reshape those dynamics in
+a way that no global normalisation can undo.
+
+This was discovered via independent external review pointing at
+QEX § 6 (paragraph 5, demapper definition); the math was re-derived
+from the paper directly. No WSJT-X or other implementation source
+consulted. Clean-room provenance intact.
+
+**Implication for measured corpus history:** the N1Norm cascade
+pass (`SoftLLRsN1BitNormalized`) was an empirical attempt to fix
+LLR dynamics by per-symbol normalisation — it may have been
+partially compensating for exactly this domain error. Earlier
+coherent-demod and refinement experiments that measured neutral
+may have been doing so against a baseline whose LLR domain was
+off-spec. Magnitude-domain A/B (see `MultiPassOptions.MagnitudeLLR`)
+is the controlled test.
+
+**Empirical confirmation (2026-05-29):** strict-mode corpus measurement
+under `cmd/sandbox-asym-ab -strict` against power vs magnitude:
+
+| Mode | Matched / Extras | N=1 | N=2 | N=3 | N1Norm |
+|---|---|---|---|---|---|
+| Power (legacy) | 111 / 23 | 98 | 7 | 2 | 4 |
+| Magnitude (spec) | **113 / 23** | 103 | 6 | 0 | 4 |
+| Δ | +2 / 0 | +5 | −1 | −2 | 0 |
+
+Net +2 matched truths cracked, **zero extras inflation**. N=1
+swallowed three cascade fallbacks (truths that previously needed
+N=2 or N=3 under the off-spec scale now decode at N=1 with the
+correct demap). N1Norm count unchanged — its per-symbol
+normalisation was not primarily compensating for the domain
+error on those 4 truths.
+
+**Strict-mode default changed to magnitude-domain 2026-05-29.**
+Operative baseline going forward: **113/144 matched / 23 extras**.
+Legacy power-domain reachable via
+`cmd/sandbox-asym-ab -strict -legacy-power-llr` for A/B comparison
+against the historical 111/23.
+
+**Implication for parked experiments (revisit candidates):**
+several earlier flat-result measurements were taken against the
+off-spec baseline and deserve re-measurement against 113/23:
+- `BestOfN` (tiebreak math operates on LLR magnitudes — per-symbol
+  varying scales would have biased the per-bit max selection)
+- Asymmetric channelizer (its +2 sym-vs-asym delta included the
+  JY5IB false positive that is now excluded from strict scoring)
+- Gate cube sweeps (per-symbol-varying LLR magnitudes change
+  reliability thresholds)
+- Coherent-demod / refinement experiments (the "no lift" verdicts
+  used a baseline whose LLR scale was off)
+
+Not all need re-running. Use the (forthcoming) per-truth funnel
+diagnostic to pick the experiments where leverage genuinely
+changed. Don't replay the full set blindly.
 
 ### 3.2 Headline gap: block detection (N=2, N=3) absent
 
