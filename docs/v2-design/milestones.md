@@ -307,16 +307,23 @@ via `lib/api/qso.ts`, built the toast system per ADR 0008, added
 the daemon HTTP access log, and logged the first real QSO through
 the v2 stack (7Q5MLV @ 14.250 MHz USB).
 
-**What's left in M2 (as of 2026-05-14):**
+**What's left in M2 (as of 2026-05-29):**
 
-- CAT-handover toast (one `toasts.info(...)` call; awaits the live
-  bridge transition).
 - Two deferred keyboard shortcuts: Ctrl+\ VFO swap, `?` help
   overlay. F2 lookup-only shipped 2026-05-15. Other ADR 0007
   shortcuts (ESC, Ctrl/Cmd+Enter, Tab→enrichment, Enter/Space on
   activatable elements) are shipped — see
   `docs/keyboard-shortcuts.md` for the live inventory.
 - Logbook + config SPAs (deferred — not blocking on M2 closeout).
+
+The CAT-handover toast item that was previously listed here as
+deferred actually shipped 2026-05-16 (Session 66, same day as the
+bridge supervisor in ADR 0020). Verified live during the 2026-05-29
+dogfood session: rig power-off produces the warn `bridge.disconnected.rig_no_data`
+"The rig has gone quiet — is it powered on?" after the 800ms
+flash-suppression window; rig power-on dismisses the warn and
+pushes the positive `bridge.reconnected` info "Rig reconnected.".
+See § Scope below for the full machinery summary.
 
 Everything else listed under "Scope" below is shipped; the code-
 review tail (sessions 53–60) cleaned up the last architectural
@@ -494,10 +501,21 @@ hasn't been run through a real-rig session since M3a closed.
   SSE consumer are the foundation the SPA's live-rig display sits on.
 - ✅ Real `EventSource` consumer in `bridge.svelte.ts` — populates
   catState from SSE. Shipped session 50 (M3a.4, 2026-05-11).
-- ⏳ CAT-handover toast — toast plumbing exists; awaits a chosen
-  trigger event from the bridge (likely first `rig-state` after a
-  fresh subscribe, gated on a "haven't toasted yet this session"
-  flag). One `toasts.info(...)` call when settled.
+- ✅ CAT-handover toast — `bridge.svelte.ts` disconnect/reconnect
+  state machine SHIPPED 2026-05-16 (Session 66, same day as the
+  bridge supervisor in ADR 0020). Three-state shape (idle →
+  scheduled → visible) gated by an 800ms flash-suppression window
+  so brief blips never reach the operator. `rig-disconnected` →
+  `toasts.warn(t('bridge.disconnected.<code>'), ttl=0)` after the
+  window elapses; a reconnect inside the window cancels quietly,
+  a reconnect after the window dismisses the warn AND pushes the
+  positive `toasts.info(t('bridge.reconnected'))`. Code-driven
+  i18n via `lib/i18n/en.ts` so different disconnect causes
+  (`rig_no_data`, `serial_port_error`, future entries) get distinct
+  wording. Sticky-toast leak fix on `closeSource()` followed up
+  same session. Verified live on the FTdx10 2026-05-29 — the
+  power-off / power-on sequence produces the expected warn / info
+  pair around the suppression window.
 - 🟡 Keyboard shortcuts per ADR 0007 — **mostly shipped, two
   deferred.** Live in the SPA today: ESC clears the QSO form,
   Ctrl/Cmd+Enter submits, Tab in Callsign triggers enrichment +

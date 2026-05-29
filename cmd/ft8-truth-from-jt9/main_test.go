@@ -111,3 +111,53 @@ func TestParseJT9Output(t *testing.T) {
 		t.Errorf("signals[2].FreqHz = %g, want 1824", signals[2].FreqHz)
 	}
 }
+
+// TestParseJT9OutputPerFile pins the multi-file partitioner. Three
+// files: the first has two decodes, the second has zero (must still
+// appear as an empty slice at index 1, not be skipped), the third has
+// one decode. The realistic <DecodeFinished> footer carries the per-
+// file count which we ignore — the prefix is enough.
+func TestParseJT9OutputPerFile(t *testing.T) {
+	stdout := `000000  -1 -0.2 1500 ~  CQ K1JT FN20
+000000  -8  0.1  650 ~  CQ DX S56GD JN65
+<DecodeFinished>   0  2        0
+<DecodeFinished>   0  0        0
+000000 -12  0.3 1824 ~  OH6IH IU7KEG JN81
+<DecodeFinished>   0  1        0
+`
+	perFile, err := parseJT9OutputPerFile([]byte(stdout), 3)
+	if err != nil {
+		t.Fatalf("parseJT9OutputPerFile: %v", err)
+	}
+	if got, want := len(perFile), 3; got != want {
+		t.Fatalf("got %d files, want %d", got, want)
+	}
+	if got, want := len(perFile[0]), 2; got != want {
+		t.Errorf("file 0: got %d signals, want %d", got, want)
+	}
+	if got, want := len(perFile[1]), 0; got != want {
+		t.Errorf("file 1 (empty): got %d signals, want %d", got, want)
+	}
+	if got, want := len(perFile[2]), 1; got != want {
+		t.Errorf("file 2: got %d signals, want %d", got, want)
+	}
+	if perFile[0][0].Text != "CQ K1JT FN20" {
+		t.Errorf("file 0 sig 0 text = %q", perFile[0][0].Text)
+	}
+	if perFile[2][0].Text != "OH6IH IU7KEG JN81" {
+		t.Errorf("file 2 sig 0 text = %q", perFile[2][0].Text)
+	}
+}
+
+// TestParseJT9OutputPerFile_CountMismatch pins the contract-violation
+// error. If jt9 emits fewer <DecodeFinished> markers than we asked for
+// files, that's a sign the partition would silently mis-attribute
+// decodes — return an error rather than continue.
+func TestParseJT9OutputPerFile_CountMismatch(t *testing.T) {
+	stdout := `000000  -1 -0.2 1500 ~  CQ K1JT FN20
+<DecodeFinished>   0  1        0
+`
+	if _, err := parseJT9OutputPerFile([]byte(stdout), 3); err == nil {
+		t.Fatal("expected error for mismatched <DecodeFinished> count")
+	}
+}
