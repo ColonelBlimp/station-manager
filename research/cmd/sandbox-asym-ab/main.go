@@ -126,6 +126,8 @@ func main() {
 	searchThreshold := flag.Float64("search-threshold", 0, "override SearchOptions.Threshold (matched-filter score floor at candidate finder). 0 = package default (3.0). Clean-room report calibrates `near 1.8` for the six-file oracle corpus; measure before adopting.")
 	magnitudeLLR := flag.Bool("magnitude-llr", false, "explicitly enable QEX § 6 magnitude-domain demap in non-strict mode (in strict mode it's the default). LLR = max|C|_{x=0} − max|C|_{x=1}, the paper-prescribed form. Has no effect when -legacy-power-llr is also set (legacy wins).")
 	legacyPowerLLR := flag.Bool("legacy-power-llr", false, "force the legacy power-domain demap (LLR = max|C|²_{x=0} − max|C|²_{x=1}) even in strict mode. Use for A/B comparison against the pre-2026-05-29 baseline. Off-spec per QEX § 6.")
+	nmsK := flag.Int("nms-k", 0, "override SearchOptions.K2MaxPerGroup (max kept candidates per freq group in K=2-medium NMS). 0 = package default (2). Session 105 funnel surfaced 7 NMS-suppressed truths at K=2; raise to measure recovery vs alias growth.")
+	maxResults := flag.Int("max-results", 0, "override SearchOptions.MaxResults (post-NMS cap). 0 = package default (200). Pairs with -nms-k: raising K admits more candidates at NMS but the cap may then bite downstream; raising both together is the controlled test.")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -159,6 +161,12 @@ func main() {
 	}
 	if *searchThreshold > 0 {
 		opts.Search.Threshold = *searchThreshold
+	}
+	if *nmsK > 0 {
+		opts.Search.K2MaxPerGroup = *nmsK
+	}
+	if *maxResults > 0 {
+		opts.Search.MaxResults = *maxResults
 	}
 	// LLR domain precedence (clearest case wins):
 	//   -legacy-power-llr  → force power (off-spec; A/B against pre-2026-05-29 baseline)

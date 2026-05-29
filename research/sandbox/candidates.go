@@ -105,12 +105,23 @@ type SearchOptions struct {
 
 	// K2Medium switches the NMS pass to the K=2 per-freq-group variant
 	// with the "medium" parameter set (tight box 6.25 Hz × 0.08 s,
-	// freq group 12.5 Hz, K=2). Designed to admit up to two distinct
-	// candidates per freq group — covers the case where two stations
-	// transmit at the same nominal carrier with offset start times —
-	// while suppressing only true near-duplicates of an already-kept
-	// candidate. When true, NMSFreqHz / NMSDTSec are ignored.
+	// freq group 12.5 Hz, K=2 unless K2MaxPerGroup overrides). Designed
+	// to admit up to K distinct candidates per freq group — covers the
+	// case where multiple stations transmit at the same nominal carrier
+	// with offset start times — while suppressing only true near-
+	// duplicates of an already-kept candidate. When true, NMSFreqHz /
+	// NMSDTSec are ignored.
 	K2Medium bool
+
+	// K2MaxPerGroup overrides the K value (max kept candidates per
+	// freq group) when K2Medium is true. Zero falls back to the
+	// historical default of 2 — the value calibrated for the
+	// "two-stations-per-carrier" common case. Raise to admit busier
+	// freq groups (Session 105 measurement: 7 corpus truths are
+	// NMS-suppressed at K=2, mostly in dense freq groups). Trade-off
+	// is more aliases admitted; measure end-to-end matched/extras
+	// before adopting a new default.
+	K2MaxPerGroup int
 }
 
 // DefaultSearchOptions returns the baseline tuning used when zero-value
@@ -187,7 +198,11 @@ func FindCandidates(spec [][]float64, opts SearchOptions) []Candidate {
 	opts = applyOptionDefaults(opts)
 	raw := FindCandidatesRaw(spec, opts)
 	if opts.K2Medium {
-		return SuppressOverlapsK2(raw, 6.25, 0.08, 12.5, 2, opts.MaxResults)
+		k := opts.K2MaxPerGroup
+		if k <= 0 {
+			k = 2
+		}
+		return SuppressOverlapsK2(raw, 6.25, 0.08, 12.5, k, opts.MaxResults)
 	}
 	return SuppressOverlaps(raw, opts.NMSFreqHz, opts.NMSDTSec, opts.MaxResults)
 }
