@@ -181,10 +181,10 @@ func main() {
 	}
 
 	if *dirPath != "" {
-		runCorpus(*dirPath, opts, *freqTol, *dtTol, *verbose, *dumpExtras, *dumpShadow, *dumpMissed)
+		runCorpus(*dirPath, opts, *freqTol, *dtTol, *verbose, *dumpExtras, *dumpShadow, *dumpMissed, *strict)
 		return
 	}
-	runSingle(*wavPath, *expectStr, opts, *freqTol, *dtTol)
+	runSingle(*wavPath, *expectStr, opts, *freqTol, *dtTol, *strict)
 }
 
 // printStrictBanner emits the strict-mode header explaining what the
@@ -192,8 +192,19 @@ func main() {
 // invariant is visible in every strict-mode run's transcript — future
 // readers diffing strict-mode scoreboards across commits can see at a
 // glance which knobs were in scope.
+//
+// Asymmetric-channelizer reasoning (interpretation A locked in
+// 2026-05-29): the FT8-tuned asymmetric slice admits decodes that
+// symmetric does not (e.g. `JY5IB EA3DYI JN11` on `20m_slot2`,
+// observed via pass=2 OSD-2 at 1386 Hz). That recovery is
+// behaviourally a deeper-mode search, so it falls into the
+// "experimental decode recovery" bucket per the clean-room report
+// and is excluded from strict scoring. `-strict` therefore runs
+// symmetric only; without `-strict`, the A/B comparison still
+// surfaces the asym deltas as deep-mode data.
 func printStrictBanner() {
 	fmt.Println("=== STRICT-PARITY MODE ===")
+	fmt.Println("  channelizer: symmetric only (asymmetric = deep-mode recovery)")
 	fmt.Println("  experimental knobs disabled: AP-CQ, AP3, BestOfN")
 	fmt.Println("  scoring: sequential jt9-default truth manifests")
 	fmt.Println("  calibration knobs (sync gate, candidate-search breadth): defaults — TBD")
@@ -201,8 +212,10 @@ func printStrictBanner() {
 }
 
 // runSingle is the original single-WAV path: optional inline -expect
-// list, full per-truth margin diagnostic, decode-list dump.
-func runSingle(wavPath, expectStr string, opts sandbox.MultiPassOptions, freqTol, dtTol float64) {
+// list, full per-truth margin diagnostic, decode-list dump. When
+// strict is true, the asymmetric channelizer is skipped entirely (see
+// printStrictBanner for the framing).
+func runSingle(wavPath, expectStr string, opts sandbox.MultiPassOptions, freqTol, dtTol float64, strict bool) {
 	data, err := audio.ReadWAV(wavPath)
 	if err != nil {
 		log.Fatalf("read %q: %v", wavPath, err)
@@ -225,11 +238,23 @@ func runSingle(wavPath, expectStr string, opts sandbox.MultiPassOptions, freqTol
 
 	symOpts := opts
 	symOpts.UseAsymmetricSlice = false
-	asymOpts := opts
-	asymOpts.UseAsymmetricSlice = true
 	// Single-WAV mode: each run starts with an empty hash table.
 	// There's no prior fixture to carry calls from.
 	sym := runOnce("symmetric", data.Samples, symOpts, exp, freqTol, dtTol, sandbox.NewCallsignHashTable())
+
+	if strict {
+		// Strict mode: symmetric only. Print sym detail; suppress the
+		// A/B scoreboard (no asym row to compare against).
+		printRun(sym)
+		fmt.Println("--- scoreboard (strict / sym-only) ---")
+		fmt.Printf("  %-18s  %7d  %6d  %5d\n", "mode", "matched", "extras", "total")
+		fmt.Printf("  %-18s  %7d  %6d  %5d\n", sym.label, sym.matched, sym.extras, len(sym.decodes))
+		fmt.Println()
+		return
+	}
+
+	asymOpts := opts
+	asymOpts.UseAsymmetricSlice = true
 	asym := runOnce("asymmetric-FT8", data.Samples, asymOpts, exp, freqTol, dtTol, sandbox.NewCallsignHashTable())
 
 	printRun(sym)
@@ -255,7 +280,7 @@ type extraDump struct {
 	nearestHz   float64
 }
 
-func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64, verbose, dumpExtras, dumpShadow, dumpMissed bool) {
+func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64, verbose, dumpExtras, dumpShadow, dumpMissed, strict bool) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.wav"))
 	if err != nil {
 		log.Fatalf("glob %q: %v", dir, err)
@@ -335,42 +360,54 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		exp := manifestToExpected(m)
 		symOpts := opts
 		symOpts.UseAsymmetricSlice = false
-		asymOpts := opts
-		asymOpts.UseAsymmetricSlice = true
 		sym := runOnce("symmetric", data.Samples, symOpts, exp, freqTol, dtTol, symHT)
-		asym := runOnce("asymmetric-FT8", data.Samples, asymOpts, exp, freqTol, dtTol, asymHT)
+
+		// In strict mode the asymmetric channelizer is skipped entirely
+		// (it's classified as deep-mode recovery per interpretation A).
+		// asym stays as the zero-value modeResult so downstream output
+		// blocks gated by `if !strict` don't dereference live data.
+		var asym modeResult
+		if !strict {
+			asymOpts := opts
+			asymOpts.UseAsymmetricSlice = true
+			asym = runOnce("asymmetric-FT8", data.Samples, asymOpts, exp, freqTol, dtTol, asymHT)
+		}
 
 		fmt.Printf("=== %s (%d truths) ===\n", filepath.Base(w), len(exp))
 		fmt.Printf("  sym  matched=%2d extras=%2d total=%2d\n", sym.matched, sym.extras, len(sym.decodes))
-		fmt.Printf("  asym matched=%2d extras=%2d total=%2d\n", asym.matched, asym.extras, len(asym.decodes))
+		if !strict {
+			fmt.Printf("  asym matched=%2d extras=%2d total=%2d\n", asym.matched, asym.extras, len(asym.decodes))
 
-		// Per-truth transitions.
-		captureMissToMatch, captureMatchToMiss := 0, 0
-		for i := range exp {
-			switch {
-			case !sym.matchMap[i] && asym.matchMap[i]:
-				captureMissToMatch++
-				transMissToMatch++
-				if verbose {
-					fmt.Printf("    MISS→MATCH: %.1f Hz dt=%+.3f \"%s\"\n", exp[i].freqHz, exp[i].dtSec, exp[i].text)
-				}
-			case sym.matchMap[i] && !asym.matchMap[i]:
-				captureMatchToMiss++
-				transMatchToMiss++
-				if verbose {
-					fmt.Printf("    MATCH→MISS: %.1f Hz dt=%+.3f \"%s\"\n", exp[i].freqHz, exp[i].dtSec, exp[i].text)
+			// Per-truth transitions (A/B-only signal; meaningless in strict).
+			captureMissToMatch, captureMatchToMiss := 0, 0
+			for i := range exp {
+				switch {
+				case !sym.matchMap[i] && asym.matchMap[i]:
+					captureMissToMatch++
+					transMissToMatch++
+					if verbose {
+						fmt.Printf("    MISS→MATCH: %.1f Hz dt=%+.3f \"%s\"\n", exp[i].freqHz, exp[i].dtSec, exp[i].text)
+					}
+				case sym.matchMap[i] && !asym.matchMap[i]:
+					captureMatchToMiss++
+					transMatchToMiss++
+					if verbose {
+						fmt.Printf("    MATCH→MISS: %.1f Hz dt=%+.3f \"%s\"\n", exp[i].freqHz, exp[i].dtSec, exp[i].text)
+					}
 				}
 			}
-		}
-		if captureMissToMatch > 0 || captureMatchToMiss > 0 {
-			fmt.Printf("  transitions: +%d miss→match, +%d match→miss\n", captureMissToMatch, captureMatchToMiss)
+			if captureMissToMatch > 0 || captureMatchToMiss > 0 {
+				fmt.Printf("  transitions: +%d miss→match, +%d match→miss\n", captureMissToMatch, captureMatchToMiss)
+			}
 		}
 		fmt.Println()
 
 		corpusSymMatched += sym.matched
-		corpusAsymMatched += asym.matched
 		corpusSymExtras += sym.extras
-		corpusAsymExtras += asym.extras
+		if !strict {
+			corpusAsymMatched += asym.matched
+			corpusAsymExtras += asym.extras
+		}
 		corpusTotalTruths += len(exp)
 
 		// Per-metric attribution. The "unique to N=k" lists capture
@@ -392,7 +429,7 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 					)
 				}
 			}
-			if asym.matchMap[i] && asym.llrMetricByTruth[i] != "" {
+			if !strict && asym.matchMap[i] && asym.llrMetricByTruth[i] != "" {
 				asymMetricMatched[asym.llrMetricByTruth[i]]++
 				if asym.llrMetricByTruth[i] != sandbox.LLRMetricN1 {
 					asymUniqueByMetric[asym.llrMetricByTruth[i]] = append(
@@ -403,7 +440,7 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 			}
 		}
 
-		if dumpExtras {
+		if dumpExtras && !strict {
 			// Collect asym-only extras: asym decodes that (i) don't match
 			// any truth, AND (ii) don't appear in the symmetric decode set
 			// (so we isolate decodes that asymmetric mode produced and
@@ -427,14 +464,16 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		// the same mode); records full per-reject dump entries when the
 		// -dump-shadow-rejects flag is set.
 		symShadowTotal += len(sym.shadowRejects)
-		asymShadowTotal += len(asym.shadowRejects)
 		for _, r := range sym.shadowRejects {
 			symShadowByReason[categorizeReason(r.Reason)]++
 			symShadowByMetric[r.LLRMetric]++
 		}
-		for _, r := range asym.shadowRejects {
-			asymShadowByReason[categorizeReason(r.Reason)]++
-			asymShadowByMetric[r.LLRMetric]++
+		if !strict {
+			asymShadowTotal += len(asym.shadowRejects)
+			for _, r := range asym.shadowRejects {
+				asymShadowByReason[categorizeReason(r.Reason)]++
+				asymShadowByMetric[r.LLRMetric]++
+			}
 		}
 		for i, e := range exp {
 			if !sym.matchMap[i] {
@@ -444,7 +483,7 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 					})
 				}
 			}
-			if !asym.matchMap[i] {
+			if !strict && !asym.matchMap[i] {
 				if r, ok := findShadowRejectForTruth(asym.shadowRejects, e, freqTol, dtTol); ok {
 					asymWouldRecover = append(asymWouldRecover, wouldRecoverEntry{
 						capture: captureBase, truth: e, reject: r,
@@ -459,11 +498,13 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 					nearTruth: shadowIsNearTruth(r, exp, freqTol, dtTol),
 				})
 			}
-			for _, r := range asym.shadowRejects {
-				asymShadowEntries = append(asymShadowEntries, shadowDumpEntry{
-					capture: captureBase, reject: r,
-					nearTruth: shadowIsNearTruth(r, exp, freqTol, dtTol),
-				})
+			if !strict {
+				for _, r := range asym.shadowRejects {
+					asymShadowEntries = append(asymShadowEntries, shadowDumpEntry{
+						capture: captureBase, reject: r,
+						nearTruth: shadowIsNearTruth(r, exp, freqTol, dtTol),
+					})
+				}
 			}
 		}
 		if dumpMissed {
@@ -471,7 +512,7 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 				if !sym.matchMap[i] {
 					missedSym = append(missedSym, missedTruthEntry{capture: captureBase, truth: e})
 				}
-				if !asym.matchMap[i] {
+				if !strict && !asym.matchMap[i] {
 					missedAsym = append(missedAsym, missedTruthEntry{capture: captureBase, truth: e})
 				}
 			}
@@ -482,25 +523,27 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 	fmt.Printf("  total truths: %d across %d captures\n", corpusTotalTruths, len(matches))
 	fmt.Printf("  %-18s  matched     extras\n", "mode")
 	fmt.Printf("  %-18s  %3d/%3d  %5d\n", "symmetric", corpusSymMatched, corpusTotalTruths, corpusSymExtras)
-	fmt.Printf("  %-18s  %3d/%3d  %5d\n", "asymmetric-FT8", corpusAsymMatched, corpusTotalTruths, corpusAsymExtras)
+	if !strict {
+		fmt.Printf("  %-18s  %3d/%3d  %5d\n", "asymmetric-FT8", corpusAsymMatched, corpusTotalTruths, corpusAsymExtras)
 
-	dMatched := corpusAsymMatched - corpusSymMatched
-	dExtras := corpusAsymExtras - corpusSymExtras
-	fmt.Printf("  delta vs symmetric:  matched %+d   extras %+d\n", dMatched, dExtras)
-	fmt.Printf("  transitions:  miss→match %d   match→miss %d   net %+d\n",
-		transMissToMatch, transMatchToMiss, transMissToMatch-transMatchToMiss)
+		dMatched := corpusAsymMatched - corpusSymMatched
+		dExtras := corpusAsymExtras - corpusSymExtras
+		fmt.Printf("  delta vs symmetric:  matched %+d   extras %+d\n", dMatched, dExtras)
+		fmt.Printf("  transitions:  miss→match %d   match→miss %d   net %+d\n",
+			transMissToMatch, transMatchToMiss, transMissToMatch-transMatchToMiss)
 
-	switch {
-	case dMatched > 0 && dExtras <= 0:
-		fmt.Println("  verdict: ASYMMETRIC WIN (+matched, no extras growth)")
-	case dMatched < 0:
-		fmt.Println("  verdict: ASYMMETRIC REGRESSION (lost truths)")
-	case dMatched == 0 && dExtras > 0:
-		fmt.Println("  verdict: ASYMMETRIC LOSS (extras grew, no truths gained)")
-	case dMatched > 0 && dExtras > 0:
-		fmt.Println("  verdict: MIXED (truths gained but extras grew too)")
-	default:
-		fmt.Println("  verdict: NEUTRAL (no parity change)")
+		switch {
+		case dMatched > 0 && dExtras <= 0:
+			fmt.Println("  verdict: ASYMMETRIC WIN (+matched, no extras growth)")
+		case dMatched < 0:
+			fmt.Println("  verdict: ASYMMETRIC REGRESSION (lost truths)")
+		case dMatched == 0 && dExtras > 0:
+			fmt.Println("  verdict: ASYMMETRIC LOSS (extras grew, no truths gained)")
+		case dMatched > 0 && dExtras > 0:
+			fmt.Println("  verdict: MIXED (truths gained but extras grew too)")
+		default:
+			fmt.Println("  verdict: NEUTRAL (no parity change)")
+		}
 	}
 
 	// Per-LLR-metric attribution table. Surfaces which block-N variant
@@ -518,25 +561,29 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		symMetricMatched[sandbox.LLRMetricBestOfN],
 		symMetricMatched[sandbox.LLRMetricAPCQ],
 		symMetricMatched[sandbox.LLRMetricAP3])
-	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d  %6d\n", "asymmetric-FT8",
-		asymMetricMatched[sandbox.LLRMetricN1],
-		asymMetricMatched[sandbox.LLRMetricN2],
-		asymMetricMatched[sandbox.LLRMetricN3],
-		asymMetricMatched[sandbox.LLRMetricN1Norm],
-		asymMetricMatched[sandbox.LLRMetricBestOfN],
-		asymMetricMatched[sandbox.LLRMetricAPCQ],
-		asymMetricMatched[sandbox.LLRMetricAP3])
+	if !strict {
+		fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d  %6d\n", "asymmetric-FT8",
+			asymMetricMatched[sandbox.LLRMetricN1],
+			asymMetricMatched[sandbox.LLRMetricN2],
+			asymMetricMatched[sandbox.LLRMetricN3],
+			asymMetricMatched[sandbox.LLRMetricN1Norm],
+			asymMetricMatched[sandbox.LLRMetricBestOfN],
+			asymMetricMatched[sandbox.LLRMetricAPCQ],
+			asymMetricMatched[sandbox.LLRMetricAP3])
+	}
 
 	for _, metric := range []string{sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ, sandbox.LLRMetricAP3} {
-		if len(symUniqueByMetric[metric]) > 0 || len(asymUniqueByMetric[metric]) > 0 {
+		hasSym := len(symUniqueByMetric[metric]) > 0
+		hasAsym := !strict && len(asymUniqueByMetric[metric]) > 0
+		if hasSym || hasAsym {
 			fmt.Printf("\n  truths recovered via %s (cascade-load-bearing):\n", metric)
-			if len(symUniqueByMetric[metric]) > 0 {
+			if hasSym {
 				fmt.Printf("    symmetric (n=%d):\n", len(symUniqueByMetric[metric]))
 				for _, t := range symUniqueByMetric[metric] {
 					fmt.Printf("      %s\n", t)
 				}
 			}
-			if len(asymUniqueByMetric[metric]) > 0 {
+			if hasAsym {
 				fmt.Printf("    asymmetric (n=%d):\n", len(asymUniqueByMetric[metric]))
 				for _, t := range asymUniqueByMetric[metric] {
 					fmt.Printf("      %s\n", t)
@@ -586,11 +633,15 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 	)
 	if dumpShadow {
 		printShadowDump("symmetric", symShadowEntries)
-		printShadowDump("asymmetric-FT8", asymShadowEntries)
+		if !strict {
+			printShadowDump("asymmetric-FT8", asymShadowEntries)
+		}
 	}
 	if dumpMissed {
 		printMissedTruths("symmetric", missedSym)
-		printMissedTruths("asymmetric-FT8", missedAsym)
+		if !strict {
+			printMissedTruths("asymmetric-FT8", missedAsym)
+		}
 	}
 }
 
