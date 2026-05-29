@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -178,6 +179,26 @@ type MultiPassOptions struct {
 	//
 	// A/B mode added 2026-05-29; not yet a strict-mode default.
 	MagnitudeLLR bool
+
+	// Stage2Mode selects the post-NMS Costas verifier behaviour:
+	// Stage2Off (default) skips it entirely, Stage2Observe runs it
+	// without filtering, Stage2Filter drops sub-threshold
+	// candidates, Stage2Rerank re-sorts by metric. The verifier
+	// runs between FindCandidates and RefineCandidate, on every
+	// pass independently. See costas_verify.go for the algorithm.
+	Stage2Mode Stage2Mode
+
+	// Stage2Metric selects which discriminator drives Stage2Filter
+	// / Stage2Rerank. Default Stage2MetricMinBlock; per the
+	// 2026-05-29 audit, MinBlockContrast is the cleanest single-
+	// metric separator at the near-truth median.
+	Stage2Metric Stage2Metric
+
+	// Stage2Threshold is the minimum metric value a candidate must
+	// reach to survive Stage2Filter. Ignored for Stage2Off /
+	// Stage2Observe / Stage2Rerank. Has no default — Stage2Filter
+	// without a threshold passes everything (functionally observe).
+	Stage2Threshold float64
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -285,6 +306,7 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			break
 		}
 		cands := FindCandidates(spec, findOpts)
+		cands = applyStage2(working, cands, opts)
 
 		passDecodes := make([]DecodeRecord, 0, len(cands))
 		for _, c := range cands {
@@ -514,6 +536,67 @@ func isDuplicate(d DecodeRecord, accepted []DecodeRecord, freqTol, dtTol float64
 		}
 	}
 	return false
+}
+
+// ApplyStage2 is the public entry point to the Stage2 Costas-verifier
+// gate so research tooling (e.g. the miss funnel) can reproduce the
+// same post-NMS transformation MultiPassDecodeFull applies internally.
+// Behaviour is identical to the internal call in MultiPassDecodeFull.
+func ApplyStage2(samples []float32, cands []Candidate, opts MultiPassOptions) []Candidate {
+	return applyStage2(samples, cands, opts)
+}
+
+// applyStage2 runs the Stage2 Costas verifier on the post-NMS
+// candidate list and returns the candidate list to feed the refine
+// loop. Behaviour depends on opts.Stage2Mode:
+//
+//   - Stage2Off: pass-through; no verifier call. Zero cost.
+//   - Stage2Observe: verifier runs on every candidate (effect
+//     visible only through downstream side instrumentation), but
+//     the candidate list is returned unchanged.
+//   - Stage2Filter: candidates with metric below opts.Stage2Threshold
+//     are dropped. Surviving order matches the input order (Sync-
+//     descending as produced by FindCandidates).
+//   - Stage2Rerank: full list is re-sorted descending by the
+//     configured metric. No candidate is dropped; the downstream
+//     MaxResults cap (if present) then admits top-K by Stage2.
+//
+// The verifier reads the supplied audio (the working buffer at the
+// current pass), so multi-pass subtraction is naturally honoured —
+// pass-2 verifies against the residual after pass-1 subtraction.
+func applyStage2(samples []float32, cands []Candidate, opts MultiPassOptions) []Candidate {
+	if opts.Stage2Mode == Stage2Off || len(cands) == 0 {
+		return cands
+	}
+	metrics := make([]float64, len(cands))
+	for i, c := range cands {
+		v := VerifyCostasAt(samples, c.FreqHz, c.DtSec, c.Sync)
+		metrics[i] = opts.Stage2Metric.extract(v)
+	}
+	switch opts.Stage2Mode {
+	case Stage2Filter:
+		out := cands[:0]
+		for i, c := range cands {
+			if metrics[i] >= opts.Stage2Threshold {
+				out = append(out, c)
+			}
+		}
+		return out
+	case Stage2Rerank:
+		idx := make([]int, len(cands))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.Slice(idx, func(i, j int) bool {
+			return metrics[idx[i]] > metrics[idx[j]]
+		})
+		out := make([]Candidate, len(cands))
+		for i, j := range idx {
+			out[i] = cands[j]
+		}
+		return out
+	}
+	return cands
 }
 
 func applyMultiPassDefaults(opts MultiPassOptions) MultiPassOptions {

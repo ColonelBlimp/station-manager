@@ -128,6 +128,9 @@ func main() {
 	legacyPowerLLR := flag.Bool("legacy-power-llr", false, "force the legacy power-domain demap (LLR = max|C|²_{x=0} − max|C|²_{x=1}) even in strict mode. Use for A/B comparison against the pre-2026-05-29 baseline. Off-spec per QEX § 6.")
 	nmsK := flag.Int("nms-k", 0, "override SearchOptions.K2MaxPerGroup (max kept candidates per freq group in K=2-medium NMS). 0 = package default (2). Session 105 funnel surfaced 7 NMS-suppressed truths at K=2; raise to measure recovery vs alias growth.")
 	maxResults := flag.Int("max-results", 0, "override SearchOptions.MaxResults (post-NMS cap). 0 = package default (200). Pairs with -nms-k: raising K admits more candidates at NMS but the cap may then bite downstream; raising both together is the controlled test.")
+	stage2Mode := flag.String("stage2-mode", "off", "post-NMS Costas verifier mode: off | observe | filter | rerank. observe runs the verifier without changing the candidate list; filter drops sub-threshold candidates; rerank sorts by metric without dropping. See research/sandbox/costas_verify.go.")
+	stage2Metric := flag.String("stage2-metric", "minblock", "Stage2 discriminator metric: minblock | geo | wins. Audit 2026-05-29: MinBlockContrast cleanest at near-truth p50, GeoContrast cleanest at p25, WinsTotal coarsest but categorical.")
+	stage2Threshold := flag.Float64("stage2-threshold", 0, "Stage2 filter threshold (units depend on -stage2-metric). Ignored for off/observe/rerank.")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -168,6 +171,17 @@ func main() {
 	if *maxResults > 0 {
 		opts.Search.MaxResults = *maxResults
 	}
+	if mode, ok := parseStage2Mode(*stage2Mode); ok {
+		opts.Stage2Mode = mode
+	} else {
+		log.Fatalf("invalid -stage2-mode %q (want off | observe | filter | rerank)", *stage2Mode)
+	}
+	if metric, ok := parseStage2Metric(*stage2Metric); ok {
+		opts.Stage2Metric = metric
+	} else {
+		log.Fatalf("invalid -stage2-metric %q (want minblock | geo | wins)", *stage2Metric)
+	}
+	opts.Stage2Threshold = *stage2Threshold
 	// LLR domain precedence (clearest case wins):
 	//   -legacy-power-llr  → force power (off-spec; A/B against pre-2026-05-29 baseline)
 	//   -magnitude-llr     → force magnitude
@@ -202,10 +216,33 @@ func main() {
 		if opts.EnableBestOfN {
 			fmt.Fprintln(os.Stderr, "note: -strict overrides EnableBestOfN (BestOfN disabled)")
 		}
+		// Stage2 default (2026-05-29 corpus measurement):
+		// Filter + GeoContrast >= 0.70 trims 2 false-positive decodes
+		// without truth loss. Threshold is empirical / corpus-calibrated
+		// on the 6-fixture strict corpus — NOT QEX-derived. The verifier
+		// concept (Costas-anchor 8-tone DTFT vote/contrast) is spec-clean
+		// per QEX § 4 + Goertzel; the operating point lives on this
+		// corpus's ROC curve and would need re-measurement on any
+		// holdout or expanded corpus before being treated as
+		// production-grade. Promotion logic: strict applies the default
+		// UNLESS the operator passed any -stage2-* flag explicitly (in
+		// which case the explicit setting wins for A/B / observe runs).
+		stage2Override := false
+		flag.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "stage2-mode", "stage2-metric", "stage2-threshold":
+				stage2Override = true
+			}
+		})
+		if !stage2Override {
+			opts.Stage2Mode = sandbox.Stage2Filter
+			opts.Stage2Metric = sandbox.Stage2MetricGeo
+			opts.Stage2Threshold = 0.70
+		}
 		opts.EnableAPCQ = false
 		opts.EnableAP3 = false
 		opts.EnableBestOfN = false
-		printStrictBanner(opts.MagnitudeLLR)
+		printStrictBanner(opts.MagnitudeLLR, opts.Stage2Mode, opts.Stage2Metric, opts.Stage2Threshold)
 	}
 
 	if *dirPath != "" {
@@ -230,7 +267,7 @@ func main() {
 // and is excluded from strict scoring. `-strict` therefore runs
 // symmetric only; without `-strict`, the A/B comparison still
 // surfaces the asym deltas as deep-mode data.
-func printStrictBanner(magnitudeMode bool) {
+func printStrictBanner(magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2Metric sandbox.Stage2Metric, stage2Threshold float64) {
 	fmt.Println("=== STRICT-PARITY MODE ===")
 	fmt.Println("  channelizer: symmetric only (asymmetric = deep-mode recovery)")
 	fmt.Println("  experimental knobs disabled: AP-CQ, AP3, BestOfN")
@@ -239,9 +276,65 @@ func printStrictBanner(magnitudeMode bool) {
 	} else {
 		fmt.Println("  LLR domain: POWER (legacy/off-spec; -legacy-power-llr override active)")
 	}
+	switch stage2Mode {
+	case sandbox.Stage2Off:
+		fmt.Println("  Stage2 verifier: off (use -stage2-mode filter to enable; default is filter/geo/0.70)")
+	case sandbox.Stage2Observe:
+		fmt.Println("  Stage2 verifier: observe (verifier runs without filtering)")
+	case sandbox.Stage2Filter:
+		fmt.Printf("  Stage2 verifier: filter %s ≥ %.3f (corpus-calibrated 2026-05-29; cuts 2 false-positives @ no truth loss)\n",
+			stage2MetricLabel(stage2Metric), stage2Threshold)
+	case sandbox.Stage2Rerank:
+		fmt.Printf("  Stage2 verifier: rerank by %s (caveat: hash/pass-2 order confound, -1 matched at default)\n", stage2MetricLabel(stage2Metric))
+	}
 	fmt.Println("  scoring: sequential jt9-default truth manifests")
 	fmt.Println("  calibration knobs (sync gate, candidate-search breadth): defaults — TBD")
 	fmt.Println()
+}
+
+// stage2MetricLabel renders a Stage2Metric value for banner output.
+// Mirrors the funnel's metricName helper; kept local so the banner
+// stays a self-contained one-stop CLI surface.
+func stage2MetricLabel(m sandbox.Stage2Metric) string {
+	switch m {
+	case sandbox.Stage2MetricGeo:
+		return "GeoContrast"
+	case sandbox.Stage2MetricWins:
+		return "WinsTotal"
+	default:
+		return "MinBlockContrast"
+	}
+}
+
+// parseStage2Mode maps the -stage2-mode flag string to the typed
+// sandbox.Stage2Mode enum. Returns false for unknown values so main
+// can fatal with a useful error rather than silently falling back.
+func parseStage2Mode(s string) (sandbox.Stage2Mode, bool) {
+	switch strings.ToLower(s) {
+	case "off", "":
+		return sandbox.Stage2Off, true
+	case "observe":
+		return sandbox.Stage2Observe, true
+	case "filter":
+		return sandbox.Stage2Filter, true
+	case "rerank":
+		return sandbox.Stage2Rerank, true
+	}
+	return sandbox.Stage2Off, false
+}
+
+// parseStage2Metric maps the -stage2-metric flag string to the typed
+// sandbox.Stage2Metric enum.
+func parseStage2Metric(s string) (sandbox.Stage2Metric, bool) {
+	switch strings.ToLower(s) {
+	case "minblock", "":
+		return sandbox.Stage2MetricMinBlock, true
+	case "geo":
+		return sandbox.Stage2MetricGeo, true
+	case "wins":
+		return sandbox.Stage2MetricWins, true
+	}
+	return sandbox.Stage2MetricMinBlock, false
 }
 
 // runSingle is the original single-WAV path: optional inline -expect
@@ -280,7 +373,7 @@ func runSingle(wavPath, expectStr string, opts sandbox.MultiPassOptions, freqTol
 		// A/B scoreboard (no asym row to compare against).
 		printRun(sym)
 		fmt.Println("--- scoreboard (strict / sym-only) ---")
-		fmt.Printf("  %-18s  %7d  %6d  %5d\n", "mode", "matched", "extras", "total")
+		fmt.Printf("  %-18s  %7s  %6s  %5s\n", "mode", "matched", "extras", "total")
 		fmt.Printf("  %-18s  %7d  %6d  %5d\n", sym.label, sym.matched, sym.extras, len(sym.decodes))
 		fmt.Println()
 		return

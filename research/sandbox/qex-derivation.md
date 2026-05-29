@@ -158,10 +158,25 @@ normalisation was not primarily compensating for the domain
 error on those 4 truths.
 
 **Strict-mode default changed to magnitude-domain 2026-05-29.**
-Operative baseline going forward: **113/144 matched / 23 extras**.
+Initial post-spec-fix baseline: 113/144 matched / 23 extras.
 Legacy power-domain reachable via
 `cmd/sandbox-asym-ab -strict -legacy-power-llr` for A/B comparison
 against the historical 111/23.
+
+**Strict-mode default further promoted 2026-05-29 (same day, post-
+audit-#1).** The Stage2 verifier
+(`research/sandbox/costas_verify.go`; clean-room from QEX § 4 +
+Goertzel 1958) was wired between FindCandidates and refine with
+mode=Filter / metric=GeoContrast / threshold=0.70 baked into the
+`-strict` flag's defaults. Operative baseline going forward:
+**113/144 matched / 21 extras** (zero matched lost, 2 false-positive
+decodes eliminated, 83% post-NMS candidate-volume reduction). The
+0.70 threshold is empirical / corpus-calibrated on the 6-fixture
+strict corpus — NOT QEX-derived; production / holdout consumers
+must re-measure their own operating point. Pre-Stage2 baseline
+reachable via `-strict -stage2-mode off`. Full sweep + funnel
+artefacts at
+`research/sandbox/reports/stage2-gate-corpus-2026-05-29.md`.
 
 **Implication for parked experiments (revisit candidates):**
 several earlier flat-result measurements were taken against the

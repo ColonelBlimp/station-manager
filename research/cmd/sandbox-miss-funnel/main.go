@@ -54,6 +54,7 @@ import (
 	"sort"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
+	"github.com/ColonelBlimp/station-manager/research/candidates"
 	"github.com/ColonelBlimp/station-manager/research/sandbox"
 	"github.com/ColonelBlimp/station-manager/research/truth"
 )
@@ -68,6 +69,7 @@ const (
 	stageGateBound    stage = "gate-bound"
 	stageDecoderBound stage = "decoder-bound"
 	stageRefineBound  stage = "refine-bound"
+	stageStage2Bound  stage = "stage2-bound"
 	stageCapBound     stage = "cap-bound"
 	stageNMSBound     stage = "nms-bound"
 	stageFinderMiss   stage = "finder-miss"
@@ -81,6 +83,7 @@ var reportOrder = []stage{
 	stageGateBound,
 	stageDecoderBound,
 	stageRefineBound,
+	stageStage2Bound,
 	stageCapBound,
 	stageNMSBound,
 	stageFinderMiss,
@@ -104,12 +107,20 @@ type truthFate struct {
 // candScore records one post-NMS candidate plus its truth-proximity
 // label. Drives the score-audit summary that answers "does the
 // matched-filter score actually separate real signals from aliases?"
+//
+// Carries both the sandbox's Sync (matched-filter score) and the
+// candidates-package Stage2 verifier outputs (WinsTotal,
+// GeoContrast, MinBlockContrast) so the audit can rank each metric's
+// near-truth vs alias separation against the same post-NMS population.
 type candScore struct {
-	capture   string
-	freqHz    float64
-	dtSec     float64
-	sync      float64
-	nearTruth bool
+	capture          string
+	freqHz           float64
+	dtSec            float64
+	sync             float64
+	nearTruth        bool
+	winsTotal        int
+	geoContrast      float64
+	minBlockContrast float64
 }
 
 func main() {
@@ -119,6 +130,9 @@ func main() {
 	magnitudeLLR := flag.Bool("magnitude-llr", true, "QEX § 6 spec-aligned magnitude-domain demap. Default true matches the strict-mode 113/23 baseline.")
 	nmsK := flag.Int("nms-k", 0, "override SearchOptions.K2MaxPerGroup (max kept per freq group in NMS). 0 = package default (2).")
 	maxResults := flag.Int("max-results", 0, "override SearchOptions.MaxResults (post-NMS cap). 0 = package default (200). Raise to test whether raising NMS K is wasted by the cap biting downstream.")
+	stage2Mode := flag.String("stage2-mode", "off", "post-NMS Costas verifier mode: off | observe | filter | rerank. Mirrors sandbox-asym-ab semantics so funnel deltas match decoder runs at the same options.")
+	stage2Metric := flag.String("stage2-metric", "minblock", "Stage2 discriminator: minblock | geo | wins.")
+	stage2Threshold := flag.Float64("stage2-threshold", 0, "Stage2 filter threshold (units depend on -stage2-metric).")
 	flag.Parse()
 
 	matches, err := filepath.Glob(filepath.Join(*dir, "*.wav"))
@@ -139,6 +153,17 @@ func main() {
 	if *maxResults > 0 {
 		opts.Search.MaxResults = *maxResults
 	}
+	if mode, ok := parseStage2Mode(*stage2Mode); ok {
+		opts.Stage2Mode = mode
+	} else {
+		log.Fatalf("invalid -stage2-mode %q (want off | observe | filter | rerank)", *stage2Mode)
+	}
+	if metric, ok := parseStage2Metric(*stage2Metric); ok {
+		opts.Stage2Metric = metric
+	} else {
+		log.Fatalf("invalid -stage2-metric %q (want minblock | geo | wins)", *stage2Metric)
+	}
+	opts.Stage2Threshold = *stage2Threshold
 
 	refineOpts := sandbox.DefaultRefineOptions()
 	searchOpts := opts.Search
@@ -151,6 +176,7 @@ func main() {
 
 	var fates []truthFate
 	var scores []candScore
+	var totalRaw, totalNMS, totalCap, totalStage2, totalRefined int
 	for _, w := range matches {
 		m, err := truth.Read(truth.PathFor(w))
 		if err != nil {
@@ -186,7 +212,17 @@ func main() {
 		if searchOpts.MaxResults > 0 && len(postCap) > searchOpts.MaxResults {
 			postCap = postCap[:searchOpts.MaxResults]
 		}
-		refined := refineCandidates(data.Samples, postCap, refineOpts)
+		// Stage2 verifier runs between post-cap and refined to match
+		// MultiPassDecodeFull's placement. ApplyStage2 returns the
+		// input unchanged for Stage2Off / Stage2Observe.
+		postStage2 := sandbox.ApplyStage2(data.Samples, append([]sandbox.Candidate(nil), postCap...), opts)
+		refined := refineCandidates(data.Samples, postStage2, refineOpts)
+
+		totalRaw += len(raw)
+		totalNMS += len(postNMS)
+		totalCap += len(postCap)
+		totalStage2 += len(postStage2)
+		totalRefined += len(refined)
 
 		// Stages 5-7: rely on MultiPassDecodeFull for accepted +
 		// gate-rejected. Anything not surfaced by either reached
@@ -199,7 +235,7 @@ func main() {
 				freqHz:  s.FreqHz,
 				dtSec:   s.DTSec,
 				text:    s.Text,
-				stage: classify(s, raw, postNMS, postCap, refined,
+				stage: classify(s, raw, postNMS, postCap, postStage2, refined,
 					result.Decodes, result.ShadowRejects,
 					*freqTol, *dtTol),
 			}
@@ -210,23 +246,104 @@ func main() {
 		}
 
 		// Score audit: label every post-NMS candidate as near-truth or
-		// alias and record its matched-filter score (Candidate.Sync).
-		// Aggregated across the corpus, the two distributions show
-		// whether the front-end's admission criterion actually separates
-		// signal from alias on its own.
+		// alias and record (a) sandbox's matched-filter score
+		// (Candidate.Sync) and (b) the candidates-package Stage2
+		// verifier outputs (WinsTotal, GeoContrast, MinBlockContrast).
+		// Aggregated across the corpus, the per-metric near-truth-vs-
+		// alias distributions show which discriminator (if any) cleanly
+		// separates real signals from aliases. Sandbox + candidates DT
+		// frames agree (both: dt = 0 ⇒ TX start at QEX nominal 0.5 s
+		// slot offset), so the sandbox coordinate feeds directly into
+		// VerifyCostas without remap.
 		for _, c := range postNMS {
+			v := candidates.VerifyCostas(data.Samples, c.FreqHz, c.DtSec, c.Sync)
 			scores = append(scores, candScore{
-				capture:   filepath.Base(w),
-				freqHz:    c.FreqHz,
-				dtSec:     c.DtSec,
-				sync:      c.Sync,
-				nearTruth: signalAnyNear(m.Signals, c.FreqHz, c.DtSec, *freqTol, *dtTol),
+				capture:          filepath.Base(w),
+				freqHz:           c.FreqHz,
+				dtSec:            c.DtSec,
+				sync:             c.Sync,
+				nearTruth:        signalAnyNear(m.Signals, c.FreqHz, c.DtSec, *freqTol, *dtTol),
+				winsTotal:        v.WinsTotal,
+				geoContrast:      v.GeoContrast,
+				minBlockContrast: v.MinBlockContrast,
 			})
 		}
 	}
 
-	printReport(fates, *magnitudeLLR)
+	printReport(fates, *magnitudeLLR, opts.Stage2Mode, opts.Stage2Metric, opts.Stage2Threshold)
+	printSurvival(totalRaw, totalNMS, totalCap, totalStage2, totalRefined, opts.Stage2Mode)
 	printScoreAudit(scores)
+}
+
+// printSurvival reports total candidate counts at each pipeline
+// stage summed across the corpus. Lets a reader see at a glance how
+// far the Stage2 verifier (when active) is trimming the post-NMS
+// candidate set vs the baseline Off / Observe behaviour.
+func printSurvival(raw, nms, capped, stage2, refined int, mode sandbox.Stage2Mode) {
+	fmt.Println()
+	fmt.Println("=== CANDIDATE SURVIVAL (totals across corpus) ===")
+	fmt.Printf("  raw:        %6d\n", raw)
+	fmt.Printf("  post-NMS:   %6d\n", nms)
+	fmt.Printf("  post-cap:   %6d\n", capped)
+	fmt.Printf("  post-Stage2:%6d  (Stage2 mode: %s)\n", stage2, modeName(mode))
+	fmt.Printf("  refined:    %6d\n", refined)
+}
+
+// modeName renders a Stage2Mode value as a short human-readable
+// label for survival-report headers.
+func modeName(m sandbox.Stage2Mode) string {
+	switch m {
+	case sandbox.Stage2Observe:
+		return "observe"
+	case sandbox.Stage2Filter:
+		return "filter"
+	case sandbox.Stage2Rerank:
+		return "rerank"
+	default:
+		return "off"
+	}
+}
+
+// metricName renders a Stage2Metric value as a short human-readable
+// label for report headers.
+func metricName(m sandbox.Stage2Metric) string {
+	switch m {
+	case sandbox.Stage2MetricGeo:
+		return "GeoContrast"
+	case sandbox.Stage2MetricWins:
+		return "WinsTotal"
+	default:
+		return "MinBlockContrast"
+	}
+}
+
+// parseStage2Mode mirrors sandbox-asym-ab's parser so the funnel and
+// the decoder harness accept the same flag vocabulary.
+func parseStage2Mode(s string) (sandbox.Stage2Mode, bool) {
+	switch s {
+	case "off", "":
+		return sandbox.Stage2Off, true
+	case "observe":
+		return sandbox.Stage2Observe, true
+	case "filter":
+		return sandbox.Stage2Filter, true
+	case "rerank":
+		return sandbox.Stage2Rerank, true
+	}
+	return sandbox.Stage2Off, false
+}
+
+// parseStage2Metric mirrors sandbox-asym-ab's parser.
+func parseStage2Metric(s string) (sandbox.Stage2Metric, bool) {
+	switch s {
+	case "minblock", "":
+		return sandbox.Stage2MetricMinBlock, true
+	case "geo":
+		return sandbox.Stage2MetricGeo, true
+	case "wins":
+		return sandbox.Stage2MetricWins, true
+	}
+	return sandbox.Stage2MetricMinBlock, false
 }
 
 // signalAnyNear is the truth-list flavour of anyNear: returns true
@@ -241,62 +358,81 @@ func signalAnyNear(signals []truth.Signal, freqHz, dtSec, freqTol, dtTol float64
 	return false
 }
 
-// printScoreAudit answers the question "does Candidate.Sync (the
-// matched-filter score that drives front-end admission) actually
-// separate signal-bearing candidates from aliases?" Two populations:
+// metricSpec describes one discriminator metric to audit. The
+// audit emits the same stats + histogram + overlap analysis for each
+// metric so the four numbers can be compared side by side on the
+// same post-NMS population.
+type metricSpec struct {
+	name     string
+	colLabel string
+	binWidth float64
+	maxBin   float64
+	extract  func(candScore) float64
+}
+
+// printScoreAudit answers the question "which front-end discriminator
+// (Sync, WinsTotal, GeoContrast, MinBlockContrast) actually separates
+// signal-bearing candidates from aliases?" Two populations:
 //
 //   - near-truth: post-NMS candidates within (freqTol, dtTol) of any
 //     truth signal in the same WAV's manifest
 //   - alias: everything else (post-NMS candidates with no truth in
 //     proximity)
 //
-// If the two distributions overlap heavily, Sync alone can't separate
-// signal from alias — admission ranking is the front-end weak point.
-// If they're cleanly separated, Sync is doing its job and any
-// remaining miss / extra problem lives downstream (refinement,
-// channelizer, demod).
+// The Sync section is the sandbox finder's matched-filter ranking
+// (the audit's Session-105 baseline). The Stage2 sections come from
+// the candidates package's per-anchor Costas verifier — same audio,
+// same coordinates, different discrimination algebra. If a Stage2
+// metric cleanly separates the populations where Sync overlaps, that
+// metric is a candidate for porting into the sandbox finder.
 func printScoreAudit(scores []candScore) {
 	if len(scores) == 0 {
 		return
 	}
+
+	metrics := []metricSpec{
+		{name: "Candidate.Sync (sandbox)", colLabel: "sync range", binWidth: 2.0, maxBin: 50.0, extract: func(s candScore) float64 { return s.sync }},
+		{name: "WinsTotal (candidates Stage2, 0..21)", colLabel: "wins range", binWidth: 1.0, maxBin: 21.0, extract: func(s candScore) float64 { return float64(s.winsTotal) }},
+		{name: "GeoContrast (candidates Stage2)", colLabel: "geo range", binWidth: 0.5, maxBin: 8.0, extract: func(s candScore) float64 { return s.geoContrast }},
+		{name: "MinBlockContrast (candidates Stage2)", colLabel: "minblock range", binWidth: 0.5, maxBin: 8.0, extract: func(s candScore) float64 { return s.minBlockContrast }},
+	}
+
+	fmt.Println()
+	fmt.Println("=== FRONT-END SCORE AUDIT (post-NMS, four metrics side-by-side) ===")
+	fmt.Printf("  scope:     all post-NMS candidates across the corpus (n=%d)\n", len(scores))
+	fmt.Printf("  labelling: near-truth = within (ftol, dttol) of any manifest signal\n")
+	for _, m := range metrics {
+		printOneMetricAudit(scores, m)
+	}
+
+	printDiscriminationSummary(scores, metrics)
+}
+
+func printOneMetricAudit(scores []candScore, m metricSpec) {
 	var nearVals, aliasVals []float64
 	for _, s := range scores {
+		v := m.extract(s)
 		if s.nearTruth {
-			nearVals = append(nearVals, s.sync)
+			nearVals = append(nearVals, v)
 		} else {
-			aliasVals = append(aliasVals, s.sync)
+			aliasVals = append(aliasVals, v)
 		}
 	}
 
 	fmt.Println()
-	fmt.Println("=== FRONT-END SCORE AUDIT (Candidate.Sync, post-NMS) ===")
-	fmt.Printf("  scope:     all post-NMS candidates across the corpus (n=%d)\n", len(scores))
-	fmt.Printf("  labelling: near-truth = within (ftol, dttol) of any manifest signal\n")
-	fmt.Println()
-
+	fmt.Printf("--- %s ---\n", m.name)
 	fmt.Printf("  population        count    min     p25     p50     p75     max\n")
 	printStats("near-truth", nearVals)
 	printStats("alias", aliasVals)
 	fmt.Println()
 
-	// Coarse histogram. Bin width 2.0 covers the typical Sync range
-	// of 3..50 in ~24 bins; the tail beyond 50 lumps into one final
-	// bucket.
-	const binWidth = 2.0
-	const maxBin = 50.0
-	histo := buildHisto(nearVals, aliasVals, binWidth, maxBin)
-	fmt.Printf("  histogram (bin width = %.1f):\n", binWidth)
-	fmt.Printf("    sync range       near-truth   alias\n")
+	histo := buildHisto(nearVals, aliasVals, m.binWidth, m.maxBin)
+	fmt.Printf("  histogram (bin width = %.1f):\n", m.binWidth)
+	fmt.Printf("    %-15s  near-truth   alias\n", m.colLabel)
 	for _, row := range histo {
 		fmt.Printf("    %-15s  %10d   %5d\n", row.label, row.near, row.alias)
 	}
-	fmt.Println()
 
-	// Overlap summary. The fraction of aliases scoring above
-	// near-truth's p25 quantifies how much "the alias pool sits at
-	// or above the signal pool's quartile floor". A high fraction
-	// indicates the front-end scoring isn't a discriminative signal
-	// on its own.
 	if len(nearVals) > 0 && len(aliasVals) > 0 {
 		sortedNear := append([]float64(nil), nearVals...)
 		sort.Float64s(sortedNear)
@@ -313,10 +449,54 @@ func printScoreAudit(scores []candScore) {
 			}
 		}
 		fmt.Println("  overlap summary:")
-		fmt.Printf("    aliases scoring ≥ near-truth p25 (%.1f): %d / %d (%.0f%%)\n",
+		fmt.Printf("    aliases scoring ≥ near-truth p25 (%.2f): %d / %d (%.0f%%)\n",
 			nearP25, aboveP25, len(aliasVals), 100*float64(aboveP25)/float64(len(aliasVals)))
-		fmt.Printf("    aliases scoring ≥ near-truth p50 (%.1f): %d / %d (%.0f%%)\n",
+		fmt.Printf("    aliases scoring ≥ near-truth p50 (%.2f): %d / %d (%.0f%%)\n",
 			nearP50, aboveP50, len(aliasVals), 100*float64(aboveP50)/float64(len(aliasVals)))
+	}
+}
+
+// printDiscriminationSummary tallies one number per metric: the
+// fraction of aliases that score above near-truth's median. Smaller
+// is better — it means alias mass sits below the signal median, so
+// thresholding on that metric trims aliases without killing real
+// signals. Side-by-side numbers make the four metrics directly
+// comparable; the smallest wins.
+func printDiscriminationSummary(scores []candScore, metrics []metricSpec) {
+	fmt.Println()
+	fmt.Println("=== DISCRIMINATION SUMMARY (smaller = better separator) ===")
+	fmt.Println("  metric                                  alias≥near-p50  alias≥near-p25")
+	for _, m := range metrics {
+		var nearVals, aliasVals []float64
+		for _, s := range scores {
+			v := m.extract(s)
+			if s.nearTruth {
+				nearVals = append(nearVals, v)
+			} else {
+				aliasVals = append(aliasVals, v)
+			}
+		}
+		if len(nearVals) == 0 || len(aliasVals) == 0 {
+			continue
+		}
+		sortedNear := append([]float64(nil), nearVals...)
+		sort.Float64s(sortedNear)
+		nearP25 := sortedNear[len(sortedNear)/4]
+		nearP50 := sortedNear[len(sortedNear)/2]
+		aboveP25 := 0
+		aboveP50 := 0
+		for _, v := range aliasVals {
+			if v >= nearP25 {
+				aboveP25++
+			}
+			if v >= nearP50 {
+				aboveP50++
+			}
+		}
+		fmt.Printf("  %-38s  %5.1f%% (%4d)   %5.1f%% (%4d)\n",
+			m.name,
+			100*float64(aboveP50)/float64(len(aliasVals)), aboveP50,
+			100*float64(aboveP25)/float64(len(aliasVals)), aboveP25)
 	}
 }
 
@@ -412,7 +592,7 @@ func refineCandidates(samples []float32, cands []sandbox.Candidate, refineOpts s
 // failure.
 func classify(
 	t truth.Signal,
-	raw, postNMS, postCap, refined []sandbox.Candidate,
+	raw, postNMS, postCap, postStage2, refined []sandbox.Candidate,
 	accepted []sandbox.DecodeRecord,
 	shadow []sandbox.ShadowReject,
 	freqTol, dtTol float64,
@@ -442,10 +622,18 @@ func classify(
 	if anyNear(refined, t.FreqHz, t.DTSec, freqTol, dtTol) {
 		return stageDecoderBound
 	}
-	// Stage 4: refine-bound. Cap-survivor was near truth but
+	// Stage 4b: refine-bound. Stage2 survivor was near truth but
 	// refinement drifted outside tolerance.
-	if anyNear(postCap, t.FreqHz, t.DTSec, freqTol, dtTol) {
+	if anyNear(postStage2, t.FreqHz, t.DTSec, freqTol, dtTol) {
 		return stageRefineBound
+	}
+	// Stage 4a: stage2-bound. Cap-survivor was near truth but the
+	// Stage2 verifier filter dropped it (or, in rerank mode with a
+	// binding cap, sorted it below the cap line). Only fires when
+	// Stage2 is active; in Off/Observe modes postStage2 == postCap
+	// so this branch is never reached.
+	if anyNear(postCap, t.FreqHz, t.DTSec, freqTol, dtTol) {
+		return stageStage2Bound
 	}
 	// Stage 3: cap-bound. Survived NMS but got dropped by the
 	// MaxResults cap before reaching refinement.
@@ -563,7 +751,7 @@ func near(aF, aD, bF, bD, freqTol, dtTol float64) bool {
 	return math.Abs(aF-bF) <= freqTol && math.Abs(aD-bD) <= dtTol
 }
 
-func printReport(fates []truthFate, magnitudeMode bool) {
+func printReport(fates []truthFate, magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2Metric sandbox.Stage2Metric, stage2Threshold float64) {
 	domain := "magnitude (QEX § 6 spec-aligned)"
 	if !magnitudeMode {
 		domain = "POWER (legacy/off-spec)"
@@ -571,6 +759,12 @@ func printReport(fates []truthFate, magnitudeMode bool) {
 	fmt.Println("=== PER-TRUTH MISS-STAGE FUNNEL ===")
 	fmt.Printf("  LLR domain:     %s\n", domain)
 	fmt.Printf("  channelizer:    symmetric only (strict-aligned)\n")
+	if stage2Mode == sandbox.Stage2Off {
+		fmt.Printf("  Stage2 verifier: off\n")
+	} else {
+		fmt.Printf("  Stage2 verifier: mode=%s metric=%s threshold=%.3f\n",
+			modeName(stage2Mode), metricName(stage2Metric), stage2Threshold)
+	}
 	fmt.Printf("  total truths:   %d\n\n", len(fates))
 
 	counts := map[stage]int{}

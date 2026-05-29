@@ -1,0 +1,210 @@
+=== PER-TRUTH MISS-STAGE FUNNEL ===
+  LLR domain:     magnitude (QEX § 6 spec-aligned)
+  channelizer:    symmetric only (strict-aligned)
+  Stage2 verifier: mode=filter metric=WinsTotal threshold=8.000
+  total truths:   144
+
+  stage              count
+    matched           113
+    gate-bound          1
+    decoder-bound      18
+    refine-bound        1
+    stage2-bound        2
+    cap-bound           0
+    nms-bound           7
+    finder-miss         2
+
+--- gate-bound (n=1) ---
+  live_slot2.wav     1487.0 Hz  dt=+0.200  "PD0LBY OH7NW +08"
+
+--- decoder-bound (n=18) ---
+  20m_slot1.wav       381.0 Hz  dt=+0.500  "<...> RG5A KN93"
+  20m_slot1.wav      1824.0 Hz  dt=+0.200  "CQ DX S56GD JN65"
+  20m_slot1.wav      2619.0 Hz  dt=+0.900  "<...> EA3NT JN01"
+  20m_slot2.wav       689.0 Hz  dt=+0.300  "<...> DG6JW/T"
+  20m_slot2.wav      1137.0 Hz  dt=+0.500  "<...> DG2EBG R-21"
+  20m_slot2.wav      2024.0 Hz  dt=+0.900  "CQ COTA IK7NXU JN81"
+  20m_slot2.wav      2250.0 Hz  dt=+0.200  "CQ PD5MVH JO22                        a1"
+  20m_slot2.wav      2546.0 Hz  dt=-0.200  "CQ UZ5DM KN28                         a1"
+  20m_slot2.wav      2593.0 Hz  dt=+0.300  "CQ TC19TC"
+  20m_slot3.wav       381.0 Hz  dt=+0.500  "<...> RG5A R-19"
+  20m_slot3.wav      1824.0 Hz  dt=+0.200  "CQ DX S56GD JN65"
+  20m_slot3.wav      1995.0 Hz  dt=+0.800  "<DG6JW/T> SV0TPN +01"
+  20m_slot3.wav      2619.0 Hz  dt=+0.600  "<...> EA3NT JN01"
+  live_slot1.wav      323.0 Hz  dt=+0.200  "<...> UX0KR KO30"
+  live_slot1.wav     1880.0 Hz  dt=+0.200  "CQ YD2ADB OI52                        a1"
+  live_slot2.wav     1177.0 Hz  dt=+0.100  "F4LNM <...> -12"
+  live_slot2.wav     1415.0 Hz  dt=+0.200  "YL2GJX <...> +06"
+  live_slot3.wav      323.0 Hz  dt=+0.200  "<...> UX0KR KO30"
+
+--- refine-bound (n=1) ---
+  live_slot1.wav     2253.0 Hz  dt=+0.100  "PE1NPS <...> +02"
+
+--- stage2-bound (n=2) ---
+  live_slot1.wav     1895.0 Hz  dt=+0.200  "UX2SB DO6LSM JO44"
+  live_slot3.wav      404.0 Hz  dt=+0.300  "<...> US5ZBR KN57"
+
+--- nms-bound (n=7) ---
+  20m_slot1.wav      1714.0 Hz  dt=+0.200  "OH5CLQ DK7ZT -13"
+                       K-cap (raw@1712.5Hz,+0.180s in freq group with 3 kept: [1706.2, 1709.4, 1721.9])
+  20m_slot2.wav      1621.0 Hz  dt=+0.200  "CQ F1THK JN02                         a1"
+                       K-cap (raw@1621.9Hz,+0.220s in freq group with 2 kept: [1628.1, 1621.9])
+  live_slot1.wav      404.0 Hz  dt=+0.300  "<...> US5ZBR KN57"
+                       K-cap (raw@403.1Hz,+0.300s in freq group with 2 kept: [403.1, 403.1])
+  live_slot1.wav     1164.0 Hz  dt=-1.000  "CQ DJ3HW JO30"
+                       tight-box (raw@1165.6Hz,-0.500s → kept@1171.9Hz,-0.460s, Δf=6.25 Δdt=+0.040)
+  live_slot1.wav     2465.0 Hz  dt=-1.000  "HA6MG DL1BBO R-23"
+                       K-cap (raw@2465.6Hz,-0.500s in freq group with 3 kept: [2459.4, 2459.4, 2475.0])
+  live_slot2.wav     1535.0 Hz  dt=+0.100  "CQ R7YZ LN04"
+                       K-cap (raw@1534.4Hz,+0.140s in freq group with 2 kept: [1546.9, 1537.5])
+  live_slot3.wav     2253.0 Hz  dt=+0.100  "<...> HG60IPA RR73"
+                       K-cap (raw@2253.1Hz,+0.100s in freq group with 3 kept: [2259.4, 2253.1, 2240.6])
+
+--- finder-miss (n=2) ---
+  20m_slot1.wav      1994.0 Hz  dt=+2.400  "<...> SV0TPN +01"
+  live_slot1.wav     1936.0 Hz  dt=+0.100  "<...> 9A5CRZ JN75"
+
+
+=== CANDIDATE SURVIVAL (totals across corpus) ===
+  raw:         97151
+  post-NMS:     1459
+  post-cap:     1200
+  post-Stage2:   245  (Stage2 mode: filter)
+  refined:       245
+
+=== FRONT-END SCORE AUDIT (post-NMS, four metrics side-by-side) ===
+  scope:     all post-NMS candidates across the corpus (n=1459)
+  labelling: near-truth = within (ftol, dttol) of any manifest signal
+
+--- Candidate.Sync (sandbox) ---
+  population        count    min     p25     p50     p75     max
+    near-truth         186     3.2    16.0    32.8    65.3   523.0
+    alias             1273     3.0     4.5     8.1    17.2   3093.4
+
+  histogram (bin width = 2.0):
+    sync range       near-truth   alias
+     0.0- 2.0                 0       0
+     2.0- 4.0                 3     242
+     4.0- 6.0                 5     232
+     6.0- 8.0                 6     158
+     8.0-10.0                11      95
+    10.0-12.0                 7      84
+    12.0-14.0                 6      73
+    14.0-16.0                10      52
+    16.0-18.0                 6      29
+    18.0-20.0                 6      31
+    20.0-22.0                 8      22
+    22.0-24.0                 7      22
+    24.0-26.0                 4      22
+    26.0-28.0                 8      23
+    28.0-30.0                 2      12
+    30.0-32.0                 2       8
+    32.0-34.0                 8      10
+    34.0-36.0                 6      11
+    36.0-38.0                 0       7
+    38.0-40.0                 1      10
+    40.0-42.0                 5       6
+    42.0-44.0                 3       7
+    44.0-46.0                 4       7
+    46.0-48.0                 5       4
+    48.0-50.0                 1       6
+        ≥50.0                62     100
+  overlap summary:
+    aliases scoring ≥ near-truth p25 (15.96): 337 / 1273 (26%)
+    aliases scoring ≥ near-truth p50 (32.80): 163 / 1273 (13%)
+
+--- WinsTotal (candidates Stage2, 0..21) ---
+  population        count    min     p25     p50     p75     max
+    near-truth         186     1.0     9.0    15.0    19.0    21.0
+    alias             1273     0.0     3.0     5.0     6.0    18.0
+
+  histogram (bin width = 1.0):
+    wins range       near-truth   alias
+     0.0- 1.0                 0       6
+     1.0- 2.0                 1      29
+     2.0- 3.0                 1     106
+     3.0- 4.0                 0     190
+     4.0- 5.0                 7     275
+     5.0- 6.0                 7     257
+     6.0- 7.0                 8     200
+     7.0- 8.0                 5     107
+     8.0- 9.0                12      29
+     9.0-10.0                 6      20
+    10.0-11.0                14       9
+    11.0-12.0                 5      10
+    12.0-13.0                 5       7
+    13.0-14.0                 4      11
+    14.0-15.0                 9       6
+    15.0-16.0                17       7
+    16.0-17.0                11       1
+    17.0-18.0                11       2
+    18.0-19.0                15       1
+    19.0-20.0                15       0
+    20.0-21.0                12       0
+        ≥21.0                21       0
+  overlap summary:
+    aliases scoring ≥ near-truth p25 (9.00): 74 / 1273 (6%)
+    aliases scoring ≥ near-truth p50 (15.00): 11 / 1273 (1%)
+
+--- GeoContrast (candidates Stage2) ---
+  population        count    min     p25     p50     p75     max
+    near-truth         186     0.1     0.8     1.9     4.4   129.0
+    alias             1273     0.0     0.2     0.3     0.4     3.2
+
+  histogram (bin width = 0.5):
+    geo range        near-truth   alias
+     0.0- 0.5                18    1139
+     0.5- 1.0                46      97
+     1.0- 1.5                15      19
+     1.5- 2.0                16       7
+     2.0- 2.5                10       5
+     2.5- 3.0                 9       3
+     3.0- 3.5                12       3
+     3.5- 4.0                 4       0
+     4.0- 4.5                12       0
+     4.5- 5.0                 3       0
+     5.0- 5.5                 5       0
+     5.5- 6.0                 4       0
+     6.0- 6.5                 5       0
+     6.5- 7.0                 4       0
+     7.0- 7.5                 2       0
+     7.5- 8.0                 1       0
+        ≥ 8.0                20       0
+  overlap summary:
+    aliases scoring ≥ near-truth p25 (0.79): 48 / 1273 (4%)
+    aliases scoring ≥ near-truth p50 (1.90): 12 / 1273 (1%)
+
+--- MinBlockContrast (candidates Stage2) ---
+  population        count    min     p25     p50     p75     max
+    near-truth         186     0.1     0.4     1.0     2.1   109.3
+    alias             1273     0.0     0.1     0.2     0.2     2.1
+
+  histogram (bin width = 0.5):
+    minblock range   near-truth   alias
+     0.0- 0.5                59    1236
+     0.5- 1.0                36      32
+     1.0- 1.5                24       3
+     1.5- 2.0                19       1
+     2.0- 2.5                 8       1
+     2.5- 3.0                 6       0
+     3.0- 3.5                 4       0
+     3.5- 4.0                 4       0
+     4.0- 4.5                 1       0
+     4.5- 5.0                 3       0
+     5.0- 5.5                 2       0
+     5.5- 6.0                 6       0
+     6.0- 6.5                 4       0
+     6.5- 7.0                 0       0
+     7.0- 7.5                 1       0
+     7.5- 8.0                 0       0
+        ≥ 8.0                 9       0
+  overlap summary:
+    aliases scoring ≥ near-truth p25 (0.42): 64 / 1273 (5%)
+    aliases scoring ≥ near-truth p50 (0.97): 6 / 1273 (0%)
+
+=== DISCRIMINATION SUMMARY (smaller = better separator) ===
+  metric                                  alias≥near-p50  alias≥near-p25
+  Candidate.Sync (sandbox)                 12.8% ( 163)    26.5% ( 337)
+  WinsTotal (candidates Stage2, 0..21)      0.9% (  11)     5.8% (  74)
+  GeoContrast (candidates Stage2)           0.9% (  12)     3.8% (  48)
+  MinBlockContrast (candidates Stage2)      0.5% (   6)     5.0% (  64)

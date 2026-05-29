@@ -105,6 +105,20 @@ const dtPhysicalOffsetSteps = 3
 // the sign cannot be confused. See costasScore + Find for the use.
 const dtPhysicalOffsetSec = float64(dtPhysicalOffsetSteps) * float64(nstep) / fs // = +0.120 s
 
+// VerifyCostas exposes the package-internal stage-2 verifier as a
+// black-box callable on raw audio at a (freq, dt) coordinate, returning
+// the full CostasVerify record (WinsTotal, GeoContrast,
+// MinBlockContrast, etc.). dt must be in the PHYSICAL frame — dt = 0
+// means the signal starts at the QEX nominal 0.5 s slot offset.
+//
+// Intended for cross-package diagnostics (e.g. comparing Stage2
+// discriminators against the sandbox finder's Sync ranking on the
+// same corpus). Production decode paths use Find / FindWithGates,
+// which run this verifier as part of their internal pipeline.
+func VerifyCostas(samples []float32, freq, dt, stage1Score float64) CostasVerify {
+	return verifyCostas(samples, freq, dt, stage1Score)
+}
+
 // verifyCostas runs the stage-2 alias-aware verifier on one
 // candidate at (freq, dt). dt must be the PHYSICAL DT — i.e. the
 // stage-1 raw DT plus dtPhysicalOffsetSec — so the per-symbol
