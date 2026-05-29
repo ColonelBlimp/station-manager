@@ -141,9 +141,11 @@ func DefaultMultiPassOptions() MultiPassOptions {
 //
 // Hash table: callers needing Type 4 hash resolution or h22 lookups
 // in Type 1 should use MultiPassDecodeWithHashes and pass a
-// persistent *CallsignHashTable.
+// persistent *CallsignHashTable. Callers needing the shadow-reject
+// audit channel should use MultiPassDecodeFull and consult the
+// returned ShadowRejects slice.
 func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
-	return MultiPassDecodeWithHashes(audio, opts, nil)
+	return MultiPassDecodeFull(audio, opts, nil).Decodes
 }
 
 // MultiPassDecodeWithHashes runs MultiPassDecode with the supplied
@@ -156,7 +158,28 @@ func MultiPassDecode(audio []float32, opts MultiPassOptions) []DecodeRecord {
 //
 // nil ht is equivalent to MultiPassDecode (no hash resolution; Type
 // 4 messages surface their h12 as a "<...N>" placeholder).
+//
+// Returns only the accepted decodes. Callers needing the
+// shadow-reject diagnostic channel should use MultiPassDecodeFull
+// instead.
 func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *CallsignHashTable) []DecodeRecord {
+	return MultiPassDecodeFull(audio, opts, ht).Decodes
+}
+
+// MultiPassDecodeFull is the rich-return entry point that exposes
+// both the accepted decodes and the shadow-reject channel.
+//
+// A shadow reject is a candidate whose codeword passed BPDecode +
+// CRC + Unpack77 (i.e. surfaced legal text) but failed the
+// post-decode quality gate (AcceptDecode). The shadow-reject channel
+// is the operator-requested audit instrument introduced 2026-05-29
+// to answer "are oracle misses gate-rejects or true decode
+// failures?" — without re-running the pipeline.
+//
+// MultiPassDecodeWithHashes and MultiPassDecode are thin wrappers
+// that return only the .Decodes slice for production callers that
+// don't consume the audit channel.
+func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHashTable) MultiPassResult {
 	opts = applyMultiPassDefaults(opts)
 
 	// Mutable audio buffer; subtraction happens in place between
@@ -166,7 +189,7 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 
 	ch, err := NewChannelizer()
 	if err != nil {
-		return nil
+		return MultiPassResult{}
 	}
 	defer ch.Close()
 	ch.SetAsymmetricFT8Slice(opts.UseAsymmetricSlice)
@@ -184,6 +207,7 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 	}
 
 	var accepted []DecodeRecord
+	var rejects []ShadowReject
 	for pass := 1; pass <= opts.MaxPasses; pass++ {
 		if err := ch.Prepare(working); err != nil {
 			break
@@ -285,10 +309,30 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			nsync := HardSyncScore(grid)
 			hardErrs := HardErrorsCount(br.Codeword, llrs)
 			snr := measureCandidateSNR(ch, r, br.Codeword)
-			if ok, _ := AcceptDecode(
+			// Compute tone-agreement eagerly. AcceptDecode only consults
+			// it on the OSD path, but the shadow-reject audit needs it
+			// uniformly across BP and OSD so the corpus harness can
+			// compare distributions. The cost is 79 comparisons per
+			// candidate — negligible next to BP+OSD.
+			toneAgree := ToneAgreementCount(br.Codeword, grid)
+			if ok, reason := AcceptDecode(
 				br.DecodeMethod, llrMetric, nsync, grid, br.Codeword,
 				hardErrs, snr, opts.Gate,
 			); !ok {
+				rejects = append(rejects, ShadowReject{
+					Reason:     reason,
+					NSync:      nsync,
+					ToneAgree:  toneAgree,
+					SNR2500DB:  snr,
+					HardErrors: hardErrs,
+					Method:     br.DecodeMethod,
+					LLRMetric:  llrMetric,
+					FreqHz:     r.FreqHz,
+					DtSec:      r.DtSec,
+					Text:       ur.Text,
+					Codeword:   br.Codeword,
+					Pass:       pass,
+				})
 				continue
 			}
 			passDecodes = append(passDecodes, DecodeRecord{
@@ -319,7 +363,7 @@ func MultiPassDecodeWithHashes(audio []float32, opts MultiPassOptions, ht *Calls
 			}
 		}
 	}
-	return accepted
+	return MultiPassResult{Decodes: accepted, ShadowRejects: rejects}
 }
 
 // registerCallsigns walks the decoded message text and registers any

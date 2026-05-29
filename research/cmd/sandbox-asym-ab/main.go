@@ -66,6 +66,12 @@ type modeResult struct {
 	// truth. Useful for understanding cascade utilisation independent
 	// of correctness.
 	llrMetricCounts map[string]int
+
+	// shadowRejects is the diagnostic channel from MultiPassDecodeFull:
+	// every candidate that passed BPDecode + Unpack77 but failed the
+	// post-decode quality gate. Used by the corpus audit to answer
+	// "are oracle misses gate-rejects or true decode failures?".
+	shadowRejects []sandbox.ShadowReject
 }
 
 // marginMetrics captures the per-truth LLR-margin signal at the known
@@ -107,6 +113,8 @@ func main() {
 	singlePass := flag.Bool("single", false, "single-pass mode (MaxPasses=1) — disables subtract+redecode loop")
 	verbose := flag.Bool("v", false, "print per-WAV detail in corpus mode (otherwise summary only)")
 	dumpExtras := flag.Bool("dump-extras", false, "in corpus mode, dump all asymmetric-only extras (decodes that don't match any truth and weren't produced by symmetric) with capture/freq/dt/text/method")
+	dumpShadow := flag.Bool("dump-shadow-rejects", false, "in corpus mode, dump every CRC/unpack-valid candidate the post-decode gate rejected (per-capture, by mode), with NSync/ToneAgree/HardErrors/SNR/Reason/LLRMetric/Method; also surfaces per-(reason, metric) histograms and per-truth would-recover audit")
+	maxHardErrors := flag.Int("max-hard-errors", -1, "override AcceptDecodeOptions.MaxHardErrors (default -1 = use sandbox default of 36)")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -120,9 +128,12 @@ func main() {
 	if *singlePass {
 		opts.MaxPasses = 1
 	}
+	if *maxHardErrors >= 0 {
+		opts.Gate.MaxHardErrors = *maxHardErrors
+	}
 
 	if *dirPath != "" {
-		runCorpus(*dirPath, opts, *freqTol, *dtTol, *verbose, *dumpExtras)
+		runCorpus(*dirPath, opts, *freqTol, *dtTol, *verbose, *dumpExtras, *dumpShadow)
 		return
 	}
 	runSingle(*wavPath, *expectStr, opts, *freqTol, *dtTol)
@@ -181,7 +192,7 @@ type extraDump struct {
 	nearestHz   float64
 }
 
-func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64, verbose, dumpExtras bool) {
+func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64, verbose, dumpExtras, dumpShadow bool) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.wav"))
 	if err != nil {
 		log.Fatalf("glob %q: %v", dir, err)
@@ -205,6 +216,19 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		// for the writeup-quality table.
 		symUniqueByMetric  = map[string][]string{}
 		asymUniqueByMetric = map[string][]string{}
+
+		// Shadow-reject audit accumulators. Populated regardless of
+		// the -dump-shadow-rejects flag: the per-(reason, metric)
+		// histograms and would-recover audit are always interesting
+		// when the corpus runs, even if the per-reject dump is
+		// expensive enough to gate on a flag.
+		symShadowTotal, asymShadowTotal     int
+		symShadowByReason                   = map[string]int{}
+		asymShadowByReason                  = map[string]int{}
+		symShadowByMetric                   = map[string]int{}
+		asymShadowByMetric                  = map[string]int{}
+		symWouldRecover, asymWouldRecover   []wouldRecoverEntry
+		symShadowEntries, asymShadowEntries []shadowDumpEntry
 	)
 
 	for _, w := range matches {
@@ -318,6 +342,52 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 				asymOnlyExtras = append(asymOnlyExtras, e)
 			}
 		}
+
+		// Shadow-reject audit. Always accumulates by-reason / by-metric
+		// histograms (cheap); records would-recover entries (truths
+		// missed by accepted decodes but carried by a shadow-reject in
+		// the same mode); records full per-reject dump entries when the
+		// -dump-shadow-rejects flag is set.
+		symShadowTotal += len(sym.shadowRejects)
+		asymShadowTotal += len(asym.shadowRejects)
+		for _, r := range sym.shadowRejects {
+			symShadowByReason[categorizeReason(r.Reason)]++
+			symShadowByMetric[r.LLRMetric]++
+		}
+		for _, r := range asym.shadowRejects {
+			asymShadowByReason[categorizeReason(r.Reason)]++
+			asymShadowByMetric[r.LLRMetric]++
+		}
+		for i, e := range exp {
+			if !sym.matchMap[i] {
+				if r, ok := findShadowRejectForTruth(sym.shadowRejects, e, freqTol, dtTol); ok {
+					symWouldRecover = append(symWouldRecover, wouldRecoverEntry{
+						capture: captureBase, truth: e, reject: r,
+					})
+				}
+			}
+			if !asym.matchMap[i] {
+				if r, ok := findShadowRejectForTruth(asym.shadowRejects, e, freqTol, dtTol); ok {
+					asymWouldRecover = append(asymWouldRecover, wouldRecoverEntry{
+						capture: captureBase, truth: e, reject: r,
+					})
+				}
+			}
+		}
+		if dumpShadow {
+			for _, r := range sym.shadowRejects {
+				symShadowEntries = append(symShadowEntries, shadowDumpEntry{
+					capture: captureBase, reject: r,
+					nearTruth: shadowIsNearTruth(r, exp, freqTol, dtTol),
+				})
+			}
+			for _, r := range asym.shadowRejects {
+				asymShadowEntries = append(asymShadowEntries, shadowDumpEntry{
+					capture: captureBase, reject: r,
+					nearTruth: shadowIsNearTruth(r, exp, freqTol, dtTol),
+				})
+			}
+		}
 	}
 
 	fmt.Println("=== CORPUS AGGREGATE ===")
@@ -411,6 +481,181 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 			}
 		}
 		fmt.Println()
+	}
+
+	// Shadow-reject audit block. Always emitted (the counts are
+	// always interesting); -dump-shadow-rejects extends it with the
+	// full per-capture per-reject dump.
+	printShadowAudit(
+		symShadowTotal, asymShadowTotal,
+		symShadowByReason, asymShadowByReason,
+		symShadowByMetric, asymShadowByMetric,
+		symWouldRecover, asymWouldRecover,
+	)
+	if dumpShadow {
+		printShadowDump("symmetric", symShadowEntries)
+		printShadowDump("asymmetric-FT8", asymShadowEntries)
+	}
+}
+
+// wouldRecoverEntry is a truth that wasn't matched by any accepted
+// decode in this mode but whose Text and (FreqHz, DtSec) line up with
+// a ShadowReject in the same mode. These are the load-bearing audit
+// hits: each one is a truth the gate threw away that the decoder
+// otherwise found.
+type wouldRecoverEntry struct {
+	capture string
+	truth   expected
+	reject  sandbox.ShadowReject
+}
+
+// shadowDumpEntry pairs a ShadowReject with its capture name and a
+// flag noting whether it sits on top of a known truth position
+// (within freqTol/dtTol AND matches truth text). Used for the
+// -dump-shadow-rejects per-mode dump.
+type shadowDumpEntry struct {
+	capture   string
+	reject    sandbox.ShadowReject
+	nearTruth bool
+}
+
+// categorizeReason buckets the AcceptDecode reason string into one
+// of a small set of named categories. The reason strings carry
+// variable thresholds (e.g. "BP nsync 7 < 8") so bucket on the prefix
+// before the numerics for the histogram. "other" is the catch-all for
+// any reason that doesn't match a known prefix (signals an
+// AcceptDecode change that should add a new category here).
+func categorizeReason(reason string) string {
+	switch {
+	case strings.HasPrefix(reason, "hard-errors"):
+		return "hard-errors"
+	case strings.HasPrefix(reason, "snr"):
+		return "snr"
+	case strings.HasPrefix(reason, "BP nsync"):
+		return "BP nsync"
+	case strings.HasPrefix(reason, "OSD nsync"):
+		return "OSD nsync"
+	case strings.HasPrefix(reason, "OSD tone-agree"):
+		return "OSD tone-agree"
+	default:
+		return "other"
+	}
+}
+
+// findShadowRejectForTruth searches rejects for one whose (FreqHz,
+// DtSec) sits within freqTol/dtTol of e and whose Text normalises to
+// the truth text. Returns the first match. Mirrors the matcher in
+// runOnce / decodeMatchesAnyTruth so the audit definition of "would
+// recover" is consistent with the accepted-decode definition of
+// "matched".
+func findShadowRejectForTruth(rejects []sandbox.ShadowReject, e expected, freqTol, dtTol float64) (sandbox.ShadowReject, bool) {
+	targetText := truth.NormalizeText(e.text)
+	for _, r := range rejects {
+		if math.Abs(r.FreqHz-e.freqHz) <= freqTol &&
+			math.Abs(r.DtSec-e.dtSec) <= dtTol &&
+			truth.NormalizeText(r.Text) == targetText {
+			return r, true
+		}
+	}
+	return sandbox.ShadowReject{}, false
+}
+
+// shadowIsNearTruth reports whether r lies within freqTol/dtTol of
+// any truth in exp AND its text normalises to the truth text. Same
+// shape as decodeMatchesAnyTruth but for shadow rejects.
+func shadowIsNearTruth(r sandbox.ShadowReject, exp []expected, freqTol, dtTol float64) bool {
+	rText := truth.NormalizeText(r.Text)
+	for _, e := range exp {
+		if math.Abs(r.FreqHz-e.freqHz) <= freqTol &&
+			math.Abs(r.DtSec-e.dtSec) <= dtTol &&
+			rText == truth.NormalizeText(e.text) {
+			return true
+		}
+	}
+	return false
+}
+
+// printShadowAudit emits the always-on shadow-reject summary: totals
+// per mode, per-reason histogram, per-metric histogram, and the
+// would-recover audit (truths missed by accepted decodes but
+// carried by a shadow-reject — the load-bearing answer to "are
+// oracle misses gate-rejects or true decode failures?").
+func printShadowAudit(
+	symTotal, asymTotal int,
+	symByReason, asymByReason map[string]int,
+	symByMetric, asymByMetric map[string]int,
+	symWouldRecover, asymWouldRecover []wouldRecoverEntry,
+) {
+	fmt.Println()
+	fmt.Println("=== SHADOW-REJECT AUDIT ===")
+	fmt.Printf("  total shadow rejects:  sym=%d   asym=%d\n", symTotal, asymTotal)
+
+	reasonKeys := []string{"hard-errors", "snr", "BP nsync", "OSD nsync", "OSD tone-agree", "other"}
+	fmt.Println("  by reason:")
+	fmt.Printf("    %-18s  %6s  %6s\n", "reason", "sym", "asym")
+	for _, k := range reasonKeys {
+		if symByReason[k] == 0 && asymByReason[k] == 0 {
+			continue
+		}
+		fmt.Printf("    %-18s  %6d  %6d\n", k, symByReason[k], asymByReason[k])
+	}
+
+	metricKeys := []string{
+		sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3,
+		sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN,
+	}
+	fmt.Println("  by LLR metric:")
+	fmt.Printf("    %-10s  %6s  %6s\n", "metric", "sym", "asym")
+	for _, k := range metricKeys {
+		if symByMetric[k] == 0 && asymByMetric[k] == 0 {
+			continue
+		}
+		fmt.Printf("    %-10s  %6d  %6d\n", k, symByMetric[k], asymByMetric[k])
+	}
+
+	fmt.Printf("  would-recover (truth missed but shadow-reject carries truth text + freq):\n")
+	fmt.Printf("    sym:  %d truth(s) the gate dropped\n", len(symWouldRecover))
+	for _, w := range symWouldRecover {
+		fmt.Printf("      %-16s  %7.2f Hz  dt=%+.3f  metric=%-7s  method=%-6s  reason=%q  truth=%q\n",
+			w.capture, w.truth.freqHz, w.truth.dtSec, w.reject.LLRMetric, w.reject.Method,
+			w.reject.Reason, w.truth.text)
+	}
+	fmt.Printf("    asym: %d truth(s) the gate dropped\n", len(asymWouldRecover))
+	for _, w := range asymWouldRecover {
+		fmt.Printf("      %-16s  %7.2f Hz  dt=%+.3f  metric=%-7s  method=%-6s  reason=%q  truth=%q\n",
+			w.capture, w.truth.freqHz, w.truth.dtSec, w.reject.LLRMetric, w.reject.Method,
+			w.reject.Reason, w.truth.text)
+	}
+}
+
+// printShadowDump emits the full per-mode dump of every captured
+// shadow-reject (only called when -dump-shadow-rejects is set). Sort
+// by capture then freq for a stable order.
+func printShadowDump(label string, entries []shadowDumpEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].capture != entries[j].capture {
+			return entries[i].capture < entries[j].capture
+		}
+		return entries[i].reject.FreqHz < entries[j].reject.FreqHz
+	})
+	fmt.Println()
+	fmt.Printf("=== SHADOW REJECTS (%s, n=%d) ===\n", label, len(entries))
+	fmt.Printf("  %-16s  %8s  %7s  %5s  %-7s  %-7s  %5s  %5s  %5s  %7s  %-40s  %s\n",
+		"capture", "freq(Hz)", "dt(s)", "pass", "metric", "method",
+		"nsync", "tone", "hErr", "snr(dB)", "text", "reason")
+	for _, e := range entries {
+		flag := ""
+		if e.nearTruth {
+			flag = " [truth]"
+		}
+		fmt.Printf("  %-16s  %8.2f  %+7.3f  %5d  %-7s  %-7s  %5d  %5d  %5d  %7.1f  %-40s  %s%s\n",
+			e.capture, e.reject.FreqHz, e.reject.DtSec, e.reject.Pass,
+			e.reject.LLRMetric, e.reject.Method,
+			e.reject.NSync, e.reject.ToneAgree, e.reject.HardErrors, e.reject.SNR2500DB,
+			truncate(e.reject.Text, 40), e.reject.Reason, flag)
 	}
 }
 
@@ -511,7 +756,9 @@ func runOnce(
 		llrMetricCounts:  map[string]int{},
 	}
 	ht := sandbox.NewCallsignHashTable()
-	res.decodes = sandbox.MultiPassDecodeWithHashes(audioSamples, opts, ht)
+	full := sandbox.MultiPassDecodeFull(audioSamples, opts, ht)
+	res.decodes = full.Decodes
+	res.shadowRejects = full.ShadowRejects
 	res.margins = computeMargins(audioSamples, opts.UseAsymmetricSlice, exp)
 
 	// Truth match. Compare text via truth.NormalizeText on both sides
