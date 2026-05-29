@@ -187,8 +187,10 @@ func runSingle(wavPath, expectStr string, opts sandbox.MultiPassOptions, freqTol
 	symOpts.UseAsymmetricSlice = false
 	asymOpts := opts
 	asymOpts.UseAsymmetricSlice = true
-	sym := runOnce("symmetric", data.Samples, symOpts, exp, freqTol, dtTol)
-	asym := runOnce("asymmetric-FT8", data.Samples, asymOpts, exp, freqTol, dtTol)
+	// Single-WAV mode: each run starts with an empty hash table.
+	// There's no prior fixture to carry calls from.
+	sym := runOnce("symmetric", data.Samples, symOpts, exp, freqTol, dtTol, sandbox.NewCallsignHashTable())
+	asym := runOnce("asymmetric-FT8", data.Samples, asymOpts, exp, freqTol, dtTol, sandbox.NewCallsignHashTable())
 
 	printRun(sym)
 	printRun(asym)
@@ -256,6 +258,17 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		missedSym, missedAsym []missedTruthEntry
 	)
 
+	// One hash table per mode, threaded across the entire corpus in
+	// alphabetical filename order. Matches `jt9 -8 file1 file2 …`
+	// behaviour: callsigns introduced by a decode in an earlier
+	// fixture become available for hash resolution in later fixtures
+	// (e.g. DG6JW/T introduced in 20m_slot2 → `<DG6JW/T> SV0TPN +01`
+	// resolves in 20m_slot3). Symmetric and asymmetric modes have
+	// independent tables so each mode's accumulated state reflects
+	// only its own decoder's prior output.
+	symHT := sandbox.NewCallsignHashTable()
+	asymHT := sandbox.NewCallsignHashTable()
+
 	for _, w := range matches {
 		manifestPath := truth.PathFor(w)
 		m, err := truth.Read(manifestPath)
@@ -284,8 +297,8 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		symOpts.UseAsymmetricSlice = false
 		asymOpts := opts
 		asymOpts.UseAsymmetricSlice = true
-		sym := runOnce("symmetric", data.Samples, symOpts, exp, freqTol, dtTol)
-		asym := runOnce("asymmetric-FT8", data.Samples, asymOpts, exp, freqTol, dtTol)
+		sym := runOnce("symmetric", data.Samples, symOpts, exp, freqTol, dtTol, symHT)
+		asym := runOnce("asymmetric-FT8", data.Samples, asymOpts, exp, freqTol, dtTol, asymHT)
 
 		fmt.Printf("=== %s (%d truths) ===\n", filepath.Base(w), len(exp))
 		fmt.Printf("  sym  matched=%2d extras=%2d total=%2d\n", sym.matched, sym.extras, len(sym.decodes))
@@ -814,15 +827,18 @@ func manifestToExpected(m *truth.Manifest) []expected {
 
 // runOnce executes the decode pipeline once with the given options
 // (whose UseAsymmetricSlice flag selects the channelizer mode) and
-// scores its decodes against the expected truth list. The hash table
-// is fresh per run so the two modes don't leak state between each
-// other.
+// scores its decodes against the expected truth list. The caller
+// supplies the hash table: single-WAV mode passes a fresh one per
+// run, corpus mode threads one per channelizer-mode across all
+// fixtures in alphabetical order so hash references can resolve
+// across files the same way `jt9 -8 file1 file2 …` does.
 func runOnce(
 	label string,
 	audioSamples []float32,
 	opts sandbox.MultiPassOptions,
 	exp []expected,
 	freqTol, dtTol float64,
+	ht *sandbox.CallsignHashTable,
 ) modeResult {
 	res := modeResult{
 		label:            label,
@@ -831,7 +847,6 @@ func runOnce(
 		llrMetricByTruth: make([]string, len(exp)),
 		llrMetricCounts:  map[string]int{},
 	}
-	ht := sandbox.NewCallsignHashTable()
 	full := sandbox.MultiPassDecodeFull(audioSamples, opts, ht)
 	res.decodes = full.Decodes
 	res.shadowRejects = full.ShadowRejects
