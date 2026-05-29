@@ -115,6 +115,9 @@ func main() {
 	dumpExtras := flag.Bool("dump-extras", false, "in corpus mode, dump all asymmetric-only extras (decodes that don't match any truth and weren't produced by symmetric) with capture/freq/dt/text/method")
 	dumpShadow := flag.Bool("dump-shadow-rejects", false, "in corpus mode, dump every CRC/unpack-valid candidate the post-decode gate rejected (per-capture, by mode), with NSync/ToneAgree/HardErrors/SNR/Reason/LLRMetric/Method; also surfaces per-(reason, metric) histograms and per-truth would-recover audit")
 	maxHardErrors := flag.Int("max-hard-errors", -1, "override AcceptDecodeOptions.MaxHardErrors (default -1 = use sandbox default of 36)")
+	enableAPCQ := flag.Bool("enable-apcq", false, "enable AP-CQ a priori decoding pass at end of cascade (QEX § 7 AP2 specialised to c28_1=CQ token)")
+	apcqMag := flag.Float64("apcq-mag", 0, "override AP-CQ pinning magnitude (0 = package default ~10)")
+	dumpMissed := flag.Bool("dump-missed", false, "in corpus mode, list every truth not matched by accepted decodes in either mode, with text + capture (used to answer 'which oracle misses are CQ-shaped?')")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -131,9 +134,15 @@ func main() {
 	if *maxHardErrors >= 0 {
 		opts.Gate.MaxHardErrors = *maxHardErrors
 	}
+	if *enableAPCQ {
+		opts.EnableAPCQ = true
+	}
+	if *apcqMag > 0 {
+		opts.APCQMag = *apcqMag
+	}
 
 	if *dirPath != "" {
-		runCorpus(*dirPath, opts, *freqTol, *dtTol, *verbose, *dumpExtras, *dumpShadow)
+		runCorpus(*dirPath, opts, *freqTol, *dtTol, *verbose, *dumpExtras, *dumpShadow, *dumpMissed)
 		return
 	}
 	runSingle(*wavPath, *expectStr, opts, *freqTol, *dtTol)
@@ -192,7 +201,7 @@ type extraDump struct {
 	nearestHz   float64
 }
 
-func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64, verbose, dumpExtras, dumpShadow bool) {
+func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64, verbose, dumpExtras, dumpShadow, dumpMissed bool) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.wav"))
 	if err != nil {
 		log.Fatalf("glob %q: %v", dir, err)
@@ -229,6 +238,10 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		asymShadowByMetric                  = map[string]int{}
 		symWouldRecover, asymWouldRecover   []wouldRecoverEntry
 		symShadowEntries, asymShadowEntries []shadowDumpEntry
+
+		// Missed-truth accumulator (per-truth, per-mode boolean) for
+		// the -dump-missed audit.
+		missedSym, missedAsym []missedTruthEntry
 	)
 
 	for _, w := range matches {
@@ -388,6 +401,16 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 				})
 			}
 		}
+		if dumpMissed {
+			for i, e := range exp {
+				if !sym.matchMap[i] {
+					missedSym = append(missedSym, missedTruthEntry{capture: captureBase, truth: e})
+				}
+				if !asym.matchMap[i] {
+					missedAsym = append(missedAsym, missedTruthEntry{capture: captureBase, truth: e})
+				}
+			}
+		}
 	}
 
 	fmt.Println("=== CORPUS AGGREGATE ===")
@@ -421,21 +444,23 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 	// truths). N=1 = primary; N=2/N=3 are the cascade-recovered set.
 	fmt.Println()
 	fmt.Println("  per-LLR-metric matched truth count:")
-	fmt.Printf("    %-16s  %-6s  %-6s  %-6s  %-7s  %-8s\n", "mode", "N=1", "N=2", "N=3", "N1Norm", "BestOfN")
-	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d\n", "symmetric",
+	fmt.Printf("    %-16s  %-6s  %-6s  %-6s  %-7s  %-8s  %-6s\n", "mode", "N=1", "N=2", "N=3", "N1Norm", "BestOfN", "APCQ")
+	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d\n", "symmetric",
 		symMetricMatched[sandbox.LLRMetricN1],
 		symMetricMatched[sandbox.LLRMetricN2],
 		symMetricMatched[sandbox.LLRMetricN3],
 		symMetricMatched[sandbox.LLRMetricN1Norm],
-		symMetricMatched[sandbox.LLRMetricBestOfN])
-	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d\n", "asymmetric-FT8",
+		symMetricMatched[sandbox.LLRMetricBestOfN],
+		symMetricMatched[sandbox.LLRMetricAPCQ])
+	fmt.Printf("    %-16s  %6d  %6d  %6d  %7d  %8d  %6d\n", "asymmetric-FT8",
 		asymMetricMatched[sandbox.LLRMetricN1],
 		asymMetricMatched[sandbox.LLRMetricN2],
 		asymMetricMatched[sandbox.LLRMetricN3],
 		asymMetricMatched[sandbox.LLRMetricN1Norm],
-		asymMetricMatched[sandbox.LLRMetricBestOfN])
+		asymMetricMatched[sandbox.LLRMetricBestOfN],
+		asymMetricMatched[sandbox.LLRMetricAPCQ])
 
-	for _, metric := range []string{sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN} {
+	for _, metric := range []string{sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ} {
 		if len(symUniqueByMetric[metric]) > 0 || len(asymUniqueByMetric[metric]) > 0 {
 			fmt.Printf("\n  truths recovered via %s (cascade-load-bearing):\n", metric)
 			if len(symUniqueByMetric[metric]) > 0 {
@@ -475,7 +500,7 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 		fmt.Printf("\n  near-truth extras: %d / %d (within ±20 Hz of a truth position)\n",
 			near, len(asymOnlyExtras))
 		fmt.Printf("  extras by LLR metric:")
-		for _, m := range []string{sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN} {
+		for _, m := range []string{sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3, sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ} {
 			if byMetric[m] > 0 {
 				fmt.Printf(" %s=%d", m, byMetric[m])
 			}
@@ -495,6 +520,42 @@ func runCorpus(dir string, opts sandbox.MultiPassOptions, freqTol, dtTol float64
 	if dumpShadow {
 		printShadowDump("symmetric", symShadowEntries)
 		printShadowDump("asymmetric-FT8", asymShadowEntries)
+	}
+	if dumpMissed {
+		printMissedTruths("symmetric", missedSym)
+		printMissedTruths("asymmetric-FT8", missedAsym)
+	}
+}
+
+// missedTruthEntry pairs an unmatched truth with its capture name.
+type missedTruthEntry struct {
+	capture string
+	truth   expected
+}
+
+// printMissedTruths emits the per-mode list of unmatched truths plus a
+// CQ-format count. The CQ count answers "is AP-CQ relevant?": if zero
+// missed truths are CQ-format, AP-CQ cannot help on this corpus
+// regardless of magnitude or implementation detail.
+func printMissedTruths(label string, entries []missedTruthEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	cqCount := 0
+	for _, e := range entries {
+		if strings.HasPrefix(strings.TrimSpace(e.truth.text), "CQ ") {
+			cqCount++
+		}
+	}
+	fmt.Println()
+	fmt.Printf("=== MISSED TRUTHS (%s, n=%d; CQ-format=%d) ===\n", label, len(entries), cqCount)
+	for _, e := range entries {
+		mark := " "
+		if strings.HasPrefix(strings.TrimSpace(e.truth.text), "CQ ") {
+			mark = "*"
+		}
+		fmt.Printf("  %s %-16s  %7.2f Hz  dt=%+.3f  %q\n",
+			mark, e.capture, e.truth.freqHz, e.truth.dtSec, e.truth.text)
 	}
 }
 
@@ -602,7 +663,7 @@ func printShadowAudit(
 
 	metricKeys := []string{
 		sandbox.LLRMetricN1, sandbox.LLRMetricN2, sandbox.LLRMetricN3,
-		sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN,
+		sandbox.LLRMetricN1Norm, sandbox.LLRMetricBestOfN, sandbox.LLRMetricAPCQ,
 	}
 	fmt.Println("  by LLR metric:")
 	fmt.Printf("    %-10s  %6s  %6s\n", "metric", "sym", "asym")

@@ -87,6 +87,33 @@ func DefaultOSDOptions() OSDOptions {
 // exploration order maximises the chance of finding the right
 // codeword within the budget.
 func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64, maxCands int) (cw [LDPCCodewordBits]uint8, ok bool, dmin float64) {
+	return runOSDWithPin(llrs, nil, order, acceptRatio, maxCands)
+}
+
+// runOSDWithPin is the pin-aware variant of runOSD. When pinned is
+// non-nil, OSD's MRB bit-flip search skips any flip pattern that would
+// touch a pinned codeword position. Used by AP-style decoding (AP-CQ
+// today; AP3 / others later) to preserve the priors through OSD —
+// without pinning, OSD-2's 2-bit flip search can land on the
+// AP-pinned positions and undo the hypothesis. nil pinned means
+// vanilla OSD behaviour.
+//
+// pinned is in natural codeword-bit order (0..173). The pin mask is
+// re-projected onto the post-Gauss-elimination MRB ordering inside
+// the function. Pinned positions that end up in LRB (the bottom 83
+// reliability tier) are no-ops for OSD by definition — OSD only
+// flips MRB bits.
+//
+// Order-0 (the un-flipped hard decision) is always evaluated
+// regardless of pinning: the hard decision at pinned positions
+// already encodes the AP hypothesis (the priors push the LLR sign).
+func runOSDWithPin(
+	llrs [LDPCCodewordBits]float64,
+	pinned *[LDPCCodewordBits]bool,
+	order int,
+	acceptRatio float64,
+	maxCands int,
+) (cw [LDPCCodewordBits]uint8, ok bool, dmin float64) {
 	if acceptRatio <= 0 {
 		acceptRatio = osdAcceptDistanceRatio
 	}
@@ -177,6 +204,20 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64, maxC
 			for c := 0; c < LDPCCodewordBits; c++ {
 				Hp[r2][c] ^= Hp[r][c]
 			}
+		}
+	}
+
+	// Project the natural-order pin mask onto the post-Gauss-elim MRB
+	// ordering. pinnedMRB[i] == true means MRB slot i (which carries
+	// permuted codeword bit perm[i] in natural order) is immutable —
+	// the flip-search loops must skip any pattern touching it.
+	// Built only when a non-nil pin mask is supplied so vanilla OSD
+	// pays zero overhead.
+	var pinnedMRB []bool
+	if pinned != nil {
+		pinnedMRB = make([]bool, LDPCInfoBits)
+		for i := 0; i < LDPCInfoBits; i++ {
+			pinnedMRB[i] = pinned[perm[i]]
 		}
 	}
 
@@ -304,6 +345,9 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64, maxC
 			if budgetReached() {
 				break order1
 			}
+			if pinnedMRB != nil && pinnedMRB[i] {
+				continue
+			}
 			copy(infoN, info0)
 			infoN[i] ^= 1
 			for r := 0; r < LDPCParityRows; r++ {
@@ -322,12 +366,18 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64, maxC
 			if budgetReached() {
 				break order2
 			}
+			if pinnedMRB != nil && pinnedMRB[i] {
+				continue
+			}
 			for r := 0; r < LDPCParityRows; r++ {
 				parity1[r] = parity0[r] ^ Acol[i][r]
 			}
 			for j := i - 1; j >= 0; j-- {
 				if budgetReached() {
 					break order2
+				}
+				if pinnedMRB != nil && pinnedMRB[j] {
+					continue
 				}
 				copy(infoN, info0)
 				infoN[i] ^= 1
@@ -349,6 +399,9 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64, maxC
 			if budgetReached() {
 				break order3
 			}
+			if pinnedMRB != nil && pinnedMRB[i] {
+				continue
+			}
 			for r := 0; r < LDPCParityRows; r++ {
 				parity1[r] = parity0[r] ^ Acol[i][r]
 			}
@@ -356,12 +409,18 @@ func runOSD(llrs [LDPCCodewordBits]float64, order int, acceptRatio float64, maxC
 				if budgetReached() {
 					break order3
 				}
+				if pinnedMRB != nil && pinnedMRB[j] {
+					continue
+				}
 				for r := 0; r < LDPCParityRows; r++ {
 					parity2[r] = parity1[r] ^ Acol[j][r]
 				}
 				for k := j - 1; k >= 0; k-- {
 					if budgetReached() {
 						break order3
+					}
+					if pinnedMRB != nil && pinnedMRB[k] {
+						continue
 					}
 					copy(infoN, info0)
 					infoN[i] ^= 1

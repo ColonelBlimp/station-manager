@@ -97,6 +97,27 @@ type BPResult struct {
 // sum-product algorithm. No damping or normalised min-sum — regular
 // BP passes only, per the milestone scope.
 func BPDecode(channelLLRs [LDPCCodewordBits]float64, opts BPOptions) BPResult {
+	return BPDecodeWithPin(channelLLRs, opts, nil)
+}
+
+// BPDecodeWithPin is the pin-aware variant. When pinned is non-nil,
+// the OSD fallback step (when BP fails to converge) is run via
+// runOSDWithPin so its bit-flip search will not touch any codeword
+// position flagged in the mask. Used by AP-style decoding (AP-CQ
+// today; AP3 etc. later) to preserve a priori priors through OSD —
+// without pinning, OSD's MRB-flip search can land on the AP-pinned
+// positions and undo the hypothesis.
+//
+// pinned is in natural codeword-bit order (0..173); nil means no
+// pinning (equivalent to BPDecode). BP iterations themselves are
+// unaffected by the mask — the priors are already baked into
+// channelLLRs by the caller, and BP only ever consults the LLR
+// vector during message passing.
+func BPDecodeWithPin(
+	channelLLRs [LDPCCodewordBits]float64,
+	opts BPOptions,
+	pinned *[LDPCCodewordBits]bool,
+) BPResult {
 	opts = applyBPDefaults(opts)
 
 	llrs := normaliseAndClamp(channelLLRs, opts.TargetMedian, opts.ClampMagnitude)
@@ -213,7 +234,7 @@ func BPDecode(channelLLRs [LDPCCodewordBits]float64, opts BPOptions) BPResult {
 	// LLRs. Per the maxosd convention, this is the "BP + OSD with
 	// channel LLRs" mode (WSJT-X maxosd = 0).
 	if opts.OSD.Enable {
-		osdCW, ok, _ := runOSD(channelLLRs, opts.OSD.Order, opts.OSD.AcceptDistanceRatio, opts.OSD.MaxCandidates)
+		osdCW, ok, _ := runOSDWithPin(channelLLRs, pinned, opts.OSD.Order, opts.OSD.AcceptDistanceRatio, opts.OSD.MaxCandidates)
 		if ok {
 			res.OK = true
 			res.SyndromeClean = true // by construction; OSD outputs are codewords

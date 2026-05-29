@@ -56,14 +56,42 @@ precisely so we don't re-derive state or redo finished work.
 
    Common pattern: the gate cannot reach `111/<23` in sym mode without truth loss because the gate is *genuinely well-calibrated* — the 32 unmatched-in-sym truths don't sit on the wrong side of any gate threshold; they fail the decoder itself. **Closes the operator's Session 103 directive to tighten before AP/OSD-3** — the lever is empirically exhausted, so the next move is necessarily decoder-side.
 
-6. **Files touched:**
-   - `research/sandbox/shadow.go` (new — `ShadowReject` + `MultiPassResult` definitions)
-   - `research/sandbox/multipass.go` (`MultiPassDecodeFull` body; `MultiPassDecode` + `MultiPassDecodeWithHashes` become thin wrappers; eager `ToneAgreementCount` computation; shadow-reject capture at the gate-reject point)
-   - `research/sandbox/shadow_test.go` (new — 3 unit tests)
-   - `research/cmd/sandbox-asym-ab/main.go` (`-dump-shadow-rejects` flag, `-max-hard-errors` flag, `modeResult.shadowRejects` field, runOnce wired to `MultiPassDecodeFull`, audit accumulators, `printShadowAudit` + `printShadowDump` + categoriser + would-recover detector)
-   - `research/sandbox/reports/shadow-rejects-2026-05-29.txt` (new — full audit dump artefact, 297 lines / 36K)
+6. **AP-CQ family + CQ_nnnn cascade — SHIPPED but ZERO MATCHED LIFT on corpus.** Operator pivoted from gate-tightening to AP decoding once the audit closed the gate question. Implementation arc within Session 104:
+   - **Bare AP-CQ (c28_1=2):** generalised `applyAPCQPriors` → `applyAPCQPriorsForC28(llrs, mag, c28Value)`; pins the 33 bits implied by a Type-1-CQ hypothesis (c28_1 = value, p1/p2/r1 = 0, i3 = 1). Added `SoftLLRsAPCQ` cascade pass + `MultiPassOptions.EnableAPCQ` flag (default off) + `LLRMetricAPCQ` attribution constant + `MultiPassOptions.APCQMag` knob.
+   - **CQ_nnnn extension:** `apCQValueOrder = {bare, DX, COTA, POTA}` per the FT8 c28_1 token layout (bare=2; "CQ AAAA" range [1003, 1003+26⁴) with values 69279/46113/274601 for DX/COTA/POTA). Cascade tries each hypothesis on each failed candidate; first BP-OK wins. Also fixed `decodeCQAbcd` to strip trailing 'A' padding so unpacked text matches jt9's display convention ("CQ DXAA" → "CQ DX"). Pinned by new unpack test cases.
+   - **Failure mode caught at first measurement:** with priors at apMag=10/20/30 but no OSD changes, all 10 APCQ-attributed candidates were CRC-passing but had standard-callsign-shape text (e.g. `OW6VHQ HF0AB/P FP54`) — NOT CQ-shaped. Diagnosis: **OSD-2 ranks the AP-pinned bits in MRB but flips them anyway during its 2-bit search, effectively undoing the c28_1 hypothesis.** The flip search is unaware of the priors' load-bearing-ness; it sees high-|LLR| bits as ordinary high-confidence channel decisions.
+   - **Post-decode text guard:** AP-CQ candidates whose `Unpack77.Text` does not start with "CQ" are silently rejected before reaching the gate. Catches the OSD-undone failures cleanly; without this guard, AP-CQ generates standard-shape extras the gate then has to filter.
+7. **OSD MRB pinning machinery — SHIPPED.** New `runOSDWithPin(llrs, pinned *[174]bool, order, ...)` skips any flip pattern that would touch a pinned position. Re-projects the natural-order pin mask onto the post-Gauss-elimination MRB ordering via `pinnedMRB[i] = pinned[perm[i]]`; vanilla OSD (nil pinned) costs zero extra work. New `BPDecodeWithPin(channelLLRs, opts, pinned)` threads the mask through BP's OSD fallback. Legacy `runOSD` and `BPDecode` become thin wrappers passing `nil` pin so every existing caller is untouched. New `apCQPinMask()` returns the `[174]bool` covering the 33 AP-CQ positions; cascade AP-CQ path now calls `BPDecodeWithPin(&pin)`. Three new unit tests (`TestRunOSDWithPin_NilEqualsRunOSD` regression, `_DoesNotFlipPinnedBit` pin guarantee under wrong-sign LLR via MRB-resident setup, `_NonPinnedBitsStillFlippable` no-op pin preserves recovery).
+8. **AP-CQ + OSD pin corpus run — STILL ZERO MATCHED LIFT.** Pin works exactly as designed: the APCQ shadow-reject count dropped 6 → 0 (no more OSD-flipped CRC-lottery garbage), but matched recovery stays at 0. Same 111/23 sym, 115/25 asym as baseline.
 
-7. **Next-session pickup (operator's prior Session 103 direction holds):** the gate-tightening lever is done. The 25 decoder-bound truths are the next attack surface.
+   | Config | sym | asym | APCQ shadow rejects |
+   |---|---|---|---|
+   | Baseline (no AP-CQ) | 111/23 | 115/25 | n/a |
+   | AP-CQ no pin + text guard | 111/23 | 115/25 | 6 (all non-CQ garbage) |
+   | **AP-CQ + OSD pin** | **111/23** | **115/25** | **0** |
+
+   **Diagnosis:** of the 33 sym oracle misses, 9 are CQ-format; of those 9, ~5 are bare "CQ \<call\> \<grid\>" where the c28_1 = 2 hypothesis applies. With c28_1 pinned via priors + OSD pin, BP/OSD still cannot recover the remaining 43 unknown payload bits (c28_2 + g15) + 14 CRC + 83 parity from the corpus channel. The 33 bits of AP leverage isn't enough when channel SNR is well below BP threshold at the unknown positions — matches QEX § 7's expected narrow recovery band for AP1/AP2.
+
+   The natural follow-on is **AP3** (pin both c28_1 AND c28_2 when the caller is in `CallsignHashTable`) — 61 known bits, leaving only 15 g15 + 14 CRC + 83 parity. The OSD pin machinery shipped today carries forward unchanged for AP3; only the priors and pin mask change.
+
+9. **Files touched:**
+   - `research/sandbox/shadow.go` (new — `ShadowReject` + `MultiPassResult` definitions)
+   - `research/sandbox/multipass.go` (`MultiPassDecodeFull`; AP-CQ cascade with multi-hypothesis loop + text guard + pin)
+   - `research/sandbox/shadow_test.go` (new — shadow-reject unit tests)
+   - `research/sandbox/metrics.go` (`applyAPCQPriorsForC28`, `apCQValue*` constants, `apCQValueOrder`, `apCQPinMask`, magnitude-tunable `softLLRsAPCQWithMag`)
+   - `research/sandbox/metrics_test.go` (3 new AP-CQ tests: known-bit pin assertion, channel-add behaviour, noiseless CQ round-trip)
+   - `research/sandbox/osd.go` (`runOSDWithPin`; `pinnedMRB` projection; order-1/2/3 loops gated on pin)
+   - `research/sandbox/osd_test.go` (3 new pin tests)
+   - `research/sandbox/bp.go` (`BPDecodeWithPin`; legacy `BPDecode` is a wrapper)
+   - `research/sandbox/unpack.go` (`decodeCQAbcd` strips trailing 'A' padding)
+   - `research/sandbox/unpack_test.go` (test cases updated for "CQ DX" / "CQ" collapse on AAAA)
+   - `research/cmd/sandbox-asym-ab/main.go` (`-dump-shadow-rejects`, `-max-hard-errors`, `-enable-apcq`, `-apcq-mag`, `-dump-missed` flags; audit block; APCQ metric column)
+   - `research/sandbox/reports/shadow-rejects-2026-05-29.txt`, `apcq-multi-2026-05-29.txt` (audit artefacts)
+   - `research/sandbox/qex-derivation.md` (§ 10 — AP2 derivation + OSD pin findings)
+
+10. **Next-session pickup:** the AP-CQ family + OSD pin work concludes that **priors-only AP is empirically insufficient on this corpus.** Two real options for the 32 remaining sym pipeline-misses:
+    - **AP3** — pin both callsigns via `CallsignHashTable`. Reuses the OSD pin machinery shipped today. The strongest AP form; the only one with realistic odds of moving corpus parity given how noise-bound the unknown payload bits are.
+    - **OSD-3 / finder-side work** — alternative decoder-side levers if AP3 also lands flat. OSD-3 deepens the bit-flip search (~125k candidates at order 3 vs ~4k at order 2); finder-side work could surface the 7 finder-bound truths Session 92-93 identified.
    - **AP decoding** — priorLLR injection from the running `CallsignHashTable`. Decoder-side, independent of cascade depth.
    - **OSD-3** — deeper bit-ordering search after BP convergence (bump `osd.go` from order-2 to order-3).
    - The shadow-reject machinery is reusable: any AP or OSD-3 trial run will surface its own would-recover entries, so the audit pattern works for both.

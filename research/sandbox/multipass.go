@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"math"
+	"strings"
 )
 
 // DecodeRecord is one accepted FT8 decode from the multi-pass pipeline.
@@ -53,6 +54,7 @@ const (
 	LLRMetricN3      = "N3"
 	LLRMetricN1Norm  = "N1Norm"
 	LLRMetricBestOfN = "BestOfN"
+	LLRMetricAPCQ    = "APCQ"
 )
 
 // MultiPassOptions tunes the multi-pass loop. Zero-value falls back
@@ -110,6 +112,27 @@ type MultiPassOptions struct {
 	// operative default. SoftLLRsBestOfN + sanity tests + attribution
 	// plumbing stay in the tree; this flag is the production gate.
 	EnableBestOfN bool
+
+	// EnableAPCQ gates the AP-CQ a priori decoding stage that runs
+	// after every other cascade pass has failed. Implements the QEX
+	// § 7 AP2 specialisation: hypothesise the candidate as a Type-1
+	// CQ message, inject ±APCQMag priors at the 33 codeword positions
+	// pinned by that hypothesis (c28_1=CQ, p1=p2=r1=0, i3=1), and
+	// re-run BP+OSD on the augmented LLR vector. Only fires when
+	// standard cascade has failed — the AP path can only help, never
+	// substitute for a working channel decode.
+	//
+	// Default false because AP-CQ is plausibly a CRC-lottery source
+	// when the candidate isn't actually a CQ message — the 33-bit
+	// pin constrains BP to a small subspace, raising the random-
+	// codeword-passes-CRC odds. Promote after measurement.
+	EnableAPCQ bool
+
+	// APCQMag overrides the AP-CQ pinning magnitude (default 0 = use
+	// the package default apCQMagnitude). Larger values dominate the
+	// channel more aggressively; smaller values let BP override more
+	// easily when the candidate is not actually a CQ message.
+	APCQMag float64
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -277,12 +300,46 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 						} else if opts.EnableBestOfN {
 							llrs5 := SoftLLRsBestOfN(grid)
 							br5 := BPDecode(llrs5, bpOpts)
-							if !br5.OK {
+							if br5.OK {
+								br = br5
+								llrs = llrs5
+								llrMetric = LLRMetricBestOfN
+							} else if opts.EnableAPCQ {
+								ok := false
+								for _, c28v := range apCQValueOrder {
+									llrs6 := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v)
+									br6 := BPDecode(llrs6, bpOpts)
+									if br6.OK {
+										br = br6
+										llrs = llrs6
+										llrMetric = LLRMetricAPCQ
+										ok = true
+										break
+									}
+								}
+								if !ok {
+									continue
+								}
+							} else {
 								continue
 							}
-							br = br5
-							llrs = llrs5
-							llrMetric = LLRMetricBestOfN
+						} else if opts.EnableAPCQ {
+							ok := false
+							pin := apCQPinMask()
+							for _, c28v := range apCQValueOrder {
+								llrs6 := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v)
+								br6 := BPDecodeWithPin(llrs6, bpOpts, &pin)
+								if br6.OK {
+									br = br6
+									llrs = llrs6
+									llrMetric = LLRMetricAPCQ
+									ok = true
+									break
+								}
+							}
+							if !ok {
+								continue
+							}
 						} else {
 							continue
 						}
@@ -293,6 +350,17 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
 			ur := Unpack77WithHashes(payload, ht)
 			if !ur.OK {
+				continue
+			}
+			// AP-CQ correctness guard: OSD-2 can flip MRB bits even when
+			// AP priors pin them strongly (the flip search is unaware of
+			// the priors). If the recovered codeword's c28_1 was flipped
+			// out of the CQ hypothesis, the unpacked text won't start
+			// with "CQ" — reject and let the next candidate take over.
+			// Without this guard, AP-CQ produces standard-callsign-shape
+			// CRC-lottery extras that the gate then has to filter; the
+			// guard catches them at the source.
+			if llrMetric == LLRMetricAPCQ && !strings.HasPrefix(ur.Text, "CQ") {
 				continue
 			}
 			// Post-decode quality gate. Reject CRC-passing codewords

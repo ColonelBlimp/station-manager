@@ -608,3 +608,130 @@ func buildNoiselessGrid(trueTones [58]int) *SymbolGrid {
 	}
 	return g
 }
+
+// TestApplyAPCQPriors_KnownBitsAndValues pins the exact bit positions
+// the AP-CQ hypothesis touches and the LLR magnitude/sign it injects.
+// Running on an all-zero LLR input means the assertion targets only
+// the prior contribution (no channel data to disentangle).
+//
+// The 33 known bits are: c28_1 (0..27) = CQ token value 2; p1 (28),
+// p2 (57), r1 (58) = 0; i3 (74..76) = 1. All bit positions traced to
+// PackType1 + PackCallsign28; magnitude is the apCQMagnitude constant.
+func TestApplyAPCQPriors_KnownBitsAndValues(t *testing.T) {
+	var llrs [FT8CodewordBits]float64
+	applyAPCQPriors(&llrs, apCQMagnitude)
+
+	// c28_1 = 2 in 28 bits MSB-first → all zeros except bit 26 = 1.
+	for i := 0; i < 28; i++ {
+		want := +apCQMagnitude
+		if i == 26 {
+			want = -apCQMagnitude
+		}
+		if llrs[i] != want {
+			t.Errorf("llrs[%d] = %+f; want %+f (c28_1=CQ pin)", i, llrs[i], want)
+		}
+	}
+	// p1 / p2 / r1 = 0 → +apCQMagnitude
+	for _, pos := range []int{28, 57, 58} {
+		if llrs[pos] != +apCQMagnitude {
+			t.Errorf("llrs[%d] = %+f; want %+f (zero-bit pin)", pos, llrs[pos], +apCQMagnitude)
+		}
+	}
+	// i3 = 1 in 3 bits → llrs[74,75] = +mag, llrs[76] = -mag
+	if llrs[74] != +apCQMagnitude {
+		t.Errorf("llrs[74] = %+f; want %+f (i3 MSB=0)", llrs[74], +apCQMagnitude)
+	}
+	if llrs[75] != +apCQMagnitude {
+		t.Errorf("llrs[75] = %+f; want %+f (i3 middle=0)", llrs[75], +apCQMagnitude)
+	}
+	if llrs[76] != -apCQMagnitude {
+		t.Errorf("llrs[76] = %+f; want %+f (i3 LSB=1)", llrs[76], -apCQMagnitude)
+	}
+	// Unknown positions: c28_2 (29..56), g15 (59..73), CRC (77..90),
+	// parity (91..173) must remain untouched (zero in this all-zero input).
+	for i := 29; i < 57; i++ {
+		if llrs[i] != 0 {
+			t.Errorf("llrs[%d] = %+f; want 0 (c28_2 must not be pinned)", i, llrs[i])
+		}
+	}
+	for i := 59; i < 74; i++ {
+		if llrs[i] != 0 {
+			t.Errorf("llrs[%d] = %+f; want 0 (g15 must not be pinned)", i, llrs[i])
+		}
+	}
+	for i := 77; i < FT8CodewordBits; i++ {
+		if llrs[i] != 0 {
+			t.Errorf("llrs[%d] = %+f; want 0 (CRC/parity must not be pinned)", i, llrs[i])
+		}
+	}
+}
+
+// TestApplyAPCQPriors_AddsToChannel verifies the priors ADD to (not
+// REPLACE) existing channel LLRs. A pre-loaded vector of +1.0 at every
+// position should come out as +1.0+prior at known positions and +1.0
+// unchanged at unknown positions.
+func TestApplyAPCQPriors_AddsToChannel(t *testing.T) {
+	var llrs [FT8CodewordBits]float64
+	for i := range llrs {
+		llrs[i] = +1.0
+	}
+	applyAPCQPriors(&llrs, apCQMagnitude)
+
+	// Spot-check a few known positions: bit 0 (c28_1 MSB=0) should be
+	// 1 + 10 = 11; bit 26 (c28_1 bit-1=1) should be 1 - 10 = -9.
+	if llrs[0] != 1.0+apCQMagnitude {
+		t.Errorf("llrs[0] = %+f; want %+f (channel + prior)", llrs[0], 1.0+apCQMagnitude)
+	}
+	if llrs[26] != 1.0-apCQMagnitude {
+		t.Errorf("llrs[26] = %+f; want %+f (channel - prior on bit=1)", llrs[26], 1.0-apCQMagnitude)
+	}
+	if llrs[76] != 1.0-apCQMagnitude {
+		t.Errorf("llrs[76] = %+f; want %+f (i3 LSB pin)", llrs[76], 1.0-apCQMagnitude)
+	}
+	// Unknown position: should stay at +1.0.
+	if llrs[40] != 1.0 {
+		t.Errorf("llrs[40] = %+f; want %+f (c28_2 unchanged)", llrs[40], 1.0)
+	}
+}
+
+// TestSoftLLRsAPCQ_NoiselessCQDecodesViaBP synthesises a clean
+// "CQ K1JT FN20" symbol grid and pushes its AP-CQ LLR vector through
+// BP. Since the channel is noiseless, channel LLRs already point to
+// the correct codeword; AP-CQ priors reinforce 33 of them and BP
+// converges in one or two iterations. The unpacked text must surface
+// the truth.
+//
+// This test is the smoke check: AP-CQ on a clean CQ signal must not
+// regress vs SoftLLRs alone.
+func TestSoftLLRsAPCQ_NoiselessCQDecodesViaBP(t *testing.T) {
+	payload, err := PackType1("CQ", "K1JT", "FN20")
+	if err != nil {
+		t.Fatalf("PackType1: %v", err)
+	}
+	info := PayloadToInfo91(payload)
+	cw := EncodeLDPC(info)
+	tones := CodewordToTones(cw)
+	// Tones are [79]int; SymbolGrid takes the 58 data symbols. Build a
+	// noiseless grid from the data positions in tones[].
+	var dataTones [58]int
+	for d := 0; d < 58; d++ {
+		dataTones[d] = tones[dataSymbolIndices[d]]
+	}
+	grid := buildNoiselessGrid(dataTones)
+
+	llrs := SoftLLRsAPCQ(grid)
+	br := BPDecode(llrs, DefaultBPOptions())
+	if !br.OK {
+		t.Fatalf("BPDecode on AP-CQ clean fixture: not OK (method=%s, iters=%d)", br.DecodeMethod, br.Iterations)
+	}
+
+	var pay [LDPCPayloadBits]uint8
+	copy(pay[:], br.Message91[:LDPCPayloadBits])
+	ur := Unpack77WithHashes(pay, nil)
+	if !ur.OK {
+		t.Fatalf("Unpack77 on AP-CQ decoded payload: not OK")
+	}
+	if ur.Text != "CQ K1JT FN20" {
+		t.Errorf("AP-CQ noiseless decode: text=%q, want %q", ur.Text, "CQ K1JT FN20")
+	}
+}

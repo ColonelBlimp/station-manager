@@ -237,14 +237,28 @@ func decodeCallsignToken(n uint32) (string, bool) {
 }
 
 // decodeCQAbcd produces "CQ aaaa" for n in [0, 26⁴), with the four
-// letters MSB-first (a, b, c, d ↦ base-26 digits).
+// letters MSB-first (a, b, c, d ↦ base-26 digits). Trailing 'A'
+// characters are stripped from the displayed modifier to match the
+// FT8 convention used by jt9 and other oracles: short modifiers
+// like "DX" or "POTA " are stored with right-side 'A' padding (A=0
+// in the base-26 encoding) and rendered without the padding. So
+// n=68276 stores "DXAA" and renders as "CQ DX"; n=273598 stores
+// "POTA" and renders as "CQ POTA".
+//
+// Edge case: a literal "CQ AAAA" payload (n=0) would render as the
+// empty modifier "CQ" — operationally indistinguishable from the
+// bare-CQ token (c28_1=2). Treated as "CQ" for display consistency.
 func decodeCQAbcd(n uint32) string {
 	var c [4]byte
 	for i := 3; i >= 0; i-- {
 		c[i] = byte('A' + n%26)
 		n /= 26
 	}
-	return "CQ " + string(c[:])
+	modifier := strings.TrimRight(string(c[:]), "A")
+	if modifier == "" {
+		return "CQ"
+	}
+	return "CQ " + modifier
 }
 
 // decodeStandardCall inverts the mixed-radix standard-callsign

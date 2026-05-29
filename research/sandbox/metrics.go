@@ -646,3 +646,185 @@ func fillSymbolLLRsN1(grid *SymbolGrid, llrs *[FT8CodewordBits]float64, d int) {
 		llrs[cbi] = max0 - max1
 	}
 }
+
+// ── A priori (AP) decoding — QEX § 7 specialisation ─────────────────
+//
+// The QEX paper § 7 ("A Priori Information") prescribes injecting
+// known-bit priors into the LLR vector before BP. The paper defines
+// three families (AP1, AP2, AP3) that vary by how much of the 77-bit
+// payload is hypothesised as known. AP-CQ is the specialisation of
+// AP2 where the c28_1 callsign-1 slot is hypothesised to carry the
+// special "CQ" token — the format every fixture with truth text
+// starting with "CQ " conforms to.
+//
+// Knowable bits under the AP-CQ hypothesis (33 of 174 codeword bits,
+// all in the systematic-payload prefix; bit positions traced to the
+// PackType1 layout documented in pack.go and QEX § 4):
+//
+//	bits  0..27  c28_1 = 2  (PackCallsign28("CQ") = 2; MSB-first in 28 bits)
+//	bit  28      p1    = 0  (rover-suffix flag for call 1; CQ is not a rover)
+//	bit  57      p2    = 0  (rover-suffix flag for call 2)
+//	bit  58      r1    = 0  (roger flag; CQ messages do not carry a roger)
+//	bits 74..76  i3    = 1  (Type 1; MSB-first in 3 bits)
+//
+// Bits 29..56 (c28_2) and 59..73 (g15) carry the unknown callsign-2 and
+// grid; CRC14 (77..90) and parity (91..173) depend on those unknown
+// bits and so are NOT pinned. The 43 unknown payload bits + 14 CRC +
+// 83 parity remain entirely channel-driven; BP recovers them given
+// the 33-bit AP anchor.
+//
+// Provenance: bit positions cross-checked against PackType1 (pack.go,
+// derived from QEX § 4); CQ token value 2 read from PackCallsign28
+// (pack.go, also QEX § 4). WSJT-X source NOT consulted, per
+// feedback_ft8_spec_implementation_oracle_policy.
+
+// apCQMagnitude is the pinning magnitude added to channel LLRs at the
+// 33 AP-CQ-known positions. Chosen so it dominates typical channel
+// LLR magnitudes (|chann|≤5 on the working fixtures) while staying
+// inside BP's tanh/atanh numerical sweet spot. ±10 is well below the
+// regions where BP's message passing saturates; ±30+ starts producing
+// NaNs in tight-coupling runs.
+const apCQMagnitude = 10.0
+
+// SoftLLRsAPCQ builds an LLR vector for the AP-CQ hypothesis: the
+// candidate decodes to a Type-1 "CQ <call> <grid>" message. The
+// vector starts from the N=1 channel LLRs and ADDs a ±apCQMagnitude
+// prior at each of the 33 codeword positions pinned by the
+// hypothesis. Adding (rather than replacing) keeps the channel
+// information active: strong channel disagreement at a known
+// position can still flip the bit if the channel LLR overpowers the
+// prior, so a wrongly-hypothesised AP-CQ on a non-CQ signal degrades
+// gracefully to a CRC failure rather than locking BP into a wrong
+// codeword.
+//
+// Output: same shape as SoftLLRs (positive favours bit 0).
+//
+// Consumed by the multipass cascade as the last (opt-in) pass; gated
+// behind MultiPassOptions.EnableAPCQ to avoid CRC-lottery extras
+// when the AP hypothesis is wrong.
+func SoftLLRsAPCQ(grid *SymbolGrid) [FT8CodewordBits]float64 {
+	return softLLRsAPCQWithMag(grid, 0, apCQValueBare)
+}
+
+// softLLRsAPCQWithMag is the magnitude-tunable form. mag<=0 falls back
+// to apCQMagnitude; c28Value selects the c28_1 hypothesis (apCQValueBare,
+// apCQValueDX, apCQValuePOTA, apCQValueCOTA, or any caller-supplied
+// value in the [0, ntokens) special-token range). Used by the cascade
+// so the operator can sweep both pinning strength and CQ-form
+// hypothesis via MultiPassOptions.APCQMag without re-deriving the bit
+// layout.
+func softLLRsAPCQWithMag(grid *SymbolGrid, mag float64, c28Value uint32) [FT8CodewordBits]float64 {
+	if mag <= 0 {
+		mag = apCQMagnitude
+	}
+	llrs := SoftLLRs(grid)
+	applyAPCQPriorsForC28(&llrs, mag, c28Value)
+	return llrs
+}
+
+// applyAPCQPriorsForC28 mutates llrs at the 33 codeword positions
+// pinned by an AP-CQ-family hypothesis. mag is the magnitude
+// added/subtracted from the channel LLR at each known position
+// (positive for bit 0, negative for bit 1, per the LDPC sign
+// convention used throughout the sandbox). c28Value selects which
+// specific c28_1 hypothesis to pin:
+//
+//	apCQValueBare    = 2      → "CQ" alone (bare CQ)
+//	apCQValueDX      = 69279  → "CQ DX  " (DXAA padding)
+//	apCQValuePOTA    = 274601 → "CQ POTA"
+//	apCQValueCOTA    = 46113  → "CQ COTA"
+//	any [0, ntokens) → caller-supplied c28_1 hypothesis
+//
+// The remaining 5 known bits (p1, p2, r1, i3) stay pinned to the
+// Type-1-CQ shape regardless of c28Value — every supported variant
+// is still a Type-1 message with no rover/roger flags.
+//
+// Exposed (lowercase, package-internal) so tests can drive
+// magnitude-zero / magnitude-large variants without re-deriving the
+// known-bit layout.
+func applyAPCQPriorsForC28(llrs *[FT8CodewordBits]float64, mag float64, c28Value uint32) {
+	// Bits 0..27 = c28_1 = c28Value, MSB-first in 28 bits.
+	const cqBits = 28
+	for i := 0; i < cqBits; i++ {
+		bit := uint8((c28Value >> (cqBits - 1 - i)) & 1)
+		llrs[i] += signedPrior(bit, mag)
+	}
+	// bit 28 = p1 = 0 (CQ is not a rover; the "/" suffix never
+	// applies to the bare token nor to "CQ AAAA" forms).
+	llrs[28] += signedPrior(0, mag)
+	// bit 57 = p2 = 0, bit 58 = r1 = 0 (Type-1 CQ has no rover-suffix
+	// for the called callsign and no roger flag).
+	llrs[57] += signedPrior(0, mag)
+	llrs[58] += signedPrior(0, mag)
+	// bits 74..76 = i3 = 1, MSB-first in 3 bits → 0, 0, 1.
+	const i3Value uint32 = 1
+	const i3Bits = 3
+	for i := 0; i < i3Bits; i++ {
+		bit := uint8((i3Value >> (i3Bits - 1 - i)) & 1)
+		llrs[74+i] += signedPrior(bit, mag)
+	}
+}
+
+// applyAPCQPriors retains the original entry point (c28_1=apCQValueBare)
+// for tests that asserted the historical AP-CQ shape pre-Session-104
+// CQ_nnnn extension.
+func applyAPCQPriors(llrs *[FT8CodewordBits]float64, mag float64) {
+	applyAPCQPriorsForC28(llrs, mag, apCQValueBare)
+}
+
+// c28_1 hypothesis values for AP-CQ-family cascade. Derived from the
+// FT8 token-range layout in unpack.go: bare CQ is value 2; "CQ AAAA"
+// forms occupy [1003, 1003+26⁴) under the formula
+// 1003 + 26³·c[0] + 26²·c[1] + 26·c[2] + c[3], where c[k] = ord(ch)-'A'
+// and the modifier is right-padded with 'A' (=0) for shorter
+// modifiers like "DX". Values cross-checked by running them through
+// Unpack77's decodeCQAbcd in a probe (one-off shell run, not in
+// tree).
+const (
+	apCQValueBare uint32 = 2
+	apCQValueDX   uint32 = 69279  // "CQ DX  " padded to "DXAA"
+	apCQValueCOTA uint32 = 46113  // "CQ COTA"
+	apCQValuePOTA uint32 = 274601 // "CQ POTA"
+)
+
+// apCQValueOrder is the cascade try-order for the AP-CQ-family
+// hypotheses. Bare CQ is most common (~60% of CQ-format truths in
+// the working corpus); DX next; POTA / COTA tail. The cascade tries
+// each in turn on a given candidate; first BP-OK wins.
+var apCQValueOrder = [...]uint32{
+	apCQValueBare, apCQValueDX, apCQValueCOTA, apCQValuePOTA,
+}
+
+// apCQPinMask returns the [LDPCCodewordBits]bool mask of codeword
+// positions pinned by any AP-CQ-family hypothesis. The same 33
+// positions are pinned regardless of the specific c28_1 value
+// (bare CQ vs CQ DX vs CQ POTA etc.) — only the *values* at those
+// positions differ across hypotheses, not the positions themselves.
+//
+// Passed to BPDecodeWithPin so OSD's MRB bit-flip search will not
+// undo the AP priors during its CRC-search. Without the pin,
+// OSD-2's 2-bit flip can land on the AP-pinned positions and
+// produce non-CQ-shape codewords that pass CRC but disagree with
+// the hypothesis (the Session 104 failure mode).
+func apCQPinMask() [FT8CodewordBits]bool {
+	var m [FT8CodewordBits]bool
+	for i := 0; i < 28; i++ { // c28_1 (28 bits)
+		m[i] = true
+	}
+	m[28] = true // p1 = 0
+	m[57] = true // p2 = 0
+	m[58] = true // r1 = 0
+	m[74] = true // i3 MSB
+	m[75] = true // i3 middle
+	m[76] = true // i3 LSB
+	return m
+}
+
+// signedPrior returns +mag when bit==0, −mag when bit==1, following
+// the LDPC sign convention (positive LLR favours bit 0).
+func signedPrior(bit uint8, mag float64) float64 {
+	if bit == 0 {
+		return +mag
+	}
+	return -mag
+}

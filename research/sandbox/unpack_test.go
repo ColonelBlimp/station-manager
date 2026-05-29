@@ -17,7 +17,17 @@ func TestUnpackCallsign28_Tokens(t *testing.T) {
 		{3, "CQ 000", true},
 		{12, "CQ 009", true},
 		{1002, "CQ 999", true},
-		{1003, "CQ AAAA", true},
+		// n=1003 stores "AAAA" (4-A padding); trailing 'A' strip per
+		// the jt9-display convention collapses the empty modifier back
+		// to bare "CQ". This makes n=1003 operationally equivalent to
+		// the bare-CQ token (n=2) at the display layer.
+		{1003, "CQ", true},
+		// Short modifiers are right-padded with 'A' (=0) and stripped
+		// on display: "CQ DX" stores "DXAA" → c28_1 = 1003 + 26²·3 + 26·23.
+		// "CQ COTA" stores "COTA" (no padding needed) → trailing 'A'
+		// strip leaves "COT" — checks that strip operates on the
+		// modifier suffix only.
+		{1003 + 3*26*26*26 + 23*26*26 + 0*26 + 0, "CQ DX", true},
 		{1003 + 26*26*26*26 - 1, "CQ ZZZZ", true},
 	}
 	for _, tc := range cases {

@@ -710,3 +710,205 @@ N1Norm-as-source, that's a separate change with its own derivation
 - **Weighted combination** instead of max-selection — rejected
   upstream: the scales are too different and weights would have
   to be tuned empirically with no theoretical basis.
+
+## 10. SoftLLRsAPCQ — a priori decoding for the CQ family (QEX § 7 AP2)
+
+### 10.1 What QEX § 7 prescribes
+
+The paper defines three families of a priori (AP) information that
+can be exploited when channel LLRs are too weak for BP alone to
+converge:
+
+- **AP1** — hypothesise i3 (the 3-bit message-type field) is known
+  in advance. Pins 3 of the 174 codeword bits.
+- **AP2** — hypothesise the first callsign field (c28_1) carries a
+  specific token, plus i3 and the auxiliary single-bit flags
+  (p1, p2, r1) consistent with that hypothesis. The c28_1 token
+  range carries DE / QRZ / CQ / "CQ nnn" / "CQ aaaa" — pinning
+  any specific token candidate fixes 28 of 174 codeword bits
+  (plus the auxiliaries: 33 total).
+- **AP3** — hypothesise both callsign fields (c28_1 and c28_2) are
+  known, e.g., a contest exchange between two pre-identified
+  stations. Pins ~61 of 174 codeword bits. The strongest AP form
+  but requires both call-side identities to be known a priori.
+
+Each form is implemented as an LLR-injection: the prior is added
+to the channel LLR at the known positions. BP iterates the
+augmented LLR vector and recovers the unknown bits.
+
+### 10.2 AP-CQ as the AP2 specialisation
+
+`SoftLLRsAPCQ` implements AP2 with the c28_1 hypothesis being a
+member of the **CQ family** of token values:
+
+| Variant   | c28_1 value | Form encoded                  |
+|-----------|-------------|-------------------------------|
+| Bare CQ   | 2           | "CQ"                          |
+| CQ DX     | 69279       | "CQ DXAA" (DX, A-padded)      |
+| CQ COTA   | 46113       | "CQ COTA"                     |
+| CQ POTA   | 274601      | "CQ POTA"                     |
+
+The values derive from the FT8 token-range layout documented in
+`unpack.go`:
+
+- Values [0, 3) are the bare tokens "DE" / "QRZ" / "CQ".
+- Values [3, 1003) carry "CQ nnn" (3-digit numeric).
+- Values [1003, 1003 + 26⁴) carry "CQ aaaa" (4-letter), MSB-first
+  base-26 encoded. Short modifiers (1-3 letters) are right-padded
+  with 'A' (=0) and rendered without padding by jt9-style
+  decoders. The sandbox's `decodeCQAbcd` matches this convention
+  via right-trim of trailing 'A' chars.
+
+For each variant, AP-CQ pins 33 of 174 codeword bits:
+
+- bits 0..27: c28_1 = variant value (28 bits)
+- bit 28: p1 = 0 (CQ-form messages don't carry rover-suffix flags)
+- bit 57: p2 = 0
+- bit 58: r1 = 0
+- bits 74..76: i3 = 1 (Type 1)
+
+The remaining 141 bits (43 unknown payload + 14 CRC + 83 parity)
+carry no prior contribution — the decoder must recover them from
+the channel alone.
+
+### 10.3 Prior magnitude and mixing
+
+Priors are **added** (not replaced) to the N=1 channel LLRs at the
+33 known positions. With `apCQMagnitude = 10` and typical channel
+`|LLR| ≤ 5` on the working fixtures, the prior dominates the
+channel by ~2:1 at each pinned bit but doesn't completely override
+it. Strong channel disagreement at a known position can still
+flip the bit — that's the graceful-degradation property: if the
+candidate isn't actually a CQ, BP fails (CRC mismatch) rather
+than locking into a wrong codeword.
+
+Magnitude is configurable via `MultiPassOptions.APCQMag` to allow
+operator-driven sweeps without re-deriving the bit layout.
+
+### 10.4 OSD mask gap (caught Session 104, CLOSED same session)
+
+The priors flow into both BP iterations (via `channelLLRs[v] + Σ
+extrinsic`) and OSD (the same `channelLLRs` argument is passed to
+`runOSD`). With `|prior|=10` dominating typical channel `|LLR|<5`,
+the 33 AP-pinned bits land at the top of OSD's reliability ranking
+and are placed in the MRB. However:
+
+**OSD-2 flips up to 2 MRB bits during its bit-flip search to find
+a CRC-passing codeword.** Before Session 104's pin fix, OSD was
+unaware that some MRB bits were load-bearing AP pins, not just
+high-confidence channel decisions. A 1- or 2-bit flip that landed
+on AP-pinned positions effectively undid the c28_1 hypothesis,
+producing a CRC-passing codeword in the standard-callsign range
+(c28_1 > 6_257_896) — not a CQ at all.
+
+Empirical baseline before the pin landed: with 4 hypotheses (bare
+CQ, DX, COTA, POTA) tried per failed candidate, AP-CQ produced 10
+CRC-passing decodes; **all 10 had non-CQ text** like `OW6VHQ
+HF0AB/P FP54` — OSD-2 had flipped its way out of the AP constraint
+into a random standard-callsign codeword.
+
+Two mitigations shipped:
+
+1. **Post-decode text guard** in `multipass.go`: after `Unpack77`
+   succeeds via the AP-CQ path, verify `Text` starts with "CQ";
+   reject and continue otherwise. Catches the OSD-flipped failures
+   cleanly; without the guard AP-CQ would have leaked standard-shape
+   CRC-lottery extras the gate would then have to filter.
+2. **OSD MRB pinning** in `osd.go` / `bp.go`: new `runOSDWithPin`
+   takes an immutable `[174]bool` mask and skips any flip pattern
+   that touches a pinned position. Re-projects natural-order pin
+   onto post-Gauss-elimination MRB ordering via
+   `pinnedMRB[i] = pinned[perm[i]]`. New `BPDecodeWithPin` threads
+   the mask through BP's OSD fallback. Legacy `runOSD` /
+   `BPDecode` are thin wrappers passing `nil` pin — zero overhead
+   for non-AP callers. `apCQPinMask()` in `metrics.go` returns the
+   33-position mask; the AP-CQ cascade path calls
+   `BPDecodeWithPin(&pin)`.
+
+After the pin landed: APCQ shadow-reject count dropped 10 → 0
+(no more OSD-flipped CRC-lottery garbage in the audit). The pin
+correctness is exercised by three unit tests
+(`TestRunOSDWithPin_NilEqualsRunOSD`,
+`_DoesNotFlipPinnedBit` with MRB-resident wrong-sign LLR setup,
+`_NonPinnedBitsStillFlippable` no-op pin regression).
+
+### 10.5 Why corpus impact is zero (revised after OSD pin)
+
+Even with OSD pin enabled (no more garbage extras leaking),
+AP-CQ recovered **0** of the 9 sym CQ-format misses on the working
+corpus. Of the 9: 4 are "CQ <modifier>" forms (DX×2, COTA,
+unknown short call), 5 are bare "CQ <call> <grid>". With c28_1
+pinned to each hypothesis in turn and OSD's flip search
+suppressed on the 33 pinned positions, neither BP nor OSD-2
+returned a CRC-valid codeword for any of these candidates.
+
+Two mechanisms explain the null result:
+
+1. **Finder-bound misses** — Session 92-93 finder-recall
+   measurements identified ~7 of 33 sym misses as candidate-
+   scanner-bound (the signal never makes it to the LLR /
+   decoder stage). AP-CQ can only help signals that surface as
+   candidates; finder-bound truths are out of reach for any AP
+   mechanism.
+
+2. **Channel-noise-bound at the 43 unknown payload bits.** With
+   c28_1 (28 bits) + p1/p2/r1/i3 (5 bits) pinned, BP/OSD must
+   still recover 43 unknown payload bits (c28_2 + g15) + 14 CRC
+   + 83 parity. On the working corpus the channel LLRs at the
+   c28_2 / g15 positions are weak enough that 33 bits of prior
+   leverage isn't sufficient — BP/OSD with pin returns
+   `ok=false` (the pin correctly blocks the OSD-flipped garbage,
+   but no legitimate CQ codeword is reachable either).
+
+   This matches QEX § 7's expected behaviour for AP1/AP2: AP
+   helps where channel SNR is just below BP threshold (the
+   typical "marginal recovery" zone). On a corpus where misses
+   sit *well* below threshold, AP2's narrow recovery band offers
+   no win.
+
+The Session 104 conclusion: **the priors-only AP-CQ approach is
+empirically insufficient on this corpus, even with correct OSD
+plumbing.** The OSD pin machinery itself is correct and
+load-bearing infrastructure for any future AP work — but the
+parity wall on this corpus needs more leverage than 33 bits can
+provide.
+
+### 10.6 AP3 as the natural follow-on
+
+The strongest QEX § 7 AP form is **AP3**: pin both c28_1 AND
+c28_2 from a known-caller hash table (`CallsignHashTable`). When
+the caller has been seen in a prior decode, c28_2 = 28 known
+bits; combined with the AP2 anchors (28 + 5 = 33), AP3 pins **61
+of 174 codeword bits**, leaving only 15 g15 + 14 CRC + 83 parity
+to recover. That's a doubling of leverage at the systematic-bits
+layer.
+
+The Session 104 OSD pin machinery (`runOSDWithPin`,
+`BPDecodeWithPin`, the `[174]bool` mask format) carries forward
+unchanged for AP3 — only the priors and pin mask change. AP3's
+implementation work is:
+
+1. Build an "AP3 hypothesis enumerator" — given the running
+   `CallsignHashTable`, generate (c28_1 ∈ {CQ family, callsigns
+   from hash}, c28_2 ∈ {callsigns from hash}) candidate pairs
+   for each failed candidate.
+2. For each pair, set priors at the 56 c28-bits + 5 auxiliaries
+   and call `BPDecodeWithPin` with the 61-bit pin mask.
+3. Text guard: verify the unpacked text matches the hypothesised
+   caller / callee shape.
+
+AP3 is parked for a future session — the OSD pin machinery
+shipped today is the prerequisite that landed.
+
+### 10.7 What this section does NOT cover
+
+- **AP3 (full-call hash table)** — § 10.6 describes it but
+  implementation is parked.
+- **AP1 (i3-only)** — pins 3 bits. Far less leverage than AP-CQ;
+  not implemented because the 33-bit AP-CQ already produced zero
+  corpus impact, so the 3-bit version would too.
+- **OSD-3** — the deeper bit-flip search (order 3 vs 2) is an
+  alternative decoder-side lever to AP3, exploring ~125k
+  candidates instead of ~4k. Compatible with the pin machinery
+  shipped today (order-3 loops gate on `pinnedMRB[k]` already).
+  Not measured against the corpus this session.
