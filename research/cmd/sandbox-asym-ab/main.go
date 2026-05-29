@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -121,6 +122,7 @@ func main() {
 	ap3Mag := flag.Float64("ap3-mag", 0, "override AP3 pinning magnitude (0 = package default ~10)")
 	ap3MaxK := flag.Int("ap3-max-k", 0, "AP3 hash-callsign cap per side (0 = default 8). Worst-case BP runs per failed candidate = (1+K)×K.")
 	dumpMissed := flag.Bool("dump-missed", false, "in corpus mode, list every truth not matched by accepted decodes in either mode, with text + capture (used to answer 'which oracle misses are CQ-shaped?')")
+	strict := flag.Bool("strict", false, "strict-parity mode (clean-room report § Behavioral Findings): forces all experimental decode-recovery features off (AP-CQ, AP3, BestOfN). Scoring is against the sequential jt9-default truth manifests; deep-mode recoveries are intentionally not admitted. Calibration knobs (sync gate, candidate-search breadth) keep their defaults at this scaffold stage.")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -153,11 +155,45 @@ func main() {
 		opts.AP3MaxCallsigns = *ap3MaxK
 	}
 
+	if *strict {
+		// Strict mode forces all experimental decode-recovery features
+		// off regardless of how the per-feature flags were set. This is
+		// the discipline: -strict cannot be subverted by also passing
+		// -enable-apcq etc. Notify when an override is taking effect so
+		// the user isn't surprised.
+		if opts.EnableAPCQ {
+			fmt.Fprintln(os.Stderr, "note: -strict overrides -enable-apcq (AP-CQ disabled)")
+		}
+		if opts.EnableAP3 {
+			fmt.Fprintln(os.Stderr, "note: -strict overrides -enable-ap3 (AP3 disabled)")
+		}
+		if opts.EnableBestOfN {
+			fmt.Fprintln(os.Stderr, "note: -strict overrides EnableBestOfN (BestOfN disabled)")
+		}
+		opts.EnableAPCQ = false
+		opts.EnableAP3 = false
+		opts.EnableBestOfN = false
+		printStrictBanner()
+	}
+
 	if *dirPath != "" {
 		runCorpus(*dirPath, opts, *freqTol, *dtTol, *verbose, *dumpExtras, *dumpShadow, *dumpMissed)
 		return
 	}
 	runSingle(*wavPath, *expectStr, opts, *freqTol, *dtTol)
+}
+
+// printStrictBanner emits the strict-mode header explaining what the
+// scaffold currently enforces. Kept terse but explicit so the
+// invariant is visible in every strict-mode run's transcript — future
+// readers diffing strict-mode scoreboards across commits can see at a
+// glance which knobs were in scope.
+func printStrictBanner() {
+	fmt.Println("=== STRICT-PARITY MODE ===")
+	fmt.Println("  experimental knobs disabled: AP-CQ, AP3, BestOfN")
+	fmt.Println("  scoring: sequential jt9-default truth manifests")
+	fmt.Println("  calibration knobs (sync gate, candidate-search breadth): defaults — TBD")
+	fmt.Println()
 }
 
 // runSingle is the original single-WAV path: optional inline -expect
