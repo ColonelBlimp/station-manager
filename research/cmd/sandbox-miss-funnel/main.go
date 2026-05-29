@@ -184,6 +184,10 @@ func main() {
 	stage2Mode := flag.String("stage2-mode", "off", "post-NMS Costas verifier mode: off | observe | filter | rerank. Mirrors sandbox-asym-ab semantics so funnel deltas match decoder runs at the same options.")
 	stage2Metric := flag.String("stage2-metric", "minblock", "Stage2 discriminator: minblock | geo | wins.")
 	stage2Threshold := flag.Float64("stage2-threshold", 0, "Stage2 filter threshold (units depend on -stage2-metric).")
+	osdDisable := flag.Bool("osd-disable", false, "disable OSD fallback entirely. Session-107 experiment 1.")
+	osdDisableN1 := flag.Bool("osd-disable-n1", false, "disable OSD for the N1 cascade stage only. Session-107 experiment 2.")
+	osdAcceptRatio := flag.Float64("osd-accept-ratio", 0, "OSDOptions.AcceptDistanceRatio override (0 = default 0.05). Session-107 experiment 3.")
+	osdOrder := flag.Int("osd-order", -1, "OSDOptions.Order override (-1 = default 2). Session-107 experiment 4.")
 	flag.Parse()
 
 	matches, err := filepath.Glob(filepath.Join(*dir, "*.wav"))
@@ -216,6 +220,21 @@ func main() {
 		log.Fatalf("invalid -stage2-metric %q (want minblock | geo | wins)", *stage2Metric)
 	}
 	opts.Stage2Threshold = *stage2Threshold
+	if opts.BP.MaxIterations == 0 {
+		opts.BP = sandbox.DefaultBPOptions()
+	}
+	if *osdDisable {
+		opts.BP.OSD.Enable = false
+	}
+	if *osdDisableN1 {
+		opts.OSDDisableForN1 = true
+	}
+	if *osdAcceptRatio > 0 {
+		opts.BP.OSD.AcceptDistanceRatio = *osdAcceptRatio
+	}
+	if *osdOrder >= 0 {
+		opts.BP.OSD.Order = *osdOrder
+	}
 
 	refineOpts := sandbox.DefaultRefineOptions()
 	searchOpts := opts.Search

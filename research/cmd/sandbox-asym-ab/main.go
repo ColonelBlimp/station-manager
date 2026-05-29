@@ -131,6 +131,10 @@ func main() {
 	stage2Mode := flag.String("stage2-mode", "off", "post-NMS Costas verifier mode: off | observe | filter | rerank. observe runs the verifier without changing the candidate list; filter drops sub-threshold candidates; rerank sorts by metric without dropping. See research/sandbox/costas_verify.go.")
 	stage2Metric := flag.String("stage2-metric", "minblock", "Stage2 discriminator metric: minblock | geo | wins. Audit 2026-05-29: MinBlockContrast cleanest at near-truth p50, GeoContrast cleanest at p25, WinsTotal coarsest but categorical.")
 	stage2Threshold := flag.Float64("stage2-threshold", 0, "Stage2 filter threshold (units depend on -stage2-metric). Ignored for off/observe/rerank.")
+	osdDisable := flag.Bool("osd-disable", false, "disable OSD fallback entirely (BP-only). Session-107 experiment 1: how many matched truths depend on OSD-2 rescue, and how many of the 21 strict-baseline extras vanish?")
+	osdDisableN1 := flag.Bool("osd-disable-n1", false, "disable OSD fallback for the N1 cascade stage only — N2/N3/N1Norm/BestOfN/AP forms keep their normally-configured OSD. Session-107 experiment 2: does N1+OSD account for most accepted extras while deeper metrics still need OSD?")
+	osdAcceptRatio := flag.Float64("osd-accept-ratio", 0, "override OSDOptions.AcceptDistanceRatio (lower = tighter, rejects more CRC-lottery codewords). 0 = package default (0.05). Session-107 experiment 3: sweep against the strict 113/21 baseline.")
+	osdOrder := flag.Int("osd-order", -1, "override OSDOptions.Order (-1 = package default 2; 1 enumerates 92 single-bit-flip candidates vs 4187 at order 2). Session-107 experiment 4: do most OSD-recovered truths need two flips or does order 1 already get them and order 2 mostly buys false positives?")
 	flag.Parse()
 
 	if *wavPath == "" && *dirPath == "" {
@@ -182,6 +186,21 @@ func main() {
 		log.Fatalf("invalid -stage2-metric %q (want minblock | geo | wins)", *stage2Metric)
 	}
 	opts.Stage2Threshold = *stage2Threshold
+	if opts.BP.MaxIterations == 0 {
+		opts.BP = sandbox.DefaultBPOptions()
+	}
+	if *osdDisable {
+		opts.BP.OSD.Enable = false
+	}
+	if *osdDisableN1 {
+		opts.OSDDisableForN1 = true
+	}
+	if *osdAcceptRatio > 0 {
+		opts.BP.OSD.AcceptDistanceRatio = *osdAcceptRatio
+	}
+	if *osdOrder >= 0 {
+		opts.BP.OSD.Order = *osdOrder
+	}
 	// LLR domain precedence (clearest case wins):
 	//   -legacy-power-llr  → force power (off-spec; A/B against pre-2026-05-29 baseline)
 	//   -magnitude-llr     → force magnitude
@@ -228,10 +247,13 @@ func main() {
 		// UNLESS the operator passed any -stage2-* flag explicitly (in
 		// which case the explicit setting wins for A/B / observe runs).
 		stage2Override := false
+		osdOverride := false
 		flag.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "stage2-mode", "stage2-metric", "stage2-threshold":
 				stage2Override = true
+			case "osd-disable", "osd-disable-n1", "osd-accept-ratio", "osd-order":
+				osdOverride = true
 			}
 		})
 		if !stage2Override {
@@ -239,10 +261,31 @@ func main() {
 			opts.Stage2Metric = sandbox.Stage2MetricGeo
 			opts.Stage2Threshold = 0.70
 		}
+		// OSD policy default (2026-05-29 corpus measurement, four-
+		// experiment sweep): OSDDisableForN1=true blocks OSD fallback
+		// at the N1 cascade stage (deeper metrics keep OSD);
+		// AcceptDistanceRatio tightens from 0.05 → 0.045 to reject
+		// CRC-lottery OSD codewords. Order stays at 2 because order-1
+		// loses 2 matched truths for only -3 extras (recall cost too
+		// high). The combination drops 4 false-positive extras at zero
+		// matched cost (113/21 → 113/17). Like the Stage2 threshold,
+		// 0.045 is corpus-calibrated — the operating band is narrow
+		// (cliff at 0.030, near-BP-only at 0.020), and any holdout /
+		// production-bound consumer must re-measure. Strict applies
+		// the defaults UNLESS the operator passes any -osd-* flag
+		// explicitly (which preserves the BP-only / N1-only-OSD-off /
+		// order-sweep paths for A/B work).
+		if !osdOverride {
+			if opts.BP.MaxIterations == 0 {
+				opts.BP = sandbox.DefaultBPOptions()
+			}
+			opts.OSDDisableForN1 = true
+			opts.BP.OSD.AcceptDistanceRatio = 0.045
+		}
 		opts.EnableAPCQ = false
 		opts.EnableAP3 = false
 		opts.EnableBestOfN = false
-		printStrictBanner(opts.MagnitudeLLR, opts.Stage2Mode, opts.Stage2Metric, opts.Stage2Threshold)
+		printStrictBanner(opts.MagnitudeLLR, opts.Stage2Mode, opts.Stage2Metric, opts.Stage2Threshold, opts.OSDDisableForN1, opts.BP.OSD.AcceptDistanceRatio, opts.BP.OSD.Order, opts.BP.OSD.Enable)
 	}
 
 	if *dirPath != "" {
@@ -267,7 +310,7 @@ func main() {
 // and is excluded from strict scoring. `-strict` therefore runs
 // symmetric only; without `-strict`, the A/B comparison still
 // surfaces the asym deltas as deep-mode data.
-func printStrictBanner(magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2Metric sandbox.Stage2Metric, stage2Threshold float64) {
+func printStrictBanner(magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2Metric sandbox.Stage2Metric, stage2Threshold float64, osdDisableN1 bool, osdAcceptRatio float64, osdOrder int, osdEnable bool) {
 	fmt.Println("=== STRICT-PARITY MODE ===")
 	fmt.Println("  channelizer: symmetric only (asymmetric = deep-mode recovery)")
 	fmt.Println("  experimental knobs disabled: AP-CQ, AP3, BestOfN")
@@ -286,6 +329,17 @@ func printStrictBanner(magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2
 			stage2MetricLabel(stage2Metric), stage2Threshold)
 	case sandbox.Stage2Rerank:
 		fmt.Printf("  Stage2 verifier: rerank by %s (caveat: hash/pass-2 order confound, -1 matched at default)\n", stage2MetricLabel(stage2Metric))
+	}
+	switch {
+	case !osdEnable:
+		fmt.Println("  OSD policy: DISABLED (BP-only; -osd-disable override active; loses 6 matched truths vs default)")
+	default:
+		n1Note := "N1+OSD enabled"
+		if osdDisableN1 {
+			n1Note = "N1+OSD disabled (deeper metrics keep OSD)"
+		}
+		fmt.Printf("  OSD policy: order=%d AcceptDistanceRatio=%.3f, %s (corpus-calibrated 2026-05-29; cuts 4 false-positives @ no truth loss)\n",
+			osdOrder, osdAcceptRatio, n1Note)
 	}
 	fmt.Println("  scoring: sequential jt9-default truth manifests")
 	fmt.Println("  calibration knobs (sync gate, candidate-search breadth): defaults — TBD")

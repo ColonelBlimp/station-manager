@@ -208,6 +208,17 @@ type MultiPassOptions struct {
 	// memory for the per-attempt BP results — fine for research
 	// runs, not for production. See research/sandbox/trace.go.
 	TraceCandidates bool
+
+	// OSDDisableForN1 gates OSD fallback specifically on the N1
+	// cascade stage. When true, the N1 BP attempt runs with OSD
+	// disabled (BP-only), while N2/N3/N1Norm/BestOfN/AP forms keep
+	// the normally-configured OSD. Implementation of the Session-107
+	// "OSD only for deeper metrics" experiment: the trace showed N1
+	// produces 67% of accepted false-positive extras AND most of
+	// them came via OSD-2 rescue, so isolating N1-OSD lets us
+	// measure whether N1+OSD is the dominant false-positive engine
+	// while preserving deeper-metric recoveries.
+	OSDDisableForN1 bool
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -745,8 +756,14 @@ func runCascade(
 	trace *[]TraceAttempt,
 ) (cascadeOutcome, bool) {
 	mm := opts.MagnitudeLLR
+	// N1 stage: optionally disable OSD for this stage only. The rest
+	// of the cascade keeps the normally-configured OSD via bpOpts.
+	n1Opts := bpOpts
+	if opts.OSDDisableForN1 {
+		n1Opts.OSD.Enable = false
+	}
 	llrs := SoftLLRs(grid, mm)
-	br := BPDecode(llrs, bpOpts)
+	br := BPDecode(llrs, n1Opts)
 	if trace != nil {
 		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1, BR: br})
 	}

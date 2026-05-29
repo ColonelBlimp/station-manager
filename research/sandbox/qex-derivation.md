@@ -168,15 +168,29 @@ audit-#1).** The Stage2 verifier
 (`research/sandbox/costas_verify.go`; clean-room from QEX § 4 +
 Goertzel 1958) was wired between FindCandidates and refine with
 mode=Filter / metric=GeoContrast / threshold=0.70 baked into the
-`-strict` flag's defaults. Operative baseline going forward:
-**113/144 matched / 21 extras** (zero matched lost, 2 false-positive
-decodes eliminated, 83% post-NMS candidate-volume reduction). The
-0.70 threshold is empirical / corpus-calibrated on the 6-fixture
-strict corpus — NOT QEX-derived; production / holdout consumers
-must re-measure their own operating point. Pre-Stage2 baseline
-reachable via `-strict -stage2-mode off`. Full sweep + funnel
-artefacts at
+`-strict` flag's defaults. Post-Stage2 baseline: 113/144 matched /
+21 extras (zero matched lost, 2 false-positive decodes eliminated,
+83% post-NMS candidate-volume reduction). The 0.70 threshold is
+empirical / corpus-calibrated on the 6-fixture strict corpus — NOT
+QEX-derived. Full sweep + funnel artefacts at
 `research/sandbox/reports/stage2-gate-corpus-2026-05-29.md`.
+
+**Strict-mode default further promoted 2026-05-29 (same day,
+post-Session-107 OSD policy sweep).** Per-candidate decoder trace
+(`research/sandbox/trace.go`) surfaced that 14/21 strict baseline
+extras came via OSD-2 rescue rather than BP convergence; a four-
+experiment sweep on the controlled OSD levers (BP-only / N1-only-
+OSD-off / AcceptDistanceRatio sweep / Order 1 vs 2) identified
+`OSDDisableForN1=true` + `OSD.AcceptDistanceRatio=0.045` (Order kept
+at 2) as the zero-recall-loss combination. Operative baseline going
+forward: **113/144 matched / 17 extras** (zero matched lost, 4
+false-positive decodes eliminated on top of the Stage2 baseline).
+The 0.045 OSD threshold is empirical / corpus-calibrated like the
+Stage2 0.70 — operating band is narrow (cliff at 0.030, near-BP-
+only at 0.020), any holdout / production-bound consumer must
+re-measure. Pre-OSD-promotion baseline reachable via
+`-strict -osd-disable-n1=false`. Full sweep + funnel artefacts at
+`research/sandbox/reports/osd-policy-corpus-2026-05-29.md`.
 
 **Implication for parked experiments (revisit candidates):**
 several earlier flat-result measurements were taken against the
