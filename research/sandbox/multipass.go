@@ -199,6 +199,15 @@ type MultiPassOptions struct {
 	// Stage2Observe / Stage2Rerank. Has no default — Stage2Filter
 	// without a threshold passes everything (functionally observe).
 	Stage2Threshold float64
+
+	// TraceCandidates gates the per-candidate decoder trace emitted
+	// via MultiPassResult.Traces. Pure observe instrumentation: no
+	// effect on decode outcomes; just records what each candidate
+	// did inside BP/OSD/unpack/gate. Cost is per-candidate audio +
+	// grid Goertzel sweeps (~few ms each on a real audio buffer) +
+	// memory for the per-attempt BP results — fine for research
+	// runs, not for production. See research/sandbox/trace.go.
+	TraceCandidates bool
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -297,6 +306,7 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 
 	var accepted []DecodeRecord
 	var rejects []ShadowReject
+	var traces []CandidateTrace
 	for pass := 1; pass <= opts.MaxPasses; pass++ {
 		if err := ch.Prepare(working); err != nil {
 			break
@@ -310,16 +320,58 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 
 		passDecodes := make([]DecodeRecord, 0, len(cands))
 		for _, c := range cands {
+			// Per-candidate trace scaffold (emit gated on TraceCandidates).
+			// Populated incrementally as the candidate moves through the
+			// pipeline; appended to result.Traces before each continue /
+			// at the accept path. The audio-side Stage2 contrast is
+			// computed once on the working (pass-residual) buffer so the
+			// trace reflects what BP actually saw on this pass.
+			var ctrace CandidateTrace
+			if opts.TraceCandidates {
+				ctrace.Pass = pass
+				ctrace.FreqHz = c.FreqHz
+				ctrace.DtSec = c.DtSec
+				ctrace.AudioGeo = VerifyCostasAt(working, c.FreqHz, c.DtSec, c.Sync).GeoContrast
+			}
+
 			r, err := RefineCandidate(ch, c, rOpts)
 			if err != nil {
+				if opts.TraceCandidates {
+					ctrace.Outcome = "refine_fail"
+					result := MultiPassResult{}
+					_ = result
+					// emit in place
+					// (collected into a slice declared above the pass loop)
+					traceEmit(&traces, ctrace)
+				}
 				continue
+			}
+			// Update freq/dt to the refined coords for the trace record.
+			if opts.TraceCandidates {
+				ctrace.FreqHz = r.FreqHz
+				ctrace.DtSec = r.DtSec
 			}
 			grid, err := ExtractSymbols(ch, r)
 			if err != nil {
+				if opts.TraceCandidates {
+					ctrace.Outcome = "extract_fail"
+					traceEmit(&traces, ctrace)
+				}
 				continue
 			}
-			co, ok := runCascade(grid, opts, bpOpts, ht)
+			if opts.TraceCandidates {
+				ctrace.GridGeo = VerifyCostasGrid(grid).GeoContrast
+			}
+			var traceTarget *[]TraceAttempt
+			if opts.TraceCandidates {
+				traceTarget = &ctrace.Attempts
+			}
+			co, ok := runCascade(grid, opts, bpOpts, ht, traceTarget)
 			if !ok {
+				if opts.TraceCandidates {
+					ctrace.Outcome = "cascade_fail"
+					traceEmit(&traces, ctrace)
+				}
 				continue
 			}
 			br := co.BR
@@ -329,7 +381,16 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
 			ur := Unpack77WithHashes(payload, ht)
 			if !ur.OK {
+				if opts.TraceCandidates {
+					ctrace.Outcome = "unpack_fail"
+					traceEmit(&traces, ctrace)
+				}
 				continue
+			}
+			// Backfill text into the winning attempt for trace clarity.
+			if opts.TraceCandidates && len(ctrace.Attempts) > 0 {
+				ctrace.Attempts[len(ctrace.Attempts)-1].Text = ur.Text
+				ctrace.Attempts[len(ctrace.Attempts)-1].TextOK = true
 			}
 			// AP-form correctness guard: OSD-2 can flip MRB bits even
 			// with priors pinned (the OSD pin shipped Session 104 now
@@ -341,6 +402,10 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			// prefix (e.g. "CQ" for AP-CQ, "K1JT W1ABC" for AP3 with
 			// standard-call c28_1).
 			if co.TextGuard != "" && !strings.HasPrefix(ur.Text, co.TextGuard) {
+				if opts.TraceCandidates {
+					ctrace.Outcome = "ap_guard_fail"
+					traceEmit(&traces, ctrace)
+				}
 				continue
 			}
 			// Post-decode quality gate. Reject CRC-passing codewords
@@ -381,6 +446,11 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 					Codeword:   br.Codeword,
 					Pass:       pass,
 				})
+				if opts.TraceCandidates {
+					ctrace.Outcome = "gate_reject:" + reason
+					ctrace.GateReason = reason
+					traceEmit(&traces, ctrace)
+				}
 				continue
 			}
 			passDecodes = append(passDecodes, DecodeRecord{
@@ -392,6 +462,10 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 				LLRMetric:    llrMetric,
 				Pass:         pass,
 			})
+			if opts.TraceCandidates {
+				ctrace.Outcome = "accepted"
+				traceEmit(&traces, ctrace)
+			}
 			registerCallsigns(ht, ur.Text)
 		}
 
@@ -411,7 +485,7 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			}
 		}
 	}
-	return MultiPassResult{Decodes: accepted, ShadowRejects: rejects}
+	return MultiPassResult{Decodes: accepted, ShadowRejects: rejects, Traces: traces}
 }
 
 // registerCallsigns walks the decoded message text and registers any
@@ -538,6 +612,17 @@ func isDuplicate(d DecodeRecord, accepted []DecodeRecord, freqTol, dtTol float64
 	return false
 }
 
+// traceEmit appends one CandidateTrace to the per-pass trace
+// accumulator. Defensive nil-guard so callers can pass a nil slice
+// pointer without ceremony (the trace path is opt-in; production
+// invocations should never hit this code).
+func traceEmit(traces *[]CandidateTrace, t CandidateTrace) {
+	if traces == nil {
+		return
+	}
+	*traces = append(*traces, t)
+}
+
 // ApplyStage2 is the public entry point to the Stage2 Costas-verifier
 // gate so research tooling (e.g. the miss funnel) can reproduce the
 // same post-NMS transformation MultiPassDecodeFull applies internally.
@@ -648,33 +733,50 @@ type cascadeOutcome struct {
 //
 // Returns (outcome, true) on first success; (zero, false) when all
 // stages fail.
+//
+// When trace is non-nil, every metric attempted is appended to the
+// trace BEFORE the success-return short-circuits. Behaviour is
+// otherwise identical to the non-traced path.
 func runCascade(
 	grid *SymbolGrid,
 	opts MultiPassOptions,
 	bpOpts BPOptions,
 	ht *CallsignHashTable,
+	trace *[]TraceAttempt,
 ) (cascadeOutcome, bool) {
 	mm := opts.MagnitudeLLR
 	llrs := SoftLLRs(grid, mm)
 	br := BPDecode(llrs, bpOpts)
+	if trace != nil {
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1, BR: br})
+	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1}, true
 	}
 
 	llrs = SoftLLRsN2(grid, mm)
 	br = BPDecode(llrs, bpOpts)
+	if trace != nil {
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN2, BR: br})
+	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN2}, true
 	}
 
 	llrs = SoftLLRsN3(grid, mm)
 	br = BPDecode(llrs, bpOpts)
+	if trace != nil {
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN3, BR: br})
+	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN3}, true
 	}
 
 	llrs = SoftLLRsN1BitNormalized(grid, mm)
 	br = BPDecode(llrs, bpOpts)
+	if trace != nil {
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1Norm, BR: br})
+	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1Norm}, true
 	}
@@ -682,6 +784,9 @@ func runCascade(
 	if opts.EnableBestOfN {
 		llrs = SoftLLRsBestOfN(grid, mm)
 		br = BPDecode(llrs, bpOpts)
+		if trace != nil {
+			*trace = append(*trace, TraceAttempt{Metric: LLRMetricBestOfN, BR: br})
+		}
 		if br.OK {
 			return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricBestOfN}, true
 		}
@@ -692,9 +797,13 @@ func runCascade(
 		for _, c28v := range apCQValueOrder {
 			l := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v, mm)
 			b := BPDecodeWithPin(l, bpOpts, &pin)
+			if trace != nil {
+				*trace = append(*trace, TraceAttempt{Metric: LLRMetricAPCQ, BR: b})
+			}
 			if b.OK {
 				return cascadeOutcome{BR: b, LLRs: l, Metric: LLRMetricAPCQ, TextGuard: "CQ"}, true
 			}
+			_ = c28v
 		}
 	}
 
@@ -705,6 +814,9 @@ func runCascade(
 			for _, p := range pairs {
 				l := softLLRsAP3WithMag(grid, opts.AP3Mag, p.c28_1, p.c28_2, mm)
 				b := BPDecodeWithPin(l, bpOpts, &pin)
+				if trace != nil {
+					*trace = append(*trace, TraceAttempt{Metric: LLRMetricAP3, BR: b})
+				}
 				if !b.OK {
 					continue
 				}

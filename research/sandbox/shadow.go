@@ -86,4 +86,14 @@ type ShadowReject struct {
 type MultiPassResult struct {
 	Decodes       []DecodeRecord
 	ShadowRejects []ShadowReject
+
+	// Traces is the per-candidate decoder-trace channel. Populated
+	// only when MultiPassOptions.TraceCandidates is true. One
+	// CandidateTrace per candidate that reached the refine stage,
+	// recording every LLR metric attempted + the final disposition
+	// (accepted / gate_reject / cascade_fail / etc.). See
+	// research/sandbox/trace.go for the record shape and ordering;
+	// traces are appended in candidate-processing order within each
+	// pass, all of pass 1 before any of pass 2.
+	Traces []CandidateTrace
 }

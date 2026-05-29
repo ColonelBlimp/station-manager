@@ -260,6 +260,99 @@ func goertzelBank(samples []float32, start, n int, coeffs, out *[8]float64) {
 // its operating point on its own corpus or a holdout split — 0.70 is
 // a corpus calibration, not a published constant.
 
+// VerifyCostasGrid runs the same per-Costas-anchor 8-tone vote +
+// log-contrast aggregation as VerifyCostasAt, but on a previously-
+// extracted SymbolGrid instead of raw audio. Used as a downstream
+// "did the symbol-quality survive the channelizer + refine + extract
+// chain" probe — reports of grid GeoContrast can be compared against
+// audio GeoContrast (VerifyCostasAt) on the same candidate to
+// attribute decoder-bound truths to either an upstream extract
+// degradation (audio good, grid bad) or a downstream BP/OSD/LLR
+// problem (audio good, grid good, no decode).
+//
+// Provenance: same QEX § 4 / Goertzel-shaped idea as VerifyCostasAt,
+// but with the per-symbol DTFT already done by `ExtractSymbols`
+// (32-point complex FFT per symbol → 8 in-band tone bins). The
+// "Goertzel" here is implicit in the FFT — both compute the DTFT at
+// the same tone frequencies, just by different algorithms; the
+// scoring layer (per-anchor argmax, log-contrast aggregation) is
+// identical.
+//
+// AccessibleBlock is set to {7, 7, 7} unconditionally — the symbol
+// grid always covers all 79 symbols by ExtractSymbols' contract
+// (if any symbol fell outside the baseband buffer, Extract would
+// have returned an error and this function would not have been
+// called).
+//
+// Sync is zero here — the candidate's matched-filter score is a
+// raw-audio-stage artefact, not preserved through Extract.
+func VerifyCostasGrid(grid *SymbolGrid) CostasVerify {
+	var v CostasVerify
+	if grid == nil {
+		return v
+	}
+	const eps = 1e-12
+	const numTones = 8
+
+	for b := 0; b < 3; b++ {
+		for s := 0; s < 7; s++ {
+			channelSym := costasBlockStarts[b] + s
+			expectedTone := costasArray[s]
+			energies := grid.Tones[channelSym]
+
+			winnerTone := 0
+			winnerEnergy := energies[0]
+			for k := 1; k < numTones; k++ {
+				if energies[k] > winnerEnergy {
+					winnerTone = k
+					winnerEnergy = energies[k]
+				}
+			}
+			v.AccessibleBlock[b]++
+			if winnerTone == expectedTone {
+				v.WinsTotal++
+				v.WinsBlock[b]++
+			}
+
+			maxOther := 0.0
+			for k := 0; k < numTones; k++ {
+				if k == expectedTone {
+					continue
+				}
+				if energies[k] > maxOther {
+					maxOther = energies[k]
+				}
+			}
+			anchorLogContrast := math.Log(energies[expectedTone]+eps) - math.Log(maxOther+eps)
+			v.LogContrastBlock[b] += anchorLogContrast
+		}
+		v.LogContrastTotal += v.LogContrastBlock[b]
+	}
+
+	v.Accessible = v.AccessibleBlock[0] + v.AccessibleBlock[1] + v.AccessibleBlock[2]
+	if v.Accessible == 0 {
+		return v
+	}
+	v.GeoContrast = math.Exp(v.LogContrastTotal / float64(v.Accessible))
+
+	minBlock := math.Inf(1)
+	for b := 0; b < 3; b++ {
+		if v.AccessibleBlock[b] == 0 {
+			continue
+		}
+		bc := math.Exp(v.LogContrastBlock[b] / float64(v.AccessibleBlock[b]))
+		if bc < minBlock {
+			minBlock = bc
+		}
+	}
+	if math.IsInf(minBlock, 1) {
+		minBlock = 0
+	}
+	v.MinBlockContrast = minBlock
+
+	return v
+}
+
 // Stage2Mode selects how the post-NMS Stage2 verifier interacts
 // with the multipass pipeline.
 type Stage2Mode int

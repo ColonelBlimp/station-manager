@@ -52,6 +52,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/research/candidates"
@@ -102,7 +103,57 @@ type truthFate struct {
 	// kept neighbour) or the K cap is firing (3+ candidates in the
 	// 12.5 Hz freq group).
 	nmsNote string
+
+	// hasRefined is true when a near-truth refined candidate was
+	// found in the funnel walker; audioGeo/gridGeo carry that
+	// candidate's measurements. Off-by-default for upstream stages
+	// (finder-miss / nms-bound / cap-bound / stage2-bound /
+	// refine-bound) — no refined candidate exists to measure.
+	hasRefined bool
+
+	// audioGeo is the audio-side Stage2 GeoContrast for the closest
+	// refined candidate near this truth. Only valid when
+	// hasRefined is true.
+	audioGeo float64
+
+	// gridGeo is the symbol-grid Costas GeoContrast for the same
+	// refined candidate after Channelizer.Extract + ExtractSymbols.
+	// Only valid when hasRefined is true and grid extraction
+	// succeeded; gridGeo == 0 with hasRefined == true indicates
+	// grid extraction failed (rare; dt placed symbols out of
+	// baseband bounds).
+	gridGeo float64
 }
+
+// traceEntry pairs a sandbox CandidateTrace with the capture it came
+// from. The funnel walks all traces across the corpus to answer the
+// Session-107 BP/OSD attribution questions; per-truth matching is by
+// capture + nearest coordinate.
+type traceEntry struct {
+	capture string
+	trace   sandbox.CandidateTrace
+}
+
+// extraEvidence records one accepted decode that did NOT match any
+// truth in the same WAV's manifest — a false-positive that survived
+// the gate. Carries the same audio/grid pair of GeoContrast values so
+// the symbol-quality bucketing applies to extras as well as missed
+// truths.
+type extraEvidence struct {
+	capture  string
+	freqHz   float64
+	dtSec    float64
+	text     string
+	audioGeo float64
+	gridGeo  float64
+}
+
+// symbolQualityThreshold is the audio/grid GeoContrast cutoff used
+// for the four-cell quadrant classification (matches the new strict
+// Stage2 default at 0.70). Same threshold on both axes so the
+// quadrant labels stay symmetric and the bucketing is interpretable
+// without per-axis calibration.
+const symbolQualityThreshold = 0.70
 
 // candScore records one post-NMS candidate plus its truth-proximity
 // label. Drives the score-audit summary that answers "does the
@@ -147,6 +198,7 @@ func main() {
 	opts := sandbox.DefaultMultiPassOptions()
 	opts.UseAsymmetricSlice = false
 	opts.MagnitudeLLR = *magnitudeLLR
+	opts.TraceCandidates = true
 	if *nmsK > 0 {
 		opts.Search.K2MaxPerGroup = *nmsK
 	}
@@ -176,6 +228,8 @@ func main() {
 
 	var fates []truthFate
 	var scores []candScore
+	var extras []extraEvidence
+	var allTraces []traceEntry
 	var totalRaw, totalNMS, totalCap, totalStage2, totalRefined int
 	for _, w := range matches {
 		m, err := truth.Read(truth.PathFor(w))
@@ -216,7 +270,7 @@ func main() {
 		// MultiPassDecodeFull's placement. ApplyStage2 returns the
 		// input unchanged for Stage2Off / Stage2Observe.
 		postStage2 := sandbox.ApplyStage2(data.Samples, append([]sandbox.Candidate(nil), postCap...), opts)
-		refined := refineCandidates(data.Samples, postStage2, refineOpts)
+		refined, grids := refineAndExtract(data.Samples, postStage2, refineOpts)
 
 		totalRaw += len(raw)
 		totalNMS += len(postNMS)
@@ -226,8 +280,49 @@ func main() {
 
 		// Stages 5-7: rely on MultiPassDecodeFull for accepted +
 		// gate-rejected. Anything not surfaced by either reached
-		// the decoder but BP/OSD failed.
+		// the decoder but BP/OSD failed. TraceCandidates is enabled
+		// in opts so result.Traces carries per-candidate decoder
+		// records for the BP/OSD attribution analysis.
 		result := sandbox.MultiPassDecodeFull(data.Samples, opts, ht)
+
+		for _, t := range result.Traces {
+			allTraces = append(allTraces, traceEntry{
+				capture: filepath.Base(w),
+				trace:   t,
+			})
+		}
+
+		// Build the audio/grid GeoContrast pair for each accepted
+		// decode that doesn't match any truth — the false-positive
+		// "extras" the gate let through. A dedicated channelizer +
+		// per-decode grid extraction is the cheapest route; running
+		// the extract is ~2 ms per decode at corpus scale and only
+		// fires on the ~20-30 extras per corpus run.
+		extraCh, err := sandbox.NewChannelizer()
+		if err == nil {
+			extraCh.SetAsymmetricFT8Slice(false)
+			if err := extraCh.Prepare(data.Samples); err == nil {
+				for _, d := range result.Decodes {
+					if isAcceptedExtra(d, m.Signals, *freqTol, *dtTol) {
+						ec := sandbox.Candidate{FreqHz: d.FreqHz, DtSec: d.DtSec, Sync: 0}
+						audio := sandbox.VerifyCostasAt(data.Samples, d.FreqHz, d.DtSec, 0)
+						gridG := 0.0
+						if grid, err := sandbox.ExtractSymbols(extraCh, ec); err == nil {
+							gridG = sandbox.VerifyCostasGrid(grid).GeoContrast
+						}
+						extras = append(extras, extraEvidence{
+							capture:  filepath.Base(w),
+							freqHz:   d.FreqHz,
+							dtSec:    d.DtSec,
+							text:     d.Text,
+							audioGeo: audio.GeoContrast,
+							gridGeo:  gridG,
+						})
+					}
+				}
+			}
+			extraCh.Close()
+		}
 
 		for _, s := range m.Signals {
 			tf := truthFate{
@@ -241,6 +336,21 @@ func main() {
 			}
 			if tf.stage == stageNMSBound {
 				tf.nmsNote = nmsAttribute(s, raw, postNMS, *freqTol, *dtTol)
+			}
+			// Symbol-quality measurement: when a near-truth refined
+			// candidate exists, record its audio + grid GeoContrast
+			// pair so the quadrant bucketing can attribute the loss
+			// to channelizer/extract (audio good + grid bad) vs
+			// BP/OSD/LLR (audio good + grid good + no decode) vs
+			// finder-admitted-noise (both weak) vs lucky-refinement
+			// (audio weak + grid good).
+			if idx := closestRefinedIndex(refined, s.FreqHz, s.DTSec, *freqTol, *dtTol); idx >= 0 {
+				tf.hasRefined = true
+				c := refined[idx]
+				tf.audioGeo = sandbox.VerifyCostasAt(data.Samples, c.FreqHz, c.DtSec, c.Sync).GeoContrast
+				if grids != nil && idx < len(grids) && grids[idx] != nil {
+					tf.gridGeo = sandbox.VerifyCostasGrid(grids[idx]).GeoContrast
+				}
 			}
 			fates = append(fates, tf)
 		}
@@ -272,7 +382,398 @@ func main() {
 
 	printReport(fates, *magnitudeLLR, opts.Stage2Mode, opts.Stage2Metric, opts.Stage2Threshold)
 	printSurvival(totalRaw, totalNMS, totalCap, totalStage2, totalRefined, opts.Stage2Mode)
+	printSymbolQuality(fates, extras)
+	printDecoderTrace(fates, extras, allTraces, *freqTol, *dtTol)
 	printScoreAudit(scores)
+}
+
+// findTracesNearTruth returns every traceEntry whose (capture,
+// FreqHz, DtSec) lies within (freqTol, dtTol) of the given truth.
+// Used by printDecoderTrace to answer "what did the decoder try on
+// this truth?" — multiple traces (one per pass) can match.
+func findTracesNearTruth(allTraces []traceEntry, capture string, freqHz, dtSec, freqTol, dtTol float64) []sandbox.CandidateTrace {
+	var out []sandbox.CandidateTrace
+	for _, te := range allTraces {
+		if te.capture != capture {
+			continue
+		}
+		if near(te.trace.FreqHz, te.trace.DtSec, freqHz, dtSec, freqTol, dtTol) {
+			out = append(out, te.trace)
+		}
+	}
+	return out
+}
+
+// findTraceForExtra returns the trace (if any) whose coordinate
+// matches an accepted extra. Used by printDecoderTrace to answer
+// Q4/Q5 (BP vs OSD success / which LLR metric won). Tight tolerance
+// (1 Hz, 0.05 s) because accepted extras come from the same refined
+// coordinate the trace recorded.
+func findTraceForExtra(allTraces []traceEntry, capture string, freqHz, dtSec float64) (sandbox.CandidateTrace, bool) {
+	for _, te := range allTraces {
+		if te.capture != capture {
+			continue
+		}
+		if te.trace.Outcome != "accepted" {
+			continue
+		}
+		if math.Abs(te.trace.FreqHz-freqHz) <= 1.0 && math.Abs(te.trace.DtSec-dtSec) <= 0.05 {
+			return te.trace, true
+		}
+	}
+	return sandbox.CandidateTrace{}, false
+}
+
+// printDecoderTrace consumes the per-candidate trace records from
+// MultiPassResult.Traces and answers the five Session-107 attribution
+// questions:
+//
+//  1. For each missed truth that reached the refine stage (audio+grid
+//     measurable population), did any LLR metric produce a CRC-valid
+//     codeword? Bucket: had_crc_valid vs all_failed.
+//  2. If had_crc_valid: was the candidate gate-rejected, AP-guard
+//     killed, unpack-failed, or accepted-but-text-mismatched (the
+//     "wrong text at same grid" pattern flagged in the symbol-quality
+//     finding).
+//  3. If all_failed: across every attempt, was failure mostly
+//     BP-non-convergent (syndrome never clean) or
+//     syndrome-clean-CRC-invalid (BP found a wrong LDPC codeword
+//     and OSD couldn't repair it)?
+//  4. For accepted extras: how many came from BP success vs OSD
+//     success? (BR.DecodeMethod prefix.)
+//  5. For accepted extras: which LLR metric won most often?
+//
+// The 19 audio_good_grid_good missed truths from the
+// symbol-quality stage are the population that drives the headline
+// answer to Q1-Q3 — they have clean grid evidence so any decoder
+// failure is squarely a BP/OSD/LLR problem.
+func printDecoderTrace(fates []truthFate, extras []extraEvidence, allTraces []traceEntry, freqTol, dtTol float64) {
+	fmt.Println()
+	fmt.Println("=== BP/OSD DECODER TRACE (per-candidate observe-mode trace) ===")
+	fmt.Printf("  total trace records (all passes, all candidates): %d\n", len(allTraces))
+
+	// Q1+Q2: missed-truth disposition.
+	type missedRow struct {
+		fate                    truthFate
+		traces                  []sandbox.CandidateTrace
+		hadCRCOK                bool
+		outcomes                []string
+		anyAttemptsWithSynClean int
+		anyAttemptsBPFail       int
+		totalAttempts           int
+	}
+	var rows []missedRow
+	for _, f := range fates {
+		if f.stage == stageMatched {
+			continue
+		}
+		if !f.hasRefined {
+			continue
+		}
+		ts := findTracesNearTruth(allTraces, f.capture, f.freqHz, f.dtSec, freqTol, dtTol)
+		row := missedRow{fate: f, traces: ts}
+		for _, t := range ts {
+			row.outcomes = append(row.outcomes, t.Outcome)
+			for _, a := range t.Attempts {
+				row.totalAttempts++
+				if a.BR.OK {
+					row.hadCRCOK = true
+				} else if a.BR.SyndromeClean {
+					row.anyAttemptsWithSynClean++
+				} else {
+					row.anyAttemptsBPFail++
+				}
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	// Q1 / Q2 aggregation.
+	hadCRC := 0
+	allFailed := 0
+	q2Buckets := map[string]int{}
+	q3SyndromeClean := 0
+	q3BPNonConverged := 0
+	for _, r := range rows {
+		if r.hadCRCOK {
+			hadCRC++
+			// Q2 sub-bucket: classify by outcome of the trace that had
+			// the CRC-OK attempt. Use the first such outcome.
+			for _, o := range r.outcomes {
+				if o == "accepted" {
+					q2Buckets["accepted_wrong_text"]++
+					break
+				} else if strings.HasPrefix(o, "gate_reject:") {
+					q2Buckets["gate_reject"]++
+					break
+				} else if o == "ap_guard_fail" {
+					q2Buckets["ap_guard_fail"]++
+					break
+				} else if o == "unpack_fail" {
+					q2Buckets["unpack_fail"]++
+					break
+				}
+			}
+		} else {
+			allFailed++
+			q3SyndromeClean += r.anyAttemptsWithSynClean
+			q3BPNonConverged += r.anyAttemptsBPFail
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("--- Q1: did any metric produce a CRC-valid codeword on the missed truths? ---\n")
+	fmt.Printf("  measurable missed truths (refined near-truth candidate exists): %d\n", len(rows))
+	fmt.Printf("    had_crc_valid (some metric returned CRC-OK):  %d\n", hadCRC)
+	fmt.Printf("    all_failed   (no metric returned CRC-OK):     %d\n", allFailed)
+
+	if hadCRC > 0 {
+		fmt.Println()
+		fmt.Println("--- Q2: for had_crc_valid, what killed the decode downstream? ---")
+		for _, k := range []string{"accepted_wrong_text", "gate_reject", "ap_guard_fail", "unpack_fail"} {
+			fmt.Printf("  %-22s %3d\n", k, q2Buckets[k])
+		}
+	}
+
+	if allFailed > 0 {
+		fmt.Println()
+		fmt.Println("--- Q3: for all_failed, what was the BP/OSD failure mode breakdown? ---")
+		fmt.Printf("  total attempts across all_failed truths: %d\n",
+			q3SyndromeClean+q3BPNonConverged)
+		fmt.Printf("    syndrome_clean_crc_invalid (BP found wrong LDPC codeword + OSD didn't repair): %d\n",
+			q3SyndromeClean)
+		fmt.Printf("    BP_nonconvergent (syndrome never clean + OSD didn't find one):                 %d\n",
+			q3BPNonConverged)
+	}
+
+	// Per-truth detail for the all_failed bucket — the load-bearing
+	// "what did each missed truth's decoder actually see" listing.
+	if allFailed > 0 {
+		fmt.Println()
+		fmt.Println("--- per-missed-truth attempt detail (all_failed bucket) ---")
+		fmt.Println("  capture            freq Hz   dt    text                                          attempts")
+		var detailRows []missedRow
+		for _, r := range rows {
+			if !r.hadCRCOK {
+				detailRows = append(detailRows, r)
+			}
+		}
+		sort.Slice(detailRows, func(i, j int) bool {
+			if detailRows[i].fate.capture != detailRows[j].fate.capture {
+				return detailRows[i].fate.capture < detailRows[j].fate.capture
+			}
+			return detailRows[i].fate.freqHz < detailRows[j].fate.freqHz
+		})
+		for _, r := range detailRows {
+			text := r.fate.text
+			if len(text) > 42 {
+				text = text[:39] + "..."
+			}
+			fmt.Printf("  %-16s  %7.1f  %+5.2f  %-44s",
+				r.fate.capture, r.fate.freqHz, r.fate.dtSec, text)
+			// Render attempts as "metric:method/iter/synclean/crcv,..."
+			var parts []string
+			for _, t := range r.traces {
+				for _, a := range t.Attempts {
+					tag := "BPfail"
+					if a.BR.OK {
+						tag = "OK"
+					} else if a.BR.SyndromeClean {
+						tag = "SynClean!CRC"
+					}
+					parts = append(parts, fmt.Sprintf("%s:%s/i%d", a.Metric, tag, a.BR.Iterations))
+				}
+			}
+			fmt.Printf("  %s\n", strings.Join(parts, ", "))
+		}
+	}
+
+	// Q4 + Q5: accepted extras attribution.
+	bpCount := 0
+	osdCount := 0
+	otherCount := 0
+	metricCounts := map[string]int{}
+	var matched, unmatched int
+	for _, e := range extras {
+		t, ok := findTraceForExtra(allTraces, e.capture, e.freqHz, e.dtSec)
+		if !ok {
+			unmatched++
+			continue
+		}
+		matched++
+		// Winning attempt is the last entry (cascade short-circuits on
+		// success); identify by Attempts[last].
+		if len(t.Attempts) == 0 {
+			continue
+		}
+		winning := t.Attempts[len(t.Attempts)-1]
+		metricCounts[winning.Metric]++
+		switch {
+		case strings.HasPrefix(winning.BR.DecodeMethod, "BP"):
+			bpCount++
+		case strings.HasPrefix(winning.BR.DecodeMethod, "OSD"):
+			osdCount++
+		default:
+			otherCount++
+		}
+	}
+	fmt.Println()
+	fmt.Println("--- Q4: accepted extras — BP success vs OSD success ---")
+	fmt.Printf("  total extras: %d (matched to trace: %d, unmatched: %d)\n",
+		len(extras), matched, unmatched)
+	fmt.Printf("    BP success:    %3d\n", bpCount)
+	fmt.Printf("    OSD success:   %3d\n", osdCount)
+	if otherCount > 0 {
+		fmt.Printf("    other/unknown: %3d\n", otherCount)
+	}
+
+	fmt.Println()
+	fmt.Println("--- Q5: accepted extras by winning LLR metric ---")
+	var metricsSorted []string
+	for k := range metricCounts {
+		metricsSorted = append(metricsSorted, k)
+	}
+	sort.Strings(metricsSorted)
+	for _, k := range metricsSorted {
+		fmt.Printf("    %-10s %3d\n", k, metricCounts[k])
+	}
+}
+
+// qualityBucket labels one (audio, grid) GeoContrast pair into the
+// four-quadrant classification the operator named:
+//
+//   - "audio_good_grid_bad"  → channelizer/refine/extract problem
+//   - "audio_good_grid_good" → BP/OSD/LLR problem (missed) or
+//     "convincing-shape extra" (accepted)
+//   - "audio_weak_grid_weak" → finder admitted a marginal/noisy
+//     candidate
+//   - "audio_weak_grid_good" → interesting (metric mismatch or
+//     lucky refinement)
+//
+// Threshold is symbolQualityThreshold on both axes.
+func qualityBucket(audioGeo, gridGeo float64) string {
+	audioGood := audioGeo >= symbolQualityThreshold
+	gridGood := gridGeo >= symbolQualityThreshold
+	switch {
+	case audioGood && gridGood:
+		return "audio_good_grid_good"
+	case audioGood && !gridGood:
+		return "audio_good_grid_bad"
+	case !audioGood && gridGood:
+		return "audio_weak_grid_good"
+	default:
+		return "audio_weak_grid_weak"
+	}
+}
+
+var qualityBucketOrder = []string{
+	"audio_good_grid_good",
+	"audio_good_grid_bad",
+	"audio_weak_grid_good",
+	"audio_weak_grid_weak",
+}
+
+// printSymbolQuality emits the operator-named symbol-quality
+// classification report:
+//
+//  1. Bucket counts for missed truths that had a refined near-truth
+//     candidate (the only population for which symbol-quality is
+//     measurable; upstream-died truths have no grid to evaluate).
+//  2. Per-missed-truth detail list, sorted by bucket then capture.
+//  3. Bucket counts for accepted extras (all extras have grids by
+//     definition — they decoded).
+//  4. Per-accepted-extra detail list, sorted by bucket then capture.
+//
+// Same audio/grid GeoContrast threshold (symbolQualityThreshold) is
+// applied on both axes — keeps the four labels symmetric. Per the
+// operator's framing the audio threshold matches the strict Stage2
+// default at 0.70.
+func printSymbolQuality(fates []truthFate, extras []extraEvidence) {
+	fmt.Println()
+	fmt.Println("=== SYMBOL-QUALITY CLASSIFICATION (audio vs grid GeoContrast) ===")
+	fmt.Printf("  threshold (both axes): GeoContrast ≥ %.2f → \"good\", otherwise \"weak\"\n", symbolQualityThreshold)
+	fmt.Println("  buckets:")
+	fmt.Println("    audio_good_grid_good  — BP/OSD/LLR problem (missed) or convincing-shape extra (accepted)")
+	fmt.Println("    audio_good_grid_bad   — channelizer/refine/extract degraded the grid")
+	fmt.Println("    audio_weak_grid_good  — interesting (metric mismatch or lucky refinement)")
+	fmt.Println("    audio_weak_grid_weak  — finder admitted a marginal/noisy candidate")
+
+	// Missed truths with a refined near-truth candidate.
+	missedByBucket := map[string][]truthFate{}
+	noRefined := 0
+	missedTotal := 0
+	for _, f := range fates {
+		if f.stage == stageMatched {
+			continue
+		}
+		missedTotal++
+		if !f.hasRefined {
+			noRefined++
+			continue
+		}
+		b := qualityBucket(f.audioGeo, f.gridGeo)
+		missedByBucket[b] = append(missedByBucket[b], f)
+	}
+	fmt.Println()
+	fmt.Printf("--- MISSED TRUTHS (n=%d total; n=%d with a refined near-truth candidate, n=%d upstream-died) ---\n",
+		missedTotal, missedTotal-noRefined, noRefined)
+	fmt.Println("  bucket                count")
+	for _, b := range qualityBucketOrder {
+		fmt.Printf("    %-22s %3d\n", b, len(missedByBucket[b]))
+	}
+	if noRefined > 0 {
+		fmt.Printf("    %-22s %3d  (no refined near-truth candidate; symbol-quality n/a)\n",
+			"upstream-died", noRefined)
+	}
+	for _, b := range qualityBucketOrder {
+		entries := missedByBucket[b]
+		if len(entries) == 0 {
+			continue
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].capture != entries[j].capture {
+				return entries[i].capture < entries[j].capture
+			}
+			return entries[i].freqHz < entries[j].freqHz
+		})
+		fmt.Println()
+		fmt.Printf("  ▸ %s (n=%d)\n", b, len(entries))
+		for _, e := range entries {
+			fmt.Printf("    %-16s  %7.1f Hz  dt=%+6.3f  audio=%6.2f  grid=%6.2f  stage=%s  %q\n",
+				e.capture, e.freqHz, e.dtSec, e.audioGeo, e.gridGeo, e.stage, e.text)
+		}
+	}
+
+	// Accepted extras (false-positive decodes).
+	extrasByBucket := map[string][]extraEvidence{}
+	for _, e := range extras {
+		b := qualityBucket(e.audioGeo, e.gridGeo)
+		extrasByBucket[b] = append(extrasByBucket[b], e)
+	}
+	fmt.Println()
+	fmt.Printf("--- ACCEPTED EXTRAS (n=%d; false-positive decodes that survived the gate) ---\n", len(extras))
+	fmt.Println("  bucket                count")
+	for _, b := range qualityBucketOrder {
+		fmt.Printf("    %-22s %3d\n", b, len(extrasByBucket[b]))
+	}
+	for _, b := range qualityBucketOrder {
+		entries := extrasByBucket[b]
+		if len(entries) == 0 {
+			continue
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].capture != entries[j].capture {
+				return entries[i].capture < entries[j].capture
+			}
+			return entries[i].freqHz < entries[j].freqHz
+		})
+		fmt.Println()
+		fmt.Printf("  ▸ %s (n=%d)\n", b, len(entries))
+		for _, e := range entries {
+			fmt.Printf("    %-16s  %7.1f Hz  dt=%+6.3f  audio=%6.2f  grid=%6.2f  %q\n",
+				e.capture, e.freqHz, e.dtSec, e.audioGeo, e.gridGeo, e.text)
+		}
+	}
 }
 
 // printSurvival reports total candidate counts at each pipeline
@@ -560,30 +1061,84 @@ func buildHisto(near, alias []float64, binWidth, maxBin float64) []histoRow {
 	return rows
 }
 
-// refineCandidates runs RefineCandidate over a slice of post-cap
-// candidates and returns the successfully refined set. Skipping the
-// per-candidate channelizer.Extract failure path is intentional: the
-// funnel only cares whether refinement *produces* a candidate, not
-// downstream extraction failures.
-func refineCandidates(samples []float32, cands []sandbox.Candidate, refineOpts sandbox.RefineOptions) []sandbox.Candidate {
+// refineAndExtract runs RefineCandidate over the supplied candidate
+// slice and pairs each survivor with its SymbolGrid (via
+// ExtractSymbols). The two return slices are index-aligned: grids[i]
+// is the grid for refined[i] (or nil if grid extraction failed for
+// that refined candidate — symbol windows outside the baseband bound
+// are the typical cause; the candidate stays in refined regardless
+// so the funnel's stage counts don't shift).
+//
+// Sharing one Channelizer across refine + extract for an entire WAV
+// is the cheap path: Prepare runs once, the cached 192k FFT is
+// reused for every Refine and every Extract.
+func refineAndExtract(samples []float32, cands []sandbox.Candidate, refineOpts sandbox.RefineOptions) ([]sandbox.Candidate, []*sandbox.SymbolGrid) {
 	ch, err := sandbox.NewChannelizer()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer ch.Close()
 	ch.SetAsymmetricFT8Slice(false)
 	if err := ch.Prepare(samples); err != nil {
-		return nil
+		return nil, nil
 	}
 	refined := make([]sandbox.Candidate, 0, len(cands))
+	grids := make([]*sandbox.SymbolGrid, 0, len(cands))
 	for _, c := range cands {
 		rc, err := sandbox.RefineCandidate(ch, c, refineOpts)
 		if err != nil {
 			continue
 		}
 		refined = append(refined, rc)
+		if g, err := sandbox.ExtractSymbols(ch, rc); err == nil {
+			grids = append(grids, g)
+		} else {
+			grids = append(grids, nil)
+		}
 	}
-	return refined
+	return refined, grids
+}
+
+// closestRefinedIndex finds the refined candidate within (freqTol,
+// dtTol) of (truthFreq, truthDt) with the smallest combined
+// distance, and returns its slice index. Returns -1 if none match.
+//
+// "Closest" combines freq + dt by treating them on a comparable
+// scale (1 s of dt drift = 8 Hz of freq drift, matching the
+// nmsAttribute helper). The constants only matter for argmin, not
+// for thresholding.
+func closestRefinedIndex(refined []sandbox.Candidate, truthFreq, truthDt, freqTol, dtTol float64) int {
+	best := -1
+	bestSq := math.Inf(1)
+	for i := range refined {
+		c := &refined[i]
+		if !near(c.FreqHz, c.DtSec, truthFreq, truthDt, freqTol, dtTol) {
+			continue
+		}
+		dF := c.FreqHz - truthFreq
+		dD := c.DtSec - truthDt
+		dist := dF*dF + (dD*8)*(dD*8)
+		if dist < bestSq {
+			bestSq = dist
+			best = i
+		}
+	}
+	return best
+}
+
+// isAcceptedExtra returns true when an accepted decode does NOT
+// match any truth in the manifest — i.e., a false-positive that
+// passed BP/OSD + CRC + gate. Same definition the harness uses for
+// its "extras" count: no near-truth coordinate AND matching text.
+func isAcceptedExtra(d sandbox.DecodeRecord, signals []truth.Signal, freqTol, dtTol float64) bool {
+	dText := truth.NormalizeText(d.Text)
+	for _, s := range signals {
+		if near(d.FreqHz, d.DtSec, s.FreqHz, s.DTSec, freqTol, dtTol) &&
+			dText == truth.NormalizeText(s.Text) {
+			return false
+		}
+	}
+	return true
 }
 
 // classify walks the pipeline outcome inputs from downstream (matched)
