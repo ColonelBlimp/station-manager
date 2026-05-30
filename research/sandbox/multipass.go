@@ -757,8 +757,18 @@ func applyStage2(samples []float32, cands []Candidate, opts MultiPassOptions) []
 			out[i] = cands[j]
 		}
 		return out
+	case Stage2Observe:
+		// Verifier metrics were computed above for diagnostics; the
+		// candidate set is returned unchanged (observe = measure, don't
+		// act). Stage2Off is short-circuited before metrics compute.
+		return cands
+	default:
+		// Unknown mode: degrade to pass-through rather than drop
+		// candidates (fail-soft). Reaching here means a Stage2Mode value
+		// was added without a case — the typed enum makes that a
+		// programming error, but a decode pass must not panic.
+		return cands
 	}
-	return cands
 }
 
 func applyMultiPassDefaults(opts MultiPassOptions) MultiPassOptions {
