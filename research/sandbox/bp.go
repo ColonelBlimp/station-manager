@@ -75,6 +75,18 @@ type BPResult struct {
 	// "BP" when BP alone reached CRC-valid, "OSD-N" when OSD order N
 	// finished the job, "fail" when neither did.
 	DecodeMethod string
+
+	// OSDSoftDist is the soft distance Σ|LLR_v|·[cw_v ≠ hard_v] of the
+	// OSD codeword that was accepted (DecodeMethod = "OSD-N"). Zero
+	// when OSD did not run or BP won outright. Diagnostic only —
+	// observe-mode trace consumers read it to see how close an OSD
+	// commit sat to the AcceptDistanceRatio gate.
+	OSDSoftDist float64
+
+	// OSDNormDist is OSDSoftDist / Σ|channel LLR| — the dimensionless
+	// quantity the OSD accept gate actually thresholds against
+	// (AcceptDistanceRatio). Zero when OSD did not produce the result.
+	OSDNormDist float64
 }
 
 // BPDecode runs sum-product belief propagation on a 174-element soft
@@ -234,7 +246,7 @@ func BPDecodeWithPin(
 	// LLRs. Per the maxosd convention, this is the "BP + OSD with
 	// channel LLRs" mode (WSJT-X maxosd = 0).
 	if opts.OSD.Enable {
-		osdCW, ok, _ := runOSDWithPin(channelLLRs, pinned, opts.OSD.Order, opts.OSD.AcceptDistanceRatio, opts.OSD.MaxCandidates)
+		osdCW, ok, dmin := runOSDWithPin(channelLLRs, pinned, opts.OSD.Order, opts.OSD.AcceptDistanceRatio, opts.OSD.MaxCandidates)
 		if ok {
 			res.OK = true
 			res.SyndromeClean = true // by construction; OSD outputs are codewords
@@ -242,6 +254,14 @@ func BPDecodeWithPin(
 			res.Codeword = osdCW
 			copy(res.Message91[:], osdCW[:LDPCInfoBits])
 			res.DecodeMethod = fmt.Sprintf("OSD-%d", opts.OSD.Order)
+			res.OSDSoftDist = dmin
+			var sumAbs float64
+			for _, l := range channelLLRs {
+				sumAbs += math.Abs(l)
+			}
+			if sumAbs > 0 {
+				res.OSDNormDist = dmin / sumAbs
+			}
 			return res
 		}
 	}

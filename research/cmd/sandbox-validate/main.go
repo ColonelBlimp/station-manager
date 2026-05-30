@@ -72,6 +72,8 @@ func main() {
 	scan := flag.Bool("scan", false, "run FindCandidates + RefineCandidate instead of per-truth probing")
 	threshold := flag.Float64("thresh", 3.0, "FindCandidates score threshold (scan mode)")
 	dfsweep := flag.Float64("dfsweep", 0, "override RefineOptions.DFSweepRangeHz (Hz); 0 = default")
+	minFreq := flag.Float64("min-freq", 0, "override SearchOptions.MinFreqHz (tone-0 search floor, Hz, scan mode). 0 = package default (100).")
+	maxFreq := flag.Float64("max-freq", 0, "override SearchOptions.MaxFreqHz (tone-0 search ceiling, Hz, scan mode). 0 = package default (3000).")
 	flag.Parse()
 
 	data, err := audio.ReadWAV(*wavPath)
@@ -110,7 +112,7 @@ func main() {
 	}
 
 	if *scan {
-		runScan(ch, data.Samples, manifest, *threshold, *dfsweep)
+		runScan(ch, data.Samples, manifest, *threshold, *dfsweep, *minFreq, *maxFreq)
 		return
 	}
 
@@ -279,7 +281,7 @@ func printTopBins(work []complex128, binHzBB float64, topN int) {
 // 3.125 Hz × 40 ms grid snapping); refined ±1 Hz / ±0.05 s (tight
 // enough that the refinement step has to actually improve over coarse
 // to count).
-func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifest, threshold, dfsweepOverride float64) {
+func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifest, threshold, dfsweepOverride, minFreq, maxFreq float64) {
 	const (
 		coarseFreqTol  = 5.0
 		coarseDtTol    = 0.1
@@ -295,6 +297,12 @@ func runScan(ch *sandbox.Channelizer, samples []float32, manifest *truth.Manifes
 
 	findOpts := sandbox.DefaultSearchOptions()
 	findOpts.Threshold = threshold
+	if minFreq > 0 {
+		findOpts.MinFreqHz = minFreq
+	}
+	if maxFreq > 0 {
+		findOpts.MaxFreqHz = maxFreq
+	}
 	cands := sandbox.FindCandidates(spec, findOpts)
 	fmt.Printf("  coarse candidates (thresh=%.2f): %d\n", threshold, len(cands))
 	for i, c := range cands {

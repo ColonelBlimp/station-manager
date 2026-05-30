@@ -181,6 +181,11 @@ func main() {
 	magnitudeLLR := flag.Bool("magnitude-llr", true, "QEX § 6 spec-aligned magnitude-domain demap. Default true matches the strict-mode 113/23 baseline.")
 	nmsK := flag.Int("nms-k", 0, "override SearchOptions.K2MaxPerGroup (max kept per freq group in NMS). 0 = package default (2).")
 	maxResults := flag.Int("max-results", 0, "override SearchOptions.MaxResults (post-NMS cap). 0 = package default (200). Raise to test whether raising NMS K is wasted by the cap biting downstream.")
+	sepKappa := flag.Float64("sep-kappa", 0, "enable N1Sep cascade stage (N1Norm + winner-vs-runner-up separation weight). 0 = off (exact baseline). Targets the unpack_fail / wrong-codeword bucket.")
+	unpackTrace := flag.Bool("unpack-trace", false, "dump the first committing cascade stage (metric + BP/OSD method + OSD soft-distance + sep summary + unpack detail) for every missed truth whose nearest trace ended unpack_fail. Trace-driven input to the sep-weight-vs-OSD-policy-vs-cascade-continue decision.")
+	emitUnresolved := flag.Bool("emit-unresolved", false, "emit CRC-valid decodes whose only defect is an unresolvable hashed callsign, rendered \"<...>\" (matches jt9 + truth manifests), instead of dropping them as unpack_fail. Gate still runs. Default off = exact baseline.")
+	minFreq := flag.Float64("min-freq", 0, "override SearchOptions.MinFreqHz (tone-0 search floor, Hz). 0 = package default (100).")
+	maxFreq := flag.Float64("max-freq", 0, "override SearchOptions.MaxFreqHz (tone-0 search ceiling, Hz). 0 = package default (3000).")
 	stage2Mode := flag.String("stage2-mode", "off", "post-NMS Costas verifier mode: off | observe | filter | rerank. Mirrors sandbox-asym-ab semantics so funnel deltas match decoder runs at the same options.")
 	stage2Metric := flag.String("stage2-metric", "minblock", "Stage2 discriminator: minblock | geo | wins.")
 	stage2Threshold := flag.Float64("stage2-threshold", 0, "Stage2 filter threshold (units depend on -stage2-metric).")
@@ -208,6 +213,18 @@ func main() {
 	}
 	if *maxResults > 0 {
 		opts.Search.MaxResults = *maxResults
+	}
+	if *minFreq > 0 {
+		opts.Search.MinFreqHz = *minFreq
+	}
+	if *maxFreq > 0 {
+		opts.Search.MaxFreqHz = *maxFreq
+	}
+	if *sepKappa > 0 {
+		opts.SepKappa = *sepKappa
+	}
+	if *emitUnresolved {
+		opts.EmitUnresolvedHashes = true
 	}
 	if mode, ok := parseStage2Mode(*stage2Mode); ok {
 		opts.Stage2Mode = mode
@@ -403,6 +420,12 @@ func main() {
 	printSurvival(totalRaw, totalNMS, totalCap, totalStage2, totalRefined, opts.Stage2Mode)
 	printSymbolQuality(fates, extras)
 	printDecoderTrace(fates, extras, allTraces, *freqTol, *dtTol)
+	if *unpackTrace {
+		printUnpackFailCommit(fates, allTraces, *freqTol, *dtTol)
+	}
+	if *emitUnresolved {
+		printUnresolvedExtraAudit(extras, fates, allTraces)
+	}
 	printScoreAudit(scores)
 }
 
@@ -441,6 +464,212 @@ func findTraceForExtra(allTraces []traceEntry, capture string, freqHz, dtSec flo
 		}
 	}
 	return sandbox.CandidateTrace{}, false
+}
+
+// printUnpackFailCommit dumps, for every missed truth whose nearest
+// trace ended in "unpack_fail", the first committing cascade stage —
+// the stage that produced the CRC-valid-but-unpackable codeword and
+// short-circuited the cascade. This is the trace-driven input to the
+// Session-108 decision: are the unpack_fail commits mostly BP from
+// N1/N1Norm (sep-weighting hypothesis alive), mostly OSD-2 (treat as
+// OSD policy), or would a later stage have decoded correctly (cascade
+// should continue past unpack_fail)?
+//
+// Fields per truth: committing stage (LLR metric) + method (BP/OSD-N)
+// + iterations + syndrome + crc + OSD soft-distance (raw + normalised
+// against Σ|LLR|, the gate quantity) + mean |LLR| + unpack-error
+// detail + per-symbol separation summary (count of near-tied symbols
+// the sep-weight would target, min/median sep).
+func printUnpackFailCommit(fates []truthFate, allTraces []traceEntry, freqTol, dtTol float64) {
+	fmt.Println()
+	fmt.Println("=== UNPACK_FAIL COMMITTING-STAGE TRACE ===")
+	fmt.Println("  per missed truth whose nearest trace ended unpack_fail: the first")
+	fmt.Println("  cascade stage that returned a CRC-valid codeword (and short-circuited).")
+	fmt.Println()
+
+	byStage := map[string]int{} // "<metric>/<BP|OSD-N>" -> count
+	byMethod := map[string]int{}
+	n := 0
+	for _, f := range fates {
+		traces := findTracesNearTruth(allTraces, f.capture, f.freqHz, f.dtSec, freqTol, dtTol)
+		var ct sandbox.CandidateTrace
+		found := false
+		for _, t := range traces {
+			if t.Outcome == "unpack_fail" {
+				ct = t
+				found = true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+		// First committing attempt = first with BR.OK (the stage that
+		// short-circuited the cascade with a CRC-valid codeword).
+		var commit sandbox.TraceAttempt
+		haveCommit := false
+		for _, a := range ct.Attempts {
+			if a.BR.OK {
+				commit = a
+				haveCommit = true
+				break
+			}
+		}
+		n++
+		method := "?"
+		if haveCommit {
+			method = commit.BR.DecodeMethod
+			byStage[commit.Metric+"/"+method]++
+			byMethod[method]++
+		}
+
+		fmt.Printf("  %-15s %7.1fHz dt=%+.2f  %q\n", f.capture, f.freqHz, f.dtSec, f.text)
+		if haveCommit {
+			fmt.Printf("      commit: stage=%-7s method=%-6s iters=%-2d syndrome=%-5v crc=%-5v meanAbsLLR=%.3g\n",
+				commit.Metric, method, commit.BR.Iterations, commit.BR.SyndromeClean, commit.BR.CRCValid, commit.MeanAbsLLR)
+			if commit.BR.OSDSoftDist > 0 || commit.BR.OSDNormDist > 0 {
+				fmt.Printf("      OSD:    softDist=%.4g normDist=%.4f (gate=AcceptDistanceRatio)\n",
+					commit.BR.OSDSoftDist, commit.BR.OSDNormDist)
+			}
+		} else {
+			fmt.Printf("      commit: (no BR.OK attempt found in trace — unexpected for unpack_fail)\n")
+		}
+		fmt.Printf("      unpack: %s\n", ct.UnpackDetail)
+		fmt.Printf("      sep:    nearTied(<1σ)=%d/58  minSep=%.3f  medianSep=%.3f\n",
+			ct.SepNumNearTied, ct.SepMin, ct.SepMedian)
+	}
+
+	fmt.Println()
+	fmt.Printf("  unpack_fail truths traced: %d\n", n)
+	fmt.Println("  --- committing method tally ---")
+	for _, k := range []string{"BP", "OSD-1", "OSD-2"} {
+		if byMethod[k] > 0 {
+			fmt.Printf("    %-6s %d\n", k, byMethod[k])
+		}
+	}
+	fmt.Println("  --- committing stage/method tally ---")
+	for k, v := range byStage {
+		fmt.Printf("    %-14s %d\n", k, v)
+	}
+}
+
+// printUnresolvedExtraAudit characterises every accepted extra (decode
+// matching no truth) that came from an unresolved-hash emit — the
+// Session-108 promotion gate. The risk being tested: an unresolved-
+// hash emit can launder a CRC-lottery codeword into plausible-looking
+// "<...>" text. For each such extra it dumps the full physical-evidence
+// record so the operator can judge benign-near-real-signal vs random-
+// accept: type, unresolved kind, committing stage + BP/OSD method,
+// nsync / tone-agreement / hard-errors / SNR, audio+grid GeoContrast,
+// the raw hash detail, nearest-truth coordinate delta, and which (if
+// any) real callsigns the emit registers into the hash table.
+func printUnresolvedExtraAudit(extras []extraEvidence, fates []truthFate, allTraces []traceEntry) {
+	fmt.Println()
+	fmt.Println("=== UNRESOLVED-EMIT EXTRA AUDIT ===")
+	fmt.Println("  accepted decodes matching NO truth that came from an unresolved-hash emit.")
+	fmt.Println()
+	n := 0
+	for _, e := range extras {
+		tr, ok := findAcceptedTrace(allTraces, e.capture, e.freqHz, e.dtSec)
+		if !ok {
+			continue
+		}
+		n++
+		stage, method := "?", "?"
+		for _, a := range tr.Attempts {
+			if a.BR.OK {
+				stage, method = a.Metric, a.BR.DecodeMethod
+				break
+			}
+		}
+		kind := "h22"
+		if tr.I3 == 4 {
+			kind = "h12"
+		}
+		ntText, ndf, ndt, haveNT := nearestTruth(fates, e.capture, e.freqHz, e.dtSec)
+		regs := resolvableCalls(e.text)
+
+		fmt.Printf("  %-15s %7.1fHz dt=%+.2f  %q  [%s]\n", e.capture, e.freqHz, e.dtSec, e.text, tr.Outcome)
+		fmt.Printf("      type=i3-%d unresolved=%s  stage=%s method=%s pass=%d\n",
+			tr.I3, kind, stage, method, tr.Pass)
+		fmt.Printf("      gate: nsync=%d toneAgree=%d/79 hardErr=%d snr=%.1fdB  geo(audio=%.2f grid=%.2f)\n",
+			tr.NSync, tr.ToneAgree, tr.HardErrors, tr.SNR2500DB, e.audioGeo, e.gridGeo)
+		fmt.Printf("      hash: %s\n", tr.UnpackDetail)
+		if haveNT {
+			fmt.Printf("      nearest truth: %q  Δf=%+.1fHz Δdt=%+.2fs\n", ntText, e.freqHz-ndf, e.dtSec-ndt)
+		} else {
+			fmt.Printf("      nearest truth: (none in capture)\n")
+		}
+		if len(regs) > 0 {
+			fmt.Printf("      registers: %v\n", regs)
+		} else {
+			fmt.Printf("      registers: (none — only <...> + non-call tokens)\n")
+		}
+	}
+	fmt.Printf("  unresolved-emit extras: %d\n", n)
+}
+
+// findAcceptedTrace returns the nearest accepted/accepted_unresolved
+// trace at (capture, freq, dt) within a tight tolerance.
+func findAcceptedTrace(allTraces []traceEntry, capture string, freqHz, dtSec float64) (sandbox.CandidateTrace, bool) {
+	for _, te := range allTraces {
+		if te.capture != capture {
+			continue
+		}
+		o := te.trace.Outcome
+		if o != "accepted" && o != "accepted_unresolved" {
+			continue
+		}
+		if math.Abs(te.trace.FreqHz-freqHz) <= 1.0 && math.Abs(te.trace.DtSec-dtSec) <= 0.05 {
+			return te.trace, true
+		}
+	}
+	return sandbox.CandidateTrace{}, false
+}
+
+// nearestTruth returns the closest truth (by freq, dt) in the same
+// capture, plus its text/freq/dt, for delta reporting.
+func nearestTruth(fates []truthFate, capture string, freqHz, dtSec float64) (text string, f, dt float64, ok bool) {
+	best := math.Inf(1)
+	for _, tf := range fates {
+		if tf.capture != capture {
+			continue
+		}
+		d := math.Abs(tf.freqHz-freqHz) + 100*math.Abs(tf.dtSec-dtSec)
+		if d < best {
+			best = d
+			text, f, dt, ok = tf.text, tf.freqHz, tf.dtSec, true
+		}
+	}
+	return text, f, dt, ok
+}
+
+// resolvableCalls returns the non-placeholder callsign-shaped tokens in
+// text — the calls an emit would Add to the hash table (registerCallsigns
+// skips "<"-prefixed and bare CQ/DE/report tokens).
+func resolvableCalls(text string) []string {
+	var out []string
+	for _, tok := range strings.Fields(text) {
+		if tok == "" || tok[0] == '<' {
+			continue
+		}
+		switch tok {
+		case "CQ", "DE", "QRZ", "R", "RRR", "RR73", "73":
+			continue
+		}
+		hasL, hasD := false, false
+		for _, c := range tok {
+			if c >= 'A' && c <= 'Z' {
+				hasL = true
+			} else if c >= '0' && c <= '9' {
+				hasD = true
+			}
+		}
+		if hasL && hasD {
+			out = append(out, tok)
+		}
+	}
+	return out
 }
 
 // printDecoderTrace consumes the per-candidate trace records from

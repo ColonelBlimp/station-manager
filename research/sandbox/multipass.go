@@ -44,6 +44,13 @@ type DecodeRecord struct {
 	// Multi-pass diagnostics: pass 2 decodes only exist when the
 	// subtract-and-redecode loop recovered an overlap.
 	Pass int
+
+	// Unresolved is true when this decode carried an unresolvable
+	// hashed callsign and was emitted with a "<...>" placeholder under
+	// MultiPassOptions.EmitUnresolvedHashes. The codeword is valid and
+	// the decode passed the gate; only the hashed callsign couldn't be
+	// rendered. False for fully-resolved decodes.
+	Unresolved bool
 }
 
 // LLRMetric* constants name the LLR-generation strategies the cascade
@@ -54,6 +61,7 @@ const (
 	LLRMetricN2      = "N2"
 	LLRMetricN3      = "N3"
 	LLRMetricN1Norm  = "N1Norm"
+	LLRMetricN1Sep   = "N1Sep"
 	LLRMetricBestOfN = "BestOfN"
 	LLRMetricAPCQ    = "APCQ"
 	LLRMetricAP3     = "AP3"
@@ -219,6 +227,32 @@ type MultiPassOptions struct {
 	// measure whether N1+OSD is the dominant false-positive engine
 	// while preserving deeper-metric recoveries.
 	OSDDisableForN1 bool
+
+	// SepKappa enables the N1Sep cascade stage (SoftLLRsN1SepWeighted):
+	// N1Norm plus a per-symbol winner-vs-runner-up separation confidence
+	// weight w_s = min(1, sep_s/SepKappa), sep_s = (√top1−√top2)/σ̂_s.
+	// SepKappa ≤ 0 (default) skips the stage entirely, so the baseline
+	// cascade and corpus numbers are preserved exactly — flip it on to
+	// A/B N1Norm against N1Norm+sepWeight. Smaller kappa down-weights
+	// ambiguous (near-tied top-tone) symbols more aggressively; the
+	// operating point is corpus-calibrated, not a spec constant. Targets
+	// the Session-107 unpack_fail / wrong-codeword bucket where a strong
+	// runner-up tone gives N1Norm false confidence. See
+	// SoftLLRsN1SepWeighted + qex-derivation.md § 8.4.
+	SepKappa float64
+
+	// EmitUnresolvedHashes lets the decode loop accept a CRC-valid,
+	// structurally-valid decode whose only defect is an unresolvable
+	// hashed callsign (UnpackResult.Unresolved) — emitting it with the
+	// "<...>" placeholder rather than discarding it as unpack_fail.
+	// This matches jt9's behaviour (and the jt9-oracle truth manifests,
+	// which carry "<...>" for the same case). The post-decode gate
+	// still runs; only genuinely undecodable payloads (unsupported i3,
+	// reserved token, bad grid) remain dropped. Default false preserves
+	// the existing baseline exactly. Targets the Session-108 finding
+	// that the unpack_fail bucket is dominated by correct codewords
+	// blocked solely on hash resolution, not wrong-codeword commits.
+	EmitUnresolvedHashes bool
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -372,6 +406,7 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			}
 			if opts.TraceCandidates {
 				ctrace.GridGeo = VerifyCostasGrid(grid).GeoContrast
+				ctrace.SepNumNearTied, ctrace.SepMin, ctrace.SepMedian = gridSepSummary(grid)
 			}
 			var traceTarget *[]TraceAttempt
 			if opts.TraceCandidates {
@@ -391,9 +426,15 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			var payload [LDPCPayloadBits]uint8
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
 			ur := Unpack77WithHashes(payload, ht)
-			if !ur.OK {
+			// Emit a displayable-but-unresolved decode (hashed callsign
+			// rendered "<...>") only under EmitUnresolvedHashes; the gate
+			// below still runs on it. Genuinely undecodable payloads
+			// (ur.OK false and ur.Unresolved false) always drop here.
+			emitUnresolved := opts.EmitUnresolvedHashes && ur.Unresolved
+			if !ur.OK && !emitUnresolved {
 				if opts.TraceCandidates {
 					ctrace.Outcome = "unpack_fail"
+					ctrace.UnpackDetail = ur.Detail
 					traceEmit(&traces, ctrace)
 				}
 				continue
@@ -401,7 +442,7 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			// Backfill text into the winning attempt for trace clarity.
 			if opts.TraceCandidates && len(ctrace.Attempts) > 0 {
 				ctrace.Attempts[len(ctrace.Attempts)-1].Text = ur.Text
-				ctrace.Attempts[len(ctrace.Attempts)-1].TextOK = true
+				ctrace.Attempts[len(ctrace.Attempts)-1].TextOK = ur.OK
 			}
 			// AP-form correctness guard: OSD-2 can flip MRB bits even
 			// with priors pinned (the OSD pin shipped Session 104 now
@@ -439,6 +480,13 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			// compare distributions. The cost is 79 comparisons per
 			// candidate — negligible next to BP+OSD.
 			toneAgree := ToneAgreementCount(br.Codeword, grid)
+			if opts.TraceCandidates {
+				ctrace.NSync = nsync
+				ctrace.ToneAgree = toneAgree
+				ctrace.HardErrors = hardErrs
+				ctrace.SNR2500DB = snr
+				ctrace.I3 = ur.I3
+			}
 			if ok, reason := AcceptDecode(
 				br.DecodeMethod, llrMetric, nsync, grid, br.Codeword,
 				hardErrs, snr, opts.Gate,
@@ -472,9 +520,15 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 				DecodeMethod: br.DecodeMethod,
 				LLRMetric:    llrMetric,
 				Pass:         pass,
+				Unresolved:   emitUnresolved,
 			})
 			if opts.TraceCandidates {
-				ctrace.Outcome = "accepted"
+				if emitUnresolved {
+					ctrace.Outcome = "accepted_unresolved"
+					ctrace.UnpackDetail = ur.Detail
+				} else {
+					ctrace.Outcome = "accepted"
+				}
 				traceEmit(&traces, ctrace)
 			}
 			registerCallsigns(ht, ur.Text)
@@ -732,6 +786,8 @@ type cascadeOutcome struct {
 //  2. N=2     — 2-symbol block detection, 0.32 s coherence (QEX § 6)
 //  3. N=3     — 3-symbol block detection, 0.48 s coherence (QEX § 6)
 //  4. N1Norm  — per-symbol noise-normalized N=1 (qex-derivation.md § 8)
+//     4b. N1Sep  — N1Norm + winner-vs-runner-up separation weight, opt-in
+//     via SepKappa > 0 (qex-derivation.md § 8.4)
 //  5. BestOfN — per-bit max-|LLR| selection, opt-in via EnableBestOfN
 //     (qex-derivation.md § 9)
 //  6. AP-CQ   — c28_1 ∈ {bare CQ, CQ DX, CQ COTA, CQ POTA}, 34 pinned
@@ -739,7 +795,7 @@ type cascadeOutcome struct {
 //  7. AP3     — (c28_1, c28_2) drawn from CallsignHashTable + CQ family;
 //     62 pinned bits; opt-in via EnableAP3
 //
-// Stages 1-5 use unpinned BP. Stages 6-7 use BPDecodeWithPin so OSD's
+// Stages 1-5 (incl. N1Sep) use unpinned BP. Stages 6-7 use BPDecodeWithPin so OSD's
 // MRB bit-flip search cannot undo the priors.
 //
 // Returns (outcome, true) on first success; (zero, false) when all
@@ -765,7 +821,7 @@ func runCascade(
 	llrs := SoftLLRs(grid, mm)
 	br := BPDecode(llrs, n1Opts)
 	if trace != nil {
-		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1, BR: br})
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1, BR: br, MeanAbsLLR: meanAbsLLR(llrs)})
 	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1}, true
@@ -774,7 +830,7 @@ func runCascade(
 	llrs = SoftLLRsN2(grid, mm)
 	br = BPDecode(llrs, bpOpts)
 	if trace != nil {
-		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN2, BR: br})
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN2, BR: br, MeanAbsLLR: meanAbsLLR(llrs)})
 	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN2}, true
@@ -783,7 +839,7 @@ func runCascade(
 	llrs = SoftLLRsN3(grid, mm)
 	br = BPDecode(llrs, bpOpts)
 	if trace != nil {
-		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN3, BR: br})
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN3, BR: br, MeanAbsLLR: meanAbsLLR(llrs)})
 	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN3}, true
@@ -792,17 +848,28 @@ func runCascade(
 	llrs = SoftLLRsN1BitNormalized(grid, mm)
 	br = BPDecode(llrs, bpOpts)
 	if trace != nil {
-		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1Norm, BR: br})
+		*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1Norm, BR: br, MeanAbsLLR: meanAbsLLR(llrs)})
 	}
 	if br.OK {
 		return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1Norm}, true
+	}
+
+	if opts.SepKappa > 0 {
+		llrs = SoftLLRsN1SepWeighted(grid, mm, opts.SepKappa)
+		br = BPDecode(llrs, bpOpts)
+		if trace != nil {
+			*trace = append(*trace, TraceAttempt{Metric: LLRMetricN1Sep, BR: br, MeanAbsLLR: meanAbsLLR(llrs)})
+		}
+		if br.OK {
+			return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricN1Sep}, true
+		}
 	}
 
 	if opts.EnableBestOfN {
 		llrs = SoftLLRsBestOfN(grid, mm)
 		br = BPDecode(llrs, bpOpts)
 		if trace != nil {
-			*trace = append(*trace, TraceAttempt{Metric: LLRMetricBestOfN, BR: br})
+			*trace = append(*trace, TraceAttempt{Metric: LLRMetricBestOfN, BR: br, MeanAbsLLR: meanAbsLLR(llrs)})
 		}
 		if br.OK {
 			return cascadeOutcome{BR: br, LLRs: llrs, Metric: LLRMetricBestOfN}, true
@@ -815,7 +882,7 @@ func runCascade(
 			l := softLLRsAPCQWithMag(grid, opts.APCQMag, c28v, mm)
 			b := BPDecodeWithPin(l, bpOpts, &pin)
 			if trace != nil {
-				*trace = append(*trace, TraceAttempt{Metric: LLRMetricAPCQ, BR: b})
+				*trace = append(*trace, TraceAttempt{Metric: LLRMetricAPCQ, BR: b, MeanAbsLLR: meanAbsLLR(l)})
 			}
 			if b.OK {
 				return cascadeOutcome{BR: b, LLRs: l, Metric: LLRMetricAPCQ, TextGuard: "CQ"}, true
@@ -832,7 +899,7 @@ func runCascade(
 				l := softLLRsAP3WithMag(grid, opts.AP3Mag, p.c28_1, p.c28_2, mm)
 				b := BPDecodeWithPin(l, bpOpts, &pin)
 				if trace != nil {
-					*trace = append(*trace, TraceAttempt{Metric: LLRMetricAP3, BR: b})
+					*trace = append(*trace, TraceAttempt{Metric: LLRMetricAP3, BR: b, MeanAbsLLR: meanAbsLLR(l)})
 				}
 				if !b.OK {
 					continue

@@ -38,6 +38,8 @@ func main() {
 	singlePass := flag.Bool("single", false, "disable multi-pass (single-pass baseline)")
 	freqTol := flag.Float64("ftol", 5.0, "freq tolerance for truth matching (Hz)")
 	dtTol := flag.Float64("dttol", 0.5, "dt tolerance for truth matching (s)")
+	minFreq := flag.Float64("min-freq", 0, "override SearchOptions.MinFreqHz (tone-0 search floor, Hz). 0 = package default (100).")
+	maxFreq := flag.Float64("max-freq", 0, "override SearchOptions.MaxFreqHz (tone-0 search ceiling, Hz). 0 = package default (3000).")
 	flag.Parse()
 
 	data, err := audio.ReadWAV(*wavPath)
@@ -62,6 +64,12 @@ func main() {
 	opts := sandbox.DefaultMultiPassOptions()
 	if *singlePass {
 		opts.MaxPasses = 1
+	}
+	if *minFreq > 0 {
+		opts.Search.MinFreqHz = *minFreq
+	}
+	if *maxFreq > 0 {
+		opts.Search.MaxFreqHz = *maxFreq
 	}
 
 	fmt.Printf("=== %s ===\n", *wavPath)

@@ -504,7 +504,17 @@ func SoftLLRsN1BitNormalized(grid *SymbolGrid, magnitudeMode bool) [FT8CodewordB
 //     result = 6v/6 = v). Correct when there's no signal tone — all
 //     tones are noise.
 func meanOfSixLowest(powers [8]float64) float64 {
-	var top1, top2, sum float64
+	top1, top2, sum := topTwoAndSum(powers)
+	return (sum - top1 - top2) / 6.0
+}
+
+// topTwoAndSum returns the two largest tone powers and the total sum of
+// an 8-tone power array in a single O(8) pass. Shared by the per-symbol
+// noise estimator (meanOfSixLowest) and the winner-vs-runner-up
+// separation denominator in SoftLLRsN1SepWeighted, so both read an
+// identical top-2 definition. Stable under ties: when multiple tones
+// share the maximum, top1/top2 collapse to the shared value.
+func topTwoAndSum(powers [8]float64) (top1, top2, sum float64) {
 	for _, p := range powers {
 		sum += p
 		if p >= top1 {
@@ -514,7 +524,156 @@ func meanOfSixLowest(powers [8]float64) float64 {
 			top2 = p
 		}
 	}
-	return (sum - top1 - top2) / 6.0
+	return top1, top2, sum
+}
+
+// SoftLLRsN1SepWeighted computes a 174-bit LLR vector as N1Norm
+// (per-symbol noise-normalized N=1 max-log demap, exactly as
+// SoftLLRsN1BitNormalized) with an ADDITIONAL per-symbol winner-vs-
+// runner-up *separation* confidence weight applied uniformly to each
+// symbol's three bit-LLRs.
+//
+// Motivation — the N1Norm blind spot (Session-107 unpack_fail bucket).
+// SoftLLRsN1BitNormalized scales each symbol's LLRs by 1/σ̂²_s, where
+// σ̂²_s is the mean of the six lowest tone powers (top-2 trimmed). That
+// correctly normalises broad multi-tone contamination — extra elevated
+// tones raise σ̂² — but is BLIND to the specific case the decoder trace
+// surfaced: the top two tones are nearly tied. A strong runner-up tone
+// (an in-channel interferer) is trimmed along with the signal tone, so
+// σ̂² stays low and N1Norm BOOSTS the symbol's confidence even though
+// its tone identity is the most ambiguous in the frame. The max-log
+// demap then hands large |LLR| to the bits where the true tone and the
+// interferer happen to agree; BP over-commits and converges to a nearby
+// wrong LDPC codeword with a coincidental CRC14 pass.
+//
+// The fix is a SYMBOL-level confidence weight from the winner-to-runner-
+// up gap, normalised by the per-symbol noise σ̂ in the magnitude domain:
+//
+//	σ̂_s  = √(meanOfSixLowest(powers))          (per-symbol noise, magnitude)
+//	sep_s = (√top1 − √top2) / σ̂_s              (≥ 0; two largest tone powers)
+//	w_s   = min(1, sep_s / kappa)              (kappa > 0)
+//
+// w_s → 1 once the winner clears the runner-up by ≥ kappa noise-σ (full
+// confidence) and ramps linearly toward 0 as the top two tones approach
+// a tie — an ambiguous symbol then contributes near-zero (soft erasure)
+// instead of over-confident wrong info. Because w_s is a RELATIVE per-
+// symbol multiplier it survives BP's median-LLR renormalisation, which
+// annihilates a uniform factor but preserves the relative spread between
+// symbols: ambiguous symbols end up weak, confident symbols dominate.
+//
+// kappa ≤ 0 disables the separation weight (w_s ≡ 1), making this
+// function bit-for-bit IDENTICAL to SoftLLRsN1BitNormalized — the
+// off-path is exact baseline, not an approximation. This is the
+// off-mechanism by design (flag/config default 0), so an A/B can
+// isolate N1Norm from N1Norm+sepWeight.
+//
+// Provenance: NOT QEX-prescribed and NOT derived from any WSJT-X source.
+// The separation statistic (√top1 − √top2)/σ̂ is the natural magnitude-
+// domain analogue of the M-ary FSK winning-tone margin; mapping it
+// through a saturating [0,1] weight is textbook soft-decision
+// reliability (Richardson & Urbanke, Modern Coding Theory, ch. 4–5) —
+// the same first-principles basis as SoftLLRsN1BitNormalized. The
+// linear-ramp saturator min(1, ·/kappa) is the simplest monotone map
+// with an interpretable knee (kappa = the sep/σ at which a symbol earns
+// full trust); a smooth tanh form is the obvious alternative if the
+// knee proves to matter. See qex-derivation.md § 8.4.
+//
+// Domain note: sep is computed in the magnitude domain regardless of
+// magnitudeMode, so kappa carries the same units (sep in noise-σ) in
+// both LLR domains and a swept kappa stays comparable across them.
+func SoftLLRsN1SepWeighted(grid *SymbolGrid, magnitudeMode bool, kappa float64) [FT8CodewordBits]float64 {
+	var llrs [FT8CodewordBits]float64
+	for d := 0; d < 58; d++ {
+		sym := dataSymbolIndices[d]
+		powers := grid.Tones[sym]
+
+		// Max-log demap (identical to SoftLLRs / SoftLLRsN1BitNormalized).
+		for bitPos := 2; bitPos >= 0; bitPos-- {
+			max0 := -math.MaxFloat64
+			max1 := -math.MaxFloat64
+			for tone := 0; tone < 8; tone++ {
+				if (inverseGrayMap[tone]>>bitPos)&1 == 0 {
+					if powers[tone] > max0 {
+						max0 = powers[tone]
+					}
+				} else {
+					if powers[tone] > max1 {
+						max1 = powers[tone]
+					}
+				}
+			}
+			cbi := 3*d + (2 - bitPos)
+			llrs[cbi] = demapDiff(max0, max1, magnitudeMode)
+		}
+
+		// Per-symbol noise (top-2 trimmed mean) shared by the N1Norm
+		// scaling and the separation denominator.
+		top1, top2, sum := topTwoAndSum(powers)
+		sigma2 := (sum - top1 - top2) / 6.0
+		if sigma2 <= 0 {
+			// Degenerate all-zero / all-equal symbol: leave demap LLRs
+			// as-is, matching SoftLLRsN1BitNormalized's skip.
+			continue
+		}
+
+		scale := 1.0 / sigma2 // N1Norm per-symbol noise normalization.
+
+		if kappa > 0 {
+			// Winner-vs-runner-up separation confidence weight. sep ≥ 0
+			// always (top1 ≥ top2), so w lands in [0, 1].
+			sep := (math.Sqrt(top1) - math.Sqrt(top2)) / math.Sqrt(sigma2)
+			w := sep / kappa
+			if w > 1 {
+				w = 1
+			}
+			scale *= w
+		}
+
+		llrs[3*d] *= scale
+		llrs[3*d+1] *= scale
+		llrs[3*d+2] *= scale
+	}
+	return llrs
+}
+
+// meanAbsLLR returns the mean |LLR| over a 174-bit channel LLR vector.
+// Diagnostic helper for the per-attempt decoder trace — the raw
+// (pre-BP-renormalisation) LLR scale a given metric produced.
+func meanAbsLLR(llrs [FT8CodewordBits]float64) float64 {
+	var s float64
+	for _, l := range llrs {
+		s += math.Abs(l)
+	}
+	return s / float64(len(llrs))
+}
+
+// gridSepSummary computes the winner-vs-runner-up separation
+// sep_d = (√top1 − √top2)/√σ̂²_d for each of the 58 data symbols and
+// returns the count with sep_d < 1 (near-tied / ambiguous top tone),
+// the minimum sep, and the median sep. Symbols with σ̂² ≤ 0 are
+// skipped. Diagnostic for the decoder trace — the same statistic
+// SoftLLRsN1SepWeighted keys on, so it tests directly whether a missed
+// truth carries the near-tied symbols that hypothesis presumes.
+func gridSepSummary(grid *SymbolGrid) (numNearTied int, minSep, medianSep float64) {
+	seps := make([]float64, 0, 58)
+	for d := 0; d < 58; d++ {
+		powers := grid.Tones[dataSymbolIndices[d]]
+		top1, top2, sum := topTwoAndSum(powers)
+		sigma2 := (sum - top1 - top2) / 6.0
+		if sigma2 <= 0 {
+			continue
+		}
+		sep := (math.Sqrt(top1) - math.Sqrt(top2)) / math.Sqrt(sigma2)
+		seps = append(seps, sep)
+		if sep < 1.0 {
+			numNearTied++
+		}
+	}
+	if len(seps) == 0 {
+		return 0, 0, 0
+	}
+	sort.Float64s(seps)
+	return numNearTied, seps[0], seps[len(seps)/2]
 }
 
 // SoftLLRsBestOfN computes a 174-bit LLR vector by per-bit selection

@@ -49,6 +49,12 @@ type TraceAttempt struct {
 	// Distinct from Text != "" because the empty-string case is
 	// "Unpack wasn't run" rather than "Unpack ran and returned empty."
 	TextOK bool
+
+	// MeanAbsLLR is the mean |LLR| over the 174 channel LLRs this
+	// metric fed to BP, BEFORE BP's median-renormalisation. Diagnostic
+	// only — lets a trace consumer see the per-metric LLR scale (e.g.
+	// whether N1Norm's per-symbol scaling collapsed the spread).
+	MeanAbsLLR float64
 }
 
 // CandidateTrace is the per-candidate decoder-trace record produced
@@ -99,4 +105,33 @@ type CandidateTrace struct {
 	// Outcome starts with "gate_reject:". Lets consumers bucket by
 	// reason without re-parsing the Outcome string.
 	GateReason string
+
+	// UnpackDetail is UnpackResult.Detail when Outcome="unpack_fail" —
+	// the unpack layer's reason string (e.g. which message type/field
+	// rejected the 77-bit payload). Empty for other outcomes.
+	UnpackDetail string
+
+	// Sep* summarise the per-data-symbol winner-vs-runner-up separation
+	// sep_d = (√top1 − √top2)/σ̂_d across the grid's 58 data symbols —
+	// the statistic SoftLLRsN1SepWeighted keys on. SepNumNearTied counts
+	// symbols with sep_d < 1 (ambiguous top tone); SepMin / SepMedian
+	// give the distribution. Populated whenever a grid was extracted
+	// (Outcome past extract_fail). Lets the trace test directly whether
+	// the unpack_fail truths actually carry near-tied symbols (the
+	// premise of the separation-weighting hypothesis).
+	SepNumNearTied int
+	SepMin         float64
+	SepMedian      float64
+
+	// Accept-path physical evidence — populated when the candidate
+	// reached the gate (Outcome "accepted", "accepted_unresolved", or
+	// "gate_reject:*"). Lets the unresolved-emit audit judge whether an
+	// emitted "<...>" decode is backed by a real signal (strong nsync /
+	// tone-agreement, low hard-errors) or is a CRC-lottery launder.
+	// I3 is the unpacked message type (1/2/4); 0 when not reached.
+	NSync      int
+	ToneAgree  int
+	HardErrors int
+	SNR2500DB  float64
+	I3         int
 }

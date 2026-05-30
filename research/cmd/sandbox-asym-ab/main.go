@@ -128,6 +128,10 @@ func main() {
 	legacyPowerLLR := flag.Bool("legacy-power-llr", false, "force the legacy power-domain demap (LLR = max|C|²_{x=0} − max|C|²_{x=1}) even in strict mode. Use for A/B comparison against the pre-2026-05-29 baseline. Off-spec per QEX § 6.")
 	nmsK := flag.Int("nms-k", 0, "override SearchOptions.K2MaxPerGroup (max kept candidates per freq group in K=2-medium NMS). 0 = package default (2). Session 105 funnel surfaced 7 NMS-suppressed truths at K=2; raise to measure recovery vs alias growth.")
 	maxResults := flag.Int("max-results", 0, "override SearchOptions.MaxResults (post-NMS cap). 0 = package default (200). Pairs with -nms-k: raising K admits more candidates at NMS but the cap may then bite downstream; raising both together is the controlled test.")
+	sepKappa := flag.Float64("sep-kappa", 0, "enable the N1Sep cascade stage: N1Norm + winner-vs-runner-up separation weight w=min(1, sep/kappa), sep=(√top1−√top2)/σ̂. 0 = off (exact baseline). Smaller kappa down-weights near-tied-top-tone symbols harder. Targets the Session-107 unpack_fail bucket; corpus-calibrated operating point, not a spec constant.")
+	emitUnresolved := flag.Bool("emit-unresolved", false, "emit CRC-valid decodes whose only defect is an unresolvable hashed callsign, rendered with the canonical \"<...>\" placeholder (matches jt9 + truth manifests), instead of dropping them as unpack_fail. Gate still runs. Default off = exact baseline. Session-108 finding: the unpack_fail bucket is dominated by correct codewords blocked on hash resolution.")
+	minFreq := flag.Float64("min-freq", 0, "override SearchOptions.MinFreqHz (tone-0 search floor, Hz). 0 = package default (100). Narrowing the window cuts aliases and runtime when band activity is sub-range; widening scans more carrier space.")
+	maxFreq := flag.Float64("max-freq", 0, "override SearchOptions.MaxFreqHz (tone-0 search ceiling, Hz). 0 = package default (3000). Effective top is clamped below this by the 8-tone span so all tones fit the spectrogram.")
 	stage2Mode := flag.String("stage2-mode", "off", "post-NMS Costas verifier mode: off | observe | filter | rerank. observe runs the verifier without changing the candidate list; filter drops sub-threshold candidates; rerank sorts by metric without dropping. See research/sandbox/costas_verify.go.")
 	stage2Metric := flag.String("stage2-metric", "minblock", "Stage2 discriminator metric: minblock | geo | wins. Audit 2026-05-29: MinBlockContrast cleanest at near-truth p50, GeoContrast cleanest at p25, WinsTotal coarsest but categorical.")
 	stage2Threshold := flag.Float64("stage2-threshold", 0, "Stage2 filter threshold (units depend on -stage2-metric). Ignored for off/observe/rerank.")
@@ -174,6 +178,18 @@ func main() {
 	}
 	if *maxResults > 0 {
 		opts.Search.MaxResults = *maxResults
+	}
+	if *minFreq > 0 {
+		opts.Search.MinFreqHz = *minFreq
+	}
+	if *maxFreq > 0 {
+		opts.Search.MaxFreqHz = *maxFreq
+	}
+	if *sepKappa > 0 {
+		opts.SepKappa = *sepKappa
+	}
+	if *emitUnresolved {
+		opts.EmitUnresolvedHashes = true
 	}
 	if mode, ok := parseStage2Mode(*stage2Mode); ok {
 		opts.Stage2Mode = mode
@@ -248,12 +264,15 @@ func main() {
 		// which case the explicit setting wins for A/B / observe runs).
 		stage2Override := false
 		osdOverride := false
+		emitOverride := false
 		flag.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "stage2-mode", "stage2-metric", "stage2-threshold":
 				stage2Override = true
 			case "osd-disable", "osd-disable-n1", "osd-accept-ratio", "osd-order":
 				osdOverride = true
+			case "emit-unresolved":
+				emitOverride = true
 			}
 		})
 		if !stage2Override {
@@ -282,10 +301,26 @@ func main() {
 			opts.OSDDisableForN1 = true
 			opts.BP.OSD.AcceptDistanceRatio = 0.045
 		}
+		// Unresolved-hash emission default (2026-05-30 Session-108 corpus
+		// measurement): emit CRC-valid, gate-passing decodes whose only
+		// defect is an unresolvable hashed callsign, rendered "<...>",
+		// rather than dropping them as unpack_fail. Matches jt9 + the
+		// jt9-oracle truth manifests (which carry "<...>" for the same
+		// case), so it is alignment with oracle behaviour, NOT a tuned
+		// numeric threshold. Lifted the strict baseline 113/17 → 128/17
+		// matched at +2 extras (→ 128/19); the +2 are real-signal render
+		// mismatches at exact truth coordinates (toneAgree 77-79/79), not
+		// CRC-lottery launders — see the unresolved-emit extra audit. The
+		// post-decode gate still runs on these. Strict applies the
+		// default UNLESS the operator passed -emit-unresolved explicitly
+		// (so -emit-unresolved=false preserves the A/B off path).
+		if !emitOverride {
+			opts.EmitUnresolvedHashes = true
+		}
 		opts.EnableAPCQ = false
 		opts.EnableAP3 = false
 		opts.EnableBestOfN = false
-		printStrictBanner(opts.MagnitudeLLR, opts.Stage2Mode, opts.Stage2Metric, opts.Stage2Threshold, opts.OSDDisableForN1, opts.BP.OSD.AcceptDistanceRatio, opts.BP.OSD.Order, opts.BP.OSD.Enable)
+		printStrictBanner(opts.MagnitudeLLR, opts.Stage2Mode, opts.Stage2Metric, opts.Stage2Threshold, opts.OSDDisableForN1, opts.BP.OSD.AcceptDistanceRatio, opts.BP.OSD.Order, opts.BP.OSD.Enable, opts.EmitUnresolvedHashes)
 	}
 
 	if *dirPath != "" {
@@ -310,7 +345,7 @@ func main() {
 // and is excluded from strict scoring. `-strict` therefore runs
 // symmetric only; without `-strict`, the A/B comparison still
 // surfaces the asym deltas as deep-mode data.
-func printStrictBanner(magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2Metric sandbox.Stage2Metric, stage2Threshold float64, osdDisableN1 bool, osdAcceptRatio float64, osdOrder int, osdEnable bool) {
+func printStrictBanner(magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2Metric sandbox.Stage2Metric, stage2Threshold float64, osdDisableN1 bool, osdAcceptRatio float64, osdOrder int, osdEnable bool, emitUnresolved bool) {
 	fmt.Println("=== STRICT-PARITY MODE ===")
 	fmt.Println("  channelizer: symmetric only (asymmetric = deep-mode recovery)")
 	fmt.Println("  experimental knobs disabled: AP-CQ, AP3, BestOfN")
@@ -340,6 +375,11 @@ func printStrictBanner(magnitudeMode bool, stage2Mode sandbox.Stage2Mode, stage2
 		}
 		fmt.Printf("  OSD policy: order=%d AcceptDistanceRatio=%.3f, %s (corpus-calibrated 2026-05-29; cuts 4 false-positives @ no truth loss)\n",
 			osdOrder, osdAcceptRatio, n1Note)
+	}
+	if emitUnresolved {
+		fmt.Println("  unresolved-hash emit: ON (CRC-valid decodes with an unresolvable hashed call emitted as \"<...>\"; matches jt9/oracle; +15 matched @ +2 real-signal-render extras 2026-05-30; -emit-unresolved=false to A/B)")
+	} else {
+		fmt.Println("  unresolved-hash emit: OFF (-emit-unresolved=false override active; drops hash-unresolvable decodes as unpack_fail)")
 	}
 	fmt.Println("  scoring: sequential jt9-default truth manifests")
 	fmt.Println("  calibration knobs (sync gate, candidate-search breadth): defaults — TBD")

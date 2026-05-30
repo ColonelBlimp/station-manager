@@ -192,6 +192,33 @@ re-measure. Pre-OSD-promotion baseline reachable via
 `-strict -osd-disable-n1=false`. Full sweep + funnel artefacts at
 `research/sandbox/reports/osd-policy-corpus-2026-05-29.md`.
 
+**Strict-mode default promoted again 2026-05-30 (Session-108
+unresolved-hash emission).** A targeted committing-stage trace
+(`sandbox-miss-funnel -unpack-trace`) overturned the Session-107
+"wrong-codeword convergence" inference: 16/16 traced `unpack_fail`
+truths were CORRECT codewords blocked solely on hash resolution
+(`call1ok=false` h22 miss, or `Type 4: h12 not in hash table`), with
+the truth's `<...>` placeholder position matching our unresolved-call
+position. The fix is a *display/accept* policy, not a decoder lever:
+emit a CRC-valid, gate-passing decode whose only defect is an
+unresolvable hashed callsign with the canonical jt9 sentinel `<...>`
+(`MultiPassOptions.EmitUnresolvedHashes`, default off; strict on),
+rather than dropping it as `unpack_fail`. Operative baseline going
+forward: **128/144 matched / 19 extras** (+15 matched / +2 extras vs
+113/17). This is alignment with jt9/WSJT-X + oracle truth-manifest
+behaviour, NOT a tuned numeric threshold — the manifests carry `<...>`
+for exactly this case. The +2 extras are real-signal render mismatches
+at exact truth coordinates (toneAgree 77–79/79), characterized as
+non-launders in the unresolved-emit extra audit. The N1 reliability-
+calibration work (N1Sep / `SepKappa`) is parked clean + off-by-default
+— it targeted a wrong-codeword problem that the trace showed mostly
+doesn't exist on this corpus. Pre-promotion baseline reachable via
+`-strict -emit-unresolved=false`. Full characterization at
+`research/sandbox/reports/unresolved-hash-emit-corpus-2026-05-30.md`.
+A *separate* future unit ("preserve hash-origin brackets on display":
+render hash-*resolved* calls as `<CALL>` to match jt9) gets its own
+independent A/B — NOT bundled here.
+
 **Implication for parked experiments (revisit candidates):**
 several earlier flat-result measurements were taken against the
 off-spec baseline and deserve re-measurement against 113/23:

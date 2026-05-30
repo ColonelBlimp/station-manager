@@ -60,11 +60,37 @@ const freeTextAlphabet = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-./?"
 // fallbacks). Detail carries diagnostic information for unsupported
 // types and for partial decodes that hit a hash placeholder.
 type UnpackResult struct {
-	OK     bool
-	Text   string
-	I3     int
-	N3     int
+	// OK is true only when the payload fully resolved — every callsign
+	// decoded (or hash-resolved), grid/report valid, message type
+	// supported. This is the unchanged "fully usable decode" signal.
+	OK bool
+
+	// Text is the human-readable message. Unresolved hashed callsigns
+	// render as the canonical jt9 sentinel "<...>" (NOT a numbered
+	// "<...12345>" form) so the text compares equal to a jt9-oracle
+	// truth that also couldn't resolve the hash. The raw hash value(s)
+	// are preserved in Detail.
+	Text string
+
+	I3 int
+	N3 int
+
+	// Detail carries the failure/diagnostic string when OK is false:
+	// the per-field resolution flags plus the raw unresolved hash
+	// value(s) for the Unresolved case, or the reason a payload was
+	// undecodable otherwise.
 	Detail string
+
+	// Unresolved is true when the payload is structurally valid and
+	// DISPLAYABLE but carries ≥1 hashed callsign (Type 1/2 h22, Type 4
+	// h12) the hash table could not resolve — Text holds the "<...>"
+	// rendering. OK is false in this case. Deliberately distinct from a
+	// genuinely undecodable payload (unsupported i3, reserved token,
+	// bad grid), where BOTH OK and Unresolved are false. The decode
+	// loop emits Unresolved decodes only when
+	// MultiPassOptions.EmitUnresolvedHashes is set; the post-decode
+	// gate still runs on them.
+	Unresolved bool
 }
 
 // Unpack77 decodes the 77-bit FT8 payload (msg91[0:77] from
@@ -183,8 +209,23 @@ func unpackType12(bits []uint8, i3 int, ht *CallsignHashTable) UnpackResult {
 	res.Text = strings.TrimRight(text, " ")
 	res.OK = ok1 && ok2 && okG
 	if !res.OK {
+		// Displayable-but-unresolved iff every non-OK field is
+		// specifically an h22 hash miss (c28 in [ntokens, callBase))
+		// and the grid resolved. A reserved-token callsign or a bad
+		// grid is undecodable, NOT displayable.
+		hashMiss1 := !ok1 && c28a >= ntokens && c28a < callBase
+		hashMiss2 := !ok2 && c28b >= ntokens && c28b < callBase
+		nonHashFail := (!ok1 && !hashMiss1) || (!ok2 && !hashMiss2) || !okG
+		res.Unresolved = (hashMiss1 || hashMiss2) && !nonHashFail
+
 		res.Detail = fmt.Sprintf("unresolved: call1ok=%v call2ok=%v gridok=%v",
 			ok1, ok2, okG)
+		if hashMiss1 {
+			res.Detail += fmt.Sprintf(" h22_1=%d", c28a-ntokens)
+		}
+		if hashMiss2 {
+			res.Detail += fmt.Sprintf(" h22_2=%d", c28b-ntokens)
+		}
 	}
 	return res
 }
@@ -209,7 +250,10 @@ func unpackCallsign28WithHashes(n uint32, ht *CallsignHashTable) (string, bool) 
 		if call, ok := ht.LookupH22(hash22); ok {
 			return call, true
 		}
-		return fmt.Sprintf("<...%d>", hash22), false
+		// Canonical jt9 sentinel — the raw hash22 is recorded in the
+		// caller's Detail, not embedded in display text, so the text
+		// matches a jt9 truth that also failed to resolve the hash.
+		return "<...>", false
 	default:
 		return decodeStandardCall(n - callBase), true
 	}
@@ -367,7 +411,8 @@ func unpackType4(bits []uint8, ht *CallsignHashTable) UnpackResult {
 
 	addressee, okAddr := ht.LookupH12(h12)
 	if !okAddr {
-		addressee = fmt.Sprintf("<...%d>", h12)
+		// Canonical jt9 sentinel; raw h12 preserved in Detail below.
+		addressee = "<...>"
 	}
 	sender := decodeC58(c58)
 
@@ -399,6 +444,9 @@ func unpackType4(bits []uint8, ht *CallsignHashTable) UnpackResult {
 		OK:   okAddr,
 	}
 	if !okAddr {
+		// The c58 sender + r2 report always decode, so an h12 miss
+		// leaves a displayable "<...> <sender> <report>" message.
+		res.Unresolved = true
 		res.Detail = fmt.Sprintf("Type 4: h12=%d not in hash table", h12)
 	}
 	return res
