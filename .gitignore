@@ -24,24 +24,3 @@ frontend/logging/dist/*
 config.json
 /db
 /log
-
-# Local reference materials (papers, specs, datasheets). ARRL-copyright
-# QEX paper etc. lives here for Claude / operator reference; not committed.
-/references/
-*.test
-/ft8-eval
-/ft8-stage-probe
-/ft8-capture-probe
-/ft8-gen10cq
-/find-candidates
-/decode-eval
-/sweep-gates
-/synth-subtract-probe
-/decoded.txt
-/jt9_wisdom.dat
-/timer.out
-/sandbox-validate
-/sandbox-make-overlap
-/sandbox-multipass
-/sandbox-realcap
-/sandbox-asym-ab

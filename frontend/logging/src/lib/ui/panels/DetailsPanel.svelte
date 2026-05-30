@@ -3,8 +3,8 @@
         Details panel — one of the four InfoPanel tabs. Mixes
         operator-typed per-QSO inputs (Power / Rig / Notes / Request
         QSL) with read-only displays of enrichment results (Email /
-        Web Site / CQ Zone / ITU Zone) and a "Lookup on QRZ.com" link
-        built from the current callsign.
+        Web Site / Grid / CQ Zone / ITU Zone) and a "Lookup on QRZ.com"
+        link built from the current callsign.
 
         Field-source split (settled session 46):
           - Operator-typed (writes to qsoDraft): Power → ADIF RX_PWR,
@@ -12,7 +12,8 @@
             APP_SM_REQUEST_QSL='Y' (operator's reminder to request a
             card; not a standard ADIF QSL_* tag).
           - Read-only display (reads from enrichmentState): Email,
-            Web Site (with external-link launcher), CQ Zone, ITU Zone.
+            Web Site (with external-link launcher), Grid (contacted
+            station's Maidenhead locator), CQ Zone, ITU Zone.
             "Look like fields, but not editable" — per-operator
             request, since an editable email/web duplicates what My
             Station / config already covers and risks divergence.
@@ -173,15 +174,26 @@
                 {@render externalIcon()}
             </button>
         </div>
-
-        <div class="text-sm">
-            <span class="font-semibold">CQ Zone:</span>
-            <span class="ml-1 tabular-nums">{enrichmentState.result?.country?.cq_zone ?? ''}</span>
+        <div class="flex flex-row items-center gap-x-2 mt-1">
+            <div class="text-sm w-32">
+                <span class="font-semibold">CQ Zone:</span>
+                <span class="ml-1 tabular-nums"
+                    >{enrichmentState.result?.country?.cq_zone ?? ''}</span
+                >
+            </div>
+            <div class="text-sm">
+                <span class="font-semibold">ITU Zone:</span>
+                <span class="ml-1 tabular-nums"
+                    >{enrichmentState.result?.country?.itu_zone ?? ''}</span
+                >
+            </div>
         </div>
-
         <div class="text-sm">
-            <span class="font-semibold">ITU Zone:</span>
-            <span class="ml-1 tabular-nums">{enrichmentState.result?.country?.itu_zone ?? ''}</span>
+            <!-- Contacted station's Maidenhead locator from the callsign
+                 lookup (ContactedStation.Gridsquare). Read-only display;
+                 blank when the lookup didn't supply one. -->
+            <span class="font-semibold">Grid:</span>
+            <span class="ml-1">{enrichmentState.result?.station?.gridsquare ?? ''}</span>
         </div>
     </div>
 </div>
