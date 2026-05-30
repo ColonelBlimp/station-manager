@@ -125,12 +125,27 @@ func Unpack77(payload [LDPCPayloadBits]uint8) UnpackResult {
 // MultiPassDecode) are responsible for Add'ing newly-decoded
 // callsigns back to the table for future references.
 func Unpack77WithHashes(payload [LDPCPayloadBits]uint8, ht *CallsignHashTable) UnpackResult {
+	return Unpack77WithHashesOpts(payload, ht, false)
+}
+
+// Unpack77WithHashesOpts is Unpack77WithHashes with display-policy
+// flags. bracketResolved controls how a callsign that arrived as a
+// HASH (Type 1/2 h22, Type 4 h12) and was RESOLVED via the table is
+// rendered: false (default) = bare "DG6JW/T"; true = jt9 convention
+// "<DG6JW/T>" with angle brackets retained to mark the hash origin.
+// Literal callsigns (standard c28, Type-4 c58 sender) and the
+// unresolved sentinel "<...>" are unaffected. The brackets are a
+// rendering choice only — the codeword, OK/Unresolved flags, and hash
+// registration are identical (registerCallsigns skips "<"-prefixed
+// tokens, and a resolved call is already in the table, so a bracketed
+// render does not change table state).
+func Unpack77WithHashesOpts(payload [LDPCPayloadBits]uint8, ht *CallsignHashTable, bracketResolved bool) UnpackResult {
 	bits := payload[:]
 	i3 := int(extractBits(bits, 74, 3))
 
 	switch i3 {
 	case 1, 2:
-		return unpackType12(bits, i3, ht)
+		return unpackType12(bits, i3, ht, bracketResolved)
 	case 0:
 		n3 := int(extractBits(bits, 71, 3))
 		if n3 == 0 {
@@ -141,7 +156,7 @@ func Unpack77WithHashes(payload [LDPCPayloadBits]uint8, ht *CallsignHashTable) U
 			Detail: fmt.Sprintf("unsupported i3=0 sub-type n3=%d", n3),
 		}
 	case 4:
-		return unpackType4(bits, ht)
+		return unpackType4(bits, ht, bracketResolved)
 	default:
 		return UnpackResult{
 			I3:     i3,
@@ -172,7 +187,7 @@ func extractBits(bits []uint8, offset, n int) uint64 {
 //
 // p1/p2 interpretation is suffix "/R" when i3=1, "/P" when i3=2.
 // r1=1 prefixes the grid/report with "R " (e.g. "R FN20", "R-12").
-func unpackType12(bits []uint8, i3 int, ht *CallsignHashTable) UnpackResult {
+func unpackType12(bits []uint8, i3 int, ht *CallsignHashTable, bracketResolved bool) UnpackResult {
 	c28a := uint32(extractBits(bits, 0, 28))
 	p1 := bits[28]
 	c28b := uint32(extractBits(bits, 29, 28))
@@ -185,8 +200,8 @@ func unpackType12(bits []uint8, i3 int, ht *CallsignHashTable) UnpackResult {
 		suffix = "/P"
 	}
 
-	call1, ok1 := unpackCallsign28WithHashes(c28a, ht)
-	call2, ok2 := unpackCallsign28WithHashes(c28b, ht)
+	call1, ok1 := unpackCallsign28WithHashes(c28a, ht, bracketResolved)
+	call2, ok2 := unpackCallsign28WithHashes(c28b, ht, bracketResolved)
 	grid, okG := unpackGrid15(g15)
 
 	res := UnpackResult{I3: i3}
@@ -234,20 +249,29 @@ func unpackType12(bits []uint8, i3 int, ht *CallsignHashTable) UnpackResult {
 // decoded text and an OK flag — OK is false for hash-placeholder
 // values that cannot be resolved without the rolling hash table.
 func unpackCallsign28(n uint32) (string, bool) {
-	return unpackCallsign28WithHashes(n, nil)
+	return unpackCallsign28WithHashes(n, nil, false)
 }
 
 // unpackCallsign28WithHashes is the hash-aware variant: hash-
 // placeholder c28 values (NTOKENS ≤ n < NTOKENS+MAX22) are looked
 // up in the supplied hash table. Returns OK=true when the table
 // resolves the hash; OK=false (with a <...> placeholder) otherwise.
-func unpackCallsign28WithHashes(n uint32, ht *CallsignHashTable) (string, bool) {
+//
+// bracketResolved wraps a HASH-resolved callsign in angle brackets
+// ("<DG6JW/T>", the jt9 hash-origin convention). It affects ONLY the
+// hash-resolved branch — standard literal callsigns (n ≥ callBase) and
+// special tokens (n < ntokens) are never bracketed, and the unresolved
+// "<...>" sentinel is independent of this flag.
+func unpackCallsign28WithHashes(n uint32, ht *CallsignHashTable, bracketResolved bool) (string, bool) {
 	switch {
 	case n < ntokens:
 		return decodeCallsignToken(n)
 	case n < callBase:
 		hash22 := n - ntokens
 		if call, ok := ht.LookupH22(hash22); ok {
+			if bracketResolved {
+				return "<" + call + ">", true
+			}
 			return call, true
 		}
 		// Canonical jt9 sentinel — the raw hash22 is recorded in the
@@ -402,7 +426,7 @@ func unpackGrid15(n uint32) (string, bool) {
 // placeholder in the output is placed in front of the c58 call
 // regardless of c1. Treated as informational here; the actual
 // output sequence follows c1.
-func unpackType4(bits []uint8, ht *CallsignHashTable) UnpackResult {
+func unpackType4(bits []uint8, ht *CallsignHashTable, bracketResolved bool) UnpackResult {
 	h12 := uint32(extractBits(bits, 0, 12))
 	c58 := extractBits(bits, 12, 58)
 	_ = bits[70] // h1; reserved for future semantic refinements
@@ -410,6 +434,11 @@ func unpackType4(bits []uint8, ht *CallsignHashTable) UnpackResult {
 	c1 := bits[73]
 
 	addressee, okAddr := ht.LookupH12(h12)
+	if okAddr && bracketResolved {
+		// jt9 hash-origin convention: a resolved h12 addressee keeps its
+		// angle brackets. The c58 sender is a literal call and stays bare.
+		addressee = "<" + addressee + ">"
+	}
 	if !okAddr {
 		// Canonical jt9 sentinel; raw h12 preserved in Detail below.
 		addressee = "<...>"

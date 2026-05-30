@@ -253,6 +253,18 @@ type MultiPassOptions struct {
 	// that the unpack_fail bucket is dominated by correct codewords
 	// blocked solely on hash resolution, not wrong-codeword commits.
 	EmitUnresolvedHashes bool
+
+	// BracketResolvedHashes renders a callsign that arrived as a HASH
+	// (Type 1/2 h22, Type 4 h12) and was resolved via the table with
+	// jt9's angle-bracket convention ("<DG6JW/T>") instead of bare
+	// ("DG6JW/T"). Display-only — codeword, gate, and hash registration
+	// are unaffected (registerCallsigns skips "<"-prefixed tokens, and a
+	// resolved call is already in the table). Default false. Targets the
+	// Session-108 residual where a hash we resolve renders bare but the
+	// jt9-oracle truth carries it bracketed (e.g. `<DG6JW/T> SV0TPN +01`).
+	// Separate A/B from EmitUnresolvedHashes — it changes display
+	// semantics for RESOLVED hash-origin calls, not unresolved emission.
+	BracketResolvedHashes bool
 }
 
 // DefaultMultiPassOptions returns the baseline tuning: 2 passes,
@@ -425,7 +437,7 @@ func MultiPassDecodeFull(audio []float32, opts MultiPassOptions, ht *CallsignHas
 			llrMetric := co.Metric
 			var payload [LDPCPayloadBits]uint8
 			copy(payload[:], br.Message91[:LDPCPayloadBits])
-			ur := Unpack77WithHashes(payload, ht)
+			ur := Unpack77WithHashesOpts(payload, ht, opts.BracketResolvedHashes)
 			// Emit a displayable-but-unresolved decode (hashed callsign
 			// rendered "<...>") only under EmitUnresolvedHashes; the gate
 			// below still runs on it. Genuinely undecodable payloads

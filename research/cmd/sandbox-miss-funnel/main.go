@@ -184,6 +184,7 @@ func main() {
 	sepKappa := flag.Float64("sep-kappa", 0, "enable N1Sep cascade stage (N1Norm + winner-vs-runner-up separation weight). 0 = off (exact baseline). Targets the unpack_fail / wrong-codeword bucket.")
 	unpackTrace := flag.Bool("unpack-trace", false, "dump the first committing cascade stage (metric + BP/OSD method + OSD soft-distance + sep summary + unpack detail) for every missed truth whose nearest trace ended unpack_fail. Trace-driven input to the sep-weight-vs-OSD-policy-vs-cascade-continue decision.")
 	emitUnresolved := flag.Bool("emit-unresolved", false, "emit CRC-valid decodes whose only defect is an unresolvable hashed callsign, rendered \"<...>\" (matches jt9 + truth manifests), instead of dropping them as unpack_fail. Gate still runs. Default off = exact baseline.")
+	bracketResolved := flag.Bool("bracket-resolved", false, "render hash-RESOLVED callsigns as \"<CALL>\" (jt9 convention) instead of bare. Display-only A/B; default off.")
 	minFreq := flag.Float64("min-freq", 0, "override SearchOptions.MinFreqHz (tone-0 search floor, Hz). 0 = package default (100).")
 	maxFreq := flag.Float64("max-freq", 0, "override SearchOptions.MaxFreqHz (tone-0 search ceiling, Hz). 0 = package default (3000).")
 	stage2Mode := flag.String("stage2-mode", "off", "post-NMS Costas verifier mode: off | observe | filter | rerank. Mirrors sandbox-asym-ab semantics so funnel deltas match decoder runs at the same options.")
@@ -225,6 +226,9 @@ func main() {
 	}
 	if *emitUnresolved {
 		opts.EmitUnresolvedHashes = true
+	}
+	if *bracketResolved {
+		opts.BracketResolvedHashes = true
 	}
 	if mode, ok := parseStage2Mode(*stage2Mode); ok {
 		opts.Stage2Mode = mode
@@ -426,6 +430,9 @@ func main() {
 	if *emitUnresolved {
 		printUnresolvedExtraAudit(extras, fates, allTraces)
 	}
+	if *bracketResolved {
+		printBracketEligible(allTraces, fates, *freqTol, *dtTol)
+	}
 	printScoreAudit(scores)
 }
 
@@ -607,6 +614,65 @@ func printUnresolvedExtraAudit(extras []extraEvidence, fates []truthFate, allTra
 		}
 	}
 	fmt.Printf("  unresolved-emit extras: %d\n", n)
+}
+
+// printBracketEligible lists every accepted decode whose text renders a
+// bracketed hash-resolved call ("<CALL>", not "<...>") — the full set
+// affected by the bracket-resolved display policy. For each it reports
+// the coordinate, text, accept outcome, and whether the text matches a
+// truth (via NormalizeText within tolerance), so the operator can see
+// exactly which outputs the policy flips match↔extra. Run with
+// -bracket-resolved; on this corpus the eligible set is tiny.
+func printBracketEligible(allTraces []traceEntry, fates []truthFate, freqTol, dtTol float64) {
+	fmt.Println()
+	fmt.Println("=== BRACKET-ELIGIBLE OUTPUT TRACE (<CALL> hash-resolved renders) ===")
+	fmt.Println()
+	n := 0
+	for _, te := range allTraces {
+		o := te.trace.Outcome
+		if o != "accepted" && o != "accepted_unresolved" {
+			continue
+		}
+		text := ""
+		if k := len(te.trace.Attempts); k > 0 {
+			text = te.trace.Attempts[k-1].Text
+		}
+		if !hasBracketedCall(text) {
+			continue
+		}
+		n++
+		matched := false
+		for _, tf := range fates {
+			if tf.capture != te.capture {
+				continue
+			}
+			if truth.NormalizeText(tf.text) == truth.NormalizeText(text) &&
+				math.Abs(tf.freqHz-te.trace.FreqHz) <= freqTol &&
+				math.Abs(tf.dtSec-te.trace.DtSec) <= dtTol {
+				matched = true
+				break
+			}
+		}
+		status := "EXTRA (no truth match)"
+		if matched {
+			status = "MATCH"
+		}
+		fmt.Printf("  %-15s %7.1fHz dt=%+.2f  %q  [%s] → %s\n",
+			te.capture, te.trace.FreqHz, te.trace.DtSec, text, o, status)
+	}
+	fmt.Printf("  bracket-eligible outputs: %d\n", n)
+}
+
+// hasBracketedCall reports whether text contains a "<CALL>" token (a
+// bracketed hash-resolved callsign), as distinct from the "<...>"
+// unresolved sentinel.
+func hasBracketedCall(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] == '<' && i+1 < len(text) && text[i+1] != '.' {
+			return true
+		}
+	}
+	return false
 }
 
 // findAcceptedTrace returns the nearest accepted/accepted_unresolved

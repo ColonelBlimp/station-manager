@@ -215,9 +215,24 @@ calibration work (N1Sep / `SepKappa`) is parked clean + off-by-default
 doesn't exist on this corpus. Pre-promotion baseline reachable via
 `-strict -emit-unresolved=false`. Full characterization at
 `research/sandbox/reports/unresolved-hash-emit-corpus-2026-05-30.md`.
-A *separate* future unit ("preserve hash-origin brackets on display":
-render hash-*resolved* calls as `<CALL>` to match jt9) gets its own
-independent A/B — NOT bundled here.
+
+**Strict-mode default promoted again 2026-05-30 (Session-108 follow-up,
+separate unit: hash-origin brackets on display).** A callsign that
+arrived as a HASH (Type 1/2 h22, Type 4 h12) and was RESOLVED via the
+table now renders `<CALL>` (jt9 angle-bracket convention) instead of
+bare `CALL` (`MultiPassOptions.BracketResolvedHashes`, default off;
+strict on). Operative baseline: **129/144 matched / 18 extras** (+1
+matched / −1 extra vs 128/19). Display-only — codeword/gate/hash-
+registration untouched. The complete bracket-eligible set on this
+corpus is 2 outputs (`sandbox-miss-funnel -bracket-resolved`): the
+`<DG6JW/T> SV0TPN +01` truth flips extra→match (jt9 emits it
+bracketed), and `<PE1NPS> HG60IPA RR73` (a Session-108 over-resolution
+extra) stays a neutral extra — no match broken. Composes WITH emit-
+unresolved (no-op without it: the resolved hash only enters the table
+via an emitted unresolved decode). jt9 display convention, NOT a tuned
+threshold. Pre-promotion baseline via `-strict -bracket-resolved=false`.
+Full characterization at
+`research/sandbox/reports/bracket-resolved-corpus-2026-05-30.md`.
 
 **Implication for parked experiments (revisit candidates):**
 several earlier flat-result measurements were taken against the
