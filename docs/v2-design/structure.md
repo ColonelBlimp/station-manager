@@ -204,7 +204,7 @@ Each item has a reason for not being in milestone 1. Listing them explicitly so 
 
 - **`internal/listeners/` and `internal/listeners/handlers/wsjtx/`** — dead code. Never ran in a working configuration (see `docs/v1-analysis/bug-inventory.md` → "WSJT-X UDP listener is dead code"). V2's WSJT-X ingest plan is completely different: a separate `cmd/wsjtx-bridge` client that translates WSJT-X UDP → daemon HTTP, scheduled for milestone 3+. Nothing in the v1 `internal/listeners` framework carries forward.
 
-- **`internal/audio/`** — confirmed absent from v2 main (not present as of 2026-05-16). Was part of the FT8 pipeline in v1; the v1.0.0 cleanup removed it and nothing reintroduced it. **ADR 0021 brings FT8 back into v2 as `internal/ft8/`** (currently a scaffold) — when its decoder pipeline lands, it'll need an audio-capture layer; whether that's a separate `internal/audio/` shared subsystem or a sub-package under `internal/ft8/audio/` is an open design question to settle then. The principle stands: only build it when a consumer needs it.
+- **`internal/audio/`** — **present and retained** (CGO-free WAV/FFT primitives). It came in with the ADR 0021 FT8 work, and was deliberately KEPT when FT8 was removed from the tree 2026-05-30 (tag `ft8-snapshot-2026-05-30`): it's a self-contained package with no daemon-subsystem dependency, held open for a future operator-facing recording/playback consumer. The CGO miniaudio `internal/audio/capture/` subpackage went with the FT8 removal. **`internal/ft8/` is no longer in the tree** — ADR 0021 is parked; FT8 continues out-of-tree as a separate stream.
 
 - **Multi-destination forwarder fan-out redesign.** The hardcoded QRZ forwarder comes over as-is for milestone 1 (one destination, works). The redesign (`ForwarderConfig` with enable/disable, action filter, per-destination credentials, fan-out at ingest) is a milestone-2-or-later task. See `docs/v1-analysis/bug-inventory.md` → "Hardcoded QRZ forwarder" and `docs/v1-analysis/design-decisions-log.md` → same.
 
@@ -238,8 +238,9 @@ station-manager/
 │   ├── qsoservice/               # domain layer
 │   ├── adif/                     # ADIF parser/writer
 │   ├── bridge/                   # daemon CAT/SSE subsystem (ADR 0013/0019/0020)
-│   ├── cat/                      # CAT controller — active, consumed by bridge + (eventually) ft8
-│   ├── ft8/                      # FT8 subsystem (ADR 0021) — scaffold as of 2026-05-16
+│   ├── cat/                      # CAT controller — active, consumed by bridge
+│   ├── audio/                    # CGO-free WAV/FFT — retained for future recording/playback (ft8 removed 2026-05-30)
+│   # ft8/ removed 2026-05-30 (ADR 0021 parked) — preserved at tag ft8-snapshot-2026-05-30
 │   ├── config/                   # JSON config loader
 │   ├── database/sqlite/          # storage
 │   ├── enums/                    # band/mode/upload-status enums
@@ -308,7 +309,7 @@ The current `main` branch (as of 2026-04-15, at commit `66e0af3`) still contains
 - `internal/adapters/` (and its `converters/` subtree) — relocates with server-side database cluster
 - `internal/listeners/handlers/wsjtx/` — dead code
 - `internal/listeners/` — verify no other consumers first, then delete
-- `internal/audio/` — already absent from v2 main as of 2026-05-16 (v1.0.0 cleanup removed it). When FT8's audio-capture layer lands per ADR 0021, decide then whether to recreate `internal/audio/` as a shared subsystem or nest it under `internal/ft8/audio/`.
+- `internal/audio/` — present and retained (CGO-free WAV/FFT). Kept when FT8 was removed 2026-05-30; held open for a future recording/playback consumer. See the entry above.
 - The existing root `go.mod` is kept but pruned of any dependencies that were only needed by deleted packages
 
 **To be created in the restructure commit:**

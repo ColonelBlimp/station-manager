@@ -28,7 +28,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"    // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
 	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/stub" // side-effect: register "stub" forwarder + default retry
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
-	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
@@ -420,27 +419,6 @@ func run() error {
 		}
 	}()
 
-	// ---- FT8 subsystem (ADR 0021) ----
-	// SCAFFOLD only as of 2026-05-16. Always constructed; the Service
-	// reports Enabled() from cfg.Ft8.Enabled. With ft8.enabled=false
-	// (the v1 default) Start() logs the disabled message and spawns
-	// nothing. With true, Start() spawns the placeholder goroutine
-	// that exits on ctx cancellation — the real decoder pipeline
-	// lands as the Fortran-port work commits. Lifecycle mirrors the
-	// bridge so the daemon-shutdown sequence handles both uniformly.
-	ft8Svc := ft8.New(cfg.Ft8, loggerSvc)
-	if err := ft8Svc.Initialize(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("initialize ft8")
-	}
-	if err := ft8Svc.Start(workerCtx); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("start ft8")
-	}
-	defer func() {
-		if err := ft8Svc.Stop(); err != nil {
-			loggerSvc.ErrorWith().Err(err).Msg("ft8: deferred stop error")
-		}
-	}()
-
 	// ---- Start HTTP server ----
 	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc)
 
@@ -476,14 +454,6 @@ func run() error {
 	// server.Shutdown: stop publishing first, then drain readers.
 	if err := bridgeSvc.Stop(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("bridge: Stop error")
-	}
-
-	// Stop the FT8 subsystem. Same shape as the bridge stop. Today
-	// the placeholder goroutine just exits on ctx cancel; once the
-	// real decoder lands this drains audio capture / DSP / decode
-	// workers before returning.
-	if err := ft8Svc.Stop(); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("ft8: Stop error")
 	}
 
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second

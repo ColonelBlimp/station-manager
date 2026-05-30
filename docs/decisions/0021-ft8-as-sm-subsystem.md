@@ -1,11 +1,22 @@
 ---
 number: 0021
 title: FT8 ships as an in-process subsystem inside Station Manager
-status: Accepted
+status: Parked
 date: 2026-05-16
 ---
 
 # 0021 — FT8 ships as an in-process subsystem inside Station Manager
+
+> **PARKED 2026-05-30.** The `internal/ft8` subsystem and the `research/`
+> clean-room decoder tree were removed from the SM tree and preserved at
+> tag **`ft8-snapshot-2026-05-30`** (sandbox at strict 129/18). FT8 work
+> resumes out-of-tree as a separate stream (planned separate repo →
+> fresh clean-room MIT v2 on the research learnings → later import-as-
+> library or re-inline). This ADR's reasoning (in-process subsystem vs
+> external library; the licensing constraints) remains the reference for
+> if/when FT8 returns in-tree; the decision is parked, not reversed. The
+> CGO-free `internal/audio` package was retained. The licensing rules in
+> the section below are still authoritative for the out-of-tree work.
 
 ## Context
 

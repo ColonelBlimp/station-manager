@@ -1,11 +1,13 @@
-// Package audio provides audio file I/O, FFT primitives, and live
-// capture (the CGO miniaudio path lives in the audio/capture subpackage)
-// for the FT8 subsystem. ReadWAV/WriteWAV are the file-I/O pair.
+// Package audio provides CGO-free audio file I/O and FFT primitives.
+// ReadWAV/WriteWAV are the file-I/O pair; the FFT helpers live in
+// fft.go / realfft.go.
 //
-// The package is a neutral peer of internal/ft8 and internal/bridge —
-// it has no dependency on any FT8 or bridge specifics and stays open
-// for future consumers (e.g. operator-facing recording / playback for
-// QSO archives).
+// The package is deliberately self-contained with no daemon-subsystem
+// dependencies, so it stays open for future consumers (e.g. operator-
+// facing recording / playback for QSO archives). It was retained when
+// the FT8 subsystem was moved out of the SM tree (2026-05-30, preserved
+// at tag ft8-snapshot-2026-05-30); the former audio/capture CGO
+// miniaudio subpackage went with that removal.
 package audio
 
 import (

@@ -800,6 +800,16 @@ alongside, send an ADIF UDP packet, see it land in the logbook. Run
 
 ## Milestone 4 — FT8 subsystem
 
+> **PARKED 2026-05-30.** The `internal/ft8` subsystem and the `research/`
+> clean-room decoder tree were removed from the SM tree and preserved at
+> tag **`ft8-snapshot-2026-05-30`** (sandbox at strict 129/18 matched).
+> FT8 resumes out-of-tree as a separate stream (planned separate repo →
+> fresh clean-room MIT v2 → later import-as-library or re-inline). The
+> milestone record below is retained as the work history and design
+> reference for when FT8 returns; the licensing preamble remains
+> authoritative for the out-of-tree effort. `internal/audio` (CGO-free
+> WAV/FFT) was retained in the SM tree.
+
 **Goal:** Station Manager decodes and transmits FT8 in-process via the
 `internal/ft8` subsystem. Decode parity with WSJT-X (whatever current
 distro `jt9` reports for a given WAV) first; layered improvements only
