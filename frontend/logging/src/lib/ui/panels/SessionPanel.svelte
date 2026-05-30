@@ -99,25 +99,35 @@
     {#if rows.length === 0}
         <p class="text-sm text-gray-500 italic px-1 py-2">No QSOs logged this session.</p>
     {:else}
-        <table class="w-full text-left text-sm tabular-nums">
-            <thead class="border-b border-gray-300">
-                <tr class="text-gray-700 font-semibold">
-                    <th class="py-1 pr-4">Callsign</th>
-                    <th class="py-1 pr-4">Name</th>
-                    <th class="py-1 pr-4">Freq</th>
-                    <th class="py-1 pr-4">Band</th>
-                    <th class="py-1 pr-4">Send</th>
-                    <th class="py-1 pr-4">Rcvd</th>
-                    <th class="py-1 pr-4">Mode</th>
-                    <th class="py-1 pr-4">Time On</th>
-                    <th class="py-1 pr-4">Country</th>
-                    <th class="py-1 pr-4">Distance</th>
-                    <th class="py-1 pr-4 sr-only">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {#each rows as row (row.uuid)}
-                    <!--
+        <!--
+            overflow-x-auto so a wide (10-column) session table scrolls
+            horizontally INSIDE the panel instead of widening the app
+            shell. The shell is `w-fit` (app.svelte <main>), so an
+            unconstrained table grew the whole card once any QSO landed,
+            which dragged the InfoPanel tab strip wider and pushed the
+            Session-tab email controls out of view. Containing the table
+            here keeps the card — and the tab strip — at a stable width.
+        -->
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm tabular-nums">
+                <thead class="border-b border-gray-300">
+                    <tr class="text-gray-700 font-semibold">
+                        <th class="py-1 pr-4">Callsign</th>
+                        <th class="py-1 pr-4">Name</th>
+                        <th class="py-1 pr-4">Freq</th>
+                        <th class="py-1 pr-4">Band</th>
+                        <th class="py-1 pr-4">Send</th>
+                        <th class="py-1 pr-4">Rcvd</th>
+                        <th class="py-1 pr-4">Mode</th>
+                        <th class="py-1 pr-4">Time On</th>
+                        <th class="py-1 pr-4">Country</th>
+                        <th class="py-1 pr-4">Distance</th>
+                        <th class="py-1 pr-4 sr-only">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {#each rows as row (row.uuid)}
+                        <!--
                         Edit affordance lives in a trailing cell rather
                         than as a role-on-row. role="button" on <tr>
                         overrode the implicit row semantics, so screen
@@ -127,34 +137,35 @@
                         explicit Edit control is also a clearer
                         keyboard target than a row-wide hit area.
                     -->
-                    <tr class="border-b border-line-soft last:border-0">
-                        <td class="py-1 pr-4 font-semibold">{row.callsign}</td>
-                        <td class="py-1 pr-4">{row.name}</td>
-                        <td class="py-1 pr-4">{formatFrequency(row.freqHz)}</td>
-                        <td class="py-1 pr-4">{row.band}</td>
-                        <td class="py-1 pr-4">{row.rstSent}</td>
-                        <td class="py-1 pr-4">{row.rstRcvd}</td>
-                        <td class="py-1 pr-4">{row.mode}</td>
-                        <td class="py-1 pr-4">
-                            {formatDate(row.qsoDate)}
-                            {formatTime(row.timeOn)}
-                        </td>
-                        <td class="py-1 pr-4">{row.country}</td>
-                        <td class="py-1 pr-4">{formatDistance(row.distanceKm)}</td>
-                        <td class="py-1 pr-2">
-                            <button
-                                type="button"
-                                class="font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer"
-                                aria-label={`Edit QSO with ${row.callsign}`}
-                                onclick={() => void openEdit(row.uuid)}
-                            >
-                                Edit
-                            </button>
-                        </td>
-                    </tr>
-                {/each}
-            </tbody>
-        </table>
+                        <tr class="border-b border-line-soft last:border-0">
+                            <td class="py-1 pr-4 font-semibold">{row.callsign}</td>
+                            <td class="py-1 pr-4">{row.name}</td>
+                            <td class="py-1 pr-4">{formatFrequency(row.freqHz)}</td>
+                            <td class="py-1 pr-4">{row.band}</td>
+                            <td class="py-1 pr-4">{row.rstSent}</td>
+                            <td class="py-1 pr-4">{row.rstRcvd}</td>
+                            <td class="py-1 pr-4">{row.mode}</td>
+                            <td class="py-1 pr-4">
+                                {formatDate(row.qsoDate)}
+                                {formatTime(row.timeOn)}
+                            </td>
+                            <td class="py-1 pr-4">{row.country}</td>
+                            <td class="py-1 pr-4">{formatDistance(row.distanceKm)}</td>
+                            <td class="py-1 pr-2">
+                                <button
+                                    type="button"
+                                    class="font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer"
+                                    aria-label={`Edit QSO with ${row.callsign}`}
+                                    onclick={() => void openEdit(row.uuid)}
+                                >
+                                    Edit
+                                </button>
+                            </td>
+                        </tr>
+                    {/each}
+                </tbody>
+            </table>
+        </div>
     {/if}
 </div>
 

@@ -355,7 +355,7 @@
             {/each}
             {#if activeTab === 'session' && configState.mailer.enabled}
                 <aside
-                    class="-ml-10 -mt-2 flex flex-row items-center gap-x-2"
+                    class="-ml-10 -mt-2 flex shrink-0 flex-row items-center gap-x-2"
                     aria-label="Email session ADIF"
                 >
                     <input
