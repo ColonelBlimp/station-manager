@@ -145,6 +145,15 @@ tasks:
     cmds:
       - go run -ldflags="-X main.Version={{.SM_VERSION}}" ./cmd/smd
 
+  tag:
+    desc: |
+      Create an annotated release tag, guarded: refuses unless the working
+      tree is clean (git status --porcelain) and the tag doesn't already
+      exist; validates vMAJOR.MINOR.PATCH[-prerelease]. Does NOT push.
+      Usage: task tag -- v2.0.0-alpha.2 ["message"]
+    cmds:
+      - bash scripts/tag.sh {{.CLI_ARGS}}
+
   tidy:
     desc: Tidy go.mod and go.sum
     cmds:
