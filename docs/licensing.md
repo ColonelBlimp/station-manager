@@ -1,222 +1,140 @@
-# Station Manager — licensing and clean-room policy
+# Station Manager — licensing
 
-This document explains how Station Manager (SM) keeps its MIT licence
-defensible while implementing the FT8 protocol — a protocol whose
-canonical reference implementation, WSJT-X, is licensed GPL v3. The
-short version: SM's FT8 code is clean-room from the published protocol
-specification, not translated or copied from WSJT-X source.
-
-It's written for three audiences: a curious user evaluating SM, a
-distro packager considering inclusion, and a potential contributor who
-wants to know how to keep their PR licence-clean. If you spot something
-in the codebase that looks like it might not match the policy below,
-opening a GitHub issue is the right next step — see the closing
+This document explains Station Manager's (SM) licence and how it relates
+to the FT8 protocol implementation it builds on. It is written for three
+audiences: a curious user evaluating SM, a distro packager considering
+inclusion, and a contributor who wants to know the licence their PR lands
+under. If you spot something that looks inconsistent with the policy
+below, opening a GitHub issue is the right next step — see the closing
 section.
 
----
-
-## 1. Station Manager is MIT-licensed
-
-The full text is in `LICENSE` at the repository root. The MIT licence
-is permissive: you can use, modify, and redistribute SM (including in
-proprietary products) provided you preserve the copyright notice. The
-goal of this document is to explain how that permissive licence is
-preserved when the project implements a protocol whose reference
-implementation is GPL.
-
-SM has no plans to relicense. Anyone using or forking SM today can
-rely on it staying MIT for the work they're doing now.
+> **History.** SM was MIT-licensed from its first commit until 2026-05-31,
+> with an elaborate clean-room policy designed to *keep* it MIT while
+> implementing FT8 from the published specification. That effort is over.
+> SM is now GPL-3.0-only. The reasoning is in
+> `docs/decisions/0023-relicense-to-gplv3.md`. Earlier revisions of this
+> file described the MIT/clean-room position; git history preserves them.
 
 ---
 
-## 2. The FT8 clean-room boundary
+## 1. Station Manager is GPL-3.0-only
 
-FT8 was designed by Steve Franke (K9AN), Bill Somerville (G4WJS), and
-Joe Taylor (K1JT) — a remarkable protocol that makes reliable QSOs
-possible at signal levels far below conventional readability. SM
-facilitates logging and forwarding QSOs the operator makes using that
-protocol; the protocol itself, and the deep DSP and coding-theory
-work behind it, is theirs.
+The full text is in `LICENSE` at the repository root; `NOTICE` records the
+copyright and the derivative chain. The GNU General Public License,
+version 3 only (`GPL-3.0-only`) is a strong copyleft licence: you may use,
+modify, and redistribute SM, but any distributed work that incorporates
+SM's code must itself be licensed GPL-3.0-only and ship with (an offer of)
+corresponding source.
 
-The FT8 protocol is documented in a publicly-available specification
-paper. WSJT-X is a *reference implementation* of that protocol, not
-the protocol itself. SM implements the protocol from the specification.
+The "version 3 **only**" — not "version 3 or later" — wording is
+deliberate and inherited; see §3.
 
-### Sources read and used as implementation references
+Copyright on SM's own code is held by Marc L. Veary (7Q5MLV), the sole
+author, which is what made the MIT → GPL relicensing possible.
 
-- **Franke, Somerville, Taylor: "The FT4 and FT8 Communication
-  Protocols"**, *QEX*, July/August 2020.
-  <https://wsjt.sourceforge.io/FT4_FT8_QEX.pdf>
-  The canonical FT8 protocol paper. SM's symbol codec, GFSK
-  synthesis, sync structure, and message-type framing all derive from
-  this paper's sections.
+### What changed for users and packagers
 
-- **`ft4_ft8_protocols.tgz`** — referenced as `[14]` in the QEX paper
-  above and downloadable from
-  <http://physics.princeton.edu/pulsar/k1jt/>.
-  The paper's authors deliberately released this tarball into the
-  public domain for reimplementers. It contains the LDPC parity
-  matrices, the symbol-to-bit mappings, and seven short reference
-  programs that demonstrate how the bit-level constructs in the paper
-  combine. SM consumes the public-domain LDPC matrices directly and
-  uses the reference programs as derivation aids.
-
-- **Companion academic references** cited inside the QEX paper for
-  individual signal-processing techniques (LDPC decoding, OSD, BP
-  decoding). These are standard DSP / coding-theory literature and
-  are referenced where SM's implementation diverges from a textbook
-  approach.
-
-### Sources NOT read and NOT consulted
-
-- **WSJT-X source code** as an implementation reference. Before
-  starting SM, the maintainer started to review the WSJT-X source
-  tree, recognised it as Fortran (which the maintainer does not
-  read), it was closed. No real working knowledge of WSJT-X's
-  internals was acquired then or since, and none will be sought
-  going forward. This is the load-bearing clean-room boundary.
-
-- **Third-party FT8 implementations** (kgoba/ft8_lib and similar
-  permissively-licensed reimplementations). Even though the licences
-  on these projects would technically permit reuse, the project
-  maintainer chose 2026-05-26 to keep them outside the implementation
-  reference set. Convergence with another reimplementation on a
-  specific constant or shape would weaken the "derived independently
-  from the spec" story; staying out of those trees keeps the story
-  simple.
-
-If contributing a PR that touches the FT8 stack, please follow the
-same rule: implement from the QEX paper + ref [14] tarball, not from
-WSJT-X or other FT8 codebases.
+- **Source up to 2026-05-31 stays MIT for anyone already relying on it.**
+  Relicensing is not retroactive on copies already published under MIT —
+  any commit at or before that date, and the `v1` branch / `v1.0.0` tag,
+  remains usable under MIT terms. From 2026-05-31 onward, `main` is
+  GPL-3.0-only.
+- **Binary distribution carries a source obligation.** The RPM and any
+  other binary you redistribute must be accompanied by, or offer,
+  corresponding GPLv3 source. The public GitHub repository satisfies this
+  for tagged source builds.
+- **Forks and downstream work must stay GPL-3.0-only.** You can no longer
+  fold SM into a proprietary or permissively-licensed product.
 
 ---
 
-## 3. The jt9 oracle policy
+## 2. Why GPL-3.0-only — the FT8 decode path
 
-SM's test suite invokes WSJT-X's `jt9` binary as a parity oracle —
-"given this WAV file, what messages does jt9 decode?" — and compares
-SM's decoder output against jt9's. This is **black-box use**: SM reads
-jt9's stdout, not its source.
+SM's reason for existing is logging and forwarding QSOs; FT8 decoding is
+one capability among several. That capability is provided by a companion
+library, **go-ft8** (`github.com/ColonelBlimp/go-ft8`), which SM links in.
 
-The `jt9` binary is installed from the operating system's WSJT-X
-package (Fedora `wsjtx`, Debian `wsjtx`, etc.); it is not bundled
-with SM and is not a runtime dependency. Black-box parity testing
-against an externally-installed GPL binary does not create a
-derivative-work relationship for SM's source.
+go-ft8 is an explicit **WSJT-X/jt9-derivative** — it descends from the
+GPL-licensed reference implementation of FT8 — and is therefore
+GPL-3.0-only. A derivative of GPLv3 code is a derivative regardless of the
+implementation language or who read the source; linking it into `smd`
+makes the distributed daemon a derivative work, and GPL copyleft requires
+the combined work to be distributed under the same licence. SM could not
+link go-ft8 and remain MIT, so SM adopted GPL-3.0-only.
 
-If you maintain a fork or downstream package and want to drop the
-oracle entirely, the test that depends on it is gated and skips
-cleanly when `jt9` isn't on PATH.
-
----
-
-## 4. The AI-consultation rule
-
-SM is developed with AI assistance. This includes Claude (in the
-editor) and occasional cross-referencing of ideas with other AI
-systems. Anyone working on a non-trivial codebase in 2026 is going to
-be in this position; the question is how to do it without
-compromising the clean-room story.
-
-The rule SM applies:
-
-- **AIs are idea sources, not value sources.** An AI suggesting an
-  algorithm shape ("try a 1920-sample window into a 3840 zero-padded
-  FFT") is fine — that's textbook DSP, unencumbered. An AI suggesting
-  a specific numeric constant ("scale by 1/300") is treated as raw
-  material that has to pass through the derivation gate before it
-  lands in code.
-
-- **The derivation gate.** A committed magic number must trace back to
-  one of: (a) a sweep against measured data with the sweep output
-  preserved, (b) a first-principles derivation in the QEX paper or
-  ref [14] reference, or (c) a documented "no-op, value is
-  conventionally X for clarity" comment with the no-op property
-  verifiable.
-
-- **Independent convergence is fine.** If a sweep lands on a constant
-  that WSJT-X also uses, that's not contamination — that's two
-  independent derivations reaching the same numerical optimum because
-  the underlying mathematics has one. The hygiene is in the
-  derivation record, not in arbitrary avoidance.
-
-The recent practical example (2026-05-27) was a `1.0/300.0` input
-scale factor suggested by an AI consultation. We declined to adopt it
-because (a) we couldn't derive it independently — it's a no-op for
-SM's matched-filter detector, so no sweep would have an optimum to
-find, and (b) it matches WSJT-X's `fac=1./300.` line exactly, so
-adopting unattributed would have created an apparent-copying problem
-for zero detection benefit.
+This reverses years of effort that went the other way. SM previously
+maintained a clean-room boundary (implement FT8 from the QEX 2020
+specification paper + the public-domain ref [14] tarball, never from the
+WSJT-X source) precisely to keep the project MIT. That clean-room decoder
+never reached jt9 parity and hit a runtime/decode-depth wall; the operator
+chose the WSJT-X-derived go-ft8 as the shipping decoder instead. With the
+project now GPL, the clean-room boundary is retired — see §4.
 
 ---
 
-## 5. CGO dependency licensing (FFTW3 etc.)
+## 3. version-3-only, not "or later"
 
-ADR 0021 (in `docs/decisions/`) covers the dependency-licensing rules
-in detail. The short version for this document's purpose:
-
-- **Source-side**: SM's source code can legitimately include CGO
-  bindings against GPL'd system libraries like FFTW3 (`libfftw3f`).
-  The binding code is the project's own work, MIT-able, and copies no
-  GPL source.
-
-- **Binary-side**: The GPL trigger fires when a binary linked against
-  a GPL'd library is distributed. SM's binary releases therefore avoid
-  GPL'd CGO dependencies. The current FT8 codepath uses pure-Go FFT
-  (`internal/audio/realfft.go`) precisely so the binary stays
-  unencumbered.
-
-- **If CGO acceleration is ever wanted**, the preferred path is a
-  permissively-licensed FFT library — KissFFT or PocketFFT (both
-  BSD-3-Clause). FFTW3 is a documented option for forks willing to
-  inherit GPL on their binaries; SM's upstream releases will not.
+go-ft8 is licensed version-3-**only**. A work that links version-3-only
+code cannot offer the recipient the GPL's usual "or, at your option, any
+later version" choice, because part of the combined work forbids it. SM
+therefore inherits `-only`. The SPDX identifier is `GPL-3.0-only`
+everywhere it appears (`LICENSE`/`NOTICE`, `nfpm.yaml`, `package.json`).
 
 ---
 
-## 6. Constants and derivation footprint
+## 4. The clean-room boundary is retired
 
-Going forward, non-trivial constants landing in the FT8 stack carry a
-doc comment pointing to their derivation source: a paper section, a
-sweep output, or a "no-op, see analysis" reference. Existing
-constants are updated when touched. This is audit-as-you-go, not a
-backfill project.
+The former policy forbade reading WSJT-X source, ran an "AI-consultation
+derivation gate" for FT8 constants, and preferred BSD/MIT FFT libraries
+over FFTW3 to keep the binary unencumbered. **None of that applies any
+more.** Now that the project is GPL-3.0-only:
 
-The measurement infrastructure that makes this discipline cheap
-already exists:
+- Building FT8 on WSJT-X/jt9-derived code is permitted — that is exactly
+  what go-ft8 does.
+- `jt9` and the WSJT-X source may be used freely as references, oracles, or
+  derivation sources for GPL code in the SM/go-ft8 family.
+- A GPL'd CGO dependency such as FFTW3 no longer raises a binary-
+  distribution concern, since the binary is GPL anyway. (go-ft8 currently
+  vendors BSD-3-Clause PocketFFT regardless, for its own reasons.)
 
-- `research/cmd/decode-eval/` — end-to-end decoder evaluation against
-  truth-tagged captures
-- `research/cmd/sweep-gates/` — parameter sweep harness for the
-  candidate-detection gate constants
-- Truth manifests at `research/*.truth.json` — pin the expected
-  signals in each test capture
-- ADR log at `docs/decisions/` — the reasoning trail for choices that
-  get revisited
+Contributors touching FT8 should work in the **go-ft8** repository under
+its GPL terms and its `docs/WSJTX_DERIVATIVE.md` conventions; SM itself
+links go-ft8 rather than carrying the decoder.
 
-A reviewer interested in any committed constant should be able to find
-either the comment that explains it or the harness that would
-reproduce it.
+---
+
+## 5. Dependency compatibility
+
+GPL-3.0-only can only be combined with GPL-compatible dependencies. As of
+this relicensing every Go and JavaScript dependency SM pulls in is under a
+permissive licence — MIT, BSD-2/3-Clause, Apache-2.0, or ISC — all of
+which are GPL-3.0-compatible, so the combined binary is distributable.
+
+The one thing to check on any *new* dependency is GPL compatibility. A
+GPLv2-only, CDDL, or proprietary dependency would be incompatible and is
+the thing to reject — the licence stays put. (Apache-2.0 is compatible
+with GPLv3, though not with GPLv2 — another reason SM is on v3.)
+
+---
+
+## 6. go-ft8 notices to carry
+
+When a binary that links go-ft8 is redistributed, preserve go-ft8's own
+`LICENSE` (GPLv3), its `NOTICE`, its `docs/WSJTX_DERIVATIVE.md` derivative-
+status notice, and its third-party notices (notably the BSD-3-Clause
+PocketFFT it vendors). SM's own `NOTICE` points at these.
 
 ---
 
 ## 7. If you find something that looks wrong
 
-The policy above is what SM intends to follow, but a project this size
-will have rough edges. If you find:
-
-- A constant in the FT8 code that looks like it came from WSJT-X
-  source and has no derivation footprint
-- An algorithm shape that goes beyond "standard DSP / coding theory"
-  and matches WSJT-X's particular implementation choice without an
-  independent reference
-- A test that reads jt9 source rather than treating it as a black box
-- Any other policy gap
-
-… please open a GitHub issue. The fix is one of: add the missing
-derivation evidence, replace the construct with an independently-
-derived equivalent, or update this document if the policy needs to
-evolve. Either way, surfacing it is more useful than letting it sit.
+If you find a dependency that looks GPL-incompatible, a binary release that
+ships without a source offer, a stale "MIT" reference left over from the
+old policy, or any other licensing gap — please open a GitHub issue. The
+fix is usually one of: replace the incompatible dependency, add the missing
+source offer, or update this document. Surfacing it is more useful than
+letting it sit.
 
 ---
 
-*Maintained by Marc Veary. Last updated 2026-05-27.*
+*Maintained by Marc Veary. Last updated 2026-05-31.*

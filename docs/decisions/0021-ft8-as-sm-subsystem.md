@@ -15,8 +15,15 @@ date: 2026-05-16
 > library or re-inline). This ADR's reasoning (in-process subsystem vs
 > external library; the licensing constraints) remains the reference for
 > if/when FT8 returns in-tree; the decision is parked, not reversed. The
-> CGO-free `internal/audio` package was retained. The licensing rules in
-> the section below are still authoritative for the out-of-tree work.
+> CGO-free `internal/audio` package was retained.
+>
+> **Licensing superseded 2026-05-31 by ADR 0023.** The MIT + clean-room
+> rules in the licensing section below are no longer in force. The FT8
+> path is now the WSJT-X/jt9-derived **go-ft8** library (GPL-3.0-only),
+> and SM relicensed to GPL-3.0-only to link it. The "fresh clean-room
+> MIT v2" plan referenced here was abandoned. Read the licensing rules
+> below only as a record of the prior position; see ADR 0023 and
+> `docs/licensing.md` for the current one.
 
 ## Context
 

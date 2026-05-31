@@ -28,9 +28,10 @@ import "math"
 // implementation.
 //
 // **Provenance.** Algorithm adapted into SM from the operator's own
-// `go-ft8/research/realfft.go` (MIT-able, operator-authored;
-// describes the standard textbook pack-and-unpack technique with
-// reference to Brigham §10-5).
+// `go-ft8/research/realfft.go` (operator-authored; describes the
+// standard textbook pack-and-unpack technique with reference to
+// Brigham §10-5). Distributed here under SM's GPL-3.0-only licence
+// like the rest of the tree.
 
 // RealPlan holds precomputed state for repeated real-to-complex
 // FFTs of the same size N. Internally wraps a half-size complex

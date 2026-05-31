@@ -27,3 +27,9 @@ Design decisions, architecture notes, and the ADR log live under `docs/`.
 
 The software does support CAT operation; however, only Yaesu FTdx10 and FT-710 have been tested (I don't own any other
 rigs).
+
+## Licence
+
+Station Manager is licensed under the **GNU General Public License, version 3 only** (`GPL-3.0-only`) — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+It was MIT-licensed until 2026-05-31. The move to GPL-3.0-only follows from the FT8 decode path: that capability comes from the companion library [go-ft8](https://github.com/ColonelBlimp/go-ft8), a WSJT-X/jt9-derived work that is GPL-3.0-only. Linking it makes the combined work a GPLv3 derivative, so the whole project adopts the same copyleft licence. The reasoning is recorded in [`docs/decisions/0023-relicense-to-gplv3.md`](docs/decisions/0023-relicense-to-gplv3.md) and [`docs/licensing.md`](docs/licensing.md).

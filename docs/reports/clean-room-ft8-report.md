@@ -1,5 +1,12 @@
 # Clean-Room FT8 Go Port Report
 
+> **Superseded 2026-05-31.** This report was written for an MIT-licensed
+> clean-room FT8 implementation. That approach was abandoned: the shipping
+> FT8 decoder is now **go-ft8**, an explicit WSJT-X/jt9-derivative
+> (GPL-3.0-only), and SM relicensed to GPL-3.0-only to link it (ADR 0023,
+> `docs/licensing.md`). Kept as a historical record of the clean-room
+> effort; the MIT/clean-room framing below no longer reflects the project.
+
 ## Purpose
 
 This report transfers behavioral findings from a parity investigation into a separate FT8 Go project without transferring implementation code, pseudocode, copied tables, or source-derived structure. It is intended for an MIT-licensed clean-room implementation based on public FT8 specifications and black-box oracle tests.

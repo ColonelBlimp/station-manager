@@ -19,7 +19,7 @@ version: "${VERSION}"
 maintainer: "ColonelBlimp"
 description: "Amateur Radio QSO logger daemon (smd) — single-binary HTTP service serving an embedded browser SPA"
 homepage: "https://github.com/ColonelBlimp/station-manager"
-license: "MIT"
+license: "GPL-3.0-only"
 
 contents:
   - src: build/bin/smd

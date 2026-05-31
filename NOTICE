@@ -1,0 +1,41 @@
+Station Manager (smd)
+
+Copyright (C) 2025, 2026 Marc L. Veary (7Q5MLV)
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License, version 3 only
+(`GPL-3.0-only`), as published by the Free Software Foundation. The full
+licence text is in `LICENSE`.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+Public License for more details.
+
+Why GPL-3.0-only
+----------------
+
+Station Manager was MIT-licensed until 2026-05-31. It moved to
+GPL-3.0-only because its FT8 decode capability is provided by the
+companion library go-ft8 (github.com/ColonelBlimp/go-ft8), which is a
+WSJT-X/jt9-derived work and therefore GPL-3.0-only. Linking that library
+into the daemon makes the combined work a derivative of GPLv3 code, and
+GPL-3.0-only's copyleft requires the whole work be distributed under the
+same licence. The reasoning trail is in `docs/decisions/0023-relicense-to-gplv3.md`
+and `docs/licensing.md`.
+
+The "version 3 only" (not "or later") wording is inherited from go-ft8,
+which is itself version-3-only; a work linking version-3-only code cannot
+offer the "or any later version" option.
+
+Bundled and linked third-party notices
+---------------------------------------
+
+- go-ft8 (github.com/ColonelBlimp/go-ft8), GPL-3.0-only, a WSJT-X/jt9
+  derivative. When the FT8 subsystem is built in, preserve go-ft8's own
+  `NOTICE`, `LICENSE`, and `docs/WSJTX_DERIVATIVE.md`, along with its
+  third-party notices (e.g. the BSD-3-Clause PocketFFT it vendors).
+
+- All other Go and JavaScript dependencies are under permissive licences
+  (MIT, BSD-2/3-Clause, Apache-2.0, ISC), each of which is compatible with
+  GPL-3.0-only. Their licence texts ship with the respective modules.

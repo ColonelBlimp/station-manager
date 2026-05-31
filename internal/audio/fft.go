@@ -15,8 +15,9 @@ import (
 // Ported from the operator's go-ft8/research/fft.go (a research-grade
 // FFTW3 replacement, validated against single-precision FFTW output
 // during the go-ft8 reboot). Pure Go; depends only on the stdlib
-// math + math/cmplx packages. Re-licensed under MIT for SM as the
-// operator's own authored code.
+// math + math/cmplx packages. The operator's own authored code,
+// distributed here under SM's GPL-3.0-only licence like the rest of
+// the tree.
 //
 // **Algorithmic notes.** The decomposition picks the smallest prime
 // factor at each recursion level (2 → 3 → 5). For N = 2^a · 3^b · 5^c

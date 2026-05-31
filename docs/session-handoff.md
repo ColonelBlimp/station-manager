@@ -39,9 +39,17 @@ In-tree and shipped:
 
 Out of tree:
 
-- **FT8** removed from the SM tree 2026-05-30, preserved at tag `ft8-snapshot-2026-05-30` (recoverable via `git checkout`). Now a separate clean-room stream. `internal/audio` (CGO-free WAV/FFT) deliberately retained. See the CLAUDE.md FT8 bullet + memory `project_ft8_library`.
+- **FT8** removed from the SM tree 2026-05-30, preserved at tag `ft8-snapshot-2026-05-30` (recoverable via `git checkout`). FT8 decode now lives in the out-of-tree **go-ft8** library (`github.com/ColonelBlimp/go-ft8`), a WSJT-X/jt9-derivative (GPL-3.0-only) that SM links; the in-tree clean-room MIT effort was abandoned. `internal/audio` (CGO-free WAV/FFT) deliberately retained. See the CLAUDE.md FT8 bullet + memory `project_ft8_library`.
+
+**Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 110 (2026-05-31) — SessionPanel Emailed-column polish + **relicense MIT → GPL-3.0-only (ADR 0023)**.
+
+**SessionPanel Emailed column.** Replaced the "Emailed" text header with a Heroicon envelope (size-5, `title`/`aria-label` "Emailed"); gated the whole column (header + cells) on `configState.mailer.enabled`, matching the InfoPanel email controls — no SMTP configured → no column. Deployed via `task deploy:local:dev`.
+
+**Relicensed SM from MIT to GPL-3.0-only.** The Session-109 "decision deferred" on licensing was resolved: the FT8 decode path is the out-of-tree **go-ft8** (`github.com/ColonelBlimp/go-ft8`), an explicit WSJT-X/jt9-derivative licensed GPL-3.0-only. SM links it → copyleft → SM adopts GPL-3.0-only (version-3-**only**, inherited; you can't add "or later" atop version-3-only code). The clean-room "never read WSJT-X source" boundary is retired. Dependency audit: all current Go/JS deps are MIT/BSD/Apache-2.0/ISC, all GPL-compatible. Changes: `LICENSE` → GPLv3 text (copied verbatim from go-ft8); new `NOTICE`; `nfpm.yaml` license tag `MIT`→`GPL-3.0-only`; `frontend/logging/package.json` adds `"license": "GPL-3.0-only"`; README licence section; stale "MIT" comments in `internal/audio/{fft,realfft}.go` corrected; new ADR `0023-relicense-to-gplv3.md`; ADR 0021 licensing-superseded note; `docs/licensing.md` fully rewritten (MIT/clean-room → GPL); `docs/reports/clean-room-ft8-report.md` superseded banner; CLAUDE.md FT8 bullet + new top-level licence note. New memory `project_sm_license_gplv3`. **Not retroactive:** code published ≤2026-05-31 and the `v1` branch / `v1.0.0` tag stay MIT for existing users. go-ft8 is NOT yet wired into `go.mod` — the relicense lands ahead of integration so the FT8 wiring can proceed cleanly. Next: expand SPA functionality.
 
 ### Session 109 (2026-05-31) — FT8 tree removal, Details remote-grid display, session email-out reworked (durable sent-status + ADIF header fix + local archive).
 
