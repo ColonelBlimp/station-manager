@@ -52,6 +52,7 @@
     {:else if contactHistoryState.items.length === 0}
         <p class="text-sm text-ink">{t('worked.empty')}</p>
     {:else}
+        <div class="overflow-x-auto overflow-y-scroll h-67">
         <table class="w-full text-sm tabular-nums">
             <thead>
                 <tr class="border-b border-line text-left">
@@ -78,5 +79,6 @@
                 {/each}
             </tbody>
         </table>
+        </div>
     {/if}
 </div>

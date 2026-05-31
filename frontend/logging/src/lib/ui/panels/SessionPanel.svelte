@@ -135,7 +135,7 @@
             Session-tab email controls out of view. Containing the table
             here keeps the card — and the tab strip — at a stable width.
         -->
-        <div class="overflow-x-auto overflow-y-scroll">
+        <div class="overflow-x-auto overflow-y-scroll h-67">
             <table class="w-full text-left text-sm tabular-nums">
                 <thead class="border-b border-gray-300">
                     <tr class="text-gray-700 font-semibold">
@@ -178,7 +178,7 @@
                     -->
                         <tr class="border-b border-line-soft last:border-0">
                             <td class="py-1 pr-4 font-semibold">{row.callsign}</td>
-                            <td class="py-1 pr-4">{row.name}</td>
+                            <td class="py-1 pr-2">{row.name}</td>
                             <td class="py-1 pr-4">{formatFrequency(row.freqHz)}</td>
                             <td class="py-1 pr-4">{row.band}</td>
                             <td class="py-1 pr-4">{row.rstSent}</td>
@@ -206,7 +206,7 @@
                                     {/if}
                                 </td>
                             {/if}
-                            <td class="py-1 pr-2">
+                            <td class="py-1 pr-4">
                                 <button
                                     type="button"
                                     class="font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer"

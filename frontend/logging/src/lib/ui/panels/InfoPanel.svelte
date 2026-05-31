@@ -366,7 +366,7 @@
                         type="email"
                         bind:value={recipient}
                         placeholder="recipient@example.com"
-                        class="text-sm border border-gray-300 rounded px-2 py-1 w-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                        class="text-sm border border-gray-300 rounded px-2 py-1 w-47 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                         aria-label="Recipient email address"
                     />
                     <button
