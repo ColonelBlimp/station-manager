@@ -22,7 +22,7 @@
         onclick={onStop}
         disabled={stopDisabled}
         class="cursor-pointer disabled:text-gray-400 disabled:cursor-default enabled:text-red-500"
-        title="Stop the QSO Timer"
+        title="F3: Stop the QSO Timer"
     >
         <svg
             fill="none"
@@ -44,7 +44,7 @@
         onclick={onStart}
         disabled={startDisabled}
         class="mr-8 cursor-pointer disabled:text-gray-400 disabled:cursor-default enabled:text-green-700"
-        title="Start the QSO Timer"
+        title="F3: Start the QSO Timer"
     >
         <svg
             fill="none"
