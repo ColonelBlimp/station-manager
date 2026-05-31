@@ -61,6 +61,17 @@ Verified: `go vet ./...` clean, gofmt clean, `go test -race -short ./internal/ft
 
 **Decode is NOT a QSO** — it's a logged "heard this" line only; no DB write, no `qso` table, no upload queue, no SPA. The QSO stays operator-driven. **Pending (the harder half):** live path — capture source (left with the FT8 snapshot), wrapping ring buffer, UTC slot scheduler, 48k→12k /4 decimation — all feeding the same `DecodeSlot` int16 seam. Then the FT8 card (separate from `LoggingCard`; Phone/CW + FT8 cards each with contesting sub-panels — worked out later). Note: the pinned pseudo-version predates go-ft8's just-landed encode commit (`6c2ac67`); bump when encode/TX is needed.
 
+### Session 113 (2026-05-31) — Live path step 1: int16 ring + UTC slot scheduler (CGO-free, tested).
+
+First slice of the live FT8 path — the CGO-free, deterministically-testable core, ahead of the capture layer. Recovered `ring.go` + `scheduler.go` (+ tests) from `ft8-snapshot-2026-05-30` and adapted: **float32 → int16** (matches the `DecodeSlot` seam, zero conversion) and **`dsp.NMAX` → `SlotSamples`** (= `goft8.SampleRate * 15` = 180000, exactly go-ft8's checked-decode frame length; the removed `dsp` package dependency is gone). In package `ft8`:
+- `sampleRing` — fixed-cap wrapping int16 buffer, scheduler-owned, single-goroutine, zero-pads head when underfilled.
+- `Scheduler` — `NewScheduler(<-chan []int16, log)`, `Run(ctx)` drains source into the ring, emits one `Slot{StartUTC, OffsetMs, Samples []int16}` per UTC :00/:15/:30/:45 boundary; cold-start skip until the ring is full; channel buf=1 with a drop-counter + warn on consumer backpressure; clean shutdown on ctx-cancel or source close.
+- Constants: `SlotDuration` (15s), `SlotSamples` (180000), `SchedulerSlotChannelBufferSize` (1).
+
+Tests (all green): ring append/wrap/overflow/snapshot-independence; `nextSlotBoundary` table (sub-second, on-boundary strict-successor, minute/hour/day rollover, non-UTC normalisation); cold-start skip; source-close shutdown; **slot emit shape** (fires at real boundary, 180000 samples, offset ≤500ms, UTC-aligned — 2.95s); **backpressure drop** (30s, 2 boundaries). Boundary-waiters gated under `!testing.Short()` (run in the full no-race lane; skip `-race -short`). Race-clean on the scheduler concurrency. CGO-free; `go vet ./...` + gofmt clean.
+
+**Next:** step 2 — `Service` lifecycle (recover the snapshot shell: Initialize/Start/Stop, idempotent, `types.Ft8Config` single `Device` string, Enabled-gated, fail-soft) wiring scheduler → safego decode worker → `DecodeSlot`, still CGO-free (test feeds the scheduler directly). Then step 3 — malgo capture behind `//go:build cgo` + `!cgo` stub.
+
 ### Session 112 (2026-05-31) — go-ft8 bumped (checked APIs) + DecodeSlot adopts checked decode + diagnostics.
 
 **Pinned to go-ft8 `v0.1.0`** (its first semver tag, landed 2026-05-31) — replaces the pseudo-version below; `go get …@v0.1.0` resolves cleanly so the `GOPROXY=direct @master` workaround is retired. Green both backends, race-short, decode unchanged.
