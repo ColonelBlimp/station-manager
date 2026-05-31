@@ -61,6 +61,16 @@ Verified: `go vet ./...` clean, gofmt clean, `go test -race -short ./internal/ft
 
 **Decode is NOT a QSO** — it's a logged "heard this" line only; no DB write, no `qso` table, no upload queue, no SPA. The QSO stays operator-driven. **Pending (the harder half):** live path — capture source (left with the FT8 snapshot), wrapping ring buffer, UTC slot scheduler, 48k→12k /4 decimation — all feeding the same `DecodeSlot` int16 seam. Then the FT8 card (separate from `LoggingCard`; Phone/CW + FT8 cards each with contesting sub-panels — worked out later). Note: the pinned pseudo-version predates go-ft8's just-landed encode commit (`6c2ac67`); bump when encode/TX is needed.
 
+### Session 115 (2026-05-31) — Documentation pass for the FT8 architecture + live path.
+
+Full doc audit (no code) bringing every doc that touches FT8 into line with the current architecture:
+- **New ADR 0024** — "FT8 via the external go-ft8 library, an in-tree wrapper, and a CGO-gated live pipeline." Captures the reasoning trail that previously lived only in transient session notes: the pivot from ADR 0021's in-process clean-room decoder to linking external go-ft8 (0021's rejected "separate library" alternative); the capture A/B/C decision (malgo chosen — multi-backend, fewest host assumptions); the two-build CGO split. Marked **Accepted**, supersedes ADR 0021 (architecture) + references ADR 0023 (licensing) + ADR 0013 (narrow-scope).
+- **ADR 0021** — added an "architecture superseded by ADR 0024" note to its banner (licensing was already superseded by 0023).
+- **CLAUDE.md** FT8 bullet — "live capture/scheduler path still pending" → live-pipeline core (ring/scheduler/Service) shipped, only step 3 (malgo capture + daemon wiring) pending; ADR 0024 reference; decode≠QSO/narrow-scope note.
+- **invariants.md** — the FT8 narrow-scope note updated: FT8 back in-tree as a thin wrapper around the external go-ft8, invariant still satisfied by the import graph (decode≠QSO, no storage/forward writes).
+- **milestones.md** M4 — "PARKED" banner replaced with "SUPERSEDED by ADR 0024," current architecture + status summarised; the old GPL-clean/MIT/clean-room preamble flagged entirely superseded by ADR 0023.
+- Memory `project_sm_ft8_integration` now points at ADR 0024. (No manual ADR index to update — they self-list.)
+
 ### Session 114 (2026-05-31) — Live path step 2: FT8 `Service` lifecycle wiring scheduler → decode worker (CGO-free, tested).
 
 Recovered the snapshot `Service` shell and re-pointed it at the real pipeline. New `types.Ft8Config{Enabled, Device}` (recreated; `Device` is a single string mirroring `BridgeSerialConfig.Port`, empty = system default). In package `ft8`:

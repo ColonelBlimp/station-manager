@@ -805,25 +805,31 @@ alongside, send an ADIF UDP packet, see it land in the logbook. Run
 
 ## Milestone 4 — FT8 subsystem
 
-> **PARKED 2026-05-30.** The `internal/ft8` subsystem and the `research/`
-> clean-room decoder tree were removed from the SM tree and preserved at
-> tag **`ft8-snapshot-2026-05-30`** (sandbox at strict 129/18 matched).
-> FT8 resumes out-of-tree as a separate stream (planned separate repo →
-> fresh clean-room MIT v2 → later import-as-library or re-inline). The
-> milestone record below is retained as the work history and design
-> reference for when FT8 returns; the licensing preamble remains
-> authoritative for the out-of-tree effort. `internal/audio` (CGO-free
-> WAV/FFT) was retained in the SM tree.
+> **SUPERSEDED 2026-05-31 by ADR 0024 — the architecture below is history.**
+> The in-tree clean-room decoder this milestone planned was removed
+> (tag `ft8-snapshot-2026-05-30`) and never reached parity. FT8 now ships
+> a different way: SM **links the external go-ft8 library** (a WSJT-X/jt9
+> derivative, GPL-3.0-only — which is why SM is GPL-3.0-only per ADR 0023),
+> and `internal/ft8` is a *thin wrapper* (`DecodeSlot`) plus a live pipeline
+> (int16 ring → UTC slot scheduler → `Service` → safego decode worker).
+> Capture is miniaudio/malgo behind a CGO build tag (static CGO-free default
+> = offline decode; CGO "live" build = capture + pocketfft). **Status
+> 2026-05-31:** offline decode + the CGO-free live-pipeline core (ring,
+> scheduler, Service) shipped and tested; the malgo capture + daemon wiring
+> (step 3) is the remaining piece. See ADR 0024 + memory
+> `project_sm_ft8_integration`. The licensing preamble below (GPL-clean /
+> keep-SM-MIT / clean-room) is **entirely superseded** — SM is GPL now, the
+> decoder IS the WSJT-X derivative, and the clean-room boundary is retired
+> (ADR 0023, `docs/licensing.md`). The slices below are kept as work
+> history only.
 
-**Goal:** Station Manager decodes and transmits FT8 in-process via the
-`internal/ft8` subsystem. Decode parity with WSJT-X (whatever current
-distro `jt9` reports for a given WAV) first; layered improvements only
-after parity is established and provable.
+**Goal (historical — see the banner):** Station Manager decodes (and later
+transmits) FT8. Decode parity is delegated to go-ft8; SM's job is the wrapper,
+the live audio pipeline, and surfacing decodes.
 
-The architecture, package boundaries, and reversal of the prior
-out-of-tree extraction are settled in ADR 0021. This milestone breaks
-that decision down into independently-exercisable slices, mirroring how
-M3a sub-divided the bridge work.
+The current architecture is settled in **ADR 0024** (which supersedes ADR
+0021's in-process clean-room decision). The slices below were written against
+the old in-tree-decoder plan and are retained as work history.
 
 ### Design preamble
 

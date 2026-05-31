@@ -17,6 +17,13 @@ date: 2026-05-16
 > if/when FT8 returns in-tree; the decision is parked, not reversed. The
 > CGO-free `internal/audio` package was retained.
 >
+> **Architecture superseded 2026-05-31 by ADR 0024.** FT8 returned in-tree,
+> but NOT as the in-process clean-room subsystem this ADR decided — instead
+> SM links the external **go-ft8** library (this ADR's rejected "separate Go
+> library" alternative, now chosen) and `internal/ft8` is a thin wrapper +
+> live pipeline. Read this ADR for the historical reasoning only; ADR 0024
+> is the current decision.
+>
 > **Licensing superseded 2026-05-31 by ADR 0023.** The MIT + clean-room
 > rules in the licensing section below are no longer in force. The FT8
 > path is now the WSJT-X/jt9-derived **go-ft8** library (GPL-3.0-only),
