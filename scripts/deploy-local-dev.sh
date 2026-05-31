@@ -9,9 +9,10 @@
 #   2. systemctl --user stop smd  (only if currently active)
 #   3. sudo rpm -Uvh --replacepkgs build/release/station-manager-dev.x86_64.rpm
 #      (rpm -U handles install / upgrade / downgrade; --replacepkgs
-#       allows reinstalling the same NVR — necessary because the dev
-#       build always ships as version "dev", so dnf install would
-#       say "nothing to do" on the second iteration).
+#       allows reinstalling the same NVR — the dev version is now
+#       git-derived, so a fresh commit IS a real upgrade, but rebuilding
+#       the same commit with a dirty tree keeps the same NVR and would
+#       otherwise be a no-op).
 #   4. systemctl --user daemon-reload  (cheap; catches smd.service edits)
 #   5. systemctl --user start smd
 #   6. systemctl --user is-active smd  (final smoke)

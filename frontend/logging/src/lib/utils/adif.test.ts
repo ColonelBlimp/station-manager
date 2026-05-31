@@ -23,6 +23,40 @@ const baseFields: AdifQsoFields = {
     txPower: 100,
 };
 
+describe('formatAdifRecord — contacted-station enrichment', () => {
+    it('emits COUNTRY / CQZ / ITUZ / DXCC / GRIDSQUARE when present', () => {
+        const adif = formatAdifRecord({
+            ...baseFields,
+            country: 'Russia',
+            cqZone: '17',
+            ituZone: '30',
+            dxcc: '54',
+            gridsquare: 'KO85',
+        });
+        expect(adif).toContain('<COUNTRY:6>Russia');
+        expect(adif).toContain('<CQZ:2>17');
+        expect(adif).toContain('<ITUZ:2>30');
+        expect(adif).toContain('<DXCC:2>54');
+        expect(adif).toContain('<GRIDSQUARE:4>KO85');
+    });
+
+    it('omits each contacted-station field when empty (station unknown)', () => {
+        const adif = formatAdifRecord(baseFields);
+        expect(adif).not.toContain('<COUNTRY:');
+        expect(adif).not.toContain('<CQZ:');
+        expect(adif).not.toContain('<ITUZ:');
+        expect(adif).not.toContain('<DXCC:');
+        expect(adif).not.toContain('<GRIDSQUARE:');
+    });
+
+    it('byte-counts a non-ASCII country name correctly', () => {
+        // "Côte d'Ivoire" — the ô is 2 bytes in UTF-8, so the prefix must
+        // be the byte length, not the JS string length.
+        const adif = formatAdifRecord({ ...baseFields, country: "Côte d'Ivoire" });
+        expect(adif).toContain("<COUNTRY:14>Côte d'Ivoire");
+    });
+});
+
 describe('formatAdifRecord — required fields', () => {
     it('emits CALL with length prefix', () => {
         const adif = formatAdifRecord(baseFields);

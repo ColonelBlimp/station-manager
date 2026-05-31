@@ -9,8 +9,13 @@
 #   3. Hand off to nfpm for the actual packaging.
 #
 # Usage:   scripts/release-rpm.sh <version>
-# Example: scripts/release-rpm.sh 0.1.0
-#          scripts/release-rpm.sh 0.0.0-local
+# Example: scripts/release-rpm.sh 2.0.0
+#          scripts/release-rpm.sh v2.0.0-rc.1   (leading 'v' is stripped)
+#
+# The explicit <version> is the readable build version (-X main.Version →
+# daemon User-Agent + ADIF PROGRAMVERSION). It is sanitised for the RPM
+# Version field, which cannot contain '-' (see scripts/version.sh). For the
+# git-derived dogfood version, use scripts/dev-rpm.sh instead.
 
 set -euo pipefail
 
@@ -18,7 +23,6 @@ if [ $# -lt 1 ]; then
   echo "usage: $0 <version>" >&2
   exit 2
 fi
-VERSION="$1"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -27,6 +31,11 @@ if ! command -v nfpm >/dev/null 2>&1; then
   echo "error: nfpm not in PATH (try: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest)" >&2
   exit 1
 fi
+
+# shellcheck source=scripts/version.sh
+. "$(dirname "$0")/version.sh"
+VERSION="${1#v}" # strip an optional leading 'v' (v2.0.0 → 2.0.0)
+RPM_VERSION=$(sm_rpm_version "$VERSION")
 
 echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
 (cd frontend/logging && npm run build)
@@ -45,7 +54,7 @@ if [ "${SM_FFT:-}" = "pocketfft" ]; then
   FFT_BACKEND="PocketFFT (CGO, dynamically linked)"
 fi
 
-echo "── [2/3] Building daemon → build/bin/smd (FFT: ${FFT_BACKEND}) ──"
+echo "── [2/3] Building daemon → build/bin/smd (version: ${VERSION}, FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
 # -X main.Version injects the build version into cmd/smd's `var Version`
 # which feeds both the User-Agent header on outbound HTTP and the
@@ -54,10 +63,10 @@ CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
     -ldflags="-s -w -X main.Version=${VERSION}" \
     -o build/bin/smd ./cmd/smd
 
-echo "── [3/3] Packaging RPM → build/release/ ──"
+echo "── [3/3] Packaging RPM → build/release/ (RPM version: ${RPM_VERSION}) ──"
 mkdir -p build/release
-VERSION="$VERSION" nfpm pkg -f nfpm.yaml -p rpm -t build/release/
+VERSION="$RPM_VERSION" nfpm pkg -f nfpm.yaml -p rpm -t build/release/
 
 echo
-echo "Built:"
+echo "Built ${VERSION}:"
 ls -lh build/release/*.rpm

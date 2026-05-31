@@ -128,6 +128,20 @@ export interface AdifQsoFields {
     /** ADIF ANT_AZ — short-path bearing, computed per QSO from MY_LAT/MY_LON. */
     antAz?: string;
 
+    // Contacted-station enrichment, captured at submit from the values the
+    // Country/Details panels resolved (enrichment already ran on Tab — these
+    // add no lookup and never block logging). Omitted when empty.
+    /** ADIF COUNTRY — contacted station's DXCC entity name (country-layer enrichment). */
+    country?: string;
+    /** ADIF CQZ — contacted station's CQ zone (country-layer enrichment). */
+    cqZone?: string;
+    /** ADIF ITUZ — contacted station's ITU zone (country-layer enrichment). */
+    ituZone?: string;
+    /** ADIF DXCC — contacted station's numeric DXCC code (QRZ station lookup; empty when the station is unknown). */
+    dxcc?: string;
+    /** ADIF GRIDSQUARE — contacted station's Maidenhead grid (QRZ station lookup; empty when unknown). */
+    gridsquare?: string;
+
     /**
      * ADIF RX_PWR — contacted station's TX power in watts as estimated
      * by the operator. Digit-only string; emitted as-is. Omitted when
@@ -278,6 +292,27 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     }
     if (f.antAz && f.antAz.length > 0) {
         lines.push(adifTag('ANT_AZ', f.antAz));
+    }
+
+    // Contacted-station enrichment (Country / Details panels). The daemon
+    // maps these ADIF tags onto ContactedStation via its uppercased-json-tag
+    // convention (COUNTRY←country, CQZ←cqz, ITUZ←ituz, DXCC←dxcc,
+    // GRIDSQUARE←gridsquare). Without these the daemon defaults COUNTRY to
+    // "Unknown" and leaves the rest empty.
+    if (f.country && f.country.length > 0) {
+        lines.push(adifTag('COUNTRY', f.country));
+    }
+    if (f.cqZone && f.cqZone.length > 0) {
+        lines.push(adifTag('CQZ', f.cqZone));
+    }
+    if (f.ituZone && f.ituZone.length > 0) {
+        lines.push(adifTag('ITUZ', f.ituZone));
+    }
+    if (f.dxcc && f.dxcc.length > 0) {
+        lines.push(adifTag('DXCC', f.dxcc));
+    }
+    if (f.gridsquare && f.gridsquare.length > 0) {
+        lines.push(adifTag('GRIDSQUARE', f.gridsquare));
     }
 
     // Contacted-station / per-QSO operator notes (Details panel).

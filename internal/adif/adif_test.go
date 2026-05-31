@@ -163,6 +163,44 @@ func TestRecordToQso_ParsesAppSmRequestQsl(t *testing.T) {
 	}
 }
 
+// TestRecordToQso_ParsesContactedStationEnrichment pins the parser side
+// for the enriched contacted-station fields the SPA now emits at submit
+// (the COUNTRY="Unknown" bug was the SPA never sending these). The daemon
+// must surface COUNTRY/CQZ/ITUZ/DXCC/GRIDSQUARE onto ContactedStation so
+// they persist and survive the email-out/ADIF-export round trip.
+func TestRecordToQso_ParsesContactedStationEnrichment(t *testing.T) {
+	body := []byte(
+		"<CALL:5>R3KNS<BAND:3>15m<MODE:3>SSB<FREQ:6>21.240" +
+			"<QSO_DATE:8>20260531<TIME_ON:4>1220<TIME_OFF:4>1223" +
+			"<RST_SENT:2>53<RST_RCVD:2>55" +
+			"<COUNTRY:6>Russia<CQZ:2>17<ITUZ:2>30<DXCC:2>54<GRIDSQUARE:4>KO85" +
+			"<STATION_CALLSIGN:6>7Q5MLV<EOR>",
+	)
+	parsed, err := Parse(body)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(parsed.Records))
+	}
+	cs := RecordToQso(parsed.Records[0], 1).ContactedStation
+	if cs.Country != "Russia" {
+		t.Errorf("Country = %q, want %q", cs.Country, "Russia")
+	}
+	if cs.CQZ != "17" {
+		t.Errorf("CQZ = %q, want %q", cs.CQZ, "17")
+	}
+	if cs.ITUZ != "30" {
+		t.Errorf("ITUZ = %q, want %q", cs.ITUZ, "30")
+	}
+	if cs.DXCC != "54" {
+		t.Errorf("DXCC = %q, want %q", cs.DXCC, "54")
+	}
+	if cs.Gridsquare != "KO85" {
+		t.Errorf("Gridsquare = %q, want %q", cs.Gridsquare, "KO85")
+	}
+}
+
 // TestRecordToQso_AbsentAppSmRequestQslDecodesFalse pins the
 // not-present default. A QSO that didn't carry APP_SM_REQUEST_QSL
 // must decode to false — the operator didn't flag it, so the

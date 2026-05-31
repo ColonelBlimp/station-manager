@@ -2,6 +2,13 @@ version: '3'
 
 dotenv: ['.env']
 
+vars:
+  # Build version derived from git (v2.* tags, via scripts/version.sh) so
+  # `task`-built and `task run` daemons carry the same semver as the RPM
+  # builds — feeds cmd/smd main.Version → User-Agent + ADIF PROGRAMVERSION.
+  SM_VERSION:
+    sh: bash -c '. scripts/version.sh && sm_git_version'
+
 tasks:
   default:
     desc: Run vet, build, and test — the CI-equivalent local smoke check
@@ -16,7 +23,7 @@ tasks:
     desc: Compile the whole module and build the daemon binary
     cmds:
       - go build ./...
-      - go build -o build/bin/smd ./cmd/smd
+      - go build -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
   frontend:install:
     desc: Install logging-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
@@ -52,7 +59,7 @@ tasks:
     desc: Build the daemon with a freshly built embedded SPA (CGO-free, static — the default backend)
     deps: [frontend:build]
     cmds:
-      - go build -o build/bin/smd ./cmd/smd
+      - go build -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
   build:smd:pocketfft:
     desc: |
@@ -62,7 +69,7 @@ tasks:
       go-ft8's //go:build pocketfft gate. Default build:smd stays CGO-free.
     deps: [frontend:build]
     cmds:
-      - CGO_ENABLED=1 go build -tags pocketfft -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=1 go build -tags pocketfft -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
   rpm:dev:
     desc: |
@@ -136,7 +143,7 @@ tasks:
       `task frontend:dev` in another terminal — Vite serves the SPA on :5173
       and proxies /v1/* to this daemon. Uses SM_WORKING_DIR from .env.
     cmds:
-      - go run ./cmd/smd
+      - go run -ldflags="-X main.Version={{.SM_VERSION}}" ./cmd/smd
 
   tidy:
     desc: Tidy go.mod and go.sum

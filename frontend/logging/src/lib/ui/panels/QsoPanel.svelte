@@ -349,6 +349,18 @@
             // empty so the record is clean rather than carrying a
             // fabricated zero.
             antAz: enrichmentState.activeBearing || undefined,
+            // Contacted-station enrichment — capture what the Country/Details
+            // panels resolved so the logged QSO (and its QRZ/ClubLog upload +
+            // ADIF export) carries the entity, zones, DXCC and grid instead of
+            // defaulting COUNTRY to "Unknown". COUNTRY/CQZ/ITUZ come from the
+            // country layer (what the panels show, always present once enriched);
+            // DXCC + grid come from the QRZ station lookup and are empty when the
+            // station is unknown. Each omitted when empty.
+            country: enrichmentState.result?.country?.name || undefined,
+            cqZone: enrichmentState.result?.country?.cq_zone || undefined,
+            ituZone: enrichmentState.result?.country?.itu_zone || undefined,
+            dxcc: enrichmentState.result?.station?.dxcc || undefined,
+            gridsquare: enrichmentState.result?.station?.gridsquare || undefined,
             // Per-QSO Details panel fields. Emitter omits each when
             // empty / false; the operator can leave any of them blank.
             rxPwr: qsoDraft.rxPwr.trim() || undefined,

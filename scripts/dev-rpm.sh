@@ -2,19 +2,22 @@
 # Build a development RPM for local testing.
 #
 # Same pipeline as scripts/release-rpm.sh (SPA build → static Go build
-# → nfpm pack) but pinned to a fixed filename
-# (station-manager-dev.x86_64.rpm) and a fixed version string (`dev`)
-# so the developer doesn't have to invent a tag for every iteration.
-# The `dev` version string also feeds the daemon's built-in
-# User-Agent (`station-manager/dev`) and ADIF PROGRAMVERSION header,
-# which makes dev-vs-release identification trivial on the network.
+# → nfpm pack). The OUTPUT FILENAME stays fixed
+# (station-manager-dev.x86_64.rpm) so the dogfood tooling
+# (deploy-local-dev.sh) has a stable path, but the VERSION is now derived
+# from git (`git describe` off the v2.* tags via scripts/version.sh) rather
+# than a fixed `dev` string. So each commit produces a distinct, traceable
+# version — e.g. 2.0.0-alpha.1-7-gabc1234 — which feeds the daemon
+# User-Agent, the ADIF PROGRAMVERSION stamped on forwarded/exported QSOs,
+# and the RPM's internal Version field (so `dnf`/`rpm -U` see real upgrades).
+# A -dirty suffix marks a build with uncommitted changes.
 #
-# Usage: scripts/dev-rpm.sh
+# Usage: scripts/dev-rpm.sh   (SM_FFT=pocketfft for the CGO backend)
 #
 # Install the result with:
 #   sudo dnf install -y build/release/station-manager-dev.x86_64.rpm
-# Re-run this script after edits — nfpm overwrites the target file,
-# Go build is incremental, dnf reinstall via the same filename works.
+# Re-run after edits — nfpm overwrites the target file; rebuilding the same
+# commit dirty keeps the same NVR, so deploy-local-dev.sh uses --replacepkgs.
 
 set -euo pipefail
 
@@ -26,7 +29,10 @@ if ! command -v nfpm >/dev/null 2>&1; then
   exit 1
 fi
 
-VERSION=dev
+# shellcheck source=scripts/version.sh
+. "$(dirname "$0")/version.sh"
+VERSION=$(sm_git_version)
+RPM_VERSION=$(sm_rpm_version "$VERSION")
 OUTPUT=build/release/station-manager-dev.x86_64.rpm
 
 echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
@@ -43,16 +49,16 @@ if [ "${SM_FFT:-}" = "pocketfft" ]; then
   FFT_BACKEND="PocketFFT (CGO, dynamically linked)"
 fi
 
-echo "── [2/3] Building daemon → build/bin/smd (FFT: ${FFT_BACKEND}) ──"
+echo "── [2/3] Building daemon → build/bin/smd (version: ${VERSION}, FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
 CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
     -ldflags="-s -w -X main.Version=${VERSION}" \
     -o build/bin/smd ./cmd/smd
 
-echo "── [3/3] Packaging RPM → ${OUTPUT} ──"
+echo "── [3/3] Packaging RPM → ${OUTPUT} (RPM version: ${RPM_VERSION}) ──"
 mkdir -p build/release
-VERSION="${VERSION}" nfpm pkg -f nfpm.yaml -p rpm -t "${OUTPUT}"
+VERSION="${RPM_VERSION}" nfpm pkg -f nfpm.yaml -p rpm -t "${OUTPUT}"
 
 echo
-echo "Built:"
+echo "Built ${VERSION}:"
 ls -lh "${OUTPUT}"
