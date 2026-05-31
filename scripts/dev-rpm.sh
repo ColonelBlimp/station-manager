@@ -32,9 +32,20 @@ OUTPUT=build/release/station-manager-dev.x86_64.rpm
 echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
 (cd frontend/logging && npm run build)
 
-echo "── [2/3] Building daemon → build/bin/smd ──"
+# FFT backend selection — see scripts/release-rpm.sh for the rationale.
+# Default gonum (pure Go, static); SM_FFT=pocketfft builds the CGO backend.
+CGO_VAL=0
+TAGS_ARG=()
+FFT_BACKEND="gonum (pure Go, static)"
+if [ "${SM_FFT:-}" = "pocketfft" ]; then
+  CGO_VAL=1
+  TAGS_ARG=(-tags pocketfft)
+  FFT_BACKEND="PocketFFT (CGO, dynamically linked)"
+fi
+
+echo "── [2/3] Building daemon → build/bin/smd (FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
-CGO_ENABLED=0 go build -trimpath \
+CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
     -ldflags="-s -w -X main.Version=${VERSION}" \
     -o build/bin/smd ./cmd/smd
 

@@ -39,9 +39,9 @@ Run in order. Each gate is a hard stop — a failure means the tag does not get 
 
 - `scripts/release-rpm.sh <ver>` runs end-to-end:
   - SPA build (`npm run build` → `frontend/logging/dist/`).
-  - Static Go build (`CGO_ENABLED=0`, `-trimpath`, `-X main.Version=<ver>`).
+  - Static Go build (`CGO_ENABLED=0`, `-trimpath`, `-X main.Version=<ver>`) — the default, CGO-free backend. The opt-in PocketFFT build (`SM_FFT=pocketfft` → `CGO_ENABLED=1 -tags pocketfft`) is dynamically linked instead; the static-link checks below apply only to the default build.
   - `nfpm pack -t build/release/` produces `station-manager-<ver>.x86_64.rpm`.
-- Binary smoke: `./build/bin/smd --help` exits 0; binary is statically linked (`file build/bin/smd | grep "statically linked"`); binary size in the expected range (sanity check against the previous release — large jumps deserve investigation).
+- Binary smoke: `./build/bin/smd --help` exits 0; for the default build the binary is statically linked (`file build/bin/smd | grep "statically linked"`) — the PocketFFT build is dynamically linked, so skip that grep for it; binary size in the expected range (sanity check against the previous release — large jumps deserve investigation).
 - The injected version is observable: `./build/bin/smd` startup log line carries `vX.Y.Z`; `curl http://127.0.0.1:8080/v1/version` returns it.
 
 ### Gate 4 — Install smoke (clean install path)

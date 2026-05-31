@@ -93,13 +93,34 @@ PKGS="$(go list ./... | grep -v /node_modules/)"
 step "Go: vet"
 go vet $PKGS
 
-step "Go: test (race detector, 5m timeout)"
-go test -race -timeout 5m $PKGS
+# Race detector in -short mode (matches CI): the heavy full-pipeline FT8
+# decode tests skip under -short — running a CPU-bound decode under -race
+# adds no race-detection value and used to blow the time budget. The full
+# run below exercises them without the race detector.
+step "Go: test (race detector, -short, 5m timeout)"
+go test -race -short -timeout 5m $PKGS
+
+step "Go: test (full, no race, 12m timeout)"
+go test -timeout 12m $PKGS
 
 step "Go: build daemon (verifies SPA embed)"
 go build -o build/bin/smd ./cmd/smd
 
 step "Go: build all cmd/ binaries"
 go build ./cmd/...
+
+# PocketFFT (CGO) opt-in backend — not the shipped default, but gated here
+# so the CGO path can't rot. Needs a C toolchain; skip cleanly without one
+# (CI always has gcc and runs this).
+if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then
+    step "Go: build daemon (PocketFFT/CGO backend)"
+    CGO_ENABLED=1 go build -tags pocketfft -o build/bin/smd-pocketfft ./cmd/smd
+
+    step "Go: FT8 decode test (PocketFFT/CGO backend)"
+    CGO_ENABLED=1 go test -tags pocketfft ./internal/ft8/...
+else
+    step "Go: PocketFFT (CGO) checks — SKIPPED (no C compiler)"
+    note "Install gcc to exercise the opt-in CGO FFT backend locally; CI always runs it."
+fi
 
 printf '\n%sAll CI gates passed locally.%s\n' "$BOLD" "$RESET"

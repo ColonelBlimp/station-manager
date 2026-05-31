@@ -131,3 +131,15 @@ jobs:
 
       - name: Build all cmd/ binaries (catcli, loadgen, etc.)
         run: go build ./cmd/...
+
+      # ─── PocketFFT (CGO) opt-in backend ─────────────────────────
+      # The default daemon build above is CGO-free (pure-Go gonum FFT). The
+      # opt-in PocketFFT backend (CGO, ~2x faster FT8 decode) is gated behind
+      # go-ft8's `pocketfft` build tag + CGO_ENABLED=1, and is NOT the shipped
+      # default. Build it and run the ft8 decode tests against it here so the
+      # CGO path can't silently rot. ubuntu-latest ships gcc.
+      - name: Build daemon (PocketFFT/CGO backend)
+        run: CGO_ENABLED=1 go build -tags pocketfft -o /tmp/smd-pocketfft ./cmd/smd
+
+      - name: FT8 decode test (PocketFFT/CGO backend)
+        run: CGO_ENABLED=1 go test -tags pocketfft ./internal/ft8/...

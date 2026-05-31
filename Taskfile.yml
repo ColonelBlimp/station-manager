@@ -49,10 +49,20 @@ tasks:
       - npm run deps:update
 
   build:smd:
-    desc: Build the daemon with a freshly built embedded SPA
+    desc: Build the daemon with a freshly built embedded SPA (CGO-free, static — the default backend)
     deps: [frontend:build]
     cmds:
       - go build -o build/bin/smd ./cmd/smd
+
+  build:smd:pocketfft:
+    desc: |
+      Build the daemon with the PocketFFT (CGO) FFT backend instead of the
+      default pure-Go gonum one — ~2x faster FT8 decode, but dynamically
+      linked (needs a C toolchain; not the static default). The backend is
+      go-ft8's //go:build pocketfft gate. Default build:smd stays CGO-free.
+    deps: [frontend:build]
+    cmds:
+      - CGO_ENABLED=1 go build -tags pocketfft -o build/bin/smd ./cmd/smd
 
   rpm:dev:
     desc: |
@@ -61,8 +71,19 @@ tasks:
       string is "dev" (also injected as cmd/smd's Version → daemon
       User-Agent and ADIF PROGRAMVERSION). For a one-command
       build→install→restart, use `task deploy:local:dev` instead.
+      CGO-free/static by default; for the PocketFFT (CGO) variant use
+      rpm:dev:pocketfft.
     cmds:
       - scripts/dev-rpm.sh
+
+  rpm:dev:pocketfft:
+    desc: |
+      Like rpm:dev but builds the PocketFFT (CGO) backend by setting
+      SM_FFT=pocketfft. Dynamically linked, ~2x faster decode, needs gcc.
+      For the one-command dogfood deploy with PocketFFT:
+        SM_FFT=pocketfft task deploy:local:dev
+    cmds:
+      - SM_FFT=pocketfft scripts/dev-rpm.sh
 
   deploy:local:dev:
     desc: |
@@ -73,6 +94,8 @@ tasks:
       starts smd back up. Final step checks systemctl is-active and
       points you at journalctl on failure. Sudo prompts for the
       package install only — systemctl commands run as your user.
+      Prefix with SM_FFT=pocketfft to dogfood the CGO PocketFFT build
+      (the env var passes through to scripts/dev-rpm.sh).
     cmds:
       - bash scripts/deploy-local-dev.sh
 

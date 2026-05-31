@@ -31,12 +31,26 @@ fi
 echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
 (cd frontend/logging && npm run build)
 
-echo "── [2/3] Building daemon → build/bin/smd ──"
+# FFT backend selection. Default is gonum (pure Go) → CGO-free, fully
+# static binary, cross-platform by default. Set SM_FFT=pocketfft to build
+# the CGO PocketFFT backend (~2x faster FT8 decode, but dynamically linked
+# against libc and not statically linked). The backend is go-ft8's own
+# //go:build pocketfft gate; SM just passes it through. See docs/licensing.md.
+CGO_VAL=0
+TAGS_ARG=()
+FFT_BACKEND="gonum (pure Go, static)"
+if [ "${SM_FFT:-}" = "pocketfft" ]; then
+  CGO_VAL=1
+  TAGS_ARG=(-tags pocketfft)
+  FFT_BACKEND="PocketFFT (CGO, dynamically linked)"
+fi
+
+echo "── [2/3] Building daemon → build/bin/smd (FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
 # -X main.Version injects the build version into cmd/smd's `var Version`
 # which feeds both the User-Agent header on outbound HTTP and the
 # PROGRAMVERSION field on ADIF exports.
-CGO_ENABLED=0 go build -trimpath \
+CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
     -ldflags="-s -w -X main.Version=${VERSION}" \
     -o build/bin/smd ./cmd/smd
 

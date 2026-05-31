@@ -31,8 +31,11 @@ sudo dnf install /path/to/station-manager-<version>.x86_64.rpm
 
 The package installs two files:
 
-- `/usr/bin/smd` — the daemon binary (single statically-linked
-  executable; the browser SPA is embedded inside it).
+- `/usr/bin/smd` — the daemon binary (the browser SPA is embedded
+  inside it). The default build is a single statically-linked,
+  CGO-free executable; an opt-in PocketFFT build (faster FT8 decode,
+  built with `SM_FFT=pocketfft`) is dynamically linked against the C
+  runtime instead.
 - `/usr/lib/systemd/user/smd.service` — the systemd user unit.
 
 The post-install scriptlet prints the next steps. The OpenPGP
