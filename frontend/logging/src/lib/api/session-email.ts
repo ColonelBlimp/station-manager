@@ -5,12 +5,20 @@
     as `lib/api/qso.ts` and `lib/api/config.ts` for consistency.
 
     Wire contract (handler_session_email.go):
-      - 200 OK   → { status: "sent" }
+      - 200 OK   → { status: "sent", emailed: string[], date: string }
       - 400      → { code: "missing_required_field" | "invalid_field_value" |
-                     "invalid_json", message, op? }
+                     "invalid_json" | "no_qsos", message, op? }
       - 503      → { code: "mailer_disabled", message, op? }
       - 502      → { code: "smtp_failure",   message, op? }
       - 5xx other → { code, message, op? }
+
+    The daemon rebuilds the ADIF from the live DB rows keyed by `uuids`,
+    so the SPA sends identifiers, not a pre-built blob. On success the
+    response reports which UUIDs were durably stamped "forwarded by
+    email" (`emailed`) and the UTC YYYYMMDD stamp (`date`); the caller
+    marks those session rows sent. A stamp-write failure on the daemon
+    (after the mail left) comes back as `emailed: []` — the rows stay
+    visually unsent so a re-send or the Logbook SPA can reconcile.
 
     `kind` collapses to:
       - 'sent'             — message accepted by the SMTP server.
@@ -34,7 +42,8 @@ import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
 
 export interface SessionEmailRequest {
     to: string;
-    adif: string;
+    /** Canonical UUIDs of the session QSOs to email; daemon rebuilds the ADIF from these. */
+    uuids: string[];
     /** Optional override; daemon stamps a UTC default when absent. */
     subject?: string;
     /** Optional override; daemon stamps `session-YYYYMMDD-HHMMSS.adi` when absent. */
@@ -42,7 +51,7 @@ export interface SessionEmailRequest {
 }
 
 export type SessionEmailOutcome =
-    | { kind: 'sent' }
+    | { kind: 'sent'; emailed: string[]; date: string }
     | { kind: 'mailer_disabled'; message: string }
     | { kind: 'invalid'; code: string; message: string }
     | { kind: 'smtp_failure'; message: string }
@@ -72,7 +81,17 @@ export async function sendSessionEmail(
     const response = fetched.response;
 
     if (response.ok) {
-        return { kind: 'sent' };
+        // Parse the durable-stamp report. A daemon that sent the mail
+        // but couldn't stamp returns emailed:[]; a body that fails to
+        // parse (unexpected shape) degrades to "sent, nothing marked"
+        // rather than throwing — the mail went out either way.
+        const body = await readJsonBody(response);
+        const ok = isPlainObject(body) ? (body as { emailed?: unknown; date?: unknown }) : null;
+        const emailed = Array.isArray(ok?.emailed)
+            ? ok.emailed.filter((u): u is string => typeof u === 'string')
+            : [];
+        const date = typeof ok?.date === 'string' ? ok.date : '';
+        return { kind: 'sent', emailed, date };
     }
 
     // Body may not parse if the daemon emits an unexpected payload.

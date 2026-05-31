@@ -177,6 +177,13 @@ logbook app); if you need one, hit `POST /v1/logbook` directly with
 | Config | `~/.local/share/station-manager/config.json` |
 | Database | `~/.local/share/station-manager/db/station-manager.db` |
 | Logs | `~/.local/share/station-manager/log/` |
+| Emailed-session ADIF archive | `~/.local/share/station-manager/exports/sent-adif/` |
+
+Each time you email a session's QSOs from the logging app, a copy of
+the exact ADIF that was sent is archived under `exports/sent-adif/`
+(filename `session-<UTC timestamp>.adi`). The copy is written before
+the email is dispatched, so a failed or flaky send still leaves a
+usable local export.
 
 The data directory is set by the systemd unit via the
 `SM_WORKING_DIR` environment variable. When running `smd` directly

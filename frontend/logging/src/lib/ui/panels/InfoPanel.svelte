@@ -154,10 +154,13 @@
         - Push a "Sending…" info toast that sticks (ttl=0) so it
           stays visible during a slow handshake. The operator's
           internet is on the slow side per the network memory.
-        - Concatenate every session QSO's pre-built ADIF (each
-          already has a trailing <eor>) into one body. Order is
-          submit-order — the daemon doesn't care, but it matches
-          what the operator's QSL manager expects to see.
+        - Send the session QSOs' UUIDs (submit order); the daemon
+          rebuilds the ADIF from the live DB rows so the mail carries
+          current data, then durably stamps each row "forwarded by
+          email" and reports back which UUIDs it marked.
+        - On success, mirror that stamp onto the session rows via
+          markEmailed so the SessionPanel's Sent column updates
+          immediately.
         - Map the discriminated outcome to a toast level + message.
           Sticky "Sending…" is dismissed before the result toast
           fires either way.
@@ -171,14 +174,15 @@
         sending = true;
         const sendingToastId = toasts.info('Sending…', 0);
         try {
-            const adif = sessionQsosState.items.map((q) => q.adif).join('');
+            const uuids = sessionQsosState.items.map((q) => q.uuid);
             const outcome = await sendSessionEmail({
                 to: recipient.trim(),
-                adif,
+                uuids,
             });
             toasts.dismiss(sendingToastId);
             switch (outcome.kind) {
                 case 'sent':
+                    sessionQsosState.markEmailed(outcome.emailed, outcome.date);
                     toasts.info(`Sent to ${recipient.trim()}`);
                     break;
                 case 'mailer_disabled':

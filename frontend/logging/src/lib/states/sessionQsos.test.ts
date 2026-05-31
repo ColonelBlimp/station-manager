@@ -89,6 +89,45 @@ describe('sessionQsosState', () => {
         });
     });
 
+    describe('markEmailed', () => {
+        it('stamps emailedDate on the matching uuids only', () => {
+            sessionQsosState.add(makeQso({ uuid: 'a', callsign: 'AAA' }));
+            sessionQsosState.add(makeQso({ uuid: 'b', callsign: 'BBB' }));
+            sessionQsosState.add(makeQso({ uuid: 'c', callsign: 'CCC' }));
+            flushSync();
+
+            sessionQsosState.markEmailed(['a', 'c'], '20260531');
+            flushSync();
+
+            expect(sessionQsosState.items[0].emailedDate).toBe('20260531');
+            expect(sessionQsosState.items[1].emailedDate).toBeUndefined();
+            expect(sessionQsosState.items[2].emailedDate).toBe('20260531');
+        });
+
+        it('persists the stamp to sessionStorage', () => {
+            sessionQsosState.add(makeQso({ uuid: 'a' }));
+            sessionQsosState.markEmailed(['a'], '20260531');
+            const parsed = JSON.parse(sessionStorage.getItem('sm.session.qsos')!) as SessionQso[];
+            expect(parsed[0].emailedDate).toBe('20260531');
+        });
+
+        it('is a no-op for an empty uuid set (daemon could not stamp)', () => {
+            sessionQsosState.add(makeQso({ uuid: 'a' }));
+            flushSync();
+            sessionQsosState.markEmailed([], '20260531');
+            flushSync();
+            expect(sessionQsosState.items[0].emailedDate).toBeUndefined();
+        });
+
+        it('is a no-op when the date is empty', () => {
+            sessionQsosState.add(makeQso({ uuid: 'a' }));
+            flushSync();
+            sessionQsosState.markEmailed(['a'], '');
+            flushSync();
+            expect(sessionQsosState.items[0].emailedDate).toBeUndefined();
+        });
+    });
+
     describe('clear', () => {
         it('empties the list and resets count to 0', () => {
             sessionQsosState.add(makeQso());

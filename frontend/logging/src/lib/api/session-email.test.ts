@@ -16,7 +16,7 @@ function mockFetchJSON(status: number, body: unknown): void {
     );
 }
 
-const REQ = { to: 'qsl@example.org', adif: '<call:5>K1ABC<eor>' };
+const REQ = { to: 'qsl@example.org', uuids: ['uuid-1', 'uuid-2'] };
 
 describe('sendSessionEmail', () => {
     it('posts JSON to /v1/session/email', async () => {
@@ -36,10 +36,30 @@ describe('sendSessionEmail', () => {
         expect(init?.body).toBe(JSON.stringify(REQ));
     });
 
-    it('returns kind=sent on 200', async () => {
-        mockFetchJSON(200, { status: 'sent' });
+    it('returns kind=sent with the stamped uuids + date on 200', async () => {
+        mockFetchJSON(200, { status: 'sent', emailed: ['uuid-1', 'uuid-2'], date: '20260531' });
         const out = await sendSessionEmail(REQ);
-        expect(out).toEqual({ kind: 'sent' });
+        expect(out).toEqual({ kind: 'sent', emailed: ['uuid-1', 'uuid-2'], date: '20260531' });
+    });
+
+    it('returns kind=sent with empty emailed when the daemon could not stamp', async () => {
+        // Mail left but the stamp write failed: daemon reports emailed:[].
+        mockFetchJSON(200, { status: 'sent', emailed: [], date: '' });
+        const out = await sendSessionEmail(REQ);
+        expect(out).toEqual({ kind: 'sent', emailed: [], date: '' });
+    });
+
+    it('degrades a 200 with an unparseable body to sent-with-nothing-marked', async () => {
+        const response = new Response('not json', {
+            status: 200,
+            headers: { 'Content-Type': 'text/plain' },
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
+        const out = await sendSessionEmail(REQ);
+        expect(out).toEqual({ kind: 'sent', emailed: [], date: '' });
     });
 
     it('returns kind=mailer_disabled on 503', async () => {
@@ -82,13 +102,13 @@ describe('sendSessionEmail', () => {
     it('returns kind=invalid for 400 missing_required_field', async () => {
         mockFetchJSON(400, {
             code: 'missing_required_field',
-            message: 'adif is required',
+            message: 'uuids is required',
         });
         const out = await sendSessionEmail(REQ);
         expect(out).toEqual({
             kind: 'invalid',
             code: 'missing_required_field',
-            message: 'adif is required',
+            message: 'uuids is required',
         });
     });
 
@@ -136,7 +156,7 @@ describe('sendSessionEmail', () => {
 
         await sendSessionEmail({
             to: 'a@b',
-            adif: '<call:3>ABC<eor>',
+            uuids: ['uuid-1'],
             subject: 'Custom Subject',
             filename: 'custom.adi',
         });

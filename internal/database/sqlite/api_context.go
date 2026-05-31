@@ -1814,6 +1814,80 @@ WHERE  id = ?`,
 	return nil
 }
 
+// MarkSessionEmailedWithContext stamps the "forwarded by email" ADIF
+// fields on a set of QSO rows after a successful SessionPanel email
+// send. It is the manual-send analogue of the forwarder's
+// MarkUploadSuccessWithAdifStampWithContext: the stamp lands inside
+// each qso row's `additional_data` JSON blob via json_set, writing
+//
+//	$.sm_fwrd_by_email_status = "Y"          (adif.YesString)
+//	$.sm_fwrd_by_email_date   = today (UTC, YYYYMMDD)
+//
+// These keys match the JSON tags on types.Qso (SmFwrdByEmailStatus /
+// SmFwrdByEmailDate), so the next read via QsoModelToType surfaces the
+// stamp as struct fields automatically — no schema column, no migration.
+//
+// Unlike the forwarder path there is no qso_upload queue row to update:
+// the session email is a one-shot operator action, not a retried
+// upload. The whole set is stamped in a single UPDATE (one atomic
+// statement) so the operator never sees a partial mark. Soft-deleted
+// rows are skipped. Stamping a QSO that is already marked emailed is
+// harmless — json_set overwrites the date with the latest send, which
+// is the desired "most recent send" semantics.
+//
+// Returns the number of rows actually stamped. A caller passing UUIDs
+// that resolved to ids can compare the count against len(ids) to detect
+// rows that vanished (soft-deleted) between fetch and stamp; the
+// session-email handler logs that gap rather than failing the send,
+// since the mail has already gone out (the "missed" case the Logbook
+// SPA reconciles).
+func (s *Service) MarkSessionEmailedWithContext(ctx context.Context, qsoIDs []int64) (int64, error) {
+	const op errors.Op = "sqlite.Service.MarkSessionEmailedWithContext"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+	if len(qsoIDs) == 0 {
+		return 0, nil
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	// Build the IN-list placeholders. The JSON paths and the two stamp
+	// values are static literals / bound params — only the id list is
+	// dynamic, and every element is an int64, so the statement carries
+	// no string interpolation of caller data.
+	placeholders := make([]string, len(qsoIDs))
+	args := make([]any, 0, len(qsoIDs)+2)
+	today := time.Now().UTC().Format("20060102")
+	args = append(args, adif.YesString, today)
+	for i, id := range qsoIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	query := `
+UPDATE qso
+SET    additional_data = json_set(
+           additional_data,
+           '$.sm_fwrd_by_email_status', ?,
+           '$.sm_fwrd_by_email_date', ?
+       )
+WHERE  id IN (` + strings.Join(placeholders, ", ") + `)
+  AND  deleted_at IS NULL`
+
+	res, err := h.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("stamp session-emailed flag")
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // MarkUploadTransientRetryWithContext records a transient failure
 // that is eligible for another attempt: status → 'pending' (so the
 // worker's next claim picks it up), attempts bumped, next_attempt_at

@@ -100,7 +100,7 @@
         <p class="text-sm text-gray-500 italic px-1 py-2">No QSOs logged this session.</p>
     {:else}
         <!--
-            overflow-x-auto so a wide (10-column) session table scrolls
+            overflow-x-auto so a wide (11-column) session table scrolls
             horizontally INSIDE the panel instead of widening the app
             shell. The shell is `w-fit` (app.svelte <main>), so an
             unconstrained table grew the whole card once any QSO landed,
@@ -122,6 +122,10 @@
                         <th class="py-1 pr-4">Time On</th>
                         <th class="py-1 pr-4">Country</th>
                         <th class="py-1 pr-4">Distance</th>
+                        <!-- "Emailed", not "Sent" — the RST "Send" column above
+                             already owns that word. This tracks whether the QSO
+                             has been forwarded to the QSL manager by email. -->
+                        <th class="py-1 pr-4">Emailed</th>
                         <th class="py-1 pr-4 sr-only">Actions</th>
                     </tr>
                 </thead>
@@ -151,6 +155,19 @@
                             </td>
                             <td class="py-1 pr-4">{row.country}</td>
                             <td class="py-1 pr-4">{formatDistance(row.distanceKm)}</td>
+                            <td class="py-1 pr-4">
+                                {#if row.emailedDate}
+                                    <span
+                                        class="text-green-700 font-semibold"
+                                        title={`Emailed ${formatDate(row.emailedDate)}`}
+                                        aria-label={`Emailed ${formatDate(row.emailedDate)}`}
+                                        >✓</span
+                                    >
+                                {:else}
+                                    <span class="text-gray-400" aria-label="Not yet emailed">—</span
+                                    >
+                                {/if}
+                            </td>
                             <td class="py-1 pr-2">
                                 <button
                                     type="button"

@@ -50,11 +50,23 @@ export interface SessionQso {
     distanceKm: string;
     /**
      * Full ADIF record submitted to the daemon — the same string
-     * formatAdifRecord() produced. Captured so the email-ADIF flow
-     * can concatenate session records into a transmittable blob
-     * without a per-QSO daemon refetch.
+     * formatAdifRecord() produced. Retained as a per-row snapshot for
+     * potential offline/export use; the email flow no longer ships it
+     * (the daemon rebuilds ADIF from the live rows keyed by uuid), so
+     * this is no longer on the email critical path.
      */
     adif: string;
+
+    /**
+     * UTC YYYYMMDD of the send that last included this QSO in a session
+     * email, mirrored from the daemon's durable sm_fwrd_by_email_date
+     * stamp. Empty / undefined means "not yet emailed to the QSL
+     * manager." Set by markEmailed() after a successful send; the
+     * daemon row is the source of truth, this is the session-view
+     * mirror so the panel can render a Sent indicator without a
+     * per-row refetch.
+     */
+    emailedDate?: string;
 }
 
 function loadFromStorage(): SessionQso[] {
@@ -115,6 +127,29 @@ class SessionQsosState {
         if (idx < 0) return;
         this.items[idx] = qso;
         saveToStorage(this.items);
+    }
+
+    /**
+     * markEmailed — stamp the given UUIDs with the send date after a
+     * successful session email. Mirrors the daemon's durable
+     * sm_fwrd_by_email_date write so the SessionPanel can render a Sent
+     * indicator immediately. Rows whose UUID isn't in the set are left
+     * untouched (a QSO logged after the send stays unsent until the
+     * next send includes it). No-op for an empty set — which is also
+     * the daemon's "sent but stamp-write failed" signal, leaving those
+     * rows visually unsent for a re-send / Logbook-SPA fix.
+     */
+    markEmailed(uuids: string[], date: string): void {
+        if (uuids.length === 0 || date === '') return;
+        const set = new Set(uuids);
+        let changed = false;
+        for (const q of this.items) {
+            if (set.has(q.uuid)) {
+                q.emailedDate = date;
+                changed = true;
+            }
+        }
+        if (changed) saveToStorage(this.items);
     }
 
     /**
