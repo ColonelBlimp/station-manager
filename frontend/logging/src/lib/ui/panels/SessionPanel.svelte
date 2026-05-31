@@ -21,6 +21,7 @@
         check covers it.
     */
     import { sessionQsosState } from '../../states/sessionQsos.svelte';
+    import { configState } from '../../states/config.svelte';
     import { qsoEditState } from '../../states/qsoEdit.svelte';
     import { fetchQso } from '../../api/qso-update';
     import { toasts } from '../../states/toasts.svelte';
@@ -95,12 +96,38 @@
     }
 </script>
 
+<!--
+    Heroicon "envelope" (outline) — the Emailed-column header. Replaces
+    the "Emailed" text label so the column reads as an at-a-glance mail
+    indicator. The column (header + cells) only renders when the
+    daemon's mailer is enabled, mirroring the InfoPanel email controls:
+    with no SMTP configured there's nothing to email, so the status
+    column is noise.
+-->
+{#snippet envelopeIcon()}
+    <svg
+        class="size-5"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="1.5"
+        stroke="currentColor"
+        aria-hidden="true"
+    >
+        <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75"
+        />
+    </svg>
+{/snippet}
+
 <div class="px-2">
     {#if rows.length === 0}
         <p class="text-sm text-gray-500 italic px-1 py-2">No QSOs logged this session.</p>
     {:else}
         <!--
-            overflow-x-auto so a wide (11-column) session table scrolls
+            overflow-x-auto so the wide session table (11 columns with
+            the mailer enabled, 10 without the Emailed column) scrolls
             horizontally INSIDE the panel instead of widening the app
             shell. The shell is `w-fit` (app.svelte <main>), so an
             unconstrained table grew the whole card once any QSO landed,
@@ -122,11 +149,19 @@
                         <th class="py-1 pr-4">Time On</th>
                         <th class="py-1 pr-4">Country</th>
                         <th class="py-1 pr-4">Distance</th>
-                        <!-- "Emailed", not "Sent" — the RST "Send" column above
-                             already owns that word. This tracks whether the QSO
-                             has been forwarded to the QSL manager by email. -->
-                        <th class="py-1 pr-4">Emailed</th>
-                        <th class="py-1 pr-4 sr-only">Actions</th>
+                        <!-- Envelope icon instead of an "Emailed" text label —
+                             tracks whether the QSO has been forwarded to the QSL
+                             manager by email. Only shown when the mailer is
+                             enabled (no SMTP → nothing to email → column hidden),
+                             matching the InfoPanel email controls. -->
+                        {#if configState.mailer.enabled}
+                            <th class="pt-1 pr-4">
+                                <span class="inline-flex" title="Emailed" aria-label="Emailed">
+                                    {@render envelopeIcon()}
+                                </span>
+                            </th>
+                        {/if}
+                        <th class="sr-only">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -155,19 +190,22 @@
                             </td>
                             <td class="py-1 pr-4">{row.country}</td>
                             <td class="py-1 pr-4">{formatDistance(row.distanceKm)}</td>
-                            <td class="py-1 pr-4">
-                                {#if row.emailedDate}
-                                    <span
-                                        class="text-green-700 font-semibold"
-                                        title={`Emailed ${formatDate(row.emailedDate)}`}
-                                        aria-label={`Emailed ${formatDate(row.emailedDate)}`}
-                                        >✓</span
-                                    >
-                                {:else}
-                                    <span class="text-gray-400" aria-label="Not yet emailed">—</span
-                                    >
-                                {/if}
-                            </td>
+                            {#if configState.mailer.enabled}
+                                <td class="py-1 pr-4">
+                                    {#if row.emailedDate}
+                                        <span
+                                            class="text-green-700 font-semibold"
+                                            title={`Emailed ${formatDate(row.emailedDate)}`}
+                                            aria-label={`Emailed ${formatDate(row.emailedDate)}`}
+                                            >✓</span
+                                        >
+                                    {:else}
+                                        <span class="text-gray-400" aria-label="Not yet emailed"
+                                            >—</span
+                                        >
+                                    {/if}
+                                </td>
+                            {/if}
                             <td class="py-1 pr-2">
                                 <button
                                     type="button"
