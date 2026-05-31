@@ -1,6 +1,8 @@
 package ft8
 
 import (
+	stderrors "errors"
+
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -10,11 +12,23 @@ const opDecodeFile errors.Op = "ft8.DecodeFile"
 
 // DecodeSlot decodes one 15-second FT8 slot from 12 kHz mono signed-16-bit
 // PCM samples, logs each decoded message as a structured line, and returns
-// the decodes. go-ft8's DecodeMessages is stateless (strict mode); a stateful
-// per-stream Decoder is a later concern for the live path.
+// the decodes. It uses go-ft8's checked, stateless API so a malformed slot
+// (wrong sample count) is rejected up front with a typed error rather than
+// silently zero-padded — which surfaces a plumbing bug in the slot producer
+// (the live path's ring buffer must emit exactly one slot) instead of hiding
+// it. A stateful per-stream Decoder is a later concern for the live path.
+//
+// Logging policy:
+//   - one info line per decoded message ("heard this");
+//   - a debug line per slot with aggregate diagnostics (off at the default
+//     info level; flip to debug when bringing the live path up or chasing an
+//     empty slot — covers the why-nothing case for every slot, decoding or
+//     not);
+//   - a warn for a rejected slot or a recovered panic.
 //
 // Fail-soft: a panic inside the decoder is recovered and logged, never
-// propagated. An FT8 failure must never take down the daemon.
+// propagated, and a rejected slot returns nil. An FT8 failure must never take
+// down the daemon.
 //
 // A nil logger is tolerated (treated as a no-op) so the offline/dev path can
 // pass logging.Noop() without ceremony.
@@ -32,8 +46,25 @@ func DecodeSlot(samples []int16, log logging.Logger) (msgs []goft8.DecodedMessag
 		}
 	}()
 
-	msgs = goft8.DecodeMessages(samples)
-	for _, m := range msgs {
+	report, err := goft8.DecodeMessagesChecked(samples, goft8.DecoderOptions{})
+	if err != nil {
+		ev := log.WarnWith().Err(err).Int("samples", len(samples))
+		// Surface the typed validation detail as queryable fields. With the
+		// zero-value DecoderOptions only DecodeInputError can fire today, but
+		// handle both so this stays correct if options are passed later.
+		var inErr *goft8.DecodeInputError
+		var optErr *goft8.DecoderOptionError
+		switch {
+		case stderrors.As(err, &inErr):
+			ev = ev.Int("got_samples", inErr.GotSamples).Int("want_samples", inErr.WantSamples)
+		case stderrors.As(err, &optErr):
+			ev = ev.Str("option_field", optErr.Field).Str("option_reason", optErr.Reason)
+		}
+		ev.Msg("ft8 slot rejected; skipped")
+		return nil
+	}
+
+	for _, m := range report.Messages {
 		log.InfoWith().
 			Str("text", m.Text).
 			Float64("freq_hz", m.FreqHz).
@@ -41,7 +72,19 @@ func DecodeSlot(samples []int16, log logging.Logger) (msgs []goft8.DecodedMessag
 			Float64("sync", m.Sync).
 			Msg("ft8 decode")
 	}
-	return msgs
+
+	d := report.Diagnostics
+	log.DebugWith().
+		Dur("duration", d.Duration).
+		Int("candidates_found", d.CandidatesFound).
+		Int("candidates_analyzed", d.CandidatesAnalyzed).
+		Int("ldpc_attempts", d.LDPCAttempts).
+		Int("ldpc_failures", d.LDPCFailures).
+		Int("unpack_failures", d.UnpackFailures).
+		Int("unique_messages", d.UniqueMessages).
+		Msg("ft8 slot decoded")
+
+	return report.Messages
 }
 
 // DecodeFile reads a WAV fixture into an int16 slot and decodes it. The WAV

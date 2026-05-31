@@ -8,10 +8,12 @@
 //
 // Two entry points share one path:
 //
-//   - DecodeSlot turns a slot of int16 samples into decoded messages,
-//     logging each as a structured line and returning the slice. This is
-//     the call the daemon will make per 15-second slot once live capture
-//     exists; the live path only has to produce the int16 slot.
+//   - DecodeSlot turns a slot of int16 samples into decoded messages via
+//     go-ft8's checked API — a malformed slot is rejected with a typed error
+//     rather than silently zero-padded — logging each message as a structured
+//     line (plus a debug-level per-slot diagnostics line) and returning the
+//     slice. This is the call the daemon will make per 15-second slot once
+//     live capture exists; the live path only has to produce the int16 slot.
 //   - DecodeFile reads a WAV fixture into an int16 slot and hands it to
 //     DecodeSlot — the offline/test path, and the first integration proof
 //     against go-ft8's deterministic corpus.

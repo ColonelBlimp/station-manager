@@ -100,6 +100,17 @@ func TestDecodeSlot_FailSoft(t *testing.T) {
 	}
 }
 
+// TestDecodeSlot_RejectsWrongLength confirms the checked API rejects a slot
+// that isn't a full 180000-sample frame: DecodeSlot returns nil (and logs a
+// warn) rather than feeding a malformed slot to the decoder. Rejection happens
+// before decode work, so this is cheap — no -short gate needed.
+func TestDecodeSlot_RejectsWrongLength(t *testing.T) {
+	short := make([]int16, 1000)
+	if got := DecodeSlot(short, logging.Noop()); got != nil {
+		t.Fatalf("wrong-length slot decoded %d messages, want nil", len(got))
+	}
+}
+
 // writeTestWAV writes a minimal canonical PCM WAV for reader-contract tests.
 func writeTestWAV(t *testing.T, path string, rate uint32, channels, bits uint16, data []byte) {
 	t.Helper()
