@@ -61,6 +61,16 @@ Verified: `go vet ./...` clean, gofmt clean, `go test -race -short ./internal/ft
 
 **Decode is NOT a QSO** — it's a logged "heard this" line only; no DB write, no `qso` table, no upload queue, no SPA. The QSO stays operator-driven. **Pending (the harder half):** live path — capture source (left with the FT8 snapshot), wrapping ring buffer, UTC slot scheduler, 48k→12k /4 decimation — all feeding the same `DecodeSlot` int16 seam. Then the FT8 card (separate from `LoggingCard`; Phone/CW + FT8 cards each with contesting sub-panels — worked out later). Note: the pinned pseudo-version predates go-ft8's just-landed encode commit (`6c2ac67`); bump when encode/TX is needed.
 
+### Session 114 (2026-05-31) — Live path step 2: FT8 `Service` lifecycle wiring scheduler → decode worker (CGO-free, tested).
+
+Recovered the snapshot `Service` shell and re-pointed it at the real pipeline. New `types.Ft8Config{Enabled, Device}` (recreated; `Device` is a single string mirroring `BridgeSerialConfig.Port`, empty = system default). In package `ft8`:
+- **`captureSource` interface** (unexported) — the live-audio seam: `Start(ctx) (<-chan []int16, error)` + `Stop()`. The real malgo impl (behind `//go:build cgo`) is step 3; the Service depends only on this interface so the whole pipeline is testable without audio/CGO.
+- **`Service`** — `Initialize`/`Start`/`Stop`, idempotent, fail-soft. `Start`: disabled → no-op; enabled → `src.Start` → `NewScheduler` → two `safego.GoTracked` goroutines (scheduler.Run + decodeLoop consuming `Slots()` → `DecodeSlot`), respawn=false with an `onPanic` logger. **Capture-won't-start is fail-soft** (warn + idle, never an error that aborts daemon start — covers the CGO-free build's unavailable-capture case). `Stop`: cancel → `src.Stop()` → `wg.Wait` (waits out one in-flight non-cancellable decode). Config snapshotted at construction (restart picks up edits). Constructed via unexported `newService(cfg, log, src)`; the exported daemon constructor lands with step 3.
+
+Tests (fake `captureSource`, all green, race-clean): Initialize requires logger / requires source when enabled; disabled acquires nothing; enabled starts capture + drains on Stop; **capture-error is fail-soft**; Start/Stop idempotent (incl. concurrent Stop); Stop-before-Start terminal. CGO-free build all, `go vet ./...`, gofmt clean; CI fast lane clean; full ft8 package 45.8s.
+
+**Next:** step 3 — malgo capture behind `//go:build cgo` + a `!cgo` stub (`newCaptureSource` returning capture-unavailable), the exported daemon constructor + `cmd/smd` registration + config field, the build-tag mechanics (live = CGO build), then a live smoke on the rig.
+
 ### Session 113 (2026-05-31) — Live path step 1: int16 ring + UTC slot scheduler (CGO-free, tested).
 
 First slice of the live FT8 path — the CGO-free, deterministically-testable core, ahead of the capture layer. Recovered `ring.go` + `scheduler.go` (+ tests) from `ft8-snapshot-2026-05-30` and adapted: **float32 → int16** (matches the `DecodeSlot` seam, zero conversion) and **`dsp.NMAX` → `SlotSamples`** (= `goft8.SampleRate * 15` = 180000, exactly go-ft8's checked-decode frame length; the removed `dsp` package dependency is gone). In package `ft8`:
