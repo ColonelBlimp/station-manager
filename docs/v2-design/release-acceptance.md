@@ -94,6 +94,13 @@ One QSO logged through the SPA, end-to-end, against the freshly installed binary
 - `sqlite3 ~/.local/share/station-manager/db/smd.sqlite "SELECT count(*) FROM qso;"` increases by exactly 1.
 - `sqlite3 ~/.local/share/station-manager/db/smd.sqlite "SELECT count(*) FROM qso_upload WHERE status='pending';"` — at least one pending upload row exists (forwarder queue wiring intact).
 
+Session email-out (skip if `smtp.enabled=false`):
+
+- On the Session tab, with ≥1 session QSO, the email controls show next to the tab; the send button enables when the recipient field has an address.
+- Click send → "Sending…" then "Sent to …" toast.
+- The SessionPanel "Emailed" column flips to a ✓ (with the date) for the sent rows.
+- A copy of the emailed ADIF appears under `~/.local/share/station-manager/exports/sent-adif/session-<UTC>.adi`, and it begins with an ADIF header ending in `<EOH>` followed by records — **not** a bare `<CALL...>` first line (the header is what stops importers from swallowing the first QSO).
+
 ### Gate 7 — Bridge smoke (skip if no rig attached)
 
 Only runs when a rig is physically connected and `bridge.enabled=true` in the config.

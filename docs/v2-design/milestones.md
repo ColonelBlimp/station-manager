@@ -536,9 +536,14 @@ hasn't been run through a real-rig session since M3a closed.
 - ✅ QSO Edit Overlay — modal edit for any session-list QSO via
   `GET /v1/qso/{uuid}` + `PATCH /v1/qso/{uuid}`. Focus trap and
   ESC contract per the session-53 code-review pass.
-- ✅ Session email-out — `POST /v1/session/email-out` ships the
-  in-memory session's ADIF to a recipient via the daemon's mailer
-  (when `mailer.enabled`). Surfaced in SessionPanel.
+- ✅ Session email-out — `POST /v1/session/email` ships the session's
+  ADIF to a recipient via the daemon's mailer (when `mailer.enabled`).
+  Controls live in the InfoPanel tab strip next to the Session tab.
+  Reworked 2026-05-31: the SPA posts `{to, uuids[]}` and the daemon
+  rebuilds the ADIF from the live DB rows (current data, proper
+  `<EOH>` header), durably stamps each QSO `sm_fwrd_by_email_*`
+  (SessionPanel "Emailed" column), and archives a local copy under
+  `<workingDir>/exports/sent-adif/` before sending.
 - ✅ Frontend code review closed (sessions 53–60). All 5 critical,
   all 17 important, 8 of 11 nits closed (3 reviewer-accepted-as-is).
   See `docs/reviews/frontend-logging-2026-05-12.md`.
