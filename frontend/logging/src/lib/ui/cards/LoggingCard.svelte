@@ -16,13 +16,13 @@
     these to tokens at that point.
 -->
 <header class="flex items-center h-13.5 px-4 border-b border-b-line-soft">
-    <div class="flex flex-row items-center w-70">
+    <div class="flex flex-row items-center w-70 cursor-default">
         <h1 class="text-lg font-bold tracking-tight">Logging Mode:</h1>
         <div class="grid grid-cols-1"></div>
     </div>
     <div class="w-38 text-xs"></div>
     <div class="w-32 text-xs"></div>
-    <div class="flex flex-col text-xs font-semibold w-52 text-nowrap">
+    <div class="flex flex-col text-xs font-semibold w-52 text-nowrap cursor-default">
         <div class="flex flex-row items-center">
             <div class="flex-none w-15">Logbook:</div>
             <div class="text-ellipsis overflow-hidden text-green-800">
@@ -36,7 +36,7 @@
             </div>
         </div>
     </div>
-    <div class="flex text-sm font-semibold w-46">
+    <div class="flex text-sm font-semibold w-46 cursor-default">
         <div class="w-24">Session Time:</div>
         <div class="text-right w-17"><SessionTimer /></div>
     </div>

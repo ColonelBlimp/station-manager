@@ -135,7 +135,7 @@
             Session-tab email controls out of view. Containing the table
             here keeps the card — and the tab strip — at a stable width.
         -->
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto overflow-y-scroll">
             <table class="w-full text-left text-sm tabular-nums">
                 <thead class="border-b border-gray-300">
                     <tr class="text-gray-700 font-semibold">
