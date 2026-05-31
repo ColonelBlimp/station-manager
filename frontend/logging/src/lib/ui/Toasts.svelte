@@ -82,7 +82,7 @@
     severity drive announce-urgency without a separate aria-live attr.
 -->
 <div
-    class="fixed top-1.25 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50 pointer-events-none"
+    class="fixed top-1.25 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50"
 >
     {#each toastsState.items as toast (toast.id)}
         <!--
@@ -102,7 +102,7 @@
             </span>
             <button
                 type="button"
-                class="absolute top-0.5 right-1.5 text-current opacity-70 hover:opacity-100 cursor-pointer leading-none"
+                class="size-4 absolute top-0.5 right-1.5 text-current opacity-60 hover:opacity-100 cursor-pointer leading-none"
                 aria-label="Dismiss notification"
                 onclick={() => dismissToast(toast.id)}
             >

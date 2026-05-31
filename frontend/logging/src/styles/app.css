@@ -159,8 +159,7 @@
     */
     .toast-base {
         @apply px-3 py-2 rounded text-sm text-left whitespace-nowrap
-        border shadow-md cursor-pointer
-        focus:outline-2 focus:outline-focus;
+        border shadow-md cursor-default focus:outline-2 focus:outline-focus;
     }
     .toast-info {
         @apply bg-indigo-50 text-indigo-800 border-indigo-200;
