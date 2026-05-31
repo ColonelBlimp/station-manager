@@ -3,7 +3,7 @@ module github.com/ColonelBlimp/station-manager
 go 1.26.2
 
 require (
-	github.com/ColonelBlimp/go-ft8 v0.0.0-20260531101539-2f05bd38cd6a
+	github.com/ColonelBlimp/go-ft8 v0.1.0
 	github.com/aarondl/null/v8 v8.1.3
 	github.com/aarondl/sqlboiler/v4 v4.19.7
 	github.com/aarondl/strmangle v0.0.9
