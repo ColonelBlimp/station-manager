@@ -45,6 +45,20 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 111 (2026-05-31) — FT8 decode wired in: offline file path (go-ft8 linked, CGO-free, fail-soft, logged).
+
+**First FT8 integration slice — offline WAV → decode → log.** Added go-ft8 (`github.com/ColonelBlimp/go-ft8`, pseudo-version `v0.0.0-20260530173941-abc3d79524f7`) as a `go.mod` dependency and proved it links **CGO-free**: go-ft8's default FFT backend is gonum's pure-Go `dsp/fourier` (the C PocketFFT is gated behind `//go:build pocketfft`), so `CGO_ENABLED=0 go build ./...` stays green and the static daemon build is unaffected. New transitive dep `gonum.org/v1/gonum` (BSD-3, GPL-compatible).
+
+New **`internal/ft8`** package (thin wrapper — go-ft8 owns all DSP/LDPC/unpack):
+- `DecodeSlot(samples []int16, log logging.Logger) []goft8.DecodedMessage` — the daemon-facing call: stateless `goft8.DecodeMessages`, logs each decode as a structured line (`text`/`freq_hz`/`dt_s`/`sync`), **fail-soft** (recovers panics → warn + nil; nil logger tolerated as Noop). This is the int16 seam we agreed: 12 kHz / mono / 16-bit, matching go-ft8's WSJT-X/jt9 contract.
+- `DecodeFile(path, log)` — `readSlotWAV` (contract-enforcing PCM16/12k/mono RIFF reader, rejects non-conforming files) → `DecodeSlot`. Offline/test path.
+- `cmd/ft8-decode-file` — dev harness; prints decodes to stdout (passes Noop).
+- Tests: integration oracle `TestDecodeFile_20mSlot1` (decodes **all 21 corpus signals, exact text** — e.g. `CQ DX S56GD JN65`, `PA2JFX SV3CNX 73`), `live_slot1` (29 decodes), reader full-slot + wrong-rate-reject, fail-soft. Heavy decodes gated under `!testing.Short()` so `-race -short` skips them (per the no-heavy-tests-under-race rule). Fixtures copied from go-ft8 `testdata/` (GPL→GPL).
+
+Verified: `go vet ./...` clean, gofmt clean, `go test -race -short ./internal/ft8/...` + full non-race tests green (3.2s), all `cmd/...` build `CGO_ENABLED=0`.
+
+**Decode is NOT a QSO** — it's a logged "heard this" line only; no DB write, no `qso` table, no upload queue, no SPA. The QSO stays operator-driven. **Pending (the harder half):** live path — capture source (left with the FT8 snapshot), wrapping ring buffer, UTC slot scheduler, 48k→12k /4 decimation — all feeding the same `DecodeSlot` int16 seam. Then the FT8 card (separate from `LoggingCard`; Phone/CW + FT8 cards each with contesting sub-panels — worked out later). Note: the pinned pseudo-version predates go-ft8's just-landed encode commit (`6c2ac67`); bump when encode/TX is needed.
+
 ### Session 110 (2026-05-31) — SessionPanel Emailed-column polish + **relicense MIT → GPL-3.0-only (ADR 0023)**.
 
 **SessionPanel Emailed column.** Replaced the "Emailed" text header with a Heroicon envelope (size-5, `title`/`aria-label` "Emailed"); gated the whole column (header + cells) on `configState.mailer.enabled`, matching the InfoPanel email controls — no SMTP configured → no column. Deployed via `task deploy:local:dev`.
