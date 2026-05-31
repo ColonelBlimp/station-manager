@@ -70,7 +70,7 @@
     }
 </script>
 
-<div class="ml-2">
+<div class="ml-2 w-31">
     <input
         {id}
         bind:this={inputElement}

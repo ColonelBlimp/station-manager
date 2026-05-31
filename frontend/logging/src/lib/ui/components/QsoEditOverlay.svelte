@@ -332,7 +332,7 @@
     >
         <div
             bind:this={dialogEl}
-            class="bg-white rounded-lg shadow-2xl w-[56rem] max-w-[95vw] max-h-[95vh] overflow-y-auto p-6"
+            class="bg-white rounded-lg shadow-2xl w-4xl max-w-[95vw] max-h-[95vh] overflow-y-auto p-6"
             role="document"
         >
             <div class="flex flex-row items-center justify-between mb-4">
@@ -401,7 +401,7 @@
                     </div>
 
                     <!-- Row 2: Name / QTH / Comment -->
-                    <div class="flex flex-row space-x-2">
+                    <div class="flex flex-row space-x-2 -mt-1">
                         <TextInput id="edit-name" label="Name" bind:value={qsoEditState.name} />
                         <TextInput
                             id="edit-qth"
@@ -417,7 +417,7 @@
                     </div>
 
                     <!-- Row 3: Date / Time On / Time Off -->
-                    <div class="flex flex-row space-x-2">
+                    <div class="flex flex-row space-x-2 -mt-4.5">
                         <DateInput
                             id="edit-qso-date"
                             label="Date"
