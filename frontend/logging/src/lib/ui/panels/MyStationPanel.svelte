@@ -6,6 +6,7 @@
     import { displayedState } from '../../states/displayed.svelte';
     import { qsoDefaults } from '../../states/qsoDefaults.svelte';
     import { toasts } from '../../states/toasts.svelte';
+    import { versionState } from '../../states/version.svelte';
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidMaidenhead } from '../../validators/maidenhead';
     import { passthrough } from '../../validators/passthrough';
@@ -126,7 +127,7 @@
         ARIA pattern as InfoPanel's outer tabs (tablist / tab /
         tabpanel) so screen readers see the nesting correctly.
     */
-    type SectionId = 'identity' | 'location' | 'equipment' | 'modes' | 'cw' | 'qso';
+    type SectionId = 'identity' | 'location' | 'equipment' | 'modes' | 'cw' | 'qso' | 'about';
 
     interface Section {
         id: SectionId;
@@ -140,6 +141,7 @@
         { id: 'modes', title: 'Mode Mappings' },
         { id: 'cw', title: 'CW' },
         { id: 'qso', title: 'QSO' },
+        { id: 'about', title: 'About' },
     ];
 
     /*
@@ -159,6 +161,7 @@
         'modes',
         'cw',
         'qso',
+        'about',
     ];
 
     function loadActiveSection(): SectionId {
@@ -233,6 +236,19 @@
         } catch {
             // Storage write failed — in-memory state is still correct;
             // we lose refresh-survival for this tab, nothing else.
+        }
+    });
+
+    // Lazy-hydrate the About panel's version info the first time the
+    // operator opens the tab — no point spending a /v1/version round-
+    // trip at app boot for a rarely-visited diagnostics panel.
+    // ensureLoaded() is idempotent (no-op after the first fetch), so
+    // re-runs of this effect on tab re-entry are cheap. The only
+    // reactive dep is activeSection; ensureLoaded reads nothing
+    // reactive, so it won't re-fire on unrelated state churn.
+    $effect(() => {
+        if (activeSection === 'about') {
+            versionState.ensureLoaded();
         }
     });
 
@@ -720,6 +736,66 @@
                         </div>
                     </div>
                 </div>
+            {:else if activeSection === 'about'}
+                <div
+                    id="my-station-about"
+                    role="tabpanel"
+                    aria-labelledby="my-station-tab-about"
+                    class="flex flex-col space-y-4 pt-3"
+                >
+                    <div class="flex flex-col">
+                        <h3 class="text-base font-semibold">Station Manager</h3>
+                        <p class="text-xs opacity-70">
+                            Local QSO log + forwarding daemon. Licensed GPL-3.0-only.
+                        </p>
+                    </div>
+
+                    <!--
+                        Three render states off versionState: in-flight,
+                        failed, loaded. The daemon serves /v1/version as a
+                        diagnostics blob (build version + Go runtime + DB
+                        schema migration level) — useful for answering
+                        "which build logged this QSO" and "did migrations
+                        apply cleanly". Refresh button re-fetches without a
+                        full SPA reload so a freshly-deployed daemon build
+                        shows up here immediately.
+                    -->
+                    {#if versionState.loading}
+                        <p class="text-sm opacity-70">Loading…</p>
+                    {:else if versionState.error !== null}
+                        <p class="text-sm text-red-700">{versionState.error}</p>
+                    {:else if versionState.info !== null}
+                        <dl class="grid grid-cols-[7rem_1fr] gap-y-1 text-sm">
+                            <dt class="font-semibold">Version</dt>
+                            <dd class="font-mono">{versionState.info.daemon}</dd>
+
+                            <dt class="font-semibold">Go runtime</dt>
+                            <dd class="font-mono">{versionState.info.go}</dd>
+
+                            <dt class="font-semibold">DB schema</dt>
+                            <dd class="font-mono">
+                                {#if versionState.info.schema !== undefined}
+                                    {versionState.info.schema.version}{versionState.info.schema
+                                        .dirty
+                                        ? ' (dirty)'
+                                        : ''}
+                                {:else}
+                                    unavailable
+                                {/if}
+                            </dd>
+                        </dl>
+                    {/if}
+
+                    <div>
+                        <button
+                            type="button"
+                            onclick={() => versionState.refresh()}
+                            disabled={versionState.loading}
+                            class="text-sm text-indigo-700 hover:text-indigo-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            >Refresh</button
+                        >
+                    </div>
+                </div>
             {/if}
         </div>
         <!--
@@ -728,16 +804,22 @@
         the full logging_station block; the daemon's response is
         re-applied so derived fields (my_lat / my_lon) and normalised
         forms (canonical gridsquare casing) flow back into the UI.
+
+        Hidden on the About sub-tab — that panel is read-only diagnostics
+        with nothing to save, so a live "Update" button there would be a
+        dead control.
     -->
-        <div class="flex w-32 h-52 justify-end items-end">
-            <button
-                id="my-station-update-btn"
-                type="button"
-                onclick={onUpdate}
-                disabled={saving}
-                class="h-9 cursor-pointer rounded-md bg-focus px-4 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
-                >{saving ? 'Saving…' : 'Update'}</button
-            >
-        </div>
+        {#if activeSection !== 'about'}
+            <div class="flex w-32 h-52 justify-end items-end">
+                <button
+                    id="my-station-update-btn"
+                    type="button"
+                    onclick={onUpdate}
+                    disabled={saving}
+                    class="h-9 cursor-pointer rounded-md bg-focus px-4 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 disabled:cursor-not-allowed"
+                    >{saving ? 'Saving…' : 'Update'}</button
+                >
+            </div>
+        {/if}
     </div>
 </div>
