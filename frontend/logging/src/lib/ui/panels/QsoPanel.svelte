@@ -9,6 +9,7 @@
     import { manualState } from '../../states/manual.svelte';
     import { qsoDefaults } from '../../states/qsoDefaults.svelte';
     import { qsoDraft } from '../../states/qsoDraft.svelte';
+    import { commentHistory } from '../../states/commentHistory.svelte';
     import TextInput from '../components/TextInput.svelte';
     import Comment from '../components/Comment.svelte';
     import DateInput from '../components/DateInput.svelte';
@@ -392,6 +393,14 @@
                     distanceKm: enrichmentState.activeDistanceKm,
                     adif,
                 });
+                // Save the logged comment to the paste list (newest at
+                // top, deduped, capped) so it's offered back on the
+                // Comment field's ▾ dropdown for the next QSO. add()
+                // ignores empty, so a blank comment doesn't pollute the
+                // list. Only the 'stored' path feeds it — duplicates /
+                // failures don't add a comment that wasn't actually
+                // logged.
+                commentHistory.add(qsoDraft.comment.trim());
                 qsoDraft.clear();
                 // Country + Worked panels return to the empty state —
                 // every QSO is a clean slate. Operator's next Tab
@@ -692,7 +701,15 @@
     <div class="flex flex-row space-x-2 mt-2">
         <TextInput id="name" label="Name" bind:value={qsoDraft.name} />
         <TextInput id="qth" label="QTH" widthClass="w-46" bind:value={qsoDraft.qth} />
-        <Comment id="comment" label="Comment" bind:value={qsoDraft.comment} />
+        <Comment
+            id="comment"
+            label="Comment"
+            bind:value={qsoDraft.comment}
+            history={commentHistory.items}
+            onpick={(text: string) => {
+                qsoDraft.comment = text;
+            }}
+        />
     </div>
     <div class="flex flex-row space-x-2 -mt-2">
         <DateInput id="qso_date" label="Date" bind:value={qsoDraft.qsoDate} />
