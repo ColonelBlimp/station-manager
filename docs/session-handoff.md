@@ -24,7 +24,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-05-31)
+## Current state (as of 2026-06-01)
 
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
@@ -34,7 +34,7 @@ In-tree and shipped:
 - **Enrichment** (ADR 0017) — hamnut + QRZ providers, domain-tables-as-cache, three-state read policy, bounded async refresh worker. Never blocks logging.
 - **Forwarder** (ADR 0022) — multi-destination `Forwarder` interface + worker + registry; enqueue gated on config presence, not `Enabled`.
 - **Bridge** (`internal/bridge`, ADR 0013 + 0019) — M3a closed 2026-05-11. Read-only rig state over `/v1/rig/events` SSE; AUTO-mode CAT → filter → SPA; pipeline supervisor (ADR 0020) self-heals first-boot ordering + mid-session disruption; rig-mode → ADIF mappings; i18n error codes (ADR 0010).
-- **SPA logging client** — QsoPanel + CountryPanel + InfoPanel with four tabs (Worked / Details / My Station / Session), all shipped. Keyboard-first flow, enrichment + contact-history wiring, QSO edit overlay, per-session QSO list. **Session email-out**: posts `{to, uuids[]}`; the daemon rebuilds the ADIF from the live DB rows (proper `<EOH>` header), durably stamps `sm_fwrd_by_email_*` (SessionPanel "Emailed" column), and archives a copy under `<workingDir>/exports/sent-adif/`. See memory `project_sm_session_email_sent_status`.
+- **SPA logging client** — QsoPanel + CountryPanel + InfoPanel with four tabs (Worked / Details / My Station / Session), all shipped. Keyboard-first flow, enrichment + contact-history wiring, QSO edit overlay, per-session QSO list. My Station has seven sub-tabs (identity / location / equipment / CW / qso / Mode Mappings / **About** — the last a read-only `/v1/version` diagnostics panel). The Comment field carries a **paste-list** (localStorage MRU of recently-logged comments, clipboard-list dropdown). **Session email-out**: posts `{to, uuids[]}`; the daemon rebuilds the ADIF from the live DB rows (proper `<EOH>` header), durably stamps `sm_fwrd_by_email_*` (SessionPanel "Emailed" column), and archives a copy under `<workingDir>/exports/sent-adif/`. See memory `project_sm_session_email_sent_status`.
 - **CD pipeline** — `.github/workflows/ci.yml` gates every push to main (SPA lint/check/test/build + gofmt/vet/`go test -race`/embed-build/all `cmd/...`). Local mirror `task ci:local`; dogfood refresh `task deploy:local:dev`.
 
 Out of tree:
@@ -44,6 +44,16 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 119 (2026-06-01) — Two SPA features: My Station → About diagnostics tab + Comment paste-list.
+
+Both SPA-only; no daemon changes.
+
+**About sub-tab (My Station).** Seventh sub-tab in `MyStationPanel`, read-only, consuming the pre-existing `GET /v1/version` diagnostics endpoint (daemon build / go runtime / DB schema version+dirty; `schema` is `omitempty`). New `lib/api/version.ts` (thin `safeFetch` wrapper, `VersionOutcome` discriminated union; always-200 endpoint so only transport-failure + malformed-200 guards) + `lib/states/version.svelte.ts` (in-memory `$state` holder, lazy `ensureLoaded()` fetch-once on first About open, `refresh()` force re-fetch, loading/error/info render states). `$effect` in the panel calls `ensureLoaded()` when `activeSection === 'about'`; Update button gated off the About section. Tests: `version.test.ts` (8) + two `MyStationPanel.test.ts` keyboard-nav assertions updated (About is now the last tab).
+
+**Comment paste-list.** Anything typed into Comment for a *saved* QSO is added (newest-first, deduped-to-top) to a bounded MRU offered back as canned phrases. New `lib/states/commentHistory.svelte.ts` — localStorage-backed (`sm.commentHistory.items`, JSON array), `MAX_COMMENTS=10`, `add()`/`clear()`, `$effect.root` mirror with first-run latch + `_disposeForTests()`. `Comment.svelte` gained optional `history?: string[]` + `onpick?` props: a clipboard-list icon trigger on the label row opens a `role="menu"` popover (click to fill). Trigger is **always rendered** (stable layout) but **disabled while `history` is empty** so it never opens an empty popover. ESC on the focused popover `stopPropagation`s so the form-level ESC (clear QSO) doesn't also fire; outside-click + pick also close. QsoPanel wires `commentHistory.add(qsoDraft.comment.trim())` in `case 'stored'` and feeds `history={commentHistory.items}` with replace-on-pick. Tests: `commentHistory.test.ts` (8) + `Comment.test.ts` (5).
+
+Docs: `frontend-spa.md` (MyStationPanel five→seven sub-tabs + About; two `localStorage` persistence-tier rows; component-inventory paste-list note) and `keyboard-shortcuts.md` (context-scoped ESC-popover row). Verified: SPA lint/`svelte-check` clean (0/0), prettier clean on touched files, 650 tests green, production build succeeds. Commits `e7a2d97a` (About), `96152b77` (paste-list), `c7ee9ff0` (clipboard-list icon + trigger-always-visible). Open: paste = replace (operator confirmed) rather than insert-at-cursor; manual delete/clear of saved comments deferred.
 
 ### Session 111 (2026-05-31) — FT8 decode wired in: offline file path (go-ft8 linked, CGO-free, fail-soft, logged).
 
