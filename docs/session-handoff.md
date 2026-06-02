@@ -24,7 +24,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-06-01)
+## Current state (as of 2026-06-02)
 
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
@@ -36,6 +36,7 @@ In-tree and shipped:
 - **Bridge** (`internal/bridge`, ADR 0013 + 0019) — M3a closed 2026-05-11. Read-only rig state over `/v1/rig/events` SSE; AUTO-mode CAT → filter → SPA; pipeline supervisor (ADR 0020) self-heals first-boot ordering + mid-session disruption; rig-mode → ADIF mappings; i18n error codes (ADR 0010).
 - **SPA logging client** — QsoPanel + CountryPanel + InfoPanel with four tabs (Worked / Details / My Station / Session), all shipped. Keyboard-first flow, enrichment + contact-history wiring, QSO edit overlay, per-session QSO list. My Station has seven sub-tabs (identity / location / equipment / CW / qso / Mode Mappings / **About** — the last a read-only `/v1/version` diagnostics panel). The Comment field carries a **paste-list** (localStorage MRU of recently-logged comments, clipboard-list dropdown). **Session email-out**: posts `{to, uuids[]}`; the daemon rebuilds the ADIF from the live DB rows (proper `<EOH>` header), durably stamps `sm_fwrd_by_email_*` (SessionPanel "Emailed" column), and archives a copy under `<workingDir>/exports/sent-adif/`. See memory `project_sm_session_email_sent_status`.
 - **CD pipeline** — `.github/workflows/ci.yml` gates every push to main (SPA lint/check/test/build + gofmt/vet/`go test -race`/embed-build/all `cmd/...`). Local mirror `task ci:local`; dogfood refresh `task deploy:local:dev`.
+- **Operator daemon control** — the RPM ships `/usr/bin/smctl` (`start|stop|restart|status`) alongside `/usr/bin/smd`; it wraps `systemctl --user … smd` and prints a state-verified `SM Started.` / `SM Stopped.` line (bare `systemctl` is silent on success). See `docs/install.md §3`.
 
 Out of tree:
 
@@ -44,6 +45,10 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 120 (2026-06-02) — `smctl` operator control wrapper.
+
+The bare day-to-day command was `systemctl --user stop smd`, which is silent on success — the operator wanted a `SM Stopped.` / `SM Started.` confirmation. Key constraint surfaced: `systemctl` cannot print custom text to the invoking terminal (it's silent on success; unit/daemon output goes to the journal), so the confirmation has to come from a *different command* that wraps it. Solution: `scripts/smctl.sh` (`start|stop|restart|status`), packaged into the RPM at `/usr/bin/smctl` (nfpm.yaml `contents`). It calls `systemctl --user … smd` then gates the success line on a verified `is-active` check after a 1 s settle — honest because the unit is `Type=simple` + `Restart=on-failure`, so `systemctl start` returns 0 the instant the process spawns even if it crashes immediately. Idempotent ("already running" / "not running" short-circuits); failure prints a red line + the `journalctl --user -u smd -n 50` hint. The dev-facing `task start/stop` Taskfile entries were explicitly *not* wanted and removed. Verified: dev RPM builds and `rpm -qlp` lists `/usr/bin/smctl`; all verbs exercised live. Docs: `install.md` (§3 introduces smctl, import-prep + where-things-live table updated). Commits `4a297ce4` (wrapper) + `f289af4e` (operator dropped the `…` ellipsis → `SM Started.`). Future: not packaged into the *currently installed* daemon until the next `task deploy:local:dev`.
 
 ### Session 119 (2026-06-01) — Two SPA features: My Station → About diagnostics tab + Comment paste-list.
 

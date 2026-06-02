@@ -28,7 +28,7 @@ contents:
       mode: 0755
 
   # Operator-facing control wrapper: `smctl start|stop|restart|status`.
-  # Prints a confirmed "SM Started…" / "SM Stopped." line that bare
+  # Prints a confirmed "SM Started." / "SM Stopped." line that bare
   # `systemctl --user … smd` cannot (systemctl is silent on success and
   # unit output goes to the journal, not the invoking terminal).
   - src: scripts/smctl.sh

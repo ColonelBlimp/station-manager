@@ -3,7 +3,7 @@
 # smctl — friendly control wrapper for the user-level smd systemd unit.
 # Installed to /usr/bin/smctl by the RPM. Use in place of
 # `systemctl --user start|stop smd` to get a confirmed result line:
-# the "SM Started…" / "SM Stopped." message only prints once the daemon
+# the "SM Started." / "SM Stopped." message only prints once the daemon
 # state is verified, not the instant systemd accepts the request.
 #
 # Why the is-active gate matters: the smd unit is Type=simple with

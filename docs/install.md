@@ -75,7 +75,7 @@ For day-to-day start/stop, the package installs a small wrapper,
 `smctl`, alongside the binary:
 
 ```
-smctl start     # → "SM Started…"   (once confirmed active)
+smctl start     # → "SM Started."   (once confirmed active)
 smctl stop      # → "SM Stopped."   (once confirmed down)
 smctl restart
 smctl status
