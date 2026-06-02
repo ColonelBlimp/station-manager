@@ -57,10 +57,32 @@ options. The concrete provider lives in a new package (e.g. `internal/ft8hints`)
 that *is* permitted to import `internal/storage` + `config`; it owns the DB
 query, the ranked source mix, and the cap. `internal/ft8` stays storage-free.
 
-(The go-ft8 API shape — `DecoderOptions.APCallHints` + `MaxAPCallHypotheses`, or
-a stateful `decoder.SetAPCallHints(hints)` — is illustrative; it firms up when
-go-ft8's AP catalogue API lands. The SM-side seam above is the decision here and
-is independent of which go-ft8 surface ships.)
+**go-ft8's intended API** (shaped 2026-06-02 around the future stateful path
+while still allowing stateless use):
+
+```go
+type APCallHint struct {
+    Call   string
+    Weight float64
+    Source string
+}
+
+type DecoderOptions struct {
+    // …
+    APCallHints         []APCallHint
+    MaxAPCallHypotheses int
+}
+
+func (d *Decoder) SetAPCallHints(hints []APCallHint) // stateful mirror
+```
+
+**Division-of-labour rule that pins the boundary:** go-ft8 copies, normalises,
+and caps the hint slice *internally* (so callers may mutate their slice safely)
+and uses the hints only for **cheap per-candidate known-bit metric agreement**,
+then a strict top-K BP-only hypothesis budget. go-ft8 does **not** rank beyond
+that metric. **All semantic ranking** — by worked/needed/watchlist/recent-heard
+— belongs upstream in SM. This keeps go-ft8 a pure value/API feature and SM the
+sole owner of "which calls matter."
 
 ## Alternatives considered
 
@@ -109,15 +131,32 @@ decoder.
 - The division of labour is explicit: **SM** owns query + rank + dedupe + cap;
   **go-ft8** owns cheap known-bit scoring, top-K AP hypotheses, BP-only-by-
   default, and per-source diagnostics.
-- AP most likely **forces the move from the stateless `DecodeMessagesChecked` to
-  go-ft8's stateful `Decoder`** (the live path currently decodes statelessly per
-  slot; the docs already flag the stateful decoder as a later concern). A
-  stateful decoder is also the natural home for `SetAPCallHints` refresh and for
-  the persistent hash table already resolving hashed calls across slots. This is
-  a larger change than the `enable_osd` knob and should be scoped on its own.
+- **The stateful decoder is the linchpin.** AP hint refresh (`SetAPCallHints`),
+  the persistent hash table (already resolving hashed calls across slots), and
+  the recent-heard call set all want the **same per-stream lifetime** — so AP
+  must *not* be buried in the current stateless per-slot `DecodeMessagesChecked`
+  path. The live path moves to go-ft8's long-lived `Decoder`. This is a larger
+  change than the `enable_osd` knob and is scoped on its own (piece 2 below); it
+  is the structural prerequisite the other pieces hang off.
 - AP decoding adds per-candidate cost on top of OSD; the strict top-K budget and
   the cap are what keep it inside the 15 s slot. The live A/B harness
   (`ft8-capture-probe -out` → jt9) is the tool to confirm AP earns its cost.
+
+**Sequencing — four separable pieces:**
+
+1. **go-ft8:** add the AP-hint value API (`DecoderOptions.APCallHints` +
+   `MaxAPCallHypotheses`, and `Decoder.SetAPCallHints`), cheap known-bit
+   scoring, top-K BP-only hypotheses, per-source diagnostics. Internal
+   copy/normalise/cap; no semantic ranking.
+2. **`internal/ft8`:** switch the live decode toward a long-lived per-stream
+   `Decoder`, and keep the **recent-heard call set** here (in-subsystem,
+   storage-free — the highest-value live AP source).
+3. **`internal/ft8hints`:** the provider — blends recent-heard + worked-on-
+   band/mode + watchlist/needed config (+ later, spots), ranks, dedupes, caps.
+4. **`cmd/smd`:** wire the provider injection through the same pattern as
+   `captureSource`.
+
+Pieces 1 and 2 are the gate; 3 can start minimal (own-call only) and grow.
 
 ## Triggers to revisit
 
