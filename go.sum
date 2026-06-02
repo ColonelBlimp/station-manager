@@ -1,5 +1,5 @@
-github.com/ColonelBlimp/go-ft8 v0.1.1 h1:ZMbQjtHal9ZTypESDZKKSVKAixUrWU9wmBATt190wfA=
-github.com/ColonelBlimp/go-ft8 v0.1.1/go.mod h1:uV0vqwwRQ069T16BjqM49l9Z2Vl61//guGHD3WD4eEE=
+github.com/ColonelBlimp/go-ft8 v0.2.0 h1:hVXlSizh9zwbprpBoyXqezcOI5+N2w/HFALABg/S/4I=
+github.com/ColonelBlimp/go-ft8 v0.2.0/go.mod h1:uV0vqwwRQ069T16BjqM49l9Z2Vl61//guGHD3WD4eEE=
 github.com/DATA-DOG/go-sqlmock v1.4.1 h1:ThlnYciV1iM/V0OSF/dtkqWb6xo5qITT1TJBG1MRDJM=
 github.com/DATA-DOG/go-sqlmock v1.4.1/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
 github.com/aarondl/inflect v0.0.2 h1:XvH8K5g1wKS921tMmDOUsZ3zS1Eo8WwK5RHC0IGGT2s=

@@ -1,7 +1,7 @@
 ---
 number: 0025
 title: Feed FT8 AP-decode hints from the logbook via an injected provider seam
-status: Proposed
+status: Accepted
 date: 2026-06-02
 ---
 
@@ -57,32 +57,44 @@ options. The concrete provider lives in a new package (e.g. `internal/ft8hints`)
 that *is* permitted to import `internal/storage` + `config`; it owns the DB
 query, the ranked source mix, and the cap. `internal/ft8` stays storage-free.
 
-**go-ft8's intended API** (shaped 2026-06-02 around the future stateful path
-while still allowing stateless use):
+**go-ft8's API — as shipped in v0.2.0 (2026-06-02):**
 
 ```go
 type APCallHint struct {
     Call   string
-    Weight float64
-    Source string
+    Weight float64  // caller policy metadata, retained for future scoring
+    Source string   // "recent", "worked", …
 }
 
 type DecoderOptions struct {
     // …
-    APCallHints         []APCallHint
-    MaxAPCallHypotheses int
+    EnableOSD           bool
+    EnableBroadAP       bool         // extra AP profiles beyond the default CQ profile
+    APCallHints         []APCallHint // copied/normalised/deduped/capped at 200 internally
+    MaxAPCallHypotheses int          // per-candidate cap; default 2, max 8
 }
-
-func (d *Decoder) SetAPCallHints(hints []APCallHint) // stateful mirror
 ```
 
+This matches the design above almost exactly. **Two deltas from what was
+sketched while Proposed:**
+
+1. **No in-place `SetAPCallHints` mutator.** Hints are passed via `DecoderOptions`
+   — accepted by both the stateless `DecodeMessagesChecked` and
+   `NewDecoderWithOptions`. "Refresh hints every N s" therefore means passing a
+   fresh `DecoderOptions` (or rebuilding the decoder), not mutating a long-lived
+   one. **Consequence: AP works in the current stateless path — the stateful
+   decoder is no longer a hard prerequisite for the first increment** (see
+   Consequences).
+2. **`EnableBroadAP`** is an additional knob (more AP profiles, more work).
+
 **Division-of-labour rule that pins the boundary:** go-ft8 copies, normalises,
-and caps the hint slice *internally* (so callers may mutate their slice safely)
-and uses the hints only for **cheap per-candidate known-bit metric agreement**,
-then a strict top-K BP-only hypothesis budget. go-ft8 does **not** rank beyond
-that metric. **All semantic ranking** — by worked/needed/watchlist/recent-heard
-— belongs upstream in SM. This keeps go-ft8 a pure value/API feature and SM the
-sole owner of "which calls matter."
+deduplicates, and caps the hint slice *internally* (so callers may mutate their
+slice safely) and uses the hints only for **cheap per-candidate known-bit metric
+agreement**, then a strict top-K BP-only hypothesis budget. go-ft8 does **not**
+rank beyond that metric. **All semantic ranking** — by worked/needed/watchlist/
+recent-heard — belongs upstream in SM. This keeps go-ft8 a pure value/API
+feature and SM the sole owner of "which calls matter." (v0.2.0 confirms this:
+its own doc-comment says the decoder "does not rank them by logbook policy.")
 
 ## Alternatives considered
 
@@ -131,38 +143,44 @@ decoder.
 - The division of labour is explicit: **SM** owns query + rank + dedupe + cap;
   **go-ft8** owns cheap known-bit scoring, top-K AP hypotheses, BP-only-by-
   default, and per-source diagnostics.
-- **The stateful decoder is the linchpin.** AP hint refresh (`SetAPCallHints`),
-  the persistent hash table (already resolving hashed calls across slots), and
-  the recent-heard call set all want the **same per-stream lifetime** — so AP
-  must *not* be buried in the current stateless per-slot `DecodeMessagesChecked`
-  path. The live path moves to go-ft8's long-lived `Decoder`. This is a larger
-  change than the `enable_osd` knob and is scoped on its own (piece 2 below); it
-  is the structural prerequisite the other pieces hang off.
+- **The stateful decoder is an optimisation, not a prerequisite** (revised once
+  v0.2.0 shipped). Because hints pass through `DecoderOptions` rather than an
+  in-place mutator, AP works in the current stateless per-slot
+  `DecodeMessagesChecked` path: the Service can hold a recent-heard set
+  (in-subsystem, storage-free) and pass it as `APCallHints` each slot. The first
+  increment therefore needs **no** decoder refactor. Moving to a long-lived
+  `Decoder` later remains worthwhile — it's the idiomatic home for hint reuse and
+  the persistent hash table (already resolving hashed calls across slots) — but
+  it's a separate optimisation, not the gate the Proposed draft assumed.
 - AP decoding adds per-candidate cost on top of OSD; the strict top-K budget and
   the cap are what keep it inside the 15 s slot. The live A/B harness
   (`ft8-capture-probe -out` → jt9) is the tool to confirm AP earns its cost.
 
 **Sequencing — four separable pieces:**
 
-1. **go-ft8:** add the AP-hint value API (`DecoderOptions.APCallHints` +
-   `MaxAPCallHypotheses`, and `Decoder.SetAPCallHints`), cheap known-bit
-   scoring, top-K BP-only hypotheses, per-source diagnostics. Internal
-   copy/normalise/cap; no semantic ranking.
-2. **`internal/ft8`:** switch the live decode toward a long-lived per-stream
-   `Decoder`, and keep the **recent-heard call set** here (in-subsystem,
-   storage-free — the highest-value live AP source).
+1. **go-ft8:** the AP-hint value API + cheap known-bit scoring + top-K BP-only
+   hypotheses + per-source diagnostics. **DONE — shipped in go-ft8 v0.2.0**
+   (`DecoderOptions.APCallHints`/`MaxAPCallHypotheses`/`EnableBroadAP`; no
+   in-place mutator).
+2. **`internal/ft8`:** maintain a **recent-heard call set** (in-subsystem,
+   storage-free — the highest-value live AP source) and pass it as `APCallHints`.
+   This works in the *current stateless* path; the long-lived `Decoder` move is a
+   later optimisation, not required here.
 3. **`internal/ft8hints`:** the provider — blends recent-heard + worked-on-
    band/mode + watchlist/needed config (+ later, spots), ranks, dedupes, caps.
 4. **`cmd/smd`:** wire the provider injection through the same pattern as
    `captureSource`.
 
-Pieces 1 and 2 are the gate; 3 can start minimal (own-call only) and grow.
+Piece 1 is done. Piece 2 is now the smallest useful increment (recent-heard,
+stateless); 3 adds the logbook provider; 4 wires it. As of 2026-06-02 only the
+v0.2.0 bump is landed — pieces 2–4 remain deferred (operator chose bump-only).
 
 ## Triggers to revisit
 
-- **go-ft8's AP catalogue API lands.** Firm up this ADR Proposed → Accepted
-  against the concrete surface (`DecoderOptions.APCallHints` vs stateful
-  `SetAPCallHints`), and finalise `APCallHint`'s fields to match.
+- ~~go-ft8's AP catalogue API lands → firm Proposed→Accepted.~~ **Done
+  2026-06-02:** go-ft8 v0.2.0 shipped the API; this ADR is Accepted and the
+  Decision/Consequences are reconciled against the as-shipped surface (no in-place
+  mutator; `EnableBroadAP` added; caps 200 hints / 8 hypotheses).
 - If a live A/B shows AP hints do **not** measurably lift recall over OSD alone,
   the logbook-provider half may not be worth its complexity — ship own-call-only
   AP and stop there.
