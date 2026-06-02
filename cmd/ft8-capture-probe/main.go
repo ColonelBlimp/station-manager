@@ -21,6 +21,11 @@
 //	# and decode each one, printing the heard messages.
 //	ft8-capture-probe -scheduler -slots=4 -device=2
 //
+//	# Same, but also write each slot to cap_slot{1..4}.wav (16-bit PCM 12k
+//	# mono) for an A/B comparison against jt9/WSJT-X:
+//	#   ft8-capture-probe -scheduler -slots=4 -device=2 -out=cap
+//	#   for w in cap_slot*.wav; do echo "== $w =="; jt9 -8 -d 3 "$w"; done
+//
 // A non-aligned single-shot capture rarely decodes real signals (FT8 needs
 // the 15 s window aligned to the UTC :00/:15/:30/:45 boundary) — use
 // -scheduler for a decode smoke; single-shot is for the audio-level check.
@@ -34,9 +39,11 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/audio/capture"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -49,6 +56,7 @@ func main() {
 		duration    = flag.Duration("duration", 10*time.Second, "capture duration (single-shot mode)")
 		schedulerOn = flag.Bool("scheduler", false, "run the UTC-aligned slot scheduler + decode instead of single-shot")
 		slotsToRun  = flag.Int("slots", 4, "number of slots to decode in -scheduler mode")
+		outPrefix   = flag.String("out", "", "in -scheduler mode, write each slot to <out>_slotN.wav (16-bit PCM 12k mono, jt9-compatible); empty = no WAV")
 	)
 	flag.Parse()
 
@@ -65,7 +73,7 @@ func main() {
 	case *listDevices:
 		runListDevices(c)
 	case *schedulerOn:
-		runSchedulerMode(c, *slotsToRun)
+		runSchedulerMode(c, cfg, *slotsToRun, *outPrefix)
 	default:
 		runSingleShot(c, cfg, *duration)
 	}
@@ -126,7 +134,7 @@ collect:
 	fmt.Println("\nFor a decode smoke, re-run with -scheduler (FT8 needs UTC-aligned slots).")
 }
 
-func runSchedulerMode(c *capture.Capture, slotsToRun int) {
+func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, outPrefix string) {
 	if slotsToRun < 1 {
 		fatal("-slots must be >= 1, got %d", slotsToRun)
 	}
@@ -181,6 +189,15 @@ func runSchedulerMode(c *capture.Capture, slotsToRun int) {
 			collected, slotsToRun, slot.StartUTC.Format("15:04:05"),
 			slot.OffsetMs, len(slot.Samples), peakAmplitudeInt16(slot.Samples))
 
+		if outPrefix != "" {
+			path := fmt.Sprintf("%s_slot%d.wav", outPrefix, collected)
+			if err := saveSlotWAV(path, slot.Samples, cfg.SampleRate); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "  warning: write %s: %v\n", path, err)
+			} else {
+				fmt.Printf("  wrote %s\n", path)
+			}
+		}
+
 		t0 := time.Now()
 		msgs := ft8.DecodeSlot(slot.Samples, logging.Noop())
 		fmt.Printf("  decoded %d msg(s) in %s\n", len(msgs), time.Since(t0).Round(time.Millisecond))
@@ -200,6 +217,23 @@ func runSchedulerMode(c *capture.Capture, slotsToRun int) {
 	}
 	fmt.Printf("\nDone: %d slot(s) processed, slot-drops=%d, capture-drops=%d\n",
 		collected, sch.Dropped(), c.DroppedChunks())
+}
+
+// saveSlotWAV writes the slot's int16 samples as a 16-bit PCM mono WAV that
+// jt9/WSJT-X can decode. audio.WriteWAV scales float32 by 32767 with rounding,
+// so int16 → float32(/32767) → WriteWAV is a lossless round-trip — jt9 sees the
+// exact samples go-ft8 decoded, making the A/B comparison faithful.
+func saveSlotWAV(path string, samples []int16, rate uint32) error {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	f := make([]float32, len(samples))
+	for i, s := range samples {
+		f[i] = float32(s) / 32767
+	}
+	return audio.WriteWAV(path, &audio.Data{SampleRate: rate, Channels: 1, Samples: f})
 }
 
 // floatToInt16 mirrors the daemon's capture-source conversion (clamp + scale).
