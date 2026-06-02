@@ -30,9 +30,13 @@ const opDecodeFile errors.Op = "ft8.DecodeFile"
 // propagated, and a rejected slot returns nil. An FT8 failure must never take
 // down the daemon.
 //
+// enableOSD turns on go-ft8's OSD-2/MRB fallback (deeper decode after BP
+// misses) — measured ~1.1–1.7× slower for a real weak-signal recall gain. The
+// daemon passes this from ft8.enable_osd (default true).
+//
 // A nil logger is tolerated (treated as a no-op) so the offline/dev path can
 // pass logging.Noop() without ceremony.
-func DecodeSlot(samples []int16, log logging.Logger) (msgs []goft8.DecodedMessage) {
+func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) (msgs []goft8.DecodedMessage) {
 	if log == nil {
 		log = logging.Noop()
 	}
@@ -46,7 +50,7 @@ func DecodeSlot(samples []int16, log logging.Logger) (msgs []goft8.DecodedMessag
 		}
 	}()
 
-	report, err := goft8.DecodeMessagesChecked(samples, goft8.DecoderOptions{})
+	report, err := goft8.DecodeMessagesChecked(samples, goft8.DecoderOptions{EnableOSD: enableOSD})
 	if err != nil {
 		ev := log.WarnWith().Err(err).Int("samples", len(samples))
 		// Surface the typed validation detail as queryable fields. With the
@@ -89,11 +93,12 @@ func DecodeSlot(samples []int16, log logging.Logger) (msgs []goft8.DecodedMessag
 
 // DecodeFile reads a WAV fixture into an int16 slot and decodes it. The WAV
 // must already meet go-ft8's contract (12 kHz, mono, 16-bit PCM); readSlotWAV
-// rejects anything else rather than mis-decoding it.
-func DecodeFile(path string, log logging.Logger) ([]goft8.DecodedMessage, error) {
+// rejects anything else rather than mis-decoding it. enableOSD is forwarded to
+// DecodeSlot.
+func DecodeFile(path string, enableOSD bool, log logging.Logger) ([]goft8.DecodedMessage, error) {
 	samples, err := readSlotWAV(path)
 	if err != nil {
 		return nil, errors.New(opDecodeFile).WithErr(err)
 	}
-	return DecodeSlot(samples, log), nil
+	return DecodeSlot(samples, enableOSD, log), nil
 }

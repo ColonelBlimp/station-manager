@@ -57,6 +57,7 @@ func main() {
 		schedulerOn = flag.Bool("scheduler", false, "run the UTC-aligned slot scheduler + decode instead of single-shot")
 		slotsToRun  = flag.Int("slots", 4, "number of slots to decode in -scheduler mode")
 		outPrefix   = flag.String("out", "", "in -scheduler mode, write each slot to <out>_slotN.wav (16-bit PCM 12k mono, jt9-compatible); empty = no WAV")
+		osd         = flag.Bool("osd", true, "enable go-ft8's OSD-2/MRB fallback decode (matches the daemon default)")
 	)
 	flag.Parse()
 
@@ -73,7 +74,7 @@ func main() {
 	case *listDevices:
 		runListDevices(c)
 	case *schedulerOn:
-		runSchedulerMode(c, cfg, *slotsToRun, *outPrefix)
+		runSchedulerMode(c, cfg, *slotsToRun, *outPrefix, *osd)
 	default:
 		runSingleShot(c, cfg, *duration)
 	}
@@ -134,7 +135,7 @@ collect:
 	fmt.Println("\nFor a decode smoke, re-run with -scheduler (FT8 needs UTC-aligned slots).")
 }
 
-func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, outPrefix string) {
+func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, outPrefix string, osd bool) {
 	if slotsToRun < 1 {
 		fatal("-slots must be >= 1, got %d", slotsToRun)
 	}
@@ -199,7 +200,7 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, ou
 		}
 
 		t0 := time.Now()
-		msgs := ft8.DecodeSlot(slot.Samples, logging.Noop())
+		msgs := ft8.DecodeSlot(slot.Samples, osd, logging.Noop())
 		fmt.Printf("  decoded %d msg(s) in %s\n", len(msgs), time.Since(t0).Round(time.Millisecond))
 		for i, m := range msgs {
 			fmt.Printf("    [%d] %8.2f Hz  %+.2f s  sync=%.2f  %q\n", i, m.FreqHz, m.DTSec, m.Sync, m.Text)

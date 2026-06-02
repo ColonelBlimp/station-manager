@@ -29,7 +29,7 @@ func TestDecodeFile_20mSlot1(t *testing.T) {
 		t.Skip("full FT8 decode is heavy; skipped under -short")
 	}
 
-	msgs, err := DecodeFile(filepath.Join("testdata", "20m_slot1.wav"), logging.Noop())
+	msgs, err := DecodeFile(filepath.Join("testdata", "20m_slot1.wav"), true, logging.Noop())
 	if err != nil {
 		t.Fatalf("DecodeFile: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestDecodeFile_LiveSlot1(t *testing.T) {
 	if testing.Short() {
 		t.Skip("full FT8 decode is heavy; skipped under -short")
 	}
-	msgs, err := DecodeFile(filepath.Join("testdata", "live_slot1.wav"), logging.Noop())
+	msgs, err := DecodeFile(filepath.Join("testdata", "live_slot1.wav"), true, logging.Noop())
 	if err != nil {
 		t.Fatalf("DecodeFile: %v", err)
 	}
@@ -92,10 +92,10 @@ func TestReadSlotWAV_RejectsWrongRate(t *testing.T) {
 // TestDecodeSlot_FailSoft confirms a decode never panics out of the package:
 // empty input and a nil logger are both tolerated.
 func TestDecodeSlot_FailSoft(t *testing.T) {
-	if got := DecodeSlot(nil, nil); len(got) != 0 {
+	if got := DecodeSlot(nil, false, nil); len(got) != 0 {
 		t.Fatalf("empty input decoded %d messages, want 0", len(got))
 	}
-	if got := DecodeSlot([]int16{}, logging.Noop()); len(got) != 0 {
+	if got := DecodeSlot([]int16{}, false, logging.Noop()); len(got) != 0 {
 		t.Fatalf("empty slice decoded %d messages, want 0", len(got))
 	}
 }
@@ -106,7 +106,7 @@ func TestDecodeSlot_FailSoft(t *testing.T) {
 // before decode work, so this is cheap — no -short gate needed.
 func TestDecodeSlot_RejectsWrongLength(t *testing.T) {
 	short := make([]int16, 1000)
-	if got := DecodeSlot(short, logging.Noop()); got != nil {
+	if got := DecodeSlot(short, false, logging.Noop()); got != nil {
 		t.Fatalf("wrong-length slot decoded %d messages, want nil", len(got))
 	}
 }

@@ -125,8 +125,18 @@ func (s *Service) Start(ctx context.Context) error {
 		s.decodeLoop(sch.Slots())
 	}, false, &s.wg)
 
-	s.log.InfoWith().Str("device", s.cfg.Device).Msg("ft8: subsystem started; decoding live slots")
+	s.log.InfoWith().
+		Str("device", s.cfg.Device).
+		Bool("osd", s.osdEnabled()).
+		Msg("ft8: subsystem started; decoding live slots")
 	return nil
+}
+
+// osdEnabled resolves the OSD decode option. nil (config absent) → true, the
+// default; applyDefaults normally fills it, so nil here only happens if a
+// Service is built without going through config load.
+func (s *Service) osdEnabled() bool {
+	return s.cfg.EnableOSD == nil || *s.cfg.EnableOSD
 }
 
 // Stop cancels the run context, releases the capture device, and waits for
@@ -167,8 +177,9 @@ func (s *Service) Enabled() bool {
 // fail-soft (it recovers per-slot panics), so a bad slot can't break the
 // loop; the safego wrapper around this loop is belt-and-braces.
 func (s *Service) decodeLoop(slots <-chan Slot) {
+	osd := s.osdEnabled()
 	for slot := range slots {
-		DecodeSlot(slot.Samples, s.log)
+		DecodeSlot(slot.Samples, osd, s.log)
 	}
 }
 

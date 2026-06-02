@@ -15,10 +15,19 @@ package types
 // is interpreted by the capture backend; an empty value is the common
 // case for a single-radio station.
 //
+// EnableOSD turns on go-ft8's OSD-2/MRB fallback decode (ordered-statistics
+// decoding after belief-propagation misses) — the analog to WSJT-X/jt9's
+// deeper LDPC effort. It recovers weak signals BP alone misses (measured
+// 2026-06-02 against jt9 -d 3: ~5 extra of 7 per the live A/B) for ~1.1–1.7×
+// decode time, well inside the 15 s slot budget. Pointer-typed so applyDefaults
+// can distinguish "absent" (nil → default true) from an explicit operator
+// false. Default true — the cost is negligible and the recall gain is real.
+//
 // The surface is deliberately minimal — it grows (frequency lists, decode
 // policy, transmit policy) as the corresponding implementation lands, so
 // config schema and behaviour stay in lockstep.
 type Ft8Config struct {
-	Enabled bool   `json:"enabled"`
-	Device  string `json:"device"`
+	Enabled   bool   `json:"enabled"`
+	Device    string `json:"device"`
+	EnableOSD *bool  `json:"enable_osd,omitempty"`
 }

@@ -25,6 +25,6 @@ func BenchmarkDecodeSlot(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = DecodeSlot(samples, log)
+		_ = DecodeSlot(samples, false, log) // OSD off: baseline, comparable to historical numbers
 	}
 }

@@ -422,6 +422,13 @@ func applyDefaults(cfg *Config, baseDir string) {
 		def := cfg.Server.Protocol == "tcp"
 		cfg.Server.ServeSPA = &def
 	}
+	if cfg.Ft8.EnableOSD == nil {
+		// OSD-2/MRB fallback decode defaults on: negligible time cost,
+		// real weak-signal recall gain (see types.Ft8Config.EnableOSD).
+		// nil (absent from config) → true; an explicit false is honoured.
+		def := true
+		cfg.Ft8.EnableOSD = &def
+	}
 
 	// Datastore defaults
 	if cfg.Datastore.Driver == "" {

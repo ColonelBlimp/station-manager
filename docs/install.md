@@ -267,12 +267,17 @@ the FT8 block in `config.json`:
 ```json
 "ft8": {
   "enabled": true,
-  "device": "1"
+  "device": "1",
+  "enable_osd": true
 }
 ```
 
 `device` is the integer index from `-list` as a string; an empty
-string means the system default capture device. Restart the daemon
+string means the system default capture device. `enable_osd` (default
+**true**, so you can omit it) turns on go-ft8's deeper OSD fallback
+decode — it recovers weak signals that basic decoding misses, at a
+small CPU cost well within the 15-second budget; set it to `false`
+only if you want the faster, shallower decode. Restart the daemon
 (`smctl restart`) and watch the log for decodes:
 
 ```

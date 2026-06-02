@@ -63,7 +63,7 @@ type Slot struct {
 //	    if err := sch.Run(ctx); err != nil { ... }
 //	}()
 //	for slot := range sch.Slots() {
-//	    ft8.DecodeSlot(slot.Samples, log)
+//	    ft8.DecodeSlot(slot.Samples, true, log)
 //	}
 //
 // Concurrency: Run owns its goroutine. Slots is safe to read from any

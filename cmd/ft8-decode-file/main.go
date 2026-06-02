@@ -6,6 +6,7 @@
 // stdout; the daemon path logs structured lines instead (see internal/ft8).
 //
 //	ft8-decode-file capture1.wav capture2.wav
+//	ft8-decode-file -osd=false capture1.wav    # baseline (no OSD fallback)
 package main
 
 import (
@@ -18,16 +19,17 @@ import (
 )
 
 func main() {
+	osd := flag.Bool("osd", true, "enable go-ft8's OSD-2/MRB fallback decode (matches the daemon default)")
 	flag.Parse()
 	paths := flag.Args()
 	if len(paths) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: ft8-decode-file <file.wav> [<file.wav> ...]")
+		fmt.Fprintln(os.Stderr, "usage: ft8-decode-file [-osd=false] <file.wav> [<file.wav> ...]")
 		os.Exit(2)
 	}
 
 	exit := 0
 	for _, path := range paths {
-		msgs, err := ft8.DecodeFile(path, logging.Noop())
+		msgs, err := ft8.DecodeFile(path, *osd, logging.Noop())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
 			exit = 1
