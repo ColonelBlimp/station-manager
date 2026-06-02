@@ -46,7 +46,7 @@ cmd_start() {
     # Let RestartSec / an immediate crash settle before declaring success.
     sleep 1
     if is_active; then
-        ok "SM Started…"
+        ok "SM Started."
     else
         fail "SM failed to start."
         return 1
