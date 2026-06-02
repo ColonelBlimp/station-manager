@@ -135,6 +135,14 @@ type Config struct {
 	// any-host-with-a-rig deployment sets it to true with serial +
 	// driver populated.
 	Bridge types.BridgeConfig `json:"bridge"`
+
+	// Ft8 configures the FT8 decode subsystem (ADR 0024). Enabled gates
+	// the whole subsystem: false (the default) = no audio device acquired,
+	// no decoder goroutines. Live capture requires the CGO build; on the
+	// static default build an Enabled subsystem logs "capture unavailable"
+	// and stays idle. There are no required sub-fields — an empty Device
+	// means the system default capture device.
+	Ft8 types.Ft8Config `json:"ft8"`
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.

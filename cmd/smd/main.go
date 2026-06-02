@@ -28,6 +28,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"    // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
 	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/stub" // side-effect: register "stub" forwarder + default retry
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
+	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
@@ -419,6 +420,27 @@ func run() error {
 		}
 	}()
 
+	// FT8 decode subsystem (ADR 0024). Independent of the bridge — it
+	// consumes receive audio, not CAT. When disabled (the default) Start is
+	// a no-op; when enabled but capture won't start (no device, busy, or the
+	// CGO-free build) it logs and stays idle. A decode is NOT a QSO: the
+	// subsystem only logs "heard this" lines, so it never touches the
+	// log/forward path (narrow-daemon-scope holds by the import graph).
+	ft8Svc := ft8.NewService(cfg.Ft8, loggerSvc)
+	if err := ft8Svc.Initialize(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("initialize ft8")
+	}
+	if err := ft8Svc.Start(workerCtx); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("start ft8")
+	}
+	// Idempotent Stop (sync.Once); the explicit shutdown call below turns
+	// this into a no-op on the happy path. Covers the error-return paths.
+	defer func() {
+		if err := ft8Svc.Stop(); err != nil {
+			loggerSvc.ErrorWith().Err(err).Msg("ft8: deferred stop error")
+		}
+	}()
+
 	// ---- Start HTTP server ----
 	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc)
 
@@ -454,6 +476,14 @@ func run() error {
 	// server.Shutdown: stop publishing first, then drain readers.
 	if err := bridgeSvc.Stop(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("bridge: Stop error")
+	}
+
+	// Stop the FT8 subsystem alongside the bridge: cancels capture +
+	// scheduler + decode worker, releases the audio device, and waits for an
+	// in-flight decode (go-ft8 is not cancellable) to finish — bounded by one
+	// slot's decode time.
+	if err := ft8Svc.Stop(); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("ft8: Stop error")
 	}
 
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
