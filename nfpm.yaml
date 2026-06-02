@@ -27,6 +27,15 @@ contents:
     file_info:
       mode: 0755
 
+  # Operator-facing control wrapper: `smctl start|stop|restart|status`.
+  # Prints a confirmed "SM Started…" / "SM Stopped." line that bare
+  # `systemctl --user … smd` cannot (systemctl is silent on success and
+  # unit output goes to the journal, not the invoking terminal).
+  - src: scripts/smctl.sh
+    dst: /usr/bin/smctl
+    file_info:
+      mode: 0755
+
   - src: packaging/smd.service
     dst: /usr/lib/systemd/user/smd.service
     file_info:

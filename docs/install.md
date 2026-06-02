@@ -71,6 +71,22 @@ The service should report `active (running)`. If it doesn't, check
 on first run is a stale `config.json` from a prior install pointing
 at unreadable paths.
 
+For day-to-day start/stop, the package installs a small wrapper,
+`smctl`, alongside the binary:
+
+```
+smctl start     # → "SM Started…"   (once confirmed active)
+smctl stop      # → "SM Stopped."   (once confirmed down)
+smctl restart
+smctl status
+```
+
+It wraps `systemctl --user … smd` and prints a confirmed result line
+that bare `systemctl` cannot — `systemctl` is silent on success and
+the daemon's own output goes to the journal, not your terminal. Use
+plain `systemctl --user enable/disable smd` for the boot-time
+enablement above; `smctl` only handles the running state.
+
 ---
 
 ## 4. First-run setup (REQUIRED)
@@ -149,9 +165,9 @@ can patch the source ADIF and re-import. Re-imports are idempotent —
 already-stored QSOs return as `duplicate`, not as errors.
 
 The importer is the same binary as the daemon — there's no separate
-package. **Stop the daemon first** (`systemctl --user stop smd`) so
-the two processes aren't racing on the same SQLite file, then run the
-import, then restart. The import itself takes seconds.
+package. **Stop the daemon first** (`smctl stop`) so the two processes
+aren't racing on the same SQLite file, then run the import, then
+`smctl start`. The import itself takes seconds.
 
 You don't need to set `SM_WORKING_DIR` in your shell. When run from
 `/usr/bin/smd` (the installed location), the binary resolves its
@@ -175,6 +191,7 @@ logbook app); if you need one, hit `POST /v1/logbook` directly with
 | What | Path |
 |---|---|
 | Binary | `/usr/bin/smd` |
+| Control wrapper | `/usr/bin/smctl` |
 | Systemd unit | `/usr/lib/systemd/user/smd.service` |
 | Data directory | `~/.local/share/station-manager/` |
 | Config | `~/.local/share/station-manager/config.json` |
