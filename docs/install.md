@@ -29,13 +29,17 @@ shared database, and no network exposure.
 sudo dnf install /path/to/station-manager-<version>.x86_64.rpm
 ```
 
-The package installs two files:
+The package installs three files:
 
 - `/usr/bin/smd` — the daemon binary (the browser SPA is embedded
   inside it). The default build is a single statically-linked,
-  CGO-free executable; an opt-in PocketFFT build (faster FT8 decode,
-  built with `SM_FFT=pocketfft`) is dynamically linked against the C
-  runtime instead.
+  CGO-free executable. A CGO build (built with `SM_FFT=pocketfft`) is
+  dynamically linked against the C runtime and adds two things the
+  static build lacks: ~2× faster FT8 decode (PocketFFT) **and live FT8
+  audio capture** — the static default can decode WAV files but cannot
+  capture from a sound device. See the "Live FT8 decode" section below
+  if you want live FT8.
+- `/usr/bin/smctl` — the start/stop control wrapper (see §3).
 - `/usr/lib/systemd/user/smd.service` — the systemd user unit.
 
 The post-install scriptlet prints the next steps. The OpenPGP
@@ -234,7 +238,62 @@ migrations are applied automatically on daemon startup.
 
 ---
 
-## 8. Uninstall
+## 8. Live FT8 decode (optional)
+
+FT8 decode is off by default and opt-in. The daemon decodes live
+receive audio into "heard this" log lines — **a decode is not a QSO**;
+nothing is written to your logbook or upload queue. It's a monitoring
+aid, not a logger.
+
+Two prerequisites:
+
+1. **A CGO build of the daemon.** Live audio capture requires CGO; the
+   static default build cannot open a sound device (it logs "capture
+   unavailable; subsystem idle" and stays up). Build/install the CGO
+   flavour with `SM_FFT=pocketfft` — e.g. for a local dogfood install,
+   `SM_FFT=pocketfft task deploy:local:dev`.
+2. **Receive audio routed to a capture device** — typically the rig's
+   USB audio codec.
+
+Find your capture device index with the probe tool (CGO build):
+
+```
+CGO_ENABLED=1 go run ./cmd/ft8-capture-probe -list
+```
+
+It prints each device and its index. Pick the rig's codec, then set
+the FT8 block in `config.json`:
+
+```json
+"ft8": {
+  "enabled": true,
+  "device": "1"
+}
+```
+
+`device` is the integer index from `-list` as a string; an empty
+string means the system default capture device. Restart the daemon
+(`smctl restart`) and watch the log for decodes:
+
+```
+journalctl --user -u smd -f | grep "ft8 decode"
+```
+
+To smoke-test capture directly without the daemon, the probe can run
+the live slot scheduler and print decodes per UTC slot:
+
+```
+CGO_ENABLED=1 go run ./cmd/ft8-capture-probe -scheduler -slots=4 -device=1
+```
+
+Healthy output is one slot every 15 s on the UTC :00/:15/:30/:45
+boundary, a non-trivial peak amplitude, and decoded messages. A
+near-zero peak means the input is muted, the wrong device, or
+unconnected.
+
+---
+
+## 9. Uninstall
 
 ```
 systemctl --user disable --now smd
