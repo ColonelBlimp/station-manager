@@ -271,20 +271,19 @@ describe('bridge SSE consumer — rig-disconnected', () => {
         vi.useRealTimers();
     });
 
-    it('flips rigResponding=false immediately, surfaces warn toast after the suppression window', () => {
+    it('defers rigResponding=false to the suppression window, with the warn toast', () => {
         currentSource().emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
-        // rigResponding flips synchronously.
-        expect(bridgeState.rigResponding).toBe(false);
-        // Toast push is deferred — no visible toast before the
-        // suppression window elapses.
+        // Deferred: rigResponding (and thus isLive) stays true immediately,
+        // so the CAT fields don't flicker on a blip the probe will recover.
+        expect(bridgeState.rigResponding).toBe(true);
         expect(toastsState.items).toHaveLength(0);
 
+        // No recovery within the window → the flip + warn fire together.
         vi.advanceTimersByTime(800);
+        expect(bridgeState.rigResponding).toBe(false);
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('warn');
-        // ttl=0 — sticky until reconnect (or operator manual
-        // dismiss). The default 6s warn TTL was too short for
-        // realistic disconnect windows.
+        // ttl=0 — sticky until reconnect (or operator manual dismiss).
         expect(toastsState.items[0].ttl).toBe(0);
         expect(toastsState.items[0].message).toContain('rig has gone quiet');
     });
@@ -295,9 +294,23 @@ describe('bridge SSE consumer — rig-disconnected', () => {
         expect(bridgeState.connected).toBe(true);
     });
 
-    it('a subsequent rig-state event flips rigResponding back to true', () => {
+    it('keeps rigResponding=true when rig-state recovers within the window (no flicker)', () => {
         const src = currentSource();
         src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        expect(bridgeState.rigResponding).toBe(true); // deferred, not yet flipped
+        vi.advanceTimersByTime(200);
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_250_000 })); // probe recovers
+        expect(bridgeState.rigResponding).toBe(true);
+        // Past the would-be flip moment: still true (the timer was cancelled).
+        vi.advanceTimersByTime(1000);
+        expect(bridgeState.rigResponding).toBe(true);
+        expect(toastsState.items).toHaveLength(0);
+    });
+
+    it('flips rigResponding=false then back to true across a genuine outage', () => {
+        const src = currentSource();
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        vi.advanceTimersByTime(800); // no recovery in window → flip fires
         expect(bridgeState.rigResponding).toBe(false);
         src.emit('rig-state', JSON.stringify({ vfoA: 14_250_000 }));
         expect(bridgeState.rigResponding).toBe(true);

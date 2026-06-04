@@ -22,9 +22,14 @@
  *     level only. Says nothing about whether the rig is alive at the
  *     other end.
  *   - `rigResponding` is `false` until the first `rig-state` event
- *     arrives, flips back to `false` on `rig-disconnected`, and back
- *     to `true` again on any subsequent `rig-state` event (implicit
- *     reconnect — see ADR 0009).
+ *     arrives, and `true` again on any subsequent `rig-state`. A
+ *     `rig-disconnected` does NOT flip it immediately: the flip is
+ *     deferred FLASH_SUPPRESS_MS (with the warn toast), so the FTdx10's
+ *     idle false-positive disconnects — recovered by the daemon probe
+ *     within ms — don't churn `isLive` and flicker the CAT fields. Only
+ *     a disconnect with no `rig-state` inside the window flips it. The
+ *     transport `error` path still flips immediately (stream genuinely
+ *     down). See ADR 0009.
  *
  * **Construction is conditional on `configState.station.enabled`.** The
  * operator's "CAT enabled" intent is the gate; when false the SPA stays
@@ -185,11 +190,19 @@ function openSource(): void {
             console.warn('[bridge] rig-disconnected JSON parse failed', e);
             return;
         }
-        bridgeState.rigResponding = false;
+        // rigResponding is NOT flipped here — it's deferred into the
+        // suppression timer below, together with the warn toast. The FTdx10
+        // fires a false-positive rig-disconnected whenever the rig sits idle
+        // (no AUTO pushes — e.g. parked on FT8), and the daemon's read-probe
+        // recovers it within milliseconds. Flipping rigResponding immediately
+        // dropped isLive for that gap, so displayedState fell back to
+        // manualState defaults and every CAT field (VFO, mode, power)
+        // flickered ~every liveness_ms. Deferring means a blip that recovers
+        // inside the window never drops isLive; only a genuine outage (no
+        // rig-state within FLASH_SUPPRESS_MS) flips it.
 
-        // Cancel any prior scheduled push (state B): replacing one
-        // pending disconnect with another — the new one wins, latest
-        // payload is what surfaces if/when the timer fires.
+        // Cancel any prior scheduled flip+push (state B): a newer disconnect
+        // wins; its payload is what surfaces if the timer fires.
         if (pendingDisconnectTimerId !== null) {
             clearTimeout(pendingDisconnectTimerId);
             pendingDisconnectTimerId = null;
@@ -201,20 +214,19 @@ function openSource(): void {
             pendingDisconnectToastId = null;
         }
 
-        // Schedule the warn push after the suppression window. If
-        // rig-state arrives within FLASH_SUPPRESS_MS, the rig-state
-        // handler cancels this timer and nothing ever renders. ttl=0
-        // (sticky) — the toast stays until reconnect or operator
-        // manual dismiss, so it's not invisible to an operator who
-        // happens to look away briefly.
+        // Schedule the rigResponding=false flip + warn push after the
+        // suppression window. If rig-state arrives within FLASH_SUPPRESS_MS,
+        // the rig-state handler cancels this timer and neither fires —
+        // isLive never drops, no flicker, no toast. ttl=0 (sticky): a genuine
+        // outage's warn stays until reconnect or operator manual dismiss.
         //
         // Daemon sends a machine-readable code + per-instance details
-        // (e.g. {"code":"rig_no_data"}). The i18n catalogue keyed by
-        // `bridge.disconnected.<code>` owns the operator-facing
-        // wording + future localizations.
+        // (e.g. {"code":"rig_no_data"}); the i18n catalogue keyed by
+        // `bridge.disconnected.<code>` owns the operator-facing wording.
         const msg = t(`bridge.disconnected.${payload.code}`, payload.details);
         pendingDisconnectTimerId = setTimeout(() => {
             pendingDisconnectTimerId = null;
+            bridgeState.rigResponding = false;
             pendingDisconnectToastId = toasts.warn(msg, 0);
         }, FLASH_SUPPRESS_MS);
     });
