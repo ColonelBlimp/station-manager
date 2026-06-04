@@ -97,6 +97,22 @@ describe('enrichCallsign', () => {
         });
     });
 
+    it('returns kind=server malformed_response when 200 body is missing callsign (M4)', async () => {
+        // `callsign` is the always-present identity field of the Result
+        // envelope and the key enrichmentState.resultForCallsign (the H1
+        // stale-result guard) compares against. A 200 object without it is a
+        // daemon regression, not a usable result — the shape guard surfaces
+        // it rather than letting an identity-less result reach the submit
+        // path (review 2026-06-04 M4).
+        mockFetchJSON(200, { country_source: 'none', station_source: 'none' });
+        const out = await enrichCallsign('M0XYZ');
+        expect(out).toEqual({
+            kind: 'server',
+            code: 'malformed_response',
+            message: 'enrichment response was missing the callsign field',
+        });
+    });
+
     it('returns kind=validation for 400 with daemon code+message', async () => {
         mockFetchJSON(400, { code: 'invalid_callsign', message: 'callsign param is required' });
         const out = await enrichCallsign('');

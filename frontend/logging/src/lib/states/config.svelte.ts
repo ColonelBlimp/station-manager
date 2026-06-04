@@ -99,13 +99,17 @@ class StationConfig {
 
 class LoggingStationView {
     /**
-     * Static-ish ADIF MY_* identity fields. Hydrated from `/v1/config`
-     * and rarely change once set, so they are plain properties — no
-     * `$state` overhead. Nothing reactively derives from these; setup
-     * dialog and My Station card write them directly via
-     * `applyResponse(...)` after a PUT round-trip. `bind:value` works
-     * fine on plain fields — it's a binding mechanism, not a reactive
-     * read.
+     * ADIF MY_* identity fields, hydrated from `/v1/config` and bound in
+     * the My Station panel via `bind:value`. Every field is `$state`:
+     * `applyResponse()` overwrites them after a GET/PUT round-trip (daemon
+     * normalisation — e.g. an uppercased gridsquare, recomputed
+     * myLat/myLon), so a mounted input must re-render to show the
+     * canonical value, and `enrichmentState.paths` (a `$derived` over
+     * `myGridsquare`) must recompute path distance/bearing when the grid
+     * changes. Plain class fields are NOT tracked in Svelte 5 — a
+     * `$derived`/template read of one goes stale on an external mutation,
+     * the bug this fixed (review 2026-06-04 M3); the prior "plain is fine,
+     * nothing derives from these" rationale was no longer true.
      *
      * Bucketing matches the operator-confirmed split (session 34):
      *   - Identity (station/operator/owner) — fallback chain applied in
@@ -121,35 +125,35 @@ class LoggingStationView {
      *     the station's callsign and the owner's callsign.
      */
     /** ADIF STATION_CALLSIGN — set during first-run setup. */
-    stationCallsign: string = '';
+    stationCallsign: string = $state('');
 
-    /** ADIF OPERATOR — the logging operator's callsign. Reactive: drives downstream consumers. */
+    /** ADIF OPERATOR — the logging operator's callsign. */
     operator: string = $state('');
 
     /** ADIF OWNER_CALLSIGN — licensee/club owner if different from station_callsign. */
-    ownerCallsign: string = '';
+    ownerCallsign: string = $state('');
 
     // Operator-typed via the My Station panel (session 34 scope).
-    myAltitude: string = '';
-    myAntenna: string = '';
-    myCity: string = '';
-    myCountry: string = '';
-    myCqZone: string = '';
-    myDxcc: string = '';
-    myGridsquare: string = '';
-    myItuZone: string = '';
-    myMorseKeyInfo: string = '';
-    myMorseKeyType: string = '';
-    myName: string = '';
-    myPostalCode: string = '';
-    myRig: string = '';
-    myStreet: string = '';
+    myAltitude: string = $state('');
+    myAntenna: string = $state('');
+    myCity: string = $state('');
+    myCountry: string = $state('');
+    myCqZone: string = $state('');
+    myDxcc: string = $state('');
+    myGridsquare: string = $state('');
+    myItuZone: string = $state('');
+    myMorseKeyInfo: string = $state('');
+    myMorseKeyType: string = $state('');
+    myName: string = $state('');
+    myPostalCode: string = $state('');
+    myRig: string = $state('');
+    myStreet: string = $state('');
 
     // Daemon-derived from myGridsquare. The SPA never writes these
     // directly — a PUT with a new myGridsquare causes the daemon to
     // recompute and the response hydrates them here.
-    myLat: string = '';
-    myLon: string = '';
+    myLat: string = $state('');
+    myLon: string = $state('');
 }
 
 class DefaultLogbookView {

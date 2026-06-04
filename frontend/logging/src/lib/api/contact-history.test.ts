@@ -70,12 +70,13 @@ describe('fetchContactHistory', () => {
         expect(out).toEqual({ kind: 'ok', items: [] });
     });
 
-    it('falls through to items=[] when a 200 body is not a JSON object', async () => {
-        // The wrapper deliberately downgrades a daemon regression
-        // (200 + unparseable body) to the same "no contacts" outcome,
-        // matching the source comment: every success path is supposed to
-        // emit at least `{items: []}`, so a missing items field is
-        // structurally equivalent to "none".
+    it('returns kind=server malformed_response when a 200 body is not a JSON object (M4)', async () => {
+        // A 200 whose body is not an object is a daemon regression, NOT an
+        // empty history. Surfacing it as a controlled server outcome (rather
+        // than the prior false-empty `items:[]`) keeps a daemon/proxy fault
+        // distinguishable from a genuine "never worked them" (review
+        // 2026-06-04 M4). Logging is still never blocked — runLookup ignores
+        // any non-ok contact-history outcome, so the panel stays empty.
         const response = new Response('not json', {
             status: 200,
             headers: { 'Content-Type': 'text/plain' },
@@ -86,19 +87,31 @@ describe('fetchContactHistory', () => {
         );
 
         const out = await fetchContactHistory('M0XYZ');
-        expect(out).toEqual({ kind: 'ok', items: [] });
+        expect(out).toEqual({
+            kind: 'server',
+            code: 'malformed_response',
+            message: 'daemon returned a 200 without an items array for /v1/contact-history',
+        });
     });
 
-    it('falls through to items=[] when 200 body has no items field', async () => {
+    it('returns kind=server malformed_response when 200 body has no items field (M4)', async () => {
         mockFetchJSON(200, { other: 'shape' });
         const out = await fetchContactHistory('M0XYZ');
-        expect(out).toEqual({ kind: 'ok', items: [] });
+        expect(out).toEqual({
+            kind: 'server',
+            code: 'malformed_response',
+            message: 'daemon returned a 200 without an items array for /v1/contact-history',
+        });
     });
 
-    it('falls through to items=[] when 200 body has items but not an array', async () => {
+    it('returns kind=server malformed_response when 200 body has items but not an array (M4)', async () => {
         mockFetchJSON(200, { items: 'oops' });
         const out = await fetchContactHistory('M0XYZ');
-        expect(out).toEqual({ kind: 'ok', items: [] });
+        expect(out).toEqual({
+            kind: 'server',
+            code: 'malformed_response',
+            message: 'daemon returned a 200 without an items array for /v1/contact-history',
+        });
     });
 
     it('returns kind=validation for 400 missing_required_param', async () => {

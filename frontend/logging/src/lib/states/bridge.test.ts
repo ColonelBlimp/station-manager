@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import { _activeSourceForTests, bridgeState, startBridge, stopBridge } from './bridge.svelte';
 import { catState, DEFAULT_VFO_HZ, DEFAULT_MODE } from './cat.svelte';
+import { manualState } from './manual.svelte';
 import { configState } from './config.svelte';
 import { _resetForTests as resetToasts, toastsState } from './toasts.svelte';
 
@@ -554,5 +555,96 @@ describe('bridge SSE consumer — tune-state', () => {
         // cached tune-state; the SPA must not optimistically clear it here.
         src.fireError();
         expect(bridgeState.tuneActive).toBe(true);
+    });
+});
+
+describe('bridge SSE consumer — disconnect snapshot (M2)', () => {
+    // On an involuntary disconnect, manualState should adopt catState's
+    // last-known values so displayedState's CAT-off fallback shows continuity
+    // rather than stale localStorage/defaults (the rule manual.svelte.ts
+    // documents). manualState is seeded with sentinels distinct from the rig
+    // values each test pushes, so a snapshot (or its absence) is unambiguous.
+    beforeEach(() => {
+        vi.useFakeTimers();
+        manualState.vfoA = 1_000_000;
+        manualState.vfoB = 2_000_000;
+        manualState.mode = 'FM';
+        manualState.subMode = 'SENTINEL';
+        manualState.selectedVfo = 'B';
+        configState.bridge.modeMappings = {};
+        startBridge();
+        configState.station.enabled = true;
+        flushSync();
+        currentSource().fireOpen();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('snapshots the last-known rig state into manualState on transport error', () => {
+        const src = currentSource();
+        src.emit(
+            'rig-state',
+            JSON.stringify({ vfoA: 14_200_000, vfoB: 14_210_000, mode: 'USB', selectedVfo: 'A' })
+        );
+        expect(bridgeState.rigResponding).toBe(true);
+        src.fireError();
+        expect(manualState.vfoA).toBe(14_200_000);
+        expect(manualState.vfoB).toBe(14_210_000);
+        expect(manualState.selectedVfo).toBe('A');
+        // No mappings → the rig literal passes through as the friendly value;
+        // subMode is reset (manualState's friendly model holds mode only).
+        expect(manualState.mode).toBe('USB');
+        expect(manualState.subMode).toBe('');
+    });
+
+    it('stores mode in operator-friendly form via the mode mappings', () => {
+        // The rig pushes a data literal the mapping resolves to {SSB, USB};
+        // the snapshot must store the FRIENDLY "USB", not the literal or "SSB".
+        configState.bridge.modeMappings = { 'DATA-U': { mode: 'SSB', submode: 'USB' } };
+        const src = currentSource();
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_074_000, mode: 'DATA-U' }));
+        src.fireError();
+        expect(manualState.mode).toBe('USB');
+        expect(manualState.subMode).toBe('');
+    });
+
+    it('snapshots on a genuine outage (disconnect with no recovery in the window)', () => {
+        const src = currentSource();
+        src.emit('rig-state', JSON.stringify({ vfoA: 21_300_000, selectedVfo: 'A', mode: 'CW' }));
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        // Deferred — not yet snapshotted (the blip might recover).
+        expect(manualState.vfoA).toBe(1_000_000);
+        vi.advanceTimersByTime(800);
+        expect(bridgeState.rigResponding).toBe(false);
+        expect(manualState.vfoA).toBe(21_300_000);
+        expect(manualState.selectedVfo).toBe('A');
+        expect(manualState.mode).toBe('CW');
+    });
+
+    it('does NOT snapshot when the rig recovers within the suppression window', () => {
+        const src = currentSource();
+        src.emit('rig-state', JSON.stringify({ vfoA: 21_300_000 }));
+        src.emit('rig-disconnected', JSON.stringify({ code: 'rig_no_data' }));
+        vi.advanceTimersByTime(200);
+        src.emit('rig-state', JSON.stringify({ vfoA: 21_310_000 })); // recovers
+        vi.advanceTimersByTime(1000);
+        // The timer was cancelled → snapshot never fired → manualState untouched.
+        expect(manualState.vfoA).toBe(1_000_000);
+        expect(manualState.selectedVfo).toBe('B');
+        expect(manualState.mode).toBe('FM');
+    });
+
+    it('does NOT clobber manualState on a transport error before any rig-state', () => {
+        // rigResponding is false (no rig-state yet) → the guard skips the
+        // snapshot, so the operator's manual edits survive a dead-rig error
+        // rather than being overwritten with default catState.
+        expect(bridgeState.rigResponding).toBe(false);
+        currentSource().fireError();
+        expect(manualState.vfoA).toBe(1_000_000);
+        expect(manualState.vfoB).toBe(2_000_000);
+        expect(manualState.selectedVfo).toBe('B');
+        expect(manualState.mode).toBe('FM');
     });
 });

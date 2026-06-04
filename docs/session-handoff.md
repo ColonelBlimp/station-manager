@@ -47,6 +47,17 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 134 (2026-06-04) — **SPA** code-review remediation: **Batch G** (M2 disconnect snapshot, M3 LoggingStationView reactivity, M4 API shape guards). Shipped + tested green (701); not yet committed. **This CLOSES the frontend-logging SPA review** — all 9 findings done.
+
+Operator committed Batches E + F since Session 133; this pass is the final batch. (A **new review landed** while working: `docs/reviews/internal-bridge-2026-06-04.md` — untracked, not yet triaged.)
+
+- **M2 (stale CAT-off fallback).** `bridge.svelte.ts` now snapshots catState→manualState on the two involuntary-disconnect paths (transport `error` + the genuine-outage timer), BEFORE the `rigResponding` flip (one displayedState recompute, no flash) — the rule `manual.svelte.ts` already documented. Mode stored friendly (`subMode||mode` of the mapped pair, round-trips via `resolveModeAndSubmode`); guarded on `rigResponding` so a disconnect before any rig-state can't clobber manual edits with default catState. **Split** carried implicitly via the VFO pair (same-freq split still inexpressible, the ADR-0009 limit); **power** intentionally NOT snapshotted (no manualState slot — falls to `configState.station.defaultPower` per session 36).
+- **M3 (plain fields not tracked).** All `LoggingStationView` fields → `$state` (was: only `operator`). Highest-risk `myGridsquare` feeds `enrichmentState.paths` (`$derived`) — plain meant a daemon-normalised grid never recomputed paths + mounted inputs went stale. Stale comment rewritten. Regression test **empirically confirmed** (fails with the field reverted to plain).
+- **M4 (object-only cast → crash/false-empty).** `isShape` guards: `/v1/config` requires logging_station/default_logbook/default_rig (applyResponse derefs them — `{}` crashed hydration); `/v1/enrich/callsign` requires `callsign` (the H1 identity key); `/v1/contact-history` distinguishes genuine `{items:[]}` (ok) from malformed (server) — **reverses my Batch-F "by-design" note**: fail-soft (logging never blocked, runLookup ignores non-ok) is preserved while the wrapper stops conflating a daemon bug with "never worked them". `qso-update` validated, no change (already guards non-object; tolerant `populate`).
+- `npm run check` (0/0) / `lint` / `build` clean; **701 tests** pass (44 files; +9). Batch G resolution + "review complete" recorded in the review doc.
+
+**Next:** operator review + commit. The SPA review is fully closed. A new `internal-bridge` review awaits triage (the operator's usual "analyse + recommend fix/ignore" flow) when they're ready.
+
 ### Session 133 (2026-06-04) — **SPA** code-review remediation: **Batch F** (M1 submit in-flight guard, H2 edit-overlay open-race). Shipped + tested green (692); not yet committed.
 
 Continues the third SPA review (`docs/reviews/frontend-logging-spa-2026-06-04.md`). Batch E (L2/H1/H3) is still in the working tree (not yet committed); this pass stacks the two concurrent-action items on top, so **E + F are uncommitted together**.

@@ -62,15 +62,22 @@ export async function fetchContactHistory(
     const body = await readJsonBody(response);
 
     if (response.ok) {
-        // 200 with an unparseable body is a daemon regression — every
-        // success path on this endpoint emits at least `{items: []}`.
-        // Empty array on a missing `items` field preserves the same
-        // "no contacts" outcome the panel renders for a fresh callsign.
-        const items =
-            isPlainObject(body) && Array.isArray(body.items)
-                ? (body.items as ContactHistory[])
-                : [];
-        return { kind: 'ok', items };
+        // A well-formed success is `{items: [...]}` — possibly empty, a
+        // genuine "never worked them". A 200 whose body is not an object or
+        // lacks an items array is a daemon regression, NOT an empty history:
+        // surface it as malformed rather than the misleading false-empty the
+        // panel would otherwise render (review 2026-06-04 M4). Logging is
+        // still never blocked — runLookup ignores any non-ok contact-history
+        // outcome, so the panel simply stays empty on a malformed response
+        // the same way it does on a network/server failure.
+        if (!isPlainObject(body) || !Array.isArray(body.items)) {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: 'daemon returned a 200 without an items array for /v1/contact-history',
+            };
+        }
+        return { kind: 'ok', items: body.items as ContactHistory[] };
     }
 
     const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;

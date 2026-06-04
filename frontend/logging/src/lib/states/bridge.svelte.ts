@@ -52,6 +52,7 @@
  */
 
 import { catState } from './cat.svelte';
+import { manualState } from './manual.svelte';
 import { configState } from './config.svelte';
 import { t } from '../i18n';
 import { toasts } from './toasts.svelte';
@@ -164,6 +165,11 @@ function openSource(): void {
     // to false. The browser's auto-reconnect re-fires `open` when the
     // stream re-establishes.
     src.addEventListener('error', () => {
+        // M2: preserve the rig's last-known values into manualState before
+        // isLive drops, so the CAT-off fallback shows continuity rather than
+        // stale defaults. Guarded on rigResponding so a transport error before
+        // any rig-state can't clobber manualState with default catState.
+        if (bridgeState.rigResponding) snapshotCatToManual();
         bridgeState.connected = false;
         bridgeState.rigResponding = false;
     });
@@ -242,6 +248,9 @@ function openSource(): void {
         const msg = t(`bridge.disconnected.${payload.code}`, payload.details);
         pendingDisconnectTimerId = setTimeout(() => {
             pendingDisconnectTimerId = null;
+            // M2: snapshot the last-known rig state before the genuine-outage
+            // flip (same rationale + guard as the transport `error` path).
+            if (bridgeState.rigResponding) snapshotCatToManual();
             bridgeState.rigResponding = false;
             pendingDisconnectToastId = toasts.warn(msg, 0);
         }, FLASH_SUPPRESS_MS);
@@ -327,6 +336,48 @@ function mergeRigState(payload: RigStatePayload): void {
     }
     if (payload.splitOverride !== undefined) catState.splitOverride = payload.splitOverride;
     if (payload.power !== undefined) catState.power = payload.power;
+}
+
+/**
+ * Snapshot the rig's last-known state into manualState on an involuntary
+ * disconnect, so displayedState's CAT-off fallback shows continuity
+ * instead of stale localStorage/defaults — the rule manual.svelte.ts
+ * documents (review 2026-06-04 M2). Called from the transport `error`
+ * handler and the genuine-outage disconnect timer, in both cases BEFORE
+ * the rigResponding flip so the snapshot and the isLive→false transition
+ * land in the same synchronous tick (displayedState recomputes once,
+ * reading the snapshotted manualState — no flash of stale values). The
+ * writes persist via manualState's own localStorage mirror.
+ *
+ * Mode is stored in the operator-FRIENDLY single-string form manualState
+ * expects (subMode||mode of the rig's mapped ADIF pair — the same value
+ * QsoPanel's mode mirror would write), so resolveModeAndSubmode
+ * round-trips it on read. The mapping lookup mirrors displayedState's
+ * live-mode branch; it is duplicated here rather than importing
+ * displayedState to avoid a bridge↔displayed import cycle.
+ *
+ * Deliberately NOT snapshotted:
+ *   - split has no manualState slot — displayedState derives it from
+ *     vfoA!==vfoB when CAT-off, so a frequency-divergent split is carried
+ *     by the VFO snapshot (a same-frequency split is inexpressible, the
+ *     documented ADR-0009 limitation).
+ *   - power has no manualState slot — CAT-off power falls to
+ *     configState.station.defaultPower by the session-36 design.
+ *
+ * Callers guard on bridgeState.rigResponding: only a genuine live→dead
+ * transition snapshots. A disconnect before any rig-state arrived would
+ * otherwise copy default catState (14.25 MHz / USB) over the operator's
+ * manual edits.
+ */
+function snapshotCatToManual(): void {
+    manualState.vfoA = catState.vfoA;
+    manualState.vfoB = catState.vfoB;
+    manualState.selectedVfo = catState.selectedVfo;
+    const mapped = configState.bridge.modeMappings[catState.mode];
+    const adifMode = mapped?.mode ?? catState.mode;
+    const adifSubMode = mapped?.submode ?? '';
+    manualState.mode = adifSubMode || adifMode;
+    manualState.subMode = '';
 }
 
 /**

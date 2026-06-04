@@ -92,6 +92,37 @@ describe('fetchConfig', () => {
         });
     });
 
+    it('returns kind=server malformed_response when 200 body lacks the required blocks (M4)', async () => {
+        // A plain `{}` passes the isPlainObject guard, but applyResponse
+        // would crash dereferencing logging_station/default_logbook/
+        // default_rig. The shape guard downgrades it to a controlled
+        // server error (review 2026-06-04 M4).
+        mockFetchJSON(200, {});
+        const out = await fetchConfig();
+        expect(out).toEqual({
+            kind: 'server',
+            code: 'malformed_response',
+            message:
+                'daemon returned /v1/config without the required station / logbook / rig blocks',
+        });
+    });
+
+    it('returns kind=ok when only the required blocks are present (M4 — optional blocks omitted)', async () => {
+        // station / bridge / mailer are omitempty-optional (applyResponse
+        // guards each with `if (resp.X)`), so a response carrying just the
+        // three dereferenced containers is valid — the guard must not
+        // over-reject it.
+        const minimal = {
+            setup_complete: false,
+            logging_station: {},
+            default_logbook: { id: 1 },
+            default_rig: { id: 0 },
+        };
+        mockFetchJSON(200, minimal);
+        const out = await fetchConfig();
+        expect(out.kind).toBe('ok');
+    });
+
     it('returns kind=validation for 400 with daemon code+message', async () => {
         mockFetchJSON(400, {
             code: 'invalid_field_value',

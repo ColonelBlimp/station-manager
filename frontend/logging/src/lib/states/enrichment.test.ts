@@ -118,6 +118,26 @@ describe('enrichmentState', () => {
             expect(enrichmentState.paths!.shortPathDistanceKm).toBeGreaterThan(0);
             expect(enrichmentState.paths!.shortPathDistanceKm).toBeLessThan(1000);
         });
+
+        it('recomputes when only myGridsquare changes after the first read (M3)', () => {
+            // paths is a $derived over configState.loggingStation.myGridsquare,
+            // and applyResponse can re-hydrate that field (daemon-normalised
+            // grid) AFTER the panel first read paths. myGridsquare must be
+            // $state for the derived to track it — a plain field would leave
+            // paths cached at the stale distance. Read paths once to lock the
+            // initial computation, THEN change only the operator's grid.
+            enrichmentState.setResult(makeResult({ gridsquare: 'KH66UB' })); // Malawi
+            configState.loggingStation.myGridsquare = 'KH78an'; // also Malawi (close)
+            flushSync();
+            const firstDistance = enrichmentState.paths?.shortPathDistanceKm;
+            expect(firstDistance).toBeGreaterThan(0);
+
+            configState.loggingStation.myGridsquare = 'IO91wm'; // UK (far)
+            flushSync();
+            const secondDistance = enrichmentState.paths?.shortPathDistanceKm;
+            expect(secondDistance).toBeGreaterThan(0);
+            expect(secondDistance).not.toBe(firstDistance);
+        });
     });
 
     describe('activeBearing', () => {

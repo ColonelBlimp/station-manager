@@ -21,7 +21,7 @@
     of submitQso in lib/api/qso.ts.
 */
 
-import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { isPlainObject, isShape, readJsonBody, safeFetch } from './_helpers';
 
 export interface EnrichmentCountry {
     id?: number;
@@ -122,6 +122,19 @@ export async function enrichCallsign(
                 kind: 'server',
                 code: 'unparseable_response',
                 message: 'enrichment response was not valid JSON',
+            };
+        }
+        // `callsign` is the one always-present field of the Result envelope
+        // and the identity the SPA keys off — `enrichmentState.resultForCallsign`
+        // (the H1 stale-result guard) compares against it. A 200 without it is
+        // a daemon regression, not a usable result: surface it as malformed
+        // rather than letting an identity-less result through (review
+        // 2026-06-04 M4). country / station are legitimately omitempty.
+        if (!isShape<EnrichmentResult>(body, ['callsign'])) {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: 'enrichment response was missing the callsign field',
             };
         }
         return { kind: 'ok', result: body as unknown as EnrichmentResult };

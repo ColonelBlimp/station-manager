@@ -285,8 +285,65 @@ across 44 files, `build` OK):
   guard. New `SessionPanel.test.ts`: close-before-resolve stays closed; open A /
   close / open B / A resolves late → B stays loaded.
 
-**Remaining:** Batch G only — M2 (CAT-disconnect snapshot of `catState` into
-`manualState`), M3 (`LoggingStationView` plain-field → `$state` + stale-comment
-fix; latent, no live bug), M4 (per-endpoint API shape guards via the existing
-`isShape` helper; contact-history "false empty" is by-design). None are
-data-corrupting; M3/M4 are latent.
+**Remaining (after Batch F):** Batch G — M2 (CAT-disconnect snapshot), M3
+(`LoggingStationView` `$state`), M4 (API shape guards) — done in the next
+section, which closes the review.
+
+## Resolution — Batch G (2026-06-04)
+
+The final three items, all Medium. Fixed this pass (`npm run check` 0 errors /
+0 warnings, `lint` clean, **701 tests pass** across 44 files, `build` OK). This
+**closes the frontend-logging SPA review** — all 9 findings resolved (L1 was
+already fixed pre-review; L2/H1/H3 in Batch E; M1/H2 in Batch F; M2/M3/M4 here).
+
+- **M2 — fixed (stale CAT-off fallback on disconnect).** `bridge.svelte.ts` now
+  snapshots the rig's last-known state into `manualState` on the two
+  involuntary-disconnect paths (the transport `error` handler + the genuine-
+  outage disconnect timer), BEFORE the `rigResponding` flip so displayedState
+  recomputes once against the snapshot (no flash). This implements the rule
+  `manual.svelte.ts` already documented. Mode is stored in the operator-friendly
+  form (`subMode||mode` of the mapped ADIF pair — the value QsoPanel's mode
+  mirror writes), so `resolveModeAndSubmode` round-trips it on read. Guarded on
+  `rigResponding` so a disconnect before any `rig-state` can't clobber the
+  operator's manual edits with default catState. **Scope notes (validated
+  against the state shape, not oversights):** split has no manualState slot — it
+  is carried implicitly via the VFO pair (a same-frequency split stays
+  inexpressible, the documented ADR-0009 limitation); power has no manualState
+  slot either — CAT-off power falls to `configState.station.defaultPower` by the
+  session-36 design. New `bridge.test.ts` cases: snapshot on error, mode-mapping
+  friendly form, snapshot on genuine outage, NO snapshot on in-window recovery,
+  NO clobber before any rig-state.
+- **M3 — fixed (plain fields not reactively tracked).** Every
+  `LoggingStationView` field is now `$state` (was: only `operator`). The
+  highest-risk was `myGridsquare`, which feeds `enrichmentState.paths`
+  (`$derived`) — a plain field meant a daemon-normalised grid (re-hydrated by
+  `applyResponse`) never recomputed path distance/bearing, and mounted My
+  Station inputs wouldn't reflect the canonical value. Rewrote the stale
+  "nothing derives from these / plain is fine" comment. New `enrichment.test.ts`
+  case verifies paths recomputes when only `myGridsquare` changes after the
+  first read — **empirically confirmed a real regression test** (it fails with
+  the field reverted to plain).
+- **M4 — fixed (object-only cast → crash / false-empty).** Endpoint-specific
+  `isShape` guards so a malformed 200 becomes a controlled
+  `server/malformed_response` instead of a crash or a misleading empty:
+  - `/v1/config` now requires `logging_station` / `default_logbook` /
+    `default_rig` (the containers `applyResponse` dereferences unconditionally —
+    a `{}` would have crashed hydration). station / bridge / mailer stay optional
+    (applyResponse already guards each).
+  - `/v1/enrich/callsign` now requires `callsign` (the identity the H1
+    `resultForCallsign` guard keys off); country / station stay omitempty.
+  - `/v1/contact-history` now distinguishes a genuine empty (`{items: []}` → ok)
+    from a malformed 200 (non-object / no items array → server). **This reverses
+    my Batch-F note that the "false empty" was by-design:** on review, the
+    fail-soft that actually matters (logging never blocked) is preserved —
+    `runLookup` still ignores any non-ok contact-history outcome, so the panel
+    stays empty — while the wrapper no longer conflates a daemon regression with
+    "never worked them". The three former "falls through to items=[]" tests were
+    updated to assert the new malformed outcome.
+  - `/v1/qso/{uuid}` (qso-update) was **validated, no change**: it already
+    guards non-object → malformed, and its `populate` is fully `?? ''`-tolerant,
+    so a plain-but-incomplete object yields a safe empty edit form rather than a
+    crash or corruption. The review listed it as least-problematic; that holds.
+
+Review complete — all 9 findings resolved across Batches E / F / G (+ the
+pre-review L1).

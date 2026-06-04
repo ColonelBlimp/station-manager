@@ -23,7 +23,7 @@
     a populated field when its value is empty.
 */
 
-import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { isPlainObject, isShape, readJsonBody, safeFetch } from './_helpers';
 
 export interface ConfigResponse {
     setup_complete: boolean;
@@ -225,6 +225,20 @@ async function parseOutcome(response: Response): Promise<ConfigOutcome> {
                 kind: 'server',
                 code: 'malformed_response',
                 message: 'daemon returned a non-JSON or empty body for /v1/config',
+            };
+        }
+        // `applyResponse` dereferences these three containers unconditionally
+        // (`resp.logging_station.operator`, `default_logbook.id`,
+        // `default_rig.id`), so a 200 missing any of them would crash
+        // hydration. Surface it as a controlled malformed response instead
+        // (review 2026-06-04 M4). station / bridge / mailer are NOT required
+        // here — applyResponse already guards each with `if (resp.X)`.
+        if (!isShape<ConfigResponse>(body, ['logging_station', 'default_logbook', 'default_rig'])) {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message:
+                    'daemon returned /v1/config without the required station / logbook / rig blocks',
             };
         }
         return { kind: 'ok', config: body as unknown as ConfigResponse };
