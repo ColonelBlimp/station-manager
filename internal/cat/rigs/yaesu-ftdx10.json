@@ -24,7 +24,9 @@
   "commands": [
     {"name": "INIT",     "cmd": "AI1;"},
     {"name": "READ",     "cmd": "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
-    {"name": "PLAYBACK", "cmd": "PB0%s;"}
+    {"name": "PLAYBACK", "cmd": "PB0%s;"},
+    {"name": "set_freq", "cmd": "FA%s;",  "pad": 9,                "exposed": true},
+    {"name": "set_mode", "cmd": "MD0%s;", "value_map": "MAINMODE", "exposed": true}
   ],
   "states": [
     {

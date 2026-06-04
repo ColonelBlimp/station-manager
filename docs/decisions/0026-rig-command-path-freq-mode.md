@@ -48,36 +48,60 @@ until a real PTT driver appears.
 Shape:
 
 - **One endpoint, semantic op vocabulary.** `POST /v1/rig/command` with
-  body `{ "op": "...", "params": {...} }`. `op` is a fixed, rig-agnostic
-  enum; the daemon maps it to the connected rig's named rigdef SET
-  command and `Encode`s it. The vocabulary grows by adding an `op` value
-  and a rigdef command entry — never a new route.
+  body `{ "op": "...", "value": <scalar> }`. `op` is a rig-agnostic semantic
+  name that **is the rigdef command name** — the daemon resolves it with no
+  translation layer (`cat.EncodeCommand(def, op, value)`), so the vocabulary
+  is standardised across rigdefs (every rig that can set its VFO names that
+  command `set_freq`). `value` is a single JSON scalar (a number for
+  `set_freq`, a string for `set_mode`); the handler renders it to a string
+  with one generic conversion, so it stays op-agnostic. The vocabulary grows
+  by adding a rigdef command entry — never a new route, and never new Go.
 - **Initial vocabulary: `set_freq` and `set_mode`.**
 
-  | op | params | FTdx10 rigdef cmd | resolution |
-  |---|---|---|---|
-  | `set_freq` | `{ "hz": <int> }` | `FA%09d;` | encode value verbatim (VFO-A) |
-  | `set_mode` | `{ "mode": "<rig literal>" }` | `MD0%s;` | invert the **bijective** `MD0` `value_mappings` (literal → code) |
+  | op | value | FTdx10 rigdef cmd | data fields | resolution |
+  |---|---|---|---|---|
+  | `set_freq` | `14074000` (number) | `FA%s;` | `pad: 9` | left-zero-pad Hz to the 9-digit VFO-A field |
+  | `set_mode` | `"DATA-U"` (string) | `MD0%s;` | `value_map: "MAINMODE"` | invert the **bijective** `MAINMODE` `value_mappings` (literal → code) |
+
+  Both also carry `exposed: true` (see capability gating below).
 
 - **`set_mode` carries the rig mode literal, not an ADIF mode.** ADIF is
   the *logging* vocabulary and has no place in a CAT path. The rigdef's
-  `MD0 value_mappings` (code ↔ literal, e.g. `C` ↔ `DATA-U`) is 1:1 and
-  safe to invert; the daemon resolves `"DATA-U"` → `C` → `MD0C;`. The
-  literal comes from operator config (below), so the SPA never hardcodes
-  it.
+  `MAINMODE` `value_mappings` (the `MD0` state's table; code ↔ literal,
+  e.g. `C` ↔ `DATA-U`) is 1:1 and safe to invert; the daemon resolves
+  `"DATA-U"` → `C` → `MD0C;` via the command's `value_map: "MAINMODE"`.
+  The literal comes from operator config (below), so the SPA never
+  hardcodes it.
 - **Confirmation is the AUTO-mode push, not a command response.** Because
   the bridge already arms AUTO mode (`AI1;`), a successful SET makes the
   rig spontaneously push the resulting state, which flows through the
   *existing* `readLoop` → SSE → `catState` merge. The command path does
   not wait on or parse a reply. No write/read response synchronisation,
   no command-echo disambiguation.
-- **Capability is advertised from the rigdef.** `GET /v1/config`'s
-  `BridgeInfo` gains the set of `op`s the connected rig supports (derived
-  from which named SET commands its rigdef defines). The SPA enables/hides
-  controls from that set — a rig with no `set_mode` command never shows a
-  mode control. An out-of-band request for an unsupported `op` returns the
-  existing i18n envelope `{ code: "rig-unsupported-command", details:
-  { op } }` (ADR 0010 shape) and writes nothing.
+- **Capability is advertised from the rigdef, gated by one flag.** A
+  command opts into the external path with `exposed: true`; that single
+  flag is the source of truth for **both** the endpoint gate
+  (`EncodeCommand` refuses an unexposed command) **and** the advertised
+  vocabulary (`GET /v1/config`'s `BridgeInfo` lists the exposed command
+  names, derived by `cat.ExposedCommands`). The SPA enables/hides controls
+  from that set — a rig with no exposed `set_mode` never shows a mode
+  control. Adding an exposed command to a rigdef makes it both reachable
+  and advertised with no Go change. An out-of-band request for an
+  unsupported or unexposed `op` returns the standard HTTP error envelope
+  (`{code, message, op}`, api.md §4.6) with `code: "rig_unsupported_command"`
+  and writes nothing. (This is the HTTP error shape — distinct from the
+  SSE `{code, details}` event envelope; the command path is request/response,
+  not an event stream.)
+- **No silent no-op for an unsupported op.** A rig that lacks an op
+  surfaces that honestly — the SPA hides the control (absent from the
+  advertised set) and the daemon rejects an out-of-band call with the typed
+  envelope above. A command-layer no-op that returned success is rejected
+  on two counts: it contradicts the typed-rejection rule, and it breaks
+  confirm-by-push (the SPA would await a state push that never arrives). A
+  future "minimum op set" is therefore a *per-SPA-surface* required-ops
+  check (the FT8 card needs `{set_freq, set_mode}`; if either is missing
+  that surface degrades with a reason), never a global mandate that would
+  force a rig to fake ops.
 - **The FT8 band plan lives in operator config**, per-band frequency and
   mode:
 
@@ -95,9 +119,14 @@ Shape:
   `set_freq` + `set_mode`. Frequency nudge (up/down) is **client-side
   arithmetic** over `set_freq` (the SPA has the live VFO frequency from
   SSE), not a backend op.
-- **`bridge.SendCommand` is rig-ID-aware** per ADR 0019's multi-rig-ready
-  API rule: `SendCommand(rigID, op, params)`, even though v1 passes one
-  rig and the route stays singular (`/v1/rig/command`).
+- **`bridge.SendCommand` is rig-agnostic**, like the read path. It targets
+  the daemon's one connected rig (`cfg.Cat.Driver`), so the signature is
+  `SendCommand(ctx, op, value)` — no rig identifier. The SPA carries no rig
+  identity in the command path either; rig identity is **display-only**
+  (`BridgeInfo.RigName`/`RigModes`). This matches how the bridge already
+  models multi-rig (one `Service` per rig — `service.go`'s timeout-field
+  comment) and the existing write method `TriggerBootstrap(ctx)`, which
+  writes to the connected rig with no rig parameter.
 
 ## Alternatives considered
 
@@ -107,6 +136,19 @@ The first sketch. Rejected: open-ended route sprawl — every future
 operation (split, VFO select, RIT, power, antenna…) is a new endpoint.
 The single-endpoint + semantic-op-enum shape keeps the HTTP surface flat
 while preserving the same rig-agnostic semantics.
+
+### Typed per-op params in the request body (`{ op, params: { hz } }`)
+
+The first body sketch carried op-specific params — `{ hz }` for `set_freq`,
+`{ mode }` for `set_mode`. Rejected: turning a typed params object into the
+single string `EncodeCommand` wants needs a per-op switch in the handler
+(which key, how to stringify), reintroducing exactly the per-op sprawl the
+data-driven `cat` layer removed — one layer up, growing with every op. The
+body is instead a uniform `{ op, value }` with value a JSON scalar; one
+generic conversion (number → decimal string, string → itself) feeds
+`EncodeCommand`, so a new op is config-only on the wire too. The lost
+benefit — a JSON-typed, self-documenting `hz` — is minor, and `value` as a
+JSON number still carries frequency naturally.
 
 ### Generic rig-literal passthrough (`{ name: "MD0", args: ["C"] }`)
 
@@ -164,17 +206,31 @@ trigger.
 
 **Signed up for:**
 
-- **`bridge.SendCommand(rigID, op, params)`** plus an op→rigdef-command
-  resolver inside `internal/bridge` (stays storage-free; ADR 0013 graph
-  intact). For `set_mode`, the literal→code inversion of the rig's
-  `MD0 value_mappings`.
-- **New rigdef SET entries** in `internal/cat/rigs/*.json`: a frequency
-  SET (`FA%09d;`) and a mode SET (`MD0%s;`) per rig, with the codec test
-  extended to cover them. The FTdx10 is the dogfood rig and lands first;
-  the FT-710 follows.
+- **`bridge.SendCommand(ctx, op, value)`** inside `internal/bridge`
+  (stays storage-free; ADR 0013 graph intact); rig-agnostic — it targets
+  the Service's one connected rig and needs no rig identifier. It resolves
+  its own `def` from `cfg.Cat.Driver` and delegates encoding to
+  `cat.EncodeCommand(def, op, value)`; there is **no** op→command resolver
+  — the op *is* the command name. The literal→code inversion for `set_mode`
+  is data-driven (the command's `value_map`), not a per-op Go helper.
+- **Data-driven command fields on `cat.Command`** — `value_map` (names a
+  marker whose bijective `value_mappings` invert the rig literal), `pad`
+  (left-zero-pads a numeric field to a fixed width), and `exposed` (opts a
+  command into the external path; default deny). Adding a command is then
+  config-only; the Go surface is fixed at `HasCommand` + `EncodeCommand`.
+- **New rigdef command entries** in `internal/cat/rigs/*.json`: `set_freq`
+  (`FA%s;`, `pad: 9`) and `set_mode` (`MD0%s;`, `value_map: "MAINMODE"`),
+  both `exposed: true`, with the codec tests extended to cover them and the
+  not-exposed safety boundary (PLAYBACK/INIT/READ stay unreachable). The
+  FTdx10 is the dogfood rig and lands first; the FT-710 follows.
 - **`POST /v1/rig/command`** handler in `internal/api`, registered only
-  when the bridge is enabled (same gate as `/v1/rig/events`). Validates
-  `op` + params, maps unsupported ops to the typed error.
+  when the bridge is enabled (same gate as `/v1/rig/events`). Decodes
+  `{op, value}`, renders value to a string with one generic scalar
+  conversion, calls `bridge.SendCommand`, and maps the cat sentinels +
+  `ErrRigNotConnected` to the HTTP error envelope (`{code, message, op}`,
+  snake_case codes `rig_unsupported_command` / `rig_invalid_value` /
+  `rig_not_connected`). Success is `202 Accepted` — the state change is
+  confirmed out-of-band by the AUTO-mode push, not in this response.
 - **`GET /v1/config` `BridgeInfo` grows a supported-ops list** derived
   from the rigdef. SPA hydrates it to gate controls.
 - **Config grows `ft8.bands`** (per-band freq + mode; standard FT8 dial
@@ -229,9 +285,13 @@ trigger.
 - **A combined "tune to FT8 band" atomic op is wanted** (one daemon call
   instead of the SPA firing `set_freq` + `set_mode`). Add a composite op
   if the two-call sequence proves racy or awkward in practice.
-- **Multi-rig hardware lands.** `SendCommand` is already rig-ID-aware;
-  the route grows to `/v1/rig/{id}/command` alongside the SSE route's
-  same evolution (ADR 0019).
+- **Two rigs on one daemon (SO2R).** Only this — not multi-rig in general
+  — needs per-rig addressing. In the field-master topology multi-rig means
+  multiple *daemons*, each with a co-located rig and its own singular
+  `/v1/rig/command`; the SPA stays rig-agnostic, talking to its daemon. A
+  genuine single-daemon-two-radio setup is the trigger to run multiple
+  bridge `Service`s and grow the route to `/v1/rig/{id}/command` — and only
+  then does a rig selector appear in the SPA. Not a current goal.
 - **A non-AUTO-mode rig is encountered.** Confirm-by-push breaks (the rig
   won't volunteer the post-SET state); the command path would need an
   explicit re-read after each write. Overlaps with ADR 0019's

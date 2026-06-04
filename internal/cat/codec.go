@@ -27,6 +27,17 @@ var ErrNoMatch = stderr.New("cat: no state matches input")
 // command is not present in the rig definition's Commands table.
 var ErrUnknownCommand = stderr.New("cat: unknown command")
 
+// ErrCommandNotExposed is returned (wrapped) by EncodeCommand when the
+// named command exists but is not flagged Exposed in the rigdef, so it is
+// not reachable via the external command path (ADR 0026). The default is
+// deny: only commands explicitly marked exposed can be encoded this way.
+var ErrCommandNotExposed = stderr.New("cat: command not exposed")
+
+// ErrUnmappedValue is returned (wrapped) by EncodeCommand when the command
+// carries a ValueMap but the caller's value is absent from that marker's
+// value_mappings table (e.g. a mode literal the rig does not support).
+var ErrUnmappedValue = stderr.New("cat: value not in command map")
+
 // Decode parses one framed CAT line (terminator already stripped by the
 // serial reader) against the given rig definition and returns a tag map
 // of extracted fields. Behaviour matches v1's lineProcessor + lookup

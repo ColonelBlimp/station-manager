@@ -146,6 +146,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// slot" resource.
 	if br != nil && br.Enabled() {
 		mux.Handle("GET /v1/rig/events", s.limitEventSubscribers(br.HTTPHandler(s.shutdownCh)))
+		// Inbound command path (ADR 0026) — same enablement gate as the
+		// SSE route. A normal request (not long-lived), so the global
+		// limitConcurrent middleware covers it; no per-route SSE cap.
+		mux.HandleFunc("POST /v1/rig/command", s.handleRigCommand)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

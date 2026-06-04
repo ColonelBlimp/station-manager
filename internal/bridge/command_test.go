@@ -1,0 +1,104 @@
+package bridge
+
+import (
+	"context"
+	stderr "errors"
+	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+)
+
+// newCommandTestService builds an FTdx10-configured Service with a fakeSerial
+// wired in as the active client, WITHOUT starting the pipeline — SendCommand
+// only needs an active client and the configured rigdef, so the test sets
+// activeClient directly and skips pipeline-goroutine timing. FTdx10 (not the
+// ft710 default) because the exposed set_freq/set_mode commands live in its
+// rigdef.
+func newCommandTestService(t *testing.T) (*Service, *fakeSerial) {
+	t.Helper()
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+	}, &logging.Service{})
+	fake := newFakeSerial()
+	s.mu.Lock()
+	s.activeClient = fake
+	s.mu.Unlock()
+	return s, fake
+}
+
+// TestSendCommand covers the happy path: exposed ops encode through
+// cat.EncodeCommand (pad for set_freq, value_map for set_mode) and the
+// resulting wire bytes reach the serial client in order.
+func TestSendCommand(t *testing.T) {
+	s, fake := newCommandTestService(t)
+
+	cases := []struct {
+		op, value, want string
+	}{
+		{"set_freq", "14074000", "FA014074000;"},
+		{"set_mode", "DATA-U", "MD0C;"},
+	}
+	for _, tc := range cases {
+		if err := s.SendCommand(context.Background(), tc.op, tc.value); err != nil {
+			t.Fatalf("SendCommand(%q, %q): %v", tc.op, tc.value, err)
+		}
+	}
+
+	writes := fake.recordedWrites()
+	if len(writes) != len(cases) {
+		t.Fatalf("recorded %d writes, want %d: %q", len(writes), len(cases), writes)
+	}
+	for i, tc := range cases {
+		if string(writes[i]) != tc.want {
+			t.Errorf("write[%d] = %q, want %q", i, writes[i], tc.want)
+		}
+	}
+}
+
+// TestSendCommand_RejectsBeforeWrite proves the bad-command paths never touch
+// the serial port: a not-exposed, unknown, or unmapped op returns the matching
+// cat sentinel and records zero writes.
+func TestSendCommand_RejectsBeforeWrite(t *testing.T) {
+	cases := []struct {
+		name    string
+		op      string
+		value   string
+		wantErr error
+	}{
+		{"not exposed", "PLAYBACK", "5", cat.ErrCommandNotExposed},
+		{"unknown op", "frobnicate", "x", cat.ErrUnknownCommand},
+		{"unmapped mode", "set_mode", "NOT-A-MODE", cat.ErrUnmappedValue},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fake := newCommandTestService(t)
+			err := s.SendCommand(context.Background(), tc.op, tc.value)
+			if !stderr.Is(err, tc.wantErr) {
+				t.Fatalf("SendCommand(%q) error = %v, want %v", tc.op, err, tc.wantErr)
+			}
+			if w := fake.recordedWrites(); len(w) != 0 {
+				t.Errorf("expected no writes on rejected command, got %q", w)
+			}
+		})
+	}
+}
+
+// TestSendCommand_NoActiveClient covers the no-silent-no-op contract: with no
+// rig connected, an operator command fails with ErrRigNotConnected rather than
+// succeeding silently (contrast TriggerBootstrap, which no-ops).
+func TestSendCommand_NoActiveClient(t *testing.T) {
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  types.BridgeSerialConfig{Port: "fake"},
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+	}, &logging.Service{})
+	// activeClient left nil — pipeline never started.
+	err := s.SendCommand(context.Background(), "set_freq", "14074000")
+	if !stderr.Is(err, ErrRigNotConnected) {
+		t.Fatalf("SendCommand with no active client = %v, want ErrRigNotConnected", err)
+	}
+}

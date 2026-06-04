@@ -52,11 +52,30 @@ type RigTiming struct {
 
 // Command is a named wire-template. Name is the semantic identifier the
 // caller uses to look up the command (e.g. "read_freq_a"); Cmd is the raw
-// wire string, possibly including Go fmt %s verbs that the caller fills
-// with positional arguments.
+// wire string, possibly including a single Go fmt %s verb that the value
+// substitutes into.
+//
+// The trailing three fields drive the data-driven inbound command path
+// (ADR 0026) and default to off (zero value), so commands that only INIT/
+// READ/decode logic touch need none of them:
+//
+//   - ValueMap names a marker Tag whose value_mappings translate the
+//     caller's rig literal into the wire code the field expects (e.g. tag
+//     "MAINMODE": "DATA-U" -> "C"). The send-side inversion is well-defined
+//     only when that map is injective on its Value side; pinned by test.
+//   - Pad left-zero-pads the (post-ValueMap) value to this width before it
+//     fills the template's %s, putting fixed field widths in data rather
+//     than a %09d verb the string value carrier cannot satisfy. 0 = none.
+//   - Exposed gates reachability via /v1/rig/command. Absent = default
+//     deny: a command is reachable from the external path only when
+//     explicitly flagged, keeping TX-capable (PLAYBACK) and internal
+//     (INIT, READ) commands off that surface by default.
 type Command struct {
-	Name string `json:"name"`
-	Cmd  string `json:"cmd"`
+	Name     string `json:"name"`
+	Cmd      string `json:"cmd"`
+	ValueMap string `json:"value_map,omitempty"`
+	Pad      int    `json:"pad,omitempty"`
+	Exposed  bool   `json:"exposed,omitempty"`
 }
 
 // State describes how to parse an incoming framed line whose first bytes
