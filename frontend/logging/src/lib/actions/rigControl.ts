@@ -4,7 +4,7 @@
     endpoint: when CAT is live they drive the rig (and the UI updates only
     when the rig pushes the new state back — confirm-by-push); when CAT is off
     they edit manualState locally. Shared by both the mouse (VfoBox click) and
-    keyboard (Ctrl+\ swap) paths so the two behave identically.
+    keyboard (Shift+Ctrl) paths so the two behave identically.
 
     Capability-gated: a live command is only sent when the configured rig
     exposes the op (configState.bridge.ops). When CAT is live but the rig
@@ -35,7 +35,7 @@ export function selectVfo(vfo: 'A' | 'B'): void {
 }
 
 /**
- * Toggle the selected VFO (A↔B) — the Ctrl+\ swap. Resolves the "other" VFO
+ * Toggle the selected VFO (A↔B) — the Shift+Ctrl VFO swap. Resolves the "other" VFO
  * from the currently displayed selection and defers to selectVfo so the
  * CAT-on/off branching lives in exactly one place.
  */
@@ -44,7 +44,7 @@ export function swapVfo(): void {
 }
 
 /**
- * Step the rig up/down one band (`BU0;` / `BD0;`) — the Ctrl+] / Ctrl+[ "run
+ * Step the rig up/down one band (`BU0;` / `BD0;`) — the Shift+Ctrl+] / Shift+Ctrl+[ "run
  * through the bands" sweep. The rig walks its band-stack registers (restoring
  * each band's last freq + mode), and the resulting `FA` push updates the SPA's
  * displayed band. Live-only and capability-gated: band-stepping has no meaning

@@ -614,10 +614,10 @@
         browser's native shift-select-line scroll from firing
         alongside the pop.
     */
-    // Ctrl+Shift+<digit> → direct band jump (Firefox grabs Alt+digit for tabs,
-    // so the band family lives on Ctrl). Keyed by physical key code (e.code)
-    // because Shift+digit yields a symbol (!@#…), not the digit. 60m (BS 02) is
-    // omitted here — reached via band-step.
+    // Shift+Ctrl+<digit> → direct band jump (Firefox grabs Alt+digit for tabs,
+    // so the whole rig-control family lives on Shift+Ctrl). Keyed by physical
+    // key code (e.code) because Shift+digit yields a symbol (!@#…), not the
+    // digit. 60m (BS 02) is omitted here — reached via band-step.
     const bandByDigit: Record<string, string> = {
         Digit1: '160m',
         Digit2: '80m',
@@ -678,34 +678,33 @@
                 qsoDraft.startQso();
             }
         }
-        if (e.ctrlKey && e.key === '\\') {
-            e.preventDefault();
-            // Swap the selected VFO (A↔B). Mirrors clicking the unselected
-            // VfoBox: local manualState swap when CAT is off, set_vfo to the
-            // rig when CAT is live + capable, silent no-op otherwise (ADR 0007).
-            swapVfo();
-            return;
-        }
-        // Band up / down — step the rig through its bands (Ctrl+] / Ctrl+[).
-        // Native BU0;/BD0; (main band) with band-stack recall; CAT-live +
-        // capable only. Alt+digit is tab-switch in Firefox, so the rig-control
-        // family lives on Ctrl (ADR 0007).
-        if (e.ctrlKey && e.key === ']') {
-            e.preventDefault();
-            bandUp();
-            return;
-        }
-        if (e.ctrlKey && e.key === '[') {
-            e.preventDefault();
-            bandDown();
-            return;
-        }
-        // Direct band jump — Ctrl+Shift+<digit>. Match e.code (physical key),
-        // since Shift+digit is a symbol, not the digit. CAT-live + capable only.
-        if (e.ctrlKey && e.shiftKey && bandByDigit[e.code]) {
-            e.preventDefault();
-            selectBand(bandByDigit[e.code]);
-            return;
+        // Rig-control commands — one family, all Shift+Ctrl+<key>, dispatched
+        // on the PHYSICAL key (e.code) because Shift mutates the character
+        // (Shift+] = }, Shift+1 = !). Keeps CAT control in its own modifier
+        // namespace, distinct from the logging shortcuts (ADR 0007); Alt+digit
+        // is Firefox tab-switch, so the family lives on Ctrl+Shift. CAT-live +
+        // capability gating lives in the rigControl actions.
+        if (e.ctrlKey && e.shiftKey) {
+            if (e.code === 'Backslash') {
+                e.preventDefault();
+                swapVfo();
+                return;
+            }
+            if (e.code === 'BracketRight') {
+                e.preventDefault();
+                bandUp();
+                return;
+            }
+            if (e.code === 'BracketLeft') {
+                e.preventDefault();
+                bandDown();
+                return;
+            }
+            if (bandByDigit[e.code]) {
+                e.preventDefault();
+                selectBand(bandByDigit[e.code]);
+                return;
+            }
         }
     }
 </script>
