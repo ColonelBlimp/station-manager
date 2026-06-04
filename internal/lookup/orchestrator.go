@@ -180,6 +180,13 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	if callsign == "" {
 		return Result{Callsign: callsign, CountrySource: SourceNone, StationSource: SourceNone}
 	}
+	// Canonicalise at the package boundary (review 2026-06-04 L3): callsigns
+	// are upper-case ASCII, the station-cache fetch is an exact-equality
+	// lookup, and the upsert keys off the incoming case — so a direct
+	// (non-HTTP) caller passing lower/mixed case must not miss or duplicate the
+	// canonical row. The HTTP handler already uppercases; doing it here makes
+	// the guarantee hold for every caller.
+	callsign = strings.ToUpper(callsign)
 
 	// The two read paths run concurrently per ADR 0017 #5. Both
 	// goroutines route through safego.Go so a panic in readCountry /
@@ -228,7 +235,7 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	s.data = FilterToCallsignFields(s.data)
 	s.data = MergeStationFromCountry(s.data, c.data)
 	if !IsEmpty(s.data) && s.data.Call == "" {
-		s.data.Call = strings.ToUpper(callsign)
+		s.data.Call = callsign // already upper-cased at the boundary (L3)
 	}
 
 	// Synchronous write-backs for cold misses. Per ADR 0017 #6, cold

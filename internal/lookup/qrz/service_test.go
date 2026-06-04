@@ -123,6 +123,20 @@ func TestInitialize_SessionKeyFailureDisablesService(t *testing.T) {
 	if s.Config.Enabled {
 		t.Fatal("Config.Enabled should be false after session-fetch failure")
 	}
+	// M2 fix (review 2026-06-04): a soft-disabled service must still be marked
+	// initialized, so a direct/late LookupWithContext returns the disabled
+	// sentinel — (ContactedStation{Call:callsign}, nil) — rather than the
+	// misleading "service is not initialized" error.
+	if !s.isInitialized.Load() {
+		t.Fatal("soft-disabled service should be marked initialized")
+	}
+	st, lerr := s.LookupWithContext(context.Background(), "M0CMC")
+	if lerr != nil {
+		t.Fatalf("disabled LookupWithContext should return the sentinel, got err: %v", lerr)
+	}
+	if st.Call != "M0CMC" {
+		t.Errorf("sentinel Call = %q, want M0CMC (the supplied callsign)", st.Call)
+	}
 }
 
 // ---- Lookup happy path ----

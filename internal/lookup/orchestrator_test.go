@@ -148,6 +148,46 @@ func TestIsEmpty(t *testing.T) {
 	}
 }
 
+// ----- L3: boundary callsign normalization -----
+
+// TestEnrich_LowercaseInput_HitsCanonicalRow pins the L3 fix: the orchestrator
+// uppercases the callsign at its own boundary, so a lower-case input resolves
+// to the canonical (upper-case) cache row instead of missing it, hitting
+// upstream, and writing a duplicate row (review 2026-06-04 L3). The HTTP
+// handler already uppercases; this guarantees it for direct package callers.
+func TestEnrich_LowercaseInput_HitsCanonicalRow(t *testing.T) {
+	db := newTestSqlite(t)
+	// Seed the canonical, upper-case station cache row (fresh on write).
+	if err := db.UpsertContactedStationWithContext(context.Background(), types.ContactedStation{
+		Call: "M0CMC",
+		Name: "Marc",
+	}); err != nil {
+		t.Fatalf("seed station: %v", err)
+	}
+	// A station provider that, if reached, proves a cache MISS (and returns
+	// the wrong data).
+	qrz := &stubCallsignProvider{name: "qrz", result: types.ContactedStation{Call: "M0CMC", Name: "WRONG"}}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Chain:      []lookup.CallsignProvider{qrz},
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &syncRefresher{},
+	}
+
+	got := o.Enrich(context.Background(), "m0cmc") // lower-case input
+
+	if got.Callsign != "M0CMC" {
+		t.Errorf("Result.Callsign = %q, want M0CMC (uppercased at the boundary)", got.Callsign)
+	}
+	if got.Station.Name != "Marc" {
+		t.Errorf("Station.Name = %q, want Marc (lower-case input must hit the canonical cache row)", got.Station.Name)
+	}
+	if qrz.calls != 0 {
+		t.Errorf("station provider called %d times, want 0 (cache hit on the canonical row, no upstream)", qrz.calls)
+	}
+}
+
 // ----- cold-miss paths -----
 
 func TestEnrich_ColdMiss_HamnutHit_StoresAndReturns(t *testing.T) {

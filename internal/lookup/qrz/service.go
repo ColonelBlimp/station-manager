@@ -153,7 +153,11 @@ func (s *Service) Initialize(ctx context.Context) error {
 				s.LoggerService.WarnWith().
 					Err(err).
 					Msg("QRZ session key fetch failed; service disabled (operator can still log QSOs; check credentials or network)")
-				return
+				// Fall through to isInitialized.Store(true): a soft-disabled
+				// provider must still report the disabled sentinel from
+				// LookupWithContext, not "service is not initialized" (review
+				// 2026-06-04 M2). cmd/smd still skips it (Config.Enabled=false);
+				// a direct/late caller gets the clean disabled sentinel.
 			}
 		} else {
 			s.LoggerService.InfoWith().Msg("QRZ.com lookup is disabled in the config")

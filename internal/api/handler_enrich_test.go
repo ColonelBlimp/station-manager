@@ -218,6 +218,26 @@ func TestEnrich_NilOrchestrator_Returns200WithEmpty(t *testing.T) {
 	if got.CountrySource != lookup.SourceNone || got.StationSource != lookup.SourceNone {
 		t.Errorf("sources = %q/%q, want none/none", got.CountrySource, got.StationSource)
 	}
+	// M3 fix (review 2026-06-04): the validated callsign is echoed back even
+	// with a nil orchestrator (was "" before — validation ran only after the
+	// nil-branch early return).
+	if got.Callsign != "M0CMC" {
+		t.Errorf("Callsign = %q, want M0CMC (echoed even with nil orchestrator)", got.Callsign)
+	}
+}
+
+// TestEnrich_NilOrchestrator_InvalidCallStill400 pins the other half of the M3
+// fix: malformed input is validated BEFORE the nil-orchestrator branch, so a
+// missing/invalid call still 400s rather than getting a 200 empty result.
+func TestEnrich_NilOrchestrator_InvalidCallStill400(t *testing.T) {
+	srv := testServer(t) // nil orchestrator
+	for _, c := range []string{"", "X"} {
+		w := httptest.NewRecorder()
+		srv.handleEnrichCallsign(w, enrichRequest(c))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("call=%q: status = %d, want 400 (validate before the nil-orchestrator branch)", c, w.Code)
+		}
+	}
 }
 
 // ---- ?refresh=true: cache-bypass routing ----

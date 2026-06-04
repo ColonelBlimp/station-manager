@@ -50,15 +50,10 @@ func emptyEnrichmentResult(callsign string) lookup.Result {
 func (s *Server) handleEnrichCallsign(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleEnrichCallsign"
 
-	if s.enrich == nil {
-		// Defensive: the daemon constructed without an orchestrator
-		// (lookup pipeline disabled in config or all providers
-		// disabled). Return 200 with empty result + source=none so
-		// the SPA's UX path is unchanged.
-		s.writeJSON(w, http.StatusOK, emptyEnrichmentResult(""))
-		return
-	}
-
+	// Validate `call` FIRST — before the nil-orchestrator branch — so malformed
+	// input always 400s and a valid callsign is echoed back even when the
+	// pipeline is disabled (review 2026-06-04 M3). Malformed input is the only
+	// non-2xx path (ADR 0017 #12).
 	callsign := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("call")))
 	if callsign == "" {
 		s.writeError(w, http.StatusBadRequest, "missing_required_param",
@@ -68,6 +63,15 @@ func (s *Server) handleEnrichCallsign(w http.ResponseWriter, r *http.Request) {
 	if !isValidCallsign(callsign) {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 			"call must be 3-32 characters and contain at least one digit", op)
+		return
+	}
+
+	if s.enrich == nil {
+		// Defensive: the daemon was constructed without an orchestrator
+		// (lookup pipeline disabled in config, or all providers disabled).
+		// Return 200 with an empty result + source=none so the SPA's UX path
+		// is unchanged — but with the validated callsign echoed back.
+		s.writeJSON(w, http.StatusOK, emptyEnrichmentResult(callsign))
 		return
 	}
 

@@ -47,6 +47,16 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 129 (2026-06-04) — Code-review remediation, **Batch B** (`internal/lookup` + enrich handler): three decision-free fixes (M2/M3/L3). Shipped + tested green; not yet committed.
+
+- **M2.** `qrz.Service.Initialize` soft-disable now falls through to `isInitialized.Store(true)` (was an early `return`), so a soft-disabled QRZ reports the disabled sentinel from `LookupWithContext`, not "service is not initialized." (Latent today — `cmd/smd` skips disabled providers — matters once config-reload / manual-retry lands.)
+- **M3.** `handleEnrichCallsign` validates `call` **before** the nil-orchestrator branch and echoes the validated callsign (was `callsign:""` + skipped validation when no providers are configured — reachable in prod).
+- **L3.** `Orchestrator.enrich` uppercases the callsign at its boundary so a direct (non-HTTP) package caller with lower/mixed case hits the canonical cache row instead of missing it + writing a duplicate.
+- Tests added/extended for each (incl. a real cache-hit test for L3 via the in-memory sqlite harness); `go test ./internal/lookup/... ./internal/api ./internal/qsoservice` + vet + gofmt clean.
+- Resolution recorded in the lookup review doc, with the two **validity corrections** carried over from the analysis (H2's "bogus `0001-01-01` timestamp" doesn't actually occur — `omitempty` on `time.Time` suppresses it; L1 has no current trigger — QRZ never populates an ignored field in isolation).
+
+**Remaining review work:** Batch C (lookup **H1** force-refresh + async-refresh replace-mode, **H2** result-shape, **M1** QRZ session re-auth — each needs a decision) + Batch D (**L2** source-name drift, **L1** `IsEmpty` guard). The four pending decisions are in the chat action plan. **Next:** those decisions, then Batch C/D.
+
 ### Session 128 (2026-06-04) — Code-review remediation, **Batch A** (`internal/adif`): H2+M2 parser rewrite + M1+H1 round-trip restore. Shipped + tested green; not yet committed.
 
 Two read-only code reviews landed in `docs/reviews/` (`internal-adif-2026-06-04.md`, `internal-lookup-2026-06-04.md`). Validated all 13 findings against the source (three parallel read-only passes) — all factually grounded; **two lookup findings were overstated** (H2: no bogus `0001-01-01` timestamp is ever emitted — `omitempty` on `time.Time` suppresses it; L1: no current provider can trigger the `IsEmpty` gap). Operator chose **Batch A** (the adif fixes) first.
