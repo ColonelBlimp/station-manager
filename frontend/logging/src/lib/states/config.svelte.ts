@@ -208,6 +208,14 @@ class BridgeView {
     ops: string[] = $state([]);
 
     /**
+     * Whether the configured rig can run the tune-carrier feature (ADR
+     * 0027) — rigdef-derived (the rig defines set_mode/set_power/tx_on/
+     * tx_off). Gates the Tune button: hidden entirely on a rig that can't
+     * tune (e.g. the FT-710). Stable for the daemon's lifetime.
+     */
+    tune: boolean = $state(false);
+
+    /**
      * Merged mode-mapping table for the configured driver — rigdef
      * shipped defaults overlaid with operator overrides from
      * config.json. Keyed by rig literal string; value is an ADIF
@@ -323,6 +331,7 @@ class ConfigState {
         this.bridge.driver = resp.bridge?.driver ?? '';
         this.bridge.rigModes = resp.bridge?.rig_modes ?? [];
         this.bridge.ops = resp.bridge?.ops ?? [];
+        this.bridge.tune = resp.bridge?.tune ?? false;
         this.bridge.modeMappings = resp.bridge?.mode_mappings ?? {};
 
         // mailer projection — daemon-managed, read-only on the SPA

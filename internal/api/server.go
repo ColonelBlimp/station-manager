@@ -150,6 +150,11 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// SSE route. A normal request (not long-lived), so the global
 		// limitConcurrent middleware covers it; no per-route SSE cap.
 		mux.HandleFunc("POST /v1/rig/command", s.handleRigCommand)
+		// Tune-carrier control (ADR 0027) — the first TX endpoint. Same
+		// enablement gate; a normal (not long-lived) request, so the global
+		// limitConcurrent middleware covers it. The daemon owns the
+		// guaranteed stop, so this can't strand a carrier.
+		mux.HandleFunc("POST /v1/rig/tune", s.handleRigTune)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

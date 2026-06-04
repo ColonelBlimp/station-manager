@@ -840,6 +840,18 @@ func validateBridge(b types.BridgeConfig) error {
 		return fmt.Errorf("bridge.timeouts.backoff_initial_ms (%d) must not exceed backoff_max_ms (%d)", b.Timeouts.BackoffInitialMs, b.Timeouts.BackoffMaxMs)
 	}
 
+	// Tune knobs (ADR 0027) — optional (zero = built-in default). A negative
+	// value is a config error; positive values are accepted and clamped at
+	// bridge.Service construction (power ≤ 40 W, duration ≤ 30 s) so config
+	// can't create an unsafe tune. Validated unconditionally so a typo
+	// surfaces at startup regardless of Enabled.
+	if b.Tune.PowerW < 0 {
+		return fmt.Errorf("bridge.tune.power_w = %d: must be 0 (default) or a positive wattage", b.Tune.PowerW)
+	}
+	if b.Tune.MaxDurationMs < 0 {
+		return fmt.Errorf("bridge.tune.max_duration_ms = %d: must be 0 (default) or a positive duration in milliseconds", b.Tune.MaxDurationMs)
+	}
+
 	if !b.Enabled {
 		return nil
 	}

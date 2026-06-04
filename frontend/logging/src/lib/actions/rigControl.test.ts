@@ -1,18 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { selectVfo, swapVfo, bandUp, bandDown, selectBand } from './rigControl';
+import { selectVfo, swapVfo, bandUp, bandDown, selectBand, toggleTune } from './rigControl';
 import { manualState } from '../states/manual.svelte';
 import { configState } from '../states/config.svelte';
 import { bridgeState } from '../states/bridge.svelte';
 import { catState } from '../states/cat.svelte';
 import { sendRigCommand } from '../api/rigCommand';
+import { sendRigTune } from '../api/rigTune';
 
 // The transport is mocked — these tests pin the CAT-on/off + capability
 // branching, not the HTTP wire (that's rigCommand's own concern).
 vi.mock('../api/rigCommand', () => ({
     sendRigCommand: vi.fn().mockResolvedValue({ kind: 'ok' }),
 }));
+vi.mock('../api/rigTune', () => ({
+    sendRigTune: vi.fn().mockResolvedValue({ kind: 'ok' }),
+}));
 
 const mockSend = vi.mocked(sendRigCommand);
+const mockTune = vi.mocked(sendRigTune);
 
 function setCatLive(): void {
     configState.station.enabled = true;
@@ -24,11 +29,15 @@ describe('rigControl', () => {
     beforeEach(() => {
         mockSend.mockClear();
         mockSend.mockResolvedValue({ kind: 'ok' });
+        mockTune.mockClear();
+        mockTune.mockResolvedValue({ kind: 'ok' });
         // CAT off by default.
         configState.station.enabled = false;
         bridgeState.connected = false;
         bridgeState.rigResponding = false;
+        bridgeState.tuneActive = false;
         configState.bridge.ops = [];
+        configState.bridge.tune = false;
         manualState.selectedVfo = 'A';
         catState.selectedVfo = 'A';
     });
@@ -122,6 +131,37 @@ describe('rigControl', () => {
             configState.bridge.ops = [];
             selectBand('20m');
             expect(mockSend).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('toggleTune', () => {
+        it('no-ops when CAT is off (cannot tune a non-live rig)', () => {
+            configState.bridge.tune = true;
+            toggleTune();
+            expect(mockTune).not.toHaveBeenCalled();
+        });
+
+        it('no-ops when the rig cannot tune (capability absent)', () => {
+            setCatLive();
+            configState.bridge.tune = false;
+            toggleTune();
+            expect(mockTune).not.toHaveBeenCalled();
+        });
+
+        it('sends active:true to start when idle + live + capable', () => {
+            setCatLive();
+            configState.bridge.tune = true;
+            bridgeState.tuneActive = false;
+            toggleTune();
+            expect(mockTune).toHaveBeenCalledWith(true);
+        });
+
+        it('sends active:false to stop when already tuning', () => {
+            setCatLive();
+            configState.bridge.tune = true;
+            bridgeState.tuneActive = true;
+            toggleTune();
+            expect(mockTune).toHaveBeenCalledWith(false);
         });
     });
 });

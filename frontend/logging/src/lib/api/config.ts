@@ -71,6 +71,13 @@ export interface BridgeFields {
      */
     ops?: string[];
     /**
+     * Whether the configured rig can run the tune-carrier feature (ADR
+     * 0027) — rigdef-derived (the rig defines set_mode/set_power/tx_on/
+     * tx_off). The SPA shows the Tune button only when true; absent
+     * (treated as false) for a rig that can't tune (e.g. the FT-710).
+     */
+    tune?: boolean;
+    /**
      * Merged view of the rigdef's shipped defaults + the operator's
      * overrides for the configured driver. Keyed by rig mode string;
      * value is an ADIF (MODE, SUBMODE) pair. The SPA consumes this

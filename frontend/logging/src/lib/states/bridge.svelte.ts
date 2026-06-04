@@ -1,8 +1,9 @@
 /**
  * Bridge SSE transport — EventSource consumer for `GET /v1/rig/events`.
  *
- * Per ADR 0010 (`docs/decisions/0010-rig-sse-wire-shape.md`) the daemon's
- * bridge subsystem publishes three SSE event types over a single stream:
+ * Per ADR 0010 (`docs/decisions/0010-rig-sse-wire-shape.md`) + ADR 0027 the
+ * daemon's bridge subsystem publishes four SSE event types over a single
+ * stream:
  *
  *   - `rig-state` — partial-payload rig snapshot. Field-by-field merge
  *     into `catState`; fields omitted from the payload preserve their
@@ -15,6 +16,9 @@
  *   - `bridge-error` — operator-actionable bridge-side error (port
  *     permission denied, unknown driver, INIT failure, identity
  *     mismatch). Toasts at error level. NOT used for transient retries.
+ *   - `tune-state` — daemon-owned tune-carrier state (ADR 0027). Sets
+ *     `bridgeState.tuneActive`, which the Tune button reflects. Includes a
+ *     hard auto-off / disconnect-release the operator didn't trigger.
  *
  * **bridgeState flags drive displayedState's three-flag rule** (ADR 0009).
  *
@@ -55,6 +59,13 @@ import { toasts } from './toasts.svelte';
 class BridgeState {
     connected: boolean = $state(false);
     rigResponding: boolean = $state(false);
+    /**
+     * Whether the daemon's tune carrier is currently keyed (ADR 0027).
+     * Daemon-authoritative — set from the `tune-state` SSE event, including a
+     * hard auto-off / disconnect-release the operator didn't trigger. The Tune
+     * button reflects this; there is no optimistic local flip.
+     */
+    tuneActive: boolean = $state(false);
 }
 
 export const bridgeState = new BridgeState();
@@ -79,6 +90,11 @@ interface RigDisconnectedPayload {
 interface BridgeErrorPayload {
     code: string;
     details?: Record<string, string>;
+}
+
+/** Payload shape mirrors `internal/bridge.TuneStatePayload`. */
+interface TuneStatePayload {
+    active: boolean;
 }
 
 let activeSource: EventSource | null = null;
@@ -241,6 +257,19 @@ function openSource(): void {
         }
         toasts.error(t(`bridge.error.${payload.code}`, payload.details));
     });
+
+    src.addEventListener('tune-state', (ev: MessageEvent<string>) => {
+        let payload: TuneStatePayload;
+        try {
+            payload = JSON.parse(ev.data) as TuneStatePayload;
+        } catch (e) {
+            console.warn('[bridge] tune-state JSON parse failed', e);
+            return;
+        }
+        // Daemon-authoritative: reflect whatever the daemon reports, including
+        // a hard auto-off / disconnect-release the operator didn't trigger.
+        bridgeState.tuneActive = payload.active;
+    });
 }
 
 function closeSource(): void {
@@ -249,6 +278,11 @@ function closeSource(): void {
     activeSource = null;
     bridgeState.connected = false;
     bridgeState.rigResponding = false;
+    // Deliberate teardown (CAT disabled / stopBridge) — forget tune state so a
+    // re-open starts clean. NOT reset on a transport `error` (browser
+    // auto-reconnect): the daemon stays authoritative and replays the cached
+    // tune-state on reconnect.
+    bridgeState.tuneActive = false;
     // Drop both disconnect-toast trackers so a future startBridge
     // after a stopBridge doesn't carry stale state.
     //

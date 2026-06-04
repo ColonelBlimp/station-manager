@@ -22,6 +22,14 @@ type BridgeConfig struct {
 	Cat      BridgeCatConfig      `json:"cat"`
 	Timeouts BridgeTimeoutsConfig `json:"timeouts,omitempty"`
 
+	// Tune configures the tune-carrier feature (ADR 0027): the operator's
+	// one-button external-amp tune — a steady reduced-power RTTY carrier the
+	// daemon keys, holds, and is guaranteed to drop. Both knobs are code
+	// constants the operator may adjust via config up to a hard ceiling; the
+	// daemon clamps each at construction so config can never create an unsafe
+	// tune. Zero / omitted = built-in default. See BridgeTuneConfig.
+	Tune BridgeTuneConfig `json:"tune,omitempty"`
+
 	// ModeMappings is the operator-override layer for the per-rig
 	// translation table that turns rig-pushed mode strings (e.g.
 	// "DATA-U") into ADIF (MODE, SUBMODE) pairs. Outer key is the rig
@@ -101,4 +109,21 @@ type BridgeTimeoutsConfig struct {
 	BackoffInitialMs       int `json:"backoff_initial_ms,omitempty"`
 	BackoffMaxMs           int `json:"backoff_max_ms,omitempty"`
 	SteadyStateThresholdMs int `json:"steady_state_threshold_ms,omitempty"`
+}
+
+// BridgeTuneConfig holds the tune-carrier knobs (ADR 0027). Both are optional
+// (zero = built-in default) and operator-overridable up to a hard
+// code-enforced ceiling: config can lower a value or raise it toward the
+// ceiling but never past it — the daemon clamps each at bridge.Service
+// construction. Same lifecycle as BridgeTimeoutsConfig: read once,
+// snapshotted at New, operator restart to pick up edits.
+//
+// PowerW is the rig's output in watts during a tune (default 20, clamp ≤ 40)
+// — the external amp is tuned at reduced drive. MaxDurationMs is the hard
+// auto-off backstop (default 15000, clamp ≤ 30000): the carrier drops
+// unconditionally after this long even if the operator never toggles tune
+// off, the SPA tab closes, or the network drops.
+type BridgeTuneConfig struct {
+	PowerW        int `json:"power_w,omitempty"`
+	MaxDurationMs int `json:"max_duration_ms,omitempty"`
 }

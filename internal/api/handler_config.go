@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
@@ -82,6 +83,11 @@ type MailerInfo struct {
 // only when the rig exposes the ops it needs. Empty when the rig defines no
 // exposed commands (e.g. the FT-710 today).
 //
+// Tune reports whether the connected rig can run the tune-carrier feature
+// (ADR 0027) — the rigdef defines the set_mode/set_power/tx_on/tx_off
+// commands the controller needs. The SPA shows the Tune button only when
+// true; false (omitted) for a rig that can't tune (e.g. the FT-710 today).
+//
 // ModeMappings is the merged view (rigdef defaults + operator
 // overrides from cfg.Bridge.ModeMappings) for the configured driver
 // only — the SPA sees a single keyed-by-rig-string table without
@@ -102,6 +108,7 @@ type BridgeInfo struct {
 	RigName      string                       `json:"rig_name,omitempty"`
 	RigModes     []string                     `json:"rig_modes,omitempty"`
 	Ops          []string                     `json:"ops,omitempty"`
+	Tune         bool                         `json:"tune,omitempty"`
 	ModeMappings map[string]types.ModeMapping `json:"mode_mappings,omitempty"`
 }
 
@@ -380,6 +387,7 @@ func bridgeInfoFor(cfg config.Config) BridgeInfo {
 	info.RigName = def.Name
 	info.RigModes = cat.RigModes(def)
 	info.Ops = cat.ExposedCommands(def)
+	info.Tune = bridge.TuneSupported(def)
 
 	// Merge mode mappings: rigdef defaults first, then operator
 	// overrides on top. Operator's entry wins per-rig-string on

@@ -59,6 +59,7 @@ beforeEach(() => {
     // Reset shared singletons to defaults.
     bridgeState.connected = false;
     bridgeState.rigResponding = false;
+    bridgeState.tuneActive = false;
     catState.rigIdentity = '';
     catState.vfoA = DEFAULT_VFO_HZ;
     catState.vfoB = DEFAULT_VFO_HZ;
@@ -491,5 +492,67 @@ describe('bridge SSE consumer — bridge-error', () => {
         );
         expect(bridgeState.connected).toBe(connectedBefore);
         expect(bridgeState.rigResponding).toBe(respondingBefore);
+    });
+});
+
+describe('bridge SSE consumer — tune-state', () => {
+    beforeEach(() => {
+        startBridge();
+        configState.station.enabled = true;
+        flushSync();
+        currentSource().fireOpen();
+    });
+
+    it('sets tuneActive=true on a tune-state active event', () => {
+        expect(bridgeState.tuneActive).toBe(false);
+        currentSource().emit('tune-state', JSON.stringify({ active: true }));
+        expect(bridgeState.tuneActive).toBe(true);
+    });
+
+    it('clears tuneActive on a tune-state inactive event (e.g. daemon auto-off)', () => {
+        const src = currentSource();
+        src.emit('tune-state', JSON.stringify({ active: true }));
+        expect(bridgeState.tuneActive).toBe(true);
+        // The daemon's hard auto-off / disconnect-release publishes inactive;
+        // the button reflects it without the operator clicking.
+        src.emit('tune-state', JSON.stringify({ active: false }));
+        expect(bridgeState.tuneActive).toBe(false);
+    });
+
+    it('does not change connected / rigResponding', () => {
+        const src = currentSource();
+        src.emit('rig-state', JSON.stringify({ vfoA: 14_250_000 }));
+        const connectedBefore = bridgeState.connected;
+        const respondingBefore = bridgeState.rigResponding;
+        src.emit('tune-state', JSON.stringify({ active: true }));
+        expect(bridgeState.connected).toBe(connectedBefore);
+        expect(bridgeState.rigResponding).toBe(respondingBefore);
+    });
+
+    it('ignores invalid JSON without breaking the stream', () => {
+        const src = currentSource();
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        src.emit('tune-state', '{not valid json');
+        expect(warnSpy).toHaveBeenCalled();
+        expect(bridgeState.tuneActive).toBe(false);
+        warnSpy.mockRestore();
+    });
+
+    it('resets tuneActive=false when CAT is disabled (deliberate teardown)', () => {
+        currentSource().emit('tune-state', JSON.stringify({ active: true }));
+        expect(bridgeState.tuneActive).toBe(true);
+        configState.station.enabled = false;
+        flushSync();
+        expect(bridgeState.tuneActive).toBe(false);
+    });
+
+    it('does NOT reset tuneActive on a transport error (daemon stays authoritative)', () => {
+        const src = currentSource();
+        src.emit('tune-state', JSON.stringify({ active: true }));
+        expect(bridgeState.tuneActive).toBe(true);
+        // A transport blip → browser auto-reconnects and the daemon replays the
+        // cached tune-state; the SPA must not optimistically clear it here.
+        src.fireError();
+        expect(bridgeState.tuneActive).toBe(true);
     });
 });

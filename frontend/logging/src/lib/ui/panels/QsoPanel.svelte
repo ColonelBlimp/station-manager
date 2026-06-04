@@ -4,6 +4,7 @@
     import Rst from '../components/Rst.svelte';
     import Mode from '../components/Mode.svelte';
     import Vfos from '../components/Vfos.svelte';
+    import TuneButton from '../components/TuneButton.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
@@ -743,6 +744,7 @@
             disabled={!displayedState.editable}
         />
         <Vfos />
+        <TuneButton />
     </div>
     <div class="flex flex-row space-x-2 mt-2">
         <TextInput id="name" label="Name" bind:value={qsoDraft.name} />

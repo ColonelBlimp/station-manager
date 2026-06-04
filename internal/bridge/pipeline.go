@@ -177,6 +177,10 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.bootstrapBytes = nil
 		s.mu.Unlock()
 		_ = client.Close()
+		// Release any active tune — the carrier physically dropped with the
+		// rig; clear state, cancel the backstop, forget the stale snapshot,
+		// and tell the SPA (ADR 0027).
+		s.clearTuneOnDisconnect()
 	}()
 
 	if err := client.WriteCommandBytes(ctx, initBytes); err != nil {
@@ -394,6 +398,9 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		if !hasFields {
 			continue
 		}
+		// Feed the tune controller's current-state snapshot (mode+power)
+		// before fanning out, so a later tune can restore them (ADR 0027).
+		s.captureTuneSnapshot(payload)
 		s.hub.publish(Event{Name: EventRigState, Payload: payload})
 	}
 }

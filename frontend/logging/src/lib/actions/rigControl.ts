@@ -15,8 +15,10 @@
 import { displayedState } from '../states/displayed.svelte';
 import { manualState } from '../states/manual.svelte';
 import { configState } from '../states/config.svelte';
+import { bridgeState } from '../states/bridge.svelte';
 import { toasts } from '../states/toasts.svelte';
 import { sendRigCommand } from '../api/rigCommand';
+import { sendRigTune } from '../api/rigTune';
 
 /**
  * Select VFO A or B. CAT off → local manualState swap. CAT live + the rig
@@ -80,5 +82,25 @@ async function driveRig(op: string, value?: string): Promise<void> {
     const outcome = await sendRigCommand(op, value);
     if (outcome.kind !== 'ok') {
         toasts.error(`Rig command failed: ${outcome.message}`);
+    }
+}
+
+/**
+ * Toggle the tune carrier (ADR 0027) — the first TX action. Live + capability
+ * gated, like the band controls. Sends the opposite of the daemon's current
+ * tune-state (bridgeState.tuneActive); the button reflects the new state only
+ * when the `tune-state` SSE push arrives (confirm-by-push, no optimistic flip).
+ * The daemon owns the guaranteed stop, so a redundant toggle is harmless.
+ */
+export function toggleTune(): void {
+    if (!displayedState.isLive) return;
+    if (!configState.bridge.tune) return;
+    void driveTune(!bridgeState.tuneActive);
+}
+
+async function driveTune(active: boolean): Promise<void> {
+    const outcome = await sendRigTune(active);
+    if (outcome.kind !== 'ok') {
+        toasts.error(`Tune ${active ? 'start' : 'stop'} failed: ${outcome.message}`);
     }
 }

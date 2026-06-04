@@ -114,6 +114,26 @@ type Service struct {
 	supervisorInitialBackoff       time.Duration
 	supervisorMaxBackoff           time.Duration
 	supervisorSteadyStateThreshold time.Duration
+
+	// Tune-carrier state (ADR 0027), all mu-guarded. tuneActive is the
+	// single-flight gate; tuneRestoreMode/Power are the pre-tune snapshot
+	// captured at StartTune and restored on stop; tuneTimer is the hard
+	// auto-off backstop. lastMode/lastPower are the rolling current-rig
+	// snapshot fed by readLoop (frozen during a tune) — the source the
+	// restore values are captured from, and the refuse-if-unknown gate.
+	tuneActive       bool
+	tuneRestoreMode  string
+	tuneRestorePower int
+	tuneTimer        *time.Timer
+	lastMode         string
+	lastPower        int
+
+	// Resolved (config-overridable, hard-clamped) tune knobs, snapshotted at
+	// New like the timeout fields above. tunePowerW ≤ maxTunePowerW;
+	// tuneMaxDuration ≤ maxTuneDuration. Read by the tune controller; mutate
+	// only before Start, same rule as the timeout fields.
+	tunePowerW      int
+	tuneMaxDuration time.Duration
 }
 
 // New constructs a Service from the operator's bridge config and a
@@ -121,6 +141,23 @@ type Service struct {
 // changes don't reach an existing Service. Operator restart picks up
 // edits — same pattern as internal/email.
 func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
+	// Clamp the tune knobs to their safe ceilings at construction (ADR 0027)
+	// — config may lower them or raise up to the ceiling, but can't exceed it.
+	// Warn so an operator whose value was capped sees why.
+	tunePower, powerClamped := resolveTunePower(cfg.Tune.PowerW)
+	tuneDur, durClamped := resolveTuneDuration(cfg.Tune.MaxDurationMs)
+	if powerClamped && logger != nil {
+		logger.WarnWith().
+			Int("requested_w", cfg.Tune.PowerW).
+			Int("clamped_w", tunePower).
+			Msg("bridge: tune power_w above safe ceiling; clamped")
+	}
+	if durClamped && logger != nil {
+		logger.WarnWith().
+			Int("requested_ms", cfg.Tune.MaxDurationMs).
+			Int("clamped_ms", int(tuneDur.Milliseconds())).
+			Msg("bridge: tune max_duration_ms above safe ceiling; clamped")
+	}
 	return &Service{
 		cfg:      cfg,
 		logger:   logger,
@@ -133,6 +170,8 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		supervisorInitialBackoff:       resolveTimeout(cfg.Timeouts.BackoffInitialMs, supervisorInitialBackoff),
 		supervisorMaxBackoff:           resolveTimeout(cfg.Timeouts.BackoffMaxMs, supervisorMaxBackoff),
 		supervisorSteadyStateThreshold: resolveTimeout(cfg.Timeouts.SteadyStateThresholdMs, supervisorSteadyStateThreshold),
+		tunePowerW:                     tunePower,
+		tuneMaxDuration:                tuneDur,
 	}
 }
 

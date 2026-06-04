@@ -4,10 +4,11 @@ package bridge
 const ServiceName = "bridgeservice"
 
 // EventName identifies the kind of event flowing from the bridge to
-// SSE subscribers. Three values per ADR 0010, no others — extending
-// this set is a wire-protocol change that requires updating the SPA's
-// EventSource consumer in `frontend/logging/src/lib/states/bridge.svelte.ts`
-// and revising ADR 0010.
+// SSE subscribers. Four values: three per ADR 0010, plus tune-state per
+// ADR 0027. Extending this set is a wire-protocol change that requires
+// updating the SPA's EventSource consumer in
+// `frontend/logging/src/lib/states/bridge.svelte.ts` and revising the
+// relevant ADR.
 type EventName string
 
 const (
@@ -32,6 +33,13 @@ const (
 	// baud-rate mismatch, etc.). NOT used for transient retries or
 	// per-frame protocol hiccups. Payload is {Message string}.
 	EventBridgeError EventName = "bridge-error"
+
+	// EventTuneState carries the daemon-owned tune-carrier state (ADR
+	// 0027): {active bool}. The daemon is authoritative — the SPA's Tune
+	// button reflects this, including a hard auto-off the operator didn't
+	// trigger. Added after the original three; the SPA's EventSource
+	// consumer handles it the same way.
+	EventTuneState EventName = "tune-state"
 )
 
 // Event is one bridge → SSE-subscriber message. Name is the SSE
@@ -154,4 +162,13 @@ type RigDisconnectedPayload struct {
 type BridgeErrorPayload struct {
 	Code    BridgeErrorCode   `json:"code"`
 	Details map[string]string `json:"details,omitempty"`
+}
+
+// TuneStatePayload is the shape under EventTuneState (ADR 0027). Active is
+// whether the tune carrier is currently keyed. The daemon emits true when a
+// tune starts and false when it ends — operator stop, hard auto-off, and
+// disconnect-release all produce false. The hub caches the latest so a late
+// SSE subscriber learns an in-progress tune.
+type TuneStatePayload struct {
+	Active bool `json:"active"`
 }

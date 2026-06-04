@@ -30,7 +30,10 @@
     {"name": "set_vfo",  "cmd": "VS%s;",  "value_map": "SELECT",   "exposed": true},
     {"name": "band_up",   "cmd": "BU0;", "exposed": true},
     {"name": "band_down", "cmd": "BD0;", "exposed": true},
-    {"name": "set_band",  "cmd": "BS%s;", "value_map": "BAND", "exposed": true}
+    {"name": "set_band",  "cmd": "BS%s;", "value_map": "BAND", "exposed": true},
+    {"name": "set_power", "cmd": "PC%s;", "pad": 3, "exposed": true},
+    {"name": "tx_on",     "cmd": "TX1;"},
+    {"name": "tx_off",    "cmd": "TX0;"}
   ],
   "states": [
     {

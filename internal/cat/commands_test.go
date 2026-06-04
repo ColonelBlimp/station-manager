@@ -113,16 +113,18 @@ func TestEncodeCommandBijection(t *testing.T) {
 }
 
 // TestExposedCommands pins the advertised op vocabulary: the FTdx10 exposes
-// exactly set_freq + set_mode (rigdef order), while the FT-710 — which has no
+// its safe inbound commands in rigdef order, while the FT-710 — which has no
 // inbound command path yet — exposes nothing, proving the default-deny of the
-// Exposed flag.
+// Exposed flag. The TX-keying commands (tx_on/tx_off) are deliberately absent:
+// they are not Exposed, so they never reach the generic command path (ADR
+// 0027) — only the tune controller may key TX.
 func TestExposedCommands(t *testing.T) {
 	def, ok := Lookup("yaesu-ftdx10")
 	if !ok {
 		t.Fatal(`Lookup("yaesu-ftdx10") not found`)
 	}
 	got := ExposedCommands(def)
-	want := []string{"set_freq", "set_mode", "set_vfo", "band_up", "band_down", "set_band"}
+	want := []string{"set_freq", "set_mode", "set_vfo", "band_up", "band_down", "set_band", "set_power"}
 	if len(got) != len(want) {
 		t.Fatalf("ExposedCommands(ftdx10) = %v, want %v", got, want)
 	}
@@ -138,5 +140,54 @@ func TestExposedCommands(t *testing.T) {
 	}
 	if ops := ExposedCommands(ft710); len(ops) != 0 {
 		t.Errorf("ExposedCommands(ft710) = %v, want empty (no exposed commands)", ops)
+	}
+}
+
+// TestEncodeCommand_SetPower pins the tune controller's power command: PC with
+// a 3-wide zero-padded value (ADR 0027). set_power is Exposed (setting power
+// never transmits) so it also rides the generic command path.
+func TestEncodeCommand_SetPower(t *testing.T) {
+	def, _ := Lookup("yaesu-ftdx10")
+	cases := []struct{ in, want string }{
+		{"20", "PC020;"},
+		{"5", "PC005;"},
+		{"100", "PC100;"},
+	}
+	for _, c := range cases {
+		got, err := EncodeCommand(def, "set_power", c.in)
+		if err != nil {
+			t.Fatalf("EncodeCommand(set_power,%q): %v", c.in, err)
+		}
+		if string(got) != c.want {
+			t.Errorf("EncodeCommand(set_power,%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestTxCommands_NotExposed is the safety gate for ADR 0027: the TX-keying
+// commands exist in the rigdef but are NOT Exposed, so the generic command
+// path (EncodeCommand) refuses them — only the tune controller may key TX,
+// via the low-level Encode (verified here too).
+func TestTxCommands_NotExposed(t *testing.T) {
+	def, _ := Lookup("yaesu-ftdx10")
+
+	for _, name := range []string{"tx_on", "tx_off"} {
+		if _, err := EncodeCommand(def, name, ""); !stderr.Is(err, ErrCommandNotExposed) {
+			t.Errorf("EncodeCommand(%q) err = %v, want ErrCommandNotExposed", name, err)
+		}
+	}
+
+	// The low-level Encode (controller-internal) still produces the bytes.
+	for _, c := range []struct{ name, want string }{
+		{"tx_on", "TX1;"},
+		{"tx_off", "TX0;"},
+	} {
+		got, err := Encode(def, c.name)
+		if err != nil {
+			t.Fatalf("Encode(%q): %v", c.name, err)
+		}
+		if string(got) != c.want {
+			t.Errorf("Encode(%q) = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

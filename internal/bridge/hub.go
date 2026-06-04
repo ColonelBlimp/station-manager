@@ -61,6 +61,14 @@ type hub struct {
 	// fires while the rig stays silent. The SPA's bridgeState shows
 	// `rigResponding=false` but the toast notification is absent.
 	lastRigDisconnected *Event
+
+	// lastTuneState caches the most recent EventTuneState so a SPA tab
+	// opening mid-tune learns the carrier is up (ADR 0027). Unlike
+	// lastRigDisconnected there's no clear-on-other-event rule: tune-state
+	// is a clean boolean the daemon owns, so the latest value is always the
+	// truth — an inactive cache replayed to a late subscriber matches the
+	// SPA's default and is harmless.
+	lastTuneState *Event
 }
 
 func newHub() *hub {
@@ -98,6 +106,9 @@ func (h *hub) publish(evt Event) {
 		h.lastRigDisconnected = &cp
 	case EventRigState:
 		h.lastRigDisconnected = nil
+	case EventTuneState:
+		cp := evt
+		h.lastTuneState = &cp
 	}
 	for id, ch := range h.subs {
 		select {
@@ -149,6 +160,15 @@ func (h *hub) subscribe() (<-chan Event, func()) {
 	if h.lastRigDisconnected != nil {
 		select {
 		case ch <- *h.lastRigDisconnected:
+		default:
+		}
+	}
+	// Replay the cached tune-state so a tab opening mid-tune (ADR 0027)
+	// learns the carrier is up. Third optional replay into the cap-64
+	// buffer — still safe.
+	if h.lastTuneState != nil {
+		select {
+		case ch <- *h.lastTuneState:
 		default:
 		}
 	}
