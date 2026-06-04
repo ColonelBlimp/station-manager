@@ -93,7 +93,7 @@
 <svelte:window onclick={onWindowClick} />
 
 <div class={widthClass} bind:this={rootEl}>
-    <div class="flex flex-row items-center">
+    <div class="relative flex flex-row items-center">
         <label for={id} class="input-label">{label}</label>
         <button
             id={triggerId}

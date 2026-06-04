@@ -35,7 +35,7 @@
         (transmitting) state goes solid red and pulses so a keyed carrier is
         unmistakable.
     -->
-    <div class="flex flex-col justify-end">
+    <div class="flex flex-col justify-end -mt-1">
         <button
             type="button"
             onclick={toggleTune}
