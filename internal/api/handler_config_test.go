@@ -58,7 +58,7 @@ func TestBridgeInfoFor_Ops(t *testing.T) {
 
 	info := bridgeInfoFor(cfg)
 
-	want := []string{"set_freq", "set_mode", "set_vfo"}
+	want := []string{"set_freq", "set_mode", "set_vfo", "band_up", "band_down", "set_band"}
 	if len(info.Ops) != len(want) {
 		t.Fatalf("BridgeInfo.Ops = %v, want %v", info.Ops, want)
 	}

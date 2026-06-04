@@ -52,6 +52,12 @@ func TestEncodeCommand(t *testing.T) {
 		{name: "set_mode LSB", cmd: "set_mode", value: "LSB", want: "MD01;"},
 		{name: "set_vfo A", cmd: "set_vfo", value: "VFO-A", want: "VS0;"},
 		{name: "set_vfo B", cmd: "set_vfo", value: "VFO-B", want: "VS1;"},
+		{name: "band_up valueless", cmd: "band_up", value: "", want: "BU0;"},
+		{name: "band_down valueless", cmd: "band_down", value: "", want: "BD0;"},
+		{name: "set_freq missing value", cmd: "set_freq", value: "", wantErr: ErrMissingValue},
+		{name: "set_band 160m", cmd: "set_band", value: "160m", want: "BS00;"},
+		{name: "set_band 20m", cmd: "set_band", value: "20m", want: "BS05;"},
+		{name: "set_band 6m", cmd: "set_band", value: "6m", want: "BS10;"},
 		{name: "set_mode unknown literal", cmd: "set_mode", value: "NOT-A-MODE", wantErr: ErrUnmappedValue},
 		{name: "PLAYBACK not exposed", cmd: "PLAYBACK", value: "5", wantErr: ErrCommandNotExposed},
 		{name: "READ not exposed", cmd: "READ", value: "", wantErr: ErrCommandNotExposed},
@@ -116,7 +122,7 @@ func TestExposedCommands(t *testing.T) {
 		t.Fatal(`Lookup("yaesu-ftdx10") not found`)
 	}
 	got := ExposedCommands(def)
-	want := []string{"set_freq", "set_mode", "set_vfo"}
+	want := []string{"set_freq", "set_mode", "set_vfo", "band_up", "band_down", "set_band"}
 	if len(got) != len(want) {
 		t.Fatalf("ExposedCommands(ftdx10) = %v, want %v", got, want)
 	}

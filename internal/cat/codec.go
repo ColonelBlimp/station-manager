@@ -38,6 +38,12 @@ var ErrCommandNotExposed = stderr.New("cat: command not exposed")
 // value_mappings table (e.g. a mode literal the rig does not support).
 var ErrUnmappedValue = stderr.New("cat: value not in command map")
 
+// ErrMissingValue is returned (wrapped) by EncodeCommand when a value-bearing
+// command (one with a %s verb, value_map, or pad) is called with an empty
+// value. Valueless commands (e.g. band_up = "BU;") are exempt — they emit
+// their template verbatim.
+var ErrMissingValue = stderr.New("cat: command requires a value")
+
 // Decode parses one framed CAT line (terminator already stripped by the
 // serial reader) against the given rig definition and returns a tag map
 // of extracted fields. Behaviour matches v1's lineProcessor + lookup

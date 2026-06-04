@@ -47,11 +47,16 @@ func ExposedCommands(def RigDefinition) []string {
 // string is the universal carrier and every transform is string -> string;
 // the data fields on Command, not Go code, describe each command's shape.
 //
+// A command with no value_map, no pad, and no %s verb (e.g. band_up = "BU;")
+// is valueless — it emits its template verbatim and ignores value. Any other
+// command requires a non-empty value.
+//
 // Errors (each wraps a sentinel for errors.Is):
 //
 //   - ErrUnknownCommand    — no command with this name in the rigdef
 //   - ErrCommandNotExposed — command exists but is not reachable externally
 //   - ErrUnmappedValue     — ValueMap is set but value is not in its table
+//   - ErrMissingValue      — a value-bearing command was called with no value
 //
 // Range and width validation of value (e.g. a frequency within band) is the
 // command endpoint's responsibility; the codec stays permissive.
@@ -66,6 +71,17 @@ func EncodeCommand(def RigDefinition, name, value string) ([]byte, error) {
 		return nil, errors.New(op).WithErr(ErrCommandNotExposed).WithMsgf("command %q is not exposed", name)
 	}
 
+	// Valueless command — no value_map, no pad, no fmt verb (e.g. band_up =
+	// "BU;"). Emit the template verbatim and ignore any value.
+	if c.ValueMap == "" && c.Pad == 0 && !strings.Contains(c.Cmd, "%") {
+		return Encode(def, name)
+	}
+
+	// Value-bearing command — a value is required.
+	if value == "" {
+		return nil, errors.New(op).WithErr(ErrMissingValue).WithMsgf("command %q requires a value", name)
+	}
+
 	v := value
 	if c.ValueMap != "" {
 		code, ok := valueCode(def, c.ValueMap, v)
@@ -77,12 +93,6 @@ func EncodeCommand(def RigDefinition, name, value string) ([]byte, error) {
 	}
 	if c.Pad > 0 {
 		v = leftZeroPad(v, c.Pad)
-	}
-
-	// A command with no value semantics (no map, no pad, empty value) is a
-	// bare template — emit it verbatim rather than feeding fmt an unused arg.
-	if v == "" && c.ValueMap == "" && c.Pad == 0 {
-		return Encode(def, name)
 	}
 	return Encode(def, name, v)
 }

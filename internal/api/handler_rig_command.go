@@ -102,9 +102,9 @@ func (s *Server) writeRigCommandError(w http.ResponseWriter, op errors.Op, err e
 	case stderr.Is(err, cat.ErrUnknownCommand), stderr.Is(err, cat.ErrCommandNotExposed):
 		s.writeError(w, http.StatusBadRequest, "rig_unsupported_command",
 			"rig does not support a requested command", op)
-	case stderr.Is(err, cat.ErrUnmappedValue):
+	case stderr.Is(err, cat.ErrUnmappedValue), stderr.Is(err, cat.ErrMissingValue):
 		s.writeError(w, http.StatusBadRequest, "rig_invalid_value",
-			"a command value is not valid for the rig", op)
+			"a command value is missing or not valid for the rig", op)
 	case stderr.Is(err, bridge.ErrRigNotConnected):
 		s.writeError(w, http.StatusServiceUnavailable, "rig_not_connected",
 			"no rig is currently connected", op)
@@ -114,12 +114,15 @@ func (s *Server) writeRigCommandError(w http.ResponseWriter, op errors.Op, err e
 }
 
 // scalarToString renders a decoded JSON scalar to the string EncodeCommand
-// expects. JSON numbers decode to float64; rig frequencies are integers well
-// inside float64's exact range, so the conversion is lossless and emits no
-// decimal point. Objects, arrays, null, and bool are rejected — no current op
-// needs them.
+// expects. A missing/null value becomes "" — valueless ops (band_up) accept it,
+// while value-bearing ops reject it downstream (ErrMissingValue). JSON numbers
+// decode to float64; rig frequencies are integers well inside float64's exact
+// range, so the conversion is lossless and emits no decimal point. Objects,
+// arrays, and bool are rejected — no current op needs them.
 func scalarToString(v any) (string, bool) {
 	switch x := v.(type) {
+	case nil:
+		return "", true
 	case string:
 		return x, true
 	case float64:

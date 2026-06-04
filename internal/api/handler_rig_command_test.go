@@ -50,6 +50,7 @@ func TestHandleRigCommand_Validation(t *testing.T) {
 		{"unknown op", `{"op":"frobnicate","value":"1"}`, http.StatusBadRequest, "rig_unsupported_command"},
 		{"not exposed", `{"op":"PLAYBACK","value":"5"}`, http.StatusBadRequest, "rig_unsupported_command"},
 		{"unmapped mode", `{"op":"set_mode","value":"NOPE"}`, http.StatusBadRequest, "rig_invalid_value"},
+		{"missing value for value-bearing op", `{"op":"set_freq"}`, http.StatusBadRequest, "rig_invalid_value"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,6 +79,7 @@ func TestHandleRigCommand_NoRig(t *testing.T) {
 	cases := []struct{ name, body string }{
 		{"set_freq numeric", `{"op":"set_freq","value":14074000}`},
 		{"set_mode string", `{"op":"set_mode","value":"DATA-U"}`},
+		{"band_up valueless (no value field)", `{"op":"band_up"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

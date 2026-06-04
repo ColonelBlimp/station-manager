@@ -27,7 +27,7 @@
     import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
     import { callsignStack } from '../../states/callsignStack.svelte';
-    import { swapVfo } from '../../actions/rigControl';
+    import { swapVfo, bandUp, bandDown, selectBand } from '../../actions/rigControl';
     import TimerControls from '../components/TimerControls.svelte';
 
     /*
@@ -614,6 +614,23 @@
         browser's native shift-select-line scroll from firing
         alongside the pop.
     */
+    // Ctrl+Shift+<digit> → direct band jump (Firefox grabs Alt+digit for tabs,
+    // so the band family lives on Ctrl). Keyed by physical key code (e.code)
+    // because Shift+digit yields a symbol (!@#…), not the digit. 60m (BS 02) is
+    // omitted here — reached via band-step.
+    const bandByDigit: Record<string, string> = {
+        Digit1: '160m',
+        Digit2: '80m',
+        Digit3: '40m',
+        Digit4: '30m',
+        Digit5: '20m',
+        Digit6: '17m',
+        Digit7: '15m',
+        Digit8: '12m',
+        Digit9: '10m',
+        Digit0: '6m',
+    };
+
     function handleKeydown(e: KeyboardEvent): void {
         if (qsoEditState.open) return;
 
@@ -667,6 +684,28 @@
             // VfoBox: local manualState swap when CAT is off, set_vfo to the
             // rig when CAT is live + capable, silent no-op otherwise (ADR 0007).
             swapVfo();
+            return;
+        }
+        // Band up / down — step the rig through its bands (Ctrl+] / Ctrl+[).
+        // Native BU0;/BD0; (main band) with band-stack recall; CAT-live +
+        // capable only. Alt+digit is tab-switch in Firefox, so the rig-control
+        // family lives on Ctrl (ADR 0007).
+        if (e.ctrlKey && e.key === ']') {
+            e.preventDefault();
+            bandUp();
+            return;
+        }
+        if (e.ctrlKey && e.key === '[') {
+            e.preventDefault();
+            bandDown();
+            return;
+        }
+        // Direct band jump — Ctrl+Shift+<digit>. Match e.code (physical key),
+        // since Shift+digit is a symbol, not the digit. CAT-live + capable only.
+        if (e.ctrlKey && e.shiftKey && bandByDigit[e.code]) {
+            e.preventDefault();
+            selectBand(bandByDigit[e.code]);
+            return;
         }
     }
 </script>

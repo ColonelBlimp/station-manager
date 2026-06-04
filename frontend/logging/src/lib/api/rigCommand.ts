@@ -30,20 +30,22 @@ interface DaemonError {
 
 /**
  * POST a single semantic rig op to the daemon. `value` is a JSON scalar — a
- * number for set_freq, a string for set_mode / set_vfo — passed through
- * verbatim (the daemon renders it to the wire string). Returns 'ok' on the
- * daemon's 202 Accepted; the new rig state arrives over the SSE stream, not
- * in this response.
+ * number for set_freq, a string for set_mode / set_vfo — or omitted entirely
+ * for valueless ops (band_up / band_down). Passed through verbatim (the daemon
+ * renders it to the wire string). Returns 'ok' on the daemon's 202 Accepted;
+ * the new rig state arrives over the SSE stream, not in this response.
  */
 export async function sendRigCommand(
     op: string,
-    value: string | number,
+    value?: string | number,
     signal?: AbortSignal
 ): Promise<RigCommandOutcome> {
+    const payload: { op: string; value?: string | number } =
+        value === undefined ? { op } : { op, value };
     const fetched = await safeFetch('/v1/rig/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ op, value }),
+        body: JSON.stringify(payload),
         signal,
     });
     if (!fetched.ok) {

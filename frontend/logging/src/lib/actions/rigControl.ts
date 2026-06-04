@@ -43,7 +43,40 @@ export function swapVfo(): void {
     selectVfo(displayedState.selectedVfo === 'A' ? 'B' : 'A');
 }
 
-async function driveRig(op: string, value: string): Promise<void> {
+/**
+ * Step the rig up/down one band (`BU0;` / `BD0;`) — the Ctrl+] / Ctrl+[ "run
+ * through the bands" sweep. The rig walks its band-stack registers (restoring
+ * each band's last freq + mode), and the resulting `FA` push updates the SPA's
+ * displayed band. Live-only and capability-gated: band-stepping has no meaning
+ * with no rig (manualState has no band concept), so it no-ops when CAT is off
+ * or the rig lacks the op.
+ */
+export function bandUp(): void {
+    stepBand('band_up');
+}
+
+export function bandDown(): void {
+    stepBand('band_down');
+}
+
+function stepBand(op: 'band_up' | 'band_down'): void {
+    if (!displayedState.isLive) return;
+    if (!configState.bridge.ops.includes(op)) return;
+    void driveRig(op);
+}
+
+/**
+ * Jump straight to a band by name (`set_band` → `BS<code>;`) — the Ctrl+Shift+
+ * digit shortcuts. The rig restores that band's stack memory; the new band
+ * shows via the `FA` push. Live-only and capability-gated, like band-step.
+ */
+export function selectBand(band: string): void {
+    if (!displayedState.isLive) return;
+    if (!configState.bridge.ops.includes('set_band')) return;
+    void driveRig('set_band', band);
+}
+
+async function driveRig(op: string, value?: string): Promise<void> {
     const outcome = await sendRigCommand(op, value);
     if (outcome.kind !== 'ok') {
         toasts.error(`Rig command failed: ${outcome.message}`);
