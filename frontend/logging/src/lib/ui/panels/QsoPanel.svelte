@@ -4,7 +4,6 @@
     import Rst from '../components/Rst.svelte';
     import Mode from '../components/Mode.svelte';
     import Vfos from '../components/Vfos.svelte';
-    import TuneButton from '../components/TuneButton.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
