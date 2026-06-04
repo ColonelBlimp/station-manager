@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -44,6 +45,27 @@ func TestHandleGetConfig_PreSetup(t *testing.T) {
 	}
 	if resp.LoggingStation.StationCallsign != "" {
 		t.Errorf("Pre-setup station_callsign should be empty; got %q", resp.LoggingStation.StationCallsign)
+	}
+}
+
+// TestBridgeInfoFor_Ops pins the capability wiring: a configured FTdx10 driver
+// surfaces its exposed ops in BridgeInfo so the SPA can gate rig-control
+// surfaces (ADR 0026).
+func TestBridgeInfoFor_Ops(t *testing.T) {
+	cfg := config.DefaultConfig(t.TempDir())
+	cfg.Bridge.Enabled = true
+	cfg.Bridge.Cat.Driver = "yaesu-ftdx10"
+
+	info := bridgeInfoFor(cfg)
+
+	want := []string{"set_freq", "set_mode"}
+	if len(info.Ops) != len(want) {
+		t.Fatalf("BridgeInfo.Ops = %v, want %v", info.Ops, want)
+	}
+	for i := range want {
+		if info.Ops[i] != want[i] {
+			t.Errorf("Ops[%d] = %q, want %q", i, info.Ops[i], want[i])
+		}
 	}
 }
 

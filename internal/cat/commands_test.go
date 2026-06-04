@@ -103,3 +103,32 @@ func TestEncodeCommandBijection(t *testing.T) {
 		}
 	}
 }
+
+// TestExposedCommands pins the advertised op vocabulary: the FTdx10 exposes
+// exactly set_freq + set_mode (rigdef order), while the FT-710 — which has no
+// inbound command path yet — exposes nothing, proving the default-deny of the
+// Exposed flag.
+func TestExposedCommands(t *testing.T) {
+	def, ok := Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal(`Lookup("yaesu-ftdx10") not found`)
+	}
+	got := ExposedCommands(def)
+	want := []string{"set_freq", "set_mode"}
+	if len(got) != len(want) {
+		t.Fatalf("ExposedCommands(ftdx10) = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ExposedCommands[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	ft710, ok := Lookup("yaesu-ft710")
+	if !ok {
+		t.Fatal(`Lookup("yaesu-ft710") not found`)
+	}
+	if ops := ExposedCommands(ft710); len(ops) != 0 {
+		t.Errorf("ExposedCommands(ft710) = %v, want empty (no exposed commands)", ops)
+	}
+}

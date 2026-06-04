@@ -19,6 +19,22 @@ func HasCommand(def RigDefinition, name string) bool {
 	return ok
 }
 
+// ExposedCommands returns the names of the rigdef's externally-reachable
+// commands (Exposed == true), in rigdef order. This is the rig's advertised
+// op vocabulary: GET /v1/config surfaces it in BridgeInfo so the SPA enables
+// only the controls the connected rig actually offers (ADR 0026). The Exposed
+// flag is the single source of truth for both this list and EncodeCommand's
+// gate, so a rigdef edit can add an op with no Go change.
+func ExposedCommands(def RigDefinition) []string {
+	var out []string
+	for _, c := range def.Commands {
+		if c.Exposed {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
 // EncodeCommand produces the wire bytes for an externally-reachable command
 // (ADR 0026 inbound path). Where Encode is the low-level template filler,
 // EncodeCommand enforces the command-path contract: the command must be
