@@ -35,13 +35,13 @@
         (transmitting) state goes solid red and pulses so a keyed carrier is
         unmistakable.
     -->
-    <div class="flex flex-col justify-end pb-1">
+    <div class="flex flex-col justify-end">
         <button
             type="button"
             onclick={toggleTune}
             disabled={!enabled}
             aria-pressed={active}
-            class="h-9 px-3 rounded text-sm font-medium border cursor-pointer transition-colors
+            class="h-6 w-20 pb-0.5 rounded text-sm font-medium border cursor-pointer transition-colors
                 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-default disabled:hover:bg-transparent
                 {active
                 ? 'border-red-600 bg-red-600 text-white hover:bg-red-700 animate-pulse'

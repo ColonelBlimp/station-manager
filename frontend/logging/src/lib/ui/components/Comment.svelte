@@ -16,6 +16,8 @@
     their first comment), so it never opens an empty popover.
 -->
 <script lang="ts">
+    import TuneButton from "./TuneButton.svelte";
+
     interface Props {
         id: string;
         label: string;
@@ -98,7 +100,7 @@
             type="button"
             disabled={disabled || history.length === 0}
             onclick={() => (open = !open)}
-            class="ml-1 text-gray-500 hover:text-gray-700 cursor-pointer leading-none px-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="ml-1 mr-4 text-gray-500 hover:text-gray-700 cursor-pointer leading-none px-1 disabled:opacity-50 disabled:cursor-not-allowed"
             aria-haspopup="menu"
             aria-expanded={open}
             aria-controls={listId}
@@ -120,6 +122,7 @@
                 />
             </svg>
         </button>
+        <TuneButton />
     </div>
     <div class="relative mt-1">
         <textarea

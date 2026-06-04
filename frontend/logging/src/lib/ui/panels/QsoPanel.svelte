@@ -744,7 +744,6 @@
             disabled={!displayedState.editable}
         />
         <Vfos />
-        <TuneButton />
     </div>
     <div class="flex flex-row space-x-2 mt-2">
         <TextInput id="name" label="Name" bind:value={qsoDraft.name} />
@@ -755,8 +754,8 @@
             bind:value={qsoDraft.comment}
             history={commentHistory.items}
             onpick={(text: string) => {
-                qsoDraft.comment = text;
-            }}
+            qsoDraft.comment = text;
+        }}
         />
     </div>
     <div class="flex flex-row space-x-2 -mt-2">
