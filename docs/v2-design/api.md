@@ -542,7 +542,7 @@ paths.
       "ituz": "27"
     },
     "country_source": "country_table",
-    "station_source": "qrz"
+    "station_source": "qrzlookupservice"
   }
   ```
 
@@ -553,9 +553,15 @@ paths.
   - `country_source`: `"country_table"` (cache hit, fresh or
     stale) | `"hamnut"` (cold-miss upstream call) | `"none"` (no
     data — hamnut down or disabled, no cache row).
-  - `station_source`: `"contacted_station"` (cache hit) |
-    `"qrz"` / `"hamqth"` / `"qrzcq"` (the chain provider that
-    won) | `"none"` (no chain provider had a record).
+  - `station_source`: `"contacted_station"` (cache hit) | the winning
+    chain provider's service name — today the DI bean name, e.g.
+    `"qrzlookupservice"` (review 2026-06-04 L2) | `"none"` (no chain
+    provider had a record).
+
+  When a layer's source is `"none"`, its `country` / `station` object is
+  **omitted entirely** from the response rather than emitted as an empty `{}`
+  (review 2026-06-04 H2). A present layer carries its `last_refreshed_at`,
+  including on a cold-miss fetch.
 
   See `docs/v2-design/enrichment.md` for the read-state matrix
   (9-cell cold/stale/fresh grid), filter+merge sequencing, and

@@ -1051,6 +1051,28 @@ func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Co
 // the original operator-typed value as historical truth, so this is
 // not a data-loss concern.
 func (s *Service) UpsertContactedStationWithContext(ctx context.Context, station types.ContactedStation) error {
+	return s.writeContactedStation(ctx, station, true)
+}
+
+// ReplaceContactedStationWithContext writes a callsign-provider refresh result
+// to contacted_station, OVERWRITING every column from the incoming station and
+// clearing any field the incoming leaves empty. This is the right policy for a
+// provider refresh — force-refresh and the async stale-refresh — where the
+// upstream is now authoritative, so a field that disappeared upstream must
+// disappear from the cache too (review 2026-06-04 H1). Contrast
+// UpsertContactedStationWithContext's non-empty-wins merge, which is correct
+// only for the QSO-submit partial snapshot. last_refreshed_at is stamped on
+// every write and the existing PK is preserved.
+func (s *Service) ReplaceContactedStationWithContext(ctx context.Context, station types.ContactedStation) error {
+	return s.writeContactedStation(ctx, station, false)
+}
+
+// writeContactedStation is the shared insert-or-update for contacted_station.
+// On an existing row, merge=true field-merges (non-empty incoming wins, empty
+// incoming keeps existing — the QSO-submit snapshot policy) while merge=false
+// replaces the row wholesale (empty incoming fields clear — the provider-
+// refresh policy). A cold insert is identical for both modes.
+func (s *Service) writeContactedStation(ctx context.Context, station types.ContactedStation, merge bool) error {
 	const op errors.Op = "sqlite.Service.UpsertContactedStationWithContext"
 	if err := checkService(op, s); err != nil {
 		return err
@@ -1072,13 +1094,17 @@ func (s *Service) UpsertContactedStationWithContext(ctx context.Context, station
 	existing, ferr := s.FetchContactedStationByCallsignWithContext(ctx, call)
 	switch {
 	case ferr == nil:
-		// Merge — non-empty new fields overwrite, empty new fields keep
-		// existing values. Preserve PK from existing row.
-		merged := mergeContactedStation(existing, station)
-		merged.CSID = existing.CSID
-		merged.LastRefreshedAt = time.Now()
+		// Existing row. merge → non-empty-wins field merge; replace → the
+		// incoming station overwrites all columns (empty fields clear).
+		// Preserve PK from the existing row either way.
+		row := station
+		if merge {
+			row = mergeContactedStation(existing, station)
+		}
+		row.CSID = existing.CSID
+		row.LastRefreshedAt = time.Now()
 
-		model, mErr := adapters.ContactedStationTypeToModel(merged)
+		model, mErr := adapters.ContactedStationTypeToModel(row)
 		if mErr != nil {
 			return errors.New(op).WithErr(mErr)
 		}
@@ -1089,7 +1115,7 @@ func (s *Service) UpsertContactedStationWithContext(ctx context.Context, station
 		return nil
 
 	case stderr.Is(ferr, errors.ErrNotFound):
-		// Cold insert — no merge needed.
+		// Cold insert — no existing row to merge or replace.
 		station.LastRefreshedAt = time.Now()
 		model, mErr := adapters.ContactedStationTypeToModel(station)
 		if mErr != nil {

@@ -2,6 +2,7 @@ package lookup_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -135,9 +136,25 @@ func TestIsEmpty(t *testing.T) {
 		{"name set", types.ContactedStation{Call: "M0CMC", Name: "Marc"}, false},
 		{"qth set", types.ContactedStation{QTH: "Lilongwe"}, false},
 		{"grid set", types.ContactedStation{Gridsquare: "KH53"}, false},
-		// country/cqz/ituz/dxcc don't count — orchestrator filters them.
+		// country/cont/cqz/ituz/dxcc don't count — orchestrator filters them.
 		{"only country (gets stripped)", types.ContactedStation{Country: "Malawi"}, true},
 		{"only cqz (gets stripped)", types.ContactedStation{CQZ: "37"}, true},
+		{"only ituz (gets stripped)", types.ContactedStation{ITUZ: "27"}, true},
+		{"only dxcc (gets stripped)", types.ContactedStation{DXCC: "223"}, true},
+		{"only cont (gets stripped)", types.ContactedStation{Cont: "EU"}, true},
+		// storage metadata never counts as provider data.
+		{"only csid (metadata)", types.ContactedStation{CSID: 42}, true},
+		// L1 (review 2026-06-04): all station-provider-owned fields now count,
+		// so a provider returning only one of these is NOT treated as empty.
+		{"lat set", types.ContactedStation{Lat: "52.5"}, false},
+		{"lon set", types.ContactedStation{Lon: "-1.9"}, false},
+		{"altitude set", types.ContactedStation{Altitude: "100"}, false},
+		{"age set", types.ContactedStation{Age: "45"}, false},
+		{"eq_call set", types.ContactedStation{EqCall: "M0XYZ"}, false},
+		{"iota set", types.ContactedStation{Iota: "EU-005"}, false},
+		{"sig set", types.ContactedStation{Sig: "POTA"}, false},
+		{"sig_info set", types.ContactedStation{SigInfo: "GB-0001"}, false},
+		{"wwff set", types.ContactedStation{WwffRef: "GFF-1234"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -185,6 +202,118 @@ func TestEnrich_LowercaseInput_HitsCanonicalRow(t *testing.T) {
 	}
 	if qrz.calls != 0 {
 		t.Errorf("station provider called %d times, want 0 (cache hit on the canonical row, no upstream)", qrz.calls)
+	}
+}
+
+// ----- H1: force/async refresh replaces the row (clears emptied fields) -----
+
+// TestEnrichRefresh_ReplacesRow_ClearsEmptiedField pins the H1 fix: a
+// force-refresh whose provider no longer returns a field must CLEAR that field
+// in the cache, not retain the stale value via a merge (review 2026-06-04 H1).
+func TestEnrichRefresh_ReplacesRow_ClearsEmptiedField(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertContactedStationWithContext(context.Background(), types.ContactedStation{
+		Call:  "M0CMC",
+		Name:  "Marc",
+		QTH:   "Lilongwe",
+		Email: "old@example.com",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// The refresh provider no longer returns an email (it went away upstream).
+	qrz := &stubCallsignProvider{name: "qrz", result: types.ContactedStation{
+		Call: "M0CMC",
+		Name: "Marc Veary",
+		QTH:  "Lilongwe",
+	}}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Chain:      []lookup.CallsignProvider{qrz},
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &syncRefresher{},
+	}
+
+	got := o.EnrichRefresh(context.Background(), "M0CMC")
+	if got.Station.Email != "" {
+		t.Errorf("Result.Station.Email = %q, want empty after force-refresh", got.Station.Email)
+	}
+
+	stored, err := db.FetchContactedStationByCallsignWithContext(context.Background(), "M0CMC")
+	if err != nil {
+		t.Fatalf("refetch: %v", err)
+	}
+	if stored.Email != "" {
+		t.Errorf("stored Email = %q, want cleared (replace, not merge)", stored.Email)
+	}
+	if stored.Name != "Marc Veary" {
+		t.Errorf("stored Name = %q, want the refresh value", stored.Name)
+	}
+}
+
+// ----- H2: result JSON shape + cold-miss timestamp -----
+
+// TestResult_MarshalJSON_OmitsLayersOnSourceNone pins the H2 fix: a no-data
+// layer must be absent from the JSON, not serialized as an empty object.
+func TestResult_MarshalJSON_OmitsLayersOnSourceNone(t *testing.T) {
+	r := lookup.Result{Callsign: "M0CMC", CountrySource: lookup.SourceNone, StationSource: lookup.SourceNone}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	if strings.Contains(s, `"country"`) {
+		t.Errorf("country object present on source=none: %s", s)
+	}
+	if strings.Contains(s, `"station"`) {
+		t.Errorf("station object present on source=none: %s", s)
+	}
+	if !strings.Contains(s, `"country_source":"none"`) || !strings.Contains(s, `"callsign":"M0CMC"`) {
+		t.Errorf("scalars missing from result JSON: %s", s)
+	}
+}
+
+// TestResult_MarshalJSON_IncludesPresentLayer confirms a populated layer still
+// serializes (only the source=none layers are dropped).
+func TestResult_MarshalJSON_IncludesPresentLayer(t *testing.T) {
+	r := lookup.Result{
+		Callsign:      "M0CMC",
+		Country:       types.Country{Name: "England"},
+		CountrySource: lookup.SourceHamnut,
+		StationSource: lookup.SourceNone,
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"country"`) || !strings.Contains(s, "England") {
+		t.Errorf("present country layer should serialize: %s", s)
+	}
+	if strings.Contains(s, `"station"`) {
+		t.Errorf("station should be omitted (source=none): %s", s)
+	}
+}
+
+// TestEnrich_ColdMiss_CarriesLastRefreshedAt pins the H2 cold-miss-timestamp
+// fix: a freshly fetched layer carries a real last_refreshed_at, not the zero
+// value, so the response matches the cache-hit path.
+func TestEnrich_ColdMiss_CarriesLastRefreshedAt(t *testing.T) {
+	db := newTestSqlite(t)
+	hamnut := &stubCountryProvider{name: "hamnut", result: types.Country{Name: "England", Prefix: "M"}}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    hamnut,
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &syncRefresher{},
+	}
+	got := o.Enrich(context.Background(), "M0CMC")
+	if got.CountrySource != lookup.SourceHamnut {
+		t.Fatalf("expected cold-miss hamnut hit, got %q", got.CountrySource)
+	}
+	if got.Country.LastRefreshedAt.IsZero() {
+		t.Error("cold-miss country should carry a non-zero LastRefreshedAt (H2)")
 	}
 }
 

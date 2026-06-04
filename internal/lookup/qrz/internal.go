@@ -3,6 +3,7 @@ package qrz
 import (
 	"context"
 	"encoding/xml"
+	stderr "errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,14 +17,11 @@ import (
 // configured username/password and stores it on the Service for
 // subsequent lookup calls.
 //
-// Carries forward v1's logic. Limitation: session keys can expire
-// (typically after 24 hours of inactivity); v1 has no refresh path
-// and v2 inherits that gap. If the daemon runs long enough to hit
-// expiry, the next Lookup will surface a session error from QRZ.com
-// — the orchestrator's implicit-fall-through (ADR 0017 #7) treats it
-// as a transport-style failure and falls through to the local DB.
-// If this becomes a real problem, add session refresh on
-// authentication-style errors as a separate task.
+// Carries forward v1's logic. Session keys can expire (typically after
+// 24 hours of inactivity); LookupWithContext now detects an expired-session
+// error (errSessionExpired) and calls this again to re-authenticate, then
+// retries the lookup once (review 2026-06-04 M1) — so a long-running daemon
+// recovers without a restart. Also called once at startup from Initialize.
 //
 // ctx is the daemon-lifecycle context (propagated from Initialize).
 // Used by http.NewRequestWithContext so daemon shutdown cancels a
@@ -79,8 +77,26 @@ func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 		return errors.New(op).WithMsg("QRZ.com returned missing session key")
 	}
 
-	s.sessionKey = db.Session.Key
+	s.setSessionKey(db.Session.Key)
 	return nil
+}
+
+// errSessionExpired marks a QRZ Session.Error indicating the session key is no
+// longer valid (expired / invalid / timed out) — distinct from a transport
+// failure or a genuine "not found". LookupWithContext re-authenticates once on
+// this error and retries the lookup (review 2026-06-04 M1).
+var errSessionExpired = stderr.New("qrz: session expired")
+
+// isSessionExpiredError reports whether a lowercased QRZ Session.Error string
+// indicates an expired/invalid session key. QRZ phrases this variously
+// ("Session Timeout", "Invalid session key", "Session does not exist", "Not
+// logged in"); match the stable substrings.
+func isSessionExpiredError(lower string) bool {
+	return strings.Contains(lower, "session timeout") ||
+		strings.Contains(lower, "invalid session") ||
+		strings.Contains(lower, "session does not exist") ||
+		strings.Contains(lower, "not logged in") ||
+		strings.Contains(lower, "session expired")
 }
 
 // unmarshalResponse decodes the QRZ XML body into a
@@ -106,8 +122,12 @@ func (s *Service) unmarshalResponse(body []byte) (types.ContactedStation, error)
 	}
 
 	if sessionErr := strings.TrimSpace(db.Session.Error); sessionErr != "" {
-		if strings.Contains(strings.ToLower(sessionErr), "not found") {
+		lower := strings.ToLower(sessionErr)
+		if strings.Contains(lower, "not found") {
 			return station, errors.New(op).WithErr(errors.ErrNotFound).WithMsg(sessionErr)
+		}
+		if isSessionExpiredError(lower) {
+			return station, errors.New(op).WithErr(errSessionExpired).WithMsg(sessionErr)
 		}
 		return station, errors.New(op).WithMsg(sessionErr)
 	}

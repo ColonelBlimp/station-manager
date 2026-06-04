@@ -62,6 +62,9 @@ type Service struct {
 	isInitialized atomic.Bool
 	initOnce      sync.Once
 
+	// sessionMu guards sessionKey, written by Initialize and by the
+	// mid-session re-auth path (review 2026-06-04 M1) and read by every lookup.
+	sessionMu  sync.Mutex
 	sessionKey string
 }
 
@@ -219,12 +222,43 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 		return types.ContactedStation{}, errors.New(op).WithMsg("callsign cannot be empty")
 	}
 
+	station, err := s.lookupOnce(ctx, callsign)
+	if err != nil && stderr.Is(err, errSessionExpired) {
+		// The session key expired mid-session. Re-authenticate once and retry
+		// the lookup once (review 2026-06-04 M1). No loop: a second expiry
+		// means credentials / QRZ are genuinely broken, not a stale key.
+		if rerr := s.requestAndSetSessionKey(ctx); rerr != nil {
+			s.LoggerService.WarnWith().Err(rerr).Msg("QRZ session re-auth failed after expiry")
+			return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("session expired and re-auth failed")
+		}
+		s.LoggerService.InfoWith().Msg("QRZ session re-authenticated after expiry; retrying lookup")
+		station, err = s.lookupOnce(ctx, callsign)
+	}
+	if err != nil {
+		// ErrNotFound bubbles up unchanged so the chain runner can branch —
+		// distinct from transport / parse / session failures, which the
+		// orchestrator also treats as "try next" but logs differently.
+		if stderr.Is(err, errors.ErrNotFound) {
+			return types.ContactedStation{}, err
+		}
+		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("lookup failed")
+	}
+	return station, nil
+}
+
+// lookupOnce performs a single QRZ query with the current session key and
+// decodes the response. ErrNotFound, errSessionExpired, and transport errors
+// all bubble (wrapped) so LookupWithContext can branch — notably re-auth on
+// errSessionExpired.
+func (s *Service) lookupOnce(ctx context.Context, callsign string) (types.ContactedStation, error) {
+	const op errors.Op = "qrz.Service.lookupOnce"
+
 	u, err := url.Parse(s.Config.URL)
 	if err != nil {
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("invalid QRZ base URL")
 	}
 	q := u.Query()
-	q.Set("s", s.sessionKey)
+	q.Set("s", s.getSessionKey())
 	q.Set("callsign", callsign)
 	q.Set("agent", s.UserAgent)
 	u.RawQuery = q.Encode()
@@ -253,16 +287,20 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("failed to read response body")
 	}
 
-	station, err := s.unmarshalResponse(body)
-	if err != nil {
-		// ErrNotFound bubbles up unchanged so the chain runner can
-		// branch — distinct from transport/parse failures, which the
-		// orchestrator also treats as "try next" but logs differently.
-		if stderr.Is(err, errors.ErrNotFound) {
-			return types.ContactedStation{}, err
-		}
-		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("failed to unmarshal response body")
-	}
+	return s.unmarshalResponse(body)
+}
 
-	return station, nil
+// getSessionKey / setSessionKey guard sessionKey for the concurrent read
+// (every lookup) vs write (Initialize + mid-session re-auth) — see sessionMu
+// (review 2026-06-04 M1).
+func (s *Service) getSessionKey() string {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	return s.sessionKey
+}
+
+func (s *Service) setSessionKey(key string) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	s.sessionKey = key
 }

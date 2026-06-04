@@ -139,6 +139,71 @@ func TestInitialize_SessionKeyFailureDisablesService(t *testing.T) {
 	}
 }
 
+// ---- session re-auth on expiry (M1) ----
+
+// TestLookupWithContext_SessionExpiry_ReAuthsAndRetries pins the M1 fix: an
+// expired-session error on a lookup triggers exactly one re-authentication and
+// one retry, which then succeeds.
+func TestLookupWithContext_SessionExpiry_ReAuthsAndRetries(t *testing.T) {
+	var lookups, sessions int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Query().Get("callsign") == "" {
+			// Re-auth request — carries username/password, no callsign.
+			sessions++
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><QRZDatabase><Session><Key>fresh-key</Key></Session></QRZDatabase>`))
+			return
+		}
+		lookups++
+		if lookups == 1 {
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><QRZDatabase><Session><Error>Invalid session key</Error></Session></QRZDatabase>`))
+			return
+		}
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><QRZDatabase><Callsign><call>M0CMC</call><fname>Marc</fname></Callsign></QRZDatabase>`))
+	}))
+	defer srv.Close()
+
+	s := initializedService(t, srv.URL, srv.Client())
+	st, err := s.LookupWithContext(context.Background(), "M0CMC")
+	if err != nil {
+		t.Fatalf("lookup after re-auth: %v", err)
+	}
+	if st.Call != "M0CMC" || st.Name != "Marc" {
+		t.Errorf("station = %+v, want Call=M0CMC Name=Marc", st)
+	}
+	if sessions != 1 {
+		t.Errorf("re-auth session fetches = %d, want 1", sessions)
+	}
+	if lookups != 2 {
+		t.Errorf("lookups = %d, want 2 (initial expiry + retry)", lookups)
+	}
+}
+
+// TestLookupWithContext_PersistentSessionExpiry_NoLoop pins that a session that
+// stays expired after re-auth yields an error rather than looping: the retry
+// happens exactly once.
+func TestLookupWithContext_PersistentSessionExpiry_NoLoop(t *testing.T) {
+	var lookups int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Query().Get("callsign") == "" {
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><QRZDatabase><Session><Key>k</Key></Session></QRZDatabase>`))
+			return
+		}
+		lookups++
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><QRZDatabase><Session><Error>Invalid session key</Error></Session></QRZDatabase>`))
+	}))
+	defer srv.Close()
+
+	s := initializedService(t, srv.URL, srv.Client())
+	if _, err := s.LookupWithContext(context.Background(), "M0CMC"); err == nil {
+		t.Fatal("expected an error on persistent session expiry")
+	}
+	if lookups != 2 {
+		t.Errorf("lookups = %d, want 2 (initial + one retry, no loop)", lookups)
+	}
+}
+
 // ---- Lookup happy path ----
 
 // TestInitialize_RespectsContextCancellation pins review-finding M4

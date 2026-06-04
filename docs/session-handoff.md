@@ -47,6 +47,25 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 131 (2026-06-04) — Code-review remediation, **Batch C** (`internal/lookup` + sqlite): the three decision-bearing fixes (H1/H2/M1). Shipped + tested green (incl. `-race`); not yet committed. **This closes the lookup review — all 8 findings done.**
+
+Operator: "go with your recommendations."
+
+- **H1.** New `ReplaceContactedStationWithContext` (shared `writeContactedStation(merge bool)` with the merge `Upsert`) overwrites all columns + clears emptied fields. The orchestrator's cold-miss/force-refresh write AND the async stale-refresh write use Replace; the QSO-submit snapshot keeps the merge. So a force-refresh that drops a field now clears it in the cache instead of retaining the stale value.
+- **H2.** Custom `Result.MarshalJSON` omits the country/station layer on `source=none` (chosen over pointer-ising the struct — same wire shape, no churn across the orchestrator tests). Cold-miss write timestamp reflected onto the returned layer so it carries `last_refreshed_at`.
+- **M1.** `unmarshalResponse` classifies an expired session (`errSessionExpired`); `LookupWithContext` re-auths once under a `sessionMu` guard + retries once (no loop). A long-running idle daemon now recovers QRZ without a restart.
+- Tests added for each; `go test ./internal/lookup/... ./internal/database/sqlite ./internal/api ./internal/qsoservice` + `-race` on qrz + vet/gofmt + SPA check all clean. Resolution recorded; `api.md` enrich response now documents the omit-on-`none` shape.
+
+**Review remediation COMPLETE** — Batches A (adif: H1/H2/M1/M2/L1) + B (lookup M2/M3/L3) + D (lookup L1/L2) + C (lookup H1/H2/M1) all landed and tested. Only the optional L2 DI-name-vs-public-label split remains as a future cleanup (not a defect). **Next:** operator review + commit; resume feature work (e.g. the tune button's HW validation, or `set_split`).
+
+### Session 130 (2026-06-04) — Code-review remediation, **Batch D** (`internal/lookup` + SPA + docs): two contract-hygiene fixes (L1/L2). Shipped + tested green; not yet committed.
+
+- **L1.** `lookup.IsEmpty` now counts every station-provider-owned field (added lat/lon/age/altitude/eq_call/iota/iota_island_id/sig/sig_info/wwff_ref), still excluding `Call` + the hamnut-owned country fields + storage metadata — so a future non-QRZ provider returning only one of those isn't treated as empty. `TestIsEmpty` table extended.
+- **L2 (cheap path).** Fixed the real type bug — the SPA's `country_source` union said `'cache'` but the daemon emits `'country_table'` — plus the lying docs: stale `api.md` `station_source` (`"qrz"` → `"qrzlookupservice"`), and the `Provider.Name()` doc + orchestrator Source comment (both claimed `Name()` returns "qrz"; it returns the DI service name). The full DI-name-vs-public-label split is deferred (the L2 "M" option — a decision).
+- `go test ./internal/lookup/...` + vet + gofmt + SPA check/lint/format all clean.
+
+**Remaining review work: Batch C only** — lookup **H1** (force-refresh + async-refresh replace-mode), **H2** (result-shape pointer/MarshalJSON + cold-miss timestamp), **M1** (QRZ session re-auth). Each needs a decision (three decisions; see the action plan). **Next:** those decisions, then Batch C.
+
 ### Session 129 (2026-06-04) — Code-review remediation, **Batch B** (`internal/lookup` + enrich handler): three decision-free fixes (M2/M3/L3). Shipped + tested green; not yet committed.
 
 - **M2.** `qrz.Service.Initialize` soft-disable now falls through to `isInitialized.Store(true)` (was an early `return`), so a soft-disabled QRZ reports the disabled sentinel from `LookupWithContext`, not "service is not initialized." (Latent today — `cmd/smd` skips disabled providers — matters once config-reload / manual-retry lands.)

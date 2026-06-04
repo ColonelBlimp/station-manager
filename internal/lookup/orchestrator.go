@@ -2,6 +2,7 @@ package lookup
 
 import (
 	"context"
+	"encoding/json"
 	stderrs "errors"
 	"fmt"
 	"strconv"
@@ -17,9 +18,10 @@ import (
 
 // Source values for the Result's per-layer source indicators (per
 // ADR 0017 #12). Callsign-class results carry the provider's Name()
-// directly (e.g., "qrz", "hamqth"); the country layer has a fixed
-// pair of constants because no provider object exists for the
-// cache-hit case.
+// directly — currently the DI service name (e.g. "qrzlookupservice",
+// review 2026-06-04 L2) — or SourceContactedTable on a station cache
+// hit; the country layer uses the fixed constants below because no
+// provider object exists for the cache-hit case.
 const (
 	// SourceNone — no data was available; either no row in the cache
 	// AND no provider returned data, or the provider chain was empty
@@ -59,6 +61,37 @@ type Result struct {
 	StationSource string                 `json:"station_source"`
 }
 
+// MarshalJSON omits the country / station layers entirely when their source is
+// SourceNone. Go's encoding/json does not treat a zero-value struct as empty,
+// so the value-typed fields above would otherwise serialize as `"country":{}`
+// / `"station":{}` on a no-data result — contradicting the SPA contract that a
+// failed/absent layer is "source=none with no object" (review 2026-06-04 H2).
+// A present layer (cache hit or provider hit) serializes as before, including
+// its last_refreshed_at.
+func (r Result) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Callsign      string                  `json:"callsign"`
+		Country       *types.Country          `json:"country,omitempty"`
+		Station       *types.ContactedStation `json:"station,omitempty"`
+		CountrySource string                  `json:"country_source"`
+		StationSource string                  `json:"station_source"`
+	}
+	w := wire{
+		Callsign:      r.Callsign,
+		CountrySource: r.CountrySource,
+		StationSource: r.StationSource,
+	}
+	if r.CountrySource != SourceNone {
+		c := r.Country
+		w.Country = &c
+	}
+	if r.StationSource != SourceNone {
+		st := r.Station
+		w.Station = &st
+	}
+	return json.Marshal(w)
+}
+
 // Orchestrator implements the ADR 0017 read pipeline. Single entry
 // point (Enrich) plus internal helpers that branch on the three
 // cache states (cold / stale / fresh) and merge the country and
@@ -78,12 +111,20 @@ type Orchestrator struct {
 	Logger     *logging.Service
 }
 
-// IsEmpty returns true when a callsign-class provider response had
-// no substantive data — Call alone (the lookup input echoed back)
-// doesn't count as data, and country / CQ / ITU / DXCC fields are
-// hamnut-exclusive (filtered out by FilterToCallsignFields), so they
-// don't count either. The chain runner uses this to decide whether
-// to advance to the next provider per ADR 0017 #8.
+// IsEmpty returns true when a callsign-class provider response had no
+// substantive station data. It tests every station-provider-owned field, and
+// deliberately ignores three groups:
+//
+//   - Call — the lookup input echoed back, not data;
+//   - Country / Cont / CQZ / ITUZ / DXCC — hamnut-exclusive, stripped by
+//     FilterToCallsignFields, so they never count as station data;
+//   - CSID / LastRefreshedAt — storage metadata, not provider data.
+//
+// The chain runner uses this to decide whether to advance to the next provider
+// per ADR 0017 #8. The field set was widened (review 2026-06-04 L1) beyond the
+// original name/QTH/grid/email/web/address/contacted-op so a future provider
+// that returns only e.g. lat/lon, IOTA, or a WWFF reference isn't mistaken for
+// an empty response.
 func IsEmpty(cs types.ContactedStation) bool {
 	return strings.TrimSpace(cs.Name) == "" &&
 		strings.TrimSpace(cs.QTH) == "" &&
@@ -91,7 +132,17 @@ func IsEmpty(cs types.ContactedStation) bool {
 		strings.TrimSpace(cs.Email) == "" &&
 		strings.TrimSpace(cs.Web) == "" &&
 		strings.TrimSpace(cs.Address) == "" &&
-		strings.TrimSpace(cs.ContactedOp) == ""
+		strings.TrimSpace(cs.ContactedOp) == "" &&
+		strings.TrimSpace(cs.Age) == "" &&
+		strings.TrimSpace(cs.Altitude) == "" &&
+		strings.TrimSpace(cs.EqCall) == "" &&
+		strings.TrimSpace(cs.Iota) == "" &&
+		strings.TrimSpace(cs.IotaIslandId) == "" &&
+		strings.TrimSpace(cs.Lat) == "" &&
+		strings.TrimSpace(cs.Lon) == "" &&
+		strings.TrimSpace(cs.Sig) == "" &&
+		strings.TrimSpace(cs.SigInfo) == "" &&
+		strings.TrimSpace(cs.WwffRef) == ""
 }
 
 // MergeStationFromCountry copies the hamnut-truth country fields
@@ -240,16 +291,24 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 
 	// Synchronous write-backs for cold misses. Per ADR 0017 #6, cold
 	// miss is the path that pays the upstream-call latency AND the
-	// write back; stale and fresh hits don't write here.
+	// write back; stale and fresh hits don't write here. `now` is also
+	// reflected onto the returned data so a cold-miss response carries
+	// last_refreshed_at, matching the cache-hit path (review 2026-06-04 H2).
+	now := time.Now()
 	if c.coldMiss && c.data.Prefix != "" {
 		if werr := o.DB.UpsertCountryWithContext(ctx, c.data); werr != nil {
 			o.warn("country upsert failed", werr)
 		}
+		c.data.LastRefreshedAt = now
 	}
 	if s.coldMiss && !IsEmpty(s.data) {
-		if werr := o.DB.UpsertContactedStationWithContext(ctx, s.data); werr != nil {
-			o.warn("contacted_station upsert failed", werr)
+		// Replace, not merge: a provider refresh (force-refresh, or the cold
+		// miss itself) is authoritative, so a field that's empty upstream must
+		// clear in the cache rather than retain a stale prior value (H1).
+		if werr := o.DB.ReplaceContactedStationWithContext(ctx, s.data); werr != nil {
+			o.warn("contacted_station replace failed", werr)
 		}
+		s.data.LastRefreshedAt = now
 	}
 
 	// Async refreshes for stale hits. Country refresh runs hamnut
@@ -271,7 +330,7 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// neither is what the SPA needs to display "what time is it
 	// where the contacted station lives, right now." TimeOffset is
 	// the persisted source of truth; LocalTime is presentation.
-	c.data = applyLocalTime(c.data, time.Now())
+	c.data = applyLocalTime(c.data, now)
 
 	// IsNewEntity = "operator has never logged a QSO with this
 	// country before." Determined by querying the qso table for any
@@ -549,8 +608,10 @@ func (o *Orchestrator) scheduleStationRefresh(callsign string) {
 			station.Call = strings.ToUpper(callsign)
 		}
 
-		if werr := o.DB.UpsertContactedStationWithContext(ctx, station); werr != nil {
-			o.warn("async contacted_station upsert failed", werr)
+		// Replace, not merge: the async stale-refresh is a provider refresh, so
+		// it must clear fields that went empty upstream (review 2026-06-04 H1).
+		if werr := o.DB.ReplaceContactedStationWithContext(ctx, station); werr != nil {
+			o.warn("async contacted_station replace failed", werr)
 		}
 	})
 }

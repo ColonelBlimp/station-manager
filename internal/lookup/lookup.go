@@ -35,10 +35,15 @@ import (
 // orchestrator (and logging) to identify which provider produced a
 // given result without needing the concrete kind in scope.
 type Provider interface {
-	// Name returns a stable lowercase identifier — "hamnut", "qrz",
-	// "hamqth", "qrzcq". Doubles as the value the SPA receives in
-	// the response's source indicator (countrySource / stationSource
-	// per ADR 0017 #12) and as the log/event label.
+	// Name returns the provider's stable identifier — the DI service
+	// name (hamnut's "hamnut", QRZ's "qrzlookupservice"). For a
+	// CallsignProvider this value is exactly what the orchestrator puts
+	// in the response's station_source indicator (ADR 0017 #12) and the
+	// log/event label, so the public source value is the service name,
+	// not a short label. The country layer does NOT use a provider
+	// Name() — it carries the fixed Source* constants (SourceHamnut /
+	// SourceCountryTable). A future split of DI-name vs public label is
+	// deferred (review 2026-06-04 L2).
 	Name() string
 
 	// Initialize wires dependencies (logger, config, HTTP client) and

@@ -6,8 +6,8 @@
             callsign:        string,
             country?:        Country (optional, omitempty)
             station?:        ContactedStation (optional, omitempty)
-            country_source:  "hamnut" | "cache" | "none"
-            station_source:  <provider name> | "cache" | "none"
+            country_source:  "hamnut" | "country_table" | "none"
+            station_source:  <provider name> | "contacted_station" | "none"
         }
       - 400 Bad Request → { code, message } (missing or invalid `call` param)
 
@@ -82,8 +82,10 @@ export interface EnrichmentResult {
     callsign: string;
     country?: EnrichmentCountry;
     station?: EnrichmentStation;
-    country_source: 'hamnut' | 'cache' | 'none';
-    /** Provider name (e.g. "qrzlookupservice"), "cache", or "none". */
+    // Daemon emits "country_table" for a cache hit (NOT "cache"), "hamnut" for
+    // a cold-miss upstream call, or "none". See review 2026-06-04 L2.
+    country_source: 'hamnut' | 'country_table' | 'none';
+    /** Provider service name (e.g. "qrzlookupservice"), "contacted_station" (cache hit), or "none". */
     station_source: string;
 }
 
