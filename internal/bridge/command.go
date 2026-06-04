@@ -15,39 +15,63 @@ import (
 // it never reached the rig (ADR 0026: no silent no-op).
 var ErrRigNotConnected = stderr.New("bridge: no active rig connection")
 
-// SendCommand encodes a semantic rig operation and writes it to the connected
-// rig (ADR 0026 inbound command path). It is rig-agnostic: op names a command
-// in the daemon's one configured rigdef (cfg.Cat.Driver), and confirmation
-// comes for free — the rig's AUTO-mode push flows back through the existing
-// readLoop → SSE → catState chain, so SendCommand does not wait on a reply.
-//
-// op is the rigdef command name directly (no resolver); value is its single
-// argument as a string (decimal Hz for set_freq, a rig mode literal for
-// set_mode). The Exposed gate, value_map inversion, and padding are
-// cat.EncodeCommand's job, so an internal (INIT/READ) or TX-capable
-// (PLAYBACK) command can never be driven from here.
-//
-// Errors propagate for the API layer to map to the i18n envelope:
-// cat.ErrUnknownCommand / cat.ErrCommandNotExposed / cat.ErrUnmappedValue
-// from encoding, ErrRigNotConnected when no rig is up, or a serial write
-// error. The write path stays inside internal/bridge (ADR 0013).
-func (s *Service) SendCommand(ctx context.Context, op, value string) error {
-	const errOp errors.Op = "bridge.Service.SendCommand"
+// RigCommand is one (op, value) pair in a SendCommands batch. Op is the rigdef
+// command name; Value is its single argument as a string.
+type RigCommand struct {
+	Op    string
+	Value string
+}
 
+// SendCommands encodes one or more semantic rig operations and writes them to
+// the connected rig as a single CAT line (ADR 0026 inbound command path).
+// Batching is the same mechanism READ uses (`ID;FA;FB;…;` in one write): each
+// command is encoded independently and the bytes are concatenated, so a "tune
+// to band" is one atomic `FA…;MD0…;` write — nothing interleaves between the
+// frequency and the mode, and the serial write mutex makes the whole line
+// uninterruptible. Confirmation is the AUTO-mode push: the rig volunteers a
+// push per command (FA, MD0, …) through the existing readLoop → SSE → catState
+// chain, so SendCommands does not wait on a reply.
+//
+// All-or-nothing: every command is encoded first; if any fails the whole batch
+// is rejected and nothing is written. op is the rigdef command name directly
+// (no resolver); cat.EncodeCommand applies the Exposed gate, value_map
+// inversion, and padding, so an internal (INIT/READ) or TX-capable (PLAYBACK)
+// command can never be driven from here.
+//
+// Errors propagate for the API layer to map: cat.ErrUnknownCommand /
+// cat.ErrCommandNotExposed / cat.ErrUnmappedValue from encoding,
+// ErrRigNotConnected when no rig is up, or a serial write error. The write
+// path stays inside internal/bridge (ADR 0013).
+func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
+	const errOp errors.Op = "bridge.Service.SendCommands"
+
+	if len(cmds) == 0 {
+		return errors.New(errOp).WithMsg("no commands")
+	}
 	def, ok := cat.Lookup(s.cfg.Cat.Driver)
 	if !ok {
 		return errors.New(errOp).WithMsgf("no rig definition for driver %q", s.cfg.Cat.Driver)
 	}
-	b, err := cat.EncodeCommand(def, op, value)
-	if err != nil {
-		return errors.New(errOp).WithErr(err).WithMsgf("encode op %q", op)
+
+	var line []byte
+	for _, c := range cmds {
+		b, err := cat.EncodeCommand(def, c.Op, c.Value)
+		if err != nil {
+			return errors.New(errOp).WithErr(err).WithMsgf("encode op %q", c.Op)
+		}
+		line = append(line, b...)
 	}
 
 	s.mu.Lock()
 	cl := s.activeClient
 	s.mu.Unlock()
 	if cl == nil {
-		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("op %q", op)
+		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("%d command(s)", len(cmds))
 	}
-	return cl.WriteCommandBytes(ctx, b)
+	return cl.WriteCommandBytes(ctx, line)
+}
+
+// SendCommand is the single-op convenience over SendCommands.
+func (s *Service) SendCommand(ctx context.Context, op, value string) error {
+	return s.SendCommands(ctx, []RigCommand{{Op: op, Value: value}})
 }

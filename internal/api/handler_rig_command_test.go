@@ -95,3 +95,60 @@ func TestHandleRigCommand_NoRig(t *testing.T) {
 		})
 	}
 }
+
+func decodeErrCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var resp ErrorResponse
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil {
+		t.Fatalf("decode error body: %v (%s)", err, w.Body.String())
+	}
+	return resp.Code
+}
+
+// TestHandleRigCommand_Batch covers the {commands:[...]} path: a well-formed
+// batch reaches SendCommands (503 here, no client), a bad op rejects the whole
+// batch, mixing {op,value} with {commands} is ambiguous, and an empty batch is
+// treated as a missing command.
+func TestHandleRigCommand_Batch(t *testing.T) {
+	srv := rigTestServer(t)
+
+	t.Run("valid batch reaches the rig", func(t *testing.T) {
+		w := postRigCommand(t, srv, `{"commands":[{"op":"set_freq","value":14074000},{"op":"set_mode","value":"DATA-U"}]}`)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503 (body %s)", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "rig_not_connected" {
+			t.Errorf("code = %q, want rig_not_connected", code)
+		}
+	})
+
+	t.Run("bad op rejects whole batch", func(t *testing.T) {
+		w := postRigCommand(t, srv, `{"commands":[{"op":"set_freq","value":14074000},{"op":"frobnicate","value":"x"}]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "rig_unsupported_command" {
+			t.Errorf("code = %q, want rig_unsupported_command", code)
+		}
+	})
+
+	t.Run("op and commands together is ambiguous", func(t *testing.T) {
+		w := postRigCommand(t, srv, `{"op":"set_freq","value":1,"commands":[{"op":"set_mode","value":"USB"}]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "invalid_field_value" {
+			t.Errorf("code = %q, want invalid_field_value", code)
+		}
+	})
+
+	t.Run("empty batch is a missing command", func(t *testing.T) {
+		w := postRigCommand(t, srv, `{"commands":[]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "missing_required_param" {
+			t.Errorf("code = %q, want missing_required_param", code)
+		}
+	})
+}

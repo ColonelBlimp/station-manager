@@ -1,7 +1,7 @@
 ---
 number: 0026
 title: Inbound rig-command path — set-freq / set-mode via one semantic endpoint, confirmed by AUTO-mode push
-status: Proposed
+status: Accepted
 date: 2026-06-03
 ---
 
@@ -56,6 +56,15 @@ Shape:
   `set_freq`, a string for `set_mode`); the handler renders it to a string
   with one generic conversion, so it stays op-agnostic. The vocabulary grows
   by adding a rigdef command entry — never a new route, and never new Go.
+- **The body also accepts an atomic batch:** `{ commands: [ {op, value}, … ] }`
+  is encoded as one CAT line (`FA…;MD0…;`, the same multi-command wire shape
+  READ uses) in a single serial write. The write is atomic — nothing
+  interleaves between its commands — and the rig pushes one confirmation per
+  command. All-or-nothing: if any element fails to encode, the whole batch is
+  rejected and nothing is written. This is how the FT8 card tunes to a band in
+  one call, and it is the answer to the composite-op question below (no new op
+  vocabulary needed). Validated live on the FTdx10 via the single ops; the
+  multi-SET line itself is the one-curl check when the card lands.
 - **Initial vocabulary: `set_freq` and `set_mode`.**
 
   | op | value | FTdx10 rigdef cmd | data fields | resolution |
@@ -77,7 +86,12 @@ Shape:
   rig spontaneously push the resulting state, which flows through the
   *existing* `readLoop` → SSE → `catState` merge. The command path does
   not wait on or parse a reply. No write/read response synchronisation,
-  no command-echo disambiguation.
+  no command-echo disambiguation. **Validated live on the FTdx10
+  (2026-06-04), both exposed ops: `set_freq` (VFO jumped, `FA` pushed
+  back) and `set_mode` (`DATA-U`→`MD0C;`, rig switched, `MD0` pushed back)
+  each returned 202 with the new state arriving over `/v1/rig/events` and
+  no extra read — the core assumption holds, and the `value_map`
+  inversion is hardware-proven.**
 - **Capability is advertised from the rigdef, gated by one flag.** A
   command opts into the external path with `exposed: true`; that single
   flag is the source of truth for **both** the endpoint gate
@@ -235,8 +249,9 @@ trigger.
   from the rigdef. SPA hydrates it to gate controls.
 - **Config grows `ft8.bands`** (per-band freq + mode; standard FT8 dial
   frequencies + `DATA-U` shipped as defaults).
-- **SPA FT8 card** gains band buttons (compose `set_freq` + `set_mode`
-  from `ft8.bands`) and freq nudge buttons (arithmetic over `set_freq`).
+- **SPA FT8 card** gains band buttons (one `{commands:[set_freq, set_mode]}`
+  batch from `ft8.bands` — atomic tune) and freq nudge buttons (arithmetic
+  over `set_freq`).
 
 **Accepted costs:**
 
@@ -282,9 +297,10 @@ trigger.
 - **The logging SPA wants VFO select / split.** Add `set_vfo` / `set_split`
   ops; both map to already-present bijective value tables (`VS`, `ST`)
   and need only rigdef SET entries.
-- **A combined "tune to FT8 band" atomic op is wanted** (one daemon call
-  instead of the SPA firing `set_freq` + `set_mode`). Add a composite op
-  if the two-call sequence proves racy or awkward in practice.
+- **A combined "tune to FT8 band" atomic op — RESOLVED in v1 by command
+  batching.** `{commands:[set_freq, set_mode]}` is written as one
+  `FA…;MD0…;` line (a single, atomic serial write); no bespoke composite op
+  was needed — it is just the two existing ops on one wire.
 - **Two rigs on one daemon (SO2R).** Only this — not multi-rig in general
   — needs per-rig addressing. In the field-master topology multi-rig means
   multiple *daemons*, each with a co-located rig and its own singular

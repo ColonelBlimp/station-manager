@@ -102,3 +102,48 @@ func TestSendCommand_NoActiveClient(t *testing.T) {
 		t.Fatalf("SendCommand with no active client = %v, want ErrRigNotConnected", err)
 	}
 }
+
+// TestSendCommands covers the batch path: multiple ops encode and concatenate
+// into a single CAT line in one write (the atomic "tune to band" shape).
+func TestSendCommands(t *testing.T) {
+	s, fake := newCommandTestService(t)
+
+	err := s.SendCommands(context.Background(), []RigCommand{
+		{Op: "set_freq", Value: "14074000"},
+		{Op: "set_mode", Value: "DATA-U"},
+	})
+	if err != nil {
+		t.Fatalf("SendCommands: %v", err)
+	}
+	writes := fake.recordedWrites()
+	if len(writes) != 1 {
+		t.Fatalf("recorded %d writes, want 1 (a batch is one line): %q", len(writes), writes)
+	}
+	if got := string(writes[0]); got != "FA014074000;MD0C;" {
+		t.Errorf("batch line = %q, want %q", got, "FA014074000;MD0C;")
+	}
+}
+
+// TestSendCommands_RejectsWholeBatchBeforeWrite proves all-or-nothing: a bad op
+// anywhere in the batch fails the whole thing with nothing written.
+func TestSendCommands_RejectsWholeBatchBeforeWrite(t *testing.T) {
+	s, fake := newCommandTestService(t)
+
+	err := s.SendCommands(context.Background(), []RigCommand{
+		{Op: "set_freq", Value: "14074000"},
+		{Op: "frobnicate", Value: "x"},
+	})
+	if !stderr.Is(err, cat.ErrUnknownCommand) {
+		t.Fatalf("SendCommands error = %v, want ErrUnknownCommand", err)
+	}
+	if w := fake.recordedWrites(); len(w) != 0 {
+		t.Errorf("expected no writes on rejected batch, got %q", w)
+	}
+}
+
+func TestSendCommands_Empty(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	if err := s.SendCommands(context.Background(), nil); err == nil {
+		t.Fatal("SendCommands(nil) = nil, want error")
+	}
+}
