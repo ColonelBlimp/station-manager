@@ -27,6 +27,7 @@
     import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
     import { callsignStack } from '../../states/callsignStack.svelte';
+    import { swapVfo } from '../../actions/rigControl';
     import TimerControls from '../components/TimerControls.svelte';
 
     /*
@@ -659,6 +660,13 @@
             } else if (startEnabled) {
                 qsoDraft.startQso();
             }
+        }
+        if (e.ctrlKey && e.key === '\\') {
+            e.preventDefault();
+            // Swap the selected VFO (A↔B). Mirrors clicking the unselected
+            // VfoBox: local manualState swap when CAT is off, set_vfo to the
+            // rig when CAT is live + capable, silent no-op otherwise (ADR 0007).
+            swapVfo();
         }
     }
 </script>

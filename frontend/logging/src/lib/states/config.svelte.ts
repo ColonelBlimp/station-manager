@@ -200,6 +200,14 @@ class BridgeView {
     rigModes: string[] = $state([]);
 
     /**
+     * Semantic ops the configured rig exposes for the inbound command
+     * path (ADR 0026), e.g. ["set_freq","set_mode","set_vfo"]. Rigdef-
+     * derived, stable for the daemon's lifetime. The SPA gates rig-control
+     * affordances (VFO select, etc.) on membership here.
+     */
+    ops: string[] = $state([]);
+
+    /**
      * Merged mode-mapping table for the configured driver — rigdef
      * shipped defaults overlaid with operator overrides from
      * config.json. Keyed by rig literal string; value is an ADIF
@@ -314,6 +322,7 @@ class ConfigState {
         this.station.rigName = resp.bridge?.rig_name ?? '';
         this.bridge.driver = resp.bridge?.driver ?? '';
         this.bridge.rigModes = resp.bridge?.rig_modes ?? [];
+        this.bridge.ops = resp.bridge?.ops ?? [];
         this.bridge.modeMappings = resp.bridge?.mode_mappings ?? {};
 
         // mailer projection — daemon-managed, read-only on the SPA

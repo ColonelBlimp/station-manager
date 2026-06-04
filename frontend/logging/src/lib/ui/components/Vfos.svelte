@@ -1,9 +1,20 @@
 <script lang="ts">
     import { displayedState } from '../../states/displayed.svelte';
     import { manualState } from '../../states/manual.svelte';
+    import { configState } from '../../states/config.svelte';
+    import { selectVfo } from '../../actions/rigControl';
     import VfoBox from './VfoBox.svelte';
     import VfoInput from './VfoInput.svelte';
     import { frequencyToBand, formatFrequency } from '../../utils/frequency';
+
+    // A VFO box is actionable when the operator can change the selected
+    // VFO: either CAT is off (a local manualState swap) or CAT is live and
+    // the rig exposes set_vfo (drive the rig). When CAT is live but the rig
+    // has no set_vfo, the boxes stay inert — manualState is ignored while
+    // live, so there is nothing useful a click could do.
+    const canSelectVfo = $derived(
+        displayedState.editable || configState.bridge.ops.includes('set_vfo')
+    );
 </script>
 
 <!--
@@ -45,9 +56,9 @@
             {label}
             isSplit={displayedState.split}
             {action}
-            disabled={!displayedState.editable}
+            disabled={!canSelectVfo}
             {isSelected}
-            onSelect={() => (manualState.selectedVfo = vfo)}
+            onSelect={() => selectVfo(vfo)}
         />
         <VfoInput
             id={`vfo-${vfo.toLowerCase()}`}

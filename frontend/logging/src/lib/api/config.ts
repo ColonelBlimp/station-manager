@@ -64,6 +64,13 @@ export interface BridgeFields {
      */
     rig_modes?: string[];
     /**
+     * Semantic ops the configured rig exposes for the inbound command
+     * path (ADR 0026), e.g. ["set_freq","set_mode","set_vfo"]. The SPA
+     * gates rig-control affordances on membership here. Empty when the
+     * rig defines no exposed commands.
+     */
+    ops?: string[];
+    /**
      * Merged view of the rigdef's shipped defaults + the operator's
      * overrides for the configured driver. Keyed by rig mode string;
      * value is an ADIF (MODE, SUBMODE) pair. The SPA consumes this

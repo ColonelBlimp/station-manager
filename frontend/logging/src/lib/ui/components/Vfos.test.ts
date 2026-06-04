@@ -59,6 +59,10 @@ describe('Vfos', () => {
         configState.station.ampMultiplier = 1.0;
         configState.station.defaultPower = 100;
 
+        // No exposed rig ops by default — VFO boxes stay inert when CAT is
+        // live, so the existing CAT-live tests below see disabled boxes.
+        configState.bridge.ops = [];
+
         // Reset bridgeState — disconnected by default.
         bridgeState.connected = false;
         bridgeState.rigResponding = false;
@@ -269,10 +273,11 @@ describe('Vfos', () => {
     });
 
     /**
-     * Select-VFO tests — clicking a VfoBox swaps `manualState.selectedVfo`
-     * to that box's letter. Click is gated on `displayedState.editable`
-     * (no-op when CAT is operating). Keyboard equivalent (Enter / Space)
-     * works when focused and not disabled.
+     * Select-VFO tests — clicking a VfoBox selects that VFO. Gated on
+     * `canSelectVfo` = CAT off (local `manualState` swap) OR CAT live + the
+     * rig exposes `set_vfo`. With CAT off and no ops set (the default here),
+     * a click writes `manualState.selectedVfo`. Keyboard equivalent (Enter /
+     * Space) works when focused and not disabled.
      */
     describe('select VFO', () => {
         it('clicking VFO-B box swaps selectedVfo from A to B', async () => {
@@ -437,6 +442,20 @@ describe('Vfos', () => {
             expect(vfoABox.getAttribute('aria-disabled')).toBe('true');
             expect(vfoBBox.getAttribute('tabindex')).toBe('-1');
             expect(vfoBBox.getAttribute('aria-disabled')).toBe('true');
+        });
+
+        it('makes the unselected box actionable when CAT is live and the rig exposes set_vfo', () => {
+            manualState.selectedVfo = 'A';
+            configState.station.enabled = true;
+            bridgeState.connected = true;
+            bridgeState.rigResponding = true;
+            configState.bridge.ops = ['set_vfo'];
+            const { container } = render(Vfos);
+            const vfoBBox = container.querySelector('[data-vfo="VFO-B"]') as HTMLElement;
+            // CAT live but the rig CAN switch VFO → the unselected box is live
+            // (the click sends set_vfo; that path is covered in rigControl.test.ts).
+            expect(vfoBBox.getAttribute('aria-disabled')).toBe('false');
+            expect(vfoBBox.getAttribute('title')).toBe('Select VFO');
         });
 
         it('after swapping, the new selected VFO renders in the RX position', async () => {

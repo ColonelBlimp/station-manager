@@ -50,6 +50,8 @@ func TestEncodeCommand(t *testing.T) {
 		{name: "set_mode DATA-U", cmd: "set_mode", value: "DATA-U", want: "MD0C;"},
 		{name: "set_mode USB", cmd: "set_mode", value: "USB", want: "MD02;"},
 		{name: "set_mode LSB", cmd: "set_mode", value: "LSB", want: "MD01;"},
+		{name: "set_vfo A", cmd: "set_vfo", value: "VFO-A", want: "VS0;"},
+		{name: "set_vfo B", cmd: "set_vfo", value: "VFO-B", want: "VS1;"},
 		{name: "set_mode unknown literal", cmd: "set_mode", value: "NOT-A-MODE", wantErr: ErrUnmappedValue},
 		{name: "PLAYBACK not exposed", cmd: "PLAYBACK", value: "5", wantErr: ErrCommandNotExposed},
 		{name: "READ not exposed", cmd: "READ", value: "", wantErr: ErrCommandNotExposed},
@@ -114,7 +116,7 @@ func TestExposedCommands(t *testing.T) {
 		t.Fatal(`Lookup("yaesu-ftdx10") not found`)
 	}
 	got := ExposedCommands(def)
-	want := []string{"set_freq", "set_mode"}
+	want := []string{"set_freq", "set_mode", "set_vfo"}
 	if len(got) != len(want) {
 		t.Fatalf("ExposedCommands(ftdx10) = %v, want %v", got, want)
 	}
