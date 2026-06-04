@@ -39,6 +39,29 @@ describe('enrichmentState', () => {
         flushSync();
     });
 
+    describe('resultForCallsign (H1)', () => {
+        it('returns the result when the callsign matches (case-insensitive)', () => {
+            const r = makeResult();
+            enrichmentState.setResult(r);
+            flushSync();
+            expect(enrichmentState.resultForCallsign('7Q7EB')).toStrictEqual(r);
+            expect(enrichmentState.resultForCallsign('7q7eb')).toStrictEqual(r);
+        });
+
+        it('returns null when the callsign does not match (stale-result guard)', () => {
+            enrichmentState.setResult(makeResult()); // callsign 7Q7EB
+            flushSync();
+            expect(enrichmentState.resultForCallsign('M0CMC')).toBeNull();
+        });
+
+        it('returns null with no result, or for an empty target', () => {
+            expect(enrichmentState.resultForCallsign('7Q7EB')).toBeNull(); // cleared in beforeEach
+            enrichmentState.setResult(makeResult());
+            flushSync();
+            expect(enrichmentState.resultForCallsign('')).toBeNull();
+        });
+    });
+
     describe('setResult / clear', () => {
         it('stores the latest result', () => {
             const r = makeResult();

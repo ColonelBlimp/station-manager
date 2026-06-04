@@ -47,6 +47,27 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 133 (2026-06-04) — **SPA** code-review remediation: **Batch F** (M1 submit in-flight guard, H2 edit-overlay open-race). Shipped + tested green (692); not yet committed.
+
+Continues the third SPA review (`docs/reviews/frontend-logging-spa-2026-06-04.md`). Batch E (L2/H1/H3) is still in the working tree (not yet committed); this pass stacks the two concurrent-action items on top, so **E + F are uncommitted together**.
+
+- **M1 (concurrent duplicate POSTs).** `QsoPanel` gained `submitting = $state(false)`: `submitQso` early-returns while set, flips it true before build/await, resets it in a `finally` (so every outcome re-enables). Log Contact disables on `!qsoDraft.canSubmit || submitting`; the `Ctrl+Enter` branch relies on the same internal guard (it calls `submitQso`, which early-returns). New `QsoPanel.test.ts` — double-click → 1 POST, repeated Ctrl+Enter while in flight → 1 POST, button re-enables after the round-trip.
+- **H2 (stale edit-overlay reopen / cross-row clobber).** `SessionPanel.openEdit` threads an `AbortController` (aborts the prior open's GET when a new open starts) and — the load-bearing defence — gates `populate()` on `qsoEditState.open && qsoEditState.uuid === uuid`, so a late GET can neither re-open a dismissed overlay nor overwrite a newer open. `'aborted'` is a no-op (already on `FetchQsoOutcome`/`safeFetch`); the error-path `close()` is safe (a stale error can only resolve while the overlay is already closed). Corrected the misleading `beginOpen` doc comment in `qsoEdit.svelte.ts`. New `SessionPanel.test.ts` — close-before-resolve stays closed; open A / close / open B / A resolves late → B stays loaded.
+- `npm run check` (0/0) / `lint` / `build` clean; **692 tests** pass (44 files). Resolution recorded in the review doc.
+
+**Remaining SPA review work:** Batch G only — M2 (CAT-disconnect snapshot of `catState`→`manualState`), M3 (`LoggingStationView` plain-field → `$state` + stale-comment fix; latent, no live bug), M4 (per-endpoint API shape guards via `isShape`; contact-history "false empty" is by-design). None data-corrupting; M3/M4 are latent. **Next:** operator review + commit; then Batch G if wanted.
+
+### Session 132 (2026-06-04) — **SPA** code-review remediation: L2 (red-build fix) + **Batch E** (H3 SUBMODE round-trip, H1 enrichment callsign-scoping). Shipped + tested green (687); not yet committed.
+
+A third review (`docs/reviews/frontend-logging-spa-2026-06-04.md`) landed — 9 findings, all validated (three read-only passes). **L1 was already fixed** (Batch D's `country_source` change), and **L2 was a live regression** — the committed VfoBox tooltip broke 2 tests, so main's `npm test` was red.
+
+- **L2 (fixed first — green the build).** VfoBox tooltip `'Shift+Ctrl+[ / ]: Select VFO'` → `'Select VFO'` (the `[/]` keys are band-step, not VFO-select; and the wrong literal broke 2 `Vfos.test.ts` assertions).
+- **H3.** `submode` added to `DaemonQsoForEdit`; `QsoEditState.mode` now holds the friendly form (populate `submode||mode` — an SSB QSO showed a **blank** dropdown before + 400'd on save), and `toPatchBody` resolves it back to PATCH both `mode`+`submode` (`submode:''` clears a stale submode on mode-change — the silent-corruption fix; the daemon honours a present-empty key). Session rows store `subMode||mode` (QsoPanel + QsoEditOverlay).
+- **H1.** `runLookup` scopes each lookup with a monotonic token (ignore stale/out-of-order responses) + clears prior enrichment on a new lookup; the definitive guard is `enrichmentState.resultForCallsign(submittedCall)` at submit, so a QSO can't be logged with a previous callsign's enrichment (country/zones/DXCC/grid/bearing). `resultForCallsign` is pure + unit-tested.
+- `npm run check` (0) / `lint` / `build` clean; **687 tests** pass. Resolution recorded in the review doc.
+
+**Remaining SPA review work:** Batch F (M1 submit in-flight guard, H2 edit-overlay AbortController) + Batch G (M2 disconnect snapshot, M3 `LoggingStationView` `$state`, M4 API shape guards). None data-corrupting. **Next:** operator review + commit; then Batch F/G if wanted.
+
 ### Session 131 (2026-06-04) — Code-review remediation, **Batch C** (`internal/lookup` + sqlite): the three decision-bearing fixes (H1/H2/M1). Shipped + tested green (incl. `-race`); not yet committed. **This closes the lookup review — all 8 findings done.**
 
 Operator: "go with your recommendations."

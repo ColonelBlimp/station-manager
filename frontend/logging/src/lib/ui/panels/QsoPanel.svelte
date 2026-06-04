@@ -155,6 +155,15 @@
     const SLOW_LOOKUP_THRESHOLD_MS = 500;
 
     /*
+        Monotonic lookup token (review 2026-06-04 H1). Each runLookup bumps it;
+        the async enrich / contact-history handlers ignore their result when a
+        newer lookup has superseded them, so a slow or out-of-order response
+        can't overwrite a newer callsign's data. Plain `let` — bookkeeping, not
+        rendered.
+    */
+    let lookupToken = 0;
+
+    /*
         runLookup — pure enrichment + contact-history fetch, no
         QSO-timer side effect. Shared between Tab (handleEnrich, which
         also calls startQso) and F2 (handleLookupShortcut, which does
@@ -176,6 +185,15 @@
         // be able to commit (press Start, or hit Tab/F3) even if
         // QRZ/hamnut are down.
         qsoDraft.lookupCallsign = call;
+        // Scope this lookup (review 2026-06-04 H1): bump the token and clear the
+        // previous call's enrichment + contact-history immediately, so a
+        // failed/none response for THIS call can't leave the prior call's data
+        // on screen or feed a later submit. The async handlers below re-check
+        // the token; submitQso re-checks the enrichment callsign as the
+        // definitive guard.
+        const token = ++lookupToken;
+        enrichmentState.clear();
+        contactHistoryState.clear();
         // Sticky info-toast for slow lookups so the operator (on a
         // flaky internet link) can distinguish "still working" from
         // "panel didn't update because nothing happened." Delayed by
@@ -194,6 +212,7 @@
         // error here, and a toast on every flaky-link Tab would be
         // noise.
         void fetchContactHistory(call).then((outcome) => {
+            if (token !== lookupToken) return; // superseded by a newer lookup
             if (outcome.kind !== 'ok') return;
             contactHistoryState.setResult(outcome.items);
         });
@@ -202,6 +221,7 @@
             if (lookingUpId !== null) {
                 toasts.dismiss(lookingUpId);
             }
+            if (token !== lookupToken) return; // superseded by a newer lookup
             if (outcome.kind !== 'ok') return;
             const r = outcome.result;
             // Push to enrichment state regardless of station result —
@@ -243,6 +263,19 @@
     }
 
     /*
+        In-flight submit guard (review 2026-06-04 M1). A QSO POST is a
+        network round-trip; without this a double-click on Log Contact —
+        or a held Ctrl+Enter — fires two POSTs for the same draft before
+        the first resolves, leaving the daemon's dedupe as the only thing
+        between that and a duplicate row. submitQso early-returns while a
+        submit is outstanding, and the Log Contact button disables on it;
+        reset in submitQso's finally so every outcome (stored / duplicate
+        / error / network) re-enables. `$state` because the button's
+        `submitDisabled` reactively reads it.
+    */
+    let submitting = $state(false);
+
+    /*
         submitQso — build the ADIF record from the current draft + rig
         state, POST it to the daemon, and branch on outcome.
 
@@ -273,181 +306,194 @@
         FREQ_RX is omitted.
     */
     async function submitQso(): Promise<void> {
-        if (!qsoDraft.canSubmit) return;
+        if (!qsoDraft.canSubmit || submitting) return;
+        submitting = true;
+        try {
+            const selectedHz =
+                displayedState.selectedVfo === 'A' ? displayedState.vfoA : displayedState.vfoB;
+            const otherHz =
+                displayedState.selectedVfo === 'A' ? displayedState.vfoB : displayedState.vfoA;
 
-        const selectedHz =
-            displayedState.selectedVfo === 'A' ? displayedState.vfoA : displayedState.vfoB;
-        const otherHz =
-            displayedState.selectedVfo === 'A' ? displayedState.vfoB : displayedState.vfoA;
+            const txFreqHz = displayedState.split ? otherHz : selectedHz;
+            const rxFreqHz = displayedState.split ? selectedHz : undefined;
 
-        const txFreqHz = displayedState.split ? otherHz : selectedHz;
-        const rxFreqHz = displayedState.split ? selectedHz : undefined;
+            // Identity fields — single source: configState.loggingStation
+            // (daemon-authoritative via /v1/config; written by the My
+            // Station panel; validated by the daemon on PUT). Read at
+            // submit time; ADIF emits omit-when-empty so unset fields
+            // simply don't appear in the record.
+            const ls = configState.loggingStation;
 
-        // Identity fields — single source: configState.loggingStation
-        // (daemon-authoritative via /v1/config; written by the My
-        // Station panel; validated by the daemon on PUT). Read at
-        // submit time; ADIF emits omit-when-empty so unset fields
-        // simply don't appear in the record.
-        const ls = configState.loggingStation;
+            // displayedState.mode / .subMode are already ADIF-resolved
+            // — when CAT is live they come from the per-rig mode-mappings
+            // table (rigdef defaults + operator overrides merged at the
+            // daemon); when CAT is off they come from
+            // resolveModeAndSubmode running inside displayedState over
+            // the operator's manualState pick. Either way the values
+            // here are the ones the QSO record should carry.
+            const resolved = { mode: displayedState.mode, subMode: displayedState.subMode };
 
-        // displayedState.mode / .subMode are already ADIF-resolved
-        // — when CAT is live they come from the per-rig mode-mappings
-        // table (rigdef defaults + operator overrides merged at the
-        // daemon); when CAT is off they come from
-        // resolveModeAndSubmode running inside displayedState over
-        // the operator's manualState pick. Either way the values
-        // here are the ones the QSO record should carry.
-        const resolved = { mode: displayedState.mode, subMode: displayedState.subMode };
+            // Captured before submit so the post-store toast can name the
+            // contact even after qsoDraft.clear() has wiped the form.
+            const submittedCall = qsoDraft.callsign.trim().toUpperCase();
 
-        // Captured before submit so the post-store toast can name the
-        // contact even after qsoDraft.clear() has wiped the form.
-        const submittedCall = qsoDraft.callsign.trim().toUpperCase();
+            // Only consume enrichment when it actually belongs to the call being
+            // logged — a stale result from a previous callsign (operator looked up
+            // A, retyped B, B's lookup failed/none) must never contaminate this
+            // QSO's ADIF (review 2026-06-04 H1). This submit-time check is the
+            // definitive guard, independent of the lookup-token race handling.
+            const enrich = enrichmentState.resultForCallsign(submittedCall);
+            const enrichBearing = enrich ? enrichmentState.activeBearing : '';
+            const enrichDistanceKm = enrich ? enrichmentState.activeDistanceKm : '';
 
-        const adif = formatAdifRecord({
-            callsign: submittedCall,
-            rstSent: qsoDraft.rstSent,
-            rstRcvd: qsoDraft.rstRcvd,
-            name: qsoDraft.name.trim(),
-            qth: qsoDraft.qth.trim(),
-            comment: qsoDraft.comment.trim(),
-            qsoDate: qsoDraft.qsoDate,
-            timeOn: qsoDraft.timeOn,
-            timeOff: qsoDraft.timeOff,
-            mode: resolved.mode,
-            subMode: resolved.subMode,
-            txFreqHz,
-            rxFreqHz,
-            band: frequencyToBand(txFreqHz),
-            txPower: displayedState.effectivePower,
-            qsoRandom: qsoDefaults.qsoRandom === 'off' ? undefined : qsoDefaults.qsoRandom,
-            stationCallsign: ls.stationCallsign,
-            operator: ls.operator,
-            ownerCallsign: ls.ownerCallsign,
-            myGridSquare: ls.myGridsquare,
-            myLat: ls.myLat,
-            myLon: ls.myLon,
-            myStreet: ls.myStreet,
-            myCity: ls.myCity,
-            myPostalCode: ls.myPostalCode,
-            myCountry: ls.myCountry,
-            myAltitude: ls.myAltitude,
-            myCqZone: ls.myCqZone,
-            myItuZone: ls.myItuZone,
-            myDxcc: ls.myDxcc,
-            myName: ls.myName,
-            // MY_RIG falls back to the rigdef's human-readable name
-            // (configState.station.rigName, resolved daemon-side from
-            // bridge.cat.driver and exposed via /v1/config). The
-            // operator's My Station → My Rig text override stays
-            // authoritative; when both are empty MY_RIG is omitted
-            // from the ADIF record.
-            myRig: ls.myRig || displayedState.rigName,
-            myAntenna: ls.myAntenna,
-            myMorseKeyType: ls.myMorseKeyType,
-            myMorseKeyInfo: ls.myMorseKeyInfo,
-            // ANT_AZ — bearing for the operator's currently-selected
-            // path (short or long) from the country panel. Empty when
-            // either grid is missing; the ADIF emitter omits ANT_AZ on
-            // empty so the record is clean rather than carrying a
-            // fabricated zero.
-            antAz: enrichmentState.activeBearing || undefined,
-            // Contacted-station enrichment — capture what the Country/Details
-            // panels resolved so the logged QSO (and its QRZ/ClubLog upload +
-            // ADIF export) carries the entity, zones, DXCC and grid instead of
-            // defaulting COUNTRY to "Unknown". COUNTRY/CQZ/ITUZ come from the
-            // country layer (what the panels show, always present once enriched);
-            // DXCC + grid come from the QRZ station lookup and are empty when the
-            // station is unknown. Each omitted when empty.
-            country: enrichmentState.result?.country?.name || undefined,
-            cqZone: enrichmentState.result?.country?.cq_zone || undefined,
-            ituZone: enrichmentState.result?.country?.itu_zone || undefined,
-            dxcc: enrichmentState.result?.station?.dxcc || undefined,
-            gridsquare: enrichmentState.result?.station?.gridsquare || undefined,
-            // Per-QSO Details panel fields. Emitter omits each when
-            // empty / false; the operator can leave any of them blank.
-            rxPwr: qsoDraft.rxPwr.trim() || undefined,
-            rig: qsoDraft.rig.trim() || undefined,
-            notes: qsoDraft.notes.trim() || undefined,
-            appSmRequestQsl: qsoDraft.requestQsl,
-        });
+            const adif = formatAdifRecord({
+                callsign: submittedCall,
+                rstSent: qsoDraft.rstSent,
+                rstRcvd: qsoDraft.rstRcvd,
+                name: qsoDraft.name.trim(),
+                qth: qsoDraft.qth.trim(),
+                comment: qsoDraft.comment.trim(),
+                qsoDate: qsoDraft.qsoDate,
+                timeOn: qsoDraft.timeOn,
+                timeOff: qsoDraft.timeOff,
+                mode: resolved.mode,
+                subMode: resolved.subMode,
+                txFreqHz,
+                rxFreqHz,
+                band: frequencyToBand(txFreqHz),
+                txPower: displayedState.effectivePower,
+                qsoRandom: qsoDefaults.qsoRandom === 'off' ? undefined : qsoDefaults.qsoRandom,
+                stationCallsign: ls.stationCallsign,
+                operator: ls.operator,
+                ownerCallsign: ls.ownerCallsign,
+                myGridSquare: ls.myGridsquare,
+                myLat: ls.myLat,
+                myLon: ls.myLon,
+                myStreet: ls.myStreet,
+                myCity: ls.myCity,
+                myPostalCode: ls.myPostalCode,
+                myCountry: ls.myCountry,
+                myAltitude: ls.myAltitude,
+                myCqZone: ls.myCqZone,
+                myItuZone: ls.myItuZone,
+                myDxcc: ls.myDxcc,
+                myName: ls.myName,
+                // MY_RIG falls back to the rigdef's human-readable name
+                // (configState.station.rigName, resolved daemon-side from
+                // bridge.cat.driver and exposed via /v1/config). The
+                // operator's My Station → My Rig text override stays
+                // authoritative; when both are empty MY_RIG is omitted
+                // from the ADIF record.
+                myRig: ls.myRig || displayedState.rigName,
+                myAntenna: ls.myAntenna,
+                myMorseKeyType: ls.myMorseKeyType,
+                myMorseKeyInfo: ls.myMorseKeyInfo,
+                // ANT_AZ — bearing for the operator's currently-selected
+                // path (short or long) from the country panel. Empty when
+                // either grid is missing; the ADIF emitter omits ANT_AZ on
+                // empty so the record is clean rather than carrying a
+                // fabricated zero.
+                antAz: enrichBearing || undefined,
+                // Contacted-station enrichment — capture what the Country/Details
+                // panels resolved so the logged QSO (and its QRZ/ClubLog upload +
+                // ADIF export) carries the entity, zones, DXCC and grid instead of
+                // defaulting COUNTRY to "Unknown". COUNTRY/CQZ/ITUZ come from the
+                // country layer (what the panels show, always present once enriched);
+                // DXCC + grid come from the QRZ station lookup and are empty when the
+                // station is unknown. Each omitted when empty.
+                country: enrich?.country?.name || undefined,
+                cqZone: enrich?.country?.cq_zone || undefined,
+                ituZone: enrich?.country?.itu_zone || undefined,
+                dxcc: enrich?.station?.dxcc || undefined,
+                gridsquare: enrich?.station?.gridsquare || undefined,
+                // Per-QSO Details panel fields. Emitter omits each when
+                // empty / false; the operator can leave any of them blank.
+                rxPwr: qsoDraft.rxPwr.trim() || undefined,
+                rig: qsoDraft.rig.trim() || undefined,
+                notes: qsoDraft.notes.trim() || undefined,
+                appSmRequestQsl: qsoDraft.requestQsl,
+            });
 
-        const outcome = await submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID);
-        switch (outcome.kind) {
-            case 'stored':
-                // Snapshot session-row fields BEFORE the clears below
-                // wipe the draft + enrichment state. country and
-                // distanceKm in particular live on enrichmentState
-                // and would otherwise be empty by the time the row
-                // renders.
-                sessionQsosState.add({
-                    uuid: outcome.uuid,
-                    callsign: submittedCall,
-                    name: qsoDraft.name.trim(),
-                    freqHz: txFreqHz,
-                    band: frequencyToBand(txFreqHz),
-                    rstSent: qsoDraft.rstSent,
-                    rstRcvd: qsoDraft.rstRcvd,
-                    mode: displayedState.mode,
-                    timeOn: qsoDraft.timeOn,
-                    qsoDate: qsoDraft.qsoDate,
-                    country: enrichmentState.result?.country?.name ?? '',
-                    distanceKm: enrichmentState.activeDistanceKm,
-                    adif,
-                });
-                // Save the logged comment to the paste list (newest at
-                // top, deduped, capped) so it's offered back on the
-                // Comment field's ▾ dropdown for the next QSO. add()
-                // ignores empty, so a blank comment doesn't pollute the
-                // list. Only the 'stored' path feeds it — duplicates /
-                // failures don't add a comment that wasn't actually
-                // logged.
-                commentHistory.add(qsoDraft.comment.trim());
-                qsoDraft.clear();
-                // Country + Worked panels return to the empty state —
-                // every QSO is a clean slate. Operator's next Tab
-                // populates the panels afresh with the new callsign's
-                // data (and the freshly-stored QSO will show up in
-                // the next Worked-panel fetch if the operator re-Tabs
-                // the same call).
-                enrichmentState.clear();
-                contactHistoryState.clear();
-                focusCallsign();
-                // Refresh the default-logbook QSO count so the
-                // LoggingCard header reflects the new row. Fire-and-forget
-                // — a refresh failure leaves the previous count visible
-                // until the next submit succeeds.
-                void configState.refreshLogbookCount();
-                if (qsoDefaults.notifyQsoStored) {
-                    toasts.info(`QSO with ${submittedCall} stored.`);
-                }
-                break;
-            case 'duplicate':
-                // Toast surfaces the operator-readable callsign rather
-                // than the 36-char UUID; the UUID lands in the dev
-                // console for cross-referencing with daemon logs.
-                console.info(`[QSO submit] duplicate uuid=${outcome.uuid}`);
-                toasts.warn(`QSO with ${submittedCall} already logged; not re-logged.`);
-                break;
-            case 'validation':
-                // Daemon's `message` is already operator-readable; the
-                // `code` is a wire-protocol identifier (snake_case
-                // `logbook_not_found` etc.) that's noise to the user
-                // but useful in the dev console for grepping daemon
-                // logs.
-                console.warn(`[QSO submit] ${outcome.code}: ${outcome.message}`);
-                toasts.error(outcome.message);
-                break;
-            case 'server':
-                console.error(`[QSO submit] ${outcome.code}: ${outcome.message}`);
-                toasts.error(`${outcome.message}. Try again.`);
-                break;
-            case 'network':
-                // The fetch-error detail (e.g. "Failed to fetch") is
-                // useful in the dev console but doesn't help the
-                // operator; the toast just names what they need to do.
-                console.error(`[QSO submit] daemon unreachable: ${outcome.message}`);
-                toasts.error('Cannot reach the daemon — check it is running.');
-                break;
+            const outcome = await submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID);
+            switch (outcome.kind) {
+                case 'stored':
+                    // Snapshot session-row fields BEFORE the clears below
+                    // wipe the draft + enrichment state. country and
+                    // distanceKm in particular live on enrichmentState
+                    // and would otherwise be empty by the time the row
+                    // renders.
+                    sessionQsosState.add({
+                        uuid: outcome.uuid,
+                        callsign: submittedCall,
+                        name: qsoDraft.name.trim(),
+                        freqHz: txFreqHz,
+                        band: frequencyToBand(txFreqHz),
+                        rstSent: qsoDraft.rstSent,
+                        rstRcvd: qsoDraft.rstRcvd,
+                        mode: displayedState.subMode || displayedState.mode,
+                        timeOn: qsoDraft.timeOn,
+                        qsoDate: qsoDraft.qsoDate,
+                        country: enrich?.country?.name ?? '',
+                        distanceKm: enrichDistanceKm,
+                        adif,
+                    });
+                    // Save the logged comment to the paste list (newest at
+                    // top, deduped, capped) so it's offered back on the
+                    // Comment field's ▾ dropdown for the next QSO. add()
+                    // ignores empty, so a blank comment doesn't pollute the
+                    // list. Only the 'stored' path feeds it — duplicates /
+                    // failures don't add a comment that wasn't actually
+                    // logged.
+                    commentHistory.add(qsoDraft.comment.trim());
+                    qsoDraft.clear();
+                    // Country + Worked panels return to the empty state —
+                    // every QSO is a clean slate. Operator's next Tab
+                    // populates the panels afresh with the new callsign's
+                    // data (and the freshly-stored QSO will show up in
+                    // the next Worked-panel fetch if the operator re-Tabs
+                    // the same call).
+                    enrichmentState.clear();
+                    contactHistoryState.clear();
+                    focusCallsign();
+                    // Refresh the default-logbook QSO count so the
+                    // LoggingCard header reflects the new row. Fire-and-forget
+                    // — a refresh failure leaves the previous count visible
+                    // until the next submit succeeds.
+                    void configState.refreshLogbookCount();
+                    if (qsoDefaults.notifyQsoStored) {
+                        toasts.info(`QSO with ${submittedCall} stored.`);
+                    }
+                    break;
+                case 'duplicate':
+                    // Toast surfaces the operator-readable callsign rather
+                    // than the 36-char UUID; the UUID lands in the dev
+                    // console for cross-referencing with daemon logs.
+                    console.info(`[QSO submit] duplicate uuid=${outcome.uuid}`);
+                    toasts.warn(`QSO with ${submittedCall} already logged; not re-logged.`);
+                    break;
+                case 'validation':
+                    // Daemon's `message` is already operator-readable; the
+                    // `code` is a wire-protocol identifier (snake_case
+                    // `logbook_not_found` etc.) that's noise to the user
+                    // but useful in the dev console for grepping daemon
+                    // logs.
+                    console.warn(`[QSO submit] ${outcome.code}: ${outcome.message}`);
+                    toasts.error(outcome.message);
+                    break;
+                case 'server':
+                    console.error(`[QSO submit] ${outcome.code}: ${outcome.message}`);
+                    toasts.error(`${outcome.message}. Try again.`);
+                    break;
+                case 'network':
+                    // The fetch-error detail (e.g. "Failed to fetch") is
+                    // useful in the dev console but doesn't help the
+                    // operator; the toast just names what they need to do.
+                    console.error(`[QSO submit] daemon unreachable: ${outcome.message}`);
+                    toasts.error('Cannot reach the daemon — check it is running.');
+                    break;
+            }
+        } finally {
+            submitting = false;
         }
     }
 
@@ -753,8 +799,8 @@
             bind:value={qsoDraft.comment}
             history={commentHistory.items}
             onpick={(text: string) => {
-            qsoDraft.comment = text;
-        }}
+                qsoDraft.comment = text;
+            }}
         />
     </div>
     <div class="flex flex-row space-x-2 -mt-2">
@@ -771,7 +817,7 @@
             <FormControls
                 onClear={clearForm}
                 onSubmit={submitQso}
-                submitDisabled={!qsoDraft.canSubmit}
+                submitDisabled={!qsoDraft.canSubmit || submitting}
             />
         </div>
     </div>

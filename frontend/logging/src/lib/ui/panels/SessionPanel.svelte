@@ -63,18 +63,52 @@
     const formatDistance = (d: string): string => (d === '' ? '' : `${d} km`);
 
     /*
+        Cancels the in-flight GET from a prior open whose overlay has
+        since been closed or re-targeted. The populate guard in openEdit
+        is the load-bearing defence; aborting is the courtesy that stops a
+        superseded request from completing at all (review 2026-06-04 H2).
+    */
+    let editAbort: AbortController | null = null;
+
+    /*
         Open the edit overlay for the row's UUID. beginOpen() flips the
         modal into a loading state immediately so the operator gets
         instant feedback; populate() arrives after the GET resolves.
         Failure paths (not_found / network / server) toast and reset.
+
+        Open-race guard (review 2026-06-04 H2): the GET is async, so by
+        the time it resolves the operator may have closed the overlay
+        (ESC / cancel) or opened a different row. Two defences:
+          - abort the previous open's GET when a new open starts, so a
+            superseded request resolves as 'aborted' (a no-op here);
+          - gate populate() on the overlay still being open AND still
+            showing the uuid we fetched for, so a late resolve can never
+            re-open a dismissed overlay or clobber a different QSO.
+        The error paths call close() unconditionally: a stale error can
+        only resolve while the overlay is already closed (a newer open
+        aborts the prior GET first, and a GET that completed pre-abort
+        does so before the next open's click runs), so close() there is
+        a harmless re-close, never a wipe of a freshly-opened overlay.
     */
     async function openEdit(uuid: string): Promise<void> {
         if (qsoEditState.open) return; // guard against double-click
+        editAbort?.abort();
+        editAbort = new AbortController();
+        const signal = editAbort.signal;
         qsoEditState.beginOpen(uuid);
-        const outcome = await fetchQso(uuid);
+        const outcome = await fetchQso(uuid, signal);
         switch (outcome.kind) {
             case 'ok':
-                qsoEditState.populate(outcome.qso);
+                // Drop the result unless THIS open is still active — a
+                // close or a newer open between beginOpen and here means
+                // the fetched record is stale.
+                if (qsoEditState.open && qsoEditState.uuid === uuid) {
+                    qsoEditState.populate(outcome.qso);
+                }
+                break;
+            case 'aborted':
+                // Superseded by a newer open; that open now owns the
+                // overlay state. Nothing to toast or reset.
                 break;
             case 'not_found':
                 toasts.error('QSO no longer exists');

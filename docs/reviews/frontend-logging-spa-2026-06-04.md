@@ -212,3 +212,81 @@ Recommended fix:
 ## Review Notes
 
 The SPA has good local separation between API wrappers, state objects, and Svelte UI components, and the existing test suite is broad enough to catch regressions like the VFO tooltip mismatch. The highest-risk gaps are not static type errors; they are cross-request state races and contract mismatches where valid operator workflows can produce incorrect logged QSO data.
+
+## Resolution — L2 + Batch E (2026-06-04)
+
+All 9 findings were independently re-verified against the source (three
+read-only passes). Two calibration notes: **L1 was already fixed** in the prior
+lookup-review remediation (`country_source` is now `'country_table'`), and
+**L2 was a live regression** — the committed VfoBox tooltip change had broken 2
+`Vfos.test.ts` assertions, so `npm test` was red on main.
+
+Fixed this pass (`npm run check` 0 errors, `lint` clean, **687 tests pass**,
+`build` OK):
+
+- **L2 — fixed (the build was red).** VfoBox's tooltip was `'Shift+Ctrl+[ / ]:
+  Select VFO'` — wrong twice over (those are band-step keys, not VFO-select;
+  the box's shortcut is Shift+Ctrl+\\) and breaking 2 tests. Reverted to the
+  accurate `'Select VFO'`; suite green.
+- **H3 — fixed (data integrity + a broken feature).** Added `submode` to
+  `DaemonQsoForEdit`; `QsoEditState.mode` now holds the operator-facing form
+  (populate = `submode || mode`, so an SSB QSO shows "USB" rather than a blank
+  dropdown), and `toPatchBody` resolves it back through `resolveModeAndSubmode`
+  to PATCH **both** `mode` and `submode` — `submode: ''` explicitly clears a
+  stale submode on a mode change (SSB→CW), which the daemon's PATCH-merge
+  honours (present-empty key; verified against `update.go`). Session rows now
+  store `displayedState.subMode || displayedState.mode` (QsoPanel +
+  QsoEditOverlay, via the now-friendly `qsoEditState.mode`). Tests in
+  `qsoEdit.test.ts` cover all three: submode shows + resolves, submode-less
+  mode shows the parent, mode-change clears submode.
+- **H1 — fixed (silent ADIF corruption).** `runLookup` scopes each lookup with
+  a monotonic token (stale / out-of-order responses are ignored) and clears the
+  prior call's enrichment + contact-history immediately. The definitive guard
+  is at submit: `enrichmentState.resultForCallsign(submittedCall)` returns the
+  result only when it belongs to the call being logged, else null — so
+  country/CQZ/ITUZ/DXCC/grid/bearing and the session row's country/distance are
+  consumed only for the matching callsign. `resultForCallsign` is a pure method
+  unit-tested in `enrichment.test.ts` (match / mismatch / empty). A full
+  QsoPanel component test of the lookup-token race is a possible follow-up; the
+  data-integrity guard itself is unit-tested.
+
+**Remaining (as of this pass):** Batch F (M1 submit in-flight guard, H2
+edit-overlay AbortController) — done in the next section — then Batch G (M2
+disconnect snapshot, M3 `LoggingStationView` `$state`, M4 API shape guards).
+None data-corrupting; M3/M4 are latent. L1 is done.
+
+## Resolution — Batch F (2026-06-04)
+
+The two open-backlog items targeting concurrent operator actions. Fixed this
+pass (`npm run check` 0 errors / 0 warnings, `lint` clean, **692 tests pass**
+across 44 files, `build` OK):
+
+- **M1 — fixed (concurrent duplicate POSTs).** `QsoPanel` gained a local
+  `submitting = $state(false)`. `submitQso` early-returns when it is set, flips
+  it true before building/awaiting, and resets it in a `finally` so every
+  outcome (stored / duplicate / validation / server / network) re-enables. The
+  Log Contact button now disables on `!qsoDraft.canSubmit || submitting`; the
+  `Ctrl+Enter` branch needs no extra check — it calls `submitQso`, which
+  early-returns while a submit is outstanding (the internal guard is the
+  authoritative one, mirroring H1's submit-time guard). New `QsoPanel.test.ts`:
+  double-click → 1 POST, repeated `Ctrl+Enter` while in flight → 1 POST, button
+  re-enables after the round-trip resolves.
+- **H2 — fixed (stale edit-overlay reopen + cross-row clobber).**
+  `SessionPanel.openEdit` now threads an `AbortController` (aborting the prior
+  open's GET when a new open starts) and — the load-bearing defence — gates
+  `populate()` on `qsoEditState.open && qsoEditState.uuid === uuid`, so a late
+  GET can neither re-open a dismissed overlay nor overwrite a newer open. The
+  `'aborted'` outcome (already on `FetchQsoOutcome`/`safeFetch`) is a no-op; the
+  error paths' unconditional `close()` is safe because a stale error can only
+  resolve while the overlay is already closed (a newer open aborts the prior GET
+  first; a GET that completed pre-abort does so before the next open's click
+  runs). The misleading `beginOpen` doc comment in `qsoEdit.svelte.ts` — which
+  claimed `close()` covered the race — was corrected to describe the actual
+  guard. New `SessionPanel.test.ts`: close-before-resolve stays closed; open A /
+  close / open B / A resolves late → B stays loaded.
+
+**Remaining:** Batch G only — M2 (CAT-disconnect snapshot of `catState` into
+`manualState`), M3 (`LoggingStationView` plain-field → `$state` + stale-comment
+fix; latent, no live bug), M4 (per-endpoint API shape guards via the existing
+`isShape` helper; contact-history "false empty" is by-design). None are
+data-corrupting; M3/M4 are latent.

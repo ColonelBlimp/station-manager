@@ -32,6 +32,7 @@
 // (e.g. `qsoEdit.test.ts`).
 export type { DaemonQsoForEdit } from '../api/qso-update';
 import type { DaemonQsoForEdit } from '../api/qso-update';
+import { resolveModeAndSubmode } from '../utils/mode';
 
 /**
  * Convert ADIF canonical date `YYYYMMDD` → `YYYY-MM-DD`. Defensive
@@ -122,7 +123,11 @@ class QsoEditState {
         this.country = qso.country ?? '';
 
         this.comment = qso.comment ?? '';
-        this.mode = qso.mode ?? '';
+        // Operator-facing form: SUBMODE wins, so a stored {MODE:SSB, SUBMODE:USB}
+        // shows "USB" in the dropdown (and saving resolves it back to the pair);
+        // a submode-less mode (CW, FT8) shows the MODE. Fixes the blank dropdown
+        // on SSB QSOs + the lost-SUBMODE round-trip (review 2026-06-04 H3).
+        this.mode = qso.submode || qso.mode || '';
         this.freq = qso.freq ?? '';
         this.freqRx = qso.freq_rx ?? '';
         this.band = qso.band ?? '';
@@ -145,9 +150,14 @@ class QsoEditState {
     /**
      * Mark the overlay as opening + loading; SessionPanel calls this
      * before firing the GET so the modal renders immediately with a
-     * spinner rather than waiting for the round-trip. The close path
-     * before populate() resolves is also covered (operator presses
-     * ESC while the GET is in flight) — see close().
+     * spinner rather than waiting for the round-trip.
+     *
+     * Sets `uuid` so SessionPanel's open-race guard can compare against
+     * it: if the operator closes the overlay (ESC / cancel) or opens a
+     * different row before the GET resolves, the stale GET sees either
+     * `open === false` or a changed `uuid` and drops its result rather
+     * than populating (review 2026-06-04 H2). SessionPanel also aborts
+     * the prior GET when a new open starts.
      */
     beginOpen(uuid: string): void {
         this.uuid = uuid;
@@ -201,6 +211,12 @@ class QsoEditState {
      * structs flatten on the wire, so PATCH must send sibling keys.
      */
     toPatchBody(): DaemonQsoForEdit {
+        // Resolve the operator-facing mode back to the ADIF MODE/SUBMODE pair
+        // and send BOTH. submode '' explicitly clears a stale submode on a mode
+        // change (e.g. SSB+USB → CW): the daemon's PATCH preserves absent keys,
+        // so omitting submode (the old behaviour) left stale data behind
+        // (review 2026-06-04 H3).
+        const resolved = resolveModeAndSubmode(this.mode);
         return {
             app_sm_request_qsl: this.requestQsl,
             call: this.callsign,
@@ -209,7 +225,8 @@ class QsoEditState {
             country: this.country,
             rst_sent: this.rstSent,
             rst_rcvd: this.rstRcvd,
-            mode: this.mode,
+            mode: resolved.mode,
+            submode: resolved.subMode,
             freq: this.freq,
             freq_rx: this.freqRx,
             band: this.band,

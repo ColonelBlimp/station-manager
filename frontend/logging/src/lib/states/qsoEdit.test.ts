@@ -30,7 +30,8 @@ const makeDaemonQso = (overrides: Partial<DaemonQsoForEdit> = {}): DaemonQsoForE
     country: 'England',
     rst_sent: '59',
     rst_rcvd: '57',
-    mode: 'USB',
+    mode: 'SSB',
+    submode: 'USB',
     freq: '14.250',
     freq_rx: '14.260',
     band: '20m',
@@ -198,7 +199,8 @@ describe('qsoEditState', () => {
                 country: 'England',
                 rst_sent: '59',
                 rst_rcvd: '57',
-                mode: 'USB',
+                mode: 'SSB',
+                submode: 'USB',
                 freq: '14.250',
                 freq_rx: '14.260',
                 band: '20m',
@@ -229,6 +231,38 @@ describe('qsoEditState', () => {
             expect(body.rx_pwr).toBe('5');
             expect(body.notes).toBe('updated notes');
             expect(body.app_sm_request_qsl).toBe(false);
+        });
+
+        // ---- H3: MODE/SUBMODE round-trip (review 2026-06-04) ----
+
+        it('shows the operator-facing submode and resolves it back to the ADIF pair', () => {
+            // Fixture is a phone QSO stored as MODE=SSB SUBMODE=USB.
+            qsoEditState.populate(makeDaemonQso());
+            flushSync();
+            expect(qsoEditState.mode).toBe('USB'); // dropdown shows the sideband, not "SSB"
+            const body = qsoEditState.toPatchBody();
+            expect(body.mode).toBe('SSB');
+            expect(body.submode).toBe('USB');
+        });
+
+        it('shows the parent mode + empty submode for a submode-less mode', () => {
+            qsoEditState.populate(makeDaemonQso({ mode: 'CW', submode: '' }));
+            flushSync();
+            expect(qsoEditState.mode).toBe('CW');
+            const body = qsoEditState.toPatchBody();
+            expect(body.mode).toBe('CW');
+            expect(body.submode).toBe('');
+        });
+
+        it('clears a stale submode when the operator changes the mode (corruption fix)', () => {
+            qsoEditState.populate(makeDaemonQso()); // SSB + USB → shows "USB"
+            flushSync();
+            qsoEditState.mode = 'CW'; // operator switches phone → CW
+            const body = qsoEditState.toPatchBody();
+            expect(body.mode).toBe('CW');
+            // submode is sent as "" (present, not omitted) so the daemon's
+            // PATCH-merge clears the old USB rather than preserving it.
+            expect(body.submode).toBe('');
         });
     });
 });

@@ -95,6 +95,23 @@ class EnrichmentState {
         this.result = null;
         this.path = 'short';
     }
+
+    /**
+     * resultForCallsign returns the latest result ONLY when it belongs to the
+     * given callsign, else null. submitQso uses this so a stale result from a
+     * previously-looked-up callsign can never contaminate the QSO being logged
+     * (review 2026-06-04 H1) — the definitive guard, independent of the
+     * lookup-token race handling in QsoPanel.runLookup. Comparison is
+     * case-insensitive; an empty target or a result for a different call
+     * yields null.
+     */
+    resultForCallsign(call: string): EnrichmentResult | null {
+        const want = call.trim().toUpperCase();
+        if (want === '' || this.result?.callsign?.toUpperCase() !== want) {
+            return null;
+        }
+        return this.result;
+    }
 }
 
 export const enrichmentState = new EnrichmentState();

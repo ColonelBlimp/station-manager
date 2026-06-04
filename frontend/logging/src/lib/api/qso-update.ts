@@ -69,6 +69,7 @@ export interface DaemonQsoForEdit {
     rst_sent?: string;
     rst_rcvd?: string;
     mode?: string;
+    submode?: string;
     freq?: string;
     freq_rx?: string;
     band?: string;

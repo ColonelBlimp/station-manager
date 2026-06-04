@@ -48,7 +48,7 @@
     aria-label="Select {label}"
     aria-disabled={disabled}
     data-vfo={label}
-    title={interactive ? 'Shift+Ctrl+[ / ]: Select VFO' : null}
+    title={interactive ? 'Select VFO' : null}
     onclick={handleClick}
     onkeydown={handleKeydown}
     class="flex flex-col font-medium text-xs text-white outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded {interactive
