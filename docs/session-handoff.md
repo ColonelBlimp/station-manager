@@ -47,6 +47,16 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 135 (2026-06-04) — **`internal/bridge`** code review **triaged** (analysis only — NO code changed). Full triage + fix sketches + batch plan in `docs/reviews/internal-bridge-2026-06-04.md` → "## Triage / recommendation".
+
+A new review landed for the bridge subsystem — 9 findings (4 High / 3 Medium / 2 Low) on the newer rig-**control** surface (commands ADR 0026 + tune TX ADR 0027). Validated every claim against the code (5 parallel read-only passes, exact `file:line`): **all 9 are code-accurate; none false.** Three are narrower than labelled (single-operator, single-rig FTdx10; the QSO **log** write path is untouched). The canonical record is the **Triage section appended to the review doc** — read that to implement; it carries per-finding verdict + evidence + fix sketch.
+
+Verdicts: **FIX** — H1 (split `ON+`→false: `!EqualFold(v,"OFF")` + ST2 test), H2 (identity mismatch leaves command/tune path live — gate writes on verified-identity), H3 (tune-off can silently omit `tx_off` — validate full tune capability incl. `tx_off` before keying; defends ADR-0027 guaranteed-stop), H4 (false "bounded by write timeout" comment — fix now; real deadline needs serial-lib check), M1 (transient bridge-errors cached forever → stale toast on first-boot recovery), M2 (SSE per-write deadline; bounded by hub eviction), L1 (`doc.go` still says "read-only"), L2 (test barriers → use `hub.subscriberCount()`). **IGNORE as standalone** — M3 (`write_timeout_ms`/RTS/DTR dropped, but the dropped `rts/dtr:true` coincide with the serial-lib default → ~nil impact; fold write-timeout into H4).
+
+**Two decisions to settle before implementing** (in the triage doc): (1) **H2 strictness** — block-writes-only vs halt-on-mismatch (`exitPermanent`, which the code's own doc already lists as intended) vs both [recommended: both]; (2) **H4 depth** — comment-fix now + decide whether to pursue a real write deadline (`go.bug.st/serial` capability check, couples with M3) or just document the limit.
+
+**Proposed batches (priority):** A — tune-safety (H3 + H4-comment, highest value) · B — identity write-gate (H2, needs decision 1) · C — split ON+ (H1) · D — hub transient-error clearing (M1) · E — SSE write deadline (M2) · F — hygiene (L1 doc.go + L2 barriers + M3 disposition). **Next:** operator picks a batch / settles the H2 design choice, then implement (re-read cited code first; keep `go test ./internal/bridge` + `-race` green; add each finding's named test).
+
 ### Session 134 (2026-06-04) — **SPA** code-review remediation: **Batch G** (M2 disconnect snapshot, M3 LoggingStationView reactivity, M4 API shape guards). Shipped + tested green (701); not yet committed. **This CLOSES the frontend-logging SPA review** — all 9 findings done.
 
 Operator committed Batches E + F since Session 133; this pass is the final batch. (A **new review landed** while working: `docs/reviews/internal-bridge-2026-06-04.md` — untracked, not yet triaged.)

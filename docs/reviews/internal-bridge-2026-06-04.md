@@ -172,3 +172,75 @@ Recommended fix:
 ## Review Notes
 
 The package has unusually strong lifecycle and retry coverage for a hardware-facing subsystem, and `go test -race ./internal/bridge` is clean. The main risks are in the newer outbound-control surface: identity mismatch handling, tune-off safety, and write timeout assumptions need to be treated as part of the same safety boundary rather than as ordinary SSE/pipeline details.
+
+---
+
+## Triage / recommendation (2026-06-04) — analysis only, NO code changed yet
+
+Each finding was validated against the actual code (five parallel read-only
+passes, exact `file:line` evidence). **All 9 are code-accurate — none false.**
+Three are *narrower in real-world impact* than their label, given this is a
+single-operator, single-rig (FTdx10) deployment with the QSO **log** write path
+untouched — the risks are all on the newer rig-**control** surface. Verdicts
+below; the two open **decisions** and the **batch plan** are at the end. The
+fix sketches are the intended approach for pickup; re-read the cited code before
+editing.
+
+### H1 — split `ON+` → `splitOverride=false`. **FIX (med-high).**
+- Evidence: `mapStatusToPayload` `pipeline.go:540-547` does `split := strings.EqualFold(v, "ON")`; `EqualFold("ON+","ON")` is false. Rigdef `yaesu-ftdx10.json` maps ST `0/1/2 → OFF/ON/ON+`. `pipeline_test.go` covers ST0/ST1, **not** ST2.
+- Accurate. Real **iff** the FTdx10 actually emits ST2 (likely "quick split") — the review didn't prove emission; the rigdef author added the mapping deliberately. Consequence if emitted: SPA shows split OFF → wrong TX/RX freq logged (a logged-ADIF data-integrity concern the operator cares about). `SplitOverride` is `*bool`, which is fine — the boolean means "split engaged", and ON+ should be `true`.
+- Fix: `split := !strings.EqualFold(v, "OFF")` (any decoded non-OFF state ⇒ engaged) + an ST2 test asserting `*SplitOverride == true`. ~1 line + test.
+
+### H2 — identity mismatch leaves command/**tune** path live. **FIX (high) — needs a decision (below).**
+- Evidence: `readLoop` gates on a *local* `identityVerified` bool (`pipeline.go:307`); after publishing `BridgeErrCodeIdentityMismatch`/`Unrecognised` it **falls through** to `mapStatusToPayload`/`captureTuneSnapshot`/`hub.publish` with no `return`/`break` (`pipeline.go:385-404`) and keeps looping. `activeClient` is set **before** any identity check (`pipeline.go:219-221`) and cleared only on pipeline teardown (`:175-178`) — never on mismatch. `SendCommands` guards only `cl == nil` (`command.go:68`); `StartTune` guards single-flight + snapshot + `activeClient`, **no identity** (`tune.go:91-104`). The identity error uses `publishBridgeError` (advisory) not `publishExitBridgeError`.
+- Accurate. Severity is **moderate not high** for this codebase (trigger = a `bridge.cat.driver` typo, single-operator localhost; the two shipping rigdefs are both Yaesu so cross-driving is plausible). Sharper edges the review under-stressed: (a) the **tune path transmits**, and `StartTune`'s snapshot guard (`ErrTuneStateUnknown`) only *incidentally* blocks a truly-foreign rig; (b) a rig that **never** sends a parseable IDENTITY leaves `identityVerified=false` forever, publishes *no* error, yet the write path stays live — a wider hole than mismatch. Note: `exitPermanent`'s own doc comment (`pipeline.go:54-58`) **lists "identity mismatch" as permanent**, but the code never implements it.
+- Fix: track identity-verified as **service state**; gate the write paths (`SendCommands`, `StartTune`, and bootstrap) on it (new `ErrRigIdentityUnverified`); and/or on a definite mismatch close the client + `return exitPermanent`. See decision (1).
+
+### H3 — tune-off can silently omit `tx_off` (keyed TX, falsely reported down). **FIX (high).**
+- Evidence: `encodeTuneOff` discards the `tx_off` encode error (`tune.go:290-306`, the `if … ; err == nil` at `:292`); `releaseTune` writes the bytes and calls `finishTune` (publishes `active=false`) on any nil write error (`:167-173`); serial treats an **empty** write as success (`serial.go:204`). The ON path *does* validate loudly (`encodeTuneOn` returns the `tx_on` error; `StartTune` aborts before keying). `TuneSupported` **does** require `tx_off` (`tune.go:312-316`) **but is only wired to the SPA UI hint** `BridgeInfo.Tune` (`handler_config.go:390`) — `handleRigTune`/`StartTune` never call it, so a direct `POST /v1/rig/tune` bypasses the gate.
+- Accurate, **narrowed**: not reachable on the FTdx10 (it has `tx_off`). It's a future-rigdef-drift foot-gun — a rigdef with `tx_on` but missing/broken `tx_off` keys TX in `StartTune`, then strands the carrier while reporting `active=false`. Directly defeats the ADR-0027 "daemon owns the guaranteed stop" invariant; the retry backstop can't save it (it re-arms only on *write* error, and an empty/partial line writes as success). Cheap to harden, high safety value.
+- Fix: in `StartTune`, validate full tune capability incl. `tx_off` **before** keying (call `TuneSupported`, or encode the off-line up front); make `encodeTuneOff` return `([]byte, error)` and require `tx_off` to encode; guarantee `tx_off` leads the release line, restore mode/power best-effort *after*.
+
+### H4 — tune auto-off not bounded by a write timeout. **FIX comment now; real deadline = investigate.**
+- Evidence: comment claims "the serial write timeout bounds it" (`tune.go:191`) but the impl calls `releaseTune(context.Background(), "auto-off")` (`:198`). Serial sets a **read** timeout only (`serial.go:149`); `WriteCommandBytes` checks ctx only *between* writes and can't interrupt a blocking `port.Write` (`serial.go:218-225`). `RigSerial.WriteTimeoutMS` exists (`rig.go:41`) but `buildSerialConfig` drops it (`pipeline.go:602-610`) and `serial.Config` has no write-timeout field. Retry re-arms only on `releaseTune` error → a hung write = no retry, and it also blocks a manual `StopTune` on `writeMu`.
+- Accurate; latent (tiny CAT writes to USB-CDC rarely block; needs a driver/HW fault). The **in-code safety claim is false** — fix that now. The *real* write-bound is harder than the review implies: Go can't interrupt a blocking `port.Write` via context, so it needs an OS write deadline — and `go.bug.st/serial` likely exposes only `SetReadTimeout`. **Pickup task:** check whether the serial lib supports a write deadline; if yes, plumb `write_timeout_ms` (couples with M3); if no, document the limit and consider a close-port escape hatch.
+
+### M1 — transient bridge-errors cached forever, replay after recovery. **FIX (med).**
+- Evidence: `hub.publish` caches *every* `EventBridgeError` in `lastBridgeError` (`hub.go:93-96`); the `EventRigState` case clears only `lastRigDisconnected`, never `lastBridgeError` (`:103-112`); `subscribe` replays it to every new subscriber (`:149-154`). `serial_open_failed` (`pipeline.go:161`) and `init_write_failed` (`:191`) are `exitTransient`. Never cleared during the Service lifetime (deliberate "once observed, stays observable" — but wrong for the transient subset).
+- Accurate; cosmetic but on the **normal first-boot path** (daemon started before rig power-on → cached `serial_open_failed`; supervisor recovers; a tab opened *after* recovery still gets the stale toast).
+- Fix: distinguish transient vs permanent bridge-errors; clear the transient `lastBridgeError` on `EventRigState` (permanent codes — `unknown_driver` etc. — never see a RigState, so stay cached correctly). Composes with a fixed H2 (mismatch halts → no RigState → identity error persists). Add the supervisor recovery test the review suggests.
+
+### M2 — SSE writes can block after clearing the write deadline. **FIX (med-low).**
+- Evidence: handler clears the deadline once (`SetWriteDeadline(time.Time{})`, `handler.go:42-45`), then writes frames + keepalives synchronously on the handler goroutine (`:77-106`); no per-write deadline; this escapes the server's 30s `WriteTimeout` (`server.go:221`). While blocked it can't observe `shutdownCh`/unsubscribe.
+- Accurate but **bounded**: the hub already evicts slow subscribers (non-blocking send; close+delete on the 64-deep buffer, `hub.go:113-120`), so a stalled client stops receiving after ≤64 queued events and never back-pressures the publisher. Only a *wedged* peer (holds socket open, never reads, never RSTs) hangs the one goroutine until TCP times out. Operator's network is "slow/unreliable", so not impossible.
+- Fix: bounded write deadline around each event/keepalive write+flush (via `http.NewResponseController`), reset/extend for the next idle period. Add a slow-client test.
+
+### M3 — rigdef `write_timeout_ms`/`RTS`/`DTR` parsed but dropped. **IGNORE as standalone.**
+- Evidence: `RigSerial` declares all three (`rig.go:34-44`); both rigdefs set `rts:true`/`dtr:true`/`write_timeout_ms:20`; `buildSerialConfig` drops them (`pipeline.go:602-610`); `serial.Config` has no fields for them.
+- Accurate but **~nil present impact**: `go.bug.st/serial` defaults DTR=true/RTS=true when `InitialStatusBits==nil` (which SM always passes), so the dropped `true` values **coincide with the library default**; for USB-CDC Yaesu rigs RTS/DTR aren't flow-control anyway, and the dropped write-timeout guards writes that never block. Only bites a *future* rigdef wanting `rts:false`/`dtr:false`.
+- Disposition: don't fix standalone. Fold `write_timeout_ms` into H4 *if* the serial lib supports a write deadline; for RTS/DTR add a doc-note (or a small `SetRTS`/`SetDTR` plumbing) — low priority.
+
+### L1 — `doc.go` still says "read-only / no inbound command path". **FIX (trivial).**
+- Evidence: `doc.go:7-11` is contradicted by `command.go` (ADR 0026 inbound commands) and `tune.go` (ADR 0027 TX keying). Per "keep all docs current", and the stale wording masks *why* the identity/tune-unkey guarantees now need to be stricter.
+- Fix: rewrite the package doc for the current read/**write** shape + the command + tune-safety constraints.
+
+### L2 — handler test barriers weakened by the post-INIT READ. **FIX (cheap).**
+- Evidence: `TestHTTPHandler_BootstrapFiresOnSubscribe` (`handler_test.go:240-272`) waits `>=1` then `>=2` writes and checks `writes[1]` — but the pipeline's post-INIT READ (`pipeline.go:209`) means `writes[1]` can be the **startup** READ, not the on-subscribe bootstrap (masked because both encode identically → green without proving the invariant). `TestHTTPHandler_FanOutToMultipleSubscribers` (`:332-340`) waits `numClients+1` but should now be `numClients+2` → real flake potential. `hub.subscriberCount()` **exists** and is purpose-built (`hub.go:206-210`).
+- Fix: switch both barriers to `s.hub.subscriberCount()`; assert bootstrap count explicitly.
+
+### Decisions needed before implementing
+
+1. **H2 strictness** — (a) block writes only (keep read-only state for diagnosis, gate `SendCommands`/`StartTune` on a verified flag); (b) halt entirely on mismatch (close client + `exitPermanent`, matches the doc's intent, loses diagnostic state); (c) both (recommended — block writes always + permanent-exit on a *definite* mismatch). Also decide whether the *no-IDENTITY-ever* rig should be treated as unverified (block writes) — recommended yes.
+2. **H4 depth** — fix the false comment now regardless; decide whether to pursue a real write deadline (needs a `go.bug.st/serial` capability check; couples with M3's `write_timeout_ms`) or just document the limitation.
+
+### Proposed batches (priority order)
+
+- **Batch A — Tune-safety (H3 + H4-comment).** `tune.go`: require full tune capability incl. `tx_off` in `StartTune` before keying; `encodeTuneOff` → `([]byte, error)` with `tx_off` leading; fix the misleading auto-off comment. Highest safety value (defends ADR-0027 guaranteed-stop).
+- **Batch B — Identity write-gate (H2).** Needs decision (1).
+- **Batch C — Split `ON+` (H1).** `mapStatusToPayload` `!EqualFold(v,"OFF")` + ST2 test.
+- **Batch D — Hub transient-error clearing (M1).** Transient/permanent split; clear transient on recovery + supervisor test.
+- **Batch E — SSE per-write deadline (M2).**
+- **Batch F — Hygiene (L1 doc.go + L2 test barriers + M3 disposition).**
+
+Nothing here touches the QSO log write path. All `go test ./internal/bridge`
+(+ `-race`) must stay green; each batch adds the test(s) named in its finding.
