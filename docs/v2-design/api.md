@@ -694,7 +694,13 @@ not preempt the vocabulary.
   client-side library exports via `internal/adif`, characterization
   test fixtures). Per ADR 0016 phase 2, the canonical external
   identifier round-trips through the ADIF surface as well as the
-  HTTP wire shape so a re-imported export preserves identity. Emitted
+  HTTP wire shape so a re-imported export preserves identity. The trust
+  boundary is by entry point (review 2026-06-04 H1): `adif.RecordToQso`
+  restores it onto `types.Qso.UUID`; the import/restore path
+  (`qsoservice.SubmitImport`, used by `smd import`) preserves a valid
+  supplied UUIDv7; the public `POST /v1/qso` path (`qsoservice.Submit`)
+  always mints a fresh UUID and never adopts a client-supplied one
+  (identity-spoofing guard). Emitted
   with `,omitempty` semantics — a QSO with no UUID does not emit an
   empty `APP_SM_QSO_ID` tag, which keeps pre-Phase-1 historical rows
   clean. The `APP_SM_` prefix follows the ADIF spec's

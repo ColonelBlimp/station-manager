@@ -112,7 +112,16 @@ func QsoToRecord(q types.Qso) Record {
 }
 
 // RecordToQso converts a parsed ADIF Record into a types.Qso, setting the
-// given logbookID. QSL and user-defined fields are mapped where possible.
+// given logbookID. It is the faithful inverse of QsoToRecord: QSL and
+// user-defined fields are mapped back, including UUID (from AppSmQsoID) and
+// QslSendVia (from QSL_SENT_VIA), both of which QsoToRecord emits.
+//
+// UUID carries the QSO's canonical UUIDv7 (ADR 0016) back off the wire so an
+// export round-trips its identity. Whether that identity is *honoured* is the
+// caller's trust decision, NOT this converter's: the public submit path
+// (qsoservice.Submit) always mints a fresh UUID — never trusting a
+// wire-supplied one — while the restore/import path (qsoservice.SubmitImport)
+// preserves it. See review 2026-06-04 H1.
 //
 // AppSmRequestQsl maps "Y" → true, anything else → false. The strict
 // equality means a malformed value ("y", "1", "true") decodes to false
@@ -121,17 +130,19 @@ func QsoToRecord(q types.Qso) Record {
 // SPA emitter.
 func RecordToQso(rec Record, logbookID int64) types.Qso {
 	q := types.Qso{
+		UUID:             rec.AppSmQsoID,
 		LogbookID:        logbookID,
 		QsoDetails:       rec.QsoDetails,
 		ContactedStation: rec.ContactedStation,
 		LoggingStation:   rec.LoggingStation,
 		Qsl: types.Qsl{
-			QslMsg:   rec.QslSection.QslMsg,
-			QslRDate: rec.QslSection.QslRDate,
-			QslSDate: rec.QslSection.QslSDate,
-			QslRcvd:  rec.QslSection.QslRcvd,
-			QslSent:  rec.QslSection.QslSent,
-			QslVia:   rec.QslSection.QslVia,
+			QslMsg:     rec.QslSection.QslMsg,
+			QslRDate:   rec.QslSection.QslRDate,
+			QslSDate:   rec.QslSection.QslSDate,
+			QslRcvd:    rec.QslSection.QslRcvd,
+			QslSent:    rec.QslSection.QslSent,
+			QslSendVia: rec.QslSection.QslSentVia,
+			QslVia:     rec.QslSection.QslVia,
 		},
 		QrzComUploadDate:    rec.QslSection.QrzComQsoUploadDate,
 		QrzComUploadStatus:  rec.QslSection.QrzComQsoUploadStatus,

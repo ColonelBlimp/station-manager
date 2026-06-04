@@ -298,3 +298,104 @@ func TestComposeToAdifString_ProducesHeaderAndRecords(t *testing.T) {
 		t.Fatal("output missing CALL field")
 	}
 }
+
+// ---- H2: <EOR>/<EOH> inside a field value must not split the record --------
+
+// TestParse_EorInFieldValueRoundTrips builds a record whose free-text fields
+// contain the literal marker text, emits it, and parses it back. The length
+// prefix — not the marker text — governs where each value ends, so the record
+// must survive as ONE record with the values intact (review 2026-06-04 H2).
+func TestParse_EorInFieldValueRoundTrips(t *testing.T) {
+	rec := Record{}
+	rec.Call = "M0CMC"
+	rec.Band = "40m"
+	rec.Comment = "contains <EOR> and <EOH> tokens"
+	rec.Notes = "trailing marker <EOR>"
+
+	parsed, err := Parse([]byte(rec.String()))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("got %d records, want 1 (a marker inside a value must not split)", len(parsed.Records))
+	}
+	r := parsed.Records[0]
+	if r.Call != "M0CMC" {
+		t.Errorf("Call = %q, want M0CMC", r.Call)
+	}
+	if r.Comment != "contains <EOR> and <EOH> tokens" {
+		t.Errorf("Comment = %q, want it intact", r.Comment)
+	}
+	if r.Notes != "trailing marker <EOR>" {
+		t.Errorf("Notes = %q, want it intact", r.Notes)
+	}
+}
+
+// TestParse_EorInValueDoesNotSplit_Handcrafted pins the exact wire shape the
+// old marker-first splitter mis-handled: COMMENT's declared length (20) spans
+// the literal "<EOR>", and a real BAND + <EOR> follow. The fields after the
+// marker-bearing value must still parse into the same record.
+func TestParse_EorInValueDoesNotSplit_Handcrafted(t *testing.T) {
+	// "contains <EOR> token" is exactly 20 bytes.
+	input := "<CALL:5>M0CMC<COMMENT:20>contains <EOR> token<BAND:3>40m<EOR>"
+	parsed, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("got %d records, want 1", len(parsed.Records))
+	}
+	r := parsed.Records[0]
+	if r.Call != "M0CMC" || r.Comment != "contains <EOR> token" || r.Band != "40m" {
+		t.Errorf("mis-parsed: Call=%q Comment=%q Band=%q", r.Call, r.Comment, r.Band)
+	}
+}
+
+// ---- L1: tolerant truncation of an over-long declared length ----------------
+
+// TestParse_OverlongFieldLengthTruncatesTolerantly documents the parser's
+// tolerant behaviour: a declared length that overruns the buffer takes the
+// available bytes and returns no error (review 2026-06-04 L1). This is a
+// characterization test — if a future strict/import mode is added, it should
+// surface this condition rather than silently truncate.
+func TestParse_OverlongFieldLengthTruncatesTolerantly(t *testing.T) {
+	input := "<CALL:99>M0CMC"
+	parsed, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("got %d records, want 1", len(parsed.Records))
+	}
+	if parsed.Records[0].Call != "M0CMC" {
+		t.Errorf("Call = %q, want M0CMC (truncated to available bytes)", parsed.Records[0].Call)
+	}
+}
+
+// ---- M2: bulk-parse allocation guard ---------------------------------------
+
+// BenchmarkParse_ManyRecords guards against an allocation regression in the
+// multi-record path (review 2026-06-04 M2 — the old splitter lowercased the
+// whole remaining file once per record, O(file × records)). Run with
+// `go test -bench=Parse_ManyRecords -benchmem ./internal/adif`.
+func BenchmarkParse_ManyRecords(b *testing.B) {
+	var sb strings.Builder
+	const rec = "<CALL:5>M0CMC<BAND:3>40m<MODE:3>SSB<FREQ:6>14.074" +
+		"<QSO_DATE:8>20250508<TIME_ON:4>0845<STATION_CALLSIGN:5>G4ABC<EOR>\n"
+	for i := 0; i < 5000; i++ {
+		sb.WriteString(rec)
+	}
+	data := []byte(sb.String())
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := Parse(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got.Records) != 5000 {
+			b.Fatalf("got %d records, want 5000", len(got.Records))
+		}
+	}
+}

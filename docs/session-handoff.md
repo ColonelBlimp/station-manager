@@ -47,6 +47,20 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 128 (2026-06-04) — Code-review remediation, **Batch A** (`internal/adif`): H2+M2 parser rewrite + M1+H1 round-trip restore. Shipped + tested green; not yet committed.
+
+Two read-only code reviews landed in `docs/reviews/` (`internal-adif-2026-06-04.md`, `internal-lookup-2026-06-04.md`). Validated all 13 findings against the source (three parallel read-only passes) — all factually grounded; **two lookup findings were overstated** (H2: no bogus `0001-01-01` timestamp is ever emitted — `omitempty` on `time.Time` suppresses it; L1: no current provider can trigger the `IsEmpty` gap). Operator chose **Batch A** (the adif fixes) first.
+
+- **H2 + M2 (parser).** `internal/adif/parse.go` rewritten as a single **length-aware forward scan**: skips each field value by its declared byte length, recognises `<EOR>`/`<EOH>` only at tag boundaries. Fixes the `<EOR>`-inside-a-value corruption (the package could emit a record it couldn't parse back — COMMENT/NOTES are operator-settable) AND drops the per-record whole-suffix lowercasing (`indexOfCaseInsensitive`, O(file×records) on bulk import). `<EOH>` header/body split is length-aware too. All prior `Parse` tests still pass (behaviour-preserving) + new H2 round-trip/handcrafted tests + `BenchmarkParse_ManyRecords` allocation guard.
+- **M1.** `RecordToQso` restores `QslSendVia` from `QSL_SENT_VIA` (was silently dropped on import/round-trip).
+- **H1.** `RecordToQso` restores `UUID` from `APP_SM_QSO_ID` (faithful inverse of `QsoToRecord`). Trust boundary split by entry point: `qsoservice.SubmitImport` (used by `smd import`) preserves a valid supplied UUIDv7 so an export round-trips identity; the public `Submit` (`POST /v1/qso`) always mints — never trusts a client UUID (spoofing guard). Policy extracted to pure `resolveSubmitUUID` + unit-tested.
+- **L1.** Tolerant truncation kept + characterization test; a strict/warn mode for `smd import` is left as an **open product decision**.
+- Docs: resolution recorded in the adif review doc; `api.md` `APP_SM_QSO_ID` contract updated with the trust boundary.
+
+**Remaining review work (not started):** Batch B (lookup cheap fixes — M2 soft-disable, M3 handler validation, L3 orchestrator uppercase), Batch C (lookup H1 force-refresh replace-mode, H2 result-shape, M1 QRZ session re-auth — each needs a decision), Batch D (L2 source-name drift, L1 `IsEmpty` guard). The four pending decisions + the full action plan are in the chat record; the lookup review doc holds the findings.
+
+**Next:** operator review of Batch A; then Batch B/C/D per the agreed plan.
+
 ### Session 127 (2026-06-04) — Tune-carrier control (ADR 0027): the **first TX feature**. Daemon + SPA **shipped + fully tested green**; ADR 0027 Accepted. **HW validation on the FTdx10 still pending** (RTTY carrier is provisional — "try it and see"). Not yet committed.
 
 Built the operator's one-button external-amp tune end-to-end. This is the first SM feature that **transmits**, so the safety model is the core: the **daemon owns the guaranteed stop**, never the SPA. Replaces the manual ritual (switch CW key to bug → enable break-in → hold the paddle → tune the amp) with one button.

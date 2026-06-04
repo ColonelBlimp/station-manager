@@ -7,6 +7,47 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
+// TestRecordToQso_RestoresUUIDAndQslSentVia pins that RecordToQso is a faithful
+// inverse of QsoToRecord for the two fields the review found dropped: UUID
+// (from APP_SM_QSO_ID, H1) and QslSendVia (from QSL_SENT_VIA, M1).
+func TestRecordToQso_RestoresUUIDAndQslSentVia(t *testing.T) {
+	rec := Record{}
+	rec.Call = "M0CMC"
+	rec.AppSmQsoID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	rec.QslSection.QslSentVia = "B"
+
+	q := RecordToQso(rec, 7)
+	if q.UUID != "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b" {
+		t.Errorf("UUID = %q, want it restored from AppSmQsoID", q.UUID)
+	}
+	if q.Qsl.QslSendVia != "B" {
+		t.Errorf("QslSendVia = %q, want B (restored from QSL_SENT_VIA)", q.Qsl.QslSendVia)
+	}
+	if q.LogbookID != 7 {
+		t.Errorf("LogbookID = %d, want 7", q.LogbookID)
+	}
+}
+
+// TestQsoRecordRoundTrip_PreservesUUIDAndQslSentVia proves the converter
+// asymmetry is gone: QsoToRecord → RecordToQso is an identity for UUID and
+// QslSendVia (both of which the emitter writes).
+func TestQsoRecordRoundTrip_PreservesUUIDAndQslSentVia(t *testing.T) {
+	q := types.Qso{
+		UUID:      "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+		LogbookID: 3,
+	}
+	q.Call = "M0CMC"
+	q.Qsl.QslSendVia = "B"
+
+	back := RecordToQso(QsoToRecord(q), 3)
+	if back.UUID != q.UUID {
+		t.Errorf("UUID round-trip: got %q, want %q", back.UUID, q.UUID)
+	}
+	if back.Qsl.QslSendVia != q.Qsl.QslSendVia {
+		t.Errorf("QslSendVia round-trip: got %q, want %q", back.Qsl.QslSendVia, q.Qsl.QslSendVia)
+	}
+}
+
 func TestRecord_String(t *testing.T) {
 	record := &Record{
 		QsoDetails: types.QsoDetails{

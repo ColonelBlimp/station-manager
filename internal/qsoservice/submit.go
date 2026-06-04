@@ -21,11 +21,42 @@ import (
 )
 
 // Submit validates an ADIF record, checks for duplicates, and atomically
-// stores the QSO and its upload-queue rows.
+// stores the QSO and its upload-queue rows. It is the PUBLIC entry point
+// (POST /v1/qso): it always mints a fresh UUIDv7 and never honours a
+// caller-supplied APP_SM_QSO_ID, so a client cannot choose a QSO's canonical
+// identity (identity-spoofing guard — review 2026-06-04 H1).
 //
 // If force is true, the dedupe check is skipped (contest edge case per
 // api.md Section 4.2).
 func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, force bool) (SubmitResult, error) {
+	return s.submit(ctx, logbookID, rec, force, false)
+}
+
+// SubmitImport is the restore/import entry point (cmd/smd import). Unlike
+// Submit it PRESERVES a valid caller-supplied UUIDv7 — carried onto qso.UUID
+// by adif.RecordToQso from the record's APP_SM_QSO_ID — so an exported logbook
+// re-imports with its canonical identities intact (ADR 0016; H1). A missing or
+// malformed supplied UUID falls back to a freshly minted one. Kept distinct
+// from Submit so only the trusted import path, never the public endpoint, can
+// set a QSO's identity from the wire.
+func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Record, force bool) (SubmitResult, error) {
+	return s.submit(ctx, logbookID, rec, force, true)
+}
+
+// resolveSubmitUUID applies the UUID policy (ADR 0016; review 2026-06-04 H1):
+// preserve=false (public submit) always mints a fresh UUIDv7; preserve=true
+// (import/restore) keeps the supplied UUID when it is a valid UUIDv7, and mints
+// otherwise. Pure + free so the policy is unit-testable without the DB path.
+func resolveSubmitUUID(supplied string, preserve bool) string {
+	if preserve && utils.IsValidUUIDv7(supplied) {
+		return supplied
+	}
+	return utils.NewUUIDv7()
+}
+
+// submit is the shared implementation. preserveUUID selects the UUID policy:
+// false (public) always mints; true (import) keeps a valid supplied UUIDv7.
+func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, preserveUUID bool) (SubmitResult, error) {
 	const op errors.Op = "qsoservice.Submit"
 
 	// ---- Validate required fields ----
@@ -189,7 +220,13 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	qso.DedupeKey = dedupeKey
-	qso.UUID = utils.NewUUIDv7()
+	// UUID policy (ADR 0016; review 2026-06-04 H1): public Submit always mints;
+	// SubmitImport preserves a valid supplied UUIDv7 (carried onto qso.UUID by
+	// RecordToQso) so canonical identity round-trips on restore/import. Dedupe
+	// is by content key (above), not UUID, so re-importing identical QSOs still
+	// dedupes before reaching here; a preserved UUID that collides with a
+	// different existing row is an out-of-scope edge surfaced by the insert.
+	qso.UUID = resolveSubmitUUID(qso.UUID, preserveUUID)
 
 	// ---- Atomic write: QSO + upload-queue rows ----
 	tx, cancel, err := s.DB.BeginTxContext(ctx)

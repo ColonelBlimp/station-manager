@@ -221,7 +221,11 @@ func runImport(args []string) error {
 
 	for i, rec := range parsed.Records {
 		normalizeImportedMode(&rec)
-		res, serr := qsoSvc.Submit(ctx, logbookID, rec, false)
+		// Import preserves the source UUID (APP_SM_QSO_ID) when present + valid,
+		// so a Station Manager export restores its canonical identities (ADR
+		// 0016; review 2026-06-04 H1). The public POST /v1/qso path uses Submit
+		// (always mints) instead.
+		res, serr := qsoSvc.SubmitImport(ctx, logbookID, rec, false)
 		if serr != nil {
 			if sub := qsoservice.IsSubmitError(serr); sub != nil {
 				errLines = append(errLines, errLine{
