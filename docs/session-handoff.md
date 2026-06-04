@@ -24,7 +24,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-06-02)
+## Current state (as of 2026-06-04)
 
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
@@ -33,7 +33,7 @@ In-tree and shipped:
 - **Daemon core** — milestones 1/1b/1c (ingest → validate → store → forward → emit status → serve queries). CGO-free SQLite (modernc), UUIDv7 QSO identity (ADR 0016), `qso_history` append-only audit, dedupe key, soft-delete, one-fails-all-fail QSO writes.
 - **Enrichment** (ADR 0017) — hamnut + QRZ providers, domain-tables-as-cache, three-state read policy, bounded async refresh worker. Never blocks logging.
 - **Forwarder** (ADR 0022) — multi-destination `Forwarder` interface + worker + registry; enqueue gated on config presence, not `Enabled`.
-- **Bridge** (`internal/bridge`, ADR 0013 + 0019) — M3a closed 2026-05-11. Read-only rig state over `/v1/rig/events` SSE; AUTO-mode CAT → filter → SPA; pipeline supervisor (ADR 0020) self-heals first-boot ordering + mid-session disruption; rig-mode → ADIF mappings; i18n error codes (ADR 0010).
+- **Bridge** (`internal/bridge`, ADR 0013 + 0019) — M3a closed 2026-05-11. Read-only rig state over `/v1/rig/events` SSE; AUTO-mode CAT → filter → SPA; pipeline supervisor (ADR 0020) self-heals first-boot ordering + mid-session disruption; rig-mode → ADIF mappings; i18n error codes (ADR 0010). **Inbound command path** (ADR 0026): `POST /v1/rig/command` drives freq/mode/VFO/band (data-driven `cat` commands + `BridgeInfo.ops`); SPA rig-control on Shift+Ctrl shortcuts. **Tune-carrier path** (ADR 0027): `POST /v1/rig/tune` + a daemon-owned TX state machine keys a reduced-power RTTY carrier for external-amp tuning — the first TX feature; the daemon owns the guaranteed stop; click-only Tune button.
 - **SPA logging client** — QsoPanel + CountryPanel + InfoPanel with four tabs (Worked / Details / My Station / Session), all shipped. Keyboard-first flow, enrichment + contact-history wiring, QSO edit overlay, per-session QSO list. My Station has seven sub-tabs (identity / location / equipment / CW / qso / Mode Mappings / **About** — the last a read-only `/v1/version` diagnostics panel). The Comment field carries a **paste-list** (localStorage MRU of recently-logged comments, clipboard-list dropdown). **Session email-out**: posts `{to, uuids[]}`; the daemon rebuilds the ADIF from the live DB rows (proper `<EOH>` header), durably stamps `sm_fwrd_by_email_*` (SessionPanel "Emailed" column), and archives a copy under `<workingDir>/exports/sent-adif/`. See memory `project_sm_session_email_sent_status`.
 - **CD pipeline** — `.github/workflows/ci.yml` gates every push to main (SPA lint/check/test/build + gofmt/vet/`go test -race`/embed-build/all `cmd/...`). Local mirror `task ci:local`; dogfood refresh `task deploy:local:dev`.
 - **Operator daemon control** — the RPM ships `/usr/bin/smctl` (`start|stop|restart|status`) alongside `/usr/bin/smd`; it wraps `systemctl --user … smd` and prints a state-verified `SM Started.` / `SM Stopped.` line (bare `systemctl` is silent on success). See `docs/install.md §3`.
@@ -46,6 +46,20 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 127 (2026-06-04) — Tune-carrier control (ADR 0027): the **first TX feature**. Daemon + SPA **shipped + fully tested green**; ADR 0027 Accepted. **HW validation on the FTdx10 still pending** (RTTY carrier is provisional — "try it and see"). Not yet committed.
+
+Built the operator's one-button external-amp tune end-to-end. This is the first SM feature that **transmits**, so the safety model is the core: the **daemon owns the guaranteed stop**, never the SPA. Replaces the manual ritual (switch CW key to bug → enable break-in → hold the paddle → tune the amp) with one button.
+
+- **Daemon tune controller** (`internal/bridge/tune.go`) — a TX state machine. `StartTune` snapshots current mode+power then writes one atomic line `MD09;PC020;TX1;` (RTTY + tune power + key); `StopTune` / auto-off / disconnect-release all converge on `TX0;PC<orig>;MD0<orig>;` (unkey, restore power, restore mode). Three guarantees armed at key: **hard auto-off timer** (fail-safe — re-arms a retry if the unkey write fails), **release-on-disconnect** (pipeline exit clears tune), **single-flight**. Refuses to start (`ErrTuneStateUnknown`) if mode+power are unknown — can't guarantee the restore. Restore snapshot is read-loop-fed and **frozen while tuning** so the rig's own RTTY/tune-power pushes can't pollute it; the one scoped exception to "no rig-state cache."
+- **rigdef** (FTdx10 only): `set_power` (`PC%s;`, pad 3, exposed), `tx_on`/`tx_off` (`TX1;`/`TX0;`, **never exposed** — only the controller keys TX, same rule as PLAYBACK). `set_mode`/`set_power` encode via `EncodeCommand`; `tx_*` via low-level `cat.Encode` (bypasses the exposed gate).
+- **Config** `bridge.tune`: `power_w` (const 20, config ≤ 40) + `max_duration_ms` (const 15 s, config ≤ 30 s), clamped at `Service.New` with a warn; validated non-negative at load.
+- **API**: `POST /v1/rig/tune {active}` (gated on bridge-enabled); error envelope (`rig_not_connected` / `rig_state_unknown` / `rig_tune_failed`); `tune-state {active}` SSE event (4th rig event type, hub-cached for late subscribers); `BridgeInfo.tune` capability via `bridge.TuneSupported(def)`.
+- **SPA**: `lib/api/rigTune.ts` (`sendRigTune`); `toggleTune` in `rigControl.ts` (confirm-by-push, no optimistic flip); `TuneButton.svelte` (**click-only** — no kb shortcut; TX safety; red + pulse when keyed; placed after `<Vfos />` in QsoPanel row 1, hidden when the rig can't tune); `bridge.svelte.ts` tune-state handler + `tuneActive` (reset on CAT-disable, NOT on a transport blip — the daemon stays authoritative and replays the cached state on reconnect); `configState.bridge.tune` capability.
+- **Tests** all green: Go (`cat` set_power-encode + tx-not-exposed gate; `bridge` controller — start/stop/auto-off/disconnect/single-flight/refuse-if-unknown/snapshot-freeze, **race-clean**; `api` tune handler + `BridgeInfo.tune`) + SPA (**681 pass**: toggleTune, tune-state, TuneButton). gofmt/vet/`go build ./...` + svelte-check (0)/eslint/build clean.
+- **Docs**: ADR 0027 Accepted; CLAUDE.md bridge bullet + `api.md` consumer table + `keyboard-shortcuts.md` (deliberate click-only note) updated; memory `project_sm_serial_bridge` pending.
+
+**Next:** HW-validate on the FTdx10 — confirm the RTTY carrier tunes the amp at 20 W, that power + mode restore cleanly on stop, and that the auto-off backstop drops the carrier. If RTTY proves unsuitable, ADR 0027's carrier-mode decision reopens (it's provisional by design). Then commit.
 
 ### Session 126 (2026-06-04) — Inbound rig-command path: data-driven `cat` rework + `bridge.SendCommand` + `POST /v1/rig/command` + `BridgeInfo.ops`. Daemon-side **shipped + tested**; ADR 0026 Accepted; confirm-by-push validated on the FTdx10; command batching added; SPA pending. Implementation committed (`5e8af9b7`); `BridgeInfo.ops` + this doc pass pending commit.
 
