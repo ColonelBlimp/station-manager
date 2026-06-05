@@ -58,6 +58,15 @@ func TestEncodeCommand(t *testing.T) {
 		{name: "set_band 20m", cmd: "set_band", value: "20m", want: "BS05;"},
 		{name: "set_band 6m", cmd: "set_band", value: "6m", want: "BS10;"},
 		{name: "set_mode unknown literal", cmd: "set_mode", value: "NOT-A-MODE", wantErr: ErrUnmappedValue},
+		// Padded-value validation (review 2026-06-05 M1): non-digit / over-wide
+		// values must be rejected, not padded into a malformed CAT line.
+		{name: "set_power non-digit", cmd: "set_power", value: "abc", wantErr: ErrInvalidPaddedValue},
+		{name: "set_power dotted number", cmd: "set_power", value: "1.5", wantErr: ErrInvalidPaddedValue},
+		{name: "set_power negative", cmd: "set_power", value: "-1", wantErr: ErrInvalidPaddedValue},
+		{name: "set_freq non-digit", cmd: "set_freq", value: "14a74000", wantErr: ErrInvalidPaddedValue},
+		{name: "set_freq over-wide", cmd: "set_freq", value: "1407400000", wantErr: ErrInvalidPaddedValue},
+		{name: "set_power at width", cmd: "set_power", value: "100", want: "PC100;"},
+		{name: "set_power padded", cmd: "set_power", value: "20", want: "PC020;"},
 		{name: "PLAYBACK not exposed", cmd: "PLAYBACK", value: "5", wantErr: ErrCommandNotExposed},
 		{name: "READ not exposed", cmd: "READ", value: "", wantErr: ErrCommandNotExposed},
 		{name: "unknown command", cmd: "NOT_A_COMMAND", value: "x", wantErr: ErrUnknownCommand},

@@ -57,9 +57,13 @@ func ExposedCommands(def RigDefinition) []string {
 //   - ErrCommandNotExposed — command exists but is not reachable externally
 //   - ErrUnmappedValue     — ValueMap is set but value is not in its table
 //   - ErrMissingValue      — a value-bearing command was called with no value
+//   - ErrInvalidPaddedValue — a padded (numeric) command got a non-digit or
+//     over-wide value
 //
-// Range and width validation of value (e.g. a frequency within band) is the
-// command endpoint's responsibility; the codec stays permissive.
+// Width + digit validation IS enforced for padded commands (so a hand-crafted
+// /v1/rig/command can't push a malformed CAT line like "PCabc;" onto the wire);
+// semantic RANGE validation (e.g. a frequency within band) remains the command
+// endpoint's responsibility — the codec stays permissive about value meaning.
 func EncodeCommand(def RigDefinition, name, value string) ([]byte, error) {
 	const op errors.Op = "cat.EncodeCommand"
 
@@ -92,9 +96,37 @@ func EncodeCommand(def RigDefinition, name, value string) ([]byte, error) {
 		v = code
 	}
 	if c.Pad > 0 {
+		// A padded command names a fixed-width numeric field (set_freq FA%s;
+		// pad 9, set_power PC%s; pad 3): the value must be ASCII digits that
+		// fit the field — left-zero-pad fills the rest. Reject non-digit or
+		// over-wide values so a hand-crafted /v1/rig/command can't pad a bad
+		// value into a malformed CAT line, e.g. "PCabc;" or "FA000001.5;"
+		// (review 2026-06-05 M1). Skipped when a value_map is also set — the
+		// map already validated the literal and produced the wire code (no
+		// padded+value_map command ships today; stay correct if one is added).
+		if c.ValueMap == "" && (!isASCIIDigits(v) || len(v) > c.Pad) {
+			return nil, errors.New(op).WithErr(ErrInvalidPaddedValue).
+				WithMsgf("value %q must be at most %d digits for command %q", value, c.Pad, name)
+		}
 		v = leftZeroPad(v, c.Pad)
 	}
 	return Encode(def, name, v)
+}
+
+// isASCIIDigits reports whether s is non-empty and every byte is '0'..'9'.
+// Used to gate padded numeric command values (set_freq, set_power); rejects
+// signs, dots, hex, and any non-digit byte — only a bare unsigned integer
+// fits a left-zero-padded CAT field.
+func isASCIIDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // lookupCommand returns the named command from the rigdef and true, or a

@@ -44,6 +44,15 @@ var ErrUnmappedValue = stderr.New("cat: value not in command map")
 // their template verbatim.
 var ErrMissingValue = stderr.New("cat: command requires a value")
 
+// ErrInvalidPaddedValue is returned (wrapped) by EncodeCommand when a padded
+// (fixed-width numeric) command — e.g. set_freq FA%s; pad 9, set_power PC%s;
+// pad 3 — is given a value that is not all ASCII digits or is wider than the
+// pad field. Padded commands name a numeric rig field, so a non-digit or
+// over-wide value would otherwise become a malformed CAT line on the wire
+// (e.g. "PCabc;"); rejecting it here lets the API return rig_invalid_value
+// instead. Value-map commands validate via their map, not this check.
+var ErrInvalidPaddedValue = stderr.New("cat: value not valid for padded command")
+
 // Decode parses one framed CAT line (terminator already stripped by the
 // serial reader) against the given rig definition and returns a tag map
 // of extracted fields. Behaviour matches v1's lineProcessor + lookup

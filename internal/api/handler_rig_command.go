@@ -102,7 +102,8 @@ func (s *Server) writeRigCommandError(w http.ResponseWriter, op errors.Op, err e
 	case stderr.Is(err, cat.ErrUnknownCommand), stderr.Is(err, cat.ErrCommandNotExposed):
 		s.writeError(w, http.StatusBadRequest, "rig_unsupported_command",
 			"rig does not support a requested command", op)
-	case stderr.Is(err, cat.ErrUnmappedValue), stderr.Is(err, cat.ErrMissingValue):
+	case stderr.Is(err, cat.ErrUnmappedValue), stderr.Is(err, cat.ErrMissingValue),
+		stderr.Is(err, cat.ErrInvalidPaddedValue):
 		s.writeError(w, http.StatusBadRequest, "rig_invalid_value",
 			"a command value is missing or not valid for the rig", op)
 	case stderr.Is(err, bridge.ErrRigNotConnected):

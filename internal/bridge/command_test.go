@@ -63,8 +63,9 @@ func TestSendCommand(t *testing.T) {
 }
 
 // TestSendCommand_RejectsBeforeWrite proves the bad-command paths never touch
-// the serial port: a not-exposed, unknown, or unmapped op returns the matching
-// cat sentinel and records zero writes.
+// the serial port — even with an active, identity-verified client (the
+// newCommandTestService default): a not-exposed, unknown, unmapped, or
+// invalid-padded op returns the matching cat sentinel and records zero writes.
 func TestSendCommand_RejectsBeforeWrite(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -75,6 +76,10 @@ func TestSendCommand_RejectsBeforeWrite(t *testing.T) {
 		{"not exposed", "PLAYBACK", "5", cat.ErrCommandNotExposed},
 		{"unknown op", "frobnicate", "x", cat.ErrUnknownCommand},
 		{"unmapped mode", "set_mode", "NOT-A-MODE", cat.ErrUnmappedValue},
+		// Padded-value validation (review 2026-06-05 M1): a non-digit set_power
+		// is rejected at encode, so a malformed "PCabc;" never reaches the wire.
+		{"non-digit set_power", "set_power", "abc", cat.ErrInvalidPaddedValue},
+		{"over-wide set_freq", "set_freq", "1407400000", cat.ErrInvalidPaddedValue},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
