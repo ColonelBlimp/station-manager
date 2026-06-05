@@ -27,7 +27,14 @@
     import { toasts } from '../../states/toasts.svelte';
     import { isValidCallsign } from '../../validators/callsign';
     import { callsignStack } from '../../states/callsignStack.svelte';
-    import { swapVfo, bandUp, bandDown, selectBand } from '../../actions/rigControl';
+    import {
+        swapVfo,
+        bandUp,
+        bandDown,
+        selectBand,
+        nudgeFreqCoarse,
+        nudgeFreqFine,
+    } from '../../actions/rigControl';
     import TimerControls from '../components/TimerControls.svelte';
 
     /*
@@ -696,12 +703,14 @@
             handleStack();
             return;
         }
-        if (e.shiftKey && e.key === 'ArrowUp') {
+        // Shift+ArrowUp/Down pop the stack — but NOT with Ctrl held, which is
+        // the rig-control freq-step family below (Shift+Ctrl+Arrow = ±10 Hz).
+        if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowUp') {
             e.preventDefault();
             handlePopTop();
             return;
         }
-        if (e.shiftKey && e.key === 'ArrowDown') {
+        if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowDown') {
             e.preventDefault();
             handlePopBottom();
             return;
@@ -749,6 +758,31 @@
             if (bandByDigit[e.code]) {
                 e.preventDefault();
                 selectBand(bandByDigit[e.code]);
+                return;
+            }
+            // Frequency step on the selected VFO, all on the arrow cluster:
+            // ↑/↓ = coarse (±100 Hz), →/← = fine (±10 Hz); up/right = higher.
+            // (Page keys were dropped — Firefox's Ctrl+Shift+PageUp/Down
+            // move-tab won't yield to preventDefault.) CAT-on/off routing +
+            // capability gating live in nudgeFreq.
+            if (e.code === 'ArrowUp') {
+                e.preventDefault();
+                nudgeFreqCoarse(1);
+                return;
+            }
+            if (e.code === 'ArrowDown') {
+                e.preventDefault();
+                nudgeFreqCoarse(-1);
+                return;
+            }
+            if (e.code === 'ArrowRight') {
+                e.preventDefault();
+                nudgeFreqFine(1);
+                return;
+            }
+            if (e.code === 'ArrowLeft') {
+                e.preventDefault();
+                nudgeFreqFine(-1);
                 return;
             }
         }

@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { selectVfo, swapVfo, bandUp, bandDown, selectBand, toggleTune } from './rigControl';
+import {
+    selectVfo,
+    swapVfo,
+    bandUp,
+    bandDown,
+    selectBand,
+    toggleTune,
+    nudgeFreq,
+    _resetFreqStepForTests,
+} from './rigControl';
 import { manualState } from '../states/manual.svelte';
 import { configState } from '../states/config.svelte';
 import { bridgeState } from '../states/bridge.svelte';
@@ -162,6 +171,88 @@ describe('rigControl', () => {
             bridgeState.tuneActive = true;
             toggleTune();
             expect(mockTune).toHaveBeenCalledWith(false);
+        });
+    });
+
+    describe('nudgeFreq — CAT off', () => {
+        beforeEach(_resetFreqStepForTests);
+
+        it('nudges the selected VFO-A manualState freq, no rig command', () => {
+            manualState.selectedVfo = 'A';
+            manualState.vfoA = 14_074_000;
+            nudgeFreq(10);
+            expect(manualState.vfoA).toBe(14_074_010);
+            nudgeFreq(-100);
+            expect(manualState.vfoA).toBe(14_073_910);
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('nudges VFO-B manualState when B is selected', () => {
+            manualState.selectedVfo = 'B';
+            manualState.vfoB = 7_100_000;
+            nudgeFreq(100);
+            expect(manualState.vfoB).toBe(7_100_100);
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('clamps to >= 0', () => {
+            manualState.selectedVfo = 'A';
+            manualState.vfoA = 5;
+            nudgeFreq(-100);
+            expect(manualState.vfoA).toBe(0);
+        });
+    });
+
+    describe('nudgeFreq — CAT live', () => {
+        beforeEach(() => {
+            setCatLive();
+            _resetFreqStepForTests();
+        });
+
+        it('drives set_freq (FA) for VFO-A off the displayed freq; manualState untouched', () => {
+            catState.selectedVfo = 'A';
+            catState.vfoA = 14_074_000;
+            manualState.vfoA = 999; // must NOT change while live
+            configState.bridge.ops = ['set_freq'];
+            nudgeFreq(10);
+            expect(mockSend).toHaveBeenCalledWith('set_freq', '14074010');
+            expect(manualState.vfoA).toBe(999);
+        });
+
+        it('drives set_freq_b (FB) for VFO-B', () => {
+            catState.selectedVfo = 'B';
+            catState.vfoB = 7_100_000;
+            configState.bridge.ops = ['set_freq_b'];
+            nudgeFreq(-100);
+            expect(mockSend).toHaveBeenCalledWith('set_freq_b', '7099900');
+        });
+
+        it('no-ops when the rig exposes no freq op for the selected VFO', () => {
+            catState.selectedVfo = 'A';
+            catState.vfoA = 14_074_000;
+            configState.bridge.ops = [];
+            nudgeFreq(10);
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('no-ops on VFO-B when only set_freq (A) is exposed', () => {
+            catState.selectedVfo = 'B';
+            catState.vfoB = 7_100_000;
+            configState.bridge.ops = ['set_freq']; // A only — no set_freq_b
+            nudgeFreq(10);
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('accumulates rapid key-repeat steps optimistically (does not re-read the lagging push)', () => {
+            catState.selectedVfo = 'A';
+            catState.vfoA = 14_074_000; // displayed never updates (no push in test)
+            configState.bridge.ops = ['set_freq'];
+            nudgeFreq(10); // 14074000 → 14074010
+            nudgeFreq(10); // off pending 14074010 → 14074020 (not re-read 14074000)
+            nudgeFreq(10); // → 14074030
+            expect(mockSend).toHaveBeenNthCalledWith(1, 'set_freq', '14074010');
+            expect(mockSend).toHaveBeenNthCalledWith(2, 'set_freq', '14074020');
+            expect(mockSend).toHaveBeenNthCalledWith(3, 'set_freq', '14074030');
         });
     });
 });

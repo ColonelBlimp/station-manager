@@ -124,7 +124,7 @@ func TestExposedCommands(t *testing.T) {
 		t.Fatal(`Lookup("yaesu-ftdx10") not found`)
 	}
 	got := ExposedCommands(def)
-	want := []string{"set_freq", "set_mode", "set_vfo", "band_up", "band_down", "set_band", "set_power"}
+	want := []string{"set_freq", "set_freq_b", "set_mode", "set_vfo", "band_up", "band_down", "set_band", "set_power"}
 	if len(got) != len(want) {
 		t.Fatalf("ExposedCommands(ftdx10) = %v, want %v", got, want)
 	}

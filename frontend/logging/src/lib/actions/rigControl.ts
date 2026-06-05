@@ -78,6 +78,87 @@ export function selectBand(band: string): void {
     void driveRig('set_band', band);
 }
 
+// Frequency-step sizes (Hz) for the Shift+Ctrl tuning shortcuts. Page = coarse,
+// Arrow = fine — kept here so the magnitudes have one home (the QsoPanel handler
+// only knows "coarse up" / "fine down").
+const FREQ_STEP_COARSE_HZ = 100;
+const FREQ_STEP_FINE_HZ = 10;
+
+// Highest value the rigdef's set_freq field (FA%s; / FB%s; pad 9) holds.
+const MAX_FREQ_HZ = 999_999_999;
+
+// Optimistic-target window for live key-repeat tuning. Each live step computes
+// an absolute set_freq from the *previous* target rather than the displayed
+// freq, because the confirming FA/FB push lags key-repeat — reading
+// displayedState every press would compute several steps off one stale value
+// and stutter. After a pause (no step within the window, or a VFO switch) we
+// re-sync to displayedState, so a physical-knob turn between bursts is picked up.
+const FREQ_REPEAT_WINDOW_MS = 350;
+const pendingFreqHz: { A: number | null; B: number | null } = { A: null, B: null };
+let lastFreqNudgeAt = 0;
+let lastFreqVfo: 'A' | 'B' | null = null;
+
+function clampFreq(hz: number): number {
+    if (hz < 0) return 0;
+    if (hz > MAX_FREQ_HZ) return MAX_FREQ_HZ;
+    return hz;
+}
+
+/**
+ * Nudge the operating (selected) VFO's frequency by deltaHz — the Shift+Ctrl
+ * Page/Arrow tuning shortcuts. CAT off → nudge the selected VFO's manualState
+ * freq directly (both VFOs are local). CAT live → drive the rig: set_freq (FA)
+ * for VFO-A, set_freq_b (FB) for VFO-B, each capability-gated on its own op; a
+ * live nudge no-ops when the rig doesn't expose the relevant command. Uses an
+ * optimistic per-VFO target so fast key-repeat tracks cleanly despite
+ * confirm-by-push lag.
+ */
+export function nudgeFreq(deltaHz: number): void {
+    const vfo = displayedState.selectedVfo;
+
+    if (!displayedState.isLive) {
+        if (vfo === 'A') {
+            manualState.vfoA = clampFreq(manualState.vfoA + deltaHz);
+        } else {
+            manualState.vfoB = clampFreq(manualState.vfoB + deltaHz);
+        }
+        return;
+    }
+
+    const op = vfo === 'A' ? 'set_freq' : 'set_freq_b';
+    if (!configState.bridge.ops.includes(op)) return;
+
+    const now = Date.now();
+    const prev = pendingFreqHz[vfo];
+    const inBurst = prev !== null && lastFreqVfo === vfo && now - lastFreqNudgeAt <= FREQ_REPEAT_WINDOW_MS;
+    const base = inBurst ? prev : vfo === 'A' ? displayedState.vfoA : displayedState.vfoB;
+    const target = clampFreq(base + deltaHz);
+
+    pendingFreqHz[vfo] = target;
+    lastFreqNudgeAt = now;
+    lastFreqVfo = vfo;
+    void driveRig(op, String(target));
+}
+
+/** Test-only: clears the optimistic freq-step state between cases so a prior
+ *  test's pending target can't leak into the next within the repeat window. */
+export function _resetFreqStepForTests(): void {
+    pendingFreqHz.A = null;
+    pendingFreqHz.B = null;
+    lastFreqNudgeAt = 0;
+    lastFreqVfo = null;
+}
+
+/** Coarse (±100 Hz) tuning nudge — Shift+Ctrl+PageUp/PageDown. dir is +1/-1. */
+export function nudgeFreqCoarse(dir: 1 | -1): void {
+    nudgeFreq(dir * FREQ_STEP_COARSE_HZ);
+}
+
+/** Fine (±10 Hz) tuning nudge — Shift+Ctrl+ArrowUp/ArrowDown. dir is +1/-1. */
+export function nudgeFreqFine(dir: 1 | -1): void {
+    nudgeFreq(dir * FREQ_STEP_FINE_HZ);
+}
+
 async function driveRig(op: string, value?: string): Promise<void> {
     const outcome = await sendRigCommand(op, value);
     if (outcome.kind !== 'ok') {

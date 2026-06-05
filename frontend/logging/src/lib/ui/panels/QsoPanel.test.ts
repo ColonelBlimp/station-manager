@@ -5,6 +5,8 @@ import QsoPanel from './QsoPanel.svelte';
 import { qsoDraft, _disposeForTests } from '../../states/qsoDraft.svelte';
 import { enrichmentState } from '../../states/enrichment.svelte';
 import { contactHistoryState } from '../../states/contactHistory.svelte';
+import { callsignStack } from '../../states/callsignStack.svelte';
+import { manualState } from '../../states/manual.svelte';
 import { submitQso, type SubmitOutcome } from '../../api/qso';
 
 /**
@@ -134,5 +136,95 @@ describe('QsoPanel — submit in-flight guard (M1)', () => {
 
         d2.resolve(DUPLICATE);
         await tick();
+    });
+});
+
+/**
+ * Frequency-step keys (CAT off → manualState): Shift+Ctrl+↑/↓ = ±100 Hz,
+ * Shift+Ctrl+→/← = ±10 Hz. The handler matches on `e.code`, so the events set
+ * it. Also pins that Shift+Ctrl+↑ does NOT fire the Shift+↑ stack-pop — the
+ * stack handlers were widened with a `!ctrlKey && !metaKey` guard so the Ctrl
+ * variant falls through to the rig block, and that a plain Shift+↑ still pops.
+ */
+describe('QsoPanel — frequency-step keys + stack-pop guard', () => {
+    beforeEach(() => {
+        mockSubmit.mockReset();
+        qsoDraft.clear();
+        callsignStack.clear();
+        manualState.selectedVfo = 'A';
+        manualState.vfoA = 14_074_000;
+    });
+
+    afterEach(() => {
+        cleanup();
+        qsoDraft.clear();
+        callsignStack.clear();
+        _disposeForTests();
+    });
+
+    it('Shift+Ctrl+ArrowUp = +100 Hz (coarse) and does not pop the stack', async () => {
+        callsignStack.push('G3ABC');
+        render(QsoPanel);
+        await tick();
+
+        await fireEvent.keyDown(window, {
+            key: 'ArrowUp',
+            code: 'ArrowUp',
+            shiftKey: true,
+            ctrlKey: true,
+        });
+        await tick();
+
+        expect(manualState.vfoA).toBe(14_074_100); // +100 Hz
+        expect(callsignStack.items).toEqual(['G3ABC']); // NOT popped
+        expect(qsoDraft.callsign).toBe(''); // NOT loaded into the form
+    });
+
+    it('Shift+Ctrl+ArrowDown = -100 Hz (coarse)', async () => {
+        render(QsoPanel);
+        await tick();
+        await fireEvent.keyDown(window, {
+            key: 'ArrowDown',
+            code: 'ArrowDown',
+            shiftKey: true,
+            ctrlKey: true,
+        });
+        await tick();
+        expect(manualState.vfoA).toBe(14_073_900); // -100 Hz
+    });
+
+    it('Shift+Ctrl+ArrowRight = +10 Hz (fine), ArrowLeft = -10 Hz', async () => {
+        render(QsoPanel);
+        await tick();
+
+        await fireEvent.keyDown(window, {
+            key: 'ArrowRight',
+            code: 'ArrowRight',
+            shiftKey: true,
+            ctrlKey: true,
+        });
+        await tick();
+        expect(manualState.vfoA).toBe(14_074_010); // +10 Hz
+
+        await fireEvent.keyDown(window, {
+            key: 'ArrowLeft',
+            code: 'ArrowLeft',
+            shiftKey: true,
+            ctrlKey: true,
+        });
+        await tick();
+        expect(manualState.vfoA).toBe(14_074_000); // back down -10 Hz
+    });
+
+    it('plain Shift+ArrowUp still pops the stack (guard did not break it)', async () => {
+        callsignStack.push('G3ABC');
+        render(QsoPanel);
+        await tick();
+
+        await fireEvent.keyDown(window, { key: 'ArrowUp', code: 'ArrowUp', shiftKey: true });
+        await tick();
+
+        expect(callsignStack.items).toEqual([]); // popped
+        expect(qsoDraft.callsign).toBe('G3ABC'); // loaded into the form
     });
 });
