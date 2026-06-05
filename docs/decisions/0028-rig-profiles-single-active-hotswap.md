@@ -117,6 +117,9 @@ process problem. Keeping it out of the daemon preserves narrow single-daemon sco
 
 ## References
 
+- `docs/v2-design/rig-profiles.md` — the long-form implementation plan (phased:
+  config model now, discovery endpoint + picker UI + runtime hot-swap with the
+  config SPA).
 - Supersedes the single-rig config shape in ADR 0013 (daemon owns bridge as
   subsystem) and ADR 0019 (bridge subsystem v1 design) — extends, does not
   invalidate.

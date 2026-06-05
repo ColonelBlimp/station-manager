@@ -293,7 +293,13 @@ whose tx_on/tx_off won't encode. Probe values mirror `encodeTuneOn`/`encodeTuneU
 
 **Review complete — all actionable findings resolved (M1, M2, L1).**
 
-### M3 — FT-710 write entries. **NON-TX DONE 2026-06-05; TX/tune pending live verification.**
+### M3 — FT-710 write entries. **NON-TX DONE + BENCH-CONFIRMED 2026-06-05; TX/tune pending live verification.**
+
+**Bench-confirmed 2026-06-05:** ran the dev daemon (`build/config.json`) against the live FT-710
+(driver `yaesu-ft710`, CAT on the rig's CP2105 `if00`). H2 identity gate confirmed `0800`; the eight
+non-TX write ops + READ exercised cleanly. The rigdef entries are now hardware-validated, not just
+OM-verified.
+
 Verified the FT-710 CAT OM (FT-710_CAT_OM_ENG_2306-C): every FTdx10 write command exists on the
 FT-710 with **byte-identical format** — FA/FB (9-digit), MD0 (MAINMODE, same table), PC (3-digit
 005-100), SV, BU0/BD0, BS (2-digit band codes 00-11; 00-10 match the FTdx10 for 160m-6m), TX1/TX0.
