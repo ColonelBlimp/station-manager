@@ -64,17 +64,26 @@ describe('rigControl', () => {
     });
 
     describe('selectVfo — CAT live', () => {
-        beforeEach(setCatLive);
+        beforeEach(() => {
+            setCatLive();
+            catState.selectedVfo = 'A';
+        });
 
-        it('sends set_vfo to the rig (not manualState) when the rig exposes set_vfo', () => {
-            configState.bridge.ops = ['set_vfo'];
-            selectVfo('B');
-            expect(mockSend).toHaveBeenCalledWith('set_vfo', 'VFO-B');
+        it('swaps the rig (swap_vfo) when selecting the OTHER VFO', () => {
+            configState.bridge.ops = ['swap_vfo'];
+            selectVfo('B'); // currently A → selecting B swaps
+            expect(mockSend).toHaveBeenCalledWith('swap_vfo', undefined);
             // manualState is untouched — confirm-by-push owns the UI when live.
             expect(manualState.selectedVfo).toBe('A');
         });
 
-        it('is a no-op when the rig does not expose set_vfo', () => {
+        it('is a no-op when selecting the already-current VFO', () => {
+            configState.bridge.ops = ['swap_vfo'];
+            selectVfo('A'); // already on A
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('is a no-op when the rig does not expose swap_vfo', () => {
             configState.bridge.ops = [];
             selectVfo('B');
             expect(mockSend).not.toHaveBeenCalled();
@@ -89,12 +98,19 @@ describe('rigControl', () => {
             expect(manualState.selectedVfo).toBe('B');
         });
 
-        it('toggles off the displayed (rig) selection when CAT is live', () => {
+        it('drives the rig swap (swap_vfo) when CAT is live', () => {
             setCatLive();
-            configState.bridge.ops = ['set_vfo'];
-            catState.selectedVfo = 'B'; // rig on B → swap targets A
+            configState.bridge.ops = ['swap_vfo'];
+            catState.selectedVfo = 'B';
             swapVfo();
-            expect(mockSend).toHaveBeenCalledWith('set_vfo', 'VFO-A');
+            expect(mockSend).toHaveBeenCalledWith('swap_vfo', undefined);
+        });
+
+        it('is a no-op when CAT is live but the rig does not expose swap_vfo', () => {
+            setCatLive();
+            configState.bridge.ops = [];
+            swapVfo();
+            expect(mockSend).not.toHaveBeenCalled();
         });
     });
 

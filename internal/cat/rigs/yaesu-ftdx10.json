@@ -29,6 +29,7 @@
     {"name": "set_freq_b", "cmd": "FB%s;", "pad": 9,                "exposed": true},
     {"name": "set_mode", "cmd": "MD0%s;", "value_map": "MAINMODE", "exposed": true},
     {"name": "set_vfo",  "cmd": "VS%s;",  "value_map": "SELECT",   "exposed": true},
+    {"name": "swap_vfo", "cmd": "SV;",                            "exposed": true},
     {"name": "band_up",   "cmd": "BU0;", "exposed": true},
     {"name": "band_down", "cmd": "BD0;", "exposed": true},
     {"name": "set_band",  "cmd": "BS%s;", "value_map": "BAND", "exposed": true},

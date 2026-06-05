@@ -21,28 +21,41 @@ import { sendRigCommand } from '../api/rigCommand';
 import { sendRigTune } from '../api/rigTune';
 
 /**
- * Select VFO A or B. CAT off → local manualState swap. CAT live + the rig
- * exposes set_vfo → drive the rig (confirm-by-push flips the UI when the VS
- * push arrives). CAT live + no set_vfo → no-op.
+ * Select VFO A or B. CAT off → local manualState selection. CAT live → the
+ * FTdx10 has no "select a specific VFO and move onto it" CAT command that
+ * actually changes the operating frequency (VS toggles a select flag only —
+ * confirmed on-rig: the display indicator moved but the frequency didn't). The
+ * working operation is `swap_vfo` (`SV;`), which swaps VFO-A↔B. With only two
+ * VFOs, "select the other one" === "swap", so a live select of the non-current
+ * VFO swaps; selecting the already-current VFO is a no-op.
  */
 export function selectVfo(vfo: 'A' | 'B'): void {
     if (!displayedState.isLive) {
         manualState.selectedVfo = vfo;
         return;
     }
-    if (!configState.bridge.ops.includes('set_vfo')) {
-        return;
-    }
-    void driveRig('set_vfo', `VFO-${vfo}`);
+    if (vfo === displayedState.selectedVfo) return;
+    swapVfoLive();
 }
 
 /**
- * Toggle the selected VFO (A↔B) — the Shift+Ctrl VFO swap. Resolves the "other" VFO
- * from the currently displayed selection and defers to selectVfo so the
- * CAT-on/off branching lives in exactly one place.
+ * Swap the VFOs (A↔B) — the Shift+Ctrl VFO swap. CAT off → toggle the local
+ * manualState selection. CAT live → drive the rig's swap (`SV;`).
  */
 export function swapVfo(): void {
-    selectVfo(displayedState.selectedVfo === 'A' ? 'B' : 'A');
+    if (!displayedState.isLive) {
+        manualState.selectedVfo = displayedState.selectedVfo === 'A' ? 'B' : 'A';
+        return;
+    }
+    swapVfoLive();
+}
+
+// swapVfoLive drives the rig's VFO swap (`swap_vfo` → `SV;`), capability-gated.
+// The rig pushes the swapped FA/FB (and VS, if it reports one) back over SSE —
+// confirm-by-push owns the UI, no optimistic flip.
+function swapVfoLive(): void {
+    if (!configState.bridge.ops.includes('swap_vfo')) return;
+    void driveRig('swap_vfo');
 }
 
 /**

@@ -47,6 +47,10 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 140 (2026-06-05) — **Dogfooding fix: VFO swap uses `SV;` (swap), not `VS;` (select).** Shipped + tested green; not yet committed. **HW-validated on the FTdx10 — swap now moves the operating frequency and the SPA A/B display behaves correctly.**
+
+Operator observed on-rig: the VFO swap (`set_vfo` → `VS;`) moved the FTdx10's display indicator but **not** the operating frequency. `VS` is a select-flag only; the working swap is **`SV;`** (swaps VFO-A↔B contents) — confirmed by the operator's v1 code. Added rigdef `swap_vfo` → `SV;` (valueless, exposed); SPA `rigControl` now routes the live swap to `swap_vfo` (both `swapVfo` and `selectVfo`-of-the-other-VFO, since with two VFOs "select the other" == "swap"). `set_vfo`/`VS` left in the rigdef but unused by the swap path (vestigial pending validation — may remove). `Vfos.svelte` actionability gate moved `set_vfo`→`swap_vfo`. Tests: `commands_test` exposed list (+swap_vfo), `rigControl.test` (swap → swap_vfo), `Vfos.test` capability gate. **Validated on-rig — freq moves + A/B display correct, no selection-model refinement needed.** `set_vfo`/`VS` is now confirmed-vestigial (exposed but unused by any path) — candidate for removal in a later tidy. Mode-selector-drives-rig work is **parked** (operator: "come back to this"; design fork A/B = rig-mode-list vs friendly-list still open).
+
 ### Session 139 (2026-06-05) — **Dep bump: go-ft8 v0.2.0 → v0.2.2** (bug fixes + performance, no API change). `go.mod`/`go.sum` only — own commit per the version-bump rule, disjoint from the Session 138 freq-step files. Verified: CGO-free default build + `internal/ft8` full tests pass (47s); CGO PocketFFT build (`-tags pocketfft`) links clean. No code change needed; ADR 0025 AP-hints status unchanged (still parked at piece 1).
 
 ### Session 138 (2026-06-05) — **Dogfooding feature: frequency-step keyboard shortcuts.** Shipped + tested green; not yet committed.

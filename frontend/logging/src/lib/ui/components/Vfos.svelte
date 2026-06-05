@@ -9,11 +9,11 @@
 
     // A VFO box is actionable when the operator can change the selected
     // VFO: either CAT is off (a local manualState swap) or CAT is live and
-    // the rig exposes set_vfo (drive the rig). When CAT is live but the rig
-    // has no set_vfo, the boxes stay inert — manualState is ignored while
-    // live, so there is nothing useful a click could do.
+    // the rig exposes swap_vfo (drive the rig's `SV;` swap). When CAT is live
+    // but the rig has no swap_vfo, the boxes stay inert — manualState is
+    // ignored while live, so there is nothing useful a click could do.
     const canSelectVfo = $derived(
-        displayedState.editable || configState.bridge.ops.includes('set_vfo')
+        displayedState.editable || configState.bridge.ops.includes('swap_vfo')
     );
 </script>
 
