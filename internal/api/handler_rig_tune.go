@@ -54,6 +54,9 @@ func (s *Server) writeRigTuneError(w http.ResponseWriter, op errors.Op, err erro
 	case stderr.Is(err, bridge.ErrTuneStateUnknown):
 		s.writeError(w, http.StatusServiceUnavailable, "rig_state_unknown",
 			"rig mode/power not yet known; try again in a moment", op)
+	case stderr.Is(err, bridge.ErrRigIdentityUnverified):
+		s.writeError(w, http.StatusConflict, "rig_identity_unverified",
+			"connected rig's identity is unverified; check the configured driver matches the rig", op)
 	default:
 		s.writeServerError(w, op, err, "rig_tune_failed", "failed to drive rig tune")
 	}

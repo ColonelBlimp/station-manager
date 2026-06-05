@@ -105,6 +105,91 @@ func TestPipeline_DecodesIdentityPush(t *testing.T) {
 	}
 }
 
+// TestClassifyIdentity pins the H2 verification decision exhaustively —
+// including the mismatch case, which can't be produced through the shipped
+// rigdefs (neither maps an ID code to a model other than its own).
+func TestClassifyIdentity(t *testing.T) {
+	cases := []struct {
+		decoded, model string
+		want           identityResult
+	}{
+		{"FT-710", "FT-710", identityConfirmed},
+		{"FTdx10", "FTdx10", identityConfirmed},
+		{"", "FT-710", identityUnrecognised},   // unmapped ID code
+		{"FTdx10", "FT-710", identityMismatch}, // wired the wrong Yaesu
+		{"FT-710", "FTdx10", identityMismatch}, // the other way round
+	}
+	for _, c := range cases {
+		if got := classifyIdentity(c.decoded, c.model); got != c.want {
+			t.Errorf("classifyIdentity(%q,%q) = %d, want %d", c.decoded, c.model, got, c.want)
+		}
+	}
+}
+
+// TestReadLoop_ConfirmsIdentityOnMatch covers the H2 confirm path: when the rig
+// identifies as the configured driver, the write gate unlocks (identityOK
+// flips true) so SendCommands / StartTune become allowed.
+func TestReadLoop_ConfirmsIdentityOnMatch(t *testing.T) {
+	s, fake := newPipelineTestService(t) // FT-710
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	if s.identityOK() {
+		t.Fatal("identity confirmed before any rig push")
+	}
+	fake.feedLine([]byte("ID0800")) // → "FT-710" matches the configured model
+
+	deadline := time.Now().Add(time.Second)
+	for !s.identityOK() {
+		if time.Now().After(deadline) {
+			t.Fatal("identity not confirmed within 1s of a matching ID push")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestReadLoop_BlocksOnUnrecognisedIdentity covers the H2 unrecognised path: a
+// rig that answers with an ID code the rigdef doesn't map publishes a
+// bridge-error and the write gate stays locked (identityOK false), but state
+// display keeps working (the pipeline doesn't halt).
+func TestReadLoop_BlocksOnUnrecognisedIdentity(t *testing.T) {
+	s, fake := newPipelineTestService(t) // FT-710
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	fake.feedLine([]byte("ID9999")) // unmapped → IDENTITY="" → unrecognised
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Name != EventBridgeError {
+				continue
+			}
+			p, ok := evt.Payload.(BridgeErrorPayload)
+			if !ok {
+				t.Fatalf("payload type = %T, want BridgeErrorPayload", evt.Payload)
+			}
+			if p.Code != BridgeErrCodeIdentityUnrecognised {
+				t.Fatalf("bridge-error code = %q, want %q", p.Code, BridgeErrCodeIdentityUnrecognised)
+			}
+			if s.identityOK() {
+				t.Error("identity confirmed despite an unrecognised ID")
+			}
+			return
+		case <-deadline:
+			t.Fatal("no identity-unrecognised bridge-error within 1s")
+		}
+	}
+}
+
 // TestPipeline_DecodesFrequencyPush covers the steady-state shape:
 // rig dial change → "FA<freq>" push → bridge emits a partial
 // rig-state event with VfoA set, every other field zero. The SPA's
@@ -210,6 +295,38 @@ func TestPipeline_DecodesSplitOff(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no rig-state event within 1s")
+	}
+}
+
+// TestMapStatusToPayload_Split covers review-finding H1 (2026-06-04): the split
+// flag is "engaged unless the rig says OFF". The FTdx10 maps ST 0/1/2 →
+// OFF/ON/ON+ ("ON+" = quick split), and the old `EqualFold(v,"ON")` test read
+// ON+ as not-split → the SPA would show split off and log the wrong TX/RX freq.
+// Tested at the mapStatusToPayload level because it's rigdef-independent (the
+// FT-710 used by the pipeline harness only maps ST 0/1, so ON+ can't reach it).
+func TestMapStatusToPayload_Split(t *testing.T) {
+	cases := []struct {
+		split string
+		want  bool
+	}{
+		{"OFF", false},
+		{"ON", true},
+		{"ON+", true},     // quick split — the H1 regression
+		{"ENABLED", true}, // any future non-OFF value is "engaged"
+	}
+	for _, c := range cases {
+		p, ok := mapStatusToPayload(cat.Status{"SPLIT": c.split})
+		if !ok {
+			t.Errorf("SPLIT=%q: payload not populated", c.split)
+			continue
+		}
+		if p.SplitOverride == nil {
+			t.Errorf("SPLIT=%q: SplitOverride is nil; want non-nil *bool", c.split)
+			continue
+		}
+		if *p.SplitOverride != c.want {
+			t.Errorf("SPLIT=%q: SplitOverride = %v, want %v", c.split, *p.SplitOverride, c.want)
+		}
 	}
 }
 

@@ -8,8 +8,9 @@
     on/off".
 
     Errors carry the daemon's `{code, message}` envelope — e.g.
-    `rig_not_connected` / `rig_state_unknown` (503) or `rig_tune_failed` (5xx).
-    Same conventions as `lib/api/rigCommand.ts`.
+    `rig_not_connected` / `rig_state_unknown` (503), `rig_identity_unverified`
+    (409 — the connected rig hasn't been confirmed as the configured driver),
+    or `rig_tune_failed` (5xx). Same conventions as `lib/api/rigCommand.ts`.
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';

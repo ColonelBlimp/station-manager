@@ -247,6 +247,116 @@ Nothing here touches the QSO log write path. All `go test ./internal/bridge`
 
 ## Resolutions
 
+### Batch B — Identity write-gate (H2). **DONE 2026-06-05. Decision: option (c) + block no-IDENTITY rigs.**
+Decision settled with the operator: (c) both — always block the operator write
+paths on unverified identity AND permanent-exit on a definite mismatch; and yes,
+a rig that never sends a parseable IDENTITY is treated as unverified (writes
+blocked).
+- New `Service.identityConfirmed` (mu-guarded) — false until the rig pushes an
+  IDENTITY matching `def.Model`; reset on every pipeline teardown so each instance
+  re-verifies. Accessors `setIdentityConfirmed` / `identityOK`.
+- `readLoop` reworked via a pure `classifyIdentity(decoded, expectedModel)` →
+  `identityConfirmed` / `identityUnrecognised` / `identityMismatch`. **Match**
+  unlocks writes; **mismatch** publishes `identity_mismatch` via the supervisor-aware
+  `publishExitBridgeError` and `return exitPermanent` (port closed, no retry — the
+  operator must fix `bridge.cat.driver`); **unrecognised** publishes the advisory
+  error but keeps reading state (writes stay blocked — could be an unlisted variant).
+  A never-identified rig stays write-blocked because `identityConfirmed` never flips.
+- Write gate: new `ErrRigIdentityUnverified` (`command.go`); `SendCommands` and
+  `StartTune` refuse while unverified, before any byte reaches the wire. State
+  display is unaffected — only the mutating writes gate. The TX path (StartTune)
+  is the most dangerous wrong-rig case, so it gates too.
+- API: `writeRigCommandError` + `writeRigTuneError` map `ErrRigIdentityUnverified`
+  → **409 Conflict** `rig_identity_unverified`. SPA wrappers surface the daemon's
+  `{code, message}` directly (409 → `validation` kind), so the daemon-provided
+  message renders as-is — wrapper doc-comments updated; no SPA logic change.
+- Composes with Batch D (M1): a confirmed mismatch halts → no `EventRigState`
+  follows → the cached identity bridge-error (non-transient) persists for late
+  subscribers, exactly as designed.
+- Tests: `TestClassifyIdentity` (exhaustive incl. the mismatch case, which can't
+  be produced through the shipped rigdefs — neither maps an ID code to a foreign
+  model), `TestReadLoop_ConfirmsIdentityOnMatch`, `TestReadLoop_BlocksOnUnrecognisedIdentity`,
+  `TestSendCommand_RefusesUnverifiedIdentity`, `TestStartTune_RefusesUnverifiedIdentity`.
+  The 409 api mapping isn't independently unit-tested (the api package can't set
+  the bridge's unexported live-but-unverified state without polluting the bridge
+  API); it mirrors the tested `rig_not_connected` 503 switch case and the underlying
+  error is bridge-tested. `go test ./internal/bridge ./internal/api` + `-race`
+  green; SPA `check` + `lint` clean; `go vet` + `gofmt` clean.
+
+**Review complete — all 9 findings resolved (Batches A–F).**
+
+### Batch F — Hygiene (L1 + L2 + M3 disposition). **DONE 2026-06-05.**
+- **L1.** `doc.go` rewritten: the package is no longer "read-only / no inbound
+  command path". State display stays read-only, but the doc now records the two
+  write paths — ADR 0026 inbound commands (Exposed-gated) and ADR 0027 tune-carrier
+  TX keying (tx_on/tx_off never Exposed; daemon-owned guaranteed stop) — and notes
+  the tune restore snapshot as the scoped exception to "no persistent rig-state cache".
+- **L2.** Both handler test barriers switched off write-tallies onto
+  `hub.subscriberCount()`. `TestHTTPHandler_BootstrapFiresOnSubscribe` now waits for
+  the startup writes (INIT + post-INIT READ), captures `preCount`, subscribes, and
+  asserts the bootstrap READ is `writes[preCount]` (the first write *after* subscribe)
+  — previously it checked `writes[1]`, which is the startup READ, and passed only
+  because the bytes are identical. `TestHTTPHandler_FanOutToMultipleSubscribers` waits
+  for `subscriberCount() >= numClients` instead of `numClients+1` writes (the per-cycle
+  post-INIT READ made the old count off-by-one and flake-prone). New helpers
+  `waitForWriteCount` / `waitForSubscribers`. Verified stable over `-count=3`.
+- **M3 — IGNORED as standalone, per triage.** Added a doc-note to `buildSerialConfig`
+  explaining why RigSerial's `WriteTimeoutMS`/`RTS`/`DTR` are parsed-but-dropped today
+  (lib defaults DTR/RTS true with nil InitialStatusBits → dropped `true` is a no-op;
+  no write-deadline field; USB-CDC RTS/DTR isn't flow control) and when to wire them
+  (a future rigdef needing rts:false/dtr:false, or a real write deadline — couples
+  with H4). No behavior change.
+
+`go test ./internal/bridge` + `-race` green; `go vet` + `gofmt` clean.
+
+### Batch E — SSE per-write deadline (M2). **DONE 2026-06-05.**
+`internal/bridge/handler.go` + `handler_test.go`:
+- The SSE handler no longer clears the write deadline to the infinite zero-time.
+  New `sseWriteTimeout` (10s, package var) bounds each write; an `armWrite`
+  closure re-arms `now + sseWriteTimeout` immediately before every write (the
+  initial header flush, each event frame, each keepalive). Re-arming before each
+  write means the long idle gap between keepalives never trips it, but a write to
+  a wedged peer (socket open, never reading, never RST) now fails within the
+  bound so the goroutine can observe shutdownCh / unsubscribe instead of hanging
+  until TCP gives up. Support is probed once — a writer chain with no net.Conn
+  (test recorders) falls back to no deadline + a single log, stream still works.
+- Test `TestHTTPHandler_BoundsWriteDeadlinePerWrite` drives the handler with a
+  `sseDeadlineRecorder` (implements `SetWriteDeadline` so `NewResponseController`
+  routes through it) and asserts at least one deadline is armed and none is the
+  zero time. `go test ./internal/bridge` + `-race` green; `go vet` + `gofmt` clean.
+
+### Batch D — Hub transient-error clearing (M1). **DONE 2026-06-05.**
+`internal/bridge/events.go` + `hub.go` + `hub_test.go`:
+- New `BridgeErrorCode.isTransient()` classifier (`events.go`) — true only for
+  `serial_open_failed` / `init_write_failed` (mirrors the pipeline's
+  `exitTransient` publishes); default false (a new code stays cached, erring
+  toward surfacing). Identity codes are non-transient (operator-actionable).
+- `hub.publish` now drops `lastBridgeError` on `EventRigState` **iff** the
+  cached error is transient — a successful rig push proves the supervisor
+  recovered, so the first-boot `serial_open_failed` toast is stale and must not
+  replay to a tab opening after recovery. Permanent faults exit the pipeline
+  and never produce a rig-state (stay cached correctly); identity warnings stay
+  cached even though today's code keeps looping after them. `lastBridgeError`
+  doc updated to record the one exception to "never cleared".
+- Tests: `TestBridgeErrorCode_IsTransient` (full code table), 
+  `TestHub_ClearsTransientBridgeErrorOnRigState` (transient cleared on
+  recovery — the M1 scenario), `TestHub_KeepsPermanentBridgeErrorAcrossRigState`
+  (identity-mismatch retained). The fix is exercised precisely at the hub level;
+  the existing supervisor tests already prove recovery emits `EventRigState`.
+  `go test ./internal/bridge` + `-race` green; `go vet` + `gofmt` clean.
+
+### Batch C — Split `ON+` (H1). **DONE 2026-06-05.**
+`internal/bridge/pipeline.go`: `mapStatusToPayload`'s SPLIT decode changed from
+`split := strings.EqualFold(v, "ON")` to `split := !strings.EqualFold(v, "OFF")`
+— any decoded non-OFF state (the FTdx10's ST2 → "ON+" quick-split, or any future
+non-OFF literal) now reports `SplitOverride=true`. Pre-fix, ON+ read as not-split
+→ the SPA showed split off and logged the wrong TX/RX freq.
+New `TestMapStatusToPayload_Split` (`pipeline_test.go`) tables OFF/ON/ON+/other.
+Tested at the `mapStatusToPayload` level rather than the pipeline level because
+it's rigdef-independent — the pipeline harness uses the FT-710, which only maps
+ST 0/1, so "ON+" can't reach it through decode. `go test ./internal/bridge` +
+`-race` green; `go vet` + `gofmt` clean.
+
 ### Batch A — Tune-safety (H3 + H4 comment). **DONE 2026-06-05.**
 `internal/bridge/tune.go` + `tune_test.go`:
 - **H3 fixed.** `encodeTuneOff` now returns `([]byte, error)` and requires

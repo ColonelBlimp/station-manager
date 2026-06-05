@@ -22,6 +22,9 @@ func tuneTestService(t *testing.T) (*Service, *fakeSerial) {
 	})
 	f := newFakeSerial()
 	s.activeClient = f
+	// Identity confirmed in the happy-path helper — StartTune's write gate (H2)
+	// refuses to key TX until the rig identifies as the configured driver.
+	s.identityConfirmed = true
 	s.lastMode = "USB"
 	s.lastPower = 100
 	s.tuneMaxDuration = time.Hour
@@ -212,6 +215,24 @@ func TestStartTune_RefusesUnknownState(t *testing.T) {
 	}
 	if len(f.recordedWrites()) != 0 {
 		t.Errorf("a tune-on line was written despite unknown state: %q", lastWrite(f))
+	}
+}
+
+// TestStartTune_RefusesUnverifiedIdentity covers the H2 gate on the TX path:
+// transmitting into a rig whose identity isn't confirmed is the most dangerous
+// wrong-rig case, so StartTune must refuse and key nothing.
+func TestStartTune_RefusesUnverifiedIdentity(t *testing.T) {
+	s, f := tuneTestService(t)
+	s.mu.Lock()
+	s.identityConfirmed = false
+	s.mu.Unlock()
+
+	err := s.StartTune(context.Background())
+	if !errors.Is(err, ErrRigIdentityUnverified) {
+		t.Fatalf("StartTune with unverified identity = %v, want ErrRigIdentityUnverified", err)
+	}
+	if n := len(f.recordedWrites()); n != 0 {
+		t.Errorf("TX was keyed despite unverified identity (%d writes)", n)
 	}
 }
 

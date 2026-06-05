@@ -175,6 +175,10 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.mu.Lock()
 		s.activeClient = nil
 		s.bootstrapBytes = nil
+		// Identity must be re-verified on the next pipeline instance — a
+		// hot-swapped rig (or a reconnect after the wrong rig was fixed)
+		// must not inherit the previous run's confirmation (H2).
+		s.identityConfirmed = false
 		s.mu.Unlock()
 		_ = client.Close()
 		// Release any active tune — the carrier physically dropped with the
@@ -385,11 +389,26 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		if !identityVerified {
 			if v, ok := status["IDENTITY"]; ok {
 				identityVerified = true
-				switch {
-				case v == "":
+				switch classifyIdentity(v, def.Model) {
+				case identityUnrecognised:
+					// Rig answered with an ID code this rigdef doesn't map.
+					// Not a definite wrong-rig (could be an unlisted variant),
+					// so keep reading state for display + diagnosis — but
+					// identity is never confirmed, so the operator write paths
+					// stay blocked (H2).
 					s.publishBridgeError(BridgeErrCodeIdentityUnrecognised, map[string]string{"driver": def.ID})
-				case v != def.Model:
-					s.publishBridgeError(BridgeErrCodeIdentityMismatch, map[string]string{"driver": def.ID, "expected": def.Model, "actual": v})
+				case identityMismatch:
+					// Definite mismatch: the wired rig is a different model than
+					// the configured driver. Halt the pipeline (close the port,
+					// no supervisor retry) so commands / tune can never reach the
+					// wrong rig (H2, option c). exitPermanent matches its own
+					// doc-comment's intent; the operator must fix bridge.cat.driver.
+					s.publishExitBridgeError(BridgeErrCodeIdentityMismatch, map[string]string{"driver": def.ID, "expected": def.Model, "actual": v})
+					return exitPermanent
+				case identityConfirmed:
+					// Positively the configured rig — unlock the operator write
+					// paths (SendCommands / StartTune).
+					s.setIdentityConfirmed(true)
 				}
 			}
 		}
@@ -403,6 +422,53 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		s.captureTuneSnapshot(payload)
 		s.hub.publish(Event{Name: EventRigState, Payload: payload})
 	}
+}
+
+// identityResult classifies a decoded rig IDENTITY against the configured
+// driver's expected model. Pure + exported-to-tests so the mismatch decision
+// (which can't be reproduced through the shipped rigdefs — neither maps an ID
+// code to a model other than its own) is exhaustively unit-testable.
+type identityResult int
+
+const (
+	// identityConfirmed — the decoded ID matches the configured model.
+	identityConfirmed identityResult = iota
+	// identityUnrecognised — the rig answered with an ID code this rigdef
+	// doesn't map (decodes to ""): could be an unlisted variant, so not a
+	// definite wrong-rig.
+	identityUnrecognised
+	// identityMismatch — the rig identified as a different, known model.
+	identityMismatch
+)
+
+// classifyIdentity decides the verification outcome for a decoded IDENTITY
+// value against the configured driver's model (H2, review 2026-06-04).
+func classifyIdentity(decoded, expectedModel string) identityResult {
+	switch {
+	case decoded == "":
+		return identityUnrecognised
+	case decoded != expectedModel:
+		return identityMismatch
+	default:
+		return identityConfirmed
+	}
+}
+
+// setIdentityConfirmed records the outcome of rig identity verification.
+// See Service.identityConfirmed for what it gates.
+func (s *Service) setIdentityConfirmed(v bool) {
+	s.mu.Lock()
+	s.identityConfirmed = v
+	s.mu.Unlock()
+}
+
+// identityOK reports whether the connected rig has been confirmed as the
+// configured driver. The operator write paths (SendCommands / StartTune)
+// refuse while this is false (H2, review 2026-06-04).
+func (s *Service) identityOK() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.identityConfirmed
 }
 
 // publishDisconnect emits one rig-disconnected event with the given
@@ -541,7 +607,13 @@ func mapStatusToPayload(status cat.Status) (RigStatePayload, bool) {
 		// *bool rather than bool: the rig pushing OFF must not be
 		// indistinguishable on the wire from "not pushed this frame"
 		// — see RigStatePayload doc-comment.
-		split := strings.EqualFold(v, "ON")
+		//
+		// Any decoded non-OFF state means split is engaged. The FTdx10
+		// rigdef maps ST 0/1/2 → OFF/ON/ON+ ("ON+" is quick-split), and
+		// EqualFold(v,"ON") would misread ON+ as not-split → the SPA shows
+		// split off and the wrong TX/RX freq gets logged. Decode-OFF is the
+		// only "not split" state (review 2026-06-04 H1).
+		split := !strings.EqualFold(v, "OFF")
 		p.SplitOverride = &split
 		populated = true
 	}
@@ -586,6 +658,18 @@ func vfoLabelToTag(label string) string {
 // stop bits as an int) to serial.Config's typed fields lives here
 // rather than in cat or serial — cat is pure codec, serial is pure
 // I/O, and the JSON↔enum translation is the bridge's glue work.
+//
+// Deliberately dropped today (review 2026-06-04 M3): RigSerial's
+// WriteTimeoutMS, RTS, and DTR are parsed from the rigdef but not
+// carried into serial.Config. go.bug.st/serial defaults DTR=true /
+// RTS=true when InitialStatusBits is nil (which serial.Open always
+// passes), so the shipped rigdefs' rts:true/dtr:true coincide with the
+// library default and dropping them is a no-op; for USB-CDC Yaesu rigs
+// RTS/DTR aren't flow control anyway. WriteTimeoutMS guards writes that
+// don't currently block (serial.Config has no write-deadline field, and
+// the lib exposes only a read timeout). Wire these only when a future
+// rigdef actually needs rts:false/dtr:false or a real write deadline
+// lands (couples with review H4).
 func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) (serial.Config, error) {
 	parity, err := parityFromString(rigSerial.Parity)
 	if err != nil {

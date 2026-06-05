@@ -2,10 +2,12 @@ package bridge
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +40,37 @@ func newHandlerTestService(t *testing.T) (*Service, *fakeSerial, chan struct{}) 
 
 	shutdownCh := make(chan struct{})
 	return s, fake, shutdownCh
+}
+
+// waitForWriteCount blocks until the fake has recorded at least n writes, or
+// fails the test on timeout. Used to sequence against the pipeline's eager
+// startup + bootstrap writes.
+func waitForWriteCount(t *testing.T, f *fakeSerial, n int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if len(f.recordedWrites()) >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("fake did not reach %d writes within %s (have %d)", n, timeout, len(f.recordedWrites()))
+}
+
+// waitForSubscribers blocks until the hub reports at least n active
+// subscribers, or fails the test on timeout. The direct barrier for "the
+// handler(s) have subscribed" — more reliable than counting bootstrap writes
+// (review 2026-06-04 L2).
+func waitForSubscribers(t *testing.T, s *Service, n int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if s.hub.subscriberCount() >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("hub did not reach %d subscribers within %s (have %d)", n, timeout, s.hub.subscriberCount())
 }
 
 // TestHTTPHandler_ServesSSEHeaders confirms the handler sets the
@@ -234,19 +267,16 @@ func TestHTTPHandler_BootstrapFiresOnSubscribe(t *testing.T) {
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
 
-	// Pipeline spawns eagerly at Start, so INIT is sent before any
-	// HTTP GET. Wait for it so we can distinguish INIT (writes[0])
-	// from the bootstrap READ that fires on SSE-open (writes[1]).
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(fake.recordedWrites()) < 1 {
-		t.Fatal("pipeline did not send INIT within 1s")
-	}
+	// Let the pipeline finish its eager startup writes BEFORE we connect.
+	// Post-2026-05-16 startup is INIT (writes[0]) + a post-INIT READ
+	// (writes[1]) that fires every pipeline cycle, so the bootstrap READ
+	// is actually writes[2]. The old test waited for >=2 writes and checked
+	// writes[1] — which is the startup READ, not the bootstrap, and passed
+	// only because both encode identically (review 2026-06-04 L2). Barrier
+	// on the hub subscriber count + a write that lands after subscription so
+	// the test proves the bootstrap actually fired on subscribe.
+	waitForWriteCount(t, fake, 2, time.Second) // INIT + post-INIT READ
+	preCount := len(fake.recordedWrites())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -257,24 +287,16 @@ func TestHTTPHandler_BootstrapFiresOnSubscribe(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Now the bootstrap READ should land. Wait for the second write.
-	deadline = time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 2 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	// The bootstrap READ is the first write AFTER the handler subscribes.
+	waitForSubscribers(t, s, 1, time.Second)
+	waitForWriteCount(t, fake, preCount+1, time.Second)
 
 	writes := fake.recordedWrites()
-	if len(writes) < 2 {
-		t.Fatalf("expected at least 2 writes (INIT + bootstrap READ), got %d", len(writes))
-	}
 	if string(writes[0]) != "AI1;" {
 		t.Errorf("first write = %q, want %q (INIT)", writes[0], "AI1;")
 	}
-	if string(writes[1]) != "ID;FA;FB;ST;VS;MD0;MD1;PC;" {
-		t.Errorf("bootstrap write = %q, want %q", writes[1], "ID;FA;FB;ST;VS;MD0;MD1;PC;")
+	if got := string(writes[preCount]); got != "ID;FA;FB;ST;VS;MD0;MD1;PC;" {
+		t.Errorf("bootstrap write (writes[%d]) = %q, want %q", preCount, got, "ID;FA;FB;ST;VS;MD0;MD1;PC;")
 	}
 }
 
@@ -326,18 +348,14 @@ func TestHTTPHandler_FanOutToMultipleSubscribers(t *testing.T) {
 		}()
 	}
 
-	// Give all clients time to connect + subscribe before we feed
-	// the test event. Bootstrap READ writes from each subscribe
-	// will happen but produce no responses (fake doesn't auto-reply).
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		// At least N+1 writes means N bootstrap READs landed (plus
-		// the pipeline's startup INIT).
-		if len(fake.recordedWrites()) >= numClients+1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait until all N clients have actually subscribed before feeding the
+	// event — barrier on the hub's subscriber count rather than a write
+	// tally. The old test waited for numClients+1 writes (N bootstrap READs
+	// + startup INIT), but the per-cycle post-INIT READ makes startup 2
+	// writes, so the count should have been numClients+2 — fragile and a
+	// real flake risk (review 2026-06-04 L2). subscriberCount is the direct
+	// barrier.
+	waitForSubscribers(t, s, numClients, 2*time.Second)
 
 	// Feed one frequency push; every subscriber should see it.
 	fake.feedLine([]byte("FA021074000"))
@@ -359,5 +377,121 @@ func TestHTTPHandler_FanOutToMultipleSubscribers(t *testing.T) {
 	}
 	if saw != numClients {
 		t.Errorf("only %d of %d clients saw the broadcast event", saw, numClients)
+	}
+}
+
+// sseDeadlineRecorder is a ResponseWriter that records the write deadlines the
+// SSE handler arms. It implements SetWriteDeadline directly so
+// http.NewResponseController routes through it without a real net.Conn,
+// letting a test assert the handler sets a BOUNDED deadline before each write
+// rather than clearing it to the zero (infinite) value (review 2026-06-04 M2).
+// Goroutine-safe: the handler writes from its own goroutine while the test
+// inspects.
+type sseDeadlineRecorder struct {
+	mu        sync.Mutex
+	header    http.Header
+	body      bytes.Buffer
+	deadlines []time.Time
+}
+
+func newSSEDeadlineRecorder() *sseDeadlineRecorder {
+	return &sseDeadlineRecorder{header: make(http.Header)}
+}
+
+func (r *sseDeadlineRecorder) Header() http.Header { return r.header }
+func (r *sseDeadlineRecorder) WriteHeader(int)     {}
+func (r *sseDeadlineRecorder) Flush()              {}
+
+func (r *sseDeadlineRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.Write(p)
+}
+
+func (r *sseDeadlineRecorder) SetWriteDeadline(t time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deadlines = append(r.deadlines, t)
+	return nil
+}
+
+func (r *sseDeadlineRecorder) bodyContains(sub string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Contains(r.body.String(), sub)
+}
+
+func (r *sseDeadlineRecorder) deadlineSnapshot() []time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]time.Time(nil), r.deadlines...)
+}
+
+// TestHTTPHandler_BoundsWriteDeadlinePerWrite covers review-finding M2: the
+// handler must arm a BOUNDED write deadline before each frame (rather than
+// clearing it to the infinite zero-time), so a wedged peer can't hang the
+// handler goroutine forever. Drives the handler with a recorder that captures
+// every deadline armed, feeds one event, then asserts at least one deadline
+// was set and none of them is the zero time.
+func TestHTTPHandler_BoundsWriteDeadlinePerWrite(t *testing.T) {
+	prev := sseWriteTimeout
+	sseWriteTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { sseWriteTimeout = prev })
+
+	s := newTestService(t, types.BridgeConfig{
+		Enabled: true,
+		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+	})
+
+	rec := newSSEDeadlineRecorder()
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/v1/rig/events", nil).WithContext(ctx)
+	shutdownCh := make(chan struct{})
+
+	done := make(chan struct{})
+	go func() {
+		s.HTTPHandler(shutdownCh).ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	// Wait for the handler to subscribe before publishing — EventRigState
+	// isn't cached, so a publish that races ahead of Subscribe fans out to
+	// zero subscribers and the handler never writes the frame.
+	subDeadline := time.Now().Add(time.Second)
+	for s.hub.subscriberCount() == 0 {
+		if time.Now().After(subDeadline) {
+			cancel()
+			t.Fatal("handler did not subscribe within 1s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Push an event so the handler performs an event-frame write.
+	s.hub.publish(Event{Name: EventRigState, Payload: RigStatePayload{Mode: "USB"}})
+
+	deadline := time.Now().Add(time.Second)
+	for !rec.bodyContains("event: rig-state") {
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("handler did not write the rig-state event within 1s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not return after context cancel")
+	}
+
+	ds := rec.deadlineSnapshot()
+	if len(ds) == 0 {
+		t.Fatal("handler never armed a write deadline; want a bounded deadline before each write (M2)")
+	}
+	for i, d := range ds {
+		if d.IsZero() {
+			t.Errorf("deadline[%d] is the zero time (infinite); M2 requires a bounded per-write deadline", i)
+		}
 	}
 }

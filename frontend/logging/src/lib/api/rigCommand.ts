@@ -9,8 +9,9 @@
     is now at X".
 
     Errors carry the daemon's `{code, message}` envelope (api.md §4.6) — e.g.
-    `rig_unsupported_command` / `rig_invalid_value` (4xx) or `rig_not_connected`
-    / `rig_command_failed` (5xx).
+    `rig_unsupported_command` / `rig_invalid_value` (4xx), `rig_not_connected`
+    (503), `rig_identity_unverified` (409 — the connected rig hasn't been
+    confirmed as the configured driver), or `rig_command_failed` (5xx).
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';

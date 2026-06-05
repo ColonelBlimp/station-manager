@@ -34,13 +34,19 @@ type hub struct {
 	// subscribers and the operator gets blank UI with no signal.
 	//
 	// Scope is per-Service-instance (hub is owned by Service, fresh
-	// hub on daemon restart). New cache entry overwrites previous;
-	// no clearing within a Service's lifetime — once a bridge-error
-	// is observed it stays observable, on the principle that
-	// "operator-actionable error" is more valuable to surface than
-	// to forget. Per the 2026-05-10 internal-bridge-pipeline review
-	// (#2): chosen over lazy-start because operators expect the
-	// daemon to hold the rig from start.
+	// hub on daemon restart). New cache entry overwrites previous.
+	// Permanent / operator-actionable errors stay cached for the
+	// Service's lifetime — once observed they stay observable, on the
+	// principle that surfacing them is more valuable than forgetting.
+	// Per the 2026-05-10 internal-bridge-pipeline review (#2): chosen
+	// over lazy-start because operators expect the daemon to hold the
+	// rig from start.
+	//
+	// The one exception (review 2026-06-04 M1): a TRANSIENT cached error
+	// (serial_open_failed / init_write_failed — the rig was off at boot)
+	// is cleared on the first EventRigState, because a successful rig
+	// push proves the supervisor recovered and the cached toast is now
+	// stale. See publish + BridgeErrorCode.isTransient.
 	lastBridgeError *Event
 
 	// lastRigDisconnected caches the most recent EventRigDisconnected
@@ -106,6 +112,18 @@ func (h *hub) publish(evt Event) {
 		h.lastRigDisconnected = &cp
 	case EventRigState:
 		h.lastRigDisconnected = nil
+		// A successful rig push means any TRANSIENT bridge-error we cached
+		// (serial_open_failed / init_write_failed at first boot, since
+		// recovered by the supervisor) is stale — drop it so a tab opening
+		// after recovery doesn't get a phantom toast. Permanent faults exit
+		// the pipeline and never produce a rig-state, so they never reach
+		// here; identity warnings are non-transient and stay cached
+		// (review 2026-06-04 M1).
+		if h.lastBridgeError != nil {
+			if p, ok := h.lastBridgeError.Payload.(BridgeErrorPayload); ok && p.Code.isTransient() {
+				h.lastBridgeError = nil
+			}
+		}
 	case EventTuneState:
 		cp := evt
 		h.lastTuneState = &cp

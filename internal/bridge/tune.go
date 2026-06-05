@@ -111,6 +111,13 @@ func (s *Service) StartTune(ctx context.Context) error {
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(ErrRigNotConnected)
 	}
+	// Never key TX on a rig whose identity isn't confirmed as the configured
+	// driver — transmitting into the wrong / unverified rig is the most
+	// dangerous case of H2.
+	if !s.identityConfirmed {
+		s.mu.Unlock()
+		return errors.New(errOp).WithErr(ErrRigIdentityUnverified)
+	}
 	// Snapshot the restore target NOW, before keying. captureTuneSnapshot
 	// freezes lastMode/lastPower for the duration of the tune, so the rig's
 	// own RTTY/tune-power pushes can't overwrite what we'll restore to.

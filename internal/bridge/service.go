@@ -69,6 +69,18 @@ type Service struct {
 	// the Service so each Subscribe doesn't repeat cat.Encode.
 	bootstrapBytes []byte
 
+	// identityConfirmed records whether the connected rig has positively
+	// identified as the configured driver (an IDENTITY push matching
+	// def.Model). It gates the operator write paths — SendCommands and
+	// StartTune refuse while false — so a wrong rig (driver typo), an
+	// unrecognised ID, or a rig that never sends a parseable ID can't be
+	// driven by commands or keyed for a tune (H2, review 2026-06-04). A
+	// definite mismatch additionally halts the pipeline (exitPermanent);
+	// the unrecognised / never-identified cases keep reading state for
+	// display but stay write-blocked. Reset to false on pipeline teardown,
+	// so each pipeline instance re-verifies. Mu-guarded.
+	identityConfirmed bool
+
 	// lastPublishedExitKey is the dedup token for the supervisor's
 	// retry loop. Each exit-causing publish (publishExitBridgeError /
 	// publishExitDisconnect) compares against this key and suppresses

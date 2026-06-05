@@ -14,6 +14,15 @@ import (
 // dial it down.
 var sseKeepAliveInterval = 30 * time.Second
 
+// sseWriteTimeout bounds a single SSE frame/keepalive write+flush. Without a
+// bound, a wedged peer (socket held open, never reading, never sending RST)
+// hangs the handler goroutine on a blocked Write indefinitely — it never
+// observes shutdownCh and holds graceful shutdown open until TCP eventually
+// gives up (review 2026-06-04 M2). Re-armed immediately before every write, so
+// the long idle gap between keepalives never trips it. Package-level var so
+// tests can dial it down.
+var sseWriteTimeout = 10 * time.Second
+
 // HTTPHandler returns the http.Handler that serves
 // `GET /v1/rig/events`. Caller registers it on the daemon's mux when
 // `bridge.enabled: true`; the api package's wiring layer is the
@@ -36,12 +45,26 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 			return
 		}
 
-		// Long-running stream: clear the WriteDeadline so an idle
-		// (but still-connected) client isn't disconnected every
-		// WriteTimeoutSec. Same pattern as /v1/events.
+		// Long-running stream: rather than clearing the WriteDeadline
+		// outright (which lets a wedged peer hang this goroutine forever
+		// — review 2026-06-04 M2), bound EACH write with a fresh deadline.
+		// armWrite resets it to now+sseWriteTimeout immediately before
+		// every frame/keepalive, so the long idle gap between keepalives
+		// never trips it but a blocked write fails within the bound and
+		// the goroutine can exit. Probe once: a writer chain with no
+		// underlying net.Conn (some test recorders) can't carry a deadline
+		// — fall back to no deadline + a single log; the stream still
+		// works under the server's WriteTimeout.
 		rc := http.NewResponseController(w)
-		if err := rc.SetWriteDeadline(time.Time{}); err != nil {
-			s.logger.InfoWith().Err(err).Msg("rig SSE write-deadline clear failed; stream subject to WriteTimeout")
+		deadlineSupported := true
+		armWrite := func() {
+			if !deadlineSupported {
+				return
+			}
+			if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
+				deadlineSupported = false
+				s.logger.InfoWith().Err(err).Msg("rig SSE per-write deadline unsupported; stream subject to WriteTimeout")
+			}
 		}
 
 		h := w.Header()
@@ -52,6 +75,7 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 		// direct loopback but keeps the deployment-flexible default
 		// honest.
 		h.Set("X-Accel-Buffering", "no")
+		armWrite()
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 
@@ -91,13 +115,16 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 					// EventSource auto-reconnects.
 					return
 				}
+				armWrite()
 				if err := s.writeSSEEvent(w, evt); err != nil {
-					// Client gone (broken pipe). Defer unsub fires.
+					// Client gone (broken pipe) or write deadline exceeded
+					// (wedged peer). Defer unsub fires.
 					return
 				}
 				flusher.Flush()
 
 			case <-keepalive.C:
+				armWrite()
 				if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
 					return
 				}

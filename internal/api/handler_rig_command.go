@@ -108,6 +108,9 @@ func (s *Server) writeRigCommandError(w http.ResponseWriter, op errors.Op, err e
 	case stderr.Is(err, bridge.ErrRigNotConnected):
 		s.writeError(w, http.StatusServiceUnavailable, "rig_not_connected",
 			"no rig is currently connected", op)
+	case stderr.Is(err, bridge.ErrRigIdentityUnverified):
+		s.writeError(w, http.StatusConflict, "rig_identity_unverified",
+			"connected rig's identity is unverified; check the configured driver matches the rig", op)
 	default:
 		s.writeServerError(w, op, err, "rig_command_failed", "failed to send rig command")
 	}

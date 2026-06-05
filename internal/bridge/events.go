@@ -142,6 +142,31 @@ const (
 	BridgeErrCodeIdentityMismatch BridgeErrorCode = "identity_mismatch"
 )
 
+// isTransient reports whether a bridge-error code names a condition the
+// pipeline supervisor recovers from on its own (a retryable exitTransient
+// fault), as opposed to a permanent config/rigdef fault or an advisory
+// identity warning. The hub uses this to decide whether a cached
+// bridge-error should be dropped once the rig starts pushing state again
+// (review 2026-06-04 M1): a transient error that has since recovered is
+// stale and must not toast a tab that opens after recovery, while a
+// permanent fault never produces a rig-state so it stays cached regardless.
+//
+// Mirrors the pipeline's exit classification (runPipeline): only
+// serial_open_failed and init_write_failed return exitTransient. The
+// identity codes are advisory (publishBridgeError, no exit) and are NOT
+// transient — they are operator-actionable, so they must survive a
+// rig-state. The default is non-transient: a new code stays cached (errs
+// toward surfacing a possibly-stale toast rather than silently hiding a
+// real fault) until it's deliberately classified here.
+func (c BridgeErrorCode) isTransient() bool {
+	switch c {
+	case BridgeErrCodeSerialOpenFailed, BridgeErrCodeInitWriteFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // RigDisconnectedPayload carries the disconnect category + key/value
 // substitution details. The SPA looks up `bridge.disconnected.<Code>`
 // in its i18n catalogue and substitutes named placeholders from

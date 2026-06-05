@@ -26,6 +26,9 @@ func newCommandTestService(t *testing.T) (*Service, *fakeSerial) {
 	fake := newFakeSerial()
 	s.mu.Lock()
 	s.activeClient = fake
+	// Identity is confirmed in the happy-path helper — the write gate (H2)
+	// blocks SendCommands until the rig identifies as the configured driver.
+	s.identityConfirmed = true
 	s.mu.Unlock()
 	return s, fake
 }
@@ -100,6 +103,26 @@ func TestSendCommand_NoActiveClient(t *testing.T) {
 	err := s.SendCommand(context.Background(), "set_freq", "14074000")
 	if !stderr.Is(err, ErrRigNotConnected) {
 		t.Fatalf("SendCommand with no active client = %v, want ErrRigNotConnected", err)
+	}
+}
+
+// TestSendCommand_RefusesUnverifiedIdentity covers the H2 write gate: a rig is
+// connected (activeClient set) but its identity is NOT confirmed as the
+// configured driver. The command must be refused with ErrRigIdentityUnverified
+// and nothing may reach the wire — covers a driver typo / unrecognised /
+// never-identified rig.
+func TestSendCommand_RefusesUnverifiedIdentity(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	s.mu.Lock()
+	s.identityConfirmed = false // connected, but identity not (yet) confirmed
+	s.mu.Unlock()
+
+	err := s.SendCommand(context.Background(), "set_freq", "14074000")
+	if !stderr.Is(err, ErrRigIdentityUnverified) {
+		t.Fatalf("SendCommand with unverified identity = %v, want ErrRigIdentityUnverified", err)
+	}
+	if n := len(fake.recordedWrites()); n != 0 {
+		t.Errorf("a command was written despite unverified identity (%d writes)", n)
 	}
 }
 

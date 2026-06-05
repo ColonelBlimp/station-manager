@@ -15,6 +15,16 @@ import (
 // it never reached the rig (ADR 0026: no silent no-op).
 var ErrRigNotConnected = stderr.New("bridge: no active rig connection")
 
+// ErrRigIdentityUnverified is returned by the operator write paths
+// (SendCommands, StartTune) when the connected rig has not positively
+// identified as the configured driver. It blocks commands / TX from reaching a
+// rig SM can't confirm is the one the operator configured — covering a driver
+// typo (wrong rig), an unrecognised ID code, and a rig that never sends a
+// parseable ID at all (H2, review 2026-06-04). State display still works; only
+// mutating writes are gated. Clears when a matching IDENTITY push arrives, or
+// stays for the pipeline's lifetime on a definite mismatch (which also halts).
+var ErrRigIdentityUnverified = stderr.New("bridge: rig identity not verified; refusing to send")
+
 // RigCommand is one (op, value) pair in a SendCommands batch. Op is the rigdef
 // command name; Value is its single argument as a string.
 type RigCommand struct {
@@ -64,9 +74,16 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 
 	s.mu.Lock()
 	cl := s.activeClient
+	idOK := s.identityConfirmed
 	s.mu.Unlock()
 	if cl == nil {
 		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("%d command(s)", len(cmds))
+	}
+	// Never drive a rig whose identity isn't confirmed as the configured
+	// driver — a wrong / unrecognised / never-identified rig must not receive
+	// commands (H2). State display is unaffected; only this write path gates.
+	if !idOK {
+		return errors.New(errOp).WithErr(ErrRigIdentityUnverified).WithMsgf("%d command(s)", len(cmds))
 	}
 	return cl.WriteCommandBytes(ctx, line)
 }
