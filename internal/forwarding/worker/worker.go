@@ -12,6 +12,7 @@ import (
 	"context"
 	stderr "errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -48,9 +49,12 @@ type Config struct {
 }
 
 // Worker drains the pending qso_upload queue for one destination.
-// Safe to run under safego.Go with respawn=true — Run is idempotent on
-// restart (orphaned in_progress rows are reset at daemon startup, so a
-// panic mid-processRow doesn't leave any hidden state).
+// Safe to run under safego.Go with respawn=true. Each row is processed
+// under a per-row recover boundary (processRowSafely): a panic mid-row
+// resets THAT row to a retryable state and the worker keeps draining the
+// rest of the batch, so a panic no longer strands the already-claimed
+// in_progress row until the next daemon restart. (The daemon-startup
+// orphan reset remains the backstop for a genuine process crash.)
 type Worker struct {
 	cfg    Config
 	fwd    forwarding.Forwarder
@@ -158,8 +162,42 @@ func (w *Worker) tickOnce(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		w.processRow(ctx, row)
+		w.processRowSafely(ctx, row)
 	}
+}
+
+// processRowSafely runs processRow under a per-row recover boundary. A panic
+// while processing one row (a forwarder bug, a malformed QSO, a runtime fault)
+// is recovered here so the worker keeps draining the rest of the batch AND the
+// already-claimed in_progress row is reset to a retryable state — rather than
+// unwinding the whole Run loop and stranding that row at in_progress until the
+// next daemon restart (review 2026-06-05 M1). The reset routes through
+// markTransientInternal, so it respects the retry budget + backoff and emits
+// the usual events; a row that panics on every attempt exhausts its budget and
+// is marked failed rather than looping forever.
+func (w *Worker) processRowSafely(ctx context.Context, row types.QsoUpload) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		w.logger.ErrorWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Int64("qso_id", row.QsoID).
+			Str("action", row.Action).
+			Str("panic", fmt.Sprintf("%v", r)).
+			Str("stack", string(debug.Stack())).
+			Msg("forwarder: panic processing row; resetting to retry")
+		// During shutdown, skip the DB write — the row stays in_progress and
+		// the next startup's orphan reset reclaims it (the crash-recovery path
+		// still applies when we're actually stopping).
+		if ctx.Err() != nil {
+			return
+		}
+		w.markTransientInternal(ctx, row, fmt.Errorf("panic: %v", r))
+	}()
+	w.processRow(ctx, row)
 }
 
 // processRow fetches the QSO, dispatches to the forwarder, and persists
@@ -209,13 +247,13 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 }
 
 // resolvePriorUpstreamID fetches the upstream_id recorded on the prior
-// successful insert for delete actions, so the forwarder can identify
-// the record to remove upstream. For insert/update it returns an empty
-// string without touching the DB.
+// successful upstream-creating action (insert OR update) for delete actions,
+// so the forwarder can identify the record to remove upstream. For
+// insert/update it returns an empty string without touching the DB.
 //
 // Returns handled=true when the row has already been resolved (DB
-// infra error → transient, no matching insert → terminal) so the
-// caller skips the 'submit' step.
+// infra error → transient, no matching upstream-creating row → terminal) so
+// the caller skips the 'submit' step.
 func (w *Worker) resolvePriorUpstreamID(
 	ctx context.Context, row types.QsoUpload, act action.Action,
 ) (string, bool) {
@@ -223,7 +261,7 @@ func (w *Worker) resolvePriorUpstreamID(
 		return "", false
 	}
 
-	upstreamID, err := w.db.FetchInsertUpstreamIDWithContext(
+	upstreamID, err := w.db.FetchPriorUpstreamIDWithContext(
 		ctx, row.QsoID, w.cfg.Name,
 	)
 	if err != nil {
@@ -233,12 +271,11 @@ func (w *Worker) resolvePriorUpstreamID(
 		return "", true
 	}
 	if upstreamID == "" {
-		// No prior successful insert for this (qso, forwarder). The
-		// delete can never resolve — mark terminal per the stage-5
-		// design decision (rather than looping on an impossible
-		// operation).
+		// No prior successful insert OR update for this (qso, forwarder).
+		// The delete can never resolve — mark terminal (rather than looping
+		// on an impossible operation).
 		w.markFailed(ctx, row,
-			"no upstream id for delete — no successful insert found")
+			"no upstream id for delete — no successful insert/update found")
 		return "", true
 	}
 	return upstreamID, false

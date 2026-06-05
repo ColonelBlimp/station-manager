@@ -1060,6 +1060,40 @@ func TestClaimPendingUploads_OrderedByNextAttemptAt(t *testing.T) {
 	}
 }
 
+// When several lifecycle rows for one QSO are pending with the SAME
+// next_attempt_at, the claim must return them in applied order
+// insert→update→delete — not the same-second nondeterministic order the bare
+// next_attempt_at key gave (review 2026-06-05 M2(b)).
+func TestClaimPendingUploads_OrdersLifecycleRowsInsertUpdateDelete(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// Enqueue in reverse (delete, update, insert) so rowid order is the
+	// opposite of the expected claim order — proves we sort on action, not id.
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Delete)
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	// Pin all three to the same next_attempt_at so ordering is decided purely
+	// by the action-priority tiebreak (deterministic — no second-boundary race).
+	rawExec(t, svc, `UPDATE qso_upload SET next_attempt_at = ? WHERE qso_id = ?`, int64(1000), qsoID)
+
+	claimed, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 5)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(claimed) != 3 {
+		t.Fatalf("claimed %d rows, want 3", len(claimed))
+	}
+	got := []string{claimed[0].Action, claimed[1].Action, claimed[2].Action}
+	want := []string{action.Insert.String(), action.Update.String(), action.Delete.String()}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("claim order = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestClaimPendingUploads_SkipsFutureNextAttempt(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
@@ -1272,12 +1306,12 @@ func TestFetchUploadsByQsoID_Multiple(t *testing.T) {
 	}
 }
 
-// ---- FetchInsertUpstreamID (stage 5: delete-action LOGID resolution) ----
+// ---- FetchPriorUpstreamID (stage 5: delete-action LOGID resolution) ----
 
-func TestFetchInsertUpstreamID_NoRows_ReturnsEmpty(t *testing.T) {
+func TestFetchPriorUpstreamID_NoRows_ReturnsEmpty(t *testing.T) {
 	svc := testService(t)
 
-	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), 999, "qrz")
+	got, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), 999, "qrz")
 	if err != nil {
 		t.Fatalf("fetch on empty: %v", err)
 	}
@@ -1286,7 +1320,7 @@ func TestFetchInsertUpstreamID_NoRows_ReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestFetchInsertUpstreamID_HappyPath(t *testing.T) {
+func TestFetchPriorUpstreamID_HappyPath(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
@@ -1299,7 +1333,7 @@ func TestFetchInsertUpstreamID_HappyPath(t *testing.T) {
 		t.Fatalf("mark success: %v", err)
 	}
 
-	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	got, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -1308,7 +1342,7 @@ func TestFetchInsertUpstreamID_HappyPath(t *testing.T) {
 	}
 }
 
-func TestFetchInsertUpstreamID_IgnoresOtherForwarders(t *testing.T) {
+func TestFetchPriorUpstreamID_IgnoresOtherForwarders(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
@@ -1318,7 +1352,7 @@ func TestFetchInsertUpstreamID_IgnoresOtherForwarders(t *testing.T) {
 	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "clublog", 1)
 	_ = svc.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "cl-999")
 
-	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	got, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -1327,27 +1361,53 @@ func TestFetchInsertUpstreamID_IgnoresOtherForwarders(t *testing.T) {
 	}
 }
 
-func TestFetchInsertUpstreamID_IgnoresNonInsertActions(t *testing.T) {
+// A successful UPDATE (ACTION=INSERT&OPTION=REPLACE) creates/owns the upstream
+// record and returns its id, so its upstream_id MUST satisfy a later delete's
+// lookup — otherwise a delete after an out-of-order update can't remove the
+// record the update created (review 2026-06-05 M2(a)). This inverts the old
+// "ignore non-insert actions" behaviour.
+func TestFetchPriorUpstreamID_ConsidersUpdateAction(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
 
-	// Successful update (with upstream_id!) should not satisfy a
-	// delete's LOGID lookup — the update didn't create the record.
+	// A successful update with an upstream_id (and NO insert row) must be found.
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
 	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
 	_ = svc.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "update-upstream")
 
-	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	got, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "update-upstream" {
+		t.Fatalf("got %q, want update-upstream (update is an upstream-creating action)", got)
+	}
+}
+
+// A successful DELETE row must NOT satisfy the lookup — a delete removes the
+// upstream record, it doesn't create one. Only insert/update count.
+func TestFetchPriorUpstreamID_IgnoresDeleteAction(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	// Force a delete row to status=uploaded with a (contrived) upstream_id and
+	// confirm the lookup still returns empty — only insert/update count.
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Delete)
+	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	_ = svc.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "delete-upstream")
+
+	got, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if got != "" {
-		t.Fatalf("got %q, want empty (update row must not satisfy insert lookup)", got)
+		t.Fatalf("got %q, want empty (a delete row must not satisfy the lookup)", got)
 	}
 }
 
-func TestFetchInsertUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
+func TestFetchPriorUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
@@ -1355,7 +1415,7 @@ func TestFetchInsertUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
 	// A pending insert row shouldn't match — no upstream_id yet.
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
 
-	got, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	got, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -1368,7 +1428,7 @@ func TestFetchInsertUpstreamID_IgnoresPendingAndFailed(t *testing.T) {
 	claimed, _ := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
 	_ = svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "boom")
 
-	got, err = svc.FetchInsertUpstreamIDWithContext(context.Background(), qsoID, "qrz")
+	got, err = svc.FetchPriorUpstreamIDWithContext(context.Background(), qsoID, "qrz")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -1438,20 +1498,20 @@ func TestInsertQsoUploadTx_ReArmOnConflict(t *testing.T) {
 		t.Errorf("attempts = %d, want 0 after re-arm", r.Attempts)
 	}
 	// upstream_id is preserved across re-arm — see api_context.go's
-	// InsertQsoUploadTx comment for why (FetchInsertUpstreamID needs it
+	// InsertQsoUploadTx comment for why (FetchPriorUpstreamID needs it
 	// for the delete-after-insert flow).
 	if r.UpstreamID != "qrz-12345" {
 		t.Errorf("upstream_id = %q, want qrz-12345 (must be preserved across re-arm)", r.UpstreamID)
 	}
 }
 
-func TestFetchInsertUpstreamID_InvalidInputs(t *testing.T) {
+func TestFetchPriorUpstreamID_InvalidInputs(t *testing.T) {
 	svc := testService(t)
 
-	if _, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), 0, "qrz"); err == nil {
+	if _, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), 0, "qrz"); err == nil {
 		t.Fatal("expected error for qsoID=0")
 	}
-	if _, err := svc.FetchInsertUpstreamIDWithContext(context.Background(), 1, ""); err == nil {
+	if _, err := svc.FetchPriorUpstreamIDWithContext(context.Background(), 1, ""); err == nil {
 		t.Fatal("expected error for empty forwarderName")
 	}
 }

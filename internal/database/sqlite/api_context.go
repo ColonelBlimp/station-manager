@@ -1580,8 +1580,14 @@ func (s *Service) IsContestDuplicateByLogbookIDWithContext(ctx context.Context, 
 // ClaimPendingUploadsWithContext atomically transitions up to `limit`
 // pending rows for the given forwarder from 'pending' to 'in_progress'
 // and returns them. Rows are selected by next_attempt_at <= now (so
-// retries don't jump the queue) and ordered by next_attempt_at ASC
-// (FIFO). Returns an empty slice when there is nothing to claim.
+// retries don't jump the queue) and ordered deterministically by
+// (next_attempt_at, qso_id, action-priority, id) — action-priority being
+// insert < update < delete — so when several lifecycle rows for one QSO are
+// pending at once they are claimed and processed in applied order rather than
+// the same-second nondeterministic order the bare next_attempt_at key gave
+// (review 2026-06-05 M2). The returned slice is re-sorted on the same key in
+// Go because UPDATE ... RETURNING row order is unspecified. Returns an empty
+// slice when there is nothing to claim.
 //
 // SQLite is single-writer, so the UPDATE...RETURNING is race-free by
 // construction; the per-forwarder scope (forwarder_name = ?) also
@@ -1639,7 +1645,10 @@ WHERE  id IN (
     WHERE  forwarder_name = ?
       AND  status         = ?
       AND  next_attempt_at <= ?
-    ORDER BY next_attempt_at
+    ORDER BY next_attempt_at,
+             qso_id,
+             CASE action WHEN 'insert' THEN 0 WHEN 'update' THEN 1 WHEN 'delete' THEN 2 ELSE 3 END,
+             id
     LIMIT  ?
 )
 RETURNING *`
@@ -1667,7 +1676,43 @@ RETURNING *`
 		}
 		out = append(out, u)
 	}
+
+	// SQLite does not guarantee the order of UPDATE ... RETURNING rows even
+	// though the subquery is ordered (the subquery's ORDER BY only decides
+	// WHICH rows are claimed under LIMIT). Re-sort the claimed batch in Go on
+	// the same key so the worker processes co-pending rows for one QSO in
+	// insert→update→delete order (review 2026-06-05 M2).
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.NextAttemptAt != b.NextAttemptAt {
+			return a.NextAttemptAt < b.NextAttemptAt
+		}
+		if a.QsoID != b.QsoID {
+			return a.QsoID < b.QsoID
+		}
+		if pa, pb := uploadActionOrder(a.Action), uploadActionOrder(b.Action); pa != pb {
+			return pa < pb
+		}
+		return a.ID < b.ID
+	})
 	return out, nil
+}
+
+// uploadActionOrder ranks a qso_upload action for deterministic claim
+// processing: insert before update before delete, so a QSO's lifecycle rows
+// (when several are pending at once) are forwarded in the order they were
+// applied locally. Must match the SQL CASE in ClaimPendingUploadsWithContext.
+func uploadActionOrder(a string) int {
+	switch a {
+	case action.Insert.String():
+		return 0
+	case action.Update.String():
+		return 1
+	case action.Delete.String():
+		return 2
+	default:
+		return 3
+	}
 }
 
 // MarkUploadSuccessWithContext records a successful Submit outcome:
@@ -2114,31 +2159,37 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 	return out, nil
 }
 
-// FetchInsertUpstreamIDWithContext returns the upstream_id recorded on
-// the successful insert for the given (qso_id, forwarder_name) pair.
-// The QRZ delete forwarder needs this value to populate LOGIDS on the
-// DELETE call — upstream's delete endpoint identifies records by its
-// own id, not by our QSO id.
+// FetchPriorUpstreamIDWithContext returns the upstream_id recorded on the most
+// recent successful UPSTREAM-CREATING action (insert OR update) for the given
+// (qso_id, forwarder_name) pair. The QRZ delete forwarder needs this value to
+// populate LOGIDS on the DELETE call — upstream's delete endpoint identifies
+// records by its own id, not by our QSO id.
 //
-// The qso_upload table enforces UNIQUE(qso_id, forwarder_name, action),
-// so at most one insert row exists per (qso, forwarder) pair in
-// practice. The `ORDER BY created_at DESC LIMIT 1` below is defensive:
-// it protects the caller if the schema ever relaxes that constraint.
-// created_at is stable across row lifetime (set at insert, never
-// mutated), so the ordering picks the most-recently-inserted row
-// regardless of what retry bookkeeping updates did to modified_at.
+// Both insert (ACTION=INSERT) and update (ACTION=INSERT&OPTION=REPLACE) can be
+// the action that created/owns the upstream record and returned its id. If an
+// update is forwarded before its insert (the out-of-order backlog case, review
+// 2026-06-05 M2), the LOGID lands on the UPDATE row — so a delete that only
+// consulted insert rows could not find the record it must remove. Considering
+// both upstream-creating actions closes that gap. (Delete rows never carry a
+// created upstream_id, so including them would be harmless but pointless; they
+// are excluded by the action filter for clarity.)
+//
+// UNIQUE(qso_id, forwarder_name, action) means at most one insert and one
+// update row exist per pair; ORDER BY created_at DESC LIMIT 1 picks the most
+// recent of them. created_at is set once at insert and never mutated, so the
+// ordering is stable regardless of retry bookkeeping.
 //
 // Returns:
 //   - ("", nil) when no matching row exists. The worker reclassifies
-//     this as a terminal failure because a delete without a prior
-//     successful insert is structurally unresolvable — retrying cannot
-//     conjure an upstream id.
+//     this as a terminal failure because a delete without any prior
+//     successful upstream-creating action is structurally unresolvable —
+//     retrying cannot conjure an upstream id.
 //   - (upstreamID, nil) on the happy path.
 //   - ("", err) only for infrastructure failures (ctx cancel, DB error).
-func (s *Service) FetchInsertUpstreamIDWithContext(
+func (s *Service) FetchPriorUpstreamIDWithContext(
 	ctx context.Context, qsoID int64, forwarderName string,
 ) (string, error) {
-	const op errors.Op = "sqlite.Service.FetchInsertUpstreamIDWithContext"
+	const op errors.Op = "sqlite.Service.FetchPriorUpstreamIDWithContext"
 	if err := checkService(op, s); err != nil {
 		return "", err
 	}
@@ -2159,7 +2210,7 @@ func (s *Service) FetchInsertUpstreamIDWithContext(
 	row, err := models.QsoUploads(
 		models.QsoUploadWhere.QsoID.EQ(qsoID),
 		models.QsoUploadWhere.ForwarderName.EQ(forwarderName),
-		models.QsoUploadWhere.Action.EQ(action.Insert.String()),
+		models.QsoUploadWhere.Action.IN([]string{action.Insert.String(), action.Update.String()}),
 		models.QsoUploadWhere.Status.EQ(status.Uploaded.String()),
 		models.QsoUploadWhere.UpstreamID.IsNotNull(),
 		qm.OrderBy("created_at DESC"),
@@ -2169,7 +2220,7 @@ func (s *Service) FetchInsertUpstreamIDWithContext(
 		if stderr.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}
-		return "", errors.New(op).WithErr(err).WithMsg("fetch insert upstream id")
+		return "", errors.New(op).WithErr(err).WithMsg("fetch prior upstream id")
 	}
 
 	if !row.UpstreamID.Valid || row.UpstreamID.String == "" {
@@ -2305,7 +2356,7 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 		return errors.New(op).WithMsg("forwarderType is empty")
 	}
 
-	// Re-arm preserves upstream_id deliberately: FetchInsertUpstreamIDWithContext
+	// Re-arm preserves upstream_id deliberately: FetchPriorUpstreamIDWithContext
 	// reads it back for the QRZ delete-after-insert flow, and the worker's
 	// own success path overwrites it on the next successful attempt.
 	// Clearing it here would lose history a re-armed insert (the rare

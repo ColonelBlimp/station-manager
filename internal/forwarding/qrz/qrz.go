@@ -253,7 +253,7 @@ func (f *Forwarder) Submit(
 // OPTION=REPLACE. Delete uses ACTION=DELETE + LOGIDS=priorUpstreamID,
 // where priorUpstreamID is the LOGID QRZ returned on the earlier
 // successful insert — resolved by the worker via
-// sqlite.Service.FetchInsertUpstreamIDWithContext before Submit.
+// sqlite.Service.FetchPriorUpstreamIDWithContext before Submit.
 func buildForm(apiKey string, qso types.Qso, act forwarding.Action, priorUpstreamID string) (url.Values, error) {
 	const op errors.Op = "qrz.buildForm"
 
@@ -273,7 +273,7 @@ func buildForm(apiKey string, qso types.Qso, act forwarding.Action, priorUpstrea
 	case action.Delete:
 		// priorUpstreamID is the LOGID captured on the earlier successful
 		// insert, resolved by the worker via
-		// sqlite.Service.FetchInsertUpstreamIDWithContext before Submit.
+		// sqlite.Service.FetchPriorUpstreamIDWithContext before Submit.
 		// Empty here is a caller bug — the worker should have
 		// short-circuited with a terminal result before we got this far.
 		if priorUpstreamID == "" {

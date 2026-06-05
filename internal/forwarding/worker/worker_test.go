@@ -399,6 +399,19 @@ func (r *recordingForwarder) snapshotCalls() []recordedCall {
 	return out
 }
 
+// panickingForwarder is a test-only Forwarder whose Submit always panics —
+// simulating a forwarder bug or a runtime fault mid-process. Used to prove the
+// worker's per-row recover boundary (review 2026-06-05 M1).
+type panickingForwarder struct{ typeName string }
+
+func (p *panickingForwarder) Type() string       { return p.typeName }
+func (p *panickingForwarder) AdifPrefix() string { return "" }
+func (p *panickingForwarder) Submit(
+	context.Context, types.Qso, forwarding.Action, string,
+) forwarding.Result {
+	panic("boom: forwarder Submit exploded")
+}
+
 // =============================================================================
 // Constructor validation
 // =============================================================================
@@ -473,6 +486,39 @@ func TestWorker_InsertSuccessPath(t *testing.T) {
 	}
 	if row.LastError != "" {
 		t.Fatalf("last_error = %q, want empty on success", row.LastError)
+	}
+}
+
+// =============================================================================
+// Panic recovery — a panic mid-row must not strand the claimed row
+// =============================================================================
+
+// A forwarder Submit panic must NOT crash the worker loop or leave the
+// already-claimed row stuck at in_progress until a daemon restart. The per-row
+// recover boundary resets it through the transient path so it's claimable
+// again in-process (review 2026-06-05 M1). Without the boundary the panic would
+// unwind Run and propagate out of the test goroutine, crashing the suite.
+func TestWorker_PanicInSubmit_RowReclaimableWithoutRestart(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	w, err := New(defaultCfg("stub"), &panickingForwarder{typeName: stub.Type}, h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Pending.String() && u.Attempts >= 1
+	})
+	if row.Status != status.Pending.String() {
+		t.Fatalf("status = %q, want pending (row stranded at in_progress?)", row.Status)
+	}
+	if row.Attempts < 1 {
+		t.Fatalf("attempts = %d, want >= 1 (panic should count as an attempt)", row.Attempts)
+	}
+	if !strings.Contains(row.LastError, "panic") {
+		t.Fatalf("last_error = %q, want it to mention the panic", row.LastError)
 	}
 }
 
