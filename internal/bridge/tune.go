@@ -379,15 +379,31 @@ func encodeTuneRestore(def cat.RigDefinition, restoreMode string, restorePower i
 	return line
 }
 
-// TuneSupported reports whether the rigdef has every command the tune
-// controller needs (set_mode, set_power, tx_on, tx_off). The config surface
-// advertises this (BridgeInfo.Tune) so the SPA shows the Tune button only on a
-// rig that can actually tune (ADR 0027).
+// TuneSupported reports whether the rigdef can actually run the tune carrier.
+// The config surface advertises this (BridgeInfo.Tune) so the SPA shows the
+// Tune button only on a rig that can tune (ADR 0027).
+//
+// It advertises by ENCODEABILITY, not command-name presence: it dry-runs the
+// exact encodes StartTune performs, so GET /v1/config cannot report tune:true
+// for a rigdef whose set_mode/set_power is unexposed, broken, or missing its
+// value-map, or whose tx_on/tx_off won't encode (review 2026-06-05 L1). The
+// probe values mirror encodeTuneOn / encodeTuneUnkey exactly — the RTTY carrier
+// mode + the default tune power through the Exposed-gated EncodeCommand, and
+// tx_on/tx_off through the low-level Encode (they are deliberately not Exposed).
 func TuneSupported(def cat.RigDefinition) bool {
-	return cat.HasCommand(def, tuneModeCommand) &&
-		cat.HasCommand(def, tunePowerCommand) &&
-		cat.HasCommand(def, tuneTxOnCommand) &&
-		cat.HasCommand(def, tuneTxOffCommand)
+	if _, err := cat.EncodeCommand(def, tuneModeCommand, tuneCarrierMode); err != nil {
+		return false
+	}
+	if _, err := cat.EncodeCommand(def, tunePowerCommand, strconv.Itoa(defaultTunePowerW)); err != nil {
+		return false
+	}
+	if _, err := cat.Encode(def, tuneTxOnCommand); err != nil {
+		return false
+	}
+	if _, err := cat.Encode(def, tuneTxOffCommand); err != nil {
+		return false
+	}
+	return true
 }
 
 // resolveTunePower clamps the operator's configured tune power to the safe

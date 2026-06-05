@@ -280,5 +280,17 @@ rigdefs pass). Left `TestEncodeCommandBijection` (a concrete MAINMODE round-trip
 but complements the structural injectivity check). `go test ./...` + `-race ./internal/cat`
 + build green; vet + gofmt clean.
 
-**Queued: Batch C (L1 TuneSupported dry-run).**
-**Deferred: M3 (FT-710 write entries — HW-gated), L2 (Lookup Clone — first real mutator).**
+### Batch C — L1 TuneSupported dry-run. **DONE 2026-06-05.**
+`internal/bridge/tune.go`: `TuneSupported` no longer checks command-name presence
+(`cat.HasCommand`) — it now dry-runs the exact encodes `StartTune` performs:
+`EncodeCommand(set_mode, tuneCarrierMode)` + `EncodeCommand(set_power, Itoa(defaultTunePowerW))`
++ `Encode(tx_on)` + `Encode(tx_off)`, all must succeed. So `BridgeInfo.Tune` can't advertise
+`tune:true` for a rigdef whose set_mode/set_power is unexposed/broken/missing its value-map or
+whose tx_on/tx_off won't encode. Probe values mirror `encodeTuneOn`/`encodeTuneUnkey` exactly
+(low-level `Encode` for the non-Exposed tx_*). Test `TestTuneSupported_RequiresEncodeableCommands`
+(four names present but set_mode unexposed → false, where name-presence would've said true).
+`go test ./...` + `-race ./internal/bridge` + build green; vet + gofmt clean.
+
+**Review complete — all actionable findings resolved (M1, M2, L1).**
+**Deferred (operator): M3 (FT-710 write entries — hardware-gated, operator has the rig),
+L2 (Lookup deep-copy/Clone — fold into the first real mutator / external-dir loader).**

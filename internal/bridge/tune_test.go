@@ -88,6 +88,41 @@ func TestTuneSupported(t *testing.T) {
 	}
 }
 
+// TestTuneSupported_RequiresEncodeableCommands covers review-finding L1: all
+// four tune command NAMES present, but set_mode is not Exposed — so it can't
+// encode. Name-presence (the old HasCommand check) would advertise tune:true;
+// the encodeability dry-run correctly reports false, matching what StartTune
+// would do at runtime.
+func TestTuneSupported_RequiresEncodeableCommands(t *testing.T) {
+	def := cat.RigDefinition{
+		ID:         "test-broken-tune",
+		Terminator: ";",
+		Commands: []cat.Command{
+			{Name: tuneModeCommand, Cmd: "MD0%s;", ValueMap: "MAINMODE"}, // present but NOT exposed
+			{Name: tunePowerCommand, Cmd: "PC%s;", Pad: 3, Exposed: true},
+			{Name: tuneTxOnCommand, Cmd: "TX1;"},
+			{Name: tuneTxOffCommand, Cmd: "TX0;"},
+		},
+		States: []cat.State{
+			{Prefix: "MD0", Markers: []cat.Marker{
+				{Tag: "MAINMODE", Index: 0, Length: 1, ValueMappings: []cat.ValueMapping{
+					{Key: "9", Value: tuneCarrierMode},
+				}},
+			}},
+		},
+	}
+	// Precondition: every tune command name is present (so the old name-presence
+	// check would have returned true).
+	for _, name := range []string{tuneModeCommand, tunePowerCommand, tuneTxOnCommand, tuneTxOffCommand} {
+		if !cat.HasCommand(def, name) {
+			t.Fatalf("precondition: command %q should be present", name)
+		}
+	}
+	if TuneSupported(def) {
+		t.Error("TuneSupported = true with an un-exposed set_mode; want false (encodeability, not name-presence)")
+	}
+}
+
 func TestResolveTunePower(t *testing.T) {
 	cases := []struct {
 		in        int
