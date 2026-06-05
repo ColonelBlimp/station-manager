@@ -264,5 +264,21 @@ Actionable batches: **A (M1), B (M2), C (L1)** — all decision-free.
   proving a bad padded value writes nothing **with an active, identity-verified fake client**.
 - `go test ./...` + `-race ./internal/cat` + build green; vet + gofmt clean.
 
-**Queued: Batch B (M2 ValidateRigDefinition), Batch C (L1 TuneSupported dry-run).**
+### Batch B — M2 ValidateRigDefinition at load. **DONE 2026-06-05.**
+New `internal/cat/validate.go` — `ValidateRigDefinition(def)` called from `rigdb.go`'s
+embedded loader (panic on failure, matching the existing id/dup load-time invariants).
+Checks (encode-critical only): unique non-empty command names; value-bearing templates
+(ValueMap / Pad / `%`) have exactly one `%s` and no other format verb (closes the silent
+`fmt.Appendf` typo hole — `countFormatVerbs` treats `%%` as a literal); `Pad >= 0`; every
+command `ValueMap` references an existing marker tag that's non-empty + injective on its
+Value side (`validateValueMap` — closes the BAND coverage gap generically, scanning all
+markers carrying the tag); markers have `Length > 0` and `Index >= 0`. Deliberately skipped
+state-prefix uniqueness (longest-prefix-wins tolerates dups) and serial-defaults (validated
+at port open) — gold-plating per the validation pass. Tests: `TestValidateRigDefinition`
+(11 bad-def cases + a good baseline) + `TestEmbeddedRigDefinitionsValidate` (both shipped
+rigdefs pass). Left `TestEncodeCommandBijection` (a concrete MAINMODE round-trip — overlaps
+but complements the structural injectivity check). `go test ./...` + `-race ./internal/cat`
++ build green; vet + gofmt clean.
+
+**Queued: Batch C (L1 TuneSupported dry-run).**
 **Deferred: M3 (FT-710 write entries — HW-gated), L2 (Lookup Clone — first real mutator).**

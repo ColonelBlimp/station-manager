@@ -46,6 +46,12 @@ func init() {
 		if _, dup := rigDB[def.ID]; dup {
 			panic(fmt.Sprintf("cat: embedded rig id %q duplicated in %s", def.ID, e.Name()))
 		}
+		// Reject structurally-invalid rigdefs at load (review 2026-06-05 M2):
+		// a template/value-map typo would otherwise become silent garbage on
+		// the CAT write path. Panic matches the other load-time invariants here.
+		if err := ValidateRigDefinition(def); err != nil {
+			panic(fmt.Sprintf("cat: invalid embedded rig %s: %v", e.Name(), err))
+		}
 		rigDB[def.ID] = def
 	}
 }
