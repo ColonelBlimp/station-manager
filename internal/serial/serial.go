@@ -111,6 +111,10 @@ type Port struct {
 
 	cfg Config
 
+	// writeTimeout bounds a single WriteCommandBytes (0 = unbounded). Derived
+	// from Config.WriteTimeoutMS at construction. See WriteCommandBytes.
+	writeTimeout time.Duration
+
 	writeMu sync.Mutex
 
 	responses chan []byte
@@ -167,11 +171,12 @@ func newPort(sp SerialPort, cfg Config) *Port {
 	}
 
 	po := &Port{
-		port:      sp,
-		cfg:       cfg,
-		responses: make(chan []byte, responsesBufSize),
-		closeCh:   make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		port:         sp,
+		cfg:          cfg,
+		writeTimeout: time.Duration(cfg.WriteTimeoutMS) * time.Millisecond,
+		responses:    make(chan []byte, responsesBufSize),
+		closeCh:      make(chan struct{}),
+		doneCh:       make(chan struct{}),
 		// errCh is buffered by one so the reader loop can report a terminal
 		// error without blocking; it is closed when readerLoop exits.
 		errCh: make(chan error, 1),
@@ -213,6 +218,44 @@ func (p *Port) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+
+	if p.writeTimeout <= 0 {
+		// No watchdog: write directly (historical behaviour — blocks until the
+		// OS write completes or errors).
+		return p.writeAll(ctx, cmd)
+	}
+
+	// Watchdog path. go.bug.st/serial has no write deadline (only
+	// SetReadTimeout), so a blocking port.Write on a driver/HW fault can't be
+	// interrupted by ctx — the loop checks ctx only between Write calls. Run the
+	// write off-goroutine; if it overruns writeTimeout, close the port. Closing
+	// errors the stuck syscall, so the goroutine unwinds and reports on the
+	// buffered channel (no leak); the now-closed port makes the bridge's
+	// supervisor tear down and reopen, which also releases any active tune.
+	// This bounds WriteCommandBytes so a hung write can never wedge writeMu (and
+	// with it the tune guaranteed-stop) forever (review 2026-06-04 H4).
+	done := make(chan error, 1)
+	go func() { done <- p.writeAll(ctx, cmd) }()
+
+	t := time.NewTimer(p.writeTimeout)
+	defer t.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-t.C:
+		// Close is idempotent and does not take writeMu, so calling it here is
+		// safe. p.closed flips true, so any concurrent/subsequent writer short-
+		// circuits to ErrClosed rather than racing the unwinding goroutine.
+		_ = p.Close()
+		return errors.New(op).WithErr(ErrWriteTimeout)
+	}
+}
+
+// writeAll writes the full command to the port, looping over partial writes
+// and honouring ctx between writes. It assumes writeMu is held by the caller
+// (directly in the unbounded path, or via the single watchdog goroutine).
+func (p *Port) writeAll(ctx context.Context, cmd []byte) error {
+	const op errors.Op = "serial.WriteCommandBytes"
 
 	written := 0
 	for written < len(cmd) {

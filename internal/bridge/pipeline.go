@@ -40,6 +40,15 @@ var (
 	supervisorSteadyStateThreshold = 10 * time.Second
 )
 
+// writeWatchdog bounds a single serial write (passed to
+// serial.Config.WriteTimeoutMS). go.bug.st/serial has no write deadline, so a
+// hung port.Write would otherwise block the writer goroutine — and the tune
+// guaranteed-stop — forever; on overrun the port closes and the supervisor
+// reopens. Generous on purpose (a hang backstop, not a per-write SLA); operators
+// override via `bridge.timeouts.write_watchdog_ms`. Package var so tests can
+// dial it down (review 2026-06-04 H4).
+var writeWatchdog = 2 * time.Second
+
 // pipelineExitClass tells runSupervisor what to do after runPipeline
 // returns. Classified at the failure site rather than divined from
 // the exit code, so retry policy lives at the call site (where the
@@ -124,6 +133,10 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.publishExitBridgeError(BridgeErrCodeSerialConfigInvalid, map[string]string{"error": errMessage(err)})
 		return exitPermanent
 	}
+	// Bound serial writes with the bridge's hang backstop (review H4). This is
+	// a bridge-policy timeout, not a rigdef-derived serial parameter, so it's
+	// applied here rather than inside buildSerialConfig.
+	serialCfg.WriteTimeoutMS = int(s.writeWatchdog / time.Millisecond)
 
 	// Pre-encode INIT and READ before touching hardware. Both encodes
 	// are pure (no I/O); if either rigdef entry is missing, fail fast
@@ -659,17 +672,19 @@ func vfoLabelToTag(label string) string {
 // rather than in cat or serial — cat is pure codec, serial is pure
 // I/O, and the JSON↔enum translation is the bridge's glue work.
 //
-// Deliberately dropped today (review 2026-06-04 M3): RigSerial's
-// WriteTimeoutMS, RTS, and DTR are parsed from the rigdef but not
-// carried into serial.Config. go.bug.st/serial defaults DTR=true /
-// RTS=true when InitialStatusBits is nil (which serial.Open always
-// passes), so the shipped rigdefs' rts:true/dtr:true coincide with the
-// library default and dropping them is a no-op; for USB-CDC Yaesu rigs
-// RTS/DTR aren't flow control anyway. WriteTimeoutMS guards writes that
-// don't currently block (serial.Config has no write-deadline field, and
-// the lib exposes only a read timeout). Wire these only when a future
-// rigdef actually needs rts:false/dtr:false or a real write deadline
-// lands (couples with review H4).
+// Deliberately dropped (review 2026-06-04 M3): RigSerial's WriteTimeoutMS,
+// RTS, and DTR are parsed from the rigdef but not carried into serial.Config.
+// go.bug.st/serial defaults DTR=true / RTS=true when InitialStatusBits is nil
+// (which serial.Open always passes), so the shipped rigdefs' rts:true/dtr:true
+// coincide with the library default and dropping them is a no-op; for USB-CDC
+// Yaesu rigs RTS/DTR aren't flow control anyway. Wire these only when a future
+// rigdef actually needs rts:false/dtr:false.
+//
+// The rigdef's WriteTimeoutMS (e.g. 20ms on the FTdx10) stays dropped on
+// purpose: it reads as an expected per-write latency, far too tight to drive
+// the H4 write watchdog (which CLOSES the port on overrun — a 20ms threshold
+// would close on any scheduling hiccup). The watchdog uses the separate,
+// generous bridge.timeouts.write_watchdog_ms instead, applied in runPipeline.
 func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) (serial.Config, error) {
 	parity, err := parityFromString(rigSerial.Parity)
 	if err != nil {

@@ -251,13 +251,14 @@ func (s *Service) finishTune() {
 
 // tuneAutoOff is the hard-backstop timer callback. It runs on a background
 // context — the safety action must fire regardless of any HTTP request's
-// lifetime. NOTE: that background context does NOT bound the unkey write. The
-// serial layer sets only a read timeout, and WriteCommandBytes checks ctx
-// merely between writes, so a blocking port.Write here is not interruptible —
-// a true write deadline is open work (review 2026-06-04 H4). On a failed unkey
+// lifetime. The unkey write itself is bounded by the serial write watchdog
+// (bridge.timeouts.write_watchdog_ms → serial.Config.WriteTimeoutMS, review
+// 2026-06-04 H4): a hung port.Write closes the port and returns ErrWriteTimeout
+// rather than blocking forever, so this callback can't wedge. On a failed unkey
 // it re-arms a short retry so the carrier is guaranteed to come down
 // eventually: the timer loops until the unkey succeeds or the rig disconnects
-// (clearTuneOnDisconnect cancels it).
+// (clearTuneOnDisconnect cancels it; a watchdog-closed port surfaces as a
+// terminal serial error → pipeline teardown → clearTuneOnDisconnect).
 func (s *Service) tuneAutoOff() {
 	if err := s.releaseTune(context.Background(), "auto-off"); err != nil {
 		s.mu.Lock()

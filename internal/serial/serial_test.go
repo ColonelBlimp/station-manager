@@ -1328,3 +1328,97 @@ func TestValidateConfigNegativeBaudRate(t *testing.T) {
 		t.Fatalf("expected error for negative baud rate, got nil")
 	}
 }
+
+// hangWritePort blocks in Write (and Read) until Close is called, simulating a
+// driver/HW fault where a serial write never returns. Used to exercise the
+// write watchdog (review 2026-06-04 H4).
+type hangWritePort struct {
+	closeCh chan struct{}
+	once    sync.Once
+}
+
+func newHangWritePort() *hangWritePort { return &hangWritePort{closeCh: make(chan struct{})} }
+
+func (h *hangWritePort) Read(p []byte) (int, error) {
+	<-h.closeCh
+	return 0, context.Canceled
+}
+
+func (h *hangWritePort) Write(p []byte) (int, error) {
+	<-h.closeCh // hang until Close unblocks us
+	return 0, context.Canceled
+}
+
+func (h *hangWritePort) Close() error {
+	h.once.Do(func() { close(h.closeCh) })
+	return nil
+}
+
+func (h *hangWritePort) SetReadTimeout(d time.Duration) error { return nil }
+
+// TestWriteCommandBytesWatchdogClosesOnHang covers review-finding H4: with a
+// positive WriteTimeoutMS, a write that never completes must NOT hang the
+// caller forever. The watchdog closes the port (the only lever, since the lib
+// has no write deadline), the call returns ErrWriteTimeout, and the now-closed
+// port rejects further writes.
+func TestWriteCommandBytesWatchdogClosesOnHang(t *testing.T) {
+	hp := newHangWritePort()
+	cfg := Config{
+		PortName:       "hang",
+		BaudRate:       9600,
+		DataBits:       8,
+		StopBits:       1,
+		LineDelimiter:  ';',
+		WriteTimeoutMS: 50,
+	}
+	c := newPort(hp, cfg)
+
+	start := time.Now()
+	err := c.WriteCommandBytes(context.Background(), []byte("FA;"))
+	elapsed := time.Since(start)
+
+	if !stderr.Is(err, ErrWriteTimeout) {
+		t.Fatalf("err = %v, want ErrWriteTimeout", err)
+	}
+	if elapsed < 40*time.Millisecond {
+		t.Errorf("returned in %v, want ≥ ~50ms (watchdog should wait the timeout)", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("returned in %v — watchdog did not bound the hung write", elapsed)
+	}
+	// The watchdog closed the port; subsequent writes short-circuit.
+	if err := c.WriteCommandBytes(context.Background(), []byte("FB;")); !stderr.Is(err, ErrClosed) {
+		t.Errorf("post-watchdog write err = %v, want ErrClosed", err)
+	}
+}
+
+// TestWriteCommandBytesWatchdogAllowsFastWrite confirms the watchdog is inert
+// on a normal (fast) write: a generous WriteTimeoutMS never fires, the write
+// succeeds, and the port stays open.
+func TestWriteCommandBytesWatchdogAllowsFastWrite(t *testing.T) {
+	mp := newMockPort()
+	cfg := Config{
+		PortName:       "mock",
+		BaudRate:       9600,
+		DataBits:       8,
+		StopBits:       1,
+		LineDelimiter:  ';',
+		WriteTimeoutMS: 2000,
+	}
+	c := newPort(mp, cfg)
+	defer c.Close()
+
+	if err := c.WriteCommandBytes(context.Background(), []byte("FA;")); err != nil {
+		t.Fatalf("WriteCommandBytes: %v", err)
+	}
+	mp.writeMu.Lock()
+	n := len(mp.writes)
+	mp.writeMu.Unlock()
+	if n != 1 {
+		t.Errorf("recorded %d writes, want 1", n)
+	}
+	// Port still usable.
+	if err := c.WriteCommandBytes(context.Background(), []byte("FB;")); err != nil {
+		t.Errorf("second write failed; watchdog wrongly closed the port: %v", err)
+	}
+}

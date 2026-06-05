@@ -38,6 +38,17 @@ type Config struct {
 	// ReadTimeoutMS is the per-read timeout applied to the underlying
 	// serial port. Zero or negative disables the timeout (blocking reads).
 	ReadTimeoutMS int `json:"read_timeout_ms"`
+
+	// WriteTimeoutMS bounds a single WriteCommandBytes call. go.bug.st/serial
+	// exposes no write deadline (only SetReadTimeout), so a blocking port.Write
+	// on a driver/HW fault cannot be interrupted by context. When positive,
+	// WriteCommandBytes runs the write under a watchdog: if it does not complete
+	// in time the port is CLOSED to unblock the stuck syscall and the call
+	// returns ErrWriteTimeout. This is a fault backstop, not a per-write SLA —
+	// set it generously (seconds), well above any legitimate CAT-write latency,
+	// so it only ever fires on a genuine hang. Zero or negative disables the
+	// watchdog (writes block indefinitely — the historical behaviour).
+	WriteTimeoutMS int `json:"write_timeout_ms"`
 }
 
 // validateConfig checks the configuration for obvious issues and returns a

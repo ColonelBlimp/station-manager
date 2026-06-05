@@ -104,11 +104,19 @@ type BridgeCatConfig struct {
 // SteadyStateThresholdMs is how long a runPipeline must survive
 // before the supervisor counts it as "interrupted steady state"
 // and resets the backoff + dedup token. Default 10000ms (10s).
+//
+// WriteWatchdogMs bounds a single serial write (the bridge passes it to
+// serial.Config.WriteTimeoutMS). go.bug.st/serial has no write deadline, so a
+// blocking port.Write on a driver/HW fault would otherwise hang the writer
+// goroutine forever (and with it the tune guaranteed-stop). On overrun the port
+// is closed and the supervisor reopens it. Default 2000ms (2s) — a fault
+// backstop well above any legitimate CAT-write latency, NOT a per-write SLA.
 type BridgeTimeoutsConfig struct {
 	LivenessMs             int `json:"liveness_ms,omitempty"`
 	BackoffInitialMs       int `json:"backoff_initial_ms,omitempty"`
 	BackoffMaxMs           int `json:"backoff_max_ms,omitempty"`
 	SteadyStateThresholdMs int `json:"steady_state_threshold_ms,omitempty"`
+	WriteWatchdogMs        int `json:"write_watchdog_ms,omitempty"`
 }
 
 // BridgeTuneConfig holds the tune-carrier knobs (ADR 0027). Both are optional

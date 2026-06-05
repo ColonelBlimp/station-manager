@@ -247,6 +247,35 @@ Nothing here touches the QSO log write path. All `go test ./internal/bridge`
 
 ## Resolutions
 
+### Follow-up — H4 real write deadline (write watchdog). **DONE 2026-06-05.**
+Investigation outcome: **`go.bug.st/serial` has no write deadline** — `Port`
+exposes `SetReadTimeout`, `Drain`, `ResetOutputBuffer`, `Close`, but nothing to
+bound a blocking `Write` (verified via `go doc`). So the triage's "plumb it if
+the lib supports it" branch is out; implemented the **close-port escape hatch**:
+- `serial.Config.WriteTimeoutMS` + `Port.writeTimeout`. When positive,
+  `WriteCommandBytes` runs the write off-goroutine under a watchdog; on overrun
+  it **closes the port** (errors the stuck syscall so the goroutine unwinds via
+  a buffered channel — no leak) and returns the new `serial.ErrWriteTimeout`.
+  `p.closed` flips, so any concurrent/subsequent writer short-circuits to
+  `ErrClosed` rather than racing the unwinding goroutine. Zero = unbounded
+  (historical behaviour). Write loop extracted to `writeAll`.
+- Bridge wiring: new `bridge.timeouts.write_watchdog_ms` (default **2000 ms**,
+  package var `writeWatchdog`, resolved at `New` → `Service.writeWatchdog`),
+  applied to `serialCfg.WriteTimeoutMS` in `runPipeline`. A watchdog-closed port
+  surfaces as a terminal serial error → pipeline teardown → supervisor reopen →
+  `clearTuneOnDisconnect`, so a hung tune-off write self-recovers instead of
+  wedging `writeMu` (and the guaranteed-stop) forever. `tuneAutoOff`'s H4 comment
+  updated to reflect the bound now exists.
+- **M3 coupling resolved (stays dropped):** the rigdef's `write_timeout_ms`
+  (20 ms on the FTdx10) is deliberately NOT used to drive the watchdog — it reads
+  as an expected per-write latency, far too tight for a port-closing backstop
+  (would close on any scheduling hiccup). The watchdog uses the separate,
+  generous bridge knob; `buildSerialConfig`'s M3 note documents this.
+- Tests: `TestWriteCommandBytesWatchdogClosesOnHang` (hung write → `ErrWriteTimeout`
+  + port closed within the bound), `TestWriteCommandBytesWatchdogAllowsFastWrite`
+  (inert on a normal write). `go test ./internal/serial ./internal/bridge` +
+  `-race` green; `go vet` + `gofmt` clean; full `go build ./...` OK.
+
 ### Batch B — Identity write-gate (H2). **DONE 2026-06-05. Decision: option (c) + block no-IDENTITY rigs.**
 Decision settled with the operator: (c) both — always block the operator write
 paths on unverified identity AND permanent-exit on a definite mismatch; and yes,

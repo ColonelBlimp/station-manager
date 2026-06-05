@@ -126,6 +126,7 @@ type Service struct {
 	supervisorInitialBackoff       time.Duration
 	supervisorMaxBackoff           time.Duration
 	supervisorSteadyStateThreshold time.Duration
+	writeWatchdog                  time.Duration
 
 	// Tune-carrier state (ADR 0027), all mu-guarded. tuneActive is the
 	// single-flight gate; tuneRestoreMode/Power are the pre-tune snapshot
@@ -195,6 +196,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		supervisorInitialBackoff:       resolveTimeout(cfg.Timeouts.BackoffInitialMs, supervisorInitialBackoff),
 		supervisorMaxBackoff:           resolveTimeout(cfg.Timeouts.BackoffMaxMs, supervisorMaxBackoff),
 		supervisorSteadyStateThreshold: resolveTimeout(cfg.Timeouts.SteadyStateThresholdMs, supervisorSteadyStateThreshold),
+		writeWatchdog:                  resolveTimeout(cfg.Timeouts.WriteWatchdogMs, writeWatchdog),
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
 		tuneRestoreSettle:              tuneSettle,
