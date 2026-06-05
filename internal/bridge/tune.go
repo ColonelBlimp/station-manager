@@ -87,6 +87,15 @@ func (s *Service) StartTune(ctx context.Context) error {
 	if err != nil {
 		return errors.New(errOp).WithErr(err).WithMsg("encode tune-on")
 	}
+	// Never key a carrier we can't guarantee dropping (ADR 0027 guaranteed-stop).
+	// encodeTuneOn proves set_mode/set_power/tx_on encode; prove tx_off encodes
+	// too BEFORE keying, so a rigdef with tx_on but no usable tx_off is refused
+	// here rather than keying TX and then stranding the carrier (review
+	// 2026-06-04 H3).
+	if _, err := cat.Encode(def, tuneTxOffCommand); err != nil {
+		return errors.New(errOp).WithErr(err).
+			WithMsg("encode tune-off (refusing to key without a guaranteed unkey)")
+	}
 
 	s.mu.Lock()
 	if s.tuneActive {
@@ -164,7 +173,17 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 
 	// Driver was validated at StartTune and can't change during a tune.
 	def, _ := cat.Lookup(s.cfg.Cat.Driver)
-	off := encodeTuneOff(def, restoreMode, restorePower)
+	off, err := encodeTuneOff(def, restoreMode, restorePower)
+	if err != nil {
+		// The unkey command itself won't encode. StartTune's pre-key gate makes
+		// this unreachable for a tune that actually started, but if we somehow
+		// got here we must NOT call finishTune (which would publish active=false)
+		// when no TX-off was ever sent — leave the tune armed so the carrier is
+		// still reported up, and fail loudly. The backstop keeps the state honest.
+		s.logger.ErrorWith().Err(err).Str("reason", reason).
+			Msg("bridge: tune unkey encode failed; carrier may be keyed — refusing to report down")
+		return errors.New(errOp).WithErr(err).WithMsg("encode tune-off")
+	}
 	if err := cl.WriteCommandBytes(ctx, off); err != nil {
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: tune unkey write failed; backstop will retry")
@@ -190,10 +209,13 @@ func (s *Service) finishTune() {
 
 // tuneAutoOff is the hard-backstop timer callback. It runs on a background
 // context — the safety action must fire regardless of any HTTP request's
-// lifetime; the serial write timeout bounds it. On a failed unkey it re-arms a
-// short retry so the carrier is guaranteed to come down eventually: the timer
-// loops until the unkey succeeds or the rig disconnects (clearTuneOnDisconnect
-// cancels it).
+// lifetime. NOTE: that background context does NOT bound the unkey write. The
+// serial layer sets only a read timeout, and WriteCommandBytes checks ctx
+// merely between writes, so a blocking port.Write here is not interruptible —
+// a true write deadline is open work (review 2026-06-04 H4). On a failed unkey
+// it re-arms a short retry so the carrier is guaranteed to come down
+// eventually: the timer loops until the unkey succeeds or the rig disconnects
+// (clearTuneOnDisconnect cancels it).
 func (s *Service) tuneAutoOff() {
 	if err := s.releaseTune(context.Background(), "auto-off"); err != nil {
 		s.mu.Lock()
@@ -283,15 +305,19 @@ func (s *Service) encodeTuneOn(def cat.RigDefinition) ([]byte, error) {
 }
 
 // encodeTuneOff builds the tune-off CAT line: unkey TX, then restore power,
-// then restore mode. tx_off is the safety-critical part and goes first; the
-// restore halves are best-effort (the values came from decoded rig pushes, so
-// they encode, but a defensive miss must never suppress the unkey). A package
-// func with no Service state so it's trivially unit-testable.
-func encodeTuneOff(def cat.RigDefinition, restoreMode string, restorePower int) []byte {
-	var line []byte
-	if tx, err := cat.Encode(def, tuneTxOffCommand); err == nil {
-		line = append(line, tx...)
+// then restore mode. tx_off is the safety-critical part and goes first; it MUST
+// encode — if it can't (a rigdef with tx_on but no usable tx_off), this returns
+// an error so the caller fails loudly rather than emitting a line that silently
+// omits the unkey and then falsely reports the carrier down (review 2026-06-04
+// H3). The restore halves stay best-effort: the values came from decoded rig
+// pushes so they encode, but a defensive miss must never suppress the unkey. A
+// package func with no Service state so it's trivially unit-testable.
+func encodeTuneOff(def cat.RigDefinition, restoreMode string, restorePower int) ([]byte, error) {
+	tx, err := cat.Encode(def, tuneTxOffCommand)
+	if err != nil {
+		return nil, err
 	}
+	line := append([]byte(nil), tx...)
 	if restorePower > 0 {
 		if p, err := cat.EncodeCommand(def, tunePowerCommand, strconv.Itoa(restorePower)); err == nil {
 			line = append(line, p...)
@@ -302,7 +328,7 @@ func encodeTuneOff(def cat.RigDefinition, restoreMode string, restorePower int) 
 			line = append(line, m...)
 		}
 	}
-	return line
+	return line, nil
 }
 
 // TuneSupported reports whether the rigdef has every command the tune

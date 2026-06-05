@@ -244,3 +244,37 @@ editing.
 
 Nothing here touches the QSO log write path. All `go test ./internal/bridge`
 (+ `-race`) must stay green; each batch adds the test(s) named in its finding.
+
+## Resolutions
+
+### Batch A — Tune-safety (H3 + H4 comment). **DONE 2026-06-05.**
+`internal/bridge/tune.go` + `tune_test.go`:
+- **H3 fixed.** `encodeTuneOff` now returns `([]byte, error)` and requires
+  `tx_off` to encode — a rigdef with `tx_on` but no usable `tx_off` yields an
+  error instead of a line that silently omits the unkey. `releaseTune` handles
+  that error by staying armed + logging loudly and **not** calling `finishTune`,
+  so the carrier is never falsely reported down when no TX-off was sent.
+  `StartTune` gained a pre-key gate (`cat.Encode(def, tx_off)`) that refuses to
+  key TX unless the unkey is proven encodable — defending the ADR-0027
+  guaranteed-stop invariant at key-time. New test `TestEncodeTuneOff_RequiresTxOff`;
+  `TestEncodeTuneOff` updated for the new signature.
+- **H4 comment fixed.** `tuneAutoOff`'s doc no longer claims "the serial write
+  timeout bounds it" (false — the serial layer sets only a read timeout and a
+  blocking `port.Write` isn't ctx-interruptible). A real write deadline remains
+  open work (needs a `go.bug.st/serial` capability check; couples with M3's
+  `write_timeout_ms`).
+- Note: the StartTune negative branch (tx_off missing) is not independently
+  reachable with the two shipped rigdefs (FTdx10 fully tune-capable; FT-710 has
+  no tune commands at all, so `encodeTuneOn` fails first), and `cat.rigDB` has
+  no test-injection hook — so the `tx_off`-missing contract is asserted at the
+  `encodeTuneOff` unit level instead. `go test ./internal/bridge ./internal/cat`
+  + `-race` green; `go vet` + `gofmt` clean.
+
+**Separately surfaced (NOT a review finding): tune mode-restore bug — task #270.**
+Operator reproduced on the FTdx10 that a tune cycle goes USB → RTTY-U correctly
+but does **not** restore to USB on stop (stays in RTTY-U); power restore works.
+The restore code path exists (`encodeTuneOff` appends `set_mode(restoreMode)`
+and the round-trip is test-pinned in `cat/commands_test.go`), so the failure is
+likely wire-ordering/timing on the rig (MD0 sent in the same burst right after
+TX0 may be ignored) rather than a missing-restore. Tracked for separate
+investigation in #270; out of scope for Batch A.

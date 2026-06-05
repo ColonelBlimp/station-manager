@@ -47,6 +47,13 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 136 (2026-06-05) — **`internal/bridge`** review remediation: **Batch A — tune-safety (H3 + H4 comment)**. Shipped + tested green (incl. `-race`); not yet committed.
+
+- **H3.** `encodeTuneOff` → `([]byte, error)`, now requires `tx_off` to encode (no more silent unkey omission). `releaseTune` handles the encode error by staying armed + loud, never calling `finishTune` (so the carrier is never falsely reported down). `StartTune` gained a pre-key gate (`cat.Encode(def, tx_off)`) refusing to key TX unless the unkey is proven encodable — defends the ADR-0027 guaranteed-stop at key-time. New `TestEncodeTuneOff_RequiresTxOff`; `TestEncodeTuneOff` updated.
+- **H4.** Fixed the false `tuneAutoOff` comment ("the serial write timeout bounds it" — it doesn't). A real write deadline stays open work (needs a `go.bug.st/serial` capability check; couples with M3).
+- **Surfaced a separate real bug → task #270:** operator reproduced on the FTdx10 that tune goes USB → RTTY-U but does **not** restore to USB on stop (power restore works). Restore code path exists + is round-trip-tested, so likely wire-ordering/timing (MD0 in the same burst right after TX0). Out of scope for Batch A; tracked separately.
+- Remaining bridge batches queued: **B** (H2 identity write-gate — needs the strictness decision), **C** (H1 split ON+), **D** (M1 hub transient-error clearing), **E** (M2 SSE per-write deadline), **F** (L1/L2/M3 hygiene). See review-doc "## Resolutions" + "## Triage / recommendation".
+
 ### Session 135 (2026-06-04) — **`internal/bridge`** code review **triaged** (analysis only — NO code changed). Full triage + fix sketches + batch plan in `docs/reviews/internal-bridge-2026-06-04.md` → "## Triage / recommendation".
 
 A new review landed for the bridge subsystem — 9 findings (4 High / 3 Medium / 2 Low) on the newer rig-**control** surface (commands ADR 0026 + tune TX ADR 0027). Validated every claim against the code (5 parallel read-only passes, exact `file:line`): **all 9 are code-accurate; none false.** Three are narrower than labelled (single-operator, single-rig FTdx10; the QSO **log** write path is untouched). The canonical record is the **Triage section appended to the review doc** — read that to implement; it carries per-finding verdict + evidence + fix sketch.

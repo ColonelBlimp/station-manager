@@ -148,9 +148,36 @@ func TestEncodeTuneOff(t *testing.T) {
 		{"", 0, "TX0;"},                 // unknown restore → at least unkey
 	}
 	for _, c := range cases {
-		if got := string(encodeTuneOff(def, c.mode, c.power)); got != c.want {
-			t.Errorf("encodeTuneOff(%q,%d) = %q, want %q", c.mode, c.power, got, c.want)
+		got, err := encodeTuneOff(def, c.mode, c.power)
+		if err != nil {
+			t.Errorf("encodeTuneOff(%q,%d) unexpected error: %v", c.mode, c.power, err)
+			continue
 		}
+		if string(got) != c.want {
+			t.Errorf("encodeTuneOff(%q,%d) = %q, want %q", c.mode, c.power, string(got), c.want)
+		}
+	}
+}
+
+// A rigdef that can key TX but has no tx_off command must NOT yield a tune-off
+// line — silently omitting the unkey would strand a keyed carrier while the
+// release path reports it down (review 2026-06-04 H3). encodeTuneOff returns an
+// error instead so releaseTune stays armed and loud.
+func TestEncodeTuneOff_RequiresTxOff(t *testing.T) {
+	def := cat.RigDefinition{
+		ID:         "test-no-txoff",
+		Terminator: ";",
+		Commands: []cat.Command{
+			{Name: tuneTxOnCommand, Cmd: "TX1;"},
+			// deliberately no tx_off
+		},
+	}
+	got, err := encodeTuneOff(def, "USB", 100)
+	if err == nil {
+		t.Fatalf("encodeTuneOff without tx_off = %q, want error", string(got))
+	}
+	if got != nil {
+		t.Errorf("encodeTuneOff error path returned bytes %q, want nil", string(got))
 	}
 }
 
