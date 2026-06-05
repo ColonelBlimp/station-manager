@@ -365,7 +365,10 @@
                         <Mode
                             id="edit-mode"
                             label="Mode"
-                            bind:value={qsoEditState.mode}
+                            value={qsoEditState.mode}
+                            onchange={(v: string) => {
+                                qsoEditState.mode = v;
+                            }}
                             list={modes}
                         />
                         <!--

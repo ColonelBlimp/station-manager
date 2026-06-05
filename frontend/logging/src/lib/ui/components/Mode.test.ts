@@ -4,9 +4,9 @@ import { tick } from 'svelte';
 import Mode from './Mode.svelte';
 
 /**
- * Mode select component. Covers:
+ * Mode select component (controlled: `value` + `onchange`). Covers:
  *   - renders one <option> per list entry
- *   - bind:value reflects user selection back to the parent
+ *   - onchange fires with the selected value (parent owns the value)
  *   - disabled prop disables the underlying <select>
  *
  * The list shape is `string[]` — both the option's value and its visible
@@ -16,13 +16,21 @@ import Mode from './Mode.svelte';
 describe('Mode', () => {
     afterEach(() => cleanup());
 
-    function setup(props: { value?: string; list?: string[]; disabled?: boolean } = {}) {
+    function setup(
+        props: {
+            value?: string;
+            list?: string[];
+            disabled?: boolean;
+            onchange?: (value: string) => void;
+        } = {}
+    ) {
         const { container } = render(Mode, {
             id: 'test-mode',
             label: 'Mode',
             value: props.value ?? 'USB',
             list: props.list ?? ['USB', 'LSB', 'CW'],
             disabled: props.disabled ?? false,
+            onchange: props.onchange ?? (() => {}),
         });
         const select = container.querySelector('select') as HTMLSelectElement;
         return { container, select };
@@ -48,11 +56,12 @@ describe('Mode', () => {
         expect(select.value).toBe('CW');
     });
 
-    it('change event updates the bound select value', async () => {
-        const { select } = setup({ value: 'USB' });
+    it('fires onchange with the newly selected value', async () => {
+        let picked = '';
+        const { select } = setup({ value: 'USB', onchange: (v) => (picked = v) });
         await fireEvent.change(select, { target: { value: 'CW' } });
         await tick();
-        expect(select.value).toBe('CW');
+        expect(picked).toBe('CW');
     });
 
     it('renders enabled by default', () => {

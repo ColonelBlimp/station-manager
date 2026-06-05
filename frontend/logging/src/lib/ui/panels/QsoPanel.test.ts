@@ -7,7 +7,11 @@ import { enrichmentState } from '../../states/enrichment.svelte';
 import { contactHistoryState } from '../../states/contactHistory.svelte';
 import { callsignStack } from '../../states/callsignStack.svelte';
 import { manualState } from '../../states/manual.svelte';
+import { configState } from '../../states/config.svelte';
+import { bridgeState } from '../../states/bridge.svelte';
+import { catState } from '../../states/cat.svelte';
 import { submitQso, type SubmitOutcome } from '../../api/qso';
+import { sendRigCommand } from '../../api/rigCommand';
 
 /**
  * QsoPanel — in-flight submit guard (review 2026-06-04 M1).
@@ -24,8 +28,12 @@ import { submitQso, type SubmitOutcome } from '../../api/qso';
 vi.mock('../../api/qso', () => ({
     submitQso: vi.fn(),
 }));
+vi.mock('../../api/rigCommand', () => ({
+    sendRigCommand: vi.fn().mockResolvedValue({ kind: 'ok' }),
+}));
 
 const mockSubmit = vi.mocked(submitQso);
+const mockRigCommand = vi.mocked(sendRigCommand);
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
     let resolve!: (v: T) => void;
@@ -226,5 +234,68 @@ describe('QsoPanel — frequency-step keys + stack-pop guard', () => {
 
         expect(callsignStack.items).toEqual([]); // popped
         expect(qsoDraft.callsign).toBe('G3ABC'); // loaded into the form
+    });
+});
+
+/**
+ * Mode dropdown — Option A: when CAT is live the dropdown shows the rig's OWN
+ * mode literals (rigModes) and a pick drives the rig via set_mode. The log
+ * still records ADIF (submit reads displayedState, not this control).
+ */
+describe('QsoPanel — live Mode dropdown drives the rig (Option A)', () => {
+    beforeEach(() => {
+        mockSubmit.mockReset();
+        mockRigCommand.mockClear();
+        mockRigCommand.mockResolvedValue({ kind: 'ok' });
+        qsoDraft.clear();
+        // CAT live + a rig that can set_mode, currently on USB.
+        configState.station.enabled = true;
+        bridgeState.connected = true;
+        bridgeState.rigResponding = true;
+        configState.bridge.ops = ['set_mode'];
+        configState.bridge.rigModes = ['LSB', 'USB', 'CW-U', 'DATA-U'];
+        catState.mode = 'USB';
+    });
+
+    afterEach(() => {
+        cleanup();
+        qsoDraft.clear();
+        // Reset CAT to off so other suites start from the default.
+        configState.station.enabled = false;
+        bridgeState.connected = false;
+        bridgeState.rigResponding = false;
+        configState.bridge.ops = [];
+        configState.bridge.rigModes = [];
+        _disposeForTests();
+    });
+
+    function modeSelect(): HTMLSelectElement {
+        const el = document.getElementById('mode') as HTMLSelectElement | null;
+        if (el === null) throw new Error('Mode select not rendered');
+        return el;
+    }
+
+    it('offers the rig mode list and reflects the rig literal, enabled', async () => {
+        render(QsoPanel);
+        await tick();
+        const sel = modeSelect();
+        expect(sel.disabled).toBe(false);
+        expect([...sel.options].map((o) => o.value)).toEqual(['LSB', 'USB', 'CW-U', 'DATA-U']);
+        expect(sel.value).toBe('USB');
+    });
+
+    it('drives set_mode with the chosen rig literal on change', async () => {
+        render(QsoPanel);
+        await tick();
+        await fireEvent.change(modeSelect(), { target: { value: 'CW-U' } });
+        await tick();
+        expect(mockRigCommand).toHaveBeenCalledWith('set_mode', 'CW-U');
+    });
+
+    it('disables the dropdown when the live rig cannot set_mode', async () => {
+        configState.bridge.ops = [];
+        render(QsoPanel);
+        await tick();
+        expect(modeSelect().disabled).toBe(true);
     });
 });

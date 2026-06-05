@@ -4,25 +4,20 @@
         label: string;
         value: string;
         list: string[];
+        onchange: (value: string) => void;
         disabled?: boolean;
         widthClass?: string;
     }
 
-    let {
-        id,
-        label,
-        value = $bindable(''),
-        list,
-        disabled = false,
-        widthClass = 'w-34',
-    }: Props = $props();
+    let { id, label, value, list, onchange, disabled = false, widthClass = 'w-34' }: Props = $props();
 </script>
 
 <div class="{widthClass} input-row">
     <label for={id} class="input-label">{label}</label>
     <div class="grid grid-cols-1 mt-1">
         <select
-            bind:value
+            {value}
+            onchange={(e) => onchange(e.currentTarget.value)}
             {id}
             {disabled}
             tabindex={disabled ? -1 : 0}

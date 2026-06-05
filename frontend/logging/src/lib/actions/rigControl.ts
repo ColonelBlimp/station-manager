@@ -172,6 +172,25 @@ export function nudgeFreqFine(dir: 1 | -1): void {
     nudgeFreq(dir * FREQ_STEP_FINE_HZ);
 }
 
+/**
+ * Set the operating mode (Option A — the live Mode dropdown offers the rig's
+ * own mode literals). CAT off → write the operator-friendly pick to
+ * manualState (resolveModeAndSubmode derives ADIF for the log). CAT live + the
+ * rig exposes set_mode → drive the rig with the chosen rig-mode literal (e.g.
+ * "LSB", "CW-U", "DATA-U"); confirm-by-push updates the UI when the MD0 push
+ * lands. CAT live + no set_mode → no-op. `value` is a friendly mode when off
+ * and a rig literal when live — the caller's dropdown supplies the matching
+ * vocabulary (baseModes vs rigModes).
+ */
+export function setMode(value: string): void {
+    if (!displayedState.isLive) {
+        manualState.mode = value;
+        return;
+    }
+    if (!configState.bridge.ops.includes('set_mode')) return;
+    void driveRig('set_mode', value);
+}
+
 async function driveRig(op: string, value?: string): Promise<void> {
     const outcome = await sendRigCommand(op, value);
     if (outcome.kind !== 'ok') {

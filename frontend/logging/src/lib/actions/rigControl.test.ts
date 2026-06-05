@@ -7,6 +7,7 @@ import {
     selectBand,
     toggleTune,
     nudgeFreq,
+    setMode,
     _resetFreqStepForTests,
 } from './rigControl';
 import { manualState } from '../states/manual.svelte';
@@ -269,6 +270,30 @@ describe('rigControl', () => {
             expect(mockSend).toHaveBeenNthCalledWith(1, 'set_freq', '14074010');
             expect(mockSend).toHaveBeenNthCalledWith(2, 'set_freq', '14074020');
             expect(mockSend).toHaveBeenNthCalledWith(3, 'set_freq', '14074030');
+        });
+    });
+
+    describe('setMode', () => {
+        it('writes the friendly mode to manualState when CAT is off (no rig command)', () => {
+            setMode('USB');
+            expect(manualState.mode).toBe('USB');
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('drives set_mode with the rig literal when CAT is live + capable', () => {
+            setCatLive();
+            configState.bridge.ops = ['set_mode'];
+            manualState.mode = 'CW'; // must NOT change while live
+            setMode('LSB');
+            expect(mockSend).toHaveBeenCalledWith('set_mode', 'LSB');
+            expect(manualState.mode).toBe('CW');
+        });
+
+        it('is a no-op when CAT is live but the rig does not expose set_mode', () => {
+            setCatLive();
+            configState.bridge.ops = [];
+            setMode('LSB');
+            expect(mockSend).not.toHaveBeenCalled();
         });
     });
 });

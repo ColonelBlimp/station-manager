@@ -326,4 +326,20 @@ describe('displayedState (ADR 0009 four-object decomposition)', () => {
             expect(displayedState.effectivePower).toBe(0);
         });
     });
+
+    describe('rigMode (live rig-mode literal for the Mode control — Option A)', () => {
+        it('is the raw catState mode literal when CAT is live', () => {
+            configState.station.enabled = true;
+            bridgeState.connected = true;
+            bridgeState.rigResponding = true;
+            catState.mode = 'DATA-U'; // a rig literal, NOT the ADIF resolution
+            expect(displayedState.rigMode).toBe('DATA-U');
+        });
+
+        it('is empty when CAT is off (off control uses the friendly mode instead)', () => {
+            catState.mode = 'DATA-U';
+            expect(displayedState.isLive).toBe(false);
+            expect(displayedState.rigMode).toBe('');
+        });
+    });
 });

@@ -6,7 +6,6 @@
     import Vfos from '../components/Vfos.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
-    import { manualState } from '../../states/manual.svelte';
     import { qsoDefaults } from '../../states/qsoDefaults.svelte';
     import { qsoDraft } from '../../states/qsoDraft.svelte';
     import { commentHistory } from '../../states/commentHistory.svelte';
@@ -34,6 +33,7 @@
         selectBand,
         nudgeFreqCoarse,
         nudgeFreqFine,
+        setMode,
     } from '../../actions/rigControl';
     import TimerControls from '../components/TimerControls.svelte';
 
@@ -59,36 +59,38 @@
     const baseModes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
     /*
-        Operator-friendly view of the current mode for the dropdown:
-        SUBMODE wins over MODE when present (so a {SSB, USB} pair
-        shows as "USB" not "SSB"; an {FT8, ''} pair shows as "FT8").
-        This collapses the ADIF MODE/SUBMODE pair back into the
-        single string the operator picks from.
-    */
-    // Two-way bind across two reactive stores: read from displayedState
-    // (which already produces ADIF values via either the rig-mode
-    // mapping lookup or resolveModeAndSubmode of manualState's friendly
-    // pick); operator writes route back into manualState's friendly
-    // form only when `editable`, so a CAT-driven mode change while the
-    // rig is live can't clobber the snapshot kept for the disconnect
-    // path. `let mode = $state(...)` + mirror-effect is the standard
-    // Svelte 5 idiom for this — a plain $derived would be read-only
-    // and break the <Mode bind:value>.
-    // eslint-disable-next-line svelte/prefer-writable-derived
-    let mode = $state(displayedState.subMode || displayedState.mode);
-    $effect(() => {
-        mode = displayedState.subMode || displayedState.mode;
-    });
-    $effect(() => {
-        if (displayedState.editable) {
-            manualState.mode = mode;
-        }
-    });
+        Mode control. The Mode dropdown is a controlled component (value +
+        onchange via `setMode`); the on/off branch lives in setMode.
 
-    // Dynamically include the current value in the dropdown options
-    // so a CAT-pushed mode the operator's friendly list doesn't
-    // already contain (e.g. mapping points at "JS8") still displays.
-    const modes = $derived(baseModes.includes(mode) ? baseModes : [...baseModes, mode]);
+          - CAT off: options = the operator-friendly baseModes; value = the
+            friendly view of the current mode (SUBMODE wins over MODE, so a
+            {SSB, USB} pair shows "USB", an {FT8, ''} pair shows "FT8"); a
+            pick writes manualState (resolveModeAndSubmode derives ADIF).
+          - CAT live (Option A): options = the rig's OWN mode literals
+            (rigModes, e.g. LSB/USB/CW-U/DATA-U); value = the rig's current
+            literal (displayedState.rigMode); a pick drives the rig via
+            set_mode, confirm-by-push. The log still records ADIF (the submit
+            path reads displayedState.mode/subMode, not this control). The
+            dropdown is disabled only when live AND the rig can't set_mode.
+    */
+    const modeList = $derived.by(() => {
+        if (displayedState.isLive) {
+            const rm = configState.bridge.rigModes;
+            // Defensive: surface the current rig literal even if rigModes
+            // somehow omits it, so the live selection always renders.
+            return displayedState.rigMode === '' || rm.includes(displayedState.rigMode)
+                ? rm
+                : [...rm, displayedState.rigMode];
+        }
+        const friendly = displayedState.subMode || displayedState.mode;
+        return baseModes.includes(friendly) ? baseModes : [...baseModes, friendly];
+    });
+    const modeValue = $derived(
+        displayedState.isLive ? displayedState.rigMode : displayedState.subMode || displayedState.mode
+    );
+    const modeDisabled = $derived(
+        displayedState.isLive && !configState.bridge.ops.includes('set_mode')
+    );
 
     /*
         QSO timer ticker. Lifecycle and pre-QSO/active branching live
@@ -818,9 +820,10 @@
         <Mode
             id="mode"
             label="Mode"
-            bind:value={mode}
-            list={modes}
-            disabled={!displayedState.editable}
+            value={modeValue}
+            list={modeList}
+            disabled={modeDisabled}
+            onchange={setMode}
         />
         <Vfos />
     </div>

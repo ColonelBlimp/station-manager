@@ -110,6 +110,16 @@ class DisplayedState {
         return resolved.subMode;
     });
 
+    /**
+     * The rig's current mode LITERAL (e.g. "USB", "DATA-U", "CW-U") when CAT
+     * is live — the value the live Mode control surface binds to and that
+     * `set_mode` round-trips (Option A: the live dropdown shows the rig's own
+     * mode list). Distinct from `mode`/`subMode` above, which resolve that
+     * literal to ADIF for the log. Empty when CAT is off — the off control
+     * uses the operator-friendly `manualState` mode instead.
+     */
+    rigMode: string = $derived(this.isLive ? catState.mode : '');
+
     selectedVfo: 'A' | 'B' = $derived(this.isLive ? catState.selectedVfo : manualState.selectedVfo);
     rigIdentity: string = $derived(this.isLive ? catState.rigIdentity : '');
 
