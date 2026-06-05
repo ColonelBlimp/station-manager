@@ -50,8 +50,7 @@ func TestEncodeCommand(t *testing.T) {
 		{name: "set_mode DATA-U", cmd: "set_mode", value: "DATA-U", want: "MD0C;"},
 		{name: "set_mode USB", cmd: "set_mode", value: "USB", want: "MD02;"},
 		{name: "set_mode LSB", cmd: "set_mode", value: "LSB", want: "MD01;"},
-		{name: "set_vfo A", cmd: "set_vfo", value: "VFO-A", want: "VS0;"},
-		{name: "set_vfo B", cmd: "set_vfo", value: "VFO-B", want: "VS1;"},
+		{name: "swap_vfo valueless", cmd: "swap_vfo", value: "", want: "SV;"},
 		{name: "band_up valueless", cmd: "band_up", value: "", want: "BU0;"},
 		{name: "band_down valueless", cmd: "band_down", value: "", want: "BD0;"},
 		{name: "set_freq missing value", cmd: "set_freq", value: "", wantErr: ErrMissingValue},
@@ -124,7 +123,7 @@ func TestExposedCommands(t *testing.T) {
 		t.Fatal(`Lookup("yaesu-ftdx10") not found`)
 	}
 	got := ExposedCommands(def)
-	want := []string{"set_freq", "set_freq_b", "set_mode", "set_vfo", "swap_vfo", "band_up", "band_down", "set_band", "set_power"}
+	want := []string{"set_freq", "set_freq_b", "set_mode", "swap_vfo", "band_up", "band_down", "set_band", "set_power"}
 	if len(got) != len(want) {
 		t.Fatalf("ExposedCommands(ftdx10) = %v, want %v", got, want)
 	}

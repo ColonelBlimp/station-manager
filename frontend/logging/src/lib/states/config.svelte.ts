@@ -205,7 +205,7 @@ class BridgeView {
 
     /**
      * Semantic ops the configured rig exposes for the inbound command
-     * path (ADR 0026), e.g. ["set_freq","set_mode","set_vfo"]. Rigdef-
+     * path (ADR 0026), e.g. ["set_freq","set_mode","swap_vfo"]. Rigdef-
      * derived, stable for the daemon's lifetime. The SPA gates rig-control
      * affordances (VFO select, etc.) on membership here.
      */

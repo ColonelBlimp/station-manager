@@ -65,7 +65,7 @@ export interface BridgeFields {
     rig_modes?: string[];
     /**
      * Semantic ops the configured rig exposes for the inbound command
-     * path (ADR 0026), e.g. ["set_freq","set_mode","set_vfo"]. The SPA
+     * path (ADR 0026), e.g. ["set_freq","set_mode","swap_vfo"]. The SPA
      * gates rig-control affordances on membership here. Empty when the
      * rig defines no exposed commands.
      */
