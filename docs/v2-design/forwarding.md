@@ -554,10 +554,13 @@ UNIQUE(qso_id, forwarder_name, action)
   use `last_attempt_at` only for operator-facing "last tried at"
   display.
 
-### Row creation: one per (enabled destination × matching action)
+### Row creation: one per (configured destination × matching action)
 
-At each QSO lifecycle event, `qsoservice` inserts one row per enabled
-forwarder whose `action_filter` includes that event's action:
+At each QSO lifecycle event, `qsoservice` inserts one row per **configured**
+forwarder whose `action_filter` includes that event's action (ADR 0022:
+enqueue is gated by config presence + `action_filter`, NOT the `Enabled`
+flag — `Enabled` gates only worker lifecycle, so a disabled forwarder still
+accrues pending rows for an operator to drain later):
 
 ```
 -- POST /v1/qso (all three destinations accept 'insert'):
@@ -823,7 +826,7 @@ dial it down without racing against in-flight goroutines.
 
 - The hardcoded `upload.OnlineServiceQRZ` at the ingest site is gone.
   `qsoservice.Submit` reads `config.Forwarders` and inserts one row
-  per enabled destination.
+  per configured destination (ADR 0022: not gated by `Enabled`).
 - Per-forwarder retry policy (v1 was global).
 - Per-destination goroutines (v1 was a single worker).
 - `Forwarder` interface at the plugin boundary (v1 had no seam).
@@ -874,7 +877,8 @@ open pending the real QRZ forwarder and the SSE event stream.
   `action_filter=["insert","update","delete"]`), and rejects
   duplicate names, unknown actions, and broken retry bounds.
 - ✅ A `POST /v1/qso` insert creates one `qso_upload` row per
-  enabled forwarder whose `action_filter` includes `"insert"`.
+  configured forwarder whose `action_filter` includes `"insert"`
+  (ADR 0022: not gated by `Enabled`).
   Covered by `internal/api/handler_forwarders_test.go` and the
   E2E test in `internal/api/handler_e2e_test.go`.
 - ⏳ The QRZ worker picks up its row within one tick, calls the

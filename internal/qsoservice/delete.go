@@ -12,8 +12,9 @@ import (
 )
 
 // Delete soft-deletes a QSO and atomically enqueues one qso_upload
-// row per enabled forwarder whose action_filter includes 'delete',
-// plus a qso_history audit row carrying the pre-delete snapshot
+// row per CONFIGURED forwarder whose action_filter includes 'delete'
+// (ADR 0022: gated by config presence + action_filter, not the Enabled
+// flag), plus a qso_history audit row carrying the pre-delete snapshot
 // (ADR 0016 prep #2).
 //
 // All three writes share a single transaction under the

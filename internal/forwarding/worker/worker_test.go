@@ -522,6 +522,32 @@ func TestWorker_PanicInSubmit_RowReclaimableWithoutRestart(t *testing.T) {
 	}
 }
 
+// A non-success forwarder result with a nil Err must still produce a non-empty
+// last_error (and forward.failed reason) via the fallback — the Forwarder
+// contract requires Err on non-success, but the worker must not trust it blindly
+// (review 2026-06-05 L2).
+func TestWorker_TerminalWithNilErr_GetsFallbackReason(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	fwd := &recordingForwarder{
+		typeName: stub.Type,
+		result:   forwarding.Result{Outcome: forwarding.OutcomeTerminal}, // Err left nil
+	}
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Failed.String()
+	})
+	if row.LastError == "" {
+		t.Fatal("last_error empty for a terminal outcome with nil Err; want fallback text")
+	}
+}
+
 // =============================================================================
 // Forwarder-scope isolation — workers claim only their own rows
 // =============================================================================

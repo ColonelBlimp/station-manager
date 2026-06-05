@@ -188,6 +188,23 @@ listeners are blocked in the sandbox. The reruns passed.
 
 ## Resolutions
 
+**Status: all actionable findings resolved (M1, M2-tractable, L1, L2). M2 enqueue
+supersession + M3 deferred by the operator (see notes below).**
+
+### Batch D — L1 + L2 hygiene. **DONE 2026-06-05.**
+- **L1** (stale "enabled forwarder" wording): row-creation comments in
+  `qsoservice/{submit,update,delete}.go` and `forwarding.md` (§"Row creation" heading +
+  body, the v1-changes bullet, and the acceptance bullet) now say **"configured forwarder"**
+  with an explicit ADR-0022 note (enqueue gated by config presence + action_filter, NOT
+  `Enabled`; `Enabled` gates only worker lifecycle). Left the genuinely-correct
+  worker-lifecycle "enabled" mentions (goroutine-per-enabled-forwarder, spawn section) and
+  the `shouldEnqueue` test pair (which already demonstrates Enabled is ignored).
+- **L2** (worker trusts non-success `Result.Err`): new `nonNilErr(err, fallback)` in
+  `worker.go`; `persistOutcome` normalizes a nil `Result.Err` on Terminal/Transient outcomes
+  to a descriptive fallback, so `last_error` and the `forward.failed` SSE reason are never
+  empty. Test `TestWorker_TerminalWithNilErr_GetsFallbackReason`.
+- `go test ./...` + build green; vet + gofmt clean.
+
 ### Batch A — M1 worker panic recovery. **DONE 2026-06-05.**
 All 5 findings validated against the code first (4 parallel read-only passes) — **all code-accurate**. M1 fixed:
 `internal/forwarding/worker/worker.go` — `tickOnce` now calls a new `processRowSafely`

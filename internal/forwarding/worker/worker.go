@@ -364,17 +364,22 @@ func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, call s
 		w.markSuccess(ctx, row, res.UpstreamID)
 
 	case forwarding.OutcomeTerminal:
+		// The Forwarder contract sets Result.Err on a non-success outcome, but
+		// don't trust it blindly — a nil here would store an empty last_error
+		// and emit an empty forward.failed reason (review 2026-06-05 L2).
+		cause := nonNilErr(res.Err, "forwarder reported terminal outcome without an error")
 		w.logger.WarnWith().
 			Str("forwarder", w.cfg.Name).
 			Int64("qso_id", row.QsoID).
 			Str("action", row.Action).
 			Str("call", call).
-			Err(res.Err).
+			Err(cause).
 			Msg("forwarding: terminal failure")
-		w.markFailed(ctx, row, errText(res.Err))
+		w.markFailed(ctx, row, cause.Error())
 
 	case forwarding.OutcomeTransient:
-		w.markTransientFromForwarder(ctx, row, call, res.Err)
+		w.markTransientFromForwarder(ctx, row, call,
+			nonNilErr(res.Err, "forwarder reported transient outcome without an error"))
 
 	default:
 		// Unknown outcome from the forwarder — treat as terminal so we
@@ -516,4 +521,16 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// nonNilErr guarantees a non-nil error for a non-success forwarder outcome.
+// The Forwarder contract sets Result.Err whenever Outcome != Success, but a
+// buggy or future forwarder could break that; without this the row's
+// last_error and the forward.failed SSE reason would be empty, silently hiding
+// the failure (review 2026-06-05 L2).
+func nonNilErr(err error, fallback string) error {
+	if err == nil {
+		return stderr.New(fallback)
+	}
+	return err
 }
