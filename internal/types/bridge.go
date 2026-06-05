@@ -123,7 +123,15 @@ type BridgeTimeoutsConfig struct {
 // auto-off backstop (default 15000, clamp ≤ 30000): the carrier drops
 // unconditionally after this long even if the operator never toggles tune
 // off, the SPA tab closes, or the network drops.
+//
+// RestoreSettleMs is the pause between unkeying (tx_off) and restoring the
+// pre-tune mode+power on tune stop (default 150, clamp ≤ 2000). Some rigs
+// (the FTdx10) ignore a mode change during the TX→RX transition tail right
+// after unkey, so the mode restore is sent after this settle. The carrier is
+// already down before the pause, so it never affects the guaranteed stop —
+// only the best-effort restore. Raise it if a rig's mode still doesn't restore.
 type BridgeTuneConfig struct {
-	PowerW        int `json:"power_w,omitempty"`
-	MaxDurationMs int `json:"max_duration_ms,omitempty"`
+	PowerW          int `json:"power_w,omitempty"`
+	MaxDurationMs   int `json:"max_duration_ms,omitempty"`
+	RestoreSettleMs int `json:"restore_settle_ms,omitempty"`
 }

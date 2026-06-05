@@ -55,10 +55,27 @@ Inherently safe (release = stop). Rejected because tuning the amp needs both han
 
 - **First retained rig-state in the bridge.** The controller needs the current mode+power to restore them, so the bridge keeps a minimal two-field snapshot fed by the read loop (which already parses `MD0`/`PC`). This is a scoped exception to ADR 0009's "no persistent rig-state cache" (that exclusion was about SSE-replay caching, not a restore snapshot). The controller **refuses to start a tune if it cannot determine the current mode+power** to restore.
 - **New daemon surface:** `POST /v1/rig/tune {active}` (registered, like `/v1/rig/command`, only when the bridge is enabled) and a `tune-state {active}` SSE event so the SPA button reflects the daemon's authoritative state — including an auto-off the operator did not trigger.
-- **New config block** `bridge.tune` (`power_w`, `max_duration_ms`), both clamped in code. Config can tune the feel but cannot create an unsafe tune (no > 40 W, no > 30 s carrier).
+- **New config block** `bridge.tune` (`power_w`, `max_duration_ms`, `restore_settle_ms`), all clamped in code. Config can tune the feel but cannot create an unsafe tune (no > 40 W, no > 30 s carrier).
 - **Activates part of the deferred PTT scope, not all of it.** This builds the daemon-owned TX-keying machinery, but PTT-for-phone, VOX, CW message keying, and TX arbitration remain deferred; a later ADR can build on this controller.
 - **Carrier mode is provisional.** If RTTY proves unsuitable in the field, the carrier-mode decision reopens without disturbing the rest of the controller.
 - Static CGO-free build is unaffected (pure CAT lines + a timer; no new native deps).
+
+## Implementation note (2026-06-05) — tune-off is two writes, not one (task #270)
+
+The Decision above describes tune-off as "`TX0;` then restores the snapshotted
+power and mode." HW testing on the FTdx10 showed the rig **ignores a mode change
+(`MD0`) sent in the same burst immediately after `TX0;`** — it accepts the power
+change but drops the mode change, leaving the rig in the tune carrier's RTTY-U
+mode. The rig accepts `MD0` fine when it's back in RX (proven by tune-*on*,
+which sets the mode before keying).
+
+So `releaseTune` now sends **two separate writes**: (1) `TX0;` alone — the
+safety-critical unkey, which still owns the guaranteed-stop / fail-safe-retry
+semantics; then (2) after a short **TX→RX settle** (`bridge.tune.restore_settle_ms`,
+default 150 ms, clamp ≤ 2 s) the best-effort `PC…;MD0…;` restore. The carrier is
+already down before the settle, so the guarantee is unaffected — the settle only
+gates the best-effort restore (and is skipped if the context cancels mid-pause).
+This is a refinement of the unkey-and-restore path, not a change to the decision.
 
 ## Triggers to revisit
 

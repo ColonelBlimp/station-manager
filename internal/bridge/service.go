@@ -146,6 +146,12 @@ type Service struct {
 	// only before Start, same rule as the timeout fields.
 	tunePowerW      int
 	tuneMaxDuration time.Duration
+
+	// tuneRestoreSettle is the pause between unkeying and restoring mode+power
+	// on tune stop (task #270). Snapshotted at New like the knobs above; mutate
+	// only before Start. The carrier is already down during this pause, so it's
+	// a responsiveness knob, not a safety one.
+	tuneRestoreSettle time.Duration
 }
 
 // New constructs a Service from the operator's bridge config and a
@@ -158,6 +164,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 	// Warn so an operator whose value was capped sees why.
 	tunePower, powerClamped := resolveTunePower(cfg.Tune.PowerW)
 	tuneDur, durClamped := resolveTuneDuration(cfg.Tune.MaxDurationMs)
+	tuneSettle, settleClamped := resolveTuneRestoreSettle(cfg.Tune.RestoreSettleMs)
 	if powerClamped && logger != nil {
 		logger.WarnWith().
 			Int("requested_w", cfg.Tune.PowerW).
@@ -169,6 +176,12 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 			Int("requested_ms", cfg.Tune.MaxDurationMs).
 			Int("clamped_ms", int(tuneDur.Milliseconds())).
 			Msg("bridge: tune max_duration_ms above safe ceiling; clamped")
+	}
+	if settleClamped && logger != nil {
+		logger.WarnWith().
+			Int("requested_ms", cfg.Tune.RestoreSettleMs).
+			Int("clamped_ms", int(tuneSettle.Milliseconds())).
+			Msg("bridge: tune restore_settle_ms above ceiling; clamped")
 	}
 	return &Service{
 		cfg:      cfg,
@@ -184,6 +197,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		supervisorSteadyStateThreshold: resolveTimeout(cfg.Timeouts.SteadyStateThresholdMs, supervisorSteadyStateThreshold),
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
+		tuneRestoreSettle:              tuneSettle,
 	}
 }
 

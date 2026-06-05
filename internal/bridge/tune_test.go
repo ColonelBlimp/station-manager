@@ -28,6 +28,9 @@ func tuneTestService(t *testing.T) (*Service, *fakeSerial) {
 	s.lastMode = "USB"
 	s.lastPower = 100
 	s.tuneMaxDuration = time.Hour
+	// Small but non-zero settle so the unkey→restore split is exercised (two
+	// writes) without slowing the tests (task #270).
+	s.tuneRestoreSettle = 5 * time.Millisecond
 	return s, f
 }
 
@@ -126,6 +129,26 @@ func TestResolveTuneDuration(t *testing.T) {
 	}
 }
 
+func TestResolveTuneRestoreSettle(t *testing.T) {
+	cases := []struct {
+		inMs      int
+		want      time.Duration
+		wantClamp bool
+	}{
+		{0, defaultTuneRestoreSettle, false},  // omitted → default 150ms
+		{-1, defaultTuneRestoreSettle, false}, // negative → default
+		{300, 300 * time.Millisecond, false},  // honoured below ceiling
+		{2000, maxTuneRestoreSettle, false},   // at the ceiling (2s)
+		{5000, maxTuneRestoreSettle, true},    // above → clamped to 2s
+	}
+	for _, c := range cases {
+		got, clamped := resolveTuneRestoreSettle(c.inMs)
+		if got != c.want || clamped != c.wantClamp {
+			t.Errorf("resolveTuneRestoreSettle(%d) = (%v,%v), want (%v,%v)", c.inMs, got, clamped, c.want, c.wantClamp)
+		}
+	}
+}
+
 func TestEncodeTuneOn(t *testing.T) {
 	def, _ := cat.Lookup("yaesu-ftdx10")
 	s := &Service{tunePowerW: 20}
@@ -139,34 +162,24 @@ func TestEncodeTuneOn(t *testing.T) {
 	}
 }
 
-func TestEncodeTuneOff(t *testing.T) {
+// The unkey command is sent on its own line (TX0;), separately from the
+// restore, so the carrier drops before the TX→RX settle (task #270).
+func TestEncodeTuneUnkey(t *testing.T) {
 	def, _ := cat.Lookup("yaesu-ftdx10")
-	cases := []struct {
-		mode  string
-		power int
-		want  string
-	}{
-		{"USB", 100, "TX0;PC100;MD02;"}, // unkey, restore power, restore mode
-		{"CW-U", 5, "TX0;PC005;MD03;"},  // 5 W → PC005;, CW-U → 3
-		{"", 0, "TX0;"},                 // unknown restore → at least unkey
+	got, err := encodeTuneUnkey(def)
+	if err != nil {
+		t.Fatalf("encodeTuneUnkey: %v", err)
 	}
-	for _, c := range cases {
-		got, err := encodeTuneOff(def, c.mode, c.power)
-		if err != nil {
-			t.Errorf("encodeTuneOff(%q,%d) unexpected error: %v", c.mode, c.power, err)
-			continue
-		}
-		if string(got) != c.want {
-			t.Errorf("encodeTuneOff(%q,%d) = %q, want %q", c.mode, c.power, string(got), c.want)
-		}
+	if string(got) != "TX0;" {
+		t.Errorf("encodeTuneUnkey = %q, want %q", string(got), "TX0;")
 	}
 }
 
-// A rigdef that can key TX but has no tx_off command must NOT yield a tune-off
-// line — silently omitting the unkey would strand a keyed carrier while the
-// release path reports it down (review 2026-06-04 H3). encodeTuneOff returns an
-// error instead so releaseTune stays armed and loud.
-func TestEncodeTuneOff_RequiresTxOff(t *testing.T) {
+// A rigdef that can key TX but has no tx_off command must NOT yield an unkey
+// line — silently omitting the unkey would strand a keyed carrier (review
+// 2026-06-04 H3). encodeTuneUnkey returns an error so StartTune's pre-key gate
+// refuses and releaseTune stays armed + loud.
+func TestEncodeTuneUnkey_RequiresTxOff(t *testing.T) {
 	def := cat.RigDefinition{
 		ID:         "test-no-txoff",
 		Terminator: ";",
@@ -175,12 +188,28 @@ func TestEncodeTuneOff_RequiresTxOff(t *testing.T) {
 			// deliberately no tx_off
 		},
 	}
-	got, err := encodeTuneOff(def, "USB", 100)
-	if err == nil {
-		t.Fatalf("encodeTuneOff without tx_off = %q, want error", string(got))
+	if _, err := encodeTuneUnkey(def); err == nil {
+		t.Fatal("encodeTuneUnkey without tx_off = nil error, want error")
 	}
-	if got != nil {
-		t.Errorf("encodeTuneOff error path returned bytes %q, want nil", string(got))
+}
+
+// encodeTuneRestore is the post-unkey best-effort half: restore power, then
+// restore mode (sent after the TX→RX settle, task #270). No tx_off here.
+func TestEncodeTuneRestore(t *testing.T) {
+	def, _ := cat.Lookup("yaesu-ftdx10")
+	cases := []struct {
+		mode  string
+		power int
+		want  string
+	}{
+		{"USB", 100, "PC100;MD02;"}, // restore power, restore mode
+		{"CW-U", 5, "PC005;MD03;"},  // 5 W → PC005;, CW-U → 3
+		{"", 0, ""},                 // nothing known to restore → empty
+	}
+	for _, c := range cases {
+		if got := string(encodeTuneRestore(def, c.mode, c.power)); got != c.want {
+			t.Errorf("encodeTuneRestore(%q,%d) = %q, want %q", c.mode, c.power, got, c.want)
+		}
 	}
 }
 
@@ -275,9 +304,19 @@ func TestStopTune_RestoresAndUnkeys(t *testing.T) {
 	if err := s.StopTune(context.Background()); err != nil {
 		t.Fatalf("StopTune: %v", err)
 	}
-	// Restore to the pre-tune snapshot (USB / 100 W): unkey, power, mode.
-	if got, want := lastWrite(f), "TX0;PC100;MD02;"; got != want {
-		t.Errorf("tune-off write = %q, want %q", got, want)
+	// Two separate writes (task #270): the safety-critical unkey on its own,
+	// then — after the TX→RX settle — the best-effort power + mode restore.
+	// The mode (MD02;) must NOT ride in the same line as the unkey, or the rig
+	// drops it during the transition tail.
+	writes := f.recordedWrites()
+	if len(writes) < 3 {
+		t.Fatalf("got %d writes, want 3 (tune-on, unkey, restore); writes=%q", len(writes), writes)
+	}
+	if got := string(writes[len(writes)-2]); got != "TX0;" {
+		t.Errorf("unkey write = %q, want %q (tx_off alone)", got, "TX0;")
+	}
+	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
+		t.Errorf("restore write = %q, want %q (power + mode after settle)", got, "PC100;MD02;")
 	}
 	s.mu.Lock()
 	active := s.tuneActive
@@ -298,6 +337,41 @@ func TestStopTune_IdempotentWhenIdle(t *testing.T) {
 	}
 }
 
+// TestStopTune_CtxCancelDuringSettleSkipsRestore covers the settle's ctx
+// handling (task #270): if the context is cancelled while we're waiting for the
+// rig to return to RX, the best-effort restore is skipped — but the carrier is
+// already down (unkey went out first), so the tune still finishes cleanly.
+func TestStopTune_CtxCancelDuringSettleSkipsRestore(t *testing.T) {
+	s, f := tuneTestService(t)
+	s.tuneRestoreSettle = 500 * time.Millisecond // long enough to cancel mid-settle
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("StartTune: %v", err)
+	}
+	awaitTuneState(t, ch, true, time.Second)
+
+	// Cancels ~20ms in: after the immediate unkey write, during the settle.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := s.StopTune(ctx); err != nil {
+		t.Fatalf("StopTune: %v", err)
+	}
+	// Unkey went out; the restore was skipped on ctx cancel — last write is the
+	// bare unkey, not the restore line.
+	if got := lastWrite(f); got != "TX0;" {
+		t.Errorf("last write = %q, want %q (unkey only; restore skipped on cancel)", got, "TX0;")
+	}
+	s.mu.Lock()
+	active := s.tuneActive
+	s.mu.Unlock()
+	if active {
+		t.Error("tuneActive = true after a ctx-cancelled stop; carrier wrongly reported up")
+	}
+	awaitTuneState(t, ch, false, time.Second)
+}
+
 func TestTuneAutoOff(t *testing.T) {
 	s, f := tuneTestService(t)
 	s.tuneMaxDuration = 30 * time.Millisecond
@@ -315,8 +389,16 @@ func TestTuneAutoOff(t *testing.T) {
 	if active {
 		t.Error("tuneActive = true after auto-off")
 	}
-	if got, want := lastWrite(f), "TX0;PC100;MD02;"; got != want {
-		t.Errorf("auto-off write = %q, want %q (unkey + restore)", got, want)
+	// Auto-off uses the same two-write release: unkey alone, then restore.
+	writes := f.recordedWrites()
+	if len(writes) < 3 {
+		t.Fatalf("got %d writes, want 3 (tune-on, unkey, restore); writes=%q", len(writes), writes)
+	}
+	if got := string(writes[len(writes)-2]); got != "TX0;" {
+		t.Errorf("auto-off unkey write = %q, want %q", got, "TX0;")
+	}
+	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
+		t.Errorf("auto-off restore write = %q, want %q", got, "PC100;MD02;")
 	}
 }
 

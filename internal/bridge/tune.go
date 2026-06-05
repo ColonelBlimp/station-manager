@@ -58,6 +58,16 @@ const (
 	// unkey write. The carrier MUST come down, so a failed stop keeps
 	// retrying (fail-safe) rather than giving up with the rig keyed.
 	tuneRetryInterval = 1 * time.Second
+
+	// defaultTuneRestoreSettle is the pause between unkeying (tx_off) and
+	// restoring the pre-tune mode+power. The FTdx10 ignores a mode-change
+	// command (MD0) during the TX→RX transition tail immediately after tx_off
+	// — it accepts the power change but drops the mode change — so the rig is
+	// left in the tune carrier's mode (task #270). The carrier is already down
+	// before this pause, so it never affects the guaranteed stop. Config may
+	// raise it up to maxTuneRestoreSettle.
+	defaultTuneRestoreSettle = 150 * time.Millisecond
+	maxTuneRestoreSettle     = 2 * time.Second
 )
 
 // ErrTuneStateUnknown is returned by StartTune when the bridge has not yet
@@ -92,7 +102,7 @@ func (s *Service) StartTune(ctx context.Context) error {
 	// too BEFORE keying, so a rigdef with tx_on but no usable tx_off is refused
 	// here rather than keying TX and then stranding the carrier (review
 	// 2026-06-04 H3).
-	if _, err := cat.Encode(def, tuneTxOffCommand); err != nil {
+	if _, err := encodeTuneUnkey(def); err != nil {
 		return errors.New(errOp).WithErr(err).
 			WithMsg("encode tune-off (refusing to key without a guaranteed unkey)")
 	}
@@ -151,13 +161,20 @@ func (s *Service) StopTune(ctx context.Context) error {
 }
 
 // releaseTune is the single unkey-and-restore path shared by the operator stop
-// and the auto-off backstop. Order on the wire is unkey, restore power,
-// restore mode — TX0 first so the carrier stops before anything else changes.
+// and the auto-off backstop. It is a two-step sequence, NOT one wire line:
 //
-// Fail-safe: if the unkey write fails it leaves tune state armed (active +
-// timer) and returns the error, so the backstop keeps retrying — the carrier
-// must not be stranded by a transient serial glitch. A no-op when no tune is
-// active, and a clean state-sync (no write) when the rig is already gone.
+//  1. Unkey (tx_off) — the safety-critical step. On a failed write it leaves
+//     tune state armed (active + timer) and returns the error so the backstop
+//     keeps retrying; the carrier must never be stranded by a transient glitch.
+//  2. Settle, then restore power + mode — best-effort. The carrier is already
+//     down after step 1, so the guaranteed stop is satisfied before the pause.
+//     The settle exists because some rigs (FTdx10) ignore a mode change during
+//     the TX→RX transition tail right after tx_off (task #270); the pause lets
+//     the rig return to RX so the restore lands. A failed restore write is
+//     logged but does NOT re-arm — the carrier is down, which is what matters.
+//
+// A no-op when no tune is active, and a clean state-sync (no write) when the
+// rig is already gone.
 func (s *Service) releaseTune(ctx context.Context, reason string) error {
 	const errOp errors.Op = "bridge.Service.releaseTune"
 
@@ -169,6 +186,7 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 	restoreMode := s.tuneRestoreMode
 	restorePower := s.tuneRestorePower
 	cl := s.activeClient
+	settle := s.tuneRestoreSettle
 	s.mu.Unlock()
 
 	if cl == nil {
@@ -180,21 +198,38 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 
 	// Driver was validated at StartTune and can't change during a tune.
 	def, _ := cat.Lookup(s.cfg.Cat.Driver)
-	off, err := encodeTuneOff(def, restoreMode, restorePower)
+
+	// Step 1 — unkey. Must encode (StartTune's pre-key gate guarantees it; if
+	// somehow not, stay armed + loud rather than reporting a carrier down that
+	// never got a tx_off). Must write (else stay armed for the backstop).
+	unkey, err := encodeTuneUnkey(def)
 	if err != nil {
-		// The unkey command itself won't encode. StartTune's pre-key gate makes
-		// this unreachable for a tune that actually started, but if we somehow
-		// got here we must NOT call finishTune (which would publish active=false)
-		// when no TX-off was ever sent — leave the tune armed so the carrier is
-		// still reported up, and fail loudly. The backstop keeps the state honest.
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: tune unkey encode failed; carrier may be keyed — refusing to report down")
 		return errors.New(errOp).WithErr(err).WithMsg("encode tune-off")
 	}
-	if err := cl.WriteCommandBytes(ctx, off); err != nil {
+	if err := cl.WriteCommandBytes(ctx, unkey); err != nil {
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: tune unkey write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-off")
+	}
+
+	// Carrier is down. Step 2 — settle, then best-effort restore. Respect ctx
+	// cancellation during the pause (e.g. shutdown / client disconnect): the
+	// carrier is already down, so skipping the restore is safe.
+	if settle > 0 {
+		select {
+		case <-time.After(settle):
+		case <-ctx.Done():
+			s.finishTune()
+			return nil
+		}
+	}
+	if restore := encodeTuneRestore(def, restoreMode, restorePower); len(restore) > 0 {
+		if err := cl.WriteCommandBytes(ctx, restore); err != nil {
+			s.logger.WarnWith().Err(err).Str("reason", reason).
+				Msg("bridge: tune mode/power restore write failed (carrier already down)")
+		}
 	}
 	s.finishTune()
 	return nil
@@ -311,20 +346,25 @@ func (s *Service) encodeTuneOn(def cat.RigDefinition) ([]byte, error) {
 	return line, nil
 }
 
-// encodeTuneOff builds the tune-off CAT line: unkey TX, then restore power,
-// then restore mode. tx_off is the safety-critical part and goes first; it MUST
-// encode — if it can't (a rigdef with tx_on but no usable tx_off), this returns
-// an error so the caller fails loudly rather than emitting a line that silently
-// omits the unkey and then falsely reports the carrier down (review 2026-06-04
-// H3). The restore halves stay best-effort: the values came from decoded rig
-// pushes so they encode, but a defensive miss must never suppress the unkey. A
-// package func with no Service state so it's trivially unit-testable.
-func encodeTuneOff(def cat.RigDefinition, restoreMode string, restorePower int) ([]byte, error) {
-	tx, err := cat.Encode(def, tuneTxOffCommand)
-	if err != nil {
-		return nil, err
-	}
-	line := append([]byte(nil), tx...)
+// encodeTuneUnkey builds the safety-critical unkey command (tx_off). It MUST
+// encode — a rigdef with tx_on but no usable tx_off is refused at StartTune
+// (review 2026-06-04 H3), and the release path stays armed + loud if it ever
+// can't unkey. Sent on its own (not concatenated with the restore) so the
+// carrier drops before the TX→RX settle that precedes the mode restore.
+func encodeTuneUnkey(def cat.RigDefinition) ([]byte, error) {
+	return cat.Encode(def, tuneTxOffCommand)
+}
+
+// encodeTuneRestore builds the best-effort post-unkey restore line: restore
+// power, then restore mode. Sent AFTER the carrier is down and the rig has
+// settled back to RX (task #270 — the FTdx10 ignores a mode change during the
+// TX→RX transition tail). Best-effort: the values came from decoded rig pushes
+// so they encode, but a defensive miss is dropped, never surfaced — by the time
+// this runs the carrier is already down, so nothing here is safety-critical. A
+// package func with no Service state so it's trivially unit-testable. Returns
+// an empty slice when there's nothing to restore (unknown mode + power).
+func encodeTuneRestore(def cat.RigDefinition, restoreMode string, restorePower int) []byte {
+	var line []byte
 	if restorePower > 0 {
 		if p, err := cat.EncodeCommand(def, tunePowerCommand, strconv.Itoa(restorePower)); err == nil {
 			line = append(line, p...)
@@ -335,7 +375,7 @@ func encodeTuneOff(def cat.RigDefinition, restoreMode string, restorePower int) 
 			line = append(line, m...)
 		}
 	}
-	return line, nil
+	return line
 }
 
 // TuneSupported reports whether the rigdef has every command the tune
@@ -372,6 +412,22 @@ func resolveTuneDuration(cfgMs int) (time.Duration, bool) {
 	d := time.Duration(cfgMs) * time.Millisecond
 	if d > maxTuneDuration {
 		return maxTuneDuration, true
+	}
+	return d, false
+}
+
+// resolveTuneRestoreSettle clamps the configured unkey→restore settle (task
+// #270): zero/omitted → default 150 ms; positive → honoured up to the 2 s
+// ceiling. The ceiling guards a config typo from making every tune-off appear
+// to hang (the carrier is already down during the settle, so it's not a safety
+// bound — just a responsiveness one).
+func resolveTuneRestoreSettle(cfgMs int) (time.Duration, bool) {
+	if cfgMs <= 0 {
+		return defaultTuneRestoreSettle, false
+	}
+	d := time.Duration(cfgMs) * time.Millisecond
+	if d > maxTuneRestoreSettle {
+		return maxTuneRestoreSettle, true
 	}
 	return d, false
 }
