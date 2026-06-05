@@ -83,8 +83,11 @@ func TestTuneSupported(t *testing.T) {
 	if !ok {
 		t.Fatal(`Lookup("yaesu-ft710") not found`)
 	}
+	// The FT-710 now has set_mode + set_power (write entries added 2026-06-05),
+	// but deliberately carries no tx_on/tx_off yet (TX/tune pending live
+	// verification), so the encodeability dry-run still reports false.
 	if TuneSupported(ft710) {
-		t.Error("TuneSupported(ft710) = true; rigdef has no tune commands")
+		t.Error("TuneSupported(ft710) = true; FT-710 has no tx_on/tx_off yet")
 	}
 }
 

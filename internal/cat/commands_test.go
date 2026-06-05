@@ -120,34 +120,65 @@ func TestEncodeCommandBijection(t *testing.T) {
 	}
 }
 
-// TestExposedCommands pins the advertised op vocabulary: the FTdx10 exposes
-// its safe inbound commands in rigdef order, while the FT-710 — which has no
-// inbound command path yet — exposes nothing, proving the default-deny of the
-// Exposed flag. The TX-keying commands (tx_on/tx_off) are deliberately absent:
-// they are not Exposed, so they never reach the generic command path (ADR
-// 0027) — only the tune controller may key TX.
+// TestExposedCommands pins the advertised op vocabulary: both shipped Yaesu
+// rigdefs expose the same safe inbound commands in rigdef order (FA/FB/MD0/
+// PC/SV/BU/BD/BS — all non-transmitting; their FT-710 formats are byte-identical
+// to the FTdx10, confirmed against FT-710_CAT_OM_ENG_2306-C). The TX-keying
+// commands (tx_on/tx_off) are deliberately absent from BOTH exposed lists: they
+// are not Exposed, so they never reach the generic command path (ADR 0027) —
+// only the tune controller may key TX. (The FT-710 carries no tx_on/tx_off at
+// all yet, pending live transmit verification.)
 func TestExposedCommands(t *testing.T) {
-	def, ok := Lookup("yaesu-ftdx10")
-	if !ok {
-		t.Fatal(`Lookup("yaesu-ftdx10") not found`)
-	}
-	got := ExposedCommands(def)
 	want := []string{"set_freq", "set_freq_b", "set_mode", "swap_vfo", "band_up", "band_down", "set_band", "set_power"}
-	if len(got) != len(want) {
-		t.Fatalf("ExposedCommands(ftdx10) = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("ExposedCommands[%d] = %q, want %q", i, got[i], want[i])
+	for _, id := range []string{"yaesu-ftdx10", "yaesu-ft710"} {
+		def, ok := Lookup(id)
+		if !ok {
+			t.Fatalf("Lookup(%q) not found", id)
+		}
+		got := ExposedCommands(def)
+		if len(got) != len(want) {
+			t.Fatalf("ExposedCommands(%s) = %v, want %v", id, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("ExposedCommands(%s)[%d] = %q, want %q", id, i, got[i], want[i])
+			}
 		}
 	}
+}
 
-	ft710, ok := Lookup("yaesu-ft710")
+// TestEncodeCommand_FT710 pins that the FT-710's added write entries encode to
+// the same wire bytes as the FTdx10 (formats confirmed byte-identical against
+// FT-710_CAT_OM_ENG_2306-C). Guards the new rigdef entries + the FT-710 BAND
+// value_map.
+func TestEncodeCommand_FT710(t *testing.T) {
+	def, ok := Lookup("yaesu-ft710")
 	if !ok {
 		t.Fatal(`Lookup("yaesu-ft710") not found`)
 	}
-	if ops := ExposedCommands(ft710); len(ops) != 0 {
-		t.Errorf("ExposedCommands(ft710) = %v, want empty (no exposed commands)", ops)
+	cases := []struct {
+		cmd, value, want string
+	}{
+		{"set_freq", "14074000", "FA014074000;"},
+		{"set_freq_b", "7074000", "FB007074000;"},
+		{"set_mode", "USB", "MD02;"},
+		{"set_mode", "RTTY-U", "MD09;"},
+		{"set_power", "20", "PC020;"},
+		{"swap_vfo", "", "SV;"},
+		{"band_up", "", "BU0;"},
+		{"band_down", "", "BD0;"},
+		{"set_band", "20m", "BS05;"},
+		{"set_band", "6m", "BS10;"},
+	}
+	for _, c := range cases {
+		got, err := EncodeCommand(def, c.cmd, c.value)
+		if err != nil {
+			t.Errorf("EncodeCommand(%q, %q): %v", c.cmd, c.value, err)
+			continue
+		}
+		if string(got) != c.want {
+			t.Errorf("EncodeCommand(%q, %q) = %q, want %q", c.cmd, c.value, string(got), c.want)
+		}
 	}
 }
 

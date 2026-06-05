@@ -4,7 +4,7 @@
   "manufacturer": "Yaesu",
   "model": "FT-710",
   "family": "yaesu",
-  "description": "Yaesu FT-710 HF/50MHz SDR transceiver. Verified against FT-710_CAT_OM_ENG_2306-C. Mostly mirrors the FTdx10 (same Yaesu ASCII+';' family, same mode codes, same FA/FB/PC/PB/AI/VS formats). Differences from the FTdx10: identity code is 0800 (not 0761); SPLIT only has 0/1 (no ON+). VS P1 semantically maps main-band to VFO-A or VFO-B (operationally equivalent to FTdx10).",
+  "description": "Yaesu FT-710 HF/50MHz SDR transceiver. Verified against FT-710_CAT_OM_ENG_2306-C. Mirrors the FTdx10 (same Yaesu ASCII+';' family, same mode codes, same FA/FB/MD0/PC/PB/AI/VS/SV/BS/BU/BD/TX formats). Differences from the FTdx10: identity code is 0800 (not 0761); SPLIT only has 0/1 (no ON+). VS P1 semantically maps main-band to VFO-A or VFO-B (operationally equivalent to FTdx10). Inbound write commands (set_freq/set_freq_b/set_mode/set_power/swap_vfo/band_up/band_down/set_band) added 2026-06-05 from the CAT OM — formats confirmed byte-identical to the FTdx10. TX/tune (tx_on/tx_off; format also identical, TX1;/TX0;) is deliberately NOT yet wired pending live FT-710 transmit verification.",
   "terminator": ";",
   "serial": {
     "baud_rate": 38400,
@@ -22,9 +22,17 @@
     "listener_read_timeout_ms": 8
   },
   "commands": [
-    {"name": "INIT",     "cmd": "AI1;"},
-    {"name": "READ",     "cmd": "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
-    {"name": "PLAYBACK", "cmd": "PB0%s;"}
+    {"name": "INIT",       "cmd": "AI1;"},
+    {"name": "READ",       "cmd": "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
+    {"name": "PLAYBACK",   "cmd": "PB0%s;"},
+    {"name": "set_freq",   "cmd": "FA%s;",  "pad": 9,                "exposed": true},
+    {"name": "set_freq_b", "cmd": "FB%s;",  "pad": 9,                "exposed": true},
+    {"name": "set_mode",   "cmd": "MD0%s;", "value_map": "MAINMODE", "exposed": true},
+    {"name": "swap_vfo",   "cmd": "SV;",                             "exposed": true},
+    {"name": "band_up",    "cmd": "BU0;",                            "exposed": true},
+    {"name": "band_down",  "cmd": "BD0;",                            "exposed": true},
+    {"name": "set_band",   "cmd": "BS%s;",  "value_map": "BAND",     "exposed": true},
+    {"name": "set_power",  "cmd": "PC%s;",  "pad": 3,                "exposed": true}
   ],
   "states": [
     {
@@ -113,6 +121,24 @@
       "prefix": "PC",
       "markers": [
         {"tag": "TXPWR", "index": 0, "length": 3}
+      ]
+    },
+    {
+      "prefix": "BS",
+      "markers": [
+        {"tag": "BAND", "index": 0, "length": 2, "value_mappings": [
+          {"key": "00", "value": "160m"},
+          {"key": "01", "value": "80m"},
+          {"key": "02", "value": "60m"},
+          {"key": "03", "value": "40m"},
+          {"key": "04", "value": "30m"},
+          {"key": "05", "value": "20m"},
+          {"key": "06", "value": "17m"},
+          {"key": "07", "value": "15m"},
+          {"key": "08", "value": "12m"},
+          {"key": "09", "value": "10m"},
+          {"key": "10", "value": "6m"}
+        ]}
       ]
     }
   ],
