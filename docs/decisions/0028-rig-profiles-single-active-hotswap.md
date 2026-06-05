@@ -14,10 +14,17 @@ The daemon has never modelled "a rig" as a first-class thing. A rig is really a
 across loose, single-valued config fields that live on the *bridge subsystem*
 rather than on a rig identity: `BridgeSerialConfig.Port` (the device node) and
 `BridgeCatConfig.Driver` (the rigdef id) in `internal/types/bridge.go`, plus
-`Ft8.Audio.Device` (the soundcard index) in `internal/types/ft8.go`. There is
+`Ft8Config.Device` (the audio device) in `internal/types/ft8.go`. There is
 exactly one of each, so the daemon's model is "the bridge has a port and a
 driver," when reality is "*this physical rig* is a (driver + port + audio) bundle,
 and the operator may have several plugged in at once."
+
+A half-built scaffolding for exactly this already exists (session 31): `types.RigConfig`
+(`{id int64, model, port, overrides}` — "the operator's DTO for one rig installed at
+their station"), `Config.DefaultRigID` (whose comment reads *"the rig's display fields
+… live in `cfg.Rigs` when CAT lands"*), and the `default_rig` join in
+`handler_config.go` (deferred *"until CAT lands and `cfg.Rigs` is populated"*). The
+catalogue this ADR introduces is the thing that scaffolding was waiting for.
 
 This bites a concrete workflow. The operator runs an FTdx10 for phone/CW and an
 FT-710 for FT8, both attached to the same PC on different USB device nodes.
@@ -36,15 +43,24 @@ swapped the cable to the wrong radio."
 
 ## Decision
 
-Introduce **named rig profiles**: a catalogue of rigs, each a
-`{driver, serial port, audio device, per-rig tune/mode overrides}` bundle, plus an
-**active-rig selector**. Exactly **one** profile is bound at a time. Switching is a
-**runtime hot-swap** — a select operation tears down the current bridge pipeline
-and binds the new profile's port + driver, letting the supervisor bring it up — not
-a config edit + restart. The bridge stops owning loose `port`/`driver` fields and
-instead references the active profile.
+Introduce a **rig catalogue** — `Config.Rigs`, a list of the existing
+`types.RigConfig` (reused, not a parallel struct), each extended with a per-rig
+`audio` block (`{device}`). A rig is identified by its `model` (the rigdef id),
+`port`, and `audio.device`. **`Config.DefaultRigID` is the active-rig selector**:
+the rig it points at is the one the bridge binds *and* the one QSOs attribute to —
+in the single-active model these are the same choice, so there is no separate
+`active_rig` field. Exactly **one** rig is active at a time.
+
+Switching is ultimately a **runtime hot-swap** — a select operation tears down the
+current bridge pipeline and binds the newly-active rig, letting the supervisor bring
+it up. The bridge and FT8 subsystems stop owning loose `port`/`driver`/`device`
+fields and instead consume the active rig's values, resolved from the catalogue.
 
 Concurrent multi-rig within one daemon is explicitly **out of scope** (see below).
+
+This lands in phases (see `docs/v2-design/rig-profiles.md`): the **config model**
+first (switch = edit `default_rig_id` + restart), then the hardware-discovery
+endpoint, picker UI, and runtime hot-swap together with the config SPA.
 
 ## Alternatives considered
 
@@ -62,6 +78,19 @@ doesn't deliver the thing the operator actually asked for — *hot*-swap. The
 supervisor's teardown/reopen machinery already makes a live re-bind cheap, so
 paying a restart per switch is needless friction.
 
+### A parallel `RigProfile` struct + a separate `active_rig` selector
+
+The first sketch of this ADR invented a new `RigProfile{driver, serial, audio}`
+struct in a `map[string]RigProfile` keyed by string ids, plus a new `active_rig`
+string selector. Rejected on discovery of the session-31 scaffolding: it would
+duplicate `types.RigConfig` (the "don't build parallel structs" anti-pattern) and
+ignore the already-half-built `default_rig` join and `DefaultRigID` selector. Reusing
+`RigConfig` (just adding `audio`) lights up the existing join, and folding the active
+selector into `DefaultRigID` removes a redundant concept — in the single-operator,
+single-active model the rig you're bound to *is* the rig you're logging on. Keeping
+them separate would only matter to bind rig A while attributing QSOs to rig B, which
+no single-operator workflow needs; split them if that ever appears.
+
 ### Concurrent multi-rig in one daemon
 
 Two (or more) rigs bound and live simultaneously — e.g. the FTdx10 holding phone
@@ -78,9 +107,15 @@ process problem. Keeping it out of the daemon preserves narrow single-daemon sco
 
 ## Consequences
 
-- A rig becomes a first-class, named entity. `port`, `driver`, and the FT8 audio
-  device move off the bridge/ft8 blocks onto a per-profile bundle; the bridge and
-  FT8 subsystems reference the *active* profile rather than carrying loose fields.
+- A rig becomes a first-class entity, reusing `types.RigConfig` (+`audio`). `port`,
+  `driver`, and the FT8 audio device move off the bridge/ft8 blocks into the catalogue
+  entry; the bridge and FT8 subsystems consume the *active* rig's values rather than
+  carrying loose fields. The `default_rig` join in `handler_config.go` (and
+  `DefaultRig` in the config response) becomes live for the first time.
+- `DefaultRigID` gains a second meaning — the **active/bound** rig, not just the
+  logging-attribution default. Acceptable because they coincide in the single-active
+  model; documented so a future reader doesn't treat them as separable without the
+  split-then call-out above.
 - A runtime select surface is needed (an endpoint + SPA control) that re-binds the
   bridge pipeline. This leans on the existing supervisor teardown/reopen path; the
   new work is "rebind to a different (port, driver) on command," not new
@@ -92,9 +127,11 @@ process problem. Keeping it out of the daemon preserves narrow single-daemon sco
   disconnect.
 - The identity write-gate composes for free: bind the wrong profile to a physical
   rig and writes stay blocked until the `ID;` response matches the driver.
-- Config migration: existing single-rig `bridge.serial.port` + `bridge.cat.driver`
-  config must keep working (read as an implicit single-entry catalogue, or a
-  one-time shape migration). Operators must not have to hand-rewrite config.json.
+- Config migration: an existing single-rig `bridge.serial.port` + `bridge.cat.driver`
+  (+ `ft8.device`) config is migrated at load into a single `RigConfig` (id 1) with
+  `default_rig_id = 1`. Operators must not have to hand-rewrite config.json. The
+  catalogue is authoritative — a resolved active rig wins over any stale loose field
+  left on disk.
 - The operating-mode toggle (phone ⊕ ft8) and rig selection stay **orthogonal** for
   now — selecting a rig and selecting an operating mode are two independent choices.
   Auto-binding a mode to a rig is deliberately not part of this decision (it would
@@ -126,7 +163,9 @@ process problem. Keeping it out of the daemon preserves narrow single-daemon sco
 - Builds on ADR 0020 (pipeline supervisor) for the teardown/reopen machinery.
 - Composes with the identity write-gate (ADR 0026 inbound command path) and the
   tune restore snapshot (ADR 0027) — both are per-rig state a swap must reset.
-- Config types: `internal/types/bridge.go` (`BridgeConfig`, `BridgeSerialConfig`,
-  `BridgeCatConfig`), `internal/types/ft8.go` (`Ft8.Audio.Device`).
+- Reused/extended type: `internal/types/rig.go` (`RigConfig` + new `RigAudioConfig`).
+  Loose fields being superseded: `internal/types/bridge.go` (`BridgeSerialConfig`,
+  `BridgeCatConfig`), `internal/types/ft8.go` (`Ft8Config.Device`). Selector:
+  `Config.DefaultRigID`.
 - Topology context for the rejected concurrent alternative: the N-writers +
   master-sink field-master shape.

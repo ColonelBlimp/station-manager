@@ -49,6 +49,22 @@ type RigConfig struct {
 	// distinguish "explicitly set to zero" from "omitted" — acceptable
 	// because no realistic override-to-zero case exists today.
 	Overrides RigOverrides `json:"overrides,omitzero"`
+
+	// Audio selects this rig's audio interface (ADR 0028). A per-rig
+	// resource, NOT FT8-specific: the same physical USB codec carries FT8
+	// receive audio and (future) recorded-CQ / voice-keyer transmit audio.
+	// Projected onto Ft8Config.Device for the active rig (the one
+	// Config.DefaultRigID points at). Empty = the system default device.
+	Audio RigAudioConfig `json:"audio,omitzero"`
+}
+
+// RigAudioConfig selects a rig's audio interface. Device is a single
+// identifier for the one physical codec; the audio layer resolves the
+// direction-appropriate handle (capture for decode, playback for a voice
+// keyer) at open time, so the operator picks one device, not two (ADR
+// 0028 — one physical device, one choice). Empty = the system default.
+type RigAudioConfig struct {
+	Device string `json:"device,omitempty"`
 }
 
 // RigOverrides shadows per-rig defaults from cat.RigDefinition. Field

@@ -403,7 +403,13 @@ func run() error {
 	// stub event emitter (M3a.1) is publishing by the time SSE
 	// subscribers connect; stopped after server.Shutdown so any
 	// in-flight SSE handlers see the hub close cleanly.
-	bridgeSvc := bridge.New(cfg.Bridge, loggerSvc)
+	//
+	// cfg.ActiveBridge() projects the active rig's driver + serial port
+	// (the rig Config.DefaultRigID selects, per ADR 0028) onto the bridge
+	// knobs. Single-rig configs are migrated into a one-entry catalogue at
+	// Load, so this resolves correctly whether or not the operator has
+	// written a `rigs` block.
+	bridgeSvc := bridge.New(cfg.ActiveBridge(), loggerSvc)
 	if err := bridgeSvc.Initialize(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("initialize bridge")
 	}
@@ -426,7 +432,7 @@ func run() error {
 	// CGO-free build) it logs and stays idle. A decode is NOT a QSO: the
 	// subsystem only logs "heard this" lines, so it never touches the
 	// log/forward path (narrow-daemon-scope holds by the import graph).
-	ft8Svc := ft8.NewService(cfg.Ft8, loggerSvc)
+	ft8Svc := ft8.NewService(cfg.ActiveFt8(), loggerSvc)
 	if err := ft8Svc.Initialize(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("initialize ft8")
 	}

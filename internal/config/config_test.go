@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -631,5 +632,192 @@ func TestWarnings_NonLoopbackTCPBind(t *testing.T) {
 					tc.protocol, tc.socket, haveBindWarn, tc.wantWarn, warnings)
 			}
 		})
+	}
+}
+
+// --- Rig catalogue (ADR 0028) ---
+
+// TestApplyRigProfiles_MigratesLegacy: a pre-catalogue config (loose
+// bridge/ft8 identity, no Rigs) folds into a single id-1 rig that becomes
+// active, and the active values project back through the helpers.
+func TestApplyRigProfiles_MigratesLegacy(t *testing.T) {
+	cfg := Config{
+		Bridge: types.BridgeConfig{
+			Cat:    types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+			Serial: types.BridgeSerialConfig{Port: "/dev/ttyUSB0"},
+		},
+		Ft8:          types.Ft8Config{Device: "USB Audio CODEC"},
+		DefaultRigID: 1, // applyDefaults would have stamped this before us
+	}
+	if err := applyRigProfiles(&cfg); err != nil {
+		t.Fatalf("applyRigProfiles: %v", err)
+	}
+	if len(cfg.Rigs) != 1 {
+		t.Fatalf("len(Rigs) = %d, want 1", len(cfg.Rigs))
+	}
+	rc := cfg.Rigs[0]
+	if rc.ID != 1 || rc.Model != "yaesu-ftdx10" || rc.Port != "/dev/ttyUSB0" || rc.Audio.Device != "USB Audio CODEC" {
+		t.Fatalf("synthesised rig = %+v, want {1 yaesu-ftdx10 /dev/ttyUSB0 ... USB Audio CODEC}", rc)
+	}
+	if cfg.DefaultRigID != 1 {
+		t.Errorf("DefaultRigID = %d, want 1", cfg.DefaultRigID)
+	}
+	if b := cfg.ActiveBridge(); b.Cat.Driver != "yaesu-ftdx10" || b.Serial.Port != "/dev/ttyUSB0" {
+		t.Errorf("ActiveBridge() = {driver %q port %q}, want {yaesu-ftdx10 /dev/ttyUSB0}", b.Cat.Driver, b.Serial.Port)
+	}
+	if f := cfg.ActiveFt8(); f.Device != "USB Audio CODEC" {
+		t.Errorf("ActiveFt8().Device = %q, want %q", f.Device, "USB Audio CODEC")
+	}
+}
+
+// TestApplyRigProfiles_NoLooseIdentityNoMigration: a bridge-disabled /
+// catalogue-less host (no Rigs, no loose fields) stays empty and the helpers
+// pass cfg.Bridge / cfg.Ft8 through unchanged.
+func TestApplyRigProfiles_NoLooseIdentityNoMigration(t *testing.T) {
+	cfg := Config{
+		Bridge:       types.BridgeConfig{Enabled: false, Timeouts: types.BridgeTimeoutsConfig{LivenessMs: 7000}},
+		DefaultRigID: 1,
+	}
+	if err := applyRigProfiles(&cfg); err != nil {
+		t.Fatalf("applyRigProfiles: %v", err)
+	}
+	if len(cfg.Rigs) != 0 {
+		t.Fatalf("len(Rigs) = %d, want 0", len(cfg.Rigs))
+	}
+	if b := cfg.ActiveBridge(); b.Cat.Driver != "" || b.Serial.Port != "" || b.Timeouts.LivenessMs != 7000 {
+		t.Errorf("ActiveBridge() = %+v, want passthrough of cfg.Bridge", b)
+	}
+}
+
+// TestApplyRigProfiles_ResolvesAndProjects: with a multi-rig catalogue,
+// DefaultRigID selects which rig the helpers project, and the cross-rig
+// bridge knobs are preserved.
+func TestApplyRigProfiles_ResolvesAndProjects(t *testing.T) {
+	cfg := Config{
+		Bridge: types.BridgeConfig{Enabled: true, Timeouts: types.BridgeTimeoutsConfig{LivenessMs: 5000}},
+		Rigs: []types.RigConfig{
+			{ID: 1, Model: "yaesu-ftdx10", Port: "/dev/ttyUSB0", Audio: types.RigAudioConfig{Device: "codec-a"}},
+			{ID: 2, Model: "yaesu-ft710", Port: "/dev/ttyUSB2", Audio: types.RigAudioConfig{Device: "codec-b"}},
+		},
+		DefaultRigID: 2,
+	}
+	if err := applyRigProfiles(&cfg); err != nil {
+		t.Fatalf("applyRigProfiles: %v", err)
+	}
+	b := cfg.ActiveBridge()
+	if b.Cat.Driver != "yaesu-ft710" || b.Serial.Port != "/dev/ttyUSB2" {
+		t.Errorf("ActiveBridge() = {driver %q port %q}, want the id-2 rig", b.Cat.Driver, b.Serial.Port)
+	}
+	if b.Timeouts.LivenessMs != 5000 || !b.Enabled {
+		t.Errorf("ActiveBridge() dropped cross-rig knobs: %+v", b)
+	}
+	if f := cfg.ActiveFt8(); f.Device != "codec-b" {
+		t.Errorf("ActiveFt8().Device = %q, want codec-b", f.Device)
+	}
+}
+
+func TestApplyRigProfiles_Errors(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{
+			name: "non-positive id",
+			cfg:  Config{Rigs: []types.RigConfig{{ID: 0, Model: "yaesu-ftdx10"}}, DefaultRigID: 1},
+			want: "positive integer",
+		},
+		{
+			name: "duplicate id",
+			cfg: Config{Rigs: []types.RigConfig{
+				{ID: 1, Model: "yaesu-ftdx10"}, {ID: 1, Model: "yaesu-ft710"},
+			}, DefaultRigID: 1},
+			want: "duplicate id 1",
+		},
+		{
+			name: "empty model",
+			cfg:  Config{Rigs: []types.RigConfig{{ID: 1, Model: ""}}, DefaultRigID: 1},
+			want: "model must not be empty",
+		},
+		{
+			name: "default_rig_id no match",
+			cfg: Config{Rigs: []types.RigConfig{
+				{ID: 1, Model: "yaesu-ftdx10"}, {ID: 2, Model: "yaesu-ft710"},
+			}, DefaultRigID: 5},
+			want: "default_rig_id 5 does not match",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			err := applyRigProfiles(&cfg)
+			if err == nil {
+				t.Fatalf("applyRigProfiles: expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want containing %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+// TestLoad_MigratesLegacyBridge: end-to-end Load of a pre-catalogue config
+// synthesises the catalogue and validateBridge passes against the projected
+// active values.
+func TestLoad_MigratesLegacyBridge(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	base := DefaultConfig(dir)
+	base.Bridge.Enabled = true
+	base.Bridge.Cat.Driver = "yaesu-ftdx10"
+	base.Bridge.Serial.Port = "/dev/ttyUSB0"
+	base.Ft8.Device = "codec-a"
+	if err := WriteJSON(path, base); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.Rigs) != 1 || got.Rigs[0].Model != "yaesu-ftdx10" || got.Rigs[0].Audio.Device != "codec-a" {
+		t.Fatalf("migrated Rigs = %+v", got.Rigs)
+	}
+	if b := got.ActiveBridge(); b.Cat.Driver != "yaesu-ftdx10" || b.Serial.Port != "/dev/ttyUSB0" {
+		t.Errorf("ActiveBridge() = %+v after migration", b)
+	}
+}
+
+// TestLoad_RigCatalogueRoundTrip: a catalogue config survives Load → WriteJSON
+// → Load unchanged (the persistence shape the PUT path relies on).
+func TestLoad_RigCatalogueRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	p1 := filepath.Join(dir, "c1.json")
+	p2 := filepath.Join(dir, "c2.json")
+	base := DefaultConfig(dir)
+	base.Bridge.Enabled = true
+	base.Rigs = []types.RigConfig{
+		{ID: 1, Model: "yaesu-ftdx10", Port: "/dev/ttyUSB0", Audio: types.RigAudioConfig{Device: "codec-a"}},
+		{ID: 2, Model: "yaesu-ft710", Port: "/dev/ttyUSB2", Audio: types.RigAudioConfig{Device: "codec-b"}},
+	}
+	base.DefaultRigID = 2
+	if err := WriteJSON(p1, base); err != nil {
+		t.Fatal(err)
+	}
+	c1, err := Load(p1)
+	if err != nil {
+		t.Fatalf("Load p1: %v", err)
+	}
+	if err := WriteJSON(p2, c1); err != nil {
+		t.Fatal(err)
+	}
+	c2, err := Load(p2)
+	if err != nil {
+		t.Fatalf("Load p2: %v", err)
+	}
+	if !reflect.DeepEqual(c1.Rigs, c2.Rigs) {
+		t.Errorf("Rigs not preserved across round-trip:\n c1 = %+v\n c2 = %+v", c1.Rigs, c2.Rigs)
+	}
+	if c2.DefaultRigID != 2 {
+		t.Errorf("DefaultRigID = %d, want 2", c2.DefaultRigID)
 	}
 }

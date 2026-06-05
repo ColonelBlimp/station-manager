@@ -371,14 +371,18 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 //
 // Pure construction; safe to call with any Config snapshot.
 func bridgeInfoFor(cfg config.Config) BridgeInfo {
+	// Resolve the ACTIVE rig's driver (ADR 0028): the loose bridge.cat /
+	// bridge.serial fields are superseded by the catalogue, so read the
+	// projected active values, not cfg.Bridge directly.
+	b := cfg.ActiveBridge()
 	info := BridgeInfo{
-		Enabled: cfg.Bridge.Enabled,
-		Driver:  cfg.Bridge.Cat.Driver,
+		Enabled: b.Enabled,
+		Driver:  b.Cat.Driver,
 	}
-	if cfg.Bridge.Cat.Driver == "" {
+	if b.Cat.Driver == "" {
 		return info
 	}
-	def, ok := cat.Lookup(cfg.Bridge.Cat.Driver)
+	def, ok := cat.Lookup(b.Cat.Driver)
 	if !ok {
 		// Unknown driver — leave Driver set so the SPA can flag a
 		// config issue, but skip the rigdef-derived fields.
@@ -397,7 +401,7 @@ func bridgeInfoFor(cfg config.Config) BridgeInfo {
 	for k, v := range def.ModeMappings {
 		merged[k] = v
 	}
-	if perDriver, ok := cfg.Bridge.ModeMappings[cfg.Bridge.Cat.Driver]; ok {
+	if perDriver, ok := b.ModeMappings[b.Cat.Driver]; ok {
 		for k, v := range perDriver {
 			merged[k] = v
 		}
@@ -432,9 +436,13 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		// ErrNotFound: pre-setup state — keep the bare {ID: N} stub.
 	}
 
-	// DefaultRig join: deferred until CAT lands and cfg.Rigs is
-	// populated. The bare {ID: N} stub stands in for now so the SPA
-	// has the field in place.
+	// DefaultRig join (ADR 0028): cfg.Rigs is now populated (a single-rig
+	// config is migrated into a one-entry catalogue at Load), so resolve the
+	// active rig's display fields. The bare {ID: N} stub stands in when no
+	// rig matches (a catalogue-less / bridge-disabled host).
+	if rc := cfg.RigByID(cfg.DefaultRigID); rc != nil {
+		resp.DefaultRig = *rc
+	}
 
 	return resp, nil
 }

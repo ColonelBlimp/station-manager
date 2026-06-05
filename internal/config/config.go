@@ -143,6 +143,111 @@ type Config struct {
 	// and stays idle. There are no required sub-fields — an empty Device
 	// means the system default capture device.
 	Ft8 types.Ft8Config `json:"ft8"`
+
+	// Rigs is the rig catalogue (ADR 0028) — the operator's installed
+	// rigs, each a reused types.RigConfig (+audio) bundling the CAT driver
+	// (Model), serial Port, and audio device. DefaultRigID selects the
+	// ACTIVE rig: the one the bridge binds AND the one QSOs attribute to —
+	// in the single-active model these coincide, so there is no separate
+	// active-rig selector. A pre-catalogue config (loose bridge.serial /
+	// bridge.cat / ft8.device, no rigs) is migrated at Load into a single
+	// id-1 rig, so existing configs keep working untouched. The catalogue
+	// is authoritative: the active rig's values are projected onto the
+	// bridge/ft8 runtime view via ActiveBridge() / ActiveFt8(), winning
+	// over any stale loose field left on disk. Switching is
+	// edit-default_rig_id + restart in Phase 1; runtime hot-swap is future
+	// work — see docs/v2-design/rig-profiles.md.
+	Rigs []types.RigConfig `json:"rigs,omitempty"`
+}
+
+// legacyRigID is the id assigned to the single rig synthesised when a
+// pre-catalogue config (loose bridge/ft8 fields, no Rigs) is migrated at
+// Load. Matches the DefaultRigID default of 1 so the migrated rig is active.
+const legacyRigID int64 = 1
+
+// applyRigProfiles reconciles the rig catalogue (ADR 0028). It migrates a
+// pre-catalogue config into a single id-1 rig, then validates the catalogue
+// and confirms DefaultRigID resolves to a defined rig. It does NOT mutate the
+// loose bridge/ft8 fields — the active rig is projected on demand via
+// ActiveBridge() / ActiveFt8(), so the catalogue stays the single on-disk
+// source of truth (the helpers always win over any stale loose field).
+// Runs after applyDefaults, so DefaultRigID is already its 1 default here.
+func applyRigProfiles(cfg *Config) error {
+	if len(cfg.Rigs) == 0 {
+		// Migrate: a config predating the catalogue carries the rig identity
+		// in the loose fields. Fold it into one rig so every config is
+		// catalogue-shaped from here on. Skipped when there's no loose
+		// identity (a bridge-disabled / FT8-only-default host).
+		if cfg.Bridge.Cat.Driver != "" || cfg.Bridge.Serial.Port != "" || cfg.Ft8.Device != "" {
+			cfg.Rigs = []types.RigConfig{{
+				ID:    legacyRigID,
+				Model: cfg.Bridge.Cat.Driver,
+				Port:  cfg.Bridge.Serial.Port,
+				Audio: types.RigAudioConfig{Device: cfg.Ft8.Device},
+			}}
+			cfg.DefaultRigID = legacyRigID // the synthesised rig is the rig
+		}
+		return nil
+	}
+
+	seen := make(map[int64]struct{}, len(cfg.Rigs))
+	for i := range cfg.Rigs {
+		rc := cfg.Rigs[i]
+		if rc.ID <= 0 {
+			return fmt.Errorf("rigs[%d]: id must be a positive integer", i)
+		}
+		if _, dup := seen[rc.ID]; dup {
+			return fmt.Errorf("rigs: duplicate id %d", rc.ID)
+		}
+		seen[rc.ID] = struct{}{}
+		if rc.Model == "" {
+			return fmt.Errorf("rigs[id=%d]: model must not be empty", rc.ID)
+		}
+	}
+	if cfg.RigByID(cfg.DefaultRigID) == nil {
+		return fmt.Errorf("default_rig_id %d does not match any defined rig", cfg.DefaultRigID)
+	}
+	return nil
+}
+
+// RigByID returns the catalogue entry with the given id, or nil if none.
+func (c Config) RigByID(id int64) *types.RigConfig {
+	for i := range c.Rigs {
+		if c.Rigs[i].ID == id {
+			return &c.Rigs[i]
+		}
+	}
+	return nil
+}
+
+// ActiveBridge returns the BridgeConfig the bridge subsystem runs with: the
+// cross-rig bridge knobs (Enabled, Timeouts, Tune, ModeMappings) with the
+// active rig's driver + serial port projected on. With no resolvable active
+// rig (a bridge-disabled / catalogue-less host) it returns cfg.Bridge
+// unchanged. The catalogue is authoritative: a resolved active rig always
+// wins over any stale loose bridge.serial / bridge.cat left on disk.
+//
+// RigConfig.Overrides (per-rig serial param shadowing) are NOT yet wired —
+// serial defaults continue to come from the rigdef, as before; wiring them is
+// future work alongside the discovery/picker UI.
+func (c Config) ActiveBridge() types.BridgeConfig {
+	b := c.Bridge
+	if rc := c.RigByID(c.DefaultRigID); rc != nil {
+		b.Cat.Driver = rc.Model
+		b.Serial.Port = rc.Port
+	}
+	return b
+}
+
+// ActiveFt8 returns the Ft8Config the FT8 subsystem runs with: the cross-rig
+// FT8 knobs (Enabled, EnableOSD) with the active rig's audio device projected
+// onto Device. Same authority rule as ActiveBridge.
+func (c Config) ActiveFt8() types.Ft8Config {
+	f := c.Ft8
+	if rc := c.RigByID(c.DefaultRigID); rc != nil {
+		f.Device = rc.Audio.Device
+	}
+	return f
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -239,6 +344,13 @@ func Load(path string) (Config, error) {
 
 	applyDefaults(&cfg, filepath.Dir(path))
 
+	// Resolve the rig catalogue (ADR 0028) before validating the bridge:
+	// migration may synthesise the catalogue from legacy loose fields, and
+	// validateBridge runs against the ACTIVE rig's projected values.
+	if err = applyRigProfiles(&cfg); err != nil {
+		return cfg, fmt.Errorf("resolving rig profiles: %w", err)
+	}
+
 	if err = validateForwarders(cfg.Forwarders); err != nil {
 		return cfg, fmt.Errorf("validating forwarders: %w", err)
 	}
@@ -249,7 +361,7 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("validating smtp: %w", err)
 	}
 
-	if err = validateBridge(cfg.Bridge); err != nil {
+	if err = validateBridge(cfg.ActiveBridge()); err != nil {
 		return cfg, fmt.Errorf("validating bridge: %w", err)
 	}
 
