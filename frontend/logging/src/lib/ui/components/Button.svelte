@@ -1,9 +1,10 @@
 <script lang="ts">
     interface Props {
+        id: string;
         label: string;
     }
 
-    let { label }: Props = $props();
+    let { id, label }: Props = $props();
 </script>
 
-<button class="btn btn-primary">{label}</button>
+<button id={id} type="button" class="btn btn-secondary w-full">{label}</button>
