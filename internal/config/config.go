@@ -1101,6 +1101,39 @@ func (s *Service) Update(fn func(cfg *Config) error) error {
 	return nil
 }
 
+// UpdateInMemoryThenPersist applies fn and commits the result to the in-memory
+// config IMMEDIATELY, then makes a best-effort attempt to persist it to disk.
+// It is the inverse commit order of Update: the in-memory mutation ALWAYS takes
+// effect, and a disk-write failure is returned (non-nil) but the memory change
+// stands.
+//
+// Use only for session-critical corrections the daemon must honour this run
+// even when config.json is unwritable — e.g. the startup default-logbook
+// self-heal, where coming up with the wrong logbook id (and failing the first
+// QSO submit) is worse than not persisting the fix; the next startup re-runs
+// the heal. For ordinary updates use Update, where the file is the source of
+// truth and a failed write leaves memory untouched.
+func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	next := s.Cfg
+	if err := fn(&next); err != nil {
+		return err
+	}
+	s.Cfg = next // memory wins regardless of the disk outcome below
+
+	if s.Path == "" {
+		return fmt.Errorf(
+			"config.Service.UpdateInMemoryThenPersist: in-memory update applied but no on-disk path set to persist it")
+	}
+	if err := WriteJSON(s.Path, next); err != nil {
+		return fmt.Errorf(
+			"config.Service.UpdateInMemoryThenPersist: in-memory update applied but writing config failed: %w", err)
+	}
+	return nil
+}
+
 // Initialize prepares the service for use. Resolves the working directory.
 func (s *Service) Initialize() error {
 	if s.initialized.Load() {

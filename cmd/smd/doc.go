@@ -3,8 +3,9 @@
 // smd owns the local SQLite QSO database, forwards logged QSOs to
 // configured online services, runs the callsign-enrichment pipeline
 // (hamnut country provider + QRZ chain provider), serves the optional
-// SMTP mailer, and hosts the rig-control bridge subsystem in the
-// default single-binary deployment. It exposes an HTTP API which
+// SMTP mailer, hosts the rig-control bridge subsystem, and runs the
+// opt-in FT8 decode subsystem (decode-is-not-a-QSO; logs heard signals
+// only) in the default single-binary deployment. It exposes an HTTP API which
 // — per ADR 0001 — also serves the embedded Svelte logging SPA at
 // `GET /` when the listener is TCP and ServeSPA is enabled. The
 // listener protocol is configurable: "tcp" (default, required for
@@ -16,7 +17,7 @@
 // subsystems do not couple with rig control, audio, FT8 protocol
 // decoding, or capture UX. ADR 0013 reframes the original
 // process-boundary rule as a package-import-graph rule:
-// `internal/storage` and `internal/forwarder` must not import
+// `internal/database/sqlite` and `internal/forwarding` must not import
 // `internal/bridge`, and vice versa. The default single-binary
 // deployment honours that boundary while running the bridge
 // in-process; a separately-built `cmd/bridge` for split-host

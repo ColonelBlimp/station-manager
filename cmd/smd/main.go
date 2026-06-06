@@ -153,7 +153,11 @@ func run() error {
 	// the value lands on disk and is visible to the operator. Fail
 	// loudly if the final value is empty — every callsite assumes a
 	// non-empty UA and would otherwise send a blank header.
-	if strings.TrimSpace(cfg.UserAgent) == "" {
+	// Normalise first so the trimmed value is what we persist and what the QRZ
+	// forwarder stamps on its header — not a stray " station-manager/dev "
+	// with surrounding whitespace (review 2026-06-06 L1).
+	cfg.UserAgent = strings.TrimSpace(cfg.UserAgent)
+	if cfg.UserAgent == "" {
 		cfg.UserAgent = "station-manager/" + Version
 	}
 	if cfg.UserAgent == "" {
@@ -166,7 +170,11 @@ func run() error {
 	// atomically. firstRunPath covers the just-seeded path; for an
 	// existing config we re-resolve via the same precedence used in
 	// loadConfig.
-	cfgSvc.SetPath(resolveConfigPath(*configPath, firstRunPath))
+	cfgPath, err := resolveConfigPath(*configPath, firstRunPath)
+	if err != nil {
+		return err
+	}
+	cfgSvc.SetPath(cfgPath)
 	// Persist the resolved UserAgent (no-op when the operator
 	// already set it explicitly; writes the daemon default otherwise
 	// so the operator sees it on disk and can override later).
@@ -400,9 +408,9 @@ func run() error {
 	// cfg.Bridge.Enabled. When disabled (master smd / headless host
 	// without a rig) Start() is a no-op and the api package skips
 	// route registration. Started before the HTTP server so the
-	// stub event emitter (M3a.1) is publishing by the time SSE
-	// subscribers connect; stopped after server.Shutdown so any
-	// in-flight SSE handlers see the hub close cleanly.
+	// event emitter is publishing by the time SSE subscribers connect;
+	// stopped BEFORE server.Shutdown in the teardown below — publishing
+	// halts first, then the HTTP shutdown drains the SSE readers.
 	//
 	// cfg.ActiveBridge() projects the active rig's driver + serial port
 	// (the rig Config.DefaultRigID selects, per ADR 0028) onto the bridge
@@ -477,9 +485,11 @@ func run() error {
 	workerCancel()
 
 	// Stop the bridge subsystem. Cancels the publisher goroutine,
-	// waits for it to exit, closes the hub so any open SSE
-	// subscribers see a clean stream end. Order matters relative to
-	// server.Shutdown: stop publishing first, then drain readers.
+	// waits for it to exit, closes the BRIDGE subsystem's own hub (not
+	// the daemon events.Hub, which is closed later, after HTTP handlers
+	// drain) so any open rig-state SSE subscribers see a clean stream
+	// end. Order matters relative to server.Shutdown: stop publishing
+	// first, then drain readers.
 	if err := bridgeSvc.Stop(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("bridge: Stop error")
 	}
@@ -613,12 +623,19 @@ func ensureDefaultLogbook(
 		Msg("startup: seeded default logbook (config marked setup complete but DB had no row)")
 
 	if id != cfg.DefaultLogbookID {
-		// Persist failure here is non-fatal: the daemon still comes up
-		// with the corrected ID in memory for this session, and the
-		// next startup re-runs the same self-heal. Failing startup
-		// over a config-write error (permissions, read-only fs)
-		// would be a worse outcome than logging it.
-		if uErr := cfgSvc.Update(func(c *config.Config) error {
+		// Correct the ID in memory FIRST, then best-effort persist:
+		// UpdateInMemoryThenPersist commits to s.Cfg regardless of the
+		// disk outcome, so run's re-Snapshot (below this call) sees the
+		// corrected id even when the write fails. Persist failure is
+		// non-fatal — the daemon comes up with the right logbook this
+		// session and the next startup re-runs the same self-heal;
+		// failing startup over a config-write error (permissions,
+		// read-only fs) would be a worse outcome than logging it.
+		// (Plain Update would NOT do this: it writes the file first and
+		// only commits memory on success, so a failed write would leave
+		// the stale id in memory and the first QSO submit would hit the
+		// exact missing-logbook FK error this heal prevents.)
+		if uErr := cfgSvc.UpdateInMemoryThenPersist(func(c *config.Config) error {
 			c.DefaultLogbookID = id
 			return nil
 		}); uErr != nil {
@@ -868,12 +885,19 @@ func buildEnrichment(
 // Shared by loadConfig (initial resolution) and resolveConfigPath
 // (post-load path-record for PUT /v1/config rewrites) so the two
 // precedence ladders cannot drift.
-func defaultConfigPath() string {
-	if dir, err := utils.WorkingDir(); err == nil {
-		return filepath.Join(dir, "config.json")
+func defaultConfigPath() (string, error) {
+	// utils.WorkingDir is the canonical resolver (explicit SM_WORKING_DIR →
+	// XDG data dir → executable dir, MkdirAll-ing the result). A failure here
+	// means the operator's intended working directory is set-but-inaccessible
+	// or uncreatable — surface it, never silently fall back to cwd. The cwd
+	// fallback was a footgun: a systemd unit runs with cwd=$HOME, so the daemon
+	// would come up reading/seeding config.json in $HOME while the real install
+	// was merely unreachable (memory feedback_daemon_workingdir_resolution).
+	dir, err := utils.WorkingDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving working directory for default config path: %w", err)
 	}
-	cwd, _ := os.Getwd()
-	return filepath.Join(cwd, "config.json")
+	return filepath.Join(dir, "config.json"), nil
 }
 
 // resolveConfigPath mirrors loadConfig's precedence to determine the
@@ -881,12 +905,12 @@ func defaultConfigPath() string {
 // cfgSvc.Path so /v1/config PUT can atomically rewrite the same file.
 // firstRunPath wins if non-empty (we just seeded it); otherwise we
 // recompute by checking the explicit flag, env var, and cwd in turn.
-func resolveConfigPath(flagPath, firstRunPath string) string {
+func resolveConfigPath(flagPath, firstRunPath string) (string, error) {
 	if firstRunPath != "" {
-		return firstRunPath
+		return firstRunPath, nil
 	}
 	if flagPath != "" {
-		return flagPath
+		return flagPath, nil
 	}
 	return defaultConfigPath()
 }
@@ -906,10 +930,18 @@ func loadConfig(path string) (cfg config.Config, firstRunPath string, err error)
 		return cfg, "", err
 	}
 
-	candidate := defaultConfigPath()
+	candidate, err := defaultConfigPath()
+	if err != nil {
+		return config.Config{}, "", err
+	}
 	if _, statErr := os.Stat(candidate); statErr == nil {
 		cfg, err = config.Load(candidate)
 		return cfg, "", err
+	} else if !os.IsNotExist(statErr) {
+		// Only a genuine "file does not exist" means first-run. Any other
+		// stat error (permissions, I/O) must not be misread as "missing" →
+		// seeding a default at a path we can't even stat; surface it.
+		return config.Config{}, "", fmt.Errorf("checking for config at %s: %w", candidate, statErr)
 	}
 	return firstRunWrite(candidate, filepath.Dir(candidate))
 }

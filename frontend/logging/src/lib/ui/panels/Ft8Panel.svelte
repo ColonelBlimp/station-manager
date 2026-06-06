@@ -17,5 +17,15 @@ import Button from "../components/Button.svelte";
     </div>
     <div class="flex flex-col w-40">
         <Button label="160m" />
+        <Button label="80m" />
+        <Button label="60m" />
+        <Button label="40m" />
+        <Button label="30m" />
+        <Button label="20m" />
+        <Button label="18m" />
+        <Button label="15m" />
+        <Button label="12m" />
+        <Button label="10m" />
+        <Button label="6m" />
     </div>
 </div>

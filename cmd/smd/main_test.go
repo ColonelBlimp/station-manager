@@ -657,3 +657,54 @@ func TestEnsureDefaultLogbook_WarnsWhenDefaultIDInvalid(t *testing.T) {
 		t.Fatalf("ensureDefaultLogbook returned an error; should warn-and-return-nil: %v", err)
 	}
 }
+
+// TestEnsureDefaultLogbook_PersistFailureKeepsCorrectedIDInMemory pins review
+// 2026-06-06 M2: when the self-heal corrects the default logbook id but
+// config.json cannot be rewritten, the corrected id must still take effect in
+// memory for this session (via UpdateInMemoryThenPersist). Otherwise run's
+// re-Snapshot carries the stale id and the first QSO submit hits the exact
+// missing-logbook FK error the heal exists to prevent.
+func TestEnsureDefaultLogbook_PersistFailureKeepsCorrectedIDInMemory(t *testing.T) {
+	db, logger, cfgSvc := newTestDepsWithCfg(t, func(c *config.Config) {
+		c.SetupComplete = true
+		c.DefaultLogbookID = 42 // hand-edited; DB will assign 1
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+	})
+
+	// Point the config service at an unwritable path (parent directory does
+	// not exist) so WriteJSON fails deterministically inside the self-heal.
+	cfgSvc.SetPath(filepath.Join(t.TempDir(), "no-such-subdir", "config.json"))
+
+	if err := ensureDefaultLogbook(context.Background(), db, cfgSvc, logger); err != nil {
+		t.Fatalf("ensureDefaultLogbook should warn-and-return-nil on persist failure: %v", err)
+	}
+
+	got := cfgSvc.Snapshot().DefaultLogbookID
+	if got == 42 {
+		t.Fatal("DefaultLogbookID still 42 after a persist-failed self-heal; the corrected id must survive in memory (M2)")
+	}
+	if got < 1 {
+		t.Errorf("corrected DefaultLogbookID = %d, want >= 1", got)
+	}
+	if _, err := db.FetchLogbookByIDWithContext(context.Background(), got); err != nil {
+		t.Errorf("logbook at corrected id %d not found: %v", got, err)
+	}
+}
+
+// TestLoadConfig_WorkingDirResolverFails pins review 2026-06-06 M1: when
+// utils.WorkingDir fails (here an SM_WORKING_DIR under a regular file, which
+// MkdirAll can't create), loadConfig must propagate the error rather than
+// silently fall back to cwd and seed/read config.json there.
+func TestLoadConfig_WorkingDirResolverFails(t *testing.T) {
+	tmp := t.TempDir()
+	blocker := filepath.Join(tmp, "iam-a-file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A path UNDER a regular file can't be MkdirAll'd → WorkingDir errors.
+	t.Setenv("SM_WORKING_DIR", filepath.Join(blocker, "subdir"))
+
+	if _, _, err := loadConfig(""); err == nil {
+		t.Fatal("loadConfig with an un-creatable SM_WORKING_DIR returned nil; want the resolver error propagated (M1)")
+	}
+}
