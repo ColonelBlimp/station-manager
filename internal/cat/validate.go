@@ -6,6 +6,18 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
+// unsafeExposableCommands are command names this project never permits a rigdef
+// to mark `exposed`. They key the transmitter (tx_on/tx_off) or play back stored
+// audio (PLAYBACK); the safety model routes TX only through the tune controller's
+// guaranteed-stop path (ADR 0027), never the generic POST /v1/rig/command path.
+// Pinned by tests for the shipped rigdefs (TestTxCommands_NotExposed); validated
+// here so a future embedded or external rigdef cannot publish one by typo.
+var unsafeExposableCommands = map[string]struct{}{
+	"tx_on":    {},
+	"tx_off":   {},
+	"PLAYBACK": {},
+}
+
 // ValidateRigDefinition checks a rig definition for the structural faults the
 // embedded loader (and a future external-dir loader) must reject, so a
 // hand-authored rigdef typo fails loudly at load instead of becoming silent
@@ -24,6 +36,15 @@ import (
 // Checks:
 //   - command names are non-empty and unique (lookupCommand returns the first
 //     match, so a duplicate would silently shadow);
+//   - command templates are non-empty — an empty Cmd encodes to zero bytes with
+//     no error, which the serial client treats as a no-op success, so a safety
+//     dry-run (e.g. TuneSupported / StartTune proving tx_off encodes) would pass
+//     while the eventual write sends nothing (review 2026-06-06 M1);
+//   - TX-capable / playback commands (tx_on, tx_off, PLAYBACK) are NOT Exposed —
+//     these are controller-only (the tune controller keys TX via the guaranteed-
+//     stop path, ADR 0027); exposing one would route it through the generic
+//     command path, bypassing the mode/power snapshot + auto-off + release-on-
+//     disconnect machinery (review 2026-06-06 M2);
 //   - value-bearing command templates (those with a ValueMap, a Pad, or a %
 //     verb) contain exactly one %s verb and no other format verb;
 //   - Pad is non-negative;
@@ -43,6 +64,22 @@ func ValidateRigDefinition(def RigDefinition) error {
 			return errors.New(op).WithMsgf("duplicate command name %q", c.Name)
 		}
 		seen[c.Name] = struct{}{}
+
+		// An empty template encodes to nothing without error — invisible to every
+		// caller that treats encode success as a capability proof, and dangerous
+		// on the safety-critical tune unkey (M1).
+		if c.Cmd == "" {
+			return errors.New(op).WithMsgf("command %q has an empty template", c.Name)
+		}
+
+		// The TX/playback commands are controller-only by safety design; the
+		// schema — not just the tests — must forbid a rigdef from exposing one (M2).
+		if c.Exposed {
+			if _, unsafe := unsafeExposableCommands[c.Name]; unsafe {
+				return errors.New(op).WithMsgf(
+					"command %q must not be exposed (TX/playback commands are controller-only, ADR 0027)", c.Name)
+			}
+		}
 
 		if c.Pad < 0 {
 			return errors.New(op).WithMsgf("command %q has negative pad %d", c.Name, c.Pad)

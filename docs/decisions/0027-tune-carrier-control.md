@@ -21,7 +21,7 @@ Add a daemon-owned **tune controller** in `internal/bridge`: a small TX state ma
 
 Tune-on snapshots the current mode and power, then emits one CAT line — set mode to **RTTY**, set power to the tune power, key TX (e.g. `MD09;PC020;TX1;`). Tune-off emits `TX0;` then restores the snapshotted power and mode. The controller arms three guarantees the moment it keys: a **hard auto-off timer**, **release-on-disconnect**, and **single-flight**; any of the three — and the explicit off — drives the same unkey-and-restore path.
 
-The TX-keying CAT commands (`tx_on`/`tx_off`) are added to the rigdef but **never `exposed`**: they are unreachable through the generic command path; only the tune controller may key TX.
+The TX-keying CAT commands (`tx_on`/`tx_off`) are added to the rigdef but **never `exposed`**: they are unreachable through the generic command path; only the tune controller may key TX. As of 2026-06-06 this is a load-time **schema invariant**, not just convention: `cat.ValidateRigDefinition` rejects any rigdef that marks `tx_on`/`tx_off`/`PLAYBACK` `exposed`, and rejects an empty command template (which would let the tune controller's `tx_off` safety dry-run pass while writing nothing) — so a future embedded or external rigdef cannot publish a TX op by typo (internal/cat review 2026-06-06, M1/M2).
 
 Tune knobs live in a new `bridge.tune` config block, each a code constant overridable by config up to a hard code-enforced ceiling: **power** default 20 W, clamp ≤ 40 W; **auto-off** default 15 s, clamp ≤ 30 s. The **RTTY carrier choice is provisional** — adopted to validate in the field.
 

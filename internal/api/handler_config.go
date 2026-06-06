@@ -96,13 +96,15 @@ type MailerInfo struct {
 // Ops is the connected rig's advertised inbound-command vocabulary — the
 // exposed command names from the rigdef (e.g. ["set_freq","set_mode"]) per
 // ADR 0026. The SPA gates rig-control surfaces on this set: a feature shows
-// only when the rig exposes the ops it needs. Empty when the rig defines no
-// exposed commands (e.g. the FT-710 today).
+// only when the rig exposes the ops it needs. Empty when the rigdef defines
+// no exposed commands (a read-only / display-only rig); both shipped Yaesu
+// rigs (FTdx10, FT-710) expose the same write ops.
 //
 // Tune reports whether the connected rig can run the tune-carrier feature
 // (ADR 0027) — the rigdef defines the set_mode/set_power/tx_on/tx_off
 // commands the controller needs. The SPA shows the Tune button only when
-// true; false (omitted) for a rig that can't tune (e.g. the FT-710 today).
+// true; false (omitted) for a rig whose rigdef lacks those commands. Both
+// shipped Yaesu rigs advertise tune (FT-710 live-confirmed 2026-06-06).
 //
 // ModeMappings is the merged view (rigdef defaults + operator
 // overrides from cfg.Bridge.ModeMappings) for the configured driver

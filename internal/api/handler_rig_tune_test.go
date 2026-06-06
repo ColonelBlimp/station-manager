@@ -72,14 +72,19 @@ func TestHandleRigTune(t *testing.T) {
 	})
 }
 
-// TestBridgeInfoFor_Tune pins the capability flag: a configured FTdx10
-// advertises tune support (rigdef has set_mode/set_power/tx_on/tx_off) so the
-// SPA can show the Tune button (ADR 0027).
+// TestBridgeInfoFor_Tune pins the capability flag: BOTH shipped Yaesu rigs
+// advertise tune support (rigdef has set_mode/set_power/tx_on/tx_off) so the
+// SPA can show the Tune button (ADR 0027). The FT-710 gained tune support
+// 2026-06-06; this asserts the API surface reports it the same as the
+// bridge-level TuneSupported tests (closes the 2026-06-06 review's L3 drift,
+// where only the FTdx10 was pinned here).
 func TestBridgeInfoFor_Tune(t *testing.T) {
-	cfg := config.DefaultConfig(t.TempDir())
-	cfg.Bridge.Enabled = true
-	cfg.Bridge.Cat.Driver = "yaesu-ftdx10"
-	if info := bridgeInfoFor(cfg); !info.Tune {
-		t.Error("BridgeInfo.Tune = false for FTdx10; want true")
+	for _, driver := range []string{"yaesu-ftdx10", "yaesu-ft710"} {
+		cfg := config.DefaultConfig(t.TempDir())
+		cfg.Bridge.Enabled = true
+		cfg.Bridge.Cat.Driver = driver
+		if info := bridgeInfoFor(cfg); !info.Tune {
+			t.Errorf("BridgeInfo.Tune = false for %s; want true", driver)
+		}
 	}
 }
