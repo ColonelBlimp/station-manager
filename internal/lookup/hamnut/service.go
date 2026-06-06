@@ -34,6 +34,11 @@ import (
 // orchestrator matches on. Mirrors the v1 constant.
 const ServiceName = types.HamNutLookupServiceName
 
+// errorBodyLimit bounds how much of a non-2xx response body is read into the
+// error message — enough for an upstream error string without slurping a
+// misbehaving giant body.
+const errorBodyLimit = 512
+
 // Compile-time check that Service satisfies lookup.CountryProvider.
 var _ lookup.CountryProvider = (*Service)(nil)
 
@@ -217,7 +222,7 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 		// Drain a small slice of the body for the error message; we
 		// don't need the whole thing and reading it all could be
 		// expensive on a misbehaving upstream.
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		return types.Country{}, errors.New(op).
 			WithMsgf("hamnut returned status %d: %s", resp.StatusCode, string(b))
 	}

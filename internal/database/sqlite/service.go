@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	stderr "errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -128,7 +129,7 @@ func (s *Service) Open() error {
 		return errors.New(op).WithErr(err).WithMsg("failed to enable sqlite foreign_keys PRAGMA")
 	}
 	// Reinforce busy timeout and WAL journal mode explicitly (DSN may not always apply reliably across drivers)
-	if _, err = db.ExecContext(ctx, "PRAGMA busy_timeout=5000"); err != nil {
+	if _, err = db.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeoutMS)); err != nil {
 		_ = db.Close()
 		return errors.New(op).WithErr(err).WithMsg("failed to set sqlite busy_timeout PRAGMA")
 	}
@@ -206,8 +207,8 @@ func (s *Service) Ping() error {
 	}
 
 	var lastErr error
-	// Up to 2 attempts for transient failures (e.g., brief network hiccup, SQLITE_BUSY)
-	for range 2 {
+	// Up to pingMaxAttempts for transient failures (e.g., brief network hiccup, SQLITE_BUSY)
+	for range pingMaxAttempts {
 		ctx, cancel := s.withDefaultTimeout(context.Background())
 		err := h.PingContext(ctx)
 		cancel()

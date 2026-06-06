@@ -1,5 +1,12 @@
 package qsoservice
 
+// Callsign length bounds (inclusive). The error messages in submit.go /
+// update.go quote "3-32" in prose; keep them in step with these if changed.
+const (
+	minCallsignLen = 3
+	maxCallsignLen = 32
+)
+
 // IsValidCallsign checks that a callsign:
 //   - is 3 to 32 characters long;
 //   - contains only ASCII letters, ASCII digits, and the recognised
@@ -16,7 +23,7 @@ package qsoservice
 //
 // The input should already be trimmed and uppercased.
 func IsValidCallsign(callsign string) bool {
-	if len(callsign) < 3 || len(callsign) > 32 {
+	if len(callsign) < minCallsignLen || len(callsign) > maxCallsignLen {
 		return false
 	}
 	hasDigit := false

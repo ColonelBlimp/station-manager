@@ -38,8 +38,9 @@ func validateConfig(cfg *types.LoggingConfig) error {
 	}
 
 	// Validate skip frame count is reasonable
-	if cfg.SkipFrameCount < 0 || cfg.SkipFrameCount > 20 {
-		return errors.New(op).WithMsg("SkipFrameCount must be between 0 and 20")
+	const maxSkipFrameCount = 20
+	if cfg.SkipFrameCount < 0 || cfg.SkipFrameCount > maxSkipFrameCount {
+		return errors.New(op).WithMsgf("SkipFrameCount must be between 0 and %d", maxSkipFrameCount)
 	}
 
 	// Validate RelLogFileDir for path traversal

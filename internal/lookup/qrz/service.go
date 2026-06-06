@@ -277,7 +277,7 @@ func (s *Service) lookupOnce(ctx context.Context, callsign string) (types.Contac
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		return types.ContactedStation{}, errors.New(op).
 			WithMsgf("QRZ.com returned status %d: %s", resp.StatusCode, string(b))
 	}

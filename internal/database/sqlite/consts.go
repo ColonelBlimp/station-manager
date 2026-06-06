@@ -29,4 +29,15 @@ const (
 	// pingRetryBackoff is the delay between ping retry attempts for transient errors.
 	// Kept short since SQLite is local and busy_timeout PRAGMA handles most wait scenarios.
 	pingRetryBackoff = 25 * time.Millisecond
+
+	// pingMaxAttempts is how many times Ping retries a transient failure
+	// (brief hiccup / SQLITE_BUSY) before giving up.
+	pingMaxAttempts = 2
+
+	// busyTimeoutMS is the SQLite busy_timeout (ms): how long a blocked
+	// connection waits for a lock before returning SQLITE_BUSY. Applied both
+	// per-connection via the DSN `_pragma` (internal.go) and as a runtime
+	// PRAGMA (service.go) — one value so the two can't drift. 5s is the
+	// SQLite-recommended setting for WAL mode.
+	busyTimeoutMS = 5000
 )

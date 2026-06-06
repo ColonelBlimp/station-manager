@@ -407,7 +407,7 @@ func DefaultConfig(dataDir string) Config {
 		Name:           types.HamNutLookupServiceName,
 		Enabled:        false,
 		URL:            "https://api.hamnut.com/v1/call-signs/prefixes",
-		HttpTimeoutSec: 10,
+		HttpTimeoutSec: defaultLookupHTTPTimeoutSec,
 	}
 	// Symmetric: a disabled QRZ lookup chain entry, prepopulated with
 	// the canonical QRZ XML endpoint and a placeholder credential
@@ -421,7 +421,7 @@ func DefaultConfig(dataDir string) Config {
 			URL:            "https://xmldata.qrz.com/xml/current",
 			Username:       "",
 			Password:       "",
-			HttpTimeoutSec: 10,
+			HttpTimeoutSec: defaultLookupHTTPTimeoutSec,
 			// Profile URL prefix — the SPA concatenates the
 			// uppercased callsign onto the end (e.g.
 			// "https://www.qrz.com/db/M0CMC"). Trailing slash is
@@ -453,6 +453,58 @@ func WriteJSON(path string, cfg Config) error {
 	}
 	return nil
 }
+
+// Default values applied by applyDefaults when the operator leaves a field
+// zero-valued. Each is the fallback layer beneath operator config — every one
+// of these is overridable in config.json; naming them keeps the magnitudes in
+// one place instead of scattered as bare literals across applyDefaults. The
+// per-field rationale lives at the assignment site below.
+const (
+	// HTTP server (seconds unless noted).
+	defaultReadHeaderTimeoutSec     = 5
+	defaultReadTimeoutSec           = 10
+	defaultWriteTimeoutSec          = 30
+	defaultIdleTimeoutSec           = 120
+	defaultShutdownTimeoutSec       = 10
+	defaultMaxBodyBytes             = 1 << 20 // 1 MiB
+	defaultPageLimit                = 50
+	defaultMaxPageLimit             = 500
+	defaultMaxConcurrentRequests    = 128
+	defaultMaxEventSubscribers      = 16
+	defaultSubmitRatePerSec         = 20
+	defaultSubmitRateBurst          = 40
+	defaultMaxContactHistoryResults = 100
+
+	// Datastore connection pool.
+	defaultMaxOpenConns        = 8
+	defaultMaxIdleConns        = 8
+	defaultContextTimeoutSec   = 10
+	defaultTxContextTimeoutSec = 10
+
+	// Logging rotation.
+	defaultLogFileMaxSizeMB  = 100
+	defaultLogFileMaxBackups = 5
+	defaultLogFileMaxAgeDays = 30
+
+	// Station knobs + default selectors.
+	defaultAmpMultiplier = 1.0
+	defaultLogbookID     = 1
+	defaultRigID         = 1
+
+	// Forwarder cadence.
+	defaultForwarderTickIntervalSec = 120
+	defaultForwarderBatchSize       = 5
+
+	// Enrichment pipeline (ADR 0017).
+	defaultCountryTTLDays     = 365
+	defaultStationTTLDays     = 90
+	defaultRefreshMaxInFlight = 4
+
+	// Lookup providers + SMTP.
+	defaultLookupHTTPTimeoutSec = 10
+	defaultSmtpPort             = 587
+	defaultSmtpTimeoutSec       = 30
+)
 
 func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.DataDir == "" {
@@ -489,43 +541,43 @@ func applyDefaults(cfg *Config, baseDir string) {
 		// headers-only protects against slowloris-style attacks
 		// regardless. See docs/v2-design/api.md §6 for the threat
 		// model (self-DoS from buggy local clients).
-		cfg.Server.ReadHeaderTimeoutSec = 5
+		cfg.Server.ReadHeaderTimeoutSec = defaultReadHeaderTimeoutSec
 	}
 	if cfg.Server.ReadTimeoutSec == 0 {
-		cfg.Server.ReadTimeoutSec = 10
+		cfg.Server.ReadTimeoutSec = defaultReadTimeoutSec
 	}
 	if cfg.Server.WriteTimeoutSec == 0 {
-		cfg.Server.WriteTimeoutSec = 30
+		cfg.Server.WriteTimeoutSec = defaultWriteTimeoutSec
 	}
 	if cfg.Server.IdleTimeoutSec == 0 {
-		cfg.Server.IdleTimeoutSec = 120
+		cfg.Server.IdleTimeoutSec = defaultIdleTimeoutSec
 	}
 	if cfg.Server.ShutdownTimeoutSec == 0 {
-		cfg.Server.ShutdownTimeoutSec = 10
+		cfg.Server.ShutdownTimeoutSec = defaultShutdownTimeoutSec
 	}
 	if cfg.Server.MaxBodyBytes == 0 {
-		cfg.Server.MaxBodyBytes = 1 << 20 // 1 MiB
+		cfg.Server.MaxBodyBytes = defaultMaxBodyBytes
 	}
 	if cfg.Server.DefaultPageLimit == 0 {
-		cfg.Server.DefaultPageLimit = 50
+		cfg.Server.DefaultPageLimit = defaultPageLimit
 	}
 	if cfg.Server.MaxPageLimit == 0 {
-		cfg.Server.MaxPageLimit = 500
+		cfg.Server.MaxPageLimit = defaultMaxPageLimit
 	}
 	if cfg.Server.MaxConcurrentRequests == 0 {
-		cfg.Server.MaxConcurrentRequests = 128
+		cfg.Server.MaxConcurrentRequests = defaultMaxConcurrentRequests
 	}
 	if cfg.Server.MaxEventSubscribers == 0 {
-		cfg.Server.MaxEventSubscribers = 16
+		cfg.Server.MaxEventSubscribers = defaultMaxEventSubscribers
 	}
 	if cfg.Server.SubmitRatePerSec == 0 {
-		cfg.Server.SubmitRatePerSec = 20
+		cfg.Server.SubmitRatePerSec = defaultSubmitRatePerSec
 	}
 	if cfg.Server.SubmitRateBurst == 0 {
-		cfg.Server.SubmitRateBurst = 40
+		cfg.Server.SubmitRateBurst = defaultSubmitRateBurst
 	}
 	if cfg.Server.MaxContactHistoryResults == 0 {
-		cfg.Server.MaxContactHistoryResults = 100
+		cfg.Server.MaxContactHistoryResults = defaultMaxContactHistoryResults
 	}
 	if cfg.Server.ServeSPA == nil {
 		// Default: serve the SPA on TCP, not on Unix-socket. Browsers
@@ -571,16 +623,16 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// PRAGMAs), the single-writer limit is enforced by SQLite itself,
 	// not by the pool size.
 	if cfg.Datastore.MaxOpenConns == 0 {
-		cfg.Datastore.MaxOpenConns = 8
+		cfg.Datastore.MaxOpenConns = defaultMaxOpenConns
 	}
 	if cfg.Datastore.MaxIdleConns == 0 {
-		cfg.Datastore.MaxIdleConns = 8
+		cfg.Datastore.MaxIdleConns = defaultMaxIdleConns
 	}
 	if cfg.Datastore.ContextTimeout == 0 {
-		cfg.Datastore.ContextTimeout = 10
+		cfg.Datastore.ContextTimeout = defaultContextTimeoutSec
 	}
 	if cfg.Datastore.TransactionContextTimeout == 0 {
-		cfg.Datastore.TransactionContextTimeout = 10
+		cfg.Datastore.TransactionContextTimeout = defaultTxContextTimeoutSec
 	}
 
 	// Logging defaults. Boolean fields (with_timestamp, file_logging,
@@ -598,13 +650,13 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Logging.FileLogging = true
 	}
 	if cfg.Logging.LogFileMaxSizeMB == 0 {
-		cfg.Logging.LogFileMaxSizeMB = 100
+		cfg.Logging.LogFileMaxSizeMB = defaultLogFileMaxSizeMB
 	}
 	if cfg.Logging.LogFileMaxBackups == 0 {
-		cfg.Logging.LogFileMaxBackups = 5
+		cfg.Logging.LogFileMaxBackups = defaultLogFileMaxBackups
 	}
 	if cfg.Logging.LogFileMaxAgeDays == 0 {
-		cfg.Logging.LogFileMaxAgeDays = 30
+		cfg.Logging.LogFileMaxAgeDays = defaultLogFileMaxAgeDays
 	}
 
 	// Station defaults. Amp disabled with a 1.0 multiplier so an
@@ -612,7 +664,7 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// pre-Station-block deployments. Operator opts in via the My
 	// Station panel's QSO sub-tab.
 	if cfg.Station.AmpMultiplier == 0 {
-		cfg.Station.AmpMultiplier = 1.0
+		cfg.Station.AmpMultiplier = defaultAmpMultiplier
 	}
 
 	// Default-pointer defaults. 1/1 so the system has a sane "default
@@ -621,10 +673,10 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// to id=1 by the /v1/config setup transition; the default rig is
 	// a no-op until CAT lands.
 	if cfg.DefaultLogbookID == 0 {
-		cfg.DefaultLogbookID = 1
+		cfg.DefaultLogbookID = defaultLogbookID
 	}
 	if cfg.DefaultRigID == 0 {
-		cfg.DefaultRigID = 1
+		cfg.DefaultRigID = defaultRigID
 	}
 
 	// Forwarder defaults — see docs/v2-design/forwarding.md §4.
@@ -634,10 +686,10 @@ func applyDefaults(cfg *Config, baseDir string) {
 	for i := range cfg.Forwarders {
 		fc := &cfg.Forwarders[i]
 		if fc.TickIntervalSec == 0 {
-			fc.TickIntervalSec = 120
+			fc.TickIntervalSec = defaultForwarderTickIntervalSec
 		}
 		if fc.BatchSize == 0 {
-			fc.BatchSize = 5
+			fc.BatchSize = defaultForwarderBatchSize
 		}
 		if len(fc.ActionFilter) == 0 {
 			fc.ActionFilter = []string{
@@ -654,13 +706,13 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// contacted_station TTL). RefreshMaxInFlight matches
 	// refresher.DefaultMaxInFlight — operator can tune via config.
 	if cfg.Lookup.CountryTTLDays == 0 {
-		cfg.Lookup.CountryTTLDays = 365
+		cfg.Lookup.CountryTTLDays = defaultCountryTTLDays
 	}
 	if cfg.Lookup.StationTTLDays == 0 {
-		cfg.Lookup.StationTTLDays = 90
+		cfg.Lookup.StationTTLDays = defaultStationTTLDays
 	}
 	if cfg.Lookup.RefreshMaxInFlight == 0 {
-		cfg.Lookup.RefreshMaxInFlight = 4
+		cfg.Lookup.RefreshMaxInFlight = defaultRefreshMaxInFlight
 	}
 	// Stamp the canonical Hamnut name when the operator left it empty
 	// — keeps LookupServiceConfig(name) lookups predictable without
@@ -669,7 +721,7 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Lookup.Hamnut.Name = types.HamNutLookupServiceName
 	}
 	if cfg.Lookup.Hamnut.HttpTimeoutSec == 0 {
-		cfg.Lookup.Hamnut.HttpTimeoutSec = 10
+		cfg.Lookup.Hamnut.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
 	}
 	// Per-chain-entry timeout default — operators rarely need to
 	// override this so the explicit zero is treated as "use the
@@ -677,7 +729,7 @@ func applyDefaults(cfg *Config, baseDir string) {
 	for i := range cfg.Lookup.Chain {
 		c := &cfg.Lookup.Chain[i]
 		if c.HttpTimeoutSec == 0 {
-			c.HttpTimeoutSec = 10
+			c.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
 		}
 	}
 
@@ -690,10 +742,10 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// — the operator fills them. Enabled stays false (zero value) so
 	// no surprise sends happen until the operator opts in.
 	if cfg.Smtp.Port == 0 {
-		cfg.Smtp.Port = 587
+		cfg.Smtp.Port = defaultSmtpPort
 	}
 	if cfg.Smtp.TimeoutSec == 0 {
-		cfg.Smtp.TimeoutSec = 30
+		cfg.Smtp.TimeoutSec = defaultSmtpTimeoutSec
 	}
 
 	// Bridge has no defaults to backfill — Serial.Port and Cat.Driver

@@ -26,6 +26,19 @@ const (
 	wavAudioFormatFloat = 3
 )
 
+const (
+	// int16NormScale normalises a 16-bit signed sample to [-1.0, 1.0): a
+	// read divides by 2^15 (full-scale negative is -32768). Write-side
+	// clamp bounds use math.MaxInt16 / math.MinInt16 directly at the call
+	// site. Kept distinct from the clamp max (32767) on purpose — the read
+	// normalisation uses the symmetric 2^15 divisor.
+	int16NormScale = 32768.0 // 2^15
+	// uint8Midpoint is the silence point of unsigned 8-bit PCM (0=min,
+	// 128=silence, 255=max); both the bias and the divisor in the 8-bit
+	// normalisation.
+	uint8Midpoint = 128.0
+)
+
 // ErrWAVInvalidHeader is returned when the file isn't a valid
 // RIFF/WAVE file or its chunk structure is malformed.
 var ErrWAVInvalidHeader = stderrors.New("audio: invalid WAV header")
@@ -255,11 +268,11 @@ func WriteWAV(path string, d *Data) error {
 
 	var buf [2]byte
 	for _, s := range d.Samples {
-		v := int32(math.Round(float64(s) * 32767.0))
-		if v > 32767 {
-			v = 32767
-		} else if v < -32768 {
-			v = -32768
+		v := int32(math.Round(float64(s) * math.MaxInt16))
+		if v > math.MaxInt16 {
+			v = math.MaxInt16
+		} else if v < math.MinInt16 {
+			v = math.MinInt16
 		}
 		binary.LittleEndian.PutUint16(buf[:], uint16(int16(v)))
 		if _, err := w.Write(buf[:]); err != nil {
@@ -292,7 +305,7 @@ func convertWAVSamples(audioFormat, bitsPerSample uint16, data []byte) ([]float3
 		samples := make([]float32, len(data)/2)
 		for i := range samples {
 			v := int16(binary.LittleEndian.Uint16(data[i*2 : i*2+2]))
-			samples[i] = float32(v) / 32768.0
+			samples[i] = float32(v) / int16NormScale
 		}
 		return samples, nil
 
@@ -300,7 +313,7 @@ func convertWAVSamples(audioFormat, bitsPerSample uint16, data []byte) ([]float3
 		// 8-bit WAV is unsigned: 0=min, 128=silence, 255=max.
 		samples := make([]float32, len(data))
 		for i, b := range data {
-			samples[i] = (float32(b) - 128.0) / 128.0
+			samples[i] = (float32(b) - uint8Midpoint) / uint8Midpoint
 		}
 		return samples, nil
 

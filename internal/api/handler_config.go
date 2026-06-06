@@ -15,6 +15,22 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
+// My Station input-validation bounds (inclusive). The zone/DXCC ranges are
+// fixed external facts (CQ zones, ITU zones, the ARRL DXCC entity list — bump
+// maxDXCCEntity when ARRL adds one); the amp/power caps are typo guards, not
+// regulatory limits. Centralised here so the conditional and its error message
+// quote the same number.
+const (
+	minCQZone        = 1
+	maxCQZone        = 40
+	minITUZone       = 1
+	maxITUZone       = 90
+	minDXCCEntity    = 0
+	maxDXCCEntity    = 522
+	maxAmpMultiplier = 1000 // real linear amps top out ~50x; 1000 = two extra zeros
+	maxDefaultPowerW = 2000 // legal limits ≈ 1500W; headroom for pre-multiplier amp output
+)
+
 // ConfigResponse is the wire shape for GET/PUT /v1/config. It embeds
 // types.X for every nested object — no parallel field definitions —
 // per the "reuse types.X rather than building parallel structs"
@@ -178,25 +194,25 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// — bump when ARRL adds a new entity (rare; once every few years).
 	req.LoggingStation.MyCqZone = strings.TrimSpace(req.LoggingStation.MyCqZone)
 	if req.LoggingStation.MyCqZone != "" {
-		if !isValidZone(req.LoggingStation.MyCqZone, 1, 40) {
+		if !isValidZone(req.LoggingStation.MyCqZone, minCQZone, maxCQZone) {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				"my_cq_zone must be a number between 1 and 40", op)
+				fmt.Sprintf("my_cq_zone must be a number between %d and %d", minCQZone, maxCQZone), op)
 			return
 		}
 	}
 	req.LoggingStation.MyITUZone = strings.TrimSpace(req.LoggingStation.MyITUZone)
 	if req.LoggingStation.MyITUZone != "" {
-		if !isValidZone(req.LoggingStation.MyITUZone, 1, 90) {
+		if !isValidZone(req.LoggingStation.MyITUZone, minITUZone, maxITUZone) {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				"my_itu_zone must be a number between 1 and 90", op)
+				fmt.Sprintf("my_itu_zone must be a number between %d and %d", minITUZone, maxITUZone), op)
 			return
 		}
 	}
 	req.LoggingStation.MyDXCC = strings.TrimSpace(req.LoggingStation.MyDXCC)
 	if req.LoggingStation.MyDXCC != "" {
-		if !isValidZone(req.LoggingStation.MyDXCC, 0, 522) {
+		if !isValidZone(req.LoggingStation.MyDXCC, minDXCCEntity, maxDXCCEntity) {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				"my_dxcc must be a number between 0 and 522 (ARRL DXCC entity code; 0 = None)", op)
+				fmt.Sprintf("my_dxcc must be a number between %d and %d (ARRL DXCC entity code; 0 = None)", minDXCCEntity, maxDXCCEntity), op)
 			return
 		}
 	}
@@ -204,9 +220,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// Validate the amp multiplier. Negative values are nonsense; a
 	// 1000x cap is a typo guard (real linear amps top out around 50x;
 	// 1000 is well into "operator typed two extra zeros" territory).
-	if req.Station.AmpMultiplier < 0 || req.Station.AmpMultiplier > 1000 {
+	if req.Station.AmpMultiplier < 0 || req.Station.AmpMultiplier > maxAmpMultiplier {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			"station.amp_multiplier must be between 0 and 1000", op)
+			fmt.Sprintf("station.amp_multiplier must be between 0 and %d", maxAmpMultiplier), op)
 		return
 	}
 
@@ -215,9 +231,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// limits in most jurisdictions are ≈ 1500W, the headroom allows
 	// for operators describing amp output before the multiplier
 	// applies.
-	if req.Station.DefaultPower < 0 || req.Station.DefaultPower > 2000 {
+	if req.Station.DefaultPower < 0 || req.Station.DefaultPower > maxDefaultPowerW {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			"station.default_power must be between 0 and 2000", op)
+			fmt.Sprintf("station.default_power must be between 0 and %d", maxDefaultPowerW), op)
 		return
 	}
 

@@ -20,6 +20,12 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
+// dedupeRefetchTimeout bounds the post-insert duplicate refetch on a fresh
+// context — the row is already committed in sqlite by then, so this is a
+// bounded pure-read; detaching from the request ctx keeps a request-deadline
+// expiry from turning a known duplicate into a 500 (review 2026-05-02 M2).
+const dedupeRefetchTimeout = 2 * time.Second
+
 // Submit validates an ADIF record, checks for duplicates, and atomically
 // stores the QSO and its upload-queue rows. It is the PUBLIC entry point
 // (POST /v1/qso): it always mints a fresh UUIDv7 and never honours a
@@ -204,7 +210,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		// Force mode: generate a unique dedupe key so the UNIQUE index
 		// doesn't block the insert. The key is still a valid 64-char hex
 		// string but is not reproducible — this QSO won't be deduplicated.
-		nonce := make([]byte, 32)
+		nonce := make([]byte, dedupeKeyBytes)
 		if _, err = rand.Read(nonce); err != nil {
 			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("generating force nonce")
 		}
@@ -255,7 +261,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		// a request-deadline expiry turn a known-duplicate into a
 		// generic 500 — the M2 finding from the 2026-05-02 review.
 		if sqlite.IsUniqueConstraintError(err) && !force {
-			refetchCtx, refetchCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			refetchCtx, refetchCancel := context.WithTimeout(context.Background(), dedupeRefetchTimeout)
 			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(refetchCtx, logbookID, dedupeKey)
 			refetchCancel()
 			if ferr == nil {

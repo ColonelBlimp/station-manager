@@ -6,6 +6,23 @@ import (
 	"time"
 )
 
+// Outbound HTTP client defaults — conservative for a daemon making many small
+// requests to a few upstreams over a flaky link (ADR 0017 prefers a fast
+// fall-through to the local DB over a hung request). These are deliberately
+// code constants, not config: the per-request deadline IS operator-tunable via
+// each provider's HttpTimeoutSec (passed as httpTimeout); the transport pool /
+// handshake knobs are not the sort of thing an operator tunes.
+const (
+	defaultHTTPRequestTimeout = 15 * time.Second
+	httpDialTimeout           = 5 * time.Second
+	httpKeepAlive             = 30 * time.Second
+	httpMaxIdleConns          = 100
+	httpMaxIdleConnsPerHost   = 10
+	httpIdleConnTimeout       = 90 * time.Second
+	httpTLSHandshakeTimeout   = 5 * time.Second
+	httpExpectContinueTimeout = 1 * time.Second
+)
+
 // NewHTTPClient returns a *http.Client configured with conservative
 // defaults appropriate for the daemon's outbound requests (lookup
 // providers, forwarders, etc.).
@@ -21,7 +38,7 @@ import (
 // through" failure mode — the daemon would rather quickly fall
 // through to the local DB than hang the request).
 func NewHTTPClient(httpTimeout time.Duration) *http.Client {
-	reqTimeout := 15 * time.Second
+	reqTimeout := defaultHTTPRequestTimeout
 	if httpTimeout > 0 {
 		reqTimeout = httpTimeout
 	}
@@ -29,15 +46,15 @@ func NewHTTPClient(httpTimeout time.Duration) *http.Client {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
+			Timeout:   httpDialTimeout,
+			KeepAlive: httpKeepAlive,
 		}).DialContext,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:          httpMaxIdleConns,
+		MaxIdleConnsPerHost:   httpMaxIdleConnsPerHost,
+		IdleConnTimeout:       httpIdleConnTimeout,
+		TLSHandshakeTimeout:   httpTLSHandshakeTimeout,
+		ExpectContinueTimeout: httpExpectContinueTimeout,
 	}
 
 	return &http.Client{

@@ -71,6 +71,10 @@ const DefaultHTTPTimeout = 30 * time.Second
 // (DNS hijack, transparent proxy) returns a giant body.
 const maxResponseBytes = 1 << 20 // 1 MiB
 
+// errorSnippetLen bounds the response-body excerpt stored in last_error so it
+// fits a log line (bodySnippet truncates to this many runes).
+const errorSnippetLen = 200
+
 // UserAgent is the User-Agent header this forwarder sends. QRZ's
 // developer guide requires a UA of ≤128 chars. cmd/smd overrides
 // this var at startup with the daemon's global Config.UserAgent
@@ -311,7 +315,7 @@ func classifyHTTPStatus(status int, body []byte) (forwarding.Result, bool) {
 		return forwarding.Result{}, false
 	}
 
-	snippet := bodySnippet(body, 200)
+	snippet := bodySnippet(body, errorSnippetLen)
 
 	switch {
 	case status == http.StatusRequestTimeout,

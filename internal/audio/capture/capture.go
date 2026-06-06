@@ -25,6 +25,12 @@ const (
 	SampleChannelBufferSize = 64
 	// BytesPerFloat32 is the number of bytes in a float32 sample.
 	BytesPerFloat32 = 4
+	// ft8SampleRateHz is the WSJT-X/jt9 canonical capture rate for FT8
+	// (12 kHz mono) — the default DefaultConfig requests.
+	ft8SampleRateHz = 12000
+	// defaultCallbackFrames is the frames-per-callback period requested from
+	// the backend (~43 ms at 12 kHz). Smaller = lower latency, higher syscall load.
+	defaultCallbackFrames = 512
 )
 
 var (
@@ -57,9 +63,9 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		DeviceIndex: -1,
-		SampleRate:  12000,
+		SampleRate:  ft8SampleRateHz,
 		Channels:    1,
-		BufferSize:  512,
+		BufferSize:  defaultCallbackFrames,
 	}
 }
 

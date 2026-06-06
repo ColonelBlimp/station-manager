@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// dedupeKeyBytes is the raw byte length of a dedupe key — a SHA-256 digest,
+// so 32 bytes / 64 hex chars. The force-mode random nonce uses the same width
+// so its hex form is indistinguishable in shape from a real key.
+const dedupeKeyBytes = sha256.Size
+
+// timeOnKeyLen is the minute-granularity prefix (HHMM) of TIME_ON used in the
+// key, per api.md §4.2 — seconds are dropped so same-minute logs dedupe.
+const timeOnKeyLen = 4
+
 // ComputeDedupeKey returns a SHA-256 hex hash of
 // CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON (uppercased, pipe-separated). TIME_ON
 // is truncated to 4 characters (HHMM) to give minute-granularity
@@ -26,8 +35,8 @@ func ComputeDedupeKey(call, band, mode, freq, qsoDate, timeOn string) string {
 	}
 
 	// Truncate timeOn to minute precision (HHMM).
-	if len(timeOn) > 4 {
-		timeOn = timeOn[:4]
+	if len(timeOn) > timeOnKeyLen {
+		timeOn = timeOn[:timeOnKeyLen]
 	}
 
 	input := strings.Join([]string{

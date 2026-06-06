@@ -14,6 +14,11 @@ import (
 // matters. It exists so the bit-shift itself can't overflow int64.
 const maxBackoffShift = 30
 
+// backoffJitterDivisor sets the jitter magnitude as a fraction of the backoff:
+// dividing by 5 yields the [0, backoff*0.2) (20%) window specified in
+// docs/v2-design/forwarding.md §5.
+const backoffJitterDivisor = 5
+
 // computeBackoff returns the delay before the next retry for a row that
 // just transitioned transient. `attempt` is the post-increment attempts
 // value (the first retry uses attempt=1, so the exponent is zero and
@@ -46,7 +51,7 @@ func computeBackoff(attempt int64, rc types.RetryConfig) time.Duration {
 	}
 
 	// 20% jitter. rand.Int64N panics on non-positive n, so floor at 1 ns
-	// when backoff/5 rounds to zero.
-	j := max(int64(backoff)/5, 1)
+	// when backoff/backoffJitterDivisor rounds to zero.
+	j := max(int64(backoff)/backoffJitterDivisor, 1)
 	return backoff + time.Duration(rand.Int64N(j))
 }

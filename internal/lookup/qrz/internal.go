@@ -13,6 +13,11 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
+// errorBodyLimit bounds how much of a non-2xx response body is read into the
+// error message — enough to capture an upstream error string without slurping
+// a misbehaving giant body.
+const errorBodyLimit = 512
+
 // requestAndSetSessionKey fetches a session key from QRZ.com using
 // configured username/password and stores it on the Service for
 // subsequent lookup calls.
@@ -58,7 +63,7 @@ func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		return errors.New(op).WithMsgf("QRZ.com returned status %d: %s", resp.StatusCode, string(b))
 	}
 	body, err := io.ReadAll(resp.Body)

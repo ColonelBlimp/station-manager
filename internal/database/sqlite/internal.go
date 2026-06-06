@@ -64,7 +64,7 @@ func (s *Service) getDsn() (string, error) {
 	// than waiting up to busy_timeout. Caught during a stress run
 	// 2026-05-09 once max_open_conns was bumped from 1 to 16.
 	pragmas := []string{
-		"busy_timeout(5000)",
+		fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS),
 		"journal_mode(WAL)",
 		"foreign_keys(on)",
 		// synchronous=NORMAL is safe under WAL (the WAL itself is
