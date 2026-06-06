@@ -7,6 +7,7 @@ import {
     selectBand,
     toggleTune,
     nudgeFreq,
+    nudgeFreqJump,
     setMode,
     _resetFreqStepForTests,
 } from './rigControl';
@@ -270,6 +271,29 @@ describe('rigControl', () => {
             expect(mockSend).toHaveBeenNthCalledWith(1, 'set_freq', '14074010');
             expect(mockSend).toHaveBeenNthCalledWith(2, 'set_freq', '14074020');
             expect(mockSend).toHaveBeenNthCalledWith(3, 'set_freq', '14074030');
+        });
+    });
+
+    describe('nudgeFreqJump — ±5 kHz band hop', () => {
+        beforeEach(_resetFreqStepForTests);
+
+        it('nudges the selected VFO manualState by 5 kHz when CAT is off', () => {
+            manualState.selectedVfo = 'A';
+            manualState.vfoA = 14_074_000;
+            nudgeFreqJump(1);
+            expect(manualState.vfoA).toBe(14_079_000);
+            nudgeFreqJump(-1);
+            expect(manualState.vfoA).toBe(14_074_000);
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('drives set_freq with the +5 kHz absolute target when CAT is live', () => {
+            setCatLive();
+            catState.selectedVfo = 'A';
+            catState.vfoA = 14_074_000;
+            configState.bridge.ops = ['set_freq'];
+            nudgeFreqJump(1);
+            expect(mockSend).toHaveBeenCalledWith('set_freq', '14079000');
         });
     });
 

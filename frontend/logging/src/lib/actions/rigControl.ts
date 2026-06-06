@@ -91,11 +91,14 @@ export function selectBand(band: string): void {
     void driveRig('set_band', band);
 }
 
-// Frequency-step sizes (Hz) for the Shift+Ctrl tuning shortcuts. Page = coarse,
-// Arrow = fine — kept here so the magnitudes have one home (the QsoPanel handler
-// only knows "coarse up" / "fine down").
+// Frequency-step sizes (Hz) for the tuning shortcuts — kept here so the
+// magnitudes have one home (the QsoPanel handler only knows "coarse up" /
+// "fine down" / "jump down"). Three tiers on the arrow cluster: fine (±10 Hz,
+// →/←), coarse (±100 Hz, ↑/↓), and a ±5 kHz jump (Shift+Ctrl+Alt+↑/↓) for
+// hopping across a band quickly.
 const FREQ_STEP_COARSE_HZ = 100;
 const FREQ_STEP_FINE_HZ = 10;
+const FREQ_STEP_JUMP_HZ = 5_000;
 
 // Highest value the rigdef's set_freq field (FA%s; / FB%s; pad 9) holds.
 const MAX_FREQ_HZ = 999_999_999;
@@ -167,9 +170,14 @@ export function nudgeFreqCoarse(dir: 1 | -1): void {
     nudgeFreq(dir * FREQ_STEP_COARSE_HZ);
 }
 
-/** Fine (±10 Hz) tuning nudge — Shift+Ctrl+ArrowUp/ArrowDown. dir is +1/-1. */
+/** Fine (±10 Hz) tuning nudge — Shift+Ctrl+ArrowLeft/ArrowRight. dir is +1/-1. */
 export function nudgeFreqFine(dir: 1 | -1): void {
     nudgeFreq(dir * FREQ_STEP_FINE_HZ);
+}
+
+/** Jump (±5 kHz) band hop — Shift+Ctrl+Alt+ArrowUp/ArrowDown. dir is +1/-1. */
+export function nudgeFreqJump(dir: 1 | -1): void {
+    nudgeFreq(dir * FREQ_STEP_JUMP_HZ);
 }
 
 /**

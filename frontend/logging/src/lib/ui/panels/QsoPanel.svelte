@@ -33,6 +33,7 @@
         selectBand,
         nudgeFreqCoarse,
         nudgeFreqFine,
+        nudgeFreqJump,
         setMode,
     } from '../../actions/rigControl';
     import TimerControls from '../components/TimerControls.svelte';
@@ -763,18 +764,21 @@
                 return;
             }
             // Frequency step on the selected VFO, all on the arrow cluster:
-            // ↑/↓ = coarse (±100 Hz), →/← = fine (±10 Hz); up/right = higher.
-            // (Page keys were dropped — Firefox's Ctrl+Shift+PageUp/Down
-            // move-tab won't yield to preventDefault.) CAT-on/off routing +
-            // capability gating live in nudgeFreq.
+            // ↑/↓ = coarse (±100 Hz), →/← = fine (±10 Hz), and Alt+↑/↓ = a
+            // ±5 kHz band hop; up/right = higher. (Page keys were dropped —
+            // Firefox's Ctrl+Shift+PageUp/Down move-tab won't yield to
+            // preventDefault.) CAT-on/off routing + capability gating live in
+            // nudgeFreq.
             if (e.code === 'ArrowUp') {
                 e.preventDefault();
-                nudgeFreqCoarse(1);
+                if (e.altKey) nudgeFreqJump(1);
+                else nudgeFreqCoarse(1);
                 return;
             }
             if (e.code === 'ArrowDown') {
                 e.preventDefault();
-                nudgeFreqCoarse(-1);
+                if (e.altKey) nudgeFreqJump(-1);
+                else nudgeFreqCoarse(-1);
                 return;
             }
             if (e.code === 'ArrowRight') {
