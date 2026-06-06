@@ -66,10 +66,10 @@ type Adif struct {
 }
 
 type UserDef struct {
-	SmQsoUploadDate     string `adif:"sm_qso_upload_date"`     // Values: "[date-time-stamp]" or empty string
-	SmQsoUploadStatus   string `adif:"sm_qso_upload_status"`   // Values: "Y" = Uploaded, "N" = Not Uploaded
-	SmFwrdByEmailDate   string `adif:"sm_fwd_by_email_date"`   // Values: "[date-time-stamp]" or empty string
-	SmFwrdByEmailStatus string `adif:"sm_fwd_by_email_status"` // Values: "Y" = Forwarded by email, "N" = Not forwarded
+	SmQsoUploadDate     string `adif:"sm_qso_upload_date"`      // Values: "[date-time-stamp]" or empty string
+	SmQsoUploadStatus   string `adif:"sm_qso_upload_status"`    // Values: "Y" = Uploaded, "N" = Not Uploaded
+	SmFwrdByEmailDate   string `adif:"sm_fwrd_by_email_date"`   // Values: "[date-time-stamp]" or empty string
+	SmFwrdByEmailStatus string `adif:"sm_fwrd_by_email_status"` // Values: "Y" = Forwarded by email, "N" = Not forwarded
 
 	// Indicates if a QSL (physical card) is wanted for this QSO. This allows for tracking if a QSL card is required for
 	// this qso. 'qsl_rcvd' should be then used to track the status: 'R' = Requested, 'Y' = QSL received.
