@@ -157,6 +157,17 @@ are unchanged.
 - **Per-rig `tune` / `mode_mappings` overrides** — only if a real need appears; today
   they're global on `bridge`.
 
+## Deferred — config-shape full cleanup (not SPA-gated)
+
+- **Drop the residual empty `bridge.serial` / `bridge.cat` (and `bridge.tune`) `{}`
+  objects from serialized config.** Leaf `omitempty` (2026-06-06) cleared the inner
+  `port`/`driver` values, but the parent struct fields on `BridgeConfig` are
+  non-pointer, so `encoding/json` still writes empty objects. Removing them means
+  making `Serial`/`Cat`/`Tune` pointer fields and threading nil-checks through
+  `ActiveBridge`, `validateBridge`, the legacy migration, and the bridge package.
+  Deferred (operator, 2026-06-06) — low value, real nil-deref risk; do it as a single
+  focused pass when the config shape is next revisited, not piecemeal.
+
 ## See
 
 - ADR 0028 — rig profiles, single-active + hot-swap (the decision).
