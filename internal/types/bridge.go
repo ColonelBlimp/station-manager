@@ -66,7 +66,10 @@ type ModeMapping struct {
 // definition in `internal/cat/rigs/*.json` — they're
 // protocol-determined and not operator-configurable.
 type BridgeSerialConfig struct {
-	Port string `json:"port"`
+	// omitempty: under ADR 0028 the active rig's Port is projected onto this
+	// field by Config.ActiveBridge() and always wins, so a value left here is
+	// inert; the empty loose field shouldn't persist in rewritten configs.
+	Port string `json:"port,omitempty"`
 }
 
 // BridgeCatConfig is the CAT-protocol end. Driver picks the per-rig
@@ -74,7 +77,10 @@ type BridgeSerialConfig struct {
 // driver = subsystem cannot decode rig pushes; treated as a config
 // error at startup when Enabled is true.
 type BridgeCatConfig struct {
-	Driver string `json:"driver"`
+	// omitempty: same rationale as BridgeSerialConfig.Port — the active rig's
+	// Model is projected onto Driver by Config.ActiveBridge() and always wins,
+	// so the empty loose field shouldn't persist in rewritten configs.
+	Driver string `json:"driver,omitempty"`
 }
 
 // BridgeTimeoutsConfig surfaces the supervisor + readLoop tuning

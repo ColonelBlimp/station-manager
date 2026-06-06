@@ -81,6 +81,19 @@ A resolved active rig **always wins** over any stale loose field left on disk. T
 receive a plain `BridgeConfig`/`Ft8Config`; only the *construction site* in
 `cmd/smd/main.go` switched to `cfg.ActiveBridge()` / `cfg.ActiveFt8()`.
 
+Because the loose fields are now resolved views, not on-disk sources, the leaf
+identity fields carry `json:",omitempty"` (2026-06-06) so the inert empty values stop
+persisting in rewritten configs — hand-setting them has no effect once a catalogue
+exists, so they shouldn't linger as misleading on-disk knobs: `Ft8Config.Device`,
+`BridgeSerialConfig.Port`, and `BridgeCatConfig.Driver`. The `ft8.device` field drops
+entirely (it's a flat leaf on `Ft8Config`); `bridge.serial` / `bridge.cat` still
+serialize as empty `{}` objects because their *parent* fields on `BridgeConfig` are
+non-pointer structs and Go's `encoding/json` won't omit a zero struct (same as
+`bridge.tune:{}`). Fully removing the empty objects would mean making `Serial`/`Cat`
+pointer fields — an invasive nil-deref-risk refactor across `ActiveBridge` /
+`validateBridge` / the migration / the bridge package — judged not worth it for the
+cosmetic gain.
+
 ## Resolution + migration (`applyRigProfiles`, `internal/config/config.go`)
 
 Runs in `Load` after `applyDefaults` (so `DefaultRigID` is already its `1` default),

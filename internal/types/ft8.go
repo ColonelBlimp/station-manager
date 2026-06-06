@@ -9,11 +9,15 @@ package types
 // deployment) the subsystem acquires no audio device and spins up no
 // decoder goroutines. Default false — FT8 stays opt-in.
 //
-// Device selects the audio capture device, a single identifier string
-// mirroring BridgeSerialConfig.Port (the serial-port end of the rig
-// connection). Empty means the system default capture device. The string
-// is interpreted by the capture backend; an empty value is the common
-// case for a single-radio station.
+// Device selects the audio capture device, a single identifier string.
+// Under ADR 0028 the authoritative source is the per-rig
+// RigConfig.Audio.Device in the rig catalogue; Config.ActiveFt8() projects
+// the active rig's value onto this field, always winning over any value
+// left here. So Device is a resolved runtime view, not an on-disk source —
+// hand-setting it has no effect when a rig catalogue exists. omitempty so
+// the inert loose field doesn't persist in rewritten configs (mirrors the
+// empty bridge.serial.port / bridge.cat.driver loose fields). Empty means
+// the system default capture device.
 //
 // EnableOSD turns on go-ft8's OSD-2/MRB fallback decode (ordered-statistics
 // decoding after belief-propagation misses) — the analog to WSJT-X/jt9's
@@ -28,6 +32,6 @@ package types
 // config schema and behaviour stay in lockstep.
 type Ft8Config struct {
 	Enabled   bool   `json:"enabled"`
-	Device    string `json:"device"`
+	Device    string `json:"device,omitempty"`
 	EnableOSD *bool  `json:"enable_osd,omitempty"`
 }
