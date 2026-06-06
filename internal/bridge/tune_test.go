@@ -83,11 +83,12 @@ func TestTuneSupported(t *testing.T) {
 	if !ok {
 		t.Fatal(`Lookup("yaesu-ft710") not found`)
 	}
-	// The FT-710 now has set_mode + set_power (write entries added 2026-06-05),
-	// but deliberately carries no tx_on/tx_off yet (TX/tune pending live
-	// verification), so the encodeability dry-run still reports false.
-	if TuneSupported(ft710) {
-		t.Error("TuneSupported(ft710) = true; FT-710 has no tx_on/tx_off yet")
+	// The FT-710 carries the full tune command set: set_mode + set_power (write
+	// entries added 2026-06-05) and tx_on/tx_off (TX1;/TX0;, added 2026-06-06,
+	// not Exposed — tune-controller-only). All four encode, so the dry-run
+	// reports true and the SPA shows the Tune button on the FT-710.
+	if !TuneSupported(ft710) {
+		t.Error("TuneSupported(ft710) = false; rigdef has set_mode/set_power/tx_on/tx_off")
 	}
 }
 

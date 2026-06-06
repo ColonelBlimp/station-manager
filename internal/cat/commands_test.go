@@ -126,8 +126,9 @@ func TestEncodeCommandBijection(t *testing.T) {
 // to the FTdx10, confirmed against FT-710_CAT_OM_ENG_2306-C). The TX-keying
 // commands (tx_on/tx_off) are deliberately absent from BOTH exposed lists: they
 // are not Exposed, so they never reach the generic command path (ADR 0027) —
-// only the tune controller may key TX. (The FT-710 carries no tx_on/tx_off at
-// all yet, pending live transmit verification.)
+// only the tune controller may key TX. (Both rigdefs now carry tx_on/tx_off —
+// the FT-710's added 2026-06-06 — but neither is Exposed, so the advertised
+// vocabulary is unchanged.)
 func TestExposedCommands(t *testing.T) {
 	want := []string{"set_freq", "set_freq_b", "set_mode", "swap_vfo", "band_up", "band_down", "set_band", "set_power"}
 	for _, id := range []string{"yaesu-ftdx10", "yaesu-ft710"} {
@@ -208,25 +209,32 @@ func TestEncodeCommand_SetPower(t *testing.T) {
 // path (EncodeCommand) refuses them — only the tune controller may key TX,
 // via the low-level Encode (verified here too).
 func TestTxCommands_NotExposed(t *testing.T) {
-	def, _ := Lookup("yaesu-ftdx10")
-
-	for _, name := range []string{"tx_on", "tx_off"} {
-		if _, err := EncodeCommand(def, name, ""); !stderr.Is(err, ErrCommandNotExposed) {
-			t.Errorf("EncodeCommand(%q) err = %v, want ErrCommandNotExposed", name, err)
+	// Both shipped Yaesu rigdefs carry tx_on/tx_off (the FT-710's added
+	// 2026-06-06); the safety gate must hold for both.
+	for _, id := range []string{"yaesu-ftdx10", "yaesu-ft710"} {
+		def, ok := Lookup(id)
+		if !ok {
+			t.Fatalf("Lookup(%q) not found", id)
 		}
-	}
 
-	// The low-level Encode (controller-internal) still produces the bytes.
-	for _, c := range []struct{ name, want string }{
-		{"tx_on", "TX1;"},
-		{"tx_off", "TX0;"},
-	} {
-		got, err := Encode(def, c.name)
-		if err != nil {
-			t.Fatalf("Encode(%q): %v", c.name, err)
+		for _, name := range []string{"tx_on", "tx_off"} {
+			if _, err := EncodeCommand(def, name, ""); !stderr.Is(err, ErrCommandNotExposed) {
+				t.Errorf("%s: EncodeCommand(%q) err = %v, want ErrCommandNotExposed", id, name, err)
+			}
 		}
-		if string(got) != c.want {
-			t.Errorf("Encode(%q) = %q, want %q", c.name, got, c.want)
+
+		// The low-level Encode (controller-internal) still produces the bytes.
+		for _, c := range []struct{ name, want string }{
+			{"tx_on", "TX1;"},
+			{"tx_off", "TX0;"},
+		} {
+			got, err := Encode(def, c.name)
+			if err != nil {
+				t.Fatalf("%s: Encode(%q): %v", id, c.name, err)
+			}
+			if string(got) != c.want {
+				t.Errorf("%s: Encode(%q) = %q, want %q", id, c.name, got, c.want)
+			}
 		}
 	}
 }
