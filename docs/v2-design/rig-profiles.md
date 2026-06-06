@@ -33,6 +33,17 @@ The interim does **not** regress KISS — it's identical to today (hand-edit JSO
 the one rig), just in the catalogue shape. The "operator never types a port path /
 device id" requirement is the config-SPA's explicit responsibility (pieces 2 & 3).
 
+**Open option (not decided, 2026-06-06):** split piece 3 across the two SPAs by
+audience — put the **active-rig selector** (the switcher: pick which configured rig
+is live, drives the hot-swap) in the **logging SPA**, where the operator already
+works during a session and would want to flip rigs without leaving the logging view;
+keep the **profile editor** (add/remove rigs, assign discovered port + audio device +
+model) in the **config SPA**, where infrequent setup belongs. The switcher reads the
+catalogue + posts `POST /v1/rig/select`; the editor owns CRUD on the catalogue. This
+matches the daemon-owns-state / each-SPA-owns-its-UX split (the daemon is the single
+source of truth either way), but it's recorded as an option to weigh when the SPAs are
+built, not a commitment.
+
 ## Config shape (operator-facing JSON)
 
 The catalogue reuses `types.RigConfig` (NOT a parallel struct — see ADR 0028's
