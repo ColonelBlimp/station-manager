@@ -27,6 +27,15 @@ export function formatUtcTime(d: Date): string {
 }
 
 /**
+ * Format a Date's UTC wall-clock as `HH:MM:SS`. Used for FT8 slot labels,
+ * where the seconds component distinguishes the four 15-second slots within a
+ * minute (:00 / :15 / :30 / :45).
+ */
+export function formatUtcClock(d: Date): string {
+    return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
+/**
  * Format a duration in milliseconds as `HH:MM:SS`. Hours can grow
  * past 99 — Field Day operating sessions, contest weekends, etc.
  * Negative or fractional inputs are floored to whole seconds; very
