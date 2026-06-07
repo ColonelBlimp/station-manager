@@ -3,7 +3,6 @@ package ft8
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -47,10 +46,10 @@ type Service struct {
 	log    logging.Logger
 	src    captureSource
 
-	// latestOcc holds the most recent per-slot occupancy report for the
-	// clear-offset picker. Lock-free single-writer (decodeLoop) / many-reader
-	// (the SSE layer); nil until the first full slot is processed.
-	latestOcc atomic.Pointer[OccupancyReport]
+	// occHub fans each per-slot occupancy report out to ft8-occupancy SSE
+	// subscribers and caches the latest for late-subscriber replay. Owned by
+	// the Service; closed on Stop.
+	occHub *occHub
 
 	mu      sync.Mutex
 	started bool
@@ -78,6 +77,7 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		occCfg:   resolveOccupancyConfig(occOverride),
 		log:      log,
 		src:      src,
+		occHub:   newOccHub(),
 		stopDone: make(chan struct{}),
 	}
 }
@@ -174,6 +174,9 @@ func (s *Service) Stop() error {
 			}
 		}
 		s.wg.Wait()
+		// Disconnect any ft8-occupancy SSE subscribers so they return
+		// promptly rather than waiting on the daemon's graceful timeout.
+		s.occHub.close()
 		s.log.InfoWith().Msg("ft8: subsystem stopped")
 	})
 	<-s.stopDone
@@ -197,7 +200,7 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	for slot := range slots {
 		msgs := DecodeSlot(slot.Samples, osd, s.log)
 		rep := Occupancy(SlotRefFromTime(slot.StartUTC), slot.Samples, msgs, s.occCfg)
-		s.latestOcc.Store(&rep)
+		s.occHub.publish(rep)
 		s.log.DebugWith().
 			Str("slot", rep.Slot.StartUTC).
 			Int("occupied", len(rep.Occupied)).
@@ -207,13 +210,12 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 }
 
 // LatestOccupancy returns the most recent per-slot occupancy report, or nil if
-// no full slot has been processed yet. Safe for concurrent use — the SSE layer
-// (the ft8-occupancy event and its replay cache) reads it here.
+// no full slot has been processed yet. Safe for concurrent use.
 func (s *Service) LatestOccupancy() *OccupancyReport {
-	if s == nil {
+	if s == nil || s.occHub == nil {
 		return nil
 	}
-	return s.latestOcc.Load()
+	return s.occHub.latest()
 }
 
 // onPanic logs a panic that escaped one of the subsystem goroutines. safego

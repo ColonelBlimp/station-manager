@@ -456,7 +456,7 @@ func run() error {
 	}()
 
 	// ---- Start HTTP server ----
-	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc)
+	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc, ft8Svc)
 
 	errCh := make(chan error, 1)
 	go func() {

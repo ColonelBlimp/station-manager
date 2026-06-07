@@ -16,6 +16,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
@@ -33,6 +34,7 @@ type Server struct {
 	enrich                   *lookup.Orchestrator
 	mailer                   *email.Service
 	bridge                   *bridge.Service
+	ft8                      *ft8.Service
 	limits                   *loadLimiter
 	maxBodyBytes             int64
 	protocol                 string
@@ -60,7 +62,7 @@ type Server struct {
 // protocol) because those don't change at runtime; the config-update
 // endpoint only touches operator-relevant fields (logging_station,
 // default_*_id) which startup doesn't bake into Server fields.
-func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service) *Server {
+func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service, ft8Svc *ft8.Service) *Server {
 	s := &Server{
 		cfg:                      cfgSvc,
 		qso:                      qso,
@@ -70,6 +72,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		enrich:                   enrich,
 		mailer:                   mailer,
 		bridge:                   br,
+		ft8:                      ft8Svc,
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		maxBodyBytes:             cfg.Server.MaxBodyBytes,
 		protocol:                 cfg.Server.Protocol,
@@ -155,6 +158,19 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// limitConcurrent middleware covers it. The daemon owns the
 		// guaranteed stop, so this can't strand a carrier.
 		mux.HandleFunc("POST /v1/rig/tune", s.handleRigTune)
+	}
+
+	// FT8 occupancy SSE — opt-in via ft8.enabled (ADR 0029 step a). When the
+	// FT8 subsystem is disabled the route is not registered (404 → SPA
+	// fallthrough), same shape as the rig SSE. The ft8.Service.HTTPHandler
+	// closure subscribes to the subsystem's occupancy hub per connection, with
+	// a one-slot replay cache for late subscribers; disconnect-safety +
+	// multi-subscriber fan-out are handled there. Shares the SSE subscriber cap
+	// (limitEventSubscribers) with the other two long-lived streams. Live
+	// occupancy needs a CGO capture build; on the static build the subsystem is
+	// idle and the stream simply carries keepalives until a slot is processed.
+	if ft8Svc != nil && ft8Svc.Enabled() {
+		mux.Handle("GET /v1/ft8/events", s.limitEventSubscribers(ft8Svc.HTTPHandler(s.shutdownCh)))
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default
