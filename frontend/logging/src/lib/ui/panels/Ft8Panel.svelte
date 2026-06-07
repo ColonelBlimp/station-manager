@@ -12,11 +12,11 @@ import Button from "../components/Button.svelte";
 -->
 <div class="flex justify-center h-115 text-gray-500 mt-4 space-x-2">
     <div class="text-center border w-101">
-        <h2 class="text-lg font-semibold">FT8</h2>
+        <h2 class="text-lg font-semibold">Band Activity</h2>
         <p class="mt-1 text-sm">Live decode view coming soon.</p>
     </div>
     <div class="text-center border w-101">
-        Other
+        <h2 class="text-lg font-semibold">TX Frequency</h2>
     </div>
     <div class="flex flex-col w-40 h-115 place-items-center px-4 space-y-2">
         <Button id="160m" label="160m" />
