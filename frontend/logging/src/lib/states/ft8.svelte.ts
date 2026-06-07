@@ -45,6 +45,42 @@ interface OccupancyPayload {
     suggested: number[] | null;
 }
 
+/** One decoded message on the wire. Mirrors `internal/ft8.DecodeLine`. */
+interface DecodeLine {
+    text: string;
+    freq_hz: number;
+    dt_s: number;
+}
+
+/** Mirrors `internal/ft8.DecodeReport`. */
+interface DecodeReport {
+    slot: Ft8SlotRef;
+    decodes: DecodeLine[] | null;
+}
+
+/**
+ * One row in the accumulating Band Activity list. `startUtc` is the slot's
+ * RFC3339 time (formatted for display by the panel); `id` is a stable,
+ * monotonic key for the {#each} so rows aren't re-created on every update.
+ */
+export interface DecodeEntry {
+    id: number;
+    startUtc: string;
+    freqHz: number;
+    dtSec: number;
+    text: string;
+}
+
+/**
+ * Cap on the rolling decode history. ~100 rows ≈ several minutes of a busy
+ * band — enough to scroll back and spot who's active without unbounded growth.
+ */
+const DECODE_HISTORY_MAX = 100;
+
+// Monotonic key source for decode rows. Never reset — uniqueness is all that
+// matters, and 2^53 ids outlast any session.
+let decodeSeq = 0;
+
 class Ft8State {
     /** Transport open (EventSource OPEN). Says nothing about whether slots are flowing. */
     connected: boolean = $state(false);
@@ -60,6 +96,11 @@ class Ft8State {
      * second source.
      */
     occupied: Ft8Band[] = $state([]);
+    /**
+     * Rolling decode history for the Band Activity feed — newest slot on top,
+     * frequency-ascending within each slot, capped at DECODE_HISTORY_MAX.
+     */
+    decodes: DecodeEntry[] = $state([]);
 }
 
 export const ft8State = new Ft8State();
@@ -102,6 +143,32 @@ function openSource(): void {
         ft8State.busyCount = ft8State.occupied.length;
         ft8State.suggested = payload.suggested ?? [];
     });
+
+    src.addEventListener('ft8-decode', (ev: MessageEvent<string>) => {
+        let report: DecodeReport;
+        try {
+            report = JSON.parse(ev.data) as DecodeReport;
+        } catch (e) {
+            console.warn('[ft8] decode JSON parse failed', e);
+            return;
+        }
+        const lines = report.decodes ?? [];
+        if (lines.length === 0) return; // silent slot — nothing to add
+
+        const startUtc = report.slot?.start_utc ?? '';
+        // Frequency-ascending within the slot so the new block reads like a band.
+        const fresh: DecodeEntry[] = [...lines]
+            .sort((a, b) => a.freq_hz - b.freq_hz)
+            .map((d) => ({
+                id: decodeSeq++,
+                startUtc,
+                freqHz: d.freq_hz,
+                dtSec: d.dt_s,
+                text: d.text,
+            }));
+        // Newest slot on top, capped.
+        ft8State.decodes = [...fresh, ...ft8State.decodes].slice(0, DECODE_HISTORY_MAX);
+    });
 }
 
 function closeSource(): void {
@@ -115,6 +182,7 @@ function closeSource(): void {
     ft8State.busyCount = 0;
     ft8State.suggested = [];
     ft8State.occupied = [];
+    ft8State.decodes = [];
 }
 
 /** Open the occupancy stream. Called from Ft8Panel onMount. Idempotent. */

@@ -8,10 +8,14 @@ import (
 	"time"
 )
 
-// EventOccupancy is the SSE event-type name for a per-slot occupancy report.
-// Extending the ft8 event vocabulary is a wire-protocol change that requires
-// updating the SPA's EventSource consumer.
-const EventOccupancy = "ft8-occupancy"
+// SSE event-type names on the /v1/ft8/events stream. Extending this set is a
+// wire-protocol change that requires updating the SPA's EventSource consumer.
+const (
+	// EventOccupancy carries a per-slot OccupancyReport (TX-offset picker).
+	EventOccupancy = "ft8-occupancy"
+	// EventDecode carries a per-slot DecodeReport (live Band Activity feed).
+	EventDecode = "ft8-decode"
+)
 
 // sseKeepAliveInterval matches the /v1/events and rig-events handlers — 30 s of
 // idle keeps NAT/proxy paths warm without wasting bandwidth. Package-level var
@@ -25,11 +29,11 @@ var sseKeepAliveInterval = 30 * time.Second
 // handler's per-write deadline. Package-level var so tests can dial it down.
 var sseWriteTimeout = 10 * time.Second
 
-// Subscribe registers a new ft8-occupancy subscriber, returning a receive-only
-// channel and an idempotent unsubscribe. The latest cached report (if any) is
-// replayed as the first event.
-func (s *Service) Subscribe() (<-chan OccupancyReport, func()) {
-	return s.occHub.subscribe()
+// Subscribe registers a new ft8-events subscriber, returning a receive-only
+// channel and an idempotent unsubscribe. The latest cached events (if any) are
+// replayed as the first messages.
+func (s *Service) Subscribe() (<-chan hubEvent, func()) {
+	return s.hub.subscribe()
 }
 
 // HTTPHandler returns the http.Handler serving `GET /v1/ft8/events`: the live
@@ -92,7 +96,7 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 			case <-shutdownCh:
 				return
 
-			case rep, ok := <-ch:
+			case evt, ok := <-ch:
 				if !ok {
 					// Hub closed (Service.Stop) or subscriber evicted (slow
 					// reader). Stream ends cleanly; the SPA's EventSource
@@ -100,7 +104,7 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 					return
 				}
 				armWrite()
-				if err := s.writeOccupancyEvent(w, rep); err != nil {
+				if err := s.writeEvent(w, evt); err != nil {
 					return
 				}
 				flusher.Flush()
@@ -116,20 +120,20 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 	})
 }
 
-// writeOccupancyEvent emits one report as an SSE frame:
+// writeEvent emits one event as an SSE frame:
 //
-//	event: ft8-occupancy
+//	event: <name>
 //	data: <json>
 //	<blank line>
 //
 // A marshal failure (a programmer error for a known typed payload) is a
-// non-fatal skip logged at warn, so one bad report can't kill the stream.
-func (s *Service) writeOccupancyEvent(w io.Writer, rep OccupancyReport) error {
-	data, err := json.Marshal(rep)
+// non-fatal skip logged at warn, so one bad event can't kill the stream.
+func (s *Service) writeEvent(w io.Writer, evt hubEvent) error {
+	data, err := json.Marshal(evt.payload)
 	if err != nil {
-		s.log.WarnWith().Err(err).Msg("ft8 SSE payload marshal failed; skipping event")
+		s.log.WarnWith().Err(err).Str("event", evt.name).Msg("ft8 SSE payload marshal failed; skipping event")
 		return nil
 	}
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventOccupancy, data)
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.name, data)
 	return err
 }

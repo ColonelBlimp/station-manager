@@ -46,10 +46,10 @@ type Service struct {
 	log    logging.Logger
 	src    captureSource
 
-	// occHub fans each per-slot occupancy report out to ft8-occupancy SSE
-	// subscribers and caches the latest for late-subscriber replay. Owned by
-	// the Service; closed on Stop.
-	occHub *occHub
+	// hub fans each slot's decode + occupancy events out to /v1/ft8/events SSE
+	// subscribers and caches the latest of each for late-subscriber replay.
+	// Owned by the Service; closed on Stop.
+	hub *hub
 
 	mu      sync.Mutex
 	started bool
@@ -77,7 +77,7 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		occCfg:   resolveOccupancyConfig(occOverride),
 		log:      log,
 		src:      src,
-		occHub:   newOccHub(),
+		hub:      newHub(),
 		stopDone: make(chan struct{}),
 	}
 }
@@ -174,9 +174,9 @@ func (s *Service) Stop() error {
 			}
 		}
 		s.wg.Wait()
-		// Disconnect any ft8-occupancy SSE subscribers so they return
-		// promptly rather than waiting on the daemon's graceful timeout.
-		s.occHub.close()
+		// Disconnect any ft8 SSE subscribers so they return promptly rather
+		// than waiting on the daemon's graceful timeout.
+		s.hub.close()
 		s.log.InfoWith().Msg("ft8: subsystem stopped")
 	})
 	<-s.stopDone
@@ -199,23 +199,32 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	osd := s.osdEnabled()
 	for slot := range slots {
 		msgs := DecodeSlot(slot.Samples, osd, s.log)
-		rep := Occupancy(SlotRefFromTime(slot.StartUTC), slot.Samples, msgs, s.occCfg)
-		s.occHub.publish(rep)
+		ref := SlotRefFromTime(slot.StartUTC)
+
+		// Publish the decode feed (live Band Activity) and the occupancy report
+		// (TX-offset picker) for the same slot. Independent SSE events on one
+		// stream; order between them doesn't matter to the SPA.
+		s.hub.publish(hubEvent{name: EventDecode, payload: newDecodeReport(ref, msgs)})
+
+		rep := Occupancy(ref, slot.Samples, msgs, s.occCfg)
+		s.hub.publish(hubEvent{name: EventOccupancy, payload: rep})
+
 		s.log.DebugWith().
-			Str("slot", rep.Slot.StartUTC).
+			Str("slot", ref.StartUTC).
+			Int("decodes", len(msgs)).
 			Int("occupied", len(rep.Occupied)).
 			Int("suggested", len(rep.Suggested)).
-			Msg("ft8 occupancy computed")
+			Msg("ft8 slot processed")
 	}
 }
 
 // LatestOccupancy returns the most recent per-slot occupancy report, or nil if
 // no full slot has been processed yet. Safe for concurrent use.
 func (s *Service) LatestOccupancy() *OccupancyReport {
-	if s == nil || s.occHub == nil {
+	if s == nil || s.hub == nil {
 		return nil
 	}
-	return s.occHub.latest()
+	return s.hub.latestOccupancy()
 }
 
 // onPanic logs a panic that escaped one of the subsystem goroutines. safego

@@ -10,6 +10,32 @@ import (
 
 const opDecodeFile errors.Op = "ft8.DecodeFile"
 
+// DecodeReport is the per-slot set of decoded messages published to the SPA as
+// the ft8-decode SSE event — the live Band Activity feed. Distinct from the
+// occupancy report (TX-offset selection, ADR 0029): this is RX display data.
+type DecodeReport struct {
+	Slot    SlotRef      `json:"slot"`
+	Decodes []DecodeLine `json:"decodes"`
+}
+
+// DecodeLine is one decoded message in operator-facing form. go-ft8 reports no
+// dB SNR, so a line carries the base-tone frequency, the time offset, and the
+// message text — the fields the operator reads to pick a station to work.
+type DecodeLine struct {
+	Text   string  `json:"text"`
+	FreqHz float64 `json:"freq_hz"`
+	DTSec  float64 `json:"dt_s"`
+}
+
+// newDecodeReport projects go-ft8's decodes into the wire DTO for one slot.
+func newDecodeReport(slot SlotRef, msgs []goft8.DecodedMessage) DecodeReport {
+	lines := make([]DecodeLine, 0, len(msgs))
+	for _, m := range msgs {
+		lines = append(lines, DecodeLine{Text: m.Text, FreqHz: m.FreqHz, DTSec: m.DTSec})
+	}
+	return DecodeReport{Slot: slot, Decodes: lines}
+}
+
 // DecodeSlot decodes one 15-second FT8 slot from 12 kHz mono signed-16-bit
 // PCM samples, logs each decoded message as a structured line, and returns
 // the decodes. It uses go-ft8's checked, stateless API so a malformed slot

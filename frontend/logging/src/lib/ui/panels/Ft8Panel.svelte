@@ -62,15 +62,30 @@
     </div>
     <div class="flex flex-col text-center w-96">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
-        <div class="border border-gray-300 rounded h-full">
-        <p class="mt-1 text-sm">{slotLabel}</p>
-        <p class="mt-1 text-xs">Live decode view coming soon.</p>
+        <div class="flex h-full flex-col rounded border border-gray-300">
+            <p class="mt-1 text-sm">{slotLabel}</p>
+            {#if ft8State.decodes.length > 0}
+                <ul
+                    class="flex-1 space-y-0.5 overflow-y-auto px-2 py-1 text-left font-mono text-xs"
+                >
+                    {#each ft8State.decodes as d (d.id)}
+                        <li class="flex gap-2 whitespace-nowrap">
+                            <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span
+                            >
+                            <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span
+                            >
+                            <span class="truncate text-gray-700">{d.text}</span>
+                        </li>
+                    {/each}
+                </ul>
+            {:else}
+                <p class="mt-1 text-xs">Waiting for decodes…</p>
+            {/if}
         </div>
     </div>
     <div class="flex flex-col text-center w-96">
         <h2 class="text-base font-semibold my-2">TX Frequency</h2>
-        <div class="border border-gray-300 rounded h-full">
-        </div>
+        <div class="border border-gray-300 rounded h-full"></div>
     </div>
     <div class="flex flex-col text-center w-20">
         <h2 class="text-sm font-semibold my-2">Clear Slots</h2>

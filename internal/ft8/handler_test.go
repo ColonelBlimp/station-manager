@@ -30,12 +30,12 @@ func waitForOccSubscribers(t *testing.T, s *Service, n int, timeout time.Duratio
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if s.occHub.subscriberCount() >= n {
+		if s.hub.subscriberCount() >= n {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("hub did not reach %d subscribers within %s (have %d)", n, timeout, s.occHub.subscriberCount())
+	t.Fatalf("hub did not reach %d subscribers within %s (have %d)", n, timeout, s.hub.subscriberCount())
 }
 
 func TestHTTPHandler_ServesSSEHeaders(t *testing.T) {
@@ -83,12 +83,12 @@ func TestHTTPHandler_StreamsOccupancy(t *testing.T) {
 	defer resp.Body.Close()
 
 	waitForOccSubscribers(t, s, 1, time.Second)
-	s.occHub.publish(OccupancyReport{
+	s.hub.publish(hubEvent{name: EventOccupancy, payload: OccupancyReport{
 		Slot:          SlotRef{StartUTC: "2026-06-07T14:30:15Z", Period: "odd"},
 		Passband:      Band{LowHz: 200, HighHz: 3000},
 		SignalWidthHz: 50,
 		Suggested:     []int{2200, 760},
-	})
+	}})
 
 	scanner := bufio.NewScanner(resp.Body)
 	var sawEvent, sawData bool
@@ -118,12 +118,55 @@ func TestHTTPHandler_StreamsOccupancy(t *testing.T) {
 	t.Fatal("did not receive a complete ft8-occupancy SSE frame")
 }
 
+// TestHTTPHandler_StreamsDecode confirms the ft8-decode event reaches a client
+// in proper SSE wire format with the expected decode payload.
+func TestHTTPHandler_StreamsDecode(t *testing.T) {
+	s, shutdownCh := newHandlerTestService(t)
+	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	waitForOccSubscribers(t, s, 1, time.Second)
+	s.hub.publish(hubEvent{name: EventDecode, payload: DecodeReport{
+		Slot:    SlotRef{StartUTC: "2026-06-07T14:30:15Z", Period: "odd"},
+		Decodes: []DecodeLine{{Text: "CQ DX S56GD JN65", FreqHz: 1500, DTSec: 0.2}},
+	}})
+
+	scanner := bufio.NewScanner(resp.Body)
+	var sawEvent, sawData bool
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "+EventDecode):
+			sawEvent = true
+		case strings.HasPrefix(line, "data: "):
+			sawData = true
+			if !strings.Contains(line, `"CQ DX S56GD JN65"`) || !strings.Contains(line, `"freq_hz":1500`) {
+				t.Errorf("decode payload missing expected fields: %q", line)
+			}
+		case line == "":
+			if sawEvent && sawData {
+				return
+			}
+		}
+	}
+	t.Fatal("did not receive a complete ft8-decode SSE frame")
+}
+
 // TestHTTPHandler_ReplaysLatestToLateSubscriber confirms a tab connecting after
 // a slot was processed gets the cached report immediately (the one-slot replay
 // cache), not a 15 s wait.
 func TestHTTPHandler_ReplaysLatestToLateSubscriber(t *testing.T) {
 	s, shutdownCh := newHandlerTestService(t)
-	s.occHub.publish(OccupancyReport{SignalWidthHz: 50, Suggested: []int{1234}})
+	s.hub.publish(hubEvent{name: EventOccupancy, payload: OccupancyReport{SignalWidthHz: 50, Suggested: []int{1234}}})
 
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)

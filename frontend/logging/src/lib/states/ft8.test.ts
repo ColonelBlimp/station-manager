@@ -129,6 +129,7 @@ describe('ft8 occupancy transport', () => {
     it('stopFt8 closes the source and resets state', () => {
         startFt8();
         latest().emit('ft8-occupancy', sampleReport);
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:15Z', ['CQ K1ABC FN42']));
         const src = latest();
 
         stopFt8();
@@ -137,6 +138,74 @@ describe('ft8 occupancy transport', () => {
         expect(ft8State.slot).toBeNull();
         expect(ft8State.busyCount).toBe(0);
         expect(ft8State.suggested).toEqual([]);
+        expect(ft8State.decodes).toEqual([]);
         expect(ft8State.connected).toBe(false);
+    });
+});
+
+/** Build a DecodeReport JSON string with the given texts (all at distinct freqs). */
+function decodeReport(startUtc: string, texts: string[]): string {
+    return JSON.stringify({
+        slot: { start_utc: startUtc, period: 'odd' },
+        decodes: texts.map((text, i) => ({ text, freq_hz: 1000 + i * 100, dt_s: 0.2 })),
+    });
+}
+
+describe('ft8 decode feed', () => {
+    it('accumulates decodes newest-slot-first', () => {
+        startFt8();
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', ['CQ A', 'CQ B']));
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:15Z', ['CQ C']));
+
+        // Newest slot (14:30:15) on top, then the prior slot's block.
+        expect(ft8State.decodes.map((d) => d.text)).toEqual(['CQ C', 'CQ A', 'CQ B']);
+        expect(ft8State.decodes[0].startUtc).toBe('2026-06-07T14:30:15Z');
+    });
+
+    it('sorts decodes within a slot by ascending frequency', () => {
+        startFt8();
+        latest().emit(
+            'ft8-decode',
+            JSON.stringify({
+                slot: { start_utc: '2026-06-07T14:30:15Z', period: 'odd' },
+                decodes: [
+                    { text: 'HIGH', freq_hz: 2400, dt_s: 0.1 },
+                    { text: 'LOW', freq_hz: 600, dt_s: 0.1 },
+                ],
+            })
+        );
+        expect(ft8State.decodes.map((d) => d.text)).toEqual(['LOW', 'HIGH']);
+    });
+
+    it('assigns unique ids and skips empty/null slots', () => {
+        startFt8();
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', ['CQ A']));
+        latest().emit(
+            'ft8-decode',
+            JSON.stringify({ slot: { start_utc: 'x', period: 'odd' }, decodes: [] })
+        );
+        latest().emit(
+            'ft8-decode',
+            JSON.stringify({ slot: { start_utc: 'y', period: 'odd' }, decodes: null })
+        );
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:15Z', ['CQ B']));
+
+        expect(ft8State.decodes).toHaveLength(2);
+        const ids = ft8State.decodes.map((d) => d.id);
+        expect(new Set(ids).size).toBe(2);
+    });
+
+    it('caps the rolling history', () => {
+        startFt8();
+        for (let s = 0; s < 60; s++) {
+            latest().emit('ft8-decode', decodeReport(`2026-06-07T14:${s}:00Z`, ['A', 'B', 'C']));
+        }
+        expect(ft8State.decodes.length).toBeLessThanOrEqual(100);
+    });
+
+    it('ignores malformed decode JSON', () => {
+        startFt8();
+        latest().emit('ft8-decode', '{bad');
+        expect(ft8State.decodes).toEqual([]);
     });
 });
