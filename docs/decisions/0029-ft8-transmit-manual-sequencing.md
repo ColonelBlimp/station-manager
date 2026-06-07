@@ -67,9 +67,11 @@ type OccupancyReport struct {
 ```
 
 The two occupancy tiers collapse into the single `Occupied` list:
-`source:"decode"` is ±25 Hz around each decode's `FreqHz`; `source:"energy"` is
-a contiguous run of per-slot FFT bins over the daemon's floor threshold; `"both"`
-where they overlap. The daemon does all thresholding and merging — the SPA
+`source:"decode"` is `[FreqHz, FreqHz+SignalWidthHz]` — go-ft8's `FreqHz` is the
+base-tone (sync) frequency per WSJT-X convention, and an FT8 signal's 8-FSK tones
+extend ~50 Hz *upward* from it, so the occupied span runs up from the reported
+frequency, not symmetrically around it; `source:"energy"` is a contiguous run of
+per-slot FFT bins over the daemon's floor threshold; `"both"` where they overlap. The daemon does all thresholding and merging — the SPA
 receives intent (~3–15 bands/slot), not raw spectrum. The SPA inverts `Occupied`
 against `Passband` to paint the clear/busy strip and to find selectable gaps
 (any gap ≥ `SignalWidthHz`); the operator clicks anywhere in a gap and that
