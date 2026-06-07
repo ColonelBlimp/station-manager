@@ -87,8 +87,8 @@ tasks:
     desc: |
       Like rpm:dev but builds the PocketFFT (CGO) backend by setting
       SM_FFT=pocketfft. Dynamically linked, ~2x faster decode, needs gcc.
-      For the one-command dogfood deploy with PocketFFT:
-        SM_FFT=pocketfft task deploy:local:dev
+      Standalone RPM only (no install/restart) — the one-command dogfood
+      deploy `task deploy:local:dev` already defaults to this backend.
     cmds:
       - SM_FFT=pocketfft scripts/dev-rpm.sh
 
@@ -101,8 +101,10 @@ tasks:
       starts smd back up. Final step checks systemctl is-active and
       points you at journalctl on failure. Sudo prompts for the
       package install only — systemctl commands run as your user.
-      Prefix with SM_FFT=pocketfft to dogfood the CGO PocketFFT build
-      (the env var passes through to scripts/dev-rpm.sh).
+      Defaults to the PocketFFT (CGO) backend so live FT8 capture + decode
+      work out of the box (the pure-Go static build leaves FT8 idle —
+      capture needs CGO). For the static CGO-free build instead, override
+      with: SM_FFT=gonum task deploy:local:dev.
     cmds:
       - bash scripts/deploy-local-dev.sh
 

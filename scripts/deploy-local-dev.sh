@@ -29,6 +29,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Default the dogfood deploy to the PocketFFT (CGO) backend so live FT8 capture
+# + decode work out of the box — the pure-Go static default leaves the FT8
+# subsystem idle ("capture unavailable") because audio capture needs CGO.
+# Exported so the child `bash scripts/dev-rpm.sh` (run below) inherits it.
+# Override for the static CGO-free build with a non-"pocketfft" value, e.g.
+#   SM_FFT=gonum task deploy:local:dev
+# `task rpm:dev` calls dev-rpm.sh directly (not via this script) and is
+# unaffected — it stays CGO-free by default.
+export SM_FFT="${SM_FFT:-pocketfft}"
+
 if [ -t 1 ]; then
     BOLD=$'\033[1m'
     DIM=$'\033[2m'
