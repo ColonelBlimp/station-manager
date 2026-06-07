@@ -50,6 +50,53 @@ logged through the normal `qsoservice` submit path when the exchange completes.
 unattended to completion) is explicitly **deferred to a later ADR** that builds
 on this machinery.
 
+### Clear-offset picker — data contract
+
+Build step (a) (the per-slot occupancy detector) emits, once per completed RX
+slot, an `OccupancyReport`: **decision data for TX-offset selection, not a
+spectrogram for display.**
+
+```go
+type OccupancyReport struct {
+    Slot          SlotRef // which UTC slot this covers (start_utc + even/odd)
+    Passband      Band    // {200, 3000} Hz — the span the picker shows
+    SignalWidthHz int     // 50 — clear room a TX needs
+    Occupied      []Band  // merged busy ranges, ascending; Source decode|energy|both, optional Level 0..1
+    Suggested     []int   // ranked clear base offsets (Hz), best first
+}
+```
+
+The two occupancy tiers collapse into the single `Occupied` list:
+`source:"decode"` is ±25 Hz around each decode's `FreqHz`; `source:"energy"` is
+a contiguous run of per-slot FFT bins over the daemon's floor threshold; `"both"`
+where they overlap. The daemon does all thresholding and merging — the SPA
+receives intent (~3–15 bands/slot), not raw spectrum. The SPA inverts `Occupied`
+against `Passband` to paint the clear/busy strip and to find selectable gaps
+(any gap ≥ `SignalWidthHz`); the operator clicks anywhere in a gap and that
+integer becomes the TX base offset, with no daemon round-trip to validate the
+pick.
+
+**Ranking is daemon-side.** `Suggested` is a daemon-ranked, best-first list of
+clear offsets for one-click slot selection; the SPA treats it as opaque and
+never re-ranks, so "what counts as a *good* clear slot" lives in one tunable,
+unit-testable place. The heuristic (config-tunable under `ft8.tx.offset_ranking.*`,
+code constants only as fallback defaults) weighs: **clear-margin width** (more
+isolation ranks higher), **distance from band edges** (deprioritize near 200/3000 Hz
+where filter roll-off and splatter bite), and **centered-in-gap** (prefer the
+middle of a wide clear region so a late neighbour doesn't clip the signal).
+Conventional FT8 sub-band taste is out of scope for v1 — that's operator
+preference, not a clear/busy fact.
+
+The report carries **no human strings** (consistent with the ADR 0010
+`{code, details}` discipline), **no currently-selected offset** (the report is
+pure RX observation; the operator's chosen TX offset is separate SPA/operator
+state that later feeds the modulator), and **no raw bin strip** in the first cut
+(an optional downsampled `Bins []uint8` is a non-breaking later add if an
+at-a-glance visual texture is wanted — still not a scrolling waterfall). It rides
+the FT8 SSE stream as `ft8-occupancy` with a one-slot hub cache (the ADR 0009
+replay pattern) so a SPA connecting mid-slot gets the last report immediately
+rather than waiting up to 15 s.
+
 ## Alternatives considered
 
 ### Auto-sequence from the start
