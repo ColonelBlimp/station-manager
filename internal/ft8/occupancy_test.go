@@ -9,6 +9,7 @@ import (
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // toneSlot synthesises a full FT8 slot of 12 kHz int16 audio: a sum of sine
@@ -320,5 +321,63 @@ func TestSlotRefFromTime_EvenOdd(t *testing.T) {
 		if got.StartUTC != ts.Format(time.RFC3339) {
 			t.Fatalf("StartUTC = %q, want %q", got.StartUTC, ts.Format(time.RFC3339))
 		}
+	}
+}
+
+func TestResolveOccupancyConfig(t *testing.T) {
+	def := DefaultOccupancyConfig()
+
+	// nil → defaults unchanged.
+	if got := resolveOccupancyConfig(nil); got != def {
+		t.Fatalf("nil override = %+v, want defaults %+v", got, def)
+	}
+
+	// Sparse override: only set fields win; zeros fall back to default.
+	got := resolveOccupancyConfig(&types.Ft8OccupancyConfig{
+		PassbandLowHz: 300,
+		WeightEdge:    0.9,
+	})
+	if got.PassbandLowHz != 300 {
+		t.Errorf("PassbandLowHz = %d, want override 300", got.PassbandLowHz)
+	}
+	if got.WeightEdge != 0.9 {
+		t.Errorf("WeightEdge = %v, want override 0.9", got.WeightEdge)
+	}
+	if got.PassbandHighHz != def.PassbandHighHz {
+		t.Errorf("PassbandHighHz = %d, want default %d", got.PassbandHighHz, def.PassbandHighHz)
+	}
+	if got.ThresholdFactor != def.ThresholdFactor {
+		t.Errorf("ThresholdFactor = %v, want default %v", got.ThresholdFactor, def.ThresholdFactor)
+	}
+	if got.WeightMargin != def.WeightMargin {
+		t.Errorf("WeightMargin = %v, want default %v", got.WeightMargin, def.WeightMargin)
+	}
+}
+
+// TestDecodeLoop_PublishesOccupancy proves the decode→occupancy glue: a slot
+// fed through decodeLoop populates LatestOccupancy. A short (wrong-length) slot
+// makes DecodeSlot reject fast (no heavy decode), so this stays a quick glue
+// test — the detector math itself is covered above and against a real slot.
+func TestDecodeLoop_PublishesOccupancy(t *testing.T) {
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+
+	if s.LatestOccupancy() != nil {
+		t.Fatal("expected nil occupancy before any slot")
+	}
+
+	ch := make(chan Slot, 1)
+	ch <- Slot{StartUTC: time.Date(2026, 6, 7, 14, 30, 0, 0, time.UTC), Samples: make([]int16, 1000)}
+	close(ch)
+	s.decodeLoop(ch)
+
+	rep := s.LatestOccupancy()
+	if rep == nil {
+		t.Fatal("decodeLoop did not publish an occupancy report")
+	}
+	if rep.Slot.Period != "even" {
+		t.Errorf("slot period = %q, want even", rep.Slot.Period)
+	}
+	if rep.Passband.LowHz != s.occCfg.PassbandLowHz {
+		t.Errorf("report passband low = %d, want resolved %d", rep.Passband.LowHz, s.occCfg.PassbandLowHz)
 	}
 }

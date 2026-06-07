@@ -34,4 +34,44 @@ type Ft8Config struct {
 	Enabled   bool   `json:"enabled"`
 	Device    string `json:"device,omitempty"`
 	EnableOSD *bool  `json:"enable_osd,omitempty"`
+
+	// TX groups the FT8 transmit-related tunables (ADR 0029). Pointer-typed
+	// so an operator who sets nothing leaves no inert block behind in a
+	// rewritten config (same discipline as Device/EnableOSD).
+	TX *Ft8TXConfig `json:"tx,omitempty"`
+}
+
+// Ft8TXConfig holds the FT8 transmit configuration (ADR 0029). Minimal today —
+// only the occupancy detector that feeds TX-offset selection is built; it grows
+// (modulator, PTT, sequencing) as those layers land.
+type Ft8TXConfig struct {
+	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
+	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
+	Occupancy *Ft8OccupancyConfig `json:"occupancy,omitempty"`
+}
+
+// Ft8OccupancyConfig tunes the per-slot occupancy detector and the clear-offset
+// ranking that feeds TX-frequency selection (ADR 0029). Every field is
+// zero-means-use-the-built-in-default (resolved against ft8.DefaultOccupancyConfig);
+// omitempty keeps unset knobs out of a rewritten config.
+//
+// Caveat of the zero-means-default rule: a ranking weight cannot be set to
+// exactly 0 to disable its term — a zero reads as "unset" and falls back to the
+// default. Use a small value (e.g. 0.001) to effectively disable a term.
+type Ft8OccupancyConfig struct {
+	// PassbandLowHz, PassbandHighHz bound the audio range the picker spans.
+	PassbandLowHz  int `json:"passband_low_hz,omitempty"`
+	PassbandHighHz int `json:"passband_high_hz,omitempty"`
+
+	// ThresholdFactor multiplies the per-slot noise-floor estimate (median
+	// passband power) to set the occupied/clear cutoff. Higher marks fewer,
+	// stronger bands busy.
+	ThresholdFactor float64 `json:"threshold_factor,omitempty"`
+
+	// Ranking weights for the suggested clear offsets (best-first). Each term
+	// scores a candidate 0..1; the weighted sum orders them. Only relative
+	// sizes matter.
+	WeightMargin   float64 `json:"weight_margin,omitempty"`   // reward wider clear room in the offset's gap
+	WeightEdge     float64 `json:"weight_edge,omitempty"`     // reward distance from passband edges
+	WeightCentered float64 `json:"weight_centered,omitempty"` // reward sitting centered in the gap
 }

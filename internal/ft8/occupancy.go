@@ -7,6 +7,7 @@ import (
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/audio"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // Per-slot occupancy detection for FT8 TX-offset selection (ADR 0029, build
@@ -86,35 +87,11 @@ type OccupancyReport struct {
 	Suggested     []int   `json:"suggested"`
 }
 
-// OccupancyConfig tunes the detector. The zero value is not usable; build one
-// with DefaultOccupancyConfig and override fields. The ranking weights are the
-// operator-tunable knobs (ADR 0029: ft8.tx.offset_ranking.*); the detection
-// references they feed are derived from signalWidthHz and the passband, not
-// separately configured.
-type OccupancyConfig struct {
-	// PassbandLowHz, PassbandHighHz bound the audio range the picker spans.
-	PassbandLowHz  int
-	PassbandHighHz int
-
-	// ThresholdFactor multiplies the per-slot noise-floor estimate (median
-	// passband power) to set the occupied/clear cutoff: bins whose averaged
-	// power exceeds floor*ThresholdFactor are energy-occupied. Higher marks
-	// fewer, stronger bands busy.
-	ThresholdFactor float64
-
-	// Ranking weights for Suggested (best-first). Each term scores a candidate
-	// offset in 0..1; the weighted sum orders them. Only the relative sizes
-	// matter — they need not sum to 1.
-	WeightMargin   float64 // reward wider total clear room in the offset's gap
-	WeightEdge     float64 // reward distance from the passband edges (filter roll-off / splatter)
-	WeightCentered float64 // reward sitting centered in the clear gap
-}
-
-// DefaultOccupancyConfig returns the fallback tuning. These are code defaults;
-// the daemon overlays operator config when the detector is wired into the
-// pipeline.
-func DefaultOccupancyConfig() OccupancyConfig {
-	return OccupancyConfig{
+// DefaultOccupancyConfig returns the fallback tuning (config path
+// ft8.tx.occupancy.*). These are code defaults; resolveOccupancyConfig overlays
+// any operator overrides onto them at Service construction.
+func DefaultOccupancyConfig() types.Ft8OccupancyConfig {
+	return types.Ft8OccupancyConfig{
 		PassbandLowHz:   200,
 		PassbandHighHz:  3000,
 		ThresholdFactor: 4.0, // ~6 dB over the median floor
@@ -124,9 +101,40 @@ func DefaultOccupancyConfig() OccupancyConfig {
 	}
 }
 
+// resolveOccupancyConfig overlays an operator's sparse overrides onto the
+// built-in defaults: every zero field falls back to its default. A nil override
+// yields the defaults unchanged.
+func resolveOccupancyConfig(c *types.Ft8OccupancyConfig) types.Ft8OccupancyConfig {
+	d := DefaultOccupancyConfig()
+	if c == nil {
+		return d
+	}
+	if c.PassbandLowHz != 0 {
+		d.PassbandLowHz = c.PassbandLowHz
+	}
+	if c.PassbandHighHz != 0 {
+		d.PassbandHighHz = c.PassbandHighHz
+	}
+	if c.ThresholdFactor != 0 {
+		d.ThresholdFactor = c.ThresholdFactor
+	}
+	if c.WeightMargin != 0 {
+		d.WeightMargin = c.WeightMargin
+	}
+	if c.WeightEdge != 0 {
+		d.WeightEdge = c.WeightEdge
+	}
+	if c.WeightCentered != 0 {
+		d.WeightCentered = c.WeightCentered
+	}
+	return d
+}
+
 // Occupancy computes the per-slot occupancy report from a slot's raw samples
 // and the decodes go-ft8 produced for the same slot. Pure and deterministic.
-func Occupancy(slot SlotRef, samples []int16, decodes []goft8.DecodedMessage, cfg OccupancyConfig) OccupancyReport {
+// cfg should be a resolved config (see resolveOccupancyConfig) — all fields
+// meaningful, not the operator's sparse overrides.
+func Occupancy(slot SlotRef, samples []int16, decodes []goft8.DecodedMessage, cfg types.Ft8OccupancyConfig) OccupancyReport {
 	power := averagePowerSpectrum(samples, occupancyFFTSize)
 	bands := detectEnergyBands(power, cfg)
 	bands = append(bands, decodeBands(decodes, cfg)...)
@@ -205,7 +213,7 @@ func hann(n int) []float32 {
 // (the median passband bin) and returns contiguous over-threshold runs as
 // energy-source bands, each carrying its peak level normalised against the
 // loudest passband bin.
-func detectEnergyBands(power []float64, cfg OccupancyConfig) []Band {
+func detectEnergyBands(power []float64, cfg types.Ft8OccupancyConfig) []Band {
 	binHz := float64(goft8.SampleRate) / float64(occupancyFFTSize)
 	binLo := int(math.Round(float64(cfg.PassbandLowHz) / binHz))
 	binHi := int(math.Round(float64(cfg.PassbandHighHz) / binHz))
@@ -261,7 +269,7 @@ func detectEnergyBands(power []float64, cfg OccupancyConfig) []Band {
 // decodeBands marks the [FreqHz, FreqHz+signalWidthHz] span each decode
 // occupies (go-ft8 reports the base/sync tone; the signal extends upward),
 // clamped to the passband. Decodes wholly outside the passband are dropped.
-func decodeBands(decodes []goft8.DecodedMessage, cfg OccupancyConfig) []Band {
+func decodeBands(decodes []goft8.DecodedMessage, cfg types.Ft8OccupancyConfig) []Band {
 	var bands []Band
 	for _, m := range decodes {
 		base := int(math.Round(m.FreqHz))
@@ -326,7 +334,7 @@ func combineSource(a, b string) string {
 // gaps wide enough for a signal, and scores candidate base offsets (stepped one
 // signal-width apart through each gap) by the configured weights. Returns the
 // best-first offsets, capped at maxSuggested.
-func suggestOffsets(occupied []Band, cfg OccupancyConfig) []int {
+func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 	lo, hi := cfg.PassbandLowHz, cfg.PassbandHighHz
 
 	// Clear gaps = passband minus the (sorted, merged) occupied bands.

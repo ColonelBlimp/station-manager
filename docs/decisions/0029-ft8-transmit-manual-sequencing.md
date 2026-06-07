@@ -81,7 +81,7 @@ pick.
 **Ranking is daemon-side.** `Suggested` is a daemon-ranked, best-first list of
 clear offsets for one-click slot selection; the SPA treats it as opaque and
 never re-ranks, so "what counts as a *good* clear slot" lives in one tunable,
-unit-testable place. The heuristic (config-tunable under `ft8.tx.offset_ranking.*`,
+unit-testable place. The heuristic (config-tunable under `ft8.tx.occupancy.*`,
 code constants only as fallback defaults) weighs: **clear-margin width** (more
 isolation ranks higher), **distance from band edges** (deprioritize near 200/3000 Hz
 where filter roll-off and splatter bite), and **centered-in-gap** (prefer the

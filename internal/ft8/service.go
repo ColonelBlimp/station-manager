@@ -3,6 +3,7 @@ package ft8
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -41,9 +42,15 @@ type captureSource interface {
 // once and snapshotted at construction — operator restart picks up edits,
 // matching internal/bridge.
 type Service struct {
-	cfg types.Ft8Config
-	log logging.Logger
-	src captureSource
+	cfg    types.Ft8Config
+	occCfg types.Ft8OccupancyConfig // resolved occupancy/offset-ranking tuning
+	log    logging.Logger
+	src    captureSource
+
+	// latestOcc holds the most recent per-slot occupancy report for the
+	// clear-offset picker. Lock-free single-writer (decodeLoop) / many-reader
+	// (the SSE layer); nil until the first full slot is processed.
+	latestOcc atomic.Pointer[OccupancyReport]
 
 	mu      sync.Mutex
 	started bool
@@ -62,8 +69,13 @@ type Service struct {
 // exported daemon constructor (which builds the build-tag-selected real
 // source) lands with the capture step; tests inject a fake source here.
 func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Service {
+	var occOverride *types.Ft8OccupancyConfig
+	if cfg.TX != nil {
+		occOverride = cfg.TX.Occupancy
+	}
 	return &Service{
 		cfg:      cfg,
+		occCfg:   resolveOccupancyConfig(occOverride),
 		log:      log,
 		src:      src,
 		stopDone: make(chan struct{}),
@@ -173,14 +185,35 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.cfg.Enabled
 }
 
-// decodeLoop consumes completed slots and decodes each. DecodeSlot is itself
+// decodeLoop consumes completed slots and decodes each, then computes the
+// per-slot occupancy report (the clear-offset picker's input) from the same
+// samples + decodes and publishes it as the latest. DecodeSlot is itself
 // fail-soft (it recovers per-slot panics), so a bad slot can't break the
-// loop; the safego wrapper around this loop is belt-and-braces.
+// loop; the safego wrapper around this loop is belt-and-braces. Occupancy is
+// cheap (one averaged FFT per slot, ~tens of ms) next to the decode, so it
+// adds negligible time to the slot budget.
 func (s *Service) decodeLoop(slots <-chan Slot) {
 	osd := s.osdEnabled()
 	for slot := range slots {
-		DecodeSlot(slot.Samples, osd, s.log)
+		msgs := DecodeSlot(slot.Samples, osd, s.log)
+		rep := Occupancy(SlotRefFromTime(slot.StartUTC), slot.Samples, msgs, s.occCfg)
+		s.latestOcc.Store(&rep)
+		s.log.DebugWith().
+			Str("slot", rep.Slot.StartUTC).
+			Int("occupied", len(rep.Occupied)).
+			Int("suggested", len(rep.Suggested)).
+			Msg("ft8 occupancy computed")
 	}
+}
+
+// LatestOccupancy returns the most recent per-slot occupancy report, or nil if
+// no full slot has been processed yet. Safe for concurrent use — the SSE layer
+// (the ft8-occupancy event and its replay cache) reads it here.
+func (s *Service) LatestOccupancy() *OccupancyReport {
+	if s == nil {
+		return nil
+	}
+	return s.latestOcc.Load()
 }
 
 // onPanic logs a panic that escaped one of the subsystem goroutines. safego
