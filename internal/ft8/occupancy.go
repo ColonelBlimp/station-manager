@@ -51,6 +51,21 @@ const (
 	// small. The SPA can still compute its own gaps from Occupied if it wants
 	// more.
 	maxSuggested = 8
+
+	// minEnergyBandHz gates ENERGY-only detection: an undecoded over-threshold
+	// run narrower than this is treated as a noise/leakage spike, not an
+	// occupant, and dropped. A real FT8 signal is signalWidthHz (~50 Hz) wide,
+	// so a quarter of that sits comfortably below any real signal yet above the
+	// single-bin spikes seen on live audio (e.g. a stray 3 Hz energy 0.08 mark).
+	// Decode-derived bands are never gated — a CRC-verified decode is a real
+	// signal regardless of how wide its averaged energy reads.
+	minEnergyBandHz = signalWidthHz / 4 // 12 Hz ≈ 4 bins at the 3.125 Hz resolution
+
+	// defaultGuardMarginHz is the default clearance a suggested offset keeps
+	// from adjacent occupied bands (config: ft8.tx.occupancy.guard_margin_hz,
+	// 0 = off). ~10 Hz ≈ a fifth of a signal width — enough to avoid sitting
+	// flush against a neighbour without eating much of a clear gap.
+	defaultGuardMarginHz = 10
 )
 
 // occupancy source labels for Band.Source.
@@ -91,6 +106,7 @@ type OccupancyReport struct {
 // ft8.tx.occupancy.*). These are code defaults; resolveOccupancyConfig overlays
 // any operator overrides onto them at Service construction.
 func DefaultOccupancyConfig() types.Ft8OccupancyConfig {
+	guard := defaultGuardMarginHz
 	return types.Ft8OccupancyConfig{
 		PassbandLowHz:   200,
 		PassbandHighHz:  3000,
@@ -98,6 +114,7 @@ func DefaultOccupancyConfig() types.Ft8OccupancyConfig {
 		WeightMargin:    0.5,
 		WeightEdge:      0.2,
 		WeightCentered:  0.3,
+		GuardMarginHz:   &guard,
 	}
 }
 
@@ -126,6 +143,9 @@ func resolveOccupancyConfig(c *types.Ft8OccupancyConfig) types.Ft8OccupancyConfi
 	}
 	if c.WeightCentered != 0 {
 		d.WeightCentered = c.WeightCentered
+	}
+	if c.GuardMarginHz != nil { // pointer: an explicit 0 (guard off) overrides the default
+		d.GuardMarginHz = c.GuardMarginHz
 	}
 	return d
 }
@@ -237,6 +257,11 @@ func detectEnergyBands(power []float64, cfg types.Ft8OccupancyConfig) []Band {
 		}
 	}
 
+	minEnergyBins := int(math.Round(minEnergyBandHz / binHz))
+	if minEnergyBins < 1 {
+		minEnergyBins = 1
+	}
+
 	var bands []Band
 	for k := binLo; k <= binHi; {
 		if power[k] <= threshold {
@@ -252,6 +277,9 @@ func detectEnergyBands(power []float64, cfg types.Ft8OccupancyConfig) []Band {
 			k++
 		}
 		end := k - 1 // last over-threshold bin
+		if end-start+1 < minEnergyBins {
+			continue // run too narrow to be a signal — noise/leakage spike, not an occupant
+		}
 		var level float32
 		if maxPow > 0 {
 			level = float32(peak / maxPow)
@@ -362,6 +390,17 @@ func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 		edgeRef = 1
 	}
 
+	// Hard guard margin: a suggested signal must keep this much clearance from
+	// the occupied bands bounding its gap, so a recommendation never sits flush
+	// against a neighbour. nil → default; explicit 0 → off (flush allowed).
+	guard := defaultGuardMarginHz
+	if cfg.GuardMarginHz != nil {
+		guard = *cfg.GuardMarginHz
+	}
+	if guard < 0 {
+		guard = 0
+	}
+
 	type scored struct {
 		off   int
 		score float64
@@ -369,13 +408,13 @@ func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 	var cands []scored
 	for _, g := range gaps {
 		w := g.hi - g.lo
-		if w < signalWidthHz {
+		if w < signalWidthHz+2*guard { // can't fit the signal plus a guard band each side
 			continue
 		}
 		gapCenter := float64(g.lo+g.hi) / 2.0
 		gapHalf := float64(w) / 2.0
 		marginScore := clamp01(float64(w) / marginRef)
-		for off := g.lo; off <= g.hi-signalWidthHz; off += signalWidthHz {
+		for off := g.lo + guard; off <= g.hi-guard-signalWidthHz; off += signalWidthHz {
 			sigCenter := float64(off) + float64(signalWidthHz)/2.0
 			centeredScore := clamp01(1 - math.Abs(sigCenter-gapCenter)/gapHalf)
 			edgeScore := clamp01(math.Min(sigCenter-float64(lo), float64(hi)-sigCenter) / edgeRef)

@@ -32,6 +32,19 @@ func toneSlot(amp float64, noiseAmp float64, seed int64, freqs ...float64) []int
 	return out
 }
 
+// signalSlot synthesises a slot containing one FT8-width (~signalWidthHz)
+// energy occupant whose base tone is at `base` — eight tones at 6.25 Hz spacing,
+// the footprint of a real FT8 signal — so it reads as a signal to the detector
+// rather than a single-bin spike the min-width gate would drop. Use this (not a
+// pure tone) wherever a test needs a genuine energy occupant.
+func signalSlot(amp, noiseAmp float64, seed int64, base float64) []int16 {
+	freqs := make([]float64, 8)
+	for i := range freqs {
+		freqs[i] = base + float64(i)*6.25
+	}
+	return toneSlot(amp, noiseAmp, seed, freqs...)
+}
+
 // bandContains reports whether hz lies within [b.LowHz, b.HighHz].
 func bandContains(b Band, hz int) bool { return hz >= b.LowHz && hz <= b.HighHz }
 
@@ -64,7 +77,7 @@ func TestOccupancy_SilentSlot_NoBands(t *testing.T) {
 func TestOccupancy_SingleTone_MarksBandAndAvoidsIt(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
 	const tone = 1500
-	rep := Occupancy(SlotRef{}, toneSlot(8000, 200, 1, tone), nil, cfg)
+	rep := Occupancy(SlotRef{}, signalSlot(8000, 200, 1, tone), nil, cfg)
 
 	var hit *Band
 	for i := range rep.Occupied {
@@ -93,6 +106,21 @@ func TestOccupancy_SingleTone_MarksBandAndAvoidsIt(t *testing.T) {
 	}
 }
 
+// TestOccupancy_NarrowEnergyGated confirms the min-width gate: a pure tone is
+// only ~1-3 bins wide — narrower than a real ~50 Hz FT8 signal — so it must NOT
+// produce an energy band. (Deliberate trade-off: a very narrow strong carrier
+// is also dropped from energy detection; decode-tier still catches anything
+// that decodes, and live single-bin noise spikes no longer leak in.)
+func TestOccupancy_NarrowEnergyGated(t *testing.T) {
+	cfg := DefaultOccupancyConfig()
+	rep := Occupancy(SlotRef{}, toneSlot(8000, 200, 3, 1500), nil, cfg)
+	for _, b := range rep.Occupied {
+		if b.Source == sourceEnergy {
+			t.Fatalf("narrow pure tone should be gated out of energy detection, got %+v", b)
+		}
+	}
+}
+
 func TestOccupancy_DecodeOnly_MarksUpwardSpan(t *testing.T) {
 	cfg := DefaultOccupancyConfig()
 	// Silent audio, one decode at 1000.4 Hz → base 1000, occupies [1000,1050].
@@ -116,7 +144,7 @@ func TestOccupancy_EnergyAndDecodeOverlap_SourceBoth(t *testing.T) {
 	const tone = 1500
 	// Decode base 1480 → [1480,1530], overlapping the tone's energy band.
 	decodes := []goft8.DecodedMessage{{FreqHz: 1480}}
-	rep := Occupancy(SlotRef{}, toneSlot(8000, 200, 2, tone), decodes, cfg)
+	rep := Occupancy(SlotRef{}, signalSlot(8000, 200, 2, tone), decodes, cfg)
 
 	var hit *Band
 	for i := range rep.Occupied {
@@ -242,6 +270,68 @@ func TestSuggestOffsets_FullyOccupied_NoSuggestions(t *testing.T) {
 	}
 }
 
+func TestSuggestOffsets_GuardMarginKeepsClearance(t *testing.T) {
+	cfg := DefaultOccupancyConfig() // guard on at defaultGuardMarginHz
+	occupied := []Band{
+		{LowHz: 600, HighHz: 700},
+		{LowHz: 1400, HighHz: 1600},
+		{LowHz: 2400, HighHz: 2450},
+	}
+	for _, off := range suggestOffsets(occupied, cfg) {
+		sigLo, sigHi := off, off+signalWidthHz
+		for _, b := range occupied {
+			if sigLo < b.HighHz && b.LowHz < sigHi {
+				t.Fatalf("offset %d overlaps %+v", off, b)
+			}
+			if sigHi <= b.LowHz && b.LowHz-sigHi < defaultGuardMarginHz {
+				t.Errorf("offset %d clears %+v below by %d Hz (< guard %d)", off, b, b.LowHz-sigHi, defaultGuardMarginHz)
+			}
+			if b.HighHz <= sigLo && sigLo-b.HighHz < defaultGuardMarginHz {
+				t.Errorf("offset %d clears %+v above by %d Hz (< guard %d)", off, b, sigLo-b.HighHz, defaultGuardMarginHz)
+			}
+		}
+	}
+}
+
+func TestSuggestOffsets_GuardOnRejectsTightGap(t *testing.T) {
+	cfg := DefaultOccupancyConfig() // guard on
+	// One exactly-signalWidthHz (50 Hz) gap [1000,1050]: fits flush but not with a guard.
+	occupied := []Band{{LowHz: 200, HighHz: 1000}, {LowHz: 1050, HighHz: 3000}}
+	if got := suggestOffsets(occupied, cfg); len(got) != 0 {
+		t.Fatalf("guard on should reject a flush-only 50 Hz gap, got %v", got)
+	}
+}
+
+func TestSuggestOffsets_GuardOffAllowsFlush(t *testing.T) {
+	cfg := DefaultOccupancyConfig()
+	zero := 0
+	cfg.GuardMarginHz = &zero // guard off
+	occupied := []Band{{LowHz: 200, HighHz: 1000}, {LowHz: 1050, HighHz: 3000}}
+	found := false
+	for _, o := range suggestOffsets(occupied, cfg) {
+		if o == 1000 { // flush against the band ending at 1000
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("guard off should offer the flush offset 1000")
+	}
+}
+
+func TestResolveOccupancyConfig_GuardOverride(t *testing.T) {
+	// Explicit 0 must survive resolution (not be treated as "unset → default").
+	zero := 0
+	got := resolveOccupancyConfig(&types.Ft8OccupancyConfig{GuardMarginHz: &zero})
+	if got.GuardMarginHz == nil || *got.GuardMarginHz != 0 {
+		t.Fatalf("explicit guard 0 lost in resolve: %v", got.GuardMarginHz)
+	}
+	// nil override keeps the default.
+	def := resolveOccupancyConfig(nil)
+	if def.GuardMarginHz == nil || *def.GuardMarginHz != defaultGuardMarginHz {
+		t.Fatalf("nil override should keep default guard %d, got %v", defaultGuardMarginHz, def.GuardMarginHz)
+	}
+}
+
 // TestOccupancy_RealSlot is the end-to-end check: decode a real corpus slot,
 // run occupancy on the same samples + decodes, and confirm the pipeline holds
 // together on live data — every decoded signal lands inside an occupied band,
@@ -327,9 +417,14 @@ func TestSlotRefFromTime_EvenOdd(t *testing.T) {
 func TestResolveOccupancyConfig(t *testing.T) {
 	def := DefaultOccupancyConfig()
 
-	// nil → defaults unchanged.
-	if got := resolveOccupancyConfig(nil); got != def {
-		t.Fatalf("nil override = %+v, want defaults %+v", got, def)
+	// nil → defaults unchanged. (Field-wise, not struct ==, since the pointer
+	// field GuardMarginHz holds distinct addresses across DefaultOccupancyConfig
+	// calls; TestResolveOccupancyConfig_GuardOverride covers the guard pointer.)
+	if n := resolveOccupancyConfig(nil); n.PassbandLowHz != def.PassbandLowHz ||
+		n.PassbandHighHz != def.PassbandHighHz || n.ThresholdFactor != def.ThresholdFactor ||
+		n.WeightMargin != def.WeightMargin || n.WeightEdge != def.WeightEdge ||
+		n.WeightCentered != def.WeightCentered {
+		t.Fatalf("nil override changed a default field: %+v vs %+v", n, def)
 	}
 
 	// Sparse override: only set fields win; zeros fall back to default.

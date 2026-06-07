@@ -8,9 +8,30 @@
     const formattedCount = $derived(countFormatter.format(configState.defaultLogbook.qsoCount));
 
     // Operating-mode switch (header <select>): "phone" renders the QSO / Country
-    // / Info logging layout; "ft8" renders the FT8 holding panel. In-memory only
-    // — a per-session UI choice, not persisted.
-    let operatingMode = $state<'phone' | 'ft8'>('phone');
+    // / Info logging layout; "ft8" renders the FT8 panel. Persisted to
+    // localStorage so the chosen panel survives a page reload (per-device UI
+    // preference — same tier as qsoDefaults).
+    const OPERATING_MODE_KEY = 'sm.operatingMode';
+
+    function loadOperatingMode(): 'phone' | 'ft8' {
+        try {
+            const raw = localStorage.getItem(OPERATING_MODE_KEY);
+            if (raw === 'phone' || raw === 'ft8') return raw;
+        } catch {
+            // localStorage unavailable — fall through to the default.
+        }
+        return 'phone';
+    }
+
+    let operatingMode = $state<'phone' | 'ft8'>(loadOperatingMode());
+
+    $effect(() => {
+        try {
+            localStorage.setItem(OPERATING_MODE_KEY, operatingMode);
+        } catch {
+            // localStorage unavailable — persistence is best-effort.
+        }
+    });
 </script>
 
 <!--

@@ -127,6 +127,21 @@ clear-offset **picker** built on per-slot occupancy gives ~95% of the
 waterfall's TX-selection value for a fraction of the cost. A visual waterfall
 remains a possible *later* operator-facing nicety, not a prerequisite for TX.
 
+**Refinement (2026-06-07, dogfooding step a):** the step-(e) picker UI is a
+**clickable occupancy *strip*** — a *static* per-slot view (busy bands shaded,
+clear gaps selectable) rendered from the same `OccupancyReport`, shown alongside
+the ranked **Clear Slots** list (click a chip or a clear point to set the TX base
+offset). This is still "data, not pixels" — a single per-slot array, not a 10 fps
+scrolling spectrogram — so the *scrolling waterfall* stays deferred; only its
+time-history dimension is given up. Crucially, SM **enforces good practice** where
+WSJT-X does not: WSJT-X lets the operator double-click *anywhere*, including onto
+an occupied signal; SM only offers clean spots and the daemon TX gate **refuses or
+snaps** an offset that overlaps current occupancy. Enforcement is best-effort *at
+pick time* — occupancy re-evaluates each slot, so a station can still land on the
+operator mid-exchange; SM guards the choice, not the whole QSO. A configurable
+**guard margin** (`ft8.tx.occupancy.guard_margin_hz`, default 10 Hz, 0 = off)
+keeps even the suggestions off a neighbour's edge.
+
 ### Client-side modulation (browser generates the audio)
 
 Have the SPA turn tones into PCM and stream it down for playback. Rejected:
@@ -160,14 +175,18 @@ the operator complete a contact, which is the entire point of running the mode.
   controller (key at slot start, unkey at slot end + on disconnect + single-flight);
   `tx_on`/`tx_off` stay controller-only and never `exposed` (the load-time schema
   invariant from the 2026-06-06 cat review).
-- **New SPA surface** in the operator's FT8 stream: decode list with clickable
-  callsigns, the occupancy / clear-offset picker, the next-message row, an
+- **New SPA surface** in the operator's FT8 stream: the live decode feed (Band
+  Activity), the clickable occupancy **strip** + ranked **Clear Slots** list for
+  TX-offset selection (see the picker refinement above), the next-message row, an
   Enable-TX / hold control, and the slot timer. This is the larger half of the
   work.
 - **Build order (RX-safe first):** (a) per-slot occupancy detector (RX-only,
   useful immediately) → (b) modulator + offline round-trip → (c) audio-output
-  device → (d) PTT/slot controller → (e) manual sequencer + logging, with the SPA
-  growing alongside. Each step is independently testable; RF only enters at (c).
+  device → (d) PTT/slot controller → (e) manual sequencer + logging + the
+  interactive picker (clickable strip + list, daemon-enforced no-overlap), with
+  the SPA growing alongside. Each step is independently testable; RF only enters
+  at (c). **(a) and (b) shipped 2026-06-07** (occupancy + SSE + SPA readout;
+  GFSK modulator round-trip-verified).
 - **Standard messages only, initially.** `EncodeStandardMessage` covers standard
   structured messages (callsign + grid/report exchanges) — enough for a normal
   CQ→73 contact. Free text, compound/portable calls, and telemetry are not yet

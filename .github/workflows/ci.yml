@@ -126,18 +126,22 @@ jobs:
       - name: go test (full, no race)
         run: go test -timeout 12m $(go list ./... | grep -v /node_modules/)
 
-      - name: Build daemon (verifies SPA embed)
-        run: go build -o /tmp/smd ./cmd/smd
+      # CGO_ENABLED=0 is explicit: ubuntu-latest ships gcc, so a bare `go build`
+      # would link CGO and NOT exercise the shipped CGO-free/static shape. This
+      # mirrors release-rpm.sh's default and is the releasability gate.
+      - name: Build daemon, static (verifies SPA embed + shipped CGO-free shape)
+        run: CGO_ENABLED=0 go build -o /tmp/smd ./cmd/smd
 
       - name: Build all cmd/ binaries (catcli, loadgen, etc.)
         run: go build ./cmd/...
 
       # ─── PocketFFT (CGO) opt-in backend ─────────────────────────
-      # The default daemon build above is CGO-free (pure-Go gonum FFT). The
+      # The static build above is the shipped default (pure-Go gonum FFT). The
       # opt-in PocketFFT backend (CGO, ~2x faster FT8 decode) is gated behind
       # go-ft8's `pocketfft` build tag + CGO_ENABLED=1, and is NOT the shipped
-      # default. Build it and run the ft8 decode tests against it here so the
-      # CGO path can't silently rot. ubuntu-latest ships gcc.
+      # default. Building it with CGO also compiles the malgo audio-capture path
+      # (`//go:build cgo`), so this step covers the live-FT8 CGO build too — it
+      # can't silently rot. ubuntu-latest ships gcc.
       - name: Build daemon (PocketFFT/CGO backend)
         run: CGO_ENABLED=1 go build -tags pocketfft -o /tmp/smd-pocketfft ./cmd/smd
 

@@ -74,4 +74,16 @@ type Ft8OccupancyConfig struct {
 	WeightMargin   float64 `json:"weight_margin,omitempty"`   // reward wider clear room in the offset's gap
 	WeightEdge     float64 `json:"weight_edge,omitempty"`     // reward distance from passband edges
 	WeightCentered float64 `json:"weight_centered,omitempty"` // reward sitting centered in the gap
+
+	// GuardMarginHz is the clearance (Hz) a suggested offset must keep from the
+	// nearest occupied band on each side, so a recommendation never sits flush
+	// against a neighbour ("brushed edge"). Pointer-typed so resolve can tell
+	// "absent" (nil → default, guard on) from an explicit 0:
+	//   - nil  → default (ft8.defaultGuardMarginHz, guard on)
+	//   - 0    → guard off (flush placements allowed — more options in a
+	//            crowded band, at the cost of brushed edges)
+	//   - N    → require N Hz clearance each side
+	// Larger values yield safer placement but fewer options in a busy band
+	// (a gap must be signalWidthHz + 2·N wide to offer anything).
+	GuardMarginHz *int `json:"guard_margin_hz,omitempty"`
 }

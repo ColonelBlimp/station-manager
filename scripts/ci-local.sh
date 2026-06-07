@@ -103,8 +103,10 @@ go test -race -short -timeout 5m $PKGS
 step "Go: test (full, no race, 12m timeout)"
 go test -timeout 12m $PKGS
 
-step "Go: build daemon (verifies SPA embed)"
-go build -o build/bin/smd ./cmd/smd
+# CGO_ENABLED=0 explicit: with gcc present a bare `go build` links CGO and
+# wouldn't exercise the shipped CGO-free/static shape. Mirrors release-rpm.sh.
+step "Go: build daemon, static (verifies SPA embed + shipped CGO-free shape)"
+CGO_ENABLED=0 go build -o build/bin/smd ./cmd/smd
 
 step "Go: build all cmd/ binaries"
 go build ./cmd/...
