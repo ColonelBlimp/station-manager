@@ -1,10 +1,10 @@
 # FT8 in Station Manager — operator & contributor guide
 
 > **Status (2026-06-07):** Receive — decode + per-slot occupancy — is shipped.
-> Transmit is decided (ADR 0029) and partly built: the GFSK modulator is done
-> and offline-verified; audio output, PTT, and the interactive picker are still
-> ahead. This guide is the single place the FT8 picture is captured; keep it
-> current as the TX layers land.
+> Transmit is decided (ADR 0029) and partly built: the GFSK modulator and the
+> audio-output device are done and bench-verifiable (zero RF); PTT, slot timing,
+> and the interactive picker are still ahead. This guide is the single place the
+> FT8 picture is captured; keep it current as the TX layers land.
 
 ## 1. What it is
 
@@ -55,6 +55,12 @@ on any PUT):
   in the rig catalogue wins over this loose field.
 - **`enable_osd`** — go-ft8's OSD-2/MRB deeper decode (recovers weak signals BP
   misses, ~1.1–1.7× decode time). Default true; omit to keep it on.
+- **`tx.device`** — the audio **output** device index (string) the TX waveform is
+  played to, from `ft8-tx-probe -list`. Separate from the capture `device`: the
+  playback and capture device enumerations are independent even when the rig's USB
+  codec is physically one device. Empty = system default playback device. (Not
+  used until the step-(d) controller streams TX audio; `ft8-tx-probe` exercises it
+  today.)
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on
@@ -148,9 +154,24 @@ the rig. Build order is **RX-safe first**; RF only enters at (c).
 | --- | --- | --- |
 | (a) | Per-slot occupancy detector + SSE + SPA readout | **done** |
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
-| (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | next |
-| (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | — |
+| (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
+| (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | next |
 | (e) | Manual sequencer + QSO logging; **interactive picker** | — |
+
+**Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
+output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
+playback device behind `//go:build cgo` (the static build excludes it; only the
+pure `fillFrame`/`bytesAsInt16` helpers compile CGO-free, and they carry the
+package's CGO-free unit tests). The int16 waveform from `ft8.EncodeToSlot` streams
+straight to the device with no float conversion. Lifecycle `New → Init →
+Play(samples) → <done> → Stop / Close`: `Play` is non-blocking and returns a channel
+closed when the whole waveform has been handed to the device; **the caller owns the
+stop** (`Stop` halts immediately) — the discipline the step-(d) controller inherits
+for its guaranteed stop. This layer drives a **sound card, not a transmitter** — no
+PTT yet, so it is RF-safe to build and bench. Validate it with
+`cmd/ft8-tx-probe` (`-list` enumerates playback devices for `ft8.tx.device`;
+`-msg=… -offset=… [-wav=…]` encodes and plays a message, optionally writing the
+slot WAV for an A/B decode back through `ft8-decode-file` / `jt9`).
 
 **Step (e) picker (decided 2026-06-07):** a **clickable occupancy strip** — a
 *static* per-slot view (busy bands shaded, clear gaps selectable), **not** a
@@ -171,7 +192,11 @@ timing.
   publish), `scheduler.go` + `ring.go` (UTC slots), `decode.go` (go-ft8 wrapper +
   `DecodeReport`), `occupancy.go` (detector + ranking + guard), `modulate.go`
   (GFSK + offline round-trip), `hub.go` + `handler.go` (SSE). Capture seam:
-  `source_cgo.go` / `source_nocgo.go`, `internal/audio/capture`.
+  `source_cgo.go` / `source_nocgo.go`, `internal/audio/capture`. Output device:
+  `internal/audio/playback` (S16 mono playback, `//go:build cgo`).
+- **Dev tools:** `cmd/ft8-capture-probe` (list/validate capture + decode smoke),
+  `cmd/ft8-tx-probe` (list playback devices + encode-and-play a message, zero RF),
+  `cmd/ft8-decode-file` (offline WAV decode). All CGO.
 - **SPA:** `frontend/logging/src/lib/states/ft8.svelte.ts` (EventSource consumer),
   `lib/ui/panels/Ft8Panel.svelte`, `lib/ui/cards/LoggingCard.svelte` (mode switch).
 - **Decisions:** ADR 0024 (RX pipeline), ADR 0027 (guaranteed-stop TX pattern),

@@ -42,9 +42,19 @@ type Ft8Config struct {
 }
 
 // Ft8TXConfig holds the FT8 transmit configuration (ADR 0029). Minimal today —
-// only the occupancy detector that feeds TX-offset selection is built; it grows
-// (modulator, PTT, sequencing) as those layers land.
+// the occupancy detector that feeds TX-offset selection and the output-device
+// selection are built; it grows (PTT, sequencing) as those layers land.
 type Ft8TXConfig struct {
+	// Device selects the audio OUTPUT (playback) device the TX waveform is
+	// streamed to — an integer index string as listed by `cmd/ft8-tx-probe
+	// -list`, separate from the capture-side Ft8Config.Device because the
+	// playback and capture device enumerations are independent (even when the
+	// rig's USB codec is physically one device). Empty → system default
+	// playback device. Name-based matching is a noted follow-up, mirroring the
+	// capture side. Like Ft8Config.Device, ADR 0028's per-rig audio device is
+	// expected to win over this loose field once TX device resolution lands.
+	Device string `json:"device,omitempty"`
+
 	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
 	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
 	Occupancy *Ft8OccupancyConfig `json:"occupancy,omitempty"`

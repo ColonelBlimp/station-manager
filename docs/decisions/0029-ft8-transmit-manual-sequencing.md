@@ -184,9 +184,15 @@ the operator complete a contact, which is the entire point of running the mode.
   useful immediately) → (b) modulator + offline round-trip → (c) audio-output
   device → (d) PTT/slot controller → (e) manual sequencer + logging + the
   interactive picker (clickable strip + list, daemon-enforced no-overlap), with
-  the SPA growing alongside. Each step is independently testable; RF only enters
-  at (c). **(a) and (b) shipped 2026-06-07** (occupancy + SSE + SPA readout;
-  GFSK modulator round-trip-verified).
+  the SPA growing alongside. Each step is independently testable; actual RF only
+  enters at (d), when PTT keys the rig — (c) drives a sound card, so it is still
+  RF-safe to bench. **(a), (b), and (c) shipped 2026-06-07.** (a) occupancy + SSE
+  + SPA readout; (b) GFSK modulator round-trip-verified; (c) `internal/audio/playback`
+  — a malgo S16/12 kHz/mono output device mirroring `internal/audio/capture`
+  (`//go:build cgo`, fail-soft, probe-listed via `cmd/ft8-tx-probe`). `Play` is
+  non-blocking and returns a done channel; **the caller owns the stop** — the
+  guaranteed-stop discipline the (d) controller inherits. `ft8.tx.device` config
+  field selects the output device.
 - **Standard messages only, initially.** `EncodeStandardMessage` covers standard
   structured messages (callsign + grid/report exchanges) — enough for a normal
   CQ→73 contact. Free text, compound/portable calls, and telemetry are not yet
