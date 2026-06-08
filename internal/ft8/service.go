@@ -3,12 +3,20 @@ package ft8
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
+
+// captureLinger is how long the capture device stays open after the last
+// /v1/ft8/events subscriber disconnects, before it is released. It absorbs
+// reconnect churn — a page reload, a momentary network blip, or flipping the
+// Operating Mode tab away and back — so the audio device isn't torn down and
+// reacquired on every brief gap. Package-level var so tests can dial it down.
+var captureLinger = 5 * time.Second
 
 // captureSource is the live-audio seam: it produces a stream of int16 PCM
 // sample batches (12 kHz mono) and runs until Stop. The real implementation
@@ -51,11 +59,23 @@ type Service struct {
 	// Owned by the Service; closed on Stop.
 	hub *hub
 
-	mu      sync.Mutex
-	started bool
-	stopped bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	mu        sync.Mutex
+	started   bool
+	stopped   bool
+	parentCtx context.Context // captured at Start; parent of each capture run
+
+	// Capture is acquired on demand, not at Start: a capture session runs only
+	// while ≥1 SSE subscriber is connected to /v1/ft8/events, and is released
+	// (after captureLinger, to absorb reconnect churn) when the last one leaves.
+	// So enabling FT8 holds no audio device until the operator actually opens
+	// the FT8 view, and frees it when they navigate away. Sessions never
+	// overlap — acquire/release are serialised under mu, and release drains the
+	// previous session's goroutines before mu is dropped.
+	subCount      int                // live /v1/ft8/events subscribers
+	capturing     bool               // a capture session is currently running
+	captureCancel context.CancelFunc // cancels the current capture run
+	lingerTimer   *time.Timer        // pending release after the last unsubscribe
+	wg            sync.WaitGroup     // scheduler + decoder of the current session
 
 	// stopOnce + stopDone serialise concurrent Stop calls so the "Stop
 	// returned, therefore stopped" contract holds for every caller.
@@ -94,16 +114,17 @@ func (s *Service) Initialize() error {
 	return nil
 }
 
-// Start binds the subsystem to a parent context and, when Enabled, acquires
-// the capture source and spawns the scheduler + decode worker. ctx is
+// Start binds the subsystem to a parent context and marks it ready. ctx is
 // typically the daemon's main lifecycle context. Idempotent — repeat calls
 // are no-ops once started, and Stop-before-Start is terminal.
 //
-// When cfg.Enabled is false, Start succeeds without acquiring anything (the
-// default deployment). When Enabled but the capture source won't start
-// (no device, device busy, or this is the CGO-free build whose capture is
-// unavailable), Start logs a warning and leaves the subsystem idle — it
-// never returns an error that would abort daemon startup.
+// Start does NOT acquire the audio device: capture is demand-driven and starts
+// on the first /v1/ft8/events subscriber (see onSubscriberAdded). When
+// cfg.Enabled is false, Start succeeds and the subsystem stays inert — no
+// subscriber will ever trigger capture. Start never returns an error that
+// would abort daemon startup; a capture that won't start later (no device,
+// device busy, or the CGO-free build whose capture is unavailable) is logged
+// and leaves the subsystem idle.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,15 +140,76 @@ func (s *Service) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	s.cancel = cancel
+	s.parentCtx = ctx
+	s.log.InfoWith().Msg("ft8: subsystem ready; capture starts on first /v1/ft8/events subscriber")
+	return nil
+}
 
+// onSubscriberAdded is called when a /v1/ft8/events subscriber connects. The
+// first subscriber (0→1) acquires the capture device; if a release is pending
+// in its linger window, the live session is simply kept (timer cancelled).
+// No-op when disabled, not yet started, or already stopped — capture only ever
+// runs in the enabled, running window. Must hold no caller locks.
+func (s *Service) onSubscriberAdded() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subCount++
+	if !s.started || s.stopped || !s.cfg.Enabled || s.subCount != 1 {
+		return
+	}
+	if s.lingerTimer != nil {
+		// A release was pending but capture is still live — keep it.
+		s.lingerTimer.Stop()
+		s.lingerTimer = nil
+		return
+	}
+	s.startCaptureLocked()
+}
+
+// onSubscriberRemoved is called when a /v1/ft8/events subscriber disconnects.
+// When the last one leaves (count→0) it schedules a release after captureLinger
+// rather than tearing the device down immediately, so a quick reconnect reuses
+// the live session.
+func (s *Service) onSubscriberRemoved() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.subCount > 0 {
+		s.subCount--
+	}
+	if s.subCount != 0 || s.stopped || !s.capturing || s.lingerTimer != nil {
+		return
+	}
+	s.lingerTimer = time.AfterFunc(captureLinger, s.onLingerExpired)
+}
+
+// onLingerExpired releases the capture device once the linger window passes
+// with no subscribers. The subCount re-check makes it robust against a
+// reconnect that raced the timer (onSubscriberAdded stops the timer, but if it
+// had already fired we still see the new subscriber here and keep the session).
+func (s *Service) onLingerExpired() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lingerTimer = nil
+	if s.subCount > 0 || s.stopped || !s.capturing {
+		return
+	}
+	s.releaseCaptureLocked()
+}
+
+// startCaptureLocked acquires the capture source and spawns the scheduler +
+// decode worker for one session. Fail-soft: a source that won't start leaves
+// capturing=false (the subsystem stays idle, logged) rather than erroring.
+// Caller holds s.mu.
+func (s *Service) startCaptureLocked() {
+	runCtx, cancel := context.WithCancel(s.parentCtx)
 	samples, err := s.src.Start(runCtx)
 	if err != nil {
 		cancel()
 		s.log.WarnWith().Err(err).Msg("ft8: capture unavailable; subsystem idle")
-		return nil
+		return
 	}
+	s.captureCancel = cancel
+	s.capturing = true
 
 	sch := NewScheduler(samples, s.log)
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
@@ -140,8 +222,28 @@ func (s *Service) Start(ctx context.Context) error {
 	s.log.InfoWith().
 		Str("device", s.cfg.Device).
 		Bool("osd", s.osdEnabled()).
-		Msg("ft8: subsystem started; decoding live slots")
-	return nil
+		Msg("ft8: subscriber present; capture started, decoding live slots")
+}
+
+// releaseCaptureLocked cancels the current capture session, releases the
+// device, and drains the scheduler + decode goroutines before returning, so
+// the next acquisition never overlaps a still-running session. No-op when not
+// capturing. Caller holds s.mu (the drain happens under the lock, which serial-
+// ises a racing onSubscriberAdded behind it — bounded by one in-flight decode).
+func (s *Service) releaseCaptureLocked() {
+	if !s.capturing {
+		return
+	}
+	if s.captureCancel != nil {
+		s.captureCancel()
+		s.captureCancel = nil
+	}
+	if err := s.src.Stop(); err != nil {
+		s.log.WarnWith().Err(err).Msg("ft8: capture stop error")
+	}
+	s.wg.Wait()
+	s.capturing = false
+	s.log.InfoWith().Msg("ft8: no subscribers; capture released")
 }
 
 // osdEnabled resolves the OSD decode option. nil (config absent) → true, the
@@ -151,29 +253,24 @@ func (s *Service) osdEnabled() bool {
 	return s.cfg.EnableOSD == nil || *s.cfg.EnableOSD
 }
 
-// Stop cancels the run context, releases the capture device, and waits for
-// the scheduler + decode goroutines to drain. Idempotent under sequential
-// and concurrent calls. An in-flight decode (go-ft8 is not cancellable) is
-// allowed to finish before Stop returns — bounded by one slot's decode time.
+// Stop marks the subsystem stopped, releases any live capture device, and
+// waits for its scheduler + decode goroutines to drain. Idempotent under
+// sequential and concurrent calls. An in-flight decode (go-ft8 is not
+// cancellable) is allowed to finish before Stop returns — bounded by one
+// slot's decode time.
 func (s *Service) Stop() error {
 	s.stopOnce.Do(func() {
 		defer close(s.stopDone)
 
 		s.mu.Lock()
-		cancel := s.cancel
-		started := s.started
 		s.stopped = true
+		if s.lingerTimer != nil {
+			s.lingerTimer.Stop()
+			s.lingerTimer = nil
+		}
+		s.releaseCaptureLocked() // cancels + stops + drains; no-op if idle
 		s.mu.Unlock()
 
-		if cancel != nil {
-			cancel()
-		}
-		if started && s.cfg.Enabled && s.src != nil {
-			if err := s.src.Stop(); err != nil {
-				s.log.WarnWith().Err(err).Msg("ft8: capture stop error")
-			}
-		}
-		s.wg.Wait()
 		// Disconnect any ft8 SSE subscribers so they return promptly rather
 		// than waiting on the daemon's graceful timeout.
 		s.hub.close()

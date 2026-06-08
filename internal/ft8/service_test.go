@@ -12,40 +12,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeSource is an in-memory captureSource for lifecycle tests: it hands the
-// Service a channel the test can drive (or not), and records start/stop so
-// the wiring can be asserted without audio hardware.
+// fakeSource is an in-memory captureSource for lifecycle tests. Capture is now
+// demand-driven, so the source must survive repeated Start→Stop cycles: each
+// Start allocates a fresh sample channel that the matching Stop closes, and
+// start/stop counts let tests assert acquire/release transitions without audio
+// hardware.
 type fakeSource struct {
-	ch        chan []int16
-	startErr  error
-	mu        sync.Mutex
-	started   bool
-	stopped   bool
-	closeOnce sync.Once
+	startErr error
+	mu       sync.Mutex
+	ch       chan []int16
+	startN   int
+	stopN    int
 }
 
-func newFakeSource() *fakeSource { return &fakeSource{ch: make(chan []int16, 4)} }
+func newFakeSource() *fakeSource { return &fakeSource{} }
 
 func (f *fakeSource) Start(_ context.Context) (<-chan []int16, error) {
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
 	f.mu.Lock()
-	f.started = true
-	f.mu.Unlock()
+	defer f.mu.Unlock()
+	f.startN++
+	f.ch = make(chan []int16, 4)
 	return f.ch, nil
 }
 
 func (f *fakeSource) Stop() error {
 	f.mu.Lock()
-	f.stopped = true
-	f.mu.Unlock()
-	f.closeOnce.Do(func() { close(f.ch) })
+	defer f.mu.Unlock()
+	f.stopN++
+	if f.ch != nil {
+		close(f.ch)
+		f.ch = nil
+	}
 	return nil
 }
 
-func (f *fakeSource) wasStarted() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.started }
-func (f *fakeSource) wasStopped() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.stopped }
+func (f *fakeSource) startCount() int  { f.mu.Lock(); defer f.mu.Unlock(); return f.startN }
+func (f *fakeSource) stopCount() int   { f.mu.Lock(); defer f.mu.Unlock(); return f.stopN }
+func (f *fakeSource) wasStarted() bool { return f.startCount() > 0 }
+func (f *fakeSource) wasStopped() bool { return f.stopCount() > 0 }
 
 func TestInitialize_RequiresLogger(t *testing.T) {
 	s := newService(types.Ft8Config{Enabled: false}, nil, nil)
@@ -64,28 +71,44 @@ func TestInitialize_EnabledRequiresSource(t *testing.T) {
 	require.NoError(t, dis.Initialize())
 }
 
+// withShortLinger sets captureLinger to a tiny value for the duration of a
+// test so release transitions fire quickly, restoring it on cleanup.
+func withShortLinger(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := captureLinger
+	captureLinger = d
+	t.Cleanup(func() { captureLinger = prev })
+}
+
 // TestStart_Disabled_AcquiresNothing covers the default deployment
-// (ft8.enabled=false): Start succeeds, the capture source is never started,
+// (ft8.enabled=false): Start succeeds, a subscriber never triggers capture,
 // and Stop is a clean no-op.
 func TestStart_Disabled_AcquiresNothing(t *testing.T) {
 	src := newFakeSource()
 	s := newService(types.Ft8Config{Enabled: false}, logging.Noop(), src)
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))
-	require.False(t, src.wasStarted(), "disabled subsystem must not start capture")
+
+	_, unsub := s.Subscribe()
+	require.False(t, src.wasStarted(), "disabled subsystem must not start capture even with a subscriber")
+	unsub()
 	require.NoError(t, s.Stop())
 }
 
-// TestStart_Enabled_StartsCaptureAndDrainsOnStop covers the live lifecycle:
-// Start acquires the source and spawns the goroutines; Stop cancels,
-// releases the device, and drains. Stop returning proves the goroutines
-// exited (wg.Wait).
-func TestStart_Enabled_StartsCaptureAndDrainsOnStop(t *testing.T) {
+// TestCapture_NoneUntilSubscriber covers the demand-driven core: an enabled,
+// Started subsystem holds no device until the first /v1/ft8/events subscriber
+// connects; that subscriber acquires it, and Stop drains. Stop returning
+// proves the goroutines exited (wg.Wait).
+func TestCapture_NoneUntilSubscriber(t *testing.T) {
 	src := newFakeSource()
 	s := newService(types.Ft8Config{Enabled: true, Device: "test"}, logging.Noop(), src)
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))
-	require.True(t, src.wasStarted(), "enabled subsystem must start capture")
+	require.False(t, src.wasStarted(), "no subscriber yet — capture must not start at Start")
+
+	_, unsub := s.Subscribe()
+	require.True(t, src.wasStarted(), "first subscriber must acquire the capture device")
+	defer unsub()
 
 	done := make(chan struct{})
 	go func() { _ = s.Stop(); close(done) }()
@@ -97,15 +120,64 @@ func TestStart_Enabled_StartsCaptureAndDrainsOnStop(t *testing.T) {
 	require.True(t, src.wasStopped(), "Stop must release the capture device")
 }
 
-// TestStart_CaptureError_FailSoft covers the "enabled but capture won't
-// start" case (no device, busy, or the CGO-free build's unavailable stub):
-// Start must NOT return an error that aborts daemon startup; it logs and
-// leaves the subsystem idle.
-func TestStart_CaptureError_FailSoft(t *testing.T) {
-	src := &fakeSource{ch: make(chan []int16), startErr: stderrors.New("no device")}
+// TestCapture_ReleasedAfterLastSubscriber covers release-on-empty and
+// re-acquire: the device is released a linger after the last subscriber leaves,
+// and a later subscriber acquires a fresh session.
+func TestCapture_ReleasedAfterLastSubscriber(t *testing.T) {
+	withShortLinger(t, 10*time.Millisecond)
+	src := newFakeSource()
 	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
 	require.NoError(t, s.Initialize())
-	require.NoError(t, s.Start(context.Background()), "capture failure must be fail-soft, not a Start error")
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub1 := s.Subscribe()
+	require.Equal(t, 1, src.startCount(), "first subscriber acquires capture")
+	unsub1()
+	require.Eventually(t, func() bool { return src.stopCount() == 1 }, time.Second, 5*time.Millisecond,
+		"capture must be released after the last subscriber leaves")
+
+	_, unsub2 := s.Subscribe()
+	defer unsub2()
+	require.Eventually(t, func() bool { return src.startCount() == 2 }, time.Second, 5*time.Millisecond,
+		"a later subscriber must re-acquire a fresh capture session")
+}
+
+// TestCapture_LingerSurvivesReconnect covers the linger's purpose: a subscriber
+// that disconnects and quickly reconnects within the linger window reuses the
+// live session — the device is neither stopped nor reacquired.
+func TestCapture_LingerSurvivesReconnect(t *testing.T) {
+	withShortLinger(t, 200*time.Millisecond)
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub1 := s.Subscribe()
+	require.Equal(t, 1, src.startCount())
+	unsub1()                   // last subscriber leaves: schedules release in 200ms
+	_, unsub2 := s.Subscribe() // reconnect well inside the window: keeps the session
+	defer unsub2()
+
+	time.Sleep(300 * time.Millisecond) // past the original linger deadline
+	require.Equal(t, 1, src.startCount(), "reconnect must not reacquire — same live session")
+	require.Equal(t, 0, src.stopCount(), "reconnect must cancel the pending release")
+}
+
+// TestCapture_Error_FailSoft covers the "enabled but capture won't start" case
+// (no device, busy, or the CGO-free build's unavailable stub): the subscriber
+// connection that triggers acquisition must not panic or error out; the
+// subsystem stays idle, and Stop is clean.
+func TestCapture_Error_FailSoft(t *testing.T) {
+	src := &fakeSource{startErr: stderrors.New("no device")}
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+
+	_, unsub := s.Subscribe()
+	require.False(t, s.capturing, "failed capture acquire must leave the subsystem idle")
+	unsub()
 	require.NoError(t, s.Stop())
 }
 
@@ -118,6 +190,10 @@ func TestLifecycle_Idempotent(t *testing.T) {
 	require.NoError(t, s.Start(context.Background()))
 	require.NoError(t, s.Start(context.Background()), "second Start must be a no-op")
 
+	_, unsub := s.Subscribe() // bring a real capture session up so Stop has work to drain
+	defer unsub()
+	require.True(t, src.wasStarted())
+
 	var wg sync.WaitGroup
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
@@ -126,14 +202,16 @@ func TestLifecycle_Idempotent(t *testing.T) {
 	wg.Wait()
 }
 
-// TestStop_BeforeStart_IsTerminal covers Stop-before-Start: a subsequent
-// Start must be a no-op (no capture acquired) rather than spinning up work
-// with nowhere to land.
+// TestStop_BeforeStart_IsTerminal covers Stop-before-Start: a subsequent Start
+// must be a no-op, and no subscriber can then acquire capture.
 func TestStop_BeforeStart_IsTerminal(t *testing.T) {
 	src := newFakeSource()
 	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Stop())
 	require.NoError(t, s.Start(context.Background()))
-	require.False(t, src.wasStarted(), "Start after Stop must not acquire capture")
+
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.False(t, src.wasStarted(), "after Stop, no subscriber may acquire capture")
 }

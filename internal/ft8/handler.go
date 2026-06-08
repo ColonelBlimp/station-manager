@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -32,8 +33,22 @@ var sseWriteTimeout = 10 * time.Second
 // Subscribe registers a new ft8-events subscriber, returning a receive-only
 // channel and an idempotent unsubscribe. The latest cached events (if any) are
 // replayed as the first messages.
+//
+// Subscriber count drives the capture device: the first subscriber acquires it,
+// the last (after a linger) releases it. The returned unsubscribe decrements
+// exactly once even if called repeatedly, and the SSE handler always calls it
+// on exit — including after a hub-side slow-reader eviction — so the count
+// stays balanced.
 func (s *Service) Subscribe() (<-chan hubEvent, func()) {
-	return s.hub.subscribe()
+	ch, unsub := s.hub.subscribe()
+	s.onSubscriberAdded()
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			s.onSubscriberRemoved()
+			unsub()
+		})
+	}
 }
 
 // HTTPHandler returns the http.Handler serving `GET /v1/ft8/events`: the live

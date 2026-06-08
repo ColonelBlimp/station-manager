@@ -49,7 +49,12 @@ on any PUT):
 }
 ```
 
-- **`enabled`** — gates the whole subsystem (default false).
+- **`enabled`** — gates the whole subsystem (default false). Enabling it does
+  *not* grab the audio device at boot: capture is **demand-driven** — the daemon
+  opens the input device when the first `/v1/ft8/events` subscriber connects (you
+  open the FT8 view) and releases it a few seconds after the last one leaves. So
+  an idle daemon with `ft8.enabled=true` holds no microphone until you actually
+  switch to FT8.
 - **`device`** — integer capture-device index from `ft8-capture-probe -list`, as
   a string. Empty = system default. Under ADR 0028 the active rig's audio device
   in the rig catalogue wins over this loose field.
@@ -148,7 +153,8 @@ config.
 Daemon-owned TX, **manual-sequenced first** (operator advances each rung of the
 CQ→73 ladder; auto-sequence is a later ADR), reusing the ADR 0027 guaranteed-stop
 discipline — `tx_on`/`tx_off` are never `exposed`, only the TX controller keys
-the rig. Build order is **RX-safe first**; RF only enters at (c).
+the rig. Build order is **RX-safe first**; RF only enters at (d) — (c) and
+everything before it are audio-only / offline.
 
 | Step | What | State |
 | --- | --- | --- |
@@ -189,7 +195,10 @@ timing.
 ## 6. Where the code lives
 
 - **Daemon:** `internal/ft8/` — `service.go` (lifecycle, decode loop, hub
-  publish), `scheduler.go` + `ring.go` (UTC slots), `decode.go` (go-ft8 wrapper +
+  publish; capture is **subscriber-driven** — acquired on the first
+  `/v1/ft8/events` subscriber, released after a short linger when the last
+  leaves, so the device is only held while an FT8 view is open),
+  `scheduler.go` + `ring.go` (UTC slots), `decode.go` (go-ft8 wrapper +
   `DecodeReport`), `occupancy.go` (detector + ranking + guard), `modulate.go`
   (GFSK + offline round-trip), `hub.go` + `handler.go` (SSE). Capture seam:
   `source_cgo.go` / `source_nocgo.go`, `internal/audio/capture`. Output device:

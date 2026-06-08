@@ -277,8 +277,16 @@ string means the system default capture device. `enable_osd` (default
 **true**, so you can omit it) turns on go-ft8's deeper OSD fallback
 decode — it recovers weak signals that basic decoding misses, at a
 small CPU cost well within the 15-second budget; set it to `false`
-only if you want the faster, shallower decode. Restart the daemon
-(`smctl restart`) and watch the log for decodes:
+only if you want the faster, shallower decode.
+
+Enabling FT8 does **not** make the daemon hold the capture device the
+whole time it runs. Capture is acquired only while you have the FT8
+view open in the SPA, and released a few seconds after you leave it —
+so an idle daemon with FT8 enabled leaves the sound device free for
+other software. (The first decode after you open the view can take up
+to one 15-second slot to appear.)
+
+Restart the daemon (`smctl restart`) and watch the log for decodes:
 
 ```
 journalctl --user -u smd -f | grep "ft8 decode"
