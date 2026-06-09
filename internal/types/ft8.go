@@ -55,6 +55,14 @@ type Ft8TXConfig struct {
 	// expected to win over this loose field once TX device resolution lands.
 	Device string `json:"device,omitempty"`
 
+	// Mode is the rig data-mode literal the TX controller switches the rig to
+	// before keying PTT (ADR 0030), e.g. "DATA-U" on the FTdx10 — the same
+	// vocabulary set_mode uses — and restores after the transmission. Empty
+	// leaves the rig's current mode untouched, for operators who keep the rig in
+	// the data mode themselves. omitempty so the inert field doesn't persist in
+	// a rewritten config.
+	Mode string `json:"mode,omitempty"`
+
 	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
 	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
 	Occupancy *Ft8OccupancyConfig `json:"occupancy,omitempty"`

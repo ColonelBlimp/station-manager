@@ -198,6 +198,9 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		// rig; clear state, cancel the backstop, forget the stale snapshot,
 		// and tell the SPA (ADR 0027).
 		s.clearTuneOnDisconnect()
+		// Release any active FT8 TX the same way — PTT dropped with the rig
+		// (ADR 0030).
+		s.clearFt8TxOnDisconnect()
 	}()
 
 	if err := client.WriteCommandBytes(ctx, initBytes); err != nil {

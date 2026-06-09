@@ -153,6 +153,19 @@ type Service struct {
 	// only before Start. The carrier is already down during this pause, so it's
 	// a responsiveness knob, not a safety one.
 	tuneRestoreSettle time.Duration
+
+	// FT8-TX keying state (ADR 0030), all mu-guarded — the second caller of the
+	// guaranteed-stop machinery alongside tune. ft8TxActive is the single-flight
+	// gate (mutually exclusive with tuneActive: one keyed transmission at a time
+	// on one rig/one PTT); ft8TxRestoreMode is the pre-TX mode captured at
+	// KeyFt8Tx and restored on unkey; ft8TxTimer is the hard auto-off backstop
+	// that drops PTT if the FT8 controller ever goes silent. Power is left at the
+	// operator's setting — no clamp (FT8 is a normal operating mode, not a tune
+	// carrier). Reuses lastMode (above) for the restore snapshot and
+	// tuneRestoreSettle for the post-unkey mode-restore settle.
+	ft8TxActive      bool
+	ft8TxRestoreMode string
+	ft8TxTimer       *time.Timer
 }
 
 // New constructs a Service from the operator's bridge config and a

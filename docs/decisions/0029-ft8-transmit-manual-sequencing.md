@@ -186,7 +186,9 @@ the operator complete a contact, which is the entire point of running the mode.
   interactive picker (clickable strip + list, daemon-enforced no-overlap), with
   the SPA growing alongside. Each step is independently testable; actual RF only
   enters at (d), when PTT keys the rig — (c) drives a sound card, so it is still
-  RF-safe to bench. **(a), (b), and (c) shipped 2026-06-07.** (a) occupancy + SSE
+  RF-safe to bench. **(d) shipped 2026-06-09 — see ADR 0030** (PTT + slot-timing
+  controller; first real RF, reachable only from the gated `ft8-tx-probe -key`).
+  **(a), (b), and (c) shipped 2026-06-07.** (a) occupancy + SSE
   + SPA readout; (b) GFSK modulator round-trip-verified; (c) `internal/audio/playback`
   — a malgo S16/12 kHz/mono output device mirroring `internal/audio/capture`
   (`//go:build cgo`, fail-soft, probe-listed via `cmd/ft8-tx-probe`). `Play` is

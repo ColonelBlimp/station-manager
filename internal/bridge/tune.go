@@ -112,6 +112,12 @@ func (s *Service) StartTune(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil // single-flight: already tuning
 	}
+	// Shared single-flight with FT8 TX (ADR 0030): one keyed transmission at a
+	// time on one rig/one PTT — refuse a tune while FT8 is keying.
+	if s.ft8TxActive {
+		s.mu.Unlock()
+		return errors.New(errOp).WithMsg("ft8 tx active; refusing concurrent tune")
+	}
 	if s.lastMode == "" || s.lastPower <= 0 {
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(ErrTuneStateUnknown)

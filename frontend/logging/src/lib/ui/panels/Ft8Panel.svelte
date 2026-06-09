@@ -131,7 +131,7 @@
                 <p class="mt-1 text-xs">Waiting for decodes…</p>
             {/if}
         </div>
-        <div class="text-gray-700 text-sm">{slotLabel}</div>
+        <div class="mt-0.5 text-gray-700 text-xs">{slotLabel}</div>
     </div>
     <div class="flex flex-col text-center w-92">
         <h2 class="text-base font-semibold my-2">TX Frequency</h2>

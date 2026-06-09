@@ -1,10 +1,12 @@
 # FT8 in Station Manager — operator & contributor guide
 
-> **Status (2026-06-07):** Receive — decode + per-slot occupancy — is shipped.
-> Transmit is decided (ADR 0029) and partly built: the GFSK modulator and the
-> audio-output device are done and bench-verifiable (zero RF); PTT, slot timing,
-> and the interactive picker are still ahead. This guide is the single place the
-> FT8 picture is captured; keep it current as the TX layers land.
+> **Status (2026-06-09):** Receive — decode + per-slot occupancy — is shipped.
+> Transmit (ADR 0029) is building RX-safe-first: the GFSK modulator, audio-output
+> device, and the **PTT + slot-timing controller** (ADR 0030) are done — so SM can
+> now key the rig and transmit one FT8 slot from the gated `ft8-tx-probe -key`
+> bench path (first real RF). Still ahead: the manual sequencer, QSO logging, and
+> the SPA TX controls (step e). This guide is the single place the FT8 picture is
+> captured; keep it current as the TX layers land.
 
 ## 1. What it is
 
@@ -63,9 +65,12 @@ on any PUT):
 - **`tx.device`** — the audio **output** device index (string) the TX waveform is
   played to, from `ft8-tx-probe -list`. Separate from the capture `device`: the
   playback and capture device enumerations are independent even when the rig's USB
-  codec is physically one device. Empty = system default playback device. (Not
-  used until the step-(d) controller streams TX audio; `ft8-tx-probe` exercises it
-  today.)
+  codec is physically one device. Empty = system default playback device.
+- **`tx.mode`** — the rig data-mode literal the TX controller switches to before
+  keying PTT (ADR 0030), e.g. `"DATA-U"` on the FTdx10 (the same vocabulary
+  `set_mode` uses), restored after the transmission. Empty leaves the rig's
+  current mode untouched, for operators who keep the rig in the data mode
+  themselves.
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on
@@ -189,15 +194,15 @@ config.
 Daemon-owned TX, **manual-sequenced first** (operator advances each rung of the
 CQ→73 ladder; auto-sequence is a later ADR), reusing the ADR 0027 guaranteed-stop
 discipline — `tx_on`/`tx_off` are never `exposed`, only the TX controller keys
-the rig. Build order is **RX-safe first**; RF only enters at (d) — (c) and
-everything before it are audio-only / offline.
+the rig. Build order is **RX-safe first**; RF first enters at (d) — (a)–(c) are
+audio-only / offline.
 
 | Step | What | State |
 | --- | --- | --- |
 | (a) | Per-slot occupancy detector + SSE + SPA readout | **done** |
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
-| (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | next |
+| (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
 | (e) | Manual sequencer + QSO logging; **interactive picker** | picker strip shipped (RX-safe selection only); TX consumption + daemon snap pending |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
@@ -214,6 +219,37 @@ PTT yet, so it is RF-safe to build and bench. Validate it with
 `cmd/ft8-tx-probe` (`-list` enumerates playback devices for `ft8.tx.device`;
 `-msg=… -offset=… [-wav=…]` encodes and plays a message, optionally writing the
 slot WAV for an A/B decode back through `ft8-decode-file` / `jt9`).
+
+**Step (d) — PTT + slot-timing controller (shipped 2026-06-09, ADR 0030; first
+real RF).** The PTT seam is `ft8.TxKeyer` (`KeyTx`/`UnkeyTx`) — the same
+injection pattern as the capture source, so `internal/ft8` keys the rig without
+importing `internal/bridge`. The bridge implements it (`KeyFt8Tx`/`UnkeyFt8Tx`,
+`internal/bridge/ft8tx.go`) by **reusing the tune controller's guaranteed-stop
+machinery**: hard auto-off backstop (`ft8TxMaxDuration`, 18 s), release-on-
+disconnect, the rig-identity gate, and a **single-flight shared with tune** so an
+FT8 transmission and a tune carrier can never key at once. `tx_on`/`tx_off` stay
+unexposed; TX power is left at the operator's setting (no tune-style clamp).
+`ft8.TxController` (`internal/ft8/txcontroller.go`) orchestrates one slot:
+`EncodeToSlot` → wait for the next UTC boundary (keying a touch early so PTT
+settles) → `KeyTx` (optionally switching to `ft8.tx.mode`) → `Player.Play` → on
+the done channel `UnkeyTx`. PTT is dropped on **every** return path (a deferred
+unconditional unkey), with the bridge auto-off as the backstop. First RF is
+reached **only** from the gated **`cmd/ft8-tx-probe -key`** — it stands up its
+own bridge connection (so **stop the daemon first** to free the serial port),
+waits for connect + identity (`bridge.TxReady()`), then transmits one slot:
+
+```
+# AUDIO-ONLY (default, RF-safe): encode + play to a sound card
+ft8-tx-probe -msg="CQ G0ABC IO91" -offset=1500
+
+# REAL RF (gated): key the rig + transmit one slot on the next UTC boundary.
+# Stop the daemon first; use a dummy load. Reads bridge + ft8.tx.{device,mode}
+# from config.json.
+smctl stop
+ft8-tx-probe -key -msg="CQ G0ABC IO91" -offset=1500
+```
+
+No SPA can transmit yet — the sequencer + TX controls are step (e).
 
 **Step (e) picker (decided 2026-06-07; strip shipped 2026-06-09):** a **clickable
 occupancy strip** — a *static* per-slot view, **not** a scrolling waterfall —
@@ -247,10 +283,14 @@ timing.
   `DecodeReport`), `occupancy.go` (detector + ranking + guard), `modulate.go`
   (GFSK + offline round-trip), `hub.go` + `handler.go` (SSE). Capture seam:
   `source_cgo.go` / `source_nocgo.go`, `internal/audio/capture`. Output device:
-  `internal/audio/playback` (S16 mono playback, `//go:build cgo`).
+  `internal/audio/playback` (S16 mono playback, `//go:build cgo`). TX (ADR 0030):
+  `txkeyer.go` (`TxKeyer`/`slotPlayer` seams) + `txcontroller.go` (slot-aligned
+  key→play→unkey); PTT keying in `internal/bridge/ft8tx.go` (`KeyFt8Tx`/
+  `UnkeyFt8Tx`/`TxReady`, reusing the tune guaranteed-stop, single-flight shared
+  with tune).
 - **Dev tools:** `cmd/ft8-capture-probe` (list/validate capture + decode smoke),
-  `cmd/ft8-tx-probe` (list playback devices + encode-and-play a message, zero RF),
-  `cmd/ft8-decode-file` (offline WAV decode). All CGO.
+  `cmd/ft8-tx-probe` (list playback devices + encode-and-play; `-key` keys the rig
+  for one slot — REAL RF, gated), `cmd/ft8-decode-file` (offline WAV decode). All CGO.
 - **SPA:** `frontend/logging/src/lib/states/ft8.svelte.ts` (EventSource consumer),
   `lib/ui/panels/Ft8Panel.svelte`, `lib/ui/cards/LoggingCard.svelte` (mode switch).
   Band Activity CQ enrichment: `lib/states/ft8Enrich.svelte.ts` (per-`call|band`
@@ -260,4 +300,5 @@ timing.
   `lib/ui/panels/Ft8OccupancyStrip.svelte` + `ft8State.selectedOffset` /
   `selectOffset()` (inert selection, RX-safe).
 - **Decisions:** ADR 0024 (RX pipeline), ADR 0027 (guaranteed-stop TX pattern),
-  ADR 0029 (transmit). Licensing: ADR 0023 + `docs/licensing.md`.
+  ADR 0029 (transmit), ADR 0030 (step (d): PTT + slot-timing controller).
+  Licensing: ADR 0023 + `docs/licensing.md`.

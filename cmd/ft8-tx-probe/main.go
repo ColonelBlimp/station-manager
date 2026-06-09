@@ -27,16 +27,23 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/audio/playback"
+	"github.com/ColonelBlimp/station-manager/internal/bridge"
+	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 func main() {
@@ -47,8 +54,18 @@ func main() {
 		offset      = flag.Float64("offset", 1500, "audio offset (Hz) of the base tone")
 		dt          = flag.Float64("dt", 0.5, "start time within the 15 s slot (seconds); FT8 standard is +0.5 s")
 		wavOut      = flag.String("wav", "", "also write the encoded slot to this WAV (16-bit PCM 12k mono) for an A/B decode")
+		key         = flag.Bool("key", false, "DANGER: key the rig (REAL RF) and transmit one slot via the FT8 TX controller (ADR 0030). Needs a connected rig; stop the daemon first to free the serial port.")
+		configPath  = flag.String("config", "", "config.json path for -key (default: resolved via SM_WORKING_DIR / the executable's dir)")
 	)
 	flag.Parse()
+
+	// -key is the only RF path: it stands up a bridge connection and keys PTT.
+	// It manages its own player + bridge, so dispatch before building the
+	// audio-only player below.
+	if *key {
+		runKeyedTx(*configPath, *deviceIndex, *msg, *offset)
+		return
+	}
 
 	cfg := playback.DefaultConfig() // 12 kHz mono S16
 	cfg.DeviceIndex = *deviceIndex
@@ -120,6 +137,108 @@ func runPlay(p *playback.Player, cfg playback.Config, msg string, offset, dt flo
 		_, _ = fmt.Fprintf(os.Stderr, "warning: stop: %v\n", err)
 	}
 }
+
+// runKeyedTx is the gated REAL-RF path (ADR 0030 step d): load config, stand up
+// a bridge connection to the rig, wait for connect + identity, then transmit one
+// FT8 slot via the daemon-owned TX controller — key PTT, play the waveform,
+// unkey with the bridge's guaranteed stop. It owns its own bridge + player so no
+// running daemon (or SPA) is involved; stop the systemd daemon first so this can
+// own the serial port.
+func runKeyedTx(configPath string, deviceIndex int, msg string, offset float64) {
+	fmt.Fprintln(os.Stderr, "\n*** -key: THIS TRANSMITS REAL RF. Use a dummy load or a known-good antenna. ***")
+	fmt.Fprintln(os.Stderr, "*** Stop the daemon first (smctl stop) so this probe can own the serial port. ***")
+
+	if configPath == "" {
+		wd, err := utils.WorkingDir()
+		if err != nil {
+			fatal("resolve working dir: %v", err)
+		}
+		configPath = filepath.Join(wd, "config.json")
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fatal("load config %s: %v", configPath, err)
+	}
+	activeBridge := cfg.ActiveBridge()
+	activeFt8 := cfg.ActiveFt8()
+
+	mode := ""
+	if activeFt8.TX != nil {
+		mode = activeFt8.TX.Mode
+	}
+
+	// Playback device: the -device flag wins; otherwise the configured
+	// ft8.tx.device. Empty/invalid → system default (-1).
+	devIdx := deviceIndex
+	if devIdx < 0 && activeFt8.TX != nil && activeFt8.TX.Device != "" {
+		if n, perr := strconv.Atoi(activeFt8.TX.Device); perr == nil {
+			devIdx = n
+		}
+	}
+	pcfg := playback.DefaultConfig()
+	pcfg.DeviceIndex = devIdx
+	player := playback.New(pcfg)
+	if err := player.Init(); err != nil {
+		fatal("playback init: %v", err)
+	}
+	defer func() { _ = player.Close() }()
+
+	// Bring up the bridge. An uninitialised &logging.Service{} is the
+	// noop-logger pattern the bridge's own tests use.
+	logger := &logging.Service{}
+	br := bridge.New(activeBridge, logger)
+	if err := br.Initialize(); err != nil {
+		fatal("bridge init: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := br.Start(ctx); err != nil {
+		fatal("bridge start: %v", err)
+	}
+	defer func() { _ = br.Stop() }()
+
+	fmt.Fprintln(os.Stderr, "waiting for rig connection + identity…")
+	if !waitTxReady(br, 30*time.Second) {
+		fatal("rig not ready (connected + identity-confirmed) within 30s — is it powered on and is bridge.cat.driver correct?")
+	}
+
+	// Ctrl-C cancels the transmission; the controller's deferred unkey + the
+	// bridge auto-off backstop guarantee PTT comes down.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Fprintln(os.Stderr, "\nsignal received — aborting (PTT will drop)…")
+		cancel()
+	}()
+
+	ctrl := ft8.NewTxController(ft8Keyer{br}, player, mode, logger)
+	fmt.Fprintf(os.Stderr, "transmitting %q at %.0f Hz on the next UTC slot (mode=%q)…\n", msg, offset, mode)
+	if err := ctrl.TransmitSlot(ctx, msg, offset); err != nil {
+		fatal("transmit: %v", err)
+	}
+	fmt.Fprintln(os.Stderr, "transmission complete; PTT down.")
+}
+
+// waitTxReady polls the bridge until it can key TX (connected + identity
+// confirmed) or the timeout elapses.
+func waitTxReady(br *bridge.Service, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if br.TxReady() {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return br.TxReady()
+}
+
+// ft8Keyer adapts the bridge's FT8 keying methods to the ft8.TxKeyer interface,
+// keeping internal/ft8 free of any internal/bridge import (ADR 0030).
+type ft8Keyer struct{ b *bridge.Service }
+
+func (k ft8Keyer) KeyTx(ctx context.Context, mode string) error { return k.b.KeyFt8Tx(ctx, mode) }
+func (k ft8Keyer) UnkeyTx(ctx context.Context) error            { return k.b.UnkeyFt8Tx(ctx) }
 
 // saveSlotWAV writes the slot's int16 samples as a 16-bit PCM mono WAV that
 // ft8-decode-file / jt9 can read back for an A/B decode of the modulator.
