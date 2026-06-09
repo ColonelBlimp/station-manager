@@ -115,6 +115,14 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   controller (step d/e) consumes it.** Any cell is clickable (the grid keeps
   picks signal-aligned); daemon-side no-overlap enforcement at pick time lands
   with step (e). The selection clears when the FT8 view closes.
+  - **TX offset only — by design (decided 2026-06-09).** It sets where *you*
+    transmit, never an RX focus. FT8 RX is wideband (the daemon decodes the whole
+    passband every slot, so you already hear every station regardless of offset),
+    and good FT8 practice is to call on a *clear* slot rather than on top of the
+    station you're working — TX and RX offsets are normally different (this is the
+    WSJT-X red Tx marker, not the green Rx marker). Choosing *which station* to
+    work is a separate callsign-based action for the step-(e) sequencer, not a
+    frequency this strip sets.
 
 ### SSE wire — `GET /v1/ft8/events`
 

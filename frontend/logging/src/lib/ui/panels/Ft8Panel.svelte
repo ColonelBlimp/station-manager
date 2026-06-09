@@ -90,7 +90,7 @@
     The live decode list (per-slot freq / DT / text) still fills the Band
     Activity body later.
 -->
-<div class="flex justify-center h-112 text-gray-500 space-x-3 border">
+<div class="flex justify-center h-111 text-gray-500 space-x-3">
     <div class="flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
         <div class="flex flex-col place-items-center px-2 space-y-1">
@@ -109,8 +109,7 @@
     </div>
     <div class="flex flex-col text-center w-92">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
-        <div class="flex h-98.25 flex-col rounded border border-gray-300 overflow-y-scroll">
-            <p class="mt-1 text-sm">{slotLabel}</p>
+        <div class="flex h-95.5 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if ft8State.decodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each ft8State.decodes as d (d.id)}
@@ -124,9 +123,7 @@
                             {#if info?.flag}
                                 <span aria-hidden="true">{info.flag}</span>
                             {/if}
-                            <span class="truncate text-gray-700" style:color={rowColor(info)}
-                                >{d.text}</span
-                            >
+                            <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
                         </li>
                     {/each}
                 </ul>
@@ -134,10 +131,11 @@
                 <p class="mt-1 text-xs">Waiting for decodes…</p>
             {/if}
         </div>
+        <div class="text-gray-700 text-sm">{slotLabel}</div>
     </div>
     <div class="flex flex-col text-center w-92">
         <h2 class="text-base font-semibold my-2">TX Frequency</h2>
-        <div class="flex h-98.25 flex-col rounded border border-gray-300">
+        <div class="flex h-95.5 flex-col rounded border border-gray-300">
             <p class="mt-1 text-xs text-gray-400">Occupied (Hz) — validation view</p>
             {#if ft8State.occupied.length > 0}
                 <ul
@@ -159,13 +157,13 @@
         </div>
     </div>
     <div class="flex flex-col text-center w-20">
-        <h2 class="text-sm font-semibold my-2">Clear Slots</h2>
+        <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>
         {#if sortedOffsets.length > 0}
             <div class="flex flex-col place-items-center px-2 space-y-2">
                 {#each sortedOffsets as offset (offset)}
                     <button
                         type="button"
-                        class="rounded bg-gray-100 px-2 py-0.5 font-mono text-sm text-gray-700"
+                        class="w-17 rounded bg-gray-100 px-2 py-0.5 font-mono text-sm text-left text-gray-700"
                         class:ring-2={offset === ft8State.selectedOffset}
                         class:ring-green-700={offset === ft8State.selectedOffset}
                         title={offset === topPick
@@ -173,7 +171,7 @@
                             : 'Click to select for TX'}
                         onclick={() => ft8State.selectOffset(offset)}
                     >
-                        {#if offset === topPick}★&nbsp;{/if}{offset}
+                        {offset}{#if offset === topPick}&nbsp;*{/if}
                     </button>
                 {/each}
             </div>
@@ -191,7 +189,7 @@
     the TX controller (ADR 0029 step d/e) keys the rig. Both surfaces drive the
     one `ft8State.selectedOffset`.
 -->
-<div class="mt-2 border-t border-gray-200">
+<div class="m-0 border-t border-gray-300">
     <Ft8OccupancyStrip
         passbandLow={ft8State.passbandLow}
         passbandHigh={ft8State.passbandHigh}

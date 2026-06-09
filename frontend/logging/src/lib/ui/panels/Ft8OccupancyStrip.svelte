@@ -96,10 +96,10 @@
 </script>
 
 <div class="w-full px-3 py-2">
-    <div class="flex items-baseline justify-between text-xs text-gray-400">
-        <span>TX Offset — click a slot</span>
+    <div class="flex items-baseline justify-between text-xs text-gray-600">
+        <span>TX Offset — click a channel</span>
         <span class="font-mono text-gray-600">
-            {selected !== null ? `${selected} Hz` : 'none selected'}
+            Offset {selected !== null ? `${selected} Hz` : 'none selected'}
         </span>
     </div>
 
@@ -108,7 +108,7 @@
         <div class="relative my-3">
             {#if selectedCenterPct !== null}
                 <span
-                    class="pointer-events-none absolute bottom-full mb-0.5 -translate-x-1/2 text-[11px] leading-none text-gray-900"
+                    class="pointer-events-none absolute bottom-full mb-0.5 -translate-x-1/2 text-[11px] leading-none"
                     style:left="{selectedCenterPct}%"
                     aria-hidden="true">▼</span
                 >
@@ -119,7 +119,7 @@
                         type="button"
                         class="h-full border-r border-gray-400 last:border-r-0 {cellClass(c.busy)}"
                         class:border-b-2={c.offset === recommendedCell}
-                        class:border-b-amber-500={c.offset === recommendedCell}
+                        class:border-b-gray-700={c.offset === recommendedCell}
                         style:width="{c.widthPct}%"
                         title={cellTitle(c.offset, c.busy)}
                         aria-label={`Select TX offset ${c.offset} hertz`}
@@ -129,14 +129,14 @@
             </div>
             {#if selectedCenterPct !== null}
                 <span
-                    class="pointer-events-none absolute top-full mt-0.5 -translate-x-1/2 text-[11px] leading-none text-gray-900"
+                    class="pointer-events-none absolute top-full mt-0.5 -translate-x-1/2 text-[11px] leading-none"
                     style:left="{selectedCenterPct}%"
                     aria-hidden="true">▲</span
                 >
             {/if}
         </div>
-        <div class="flex justify-between font-mono text-[10px] text-gray-400">
-            <span>{passbandLow}</span>
+        <div class="flex justify-between font-mono text-[10px] text-gray-600">
+            <span>{passbandLow} Hz</span>
             <span>{passbandHigh} Hz</span>
         </div>
     {:else}
