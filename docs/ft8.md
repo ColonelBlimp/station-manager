@@ -92,12 +92,22 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   lines stay plain. The two highlight colours are operator-configurable
   (localStorage; defaults green = new, grey = worked).
 - **Clear Slots** — the daemon's ranked clear base offsets, shown
-  frequency-sorted with **★** marking the daemon's top pick. Read-only today;
-  becomes click-to-select TX at step (e).
+  frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
+  select it as the TX base offset** (highlighted; mirrors the strip below).
 - **TX Frequency** — *temporary validation view*: the per-slot **Occupied (Hz)**
   list with each band's source/level (`decode` / `both 0.42` / `energy 0.06`),
   added to cross-check the detector against WSJT-X. Step (e) reclaims this panel
   for the interactive TX picker.
+- **TX Offset strip** (bottom, shipped 2026-06-09) — a horizontal, per-slot
+  *spatial* view of the same data: the audio passband laid out left→right, busy
+  bands shaded, and the daemon's clear offsets drawn as clickable green markers
+  (★ = top pick) sized to the TX signal footprint. Clicking a marker — or a Clear
+  Slots chip — sets the one `ft8State.selectedOffset`. **Selection is inert (RX-safe):
+  it only marks "this is where I'll transmit"; nothing keys the rig until the TX
+  controller (step d/e) consumes it.** Only the daemon's vetted offsets are
+  selectable (the SPA never invents a spot); click-anywhere-with-snap is a later
+  upgrade once daemon-side no-overlap enforcement lands at step (e). The selection
+  clears when the FT8 view closes.
 
 ### SSE wire — `GET /v1/ft8/events`
 
@@ -173,7 +183,7 @@ everything before it are audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | next |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | — |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | picker strip shipped (RX-safe selection only); TX consumption + daemon snap pending |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
@@ -190,14 +200,19 @@ PTT yet, so it is RF-safe to build and bench. Validate it with
 `-msg=… -offset=… [-wav=…]` encodes and plays a message, optionally writing the
 slot WAV for an A/B decode back through `ft8-decode-file` / `jt9`).
 
-**Step (e) picker (decided 2026-06-07):** a **clickable occupancy strip** — a
-*static* per-slot view (busy bands shaded, clear gaps selectable), **not** a
-scrolling waterfall — alongside the existing ranked **Clear Slots** list. Click a
-clear spot (or a chip) to set the TX base offset; the daemon enforces no-overlap
-by refusing/snapping the pick. Enforcement is best-effort *at pick time* —
-occupancy re-evaluates each slot, so a station can still land on you mid-exchange;
-SM guards the *choice*, not the whole QSO. A full scrolling waterfall (time
-history) stays a deferred nicety.
+**Step (e) picker (decided 2026-06-07; strip shipped 2026-06-09):** a **clickable
+occupancy strip** — a *static* per-slot view (busy bands shaded, clear offsets
+selectable), **not** a scrolling waterfall — alongside the existing ranked **Clear
+Slots** list. **The strip + selection are now built** (`Ft8OccupancyStrip.svelte`,
+`ft8State.selectedOffset`): click a daemon-vetted clear marker or a Clear Slots
+chip to set the TX base offset; both surfaces drive the one selection and it's
+**inert — RX-safe — until a transmitter exists** (it marks intent, keys nothing).
+Still pending for step (e) proper: the TX controller *consuming* the selected
+offset, and daemon-side no-overlap enforcement (refusing/snapping the pick). That
+enforcement is best-effort *at pick time* — occupancy re-evaluates each slot, so a
+station can still land on you mid-exchange; SM guards the *choice*, not the whole
+QSO. Click-anywhere-with-snap (vs today's discrete vetted markers) and a full
+scrolling waterfall (time history) stay deferred niceties.
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →
@@ -222,6 +237,8 @@ timing.
   Band Activity CQ enrichment: `lib/states/ft8Enrich.svelte.ts` (per-`call|band`
   cache + fail-soft flag/worked lookups + configurable highlight colours),
   `lib/utils/ft8Message.ts` (`parseCqCall`), `lib/utils/flag.ts` (`ccodeToFlag`),
-  `lib/api/contest-dupe.ts` (worked-before client).
+  `lib/api/contest-dupe.ts` (worked-before client). TX-offset picker:
+  `lib/ui/panels/Ft8OccupancyStrip.svelte` + `ft8State.selectedOffset` /
+  `selectOffset()` (inert selection, RX-safe).
 - **Decisions:** ADR 0024 (RX pipeline), ADR 0027 (guaranteed-stop TX pattern),
   ADR 0029 (transmit). Licensing: ADR 0023 + `docs/licensing.md`.

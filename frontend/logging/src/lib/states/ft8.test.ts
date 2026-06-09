@@ -101,6 +101,9 @@ describe('ft8 occupancy transport', () => {
         expect(ft8State.busyCount).toBe(2);
         expect(ft8State.suggested).toEqual([2200, 1800, 760]);
         expect(ft8State.occupied).toHaveLength(2);
+        expect(ft8State.passbandLow).toBe(200);
+        expect(ft8State.passbandHigh).toBe(3000);
+        expect(ft8State.signalWidth).toBe(50);
     });
 
     it('treats null occupied/suggested as empty', () => {
@@ -140,6 +143,24 @@ describe('ft8 occupancy transport', () => {
         expect(ft8State.suggested).toEqual([]);
         expect(ft8State.decodes).toEqual([]);
         expect(ft8State.connected).toBe(false);
+    });
+});
+
+describe('ft8 TX-offset selection', () => {
+    it('selectOffset sets the selected offset; re-picking replaces it', () => {
+        startFt8();
+        expect(ft8State.selectedOffset).toBeNull();
+        ft8State.selectOffset(760);
+        expect(ft8State.selectedOffset).toBe(760);
+        ft8State.selectOffset(1800);
+        expect(ft8State.selectedOffset).toBe(1800);
+    });
+
+    it('stopFt8 clears the selected offset', () => {
+        startFt8();
+        ft8State.selectOffset(760);
+        stopFt8();
+        expect(ft8State.selectedOffset).toBeNull();
     });
 });
 

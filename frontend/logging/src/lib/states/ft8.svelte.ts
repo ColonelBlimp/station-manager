@@ -91,16 +91,36 @@ class Ft8State {
     /** Daemon-ranked clear base offsets (Hz), best first. */
     suggested: number[] = $state([]);
     /**
-     * The merged busy bands. Not rendered by the compact display, but carried
-     * so a future spectrum strip / the step-e TX picker can read it without a
-     * second source.
+     * The merged busy bands. Rendered by the occupancy strip (busy shading) and
+     * carried for the step-e TX picker.
      */
     occupied: Ft8Band[] = $state([]);
+    /**
+     * Audio passband the picker spans (Hz). Defaults to the daemon's standard
+     * 200–3000 before the first occupancy report; each report refreshes it.
+     */
+    passbandLow: number = $state(200);
+    passbandHigh: number = $state(3000);
+    /** Nominal signal width (Hz) — the footprint a TX offset occupies on the strip. */
+    signalWidth: number = $state(50);
+    /**
+     * Operator-selected TX base offset (Hz), or null when none is picked. Set by
+     * clicking a clear offset on the strip or a Clear Slots chip. In-memory,
+     * per-session, and **inert** until the TX controller (step d/e) consumes it —
+     * picking it keys nothing today. Survives a slot change (the chosen offset
+     * stays put even as occupancy shifts around it).
+     */
+    selectedOffset: number | null = $state(null);
     /**
      * Rolling decode history for the Band Activity feed — newest slot on top,
      * frequency-ascending within each slot, capped at DECODE_HISTORY_MAX.
      */
     decodes: DecodeEntry[] = $state([]);
+
+    /** Pick (or re-pick) the TX base offset. */
+    selectOffset(hz: number): void {
+        this.selectedOffset = hz;
+    }
 }
 
 export const ft8State = new Ft8State();
@@ -142,6 +162,11 @@ function openSource(): void {
         ft8State.occupied = payload.occupied ?? [];
         ft8State.busyCount = ft8State.occupied.length;
         ft8State.suggested = payload.suggested ?? [];
+        if (payload.passband) {
+            ft8State.passbandLow = payload.passband.low_hz;
+            ft8State.passbandHigh = payload.passband.high_hz;
+        }
+        if (payload.signal_width_hz > 0) ft8State.signalWidth = payload.signal_width_hz;
     });
 
     src.addEventListener('ft8-decode', (ev: MessageEvent<string>) => {
@@ -183,6 +208,7 @@ function closeSource(): void {
     ft8State.suggested = [];
     ft8State.occupied = [];
     ft8State.decodes = [];
+    ft8State.selectedOffset = null;
 }
 
 /** Open the occupancy stream. Called from Ft8Panel onMount. Idempotent. */

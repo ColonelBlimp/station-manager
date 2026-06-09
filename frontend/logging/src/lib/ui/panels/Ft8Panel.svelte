@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
     import Button from '../components/Button.svelte';
+    import Ft8OccupancyStrip from './Ft8OccupancyStrip.svelte';
     import { ft8State, startFt8, stopFt8, type Ft8Band } from '../../states/ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { displayedState } from '../../states/displayed.svelte';
@@ -165,7 +166,12 @@
                     <button
                         type="button"
                         class="rounded bg-gray-100 px-2 py-0.5 font-mono text-sm text-gray-700"
-                        title={offset === topPick ? 'Daemon’s top-ranked clear offset' : undefined}
+                        class:ring-2={offset === ft8State.selectedOffset}
+                        class:ring-green-700={offset === ft8State.selectedOffset}
+                        title={offset === topPick
+                            ? 'Daemon’s top-ranked clear offset — click to select for TX'
+                            : 'Click to select for TX'}
+                        onclick={() => ft8State.selectOffset(offset)}
                     >
                         {#if offset === topPick}★&nbsp;{/if}{offset}
                     </button>
@@ -177,4 +183,24 @@
             <p class="mt-1 text-xs">Waiting…</p>
         {/if}
     </div>
+</div>
+<!--
+    TX-offset picker: a spatial view of the same clear offsets the Clear Slots
+    column lists, laid out across the passband against the busy bands. Clicking a
+    marker (or a chip) only sets the selected TX base offset — it is inert until
+    the TX controller (ADR 0029 step d/e) keys the rig. Both surfaces drive the
+    one `ft8State.selectedOffset`.
+-->
+<div class="mt-2 border-t border-gray-200">
+    <Ft8OccupancyStrip
+        passbandLow={ft8State.passbandLow}
+        passbandHigh={ft8State.passbandHigh}
+        signalWidth={ft8State.signalWidth}
+        occupied={ft8State.occupied}
+        suggested={ft8State.suggested}
+        {topPick}
+        selected={ft8State.selectedOffset}
+        hasSlot={ft8State.slot !== null}
+        onselect={(hz: number) => ft8State.selectOffset(hz)}
+    />
 </div>
