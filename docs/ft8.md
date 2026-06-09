@@ -270,6 +270,74 @@ station can still land on you mid-exchange; SM guards the *choice*, not the whol
 QSO. Finer-than-50 Hz placement (the 6.25 Hz tone grid) and a full scrolling
 waterfall (time history) stay deferred niceties.
 
+### Step (e) sequencer — design (2026-06-09; **PAUSED, blocked on a go-ft8 SNR field**)
+
+Design captured for resumption; not yet built. Step (e) breaks into increments:
+
+- **e1 — daemon TX wiring (no sequencing):** wire `TxController` into the daemon's
+  `ft8.Service` (it is probe-only today), add an Enable-TX arm/disarm + a
+  "transmit this message on the next slot" path the SPA drives, plus the slot
+  timer. Plumbing + the safety gate; does not need SNR, so it can proceed in
+  parallel with the upstream work below.
+- **e2 — message model + next-message resolver (pure):** parse the rung messages
+  (the two calls + the token: grid / report / R-report / RR73 / RRR / 73; extend
+  `parseCqCall` to also return the grid) and a pure resolver
+  `(myCall, theirCall, myGrid, QSO state, last RX msg) → next TX msg`. No I/O,
+  unit-tested. **Shared by manual and auto.**
+- **e3 — manual sequencer UX:** initiation = **click a highlighted CQ row in Band
+  Activity** — the existing CQ parse + worked/unworked tint already mark whom to
+  work (un-worked = worth a click), so this is not a new picker. QSO-state
+  display, retry, abandon.
+- **e4 — QSO completion → log:** detect the exchange complete → build `types.Qso`
+  → submit via `qsoservice` (the "decode≠QSO → completed exchange = QSO"
+  evolution; `internal/ft8` imports `qsoservice`, never the reverse).
+- **e5 — auto-sequencer (separate ADR):** the daemon also *initiates* and walks
+  the ladder via the e2 resolver + watchdogs.
+
+**Scope order: answering a CQ first, then calling CQ** (calling CQ adds
+multi-answerer management).
+
+**Manual/auto seam (the key idea):** a **pure next-message resolver** shared by
+both; the only difference is the **send policy**. *Proposed (not yet ratified):*
+the operator's judgement is *whom to work* (the click), and rung advance is
+mechanical — so within a QSO the rungs **auto-advance** (operator armed it by
+clicking + Enable-TX; intervenes only to retry/abandon). i.e. **manual =
+operator-initiated-per-QSO with automatic rung advance; auto = daemon-initiated.**
+OPEN QUESTION: confirm this vs strict per-rung confirm.
+
+**Resolver + live QSO/sequencer state live daemon-side** (working assumption):
+auto needs it there, it is shared orchestration state (ADR 0004), and
+QSO-completion is daemon-side. The SPA is a thin sequencer view (show next
+message, arm/confirm/abandon).
+
+**Answer-a-CQ state machine** (our side, answering `CQ K1ABC FN42` as
+`G0XYZ IO91`, transmitting in the slot parity **opposite** K1ABC):
+
+| State | We heard | We send | advance on |
+| --- | --- | --- | --- |
+| Calling | (op clicked the CQ) | `K1ABC G0XYZ IO91` | repeat until answered |
+| Reporting | `G0XYZ K1ABC -10` | `K1ABC G0XYZ R-<snr>` | a report to us |
+| Confirming | `G0XYZ K1ABC RR73`/RRR | `K1ABC G0XYZ 73` → **log** | RR73/RRR to us |
+
+Off-ramps: K1ABC answers someone else (`SP9ABC K1ABC …`) → stay Calling
+(repeat/abandon); operator abandon; timeout after N unanswered repeats. **Advance
+rule:** a decode advances the QSO only if it parses `<ourCall> <theirCall>
+<token>` from the worked station.
+
+**Report source (DECIDED):** the report we send (rung 3, `R-<snr>`) is the **real
+SNR from go-ft8** — a `DecodedMessage.SNR` (dB) field **requested upstream and in
+progress (2026-06-09)**. The sequencer records the partner's latest SNR; rung 3
+sends it. SNR belongs in the decoder (jt9 already computes it; go-ft8 is a jt9
+derivative), so a configured default and SM-side SNR computation were both
+rejected. This **blocks rung 3 / e2's report formation** — but e1, parsing, and
+initiation don't depend on it. Bonus: it also gives Band Activity a real **dB
+column** (the thing currently missing). When it lands, SM threads `SNR` through
+`decode.go` → `DecodeReport` → SPA + sequencer.
+
+**STATUS:** design paused pending the go-ft8 SNR field; resume e1/e2 when it lands
+(e1 can start in parallel). An ADR (0031) is a candidate once the manual/auto
+send-policy seam is ratified.
+
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →
 timing.
