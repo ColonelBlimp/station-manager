@@ -104,9 +104,11 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   wide and sits at any continuous offset — so this grid is an SM picker
   convention: one slot = one signal width, so a pick can't half-overlap. **Each
   cell is coloured from the daemon's occupancy: green = clear, red = busy** (any
-  occupied band overlapping the cell's span); **white = the slot you selected**;
-  **amber underline = the daemon's #1 recommendation** (its continuous top-ranked
-  offset snapped to the nearest cell). Every cell's offset is in its hover title
+  occupied band overlapping the cell's span); the **selected slot keeps its
+  occupancy colour and is bracketed by a ▼ above / ▲ below** (so the pick reads
+  without hiding busy/clear); **amber underline = the daemon's #1 recommendation**
+  (its continuous top-ranked offset snapped to the nearest cell). Every cell's
+  offset is in its hover title
   (`TX offset 1500 Hz — clear, recommended`). Clicking a cell — or a Clear Slots
   chip — sets the one `ft8State.selectedOffset`. **Selection is inert (RX-safe):
   it only marks "this is where I'll transmit"; nothing keys the rig until the TX

@@ -10,9 +10,10 @@
     // Overlay (model A): each cell is coloured from the daemon's occupancy —
     // red if any busy band overlaps the cell's 50 Hz span, green if clear — and
     // the daemon's #1 recommendation (a continuous offset) is marked on its
-    // nearest cell. Clicking a slot sets the TX base offset (white). RX-safe —
-    // selection is inert until the TX controller (ADR 0029 step d/e) consumes
-    // it; nothing keys the rig here.
+    // nearest cell. The selected slot keeps its occupancy colour and is bracketed
+    // by a ▼ above / ▲ below so the pick reads without hiding busy/clear.
+    // Clicking a slot sets the TX base offset. RX-safe — selection is inert until
+    // the TX controller (ADR 0029 step d/e) consumes it; nothing keys the rig here.
     interface Props {
         passbandLow: number;
         passbandHigh: number;
@@ -55,21 +56,33 @@
         })
     );
 
-    // The daemon's #1 pick is a continuous offset; snap it to the nearest cell.
+    // Snap a continuous offset to its nearest cell index, or null if out of range.
+    function nearestIndex(hz: number | null): number | null {
+        if (hz === null) return null;
+        const idx = Math.round((hz - passbandLow) / slotWidth);
+        return idx < 0 || idx >= slotCount ? null : idx;
+    }
+
+    // The daemon's #1 pick (continuous) snapped to its cell offset.
     const recommendedCell = $derived.by(() => {
-        if (recommended === null) return null;
-        const idx = Math.min(
-            slotCount - 1,
-            Math.max(0, Math.round((recommended - passbandLow) / slotWidth))
-        );
-        return passbandLow + idx * slotWidth;
+        const idx = nearestIndex(recommended);
+        return idx === null ? null : passbandLow + idx * slotWidth;
     });
 
-    // Fill + hover for a cell. Selected wins (white, ringed) so the operator's
-    // pick stands out over the green/red occupancy. All classes are literal so
-    // Tailwind's JIT emits them.
-    function cellClass(offset: number, busy: boolean): string {
-        if (offset === selected) return 'bg-white ring-2 ring-inset ring-gray-900';
+    // The selected slot's cell offset, and the % position of that cell's centre
+    // (drives the ▼/▲ markers). A chip pick (a non-grid daemon offset) snaps to
+    // the nearest cell so the markers still land on the strip.
+    const selectedIndex = $derived(nearestIndex(selected));
+    const selectedCell = $derived(
+        selectedIndex === null ? null : passbandLow + selectedIndex * slotWidth
+    );
+    const selectedCenterPct = $derived(
+        selectedIndex === null ? null : ((selectedIndex + 0.5) / slotCount) * 100
+    );
+
+    // Fill + hover for a cell — occupancy only; the selection is shown by the
+    // arrows, not by recolouring. Literal classes so Tailwind's JIT emits them.
+    function cellClass(busy: boolean): string {
         if (busy) return 'bg-red-600/90 hover:bg-red-700';
         return 'bg-green-500/80 hover:bg-green-600';
     }
@@ -77,7 +90,7 @@
     function cellTitle(offset: number, busy: boolean): string {
         const tags = [busy ? 'busy' : 'clear'];
         if (offset === recommendedCell) tags.push('recommended');
-        if (offset === selected) tags.push('selected');
+        if (offset === selectedCell) tags.push('selected');
         return `TX offset ${offset} Hz — ${tags.join(', ')}`;
     }
 </script>
@@ -91,23 +104,36 @@
     </div>
 
     {#if hasSlot}
-        <!-- green = clear · red = busy · white = your pick · amber underline = daemon recommendation -->
-        <div class="relative mt-1 flex h-8 w-full overflow-hidden rounded border border-gray-400">
-            {#each cells as c (c.offset)}
-                <button
-                    type="button"
-                    class="h-full border-r border-gray-400 last:border-r-0 {cellClass(
-                        c.offset,
-                        c.busy
-                    )}"
-                    class:border-b-2={c.offset === recommendedCell}
-                    class:border-b-amber-500={c.offset === recommendedCell}
-                    style:width="{c.widthPct}%"
-                    title={cellTitle(c.offset, c.busy)}
-                    aria-label={`Select TX offset ${c.offset} hertz`}
-                    onclick={() => onselect(c.offset)}
-                ></button>
-            {/each}
+        <!-- green = clear · red = busy · ▼/▲ bracket your pick · amber underline = daemon recommendation -->
+        <div class="relative my-3">
+            {#if selectedCenterPct !== null}
+                <span
+                    class="pointer-events-none absolute bottom-full mb-0.5 -translate-x-1/2 text-[11px] leading-none text-gray-900"
+                    style:left="{selectedCenterPct}%"
+                    aria-hidden="true">▼</span
+                >
+            {/if}
+            <div class="flex h-8 w-full overflow-hidden rounded border border-gray-400">
+                {#each cells as c (c.offset)}
+                    <button
+                        type="button"
+                        class="h-full border-r border-gray-400 last:border-r-0 {cellClass(c.busy)}"
+                        class:border-b-2={c.offset === recommendedCell}
+                        class:border-b-amber-500={c.offset === recommendedCell}
+                        style:width="{c.widthPct}%"
+                        title={cellTitle(c.offset, c.busy)}
+                        aria-label={`Select TX offset ${c.offset} hertz`}
+                        onclick={() => onselect(c.offset)}
+                    ></button>
+                {/each}
+            </div>
+            {#if selectedCenterPct !== null}
+                <span
+                    class="pointer-events-none absolute top-full mt-0.5 -translate-x-1/2 text-[11px] leading-none text-gray-900"
+                    style:left="{selectedCenterPct}%"
+                    aria-hidden="true">▲</span
+                >
+            {/if}
         </div>
         <div class="flex justify-between font-mono text-[10px] text-gray-400">
             <span>{passbandLow}</span>
