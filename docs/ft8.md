@@ -208,18 +208,22 @@ PTT yet, so it is RF-safe to build and bench. Validate it with
 slot WAV for an A/B decode back through `ft8-decode-file` / `jt9`).
 
 **Step (e) picker (decided 2026-06-07; strip shipped 2026-06-09):** a **clickable
-occupancy strip** — a *static* per-slot view (busy bands shaded, clear offsets
-selectable), **not** a scrolling waterfall — alongside the existing ranked **Clear
-Slots** list. **The strip + selection are now built** (`Ft8OccupancyStrip.svelte`,
-`ft8State.selectedOffset`): click a daemon-vetted clear marker or a Clear Slots
-chip to set the TX base offset; both surfaces drive the one selection and it's
+occupancy strip** — a *static* per-slot view, **not** a scrolling waterfall —
+alongside the existing ranked **Clear Slots** list. **The strip + selection are now
+built** (`Ft8OccupancyStrip.svelte`, `ft8State.selectedOffset`). It is
+**channelised**: the passband is split into uniform ~50 Hz slots (≈56), each one
+signal wide, and **any** slot is clickable — the grid keeps every pick
+signal-aligned (no half-overlap), so there's no need for "vetted markers only." Per
+cell: green = clear, red = busy (derived from the daemon's `occupied` ranges), the
+selected slot bracketed by ▼/▲, and the daemon's #1 recommendation underlined
+amber. Clicking a slot or a Clear Slots chip drives the one selection, which is
 **inert — RX-safe — until a transmitter exists** (it marks intent, keys nothing).
 Still pending for step (e) proper: the TX controller *consuming* the selected
 offset, and daemon-side no-overlap enforcement (refusing/snapping the pick). That
 enforcement is best-effort *at pick time* — occupancy re-evaluates each slot, so a
 station can still land on you mid-exchange; SM guards the *choice*, not the whole
-QSO. Click-anywhere-with-snap (vs today's discrete vetted markers) and a full
-scrolling waterfall (time history) stay deferred niceties.
+QSO. Finer-than-50 Hz placement (the 6.25 Hz tone grid) and a full scrolling
+waterfall (time history) stay deferred niceties.
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →
