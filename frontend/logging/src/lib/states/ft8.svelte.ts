@@ -50,6 +50,7 @@ interface DecodeLine {
     text: string;
     freq_hz: number;
     dt_s: number;
+    snr: number;
 }
 
 /** Mirrors `internal/ft8.DecodeReport`. */
@@ -68,6 +69,7 @@ export interface DecodeEntry {
     startUtc: string;
     freqHz: number;
     dtSec: number;
+    snr: number;
     text: string;
 }
 
@@ -189,6 +191,7 @@ function openSource(): void {
                 startUtc,
                 freqHz: d.freq_hz,
                 dtSec: d.dt_s,
+                snr: d.snr,
                 text: d.text,
             }));
         // Newest slot on top, capped.

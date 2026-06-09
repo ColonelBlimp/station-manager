@@ -168,7 +168,7 @@ describe('ft8 TX-offset selection', () => {
 function decodeReport(startUtc: string, texts: string[]): string {
     return JSON.stringify({
         slot: { start_utc: startUtc, period: 'odd' },
-        decodes: texts.map((text, i) => ({ text, freq_hz: 1000 + i * 100, dt_s: 0.2 })),
+        decodes: texts.map((text, i) => ({ text, freq_hz: 1000 + i * 100, dt_s: 0.2, snr: -10 + i })),
     });
 }
 
@@ -190,12 +190,24 @@ describe('ft8 decode feed', () => {
             JSON.stringify({
                 slot: { start_utc: '2026-06-07T14:30:15Z', period: 'odd' },
                 decodes: [
-                    { text: 'HIGH', freq_hz: 2400, dt_s: 0.1 },
-                    { text: 'LOW', freq_hz: 600, dt_s: 0.1 },
+                    { text: 'HIGH', freq_hz: 2400, dt_s: 0.1, snr: 3 },
+                    { text: 'LOW', freq_hz: 600, dt_s: 0.1, snr: -18 },
                 ],
             })
         );
         expect(ft8State.decodes.map((d) => d.text)).toEqual(['LOW', 'HIGH']);
+    });
+
+    it('carries SNR through to the decode entry', () => {
+        startFt8();
+        latest().emit(
+            'ft8-decode',
+            JSON.stringify({
+                slot: { start_utc: '2026-06-07T14:30:15Z', period: 'odd' },
+                decodes: [{ text: 'CQ A', freq_hz: 1000, dt_s: 0.2, snr: -7 }],
+            })
+        );
+        expect(ft8State.decodes[0].snr).toBe(-7);
     });
 
     it('assigns unique ids and skips empty/null slots', () => {

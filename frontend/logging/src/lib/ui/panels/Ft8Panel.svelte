@@ -38,6 +38,11 @@
         }
     });
 
+    // SNR formatted WSJT-X-style: an explicit-sign integer dB ("+04", "-13").
+    function formatSnr(snr: number): string {
+        return (snr >= 0 ? '+' : '-') + String(Math.abs(snr)).padStart(2, '0');
+    }
+
     // Tint colour for a CQ row: the attention colour when the station is new on
     // this band, the muted colour when worked before, and no override (default
     // text colour) while the worked answer is still pending or for non-CQ rows.
@@ -118,6 +123,7 @@
                         <li class="flex gap-2 whitespace-nowrap">
                             <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span
                             >
+                            <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
                             <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span
                             >
                             {#if info?.flag}

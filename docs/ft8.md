@@ -4,10 +4,12 @@
 > Transmit (ADR 0029) is building RX-safe-first: the GFSK modulator, audio-output
 > device, and the **PTT + slot-timing controller** (ADR 0030) are done — so SM can
 > now key the rig and transmit one FT8 slot from the gated `ft8-tx-probe -key`
-> bench path. **First real RF live-validated on the bench 2026-06-09.** Still
-> ahead: the manual sequencer, QSO logging, and
-> the SPA TX controls (step e). This guide is the single place the FT8 picture is
-> captured; keep it current as the TX layers land.
+> bench path. **First real RF live-validated on the bench 2026-06-09.** go-ft8
+> **v0.3.0** added the per-decode **SNR** (dB) — now shown in Band Activity and the
+> source for the report we'll send — clearing the step (e) blocker. Still ahead:
+> the manual sequencer, QSO logging, and the SPA TX controls (step e). This guide
+> is the single place the FT8 picture is captured; keep it current as the TX
+> layers land.
 
 ## 1. What it is
 
@@ -84,8 +86,11 @@ persisted to `localStorage` (survives reload). FT8 mode renders `Ft8Panel`,
 which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 
 - **Band Activity** — live decode feed: a rolling list (newest slot on top,
-  frequency-ascending within a slot, ~100-row cap) of `time · freq · message`.
-  No dB column — go-ft8 doesn't report an SNR. **CQ lines are enriched**: each
+  frequency-ascending within a slot, ~100-row cap) of `time · SNR · freq ·
+  message`. The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
+  from go-ft8's `DecodedMessage.SNR` (dB, 2500 Hz reference), added in go-ft8
+  v0.3.0 and threaded through `DecodeLine.SNR` → the `ft8-decode` SSE → the row.
+  **CQ lines are enriched**: each
   carries the calling station's **country flag** and a **worked-before tint** —
   un-worked-on-this-band stations show in the attention colour, worked-before
   (dupe) stations are muted, WSJT-X-style. Enrichment is purely SPA-side and
@@ -135,7 +140,7 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 Two event types over one stream, each with a one-slot replay cache (a tab
 connecting mid-slot gets the current state immediately):
 
-- **`ft8-decode`** → `DecodeReport{ slot, decodes:[{text, freq_hz, dt_s}] }`
+- **`ft8-decode`** → `DecodeReport{ slot, decodes:[{text, freq_hz, dt_s, snr}] }`
 - **`ft8-occupancy`** → `OccupancyReport{ slot, passband, signal_width_hz,
   occupied:[{low_hz, high_hz, source, level}], suggested:[hz…] }`
 
@@ -270,9 +275,12 @@ station can still land on you mid-exchange; SM guards the *choice*, not the whol
 QSO. Finer-than-50 Hz placement (the 6.25 Hz tone grid) and a full scrolling
 waterfall (time history) stay deferred niceties.
 
-### Step (e) sequencer — design (2026-06-09; **PAUSED, blocked on a go-ft8 SNR field**)
+### Step (e) sequencer — design (2026-06-09; **UNBLOCKED — go-ft8 SNR landed in v0.3.0**)
 
-Design captured for resumption; not yet built. Step (e) breaks into increments:
+Design captured; not yet built. The former blocker (go-ft8 had no SNR) cleared
+when **go-ft8 v0.3.0** added `DecodedMessage.SNR` (dB, 2500 Hz reference); SM is
+on v0.3.0 and the field is already threaded through the RX display (`DecodeLine.SNR`
+→ `ft8-decode` SSE → Band Activity dB column). Step (e) breaks into increments:
 
 - **e1 — daemon TX wiring (no sequencing):** wire `TxController` into the daemon's
   `ft8.Service` (it is probe-only today), add an Enable-TX arm/disarm + a
@@ -324,19 +332,18 @@ Off-ramps: K1ABC answers someone else (`SP9ABC K1ABC …`) → stay Calling
 rule:** a decode advances the QSO only if it parses `<ourCall> <theirCall>
 <token>` from the worked station.
 
-**Report source (DECIDED):** the report we send (rung 3, `R-<snr>`) is the **real
-SNR from go-ft8** — a `DecodedMessage.SNR` (dB) field **requested upstream and in
-progress (2026-06-09)**. The sequencer records the partner's latest SNR; rung 3
-sends it. SNR belongs in the decoder (jt9 already computes it; go-ft8 is a jt9
-derivative), so a configured default and SM-side SNR computation were both
-rejected. This **blocks rung 3 / e2's report formation** — but e1, parsing, and
-initiation don't depend on it. Bonus: it also gives Band Activity a real **dB
-column** (the thing currently missing). When it lands, SM threads `SNR` through
-`decode.go` → `DecodeReport` → SPA + sequencer.
+**Report source (DECIDED, now available):** the report we send (rung 3, `R-<snr>`)
+is the **real SNR from go-ft8** — `DecodedMessage.SNR` (dB), added in **v0.3.0**
+(SM now links it). The sequencer records the partner's latest SNR; rung 3 sends it.
+SNR belongs in the decoder (jt9 already computes it; go-ft8 is a jt9 derivative),
+so a configured default and SM-side SNR computation were both rejected. The SNR is
+already threaded through `decode.go` → `DecodeReport` → SPA (the Band Activity dB
+column); e2's resolver reads the same field to form rung 3.
 
-**STATUS:** design paused pending the go-ft8 SNR field; resume e1/e2 when it lands
-(e1 can start in parallel). An ADR (0031) is a candidate once the manual/auto
-send-policy seam is ratified.
+**STATUS:** unblocked (SNR landed in go-ft8 v0.3.0 and is threaded to the RX
+display). Ready to build — e1 (daemon TX) and e2 (resolver) are next; e1 is
+SNR-independent and can start any time. An ADR (0031) is a candidate once the
+manual/auto send-policy seam is ratified.
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →

@@ -18,20 +18,22 @@ type DecodeReport struct {
 	Decodes []DecodeLine `json:"decodes"`
 }
 
-// DecodeLine is one decoded message in operator-facing form. go-ft8 reports no
-// dB SNR, so a line carries the base-tone frequency, the time offset, and the
-// message text — the fields the operator reads to pick a station to work.
+// DecodeLine is one decoded message in operator-facing form: the base-tone
+// frequency, the time offset, the SNR (dB, WSJT-X 2500 Hz reference), and the
+// message text — the fields the operator reads to pick a station to work and
+// the report to send back. SNR also feeds the step (e) answer-a-CQ sequencer.
 type DecodeLine struct {
 	Text   string  `json:"text"`
 	FreqHz float64 `json:"freq_hz"`
 	DTSec  float64 `json:"dt_s"`
+	SNR    int     `json:"snr"`
 }
 
 // newDecodeReport projects go-ft8's decodes into the wire DTO for one slot.
 func newDecodeReport(slot SlotRef, msgs []goft8.DecodedMessage) DecodeReport {
 	lines := make([]DecodeLine, 0, len(msgs))
 	for _, m := range msgs {
-		lines = append(lines, DecodeLine{Text: m.Text, FreqHz: m.FreqHz, DTSec: m.DTSec})
+		lines = append(lines, DecodeLine{Text: m.Text, FreqHz: m.FreqHz, DTSec: m.DTSec, SNR: m.SNR})
 	}
 	return DecodeReport{Slot: slot, Decodes: lines}
 }
@@ -99,6 +101,7 @@ func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) (msgs []gof
 			Str("text", m.Text).
 			Float64("freq_hz", m.FreqHz).
 			Float64("dt_s", m.DTSec).
+			Int("snr", m.SNR).
 			Float64("sync", m.Sync).
 			Msg("ft8 decode")
 	}
