@@ -197,8 +197,7 @@
         passbandHigh={ft8State.passbandHigh}
         signalWidth={ft8State.signalWidth}
         occupied={ft8State.occupied}
-        suggested={ft8State.suggested}
-        {topPick}
+        recommended={topPick}
         selected={ft8State.selectedOffset}
         hasSlot={ft8State.slot !== null}
         onselect={(hz: number) => ft8State.selectOffset(hz)}

@@ -1,21 +1,24 @@
 <script lang="ts">
     import type { Ft8Band } from '../../states/ft8.svelte';
 
-    // A horizontal, per-slot view of the audio passband: busy bands shaded, the
-    // daemon's clear base offsets drawn as clickable green markers (★ = top
-    // pick) sized to the TX signal footprint. Clicking a marker selects that TX
-    // base offset. RX-safe — selection is inert until the TX controller (ADR
-    // 0029 step d/e) consumes it; nothing keys the rig here. Only the daemon's
-    // vetted `suggested` offsets are selectable (the SPA never invents a spot);
-    // click-anywhere-with-snap is a later upgrade once daemon-side enforcement
-    // lands at step (e).
+    // A horizontal, per-slot view of the audio passband, divided into uniform
+    // signal-width slots. FT8 has no standard offset grid — a signal is ~50 Hz
+    // wide (8 tones × 6.25 Hz) and can sit at any continuous offset — so this
+    // grid is an SM picker convention: split 200–3000 Hz into ~50 Hz slots
+    // (≈56), each exactly one signal wide, so a pick can't half-overlap.
+    //
+    // Overlay (model A): each cell is coloured from the daemon's occupancy —
+    // red if any busy band overlaps the cell's 50 Hz span, green if clear — and
+    // the daemon's #1 recommendation (a continuous offset) is marked on its
+    // nearest cell. Clicking a slot sets the TX base offset (white). RX-safe —
+    // selection is inert until the TX controller (ADR 0029 step d/e) consumes
+    // it; nothing keys the rig here.
     interface Props {
         passbandLow: number;
         passbandHigh: number;
         signalWidth: number;
         occupied: Ft8Band[];
-        suggested: number[];
-        topPick: number | null;
+        recommended: number | null;
         selected: number | null;
         hasSlot: boolean;
         onselect: (hz: number) => void;
@@ -25,63 +28,85 @@
         passbandHigh,
         signalWidth,
         occupied,
-        suggested,
-        topPick,
+        recommended,
         selected,
         hasSlot,
         onselect,
     }: Props = $props();
 
-    // Guard the divisor: a degenerate/empty passband would otherwise NaN every
-    // position. The default 200–3000 means this only bites before the first report.
     const span = $derived(Math.max(1, passbandHigh - passbandLow));
+    // Guard the slot width and cap the count so a degenerate report can't ask
+    // for thousands of cells.
+    const slotWidth = $derived(Math.max(1, signalWidth));
+    const slotCount = $derived(Math.min(200, Math.max(1, Math.floor(span / slotWidth))));
 
-    // Frequency → strip position (%), clamped so an offset at/just past an edge
-    // still renders on the bar rather than overflowing it.
-    function pct(hz: number): number {
-        return Math.min(100, Math.max(0, ((hz - passbandLow) / span) * 100));
+    // A cell is busy if any occupied band overlaps its [offset, offset+width) span.
+    function isBusy(offset: number): boolean {
+        const hi = offset + slotWidth;
+        return occupied.some((b) => offset < b.high_hz && hi > b.low_hz);
     }
 
-    // Ascending so markers render left-to-right like a band; keyed by offset.
-    const offsets = $derived([...suggested].sort((a, b) => a - b));
+    // One cell per slot, filling the strip edge-to-edge. Base offset = passband
+    // low + index × slot width (200, 250, … for 50 Hz).
+    const cells = $derived(
+        Array.from({ length: slotCount }, (_, i) => {
+            const offset = passbandLow + i * slotWidth;
+            return { offset, widthPct: 100 / slotCount, busy: isBusy(offset) };
+        })
+    );
+
+    // The daemon's #1 pick is a continuous offset; snap it to the nearest cell.
+    const recommendedCell = $derived.by(() => {
+        if (recommended === null) return null;
+        const idx = Math.min(
+            slotCount - 1,
+            Math.max(0, Math.round((recommended - passbandLow) / slotWidth))
+        );
+        return passbandLow + idx * slotWidth;
+    });
+
+    // Fill + hover for a cell. Selected wins (white, ringed) so the operator's
+    // pick stands out over the green/red occupancy. All classes are literal so
+    // Tailwind's JIT emits them.
+    function cellClass(offset: number, busy: boolean): string {
+        if (offset === selected) return 'bg-white ring-2 ring-inset ring-gray-900';
+        if (busy) return 'bg-red-600/90 hover:bg-red-700';
+        return 'bg-green-500/80 hover:bg-green-600';
+    }
+
+    function cellTitle(offset: number, busy: boolean): string {
+        const tags = [busy ? 'busy' : 'clear'];
+        if (offset === recommendedCell) tags.push('recommended');
+        if (offset === selected) tags.push('selected');
+        return `TX offset ${offset} Hz — ${tags.join(', ')}`;
+    }
 </script>
 
 <div class="w-full px-3 py-2">
     <div class="flex items-baseline justify-between text-xs text-gray-400">
-        <span>TX Offset — click a clear slot</span>
+        <span>TX Offset — click a slot</span>
         <span class="font-mono text-gray-600">
             {selected !== null ? `${selected} Hz` : 'none selected'}
         </span>
     </div>
 
     {#if hasSlot}
-        <div class="relative mt-1 h-8 w-full rounded border border-gray-300 bg-gray-50">
-            <!-- Busy bands (shaded, non-interactive). -->
-            {#each occupied as b (b.low_hz)}
-                <div
-                    class="absolute top-0 h-full bg-red-200/70"
-                    style:left="{pct(b.low_hz)}%"
-                    style:width="{pct(b.high_hz) - pct(b.low_hz)}%"
-                ></div>
-            {/each}
-            <!-- Clear-offset markers (selectable), sized to the TX footprint. -->
-            {#each offsets as offset (offset)}
+        <!-- green = clear · red = busy · white = your pick · amber underline = daemon recommendation -->
+        <div class="relative mt-1 flex h-8 w-full overflow-hidden rounded border border-gray-400">
+            {#each cells as c (c.offset)}
                 <button
                     type="button"
-                    class="absolute top-0 flex h-full items-start justify-center border-l-2 border-green-600 bg-green-500/40 leading-none hover:bg-green-500/70"
-                    class:ring-2={offset === selected}
-                    class:ring-inset={offset === selected}
-                    class:ring-green-800={offset === selected}
-                    style:left="{pct(offset)}%"
-                    style:width="{Math.max(1, pct(offset + signalWidth) - pct(offset))}%"
-                    title={`Select TX offset ${offset} Hz${
-                        offset === topPick ? ' (daemon top pick)' : ''
-                    }`}
-                    aria-label={`Select TX offset ${offset} hertz`}
-                    onclick={() => onselect(offset)}
-                >
-                    {#if offset === topPick}<span class="text-[10px] text-green-900">★</span>{/if}
-                </button>
+                    class="h-full border-r border-gray-400 last:border-r-0 {cellClass(
+                        c.offset,
+                        c.busy
+                    )}"
+                    class:border-b-2={c.offset === recommendedCell}
+                    class:border-b-amber-500={c.offset === recommendedCell}
+                    style:width="{c.widthPct}%"
+                    title={cellTitle(c.offset, c.busy)}
+                    aria-label={`Select TX offset ${c.offset} hertz`}
+                    onclick={() => onselect(c.offset)}
+                ></button>
             {/each}
         </div>
         <div class="flex justify-between font-mono text-[10px] text-gray-400">

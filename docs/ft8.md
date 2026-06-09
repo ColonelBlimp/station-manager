@@ -99,15 +99,20 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   added to cross-check the detector against WSJT-X. Step (e) reclaims this panel
   for the interactive TX picker.
 - **TX Offset strip** (bottom, shipped 2026-06-09) — a horizontal, per-slot
-  *spatial* view of the same data: the audio passband laid out left→right, busy
-  bands shaded, and the daemon's clear offsets drawn as clickable green markers
-  (★ = top pick) sized to the TX signal footprint. Clicking a marker — or a Clear
-  Slots chip — sets the one `ft8State.selectedOffset`. **Selection is inert (RX-safe):
+  *spatial* view of the passband, **channelised** into uniform ~50 Hz slots
+  (≈56 across 200–3000). FT8 has no standard offset grid — a signal is ~50 Hz
+  wide and sits at any continuous offset — so this grid is an SM picker
+  convention: one slot = one signal width, so a pick can't half-overlap. **Each
+  cell is coloured from the daemon's occupancy: green = clear, red = busy** (any
+  occupied band overlapping the cell's span); **white = the slot you selected**;
+  **amber underline = the daemon's #1 recommendation** (its continuous top-ranked
+  offset snapped to the nearest cell). Every cell's offset is in its hover title
+  (`TX offset 1500 Hz — clear, recommended`). Clicking a cell — or a Clear Slots
+  chip — sets the one `ft8State.selectedOffset`. **Selection is inert (RX-safe):
   it only marks "this is where I'll transmit"; nothing keys the rig until the TX
-  controller (step d/e) consumes it.** Only the daemon's vetted offsets are
-  selectable (the SPA never invents a spot); click-anywhere-with-snap is a later
-  upgrade once daemon-side no-overlap enforcement lands at step (e). The selection
-  clears when the FT8 view closes.
+  controller (step d/e) consumes it.** Any cell is clickable (the grid keeps
+  picks signal-aligned); daemon-side no-overlap enforcement at pick time lands
+  with step (e). The selection clears when the FT8 view closes.
 
 ### SSE wire — `GET /v1/ft8/events`
 
