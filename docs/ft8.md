@@ -79,7 +79,18 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 
 - **Band Activity** — live decode feed: a rolling list (newest slot on top,
   frequency-ascending within a slot, ~100-row cap) of `time · freq · message`.
-  No dB column — go-ft8 doesn't report an SNR.
+  No dB column — go-ft8 doesn't report an SNR. **CQ lines are enriched**: each
+  carries the calling station's **country flag** and a **worked-before tint** —
+  un-worked-on-this-band stations show in the attention colour, worked-before
+  (dupe) stations are muted, WSJT-X-style. Enrichment is purely SPA-side and
+  reuses existing endpoints (`/v1/enrich/callsign` → flag, `/v1/contest-dupe` →
+  worked on the current band+mode); it's progressive and fail-soft — the row
+  renders immediately and the decorations appear when the lookups resolve, so a
+  slow/absent hamnut or DB answer never stalls the feed. Results are cached per
+  `call|band` for the session (CQ stations recur, so steady-state lookups ≈ 0).
+  Only CQ messages are decorated today (one unambiguous callsign); reply/report
+  lines stay plain. The two highlight colours are operator-configurable
+  (localStorage; defaults green = new, grey = worked).
 - **Clear Slots** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. Read-only today;
   becomes click-to-select TX at step (e).
@@ -208,5 +219,9 @@ timing.
   `cmd/ft8-decode-file` (offline WAV decode). All CGO.
 - **SPA:** `frontend/logging/src/lib/states/ft8.svelte.ts` (EventSource consumer),
   `lib/ui/panels/Ft8Panel.svelte`, `lib/ui/cards/LoggingCard.svelte` (mode switch).
+  Band Activity CQ enrichment: `lib/states/ft8Enrich.svelte.ts` (per-`call|band`
+  cache + fail-soft flag/worked lookups + configurable highlight colours),
+  `lib/utils/ft8Message.ts` (`parseCqCall`), `lib/utils/flag.ts` (`ccodeToFlag`),
+  `lib/api/contest-dupe.ts` (worked-before client).
 - **Decisions:** ADR 0024 (RX pipeline), ADR 0027 (guaranteed-stop TX pattern),
   ADR 0029 (transmit). Licensing: ADR 0023 + `docs/licensing.md`.

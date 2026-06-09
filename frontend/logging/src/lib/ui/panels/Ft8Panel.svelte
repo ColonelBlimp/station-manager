@@ -2,13 +2,48 @@
     import { onMount, onDestroy } from 'svelte';
     import Button from '../components/Button.svelte';
     import { ft8State, startFt8, stopFt8, type Ft8Band } from '../../states/ft8.svelte';
+    import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
+    import { displayedState } from '../../states/displayed.svelte';
+    import { parseCqCall } from '../../utils/ft8Message';
+    import { frequencyToBand } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
 
     // The occupancy stream is scoped to this view: open while FT8 mode is showing,
     // close on leave (LoggingCard mounts/unmounts this panel with the Operating
-    // Mode switch). See ft8.svelte.ts.
+    // Mode switch). See ft8.svelte.ts. The enrichment cache is dropped on leave
+    // too so a re-open re-resolves against current operating history.
     onMount(startFt8);
-    onDestroy(stopFt8);
+    onDestroy(() => {
+        stopFt8();
+        ft8EnrichState.clear();
+    });
+
+    // Current operating band, derived from the selected VFO. The worked-before
+    // lookup is band+mode-specific, so the band is part of each enrichment key.
+    const opFreq = $derived(
+        displayedState.selectedVfo === 'B' ? displayedState.vfoB : displayedState.vfoA
+    );
+    const band = $derived(frequencyToBand(opFreq));
+
+    // Drive flag + worked-before lookups for the CQ stations on screen. Runs once
+    // per slot (when the decode list changes) and on a band change (new keys);
+    // observe() dedupes, so re-scanning the visible rows costs nothing after the
+    // first sighting of each call. Only CQ lines are enriched (one unambiguous
+    // callsign); reply/report lines are left plain for now.
+    $effect(() => {
+        for (const d of ft8State.decodes) {
+            const call = parseCqCall(d.text);
+            if (call) ft8EnrichState.observe(call, band);
+        }
+    });
+
+    // Tint colour for a CQ row: the attention colour when the station is new on
+    // this band, the muted colour when worked before, and no override (default
+    // text colour) while the worked answer is still pending or for non-CQ rows.
+    function rowColor(info: Ft8CallInfo | undefined): string | undefined {
+        if (!info || info.worked === undefined) return undefined;
+        return info.worked ? ft8EnrichState.colorWorked : ft8EnrichState.colorUnworked;
+    }
 
     // Slot label: "14:30:15 · odd · 19 busy", or a waiting state before the first
     // event. start_utc is RFC3339 UTC; render its UTC wall-clock with seconds so
@@ -78,12 +113,19 @@
             {#if ft8State.decodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each ft8State.decodes as d (d.id)}
+                        {@const cqCall = parseCqCall(d.text)}
+                        {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
                         <li class="flex gap-2 whitespace-nowrap">
                             <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span
                             >
                             <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span
                             >
-                            <span class="truncate text-gray-700">{d.text}</span>
+                            {#if info?.flag}
+                                <span aria-hidden="true">{info.flag}</span>
+                            {/if}
+                            <span class="truncate text-gray-700" style:color={rowColor(info)}
+                                >{d.text}</span
+                            >
                         </li>
                     {/each}
                 </ul>
