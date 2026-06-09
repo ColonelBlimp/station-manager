@@ -106,7 +106,7 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   cell is coloured from the daemon's occupancy: green = clear, red = busy** (any
   occupied band overlapping the cell's span); the **selected slot keeps its
   occupancy colour and is bracketed by a ▼ above / ▲ below** (so the pick reads
-  without hiding busy/clear); **amber underline = the daemon's #1 recommendation**
+  without hiding busy/clear); **grey underline = the daemon's #1 recommendation**
   (its continuous top-ranked offset snapped to the nearest cell). Every cell's
   offset is in its hover title
   (`TX offset 1500 Hz — clear, recommended`). Clicking a cell — or a Clear Slots
@@ -224,7 +224,7 @@ signal wide, and **any** slot is clickable — the grid keeps every pick
 signal-aligned (no half-overlap), so there's no need for "vetted markers only." Per
 cell: green = clear, red = busy (derived from the daemon's `occupied` ranges), the
 selected slot bracketed by ▼/▲, and the daemon's #1 recommendation underlined
-amber. Clicking a slot or a Clear Slots chip drives the one selection, which is
+grey. Clicking a slot or a Clear Slots chip drives the one selection, which is
 **inert — RX-safe — until a transmitter exists** (it marks intent, keys nothing).
 Still pending for step (e) proper: the TX controller *consuming* the selected
 offset, and daemon-side no-overlap enforcement (refusing/snapping the pick). That
