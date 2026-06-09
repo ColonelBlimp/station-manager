@@ -107,7 +107,8 @@ probe path validates the controller before any UI can reach it.
   empty = leave mode untouched). No new power knob.
 - **RF reachable from the bench.** `cmd/ft8-tx-probe -key` keys the rig; the
   default (no `-key`) stays audio-only/RF-safe as today. Live TX still requires a
-  CGO build (audio output is CGO).
+  CGO build (audio output is CGO). **First real RF live-validated on the bench
+  2026-06-09** — PTT keyed, waveform transmitted, clean unkey.
 - **Step (e) unblocked.** The sequencer, QSO logging, and SPA TX controls build
   on this controller; they decide *which* message and *when*, then hand it to the
   same key→play→unkey path.

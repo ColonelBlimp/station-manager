@@ -55,7 +55,7 @@ func main() {
 		dt          = flag.Float64("dt", 0.5, "start time within the 15 s slot (seconds); FT8 standard is +0.5 s")
 		wavOut      = flag.String("wav", "", "also write the encoded slot to this WAV (16-bit PCM 12k mono) for an A/B decode")
 		key         = flag.Bool("key", false, "DANGER: key the rig (REAL RF) and transmit one slot via the FT8 TX controller (ADR 0030). Needs a connected rig; stop the daemon first to free the serial port.")
-		configPath  = flag.String("config", "", "config.json path for -key (default: resolved via SM_WORKING_DIR / the executable's dir)")
+		configPath  = flag.String("config", "", "config.json path for -key (default: $SM_WORKING_DIR, else the XDG data dir ~/.local/share/station-manager)")
 	)
 	flag.Parse()
 
@@ -148,13 +148,7 @@ func runKeyedTx(configPath string, deviceIndex int, msg string, offset float64) 
 	fmt.Fprintln(os.Stderr, "\n*** -key: THIS TRANSMITS REAL RF. Use a dummy load or a known-good antenna. ***")
 	fmt.Fprintln(os.Stderr, "*** Stop the daemon first (smctl stop) so this probe can own the serial port. ***")
 
-	if configPath == "" {
-		wd, err := utils.WorkingDir()
-		if err != nil {
-			fatal("resolve working dir: %v", err)
-		}
-		configPath = filepath.Join(wd, "config.json")
-	}
+	configPath = resolveConfigPath(configPath)
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fatal("load config %s: %v", configPath, err)
@@ -239,6 +233,22 @@ type ft8Keyer struct{ b *bridge.Service }
 
 func (k ft8Keyer) KeyTx(ctx context.Context, mode string) error { return k.b.KeyFt8Tx(ctx, mode) }
 func (k ft8Keyer) UnkeyTx(ctx context.Context) error            { return k.b.UnkeyFt8Tx(ctx) }
+
+// resolveConfigPath finds config.json for the -key path: an explicit -config
+// flag wins; otherwise $SM_WORKING_DIR (the systemd unit's value), else the XDG
+// data dir. It deliberately does NOT use utils.WorkingDir's executable-dir
+// fallback — under `go run` the binary lives in the go-build cache, so that
+// would point at a cache dir with no config. The probe always targets the
+// operator's real install, which lives at the XDG data dir.
+func resolveConfigPath(flagPath string) string {
+	if flagPath != "" {
+		return flagPath
+	}
+	if wd := os.Getenv(utils.EnvSmWorkingDir); wd != "" {
+		return filepath.Join(wd, "config.json")
+	}
+	return filepath.Join(utils.XDGDataDir(), "config.json")
+}
 
 // saveSlotWAV writes the slot's int16 samples as a 16-bit PCM mono WAV that
 // ft8-decode-file / jt9 can read back for an A/B decode of the modulator.

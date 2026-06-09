@@ -68,6 +68,14 @@ func isSystemPath(dir string) bool {
 	return false
 }
 
+// XDGDataDir returns the application's XDG data directory
+// ($XDG_DATA_HOME/station-manager, default ~/.local/share/station-manager) — the
+// install location of config.json and the database. Exposed for tools that must
+// find the operator's real install without being the installed daemon, where
+// WorkingDir's exe-dir fallback would mislead — notably under `go run`, whose
+// executable lives in the go-build cache rather than a system path.
+func XDGDataDir() string { return xdgDataDir() }
+
 // xdgDataDir returns $XDG_DATA_HOME/station-manager, defaulting to
 // ~/.local/share/station-manager when XDG_DATA_HOME is unset.
 func xdgDataDir() string {

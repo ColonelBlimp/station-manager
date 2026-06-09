@@ -4,7 +4,8 @@
 > Transmit (ADR 0029) is building RX-safe-first: the GFSK modulator, audio-output
 > device, and the **PTT + slot-timing controller** (ADR 0030) are done — so SM can
 > now key the rig and transmit one FT8 slot from the gated `ft8-tx-probe -key`
-> bench path (first real RF). Still ahead: the manual sequencer, QSO logging, and
+> bench path. **First real RF live-validated on the bench 2026-06-09.** Still
+> ahead: the manual sequencer, QSO logging, and
 > the SPA TX controls (step e). This guide is the single place the FT8 picture is
 > captured; keep it current as the TX layers land.
 
