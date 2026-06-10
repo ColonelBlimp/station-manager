@@ -51,17 +51,25 @@ async function postFt8Qso(path: string, body: unknown, signal?: AbortSignal): Pr
 }
 
 /** Start answering a CQ. slotUtc is the RFC3339 start of the slot the CQ was
- *  heard in (it fixes the worked station's parity); offsetHz is the picked offset. */
+ *  heard in (it fixes the worked station's parity); offsetHz is the picked offset;
+ *  operatingFreqMHz is the rig dial frequency (the logged QSO freq = dial + offset). */
 export function startFt8Qso(
     theirCall: string,
     theirGrid: string,
     slotUtc: string,
     offsetHz: number,
+    operatingFreqMHz: number,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
         '/v1/ft8/qso/start',
-        { their_call: theirCall, their_grid: theirGrid, slot_utc: slotUtc, offset_hz: offsetHz },
+        {
+            their_call: theirCall,
+            their_grid: theirGrid,
+            slot_utc: slotUtc,
+            offset_hz: offsetHz,
+            operating_freq_mhz: operatingFreqMHz,
+        },
         signal
     );
 }

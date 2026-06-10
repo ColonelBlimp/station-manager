@@ -74,7 +74,15 @@
     async function answerCq(d: DecodeEntry): Promise<void> {
         const cq = parseCq(d.text);
         if (!cq || !canAnswer || ft8State.selectedOffset === null) return;
-        const out = await startFt8Qso(cq.call, cq.grid, d.startUtc, ft8State.selectedOffset);
+        // opFreq is the dial frequency in Hz (selected VFO); the daemon logs the
+        // QSO at dial + audio offset, so it needs the dial freq in MHz.
+        const out = await startFt8Qso(
+            cq.call,
+            cq.grid,
+            d.startUtc,
+            ft8State.selectedOffset,
+            opFreq / 1_000_000
+        );
         if (out.kind !== 'ok') toasts.error(out.message);
     }
 

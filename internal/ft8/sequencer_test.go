@@ -76,7 +76,7 @@ func TestSequencer_HappyPath(t *testing.T) {
 
 	// Answer K1ABC's CQ heard in the even slot at epoch 0.
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
-		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500))
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
 	require.True(t, s.Active())
 
 	// Their re-CQ (or silence) → we send our call.
@@ -101,12 +101,14 @@ func TestSequencer_HappyPath(t *testing.T) {
 	require.Equal(t, "FN42", r.completed[0].TheirGrid)
 	require.Equal(t, -10, r.completed[0].TheirReport) // they sent us -10
 	require.Equal(t, -12, r.completed[0].OurReport)   // we sent R-12
+	require.Equal(t, 14.074, r.completed[0].DialFreqMHz)
+	require.Equal(t, 1500.0, r.completed[0].OffsetHz)
 }
 
 func TestSequencer_OnlyTransmitsOppositeParity(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
 
 	// A slot of OUR parity (odd, sec=15) just decoded → nothing to send.
 	ref := SlotRefFromTime(time.Unix(15, 0).UTC())
@@ -121,7 +123,7 @@ func TestSequencer_OnlyTransmitsOppositeParity(t *testing.T) {
 func TestSequencer_LateStartGuardSkips(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
 
 	// Fire OnSlot too late into our slot (5 s in > maxStartDt ~1.7 s) → skip.
 	ref := SlotRefFromTime(time.Unix(30, 0).UTC())
@@ -134,7 +136,7 @@ func TestSequencer_AbandonsAfterMaxRepeats(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	s.maxRepeats = 2
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
 
 	// No answer ever (empty their-slots): call, call, then abandon.
 	driveTheir(s, 30, nil) // repeat 1
@@ -149,17 +151,17 @@ func TestSequencer_StartErrors(t *testing.T) {
 	s := newTestSeq(r)
 	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
 
-	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 0), ErrNoOffset)
-	require.Error(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", "not-a-time", 1500))
+	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 0, 14.074), ErrNoOffset)
+	require.Error(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", "not-a-time", 1500, 14.074))
 
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 1500))
-	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "W2XYZ", "", slot, 1500), ErrQsoInProgress)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 1500, 14.074))
+	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "W2XYZ", "", slot, 1500, 14.074), ErrQsoInProgress)
 }
 
 func TestSequencer_Abandon(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
 	s.Abandon()
 	require.False(t, s.Active())
 	// Idle: a their-slot now does nothing.
@@ -170,7 +172,7 @@ func TestSequencer_Abandon(t *testing.T) {
 func TestSequencer_AbandonsWhenDisarmedMidQso(t *testing.T) {
 	r := &seqRecorder{transmitErr: ErrTxNotArmed} // simulate TX disarmed under us
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
 	driveTheir(s, 30, nil) // transmit returns ErrTxNotArmed → abandon
 	require.False(t, s.Active(), "a not-armed transmit abandons the QSO")
 	require.True(t, stderrors.Is(r.transmitErr, ErrTxNotArmed))

@@ -19,6 +19,10 @@ type ft8QsoStartRequest struct {
 	TheirGrid string  `json:"their_grid"`
 	SlotUTC   string  `json:"slot_utc"`
 	OffsetHz  float64 `json:"offset_hz"`
+	// OperatingFreqMHz is the rig's dial frequency (the SPA reads it from the live
+	// rig state). The logged QSO's frequency is this + the audio offset; the
+	// daemon can't read the dial freq itself (the bridge is a pure pass-through).
+	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -48,7 +52,8 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC, req.OffsetHz)
+	err := s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
+		req.OffsetHz, req.OperatingFreqMHz)
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return

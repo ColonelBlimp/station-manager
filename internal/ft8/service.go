@@ -113,6 +113,12 @@ type Service struct {
 	// exchange, driven per slot from decodeLoop, transmitting via seqTransmit.
 	// Created in newService; nil-safe via its own methods.
 	seq *Sequencer
+
+	// qsoLogger logs a completed exchange (ADR 0029 step e4); injected via
+	// SetQsoLogger before Start (cmd/smd wires it to qsoservice). nil = not
+	// logged. Read only in the seq.onComplete callback (decodeLoop goroutine,
+	// created after wiring — happens-before holds).
+	qsoLogger func(ctx context.Context, c CompletedQso)
 }
 
 // newService constructs a Service with an injected capture source. The
@@ -139,6 +145,14 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		func(st QsoStatus) { s.hub.publish(hubEvent{name: EventQso, payload: st}) },
 		log,
 	)
+	// On a completed exchange, hand it to the injected logger (e4). Reads
+	// s.qsoLogger at call time (set via SetQsoLogger before Start), so the
+	// daemon wires logging after construction.
+	s.seq.onComplete = func(c CompletedQso) {
+		if s.qsoLogger != nil {
+			s.qsoLogger(s.base(), c)
+		}
+	}
 	return s
 }
 

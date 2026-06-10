@@ -446,6 +446,23 @@ func run() error {
 	// scope by import graph). Only meaningful when the bridge is enabled and a
 	// rig is connected; otherwise TxReady() stays false and arming is refused.
 	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
+	// Wire the completed-QSO sink (ADR 0029 step e4): a finished FT8 exchange
+	// becomes a logged QSO. The assembly + submit live here (the composition
+	// root has config + qsoservice + adif), so internal/ft8 stays narrow — it
+	// just emits a CompletedQso. Best-effort: a submit failure is logged, never
+	// fatal (the QSO already happened on the air).
+	ft8Svc.SetQsoLogger(func(ctx context.Context, c ft8.CompletedQso) {
+		snap := cfgSvc.Snapshot()
+		q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
+		rec := adif.QsoToRecord(q)
+		if _, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false); err != nil {
+			loggerSvc.ErrorWith().Err(err).Str("call", c.TheirCall).
+				Msg("ft8: failed to log completed QSO")
+			return
+		}
+		loggerSvc.InfoWith().Str("call", c.TheirCall).Str("band", q.Band).
+			Msg("ft8: completed QSO logged")
+	})
 	if err := ft8Svc.Initialize(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("initialize ft8")
 	}

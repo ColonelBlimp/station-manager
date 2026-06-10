@@ -52,7 +52,7 @@ type QsoStatus struct {
 }
 
 // CompletedQso is captured when an exchange finishes (73 sent) — the data e4 maps
-// to a types.Qso and submits via qsoservice. e3 only logs it (onComplete nil).
+// to a types.Qso (BuildQso) and submits via qsoservice.
 type CompletedQso struct {
 	TheirCall      string
 	TheirGrid      string
@@ -61,6 +61,10 @@ type CompletedQso struct {
 	TheirReport    int // the report THEY sent us
 	HasTheirReport bool
 	OffsetHz       float64
+	// DialFreqMHz is the rig's dial frequency at QSO start (from the SPA, which
+	// reads it from the live rig state). The logged QSO frequency is this plus
+	// the audio offset; the band is derived from the sum.
+	DialFreqMHz float64
 }
 
 // Sequencer owns the (single) active exchange. Its dependencies are injected so
@@ -73,6 +77,7 @@ type Sequencer struct {
 	theirPeriod string    // the worked station's TX parity ("even"/"odd")
 	theirGrid   string
 	offsetHz    float64
+	dialFreqMHz float64 // rig dial freq at start, for the logged QSO frequency
 	repeats     int
 	maxRepeats  int
 
@@ -98,7 +103,7 @@ func newSequencer(transmit func(string, float64) error, publish func(QsoStatus),
 // the CQ was heard in (it fixes the worked station's parity — we transmit in the
 // opposite one). offsetHz is the operator-picked clear offset. Idempotency: only
 // one QSO at a time (ErrQsoInProgress).
-func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz float64) error {
+func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
@@ -117,6 +122,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.theirGrid = theirGrid
 	s.offsetHz = offsetHz
+	s.dialFreqMHz = dialFreqMHz
 	s.repeats = 0
 	st := s.statusLocked()
 	s.mu.Unlock()
@@ -268,5 +274,6 @@ func (s *Sequencer) completedQsoLocked() CompletedQso {
 		TheirReport:    s.ex.RcvdReport,
 		HasTheirReport: s.ex.HasRcvdReport,
 		OffsetHz:       s.offsetHz,
+		DialFreqMHz:    s.dialFreqMHz,
 	}
 }

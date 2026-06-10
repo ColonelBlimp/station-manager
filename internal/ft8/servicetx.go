@@ -269,7 +269,7 @@ func (s *Service) startTransmission(
 // theirSlotUTC) and a clear offset. Requires TX **armed** — the sequencer keys
 // through the armed controller. ourCall/ourGrid are the station identity the api
 // layer resolved from config.
-func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz float64) error {
+func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartQso"
 	s.txMu.Lock()
 	armed := s.txArmed
@@ -277,7 +277,16 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
 	}
-	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz)
+	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz)
+}
+
+// SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029
+// step e4) — the daemon (cmd/smd) wires it to qsoservice. Called once during
+// wiring, before Start. A nil logger (e.g. tests) means completed exchanges are
+// not logged, only emitted on the SSE. internal/ft8 stays free of qsoservice /
+// config / adif: the assembly + submit live in the injected sink.
+func (s *Service) SetQsoLogger(fn func(ctx context.Context, c CompletedQso)) {
+	s.qsoLogger = fn
 }
 
 // AbandonQso drops any active sequenced QSO (operator action). Idempotent.
