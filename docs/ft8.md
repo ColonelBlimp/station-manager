@@ -271,7 +271,7 @@ audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | e1 (daemon TX + Ladder Arm/Call-CQ) + e2 (resolver) + e3 (sequencer: click-a-CQ → auto-advance, ADR 0031) shipped 2026-06-10; e4 logging pending |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**; e5 auto-seq + call-CQ pending |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
@@ -411,9 +411,21 @@ read by the e2 resolver. Step (e) breaks into increments:
   SSE. **SPA:** initiation = **click a CQ row in Band Activity** (clickable when TX
   armed + an offset picked + no QSO running → `startFt8Qso`); the Ladder tab shows
   the live rung / next message / Abandon (`ft8State.qso`).
-- **e4 — QSO completion → log:** detect the exchange complete → build `types.Qso`
-  → submit via `qsoservice` (the "decode≠QSO → completed exchange = QSO"
-  evolution; `internal/ft8` imports `qsoservice`, never the reverse).
+- **e4 — QSO completion → log: SHIPPED 2026-06-10.** On the 73, the sequencer
+  captures a `CompletedQso` and hands it to an **injected sink** (`SetQsoLogger`):
+  `internal/ft8/qsolog.go`'s pure `BuildQso(c, station, logbookID, now)` assembles
+  a `types.Qso` (their call/grid; mode FT8; **freq = dial + audio offset**, band
+  derived; RST_SENT = our report, RST_RCVD = theirs; the whole `LoggingStation`
+  identity copied in, STATION_CALLSIGN falling back to OPERATOR), and the daemon's
+  sink (`cmd/smd`) does `adif.QsoToRecord` → `qsoservice.Submit` (force=false, so
+  dupe detection applies). **The "decode ≠ QSO" rule (ADR 0024) becomes "a
+  completed *exchange* is a QSO."** Narrow-daemon-scope still holds: `internal/ft8`
+  does **not** import `qsoservice` — the assembly + submit live in the composition
+  root (`cmd/smd`), wired in via the `SetQsoLogger` callback (dependency injection;
+  the one-way direction ADR 0029 wanted, achieved without the import). Best-effort:
+  a submit failure is logged, never fatal (the QSO already happened on the air).
+  The dial freq comes from the SPA at `qso/start` (`operating_freq_mhz`) — the
+  bridge is a pass-through and can't surface it.
 - **e5 — auto-sequencer (separate ADR):** the daemon also *initiates* and walks
   the ladder via the e2 resolver + watchdogs.
 
@@ -458,14 +470,15 @@ so a configured default and SM-side SNR computation were both rejected. The SNR 
 already threaded through `decode.go` → `DecodeReport` → SPA (the Band Activity dB
 column); e2's resolver reads the same field to form rung 3.
 
-**STATUS:** **e1, e2, e3 shipped 2026-06-10.** e1 = daemon TX path + SPA Ladder-tab
-Arm/Call-CQ UX (first SPA-reachable RF, Arm-gated). e2 = the pure resolver. e3 =
-the daemon manual sequencer (ADR 0031: operator-initiated, auto-advancing) + SPA
-click-a-CQ-to-answer initiation + the Ladder-tab sequencer view/Abandon. **Next:
-e4** — the completed exchange (`CompletedQso`, captured on the 73) → `types.Qso`
-→ `qsoservice` submit (the "decode≠QSO → completed exchange = QSO" evolution;
-`internal/ft8` imports `qsoservice`, never the reverse). Then **e5** auto-sequence
-(separate ADR). The send-policy seam is ratified (ADR 0031 Accepted).
+**STATUS:** **e1–e4 shipped 2026-06-10 — the answer-a-CQ flow is complete end to
+end** (arm → pick offset → click a CQ → auto-advance CQ→73 → **logged**). e1 =
+daemon TX + Ladder Arm/Call-CQ. e2 = pure resolver. e3 = daemon manual sequencer
+(ADR 0031) + click-a-CQ initiation + Ladder view/Abandon. e4 = completed exchange
+→ `types.Qso` (`BuildQso`) → `qsoservice` via the injected `SetQsoLogger` sink
+(`internal/ft8` stays narrow — no `qsoservice` import). **Next: e5** — auto-sequence
+(daemon-initiated), a separate ADR; and the deferred **call-CQ** scope (the
+caller-side state machine + multi-answerer handling — calling CQ today is only the
+e1 single-shot button). The send-policy seam is ratified (ADR 0031 Accepted).
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →
