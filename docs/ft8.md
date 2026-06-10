@@ -277,21 +277,30 @@ waterfall (time history) stay deferred niceties.
 
 ### Step (e) sequencer — design (2026-06-09; **UNBLOCKED — go-ft8 SNR landed in v0.3.0**)
 
-Design captured; not yet built. The former blocker (go-ft8 had no SNR) cleared
-when **go-ft8 v0.3.0** added `DecodedMessage.SNR` (dB, 2500 Hz reference); SM is
-on v0.3.0 and the field is already threaded through the RX display (`DecodeLine.SNR`
-→ `ft8-decode` SSE → Band Activity dB column). Step (e) breaks into increments:
+Design captured; **e2 shipped 2026-06-10, e1/e3/e4 pending.** The former blocker
+(go-ft8 had no SNR) cleared when **go-ft8 v0.3.0** added `DecodedMessage.SNR`
+(dB, 2500 Hz reference); SM is on v0.3.0 and the field is threaded through the RX
+display (`DecodeLine.SNR` → `ft8-decode` SSE → Band Activity dB column) and now
+read by the e2 resolver. Step (e) breaks into increments:
 
 - **e1 — daemon TX wiring (no sequencing):** wire `TxController` into the daemon's
   `ft8.Service` (it is probe-only today), add an Enable-TX arm/disarm + a
   "transmit this message on the next slot" path the SPA drives, plus the slot
   timer. Plumbing + the safety gate; does not need SNR, so it can proceed in
   parallel with the upstream work below.
-- **e2 — message model + next-message resolver (pure):** parse the rung messages
-  (the two calls + the token: grid / report / R-report / RR73 / RRR / 73; extend
-  `parseCqCall` to also return the grid) and a pure resolver
-  `(myCall, theirCall, myGrid, QSO state, last RX msg) → next TX msg`. No I/O,
-  unit-tested. **Shared by manual and auto.**
+- **e2 — message model + next-message resolver (pure): SHIPPED 2026-06-10**
+  (`internal/ft8/sequence.go`). A `parseMessage` model reduces a decoded line to
+  `{kind, to, from, grid, report}` (CQ / grid / report / R-report / RRR·RR73 / 73),
+  and an `Exchange` value type walks the answer-a-CQ ladder via pure methods:
+  `NewExchange(ourCall, ourGrid, theirCall)` → `TxMessage()` (the message to send
+  this rung) + `Advance(decodeText, snr)` (applies a received decode, advances only
+  on `<ourCall> <theirCall> <token>` from the worked station, records the report
+  they sent + our SNR of their signal) + `Sent()`/`Done()` (final-73 → log). The
+  report we send (rung 3) is formatted from the recorded SNR, clamped to the
+  [-50, 49] range `EncodeStandardMessage` accepts; a round-trip test asserts every
+  message the resolver emits is encodable (RF-safe, no rig). No I/O, no timing,
+  no rig — **shared by manual and auto** (only the send policy differs). The
+  daemon-side call/grid recognisers mirror the SPA's `parseCqCall` helpers.
 - **e3 — manual sequencer UX:** initiation = **click a highlighted CQ row in Band
   Activity** — the existing CQ parse + worked/unworked tint already mark whom to
   work (un-worked = worth a click), so this is not a new picker. QSO-state
@@ -340,10 +349,12 @@ so a configured default and SM-side SNR computation were both rejected. The SNR 
 already threaded through `decode.go` → `DecodeReport` → SPA (the Band Activity dB
 column); e2's resolver reads the same field to form rung 3.
 
-**STATUS:** unblocked (SNR landed in go-ft8 v0.3.0 and is threaded to the RX
-display). Ready to build — e1 (daemon TX) and e2 (resolver) are next; e1 is
-SNR-independent and can start any time. An ADR (0031) is a candidate once the
-manual/auto send-policy seam is ratified.
+**STATUS:** e2 (pure resolver) shipped 2026-06-10. **e1** (wire `TxController`
+into `ft8.Service` + Enable-TX arm/disarm + the slot timer) is the next brick —
+SNR-independent plumbing on the bench-validated step-(d) controller. Then **e3**
+(manual sequencer UX: click a highlighted CQ row → drive the e2 `Exchange`) and
+**e4** (completed exchange → `types.Qso` via `qsoservice`). An ADR (0031) is a
+candidate once the manual/auto send-policy seam is ratified.
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →
