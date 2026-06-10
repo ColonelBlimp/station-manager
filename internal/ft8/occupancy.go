@@ -358,28 +358,65 @@ func combineSource(a, b string) string {
 	return sourceBoth
 }
 
-// suggestOffsets inverts the occupied bands against the passband, finds clear
-// gaps wide enough for a signal, and scores candidate base offsets (stepped one
-// signal-width apart through each gap) by the configured weights. Returns the
-// best-first offsets, capped at maxSuggested.
-func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
-	lo, hi := cfg.PassbandLowHz, cfg.PassbandHighHz
+// clearGap is a clear [lo, hi) audio-frequency range between occupied bands.
+type clearGap struct{ lo, hi int }
 
-	// Clear gaps = passband minus the (sorted, merged) occupied bands.
-	type gap struct{ lo, hi int }
-	var gaps []gap
+// clearGaps inverts the (sorted, merged) occupied bands against the passband
+// [lo, hi), returning the clear ranges between them.
+func clearGaps(occupied []Band, lo, hi int) []clearGap {
+	var gaps []clearGap
 	cursor := lo
 	for _, b := range occupied {
 		if b.LowHz > cursor {
-			gaps = append(gaps, gap{cursor, b.LowHz})
+			gaps = append(gaps, clearGap{cursor, b.LowHz})
 		}
 		if b.HighHz > cursor {
 			cursor = b.HighHz
 		}
 	}
 	if cursor < hi {
-		gaps = append(gaps, gap{cursor, hi})
+		gaps = append(gaps, clearGap{cursor, hi})
 	}
+	return gaps
+}
+
+// resolveGuard returns the clearance a suggested offset keeps from the occupied
+// bands bounding its gap, so a recommendation never sits flush against a
+// neighbour. nil → default; explicit 0 → off (flush allowed); negatives clamp to 0.
+func resolveGuard(cfg types.Ft8OccupancyConfig) int {
+	guard := defaultGuardMarginHz
+	if cfg.GuardMarginHz != nil {
+		guard = *cfg.GuardMarginHz
+	}
+	if guard < 0 {
+		guard = 0
+	}
+	return guard
+}
+
+// offsetClear reports whether a base offset is still usable for TX this slot:
+// its signal [off, off+signalWidthHz] plus the guard margin on each side fits
+// entirely within one clear gap. This is the same admission bar suggestOffsets
+// applies to candidates, used by stickySuggested to decide if the previous
+// recommendation remains "reasonably clear".
+func offsetClear(occupied []Band, cfg types.Ft8OccupancyConfig, off int) bool {
+	guard := resolveGuard(cfg)
+	for _, g := range clearGaps(occupied, cfg.PassbandLowHz, cfg.PassbandHighHz) {
+		if off >= g.lo+guard && off+signalWidthHz <= g.hi-guard {
+			return true
+		}
+	}
+	return false
+}
+
+// suggestOffsets inverts the occupied bands against the passband, finds clear
+// gaps wide enough for a signal, and scores candidate base offsets (stepped one
+// signal-width apart through each gap) by the configured weights. Returns the
+// best-first offsets, capped at maxSuggested.
+func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
+	lo, hi := cfg.PassbandLowHz, cfg.PassbandHighHz
+	gaps := clearGaps(occupied, lo, hi)
+	guard := resolveGuard(cfg)
 
 	// Derived scoring references (not magic numbers — keyed to the geometry):
 	// a gap four signals wide saturates the margin score; edge distance is
@@ -388,17 +425,6 @@ func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 	edgeRef := float64(hi-lo) / 2.0
 	if edgeRef <= 0 {
 		edgeRef = 1
-	}
-
-	// Hard guard margin: a suggested signal must keep this much clearance from
-	// the occupied bands bounding its gap, so a recommendation never sits flush
-	// against a neighbour. nil → default; explicit 0 → off (flush allowed).
-	guard := defaultGuardMarginHz
-	if cfg.GuardMarginHz != nil {
-		guard = *cfg.GuardMarginHz
-	}
-	if guard < 0 {
-		guard = 0
 	}
 
 	type scored struct {
@@ -439,6 +465,36 @@ func suggestOffsets(occupied []Band, cfg types.Ft8OccupancyConfig) []int {
 	out := make([]int, 0, n)
 	for i := 0; i < n; i++ {
 		out = append(out, cands[i].off)
+	}
+	return out
+}
+
+// stickySuggested applies offset hysteresis to a slot's ranked clear offsets:
+// if prev (the previous slot's top recommendation) is still clear this slot, it
+// is floated to the front so the ★ recommendation doesn't hop to a marginally
+// wider gap while the operator's current spot remains usable. The per-slot
+// scoring is unchanged — this only decides which clear offset leads the list;
+// the rest still follow in score order, and the operator sees every option.
+//
+// prev == 0 (no previous pick) or a prev that has since become occupied returns
+// the fresh ranking untouched — stickiness never keeps a spot a signal has
+// moved into. "Still clear" is offsetClear's guard-margin bar.
+func stickySuggested(suggested []int, occupied []Band, cfg types.Ft8OccupancyConfig, prev int) []int {
+	if prev == 0 || !offsetClear(occupied, cfg, prev) {
+		return suggested
+	}
+	// prev may not be among this slot's freshly-generated candidates (gap
+	// stepping shifts the offsets), but it is still usable — lead with it, then
+	// the fresh ranking minus any duplicate.
+	out := make([]int, 0, len(suggested)+1)
+	out = append(out, prev)
+	for _, o := range suggested {
+		if o != prev {
+			out = append(out, o)
+		}
+	}
+	if len(out) > maxSuggested {
+		out = out[:maxSuggested]
 	}
 	return out
 }

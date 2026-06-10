@@ -39,6 +39,9 @@ export interface Ft8CallInfo {
     worked?: boolean;
     /** Flag emoji, or '' when the country is unknown / not alpha-2. undefined = pending. */
     flag?: string;
+    /** Country name (from the same enrichment lookup as the flag) for the flag's
+     *  hover tooltip. undefined when unknown/pending. */
+    country?: string;
 }
 
 // FT8 is itself an ADIF main mode, so the dupe axis is band + "FT8".
@@ -123,7 +126,11 @@ class Ft8EnrichState {
         // Flag — country via enrichment (hamnut-backed, daemon-cached).
         const flagLookup = enrichCallsign(call)
             .then((out) => {
-                if (out.kind === 'ok') merge({ flag: ccodeToFlag(out.result.country?.ccode) });
+                if (out.kind === 'ok')
+                    merge({
+                        flag: ccodeToFlag(out.result.country?.ccode),
+                        country: out.result.country?.name,
+                    });
             })
             .catch(() => {
                 /* fail-soft: no flag */

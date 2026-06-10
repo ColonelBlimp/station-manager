@@ -21,12 +21,12 @@ async function settle(): Promise<void> {
     flushSync();
 }
 
-function okEnrich(ccode: string) {
+function okEnrich(ccode: string, name?: string) {
     return {
         kind: 'ok' as const,
         result: {
             callsign: 'X',
-            country: { ccode },
+            country: { ccode, name },
             country_source: 'hamnut' as const,
             station_source: 'none',
         },
@@ -61,6 +61,13 @@ describe('ft8EnrichState.observe', () => {
             mode: 'FT8',
         });
         expect(ft8EnrichState.info('G3XYZ', '20m')).toEqual({ flag: '🇬🇧', worked: true });
+    });
+
+    it('carries the country name (for the flag tooltip) alongside the flag', async () => {
+        enrichMock.mockResolvedValue(okEnrich('GB', 'England'));
+        ft8EnrichState.observe('G3XYZ', '20m');
+        await settle();
+        expect(ft8EnrichState.info('G3XYZ', '20m')?.country).toBe('England');
     });
 
     it('is fail-soft: a flag lookup error still leaves the worked answer', async () => {

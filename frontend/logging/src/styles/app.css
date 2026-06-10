@@ -197,4 +197,11 @@
     .btn-secondary {
         @apply bg-surface text-gray-900 hover:opacity-90 outline-1 -outline-offset-1 outline-line;
     }
+
+    .ft8-panel-width {
+        @apply w-80;
+    }
+    .ft8-panel-height {
+        @apply h-60;
+    }
 }

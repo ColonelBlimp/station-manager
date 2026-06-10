@@ -82,6 +82,32 @@ type Service struct {
 	// Mirrors internal/bridge.Service.
 	stopOnce sync.Once
 	stopDone chan struct{}
+
+	// ---- FT8 transmit (ADR 0030 step e1) ----
+	// The TX path is independent of capture: a keyer (PTT, injected from the
+	// bridge in cmd/smd via SetTxKeyer so internal/ft8 never imports
+	// internal/bridge) plus an on-demand output device acquired on arm. Guarded
+	// by txMu, NOT s.mu — TX and capture don't interact, and the bridge enforces
+	// single-flight at the hardware level regardless. Disarmed at construction;
+	// the operator arms explicitly (the gate before any FT8 RF). See servicetx.go.
+	//
+	// Lock order where both are taken: txMu first, then s.mu (base()); capture
+	// code never takes txMu, and Stop disarms TX outside s.mu — so there is no
+	// s.mu→txMu nesting.
+	newPlayer func(deviceIndex int) (txPlayer, error)
+
+	txMu       sync.Mutex
+	keyer      TxKeyer
+	txArmed    bool
+	txInFlight bool
+	txClosed   bool   // set on Stop; refuses further arming
+	txMessage  string // message of the in-flight transmission ("" = none)
+	txOffsetHz float64
+	txLastErr  string // i18n code of the last failed transmission ("" = none)
+	txDevice   txPlayer
+	txCtrl     *TxController
+	txCancel   context.CancelFunc
+	txWg       sync.WaitGroup
 }
 
 // newService constructs a Service with an injected capture source. The
@@ -93,12 +119,13 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		occOverride = cfg.TX.Occupancy
 	}
 	return &Service{
-		cfg:      cfg,
-		occCfg:   resolveOccupancyConfig(occOverride),
-		log:      log,
-		src:      src,
-		hub:      newHub(),
-		stopDone: make(chan struct{}),
+		cfg:       cfg,
+		occCfg:    resolveOccupancyConfig(occOverride),
+		log:       log,
+		src:       src,
+		hub:       newHub(),
+		stopDone:  make(chan struct{}),
+		newPlayer: newTxPlayer, // build-tagged; CGO-free build returns ErrTxUnavailable
 	}
 }
 
@@ -262,6 +289,11 @@ func (s *Service) Stop() error {
 	s.stopOnce.Do(func() {
 		defer close(s.stopDone)
 
+		// Disarm TX first: drops PTT if a transmission is mid-flight and closes
+		// the output device. Done before taking s.mu — disarm serialises on txMu
+		// and waits on the TX goroutine, so it must not nest under s.mu.
+		s.disarmTx(true)
+
 		s.mu.Lock()
 		s.stopped = true
 		if s.lingerTimer != nil {
@@ -294,6 +326,11 @@ func (s *Service) Enabled() bool {
 // adds negligible time to the slot budget.
 func (s *Service) decodeLoop(slots <-chan Slot) {
 	osd := s.osdEnabled()
+	// Previously-recommended top offset, carried across slots for the
+	// clear-offset hysteresis (stickySuggested): the ★ recommendation stays put
+	// while it remains clear instead of hopping to a marginally wider gap each
+	// slot. Loop-local, so it resets naturally when a new capture session starts.
+	prevTop := 0
 	for slot := range slots {
 		msgs := DecodeSlot(slot.Samples, osd, s.log)
 		ref := SlotRefFromTime(slot.StartUTC)
@@ -304,6 +341,12 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		s.hub.publish(hubEvent{name: EventDecode, payload: newDecodeReport(ref, msgs)})
 
 		rep := Occupancy(ref, slot.Samples, msgs, s.occCfg)
+		rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, prevTop)
+		if len(rep.Suggested) > 0 {
+			prevTop = rep.Suggested[0]
+		} else {
+			prevTop = 0
+		}
 		s.hub.publish(hubEvent{name: EventOccupancy, payload: rep})
 
 		s.log.DebugWith().

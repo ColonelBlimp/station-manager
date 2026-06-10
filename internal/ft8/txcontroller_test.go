@@ -18,6 +18,7 @@ type fakeKeyer struct {
 	keyMode  string
 	keyCount int
 	unkeyN   int
+	notReady bool // when true, TxReady reports false
 }
 
 func (k *fakeKeyer) KeyTx(_ context.Context, mode string) error {
@@ -40,6 +41,9 @@ func (k *fakeKeyer) UnkeyTx(_ context.Context) error {
 
 func (k *fakeKeyer) keys() int   { k.mu.Lock(); defer k.mu.Unlock(); return k.keyCount }
 func (k *fakeKeyer) unkeys() int { k.mu.Lock(); defer k.mu.Unlock(); return k.unkeyN }
+
+// ready reports the fake's TX readiness; defaults to true (a connected rig).
+func (k *fakeKeyer) TxReady() bool { k.mu.Lock(); defer k.mu.Unlock(); return !k.notReady }
 
 // fakePlayer records Play/Stop and hands back a done channel the test controls.
 type fakePlayer struct {

@@ -89,6 +89,17 @@ middle of a wide clear region so a late neighbour doesn't clip the signal).
 Conventional FT8 sub-band taste is out of scope for v1 — that's operator
 preference, not a clear/busy fact.
 
+**Refinement (2026-06-10): offset hysteresis.** The per-slot scoring chooses the
+*initial* recommendation, but the top pick (the ★) then **sticks across slots
+while it stays clear** instead of re-optimising every 15 s — which made the ★ hop
+to whatever gap was widest that slot even when the operator's spot was still fine.
+Each slot, if the previous top pick still passes the guard-margin admission bar
+(`offsetClear`), it is floated back to the front of `Suggested`; it only loses the
+★ when a signal actually moves into its space. The scoring weights are unchanged
+and the rest of `Suggested` still follows in score order — stickiness only governs
+which clear offset leads. State is the previous pick carried in the decode loop
+for the life of a capture session (no persistence, no new config).
+
 The report carries **no human strings** (consistent with the ADR 0010
 `{code, details}` discipline), **no currently-selected offset** (the report is
 pure RX observation; the operator's chosen TX offset is separate SPA/operator

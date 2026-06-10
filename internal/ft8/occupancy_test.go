@@ -318,6 +318,90 @@ func TestSuggestOffsets_GuardOffAllowsFlush(t *testing.T) {
 	}
 }
 
+func TestOffsetClear(t *testing.T) {
+	cfg := DefaultOccupancyConfig() // guard on at defaultGuardMarginHz (10)
+	occupied := []Band{{LowHz: 600, HighHz: 700}, {LowHz: 1400, HighHz: 1600}}
+
+	// 1000 sits in the wide 700–1400 gap with room for signal + guard each side.
+	if !offsetClear(occupied, cfg, 1000) {
+		t.Error("1000 should be clear in the 700–1400 gap")
+	}
+	// An offset whose signal lands inside an occupied band is not clear.
+	if offsetClear(occupied, cfg, 620) {
+		t.Error("620 overlaps the 600–700 band; should not be clear")
+	}
+	// Flush against a neighbour fails the guard margin: 700 + 50 = 750, but the
+	// gap starts at 700 so the low guard (10 Hz) isn't satisfied.
+	if offsetClear(occupied, cfg, 700) {
+		t.Error("700 sits flush against the band ending at 700; guard should reject it")
+	}
+}
+
+func TestStickySuggested(t *testing.T) {
+	cfg := DefaultOccupancyConfig()
+	occupied := []Band{{LowHz: 600, HighHz: 700}, {LowHz: 1400, HighHz: 1600}}
+
+	t.Run("no previous pick returns the fresh ranking", func(t *testing.T) {
+		fresh := []int{2000, 1000, 800}
+		got := stickySuggested(fresh, occupied, cfg, 0)
+		if !equalInts(got, fresh) {
+			t.Fatalf("prev=0 should be untouched: got %v", got)
+		}
+	})
+
+	t.Run("a still-clear previous pick is floated to the front", func(t *testing.T) {
+		fresh := []int{2000, 1000, 800} // 800 ranks last this slot
+		got := stickySuggested(fresh, occupied, cfg, 800)
+		if len(got) == 0 || got[0] != 800 {
+			t.Fatalf("clear prev 800 should lead, got %v", got)
+		}
+		// No duplication and the others still follow.
+		if !equalInts(got, []int{800, 2000, 1000}) {
+			t.Fatalf("expected [800 2000 1000], got %v", got)
+		}
+	})
+
+	t.Run("a previous pick that is now occupied is dropped", func(t *testing.T) {
+		fresh := []int{2000, 1000}
+		got := stickySuggested(fresh, occupied, cfg, 620) // 620 now overlaps 600–700
+		if !equalInts(got, fresh) {
+			t.Fatalf("occupied prev should not be floated: got %v", got)
+		}
+	})
+
+	t.Run("a clear prev absent from the fresh list is still prepended", func(t *testing.T) {
+		fresh := []int{2000, 1000} // 900 isn't a generated candidate this slot
+		got := stickySuggested(fresh, occupied, cfg, 900)
+		if len(got) == 0 || got[0] != 900 {
+			t.Fatalf("clear prev 900 should lead even when absent, got %v", got)
+		}
+	})
+
+	t.Run("respects the maxSuggested cap after prepending", func(t *testing.T) {
+		fresh := make([]int, maxSuggested) // a full list, none equal to prev
+		for i := range fresh {
+			fresh[i] = 1000 + i // all clear in the 700–1400 gap region is irrelevant; cap check only
+		}
+		got := stickySuggested(fresh, occupied, cfg, 1000) // 1000 is in fresh, moved to front
+		if len(got) > maxSuggested {
+			t.Fatalf("result exceeds cap: len=%d", len(got))
+		}
+	})
+}
+
+// equalInts reports whether two int slices are element-wise equal.
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestResolveOccupancyConfig_GuardOverride(t *testing.T) {
 	// Explicit 0 must survive resolution (not be treated as "unset → default").
 	zero := 0

@@ -69,6 +69,14 @@ beforeEach(() => {
 
 afterEach(() => {
     stopFt8();
+    // selectedOffset now persists (localStorage) across stopFt8, so reset it
+    // explicitly between tests to keep the singleton from leaking a pick.
+    ft8State.selectedOffset = null;
+    try {
+        localStorage.removeItem('sm.ft8.tx.offset');
+    } catch {
+        /* ignore */
+    }
     vi.unstubAllGlobals();
 });
 
@@ -156,11 +164,16 @@ describe('ft8 TX-offset selection', () => {
         expect(ft8State.selectedOffset).toBe(1800);
     });
 
-    it('stopFt8 clears the selected offset', () => {
+    it('the selected offset survives stopFt8 (persisted, view-leave/return)', () => {
         startFt8();
         ft8State.selectOffset(760);
         stopFt8();
-        expect(ft8State.selectedOffset).toBeNull();
+        expect(ft8State.selectedOffset).toBe(760);
+    });
+
+    it('persists the selected offset to localStorage', () => {
+        ft8State.selectOffset(1800);
+        expect(localStorage.getItem('sm.ft8.tx.offset')).toBe('1800');
     });
 });
 
@@ -240,5 +253,81 @@ describe('ft8 decode feed', () => {
         startFt8();
         latest().emit('ft8-decode', '{bad');
         expect(ft8State.decodes).toEqual([]);
+    });
+});
+
+describe('ft8 decode history cap', () => {
+    // historyMax is a persisted singleton preference — restore the default after
+    // each test so it doesn't leak into the other suites.
+    afterEach(() => {
+        ft8State.setHistoryMax(100);
+    });
+
+    // Build N distinct decode texts for a single slot.
+    const manyTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `C${i}`);
+
+    it('caps newly added decodes to the configured limit', () => {
+        startFt8();
+        ft8State.setHistoryMax(10);
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', manyTexts(15)));
+        expect(ft8State.decodes).toHaveLength(10);
+    });
+
+    it('re-applies the cap to the existing history immediately on shrink', () => {
+        startFt8();
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', manyTexts(20)));
+        expect(ft8State.decodes).toHaveLength(20);
+        ft8State.setHistoryMax(12);
+        expect(ft8State.decodes).toHaveLength(12);
+    });
+
+    it('clamps out-of-range values to the sane bounds', () => {
+        ft8State.setHistoryMax(0);
+        expect(ft8State.historyMax).toBe(10); // floor
+        ft8State.setHistoryMax(999999);
+        expect(ft8State.historyMax).toBe(2000); // ceiling
+    });
+
+    it('persists the limit to localStorage', () => {
+        ft8State.setHistoryMax(42);
+        expect(localStorage.getItem('sm.ft8.history.max')).toBe('42');
+    });
+});
+
+describe('ft8 decode feed mode', () => {
+    // feedMode is a persisted singleton preference — restore the default after
+    // each test so it doesn't leak into the other suites.
+    afterEach(() => {
+        ft8State.setFeedMode('accumulate');
+    });
+
+    it('defaults to accumulate', () => {
+        expect(ft8State.feedMode).toBe('accumulate');
+    });
+
+    it('in single mode, each slot replaces the previous one', () => {
+        startFt8();
+        ft8State.setFeedMode('single');
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', ['CQ A', 'CQ B']));
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:15Z', ['CQ C']));
+
+        expect(ft8State.decodes.map((d) => d.text)).toEqual(['CQ C']);
+        expect(ft8State.decodes[0].startUtc).toBe('2026-06-07T14:30:15Z');
+    });
+
+    it('switching to single trims the current list to the latest slot at once', () => {
+        startFt8();
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', ['CQ A', 'CQ B']));
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:15Z', ['CQ C']));
+        expect(ft8State.decodes).toHaveLength(3); // accumulated
+
+        ft8State.setFeedMode('single');
+        // Only the newest slot (14:30:15) survives.
+        expect(ft8State.decodes.map((d) => d.text)).toEqual(['CQ C']);
+    });
+
+    it('persists the mode to localStorage', () => {
+        ft8State.setFeedMode('single');
+        expect(localStorage.getItem('sm.ft8.feed.mode')).toBe('single');
     });
 });

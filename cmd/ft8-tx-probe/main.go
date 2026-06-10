@@ -233,6 +233,7 @@ type ft8Keyer struct{ b *bridge.Service }
 
 func (k ft8Keyer) KeyTx(ctx context.Context, mode string) error { return k.b.KeyFt8Tx(ctx, mode) }
 func (k ft8Keyer) UnkeyTx(ctx context.Context) error            { return k.b.UnkeyFt8Tx(ctx) }
+func (k ft8Keyer) TxReady() bool                                { return k.b.TxReady() }
 
 // resolveConfigPath finds config.json for the -key path: an explicit -config
 // flag wins; otherwise $SM_WORKING_DIR (the systemd unit's value), else the XDG

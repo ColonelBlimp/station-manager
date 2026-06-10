@@ -171,6 +171,13 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// idle and the stream simply carries keepalives until a slot is processed.
 	if ft8Svc != nil && ft8Svc.Enabled() {
 		mux.Handle("GET /v1/ft8/events", s.limitEventSubscribers(ft8Svc.HTTPHandler(s.shutdownCh)))
+		// FT8 transmit (ADR 0030 step e1) — arm/disarm the TX path and queue a
+		// message on the next slot. Same enablement gate as the SSE route;
+		// normal (not long-lived) requests, so the global limitConcurrent
+		// middleware covers them. The daemon owns the guaranteed stop, and
+		// arming is refused unless a rig is connected — neither can strand RF.
+		mux.HandleFunc("POST /v1/ft8/tx/arm", s.handleFt8TxArm)
+		mux.HandleFunc("POST /v1/ft8/tx/send", s.handleFt8TxSend)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

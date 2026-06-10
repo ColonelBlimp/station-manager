@@ -441,6 +441,11 @@ func run() error {
 	// subsystem only logs "heard this" lines, so it never touches the
 	// log/forward path (narrow-daemon-scope holds by the import graph).
 	ft8Svc := ft8.NewService(cfg.ActiveFt8(), loggerSvc)
+	// Wire the bridge as the FT8 TX keyer (ADR 0030): internal/ft8 keys PTT
+	// through this adapter so it never imports internal/bridge (narrow-daemon-
+	// scope by import graph). Only meaningful when the bridge is enabled and a
+	// rig is connected; otherwise TxReady() stays false and arming is refused.
+	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
 	if err := ft8Svc.Initialize(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("initialize ft8")
 	}
@@ -972,3 +977,13 @@ func firstRunWrite(path, baseDir string) (config.Config, string, error) {
 	}
 	return loaded, path, nil
 }
+
+// ft8Keyer adapts the bridge's FT8 keying methods to the ft8.TxKeyer seam,
+// keeping internal/ft8 free of any internal/bridge import (ADR 0030). The bridge
+// owns the guaranteed-stop machinery (hard auto-off, release-on-disconnect,
+// single-flight shared with the tune carrier); this is a thin pass-through.
+type ft8Keyer struct{ b *bridge.Service }
+
+func (k ft8Keyer) KeyTx(ctx context.Context, mode string) error { return k.b.KeyFt8Tx(ctx, mode) }
+func (k ft8Keyer) UnkeyTx(ctx context.Context) error            { return k.b.UnkeyFt8Tx(ctx) }
+func (k ft8Keyer) TxReady() bool                                { return k.b.TxReady() }

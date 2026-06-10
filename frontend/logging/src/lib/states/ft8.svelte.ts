@@ -74,10 +74,99 @@ export interface DecodeEntry {
 }
 
 /**
- * Cap on the rolling decode history. ~100 rows ≈ several minutes of a busy
- * band — enough to scroll back and spot who's active without unbounded growth.
+ * Cap on the rolling decode history — a per-device operator preference in
+ * localStorage (no visible control yet; a future FT8 display-settings surface
+ * exposes it). ~100 rows ≈ several minutes of a busy band — enough to scroll
+ * back and spot who's active without unbounded growth. Clamped on load + set so
+ * a bad stored value can't hide every row or balloon memory.
  */
-const DECODE_HISTORY_MAX = 100;
+const KEY_HISTORY_MAX = 'sm.ft8.history.max';
+const DEFAULT_HISTORY_MAX = 100;
+const HISTORY_MAX_MIN = 10;
+const HISTORY_MAX_MAX = 2000;
+
+function clampHistoryMax(n: number): number {
+    if (!Number.isFinite(n)) return DEFAULT_HISTORY_MAX;
+    return Math.min(HISTORY_MAX_MAX, Math.max(HISTORY_MAX_MIN, Math.trunc(n)));
+}
+
+function loadHistoryMax(): number {
+    try {
+        const raw = localStorage.getItem(KEY_HISTORY_MAX);
+        if (raw === null) return DEFAULT_HISTORY_MAX;
+        const n = Number.parseInt(raw, 10);
+        return Number.isNaN(n) ? DEFAULT_HISTORY_MAX : clampHistoryMax(n);
+    } catch {
+        // localStorage unavailable (private mode / quota) — use the default.
+        return DEFAULT_HISTORY_MAX;
+    }
+}
+
+function saveHistoryMax(n: number): void {
+    try {
+        localStorage.setItem(KEY_HISTORY_MAX, String(n));
+    } catch {
+        // Best-effort persistence; the in-memory value still applies this session.
+    }
+}
+
+/**
+ * Band Activity feed mode — a per-device operator preference in localStorage (no
+ * visible control yet; future FT8 display-settings surface). `accumulate` is the
+ * rolling history (newest slot prepended onto prior slots, capped at historyMax);
+ * `single` shows only the current 15 s slot's decodes, replacing the list each
+ * slot (WSJT-X "clear each period" style).
+ */
+export type Ft8FeedMode = 'accumulate' | 'single';
+const KEY_FEED_MODE = 'sm.ft8.feed.mode';
+const DEFAULT_FEED_MODE: Ft8FeedMode = 'accumulate';
+
+function loadFeedMode(): Ft8FeedMode {
+    try {
+        const raw = localStorage.getItem(KEY_FEED_MODE);
+        return raw === 'single' || raw === 'accumulate' ? raw : DEFAULT_FEED_MODE;
+    } catch {
+        // localStorage unavailable (private mode / quota) — use the default.
+        return DEFAULT_FEED_MODE;
+    }
+}
+
+function saveFeedMode(mode: Ft8FeedMode): void {
+    try {
+        localStorage.setItem(KEY_FEED_MODE, mode);
+    } catch {
+        // Best-effort persistence; the in-memory value still applies this session.
+    }
+}
+
+/**
+ * Selected TX base offset (Hz) — a per-device operator choice in localStorage so
+ * the picked channel survives a browser refresh and a view-leave/return, not just
+ * a slot change. A restored offset that is now occupied is harmless: the daemon
+ * TX gate (ADR 0029) refuses/snaps an overlapping offset at send time.
+ */
+const KEY_TX_OFFSET = 'sm.ft8.tx.offset';
+
+function loadTxOffset(): number | null {
+    try {
+        const raw = localStorage.getItem(KEY_TX_OFFSET);
+        if (raw === null) return null;
+        const n = Number.parseInt(raw, 10);
+        return Number.isNaN(n) ? null : n;
+    } catch {
+        // localStorage unavailable (private mode / quota) — no restored pick.
+        return null;
+    }
+}
+
+function saveTxOffset(hz: number | null): void {
+    try {
+        if (hz === null) localStorage.removeItem(KEY_TX_OFFSET);
+        else localStorage.setItem(KEY_TX_OFFSET, String(hz));
+    } catch {
+        // Best-effort persistence; the in-memory value still applies this session.
+    }
+}
 
 // Monotonic key source for decode rows. Never reset — uniqueness is all that
 // matters, and 2^53 ids outlast any session.
@@ -107,21 +196,61 @@ class Ft8State {
     signalWidth: number = $state(50);
     /**
      * Operator-selected TX base offset (Hz), or null when none is picked. Set by
-     * clicking a clear offset on the strip or a Clear Slots chip. In-memory,
-     * per-session, and **inert** until the TX controller (step d/e) consumes it —
-     * picking it keys nothing today. Survives a slot change (the chosen offset
-     * stays put even as occupancy shifts around it).
+     * clicking a clear offset on the strip or a Clear Slots chip. Persisted to
+     * localStorage (per device), so the chosen channel survives a slot change, a
+     * browser refresh, and a view-leave/return — it is the operator's "this is
+     * the channel I chose" until they pick another. Still **inert** until the TX
+     * controller (step d/e) consumes it — picking it keys nothing today.
      */
-    selectedOffset: number | null = $state(null);
+    selectedOffset: number | null = $state(loadTxOffset());
     /**
      * Rolling decode history for the Band Activity feed — newest slot on top,
-     * frequency-ascending within each slot, capped at DECODE_HISTORY_MAX.
+     * frequency-ascending within each slot, capped at historyMax.
      */
     decodes: DecodeEntry[] = $state([]);
+    /**
+     * Max rows kept in the Band Activity feed (localStorage, per device). The
+     * decode handler caps the rolling history to this; setHistoryMax updates it
+     * (clamped + persisted) and re-applies the cap immediately.
+     */
+    historyMax: number = $state(loadHistoryMax());
+    /**
+     * Band Activity feed mode (localStorage, per device): `accumulate` rolls
+     * slots up (capped at historyMax); `single` shows only the current slot.
+     */
+    feedMode: Ft8FeedMode = $state(loadFeedMode());
 
-    /** Pick (or re-pick) the TX base offset. */
+    /** Pick (or re-pick) the TX base offset; persisted so it survives a refresh. */
     selectOffset(hz: number): void {
         this.selectedOffset = hz;
+        saveTxOffset(hz);
+    }
+
+    /**
+     * Set the Band Activity row cap. Clamped to a sane range, persisted to
+     * localStorage, and applied to the current history at once so shrinking it
+     * takes effect without waiting for the next slot.
+     */
+    setHistoryMax(n: number): void {
+        this.historyMax = clampHistoryMax(n);
+        saveHistoryMax(this.historyMax);
+        if (this.decodes.length > this.historyMax) {
+            this.decodes = this.decodes.slice(0, this.historyMax);
+        }
+    }
+
+    /**
+     * Set the Band Activity feed mode (persisted). Switching to `single` trims
+     * the current list to just the latest slot at once, so the change is visible
+     * without waiting for the next slot (the rows sharing the top startUtc).
+     */
+    setFeedMode(mode: Ft8FeedMode): void {
+        this.feedMode = mode;
+        saveFeedMode(mode);
+        if (mode === 'single' && this.decodes.length > 0) {
+            const top = this.decodes[0].startUtc;
+            this.decodes = this.decodes.filter((d) => d.startUtc === top);
+        }
     }
 }
 
@@ -194,8 +323,11 @@ function openSource(): void {
                 snr: d.snr,
                 text: d.text,
             }));
-        // Newest slot on top, capped.
-        ft8State.decodes = [...fresh, ...ft8State.decodes].slice(0, DECODE_HISTORY_MAX);
+        // `single` shows only this slot; `accumulate` prepends onto prior slots.
+        // Either way, cap to the operator's row limit (a safety bound for a very
+        // busy single slot too).
+        const next = ft8State.feedMode === 'single' ? fresh : [...fresh, ...ft8State.decodes];
+        ft8State.decodes = next.slice(0, ft8State.historyMax);
     });
 }
 
@@ -211,7 +343,9 @@ function closeSource(): void {
     ft8State.suggested = [];
     ft8State.occupied = [];
     ft8State.decodes = [];
-    ft8State.selectedOffset = null;
+    // selectedOffset is deliberately NOT reset: it's a persisted operator choice
+    // (localStorage) that survives view-leave/return and refresh, unlike the
+    // per-session occupancy/decode state cleared above.
 }
 
 /** Open the occupancy stream. Called from Ft8Panel onMount. Idempotent. */

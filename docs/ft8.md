@@ -85,15 +85,25 @@ The header **Operating Mode** switch chooses Phone/CW vs FT8; the choice is
 persisted to `localStorage` (survives reload). FT8 mode renders `Ft8Panel`,
 which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 
-- **Band Activity** — live decode feed: a rolling list (newest slot on top,
-  frequency-ascending within a slot, ~100-row cap) of `time · SNR · freq ·
-  message`. The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
+- **Band Activity** — live decode feed: `time · SNR · freq · message`, newest
+  slot on top, frequency-ascending within a slot. Two per-device display
+  preferences (localStorage; no visible control yet — a future FT8
+  display-settings surface will expose these + the highlight colours below):
+  - **feed mode** (`ft8State.feedMode`, key `sm.ft8.feed.mode`, default
+    `accumulate`): `accumulate` rolls slots up into a rolling history;
+    `single` shows only the current 15 s slot, replacing the list each slot
+    (WSJT-X "clear each period" style).
+  - **row cap** (`ft8State.historyMax`, key `sm.ft8.history.max`, default 100,
+    clamped 10–2000): the accumulate-mode history limit (also a safety bound on
+    a very busy single slot). The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
   from go-ft8's `DecodedMessage.SNR` (dB, 2500 Hz reference), added in go-ft8
   v0.3.0 and threaded through `DecodeLine.SNR` → the `ft8-decode` SSE → the row.
   **CQ lines are enriched**: each
   carries the calling station's **country flag** and a **worked-before tint** —
   un-worked-on-this-band stations show in the attention colour, worked-before
-  (dupe) stations are muted, WSJT-X-style. Enrichment is purely SPA-side and
+  (dupe) stations are muted, WSJT-X-style. Hovering the flag reveals the country
+  name (a `title` tooltip from the same enrichment lookup; the flag uses a
+  default cursor, not a text caret). Enrichment is purely SPA-side and
   reuses existing endpoints (`/v1/enrich/callsign` → flag, `/v1/contest-dupe` →
   worked on the current band+mode); it's progressive and fail-soft — the row
   renders immediately and the decorations appear when the lookups resolve, so a
@@ -125,7 +135,11 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   it only marks "this is where I'll transmit"; nothing keys the rig until the TX
   controller (step d/e) consumes it.** Any cell is clickable (the grid keeps
   picks signal-aligned); daemon-side no-overlap enforcement at pick time lands
-  with step (e). The selection clears when the FT8 view closes.
+  with step (e). The pick is **persisted** (localStorage `sm.ft8.tx.offset`, per
+  device): it survives a slot change, a browser refresh, and a view-leave/return,
+  so the chosen channel sticks until the operator picks another. A restored offset
+  that has since become occupied is harmless — the daemon TX gate refuses/snaps an
+  overlapping offset at send time (step e).
   - **TX offset only — by design (decided 2026-06-09).** It sets where *you*
     transmit, never an RX focus. FT8 RX is wideband (the daemon decodes the whole
     passband every slot, so you already hear every station regardless of offset),
@@ -180,6 +194,17 @@ from adjacent occupied bands, so a recommendation never sits flush ("brushed
 edge"). Unlike WSJT-X — which lets the operator click *anywhere*, including onto
 a signal — SM only offers clean spots, and at step (e) the daemon TX gate refuses
 (or snaps) an overlapping offset. Good practice is enforced, not optional.
+
+**Offset hysteresis (stickiness).** The per-slot scoring above picks the *first*
+recommendation, but the ★ then **stays put across slots while it remains clear**
+rather than re-optimising (and hopping) every 15 s. Each slot, if the previous
+top pick still fits a clear gap with the guard margin (`offsetClear` — the same
+admission bar candidates use), it is floated back to the front of `suggested`;
+only when a signal moves into its space does the ★ fall back to the freshly
+ranked best. This is daemon-side and stateless across restarts — the previous
+pick is carried in the decode loop for the life of a capture session. The rest of
+`suggested` still follows in score order, so the operator always sees the other
+options; stickiness only governs which clear offset leads.
 
 ### Config — `ft8.tx.occupancy.*`
 
@@ -283,11 +308,37 @@ Design captured; **e2 shipped 2026-06-10, e1/e3/e4 pending.** The former blocker
 display (`DecodeLine.SNR` → `ft8-decode` SSE → Band Activity dB column) and now
 read by the e2 resolver. Step (e) breaks into increments:
 
-- **e1 — daemon TX wiring (no sequencing):** wire `TxController` into the daemon's
-  `ft8.Service` (it is probe-only today), add an Enable-TX arm/disarm + a
-  "transmit this message on the next slot" path the SPA drives, plus the slot
-  timer. Plumbing + the safety gate; does not need SNR, so it can proceed in
-  parallel with the upstream work below.
+- **e1 — daemon TX wiring (no sequencing): daemon side SHIPPED 2026-06-10; SPA UX
+  pending design.** The `TxController` (probe-only at step d) is now wired into the
+  daemon `ft8.Service` (`internal/ft8/servicetx.go`):
+  - **Arm gate.** `Service.ArmTx(bool)` — the explicit operator gate before any FT8
+    RF; **disarmed at construction**, nothing transmits until armed. Arming requires
+    a wired, ready keyer (`TxKeyer.TxReady()` — new on the seam; the bridge already
+    has it) and an available output device, which it acquires (`Init`) and the
+    controller is built against; disarming aborts any in-flight TX (PTT drops) and
+    releases the device. `Stop` disarms + latches (no re-arm after shutdown).
+  - **Send.** `Service.TransmitNext(message, offsetHz)` — refused unless armed, idle,
+    and the message encodes (validated synchronously → a bad message is an immediate
+    error, not an async failure after the slot wait). Runs `TxController.TransmitSlot`
+    in a `safego`-tracked goroutine so the HTTP call returns at once; the guaranteed
+    stop is unchanged (controller deferred unkey + bridge auto-off + single-flight).
+  - **Output-device seam.** Build-tagged `newTxPlayer` (`txplayer_cgo.go` real malgo
+    `playback.Player` + `txplayer_nocgo.go` stub) — exactly like the capture seam, so
+    the static CGO-free build reports `ErrTxUnavailable` and never keys.
+  - **Keyer injection.** `cmd/smd` wires the bridge as `ft8.TxKeyer` via the `ft8Keyer`
+    adapter (`SetTxKeyer`), so `internal/ft8` keys PTT without importing `internal/bridge`.
+  - **Endpoints (SPA-reachable, gated by `ft8.enabled`):** `POST /v1/ft8/tx/arm`
+    `{armed}` and `POST /v1/ft8/tx/send` `{message, offset_hz}` (202 = applied/queued;
+    error codes `ft8_tx_unavailable` 503 / `rig_not_ready` 503 / `ft8_tx_not_armed` 409 /
+    `ft8_tx_in_flight` 409 / `ft8_tx_bad_message` 400, per the ADR 0010 `{code,details}`
+    discipline).
+  - **SSE:** a new `ft8-tx` event `{armed, transmitting, message, offset_hz, error}` on
+    `/v1/ft8/events`, hub-cached for late-subscriber replay (current arm state on connect).
+  - **Slot timer is SPA-derived** (not a daemon event): FT8 slots are wall-clock-aligned
+    (00/15/30/45 s) and every decode/occupancy event is slot-stamped, so the countdown is
+    computed client-side (KISS).
+  - **SPA UX (Arm control, send trigger, TX-state display) is being designed before any
+    Svelte is written.**
 - **e2 — message model + next-message resolver (pure): SHIPPED 2026-06-10**
   (`internal/ft8/sequence.go`). A `parseMessage` model reduces a decoded line to
   `{kind, to, from, grid, report}` (CQ / grid / report / R-report / RRR·RR73 / 73),
@@ -349,12 +400,13 @@ so a configured default and SM-side SNR computation were both rejected. The SNR 
 already threaded through `decode.go` → `DecodeReport` → SPA (the Band Activity dB
 column); e2's resolver reads the same field to form rung 3.
 
-**STATUS:** e2 (pure resolver) shipped 2026-06-10. **e1** (wire `TxController`
-into `ft8.Service` + Enable-TX arm/disarm + the slot timer) is the next brick —
-SNR-independent plumbing on the bench-validated step-(d) controller. Then **e3**
-(manual sequencer UX: click a highlighted CQ row → drive the e2 `Exchange`) and
-**e4** (completed exchange → `types.Qso` via `qsoservice`). An ADR (0031) is a
-candidate once the manual/auto send-policy seam is ratified.
+**STATUS:** e2 (pure resolver) + e1 **daemon side** shipped 2026-06-10 (arm/disarm
+gate, `TransmitNext`, output-device seam, the two `/v1/ft8/tx/*` endpoints, the
+`ft8-tx` SSE event — see the e1 bullet above). **e1 SPA UX is being designed before
+any Svelte** (the Arm control, the send trigger, the TX-state readout). Then **e3**
+(manual sequencer UX: click a highlighted CQ row → drive the e2 `Exchange` →
+`TransmitNext`) and **e4** (completed exchange → `types.Qso` via `qsoservice`). An
+ADR (0031) is a candidate once the manual/auto send-policy seam is ratified.
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →

@@ -16,6 +16,10 @@ const (
 	EventOccupancy = "ft8-occupancy"
 	// EventDecode carries a per-slot DecodeReport (live Band Activity feed).
 	EventDecode = "ft8-decode"
+	// EventTx carries a TxState — the FT8 transmit arm/disarm + in-flight
+	// status (ADR 0030 step e1). Cached for late-subscriber replay so a tab
+	// connecting mid-session sees the current arm state immediately.
+	EventTx = "ft8-tx"
 )
 
 // sseKeepAliveInterval matches the /v1/events and rig-events handlers — 30 s of

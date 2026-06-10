@@ -95,39 +95,49 @@
     The live decode list (per-slot freq / DT / text) still fills the Band
     Activity body later.
 -->
-<div class="flex justify-center h-111 text-gray-500 space-x-3">
+<div class="flex justify-center h-80 text-gray-500 space-x-3">
     <div class="flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
         <div class="flex flex-col place-items-center px-2 space-y-1">
-            <Button id="160m" label="160m" />
-            <Button id="80m" label="80m" />
-            <Button id="60m" label="60m" />
-            <Button id="40m" label="40m" />
-            <Button id="30m" label="30m" />
-            <Button id="20m" label="20m" />
-            <Button id="18m" label="18m" />
-            <Button id="15m" label="15m" />
-            <Button id="12m" label="12m" />
-            <Button id="10m" label="10m" />
-            <Button id="6m" label="6m" />
+            <div class="flex gap-1">
+                <Button id="160m" label="160m" />
+                <Button id="80m" label="80m" />
+            </div>
+            <div class="flex gap-1">
+                <Button id="60m" label="60m" />
+                <Button id="40m" label="40m" />
+            </div>
+            <div class="flex gap-1">
+                <Button id="30m" label="30m" />
+                <Button id="20m" label="20m" />
+            </div>
+            <div class="flex gap-1">
+                <Button id="18m" label="18m" />
+                <Button id="15m" label="15m" />
+            </div>
+            <div class="flex gap-1">
+                <Button id="12m" label="12m" />
+                <Button id="10m" label="10m" />
+            </div>
+            <div class="flex gap-1">
+                <Button id="6m" label="6m" />
+            </div>
         </div>
     </div>
-    <div class="flex flex-col text-center w-92">
+    <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
-        <div class="flex h-95.5 flex-col rounded border border-gray-300 overflow-y-scroll">
+        <div class="flex ft8-panel-height flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if ft8State.decodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each ft8State.decodes as d (d.id)}
                         {@const cqCall = parseCqCall(d.text)}
                         {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
                         <li class="flex gap-2 whitespace-nowrap">
-                            <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span
-                            >
+                            <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
                             <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
-                            <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span
-                            >
+                            <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
                             {#if info?.flag}
-                                <span aria-hidden="true">{info.flag}</span>
+                                <span class="cursor-default" title={info.country} aria-hidden="true">{info.flag}</span>
                             {/if}
                             <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
                         </li>
@@ -139,9 +149,9 @@
         </div>
         <div class="mt-0.5 text-gray-700 text-xs">{slotLabel}</div>
     </div>
-    <div class="flex flex-col text-center w-92">
+    <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">TX Frequency</h2>
-        <div class="flex h-95.5 flex-col rounded border border-gray-300">
+        <div class="flex ft8-panel-height flex-col rounded border border-gray-300">
             <p class="mt-1 text-xs text-gray-400">Occupied (Hz) — validation view</p>
             {#if ft8State.occupied.length > 0}
                 <ul
@@ -165,11 +175,11 @@
     <div class="flex flex-col text-center w-20">
         <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>
         {#if sortedOffsets.length > 0}
-            <div class="flex flex-col place-items-center px-2 space-y-2">
+            <div class="flex flex-col place-items-center px-2 space-y-1 overflow-y-scroll">
                 {#each sortedOffsets as offset (offset)}
                     <button
                         type="button"
-                        class="w-17 rounded bg-gray-100 px-2 py-0.5 font-mono text-sm text-left text-gray-700"
+                        class="border border-gray-300 w-16 rounded bg-gray-100 px-2 py-0.5 font-mono text-sm text-left text-gray-700"
                         class:ring-2={offset === ft8State.selectedOffset}
                         class:ring-green-700={offset === ft8State.selectedOffset}
                         title={offset === topPick
