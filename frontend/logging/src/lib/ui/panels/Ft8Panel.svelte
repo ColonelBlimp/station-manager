@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
     import Button from '../components/Button.svelte';
-    import Ft8OccupancyStrip from './Ft8OccupancyStrip.svelte';
+    import Ft8OccupancyPanel from './Ft8OccupancyPanel.svelte';
     import { ft8State, startFt8, stopFt8, type Ft8Band } from '../../states/ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { displayedState } from '../../states/displayed.svelte';
@@ -205,15 +205,7 @@
     the TX controller (ADR 0029 step d/e) keys the rig. Both surfaces drive the
     one `ft8State.selectedOffset`.
 -->
-<div class="m-0 border-t border-gray-300">
-    <Ft8OccupancyStrip
-        passbandLow={ft8State.passbandLow}
-        passbandHigh={ft8State.passbandHigh}
-        signalWidth={ft8State.signalWidth}
-        occupied={ft8State.occupied}
-        recommended={topPick}
-        selected={ft8State.selectedOffset}
-        hasSlot={ft8State.slot !== null}
-        onselect={(hz: number) => ft8State.selectOffset(hz)}
-    />
+<div class="flex flex-col w-full px-6 pt-6">
+
 </div>
+<Ft8OccupancyPanel />
