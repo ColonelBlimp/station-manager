@@ -61,6 +61,25 @@ interface DecodeReport {
     decodes: DecodeLine[] | null;
 }
 
+/** FT8 transmit status (ADR 0030 step e1). Mirrors `internal/ft8.TxState` (the
+ *  `ft8-tx` SSE payload): armed/transmitting + the in-flight message/offset and
+ *  an i18n error code for the last failed send. */
+export interface Ft8TxStatus {
+    armed: boolean;
+    transmitting: boolean;
+    message: string;
+    offsetHz: number;
+    error: string;
+}
+
+const emptyTxStatus = (): Ft8TxStatus => ({
+    armed: false,
+    transmitting: false,
+    message: '',
+    offsetHz: 0,
+    error: '',
+});
+
 /**
  * One row in the accumulating Band Activity list. `startUtc` is the slot's
  * RFC3339 time (formatted for display by the panel); `id` is a stable,
@@ -152,6 +171,12 @@ class Ft8State {
      * configState.ft8Display.feedMode; both applied by the decode handler.
      */
     decodes: DecodeEntry[] = $state([]);
+    /**
+     * FT8 transmit status, hydrated from the `ft8-tx` SSE event (daemon-owned,
+     * hub-cached so a reconnect replays the current arm state). The SPA reads it;
+     * arm/disarm/send go through lib/api/ft8tx.ts and the daemon confirms by push.
+     */
+    tx: Ft8TxStatus = $state(emptyTxStatus());
 
     /** Pick (or re-pick) the TX base offset; persisted so it survives a refresh. */
     selectOffset(hz: number): void {
@@ -236,6 +261,27 @@ function openSource(): void {
         const next = display.feedMode === 'single' ? fresh : [...fresh, ...ft8State.decodes];
         ft8State.decodes = next.slice(0, display.historyMax);
     });
+
+    src.addEventListener('ft8-tx', (ev: MessageEvent<string>) => {
+        try {
+            const p = JSON.parse(ev.data) as Partial<{
+                armed: boolean;
+                transmitting: boolean;
+                message: string;
+                offset_hz: number;
+                error: string;
+            }>;
+            ft8State.tx = {
+                armed: p.armed ?? false,
+                transmitting: p.transmitting ?? false,
+                message: p.message ?? '',
+                offsetHz: p.offset_hz ?? 0,
+                error: p.error ?? '',
+            };
+        } catch (e) {
+            console.warn('[ft8] tx-state JSON parse failed', e);
+        }
+    });
 }
 
 function closeSource(): void {
@@ -250,6 +296,9 @@ function closeSource(): void {
     ft8State.suggested = [];
     ft8State.occupied = [];
     ft8State.decodes = [];
+    // TX status reset to its empty display state; the daemon is authoritative and
+    // the hub replays the real `ft8-tx` (e.g. still-armed) on the next connect.
+    ft8State.tx = emptyTxStatus();
     // selectedOffset is deliberately NOT reset: it's a persisted operator choice
     // (localStorage) that survives view-leave/return and refresh, unlike the
     // per-session occupancy/decode state cleared above.

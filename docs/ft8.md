@@ -123,7 +123,8 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   for the interactive TX picker.
 - **Lower section — tabs** (same tablist pattern + `.tab-item` class as InfoPanel,
   full WAI-ARIA keyboard nav): **Occupancy** (the TX Offset strip below), **Ladder**
-  (`Ft8MsgPanel` — the CQ→73 message sequencer; placeholder until step e3), and
+  (`Ft8MsgPanel` — FT8 transmit: Arm/Disarm + Call CQ + TX-state + slot countdown
+  per step e1; grows into the full CQ→73 sequencer at e3), and
   **Settings** (`Ft8SettingsPanel` — the FT8 display preferences: row cap, feed mode,
   CQ highlight colours). The Settings tab saves the **same way as the My Station tab**
   — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
@@ -263,7 +264,7 @@ audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | picker strip shipped (RX-safe selection only); TX consumption + daemon snap pending |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | e1 (daemon TX + Ladder-tab Arm/Call-CQ UX) + e2 (resolver) shipped 2026-06-10; e3 sequencer + e4 logging pending |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
@@ -366,8 +367,15 @@ read by the e2 resolver. Step (e) breaks into increments:
   - **Slot timer is SPA-derived** (not a daemon event): FT8 slots are wall-clock-aligned
     (00/15/30/45 s) and every decode/occupancy event is slot-stamped, so the countdown is
     computed client-side (KISS).
-  - **SPA UX (Arm control, send trigger, TX-state display) is being designed before any
-    Svelte is written.**
+  - **SPA UX SHIPPED 2026-06-10** in the **Ladder tab** (`Ft8MsgPanel`): an **Arm/Disarm
+    TX** toggle (red when armed; disabled when the rig isn't live — `displayedState.isLive`),
+    a **slot countdown** (SPA-derived), and — since the sequencer (e3) doesn't exist yet —
+    a single **Call CQ** action that builds `CQ <mycall> <mygrid>` from the My Station
+    identity and sends it on the picked offset (`ft8State.selectedOffset`). A TX-state line
+    reflects `ft8State.tx` (the `ft8-tx` SSE): disarmed / armed-ready / "Transmitting … @ N Hz"
+    / last-error. Arm + send go through `lib/api/ft8tx.ts` (`armFt8Tx`/`sendFt8Tx` → the two
+    POSTs); the daemon confirms by push (no optimistic local state). Free-text send and the
+    click-a-CQ-row sequencer are deliberately deferred to e3.
 - **e2 — message model + next-message resolver (pure): SHIPPED 2026-06-10**
   (`internal/ft8/sequence.go`). A `parseMessage` model reduces a decoded line to
   `{kind, to, from, grid, report}` (CQ / grid / report / R-report / RRR·RR73 / 73),
@@ -395,12 +403,15 @@ read by the e2 resolver. Step (e) breaks into increments:
 multi-answerer management).
 
 **Manual/auto seam (the key idea):** a **pure next-message resolver** shared by
-both; the only difference is the **send policy**. *Proposed (not yet ratified):*
-the operator's judgement is *whom to work* (the click), and rung advance is
-mechanical — so within a QSO the rungs **auto-advance** (operator armed it by
-clicking + Enable-TX; intervenes only to retry/abandon). i.e. **manual =
-operator-initiated-per-QSO with automatic rung advance; auto = daemon-initiated.**
-OPEN QUESTION: confirm this vs strict per-rung confirm.
+both; the only difference is the **send policy**. **RATIFIED 2026-06-10 (ADR 0031):**
+the operator's judgement is *whom to work* (the click) + arming TX, and rung
+advance is mechanical — so within a QSO the rungs **auto-advance** (the daemon
+walks the ladder via the e2 resolver; the operator intervenes only to
+retry/abandon). i.e. **manual = operator-initiated-per-QSO with automatic rung
+advance; auto = daemon-initiated** (a strict superset, deferred). Per-rung confirm
+was rejected (the 15 s cadence makes it frantic; the Arm-TX gate already provides
+the deliberate-consent safety). Off-ramps: stop after N unanswered repeats; never
+auto-start a fresh CQ cycle; abort on operator action; never auto-switch targets.
 
 **Resolver + live QSO/sequencer state live daemon-side** (working assumption):
 auto needs it there, it is shared orchestration state (ADR 0004), and
@@ -429,13 +440,15 @@ so a configured default and SM-side SNR computation were both rejected. The SNR 
 already threaded through `decode.go` → `DecodeReport` → SPA (the Band Activity dB
 column); e2's resolver reads the same field to form rung 3.
 
-**STATUS:** e2 (pure resolver) + e1 **daemon side** shipped 2026-06-10 (arm/disarm
-gate, `TransmitNext`, output-device seam, the two `/v1/ft8/tx/*` endpoints, the
-`ft8-tx` SSE event — see the e1 bullet above). **e1 SPA UX is being designed before
-any Svelte** (the Arm control, the send trigger, the TX-state readout). Then **e3**
-(manual sequencer UX: click a highlighted CQ row → drive the e2 `Exchange` →
-`TransmitNext`) and **e4** (completed exchange → `types.Qso` via `qsoservice`). An
-ADR (0031) is a candidate once the manual/auto send-policy seam is ratified.
+**STATUS:** **e1 and e2 shipped 2026-06-10.** e1 = daemon TX path (arm/disarm gate,
+`TransmitNext`, output-device seam, the two `/v1/ft8/tx/*` endpoints, the `ft8-tx`
+SSE) **+ the SPA Ladder-tab UX** (Arm/Disarm, slot countdown, Call CQ, TX-state
+readout — see the e1 bullet above); the first SPA-reachable RF, gated by the Arm
+toggle. e2 = the pure next-message resolver. **Next: e3** — the manual sequencer UX
+(click a highlighted CQ row → drive the e2 `Exchange` → `TransmitNext`, replacing
+the Call-CQ-only placeholder in the Ladder tab) — and **e4** (completed exchange →
+`types.Qso` via `qsoservice`). The manual/auto send-policy seam is **ratified —
+ADR 0031 Accepted** (auto-advance within an operator-initiated QSO); e3 builds to it.
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →

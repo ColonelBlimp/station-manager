@@ -257,6 +257,49 @@ describe('ft8 decode feed', () => {
     });
 });
 
+describe('ft8 tx status (ft8-tx SSE)', () => {
+    it('hydrates ft8State.tx from an ft8-tx event', () => {
+        startFt8();
+        latest().emit(
+            'ft8-tx',
+            JSON.stringify({
+                armed: true,
+                transmitting: true,
+                message: 'CQ G0XYZ IO91',
+                offset_hz: 1500,
+                error: '',
+            })
+        );
+        expect(ft8State.tx.armed).toBe(true);
+        expect(ft8State.tx.transmitting).toBe(true);
+        expect(ft8State.tx.message).toBe('CQ G0XYZ IO91');
+        expect(ft8State.tx.offsetHz).toBe(1500);
+    });
+
+    it('defaults omitted fields and carries an error code', () => {
+        startFt8();
+        latest().emit('ft8-tx', JSON.stringify({ armed: true, error: 'ft8_tx_failed' }));
+        expect(ft8State.tx.armed).toBe(true);
+        expect(ft8State.tx.transmitting).toBe(false);
+        expect(ft8State.tx.message).toBe('');
+        expect(ft8State.tx.error).toBe('ft8_tx_failed');
+    });
+
+    it('stopFt8 resets tx status (daemon replays the truth on reconnect)', () => {
+        startFt8();
+        latest().emit('ft8-tx', JSON.stringify({ armed: true }));
+        stopFt8();
+        expect(ft8State.tx.armed).toBe(false);
+        expect(ft8State.tx.transmitting).toBe(false);
+    });
+
+    it('ignores malformed tx JSON', () => {
+        startFt8();
+        latest().emit('ft8-tx', '{bad');
+        expect(ft8State.tx.armed).toBe(false);
+    });
+});
+
 // The row cap + feed mode are daemon-owned settings now (configState.ft8Display);
 // the decode handler reads them each slot. These tests drive configState directly
 // and restore the defaults after each so they don't leak into the other suites.
