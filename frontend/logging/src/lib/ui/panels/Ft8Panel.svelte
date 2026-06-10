@@ -2,8 +2,11 @@
     import { onMount, onDestroy } from 'svelte';
     import Button from '../components/Button.svelte';
     import Ft8OccupancyPanel from './Ft8OccupancyPanel.svelte';
+    import Ft8MsgPanel from './Ft8MsgPanel.svelte';
+    import Ft8SettingsPanel from './Ft8SettingsPanel.svelte';
     import { ft8State, startFt8, stopFt8, type Ft8Band } from '../../states/ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
+    import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { parseCqCall } from '../../utils/ft8Message';
     import { frequencyToBand } from '../../utils/frequency';
@@ -48,7 +51,9 @@
     // text colour) while the worked answer is still pending or for non-CQ rows.
     function rowColor(info: Ft8CallInfo | undefined): string | undefined {
         if (!info || info.worked === undefined) return undefined;
-        return info.worked ? ft8EnrichState.colorWorked : ft8EnrichState.colorUnworked;
+        return info.worked
+            ? configState.ft8Display.highlightWorked
+            : configState.ft8Display.highlightUnworked;
     }
 
     // Slot label: "14:30:15 · odd · 19 busy", or a waiting state before the first
@@ -78,6 +83,52 @@
         if (b.source === 'decode') return 'decode';
         const lvl = b.level !== undefined ? ` ${b.level.toFixed(2)}` : '';
         return `${b.source ?? '?'}${lvl}`;
+    }
+
+    // ---- Lower-section tabs (same pattern + .tab-item class as InfoPanel) ----
+    type Ft8TabId = 'occupancy' | 'ladder' | 'settings';
+    const tabs: { id: Ft8TabId; title: string }[] = [
+        { id: 'occupancy', title: 'Occupancy' },
+        { id: 'ladder', title: 'Ladder' },
+        { id: 'settings', title: 'Settings' },
+    ];
+    let activeTab: Ft8TabId = $state('occupancy');
+
+    const tabItemClass = (isActive: boolean): string =>
+        isActive
+            ? 'text-indigo-700 cursor-default'
+            : 'text-gray-500 hover:text-gray-700 cursor-pointer';
+
+    // WAI-ARIA tabs keyboard contract (mirrors InfoPanel): arrows cycle (wrap),
+    // Home/End jump to ends, auto-activation so the panel follows focus.
+    function moveTab(delta: number): void {
+        const idx = tabs.findIndex((t) => t.id === activeTab);
+        const next = (idx + delta + tabs.length) % tabs.length;
+        activeTab = tabs[next].id;
+        document.getElementById(`ft8tab-${tabs[next].id}`)?.focus();
+    }
+
+    function handleTabKeydown(e: KeyboardEvent): void {
+        switch (e.key) {
+            case 'ArrowRight':
+                e.preventDefault();
+                moveTab(1);
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                moveTab(-1);
+                break;
+            case 'Home':
+                e.preventDefault();
+                activeTab = tabs[0].id;
+                document.getElementById(`ft8tab-${tabs[0].id}`)?.focus();
+                break;
+            case 'End':
+                e.preventDefault();
+                activeTab = tabs[tabs.length - 1].id;
+                document.getElementById(`ft8tab-${tabs[tabs.length - 1].id}`)?.focus();
+                break;
+        }
     }
 </script>
 
@@ -199,13 +250,45 @@
     </div>
 </div>
 <!--
-    TX-offset picker: a spatial view of the same clear offsets the Clear Slots
-    column lists, laid out across the passband against the busy bands. Clicking a
-    marker (or a chip) only sets the selected TX base offset — it is inert until
-    the TX controller (ADR 0029 step d/e) keys the rig. Both surfaces drive the
-    one `ft8State.selectedOffset`.
+    Tabbed lower section (same tablist pattern + .tab-item class as InfoPanel):
+      - Occupancy — the TX-offset picker strip (Ft8OccupancyPanel)
+      - Ladder    — the FT8 message sequencer (Ft8MsgPanel; stub until step e3)
+      - Settings  — FT8 display preferences (Ft8SettingsPanel), daemon-backed
+    WAI-ARIA tabs contract mirrors InfoPanel: roving tabindex, arrow/Home/End
+    navigation with auto-activation.
 -->
-<div class="flex flex-col w-full px-6 pt-6">
+<div class="flex flex-col w-full px-6 pt-4">
+    <div class="flex flex-row items-center border-b border-gray-400 pb-2">
+        <div role="tablist" class="flex flex-row items-center space-x-12">
+            {#each tabs as tab (tab.id)}
+                <button
+                    id={`ft8tab-${tab.id}`}
+                    type="button"
+                    role="tab"
+                    class="tab-item {tabItemClass(activeTab === tab.id)}"
+                    aria-selected={activeTab === tab.id}
+                    aria-controls={`ft8panel-${tab.id}`}
+                    tabindex={activeTab === tab.id ? 0 : -1}
+                    onclick={() => (activeTab = tab.id)}
+                    onkeydown={handleTabKeydown}
+                >
+                    <span>{tab.title}</span>
+                </button>
+            {/each}
+        </div>
+    </div>
 
+    {#if activeTab === 'occupancy'}
+        <div id="ft8panel-occupancy" role="tabpanel" aria-labelledby="ft8tab-occupancy">
+            <Ft8OccupancyPanel />
+        </div>
+    {:else if activeTab === 'ladder'}
+        <div id="ft8panel-ladder" role="tabpanel" aria-labelledby="ft8tab-ladder">
+            <Ft8MsgPanel />
+        </div>
+    {:else if activeTab === 'settings'}
+        <div id="ft8panel-settings" role="tabpanel" aria-labelledby="ft8tab-settings">
+            <Ft8SettingsPanel />
+        </div>
+    {/if}
 </div>
-<Ft8OccupancyPanel />

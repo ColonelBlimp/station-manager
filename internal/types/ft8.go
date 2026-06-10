@@ -39,6 +39,86 @@ type Ft8Config struct {
 	// so an operator who sets nothing leaves no inert block behind in a
 	// rewritten config (same discipline as Device/EnableOSD).
 	TX *Ft8TXConfig `json:"tx,omitempty"`
+
+	// Display holds the SPA's FT8 Band Activity display preferences (row cap,
+	// feed mode, CQ highlight colours). These are durable per-operator settings,
+	// edited from the FT8 Settings tab via /v1/config — NOT per-session browser
+	// state — so they live in config.json rather than localStorage. Pointer-typed
+	// for the same inert-block reason as TX; only operator-set values persist
+	// (the daemon serves resolved defaults via ResolveFt8Display).
+	Display *Ft8DisplayConfig `json:"display,omitempty"`
+}
+
+// Ft8DisplayConfig holds the FT8 Band Activity display preferences the SPA reads
+// from and writes to /v1/config. The daemon does not consume these (they're pure
+// SPA presentation) — it stores the operator's choices and serves them resolved
+// against the defaults below, so a fresh config still yields sensible values.
+//
+// Every field is zero-means-use-the-default (resolved by ResolveFt8Display);
+// omitempty keeps unset knobs out of a rewritten config.
+type Ft8DisplayConfig struct {
+	// HistoryMax caps the rolling Band Activity decode feed (rows). 0 → default.
+	HistoryMax int `json:"history_max,omitempty"`
+	// FeedMode is the Band Activity feed mode: "accumulate" (roll slots up,
+	// capped at HistoryMax) or "single" (show only the current 15 s slot).
+	// Empty → default "accumulate".
+	FeedMode string `json:"feed_mode,omitempty"`
+	// HighlightUnworked / HighlightWorked are the CQ-row tint colours (CSS hex)
+	// for a station not-yet-worked-on-this-band vs worked-before. Empty → defaults.
+	HighlightUnworked string `json:"highlight_unworked,omitempty"`
+	HighlightWorked   string `json:"highlight_worked,omitempty"`
+}
+
+// FT8 display defaults. Code constants (the single source of truth, shared by
+// daemon and — via the resolved /v1/config response — the SPA), used as fallback
+// when the operator has set nothing. Mirror the SPA's former localStorage
+// defaults (row cap 100, accumulate, WSJT-X-land green/grey).
+const (
+	DefaultFt8HistoryMax        = 100
+	DefaultFt8FeedMode          = "accumulate"
+	DefaultFt8HighlightUnworked = "#15803d" // tailwind green-700 — un-worked (attention)
+	DefaultFt8HighlightWorked   = "#9ca3af" // tailwind gray-400 — worked-before (muted)
+)
+
+// Ft8FeedModeValid reports whether s is an accepted feed-mode literal.
+func Ft8FeedModeValid(s string) bool {
+	return s == "accumulate" || s == "single"
+}
+
+// ResolveFt8Display overlays an operator's sparse Display overrides onto the
+// built-in defaults: every zero/empty field falls back to its default. A nil
+// override yields the defaults unchanged. The clamp on HistoryMax matches the
+// SPA's former bounds so a hand-edited config can't hide every row or balloon
+// the feed.
+func ResolveFt8Display(c *Ft8DisplayConfig) Ft8DisplayConfig {
+	d := Ft8DisplayConfig{
+		HistoryMax:        DefaultFt8HistoryMax,
+		FeedMode:          DefaultFt8FeedMode,
+		HighlightUnworked: DefaultFt8HighlightUnworked,
+		HighlightWorked:   DefaultFt8HighlightWorked,
+	}
+	if c == nil {
+		return d
+	}
+	if c.HistoryMax != 0 { // 0 = unset → keep the default
+		h := c.HistoryMax
+		if h < 10 {
+			h = 10
+		} else if h > 2000 {
+			h = 2000
+		}
+		d.HistoryMax = h
+	}
+	if Ft8FeedModeValid(c.FeedMode) {
+		d.FeedMode = c.FeedMode
+	}
+	if c.HighlightUnworked != "" {
+		d.HighlightUnworked = c.HighlightUnworked
+	}
+	if c.HighlightWorked != "" {
+		d.HighlightWorked = c.HighlightWorked
+	}
+	return d
 }
 
 // Ft8TXConfig holds the FT8 transmit configuration (ADR 0029). Minimal today —

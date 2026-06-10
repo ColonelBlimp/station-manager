@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _activeSourceForTests, ft8State, startFt8, stopFt8 } from './ft8.svelte';
+import { configState } from './config.svelte';
 
 /**
  * Synchronous fake EventSource (same approach as bridge.test.ts): startFt8()
@@ -256,58 +257,36 @@ describe('ft8 decode feed', () => {
     });
 });
 
-describe('ft8 decode history cap', () => {
-    // historyMax is a persisted singleton preference — restore the default after
-    // each test so it doesn't leak into the other suites.
+// The row cap + feed mode are daemon-owned settings now (configState.ft8Display);
+// the decode handler reads them each slot. These tests drive configState directly
+// and restore the defaults after each so they don't leak into the other suites.
+describe('ft8 decode history cap (configState.ft8Display.historyMax)', () => {
     afterEach(() => {
-        ft8State.setHistoryMax(100);
+        configState.ft8Display.historyMax = 100;
     });
 
-    // Build N distinct decode texts for a single slot.
     const manyTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `C${i}`);
 
     it('caps newly added decodes to the configured limit', () => {
         startFt8();
-        ft8State.setHistoryMax(10);
+        configState.ft8Display.historyMax = 10;
         latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', manyTexts(15)));
         expect(ft8State.decodes).toHaveLength(10);
     });
-
-    it('re-applies the cap to the existing history immediately on shrink', () => {
-        startFt8();
-        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', manyTexts(20)));
-        expect(ft8State.decodes).toHaveLength(20);
-        ft8State.setHistoryMax(12);
-        expect(ft8State.decodes).toHaveLength(12);
-    });
-
-    it('clamps out-of-range values to the sane bounds', () => {
-        ft8State.setHistoryMax(0);
-        expect(ft8State.historyMax).toBe(10); // floor
-        ft8State.setHistoryMax(999999);
-        expect(ft8State.historyMax).toBe(2000); // ceiling
-    });
-
-    it('persists the limit to localStorage', () => {
-        ft8State.setHistoryMax(42);
-        expect(localStorage.getItem('sm.ft8.history.max')).toBe('42');
-    });
 });
 
-describe('ft8 decode feed mode', () => {
-    // feedMode is a persisted singleton preference — restore the default after
-    // each test so it doesn't leak into the other suites.
+describe('ft8 decode feed mode (configState.ft8Display.feedMode)', () => {
     afterEach(() => {
-        ft8State.setFeedMode('accumulate');
+        configState.ft8Display.feedMode = 'accumulate';
     });
 
     it('defaults to accumulate', () => {
-        expect(ft8State.feedMode).toBe('accumulate');
+        expect(configState.ft8Display.feedMode).toBe('accumulate');
     });
 
     it('in single mode, each slot replaces the previous one', () => {
         startFt8();
-        ft8State.setFeedMode('single');
+        configState.ft8Display.feedMode = 'single';
         latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', ['CQ A', 'CQ B']));
         latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:15Z', ['CQ C']));
 
@@ -315,19 +294,11 @@ describe('ft8 decode feed mode', () => {
         expect(ft8State.decodes[0].startUtc).toBe('2026-06-07T14:30:15Z');
     });
 
-    it('switching to single trims the current list to the latest slot at once', () => {
+    it('in accumulate mode, slots roll up', () => {
         startFt8();
+        configState.ft8Display.feedMode = 'accumulate';
         latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', ['CQ A', 'CQ B']));
         latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:15Z', ['CQ C']));
-        expect(ft8State.decodes).toHaveLength(3); // accumulated
-
-        ft8State.setFeedMode('single');
-        // Only the newest slot (14:30:15) survives.
-        expect(ft8State.decodes.map((d) => d.text)).toEqual(['CQ C']);
-    });
-
-    it('persists the mode to localStorage', () => {
-        ft8State.setFeedMode('single');
-        expect(localStorage.getItem('sm.ft8.feed.mode')).toBe('single');
+        expect(ft8State.decodes).toHaveLength(3);
     });
 });

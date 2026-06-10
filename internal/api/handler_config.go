@@ -61,6 +61,14 @@ type ConfigResponse struct {
 	Station        types.StationConfig  `json:"station"`
 	Bridge         BridgeInfo           `json:"bridge"`
 	Mailer         MailerInfo           `json:"mailer"`
+	// Ft8Display is the FT8 Band Activity display preferences (row cap, feed
+	// mode, CQ highlight colours) — operator-writable, unlike the read-only
+	// Bridge/Mailer projections. On GET it is always populated with the resolved
+	// values (defaults filled), so the SPA reads sensible values even on a fresh
+	// config. On PUT it is **presence-aware**: a body that omits it (e.g. a My
+	// Station save) leaves the stored block untouched; a body that includes it
+	// replaces it. Pointer-typed so the handler can tell "sent" from "absent".
+	Ft8Display *types.Ft8DisplayConfig `json:"ft8_display,omitempty"`
 }
 
 // MailerInfo is the SPA-visible subset of the SMTP config. Enabled
@@ -295,6 +303,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// FT8 display: validate the one enum up front for a friendly 400 (the rest
+	// — colours, row cap — are normalised by ResolveFt8Display, not rejected).
+	if req.Ft8Display != nil && req.Ft8Display.FeedMode != "" && !types.Ft8FeedModeValid(req.Ft8Display.FeedMode) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			fmt.Sprintf("ft8_display.feed_mode %q must be \"accumulate\" or \"single\"", req.Ft8Display.FeedMode), op)
+		return
+	}
+
 	if err := s.cfg.Update(func(cfg *config.Config) error {
 		// Operator-writable fields. Server-managed fields
 		// (SetupComplete, DefaultLogbookID/RigID — except via the
@@ -327,6 +343,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			} else {
 				delete(cfg.Bridge.ModeMappings, req.Bridge.Driver)
 			}
+		}
+		// FT8 display prefs — presence-aware: only touched when the body carried
+		// `ft8_display` (so a My Station save, which omits it, leaves it alone).
+		// Stored normalised (ResolveFt8Display clamps/defaults), so the on-disk
+		// value already matches what GET would serve.
+		if req.Ft8Display != nil {
+			resolved := types.ResolveFt8Display(req.Ft8Display)
+			cfg.Ft8.Display = &resolved
 		}
 		return nil
 	}); err != nil {
@@ -443,6 +467,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 			DefaultRecipient: s.mailer.DefaultRecipient(),
 		},
 	}
+
+	// FT8 display prefs, always resolved (defaults filled) so a fresh config
+	// still yields sensible values for the SPA's Settings tab.
+	ft8Display := types.ResolveFt8Display(cfg.Ft8.Display)
+	resp.Ft8Display = &ft8Display
 
 	if cfg.DefaultLogbookID > 0 {
 		row, err := s.db.FetchLogbookByIDWithContext(r.Context(), cfg.DefaultLogbookID)

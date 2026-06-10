@@ -132,16 +132,6 @@ describe('ft8EnrichState.observe', () => {
         expect(ft8EnrichState.info('K1ABC', '20m')).toBeUndefined();
     });
 });
-
-describe('ft8EnrichState highlight colours', () => {
-    it('persists colour changes to localStorage', () => {
-        ft8EnrichState.setColorUnworked('#abcdef');
-        ft8EnrichState.setColorWorked('#123456');
-        flushSync();
-
-        expect(ft8EnrichState.colorUnworked).toBe('#abcdef');
-        expect(ft8EnrichState.colorWorked).toBe('#123456');
-        expect(localStorage.getItem('sm.ft8.highlight.unworked')).toBe('#abcdef');
-        expect(localStorage.getItem('sm.ft8.highlight.worked')).toBe('#123456');
-    });
-});
+// The highlight colours moved to daemon config (configState.ft8Display); their
+// persistence is covered by the daemon config tests + configState hydration, not
+// here.

@@ -43,7 +43,12 @@
  *     default_rig_id. Empty until CAT lands.
  */
 
-import type { AdifModePair, ConfigResponse } from '../api/config';
+import type {
+    AdifModePair,
+    ConfigResponse,
+    LoggingStationFields,
+    StationFields,
+} from '../api/config';
 import { fetchLogbookCount } from '../api/logbook';
 
 class StationConfig {
@@ -245,6 +250,21 @@ class MailerView {
     defaultRecipient: string = $state('');
 }
 
+/**
+ * FT8 Band Activity display preferences, mirrored from `ft8_display` on
+ * /v1/config (daemon-owned, durable — replaces the former browser-localStorage
+ * prefs). All `$state` so the Band Activity feed (row cap, feed mode) and CQ
+ * enrichment (highlight colours) react live as the FT8 Settings tab edits them.
+ * Defaults match the daemon's (types.DefaultFt8*) and stand in as a forward-
+ * compat fallback if a daemon build predates the `ft8_display` wire field.
+ */
+class Ft8DisplayView {
+    historyMax: number = $state(100);
+    feedMode: 'accumulate' | 'single' = $state('accumulate');
+    highlightUnworked: string = $state('#15803d');
+    highlightWorked: string = $state('#9ca3af');
+}
+
 class ConfigState {
     /** CAT-side station properties — see ADR 0009. */
     station: StationConfig = new StationConfig();
@@ -267,6 +287,7 @@ class ConfigState {
     defaultRig: DefaultRigView = new DefaultRigView();
     bridge: BridgeView = new BridgeView();
     mailer: MailerView = new MailerView();
+    ft8Display: Ft8DisplayView = new Ft8DisplayView();
 
     /**
      * Hydrate from a daemon GET/PUT /v1/config response. Each block
@@ -338,6 +359,14 @@ class ConfigState {
         this.bridge.tune = resp.bridge?.tune ?? false;
         this.bridge.modeMappings = resp.bridge?.mode_mappings ?? {};
 
+        // FT8 display prefs — daemon-resolved (always present), with the same
+        // defaults as a forward-compat fallback for an older daemon.
+        const fd = resp.ft8_display;
+        this.ft8Display.historyMax = fd?.history_max ?? 100;
+        this.ft8Display.feedMode = fd?.feed_mode ?? 'accumulate';
+        this.ft8Display.highlightUnworked = fd?.highlight_unworked ?? '#15803d';
+        this.ft8Display.highlightWorked = fd?.highlight_worked ?? '#9ca3af';
+
         // mailer projection — daemon-managed, read-only on the SPA
         // side. Defensive guard against missing block (older daemon
         // builds) so a bad fetch doesn't NPE the hydration path.
@@ -355,6 +384,45 @@ class ConfigState {
     /** Mark the fetch as settled even on failure so consumers can render fallbacks. */
     markLoaded(): void {
         this.loaded = true;
+    }
+
+    /**
+     * Build the writable logging_station payload for a /v1/config PUT from the
+     * current state. The daemon overwrites logging_station unconditionally on
+     * PUT, so any panel that PUTs a *different* block (e.g. ft8_display) must
+     * include this to avoid zeroing station identity. my_lat/my_lon are omitted
+     * — they're daemon-derived from the gridsquare.
+     */
+    toLoggingStationFields(): LoggingStationFields {
+        const ls = this.loggingStation;
+        return {
+            station_callsign: ls.stationCallsign,
+            operator: ls.operator,
+            owner_callsign: ls.ownerCallsign,
+            my_name: ls.myName,
+            my_gridsquare: ls.myGridsquare,
+            my_street: ls.myStreet,
+            my_city: ls.myCity,
+            my_postal_code: ls.myPostalCode,
+            my_country: ls.myCountry,
+            my_altitude: ls.myAltitude,
+            my_cq_zone: ls.myCqZone,
+            my_itu_zone: ls.myItuZone,
+            my_dxcc: ls.myDxcc,
+            my_rig: ls.myRig,
+            my_antenna: ls.myAntenna,
+            my_morse_key_type: ls.myMorseKeyType,
+            my_morse_key_info: ls.myMorseKeyInfo,
+        };
+    }
+
+    /** Build the writable station payload for a /v1/config PUT (same clobber rationale). */
+    toStationFields(): StationFields {
+        return {
+            amp_enabled: this.station.ampEnabled,
+            amp_multiplier: this.station.ampMultiplier,
+            default_power: this.station.defaultPower,
+        };
     }
 
     /**

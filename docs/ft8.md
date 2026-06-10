@@ -86,16 +86,17 @@ persisted to `localStorage` (survives reload). FT8 mode renders `Ft8Panel`,
 which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 
 - **Band Activity** — live decode feed: `time · SNR · freq · message`, newest
-  slot on top, frequency-ascending within a slot. Two per-device display
-  preferences (localStorage; no visible control yet — a future FT8
-  display-settings surface will expose these + the highlight colours below):
-  - **feed mode** (`ft8State.feedMode`, key `sm.ft8.feed.mode`, default
-    `accumulate`): `accumulate` rolls slots up into a rolling history;
-    `single` shows only the current 15 s slot, replacing the list each slot
-    (WSJT-X "clear each period" style).
-  - **row cap** (`ft8State.historyMax`, key `sm.ft8.history.max`, default 100,
-    clamped 10–2000): the accumulate-mode history limit (also a safety bound on
-    a very busy single slot). The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
+  slot on top, frequency-ascending within a slot. Two display preferences, edited
+  from the **Settings tab** (see below) and **daemon-backed** — they live in
+  `config.json` under `ft8.display`, not browser localStorage, so they're durable
+  per-operator (survive a browser change / data clear), read by the SPA from
+  `configState.ft8Display`:
+  - **feed mode** (`feed_mode`, default `accumulate`): `accumulate` rolls slots
+    up into a rolling history; `single` shows only the current 15 s slot,
+    replacing the list each slot (WSJT-X "clear each period" style).
+  - **row cap** (`history_max`, default 100, clamped 10–2000 daemon-side): the
+    accumulate-mode history limit (also a safety bound on a very busy single
+    slot). The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
   from go-ft8's `DecodedMessage.SNR` (dB, 2500 Hz reference), added in go-ft8
   v0.3.0 and threaded through `DecodeLine.SNR` → the `ft8-decode` SSE → the row.
   **CQ lines are enriched**: each
@@ -110,8 +111,9 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   slow/absent hamnut or DB answer never stalls the feed. Results are cached per
   `call|band` for the session (CQ stations recur, so steady-state lookups ≈ 0).
   Only CQ messages are decorated today (one unambiguous callsign); reply/report
-  lines stay plain. The two highlight colours are operator-configurable
-  (localStorage; defaults green = new, grey = worked).
+  lines stay plain. The two highlight colours are operator-configurable from the
+  **Settings tab** (daemon-backed `ft8.display.highlight_unworked` /
+  `highlight_worked`; defaults green = new, grey = worked).
 - **Clear Slots** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
   select it as the TX base offset** (highlighted; mirrors the strip below).
@@ -119,7 +121,15 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   list with each band's source/level (`decode` / `both 0.42` / `energy 0.06`),
   added to cross-check the detector against WSJT-X. Step (e) reclaims this panel
   for the interactive TX picker.
-- **TX Offset strip** (bottom, shipped 2026-06-09) — a horizontal, per-slot
+- **Lower section — tabs** (same tablist pattern + `.tab-item` class as InfoPanel,
+  full WAI-ARIA keyboard nav): **Occupancy** (the TX Offset strip below), **Ladder**
+  (`Ft8MsgPanel` — the CQ→73 message sequencer; placeholder until step e3), and
+  **Settings** (`Ft8SettingsPanel` — the FT8 display preferences: row cap, feed mode,
+  CQ highlight colours). The Settings tab saves the **same way as the My Station tab**
+  — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
+  `/v1/config` (bundling the current `logging_station`/`station` so the unconditional
+  overwrite doesn't clobber them) and re-hydrates from the response.
+- **TX Offset strip** (in the Occupancy tab, shipped 2026-06-09) — a horizontal, per-slot
   *spatial* view of the passband, **channelised** into uniform ~50 Hz slots
   (≈56 across 200–3000). FT8 has no standard offset grid — a signal is ~50 Hz
   wide and sits at any continuous offset — so this grid is an SM picker
@@ -219,6 +229,25 @@ All omittable (zero/absent → default); `guard_margin_hz` is pointer-typed so a
 explicit `0` (off) is distinct from "unset". Structural constants (FFT size,
 50 Hz signal width, ~12 Hz energy gate, cap of 8 suggestions) live in code, not
 config.
+
+### Config — `ft8.display.*` (Band Activity preferences)
+
+Operator display settings edited from the **FT8 Settings tab** (not hand-edited);
+served resolved on `/v1/config` (`ft8_display`) and PUT back to persist. The daemon
+does not consume these — they're pure SPA presentation — it stores + resolves them
+(`types.ResolveFt8Display`), so a fresh config still yields sensible values.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `history_max` | 100 | Band Activity row cap (clamped 10–2000) |
+| `feed_mode` | `accumulate` | `accumulate` (roll slots up) or `single` (current slot only) |
+| `highlight_unworked` | `#15803d` | CQ tint — not worked on this band (attention) |
+| `highlight_worked` | `#9ca3af` | CQ tint — worked-before (muted) |
+
+Daemon-backed rather than browser localStorage so they survive a browser change /
+data clear and follow the operator (per the "settings live in config.json, not
+localStorage" rule). The **selected TX offset** is the one exception — it stays in
+localStorage (`sm.ft8.tx.offset`) as live operating state, not a setting.
 
 ## 5. Transmit roadmap (ADR 0029)
 

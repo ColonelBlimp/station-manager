@@ -24,8 +24,9 @@
  *     is treated as terminal for the session (a transient dupe-endpoint blip can
  *     leave `worked` blank until a band change — acceptable for a display aid).
  *
- * Persistence tier: in-memory for the cache (cleared when the FT8 view closes);
- * localStorage for the two highlight colours (per-device operator preference).
+ * Persistence tier: in-memory for the cache (cleared when the FT8 view closes).
+ * The highlight colours used to tint the rows are daemon-owned config now
+ * (configState.ft8Display), read by the Band Activity panel — not kept here.
  */
 
 import { configState } from './config.svelte';
@@ -47,30 +48,10 @@ export interface Ft8CallInfo {
 // FT8 is itself an ADIF main mode, so the dupe axis is band + "FT8".
 const FT8_MODE = 'FT8';
 
-// Highlight-colour preference (localStorage). Defaults follow WSJT-X-land
-// emphasis: the un-worked station gets the attention colour (green — "new, go
-// work them"); a worked-before station is muted (grey) so the eye skips dupes.
-const KEY_UNWORKED = 'sm.ft8.highlight.unworked';
-const KEY_WORKED = 'sm.ft8.highlight.worked';
-const DEFAULT_UNWORKED = '#15803d'; // tailwind green-700
-const DEFAULT_WORKED = '#9ca3af'; // tailwind gray-400
-
-function loadColor(key: string, fallback: string): string {
-    try {
-        return localStorage.getItem(key) ?? fallback;
-    } catch {
-        // localStorage unavailable (private mode / quota) — use the default.
-        return fallback;
-    }
-}
-
-function saveColor(key: string, value: string): void {
-    try {
-        localStorage.setItem(key, value);
-    } catch {
-        // Best-effort persistence; an in-memory value still applies this session.
-    }
-}
+// The CQ highlight colours are daemon-owned settings now (config.json
+// `ft8.display`, served on /v1/config) — read from configState.ft8Display by the
+// Band Activity panel, edited via the FT8 Settings tab. They are no longer kept
+// here (they were localStorage; durable per-operator config replaces that).
 
 function cacheKey(call: string, band: string): string {
     return `${call}|${band}`;
@@ -83,11 +64,6 @@ class Ft8EnrichState {
      */
     cache: Record<string, Ft8CallInfo> = $state({});
 
-    /** Attention colour for an un-worked CQ station. */
-    colorUnworked: string = $state(loadColor(KEY_UNWORKED, DEFAULT_UNWORKED));
-    /** Muted colour for a worked-before CQ station (dupe de-emphasis). */
-    colorWorked: string = $state(loadColor(KEY_WORKED, DEFAULT_WORKED));
-
     // Keys with a lookup currently in flight — dedupes concurrent observes for
     // the same call+band within and across slots. Non-reactive: it gates work,
     // it isn't rendered.
@@ -96,16 +72,6 @@ class Ft8EnrichState {
     /** Decoration for a CQ call on a band, or undefined if not yet looked up. */
     info(call: string, band: string): Ft8CallInfo | undefined {
         return this.cache[cacheKey(call, band)];
-    }
-
-    setColorUnworked(hex: string): void {
-        this.colorUnworked = hex;
-        saveColor(KEY_UNWORKED, hex);
-    }
-
-    setColorWorked(hex: string): void {
-        this.colorWorked = hex;
-        saveColor(KEY_WORKED, hex);
     }
 
     /**

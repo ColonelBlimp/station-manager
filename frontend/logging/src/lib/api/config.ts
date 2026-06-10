@@ -33,6 +33,21 @@ export interface ConfigResponse {
     station: StationFields;
     bridge: BridgeFields;
     mailer: MailerFields;
+    /**
+     * FT8 Band Activity display preferences (row cap, feed mode, CQ highlight
+     * colours). Operator-writable, daemon-resolved (always present on GET with
+     * defaults filled). Optional on the type for forward-compat with a daemon
+     * build that predates it. PUT it back to persist (presence-aware on the
+     * daemon — omitting it leaves the stored block untouched).
+     */
+    ft8_display?: Ft8DisplayFields;
+}
+
+export interface Ft8DisplayFields {
+    history_max?: number;
+    feed_mode?: 'accumulate' | 'single';
+    highlight_unworked?: string;
+    highlight_worked?: string;
 }
 
 export interface BridgeFields {
@@ -196,7 +211,12 @@ export async function putConfig(
     payload: Partial<
         Pick<
             ConfigResponse,
-            'logging_station' | 'default_logbook' | 'default_rig' | 'station' | 'bridge'
+            | 'logging_station'
+            | 'default_logbook'
+            | 'default_rig'
+            | 'station'
+            | 'bridge'
+            | 'ft8_display'
         >
     >,
     signal?: AbortSignal

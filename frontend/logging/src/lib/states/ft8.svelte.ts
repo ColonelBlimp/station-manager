@@ -22,6 +22,8 @@
  * stays in its waiting state.
  */
 
+import { configState } from './config.svelte';
+
 /** One occupied audio-frequency range. Mirrors `internal/ft8.Band` (snake_case wire). */
 export interface Ft8Band {
     low_hz: number;
@@ -73,71 +75,11 @@ export interface DecodeEntry {
     text: string;
 }
 
-/**
- * Cap on the rolling decode history — a per-device operator preference in
- * localStorage (no visible control yet; a future FT8 display-settings surface
- * exposes it). ~100 rows ≈ several minutes of a busy band — enough to scroll
- * back and spot who's active without unbounded growth. Clamped on load + set so
- * a bad stored value can't hide every row or balloon memory.
- */
-const KEY_HISTORY_MAX = 'sm.ft8.history.max';
-const DEFAULT_HISTORY_MAX = 100;
-const HISTORY_MAX_MIN = 10;
-const HISTORY_MAX_MAX = 2000;
-
-function clampHistoryMax(n: number): number {
-    if (!Number.isFinite(n)) return DEFAULT_HISTORY_MAX;
-    return Math.min(HISTORY_MAX_MAX, Math.max(HISTORY_MAX_MIN, Math.trunc(n)));
-}
-
-function loadHistoryMax(): number {
-    try {
-        const raw = localStorage.getItem(KEY_HISTORY_MAX);
-        if (raw === null) return DEFAULT_HISTORY_MAX;
-        const n = Number.parseInt(raw, 10);
-        return Number.isNaN(n) ? DEFAULT_HISTORY_MAX : clampHistoryMax(n);
-    } catch {
-        // localStorage unavailable (private mode / quota) — use the default.
-        return DEFAULT_HISTORY_MAX;
-    }
-}
-
-function saveHistoryMax(n: number): void {
-    try {
-        localStorage.setItem(KEY_HISTORY_MAX, String(n));
-    } catch {
-        // Best-effort persistence; the in-memory value still applies this session.
-    }
-}
-
-/**
- * Band Activity feed mode — a per-device operator preference in localStorage (no
- * visible control yet; future FT8 display-settings surface). `accumulate` is the
- * rolling history (newest slot prepended onto prior slots, capped at historyMax);
- * `single` shows only the current 15 s slot's decodes, replacing the list each
- * slot (WSJT-X "clear each period" style).
- */
-export type Ft8FeedMode = 'accumulate' | 'single';
-const KEY_FEED_MODE = 'sm.ft8.feed.mode';
-const DEFAULT_FEED_MODE: Ft8FeedMode = 'accumulate';
-
-function loadFeedMode(): Ft8FeedMode {
-    try {
-        const raw = localStorage.getItem(KEY_FEED_MODE);
-        return raw === 'single' || raw === 'accumulate' ? raw : DEFAULT_FEED_MODE;
-    } catch {
-        // localStorage unavailable (private mode / quota) — use the default.
-        return DEFAULT_FEED_MODE;
-    }
-}
-
-function saveFeedMode(mode: Ft8FeedMode): void {
-    try {
-        localStorage.setItem(KEY_FEED_MODE, mode);
-    } catch {
-        // Best-effort persistence; the in-memory value still applies this session.
-    }
-}
+// Band Activity display preferences (row cap + feed mode) and the CQ highlight
+// colours are daemon-owned settings now (config.json `ft8.display`, served on
+// /v1/config) — read from configState.ft8Display, edited via the FT8 Settings
+// tab. They are NOT localStorage: durable, per-operator, not per-browser. The
+// decode handler below reads the cap + mode from configState each slot.
 
 /**
  * Selected TX base offset (Hz) — a per-device operator choice in localStorage so
@@ -205,52 +147,16 @@ class Ft8State {
     selectedOffset: number | null = $state(loadTxOffset());
     /**
      * Rolling decode history for the Band Activity feed — newest slot on top,
-     * frequency-ascending within each slot, capped at historyMax.
+     * frequency-ascending within each slot. Capped at configState.ft8Display
+     * .historyMax (daemon-owned) and shown either accumulated or single-slot per
+     * configState.ft8Display.feedMode; both applied by the decode handler.
      */
     decodes: DecodeEntry[] = $state([]);
-    /**
-     * Max rows kept in the Band Activity feed (localStorage, per device). The
-     * decode handler caps the rolling history to this; setHistoryMax updates it
-     * (clamped + persisted) and re-applies the cap immediately.
-     */
-    historyMax: number = $state(loadHistoryMax());
-    /**
-     * Band Activity feed mode (localStorage, per device): `accumulate` rolls
-     * slots up (capped at historyMax); `single` shows only the current slot.
-     */
-    feedMode: Ft8FeedMode = $state(loadFeedMode());
 
     /** Pick (or re-pick) the TX base offset; persisted so it survives a refresh. */
     selectOffset(hz: number): void {
         this.selectedOffset = hz;
         saveTxOffset(hz);
-    }
-
-    /**
-     * Set the Band Activity row cap. Clamped to a sane range, persisted to
-     * localStorage, and applied to the current history at once so shrinking it
-     * takes effect without waiting for the next slot.
-     */
-    setHistoryMax(n: number): void {
-        this.historyMax = clampHistoryMax(n);
-        saveHistoryMax(this.historyMax);
-        if (this.decodes.length > this.historyMax) {
-            this.decodes = this.decodes.slice(0, this.historyMax);
-        }
-    }
-
-    /**
-     * Set the Band Activity feed mode (persisted). Switching to `single` trims
-     * the current list to just the latest slot at once, so the change is visible
-     * without waiting for the next slot (the rows sharing the top startUtc).
-     */
-    setFeedMode(mode: Ft8FeedMode): void {
-        this.feedMode = mode;
-        saveFeedMode(mode);
-        if (mode === 'single' && this.decodes.length > 0) {
-            const top = this.decodes[0].startUtc;
-            this.decodes = this.decodes.filter((d) => d.startUtc === top);
-        }
     }
 }
 
@@ -325,9 +231,10 @@ function openSource(): void {
             }));
         // `single` shows only this slot; `accumulate` prepends onto prior slots.
         // Either way, cap to the operator's row limit (a safety bound for a very
-        // busy single slot too).
-        const next = ft8State.feedMode === 'single' ? fresh : [...fresh, ...ft8State.decodes];
-        ft8State.decodes = next.slice(0, ft8State.historyMax);
+        // busy single slot too). Both knobs are daemon-owned (configState.ft8Display).
+        const display = configState.ft8Display;
+        const next = display.feedMode === 'single' ? fresh : [...fresh, ...ft8State.decodes];
+        ft8State.decodes = next.slice(0, display.historyMax);
     });
 }
 

@@ -15,7 +15,7 @@
     Ft8Panel; both drive the one selection. The presentational strip lives in
     Ft8OccupancyStrip; this panel wires it to ft8State.
 -->
-<div class="m-0 border-t border-gray-300">
+<div class="pt-2">
     <Ft8OccupancyStrip
         passbandLow={ft8State.passbandLow}
         passbandHigh={ft8State.passbandHigh}
