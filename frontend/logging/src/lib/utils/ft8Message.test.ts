@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { parseCqCall } from './ft8Message';
+import { parseCqCall, parseCq } from './ft8Message';
+
+describe('parseCq (call + grid)', () => {
+    it('parses call and grid', () => {
+        expect(parseCq('CQ K1ABC FN42')).toEqual({ call: 'K1ABC', grid: 'FN42' });
+    });
+    it('parses call with no grid', () => {
+        expect(parseCq('CQ G3XYZ')).toEqual({ call: 'G3XYZ', grid: '' });
+    });
+    it('skips modifiers and grabs call + grid', () => {
+        expect(parseCq('CQ DX S56GD JN65')).toEqual({ call: 'S56GD', grid: 'JN65' });
+        expect(parseCq('CQ POTA W2ABC')).toEqual({ call: 'W2ABC', grid: '' });
+    });
+    it('returns null for non-CQ', () => {
+        expect(parseCq('K1ABC W2XYZ -10')).toBeNull();
+    });
+});
 
 describe('parseCqCall', () => {
     it('parses a plain CQ with grid', () => {

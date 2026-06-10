@@ -43,7 +43,20 @@ const (
 	// headroom below full scale so the ramped edges and any downstream mixing
 	// don't clip.
 	txAmplitude = 0.5
+
+	// ft8ToneCount is the standard FT8 message tone-sequence length (Costas +
+	// data symbols). EncodeStandardMessage returns exactly this many.
+	ft8ToneCount = 79
+
+	// txWaveformSamples is the bare GFSK waveform length: the Gaussian pulse adds
+	// one symbol of overhang at each end, so (tones+2) symbols.
+	txWaveformSamples = (ft8ToneCount + 2) * txSamplesPerSymbol
 )
+
+// txWaveformSec is the bare waveform duration (~12.96 s) — the room a
+// transmission needs inside the 15 s slot, used by the sequencer's late-start
+// guard (sequencer.go).
+const txWaveformSec = float64(txWaveformSamples) / float64(goft8.SampleRate)
 
 // Modulate turns an FT8 tone sequence (each value 0..7) into a normalised
 // GFSK waveform in [-1, 1] at the given audio offset, sampled at
@@ -139,4 +152,24 @@ func EncodeToSlot(text string, offsetHz, dtSec float64) ([]int16, error) {
 		slot[k] = int16(float64(v) * txAmplitude * math.MaxInt16)
 	}
 	return slot, nil
+}
+
+// EncodeWaveform encodes a standard FT8 message to the BARE GFSK waveform as
+// int16 PCM (no slot padding, ~12.96 s). This is the shape the sequencer
+// transmits when answering a CQ in the CURRENT slot started late (ADR 0031): the
+// tones must come out at the moment of the call, not after dtSec of leading
+// silence, and there is no trailing silence to hold PTT into the next slot.
+// Errors only on an unencodable standard message.
+func EncodeWaveform(text string, offsetHz float64) ([]int16, error) {
+	const op errors.Op = "ft8.EncodeWaveform"
+	enc, err := goft8.EncodeStandardMessage(text)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsgf("encode %q", text)
+	}
+	wave := Modulate(enc.Tones[:], offsetHz)
+	out := make([]int16, len(wave))
+	for i, v := range wave {
+		out[i] = int16(float64(v) * txAmplitude * math.MaxInt16)
+	}
+	return out, nil
 }

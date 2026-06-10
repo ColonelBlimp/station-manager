@@ -4,11 +4,19 @@
     import Ft8OccupancyPanel from './Ft8OccupancyPanel.svelte';
     import Ft8MsgPanel from './Ft8MsgPanel.svelte';
     import Ft8SettingsPanel from './Ft8SettingsPanel.svelte';
-    import { ft8State, startFt8, stopFt8, type Ft8Band } from '../../states/ft8.svelte';
+    import {
+        ft8State,
+        startFt8,
+        stopFt8,
+        type Ft8Band,
+        type DecodeEntry,
+    } from '../../states/ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
-    import { parseCqCall } from '../../utils/ft8Message';
+    import { parseCqCall, parseCq } from '../../utils/ft8Message';
+    import { startFt8Qso } from '../../api/ft8qso';
+    import { toasts } from '../../states/toasts.svelte';
     import { frequencyToBand } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
 
@@ -54,6 +62,20 @@
         return info.worked
             ? configState.ft8Display.highlightWorked
             : configState.ft8Display.highlightUnworked;
+    }
+
+    // Answering a CQ (ADR 0031 step e3): a CQ row is clickable to start an
+    // exchange when TX is armed, an offset is picked, and no QSO is already
+    // running. The daemon then auto-advances the ladder.
+    const canAnswer = $derived(
+        ft8State.tx.armed && ft8State.selectedOffset !== null && !ft8State.qso.active
+    );
+
+    async function answerCq(d: DecodeEntry): Promise<void> {
+        const cq = parseCq(d.text);
+        if (!cq || !canAnswer || ft8State.selectedOffset === null) return;
+        const out = await startFt8Qso(cq.call, cq.grid, d.startUtc, ft8State.selectedOffset);
+        if (out.kind !== 'ok') toasts.error(out.message);
     }
 
     // Slot label: "14:30:15 · odd · 19 busy", or a waiting state before the first
@@ -183,6 +205,7 @@
                     {#each ft8State.decodes as d (d.id)}
                         {@const cqCall = parseCqCall(d.text)}
                         {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
+                        {@const answerable = cqCall !== null && canAnswer}
                         <li class="flex gap-2 whitespace-nowrap">
                             <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
                             <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
@@ -190,7 +213,18 @@
                             {#if info?.flag}
                                 <span class="cursor-default" title={info.country} aria-hidden="true">{info.flag}</span>
                             {/if}
-                            <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
+                            {#if answerable}
+                                <button
+                                    type="button"
+                                    class="truncate text-left text-gray-700 cursor-pointer hover:underline"
+                                    style:color={rowColor(info)}
+                                    title={`Answer ${cqCall}`}
+                                    onclick={() => answerCq(d)}>{d.text}</button>
+                            {:else}
+                                <span class="truncate text-gray-700" style:color={rowColor(info)}
+                                    >{d.text}</span
+                                >
+                            {/if}
                         </li>
                     {/each}
                 </ul>

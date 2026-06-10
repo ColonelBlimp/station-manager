@@ -171,6 +171,21 @@ const (
 	txDone                      // 73 sent; nothing more to transmit
 )
 
+// label is the lower-case wire/display name for the rung (used in the ft8-qso
+// SSE payload).
+func (s txState) label() string {
+	switch s {
+	case txCalling:
+		return "calling"
+	case txReporting:
+		return "reporting"
+	case txConfirming:
+		return "confirming"
+	default:
+		return "done"
+	}
+}
+
 // Exchange is the state of one answer-a-CQ contact. Its resolver methods return
 // a new Exchange rather than mutating in place, so the daemon sequencer holds
 // one value per active contact and the rung logic stays pure and testable.
@@ -184,8 +199,9 @@ type Exchange struct {
 	// RcvdReport is the report THEY sent us (rung 2), kept for the logged QSO.
 	RcvdReport    int
 	HasRcvdReport bool
-	// SendSnr is OUR latest measured SNR of their signal — the value rung 3
-	// reports back. Refreshed on every decode of theirs that advances us.
+	// SendSnr is OUR measured SNR of their signal at the moment they reported us
+	// (Calling→Reporting) — the value rung 3 reports back, and the report we log
+	// as sent. Fixed once set; later rungs don't change it.
 	SendSnr    int
 	HasSendSnr bool
 }
@@ -244,9 +260,10 @@ func (e Exchange) Advance(text string, snr int) (Exchange, bool) {
 			return e, true
 		}
 	case txReporting:
-		// They rogered (RRR / RR73) → send our 73.
+		// They rogered (RRR / RR73) → send our 73. SendSnr is NOT updated here:
+		// it's the report we already sent at rung 3 (fixed on entering Reporting),
+		// and this decode's SNR is irrelevant — we send no further report.
 		if m.kind == msgRoger {
-			e.SendSnr, e.HasSendSnr = snr, true
 			e.State = txConfirming
 			return e, true
 		}

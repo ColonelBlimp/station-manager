@@ -178,6 +178,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// arming is refused unless a rig is connected — neither can strand RF.
 		mux.HandleFunc("POST /v1/ft8/tx/arm", s.handleFt8TxArm)
 		mux.HandleFunc("POST /v1/ft8/tx/send", s.handleFt8TxSend)
+		// Manual sequencer (ADR 0031 step e3) — start/abandon an answer-a-CQ
+		// exchange the daemon then auto-advances. Same enablement gate.
+		mux.HandleFunc("POST /v1/ft8/qso/start", s.handleFt8QsoStart)
+		mux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

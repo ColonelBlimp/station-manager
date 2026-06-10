@@ -80,6 +80,25 @@ const emptyTxStatus = (): Ft8TxStatus => ({
     error: '',
 });
 
+/** Manual sequencer status (ADR 0031 step e3). Mirrors `internal/ft8.QsoStatus`
+ *  (the `ft8-qso` SSE payload): the active answer-a-CQ contact's rung, worked
+ *  call, the message the daemon will send next, and the unanswered-repeat count. */
+export interface Ft8QsoStatus {
+    active: boolean;
+    theirCall: string;
+    state: string; // calling | reporting | confirming
+    nextMessage: string;
+    repeats: number;
+}
+
+const emptyQsoStatus = (): Ft8QsoStatus => ({
+    active: false,
+    theirCall: '',
+    state: '',
+    nextMessage: '',
+    repeats: 0,
+});
+
 /**
  * One row in the accumulating Band Activity list. `startUtc` is the slot's
  * RFC3339 time (formatted for display by the panel); `id` is a stable,
@@ -177,6 +196,12 @@ class Ft8State {
      * arm/disarm/send go through lib/api/ft8tx.ts and the daemon confirms by push.
      */
     tx: Ft8TxStatus = $state(emptyTxStatus());
+    /**
+     * Manual sequencer status, hydrated from the `ft8-qso` SSE (daemon-owned,
+     * hub-cached so a reconnect replays the active contact). Start/abandon go
+     * through lib/api/ft8qso.ts; the daemon confirms by push.
+     */
+    qso: Ft8QsoStatus = $state(emptyQsoStatus());
 
     /** Pick (or re-pick) the TX base offset; persisted so it survives a refresh. */
     selectOffset(hz: number): void {
@@ -282,6 +307,27 @@ function openSource(): void {
             console.warn('[ft8] tx-state JSON parse failed', e);
         }
     });
+
+    src.addEventListener('ft8-qso', (ev: MessageEvent<string>) => {
+        try {
+            const p = JSON.parse(ev.data) as Partial<{
+                active: boolean;
+                their_call: string;
+                state: string;
+                next_message: string;
+                repeats: number;
+            }>;
+            ft8State.qso = {
+                active: p.active ?? false,
+                theirCall: p.their_call ?? '',
+                state: p.state ?? '',
+                nextMessage: p.next_message ?? '',
+                repeats: p.repeats ?? 0,
+            };
+        } catch (e) {
+            console.warn('[ft8] qso JSON parse failed', e);
+        }
+    });
 }
 
 function closeSource(): void {
@@ -296,9 +342,10 @@ function closeSource(): void {
     ft8State.suggested = [];
     ft8State.occupied = [];
     ft8State.decodes = [];
-    // TX status reset to its empty display state; the daemon is authoritative and
-    // the hub replays the real `ft8-tx` (e.g. still-armed) on the next connect.
+    // TX + QSO status reset to empty display state; the daemon is authoritative
+    // and the hub replays the real `ft8-tx` / `ft8-qso` on the next connect.
     ft8State.tx = emptyTxStatus();
+    ft8State.qso = emptyQsoStatus();
     // selectedOffset is deliberately NOT reset: it's a persisted operator choice
     // (localStorage) that survives view-leave/return and refresh, unlike the
     // per-session occupancy/decode state cleared above.

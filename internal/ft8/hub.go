@@ -37,6 +37,7 @@ type hub struct {
 	lastOccupancy *hubEvent
 	lastDecode    *hubEvent
 	lastTx        *hubEvent
+	lastQso       *hubEvent
 }
 
 func newHub() *hub {
@@ -60,6 +61,8 @@ func (h *hub) publish(evt hubEvent) {
 		h.lastDecode = &cp
 	case EventTx:
 		h.lastTx = &cp
+	case EventQso:
+		h.lastQso = &cp
 	}
 	for id, ch := range h.subs {
 		select {
@@ -92,7 +95,7 @@ func (h *hub) subscribe() (<-chan hubEvent, func()) {
 	h.subs[id] = ch
 
 	// Replay cached events into the just-allocated buffer (non-blocking; cap>0).
-	for _, cached := range []*hubEvent{h.lastDecode, h.lastOccupancy, h.lastTx} {
+	for _, cached := range []*hubEvent{h.lastDecode, h.lastOccupancy, h.lastTx, h.lastQso} {
 		if cached != nil {
 			select {
 			case ch <- *cached:

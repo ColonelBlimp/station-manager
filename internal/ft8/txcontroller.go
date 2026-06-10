@@ -78,6 +78,21 @@ func (c *TxController) TransmitSlot(ctx context.Context, text string, offsetHz f
 	return c.transmit(ctx, wave)
 }
 
+// TransmitNow encodes a standard FT8 message and transmits its bare waveform
+// IMMEDIATELY — no wait for a slot boundary (ADR 0031 sequencer timing). Answering
+// a CQ must land in the slot opposite the worked station, which is only known
+// after decoding their slot (~1.5 s into ours), so the rung is sent in the
+// current slot started late. The caller (the sequencer) owns the late-start guard;
+// this just key → play → unkey with the same guaranteed stop as TransmitSlot.
+func (c *TxController) TransmitNow(ctx context.Context, text string, offsetHz float64) error {
+	const op errors.Op = "ft8.TxController.TransmitNow"
+	wave, err := EncodeWaveform(text, offsetHz)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsgf("encode %q", text)
+	}
+	return c.transmit(ctx, wave)
+}
+
 // transmit is the key → play → unkey core, independent of slot timing so it is
 // unit-testable. PTT is unkeyed on EVERY return path (success, play error, or
 // ctx cancel) via a deferred guard, on a background context so a cancelled

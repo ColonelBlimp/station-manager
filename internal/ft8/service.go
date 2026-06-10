@@ -108,6 +108,11 @@ type Service struct {
 	txCtrl     *TxController
 	txCancel   context.CancelFunc
 	txWg       sync.WaitGroup
+
+	// seq is the manual sequencer (ADR 0031 step e3): one active answer-a-CQ
+	// exchange, driven per slot from decodeLoop, transmitting via seqTransmit.
+	// Created in newService; nil-safe via its own methods.
+	seq *Sequencer
 }
 
 // newService constructs a Service with an injected capture source. The
@@ -118,7 +123,7 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 	if cfg.TX != nil {
 		occOverride = cfg.TX.Occupancy
 	}
-	return &Service{
+	s := &Service{
 		cfg:       cfg,
 		occCfg:    resolveOccupancyConfig(occOverride),
 		log:       log,
@@ -127,6 +132,14 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		stopDone:  make(chan struct{}),
 		newPlayer: newTxPlayer, // build-tagged; CGO-free build returns ErrTxUnavailable
 	}
+	// The sequencer transmits via seqTransmit (current-slot late-dt) and fans its
+	// state out on the ft8-qso SSE; both reference s, so wire it after s exists.
+	s.seq = newSequencer(
+		s.seqTransmit,
+		func(st QsoStatus) { s.hub.publish(hubEvent{name: EventQso, payload: st}) },
+		log,
+	)
+	return s
 }
 
 // Initialize validates dependencies. Idempotent.
@@ -348,6 +361,11 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			prevTop = 0
 		}
 		s.hub.publish(hubEvent{name: EventOccupancy, payload: rep})
+
+		// Drive the manual sequencer (ADR 0031): feed this slot's decodes to the
+		// active exchange and let it transmit the next rung in the current
+		// (opposite-parity) slot. No-op when no QSO is active.
+		s.seq.OnSlot(ref, msgs, time.Now().UTC())
 
 		s.log.DebugWith().
 			Str("slot", ref.StartUTC).

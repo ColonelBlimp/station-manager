@@ -4,19 +4,20 @@
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { armFt8Tx, sendFt8Tx } from '../../api/ft8tx';
+    import { abandonFt8Qso } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
 
     /*
-        FT8 transmit — manual, single-message (ADR 0029/0030 step e1). The daemon
-        owns the TX path (arm gate + guaranteed stop); this panel is the SPA
-        surface: Arm/Disarm, a "Call CQ" send on the operator-picked offset, and a
-        TX-state readout driven by the `ft8-tx` SSE (ft8State.tx). Arming/sending
-        go through lib/api/ft8tx.ts; the daemon confirms by push, so the UI reflects
-        ft8State.tx rather than optimistic local state.
-
-        e3 grows this tab into the full CQ→73 sequencer (click a highlighted CQ row
-        → the e2 resolver pre-fills the next message → enqueue). For now the only
-        sendable message is a CQ built from the operator's identity.
+        FT8 transmit (ADR 0029/0030/0031). The daemon owns the TX path (arm gate +
+        guaranteed stop) and the sequencer; this panel is the SPA surface:
+          - Arm/Disarm + a slot countdown (always).
+          - When a sequenced answer-a-CQ contact is active (ft8State.qso.active —
+            started by clicking a CQ row in Band Activity, step e3): the live rung,
+            next message, and an Abandon button. The daemon auto-advances the
+            CQ→73 ladder; the operator only watches + can bail.
+          - When idle + armed: a manual "Call CQ" send on the picked offset (e1).
+        Arm/send/abandon go through lib/api; the daemon confirms by push, so the UI
+        reflects ft8State.tx / ft8State.qso rather than optimistic local state.
     */
 
     // The operator must have a callsign to call CQ; grid is optional (CQ <call>
@@ -26,14 +27,30 @@
     const cqMessage = $derived(myCall ? `CQ ${myCall}${myGrid ? ` ${myGrid}` : ''}` : '');
 
     const tx = $derived(ft8State.tx);
+    const qso = $derived(ft8State.qso);
     const offset = $derived(ft8State.selectedOffset);
     // Arming a disconnected rig just 503s; gate on the live-rig signal so the
     // control is only offered when it can work.
     const canArm = $derived(displayedState.isLive);
-    const canSend = $derived(tx.armed && !tx.transmitting && offset !== null && cqMessage !== '');
+    // Manual Call CQ is only offered when idle (no sequenced contact in flight).
+    const canSend = $derived(
+        tx.armed && !tx.transmitting && !qso.active && offset !== null && cqMessage !== ''
+    );
 
     let arming = $state(false);
     let sending = $state(false);
+    let abandoning = $state(false);
+
+    async function onAbandon(): Promise<void> {
+        if (abandoning) return;
+        abandoning = true;
+        try {
+            const out = await abandonFt8Qso();
+            if (out.kind !== 'ok') toasts.error(out.message);
+        } finally {
+            abandoning = false;
+        }
+    }
 
     async function toggleArm(): Promise<void> {
         if (arming) return;
@@ -99,7 +116,32 @@
         <p class="text-xs text-amber-700">Rig not connected — connect a rig to transmit.</p>
     {/if}
 
-    {#if tx.armed}
+    {#if qso.active}
+        <!-- A sequenced answer-a-CQ contact is in progress; the daemon walks the
+             ladder, the operator watches and can Abandon. -->
+        <div class="flex flex-col gap-1 rounded border border-indigo-200 bg-indigo-50 p-2">
+            <div>
+                Working <span class="font-mono font-semibold">{qso.theirCall}</span>
+                <span class="text-xs text-gray-500">· {qso.state}</span>
+                {#if qso.repeats > 0}<span class="text-xs text-gray-500"
+                        >· repeat {qso.repeats}</span
+                    >{/if}
+            </div>
+            <div>
+                Next: <span class="font-mono">{qso.nextMessage}</span>
+            </div>
+            <div class="mt-1">
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    onclick={onAbandon}
+                    disabled={abandoning}
+                >
+                    Abandon
+                </button>
+            </div>
+        </div>
+    {:else if tx.armed}
         <div class="flex flex-col gap-1">
             <div>
                 TX offset:
@@ -117,6 +159,9 @@
                     {tx.transmitting ? 'Transmitting…' : 'Call CQ'}
                 </button>
             </div>
+            <p class="text-xs text-gray-500">
+                Or click a CQ in Band Activity to answer it.
+            </p>
         </div>
     {/if}
 

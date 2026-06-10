@@ -20,6 +20,9 @@ const (
 	// status (ADR 0030 step e1). Cached for late-subscriber replay so a tab
 	// connecting mid-session sees the current arm state immediately.
 	EventTx = "ft8-tx"
+	// EventQso carries a QsoStatus — the manual sequencer's active-contact state
+	// (ADR 0031 step e3). Cached for late-subscriber replay.
+	EventQso = "ft8-qso"
 )
 
 // sseKeepAliveInterval matches the /v1/events and rig-events handlers — 30 s of

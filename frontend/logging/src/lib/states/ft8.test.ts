@@ -300,6 +300,47 @@ describe('ft8 tx status (ft8-tx SSE)', () => {
     });
 });
 
+describe('ft8 qso status (ft8-qso SSE)', () => {
+    it('hydrates ft8State.qso from an ft8-qso event', () => {
+        startFt8();
+        latest().emit(
+            'ft8-qso',
+            JSON.stringify({
+                active: true,
+                their_call: 'K1ABC',
+                state: 'reporting',
+                next_message: 'K1ABC G0XYZ R-12',
+                repeats: 1,
+            })
+        );
+        expect(ft8State.qso.active).toBe(true);
+        expect(ft8State.qso.theirCall).toBe('K1ABC');
+        expect(ft8State.qso.state).toBe('reporting');
+        expect(ft8State.qso.nextMessage).toBe('K1ABC G0XYZ R-12');
+        expect(ft8State.qso.repeats).toBe(1);
+    });
+
+    it('treats an idle event as inactive with defaults', () => {
+        startFt8();
+        latest().emit('ft8-qso', JSON.stringify({ active: false }));
+        expect(ft8State.qso.active).toBe(false);
+        expect(ft8State.qso.theirCall).toBe('');
+    });
+
+    it('stopFt8 resets qso status', () => {
+        startFt8();
+        latest().emit('ft8-qso', JSON.stringify({ active: true, their_call: 'K1ABC' }));
+        stopFt8();
+        expect(ft8State.qso.active).toBe(false);
+    });
+
+    it('ignores malformed qso JSON', () => {
+        startFt8();
+        latest().emit('ft8-qso', '{bad');
+        expect(ft8State.qso.active).toBe(false);
+    });
+});
+
 // The row cap + feed mode are daemon-owned settings now (configState.ft8Display);
 // the decode handler reads them each slot. These tests drive configState directly
 // and restore the defaults after each so they don't leak into the other suites.

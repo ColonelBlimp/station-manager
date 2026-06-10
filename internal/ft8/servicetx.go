@@ -128,8 +128,12 @@ func (s *Service) armTx() error {
 
 // disarmTx tears down the TX path: aborts any in-flight transmission, drains
 // the TX goroutine, and closes the output device. closing=true also latches the
-// subsystem so it can never be re-armed (used by Stop). Idempotent.
+// subsystem so it can never be re-armed (used by Stop). Idempotent. Also abandons
+// any active sequenced QSO (ADR 0031 off-ramp: disarm aborts the contact).
 func (s *Service) disarmTx(closing bool) {
+	if s.seq != nil {
+		s.seq.Abandon()
+	}
 	s.txMu.Lock()
 	if closing {
 		s.txClosed = true
@@ -177,6 +181,40 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	if _, err := EncodeToSlot(message, offsetHz, txSlotDtSec); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
+	// Boundary-aligned: TransmitSlot waits for the next UTC slot and starts at
+	// dt=0 — right for a manually-initiated CQ (we pick our own slot/parity).
+	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
+		return ctrl.TransmitSlot(ctx, message, offsetHz)
+	})
+}
+
+// seqTransmit transmits a sequencer rung in the CURRENT slot, started late
+// (ADR 0031 answer-a-CQ timing) — no boundary wait, so the reply lands in the
+// slot opposite the worked station. Used only by the Sequencer; the late-start
+// guard is the sequencer's. Shares the arm gate + single-flight + ft8-tx status
+// with TransmitNext.
+func (s *Service) seqTransmit(message string, offsetHz float64) error {
+	const op errors.Op = "ft8.Service.seqTransmit"
+	if _, err := EncodeWaveform(message, offsetHz); err != nil {
+		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
+	}
+	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
+		return ctrl.TransmitNow(ctx, message, offsetHz)
+	})
+}
+
+// startTransmission runs one transmission through the armed controller under the
+// single-flight guard, in a tracked goroutine. fn is the controller call —
+// boundary-aligned TransmitSlot for a manual CQ, or immediate TransmitNow for a
+// sequencer rung. Returns synchronously with ErrTxNotArmed / ErrTxInFlight if it
+// can't start; the transmission's progress/outcome rides the ft8-tx SSE. PTT is
+// guaranteed down on every path (controller deferred-unkey + bridge auto-off).
+func (s *Service) startTransmission(
+	message string,
+	offsetHz float64,
+	fn func(ctx context.Context, ctrl *TxController) error,
+) error {
+	const op errors.Op = "ft8.Service.startTransmission"
 
 	base := s.base() // daemon lifecycle ctx (taken before txMu — no lock nesting)
 
@@ -202,7 +240,7 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 
 	safego.GoTracked(txCtx, "ft8.tx", s.onPanic, func() {
 		defer cancel() // release the ctx on normal completion
-		err := ctrl.TransmitSlot(txCtx, message, offsetHz)
+		err := fn(txCtx, ctrl)
 
 		// A cancel (disarm / daemon stop) is a normal stop, not a failure.
 		failed := err != nil && !stderrors.Is(err, context.Canceled)
@@ -224,6 +262,29 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	}, false, &s.txWg)
 
 	return nil
+}
+
+// StartQso begins a manual answer-a-CQ exchange (ADR 0031): the operator picked
+// the worked station (theirCall/theirGrid, from a CQ heard in the slot at
+// theirSlotUTC) and a clear offset. Requires TX **armed** — the sequencer keys
+// through the armed controller. ourCall/ourGrid are the station identity the api
+// layer resolved from config.
+func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz float64) error {
+	const op errors.Op = "ft8.Service.StartQso"
+	s.txMu.Lock()
+	armed := s.txArmed
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz)
+}
+
+// AbandonQso drops any active sequenced QSO (operator action). Idempotent.
+func (s *Service) AbandonQso() {
+	if s.seq != nil {
+		s.seq.Abandon()
+	}
 }
 
 // publishTxState snapshots the current TX state under txMu and fans it out on

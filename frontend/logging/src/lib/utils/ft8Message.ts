@@ -45,3 +45,22 @@ export function parseCqCall(text: string): string | null {
     }
     return null;
 }
+
+/**
+ * parseCq returns the calling station's callsign AND grid from a CQ decode, or
+ * null if the line is not an answerable CQ. The grid is the 4-char Maidenhead
+ * token immediately after the call when present (`CQ K1ABC FN42` → FN42), else
+ * '' (`CQ EU G3XYZ`). Used to initiate an answer-a-CQ exchange (the grid is
+ * carried for the logged QSO; an absent grid is fine).
+ */
+export function parseCq(text: string): { call: string; grid: string } | null {
+    const toks = text.trim().toUpperCase().split(/\s+/);
+    if (toks.length < 2 || toks[0] !== 'CQ') return null;
+    for (let i = 1; i < toks.length; i++) {
+        if (looksLikeCall(toks[i])) {
+            const grid = i + 1 < toks.length && GRID4.test(toks[i + 1]) ? toks[i + 1] : '';
+            return { call: toks[i], grid };
+        }
+    }
+    return null;
+}
