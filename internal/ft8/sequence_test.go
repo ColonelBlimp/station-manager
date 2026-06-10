@@ -208,6 +208,20 @@ func TestExchangeOffRamps(t *testing.T) {
 	})
 }
 
+// Once we are confirming (about to send 73) or done, no received decode
+// advances the exchange — txConfirming completes on our own transmission, txDone
+// is terminal.
+func TestExchangeNoAdvanceFromTerminalStates(t *testing.T) {
+	confirming := Exchange{OurCall: "G0XYZ", OurGrid: "IO91", TheirCall: "K1ABC", State: txConfirming}
+	if e, ok := confirming.Advance("G0XYZ K1ABC RR73", -10); ok || e.State != txConfirming {
+		t.Errorf("confirming: ok=%v state=%d, want ok=false state=txConfirming", ok, e.State)
+	}
+	done := Exchange{OurCall: "G0XYZ", OurGrid: "IO91", TheirCall: "K1ABC", State: txDone}
+	if e, ok := done.Advance("G0XYZ K1ABC 73", -10); ok || e.State != txDone {
+		t.Errorf("done: ok=%v state=%d, want ok=false state=txDone", ok, e.State)
+	}
+}
+
 // SendSnr is refreshed from the latest advancing decode so rung 3 reports the
 // freshest measurement, not a stale one.
 func TestExchangeReportsFreshSnr(t *testing.T) {

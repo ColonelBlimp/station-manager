@@ -250,6 +250,10 @@ func (e Exchange) Advance(text string, snr int) (Exchange, bool) {
 			e.State = txConfirming
 			return e, true
 		}
+	default:
+		// txConfirming and txDone have no RX-driven advance: txConfirming
+		// completes when WE transmit the 73 (Sent()), and txDone is terminal.
+		// A decode in either state is just more band traffic.
 	}
 	return e, false
 }
