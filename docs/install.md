@@ -251,7 +251,14 @@ Two prerequisites:
    static default build cannot open a sound device (it logs "capture
    unavailable; subsystem idle" and stays up). Build/install the CGO
    flavour with `SM_FFT=pocketfft` — e.g. for a local dogfood install,
-   `SM_FFT=pocketfft task deploy:local:dev`.
+   `SM_FFT=pocketfft task deploy:local:dev`. **PocketFFT (not the plain
+   gonum CGO build) is the supported flavour for live FT8 *transmit*:**
+   answering a CQ must finish decoding within ~1.7 s of the slot boundary
+   to reply in time, and PocketFFT's faster decode stays comfortably inside
+   that on typical hardware (gonum is borderline with OSD on — a missed slot
+   simply retries the message a cycle later, never a lost QSO). See
+   `docs/ft8.md` for the timing detail. Nothing else is needed to keep the
+   timing healthy beyond not pinning the CPU during a QSO.
 2. **Receive audio routed to a capture device** — typically the rig's
    USB audio codec.
 

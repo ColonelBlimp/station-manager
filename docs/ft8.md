@@ -77,7 +77,26 @@ on any PUT):
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on
-either is well inside the 15 s slot.
+either is well inside the 15 s slot for **RX**. **For live FT8 *transmit*, use the
+PocketFFT build** — answering a CQ must finish decoding within ~1.74 s of the slot
+boundary to reply in the immediate opposite slot (§6). On an i3-10100F, a busy
+slot decodes in ~0.72 s with PocketFFT (≈1 s of headroom) vs ~1.5 s with gonum +
+OSD (~0.24 s — a slow/dense slot can miss the window and the reply slips a cycle,
++30 s). `task deploy:local:dev` already defaults to PocketFFT; a plain static
+release uses gonum.
+
+**What the operator does to keep decode (and the answer-slot timing) fast:**
+
+- **Run a PocketFFT build for live TX** — `task deploy:local:dev`, or
+  `SM_FFT=pocketfft …`. This is the single biggest lever and usually the *only*
+  thing needed.
+- Keep `enable_osd` **on** (default): its ~1.3× cost sits well inside PocketFFT's
+  headroom and it materially improves weak-signal recall. Only consider disabling
+  it on a gonum build that's actually missing answer slots.
+- Don't pin the CPU during a TX QSO — decode is CPU-bound and budgeted to a single
+  slot; a loaded box drifts toward the miss threshold (more so on gonum).
+- Nothing else: slot alignment is automatic, and a missed slot is never a failed
+  QSO — the sequencer just retries the rung on the next cycle.
 
 ## 3. The SPA (FT8 view)
 
@@ -427,9 +446,17 @@ read by the e2 resolver. Step (e) breaks into increments:
   **current slot started late** (`seqTransmit` → `TransmitNow`, bare waveform) in
   the parity **opposite** theirs — the only timing that answers a CQ correctly
   (decode completes ~1 s into our slot; the next boundary would be their parity →
-  collision). Off-ramps (ADR 0031): late-start guard (skip + retry if a slow
-  decode misses the window), N-unanswered-repeats → abandon, abort on
-  Disarm/Abandon, never auto-switch targets. On the 73 it captures a `CompletedQso`
+  collision). Off-ramps (ADR 0031): late-start guard — send the rung only if the
+  decode finished within `maxStartDt` (≈ 1.74 s = 15 − 12.96 s waveform − 0.3 s) of
+  the slot boundary, else skip and retry next cycle (+30 s) — plus
+  N-unanswered-repeats → abandon, abort on Disarm/Abandon, never auto-switch
+  targets. **Timing decision (settled 2026-06-11, benchmark-validated):** the
+  current-slot late-`dt` reply is kept over a clean `dt=0` "next appropriate slot"
+  (which would cost +30 s on *every* rung). On a busy 21-signal slot on an
+  i3-10100F, OSD-on decode is ~0.72 s with PocketFFT (≈1 s headroom under
+  `maxStartDt`) vs ~1.5 s with gonum (~0.24 s — borderline), so **PocketFFT is the
+  supported live-TX build** (§2). A gonum miss is not a failed QSO, just a +30 s
+  rung retry. On the 73 it captures a `CompletedQso`
   (e4 logs). Endpoints `POST /v1/ft8/qso/{start,abandon}` (start gated on TX armed;
   our identity resolved daemon-side from config, not client-sent) + the `ft8-qso`
   SSE. **SPA:** initiation = **click a CQ row in Band Activity** (clickable when TX
