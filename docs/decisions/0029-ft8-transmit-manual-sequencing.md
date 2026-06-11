@@ -47,8 +47,10 @@ message it was handed, on the chosen slot, with a guaranteed unkey. The QSO is
 logged through the normal `qsoservice` submit path when the exchange completes.
 
 **Auto-sequencing** (the daemon parsing decodes and walking the ladder
-unattended to completion) is explicitly **deferred to a later ADR** that builds
-on this machinery.
+unattended to completion) is **out of scope and unsupported** — the QEX FT8
+specification forbids automatic operation, and unattended operation is
+licence-restricted in many jurisdictions. SM is **attended-only**: every QSO is
+operator-initiated.
 
 ### Clear-offset picker — data contract
 
@@ -123,8 +125,11 @@ auto-start a fresh CQ cycle without re-arming, abort on operator input) layered
 on top of a TX chain that has *not yet been proven on real RF*. Manual is a
 strict subset: it exercises the entire encode→modulate→audio→PTT→timing path
 with a human in the loop on every transmission, so it de-risks the plumbing
-before any autonomy is added. Auto becomes a clean follow-on once the plumbing
-is trustworthy — not a thing reopened, a thing layered.
+before any autonomy is added. **Beyond the trust/safety argument, unattended
+auto-sequencing is not a planned follow-on at all: the QEX FT8 specification
+forbids automatic operation (and it is licence-restricted in many jurisdictions),
+so SM stays attended-only. Manual/attended is the supported model — not a stepping
+stone to autonomy.**
 
 ### Full real-time waterfall for TX-frequency selection
 
@@ -212,19 +217,25 @@ the operator complete a contact, which is the entire point of running the mode.
   encodable and are out of scope for this first cut.
 - **Multi-ADR, multi-session feature.** This is the largest capability in the
   project; each layer above may spawn its own ADR (audio-out device model, the
-  sequencer/auto-seq design, the QSO-completion → log mapping).
+  manual-sequencer design, the QSO-completion → log mapping).
 
 ## Triggers to revisit
 
 - **If manual sequencing proves too slow to keep up with FT8's 15 s cadence in
-  practice**, promote auto-sequence sooner (it is already the planned follow-on,
-  not a reversal).
+  practice**, tighten the *within-QSO* automation (the rungs already auto-advance
+  once the operator initiates) — but **not** a move to daemon-initiated
+  auto-sequencing. **Automatic/unattended operation is out of scope and
+  unsupported: the QEX FT8 specification forbids automatic operation, and
+  unattended operation is licence-restricted in many jurisdictions. SM is
+  attended-only — every QSO is operator-initiated.** This is a hard boundary, not
+  a triggerable trade-off.
 - **If the operator needs free-text, compound/portable, or contest-exchange
   messages**, the `EncodeStandardMessage`-only limit forces either an upstream
   go-ft8 encoder extension or an SM-side packer — reopen the message-scope cut.
 - **If a second operating position / contest topology lands** (the N-writers
-  model), unattended auto-sequencing and TX arbitration across stations become
-  pressing and this single-position manual model needs revisiting.
+  model), TX arbitration across stations and the single-position model need
+  revisiting. (Unattended/automatic operation stays out of scope regardless of
+  topology — QEX-forbidden.)
 - **If the clear-offset picker proves insufficient** for reading band congestion
   in the field, the deferred visual waterfall comes back onto the table.
 

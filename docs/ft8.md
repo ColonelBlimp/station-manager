@@ -299,8 +299,10 @@ localStorage (`sm.ft8.tx.offset`) as live operating state, not a setting.
 
 ## 5. Transmit roadmap (ADR 0029)
 
-Daemon-owned TX, **manual-sequenced first** (operator advances each rung of the
-CQ→73 ladder; auto-sequence is a later ADR), reusing the ADR 0027 guaranteed-stop
+Daemon-owned TX, **operator-initiated and attended** (a human starts each QSO; the
+CQ→73 rungs then auto-advance within that QSO). **Automatic/unattended sequencing
+is out of scope and unsupported — the QEX FT8 specification forbids automatic
+operation.** Reusing the ADR 0027 guaranteed-stop
 discipline — `tx_on`/`tx_off` are never `exposed`, only the TX controller keys
 the rig. Build order is **RX-safe first**; RF first enters at (d) — (a)–(c) are
 audio-only / offline.
@@ -311,7 +313,7 @@ audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**; e5 auto-seq + call-CQ pending |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**; call-CQ (operator-initiated) pending. Automatic/unattended sequencing is out of scope — QEX-forbidden. |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
@@ -477,8 +479,12 @@ read by the e2 resolver. Step (e) breaks into increments:
   a submit failure is logged, never fatal (the QSO already happened on the air).
   The dial freq comes from the SPA at `qso/start` (`operating_freq_mhz`) — the
   bridge is a pass-through and can't surface it.
-- **e5 — auto-sequencer (separate ADR):** the daemon also *initiates* and walks
-  the ladder via the e2 resolver + watchdogs.
+- **Automatic / unattended sequencing is OUT OF SCOPE and NOT SUPPORTED.** The FT8
+  protocol forbids automatic operation (per the QEX FT8 protocol specification),
+  and unattended operation is illegal without a special licence in many
+  jurisdictions. SM therefore supports **only operator-initiated (attended)** FT8:
+  every contact is started by a human — answer-a-CQ (click a CQ) and call-CQ
+  (press Call CQ). There is no daemon-initiated auto-answer mode.
 
 **Scope order: answering a CQ first, then calling CQ** (calling CQ adds
 multi-answerer management).
@@ -489,7 +495,10 @@ the operator's judgement is *whom to work* (the click) + arming TX, and rung
 advance is mechanical — so within a QSO the rungs **auto-advance** (the daemon
 walks the ladder via the e2 resolver; the operator intervenes only to
 retry/abandon). i.e. **manual = operator-initiated-per-QSO with automatic rung
-advance; auto = daemon-initiated** (a strict superset, deferred). Per-rung confirm
+advance** — but the operator still initiates every QSO (the click + arming TX), so
+SM stays **attended-only**. A daemon-*initiated* mode would be automatic/unattended
+operation, which is **out of scope and unsupported** — the QEX FT8 specification
+forbids automatic operation (see above). Per-rung confirm
 was rejected (the 15 s cadence makes it frantic; the Arm-TX gate already provides
 the deliberate-consent safety). Off-ramps: stop after N unanswered repeats; never
 auto-start a fresh CQ cycle; abort on operator action; never auto-switch targets.
@@ -526,10 +535,11 @@ end** (arm → pick offset → click a CQ → auto-advance CQ→73 → **logged*
 daemon TX + Ladder Arm/Call-CQ. e2 = pure resolver. e3 = daemon manual sequencer
 (ADR 0031) + click-a-CQ initiation + Ladder view/Abandon. e4 = completed exchange
 → `types.Qso` (`BuildQso`) → `qsoservice` via the injected `SetQsoLogger` sink
-(`internal/ft8` stays narrow — no `qsoservice` import). **Next: e5** — auto-sequence
-(daemon-initiated), a separate ADR; and the deferred **call-CQ** scope (the
-caller-side state machine + multi-answerer handling — calling CQ today is only the
-e1 single-shot button). The send-policy seam is ratified (ADR 0031 Accepted).
+(`internal/ft8` stays narrow — no `qsoservice` import). **Next: the deferred
+**call-CQ** scope** (operator-initiated caller-side state machine + multi-answerer
+handling — calling CQ today is only the single-shot button). The send-policy seam
+is ratified (ADR 0031 Accepted). **Automatic/unattended sequencing is out of scope
+and unsupported — the QEX FT8 specification forbids automatic operation.**
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →

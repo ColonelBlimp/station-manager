@@ -38,10 +38,13 @@ decode — and logs the completed exchange (e4). The operator intervenes only to
 **retry** or **abandon**. Per-rung confirmation is **not** required; the Arm-TX
 gate (e1) is the deliberate-consent point for RF.
 
-This makes manual a **strict subset** of the deferred auto-sequence: the e2
-resolver and auto-advance-within-a-QSO are shared by both; the *only* difference
-is initiation — **manual** = the operator clicks each QSO into being; **auto**
-(a later ADR) = the daemon also picks whom to work and initiates.
+The distinction is **initiation**: **manual/attended** = the operator clicks each
+QSO into being (the only supported mode); a hypothetical **daemon-initiated** mode
+= the daemon picks whom to work and initiates on its own. The latter is
+**automatic/unattended operation, which is out of scope and unsupported** — the
+QEX FT8 specification forbids automatic operation (licence-restricted in many
+jurisdictions). The e2 resolver + auto-advance-within-a-QSO exist purely to serve
+the attended path.
 
 Auto-advance carries required off-ramps / watchdogs (the answer-a-CQ machine
 already specifies these):
@@ -79,7 +82,7 @@ reversing this decision, if auto-advance proves too autonomous in field use.
 
 - **e3 sequencer state lives daemon-side.** The live QSO/sequencer state and the
   decode→advance loop run in the daemon (ADR 0004 — daemon owns orchestration and
-  shared state; auto-sequence will need it there; QSO completion is daemon-side).
+  shared state; QSO completion is daemon-side).
   The SPA is a thin sequencer view: it shows the current rung / next message and
   offers Abandon (+ retry); initiation is clicking a highlighted CQ row. The
   Ladder tab's Call-CQ-only placeholder (e1) is replaced by this.
@@ -90,8 +93,10 @@ reversing this decision, if auto-advance proves too autonomous in field use.
   narrow-daemon-scope (ADR 0013) still holds by import graph.
 - **Watchdog tunables** (N unanswered repeats, etc.) land under `ft8.tx` in the
   single `config.json` (per the one-config-file rule), with code-constant defaults.
-- **Auto-sequence becomes a clean follow-on** — daemon-initiated calling on top of
-  the same machinery — rather than a reopening of this decision.
+- **Automatic/unattended sequencing stays out of scope** — daemon-*initiated*
+  operation is forbidden by the QEX FT8 specification (and licence-restricted in
+  many jurisdictions); SM is attended-only. This machinery serves the
+  operator-initiated path only, not a path to autonomy.
 - **The trust surface is bounded:** one click + armed TX yields one auto-completing
   exchange (or a timeout), not open-ended autonomy; the per-slot guaranteed stop
   still applies to every transmission.
@@ -103,8 +108,9 @@ reversing this decision, if auto-advance proves too autonomous in field use.
 - If the N-unanswered-repeats / timeout defaults prove wrong in practice, tune the
   `ft8.tx` watchdog config (no design change).
 - If a second operating position / contest topology lands (the N-writers model),
-  TX arbitration across stations and unattended auto-sequencing become pressing —
-  the single-position manual model needs revisiting (shared with ADR 0029).
+  TX arbitration across stations and the single-position model need revisiting
+  (shared with ADR 0029). (Unattended/automatic operation stays out of scope
+  regardless of topology — QEX-forbidden.)
 
 ## References
 
