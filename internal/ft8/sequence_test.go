@@ -267,3 +267,24 @@ func TestExchangeMessagesAreEncodable(t *testing.T) {
 		}
 	}
 }
+
+// Regression (live failure 2026-06-11): a configured 6-char locator must be
+// trimmed to the 4-char Maidenhead field, or the calling rung is unencodable
+// ("ft8: not an encodable standard message") and the answer-a-CQ reply never
+// transmits. Uses the exact call/grid that failed on air.
+func TestExchangeTrimsGridToFourChars(t *testing.T) {
+	e := NewExchange("7Q5MLV", "KH78AN", "RW6AU")
+	if e.OurGrid != "KH78" {
+		t.Fatalf("OurGrid = %q, want KH78 (trimmed to 4)", e.OurGrid)
+	}
+	msg, ok := e.TxMessage()
+	if !ok {
+		t.Fatal("no TxMessage in txCalling")
+	}
+	if want := "RW6AU 7Q5MLV KH78"; msg != want {
+		t.Errorf("calling TxMessage = %q, want %q", msg, want)
+	}
+	if _, err := goft8.EncodeStandardMessage(msg); err != nil {
+		t.Errorf("EncodeStandardMessage(%q) failed: %v", msg, err)
+	}
+}

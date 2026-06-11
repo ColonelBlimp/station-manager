@@ -208,11 +208,18 @@ type Exchange struct {
 
 // NewExchange starts answering a CQ: theirCall is the CQing station, ourCall and
 // ourGrid identify us. The exchange begins in txCalling, so the first TxMessage
-// is our opening call. Callsigns and grid are upper-cased to match decoded text.
+// is our opening call. Callsigns and grid are upper-cased to match decoded text;
+// the grid is trimmed to its 4-char Maidenhead field because FT8 standard messages
+// carry only 4 characters — a longer configured locator (e.g. "KH78AN") makes
+// EncodeStandardMessage reject the message ("not an encodable standard message").
 func NewExchange(ourCall, ourGrid, theirCall string) Exchange {
+	grid := strings.ToUpper(strings.TrimSpace(ourGrid))
+	if len(grid) > 4 {
+		grid = grid[:4]
+	}
 	return Exchange{
 		OurCall:   strings.ToUpper(strings.TrimSpace(ourCall)),
-		OurGrid:   strings.ToUpper(strings.TrimSpace(ourGrid)),
+		OurGrid:   grid,
 		TheirCall: strings.ToUpper(strings.TrimSpace(theirCall)),
 		State:     txCalling,
 	}
