@@ -116,23 +116,44 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   `highlight_worked`; defaults green = new, grey = worked). **Answering (e3):** a
   CQ row is clickable to start a sequenced QSO when TX is armed + a clear offset is
   picked + no QSO is already running (the daemon then auto-advances the ladder).
-- **Clear Slots** — the daemon's ranked clear base offsets, shown
+- **Clear Offsets** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
-  select it as the TX base offset** (highlighted; mirrors the strip below).
-- **TX Frequency** — *temporary validation view*: the per-slot **Occupied (Hz)**
-  list with each band's source/level (`decode` / `both 0.42` / `energy 0.06`),
-  added to cross-check the detector against WSJT-X. Step (e) reclaims this panel
-  for the interactive TX picker.
+  select it as the TX base offset**; the selected chip is marked with a **darker
+  green border** (`border-green-700` + light-green fill). It only appears while the
+  selected offset is among the current slot's suggestions (the selection itself
+  persists in `ft8State.selectedOffset` regardless).
+- **Rx Frequency** — a WSJT-X-style filtered decode pane (reuses the Band Activity
+  row rendering) showing just the conversation being watched. While a QSO is active
+  it filters to messages **involving the worked station's callsign** (callsign-exact,
+  so a few-Hz offset drift never drops them — more precise than WSJT-X's
+  pure-frequency window); when idle it shows decodes within ±tolerance (≈ the signal
+  width) of the **selected offset** — "what's on the channel I'm parked on". A caption
+  keys it (`Following <call>` / `Offset N Hz ±tol` / `No offset selected`) and empty
+  states prompt accordingly. Purely SPA-side — filters the existing
+  `ft8State.decodes`, no daemon change. (Replaced the temporary "TX Frequency"
+  occupied-Hz validation view, which the Occupancy-tab strip superseded.)
 - **Lower section — tabs** (same tablist pattern + `.tab-item` class as InfoPanel,
   full WAI-ARIA keyboard nav): **Occupancy** (the TX Offset strip below), **Ladder**
-  (`Ft8MsgPanel` — FT8 transmit: Arm/Disarm + slot countdown; when a sequenced
-  answer-a-CQ contact is active it shows the live rung / next message / Abandon
-  (e3), else a manual Call CQ (e1)), and
+  (`Ft8MsgPanel` — the FT8 transmit surface, see next bullet), and
   **Settings** (`Ft8SettingsPanel` — the FT8 display preferences: row cap, feed mode,
   CQ highlight colours). The Settings tab saves the **same way as the My Station tab**
   — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
   `/v1/config` (bundling the current `logging_station`/`station` so the unconditional
   overwrite doesn't clobber them) and re-hydrates from the response.
+- **Ladder tab** (`Ft8MsgPanel`) — the FT8 transmit surface: an **Enable/Disable TX**
+  button (the arm gate; red when enabled, gated on a live rig via
+  `displayedState.isLive`) + a slot countdown; **Call CQ** and **Abandon** buttons
+  always visible but gated (Call CQ enabled only when enabled + idle + offset +
+  callsign; Abandon only while a sequenced answer-a-CQ QSO is active); and a
+  **message ladder** rendering the full call-CQ exchange one slot per row — our TX
+  messages interleaved with the remote's expected responses (`rx`). Unknowns are
+  placeholders: `<DX>` (their call), `<GRID>` (their locator), `<RST>` (a report).
+  The current slot's row is highlighted — our TX row while transmitting, the RX row
+  below while listening for the reply. **NB the ladder is presentational**:
+  calling-CQ *sequencing* is the deferred call-CQ scope (today Call CQ is a
+  single-shot send on the next slot boundary), so the highlight is currently
+  borrowed from the answer-a-CQ `qso.state` machine; the real call-CQ driver
+  replaces it when that backend lands.
 - **TX Offset strip** (in the Occupancy tab, shipped 2026-06-09) — a horizontal, per-slot
   *spatial* view of the passband, **channelised** into uniform ~50 Hz slots
   (≈56 across 200–3000). FT8 has no standard offset grid — a signal is ~50 Hz
@@ -374,15 +395,18 @@ read by the e2 resolver. Step (e) breaks into increments:
   - **Slot timer is SPA-derived** (not a daemon event): FT8 slots are wall-clock-aligned
     (00/15/30/45 s) and every decode/occupancy event is slot-stamped, so the countdown is
     computed client-side (KISS).
-  - **SPA UX SHIPPED 2026-06-10** in the **Ladder tab** (`Ft8MsgPanel`): an **Arm/Disarm
-    TX** toggle (red when armed; disabled when the rig isn't live — `displayedState.isLive`),
+  - **SPA UX SHIPPED 2026-06-10** in the **Ladder tab** (`Ft8MsgPanel`): an **Enable/Disable
+    TX** toggle (the arm gate — originally labelled "Arm/Disarm"; red when enabled; disabled
+    when the rig isn't live — `displayedState.isLive`),
     a **slot countdown** (SPA-derived), and — since the sequencer (e3) doesn't exist yet —
     a single **Call CQ** action that builds `CQ <mycall> <mygrid>` from the My Station
     identity and sends it on the picked offset (`ft8State.selectedOffset`). A TX-state line
     reflects `ft8State.tx` (the `ft8-tx` SSE): disarmed / armed-ready / "Transmitting … @ N Hz"
     / last-error. Arm + send go through `lib/api/ft8tx.ts` (`armFt8Tx`/`sendFt8Tx` → the two
     POSTs); the daemon confirms by push (no optimistic local state). Free-text send and the
-    click-a-CQ-row sequencer are deliberately deferred to e3.
+    click-a-CQ-row sequencer are deliberately deferred to e3. (The Ladder tab has since
+    gained always-visible Call CQ/Abandon buttons and a presentational call-CQ message
+    ladder — see the panel-layout section above.)
 - **e2 — message model + next-message resolver (pure): SHIPPED 2026-06-10**
   (`internal/ft8/sequence.go`). A `parseMessage` model reduces a decoded line to
   `{kind, to, from, grid, report}` (CQ / grid / report / R-report / RRR·RR73 / 73),

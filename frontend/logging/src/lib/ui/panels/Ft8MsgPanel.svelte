@@ -23,7 +23,11 @@
     // The operator must have a callsign to call CQ; grid is optional (CQ <call>
     // is still an encodable standard message). Built from My Station identity.
     const myCall = $derived(configState.loggingStation.stationCallsign.trim().toUpperCase());
-    const myGrid = $derived(configState.loggingStation.myGridsquare.trim().toUpperCase());
+    // FT8 standard messages carry only the 4-char Maidenhead field, so trim a
+    // longer configured locator (e.g. IO91wm → IO91) for the on-air message.
+    const myGrid = $derived(
+        configState.loggingStation.myGridsquare.trim().toUpperCase().slice(0, 4)
+    );
     const cqMessage = $derived(myCall ? `CQ ${myCall}${myGrid ? ` ${myGrid}` : ''}` : '');
 
     const tx = $derived(ft8State.tx);
@@ -36,6 +40,42 @@
     const canSend = $derived(
         tx.armed && !tx.transmitting && !qso.active && offset !== null && cqMessage !== ''
     );
+    // Abandon stays disabled until there is a sequenced exchange to bail out of —
+    // answering a CQ (qso.active), the only thing abandonFt8Qso can cancel today.
+    // Always disabled when TX isn't armed. A single-shot Call CQ is deliberately
+    // NOT covered (it has no abandonable state); calling-CQ sequencing is the
+    // deferred call-CQ scope, and qso.active will extend to it when it lands.
+    const canAbandon = $derived(tx.armed && qso.active);
+
+    // ---- Call-CQ message ladder (presentational) ------------------------------
+    // The full call-CQ exchange, one slot per row top to bottom: our TX messages
+    // interleaved with the remote station's expected responses (rx). Unknowns are
+    // placeholders — <DX> (their callsign), <GRID> (their locator), <RST> (a
+    // signal report) — that resolve as the QSO progresses. The highlighted row is
+    // our message for the current slot. NOTE: calling-CQ sequencing is the
+    // deferred call-CQ scope (today Call CQ is single-shot), so for now the active
+    // rung is borrowed from the answer-a-CQ qso.state machine
+    // (calling→reporting→confirming) — that makes the highlight demoable via
+    // ?__ft8demo=1..4; the real call-CQ driver replaces it when that backend lands.
+    const dxCall = $derived(qso.theirCall || '<DX>');
+    const callerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
+        { dir: 'tx', text: cqMessage },
+        { dir: 'rx', text: `${myCall} ${dxCall} <GRID>` },
+        { dir: 'tx', text: `${dxCall} ${myCall} <RST>` },
+        { dir: 'rx', text: `${myCall} ${dxCall} R<RST>` },
+        { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
+        { dir: 'rx', text: `${myCall} ${dxCall} 73` },
+    ]);
+    // The highlighted row is the message for the CURRENT slot. qso.state names our
+    // transmit rung (tx rows 0 / 2 / 4); while we're actually transmitting it, that
+    // TX row is current — but between transmissions, when we're listening for the
+    // remote's reply, the current row is the RX row just below (1 / 3 / 5).
+    // Idle/armed (no exchange yet) sits on the CQ row.
+    const callerStep = $derived.by(() => {
+        const txRow = qso.state === 'reporting' ? 2 : qso.state === 'confirming' ? 4 : 0;
+        if (!qso.active) return txRow;
+        return tx.transmitting ? txRow : txRow + 1;
+    });
 
     let arming = $state(false);
     let sending = $state(false);
@@ -89,81 +129,71 @@
 
     // Status line under the controls.
     const statusLine = $derived.by(() => {
-        if (!tx.armed) return 'TX disarmed.';
+        if (!tx.armed) return 'TX disabled.';
         if (tx.transmitting)
             return `Transmitting ${tx.message || cqMessage} @ ${tx.offsetHz || offset} Hz…`;
         if (tx.error) return `Last transmission failed (${tx.error}).`;
-        return 'Armed — ready.';
+        return 'TX Enabled — ready.';
     });
 </script>
 
-<div class="flex flex-col gap-3 px-2 py-4 text-sm text-gray-700" style="max-width: 32rem">
-    <div class="flex items-center gap-4">
-        <button
-            type="button"
-            onclick={toggleArm}
-            disabled={arming || !canArm}
-            class="rounded px-3 py-1.5 text-sm font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
-                ? 'bg-red-600 text-white hover:bg-red-700'
-                : 'bg-focus text-surface hover:opacity-90'}"
-        >
-            {tx.armed ? 'Disarm TX' : 'Arm TX'}
-        </button>
-        <span class="text-xs text-gray-500">next slot in {secondsToNextSlot}s</span>
-    </div>
-
-    {#if !canArm}
-        <p class="text-xs text-amber-700">Rig not connected — connect a rig to transmit.</p>
-    {/if}
-
-    {#if qso.active}
-        <!-- A sequenced answer-a-CQ contact is in progress; the daemon walks the
-             ladder, the operator watches and can Abandon. -->
-        <div class="flex flex-col gap-1 rounded border border-indigo-200 bg-indigo-50 p-2">
-            <div>
-                Working <span class="font-mono font-semibold">{qso.theirCall}</span>
-                <span class="text-xs text-gray-500">· {qso.state}</span>
-                {#if qso.repeats > 0}<span class="text-xs text-gray-500"
-                        >· repeat {qso.repeats}</span
-                    >{/if}
-            </div>
-            <div>
-                Next: <span class="font-mono">{qso.nextMessage}</span>
-            </div>
-            <div class="mt-1">
+<div class="flex flex-col text-sm text-gray-700 h-56">
+    <h3 class="text-center my-1 font-semibold text-lg w-full">Next slot in {secondsToNextSlot}s</h3>
+    <div class="flex flex-row h-46">
+        <div class="w-full px-2">
+            {#if tx.armed}
+                <div
+                    class="flex flex-col py-0 font-mono text-sm text-left border border-gray-300 rounded"
+                >
+                    {#each callerLadder as m, i (i)}
+                        <div
+                            class="items-center h-6 flex gap-x-2 rounded px-2 {i === callerStep
+                                ? 'bg-indigo-100 font-semibold text-indigo-800'
+                                : m.dir === 'rx'
+                                  ? 'italic text-gray-400'
+                                  : 'text-gray-600'}"
+                        >
+                            <span class="w-6 shrink-0 text-xs uppercase opacity-70">{m.dir}</span>
+                            <span>{m.text}</span>
+                        </div>
+                    {/each}
+                </div>
+            {:else}
+                <p class="text-xs text-gray-400">Enable TX to call CQ.</p>
+            {/if}
+        </div>
+        <div class="flex flex-col gap-1 w-50">
+            <div class="flex flex-col gap-y-2 h-80">
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    onclick={callCq}
+                    disabled={!canSend || sending}
+                >
+                    {tx.transmitting && !qso.active ? 'Transmitting…' : 'Call CQ'}
+                </button>
                 <button
                     type="button"
                     class="btn btn-secondary"
                     onclick={onAbandon}
-                    disabled={abandoning}
+                    disabled={!canAbandon || abandoning}
                 >
                     Abandon
                 </button>
             </div>
-        </div>
-    {:else if tx.armed}
-        <div class="flex flex-col gap-1">
             <div>
-                TX offset:
-                <span class="font-mono">{offset !== null ? `${offset} Hz` : '—'}</span>
-            </div>
-            {#if offset === null}
-                <p class="text-xs text-gray-500">Pick a clear offset on the Occupancy tab first.</p>
-            {/if}
-            <div>
-                Message:
-                <span class="font-mono">{cqMessage || '— set your callsign in My Station —'}</span>
-            </div>
-            <div class="mt-1">
-                <button type="button" class="btn btn-primary" onclick={callCq} disabled={!canSend || sending}>
-                    {tx.transmitting ? 'Transmitting…' : 'Call CQ'}
+                <button
+                    type="button"
+                    onclick={toggleArm}
+                    disabled={arming || !canArm}
+                    class="h-8 w-41 rounded px-3 py-1.5 text-sm font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
+                        ? 'bg-red-600 text-white hover:bg-red-700'
+                        : 'bg-focus text-surface hover:opacity-90'}"
+                >
+                    {tx.armed ? 'Disable TX' : 'Enable TX'}
                 </button>
             </div>
-            <p class="text-xs text-gray-500">
-                Or click a CQ in Band Activity to answer it.
-            </p>
         </div>
-    {/if}
-
-    <p class="text-xs {tx.error ? 'text-red-700' : 'text-gray-500'}">{statusLine}</p>
+    </div>
+    <div class="flex flex-col items-center -mt-7.5">{statusLine}</div>
 </div>

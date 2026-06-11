@@ -4,13 +4,7 @@
     import Ft8OccupancyPanel from './Ft8OccupancyPanel.svelte';
     import Ft8MsgPanel from './Ft8MsgPanel.svelte';
     import Ft8SettingsPanel from './Ft8SettingsPanel.svelte';
-    import {
-        ft8State,
-        startFt8,
-        stopFt8,
-        type Ft8Band,
-        type DecodeEntry,
-    } from '../../states/ft8.svelte';
+    import { ft8State, startFt8, stopFt8, type DecodeEntry } from '../../states/ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
@@ -104,16 +98,35 @@
     const topPick = $derived(ft8State.suggested[0] ?? null);
     const sortedOffsets = $derived([...ft8State.suggested].sort((a, b) => a - b));
 
-    // Diagnostic label for an occupied band: its detection source, plus the
-    // normalised peak level for energy-derived bands. A weak `energy 0.06` mark
-    // on a frequency WSJT-X shows as clear points at a threshold false-positive;
-    // `decode` means a real signal was decoded there. (Temporary validation
-    // view — the TX Frequency panel becomes the TX picker at step e.)
-    function occupiedLabel(b: Ft8Band): string {
-        if (b.source === 'decode') return 'decode';
-        const lvl = b.level !== undefined ? ` ${b.level.toFixed(2)}` : '';
-        return `${b.source ?? '?'}${lvl}`;
-    }
+    // ---- Rx Frequency pane (WSJT-X-style) -------------------------------------
+    // Filter the decode feed to the conversation the operator is watching. While
+    // a QSO is active, the messages involving the worked station — matched by
+    // callsign, so a few-Hz drift in their audio offset never drops them (more
+    // precise than WSJT-X's pure-frequency window, which is all it has to go on).
+    // When idle, the decodes sitting on the selected TX offset (±tolerance), i.e.
+    // "what is on the channel I'm parked on". Tolerance ≈ the nominal signal width.
+    const rxTol = $derived(ft8State.signalWidth > 0 ? ft8State.signalWidth : 50);
+    const rxDecodes = $derived.by(() => {
+        const all = ft8State.decodes;
+        const q = ft8State.qso;
+        if (q.active && q.theirCall) {
+            const call = q.theirCall.toUpperCase();
+            return all.filter((d) => d.text.toUpperCase().split(/\s+/).includes(call));
+        }
+        if (ft8State.selectedOffset !== null) {
+            const off = ft8State.selectedOffset;
+            return all.filter((d) => Math.abs(d.freqHz - off) <= rxTol);
+        }
+        return [];
+    });
+    // Caption under the Rx Frequency header: what the pane is currently keyed to.
+    const rxCaption = $derived.by(() => {
+        const q = ft8State.qso;
+        if (q.active && q.theirCall) return `Following ${q.theirCall}`;
+        if (ft8State.selectedOffset !== null)
+            return `Offset ${ft8State.selectedOffset} Hz ±${rxTol}`;
+        return 'No offset selected';
+    });
 
     // ---- Lower-section tabs (same pattern + .tab-item class as InfoPanel) ----
     type Ft8TabId = 'occupancy' | 'ladder' | 'settings';
@@ -168,14 +181,39 @@
     switch is set to "FT8" (Phone/CW renders QsoPanel + CountryPanel + InfoPanel
     instead).
 
-    Step (a) of the FT8-TX work (ADR 0029) wires the per-slot occupancy readout:
-    Band Activity shows the current slot + how many signals are busy; TX
-    Frequency lists the daemon's clear base offsets (frequency-sorted, ★ = the
-    daemon's top-ranked pick). Read-only for now — clicking a clear offset to set
-    the TX frequency arrives with step (e), when there is a transmitter to point.
-    The live decode list (per-slot freq / DT / text) still fills the Band
-    Activity body later.
+    Top row: Band Activity (every decode this slot) · Rx Frequency (the decode
+    feed filtered to the conversation being watched — the worked station while a
+    QSO is active, else the selected offset ±tolerance, WSJT-X-style) · Clear
+    Offsets (the daemon's clear base offsets, frequency-sorted, ★ = top pick;
+    click to select for TX). Offset occupancy + picking lives on the Occupancy
+    tab's strip.
 -->
+
+{#snippet decodeRow(d: DecodeEntry)}
+    {@const cqCall = parseCqCall(d.text)}
+    {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
+    {@const answerable = cqCall !== null && canAnswer}
+    <li class="flex gap-2 whitespace-nowrap">
+        <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
+        <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
+        <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
+        {#if info?.flag}
+            <span class="cursor-default" title={info.country} aria-hidden="true">{info.flag}</span>
+        {/if}
+        {#if answerable}
+            <button
+                type="button"
+                class="truncate text-left text-gray-700 cursor-pointer hover:underline"
+                style:color={rowColor(info)}
+                title={`Answer ${cqCall}`}
+                onclick={() => answerCq(d)}>{d.text}</button
+            >
+        {:else}
+            <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
+        {/if}
+    </li>
+{/snippet}
+
 <div class="flex justify-center h-80 text-gray-500 space-x-3">
     <div class="flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
@@ -207,33 +245,13 @@
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
-        <div class="flex ft8-panel-height flex-col rounded border border-gray-300 overflow-y-scroll">
+        <div
+            class="flex ft8-panel-height flex-col rounded border border-gray-300 overflow-y-scroll"
+        >
             {#if ft8State.decodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each ft8State.decodes as d (d.id)}
-                        {@const cqCall = parseCqCall(d.text)}
-                        {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
-                        {@const answerable = cqCall !== null && canAnswer}
-                        <li class="flex gap-2 whitespace-nowrap">
-                            <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
-                            <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
-                            <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
-                            {#if info?.flag}
-                                <span class="cursor-default" title={info.country} aria-hidden="true">{info.flag}</span>
-                            {/if}
-                            {#if answerable}
-                                <button
-                                    type="button"
-                                    class="truncate text-left text-gray-700 cursor-pointer hover:underline"
-                                    style:color={rowColor(info)}
-                                    title={`Answer ${cqCall}`}
-                                    onclick={() => answerCq(d)}>{d.text}</button>
-                            {:else}
-                                <span class="truncate text-gray-700" style:color={rowColor(info)}
-                                    >{d.text}</span
-                                >
-                            {/if}
-                        </li>
+                        {@render decodeRow(d)}
                     {/each}
                 </ul>
             {:else}
@@ -243,27 +261,25 @@
         <div class="mt-0.5 text-gray-700 text-xs">{slotLabel}</div>
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
-        <h2 class="text-base font-semibold my-2">TX Frequency</h2>
-        <div class="flex ft8-panel-height flex-col rounded border border-gray-300">
-            <p class="mt-1 text-xs text-gray-400">Occupied (Hz) — validation view</p>
-            {#if ft8State.occupied.length > 0}
-                <ul
-                    class="flex-1 space-y-0.5 overflow-y-auto px-2 py-1 text-left font-mono text-xs"
-                >
-                    {#each ft8State.occupied as b (b.low_hz)}
-                        <li class="flex gap-2 whitespace-nowrap">
-                            <span class="w-20 text-right text-gray-600">{b.low_hz}–{b.high_hz}</span
-                            >
-                            <span class="text-gray-400">{occupiedLabel(b)}</span>
-                        </li>
+        <h2 class="text-base font-semibold my-2">Rx Frequency</h2>
+        <div
+            class="flex ft8-panel-height flex-col rounded border border-gray-300 overflow-y-scroll"
+        >
+            {#if rxDecodes.length > 0}
+                <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
+                    {#each rxDecodes as d (d.id)}
+                        {@render decodeRow(d)}
                     {/each}
                 </ul>
-            {:else if ft8State.slot}
-                <p class="mt-1 text-xs">Nothing occupied.</p>
+            {:else if ft8State.qso.active}
+                <p class="mt-1 text-xs">Waiting for {ft8State.qso.theirCall}…</p>
+            {:else if ft8State.selectedOffset !== null}
+                <p class="mt-1 text-xs">Nothing on this offset.</p>
             {:else}
-                <p class="mt-1 text-xs">Waiting…</p>
+                <p class="mt-1 text-xs">Pick an offset on the Occupancy tab.</p>
             {/if}
         </div>
+        <div class="mt-0.5 text-gray-700 text-xs">{rxCaption}</div>
     </div>
     <div class="flex flex-col text-center w-20">
         <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>
@@ -272,9 +288,10 @@
                 {#each sortedOffsets as offset (offset)}
                     <button
                         type="button"
-                        class="border border-gray-300 w-16 rounded bg-gray-100 px-2 py-0.5 font-mono text-sm text-left text-gray-700"
-                        class:ring-2={offset === ft8State.selectedOffset}
-                        class:ring-green-700={offset === ft8State.selectedOffset}
+                        class="w-16 rounded border px-2 py-0.5 font-mono text-sm text-left {offset ===
+                        ft8State.selectedOffset
+                            ? 'border-green-700 bg-green-50 text-green-900'
+                            : 'border-gray-300 bg-gray-100 text-gray-700'}"
                         title={offset === topPick
                             ? 'Daemon’s top-ranked clear offset — click to select for TX'
                             : 'Click to select for TX'}
