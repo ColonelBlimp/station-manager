@@ -162,7 +162,7 @@
                 <p class="text-xs text-gray-400">Enable TX to call CQ.</p>
             {/if}
         </div>
-        <div class="flex flex-col gap-1 w-50">
+        <div class="flex flex-col gap-1 w-50 z-10 border">
             <div class="flex flex-col gap-y-2 h-80">
                 <button
                     type="button"
@@ -195,5 +195,5 @@
             </div>
         </div>
     </div>
-    <div class="flex flex-col items-center -mt-7.5">{statusLine}</div>
+    <div class="z-0 flex flex-col items-center -mt-7.5">{statusLine}</div>
 </div>
