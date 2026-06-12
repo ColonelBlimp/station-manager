@@ -24,6 +24,8 @@
 
 import { configState } from './config.svelte';
 import { sessionQsosState } from './sessionQsos.svelte';
+import { toasts } from './toasts.svelte';
+import { qsoDefaults } from './qsoDefaults.svelte';
 import { pathInfo } from '../utils/bearing';
 
 /** One occupied audio-frequency range. Mirrors `internal/ft8.Band` (snake_case wire). */
@@ -356,15 +358,17 @@ function openSource(): void {
             }>;
             const uuid = p.uuid ?? '';
             if (uuid === '' || sessionQsosState.items.some((q) => q.uuid === uuid)) return;
+            const call = p.callsign ?? '';
+            const band = p.band ?? '';
             const grid = p.gridsquare ?? '';
             const myGrid = configState.loggingStation.myGridsquare;
             const path = grid && myGrid ? pathInfo(myGrid, grid) : null;
             sessionQsosState.add({
                 uuid,
-                callsign: p.callsign ?? '',
+                callsign: call,
                 name: '',
                 freqHz: p.freq_hz ?? 0,
-                band: p.band ?? '',
+                band,
                 rstSent: p.rst_sent ?? '',
                 rstRcvd: p.rst_rcvd ?? '',
                 mode: p.mode ?? 'FT8',
@@ -374,6 +378,14 @@ function openSource(): void {
                 distanceKm: path ? String(Math.round(path.shortPathDistanceKm)) : '',
                 adif: '',
             });
+            // FT8 QSOs log daemon-side with no form to clear, so a toast is the only
+            // visible "it's in the log" signal. Same setting + wording as the Phone/CW
+            // logged-toast (qsoDefaults.notifyQsoStored) so one switch governs both.
+            if (qsoDefaults.notifyQsoStored) {
+                toasts.info(
+                    call ? `QSO logged — ${call}${band ? ` (${band})` : ''}` : 'QSO logged'
+                );
+            }
         } catch (e) {
             console.warn('[ft8] logged JSON parse failed', e);
         }

@@ -30,20 +30,6 @@ when it ships — don't let this rot into a graveyard.
   whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
   and decide whether the Rx pane should collapse to the latest decode per station.
 
-- **Answer-a-CQ: first rung waits a full cycle (~30 s) — CONFIRMED ON AIR
-  2026-06-12, fix HELD.** ADR 0032 truncation did NOT fix this (it only governs a
-  *late* send within a slot, not *which* slot fires first). On-air proof from the
-  daemon log: clicked JA6CPQ at `10:50:33`, first TX was `10:51:00` (~27 s later) —
-  SM skipped the usable `10:50:30` even slot (only 3 s in, well inside the 4.5 s
-  `txLateWindowSec`) and waited a full cycle. **Root cause (structural):**
-  `Sequencer.StartQso` only sets up state; the sole transmit trigger is `OnSlot`,
-  which acts only on the *worked station's* parity slots — so the earliest send is
-  after *their* next slot finishes decoding (~1.5–2 slots after the click). **Fix
-  (held per operator "completion test first"):** `StartQso` should fire the first
-  rung itself when the click lands in a usable opposite-parity slot within
-  `txLateWindowSec`, instead of waiting for the next `OnSlot`. Needs `now` injected
-  into `StartQso` for deterministic tests. Un-hold when the operator gives the go.
-
 - **Answer-a-CQ: Abandon does not stop an in-flight transmission.** Clicking
   Abandon mid-transmit clears the sequencer but the current rung's waveform plays
   to completion with PTT keyed. `Service.AbandonQso` (`internal/ft8/servicetx.go`)
@@ -141,8 +127,9 @@ when it ships — don't let this rot into a graveyard.
   time. `TIME_OFF` is therefore correct; `TIME_ON` is up to ~2 min late. Harmless
   for QSL time-matching (±30 min window) but not strictly accurate. Fix: thread the
   `StartQso` instant into `CompletedQso` (a `StartedAt`) and use it for `TIME_ON`,
-  keeping `now` for `TIME_OFF`. **Pairs with the held first-rung fix** (Bugs above),
-  which also needs the `StartQso` wall-clock injected — do them together.
+  keeping `now` for `TIME_OFF`. The first-rung fix (shipped 2026-06-12) already
+  injects `now` into `Sequencer.StartQso`, so the wall-clock is in hand — this item
+  is now just capturing it onto `CompletedQso` and stamping `TIME_ON` from it.
 - **FT8 caller-side sequencing — `auto_first` SHIPPED 2026-06-12 (ADR 0033); the
   `operator_pick` stack remains.** When *we* call CQ and stations answer, work them one
   at a time, looping the pile-up until Abandon. This was the gap on 2026-06-12 when a

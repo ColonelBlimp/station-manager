@@ -87,7 +87,9 @@
         return baseModes.includes(friendly) ? baseModes : [...baseModes, friendly];
     });
     const modeValue = $derived(
-        displayedState.isLive ? displayedState.rigMode : displayedState.subMode || displayedState.mode
+        displayedState.isLive
+            ? displayedState.rigMode
+            : displayedState.subMode || displayedState.mode
     );
     const modeDisabled = $derived(
         displayedState.isLive && !configState.bridge.ops.includes('set_mode')
@@ -471,7 +473,10 @@
                     // until the next submit succeeds.
                     void configState.refreshLogbookCount();
                     if (qsoDefaults.notifyQsoStored) {
-                        toasts.info(`QSO with ${submittedCall} stored.`);
+                        const loggedBand = frequencyToBand(txFreqHz);
+                        toasts.info(
+                            `QSO logged — ${submittedCall}${loggedBand ? ` (${loggedBand})` : ''}`
+                        );
                     }
                     break;
                 case 'duplicate':

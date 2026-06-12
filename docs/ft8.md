@@ -182,7 +182,11 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   the daemon emits each completed exchange's session fields — carrying the canonical
   **UUID**, so email-out and edit work for FT8 rows exactly as for Phone/CW. A
   recipient input + paper-plane button (the extracted `SessionEmailControls`, used by
-  both panels) emails the session ADIF when the daemon mailer is configured. (Known
+  both panels) emails the session ADIF when the daemon mailer is configured. A
+  **`QSO logged — <call> (<band>)` toast** fires on each completed FT8 exchange (the
+  only "it's in the log" signal, since there's no form to clear) — gated on the same
+  **Toast on QSO stored** setting (`qsoDefaults.notifyQsoStored`, My Station →
+  Notifications) and worded identically to the Phone/CW logged-toast. (Known
   gap: the Country column is blank for FT8 rows — no enrichment at FT8 log time; the
   *emailed* ADIF is unaffected, rebuilt daemon-side from the stored DB row. Distance
   is computed SPA-side from your grid.)
