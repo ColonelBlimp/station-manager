@@ -455,13 +455,18 @@ func run() error {
 		snap := cfgSvc.Snapshot()
 		q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
 		rec := adif.QsoToRecord(q)
-		if _, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false); err != nil {
+		res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false)
+		if err != nil {
 			loggerSvc.ErrorWith().Err(err).Str("call", c.TheirCall).
 				Msg("ft8: failed to log completed QSO")
 			return
 		}
 		loggerSvc.InfoWith().Str("call", c.TheirCall).Str("band", q.Band).
 			Msg("ft8: completed QSO logged")
+		// Surface the logged QSO to the SPA's session list (ADR 0029 step e4).
+		// The canonical UUID flows through so the SPA's email-out / edit paths
+		// work for FT8 rows; best-effort, after a confirmed store.
+		ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID))
 	})
 	if err := ft8Svc.Initialize(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("initialize ft8")

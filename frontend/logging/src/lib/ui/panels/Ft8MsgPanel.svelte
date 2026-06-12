@@ -154,7 +154,7 @@
     });
 </script>
 
-<div class="flex flex-col text-sm text-gray-700 h-44 mt-4">
+<div class="flex flex-col text-sm text-gray-700 h-42 mt-4">
     <div class="flex flex-row h-46">
         <div class="w-full px-2">
             {#if tx.armed}
@@ -179,7 +179,7 @@
             {/if}
         </div>
         <div class="flex flex-col gap-1 w-50 z-10">
-            <div class="flex flex-col gap-y-2 h-34">
+            <div class="flex flex-col gap-y-2 h-29">
                 <button
                     type="button"
                     class="btn btn-primary"

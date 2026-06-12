@@ -332,6 +332,15 @@ func (s *Service) publishTxState() {
 	s.hub.publish(hubEvent{name: EventTx, payload: st})
 }
 
+// PublishQsoLogged fans a just-logged FT8 QSO out on the ft8-logged SSE event so
+// the SPA can add it to its session list (ADR 0029 step e4). Called by the e4
+// sink (cmd/smd) after a successful qsoservice submit — the daemon owns assembly
+// + storage there, so internal/ft8 receives only the SPA-ready payload and stays
+// free of the storage path. One-shot (not cached for replay; see hub.publish).
+func (s *Service) PublishQsoLogged(l LoggedQso) {
+	s.hub.publish(hubEvent{name: EventLogged, payload: l})
+}
+
 // base returns the daemon-lifecycle context bound at Start (parent of every
 // transmission, so daemon shutdown aborts an in-flight TX and drops PTT). Read
 // under s.mu since Start writes parentCtx there.

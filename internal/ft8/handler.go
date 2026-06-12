@@ -23,6 +23,11 @@ const (
 	// EventQso carries a QsoStatus — the manual sequencer's active-contact state
 	// (ADR 0031 step e3). Cached for late-subscriber replay.
 	EventQso = "ft8-qso"
+	// EventLogged carries a LoggedQso — a one-shot "this completed exchange was
+	// logged" notification (ADR 0029 step e4) so the SPA can add it to its
+	// session list. Deliberately NOT cached for replay (see hub.publish): a late
+	// subscriber re-receiving an old logged event would duplicate the session row.
+	EventLogged = "ft8-logged"
 )
 
 // sseKeepAliveInterval matches the /v1/events and rig-events handlers — 30 s of

@@ -23,6 +23,8 @@
  */
 
 import { configState } from './config.svelte';
+import { sessionQsosState } from './sessionQsos.svelte';
+import { pathInfo } from '../utils/bearing';
 
 /** One occupied audio-frequency range. Mirrors `internal/ft8.Band` (snake_case wire). */
 export interface Ft8Band {
@@ -160,8 +162,6 @@ class Ft8State {
     connected: boolean = $state(false);
     /** Latest slot this report covers, or null before the first event. */
     slot: Ft8SlotRef | null = $state(null);
-    /** Count of occupied bands in the latest slot — the "N busy" readout. */
-    busyCount: number = $state(0);
     /** Daemon-ranked clear base offsets (Hz), best first. */
     suggested: number[] = $state([]);
     /**
@@ -250,7 +250,6 @@ function openSource(): void {
         }
         ft8State.slot = payload.slot ?? null;
         ft8State.occupied = payload.occupied ?? [];
-        ft8State.busyCount = ft8State.occupied.length;
         ft8State.suggested = payload.suggested ?? [];
         if (payload.passband) {
             ft8State.passbandLow = payload.passband.low_hz;
@@ -333,6 +332,52 @@ function openSource(): void {
             console.warn('[ft8] qso JSON parse failed', e);
         }
     });
+
+    // ft8-logged (EventLogged): a completed exchange the daemon just stored. Add
+    // it to the shared session list so FT8 QSOs sit alongside Phone/CW ones for
+    // email-out / edit (the daemon's UUID flows through, so both paths work). The
+    // event is one-shot (not replayed on reconnect), but a uuid-dedup guards any
+    // double-delivery. Distance is computed here from the operator's grid; country
+    // is left blank (no enrichment at FT8 log time) — the emailed ADIF is rebuilt
+    // daemon-side from the stored row regardless, so this is display-only.
+    src.addEventListener('ft8-logged', (ev: MessageEvent<string>) => {
+        try {
+            const p = JSON.parse(ev.data) as Partial<{
+                uuid: string;
+                callsign: string;
+                freq_hz: number;
+                band: string;
+                rst_sent: string;
+                rst_rcvd: string;
+                mode: string;
+                time_on: string;
+                qso_date: string;
+                gridsquare: string;
+            }>;
+            const uuid = p.uuid ?? '';
+            if (uuid === '' || sessionQsosState.items.some((q) => q.uuid === uuid)) return;
+            const grid = p.gridsquare ?? '';
+            const myGrid = configState.loggingStation.myGridsquare;
+            const path = grid && myGrid ? pathInfo(myGrid, grid) : null;
+            sessionQsosState.add({
+                uuid,
+                callsign: p.callsign ?? '',
+                name: '',
+                freqHz: p.freq_hz ?? 0,
+                band: p.band ?? '',
+                rstSent: p.rst_sent ?? '',
+                rstRcvd: p.rst_rcvd ?? '',
+                mode: p.mode ?? 'FT8',
+                timeOn: p.time_on ?? '',
+                qsoDate: p.qso_date ?? '',
+                country: '',
+                distanceKm: path ? String(Math.round(path.shortPathDistanceKm)) : '',
+                adif: '',
+            });
+        } catch (e) {
+            console.warn('[ft8] logged JSON parse failed', e);
+        }
+    });
 }
 
 function closeSource(): void {
@@ -343,7 +388,6 @@ function closeSource(): void {
     // Forget the last slot so re-entering the FT8 view starts clean rather than
     // flashing a stale slot from a previous visit until the next event lands.
     ft8State.slot = null;
-    ft8State.busyCount = 0;
     ft8State.suggested = [];
     ft8State.occupied = [];
     ft8State.decodes = [];

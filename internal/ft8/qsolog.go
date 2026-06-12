@@ -54,3 +54,54 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	}
 	return q
 }
+
+// LoggedQso is the `ft8-logged` SSE payload (EventLogged): the just-stored FT8
+// QSO's session-list fields, shaped for the SPA's SessionQso row. Carries the
+// canonical UUID so the SPA's email-out / edit paths (which key off it) work for
+// FT8 rows exactly as they do for Phone/CW ones. Country + distance are left to
+// the SPA (it has the operator's grid + an enrichment cache); this payload is
+// only what the daemon already holds at log time.
+type LoggedQso struct {
+	UUID       string `json:"uuid"`
+	Callsign   string `json:"callsign"`
+	FreqHz     int64  `json:"freq_hz"`
+	Band       string `json:"band"`
+	RstSent    string `json:"rst_sent"`
+	RstRcvd    string `json:"rst_rcvd"`
+	Mode       string `json:"mode"`
+	TimeOn     string `json:"time_on"`  // UTC "HH:MM"
+	QsoDate    string `json:"qso_date"` // "YYYY-MM-DD"
+	Gridsquare string `json:"gridsquare"`
+}
+
+// NewLoggedQso maps a stored types.Qso (as built by BuildQso) plus its canonical
+// UUID into the SSE payload, converting the daemon's storage formats to the
+// SPA-friendly shapes the session list expects: FREQ MHz → Hz, TIME_ON "HHMM" →
+// "HH:MM", QSO_DATE "YYYYMMDD" → "YYYY-MM-DD". A malformed freq/time/date degrades
+// to a zero/blank field rather than failing — the QSO is already logged.
+func NewLoggedQso(q types.Qso, uuid string) LoggedQso {
+	var freqHz int64
+	if mhz, err := strconv.ParseFloat(q.Freq, 64); err == nil {
+		freqHz = int64(mhz*1_000_000 + 0.5)
+	}
+	timeOn := q.TimeOn
+	if len(timeOn) == 4 {
+		timeOn = timeOn[:2] + ":" + timeOn[2:]
+	}
+	qsoDate := q.QsoDate
+	if len(qsoDate) == 8 {
+		qsoDate = qsoDate[:4] + "-" + qsoDate[4:6] + "-" + qsoDate[6:]
+	}
+	return LoggedQso{
+		UUID:       uuid,
+		Callsign:   q.Call,
+		FreqHz:     freqHz,
+		Band:       q.Band,
+		RstSent:    q.RstSent,
+		RstRcvd:    q.RstRcvd,
+		Mode:       q.Mode,
+		TimeOn:     timeOn,
+		QsoDate:    qsoDate,
+		Gridsquare: q.Gridsquare,
+	}
+}

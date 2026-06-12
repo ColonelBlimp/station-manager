@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _activeSourceForTests, ft8State, startFt8, stopFt8 } from './ft8.svelte';
 import { configState } from './config.svelte';
+import { sessionQsosState } from './sessionQsos.svelte';
 
 /**
  * Synchronous fake EventSource (same approach as bridge.test.ts): startFt8()
@@ -107,7 +108,6 @@ describe('ft8 occupancy transport', () => {
         latest().emit('ft8-occupancy', sampleReport);
 
         expect(ft8State.slot).toEqual({ start_utc: '2026-06-07T14:30:15Z', period: 'odd' });
-        expect(ft8State.busyCount).toBe(2);
         expect(ft8State.suggested).toEqual([2200, 1800, 760]);
         expect(ft8State.occupied).toHaveLength(2);
         expect(ft8State.passbandLow).toBe(200);
@@ -127,7 +127,6 @@ describe('ft8 occupancy transport', () => {
                 suggested: null,
             })
         );
-        expect(ft8State.busyCount).toBe(0);
         expect(ft8State.occupied).toEqual([]);
         expect(ft8State.suggested).toEqual([]);
     });
@@ -148,7 +147,7 @@ describe('ft8 occupancy transport', () => {
         expect(src.closed).toBe(true);
         expect(_activeSourceForTests()).toBeNull();
         expect(ft8State.slot).toBeNull();
-        expect(ft8State.busyCount).toBe(0);
+        expect(ft8State.occupied).toEqual([]);
         expect(ft8State.suggested).toEqual([]);
         expect(ft8State.decodes).toEqual([]);
         expect(ft8State.connected).toBe(false);
@@ -182,7 +181,12 @@ describe('ft8 TX-offset selection', () => {
 function decodeReport(startUtc: string, texts: string[]): string {
     return JSON.stringify({
         slot: { start_utc: startUtc, period: 'odd' },
-        decodes: texts.map((text, i) => ({ text, freq_hz: 1000 + i * 100, dt_s: 0.2, snr: -10 + i })),
+        decodes: texts.map((text, i) => ({
+            text,
+            freq_hz: 1000 + i * 100,
+            dt_s: 0.2,
+            snr: -10 + i,
+        })),
     });
 }
 
@@ -338,6 +342,58 @@ describe('ft8 qso status (ft8-qso SSE)', () => {
         startFt8();
         latest().emit('ft8-qso', '{bad');
         expect(ft8State.qso.active).toBe(false);
+    });
+});
+
+describe('ft8 logged → session list (ft8-logged SSE)', () => {
+    beforeEach(() => sessionQsosState.clear());
+    afterEach(() => sessionQsosState.clear());
+
+    const loggedReport = JSON.stringify({
+        uuid: 'uuid-1',
+        callsign: 'K1ABC',
+        freq_hz: 14_075_500,
+        band: '20m',
+        rst_sent: '-12',
+        rst_rcvd: '-10',
+        mode: 'FT8',
+        time_on: '09:05',
+        qso_date: '2026-06-10',
+        gridsquare: 'FN42',
+    });
+
+    it('adds a completed FT8 QSO to the shared session list', () => {
+        startFt8();
+        latest().emit('ft8-logged', loggedReport);
+        expect(sessionQsosState.count).toBe(1);
+        const row = sessionQsosState.items[0];
+        expect(row.uuid).toBe('uuid-1');
+        expect(row.callsign).toBe('K1ABC');
+        expect(row.band).toBe('20m');
+        expect(row.mode).toBe('FT8');
+        expect(row.freqHz).toBe(14_075_500);
+        expect(row.timeOn).toBe('09:05');
+        expect(row.rstSent).toBe('-12');
+        expect(row.rstRcvd).toBe('-10');
+    });
+
+    it('dedups a repeated uuid (one-shot event, defensive against double-delivery)', () => {
+        startFt8();
+        latest().emit('ft8-logged', loggedReport);
+        latest().emit('ft8-logged', loggedReport);
+        expect(sessionQsosState.count).toBe(1);
+    });
+
+    it('ignores an event with no uuid (cannot edit/email without it)', () => {
+        startFt8();
+        latest().emit('ft8-logged', JSON.stringify({ callsign: 'K1ABC' }));
+        expect(sessionQsosState.count).toBe(0);
+    });
+
+    it('ignores malformed logged JSON', () => {
+        startFt8();
+        latest().emit('ft8-logged', '{bad');
+        expect(sessionQsosState.count).toBe(0);
     });
 });
 

@@ -55,3 +55,45 @@ func TestBuildQso_StationCallsignFallsBackToOperator(t *testing.T) {
 	q := BuildQso(CompletedQso{TheirCall: "K1ABC", DialFreqMHz: 14.074}, station, 1, time.Now())
 	require.Equal(t, "G0XYZ", q.StationCallsign)
 }
+
+func TestNewLoggedQso(t *testing.T) {
+	// Build a QSO the normal way, then map it to the SSE payload — the storage
+	// formats (MHz freq, HHMM time, YYYYMMDD date) must convert to the SPA shapes
+	// (Hz, HH:MM, YYYY-MM-DD), and the UUID must carry through for email/edit.
+	station := types.LoggingStation{StationCallsign: "G0XYZ"}
+	c := CompletedQso{
+		TheirCall:      "K1ABC",
+		TheirGrid:      "FN42",
+		OurReport:      -12,
+		HasOurReport:   true,
+		TheirReport:    -10,
+		HasTheirReport: true,
+		OffsetHz:       1500,
+		DialFreqMHz:    14.074,
+	}
+	now := time.Date(2026, 6, 10, 9, 5, 0, 0, time.UTC)
+	q := BuildQso(c, station, 7, now)
+
+	l := NewLoggedQso(q, "uuid-123")
+
+	require.Equal(t, "uuid-123", l.UUID)
+	require.Equal(t, "K1ABC", l.Callsign)
+	require.Equal(t, int64(14_075_500), l.FreqHz) // 14.0755 MHz → Hz
+	require.Equal(t, "20m", l.Band)
+	require.Equal(t, "FT8", l.Mode)
+	require.Equal(t, "09:05", l.TimeOn)       // HHMM → HH:MM
+	require.Equal(t, "2026-06-10", l.QsoDate) // YYYYMMDD → YYYY-MM-DD
+	require.Equal(t, "-12", l.RstSent)
+	require.Equal(t, "-10", l.RstRcvd)
+	require.Equal(t, "FN42", l.Gridsquare)
+}
+
+func TestNewLoggedQso_MalformedFieldsDegrade(t *testing.T) {
+	// A QSO with unparseable freq / short time / date must not panic — the QSO is
+	// already logged; the payload just carries zero/blank for the bad fields.
+	l := NewLoggedQso(types.Qso{}, "uuid-x")
+	require.Equal(t, "uuid-x", l.UUID)
+	require.Equal(t, int64(0), l.FreqHz)
+	require.Equal(t, "", l.TimeOn)
+	require.Equal(t, "", l.QsoDate)
+}

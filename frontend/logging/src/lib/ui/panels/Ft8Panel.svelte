@@ -3,6 +3,9 @@
     import Ft8OccupancyPanel from './Ft8OccupancyPanel.svelte';
     import Ft8MsgPanel from './Ft8MsgPanel.svelte';
     import Ft8SettingsPanel from './Ft8SettingsPanel.svelte';
+    import SessionPanel from './SessionPanel.svelte';
+    import SessionEmailControls from './SessionEmailControls.svelte';
+    import { sessionQsosState } from '../../states/sessionQsos.svelte';
     import { ft8State, startFt8, stopFt8, type DecodeEntry } from '../../states/ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { configState } from '../../states/config.svelte';
@@ -12,6 +15,7 @@
     import { toasts } from '../../states/toasts.svelte';
     import { frequencyToBand } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
+    import { pathInfo } from '../../utils/bearing';
     import { setFreq } from '../../actions/rigControl';
 
     // The occupancy stream is scoped to this view: open while FT8 mode is showing,
@@ -50,6 +54,10 @@
         displayedState.selectedVfo === 'B' ? displayedState.vfoB : displayedState.vfoA
     );
     const band = $derived(frequencyToBand(opFreq));
+
+    // Operator's Maidenhead grid — the local end of the beam-heading calc for each CQ.
+    // pathInfo() tolerates 4/6/8-char; empty/invalid yields no bearing (blank column).
+    const myGrid = $derived(configState.loggingStation.myGridsquare);
 
     // A Main-Freq button highlights when the live dial is within this much of its
     // configured FT8 freq. The dial sits exactly on the watering hole during FT8, so
@@ -106,13 +114,14 @@
         if (out.kind !== 'ok') toasts.error(out.message);
     }
 
-    // Slot label: "14:30:15 · odd · 19 busy", or a waiting state before the first
-    // event. start_utc is RFC3339 UTC; render its UTC wall-clock with seconds so
-    // the four 15 s slots per minute are distinguishable.
+    // Slot label: "14:30:15 · odd", or a waiting state before the first event.
+    // start_utc is RFC3339 UTC; render its UTC wall-clock with seconds so the four
+    // 15 s slots per minute are distinguishable. (Congestion isn't shown here — the
+    // occupancy strip carries it visually; a raw count wasn't actionable.)
     const slotLabel = $derived.by(() => {
         if (!ft8State.slot) return 'Waiting for slot…';
         const clock = formatUtcClock(new Date(ft8State.slot.start_utc));
-        return `${clock} · ${ft8State.slot.period} · ${ft8State.busyCount} busy`;
+        return `${clock} · ${ft8State.slot.period}`;
     });
 
     // The daemon sends `suggested` best-first by rank. For display we sort a copy
@@ -174,12 +183,14 @@
     });
 
     // ---- Lower-section tabs (same pattern + .tab-item class as InfoPanel) ----
-    type Ft8TabId = 'occupancy' | 'ladder' | 'settings';
-    const tabs: { id: Ft8TabId; title: string }[] = [
+    type Ft8TabId = 'occupancy' | 'ladder' | 'session' | 'settings';
+    // $derived so the Session count tracks sessionQsosState as FT8 QSOs land.
+    const tabs: { id: Ft8TabId; title: string; count?: number }[] = $derived([
         { id: 'occupancy', title: 'Occupancy' },
         { id: 'ladder', title: 'Operate' },
         { id: 'settings', title: 'Settings' },
-    ];
+        { id: 'session', title: 'Session', count: sessionQsosState.count },
+    ]);
     let activeTab: Ft8TabId = $state('occupancy');
 
     const tabItemClass = (isActive: boolean): string =>
@@ -235,15 +246,22 @@
 -->
 
 {#snippet decodeRow(d: DecodeEntry, showTime: boolean)}
-    {@const cqCall = parseCqCall(d.text)}
+    {@const cq = parseCq(d.text)}
+    {@const cqCall = cq?.call ?? null}
     {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
     {@const answerable = cqCall !== null && canAnswer}
+    {@const bearing = cq?.grid && myGrid ? pathInfo(myGrid, cq.grid)?.shortPathBearing : undefined}
     <li class="flex gap-2 whitespace-nowrap">
         {#if showTime}
             <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
         {/if}
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
         <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
+        <span class="w-10 text-right text-indigo-600" title="Beam heading to this CQ (short path)"
+            >{bearing !== undefined
+                ? `${Math.round(bearing).toString().padStart(3, '0')}°`
+                : ''}</span
+        >
         {#if info?.flag}
             <span class="cursor-default" title={info.country} aria-hidden="true">{info.flag}</span>
         {/if}
@@ -273,6 +291,21 @@
     </li>
 {/snippet}
 
+<!-- Column header for the decode lists. Lives inside the scroll container as a sticky
+     row (top-0) so it stays pinned while the rows scroll under it; column widths/gap
+     mirror decodeRow so the labels line up over their data. -->
+{#snippet headerRow(showTime: boolean)}
+    <div
+        class="sticky top-0 z-10 flex gap-2 whitespace-nowrap border-b border-gray-200 bg-white pb-0.5 pl-1 pr-2 pt-1 font-mono text-xs text-gray-400"
+    >
+        {#if showTime}<span>UTC</span>{/if}
+        <span class="w-7 text-right">dB</span>
+        <span class="w-10 text-right">Hz</span>
+        <span class="w-10 text-right">Beam</span>
+        <span class="flex-1 text-left">Message</span>
+    </div>
+{/snippet}
+
 <!-- Main-Freq band button: on click tunes the operating VFO to this band's configured
      FT8 dial freq (setFreq → set_freq when CAT-live, manualState when off), and
      highlights (btn-primary) when the live dial is already on that freq. Disabled if
@@ -289,7 +322,7 @@
     >
 {/snippet}
 
-<div class="flex justify-center h-80 text-gray-500 space-x-3 mt-1">
+<div class="flex justify-center h-85 text-gray-500 space-x-3 mt-1">
     <div class="flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
         <div class="flex flex-col place-items-center px-2 space-y-1">
@@ -303,10 +336,11 @@
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
-        <div class="flex h-60 flex-col rounded border border-gray-300 overflow-y-scroll">
+        <div class="flex h-65 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if ft8State.decodes.length > 0}
                 {@const showSlot = configState.ft8Display.feedMode === 'accumulate'}
-                <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
+                {@render headerRow(false)}
+                <ul class="flex-1 space-y-0.5 py-1 pl-1 pr-2 text-left font-mono text-xs">
                     {#each ft8State.decodes as d, i (d.id)}
                         {#if showSlot && (i === 0 || ft8State.decodes[i - 1].startUtc !== d.startUtc)}
                             {@render slotSeparator(d.startUtc)}
@@ -337,7 +371,7 @@
                 <p class="mt-1 text-xs">Pick an offset on the Occupancy tab.</p>
             {/if}
         </div>
-        <div class="h-39 mt-2 border rounded border-gray-300 bg-gray-100 px-2 py-0.5 text-xs">
+        <div class="h-44 mt-2 border rounded border-gray-300 bg-gray-100 px-2 py-0.5 text-xs">
             Enrichment
         </div>
     </div>
@@ -377,16 +411,100 @@
     <div class="">&nbsp;|&nbsp;</div>
     <div class={rxCaptionClass}>{rxCaption}</div>
 </div>
+<!-- Heroicon "cog-6-tooth" (outline) — the Settings tab icon, matching the gear
+     used on InfoPanel's My Station tab so the two operating modes read alike. -->
+{#snippet settingsIcon()}
+    <svg
+        class="size-5"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="1.5"
+        stroke="currentColor"
+        aria-hidden="true"
+    >
+        <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z"
+        />
+        <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+        />
+    </svg>
+{/snippet}
+
+<!-- Heroicon "list-bullet" (outline) — the Session tab icon, matching InfoPanel's
+     Session tab so the shared session log reads alike across both modes. -->
+{#snippet sessionIcon()}
+    <svg
+        class="size-5"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="1.5"
+        stroke="currentColor"
+        aria-hidden="true"
+    >
+        <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"
+        />
+    </svg>
+{/snippet}
+
+<!-- Heroicon "chart-bar" (outline) — the Occupancy tab icon; the bars read as the
+     per-slot spectrum occupancy the picker strip shows. -->
+{#snippet occupancyIcon()}
+    <svg
+        class="size-5"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="1.5"
+        stroke="currentColor"
+        aria-hidden="true"
+    >
+        <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
+        />
+    </svg>
+{/snippet}
+
+<!-- Heroicon "signal" (outline) — the Operate tab icon; broadcast arcs read as
+     "on the air", the transmit surface where you arm + call/answer. -->
+{#snippet operateIcon()}
+    <svg
+        class="size-5"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="1.5"
+        stroke="currentColor"
+        aria-hidden="true"
+    >
+        <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"
+        />
+    </svg>
+{/snippet}
+
 <!--
     Tabbed lower section (same tablist pattern + .tab-item class as InfoPanel):
       - Occupancy — the TX-offset picker strip (Ft8OccupancyPanel)
       - Operate   — the FT8 transmit surface + message ladder (Ft8MsgPanel)
+      - Session   — the shared session QSO log (SessionPanel) + email-out, same as
+                    InfoPanel's Session tab; FT8 QSOs land here via the ft8-logged SSE
       - Settings  — FT8 display preferences (Ft8SettingsPanel), daemon-backed
     WAI-ARIA tabs contract mirrors InfoPanel: roving tabindex, arrow/Home/End
-    navigation with auto-activation.
+    navigation with auto-activation. justify-between floats the Session-tab email
+    controls to the right of the strip (only while Session is active + mailer on).
 -->
 <div class="flex flex-col w-full px-6 pt-4">
-    <div class="flex flex-row items-center border-b border-gray-400 pb-2">
+    <div class="flex flex-row items-center justify-between border-b border-gray-400 pb-2">
         <div role="tablist" class="flex flex-row items-center space-x-12">
             {#each tabs as tab (tab.id)}
                 <button
@@ -400,10 +518,22 @@
                     onclick={() => (activeTab = tab.id)}
                     onkeydown={handleTabKeydown}
                 >
-                    <span>{tab.title}</span>
+                    {#if tab.id === 'occupancy'}{@render occupancyIcon()}{/if}
+                    {#if tab.id === 'ladder'}{@render operateIcon()}{/if}
+                    {#if tab.id === 'settings'}{@render settingsIcon()}{/if}
+                    {#if tab.id === 'session'}{@render sessionIcon()}{/if}
+                    <span>{tab.title}{tab.count !== undefined ? ` (${tab.count})` : ''}</span>
                 </button>
             {/each}
         </div>
+        {#if activeTab === 'session' && configState.mailer.enabled}
+            <aside
+                class="flex shrink-0 flex-row items-center gap-x-2"
+                aria-label="Email session ADIF"
+            >
+                <SessionEmailControls />
+            </aside>
+        {/if}
     </div>
 
     {#if activeTab === 'occupancy'}
@@ -417,6 +547,10 @@
     {:else if activeTab === 'settings'}
         <div id="ft8panel-settings" role="tabpanel" aria-labelledby="ft8tab-settings">
             <Ft8SettingsPanel />
+        </div>
+    {:else if activeTab === 'session'}
+        <div id="ft8panel-session" role="tabpanel" aria-labelledby="ft8tab-session">
+            <SessionPanel />
         </div>
     {/if}
 </div>
