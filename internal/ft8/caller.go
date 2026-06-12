@@ -118,6 +118,9 @@ func (e CallerExchange) Advance(text string) (CallerExchange, bool) {
 		case msgRoger:
 			e.State = cqRogering
 			return e, true
+		default:
+			// Any other kind (a re-sent grid, our own echo, plain band traffic)
+			// is not a roger — don't advance; fall through to the no-advance return.
 		}
 	}
 	// cqRogering completes on OUR transmit (Sent); cqDone is terminal. A decode in

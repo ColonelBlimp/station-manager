@@ -213,6 +213,8 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		s.onSlotAnswering(ref, msgs, now)
 	case seqCalling:
 		s.onSlotCalling(ref, msgs, now)
+	default:
+		// seqIdle — no active session; nothing to drive this slot.
 	}
 }
 

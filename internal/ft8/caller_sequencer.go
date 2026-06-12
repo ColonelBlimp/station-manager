@@ -166,6 +166,8 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	case !working:
 		s.repeats++ // CQ repeat count for status; uncapped
+	default:
+		// working && confirming — about to send RR73 (a one-shot); repeats untouched.
 	}
 
 	transmit, offset := s.transmit, s.offsetHz
