@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"math"
@@ -471,5 +472,81 @@ func TestWriteWAV_DefaultsMonoOnZeroChannels(t *testing.T) {
 	}
 	if out.Channels != 1 {
 		t.Errorf("Channels = %d, want 1 (defaulted)", out.Channels)
+	}
+}
+
+// --------------- ReadWAV — chunk-alignment + error-sentinel regressions --------
+
+// wavBytes assembles raw WAV bytes from mixed string (chunk IDs / magic) and
+// fixed-size LE values — for hand-crafted edge cases the structured builders can't
+// express (odd-sized chunks, truncated/misordered headers).
+func wavBytes(parts ...any) []byte {
+	var buf bytes.Buffer
+	for _, p := range parts {
+		if s, ok := p.(string); ok {
+			buf.WriteString(s)
+			continue
+		}
+		if err := binary.Write(&buf, binary.LittleEndian, p); err != nil {
+			panic(err) // test-only: a wrong part type is a test bug
+		}
+	}
+	return buf.Bytes()
+}
+
+// writeRawWAV writes raw bytes to a temp .wav and returns the path.
+func writeRawWAV(t *testing.T, b []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "raw.wav")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatalf("write raw wav: %v", err)
+	}
+	return path
+}
+
+// An odd-sized fmt chunk is followed by a RIFF word-alignment pad byte; ReadWAV must
+// consume it so the next chunk ID (data) reads on a word boundary. Regression for the
+// fmt-branch pad bug — the unknown-chunk (default) branch already padded, but fmt did
+// not, so an odd fmt size shifted every following chunk by one byte.
+func TestReadWAV_OddSizedFmtChunkPad(t *testing.T) {
+	pcm := []byte{0x00, 0x00, 0xFF, 0x7F} // two PCM16 samples (silence, max+)
+	raw := wavBytes(
+		"RIFF", uint32(42), "WAVE",
+		"fmt ", uint32(17), // 16 standard bytes + 1 extension byte = odd
+		uint16(1), uint16(1), uint32(12000), uint32(24000), uint16(2), uint16(16),
+		uint8(0xAB), // the 1 extra fmt byte (makes chunkSize 17)
+		uint8(0x00), // RIFF pad byte word-aligning the odd chunk
+		"data", uint32(len(pcm)), pcm,
+	)
+	w, err := ReadWAV(writeRawWAV(t, raw))
+	if err != nil {
+		t.Fatalf("ReadWAV(odd-fmt): %v", err)
+	}
+	if w.SampleRate != 12000 || w.Channels != 1 || len(w.Samples) != 2 {
+		t.Fatalf("odd-fmt parse = rate %d / ch %d / n %d, want 12000 / 1 / 2",
+			w.SampleRate, w.Channels, len(w.Samples))
+	}
+}
+
+// A file truncated inside the fmt chunk must classify as ErrWAVInvalidHeader, not a
+// raw I/O error — so callers can branch on errors.Is. Regression for sentinel
+// preservation in the fmt-read path.
+func TestReadWAV_TruncatedFmt_IsInvalidHeader(t *testing.T) {
+	// fmt declares 16 bytes but the file ends after 2 of them.
+	raw := wavBytes("RIFF", uint32(20), "WAVE", "fmt ", uint32(16), uint16(1))
+	_, err := ReadWAV(writeRawWAV(t, raw))
+	if !errors.Is(err, ErrWAVInvalidHeader) {
+		t.Errorf("ReadWAV(truncated fmt) err=%v, want ErrWAVInvalidHeader", err)
+	}
+}
+
+// A data chunk before any fmt chunk must classify as ErrWAVInvalidHeader (was a
+// message-only error). Regression for sentinel preservation in the data path.
+func TestReadWAV_DataBeforeFmt_IsInvalidHeader(t *testing.T) {
+	pcm := []byte{0x00, 0x00}
+	raw := wavBytes("RIFF", uint32(24), "WAVE", "data", uint32(len(pcm)), pcm)
+	_, err := ReadWAV(writeRawWAV(t, raw))
+	if !errors.Is(err, ErrWAVInvalidHeader) {
+		t.Errorf("ReadWAV(data-before-fmt) err=%v, want ErrWAVInvalidHeader", err)
 	}
 }

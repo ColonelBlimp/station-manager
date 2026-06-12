@@ -137,33 +137,39 @@ outer:
 				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader)
 			}
 			if err := binary.Read(f, binary.LittleEndian, &audioFormat); err != nil {
-				return nil, errors.New(op).WithErr(err)
+				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).WithMsgf("read fmt audioFormat: %v", err)
 			}
 			if err := binary.Read(f, binary.LittleEndian, &channels); err != nil {
-				return nil, errors.New(op).WithErr(err)
+				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).WithMsgf("read fmt channels: %v", err)
 			}
 			if err := binary.Read(f, binary.LittleEndian, &sampleRate); err != nil {
-				return nil, errors.New(op).WithErr(err)
+				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).WithMsgf("read fmt sampleRate: %v", err)
 			}
 			// Skip byteRate (4 bytes) and blockAlign (2 bytes) — derivable
 			// from the fields above.
 			if _, err := io.CopyN(io.Discard, f, 6); err != nil {
-				return nil, errors.New(op).WithErr(err)
+				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).WithMsgf("skip fmt byteRate/blockAlign: %v", err)
 			}
 			if err := binary.Read(f, binary.LittleEndian, &bitsPerSample); err != nil {
-				return nil, errors.New(op).WithErr(err)
+				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).WithMsgf("read fmt bitsPerSample: %v", err)
 			}
-			// Skip any extra fmt bytes (extensible-format extra fields, etc.).
-			if extra := int64(chunkSize) - 16; extra > 0 {
-				if _, err := io.CopyN(io.Discard, f, extra); err != nil {
-					return nil, errors.New(op).WithErr(err)
+			// Skip any extra fmt bytes (extensible-format extra fields, etc.) plus the
+			// RIFF word-alignment pad byte when chunkSize is odd, so the next chunk ID
+			// reads on a word boundary (the default branch pads odd chunks the same way).
+			skip := int64(chunkSize) - 16
+			if chunkSize%2 != 0 {
+				skip++
+			}
+			if skip > 0 {
+				if _, err := io.CopyN(io.Discard, f, skip); err != nil {
+					return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).WithMsgf("skip fmt extra: %v", err)
 				}
 			}
 			fmtFound = true
 
 		case "data":
 			if !fmtFound {
-				return nil, errors.New(op).WithMsg("data chunk precedes fmt chunk")
+				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).WithMsg("data chunk precedes fmt chunk")
 			}
 			var readErr error
 			pcmData, readErr = io.ReadAll(io.LimitReader(f, int64(chunkSize)))

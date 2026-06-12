@@ -141,9 +141,16 @@ func (p *Player) Play(samples []int16) (<-chan struct{}, error) {
 		return nil, ErrAlreadyPlaying
 	}
 
+	// Hold mu across the whole start sequence — InitDevice + device.Start touch the
+	// malgo context, and a concurrent Close must not free it mid-init (same reasoning
+	// as capture.Start). mu is the lifecycle lock; the audio callback uses p.pos
+	// (atomic) + p.buf (set here before device.Start, and Stop halts the device
+	// before nil'ing buf), never mu — so holding it across the HW calls only
+	// serialises Stop/Close, not the hot path.
 	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if p.ctx == nil {
-		p.mu.Unlock()
 		p.playing.Store(false)
 		return nil, ErrNotInitialized
 	}
@@ -153,12 +160,10 @@ func (p *Player) Play(samples []int16) (<-chan struct{}, error) {
 	if p.config.DeviceIndex >= 0 {
 		devices, err := p.ctx.Devices(malgo.Playback)
 		if err != nil {
-			p.mu.Unlock()
 			p.playing.Store(false)
 			return nil, errors.New(op).WithErr(err)
 		}
 		if p.config.DeviceIndex >= len(devices) {
-			p.mu.Unlock()
 			p.playing.Store(false)
 			return nil, errors.New(op).WithMsgf("device index %d out of range (have %d devices)",
 				p.config.DeviceIndex, len(devices))
@@ -171,7 +176,6 @@ func (p *Player) Play(samples []int16) (<-chan struct{}, error) {
 	done := make(chan struct{})
 	p.done = done
 	var doneOnce sync.Once
-	p.mu.Unlock()
 
 	deviceConfig := malgo.DeviceConfig{
 		DeviceType:         malgo.Playback,
@@ -209,15 +213,11 @@ func (p *Player) Play(samples []int16) (<-chan struct{}, error) {
 		return nil, errors.New(op).WithErr(err)
 	}
 
-	p.mu.Lock()
 	p.device = device
-	p.mu.Unlock()
 
 	if err := device.Start(); err != nil {
-		p.mu.Lock()
 		device.Uninit()
 		p.device = nil
-		p.mu.Unlock()
 		p.playing.Store(false)
 		return nil, errors.New(op).WithErr(err)
 	}

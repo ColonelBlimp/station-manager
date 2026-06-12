@@ -190,9 +190,17 @@ func (c *Capture) Start(ctx context.Context) error {
 		return ErrAlreadyRunning
 	}
 
+	// Hold mu across the whole start sequence. InitDevice + device.Start touch the
+	// malgo context (c.ctx.Context), and a concurrent Close must not free that
+	// context mid-init — the bug if we dropped the lock here: Close→Stop sees
+	// c.device still nil (set only after InitDevice), no-ops, then Close frees c.ctx
+	// while we're calling InitDevice on it. mu is the lifecycle lock; the audio
+	// callback uses callbackPtr/closed/safeSend (all atomic), never mu, so holding it
+	// across the HW calls only serialises Stop/Close, never the hot path.
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.ctx == nil {
-		c.mu.Unlock()
 		c.running.Store(false)
 		return ErrNotInitialized
 	}
@@ -203,19 +211,16 @@ func (c *Capture) Start(ctx context.Context) error {
 	if c.config.DeviceIndex >= 0 {
 		devices, err := c.ctx.Devices(malgo.Capture)
 		if err != nil {
-			c.mu.Unlock()
 			c.running.Store(false)
 			return errors.New(op).WithErr(err)
 		}
 		if c.config.DeviceIndex >= len(devices) {
-			c.mu.Unlock()
 			c.running.Store(false)
 			return errors.New(op).WithMsgf("device index %d out of range (have %d devices)",
 				c.config.DeviceIndex, len(devices))
 		}
 		deviceID = devices[c.config.DeviceIndex].ID.Pointer()
 	}
-	c.mu.Unlock()
 
 	deviceConfig := malgo.DeviceConfig{
 		DeviceType:         malgo.Capture,
@@ -258,18 +263,13 @@ func (c *Capture) Start(ctx context.Context) error {
 	}
 
 	internalCtx, cancelInternal := context.WithCancel(context.Background())
-
-	c.mu.Lock()
 	c.device = device
 	c.cancelInternal = cancelInternal
-	c.mu.Unlock()
 
 	if err := device.Start(); err != nil {
-		c.mu.Lock()
 		c.device.Uninit()
 		c.device = nil
 		c.cancelInternal = nil
-		c.mu.Unlock()
 		cancelInternal()
 		c.running.Store(false)
 		return errors.New(op).WithErr(err)
