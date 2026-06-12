@@ -7239,6 +7239,22 @@ Both `internal/errors` and `internal/logging` reached v2 final state.
 > all shipped; "auto-sequence" is now OUT OF SCOPE / QEX-forbidden (attended-only).
 > Read the top session entries for true current state.**
 
+### Time-boxed near-term goal: Icom IC-7300 CAT (borrowed rig)
+
+**Flagged 2026-06-12. Borrowed an IC-7300 for a limited time — get its CAT
+working with SM and bundle Icom support into a release within the next ~4–5
+sessions, while the hardware is on hand.** This is the first **Icom** rig in a
+codebase whose only rigdefs are Yaesu (FTdx10, FT710). Icom speaks **CI-V**, a
+different protocol family from the Yaesu/Kenwood-style CAT the bridge currently
+encodes — so the first task is to confirm whether `internal/cat` already
+abstracts protocol families or is Yaesu-shaped, then add an IC-7300 rigdef
+(`internal/cat/rigs/icom-ic7300.json` or equivalent) + whatever CI-V
+command/parse support the existing READ/INIT/SET path needs. Validate on the
+real rig (read-only state first per ADR 0019, then the inbound ops per ADR 0026)
+before tagging a release. Hard deadline is the loan window — prioritise over
+non-blocking polish. (Not in `docs/backlog.md` — that file is *deliberately
+not-now*; this is now-ish and time-critical.)
+
 ### Parked follow-ups (named, deliberate defer)
 
 - **Contest logging not built.** Flagged session 66 (2026-05-16). The SPA today is steady-state casual-QSO logging — no contest mode, no macro keys (though F1, F4–F12 are already reserved by ADR 0007 for this), no exchange-field handling (serial numbers, RST+state, etc.), no real-time dupe checking, no multiplier tracking, no Cabrillo export, no contest-specific ADIF fields (`STX`, `STX_STRING`, `SRX`, `SRX_STRING`, `CONTEST_ID`). Scope question to settle when it's picked up: separate client (e.g. `frontend/contest/`) versus a mode switch inside `frontend/logging/`. Contest logging has different UX rhythm (high rate, keyboard-first, minimal panels) and different field shape (per-contest exchange template) — likely warrants its own SPA in line with the logging-vs-logbook split per `feedback_logging_vs_logbook_scope`, but pin that decision when an operator-driven need surfaces (likely the next CQ WW or similar contest the operator wants to enter). Daemon side is largely already there — `types.Qso` follows ADIF (so contest fields slot in via existing `additional_data` pattern), multi-rig API-aware for SO2R contests, UUIDv7 for sync.
