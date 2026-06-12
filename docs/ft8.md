@@ -210,7 +210,11 @@ Clicking a CQ row sends a **directed** reply — `<their-call> <your-call> <your
 (e.g. `JA6CPQ 7Q5MLV KH78`), **never a CQ**. The sequencer repeats that call once per
 your-parity slot until the station answers or you Abandon. (You can confirm exactly
 what went out in the daemon log: `ft8 seq: transmitting rung` records the literal
-message, rung, offset, and how late into the slot it fired.)
+message, rung, offset, and how late into the slot it fired. The `ft8 seq:` QSO
+events log at **info**, so they are always captured; the full per-slot decode stream
+— `ft8 decode`, one line per decoded signal — logs at **debug** to keep the normal
+log quiet, so raise the daemon log level to `debug` when you want every decode for
+on-air diagnosis.)
 
 **Don't expect the station you answered to always come back.** Two normal FT8
 realities — neither a fault in SM, and both visible in the log as a string of

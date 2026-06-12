@@ -96,8 +96,13 @@ func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) (msgs []gof
 		return nil
 	}
 
+	// Per-decode detail is DEBUG, not INFO: it fires 12–16×/slot continuously while
+	// FT8 runs (a firehose at info), and the live view is the SPA Band Activity, not
+	// the log. At the default info level zerolog gates this to a near-free no-op (no
+	// build, no file I/O); set the log level to debug to recover the decode stream for
+	// on-air diagnosis. Matches the per-slot summary below, also debug.
 	for _, m := range report.Messages {
-		log.InfoWith().
+		log.DebugWith().
 			Str("text", m.Text).
 			Float64("freq_hz", m.FreqHz).
 			Float64("dt_s", m.DTSec).
