@@ -178,35 +178,36 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 
 	// Validate encodability synchronously so a bad message is an immediate
 	// error, not an async failure after the (up to 15 s) slot wait.
-	if _, err := EncodeToSlot(message, offsetHz, txSlotDtSec); err != nil {
+	if _, err := EncodeToSlot(message, offsetHz, txNominalDtSec); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
-	// Boundary-aligned: TransmitSlot waits for the next UTC slot and starts at
-	// dt=0 — right for a manually-initiated CQ (we pick our own slot/parity).
+	// Boundary-aligned: TransmitSlot waits for the next UTC slot and starts at the
+	// nominal +0.5 s — right for a manually-initiated CQ (we pick our own slot/
+	// parity, so we start on time with no truncation).
 	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitSlot(ctx, message, offsetHz)
 	})
 }
 
-// seqTransmit transmits a sequencer rung in the CURRENT slot, started late
-// (ADR 0031 answer-a-CQ timing) — no boundary wait, so the reply lands in the
-// slot opposite the worked station. Used only by the Sequencer; the late-start
-// guard is the sequencer's. Shares the arm gate + single-flight + ft8-tx status
-// with TransmitNext.
+// seqTransmit transmits a sequencer rung in the CURRENT slot on the synchronised
+// timebase (ADR 0032) — the reply lands in the slot opposite the worked station,
+// head-truncated if the decode landed past the slot's nominal +0.5 s start. Used
+// only by the Sequencer; the late-window guard is the sequencer's. Shares the arm
+// gate + single-flight + ft8-tx status with TransmitNext.
 func (s *Service) seqTransmit(message string, offsetHz float64) error {
 	const op errors.Op = "ft8.Service.seqTransmit"
 	if _, err := EncodeWaveform(message, offsetHz); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
 	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
-		return ctrl.TransmitNow(ctx, message, offsetHz)
+		return ctrl.TransmitCurrentSlot(ctx, message, offsetHz)
 	})
 }
 
 // startTransmission runs one transmission through the armed controller under the
 // single-flight guard, in a tracked goroutine. fn is the controller call —
-// boundary-aligned TransmitSlot for a manual CQ, or immediate TransmitNow for a
-// sequencer rung. Returns synchronously with ErrTxNotArmed / ErrTxInFlight if it
+// next-slot TransmitSlot for a manual CQ, or current-slot TransmitCurrentSlot for
+// a sequencer rung. Returns synchronously with ErrTxNotArmed / ErrTxInFlight if it
 // can't start; the transmission's progress/outcome rides the ft8-tx SSE. PTT is
 // guaranteed down on every path (controller deferred-unkey + bridge auto-off).
 func (s *Service) startTransmission(

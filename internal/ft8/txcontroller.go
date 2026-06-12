@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
@@ -19,13 +20,17 @@ import (
 // step (d) only the gated cmd/ft8-tx-probe constructs and drives it, so no SPA
 // or daemon path can transmit. Step (e) wires it to the sequencer + SPA.
 
-// TX timing. txSlotDtSec lays the waveform at the very start of the slot
-// (EncodeToSlot pads the rest with silence); the controller aligns Play to the
-// UTC boundary. txPreKeyLead keys PTT slightly before audio so the transmitter
-// is fully up before RF; txPlayTail lets the device buffer drain after the
-// waveform is handed over before PTT drops. Lead/tail are package vars so tests
-// dial them to zero; ADR 0030 makes them config if real hardware needs tuning.
-const txSlotDtSec = 0.0
+// TX timing (ADR 0032). FT8 rides a slot-synchronised timebase: symbol 0 of the
+// waveform belongs at the slot boundary + txNominalDtSec — the nominal 0.5 s
+// start WSJT-X uses (DT ≈ 0 at the receiver). When a rung is initiated after
+// that point (the answer-a-CQ case: the partner's decode lands ~0.7 s into our
+// slot), the controller drops the already-elapsed head and transmits the
+// synchronised remainder in place — "truncate, don't shift" — so the receiver
+// re-syncs on the Costas arrays (§8 of the QEX FT4/FT8 paper). txPreKeyLead keys
+// PTT slightly before audio so the transmitter is fully up before RF; txPlayTail
+// lets the device buffer drain before PTT drops. Lead/tail are package vars so
+// tests dial them to zero; ADR 0030 makes them config if real hardware needs it.
+const txNominalDtSec = 0.5
 
 var (
 	txPreKeyLead = 200 * time.Millisecond
@@ -53,42 +58,74 @@ func NewTxController(keyer TxKeyer, player slotPlayer, mode string, log logging.
 }
 
 // TransmitSlot encodes a standard FT8 message at the given base offset and
-// transmits it on the next UTC slot boundary. Blocks until the transmission
-// completes (or ctx is cancelled); PTT is guaranteed dropped before it returns.
-// Errors if the message isn't an encodable standard message.
+// transmits it on the next UTC slot, on the synchronised timebase (symbol 0 at
+// boundary + txNominalDtSec). Blocks until the transmission completes (or ctx is
+// cancelled); PTT is guaranteed dropped before it returns. Errors if the message
+// isn't an encodable standard message. Used for a manually-initiated CQ, where we
+// pick our own slot/parity and start on time (no truncation).
 func (c *TxController) TransmitSlot(ctx context.Context, text string, offsetHz float64) error {
 	const op errors.Op = "ft8.TxController.TransmitSlot"
 
-	wave, err := EncodeToSlot(text, offsetHz, txSlotDtSec)
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("encode %q", text)
-	}
-
-	// Align so the waveform's first sample plays at the slot boundary: wake
-	// txPreKeyLead early to key PTT, settle, then Play lands on the boundary.
-	target := nextSlotBoundary(time.Now().UTC())
-	if err := sleepUntil(ctx, time.Until(target.Add(-txPreKeyLead))); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("wait for slot boundary")
-	}
-	c.log.InfoWith().
-		Str("text", text).
-		Float64("offset_hz", offsetHz).
-		Time("slot_utc", target).
-		Msg("ft8 tx: transmitting on next slot")
-	return c.transmit(ctx, wave)
-}
-
-// TransmitNow encodes a standard FT8 message and transmits its bare waveform
-// IMMEDIATELY — no wait for a slot boundary (ADR 0031 sequencer timing). Answering
-// a CQ must land in the slot opposite the worked station, which is only known
-// after decoding their slot (~1.5 s into ours), so the rung is sent in the
-// current slot started late. The caller (the sequencer) owns the late-start guard;
-// this just key → play → unkey with the same guaranteed stop as TransmitSlot.
-func (c *TxController) TransmitNow(ctx context.Context, text string, offsetHz float64) error {
-	const op errors.Op = "ft8.TxController.TransmitNow"
 	wave, err := EncodeWaveform(text, offsetHz)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsgf("encode %q", text)
+	}
+	boundary := nextSlotBoundary(time.Now().UTC())
+	c.log.InfoWith().
+		Str("text", text).
+		Float64("offset_hz", offsetHz).
+		Time("slot_utc", boundary).
+		Msg("ft8 tx: transmitting on next slot")
+	return c.transmitAligned(ctx, wave, boundary)
+}
+
+// TransmitCurrentSlot encodes a standard FT8 message and transmits it in the
+// CURRENT UTC slot on the synchronised timebase (ADR 0032). Answering a CQ must
+// land in the slot opposite the worked station's, which is only known after
+// decoding their slot (~0.7 s into ours) — so by the time this is called the
+// slot's nominal +0.5 s start has usually just passed, and transmitAligned drops
+// the elapsed head and sends the synchronised remainder. The caller (the
+// sequencer) owns the late-window guard; this shares the guaranteed stop with
+// TransmitSlot.
+func (c *TxController) TransmitCurrentSlot(ctx context.Context, text string, offsetHz float64) error {
+	const op errors.Op = "ft8.TxController.TransmitCurrentSlot"
+	wave, err := EncodeWaveform(text, offsetHz)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsgf("encode %q", text)
+	}
+	// Current slot start = the next boundary minus one slot.
+	boundary := nextSlotBoundary(time.Now().UTC()).Add(-SlotDuration)
+	return c.transmitAligned(ctx, wave, boundary)
+}
+
+// transmitAligned transmits waveform on the synchronised timebase for the given
+// slot boundary (ADR 0032). The waveform's symbol 0 belongs at boundary +
+// txNominalDtSec; if that nominal start is still ahead we wait and send the full
+// waveform (DT ≈ 0), and if it has already passed (a late rung) we drop the
+// elapsed head and send the synchronised remainder, re-ramped to suppress the
+// click at the new leading edge. PTT is keyed only ~txPreKeyLead before audio
+// (never held across a long boundary wait) via the shared transmit() core, which
+// guarantees the unkey on every path.
+func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, boundary time.Time) error {
+	const op errors.Op = "ft8.TxController.transmitAligned"
+
+	nominal := boundary.Add(time.Duration(txNominalDtSec * float64(time.Second)))
+	// Audio begins at the nominal start, or as soon as PTT can settle if we're
+	// already past it (a late rung).
+	audioStart := nominal
+	if earliest := time.Now().Add(txPreKeyLead); earliest.After(nominal) {
+		audioStart = earliest
+	}
+	// Sleep until txPreKeyLead before audioStart; transmit() then keys, settles
+	// that lead, and plays — so the first sample lands on audioStart.
+	if err := sleepUntil(ctx, time.Until(audioStart.Add(-txPreKeyLead))); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("wait for slot start")
+	}
+
+	skip := int(audioStart.Sub(nominal).Seconds() * float64(goft8.SampleRate))
+	wave := truncateHead(waveform, skip)
+	if len(wave) == 0 {
+		return errors.New(op).WithMsg("too late in slot; nothing left to transmit")
 	}
 	return c.transmit(ctx, wave)
 }

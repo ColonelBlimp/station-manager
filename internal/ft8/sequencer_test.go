@@ -125,9 +125,9 @@ func TestSequencer_LateStartGuardSkips(t *testing.T) {
 	s := newTestSeq(r)
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
 
-	// Fire OnSlot too late into our slot (5 s in > maxStartDt ~1.7 s) → skip.
+	// Fire OnSlot too late into our slot (6 s in > txLateWindowSec 4.5 s) → skip.
 	ref := SlotRefFromTime(time.Unix(30, 0).UTC())
-	s.OnSlot(ref, nil, time.Unix(30+slotSeconds+5, 0).UTC())
+	s.OnSlot(ref, nil, time.Unix(30+slotSeconds+6, 0).UTC())
 	require.Empty(t, r.sentMsgs(), "a too-late slot must be skipped")
 	require.True(t, s.Active(), "skipping a slot does not end the QSO")
 }

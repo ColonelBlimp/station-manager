@@ -53,9 +53,9 @@ const (
 	txWaveformSamples = (ft8ToneCount + 2) * txSamplesPerSymbol
 )
 
-// txWaveformSec is the bare waveform duration (~12.96 s) — the room a
-// transmission needs inside the 15 s slot, used by the sequencer's late-start
-// guard (sequencer.go).
+// txWaveformSec is the bare waveform duration (~12.96 s) — the room a full
+// transmission occupies inside the 15 s slot. (The sequencer's late-window guard
+// is a fixed tolerance now, not derived from this; see ADR 0032.)
 const txWaveformSec = float64(txWaveformSamples) / float64(goft8.SampleRate)
 
 // Modulate turns an FT8 tone sequence (each value 0..7) into a normalised
@@ -172,4 +172,36 @@ func EncodeWaveform(text string, offsetHz float64) ([]int16, error) {
 		out[i] = int16(float64(v) * txAmplitude * math.MaxInt16)
 	}
 	return out, nil
+}
+
+// truncateHead drops the first skip samples of a synchronised waveform — a late
+// start (ADR 0032) — and re-ramps the new leading edge to suppress the key click
+// a hard sample step would cause. skip ≤ 0 returns the waveform unchanged; skip
+// at or past the end returns nil (nothing left to send). It mutates the returned
+// slice's backing array, which the caller owns (a freshly-encoded per-transmission
+// waveform).
+func truncateHead(wave []int16, skip int) []int16 {
+	if skip <= 0 {
+		return wave
+	}
+	if skip >= len(wave) {
+		return nil
+	}
+	out := wave[skip:]
+	applyLeadingRamp(out)
+	return out
+}
+
+// applyLeadingRamp fades in the first symbol-eighth of s with a raised cosine —
+// the same edge taper Modulate applies to a full waveform — so a head-truncated
+// transmission doesn't begin on a hard sample step.
+func applyLeadingRamp(s []int16) {
+	nramp := txSamplesPerSymbol / 8
+	if nramp > len(s) {
+		nramp = len(s)
+	}
+	for i := 0; i < nramp; i++ {
+		w := 0.5 * (1 - math.Cos(math.Pi*float64(i)/float64(nramp)))
+		s[i] = int16(float64(s[i]) * w)
+	}
 }

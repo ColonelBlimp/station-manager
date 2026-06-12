@@ -15,22 +15,24 @@ import (
 // worked station, advancing on the decode directed to us — and finishes when the
 // 73 is sent (e4 will log it). The operator intervenes only to Abandon.
 //
-// Timing (the hard part): we answer in the slot immediately AFTER the worked
-// station's, which we only learn after decoding their slot (~0.7–1.6 s into our
-// slot). So each rung is sent in the CURRENT slot started late (seqTransmit →
-// controller.TransmitNow), in the parity opposite theirs — NOT at the next
-// boundary, which would be their parity and collide. OnSlot is the single trigger:
-// the decode loop calls it once per completed slot.
+// Timing (ADR 0032): we answer in the slot immediately AFTER the worked station's,
+// which we only learn after decoding their slot (~0.7–1.6 s into our slot). The
+// rung is sent on the synchronised timebase (seqTransmit → TransmitCurrentSlot),
+// in the parity opposite theirs — NOT at the next boundary, which would be their
+// parity and collide. Because the decode lands after the slot's nominal +0.5 s
+// start, the controller drops the elapsed head and transmits the synchronised
+// remainder (truncate-don't-shift); the receiver re-syncs on the Costas arrays.
+// OnSlot is the single trigger: the decode loop calls it once per completed slot.
 
 // defaultSeqMaxRepeats caps consecutive unanswered transmissions of a rung before
 // the QSO is abandoned (ADR 0031 off-ramp). ~6 of our slots ≈ 90 s of calling.
 const defaultSeqMaxRepeats = 6
 
-// maxStartDt is the latest into a slot we will START a rung. Past this the bare
-// ~12.96 s waveform wouldn't finish before the slot ends, so we skip and retry on
-// our next cycle. Package var so tests can dial it. The 0.3 s margin covers the
-// controller's pre-key lead + a little slack.
-var maxStartDt = SlotDuration.Seconds() - txWaveformSec - 0.3
+// txLateWindowSec is the latest into our slot we will START a rung. Past this,
+// too few symbols / Costas sync words survive the head-truncation (ADR 0032) for
+// a reliable decode, so we skip and retry on our next cycle. The truncation
+// itself lives in the TxController. Package var so tests can dial it.
+var txLateWindowSec = 4.5
 
 // Sequencer sentinels (mapped to HTTP by the api layer).
 var (
@@ -190,15 +192,16 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		return
 	}
 
-	// Late-start guard: the current (our) slot started at ref.start + SlotDuration.
-	// If we're past the window the waveform won't fit — skip, retry next cycle.
+	// Late-window guard: the current (our) slot started at ref.start + SlotDuration.
+	// Too late into it and too few symbols survive head-truncation to decode — skip
+	// and retry next cycle (ADR 0032).
 	curStart, perr := time.Parse(time.RFC3339, ref.StartUTC)
 	if perr != nil {
 		s.mu.Unlock()
 		return
 	}
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > maxStartDt {
+	if dt < 0 || dt > txLateWindowSec {
 		st := s.statusLocked()
 		s.mu.Unlock()
 		s.publish(st)

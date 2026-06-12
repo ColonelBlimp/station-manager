@@ -37,14 +37,13 @@ when it ships — don't let this rot into a graveyard.
   whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
   and decide whether the Rx pane should collapse to the latest decode per station.
 
-- **Answer-a-CQ: first rung waits a full cycle (~30 s) — SUBSUMED by ADR 0032.**
-  `Sequencer.StartQso` only sets up the exchange and never transmits; the only
-  transmit trigger is `OnSlot`, and the one that would fire the opening call
-  already ran with `s.ex == nil` (it's what produced the clickable CQ), so the
-  first reply waits for the next their-parity slot. **Not fixed as a standalone
-  patch** — the ADR 0032 timing rework (synchronised timebase + transmit on the
-  next opposite-parity boundary, truncated if late) fixes this structurally. Kept
-  here as a symptom to verify gone once 0032 lands.
+- **Answer-a-CQ: first rung timing — VERIFY ON AIR (ADR 0032 landed 2026-06-12).**
+  The first-rung "waits a full cycle (~30 s)" symptom should now be gone: the
+  synchronised-timebase + truncate-when-late rework means the opening call fires in
+  the immediate opposite-parity slot (head-truncated if the click/decode was late).
+  Unit tests cover the timing logic; **still needs on-air confirmation** that
+  clicking a CQ now transmits in the very next slot, not a cycle later. Close this
+  once validated on the rig.
 
 - **Answer-a-CQ: Abandon does not stop an in-flight transmission.** Clicking
   Abandon mid-transmit clears the sequencer but the current rung's waveform plays
@@ -60,18 +59,6 @@ when it ships — don't let this rot into a graveyard.
 
 ## Features / enhancements
 
-- **Implement ADR 0032 — FT8 TX timing: synchronised timebase + truncate-when-late.**
-  Replace the sequencer's full-waveform-shifted-late model (`seqTransmit` →
-  `TransmitNow`, gated on `maxStartDt ≈ 1.74 s`) with the QEX §8 model: ride a
-  slot-synchronised timebase (symbol 0 at boundary + 0.5 s), transmit each rung on
-  the next opposite-parity boundary, and when the decode/click lands late emit the
-  **truncated** synchronised waveform (drop the elapsed head) instead of shifting a
-  full one — gaining the ~5–8 s (AP-mycall) late tolerance. Touches
-  `internal/ft8/modulate.go`/`EncodeToSlot` (slot-offset-aligned, head-truncated
-  emission), `txcontroller.go` (`TransmitNow` → slot-aware truncated send), and
-  `sequencer.go` (drop the full-fit guard for a "symbols-remain" guard). Fixes the
-  first-rung delay structurally. Update CLAUDE.md + `docs/ft8.md` timing prose when
-  it lands. See ADR 0032.
 - **FT8 offset picker — daemon-side no-overlap snap + click-anywhere.**
   `Ft8OccupancyStrip` offers daemon-vetted clear offsets as discrete markers
   today; clicking arbitrary spectrum (with a daemon-side snap to the nearest
@@ -111,6 +98,50 @@ when it ships — don't let this rot into a graveyard.
   parity from the epoch slot index (`Math.floor(nowSec / 15) + 1`) and match the
   daemon's even/odd convention (`SlotRefFromTime` / `ft8State.slot.period`) so the
   two readouts agree.
+- **FT8 Tx even/odd sequence option (caller-side).** WSJT-X's "Tx even/1st": let
+  the operator choose which slot parity to transmit in when **calling CQ** (even =
+  `:00/:30`, odd = `:15/:45`). Today the single-shot Call CQ (`TransmitNext` →
+  `TransmitSlot`) fires on the *very next* boundary regardless of parity; the option
+  would wait for the next slot of the chosen parity. **Caller-side only** — when
+  *answering* a CQ the parity is forced opposite the worked station (ADR 0031/0032
+  already correct), so this never applies there. Belongs with the deferred call-CQ
+  caller-side scope, but the toggle is small enough to add to the single-shot
+  button independently. Open design point: **persistent setting** (`config.json`)
+  vs **operating state** (session toggle, like the selected offset) — WSJT-X treats
+  it as a live checkbox; lean operating-state with maybe a config default.
+- **FT8 semi-auto response to a session watch-list — UNDER CONSIDERATION (grayline,
+  NOT decided).** Idea: the operator manually selects a set of callsigns into a
+  **session-bound** list and clicks **'Go'** to arm it; when one of those calls
+  then appears as a CQ in a decode, the daemon responds in the **immediate next
+  slot** — using the ADR 0032 synchronised/truncated send to hit the tight
+  end-of-decode → next-sequence window a human can't reliably click within.
+  Technically a small delta on ADR 0032: the only new piece is swapping the
+  per-QSO click for a watch-list match as the initiation trigger; sequencer,
+  timing, and off-ramps already exist.
+  **Attended framing + guardrails (the operator's design):** the list is
+  session-bound (cleared on session end — never persistent, never unmanned), the
+  operator manually picks the targets and gives an explicit 'Go', is present and
+  supervising, can abort instantly (Abandon / Disarm), and there is no auto-CQ
+  cycle — the human supplies the operating *intent* (the selection + 'Go'); the
+  software only covers human reaction time in the reply window.
+  **Open regulatory question (acknowledged grayline, still being thought through):**
+  does pre-authorising a batch + auto-responding count as *attended* (the operator
+  initiated the intent, analogous to WSJT-X "Call 1st") or does it cross into
+  *daemon-initiated* operation (QEX §9 forbids robotic/unattended; attended-only
+  stance)? Not resolved — recorded to keep thinking. **If ever built, it must be
+  framed as attended-assisted; public docs must never present it as automatic
+  operation.** See memory `project_sm_ft8_attended_only`.
+- **FT8 callsign ignore list.** An operator-maintained list of callsigns to
+  suppress in the FT8 view — already worked, not being sought, known nuisance, etc.
+  Listed calls should be hidden (or clearly de-emphasised) in Band Activity and not
+  offered as answerable CQ rows. Distinct from the existing *automatic*
+  worked-before tint (`ft8Enrich`): this is a **manual** list with mixed reasons,
+  so keep it separate from worked-detection. Open design points: (1) storage — a
+  non-session setting → daemon `config.json` (per the settings-in-config rule), with
+  an add/remove UX in the FT8 view; (2) behaviour — hide entirely vs grey-out vs
+  just non-clickable (lean: hide, with a toggle to reveal); (3) match semantics —
+  exact callsign vs prefix/wildcard. Whether it also feeds AP-hint *de*-prioritising
+  (ADR 0025) is a later question, not v1.
 - **Rename the "Ladder" tab to "Operate"** in `Ft8Panel.svelte`. The lower-section
   tab currently titled "Ladder" (`tabs` array, id `ladder`, renders `Ft8MsgPanel`)
   should read **Operate**. Tab title only — the `id`/`role`/`aria` wiring can stay

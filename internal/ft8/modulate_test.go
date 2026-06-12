@@ -119,6 +119,54 @@ func TestModulate_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestModulate_TruncatedDecodes is the ADR 0032 correctness proof: a synchronised
+// transmission whose head was dropped (a late answer-a-CQ start) still decodes,
+// because the receiver re-syncs on the middle/end Costas arrays. We build a full
+// slot, then zero the leading nominal + late seconds — exactly what a receiver
+// would hear if we started late but on the synchronised timebase — and assert the
+// message still comes back. Heavy (full decode), gated under -short.
+func TestModulate_TruncatedDecodes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+
+	const (
+		text    = "K1ABC W9XYZ R-12"
+		offset  = 1500.0
+		lateSec = 2.0 // start 2 s past nominal → first Costas array lost
+	)
+	enc, err := goft8.EncodeStandardMessage(text)
+	if err != nil {
+		t.Fatalf("EncodeStandardMessage: %v", err)
+	}
+	slot, err := EncodeToSlot(text, offset, 0.5) // waveform at the nominal +0.5 s
+	if err != nil {
+		t.Fatalf("EncodeToSlot: %v", err)
+	}
+	// Silence everything up to nominal (0.5 s) + lateSec — the head a late starter
+	// would never have transmitted.
+	zeroUntil := int((0.5 + lateSec) * float64(goft8.SampleRate))
+	for i := 0; i < zeroUntil && i < len(slot); i++ {
+		slot[i] = 0
+	}
+
+	msgs := DecodeSlot(slot, true, logging.Noop())
+	found := false
+	for _, m := range msgs {
+		if strings.EqualFold(strings.TrimSpace(m.Text), enc.Text) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		got := make([]string, len(msgs))
+		for i, m := range msgs {
+			got[i] = m.Text
+		}
+		t.Fatalf("truncated (%.1fs late) signal did not decode; got %v, want %q", lateSec, got, enc.Text)
+	}
+}
+
 // TestModulate_RoundTripOccupancy closes the loop with step (a): the offset we
 // transmit on shows up as occupied in the occupancy detector reading the same
 // audio — i.e. a signal we generate would correctly mark its own slot busy.

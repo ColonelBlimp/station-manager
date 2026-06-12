@@ -77,12 +77,13 @@ on any PUT):
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on
-either is well inside the 15 s slot for **RX**. **For live FT8 *transmit*, use the
-PocketFFT build** — answering a CQ must finish decoding within ~1.74 s of the slot
-boundary to reply in the immediate opposite slot (§6). On an i3-10100F, a busy
-slot decodes in ~0.72 s with PocketFFT (≈1 s of headroom) vs ~1.5 s with gonum +
-OSD (~0.24 s — a slow/dense slot can miss the window and the reply slips a cycle,
-+30 s). `task deploy:local:dev` already defaults to PocketFFT; a plain static
+either is well inside the 15 s slot for **RX**. **For live FT8 *transmit*, PocketFFT
+is preferred** — answering a CQ replies on a synchronised timebase and, if the
+decode lands past the slot's nominal +0.5 s start, transmits the head-truncated
+remainder (ADR 0032, §6), so a slower decode no longer slips a whole cycle.
+PocketFFT still wins on decode speed (~0.72 s on a busy i3-10100F slot vs ~1.5 s
+for gonum + OSD), which keeps the most symbols in a truncated reply and best
+recall. `task deploy:local:dev` already defaults to PocketFFT; a plain static
 release uses gonum.
 
 **What the operator does to keep decode (and the answer-slot timing) fast:**
@@ -445,20 +446,20 @@ read by the e2 resolver. Step (e) breaks into increments:
   `internal/ft8/sequencer.go` (`Sequencer`) owns one active answer-a-CQ exchange,
   driven per slot from `decodeLoop` via `OnSlot`: it feeds the worked station's
   decode to the e2 `Exchange.Advance`, then transmits the next rung in the
-  **current slot started late** (`seqTransmit` → `TransmitNow`, bare waveform) in
-  the parity **opposite** theirs — the only timing that answers a CQ correctly
-  (decode completes ~1 s into our slot; the next boundary would be their parity →
-  collision). Off-ramps (ADR 0031): late-start guard — send the rung only if the
-  decode finished within `maxStartDt` (≈ 1.74 s = 15 − 12.96 s waveform − 0.3 s) of
-  the slot boundary, else skip and retry next cycle (+30 s) — plus
+  **current slot** on a **synchronised timebase** (`seqTransmit` →
+  `TransmitCurrentSlot`) in the parity **opposite** theirs — the only timing that
+  answers a CQ correctly (the next boundary would be their parity → collision).
+  Because the decode lands ~0.7 s into our slot, past the nominal +0.5 s start, the
+  controller drops the elapsed head and transmits the **synchronised remainder**
+  (truncate-don't-shift, ADR 0032); the receiver re-syncs on the Costas arrays
+  (QEX §8 — a reply up to ~5 s late, ~8 s with AP-mycall, still decodes). Off-ramps
+  (ADR 0031): late-window guard — `txLateWindowSec` (~4.5 s into the slot) skips a
+  rung only when too few symbols would survive truncation; plus
   N-unanswered-repeats → abandon, abort on Disarm/Abandon, never auto-switch
-  targets. **Timing decision (settled 2026-06-11, benchmark-validated):** the
-  current-slot late-`dt` reply is kept over a clean `dt=0` "next appropriate slot"
-  (which would cost +30 s on *every* rung). On a busy 21-signal slot on an
-  i3-10100F, OSD-on decode is ~0.72 s with PocketFFT (≈1 s headroom under
-  `maxStartDt`) vs ~1.5 s with gonum (~0.24 s — borderline), so **PocketFFT is the
-  supported live-TX build** (§2). A gonum miss is not a failed QSO, just a +30 s
-  rung retry. On the 73 it captures a `CompletedQso`
+  targets. **PocketFFT remains the preferred live-TX build** (§2): a faster decode
+  (~0.72 s busy-slot vs ~1.5 s gonum) keeps more symbols in a truncated reply and
+  best recall, but a slower decode now truncates rather than slipping a cycle. On
+  the 73 it captures a `CompletedQso`
   (e4 logs). Endpoints `POST /v1/ft8/qso/{start,abandon}` (start gated on TX armed;
   our identity resolved daemon-side from config, not client-sent) + the `ft8-qso`
   SSE. **SPA:** initiation = **click a CQ row in Band Activity** (clickable when TX
