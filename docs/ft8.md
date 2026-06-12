@@ -525,7 +525,13 @@ read by the e2 resolver. Step (e) breaks into increments:
   (ADR 0031): late-window guard — `txLateWindowSec` (~4.5 s into the slot) skips a
   rung only when too few symbols would survive truncation; plus
   N-unanswered-repeats → abandon, abort on Disarm/Abandon, never auto-switch
-  targets. **PocketFFT remains the preferred live-TX build** (§2): a faster decode
+  targets. **First-rung immediate-fire (2026-06-12):** `StartQso` takes `now` and a
+  `fireOpening(now)` helper sends the opening call in the click's *current* TX slot
+  when it's the opposite parity within `txLateWindowSec` — otherwise the opening rung
+  waits for the next qualifying `OnSlot`, which lands at a boundary, so a click just
+  after one stalled a full ~30 s cycle. (Caller-side Call CQ is unchanged — it picks
+  its CQ parity as the *next* slot, so its first CQ is already ≤ ~15 s.) **PocketFFT
+  remains the preferred live-TX build** (§2): a faster decode
   (~0.72 s busy-slot vs ~1.5 s gonum) keeps more symbols in a truncated reply and
   best recall, but a slower decode now truncates rather than slipping a cycle. On
   the 73 it captures a `CompletedQso`

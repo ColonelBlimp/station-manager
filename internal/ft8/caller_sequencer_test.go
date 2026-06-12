@@ -55,7 +55,7 @@ func TestCallerSequencer_StartErrors(t *testing.T) {
 	// One session at a time — a second call-CQ OR an answer-a-CQ is refused.
 	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", now), ErrQsoInProgress)
 	require.ErrorIs(t,
-		s.StartQso("7Q5MLV", "KH78", "K1ABC", "", now.Format(time.RFC3339), 2700, 28.074),
+		s.StartQso("7Q5MLV", "KH78", "K1ABC", "", now.Format(time.RFC3339), 2700, 28.074, now),
 		ErrQsoInProgress)
 }
 

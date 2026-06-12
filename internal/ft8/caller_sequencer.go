@@ -62,6 +62,10 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 		Float64("offset_hz", offsetHz).Str("their_period", s.theirPeriod).
 		Msg("ft8 seq: calling CQ")
 	s.publish(st)
+	// No immediate-fire here (unlike answering a CQ): we chose our CQ parity as the
+	// NEXT slot, so the first CQ goes out at the upcoming boundary (≤ one slot, ~15 s)
+	// via onSlotCalling — already far better than the answer-a-CQ worst case, and we
+	// don't claim the current slot for a CQ.
 	return nil
 }
 

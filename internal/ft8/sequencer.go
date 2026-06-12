@@ -145,7 +145,7 @@ func newSequencer(transmit func(string, float64) error, publish func(QsoStatus),
 // the CQ was heard in (it fixes the worked station's parity — we transmit in the
 // opposite one). offsetHz is the operator-picked clear offset. Idempotency: only
 // one QSO at a time (ErrQsoInProgress).
-func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
@@ -173,6 +173,9 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", s.theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: answering CQ")
 	s.publish(st)
+	// Send the opening call this slot if we're already in our TX window — else the
+	// first rung waits for the next qualifying OnSlot (up to a full cycle late).
+	s.fireOpening(now)
 	return nil
 }
 
@@ -341,6 +344,80 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		}
 		s.publish(QsoStatus{Active: false})
 	}
+}
+
+// slotStart returns the UTC 15-second slot boundary containing t, epoch-aligned to
+// match SlotRefFromTime's parity convention (:00/:15/:30/:45).
+func slotStart(t time.Time) time.Time {
+	u := t.Unix()
+	return time.Unix(u-u%slotSeconds, 0).UTC()
+}
+
+// fireOpening transmits the opening rung IMMEDIATELY if, at start time, we are
+// already inside our own TX slot (parity opposite the partner's) and early enough
+// that head-truncation still leaves a decodable signal (ADR 0032). Without this,
+// the opening rung waits for the next qualifying OnSlot — which lands at a slot
+// boundary, so a session started just after one misses the current TX slot and
+// stalls a full ~30 s cycle. A no-op (the OnSlot path then drives normally) when
+// we're in the partner's slot or past the late window. Called once, right after
+// StartQso / StartCallCq set up state. The opening rung is always non-terminal
+// (answer: "calling"; call-CQ: the CQ), so there is no completion path here.
+func (s *Sequencer) fireOpening(now time.Time) {
+	s.mu.Lock()
+	// Resolve the opening message for the active mode.
+	var msg, rung string
+	switch s.mode {
+	case seqAnswering:
+		if s.ex == nil {
+			s.mu.Unlock()
+			return
+		}
+		m, ok := s.ex.TxMessage()
+		if !ok {
+			s.mu.Unlock()
+			return
+		}
+		msg, rung = m, s.ex.State.label()
+	case seqCalling:
+		if s.caller != nil { // a contact already started — not an opening
+			s.mu.Unlock()
+			return
+		}
+		msg, rung = s.cqMessage, "calling-cq"
+	default:
+		s.mu.Unlock()
+		return
+	}
+
+	// Only the current slot of OUR parity (opposite the partner's) is transmittable,
+	// and only within the late window (else too few symbols survive truncation).
+	curStart := slotStart(now)
+	if SlotRefFromTime(curStart).Period == s.theirPeriod {
+		s.mu.Unlock()
+		return // current slot is the partner's parity — leave it to OnSlot
+	}
+	dt := now.Sub(curStart).Seconds()
+	if dt < 0 || dt > txLateWindowSec {
+		s.mu.Unlock()
+		return
+	}
+
+	s.repeats++
+	transmit, offset, repeats := s.transmit, s.offsetHz, s.repeats
+	st := s.statusLocked()
+	s.mu.Unlock()
+
+	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
+		Float64("dt_s", dt).Int("repeats", repeats).Bool("immediate", true).
+		Msg("ft8 seq: transmitting rung")
+	if err := transmit(msg, offset); err != nil {
+		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
+		if stderrors.Is(err, ErrTxNotArmed) {
+			s.Abandon() // TX disarmed under us — can't continue.
+			return
+		}
+	}
+	s.publish(st)
 }
 
 // statusLocked builds the QsoStatus snapshot for the active session. Caller holds s.mu.

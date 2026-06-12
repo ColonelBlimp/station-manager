@@ -280,7 +280,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
 	}
-	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz)
+	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
 // StartCallCq begins a sequenced Call-CQ session (ADR 0033): we call CQ in our slot

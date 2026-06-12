@@ -76,7 +76,7 @@ func TestSequencer_HappyPath(t *testing.T) {
 
 	// Answer K1ABC's CQ heard in the even slot at epoch 0.
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
-		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.True(t, s.Active())
 
 	// Their re-CQ (or silence) → we send our call.
@@ -108,7 +108,7 @@ func TestSequencer_HappyPath(t *testing.T) {
 func TestSequencer_OnlyTransmitsOppositeParity(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	// A slot of OUR parity (odd, sec=15) just decoded → nothing to send.
 	ref := SlotRefFromTime(time.Unix(15, 0).UTC())
@@ -120,10 +120,38 @@ func TestSequencer_OnlyTransmitsOppositeParity(t *testing.T) {
 	require.Equal(t, []string{"K1ABC G0XYZ IO91"}, r.sentMsgs())
 }
 
+func TestSequencer_FiresOpeningRungImmediately(t *testing.T) {
+	// Click lands early in our TX slot → the opening call goes out THIS slot without
+	// waiting for the next OnSlot (the first-rung-delay fix). theirSlotUTC even →
+	// theirPeriod even → we TX in odd slots; now = 1 s into the odd slot at unix 15.
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(16, 0).UTC()))
+	require.Equal(t, []string{"K1ABC G0XYZ IO91"}, r.sentMsgs(),
+		"opening call should fire on the start slot, not wait for OnSlot")
+}
+
+func TestSequencer_NoImmediateFireLateOrWrongParity(t *testing.T) {
+	// Too late into our (odd) slot (6 s > 4.5 s) → wait for OnSlot, no immediate fire.
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(15+6, 0).UTC()))
+	require.Empty(t, r.sentMsgs(), "a late start must wait for OnSlot")
+
+	// Starting in the worked station's (even) slot → not ours to transmit in.
+	r2 := &seqRecorder{}
+	s2 := newTestSeq(r2)
+	require.NoError(t, s2.StartQso("G0XYZ", "IO91", "K1ABC", "",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(2, 0).UTC()))
+	require.Empty(t, r2.sentMsgs(), "must not transmit in the worked station's slot")
+}
+
 func TestSequencer_LateStartGuardSkips(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	// Fire OnSlot too late into our slot (6 s in > txLateWindowSec 4.5 s) → skip.
 	ref := SlotRefFromTime(time.Unix(30, 0).UTC())
@@ -136,7 +164,7 @@ func TestSequencer_AbandonsAfterMaxRepeats(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	s.maxRepeats = 2
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	// No answer ever (empty their-slots): call, call, then abandon.
 	driveTheir(s, 30, nil) // repeat 1
@@ -151,17 +179,17 @@ func TestSequencer_StartErrors(t *testing.T) {
 	s := newTestSeq(r)
 	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
 
-	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 0, 14.074), ErrNoOffset)
-	require.Error(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", "not-a-time", 1500, 14.074))
+	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 0, 14.074, time.Unix(0, 0).UTC()), ErrNoOffset)
+	require.Error(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", "not-a-time", 1500, 14.074, time.Unix(0, 0).UTC()))
 
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 1500, 14.074))
-	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "W2XYZ", "", slot, 1500, 14.074), ErrQsoInProgress)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", slot, 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "W2XYZ", "", slot, 1500, 14.074, time.Unix(0, 0).UTC()), ErrQsoInProgress)
 }
 
 func TestSequencer_Abandon(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	s.Abandon()
 	require.False(t, s.Active())
 	// Idle: a their-slot now does nothing.
@@ -172,7 +200,7 @@ func TestSequencer_Abandon(t *testing.T) {
 func TestSequencer_AbandonsWhenDisarmedMidQso(t *testing.T) {
 	r := &seqRecorder{transmitErr: ErrTxNotArmed} // simulate TX disarmed under us
 	s := newTestSeq(r)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "", time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	driveTheir(s, 30, nil) // transmit returns ErrTxNotArmed → abandon
 	require.False(t, s.Active(), "a not-armed transmit abandons the QSO")
 	require.True(t, stderrors.Is(r.transmitErr, ErrTxNotArmed))
