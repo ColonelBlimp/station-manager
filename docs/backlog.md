@@ -176,33 +176,6 @@ when it ships — don't let this rot into a graveyard.
   - **Attended either way:** operator initiates by calling CQ, is present, Abandon stops
     it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why this
     **supersedes the auto-responder framing** of the watch-list item above.
-- **FT8 session log — a Session tab, like Phone/CW.** Phone/CW keeps a client-side
-  session log (`sessionQsosState` → `SessionPanel.svelte`) hosted in `InfoPanel`'s
-  **Session** tab: email-out, edit (via `QsoEditOverlay` / `qsoEditState`), an
-  **Emailed** column, and a count badge. FT8 has none of this — give the FT8 panel a
-  **Session tab** (alongside Occupancy / Operate / Settings) for emailing-out /
-  editing the session's QSOs.
-  - *Reuse, don't duplicate:* `sessionQsosState` is mode-agnostic (a QSO is a QSO).
-    Render the existing `SessionPanel` in the new FT8 tab. **Lean: ONE shared session
-    list across Phone/CW + FT8** so a mixed-mode session emails out together (a mode
-    filter/column is a later nice-to-have). NB the **email-out controls currently live
-    in `InfoPanel`, not `SessionPanel`** (`InfoPanel` builds `{to, uuids[]}` from
-    `sessionQsosState.items` and calls `markEmailed`) — so either lift the email-out +
-    Send affordance into `SessionPanel` (or a shared wrapper) so both hosts get it, or
-    duplicate the small control. Lifting it is cleaner.
-  - *The wiring gap (the real work):* manual QSOs enter `sessionQsosState` via the SPA
-    submit path; **FT8 QSOs are logged daemon-side** (the e4 `SetQsoLogger` sink in
-    `cmd/smd` → `qsoservice.Submit`), so the SPA never sees them and they don't reach
-    the session log. The `ft8-qso` SSE carries only `{active, their_call, state, …}` —
-    not the logged QSO. Fix: on FT8 QSO completion, add the logged QSO to
-    `sessionQsosState`. Options — (a) extend the daemon to emit an **"ft8 qso logged"
-    event** carrying the logged QSO (uuid + the summary fields `SessionPanel` shows +
-    what email-out needs by uuid); SPA adds it. (b) SPA re-fetches the just-logged QSO
-    on completion. **Lean (a)** — a uuid-bearing logged event gives email-out its
-    by-uuid handle directly and keeps the SPA from guessing which row was written.
-  - *Companion to e4:* e4 writes the QSO to the DB; this surfaces the session's logged
-    QSOs for email/edit. Affordances (email-out, edit overlay, Emailed column, count)
-    come free from reusing `SessionPanel` + `sessionQsosState`.
 - **FT8 Rx Frequency pane — cap the decode list + add a worked-station enrichment
   card.** The Rx Frequency column (`Ft8Panel.svelte`, `rxDecodes`) renders a tall
   scrolling decode list that earns little mid-QSO — the worked station transmits once
@@ -224,6 +197,10 @@ when it ships — don't let this rot into a graveyard.
   - *Field set (lean, DX-focused):* flag · country · DXCC prefix; grid → **bearing +
     distance** (short/long — the FT8 DXing headline); **worked-before** on band+mode
     (the dupe tint already computed); CQ/ITU zone · continent; name/QTH secondary.
+    (NB **per-CQ-row beam heading already shipped 2026-06-12** — Band Activity shows a
+    short-path bearing on each CQ row via `pathInfo`, for pre-aiming before you answer.
+    This card is the *persistent worked-station* view during an active QSO — distance +
+    long-path + country, keyed on `qso.theirCall` — not a duplicate of the per-row one.)
   - *Idle state (DECIDED 2026-06-12):* when no QSO is active the pane is **blank —
     mirror the Phone/CW `CountryPanel` empty state** (same placeholder presentation, so
     the two modes feel consistent). The idle offset-decode list is **dropped** (the

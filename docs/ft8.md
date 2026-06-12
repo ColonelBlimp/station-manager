@@ -105,8 +105,18 @@ The header **Operating Mode** switch chooses Phone/CW vs FT8; the choice is
 persisted to `localStorage` (survives reload). FT8 mode renders `Ft8Panel`,
 which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 
-- **Band Activity** — live decode feed: `time · SNR · freq · message`, newest
-  slot on top, frequency-ascending within a slot. Two display preferences, edited
+- **Band Activity** — live decode feed under a **sticky column header**
+  (`dB · Hz · Beam · Message`) that stays pinned while the rows scroll; one row
+  per decode, newest slot on top, frequency-ascending within a slot. Each CQ row
+  that carries a grid shows a **beam heading** — the short-path bearing from your
+  grid (`my_gridsquare`) to the CQ's grid (e.g. `045°`, indigo column) — so you can
+  aim the antenna before answering. It reuses the same `pathInfo` bearing math as
+  the Phone/CW Country panel, purely SPA-side (blank when the CQ has no grid or
+  your grid is unset). In `accumulate` mode a **slot divider** (`HH:MM:SS · band`)
+  heads each slot's block; the per-row timestamp was dropped (redundant with the
+  divider + the footer's slot clock). The footer slot label is `HH:MM:SS · even/odd`
+  — a raw "N busy" count was removed as un-actionable (the occupancy strip carries
+  congestion visually). Two display preferences, edited
   from the **Settings tab** (see below) and **daemon-backed** — they live in
   `config.json` under `ft8.display`, not browser localStorage, so they're durable
   per-operator (survive a browser change / data clear), read by the SPA from
@@ -153,15 +163,29 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   `ft8State.decodes`, no daemon change. (Replaced the temporary "TX Frequency"
   occupied-Hz validation view, which the Occupancy-tab strip superseded.)
 - **Lower section — tabs** (same tablist pattern + `.tab-item` class as InfoPanel,
-  full WAI-ARIA keyboard nav): **Occupancy** (the TX Offset strip below), **Operate**
-  (`Ft8MsgPanel` — the FT8 transmit surface, see next bullet), and
-  **Settings** (`Ft8SettingsPanel` — the FT8 display preferences: row cap, feed mode,
-  CQ highlight colours). The Settings tab saves the **same way as the My Station tab**
+  full WAI-ARIA keyboard nav; each tab carries a Heroicon to read alike with the
+  Phone/CW InfoPanel tabs): **Occupancy** (chart-bar — the TX Offset strip below),
+  **Operate** (signal — `Ft8MsgPanel`, the FT8 transmit surface, see next bullet),
+  **Session** (list-bullet — the shared session log, see below), and **Settings**
+  (cog — `Ft8SettingsPanel`, the FT8 display preferences: row cap, feed mode, CQ
+  highlight colours). The Settings tab saves the **same way as the My Station tab**
   — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
   `/v1/config` (bundling the current `logging_station`/`station` so the unconditional
   overwrite doesn't clobber them) and re-hydrates from the response.
   (The **"Next slot in Ns · even/odd" countdown** sits in the main panel footer below
   the activity row, so it stays visible regardless of the active lower tab.)
+- **Session tab** (`SessionPanel` + `SessionEmailControls`) — the **shared** session
+  QSO log, identical to InfoPanel's Session tab: a "session" is everything worked
+  this sitting **across both modes**, so FT8 QSOs and Phone/CW QSOs share one list
+  (`sessionQsosState`) and one email-out, and FT8 QSOs also appear in the Phone/CW
+  Session tab. FT8 QSOs reach the list via the **`ft8-logged` SSE event** (below):
+  the daemon emits each completed exchange's session fields — carrying the canonical
+  **UUID**, so email-out and edit work for FT8 rows exactly as for Phone/CW. A
+  recipient input + paper-plane button (the extracted `SessionEmailControls`, used by
+  both panels) emails the session ADIF when the daemon mailer is configured. (Known
+  gap: the Country column is blank for FT8 rows — no enrichment at FT8 log time; the
+  *emailed* ADIF is unaffected, rebuilt daemon-side from the stored DB row. Distance
+  is computed SPA-side from your grid.)
 - **Operate tab** (`Ft8MsgPanel`) — the FT8 transmit surface: an **Enable/Disable TX**
   button (the arm gate; red when enabled, gated on a live rig via
   `displayedState.isLive`); **Call CQ** and **Abandon** buttons, always visible but
@@ -243,8 +267,10 @@ later increment; for now it takes the first valid answerer.
 
 ### SSE wire — `GET /v1/ft8/events`
 
-Four event types over one stream, each with a replay cache (a tab connecting
-mid-session gets the current state immediately):
+Five event types over one stream. The first four are **replay-cached** (a tab
+connecting mid-session gets the current state immediately); `ft8-logged` is a
+one-shot notification and deliberately **not** cached (replaying it to a late
+subscriber would duplicate a session-list row):
 
 - **`ft8-decode`** → `DecodeReport{ slot, decodes:[{text, freq_hz, dt_s, snr}] }`
 - **`ft8-occupancy`** → `OccupancyReport{ slot, passband, signal_width_hz,
@@ -253,6 +279,11 @@ mid-session gets the current state immediately):
   transmit arm/in-flight status (step e1).
 - **`ft8-qso`** → `QsoStatus{ active, their_call, state, next_message, repeats }` —
   the manual sequencer's active contact (step e3).
+- **`ft8-logged`** → `LoggedQso{ uuid, callsign, freq_hz, band, rst_sent, rst_rcvd,
+  mode, time_on, qso_date, gridsquare }` — a completed exchange the daemon just
+  stored (step e4), so the SPA adds it to its session list. Emitted by the e4 sink
+  (`cmd/smd`) after a successful `qsoservice.Submit`, via `Service.PublishQsoLogged`;
+  `internal/ft8` builds the payload (`NewLoggedQso`) but never touches storage.
 
 ## 4. How occupancy works
 
@@ -595,7 +626,8 @@ timing.
   leaves, so the device is only held while an FT8 view is open),
   `scheduler.go` + `ring.go` (UTC slots), `decode.go` (go-ft8 wrapper +
   `DecodeReport`), `occupancy.go` (detector + ranking + guard), `modulate.go`
-  (GFSK + offline round-trip), `hub.go` + `handler.go` (SSE). Capture seam:
+  (GFSK + offline round-trip), `qsolog.go` (`BuildQso` + the `LoggedQso` payload /
+  `NewLoggedQso` mapper for the `ft8-logged` event), `hub.go` + `handler.go` (SSE). Capture seam:
   `source_cgo.go` / `source_nocgo.go`, `internal/audio/capture`. Output device:
   `internal/audio/playback` (S16 mono playback, `//go:build cgo`). TX (ADR 0030):
   `txkeyer.go` (`TxKeyer`/`slotPlayer` seams) + `txcontroller.go` (slot-aligned
@@ -605,8 +637,13 @@ timing.
 - **Dev tools:** `cmd/ft8-capture-probe` (list/validate capture + decode smoke),
   `cmd/ft8-tx-probe` (list playback devices + encode-and-play; `-key` keys the rig
   for one slot — REAL RF, gated), `cmd/ft8-decode-file` (offline WAV decode). All CGO.
-- **SPA:** `frontend/logging/src/lib/states/ft8.svelte.ts` (EventSource consumer),
-  `lib/ui/panels/Ft8Panel.svelte`, `lib/ui/cards/LoggingCard.svelte` (mode switch).
+- **SPA:** `frontend/logging/src/lib/states/ft8.svelte.ts` (EventSource consumer;
+  the `ft8-logged` listener builds a session row — distance via `pathInfo`, dedup by
+  uuid — and calls `sessionQsosState.add`), `lib/ui/panels/Ft8Panel.svelte`,
+  `lib/ui/cards/LoggingCard.svelte` (mode switch). Session tab reuses
+  `lib/ui/panels/SessionPanel.svelte` + the extracted
+  `lib/ui/panels/SessionEmailControls.svelte` (recipient + send, shared with InfoPanel).
+  Per-CQ beam heading: `lib/utils/bearing.ts` (`pathInfo`).
   Band Activity CQ enrichment: `lib/states/ft8Enrich.svelte.ts` (per-`call|band`
   cache + fail-soft flag/worked lookups + configurable highlight colours),
   `lib/utils/ft8Message.ts` (`parseCqCall`), `lib/utils/flag.ts` (`ccodeToFlag`),
