@@ -28,8 +28,50 @@ when it ships — don't let this rot into a graveyard.
   open FT8 view; acquire only once CAT comes up (and release the mic if CAT
   drops). Stay fail-soft (subsystem idle, no crash) when CAT is absent.
 
+- **Rx Frequency table shows duplicate rows when feed mode ≠ "single".** With the
+  FT8 display feed mode set to anything other than `single` (i.e. `accumulate`),
+  duplicate entries appear in the Rx Frequency pane. Likely the `rxDecodes` filter
+  in `Ft8Panel.svelte` surfaces the same station decoded across multiple
+  accumulated slots (filter is by callsign in-QSO / offset±tol idle, with no
+  per-call/per-offset dedup), which reads as duplicates. Investigate: confirm
+  whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
+  and decide whether the Rx pane should collapse to the latest decode per station.
+
+- **Answer-a-CQ: first rung waits a full cycle (~30 s) — SUBSUMED by ADR 0032.**
+  `Sequencer.StartQso` only sets up the exchange and never transmits; the only
+  transmit trigger is `OnSlot`, and the one that would fire the opening call
+  already ran with `s.ex == nil` (it's what produced the clickable CQ), so the
+  first reply waits for the next their-parity slot. **Not fixed as a standalone
+  patch** — the ADR 0032 timing rework (synchronised timebase + transmit on the
+  next opposite-parity boundary, truncated if late) fixes this structurally. Kept
+  here as a symptom to verify gone once 0032 lands.
+
+- **Answer-a-CQ: Abandon does not stop an in-flight transmission.** Clicking
+  Abandon mid-transmit clears the sequencer but the current rung's waveform plays
+  to completion with PTT keyed. `Service.AbandonQso` (`internal/ft8/servicetx.go`)
+  only calls `seq.Abandon()` (clears `s.ex`, prevents the *next* rung) but never
+  cancels the in-flight TX. Disable TX (`disarmTx`) already does the right thing
+  via `s.txCancel()` (controller honours `ctx.Done()` → `player.Stop()` + deferred
+  PTT unkey, txcontroller.go). **Fix:** `AbandonQso` should also call the in-flight
+  `s.txCancel()` (snapshot under `txMu`), **without disarming** — stay armed + keep
+  the output device so the operator can answer another CQ. The tracked goroutine
+  then flips `txInFlight` false and republishes; the cancel is a normal stop (no
+  error toast). Guaranteed-stop-adjacent — operator expects RF to stop on Abandon.
+
 ## Features / enhancements
 
+- **Implement ADR 0032 — FT8 TX timing: synchronised timebase + truncate-when-late.**
+  Replace the sequencer's full-waveform-shifted-late model (`seqTransmit` →
+  `TransmitNow`, gated on `maxStartDt ≈ 1.74 s`) with the QEX §8 model: ride a
+  slot-synchronised timebase (symbol 0 at boundary + 0.5 s), transmit each rung on
+  the next opposite-parity boundary, and when the decode/click lands late emit the
+  **truncated** synchronised waveform (drop the elapsed head) instead of shifting a
+  full one — gaining the ~5–8 s (AP-mycall) late tolerance. Touches
+  `internal/ft8/modulate.go`/`EncodeToSlot` (slot-offset-aligned, head-truncated
+  emission), `txcontroller.go` (`TransmitNow` → slot-aware truncated send), and
+  `sequencer.go` (drop the full-fit guard for a "symbols-remain" guard). Fixes the
+  first-rung delay structurally. Update CLAUDE.md + `docs/ft8.md` timing prose when
+  it lands. See ADR 0032.
 - **FT8 offset picker — daemon-side no-overlap snap + click-anywhere.**
   `Ft8OccupancyStrip` offers daemon-vetted clear offsets as discrete markers
   today; clicking arbitrary spectrum (with a daemon-side snap to the nearest
@@ -61,6 +103,14 @@ when it ships — don't let this rot into a graveyard.
     tolerance). **No new daemon op or endpoint** — tuning is just `set_freq`.
   - *Note:* the existing button labelled **"18m" is the 17m band** (18.100 MHz) —
     fix the label when this lands. Bands present: 160/80/60/40/30/20/17/15/12/10/6.
+- **Show the next slot's parity (even/odd) in the slot countdown.** The "Next slot
+  in Ns" header should also say whether that next slot is even or odd, e.g. "Next
+  slot in 7s · even". NB the countdown actually lives in **`Ft8MsgPanel.svelte`**
+  (the `secondsToNextSlot` header, line ~141), not `Ft8Panel.svelte` (which only
+  carries the `· even/odd ·` parity in its `slotLabel`). Derive the next slot's
+  parity from the epoch slot index (`Math.floor(nowSec / 15) + 1`) and match the
+  daemon's even/odd convention (`SlotRefFromTime` / `ft8State.slot.period`) so the
+  two readouts agree.
 - **Rename the "Ladder" tab to "Operate"** in `Ft8Panel.svelte`. The lower-section
   tab currently titled "Ladder" (`tabs` array, id `ladder`, renders `Ft8MsgPanel`)
   should read **Operate**. Tab title only — the `id`/`role`/`aria` wiring can stay
@@ -74,3 +124,12 @@ when it ships — don't let this rot into a graveyard.
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
   QEX FT8 specification forbids automatic operation and it is licence-restricted
   in many jurisdictions. SM is attended-only. This is not a roadmap item.
+- **"Design our own sequencing/timing" — future thinking (flagged 2026-06-12).**
+  Operator wants to revisit, later, whether SM grows its own sequencing/timing
+  design rather than mirroring WSJT-X's. Hard constraint to carry into that
+  conversation: anything on the air as *FT8* must stay protocol-interoperable —
+  the Costas sync, 15 s cadence, and 0.5 s nominal start are protocol, not SM
+  choices; a genuinely new mode would need its own Costas arrays (per the QEX
+  licence restriction on non-conforming streaming) and would not be "FT8". So the
+  open design space is SM's own sequencer *architecture / policy / UX*, not the
+  on-air timing of standard FT8. No action now — recorded so it isn't lost.
