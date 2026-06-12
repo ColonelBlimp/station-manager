@@ -37,7 +37,15 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	q.Freq = freq
 	q.Band = utils.FrequencyToBand(freq)
 	q.QsoDate = now.Format("20060102")
-	q.TimeOn = now.Format("150405")
+	// time_on/time_off are HHMM (the storage schema's CHECK constraint requires
+	// exactly 4 chars, matching the rest of the logging path — not ADIF's optional
+	// HHMMSS). now is the completion instant (73 sent), so it is the true TIME_OFF;
+	// TIME_ON reuses it as a close approximation — an FT8 exchange spans ~2 min, well
+	// inside QSL time-matching tolerance. Threading the real StartQso instant through
+	// for an exact TIME_ON is a noted follow-up.
+	hhmm := now.Format("1504")
+	q.TimeOn = hhmm
+	q.TimeOff = hhmm
 	if c.HasOurReport {
 		q.RstSent = strconv.Itoa(c.OurReport)
 	}

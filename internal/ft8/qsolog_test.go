@@ -38,7 +38,12 @@ func TestBuildQso(t *testing.T) {
 	require.Equal(t, "14.075500", q.Freq)
 	require.Equal(t, "20m", q.Band)
 	require.Equal(t, "20260610", q.QsoDate)
-	require.Equal(t, "143045", q.TimeOn)
+	// HHMM, not HHMMSS — the qso table's time_on/time_off CHECK constraint requires
+	// exactly 4 chars (length(time_on) = 4). Both come from `now` (the completion
+	// instant). This is the regression guard for the constraint-violation that
+	// silently failed every FT8 QSO insert until 2026-06-12.
+	require.Equal(t, "1430", q.TimeOn)
+	require.Equal(t, "1430", q.TimeOff)
 	require.Equal(t, "-12", q.RstSent) // we sent
 	require.Equal(t, "-10", q.RstRcvd) // they sent us
 }

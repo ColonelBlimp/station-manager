@@ -204,6 +204,36 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
     work is a separate callsign-based action for the step-(e) sequencer, not a
     frequency this strip sets.
 
+### Working a CQ — what to expect on the air
+
+Clicking a CQ row sends a **directed** reply — `<their-call> <your-call> <your-grid>`
+(e.g. `JA6CPQ 7Q5MLV KH78`), **never a CQ**. The sequencer repeats that call once per
+your-parity slot until the station answers or you Abandon. (You can confirm exactly
+what went out in the daemon log: `ft8 seq: transmitting rung` records the literal
+message, rung, offset, and how late into the slot it fired.)
+
+**Don't expect the station you answered to always come back.** Two normal FT8
+realities — neither a fault in SM, and both visible in the log as a string of
+`calling`-rung transmits with no advance:
+
+- **Propagation + power.** A weak-path or low-power signal may simply not decode at
+  the far end. From a rare/remote location at low power, easy-path stations (e.g.
+  same-or-neighbouring continent) hear you while harder paths (trans-equatorial,
+  polar, the far side of the world) often don't — so the JA/US station you called
+  stays silent even though your call went out correctly.
+- **Pile-ups on a rare prefix.** The moment you transmit, your callsign is visible to
+  the whole passband (FT8 RX is wideband — everyone decodes everyone). DXers chasing a
+  rare prefix call *you* with their grid regardless of who you're working, so you
+  routinely see a *different* station answer you (`<your-call> <their-call> <grid>`)
+  while the one you picked never replies. That is the pile-up, not a sequencing bug.
+
+**Operational takeaway:** from a sought-after location, work the callers in your
+pile-up rather than chasing weak-path CQs. Caller-side sequencing — taking forward the
+stations that call *you* — is deferred scope today: SM currently completes a QSO only
+when *you* click someone else's CQ (a station calling *you* is a directed line, not a
+CQ, so it isn't a clickable row). To work a pile-up of your own callers right now, fall
+back to manual / WSJT-X operation.
+
 ### SSE wire — `GET /v1/ft8/events`
 
 Four event types over one stream, each with a replay cache (a tab connecting
