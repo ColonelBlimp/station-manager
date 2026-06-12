@@ -19,10 +19,30 @@
     // Mode switch). See ft8.svelte.ts. The enrichment cache is dropped on leave
     // too so a re-open re-resolves against current operating history.
     onMount(startFt8);
+
+    // Slot countdown — FT8 slots align to the UTC :00/:15/:30/:45 boundaries. This
+    // panel stays mounted the whole time FT8 mode is shown, so the footer countdown
+    // is live regardless of which lower tab is active. Light 500 ms tick.
+    const SLOT_SECONDS = 15; // FT8 slot length (protocol constant)
+    let nowSec = $state(Math.floor(Date.now() / 1000));
+    let slotTimer: ReturnType<typeof setInterval> | undefined;
+    onMount(() => {
+        slotTimer = setInterval(() => (nowSec = Math.floor(Date.now() / 1000)), 500);
+    });
     onDestroy(() => {
         stopFt8();
         ft8EnrichState.clear();
+        clearInterval(slotTimer);
     });
+
+    // Countdown to the next slot + that slot's parity. seconds-to-next = 15 −
+    // (epoch mod 15) (epoch 0 is a slot boundary). Next-slot parity matches the
+    // daemon convention (occupancy.go SlotRefFromTime): (unix / 15) % 2 == 0 → even
+    // (:00/:30), else odd (:15/:45).
+    const secondsToNextSlot = $derived(SLOT_SECONDS - (nowSec % SLOT_SECONDS));
+    const nextSlotParity = $derived(
+        (Math.floor(nowSec / SLOT_SECONDS) + 1) % 2 === 0 ? 'even' : 'odd'
+    );
 
     // Current operating band, derived from the selected VFO. The worked-before
     // lookup is band+mode-specific, so the band is part of each enrichment key.
@@ -132,7 +152,7 @@
     type Ft8TabId = 'occupancy' | 'ladder' | 'settings';
     const tabs: { id: Ft8TabId; title: string }[] = [
         { id: 'occupancy', title: 'Occupancy' },
-        { id: 'ladder', title: 'Ladder' },
+        { id: 'ladder', title: 'Operate' },
         { id: 'settings', title: 'Settings' },
     ];
     let activeTab: Ft8TabId = $state('occupancy');
@@ -308,10 +328,15 @@
         {/if}
     </div>
 </div>
+<!-- Slot countdown — moved here from the Operate tab so it's visible regardless of
+     the active lower tab; sits at the bottom of the main activity row. -->
+<div class="text-center text-gray-700 text-sm font-semibold pt-2 pb-1">
+    Next slot in {secondsToNextSlot}s · {nextSlotParity}
+</div>
 <!--
     Tabbed lower section (same tablist pattern + .tab-item class as InfoPanel):
       - Occupancy — the TX-offset picker strip (Ft8OccupancyPanel)
-      - Ladder    — the FT8 message sequencer (Ft8MsgPanel; stub until step e3)
+      - Operate   — the FT8 transmit surface + message ladder (Ft8MsgPanel)
       - Settings  — FT8 display preferences (Ft8SettingsPanel), daemon-backed
     WAI-ARIA tabs contract mirrors InfoPanel: roving tabindex, arrow/Home/End
     navigation with auto-activation.

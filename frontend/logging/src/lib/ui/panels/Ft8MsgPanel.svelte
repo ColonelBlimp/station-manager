@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
     import { ft8State } from '../../states/ft8.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
@@ -47,16 +46,17 @@
     // deferred call-CQ scope, and qso.active will extend to it when it lands.
     const canAbandon = $derived(tx.armed && qso.active);
 
-    // ---- Call-CQ message ladder (presentational) ------------------------------
-    // The full call-CQ exchange, one slot per row top to bottom: our TX messages
-    // interleaved with the remote station's expected responses (rx). Unknowns are
-    // placeholders — <DX> (their callsign), <GRID> (their locator), <RST> (a
-    // signal report) — that resolve as the QSO progresses. The highlighted row is
-    // our message for the current slot. NOTE: calling-CQ sequencing is the
-    // deferred call-CQ scope (today Call CQ is single-shot), so for now the active
-    // rung is borrowed from the answer-a-CQ qso.state machine
-    // (calling→reporting→confirming) — that makes the highlight demoable via
-    // ?__ft8demo=1..4; the real call-CQ driver replaces it when that backend lands.
+    // ---- Message ladder --------------------------------------------------------
+    // One slot per row, top to bottom: our TX messages interleaved with the remote
+    // station's expected responses (rx); the highlighted row is the current slot.
+    // Unknowns are placeholders — <DX> (their call), <GRID> (locator), <RST> (report).
+    // Two ladders, branched on qso.active:
+    //   - answer-a-CQ (qso.active, e3): the REAL exchange we drive — our rungs are
+    //     grid → R-report → 73, advancing on the daemon's qso.state.
+    //   - call-CQ (idle + armed): still PRESENTATIONAL — calling-CQ sequencing is the
+    //     deferred caller-side scope (Call CQ is single-shot today). Its highlight is
+    //     borrowed from the qso.state machine so it stays demoable via ?__ft8demo=1..4
+    //     until the caller-side driver lands.
     const dxCall = $derived(qso.theirCall || '<DX>');
     const callerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
         { dir: 'tx', text: cqMessage },
@@ -66,6 +66,7 @@
         { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
         { dir: 'rx', text: `${myCall} ${dxCall} 73` },
     ]);
+
     // The highlighted row is the message for the CURRENT slot. qso.state names our
     // transmit rung (tx rows 0 / 2 / 4); while we're actually transmitting it, that
     // TX row is current — but between transmissions, when we're listening for the
@@ -76,6 +77,27 @@
         if (!qso.active) return txRow;
         return tx.transmitting ? txRow : txRow + 1;
     });
+
+    // Answer-a-CQ ladder (qso.active): we are the ANSWERING station — our rungs are
+    // grid → R-report → 73 (tx rows 0/2/4), interleaved with the worked station's
+    // replies. RST values aren't exposed to the SPA, so reports stay <RST>.
+    const answerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
+        { dir: 'tx', text: `${dxCall} ${myCall}${myGrid ? ` ${myGrid}` : ' <GRID>'}` },
+        { dir: 'rx', text: `${myCall} ${dxCall} <RST>` },
+        { dir: 'tx', text: `${dxCall} ${myCall} R<RST>` },
+        { dir: 'rx', text: `${myCall} ${dxCall} RR73` },
+        { dir: 'tx', text: `${dxCall} ${myCall} 73` },
+    ]);
+    const answerStep = $derived.by(() => {
+        const txRow = qso.state === 'reporting' ? 2 : qso.state === 'confirming' ? 4 : 0;
+        const next = tx.transmitting ? txRow : txRow + 1;
+        return Math.min(next, answerLadder.length - 1);
+    });
+
+    // Rendered ladder + highlight: the real answer ladder while answering a CQ,
+    // else the presentational caller ladder (armed + idle).
+    const ladder = $derived(qso.active ? answerLadder : callerLadder);
+    const ladderStep = $derived(qso.active ? answerStep : callerStep);
 
     let arming = $state(false);
     let sending = $state(false);
@@ -115,39 +137,26 @@
         }
     }
 
-    // Slot countdown — SPA-derived (FT8 slots align to UTC :00/:15/:30/:45). A
-    // light ticker; the tab only mounts this panel while it's the active tab.
-    let nowSec = $state(Math.floor(Date.now() / 1000));
-    let timer: ReturnType<typeof setInterval> | undefined;
-    onMount(() => {
-        timer = setInterval(() => (nowSec = Math.floor(Date.now() / 1000)), 500);
-    });
-    onDestroy(() => clearInterval(timer));
-    // Epoch seconds align to the UTC :00/:15/:30/:45 slot boundaries (epoch 0 is
-    // a boundary), so seconds-to-next is just 15 − (epoch % 15): a 15→1 countdown.
-    const secondsToNextSlot = $derived(15 - (nowSec % 15));
-
     // Status line under the controls.
     const statusLine = $derived.by(() => {
-        if (!tx.armed) return 'TX disabled.';
+        if (!tx.armed) return 'Tx disabled.';
         if (tx.transmitting)
             return `Transmitting ${tx.message || cqMessage} @ ${tx.offsetHz || offset} Hz…`;
         if (tx.error) return `Last transmission failed (${tx.error}).`;
-        return 'TX Enabled — ready.';
+        return 'Tx Enabled — ready.';
     });
 </script>
 
-<div class="flex flex-col text-sm text-gray-700 h-56">
-    <h3 class="text-center my-1 font-semibold text-lg w-full">Next slot in {secondsToNextSlot}s</h3>
+<div class="flex flex-col text-sm text-gray-700 h-44 mt-4">
     <div class="flex flex-row h-46">
         <div class="w-full px-2">
             {#if tx.armed}
                 <div
                     class="flex flex-col py-0 font-mono text-sm text-left border border-gray-300 rounded"
                 >
-                    {#each callerLadder as m, i (i)}
+                    {#each ladder as m, i (i)}
                         <div
-                            class="items-center h-6 flex gap-x-2 rounded px-2 {i === callerStep
+                            class="items-center h-6 flex gap-x-2 rounded px-2 {i === ladderStep
                                 ? 'bg-indigo-100 font-semibold text-indigo-800'
                                 : m.dir === 'rx'
                                   ? 'italic text-gray-400'
@@ -163,7 +172,7 @@
             {/if}
         </div>
         <div class="flex flex-col gap-1 w-50 z-10">
-            <div class="flex flex-col gap-y-2 h-80">
+            <div class="flex flex-col gap-y-2 h-34">
                 <button
                     type="button"
                     class="btn btn-primary"
@@ -190,7 +199,7 @@
                         ? 'bg-red-600 text-white hover:bg-red-700'
                         : 'bg-focus text-surface hover:opacity-90'}"
                 >
-                    {tx.armed ? 'Disable TX' : 'Enable TX'}
+                    {tx.armed ? 'Disable Tx' : 'Enable Tx'}
                 </button>
             </div>
         </div>
