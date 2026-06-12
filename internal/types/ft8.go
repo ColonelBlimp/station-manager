@@ -143,9 +143,42 @@ type Ft8TXConfig struct {
 	// a rewritten config.
 	Mode string `json:"mode,omitempty"`
 
+	// CallerAnswerMode selects how a sequenced Call-CQ session picks which station
+	// to work when stations answer (ADR 0033): "auto_first" works the first valid
+	// answerer (WSJT-X "Auto Seq"); "operator_pick" queues answerers for the
+	// operator to pop (the pile-up stack). Empty/invalid → the
+	// ResolveFt8CallerAnswerMode default (auto_first). Edited from the FT8 Settings
+	// tab once operator_pick ships; until then the daemon reads it from config.json.
+	CallerAnswerMode string `json:"caller_answer_mode,omitempty"`
+
 	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
 	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
 	Occupancy *Ft8OccupancyConfig `json:"occupancy,omitempty"`
+}
+
+// Caller-answer-mode literals (ADR 0033) for Ft8TXConfig.CallerAnswerMode.
+const (
+	Ft8CallerAnswerAutoFirst    = "auto_first"    // work the first valid answerer (WSJT-X "Auto Seq")
+	Ft8CallerAnswerOperatorPick = "operator_pick" // queue answerers; operator pops one (pile-up stack)
+
+	// DefaultFt8CallerAnswerMode is the resolve fallback (ADR 0033).
+	DefaultFt8CallerAnswerMode = Ft8CallerAnswerAutoFirst
+)
+
+// Ft8CallerAnswerModeValid reports whether s is an accepted caller-answer-mode literal.
+func Ft8CallerAnswerModeValid(s string) bool {
+	return s == Ft8CallerAnswerAutoFirst || s == Ft8CallerAnswerOperatorPick
+}
+
+// ResolveFt8CallerAnswerMode returns the effective caller-answer mode: the operator's
+// setting when valid, else the default (auto_first). A nil TX block resolves to the
+// default. ADR 0033 — when WE call CQ, which answering station do we work: the first
+// one automatically, or one the operator picks from the stack.
+func ResolveFt8CallerAnswerMode(c *Ft8TXConfig) string {
+	if c == nil || !Ft8CallerAnswerModeValid(c.CallerAnswerMode) {
+		return DefaultFt8CallerAnswerMode
+	}
+	return c.CallerAnswerMode
 }
 
 // Ft8OccupancyConfig tunes the per-slot occupancy detector and the clear-offset

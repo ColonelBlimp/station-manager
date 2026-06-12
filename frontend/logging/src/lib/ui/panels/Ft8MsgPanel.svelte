@@ -2,20 +2,22 @@
     import { ft8State } from '../../states/ft8.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
-    import { armFt8Tx, sendFt8Tx } from '../../api/ft8tx';
-    import { abandonFt8Qso } from '../../api/ft8qso';
+    import { armFt8Tx } from '../../api/ft8tx';
+    import { abandonFt8Qso, startFt8Cq } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
 
     /*
-        FT8 transmit (ADR 0029/0030/0031). The daemon owns the TX path (arm gate +
-        guaranteed stop) and the sequencer; this panel is the SPA surface:
-          - Arm/Disarm + a slot countdown (always).
-          - When a sequenced answer-a-CQ contact is active (ft8State.qso.active —
-            started by clicking a CQ row in Band Activity, step e3): the live rung,
-            next message, and an Abandon button. The daemon auto-advances the
-            CQ→73 ladder; the operator only watches + can bail.
-          - When idle + armed: a manual "Call CQ" send on the picked offset (e1).
-        Arm/send/abandon go through lib/api; the daemon confirms by push, so the UI
+        FT8 transmit (ADR 0029/0030/0031/0033). The daemon owns the TX path (arm gate
+        + guaranteed stop) and the sequencer; this panel is the SPA surface:
+          - Arm/Disarm (always).
+          - A sequenced session is driven by the daemon and shown live via
+            ft8State.qso (role + rung); the operator only watches + can Abandon:
+              · answer-a-CQ (role "answerer", started by clicking a CQ in Band
+                Activity, step e3): our rungs grid → R-report → 73.
+              · call-CQ (role "caller", started by the Call CQ button, ADR 0033):
+                we call CQ and work the stations that answer, looping the pile-up.
+          - When idle + armed: Call CQ starts a caller session on the picked offset.
+        Arm/start/abandon go through lib/api; the daemon confirms by push, so the UI
         reflects ft8State.tx / ft8State.qso rather than optimistic local state.
     */
 
@@ -32,31 +34,33 @@
     const tx = $derived(ft8State.tx);
     const qso = $derived(ft8State.qso);
     const offset = $derived(ft8State.selectedOffset);
+    // The rig dial frequency (selected VFO), in Hz; the daemon logs each contact at
+    // dial + audio offset, so Call CQ passes opFreq / 1e6 MHz.
+    const opFreq = $derived(
+        displayedState.selectedVfo === 'B' ? displayedState.vfoB : displayedState.vfoA
+    );
     // Arming a disconnected rig just 503s; gate on the live-rig signal so the
     // control is only offered when it can work.
     const canArm = $derived(displayedState.isLive);
-    // Manual Call CQ is only offered when idle (no sequenced contact in flight).
+    // Call CQ starts a caller session — offered only when armed, idle (no session in
+    // flight), an offset is picked, and we have a callsign.
     const canSend = $derived(
         tx.armed && !tx.transmitting && !qso.active && offset !== null && cqMessage !== ''
     );
-    // Abandon stays disabled until there is a sequenced exchange to bail out of —
-    // answering a CQ (qso.active), the only thing abandonFt8Qso can cancel today.
-    // Always disabled when TX isn't armed. A single-shot Call CQ is deliberately
-    // NOT covered (it has no abandonable state); calling-CQ sequencing is the
-    // deferred call-CQ scope, and qso.active will extend to it when it lands.
+    // Abandon is enabled whenever a sequenced session is active (answer-a-CQ or
+    // call-CQ) and TX is armed — abandonFt8Qso drops either.
     const canAbandon = $derived(tx.armed && qso.active);
 
     // ---- Message ladder --------------------------------------------------------
     // One slot per row, top to bottom: our TX messages interleaved with the remote
     // station's expected responses (rx); the highlighted row is the current slot.
     // Unknowns are placeholders — <DX> (their call), <GRID> (locator), <RST> (report).
-    // Two ladders, branched on qso.active:
-    //   - answer-a-CQ (qso.active, e3): the REAL exchange we drive — our rungs are
-    //     grid → R-report → 73, advancing on the daemon's qso.state.
-    //   - call-CQ (idle + armed): still PRESENTATIONAL — calling-CQ sequencing is the
-    //     deferred caller-side scope (Call CQ is single-shot today). Its highlight is
-    //     borrowed from the qso.state machine so it stays demoable via ?__ft8demo=1..4
-    //     until the caller-side driver lands.
+    // Two ladders, branched on the session role (ft8State.qso.role):
+    //   - answer-a-CQ ("answerer", e3): our rungs are grid → R-report → 73.
+    //   - call-CQ ("caller", ADR 0033): CQ → report → RR73, advancing on the daemon's
+    //     qso.state (calling-cq → reporting → rogering).
+    // Both are LIVE — driven by the daemon's qso.state. When idle the caller ladder
+    // is a static preview (the CQ row highlighted).
     const dxCall = $derived(qso.theirCall || '<DX>');
     const callerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
         { dir: 'tx', text: cqMessage },
@@ -67,13 +71,12 @@
         { dir: 'rx', text: `${myCall} ${dxCall} 73` },
     ]);
 
-    // The highlighted row is the message for the CURRENT slot. qso.state names our
-    // transmit rung (tx rows 0 / 2 / 4); while we're actually transmitting it, that
-    // TX row is current — but between transmissions, when we're listening for the
-    // remote's reply, the current row is the RX row just below (1 / 3 / 5).
-    // Idle/armed (no exchange yet) sits on the CQ row.
+    // The highlighted row is the message for the CURRENT slot. The caller's TX rungs
+    // are rows 0 (calling-cq) / 2 (reporting) / 4 (rogering); while transmitting that
+    // rung is current, and between transmissions (listening for the reply) the RX row
+    // just below (1 / 3 / 5) is. Idle (no session) sits on the CQ row.
     const callerStep = $derived.by(() => {
-        const txRow = qso.state === 'reporting' ? 2 : qso.state === 'confirming' ? 4 : 0;
+        const txRow = qso.state === 'reporting' ? 2 : qso.state === 'rogering' ? 4 : 0;
         if (!qso.active) return txRow;
         return tx.transmitting ? txRow : txRow + 1;
     });
@@ -94,10 +97,12 @@
         return Math.min(next, answerLadder.length - 1);
     });
 
-    // Rendered ladder + highlight: the real answer ladder while answering a CQ,
-    // else the presentational caller ladder (armed + idle).
-    const ladder = $derived(qso.active ? answerLadder : callerLadder);
-    const ladderStep = $derived(qso.active ? answerStep : callerStep);
+    // Rendered ladder + highlight: the answer ladder while answering a CQ (role
+    // "answerer"), else the caller ladder — live while calling CQ (role "caller"),
+    // or a static preview when idle.
+    const answering = $derived(qso.active && qso.role === 'answerer');
+    const ladder = $derived(answering ? answerLadder : callerLadder);
+    const ladderStep = $derived(answering ? answerStep : callerStep);
 
     let arming = $state(false);
     let sending = $state(false);
@@ -130,7 +135,9 @@
         if (sending || offset === null || cqMessage === '') return;
         sending = true;
         try {
-            const out = await sendFt8Tx(cqMessage, offset);
+            // Start a sequenced Call-CQ session (ADR 0033). The daemon resolves our
+            // callsign/grid from config; we pass the offset + dial freq for logging.
+            const out = await startFt8Cq(offset, opFreq / 1_000_000);
             if (out.kind !== 'ok') toasts.error(out.message);
         } finally {
             sending = false;
@@ -179,7 +186,7 @@
                     onclick={callCq}
                     disabled={!canSend || sending}
                 >
-                    {tx.transmitting && !qso.active ? 'Transmitting…' : 'Call CQ'}
+                    {qso.active && qso.role === 'caller' ? 'Calling CQ…' : 'Call CQ'}
                 </button>
                 <button
                     type="button"

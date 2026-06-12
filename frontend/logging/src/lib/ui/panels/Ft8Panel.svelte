@@ -234,7 +234,7 @@
     </li>
 {/snippet}
 
-<div class="flex justify-center h-80 text-gray-500 space-x-3">
+<div class="flex justify-center h-80 text-gray-500 space-x-3 mt-1">
     <div class="flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
         <div class="flex flex-col place-items-center px-2 space-y-1">
@@ -266,7 +266,7 @@
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
         <div
-            class="flex ft8-panel-height flex-col rounded border border-gray-300 overflow-y-scroll"
+            class="flex h-60 flex-col rounded border border-gray-300 overflow-y-scroll"
         >
             {#if ft8State.decodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
@@ -282,9 +282,7 @@
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Rx Frequency</h2>
-        <div
-            class="flex ft8-panel-height flex-col rounded border border-gray-300 overflow-y-scroll"
-        >
+        <div class="flex h-19 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if rxDecodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each rxDecodes as d (d.id)}
@@ -299,7 +297,9 @@
                 <p class="mt-1 text-xs">Pick an offset on the Occupancy tab.</p>
             {/if}
         </div>
-        <div class="mt-0.5 text-gray-700 text-xs">{rxCaption}</div>
+        <div class="h-39 mt-2 border rounded border-gray-300 bg-gray-100 px-2 py-0.5 text-xs">
+Enrichment
+        </div>
     </div>
     <div class="flex flex-col text-center w-20">
         <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>
@@ -330,10 +330,14 @@
 </div>
 <!-- Slot countdown — moved here from the Operate tab so it's visible regardless of
      the active lower tab; sits at the bottom of the main activity row. -->
-<div class="text-center text-gray-700 text-sm font-semibold pt-2 pb-1">
-    Next slot in {secondsToNextSlot}s · {nextSlotParity}
+<div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5">
+    <div class="flex">
+        Next slot in {secondsToNextSlot}s · {nextSlotParity}
+    </div>
+    <div class="">&nbsp;|&nbsp;</div>
+    <div class="">{rxCaption}</div>
 </div>
-<!--
+    <!--
     Tabbed lower section (same tablist pattern + .tab-item class as InfoPanel):
       - Occupancy — the TX-offset picker strip (Ft8OccupancyPanel)
       - Operate   — the FT8 transmit surface + message ladder (Ft8MsgPanel)

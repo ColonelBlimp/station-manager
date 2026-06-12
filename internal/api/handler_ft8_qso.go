@@ -61,8 +61,50 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// handleFt8QsoAbandon drops any active sequenced QSO. Idempotent — abandoning
-// when idle is a 202 no-op.
+// ft8CqStartRequest is the POST /v1/ft8/cq/start body (ADR 0033): call CQ and work
+// the stations that answer, transmitting on `offset_hz`. Our callsign/grid are
+// resolved server-side from the station config (like qso/start); the answerer-
+// selection mode is daemon config (ft8.tx.caller_answer_mode). One session at a time.
+type ft8CqStartRequest struct {
+	OffsetHz float64 `json:"offset_hz"`
+	// OperatingFreqMHz is the rig's dial frequency (the SPA reads it from the live
+	// rig state); the logged QSO frequency is this + the audio offset.
+	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
+}
+
+// handleFt8CqStart begins a sequenced Call-CQ session (ADR 0033, step e + caller
+// side). Registered only when FT8 is enabled; requires TX already armed. A 202 means
+// "the sequencer is now calling CQ and will work answerers"; progress (calling-cq →
+// per-contact rungs) rides the ft8-qso SSE.
+func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8CqStart"
+
+	var req ft8CqStartRequest
+	if !s.readJSONBody(w, r, op, &req) {
+		return
+	}
+
+	// Our identity is daemon-owned (the station config), not client-supplied.
+	ls := s.cfg.Snapshot().LoggingStation
+	ourCall := strings.TrimSpace(ls.StationCallsign)
+	if ourCall == "" {
+		ourCall = strings.TrimSpace(ls.Operator)
+	}
+	if ourCall == "" {
+		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
+			"set your station callsign in My Station before calling CQ", op)
+		return
+	}
+
+	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleFt8QsoAbandon drops any active sequenced session — answer-a-CQ or Call-CQ.
+// Idempotent — abandoning when idle is a 202 no-op.
 func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, _ *http.Request) {
 	s.ft8.AbandonQso()
 	w.WriteHeader(http.StatusAccepted)

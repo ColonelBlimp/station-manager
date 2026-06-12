@@ -182,6 +182,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// exchange the daemon then auto-advances. Same enablement gate.
 		mux.HandleFunc("POST /v1/ft8/qso/start", s.handleFt8QsoStart)
 		mux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
+		// Caller-side sequencer (ADR 0033) — start a Call-CQ session that works the
+		// stations that answer (auto_first / operator_pick per ft8.tx.caller_answer_mode);
+		// abandon uses the shared qso/abandon route. Same enablement gate.
+		mux.HandleFunc("POST /v1/ft8/cq/start", s.handleFt8CqStart)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

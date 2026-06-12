@@ -4,9 +4,11 @@ import (
 	"context"
 	stderrors "errors"
 	"strconv"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // FT8 transmit wiring (ADR 0030 step e1) — the daemon-reachable TX path.
@@ -279,6 +281,24 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 		return errors.New(op).WithErr(ErrTxNotArmed)
 	}
 	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz)
+}
+
+// StartCallCq begins a sequenced Call-CQ session (ADR 0033): we call CQ in our slot
+// parity and work the stations that answer, one at a time, looping until AbandonQso.
+// Requires TX **armed** — the sequencer keys through the armed controller. The
+// answerer-selection mode is read from ft8.tx.caller_answer_mode (default auto_first).
+// ourCall/ourGrid are the station identity the api layer resolved from config;
+// offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency.
+func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64) error {
+	const op errors.Op = "ft8.Service.StartCallCq"
+	s.txMu.Lock()
+	armed := s.txArmed
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	mode := types.ResolveFt8CallerAnswerMode(s.cfg.TX)
+	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, time.Now().UTC())
 }
 
 // SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029

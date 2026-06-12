@@ -153,27 +153,30 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   `ft8State.decodes`, no daemon change. (Replaced the temporary "TX Frequency"
   occupied-Hz validation view, which the Occupancy-tab strip superseded.)
 - **Lower section — tabs** (same tablist pattern + `.tab-item` class as InfoPanel,
-  full WAI-ARIA keyboard nav): **Occupancy** (the TX Offset strip below), **Ladder**
+  full WAI-ARIA keyboard nav): **Occupancy** (the TX Offset strip below), **Operate**
   (`Ft8MsgPanel` — the FT8 transmit surface, see next bullet), and
   **Settings** (`Ft8SettingsPanel` — the FT8 display preferences: row cap, feed mode,
   CQ highlight colours). The Settings tab saves the **same way as the My Station tab**
   — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
   `/v1/config` (bundling the current `logging_station`/`station` so the unconditional
   overwrite doesn't clobber them) and re-hydrates from the response.
-- **Ladder tab** (`Ft8MsgPanel`) — the FT8 transmit surface: an **Enable/Disable TX**
+  (The **"Next slot in Ns · even/odd" countdown** sits in the main panel footer below
+  the activity row, so it stays visible regardless of the active lower tab.)
+- **Operate tab** (`Ft8MsgPanel`) — the FT8 transmit surface: an **Enable/Disable TX**
   button (the arm gate; red when enabled, gated on a live rig via
-  `displayedState.isLive`) + a slot countdown; **Call CQ** and **Abandon** buttons
-  always visible but gated (Call CQ enabled only when enabled + idle + offset +
-  callsign; Abandon only while a sequenced answer-a-CQ QSO is active); and a
-  **message ladder** rendering the full call-CQ exchange one slot per row — our TX
-  messages interleaved with the remote's expected responses (`rx`). Unknowns are
-  placeholders: `<DX>` (their call), `<GRID>` (their locator), `<RST>` (a report).
-  The current slot's row is highlighted — our TX row while transmitting, the RX row
-  below while listening for the reply. **NB the ladder is presentational**:
-  calling-CQ *sequencing* is the deferred call-CQ scope (today Call CQ is a
-  single-shot send on the next slot boundary), so the highlight is currently
-  borrowed from the answer-a-CQ `qso.state` machine; the real call-CQ driver
-  replaces it when that backend lands.
+  `displayedState.isLive`); **Call CQ** and **Abandon** buttons, always visible but
+  gated (Call CQ enabled when armed + idle + offset + callsign; Abandon only while a
+  sequenced session — answer-a-CQ or call-CQ — is active); and a **message ladder**
+  rendering the exchange one slot per row — our TX messages interleaved with the
+  remote's expected responses (`rx`), unknowns as placeholders `<DX>` / `<GRID>` /
+  `<RST>`. The current slot's row is highlighted — our TX row while transmitting, the
+  RX row below while listening. **The ladder is LIVE and role-aware**
+  (`ft8State.qso.role`): answering a CQ (`answerer`, e3) shows the answer ladder
+  (grid → R-report → 73); **Call CQ** (`caller`, ADR 0033) starts a *sequenced*
+  session — the daemon calls CQ and auto-works the answerers (per
+  `ft8.tx.caller_answer_mode`, default `auto_first`), the caller ladder highlights the
+  real rung (`calling-cq → reporting → rogering`), and the button reads "Calling CQ…".
+  When idle the caller ladder shows as a static preview.
 - **TX Offset strip** (in the Occupancy tab, shipped 2026-06-09) — a horizontal, per-slot
   *spatial* view of the passband, **channelised** into uniform ~50 Hz slots
   (≈56 across 200–3000). FT8 has no standard offset grid — a signal is ~50 Hz
@@ -232,11 +235,11 @@ realities — neither a fault in SM, and both visible in the log as a string of
   while the one you picked never replies. That is the pile-up, not a sequencing bug.
 
 **Operational takeaway:** from a sought-after location, work the callers in your
-pile-up rather than chasing weak-path CQs. Caller-side sequencing — taking forward the
-stations that call *you* — is deferred scope today: SM currently completes a QSO only
-when *you* click someone else's CQ (a station calling *you* is a directed line, not a
-CQ, so it isn't a clickable row). To work a pile-up of your own callers right now, fall
-back to manual / WSJT-X operation.
+pile-up rather than chasing weak-path CQs — **press Call CQ** and SM works the
+answerers for you (ADR 0033 caller-side sequencing, `auto_first`: it calls CQ,
+auto-works the first answerer through RR73, logs it, and resumes — looping the pile-up
+until you Abandon). Choosing *which* answerer to work (the `operator_pick` stack) is a
+later increment; for now it takes the first valid answerer.
 
 ### SSE wire — `GET /v1/ft8/events`
 
@@ -348,7 +351,7 @@ audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**; call-CQ (operator-initiated) pending. Automatic/unattended sequencing is out of scope — QEX-forbidden. |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**. **Call-CQ `auto_first` shipped 2026-06-12 (ADR 0033)** — Call CQ → daemon works the pile-up (first answerer) → logged, looping until Abandon; the `operator_pick` stack pending. Automatic/unattended sequencing is out of scope — QEX-forbidden. |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
@@ -460,9 +463,10 @@ read by the e2 resolver. Step (e) breaks into increments:
     reflects `ft8State.tx` (the `ft8-tx` SSE): disarmed / armed-ready / "Transmitting … @ N Hz"
     / last-error. Arm + send go through `lib/api/ft8tx.ts` (`armFt8Tx`/`sendFt8Tx` → the two
     POSTs); the daemon confirms by push (no optimistic local state). Free-text send and the
-    click-a-CQ-row sequencer are deliberately deferred to e3. (The Ladder tab has since
-    gained always-visible Call CQ/Abandon buttons and a presentational call-CQ message
-    ladder — see the panel-layout section above.)
+    click-a-CQ-row sequencer are deliberately deferred to e3. (The tab — since renamed
+    **Operate** — has since gained the answer-a-CQ sequencer (e3/e4) and, per ADR 0033,
+    a live caller-side Call-CQ session; its message ladder is now daemon-driven, not
+    presentational — see the panel-layout section above.)
 - **e2 — message model + next-message resolver (pure): SHIPPED 2026-06-10**
   (`internal/ft8/sequence.go`). A `parseMessage` model reduces a decoded line to
   `{kind, to, from, grid, report}` (CQ / grid / report / R-report / RRR·RR73 / 73),
@@ -497,7 +501,7 @@ read by the e2 resolver. Step (e) breaks into increments:
   (e4 logs). Endpoints `POST /v1/ft8/qso/{start,abandon}` (start gated on TX armed;
   our identity resolved daemon-side from config, not client-sent) + the `ft8-qso`
   SSE. **SPA:** initiation = **click a CQ row in Band Activity** (clickable when TX
-  armed + an offset picked + no QSO running → `startFt8Qso`); the Ladder tab shows
+  armed + an offset picked + no QSO running → `startFt8Qso`); the Operate tab shows
   the live rung / next message / Abandon (`ft8State.qso`).
 - **e4 — QSO completion → log: SHIPPED 2026-06-10.** On the 73, the sequencer
   captures a `CompletedQso` and hands it to an **injected sink** (`SetQsoLogger`):
@@ -567,14 +571,17 @@ column); e2's resolver reads the same field to form rung 3.
 
 **STATUS:** **e1–e4 shipped 2026-06-10 — the answer-a-CQ flow is complete end to
 end** (arm → pick offset → click a CQ → auto-advance CQ→73 → **logged**). e1 =
-daemon TX + Ladder Arm/Call-CQ. e2 = pure resolver. e3 = daemon manual sequencer
-(ADR 0031) + click-a-CQ initiation + Ladder view/Abandon. e4 = completed exchange
+daemon TX + Operate-tab Arm/Call-CQ. e2 = pure resolver. e3 = daemon manual sequencer
+(ADR 0031) + click-a-CQ initiation + Operate view/Abandon. e4 = completed exchange
 → `types.Qso` (`BuildQso`) → `qsoservice` via the injected `SetQsoLogger` sink
-(`internal/ft8` stays narrow — no `qsoservice` import). **Next: the deferred
-**call-CQ** scope** (operator-initiated caller-side state machine + multi-answerer
-handling — calling CQ today is only the single-shot button). The send-policy seam
-is ratified (ADR 0031 Accepted). **Automatic/unattended sequencing is out of scope
-and unsupported — the QEX FT8 specification forbids automatic operation.**
+(`internal/ft8` stays narrow — no `qsoservice` import). **Call-CQ caller-side
+sequencing shipped 2026-06-12 (ADR 0033, `auto_first`):** Call CQ starts a sequenced
+session — the daemon calls CQ, auto-works the first answerer through RR73, logs it,
+and loops the pile-up until Abandon (`CallerExchange` + `onSlotCalling` +
+`POST /v1/ft8/cq/start`; needs on-air validation). **Next: the `operator_pick` stack**
+(operator chooses which answerer from a pile-up queue) + its Settings toggle.
+**Automatic/unattended sequencing is out of scope and unsupported — the QEX FT8
+specification forbids automatic operation.**
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
 free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →

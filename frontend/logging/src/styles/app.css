@@ -201,7 +201,4 @@
     .ft8-panel-width {
         @apply w-80;
     }
-    .ft8-panel-height {
-        @apply h-60;
-    }
 }

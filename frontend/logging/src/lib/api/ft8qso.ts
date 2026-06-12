@@ -1,10 +1,12 @@
 /*
     Thin daemon-side wrapper for the FT8 manual-sequencer endpoints (ADR 0031,
-    step e3):
-      - POST /v1/ft8/qso/start   {their_call, their_grid, slot_utc, offset_hz}
-      - POST /v1/ft8/qso/abandon
+    step e3; ADR 0033 caller side):
+      - POST /v1/ft8/qso/start    {their_call, their_grid, slot_utc, offset_hz}
+      - POST /v1/ft8/cq/start     {offset_hz, operating_freq_mhz}
+      - POST /v1/ft8/qso/abandon  (drops either session)
 
-    Start begins answering a CQ; the daemon then auto-advances the CQ→73 ladder.
+    qso/start begins answering a CQ; cq/start begins calling CQ and working the
+    stations that answer. Either way the daemon auto-advances the CQ→73 ladder.
     Both return 202 with no body on success; the contact's progress arrives
     out-of-band as `ft8-qso` SSE events. Our own callsign/grid are resolved
     server-side from the station config, not sent here. Errors carry the daemon's
@@ -27,7 +29,11 @@ interface DaemonError {
     op?: string;
 }
 
-async function postFt8Qso(path: string, body: unknown, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+async function postFt8Qso(
+    path: string,
+    body: unknown,
+    signal?: AbortSignal
+): Promise<Ft8QsoOutcome> {
     const fetched = await safeFetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -74,7 +80,24 @@ export function startFt8Qso(
     );
 }
 
-/** Abandon any active sequenced QSO. */
+/** Start calling CQ (ADR 0033): the daemon calls CQ on offsetHz and works the
+ *  stations that answer, one at a time, until abandoned (auto_first / operator_pick
+ *  per the daemon's ft8.tx.caller_answer_mode). operatingFreqMHz is the rig dial
+ *  frequency (logged QSO freq = dial + offset). Our callsign/grid are resolved
+ *  server-side from the station config. */
+export function startFt8Cq(
+    offsetHz: number,
+    operatingFreqMHz: number,
+    signal?: AbortSignal
+): Promise<Ft8QsoOutcome> {
+    return postFt8Qso(
+        '/v1/ft8/cq/start',
+        { offset_hz: offsetHz, operating_freq_mhz: operatingFreqMHz },
+        signal
+    );
+}
+
+/** Abandon any active sequenced session — answer-a-CQ or Call-CQ. */
 export function abandonFt8Qso(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
     return postFt8Qso('/v1/ft8/qso/abandon', {}, signal);
 }

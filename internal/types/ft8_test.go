@@ -65,3 +65,25 @@ func TestFt8FeedModeValid(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveFt8CallerAnswerMode(t *testing.T) {
+	cases := []struct {
+		name string
+		in   *Ft8TXConfig
+		want string
+	}{
+		{"nil TX block → default", nil, DefaultFt8CallerAnswerMode},
+		{"empty → default", &Ft8TXConfig{}, Ft8CallerAnswerAutoFirst},
+		{"invalid → default", &Ft8TXConfig{CallerAnswerMode: "bogus"}, Ft8CallerAnswerAutoFirst},
+		{"auto_first honoured", &Ft8TXConfig{CallerAnswerMode: "auto_first"}, Ft8CallerAnswerAutoFirst},
+		{"operator_pick honoured", &Ft8TXConfig{CallerAnswerMode: "operator_pick"}, Ft8CallerAnswerOperatorPick},
+	}
+	for _, c := range cases {
+		if got := ResolveFt8CallerAnswerMode(c.in); got != c.want {
+			t.Errorf("%s: ResolveFt8CallerAnswerMode = %q, want %q", c.name, got, c.want)
+		}
+	}
+	if DefaultFt8CallerAnswerMode != Ft8CallerAnswerAutoFirst {
+		t.Errorf("default = %q, want auto_first", DefaultFt8CallerAnswerMode)
+	}
+}

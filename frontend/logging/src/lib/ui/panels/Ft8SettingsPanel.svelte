@@ -53,9 +53,9 @@
     }
 </script>
 
-<div class="flex flex-col gap-4 px-2 py-4 text-sm text-gray-700" style="max-width: 28rem">
+<div class="flex gap-x-6 px-2 py-4 text-sm text-gray-700">
+    <div class="flex flex-col w-80">
     <h3 class="font-semibold text-gray-800">Band Activity</h3>
-
     <label class="flex items-center justify-between gap-3">
         <span>Max rows shown</span>
         <!-- Bound directly to the daemon-mirrored config; the daemon clamps the
@@ -69,7 +69,7 @@
         />
     </label>
 
-    <label class="flex items-center justify-between gap-3">
+    <label class="flex items-center justify-between gap-3 pt-1">
         <span>Feed mode</span>
         <select
             bind:value={configState.ft8Display.feedMode}
@@ -79,6 +79,8 @@
             <option value="single">Single slot</option>
         </select>
     </label>
+    </div>
+    <div class="flex flex-col w-66">
 
     <h3 class="mt-2 font-semibold text-gray-800">CQ highlight colours</h3>
 
@@ -101,10 +103,10 @@
             aria-label="Worked-before highlight colour"
         />
     </label>
-
-    <div class="mt-2">
-        <button type="button" class="btn btn-primary" onclick={onSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
-        </button>
     </div>
+</div>
+<div class="mt-2">
+    <button type="button" class="btn btn-primary" onclick={onSave} disabled={saving}>
+        {saving ? 'Saving…' : 'Save'}
+    </button>
 </div>

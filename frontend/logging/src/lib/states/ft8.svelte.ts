@@ -80,19 +80,22 @@ const emptyTxStatus = (): Ft8TxStatus => ({
     error: '',
 });
 
-/** Manual sequencer status (ADR 0031 step e3). Mirrors `internal/ft8.QsoStatus`
- *  (the `ft8-qso` SSE payload): the active answer-a-CQ contact's rung, worked
- *  call, the message the daemon will send next, and the unanswered-repeat count. */
+/** Manual sequencer status (ADR 0031 step e3 / ADR 0033 caller side). Mirrors
+ *  `internal/ft8.QsoStatus` (the `ft8-qso` SSE payload): the active contact's role
+ *  (answerer/caller), rung, worked call, the message the daemon will send next, and
+ *  the unanswered-repeat count. */
 export interface Ft8QsoStatus {
     active: boolean;
+    role: string; // 'answerer' | 'caller'; '' when idle
     theirCall: string;
-    state: string; // calling | reporting | confirming
+    state: string; // answerer: calling|reporting|confirming · caller: calling-cq|reporting|rogering
     nextMessage: string;
     repeats: number;
 }
 
 const emptyQsoStatus = (): Ft8QsoStatus => ({
     active: false,
+    role: '',
     theirCall: '',
     state: '',
     nextMessage: '',
@@ -312,6 +315,7 @@ function openSource(): void {
         try {
             const p = JSON.parse(ev.data) as Partial<{
                 active: boolean;
+                role: string;
                 their_call: string;
                 state: string;
                 next_message: string;
@@ -319,6 +323,7 @@ function openSource(): void {
             }>;
             ft8State.qso = {
                 active: p.active ?? false,
+                role: p.role ?? '',
                 theirCall: p.their_call ?? '',
                 state: p.state ?? '',
                 nextMessage: p.next_message ?? '',

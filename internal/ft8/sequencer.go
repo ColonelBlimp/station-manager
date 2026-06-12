@@ -36,19 +36,40 @@ var txLateWindowSec = 4.5
 
 // Sequencer sentinels (mapped to HTTP by the api layer).
 var (
-	// ErrQsoInProgress: StartQso while a QSO is already active.
+	// ErrQsoInProgress: a StartQso/StartCallCq while a session is already active.
 	ErrQsoInProgress = stderrors.New("ft8: a QSO is already in progress")
-	// ErrNoOffset: StartQso without a TX offset.
+	// ErrNoOffset: started without a TX offset.
 	ErrNoOffset = stderrors.New("ft8: no TX offset selected")
+	// ErrNoCall: StartCallCq without an operator callsign.
+	ErrNoCall = stderrors.New("ft8: no operator callsign configured")
 )
 
-// QsoStatus is the `ft8-qso` SSE payload + the sequencer's exposed state: the
-// active contact's rung, the worked call, the message we'll send next, and the
-// unanswered-repeat count. Active=false means idle (no QSO).
+// seqMode is the active sequencer session: idle, answering a CQ (ex drives), or
+// calling CQ (caller drives, ADR 0033). Only one session is active at a time.
+type seqMode int
+
+const (
+	seqIdle seqMode = iota
+	seqAnswering
+	seqCalling
+)
+
+// QsoStatus roles (the `ft8-qso` SSE Role field) — which side of the contact we
+// are, so the SPA renders the matching ladder.
+const (
+	roleAnswerer = "answerer"
+	roleCaller   = "caller"
+)
+
+// QsoStatus is the `ft8-qso` SSE payload + the sequencer's exposed state: the role
+// (answerer/caller), the active contact's rung, the worked call, the message we'll
+// send next, and the unanswered-repeat count. Active=false means idle (no session).
 type QsoStatus struct {
-	Active      bool   `json:"active"`
-	TheirCall   string `json:"their_call,omitempty"`
-	State       string `json:"state,omitempty"` // calling | reporting | confirming
+	Active    bool   `json:"active"`
+	Role      string `json:"role,omitempty"` // "answerer" | "caller"; empty when idle
+	TheirCall string `json:"their_call,omitempty"`
+	// State — answerer: calling|reporting|confirming; caller: calling-cq|reporting|rogering.
+	State       string `json:"state,omitempty"`
 	NextMessage string `json:"next_message,omitempty"`
 	Repeats     int    `json:"repeats,omitempty"`
 }
@@ -69,15 +90,34 @@ type CompletedQso struct {
 	DialFreqMHz float64
 }
 
-// Sequencer owns the (single) active exchange. Its dependencies are injected so
-// it stays decoupled from the Service and unit-testable: transmit sends a rung
-// (Service.seqTransmit — current-slot late-dt), publish fans out QsoStatus on the
-// ft8-qso SSE, and onComplete (optional, e4) consumes a finished QSO.
+// Sequencer owns the (single) active session — answering a CQ or calling CQ, never
+// both. Its dependencies are injected so it stays decoupled from the Service and
+// unit-testable: transmit sends a rung (Service.seqTransmit — current-slot late-dt),
+// publish fans out QsoStatus on the ft8-qso SSE, and onComplete (optional, e4)
+// consumes a finished QSO. The caller-side flow (ADR 0033) lives in
+// caller_sequencer.go but shares this struct's deps + the OnSlot entry point.
 type Sequencer struct {
-	mu          sync.Mutex
-	ex          *Exchange // active exchange; nil = idle
-	theirPeriod string    // the worked station's TX parity ("even"/"odd")
-	theirGrid   string
+	mu   sync.Mutex
+	mode seqMode
+
+	// Answering a CQ (seqAnswering): ex is the active exchange; theirGrid is the
+	// worked station's grid from the CQ we answered.
+	ex        *Exchange
+	theirGrid string
+
+	// Calling CQ (seqCalling, ADR 0033): caller is nil while still calling (phase 1),
+	// set once an answerer is chosen (phase 2). cqMessage is repeated each of our
+	// slots until answered; answerMode is auto_first | operator_pick.
+	caller     *CallerExchange
+	ourCall    string
+	ourGrid    string
+	cqMessage  string
+	answerMode string
+
+	// Shared by both modes. theirPeriod is the parity of the slots we PROCESS (the
+	// worked station's when answering, or — when calling CQ — the answerers', i.e.
+	// opposite our CQ parity); we transmit in the opposite (current) slot.
+	theirPeriod string
 	offsetHz    float64
 	dialFreqMHz float64 // rig dial freq at start, for the logged QSO frequency
 	repeats     int
@@ -115,11 +155,12 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	}
 
 	s.mu.Lock()
-	if s.ex != nil {
+	if s.mode != seqIdle {
 		s.mu.Unlock()
 		return ErrQsoInProgress
 	}
 	ex := NewExchange(ourCall, ourGrid, theirCall)
+	s.mode = seqAnswering
 	s.ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.theirGrid = theirGrid
@@ -135,31 +176,49 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	return nil
 }
 
-// Abandon drops the active QSO (operator action, disarm, or off-ramp). Idempotent.
+// Abandon drops the active session — answering or calling CQ (operator action,
+// disarm, or off-ramp). Idempotent.
 func (s *Sequencer) Abandon() {
 	s.mu.Lock()
-	was := s.ex != nil
+	was := s.mode != seqIdle
+	s.mode = seqIdle
 	s.ex = nil
+	s.caller = nil
 	s.repeats = 0
 	s.mu.Unlock()
 	if was {
-		s.log.InfoWith().Msg("ft8 seq: QSO abandoned")
+		s.log.InfoWith().Msg("ft8 seq: session abandoned")
 		s.publish(QsoStatus{Active: false})
 	}
 }
 
-// Active reports whether a QSO is in progress.
+// Active reports whether a session (answering or calling CQ) is in progress.
 func (s *Sequencer) Active() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.ex != nil
+	return s.mode != seqIdle
 }
 
-// OnSlot is the per-slot driver, called by the decode loop once each completed
-// slot. ref is the slot just decoded; msgs are its decodes; now is wall-clock UTC.
-// We act only around the worked station's slot: feed their decodes to Advance,
-// then transmit our rung in the (current) opposite-parity slot, late-dt.
+// OnSlot is the per-slot driver, called by the decode loop once each completed slot.
+// ref is the slot just decoded; msgs are its decodes; now is wall-clock UTC. It
+// dispatches to the active session's handler (answering a CQ, or calling CQ); idle
+// is a no-op. Each handler re-validates its mode under s.mu, so the brief unlocked
+// read here is safe (a concurrent Abandon at worst makes a handler no-op).
 func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
+	s.mu.Lock()
+	mode := s.mode
+	s.mu.Unlock()
+	switch mode {
+	case seqAnswering:
+		s.onSlotAnswering(ref, msgs, now)
+	case seqCalling:
+		s.onSlotCalling(ref, msgs, now)
+	}
+}
+
+// onSlotAnswering drives an answer-a-CQ exchange: feed the worked station's decodes
+// to Advance, then transmit our rung in the (current) opposite-parity slot, late-dt.
+func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
 	// Decide everything under the lock, then run side effects (transmit, publish,
 	// complete) after releasing it — transmit takes the Service's txMu.
 	s.mu.Lock()
@@ -203,6 +262,7 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 	msg, ok := s.ex.TxMessage()
 	if !ok { // exchange already done — shouldn't happen here; clear defensively.
 		s.ex = nil
+		s.mode = seqIdle
 		s.mu.Unlock()
 		s.publish(QsoStatus{Active: false})
 		return
@@ -230,6 +290,7 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		// Calling / Reporting wait for the partner; cap the repeats (off-ramp).
 		if s.repeats >= s.maxRepeats {
 			s.ex = nil
+			s.mode = seqIdle
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: no answer after max repeats; abandoning")
 			s.publish(QsoStatus{Active: false})
@@ -248,6 +309,7 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		c := s.completedQsoLocked()
 		completed = &c
 		s.ex = nil // back to idle once captured
+		s.mode = seqIdle
 	}
 	st := s.statusLocked()
 	s.mu.Unlock()
@@ -279,18 +341,38 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 	}
 }
 
-// statusLocked builds the QsoStatus snapshot. Caller holds s.mu.
+// statusLocked builds the QsoStatus snapshot for the active session. Caller holds s.mu.
 func (s *Sequencer) statusLocked() QsoStatus {
-	if s.ex == nil {
+	switch s.mode {
+	case seqAnswering:
+		if s.ex == nil {
+			return QsoStatus{Active: false}
+		}
+		msg, _ := s.ex.TxMessage()
+		return QsoStatus{
+			Active:      true,
+			Role:        roleAnswerer,
+			TheirCall:   s.ex.TheirCall,
+			State:       s.ex.State.label(),
+			NextMessage: msg,
+			Repeats:     s.repeats,
+		}
+	case seqCalling:
+		// Calling CQ: active from the first CQ. Until a station is being worked
+		// (caller != nil) the rung is "calling-cq" and the next message is the CQ.
+		st := QsoStatus{Active: true, Role: roleCaller, Repeats: s.repeats}
+		if s.caller != nil {
+			msg, _ := s.caller.TxMessage()
+			st.TheirCall = s.caller.TheirCall
+			st.State = s.caller.State.label()
+			st.NextMessage = msg
+		} else {
+			st.State = "calling-cq"
+			st.NextMessage = s.cqMessage
+		}
+		return st
+	default:
 		return QsoStatus{Active: false}
-	}
-	msg, _ := s.ex.TxMessage()
-	return QsoStatus{
-		Active:      true,
-		TheirCall:   s.ex.TheirCall,
-		State:       s.ex.State.label(),
-		NextMessage: msg,
-		Repeats:     s.repeats,
 	}
 }
 

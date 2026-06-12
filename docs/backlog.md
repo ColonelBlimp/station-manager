@@ -11,13 +11,6 @@ when it ships — don't let this rot into a graveyard.
 
 ## Bugs
 
-- **`Ft8MsgPanel.svelte` — Ladder ignores answer-a-CQ.** The message ladder always
-  renders the *caller* (Call-CQ) sequence; when answering a CQ (`qso.active`) it
-  should branch and render an *answer* ladder built from `qso.theirCall` /
-  `qso.state` (`<them> 7Q5MLV KH78` → R<rst> → 73). Display-only — the daemon TX
-  path is correct. Branch on `qso.active`: answer ladder when active, caller
-  ladder when idle.
-
 - **FT8 capture grabs the mic with no CAT / rig off.** Capture is demand-driven
   (acquired when the first `/v1/ft8/events` SSE subscriber connects). On PC boot
   `smd` autostarts and, if the SPA reopens to the FT8 view from last session, it
@@ -91,22 +84,6 @@ when it ships — don't let this rot into a graveyard.
     tolerance). **No new daemon op or endpoint** — tuning is just `set_freq`.
   - *Note:* the existing button labelled **"18m" is the 17m band** (18.100 MHz) —
     fix the label when this lands. Bands present: 160/80/60/40/30/20/17/15/12/10/6.
-- **Show the next slot's parity (even/odd) in the slot countdown.** The "Next slot
-  in Ns" header should also say whether that next slot is even or odd, e.g. "Next
-  slot in 7s · even". NB the countdown actually lives in **`Ft8MsgPanel.svelte`**
-  (the `secondsToNextSlot` header, line ~141), not `Ft8Panel.svelte` (which only
-  carries the `· even/odd ·` parity in its `slotLabel`). Derive the next slot's
-  parity from the epoch slot index (`Math.floor(nowSec / 15) + 1`) and match the
-  daemon's even/odd convention (`SlotRefFromTime` / `ft8State.slot.period`) so the
-  two readouts agree. **Do together with the "move the slot countdown" item below** —
-  apply the parity in the countdown's new home, not its old one.
-- **Move the slot countdown to the main FT8 panel (bottom).** The "Next slot in Ns"
-  readout currently lives in `Ft8MsgPanel.svelte` (the Operate/Ladder tab). Move it
-  to the **main `Ft8Panel.svelte`**, anchored at the **bottom of the panel** (below
-  the Main Freq / Band Activity / Rx Frequency / Clear Offsets region), so it stays
-  visible regardless of which lower tab is active. Render it once from the single
-  source (`ft8State.slot` / `secondsToNextSlot`) and drop the copy from the tab. Pairs
-  with the parity item above (F5): show even/odd in this new main-panel footer.
 - **FT8 Tx even/odd sequence option (caller-side).** WSJT-X's "Tx even/1st": let
   the operator choose which slot parity to transmit in when **calling CQ** (even =
   `:00/:30`, odd = `:15/:45`). Today the single-shot Call CQ (`TransmitNext` →
@@ -159,10 +136,6 @@ when it ships — don't let this rot into a graveyard.
   just non-clickable (lean: hide, with a toggle to reveal); (3) match semantics —
   exact callsign vs prefix/wildcard. Whether it also feeds AP-hint *de*-prioritising
   (ADR 0025) is a later question, not v1.
-- **Rename the "Ladder" tab to "Operate"** in `Ft8Panel.svelte`. The lower-section
-  tab currently titled "Ladder" (`tabs` array, id `ladder`, renders `Ft8MsgPanel`)
-  should read **Operate**. Tab title only — the `id`/`role`/`aria` wiring can stay
-  `ladder` unless a fuller rename is wanted.
 - **FT8 Band Activity — float CQ calls to the top (config toggle, feed mode
   `single`).** In `single` feed mode the operator wants every **CQ** decode grouped
   at the **top** of the Band Activity list (`ft8State.decodes`, the `{#each}` at
@@ -189,40 +162,30 @@ when it ships — don't let this rot into a graveyard.
   `StartQso` instant into `CompletedQso` (a `StartedAt`) and use it for `TIME_ON`,
   keeping `now` for `TIME_OFF`. **Pairs with the held first-rung fix** (Bugs above),
   which also needs the `StartQso` wall-clock injected — do them together.
-- **FT8 caller-side sequencing — pile-up work-stack (DIRECTION CHOSEN 2026-06-12:
-  caller-side first).** When *we* call CQ and stations answer, work them down a queue
-  modelled on the Phone/CW callsign stack
-  (`frontend/logging/src/lib/states/callsignStack.svelte.ts` + `StackingDrawer`).
-  This is the concrete shape of the previously-vague "call-CQ caller-side scope", and
-  it is what was missing on 2026-06-12 when a real 7Q pile-up (DK8IF / DL9UW / … all
-  calling 7Q5MLV) was unworkable. Shape:
-  - *Answerer selection — CONFIG KNOB (decided 2026-06-12), switchable:*
-    - **(a) auto-work the first/strongest answerer** — WSJT-X "Auto Seq" style: the
-      daemon picks the first valid answerer and sequences it to 73. Least clicking.
-    - **(b) operator picks** — answerers populate the stack (below) and the operator
-      pops one to work. The ADR 0031 "operator picks whom to work" path.
-    Stored as a daemon-config setting (e.g. `ft8.tx.caller_answer_mode:
-    auto_first | operator_pick`, with a Settings-tab toggle). Default leans **(a)** per
-    the operator's pick; final call when built.
-  - *The stack (mode b / the worklist):* directed decodes to our call during our CQ
-    (`<ourcall> <them> <grid>`) push onto a LIFO stack (dedup, newest-on-top, mirroring
-    the logging `callsignStack` + `StackingDrawer`); the operator pops an entry (click /
-    Shift+Up = top / Shift+Down = oldest) → the sequencer runs THAT exchange to 73 →
-    auto-pop → next. In mode (a) the daemon auto-pops the first answerer instead.
-  - *Backend (shared by both modes):* the **caller-side ladder** in the Exchange
-    resolver — the mirror of today's answerer ladder: they answer with a grid, WE send
-    the report, they R-report, WE send RR73 (then their optional 73). Reuses ADR 0032
-    timing, the repeat/off-ramp caps, the guaranteed-stop, and the `StartQso`/`OnSlot`
-    machinery adapted to the caller role. Completion → `CompletedQso` → the **e4 sink
-    logs it** (full logging mostly reuses what shipped — the new part is the caller-side
-    report direction). **Warrants an ADR** (extends ADR 0031) when built.
-  - *SPA:* the **Operate** tab — the caller ladder goes live (the answer-ladder branch
-    sits right next to it), plus a stack/drawer for mode (b).
-  - **Attended either way:** the operator initiates by calling CQ, is present, and can
-    Abandon instantly; there is **no auto-CQ cycle and no auto-fire-on-watch-match**.
-    Mode (a) auto-selects the first answerer (the WSJT-X norm); mode (b) the operator
-    pops each. This is why the stack model **supersedes the auto-responder framing** of
-    the watch-list item above.
+- **FT8 caller-side sequencing — `auto_first` SHIPPED 2026-06-12 (ADR 0033); the
+  `operator_pick` stack remains.** When *we* call CQ and stations answer, work them one
+  at a time, looping the pile-up until Abandon. This was the gap on 2026-06-12 when a
+  real 7Q pile-up (DK8IF / DL9UW / …) was unworkable.
+  - **SHIPPED — `auto_first` (the WSJT-X "Auto Seq" mode):** the Operate-tab **Call CQ**
+    button starts a sequenced session (`POST /v1/ft8/cq/start` → `Service.StartCallCq` →
+    the `Sequencer` caller mode) that calls CQ, **auto-works the first answerer** through
+    report → RR73, **logs it via the e4 sink**, then resumes CQ — looping until Abandon.
+    Caller ladder: `internal/ft8/caller.go` (`CallerExchange`); driver:
+    `caller_sequencer.go` (`onSlotCalling`); live role-aware ladder + "Calling CQ…":
+    `Ft8MsgPanel`. Config: `ft8.tx.caller_answer_mode` (default `auto_first`). **Needs
+    on-air validation** — unit-tested + offline-encode-verified only so far.
+  - **REMAINS — `operator_pick` (the pile-up work-stack):** instead of auto-working the
+    first answerer, answerers populate a LIFO stack (mirroring the Phone/CW
+    `callsignStack` + `StackingDrawer`) the operator pops to choose whom to work (the
+    ADR 0031 "operator picks" path). The sequencer already carries `answerMode` and
+    `CallerExchange` is selection-agnostic, so no resolver rework — `operator_pick` adds:
+    (1) the daemon-side "queue answerers / pop to start a `CallerExchange`" branch in
+    `onSlotCalling`; (2) the SPA stack drawer in the Operate tab; (3) the **Settings-tab
+    toggle** for `caller_answer_mode` (deferred with this mode — pointless to toggle to a
+    mode that isn't built; daemon defaults to `auto_first` meanwhile).
+  - **Attended either way:** operator initiates by calling CQ, is present, Abandon stops
+    it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why this
+    **supersedes the auto-responder framing** of the watch-list item above.
 - **FT8 session log — a Session tab, like Phone/CW.** Phone/CW keeps a client-side
   session log (`sessionQsosState` → `SessionPanel.svelte`) hosted in `InfoPanel`'s
   **Session** tab: email-out, edit (via `QsoEditOverlay` / `qsoEditState`), an
