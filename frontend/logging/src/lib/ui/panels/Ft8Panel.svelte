@@ -169,8 +169,8 @@
     const rxCaptionClass = $derived.by(() => {
         if (ft8State.qso.active || ft8State.selectedOffset === null) return '';
         return selectedOffsetBusy
-            ? 'rounded px-1.5 bg-red-600 text-white'
-            : 'rounded px-1.5 bg-green-500 text-white';
+            ? 'rounded px-1.5 bg-red-600 text-white py-0.5'
+            : 'rounded px-1.5 bg-green-500 text-white py-0.5';
     });
 
     // ---- Lower-section tabs (same pattern + .tab-item class as InfoPanel) ----
