@@ -176,12 +176,28 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 	}
 
 	// Advance on their decode directed to us (records their report + our SNR).
+	// Capture what the worked station said to us this slot and whether it advanced
+	// us, so a stalled exchange is diagnosable: did their roger arrive and we fail
+	// to parse it, or did they send nothing we decoded?
+	var heard string
+	advanced := false
 	for _, m := range msgs {
+		if pm := parseMessage(m.Text); pm.to == s.ex.OurCall && pm.from == s.ex.TheirCall {
+			heard = m.Text
+		}
 		if next, ok := s.ex.Advance(m.Text, m.SNR); ok {
 			*s.ex = next
 			s.repeats = 0
+			advanced = true
 			break
 		}
+	}
+	if heard != "" {
+		s.log.InfoWith().
+			Str("from_worked", heard).
+			Bool("advanced", advanced).
+			Str("now_rung", s.ex.State.label()).
+			Msg("ft8 seq: decode from worked station")
 	}
 
 	msg, ok := s.ex.TxMessage()
