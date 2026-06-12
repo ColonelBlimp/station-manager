@@ -62,11 +62,15 @@
     // Both are LIVE — driven by the daemon's qso.state. When idle the caller ladder
     // is a static preview (the CQ row highlighted).
     const dxCall = $derived(qso.theirCall || '<DX>');
+    // Real reports once the daemon knows them (qso.our_report / their_report),
+    // else the <RST> placeholder. ourRst = the report WE send; theirRst = theirs.
+    const ourRst = $derived(qso.ourReport || '<RST>');
+    const theirRst = $derived(qso.theirReport || '<RST>');
     const callerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
         { dir: 'tx', text: cqMessage },
         { dir: 'rx', text: `${myCall} ${dxCall} <GRID>` },
-        { dir: 'tx', text: `${dxCall} ${myCall} <RST>` },
-        { dir: 'rx', text: `${myCall} ${dxCall} R<RST>` },
+        { dir: 'tx', text: `${dxCall} ${myCall} ${ourRst}` },
+        { dir: 'rx', text: `${myCall} ${dxCall} R${theirRst}` },
         { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
         { dir: 'rx', text: `${myCall} ${dxCall} 73` },
     ]);
@@ -83,11 +87,11 @@
 
     // Answer-a-CQ ladder (qso.active): we are the ANSWERING station — our rungs are
     // grid → R-report → 73 (tx rows 0/2/4), interleaved with the worked station's
-    // replies. RST values aren't exposed to the SPA, so reports stay <RST>.
+    // replies. Reports fill from qso.our_report / their_report once known.
     const answerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
         { dir: 'tx', text: `${dxCall} ${myCall}${myGrid ? ` ${myGrid}` : ' <GRID>'}` },
-        { dir: 'rx', text: `${myCall} ${dxCall} <RST>` },
-        { dir: 'tx', text: `${dxCall} ${myCall} R<RST>` },
+        { dir: 'rx', text: `${myCall} ${dxCall} ${theirRst}` },
+        { dir: 'tx', text: `${dxCall} ${myCall} R${ourRst}` },
         { dir: 'rx', text: `${myCall} ${dxCall} RR73` },
         { dir: 'tx', text: `${dxCall} ${myCall} 73` },
     ]);

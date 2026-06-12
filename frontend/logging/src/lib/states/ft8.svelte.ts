@@ -95,6 +95,11 @@ export interface Ft8QsoStatus {
     state: string; // answerer: calling|reporting|confirming · caller: calling-cq|reporting|rogering
     nextMessage: string;
     repeats: number;
+    // Signal reports exchanged, formatted as on the air (e.g. '-12'); '' until known.
+    // ourReport = the report we send; theirReport = the one they sent us. The ladder
+    // fills its <RST> placeholders from these.
+    ourReport: string;
+    theirReport: string;
 }
 
 const emptyQsoStatus = (): Ft8QsoStatus => ({
@@ -104,6 +109,8 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     state: '',
     nextMessage: '',
     repeats: 0,
+    ourReport: '',
+    theirReport: '',
 });
 
 /**
@@ -321,6 +328,8 @@ function openSource(): void {
                 state: string;
                 next_message: string;
                 repeats: number;
+                our_report: string;
+                their_report: string;
             }>;
             ft8State.qso = {
                 active: p.active ?? false,
@@ -329,6 +338,8 @@ function openSource(): void {
                 state: p.state ?? '',
                 nextMessage: p.next_message ?? '',
                 repeats: p.repeats ?? 0,
+                ourReport: p.our_report ?? '',
+                theirReport: p.their_report ?? '',
             };
         } catch (e) {
             console.warn('[ft8] qso JSON parse failed', e);

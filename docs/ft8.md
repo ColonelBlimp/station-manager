@@ -197,7 +197,9 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   sequenced session — answer-a-CQ or call-CQ — is active); and a **message ladder**
   rendering the exchange one slot per row — our TX messages interleaved with the
   remote's expected responses (`rx`), unknowns as placeholders `<DX>` / `<GRID>` /
-  `<RST>`. The current slot's row is highlighted — our TX row while transmitting, the
+  `<RST>` — the **reports fill in live** from `qso.our_report`/`their_report` once the
+  daemon knows them (the `<RST>` slots show the real `-12` etc.). The current slot's
+  row is highlighted — our TX row while transmitting, the
   RX row below while listening. **The ladder is LIVE and role-aware**
   (`ft8State.qso.role`): answering a CQ (`answerer`, e3) shows the answer ladder
   (grid → R-report → 73); **Call CQ** (`caller`, ADR 0033) starts a *sequenced*
@@ -281,7 +283,9 @@ subscriber would duplicate a session-list row):
   occupied:[{low_hz, high_hz, source, level}], suggested:[hz…] }`
 - **`ft8-tx`** → `TxState{ armed, transmitting, message, offset_hz, error }` — the
   transmit arm/in-flight status (step e1).
-- **`ft8-qso`** → `QsoStatus{ active, their_call, state, next_message, repeats }` —
+- **`ft8-qso`** → `QsoStatus{ active, role, their_call, state, next_message, repeats,
+  our_report, their_report }` — `our_report`/`their_report` are the exchanged signal
+  reports (e.g. `-12`), empty until known, used to fill the ladder's `<RST>` slots —
   the manual sequencer's active contact (step e3).
 - **`ft8-logged`** → `LoggedQso{ uuid, callsign, freq_hz, band, rst_sent, rst_rcvd,
   mode, time_on, qso_date, gridsquare }` — a completed exchange the daemon just

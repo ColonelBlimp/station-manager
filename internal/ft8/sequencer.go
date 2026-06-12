@@ -72,6 +72,12 @@ type QsoStatus struct {
 	State       string `json:"state,omitempty"`
 	NextMessage string `json:"next_message,omitempty"`
 	Repeats     int    `json:"repeats,omitempty"`
+	// OurReport / TheirReport — the signal reports exchanged, formatted exactly as
+	// they appear on the air (e.g. "-12", "+04"); empty until known. OurReport is
+	// the report WE send (our SNR of their signal); TheirReport is the one THEY sent
+	// us. The SPA fills the ladder's <RST> placeholders from these.
+	OurReport   string `json:"our_report,omitempty"`
+	TheirReport string `json:"their_report,omitempty"`
 }
 
 // CompletedQso is captured when an exchange finishes (73 sent) — the data e4 maps
@@ -428,7 +434,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			return QsoStatus{Active: false}
 		}
 		msg, _ := s.ex.TxMessage()
-		return QsoStatus{
+		st := QsoStatus{
 			Active:      true,
 			Role:        roleAnswerer,
 			TheirCall:   s.ex.TheirCall,
@@ -436,6 +442,13 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			NextMessage: msg,
 			Repeats:     s.repeats,
 		}
+		if s.ex.HasSendSnr {
+			st.OurReport = formatReport(s.ex.SendSnr)
+		}
+		if s.ex.HasRcvdReport {
+			st.TheirReport = formatReport(s.ex.RcvdReport)
+		}
+		return st
 	case seqCalling:
 		// Calling CQ: active from the first CQ. Until a station is being worked
 		// (caller != nil) the rung is "calling-cq" and the next message is the CQ.
@@ -445,6 +458,12 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			st.TheirCall = s.caller.TheirCall
 			st.State = s.caller.State.label()
 			st.NextMessage = msg
+			if s.caller.HasSendSnr {
+				st.OurReport = formatReport(s.caller.SendSnr)
+			}
+			if s.caller.HasRcvdReport {
+				st.TheirReport = formatReport(s.caller.RcvdReport)
+			}
 		} else {
 			st.State = "calling-cq"
 			st.NextMessage = s.cqMessage
