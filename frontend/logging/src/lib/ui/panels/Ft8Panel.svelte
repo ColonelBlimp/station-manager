@@ -1,6 +1,5 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
-    import Button from '../components/Button.svelte';
     import Ft8OccupancyPanel from './Ft8OccupancyPanel.svelte';
     import Ft8MsgPanel from './Ft8MsgPanel.svelte';
     import Ft8SettingsPanel from './Ft8SettingsPanel.svelte';
@@ -13,6 +12,7 @@
     import { toasts } from '../../states/toasts.svelte';
     import { frequencyToBand } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
+    import { setFreq } from '../../actions/rigControl';
 
     // The occupancy stream is scoped to this view: open while FT8 mode is showing,
     // close on leave (LoggingCard mounts/unmounts this panel with the Operating
@@ -50,6 +50,12 @@
         displayedState.selectedVfo === 'B' ? displayedState.vfoB : displayedState.vfoA
     );
     const band = $derived(frequencyToBand(opFreq));
+
+    // A Main-Freq button highlights when the live dial is within this much of its
+    // configured FT8 freq. The dial sits exactly on the watering hole during FT8, so
+    // the small window only absorbs rig rounding / a fine nudge — it means "you're on
+    // this band's FT8 freq", not merely "somewhere in this band".
+    const BAND_MATCH_TOL_HZ = 500;
 
     // Drive flag + worked-before lookups for the CQ stations on screen. Runs once
     // per slot (when the decode list changes) and on a band change (new keys);
@@ -147,6 +153,25 @@
             return `Offset ${ft8State.selectedOffset} Hz ±${rxTol}`;
         return 'No offset selected';
     });
+    // Is the selected TX offset currently occupied? Mirrors the Occupancy strip's
+    // busy test exactly — overlap of [offset, offset+signalWidth) with any occupied
+    // band — so the footer "Offset N Hz ±tol" readout can flag busy/clear in the same
+    // colours. null when no offset is selected.
+    const selectedOffsetBusy = $derived.by(() => {
+        const off = ft8State.selectedOffset;
+        if (off === null) return null;
+        const hi = off + (ft8State.signalWidth > 0 ? ft8State.signalWidth : 50);
+        return ft8State.occupied.some((b) => off < b.high_hz && hi > b.low_hz);
+    });
+    // Highlight class for the footer Offset readout: red pill = busy, green pill =
+    // clear (the Occupancy strip's red-600 / green-500). Only while idle on a picked
+    // offset; the "Following X" / "No offset" captions stay neutral (inherit gray).
+    const rxCaptionClass = $derived.by(() => {
+        if (ft8State.qso.active || ft8State.selectedOffset === null) return '';
+        return selectedOffsetBusy
+            ? 'rounded px-1.5 bg-red-600 text-white'
+            : 'rounded px-1.5 bg-green-500 text-white';
+    });
 
     // ---- Lower-section tabs (same pattern + .tab-item class as InfoPanel) ----
     type Ft8TabId = 'occupancy' | 'ladder' | 'settings';
@@ -209,12 +234,14 @@
     tab's strip.
 -->
 
-{#snippet decodeRow(d: DecodeEntry)}
+{#snippet decodeRow(d: DecodeEntry, showTime: boolean)}
     {@const cqCall = parseCqCall(d.text)}
     {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
     {@const answerable = cqCall !== null && canAnswer}
     <li class="flex gap-2 whitespace-nowrap">
-        <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
+        {#if showTime}
+            <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
+        {/if}
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
         <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
         {#if info?.flag}
@@ -234,44 +261,57 @@
     </li>
 {/snippet}
 
+<!-- Slot divider for accumulate (multi-slot) Band Activity: the per-row timestamp is
+     dropped, so a divider carries each slot's UTC time + the operating band (e.g.
+     "14:30:15 · 20m"); the rows below keep SNR / freq / flag / message. Single-slot
+     mode shows no divider — the footer already carries the one slot's time. -->
+{#snippet slotSeparator(utc: string)}
+    <li
+        class="mt-0.5 border-t border-gray-200 pt-0.5 text-gray-400 first:mt-0 first:border-t-0 first:pt-0"
+    >
+        {formatUtcClock(new Date(utc))}{#if band}&nbsp;·&nbsp;{band}{/if}
+    </li>
+{/snippet}
+
+<!-- Main-Freq band button: on click tunes the operating VFO to this band's configured
+     FT8 dial freq (setFreq → set_freq when CAT-live, manualState when off), and
+     highlights (btn-primary) when the live dial is already on that freq. Disabled if
+     the band has no configured frequency. -->
+{#snippet bandButton(b: string)}
+    {@const freq = configState.ft8Frequencies[b]}
+    {@const active = freq !== undefined && Math.abs(opFreq - freq) <= BAND_MATCH_TOL_HZ}
+    <button
+        type="button"
+        class="btn w-14 {active ? 'btn-primary' : 'btn-secondary'}"
+        disabled={freq === undefined}
+        title={freq !== undefined ? `Tune ${b} — ${(freq / 1_000_000).toFixed(3)} MHz` : b}
+        onclick={() => freq !== undefined && setFreq(freq)}>{b}</button
+    >
+{/snippet}
+
 <div class="flex justify-center h-80 text-gray-500 space-x-3 mt-1">
     <div class="flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
         <div class="flex flex-col place-items-center px-2 space-y-1">
-            <div class="flex gap-1">
-                <Button id="160m" label="160m" />
-                <Button id="80m" label="80m" />
-            </div>
-            <div class="flex gap-1">
-                <Button id="60m" label="60m" />
-                <Button id="40m" label="40m" />
-            </div>
-            <div class="flex gap-1">
-                <Button id="30m" label="30m" />
-                <Button id="20m" label="20m" />
-            </div>
-            <div class="flex gap-1">
-                <Button id="18m" label="18m" />
-                <Button id="15m" label="15m" />
-            </div>
-            <div class="flex gap-1">
-                <Button id="12m" label="12m" />
-                <Button id="10m" label="10m" />
-            </div>
-            <div class="flex gap-1">
-                <Button id="6m" label="6m" />
-            </div>
+            <div class="flex gap-1">{@render bandButton('160m')}{@render bandButton('80m')}</div>
+            <div class="flex gap-1">{@render bandButton('60m')}{@render bandButton('40m')}</div>
+            <div class="flex gap-1">{@render bandButton('30m')}{@render bandButton('20m')}</div>
+            <div class="flex gap-1">{@render bandButton('17m')}{@render bandButton('15m')}</div>
+            <div class="flex gap-1">{@render bandButton('12m')}{@render bandButton('10m')}</div>
+            <div class="flex gap-1">{@render bandButton('6m')}</div>
         </div>
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
-        <div
-            class="flex h-60 flex-col rounded border border-gray-300 overflow-y-scroll"
-        >
+        <div class="flex h-60 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if ft8State.decodes.length > 0}
+                {@const showSlot = configState.ft8Display.feedMode === 'accumulate'}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
-                    {#each ft8State.decodes as d (d.id)}
-                        {@render decodeRow(d)}
+                    {#each ft8State.decodes as d, i (d.id)}
+                        {#if showSlot && (i === 0 || ft8State.decodes[i - 1].startUtc !== d.startUtc)}
+                            {@render slotSeparator(d.startUtc)}
+                        {/if}
+                        {@render decodeRow(d, false)}
                     {/each}
                 </ul>
             {:else}
@@ -286,7 +326,7 @@
             {#if rxDecodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each rxDecodes as d (d.id)}
-                        {@render decodeRow(d)}
+                        {@render decodeRow(d, true)}
                     {/each}
                 </ul>
             {:else if ft8State.qso.active}
@@ -298,7 +338,7 @@
             {/if}
         </div>
         <div class="h-39 mt-2 border rounded border-gray-300 bg-gray-100 px-2 py-0.5 text-xs">
-Enrichment
+            Enrichment
         </div>
     </div>
     <div class="flex flex-col text-center w-20">
@@ -335,9 +375,9 @@ Enrichment
         Next slot in {secondsToNextSlot}s · {nextSlotParity}
     </div>
     <div class="">&nbsp;|&nbsp;</div>
-    <div class="">{rxCaption}</div>
+    <div class={rxCaptionClass}>{rxCaption}</div>
 </div>
-    <!--
+<!--
     Tabbed lower section (same tablist pattern + .tab-item class as InfoPanel):
       - Occupancy — the TX-offset picker strip (Ft8OccupancyPanel)
       - Operate   — the FT8 transmit surface + message ladder (Ft8MsgPanel)

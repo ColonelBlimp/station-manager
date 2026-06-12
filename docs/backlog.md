@@ -65,25 +65,6 @@ when it ships — don't let this rot into a graveyard.
 - **`ft8.device` name-matching.** Config takes an integer device index from
   `ft8-capture-probe -list`; matching by device *name* (stable across reorder)
   is a noted follow-up.
-- **FT8 "Main Freq" band buttons — config-driven, tune-on-click, highlight
-  current.** The `Ft8Panel` "Main Freq" column is dumb today (`Button.svelte`
-  band labels, no handler, no highlight). Make each band button **jump the rig to
-  that band's FT8 dial frequency** and **highlight the button matching the current
-  dial frequency**. Two parts:
-  - *Daemon config:* a new configurable per-band FT8 dial-frequency block in the
-    single `config.json` under `ft8` (e.g. `ft8.frequencies` map band→Hz), typed
-    in `internal/types/ft8.go` (`Ft8Config`) with a `Resolve…` default = the IARU
-    band plan (operator is Region 1 / 7Q — Region-1 freqs). Configurable per the
-    no-magic-numbers rule; mirrored to the SPA via `/v1/config` (`configState` in
-    `config.svelte.ts`, alongside `ft8Display`).
-  - *SPA wiring:* click → drive the **existing `set_freq` op** (`FA`; already
-    exposed, same path `nudgeFreq` in `actions/rigControl.ts` uses) to the band's
-    configured Hz when CAT is live; when CAT is off, set the selected VFO's
-    `manualState` freq (mirror `nudgeFreq`'s live/manual split). Highlight the
-    button whose configured freq matches the current dial freq (`opFreq`, ±a small
-    tolerance). **No new daemon op or endpoint** — tuning is just `set_freq`.
-  - *Note:* the existing button labelled **"18m" is the 17m band** (18.100 MHz) —
-    fix the label when this lands. Bands present: 160/80/60/40/30/20/17/15/12/10/6.
 - **FT8 Tx even/odd sequence option (caller-side).** WSJT-X's "Tx even/1st": let
   the operator choose which slot parity to transmit in when **calling CQ** (even =
   `:00/:30`, odd = `:15/:45`). Today the single-shot Call CQ (`TransmitNext` →
@@ -174,15 +155,24 @@ when it ships — don't let this rot into a graveyard.
     `caller_sequencer.go` (`onSlotCalling`); live role-aware ladder + "Calling CQ…":
     `Ft8MsgPanel`. Config: `ft8.tx.caller_answer_mode` (default `auto_first`). **Needs
     on-air validation** — unit-tested + offline-encode-verified only so far.
-  - **REMAINS — `operator_pick` (the pile-up work-stack):** instead of auto-working the
-    first answerer, answerers populate a LIFO stack (mirroring the Phone/CW
-    `callsignStack` + `StackingDrawer`) the operator pops to choose whom to work (the
-    ADR 0031 "operator picks" path). The sequencer already carries `answerMode` and
-    `CallerExchange` is selection-agnostic, so no resolver rework — `operator_pick` adds:
-    (1) the daemon-side "queue answerers / pop to start a `CallerExchange`" branch in
-    `onSlotCalling`; (2) the SPA stack drawer in the Operate tab; (3) the **Settings-tab
-    toggle** for `caller_answer_mode` (deferred with this mode — pointless to toggle to a
-    mode that isn't built; daemon defaults to `auto_first` meanwhile).
+  - **REMAINS — `operator_pick` (the pick-a-caller stack) — PRIORITISED 2026-06-12,
+    top FT8 build item (validated need on air).** First time operating the pile-up, the
+    operator hit the exact gap: answering a CQ from a silent station while OTHER
+    stations called *them*, with **no way to switch to a caller** — those callers send
+    directed `7Q5MLV <them> …` lines, which aren't clickable CQ rows. So the scope is
+    **broader than "Call-CQ only": a "stations calling me" pick-list that works in BOTH
+    modes** — while calling CQ *and* while answering a CQ — letting the operator tap a
+    caller to switch to working them (the WSJT-X "double-click a station calling you"
+    behaviour). The callers (decodes `<ourcall> <them> …` directed to us) populate a
+    stack/queue (mirroring the Phone/CW `callsignStack` + `StackingDrawer`) the operator
+    pops, instead of `auto_first` taking the first. The sequencer already carries
+    `answerMode` and `CallerExchange` is selection-agnostic, so no resolver rework —
+    `operator_pick` adds: (1) a daemon-side "stations-calling-me" collector +
+    pop-to-start-a-`CallerExchange`, available whether idle/calling-CQ OR mid
+    answer-a-CQ (switching abandons the current contact); (2) the SPA stack drawer in the
+    Operate tab; (3) the **Settings-tab toggle** for `caller_answer_mode`. **Today's
+    workaround:** Abandon the silent station → Call CQ → `auto_first` works the first
+    caller (no choice of which).
   - **Attended either way:** operator initiates by calling CQ, is present, Abandon stops
     it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why this
     **supersedes the auto-responder framing** of the watch-list item above.

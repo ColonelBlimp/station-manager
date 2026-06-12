@@ -87,3 +87,30 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 		t.Errorf("default = %q, want auto_first", DefaultFt8CallerAnswerMode)
 	}
 }
+
+func TestResolveFt8Frequencies(t *testing.T) {
+	// nil → the WSJT-X defaults, unchanged.
+	d := ResolveFt8Frequencies(nil)
+	if d["20m"] != 14_074_000 || d["6m"] != 50_313_000 || d["60m"] != 5_357_000 {
+		t.Fatalf("nil override = %v, want WSJT-X defaults", d)
+	}
+	if len(d) != len(DefaultFt8Frequencies()) {
+		t.Errorf("nil override len = %d, want %d", len(d), len(DefaultFt8Frequencies()))
+	}
+	// Positive override replaces; non-positive is ignored; unknown band is added.
+	got := ResolveFt8Frequencies(map[string]int{"20m": 14_074_500, "40m": 0, "4m": 70_154_000})
+	if got["20m"] != 14_074_500 {
+		t.Errorf("20m override = %d, want 14074500", got["20m"])
+	}
+	if got["40m"] != 7_074_000 {
+		t.Errorf("40m (zero override ignored) = %d, want default 7074000", got["40m"])
+	}
+	if got["4m"] != 70_154_000 {
+		t.Errorf("4m (added) = %d, want 70154000", got["4m"])
+	}
+	// Returns a fresh map — mutating it must not leak into the package defaults.
+	got["20m"] = 1
+	if DefaultFt8Frequencies()["20m"] != 14_074_000 {
+		t.Error("ResolveFt8Frequencies leaked into the package defaults")
+	}
+}

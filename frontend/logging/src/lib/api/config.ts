@@ -41,6 +41,13 @@ export interface ConfigResponse {
      * daemon — omitting it leaves the stored block untouched).
      */
     ft8_display?: Ft8DisplayFields;
+    /**
+     * FT8 per-band dial frequencies (band label → Hz, e.g. `{"20m": 14074000}`),
+     * daemon-resolved (defaults + operator overrides, always present on GET). Read by
+     * the Main-Freq band buttons to tune + highlight. Optional for forward-compat with
+     * a daemon build that predates it. Read-only over /v1/config (edited in config.json).
+     */
+    ft8_frequencies?: Record<string, number>;
 }
 
 export interface Ft8DisplayFields {

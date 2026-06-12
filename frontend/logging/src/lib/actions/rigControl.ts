@@ -146,13 +146,42 @@ export function nudgeFreq(deltaHz: number): void {
 
     const now = Date.now();
     const prev = pendingFreqHz[vfo];
-    const inBurst = prev !== null && lastFreqVfo === vfo && now - lastFreqNudgeAt <= FREQ_REPEAT_WINDOW_MS;
+    const inBurst =
+        prev !== null && lastFreqVfo === vfo && now - lastFreqNudgeAt <= FREQ_REPEAT_WINDOW_MS;
     const base = inBurst ? prev : vfo === 'A' ? displayedState.vfoA : displayedState.vfoB;
     const target = clampFreq(base + deltaHz);
 
     pendingFreqHz[vfo] = target;
     lastFreqNudgeAt = now;
     lastFreqVfo = vfo;
+    void driveRig(op, String(target));
+}
+
+/**
+ * Tune the operating (selected) VFO to an ABSOLUTE frequency (Hz) — the FT8 Main-Freq
+ * band buttons. CAT off → set the selected VFO's manualState freq; CAT live → set_freq
+ * (FA) for VFO-A / set_freq_b (FB) for VFO-B, capability-gated (no-op if the rig
+ * doesn't expose the op). Clears the optimistic burst target so a later key-repeat
+ * nudge re-bases off this freq rather than a stale pending value.
+ */
+export function setFreq(hz: number): void {
+    const target = clampFreq(hz);
+    const vfo = displayedState.selectedVfo;
+
+    if (!displayedState.isLive) {
+        if (vfo === 'A') {
+            manualState.vfoA = target;
+        } else {
+            manualState.vfoB = target;
+        }
+        return;
+    }
+
+    const op = vfo === 'A' ? 'set_freq' : 'set_freq_b';
+    if (!configState.bridge.ops.includes(op)) return;
+
+    pendingFreqHz[vfo] = null;
+    lastFreqVfo = null;
     void driveRig(op, String(target));
 }
 

@@ -69,6 +69,12 @@ type ConfigResponse struct {
 	// Station save) leaves the stored block untouched; a body that includes it
 	// replaces it. Pointer-typed so the handler can tell "sent" from "absent".
 	Ft8Display *types.Ft8DisplayConfig `json:"ft8_display,omitempty"`
+	// Ft8Frequencies is the per-band FT8 dial frequencies (band→Hz), always served
+	// RESOLVED on GET (defaults + operator overrides) for the SPA's Main-Freq band
+	// buttons. Read-only over /v1/config for now — overrides are edited in config.json
+	// (no Settings control yet) and a PUT never carries it, so it's left untouched on
+	// write (it survives in the in-memory cfg, rewritten with the rest).
+	Ft8Frequencies map[string]int `json:"ft8_frequencies,omitempty"`
 }
 
 // MailerInfo is the SPA-visible subset of the SMTP config. Enabled
@@ -472,6 +478,10 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// still yields sensible values for the SPA's Settings tab.
 	ft8Display := types.ResolveFt8Display(cfg.Ft8.Display)
 	resp.Ft8Display = &ft8Display
+
+	// FT8 per-band dial frequencies, always resolved (defaults + overrides) for the
+	// SPA's Main-Freq band buttons.
+	resp.Ft8Frequencies = types.ResolveFt8Frequencies(cfg.Ft8.Frequencies)
 
 	if cfg.DefaultLogbookID > 0 {
 		row, err := s.db.FetchLogbookByIDWithContext(r.Context(), cfg.DefaultLogbookID)

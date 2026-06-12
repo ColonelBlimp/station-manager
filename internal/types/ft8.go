@@ -47,6 +47,14 @@ type Ft8Config struct {
 	// for the same inert-block reason as TX; only operator-set values persist
 	// (the daemon serves resolved defaults via ResolveFt8Display).
 	Display *Ft8DisplayConfig `json:"display,omitempty"`
+
+	// Frequencies maps a band label (e.g. "20m") to its FT8 dial frequency in Hz.
+	// SPA-facing (the daemon doesn't consume it): the Main-Freq band buttons tune to
+	// these and highlight the one matching the live dial. Stored sparse, served
+	// resolved (defaults + operator overrides) on /v1/config like Display; nil/empty →
+	// the ResolveFt8Frequencies defaults (the WSJT-X FT8 dial frequencies). omitempty
+	// so an untouched config carries no inert block.
+	Frequencies map[string]int `json:"frequencies,omitempty"`
 }
 
 // Ft8DisplayConfig holds the FT8 Band Activity display preferences the SPA reads
@@ -117,6 +125,41 @@ func ResolveFt8Display(c *Ft8DisplayConfig) Ft8DisplayConfig {
 	}
 	if c.HighlightWorked != "" {
 		d.HighlightWorked = c.HighlightWorked
+	}
+	return d
+}
+
+// DefaultFt8Frequencies returns the per-band FT8 dial frequencies (Hz) — the WSJT-X
+// "watering hole" defaults (largely region-independent for FT8; 60 m = 5.357 MHz).
+// The single source of truth, served resolved to the SPA via /v1/config; operator
+// overrides merge over these (ResolveFt8Frequencies).
+func DefaultFt8Frequencies() map[string]int {
+	return map[string]int{
+		"160m": 1_840_000,
+		"80m":  3_573_000,
+		"60m":  5_357_000,
+		"40m":  7_074_000,
+		"30m":  10_136_000,
+		"20m":  14_074_000,
+		"17m":  18_100_000,
+		"15m":  21_074_000,
+		"12m":  24_915_000,
+		"10m":  28_074_000,
+		"6m":   50_313_000,
+	}
+}
+
+// ResolveFt8Frequencies overlays an operator's sparse band→Hz overrides onto the
+// built-in defaults: a positive override replaces that band's default (and may add a
+// band the defaults don't list); non-positive or absent entries keep the default. A
+// nil/empty override yields the defaults unchanged. Returns a fresh map so callers can
+// serve it without mutating the package defaults.
+func ResolveFt8Frequencies(c map[string]int) map[string]int {
+	d := DefaultFt8Frequencies()
+	for band, hz := range c {
+		if hz > 0 {
+			d[band] = hz
+		}
 	}
 	return d
 }

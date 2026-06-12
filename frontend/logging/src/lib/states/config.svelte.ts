@@ -290,6 +290,13 @@ class ConfigState {
     ft8Display: Ft8DisplayView = new Ft8DisplayView();
 
     /**
+     * FT8 per-band dial frequencies (band label → Hz), mirrored from
+     * `ft8_frequencies` on every applyResponse. Read by the Main-Freq band buttons to
+     * tune + highlight; empty until the first /v1/config fetch settles.
+     */
+    ft8Frequencies: Record<string, number> = $state({});
+
+    /**
      * Hydrate from a daemon GET/PUT /v1/config response. Each block
      * is copied field-by-field rather than wholesale-assigned so the
      * Svelte 5 $state reactivity boundaries on the inner classes are
@@ -366,6 +373,7 @@ class ConfigState {
         this.ft8Display.feedMode = fd?.feed_mode ?? 'accumulate';
         this.ft8Display.highlightUnworked = fd?.highlight_unworked ?? '#15803d';
         this.ft8Display.highlightWorked = fd?.highlight_worked ?? '#9ca3af';
+        this.ft8Frequencies = resp.ft8_frequencies ?? {};
 
         // mailer projection — daemon-managed, read-only on the SPA
         // side. Defensive guard against missing block (older daemon
