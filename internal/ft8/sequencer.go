@@ -191,6 +191,7 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		s.publish(QsoStatus{Active: false})
 		return
 	}
+	rung := s.ex.State.label()
 
 	// Late-window guard: the current (our) slot started at ref.start + SlotDuration.
 	// Too late into it and too few symbols survive head-truncation to decode — skip
@@ -222,6 +223,7 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 	}
 
 	transmit, offset := s.transmit, s.offsetHz
+	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
 		// Sending the 73 completes the QSO.
@@ -234,7 +236,16 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 	st := s.statusLocked()
 	s.mu.Unlock()
 
-	// Side effects outside the lock.
+	// Side effects outside the lock. Log every rung transmit (msg, rung, and how
+	// late into our slot it fired) so an on-air failure is diagnosable from the
+	// log — a successful send was previously silent.
+	s.log.InfoWith().
+		Str("msg", msg).
+		Str("rung", rung).
+		Float64("offset_hz", offset).
+		Float64("dt_s", dt).
+		Int("repeats", repeats).
+		Msg("ft8 seq: transmitting rung")
 	if err := transmit(msg, offset); err != nil {
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) {
