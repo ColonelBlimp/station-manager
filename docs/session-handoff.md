@@ -47,6 +47,16 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 169 (2026-06-13) — **FT8 fixes: country enrichment at log time, mode-aware RST validation, Band-Activity clear on band change.**
+
+Three operator-reported FT8 fixes:
+
+1. **Country enrichment for FT8 QSOs (the headline).** Operator worked Sri Lanka on FT8 but no country record was created. Root cause: country enrichment is **SPA-driven** for Phone/CW (the SPA calls `/v1/enrich/callsign` before submit — that cold-miss path writes the `country` table row + fills the QSO's country). The FT8 e4 sink built+submitted a QSO daemon-side with **no enrich call**, so `Submit` defaulted country to "Unknown" and no country record was written. **Fix** (in the `cmd/smd` sink, not `internal/ft8` — narrow scope held): before `Submit`, call `enrichOrchestrator.Enrich(theirCall)` and copy the merged contacted-station fields (country/DXCC/CQ+ITU zone/…) onto the QSO; the on-air grid stays authoritative over any cached locator. Fills the stored QSO **and** triggers the cold-miss country-table write. The whole sink now runs in a **one-shot `safego` goroutine off the FT8 decode loop** (the sink fires on that loop after the 73; a cold-miss country lookup is network I/O that would stall slot decoding + drop slots if inline). Best-effort — `Enrich` never errors, so logging is never blocked. `LoggedQso`/the `ft8-logged` SSE now carry `country`, so the Session-tab Country column is populated for FT8 rows. Tests updated (`TestNewLoggedQso` + SPA listener). **NOT yet on-air-validated** — verify next fresh-DXCC FT8 QSO.
+2. **Mode-aware RST validation.** Editing an FT8 QSO flagged RST sent/rcvd red (and stripped the sign) because the shared `Rst` component hardcoded the phone/CW digits-only validator. FT8 reports are signed dB SNRs (`-12`, `+04`). `Rst` now takes a `mode` prop and switches to `isValidSignalReport` + a sign-preserving transform for WSJT-X-family modes (`utils/mode.ts` `usesSignalReport`). Wired in `QsoEditOverlay` + `QsoPanel`.
+3. **Band Activity clears on band change.** The accumulated decode feed is per-watering-hole; an `$effect` in `Ft8Panel` watching the derived `band` calls `ft8State.clearDecodes()` when it crosses a band boundary (intra-band nudges + empty/unknown band ignored).
+
+All green: full Go build + `go test ./internal/ft8 ./cmd/smd` pass; SPA check 0/0, lint clean, vitest pass. Docs updated (CLAUDE.md FT8 bullet, `docs/ft8.md` §3 + e4 section + SSE list, memory `project_sm_ft8_integration`).
+
 ### Session 168 (2026-06-12) — **FT8 Session tab + `ft8-logged` SSE event (shared session log across modes); per-CQ beam-heading column; Band Activity polish; FT8 tab icons.**
 
 **⇒ NEXT ACTION unchanged from Session 167: build `operator_pick` (the pick-a-caller stack) — TOP FT8 priority.** Also still pending: **on-air validation** of the just-shipped Session tab (complete an FT8 QSO → confirm it lands in the list + emails out) and of caller-side Call CQ (`auto_first`). All this session's work is daemon+SPA, green (full Go suite + SPA 793 tests/build/check/lint), **not yet exercised on the rig** — needs a `task run:smd` rebuild (daemon changed).

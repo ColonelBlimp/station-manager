@@ -73,6 +73,9 @@ func TestNewLoggedQso(t *testing.T) {
 	}
 	now := time.Date(2026, 6, 10, 9, 5, 0, 0, time.UTC)
 	q := BuildQso(c, station, 7, now)
+	// Country is filled by the cmd/smd sink's enrichment before submit (BuildQso
+	// itself leaves it empty); the payload must carry it through to the SPA.
+	q.Country = "United States"
 
 	l := NewLoggedQso(q, "uuid-123")
 
@@ -86,6 +89,7 @@ func TestNewLoggedQso(t *testing.T) {
 	require.Equal(t, "-12", l.RstSent)
 	require.Equal(t, "-10", l.RstRcvd)
 	require.Equal(t, "FN42", l.Gridsquare)
+	require.Equal(t, "United States", l.Country)
 }
 
 func TestNewLoggedQso_MalformedFieldsDegrade(t *testing.T) {

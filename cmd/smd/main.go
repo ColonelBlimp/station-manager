@@ -451,22 +451,53 @@ func run() error {
 	// root has config + qsoservice + adif), so internal/ft8 stays narrow — it
 	// just emits a CompletedQso. Best-effort: a submit failure is logged, never
 	// fatal (the QSO already happened on the air).
+	ft8LogPanic := func(name string, pv any, stack []byte) {
+		loggerSvc.ErrorWith().Str("goroutine", name).Interface("panic", pv).
+			Str("stack", string(stack)).Msg("ft8: qso-log goroutine panicked")
+	}
 	ft8Svc.SetQsoLogger(func(ctx context.Context, c ft8.CompletedQso) {
-		snap := cfgSvc.Snapshot()
-		q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
-		rec := adif.QsoToRecord(q)
-		res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false)
-		if err != nil {
-			loggerSvc.ErrorWith().Err(err).Str("call", c.TheirCall).
-				Msg("ft8: failed to log completed QSO")
-			return
-		}
-		loggerSvc.InfoWith().Str("call", c.TheirCall).Str("band", q.Band).
-			Msg("ft8: completed QSO logged")
-		// Surface the logged QSO to the SPA's session list (ADR 0029 step e4).
-		// The canonical UUID flows through so the SPA's email-out / edit paths
-		// work for FT8 rows; best-effort, after a confirmed store.
-		ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID))
+		// This callback fires on the FT8 decode loop (after the 73). Submit does
+		// DB writes and the country lookup below does network I/O — running either
+		// inline would stall slot decoding and drop slots (the scheduler buffers
+		// one slot then drops on backpressure). So the whole log+enrich runs in a
+		// one-shot safego goroutine, decoupled from the real-time pipeline; a panic
+		// here is recovered and can't take the daemon (or the decode loop) down.
+		safego.Go(ctx, "ft8.qsolog", ft8LogPanic, func() {
+			snap := cfgSvc.Snapshot()
+			q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
+			// Country/DXCC enrichment for the contacted station. The SPA logging
+			// form gets this by calling /v1/enrich/callsign before it submits; the
+			// FT8 path has no form, so the daemon runs the same lookup here. Besides
+			// filling the QSO's country fields, Enrich's cold-miss path writes the
+			// country cache row — without this call an FT8 QSO logged with country
+			// "Unknown" and created no country record. Best-effort by contract:
+			// Enrich never errors (failures fold to empty fields, source=none), so
+			// the submit always runs — "enrichment never blocks logging" holds. The
+			// on-air grid stays authoritative over any cached locator.
+			if enrichOrchestrator != nil {
+				enr := enrichOrchestrator.Enrich(ctx, q.Call)
+				grid := q.Gridsquare
+				q.ContactedStation = enr.Station
+				q.Call = c.TheirCall
+				if grid != "" {
+					q.Gridsquare = grid
+				}
+				q.CountryDetails = enr.Country
+			}
+			rec := adif.QsoToRecord(q)
+			res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false)
+			if err != nil {
+				loggerSvc.ErrorWith().Err(err).Str("call", c.TheirCall).
+					Msg("ft8: failed to log completed QSO")
+				return
+			}
+			loggerSvc.InfoWith().Str("call", c.TheirCall).Str("band", q.Band).
+				Str("country", q.Country).Msg("ft8: completed QSO logged")
+			// Surface the logged QSO to the SPA's session list (ADR 0029 step e4).
+			// The canonical UUID flows through so the SPA's email-out / edit paths
+			// work for FT8 rows; best-effort, after a confirmed store.
+			ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID))
+		}, false /* one-shot: a completed QSO is a single event, no respawn */)
 	})
 	if err := ft8Svc.Initialize(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("initialize ft8")

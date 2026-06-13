@@ -90,7 +90,7 @@
 -->
 {#snippet paperPlaneIcon()}
     <svg
-        class="size-5 -rotate-30"
+        class="-mt-2 size-5 -rotate-30"
         fill="none"
         viewBox="0 0 24 24"
         stroke-width="1.5"
@@ -109,7 +109,7 @@
     type="email"
     bind:value={recipient}
     placeholder="recipient@example.com"
-    class="text-sm border border-gray-300 rounded px-2 py-1 w-47 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+    class="text-sm border border-gray-300 rounded -mt-1.5 px-2 py-1 w-47 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
     aria-label="Recipient email address"
 />
 <button

@@ -194,8 +194,8 @@
     const rxCaptionClass = $derived.by(() => {
         if (ft8State.qso.active || ft8State.selectedOffset === null) return '';
         return selectedOffsetBusy
-            ? 'rounded px-1.5 bg-red-600 text-white py-0.5'
-            : 'rounded px-1.5 bg-green-500 text-white py-0.5';
+            ? 'text-center rounded px-1.5 bg-red-600 text-white py-0.5 w-28'
+            : 'text-center rounded px-1.5 bg-green-500 text-white py-0.5 w-38';
     });
 
     // ---- Lower-section tabs (same pattern + .tab-item class as InfoPanel) ----
@@ -421,7 +421,7 @@
 <!-- Slot countdown — moved here from the Operate tab so it's visible regardless of
      the active lower tab; sits at the bottom of the main activity row. -->
 <div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5">
-    <div class="flex">
+    <div class="w-40 text-right">
         Next slot in {secondsToNextSlot}s · {nextSlotParity}
     </div>
     <div class="">&nbsp;|&nbsp;</div>
@@ -544,7 +544,7 @@
         </div>
         {#if activeTab === 'session' && configState.mailer.enabled}
             <aside
-                class="flex shrink-0 flex-row items-center gap-x-2"
+                class="relative flex shrink-0 flex-row items-center gap-x-2"
                 aria-label="Email session ADIF"
             >
                 <SessionEmailControls />

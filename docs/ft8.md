@@ -190,10 +190,10 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   **`QSO logged — <call> (<band>)` toast** fires on each completed FT8 exchange (the
   only "it's in the log" signal, since there's no form to clear) — gated on the same
   **Toast on QSO stored** setting (`qsoDefaults.notifyQsoStored`, My Station →
-  Notifications) and worded identically to the Phone/CW logged-toast. (Known
-  gap: the Country column is blank for FT8 rows — no enrichment at FT8 log time; the
-  *emailed* ADIF is unaffected, rebuilt daemon-side from the stored DB row. Distance
-  is computed SPA-side from your grid.)
+  Notifications) and worded identically to the Phone/CW logged-toast. The **Country
+  column is populated for FT8 rows** — the daemon enriches the contacted station
+  before submit (see e4 below), so `country` rides the `ft8-logged` event. Distance
+  is computed SPA-side from your grid.
 - **Operate tab** (`Ft8MsgPanel`) — the FT8 transmit surface: an **Enable/Disable TX**
   button (the arm gate; red when enabled, gated on a live rig via
   `displayedState.isLive`); **Call CQ** and **Abandon** buttons, always visible but
@@ -292,10 +292,12 @@ subscriber would duplicate a session-list row):
   reports (e.g. `-12`), empty until known, used to fill the ladder's `<RST>` slots —
   the manual sequencer's active contact (step e3).
 - **`ft8-logged`** → `LoggedQso{ uuid, callsign, freq_hz, band, rst_sent, rst_rcvd,
-  mode, time_on, qso_date, gridsquare }` — a completed exchange the daemon just
-  stored (step e4), so the SPA adds it to its session list. Emitted by the e4 sink
+  mode, time_on, qso_date, gridsquare, country }` — a completed exchange the daemon
+  just stored (step e4), so the SPA adds it to its session list. Emitted by the e4 sink
   (`cmd/smd`) after a successful `qsoservice.Submit`, via `Service.PublishQsoLogged`;
   `internal/ft8` builds the payload (`NewLoggedQso`) but never touches storage.
+  `country` is the enriched country the sink resolved before submit (so the Session-tab
+  Country column matches Phone/CW).
 
 ## 4. How occupancy works
 
@@ -565,6 +567,19 @@ read by the e2 resolver. Step (e) breaks into increments:
   root (`cmd/smd`), wired in via the `SetQsoLogger` callback (dependency injection;
   the one-way direction ADR 0029 wanted, achieved without the import). Best-effort:
   a submit failure is logged, never fatal (the QSO already happened on the air).
+  - **Country enrichment at log time (2026-06-13).** Before `Submit`, the sink calls
+    `enrichOrchestrator.Enrich(theirCall)` and copies the merged contacted-station
+    fields (country, DXCC, CQ/ITU zone, …) onto the QSO — the daemon-side equivalent
+    of the SPA calling `/v1/enrich/callsign` before a Phone/CW submit. This both fills
+    the stored QSO's country (otherwise `Submit` defaults it to "Unknown") **and**
+    triggers the cold-miss `country`-table cache write inside `Enrich` (so a worked
+    DXCC entity gets its country record). The on-air grid stays authoritative over any
+    cached locator. The whole sink — enrich + submit + `PublishQsoLogged` — runs in a
+    one-shot `safego` goroutine **off the FT8 decode loop**, because the sink fires on
+    that loop (after the 73) and a cold-miss country lookup is network I/O that would
+    otherwise stall slot decoding and drop slots. `Enrich` never errors (failures fold
+    to empty fields), so logging is never blocked — the "enrichment never blocks
+    logging" invariant holds.
   - **Report validation is mode-aware.** FT8 RST_SENT/RST_RCVD are signed dB SNRs
     (`-12`, `+04`), not phone/CW RST digits. The shared `Rst` SPA component takes a
     `mode` prop and switches the validator + input cleaning when the mode is a

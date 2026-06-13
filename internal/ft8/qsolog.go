@@ -58,9 +58,10 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 // LoggedQso is the `ft8-logged` SSE payload (EventLogged): the just-stored FT8
 // QSO's session-list fields, shaped for the SPA's SessionQso row. Carries the
 // canonical UUID so the SPA's email-out / edit paths (which key off it) work for
-// FT8 rows exactly as they do for Phone/CW ones. Country + distance are left to
-// the SPA (it has the operator's grid + an enrichment cache); this payload is
-// only what the daemon already holds at log time.
+// FT8 rows exactly as they do for Phone/CW ones. Country is included because the
+// daemon enriches the contacted station before submit (the cmd/smd sink), so it
+// holds the value at log time; distance is still left to the SPA (it has the
+// operator's grid + the on-air locator).
 type LoggedQso struct {
 	UUID       string `json:"uuid"`
 	Callsign   string `json:"callsign"`
@@ -72,6 +73,7 @@ type LoggedQso struct {
 	TimeOn     string `json:"time_on"`  // UTC "HH:MM"
 	QsoDate    string `json:"qso_date"` // "YYYY-MM-DD"
 	Gridsquare string `json:"gridsquare"`
+	Country    string `json:"country"` // contacted station's country (enriched at log time)
 }
 
 // NewLoggedQso maps a stored types.Qso (as built by BuildQso) plus its canonical
@@ -103,5 +105,6 @@ func NewLoggedQso(q types.Qso, uuid string) LoggedQso {
 		TimeOn:     timeOn,
 		QsoDate:    qsoDate,
 		Gridsquare: q.Gridsquare,
+		Country:    q.Country,
 	}
 }

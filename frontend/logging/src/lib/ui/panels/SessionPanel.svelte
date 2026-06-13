@@ -28,6 +28,11 @@
     import { formatFrequency } from '../../utils/frequency';
     import QsoEditOverlay from '../components/QsoEditOverlay.svelte';
 
+    interface Props {
+        cssTableHeight?: string;
+    }
+    let { cssTableHeight = 'h-35' }: Props = $props();
+
     /*
         Reverse for newest-first display without mutating the
         underlying array (which is in submit order — the order
@@ -157,7 +162,7 @@
 
 <div class="px-2">
     {#if rows.length === 0}
-        <p class="text-sm text-gray-500 italic px-1 py-2">No QSOs logged this session.</p>
+        <p class="text-sm text-gray-500 italic px-1 py-2 {cssTableHeight}">No QSOs logged this session.</p>
     {:else}
         <!--
             overflow-x-auto so the wide session table (11 columns with
@@ -169,7 +174,7 @@
             Session-tab email controls out of view. Containing the table
             here keeps the card — and the tab strip — at a stable width.
         -->
-        <div class="overflow-x-auto overflow-y-scroll h-67">
+        <div class="overflow-x-auto overflow-y-scroll {cssTableHeight}">
             <table class="w-full text-left text-sm tabular-nums">
                 <thead class="border-b border-gray-300">
                     <tr class="text-gray-700 font-semibold">

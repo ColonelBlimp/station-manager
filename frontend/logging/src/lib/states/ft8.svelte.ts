@@ -361,8 +361,8 @@ function openSource(): void {
     // email-out / edit (the daemon's UUID flows through, so both paths work). The
     // event is one-shot (not replayed on reconnect), but a uuid-dedup guards any
     // double-delivery. Distance is computed here from the operator's grid; country
-    // is left blank (no enrichment at FT8 log time) — the emailed ADIF is rebuilt
-    // daemon-side from the stored row regardless, so this is display-only.
+    // comes from the payload (the daemon enriches the contact before submit), so
+    // the Session-tab Country column is populated for FT8 rows like Phone/CW ones.
     src.addEventListener('ft8-logged', (ev: MessageEvent<string>) => {
         try {
             const p = JSON.parse(ev.data) as Partial<{
@@ -376,6 +376,7 @@ function openSource(): void {
                 time_on: string;
                 qso_date: string;
                 gridsquare: string;
+                country: string;
             }>;
             const uuid = p.uuid ?? '';
             if (uuid === '' || sessionQsosState.items.some((q) => q.uuid === uuid)) return;
@@ -395,7 +396,7 @@ function openSource(): void {
                 mode: p.mode ?? 'FT8',
                 timeOn: p.time_on ?? '',
                 qsoDate: p.qso_date ?? '',
-                country: '',
+                country: p.country ?? '',
                 distanceKm: path ? String(Math.round(path.shortPathDistanceKm)) : '',
                 adif: '',
             });

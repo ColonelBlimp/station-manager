@@ -368,6 +368,7 @@ describe('ft8 logged → session list (ft8-logged SSE)', () => {
         time_on: '09:05',
         qso_date: '2026-06-10',
         gridsquare: 'FN42',
+        country: 'United States',
     });
 
     it('adds a completed FT8 QSO to the shared session list', () => {
@@ -383,6 +384,7 @@ describe('ft8 logged → session list (ft8-logged SSE)', () => {
         expect(row.timeOn).toBe('09:05');
         expect(row.rstSent).toBe('-12');
         expect(row.rstRcvd).toBe('-10');
+        expect(row.country).toBe('United States');
     });
 
     it('dedups a repeated uuid (one-shot event, defensive against double-delivery)', () => {

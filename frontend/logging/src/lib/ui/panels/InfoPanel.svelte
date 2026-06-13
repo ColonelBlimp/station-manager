@@ -249,6 +249,6 @@
             <MyStationPanel />
         </div>
     {:else if activeTab === 'session'}
-        <div id="panel-session" role="tabpanel" aria-labelledby="tab-session"><SessionPanel /></div>
+        <div id="panel-session" role="tabpanel" aria-labelledby="tab-session"><SessionPanel cssTableHeight="h-60" /></div>
     {/if}
 </div>
