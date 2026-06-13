@@ -261,16 +261,13 @@
     tab's strip.
 -->
 
-{#snippet decodeRow(d: DecodeEntry, showTime: boolean)}
+{#snippet decodeRow(d: DecodeEntry)}
     {@const cq = parseCq(d.text)}
     {@const cqCall = cq?.call ?? null}
     {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
     {@const answerable = cqCall !== null && canAnswer}
     {@const bearing = cq?.grid && myGrid ? pathInfo(myGrid, cq.grid)?.shortPathBearing : undefined}
     <li class="flex gap-2 whitespace-nowrap">
-        {#if showTime}
-            <span class="text-gray-400">{formatUtcClock(new Date(d.startUtc))}</span>
-        {/if}
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
         <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
         <span class="w-10 text-right text-indigo-600" title="Beam heading to this CQ (short path)"
@@ -310,11 +307,10 @@
 <!-- Column header for the decode lists. Lives inside the scroll container as a sticky
      row (top-0) so it stays pinned while the rows scroll under it; column widths/gap
      mirror decodeRow so the labels line up over their data. -->
-{#snippet headerRow(showTime: boolean)}
+{#snippet headerRow()}
     <div
         class="sticky top-0 z-10 flex gap-2 whitespace-nowrap border-b border-gray-200 bg-white pb-0.5 pl-1 pr-2 pt-1 font-mono text-xs text-gray-400"
     >
-        {#if showTime}<span>UTC</span>{/if}
         <span class="w-7 text-right">dB</span>
         <span class="w-10 text-right">Hz</span>
         <span class="w-10 text-right">Beam</span>
@@ -355,13 +351,13 @@
         <div class="flex h-65 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if ft8State.decodes.length > 0}
                 {@const showSlot = configState.ft8Display.feedMode === 'accumulate'}
-                {@render headerRow(false)}
+                {@render headerRow()}
                 <ul class="flex-1 space-y-0.5 py-1 pl-1 pr-2 text-left font-mono text-xs">
                     {#each ft8State.decodes as d, i (d.id)}
                         {#if showSlot && (i === 0 || ft8State.decodes[i - 1].startUtc !== d.startUtc)}
                             {@render slotSeparator(d.startUtc)}
                         {/if}
-                        {@render decodeRow(d, false)}
+                        {@render decodeRow(d)}
                     {/each}
                 </ul>
             {:else}
@@ -376,7 +372,7 @@
             {#if rxDecodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each rxDecodes as d (d.id)}
-                        {@render decodeRow(d, true)}
+                        {@render decodeRow(d)}
                     {/each}
                 </ul>
             {:else if ft8State.qso.active}
