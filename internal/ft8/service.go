@@ -242,12 +242,22 @@ func (s *Service) onSubscriberRemoved() {
 // had already fired we still see the new subscriber here and keep the session).
 func (s *Service) onLingerExpired() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.lingerTimer = nil
 	if s.subCount > 0 || s.stopped || !s.capturing {
+		s.mu.Unlock()
 		return
 	}
 	s.releaseCaptureLocked()
+	s.mu.Unlock()
+
+	// Attended-only: the last /v1/ft8/events subscriber is gone past the linger
+	// window (the browser was closed, not briefly reloaded), so no operator is
+	// attending FT8 — TX must not stay armed across browser sessions. Disarm
+	// OUTSIDE s.mu: disarmTx takes its own txMu and may wait on an in-flight
+	// transmission to drain (txWg); holding s.mu across that would stall subscriber
+	// / capture accounting. Idempotent — a no-op on the capture-only path (TX not
+	// armed); when armed it drops PTT and abandons any active sequenced QSO.
+	s.disarmTx(false)
 }
 
 // startCaptureLocked acquires the capture source and spawns the scheduler +

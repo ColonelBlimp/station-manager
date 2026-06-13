@@ -165,6 +165,33 @@ func TestCapture_LingerSurvivesReconnect(t *testing.T) {
 	require.Equal(t, 0, src.stopCount(), "reconnect must cancel the pending release")
 }
 
+// TestCapture_DisarmsTxWhenLastSubscriberLeaves covers the attended-only rule:
+// TX must not stay armed after the operator's browser closes. Arming, then losing
+// the last /v1/ft8/events subscriber past the linger window, disarms TX — so a
+// reopened browser sees disarmed, not a stale armed state carried across sessions.
+func TestCapture_DisarmsTxWhenLastSubscriberLeaves(t *testing.T) {
+	withShortLinger(t, 10*time.Millisecond)
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
+	s.newPlayer = func(int) (txPlayer, error) { return newFakeTxPlayer(), nil }
+	s.SetTxKeyer(&fakeKeyer{})
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe() // FT8 view open → capture acquired
+	require.Eventually(t, func() bool { return src.startCount() == 1 }, time.Second, 5*time.Millisecond)
+
+	require.NoError(t, s.ArmTx(true))
+	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
+	require.True(t, armed(), "TX should be armed after ArmTx")
+
+	unsub() // browser closes: last subscriber gone
+
+	require.Eventually(t, func() bool { return !armed() }, time.Second, 5*time.Millisecond,
+		"TX must be disarmed once the last subscriber leaves past the linger")
+}
+
 // TestCapture_Error_FailSoft covers the "enabled but capture won't start" case
 // (no device, busy, or the CGO-free build's unavailable stub): the subscriber
 // connection that triggers acquisition must not panic or error out; the
