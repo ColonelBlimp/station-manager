@@ -689,26 +689,55 @@ func vfoLabelToTag(label string) string {
 // would close on any scheduling hiccup). The watchdog uses the separate,
 // generous bridge.timeouts.write_watchdog_ms instead, applied in runPipeline.
 func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) (serial.Config, error) {
-	parity, err := parityFromString(rigSerial.Parity)
+	// Per-rig serial overrides (config.md §10, B2): a non-zero/non-empty override
+	// field wins over the rigdef default; a zero field inherits. brCfg.Overrides is
+	// the active rig's RigConfig.Overrides, projected by Config.ActiveBridge().
+	ov := brCfg.Overrides
+	baudRate := rigSerial.BaudRate
+	if ov.BaudRate != 0 {
+		baudRate = ov.BaudRate
+	}
+	dataBits := rigSerial.DataBits
+	if ov.DataBits != 0 {
+		dataBits = ov.DataBits
+	}
+	stopBitsN := rigSerial.StopBits
+	if ov.StopBits != 0 {
+		stopBitsN = ov.StopBits
+	}
+	parityStr := rigSerial.Parity
+	if ov.Parity != "" {
+		parityStr = ov.Parity
+	}
+	delimStr := rigSerial.LineDelimiter
+	if ov.LineDelimiter != "" {
+		delimStr = ov.LineDelimiter
+	}
+	readTimeoutMS := rigSerial.ReadTimeoutMS
+	if ov.ReadTimeoutMS != 0 {
+		readTimeoutMS = ov.ReadTimeoutMS
+	}
+
+	parity, err := parityFromString(parityStr)
 	if err != nil {
 		return serial.Config{}, err
 	}
-	stopBits, err := stopBitsFromInt(rigSerial.StopBits)
+	stopBits, err := stopBitsFromInt(stopBitsN)
 	if err != nil {
 		return serial.Config{}, err
 	}
-	delim, err := delimiterFromString(rigSerial.LineDelimiter)
+	delim, err := delimiterFromString(delimStr)
 	if err != nil {
 		return serial.Config{}, err
 	}
 	return serial.Config{
 		PortName:      brCfg.Port,
-		BaudRate:      rigSerial.BaudRate,
-		DataBits:      rigSerial.DataBits,
+		BaudRate:      baudRate,
+		DataBits:      dataBits,
 		Parity:        parity,
 		StopBits:      stopBits,
 		LineDelimiter: delim,
-		ReadTimeoutMS: rigSerial.ReadTimeoutMS,
+		ReadTimeoutMS: readTimeoutMS,
 	}, nil
 }
 

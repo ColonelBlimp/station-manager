@@ -275,6 +275,7 @@ func (c Config) ActiveBridge() types.BridgeConfig {
 	if rc := c.RigByID(c.DefaultRigID); rc != nil {
 		b.Cat.Driver = rc.Model
 		b.Serial.Port = rc.Port
+		b.Serial.Overrides = rc.Overrides // per-rig serial overrides (config.md §10, B2)
 	}
 	return b
 }

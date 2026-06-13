@@ -964,3 +964,25 @@ func TestLoad_RejectsInvalidRigModeMapping(t *testing.T) {
 		t.Fatal("Load expected error for invalid per-rig mode mapping, got nil")
 	}
 }
+
+// --- §10 slice 2c: per-rig serial overrides projected by ActiveBridge ------
+
+func TestActiveBridge_ProjectsRigSerialOverrides(t *testing.T) {
+	cfg := DefaultConfig(t.TempDir())
+	cfg.Bridge.Enabled = true
+	cfg.Rigs = []types.RigConfig{{
+		ID:        1,
+		Model:     "yaesu-ftdx10",
+		Port:      "/dev/ttyUSB9",
+		Overrides: types.RigOverrides{BaudRate: 4800, Parity: "even"},
+	}}
+	cfg.DefaultRigID = 1
+
+	b := cfg.ActiveBridge()
+	if b.Cat.Driver != "yaesu-ftdx10" || b.Serial.Port != "/dev/ttyUSB9" {
+		t.Fatalf("projected driver/port = %q/%q, want yaesu-ftdx10 /dev/ttyUSB9", b.Cat.Driver, b.Serial.Port)
+	}
+	if b.Serial.Overrides.BaudRate != 4800 || b.Serial.Overrides.Parity != "even" {
+		t.Fatalf("projected serial overrides = %+v, want BaudRate 4800 / Parity even", b.Serial.Overrides)
+	}
+}

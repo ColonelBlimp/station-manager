@@ -61,6 +61,13 @@ type BridgeSerialConfig struct {
 	// field by Config.ActiveBridge() and always wins, so a value left here is
 	// inert; the empty loose field shouldn't persist in rewritten configs.
 	Port string `json:"port,omitempty"`
+
+	// Overrides carries the active rig's per-rig serial overrides (config.md §10,
+	// B2), projected here from RigConfig.Overrides by Config.ActiveBridge().
+	// Runtime-only (json:"-") — the persisted home is the rig, not this bridge
+	// block. A non-zero field wins over the rigdef serial default in
+	// buildSerialConfig; a zero field inherits the rigdef default.
+	Overrides RigOverrides `json:"-"`
 }
 
 // BridgeCatConfig is the CAT-protocol end. Driver picks the per-rig
