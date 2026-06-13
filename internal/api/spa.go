@@ -24,6 +24,14 @@ import (
 func spaHandler(spa fs.FS) http.Handler {
 	fileServer := http.FileServer(http.FS(spa))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Force revalidation on every SPA asset. The entry bundle has a
+		// stable, hash-free name (assets/index.js + index.css — see
+		// vite.config.ts), so the filename no longer changes when the SPA is
+		// rebuilt; without this header a browser could serve a stale cached
+		// bundle after a daemon update. The embed FS carries no modtime/ETag
+		// for conditional revalidation, so `no-cache` effectively means
+		// "always refetch" — fine for a localhost-served single-operator app.
+		w.Header().Set("Cache-Control", "no-cache")
 		// http.FS opens paths relative to the FS root. The leading
 		// "/" is stripped so e.g. "/assets/main.js" → "assets/main.js".
 		clean := strings.TrimPrefix(r.URL.Path, "/")

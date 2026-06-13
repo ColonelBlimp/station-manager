@@ -194,7 +194,7 @@
     const rxCaptionClass = $derived.by(() => {
         if (ft8State.qso.active || ft8State.selectedOffset === null) return '';
         return selectedOffsetBusy
-            ? 'text-center rounded px-1.5 bg-red-600 text-white py-0.5 w-28'
+            ? 'text-center rounded px-1.5 bg-red-600 text-white py-0.5 w-38'
             : 'text-center rounded px-1.5 bg-green-500 text-white py-0.5 w-38';
     });
 

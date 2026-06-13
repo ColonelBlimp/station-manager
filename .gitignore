@@ -10,9 +10,16 @@ build/
 
 /logging
 
-# Frontend SPA — node_modules never tracked; dist/ is built by Vite
-# but the placeholder dist/index.html is committed so go:embed compiles
-# before anyone runs `task frontend:install`.
+# Frontend SPA — node_modules never tracked; dist/ is built by Vite.
+# dist/index.html IS committed (so `//go:embed all:logging/dist` compiles
+# before the first local build, and so the embedded daemon has a real page);
+# the rest of dist/ (the built assets) is gitignored. This is only safe
+# because the entry bundle has STABLE, hash-free names — assets/index.js +
+# assets/index.css (see frontend/logging/vite.config.ts). So a fresh build
+# always produces the SAME index.html: it never drifts from the gitignored
+# dist/assets/, and committing it (even via stage-all) can't reintroduce the
+# blank-page bug a hash-referencing index.html caused. Just rebuild before
+# previewing on the embedded daemon (8080); for live SPA dev use Vite (5173).
 frontend/logging/node_modules/
 frontend/logging/dist/*
 !frontend/logging/dist/index.html
