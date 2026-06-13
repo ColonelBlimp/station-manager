@@ -1,8 +1,9 @@
-# Config System — current-state review
+# Config System — review + redesign
 
-> **Status:** review (current state). **Phase:** review-first; the redesign is a
-> separate follow-up — see §8 for the parked inputs. **No code changes accompany
-> this document.**
+> **Status:** review complete; **redesign in progress** — decisions captured per topic as
+> they're settled. §1–8 are the current-state review; §9+ are redesign decisions (first:
+> the ownership taxonomy, §9, decided 2026-06-13). **No code changes accompany this
+> document** — it drives the later refactor.
 >
 > **Method:** the **Go code is the source of truth** for everything below. On-disk
 > `config.json` files (dev `build/config.json`, dogfood `~/.local/share/station-manager/config.json`)
@@ -271,8 +272,7 @@ paths** (a divergence, §7).
 
 To be resolved in the redesign phase, not here:
 
-- **Ownership taxonomy + the rule for a *new* field**: global / per-rig / SPA-display /
-  session — and a single documented rule so drift can't recur.
+- **Ownership taxonomy + the rule for a *new* field** — ✅ **DECIDED 2026-06-13; see §9.**
 - **Finish the per-rig move**: which fields move into `RigConfig` (starting with
   `ft8.tx.mode`); projection-overlay vs the active rig fully owning its sub-config;
   whether/how to delete the loose blocks; wire `RigConfig.Overrides`.
@@ -292,3 +292,78 @@ To be resolved in the redesign phase, not here:
 
 **Guardrail for the redesign:** *build specific, not generic* — a clean, explicit shape,
 not a generic settings framework (the v1 `adapters/` cautionary tale).
+
+## 9. Redesign — ownership taxonomy (decided 2026-06-13)
+
+The drift-killer: a fixed set of scopes **plus a placement rule** applied to every config
+value, new or existing. Resolves §7 finding #1 ("no rule for where a new field goes").
+
+### 9.1 The seven scopes
+
+| Scope | What it is | Authority / home | Mutable? |
+|---|---|---|---|
+| **A — rig capability** | what a rig *model* can do + its per-model defaults | rigdef `internal/cat/rigs/*.json` | immutable (embedded) |
+| **B — per-rig config** | operator config that varies with the active rig | `RigConfig` (catalogue), per instance | operator |
+| **C — global daemon config** | one value per daemon, rig-independent | config.json top-level | operator |
+| **D — operator/station identity** | who the operator/station is | config.json `logging_station` / `station` | operator |
+| **E — SPA presentation prefs** | daemon stores, never reads | config.json (served to the SPA) | operator (via SPA) |
+| **F — session/operating state** | ephemeral runtime state | in-memory / localStorage — **never config.json** | n/a |
+| **G — entity / derived data** | rows + caches | the **DB** — **never config.json** | per-feature |
+
+### 9.2 Inside B — split by *default source*, not storage
+
+Everything in B is stored **per rig instance, inside that rig's `RigConfig` block** —
+self-contained, no per-model side tables (see 9.4). The B1/B2 split is only about whether
+a sensible default exists:
+
+- **B1 — per-instance, must-set** (no default; hardware/cabling-specific): serial **port**,
+  **audio device(s)** (capture + TX playback).
+- **B2 — per-model, rigdef-default + optional override**: FT8 **data-mode literal**, serial
+  **param overrides**, **mode-mappings**. Resolution: `rig.Model` → rigdef per-model default
+  → apply this rig's override; the **merged** value is authoritative.
+
+**`mode_mappings` is the reference implementation of B2 today** (My Station → Mode
+Mappings; rigdef ships defaults; only operator deltas persist; merged at `/v1/config` GET).
+`ft8.tx.mode` and the serial overrides simply adopt the same pattern.
+
+### 9.3 The placement rule (apply to any field; first match wins)
+
+1. *What the rig model can do* → **A** (rigdef; not operator config).
+2. *Describes the rig model* (e.g. `MY_RIG`) → **derive from the rigdef at log time; don't store.**
+3. *Value depends on the active rig* → **B** — no sensible default (hardware) → **B1**;
+   the rigdef can default it per model → **B2**.
+4. *Who the operator/station is* → **D**.
+5. *Daemon reads it to change behaviour, one value daemon-wide* → **C**.
+6. *Only the SPA reads it* → **E**.
+7. *Ephemeral operating state* → **F** (never config.json).
+8. *Row / derived data* → **G** (the DB).
+
+**Drift-killer:** if the value would differ on a different rig, it is **B** — never a
+global block.
+
+### 9.4 Principles
+
+- **Independently-varying equipment is its own axis, not per-rig.** Rig↔antenna is **N:M**
+  (e.g. 2 rigs, 1 shared antenna; one-to-many / many-to-one / many-to-many / one-to-one all
+  occur). So **`MY_ANTENNA` is NOT per-rig** — it's a plain operator-set free-text identity
+  field (**D**), commonly **blank** (operators often exchange equipment verbally and note it
+  in the comment field, not `MY_ANTENNA`); **never required, never derived.** A future
+  multi-antenna + switch setup would add its own "active antenna" selector (mirroring rigs),
+  orthogonal to the rig — deferred (operator has one antenna).
+- **Don't normalize config across rigs to avoid repeated values.** Two same-model rigs are
+  just two rigs; coinciding params are coincidence, not shared state. No per-model side
+  tables — each `RigConfig` is self-contained.
+- **Derive what the rigdef knows.** `MY_RIG` ← the active rig's rigdef `name` at log time
+  (follows the QSO's rig automatically; not stored, not hand-typed).
+
+### 9.5 Implications (consequences of the taxonomy — sequenced in the "finish the per-rig move" + "versioning/migration" topics, NOT actioned here)
+
+- `ft8.tx.mode` → **B2** inside `RigConfig`; the rigdef declares the per-model data-mode
+  default (a new rigdef field). Fixes the `DATA-U`-is-global bug + the incoming IC-7300.
+- `bridge.mode_mappings` → fold into `RigConfig` (per instance); drop the top-level
+  driver-keyed block.
+- `RigConfig.Overrides` (serial) → **B2**; wire it (declared-but-unused today).
+- `ft8.tx.device` → **B1** (per instance), resolved like the capture device.
+- Loose `bridge.serial` / `bridge.cat` + `ft8.device` → removed once the fields fully live
+  in `RigConfig` (ends the transitional projection).
+- `MY_RIG` → derived from the rigdef `name`; stop storing it in `logging_station`.
