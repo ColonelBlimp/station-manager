@@ -282,21 +282,21 @@ func (c Config) ActiveBridge() types.BridgeConfig {
 	// for the runtime projection so the returned view is always populated (callers
 	// deref freely) and never aliases — or persists onto — the stored config. Any
 	// legacy values still on disk are carried, then the active rig overlays them.
-	serial := types.BridgeSerialConfig{}
-	cat := types.BridgeCatConfig{}
+	serialCfg := types.BridgeSerialConfig{}
+	catCfg := types.BridgeCatConfig{}
 	if b.Serial != nil {
-		serial = *b.Serial
+		serialCfg = *b.Serial
 	}
 	if b.Cat != nil {
-		cat = *b.Cat
+		catCfg = *b.Cat
 	}
 	if rc := c.RigByID(c.DefaultRigID); rc != nil {
-		cat.Driver = rc.Model
-		serial.Port = rc.Port
-		serial.Overrides = rc.Overrides // per-rig serial overrides (config.md §10, B2)
+		catCfg.Driver = rc.Model
+		serialCfg.Port = rc.Port
+		serialCfg.Overrides = rc.Overrides // per-rig serial overrides (config.md §10, B2)
 	}
-	b.Serial = &serial
-	b.Cat = &cat
+	b.Serial = &serialCfg
+	b.Cat = &catCfg
 	return b
 }
 
