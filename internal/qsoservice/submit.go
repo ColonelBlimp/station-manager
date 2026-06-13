@@ -35,6 +35,14 @@ const dedupeRefetchTimeout = 2 * time.Second
 // If force is true, the dedupe check is skipped (contest edge case per
 // api.md Section 4.2).
 func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, force bool) (SubmitResult, error) {
+	// Stamp the derived MY_RIG for live logging (config.md §10): the active rig's
+	// per-rig override, else its rigdef Name. Authoritative — clients no longer
+	// set MY_RIG, and the single injection point covers both the phone/CW handler
+	// and the FT8 e4 sink. SubmitImport deliberately does NOT stamp (it preserves
+	// an imported QSO's own MY_RIG). nil-safe for test wiring without a config.
+	if s.Config != nil {
+		rec.MyRig = s.Config.Snapshot().ResolveMyRig()
+	}
 	return s.submit(ctx, logbookID, rec, force, false)
 }
 

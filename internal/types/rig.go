@@ -72,6 +72,15 @@ type RigConfig struct {
 	// /v1/config GET time (operator's entry wins on collision). Moved here from
 	// the global bridge.mode_mappings — the rig knows its Model, so no driver key.
 	ModeMappings map[string]ModeMapping `json:"mode_mappings,omitempty"`
+
+	// MyRig is the operator's optional per-rig override of the ADIF MY_RIG value
+	// (config.md §10, B2). nil = derive from the rigdef Name for this rig's Model
+	// (e.g. "Yaesu FTdx10"); a non-nil value (including "") overrides it — ""
+	// meaning "don't publish MY_RIG" (suppress). Pointer so "unset → derive" is
+	// distinguishable from an explicit "" suppress. Resolved by Config.ResolveMyRig
+	// and stamped onto each live QSO at submit time (not stored on the QSO's
+	// LoggingStation in config).
+	MyRig *string `json:"my_rig,omitempty"`
 }
 
 // RigAudioConfig selects a rig's audio interface. Device is a single

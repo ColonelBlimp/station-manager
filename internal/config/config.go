@@ -233,8 +233,9 @@ func applyRigProfiles(cfg *Config) error {
 // only as the runtime projection target (set by ActiveFt8), no longer an operator
 // knob — so any value found there is moved onto the active rig (when that rig has
 // no explicit override yet) and cleared. Typed + idempotent: a no-op once the
-// value lives on the rig. Field REMOVALS (mode_mappings, MyRig) use the raw
-// versioned migrations instead; this field is kept, so a typed fold suffices.
+// value lives on the rig. The bridge.mode_mappings REMOVAL uses the raw versioned
+// migration instead; ft8.tx.mode and MyRig keep their Go fields (as projection /
+// QSO-emission targets), so a typed fold suffices for those.
 func migrateGlobalFt8Mode(cfg *Config) {
 	if cfg.Ft8.TX == nil || cfg.Ft8.TX.Mode == "" {
 		return
@@ -248,6 +249,28 @@ func migrateGlobalFt8Mode(cfg *Config) {
 		rc.Ft8Mode = &mode
 	}
 	cfg.Ft8.TX.Mode = "" // no longer a global knob; ActiveFt8 re-projects it per-rig
+}
+
+// migrateGlobalMyRig folds the legacy config logging_station.my_rig into the
+// active rig's per-rig MyRig override (config.md §10). MY_RIG is now derived at
+// submit (Config.ResolveMyRig) from the active rig, not stored in the config's
+// logging_station block — so any value found there is moved onto the active rig
+// (when it has no override yet) and cleared. Typed + idempotent. The
+// LoggingStation.MyRig Go field is retained because it's embedded in types.Qso
+// for ADIF MY_RIG emission; this only clears its config-block role.
+func migrateGlobalMyRig(cfg *Config) {
+	if cfg.LoggingStation.MyRig == "" {
+		return
+	}
+	rc := cfg.RigByID(cfg.DefaultRigID)
+	if rc == nil {
+		return
+	}
+	if rc.MyRig == nil {
+		v := cfg.LoggingStation.MyRig
+		rc.MyRig = &v
+	}
+	cfg.LoggingStation.MyRig = "" // no longer a config field; derived per-rig at submit
 }
 
 // RigByID returns the catalogue entry with the given id, or nil if none.
@@ -311,6 +334,26 @@ func (c Config) ActiveFt8() types.Ft8Config {
 		f.TX = &tx
 	}
 	return f
+}
+
+// ResolveMyRig returns the ADIF MY_RIG value for the active rig (config.md §10,
+// B2): the per-rig override if set (a non-nil value, including "" to suppress),
+// else the rigdef Name for the rig's Model (e.g. "Yaesu FTdx10"). qsoservice
+// stamps this onto each live QSO at submit time, so MY_RIG follows the active
+// rig automatically rather than being a hand-typed identity field. "" when there
+// is no resolvable active rig.
+func (c Config) ResolveMyRig() string {
+	rc := c.RigByID(c.DefaultRigID)
+	if rc == nil {
+		return ""
+	}
+	if rc.MyRig != nil {
+		return *rc.MyRig
+	}
+	if def, ok := cat.Lookup(rc.Model); ok {
+		return def.Name
+	}
+	return ""
 }
 
 // ServerConfig holds HTTP server tunables. All timeouts are in seconds.
@@ -428,6 +471,7 @@ func Load(path string) (Config, error) {
 	// the runtime projection target, so a typed fold is simpler than a raw
 	// versioned migration (those are reserved for field REMOVALS).
 	migrateGlobalFt8Mode(&cfg)
+	migrateGlobalMyRig(&cfg)
 
 	if err = validateForwarders(cfg.Forwarders); err != nil {
 		return cfg, fmt.Errorf("validating forwarders: %w", err)

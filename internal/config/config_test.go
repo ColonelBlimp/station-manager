@@ -986,3 +986,60 @@ func TestActiveBridge_ProjectsRigSerialOverrides(t *testing.T) {
 		t.Fatalf("projected serial overrides = %+v, want BaudRate 4800 / Parity even", b.Serial.Overrides)
 	}
 }
+
+// --- §10 slice 2d: per-rig MY_RIG (derive / override / suppress) ----------
+
+func TestLoad_FoldsGlobalMyRigOntoActiveRig(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	// Legacy config logging_station.my_rig is folded onto the active rig's
+	// per-rig override and cleared from the logging_station block.
+	content := `{
+		"data_dir": "/tmp/d",
+		"rigs": [{"id": 1, "model": "yaesu-ftdx10"}],
+		"default_rig_id": 1,
+		"logging_station": {"my_rig": "FTdx10 + ATU"}
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	rc := cfg.RigByID(1)
+	if rc == nil || rc.MyRig == nil || *rc.MyRig != "FTdx10 + ATU" {
+		t.Fatalf("active rig MyRig = %v, want override 'FTdx10 + ATU'", rc.MyRig)
+	}
+	if cfg.LoggingStation.MyRig != "" {
+		t.Fatalf("logging_station.my_rig = %q, want cleared", cfg.LoggingStation.MyRig)
+	}
+	if got := cfg.ResolveMyRig(); got != "FTdx10 + ATU" {
+		t.Fatalf("ResolveMyRig() = %q, want the per-rig override", got)
+	}
+}
+
+func TestResolveMyRig_DeriveAndSuppress(t *testing.T) {
+	cfg := DefaultConfig(t.TempDir())
+	cfg.Rigs = []types.RigConfig{{ID: 1, Model: "yaesu-ftdx10"}}
+	cfg.DefaultRigID = 1
+
+	// No override → derive the rigdef Name.
+	if got := cfg.ResolveMyRig(); got != "Yaesu FTdx10" {
+		t.Fatalf("ResolveMyRig() with no override = %q, want rigdef name 'Yaesu FTdx10'", got)
+	}
+
+	// Explicit empty override → suppress (publish nothing).
+	empty := ""
+	cfg.Rigs[0].MyRig = &empty
+	if got := cfg.ResolveMyRig(); got != "" {
+		t.Fatalf("ResolveMyRig() with \"\" override = %q, want \"\" (suppressed)", got)
+	}
+
+	// Explicit value → verbatim.
+	custom := "Homebrew TX"
+	cfg.Rigs[0].MyRig = &custom
+	if got := cfg.ResolveMyRig(); got != "Homebrew TX" {
+		t.Fatalf("ResolveMyRig() with override = %q, want 'Homebrew TX'", got)
+	}
+}
