@@ -356,11 +356,13 @@
                             id="edit-rst-sent"
                             label="RST Sent"
                             bind:value={qsoEditState.rstSent}
+                            mode={qsoEditState.mode}
                         />
                         <Rst
                             id="edit-rst-rcvd"
                             label="RST Rcvd"
                             bind:value={qsoEditState.rstRcvd}
+                            mode={qsoEditState.mode}
                         />
                         <Mode
                             id="edit-mode"

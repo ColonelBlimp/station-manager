@@ -824,8 +824,18 @@
             onenrich={handleEnrich}
             onstack={handleStack}
         />
-        <Rst id="rst_sent" label="RST Sent" bind:value={qsoDraft.rstSent} />
-        <Rst id="rst_rcvd" label="RST Rcvd" bind:value={qsoDraft.rstRcvd} />
+        <Rst
+            id="rst_sent"
+            label="RST Sent"
+            bind:value={qsoDraft.rstSent}
+            mode={displayedState.subMode || displayedState.mode}
+        />
+        <Rst
+            id="rst_rcvd"
+            label="RST Rcvd"
+            bind:value={qsoDraft.rstRcvd}
+            mode={displayedState.subMode || displayedState.mode}
+        />
         <Mode
             id="mode"
             label="Mode"

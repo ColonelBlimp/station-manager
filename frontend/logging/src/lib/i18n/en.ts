@@ -70,6 +70,7 @@ export const en: Record<string, string> = {
     'validators.itu_zone': 'ITU Zone must be between 1 and 90',
     'validators.dxcc': 'DXCC entity must be between 0 and 522',
     'validators.rst': 'RST must be 2 or 3 digits',
+    'validators.signalReport': 'Signal report must be a dB value (e.g. -12, +04)',
     'validators.frequency': 'Frequency must be 100 kHz – 30 GHz (e.g. 14.250.000 or 14.250)',
 
     // ─── Worked panel ─────────────────────────────────────────────

@@ -1,5 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { resolveModeAndSubmode } from './mode';
+import { resolveModeAndSubmode, usesSignalReport } from './mode';
+
+describe('usesSignalReport', () => {
+    it('is true for FT8 (WSJT-X dB SNR report)', () => {
+        expect(usesSignalReport('FT8')).toBe(true);
+    });
+
+    it('is true for FT4', () => {
+        expect(usesSignalReport('FT4')).toBe(true);
+    });
+
+    it('is case- and whitespace-insensitive', () => {
+        expect(usesSignalReport('  ft8 ')).toBe(true);
+    });
+
+    it('is false for phone modes (SSB/USB)', () => {
+        expect(usesSignalReport('SSB')).toBe(false);
+        expect(usesSignalReport('USB')).toBe(false);
+    });
+
+    it('is false for CW', () => {
+        expect(usesSignalReport('CW')).toBe(false);
+    });
+
+    it('is false for PSK31 (uses ordinary RST)', () => {
+        expect(usesSignalReport('PSK31')).toBe(false);
+    });
+
+    it('is false for empty/unknown input', () => {
+        expect(usesSignalReport('')).toBe(false);
+    });
+});
 
 describe('resolveModeAndSubmode', () => {
     it('maps USB → MODE=SSB, SUBMODE=USB', () => {

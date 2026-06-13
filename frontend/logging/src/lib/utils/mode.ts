@@ -66,6 +66,44 @@ const SUBMODE_TO_MODE: Record<string, string> = {
     APRS: 'PACKET',
 };
 
+/*
+    The WSJT-X-family weak-signal digital modes report a signed dB SNR
+    (e.g. -12, +04) instead of the RST readability/strength (and tone)
+    digits used by phone and CW. RST input validation must branch on this
+    so an FT8 report like "-12" isn't flagged as invalid (and so its sign
+    isn't stripped as the operator edits). Matched case-insensitively
+    against the ADIF MODE or SUBMODE. Limited to the SNR-reporting modes —
+    PSK/RTTY/OLIVIA/MFSK16 etc. still use ordinary RST.
+*/
+const SIGNAL_REPORT_MODES = new Set<string>([
+    'FT8',
+    'FT4',
+    'JT65',
+    'JT9',
+    'JT4',
+    'JT6M',
+    'JT44',
+    'FST4',
+    'FST4W',
+    'Q65',
+    'QRA64',
+    'MSK144',
+    'FSK441',
+    'JTMS',
+    'ISCAT',
+    'JS8',
+    'WSPR',
+]);
+
+/**
+ * True when the given ADIF mode (or submode) reports signal strength as a
+ * signed dB SNR rather than RST digits. Used to pick the right report
+ * validator/format. Empty/unknown input is treated as RST (false).
+ */
+export function usesSignalReport(mode: string): boolean {
+    return SIGNAL_REPORT_MODES.has(mode.trim().toUpperCase());
+}
+
 export interface ResolvedMode {
     /** ADIF MODE — always populated for non-empty input. */
     mode: string;

@@ -561,6 +561,12 @@ read by the e2 resolver. Step (e) breaks into increments:
   root (`cmd/smd`), wired in via the `SetQsoLogger` callback (dependency injection;
   the one-way direction ADR 0029 wanted, achieved without the import). Best-effort:
   a submit failure is logged, never fatal (the QSO already happened on the air).
+  - **Report validation is mode-aware.** FT8 RST_SENT/RST_RCVD are signed dB SNRs
+    (`-12`, `+04`), not phone/CW RST digits. The shared `Rst` SPA component takes a
+    `mode` prop and switches the validator + input cleaning when the mode is a
+    WSJT-X-family weak-signal mode (`utils/mode.ts` `usesSignalReport`,
+    `validators/rst.ts` `isValidSignalReport`) so editing an FT8 QSO in the edit
+    overlay doesn't flag the report red or strip its sign.
   The dial freq comes from the SPA at `qso/start` (`operating_freq_mhz`) — the
   bridge is a pass-through and can't surface it.
 - **Automatic / unattended sequencing is OUT OF SCOPE and NOT SUPPORTED.** The FT8
