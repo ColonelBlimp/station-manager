@@ -23,6 +23,13 @@ const ServiceName = types.ConfigServiceName
 
 // Config is the daemon's on-disk configuration.
 type Config struct {
+	// Version is the config schema version (config.md §13). A file with no
+	// `version` field is the pre-versioning baseline — the catalogue-era shape,
+	// treated as v1. Load migrates older documents up to currentConfigVersion
+	// (migrateDocument) before unmarshalling; applyDefaults stamps it so a
+	// freshly-loaded or first-run config always carries the current version.
+	Version int `json:"version,omitempty"`
+
 	// DataDir is the root directory for on-disk state: sqlite database,
 	// log files, any future cache directories. Resolved via
 	// utils.WorkingDir() at daemon startup.
@@ -338,6 +345,15 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("reading config file: %w", err)
 	}
 
+	// Migrate the raw document up to the current schema version before
+	// unmarshalling (config.md §13). A newer-than-supported file is fatal here
+	// (downgrade guard). Rewrite-on-migration (persisting the upgraded shape) is
+	// deferred until the first real migration lands with §10.
+	data, err = migrateDocument(data)
+	if err != nil {
+		return cfg, fmt.Errorf("migrating config: %w", err)
+	}
+
 	if err = json.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parsing config file: %w", err)
 	}
@@ -507,6 +523,13 @@ const (
 )
 
 func applyDefaults(cfg *Config, baseDir string) {
+	// Stamp the current schema version so a freshly-loaded (version-less) or
+	// first-run config always carries it; migrateDocument has already brought
+	// any older document up to currentConfigVersion by this point (config.md §13).
+	if cfg.Version == 0 {
+		cfg.Version = currentConfigVersion
+	}
+
 	if cfg.DataDir == "" {
 		cfg.DataDir = baseDir
 	}

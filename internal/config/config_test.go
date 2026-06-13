@@ -821,3 +821,41 @@ func TestLoad_RigCatalogueRoundTrip(t *testing.T) {
 		t.Errorf("DefaultRigID = %d, want 2", c2.DefaultRigID)
 	}
 }
+
+// --- §13 versioning & migration scaffold ----------------------------------
+
+func TestLoad_StampsCurrentVersion(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	// A version-less file is the pre-versioning baseline; Load stamps the current
+	// schema version so the in-memory config always carries it.
+	content := `{"data_dir": "/tmp/d", "socket_path": "/tmp/s.sock"}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Version != currentConfigVersion {
+		t.Fatalf("Version = %d, want currentConfigVersion %d", cfg.Version, currentConfigVersion)
+	}
+}
+
+func TestLoad_RejectsNewerConfigVersion(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	// A document from a newer schema than this build supports is fatal — the
+	// downgrade guard (config.md §13.4).
+	content := `{"version": 999, "data_dir": "/tmp/d"}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	_, err := Load(cfgFile)
+	if err == nil {
+		t.Fatal("Load expected error for newer-than-supported config version, got nil")
+	}
+	if !strings.Contains(err.Error(), "downgrade") {
+		t.Fatalf("error = %q, want it to mention downgrade", err.Error())
+	}
+}
