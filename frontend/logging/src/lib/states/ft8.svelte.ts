@@ -220,6 +220,16 @@ class Ft8State {
         this.selectedOffset = hz;
         saveTxOffset(hz);
     }
+
+    /**
+     * Drop the accumulated Band Activity feed. Called on a band change — the
+     * prior rows are decodes from a different band's watering hole and would be
+     * misleading alongside the new band's traffic. Occupancy/suggested refresh
+     * on their own each slot, so only the decode history needs clearing.
+     */
+    clearDecodes(): void {
+        this.decodes = [];
+    }
 }
 
 export const ft8State = new Ft8State();

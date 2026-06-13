@@ -259,6 +259,14 @@ describe('ft8 decode feed', () => {
         latest().emit('ft8-decode', '{bad');
         expect(ft8State.decodes).toEqual([]);
     });
+
+    it('clearDecodes empties the feed (band-change clear)', () => {
+        startFt8();
+        latest().emit('ft8-decode', decodeReport('2026-06-07T14:30:00Z', ['CQ A', 'CQ B']));
+        expect(ft8State.decodes.length).toBeGreaterThan(0);
+        ft8State.clearDecodes();
+        expect(ft8State.decodes).toEqual([]);
+    });
 });
 
 describe('ft8 tx status (ft8-tx SSE)', () => {

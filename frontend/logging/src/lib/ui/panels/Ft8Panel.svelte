@@ -55,6 +55,22 @@
     );
     const band = $derived(frequencyToBand(opFreq));
 
+    // Clear the Band Activity feed when the operating band changes: the
+    // accumulated rows are decodes from the previous band's watering hole and
+    // would be misleading mixed with the new band's traffic. Track the last
+    // seen band so intra-band dial nudges (that don't cross a band boundary)
+    // don't wipe the list. lastBand starts '' so the first run just records
+    // the band — the feed is empty on mount, so that initial clear is a no-op.
+    // Empty band ('' — no/invalid dial freq) is ignored so a transient unknown
+    // doesn't clear it.
+    let lastBand = $state('');
+    $effect(() => {
+        if (band !== '' && band !== lastBand) {
+            ft8State.clearDecodes();
+            lastBand = band;
+        }
+    });
+
     // Operator's Maidenhead grid — the local end of the beam-heading calc for each CQ.
     // pathInfo() tolerates 4/6/8-char; empty/invalid yields no bearing (blank column).
     const myGrid = $derived(configState.loggingStation.myGridsquare);

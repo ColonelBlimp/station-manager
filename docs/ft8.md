@@ -114,7 +114,11 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   the Phone/CW Country panel, purely SPA-side (blank when the CQ has no grid or
   your grid is unset). In `accumulate` mode a **slot divider** (`HH:MM:SS · band`)
   heads each slot's block; the per-row timestamp was dropped (redundant with the
-  divider + the footer's slot clock). The footer slot label is `HH:MM:SS · even/odd`
+  divider + the footer's slot clock). **The feed clears on a band change** — when
+  the operating band (derived from the selected VFO's dial frequency) crosses a band
+  boundary, the accumulated rows are decodes from the previous band's watering hole,
+  so they're dropped rather than mixed with the new band's traffic (intra-band dial
+  nudges don't clear it). The footer slot label is `HH:MM:SS · even/odd`
   — a raw "N busy" count was removed as un-actionable (the occupancy strip carries
   congestion visually). Two display preferences, edited
   from the **Settings tab** (see below) and **daemon-backed** — they live in
