@@ -14,8 +14,11 @@ import (
 // dependency-light: the daemon (cmd/smd) converts the result to an adif.Record
 // and submits it via qsoservice, so internal/ft8 stays free of the storage path.
 //
-//   - Frequency is the dial frequency at QSO start plus the audio offset; the
-//     band is derived from the sum.
+//   - Frequency is the DIAL frequency at QSO start — the FT8 logging convention
+//     (WSJT-X/JTDX log the dial, not dial+audio-offset). Both stations share the
+//     dial but sit at different audio offsets, so baking our TX offset into FREQ
+//     would disagree with the worked station's log and with QRZ/LoTW norms. The
+//     band is derived from the dial. c.OffsetHz is TX placement, not the QSO freq.
 //   - Reports map straight across: RST_SENT is the report WE sent (our SNR of
 //     their signal, rung 3); RST_RCVD is the report THEY sent us (rung 2).
 //   - The whole LoggingStation identity block is copied in; STATION_CALLSIGN
@@ -23,8 +26,7 @@ import (
 //     passes when the operator set only OPERATOR.
 func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now time.Time) types.Qso {
 	now = now.UTC()
-	freqMHz := c.DialFreqMHz + c.OffsetHz/1_000_000.0
-	freq := fmt.Sprintf("%.6f", freqMHz)
+	freq := fmt.Sprintf("%.6f", c.DialFreqMHz)
 
 	q := types.Qso{LogbookID: logbookID}
 	q.LoggingStation = station

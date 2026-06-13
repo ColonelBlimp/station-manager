@@ -34,8 +34,9 @@ func TestBuildQso(t *testing.T) {
 	require.Equal(t, "FT8", q.Mode)
 	require.Equal(t, "G0XYZ", q.StationCallsign)
 	require.Equal(t, "IO91", q.MyGridsquare)
-	// 14.074 + 1500 Hz = 14.0755 MHz → 20m.
-	require.Equal(t, "14.075500", q.Freq)
+	// FT8 logs the DIAL frequency, not dial+offset (WSJT-X convention) — the
+	// 1500 Hz TX offset is deliberately NOT added. 14.074 MHz → 20m.
+	require.Equal(t, "14.074000", q.Freq)
 	require.Equal(t, "20m", q.Band)
 	require.Equal(t, "20260610", q.QsoDate)
 	// HHMM, not HHMMSS — the qso table's time_on/time_off CHECK constraint requires
@@ -81,7 +82,7 @@ func TestNewLoggedQso(t *testing.T) {
 
 	require.Equal(t, "uuid-123", l.UUID)
 	require.Equal(t, "K1ABC", l.Callsign)
-	require.Equal(t, int64(14_075_500), l.FreqHz) // 14.0755 MHz → Hz
+	require.Equal(t, int64(14_074_000), l.FreqHz) // dial 14.074 MHz → Hz (TX offset not added)
 	require.Equal(t, "20m", l.Band)
 	require.Equal(t, "FT8", l.Mode)
 	require.Equal(t, "09:05", l.TimeOn)       // HHMM → HH:MM

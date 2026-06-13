@@ -28,8 +28,9 @@ func TestFt8CompletedQsoLogsToDB(t *testing.T) {
 	lbID := createTestLogbook(t, srv, "FT8", "7Q5MLV")
 
 	// Mirrors the first completed on-air answer-a-CQ exchange (DL9UW on 10 m,
-	// 2026-06-12): we sent R-10, they sent us -15; our offset 2900 Hz on the
-	// 28.074 MHz dial. now is the completion instant (09:10:15 UTC).
+	// 2026-06-12): we sent R-10, they sent us -15; our TX offset 2900 Hz on the
+	// 28.074 MHz dial. FT8 logs the DIAL, so the 2900 Hz offset must NOT appear in
+	// FREQ (asserted below). now is the completion instant (09:10:15 UTC).
 	c := ft8.CompletedQso{
 		TheirCall:      "DL9UW",
 		TheirGrid:      "JO41",
@@ -65,5 +66,13 @@ func TestFt8CompletedQsoLogsToDB(t *testing.T) {
 	if got.Call != "DL9UW" || got.Band != "10m" || got.Mode != "FT8" {
 		t.Fatalf("stored qso = call %q / band %q / mode %q, want DL9UW / 10m / FT8",
 			got.Call, got.Band, got.Mode)
+	}
+	// FT8 logs the DIAL frequency, not dial+TX-offset — the 2900 Hz offset must
+	// not be baked into FREQ (it would disagree with the worked station's log and
+	// QRZ/LoTW). Regression guard for the dial-vs-dial+offset fix (2026-06-13).
+	// Storage normalises the FREQ string (trailing zeros trimmed), so 28.074000 →
+	// "28.074"; the point is it's the dial, not 28.0769.
+	if got.Freq != "28.074" {
+		t.Fatalf("stored freq = %q, want dial 28.074 (TX offset must not be added)", got.Freq)
 	}
 }

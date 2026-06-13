@@ -557,8 +557,12 @@ read by the e2 resolver. Step (e) breaks into increments:
 - **e4 — QSO completion → log: SHIPPED 2026-06-10.** On the 73, the sequencer
   captures a `CompletedQso` and hands it to an **injected sink** (`SetQsoLogger`):
   `internal/ft8/qsolog.go`'s pure `BuildQso(c, station, logbookID, now)` assembles
-  a `types.Qso` (their call/grid; mode FT8; **freq = dial + audio offset**, band
-  derived; RST_SENT = our report, RST_RCVD = theirs; the whole `LoggingStation`
+  a `types.Qso` (their call/grid; mode FT8; **freq = the DIAL frequency** — the FT8
+  logging convention (WSJT-X/JTDX log the dial, not dial+audio-offset); both stations
+  share the dial but sit at different audio offsets, so the TX offset is deliberately
+  NOT added to FREQ (fixed 2026-06-13 — it was previously dial+offset, which disagreed
+  with the worked station's log + QRZ/LoTW); band derived from the dial; RST_SENT = our
+  report, RST_RCVD = theirs; the whole `LoggingStation`
   identity copied in, STATION_CALLSIGN falling back to OPERATOR), and the daemon's
   sink (`cmd/smd`) does `adif.QsoToRecord` → `qsoservice.Submit` (force=false, so
   dupe detection applies). **The "decode ≠ QSO" rule (ADR 0024) becomes "a
