@@ -1,12 +1,11 @@
 # Config System — review + redesign
 
-> **Status:** review complete; **redesign in progress** — decisions captured per topic as
-> they're settled. §1–8 are the current-state review; §9+ are redesign decisions (§9
-> ownership taxonomy — decided 2026-06-13; §10 finish-the-per-rig-move — design decided
-> 2026-06-13, impl pending; §11 dynamic-reload + §12 validation-unification + §13
-> versioning/migration + §14 defaults-home + §15 persistence-shape — design decided
-> 2026-06-13, impl pending). **No code changes accompany this document** — it drives the later
-> refactor.
+> **Status:** review complete; redesign **decided across §9–15** (2026-06-13);
+> **implementation in progress.** §1–8 are the current-state review; §9–15 are the redesign
+> decisions. Implementation so far: **§13 version/migration scaffold + §10 per-rig moves 2a–2d
+> SHIPPED** (see §10.5; §10's 2e audio is deferred to the config-SPA workstream). **§14 defaults,
+> §12 validation, §11 reload, §15 sparse persistence — decided, not yet implemented.** Multi-rig
+> / N-writer parked (§8).
 >
 > **Method:** the **Go code is the source of truth** for everything below. On-disk
 > `config.json` files (dev `build/config.json`, dogfood `~/.local/share/station-manager/config.json`)
@@ -426,7 +425,10 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
    the capture (input) and playback (output) endpoints. One field, the operator never types
    indices (KISS principle), and it absorbs the previously-noted name-matching follow-up.
    (Index-based was the alternative but needs two fields, since input/output enumerate with
-   independent indices.)
+   independent indices.) ⏸ **Implementation DEFERRED to the config-SPA workstream (2026-06-13)**
+   — the device-by-name picker UX is its rightful home, and the daemon-side name resolution
+   should land with it. Until then `RigConfig.Audio.Device` stays the existing index-based
+   capture device, and the TX playback device stays the loose global `ft8.tx.device`.
 2. **`MY_RIG` derivation point** — ✅ **DECIDED 2026-06-13: daemon-side at QSO submit**, a
    single injection point both the phone/CW (handler) and FT8 (sink) submit paths flow through
    (via an injected resolver, so `qsoservice` stays decoupled from `cat`/`config`). It stamps a
@@ -440,12 +442,28 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
    `RigConfig.ModeMappings map[string]types.ModeMapping`; the rig's `Model` already *is* the
    driver. Merge becomes `rigdef(rc.Model).ModeMappings` ← `rc.ModeMappings`.
 
-### 10.5 Status
+### 10.5 Implementation status (2026-06-13)
 
-Design only — no code. Implementation (rigdef `Ft8Mode` field + JSON, `RigConfig` fields,
-`Active*` resolution, **name-based audio-device resolution → capture + playback endpoints**,
-`bridgeInfoFor` + serial wiring, the SPA mode-mappings editor target, `MY_RIG` derivation,
-migration, loose-block removal) is a later, separately-approved phase.
+**SHIPPED** (behind the §13 version/migration scaffold), one slice each:
+- **2a** — rigdef `Ft8Mode` + per-rig `RigConfig.Ft8Mode` override + `ActiveFt8` projection onto
+  `Ft8Config.TX.Mode`; legacy global `ft8.tx.mode` folded typed (`migrateGlobalFt8Mode`).
+- **2b** — `RigConfig.ModeMappings` (keyed by rig literal); **global `bridge.ModeMappings`
+  removed**; first **raw `v1→v2` migration**; per-rig ADIF validation; `bridgeInfoFor` + the
+  PUT handler retargeted to the active rig. (+ an api round-trip test plugging the prior gap.)
+- **2c** — `RigConfig.Overrides` wired into `buildSerialConfig` via an `ActiveBridge` projection.
+- **2d** — `RigConfig.MyRig` + `Config.ResolveMyRig` + submit-time stamp in `qsoservice.Submit`
+  (reuses the existing `Config` dependency — no separate injected resolver; `SubmitImport`
+  preserves imported `MY_RIG`); legacy `logging_station.my_rig` folded typed.
+
+**DEFERRED to the config-SPA workstream:** **2e — name-based audio device** (§10.4 #1).
+
+**Follow-on cleanups (not yet done):**
+- The logging SPA's My Station **"Rig" field is now inert** (MY_RIG is derived at submit) —
+  remove it when the config SPA / per-rig editor lands.
+- **Loose-block removal is partial:** `bridge.mode_mappings` is gone, but `bridge.serial`/
+  `bridge.cat` + `ft8.device` (and the kept-as-projection-target `ft8.tx.mode` /
+  `logging_station.my_rig` Go fields) remain. Full struct removal is a later cleanup, best
+  paired with **§15 sparse persistence** (so removed keys stop being written).
 
 ### 10.6 Editing surface — dedicated config SPA (direction; separate workstream)
 
