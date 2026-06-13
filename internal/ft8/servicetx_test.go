@@ -174,6 +174,31 @@ func TestTransmitNext_PublishesAndCancelsOnDisarm(t *testing.T) {
 	require.False(t, s.txArmed)
 }
 
+// TestAbandonQso_CancelsInFlightTransmission covers the operator off-ramp: hitting
+// Abandon during a transmission (e.g. a Call-CQ that's mid-cycle) must cut TX
+// immediately — drop PTT, stop audio — not let the ~13 s slot finish. Unlike
+// disarm, Abandon leaves TX ARMED so the operator can call CQ or answer again.
+func TestAbandonQso_CancelsInFlightTransmission(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	ch, unsub := s.hub.subscribe()
+	defer unsub()
+
+	require.NoError(t, s.ArmTx(true))
+	require.NoError(t, s.TransmitNext("CQ G0XYZ IO91", 1500))
+
+	st := drainTxState(t, ch, func(st TxState) bool { return st.Transmitting })
+	require.True(t, st.Transmitting)
+
+	s.AbandonQso() // operator hits Abandon mid-transmission
+
+	inFlight := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txInFlight }
+	require.Eventually(t, func() bool { return !inFlight() }, time.Second, 5*time.Millisecond,
+		"Abandon must cancel the in-flight transmission immediately, not wait for the slot")
+
+	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
+	require.True(t, armed(), "Abandon must leave TX armed (only the contact ends, not the TX path)")
+}
+
 // Stop disarms TX (drops PTT / closes the device) and latches the subsystem so
 // it can't be re-armed afterwards.
 func TestStop_DisarmsAndLatchesTx(t *testing.T) {

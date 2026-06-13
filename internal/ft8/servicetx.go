@@ -311,9 +311,22 @@ func (s *Service) SetQsoLogger(fn func(ctx context.Context, c CompletedQso)) {
 }
 
 // AbandonQso drops any active sequenced QSO (operator action). Idempotent.
+// Abandon is the operator's immediate off-ramp: besides stopping the sequencer
+// (no further rungs), it cancels any in-flight transmission NOW — dropping PTT
+// and stopping audio mid-slot rather than letting the current ~13 s cycle play
+// out. TX stays ARMED (the device isn't torn down): only the contact ends, so
+// the operator can call CQ or answer again. (disarmTx is the harder stop that
+// also closes the device.) The cancelled transmission's goroutine clears
+// txCancel/txInFlight and publishes the final ft8-tx state on its own path.
 func (s *Service) AbandonQso() {
 	if s.seq != nil {
 		s.seq.Abandon()
+	}
+	s.txMu.Lock()
+	cancel := s.txCancel
+	s.txMu.Unlock()
+	if cancel != nil {
+		cancel() // abort in-flight; the controller drops PTT on the cancel path
 	}
 }
 
