@@ -749,13 +749,17 @@ func TestApplyRigProfiles_Errors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := tc.cfg
-			err := applyRigProfiles(&cfg)
-			if err == nil {
-				t.Fatalf("applyRigProfiles: expected error containing %q, got nil", tc.want)
+			// Rig-catalogue validation moved from applyRigProfiles to Validate
+			// (config.md §12); assert an error finding carries the message.
+			found := false
+			for _, f := range Validate(tc.cfg) {
+				if !f.Warning && strings.Contains(f.Message, tc.want) {
+					found = true
+					break
+				}
 			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("error = %q, want containing %q", err.Error(), tc.want)
+			if !found {
+				t.Fatalf("Validate: expected an error finding containing %q; got %+v", tc.want, Validate(tc.cfg))
 			}
 		})
 	}

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
-	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -198,33 +197,10 @@ func applyRigProfiles(cfg *Config) error {
 		return nil
 	}
 
-	seen := make(map[int64]struct{}, len(cfg.Rigs))
-	for i := range cfg.Rigs {
-		rc := cfg.Rigs[i]
-		if rc.ID <= 0 {
-			return fmt.Errorf("rigs[%d]: id must be a positive integer", i)
-		}
-		if _, dup := seen[rc.ID]; dup {
-			return fmt.Errorf("rigs: duplicate id %d", rc.ID)
-		}
-		seen[rc.ID] = struct{}{}
-		if rc.Model == "" {
-			return fmt.Errorf("rigs[id=%d]: model must not be empty", rc.ID)
-		}
-		// Per-rig mode-mapping overrides (config.md §10, B2) — validate ADIF
-		// mode/submode here (moved from the old global bridge.mode_mappings check).
-		for rigStr, mm := range rc.ModeMappings {
-			if mm.Mode == "" || !modes.IsValidMode(mm.Mode) {
-				return fmt.Errorf("rigs[id=%d].mode_mappings[%s]: mode %q is not a known ADIF main mode", rc.ID, rigStr, mm.Mode)
-			}
-			if mm.SubMode != "" && !modes.IsValidSubMode(mm.SubMode) {
-				return fmt.Errorf("rigs[id=%d].mode_mappings[%s]: submode %q is not a known ADIF submode", rc.ID, rigStr, mm.SubMode)
-			}
-		}
-	}
-	if cfg.RigByID(cfg.DefaultRigID) == nil {
-		return fmt.Errorf("default_rig_id %d does not match any defined rig", cfg.DefaultRigID)
-	}
+	// Validation (positive/unique ids, non-empty model, default_rig_id resolves,
+	// per-rig mode-mappings) moved to validateRigs in Validate (config.md §12) so
+	// the rules live in the one validator. applyRigProfiles now only folds legacy
+	// loose fields into a catalogue; it has no error path of its own.
 	return nil
 }
 
