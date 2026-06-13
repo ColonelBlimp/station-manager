@@ -25,8 +25,8 @@ func newPipelineTestService(t *testing.T) (*Service, *fakeSerial) {
 	t.Helper()
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -503,8 +503,8 @@ func TestPipeline_TerminalSerialErrorEmitsDisconnect(t *testing.T) {
 func TestPipeline_UnknownDriverExitsCleanly(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "no-such-rig"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "no-such-rig"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -526,8 +526,8 @@ func TestPipeline_UnknownDriverExitsCleanly(t *testing.T) {
 func TestPipeline_OpenFailureExitsCleanly(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -627,8 +627,8 @@ func TestPipeline_TriggerBootstrap_NoOpWhenPipelineNotRunning(t *testing.T) {
 func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-no-such-rig"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-no-such-rig"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -678,8 +678,8 @@ func TestPipeline_BridgeError_UnknownDriver(t *testing.T) {
 func TestHub_CachesBridgeErrorForLateSubscriber(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "unknown-on-purpose"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "unknown-on-purpose"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -818,8 +818,8 @@ func TestHub_ClearsRigDisconnectedCacheOnRigState(t *testing.T) {
 func TestPipeline_BridgeError_OpenFailure(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "/dev/no-such-port"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "/dev/no-such-port"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)

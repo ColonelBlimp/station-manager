@@ -185,11 +185,18 @@ func applyRigProfiles(cfg *Config) error {
 		// in the loose fields. Fold it into one rig so every config is
 		// catalogue-shaped from here on. Skipped when there's no loose
 		// identity (a bridge-disabled / FT8-only-default host).
-		if cfg.Bridge.Cat.Driver != "" || cfg.Bridge.Serial.Port != "" || cfg.Ft8.Device != "" {
+		var driver, port string
+		if cfg.Bridge.Cat != nil {
+			driver = cfg.Bridge.Cat.Driver
+		}
+		if cfg.Bridge.Serial != nil {
+			port = cfg.Bridge.Serial.Port
+		}
+		if driver != "" || port != "" || cfg.Ft8.Device != "" {
 			cfg.Rigs = []types.RigConfig{{
 				ID:    legacyRigID,
-				Model: cfg.Bridge.Cat.Driver,
-				Port:  cfg.Bridge.Serial.Port,
+				Model: driver,
+				Port:  port,
 				Audio: types.RigAudioConfig{Device: cfg.Ft8.Device},
 			}}
 			cfg.DefaultRigID = legacyRigID // the synthesised rig is the rig
@@ -271,11 +278,25 @@ func (c Config) RigByID(id int64) *types.RigConfig {
 // future work alongside the discovery/picker UI.
 func (c Config) ActiveBridge() types.BridgeConfig {
 	b := c.Bridge
-	if rc := c.RigByID(c.DefaultRigID); rc != nil {
-		b.Cat.Driver = rc.Model
-		b.Serial.Port = rc.Port
-		b.Serial.Overrides = rc.Overrides // per-rig serial overrides (config.md §10, B2)
+	// Serial/Cat are nil in the stored config (config.md §10): build fresh blocks
+	// for the runtime projection so the returned view is always populated (callers
+	// deref freely) and never aliases — or persists onto — the stored config. Any
+	// legacy values still on disk are carried, then the active rig overlays them.
+	serial := types.BridgeSerialConfig{}
+	cat := types.BridgeCatConfig{}
+	if b.Serial != nil {
+		serial = *b.Serial
 	}
+	if b.Cat != nil {
+		cat = *b.Cat
+	}
+	if rc := c.RigByID(c.DefaultRigID); rc != nil {
+		cat.Driver = rc.Model
+		serial.Port = rc.Port
+		serial.Overrides = rc.Overrides // per-rig serial overrides (config.md §10, B2)
+	}
+	b.Serial = &serial
+	b.Cat = &cat
 	return b
 }
 
@@ -556,8 +577,9 @@ func WriteJSON(path string, cfg Config) error {
 // Normalize applies the operator-identity transforms shared by Load and the PUT
 // handler (config.md §12): uppercase + trim the station callsign, normalise the
 // Maidenhead grid and derive MY_LAT/MY_LON from it (cleared when the grid is
-// empty), and trim the zone / DXCC strings. Pure transform — validation is a
-// separate step (Validate). Run before Validate so both paths see one shape.
+// empty), trim the zone / DXCC strings, and drop per-rig overrides that merely
+// restate the rigdef default. Pure transform — validation is a separate step
+// (Validate). Run before Validate so both paths see one shape.
 func Normalize(cfg *Config) {
 	ls := &cfg.LoggingStation
 	ls.StationCallsign = strings.ToUpper(strings.TrimSpace(ls.StationCallsign))
@@ -572,6 +594,45 @@ func Normalize(cfg *Config) {
 	ls.MyCqZone = strings.TrimSpace(ls.MyCqZone)
 	ls.MyITUZone = strings.TrimSpace(ls.MyITUZone)
 	ls.MyDXCC = strings.TrimSpace(ls.MyDXCC)
+
+	normalizeRigOverrides(cfg)
+
+	// Drop vestigial empty loose serial/cat blocks (config.md §10): serial port +
+	// CAT driver are per-rig now (RigConfig.Port + Model), so an empty stored block
+	// is noise — and a non-nil pointer to a zero struct re-serializes as `{}`, which
+	// omitempty can't drop, so nil it explicitly. Runs after applyRigProfiles, so a
+	// legacy block that still carried a value has already been folded into the
+	// catalogue; only genuinely-empty leftovers are cleared here.
+	if cfg.Bridge.Serial != nil && cfg.Bridge.Serial.Port == "" {
+		cfg.Bridge.Serial = nil
+	}
+	if cfg.Bridge.Cat != nil && cfg.Bridge.Cat.Driver == "" {
+		cfg.Bridge.Cat = nil
+	}
+}
+
+// normalizeRigOverrides nils out per-rig Ft8Mode / MyRig overrides that merely
+// repeat the rig's own rigdef default (config.md §10): a nil override derives
+// from the rigdef, so "nil" and "== default" produce the same runtime value —
+// storing the redundant copy is noise and freezes the value against a future
+// rigdef-default change. Keeps the persisted config to "only what differs from
+// the rig's defaults" (the operator's pointer-omit-when-default model). An
+// override that genuinely differs, and the explicit "" MyRig suppress, are left
+// untouched; an unknown model (no rigdef) is left as-is.
+func normalizeRigOverrides(cfg *Config) {
+	for i := range cfg.Rigs {
+		rc := &cfg.Rigs[i]
+		def, ok := cat.Lookup(rc.Model)
+		if !ok {
+			continue
+		}
+		if rc.Ft8Mode != nil && *rc.Ft8Mode == def.Ft8Mode {
+			rc.Ft8Mode = nil
+		}
+		if rc.MyRig != nil && *rc.MyRig == def.Name {
+			rc.MyRig = nil
+		}
+	}
 }
 
 // Config default-fill values + the defaults discoverability index live in

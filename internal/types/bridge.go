@@ -16,10 +16,17 @@ package types
 // Serial / CAT sub-blocks describe the rig hardware. Driver names
 // match the JSON files under `internal/cat/rigs/` (yaesu-ft710,
 // yaesu-ftdx10 today; more as `internal/cat` grows).
+//
+// Serial / Cat are pointers (omitempty) because serial port + CAT driver live
+// per-rig now (RigConfig.Port + Model, config.md §10): the stored config carries
+// nil here — only Config.ActiveBridge() populates them, as a fresh runtime
+// projection of the active rig — so a clean config no longer persists empty
+// `"serial": {}` / `"cat": {}` blocks. A loaded legacy config that still has
+// them is read once by the catalogue-synthesis fold.
 type BridgeConfig struct {
 	Enabled  bool                 `json:"enabled"`
-	Serial   BridgeSerialConfig   `json:"serial"`
-	Cat      BridgeCatConfig      `json:"cat"`
+	Serial   *BridgeSerialConfig  `json:"serial,omitempty"`
+	Cat      *BridgeCatConfig     `json:"cat,omitempty"`
 	Timeouts BridgeTimeoutsConfig `json:"timeouts,omitempty"`
 
 	// Tune configures the tune-carrier feature (ADR 0027): the operator's

@@ -89,8 +89,8 @@ func TestKeyFt8Tx_RefusesUnverifiedIdentity(t *testing.T) {
 func TestKeyFt8Tx_NoActiveClient(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
 	}, &logging.Service{})
 	err := s.KeyFt8Tx(context.Background(), "DATA-U")
 	if !stderr.Is(err, ErrRigNotConnected) {

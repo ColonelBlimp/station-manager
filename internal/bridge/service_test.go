@@ -98,8 +98,8 @@ func TestStart_Disabled_NoPublisher(t *testing.T) {
 func TestStart_Enabled_PublishesPipelineEvents(t *testing.T) {
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	})
 	fake := installFakeSerial(s)
 	if err := s.Initialize(); err != nil {
@@ -140,8 +140,8 @@ func TestStart_Enabled_PublishesPipelineEvents(t *testing.T) {
 func TestStart_Idempotent(t *testing.T) {
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	})
 	installFakeSerial(s)
 	_ = s.Initialize()
@@ -162,8 +162,8 @@ func TestStart_Idempotent(t *testing.T) {
 func TestStop_ClosesHub_AndDrainsSubscribers(t *testing.T) {
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	})
 	installFakeSerial(s)
 	_ = s.Initialize()

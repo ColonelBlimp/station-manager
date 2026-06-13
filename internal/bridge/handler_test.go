@@ -26,8 +26,8 @@ func newHandlerTestService(t *testing.T) (*Service, *fakeSerial, chan struct{}) 
 	t.Helper()
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	fake := installFakeSerial(s)
 	if err := s.Initialize(); err != nil {
@@ -440,7 +440,7 @@ func TestHTTPHandler_BoundsWriteDeadlinePerWrite(t *testing.T) {
 
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	})
 
 	rec := newSSEDeadlineRecorder()

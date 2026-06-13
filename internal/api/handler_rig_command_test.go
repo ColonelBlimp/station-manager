@@ -22,7 +22,7 @@ func rigTestServer(t *testing.T) *Server {
 	srv := testServer(t)
 	srv.bridge = bridge.New(types.BridgeConfig{
 		Enabled: true,
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
 	}, &logging.Service{})
 	return srv
 }

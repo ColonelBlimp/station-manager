@@ -43,8 +43,8 @@ func TestSupervisor_RetriesUntilOpenSucceeds(t *testing.T) {
 
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -100,8 +100,8 @@ func TestSupervisor_ReopensAfterTerminalReadError(t *testing.T) {
 
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -161,8 +161,8 @@ func TestSupervisor_PermanentErrorDoesNotRetry(t *testing.T) {
 
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "nonexistent-rig"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "nonexistent-rig"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -229,8 +229,8 @@ func TestSupervisor_DedupesIdenticalOpenFailureAcrossRetries(t *testing.T) {
 
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ft710"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
 	}, &logging.Service{})
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)

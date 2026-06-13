@@ -18,7 +18,7 @@ func tuneTestService(t *testing.T) (*Service, *fakeSerial) {
 	t.Helper()
 	s := newTestService(t, types.BridgeConfig{
 		Enabled: true,
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
 	})
 	f := newFakeSerial()
 	s.activeClient = f

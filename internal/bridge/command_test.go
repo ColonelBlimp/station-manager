@@ -20,8 +20,8 @@ func newCommandTestService(t *testing.T) (*Service, *fakeSerial) {
 	t.Helper()
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
 	}, &logging.Service{})
 	fake := newFakeSerial()
 	s.mu.Lock()
@@ -101,8 +101,8 @@ func TestSendCommand_RejectsBeforeWrite(t *testing.T) {
 func TestSendCommand_NoActiveClient(t *testing.T) {
 	s := New(types.BridgeConfig{
 		Enabled: true,
-		Serial:  types.BridgeSerialConfig{Port: "fake"},
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
 	}, &logging.Service{})
 	// activeClient left nil — pipeline never started.
 	err := s.SendCommand(context.Background(), "set_freq", "14074000")

@@ -643,8 +643,8 @@ func TestWarnings_NonLoopbackTCPBind(t *testing.T) {
 func TestApplyRigProfiles_MigratesLegacy(t *testing.T) {
 	cfg := Config{
 		Bridge: types.BridgeConfig{
-			Cat:    types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
-			Serial: types.BridgeSerialConfig{Port: "/dev/ttyUSB0"},
+			Cat:    &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+			Serial: &types.BridgeSerialConfig{Port: "/dev/ttyUSB0"},
 		},
 		Ft8:          types.Ft8Config{Device: "USB Audio CODEC"},
 		DefaultRigID: 1, // applyDefaults would have stamped this before us
@@ -773,8 +773,8 @@ func TestLoad_MigratesLegacyBridge(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	base := DefaultConfig(dir)
 	base.Bridge.Enabled = true
-	base.Bridge.Cat.Driver = "yaesu-ftdx10"
-	base.Bridge.Serial.Port = "/dev/ttyUSB0"
+	base.Bridge.Cat = &types.BridgeCatConfig{Driver: "yaesu-ftdx10"}
+	base.Bridge.Serial = &types.BridgeSerialConfig{Port: "/dev/ttyUSB0"}
 	base.Ft8.Device = "codec-a"
 	if err := WriteJSON(path, base); err != nil {
 		t.Fatal(err)

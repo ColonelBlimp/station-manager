@@ -22,7 +22,7 @@ func tuneTestServer(t *testing.T) *Server {
 	srv := testServer(t)
 	srv.bridge = bridge.New(types.BridgeConfig{
 		Enabled: true,
-		Cat:     types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
 	}, &logging.Service{})
 	return srv
 }
@@ -82,7 +82,7 @@ func TestBridgeInfoFor_Tune(t *testing.T) {
 	for _, driver := range []string{"yaesu-ftdx10", "yaesu-ft710"} {
 		cfg := config.DefaultConfig(t.TempDir())
 		cfg.Bridge.Enabled = true
-		cfg.Bridge.Cat.Driver = driver
+		cfg.Bridge.Cat = &types.BridgeCatConfig{Driver: driver}
 		if info := bridgeInfoFor(cfg); !info.Tune {
 			t.Errorf("BridgeInfo.Tune = false for %s; want true", driver)
 		}

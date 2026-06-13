@@ -54,7 +54,7 @@ func TestHandleGetConfig_PreSetup(t *testing.T) {
 func TestBridgeInfoFor_Ops(t *testing.T) {
 	cfg := config.DefaultConfig(t.TempDir())
 	cfg.Bridge.Enabled = true
-	cfg.Bridge.Cat.Driver = "yaesu-ftdx10"
+	cfg.Bridge.Cat = &types.BridgeCatConfig{Driver: "yaesu-ftdx10"}
 
 	info := bridgeInfoFor(cfg)
 

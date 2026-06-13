@@ -3,7 +3,9 @@
 > **Status:** review complete; redesign **decided across §9–15** (2026-06-13);
 > **implementation in progress.** §1–8 are the current-state review; §9–15 are the redesign
 > decisions. Implementation so far: **§13 version/migration scaffold + §10 per-rig moves 2a–2d
-> SHIPPED** (see §10.5; §10's 2e audio is deferred to the config-SPA workstream). **§12 validation
+> SHIPPED**, plus loose-block removal (`bridge.serial`/`cat` → `*omitempty`) + a canonicalising
+> `Normalize` that drops rig overrides equal to the rigdef default (see §10.5; §10's 2e audio is
+> deferred to the config-SPA workstream). **§12 validation
 > unification SHIPPED** (§12a consolidation + §12b rig/field rules + the `Validate`/`Normalize` PUT
 > rewire — see §12 status). **§13 versioning/migration scaffold SHIPPED** (§13.6). **§15 persistence
 > shape SETTLED** — sparse-on-disk rejected; filled-on-disk kept, default-value drift handled by a
@@ -461,15 +463,25 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
   (reuses the existing `Config` dependency — no separate injected resolver; `SubmitImport`
   preserves imported `MY_RIG`); legacy `logging_station.my_rig` folded typed.
 
-**DEFERRED to the config-SPA workstream:** **2e — name-based audio device** (§10.4 #1).
+**SHIPPED — loose-block removal + canonicalising Normalize (2026-06-13):**
+- **`bridge.serial` / `bridge.cat` dropped.** `BridgeConfig.Serial`/`Cat` are now
+  `*pointer,omitempty`: the **stored** config carries `nil` (so empty `"serial": {}` / `"cat": {}`
+  no longer persist), and `ActiveBridge()` builds a fresh, always-non-nil runtime projection of the
+  active rig (no aliasing of stored state; callers deref freely). The legacy-synthesis fold reads
+  them nil-guarded.
+- **`Normalize` now canonicalises to "only what differs":** it nils any per-rig `Ft8Mode`/`MyRig`
+  override that merely restates the rigdef default (`normalizeRigOverrides`, via `cat.Lookup`) and
+  nils empty loose `serial`/`cat` blocks (a non-nil pointer to a zero struct would re-serialize as
+  `{}`). Runs on **every** Load + PUT, so configs stay clean, not just at migration. Verified end
+  to end on the dev `build/config.json`: both rigs reduce to `{id, model, port}` while
+  `ResolveMyRig` / `ActiveFt8().TX.Mode` still derive correctly, and `bridge` reduces to
+  `{enabled, timeouts, tune}`.
 
-**Follow-on cleanups (not yet done):**
-- The logging SPA's My Station **"Rig" field is now inert** (MY_RIG is derived at submit) —
-  remove it when the config SPA / per-rig editor lands.
-- **Loose-block removal is partial:** `bridge.mode_mappings` is gone, but `bridge.serial`/
-  `bridge.cat` + `ft8.device` (and the kept-as-projection-target `ft8.tx.mode` /
-  `logging_station.my_rig` Go fields) remain. Full struct removal is a later cleanup, best
-  paired with **§15 sparse persistence** (so removed keys stop being written).
+**DEFERRED to the config-SPA workstream:** **2e — name-based audio device** (§10.4 #1); the live
+global `ft8.tx.device` stays in place until then (it's a *used* value, not vestigial). The logging
+SPA's My Station **"Rig" field is inert** (MY_RIG derived) — remove it when the per-rig editor
+lands. `bridge.tune` `{}` is a *legitimate* defaults block (tune knobs are code-constant
+ceilings, ADR 0027), not vestigial — kept.
 
 ### 10.6 Editing surface — dedicated config SPA (direction; separate workstream)
 

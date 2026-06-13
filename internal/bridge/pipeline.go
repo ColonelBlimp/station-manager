@@ -127,7 +127,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		return exitPermanent
 	}
 
-	serialCfg, err := buildSerialConfig(s.cfg.Serial, def.Serial)
+	serialCfg, err := buildSerialConfig(*s.cfg.Serial, def.Serial)
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Msg("bridge: serial config build failed; pipeline not started")
 		s.publishExitBridgeError(BridgeErrCodeSerialConfigInvalid, map[string]string{"error": errMessage(err)})
