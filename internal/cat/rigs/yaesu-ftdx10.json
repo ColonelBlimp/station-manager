@@ -4,6 +4,7 @@
   "manufacturer": "Yaesu",
   "model": "FTdx10",
   "family": "yaesu",
+  "ft8_mode": "DATA-U",
   "description": "Yaesu FTdx10 HF/50MHz SDR transceiver. ASCII CAT terminated by ';'. Push-state updates via AI mode. Commands, states, tag names, and mode mappings lifted from v1's battle-tested default (internal/config/defaults.go on the v1 branch).",
   "terminator": ";",
   "serial": {

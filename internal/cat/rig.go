@@ -22,6 +22,14 @@ type RigDefinition struct {
 	Commands     []Command                    `json:"commands"`
 	States       []State                      `json:"states"`
 	ModeMappings map[string]types.ModeMapping `json:"mode_mappings,omitempty"`
+
+	// Ft8Mode is the rig-mode literal FT8 operates in on this model (e.g.
+	// "DATA-U" on the Yaesus) — the per-model default the FT8 TX controller
+	// switches to before keying, and the mode band-select sets. The rigdef
+	// supplies it as the default; an operator may override per rig via
+	// RigConfig.Ft8Mode (config.md §10). Empty = no FT8 default for this model
+	// (leave the rig's current mode).
+	Ft8Mode string `json:"ft8_mode,omitempty"`
 }
 
 // RigSerial carries serial-port defaults for the rig. Values are in

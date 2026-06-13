@@ -4,6 +4,7 @@
   "manufacturer": "Yaesu",
   "model": "FT-710",
   "family": "yaesu",
+  "ft8_mode": "DATA-U",
   "description": "Yaesu FT-710 HF/50MHz SDR transceiver. Verified against FT-710_CAT_OM_ENG_2306-C. Mirrors the FTdx10 (same Yaesu ASCII+';' family, same mode codes, same FA/FB/MD0/PC/PB/AI/VS/SV/BS/BU/BD/TX formats). Differences from the FTdx10: identity code is 0800 (not 0761); SPLIT only has 0/1 (no ON+). VS P1 semantically maps main-band to VFO-A or VFO-B (operationally equivalent to FTdx10). Inbound write commands (set_freq/set_freq_b/set_mode/set_power/swap_vfo/band_up/band_down/set_band) added 2026-06-05 from the CAT OM (formats byte-identical to the FTdx10) and bench-confirmed on the live FT-710 the same day (identity 0800, all eight non-TX ops + READ). TX/tune (tx_on/tx_off; format also identical, TX1;/TX0;) wired 2026-06-06 and live-confirmed on the FT-710 the same day (Tune button keys an RTTY-U carrier at tune power and unkeys with a clean mode+power restore); deliberately NOT exposed (tune-controller-only, ADR 0027) so only the guaranteed-stop tune path may key TX. This lights up TuneSupported for the FT-710.",
   "terminator": ";",
   "serial": {

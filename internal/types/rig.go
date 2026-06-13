@@ -56,6 +56,14 @@ type RigConfig struct {
 	// Projected onto Ft8Config.Device for the active rig (the one
 	// Config.DefaultRigID points at). Empty = the system default device.
 	Audio RigAudioConfig `json:"audio,omitzero"`
+
+	// Ft8Mode is the operator's optional per-rig override of the FT8 operating
+	// mode literal (config.md §10, scope B2). nil = use the rigdef default for
+	// this rig's Model (cat.RigDefinition.Ft8Mode); a non-nil value (including
+	// "") overrides it — "" meaning "leave the rig's current mode". Pointer so
+	// "unset → use rigdef default" is distinguishable from an explicit ""
+	// override. Resolved + projected onto Ft8Config.TX.Mode by Config.ActiveFt8.
+	Ft8Mode *string `json:"ft8_mode,omitempty"`
 }
 
 // RigAudioConfig selects a rig's audio interface. Device is a single

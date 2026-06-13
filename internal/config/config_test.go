@@ -859,3 +859,60 @@ func TestLoad_RejectsNewerConfigVersion(t *testing.T) {
 		t.Fatalf("error = %q, want it to mention downgrade", err.Error())
 	}
 }
+
+// --- §10 slice 2a: per-rig FT8 mode ---------------------------------------
+
+func TestLoad_FoldsGlobalFt8ModeOntoActiveRig(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	// Legacy global ft8.tx.mode (DATA-L) + a catalogue; Load folds it onto the
+	// active rig's per-rig override and clears the global knob.
+	content := `{
+		"data_dir": "/tmp/d",
+		"rigs": [{"id": 1, "model": "yaesu-ftdx10"}],
+		"default_rig_id": 1,
+		"ft8": {"tx": {"mode": "DATA-L"}}
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	rc := cfg.RigByID(1)
+	if rc == nil || rc.Ft8Mode == nil || *rc.Ft8Mode != "DATA-L" {
+		t.Fatalf("active rig Ft8Mode = %v, want override DATA-L", rc.Ft8Mode)
+	}
+	if cfg.Ft8.TX != nil && cfg.Ft8.TX.Mode != "" {
+		t.Fatalf("global Ft8TXConfig.Mode = %q, want cleared", cfg.Ft8.TX.Mode)
+	}
+	if got := cfg.ActiveFt8().TX.Mode; got != "DATA-L" {
+		t.Fatalf("ActiveFt8().TX.Mode = %q, want DATA-L (the per-rig override)", got)
+	}
+}
+
+func TestActiveFt8_UsesRigdefDefaultWhenNoOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	// No global ft8.tx.mode, no per-rig override → ActiveFt8 falls back to the
+	// rigdef's ft8_mode default for the model (FTdx10 ships DATA-U).
+	content := `{
+		"data_dir": "/tmp/d",
+		"rigs": [{"id": 1, "model": "yaesu-ftdx10"}],
+		"default_rig_id": 1
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if rc := cfg.RigByID(1); rc == nil || rc.Ft8Mode != nil {
+		t.Fatalf("rig Ft8Mode = %v, want nil (rely on rigdef default)", rc.Ft8Mode)
+	}
+	if got := cfg.ActiveFt8().TX.Mode; got != "DATA-U" {
+		t.Fatalf("ActiveFt8().TX.Mode = %q, want rigdef default DATA-U", got)
+	}
+}

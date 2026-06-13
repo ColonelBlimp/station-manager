@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -217,6 +218,28 @@ func applyRigProfiles(cfg *Config) error {
 	return nil
 }
 
+// migrateGlobalFt8Mode folds the legacy global ft8.tx.mode into the active rig's
+// per-rig Ft8Mode override (config.md §10). The Ft8TXConfig.Mode field is retained
+// only as the runtime projection target (set by ActiveFt8), no longer an operator
+// knob — so any value found there is moved onto the active rig (when that rig has
+// no explicit override yet) and cleared. Typed + idempotent: a no-op once the
+// value lives on the rig. Field REMOVALS (mode_mappings, MyRig) use the raw
+// versioned migrations instead; this field is kept, so a typed fold suffices.
+func migrateGlobalFt8Mode(cfg *Config) {
+	if cfg.Ft8.TX == nil || cfg.Ft8.TX.Mode == "" {
+		return
+	}
+	rc := cfg.RigByID(cfg.DefaultRigID)
+	if rc == nil {
+		return // no active rig to carry it (degenerate config); leave as-is
+	}
+	if rc.Ft8Mode == nil {
+		mode := cfg.Ft8.TX.Mode
+		rc.Ft8Mode = &mode
+	}
+	cfg.Ft8.TX.Mode = "" // no longer a global knob; ActiveFt8 re-projects it per-rig
+}
+
 // RigByID returns the catalogue entry with the given id, or nil if none.
 func (c Config) RigByID(id int64) *types.RigConfig {
 	for i := range c.Rigs {
@@ -251,8 +274,30 @@ func (c Config) ActiveBridge() types.BridgeConfig {
 // onto Device. Same authority rule as ActiveBridge.
 func (c Config) ActiveFt8() types.Ft8Config {
 	f := c.Ft8
-	if rc := c.RigByID(c.DefaultRigID); rc != nil {
-		f.Device = rc.Audio.Device
+	rc := c.RigByID(c.DefaultRigID)
+	if rc == nil {
+		return f
+	}
+	f.Device = rc.Audio.Device
+
+	// Resolve the per-rig FT8 mode (config.md §10, B2): the operator's per-rig
+	// override wins, else the rigdef default for this rig's Model. Project it
+	// onto Ft8Config.TX.Mode so the FT8 TX controller's consumer (txMode) is
+	// unchanged. Copy the TX block first so we never mutate the stored config's
+	// shared TX pointer.
+	mode := ""
+	if rc.Ft8Mode != nil {
+		mode = *rc.Ft8Mode
+	} else if def, ok := cat.Lookup(rc.Model); ok {
+		mode = def.Ft8Mode
+	}
+	if mode != "" || f.TX != nil {
+		tx := types.Ft8TXConfig{}
+		if f.TX != nil {
+			tx = *f.TX
+		}
+		tx.Mode = mode
+		f.TX = &tx
 	}
 	return f
 }
@@ -366,6 +411,12 @@ func Load(path string) (Config, error) {
 	if err = applyRigProfiles(&cfg); err != nil {
 		return cfg, fmt.Errorf("resolving rig profiles: %w", err)
 	}
+
+	// Fold the legacy global ft8.tx.mode into the active rig's per-rig override
+	// (config.md §10). Typed + idempotent — the Ft8TXConfig.Mode field is kept as
+	// the runtime projection target, so a typed fold is simpler than a raw
+	// versioned migration (those are reserved for field REMOVALS).
+	migrateGlobalFt8Mode(&cfg)
 
 	if err = validateForwarders(cfg.Forwarders); err != nil {
 		return cfg, fmt.Errorf("validating forwarders: %w", err)
