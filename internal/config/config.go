@@ -473,18 +473,15 @@ func Load(path string) (Config, error) {
 	migrateGlobalFt8Mode(&cfg)
 	migrateGlobalMyRig(&cfg)
 
-	if err = validateForwarders(cfg.Forwarders); err != nil {
-		return cfg, fmt.Errorf("validating forwarders: %w", err)
-	}
-	if err = validateLookup(cfg.Lookup); err != nil {
-		return cfg, fmt.Errorf("validating lookup: %w", err)
-	}
-	if err = validateSmtp(cfg.Smtp); err != nil {
-		return cfg, fmt.Errorf("validating smtp: %w", err)
-	}
-
-	if err = validateBridge(cfg.ActiveBridge()); err != nil {
-		return cfg, fmt.Errorf("validating bridge: %w", err)
+	// Single validation entry (config.md §12): the consolidated Validate replaces
+	// the per-validator calls. Any error finding is fatal at Load (clear message);
+	// warnings are advisory and surfaced separately via Warnings() after the logger
+	// is up. (Rig-catalogue validation still runs in applyRigProfiles above; it
+	// folds into Validate with §12b.)
+	for _, f := range Validate(cfg) {
+		if !f.Warning {
+			return cfg, fmt.Errorf("invalid config (%s): %s", f.Code, f.Message)
+		}
 	}
 
 	return cfg, nil
@@ -576,57 +573,9 @@ func WriteJSON(path string, cfg Config) error {
 	return nil
 }
 
-// Default values applied by applyDefaults when the operator leaves a field
-// zero-valued. Each is the fallback layer beneath operator config — every one
-// of these is overridable in config.json; naming them keeps the magnitudes in
-// one place instead of scattered as bare literals across applyDefaults. The
-// per-field rationale lives at the assignment site below.
-const (
-	// HTTP server (seconds unless noted).
-	defaultReadHeaderTimeoutSec     = 5
-	defaultReadTimeoutSec           = 10
-	defaultWriteTimeoutSec          = 30
-	defaultIdleTimeoutSec           = 120
-	defaultShutdownTimeoutSec       = 10
-	defaultMaxBodyBytes             = 1 << 20 // 1 MiB
-	defaultPageLimit                = 50
-	defaultMaxPageLimit             = 500
-	defaultMaxConcurrentRequests    = 128
-	defaultMaxEventSubscribers      = 16
-	defaultSubmitRatePerSec         = 20
-	defaultSubmitRateBurst          = 40
-	defaultMaxContactHistoryResults = 100
-
-	// Datastore connection pool.
-	defaultMaxOpenConns        = 8
-	defaultMaxIdleConns        = 8
-	defaultContextTimeoutSec   = 10
-	defaultTxContextTimeoutSec = 10
-
-	// Logging rotation.
-	defaultLogFileMaxSizeMB  = 100
-	defaultLogFileMaxBackups = 5
-	defaultLogFileMaxAgeDays = 30
-
-	// Station knobs + default selectors.
-	defaultAmpMultiplier = 1.0
-	defaultLogbookID     = 1
-	defaultRigID         = 1
-
-	// Forwarder cadence.
-	defaultForwarderTickIntervalSec = 120
-	defaultForwarderBatchSize       = 5
-
-	// Enrichment pipeline (ADR 0017).
-	defaultCountryTTLDays     = 365
-	defaultStationTTLDays     = 90
-	defaultRefreshMaxInFlight = 4
-
-	// Lookup providers + SMTP.
-	defaultLookupHTTPTimeoutSec = 10
-	defaultSmtpPort             = 587
-	defaultSmtpTimeoutSec       = 30
-)
+// Config default-fill values + the defaults discoverability index live in
+// defaults.go; safety ceilings are enforced in their owning subsystems (see
+// defaults.go for the index). config.md §14.
 
 func applyDefaults(cfg *Config, baseDir string) {
 	// Stamp the current schema version so a freshly-loaded (version-less) or

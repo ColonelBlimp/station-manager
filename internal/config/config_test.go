@@ -1043,3 +1043,27 @@ func TestResolveMyRig_DeriveAndSuppress(t *testing.T) {
 		t.Fatalf("ResolveMyRig() with override = %q, want 'Homebrew TX'", got)
 	}
 }
+
+// --- §12a slice: consolidated Validate -------------------------------------
+
+func TestValidate_CollectsErrorsAndWarnings(t *testing.T) {
+	cfg := DefaultConfig(t.TempDir())
+	cfg.Forwarders = []types.ForwarderConfig{{Type: "qrz"}} // empty name → error finding
+	cfg.Server.Protocol = "tcp"
+	cfg.SocketPath = "0.0.0.0:8080" // non-loopback bind → warning finding
+
+	var gotErr, gotWarn bool
+	for _, f := range Validate(cfg) {
+		if f.Warning {
+			gotWarn = true
+		} else {
+			gotErr = true
+		}
+	}
+	if !gotErr {
+		t.Error("Validate: expected an error finding for the invalid forwarder")
+	}
+	if !gotWarn {
+		t.Error("Validate: expected a warning finding for the non-loopback TCP bind")
+	}
+}

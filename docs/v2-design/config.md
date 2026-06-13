@@ -4,8 +4,8 @@
 > **implementation in progress.** §1–8 are the current-state review; §9–15 are the redesign
 > decisions. Implementation so far: **§13 version/migration scaffold + §10 per-rig moves 2a–2d
 > SHIPPED** (see §10.5; §10's 2e audio is deferred to the config-SPA workstream). **§14 defaults,
-> §12 validation, §11 reload, §15 sparse persistence — decided, not yet implemented.** Multi-rig
-> / N-writer parked (§8).
+> §12 validation, §11 reload, §15 sparse persistence — decided, not yet implemented** (§14a consolidation shipped, §14b `*T`
+> fold deferred — see §14.5). Multi-rig / N-writer parked (§8).
 >
 > **Method:** the **Go code is the source of truth** for everything below. On-disk
 > `config.json` files (dev `build/config.json`, dogfood `~/.local/share/station-manager/config.json`)
@@ -682,11 +682,21 @@ Whether filled defaults materialize to config.json or it stays sparse is a **per
 question (separate topic). Defaults-home unifies *declaration* + *resolution* + the ceiling
 distinction only.
 
-### 14.5 Status
+### 14.5 Implementation status (2026-06-13)
 
-Design only — no code. Implementation (the `defaults.go` consolidation, the single `applyDefaults`
-pass + `*T` conversions, the ceilings section + clamp-with-warning in `normalize`) is a later,
-separately-approved phase.
+**SHIPPED — §14a consolidation/index:** `internal/config/defaults.go` is the single
+discoverability point (the four-flavor model + the relocated numeric const block + the index of
+subsystem-enforced safety ceilings, which stay in `bridge`/`ft8`/`types` to avoid coupling).
+
+**DEFERRED — §14b `*T` wart fix:** converting the `(a′)` `DefaultConfig`-seed booleans
+(`logging.with_timestamp`/`file_logging`/`log_file_compress`, `smtp.starttls`) to `*T` would
+fold the two default-application mechanisms into one, but it churns the shared
+`types.LoggingConfig`/`SmtpConfig` consumed by the logging + email subsystems (and reddens their
+tests) for a cosmetic gain. The `DefaultConfig`-seed is the standard Go idiom for a default-true
+bool. Accepted as-is.
+
+**Clamp-with-warning in `normalize`** lands with §12 (the normalize step); ceilings are clamped
+in their owning subsystems until then.
 
 ## 15. Redesign — persistence shape (decided 2026-06-13)
 
