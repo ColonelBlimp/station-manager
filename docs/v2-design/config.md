@@ -472,7 +472,15 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
 - **`Normalize` now canonicalises to "only what differs":** it nils any per-rig `Ft8Mode`/`MyRig`
   override that merely restates the rigdef default (`normalizeRigOverrides`, via `cat.Lookup`) and
   nils empty loose `serial`/`cat` blocks (a non-nil pointer to a zero struct would re-serialize as
-  `{}`). Runs on **every** Load + PUT, so configs stay clean, not just at migration. Verified end
+  `{}`). Runs on **every** Load + PUT, so configs stay clean, not just at migration.
+- **`migrateGlobalMyRig` no longer misattributes a stock name:** the legacy global `my_rig` is
+  folded onto the active rig **only when it's a genuinely custom string**. If it equals the rigdef
+  name of *any* catalogue rig (`rigNamed`), it's just stock identity that derives per-rig — so it's
+  dropped rather than stamped onto the active rig, which may be a different model. (Caught when a
+  v1 copy with `default_rig_id` pointing at one model carried a global `my_rig` naming another:
+  e.g. active = FTdx10 but `my_rig: "Yaesu FT-710"` was folding "Yaesu FT-710" onto the FTdx10.)
+  `normalizeRigOverrides` only strips a rig's *own*-name match; the cross-catalogue case needs this
+  fold-level guard. Verified end
   to end on the dev `build/config.json`: both rigs reduce to `{id, model, port}` while
   `ResolveMyRig` / `ActiveFt8().TX.Mode` still derive correctly, and `bridge` reduces to
   `{enabled, timeouts, tune}`.

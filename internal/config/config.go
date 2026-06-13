@@ -245,15 +245,34 @@ func migrateGlobalMyRig(cfg *Config) {
 	if cfg.LoggingStation.MyRig == "" {
 		return
 	}
+	global := cfg.LoggingStation.MyRig
+	cfg.LoggingStation.MyRig = "" // no longer a config field; derived per-rig at submit
 	rc := cfg.RigByID(cfg.DefaultRigID)
 	if rc == nil {
 		return
 	}
-	if rc.MyRig == nil {
-		v := cfg.LoggingStation.MyRig
-		rc.MyRig = &v
+	// A legacy global MY_RIG that's just the stock rigdef name of SOME catalogue
+	// rig is derived per-rig anyway — don't fold it onto the active rig, which may
+	// be a different model (that would stamp a wrong name, e.g. "Yaesu FT-710" onto
+	// an FTdx10). Drop it; each rig derives its own name. Only a genuinely custom
+	// string (matching no rigdef name) is a real override worth carrying onto the
+	// active rig.
+	if rigNamed(cfg.Rigs, global) {
+		return
 	}
-	cfg.LoggingStation.MyRig = "" // no longer a config field; derived per-rig at submit
+	if rc.MyRig == nil {
+		rc.MyRig = &global
+	}
+}
+
+// rigNamed reports whether any catalogue rig's rigdef name equals name.
+func rigNamed(rigs []types.RigConfig, name string) bool {
+	for i := range rigs {
+		if def, ok := cat.Lookup(rigs[i].Model); ok && def.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // RigByID returns the catalogue entry with the given id, or nil if none.
