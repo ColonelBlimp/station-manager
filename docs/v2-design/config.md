@@ -5,9 +5,13 @@
 > decisions. Implementation so far: **§13 version/migration scaffold + §10 per-rig moves 2a–2d
 > SHIPPED** (see §10.5; §10's 2e audio is deferred to the config-SPA workstream). **§12 validation
 > unification SHIPPED** (§12a consolidation + §12b rig/field rules + the `Validate`/`Normalize` PUT
-> rewire — see §12 status). **§14 defaults, §11 reload, §15 sparse persistence — decided, not yet
-> implemented** (§14a consolidation shipped, §14b `*T` fold deferred — see §14.5). Multi-rig /
-> N-writer parked (§8).
+> rewire — see §12 status). **§13 versioning/migration scaffold SHIPPED** (§13.6). **§15 persistence
+> shape SETTLED** — sparse-on-disk rejected; filled-on-disk kept, default-value drift handled by a
+> §13 migration with the equals-old-default guard (no code — §15.2/§15.4). **§11 reload — decided,
+> implementation GATED on the config-SPA write path** (no runtime writer touches a hot-reloadable
+> field today — see §11.5). **§14 defaults — §14a consolidation shipped; §14b `*T` fold stays
+> deferred** (sparse was its only justification — see §14.5 / §15.2); §14's defaults-fill
+> consolidation is the only remaining optional code item. Multi-rig / N-writer parked (§8).
 >
 > **Method:** the **Go code is the source of truth** for everything below. On-disk
 > `config.json` files (dev `build/config.json`, dogfood `~/.local/share/station-manager/config.json`)
@@ -538,9 +542,23 @@ acquire/release, and closes ADR 0028's deferred "runtime hot-swap" item.
 
 ### 11.5 Status
 
-Design only — no code. Implementation (the `OnChange` hook + composition-root dispatch,
-`Reload` on ft8 / enrichment / forwarder / mailer, the restart-required signal) is a later,
-separately-approved phase.
+Design decided; **implementation gated on the config-SPA write path (deferred 2026-06-13).**
+
+When the implementation was scoped, every runtime config-write path was traced: `PUT /v1/config`
+writes only `LoggingStation` / `Station` / `ft8_display` / active-rig `mode_mappings` (all
+**already-live** classes 1–2 — read-at-use or SPA-re-read-on-response, needing no reload), and the
+two `cmd/smd` startup writes (`UserAgent`, default-logbook self-heal) fire before subsystems exist.
+**No runtime writer touches a class-3 (hot-reloadable) field** — forwarder config, SMTP creds,
+enrichment/lookup, `ft8.enabled`/`device`/`ft8_mode` are all edited the "stop → edit config.json →
+restart" way. So building `OnChange` + the four `Reload`s now would be the mechanism *ahead of its
+trigger*: the hook would fire on every My Station save and every subsystem `Reload` would no-op,
+and it couldn't be tested end-to-end (no runtime writer to exercise it).
+
+The trigger is the **config-SPA** (§10.6, separate workstream): that's what makes
+forwarder/mailer/enrichment/rig-hardware editable at runtime. §11 lands *with* it — editor and
+reload-on-edit built and tested as one unit, with `Reload` semantics informed by the real editor.
+Until then those fields stay restart-only (the "restart required" hint, §11.3, is likewise moot:
+no PUT-writable field is restart-only today). The design above stands; only the build is deferred.
 
 ## 12. Redesign — validation unification (decided 2026-06-13)
 
@@ -656,11 +674,31 @@ existing normalize + validate run as usual.
   ("config is from a newer Station Manager; downgrade not supported"). Don't risk misreading
   newer fields.
 
-### 13.5 Status
+### 13.5 Default-value changes — the equals-old-default guard
 
-Design only — no code. Implementation (the `version` field + const, the ordered raw-document
-migration registry, the v0→v1 fold + the §10 migration, rewrite-on-migration, the downgrade
-guard) is a later, separately-approved phase.
+When a future release **changes the value of an existing default** (not adds a field — additions
+auto-materialise on the next write via `applyDefaults`), filled-on-disk would otherwise freeze the
+old value (§15.2). The fix is a migration step that rewrites the stale value **only when the
+operator never customised it**:
+
+```
+if doc["smtp"]["port"] == oldDefault { doc["smtp"]["port"] = newDefault }
+```
+
+An untouched default propagates; a deliberately-customised value is left alone. This keeps
+default-drift a **deliberate, reviewed, per-change** act (the release that changes the default
+writes the migration) rather than an always-on silent re-resolution — and it's why sparse-on-disk
+was unnecessary (§15.2). Rare in practice; default *value* changes are infrequent.
+
+### 13.6 Status
+
+**Scaffold + first migrations SHIPPED (2026-06-13).** `Config.Version` + `currentConfigVersion`
+(now **2**) + the ordered raw-document registry + downgrade guard live in
+`internal/config/migrations.go`; `Load` runs `migrateDocument` as the first pipeline step. The
+loose→catalogue fold became the v0→v1 step (in-memory typed folds) and §10 2b's global
+`bridge.mode_mappings` removal landed as the **v1→v2** raw migration. The equals-old-default guard
+(§13.5) is a documented pattern with no current instance — the first default-value change will add
+one.
 
 ## 14. Redesign — defaults home (decided 2026-06-13)
 
@@ -697,11 +735,12 @@ default copies).
 - **Sanity/typo ranges reject** — timeout range, amp/power/zone bounds → **validation** rejects
   (§12 *error*); a 100-hour timeout is an error worth refusing.
 
-### 14.4 Deferred
+### 14.4 Persistence interaction (settled by §15)
 
-Whether filled defaults materialize to config.json or it stays sparse is a **persistence-shape**
-question (separate topic). Defaults-home unifies *declaration* + *resolution* + the ceiling
-distinction only.
+Whether filled defaults materialize to config.json or it stays sparse was a **persistence-shape**
+question, **settled in §15: filled-on-disk** (sparse rejected). Defaults-home unifies *declaration*
++ *resolution* + the ceiling distinction only; the on-disk shape stays filled, with default-value
+drift handled by a §13 migration (§13.5 / §15.2).
 
 ### 14.5 Implementation status (2026-06-13)
 
@@ -714,10 +753,12 @@ subsystem-enforced safety ceilings, which stay in `bridge`/`ft8`/`types` to avoi
 fold the two default-application mechanisms into one, but it churns the shared
 `types.LoggingConfig`/`SmtpConfig` consumed by the logging + email subsystems (and reddens their
 tests) for a cosmetic gain. The `DefaultConfig`-seed is the standard Go idiom for a default-true
-bool. Accepted as-is.
+bool. Accepted as-is. **§15 makes the deferral permanent:** sparse-on-disk (the only thing that
+would have made `*T` load-bearing — to tell "operator set false" from "unset") was rejected, so
+there's no remaining reason to revisit this.
 
-**Clamp-with-warning in `normalize`** lands with §12 (the normalize step); ceilings are clamped
-in their owning subsystems until then.
+**Clamp-with-warning in `normalize`** is the one piece of §12's normalize not yet wired (§12.6);
+ceilings stay clamped in their owning subsystems (`bridge`/`ft8`) until §14's resolve pass lands.
 
 ## 15. Redesign — persistence shape (decided 2026-06-13)
 
@@ -738,22 +779,33 @@ Not split, not DB. The §9 taxonomy maps to storage:
 Rule: **config in the one file; entities & derived state in the DB.** DB-for-config stays
 rejected; the single-file invariant holds.
 
-### 15.2 Sparse on disk (resolves the §14 deferral)
+### 15.2 Filled on disk; default-drift handled by a §13 migration (decided 2026-06-13)
 
-config.json stores **only operator-set values**; defaults are resolved in memory (the §14
-single resolve pass, on read — generalizing the existing `ActiveBridge()`/`ActiveFt8()`
-resolve-on-read pattern). GET `/v1/config` still serves the **resolved** view. Why sparse over
-today's filled:
+**Sparse-on-disk was considered and rejected** in favour of keeping the current **filled-on-disk**
+shape (`applyDefaults` materialises in memory at Load; `WriteJSON` writes the resolved struct).
 
-- The file reads as **pure operator intent** ("what I changed"), not a wall of materialized
-  defaults.
-- **Default changes propagate** — an unset field re-takes the new default each load. Filled-on-
-  disk *freezes* the old default into the file (it writes `smtp.port: 587`, so a future default
-  change silently never applies) — a real latent bug sparse fixes.
-- Smaller diffs; clearer dev-vs-dogfood divergence.
-- **Enabled by §14's `*T` / omitempty** — an unset field is omitted, an explicit zero/false is
-  kept (no collision). Cost: the stored config is the sparse raw and reads resolve — but that's
-  the `Active*` pattern generalized, **not** a second persisted struct.
+Sparse existed to fix **one** real problem: filled-on-disk *freezes* an old default into the file
+(it writes `smtp.port: 587`), so a future change to that default silently never reaches an operator
+whose config.json already materialised the old value. The other sparse benefits — "reads as pure
+operator intent," smaller diffs — are cosmetic on a single-operator, config-isn't-authoritative
+project. And full sparse is invasive: it requires moving `applyDefaults` from a Load-time mutation
+to resolve-on-read (auditing every direct `.Cfg` read that bypasses `Snapshot()`), reworking the
+§12b-2 PUT candidate pattern (which round-trips through the *resolved* snapshot and would re-fill a
+sparse `s.Cfg`), and un-deferring §14b (the `*T`/omitempty fields — the only thing that makes
+"operator set 0/false" distinguishable from "unset"). Large, breakage-heavy, for a modest gain.
+
+Instead, the freeze is solved **where it actually occurs** — at a default *value* change — using the
+already-shipped §13 migration mechanism. When a future release changes a default's value, it bumps
+`currentConfigVersion` and adds a migration step that rewrites the stale value **only if the operator
+never customised it** (the equals-old-default guard, §13.5). Propagation becomes a deliberate,
+reviewed act per change, not an always-on silent re-resolution that can shift a working setup out
+from under the operator on upgrade. New *fields* (vs changed default *values*) still auto-materialise
+on the next write via `applyDefaults`, so additions need no migration — only value changes do, and
+those are rare.
+
+Consequence: **§14b stays deferred** (sparse was the only thing that made `*T` load-bearing;
+without it, §14b is the cosmetic refactor it always was), and the config redesign's only remaining
+open code item is §14's optional defaults-fill consolidation — no longer blocking anything.
 
 ### 15.3 Deterministic, atomic, daemon-owned writes
 
@@ -769,6 +821,9 @@ today's filled:
 
 ### 15.4 Status
 
-Design only — no code. Implementation (store-sparse / resolve-on-read split, sparse marshalling
-via the §14 `*T`/omitempty fields, keeping the atomic deterministic `WriteJSON`) is a later,
-separately-approved phase.
+**SETTLED (2026-06-13) — no code required.** The single-file invariant (§15.1) and the
+deterministic / atomic / daemon-owned write discipline (§15.3) are already how `WriteJSON` behaves;
+sparse-on-disk was rejected (§15.2) in favour of keeping filled-on-disk and handling default-value
+drift via a §13 migration when (rarely) a default changes. Nothing to build now — this section
+records the decision. The only remaining redesign code item is §14's optional defaults-fill
+consolidation (and §11, gated on the config-SPA write path — §11.5).
