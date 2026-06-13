@@ -43,6 +43,12 @@ export interface Ft8CallInfo {
     /** Country name (from the same enrichment lookup as the flag) for the flag's
      *  hover tooltip. undefined when unknown/pending. */
     country?: string;
+    /** Operator name (enrichment station.name), shown in the answering panel.
+     *  undefined when unknown/pending; '' when the lookup returned no name. */
+    opName?: string;
+    /** Operator's Maidenhead locator (enrichment station.gridsquare) — the far end
+     *  of the short-path distance readout. undefined/'' when unknown. */
+    grid?: string;
 }
 
 // FT8 is itself an ADIF main mode, so the dupe axis is band + "FT8".
@@ -96,6 +102,8 @@ class Ft8EnrichState {
                     merge({
                         flag: ccodeToFlag(out.result.country?.ccode),
                         country: out.result.country?.name,
+                        opName: out.result.station?.name,
+                        grid: out.result.station?.gridsquare,
                     });
             })
             .catch(() => {

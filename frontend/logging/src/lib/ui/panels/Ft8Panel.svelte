@@ -93,6 +93,28 @@
         }
     });
 
+    // Worked-station enrichment for the Rx Frequency pane's Enrichment box (both
+    // roles — answering a CQ or working someone who answered our CQ). The far-end
+    // call may not have been a CQ row (caller role), so enrich it here too; the
+    // box shows op name, country (flag + name) and the short-path distance.
+    $effect(() => {
+        if (ft8State.qso.active && ft8State.qso.theirCall) {
+            ft8EnrichState.observe(ft8State.qso.theirCall, band);
+        }
+    });
+    const workedInfo = $derived(
+        ft8State.qso.active && ft8State.qso.theirCall
+            ? ft8EnrichState.info(ft8State.qso.theirCall, band)
+            : undefined
+    );
+    // Short-path distance to the worked station, from the operator's grid to the
+    // enriched (QRZ) locator. null when either grid is missing/invalid.
+    const workedDistanceKm = $derived(
+        myGrid && workedInfo?.grid
+            ? (pathInfo(myGrid, workedInfo.grid)?.shortPathDistanceKm ?? null)
+            : null
+    );
+
     // SNR formatted WSJT-X-style: an explicit-sign integer dB ("+04", "-13").
     function formatSnr(snr: number): string {
         return (snr >= 0 ? '+' : '-') + String(Math.abs(snr)).padStart(2, '0');
@@ -383,8 +405,27 @@
                 <p class="mt-1 text-xs">Pick an offset on the Occupancy tab.</p>
             {/if}
         </div>
-        <div class="h-44 mt-2 border rounded border-gray-300 bg-gray-100 px-2 py-0.5 text-xs">
-            Enrichment
+        <!-- Enrichment box: the worked station's QRZ details while a QSO is active
+             (both roles). Each line appears as its lookup lands (progressive,
+             fail-soft); an empty lookup just leaves that line blank. -->
+        <div
+            class="h-44 mt-2 overflow-y-auto rounded border border-gray-300 bg-gray-100 px-2 py-1 text-left text-xs"
+        >
+            {#if workedInfo}
+                <div class="font-semibold text-gray-700">{ft8State.qso.theirCall}</div>
+                {#if workedInfo.opName}<div class="text-gray-700">{workedInfo.opName}</div>{/if}
+                {#if workedInfo.flag || workedInfo.country}
+                    <div class="flex items-center gap-1 text-gray-600">
+                        {#if workedInfo.flag}<span aria-hidden="true">{workedInfo.flag}</span>{/if}
+                        {#if workedInfo.country}<span>{workedInfo.country}</span>{/if}
+                    </div>
+                {/if}
+                {#if workedDistanceKm !== null}
+                    <div class="text-gray-600">{workedDistanceKm.toLocaleString()} km</div>
+                {/if}
+            {:else}
+                <span class="text-gray-400">Enrichment</span>
+            {/if}
         </div>
     </div>
     <div class="flex flex-col text-center w-20">
