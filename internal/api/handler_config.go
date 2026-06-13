@@ -341,13 +341,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if req.Bridge.Driver != "" && req.Bridge.ModeMappings != nil {
-			if cfg.Bridge.ModeMappings == nil {
-				cfg.Bridge.ModeMappings = make(map[string]map[string]types.ModeMapping)
-			}
-			if len(nextBridgeOverrides) > 0 {
-				cfg.Bridge.ModeMappings[req.Bridge.Driver] = nextBridgeOverrides
-			} else {
-				delete(cfg.Bridge.ModeMappings, req.Bridge.Driver)
+			// Overrides now live on the active rig (config.md §10). The SPA edits
+			// the configured driver's mappings, which is the active rig's model.
+			if rc := cfg.RigByID(cfg.DefaultRigID); rc != nil {
+				if len(nextBridgeOverrides) > 0 {
+					rc.ModeMappings = nextBridgeOverrides
+				} else {
+					rc.ModeMappings = nil
+				}
 			}
 		}
 		// FT8 display prefs — presence-aware: only touched when the body carried
@@ -449,8 +450,10 @@ func bridgeInfoFor(cfg config.Config) BridgeInfo {
 	for k, v := range def.ModeMappings {
 		merged[k] = v
 	}
-	if perDriver, ok := b.ModeMappings[b.Cat.Driver]; ok {
-		for k, v := range perDriver {
+	// Operator overrides now live on the active rig (config.md §10), not a global
+	// driver-keyed block. Layer the active rig's per-rig overrides on top.
+	if rc := cfg.RigByID(cfg.DefaultRigID); rc != nil {
+		for k, v := range rc.ModeMappings {
 			merged[k] = v
 		}
 	}

@@ -10,7 +10,7 @@ import (
 // change alters the config shape. A config file with no `version` field is the
 // pre-versioning baseline — the catalogue-era shape, treated as v1. See
 // docs/v2-design/config.md §13.
-const currentConfigVersion = 1
+const currentConfigVersion = 2
 
 // migration upgrades a raw config JSON document from version `from` to `from+1`.
 // Migrations operate on the decoded document (a map), NOT the typed Config, so a
@@ -22,12 +22,96 @@ type migration struct {
 	apply func(doc map[string]any) error
 }
 
-// migrations is the ordered registry, each step from→from+1. Empty until the
-// first shape-changing release registers one (§10's per-rig field moves become
-// the v1→v2 migration). Pre-versioning loose-field configs (legacy
-// bridge.serial / ft8.device) are still folded by applyRigProfiles — their
-// fields aren't removed yet, so they need no raw migration here.
-var migrations []migration
+// migrations is the ordered registry, each step from→from+1.
+//   - v1→v2 (config.md §10): fold the removed global bridge.mode_mappings into the
+//     per-rig RigConfig.mode_mappings. Raw because the BridgeConfig field is gone,
+//     so the value can't be read typed after unmarshal.
+//
+// (The other §10 moves whose struct fields are RETAINED — ft8.tx.mode → the
+// projection-target Ft8TXConfig.Mode — are folded typed in config.go, not here.)
+var migrations = []migration{
+	{from: 1, apply: migrateV1toV2},
+}
+
+// migrateV1toV2 folds the global bridge.mode_mappings[driver] block (removed from
+// BridgeConfig in §10) into each rig's per-rig mode_mappings, keyed by rig literal
+// (the rig knows its Model, so the driver key is dropped). Idempotent: a no-op once
+// the global block is gone. Synthesises the id-1 rig from legacy loose fields when
+// there's no catalogue yet, so the mappings still have a home.
+func migrateV1toV2(doc map[string]any) error {
+	bridge, _ := doc["bridge"].(map[string]any)
+	if bridge == nil {
+		return nil
+	}
+	byDriver, _ := bridge["mode_mappings"].(map[string]any)
+	if len(byDriver) == 0 {
+		delete(bridge, "mode_mappings") // drop an empty/absent block
+		return nil
+	}
+
+	// Ensure a rigs catalogue exists. A pre-catalogue (loose) config carries its
+	// identity in bridge.cat.driver / bridge.serial.port / ft8.device — synthesise
+	// the id-1 rig from those (mirrors applyRigProfiles) so the mappings land.
+	rigs, _ := doc["rigs"].([]any)
+	if len(rigs) == 0 {
+		driver := nestedString(doc, "bridge", "cat", "driver")
+		port := nestedString(doc, "bridge", "serial", "port")
+		device := nestedString(doc, "ft8", "device")
+		if driver != "" || port != "" || device != "" {
+			rig := map[string]any{"id": float64(1), "model": driver, "port": port}
+			if device != "" {
+				rig["audio"] = map[string]any{"device": device}
+			}
+			rigs = []any{rig}
+			doc["rigs"] = rigs
+			if _, ok := doc["default_rig_id"]; !ok {
+				doc["default_rig_id"] = float64(1)
+			}
+		}
+	}
+
+	// Place each driver's overrides on every rig of that Model (coinciding values
+	// across same-model rigs is fine — config.md §9.4). Don't clobber a rig that
+	// already carries its own mode_mappings.
+	for _, r := range rigs {
+		rig, _ := r.(map[string]any)
+		if rig == nil {
+			continue
+		}
+		model, _ := rig["model"].(string)
+		mm, ok := byDriver[model].(map[string]any)
+		if !ok || len(mm) == 0 {
+			continue
+		}
+		if _, exists := rig["mode_mappings"]; !exists {
+			rig["mode_mappings"] = mm
+		}
+	}
+
+	delete(bridge, "mode_mappings")
+	return nil
+}
+
+// nestedString walks a chain of map keys and returns the string at the end, or
+// "" if any hop is missing or not the expected type.
+func nestedString(doc map[string]any, keys ...string) string {
+	cur := doc
+	for i, k := range keys {
+		v, ok := cur[k]
+		if !ok {
+			return ""
+		}
+		if i == len(keys)-1 {
+			s, _ := v.(string)
+			return s
+		}
+		cur, ok = v.(map[string]any)
+		if !ok {
+			return ""
+		}
+	}
+	return ""
+}
 
 // migrateDocument upgrades raw config bytes to currentConfigVersion, returning
 // the (possibly rewritten) bytes. A document newer than this build is a fatal

@@ -211,6 +211,16 @@ func applyRigProfiles(cfg *Config) error {
 		if rc.Model == "" {
 			return fmt.Errorf("rigs[id=%d]: model must not be empty", rc.ID)
 		}
+		// Per-rig mode-mapping overrides (config.md §10, B2) — validate ADIF
+		// mode/submode here (moved from the old global bridge.mode_mappings check).
+		for rigStr, mm := range rc.ModeMappings {
+			if mm.Mode == "" || !modes.IsValidMode(mm.Mode) {
+				return fmt.Errorf("rigs[id=%d].mode_mappings[%s]: mode %q is not a known ADIF main mode", rc.ID, rigStr, mm.Mode)
+			}
+			if mm.SubMode != "" && !modes.IsValidSubMode(mm.SubMode) {
+				return fmt.Errorf("rigs[id=%d].mode_mappings[%s]: submode %q is not a known ADIF submode", rc.ID, rigStr, mm.SubMode)
+			}
+		}
 	}
 	if cfg.RigByID(cfg.DefaultRigID) == nil {
 		return fmt.Errorf("default_rig_id %d does not match any defined rig", cfg.DefaultRigID)
@@ -1025,23 +1035,8 @@ func validateSmtp(s types.SmtpConfig) error {
 // Surfaces missing required sub-fields loudly at startup rather than
 // failing later with a SQLITE_BUSY-style obscure error.
 func validateBridge(b types.BridgeConfig) error {
-	// ModeMappings are validated unconditionally — operators may
-	// configure mappings ahead of enabling CAT, and bad entries
-	// should surface at startup regardless of whether the bridge
-	// will actually run. Empty map is always fine.
-	for driver, perRig := range b.ModeMappings {
-		for rigStr, mm := range perRig {
-			if mm.Mode == "" {
-				return fmt.Errorf("bridge.mode_mappings[%s][%s]: mode must not be empty", driver, rigStr)
-			}
-			if !modes.IsValidMode(mm.Mode) {
-				return fmt.Errorf("bridge.mode_mappings[%s][%s]: mode %q is not a known ADIF main mode", driver, rigStr, mm.Mode)
-			}
-			if mm.SubMode != "" && !modes.IsValidSubMode(mm.SubMode) {
-				return fmt.Errorf("bridge.mode_mappings[%s][%s]: submode %q is not a known ADIF submode", driver, rigStr, mm.SubMode)
-			}
-		}
-	}
+	// Mode-mapping validation moved to applyRigProfiles (per-rig, config.md §10):
+	// the override layer now lives on each RigConfig, not in a global block here.
 
 	// Timeout overrides — validated unconditionally so a malformed
 	// value surfaces at startup regardless of Enabled. All four are

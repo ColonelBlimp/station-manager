@@ -30,19 +30,10 @@ type BridgeConfig struct {
 	// tune. Zero / omitted = built-in default. See BridgeTuneConfig.
 	Tune BridgeTuneConfig `json:"tune,omitempty"`
 
-	// ModeMappings is the operator-override layer for the per-rig
-	// translation table that turns rig-pushed mode strings (e.g.
-	// "DATA-U") into ADIF (MODE, SUBMODE) pairs. Outer key is the rig
-	// driver id (e.g. "yaesu-ftdx10"); inner key is the rig literal
-	// mode string. Shipped defaults live inside each rigdef JSON
-	// under `mode_mappings` and are merged with this override at
-	// `/v1/config` GET time — operator's entry wins on key collision.
-	//
-	// The split (shipped defaults vs operator overrides) means a
-	// daemon upgrade picks up new shipped mappings without touching
-	// the operator's edits; the operator can change any value without
-	// risking the next upgrade overwriting it.
-	ModeMappings map[string]map[string]ModeMapping `json:"mode_mappings,omitempty"`
+	// Mode-mapping overrides moved to RigConfig.ModeMappings (config.md §10, B2):
+	// the rig knows its own Model, so they live per-rig (keyed by rig literal)
+	// rather than in a global driver-keyed block here. The merged view (rigdef
+	// defaults + the active rig's overrides) is still served at /v1/config GET.
 }
 
 // ModeMapping pairs an ADIF MODE with an optional SUBMODE refinement.

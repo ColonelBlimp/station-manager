@@ -64,6 +64,14 @@ type RigConfig struct {
 	// "unset → use rigdef default" is distinguishable from an explicit ""
 	// override. Resolved + projected onto Ft8Config.TX.Mode by Config.ActiveFt8.
 	Ft8Mode *string `json:"ft8_mode,omitempty"`
+
+	// ModeMappings is this rig's operator-override layer (config.md §10, B2) for
+	// the rig-literal → ADIF (MODE, SUBMODE) translation, keyed by the rig's mode
+	// literal (e.g. "DATA-U"). The rigdef for this rig's Model ships the defaults
+	// (cat.RigDefinition.ModeMappings); they're merged with these overrides at
+	// /v1/config GET time (operator's entry wins on collision). Moved here from
+	// the global bridge.mode_mappings — the rig knows its Model, so no driver key.
+	ModeMappings map[string]ModeMapping `json:"mode_mappings,omitempty"`
 }
 
 // RigAudioConfig selects a rig's audio interface. Device is a single

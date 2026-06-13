@@ -916,3 +916,51 @@ func TestActiveFt8_UsesRigdefDefaultWhenNoOverride(t *testing.T) {
 		t.Fatalf("ActiveFt8().TX.Mode = %q, want rigdef default DATA-U", got)
 	}
 }
+
+// --- §10 slice 2b: per-rig mode-mappings (+ v1→v2 migration) --------------
+
+func TestLoad_MigratesGlobalModeMappingsToRig(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	// v1 shape: a global bridge.mode_mappings[driver] override + a rig of that
+	// model. The v1→v2 migration folds it onto the rig (keyed by rig literal) and
+	// removes the global block.
+	content := `{
+		"data_dir": "/tmp/d",
+		"rigs": [{"id": 1, "model": "yaesu-ftdx10"}],
+		"default_rig_id": 1,
+		"bridge": {"mode_mappings": {"yaesu-ftdx10": {"DATA-U": {"mode": "FT4"}}}}
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Version != currentConfigVersion {
+		t.Fatalf("Version = %d, want %d (migrated)", cfg.Version, currentConfigVersion)
+	}
+	rc := cfg.RigByID(1)
+	if rc == nil || rc.ModeMappings["DATA-U"].Mode != "FT4" {
+		t.Fatalf("rig ModeMappings = %v, want DATA-U→FT4 folded from the global block", rc.ModeMappings)
+	}
+}
+
+func TestLoad_RejectsInvalidRigModeMapping(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.json")
+	// A per-rig mode-mapping with a non-ADIF mode is fatal (validation moved from
+	// the global bridge.mode_mappings check to per-rig, §10).
+	content := `{
+		"data_dir": "/tmp/d",
+		"rigs": [{"id": 1, "model": "yaesu-ftdx10", "mode_mappings": {"DATA-U": {"mode": "BOGUS"}}}],
+		"default_rig_id": 1
+	}`
+	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	if _, err := Load(cfgFile); err == nil {
+		t.Fatal("Load expected error for invalid per-rig mode mapping, got nil")
+	}
+}
