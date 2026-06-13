@@ -3,9 +3,11 @@
 > **Status:** review complete; redesign **decided across §9–15** (2026-06-13);
 > **implementation in progress.** §1–8 are the current-state review; §9–15 are the redesign
 > decisions. Implementation so far: **§13 version/migration scaffold + §10 per-rig moves 2a–2d
-> SHIPPED** (see §10.5; §10's 2e audio is deferred to the config-SPA workstream). **§14 defaults,
-> §12 validation, §11 reload, §15 sparse persistence — decided, not yet implemented** (§14a consolidation shipped, §14b `*T`
-> fold deferred — see §14.5). Multi-rig / N-writer parked (§8).
+> SHIPPED** (see §10.5; §10's 2e audio is deferred to the config-SPA workstream). **§12 validation
+> unification SHIPPED** (§12a consolidation + §12b rig/field rules + the `Validate`/`Normalize` PUT
+> rewire — see §12 status). **§14 defaults, §11 reload, §15 sparse persistence — decided, not yet
+> implemented** (§14a consolidation shipped, §14b `*T` fold deferred — see §14.5). Multi-rig /
+> N-writer parked (§8).
 >
 > **Method:** the **Go code is the source of truth** for everything below. On-disk
 > `config.json` files (dev `build/config.json`, dogfood `~/.local/share/station-manager/config.json`)
@@ -589,9 +591,28 @@ stopped, restart" workflow — a bad edit fails the restart with a clear message
 
 ### 12.6 Status
 
-Design only — no code. Implementation (extract `config.Validate` + `normalize`; route Load and
-the PUT handler through them; map findings → fatal / 400 / warning) is a later,
-separately-approved phase.
+**SHIPPED (2026-06-13).** Landed in slices:
+
+- **§12a** — `config.Validate(cfg) []Finding` consolidating the four standalone validators
+  (forwarders, lookup, smtp, bridge) + the non-loopback-bind advisory; `Finding{Field, Code,
+  Message, Warning}`; `Load` routes through it (errors → fatal). `internal/config/validate.go`.
+- **§12b-1** — rig-catalogue + per-rig mode-mapping validation moved out of `applyRigProfiles`
+  (now fold-only) into `validateRigs`.
+- **§12b-2** — the operator-identity field rules (callsign, grid, zones, amp/power, ft8_display
+  feed-mode) folded into `Validate`; an exported `config.Normalize` (uppercase callsign,
+  maidenhead→lat/lon derive, trim zones) run before `Validate` by both paths; the PUT handler
+  rewired to **build a candidate → `Normalize` → `Validate` (whole-config) → 400 on first error
+  finding → persist via `*cfg = candidate`**, dropping all its inline checks/transforms. The
+  config callsign rule is reimplemented in `internal/config` (can't import `qsoservice` — cycle;
+  api keeps its own `isValidCallsign` for the QSO/logbook surfaces); `api.isValidZone` retired
+  (config-only) and the api bounds-const block removed.
+
+Two behavioral consequences confirmed and accepted: an **invalid `ft8_display.feed_mode` is a
+400** (the candidate stores the *raw* feed_mode so `Validate` rejects it; `ResolveFt8Display`
+runs only after validation passes — option A); and **PUT validates the whole candidate**, so a
+PUT that touches one field is rejected if the config carries an unrelated invalid bridge (an
+enabled-but-portless bridge couldn't `Load` anyway). The clamp-with-warning ceiling enforcement
+(§14.2) is the one piece of `Normalize` not yet wired — it lands with §14.
 
 ## 13. Redesign — versioning & migration (decided 2026-06-13)
 

@@ -2,33 +2,13 @@ package api
 
 import (
 	stderr "errors"
-	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/config"
-	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
-	"github.com/ColonelBlimp/station-manager/internal/utils"
-)
-
-// My Station input-validation bounds (inclusive). The zone/DXCC ranges are
-// fixed external facts (CQ zones, ITU zones, the ARRL DXCC entity list — bump
-// maxDXCCEntity when ARRL adds one); the amp/power caps are typo guards, not
-// regulatory limits. Centralised here so the conditional and its error message
-// quote the same number.
-const (
-	minCQZone        = 1
-	maxCQZone        = 40
-	minITUZone       = 1
-	maxITUZone       = 90
-	minDXCCEntity    = 0
-	maxDXCCEntity    = 522
-	maxAmpMultiplier = 1000 // real linear amps top out ~50x; 1000 = two extra zeros
-	maxDefaultPowerW = 2000 // legal limits ≈ 1500W; headroom for pre-multiplier amp output
 )
 
 // ConfigResponse is the wire shape for GET/PUT /v1/config. It embeds
@@ -164,121 +144,25 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normalise + validate the incoming station_callsign. Empty is
-	// allowed (pre-setup state); non-empty must satisfy the project's
-	// callsign rules — same shape used by /v1/logbook and /v1/qso so
-	// the operator gets one consistent failure mode regardless of
-	// where they're entering a callsign.
-	incomingCall := strings.ToUpper(strings.TrimSpace(req.LoggingStation.StationCallsign))
-	req.LoggingStation.StationCallsign = incomingCall
-	if incomingCall != "" && !isValidCallsign(incomingCall) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			"station_callsign must be 3-32 characters and contain at least one digit", op)
-		return
-	}
-
-	// Validate + normalise MyGridsquare and derive MyLat/MyLon. Empty
-	// gridsquare clears the derived coordinates; an invalid gridsquare
-	// is a 400 (operator types it via the My Station panel and gets a
-	// validator there too — daemon-side check is the backstop). Zones
-	// + DXCC are operator-typed strings; not derived from the grid.
-	incomingGrid := utils.NormalizeMaidenhead(req.LoggingStation.MyGridsquare)
-	if incomingGrid != "" && !utils.IsValidMaidenhead(incomingGrid) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			"my_gridsquare must be a 4, 6, or 8 character Maidenhead locator", op)
-		return
-	}
-	req.LoggingStation.MyGridsquare = incomingGrid
-	if incomingGrid == "" {
-		req.LoggingStation.MyLat = ""
-		req.LoggingStation.MyLon = ""
-	} else if lat, lon, ok := utils.MaidenheadToADIFLatLon(incomingGrid); ok {
-		req.LoggingStation.MyLat = lat
-		req.LoggingStation.MyLon = lon
-	}
-
-	// Validate MyCqZone (1-40 per CQWW), MyITUZone (1-90 per ITU
-	// R-REC-V.6), and MyDXCC (0-522 per current ARRL DXCC list; 0 is
-	// the "None" entity for maritime-mobile / non-DXCC QSOs). All
-	// three are operator-typed strings; empty stays empty (pre-setup
-	// or operator hasn't filled them in). When non-empty, malformed
-	// values must not land in config.json — they'd be emitted on
-	// every subsequent QSO's MY_* tags and rejected by ClubLog / LoTW.
-	// Daemon-side enforcement is the backstop; the My Station panel
-	// can pre-empt with a SPA-side validator for snappy feedback. The
-	// 522 cap on DXCC is the current ARRL maximum at time of writing
-	// — bump when ARRL adds a new entity (rare; once every few years).
-	req.LoggingStation.MyCqZone = strings.TrimSpace(req.LoggingStation.MyCqZone)
-	if req.LoggingStation.MyCqZone != "" {
-		if !isValidZone(req.LoggingStation.MyCqZone, minCQZone, maxCQZone) {
-			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				fmt.Sprintf("my_cq_zone must be a number between %d and %d", minCQZone, maxCQZone), op)
-			return
-		}
-	}
-	req.LoggingStation.MyITUZone = strings.TrimSpace(req.LoggingStation.MyITUZone)
-	if req.LoggingStation.MyITUZone != "" {
-		if !isValidZone(req.LoggingStation.MyITUZone, minITUZone, maxITUZone) {
-			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				fmt.Sprintf("my_itu_zone must be a number between %d and %d", minITUZone, maxITUZone), op)
-			return
-		}
-	}
-	req.LoggingStation.MyDXCC = strings.TrimSpace(req.LoggingStation.MyDXCC)
-	if req.LoggingStation.MyDXCC != "" {
-		if !isValidZone(req.LoggingStation.MyDXCC, minDXCCEntity, maxDXCCEntity) {
-			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				fmt.Sprintf("my_dxcc must be a number between %d and %d (ARRL DXCC entity code; 0 = None)", minDXCCEntity, maxDXCCEntity), op)
-			return
-		}
-	}
-
-	// Validate the amp multiplier. Negative values are nonsense; a
-	// 1000x cap is a typo guard (real linear amps top out around 50x;
-	// 1000 is well into "operator typed two extra zeros" territory).
-	if req.Station.AmpMultiplier < 0 || req.Station.AmpMultiplier > maxAmpMultiplier {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			fmt.Sprintf("station.amp_multiplier must be between 0 and %d", maxAmpMultiplier), op)
-		return
-	}
-
-	// Validate the CAT-off default power. 0 means "not set" (ADIF
-	// TX_PWR will be omitted). 2000W cap is a typo guard — legal
-	// limits in most jurisdictions are ≈ 1500W, the headroom allows
-	// for operators describing amp output before the multiplier
-	// applies.
-	if req.Station.DefaultPower < 0 || req.Station.DefaultPower > maxDefaultPowerW {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			fmt.Sprintf("station.default_power must be between 0 and %d", maxDefaultPowerW), op)
-		return
-	}
-
-	// Setup transition: if SetupComplete is currently false AND the
-	// incoming callsign is non-empty, this PUT completes setup. Seed
-	// the default logbook row before persisting config so the file
-	// can record default_logbook_id immediately. Idempotent: if a
-	// row at default_logbook_id already exists, no insert is done.
 	current := s.cfg.Snapshot()
-	completingSetup := !current.SetupComplete && incomingCall != ""
 
-	var seededLogbookID int64
-	if completingSetup {
-		id, err := s.seedDefaultLogbook(r, current.DefaultLogbookID, incomingCall)
-		if err != nil {
-			s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
-			return
-		}
-		seededLogbookID = id
+	// Build the candidate config: the current snapshot with the request's
+	// operator-writable fields overlaid, then run it through the ONE config
+	// pipeline — Normalize + Validate (config.md §12), the same Load runs — before
+	// persisting. A value rejected here would also be rejected at Load.
+	candidate := current
+	candidate.LoggingStation = req.LoggingStation
+	candidate.Station = req.Station
+	// FT8 display prefs — presence-aware: only touched when the body carried
+	// `ft8_display` (a My Station save omits it, leaving it alone). Stored RAW
+	// here so Validate can reject an invalid feed_mode (config.md §12 option A);
+	// resolution (clamp colours/cap, default feed_mode) happens after validation.
+	if req.Ft8Display != nil {
+		candidate.Ft8.Display = req.Ft8Display
 	}
-
-	// Mode-mapping overrides: diff against the rigdef's shipped
-	// defaults so only operator-deviated entries get persisted.
-	// Future rigdef updates can change defaults the operator never
-	// touched without their overrides locking in the old values.
-	// Skipped entirely when the request body doesn't carry a bridge
-	// block (req.Bridge.Driver == "" — operator's PUT was about
-	// something else like logging_station).
-	var nextBridgeOverrides map[string]types.ModeMapping
+	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
+	// defaults so only operator deviations persist, stored on the active rig
+	// (config.md §10). Bad ADIF in the result is caught by Validate below.
 	if req.Bridge.Driver != "" && req.Bridge.ModeMappings != nil {
 		def, ok := cat.Lookup(req.Bridge.Driver)
 		if !ok {
@@ -286,79 +170,66 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 				"bridge.driver does not match a known rigdef", op)
 			return
 		}
-		nextBridgeOverrides = make(map[string]types.ModeMapping)
-		for rigStr, mm := range req.Bridge.ModeMappings {
-			// Validate first — both sides of the pair must be
-			// catalogue-known. validateBridge re-checks on persist
-			// (defence in depth) but we surface a 400 here with
-			// the offending key for a friendlier error path.
-			if mm.Mode == "" || !modes.IsValidMode(mm.Mode) {
-				s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-					fmt.Sprintf("bridge.mode_mappings[%s].mode %q is not a known ADIF main mode", rigStr, mm.Mode), op)
-				return
+		overrides := make(map[string]types.ModeMapping)
+		for lit, mm := range req.Bridge.ModeMappings {
+			if shipped, shippedOk := def.ModeMappings[lit]; !shippedOk || shipped != mm {
+				overrides[lit] = mm
 			}
-			if mm.SubMode != "" && !modes.IsValidSubMode(mm.SubMode) {
-				s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-					fmt.Sprintf("bridge.mode_mappings[%s].submode %q is not a known ADIF submode", rigStr, mm.SubMode), op)
-				return
-			}
-			shipped, shippedOk := def.ModeMappings[rigStr]
-			if !shippedOk || shipped != mm {
-				nextBridgeOverrides[rigStr] = mm
+		}
+		// Copy the rig slice before mutating so the active rig's mappings don't
+		// alias the live config (candidate := current is a shallow copy).
+		candidate.Rigs = append([]types.RigConfig(nil), current.Rigs...)
+		if rc := candidate.RigByID(candidate.DefaultRigID); rc != nil {
+			if len(overrides) > 0 {
+				rc.ModeMappings = overrides
+			} else {
+				rc.ModeMappings = nil
 			}
 		}
 	}
 
-	// FT8 display: validate the one enum up front for a friendly 400 (the rest
-	// — colours, row cap — are normalised by ResolveFt8Display, not rejected).
-	if req.Ft8Display != nil && req.Ft8Display.FeedMode != "" && !types.Ft8FeedModeValid(req.Ft8Display.FeedMode) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			fmt.Sprintf("ft8_display.feed_mode %q must be \"accumulate\" or \"single\"", req.Ft8Display.FeedMode), op)
-		return
+	// Normalize + validate through the single config pipeline. The first error
+	// finding becomes a 400 carrying its stable code + message (ADR 0010).
+	config.Normalize(&candidate)
+	for _, f := range config.Validate(candidate) {
+		if !f.Warning {
+			s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)
+			return
+		}
+	}
+
+	// FT8 display passed validation — now resolve to the stored shape (clamps
+	// colours / row cap; feed_mode was already validated raw above). Stored
+	// normalised so the on-disk value matches what GET would serve.
+	if req.Ft8Display != nil {
+		resolved := types.ResolveFt8Display(req.Ft8Display)
+		candidate.Ft8.Display = &resolved
+	}
+
+	// Setup transition (after validation passes): the first PUT with a non-empty
+	// callsign completes setup — seed the default logbook row, flip SetupComplete,
+	// and materialise OPERATOR / OWNER_CALLSIGN from the callsign when unset.
+	if !current.SetupComplete && candidate.LoggingStation.StationCallsign != "" {
+		id, err := s.seedDefaultLogbook(r, candidate.DefaultLogbookID, candidate.LoggingStation.StationCallsign)
+		if err != nil {
+			s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
+			return
+		}
+		candidate.SetupComplete = true
+		if id != 0 {
+			candidate.DefaultLogbookID = id
+		}
+		call := candidate.LoggingStation.StationCallsign
+		if candidate.LoggingStation.Operator == "" {
+			candidate.LoggingStation.Operator = call
+		}
+		if candidate.LoggingStation.OwnerCallsign == "" {
+			candidate.LoggingStation.OwnerCallsign = call
+		}
 	}
 
 	if err := s.cfg.Update(func(cfg *config.Config) error {
-		// Operator-writable fields. Server-managed fields
-		// (SetupComplete, DefaultLogbookID/RigID — except via the
-		// setup transition) are NOT touched from the request body.
-		cfg.LoggingStation = req.LoggingStation
-		cfg.Station = req.Station
-		if completingSetup {
-			cfg.SetupComplete = true
-			if seededLogbookID != 0 {
-				cfg.DefaultLogbookID = seededLogbookID
-			}
-			// Materialise ADIF identity on first setup: copy the
-			// just-set callsign into Operator and OwnerCallsign when
-			// the request didn't already provide them. One-shot — later
-			// edits via the My Station panel are honoured as-is, no
-			// re-sync.
-			if cfg.LoggingStation.Operator == "" {
-				cfg.LoggingStation.Operator = incomingCall
-			}
-			if cfg.LoggingStation.OwnerCallsign == "" {
-				cfg.LoggingStation.OwnerCallsign = incomingCall
-			}
-		}
-		if req.Bridge.Driver != "" && req.Bridge.ModeMappings != nil {
-			// Overrides now live on the active rig (config.md §10). The SPA edits
-			// the configured driver's mappings, which is the active rig's model.
-			if rc := cfg.RigByID(cfg.DefaultRigID); rc != nil {
-				if len(nextBridgeOverrides) > 0 {
-					rc.ModeMappings = nextBridgeOverrides
-				} else {
-					rc.ModeMappings = nil
-				}
-			}
-		}
-		// FT8 display prefs — presence-aware: only touched when the body carried
-		// `ft8_display` (so a My Station save, which omits it, leaves it alone).
-		// Stored normalised (ResolveFt8Display clamps/defaults), so the on-disk
-		// value already matches what GET would serve.
-		if req.Ft8Display != nil {
-			resolved := types.ResolveFt8Display(req.Ft8Display)
-			cfg.Ft8.Display = &resolved
-		}
+		*cfg = candidate
 		return nil
 	}); err != nil {
 		s.writeServerError(w, op, err, "config_write_error", "failed to persist config update")

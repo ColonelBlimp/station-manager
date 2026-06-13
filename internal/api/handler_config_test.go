@@ -819,8 +819,11 @@ func TestHandlePutConfig_ModeMappingsOverride_RoundTrip(t *testing.T) {
 	srv := testServerWithCfg(t, func(cfg *config.Config) {
 		cfg.Bridge.Enabled = true
 		// A catalogue with one active rig; ActiveBridge projects its model onto
-		// the driver, so bridgeInfoFor resolves the FTdx10 rigdef.
-		cfg.Rigs = []types.RigConfig{{ID: 1, Model: "yaesu-ftdx10"}}
+		// the driver, so bridgeInfoFor resolves the FTdx10 rigdef. Port is set
+		// because PUT now runs the whole-config validator (config.md §12), which
+		// requires serial.port when the bridge is enabled — an enabled-but-portless
+		// bridge couldn't Load anyway.
+		cfg.Rigs = []types.RigConfig{{ID: 1, Model: "yaesu-ftdx10", Port: "/dev/ttyUSB0"}}
 		cfg.DefaultRigID = 1
 	})
 

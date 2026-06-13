@@ -449,6 +449,10 @@ func Load(path string) (Config, error) {
 	migrateGlobalFt8Mode(&cfg)
 	migrateGlobalMyRig(&cfg)
 
+	// Normalize identity fields (uppercase callsign, grid → lat/lon, trim zones)
+	// before validating — the same pipeline the PUT handler runs (config.md §12).
+	Normalize(&cfg)
+
 	// Single validation entry (config.md §12): the consolidated Validate replaces
 	// the per-validator calls. Any error finding is fatal at Load (clear message);
 	// warnings are advisory and surfaced separately via Warnings() after the logger
@@ -547,6 +551,27 @@ func WriteJSON(path string, cfg Config) error {
 		return fmt.Errorf("renaming temp config to %s: %w", path, err)
 	}
 	return nil
+}
+
+// Normalize applies the operator-identity transforms shared by Load and the PUT
+// handler (config.md §12): uppercase + trim the station callsign, normalise the
+// Maidenhead grid and derive MY_LAT/MY_LON from it (cleared when the grid is
+// empty), and trim the zone / DXCC strings. Pure transform — validation is a
+// separate step (Validate). Run before Validate so both paths see one shape.
+func Normalize(cfg *Config) {
+	ls := &cfg.LoggingStation
+	ls.StationCallsign = strings.ToUpper(strings.TrimSpace(ls.StationCallsign))
+	ls.MyGridsquare = utils.NormalizeMaidenhead(ls.MyGridsquare)
+	if ls.MyGridsquare == "" {
+		ls.MyLat = ""
+		ls.MyLon = ""
+	} else if lat, lon, ok := utils.MaidenheadToADIFLatLon(ls.MyGridsquare); ok {
+		ls.MyLat = lat
+		ls.MyLon = lon
+	}
+	ls.MyCqZone = strings.TrimSpace(ls.MyCqZone)
+	ls.MyITUZone = strings.TrimSpace(ls.MyITUZone)
+	ls.MyDXCC = strings.TrimSpace(ls.MyDXCC)
 }
 
 // Config default-fill values + the defaults discoverability index live in
