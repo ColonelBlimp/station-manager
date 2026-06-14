@@ -27,7 +27,9 @@ func TestSequencer_FinalRungAsyncFailDoesNotLog(t *testing.T) {
 
 	require.Contains(t, r.sentMsgs(), "K1ABC G0XYZ 73", "the 73 was queued")
 	require.Empty(t, r.completed, "a failed final 73 must NOT log a QSO (review H1)")
-	require.False(t, s.Active())
+	// Follow-up M1: a failed final 73 stays active so the next slot retries it,
+	// rather than silently ending the contact.
+	require.True(t, s.Active(), "a failed final 73 stays active to retry")
 }
 
 // TestSequencer_FinalRungBadMessageAbandonsNoLog: a synchronous terminal error
@@ -62,6 +64,100 @@ func TestCallerSequencer_FinalRR73AsyncFailDoesNotLog(t *testing.T) {
 
 	require.Contains(t, r.sentMsgs(), "DL9UW 7Q5MLV RR73", "the RR73 was queued")
 	require.Empty(t, r.completed, "a failed RR73 must NOT log a QSO (review H1)")
+}
+
+// --- Follow-up M1: final-rung state survives transmit acceptance -------------
+
+// A synchronous ErrTxInFlight on the final 73 must NOT end or log the QSO — the
+// exchange stays in confirming so the next slot retries (review follow-up M1).
+func TestSequencer_FinalRungInFlightRetries(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+
+	r.mu.Lock()
+	r.transmitErr = ErrTxInFlight // a prior TX is still running when the 73 fires
+	r.mu.Unlock()
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+	require.Empty(t, r.completed, "ErrTxInFlight on the 73 must not log")
+	require.True(t, s.Active(), "ErrTxInFlight on the final rung is retryable, not terminal")
+
+	r.mu.Lock()
+	r.transmitErr = nil // TX free now
+	r.mu.Unlock()
+	driveTheir(s, 120, nil) // next slot retries the 73
+	require.Contains(t, r.sentMsgs(), "K1ABC G0XYZ 73")
+	require.Len(t, r.completed, 1, "the retried 73 logs the QSO")
+	require.False(t, s.Active())
+}
+
+// Caller equivalent: ErrTxInFlight on RR73 keeps the contact in cqRogering and
+// retries RR73 — it must not silently drop back to CQ (review follow-up M1).
+func TestCallerSequencer_FinalRR73InFlightRetries(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+
+	r.mu.Lock()
+	r.transmitErr = ErrTxInFlight
+	r.mu.Unlock()
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}) // RR73 attempt fails
+	require.Empty(t, r.completed, "ErrTxInFlight on RR73 must not log")
+
+	r.mu.Lock()
+	r.transmitErr = nil
+	r.mu.Unlock()
+	driveTheir(s, 120, nil) // retry RR73 (not a CQ)
+	sent := r.sentMsgs()
+	require.Equal(t, "DL9UW 7Q5MLV RR73", sent[len(sent)-1], "retried RR73, did not drop to CQ")
+	require.Len(t, r.completed, 1, "the retried RR73 logs the QSO")
+}
+
+// The session stays active until the final 73 completes; on success the
+// deferred callback logs and goes idle (review follow-up M1 — keep-active model).
+func TestSequencer_DeferredFinal73LogsOnSuccess(t *testing.T) {
+	r := &seqRecorder{deferOnDone: true}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)}) // 73 queued, callback deferred
+
+	require.True(t, s.Active(), "session stays active while the 73 is in flight")
+	require.Empty(t, r.completed, "not logged until the 73 actually completes")
+
+	r.fireOnDone(true)
+	require.False(t, s.Active(), "idle once the 73 completes")
+	require.Len(t, r.completed, 1, "logged on completion")
+}
+
+// Abandon while the final 73 is in flight bumps the generation, so the later
+// (now-stale) success callback must neither log nor publish over the new state
+// (review follow-up M1 — generation guard).
+func TestSequencer_AbandonDuringFinal73SuppressesStaleCallback(t *testing.T) {
+	r := &seqRecorder{deferOnDone: true}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)}) // 73 queued, deferred
+
+	// A new QSO can't start while we're still keying the 73.
+	require.ErrorIs(t, s.StartQso("G0XYZ", "IO91", "W2DEF", "EM12",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()),
+		ErrQsoInProgress)
+
+	s.Abandon() // supersedes the session (bumps generation)
+	require.False(t, s.Active())
+
+	r.fireOnDone(true) // the stale 73 callback finally fires
+	require.Empty(t, r.completed, "a superseded session's callback must not log (gen guard)")
 }
 
 // --- M1: a session is not committed unless its opening message encodes -------
@@ -131,17 +227,18 @@ func TestService_StartDisarmRace(t *testing.T) {
 	}
 }
 
-// --- M2: the scheduler skips slots whose boundary it was delayed past --------
+// --- M2: the scheduler skips slots serviced beyond the lateness budget -------
 
-func TestStaleTarget(t *testing.T) {
+func TestSlotTooLate(t *testing.T) {
 	target := time.Unix(60, 0).UTC()
 
-	// On time / still within the slot that started at target → emit (not stale).
-	require.False(t, staleTarget(target, target))
-	require.False(t, staleTarget(target.Add(5*time.Second), target))
-	require.False(t, staleTarget(target.Add(SlotDuration-time.Millisecond), target))
+	// On time / small delay (within the 2 s budget) → emit.
+	require.False(t, slotTooLate(target, target))
+	require.False(t, slotTooLate(target.Add(100*time.Millisecond), target))
+	require.False(t, slotTooLate(target.Add(maxSlotLateness), target)) // exactly at the budget
 
-	// Delayed to/past the next boundary → stale (one slot and many slots late).
-	require.True(t, staleTarget(target.Add(SlotDuration), target))
-	require.True(t, staleTarget(target.Add(3*SlotDuration+2*time.Second), target))
+	// Beyond the budget → skip (a large sub-slot delay AND a multi-slot delay).
+	require.True(t, slotTooLate(target.Add(5*time.Second), target))
+	require.True(t, slotTooLate(target.Add(SlotDuration), target))
+	require.True(t, slotTooLate(target.Add(3*SlotDuration+2*time.Second), target))
 }

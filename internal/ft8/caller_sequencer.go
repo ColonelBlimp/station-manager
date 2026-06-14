@@ -49,6 +49,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 		return ErrQsoInProgress
 	}
 	s.mode = seqCalling
+	s.sessionGen++
 	s.caller = nil
 	s.ourCall = call
 	s.ourGrid = grid
@@ -184,48 +185,60 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
-		// Sending RR73 completes the QSO (we don't await their closing 73). Capture
-		// it; logging is deferred to onDone so it happens ONLY if the RR73 actually
-		// transmits (review H1). Either way we resume calling CQ (the pile-up).
-		sent := s.caller.Sent()
-		s.caller = &sent
+		// Capture the QSO data but DO NOT clear the contact or resume CQ yet
+		// (review follow-up M1): the contact stays in cqRogering until the RR73
+		// actually transmits, so a synchronous ErrTxInFlight retries RR73 next slot
+		// instead of silently dropping to CQ. Report fields are final at
+		// cqRogering — Sent() only flips State — so reading the live exchange works.
 		c := s.completedCallerQsoLocked()
 		completed = &c
-		s.caller = nil
-		s.repeats = 0
 	}
+	gen := s.sessionGen
 	st := s.statusLocked()
-	onComplete := s.onComplete
+	publish, onComplete := s.publish, s.onComplete
 	s.mu.Unlock()
 
 	// Side effects outside the lock.
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
 		Float64("dt_s", dt).Int("repeats", repeats).Msg("ft8 seq: caller transmitting rung")
 
-	// Final-rung (RR73) completion (review H1): log ONLY on a true on-air success.
-	// The session continues (st already shows the resumed calling-cq state), so
-	// onDone just logs — it does not publish idle.
+	// Final-rung (RR73) completion (review H1 + follow-up M1): log + resume CQ
+	// ONLY on a true on-air success, gen-guarded so an Abandon mid-flight can't
+	// log or publish. On RF failure → keep the contact in cqRogering so the next
+	// slot retries RR73 rather than silently dropping back to CQ.
 	var onDone func(ok bool)
 	if completed != nil {
 		c := *completed
 		onDone = func(ok bool) {
-			if ok {
-				s.log.InfoWith().Str("their_call", c.TheirCall).
-					Msg("ft8 seq: caller QSO complete (RR73 sent)")
-				if onComplete != nil {
-					onComplete(c)
-				}
-			} else {
-				s.log.WarnWith().Str("their_call", c.TheirCall).
-					Msg("ft8 seq: caller RR73 did not transmit; QSO NOT logged")
+			s.mu.Lock()
+			if s.sessionGen != gen { // superseded (abandon) — stale callback
+				s.mu.Unlock()
+				return
 			}
+			if !ok {
+				s.mu.Unlock()
+				s.log.WarnWith().Str("their_call", c.TheirCall).
+					Msg("ft8 seq: caller RR73 did not transmit; will retry next slot")
+				return
+			}
+			s.caller = nil // resume calling CQ (work the pile-up)
+			s.repeats = 0
+			cqSt := s.statusLocked()
+			s.mu.Unlock()
+			s.log.InfoWith().Str("their_call", c.TheirCall).
+				Msg("ft8 seq: caller QSO complete (RR73 sent)")
+			if onComplete != nil {
+				onComplete(c)
+			}
+			publish(cqSt) // now back to calling-cq
 		}
 	}
 
 	if err := transmit(msg, offset, onDone); err != nil {
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: caller rung transmit failed")
 		// onDone never fired, so a final-rung QSO is correctly not logged.
-		// ErrTxNotArmed / ErrTxBadMessage are terminal (review M1); else transient.
+		// ErrTxNotArmed / ErrTxBadMessage are terminal (review M1); else transient
+		// — the contact is untouched (still cqRogering), so the next slot retries.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()
 			return

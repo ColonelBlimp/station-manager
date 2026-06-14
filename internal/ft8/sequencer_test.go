@@ -21,6 +21,21 @@ type seqRecorder struct {
 	transmitErr error // non-nil → transmit returns it synchronously (onDone never fires)
 	asyncFail   bool  // true → transmit "queues" (returns nil) but onDone(false): the
 	// transmission started then failed on air (review H1 — the final-rung case).
+	deferOnDone   bool          // true → transmit captures onDone instead of firing it
+	pendingOnDone func(ok bool) // the last captured (deferred) onDone
+}
+
+// fireOnDone invokes the most recently captured deferred onDone, simulating the
+// tx goroutine completing later. Used to test async-callback ordering (a session
+// superseded before its final-rung callback returns). No-op if none pending.
+func (r *seqRecorder) fireOnDone(ok bool) {
+	r.mu.Lock()
+	fn := r.pendingOnDone
+	r.pendingOnDone = nil
+	r.mu.Unlock()
+	if fn != nil {
+		fn(ok)
+	}
 }
 
 // transmit mirrors Service.seqTransmit's contract: it returns synchronously
@@ -37,6 +52,11 @@ func (r *seqRecorder) transmit(msg string, off float64, onDone func(ok bool)) er
 	r.sent = append(r.sent, msg)
 	r.offsets = append(r.offsets, off)
 	fail := r.asyncFail
+	if r.deferOnDone {
+		r.pendingOnDone = onDone // fired later via fireOnDone
+		r.mu.Unlock()
+		return nil
+	}
 	r.mu.Unlock()
 	if onDone != nil {
 		onDone(!fail)

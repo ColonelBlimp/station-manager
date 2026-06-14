@@ -124,16 +124,19 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 		case <-timer.C:
 			now := time.Now().UTC()
-			// Normal: the timer fired ~at target; emit the slot that just ended
-			// there. Delayed past the NEXT boundary (a slow goroutine): the ring now
-			// holds a later slot's audio, so a target-stamped emit would carry the
-			// wrong StartUTC/parity — and the sequencer keys rung timing off parity.
-			// Skip the stale slot and resync at the next future boundary (review M2).
-			if staleTarget(now, target) {
+			// Normal: the timer fired ~at target (sub-50 ms); emit the slot that
+			// ended there. If the goroutine was delayed more than maxSlotLateness,
+			// the ring no longer represents [target-SlotDuration, target) — it has
+			// shed the front of the slot and gained samples from after target — so a
+			// target-stamped emit would carry a shifted window and a stale
+			// StartUTC/parity (which the sequencer keys rung timing off). Skip and
+			// resync at the next future boundary (review follow-up M2).
+			if slotTooLate(now, target) {
 				s.log.WarnWith().
 					Str("missed_target", target.Format(time.RFC3339)).
 					Str("now", now.Format(time.RFC3339)).
-					Msg("ft8.scheduler: timer delayed past slot boundary; skipping stale slot")
+					Int64("late_ms", now.Sub(target).Milliseconds()).
+					Msg("ft8.scheduler: timer delay exceeded the lateness budget; skipping slot")
 			} else {
 				s.emitSlot(ring, target, now)
 			}
@@ -143,12 +146,18 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 }
 
-// staleTarget reports whether the scheduler goroutine was delayed past the slot
-// that ended at target — i.e. now has already reached the next boundary. When
-// true the ring no longer holds target's slot, so emitting it would mis-stamp
-// StartUTC/parity; the caller skips it and resyncs (review M2).
-func staleTarget(now, target time.Time) bool {
-	return !now.Before(target.Add(SlotDuration))
+// maxSlotLateness bounds how late the scheduler goroutine may service a slot
+// boundary and still emit. Beyond it the ring window has shifted enough that the
+// snapshot no longer matches the target slot, so we skip+resync rather than feed
+// decode/occupancy a mis-stamped slot (review follow-up M2). Default 2 s: far
+// above normal jitter (sub-50 ms) and a generous GC pause, far below a full
+// 15 s slot. Package var so tests can dial it.
+var maxSlotLateness = 2 * time.Second
+
+// slotTooLate reports whether the goroutine serviced the boundary later than
+// maxSlotLateness — i.e. the target slot's snapshot can no longer be trusted.
+func slotTooLate(now, target time.Time) bool {
+	return now.Sub(target) > maxSlotLateness
 }
 
 // emitSlot snapshots the ring and tries to publish the slot. If the ring
