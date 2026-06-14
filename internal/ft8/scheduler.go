@@ -122,26 +122,48 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			}
 			ring.Append(batch)
 
-		case fired := <-timer.C:
-			s.emitSlot(ring, target, fired)
-			target = target.Add(SlotDuration)
+		case <-timer.C:
+			now := time.Now().UTC()
+			// Normal: the timer fired ~at target; emit the slot that just ended
+			// there. Delayed past the NEXT boundary (a slow goroutine): the ring now
+			// holds a later slot's audio, so a target-stamped emit would carry the
+			// wrong StartUTC/parity — and the sequencer keys rung timing off parity.
+			// Skip the stale slot and resync at the next future boundary (review M2).
+			if staleTarget(now, target) {
+				s.log.WarnWith().
+					Str("missed_target", target.Format(time.RFC3339)).
+					Str("now", now.Format(time.RFC3339)).
+					Msg("ft8.scheduler: timer delayed past slot boundary; skipping stale slot")
+			} else {
+				s.emitSlot(ring, target, now)
+			}
+			target = nextSlotBoundary(now)
 			timer.Reset(time.Until(target))
 		}
 	}
+}
+
+// staleTarget reports whether the scheduler goroutine was delayed past the slot
+// that ended at target — i.e. now has already reached the next boundary. When
+// true the ring no longer holds target's slot, so emitting it would mis-stamp
+// StartUTC/parity; the caller skips it and resyncs (review M2).
+func staleTarget(now, target time.Time) bool {
+	return !now.Before(target.Add(SlotDuration))
 }
 
 // emitSlot snapshots the ring and tries to publish the slot. If the ring
 // has not yet seen a full SlotDuration of audio (cold start), the slot is
 // silently skipped — emitting a half-filled buffer would produce
 // false-decode noise. Once enough samples have accumulated, every
-// subsequent boundary fires a slot.
-func (s *Scheduler) emitSlot(ring *sampleRing, target, fired time.Time) {
+// subsequent boundary fires a slot. now is the actual service time (not the
+// timer payload), so OffsetMs reflects real servicing delay (review M2).
+func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time) {
 	if ring.Filled() < int64(ring.Cap()) {
 		return
 	}
 	slot := Slot{
 		StartUTC: target.Add(-SlotDuration),
-		OffsetMs: fired.Sub(target).Milliseconds(),
+		OffsetMs: now.Sub(target).Milliseconds(),
 		Samples:  ring.Snapshot(),
 	}
 	select {

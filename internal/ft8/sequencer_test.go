@@ -18,17 +18,29 @@ type seqRecorder struct {
 	offsets     []float64
 	statuses    []QsoStatus
 	completed   []CompletedQso
-	transmitErr error
+	transmitErr error // non-nil → transmit returns it synchronously (onDone never fires)
+	asyncFail   bool  // true → transmit "queues" (returns nil) but onDone(false): the
+	// transmission started then failed on air (review H1 — the final-rung case).
 }
 
-func (r *seqRecorder) transmit(msg string, off float64) error {
+// transmit mirrors Service.seqTransmit's contract: it returns synchronously
+// ("queued"), then fires onDone with the on-air outcome. Tests fire onDone
+// synchronously (the real path fires it from the tx goroutine); ok=true unless
+// asyncFail is set, so the final-rung completion path is exercised either way.
+func (r *seqRecorder) transmit(msg string, off float64, onDone func(ok bool)) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.transmitErr != nil {
-		return r.transmitErr
+		err := r.transmitErr
+		r.mu.Unlock()
+		return err
 	}
 	r.sent = append(r.sent, msg)
 	r.offsets = append(r.offsets, off)
+	fail := r.asyncFail
+	r.mu.Unlock()
+	if onDone != nil {
+		onDone(!fail)
+	}
 	return nil
 }
 

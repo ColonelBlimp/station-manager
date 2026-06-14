@@ -77,8 +77,10 @@ on any PUT):
 - **`tx.caller_answer_mode`** — when WE call CQ, which answering station to work
   (ADR 0033): `"auto_first"` works the first valid answerer (WSJT-X "Auto Seq");
   `"operator_pick"` queues answerers for the operator to pop (the pile-up stack).
-  Default `auto_first`; empty/invalid → the default. `operator_pick` is not yet
-  wired — it currently behaves as `auto_first` until the stack ships.
+  Default `auto_first`; empty/invalid → the default. `operator_pick` is **not yet
+  implemented** — Call CQ with it configured is **rejected** at start (501
+  `ft8_caller_mode_unsupported`) rather than silently auto-picking, so the setting
+  never misbehaves; use `auto_first` until the stack ships.
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on

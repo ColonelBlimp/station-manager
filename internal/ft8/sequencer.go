@@ -129,13 +129,17 @@ type Sequencer struct {
 	repeats     int
 	maxRepeats  int
 
-	transmit   func(message string, offsetHz float64) error
+	// transmit sends a rung. onDone (optional) fires from the transmit goroutine
+	// once the transmission finishes — ok=true only on a clean on-air success.
+	// The final rung passes a completion closure so the QSO is logged ONLY after
+	// the 73/RR73 actually transmitted, never on "queued" (review H1).
+	transmit   func(message string, offsetHz float64, onDone func(ok bool)) error
 	publish    func(QsoStatus)
 	onComplete func(CompletedQso)
 	log        logging.Logger
 }
 
-func newSequencer(transmit func(string, float64) error, publish func(QsoStatus), log logging.Logger) *Sequencer {
+func newSequencer(transmit func(string, float64, func(ok bool)) error, publish func(QsoStatus), log logging.Logger) *Sequencer {
 	if log == nil {
 		log = logging.Noop()
 	}
@@ -160,12 +164,22 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 		return err
 	}
 
+	ex := NewExchange(ourCall, ourGrid, theirCall)
+	// Validate the opening message encodes BEFORE committing the session (review
+	// M1): the CQ parser accepts compound/portable calls (with `/`) the standard
+	// encoder rejects, so an unanswerable call would otherwise publish an active
+	// ladder that can never produce RF. Fail up front with a clear error.
+	if msg, ok := ex.TxMessage(); ok {
+		if _, err := goft8.EncodeStandardMessage(msg); err != nil {
+			return ErrTxBadMessage
+		}
+	}
+
 	s.mu.Lock()
 	if s.mode != seqIdle {
 		s.mu.Unlock()
 		return ErrQsoInProgress
 	}
-	ex := NewExchange(ourCall, ourGrid, theirCall)
 	s.mode = seqAnswering
 	s.ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
@@ -314,7 +328,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
-		// Sending the 73 completes the QSO.
+		// Sending the 73 completes the QSO — but only if it actually transmits
+		// (review H1); the logging is deferred to onDone below.
 		sent := s.ex.Sent()
 		s.ex = &sent
 		c := s.completedQsoLocked()
@@ -323,6 +338,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.mode = seqIdle
 	}
 	st := s.statusLocked()
+	onComplete, publish := s.onComplete, s.publish
 	s.mu.Unlock()
 
 	// Side effects outside the lock. Log every rung transmit (msg, rung, and how
@@ -335,21 +351,47 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		Float64("dt_s", dt).
 		Int("repeats", repeats).
 		Msg("ft8 seq: transmitting rung")
-	if err := transmit(msg, offset); err != nil {
+
+	// Final-rung completion (review H1): the QSO logs ONLY after the 73 truly
+	// transmits. onDone fires from the transmit goroutine with the real outcome;
+	// a "queued" return is not success. Either way the session is over once the
+	// 73 is committed, so publish idle.
+	var onDone func(ok bool)
+	if completed != nil {
+		c := *completed
+		onDone = func(ok bool) {
+			if ok {
+				s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: QSO complete (73 sent)")
+				if onComplete != nil {
+					onComplete(c)
+				}
+			} else {
+				s.log.WarnWith().Str("their_call", c.TheirCall).
+					Msg("ft8 seq: final 73 did not transmit; QSO NOT logged")
+			}
+			publish(QsoStatus{Active: false})
+		}
+	}
+
+	if err := transmit(msg, offset, onDone); err != nil {
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
-		if stderrors.Is(err, ErrTxNotArmed) {
-			s.Abandon() // TX disarmed under us — can't continue.
+		// onDone never fired (the goroutine didn't start), so a final-rung QSO is
+		// correctly NOT logged. ErrTxNotArmed (TX gone) and ErrTxBadMessage (will
+		// never encode — review M1) are terminal; abandon. Anything else (e.g.
+		// ErrTxInFlight) is transient: skip this slot and retry next cycle.
+		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.Abandon()
 			return
 		}
-	}
-	s.publish(st)
-	if completed != nil {
-		s.log.InfoWith().Str("their_call", completed.TheirCall).Msg("ft8 seq: QSO complete (73 sent)")
-		if s.onComplete != nil {
-			s.onComplete(*completed)
+		if completed != nil {
+			publish(QsoStatus{Active: false}) // final rung already went idle
+		} else {
+			publish(st)
 		}
-		s.publish(QsoStatus{Active: false})
+		return
 	}
+	publish(st)
+	// Completion (confirming) is handled by onDone from the transmit goroutine.
 }
 
 // slotStart returns the UTC 15-second slot boundary containing t, epoch-aligned to
@@ -416,10 +458,11 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
 		Float64("dt_s", dt).Int("repeats", repeats).Bool("immediate", true).
 		Msg("ft8 seq: transmitting rung")
-	if err := transmit(msg, offset); err != nil {
+	// The opening rung is always non-terminal (no completion), so no onDone.
+	if err := transmit(msg, offset, nil); err != nil {
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
-		if stderrors.Is(err, ErrTxNotArmed) {
-			s.Abandon() // TX disarmed under us — can't continue.
+		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.Abandon() // TX gone / message can't encode — can't continue.
 			return
 		}
 	}

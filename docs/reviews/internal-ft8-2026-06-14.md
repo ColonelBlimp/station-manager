@@ -1,5 +1,37 @@
 # internal/ft8 Code Review - 2026-06-14
 
+> **Resolution (2026-06-14): all six findings fixed.**
+> - **H1** — the final-rung completion now fires from the transmit goroutine
+>   only on a true on-air success: `startTransmission`/`seqTransmit` take an
+>   `onDone(ok bool)` callback (ok=false on cancel/error), and the sequencer logs
+>   the QSO inside it instead of inline after "queued." A synchronous final-rung
+>   error no longer completes — `ErrTxNotArmed`/`ErrTxBadMessage` are terminal
+>   (abandon), anything else (e.g. `ErrTxInFlight`) skips the slot. Both
+>   answerer (`sequencer.go`) and caller (`caller_sequencer.go`) paths. Tests:
+>   `TestSequencer_FinalRungAsyncFailDoesNotLog`,
+>   `TestSequencer_FinalRungBadMessageAbandonsNoLog`,
+>   `TestCallerSequencer_FinalRR73AsyncFailDoesNotLog`.
+> - **H2** — `StartCallCq` rejects `operator_pick` up front with
+>   `ErrCallerAnswerModeUnsupported` → 501 `ft8_caller_mode_unsupported` (no more
+>   silent auto-pick). Test: `TestStartCallCq_RejectsOperatorPick`.
+> - **M1** — `StartQso`/`StartCallCq` validate the opening message
+>   (`goft8.EncodeStandardMessage`) before committing/publishing; an unencodable
+>   call returns `ErrTxBadMessage` → 400 `ft8_tx_bad_message`. Tests:
+>   `TestSequencer_StartQsoRejectsUnencodableCall`,
+>   `TestCallerSequencer_StartCallCqRejectsUnencodableCq`.
+> - **M2** — the scheduler skips a target it was delayed past (resyncs at the
+>   next future boundary) and stamps `OffsetMs` from actual service time. Test:
+>   `TestStaleTarget`.
+> - **M3** — a `seqGate` mutex makes the armed-check + sequencer commit atomic
+>   w.r.t. disarm; disarm clears `txArmed` (under `txMu`) before abandoning.
+>   Test: `TestService_StartDisarmRace` (passes under `-race`).
+> - **L1** — `doc.go` rewritten to describe the current RX/TX/sequencer shape,
+>   the TxKeyer seam, attended-only model, and the QSO-log-sink boundary.
+>
+> Verified: `go test -race -short ./internal/ft8`; `go test ./internal/ft8
+> ./internal/api ./internal/bridge ./cmd/smd`; `CGO_ENABLED=0 go test
+> ./internal/ft8` + `CGO_ENABLED=0 go build ./...`; `go vet` — all green.
+
 ## Scope
 
 Reviewed the live FT8 subsystem and the adjacent contracts that make its

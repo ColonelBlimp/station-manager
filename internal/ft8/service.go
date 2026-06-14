@@ -109,6 +109,17 @@ type Service struct {
 	txCancel   context.CancelFunc
 	txWg       sync.WaitGroup
 
+	// seqGate serialises "start a session" (StartQso/StartCallCq) against
+	// "disarm + abandon" (disarmTx) so the armed-check and the sequencer commit
+	// are atomic w.r.t. a concurrent disarm (review M3). Without it, a start can
+	// observe txArmed=true, a disarm can then abandon the idle sequencer and
+	// clear txArmed, and the start can still commit an active session — leaving
+	// an active sequencer after TX is disarmed. Outermost lock; order is
+	// seqGate → txMu (→ s.mu via base()); held only across the brief
+	// check-and-commit, never across the ~13 s audio (that runs in the tx
+	// goroutine, which takes only txMu).
+	seqGate sync.Mutex
+
 	// seq is the manual sequencer (ADR 0031 step e3): one active answer-a-CQ
 	// exchange, driven per slot from decodeLoop, transmitting via seqTransmit.
 	// Created in newService; nil-safe via its own methods.

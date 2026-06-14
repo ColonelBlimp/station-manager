@@ -1,27 +1,58 @@
-// Package ft8 wires the go-ft8 decode library into Station Manager.
+// Package ft8 is Station Manager's FT8 subsystem: it wires the go-ft8 library
+// into the daemon and owns everything from live receive audio through decode,
+// occupancy analysis, the SSE wire, and — attended-only — transmit, sequencing,
+// and completed-QSO assembly. It is no longer the thin decode-only wrapper the
+// original scaffold was; the responsibilities below all live here now.
 //
-// It is deliberately thin: it owns the int16 audio seam (12 kHz, mono,
-// signed-16-bit PCM — the format go-ft8 and its WSJT-X/jt9 lineage expect)
-// and the fail-soft + structured-logging policy around a decode. The DSP,
-// LDPC, and message unpacking all live in go-ft8; this package does not
-// reimplement any of it.
+// # Audio + decode (RX)
 //
-// Two entry points share one path:
+// The int16 seam (12 kHz, mono, signed-16-bit PCM — the format go-ft8 and its
+// WSJT-X/jt9 lineage expect) is the package's contract. The DSP, LDPC, and
+// message unpacking all live in go-ft8; this package does not reimplement any
+// of it.
 //
 //   - DecodeSlot turns a slot of int16 samples into decoded messages via
-//     go-ft8's checked API — a malformed slot is rejected with a typed error
-//     rather than silently zero-padded — logging each message as a structured
-//     line (plus a debug-level per-slot diagnostics line) and returning the
-//     slice. This is the call the daemon will make per 15-second slot once
-//     live capture exists; the live path only has to produce the int16 slot.
-//   - DecodeFile reads a WAV fixture into an int16 slot and hands it to
-//     DecodeSlot — the offline/test path, and the first integration proof
-//     against go-ft8's deterministic corpus.
+//     go-ft8's checked API (a malformed slot is rejected with a typed error,
+//     not silently zero-padded), logging each message.
+//   - DecodeFile reads a WAV fixture into a slot and hands it to DecodeSlot —
+//     the offline/test path.
+//   - Live capture (CGO build only; a !cgo stub leaves the subsystem idle) feeds
+//     a sample ring; a UTC slot Scheduler snapshots it on each 15-second
+//     boundary and drives a decode worker. Capture is demand-driven: the device
+//     is acquired on the first /v1/ft8/events subscriber and released a short
+//     linger after the last leaves.
+//   - The occupancy detector ranks clear TX offsets per slot.
+//   - Decodes, occupancy, TX state, QSO status, and completed-QSO events fan out
+//     on the ft8-* SSE events (Service.HTTPHandler).
 //
-// Fail-soft is load-bearing: a decode that errors or panics logs and
-// returns nothing. An FT8 failure must never take down the daemon, the
-// same principle as "enrichment never blocks logging".
+// # Transmit + sequencing (TX, attended-only)
 //
-// go-ft8 is licensed GPL-3.0-only (a WSJT-X/jt9 derivative); linking it is
-// why Station Manager is GPL-3.0-only. See docs/licensing.md and ADR 0023.
+// Transmit is operator-initiated and auto-advancing — never unattended (the QEX
+// FT8 spec forbids automatic operation). The operator arms TX, then either
+// answers a CQ (ADR 0031) or calls CQ to work a pile-up (ADR 0033); the
+// sequencer walks the message ladder, transmitting each rung on the synchronised
+// timebase (ADR 0032).
+//
+//   - TxKeyer is the PTT seam: the package keys the rig WITHOUT importing
+//     internal/bridge (the bridge implements TxKeyer; injected like the capture
+//     source). tx_on/tx_off are never exposed on the generic command path.
+//   - TxController orchestrates one slot: encode → wait for the boundary → key →
+//     play → unkey, with PTT guaranteed down on every return path.
+//   - A completed exchange (73/RR73 actually transmitted — never merely queued)
+//     is assembled by the pure BuildQso into a types.Qso and handed to an
+//     injected sink (SetQsoLogger); submit, enrichment, and forwarding stay in
+//     cmd/smd + qsoservice, so this package does NOT import qsoservice.
+//     Narrow-daemon-scope holds by import graph; dependency injection gives the
+//     one-way direction.
+//
+// # Invariants
+//
+// Fail-soft is load-bearing: a decode (or capture, or TX) failure logs and
+// returns — it must never take down the daemon, the same principle as
+// "enrichment never blocks logging". A bare decode is NOT a QSO; only a
+// completed exchange is, and it is logged only after the final rung truly
+// transmits.
+//
+// go-ft8 is licensed GPL-3.0-only (a WSJT-X/jt9 derivative); linking it is why
+// Station Manager is GPL-3.0-only. See docs/licensing.md and ADR 0023.
 package ft8

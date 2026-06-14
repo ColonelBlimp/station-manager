@@ -40,6 +40,12 @@ var (
 	ErrTxInFlight = stderrors.New("ft8: a transmission is already in flight")
 	// ErrTxBadMessage: the message is not an encodable standard FT8 message.
 	ErrTxBadMessage = stderrors.New("ft8: not an encodable standard message")
+	// ErrCallerAnswerModeUnsupported: a Call-CQ session was requested with an
+	// answerer-selection mode that is configured but not yet implemented
+	// (operator_pick — the pile-up stack is future work). Rejected at start so a
+	// config'd operator_pick fails loudly rather than silently auto-picking the
+	// first answerer (review H2 / ADR 0033).
+	ErrCallerAnswerModeUnsupported = stderrors.New("ft8: caller answer mode not supported")
 )
 
 // txPlayer is the daemon's owned FT8 transmit output device. It extends the
@@ -133,15 +139,23 @@ func (s *Service) armTx() error {
 // subsystem so it can never be re-armed (used by Stop). Idempotent. Also abandons
 // any active sequenced QSO (ADR 0031 off-ramp: disarm aborts the contact).
 func (s *Service) disarmTx(closing bool) {
-	if s.seq != nil {
-		s.seq.Abandon()
-	}
+	// seqGate: clear the armed state AND abandon the sequencer atomically w.r.t.
+	// a concurrent StartQso/StartCallCq (review M3), so a start can't slip an
+	// active session in between. Order seqGate → txMu.
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+
 	s.txMu.Lock()
 	if closing {
 		s.txClosed = true
 	}
 	if !s.txArmed && s.txCancel == nil {
 		s.txMu.Unlock() // idle: nothing to tear down (txClosed already latched above)
+		// Still abandon under the gate: a session could be active from a start
+		// that raced an earlier disarm; clear it now that armed is false.
+		if s.seq != nil {
+			s.seq.Abandon()
+		}
 		return
 	}
 	wasArmed := s.txArmed
@@ -153,6 +167,12 @@ func (s *Service) disarmTx(closing bool) {
 	s.txDevice = nil
 	s.txCtrl = nil
 	s.txMu.Unlock()
+
+	// Armed state is now false (under the gate); abandon the sequencer. A start
+	// blocked on seqGate will observe txArmed=false and refuse to commit.
+	if s.seq != nil {
+		s.seq.Abandon()
+	}
 
 	// Wait for the in-flight transmission (if any) to return BEFORE closing the
 	// device — outside txMu so the TX goroutine can clear its own state. The
@@ -188,7 +208,7 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	// parity, so we start on time with no truncation).
 	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitSlot(ctx, message, offsetHz)
-	})
+	}, nil)
 }
 
 // seqTransmit transmits a sequencer rung in the CURRENT slot on the synchronised
@@ -196,14 +216,18 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 // head-truncated if the decode landed past the slot's nominal +0.5 s start. Used
 // only by the Sequencer; the late-window guard is the sequencer's. Shares the arm
 // gate + single-flight + ft8-tx status with TransmitNext.
-func (s *Service) seqTransmit(message string, offsetHz float64) error {
+// onDone (optional) fires from the transmit goroutine once the transmission
+// finishes, with ok=true only on actual success (a cancel from disarm/stop is
+// ok=false). The sequencer uses it to log a completed QSO only after the final
+// rung truly transmitted — never on "queued" alone (review H1).
+func (s *Service) seqTransmit(message string, offsetHz float64, onDone func(ok bool)) error {
 	const op errors.Op = "ft8.Service.seqTransmit"
 	if _, err := EncodeWaveform(message, offsetHz); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
 	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitCurrentSlot(ctx, message, offsetHz)
-	})
+	}, onDone)
 }
 
 // startTransmission runs one transmission through the armed controller under the
@@ -216,6 +240,7 @@ func (s *Service) startTransmission(
 	message string,
 	offsetHz float64,
 	fn func(ctx context.Context, ctrl *TxController) error,
+	onDone func(ok bool),
 ) error {
 	const op errors.Op = "ft8.Service.startTransmission"
 
@@ -262,6 +287,13 @@ func (s *Service) startTransmission(
 			s.log.WarnWith().Err(err).Msg("ft8 tx: transmission failed")
 		}
 		s.publishTxState() // done (or failed)
+
+		// Completion callback (final-rung QSO logging, review H1): ok only on a
+		// clean success — a cancel (disarm/stop) or any error means the final
+		// transmission did NOT complete on air, so the QSO must not be logged.
+		if onDone != nil {
+			onDone(err == nil)
+		}
 	}, false, &s.txWg)
 
 	return nil
@@ -274,6 +306,9 @@ func (s *Service) startTransmission(
 // layer resolved from config.
 func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartQso"
+	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
 	s.txMu.Lock()
 	armed := s.txArmed
 	s.txMu.Unlock()
@@ -291,13 +326,23 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 // offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency.
 func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartCallCq"
+	// Reject operator_pick until the pile-up stack exists (review H2): the
+	// sequencer would otherwise silently auto-pick the first answerer, which is
+	// NOT what operator_pick promises. Fail loudly so a config typo is visible.
+	mode := types.ResolveFt8CallerAnswerMode(s.cfg.TX)
+	if mode == types.Ft8CallerAnswerOperatorPick {
+		return errors.New(op).WithErr(ErrCallerAnswerModeUnsupported).
+			WithMsg("operator_pick answerer selection is not yet implemented; use auto_first")
+	}
+	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
 	s.txMu.Lock()
 	armed := s.txArmed
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
 	}
-	mode := types.ResolveFt8CallerAnswerMode(s.cfg.TX)
 	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, time.Now().UTC())
 }
 

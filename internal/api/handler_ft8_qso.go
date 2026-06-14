@@ -121,6 +121,14 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 	case stderr.Is(err, ft8.ErrNoOffset):
 		s.writeError(w, http.StatusBadRequest, "ft8_no_offset",
 			"pick a clear TX offset before starting a QSO", op)
+	case stderr.Is(err, ft8.ErrTxBadMessage):
+		s.writeError(w, http.StatusBadRequest, "ft8_tx_bad_message",
+			"that station can't be worked on FT8 — only standard messages transmit "+
+				"(compound/portable calls and free text can't be encoded)", op)
+	case stderr.Is(err, ft8.ErrCallerAnswerModeUnsupported):
+		s.writeError(w, http.StatusNotImplemented, "ft8_caller_mode_unsupported",
+			"operator_pick answerer selection is not yet implemented; "+
+				"set ft8.tx.caller_answer_mode to auto_first", op)
 	default:
 		// A bad slot_utc (time.Parse failure) and anything else map to 400 —
 		// the request is malformed, not a server fault.
