@@ -28,53 +28,58 @@ type Service struct {
 	mu            sync.RWMutex
 	isInitialized atomic.Bool
 	isOpen        atomic.Bool
-	initOnce      sync.Once
 }
 
 // Initialize initializes the database service. No constructor is provided as this service is to be
 // initialized within an IOC/DI container.
+// Initialize validates dependencies + config and prepares the data directory.
+// Idempotent and RETRYABLE: a failure (missing logger/config, invalid config,
+// directory error) leaves the service uninitialized so a later call — after the
+// dependency/config problem is fixed — runs the body again and can succeed.
+// (The previous sync.Once consumed the guard on the first failure, so a retry
+// silently returned nil while the service stayed uninitialized and Open kept
+// failing.) Guarded by s.mu so concurrent calls serialise; isInitialized is set
+// ONLY after every step succeeds.
 func (s *Service) Initialize() error {
 	const op errors.Op = "sqlite.Service.Initialize"
 	if s.isInitialized.Load() {
 		return nil
 	}
 
-	var initErr error
-	s.initOnce.Do(func() {
-		if s.LoggerService == nil {
-			initErr = errors.New(op).WithMsg("logger service has not been set/injected")
-			return
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Re-check under the lock: another goroutine may have initialised between
+	// the lock-free fast path above and acquiring the lock.
+	if s.isInitialized.Load() {
+		return nil
+	}
+
+	if s.LoggerService == nil {
+		return errors.New(op).WithMsg("logger service has not been set/injected")
+	}
+	if s.ConfigService == nil {
+		return errors.New(op).WithMsg("application config has not been set/injected")
+	}
+
+	dbCfg, err := s.ConfigService.DatastoreConfig()
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	if err = validateConfig(&dbCfg); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("Invalid database config")
+	}
+
+	if dbCfg.Driver == SqliteDriver {
+		// Ensure the database directory exists.
+		if err = s.checkDatabaseDir(dbCfg.Path); err != nil {
+			return errors.New(op).WithErr(err)
 		}
+	}
 
-		if s.ConfigService == nil {
-			initErr = errors.New(op).WithMsg("application config has not been set/injected")
-			return
-		}
-
-		dbCfg, err := s.ConfigService.DatastoreConfig()
-		if err != nil {
-			initErr = errors.New(op).WithErr(err)
-			return
-		}
-
-		if err = validateConfig(&dbCfg); err != nil {
-			initErr = errors.New(op).WithErr(err).WithMsg("Invalid database config")
-			return
-		}
-		s.DatabaseConfig = &dbCfg
-
-		if s.DatabaseConfig.Driver == SqliteDriver {
-			// Ensure the database directory exists
-			if err = s.checkDatabaseDir(s.DatabaseConfig.Path); err != nil {
-				initErr = errors.New(op).WithErr(err)
-				return
-			}
-		}
-
-		s.isInitialized.Store(true)
-	})
-
-	return initErr
+	// All steps succeeded — commit the validated config and latch initialised.
+	s.DatabaseConfig = &dbCfg
+	s.isInitialized.Store(true)
+	return nil
 }
 
 // Open opens the database connection.
@@ -183,14 +188,13 @@ func (s *Service) Close() error {
 	s.handle = nil
 	s.isOpen.Store(false)
 
-	// Reset Initialize's guard so a subsequent Initialize()->Open() cycle
-	// actually re-runs. Without this the next Initialize is a no-op and
-	// any config change between cycles is silently ignored — a trap for
-	// a future config-reload path (SIGHUP etc.). Safe against races
-	// because Close holds s.mu.Lock() and every non-get path takes the
-	// same mutex; if that lock discipline ever changes this reassignment
-	// needs revisiting.
-	s.initOnce = sync.Once{}
+	// Clear the initialised flag so a subsequent Initialize()->Open() cycle
+	// actually re-runs (Initialize is mutex-guarded + re-checkable, so simply
+	// dropping the flag is enough — there is no longer a sync.Once to reset).
+	// Without this the next Initialize is a no-op and any config change between
+	// cycles is silently ignored — a trap for a future config-reload path
+	// (SIGHUP etc.). Safe against races: Close holds s.mu.Lock(), the same lock
+	// Initialize takes.
 	s.isInitialized.Store(false)
 
 	return nil

@@ -323,6 +323,50 @@ func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64,
 	return version, dirty, nil
 }
 
+// updateActiveQso updates a QSO's mutable columns by primary key, but ONLY
+// while it is not soft-deleted: the `id = ? AND deleted_at IS NULL` predicate is
+// part of the UPDATE itself (not a separate exists-check), so a DELETE that
+// commits between a stale PATCH's read and this write cannot be written through.
+// Without that, a stale update could mutate a tombstone, report success, and
+// enqueue spurious update uploads/history — and the previous generated full-row
+// Update(Infer) additionally resurrected the row by writing deleted_at = NULL.
+//
+// The column map is explicit and omits id / created_at / deleted_at — identity +
+// audit columns an edit must never touch (modified_at IS refreshed). It must
+// stay in sync with the promoted columns QsoTypeToModel populates. Returns
+// errors.ErrNotFound when no active row matched. exec is *sql.DB or *sql.Tx.
+func updateActiveQso(ctx context.Context, exec boil.ContextExecutor, model models.Qso) error {
+	const op errors.Op = "sqlite.updateActiveQso"
+	cols := models.M{
+		models.QsoColumns.UUID:           model.UUID,
+		models.QsoColumns.LogbookID:      model.LogbookID,
+		models.QsoColumns.Call:           model.Call,
+		models.QsoColumns.Band:           model.Band,
+		models.QsoColumns.Mode:           model.Mode,
+		models.QsoColumns.Freq:           model.Freq,
+		models.QsoColumns.QsoDate:        model.QsoDate,
+		models.QsoColumns.TimeOn:         model.TimeOn,
+		models.QsoColumns.TimeOff:        model.TimeOff,
+		models.QsoColumns.RstSent:        model.RstSent,
+		models.QsoColumns.RstRcvd:        model.RstRcvd,
+		models.QsoColumns.Country:        model.Country,
+		models.QsoColumns.AdditionalData: model.AdditionalData,
+		models.QsoColumns.DedupeKey:      model.DedupeKey,
+		models.QsoColumns.ModifiedAt:     model.ModifiedAt,
+	}
+	n, err := models.Qsos(
+		models.QsoWhere.ID.EQ(model.ID),
+		models.QsoWhere.DeletedAt.IsNull(),
+	).UpdateAll(ctx, exec, cols)
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	if n == 0 {
+		return errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active QSO with id %d", model.ID)
+	}
+	return nil
+}
+
 func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error {
 	const op errors.Op = "sqlite.Service.UpdateQsoWithContext"
 	if err := checkService(op, s); err != nil {
@@ -348,11 +392,7 @@ func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error
 
 	model.ModifiedAt = null.TimeFrom(time.Now())
 
-	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
-		return errors.New(op).WithErr(err)
-	}
-
-	return nil
+	return updateActiveQso(ctx, h, model)
 }
 
 func (s *Service) FetchQsoByIdWithContext(ctx context.Context, id int64) (types.Qso, error) {
@@ -867,9 +907,35 @@ func (s *Service) FetchCountryByNameWithContext(ctx context.Context, name string
 	return country, nil
 }
 
+// validateCountryPrefix trims country.Prefix and rejects it if empty or if it
+// contains a SQL LIKE meta-character. The longest-prefix-match read path
+// (FetchCountryByCallsignWithContext) interpolates the prefix directly into a
+// `<callsign> LIKE <prefix> || '%'` pattern, so a wildcard ('%', '_') or the
+// LIKE escape ('\') in a stored prefix would silently over-match every callsign.
+// Centralised here and called from EVERY durable country writer (insert /
+// update / upsert) so the invariant can't be bypassed via a direct helper
+// (review L1). Writes the trimmed value back through the pointer.
+func validateCountryPrefix(op errors.Op, country *types.Country) error {
+	prefix := strings.TrimSpace(country.Prefix)
+	if prefix == "" {
+		return errors.New(op).WithMsg("country.Prefix cannot be empty")
+	}
+	if strings.ContainsAny(prefix, `%_\`) {
+		return errors.New(op).WithMsgf(
+			"country.Prefix %q contains SQL LIKE meta-character (%% _ \\); prefixes must be plain alphanumerics",
+			prefix)
+	}
+	country.Prefix = prefix
+	return nil
+}
+
 func (s *Service) InsertCountryWithContext(ctx context.Context, country types.Country) (int64, error) {
 	const op errors.Op = "sqlite.Service.InsertCountryWithContext"
 	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+
+	if err := validateCountryPrefix(op, &country); err != nil {
 		return 0, err
 	}
 
@@ -895,6 +961,10 @@ func (s *Service) InsertCountryWithContext(ctx context.Context, country types.Co
 func (s *Service) UpdateCountryWithContext(ctx context.Context, country types.Country) error {
 	const op errors.Op = "sqlite.Service.UpdateCountryWithContext"
 	if err := checkService(op, s); err != nil {
+		return err
+	}
+
+	if err := validateCountryPrefix(op, &country); err != nil {
 		return err
 	}
 
@@ -985,14 +1055,8 @@ func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Co
 	if err := checkService(op, s); err != nil {
 		return err
 	}
-	prefix := strings.TrimSpace(country.Prefix)
-	if prefix == "" {
-		return errors.New(op).WithMsg("country.Prefix cannot be empty")
-	}
-	if strings.ContainsAny(prefix, `%_\`) {
-		return errors.New(op).WithMsgf(
-			"country.Prefix %q contains SQL LIKE meta-character (%% _ \\); prefixes must be plain alphanumerics",
-			prefix)
+	if err := validateCountryPrefix(op, &country); err != nil {
+		return err
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -1003,12 +1067,11 @@ func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Co
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	country.Prefix = prefix
 	country.LastRefreshedAt = time.Now()
 
 	// Preserve the existing PK on conflict so sqlboiler's Upsert generates
 	// a stable update path; new rows let AUTOINCREMENT assign.
-	if existing, ferr := s.FetchCountryByPrefixWithContext(ctx, prefix); ferr == nil {
+	if existing, ferr := s.FetchCountryByPrefixWithContext(ctx, country.Prefix); ferr == nil {
 		country.ID = existing.ID
 	} else if !stderr.Is(ferr, errors.ErrNotFound) {
 		return errors.New(op).WithErr(ferr)
@@ -2280,11 +2343,7 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 
 	model.ModifiedAt = null.TimeFrom(time.Now())
 
-	if _, err = model.Update(ctx, tx, boil.Infer()); err != nil {
-		return errors.New(op).WithErr(err)
-	}
-
-	return nil
+	return updateActiveQso(ctx, tx, model)
 }
 
 // DeleteQsoByIDTx soft-deletes a QSO within the caller-supplied tx by

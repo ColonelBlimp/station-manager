@@ -107,6 +107,13 @@ func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, status, se.Code, se.Message, op)
 			return
 		}
+		// The QSO was active when we fetched it but a concurrent DELETE
+		// soft-deleted it before the update committed (the active-row UPDATE
+		// matched zero rows → ErrNotFound). That's a 404, not a server fault.
+		if stderr.Is(err, errors.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
+			return
+		}
 		s.writeServerError(w, op, err, "update_failed", "QSO update failed")
 		return
 	}

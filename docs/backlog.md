@@ -11,6 +11,20 @@ when it ships — don't let this rot into a graveyard.
 
 ## Bugs
 
+- **Logbook + contacted-station updates use the unguarded generated
+  `Update(Infer)` pattern.** Filed from the `internal/database` review
+  (2026-06-14, M2 follow-up). `UpdateLogbookWithContext` and the
+  contacted-station update helper convert to a fresh SQLBoiler model and call
+  `model.Update(boil.Infer())` with a primary-key-only predicate and an ignored
+  rows-affected count — the same shape that let a stale QSO update write through
+  a soft-deleted row. Both tables have `deleted_at`, and logbook is API-reachable
+  (`PATCH /v1/logbook/{id}`). The **QSO** path was fixed (active-row `UpdateAll`
+  with `deleted_at IS NULL` + `ErrNotFound` on zero rows — see `updateActiveQso`);
+  sweep logbook + contacted-station with the same active-predicate rule. Lower
+  risk than QSO (countries/contacted-station are rarely soft-deleted; logbook
+  edits are infrequent), hence deferred — but the pattern should be made
+  consistent. See `docs/reviews/internal-database-2026-06-14.md`.
+
 - **FT8 capture grabs the mic with no CAT / rig off.** Capture is demand-driven
   (acquired when the first `/v1/ft8/events` SSE subscriber connects). On PC boot
   `smd` autostarts and, if the SPA reopens to the FT8 view from last session, it
