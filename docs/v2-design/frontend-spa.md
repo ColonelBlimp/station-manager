@@ -58,6 +58,45 @@ Path A only verifies that `go:embed` and the SPA-fallback handler work. Path B i
 
 **Tailwind CSS v4** (`tailwindcss` + `@tailwindcss/vite`) was added shortly after the bare scaffold. Decision: use v4's CSS-first config (`@import "tailwindcss";` in `src/styles/app.css`, no `tailwind.config.js`), import the CSS in `main.ts`, write utility classes directly in `app.svelte`. Replaces the original "plain scoped component CSS to start" stance from the open-questions list — Tailwind v4's compile-only plugin keeps the runtime cost zero, the bundle small, and the per-component styling ergonomic for a form-heavy logging UI. The Tailwind v4 oklch palette names also align with the existing `cmd/logging/colours.go` palette comments, so visual language can be shared between the Gio app and the SPA while both exist.
 
+## Config SPA scaffold landed — 2026-06-14
+
+The **config client** is the second embedded SPA, scaffolded as a separate
+sibling project at `frontend/config/` (not a route inside `frontend/logging/`,
+which stays the live-logging client only). Plumbing-only: the app shell renders
+a placeholder. The actual config-editing UX (station, rigs, forwarding, FT8,
+bridge, SMTP) is a deliberately deferred design pass — panels need their own UX
+discussion before any Svelte. The config-system redesign (`config.md`) is
+*decided and partly shipped* (§9–15), and it explicitly routes two remaining
+items **to this workstream**: §10 2e name-based audio-device selection, and §11
+hot-reload (gated on the config-SPA write path). So this SPA is the vehicle that
+finishes those, not something racing an in-flux schema.
+
+**Serving — `/config/` sub-path, same origin.** Decided over a separate
+listener (one daemon, one `/v1/*` API, no CORS):
+
+- Vite `base: '/config/'` so the built `index.html` references
+  `/config/assets/index.{js,css}`.
+- `internal/api/server.go` registers `GET /config/` →
+  `http.StripPrefix("/config", spaHandler(frontend.ConfigFS()))`, behind the
+  same `tcp && ServeSPA` gate as the logging root. As a subtree pattern it
+  takes priority over the `/` catch-all, and ServeMux 307-redirects a bare
+  `/config` to `/config/`. The shared `spaHandler` resolves the bundle and the
+  SPA-fallback (unknown sub-routes → config index.html) after the prefix strip.
+- `frontend/embed.go` gains `//go:embed all:config/dist` + `ConfigFS()`.
+
+**Build wiring.** `frontend:config:{install,dev,build}` Taskfile entries; dev
+server on **:5174** (alongside logging's :5173). A new `frontend:build:all`
+aggregate builds both SPAs and is what the `build:smd*` tasks depend on (so
+adding the future logbook SPA is one line). CI gained a config
+install→lint→type-check→build gate (no test step yet — no config tests until the
+UI lands) and the npm cache now keys on both lockfiles. `.gitignore` mirrors the
+logging rule (committed `dist/index.html`, gitignored assets).
+
+**Verified live** (fresh static daemon, throwaway working dir): `GET /` → logging
+SPA, `GET /config/` → config SPA (correct `/config/assets/*` refs), `GET /config`
+→ 307 → `/config/`, `GET /config/assets/index.js` → 200 js, `GET /config/rigs` →
+config index.html (fallback), `GET /v1/healthz` → 200 (API unaffected).
+
 ## Toolkit choice (confirmed 2026-04-30)
 
 **Svelte 5 + Vite + plain TS.** Not SvelteKit. Decided over Vue/React on three grounds:

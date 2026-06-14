@@ -225,6 +225,13 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// can only reach TCP listeners). See docs/v2-design/frontend-spa.md
 	// and docs/v2-design/topology.md.
 	if cfg.Server.Protocol == "tcp" && cfg.Server.ServeSPA != nil && *cfg.Server.ServeSPA {
+		// Config SPA at the /config/ sub-path. StripPrefix turns
+		// "/config/assets/index.js" into "/assets/index.js" so the shared
+		// spaHandler resolves it (and unknown sub-routes) against the
+		// config dist/. Registered as a subtree pattern, so ServeMux
+		// 301-redirects a bare "/config" to "/config/". This more-specific
+		// pattern takes priority over the "/" catch-all below.
+		mux.Handle("GET /config/", http.StripPrefix("/config", spaHandler(frontend.ConfigFS())))
 		mux.Handle("GET /", spaHandler(frontend.LoggingFS()))
 	}
 

@@ -53,7 +53,9 @@ jobs:
         with:
           node-version-file: frontend/logging/package.json
           cache: npm
-          cache-dependency-path: frontend/logging/package-lock.json
+          cache-dependency-path: |
+            frontend/logging/package-lock.json
+            frontend/config/package-lock.json
 
       # ─── SPA gate ───────────────────────────────────────────────
       # Run SPA-side checks BEFORE the Go build so the daemon embed
@@ -78,6 +80,27 @@ jobs:
 
       - name: SPA build (produces dist/ for daemon embed)
         working-directory: frontend/logging
+        run: npm run build
+
+      # ─── Config SPA gate ────────────────────────────────────────
+      # The config client (frontend/config/) is a separate embedded SPA
+      # served at /config/. Same lint → type-check → build order; no test
+      # step yet (no tests until the config UI lands).
+
+      - name: Config SPA install
+        working-directory: frontend/config
+        run: npm ci
+
+      - name: Config SPA lint
+        working-directory: frontend/config
+        run: npm run lint
+
+      - name: Config SPA type-check
+        working-directory: frontend/config
+        run: npx svelte-check --fail-on-warnings
+
+      - name: Config SPA build (produces dist/ for daemon embed)
+        working-directory: frontend/config
         run: npm run build
 
       # ─── Go gate ────────────────────────────────────────────────

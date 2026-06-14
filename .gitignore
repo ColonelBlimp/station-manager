@@ -23,6 +23,11 @@ build/
 frontend/logging/node_modules/
 frontend/logging/dist/*
 !frontend/logging/dist/index.html
+# Config SPA — same rule as logging: node_modules untracked, dist/ built by
+# Vite, dist/index.html committed so `//go:embed all:config/dist` compiles.
+frontend/config/node_modules/
+frontend/config/dist/*
+!frontend/config/dist/index.html
 # Stray repo-root node_modules (e.g. vitest cache left behind by running
 # from the wrong cwd) — Go project, never legitimate here.
 /node_modules/

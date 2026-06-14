@@ -55,13 +55,35 @@ tasks:
     cmds:
       - npm run deps:update
 
+  frontend:config:install:
+    desc: Install config-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
+    dir: frontend/config
+    cmds:
+      - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
+
+  frontend:config:dev:
+    desc: Run the config SPA Vite dev server with HMR on :5174 (proxies /v1/* to daemon on :8080; runs alongside frontend:dev)
+    dir: frontend/config
+    cmds:
+      - npm run dev
+
+  frontend:config:build:
+    desc: Production build of the config SPA (consumed by go:embed)
+    dir: frontend/config
+    cmds:
+      - npm run build
+
+  frontend:build:all:
+    desc: Build every embedded SPA (logging + config). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
+    deps: [frontend:build, frontend:config:build]
+
   build:smd:
     desc: |
       Build the daemon with a freshly built embedded SPA. CGO on (live FT8
       capture; dynamically linked against core glibc) — the default dev build.
       For the static CGO-free shape (headless/aggregator + the shipped-release
       shape) use build:smd:static; for faster decode use build:smd:pocketfft.
-    deps: [frontend:build]
+    deps: [frontend:build:all]
     cmds:
       - CGO_ENABLED=1 go build -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
@@ -71,7 +93,7 @@ tasks:
       audio capture, so the FT8 subsystem stays idle. This is the shipped-release
       shape (matches release-rpm.sh's CGO_ENABLED=0 default) and the right build
       for a headless / network-only aggregator node.
-    deps: [frontend:build]
+    deps: [frontend:build:all]
     cmds:
       - CGO_ENABLED=0 go build -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
@@ -83,7 +105,7 @@ tasks:
       gate. build:smd is also CGO now (live capture) but uses the gonum FFT;
       this task swaps in the faster PocketFFT FFT. build:smd:static is the
       CGO-free shape.
-    deps: [frontend:build]
+    deps: [frontend:build:all]
     cmds:
       - CGO_ENABLED=1 go build -tags pocketfft -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 

@@ -74,6 +74,11 @@ on any PUT):
   `set_mode` uses), restored after the transmission. Empty leaves the rig's
   current mode untouched, for operators who keep the rig in the data mode
   themselves.
+- **`tx.caller_answer_mode`** — when WE call CQ, which answering station to work
+  (ADR 0033): `"auto_first"` works the first valid answerer (WSJT-X "Auto Seq");
+  `"operator_pick"` queues answerers for the operator to pop (the pile-up stack).
+  Default `auto_first`; empty/invalid → the default. `operator_pick` is not yet
+  wired — it currently behaves as `auto_first` until the stack ships.
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on

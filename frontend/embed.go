@@ -25,6 +25,14 @@ import (
 //go:embed all:logging/dist
 var loggingSPA embed.FS
 
+// configSPA holds the built config SPA's static assets — the
+// station-configuration client, served by the daemon under the
+// /config/ sub-path while the logging SPA owns the root. Same `all:`
+// rationale as loggingSPA.
+//
+//go:embed all:config/dist
+var configSPA embed.FS
+
 // LoggingFS returns the logging SPA's filesystem rooted at the dist/
 // directory so http.FileServer treats index.html as the root document.
 //
@@ -40,6 +48,17 @@ func LoggingFS() fs.FS {
 		// fire for a programmer error in the embed directive,
 		// which we want surfaced loudly.
 		panic("frontend: fs.Sub on embedded loggingSPA failed: " + err.Error())
+	}
+	return sub
+}
+
+// ConfigFS returns the config SPA's filesystem rooted at its dist/
+// directory. Same infallible-at-runtime contract as LoggingFS — the
+// embed directive guarantees the path at compile time.
+func ConfigFS() fs.FS {
+	sub, err := fs.Sub(configSPA, "config/dist")
+	if err != nil {
+		panic("frontend: fs.Sub on embedded configSPA failed: " + err.Error())
 	}
 	return sub
 }
