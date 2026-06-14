@@ -72,6 +72,15 @@ when it ships — don't let this rot into a graveyard.
 
 ## Features / enhancements
 
+- **CAT poll mode (rigdef-configurable) — deferred (ADR 0034).** The bridge read
+  model (ADR 0019) is push-only: the rig broadcasts on change (Yaesu/Kenwood AI,
+  Icom CI-V Transceive). Designed but deferred: an optional rigdef `poll` block
+  (interval + read command) that sends `READ` on a timer and flips liveness so a
+  *missed poll* — not silence — is the disconnect signal. For Icom we instead
+  document **CI-V Transceive ON** as an operator prerequisite. Add the `poll`
+  block (additive; push-only rigs unaffected) if an operator can't keep
+  Transceive on, the bus contends with other software, or state Transceive
+  doesn't broadcast surfaces. Decide one-missed-poll vs N-strikes then.
 - **FT8 offset picker — daemon-side no-overlap snap + click-anywhere.**
   `Ft8OccupancyStrip` offers daemon-vetted clear offsets as discrete markers
   today; clicking arbitrary spectrum (with a daemon-side snap to the nearest
