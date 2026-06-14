@@ -520,6 +520,28 @@ func TestValidateBridge_TimeoutRangeChecks(t *testing.T) {
 		}
 	})
 
+	// write_watchdog_ms is the serial-write backstop; it must be range-checked
+	// like the others (review H1). A too-small value closes the port on normal
+	// jitter; a too-large one leaves command/tune-stop writes blocked far past
+	// the intended fault backstop.
+	t.Run("rejects below-min write_watchdog_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{WriteWatchdogMs: 1},
+		})
+		if err == nil || !strings.Contains(err.Error(), "write_watchdog_ms") {
+			t.Errorf("expected error naming write_watchdog_ms; got %v", err)
+		}
+	})
+
+	t.Run("rejects above-max write_watchdog_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{WriteWatchdogMs: 9_000_000},
+		})
+		if err == nil || !strings.Contains(err.Error(), "write_watchdog_ms") {
+			t.Errorf("expected error naming write_watchdog_ms; got %v", err)
+		}
+	})
+
 	t.Run("accepts in-range values", func(t *testing.T) {
 		err := validateBridge(types.BridgeConfig{
 			Timeouts: types.BridgeTimeoutsConfig{
@@ -527,6 +549,7 @@ func TestValidateBridge_TimeoutRangeChecks(t *testing.T) {
 				BackoffInitialMs:       1000,
 				BackoffMaxMs:           30000,
 				SteadyStateThresholdMs: 10000,
+				WriteWatchdogMs:        2000,
 			},
 		})
 		if err != nil {

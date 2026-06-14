@@ -602,6 +602,12 @@ func WriteJSON(path string, cfg Config) error {
 func Normalize(cfg *Config) {
 	ls := &cfg.LoggingStation
 	ls.StationCallsign = strings.ToUpper(strings.TrimSpace(ls.StationCallsign))
+	// Operator and OwnerCallsign are callsign identity fields too (the SPA
+	// validates all three; both can be emitted into logged ADIF as OPERATOR /
+	// OWNER_CALLSIGN, and the FT8 path falls back to Operator when
+	// StationCallsign is empty) — canonicalise them the same way.
+	ls.Operator = strings.ToUpper(strings.TrimSpace(ls.Operator))
+	ls.OwnerCallsign = strings.ToUpper(strings.TrimSpace(ls.OwnerCallsign))
 	ls.MyGridsquare = utils.NormalizeMaidenhead(ls.MyGridsquare)
 	if ls.MyGridsquare == "" {
 		ls.MyLat = ""
@@ -1144,6 +1150,15 @@ func validateBridge(b types.BridgeConfig) error {
 	if err := checkTimeout("bridge.timeouts.steady_state_threshold_ms", b.Timeouts.SteadyStateThresholdMs); err != nil {
 		return err
 	}
+	// The serial-write watchdog (bridge.New → serial.Config.WriteTimeoutMS)
+	// closes the port if a single blocking write hangs, so an out-of-range
+	// value here is hardware-write-path relevant: too small closes the port on
+	// normal scheduling jitter, too large leaves command / tune-stop writes
+	// blocked far past the intended fault backstop. Same sane-range guard as
+	// the other timeout overrides.
+	if err := checkTimeout("bridge.timeouts.write_watchdog_ms", b.Timeouts.WriteWatchdogMs); err != nil {
+		return err
+	}
 	if b.Timeouts.BackoffInitialMs > 0 && b.Timeouts.BackoffMaxMs > 0 && b.Timeouts.BackoffInitialMs > b.Timeouts.BackoffMaxMs {
 		return fmt.Errorf("bridge.timeouts.backoff_initial_ms (%d) must not exceed backoff_max_ms (%d)", b.Timeouts.BackoffInitialMs, b.Timeouts.BackoffMaxMs)
 	}
@@ -1208,10 +1223,44 @@ func (s *Service) SetPath(p string) {
 // Callers receive a value (not a pointer) so they can read fields
 // without holding any lock. Adequate for everything except hot-loop
 // reads — the daemon doesn't have any of those.
+//
+// The copy is SHALLOW: nested slices/maps/pointers (Rigs, Forwarders,
+// Lookup.Chain, the mode-mapping maps, …) still alias the live config's
+// backing storage. That's fine for read-only inspection, but a caller that
+// intends to MUTATE the result (e.g. building a candidate to run through
+// Normalize before persisting) must take an independent copy with Clone()
+// first — otherwise the mutation reaches the live config outside the lock.
 func (s *Service) Snapshot() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.Cfg
+}
+
+// Clone returns a fully independent deep copy of the config — no shared
+// slices, maps, or pointers with the receiver. Used for the candidate-editing
+// path (PUT /v1/config builds a candidate, Normalizes it in place, then
+// persists): without a deep copy, Normalize's in-place edits (e.g.
+// normalizeRigOverrides niling per-rig overrides) would mutate the live
+// config's backing arrays before the change is validated or committed.
+//
+// Implemented as a JSON round-trip rather than a hand-written field-by-field
+// deep copy: Config is exactly the on-disk config.json shape (WriteJSON
+// marshals it, Load unmarshals it), so a marshal→unmarshal is provably
+// faithful and — unlike a hand-rolled deep copy — cannot silently rot the day
+// a new nested slice/map field is added. PUTs are rare, so the cost is moot.
+func (c Config) Clone() Config {
+	b, err := json.Marshal(c)
+	if err != nil {
+		// Config is plain JSON-serializable data (no channels/funcs); marshal
+		// cannot fail in practice. Fall back to the shallow value copy rather
+		// than panicking — strictly no worse than pre-Clone behaviour.
+		return c
+	}
+	var out Config
+	if err := json.Unmarshal(b, &out); err != nil {
+		return c
+	}
+	return out
 }
 
 // Update applies fn to a copy of the current config under the write
@@ -1300,7 +1349,14 @@ func (s *Service) Close() error {
 }
 
 // WorkingDir returns the resolved data directory.
+// These accessors all read s.Cfg, which Update() reassigns wholesale under
+// the write lock — so each takes the read lock to avoid racing a concurrent
+// PUT /v1/config (a torn read of an unrelated field is still a data race).
+// They return values / copies, never the live backing storage.
+
 func (s *Service) WorkingDir() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.workingDir != "" {
 		return s.workingDir
 	}
@@ -1309,23 +1365,38 @@ func (s *Service) WorkingDir() string {
 
 // LoggingConfig returns the logging configuration.
 func (s *Service) LoggingConfig() (types.LoggingConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.Cfg.Logging, nil
 }
 
 // DatastoreConfig returns the sqlite datastore configuration.
 func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.Cfg.Datastore, nil
 }
 
-// Forwarders returns the configured forwarding destinations. The caller
-// should not mutate the returned slice.
+// Forwarders returns a defensive copy of the configured forwarding
+// destinations. Callers (qsoservice submit/update/delete) range over it; a
+// copy means they can neither race Update's reassignment nor accidentally
+// mutate the live config slice.
 func (s *Service) Forwarders() []types.ForwarderConfig {
-	return s.Cfg.Forwarders
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.Cfg.Forwarders) == 0 {
+		return nil
+	}
+	out := make([]types.ForwarderConfig, len(s.Cfg.Forwarders))
+	copy(out, s.Cfg.Forwarders)
+	return out
 }
 
 // Enrichment returns the enrichment pipeline configuration per
 // ADR 0017. Caller should not mutate the returned struct.
 func (s *Service) Enrichment() types.EnrichmentConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.Cfg.Lookup
 }
 
@@ -1334,11 +1405,15 @@ func (s *Service) Enrichment() types.EnrichmentConfig {
 // accessor performs the conversion so consumers (the orchestrator)
 // don't have to.
 func (s *Service) CountryTTL() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return time.Duration(s.Cfg.Lookup.CountryTTLDays) * 24 * time.Hour
 }
 
 // StationTTL returns the contacted_station staleness threshold.
 func (s *Service) StationTTL() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return time.Duration(s.Cfg.Lookup.StationTTLDays) * 24 * time.Hour
 }
 
@@ -1346,6 +1421,8 @@ func (s *Service) StationTTL() time.Duration {
 // goroutines. Zero is interpreted by refresher.Service as "use
 // package default."
 func (s *Service) RefreshMaxInFlight() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.Cfg.Lookup.RefreshMaxInFlight
 }
 
@@ -1358,6 +1435,8 @@ func (s *Service) RefreshMaxInFlight() int {
 // when the DI container injects a *config.Service rather than
 // constructing the provider with an explicit Config block.
 func (s *Service) LookupServiceConfig(name string) (types.LookupConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.Cfg.Lookup.Hamnut.Name == name {
 		return s.Cfg.Lookup.Hamnut, nil
 	}

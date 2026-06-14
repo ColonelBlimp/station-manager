@@ -1,5 +1,27 @@
 # internal/config Code Review - 2026-06-14
 
+> **Resolution (2026-06-14): all three findings fixed.**
+> - **H1** — `validateBridge` now runs `checkTimeout("bridge.timeouts.write_watchdog_ms", …)`
+>   (same 50ms–1h range as the other timeouts; that ceiling also bounds the
+>   overflow concern). Below-min / above-max / in-range tests added to
+>   `TestValidateBridge_TimeoutRangeChecks`.
+> - **M1** — all nine `s.Cfg`-reading accessors now take the read lock;
+>   `Forwarders()` returns a defensive slice copy; new `Config.Clone()` (JSON
+>   round-trip deep copy) is used for the PUT candidate so `Normalize`'s in-place
+>   edits can't touch the live config. `Snapshot()`'s shallow-copy contract is
+>   now documented. Tests: `TestConfig_Clone_IsIndependent` +
+>   `TestService_UpdateAccessorRace` (passes under `-race`).
+> - **M2** — `Normalize` trims+uppercases `Operator` and `OwnerCallsign`;
+>   `validateLoggingStation` applies the callsign rule to all three identity
+>   fields (empty still passes — they fall back). Load is now fatal on a
+>   malformed `operator`/`owner_callsign` (the §12b-2 `station_callsign`
+>   precedent). Tests: `TestNormalize_CanonicalisesOperatorAndOwner` +
+>   `TestValidateLoggingStation_OperatorAndOwnerCallsignRules`.
+>
+> Verified: `go test -race ./internal/config` + `go test ./internal/config
+> ./internal/api ./internal/qsoservice ./internal/bridge` green; `go vet` +
+> full `go build ./...` clean.
+
 ## Scope
 
 Reviewed `internal/config` and the adjacent contracts that make its behavior

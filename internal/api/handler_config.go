@@ -150,7 +150,13 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// operator-writable fields overlaid, then run it through the ONE config
 	// pipeline — Normalize + Validate (config.md §12), the same Load runs — before
 	// persisting. A value rejected here would also be rejected at Load.
-	candidate := current
+	//
+	// Clone (deep copy), not the shallow Snapshot value: Normalize mutates the
+	// candidate in place (e.g. normalizeRigOverrides nils per-rig overrides), and
+	// a shallow copy still aliases the live config's Rigs/slice backing arrays —
+	// so editing the candidate would corrupt the running config before the change
+	// is even validated or committed.
+	candidate := current.Clone()
 	candidate.LoggingStation = req.LoggingStation
 	candidate.Station = req.Station
 	// FT8 display prefs — presence-aware: only touched when the body carried

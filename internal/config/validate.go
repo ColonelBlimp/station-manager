@@ -133,6 +133,16 @@ func validateLoggingStation(ls types.LoggingStation) []Finding {
 	if ls.StationCallsign != "" && !isValidCallsign(ls.StationCallsign) {
 		add("logging_station.station_callsign", "station_callsign must be 3-32 characters and contain at least one digit")
 	}
+	// Operator and OwnerCallsign follow the same callsign rule (empty passes —
+	// they're optional and fall back to station_callsign). Catches a malformed
+	// value from a direct API client or hand-edited config before it lands in
+	// ADIF (OPERATOR / OWNER_CALLSIGN) or the FT8-fallback identity path.
+	if ls.Operator != "" && !isValidCallsign(ls.Operator) {
+		add("logging_station.operator", "operator must be 3-32 characters and contain at least one digit")
+	}
+	if ls.OwnerCallsign != "" && !isValidCallsign(ls.OwnerCallsign) {
+		add("logging_station.owner_callsign", "owner_callsign must be 3-32 characters and contain at least one digit")
+	}
 	if ls.MyGridsquare != "" && !utils.IsValidMaidenhead(ls.MyGridsquare) {
 		add("logging_station.my_gridsquare", "my_gridsquare must be a 4, 6, or 8 character Maidenhead locator")
 	}
