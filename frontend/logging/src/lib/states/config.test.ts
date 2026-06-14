@@ -37,9 +37,7 @@ describe('configState.refreshLogbookCount', () => {
         // id=0 is the pre-setup baseline — there is no logbook to count
         // against, so the wrapper must not even make the request (a 404
         // for id=0 would otherwise toast or churn).
-        const fetchSpy = vi.fn(() =>
-            Promise.resolve(new Response('{}', { status: 200 }))
-        );
+        const fetchSpy = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
         vi.stubGlobal('fetch', fetchSpy);
 
         await configState.refreshLogbookCount();

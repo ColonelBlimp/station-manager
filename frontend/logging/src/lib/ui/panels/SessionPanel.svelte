@@ -162,7 +162,9 @@
 
 <div class="px-2">
     {#if rows.length === 0}
-        <p class="text-sm text-gray-500 italic px-1 py-2 {cssTableHeight}">No QSOs logged this session.</p>
+        <p class="text-sm text-gray-500 italic px-1 py-2 {cssTableHeight}">
+            No QSOs logged this session.
+        </p>
     {:else}
         <!--
             overflow-x-auto so the wide session table (11 columns with

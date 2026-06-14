@@ -66,7 +66,10 @@ describe('fetchContestDupe', () => {
     });
 
     it('maps a 400 to a validation outcome', async () => {
-        mockFetchJSON(400, { code: 'invalid_field_value', message: 'band is not a recognised band' });
+        mockFetchJSON(400, {
+            code: 'invalid_field_value',
+            message: 'band is not a recognised band',
+        });
         const out = await fetchContestDupe({ logbook: 1, call: 'K1ABC', band: 'bogus' });
         expect(out.kind).toBe('validation');
         if (out.kind === 'validation') expect(out.code).toBe('invalid_field_value');

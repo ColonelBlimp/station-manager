@@ -53,32 +53,32 @@
         <p class="text-sm text-ink">{t('worked.empty')}</p>
     {:else}
         <div class="overflow-x-auto overflow-y-scroll h-67">
-        <table class="w-full text-sm tabular-nums">
-            <thead>
-                <tr class="border-b border-line text-left">
-                    <th class="w-24 px-2 py-1 font-semibold">Date</th>
-                    <th class="w-16 px-2 py-1 font-semibold">Time</th>
-                    <th class="w-16 px-2 py-1 font-semibold">Band</th>
-                    <th class="w-20 px-2 py-1 font-semibold">Mode</th>
-                    <th class="w-10 px-2 py-1 font-semibold">Sent</th>
-                    <th class="w-10 px-2 py-1 font-semibold">Rcvd</th>
-                    <th class="px-2 py-1 font-semibold">Notes</th>
-                </tr>
-            </thead>
-            <tbody>
-                {#each contactHistoryState.items as qso (qso.uuid)}
-                    <tr class="border-b border-line-soft">
-                        <td class="px-2 py-1">{formatQsoDate(qso.qso_date)}</td>
-                        <td class="px-2 py-1">{formatQsoTime(qso.time_on)}</td>
-                        <td class="px-2 py-1">{qso.band}</td>
-                        <td class="px-2 py-1">{qso.mode}</td>
-                        <td class="px-2 py-1">{qso.rst_sent}</td>
-                        <td class="px-2 py-1">{qso.rst_rcvd}</td>
-                        <td class="px-2 py-1">{qso.notes}</td>
+            <table class="w-full text-sm tabular-nums">
+                <thead>
+                    <tr class="border-b border-line text-left">
+                        <th class="w-24 px-2 py-1 font-semibold">Date</th>
+                        <th class="w-16 px-2 py-1 font-semibold">Time</th>
+                        <th class="w-16 px-2 py-1 font-semibold">Band</th>
+                        <th class="w-20 px-2 py-1 font-semibold">Mode</th>
+                        <th class="w-10 px-2 py-1 font-semibold">Sent</th>
+                        <th class="w-10 px-2 py-1 font-semibold">Rcvd</th>
+                        <th class="px-2 py-1 font-semibold">Notes</th>
                     </tr>
-                {/each}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {#each contactHistoryState.items as qso (qso.uuid)}
+                        <tr class="border-b border-line-soft">
+                            <td class="px-2 py-1">{formatQsoDate(qso.qso_date)}</td>
+                            <td class="px-2 py-1">{formatQsoTime(qso.time_on)}</td>
+                            <td class="px-2 py-1">{qso.band}</td>
+                            <td class="px-2 py-1">{qso.mode}</td>
+                            <td class="px-2 py-1">{qso.rst_sent}</td>
+                            <td class="px-2 py-1">{qso.rst_rcvd}</td>
+                            <td class="px-2 py-1">{qso.notes}</td>
+                        </tr>
+                    {/each}
+                </tbody>
+            </table>
         </div>
     {/if}
 </div>

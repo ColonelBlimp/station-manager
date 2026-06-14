@@ -16,7 +16,7 @@
     their first comment), so it never opens an empty popover.
 -->
 <script lang="ts">
-    import TuneButton from "./TuneButton.svelte";
+    import TuneButton from './TuneButton.svelte';
 
     interface Props {
         id: string;

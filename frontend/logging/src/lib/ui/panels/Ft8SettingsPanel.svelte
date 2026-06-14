@@ -55,54 +55,53 @@
 
 <div class="flex gap-x-6 px-2 py-4 text-sm text-gray-700">
     <div class="flex flex-col w-80">
-    <h3 class="font-semibold text-gray-800">Band Activity</h3>
-    <label class="flex items-center justify-between gap-3">
-        <span>Max rows shown</span>
-        <!-- Bound directly to the daemon-mirrored config; the daemon clamps the
+        <h3 class="font-semibold text-gray-800">Band Activity</h3>
+        <label class="flex items-center justify-between gap-3">
+            <span>Max rows shown</span>
+            <!-- Bound directly to the daemon-mirrored config; the daemon clamps the
              value (10–2000) on save, so out-of-range typing is corrected there. -->
-        <input
-            type="number"
-            min="10"
-            max="2000"
-            bind:value={configState.ft8Display.historyMax}
-            class="w-24 rounded border border-gray-300 px-2 py-1 text-right focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-    </label>
+            <input
+                type="number"
+                min="10"
+                max="2000"
+                bind:value={configState.ft8Display.historyMax}
+                class="w-24 rounded border border-gray-300 px-2 py-1 text-right focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+        </label>
 
-    <label class="flex items-center justify-between gap-3 pt-1">
-        <span>Feed mode</span>
-        <select
-            bind:value={configState.ft8Display.feedMode}
-            class="w-44 rounded border border-gray-300 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        >
-            <option value="accumulate">Accumulate (roll up)</option>
-            <option value="single">Single slot</option>
-        </select>
-    </label>
+        <label class="flex items-center justify-between gap-3 pt-1">
+            <span>Feed mode</span>
+            <select
+                bind:value={configState.ft8Display.feedMode}
+                class="w-44 rounded border border-gray-300 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+                <option value="accumulate">Accumulate (roll up)</option>
+                <option value="single">Single slot</option>
+            </select>
+        </label>
     </div>
     <div class="flex flex-col w-66">
+        <h3 class="mt-2 font-semibold text-gray-800">CQ highlight colours</h3>
 
-    <h3 class="mt-2 font-semibold text-gray-800">CQ highlight colours</h3>
+        <label class="flex items-center justify-between gap-3">
+            <span>Not worked on this band</span>
+            <input
+                type="color"
+                bind:value={configState.ft8Display.highlightUnworked}
+                class="h-7 w-12 cursor-pointer rounded border border-gray-300"
+                aria-label="Not-worked highlight colour"
+            />
+        </label>
 
-    <label class="flex items-center justify-between gap-3">
-        <span>Not worked on this band</span>
-        <input
-            type="color"
-            bind:value={configState.ft8Display.highlightUnworked}
-            class="h-7 w-12 cursor-pointer rounded border border-gray-300"
-            aria-label="Not-worked highlight colour"
-        />
-    </label>
-
-    <label class="flex items-center justify-between gap-3">
-        <span>Worked before (dupe)</span>
-        <input
-            type="color"
-            bind:value={configState.ft8Display.highlightWorked}
-            class="h-7 w-12 cursor-pointer rounded border border-gray-300"
-            aria-label="Worked-before highlight colour"
-        />
-    </label>
+        <label class="flex items-center justify-between gap-3">
+            <span>Worked before (dupe)</span>
+            <input
+                type="color"
+                bind:value={configState.ft8Display.highlightWorked}
+                class="h-7 w-12 cursor-pointer rounded border border-gray-300"
+                aria-label="Worked-before highlight colour"
+            />
+        </label>
     </div>
 </div>
 <div class="mt-2">

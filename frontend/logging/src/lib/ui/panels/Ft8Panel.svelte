@@ -5,6 +5,7 @@
     import Ft8SettingsPanel from './Ft8SettingsPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import SessionEmailControls from './SessionEmailControls.svelte';
+    import Ft8EnrichmentBox from './Ft8EnrichmentBox.svelte';
     import { sessionQsosState } from '../../states/sessionQsos.svelte';
     import { ft8State, startFt8, stopFt8, type DecodeEntry } from '../../states/ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
@@ -405,28 +406,11 @@
                 <p class="mt-1 text-xs">Pick an offset on the Occupancy tab.</p>
             {/if}
         </div>
-        <!-- Enrichment box: the worked station's QRZ details while a QSO is active
-             (both roles). Each line appears as its lookup lands (progressive,
-             fail-soft); an empty lookup just leaves that line blank. -->
-        <div
-            class="h-44 mt-2 overflow-y-auto rounded border border-gray-300 bg-gray-100 px-2 py-1 text-left text-xs"
-        >
-            {#if workedInfo}
-                <div class="font-semibold text-gray-700">{ft8State.qso.theirCall}</div>
-                {#if workedInfo.opName}<div class="text-gray-700">{workedInfo.opName}</div>{/if}
-                {#if workedInfo.flag || workedInfo.country}
-                    <div class="flex items-center gap-1 text-gray-600">
-                        {#if workedInfo.flag}<span aria-hidden="true">{workedInfo.flag}</span>{/if}
-                        {#if workedInfo.country}<span>{workedInfo.country}</span>{/if}
-                    </div>
-                {/if}
-                {#if workedDistanceKm !== null}
-                    <div class="text-gray-600">{workedDistanceKm.toLocaleString()} km</div>
-                {/if}
-            {:else}
-                <span class="text-gray-400">Enrichment</span>
-            {/if}
-        </div>
+        <Ft8EnrichmentBox
+            call={ft8State.qso.theirCall}
+            info={workedInfo}
+            distanceKm={workedDistanceKm}
+        />
     </div>
     <div class="flex flex-col text-center w-20">
         <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>

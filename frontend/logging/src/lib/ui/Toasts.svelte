@@ -81,9 +81,7 @@
     has unspecified behaviour across NVDA / VoiceOver / Orca) and lets
     severity drive announce-urgency without a separate aria-live attr.
 -->
-<div
-    class="fixed top-1.25 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50"
->
+<div class="fixed top-1.25 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50">
     {#each toastsState.items as toast (toast.id)}
         <!--
             Toast itself is non-interactive — role=alert / role=status

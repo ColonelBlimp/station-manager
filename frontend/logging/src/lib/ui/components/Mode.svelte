@@ -9,7 +9,15 @@
         widthClass?: string;
     }
 
-    let { id, label, value, list, onchange, disabled = false, widthClass = 'w-34' }: Props = $props();
+    let {
+        id,
+        label,
+        value,
+        list,
+        onchange,
+        disabled = false,
+        widthClass = 'w-34',
+    }: Props = $props();
 </script>
 
 <div class="{widthClass} input-row">
