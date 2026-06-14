@@ -54,6 +54,12 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 171 (2026-06-14) — **Icom CI-V design DECIDED + bench-validated against the real IC-7300 → ADR 0034 (Accepted); throwaway-turned-keeper probe `cmd/civ-probe`.**
+Designed the Icom CI-V codec path and **validated every assumption on the borrowed IC-7300** before writing any codec. **ADR 0034 (Accepted):** `protocol` discriminator on `RigDefinition` — `kenwood` (default; the existing ASCII engine, renamed off the misleading `yaesu_ascii` since the family is Kenwood's, Yaesu adopted it) | `icom_civ` (a new pure-Go CI-V engine: `FE FE…FD` framing, BCD, echo filter `keep from==rig`). **"No code to add a rig after the first of a family"** held by putting CI-V command bytes + a fixed `encoding` vocabulary (`ascii`/`none`/`bcd_freq`/`mode_seq`/`bcd_power`) in the rigdef as data. **Mode is `mode_seq`** — a per-literal CI-V frame sequence (bench-validated: `06` self-clears the data flag, so non-data modes = 1 frame, USB-D = 2). **Read strategy = push-only, explicitly NO polling** (operator directive — polling is a known friction source; they've been burned before). Protocol survey: two families cover the market (Kenwood-ASCII + Icom CI-V); ANAN is the *same* Kenwood family but a future *transport* question (openHPSDR/UDP), not a codec.
+  - **Bench findings (probe `cmd/civ-probe` — kept as a dev tool, RF-safe: never sends TX, de-asserts DTR+RTS on open):** addr `0x94`; **effective baud 19200/8N1 = the `CI-V Baud Rate`, NOT `CI-V USB Baud Rate` (115200, dormant while `CI-V USB Port = Link to [REMOTE]`)** — a real gotcha, confirmed empirically (115200 gave echo-but-no-reply). USB Echo Back On → echo filter required. 5-byte LE BCD freq. **The data flag (`1A 06`) is NEVER broadcast** via Transceive — confirmed across a USB↔USB-D toggle AND a full band-hop — so push can't see USB vs USB-D. That's fine: **FT8 sets its own mode + logs FT8**, and base mode is right for SSB/CW. Accepted limitation (USB-vs-USB-D for a mode SM didn't set: only tune-restore + non-FT8 data-mode logging); non-polling escape hatch (single *event-triggered* `1A 06` query riding the existing decode stream) recorded, NOT built.
+  - **Safety finding:** the IC-7300's `USB SEND` can map PTT to RTS/DTR, and opening the port asserts them — **it keyed the rig during the first probe.** So: key via **CAT (`1C 00`) only**; the Icom serial config must **de-assert DTR+RTS on open** and not inherit Yaesu `rts:true/dtr:true`; `USB SEND=OFF` is an operator prerequisite. (Operator monitors TX — no harm done.)
+  - **Bench time EXTENDED** (operator relaxed the ~4–5-session loan box — IC-7300 is the most common HF rig, so get it right). Docs: ADR 0034 (full schema + "Validated on the bench" table + read strategy + consequences/triggers), memory `project_sm_ic7300_borrowed` (+ index) rewritten with the validated facts, install.md prerequisites listed (to write when shipping). **⇒ NEXT: implement the `icom_civ` engine** (codec dispatch on `protocol`, BCD, framing, echo filter, `mode_seq`) + the IC-7300 rigdef, then validate on the rig per ADR 0019 (read-only state) → ADR 0026 (inbound ops). The probe is the re-validation harness.
+
 ### Session 170 (2026-06-14) — **Config SPA scaffolded + served at `/config/`; rig-profiles editor designed; slice 1 (`GET /v1/hardware`) shipped; canonical API endpoint reference written.**
 
 Started the **config SPA** workstream — the third client (ADR 0001), the home for set-once config that's noise in the live-logging client.
@@ -168,21 +174,37 @@ All green: full Go build + `go test ./internal/ft8 ./cmd/smd` pass; SPA check 0/
 > "auto-sequence" is OUT OF SCOPE / QEX-forbidden (attended-only). Read the top
 > session entries for true current state.**
 
-### Time-boxed near-term goal: Icom IC-7300 CAT (borrowed rig)
+### Near-term goal: Icom IC-7300 CAT (borrowed rig) — DESIGN DONE, IMPLEMENT NEXT
 
-**Flagged 2026-06-12. Borrowed an IC-7300 for a limited time — get its CAT
-working with SM and bundle Icom support into a release within the next ~4–5
-sessions, while the hardware is on hand.** This is the first **Icom** rig in a
-codebase whose only rigdefs are Yaesu (FTdx10, FT710). Icom speaks **CI-V**, a
-different protocol family from the Yaesu/Kenwood-style CAT the bridge currently
-encodes — so the first task is to confirm whether `internal/cat` already
-abstracts protocol families or is Yaesu-shaped, then add an IC-7300 rigdef
-(`internal/cat/rigs/icom-ic7300.json` or equivalent) + whatever CI-V
-command/parse support the existing READ/INIT/SET path needs. Validate on the
-real rig (read-only state first per ADR 0019, then the inbound ops per ADR 0026)
-before tagging a release. Hard deadline is the loan window — prioritise over
-non-blocking polish. (Not in `docs/backlog.md` — that file is *deliberately
-not-now*; this is now-ish and time-critical.)
+**Design decided + bench-validated against the real rig 2026-06-14 → ADR 0034
+(Accepted). Read it before coding.** The IC-7300 is the first **Icom** (all
+other rigdefs are Yaesu) and speaks **CI-V**. `internal/cat` is Yaesu/Kenwood-
+ASCII-shaped, so the plan is a **`protocol` seam**: `kenwood` (existing engine,
+the default) | `icom_civ` (new pure-Go CI-V engine). Bench time was **extended**
+(loan box relaxed — IC-7300 is ubiquitous, get it right).
+
+**⇒ NEXT ACTION: implement the `icom_civ` engine + IC-7300 rigdef.**
+1. `internal/cat`: add `Protocol` (+ `CivAddress`) to `RigDefinition`; dispatch
+   `Encode`/`EncodeCommand`/`Decode` on it (Kenwood path unchanged, default).
+   New CI-V engine: `FE FE…FD` framing, 5-byte LE BCD freq, command-byte state
+   match, echo filter (`keep from == civ_address`), and the `encoding` kinds
+   (`ascii`/`none`/`bcd_freq`/`mode_seq`/`bcd_power`). `mode_seq` = per-literal
+   CI-V frame sequence (non-data = 1 frame, USB-D = 2; `06` self-clears data).
+   `cat/validate.go` validates CI-V rigdefs (hex addr/cmd/frames, known
+   encoding, injective mode table).
+2. `internal/cat/rigs/icom-ic7300.json` — addr `0x94`, terminator `0xFD`,
+   baud **19200/8N1** (the `CI-V Baud Rate`, NOT the USB baud — see ADR), commands
+   (read/init/set_freq/set_mode/set_power/tx_on/tx_off — TX unexposed).
+3. **Serial transport: de-assert DTR+RTS on open for Icom** (USB SEND can key the
+   rig); the Icom config must not inherit Yaesu `rts:true/dtr:true`.
+4. Validate on the rig per ADR 0019 (read-only state) → ADR 0026 (inbound ops);
+   **re-use `cmd/civ-probe`** as the validation harness. install.md prerequisites
+   (Transceive ON, USB Port = Link to [REMOTE], baud = CI-V Baud Rate, USB SEND
+   OFF) when shipping.
+
+Read strategy is **push-only, NO polling** (operator directive). Validated facts
++ the gotchas live in ADR 0034 "Validated on the bench" + memory
+`project_sm_ic7300_borrowed`. (Not in `docs/backlog.md` — this is now-ish.)
 
 ### Parked follow-ups (named, deliberate defer)
 
