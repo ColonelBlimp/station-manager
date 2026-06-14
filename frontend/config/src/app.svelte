@@ -1,16 +1,65 @@
 <script lang="ts">
-    // Scaffold placeholder. The config-editing UX (station, rigs, forwarding,
-    // FT8, bridge, SMTP) is a separate design pass — deliberately not built
-    // here until that UX is discussed. The config-system redesign
-    // (docs/v2-design/config.md §9-15) is decided and partly shipped; it routes
-    // §10 2e (audio-device naming) and §11 (hot-reload) to this workstream.
-    const version = '0.0.0';
+    import { onMount } from 'svelte';
+    import { configState } from './lib/states/config.svelte';
+
+    // Slice 3 — plumbing only: load the daemon's config + rig-profiles data on
+    // mount and prove it flows into configState. The rig-profiles editor UX is
+    // slice 4 (a separate design pass); this view is a temporary readout, not
+    // the final surface.
+    onMount(() => {
+        void configState.load();
+    });
 </script>
 
 <main class="min-h-screen bg-gray-50 p-8 font-sans">
     <h1 class="text-2xl font-semibold text-gray-900">Station Manager — Config</h1>
-    <p class="mt-2 text-gray-600">
-        Scaffold ({version}). The configuration UI lives here. Served at
-        <code class="rounded bg-gray-200 px-1">/config/</code>.
-    </p>
+
+    {#if !configState.loaded}
+        <p class="mt-2 text-gray-600">Loading…</p>
+    {:else}
+        {#if configState.error}
+            <p class="mt-2 rounded bg-red-50 px-2 py-1 text-sm text-red-700">{configState.error}</p>
+        {/if}
+
+        <p class="mt-2 text-gray-600">
+            Setup complete: <strong>{configState.config?.setup_complete ? 'yes' : 'no'}</strong>
+            · Station callsign:
+            <strong>{configState.config?.logging_station.station_callsign || '—'}</strong>
+        </p>
+
+        <section class="mt-6">
+            <h2 class="font-semibold text-gray-800">
+                Configured rigs ({configState.rigs.length}) · default #{configState.defaultRigId}
+            </h2>
+            {#if configState.rigs.length === 0}
+                <p class="text-sm text-gray-500">None configured yet.</p>
+            {:else}
+                <ul class="mt-1 text-sm text-gray-700">
+                    {#each configState.rigs as rig (rig.id)}
+                        <li>
+                            #{rig.id}
+                            {configState.rigdefFor(rig.model)?.name ?? rig.model}
+                            @ {rig.port || '—'}
+                            {#if rig.id === configState.defaultRigId}<span class="text-green-700"
+                                    >✓ default</span
+                                >{/if}
+                        </li>
+                    {/each}
+                </ul>
+            {/if}
+        </section>
+
+        <section class="mt-6">
+            <h2 class="font-semibold text-gray-800">
+                Rig catalogue ({configState.catalogue.length})
+            </h2>
+            <ul class="mt-1 text-sm text-gray-700">
+                {#each configState.catalogue as def (def.id)}
+                    <li>
+                        {def.name} — FT8 {def.ft8_mode || '—'}, {def.rig_modes?.length ?? 0} modes
+                    </li>
+                {/each}
+            </ul>
+        </section>
+    {/if}
 </main>

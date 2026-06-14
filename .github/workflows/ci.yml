@@ -84,8 +84,7 @@ jobs:
 
       # ─── Config SPA gate ────────────────────────────────────────
       # The config client (frontend/config/) is a separate embedded SPA
-      # served at /config/. Same lint → type-check → build order; no test
-      # step yet (no tests until the config UI lands).
+      # served at /config/. Same lint → type-check → test → build order.
 
       - name: Config SPA install
         working-directory: frontend/config
@@ -98,6 +97,10 @@ jobs:
       - name: Config SPA type-check
         working-directory: frontend/config
         run: npx svelte-check --fail-on-warnings
+
+      - name: Config SPA tests
+        working-directory: frontend/config
+        run: npx vitest run
 
       - name: Config SPA build (produces dist/ for daemon embed)
         working-directory: frontend/config
