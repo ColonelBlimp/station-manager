@@ -342,6 +342,15 @@ These are known concerns that were raised during session 5 and deliberately not 
 
 ## 7a. Landed endpoints (current daemon state, audited 2026-05-02)
 
+> **The complete, current endpoint list lives in
+> [api-endpoints.md](api-endpoints.md)** (the canonical reference, every route
+> with full request/response/error/gating detail). This section is the
+> *original* landed-endpoints audit (2026-05-02) and has since drifted — it
+> predates the FT8, session-email, hardware-enumeration, and several rig
+> endpoints. Treat api-endpoints.md as authoritative for *what exists*; this
+> file (the design brief) remains the home for *why*. New endpoints are
+> documented in api-endpoints.md, not here.
+
 This section captures the concrete shapes that actually shipped, to
 supplement the sketch in Section 5. When the sketch and this section
 disagree, **this section is authoritative**; the sketch reflects

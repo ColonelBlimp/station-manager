@@ -129,6 +129,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	mux.HandleFunc("GET /v1/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /v1/config", s.handlePutConfig)
 
+	// Hardware enumeration — serial ports + audio devices for the config
+	// SPA's rig-profile pickers (friendly labels, no hand-typed ids).
+	mux.HandleFunc("GET /v1/hardware", s.handleHardware)
+
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)

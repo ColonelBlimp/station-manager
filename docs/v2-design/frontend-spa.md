@@ -97,6 +97,66 @@ SPA, `GET /config/` → config SPA (correct `/config/assets/*` refs), `GET /conf
 → 307 → `/config/`, `GET /config/assets/index.js` → 200 js, `GET /config/rigs` →
 config index.html (fallback), `GET /v1/healthz` → 200 (API unaffected).
 
+## Config SPA — rig-profiles editor (design, 2026-06-14)
+
+The config SPA's purpose is a **parking place for set-once config** that is UI
+noise in the live-logging client (operator direction; config.md §10.6). Its
+**first real surface is a rig-profiles editor** — and Mode Mappings, currently
+buried in the logging SPA's My Station → Mode Mappings sub-tab, is just *one
+facet of a per-rig profile* (`types.RigConfig`), so it migrates as part of this,
+not standalone.
+
+**Scope decision: profile *instances* only.** User-defined rig *definitions*
+(authoring new rigdefs into a working-dir override directory) were **considered
+and dropped** — rigdefs stay embedded + immutable (the FT8-modes-style override
+dir is not pursued). So the editor manages `RigConfig` instances, each
+referencing an embedded rigdef by Model. No invariant touched.
+
+**Layout — master-detail:**
+- **Left:** a simple list of the operator's configured rigs; the **default
+  (active) rig marked with a ✓**. List-level actions: Set Default (restart-only —
+  it's which rig the daemon binds).
+- **Right:** the selected profile's knobs. Buttons: **Update / Cancel**
+  (dirty-tracked; Update persists the selected rig, Cancel reverts the edit).
+
+**Per-rig facets**, each *rigdef default ← operator override* (so the editor must
+show "inheriting default X" vs "overridden to Y" with a revert affordance — more
+than the resolved read-view the logging SPA consumes; the daemon must expose
+rigdef defaults for *all* models, likely a small `GET /v1/rigs`): Model (rigdef
+catalogue pick), Port, **audio device** (§10 2e — name-based, routed here), FT8
+mode, **Mode Mappings**, MY_RIG, serial overrides.
+
+**The default rig is editable — no lock.** A "promote another rig to default
+before editing" rule was rejected: it breaks the single-rig operator (no second
+rig to promote). Instead, editing the active rig is *safe but deferred* — the
+running bridge keeps its startup snapshot, so hardware-binding changes (Port,
+Model, serial, audio device, default-rig) take effect on **restart**. The editor
+shows a **"restart required to apply"** banner only when a restart-only field
+actually changed (config.md §11: restart-only PUTs persist + surface a hint).
+Live fields (Mode Mappings, MY_RIG) apply without restart; FT8 mode is
+hot-reloadable in principle but restart-today until §11's reload lands.
+
+**Hardware pickers — enumerate, don't recommend.** The operator never hand-types
+`/dev/ttyUSB0` or an audio index: the daemon enumerates via `GET /v1/hardware`
+(serial ports + audio devices, friendly labels), the SPA presents pick-lists. A
+★-recommendation heuristic was **considered and dropped** — a wrong ★ invites
+misplaced trust, and the friendly labels do the work. Per-rig "which device to
+pick" hints live in the **operator docs** (`docs/install.md`), not in code. Audio
+enumeration is CGO-gated, so the static build reports `audio.available:false`
+(graceful degrade); serial is pure-Go (all builds). Friendly serial labels
+depend on udev providing the USB product string — may fall back to the bare path.
+
+**Build order (daemon-first, committable slices):**
+1. **`GET /v1/hardware`** enumeration endpoint — **shipped 2026-06-14**
+   (`internal/hardware` + handler; serial pure-Go, audio CGO-seam).
+2. Daemon: rigdef-defaults exposure (likely `GET /v1/rigs`) for the
+   default-vs-override UX.
+3. Config SPA plumbing (`configState` + `/v1/config` GET/PUT wrapper).
+4. Config SPA rig-profiles surface (the master-detail UX above).
+5. Logging-SPA cleanup: remove My Station → Mode Mappings + the inert Rig field
+   once the CSPA covers them.
+6. Docs: the install.md hardware-pick hint table.
+
 ## Toolkit choice (confirmed 2026-04-30)
 
 **Svelte 5 + Vite + plain TS.** Not SvelteKit. Decided over Vue/React on three grounds:
