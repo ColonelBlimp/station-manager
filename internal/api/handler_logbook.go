@@ -138,6 +138,13 @@ func (s *Server) handleUpdateLogbook(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, "duplicate_name", "a logbook with that name already exists", op)
 			return
 		}
+		// The logbook was active when fetched but a concurrent DELETE
+		// soft-deleted it before the update committed (the active-row update
+		// matched zero rows → ErrNotFound). That's a 404, not a server fault.
+		if stderr.Is(err, errors.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)
+			return
+		}
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}

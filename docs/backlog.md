@@ -11,19 +11,33 @@ when it ships — don't let this rot into a graveyard.
 
 ## Bugs
 
-- **Logbook + contacted-station updates use the unguarded generated
-  `Update(Infer)` pattern.** Filed from the `internal/database` review
-  (2026-06-14, M2 follow-up). `UpdateLogbookWithContext` and the
-  contacted-station update helper convert to a fresh SQLBoiler model and call
-  `model.Update(boil.Infer())` with a primary-key-only predicate and an ignored
-  rows-affected count — the same shape that let a stale QSO update write through
-  a soft-deleted row. Both tables have `deleted_at`, and logbook is API-reachable
-  (`PATCH /v1/logbook/{id}`). The **QSO** path was fixed (active-row `UpdateAll`
-  with `deleted_at IS NULL` + `ErrNotFound` on zero rows — see `updateActiveQso`);
-  sweep logbook + contacted-station with the same active-predicate rule. Lower
-  risk than QSO (countries/contacted-station are rarely soft-deleted; logbook
-  edits are infrequent), hence deferred — but the pattern should be made
-  consistent. See `docs/reviews/internal-database-2026-06-14.md`.
+- **Contacted-station update uses the unguarded generated `Update(Infer)`
+  pattern.** Filed from the `internal/database` review (2026-06-14, M2 follow-up).
+  The contacted-station update helper converts to a fresh SQLBoiler model and
+  calls `model.Update(boil.Infer())` with a primary-key-only predicate and an
+  ignored rows-affected count — the same shape that let a stale QSO update write
+  through a soft-deleted row. The table has `deleted_at`. The **QSO** path
+  (`updateActiveQso`) and the **logbook** path (api review M3, 2026-06-14) are
+  now fixed with the active-row `UpdateAll WHERE id AND deleted_at IS NULL` +
+  `ErrNotFound`; contacted-station should get the same treatment for consistency.
+  Lower risk (it's an enrichment-cache row, rarely soft-deleted, not directly
+  API-reachable for update), hence deferred. See
+  `docs/reviews/internal-database-2026-06-14.md`.
+
+- **`PUT /v1/config` contract: default ids ignored + omitted blocks zeroed.**
+  Filed from the `internal/api` review (2026-06-14, M4 + M5). M4: the handler
+  accepts `default_logbook.id`/`default_rig.id` (documented + in the SPA's
+  writable type) but never copies them into the candidate — a silent no-op. M5:
+  `logging_station`/`station` are copied unconditionally from the request, so a
+  PUT omitting them zeroes the operator identity (the SPA works around it by
+  always bundling the blocks). Fix together with a **presence-aware pointer-block
+  PUT request type** (`*types.LoggingStation`, `*types.StationConfig`,
+  `*types.Logbook`, `*types.RigConfig`, `*types.Ft8DisplayConfig`, `*BridgeInfo` —
+  pointers to the canonical `types.X`, not re-defined fields): apply only present
+  blocks; wire + validate the default ids (logbook active-row exists; rig id via
+  config validation). Backward-compatible with the SPA. Deferred because it
+  changes `/v1/config` semantics and wants its own test/readthrough pass against
+  both SPAs. See `docs/reviews/internal-api-2026-06-14.md`.
 
 - **FT8 capture grabs the mic with no CAT / rig off.** Capture is demand-driven
   (acquired when the first `/v1/ft8/events` SSE subscriber connects). On PC boot

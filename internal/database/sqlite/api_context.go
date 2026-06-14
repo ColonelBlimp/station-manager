@@ -1518,26 +1518,34 @@ func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Lo
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	model, err := models.FindLogbook(ctx, h, logbook.ID)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
-		}
-		return errors.New(op).WithErr(err)
+	// Active-row update (review internal-api M3, same shape as updateActiveQso):
+	// the `id = ? AND deleted_at IS NULL` predicate is in the UPDATE itself, so a
+	// DELETE that commits between the handler's read and this write can't be
+	// written through — no resurrection of a soft-deleted logbook. The column map
+	// omits id / created_at / deleted_at and refreshes modified_at. Callsign is
+	// included (unchanged by the handler, which only patches name/description) so
+	// the stored value is preserved. Zero rows affected → ErrNotFound.
+	cols := models.M{
+		models.LogbookColumns.Name:        logbook.Name,
+		models.LogbookColumns.Callsign:    logbook.Callsign,
+		models.LogbookColumns.Description: null.StringFrom(logbook.Description),
+		models.LogbookColumns.ModifiedAt:  null.TimeFrom(time.Now()),
 	}
-
-	model.Name = logbook.Name
-	model.Callsign = logbook.Callsign
-	model.Description = null.StringFrom(logbook.Description)
-
-	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
-		// Same UNIQUE-on-name path as InsertLogbookWithContext: if the
-		// rename collides with an existing logbook, surface a typed
-		// sentinel so the handler can return 409 via errors.Is.
+	n, err := models.Logbooks(
+		models.LogbookWhere.ID.EQ(logbook.ID),
+		models.LogbookWhere.DeletedAt.IsNull(),
+	).UpdateAll(ctx, h, cols)
+	if err != nil {
+		// Same UNIQUE-on-name path as InsertLogbookWithContext: if the rename
+		// collides with an existing logbook, surface a typed sentinel so the
+		// handler can return 409 via errors.Is.
 		if isUniqueConstraintError(err) {
 			return errors.New(op).WithErr(errors.ErrDuplicateName)
 		}
 		return errors.New(op).WithErr(err).WithMsg("failed to update logbook")
+	}
+	if n == 0 {
+		return errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active logbook with id %d", logbook.ID)
 	}
 
 	return nil

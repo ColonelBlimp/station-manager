@@ -15,6 +15,12 @@ import (
 // Package-level var so tests can dial it down without waiting 30 s.
 var sseKeepAliveInterval = 30 * time.Second
 
+// sseWriteTimeout bounds a single SSE write so a wedged peer (socket open but
+// not reading) can't hang the handler goroutine forever. Re-armed before every
+// frame/keepalive; the idle gap between keepalives never trips it. Matches the
+// bridge / FT8 SSE handlers. Package var so tests can dial it down.
+var sseWriteTimeout = 10 * time.Second
+
 // handleEvents serves the daemon's live event stream as Server-Sent
 // Events (text/event-stream). The wire vocabulary is fixed in
 // docs/v2-design/api.md §4.5 — qso.stored/updated/deleted and
@@ -41,21 +47,26 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Long-running stream: remove the server's WriteTimeout so an idle
-	// but still-connected client isn't force-disconnected every
-	// WriteTimeoutSec. ResponseController is the std-lib-blessed way
-	// (Go 1.21+).
-	//
-	// Deadline removal is sticky for the connection lifetime — net.Conn
-	// does not auto-rearm after each write, so a single
-	// SetWriteDeadline(time.Time{}) covers the whole stream. If the
-	// underlying conn doesn't support deadline control we surface the
-	// failure at info level (the connection still works, just under the
-	// regular WriteTimeout) so a future regression that breaks all
-	// long-lived streams is at least visible in logs.
+	// Long-running stream: rather than clearing the WriteDeadline outright
+	// (which lets a wedged peer — socket open, not reading — hang this goroutine
+	// forever, unable to observe ctx/shutdown/eviction; review internal-api M1),
+	// bound EACH write with a fresh deadline. armWrite resets it to
+	// now+sseWriteTimeout immediately before every frame/keepalive, so the long
+	// idle gap between keepalives never trips it but a blocked write fails within
+	// the bound and the goroutine can exit. Probe once: a writer chain with no
+	// underlying net.Conn (some test recorders) can't carry a deadline — fall
+	// back to no deadline + a single log; the stream still works under the
+	// server's WriteTimeout. Mirrors the bridge / FT8 SSE handlers.
 	rc := http.NewResponseController(w)
-	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
-		s.logger.InfoWith().Err(err).Msg("SSE write-deadline clear failed; stream subject to WriteTimeout")
+	deadlineSupported := true
+	armWrite := func() {
+		if !deadlineSupported {
+			return
+		}
+		if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
+			deadlineSupported = false
+			s.logger.InfoWith().Err(err).Msg("SSE per-write deadline unsupported; stream subject to WriteTimeout")
+		}
 	}
 
 	h := w.Header()
@@ -65,6 +76,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// Suppress buffering for deployments behind nginx or similar; a
 	// no-op for the unix-socket default but keeps TCP mode clean.
 	h.Set("X-Accel-Buffering", "no")
+	armWrite()
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
@@ -93,14 +105,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				// EOF and reconnects.
 				return
 			}
+			armWrite()
 			if err := s.writeSSEEvent(w, evt); err != nil {
-				// Client gone (broken pipe / reset). Nothing useful
-				// to log at info level; the defer unsubs us.
+				// Client gone (broken pipe / reset) or a wedged write hit the
+				// per-write deadline. Either way, the defer unsubs us.
 				return
 			}
 			flusher.Flush()
 
 		case <-keepalive.C:
+			armWrite()
 			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
 				return
 			}

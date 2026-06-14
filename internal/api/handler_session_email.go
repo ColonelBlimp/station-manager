@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	stderrs "errors"
 	"fmt"
 	"net/http"
@@ -76,9 +75,7 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SessionEmailRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.maxBodyBytes)).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_json",
-			fmt.Sprintf("could not decode request body: %v", err), op)
+	if !s.readJSONBody(w, r, op, &req) {
 		return
 	}
 
@@ -152,6 +149,15 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Filename == "" {
 		req.Filename = fmt.Sprintf("session-%s.adi", now.Format("20060102-150405"))
+	} else {
+		// An operator-supplied filename is a bare attachment/archive name, never
+		// a path — reject traversal so it can't escape the archive dir (H1).
+		clean, ferr := safeArchiveFilename(req.Filename)
+		if ferr != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value", ferr.Error(), op)
+			return
+		}
+		req.Filename = clean
 	}
 
 	// Archive the composed ADIF under the working dir BEFORE attempting
@@ -222,6 +228,23 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// safeArchiveFilename validates an operator-supplied filename. The value is used
+// both as the email attachment display name AND as the final component of the
+// local archive path, so it must be a bare filename — never a path. A traversal
+// value such as "../../config.json" would otherwise resolve outside the archive
+// dir and overwrite files under the working dir with ADIF content (review H1).
+// Rejects path separators, "." / "..", and absolute paths; appends ".adi" when
+// missing. The caller has already trimmed the value and defaulted the empty case.
+func safeArchiveFilename(name string) (string, error) {
+	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." || filepath.IsAbs(name) {
+		return "", fmt.Errorf("filename must be a bare name without path separators or %q", "..")
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".adi") {
+		name += ".adi"
+	}
+	return name, nil
+}
+
 // archiveSessionAdif writes the composed ADIF to
 // <workingDir>/exports/sent-adif/<filename> as a durable local copy of
 // what was (or will be) emailed. Best-effort: every failure is logged
@@ -242,6 +265,15 @@ func (s *Server) archiveSessionAdif(filename, body string) {
 		return
 	}
 	path := filepath.Join(dir, filename)
+	// Defence-in-depth: the handler already validates filename as a bare name,
+	// but re-confirm the resolved path stays inside the archive dir before any
+	// write — a traversal must never reach os.WriteFile (review H1).
+	if rel, rerr := filepath.Rel(dir, path); rerr != nil || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		s.logger.WarnWith().Str("path", path).
+			Msg("session email: refusing to archive outside the archive dir")
+		return
+	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		s.logger.WarnWith().Err(err).Str("path", path).
 			Msg("session email: could not write local ADIF archive")

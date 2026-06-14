@@ -9,12 +9,25 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
-// sseEventsPath is the one SSE endpoint; limitConcurrent exempts it
-// from the general concurrent-request cap because SSE connections are
-// long-lived by design and would otherwise saturate that cap under
-// normal use. /v1/events has its own subscriber cap in
-// limitEventSubscribers.
+// sseEventsPath is the daemon-firehose SSE endpoint.
 const sseEventsPath = "/v1/events"
+
+// isSSEPath reports whether p is one of the long-lived Server-Sent-Events
+// endpoints. ALL of them are exempt from limitConcurrent (the general
+// concurrent-request cap): an SSE connection is held for the stream's lifetime,
+// so counting it against that cap would let a few EventSource connections
+// (e.g. several browser tabs each opening rig + FT8 streams) exhaust the request
+// budget and 503 unrelated calls — review internal-api M2. They are bounded
+// separately by limitEventSubscribers. Previously only /v1/events was exempted,
+// leaving /v1/rig/events + /v1/ft8/events holding ordinary request slots.
+func isSSEPath(p string) bool {
+	switch p {
+	case sseEventsPath, "/v1/rig/events", "/v1/ft8/events":
+		return true
+	default:
+		return false
+	}
+}
 
 // recoverPanic wraps an http.Handler with a panic safety net.
 //
@@ -68,7 +81,7 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 func (s *Server) limitConcurrent(next http.Handler) http.Handler {
 	const op errors.Op = "api.limitConcurrent"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == sseEventsPath {
+		if isSSEPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

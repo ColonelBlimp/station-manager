@@ -78,6 +78,42 @@ func TestUpdateQso_RejectsSoftDeletedAndMissing(t *testing.T) {
 	}
 }
 
+// TestUpdateLogbook_RejectsSoftDeletedAndMissing is the logbook sibling of the
+// QSO soft-delete fix (api review M3): PATCH /v1/logbook/{id} is API-reachable,
+// so a stale update after a concurrent delete must not resurrect the tombstone.
+func TestUpdateLogbook_RejectsSoftDeletedAndMissing(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+
+	id, err := svc.InsertLogbook(types.Logbook{Name: "L1", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatalf("insert logbook: %v", err)
+	}
+
+	// Active update succeeds.
+	if err := svc.UpdateLogbookWithContext(ctx, types.Logbook{ID: id, Name: "L1-renamed", Callsign: "G4ABC"}); err != nil {
+		t.Fatalf("active logbook update should succeed: %v", err)
+	}
+
+	// Soft-delete it.
+	if err := svc.DeleteLogbookByIDWithContext(ctx, id); err != nil {
+		t.Fatalf("soft delete logbook: %v", err)
+	}
+
+	// Updating a soft-deleted logbook → ErrNotFound, not resurrected.
+	if err := svc.UpdateLogbookWithContext(ctx, types.Logbook{ID: id, Name: "zombie", Callsign: "G4ABC"}); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("update of soft-deleted logbook: got %v, want ErrNotFound", err)
+	}
+	if _, ferr := svc.FetchLogbookByIDWithContext(ctx, id); !stderr.Is(ferr, errors.ErrNotFound) {
+		t.Errorf("soft-deleted logbook resurfaced on the active read path: %v", ferr)
+	}
+
+	// Missing id → ErrNotFound.
+	if err := svc.UpdateLogbookWithContext(ctx, types.Logbook{ID: 999999, Name: "x", Callsign: "G4ABC"}); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("update of missing logbook: got %v, want ErrNotFound", err)
+	}
+}
+
 // --- M1: Initialize is retryable after a failed first call ------------------
 
 func TestInitialize_RetryableAfterFailure(t *testing.T) {

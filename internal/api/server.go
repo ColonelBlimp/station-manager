@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/frontend"
@@ -50,6 +51,11 @@ type Server struct {
 	// Shutdown blocked until the configured graceful-shutdown timeout
 	// expires and the listener force-closes the connection.
 	shutdownCh chan struct{}
+	// shutdownOnce guards the shutdownCh close so Shutdown is idempotent —
+	// http.Server.Shutdown is itself safe to call repeatedly, but an
+	// unguarded close(shutdownCh) panics ("close of closed channel") on a
+	// second call (a future test, supervisor retry, or duplicated teardown).
+	shutdownOnce sync.Once
 }
 
 // New constructs a Server from the resolved services and config. The
@@ -313,7 +319,7 @@ func (s *Server) ListenAndServe(socketPath string) error {
 // stale file between runs. The next startup's pre-bind cleanup also
 // handles this, but removing on exit keeps the filesystem honest.
 func (s *Server) Shutdown(ctx context.Context) error {
-	close(s.shutdownCh)
+	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
 	err := s.httpServer.Shutdown(ctx)
 	if s.protocol == "unix" && s.socketPath != "" {
 		// Ignore the remove error: the kernel may have already unlinked
