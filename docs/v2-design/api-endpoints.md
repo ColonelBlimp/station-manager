@@ -175,6 +175,16 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Errors:** None on the wire — degrades gracefully: serial enum failure → empty list + warn; audio unavailable (CGO-free static build, `ErrAudioUnavailable`) → `available:false` (not an error); other audio failure → `available:false` + warn.
 - **Notes:** Live enumeration (no cache); listing audio never grabs a device, so it's safe alongside active FT8 capture. Friendly serial labels depend on udev populating the USB product string (may fall back to the bare path).
 
+### `GET /v1/rigs`
+- **Purpose:** The config SPA's rig-profiles editor surface (ADR 0028 / config.md §10) — the operator's configured rigs paired with the embedded rigdef catalogue, so the editor can render "inheriting rigdef default X" vs "operator override Y."
+- **Gating:** Always-on (config editing, independent of the bridge subsystem).
+- **Response:** **200**, body `{"default_rig_id": int64, "rigs": [types.RigConfig], "catalogue": [RigDefSummary]}`.
+  - `rigs` is the stored config (overrides intact — a `null`/absent `ft8_mode`/`my_rig`/`mode_mappings`/`overrides` means "inherit the rigdef default"). `rigs` is non-null (`[]` when none configured).
+  - `RigDefSummary` = `{id, name, manufacturer, model, family, description?, ft8_mode?, rig_modes?, mode_mappings?, serial}` — the editor-facing projection of a rigdef; **omits the large `commands`/`states` CAT tables**.
+  - The SPA joins `rig.model` → `catalogue[].id` to compute default-vs-override per field, and derives the default MY_RIG from the matched `catalogue[].name`.
+- **Errors:** None on the wire (always 200).
+- **Notes:** Read-only. The write path (save a profile / set the default rig) lands with the editor; until then rigs are edited in `config.json` (stop → edit → restart).
+
 ---
 
 ## Operational

@@ -133,6 +133,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// SPA's rig-profile pickers (friendly labels, no hand-typed ids).
 	mux.HandleFunc("GET /v1/hardware", s.handleHardware)
 
+	// Rig-profiles editor surface — configured rigs (overrides) + the rigdef
+	// catalogue (defaults) for the config SPA's default-vs-override editing.
+	mux.HandleFunc("GET /v1/rigs", s.handleRigs)
+
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)

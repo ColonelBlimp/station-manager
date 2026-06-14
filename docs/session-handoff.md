@@ -68,7 +68,7 @@ Started the **config SPA** workstream — the third client (ADR 0001), the home 
 
 5. Minor: added the `ft8.tx.caller_answer_mode` config bullet to `docs/ft8.md` (was prose-only).
 
-**⇒ NEXT:** operator has items for the **`internal/config` package** to address first. After that, the config-SPA workstream resumes at **slice 2 — daemon rigdef-defaults exposure** (likely `GET /v1/rigs`) for the default-vs-override editing UX, then slice 3 (CSPA `configState` + `/v1/config` wrapper), slice 4 (the rig-profiles master-detail surface), slice 5 (remove My Station → Mode Mappings + the inert Rig field), slice 6 (install.md hardware-pick hints). Slice-1 work this session is **not yet committed** (operator commits per their habit).
+**⇒ NEXT:** config-SPA workstream. **Slices 1–2 shipped:** slice 1 = `GET /v1/hardware`; slice 2 = `GET /v1/rigs` (configured rigs + rigdef catalogue, default-vs-override read surface, `RigDefSummary` omits CAT tables; read-only — write path lands with the editor). Resume at **slice 3 — CSPA plumbing** (`configState` + `/v1/config` + `/v1/rigs` fetch wrappers in `frontend/config/`), then slice 4 (the rig-profiles master-detail editor + its write path), slice 5 (remove My Station → Mode Mappings + the inert Rig field), slice 6 (install.md hardware-pick hints). Also handled this session: `internal/config` review (3 findings) + `internal/ft8` review + follow-up (6 + 2 findings) — all fixed.
 
 ### Session 169 (2026-06-13) — **FT8 fixes: country enrichment at log time, mode-aware RST validation, Band-Activity clear on band change.**
 
