@@ -177,9 +177,14 @@ func MergeStationFromCountry(s types.ContactedStation, c types.Country) types.Co
 	if c.ITUZone != "" && c.ITUZone != s.ITUZ {
 		s.ITUZ = c.ITUZone
 	}
-	if c.DXCCPrefix != "" && c.DXCCPrefix != s.DXCC {
-		s.DXCC = c.DXCCPrefix
-	}
+	// DXCC is deliberately NOT merged from c.DXCCPrefix. The ADIF DXCC
+	// field (ContactedStation.DXCC) is the numeric DXCC *entity code*
+	// (e.g. 291 for the USA); c.DXCCPrefix is the alphabetic *prefix*
+	// ("K", "VK"). Mapping the prefix into the numeric field made
+	// uploaders like QRZ reject the value and file the QSO as NON-DXCC.
+	// The prefix's home is Country.DXCCPrefix (country_details), which is
+	// not ADIF-emitted. With DXCC left empty, QRZ resolves the entity
+	// from the callsign, which is correct.
 	return s
 }
 

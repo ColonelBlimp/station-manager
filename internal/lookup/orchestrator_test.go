@@ -478,8 +478,14 @@ func TestEnrich_ColdMiss_ChainAndHamnut_MergesAndStoresHamnutTruth(t *testing.T)
 	if got.Station.ITUZ != "27" {
 		t.Errorf("Station.ITUZ = %q, want \"27\" (not QRZ's bogus 53)", got.Station.ITUZ)
 	}
-	if got.Station.DXCC != "G" {
-		t.Errorf("Station.DXCC = %q, want G", got.Station.DXCC)
+	// DXCC (the numeric ADIF entity field) must stay empty — hamnut's
+	// alphabetic prefix is NOT a valid DXCC entity code, so it is no
+	// longer merged onto the station. The prefix lives on Country.DXCCPrefix.
+	if got.Station.DXCC != "" {
+		t.Errorf("Station.DXCC = %q, want \"\" (prefix must not fill the numeric DXCC field)", got.Station.DXCC)
+	}
+	if got.Country.DXCCPrefix != "G" {
+		t.Errorf("Country.DXCCPrefix = %q, want G", got.Country.DXCCPrefix)
 	}
 
 	// Result.Country also carries hamnut's truth — the country layer's
@@ -678,7 +684,9 @@ func TestMergeStationFromCountry(t *testing.T) {
 			"empty station fills from country",
 			types.ContactedStation{Name: "Marc"},
 			types.Country{Name: "England", CQZone: "14", ITUZone: "27", Continent: "EU", DXCCPrefix: "G"},
-			types.ContactedStation{Name: "Marc", Country: "England", CQZ: "14", ITUZ: "27", Cont: "EU", DXCC: "G"},
+			// DXCCPrefix is intentionally NOT merged onto the station's
+			// numeric DXCC field (it's an alphabetic prefix, not an entity code).
+			types.ContactedStation{Name: "Marc", Country: "England", CQZ: "14", ITUZ: "27", Cont: "EU"},
 		},
 		{
 			"only when different — same value is a no-op",

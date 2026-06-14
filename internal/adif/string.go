@@ -87,6 +87,13 @@ func parseToAdifString(obj any) string {
 				if tag == emptyString || tag == "-" {
 					continue
 				}
+				// The ADIF DXCC field is the numeric DXCC entity code
+				// (e.g. 291). A non-numeric value (such as a DXCC prefix)
+				// makes uploaders like QRZ classify the record as
+				// NON-DXCC, so drop it rather than emit garbage.
+				if strings.EqualFold(tag, "dxcc") && !isAsciiDigits(field.String()) {
+					continue
+				}
 				buf.WriteString(formatField(tag, field.String()))
 			}
 		}
@@ -97,6 +104,20 @@ func parseToAdifString(obj any) string {
 	buf.WriteString(NewLineStr)
 
 	return buf.String()
+}
+
+// isAsciiDigits reports whether s is non-empty and composed solely of
+// ASCII digits 0-9 — the shape required of a numeric ADIF field value.
+func isAsciiDigits(s string) bool {
+	if s == emptyString {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func formatField(tagName string, value string) string {
