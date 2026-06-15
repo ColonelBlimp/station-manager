@@ -11,6 +11,13 @@
 //   - -set:           WRITE TEST — drive set-mode (0x06) + data-mode (0x1A 0x06)
 //     to validate the USB-D frame sequence; restores the starting state. Still
 //     no TX command.
+//   - -trace:         WRITE TEST — send set-freq (0x05) / set-mode (0x06) and
+//     print EVERY returned frame with millisecond timing (echo, ACK, any
+//     Transceive broadcast — nothing discarded), to characterise the FB ACK
+//     shape + latency, whether a command also triggers a broadcast, and the
+//     FA/NG reply to a deliberately out-of-band freq. Restores the starting
+//     freq+mode. Never sends a TX command; an out-of-band freq is refused, not
+//     transmitted.
 //
 // Findings it established (ADR 0034 "Validated on the bench"): addr 0x94 /
 // 19200 8N1, USB Echo Back on, 5-byte LE BCD freq, 0x06 self-clears the data
@@ -32,6 +39,7 @@ func main() {
 	addr := flag.Int("addr", 0x94, "rig CI-V address (IC-7300 default 0x94)")
 	ctrl := flag.Int("ctrl", 0xE0, "controller CI-V address")
 	set := flag.Bool("set", false, "WRITE TEST: drive set-mode (06) + data-mode (1A 06) to validate the USB-D sequence (no TX commands ever); restores starting state")
+	trace := flag.Bool("trace", false, "WRITE TEST: send set-freq/set-mode and print every returned frame with ms timing (ACK shape+latency, broadcast?, FA/NG on out-of-band); restores starting freq+mode; no TX")
 	listen := flag.Bool("listen", false, "READ-ONLY: open and passively log CI-V Transceive broadcasts while you change the front panel; sends nothing")
 	secs := flag.Int("secs", 45, "listen duration in seconds (-listen only)")
 	flag.Parse()
@@ -56,6 +64,15 @@ func main() {
 			_, _ = fmt.Sscanf(bs[0], "%d", &baud)
 		}
 		runSetTest(*port, baud, byte(*addr), byte(*ctrl))
+		return
+	}
+
+	if *trace {
+		baud := 19200
+		if bs := splitCSV(*baudList); len(bs) > 0 {
+			_, _ = fmt.Sscanf(bs[0], "%d", &baud)
+		}
+		runTraceTest(*port, baud, byte(*addr), byte(*ctrl))
 		return
 	}
 
@@ -221,6 +238,142 @@ func runSetTest(path string, baud int, addr, ctrl byte) {
 	readState("restored")
 }
 
+// runTraceTest sends set commands and prints EVERY returned frame with timing
+// relative to the write — nothing drained or discarded — so we can see the FB
+// ACK shape + latency, whether a command also triggers a Transceive broadcast,
+// and the FA/NG reply to a deliberately out-of-band frequency. It restores the
+// starting freq+mode. No TX command is ever sent; an out-of-band freq is
+// refused by the rig, not transmitted.
+func runTraceTest(path string, baud int, addr, ctrl byte) {
+	mode := &serial.Mode{BaudRate: baud, DataBits: 8, Parity: serial.NoParity, StopBits: serial.OneStopBit}
+	p, err := serial.Open(path, mode)
+	if err != nil {
+		fmt.Printf("open: %v\n", err)
+		return
+	}
+	defer func() { _ = p.Close() }()
+	deassertPTTLines(p)
+	_ = p.SetReadTimeout(20 * time.Millisecond) // tight poll → ~ms frame timing
+
+	// readReply sends a poll and returns the data bytes of the matching reply.
+	readReply := func(payload []byte, cmd byte) []byte {
+		_, _ = p.Write(buildFrame(addr, ctrl, payload))
+		for _, f := range collectFrames(p, 400*time.Millisecond) {
+			if len(f) >= 6 && f[3] == addr && f[4] == cmd {
+				return f[5 : len(f)-1]
+			}
+		}
+		return nil
+	}
+
+	// do writes one command and prints every frame that comes back, timed.
+	do := func(label string, payload []byte) {
+		frame := buildFrame(addr, ctrl, payload)
+		fmt.Printf("\n-> %s : send % X\n", label, frame)
+		start := time.Now()
+		if _, err := p.Write(frame); err != nil {
+			fmt.Printf("   write: %v\n", err)
+			return
+		}
+		got := collectFramesTimed(p, 700*time.Millisecond, start)
+		if len(got) == 0 {
+			fmt.Println("   (no frames returned)")
+		}
+		for _, tf := range got {
+			fmt.Printf("   [%6.1f ms] ", float64(tf.at.Microseconds())/1000.0)
+			decodeFrame(tf.bytes, addr, ctrl)
+		}
+	}
+
+	// Baseline freq + mode (for restore).
+	baseFreq := readReply([]byte{0x03}, 0x03)
+	baseMode := readReply([]byte{0x04}, 0x04)
+	fmt.Printf("\n== baseline ==\n   freq bytes: % X  (%d Hz)\n   mode bytes: % X\n",
+		baseFreq, bcdFreqToHz(baseFreq), baseMode)
+	if len(baseFreq) != 5 || len(baseMode) < 1 {
+		fmt.Println("   baseline read incomplete — aborting trace to avoid an unsafe restore")
+		return
+	}
+	baseHz := bcdFreqToHz(baseFreq)
+	fil := byte(0x01)
+	if len(baseMode) >= 2 {
+		fil = baseMode[1]
+	}
+
+	// 1) set-freq to the SAME freq (a no-op) — does a write that changes
+	//    nothing still ACK, and does it broadcast?
+	do("set_freq SAME (no-op)", append([]byte{0x05}, hzToBCDFreq(baseHz)...))
+
+	// 2) set-freq nudged +1 kHz (still in-band) — ACK + any broadcast of the
+	//    new value (Transceive should NOT echo a commanded change if #6 holds).
+	do("set_freq +1 kHz", append([]byte{0x05}, hzToBCDFreq(baseHz+1000)...))
+
+	// 3) set-mode to current base mode (no-op mode write) — ACK shape for 06.
+	do("set_mode base (no-op)", []byte{0x06, baseMode[0], fil})
+
+	// 4) DECISIVE: out-of-band freq (100 MHz, outside the IC-7300's coverage)
+	//    — capture the FA/NG reply. RF-safe: refused, never transmitted.
+	do("set_freq 100 MHz (expect NG)", append([]byte{0x05}, hzToBCDFreq(100_000_000)...))
+
+	// Restore starting state.
+	fmt.Println("\n--- restoring starting freq + mode ---")
+	do("restore freq", append([]byte{0x05}, hzToBCDFreq(baseHz)...))
+	do("restore mode", []byte{0x06, baseMode[0], fil})
+}
+
+// timedFrame is one CI-V frame with its arrival time relative to a write.
+type timedFrame struct {
+	at    time.Duration
+	bytes []byte
+}
+
+// collectFramesTimed reads for the window, parsing frames as bytes arrive and
+// stamping each newly-completed frame with the elapsed time since start. The
+// stamp is when the frame became parseable (close to arrival at 19200 baud).
+func collectFramesTimed(p serial.Port, window time.Duration, start time.Time) []timedFrame {
+	deadline := time.Now().Add(window)
+	var buf []byte
+	var out []timedFrame
+	emitted := 0
+	tmp := make([]byte, 256)
+	for time.Now().Before(deadline) {
+		n, _ := p.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+			frames := splitFrames(buf)
+			for ; emitted < len(frames); emitted++ {
+				out = append(out, timedFrame{at: time.Since(start), bytes: frames[emitted]})
+			}
+		}
+	}
+	return out
+}
+
+// bcdFreqToHz decodes 5-byte little-endian BCD frequency bytes to Hz.
+func bcdFreqToHz(b []byte) uint64 {
+	var hz, mult uint64 = 0, 1
+	for _, by := range b { // first byte = least significant pair
+		hz += uint64(by&0x0F) * mult
+		mult *= 10
+		hz += uint64(by>>4) * mult
+		mult *= 10
+	}
+	return hz
+}
+
+// hzToBCDFreq encodes Hz as 5-byte little-endian BCD (IC-7300 set-freq form).
+func hzToBCDFreq(hz uint64) []byte {
+	b := make([]byte, 5)
+	for i := 0; i < 5; i++ {
+		lo := byte(hz % 10)
+		hz /= 10
+		hi := byte(hz % 10)
+		hz /= 10
+		b[i] = hi<<4 | lo
+	}
+	return b
+}
+
 // buildFrame wraps a command payload in FE FE <to> <from> ... FD.
 func buildFrame(to, from byte, payload []byte) []byte {
 	f := []byte{0xFE, 0xFE, to, from}
@@ -305,6 +458,10 @@ func decodeFrame(f []byte, addr, ctrl byte) bool {
 		} else {
 			fmt.Printf("        1A sub=% X\n", data)
 		}
+	case 0xFB:
+		fmt.Println("        >>> ACK OK (FB) — command accepted")
+	case 0xFA:
+		fmt.Println("        >>> NG / REJECTED (FA) — command refused")
 	default:
 		fmt.Printf("        cmd 0x%02X data=% X\n", cmd, data)
 	}

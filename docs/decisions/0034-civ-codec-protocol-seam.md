@@ -288,6 +288,112 @@ probe. Consequences for the rigdef + transport:
   transport should **de-assert DTR+RTS on open** so a stray `USB SEND` mapping
   can't transmit. `USB SEND = OFF` is also a documented operator prerequisite.
 
+## Command path: wait-for-ACK (bench re-validation 2026-06-15)
+
+End-to-end bench testing surfaced a behaviour the original push-only model did
+not cover: **the IC-7300 confirms a controller command with a bare `FB`/`FA`
+ACK and sends NO Transceive broadcast for it.** So the confirm-by-push model
+(ADR 0019/0026 — write, return, let the rig's push update the SPA) has nothing
+to confirm on `icom_civ`, and the SPA only catches up on the ~10 s liveness
+probe. This section records the re-validation and the proposed fix. **The fix
+is PROPOSED, pending operator decision (see the fork at the end) — not yet
+built.**
+
+### Re-validated on the bench (probe `cmd/civ-probe`, now with a `-trace` mode)
+
+A new `-trace` mode sends `set_freq`/`set_mode` and prints **every** returned
+frame with millisecond timing (echo, ACK, any broadcast — nothing discarded),
+plus a deliberately out-of-band freq to capture the reject. Findings:
+
+- **ACK shape + latency.** Accepted command → `FE FE E0 94 **FB** FD`, arriving
+  **~18–21 ms** after the write (echo at ~6 ms, ACK ~13 ms later). The reject is
+  `FE FE E0 94 **FA** FD` — an out-of-band 100 MHz set was **refused** (the rig
+  does NOT clamp). The reject path is real and deterministic.
+- **A commanded change never broadcasts (even with Transceive ON).** The `+1 kHz`
+  set produced only echo + `FB`, no `00`/`01` frame. So the rig does not echo its
+  own commanded changes — adopt-on-ACK is the *only* way the SPA learns a command
+  landed, not just an optimization.
+- **Both paths are independent of the Transceive menu setting.** With Transceive
+  **OFF**: a `-listen` window was completely silent while the front panel was
+  worked (confirming Transceive is the *sole* carrier of rig-originated changes —
+  so "Transceive = ON" is a hard prerequisite for the rig→SPA *display* path),
+  yet polled reads (`03`/`04`/`1A 06`) still answered and `set` commands still
+  applied + ACKed. **Conclusion: only the passive rig→SPA display needs
+  Transceive; the SPA→rig command path and the connect snapshot never do.**
+- **Today the `FB` is received and dropped.** `cat.Decode` matches frames against
+  rigdef *states* by command byte; `FB`/`FA` match nothing → `ErrNoMatch` →
+  silently skipped. The ACK is arriving and being ignored — that *is* the latency.
+
+This **supersedes the "read-after-write" framing** of session 172: adopt-on-ACK
+(hold the value we commanded, gated on `FB`) is strictly better than re-reading
+— it avoids a second half-duplex round-trip, sidesteps the back-to-back read
+collision, and resolves USB-vs-USB-D precisely on the command path (we *know* we
+sent USB-D; a read-back could not tell — see the accepted-limitation note).
+
+### Proposed design (PROPOSED — pending decision)
+
+Reuse the existing state-publish path: readLoop today does `cat.Decode` →
+`status` map (`{"VFOAFREQ":"14074000"}`) → `mapStatusToPayload` →
+`captureTuneSnapshot` → `hub.publish(EventRigState)` (pipeline.go:461-468).
+Adopt-on-ACK feeds the **same** path from a synthesized `status` map.
+
+1. **ACK classifier (`cat`/`civ.go`):** `CIVAck(def, frame) (isAck, accepted bool)`
+   — `…FB…`→(true,true), `…FA…`→(true,false), else (false,_). Frame structure is
+   protocol knowledge, so it lives next to the codec.
+2. **ACK routing (readLoop, CIV branch only):** if `CIVAck` says it's an ACK,
+   deliver to a pending waiter and `continue` (an ACK is not state); else
+   decode→publish as today. The echo (`from==E0`) is already dropped by
+   `cat.Decode`'s address filter.
+3. **Single-flight + waiter (Service):** `cmdMu sync.Mutex` (one batch at a time —
+   matches the half-duplex bus) + `pendingAck chan bool` (guarded by `s.mu`). The
+   readLoop still owns the *read*; `SendCommands` only *writes* and waits on the
+   channel — no double-reader.
+4. **CIV `SendCommands` (branch on `def.Protocol`; Kenwood path untouched):**
+   ```
+   cmdMu.Lock(); defer Unlock()
+   for each (op, value):
+       for each frame in splitCIVFrames(EncodeCommand(def, op, value)):  // set_mode "USB-D" = 2 frames
+           install pendingAck; write(frame)
+           select {
+           case ok := <-pendingAck: if !ok { return error (FA → op rejected) }
+           case <-time.After(ackTimeout): return error (no ack)
+           case <-ctx.Done():            return ctx.Err()
+           }
+       // all frames of this op ACKed → synthesize + publish:
+       status := {stateFor(def, op): value}
+       if p, ok := mapStatusToPayload(status); ok { captureTuneSnapshot(p); hub.publish(EventRigState, p) }
+   ```
+5. **op→state mapping (`stateFor`):** new optional `Command.sets_state` rigdef
+   field (`set_freq`→`VFOAFREQ`, `set_freq_b`→`VFOBFREQ`, `set_mode`→`MAINMODE`).
+   Data-driven, so a future Icom needs no code. The commanded `value` is already
+   in state form (`"14074000"`; the rig literal `"USB-D"` which `displayedState`
+   resolves) — passes straight into the `status` map.
+6. **Timeout knob:** `bridge.timeouts.civ_ack_ms`, default ~500 ms (measured RTT
+   ~20 ms), clamped — same pattern as `civ_read_gap_ms` (no magic numbers).
+
+**Edge cases:** (a) `FA` mid-batch — CI-V cannot be truly atomic (each frame
+applies independently); the freq that already applied is published, and an error
+naming the failed op returns. Document it. (b) `FA` surfaces as an HTTP error on
+`POST /v1/rig/command`, consistent with how `ErrRigNotConnected` /
+`ErrRigIdentityUnverified` already surface. (c) Freq-step key-repeat: each POST
+is a ~20 ms round-trip serialized behind `cmdMu` — *faster* than the FTdx10 push
+lag the optimistic per-VFO target already handles, so likely fine; coalescing
+rapid repeats is a possible refinement.
+
+**Out of scope for this path** (separate decision): the front-panel USB↔USB-D
+gap is a readLoop question (accept+document, or the single event-triggered
+`1A 06` read named under Triggers), not a command-path question. Adopt-on-ACK
+already makes the *commanded* direction precise.
+
+### THE OPEN FORK (operator to decide on return)
+
+**Synchronous (recommended)** — `SendCommands` waits ~20 ms and returns `FA` as a
+direct HTTP error; matches the "wait for the Ack and hold that state" framing and
+the existing command-error semantics. *vs* **Async pending-queue** —
+`SendCommands` returns immediately, the readLoop synthesizes on `FB` and emits
+`FA` as an SSE error event; non-blocking but looser error correlation. Also to
+confirm: the `sets_state` rigdef-field approach for `stateFor`.
+
 ## Alternatives considered
 
 ### Cram CI-V into the existing marker/value_map mini-language
@@ -401,9 +507,12 @@ which reads as a bug. `kenwood` names the family honestly.
 - `internal/serial/serial.go` — delimiter-byte framing (already CI-V-capable);
   the transport must de-assert DTR+RTS on open for Icom (USB SEND finding).
 - `docs/v2-design/bridge.md` §3c (pure-codec layering) + §8.3 (pluggable transport).
-- Bench validation: `cmd/civ-probe` (throwaway read/`-set`/`-listen` probe,
-  2026-06-14) — confirmed the settings table, BCD, `06` self-clears data, and
-  data-flag-never-broadcast.
+- Bench validation: `cmd/civ-probe` (read/`-set`/`-listen`/`-trace` probe) —
+  2026-06-14 confirmed the settings table, BCD, `06` self-clears data, and
+  data-flag-never-broadcast; 2026-06-15 (`-trace`) confirmed the `FB`/`FA` ACK
+  shape + ~20 ms latency, that a commanded change never broadcasts, and that the
+  command + read paths are independent of the Transceive menu setting (see the
+  "Command path: wait-for-ACK" section).
 - `docs/install.md` (future): IC-7300 prerequisites — CI-V Transceive ON,
   `CI-V USB Port = Link to [REMOTE]`, baud = `CI-V Baud Rate` (not USB baud),
   `USB SEND = OFF`.

@@ -54,6 +54,15 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 173 (2026-06-15) — **CI-V command-path RE-VALIDATED standalone (daemon out of the loop); wait-for-ACK design fully sketched + documented; PARKED for operator review/decision before any code.**
+Stepped back from the daemon to prove the CI-V model against the rig directly via `cmd/civ-probe`, then designed the latency fix. **No production code written this session** — only the probe gained a `-trace` mode (uncommitted; RF-safe: never sends a TX command, an out-of-band freq is refused not transmitted). Full detail in **ADR 0034 → "Command path: wait-for-ACK (bench re-validation 2026-06-15)"**.
+- **Built an assumption ledger and tested each weak claim on the bench.** Crystal-clear results:
+  - **Transceive ON** (the rig's default): a dial turn / band / mode / VFO-swap all broadcast (cmd `00` freq, `01` mode) — the rig→SPA display path works as designed.
+  - **Transceive OFF**: `-listen` was *silent* while the front panel was worked → Transceive is the **sole** carrier of rig-originated changes, so "Transceive = ON" is a **hard prerequisite for the display path** (not just a nicety). BUT polled reads still answered and `set` commands still applied + ACKed → **the command path and the connect snapshot are independent of the Transceive setting.**
+  - **`FB`/`FA` ACK** (`-trace`): accepted → `FE FE E0 94 FB FD` at **~18–21 ms**; out-of-band 100 MHz → `FE FE E0 94 FA FD` (rig **refuses**, does not clamp). A commanded change returns **only echo + `FB`, no broadcast** even with Transceive ON — so the SPA can ONLY learn a command landed via the ACK.
+- **Design decided to move from "read-after-write" → "adopt-on-ACK"** (strictly better: no second round-trip, sidesteps the half-duplex read collision, and resolves USB-vs-USB-D precisely on the command path — we *hold* the literal we sent). Mechanism sketched in full in ADR 0034: a `cat.CIVAck` classifier, ACK routing in the readLoop (CIV branch), a single-flight `cmdMu` + `pendingAck` channel waiter, a per-op `SendCommands` loop that waits for each frame's `FB`/`FA` then synthesizes state through the **existing** `mapStatusToPayload`→`hub.publish(EventRigState)` path, a data-driven `Command.sets_state` rigdef field for op→state, and a `bridge.timeouts.civ_ack_ms` knob. Kenwood path stays fire-and-forget, untouched.
+- **⇒ THE OPEN FORK (operator decides on return):** **synchronous** (recommended — `SendCommands` waits ~20 ms, returns `FA` as an HTTP error; matches "wait for the Ack and hold that state" + existing command-error semantics) **vs async pending-queue** (non-blocking, `FA` as an SSE error event, looser correlation). Plus confirm the `sets_state` rigdef-field approach. **Nothing is built — the next session implements the chosen variant.** Still uncommitted from session 172: the CI-V bench-validation fixes (`internal/bridge/{pipeline,service,command,pipeline_test}.go`, `civ_snapshot_test.go`, `internal/config/config.go`, `internal/types/bridge.go`) + this session's `cmd/civ-probe/main.go` `-trace` mode.
+
 ### Session 172 (2026-06-15) — **Icom CI-V engine + IC-7300 rigdef IMPLEMENTED and bench-validated end-to-end; two fixes found on the rig; command-latency diagnosed (PARKED mid-fix).**
 Built the whole `icom_civ` path per ADR 0034 and validated it against the borrowed IC-7300. **Shipped (committed in steps 1–3 earlier this session):** the CI-V engine (`internal/cat/civ.go` — `FE FE…FD` framing, 5-byte LE BCD freq, BE BCD level, echo/address filter `from==civ_address`, `none`/`frame_seq`/`bcd_freq`/`mode_seq`/`bcd_power` encodings; protocol dispatch in `codec.go`/`commands.go`; `validateCIV`); the `icom-ic7300.json` rigdef (addr `0x94`, `"0xFD"` delimiter, 19200/8N1, RX + `set_freq`/`set_mode`, **no exposed TX** — deferred); the serial transport de-asserting DTR+RTS at open via `serial.Mode.InitialStatusBits` (no assert window — the USB SEND keying hazard) + the `"0xFD"` hex delimiter parse. **Schema refinements vs the ADR illustration:** `mode_seq` is inline on the command (not a `value_map`); added `frame_seq` for valueless multi-frame READ; `"0xFD"` delimiter form. ADR 0034 carries an implementation note.
   - **Validated on the rig:** clean open at 19200 with **no keying** on connect; RX freq + mode decode and display (startup + live dial-move); inbound `set_freq`/`set_mode` work.
@@ -193,13 +202,19 @@ RX freq + mode display, inbound `set_freq`/`set_mode` work. Two follow-on fixes
 **uncommitted but commit-ready** (build/tests/gofmt green). Read the Session 172
 entry for the full picture; ADR 0034 has the implementation note.
 
-**⇒ NEXT ACTION (resume here): build read-after-write for CI-V command latency.**
-The IC-7300 ACKs a commanded change with a bare `FB` and sends NO transceive
-broadcast (proven by RX-frame trace), so confirm-by-push never fires and the SPA
-lags to the ~10 s liveness probe. After a CI-V command (`SendCommands`), read the
-state back so the UI updates in ~100 ms. Decide sync vs async/`safego` (needs a
-service-scoped ctx, not the request ctx) + whether to debounce freq-step
-key-repeat. Then, in order:
+**⇒ NEXT ACTION (resume here): operator decides the wait-for-ACK fork, then build it.**
+Session 173 re-validated the command path standalone and designed the fix —
+**"adopt-on-ACK" supersedes the earlier "read-after-write"** (better: no second
+round-trip, sidesteps the half-duplex read collision, resolves USB-vs-USB-D on
+the command path). The IC-7300 ACKs a commanded change with `FB`/`FA` (~20 ms) and
+sends NO broadcast, so adopt-on-ACK is the only way the SPA learns the command
+landed. **The full design is in ADR 0034 → "Command path: wait-for-ACK".** Before
+coding, the operator picks: **synchronous** (recommended — `SendCommands` waits
+~20 ms, `FA`→HTTP error) **vs async pending-queue** (non-blocking, `FA`→SSE error
+event); and confirms the data-driven `Command.sets_state` op→state approach. Then
+build the chosen variant (classifier + readLoop routing + `cmdMu`/`pendingAck`
+waiter + per-op synthesize via `mapStatusToPayload` + `civ_ack_ms` knob; Kenwood
+path untouched). Possible refinement: coalesce freq-step key-repeat. Then, in order:
 1. **USB-D differentiation** — DECISION PENDING. Accept (documented: the `04` read
    gives base mode, `1A 06` data flag never broadcast) vs build the `1A 06`
    snapshot read + stateful base+flag mode-assembly (options 1+2). Operator made
@@ -210,10 +225,12 @@ key-repeat. Then, in order:
    looked at).
 3. **No band highlight** — SPA band buttons don't derive current band from freq
    (SPA-side).
-4. **Doc pass** — ADR 0034 (spacing/identity/FB-ACK findings already partly
-   noted), the `bridge.timeouts.civ_read_gap_ms` knob, memory
-   `project_sm_ic7300_borrowed`, and `install.md` prerequisites (Transceive ON,
-   USB Port = Link to [REMOTE], baud = CI-V Baud Rate, USB SEND OFF) when shipping.
+4. **Doc pass** — ADR 0034 (spacing/identity/FB-ACK/wait-for-ACK findings now
+   documented), memory `project_sm_ic7300_borrowed` (done), the
+   `bridge.timeouts.civ_read_gap_ms`/`civ_ack_ms` knobs, and `install.md`
+   prerequisites (Transceive ON, USB Port = Link to [REMOTE], baud = CI-V Baud
+   Rate, USB SEND OFF) when shipping. CLAUDE.md serial-bridge bullet when the
+   command path lands.
 
 Read strategy is **push-only, NO polling** (operator directive); read-after-write
 is event-driven (triggered by the command), not a poll. Validated facts + gotchas
