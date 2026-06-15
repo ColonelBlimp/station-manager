@@ -108,6 +108,18 @@ describe('rigControl', () => {
             expect(mockSend).toHaveBeenCalledWith('swap_vfo', undefined);
         });
 
+        it('optimistically mirrors VFO-A into VFO-B (single-RX rigs never push VFO-B)', () => {
+            setCatLive();
+            configState.bridge.ops = ['swap_vfo'];
+            catState.vfoA = 14_074_000;
+            catState.vfoB = 7_074_000;
+            swapVfo();
+            // After CI-V 07 B0 the rig's VFO-B holds the old VFO-A; reflect it now.
+            // The daemon read-back fills the new vfoA shortly after (not in this unit).
+            expect(catState.vfoB).toBe(14_074_000);
+            expect(mockSend).toHaveBeenCalledWith('swap_vfo', undefined);
+        });
+
         it('is a no-op when CAT is live but the rig does not expose swap_vfo', () => {
             setCatLive();
             configState.bridge.ops = [];

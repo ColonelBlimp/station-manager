@@ -266,6 +266,26 @@ func validateCIV(def RigDefinition) error {
 		}
 	}
 
+	// A command's sets_state (wait-for-ACK, ADR 0034) must name a real State
+	// marker tag — otherwise the command path would synthesize a push keyed on a
+	// tag nothing maps and the commanded change would silently never reach the
+	// SPA (the latency bug the field exists to fix).
+	tags := make(map[string]struct{})
+	for _, st := range def.States {
+		for _, mk := range st.Markers {
+			tags[mk.Tag] = struct{}{}
+		}
+	}
+	for _, c := range def.Commands {
+		if c.SetsState == "" {
+			continue
+		}
+		if _, ok := tags[c.SetsState]; !ok {
+			return errors.New(op).WithMsgf(
+				"command %q sets_state %q is not a known state marker tag", c.Name, c.SetsState)
+		}
+	}
+
 	return nil
 }
 

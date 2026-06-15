@@ -107,6 +107,13 @@ export interface BridgeFields {
      * and for the Mode Mappings sub-tab's edit form.
      */
     mode_mappings?: Record<string, AdifModePair>;
+    /**
+     * Rig CAT mode literal for FT8 (e.g. "USB-D" on the IC-7300, "DATA-U" on the
+     * FTdx10) — rigdef default, overridable per-rig. The FT8 Main-Freq band
+     * buttons drive set_mode with it so picking a band also asserts data mode.
+     * Absent when no driver is configured.
+     */
+    ft8_mode?: string;
 }
 
 export interface AdifModePair {

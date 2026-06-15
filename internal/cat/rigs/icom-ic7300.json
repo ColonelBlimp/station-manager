@@ -26,8 +26,8 @@
   "commands": [
     {"name": "INIT", "cmd": "03", "encoding": "none"},
     {"name": "READ", "encoding": "frame_seq", "frames": ["03", "04"]},
-    {"name": "set_freq", "cmd": "05", "encoding": "bcd_freq", "exposed": true},
-    {"name": "set_mode", "cmd": "06", "encoding": "mode_seq", "exposed": true, "mode_seq": [
+    {"name": "set_freq", "cmd": "05", "encoding": "bcd_freq", "exposed": true, "sets_state": "VFOAFREQ"},
+    {"name": "set_mode", "cmd": "06", "encoding": "mode_seq", "exposed": true, "sets_state": "MAINMODE", "mode_seq": [
       {"mode": "LSB",    "frames": ["0600:01"]},
       {"mode": "USB",    "frames": ["0601:01"]},
       {"mode": "AM",     "frames": ["0602:01"]},
@@ -38,7 +38,8 @@
       {"mode": "RTTY-R", "frames": ["0608:01"]},
       {"mode": "LSB-D",  "frames": ["0600:01", "1A06:0101"]},
       {"mode": "USB-D",  "frames": ["0601:01", "1A06:0101"]}
-    ]}
+    ]},
+    {"name": "swap_vfo", "cmd": "07B0", "encoding": "none", "exposed": true}
   ],
   "states": [
     {

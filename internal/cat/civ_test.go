@@ -406,13 +406,26 @@ func TestEmbeddedIC7300(t *testing.T) {
 		t.Errorf("Decode mode broadcast: st=%v err=%v", st, err)
 	}
 
-	// TX must not be reachable: the rigdef ships no exposed TX command, and the
-	// inbound ops are exactly freq + mode (RX-safe layer; TX is a later step).
+	// swap_vfo exchanges VFO A/B via CI-V 07 B0 (a valueless `none` command).
+	swap, err := EncodeCommand(def, "swap_vfo", "")
+	if err != nil {
+		t.Fatalf("EncodeCommand swap_vfo: %v", err)
+	}
+	eqBytes(t, swap, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x07, 0xB0, 0xFD})
+
+	// TX must not be reachable: the rigdef ships no exposed TX command. The
+	// inbound ops are exactly freq + mode + swap_vfo (RX-safe layer; TX is a
+	// later step). swap_vfo declares no sets_state — it has no commanded value
+	// to adopt, so the bridge reads state back after the ACK (ADR 0034).
+	wantOps := map[string]bool{"set_freq": true, "set_mode": true, "swap_vfo": true}
 	ops := ExposedCommands(def)
-	if len(ops) != 2 {
-		t.Errorf("ExposedCommands = %v, want exactly [set_freq set_mode]", ops)
+	if len(ops) != len(wantOps) {
+		t.Errorf("ExposedCommands = %v, want exactly %v", ops, wantOps)
 	}
 	for _, op := range ops {
+		if !wantOps[op] {
+			t.Errorf("ExposedCommands includes unexpected %q", op)
+		}
 		if op == "tx_on" || op == "tx_off" || op == "set_power" {
 			t.Errorf("ExposedCommands includes %q — must never be exposed", op)
 		}
@@ -436,5 +449,89 @@ func TestValidate_UnknownProtocol(t *testing.T) {
 	def.Protocol = "martian"
 	if err := ValidateRigDefinition(def); err == nil {
 		t.Errorf("ValidateRigDefinition(unknown protocol) = nil, want error")
+	}
+}
+
+// TestCIVAck classifies the FB/FA command acknowledgement (ADR 0034
+// wait-for-ACK). Bench-validated frame shapes: FE FE E0 94 FB FD (OK) / …FA FD
+// (NG). Everything else — broadcasts, polled replies, our own echo — is not an
+// ACK, so the read loop decodes it normally.
+func TestCIVAck(t *testing.T) {
+	def := civTestDef()
+	cases := []struct {
+		name            string
+		frame           []byte
+		wantAck, wantOK bool
+	}{
+		{"FB ok", []byte{0xFE, 0xFE, 0xE0, 0x94, 0xFB}, true, true},
+		{"FA ng", []byte{0xFE, 0xFE, 0xE0, 0x94, 0xFA}, true, false},
+		{"freq broadcast", []byte{0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00}, false, false},
+		{"mode reply", []byte{0xFE, 0xFE, 0xE0, 0x94, 0x04, 0x01, 0x01}, false, false},
+		{"our echo (from controller E0)", []byte{0xFE, 0xFE, 0x94, 0xE0, 0x05, 0x00, 0x40, 0x07, 0x14, 0x00}, false, false},
+		{"too short", []byte{0xFE, 0xFE, 0xE0, 0x94}, false, false},
+		{"not a CI-V preamble", []byte{0x01, 0x02, 0xE0, 0x94, 0xFB}, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			isAck, ok := CIVAck(def, c.frame)
+			if isAck != c.wantAck || (isAck && ok != c.wantOK) {
+				t.Errorf("CIVAck = (isAck %v, accepted %v), want (%v, %v)", isAck, ok, c.wantAck, c.wantOK)
+			}
+		})
+	}
+}
+
+// TestCIVAck_NonCIVRig: a Kenwood rig never classifies a CI-V frame as an ACK —
+// the wait-for-ACK path is icom_civ-only and CIVAck guards on the protocol.
+func TestCIVAck_NonCIVRig(t *testing.T) {
+	def := civTestDef()
+	def.Protocol = ProtocolKenwood
+	if isAck, _ := CIVAck(def, []byte{0xFE, 0xFE, 0xE0, 0x94, 0xFB}); isAck {
+		t.Error("CIVAck classified an ACK for a non-CI-V rig")
+	}
+}
+
+// TestCommandSetsState reads the op→state-marker mapping the wait-for-ACK path
+// uses to synthesize a push from a commanded value.
+func TestCommandSetsState(t *testing.T) {
+	def, ok := Lookup("icom-ic7300")
+	if !ok {
+		t.Fatal("embedded icom-ic7300 rigdef not found")
+	}
+	cases := []struct{ op, want string }{
+		{"set_freq", "VFOAFREQ"},
+		{"set_mode", "MAINMODE"},
+		{"INIT", ""},     // no sets_state
+		{"nonesuch", ""}, // unknown command
+	}
+	for _, c := range cases {
+		if got := CommandSetsState(def, c.op); got != c.want {
+			t.Errorf("CommandSetsState(%q) = %q, want %q", c.op, got, c.want)
+		}
+	}
+}
+
+// TestValidate_SetsStateUnknownTag: a command whose sets_state names a tag no
+// State marker carries fails validation — otherwise the command path would
+// synthesize a push nothing maps and the change would silently never display.
+func TestValidate_SetsStateUnknownTag(t *testing.T) {
+	def := civTestDef()
+	for i := range def.Commands {
+		if def.Commands[i].Name == "set_freq" {
+			def.Commands[i].SetsState = "NOSUCHTAG"
+		}
+	}
+	if err := ValidateRigDefinition(def); err == nil {
+		t.Error("ValidateRigDefinition(bad sets_state) = nil, want error")
+	}
+
+	// A sets_state that DOES name a real marker validates fine.
+	for i := range def.Commands {
+		if def.Commands[i].Name == "set_freq" {
+			def.Commands[i].SetsState = "VFOAFREQ"
+		}
+	}
+	if err := ValidateRigDefinition(def); err != nil {
+		t.Errorf("ValidateRigDefinition(valid sets_state) = %v, want nil", err)
 	}
 }

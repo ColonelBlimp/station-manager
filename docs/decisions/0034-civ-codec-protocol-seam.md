@@ -295,9 +295,10 @@ not cover: **the IC-7300 confirms a controller command with a bare `FB`/`FA`
 ACK and sends NO Transceive broadcast for it.** So the confirm-by-push model
 (ADR 0019/0026 — write, return, let the rig's push update the SPA) has nothing
 to confirm on `icom_civ`, and the SPA only catches up on the ~10 s liveness
-probe. This section records the re-validation and the proposed fix. **The fix
-is PROPOSED, pending operator decision (see the fork at the end) — not yet
-built.**
+probe. This section records the re-validation and the fix. **DECIDED + IMPLEMENTED
+2026-06-15** — the operator chose the synchronous variant and the `sets_state`
+rigdef-field mapping (the two recommendations); both are built and tested
+(`internal/{cat,bridge,api}`). On-rig validation is the remaining step.
 
 ### Re-validated on the bench (probe `cmd/civ-probe`, now with a `-trace` mode)
 
@@ -330,7 +331,7 @@ This **supersedes the "read-after-write" framing** of session 172: adopt-on-ACK
 collision, and resolves USB-vs-USB-D precisely on the command path (we *know* we
 sent USB-D; a read-back could not tell — see the accepted-limitation note).
 
-### Proposed design (PROPOSED — pending decision)
+### Design (IMPLEMENTED 2026-06-15)
 
 Reuse the existing state-publish path: readLoop today does `cat.Decode` →
 `status` map (`{"VFOAFREQ":"14074000"}`) → `mapStatusToPayload` →
@@ -380,19 +381,40 @@ is a ~20 ms round-trip serialized behind `cmdMu` — *faster* than the FTdx10 pu
 lag the optimistic per-VFO target already handles, so likely fine; coalescing
 rapid repeats is a possible refinement.
 
+**Valueless ops (e.g. `swap_vfo`) read back instead of synthesizing.** An op
+with no `sets_state` changed state in a way the commanded value can't express —
+`swap_vfo` (CI-V `07 B0`, exchange A/B) leaves the operating VFO holding
+"whatever was in the other one." Since the rig still won't broadcast it, after
+the ACK the command path fires a **one-shot READ-back** (the cached READ frames
+through `writeSnapshotReads`); the replies ride the normal decode→push path.
+This is the same "no timer poll" discipline — fired by the ACK, not a clock —
+and it generalises: `sets_state` present → synthesize from the value;
+`sets_state` absent → read back. Best-effort (the command already succeeded on
+the FB, so a read-back write fault is logged, not returned). On a dual-receiver
+Icom (IC-7610/9700/…) a swap could instead synthesize both sides from a Sub
+read; the IC-7300 is single-RX, so the blind READ-back is the fit.
+
 **Out of scope for this path** (separate decision): the front-panel USB↔USB-D
 gap is a readLoop question (accept+document, or the single event-triggered
 `1A 06` read named under Triggers), not a command-path question. Adopt-on-ACK
 already makes the *commanded* direction precise.
 
-### THE OPEN FORK (operator to decide on return)
+### The fork — DECIDED (2026-06-15): synchronous + `sets_state`
 
-**Synchronous (recommended)** — `SendCommands` waits ~20 ms and returns `FA` as a
-direct HTTP error; matches the "wait for the Ack and hold that state" framing and
-the existing command-error semantics. *vs* **Async pending-queue** —
-`SendCommands` returns immediately, the readLoop synthesizes on `FB` and emits
-`FA` as an SSE error event; non-blocking but looser error correlation. Also to
-confirm: the `sets_state` rigdef-field approach for `stateFor`.
+The operator chose **synchronous**: `SendCommands` waits for each frame's FB/FA
+(~20 ms) and returns a direct HTTP error on FA, matching the "wait for the Ack
+and hold that state" framing and the existing command-error semantics — over the
+async pending-queue (non-blocking but looser error correlation). And the
+data-driven **`sets_state` rigdef field** for op→state (over a hardcoded Go
+switch), keeping "no code to add a rig after the first of a family." As built:
+`cat.CIVAck` + `cat.CommandSetsState` + the `Command.sets_state` field +
+validation that it names a real marker tag (`cat/validate.go`); the `cmdMu` /
+`pendingAck` waiter + `sendCommandsCIV` + `publishCommandedState` (`bridge`); the
+`bridge.timeouts.civ_ack_ms` knob; and 422 `rig_command_rejected` / 504
+`rig_command_no_ack` HTTP mappings (`api`). The Kenwood path is untouched
+(fire-and-forget, confirm-by-push). **`swap_vfo` (CI-V `07 B0`) was added to the
+IC-7300 rigdef** as the first valueless exposed op, exercising the read-back
+branch (no `sets_state` → one-shot READ-back after the ACK).
 
 ## Alternatives considered
 

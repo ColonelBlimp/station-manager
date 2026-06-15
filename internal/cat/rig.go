@@ -180,6 +180,15 @@ type Command struct {
 	// command (CI-V READ). Each is wrapped in `FE FE…FD` and concatenated;
 	// the rig answers each query in turn. Empty for every other encoding.
 	Frames []string `json:"frames,omitempty"`
+
+	// SetsState names the State marker tag this command sets (e.g. set_freq →
+	// "VFOAFREQ", set_mode → "MAINMODE"). Used by the CI-V wait-for-ACK command
+	// path (ADR 0034): the IC-7300 confirms a command with a bare FB/FA ACK and
+	// never broadcasts the change, so on a successful FB the bridge synthesizes
+	// the state push from the commanded value keyed by this tag. Data-driven, so
+	// a later Icom adds settable ops without code. Empty for commands that don't
+	// map to a display state (and for the Kenwood path, which confirms by push).
+	SetsState string `json:"sets_state,omitempty"`
 }
 
 // ModeSequence maps one rig mode literal to the ordered CI-V frame bodies that

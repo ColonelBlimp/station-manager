@@ -122,6 +122,12 @@ type BridgeInfo struct {
 	Ops          []string                     `json:"ops,omitempty"`
 	Tune         bool                         `json:"tune,omitempty"`
 	ModeMappings map[string]types.ModeMapping `json:"mode_mappings,omitempty"`
+
+	// Ft8Mode is the rig CAT mode literal for FT8 (e.g. "USB-D" on the IC-7300,
+	// "DATA-U" on the FTdx10) — rigdef default, overridable per-rig. The SPA's
+	// FT8 Main-Freq band buttons drive set_mode with it so picking an FT8 band
+	// also puts the rig in data mode. Empty when no driver is configured.
+	Ft8Mode string `json:"ft8_mode,omitempty"`
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -318,6 +324,13 @@ func bridgeInfoFor(cfg config.Config) BridgeInfo {
 	info.RigModes = cat.RigModes(def)
 	info.Ops = cat.ExposedCommands(def)
 	info.Tune = bridge.TuneSupported(def)
+	info.Ft8Mode = def.Ft8Mode
+
+	rc := cfg.RigByID(cfg.DefaultRigID)
+	// FT8 mode: rigdef default, overridden by the active rig's per-rig value.
+	if rc != nil && rc.Ft8Mode != nil {
+		info.Ft8Mode = *rc.Ft8Mode
+	}
 
 	// Merge mode mappings: rigdef defaults first, then operator
 	// overrides on top. Operator's entry wins per-rig-string on
@@ -329,7 +342,7 @@ func bridgeInfoFor(cfg config.Config) BridgeInfo {
 	}
 	// Operator overrides now live on the active rig (config.md §10), not a global
 	// driver-keyed block. Layer the active rig's per-rig overrides on top.
-	if rc := cfg.RigByID(cfg.DefaultRigID); rc != nil {
+	if rc != nil {
 		for k, v := range rc.ModeMappings {
 			merged[k] = v
 		}

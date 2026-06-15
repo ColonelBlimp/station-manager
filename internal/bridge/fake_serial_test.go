@@ -23,6 +23,14 @@ type fakeSerial struct {
 	writes [][]byte
 	errCh  chan error
 	closed bool
+
+	// onWrite, when set, is called for each WriteCommandBytes with a copy of the
+	// written bytes; a non-nil return is enqueued as a rig reply (delimiter
+	// already stripped, like feedLine). Models a rig that acknowledges every
+	// command — used by the CI-V wait-for-ACK command tests to feed the FB/FA
+	// per write without hand-sequencing each reply. Nil (default) = no
+	// auto-reply, so existing tests are unaffected.
+	onWrite func(written []byte) []byte
 }
 
 func newFakeSerial() *fakeSerial {
@@ -75,6 +83,16 @@ func (f *fakeSerial) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 		return serial.ErrClosed
 	}
 	f.writes = append(f.writes, append([]byte(nil), cmd...))
+	if f.onWrite != nil {
+		if reply := f.onWrite(append([]byte(nil), cmd...)); reply != nil {
+			// Non-blocking send under mu (buffered 64); mirrors feedLine. A full
+			// buffer is a test bug (replies should drain promptly).
+			select {
+			case f.lines <- reply:
+			default:
+			}
+		}
+	}
 	return nil
 }
 

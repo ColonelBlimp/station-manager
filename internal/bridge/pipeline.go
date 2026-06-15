@@ -64,6 +64,14 @@ var civReadGap = 50 * time.Millisecond
 // the ceiling stays well under the liveness window.
 const civReadGapMax = 2 * time.Second
 
+// civAckTimeout is the default wait for a CI-V command's FB/FA ACK after writing
+// each frame (ADR 0034 wait-for-ACK). The IC-7300 ACKs in ~20ms and never
+// broadcasts a commanded change, so the command path adopts state on FB / errors
+// on FA rather than waiting for a push. 500ms is generous headroom over the
+// measured round-trip. Only the icom_civ path uses it; operators override via
+// `bridge.timeouts.civ_ack_ms`. Package var so tests can dial it down.
+var civAckTimeout = 500 * time.Millisecond
+
 // pipelineExitClass tells runSupervisor what to do after runPipeline
 // returns. Classified at the failure site rather than divined from
 // the exit code, so retry policy lives at the call site (where the
@@ -397,6 +405,16 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		}
 
 		announcedDisconnect = false
+
+		// CI-V command ACK (ADR 0034): the rig answers a set-command with a bare
+		// FB/FA and never broadcasts the change, so route the ACK to the waiting
+		// SendCommands instead of decoding it as state (it matches no State, so
+		// it would be dropped anyway). Non-ACK frames (broadcasts, polled
+		// replies) fall through to the normal decode below.
+		if isAck, accepted := cat.CIVAck(def, line); isAck {
+			s.deliverAck(accepted)
+			continue
+		}
 
 		status, decErr := cat.Decode(def, line)
 		if decErr != nil {

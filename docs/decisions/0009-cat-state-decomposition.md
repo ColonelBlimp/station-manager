@@ -33,6 +33,7 @@ This ADR is a **refinement of ADR 0006's implementation**, not a supersession. E
 - **Fields:** `enabled` (sourced from configState — see note), `rigIdentity`, `vfoA`, `vfoB`, `mode`, `subMode`, `selectedVfo`, `splitOverride`, `power`, … (grows as more CAT-reported fields land).
 - **Initial values:** unset / sentinel until first SSE event.
 - **Mutation discipline:** the SPA NEVER writes to `catState`. Programmer error if it does. This is structurally enforced by keeping write paths only inside `lib/states/bridge.svelte.ts` (the SSE consumer); the export shape can omit setters or use a frozen-on-read pattern if discipline drift becomes a concern.
+  - **One narrow exception (added 2026-06-15, ADR 0034):** `swapVfoLive` (`actions/rigControl.ts`) optimistically sets `catState.vfoB ← catState.vfoA` on a VFO swap. A dual-VFO rig (FTdx10) pushes both VFOs back after a swap, so confirm-by-push repaints both boxes; but a **single-RX rig (IC-7300)** confirms the swap with a bare CI-V ACK and never pushes VFO-B, and the daemon's read-after-swap only refreshes the operating VFO (→ `catState.vfoA`). After CI-V `07 B0` the rig's VFO-B genuinely holds the old VFO-A, so the SPA reflects that immediately rather than leaving the box stale forever. It mirrors a swap the rig **confirmed** (not invented state), and on a dual-VFO rig the rig's own VFO-B push overwrites it at once — so it's harmless there. This is the sole sanctioned SPA write to `catState`; any other is still programmer error.
 
 ### 2. `manualState` — operator's manual edits in CAT-off mode
 

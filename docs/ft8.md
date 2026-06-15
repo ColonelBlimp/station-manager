@@ -112,6 +112,15 @@ The header **Operating Mode** switch chooses Phone/CW vs FT8; the choice is
 persisted to `localStorage` (survives reload). FT8 mode renders `Ft8Panel`,
 which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 
+- **Main-Freq band buttons** — one button per configured FT8 band; clicking
+  tunes the operating VFO to that band's dial freq and, **when CAT is live, also
+  asserts the rig's FT8 mode** (`setFreq` + `setMode(configState.bridge.ft8Mode)`),
+  so picking a band guarantees data mode (e.g. `USB-D` on the IC-7300, `DATA-U`
+  on the FTdx10) rather than leaving the rig in whatever mode it was. `ft8Mode`
+  is the rigdef default (per-rig overridable) carried in `/v1/config`
+  `bridge.ft8_mode`. CAT-off the button only tunes `manualState` (mode assert is
+  live-only — `setMode` off would write the rig literal into `manualState`, which
+  expects operator-friendly modes). Each call is independently capability-gated.
 - **Band Activity** — live decode feed under a **sticky column header**
   (`dB · Hz · Beam · Message`) that stays pinned while the rows scroll; one row
   per decode, newest slot on top, frequency-ascending within a slot. Each CQ row

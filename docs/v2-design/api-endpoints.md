@@ -156,7 +156,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `GET /v1/config`
 - **Purpose:** Operator-relevant config + joined display details (config / My Station SPA).
 - **Gating:** Always-on.
-- **Response:** **200**, body = `ConfigResponse`: `setup_complete` (bool), `logging_station` (`types.LoggingStation`), `default_logbook` (`types.Logbook`, DB-joined), `default_rig` (`types.RigConfig`, active rig), `station` (`types.StationConfig`), `bridge` (`BridgeInfo`: `enabled`, `driver?`, `rig_name?`, `rig_modes?`, `ops?`, `tune?`, `mode_mappings?` — merged rigdef-defaults + overrides for the active driver), `mailer` (`MailerInfo`: `enabled`, `default_recipient?`), `ft8_display` (resolved `types.Ft8DisplayConfig`), `ft8_frequencies` (resolved `map[string]int`).
+- **Response:** **200**, body = `ConfigResponse`: `setup_complete` (bool), `logging_station` (`types.LoggingStation`), `default_logbook` (`types.Logbook`, DB-joined), `default_rig` (`types.RigConfig`, active rig), `station` (`types.StationConfig`), `bridge` (`BridgeInfo`: `enabled`, `driver?`, `rig_name?`, `rig_modes?`, `ops?`, `tune?`, `mode_mappings?` — merged rigdef-defaults + overrides for the active driver — and `ft8_mode?`, the rig CAT mode literal for FT8 (rigdef default + per-rig override) the FT8 band buttons assert), `mailer` (`MailerInfo`: `enabled`, `default_recipient?`), `ft8_display` (resolved `types.Ft8DisplayConfig`), `ft8_frequencies` (resolved `map[string]int`).
 - **Errors:** 500 `db_error`.
 - **Notes:** Mailer/Bridge are read-only projections — SMTP creds and the serial port are never on the wire.
 
@@ -214,9 +214,9 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Purpose:** Inbound rig control — freq/mode/VFO/band (ADR 0026).
 - **Gating:** **Only when the bridge is enabled.**
 - **Request:** Body either single `{"op": string, "value": <scalar>}` **or** atomic batch `{"commands": [{op, value}, …]}` (not both). `value` is a JSON scalar.
-- **Response:** **202 Accepted** — "written," not "rig is now at X"; the resulting state is confirmed out-of-band via the `rig-state` SSE push.
-- **Errors:** 400 `invalid_json`/`invalid_field_value`/`missing_required_param`/`rig_unsupported_command`/`rig_invalid_value`; 503 `rig_not_connected`; 409 `rig_identity_unverified`; 500 `rig_command_failed`.
-- **Notes:** A batch becomes one atomic CAT line. `tx_on`/`tx_off` are never exposed — TX can't be keyed here.
+- **Response:** **202 Accepted**. For the `kenwood` family this is "written," not "rig is now at X" — the resulting state is confirmed out-of-band via the `rig-state` SSE push (confirm-by-push). For `icom_civ` (ADR 0034 wait-for-ACK) the daemon waits for the rig's per-command FB/FA ACK before responding: a 202 means the rig **accepted** the command (and the daemon has synthesized the matching `rig-state` push, since CI-V never broadcasts a commanded change); a rejected/timed-out command returns an error below.
+- **Errors:** 400 `invalid_json`/`invalid_field_value`/`missing_required_param`/`rig_unsupported_command`/`rig_invalid_value`; 503 `rig_not_connected`; 409 `rig_identity_unverified`; 422 `rig_command_rejected` (CI-V only — rig answered FA/NG, e.g. value out of range); 504 `rig_command_no_ack` (CI-V only — no FB/FA within `bridge.timeouts.civ_ack_ms`); 500 `rig_command_failed`.
+- **Notes:** A `kenwood` batch becomes one atomic CAT line; an `icom_civ` batch is sent frame-by-frame, each awaiting its ACK (the bus is half-duplex), so a mid-batch FA leaves earlier ops applied. `tx_on`/`tx_off` are never exposed — TX can't be keyed here.
 
 ### `POST /v1/rig/tune`
 - **Purpose:** Drive the daemon-owned tune-carrier TX state machine (ADR 0027) — a reduced-power RTTY carrier for amp tuning.

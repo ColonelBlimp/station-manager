@@ -112,6 +112,16 @@ func (s *Server) writeRigCommandError(w http.ResponseWriter, op errors.Op, err e
 	case stderr.Is(err, bridge.ErrRigIdentityUnverified):
 		s.writeError(w, http.StatusConflict, "rig_identity_unverified",
 			"connected rig's identity is unverified; check the configured driver matches the rig", op)
+	case stderr.Is(err, bridge.ErrCommandRejected):
+		// The command reached the rig and it declined (e.g. out-of-band freq).
+		// 422: well-formed request, but the target refused the operation.
+		s.writeError(w, http.StatusUnprocessableEntity, "rig_command_rejected",
+			"the rig refused the command (e.g. value out of range)", op)
+	case stderr.Is(err, bridge.ErrCommandNoAck):
+		// No ACK within the wait window — the rig may be wedged or mid-reconnect.
+		// 504: an upstream (the rig) didn't respond in time.
+		s.writeError(w, http.StatusGatewayTimeout, "rig_command_no_ack",
+			"the rig did not acknowledge the command in time", op)
 	default:
 		s.writeServerError(w, op, err, "rig_command_failed", "failed to send rig command")
 	}

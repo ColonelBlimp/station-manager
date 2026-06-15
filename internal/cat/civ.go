@@ -32,7 +32,48 @@ const (
 	// civPowerBCDLen is the big-endian BCD level width for set_power: 2 bytes =
 	// a 0–255 rig level (0000–0255), the IC-7300 power-level field.
 	civPowerBCDLen = 2
+	// civAckOK / civAckNG are the command-acknowledgement command bytes the rig
+	// returns for a controller set-command: FB = OK (applied), FA = NG (refused,
+	// e.g. an out-of-band frequency). Bench-validated 2026-06-15 (ADR 0034).
+	civAckOK = 0xFB
+	civAckNG = 0xFA
 )
+
+// CIVAck classifies a single decoded CI-V frame as a command acknowledgement.
+// The IC-7300 (Icom CI-V generally) answers a controller set-command with a bare
+// ACK frame — FE FE E0 94 FB FD (OK) or …FA FD (NG) — and sends NO Transceive
+// broadcast for a commanded change (bench 2026-06-15). So the bridge's confirm
+// path must read the ACK directly rather than wait for a push that never comes
+// (ADR 0034 wait-for-ACK). line is one FD-delimited frame with the trailing FD
+// already stripped by the serial reader.
+//
+// Returns isAck=false for every non-ACK frame (state broadcasts, polled replies,
+// our own echoes) and for non-CI-V rigs, so the read loop decodes those as
+// normal. accepted is true for FB, false for FA — meaningful only when isAck.
+func CIVAck(def RigDefinition, line []byte) (isAck, accepted bool) {
+	if def.Protocol != ProtocolIcomCIV {
+		return false, false
+	}
+	rigAddr, err := civAddressByte(def)
+	if err != nil {
+		return false, false
+	}
+	// FE FE <to> <from> <cmd>; trailing FD already stripped by the reader.
+	if len(line) < 5 || line[0] != civPreamble || line[1] != civPreamble {
+		return false, false
+	}
+	if line[3] != rigAddr {
+		return false, false // our echo, or another bus member — not the rig
+	}
+	switch line[4] {
+	case civAckOK:
+		return true, true
+	case civAckNG:
+		return true, false
+	default:
+		return false, false
+	}
+}
 
 // encodeCIV is the icom_civ branch of Encode — the low-level filler for
 // valueless CI-V commands (INIT, READ, tx_on, tx_off) whose full byte sequence

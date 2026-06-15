@@ -233,6 +233,15 @@ class BridgeView {
      * sub-tab as the edit-form's initial values.
      */
     modeMappings: Record<string, AdifModePair> = $state({});
+
+    /**
+     * Rig CAT mode literal for FT8 (e.g. "USB-D" on the IC-7300, "DATA-U" on
+     * the FTdx10) — rigdef-derived (with per-rig override), stable for the
+     * daemon's lifetime. The FT8 Main-Freq band buttons drive `set_mode` with
+     * it so picking a band also asserts data mode. Empty when no driver is
+     * configured (the band buttons then only tune).
+     */
+    ft8Mode: string = $state('');
 }
 
 /**
@@ -365,6 +374,7 @@ class ConfigState {
         this.bridge.ops = resp.bridge?.ops ?? [];
         this.bridge.tune = resp.bridge?.tune ?? false;
         this.bridge.modeMappings = resp.bridge?.mode_mappings ?? {};
+        this.bridge.ft8Mode = resp.bridge?.ft8_mode ?? '';
 
         // FT8 display prefs — daemon-resolved (always present), with the same
         // defaults as a forward-compat fallback for an older daemon.

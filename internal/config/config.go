@@ -1165,6 +1165,12 @@ func validateBridge(b types.BridgeConfig) error {
 	if err := checkTimeout("bridge.timeouts.civ_read_gap_ms", b.Timeouts.CivReadGapMs); err != nil {
 		return err
 	}
+	// CI-V command ACK wait (icom_civ only). The command path waits this long for
+	// the rig's FB/FA after each frame before giving up (ADR 0034 wait-for-ACK).
+	// Same sane-range guard as the other timeout overrides.
+	if err := checkTimeout("bridge.timeouts.civ_ack_ms", b.Timeouts.CivAckMs); err != nil {
+		return err
+	}
 	if b.Timeouts.BackoffInitialMs > 0 && b.Timeouts.BackoffMaxMs > 0 && b.Timeouts.BackoffInitialMs > b.Timeouts.BackoffMaxMs {
 		return fmt.Errorf("bridge.timeouts.backoff_initial_ms (%d) must not exceed backoff_max_ms (%d)", b.Timeouts.BackoffInitialMs, b.Timeouts.BackoffMaxMs)
 	}

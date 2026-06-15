@@ -17,7 +17,20 @@
     import { frequencyToBand } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
     import { pathInfo } from '../../utils/bearing';
-    import { setFreq } from '../../actions/rigControl';
+    import { setFreq, setMode } from '../../actions/rigControl';
+
+    // Tune the rig to an FT8 band's dial freq AND assert the rig's FT8 mode, so
+    // picking a band also puts the rig in data mode (e.g. USB-D on the IC-7300).
+    // Mode is asserted only when CAT is live: setMode then drives the rig with
+    // the rig literal (configState.bridge.ft8Mode); CAT-off it would write that
+    // literal into manualState, which expects operator-friendly modes — so off,
+    // we just tune (unchanged). Both calls are individually capability-gated.
+    function tuneToFt8Band(freq: number): void {
+        setFreq(freq);
+        if (displayedState.isLive && configState.bridge.ft8Mode) {
+            setMode(configState.bridge.ft8Mode);
+        }
+    }
 
     // The occupancy stream is scoped to this view: open while FT8 mode is showing,
     // close on leave (LoggingCard mounts/unmounts this panel with the Operating
@@ -342,9 +355,10 @@
 {/snippet}
 
 <!-- Main-Freq band button: on click tunes the operating VFO to this band's configured
-     FT8 dial freq (setFreq → set_freq when CAT-live, manualState when off), and
-     highlights (btn-primary) when the live dial is already on that freq. Disabled if
-     the band has no configured frequency. -->
+     FT8 dial freq AND asserts the rig's FT8 mode when CAT-live (setFreq → set_freq +
+     setMode → ft8Mode; CAT off → manualState freq only), and highlights (btn-primary)
+     when the live dial is already on that freq. Disabled if the band has no
+     configured frequency. -->
 {#snippet bandButton(b: string)}
     {@const freq = configState.ft8Frequencies[b]}
     {@const active = freq !== undefined && Math.abs(opFreq - freq) <= BAND_MATCH_TOL_HZ}
@@ -353,7 +367,7 @@
         class="btn w-14 {active ? 'btn-primary' : 'btn-secondary'}"
         disabled={freq === undefined}
         title={freq !== undefined ? `Tune ${b} — ${(freq / 1_000_000).toFixed(3)} MHz` : b}
-        onclick={() => freq !== undefined && setFreq(freq)}>{b}</button
+        onclick={() => freq !== undefined && tuneToFt8Band(freq)}>{b}</button
     >
 {/snippet}
 

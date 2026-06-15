@@ -144,6 +144,18 @@ func lookupCommand(def RigDefinition, name string) (Command, bool) {
 	return Command{}, false
 }
 
+// CommandSetsState returns the State marker tag a command sets (its SetsState
+// field), or "" if the command is unknown or doesn't declare one. The CI-V
+// wait-for-ACK path (ADR 0034) uses it to key the synthesized state push from a
+// commanded value once the rig ACKs with FB.
+func CommandSetsState(def RigDefinition, name string) string {
+	c, ok := lookupCommand(def, name)
+	if !ok {
+		return ""
+	}
+	return c.SetsState
+}
+
 // valueCode inverts the value_mappings of the marker carrying tag, mapping a
 // rig literal back to the wire code its command field expects — the
 // send-side counterpart to Decode's code -> literal lookup, and the generic

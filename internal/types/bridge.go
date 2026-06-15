@@ -132,6 +132,14 @@ type BridgeCatConfig struct {
 // frames lets each reply complete. Default 50ms; only the icom_civ path uses it
 // (the Kenwood ASCII rigs queue a ;-delimited burst fine, so it's ignored
 // there). Clamped to a sane ceiling so a typo can't stall every snapshot.
+//
+// CivAckMs is how long the CI-V command path waits for the rig's FB/FA ACK
+// after writing each command frame (ADR 0034 wait-for-ACK). The IC-7300 confirms
+// a set-command with a bare FB (OK) / FA (NG) and never broadcasts the change,
+// so the bridge adopts the commanded state on FB and surfaces FA as an error;
+// this bounds that wait. Measured round-trip is ~20ms, so the 500ms default is
+// generous; only the icom_civ path uses it (the Kenwood path is fire-and-forget,
+// confirm-by-push).
 type BridgeTimeoutsConfig struct {
 	LivenessMs             int `json:"liveness_ms,omitempty"`
 	BackoffInitialMs       int `json:"backoff_initial_ms,omitempty"`
@@ -139,6 +147,7 @@ type BridgeTimeoutsConfig struct {
 	SteadyStateThresholdMs int `json:"steady_state_threshold_ms,omitempty"`
 	WriteWatchdogMs        int `json:"write_watchdog_ms,omitempty"`
 	CivReadGapMs           int `json:"civ_read_gap_ms,omitempty"`
+	CivAckMs               int `json:"civ_ack_ms,omitempty"`
 }
 
 // BridgeTuneConfig holds the tune-carrier knobs (ADR 0027). Both are optional

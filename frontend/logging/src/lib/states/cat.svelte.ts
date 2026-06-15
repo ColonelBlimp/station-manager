@@ -47,7 +47,13 @@ class CatState {
      */
     vfoA: number = $state(DEFAULT_VFO_HZ);
 
-    /** VFO B frequency in Hz. Bridge writes only. */
+    /**
+     * VFO B frequency in Hz. Bridge writes only, with ONE narrow exception:
+     * `swapVfoLive` (rigControl.ts) optimistically sets `vfoB ← vfoA` on a VFO
+     * swap, because a single-RX rig (IC-7300) confirms the swap by ACK and never
+     * pushes VFO-B — so the box would otherwise never reflect the swap. It
+     * mirrors a swap the rig confirmed; see that function for the full rationale.
+     */
     vfoB: number = $state(DEFAULT_VFO_HZ);
 
     /**

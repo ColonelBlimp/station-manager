@@ -3,9 +3,11 @@ package bridge
 import (
 	"context"
 	stderr "errors"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/serial"
 )
 
 // ErrRigNotConnected is returned by SendCommand when no rig serial client is
@@ -24,6 +26,18 @@ var ErrRigNotConnected = stderr.New("bridge: no active rig connection")
 // mutating writes are gated. Clears when a matching IDENTITY push arrives, or
 // stays for the pipeline's lifetime on a definite mismatch (which also halts).
 var ErrRigIdentityUnverified = stderr.New("bridge: rig identity not verified; refusing to send")
+
+// ErrCommandRejected is returned by the CI-V command path (ADR 0034
+// wait-for-ACK) when the rig answers a command with FA (NG) — it refused the
+// command, e.g. an out-of-band frequency. Distinct from an encoding error: the
+// command was well-formed and reached the rig, which declined it.
+var ErrCommandRejected = stderr.New("bridge: rig rejected command")
+
+// ErrCommandNoAck is returned by the CI-V command path when the rig sends no
+// FB/FA ACK within the wait window (bridge.timeouts.civ_ack_ms). The command may
+// or may not have applied; the bridge can't confirm, so it surfaces the
+// uncertainty rather than synthesizing a state it didn't see acknowledged.
+var ErrCommandNoAck = stderr.New("bridge: no command ACK from rig")
 
 // RigCommand is one (op, value) pair in a SendCommands batch. Op is the rigdef
 // command name; Value is its single argument as a string.
@@ -63,13 +77,15 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 		return errors.New(errOp).WithMsgf("no rig definition for driver %q", s.cfg.Cat.Driver)
 	}
 
-	var line []byte
-	for _, c := range cmds {
+	// Encode every op up front (all-or-nothing): a bad op rejects the whole
+	// batch before anything is written, for both protocols.
+	encoded := make([]encodedCommand, len(cmds))
+	for i, c := range cmds {
 		b, err := cat.EncodeCommand(def, c.Op, c.Value)
 		if err != nil {
 			return errors.New(errOp).WithErr(err).WithMsgf("encode op %q", c.Op)
 		}
-		line = append(line, b...)
+		encoded[i] = encodedCommand{op: c.Op, value: c.Value, bytes: b}
 	}
 
 	s.mu.Lock()
@@ -85,7 +101,157 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	if !idOK {
 		return errors.New(errOp).WithErr(ErrRigIdentityUnverified).WithMsgf("%d command(s)", len(cmds))
 	}
+
+	// CI-V (ADR 0034): the rig confirms each command with a bare FB/FA ACK and
+	// never broadcasts the change, so write each frame and wait for its ACK,
+	// then synthesize the state push from the commanded value. The Kenwood path
+	// stays fire-and-forget — confirmation arrives asynchronously as a rig push.
+	if def.Protocol == cat.ProtocolIcomCIV {
+		return s.sendCommandsCIV(ctx, def, cl, encoded)
+	}
+
+	var line []byte
+	for _, c := range encoded {
+		line = append(line, c.bytes...)
+	}
 	return cl.WriteCommandBytes(ctx, line)
+}
+
+// encodedCommand pairs a semantic op (+ its commanded value, for state
+// synthesis) with its pre-encoded wire bytes. For CI-V an op's bytes may be
+// several concatenated FE FE…FD frames (a data-mode set is two).
+type encodedCommand struct {
+	op    string
+	value string
+	bytes []byte
+}
+
+// sendCommandsCIV is the icom_civ branch of SendCommands: wait-for-ACK (ADR
+// 0034). It holds cmdMu for the whole batch (one outstanding command at a time —
+// the half-duplex bus can't service overlapping commands, and it keeps a
+// "tune to band" freq+mode pair from interleaving with another caller), writes
+// each frame, and waits for the rig's FB/FA. On a fully-ACKed op it reflects the
+// new state onto the SSE stream (the rig never broadcasts a commanded change):
+// an op with a sets_state synthesizes the push from its commanded value; an op
+// without one (e.g. swap_vfo — the new operating freq+mode is "whatever was in
+// the other VFO", which we can't synthesize) triggers a one-shot READ-back so
+// the SPA updates promptly. FA returns ErrCommandRejected; a missing ACK returns
+// ErrCommandNoAck. A mid-batch failure leaves earlier ops applied (CI-V can't be
+// atomic across frames) — the state already pushed for them reflects reality;
+// the error names the op that failed.
+func (s *Service) sendCommandsCIV(ctx context.Context, def cat.RigDefinition, cl serial.Client, cmds []encodedCommand) error {
+	const errOp errors.Op = "bridge.Service.SendCommands"
+
+	s.cmdMu.Lock()
+	defer s.cmdMu.Unlock()
+
+	for _, c := range cmds {
+		for _, frame := range splitCIVFrames(c.bytes) {
+			ackCh := make(chan bool, 1)
+			s.mu.Lock()
+			s.pendingAck = ackCh
+			s.mu.Unlock()
+
+			if err := cl.WriteCommandBytes(ctx, frame); err != nil {
+				s.clearPendingAck(ackCh)
+				return errors.New(errOp).WithErr(err).WithMsgf("write op %q", c.op)
+			}
+
+			select {
+			case accepted := <-ackCh:
+				s.clearPendingAck(ackCh)
+				if !accepted {
+					return errors.New(errOp).WithErr(ErrCommandRejected).
+						WithMsgf("rig refused op %q (value %q)", c.op, c.value)
+				}
+			case <-time.After(s.civAckTimeout):
+				s.clearPendingAck(ackCh)
+				return errors.New(errOp).WithErr(ErrCommandNoAck).
+					WithMsgf("op %q: no ACK within %s", c.op, s.civAckTimeout)
+			case <-ctx.Done():
+				s.clearPendingAck(ackCh)
+				return ctx.Err()
+			}
+		}
+		// Every frame of this op ACKed (FB). The rig applied it but won't push it,
+		// so reflect the new state ourselves (ADR 0034): synthesize from the
+		// commanded value when the op names a state it sets, otherwise read it
+		// back (a valueless op like swap_vfo changed state we can't synthesize).
+		if cat.CommandSetsState(def, c.op) != "" {
+			s.publishCommandedState(def, c.op, c.value)
+		} else {
+			s.readBackAfterCommand(ctx, cl)
+		}
+	}
+	return nil
+}
+
+// readBackAfterCommand re-snapshots rig state after a valueless command (no
+// sets_state, e.g. swap_vfo) that changed state in a way the bridge can't
+// synthesize from the commanded value. It reuses the cached READ frames and the
+// half-duplex-safe snapshot writer; the replies ride the normal decode→push
+// path, so the SPA updates in ~100 ms instead of waiting for the liveness probe.
+// Event-driven (fired by the ACK), not a timer poll. Best-effort: the command
+// already succeeded (FB received), so a read-back write fault is logged, not
+// returned as a command failure.
+func (s *Service) readBackAfterCommand(ctx context.Context, cl serial.Client) {
+	s.mu.Lock()
+	bb := s.bootstrapBytes
+	s.mu.Unlock()
+	if len(bb) == 0 {
+		return
+	}
+	if err := s.writeSnapshotReads(ctx, cl, true, bb); err != nil && s.logger != nil {
+		s.logger.WarnWith().Str("error", errMessage(err)).Msg("bridge: CI-V read-back after command failed")
+	}
+}
+
+// deliverAck routes a CI-V ACK from the readLoop to the SendCommands waiter.
+// The channel is buffered (1) and we send non-blocking, so a stray ACK with no
+// waiter (or a duplicate) is dropped rather than stalling the read loop.
+func (s *Service) deliverAck(accepted bool) {
+	s.mu.Lock()
+	ch := s.pendingAck
+	s.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- accepted:
+	default:
+	}
+}
+
+// clearPendingAck detaches the waiter channel once SendCommands is done with it,
+// but only if it's still the installed one — cmdMu already serialises batches,
+// so this is just defensive against clobbering a successor.
+func (s *Service) clearPendingAck(ch chan bool) {
+	s.mu.Lock()
+	if s.pendingAck == ch {
+		s.pendingAck = nil
+	}
+	s.mu.Unlock()
+}
+
+// publishCommandedState synthesizes a rig-state push from a commanded (op,
+// value) after the rig ACKs it — the CI-V confirm-by-ACK analogue of the
+// Kenwood confirm-by-push (ADR 0034). The op's SetsState names the marker the
+// value sets; the value is already in decoded state form (Hz digits for freq,
+// the rig mode literal for mode), so it feeds the same mapStatusToPayload →
+// hub.publish path the readLoop uses for a decoded frame. captureTuneSnapshot
+// keeps the tune-restore snapshot current (a commanded mode change is a real
+// state change). A no-op when the op declares no SetsState.
+func (s *Service) publishCommandedState(def cat.RigDefinition, op, value string) {
+	tag := cat.CommandSetsState(def, op)
+	if tag == "" {
+		return
+	}
+	payload, ok := mapStatusToPayload(cat.Status{tag: value})
+	if !ok {
+		return
+	}
+	s.captureTuneSnapshot(payload)
+	s.hub.publish(Event{Name: EventRigState, Payload: payload})
 }
 
 // SendCommand is the single-op convenience over SendCommands.

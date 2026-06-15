@@ -134,6 +134,18 @@ type Service struct {
 	supervisorSteadyStateThreshold time.Duration
 	writeWatchdog                  time.Duration
 	civReadGap                     time.Duration
+	civAckTimeout                  time.Duration
+
+	// CI-V wait-for-ACK command-path state (ADR 0034). The IC-7300 confirms a
+	// set-command with a bare FB/FA ACK and never broadcasts the change, so
+	// SendCommands (icom_civ) writes each frame and waits for its ACK here.
+	// cmdMu serialises command batches — one outstanding command at a time,
+	// matching the half-duplex bus. pendingAck is the per-frame waiter channel
+	// (buffered 1): SendCommands installs it under mu before each write and the
+	// readLoop delivers the FB(true)/FA(false) to it via deliverAck. Nil when no
+	// command is in flight.
+	cmdMu      sync.Mutex
+	pendingAck chan bool
 
 	// Tune-carrier state (ADR 0027), all mu-guarded. tuneActive is the
 	// single-flight gate; tuneRestoreMode/Power are the pre-tune snapshot
@@ -218,6 +230,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		supervisorSteadyStateThreshold: resolveTimeout(cfg.Timeouts.SteadyStateThresholdMs, supervisorSteadyStateThreshold),
 		writeWatchdog:                  resolveTimeout(cfg.Timeouts.WriteWatchdogMs, writeWatchdog),
 		civReadGap:                     clampDuration(resolveTimeout(cfg.Timeouts.CivReadGapMs, civReadGap), civReadGapMax),
+		civAckTimeout:                  resolveTimeout(cfg.Timeouts.CivAckMs, civAckTimeout),
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
 		tuneRestoreSettle:              tuneSettle,

@@ -14,6 +14,7 @@
 
 import { displayedState } from '../states/displayed.svelte';
 import { manualState } from '../states/manual.svelte';
+import { catState } from '../states/cat.svelte';
 import { configState } from '../states/config.svelte';
 import { bridgeState } from '../states/bridge.svelte';
 import { toasts } from '../states/toasts.svelte';
@@ -50,11 +51,21 @@ export function swapVfo(): void {
     swapVfoLive();
 }
 
-// swapVfoLive drives the rig's VFO swap (`swap_vfo` → `SV;`), capability-gated.
-// The rig pushes the swapped FA/FB (and VS, if it reports one) back over SSE —
-// confirm-by-push owns the UI, no optimistic flip.
+// swapVfoLive drives the rig's VFO swap (`swap_vfo`), capability-gated.
+//
+// Optimistic VFO-B mirror — the one deliberate SPA write to catState, a narrow
+// exception to ADR 0009's "bridge writes only" (documented there). A dual-VFO
+// rig (FTdx10, `SV;`) pushes both VFOs back, so confirm-by-push repaints both
+// boxes. But a single-RX rig (IC-7300, CI-V `07 B0`) confirms the swap with a
+// bare ACK and never pushes VFO-B, and the daemon's read-after-swap only
+// refreshes the operating VFO (→ catState.vfoA). After `07 B0` the rig's VFO-B
+// genuinely holds the old VFO-A, so reflect that immediately; the read-back
+// fills the new vfoA ~100 ms later. This mirrors a swap the rig confirmed, not
+// invented state — and on a rig that DOES push both, the rig's own VFO-B push
+// overwrites this at once, so it's harmless there.
 function swapVfoLive(): void {
     if (!configState.bridge.ops.includes('swap_vfo')) return;
+    catState.vfoB = catState.vfoA;
     void driveRig('swap_vfo');
 }
 
