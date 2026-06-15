@@ -1159,6 +1159,12 @@ func validateBridge(b types.BridgeConfig) error {
 	if err := checkTimeout("bridge.timeouts.write_watchdog_ms", b.Timeouts.WriteWatchdogMs); err != nil {
 		return err
 	}
+	// CI-V snapshot inter-frame gap (icom_civ only). Same sane-range guard; the
+	// bridge additionally clamps it to a 2 s ceiling at construction so a large
+	// value can't stall every state snapshot (ADR 0034 snapshot-timing fix).
+	if err := checkTimeout("bridge.timeouts.civ_read_gap_ms", b.Timeouts.CivReadGapMs); err != nil {
+		return err
+	}
 	if b.Timeouts.BackoffInitialMs > 0 && b.Timeouts.BackoffMaxMs > 0 && b.Timeouts.BackoffInitialMs > b.Timeouts.BackoffMaxMs {
 		return fmt.Errorf("bridge.timeouts.backoff_initial_ms (%d) must not exceed backoff_max_ms (%d)", b.Timeouts.BackoffInitialMs, b.Timeouts.BackoffMaxMs)
 	}

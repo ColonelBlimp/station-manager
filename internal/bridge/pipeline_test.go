@@ -150,6 +150,52 @@ func TestReadLoop_ConfirmsIdentityOnMatch(t *testing.T) {
 	}
 }
 
+// newCIVPipelineTestService is the icom_civ counterpart of
+// newPipelineTestService: an IC-7300 (CI-V) service over the fake serial, with
+// the snapshot read gap zeroed so tests don't incur the real inter-frame delay.
+func newCIVPipelineTestService(t *testing.T) (*Service, *fakeSerial) {
+	t.Helper()
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "icom-ic7300"},
+	}, &logging.Service{})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	s.civReadGap = 0 // no real delay in tests
+	fake := installFakeSerial(s)
+	return s, fake
+}
+
+// TestReadLoop_ConfirmsCIVIdentityOnFirstDecode: CI-V has no model-ID
+// handshake — the bus address is the identity, enforced by cat.Decode's echo
+// filter — so the first successful decode unlocks the write gate (ADR 0034,
+// Option B). Without this the inbound command path rejects every set with
+// rig_identity_unverified (bench 2026-06-15: a mode-change toast error).
+func TestReadLoop_ConfirmsCIVIdentityOnFirstDecode(t *testing.T) {
+	s, fake := newCIVPipelineTestService(t)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	if s.identityOK() {
+		t.Fatal("identity confirmed before any rig frame")
+	}
+	// A frequency Transceive broadcast from the configured CI-V address (0x94);
+	// the trailing 0xFD is stripped by the serial framing before decode.
+	fake.feedLine([]byte{0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00})
+
+	deadline := time.Now().Add(time.Second)
+	for !s.identityOK() {
+		if time.Now().After(deadline) {
+			t.Fatal("CI-V identity not confirmed within 1s of a decoded frame")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestReadLoop_BlocksOnUnrecognisedIdentity covers the H2 unrecognised path: a
 // rig that answers with an ID code the rigdef doesn't map publishes a
 // bridge-error and the write gate stays locked (identityOK false), but state

@@ -122,12 +122,23 @@ type BridgeCatConfig struct {
 // goroutine forever (and with it the tune guaranteed-stop). On overrun the port
 // is closed and the supervisor reopens it. Default 2000ms (2s) — a fault
 // backstop well above any legitimate CAT-write latency, NOT a per-write SLA.
+//
+// CivReadGapMs is the inter-frame delay the bridge inserts between the
+// individual read frames of a CI-V state snapshot (READ). CI-V is half-duplex:
+// a second read sent while the rig is turning around its reply to the first
+// makes the rig abandon the in-progress reply and answer only the last read, so
+// a back-to-back read-freq + read-mode burst loses the freq reply (bench
+// 2026-06-15: a fresh SPA tab showed stale freq, current mode). Spacing the
+// frames lets each reply complete. Default 50ms; only the icom_civ path uses it
+// (the Kenwood ASCII rigs queue a ;-delimited burst fine, so it's ignored
+// there). Clamped to a sane ceiling so a typo can't stall every snapshot.
 type BridgeTimeoutsConfig struct {
 	LivenessMs             int `json:"liveness_ms,omitempty"`
 	BackoffInitialMs       int `json:"backoff_initial_ms,omitempty"`
 	BackoffMaxMs           int `json:"backoff_max_ms,omitempty"`
 	SteadyStateThresholdMs int `json:"steady_state_threshold_ms,omitempty"`
 	WriteWatchdogMs        int `json:"write_watchdog_ms,omitempty"`
+	CivReadGapMs           int `json:"civ_read_gap_ms,omitempty"`
 }
 
 // BridgeTuneConfig holds the tune-carrier knobs (ADR 0027). Both are optional

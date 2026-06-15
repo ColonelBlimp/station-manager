@@ -54,6 +54,15 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 172 (2026-06-15) — **Icom CI-V engine + IC-7300 rigdef IMPLEMENTED and bench-validated end-to-end; two fixes found on the rig; command-latency diagnosed (PARKED mid-fix).**
+Built the whole `icom_civ` path per ADR 0034 and validated it against the borrowed IC-7300. **Shipped (committed in steps 1–3 earlier this session):** the CI-V engine (`internal/cat/civ.go` — `FE FE…FD` framing, 5-byte LE BCD freq, BE BCD level, echo/address filter `from==civ_address`, `none`/`frame_seq`/`bcd_freq`/`mode_seq`/`bcd_power` encodings; protocol dispatch in `codec.go`/`commands.go`; `validateCIV`); the `icom-ic7300.json` rigdef (addr `0x94`, `"0xFD"` delimiter, 19200/8N1, RX + `set_freq`/`set_mode`, **no exposed TX** — deferred); the serial transport de-asserting DTR+RTS at open via `serial.Mode.InitialStatusBits` (no assert window — the USB SEND keying hazard) + the `"0xFD"` hex delimiter parse. **Schema refinements vs the ADR illustration:** `mode_seq` is inline on the command (not a `value_map`); added `frame_seq` for valueless multi-frame READ; `"0xFD"` delimiter form. ADR 0034 carries an implementation note.
+  - **Validated on the rig:** clean open at 19200 with **no keying** on connect; RX freq + mode decode and display (startup + live dial-move); inbound `set_freq`/`set_mode` work.
+  - **Two fixes found during bench validation (UNCOMMITTED — commit-ready set):**
+    1. **Snapshot spacing.** A back-to-back `03`+`04` READ burst loses replies on the half-duplex bus (the rig answers only the *last* read) → freq or mode came up blank/stale. Fix: `writeSnapshotReads` splits CI-V snapshot reads on `0xFD` and writes each with a gap (`bridge.timeouts.civ_read_gap_ms`, default **50 ms**, clamped ≤ 2 s, validated at load). 50 ms is enough — both freq + mode now decode (confirmed via a temporary RX-frame hex log, since removed).
+    2. **Identity gate.** CI-V has no model-ID handshake, so `identityConfirmed` never flipped → inbound commands 409'd `rig_identity_unverified`. Fix (ADR 0034 Option B): for `icom_civ`, the bus address **is** the identity (the echo filter already enforces `from==civ_address`), so the first successful decode confirms identity. Mode-change from the SPA then works.
+  - **Command-latency diagnosed, fix designed, NOT built (the active thread at park).** Proven from an RX-frame trace: the IC-7300 replies to a CI-V `set_freq`/`set_mode` with a bare **`FB` (ACK)** and sends **no** transceive broadcast (front-panel changes DO broadcast — that's why dial-moves are instant). So confirm-by-push has nothing to confirm and the SPA only catches up on the ~10 s liveness probe. **Fix = read-after-write:** after a CI-V command, read state back so the UI updates in ~100 ms. Open choice on resume: sync (~100 ms POST) vs async/`safego` (was checking for a service-scoped ctx) + whether to debounce freq-step key-repeat.
+  - **Accepted/known limitations surfaced live:** (a) **USB vs USB-D not distinguishable on read** — the `04` mode read returns base mode only, the data flag (`1A 06`) is never broadcast. Operator made the *operational* case it matters (FT8 leaves USB-D → phone TX into a data slot). DECISION PENDING: accept (documented) vs build the `1A 06` snapshot read + stateful mode-assembly (options 1+2) — and note even that goes stale on a silent front-panel data toggle (only polling, which is rejected, fully closes it). (b) **Freq up/down keyboard shortcuts** reported broken for the IC-7300 — parked, not yet looked at. (c) **No band highlight** — SPA band buttons don't derive the current band from freq (SPA-side). **⇒ NEXT: build read-after-write, then decide USB-D, then the freq-shortcut bug + band highlight; then the doc pass** (ADR 0034 spacing/identity/FB-ACK findings, the `civ_read_gap_ms` knob, memory `project_sm_ic7300_borrowed`). Uncommitted files: `internal/bridge/{pipeline,service,command,pipeline_test}.go`, `internal/bridge/civ_snapshot_test.go`, `internal/config/config.go`, `internal/types/bridge.go` — clean (build/tests/gofmt green), commit-ready as the "CI-V bench-validation fixes" unit.
+
 ### Session 171 (2026-06-14) — **Icom CI-V design DECIDED + bench-validated against the real IC-7300 → ADR 0034 (Accepted); throwaway-turned-keeper probe `cmd/civ-probe`.**
 Designed the Icom CI-V codec path and **validated every assumption on the borrowed IC-7300** before writing any codec. **ADR 0034 (Accepted):** `protocol` discriminator on `RigDefinition` — `kenwood` (default; the existing ASCII engine, renamed off the misleading `yaesu_ascii` since the family is Kenwood's, Yaesu adopted it) | `icom_civ` (a new pure-Go CI-V engine: `FE FE…FD` framing, BCD, echo filter `keep from==rig`). **"No code to add a rig after the first of a family"** held by putting CI-V command bytes + a fixed `encoding` vocabulary (`ascii`/`none`/`bcd_freq`/`mode_seq`/`bcd_power`) in the rigdef as data. **Mode is `mode_seq`** — a per-literal CI-V frame sequence (bench-validated: `06` self-clears the data flag, so non-data modes = 1 frame, USB-D = 2). **Read strategy = push-only, explicitly NO polling** (operator directive — polling is a known friction source; they've been burned before). Protocol survey: two families cover the market (Kenwood-ASCII + Icom CI-V); ANAN is the *same* Kenwood family but a future *transport* question (openHPSDR/UDP), not a codec.
   - **Bench findings (probe `cmd/civ-probe` — kept as a dev tool, RF-safe: never sends TX, de-asserts DTR+RTS on open):** addr `0x94`; **effective baud 19200/8N1 = the `CI-V Baud Rate`, NOT `CI-V USB Baud Rate` (115200, dormant while `CI-V USB Port = Link to [REMOTE]`)** — a real gotcha, confirmed empirically (115200 gave echo-but-no-reply). USB Echo Back On → echo filter required. 5-byte LE BCD freq. **The data flag (`1A 06`) is NEVER broadcast** via Transceive — confirmed across a USB↔USB-D toggle AND a full band-hop — so push can't see USB vs USB-D. That's fine: **FT8 sets its own mode + logs FT8**, and base mode is right for SSB/CW. Accepted limitation (USB-vs-USB-D for a mode SM didn't set: only tune-restore + non-FT8 data-mode logging); non-polling escape hatch (single *event-triggered* `1A 06` query riding the existing decode stream) recorded, NOT built.
@@ -174,37 +183,41 @@ All green: full Go build + `go test ./internal/ft8 ./cmd/smd` pass; SPA check 0/
 > "auto-sequence" is OUT OF SCOPE / QEX-forbidden (attended-only). Read the top
 > session entries for true current state.**
 
-### Near-term goal: Icom IC-7300 CAT (borrowed rig) — DESIGN DONE, IMPLEMENT NEXT
+### Near-term goal: Icom IC-7300 CAT (borrowed rig) — ENGINE + RIGDEF SHIPPED & VALIDATED; finishing the rough edges
 
-**Design decided + bench-validated against the real rig 2026-06-14 → ADR 0034
-(Accepted). Read it before coding.** The IC-7300 is the first **Icom** (all
-other rigdefs are Yaesu) and speaks **CI-V**. `internal/cat` is Yaesu/Kenwood-
-ASCII-shaped, so the plan is a **`protocol` seam**: `kenwood` (existing engine,
-the default) | `icom_civ` (new pure-Go CI-V engine). Bench time was **extended**
-(loan box relaxed — IC-7300 is ubiquitous, get it right).
+**Steps 1–3 DONE and bench-validated (Session 172, 2026-06-15).** CI-V engine
+(`internal/cat/civ.go`), `icom-ic7300.json` rigdef, serial DTR/RTS de-assert +
+`"0xFD"` delimiter parse — all committed. On the rig: clean open with no keying,
+RX freq + mode display, inbound `set_freq`/`set_mode` work. Two follow-on fixes
+(snapshot spacing `civ_read_gap_ms` + CI-V identity-on-first-decode) are
+**uncommitted but commit-ready** (build/tests/gofmt green). Read the Session 172
+entry for the full picture; ADR 0034 has the implementation note.
 
-**⇒ NEXT ACTION: implement the `icom_civ` engine + IC-7300 rigdef.**
-1. `internal/cat`: add `Protocol` (+ `CivAddress`) to `RigDefinition`; dispatch
-   `Encode`/`EncodeCommand`/`Decode` on it (Kenwood path unchanged, default).
-   New CI-V engine: `FE FE…FD` framing, 5-byte LE BCD freq, command-byte state
-   match, echo filter (`keep from == civ_address`), and the `encoding` kinds
-   (`ascii`/`none`/`bcd_freq`/`mode_seq`/`bcd_power`). `mode_seq` = per-literal
-   CI-V frame sequence (non-data = 1 frame, USB-D = 2; `06` self-clears data).
-   `cat/validate.go` validates CI-V rigdefs (hex addr/cmd/frames, known
-   encoding, injective mode table).
-2. `internal/cat/rigs/icom-ic7300.json` — addr `0x94`, terminator `0xFD`,
-   baud **19200/8N1** (the `CI-V Baud Rate`, NOT the USB baud — see ADR), commands
-   (read/init/set_freq/set_mode/set_power/tx_on/tx_off — TX unexposed).
-3. **Serial transport: de-assert DTR+RTS on open for Icom** (USB SEND can key the
-   rig); the Icom config must not inherit Yaesu `rts:true/dtr:true`.
-4. Validate on the rig per ADR 0019 (read-only state) → ADR 0026 (inbound ops);
-   **re-use `cmd/civ-probe`** as the validation harness. install.md prerequisites
-   (Transceive ON, USB Port = Link to [REMOTE], baud = CI-V Baud Rate, USB SEND
-   OFF) when shipping.
+**⇒ NEXT ACTION (resume here): build read-after-write for CI-V command latency.**
+The IC-7300 ACKs a commanded change with a bare `FB` and sends NO transceive
+broadcast (proven by RX-frame trace), so confirm-by-push never fires and the SPA
+lags to the ~10 s liveness probe. After a CI-V command (`SendCommands`), read the
+state back so the UI updates in ~100 ms. Decide sync vs async/`safego` (needs a
+service-scoped ctx, not the request ctx) + whether to debounce freq-step
+key-repeat. Then, in order:
+1. **USB-D differentiation** — DECISION PENDING. Accept (documented: the `04` read
+   gives base mode, `1A 06` data flag never broadcast) vs build the `1A 06`
+   snapshot read + stateful base+flag mode-assembly (options 1+2). Operator made
+   the operational case (FT8 leaves USB-D → phone TX in a data slot). Note even
+   1+2 goes stale on a silent front-panel data toggle — only polling (rejected)
+   fully closes it.
+2. **Freq up/down keyboard shortcuts** broken for the IC-7300 — diagnose (not yet
+   looked at).
+3. **No band highlight** — SPA band buttons don't derive current band from freq
+   (SPA-side).
+4. **Doc pass** — ADR 0034 (spacing/identity/FB-ACK findings already partly
+   noted), the `bridge.timeouts.civ_read_gap_ms` knob, memory
+   `project_sm_ic7300_borrowed`, and `install.md` prerequisites (Transceive ON,
+   USB Port = Link to [REMOTE], baud = CI-V Baud Rate, USB SEND OFF) when shipping.
 
-Read strategy is **push-only, NO polling** (operator directive). Validated facts
-+ the gotchas live in ADR 0034 "Validated on the bench" + memory
-`project_sm_ic7300_borrowed`. (Not in `docs/backlog.md` — this is now-ish.)
+Read strategy is **push-only, NO polling** (operator directive); read-after-write
+is event-driven (triggered by the command), not a poll. Validated facts + gotchas
+live in ADR 0034 "Validated on the bench" + memory `project_sm_ic7300_borrowed`.
 
 ### Parked follow-ups (named, deliberate defer)
 

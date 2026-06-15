@@ -69,6 +69,12 @@ type Service struct {
 	// the Service so each Subscribe doesn't repeat cat.Encode.
 	bootstrapBytes []byte
 
+	// bootstrapCIV records whether the active rig speaks icom_civ, so
+	// TriggerBootstrap spaces the snapshot read frames (CI-V half-duplex,
+	// last-read-in-a-burst-wins — see writeSnapshotReads). Set with
+	// bootstrapBytes at pipeline start, cleared on exit.
+	bootstrapCIV bool
+
 	// identityConfirmed records whether the connected rig has positively
 	// identified as the configured driver (an IDENTITY push matching
 	// def.Model). It gates the operator write paths — SendCommands and
@@ -127,6 +133,7 @@ type Service struct {
 	supervisorMaxBackoff           time.Duration
 	supervisorSteadyStateThreshold time.Duration
 	writeWatchdog                  time.Duration
+	civReadGap                     time.Duration
 
 	// Tune-carrier state (ADR 0027), all mu-guarded. tuneActive is the
 	// single-flight gate; tuneRestoreMode/Power are the pre-tune snapshot
@@ -210,6 +217,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		supervisorMaxBackoff:           resolveTimeout(cfg.Timeouts.BackoffMaxMs, supervisorMaxBackoff),
 		supervisorSteadyStateThreshold: resolveTimeout(cfg.Timeouts.SteadyStateThresholdMs, supervisorSteadyStateThreshold),
 		writeWatchdog:                  resolveTimeout(cfg.Timeouts.WriteWatchdogMs, writeWatchdog),
+		civReadGap:                     clampDuration(resolveTimeout(cfg.Timeouts.CivReadGapMs, civReadGap), civReadGapMax),
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
 		tuneRestoreSettle:              tuneSettle,
@@ -226,6 +234,18 @@ func resolveTimeout(cfgMs int, defaultDur time.Duration) time.Duration {
 		return time.Duration(cfgMs) * time.Millisecond
 	}
 	return defaultDur
+}
+
+// clampDuration caps d at max (and floors a negative at zero). Used for the
+// CI-V read gap so an operator typo can't stall every state snapshot.
+func clampDuration(d, max time.Duration) time.Duration {
+	if d < 0 {
+		return 0
+	}
+	if d > max {
+		return max
+	}
+	return d
 }
 
 // Initialize validates dependencies. Idempotent. Required by the
@@ -355,9 +375,10 @@ func (s *Service) TriggerBootstrap(ctx context.Context) error {
 	s.mu.Lock()
 	cl := s.activeClient
 	bb := s.bootstrapBytes
+	civ := s.bootstrapCIV
 	s.mu.Unlock()
 	if cl == nil || len(bb) == 0 {
 		return nil
 	}
-	return cl.WriteCommandBytes(ctx, bb)
+	return s.writeSnapshotReads(ctx, cl, civ, bb)
 }

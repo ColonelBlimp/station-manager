@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	stderr "errors"
@@ -49,6 +50,19 @@ var (
 // override via `bridge.timeouts.write_watchdog_ms`. Package var so tests can
 // dial it down (review 2026-06-04 H4).
 var writeWatchdog = 2 * time.Second
+
+// civReadGap is the default inter-frame delay between the read frames of a CI-V
+// state snapshot. CI-V is half-duplex: a back-to-back read-freq + read-mode
+// burst makes the rig answer only the last read (bench 2026-06-15 — fresh SPA
+// tab showed stale freq, current mode), so the snapshot reads are spaced. Only
+// the icom_civ path uses it; operators override via
+// `bridge.timeouts.civ_read_gap_ms`. Package var so tests can dial it to zero.
+var civReadGap = 50 * time.Millisecond
+
+// civReadGapMax caps the configured gap so a typo (e.g. 50000) can't stall
+// every snapshot for a minute. A snapshot of N reads waits (N-1)×gap total, so
+// the ceiling stays well under the liveness window.
+const civReadGapMax = 2 * time.Second
 
 // pipelineExitClass tells runSupervisor what to do after runPipeline
 // returns. Classified at the failure site rather than divined from
@@ -189,6 +203,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.mu.Lock()
 		s.activeClient = nil
 		s.bootstrapBytes = nil
+		s.bootstrapCIV = false
 		// Identity must be re-verified on the next pipeline instance — a
 		// hot-swapped rig (or a reconnect after the wrong rig was fixed)
 		// must not inherit the previous run's confirmation (H2).
@@ -227,7 +242,8 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	// if the port is genuinely bad, the readLoop will surface it as
 	// a terminal-read error within milliseconds; if it's a transient
 	// flake, the readLoop probe re-issues READ on the next timeout.
-	if err := client.WriteCommandBytes(ctx, readBytes); err != nil {
+	civSnapshot := def.Protocol == cat.ProtocolIcomCIV
+	if err := s.writeSnapshotReads(ctx, client, civSnapshot, readBytes); err != nil {
 		s.logger.WarnWith().
 			Err(err).
 			Str("driver", def.ID).
@@ -240,6 +256,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	s.mu.Lock()
 	s.activeClient = client
 	s.bootstrapBytes = readBytes
+	s.bootstrapCIV = civSnapshot
 	s.mu.Unlock()
 
 	s.logger.InfoWith().
@@ -360,7 +377,7 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(werr)})
 					return exitTransient
 				}
-				if werr := client.WriteCommandBytes(ctx, readBytes); werr != nil {
+				if werr := s.writeSnapshotReads(ctx, client, def.Protocol == cat.ProtocolIcomCIV, readBytes); werr != nil {
 					if ctx.Err() != nil {
 						return exitContextCancelled
 					}
@@ -404,7 +421,18 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		// daemon restart is already the recovery path. Per the
 		// 2026-05-10 internal-bridge-pipeline review (#9).
 		if !identityVerified {
-			if v, ok := status["IDENTITY"]; ok {
+			if def.Protocol == cat.ProtocolIcomCIV {
+				// CI-V has no model-ID handshake; the bus address IS the rig's
+				// identity. cat.Decode's echo/address filter drops every frame
+				// whose `from` isn't the configured civ_address, so reaching here
+				// with a successful decode means this frame came from the rig at
+				// the configured address by construction (ADR 0034). That is the
+				// confirmation — unlock the operator write paths. (A different
+				// Icom deliberately set to the same address would pass, but
+				// commands route by that address anyway, and TX stays unexposed.)
+				identityVerified = true
+				s.setIdentityConfirmed(true)
+			} else if v, ok := status["IDENTITY"]; ok {
 				identityVerified = true
 				switch classifyIdentity(v, def.Model) {
 				case identityUnrecognised:
@@ -744,6 +772,61 @@ func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) 
 		RTS:           rigSerial.RTS,
 		DTR:           rigSerial.DTR,
 	}, nil
+}
+
+// civFrameDelimiter is the CI-V frame terminator (0xFD). The icom_civ codec
+// emits whole FE FE…FD frames, so a READ snapshot's frames are split here on
+// this byte. Fixed for the protocol (the rigdef declares it as the serial
+// line_delimiter too, but the snapshot splitter doesn't need the serial config
+// in scope).
+const civFrameDelimiter = 0xFD
+
+// writeSnapshotReads writes a READ state snapshot to the rig. For Kenwood it is
+// a single write — the rig queues the ;-delimited burst fine. For CI-V it must
+// NOT be: the link is half-duplex and a second read arriving while the rig is
+// turning around its reply to the first makes the rig abandon that reply and
+// answer only the last read, so a back-to-back read-freq + read-mode burst
+// loses the freq reply (bench 2026-06-15 — a fresh SPA tab showed stale freq,
+// current mode). So the CI-V frames are split on the frame delimiter and written
+// one at a time with civReadGap between them, letting each reply complete.
+//
+// The gap is inserted only BETWEEN frames (not before the first), so a
+// single-frame snapshot has no added latency. ctx cancellation is honoured
+// during the gap so shutdown isn't delayed.
+func (s *Service) writeSnapshotReads(ctx context.Context, client serial.Client, civ bool, readBytes []byte) error {
+	if !civ {
+		return client.WriteCommandBytes(ctx, readBytes)
+	}
+	frames := splitCIVFrames(readBytes)
+	for i, f := range frames {
+		if i > 0 && s.civReadGap > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(s.civReadGap):
+			}
+		}
+		if err := client.WriteCommandBytes(ctx, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitCIVFrames splits a concatenated CI-V byte sequence into its individual
+// frame bodies on the frame delimiter (0xFD), dropping the empty tail after the
+// final delimiter. The trailing delimiter is stripped from each body;
+// WriteCommandBytes re-appends it on write. A buffer with no delimiter is
+// returned as a single frame unchanged.
+func splitCIVFrames(b []byte) [][]byte {
+	var frames [][]byte
+	for _, f := range bytes.Split(b, []byte{civFrameDelimiter}) {
+		if len(f) == 0 {
+			continue
+		}
+		frames = append(frames, f)
+	}
+	return frames
 }
 
 // parityFromString maps the rigdef's parity string to the
