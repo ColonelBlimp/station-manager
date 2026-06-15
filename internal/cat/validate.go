@@ -55,6 +55,18 @@ var unsafeExposableCommands = map[string]struct{}{
 func ValidateRigDefinition(def RigDefinition) error {
 	const op errors.Op = "cat.ValidateRigDefinition"
 
+	// Protocol dispatch (ADR 0034): the ASCII checks below assume Kenwood %s
+	// templates and slice/value-map markers, none of which apply to a CI-V
+	// rigdef. An unknown protocol is a config error.
+	switch def.Protocol {
+	case "", ProtocolKenwood:
+		// Fall through to the Kenwood validation below.
+	case ProtocolIcomCIV:
+		return validateCIV(def)
+	default:
+		return errors.New(op).WithMsgf("unknown protocol %q", def.Protocol)
+	}
+
 	seen := make(map[string]struct{}, len(def.Commands))
 	for _, c := range def.Commands {
 		if c.Name == "" {
@@ -148,6 +160,130 @@ func validateValueMap(op errors.Op, def RigDefinition, cmdName, tag string) erro
 	}
 	if len(values) == 0 {
 		return errors.New(op).WithMsgf("command %q value_map %q has no value mappings", cmdName, tag)
+	}
+	return nil
+}
+
+// civEncodingKinds is the set of Encoding values a CI-V command may declare.
+// EncodingASCII is deliberately excluded — the ASCII kind belongs to the
+// Kenwood path; a CI-V command with no/empty encoding is a rigdef error
+// (an Icom command always names a binary kind).
+var civEncodingKinds = map[string]struct{}{
+	EncodingNone:     {},
+	EncodingBCDFreq:  {},
+	EncodingModeSeq:  {},
+	EncodingBCDPower: {},
+}
+
+// civMarkerKinds is the set of Marker.Kind values a CI-V state may declare.
+var civMarkerKinds = map[string]struct{}{
+	MarkerKindBCDFreq: {},
+	MarkerKindByte:    {},
+}
+
+// validateCIV checks an icom_civ rigdef for the faults the loader must reject
+// so a hand-authored CI-V rigdef typo fails loudly at load instead of becoming
+// silent garbage on the wire (ADR 0034). The CI-V analogue of the Kenwood
+// checks in ValidateRigDefinition: command bytes are hex (not ASCII templates),
+// encodings name a known binary kind, mode_seq frames are hex with injective
+// mode literals, and state prefixes / marker kinds are CI-V-shaped.
+func validateCIV(def RigDefinition) error {
+	const op errors.Op = "cat.ValidateRigDefinition"
+
+	if _, err := civAddressByte(def); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("invalid civ_address")
+	}
+
+	seen := make(map[string]struct{}, len(def.Commands))
+	for _, c := range def.Commands {
+		if c.Name == "" {
+			return errors.New(op).WithMsg("command with empty name")
+		}
+		if _, dup := seen[c.Name]; dup {
+			return errors.New(op).WithMsgf("duplicate command name %q", c.Name)
+		}
+		seen[c.Name] = struct{}{}
+
+		// Same safety rule as the Kenwood path: TX/playback commands are
+		// controller-only and must never be exposed (ADR 0027/0030).
+		if c.Exposed {
+			if _, unsafe := unsafeExposableCommands[c.Name]; unsafe {
+				return errors.New(op).WithMsgf(
+					"command %q must not be exposed (TX/playback commands are controller-only, ADR 0027)", c.Name)
+			}
+		}
+
+		if _, ok := civEncodingKinds[c.Encoding]; !ok {
+			return errors.New(op).WithMsgf(
+				"command %q has unknown CI-V encoding %q", c.Name, c.Encoding)
+		}
+
+		// EncodingModeSeq carries its bytes in the per-literal frame lists, not
+		// in Cmd; every other kind needs valid hex command bytes in Cmd.
+		if c.Encoding == EncodingModeSeq {
+			if err := validateModeSeq(op, c); err != nil {
+				return err
+			}
+		} else {
+			if c.Cmd == "" {
+				return errors.New(op).WithMsgf("command %q has an empty cmd", c.Name)
+			}
+			if _, err := civHexBytes(c.Cmd); err != nil {
+				return errors.New(op).WithMsgf("command %q has invalid hex cmd %q", c.Name, c.Cmd)
+			}
+		}
+	}
+
+	for _, st := range def.States {
+		if _, err := civHexBytes(st.Prefix); err != nil || st.Prefix == "" {
+			return errors.New(op).WithMsgf("state has invalid hex prefix %q", st.Prefix)
+		}
+		for _, mk := range st.Markers {
+			if _, ok := civMarkerKinds[mk.Kind]; !ok {
+				return errors.New(op).WithMsgf(
+					"state %q marker %q has unknown CI-V kind %q", st.Prefix, mk.Tag, mk.Kind)
+			}
+			if mk.Length <= 0 {
+				return errors.New(op).WithMsgf(
+					"state %q marker %q has non-positive length %d", st.Prefix, mk.Tag, mk.Length)
+			}
+			if mk.Index < 0 {
+				return errors.New(op).WithMsgf(
+					"state %q marker %q has negative index %d", st.Prefix, mk.Tag, mk.Index)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateModeSeq checks an EncodingModeSeq command: it must carry at least one
+// mode entry, each entry needs at least one frame, every frame must be valid
+// hex, and the mode literals must be unique (lookupModeSeq returns the first
+// match, so a duplicate would silently shadow — the CI-V analogue of the
+// value_map injectivity check).
+func validateModeSeq(op errors.Op, c Command) error {
+	if len(c.ModeSeq) == 0 {
+		return errors.New(op).WithMsgf("command %q has encoding mode_seq but no mode_seq entries", c.Name)
+	}
+	seen := make(map[string]struct{}, len(c.ModeSeq))
+	for _, m := range c.ModeSeq {
+		if m.Mode == "" {
+			return errors.New(op).WithMsgf("command %q has a mode_seq entry with empty mode", c.Name)
+		}
+		if _, dup := seen[m.Mode]; dup {
+			return errors.New(op).WithMsgf("command %q mode_seq has duplicate mode %q", c.Name, m.Mode)
+		}
+		seen[m.Mode] = struct{}{}
+		if len(m.Frames) == 0 {
+			return errors.New(op).WithMsgf("command %q mode %q has no frames", c.Name, m.Mode)
+		}
+		for _, f := range m.Frames {
+			b, err := civHexBytes(f)
+			if err != nil || len(b) == 0 {
+				return errors.New(op).WithMsgf("command %q mode %q has invalid hex frame %q", c.Name, m.Mode, f)
+			}
+		}
 	}
 	return nil
 }

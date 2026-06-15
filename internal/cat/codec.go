@@ -73,6 +73,10 @@ var ErrInvalidPaddedValue = stderr.New("cat: value not valid for padded command"
 func Decode(def RigDefinition, line []byte) (Status, error) {
 	const op errors.Op = "cat.Decode"
 
+	if def.Protocol == ProtocolIcomCIV {
+		return decodeCIV(def, line)
+	}
+
 	state, tail, ok := lookupState(line, def.States)
 	if !ok {
 		return nil, errors.New(op).WithErr(ErrNoMatch)
@@ -114,6 +118,10 @@ func Decode(def RigDefinition, line []byte) (Status, error) {
 // present in def.Commands.
 func Encode(def RigDefinition, name string, args ...any) ([]byte, error) {
 	const op errors.Op = "cat.Encode"
+
+	if def.Protocol == ProtocolIcomCIV {
+		return encodeCIV(def, name, args...)
+	}
 
 	for _, c := range def.Commands {
 		if c.Name != name {

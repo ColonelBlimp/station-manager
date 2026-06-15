@@ -67,6 +67,10 @@ func ExposedCommands(def RigDefinition) []string {
 func EncodeCommand(def RigDefinition, name, value string) ([]byte, error) {
 	const op errors.Op = "cat.EncodeCommand"
 
+	if def.Protocol == ProtocolIcomCIV {
+		return encodeCommandCIV(def, name, value)
+	}
+
 	c, ok := lookupCommand(def, name)
 	if !ok {
 		return nil, errors.New(op).WithErr(ErrUnknownCommand).WithMsgf("unknown command %q", name)
