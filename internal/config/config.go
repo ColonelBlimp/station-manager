@@ -328,7 +328,13 @@ func (c Config) ActiveFt8() types.Ft8Config {
 	if rc == nil {
 		return f
 	}
-	f.Device = rc.Audio.Device
+	// The active rig's audio device wins WHEN SET; an unset per-rig audio must
+	// NOT clobber a configured loose ft8.device back to "" (system default).
+	// Migration leaves audio empty on rigs the operator hasn't given a device,
+	// so the loose ft8.device stays the fallback until per-rig audio is set.
+	if rc.Audio.Device != "" {
+		f.Device = rc.Audio.Device
+	}
 
 	// Resolve the per-rig FT8 mode (config.md §10, B2): the operator's per-rig
 	// override wins, else the rigdef default for this rig's Model. Project it

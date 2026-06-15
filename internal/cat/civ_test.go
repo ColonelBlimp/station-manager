@@ -451,6 +451,20 @@ func TestEmbeddedIC7300(t *testing.T) {
 	}
 	eqBytes(t, swap, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x07, 0xB0, 0xFD})
 
+	// TX keying (CI-V 1C 00 01 / 1C 00 00) — controller-only, via low-level
+	// Encode (bypasses the exposed gate, like tune/FT8-TX). The exposed-ops
+	// assertion below pins that these are NEVER reachable via the command path.
+	txOn, err := Encode(def, "tx_on")
+	if err != nil {
+		t.Fatalf("Encode tx_on: %v", err)
+	}
+	eqBytes(t, txOn, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0x01, 0xFD})
+	txOff, err := Encode(def, "tx_off")
+	if err != nil {
+		t.Fatalf("Encode tx_off: %v", err)
+	}
+	eqBytes(t, txOff, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0x00, 0xFD})
+
 	// TX must not be reachable: the rigdef ships no exposed TX command. The
 	// inbound ops are exactly freq + mode + swap_vfo (RX-safe layer; TX is a
 	// later step). swap_vfo declares no sets_state — it has no commanded value

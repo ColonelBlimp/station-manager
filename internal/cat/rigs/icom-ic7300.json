@@ -40,7 +40,9 @@
       {"mode": "LSB-D",  "frames": ["0600:01", "1A06:0101"]},
       {"mode": "USB-D",  "frames": ["0601:01", "1A06:0101"]}
     ]},
-    {"name": "swap_vfo", "cmd": "07B0", "encoding": "none", "exposed": true}
+    {"name": "swap_vfo", "cmd": "07B0", "encoding": "none", "exposed": true},
+    {"name": "tx_on", "cmd": "1C0001", "encoding": "none"},
+    {"name": "tx_off", "cmd": "1C0000", "encoding": "none"}
   ],
   "states": [
     {

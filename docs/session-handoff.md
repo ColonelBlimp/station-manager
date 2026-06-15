@@ -54,6 +54,12 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 175 (2026-06-15) — **FT8 on the IC-7300: RX fixed + working; TX keying prepped (bench pending); rig-profile audio-model gap found → ADR 0036.** (Uncommitted; follows the committed ADR 0035 work in Session 174.)
+- **FT8 TX keying added to the IC-7300 rigdef (bench not yet run).** `tx_on`=`1C 00 01` / `tx_off`=`1C 00 00`, **unexposed** (controller-only, via low-level `cat.Encode`; tests pin the bytes + that they stay out of `ExposedCommands`). The TX *machinery* (`ft8.TxController`, `TxKeyer` seam, `internal/bridge/ft8tx.go` guaranteed-stop) is rig-agnostic + already built — so FT8 TX from the IC-7300 needs only this rigdef keying + audio/mode config + on-rig validation. `ft8.tx.mode` resolves to `USB-D` from the rigdef via `ActiveFt8()` (no config field needed). **⇒ The `-key` bench is the next on-rig step**, staged: RF-safe audio check (`/tmp/ft8-tx-probe -device 2 -msg ...`) then `/tmp/ft8-tx-probe -key -config build/config.json …`. First-Icom-RF checklist: USB SEND=OFF, dummy load, low power (FT8 TX doesn't clamp), one slot then auto-unkey. `cmd/ft8-tx-probe` + `cmd/ft8-capture-probe` are the bench tools; `cmd/civ-probe` gained `-trace`/`-mirror`/split+25/26 decode this arc.
+- **FT8 RX fixed end-to-end** after a multi-part debug: (a) **device misidentification** — the IC-7300's USB codec is **PCM2901**, not the PCM2903C I'd guessed (that's the *other* rig): **capture index 4, playback index 2** (they enumerate independently!). (b) **`ActiveFt8()` clobber bug** — it unconditionally overwrote the loose `ft8.device` with the active rig's *empty* `audio.device`, zeroing it to the system default; fixed to override only when set (`internal/config/config.go`, build+config tests green — **genuine bug, commit it**). (c) **rig setting** — `USB AF/IF Output` was on **IF**; must be **AF** (FT8-prereq, add to install.md). Dev `build/config.json` now: `ft8.device:"4"` / `ft8.tx.device:"2"`. Decode smoke pulled 30 msgs/slot on device 4; decodes now landing live.
+- **⇒ Rig-profile audio-model gap → ADR 0036 (Accepted).** The debug exposed that per-rig RX/TX devices **don't live in the profile** — they're global `ft8.*` — so switching `default_rig_id` doesn't re-bind audio (operator would hand-edit indices per rig, defeating ADR 0028). And the single `RigAudioConfig{Device}` can't hold capture≠playback indices. ADR 0036 amends ADR 0028: profile owns **per-rig, per-direction, name-based** audio (`audio.{capture, playback}`, resolved name→index at runtime). Implementation = the config-SPA rig-profile-editor workstream (deferred); loose `ft8.device`/`ft8.tx.device` are the working knobs until then. Forward-pointer added to ADR 0028.
+- **Uncommitted this arc:** IC-7300 rigdef (tx_on/tx_off), `internal/config/config.go` (ActiveFt8 clobber fix), `build/config.json` (device 4/2), `cmd/civ-probe` (-mirror/-trace/split+25/26 decode), ADR 0036 (+0028 pointer), this handoff + memories. Plus everything from Session 174 if not yet committed.
+
 ### Session 174 (2026-06-15) — **CI-V wait-for-ACK command path + full Icom state-mirror polling SHIPPED & on-rig validated; ADR 0035 written/Accepted.** Big session — the whole Icom rig-control + display-parity story landed.
 - **Wait-for-ACK command path (ADR 0034 revision) — SHIPPED, on-rig validated.** `SendCommands` branches on protocol: Kenwood fire-and-forget (unchanged); `icom_civ` does adopt-on-ACK (`sendCommandsCIV`) — write each frame, wait FB/FA (~20 ms), synthesize state on FB via `publishCommandedState` (keyed by new `Command.sets_state` rigdef field), 422 `rig_command_rejected` on FA, 504 `rig_command_no_ack` on timeout (`bridge.timeouts.civ_ack_ms`). `cat.CIVAck` classifier + readLoop ACK routing (`pendingAck`/`cmdMu`). Operator confirmed on the rig: **freq, mode (incl. USB-D), all freq-step families — ~10 s latency gone.**
 - **`swap_vfo` (CI-V `07 B0`) + read-after-swap + optimistic VFO-B mirror.** swap_vfo exposed; valueless ops (no `sets_state`) fire a READ-back after the ACK (`readBackAfterCommand`). SPA: `swapVfoLive` optimistically sets `catState.vfoB ← vfoA` (the ONE sanctioned SPA write to catState — ADR 0009 exception, documented). On-rig: swap now visually exchanges A↔B.
@@ -202,13 +208,30 @@ All green: full Go build + `go test ./internal/ft8 ./cmd/smd` pass; SPA check 0/
 
 ### Near-term goal: Icom IC-7300 CAT (borrowed rig) — ENGINE + RIGDEF SHIPPED & VALIDATED; finishing the rough edges
 
-**Steps 1–3 DONE and bench-validated (Session 172, 2026-06-15).** CI-V engine
-(`internal/cat/civ.go`), `icom-ic7300.json` rigdef, serial DTR/RTS de-assert +
-`"0xFD"` delimiter parse — all committed. On the rig: clean open with no keying,
-RX freq + mode display, inbound `set_freq`/`set_mode` work. Two follow-on fixes
-(snapshot spacing `civ_read_gap_ms` + CI-V identity-on-first-decode) are
-**uncommitted but commit-ready** (build/tests/gofmt green). Read the Session 172
-entry for the full picture; ADR 0034 has the implementation note.
+**IC-7300 CAT is now full-featured & on-rig validated** (Sessions 172–175): CI-V
+engine + rigdef, inbound commands via **wait-for-ACK** (ADR 0034 rev), **full
+state-mirror polling** for VFO-B/USB-D/split → display parity with Yaesu (ADR
+0035), VFO swap (+ optimistic mirror), FT8 band buttons assert USB-D, and **FT8 RX
+working** (codec = PCM2901: capture index 4 / playback index 2). FT8 **TX keying
+added to the rigdef** (`tx_on`/`tx_off`, unexposed) — bench not yet run.
+
+**⇒ NEXT ACTION (resume here): run the FT8 TX `-key` bench on the IC-7300** (first
+Icom RF). Staged: RF-safe audio check (`/tmp/ft8-tx-probe -device 2 -msg …`), then
+`/tmp/ft8-tx-probe -key -config build/config.json …`. Checklist: USB SEND=OFF,
+dummy load, low power (FT8 TX doesn't clamp), one slot then auto-unkey — full
+detail in the Session 175 entry.
+
+**Then (diagnosed, parked — not bugs):** split **control** (a `set_split` toggle;
+split *display* already works via the poll); **band-jump `Ctrl+Shift+5–9`** on Icom
+(no `BS` equivalent — needs band-stacking register `1A 01` or `set_freq`-to-default,
+a design call); **band highlight** (SPA derive current band from freq); **per-rig
+audio model** (ADR 0036 — config-SPA workstream). And **commit** the uncommitted
+Session 174–175 arc.
+
+> **The detailed sub-items below (wait-for-ACK fork, USB-D differentiation, freq
+> up/down shortcuts) are now DONE** — wait-for-ACK shipped (ADR 0034 rev), USB-D is
+> solved by the `26 00` poll (ADR 0035), freq shortcuts work on the rig. Kept for
+> history; Sessions 174–175 are the current state.
 
 **⇒ NEXT ACTION (resume here): operator decides the wait-for-ACK fork, then build it.**
 Session 173 re-validated the command path standalone and designed the fix —
@@ -240,9 +263,11 @@ path untouched). Possible refinement: coalesce freq-step key-repeat. Then, in or
    Rate, USB SEND OFF) when shipping. CLAUDE.md serial-bridge bullet when the
    command path lands.
 
-Read strategy is **push-only, NO polling** (operator directive); read-after-write
-is event-driven (triggered by the command), not a poll. Validated facts + gotchas
-live in ADR 0034 "Validated on the bench" + memory `project_sm_ic7300_borrowed`.
+Read strategy (REVISED for Icom by ADR 0035): push for the fast operating
+freq/mode **plus** a targeted, collision-aware **poll** of the un-pushed fields
+(VFO-B/mode+data/split) — Yaesu stays push-only. Commands use **wait-for-ACK**
+(adopt-on-`FB`), not the old read-after-write framing. Validated facts + gotchas
+live in ADR 0034 + ADR 0035 + memory `project_sm_ic7300_borrowed`.
 
 ### Parked follow-ups (named, deliberate defer)
 
