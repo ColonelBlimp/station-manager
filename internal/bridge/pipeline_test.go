@@ -163,7 +163,10 @@ func newCIVPipelineTestService(t *testing.T) (*Service, *fakeSerial) {
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	s.civReadGap = 0 // no real delay in tests
+	s.civReadGap = 0              // no real delay in tests
+	s.civPollInterval = time.Hour // disable the state-mirror poll by default; the
+	// dedicated poll test dials it down. Keeps the other CIV tests' write counts
+	// deterministic (no background POLL frames landing mid-assertion).
 	fake := installFakeSerial(s)
 	return s, fake
 }

@@ -1171,6 +1171,14 @@ func validateBridge(b types.BridgeConfig) error {
 	if err := checkTimeout("bridge.timeouts.civ_ack_ms", b.Timeouts.CivAckMs); err != nil {
 		return err
 	}
+	// CI-V state-mirror poll cadence + collision back-off (icom_civ only, ADR
+	// 0035). Same sane-range guard as the other timeout overrides.
+	if err := checkTimeout("bridge.timeouts.civ_poll_interval_ms", b.Timeouts.CivPollIntervalMs); err != nil {
+		return err
+	}
+	if err := checkTimeout("bridge.timeouts.civ_poll_quiet_ms", b.Timeouts.CivPollQuietMs); err != nil {
+		return err
+	}
 	if b.Timeouts.BackoffInitialMs > 0 && b.Timeouts.BackoffMaxMs > 0 && b.Timeouts.BackoffInitialMs > b.Timeouts.BackoffMaxMs {
 		return fmt.Errorf("bridge.timeouts.backoff_initial_ms (%d) must not exceed backoff_max_ms (%d)", b.Timeouts.BackoffInitialMs, b.Timeouts.BackoffMaxMs)
 	}

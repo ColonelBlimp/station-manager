@@ -7,6 +7,7 @@ import (
 	stderr "errors"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -72,6 +73,21 @@ const civReadGapMax = 2 * time.Second
 // `bridge.timeouts.civ_ack_ms`. Package var so tests can dial it down.
 var civAckTimeout = 500 * time.Millisecond
 
+// civPollInterval is the default steady-state cadence of the Icom state-mirror
+// poll (ADR 0035): how often the daemon fires the rigdef's POLL read-list to
+// mirror the fields Transceive never pushes (non-operating VFO, mode data flag,
+// split). 1s keeps the slow-field display lag ≤ ~1s while staying light on the
+// bus. Only icom_civ rigs that declare a POLL command poll; operators override
+// via `bridge.timeouts.civ_poll_interval_ms`. Package var so tests can dial it.
+var civPollInterval = 1 * time.Second
+
+// civPollQuiet is the default collision back-off: a poll tick is skipped if a
+// Transceive broadcast arrived within this window (the rig is mid dial-turn
+// storm on the half-duplex bus). Freq is pushed in real-time during a spin
+// anyway, and the skipped gap-read recovers on the next tick — so deferring
+// avoids the benign collisions seen on the bench (2026-06-15) at no cost.
+var civPollQuiet = 250 * time.Millisecond
+
 // pipelineExitClass tells runSupervisor what to do after runPipeline
 // returns. Classified at the failure site rather than divined from
 // the exit code, so retry policy lives at the call site (where the
@@ -110,6 +126,13 @@ const initCommandName = "INIT"
 // `ID;FA;FB;ST;VS;MD0;MD1;PC;` — 8 framed responses the readLoop
 // decodes and publishes as a sequence of partial rig-state events.
 const readCommandName = "READ"
+
+// pollCommandName is the optional steady-state state-mirror read-list (ADR
+// 0035). A rigdef that declares it (icom_civ rigs whose Transceive push is
+// structurally incomplete) gets a low-rate poll of the un-pushed fields; a
+// rigdef without it (every Yaesu, whose AI push is complete) runs no poll loop.
+// The presence of the command is the data-driven on/off switch.
+const pollCommandName = "POLL"
 
 // runPipeline opens the serial port via s.openClient, looks up the
 // rig def via cat.Lookup, sends the rigdef's INIT command, then
@@ -186,6 +209,18 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.publishExitBridgeError(BridgeErrCodeMissingRead, map[string]string{"driver": def.ID})
 		return exitPermanent
 	}
+	// POLL is optional (ADR 0035): only rigdefs whose push is structurally
+	// incomplete declare it. Absent → no poll loop (pollBytes stays nil). A
+	// declared-but-unencodable POLL is a rigdef bug, but non-fatal — log and run
+	// push-only rather than refusing the whole pipeline.
+	var pollBytes []byte
+	if cat.HasCommand(def, pollCommandName) {
+		if pollBytes, err = cat.Encode(def, pollCommandName); err != nil {
+			s.logger.WarnWith().Err(err).Str("driver", def.ID).
+				Msg("bridge: rigdef POLL command failed to encode; running push-only (no state-mirror poll)")
+			pollBytes = nil
+		}
+	}
 
 	client, err := s.openClient(serialCfg)
 	if err != nil {
@@ -212,6 +247,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.activeClient = nil
 		s.bootstrapBytes = nil
 		s.bootstrapCIV = false
+		s.pollBytes = nil
 		// Identity must be re-verified on the next pipeline instance — a
 		// hot-swapped rig (or a reconnect after the wrong rig was fixed)
 		// must not inherit the previous run's confirmation (H2).
@@ -265,6 +301,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	s.activeClient = client
 	s.bootstrapBytes = readBytes
 	s.bootstrapCIV = civSnapshot
+	s.pollBytes = pollBytes
 	s.mu.Unlock()
 
 	s.logger.InfoWith().
@@ -273,7 +310,56 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		Str("driver", def.ID).
 		Msg("bridge: pipeline started; AUTO-mode CAT data flow active")
 
+	// Start the state-mirror poll loop (ADR 0035) for a rigdef that declares
+	// POLL. It runs for this pipeline instance only; the deferred cancel + wait
+	// (registered so they run BEFORE the client.Close defer above) stop and drain
+	// it before the port closes, so no poll write can hit a closed port.
+	if len(pollBytes) > 0 {
+		pollCtx, pollCancel := context.WithCancel(ctx)
+		var pollWg sync.WaitGroup
+		pollWg.Add(1)
+		go func() {
+			defer pollWg.Done()
+			s.runPollLoop(pollCtx, client, pollBytes)
+		}()
+		defer pollWg.Wait()
+		defer pollCancel()
+	}
+
 	return s.readLoop(ctx, client, def, initBytes, readBytes)
+}
+
+// runPollLoop fires the rigdef's POLL read-list on a low-rate ticker to mirror
+// the Icom state CI-V Transceive never pushes (non-operating VFO, mode data
+// flag, split) — ADR 0035. The replies ride the normal readLoop → decode →
+// publish path; this loop only writes. It is collision-aware (skips a tick while
+// the rig is mid Transceive burst — a dial-turn storm) and serialises with the
+// command path through cmdMu so a poll and a SendCommands batch never interleave
+// their frames on the half-duplex bus. Doubles as a liveness keepalive: while it
+// runs the rig answers each interval, so a stall surfaces as a read timeout.
+func (s *Service) runPollLoop(ctx context.Context, client serial.Client, pollBytes []byte) {
+	ticker := time.NewTicker(s.civPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			busy := time.Since(s.lastBroadcastAt) < s.civPollQuiet
+			s.mu.Unlock()
+			if busy {
+				continue // collision back-off: rig is mid-broadcast (dial spin)
+			}
+			s.cmdMu.Lock()
+			err := s.writeSnapshotReads(ctx, client, true, pollBytes)
+			s.cmdMu.Unlock()
+			if err != nil && ctx.Err() == nil {
+				s.logger.WarnWith().Str("error", errMessage(err)).
+					Msg("bridge: CI-V state-mirror poll write failed")
+			}
+		}
+	}
 }
 
 // runSupervisor wraps runPipeline in a retry loop so the bridge
@@ -405,6 +491,16 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		}
 
 		announcedDisconnect = false
+
+		// Track unsolicited Transceive broadcasts so the poll loop's collision
+		// back-off can defer while the rig is mid dial-turn storm (ADR 0035).
+		// Only broadcasts (to 0x00) count — the poll's own replies must not, or
+		// it would suppress itself.
+		if cat.IsCIVBroadcast(def, line) {
+			s.mu.Lock()
+			s.lastBroadcastAt = time.Now()
+			s.mu.Unlock()
+		}
 
 		// CI-V command ACK (ADR 0034): the rig answers a set-command with a bare
 		// FB/FA and never broadcasts the change, so route the ACK to the waiting

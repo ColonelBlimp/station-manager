@@ -149,11 +149,13 @@ func TestSendCommandsCIV_ReadsBackAfterSwap(t *testing.T) {
 	got := fake.recordedWrites()[before:]
 	want := [][]byte{
 		{0xFE, 0xFE, 0x94, 0xE0, 0x07, 0xB0}, // the swap (07 B0)
-		{0xFE, 0xFE, 0x94, 0xE0, 0x03},       // read-back: freq query
-		{0xFE, 0xFE, 0x94, 0xE0, 0x04},       // read-back: mode query
+		{0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x00}, // read-back: VFO-A freq
+		{0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01}, // read-back: VFO-B freq
+		{0xFE, 0xFE, 0x94, 0xE0, 0x26, 0x00}, // read-back: mode + data
+		{0xFE, 0xFE, 0x94, 0xE0, 0x0F},       // read-back: split
 	}
 	if len(got) != len(want) {
-		t.Fatalf("swap_vfo wrote %d frames (% X), want swap + 2 read-back", len(got), got)
+		t.Fatalf("swap_vfo wrote %d frames (% X), want swap + 4 read-back", len(got), got)
 	}
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {

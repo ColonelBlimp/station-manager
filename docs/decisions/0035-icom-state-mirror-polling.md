@@ -1,7 +1,7 @@
 ---
 number: 0035
 title: Full rig-state mirror on Icom via hybrid push + targeted polling
-status: Proposed
+status: Accepted
 date: 2026-06-15
 ---
 

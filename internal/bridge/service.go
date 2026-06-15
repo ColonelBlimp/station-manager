@@ -75,6 +75,21 @@ type Service struct {
 	// bootstrapBytes at pipeline start, cleared on exit.
 	bootstrapCIV bool
 
+	// pollBytes is the pre-encoded POLL read-list (ADR 0035) — the steady-state
+	// Icom state-mirror reads (non-operating VFO, mode+data, split) the poll loop
+	// fires on civPollInterval. Empty when the rigdef declares no POLL command
+	// (every Kenwood rig, and any Icom that doesn't opt in), which is the
+	// data-driven gate: no POLL command → no poll loop. Set at pipeline start.
+	pollBytes []byte
+
+	// lastBroadcastAt is the time of the most recent unsolicited Transceive
+	// broadcast from the rig (mu-guarded), updated by readLoop. The poll loop's
+	// collision back-off reads it: a poll tick is skipped while broadcasts are
+	// streaming (a dial-turn storm). Only broadcasts update it — the poll's own
+	// replies (transponded to the controller) must not, or the poll would
+	// suppress itself.
+	lastBroadcastAt time.Time
+
 	// identityConfirmed records whether the connected rig has positively
 	// identified as the configured driver (an IDENTITY push matching
 	// def.Model). It gates the operator write paths — SendCommands and
@@ -135,6 +150,8 @@ type Service struct {
 	writeWatchdog                  time.Duration
 	civReadGap                     time.Duration
 	civAckTimeout                  time.Duration
+	civPollInterval                time.Duration
+	civPollQuiet                   time.Duration
 
 	// CI-V wait-for-ACK command-path state (ADR 0034). The IC-7300 confirms a
 	// set-command with a bare FB/FA ACK and never broadcasts the change, so
@@ -231,6 +248,8 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		writeWatchdog:                  resolveTimeout(cfg.Timeouts.WriteWatchdogMs, writeWatchdog),
 		civReadGap:                     clampDuration(resolveTimeout(cfg.Timeouts.CivReadGapMs, civReadGap), civReadGapMax),
 		civAckTimeout:                  resolveTimeout(cfg.Timeouts.CivAckMs, civAckTimeout),
+		civPollInterval:                resolveTimeout(cfg.Timeouts.CivPollIntervalMs, civPollInterval),
+		civPollQuiet:                   resolveTimeout(cfg.Timeouts.CivPollQuietMs, civPollQuiet),
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
 		tuneRestoreSettle:              tuneSettle,

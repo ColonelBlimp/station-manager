@@ -363,20 +363,33 @@ func TestEmbeddedIC7300(t *testing.T) {
 		t.Errorf("Ft8Mode = %q, want USB-D", def.Ft8Mode)
 	}
 
-	// INIT primes comms with a single freq read; READ snapshots freq + mode.
+	// INIT primes comms with a single (decodable) VFO-A freq read. READ is the
+	// full connect snapshot; POLL is the steady-state mirror gaps (ADR 0035).
 	initBytes, err := Encode(def, "INIT")
 	if err != nil {
 		t.Fatalf("Encode INIT: %v", err)
 	}
-	eqBytes(t, initBytes, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x03, 0xFD})
+	eqBytes(t, initBytes, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x00, 0xFD})
 
 	read, err := Encode(def, "READ")
 	if err != nil {
 		t.Fatalf("Encode READ: %v", err)
 	}
 	eqBytes(t, read, []byte{
-		0xFE, 0xFE, 0x94, 0xE0, 0x03, 0xFD,
-		0xFE, 0xFE, 0x94, 0xE0, 0x04, 0xFD,
+		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x00, 0xFD, // VFO-A freq
+		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01, 0xFD, // VFO-B freq
+		0xFE, 0xFE, 0x94, 0xE0, 0x26, 0x00, 0xFD, // mode + data flag
+		0xFE, 0xFE, 0x94, 0xE0, 0x0F, 0xFD, // split
+	})
+
+	poll, err := Encode(def, "POLL")
+	if err != nil {
+		t.Fatalf("Encode POLL: %v", err)
+	}
+	eqBytes(t, poll, []byte{
+		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01, 0xFD, // VFO-B (VFO-A comes via Transceive push)
+		0xFE, 0xFE, 0x94, 0xE0, 0x26, 0x00, 0xFD, // mode + data flag
+		0xFE, 0xFE, 0x94, 0xE0, 0x0F, 0xFD, // split
 	})
 
 	// FT8 mode set: base USB then data ON (the bench-validated two-frame form).
@@ -396,14 +409,33 @@ func TestEmbeddedIC7300(t *testing.T) {
 	}
 	eqBytes(t, freq, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x05, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD})
 
-	// Decode a real freq + mode broadcast.
+	// Decode the Transceive freq push (00) — the fast operating-freq path.
 	st, err := Decode(def, []byte{0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00})
 	if err != nil || st["VFOAFREQ"] != "14074000" {
-		t.Errorf("Decode freq broadcast: st=%v err=%v", st, err)
+		t.Errorf("Decode freq push: st=%v err=%v", st, err)
 	}
-	st, err = Decode(def, []byte{0xFE, 0xFE, 0x00, 0x94, 0x01, 0x03, 0x01})
-	if err != nil || st["MAINMODE"] != "CW" {
-		t.Errorf("Decode mode broadcast: st=%v err=%v", st, err)
+	// Decode the polled VFO-A / VFO-B freq reads (25 00 / 25 01).
+	st, err = Decode(def, []byte{0xFE, 0xFE, 0xE0, 0x94, 0x25, 0x00, 0x20, 0x68, 0x13, 0x10, 0x00})
+	if err != nil || st["VFOAFREQ"] != "10136820" {
+		t.Errorf("Decode 25 00 (VFO-A): st=%v err=%v", st, err)
+	}
+	st, err = Decode(def, []byte{0xFE, 0xFE, 0xE0, 0x94, 0x25, 0x01, 0x60, 0x32, 0x07, 0x14, 0x00})
+	if err != nil || st["VFOBFREQ"] != "14073260" {
+		t.Errorf("Decode 25 01 (VFO-B): st=%v err=%v", st, err)
+	}
+	// Decode the polled mode+data read (26 00): mode=01 USB, data=01 ON → USB-D.
+	st, err = Decode(def, []byte{0xFE, 0xFE, 0xE0, 0x94, 0x26, 0x00, 0x01, 0x01, 0x01})
+	if err != nil || st["MAINMODE"] != "USB-D" {
+		t.Errorf("Decode 26 00 USB-D: st=%v err=%v", st, err)
+	}
+	st, err = Decode(def, []byte{0xFE, 0xFE, 0xE0, 0x94, 0x26, 0x00, 0x01, 0x00, 0x01})
+	if err != nil || st["MAINMODE"] != "USB" {
+		t.Errorf("Decode 26 00 USB (data off): st=%v err=%v", st, err)
+	}
+	// Decode split (0F): 01 = ON.
+	st, err = Decode(def, []byte{0xFE, 0xFE, 0xE0, 0x94, 0x0F, 0x01})
+	if err != nil || st["SPLIT"] != "ON" {
+		t.Errorf("Decode 0F split: st=%v err=%v", st, err)
 	}
 
 	// swap_vfo exchanges VFO A/B via CI-V 07 B0 (a valueless `none` command).

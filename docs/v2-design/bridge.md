@@ -64,6 +64,8 @@ Unchanged from earlier thinking. Modern rigs run in push-state modes (Yaesu AUTO
 
 Do not re-derive classic request/response framing for CAT. See `docs/v1-analysis/invariants.md` §"CAT protocol model" for the fuller discussion.
 
+**Icom caveat (ADR 0035, 2026-06-15).** The push-state assumption holds for Yaesu (AUTO/AI pushes the *complete* state), but Icom CI-V Transceive is structurally incomplete — it pushes the operating VFO frequency and base mode, but never the modifier flags (data → USB-vs-USB-D, split) or the non-operating VFO. So `icom_civ` rigs add a **targeted, low-rate, collision-aware poll** of the un-pushed fields (a rigdef `POLL` read-list: `25 01` VFO-B, `26 00` mode+data, `0F` split) on top of the push — push stays for the fast operating freq/mode. The poll loop lives in `internal/bridge/pipeline.go` (`runPollLoop`), is gated on the rigdef declaring a `POLL` command (Yaesu rigdefs don't, so they run push-only unchanged), backs off while a Transceive burst is in flight (`bridge.timeouts.civ_poll_quiet_ms`), serialises with the command path through `cmdMu`, and doubles as a liveness keepalive. It publishes through the same decode→`rig-state` path as a push, so it adds no daemon state cache. Full reasoning: ADR 0035.
+
 ---
 
 ## 3. Design (if built): Unix-socket-only, SM-internal multiplexer

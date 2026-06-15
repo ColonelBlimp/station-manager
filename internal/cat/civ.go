@@ -191,6 +191,26 @@ func encodeCommandCIV(def RigDefinition, name, value string) ([]byte, error) {
 	}
 }
 
+// IsCIVBroadcast reports whether a decoded CI-V frame is an unsolicited
+// Transceive broadcast (addressed to 0x00) from the configured rig, as opposed
+// to a transponded reply to a controller read (addressed to 0xE0). The poll
+// loop's collision back-off (ADR 0035) keys off this: it must defer a poll while
+// the rig is mid-broadcast (a dial-turn storm), but the poll's OWN replies (to
+// the controller) must NOT count as "bus busy" or the poll would suppress
+// itself. Returns false for non-CI-V rigs and any non-broadcast frame.
+func IsCIVBroadcast(def RigDefinition, line []byte) bool {
+	if def.Protocol != ProtocolIcomCIV {
+		return false
+	}
+	rigAddr, err := civAddressByte(def)
+	if err != nil {
+		return false
+	}
+	// FE FE <to> <from> …  — broadcast iff to == 0x00 and from == the rig.
+	return len(line) >= 5 && line[0] == civPreamble && line[1] == civPreamble &&
+		line[2] == 0x00 && line[3] == rigAddr
+}
+
 // decodeCIV is the icom_civ branch of Decode. line is one FD-delimited frame
 // with the trailing FD already stripped by the serial reader, so it is
 // FE FE <to> <from> <cmd> [<subcmd>] [<data>].

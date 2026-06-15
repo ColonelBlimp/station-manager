@@ -148,6 +148,17 @@ type BridgeTimeoutsConfig struct {
 	WriteWatchdogMs        int `json:"write_watchdog_ms,omitempty"`
 	CivReadGapMs           int `json:"civ_read_gap_ms,omitempty"`
 	CivAckMs               int `json:"civ_ack_ms,omitempty"`
+
+	// CivPollIntervalMs is the steady-state cadence of the Icom state-mirror
+	// poll (ADR 0035) — the daemon fires the rigdef's POLL read-list this often
+	// to mirror the fields CI-V Transceive never pushes (non-operating VFO, mode
+	// data flag, split). Default ~1s; only icom_civ rigs that declare a POLL
+	// command use it. CivPollQuietMs is the collision back-off: a poll tick is
+	// skipped if a Transceive broadcast arrived within this window (the rig is
+	// mid dial-turn storm on the half-duplex bus), since freq is pushed in
+	// real-time anyway and the missed gap-read recovers on the next tick.
+	CivPollIntervalMs int `json:"civ_poll_interval_ms,omitempty"`
+	CivPollQuietMs    int `json:"civ_poll_quiet_ms,omitempty"`
 }
 
 // BridgeTuneConfig holds the tune-carrier knobs (ADR 0027). Both are optional

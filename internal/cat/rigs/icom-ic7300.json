@@ -24,8 +24,9 @@
     "listener_read_timeout_ms": 50
   },
   "commands": [
-    {"name": "INIT", "cmd": "03", "encoding": "none"},
-    {"name": "READ", "encoding": "frame_seq", "frames": ["03", "04"]},
+    {"name": "INIT", "cmd": "2500", "encoding": "none"},
+    {"name": "READ", "encoding": "frame_seq", "frames": ["2500", "2501", "2600", "0F"]},
+    {"name": "POLL", "encoding": "frame_seq", "frames": ["2501", "2600", "0F"]},
     {"name": "set_freq", "cmd": "05", "encoding": "bcd_freq", "exposed": true, "sets_state": "VFOAFREQ"},
     {"name": "set_mode", "cmd": "06", "encoding": "mode_seq", "exposed": true, "sets_state": "MAINMODE", "mode_seq": [
       {"mode": "LSB",    "frames": ["0600:01"]},
@@ -49,38 +50,40 @@
       ]
     },
     {
-      "prefix": "03",
+      "prefix": "2500",
       "markers": [
         {"tag": "VFOAFREQ", "kind": "bcd_freq", "index": 0, "length": 5}
       ]
     },
     {
-      "prefix": "01",
+      "prefix": "2501",
       "markers": [
-        {"tag": "MAINMODE", "kind": "byte", "index": 0, "length": 1, "value_mappings": [
-          {"key": "00", "value": "LSB"},
-          {"key": "01", "value": "USB"},
-          {"key": "02", "value": "AM"},
-          {"key": "03", "value": "CW"},
-          {"key": "04", "value": "RTTY"},
-          {"key": "05", "value": "FM"},
-          {"key": "07", "value": "CW-R"},
-          {"key": "08", "value": "RTTY-R"}
+        {"tag": "VFOBFREQ", "kind": "bcd_freq", "index": 0, "length": 5}
+      ]
+    },
+    {
+      "prefix": "2600",
+      "markers": [
+        {"tag": "MAINMODE", "kind": "byte", "index": 0, "length": 2, "value_mappings": [
+          {"key": "0000", "value": "LSB"},
+          {"key": "0001", "value": "LSB-D"},
+          {"key": "0100", "value": "USB"},
+          {"key": "0101", "value": "USB-D"},
+          {"key": "0200", "value": "AM"},
+          {"key": "0300", "value": "CW"},
+          {"key": "0400", "value": "RTTY"},
+          {"key": "0500", "value": "FM"},
+          {"key": "0700", "value": "CW-R"},
+          {"key": "0800", "value": "RTTY-R"}
         ]}
       ]
     },
     {
-      "prefix": "04",
+      "prefix": "0F",
       "markers": [
-        {"tag": "MAINMODE", "kind": "byte", "index": 0, "length": 1, "value_mappings": [
-          {"key": "00", "value": "LSB"},
-          {"key": "01", "value": "USB"},
-          {"key": "02", "value": "AM"},
-          {"key": "03", "value": "CW"},
-          {"key": "04", "value": "RTTY"},
-          {"key": "05", "value": "FM"},
-          {"key": "07", "value": "CW-R"},
-          {"key": "08", "value": "RTTY-R"}
+        {"tag": "SPLIT", "kind": "byte", "index": 0, "length": 1, "value_mappings": [
+          {"key": "00", "value": "OFF"},
+          {"key": "01", "value": "ON"}
         ]}
       ]
     }
