@@ -50,6 +50,21 @@
       ]
     },
     {
+      "prefix": "01",
+      "markers": [
+        {"tag": "MAINMODE", "kind": "byte", "index": 0, "length": 1, "value_mappings": [
+          {"key": "00", "value": "LSB"},
+          {"key": "01", "value": "USB"},
+          {"key": "02", "value": "AM"},
+          {"key": "03", "value": "CW"},
+          {"key": "04", "value": "RTTY"},
+          {"key": "05", "value": "FM"},
+          {"key": "07", "value": "CW-R"},
+          {"key": "08", "value": "RTTY-R"}
+        ]}
+      ]
+    },
+    {
       "prefix": "2500",
       "markers": [
         {"tag": "VFOAFREQ", "kind": "bcd_freq", "index": 0, "length": 5}

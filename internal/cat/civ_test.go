@@ -414,6 +414,12 @@ func TestEmbeddedIC7300(t *testing.T) {
 	if err != nil || st["VFOAFREQ"] != "14074000" {
 		t.Errorf("Decode freq push: st=%v err=%v", st, err)
 	}
+	// Decode the Transceive base-mode push (01) — the INSTANT mode path on a
+	// front-panel mode change; the 26 00 poll refines the data flag a beat later.
+	st, err = Decode(def, []byte{0xFE, 0xFE, 0x00, 0x94, 0x01, 0x03, 0x01})
+	if err != nil || st["MAINMODE"] != "CW" {
+		t.Errorf("Decode mode push (01): st=%v err=%v", st, err)
+	}
 	// Decode the polled VFO-A / VFO-B freq reads (25 00 / 25 01).
 	st, err = Decode(def, []byte{0xFE, 0xFE, 0xE0, 0x94, 0x25, 0x00, 0x20, 0x68, 0x13, 0x10, 0x00})
 	if err != nil || st["VFOAFREQ"] != "10136820" {
