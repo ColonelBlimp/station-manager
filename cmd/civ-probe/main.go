@@ -41,6 +41,7 @@ func main() {
 	set := flag.Bool("set", false, "WRITE TEST: drive set-mode (06) + data-mode (1A 06) to validate the USB-D sequence (no TX commands ever); restores starting state")
 	trace := flag.Bool("trace", false, "WRITE TEST: send set-freq/set-mode and print every returned frame with ms timing (ACK shape+latency, broadcast?, FA/NG on out-of-band); restores starting freq+mode; no TX")
 	listen := flag.Bool("listen", false, "READ-ONLY: open and passively log CI-V Transceive broadcasts while you change the front panel; sends nothing")
+	mirror := flag.Bool("mirror", false, "READ-ONLY mirror probe: loop the candidate full-sync read-set (25 00 VFO-A, 25 01 VFO-B, 26 00 mode+data, 0F split), decoding each + flagging missing replies. Turn the dial partway through to test half-duplex collision. No writes that change state.")
 	secs := flag.Int("secs", 45, "listen duration in seconds (-listen only)")
 	flag.Parse()
 
@@ -55,6 +56,15 @@ func main() {
 			_, _ = fmt.Sscanf(bs[0], "%d", &baud)
 		}
 		listenBroadcast(*port, baud, byte(*addr), byte(*ctrl), time.Duration(*secs)*time.Second)
+		return
+	}
+
+	if *mirror {
+		baud := 19200
+		if bs := splitCSV(*baudList); len(bs) > 0 {
+			_, _ = fmt.Sscanf(bs[0], "%d", &baud)
+		}
+		runMirrorTest(*port, baud, byte(*addr), byte(*ctrl), time.Duration(*secs)*time.Second)
 		return
 	}
 
@@ -374,6 +384,78 @@ func hzToBCDFreq(hz uint64) []byte {
 	return b
 }
 
+// runMirrorTest loops the candidate full-sync read-set and reports, per poll,
+// which replies arrived — so the early polls (operator idle) confirm the rig
+// answers 25/26/0F, and later polls (operator turning the dial, so the bus is
+// busy with unsolicited 00 broadcasts) expose half-duplex collision as missing
+// replies. READ-ONLY: every frame is a query (0x25/0x26/0x0F), never a set.
+func runMirrorTest(path string, baud int, addr, ctrl byte, dur time.Duration) {
+	mode := &serial.Mode{BaudRate: baud, DataBits: 8, Parity: serial.NoParity, StopBits: serial.OneStopBit}
+	p, err := serial.Open(path, mode)
+	if err != nil {
+		fmt.Printf("open: %v\n", err)
+		return
+	}
+	defer func() { _ = p.Close() }()
+	deassertPTTLines(p)
+	_ = p.SetReadTimeout(60 * time.Millisecond)
+
+	reads := []struct {
+		label   string
+		payload []byte
+	}{
+		{"VFO-A freq (25 00)", []byte{0x25, 0x00}},
+		{"VFO-B freq (25 01)", []byte{0x25, 0x01}},
+		{"mode+data (26 00)", []byte{0x26, 0x00}},
+		{"split    (0F)", []byte{0x0F}},
+	}
+
+	fmt.Printf("mirror probe for %s — idle for the first few polls, then TURN THE DIAL to test collision...\n", dur)
+	deadline := time.Now().Add(dur)
+	poll := 0
+	for time.Now().Before(deadline) {
+		poll++
+		fmt.Printf("\n===== poll #%d =====\n", poll)
+		missing := 0
+		for _, r := range reads {
+			if !fireRead(p, addr, ctrl, r.payload, r.label) {
+				missing++
+			}
+			time.Sleep(60 * time.Millisecond) // inter-read spacing (half-duplex)
+		}
+		fmt.Printf("poll #%d: %d/%d replies MISSING\n", poll, missing, len(reads))
+		time.Sleep(400 * time.Millisecond) // inter-poll gap
+	}
+	fmt.Println("\n(mirror probe closed)")
+}
+
+// fireRead writes one read query and reports whether the matching reply came
+// back from the rig (by command byte, plus the subcommand byte for 25/26 so a
+// VFO-A reply isn't mistaken for VFO-B). Decodes every frame seen in the window
+// — including any unsolicited Transceive broadcasts that arrive mid-poll.
+func fireRead(p serial.Port, addr, ctrl byte, payload []byte, label string) bool {
+	fmt.Printf("-> %s\n", label)
+	if _, err := p.Write(buildFrame(addr, ctrl, payload)); err != nil {
+		fmt.Printf("   write: %v\n", err)
+		return false
+	}
+	got := false
+	for _, f := range collectFrames(p, 300*time.Millisecond) {
+		if len(f) >= 6 && f[3] == addr && f[4] == payload[0] {
+			data := f[5 : len(f)-1]
+			// Match the subcommand too for 25/26 (00 selected vs 01 unselected).
+			if len(payload) < 2 || (len(data) >= 1 && data[0] == payload[1]) {
+				got = true
+			}
+		}
+		decodeFrame(f, addr, ctrl)
+	}
+	if !got {
+		fmt.Printf("   !! no reply for %s\n", label)
+	}
+	return got
+}
+
 // buildFrame wraps a command payload in FE FE <to> <from> ... FD.
 func buildFrame(to, from byte, payload []byte) []byte {
 	f := []byte{0xFE, 0xFE, to, from}
@@ -458,6 +540,34 @@ func decodeFrame(f []byte, addr, ctrl byte) bool {
 		} else {
 			fmt.Printf("        1A sub=% X\n", data)
 		}
+	case 0x0F:
+		// Split status (0F): 0F 00 = off, 0F 01 = on. The whole point of the
+		// split-broadcast bench — does a front-panel split toggle push a 0F?
+		fmt.Printf("        >>> SPLIT = %s\n", splitName(data))
+	case 0x25:
+		// VFO freq read: data = [subcmd(00=selected, 01=unselected), 5-byte BCD].
+		if len(data) >= 6 {
+			which := "selected (VFO-A)"
+			if data[0] == 0x01 {
+				which = "UNSELECTED (VFO-B)"
+			}
+			fmt.Printf("        >>> %s freq = %s Hz\n", which, decodeBCDFreq(data[1:]))
+		} else {
+			fmt.Printf("        25 data=% X\n", data)
+		}
+	case 0x26:
+		// Operating mode read: data = [subcmd, mode, data-flag, filter] — the
+		// full mode INCLUDING the data flag in one read (closes the USB-D gap).
+		if len(data) >= 4 {
+			which := "selected"
+			if data[0] == 0x01 {
+				which = "unselected"
+			}
+			fmt.Printf("        >>> %s mode = %s, data = %s, filter = 0x%02X\n",
+				which, modeName(data[1:]), dataModeName(data[2:]), data[3])
+		} else {
+			fmt.Printf("        26 data=% X\n", data)
+		}
 	case 0xFB:
 		fmt.Println("        >>> ACK OK (FB) — command accepted")
 	case 0xFA:
@@ -499,6 +609,16 @@ func filterName(d []byte) string {
 }
 
 func dataModeName(d []byte) string {
+	if len(d) < 1 {
+		return "(none)"
+	}
+	if d[0] == 0x00 {
+		return "OFF (0x00)"
+	}
+	return fmt.Sprintf("ON (0x%02X)", d[0])
+}
+
+func splitName(d []byte) string {
 	if len(d) < 1 {
 		return "(none)"
 	}

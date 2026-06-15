@@ -142,6 +142,14 @@ behaviour for a dropped echo.
 
 ### Read strategy: push-only, no polling
 
+> **Revised for Icom by ADR 0035 (2026-06-15).** Bench work showed Icom's CI-V
+> Transceive push is structurally incomplete (it carries the operating freq +
+> base mode, but never the data flag, split, or the non-operating VFO), so the
+> push-only stance below cannot fully mirror an Icom. ADR 0035 adds a targeted,
+> collision-aware **poll** of the un-pushed fields for `icom_civ` only — push
+> stays for the fast freq/mode. This codec-seam ADR otherwise stands; only the
+> no-polling rule is revised, and only for Icom (Yaesu remains push-only).
+
 The bridge's read model (ADR 0019) assumes the rig **pushes** state on change:
 `INIT` arms broadcast, `READ` takes a one-shot snapshot on connect, steady state
 decodes pushed lines. All three CAT families support push — Yaesu AUTO (`AI1;`),
