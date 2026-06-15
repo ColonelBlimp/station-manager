@@ -1,11 +1,24 @@
 ---
 number: 0036
 title: Rig profile owns its audio devices — per-rig, per-direction, name-based
-status: Accepted
+status: Proposed
 date: 2026-06-15
 ---
 
 # 0036 — Rig profile owns its audio devices — per-rig, per-direction, name-based
+
+> ⚠️ **PENDING RESOLUTION (2026-06-15).** While documenting, found that
+> `docs/v2-design/config.md` §10.4 #1 **already decided this** on 2026-06-13:
+> a **single name-based** `RigConfig.Audio.Device` resolved to *both* capture +
+> playback endpoints — and it **explicitly rejected** the two-field model this
+> ADR's Decision proposes (the IC-7300 validates the single-name choice: codec
+> `"PCM2901 Audio Codec Analog Stereo"` appears in both lists, capture idx 4 /
+> playback idx 2). So this ADR duplicates + contradicts an existing decision.
+> **Next session: decide — (a) delete this ADR, repoint ADR 0028's forward-note
+> at config.md §10.4 #1, and add a "validated 2026-06-15 + interim `ActiveFt8`
+> clobber bug fixed" note to §10.4 #1 (recommended — link, don't duplicate); or
+> (b) thin this ADR to a link-only amendment of 0028 aligned to the single-name
+> model.** Do NOT treat the two-field Decision below as authoritative.
 
 ## Context
 
