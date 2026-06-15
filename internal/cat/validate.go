@@ -170,6 +170,7 @@ func validateValueMap(op errors.Op, def RigDefinition, cmdName, tag string) erro
 // (an Icom command always names a binary kind).
 var civEncodingKinds = map[string]struct{}{
 	EncodingNone:     {},
+	EncodingFrameSeq: {},
 	EncodingBCDFreq:  {},
 	EncodingModeSeq:  {},
 	EncodingBCDPower: {},
@@ -218,13 +219,24 @@ func validateCIV(def RigDefinition) error {
 				"command %q has unknown CI-V encoding %q", c.Name, c.Encoding)
 		}
 
-		// EncodingModeSeq carries its bytes in the per-literal frame lists, not
-		// in Cmd; every other kind needs valid hex command bytes in Cmd.
-		if c.Encoding == EncodingModeSeq {
+		// EncodingModeSeq / EncodingFrameSeq carry their bytes in frame lists,
+		// not in Cmd; every other kind needs valid hex command bytes in Cmd.
+		switch c.Encoding {
+		case EncodingModeSeq:
 			if err := validateModeSeq(op, c); err != nil {
 				return err
 			}
-		} else {
+		case EncodingFrameSeq:
+			if len(c.Frames) == 0 {
+				return errors.New(op).WithMsgf("command %q has encoding frame_seq but no frames", c.Name)
+			}
+			for _, f := range c.Frames {
+				b, err := civHexBytes(f)
+				if err != nil || len(b) == 0 {
+					return errors.New(op).WithMsgf("command %q has invalid hex frame %q", c.Name, f)
+				}
+			}
+		default:
 			if c.Cmd == "" {
 				return errors.New(op).WithMsgf("command %q has an empty cmd", c.Name)
 			}

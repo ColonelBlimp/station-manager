@@ -24,8 +24,15 @@ const (
 	EncodingASCII = "ascii"
 	// EncodingNone is a CI-V command with no value substitution — its full
 	// byte sequence (command + optional subcommand + fixed data) lives in Cmd
-	// as hex. Used by INIT/READ/tx_on/tx_off.
+	// as hex. Used by INIT/tx_on/tx_off.
 	EncodingNone = "none"
+	// EncodingFrameSeq is a valueless command that emits a fixed SEQUENCE of
+	// CI-V frames (the bytes live in Command.Frames, not Cmd). The CI-V
+	// analogue of the Kenwood READ packing several `;`-terminated queries into
+	// one string: READ polls freq (`03`) + mode (`04`) as two frames so a
+	// freshly-connected SPA gets a state snapshot (Transceive only broadcasts
+	// on change, never on connect).
+	EncodingFrameSeq = "frame_seq"
 	// EncodingBCDFreq encodes a decimal-Hz value as 5-byte little-endian BCD
 	// appended to the command bytes (CI-V set_freq).
 	EncodingBCDFreq = "bcd_freq"
@@ -161,6 +168,11 @@ type Command struct {
 	// mode, two for a data mode (base mode then the `1A 06` data flag). Empty
 	// for every other command and encoding.
 	ModeSeq []ModeSequence `json:"mode_seq,omitempty"`
+
+	// Frames carries the ordered hex frame bodies for an EncodingFrameSeq
+	// command (CI-V READ). Each is wrapped in `FE FE…FD` and concatenated;
+	// the rig answers each query in turn. Empty for every other encoding.
+	Frames []string `json:"frames,omitempty"`
 }
 
 // ModeSequence maps one rig mode literal to the ordered CI-V frame bodies that

@@ -346,6 +346,91 @@ func TestValidateCIV_Rejects(t *testing.T) {
 	}
 }
 
+// TestEmbeddedIC7300 pins the shipped icom-ic7300.json rigdef end-to-end
+// through the public codec surface — the same functions the bridge calls. The
+// embedded loader already ran ValidateRigDefinition at init (a fault would
+// panic the package), so this asserts the wire bytes are what the bench
+// validated, not just that the file parses.
+func TestEmbeddedIC7300(t *testing.T) {
+	def, ok := Lookup("icom-ic7300")
+	if !ok {
+		t.Fatal("icom-ic7300 not in the embedded rig DB")
+	}
+	if def.Protocol != ProtocolIcomCIV {
+		t.Fatalf("Protocol = %q, want %q", def.Protocol, ProtocolIcomCIV)
+	}
+	if def.Ft8Mode != "USB-D" {
+		t.Errorf("Ft8Mode = %q, want USB-D", def.Ft8Mode)
+	}
+
+	// INIT primes comms with a single freq read; READ snapshots freq + mode.
+	initBytes, err := Encode(def, "INIT")
+	if err != nil {
+		t.Fatalf("Encode INIT: %v", err)
+	}
+	eqBytes(t, initBytes, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x03, 0xFD})
+
+	read, err := Encode(def, "READ")
+	if err != nil {
+		t.Fatalf("Encode READ: %v", err)
+	}
+	eqBytes(t, read, []byte{
+		0xFE, 0xFE, 0x94, 0xE0, 0x03, 0xFD,
+		0xFE, 0xFE, 0x94, 0xE0, 0x04, 0xFD,
+	})
+
+	// FT8 mode set: base USB then data ON (the bench-validated two-frame form).
+	usbD, err := EncodeCommand(def, "set_mode", "USB-D")
+	if err != nil {
+		t.Fatalf("EncodeCommand set_mode USB-D: %v", err)
+	}
+	eqBytes(t, usbD, []byte{
+		0xFE, 0xFE, 0x94, 0xE0, 0x06, 0x01, 0x01, 0xFD,
+		0xFE, 0xFE, 0x94, 0xE0, 0x1A, 0x06, 0x01, 0x01, 0xFD,
+	})
+
+	// Inbound freq op.
+	freq, err := EncodeCommand(def, "set_freq", "14074000")
+	if err != nil {
+		t.Fatalf("EncodeCommand set_freq: %v", err)
+	}
+	eqBytes(t, freq, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x05, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD})
+
+	// Decode a real freq + mode broadcast.
+	st, err := Decode(def, []byte{0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00})
+	if err != nil || st["VFOAFREQ"] != "14074000" {
+		t.Errorf("Decode freq broadcast: st=%v err=%v", st, err)
+	}
+	st, err = Decode(def, []byte{0xFE, 0xFE, 0x00, 0x94, 0x01, 0x03, 0x01})
+	if err != nil || st["MAINMODE"] != "CW" {
+		t.Errorf("Decode mode broadcast: st=%v err=%v", st, err)
+	}
+
+	// TX must not be reachable: the rigdef ships no exposed TX command, and the
+	// inbound ops are exactly freq + mode (RX-safe layer; TX is a later step).
+	ops := ExposedCommands(def)
+	if len(ops) != 2 {
+		t.Errorf("ExposedCommands = %v, want exactly [set_freq set_mode]", ops)
+	}
+	for _, op := range ops {
+		if op == "tx_on" || op == "tx_off" || op == "set_power" {
+			t.Errorf("ExposedCommands includes %q — must never be exposed", op)
+		}
+	}
+
+	// Settable modes include the data mode (superset of broadcast base modes).
+	modes := RigModes(def)
+	var hasUSBD bool
+	for _, m := range modes {
+		if m == "USB-D" {
+			hasUSBD = true
+		}
+	}
+	if !hasUSBD {
+		t.Errorf("RigModes = %v, want it to include USB-D", modes)
+	}
+}
+
 func TestValidate_UnknownProtocol(t *testing.T) {
 	def := civTestDef()
 	def.Protocol = "martian"

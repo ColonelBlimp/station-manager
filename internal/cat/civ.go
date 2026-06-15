@@ -46,6 +46,21 @@ func encodeCIV(def RigDefinition, name string, _ ...any) ([]byte, error) {
 	if !ok {
 		return nil, errors.New(op).WithErr(ErrUnknownCommand).WithMsgf("unknown command %q", name)
 	}
+	if c.Encoding == EncodingFrameSeq {
+		var out []byte
+		for _, f := range c.Frames {
+			fb, err := civHexBytes(f)
+			if err != nil {
+				return nil, errors.New(op).WithErr(err).WithMsgf("command %q has invalid hex frame %q", name, f)
+			}
+			frame, err := civFrame(def, fb)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, frame...)
+		}
+		return out, nil
+	}
 	body, err := civHexBytes(c.Cmd)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsgf("command %q has invalid hex cmd %q", name, c.Cmd)

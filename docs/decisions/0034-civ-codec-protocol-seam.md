@@ -93,7 +93,8 @@ becomes the data payload:
 | `encoding`  | meaning                                                        | used by            |
 |-------------|----------------------------------------------------------------|--------------------|
 | `ascii`     | today's behaviour — `%s` template + `value_map` + `pad`        | Kenwood (default)  |
-| `none`      | no data payload (valueless command)                            | read_freq, read_mode |
+| `none`      | no data payload (valueless single frame, bytes in `cmd`)       | INIT, tx_on, tx_off |
+| `frame_seq` | valueless, emits a fixed SEQUENCE of frames (bytes in `frames`)| READ (freq + mode)  |
 | `bcd_freq`  | decimal Hz → 5-byte little-endian BCD                          | set_freq           |
 | `mode_seq`  | `value_map` literal → an **ordered CI-V frame sequence** (1+ frames) | set_mode     |
 | `bcd_power` | percent/level → BCD level field                                | set_power          |
@@ -198,6 +199,47 @@ dispatch on `def.Protocol`. No bridge change, so the tune controller (ADR 0027),
 the FT8-TX keyer (ADR 0030), and the command path (ADR 0026) work over CI-V the
 moment the rigdef declares its `tx_on`/`tx_off`/`set_mode`/`set_power` commands —
 and `tx_on`/`tx_off` stay **unexposed** exactly as on the Yaesus.
+
+## Implementation notes (codec + rigdef shipped 2026-06-15)
+
+The schema above is the decision; three refinements landed when the engine
+(`internal/cat/civ.go`) and the `icom-ic7300.json` rigdef were built. None
+change a decision — they pin the "illustrative; exact bytes pinned when built"
+parts:
+
+- **`mode_seq` is inline on the command, not a `value_map`.** The per-literal
+  frame sequence lives in a `Command.ModeSeq` field (`[{mode, frames}]`), not in
+  a marker's `value_mappings`. CI-V's settable mode set is a *superset* of the
+  broadcast base modes (the data flag is never pushed), so the decode MAINMODE
+  marker (base modes only) cannot also carry the settable frame sequences — they
+  are genuinely two tables. `RigModes` therefore sources the settable list from
+  `set_mode`'s `ModeSeq` for CI-V. The `value_map: "MODE"` shown in the
+  illustration is dropped (it would point at a non-existent marker).
+- **A new `frame_seq` encoding kind** joins the table for valueless multi-frame
+  commands. `READ` must poll freq (`03`) **and** mode (`04`) as two frames to
+  snapshot state on connect (Transceive only broadcasts on *change*, never on
+  connect — the CI-V analogue of the Kenwood `READ` packing `ID;FA;FB;…`).
+  `INIT` is a single `none` `03` freq-read poke (CI-V Transceive is an operator
+  prerequisite, so there is nothing for `INIT` to *arm* — the daemon neither
+  forces nor falls back).
+- **The delimiter is declared as `"0xFD"`** in the rigdef (`terminator` +
+  `serial.line_delimiter`). A raw 0xFD byte cannot be a JSON string (it is not
+  valid UTF-8), and `"ý"` unmarshals to the 2-byte UTF-8 of U+00FD, not the
+  single byte. The `"0xFD"` hex form keeps the rigdef self-describing (the
+  existing "every rigdef declares its delimiter explicitly" rule); the serial
+  glue learns to parse it in the transport step.
+
+**Shipped in RX-safe layers (build order: ADR 0019 → 0026 → TX).** The first
+`icom-ic7300.json` carries only RX state (INIT/READ + freq/mode decode) and the
+two inbound ops `set_freq` + `set_mode` (ADR 0026, no TX). **`tx_on`/`tx_off`
+and `set_power` are deferred to the on-rig TX-validation step** — the illustration
+above shows them, but TX on the IC-7300 needs the DTR/RTS de-assert (the USB SEND
+keying finding) wired *and* on-rig validation before any keying command ships.
+`bcd_power` is implemented in the engine (decimal 0–255 level → 2-byte
+big-endian BCD) but the IC-7300's level field is a 0–255 scale, **not watts** —
+the tune controller passes watts, so a watts→level mapping is owed before
+`set_power` ships for Icom. So the shipped RX rigdef has **no exposed TX command
+at all**, which the codec test asserts.
 
 ## Validated on the bench (IC-7300, 2026-06-14)
 
