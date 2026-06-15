@@ -145,6 +145,23 @@ func Open(cfg Config) (*Port, error) {
 		Parity:   ncfg.Parity,
 	}
 
+	// Set the initial DTR/RTS line state AT OPEN when the config specifies it.
+	// go.bug.st/serial asserts both when InitialStatusBits is nil; for a rig
+	// whose PTT can be mapped to a control line (Icom USB SEND), asserting on
+	// open would key the transmitter, so we must set the lines before the port
+	// is live — not assert-then-clear. The baseline is the library default
+	// (both true); a non-nil field overrides just that line.
+	if ncfg.RTS != nil || ncfg.DTR != nil {
+		bits := &serial.ModemOutputBits{RTS: true, DTR: true}
+		if ncfg.RTS != nil {
+			bits.RTS = *ncfg.RTS
+		}
+		if ncfg.DTR != nil {
+			bits.DTR = *ncfg.DTR
+		}
+		mode.InitialStatusBits = bits
+	}
+
 	p, err := serial.Open(ncfg.PortName, mode)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err)

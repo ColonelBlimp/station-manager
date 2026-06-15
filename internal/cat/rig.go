@@ -116,8 +116,15 @@ type RigSerial struct {
 	LineDelimiter  string `json:"line_delimiter"`
 	ReadTimeoutMS  int    `json:"read_timeout_ms"`
 	WriteTimeoutMS int    `json:"write_timeout_ms,omitempty"`
-	RTS            bool   `json:"rts,omitempty"`
-	DTR            bool   `json:"dtr,omitempty"`
+
+	// RTS and DTR are the initial modem-output-line states the transport sets
+	// at open (*bool tri-state: nil/omitted = leave go.bug.st default of both
+	// asserted; an explicit false DE-ASSERTS). Icom CI-V sets both false: its
+	// USB SEND can map PTT to a control line, so opening with the line asserted
+	// would key the rig (ADR 0034). The Yaesu USB-CDC rigs set true (the
+	// default, where the lines aren't flow control anyway).
+	RTS *bool `json:"rts,omitempty"`
+	DTR *bool `json:"dtr,omitempty"`
 }
 
 // RigTiming holds CAT-level timing tunables for the rig's background

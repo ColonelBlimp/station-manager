@@ -1005,3 +1005,57 @@ func TestBuildSerialConfig_FromYaesuRigDef(t *testing.T) {
 		t.Errorf("ReadTimeoutMS = %d, want %d", cfg.ReadTimeoutMS, def.Serial.ReadTimeoutMS)
 	}
 }
+
+// TestBuildSerialConfig_FromIcomCIVRigDef pins the two transport-level
+// requirements ADR 0034 puts on the IC-7300: the binary frame delimiter parses
+// from its "0xFD" hex form, and DTR+RTS are de-asserted at open (the USB SEND
+// keying hazard — opening with a line asserted would key the rig).
+func TestBuildSerialConfig_FromIcomCIVRigDef(t *testing.T) {
+	def, ok := cat.Lookup("icom-ic7300")
+	if !ok {
+		t.Fatal("icom-ic7300 rigdef not found")
+	}
+	cfg, err := buildSerialConfig(types.BridgeSerialConfig{
+		Port: "/dev/ttyUSB0",
+	}, def.Serial)
+	if err != nil {
+		t.Fatalf("buildSerialConfig: %v", err)
+	}
+	if cfg.LineDelimiter != 0xFD {
+		t.Errorf("LineDelimiter = %#x, want 0xFD (CI-V frame terminator)", cfg.LineDelimiter)
+	}
+	if cfg.RTS == nil || *cfg.RTS {
+		t.Errorf("RTS = %v, want explicit false (de-assert to avoid USB SEND keying)", cfg.RTS)
+	}
+	if cfg.DTR == nil || *cfg.DTR {
+		t.Errorf("DTR = %v, want explicit false (de-assert to avoid USB SEND keying)", cfg.DTR)
+	}
+}
+
+// TestDelimiterFromString covers the literal-char and 0xNN hex forms plus the
+// rejection paths, so the CI-V "0xFD" delimiter and the Kenwood ";" both round
+// through one parser.
+func TestDelimiterFromString(t *testing.T) {
+	ok := map[string]byte{
+		";":    ';',
+		"\r":   '\r',
+		"0xFD": 0xFD,
+		"0XFD": 0xFD,
+		"0x3b": ';',
+	}
+	for in, want := range ok {
+		got, err := delimiterFromString(in)
+		if err != nil {
+			t.Errorf("delimiterFromString(%q): unexpected error %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("delimiterFromString(%q) = %#x, want %#x", in, got, want)
+		}
+	}
+	for _, bad := range []string{"", "ab", "0xFFF", "0x", "0xGG", "ý"} {
+		if _, err := delimiterFromString(bad); err == nil {
+			t.Errorf("delimiterFromString(%q) = nil error, want error", bad)
+		}
+	}
+}

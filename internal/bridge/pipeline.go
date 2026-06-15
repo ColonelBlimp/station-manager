@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/hex"
 	stderr "errors"
 	"strconv"
 	"strings"
@@ -675,13 +676,15 @@ func vfoLabelToTag(label string) string {
 // rather than in cat or serial — cat is pure codec, serial is pure
 // I/O, and the JSON↔enum translation is the bridge's glue work.
 //
-// Deliberately dropped (review 2026-06-04 M3): RigSerial's WriteTimeoutMS,
-// RTS, and DTR are parsed from the rigdef but not carried into serial.Config.
-// go.bug.st/serial defaults DTR=true / RTS=true when InitialStatusBits is nil
-// (which serial.Open always passes), so the shipped rigdefs' rts:true/dtr:true
-// coincide with the library default and dropping them is a no-op; for USB-CDC
-// Yaesu rigs RTS/DTR aren't flow control anyway. Wire these only when a future
-// rigdef actually needs rts:false/dtr:false.
+// RTS/DTR ARE now carried (the trigger the M3 note anticipated: ADR 0034's
+// Icom CI-V needs rts:false/dtr:false because USB SEND can map PTT to a control
+// line, so opening with it asserted keys the rig). They pass through as the
+// rigdef's *bool tri-state — nil leaves go.bug.st's default (both asserted, the
+// historical behaviour the Yaesu USB-CDC rigs rely on), an explicit false
+// de-asserts at open via serial.Mode.InitialStatusBits. No per-rig override for
+// these (not needed); the rigdef is authoritative.
+//
+// Still deliberately dropped (review 2026-06-04 M3): RigSerial's WriteTimeoutMS.
 //
 // The rigdef's WriteTimeoutMS (e.g. 20ms on the FTdx10) stays dropped on
 // purpose: it reads as an expected per-write latency, far too tight to drive
@@ -738,6 +741,8 @@ func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) 
 		StopBits:      stopBits,
 		LineDelimiter: delim,
 		ReadTimeoutMS: readTimeoutMS,
+		RTS:           rigSerial.RTS,
+		DTR:           rigSerial.DTR,
 	}, nil
 }
 
@@ -790,8 +795,19 @@ func delimiterFromString(s string) (byte, error) {
 	if s == "" {
 		return 0, stderr.New("bridge: rigdef serial.line_delimiter is required (no implicit default)")
 	}
+	// Hex-byte form "0xFD" (case-insensitive) for binary protocols whose frame
+	// delimiter isn't a printable character: a raw 0xFD byte can't be a JSON
+	// string (not valid UTF-8), and "ý" would unmarshal to the 2-byte UTF-8 of
+	// U+00FD, not the single byte. The CI-V rigdef declares "0xFD" (ADR 0034).
+	if len(s) == 4 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+		b, err := hex.DecodeString(s[2:])
+		if err != nil || len(b) != 1 {
+			return 0, stderr.New("bridge: line_delimiter hex form must be 0x followed by two hex digits, got " + strconv.Quote(s))
+		}
+		return b[0], nil
+	}
 	if len(s) != 1 {
-		return 0, stderr.New("bridge: line_delimiter must be a single byte, got " + strconv.Quote(s))
+		return 0, stderr.New("bridge: line_delimiter must be a single byte or 0xNN hex form, got " + strconv.Quote(s))
 	}
 	return s[0], nil
 }

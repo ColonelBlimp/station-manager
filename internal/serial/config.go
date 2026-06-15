@@ -49,6 +49,18 @@ type Config struct {
 	// so it only ever fires on a genuine hang. Zero or negative disables the
 	// watchdog (writes block indefinitely — the historical behaviour).
 	WriteTimeoutMS int `json:"write_timeout_ms"`
+
+	// RTS and DTR set the initial state of the corresponding modem output
+	// lines AT OPEN. nil leaves go.bug.st/serial's default (both asserted /
+	// true) — the historical behaviour and correct for USB-CDC rigs where the
+	// lines aren't flow control. A non-nil false DE-ASSERTS the line: required
+	// for Icom CI-V, where the rig's USB SEND function can map PTT to RTS or
+	// DTR, so a port opened with the line asserted would key the transmitter
+	// (ADR 0034 bench finding). Applied via serial.Mode.InitialStatusBits so
+	// the line is never asserted even momentarily — there is no
+	// assert-then-clear window.
+	RTS *bool `json:"rts,omitempty"`
+	DTR *bool `json:"dtr,omitempty"`
 }
 
 // validateConfig checks the configuration for obvious issues and returns a
