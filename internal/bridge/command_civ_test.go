@@ -153,9 +153,10 @@ func TestSendCommandsCIV_ReadsBackAfterSwap(t *testing.T) {
 		{0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01}, // read-back: VFO-B freq
 		{0xFE, 0xFE, 0x94, 0xE0, 0x26, 0x00}, // read-back: mode + data
 		{0xFE, 0xFE, 0x94, 0xE0, 0x0F},       // read-back: split
+		{0xFE, 0xFE, 0x94, 0xE0, 0x14, 0x0A}, // read-back: power level
 	}
 	if len(got) != len(want) {
-		t.Fatalf("swap_vfo wrote %d frames (% X), want swap + 4 read-back", len(got), got)
+		t.Fatalf("swap_vfo wrote %d frames (% X), want swap + 5 read-back", len(got), got)
 	}
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {

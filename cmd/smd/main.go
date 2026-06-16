@@ -5,11 +5,13 @@ import (
 	stderr "errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -483,6 +485,22 @@ func run() error {
 					q.Gridsquare = grid
 				}
 				q.CountryDetails = enr.Country
+			}
+			// TX_PWR: the effective at-antenna power, mirroring the phone/CW SPA
+			// derivation (displayedState.effectivePower) — the rig's live power
+			// scaled by the linear amp when enabled, falling back to the
+			// operator's default power when CAT can't report it (rig blip / not
+			// yet read). Left unset (TX_PWR omitted) only when neither is known.
+			rawW := float64(bridgeSvc.CurrentPowerW())
+			if rawW == 0 {
+				rawW = snap.Station.DefaultPower
+			}
+			if rawW > 0 {
+				mult := 1.0
+				if snap.Station.AmpEnabled && snap.Station.AmpMultiplier > 0 {
+					mult = snap.Station.AmpMultiplier
+				}
+				q.TxPwr = strconv.Itoa(int(math.Round(rawW * mult)))
 			}
 			rec := adif.QsoToRecord(q)
 			res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false)

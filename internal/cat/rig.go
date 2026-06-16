@@ -59,6 +59,12 @@ const (
 	// maps it through value_mappings (CI-V mode byte → literal). The base mode
 	// only — the data flag is never broadcast (ADR 0034 read strategy).
 	MarkerKindByte = "byte"
+	// MarkerKindBCDLevel reads Length big-endian BCD bytes as a 0–255 CI-V level
+	// (the power-setting format, 14 0A) and scales it to watts via the marker's
+	// ScaleMaxWatts: watts = round(level × ScaleMaxWatts / 255). So a rig whose
+	// power is a scaled level (Icom) surfaces the same watts the Yaesu PC field
+	// reports directly, and the bridge's TXPWR→Power mapping stays rig-agnostic.
+	MarkerKindBCDLevel = "bcd_level"
 )
 
 // RigDefinition is the shape of a rig-database entry. Ships as an embedded
@@ -161,6 +167,13 @@ type Command struct {
 	Pad      int    `json:"pad,omitempty"`
 	Exposed  bool   `json:"exposed,omitempty"`
 
+	// ScaleMaxWatts is the rated full-scale power in watts for an
+	// EncodingBCDPower command whose rig takes a 0–255 level (Icom 14 0A): the
+	// incoming watts value is scaled to a level (level = round(watts × 255 /
+	// ScaleMaxWatts)) before BCD encoding. Zero means the value is already the
+	// raw level (no scaling). Must match the power marker's ScaleMaxWatts.
+	ScaleMaxWatts int `json:"scale_max_watts,omitempty"`
+
 	// Encoding selects how the value becomes the wire payload (ADR 0034). Empty
 	// defaults to EncodingASCII (the Kenwood %s-template path), so every Kenwood
 	// command is unchanged. For ProtocolIcomCIV, Cmd holds the hex command bytes
@@ -220,11 +233,19 @@ type Marker struct {
 	ValueMappings []ValueMapping `json:"value_mappings,omitempty"`
 
 	// Kind selects how the CI-V decoder reads the marker's byte slice (ADR
-	// 0034): MarkerKindBCDFreq (little-endian BCD → decimal Hz) or
-	// MarkerKindByte (uppercase hex code → value_mappings lookup). Empty is the
-	// Kenwood default — a raw byte-slice string, optionally value-mapped — and
-	// is the only kind the ASCII decoder understands.
+	// 0034): MarkerKindBCDFreq (little-endian BCD → decimal Hz),
+	// MarkerKindByte (uppercase hex code → value_mappings lookup), or
+	// MarkerKindBCDLevel (big-endian BCD 0–255 level → watts via ScaleMaxWatts).
+	// Empty is the Kenwood default — a raw byte-slice string, optionally
+	// value-mapped — and is the only kind the ASCII decoder understands.
 	Kind string `json:"kind,omitempty"`
+
+	// ScaleMaxWatts is the rated full-scale power in watts for a
+	// MarkerKindBCDLevel marker: the rig's 0–255 power level maps linearly onto
+	// 0–ScaleMaxWatts (Icom 14 0A is a scaled level, not watts). Ignored for
+	// other kinds. Must match the set_power command's ScaleMaxWatts so read and
+	// write agree.
+	ScaleMaxWatts int `json:"scale_max_watts,omitempty"`
 }
 
 // ValueMapping is one key/value pair in a Marker's lookup table. Applied

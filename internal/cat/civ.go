@@ -3,6 +3,8 @@ package cat
 import (
 	"bytes"
 	"encoding/hex"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -179,7 +181,24 @@ func encodeCommandCIV(def RigDefinition, name, value string) ([]byte, error) {
 		if err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsgf("command %q has invalid hex cmd %q", name, c.Cmd)
 		}
-		lvl, err := levelToBCD(value, civPowerBCDLen)
+		// When the rig takes a 0–255 scaled level (ScaleMaxWatts set), the
+		// inbound value is watts: scale to the level the rig expects so callers
+		// (and the SPA) speak watts uniformly across rigs. Zero = value is
+		// already the raw level.
+		level := value
+		if c.ScaleMaxWatts > 0 {
+			w, err := strconv.Atoi(value)
+			if err != nil || w < 0 {
+				return nil, errors.New(op).WithErr(ErrInvalidPaddedValue).
+					WithMsgf("value %q is not valid watts for command %q", value, name)
+			}
+			lv := int(math.Round(float64(w) * 255 / float64(c.ScaleMaxWatts)))
+			if lv > 255 {
+				lv = 255
+			}
+			level = strconv.Itoa(lv)
+		}
+		lvl, err := levelToBCD(level, civPowerBCDLen)
 		if err != nil {
 			return nil, errors.New(op).WithErr(ErrInvalidPaddedValue).
 				WithMsgf("value %q is not a valid level for command %q", value, name)
@@ -278,6 +297,17 @@ func decodeCIV(def RigDefinition, line []byte) (Status, error) {
 				}
 			}
 			status[m.Tag] = mapped
+		case MarkerKindBCDLevel:
+			lvl, err := bcdLevelToInt(slice)
+			if err != nil {
+				// Malformed BCD — skip rather than blank the whole decode.
+				continue
+			}
+			watts := lvl
+			if m.ScaleMaxWatts > 0 {
+				watts = int(math.Round(float64(lvl) * float64(m.ScaleMaxWatts) / 255))
+			}
+			status[m.Tag] = strconv.Itoa(watts)
 		default:
 			// Unknown decode kind on the CI-V path — skip.
 		}
@@ -405,6 +435,22 @@ func bcdToFreq(b []byte) (string, error) {
 		s = "0"
 	}
 	return s, nil
+}
+
+// bcdLevelToInt decodes big-endian BCD bytes as an integer — the inverse of
+// levelToBCD, for the CI-V level format (2 bytes, 0000–0255). Each byte holds
+// two decimal digits; byte 0 is most significant. Example: 01 00 → 100.
+func bcdLevelToInt(b []byte) (int, error) {
+	n := 0
+	for _, by := range b {
+		hi := by >> 4
+		lo := by & 0x0f
+		if hi > 9 || lo > 9 {
+			return 0, ErrInvalidPaddedValue
+		}
+		n = n*100 + int(hi)*10 + int(lo)
+	}
+	return n, nil
 }
 
 // levelToBCD encodes a decimal level string as nbytes of big-endian BCD (the

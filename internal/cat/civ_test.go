@@ -182,7 +182,54 @@ func TestEncodeCommandCIV_Power(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommand set_power: %v", err)
 	}
+	// No scale_max_watts on civTestDef's set_power → value is the raw 0–255 level.
 	eqBytes(t, got, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x14, 0x0A, 0x01, 0x00, 0xFD})
+}
+
+// TestEmbeddedIC7300_PowerScaling exercises the real rigdef's scale_max_watts=100
+// on both directions: watts↔0–255 level (set_power encode) and level→watts
+// (14 0A decode → TXPWR), so the SPA/QSO sees watts uniformly across rigs.
+func TestEmbeddedIC7300_PowerScaling(t *testing.T) {
+	def, ok := Lookup("icom-ic7300")
+	if !ok {
+		t.Fatal("icom-ic7300 not embedded")
+	}
+
+	// Encode: watts → level (round(watts×255/100)), big-endian BCD.
+	for _, tc := range []struct {
+		watts string
+		bcd   []byte // the 2-byte level after the 14 0A command bytes
+	}{
+		{"0", []byte{0x00, 0x00}},   // 0 → 0
+		{"50", []byte{0x01, 0x28}},  // round(127.5) = 128 → 01 28
+		{"100", []byte{0x02, 0x55}}, // 255 → 02 55
+	} {
+		got, err := EncodeCommand(def, "set_power", tc.watts)
+		if err != nil {
+			t.Fatalf("EncodeCommand set_power %sW: %v", tc.watts, err)
+		}
+		want := append([]byte{0xFE, 0xFE, 0x94, 0xE0, 0x14, 0x0A}, append(tc.bcd, 0xFD)...)
+		eqBytes(t, got, want)
+	}
+
+	// Decode: level → watts (round(level×100/255)). Reply FE FE E0 94 14 0A <2 BCD>.
+	for _, tc := range []struct {
+		bcd   []byte
+		watts string
+	}{
+		{[]byte{0x00, 0x00}, "0"},
+		{[]byte{0x01, 0x28}, "50"},  // 128 → round(50.196) = 50
+		{[]byte{0x02, 0x55}, "100"}, // 255 → 100
+	} {
+		line := append([]byte{0xFE, 0xFE, 0xE0, 0x94, 0x14, 0x0A}, tc.bcd...)
+		st, err := Decode(def, line)
+		if err != nil {
+			t.Fatalf("Decode power %v: %v", tc.bcd, err)
+		}
+		if st["TXPWR"] != tc.watts {
+			t.Errorf("level %v: TXPWR = %q, want %q", tc.bcd, st["TXPWR"], tc.watts)
+		}
+	}
 }
 
 func TestEncodeCommandCIV_Errors(t *testing.T) {
@@ -380,6 +427,7 @@ func TestEmbeddedIC7300(t *testing.T) {
 		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01, 0xFD, // VFO-B freq
 		0xFE, 0xFE, 0x94, 0xE0, 0x26, 0x00, 0xFD, // mode + data flag
 		0xFE, 0xFE, 0x94, 0xE0, 0x0F, 0xFD, // split
+		0xFE, 0xFE, 0x94, 0xE0, 0x14, 0x0A, 0xFD, // power level (14 0A)
 	})
 
 	poll, err := Encode(def, "POLL")
@@ -390,6 +438,7 @@ func TestEmbeddedIC7300(t *testing.T) {
 		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01, 0xFD, // VFO-B (VFO-A comes via Transceive push)
 		0xFE, 0xFE, 0x94, 0xE0, 0x26, 0x00, 0xFD, // mode + data flag
 		0xFE, 0xFE, 0x94, 0xE0, 0x0F, 0xFD, // split
+		0xFE, 0xFE, 0x94, 0xE0, 0x14, 0x0A, 0xFD, // power level (14 0A)
 	})
 
 	// FT8 mode set: base USB then data ON (the bench-validated two-frame form).
@@ -465,11 +514,12 @@ func TestEmbeddedIC7300(t *testing.T) {
 	}
 	eqBytes(t, txOff, []byte{0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0x00, 0xFD})
 
-	// TX must not be reachable: the rigdef ships no exposed TX command. The
-	// inbound ops are exactly freq + mode + swap_vfo (RX-safe layer; TX is a
-	// later step). swap_vfo declares no sets_state — it has no commanded value
-	// to adopt, so the bridge reads state back after the ACK (ADR 0034).
-	wantOps := map[string]bool{"set_freq": true, "set_mode": true, "swap_vfo": true}
+	// TX *keying* must not be reachable: the rigdef ships no exposed tx_on/tx_off
+	// (controller-only, ADR 0027/0030). The exposed inbound ops are freq + mode +
+	// swap_vfo + set_power (set_power is a power-level set, not TX keying, and is
+	// exposed on the Yaesu rigdefs too). swap_vfo declares no sets_state — it has
+	// no commanded value to adopt, so the bridge reads state back after the ACK.
+	wantOps := map[string]bool{"set_freq": true, "set_mode": true, "swap_vfo": true, "set_power": true}
 	ops := ExposedCommands(def)
 	if len(ops) != len(wantOps) {
 		t.Errorf("ExposedCommands = %v, want exactly %v", ops, wantOps)
@@ -478,8 +528,8 @@ func TestEmbeddedIC7300(t *testing.T) {
 		if !wantOps[op] {
 			t.Errorf("ExposedCommands includes unexpected %q", op)
 		}
-		if op == "tx_on" || op == "tx_off" || op == "set_power" {
-			t.Errorf("ExposedCommands includes %q — must never be exposed", op)
+		if op == "tx_on" || op == "tx_off" {
+			t.Errorf("ExposedCommands includes %q — TX keying must never be exposed", op)
 		}
 	}
 

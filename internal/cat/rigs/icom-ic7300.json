@@ -7,7 +7,7 @@
   "protocol": "icom_civ",
   "civ_address": "94",
   "ft8_mode": "USB-D",
-  "description": "Icom IC-7300 HF/50MHz SDR transceiver. Icom CI-V binary protocol (FE FE..FD frames, addressed bus), push-state via CI-V Transceive. The first non-Yaesu rig and first CI-V rig; commands, mode codes, and addressing bench-validated on the borrowed rig 2026-06-14 (ADR 0034). RX-state + inbound freq/mode ops; TX (tune/FT8-TX) and power are deferred to the on-rig TX-validation step. Operator prerequisites (install.md): CI-V Transceive ON, CI-V USB Port = Link to [REMOTE], connect baud = CI-V Baud Rate (NOT the dormant CI-V USB Baud Rate), USB SEND = OFF.",
+  "description": "Icom IC-7300 HF/50MHz SDR transceiver. Icom CI-V binary protocol (FE FE..FD frames, addressed bus), push-state via CI-V Transceive. The first non-Yaesu rig and first CI-V rig; commands, mode codes, and addressing bench-validated on the borrowed rig 2026-06-14 (ADR 0034). RX-state + inbound freq/mode ops; FT8-TX keying validated on-rig 2026-06-16. Power read+set via 14 0A (a 0–255 level scaled to/from watts at scale_max_watts=100 so it reads as watts like the Yaesu PC field); read in READ+POLL, set_power exposed. tune-carrier (set_power-based mode+power restore) not yet wired for this rig. Operator prerequisites (install.md): CI-V Transceive ON, CI-V USB Port = Link to [REMOTE], connect baud = CI-V Baud Rate (NOT the dormant CI-V USB Baud Rate), USB SEND = OFF.",
   "terminator": "0xFD",
   "serial": {
     "baud_rate": 19200,
@@ -25,8 +25,8 @@
   },
   "commands": [
     {"name": "INIT", "cmd": "2500", "encoding": "none"},
-    {"name": "READ", "encoding": "frame_seq", "frames": ["2500", "2501", "2600", "0F"]},
-    {"name": "POLL", "encoding": "frame_seq", "frames": ["2501", "2600", "0F"]},
+    {"name": "READ", "encoding": "frame_seq", "frames": ["2500", "2501", "2600", "0F", "140A"]},
+    {"name": "POLL", "encoding": "frame_seq", "frames": ["2501", "2600", "0F", "140A"]},
     {"name": "set_freq", "cmd": "05", "encoding": "bcd_freq", "exposed": true, "sets_state": "VFOAFREQ"},
     {"name": "set_mode", "cmd": "06", "encoding": "mode_seq", "exposed": true, "sets_state": "MAINMODE", "mode_seq": [
       {"mode": "LSB",    "frames": ["0600:01"]},
@@ -41,6 +41,7 @@
       {"mode": "USB-D",  "frames": ["0601:01", "1A06:0101"]}
     ]},
     {"name": "swap_vfo", "cmd": "07B0", "encoding": "none", "exposed": true},
+    {"name": "set_power", "cmd": "140A", "encoding": "bcd_power", "exposed": true, "scale_max_watts": 100, "sets_state": "TXPWR"},
     {"name": "tx_on", "cmd": "1C0001", "encoding": "none"},
     {"name": "tx_off", "cmd": "1C0000", "encoding": "none"}
   ],
@@ -102,6 +103,12 @@
           {"key": "00", "value": "OFF"},
           {"key": "01", "value": "ON"}
         ]}
+      ]
+    },
+    {
+      "prefix": "140A",
+      "markers": [
+        {"tag": "TXPWR", "kind": "bcd_level", "index": 0, "length": 2, "scale_max_watts": 100}
       ]
     }
   ],

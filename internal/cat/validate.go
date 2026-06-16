@@ -178,8 +178,9 @@ var civEncodingKinds = map[string]struct{}{
 
 // civMarkerKinds is the set of Marker.Kind values a CI-V state may declare.
 var civMarkerKinds = map[string]struct{}{
-	MarkerKindBCDFreq: {},
-	MarkerKindByte:    {},
+	MarkerKindBCDFreq:  {},
+	MarkerKindByte:     {},
+	MarkerKindBCDLevel: {},
 }
 
 // validateCIV checks an icom_civ rigdef for the faults the loader must reject

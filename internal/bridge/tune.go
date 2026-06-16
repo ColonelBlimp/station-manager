@@ -320,6 +320,17 @@ func (s *Service) captureTuneSnapshot(p RigStatePayload) {
 	s.mu.Unlock()
 }
 
+// CurrentPowerW returns the rig's last-known TX power in watts, or 0 if unknown
+// (no power decoded yet, or CAT down). Reads the rolling current-rig snapshot
+// the read loop maintains. The FT8 QSO sink (cmd/smd) calls this to stamp
+// TX_PWR on a completed contact, so internal/ft8 gets the rig power by
+// dependency injection without importing internal/bridge (ADR 0013 scope).
+func (s *Service) CurrentPowerW() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastPower
+}
+
 // publishTuneState fans a tune-state event to subscribers (and the hub's
 // one-slot cache, so a SPA tab opening mid-tune still learns the carrier is
 // up). Daemon-authoritative: an auto-off the operator didn't trigger reaches
