@@ -111,7 +111,7 @@ func (s *Service) armTx() error {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 
-	player, err := s.newPlayer(s.txDeviceIndex())
+	player, err := s.newPlayer(s.txDeviceSpec())
 	if err != nil {
 		s.txMu.Unlock()
 		// newPlayer already wraps ErrTxUnavailable on the CGO-free build.
@@ -411,18 +411,30 @@ func (s *Service) base() context.Context {
 	return s.parentCtx
 }
 
-// txDeviceIndex resolves the output device from ft8.tx.device: an integer index
-// (as listed by `ft8-tx-probe -list`), else -1 (system default). Mirrors the
-// capture-side device resolution.
-func (s *Service) txDeviceIndex() int {
-	if s.cfg.TX != nil && s.cfg.TX.Device != "" {
-		if n, err := strconv.Atoi(s.cfg.TX.Device); err == nil {
-			return n
-		}
-		s.log.WarnWith().Str("device", s.cfg.TX.Device).
-			Msg("ft8: tx.device is not an integer index; using system default")
+// txDeviceSpec resolves the output device from ft8.tx.device (projected from the
+// active rig's audio.tx by ActiveFt8): a non-numeric value is a device NAME
+// resolved to a live index at acquire time by the playback layer; an integer
+// string is honoured as a raw index for any un-migrated config; empty → system
+// default (name "", index -1). Mirrors the capture-side resolveAudioDevice.
+func (s *Service) txDeviceSpec() (name string, index int) {
+	if s.cfg.TX != nil {
+		return resolveAudioDevice(s.cfg.TX.Device)
 	}
-	return -1
+	return "", -1
+}
+
+// resolveAudioDevice maps a configured audio-device string to either a device
+// name (the per-rig RigConfig.Audio.{RX,TX} model) or a raw index (a legacy
+// integer-string config). A value that parses as an integer is the index; any
+// other non-empty value is a name; empty is the system default.
+func resolveAudioDevice(s string) (name string, index int) {
+	if s == "" {
+		return "", -1
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return "", n
+	}
+	return s, -1
 }
 
 // txMode is the rig data-mode literal the controller switches to before keying

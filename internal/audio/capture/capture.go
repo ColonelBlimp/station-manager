@@ -42,7 +42,15 @@ var (
 
 // Config holds audio capture configuration.
 type Config struct {
-	// DeviceIndex selects a capture device. -1 means the system default.
+	// DeviceName selects a capture device by its enumerated name (as reported
+	// by ListDevices / GET /v1/hardware). When non-empty it takes precedence
+	// over DeviceIndex and is resolved to a live device at Start time, so it
+	// survives device re-enumeration across replug/reboot. No match → Start
+	// errors (fail-soft idle at the FT8 layer) rather than silently grabbing
+	// the system default.
+	DeviceName string
+	// DeviceIndex selects a capture device. -1 means the system default. Used
+	// only when DeviceName is empty.
 	DeviceIndex int
 	// SampleRate in Hz. FT8 canonical is 12000.
 	SampleRate uint32
@@ -208,7 +216,24 @@ func (c *Capture) Start(ctx context.Context) error {
 	audioCtx := c.ctx.Context
 
 	var deviceID unsafe.Pointer
-	if c.config.DeviceIndex >= 0 {
+	switch {
+	case c.config.DeviceName != "":
+		devices, err := c.ctx.Devices(malgo.Capture)
+		if err != nil {
+			c.running.Store(false)
+			return errors.New(op).WithErr(err)
+		}
+		for i := range devices {
+			if devices[i].Name() == c.config.DeviceName {
+				deviceID = devices[i].ID.Pointer()
+				break
+			}
+		}
+		if deviceID == nil {
+			c.running.Store(false)
+			return errors.New(op).WithMsgf("capture device %q not found", c.config.DeviceName)
+		}
+	case c.config.DeviceIndex >= 0:
 		devices, err := c.ctx.Devices(malgo.Capture)
 		if err != nil {
 			c.running.Store(false)

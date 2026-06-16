@@ -50,11 +50,13 @@ type RigConfig struct {
 	// because no realistic override-to-zero case exists today.
 	Overrides RigOverrides `json:"overrides,omitzero"`
 
-	// Audio selects this rig's audio interface (ADR 0028). A per-rig
-	// resource, NOT FT8-specific: the same physical USB codec carries FT8
-	// receive audio and (future) recorded-CQ / voice-keyer transmit audio.
-	// Projected onto Ft8Config.Device for the active rig (the one
-	// Config.DefaultRigID points at). Empty = the system default device.
+	// Audio selects this rig's audio devices, per direction (ADR 0028;
+	// per-direction model config.md §10.4 #1, revised 2026-06-16). A per-rig
+	// resource, NOT FT8-specific: the rig's codec carries FT8 receive audio
+	// and (future) recorded-CQ / voice-keyer transmit audio. Projected onto
+	// Ft8Config.Device (RX) / Ft8Config.TX.Device (TX) for the active rig (the
+	// one Config.DefaultRigID points at), so switching the active rig re-binds
+	// audio along with the CAT port + driver.
 	Audio RigAudioConfig `json:"audio,omitzero"`
 
 	// Ft8Mode is the operator's optional per-rig override of the FT8 operating
@@ -83,13 +85,24 @@ type RigConfig struct {
 	MyRig *string `json:"my_rig,omitempty"`
 }
 
-// RigAudioConfig selects a rig's audio interface. Device is a single
-// identifier for the one physical codec; the audio layer resolves the
-// direction-appropriate handle (capture for decode, playback for a voice
-// keyer) at open time, so the operator picks one device, not two (ADR
-// 0028 — one physical device, one choice). Empty = the system default.
+// RigAudioConfig selects a rig's audio devices by NAME, per direction
+// (config.md §10.4 #1, revised 2026-06-16 from the original single-field
+// model). RX is the capture device (FT8 decode, future recording); TX is the
+// playback device (FT8 transmit, future voice keyer).
+//
+// Names — not indices — because an index drifts across replug/reboot and
+// differs between a codec's capture and playback enumerations (the borrowed
+// IC-7300's USB codec "PCM2901 …" is capture index 4 but playback index 2). The
+// audio layer resolves each name to a live device index at acquire time by
+// matching the enumerated capture/playback lists (the same enumeration
+// GET /v1/hardware exposes), fail-soft: no match → that direction's device is
+// treated as absent (the FT8 subsystem stays idle rather than grabbing the
+// wrong default). Per direction rather than one field because RX and TX are not
+// guaranteed to be the same physical device. Empty = the system default for
+// that direction.
 type RigAudioConfig struct {
-	Device string `json:"device,omitempty"`
+	RX string `json:"rx,omitempty"`
+	TX string `json:"tx,omitempty"`
 }
 
 // RigOverrides shadows per-rig defaults from cat.RigDefinition. Field

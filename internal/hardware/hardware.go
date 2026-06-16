@@ -45,8 +45,9 @@ type SerialPort struct {
 }
 
 // AudioDevice is one enumerated audio endpoint (capture or playback). Name is
-// the identifier RigConfig.Audio.Device matches by (ADR 0028 — name-based, not
-// index). IsDefault flags the host's default device for that direction.
+// the identifier RigConfig.Audio.RX (capture) / RigConfig.Audio.TX (playback)
+// matches by (ADR 0028 — name-based, not index). IsDefault flags the host's
+// default device for that direction.
 type AudioDevice struct {
 	Name      string `json:"name"`
 	IsDefault bool   `json:"is_default"`

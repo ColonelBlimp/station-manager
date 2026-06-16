@@ -4,7 +4,6 @@ package ft8
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio/capture"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -28,25 +27,18 @@ type malgoSource struct {
 	cancel context.CancelFunc
 }
 
-// newCaptureSource builds the real (CGO) capture source. cfg.Device selects
-// the input device: empty → system default; an integer string → that device
-// index (as listed by `cmd/ft8-capture-probe`). Name-based matching is a
-// noted follow-up — index selection off the probe's device list is enough for
-// the live smoke.
+// newCaptureSource builds the real (CGO) capture source. cfg.Device selects the
+// input device (projected from the active rig's audio.rx by ActiveFt8): empty →
+// system default; a device NAME → resolved to a live index at acquire time by
+// the capture layer (the per-rig RigConfig.Audio.RX model); an integer string →
+// honoured as a raw index for any un-migrated config.
 func newCaptureSource(cfg types.Ft8Config, log logging.Logger) captureSource {
 	if log == nil {
 		log = logging.Noop()
 	}
 	cc := capture.DefaultConfig() // 12 kHz mono float32, default device, 512-frame period
 	cc.Logger = log
-	if cfg.Device != "" {
-		if idx, err := strconv.Atoi(cfg.Device); err == nil {
-			cc.DeviceIndex = idx
-		} else {
-			log.WarnWith().Str("device", cfg.Device).
-				Msg("ft8: device is not an integer index; using system default (name matching is future work)")
-		}
-	}
+	cc.DeviceName, cc.DeviceIndex = resolveAudioDevice(cfg.Device)
 	return &malgoSource{cfg: cc, log: log}
 }
 

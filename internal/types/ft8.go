@@ -9,15 +9,16 @@ package types
 // deployment) the subsystem acquires no audio device and spins up no
 // decoder goroutines. Default false — FT8 stays opt-in.
 //
-// Device selects the audio capture device, a single identifier string.
-// Under ADR 0028 the authoritative source is the per-rig
-// RigConfig.Audio.Device in the rig catalogue; Config.ActiveFt8() projects
-// the active rig's value onto this field, always winning over any value
-// left here. So Device is a resolved runtime view, not an on-disk source —
-// hand-setting it has no effect when a rig catalogue exists. omitempty so
-// the inert loose field doesn't persist in rewritten configs (mirrors the
-// empty bridge.serial.port / bridge.cat.driver loose fields). Empty means
-// the system default capture device.
+// Device selects the audio capture device. Under ADR 0028 the authoritative
+// source is the per-rig RigConfig.Audio.RX (a device NAME) in the rig
+// catalogue; Config.ActiveFt8() projects the active rig's value onto this
+// field. So Device is a resolved runtime view, not an on-disk operator knob —
+// mirroring how ActiveBridge() projects the active rig's port/driver onto
+// bridge.serial.port / bridge.cat.driver. The value is a device name, resolved
+// to a live index at acquire time (an integer string is still honoured as a
+// raw index for any un-migrated config). omitempty so the resolved field
+// doesn't persist in rewritten configs. Empty means the system default capture
+// device.
 //
 // EnableOSD turns on go-ft8's OSD-2/MRB fallback decode (ordered-statistics
 // decoding after belief-propagation misses) — the analog to WSJT-X/jt9's
@@ -169,13 +170,15 @@ func ResolveFt8Frequencies(c map[string]int) map[string]int {
 // selection are built; it grows (PTT, sequencing) as those layers land.
 type Ft8TXConfig struct {
 	// Device selects the audio OUTPUT (playback) device the TX waveform is
-	// streamed to — an integer index string as listed by `cmd/ft8-tx-probe
-	// -list`, separate from the capture-side Ft8Config.Device because the
-	// playback and capture device enumerations are independent (even when the
-	// rig's USB codec is physically one device). Empty → system default
-	// playback device. Name-based matching is a noted follow-up, mirroring the
-	// capture side. Like Ft8Config.Device, ADR 0028's per-rig audio device is
-	// expected to win over this loose field once TX device resolution lands.
+	// streamed to. Authoritative source is the per-rig RigConfig.Audio.TX (a
+	// device NAME); Config.ActiveFt8() projects the active rig's value here, so
+	// this is a resolved runtime view, not an on-disk operator knob — the
+	// playback analogue of Ft8Config.Device (RX). Separate from the capture side
+	// because playback and capture enumerate independently (the rig's one USB
+	// codec is capture index 4 / playback index 2 on the IC-7300). The value is
+	// a device name resolved to a live index at acquire time (an integer string
+	// still honoured as a raw index for any un-migrated config). Empty → system
+	// default playback device.
 	Device string `json:"device,omitempty"`
 
 	// Mode is the rig data-mode literal the TX controller switches the rig to

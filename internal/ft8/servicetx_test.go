@@ -42,7 +42,7 @@ func (p *fakeTxPlayer) closes() int { p.mu.Lock(); defer p.mu.Unlock(); return p
 // boundary until disarm cancels it (no 15 s wait is ever awaited).
 func newTxTestService(keyer TxKeyer, player txPlayer, playerErr error) *Service {
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), nil)
-	s.newPlayer = func(int) (txPlayer, error) {
+	s.newPlayer = func(string, int) (txPlayer, error) {
 		if playerErr != nil {
 			return nil, playerErr
 		}

@@ -679,8 +679,11 @@ func TestApplyRigProfiles_MigratesLegacy(t *testing.T) {
 		t.Fatalf("len(Rigs) = %d, want 1", len(cfg.Rigs))
 	}
 	rc := cfg.Rigs[0]
-	if rc.ID != 1 || rc.Model != "yaesu-ftdx10" || rc.Port != "/dev/ttyUSB0" || rc.Audio.Device != "USB Audio CODEC" {
-		t.Fatalf("synthesised rig = %+v, want {1 yaesu-ftdx10 /dev/ttyUSB0 ... USB Audio CODEC}", rc)
+	// Audio is NOT synthesised from the legacy ft8.device: it's an index that
+	// can't become a name at load time (config.md §10.4 #1), so the rig's Audio
+	// stays empty and the loose ft8.device remains a resolved fallback.
+	if rc.ID != 1 || rc.Model != "yaesu-ftdx10" || rc.Port != "/dev/ttyUSB0" || rc.Audio != (types.RigAudioConfig{}) {
+		t.Fatalf("synthesised rig = %+v, want {1 yaesu-ftdx10 /dev/ttyUSB0 <no audio>}", rc)
 	}
 	if cfg.DefaultRigID != 1 {
 		t.Errorf("DefaultRigID = %d, want 1", cfg.DefaultRigID)
@@ -688,6 +691,7 @@ func TestApplyRigProfiles_MigratesLegacy(t *testing.T) {
 	if b := cfg.ActiveBridge(); b.Cat.Driver != "yaesu-ftdx10" || b.Serial.Port != "/dev/ttyUSB0" {
 		t.Errorf("ActiveBridge() = {driver %q port %q}, want {yaesu-ftdx10 /dev/ttyUSB0}", b.Cat.Driver, b.Serial.Port)
 	}
+	// The rig has no named audio, so the loose ft8.device passes through unclobbered.
 	if f := cfg.ActiveFt8(); f.Device != "USB Audio CODEC" {
 		t.Errorf("ActiveFt8().Device = %q, want %q", f.Device, "USB Audio CODEC")
 	}
@@ -719,8 +723,8 @@ func TestApplyRigProfiles_ResolvesAndProjects(t *testing.T) {
 	cfg := Config{
 		Bridge: types.BridgeConfig{Enabled: true, Timeouts: types.BridgeTimeoutsConfig{LivenessMs: 5000}},
 		Rigs: []types.RigConfig{
-			{ID: 1, Model: "yaesu-ftdx10", Port: "/dev/ttyUSB0", Audio: types.RigAudioConfig{Device: "codec-a"}},
-			{ID: 2, Model: "yaesu-ft710", Port: "/dev/ttyUSB2", Audio: types.RigAudioConfig{Device: "codec-b"}},
+			{ID: 1, Model: "yaesu-ftdx10", Port: "/dev/ttyUSB0", Audio: types.RigAudioConfig{RX: "codec-a-in", TX: "codec-a-out"}},
+			{ID: 2, Model: "yaesu-ft710", Port: "/dev/ttyUSB2", Audio: types.RigAudioConfig{RX: "codec-b-in", TX: "codec-b-out"}},
 		},
 		DefaultRigID: 2,
 	}
@@ -734,8 +738,13 @@ func TestApplyRigProfiles_ResolvesAndProjects(t *testing.T) {
 	if b.Timeouts.LivenessMs != 5000 || !b.Enabled {
 		t.Errorf("ActiveBridge() dropped cross-rig knobs: %+v", b)
 	}
-	if f := cfg.ActiveFt8(); f.Device != "codec-b" {
-		t.Errorf("ActiveFt8().Device = %q, want codec-b", f.Device)
+	// Per-direction projection: RX → Device (capture), TX → TX.Device (playback).
+	f := cfg.ActiveFt8()
+	if f.Device != "codec-b-in" {
+		t.Errorf("ActiveFt8().Device = %q, want codec-b-in", f.Device)
+	}
+	if f.TX == nil || f.TX.Device != "codec-b-out" {
+		t.Errorf("ActiveFt8().TX.Device = %v, want codec-b-out", f.TX)
 	}
 }
 
@@ -806,7 +815,9 @@ func TestLoad_MigratesLegacyBridge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(got.Rigs) != 1 || got.Rigs[0].Model != "yaesu-ftdx10" || got.Rigs[0].Audio.Device != "codec-a" {
+	// The legacy ft8.device is NOT migrated into the rig's Audio (it's an index,
+	// not a name); the synthesised rig has no audio.
+	if len(got.Rigs) != 1 || got.Rigs[0].Model != "yaesu-ftdx10" || got.Rigs[0].Audio != (types.RigAudioConfig{}) {
 		t.Fatalf("migrated Rigs = %+v", got.Rigs)
 	}
 	if b := got.ActiveBridge(); b.Cat.Driver != "yaesu-ftdx10" || b.Serial.Port != "/dev/ttyUSB0" {
@@ -823,8 +834,8 @@ func TestLoad_RigCatalogueRoundTrip(t *testing.T) {
 	base := DefaultConfig(dir)
 	base.Bridge.Enabled = true
 	base.Rigs = []types.RigConfig{
-		{ID: 1, Model: "yaesu-ftdx10", Port: "/dev/ttyUSB0", Audio: types.RigAudioConfig{Device: "codec-a"}},
-		{ID: 2, Model: "yaesu-ft710", Port: "/dev/ttyUSB2", Audio: types.RigAudioConfig{Device: "codec-b"}},
+		{ID: 1, Model: "yaesu-ftdx10", Port: "/dev/ttyUSB0", Audio: types.RigAudioConfig{RX: "codec-a-in", TX: "codec-a-out"}},
+		{ID: 2, Model: "yaesu-ft710", Port: "/dev/ttyUSB2", Audio: types.RigAudioConfig{RX: "codec-b-in", TX: "codec-b-out"}},
 	}
 	base.DefaultRigID = 2
 	if err := WriteJSON(p1, base); err != nil {

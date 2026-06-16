@@ -173,7 +173,7 @@ func TestCapture_DisarmsTxWhenLastSubscriberLeaves(t *testing.T) {
 	withShortLinger(t, 10*time.Millisecond)
 	src := newFakeSource()
 	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
-	s.newPlayer = func(int) (txPlayer, error) { return newFakeTxPlayer(), nil }
+	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
 	s.SetTxKeyer(&fakeKeyer{})
 	require.NoError(t, s.Initialize())
 	require.NoError(t, s.Start(context.Background()))

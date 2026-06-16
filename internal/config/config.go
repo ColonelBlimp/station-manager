@@ -192,12 +192,17 @@ func applyRigProfiles(cfg *Config) error {
 		if cfg.Bridge.Serial != nil {
 			port = cfg.Bridge.Serial.Port
 		}
-		if driver != "" || port != "" || cfg.Ft8.Device != "" {
+		if driver != "" || port != "" {
 			cfg.Rigs = []types.RigConfig{{
 				ID:    legacyRigID,
 				Model: driver,
 				Port:  port,
-				Audio: types.RigAudioConfig{Device: cfg.Ft8.Device},
+				// Audio is left unset: the per-rig model is name-based
+				// (RigConfig.Audio.RX/TX) and the legacy ft8.device/tx.device
+				// are integer indices that can't be converted to names at load
+				// time (no device enumeration here). They remain honoured as a
+				// resolved fallback via ActiveFt8 until the operator sets named
+				// devices on the rig — no auto-migration (config.md §10.4 #1).
 			}}
 			cfg.DefaultRigID = legacyRigID // the synthesised rig is the rig
 		}
@@ -328,12 +333,13 @@ func (c Config) ActiveFt8() types.Ft8Config {
 	if rc == nil {
 		return f
 	}
-	// The active rig's audio device wins WHEN SET; an unset per-rig audio must
-	// NOT clobber a configured loose ft8.device back to "" (system default).
-	// Migration leaves audio empty on rigs the operator hasn't given a device,
-	// so the loose ft8.device stays the fallback until per-rig audio is set.
-	if rc.Audio.Device != "" {
-		f.Device = rc.Audio.Device
+	// The active rig's audio device NAME wins per direction WHEN SET; an unset
+	// per-rig audio must NOT clobber a loose ft8.device/ft8.tx.device back to ""
+	// (system default), so un-migrated configs keep working. RX → capture
+	// (Device), TX → playback (TX.Device); both are resolved name→index at
+	// acquire time by the audio layer.
+	if rc.Audio.RX != "" {
+		f.Device = rc.Audio.RX
 	}
 
 	// Resolve the per-rig FT8 mode (config.md §10, B2): the operator's per-rig
@@ -347,12 +353,17 @@ func (c Config) ActiveFt8() types.Ft8Config {
 	} else if def, ok := cat.Lookup(rc.Model); ok {
 		mode = def.Ft8Mode
 	}
-	if mode != "" || f.TX != nil {
+	if mode != "" || f.TX != nil || rc.Audio.TX != "" {
 		tx := types.Ft8TXConfig{}
 		if f.TX != nil {
 			tx = *f.TX
 		}
 		tx.Mode = mode
+		// Project the active rig's TX (playback) device name, when set, the same
+		// way RX projects onto Device above — completing the per-direction wiring.
+		if rc.Audio.TX != "" {
+			tx.Device = rc.Audio.TX
+		}
 		f.TX = &tx
 	}
 	return f

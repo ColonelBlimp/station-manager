@@ -51,8 +51,8 @@ rejected-alternative); `default_rig_id` is the active selector.
 
 ```json
 "rigs": [
-  { "id": 1, "model": "yaesu-ftdx10", "port": "/dev/serial/by-id/...01817BF4-if00-port0", "audio": { "device": "" } },
-  { "id": 2, "model": "yaesu-ft710",  "port": "/dev/serial/by-id/...01ABC53F-if00-port0", "audio": { "device": "" } }
+  { "id": 1, "model": "yaesu-ftdx10", "port": "/dev/serial/by-id/...01817BF4-if00-port0", "audio": { "rx": "", "tx": "" } },
+  { "id": 2, "model": "yaesu-ft710",  "port": "/dev/serial/by-id/...01ABC53F-if00-port0", "audio": { "rx": "", "tx": "" } }
 ],
 "default_rig_id": 1,
 
@@ -61,8 +61,9 @@ rejected-alternative); `default_rig_id` is the active selector.
 ```
 
 - **Per-rig facts** live in the `RigConfig` entry: `model` (the rigdef id → projected
-  onto `bridge.cat.driver`), `port` (→ `bridge.serial.port`), `audio.device` (→
-  `ft8.device`). `id` is the int64 selector key (uniform with `default_logbook_id`).
+  onto `bridge.cat.driver`), `port` (→ `bridge.serial.port`), `audio.rx` (capture device
+  name → `ft8.device`) and `audio.tx` (playback device name → `ft8.tx.device`). `id` is the
+  int64 selector key (uniform with `default_logbook_id`).
 - **`default_rig_id`** selects the active rig — the one the bridge binds *and* the one
   QSOs attribute to (single-active model; they coincide).
 - **Cross-rig knobs** stay where they are: `bridge.enabled`/`timeouts`/`tune`,
@@ -83,8 +84,9 @@ clean on-disk source:
 
 - `Config.ActiveBridge() types.BridgeConfig` — `cfg.Bridge` (cross-rig knobs) with the
   active rig's `Model`→`Cat.Driver` + `Port`→`Serial.Port` projected on.
-- `Config.ActiveFt8() types.Ft8Config` — `cfg.Ft8` with the active rig's
-  `Audio.Device`→`Device` projected on.
+- `Config.ActiveFt8() types.Ft8Config` — `cfg.Ft8` with the active rig's per-direction audio
+  projected on: `Audio.RX`→`Device` (capture), `Audio.TX`→`TX.Device` (playback). Both are
+  device names, resolved name→index by the audio layer at acquire (rev. 2026-06-16).
 - `Config.RigByID(id) *types.RigConfig` — catalogue lookup.
 
 A resolved active rig **always wins** over any stale loose field left on disk. The
@@ -160,9 +162,11 @@ are unchanged.
 - **Runtime hot-swap** — `POST /v1/rig/select {id}` + Service re-bind (tear down
   current pipeline, re-project, reopen; reset per-rig live state — tune snapshot, hub
   caches, identity confirmation — as cleanly as a disconnect, ADR 0028).
-- **Name-based audio resolution** — match `audio.device` name against the
-  direction-appropriate capture/playback enumeration at open time (supersedes the
-  current index-based `ft8.device`).
+- ~~**Name-based audio resolution**~~ — **SHIPPED daemon-side 2026-06-16** as per-direction
+  `audio.{rx,tx}` names, resolved against the capture/playback enumeration at acquire
+  (`internal/audio/{capture,playback}` `DeviceName`); the global `ft8.device`/`ft8.tx.device`
+  knobs are dropped. Only the by-name **picker UI** remains for this workstream — the operator
+  hand-edits `audio.rx`/`audio.tx` names until it lands.
 - **`RigConfig.Overrides` wiring** — per-rig serial-param shadowing into the bridge's
   `buildSerialConfig` (today the rigdef defaults win).
 - **Per-rig `tune` / `mode_mappings` overrides** — only if a real need appears; today

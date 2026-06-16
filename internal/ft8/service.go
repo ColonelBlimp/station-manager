@@ -94,7 +94,7 @@ type Service struct {
 	// Lock order where both are taken: txMu first, then s.mu (base()); capture
 	// code never takes txMu, and Stop disarms TX outside s.mu — so there is no
 	// s.mu→txMu nesting.
-	newPlayer func(deviceIndex int) (txPlayer, error)
+	newPlayer func(deviceName string, deviceIndex int) (txPlayer, error)
 
 	txMu       sync.Mutex
 	keyer      TxKeyer

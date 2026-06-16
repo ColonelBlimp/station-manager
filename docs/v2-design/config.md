@@ -112,7 +112,7 @@ secretly are) rig-specific.
 | Field | Consumer | Lifecycle | Rig? | Notes |
 |---|---|---|---|---|
 | `Enabled` | both | start | — | Gates the subsystem |
-| `Device` (capture) | D | start | **yes** | Loose; authoritative source `RigConfig.Audio.Device`, projected by `ActiveFt8()` |
+| `Device` (capture) | D | start | **yes** | Resolved view; authoritative source `RigConfig.Audio.RX` (name), projected by `ActiveFt8()` |
 | `EnableOSD` (`*bool`) | D | start | — | nil→true |
 | `TX.Device` (playback) | D | start | **yes** (not yet projected) | Should follow `RigConfig.Audio` like capture |
 | `TX.Mode` | D | start (read at arm via `txMode()`) | **YES — rig-specific but GLOBAL** | `"DATA-U"` is Yaesu vocabulary; the trigger for this review |
@@ -409,7 +409,7 @@ B1 (must-set) + B2 (overrides).
 | FT8 data-mode (`ft8.tx.mode`) | global `Ft8TXConfig.Mode` | new rigdef `RigDefinition.Ft8Mode` default + optional `RigConfig.Ft8Mode` | `ActiveFt8()`: `rc.Ft8Mode → else rigdef(rc.Model).Ft8Mode` → projected onto `Ft8Config.TX.Mode` |
 | mode-mappings | global `bridge.ModeMappings[driver][lit]` | `RigConfig.ModeMappings[lit]` (driver key dropped — the rig knows its model) | `bridgeInfoFor`: `rigdef(rc.Model).ModeMappings` ← `rc.ModeMappings` (same merge, new source) |
 | serial overrides | `RigConfig.Overrides` (declared, **unwired**) | wire it | `buildSerialConfig`: `rigdef.Serial` ← `rc.Overrides` (zero field = rigdef default) |
-| FT8 audio (capture + TX playback) | capture `RigConfig.Audio.Device` (index) + global TX `Ft8TXConfig.Device` | single **name-based** `RigConfig.Audio.Device` | `ActiveFt8()` matches the device *name* → input + output endpoints → projects onto `Ft8Config.Device` (capture) + `Ft8Config.TX.Device` (playback) |
+| FT8 audio (capture + TX playback) | capture `RigConfig.Audio.Device` (index) + global TX `Ft8TXConfig.Device` | **per-direction name-based** `RigConfig.Audio.{rx, tx}` (rev. 2026-06-16) | `ActiveFt8()` projects `audio.rx → Ft8Config.Device` (capture) + `audio.tx → Ft8Config.TX.Device` (playback); the audio layer resolves each name → live index at acquire time |
 | `MY_RIG` | stored `logging_station.MyRig` | per-rig `RigConfig.MyRig *string` override over a rigdef-`Name` default (B2) | stamped at submit (single injection point): `rc.MyRig != nil ? *rc.MyRig : rigdef(rc.Model).Name` — nil=derive, `""`=suppress |
 
 Once these live in `RigConfig`, the transitional loose globals are removed: `bridge.serial` /
@@ -428,25 +428,39 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
 
 ### 10.4 Open sub-decisions (pending operator confirmation)
 
-1. **Audio device identification** — ✅ **DECIDED 2026-06-13: name-based, a single
-   `RigConfig.Audio.Device`** (device name / substring match); the daemon resolves it to *both*
-   the capture (input) and playback (output) endpoints. One field, the operator never types
-   indices (KISS principle), and it absorbs the previously-noted name-matching follow-up.
-   (Index-based was the alternative but needs two fields, since input/output enumerate with
-   independent indices.) ✅ **Validated on the borrowed IC-7300 (2026-06-15/16):** its USB codec
-   appears under the **same name** `"PCM2901 Audio Codec Analog Stereo"` in *both* the capture list
-   (index **4**) and the playback list (index **2**) — exactly the single-name → both-endpoints
-   resolution this decision assumes, and a concrete demonstration of why an *index* can't be the
-   identifier (one codec, two different indices). The interim index-based path also had a bug:
-   `ActiveFt8()` unconditionally overwrote the loose `ft8.device` with the active rig's *empty*
-   `Audio.Device`, zeroing it to the system default — **fixed 2026-06-15** to override only when the
-   per-rig value is set (so the loose `ft8.device`/`ft8.tx.device` keep working until the name-based
-   path lands). ⏸ **Implementation DEFERRED to the config-SPA workstream (2026-06-13)**
-   — the device-by-name picker UX is its rightful home, and the daemon-side name resolution
-   should land with it; the model is **per-direction** (one name, resolved to a capture index and a
-   playback index independently, since they enumerate separately — see the IC-7300 above). Until
-   then `RigConfig.Audio.Device` stays the existing index-based capture device, and the TX playback
-   device stays the loose global `ft8.tx.device`.
+1. **Audio device identification** — ✅ **DECIDED 2026-06-13: name-based** (device names, not
+   indices, because an index drifts across replug/reboot and differs between a codec's capture and
+   playback enumerations). ✏️ **REVISED 2026-06-16: per-direction, two fields**
+   `RigConfig.Audio.{rx, tx}` (each a device **name**), superseding the original single
+   `RigConfig.Audio.Device`. *Why the revision:* the single-field model assumed one name resolves to
+   both endpoints — true when the same codec enumerates under an identical name in both lists, but
+   not guaranteed (a rig may use genuinely different devices for RX and TX, or differing names), and
+   the single field was never wired for playback. Per-direction is explicit, robust, and only costs
+   the operator a second pick (the config-SPA can auto-fill both from one choice for the common
+   single-codec case). The borrowed IC-7300 motivated it: its USB codec `"PCM2901 Audio Codec Analog
+   Stereo"` is capture index **4** / playback index **2** — same name, two indices — which is
+   exactly why names beat indices, and why each direction resolves independently.
+   - **Resolution:** `Config.ActiveFt8()` projects `audio.rx → Ft8Config.Device` (capture) and
+     `audio.tx → Ft8Config.TX.Device` (playback); the audio layer (`internal/audio/{capture,
+     playback}`, via a `DeviceName` config field) matches the name against the live enumeration at
+     **acquire time** (survives replug) and fails soft — no match → that direction goes idle rather
+     than grabbing the wrong system default. An integer-string value is still honoured as a raw
+     index for any un-migrated config.
+   - **The global `ft8.device` / `ft8.tx.device` are dropped as operator knobs** — device selection
+     is now purely a per-rig property, so switching `default_rig_id` re-binds audio along with the
+     CAT port + driver. `Ft8Config.Device` / `Ft8Config.TX.Device` survive only as resolved
+     runtime-view fields `ActiveFt8()` fills (the FT8 subsystem keeps consuming a plain
+     `Ft8Config` — it never imports the rig catalogue), mirroring `ActiveBridge()`.
+   - **No index→name auto-migration** (the loader can't safely enumerate devices), so an existing
+     index config's `ft8.device`/`ft8.tx.device` are simply dropped and each rig's `audio.rx`/`tx`
+     are set once by name. Trivial here (single dev/dogfood host).
+   - **The earlier interim `ActiveFt8()` clobber bug** (it overwrote a loose `ft8.device` with the
+     active rig's *empty* audio device, zeroing it to the system default) was fixed 2026-06-15.
+   - ✅ **Daemon side SHIPPED 2026-06-16** (`RigAudioConfig.{RX,TX}`, `ActiveFt8` per-direction
+     projection, `capture.Config`/`playback.Config` `DeviceName` name resolution, validated on the
+     IC-7300). ⏸ **The device-by-name picker UI is still DEFERRED to the config-SPA workstream** —
+     its rightful home — but the operator no longer hand-edits indices: they hand-edit *names* now,
+     and the SPA will replace that with a pick-list off `GET /v1/hardware`.
 2. **`MY_RIG` derivation point** — ✅ **DECIDED 2026-06-13: daemon-side at QSO submit**, a
    single injection point both the phone/CW (handler) and FT8 (sink) submit paths flow through
    (via an injected resolver, so `qsoservice` stays decoupled from `cat`/`config`). It stamps a
@@ -495,10 +509,13 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
   `ResolveMyRig` / `ActiveFt8().TX.Mode` still derive correctly, and `bridge` reduces to
   `{enabled, timeouts, tune}`.
 
-**DEFERRED to the config-SPA workstream:** **2e — name-based audio device** (§10.4 #1); the live
-global `ft8.tx.device` stays in place until then (it's a *used* value, not vestigial). The logging
-SPA's My Station **"Rig" field is inert** (MY_RIG derived) — remove it when the per-rig editor
-lands. `bridge.tune` `{}` is a *legitimate* defaults block (tune knobs are code-constant
+**SHIPPED 2026-06-16 — 2e name-based audio device (§10.4 #1), daemon side:** per-direction
+`RigConfig.Audio.{rx,tx}` (names) replace the single index field; `ActiveFt8()` projects both
+directions; `internal/audio/{capture,playback}` resolve name→index at acquire (fail-soft); the
+global `ft8.device`/`ft8.tx.device` operator knobs are **dropped**. Only the device-by-name
+**picker UI** remains deferred to the config-SPA workstream (until then the operator hand-edits
+`audio.rx`/`audio.tx` names directly). The logging SPA's My Station **"Rig" field is inert**
+(MY_RIG derived) — remove it when the per-rig editor lands. `bridge.tune` `{}` is a *legitimate* defaults block (tune knobs are code-constant
 ceilings, ADR 0027), not vestigial — kept.
 
 ### 10.6 Editing surface — dedicated config SPA (direction; separate workstream)

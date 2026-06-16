@@ -36,7 +36,7 @@ export interface RigConfig {
     id: number;
     model: string;
     port: string;
-    audio?: { device?: string };
+    audio?: { rx?: string; tx?: string };
     ft8_mode?: string | null;
     mode_mappings?: Record<string, ModeMapping>;
     my_rig?: string | null;

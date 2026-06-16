@@ -36,7 +36,15 @@ var (
 
 // Config holds audio playback configuration.
 type Config struct {
-	// DeviceIndex selects a playback device. -1 means the system default.
+	// DeviceName selects a playback device by its enumerated name (as reported
+	// by ListDevices / GET /v1/hardware). When non-empty it takes precedence
+	// over DeviceIndex and is resolved to a live device at Play time, so it
+	// survives device re-enumeration across replug/reboot. No match → Play
+	// errors (fail-soft idle at the FT8 layer) rather than silently grabbing
+	// the system default.
+	DeviceName string
+	// DeviceIndex selects a playback device. -1 means the system default. Used
+	// only when DeviceName is empty.
 	DeviceIndex int
 	// SampleRate in Hz. FT8 canonical is 12000.
 	SampleRate uint32
@@ -157,7 +165,24 @@ func (p *Player) Play(samples []int16) (<-chan struct{}, error) {
 	audioCtx := p.ctx.Context
 
 	var deviceID unsafe.Pointer
-	if p.config.DeviceIndex >= 0 {
+	switch {
+	case p.config.DeviceName != "":
+		devices, err := p.ctx.Devices(malgo.Playback)
+		if err != nil {
+			p.playing.Store(false)
+			return nil, errors.New(op).WithErr(err)
+		}
+		for i := range devices {
+			if devices[i].Name() == p.config.DeviceName {
+				deviceID = devices[i].ID.Pointer()
+				break
+			}
+		}
+		if deviceID == nil {
+			p.playing.Store(false)
+			return nil, errors.New(op).WithMsgf("playback device %q not found", p.config.DeviceName)
+		}
+	case p.config.DeviceIndex >= 0:
 		devices, err := p.ctx.Devices(malgo.Playback)
 		if err != nil {
 			p.playing.Store(false)
