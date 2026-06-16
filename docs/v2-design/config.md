@@ -456,9 +456,10 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
      are set once by name. Trivial here (single dev/dogfood host).
    - **The earlier interim `ActiveFt8()` clobber bug** (it overwrote a loose `ft8.device` with the
      active rig's *empty* audio device, zeroing it to the system default) was fixed 2026-06-15.
-   - ✅ **Daemon side SHIPPED 2026-06-16** (`RigAudioConfig.{RX,TX}`, `ActiveFt8` per-direction
-     projection, `capture.Config`/`playback.Config` `DeviceName` name resolution, validated on the
-     IC-7300). ⏸ **The device-by-name picker UI is still DEFERRED to the config-SPA workstream** —
+   - ✅ **Daemon side SHIPPED + live-validated 2026-06-16** (`RigAudioConfig.{RX,TX}`, `ActiveFt8`
+     per-direction projection, `capture.Config`/`playback.Config` `DeviceName` name resolution).
+     Live RX decode confirmed on dev: the daemon matched `"PCM2901 Audio Codec Analog Stereo"` →
+     IC-7300 capture device and decodes landed. ⏸ **The device-by-name picker UI is still DEFERRED to the config-SPA workstream** —
      its rightful home — but the operator no longer hand-edits indices: they hand-edit *names* now,
      and the SPA will replace that with a pick-list off `GET /v1/hardware`.
 2. **`MY_RIG` derivation point** — ✅ **DECIDED 2026-06-13: daemon-side at QSO submit**, a
