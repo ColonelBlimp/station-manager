@@ -433,10 +433,20 @@ QRZ export, so this is low-stakes — but it keeps existing config.json files lo
    the capture (input) and playback (output) endpoints. One field, the operator never types
    indices (KISS principle), and it absorbs the previously-noted name-matching follow-up.
    (Index-based was the alternative but needs two fields, since input/output enumerate with
-   independent indices.) ⏸ **Implementation DEFERRED to the config-SPA workstream (2026-06-13)**
+   independent indices.) ✅ **Validated on the borrowed IC-7300 (2026-06-15/16):** its USB codec
+   appears under the **same name** `"PCM2901 Audio Codec Analog Stereo"` in *both* the capture list
+   (index **4**) and the playback list (index **2**) — exactly the single-name → both-endpoints
+   resolution this decision assumes, and a concrete demonstration of why an *index* can't be the
+   identifier (one codec, two different indices). The interim index-based path also had a bug:
+   `ActiveFt8()` unconditionally overwrote the loose `ft8.device` with the active rig's *empty*
+   `Audio.Device`, zeroing it to the system default — **fixed 2026-06-15** to override only when the
+   per-rig value is set (so the loose `ft8.device`/`ft8.tx.device` keep working until the name-based
+   path lands). ⏸ **Implementation DEFERRED to the config-SPA workstream (2026-06-13)**
    — the device-by-name picker UX is its rightful home, and the daemon-side name resolution
-   should land with it. Until then `RigConfig.Audio.Device` stays the existing index-based
-   capture device, and the TX playback device stays the loose global `ft8.tx.device`.
+   should land with it; the model is **per-direction** (one name, resolved to a capture index and a
+   playback index independently, since they enumerate separately — see the IC-7300 above). Until
+   then `RigConfig.Audio.Device` stays the existing index-based capture device, and the TX playback
+   device stays the loose global `ft8.tx.device`.
 2. **`MY_RIG` derivation point** — ✅ **DECIDED 2026-06-13: daemon-side at QSO submit**, a
    single injection point both the phone/CW (handler) and FT8 (sink) submit paths flow through
    (via an injected resolver, so `qsoservice` stays decoupled from `cat`/`config`). It stamps a

@@ -43,13 +43,17 @@ swapped the cable to the wrong radio."
 
 ## Decision
 
-> **Audio model amended by ADR 0036 (2026-06-15).** The single `audio.{device}`
-> field below was disproven on the IC-7300: capture and playback enumerate
-> independently with different indices for one codec, and the per-rig field was
-> never wired for playback — so it can't carry a rig's audio. ADR 0036 replaces
-> it with per-direction, **name-based** devices (`audio.{capture, playback}`)
-> owned by the profile. The catalogue / `DefaultRigID` / `ActiveBridge`/`ActiveFt8`
-> machinery in this ADR stands; only the audio sub-shape changes.
+> **Audio model: see `docs/v2-design/config.md` §10.4 #1 (decided 2026-06-13).**
+> The single **index** `audio.{device}` field as originally wired here was
+> inadequate: capture and playback enumerate independently with different indices
+> for one codec, and the per-rig field was never wired for playback. The settled
+> model is a single **name-based** `RigConfig.Audio.Device` that the daemon
+> resolves to *both* the capture and playback endpoints (one name → two indices,
+> resolved per direction). Validated on the IC-7300 (codec `"PCM2901 …"` appears
+> as capture index 4 / playback index 2). The catalogue / `DefaultRigID` /
+> `ActiveBridge`/`ActiveFt8` machinery in this ADR stands; only the audio
+> sub-field's *resolution* changes, and its implementation is deferred to the
+> config-SPA rig-profile-editor workstream.
 
 Introduce a **rig catalogue** — `Config.Rigs`, a list of the existing
 `types.RigConfig` (reused, not a parallel struct), each extended with a per-rig

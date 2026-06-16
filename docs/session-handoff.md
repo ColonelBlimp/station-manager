@@ -54,6 +54,10 @@ Out of tree:
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
 
+### Session 176 (2026-06-16) — **First Icom on-air FT8 TX validated end-to-end.** The Session 175 `-key` bench ran; full clean key→TX→auto-unkey cycle on the IC-7300.
+- **`ft8-tx-probe -key` bench passed on the real rig (first Icom RF through SM).** RF-safe phase first: `/tmp/ft8-tx-probe -device=2 -msg="CQ 7Q5MLV KH78" -offset=1500 -wav=/tmp/tx.wav` → `/tmp/ft8-decode-file /tmp/tx.wav` gave an **exact round-trip** (`1500.0 Hz CQ 7Q5MLV KH78`), proving encode→modulate→PCM2901-out→decode agree. Then the keyed phase: stop the dogfood daemon (frees serial), `/tmp/ft8-tx-probe -key -config build/config.json -msg="CQ 7Q5MLV KH78" -offset=1500`. Operator confirmed: **rig keyed on the UTC slot, switched to USB-D (`ft8.tx.mode` from rigdef), transmitted, and unkeyed cleanly on its own** at waveform end → back to RX — no Ctrl-C, no 18 s auto-off backstop. So the `ft8.TxKeyer`→bridge `KeyFt8Tx`→tune-controller guaranteed-stop chain (ADR 0030) is proven on the **second rig family**. Probe binaries are throwaway (`/tmp/ft8-tx-probe`, `/tmp/ft8-decode-file`); nothing committed this session except docs/memory.
+- **ADR 0036 cleanup DONE.** Deleted `docs/decisions/0036-rig-profile-audio-devices.md` (it duplicated + contradicted `config.md` §10.4 #1, which already decided the **single name-based** `RigConfig.Audio.Device` → both endpoints on 2026-06-13). Repointed ADR 0028's audio-model forward-note at config.md §10.4 #1 (single-name, per-direction resolution; not the two-field shape 0036 had drafted). Added a validation note to §10.4 #1: the IC-7300's PCM2901 codec appears under the *same name* as capture idx 4 / playback idx 2 — a clean demonstration of single-name→both-endpoints (and of why an index can't be the identifier) — plus the `ActiveFt8()` clobber-bug fix. **The whole IC-7300 arc is now closed**; per-rig audio *implementation* stays deferred to the config-SPA rig-profile-editor workstream (unchanged).
+
 ### Session 175 (2026-06-15) — **FT8 on the IC-7300: RX fixed + working; TX keying prepped (bench pending); rig-profile audio-model gap found → ADR 0036.** (Uncommitted; follows the committed ADR 0035 work in Session 174.)
 - **FT8 TX keying added to the IC-7300 rigdef (bench not yet run).** `tx_on`=`1C 00 01` / `tx_off`=`1C 00 00`, **unexposed** (controller-only, via low-level `cat.Encode`; tests pin the bytes + that they stay out of `ExposedCommands`). The TX *machinery* (`ft8.TxController`, `TxKeyer` seam, `internal/bridge/ft8tx.go` guaranteed-stop) is rig-agnostic + already built — so FT8 TX from the IC-7300 needs only this rigdef keying + audio/mode config + on-rig validation. `ft8.tx.mode` resolves to `USB-D` from the rigdef via `ActiveFt8()` (no config field needed). **⇒ The `-key` bench is the next on-rig step**, staged: RF-safe audio check (`/tmp/ft8-tx-probe -device 2 -msg ...`) then `/tmp/ft8-tx-probe -key -config build/config.json …`. First-Icom-RF checklist: USB SEND=OFF, dummy load, low power (FT8 TX doesn't clamp), one slot then auto-unkey. `cmd/ft8-tx-probe` + `cmd/ft8-capture-probe` are the bench tools; `cmd/civ-probe` gained `-trace`/`-mirror`/split+25/26 decode this arc.
 - **FT8 RX fixed end-to-end** after a multi-part debug: (a) **device misidentification** — the IC-7300's USB codec is **PCM2901**, not the PCM2903C I'd guessed (that's the *other* rig): **capture index 4, playback index 2** (they enumerate independently!). (b) **`ActiveFt8()` clobber bug** — it unconditionally overwrote the loose `ft8.device` with the active rig's *empty* `audio.device`, zeroing it to the system default; fixed to override only when set (`internal/config/config.go`, build+config tests green — **genuine bug, commit it**). (c) **rig setting** — `USB AF/IF Output` was on **IF**; must be **AF** (FT8-prereq, add to install.md). Dev `build/config.json` now: `ft8.device:"4"` / `ft8.tx.device:"2"`. Decode smoke pulled 30 msgs/slot on device 4; decodes now landing live.
@@ -215,18 +219,17 @@ state-mirror polling** for VFO-B/USB-D/split → display parity with Yaesu (ADR
 working** (codec = PCM2901: capture index 4 / playback index 2). FT8 **TX keying
 added to the rigdef** (`tx_on`/`tx_off`, unexposed) — bench not yet run.
 
-**⇒ NEXT ACTION (resume here): run the FT8 TX `-key` bench on the IC-7300** (first
-Icom RF). Staged: RF-safe audio check (`/tmp/ft8-tx-probe -device 2 -msg …`), then
-`/tmp/ft8-tx-probe -key -config build/config.json …`. Checklist: USB SEND=OFF,
-dummy load, low power (FT8 TX doesn't clamp), one slot then auto-unkey — full
-detail in the Session 175 entry.
+**⇒ The IC-7300 arc is CLOSED (Session 176, 2026-06-16):** first Icom on-air FT8 TX
+validated end-to-end (`-key` bench — keyed on slot, USB-D, clean self-unkey), and the
+ADR 0036 cleanup is done (deleted; folded into `config.md` §10.4 #1). No IC-7300
+next-action remains.
 
-**Then (diagnosed, parked — not bugs):** split **control** (a `set_split` toggle;
+**Diagnosed, parked — not bugs:** split **control** (a `set_split` toggle;
 split *display* already works via the poll); **band-jump `Ctrl+Shift+5–9`** on Icom
 (no `BS` equivalent — needs band-stacking register `1A 01` or `set_freq`-to-default,
 a design call); **band highlight** (SPA derive current band from freq); **per-rig
-audio model** (ADR 0036 — config-SPA workstream). And **commit** the uncommitted
-Session 174–175 arc.
+audio model implementation** (single name-based `RigConfig.Audio.Device`, config.md
+§10.4 #1 — config-SPA workstream). And **commit** the uncommitted Session 174–176 arc.
 
 > **The detailed sub-items below (wait-for-ACK fork, USB-D differentiation, freq
 > up/down shortcuts) are now DONE** — wait-for-ACK shipped (ADR 0034 rev), USB-D is
