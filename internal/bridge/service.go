@@ -164,6 +164,18 @@ type Service struct {
 	cmdMu      sync.Mutex
 	pendingAck chan bool
 
+	// keyMu serialises the full key + release sequences for the keyed-transmission
+	// features (tune carrier + FT8 TX), across all protocols (review 2026-06-16).
+	// KeyFt8Tx / StartTune / releaseFt8Tx / releaseTune each hold it for their
+	// whole body, so at most one keyed-transmission state transition runs at a
+	// time: no double-release (operator stop racing the auto-off backstop) and no
+	// new key starting while a release is still settling/restoring (which could
+	// fire a stale tx_off or restore over the new transmission). The release sets
+	// active=false only at the end (finishTune/finishFt8Tx), so a second release
+	// blocked here observes !active afterwards and no-ops. Lock order is keyMu →
+	// cmdMu → mu; nothing acquires keyMu while holding cmdMu or mu.
+	keyMu sync.Mutex
+
 	// Tune-carrier state (ADR 0027), all mu-guarded. tuneActive is the
 	// single-flight gate; tuneRestoreMode/Power are the pre-tune snapshot
 	// captured at StartTune and restored on stop; tuneTimer is the hard

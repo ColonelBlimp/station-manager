@@ -87,6 +87,11 @@ var ErrTuneStateUnknown = stderr.New("bridge: current rig mode/power unknown; ca
 func (s *Service) StartTune(ctx context.Context) error {
 	const errOp errors.Op = "bridge.Service.StartTune"
 
+	// keyMu: serialise against a concurrent release (and FT8 key). Held for the
+	// whole key so a release that's still settling can't be raced by a new key.
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+
 	def, ok := cat.Lookup(s.cfg.Cat.Driver)
 	if !ok {
 		return errors.New(errOp).WithMsgf("no rig definition for driver %q", s.cfg.Cat.Driver)
@@ -145,7 +150,10 @@ func (s *Service) StartTune(ctx context.Context) error {
 	s.tuneTimer = time.AfterFunc(s.tuneMaxDuration, s.tuneAutoOff)
 	s.mu.Unlock()
 
-	if err := cl.WriteCommandBytes(ctx, on); err != nil {
+	// CI-V waits for the rig's FB/FA so a rejected/dropped key fails here (and
+	// rolls back) rather than reporting a carrier the rig never raised; Yaesu/
+	// Kenwood is the unchanged fire-and-forget write.
+	if err := s.writeKeyedLine(ctx, def, cl, on, "tune-on"); err != nil {
 		s.mu.Lock()
 		s.tuneActive = false
 		if s.tuneTimer != nil {
@@ -184,6 +192,13 @@ func (s *Service) StopTune(ctx context.Context) error {
 func (s *Service) releaseTune(ctx context.Context, reason string) error {
 	const errOp errors.Op = "bridge.Service.releaseTune"
 
+	// keyMu: one release at a time, and no key may start mid-release. A second
+	// release (operator stop racing the auto-off backstop) blocks here, then
+	// observes tuneActive=false below and no-ops. Held across the settle +
+	// restore so a stale restore can't land over a new transmission.
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+
 	s.mu.Lock()
 	if !s.tuneActive {
 		s.mu.Unlock()
@@ -214,7 +229,11 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 			Msg("bridge: tune unkey encode failed; carrier may be keyed — refusing to report down")
 		return errors.New(errOp).WithErr(err).WithMsg("encode tune-off")
 	}
-	if err := cl.WriteCommandBytes(ctx, unkey); err != nil {
+	// CI-V waits for the FB/FA: a rig that NAKs or never ACKs tx_off must not be
+	// reported as unkeyed (that would cancel the auto-off backstop and strand the
+	// carrier) — the error keeps tune armed so the backstop retries. Yaesu/Kenwood
+	// is the unchanged fire-and-forget write.
+	if err := s.writeKeyedLine(ctx, def, cl, unkey, "tune-off"); err != nil {
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: tune unkey write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-off")
@@ -232,7 +251,9 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 		}
 	}
 	if restore := encodeTuneRestore(def, restoreMode, restorePower); len(restore) > 0 {
-		if err := cl.WriteCommandBytes(ctx, restore); err != nil {
+		// Best-effort: the carrier is already down, so a failed/un-ACked restore is
+		// logged, never surfaced (CI-V waits for the ACK; Yaesu fire-and-forget).
+		if err := s.writeKeyedLine(ctx, def, cl, restore, "tune restore"); err != nil {
 			s.logger.WarnWith().Err(err).Str("reason", reason).
 				Msg("bridge: tune mode/power restore write failed (carrier already down)")
 		}

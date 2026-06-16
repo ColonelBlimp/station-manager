@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -364,6 +365,71 @@ func TestStopTune_RestoresAndUnkeys(t *testing.T) {
 		t.Error("tuneActive = true after StopTune")
 	}
 	awaitTuneState(t, ch, false, time.Second)
+}
+
+// TestReleaseTune_ConcurrentStopsReleaseOnce (review 2026-06-16 #3): two stops
+// racing (operator stop vs the auto-off backstop, or a double-click) must release
+// exactly once. keyMu serialises the release bodies and the first clears
+// tuneActive, so the second observes it inactive and no-ops — exactly one tx_off
+// reaches the wire, never two (which could fire a stale unkey/restore over a
+// later transmission).
+func TestReleaseTune_ConcurrentStopsReleaseOnce(t *testing.T) {
+	s, f := tuneTestService(t)
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("StartTune: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = s.StopTune(context.Background()) }()
+	}
+	wg.Wait()
+
+	s.mu.Lock()
+	active := s.tuneActive
+	s.mu.Unlock()
+	if active {
+		t.Error("tuneActive should be false after concurrent stops")
+	}
+	n := 0
+	for _, w := range f.recordedWrites() {
+		if string(w) == "TX0;" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("tx_off written %d times, want exactly 1 (releases serialised)", n)
+	}
+}
+
+// TestKeyRelease_ConcurrentStartStopNoDeadlock hammers StartTune/StopTune from
+// several goroutines to exercise keyMu under the race detector (no deadlock, no
+// data race). A final stop must leave the carrier definitively down.
+func TestKeyRelease_ConcurrentStartStopNoDeadlock(t *testing.T) {
+	s, _ := tuneTestService(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				_ = s.StartTune(context.Background())
+			} else {
+				_ = s.StopTune(context.Background())
+			}
+		}(i)
+	}
+	wg.Wait()
+	if err := s.StopTune(context.Background()); err != nil {
+		t.Fatalf("final StopTune: %v", err)
+	}
+	s.mu.Lock()
+	active := s.tuneActive
+	s.mu.Unlock()
+	if active {
+		t.Error("tuneActive should be false after a final StopTune")
+	}
 }
 
 func TestStopTune_IdempotentWhenIdle(t *testing.T) {

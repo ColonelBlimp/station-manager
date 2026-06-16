@@ -112,6 +112,11 @@ func (s *Server) writeRigCommandError(w http.ResponseWriter, op errors.Op, err e
 	case stderr.Is(err, bridge.ErrRigIdentityUnverified):
 		s.writeError(w, http.StatusConflict, "rig_identity_unverified",
 			"connected rig's identity is unverified; check the configured driver matches the rig", op)
+	case stderr.Is(err, bridge.ErrTxActive):
+		// A tune carrier or FT8 TX owns the rig; a command can't write while it's
+		// transmitting. 409: conflicts with the current state, retry once TX ends.
+		s.writeError(w, http.StatusConflict, "rig_tx_active",
+			"the rig is transmitting (tune or FT8); try again once transmission ends", op)
 	case stderr.Is(err, bridge.ErrCommandRejected):
 		// The command reached the rig and it declined (e.g. out-of-band freq).
 		// 422: well-formed request, but the target refused the operation.

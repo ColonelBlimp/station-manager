@@ -47,6 +47,11 @@ const ft8TxModeCommand = "set_mode"
 func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	const errOp errors.Op = "bridge.Service.KeyFt8Tx"
 
+	// keyMu: serialise against a concurrent release (and tune key). Held for the
+	// whole key so a release that's still settling can't be raced by a new key.
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+
 	def, ok := cat.Lookup(s.cfg.Cat.Driver)
 	if !ok {
 		return errors.New(errOp).WithMsgf("no rig definition for driver %q", s.cfg.Cat.Driver)
@@ -102,7 +107,11 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	s.ft8TxTimer = time.AfterFunc(ft8TxMaxDuration, s.ft8TxAutoOff)
 	s.mu.Unlock()
 
-	if err := cl.WriteCommandBytes(ctx, on); err != nil {
+	// CI-V waits for the rig's FB/FA so a rejected/dropped key fails here (and
+	// rolls back) rather than reporting a key the rig never entered; Yaesu/Kenwood
+	// is the unchanged fire-and-forget write. The mode frame (if any) ACKs before
+	// tx_on is written, so tx_on never follows an unconfirmed mode switch.
+	if err := s.writeKeyedLine(ctx, def, cl, on, "ft8 tx-on"); err != nil {
 		s.mu.Lock()
 		s.ft8TxActive = false
 		if s.ft8TxTimer != nil {
@@ -136,6 +145,13 @@ func (s *Service) UnkeyFt8Tx(ctx context.Context) error {
 func (s *Service) releaseFt8Tx(ctx context.Context, reason string) error {
 	const errOp errors.Op = "bridge.Service.releaseFt8Tx"
 
+	// keyMu: one release at a time, and no key may start mid-release. A second
+	// release (operator unkey racing the auto-off backstop) blocks here, then
+	// observes ft8TxActive=false below and no-ops. Held across the settle +
+	// restore so a stale restore can't land over a new transmission.
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+
 	s.mu.Lock()
 	if !s.ft8TxActive {
 		s.mu.Unlock()
@@ -163,7 +179,11 @@ func (s *Service) releaseFt8Tx(ctx context.Context, reason string) error {
 			Msg("bridge: ft8 tx-off encode failed; PTT may be keyed — refusing to report down")
 		return errors.New(errOp).WithErr(err).WithMsg("encode ft8 tx-off")
 	}
-	if err := cl.WriteCommandBytes(ctx, unkey); err != nil {
+	// CI-V waits for the FB/FA: a rig that NAKs or never ACKs tx_off must not be
+	// reported as unkeyed (that would cancel the auto-off backstop and strand
+	// PTT) — the error keeps TX armed so the backstop retries. Yaesu/Kenwood is
+	// the unchanged fire-and-forget write.
+	if err := s.writeKeyedLine(ctx, def, cl, unkey, "ft8 tx-off"); err != nil {
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: ft8 tx-off write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-off")
@@ -182,7 +202,9 @@ func (s *Service) releaseFt8Tx(ctx context.Context, reason string) error {
 			}
 		}
 		if m, err := cat.EncodeCommand(def, ft8TxModeCommand, restoreMode); err == nil {
-			if err := cl.WriteCommandBytes(ctx, m); err != nil {
+			// Best-effort: PTT is already down, so a failed/un-ACKed restore is
+			// logged, never surfaced (CI-V waits for the ACK; Yaesu fire-and-forget).
+			if err := s.writeKeyedLine(ctx, def, cl, m, "ft8 mode restore"); err != nil {
 				s.logger.WarnWith().Err(err).Str("reason", reason).
 					Msg("bridge: ft8 mode restore write failed (PTT already down)")
 			}
@@ -262,15 +284,18 @@ func (s *Service) encodeFt8TxOn(def cat.RigDefinition, mode string) ([]byte, err
 	return line, nil
 }
 
-// TxReady reports whether the bridge can key TX right now: a rig is connected
-// and its identity is confirmed — the two gates KeyFt8Tx (and StartTune)
-// enforce. Exposed so a caller can wait for readiness rather than discovering
-// it via a refused key (the ft8-tx-probe polls it; the step-(e) SPA TX gate can
-// read it too).
+// TxReady reports whether the bridge can key TX right now: a rig is connected,
+// its identity is confirmed, and no keyed transmission already owns the PTT —
+// the gates KeyFt8Tx (and StartTune) enforce. Including the tune/FT8 active
+// flags means an active tune no longer reports "ready" to the FT8 arm/transmit
+// gate (review 2026-06-16), so a caller waits rather than arming and then
+// hitting a refused key. Exposed so a caller can poll readiness rather than
+// discovering it via a refused key (the ft8-tx-probe polls it; the SPA TX gate
+// reads it too).
 func (s *Service) TxReady() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.activeClient != nil && s.identityConfirmed
+	return s.activeClient != nil && s.identityConfirmed && !s.tuneActive && !s.ft8TxActive
 }
 
 // Ft8TxSupported reports whether the rigdef can key PTT for FT8 — it dry-runs

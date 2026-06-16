@@ -1,9 +1,11 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	stderr "errors"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -144,6 +146,112 @@ func TestKeyFt8Tx_SingleFlight(t *testing.T) {
 		t.Fatalf("expected one key write (single-flight), got %q", w)
 	}
 	s.finishFt8Tx() // cancel the auto-off timer
+}
+
+// TestTxReady_FalseWhileTransmitting (review 2026-06-16 #4): TxReady must report
+// not-ready while a tune carrier or FT8 TX already owns the PTT, so the FT8 arm/
+// transmit gate waits instead of arming and then hitting a refused key.
+func TestTxReady_FalseWhileTransmitting(t *testing.T) {
+	s, _ := newCommandTestService(t) // connected + identity confirmed
+	if !s.TxReady() {
+		t.Fatal("TxReady should be true when connected + identity confirmed")
+	}
+	s.mu.Lock()
+	s.tuneActive = true
+	s.mu.Unlock()
+	if s.TxReady() {
+		t.Error("TxReady should be false while a tune is active")
+	}
+	s.mu.Lock()
+	s.tuneActive = false
+	s.ft8TxActive = true
+	s.mu.Unlock()
+	if s.TxReady() {
+		t.Error("TxReady should be false while FT8 TX is active")
+	}
+}
+
+// TestKeyUnkeyFt8TxCIV_ConfirmedByAck (review 2026-06-16 H2): on a CI-V rig the
+// FT8 key + unkey go through the wait-for-ACK path — tx_on and tx_off are CI-V
+// commands the IC-7300 confirms with FB, so the bridge waits for that ACK rather
+// than reporting success on bytes-written alone. With the rig ACKing, key/unkey
+// complete and the single-flight clears.
+func TestKeyUnkeyFt8TxCIV_ConfirmedByAck(t *testing.T) {
+	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup()
+
+	before := len(fake.recordedWrites())
+	if err := s.KeyFt8Tx(context.Background(), ""); err != nil {
+		t.Fatalf("KeyFt8Tx (CI-V): %v", err)
+	}
+	s.mu.Lock()
+	active := s.ft8TxActive
+	s.mu.Unlock()
+	if !active {
+		t.Fatal("ft8TxActive should be true after a CI-V key")
+	}
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx (CI-V): %v", err)
+	}
+	s.mu.Lock()
+	active = s.ft8TxActive
+	s.mu.Unlock()
+	if active {
+		t.Fatal("ft8TxActive should be false after a CI-V unkey")
+	}
+	// tx_on (1C 00 01) then tx_off (1C 00 00) reached the wire.
+	var sawOn, sawOff bool
+	for _, w := range fake.recordedWrites()[before:] {
+		if bytes.Contains(w, []byte{0x1C, 0x00, 0x01}) {
+			sawOn = true
+		}
+		if bytes.Contains(w, []byte{0x1C, 0x00, 0x00}) {
+			sawOff = true
+		}
+	}
+	if !sawOn || !sawOff {
+		t.Fatalf("expected tx_on and tx_off frames, sawOn=%v sawOff=%v", sawOn, sawOff)
+	}
+}
+
+// TestUnkeyFt8TxCIV_NoAckKeepsArmed (review 2026-06-16 H2, the safety case): if a
+// CI-V rig never ACKs tx_off, the unkey must NOT report success — that would
+// cancel the auto-off backstop and strand PTT. Instead it returns ErrCommandNoAck
+// and leaves TX armed so the backstop keeps retrying. The rig here ACKs tx_on but
+// goes silent on tx_off.
+func TestUnkeyFt8TxCIV_NoAckKeepsArmed(t *testing.T) {
+	s, fake := newCIVPipelineTestService(t)
+	s.civAckTimeout = 60 * time.Millisecond // before Start — only the cmd path reads it
+	// ACK everything except tx_off (1C 00 00), which the rig leaves unacknowledged.
+	fake.onWrite = func(w []byte) []byte {
+		if bytes.Contains(w, []byte{0x1C, 0x00, 0x00}) {
+			return nil
+		}
+		return append([]byte(nil), civAckOKFrame...)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	_, unsub := s.Subscribe()
+	defer func() { unsub(); _ = s.Stop() }()
+	fake.feedLine(civFreqBroadcast)
+	waitForIdentity(t, s)
+
+	if err := s.KeyFt8Tx(context.Background(), ""); err != nil {
+		t.Fatalf("KeyFt8Tx (tx_on is ACKed): %v", err)
+	}
+	err := s.UnkeyFt8Tx(context.Background())
+	if !stderr.Is(err, ErrCommandNoAck) {
+		t.Fatalf("UnkeyFt8Tx with un-ACKed tx_off = %v, want ErrCommandNoAck", err)
+	}
+	s.mu.Lock()
+	active := s.ft8TxActive
+	s.mu.Unlock()
+	if !active {
+		t.Fatal("ft8TxActive must stay true after an un-ACKed tx_off (backstop must keep retrying)")
+	}
+	// Cancel the armed auto-off backstop so it can't fire after the test.
+	s.clearFt8TxOnDisconnect()
 }
 
 // TestClearFt8TxOnDisconnect clears active TX state + cancels the backstop when

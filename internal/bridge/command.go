@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	stderr "errors"
+	"fmt"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -26,6 +27,14 @@ var ErrRigNotConnected = stderr.New("bridge: no active rig connection")
 // mutating writes are gated. Clears when a matching IDENTITY push arrives, or
 // stays for the pipeline's lifetime on a definite mismatch (which also halts).
 var ErrRigIdentityUnverified = stderr.New("bridge: rig identity not verified; refusing to send")
+
+// ErrTxActive is returned by SendCommands when a tune carrier or FT8
+// transmission is keyed. The generic command path must not write while the rig
+// is transmitting: it could retune/re-mode the rig mid-transmission, and
+// set_power (Exposed) would override the tune-power clamp and transmit at full
+// power. Only the keyed-transmission controllers (tune / FT8 TX) may touch the
+// rig while PTT is down-to-up; everything else waits (review 2026-06-16).
+var ErrTxActive = stderr.New("bridge: transmission active; refusing command")
 
 // ErrCommandRejected is returned by the CI-V command path (ADR 0034
 // wait-for-ACK) when the rig answers a command with FA (NG) — it refused the
@@ -91,6 +100,7 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	s.mu.Lock()
 	cl := s.activeClient
 	idOK := s.identityConfirmed
+	txBusy := s.tuneActive || s.ft8TxActive
 	s.mu.Unlock()
 	if cl == nil {
 		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("%d command(s)", len(cmds))
@@ -100,6 +110,14 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	// commands (H2). State display is unaffected; only this write path gates.
 	if !idOK {
 		return errors.New(errOp).WithErr(ErrRigIdentityUnverified).WithMsgf("%d command(s)", len(cmds))
+	}
+	// Never write to a rig that is transmitting (review 2026-06-16): a tune
+	// carrier or FT8 TX owns the rig, and a generic command could retune/re-mode
+	// it mid-transmission or (via the Exposed set_power) defeat the tune-power
+	// clamp. The keyed-transmission controllers are the only writers while PTT is
+	// up. Surfaced as a 409 conflict so the SPA can retry once TX ends.
+	if txBusy {
+		return errors.New(errOp).WithErr(ErrTxActive).WithMsgf("%d command(s)", len(cmds))
 	}
 
 	// CI-V (ADR 0034): the rig confirms each command with a bare FB/FA ACK and
@@ -146,32 +164,8 @@ func (s *Service) sendCommandsCIV(ctx context.Context, def cat.RigDefinition, cl
 	defer s.cmdMu.Unlock()
 
 	for _, c := range cmds {
-		for _, frame := range splitCIVFrames(c.bytes) {
-			ackCh := make(chan bool, 1)
-			s.mu.Lock()
-			s.pendingAck = ackCh
-			s.mu.Unlock()
-
-			if err := cl.WriteCommandBytes(ctx, frame); err != nil {
-				s.clearPendingAck(ackCh)
-				return errors.New(errOp).WithErr(err).WithMsgf("write op %q", c.op)
-			}
-
-			select {
-			case accepted := <-ackCh:
-				s.clearPendingAck(ackCh)
-				if !accepted {
-					return errors.New(errOp).WithErr(ErrCommandRejected).
-						WithMsgf("rig refused op %q (value %q)", c.op, c.value)
-				}
-			case <-time.After(s.civAckTimeout):
-				s.clearPendingAck(ackCh)
-				return errors.New(errOp).WithErr(ErrCommandNoAck).
-					WithMsgf("op %q: no ACK within %s", c.op, s.civAckTimeout)
-			case <-ctx.Done():
-				s.clearPendingAck(ackCh)
-				return ctx.Err()
-			}
+		if err := s.writeCIVFramesAwaitAck(ctx, cl, c.bytes, fmt.Sprintf("op %q (value %q)", c.op, c.value)); err != nil {
+			return err
 		}
 		// Every frame of this op ACKed (FB). The rig applied it but won't push it,
 		// so reflect the new state ourselves (ADR 0034): synthesize from the
@@ -184,6 +178,66 @@ func (s *Service) sendCommandsCIV(ctx context.Context, def cat.RigDefinition, cl
 		}
 	}
 	return nil
+}
+
+// writeCIVFramesAwaitAck writes each CI-V frame of b and waits for the rig's
+// per-frame FB/FA ACK (ADR 0034 wait-for-ACK). The caller MUST hold cmdMu —
+// pendingAck has a single installer and cmdMu is what guarantees that. label
+// names the operation for error context. Returns ErrCommandRejected on an FA
+// (NG), ErrCommandNoAck on a missing ACK within civAckTimeout, ctx.Err() on
+// cancel, or a serial write error. Shared by the generic command path
+// (sendCommandsCIV) and the TX key/unkey path (writeKeyedLine), so a CI-V rig's
+// key/unkey is confirmed by ACK rather than reported on bytes-written alone
+// (review 2026-06-16).
+func (s *Service) writeCIVFramesAwaitAck(ctx context.Context, cl serial.Client, b []byte, label string) error {
+	const errOp errors.Op = "bridge.Service.writeCIVFramesAwaitAck"
+	for _, frame := range splitCIVFrames(b) {
+		ackCh := make(chan bool, 1)
+		s.mu.Lock()
+		s.pendingAck = ackCh
+		s.mu.Unlock()
+
+		if err := cl.WriteCommandBytes(ctx, frame); err != nil {
+			s.clearPendingAck(ackCh)
+			return errors.New(errOp).WithErr(err).WithMsgf("write %s", label)
+		}
+
+		select {
+		case accepted := <-ackCh:
+			s.clearPendingAck(ackCh)
+			if !accepted {
+				return errors.New(errOp).WithErr(ErrCommandRejected).WithMsgf("rig refused %s", label)
+			}
+		case <-time.After(s.civAckTimeout):
+			s.clearPendingAck(ackCh)
+			return errors.New(errOp).WithErr(ErrCommandNoAck).
+				WithMsgf("%s: no ACK within %s", label, s.civAckTimeout)
+		case <-ctx.Done():
+			s.clearPendingAck(ackCh)
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// writeKeyedLine writes a keyed-transmission CAT line (a tune/FT8 key, unkey, or
+// mode/power restore) with protocol-appropriate confirmation. For a CI-V rig it
+// waits for the rig's per-frame FB/FA ACK so a rejected or dropped key/unkey is
+// surfaced as an error rather than reported on bytes-written alone (review
+// 2026-06-16) — critical for tx_off, whose silent failure would otherwise look
+// like a clean unkey and let the release cancel the auto-off backstop, stranding
+// PTT. For other protocols (Yaesu/Kenwood, which send no command ACK) it is a
+// single fire-and-forget write, unchanged. The caller holds keyMu; the CI-V
+// branch additionally takes cmdMu (lock order keyMu → cmdMu) for the ACK
+// sequence, which is free of the generic command path because a keyed
+// transmission already blocks SendCommands (ErrTxActive).
+func (s *Service) writeKeyedLine(ctx context.Context, def cat.RigDefinition, cl serial.Client, line []byte, label string) error {
+	if def.Protocol == cat.ProtocolIcomCIV {
+		s.cmdMu.Lock()
+		defer s.cmdMu.Unlock()
+		return s.writeCIVFramesAwaitAck(ctx, cl, line, label)
+	}
+	return cl.WriteCommandBytes(ctx, line)
 }
 
 // readBackAfterCommand re-snapshots rig state after a valueless command (no

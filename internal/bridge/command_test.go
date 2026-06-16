@@ -62,6 +62,36 @@ func TestSendCommand(t *testing.T) {
 	}
 }
 
+// TestSendCommands_RefusedWhileTransmitting (review 2026-06-16 H1): the generic
+// command path must refuse with ErrTxActive while a tune carrier or FT8 TX owns
+// the rig — otherwise set_power (Exposed) could override the tune-power clamp and
+// transmit at full power, or a retune could land mid-transmission. Nothing
+// reaches the wire. Covers both keyed-transmission flags.
+func TestSendCommands_RefusedWhileTransmitting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(s *Service)
+	}{
+		{"tune active", func(s *Service) { s.tuneActive = true }},
+		{"ft8 tx active", func(s *Service) { s.ft8TxActive = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fake := newCommandTestService(t)
+			s.mu.Lock()
+			tc.set(s)
+			s.mu.Unlock()
+
+			err := s.SendCommand(context.Background(), "set_power", "100")
+			if !stderr.Is(err, ErrTxActive) {
+				t.Fatalf("SendCommand during TX = %v, want ErrTxActive", err)
+			}
+			if w := fake.recordedWrites(); len(w) != 0 {
+				t.Errorf("expected no writes while transmitting, got %q", w)
+			}
+		})
+	}
+}
+
 // TestSendCommand_RejectsBeforeWrite proves the bad-command paths never touch
 // the serial port — even with an active, identity-verified client (the
 // newCommandTestService default): a not-exposed, unknown, unmapped, or
