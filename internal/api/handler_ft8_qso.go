@@ -20,8 +20,10 @@ type ft8QsoStartRequest struct {
 	SlotUTC   string  `json:"slot_utc"`
 	OffsetHz  float64 `json:"offset_hz"`
 	// OperatingFreqMHz is the rig's dial frequency (the SPA reads it from the live
-	// rig state). The logged QSO's frequency is this + the audio offset; the
-	// daemon can't read the dial freq itself (the bridge is a pure pass-through).
+	// rig state). The logged QSO frequency IS this dial frequency — the FT8
+	// convention (BuildQso logs the dial, not dial+offset; offset_hz is TX
+	// placement only, never folded into FREQ). The daemon can't read the dial
+	// itself (the bridge is a pure pass-through), so the SPA supplies it.
 	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
 }
 
@@ -68,7 +70,8 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 type ft8CqStartRequest struct {
 	OffsetHz float64 `json:"offset_hz"`
 	// OperatingFreqMHz is the rig's dial frequency (the SPA reads it from the live
-	// rig state); the logged QSO frequency is this + the audio offset.
+	// rig state); the logged QSO frequency IS this dial frequency (FT8 convention —
+	// BuildQso logs the dial, not dial+offset).
 	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
 }
 
@@ -115,6 +118,9 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 	case stderr.Is(err, ft8.ErrTxNotArmed):
 		s.writeError(w, http.StatusConflict, "ft8_tx_not_armed",
 			"arm FT8 transmit before starting a QSO", op)
+	case stderr.Is(err, ft8.ErrTxNotReady):
+		s.writeError(w, http.StatusServiceUnavailable, "rig_not_ready",
+			"rig not connected or identity unverified; try again in a moment", op)
 	case stderr.Is(err, ft8.ErrQsoInProgress):
 		s.writeError(w, http.StatusConflict, "ft8_qso_in_progress",
 			"a QSO is already in progress; abandon it first", op)

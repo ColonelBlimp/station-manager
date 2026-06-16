@@ -93,6 +93,22 @@ func TestCallerSequencer_DropsSilentAnswererResumesCq(t *testing.T) {
 	require.Equal(t, "CQ 7Q5MLV KH78", sent[len(sent)-1], "resumed calling CQ")
 }
 
+// review M2: an auto-first slot whose first answerer is a compound/portable call
+// (our reply to it can't encode) must be SKIPPED, not abandon the whole pile-up —
+// we fall through to the next encodable answerer in the same slot.
+func TestCallerSequencer_AutoFirstSkipsUnencodableAnswerer(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 30, []goft8.DecodedMessage{
+		dm("7Q5MLV K1ABC/P JO41", -5), // portable: our report to it won't encode → skip
+		dm("7Q5MLV DL9UW JO41", -8),   // standard: work this one instead
+	})
+	require.NotNil(t, s.caller, "must pick the encodable answerer, not abandon the session")
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+	require.True(t, s.Active())
+}
+
 // onSlotCalling acts only in the answerers' (opposite-our-CQ) parity slots; a decode
 // in our own parity slot is a no-op.
 func TestCallerSequencer_OnlyActsInAnswerersParity(t *testing.T) {

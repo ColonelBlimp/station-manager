@@ -255,6 +255,15 @@ func (s *Service) startTransmission(
 		s.txMu.Unlock()
 		return errors.New(op).WithErr(ErrTxInFlight)
 	}
+	// Re-check LIVE rig readiness, not just the sticky armed flag (review M1):
+	// the rig can disconnect or lose identity verification between ArmTx and now,
+	// in which case the bridge would refuse to key anyway. Fail fast here so we
+	// don't launch a TX goroutine (and, for a sequencer rung, keep a session
+	// alive) against an unready rig.
+	if s.keyer == nil || !s.keyer.TxReady() {
+		s.txMu.Unlock()
+		return errors.New(op).WithErr(ErrTxNotReady)
+	}
 	ctrl := s.txCtrl
 	txCtx, cancel := context.WithCancel(base)
 	s.txCancel = cancel
@@ -311,9 +320,16 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	defer s.seqGate.Unlock()
 	s.txMu.Lock()
 	armed := s.txArmed
+	ready := s.keyer != nil && s.keyer.TxReady()
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	// Live readiness, not just the sticky armed flag (review M1): refuse to
+	// commit (and publish) a session the rig can no longer key, rather than
+	// returning 202 and letting the sequencer spin against an unready rig.
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
@@ -339,9 +355,14 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	defer s.seqGate.Unlock()
 	s.txMu.Lock()
 	armed := s.txArmed
+	ready := s.keyer != nil && s.keyer.TxReady()
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	// Live readiness, not just the sticky armed flag (review M1).
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, time.Now().UTC())
 }

@@ -45,6 +45,9 @@ func (k *fakeKeyer) unkeys() int { k.mu.Lock(); defer k.mu.Unlock(); return k.un
 // ready reports the fake's TX readiness; defaults to true (a connected rig).
 func (k *fakeKeyer) TxReady() bool { k.mu.Lock(); defer k.mu.Unlock(); return !k.notReady }
 
+// setNotReady toggles readiness mid-test (e.g. the rig disconnecting after arming).
+func (k *fakeKeyer) setNotReady(v bool) { k.mu.Lock(); k.notReady = v; k.mu.Unlock() }
+
 // fakePlayer records Play/Stop and hands back a done channel the test controls.
 type fakePlayer struct {
 	mu      sync.Mutex

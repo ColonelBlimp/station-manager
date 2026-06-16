@@ -35,7 +35,8 @@
     const qso = $derived(ft8State.qso);
     const offset = $derived(ft8State.selectedOffset);
     // The rig dial frequency (selected VFO), in Hz; the daemon logs each contact at
-    // dial + audio offset, so Call CQ passes opFreq / 1e6 MHz.
+    // the dial frequency (FT8 convention — not dial+offset), so Call CQ passes
+    // opFreq / 1e6 MHz.
     const opFreq = $derived(
         displayedState.selectedVfo === 'B' ? displayedState.vfoB : displayedState.vfoA
     );

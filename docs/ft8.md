@@ -242,12 +242,15 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   chip — sets the one `ft8State.selectedOffset`. **Selection is inert (RX-safe):
   it only marks "this is where I'll transmit"; nothing keys the rig until the TX
   controller (step d/e) consumes it.** Any cell is clickable (the grid keeps
-  picks signal-aligned); daemon-side no-overlap enforcement at pick time lands
-  with step (e). The pick is **persisted** (localStorage `sm.ft8.tx.offset`, per
-  device): it survives a slot change, a browser refresh, and a view-leave/return,
-  so the chosen channel sticks until the operator picks another. A restored offset
-  that has since become occupied is harmless — the daemon TX gate refuses/snaps an
-  overlapping offset at send time (step e).
+  picks signal-aligned); the strip is **best-effort guidance, not a hard gate** —
+  SM is attended-only, so the offset is the operator's choice and the daemon does
+  **not** refuse or snap an overlapping pick (a daemon-side admission gate was
+  considered and deliberately left out — see the review note below). The pick is
+  **persisted** (localStorage `sm.ft8.tx.offset`, per device): it survives a slot
+  change, a browser refresh, and a view-leave/return, so the chosen channel sticks
+  until the operator picks another. A restored offset that has since become
+  occupied simply re-colours busy on the strip — it's the operator's call to
+  re-pick; SM does not block it.
   - **TX offset only — by design (decided 2026-06-09).** It sets where *you*
     transmit, never an RX focus. FT8 RX is wideband (the daemon decodes the whole
     passband every slot, so you already hear every station regardless of offset),
@@ -346,11 +349,15 @@ re-ranks. Each candidate scores 0..1 on three weighted terms:
 - **centered** — sitting in the middle of its gap rather than flush against a
   neighbour.
 
-A **guard margin** additionally forbids candidates that don't keep clearance
-from adjacent occupied bands, so a recommendation never sits flush ("brushed
-edge"). Unlike WSJT-X — which lets the operator click *anywhere*, including onto
-a signal — SM only offers clean spots, and at step (e) the daemon TX gate refuses
-(or snaps) an overlapping offset. Good practice is enforced, not optional.
+A **guard margin** additionally forbids *candidates* (the ranked suggestions)
+that don't keep clearance from adjacent occupied bands, so a recommendation never
+sits flush ("brushed edge"). Unlike WSJT-X — which gives the operator no occupancy
+cue at all — SM ranks and highlights the clean spots and shades the busy ones, so
+a clear offset is obvious at a glance. But the pick is the **operator's** (SM is
+attended-only): the strip is best-effort **guidance**, not a hard gate — SM does
+**not** refuse or snap an overlapping selection. A daemon-side admission gate was
+considered (review 2026-06-16 H1) and deliberately left out; enforcement would
+fight the attended-operation model.
 
 **Offset hysteresis (stickiness).** The per-slot scoring above picks the *first*
 recommendation, but the ★ then **stays put across slots while it remains clear**

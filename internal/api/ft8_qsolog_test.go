@@ -76,3 +76,43 @@ func TestFt8CompletedQsoLogsToDB(t *testing.T) {
 		t.Fatalf("stored freq = %q, want dial 28.074 (TX offset must not be added)", got.Freq)
 	}
 }
+
+// TestFt8CallerBareRogerNoFalseRst is the M3 regression (review 2026-06-16): a
+// caller-side FT8 QSO completed via the bare-roger path (the answerer sent a plain
+// RRR/RR73, so no RST_RCVD was ever decoded) must NOT be stored with qsoservice's
+// voice-style "59" default. FT8 reports are SNR in dB, so a fabricated 59 is false
+// log data. The received report stays empty (ADIF omits it); the sent report — which
+// we DID send — is preserved. Runs the real submit path so the constraint is honoured.
+func TestFt8CallerBareRogerNoFalseRst(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "FT8", "7Q5MLV")
+
+	// We sent our report (-10); they rogered with a bare RR73 → HasTheirReport false.
+	c := ft8.CompletedQso{
+		TheirCall:    "DL9UW",
+		TheirGrid:    "JO41",
+		OurReport:    -10,
+		HasOurReport: true,
+		// HasTheirReport: false — the caller-side bare-roger path.
+		DialFreqMHz: 28.074,
+	}
+	station := types.LoggingStation{StationCallsign: "7Q5MLV", Operator: "7Q5MLV", MyGridsquare: "KH78"}
+	now := time.Date(2026, 6, 12, 9, 10, 15, 0, time.UTC)
+
+	q := ft8.BuildQso(c, station, lbID, now)
+	rec := adif.QsoToRecord(q)
+	res, err := srv.qso.Submit(context.Background(), lbID, rec, false)
+	if err != nil {
+		t.Fatalf("submit failed: %v", err)
+	}
+	got, err := srv.db.FetchQsoById(res.ID)
+	if err != nil {
+		t.Fatalf("fetch stored qso: %v", err)
+	}
+	if got.RstRcvd != "" {
+		t.Fatalf("stored rst_rcvd = %q, want empty (no false 59 default for FT8)", got.RstRcvd)
+	}
+	if got.RstSent != "-10" {
+		t.Fatalf("stored rst_sent = %q, want -10 (our sent report preserved)", got.RstSent)
+	}
+}

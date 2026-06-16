@@ -101,14 +101,30 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// operator_pick would instead queue answerers for the operator to pop — a
 		// later increment; today we always take the first.
 		for _, m := range msgs {
-			if pm := parseMessage(m.Text); pm.kind == msgGrid && pm.to == s.ourCall {
-				c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
-				s.caller = &c
-				s.repeats = 0
-				heard = m.Text
-				advanced = true
-				break
+			pm := parseMessage(m.Text)
+			if pm.kind != msgGrid || pm.to != s.ourCall {
+				continue
 			}
+			// Validate OUR reply to this answerer encodes before committing to them
+			// (review M2). A compound/portable answerer (e.g. K1ABC/P) yields an
+			// unencodable response, which seqTransmit would treat as terminal and
+			// abandon the whole Call-CQ loop. Skip such an answerer and keep scanning
+			// this slot for an encodable one; if none, we simply keep calling CQ.
+			c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
+			reply, ok := c.TxMessage()
+			if !ok {
+				continue
+			}
+			if _, err := goft8.EncodeStandardMessage(reply); err != nil {
+				s.log.InfoWith().Str("answerer", pm.from).
+					Msg("ft8 seq: skipping answerer — our reply does not encode (compound/portable call?)")
+				continue
+			}
+			s.caller = &c
+			s.repeats = 0
+			heard = m.Text
+			advanced = true
+			break
 		}
 	} else {
 		for _, m := range msgs {

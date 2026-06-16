@@ -200,12 +200,18 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		qso.ContactedStation.Country = "Unknown"
 	}
 
-	// RST defaults
-	if strings.TrimSpace(qso.QsoDetails.RstSent) == "" {
-		qso.QsoDetails.RstSent = "59"
-	}
-	if strings.TrimSpace(qso.QsoDetails.RstRcvd) == "" {
-		qso.QsoDetails.RstRcvd = "59"
+	// RST defaults. The "59" voice-style default is meaningless for FT8, whose
+	// reports are SNR in dB (e.g. -10). The caller-side bare-roger path completes
+	// a QSO with no RST_RCVD decoded (the other station sent a plain RR73), so
+	// fabricating 59 there would be false log data (review M3) — leave FT8 RST
+	// empty (ADIF omits an empty report) rather than defaulting it.
+	if mode != "FT8" {
+		if strings.TrimSpace(qso.QsoDetails.RstSent) == "" {
+			qso.QsoDetails.RstSent = "59"
+		}
+		if strings.TrimSpace(qso.QsoDetails.RstRcvd) == "" {
+			qso.QsoDetails.RstRcvd = "59"
+		}
 	}
 
 	// ---- Dedupe ----

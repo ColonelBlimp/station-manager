@@ -149,14 +149,15 @@ clear gaps selectable) rendered from the same `OccupancyReport`, shown alongside
 the ranked **Clear Slots** list (click a chip or a clear point to set the TX base
 offset). This is still "data, not pixels" — a single per-slot array, not a 10 fps
 scrolling spectrogram — so the *scrolling waterfall* stays deferred; only its
-time-history dimension is given up. Crucially, SM **enforces good practice** where
-WSJT-X does not: WSJT-X lets the operator double-click *anywhere*, including onto
-an occupied signal; SM only offers clean spots and the daemon TX gate **refuses or
-snaps** an offset that overlaps current occupancy. Enforcement is best-effort *at
-pick time* — occupancy re-evaluates each slot, so a station can still land on the
-operator mid-exchange; SM guards the choice, not the whole QSO. A configurable
-**guard margin** (`ft8.tx.occupancy.guard_margin_hz`, default 10 Hz, 0 = off)
-keeps even the suggestions off a neighbour's edge.
+time-history dimension is given up. SM **guides good practice** where WSJT-X
+offers no help: WSJT-X lets the operator double-click *anywhere* with no occupancy
+cue, whereas SM ranks and highlights the clean spots (and shades the busy ones) so
+the operator can pick a clear offset at a glance. The pick remains the **operator's
+choice** — SM is attended-only, so it does **not refuse or snap** an overlapping
+selection; the strip is best-effort *guidance*, not a hard gate (a daemon-side
+admission gate was considered and deliberately left out — see the review note
+below). A configurable **guard margin** (`ft8.tx.occupancy.guard_margin_hz`,
+default 10 Hz, 0 = off) keeps the *suggestions* off a neighbour's edge.
 
 ### Client-side modulation (browser generates the audio)
 

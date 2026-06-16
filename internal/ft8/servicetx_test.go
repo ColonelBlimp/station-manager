@@ -102,6 +102,19 @@ func TestArmTx_RequiresReadyKeyer(t *testing.T) {
 	})
 }
 
+// review M1: once the rig becomes unready after arming, a sequenced session start
+// must refuse with ErrTxNotReady — the live keyer readiness is re-checked, not just
+// the sticky armed flag, so the API can't return 202 and spin against an unready rig.
+func TestStartSession_RefusesWhenRigBecomesUnready(t *testing.T) {
+	k := &fakeKeyer{}
+	s := newTxTestService(k, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	k.setNotReady(true) // rig disconnects / loses identity after arming
+	now := time.Now().UTC().Format(time.RFC3339)
+	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074), ErrTxNotReady)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074), ErrTxNotReady)
+}
+
 func TestArmTx_AcquiresAndReleasesDevice(t *testing.T) {
 	p := newFakeTxPlayer()
 	s := newTxTestService(&fakeKeyer{}, p, nil)

@@ -155,7 +155,8 @@
         const cq = parseCq(d.text);
         if (!cq || !canAnswer || ft8State.selectedOffset === null) return;
         // opFreq is the dial frequency in Hz (selected VFO); the daemon logs the
-        // QSO at dial + audio offset, so it needs the dial freq in MHz.
+        // QSO at the dial frequency (FT8 convention — not dial+offset), so it
+        // needs the dial freq in MHz.
         const out = await startFt8Qso(
             cq.call,
             cq.grid,
