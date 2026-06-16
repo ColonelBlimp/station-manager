@@ -58,18 +58,6 @@ when it ships — don't let this rot into a graveyard.
   whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
   and decide whether the Rx pane should collapse to the latest decode per station.
 
-- **Answer-a-CQ: Abandon does not stop an in-flight transmission.** Clicking
-  Abandon mid-transmit clears the sequencer but the current rung's waveform plays
-  to completion with PTT keyed. `Service.AbandonQso` (`internal/ft8/servicetx.go`)
-  only calls `seq.Abandon()` (clears `s.ex`, prevents the *next* rung) but never
-  cancels the in-flight TX. Disable TX (`disarmTx`) already does the right thing
-  via `s.txCancel()` (controller honours `ctx.Done()` → `player.Stop()` + deferred
-  PTT unkey, txcontroller.go). **Fix:** `AbandonQso` should also call the in-flight
-  `s.txCancel()` (snapshot under `txMu`), **without disarming** — stay armed + keep
-  the output device so the operator can answer another CQ. The tracked goroutine
-  then flips `txInFlight` false and republishes; the cancel is a normal stop (no
-  error toast). Guaranteed-stop-adjacent — operator expects RF to stop on Abandon.
-
 ## Features / enhancements
 
 - **CAT poll mode (rigdef-configurable) — deferred (ADR 0034).** The bridge read

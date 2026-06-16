@@ -121,13 +121,14 @@
             ? ft8EnrichState.info(ft8State.qso.theirCall, band)
             : undefined
     );
-    // Short-path distance to the worked station, from the operator's grid to the
-    // enriched (QRZ) locator. null when either grid is missing/invalid.
-    const workedDistanceKm = $derived(
-        myGrid && workedInfo?.grid
-            ? (pathInfo(myGrid, workedInfo.grid)?.shortPathDistanceKm ?? null)
-            : null
+    // Short-path geometry to the worked station, from the operator's grid to the
+    // enriched (QRZ) locator — computed once and split into distance + beam heading
+    // for the enrichment pane. null when either grid is missing/invalid.
+    const workedPath = $derived(
+        myGrid && workedInfo?.grid ? pathInfo(myGrid, workedInfo.grid) : null
     );
+    const workedDistanceKm = $derived(workedPath?.shortPathDistanceKm ?? null);
+    const workedBearingDeg = $derived(workedPath?.shortPathBearing ?? null);
 
     // SNR formatted WSJT-X-style: an explicit-sign integer dB ("+04", "-13").
     function formatSnr(snr: number): string {
@@ -425,6 +426,7 @@
             call={ft8State.qso.theirCall}
             info={workedInfo}
             distanceKm={workedDistanceKm}
+            bearingDeg={workedBearingDeg}
         />
     </div>
     <div class="flex flex-col text-center w-20">

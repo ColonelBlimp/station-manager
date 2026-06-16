@@ -318,6 +318,10 @@ func (s *Service) releaseCaptureLocked() {
 	}
 	s.wg.Wait()
 	s.capturing = false
+	// Invalidate the Band Activity / occupancy replay cache: with the session
+	// ended, a later subscriber must not be handed this session's last slot (it
+	// would show stale decodes when the rig is off and capture can't reacquire).
+	s.hub.clearActivity()
 	s.log.InfoWith().Msg("ft8: no subscribers; capture released")
 }
 

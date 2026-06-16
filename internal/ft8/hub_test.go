@@ -68,6 +68,44 @@ func TestHub_LatestOccupancyNilBeforePublish(t *testing.T) {
 	}
 }
 
+// clearActivity drops the decode + occupancy replay caches (called on capture
+// release) so a tab connecting after the session ended isn't shown a stale slot
+// from the prior session — the reported "rig off, Band Activity holds last
+// session's decodes" bug. The TX cache must survive (daemon-owned, capture-
+// independent), so a later subscriber still gets the armed/idle TX state.
+func TestHub_ClearActivityDropsDecodeAndOccupancyButKeepsTx(t *testing.T) {
+	h := newHub()
+	h.publish(decodeEvent("CQ K1ABC"))
+	h.publish(occEvent(2200))
+	h.publish(hubEvent{name: EventTx, payload: TxState{Armed: true}})
+
+	h.clearActivity()
+
+	if rep := h.latestOccupancy(); rep != nil {
+		t.Fatalf("latestOccupancy = %+v, want nil after clearActivity", rep)
+	}
+
+	ch, unsub := h.subscribe()
+	defer unsub()
+
+	got := map[string]bool{}
+	for {
+		select {
+		case e := <-ch:
+			got[e.name] = true
+			continue
+		default:
+		}
+		break
+	}
+	if got[EventDecode] || got[EventOccupancy] {
+		t.Fatalf("decode/occupancy replayed after clearActivity: %v", got)
+	}
+	if !got[EventTx] {
+		t.Fatalf("TX state must still replay after clearActivity: %v", got)
+	}
+}
+
 func TestHub_EvictsSlowSubscriber(t *testing.T) {
 	h := newHub()
 	ch, unsub := h.subscribe()

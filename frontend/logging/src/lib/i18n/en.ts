@@ -47,7 +47,10 @@ export const en: Record<string, string> = {
         'Driver "{driver}" has no startup command — cannot enable rig push-state',
     'bridge.error.missing_read_command':
         'Driver "{driver}" has no read command — cannot fetch initial rig state',
-    'bridge.error.serial_open_failed': 'Could not open serial port "{port}": {error}',
+    // The full /dev/serial/by-id/... path is implementation detail the operator
+    // doesn't act on (and is ~95 chars of toast noise); the daemon still logs it
+    // via the payload's `port`. Keep only the actionable cause in the UI.
+    'bridge.error.serial_open_failed': 'Could not open the rig serial port ({error})',
     'bridge.error.init_write_failed': 'Could not enable push-state on driver "{driver}": {error}',
     'bridge.error.identity_unrecognised':
         'The connected rig\'s ID is not recognised by driver "{driver}" — check bridge.cat.driver matches your rig',

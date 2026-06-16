@@ -24,10 +24,12 @@ type hubEvent struct {
 // current state immediately (the ADR 0009 late-subscriber pattern) rather than
 // waiting up to 15 s for the next slot.
 //
-// The two cached slots are the latest of each event type. Unlike the bridge
-// there is no clear-on-other-event rule: each latest report is always the
-// truth, and replaying a recent-but-stale slot to a new tab is harmless — the
-// next slot overwrites it.
+// The two cached slots are the latest of each event type. There is no
+// clear-on-other-event rule: within a live capture session each latest report is
+// the truth, and replaying a recent slot to a new tab is correct — the next slot
+// overwrites it. The decode + occupancy caches ARE dropped (clearActivity) when a
+// capture session is released, so a tab connecting after the session ended (rig
+// off, capture can't reacquire) isn't shown a stale slot from the prior session.
 type hub struct {
 	mu     sync.Mutex
 	subs   map[int64]chan hubEvent
@@ -127,6 +129,20 @@ func (h *hub) latestOccupancy() *OccupancyReport {
 		return &rep
 	}
 	return nil
+}
+
+// clearActivity drops the cached decode + occupancy slots so a subscriber that
+// connects later is not replayed a stale Band Activity / occupancy snapshot from
+// an ended capture session (e.g. the operator reopens the SPA with the rig off:
+// capture can't reacquire, so nothing would overwrite the replay). Called when a
+// capture session is released. The TX/QSO caches are left intact — they reflect
+// daemon-owned state independent of capture, and the SPA keeps the selected TX
+// offset in localStorage, so neither is affected.
+func (h *hub) clearActivity() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.lastDecode = nil
+	h.lastOccupancy = nil
 }
 
 // close disconnects all subscribers and marks the hub closed. Idempotent.

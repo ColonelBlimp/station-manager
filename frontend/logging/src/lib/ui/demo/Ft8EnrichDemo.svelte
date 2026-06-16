@@ -15,9 +15,12 @@
     let country = $state('Italy');
     let hasDistance = $state(true);
     let distanceKm = $state(1287);
+    let hasBearing = $state(true);
+    let bearingDeg = $state(45);
 
     const info = $derived<Ft8CallInfo | undefined>(active ? { opName, flag, country } : undefined);
     const dist = $derived(hasDistance ? distanceKm : null);
+    const bearing = $derived(hasBearing ? bearingDeg : null);
 </script>
 
 <main class="mx-auto mt-12 max-w-3xl rounded-xl border border-line-soft p-8">
@@ -63,12 +66,25 @@
                     disabled={!active || !hasDistance}
                 />
             </label>
+            <label class="flex items-center gap-2">
+                <input type="checkbox" bind:checked={hasBearing} disabled={!active} />
+                <span>Show bearing</span>
+            </label>
+            <label class="flex flex-col gap-1">
+                <span class="text-gray-600">Bearing (°)</span>
+                <input
+                    class="input-base"
+                    type="number"
+                    bind:value={bearingDeg}
+                    disabled={!active || !hasBearing}
+                />
+            </label>
         </form>
 
         <!-- Live preview, sized like the Rx Frequency column it lives in. -->
         <div class="w-44">
             <h2 class="mb-1 text-xs font-semibold text-gray-500">Live preview (w-44)</h2>
-            <Ft8EnrichmentBox {call} {info} distanceKm={dist} />
+            <Ft8EnrichmentBox {call} {info} distanceKm={dist} bearingDeg={bearing} />
         </div>
     </div>
 </main>

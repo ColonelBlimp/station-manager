@@ -23,10 +23,10 @@ describe('i18n render helper', () => {
     });
 
     it('leaves unsupplied placeholders intact (visible at runtime)', () => {
-        const out = t('bridge.error.serial_open_failed', { port: '/dev/ttyUSB0' });
-        // error not supplied, port is — port substitutes, error stays
+        const out = t('bridge.error.init_write_failed', { driver: 'yaesu-ftdx10' });
+        // error not supplied, driver is — driver substitutes, error stays
         // as the literal placeholder so the gap is visible.
-        expect(out).toContain('/dev/ttyUSB0');
+        expect(out).toContain('yaesu-ftdx10');
         expect(out).toContain('{error}');
     });
 
