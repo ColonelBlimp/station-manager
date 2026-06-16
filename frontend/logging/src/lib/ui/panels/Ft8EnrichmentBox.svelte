@@ -23,10 +23,8 @@
     {#if info}
         {#if info.flag || info.country}
             <div class="flex flex-col gap-0.5 text-gray-600">
-                {#if info.flag}<span class="text-xl leading-none" aria-hidden="true"
-                        >{info.flag}</span
-                    >{/if}
-                {#if info.country}<span>{info.country}</span>{/if}
+                {#if info.flag}<span class="text-4xl leading-none" aria-hidden="true">{info.flag}</span>{/if}
+                {#if info.country}<span class="mb-1">{info.country}</span>{/if}
             </div>
         {/if}
         <div class="font-semibold text-gray-700">{call}</div>
