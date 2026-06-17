@@ -69,6 +69,7 @@ beforeEach(() => {
     catState.selectedVfo = 'A';
     catState.splitOverride = null;
     catState.power = 0;
+    catState.freqKnown = false;
     configState.station.enabled = false;
 
     resetToasts();
@@ -238,6 +239,27 @@ describe('bridge SSE consumer — rig-state merge', () => {
         bridgeState.rigResponding = false;
         currentSource().emit('rig-state', JSON.stringify({ vfoA: 14_250_000 }));
         expect(bridgeState.rigResponding).toBe(true);
+    });
+
+    it('freqKnown flips true only once a rig-state carries vfoA', () => {
+        // A rig-state without vfoA (e.g. an IC-7300 whose freq poll has not landed)
+        // leaves freqKnown false even though the rig is responding — vfoA is still the
+        // placeholder default, so FT8 must not log it.
+        expect(catState.freqKnown).toBe(false);
+        currentSource().emit('rig-state', JSON.stringify({ mode: 'USB', selectedVfo: 'A' }));
+        expect(bridgeState.rigResponding).toBe(true);
+        expect(catState.freqKnown).toBe(false);
+
+        // A vfoA arrives → the dial is real now.
+        currentSource().emit('rig-state', JSON.stringify({ vfoA: 21_074_000 }));
+        expect(catState.freqKnown).toBe(true);
+    });
+
+    it('freqKnown resets to false on a transport error (reconnect must re-deliver)', () => {
+        currentSource().emit('rig-state', JSON.stringify({ vfoA: 21_074_000 }));
+        expect(catState.freqKnown).toBe(true);
+        currentSource().fireError();
+        expect(catState.freqKnown).toBe(false);
     });
 
     it('ignores invalid JSON without breaking the stream', () => {

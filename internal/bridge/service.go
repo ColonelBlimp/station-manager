@@ -189,6 +189,20 @@ type Service struct {
 	lastMode         string
 	lastPower        int
 
+	// Rolling current-rig dial snapshot, mu-guarded, fed by readLoop alongside
+	// lastMode/lastPower. lastVfoA/lastVfoB are the per-VFO frequencies (Hz),
+	// lastSelectedVfo ("A"/"B") which one is operating; dialKnown flips true once a
+	// real frequency has been decoded (so the FT8 QSO sink can tell "no freq yet"
+	// from a real 0). CurrentDialMHz resolves the selected VFO's freq for FT8
+	// logging — the rig is the authority for the logged frequency, NOT the SPA's
+	// start-time snapshot (which is captured once and reused across a Call-CQ
+	// pile-up, so it goes stale). Cleared on disconnect with the rest of the
+	// snapshot. NOT frozen during tune/TX — the dial does not move while keyed.
+	lastVfoA        int64
+	lastVfoB        int64
+	lastSelectedVfo string
+	dialKnown       bool
+
 	// Resolved (config-overridable, hard-clamped) tune knobs, snapshotted at
 	// New like the timeout fields above. tunePowerW ≤ maxTunePowerW;
 	// tuneMaxDuration ≤ maxTuneDuration. Read by the tune controller; mutate

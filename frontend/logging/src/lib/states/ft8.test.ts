@@ -358,7 +358,9 @@ describe('ft8 qso status (ft8-qso SSE)', () => {
             'ft8-qso',
             JSON.stringify({
                 active: true,
+                role: 'worker',
                 their_call: 'K1ABC',
+                their_grid: 'FN42',
                 state: 'reporting',
                 next_message: 'K1ABC G0XYZ R-12',
                 repeats: 1,
@@ -366,7 +368,9 @@ describe('ft8 qso status (ft8-qso SSE)', () => {
             })
         );
         expect(ft8State.qso.active).toBe(true);
+        expect(ft8State.qso.role).toBe('worker');
         expect(ft8State.qso.theirCall).toBe('K1ABC');
+        expect(ft8State.qso.theirGrid).toBe('FN42');
         expect(ft8State.qso.state).toBe('reporting');
         expect(ft8State.qso.nextMessage).toBe('K1ABC G0XYZ R-12');
         expect(ft8State.qso.repeats).toBe(1);

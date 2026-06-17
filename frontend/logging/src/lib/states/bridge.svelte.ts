@@ -172,6 +172,9 @@ function openSource(): void {
         if (bridgeState.rigResponding) snapshotCatToManual();
         bridgeState.connected = false;
         bridgeState.rigResponding = false;
+        // The rig's reported freq is no longer current — a reconnect must re-deliver
+        // it before FT8 logging trusts it again (catState.freqKnown).
+        catState.freqKnown = false;
     });
 
     src.addEventListener('rig-state', (ev: MessageEvent<string>) => {
@@ -252,6 +255,7 @@ function openSource(): void {
             // flip (same rationale + guard as the transport `error` path).
             if (bridgeState.rigResponding) snapshotCatToManual();
             bridgeState.rigResponding = false;
+            catState.freqKnown = false; // re-require a rig-reported freq on reconnect
             pendingDisconnectToastId = toasts.warn(msg, 0);
         }, FLASH_SUPPRESS_MS);
     });
@@ -327,7 +331,12 @@ function closeSource(): void {
  */
 function mergeRigState(payload: RigStatePayload): void {
     if (payload.rigIdentity !== undefined) catState.rigIdentity = payload.rigIdentity;
-    if (payload.vfoA !== undefined) catState.vfoA = payload.vfoA;
+    if (payload.vfoA !== undefined) {
+        catState.vfoA = payload.vfoA;
+        // The rig has now reported a real dial frequency — `vfoA` is no longer the
+        // placeholder default, so consumers may trust/log it (see catState.freqKnown).
+        catState.freqKnown = true;
+    }
     if (payload.vfoB !== undefined) catState.vfoB = payload.vfoB;
     if (payload.mode !== undefined) catState.mode = payload.mode;
     if (payload.subMode !== undefined) catState.subMode = payload.subMode;

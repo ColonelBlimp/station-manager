@@ -11,10 +11,11 @@
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
+    import { catState } from '../../states/cat.svelte';
     import { parseCqCall, parseCq, parseDirectedToMe } from '../../utils/ft8Message';
     import { startFt8Qso, startFt8WorkCaller } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
-    import { frequencyToBand } from '../../utils/frequency';
+    import { frequencyToBand, formatFrequency } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
     import { pathInfo } from '../../utils/bearing';
     import { setFreq, setMode } from '../../actions/rigControl';
@@ -68,6 +69,12 @@
         displayedState.selectedVfo === 'B' ? displayedState.vfoB : displayedState.vfoA
     );
     const band = $derived(frequencyToBand(opFreq));
+    // Whether opFreq is a real, rig-reported dial frequency rather than the placeholder
+    // default `catState` initialises to. FT8 keys through a live rig (arming requires
+    // isLive), but the rig can be "responding" while its frequency poll hasn't landed
+    // yet — leaving opFreq at the 14.250 placeholder. We must NOT log that, and we show
+    // the operator a "waiting" state instead of a plausible-but-wrong frequency.
+    const freqKnown = $derived(displayedState.isLive && catState.freqKnown);
 
     // Clear the Band Activity feed when the operating band changes: the
     // accumulated rows are decodes from the previous band's watering hole and
@@ -156,8 +163,12 @@
     // Answering a CQ (ADR 0031 step e3): a CQ row is clickable to start an
     // exchange when TX is armed, an offset is picked, and no QSO is already
     // running. The daemon then auto-advances the ladder.
+    // freqKnown is part of the gate: without a real rig frequency we'd log the QSO on
+    // the placeholder band (the 14.250 bug). Better to leave the row un-clickable — the
+    // freq label below the Main-Freq buttons shows "waiting for rig" so the reason is
+    // visible — than to record a wrong-band contact.
     const canAnswer = $derived(
-        ft8State.tx.armed && ft8State.selectedOffset !== null && !ft8State.qso.active
+        ft8State.tx.armed && ft8State.selectedOffset !== null && !ft8State.qso.active && freqKnown
     );
 
     async function answerCq(d: DecodeEntry): Promise<void> {
@@ -436,7 +447,8 @@
      configured frequency. -->
 {#snippet bandButton(b: string)}
     {@const freq = configState.ft8Frequencies[b]}
-    {@const active = freq !== undefined && Math.abs(opFreq - freq) <= BAND_MATCH_TOL_HZ}
+    {@const active =
+        freqKnown && freq !== undefined && Math.abs(opFreq - freq) <= BAND_MATCH_TOL_HZ}
     <button
         type="button"
         class="btn w-14 {active ? 'btn-primary' : 'btn-secondary'}"
@@ -456,6 +468,18 @@
             <div class="flex gap-1">{@render bandButton('17m')}{@render bandButton('15m')}</div>
             <div class="flex gap-1">{@render bandButton('12m')}{@render bandButton('10m')}</div>
             <div class="flex gap-1">{@render bandButton('6m')}</div>
+        </div>
+        <!-- The live dial frequency (the value FT8 logs). Shown so the operator can
+             verify it before working anyone — its absence was why wrong-band QSOs went
+             unnoticed. "waiting for rig" (amber) when the rig hasn't reported a dial yet
+             (catState.freqKnown false); FT8 TX is blocked in that state, so it doubles as
+             the why-can't-I-click explanation. -->
+        <div class="mt-2 font-mono text-sm" title="Live dial frequency — what FT8 logs">
+            {#if freqKnown}
+                <span class="font-semibold text-gray-700">{formatFrequency(opFreq)}</span>
+            {:else}
+                <span class="text-amber-600">waiting for rig…</span>
+            {/if}
         </div>
     </div>
     <div class="flex flex-col text-center ft8-panel-width">

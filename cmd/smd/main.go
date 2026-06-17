@@ -466,6 +466,15 @@ func run() error {
 		// here is recovered and can't take the daemon (or the decode loop) down.
 		safego.Go(ctx, "ft8.qsolog", ft8LogPanic, func() {
 			snap := cfgSvc.Snapshot()
+			// Authoritative frequency: the rig's live dial from the bridge, NOT the
+			// SPA's start-time snapshot (c.DialFreqMHz). The SPA value is captured once
+			// when the session starts and reused for every QSO — across a whole Call-CQ
+			// pile-up — so it goes stale (e.g. logged before the IC-7300's freq poll had
+			// landed, producing wrong-band QSOs). The bridge is on frequency; prefer it,
+			// falling back to the SPA value only when the bridge has no dial yet.
+			if dialMHz, ok := bridgeSvc.CurrentDialMHz(); ok {
+				c.DialFreqMHz = dialMHz
+			}
 			q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
 			// Country/DXCC enrichment for the contacted station. The SPA logging
 			// form gets this by calling /v1/enrich/callsign before it submits; the

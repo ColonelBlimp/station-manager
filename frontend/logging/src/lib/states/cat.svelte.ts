@@ -91,6 +91,18 @@ class CatState {
      * operator's amp multiplier per ADR 0009. Bridge writes only.
      */
     power: number = $state(0);
+
+    /**
+     * Whether the rig has actually delivered a frequency yet. `vfoA`/`vfoB`
+     * initialise to a *valid-looking* placeholder (DEFAULT_VFO_HZ), so a rig that
+     * is "responding" but hasn't reported its dial (e.g. an IC-7300 whose CI-V
+     * frequency poll hasn't landed yet) leaves `vfoA` at the placeholder with
+     * nothing to flag it. This flips true on the first `rig-state` carrying a
+     * `vfoA`, and back to false on disconnect, so consumers (notably FT8 logging)
+     * can refuse to record a frequency the rig never actually reported. Bridge
+     * writes only.
+     */
+    freqKnown: boolean = $state(false);
 }
 
 export const catState = new CatState();

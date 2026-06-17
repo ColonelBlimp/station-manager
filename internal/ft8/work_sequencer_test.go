@@ -23,11 +23,13 @@ func TestWorkCaller_HappyPath(t *testing.T) {
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.True(t, s.Active())
 
-	// Initial status: caller-role, reporting rung, cap advertised, our report known.
+	// Initial status: worker role (caller-style ladder, no CQ), reporting rung, cap
+	// advertised, our report known, and the caller's grid carried for the ladder.
 	st := r.lastStatus()
-	require.Equal(t, roleCaller, st.Role)
+	require.Equal(t, roleWorker, st.Role)
 	require.Equal(t, "reporting", st.State)
 	require.Equal(t, "K1ABC", st.TheirCall)
+	require.Equal(t, "FN42", st.TheirGrid)
 	require.Equal(t, "K1ABC G0XYZ -12", st.NextMessage)
 	require.Equal(t, "-12", st.OurReport)
 	require.Equal(t, defaultSeqMaxRepeats, st.MaxRepeats)

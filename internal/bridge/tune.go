@@ -314,6 +314,12 @@ func (s *Service) clearTuneOnDisconnect() {
 	}
 	s.lastMode = ""
 	s.lastPower = 0
+	// Forget the dial snapshot too — a frequency from a previous rig session must
+	// not seed a logged QSO after reconnect; the post-INIT READ / poll repopulates.
+	s.lastVfoA = 0
+	s.lastVfoB = 0
+	s.lastSelectedVfo = ""
+	s.dialKnown = false
 	s.mu.Unlock()
 	if wasActive {
 		s.logger.WarnWith().Msg("bridge: rig disconnected during tune; tune state cleared")
@@ -350,6 +356,49 @@ func (s *Service) CurrentPowerW() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastPower
+}
+
+// captureDialFreq records the rig's current per-VFO dial frequency + selected VFO
+// from each decoded rig-state. Unlike captureTuneSnapshot it is NOT frozen during a
+// tune/TX — the operating frequency does not move while keyed, and we always want the
+// latest. Partial payloads merge (a field absent from this rig-state keeps its prior
+// value), mirroring the SPA's rig-state merge.
+func (s *Service) captureDialFreq(p RigStatePayload) {
+	if p.VfoA == 0 && p.VfoB == 0 && p.SelectedVfo == "" {
+		return
+	}
+	s.mu.Lock()
+	if p.VfoA != 0 {
+		s.lastVfoA = p.VfoA
+		s.dialKnown = true
+	}
+	if p.VfoB != 0 {
+		s.lastVfoB = p.VfoB
+	}
+	if p.SelectedVfo == "A" || p.SelectedVfo == "B" {
+		s.lastSelectedVfo = p.SelectedVfo
+	}
+	s.mu.Unlock()
+}
+
+// CurrentDialMHz returns the rig's last-known operating (selected-VFO) dial frequency
+// in MHz, or ok=false if no frequency has been decoded yet (or CAT is down). The FT8
+// QSO sink (cmd/smd) uses this as the authoritative logged frequency — the rig is on
+// frequency, whereas the SPA's start-time snapshot is captured once and reused across
+// a whole Call-CQ pile-up, so it can be stale (e.g. logged before the IC-7300's freq
+// poll landed). Injected the same way as CurrentPowerW, so internal/ft8 needs no
+// internal/bridge import (ADR 0013 scope).
+func (s *Service) CurrentDialMHz() (float64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dialKnown {
+		return 0, false
+	}
+	hz := s.lastVfoA
+	if s.lastSelectedVfo == "B" && s.lastVfoB != 0 {
+		hz = s.lastVfoB
+	}
+	return float64(hz) / 1_000_000, true
 }
 
 // publishTuneState fans a tune-state event to subscribers (and the hub's

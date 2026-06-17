@@ -579,6 +579,9 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		// Feed the tune controller's current-state snapshot (mode+power)
 		// before fanning out, so a later tune can restore them (ADR 0027).
 		s.captureTuneSnapshot(payload)
+		// Keep the rolling dial snapshot current too — the FT8 QSO sink logs the
+		// rig's actual frequency from this, not the SPA's stale start-time value.
+		s.captureDialFreq(payload)
 		s.hub.publish(Event{Name: EventRigState, Payload: payload})
 	}
 }

@@ -2,6 +2,7 @@
     import { ft8State } from '../../states/ft8.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
+    import { catState } from '../../states/cat.svelte';
     import { armFt8Tx } from '../../api/ft8tx';
     import { abandonFt8Qso, startFt8Cq } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
@@ -43,10 +44,19 @@
     // Arming a disconnected rig just 503s; gate on the live-rig signal so the
     // control is only offered when it can work.
     const canArm = $derived(displayedState.isLive);
+    // A real, rig-reported dial frequency must be known before we start anything that
+    // logs — otherwise the QSO records the placeholder band (the 14.250 bug). FT8 keys
+    // through a live rig, but it can be "responding" before its frequency poll lands.
+    const freqKnown = $derived(displayedState.isLive && catState.freqKnown);
     // Call CQ starts a caller session — offered only when armed, idle (no session in
-    // flight), an offset is picked, and we have a callsign.
+    // flight), an offset is picked, we have a callsign, and the dial frequency is known.
     const canSend = $derived(
-        tx.armed && !tx.transmitting && !qso.active && offset !== null && cqMessage !== ''
+        tx.armed &&
+            !tx.transmitting &&
+            !qso.active &&
+            offset !== null &&
+            cqMessage !== '' &&
+            freqKnown
     );
     // Abandon is enabled whenever a sequenced session is active (answer-a-CQ or
     // call-CQ) and TX is armed — abandonFt8Qso drops either.
@@ -56,20 +66,26 @@
     // One slot per row, top to bottom: our TX messages interleaved with the remote
     // station's expected responses (rx); the highlighted row is the current slot.
     // Unknowns are placeholders — <DX> (their call), <GRID> (locator), <RST> (report).
-    // Two ladders, branched on the session role (ft8State.qso.role):
+    // Three ladders, branched on the session role (ft8State.qso.role):
     //   - answer-a-CQ ("answerer", e3): our rungs are grid → R-report → 73.
     //   - call-CQ ("caller", ADR 0033): CQ → report → RR73, advancing on the daemon's
     //     qso.state (calling-cq → reporting → rogering).
-    // Both are LIVE — driven by the daemon's qso.state. When idle the caller ladder
-    // is a static preview (the CQ row highlighted).
+    //   - work-a-caller ("worker", ADR 0033): a station called US, so there is NO CQ
+    //     row — the opening is THEIR call to us; then report → RR73. Same exchange as
+    //     the caller side from the report rung on, just without the CQ phase.
+    // All are LIVE — driven by the daemon's qso.state. When idle the caller ladder is
+    // a static preview (the CQ row highlighted).
     const dxCall = $derived(qso.theirCall || '<DX>');
+    // The worked station's grid (daemon-supplied), for the ladder's opening row; the
+    // <GRID> placeholder only while it's still unknown (the idle caller preview).
+    const dxGrid = $derived(qso.theirGrid || '<GRID>');
     // Real reports once the daemon knows them (qso.our_report / their_report),
     // else the <RST> placeholder. ourRst = the report WE send; theirRst = theirs.
     const ourRst = $derived(qso.ourReport || '<RST>');
     const theirRst = $derived(qso.theirReport || '<RST>');
     const callerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
         { dir: 'tx', text: cqMessage },
-        { dir: 'rx', text: `${myCall} ${dxCall} <GRID>` },
+        { dir: 'rx', text: `${myCall} ${dxCall} ${dxGrid}` },
         { dir: 'tx', text: `${dxCall} ${myCall} ${ourRst}` },
         { dir: 'rx', text: `${myCall} ${dxCall} R${theirRst}` },
         { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
@@ -84,6 +100,23 @@
         const txRow = qso.state === 'reporting' ? 2 : qso.state === 'rogering' ? 4 : 0;
         if (!qso.active) return txRow;
         return tx.transmitting ? txRow : txRow + 1;
+    });
+
+    // Work-a-caller ladder (role "worker"): the caller ladder with the CQ row dropped —
+    // the opening is the station's call to US (their grid), then our report → RR73. No
+    // calling-cq state here; the exchange starts at "reporting".
+    const workLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
+        { dir: 'rx', text: `${myCall} ${dxCall} ${dxGrid}` },
+        { dir: 'tx', text: `${dxCall} ${myCall} ${ourRst}` },
+        { dir: 'rx', text: `${myCall} ${dxCall} R${theirRst}` },
+        { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
+        { dir: 'rx', text: `${myCall} ${dxCall} 73` },
+    ]);
+    // Our TX rungs are rows 1 (reporting) / 3 (rogering); transmitting → that row, else
+    // the RX row below it (waiting for their reply). Opening defaults to the report rung.
+    const workStep = $derived.by(() => {
+        const txRow = qso.state === 'rogering' ? 3 : 1;
+        return Math.min(tx.transmitting ? txRow : txRow + 1, workLadder.length - 1);
     });
 
     // Answer-a-CQ ladder (qso.active): we are the ANSWERING station — our rungs are
@@ -102,12 +135,13 @@
         return Math.min(next, answerLadder.length - 1);
     });
 
-    // Rendered ladder + highlight: the answer ladder while answering a CQ (role
-    // "answerer"), else the caller ladder — live while calling CQ (role "caller"),
-    // or a static preview when idle.
+    // Rendered ladder + highlight, by role: answerer → answer ladder; worker → the
+    // no-CQ work-a-caller ladder; else the caller ladder (live while calling CQ, or a
+    // static preview when idle).
     const answering = $derived(qso.active && qso.role === 'answerer');
-    const ladder = $derived(answering ? answerLadder : callerLadder);
-    const ladderStep = $derived(answering ? answerStep : callerStep);
+    const working = $derived(qso.active && qso.role === 'worker');
+    const ladder = $derived(answering ? answerLadder : working ? workLadder : callerLadder);
+    const ladderStep = $derived(answering ? answerStep : working ? workStep : callerStep);
 
     let arming = $state(false);
     let sending = $state(false);

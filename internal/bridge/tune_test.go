@@ -559,3 +559,52 @@ func TestCaptureTuneSnapshot_FrozenDuringTune(t *testing.T) {
 		t.Errorf("snapshot not updated while idle: mode=%q power=%d, want CW-U/50", mode, power)
 	}
 }
+
+// dialHz round-trips CurrentDialMHz back to integer Hz for exact comparison
+// (avoids float-equality fuzz on values like 21.074).
+func dialHz(mhz float64) int64 { return int64(mhz*1_000_000 + 0.5) }
+
+// TestCurrentDialMHz resolves the selected VFO's frequency for FT8 logging, merging
+// partial rig-state pushes — the source of truth is the rig (the bridge), not the
+// SPA's stale start-time snapshot.
+func TestCurrentDialMHz(t *testing.T) {
+	s, _ := tuneTestService(t)
+
+	// Unknown before any frequency is decoded — the FT8 sink must fall back, never
+	// log a fabricated 0 or a placeholder.
+	if _, ok := s.CurrentDialMHz(); ok {
+		t.Fatal("CurrentDialMHz should be unknown before any frequency is decoded")
+	}
+
+	// VFO-A arrives → known; selected VFO defaults to A.
+	s.captureDialFreq(RigStatePayload{VfoA: 21_074_000})
+	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 21_074_000 {
+		t.Fatalf("VFO-A dial = %v ok=%v, want 21.074 true", mhz, ok)
+	}
+
+	// Partial merge: a SelectedVfo=B push (no freq) then a VfoB push → selected freq
+	// follows VFO-B, while the earlier VFO-A value is retained.
+	s.captureDialFreq(RigStatePayload{SelectedVfo: "B"})
+	s.captureDialFreq(RigStatePayload{VfoB: 14_139_500})
+	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 14_139_500 {
+		t.Fatalf("selected VFO-B dial = %v ok=%v, want 14.1395 true", mhz, ok)
+	}
+	s.captureDialFreq(RigStatePayload{SelectedVfo: "A"})
+	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 21_074_000 {
+		t.Fatalf("back to VFO-A dial = %v ok=%v, want 21.074 true", mhz, ok)
+	}
+}
+
+// TestClearTuneOnDisconnect_ForgetsDial: a frequency from a previous rig session must
+// not seed a logged QSO after reconnect.
+func TestClearTuneOnDisconnect_ForgetsDial(t *testing.T) {
+	s, _ := tuneTestService(t)
+	s.captureDialFreq(RigStatePayload{VfoA: 21_074_000})
+	if _, ok := s.CurrentDialMHz(); !ok {
+		t.Fatal("precondition: dial should be known after a frequency push")
+	}
+	s.clearTuneOnDisconnect()
+	if _, ok := s.CurrentDialMHz(); ok {
+		t.Fatal("dial must be forgotten on disconnect")
+	}
+}

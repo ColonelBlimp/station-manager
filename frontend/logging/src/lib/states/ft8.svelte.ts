@@ -90,8 +90,9 @@ const emptyTxStatus = (): Ft8TxStatus => ({
  *  the unanswered-repeat count. */
 export interface Ft8QsoStatus {
     active: boolean;
-    role: string; // 'answerer' | 'caller'; '' when idle
+    role: string; // 'answerer' | 'caller' | 'worker'; '' when idle
     theirCall: string;
+    theirGrid: string; // worked station's grid (fills the ladder's opening row); '' until known
     state: string; // answerer: calling|reporting|confirming · caller: calling-cq|reporting|rogering
     nextMessage: string;
     repeats: number;
@@ -112,6 +113,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     active: false,
     role: '',
     theirCall: '',
+    theirGrid: '',
     state: '',
     nextMessage: '',
     repeats: 0,
@@ -362,6 +364,7 @@ function openSource(): void {
                 active: boolean;
                 role: string;
                 their_call: string;
+                their_grid: string;
                 state: string;
                 next_message: string;
                 repeats: number;
@@ -373,6 +376,7 @@ function openSource(): void {
                 active: p.active ?? false,
                 role: p.role ?? '',
                 theirCall: p.their_call ?? '',
+                theirGrid: p.their_grid ?? '',
                 state: p.state ?? '',
                 nextMessage: p.next_message ?? '',
                 repeats: p.repeats ?? 0,

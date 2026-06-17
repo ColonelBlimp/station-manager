@@ -128,6 +128,17 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   `bridge.ft8_mode`. CAT-off the button only tunes `manualState` (mode assert is
   live-only — `setMode` off would write the rig literal into `manualState`, which
   expects operator-friendly modes). Each call is independently capability-gated.
+  A **dial-frequency label** sits below the buttons showing the live operating
+  frequency (`displayedState` selected VFO) — **the exact value FT8 logs**, so the
+  operator can verify the band before working anyone. It reads **"waiting for rig…"**
+  (amber) until the rig has actually reported a dial frequency (`catState.freqKnown`),
+  and in that state **FT8 TX is blocked** (CQ rows / pile-up rows un-clickable, Call CQ
+  disabled) and **no band button highlights**. This guards a real data-integrity bug:
+  `catState.vfoA`/`vfoB` initialise to a *valid-looking* placeholder (14.250 MHz), so a
+  rig that is "responding" but whose frequency poll hasn't landed yet (seen on the
+  IC-7300 — CI-V freq arrives via the bridge poll, not a broadcast) would otherwise let
+  a QSO be logged on the wrong band with nothing to flag it. `freqKnown` flips true on
+  the first `rig-state` carrying a `vfoA` and false on disconnect.
 - **Band Activity** — live decode feed under a **sticky column header**
   (`dB · Hz · Beam · Message`) that stays pinned while the rows scroll; one row
   per decode, newest slot on top, frequency-ascending within a slot. Each CQ row
@@ -265,7 +276,12 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   session — the daemon calls CQ and auto-works the answerers (per
   `ft8.tx.caller_answer_mode`, default `auto_first`), the caller ladder highlights the
   real rung (`calling-cq → reporting → rogering`), and the button reads "Calling CQ…".
-  When idle the caller ladder shows as a static preview.
+  When idle the caller ladder shows as a static preview. **Working a caller** (`worker`,
+  ADR 0033 "work a caller") shows a third ladder: the caller-style exchange with **no CQ
+  row** — the opening is the station's call to *us* (their actual grid, from
+  `qso.their_grid`), then report → RR73. (`their_grid` is carried on the `ft8-qso`
+  payload for all roles, so the opening row shows the real grid rather than a `<GRID>`
+  placeholder.)
 - **TX Offset strip** (in the Occupancy tab, shipped 2026-06-09) — a horizontal, per-slot
   *spatial* view of the passband, **channelised** into uniform ~50 Hz slots
   (≈56 across 200–3000). FT8 has no standard offset grid — a signal is ~50 Hz
@@ -652,8 +668,14 @@ read by the e2 resolver. Step (e) breaks into increments:
     WSJT-X-family weak-signal mode (`utils/mode.ts` `usesSignalReport`,
     `validators/rst.ts` `isValidSignalReport`) so editing an FT8 QSO in the edit
     overlay doesn't flag the report red or strip its sign.
-  The dial freq comes from the SPA at `qso/start` (`operating_freq_mhz`) — the
-  bridge is a pass-through and can't surface it.
+  The logged dial frequency is the **rig's live dial read from the bridge at QSO
+  completion** (`bridge.CurrentDialMHz()`, injected into the `cmd/smd` e4 sink exactly
+  like `CurrentPowerW()` — `internal/ft8` stays import-clean). The SPA's `qso/start`
+  `operating_freq_mhz` is now only a **fallback** for when the bridge has no dial yet.
+  This was a deliberate fix (2026-06-17): the SPA value is a *start-time snapshot*
+  captured once and reused for an entire Call-CQ pile-up, so it logged a stale/wrong
+  band when the QSO started before the rig's frequency poll had landed (seen on the
+  IC-7300). The bridge is always on frequency, so reading it at completion is correct.
 - **Automatic / unattended sequencing is OUT OF SCOPE and NOT SUPPORTED.** The FT8
   protocol forbids automatic operation (per the QEX FT8 protocol specification),
   and unattended operation is illegal without a special licence in many

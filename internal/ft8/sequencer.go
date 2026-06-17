@@ -67,6 +67,11 @@ const (
 const (
 	roleAnswerer = "answerer"
 	roleCaller   = "caller"
+	// roleWorker: working a station that called US, picked from the pile-up (ADR 0033
+	// "work a caller"). Caller-style exchange (we report first) but with NO CQ phase,
+	// so the SPA renders a dedicated ladder (no leading CQ row) — distinct from
+	// roleCaller, whose ladder opens with our CQ.
+	roleWorker = "worker"
 )
 
 // QsoStatus is the `ft8-qso` SSE payload + the sequencer's exposed state: the role
@@ -74,8 +79,11 @@ const (
 // send next, and the unanswered-repeat count. Active=false means idle (no session).
 type QsoStatus struct {
 	Active    bool   `json:"active"`
-	Role      string `json:"role,omitempty"` // "answerer" | "caller"; empty when idle
+	Role      string `json:"role,omitempty"` // "answerer" | "caller" | "worker"; empty when idle
 	TheirCall string `json:"their_call,omitempty"`
+	// TheirGrid — the worked station's 4-char grid, for the ladder's opening row (so it
+	// shows the real grid, not a "<GRID>" placeholder). Empty until known.
+	TheirGrid string `json:"their_grid,omitempty"`
 	// State — answerer: calling|reporting|confirming; caller: calling-cq|reporting|rogering.
 	State       string `json:"state,omitempty"`
 	NextMessage string `json:"next_message,omitempty"`
@@ -531,6 +539,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			Active:      true,
 			Role:        roleAnswerer,
 			TheirCall:   s.ex.TheirCall,
+			TheirGrid:   s.theirGrid,
 			State:       s.ex.State.label(),
 			NextMessage: msg,
 			Repeats:     s.repeats,
@@ -554,6 +563,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		if s.caller != nil {
 			msg, _ := s.caller.TxMessage()
 			st.TheirCall = s.caller.TheirCall
+			st.TheirGrid = s.caller.TheirGrid
 			st.State = s.caller.State.label()
 			st.NextMessage = msg
 			// Cap governs the working-an-answerer rungs but not the one-shot RR73; on
@@ -582,8 +592,9 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		msg, _ := s.caller.TxMessage()
 		st := QsoStatus{
 			Active:      true,
-			Role:        roleCaller,
+			Role:        roleWorker,
 			TheirCall:   s.caller.TheirCall,
+			TheirGrid:   s.caller.TheirGrid,
 			State:       s.caller.State.label(),
 			NextMessage: msg,
 			Repeats:     s.repeats,
