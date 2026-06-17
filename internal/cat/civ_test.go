@@ -435,7 +435,12 @@ func TestEmbeddedIC7300(t *testing.T) {
 		t.Fatalf("Encode POLL: %v", err)
 	}
 	eqBytes(t, poll, []byte{
-		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01, 0xFD, // VFO-B (VFO-A comes via Transceive push)
+		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x00, 0xFD, // VFO-A operating freq — polled every
+		// cycle, not push-only: Transceive pushes VFO-A on a freq CHANGE, but at
+		// steady state (parked) it never re-sends, so a fresh subscriber or a stale
+		// mirror would otherwise miss the operating frequency (the wrong-band logging
+		// bug). Mirrors READ; see ADR 0035 revision.
+		0xFE, 0xFE, 0x94, 0xE0, 0x25, 0x01, 0xFD, // VFO-B
 		0xFE, 0xFE, 0x94, 0xE0, 0x26, 0x00, 0xFD, // mode + data flag
 		0xFE, 0xFE, 0x94, 0xE0, 0x0F, 0xFD, // split
 		0xFE, 0xFE, 0x94, 0xE0, 0x14, 0x0A, 0xFD, // power level (14 0A)

@@ -26,7 +26,7 @@
   "commands": [
     {"name": "INIT", "cmd": "2500", "encoding": "none"},
     {"name": "READ", "encoding": "frame_seq", "frames": ["2500", "2501", "2600", "0F", "140A"]},
-    {"name": "POLL", "encoding": "frame_seq", "frames": ["2501", "2600", "0F", "140A"]},
+    {"name": "POLL", "encoding": "frame_seq", "frames": ["2500", "2501", "2600", "0F", "140A"]},
     {"name": "set_freq", "cmd": "05", "encoding": "bcd_freq", "exposed": true, "sets_state": "VFOAFREQ"},
     {"name": "set_mode", "cmd": "06", "encoding": "mode_seq", "exposed": true, "sets_state": "MAINMODE", "mode_seq": [
       {"mode": "LSB",    "frames": ["0600:01"]},

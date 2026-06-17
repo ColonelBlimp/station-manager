@@ -135,6 +135,27 @@ rigdef entry, not an engine change. Shape extensible, scope minimal.
 - **If an operator reports the poll masking a disconnect**, revisit the liveness
   interaction (the poll should *sharpen* disconnect detection, not hide it).
 
+## Revision (2026-06-17) — poll the operating freq too (VFO-A)
+
+The original Decision kept the **operating frequency (VFO-A) push-only**, polling only
+the *non-operating* VFO/mode/split (Context: "freq is pushed in real-time anyway, so
+nothing went stale"). On air that assumption failed: Transceive pushes the operating
+freq only on a **change**, so while the operator is **parked** (not turning the dial)
+VFO-A is never re-sent. Consequences observed: (1) a fresh SPA tab / reconnect that
+missed the one-time connect READ shows **"waiting for rig…"** indefinitely; (2) the
+SPA's `catState.vfoA` could sit at the placeholder default — the **wrong-band FT8
+logging bug** (QSOs logged on 14.250/20m while actually on 21.074/15m; session 181).
+
+Fix: add the operating-freq read (`25 00`) to the **POLL** read-list (it was already
+in READ), so VFO-A is mirrored every poll cycle like the other fields —
+`icom-ic7300.json` POLL = `["2500","2501","2600","0F","140A"]`. Transceive push stays
+(real-time on change); the poll is the steady-state backstop. The ~27% single-`25`-read
+half-duplex collision characterised above is **benign and self-healing** (recovered on
+the next poll), so polling the operating freq continuously is safe — the original reason
+to exclude it ("already pushed in real-time") was the part that didn't hold. Yaesu is
+unaffected (its AUTO mode pushes the complete state). Requires a redeploy (the rigdef is
+embedded) + bench re-confirm of the poll cadence with the extra read.
+
 ## References
 
 - ADR 0034 (CI-V codec protocol seam + wait-for-ACK) — this revises its
