@@ -30,7 +30,18 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-06-14)
+## Current state (as of 2026-06-17)
+
+> **Recent arc (sessions 178–184, all 2026-06-16/17, uncommitted unless noted):** bridge
+> TX-safety review fixes; FT8 "Working [call]" channel banner + auto-abandon countdown
+> (+ `ft8.tx.max_repeats` knob); **FT8 work-a-caller** (`StartWorkCaller` / `qso/work`) +
+> the dedicated `worker` ladder; **wrong-band FT8 logging fixed** at two layers —
+> daemon now logs the bridge's live dial at completion (`CurrentDialMHz`), and the
+> **IC-7300 POLL now reads the operating freq (`25 00`)** (the real root cause; needs a
+> redeploy + bench re-confirm); FT8 Settings **Float-CQ-to-top** toggle; **FT8 pile-up
+> callsign stacking** (Ctrl+click → SPA FIFO → drains via work-a-caller; SPA-only); and
+> the **session-email subject = logbook-callsign-prefixed + `Contains N QSOs.` body**.
+> Per-session detail in the `### Session N` entries below.
 
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
@@ -263,12 +274,21 @@ All green: full Go build + `go test ./internal/ft8 ./cmd/smd` pass; SPA check 0/
 
 ## Next steps (priority order)
 
-> **⚠️ The current next step is the "⇒ NEXT ACTION" at the top of the Session 167
-> entry: deploy + on-air validation (answer-a-CQ now LOGS after the e4 fix; validate
-> the just-shipped caller-side Call CQ / ADR 0033 `auto_first`). The FT8-TX items
-> below are STALE — TX steps (a)–(e) + answer-a-CQ + caller-side all shipped;
-> "auto-sequence" is OUT OF SCOPE / QEX-forbidden (attended-only). Read the top
-> session entries for true current state.**
+> **⚠️ CURRENT NEXT STEPS (as of session 184, 2026-06-17) — the items deeper below are
+> STALE history (operator_pick is SUPERSEDED, IC-7300 arc closed; kept for the trail):**
+> 1. **Commit** the uncommitted sessions 178–184 work (operator commits per their habit).
+> 2. **`task deploy:local:dev`** then **on-air / bench re-validate** the recent FT8 arc:
+>    the **IC-7300 operating-freq POLL fix** (freq should track continuously while parked;
+>    a fresh tab shows it within ~a poll cycle — this is the embedded-rigdef change that
+>    needs a redeploy), **pile-up callsign stacking** (Ctrl+click callers → drains), the
+>    **wrong-band logging fix** (FT8 QSOs log the live dial), and caller-side Call CQ.
+> 3. **Parked design — Band Activity prefix/substring filter** (session 182; design in the
+>    backlog, ready to shape → build). Plus the new backlog items: **PSK Reporter upload**
+>    and **configurable session-email subject/body templates**.
+>
+> The FT8-TX items further below are STALE — TX (a)–(e) + answer-a-CQ + caller-side +
+> work-a-caller + pile-up stacking all shipped; "auto-sequence" is OUT OF SCOPE /
+> QEX-forbidden (attended-only). Read the top `### Session N` entries for true state.
 
 ### Near-term goal: Icom IC-7300 CAT (borrowed rig) — ENGINE + RIGDEF SHIPPED & VALIDATED; finishing the rough edges
 
