@@ -357,6 +357,45 @@ func submitTestQsoUUID(t *testing.T, srv *Server, lbID int64) string {
 	return stored.UUID
 }
 
+func TestSessionEmailSubject_CallsignPrefix(t *testing.T) {
+	now := time.Date(2026, 6, 17, 14, 30, 0, 0, time.UTC)
+	// Default subject (none supplied), prefixed with the logbook callsign.
+	def := sessionEmailSubject("G4ABC", "", now)
+	if !strings.HasPrefix(def, "G4ABC ") {
+		t.Errorf("subject = %q, want it prefixed with 'G4ABC '", def)
+	}
+	if !strings.Contains(def, "Station Manager session ADIF") {
+		t.Errorf("default subject body missing; got %q", def)
+	}
+	// Operator-supplied subject is also prefixed with the callsign.
+	if got := sessionEmailSubject("G4ABC", "My QSOs", now); got != "G4ABC My QSOs" {
+		t.Errorf("supplied subject = %q, want 'G4ABC My QSOs'", got)
+	}
+	// No callsign → no prefix (just the supplied/default subject).
+	if got := sessionEmailSubject("", "My QSOs", now); got != "My QSOs" {
+		t.Errorf("no-callsign subject = %q, want 'My QSOs'", got)
+	}
+	// Whitespace-only callsign is treated as absent.
+	if got := sessionEmailSubject("  ", "My QSOs", now); got != "My QSOs" {
+		t.Errorf("blank-callsign subject = %q, want 'My QSOs'", got)
+	}
+}
+
+func TestSessionEmailBody_QsoCountAndPluralisation(t *testing.T) {
+	now := time.Date(2026, 6, 17, 14, 30, 0, 0, time.UTC)
+	one := sessionEmailBody(1, now)
+	if !strings.Contains(one, "ADIF for this session attached.") || !strings.Contains(one, "Contains 1 QSO.") {
+		t.Errorf("1-QSO body = %q, want the attached line + 'Contains 1 QSO.'", one)
+	}
+	if strings.Contains(one, "QSOs") {
+		t.Errorf("1-QSO body should say 'QSO' (singular), got %q", one)
+	}
+	many := sessionEmailBody(5, now)
+	if !strings.Contains(many, "Contains 5 QSOs.") {
+		t.Errorf("5-QSO body = %q, want 'Contains 5 QSOs.'", many)
+	}
+}
+
 // apiSmtpFake is a minimal SMTP server that accepts any message and
 // records nothing beyond the fact that a full DATA exchange completed.
 // It mirrors the unexported smtpFake in internal/email (which the api
