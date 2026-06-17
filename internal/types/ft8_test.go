@@ -88,6 +88,29 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 	}
 }
 
+func TestResolveFt8MaxRepeats(t *testing.T) {
+	cases := []struct {
+		name string
+		in   *Ft8TXConfig
+		want int
+	}{
+		{"nil TX block → default", nil, DefaultFt8MaxRepeats},
+		{"unset (0) → default", &Ft8TXConfig{}, DefaultFt8MaxRepeats},
+		{"negative → default", &Ft8TXConfig{MaxRepeats: -3}, DefaultFt8MaxRepeats},
+		{"in-range honoured", &Ft8TXConfig{MaxRepeats: 4}, 4},
+		{"at ceiling honoured", &Ft8TXConfig{MaxRepeats: Ft8MaxRepeatsCeiling}, Ft8MaxRepeatsCeiling},
+		{"above ceiling clamped", &Ft8TXConfig{MaxRepeats: 99}, Ft8MaxRepeatsCeiling},
+	}
+	for _, c := range cases {
+		if got := ResolveFt8MaxRepeats(c.in); got != c.want {
+			t.Errorf("%s: ResolveFt8MaxRepeats = %d, want %d", c.name, got, c.want)
+		}
+	}
+	if Ft8MaxRepeatsCeiling != 10 {
+		t.Errorf("ceiling = %d, want 10", Ft8MaxRepeatsCeiling)
+	}
+}
+
 func TestResolveFt8Frequencies(t *testing.T) {
 	// nil → the WSJT-X defaults, unchanged.
 	d := ResolveFt8Frequencies(nil)

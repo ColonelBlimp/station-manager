@@ -76,8 +76,17 @@ func (r *seqRecorder) sentMsgs() []string {
 	return append([]string(nil), r.sent...)
 }
 
+func (r *seqRecorder) lastStatus() QsoStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.statuses) == 0 {
+		return QsoStatus{}
+	}
+	return r.statuses[len(r.statuses)-1]
+}
+
 func newTestSeq(r *seqRecorder) *Sequencer {
-	s := newSequencer(r.transmit, r.publish, nil)
+	s := newSequencer(r.transmit, r.publish, 0, nil) // 0 → defaultSeqMaxRepeats
 	s.onComplete = func(c CompletedQso) {
 		r.mu.Lock()
 		r.completed = append(r.completed, c)
@@ -204,6 +213,27 @@ func TestSequencer_AbandonsAfterMaxRepeats(t *testing.T) {
 	driveTheir(s, 90, nil) // would be repeat 3 > max → abandon, no transmit
 	require.Equal(t, []string{"K1ABC G0XYZ IO91", "K1ABC G0XYZ IO91"}, r.sentMsgs())
 	require.False(t, s.Active(), "abandons after max unanswered repeats")
+}
+
+// TestSequencer_MaxRepeatsHonouredAndExposed: a custom cap (via newSequencer) is
+// applied, and the published status advertises MaxRepeats on the capped rungs so
+// the SPA can render "calls left" — but NOT on the one-shot 73 (where the cap does
+// not apply). The exposed value is the SPA's countdown denominator.
+func TestSequencer_MaxRepeatsHonouredAndExposed(t *testing.T) {
+	r := &seqRecorder{}
+	s := newSequencer(r.transmit, r.publish, 3, nil)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	// Opening (calling) rung is capped → the cap is advertised; remaining = max-repeats.
+	st := r.lastStatus()
+	require.Equal(t, 3, st.MaxRepeats, "capped rung should advertise the cap")
+	require.GreaterOrEqual(t, st.MaxRepeats-st.Repeats, 0, "remaining must not go negative")
+
+	// 0 → the default cap (parity with the pre-config behaviour).
+	r2 := &seqRecorder{}
+	s2 := newSequencer(r2.transmit, r2.publish, 0, nil)
+	require.Equal(t, defaultSeqMaxRepeats, s2.maxRepeats)
 }
 
 func TestSequencer_StartErrors(t *testing.T) {

@@ -18,8 +18,8 @@ package config
 //	     cosmetic gain — the DefaultConfig-seed is the standard Go idiom for a
 //	     default-true bool that must not be re-stomped each Load. Accepted as-is.]
 //	(b)  serve/read-time resolve — types/ft8.go: ResolveFt8Display,
-//	     ResolveFt8Frequencies, ResolveFt8CallerAnswerMode (defaults applied at
-//	     /v1/config GET, keeping config.json sparse for SPA prefs).
+//	     ResolveFt8Frequencies, ResolveFt8CallerAnswerMode, ResolveFt8MaxRepeats
+//	     (defaults applied at /v1/config GET, keeping config.json sparse for SPA prefs).
 //	(c)  nil-pointer-means-default — Server.ServeSPA, Ft8.EnableOSD,
 //	     Ft8.TX.Occupancy.GuardMarginHz (*T distinguishes unset from explicit 0/false).
 //
@@ -29,6 +29,8 @@ package config
 //	- tune power ≤ 40 W, duration ≤ 30 s, restore-settle ≤ 2 s — clamped at
 //	  bridge.Service construction (internal/bridge).
 //	- FT8 TX hard auto-off ft8TxMaxDuration = 18 s — internal/bridge/ft8tx.go.
+//	- FT8 sequencer unanswered-rung repeat cap ≤ Ft8MaxRepeatsCeiling = 10 —
+//	  clamped in types.ResolveFt8MaxRepeats (ft8.tx.max_repeats; default 6).
 //	- band-activity history_max clamp [10, 2000] — types.ResolveFt8Display.
 //	- bridge timeout sane range [50 ms, 1 h] — validateBridge (typo guard; rejects).
 //

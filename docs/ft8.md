@@ -81,6 +81,13 @@ on any PUT):
   implemented** — Call CQ with it configured is **rejected** at start (501
   `ft8_caller_mode_unsupported`) rather than silently auto-picking, so the setting
   never misbehaves; use `auto_first` until the stack ships.
+- **`tx.max_repeats`** — how many times the sequencer re-sends an unanswered rung
+  before it auto-abandons the contact (ADR 0031 off-ramp; the caller side resumes
+  CQ instead of abandoning). Default **6** (~90 s of calling); `0`/absent → default.
+  **Hard-clamped to ≤ 10** (`Ft8MaxRepeatsCeiling`) — a safety bound like the
+  tune-power / auto-off clamps, so no config value can leave the rig calling a dead
+  station for minutes. Surfaced to the SPA as a per-rung "N calls left" countdown in
+  the Working banner (see §4). Config-only today (no Settings-tab control yet).
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on
@@ -182,6 +189,24 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   states prompt accordingly. Purely SPA-side — filters the existing
   `ft8State.decodes`, no daemon change. (Replaced the temporary "TX Frequency"
   occupied-Hz validation view, which the Occupancy-tab strip superseded.)
+- **"Working [callsign]" channel banner** — an always-visible strip (below the slot
+  countdown, so it shows on **every** lower tab) that appears only while a contact is
+  in flight (`ft8State.qso.active`). It reads `Working <call> — channel clear/BUSY`
+  and colours **green when the selected TX channel is clear, red when occupied** —
+  the same overlap test as the Occupancy strip (`ft8State.channelOccupied`: the
+  `[selectedOffset, selectedOffset + signalWidth)` span vs the latest occupied bands),
+  re-evaluated each slot. Grey "channel unknown" when no offset is picked or no
+  occupancy report has arrived yet. It closes the **pick-time → TX-time gap**: a
+  channel chosen clear can have a station land on it a slot or two later, and this
+  surfaces that **before** the next transmission keys rather than after. Purely
+  SPA-side, RX-safe — no daemon change. The banner also carries a **per-rung
+  attempts-remaining countdown** (`· N calls left`) while the current rung is subject
+  to the auto-abandon cap (`ft8.tx.max_repeats`, default 6): it counts down each
+  unanswered slot and reaches 0 on the slot before the sequencer abandons (or, on the
+  caller side, resumes CQ). The daemon advertises the cap (`max_repeats`) on the
+  `ft8-qso` payload **only on the rungs it governs**, so the countdown shows iff
+  `max_repeats > 0` — it's absent on the uncapped calling-CQ rung and the one-shot
+  73/RR73.
 - **Lower section — tabs** (same tablist pattern + `.tab-item` class as InfoPanel,
   full WAI-ARIA keyboard nav; each tab carries a Heroicon to read alike with the
   Phone/CW InfoPanel tabs): **Occupancy** (chart-bar — the TX Offset strip below),

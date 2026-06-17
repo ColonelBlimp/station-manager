@@ -480,8 +480,10 @@ describe('bridge SSE consumer — bridge-error', () => {
         );
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('error');
-        expect(toastsState.items[0].message).toContain('/dev/ttyUSB0');
+        // The UI message is deliberately short — it omits the long by-id port path
+        // (kept in the daemon logs) and surfaces only the underlying error detail.
         expect(toastsState.items[0].message).toContain('permission denied');
+        expect(toastsState.items[0].message).not.toContain('/dev/ttyUSB0');
     });
 
     it('does not change bridgeState flags', () => {

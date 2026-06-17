@@ -197,6 +197,14 @@ type Ft8TXConfig struct {
 	// tab once operator_pick ships; until then the daemon reads it from config.json.
 	CallerAnswerMode string `json:"caller_answer_mode,omitempty"`
 
+	// MaxRepeats caps how many times an unanswered rung is re-sent before the
+	// sequencer auto-abandons the contact (ADR 0031 off-ramp). The operator's knob;
+	// 0/absent → DefaultFt8MaxRepeats, and any value is clamped to
+	// [1, Ft8MaxRepeatsCeiling] by ResolveFt8MaxRepeats. The ceiling is a hard
+	// internal limit a config edit cannot exceed — so a typo (or a deliberate large
+	// value) can never leave the rig calling a dead station for minutes on end.
+	MaxRepeats int `json:"max_repeats,omitempty"`
+
 	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
 	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
 	Occupancy *Ft8OccupancyConfig `json:"occupancy,omitempty"`
@@ -214,6 +222,29 @@ const (
 // Ft8CallerAnswerModeValid reports whether s is an accepted caller-answer-mode literal.
 func Ft8CallerAnswerModeValid(s string) bool {
 	return s == Ft8CallerAnswerAutoFirst || s == Ft8CallerAnswerOperatorPick
+}
+
+// Unanswered-rung repeat cap (ADR 0031 off-ramp) for Ft8TXConfig.MaxRepeats.
+const (
+	// DefaultFt8MaxRepeats is the resolve fallback — ~6 of our slots ≈ 90 s of calling.
+	DefaultFt8MaxRepeats = 6
+	// Ft8MaxRepeatsCeiling is the hard internal ceiling the config can never exceed.
+	Ft8MaxRepeatsCeiling = 10
+)
+
+// ResolveFt8MaxRepeats returns the effective unanswered-rung repeat cap: the
+// operator's value clamped to [1, Ft8MaxRepeatsCeiling], or DefaultFt8MaxRepeats
+// when unset/non-positive. A nil TX block resolves to the default. The ceiling is
+// a safety bound — like the tune-power / auto-off clamps (ADR 0027) — so no config
+// value can keep the sequencer transmitting at a silent station indefinitely.
+func ResolveFt8MaxRepeats(c *Ft8TXConfig) int {
+	if c == nil || c.MaxRepeats <= 0 {
+		return DefaultFt8MaxRepeats
+	}
+	if c.MaxRepeats > Ft8MaxRepeatsCeiling {
+		return Ft8MaxRepeatsCeiling
+	}
+	return c.MaxRepeats
 }
 
 // ResolveFt8CallerAnswerMode returns the effective caller-answer mode: the operator's

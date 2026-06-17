@@ -205,6 +205,7 @@ would let config create an unsafe state.
 | Tune duration ≤ 30 s | `bridge.Service` construction | const 15 s default, clamped ≤ 30 |
 | Tune restore-settle ≤ 2 s | `bridge.Service` construction | const 150 ms default, clamped ≤ 2 s |
 | FT8 TX hard auto-off (`ft8TxMaxDuration`) | `internal/bridge/ft8tx.go` | 18 s, not operator-overridable |
+| FT8 sequencer repeat cap ≤ 10 (`Ft8MaxRepeatsCeiling`) | `types.ResolveFt8MaxRepeats` | const 6 default, config `ft8.tx.max_repeats` clamped ≤ 10 |
 | Band-activity `history_max` clamp [10, 2000] | `ResolveFt8Display` | both a default *and* a clamp |
 | Bridge timeout sane range [50 ms, 1 h] | `validateBridge` | rejects out-of-range as a typo guard |
 

@@ -216,25 +216,56 @@
             return `Offset ${ft8State.selectedOffset} Hz ±${rxTol}`;
         return 'No offset selected';
     });
-    // Is the selected TX offset currently occupied? Mirrors the Occupancy strip's
-    // busy test exactly — overlap of [offset, offset+signalWidth) with any occupied
-    // band — so the footer "Offset N Hz ±tol" readout can flag busy/clear in the same
-    // colours. null when no offset is selected.
-    const selectedOffsetBusy = $derived.by(() => {
-        const off = ft8State.selectedOffset;
-        if (off === null) return null;
-        const hi = off + (ft8State.signalWidth > 0 ? ft8State.signalWidth : 50);
-        return ft8State.occupied.some((b) => off < b.high_hz && hi > b.low_hz);
-    });
+    // Is the selected TX channel currently under another signal? Centralised on
+    // ft8State.channelOccupied (overlap of [offset, offset+signalWidth) with any
+    // occupied band); null when no offset is picked or no occupancy yet. Shared by
+    // the footer Offset readout and the always-visible "Working X" banner below.
+    const channelOccupied = $derived(ft8State.channelOccupied);
     // Highlight class for the footer Offset readout: red pill = busy, green pill =
     // clear (the Occupancy strip's red-600 / green-500). Only while idle on a picked
     // offset; the "Following X" / "No offset" captions stay neutral (inherit gray).
+    // null (no occupancy yet) reads as clear, matching the prior empty-band default.
     const rxCaptionClass = $derived.by(() => {
         if (ft8State.qso.active || ft8State.selectedOffset === null) return '';
-        return selectedOffsetBusy
+        return channelOccupied === true
             ? 'text-center rounded px-1.5 bg-red-600 text-white py-0.5 w-38'
             : 'text-center rounded px-1.5 bg-green-500 text-white py-0.5 w-38';
     });
+
+    // "Working [callsign]" channel banner (always visible, every lower tab). Shown
+    // only while a contact is in flight (qso.active). Colour tracks the selected TX
+    // channel's occupancy so a station landing on the channel between pick and TX is
+    // visible BEFORE the next transmission keys, not discovered after it starts.
+    const workingCall = $derived(ft8State.qso.active ? ft8State.qso.theirCall : '');
+    // green = channel clear · red = channel busy · gray = unknown (no offset picked
+    // or no occupancy report yet — can't claim either).
+    const workingBannerClass = $derived(
+        channelOccupied === true
+            ? 'bg-red-600 text-white'
+            : channelOccupied === false
+              ? 'bg-green-600 text-white'
+              : 'bg-gray-200 text-gray-600'
+    );
+    const workingChannelLabel = $derived(
+        channelOccupied === true
+            ? 'channel BUSY'
+            : channelOccupied === false
+              ? 'channel clear'
+              : 'channel unknown'
+    );
+    // Attempts-remaining countdown before the sequencer auto-abandons the current
+    // rung (ADR 0031 off-ramp). The daemon sends max_repeats ONLY on the capped rungs
+    // (>0), so a positive cap is the whole show-condition — no cap-vs-one-shot logic
+    // here. remaining = cap − attempts-so-far, floored at 0 (at 0 the next slot
+    // abandons). '' when not on a capped rung (calling CQ / one-shot 73/RR73).
+    const callsLeft = $derived(
+        ft8State.qso.maxRepeats > 0
+            ? Math.max(0, ft8State.qso.maxRepeats - ft8State.qso.repeats)
+            : null
+    );
+    const callsLeftLabel = $derived(
+        callsLeft === null ? '' : ` · ${callsLeft} ${callsLeft === 1 ? 'call' : 'calls'} left`
+    );
 
     // ---- Lower-section tabs (same pattern + .tab-item class as InfoPanel) ----
     type Ft8TabId = 'occupancy' | 'ladder' | 'session' | 'settings';
@@ -465,6 +496,19 @@
     <div class="">&nbsp;|&nbsp;</div>
     <div class={rxCaptionClass}>{rxCaption}</div>
 </div>
+<!-- "Working [callsign]" channel banner — always visible (every lower tab) while a
+     contact is in flight, so a station landing on the picked channel between pick and
+     TX shows up before the next transmission keys. green=clear · red=busy · gray=unknown. -->
+{#if workingCall}
+    <div class="flex justify-center w-full">
+        <div
+            class="rounded px-3 py-0.5 text-sm font-semibold {workingBannerClass}"
+            title="Selected TX channel occupancy for the station being worked"
+        >
+            Working {workingCall} — {workingChannelLabel}{callsLeftLabel}
+        </div>
+    </div>
+{/if}
 <!-- Heroicon "cog-6-tooth" (outline) — the Settings tab icon, matching the gear
      used on InfoPanel's My Station tab so the two operating modes read alike. -->
 {#snippet settingsIcon()}

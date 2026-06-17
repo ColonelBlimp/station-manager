@@ -177,6 +177,45 @@ describe('ft8 TX-offset selection', () => {
     });
 });
 
+describe('ft8 channelOccupied (selected-channel collision check)', () => {
+    it('is null with no offset picked', () => {
+        ft8State.selectedOffset = null;
+        ft8State.occupied = [{ low_hz: 1000, high_hz: 1050 }];
+        expect(ft8State.channelOccupied).toBeNull();
+    });
+
+    it('is null when an offset is picked but no occupancy has arrived', () => {
+        ft8State.selectedOffset = 1500;
+        ft8State.occupied = [];
+        expect(ft8State.channelOccupied).toBeNull();
+    });
+
+    it('is false when the channel span clears every occupied band', () => {
+        ft8State.signalWidth = 50;
+        ft8State.selectedOffset = 1500; // [1500,1550)
+        ft8State.occupied = [
+            { low_hz: 1000, high_hz: 1050 },
+            { low_hz: 1560, high_hz: 1610 },
+        ];
+        expect(ft8State.channelOccupied).toBe(false);
+    });
+
+    it('is true when the channel span overlaps an occupied band', () => {
+        ft8State.signalWidth = 50;
+        ft8State.selectedOffset = 1500; // [1500,1550)
+        ft8State.occupied = [{ low_hz: 1540, high_hz: 1590 }];
+        expect(ft8State.channelOccupied).toBe(true);
+    });
+
+    it('treats touching edges as clear (half-open overlap)', () => {
+        ft8State.signalWidth = 50;
+        ft8State.selectedOffset = 1500; // [1500,1550)
+        // A band starting exactly at the channel's high edge does not overlap.
+        ft8State.occupied = [{ low_hz: 1550, high_hz: 1600 }];
+        expect(ft8State.channelOccupied).toBe(false);
+    });
+});
+
 /** Build a DecodeReport JSON string with the given texts (all at distinct freqs). */
 function decodeReport(startUtc: string, texts: string[]): string {
     return JSON.stringify({
@@ -323,6 +362,7 @@ describe('ft8 qso status (ft8-qso SSE)', () => {
                 state: 'reporting',
                 next_message: 'K1ABC G0XYZ R-12',
                 repeats: 1,
+                max_repeats: 6,
             })
         );
         expect(ft8State.qso.active).toBe(true);
@@ -330,6 +370,16 @@ describe('ft8 qso status (ft8-qso SSE)', () => {
         expect(ft8State.qso.state).toBe('reporting');
         expect(ft8State.qso.nextMessage).toBe('K1ABC G0XYZ R-12');
         expect(ft8State.qso.repeats).toBe(1);
+        expect(ft8State.qso.maxRepeats).toBe(6);
+    });
+
+    it('defaults maxRepeats to 0 when the cap is absent (uncapped/one-shot rung)', () => {
+        startFt8();
+        latest().emit(
+            'ft8-qso',
+            JSON.stringify({ active: true, their_call: 'K1ABC', state: 'confirming' })
+        );
+        expect(ft8State.qso.maxRepeats).toBe(0);
     });
 
     it('treats an idle event as inactive with defaults', () => {

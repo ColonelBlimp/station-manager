@@ -7,6 +7,7 @@ import (
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // FT8 manual sequencer (ADR 0031): operator-initiated, auto-advancing. The
@@ -25,8 +26,10 @@ import (
 // OnSlot is the single trigger: the decode loop calls it once per completed slot.
 
 // defaultSeqMaxRepeats caps consecutive unanswered transmissions of a rung before
-// the QSO is abandoned (ADR 0031 off-ramp). ~6 of our slots ≈ 90 s of calling.
-const defaultSeqMaxRepeats = 6
+// the QSO is abandoned (ADR 0031 off-ramp). ~6 of our slots ≈ 90 s of calling. The
+// operator can override it via ft8.tx.max_repeats (clamped ≤ Ft8MaxRepeatsCeiling);
+// this is the fallback when unset.
+const defaultSeqMaxRepeats = types.DefaultFt8MaxRepeats
 
 // txLateWindowSec is the latest into our slot we will START a rung. Past this,
 // too few symbols / Costas sync words survive the head-truncation (ADR 0032) for
@@ -72,6 +75,12 @@ type QsoStatus struct {
 	State       string `json:"state,omitempty"`
 	NextMessage string `json:"next_message,omitempty"`
 	Repeats     int    `json:"repeats,omitempty"`
+	// MaxRepeats — the unanswered-rung repeat cap, set ONLY while the current rung is
+	// actually subject to it (an answerer pre-73, or a caller working an answerer
+	// pre-RR73). Zero (omitted) on the uncapped rungs (calling CQ) and the one-shot
+	// final rungs (73/RR73), so the SPA shows the "calls left" countdown iff this is
+	// >0 without re-deriving the cap-vs-one-shot rule. Remaining = MaxRepeats-Repeats.
+	MaxRepeats int `json:"max_repeats,omitempty"`
 	// OurReport / TheirReport — the signal reports exchanged, formatted exactly as
 	// they appear on the air (e.g. "-12", "+04"); empty until known. OurReport is
 	// the report WE send (our SNR of their signal); TheirReport is the one THEY sent
@@ -147,12 +156,15 @@ type Sequencer struct {
 	log        logging.Logger
 }
 
-func newSequencer(transmit func(string, float64, func(ok bool)) error, publish func(QsoStatus), log logging.Logger) *Sequencer {
+func newSequencer(transmit func(string, float64, func(ok bool)) error, publish func(QsoStatus), maxRepeats int, log logging.Logger) *Sequencer {
 	if log == nil {
 		log = logging.Noop()
 	}
+	if maxRepeats <= 0 {
+		maxRepeats = defaultSeqMaxRepeats
+	}
 	return &Sequencer{
-		maxRepeats: defaultSeqMaxRepeats,
+		maxRepeats: maxRepeats,
 		transmit:   transmit,
 		publish:    publish,
 		log:        log,
@@ -503,6 +515,11 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			NextMessage: msg,
 			Repeats:     s.repeats,
 		}
+		// Advertise the cap only on the rungs it governs (everything but the one-shot
+		// 73), so the SPA's countdown shows iff max_repeats>0.
+		if s.ex.State != txConfirming {
+			st.MaxRepeats = s.maxRepeats
+		}
 		if s.ex.HasSendSnr {
 			st.OurReport = formatReport(s.ex.SendSnr)
 		}
@@ -519,6 +536,11 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			st.TheirCall = s.caller.TheirCall
 			st.State = s.caller.State.label()
 			st.NextMessage = msg
+			// Cap governs the working-an-answerer rungs but not the one-shot RR73; on
+			// plain calling-cq (caller==nil) it's uncapped, so MaxRepeats stays 0.
+			if s.caller.State != cqRogering {
+				st.MaxRepeats = s.maxRepeats
+			}
 			if s.caller.HasSendSnr {
 				st.OurReport = formatReport(s.caller.SendSnr)
 			}

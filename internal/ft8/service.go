@@ -154,6 +154,7 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 	s.seq = newSequencer(
 		s.seqTransmit,
 		func(st QsoStatus) { s.hub.publish(hubEvent{name: EventQso, payload: st}) },
+		types.ResolveFt8MaxRepeats(cfg.TX),
 		log,
 	)
 	// On a completed exchange, hand it to the injected logger (e4). Reads

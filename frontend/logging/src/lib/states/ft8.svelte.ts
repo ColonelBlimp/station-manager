@@ -95,6 +95,12 @@ export interface Ft8QsoStatus {
     state: string; // answerer: calling|reporting|confirming · caller: calling-cq|reporting|rogering
     nextMessage: string;
     repeats: number;
+    // maxRepeats — the unanswered-rung repeat cap, set by the daemon ONLY on the rungs
+    // it governs (an answerer pre-73 / a caller working an answerer pre-RR73); 0 on the
+    // uncapped (calling CQ) and one-shot (73/RR73) rungs. The "calls left" countdown
+    // (= maxRepeats - repeats) is shown iff maxRepeats > 0, so the SPA needs no copy of
+    // the cap-vs-one-shot rule.
+    maxRepeats: number;
     // Signal reports exchanged, formatted as on the air (e.g. '-12'); '' until known.
     // ourReport = the report we send; theirReport = the one they sent us. The ladder
     // fills its <RST> placeholders from these.
@@ -109,6 +115,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     state: '',
     nextMessage: '',
     repeats: 0,
+    maxRepeats: 0,
     ourReport: '',
     theirReport: '',
 });
@@ -219,6 +226,26 @@ class Ft8State {
     selectOffset(hz: number): void {
         this.selectedOffset = hz;
         saveTxOffset(hz);
+    }
+
+    /**
+     * Is the selected TX channel currently sitting under another signal? The
+     * channel spans [selectedOffset, selectedOffset + signalWidth]; it is
+     * occupied when that span overlaps any band in the latest occupancy report.
+     * Returns null when no offset is picked or no occupancy has arrived yet — the
+     * caller renders that as "unknown" rather than a clear/occupied claim.
+     *
+     * This is the pick-time → TX-time gap closer: a channel chosen clear can have
+     * a station land on it a slot or two later, and this re-evaluates each slot
+     * as a fresh `occupied` list arrives (the getter reads reactive $state).
+     */
+    get channelOccupied(): boolean | null {
+        if (this.selectedOffset === null) return null;
+        if (this.occupied.length === 0) return null;
+        const lo = this.selectedOffset;
+        const hi = this.selectedOffset + this.signalWidth;
+        // Half-open overlap: band.low < channel.high && band.high > channel.low.
+        return this.occupied.some((b) => b.low_hz < hi && b.high_hz > lo);
     }
 
     /**
@@ -338,6 +365,7 @@ function openSource(): void {
                 state: string;
                 next_message: string;
                 repeats: number;
+                max_repeats: number;
                 our_report: string;
                 their_report: string;
             }>;
@@ -348,6 +376,7 @@ function openSource(): void {
                 state: p.state ?? '',
                 nextMessage: p.next_message ?? '',
                 repeats: p.repeats ?? 0,
+                maxRepeats: p.max_repeats ?? 0,
                 ourReport: p.our_report ?? '',
                 theirReport: p.their_report ?? '',
             };
