@@ -194,6 +194,39 @@ when it ships — don't let this rot into a graveyard.
   - **Attended either way:** operator initiates by calling CQ, is present, Abandon stops
     it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why this
     **supersedes the auto-responder framing** of the watch-list item above.
+- **FT8 → PSK Reporter reception-report upload (SM as a reporter/skimmer).** Flagged
+  2026-06-17. Every FT8 slot already decodes many stations (call + grid + freq + SNR +
+  time + mode), so SM can upload these as **reception reports** to PSK Reporter — the
+  standard digital-mode feedback loop WSJT-X/JTDX feed: it powers propagation maps and
+  "who is hearing me right now." Protocol spec (read at implementation — do NOT assume
+  the wire details): <https://pskreporter.info/pskdev.html> (a periodic, batched UDP
+  report format to PSK Reporter's collector; confirm host/port, the binary record
+  layout, and the rate/cadence guidelines from that page).
+  - **Direction:** this is the **report/upload** side (what *I* hear). The retrieve/query
+    side (a feed of who heard *you*) is a separate, later item — don't conflate.
+  - **Scope placement (ADR 0013/0024):** keep `internal/ft8` narrow — it stays
+    decode-only, no outbound network. Inject the reporter the same way as the QSO-logger
+    sink (`SetQsoLogger`): `internal/ft8` emits the decode data it already has; a
+    separate reporter (a new `internal/ft8reporter` or the `cmd/smd` composition root)
+    batches + uploads. Narrow-daemon-scope holds by import graph — `internal/ft8` never
+    imports the uploader.
+  - **Opt-in + identity:** **default OFF** — uploading publishes your callsign and
+    everything you hear to a public service (consent/privacy). Needs the operator call +
+    grid (from My Station) to report; gate on a config flag + presence of identity
+    (mirror the forwarder's "enqueue gated on config presence" stance, ADR 0022).
+  - **Batching + fail-soft:** PSK Reporter expects periodic *batched* uploads (a window
+    of decodes every few minutes), not per-decode — fits the operator's conservative,
+    flaky-network defaults. Upload failures **log-and-drop, never block** decoding/QSOs
+    (the "FT8 fails soft" + "enrichment never blocks logging" discipline).
+  - **Per-spot data:** sender = the decoded call + grid (from the decode); the reported
+    **frequency is the actual RF freq = dial + the decode's audio offset** (NOT the
+    dial-only convention QSO logging uses — PSK Reporter wants where the signal actually
+    was); SNR + mode `FT8` + slot time; receiver = operator call/grid (+ optional
+    software name/version, antenna). Confirm the exact required/optional fields against
+    the spec.
+  - **Reuse vs forwarder:** outbound like the QSO forwarder but a *different* destination
+    type (spots over UDP, not the QSO upload-queue) — borrow the worker/batching shape,
+    don't force it through the QSO forwarding path.
 - **FT8 Rx Frequency pane — cap the decode list + add a worked-station enrichment
   card.** The Rx Frequency column (`Ft8Panel.svelte`, `rxDecodes`) renders a tall
   scrolling decode list that earns little mid-QSO — the worked station transmits once
