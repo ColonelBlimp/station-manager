@@ -1,5 +1,7 @@
 <script lang="ts">
     import { ft8State } from '../../states/ft8.svelte';
+    import { ft8PileupStack } from '../../states/ft8PileupStack.svelte';
+    import Ft8PileupDrawer from './Ft8PileupDrawer.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { catState } from '../../states/cat.svelte';
@@ -150,6 +152,9 @@
     async function onAbandon(): Promise<void> {
         if (abandoning) return;
         abandoning = true;
+        // Pause pile-up auto-drain too: Abandon should stop the run, not silently jump
+        // to the next queued caller. The queue is kept (Resume on the drawer restarts).
+        ft8PileupStack.pause();
         try {
             const out = await abandonFt8Qso();
             if (out.kind !== 'ok') toasts.error(out.message);
@@ -252,3 +257,7 @@
     </div>
     <div class="z-0 flex flex-col items-center -mt-7.5">{statusLine}</div>
 </div>
+<!-- Pile-up stack (ADR 0033 operator-curated FIFO): Ctrl+click callers in Band Activity
+     to enqueue; this drains them oldest-first via the work-a-caller path. Self-contained
+     (reads ft8PileupStack); shown only when non-empty. -->
+<Ft8PileupDrawer />

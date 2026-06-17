@@ -199,8 +199,20 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   the moment you're free. The daemon then runs a caller-style exchange (we report first
   → RR73 → log) and returns to idle. Detection is SPA-side (`parseDirectedToMe`); only
   the unambiguous grid opening is matched, not the mid-exchange `R-12`/`RR73`/`73`
-  replies. (The complementary `operator_pick` Call-CQ answerer stack is still pending —
-  this is its manual, no-CQ-needed sibling.)
+  replies.
+  **Pile-up callsign stacking (ADR 0033, shipped 2026-06-17):** because a calling-you
+  row is only *clickable* when armed + idle, callers you spot mid-QSO are gone before
+  you can act. **Ctrl/Cmd+click** a calling-you decode instead to push it onto a
+  **pile-up stack** — a FIFO (`ft8PileupStack`), worked **oldest-first**. Ctrl+click is
+  available in **any** state (mid-QSO, disarmed; it's pure capture, no TX — a ✓ marks a
+  row already stacked), so you grab callers the instant you see them in your RX slot and
+  the SPA works them when it can. The Operate view **drains** the stack via the
+  work-a-caller path whenever the rig is armed + idle, advancing as each contact
+  completes, while you keep adding. **Abandon pauses** the drain (queue kept; Resume on
+  the drawer); the drawer (Operate tab, depth badge on the tab) lists the waiting callers
+  with per-entry remove + Clear-all. SPA-only (daemon untouched); in-memory (erased on
+  tab/browser close, like the Phone/CW `callsignStack`). This is the realised
+  operator-pick experience and **supersedes** the daemon `operator_pick` Call-CQ mode.
 - **Clear Offsets** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
   select it as the TX base offset**; the selected chip is marked with a **darker
@@ -351,8 +363,10 @@ realities — neither a fault in SM, and both visible in the log as a string of
 pile-up rather than chasing weak-path CQs — **press Call CQ** and SM works the
 answerers for you (ADR 0033 caller-side sequencing, `auto_first`: it calls CQ,
 auto-works the first answerer through RR73, logs it, and resumes — looping the pile-up
-until you Abandon). Choosing *which* answerer to work (the `operator_pick` stack) is a
-later increment; for now it takes the first valid answerer.
+until you Abandon). To choose *which* callers to work and in what order, use **pile-up
+callsign stacking** instead: **Ctrl/Cmd+click** each calling-you decode to queue it, and
+SM works the stack oldest-first (see "Working a caller" above). `auto_first` Call CQ is
+the hands-off option; the stack is the operator-curated one.
 
 ### SSE wire — `GET /v1/ft8/events`
 
@@ -742,8 +756,10 @@ daemon TX + Operate-tab Arm/Call-CQ. e2 = pure resolver. e3 = daemon manual sequ
 sequencing shipped 2026-06-12 (ADR 0033, `auto_first`):** Call CQ starts a sequenced
 session — the daemon calls CQ, auto-works the first answerer through RR73, logs it,
 and loops the pile-up until Abandon (`CallerExchange` + `onSlotCalling` +
-`POST /v1/ft8/cq/start`; needs on-air validation). **Next: the `operator_pick` stack**
-(operator chooses which answerer from a pile-up queue) + its Settings toggle.
+`POST /v1/ft8/cq/start`; needs on-air validation). **Pile-up callsign stacking shipped
+2026-06-17** (ADR 0033 amendment): Ctrl+click calling-you decodes onto an SPA-owned FIFO
+that drains via the work-a-caller path — the operator-curated alternative to
+`auto_first`, superseding the daemon `operator_pick` Call-CQ mode.
 **Automatic/unattended sequencing is out of scope and unsupported — the QEX FT8
 specification forbids automatic operation.**
 

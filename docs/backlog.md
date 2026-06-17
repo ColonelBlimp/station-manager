@@ -173,24 +173,24 @@ when it ships — don't let this rot into a graveyard.
     `caller_sequencer.go` (`onSlotCalling`); live role-aware ladder + "Calling CQ…":
     `Ft8MsgPanel`. Config: `ft8.tx.caller_answer_mode` (default `auto_first`). **Needs
     on-air validation** — unit-tested + offline-encode-verified only so far.
-  - **REMAINS — `operator_pick` (the pick-a-caller stack) — PRIORITISED 2026-06-12,
-    top FT8 build item (validated need on air).** First time operating the pile-up, the
-    operator hit the exact gap: answering a CQ from a silent station while OTHER
-    stations called *them*, with **no way to switch to a caller** — those callers send
-    directed `7Q5MLV <them> …` lines, which aren't clickable CQ rows. So the scope is
-    **broader than "Call-CQ only": a "stations calling me" pick-list that works in BOTH
-    modes** — while calling CQ *and* while answering a CQ — letting the operator tap a
-    caller to switch to working them (the WSJT-X "double-click a station calling you"
-    behaviour). The callers (decodes `<ourcall> <them> …` directed to us) populate a
-    stack/queue (mirroring the Phone/CW `callsignStack` + `StackingDrawer`) the operator
-    pops, instead of `auto_first` taking the first. The sequencer already carries
-    `answerMode` and `CallerExchange` is selection-agnostic, so no resolver rework —
-    `operator_pick` adds: (1) a daemon-side "stations-calling-me" collector +
-    pop-to-start-a-`CallerExchange`, available whether idle/calling-CQ OR mid
-    answer-a-CQ (switching abandons the current contact); (2) the SPA stack drawer in the
-    Operate tab; (3) the **Settings-tab toggle** for `caller_answer_mode`. **Today's
-    workaround:** Abandon the silent station → Call CQ → `auto_first` works the first
-    caller (no choice of which).
+  - **SHIPPED 2026-06-17 — pile-up callsign stacking (the operator-pick experience, as
+    an SPA-owned FIFO).** Realised the "pick which caller to work" need via a different
+    (operator-chosen) shape than the original daemon `operator_pick` Call-CQ mode:
+    **Ctrl/Cmd+click** a calling-you decode in Band Activity to push it onto an in-memory
+    **FIFO** (`ft8PileupStack.svelte.ts`), worked **oldest-first**; the Operate view
+    **drains** it via the existing work-a-caller path (`StartWorkCaller`) whenever the rig
+    is armed+idle, advancing as each contact completes, while the operator keeps adding.
+    Capture (Ctrl+click) is available in **any state** (mid-QSO, disarmed — pure capture,
+    no TX), which is the whole point: callers are only visible in your RX parity and the
+    work-now click is gated on armed+idle, so you grab them when you see them and the SPA
+    works them when it can. Drawer (`Ft8PileupDrawer.svelte`) in the Operate tab + a depth
+    badge on the tab; **Abandon pauses** the drain (queue kept, Resume on the drawer);
+    Clear-all + per-entry remove. **SPA-only** — daemon untouched (reuses work-a-caller +
+    the `ft8-qso` idle signal). In-memory (erased on tab/browser close), mirroring
+    `callsignStack`. This **supersedes the daemon `caller_answer_mode: operator_pick`
+    Call-CQ mode** (still `501`-rejected at `StartCallCq`; not needed — the stack gives
+    operator-chosen working for *anyone* calling you, whether or not you called CQ).
+    `auto_first` Call-CQ stays as the hands-off "call CQ + auto-work answerers" loop.
   - **Attended either way:** operator initiates by calling CQ, is present, Abandon stops
     it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why this
     **supersedes the auto-responder framing** of the watch-list item above.

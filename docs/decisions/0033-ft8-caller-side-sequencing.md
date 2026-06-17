@@ -120,15 +120,37 @@ CQ (there is no standing CQ to resume). The report we send is our SNR of the pic
 decode (the SPA passes `their_snr`). Attended throughout — the operator initiates each
 contact by clicking it.
 
-This is the foundation the still-pending **`operator_pick`** Call-CQ stack sits on:
-`operator_pick` is "the same pick, but the candidates are answerers to *our* CQ,
-queued for the operator to pop." `auto_first` Call-CQ remains as shipped; `StartWorkCaller`
-is the manual, no-CQ-needed pick. Why not fold work-a-caller into the answerer flow
-(`StartQso`)? Because the *roles* differ — a station that sent us a grid has opened the
-exchange, so **we report first** (the caller ladder), whereas `StartQso` answers a CQ by
-sending our grid first (the answerer ladder). Reusing `CallerExchange` keeps each ladder
-true to its role (the "build specific" lesson), as the original decision argued for the
-two-ladder split.
+This is the foundation the pile-up stack sits on (below). Why not fold work-a-caller
+into the answerer flow (`StartQso`)? Because the *roles* differ — a station that sent us
+a grid has opened the exchange, so **we report first** (the caller ladder), whereas
+`StartQso` answers a CQ by sending our grid first (the answerer ladder). Reusing
+`CallerExchange` keeps each ladder true to its role (the "build specific" lesson), as the
+original decision argued for the two-ladder split.
+
+## Amendment (2026-06-17) — pile-up callsign stacking supersedes daemon `operator_pick`
+
+The `operator_pick` answerer-selection was originally scoped as a **daemon** Call-CQ
+mode (the sequencer collects answerers to our CQ and the operator pops one). On air the
+operator instead asked for a simpler, more general shape that builds on work-a-caller:
+an **SPA-owned FIFO** of stations calling you. **Ctrl/Cmd+click** a calling-you decode
+to enqueue it (`ft8PileupStack.svelte.ts`); the Operate view **drains** the queue
+oldest-first via `StartWorkCaller`, advancing as each contact completes, while the
+operator keeps adding. Capture is available in **any state** (mid-QSO, disarmed — pure
+capture, no TX), which is the point: callers are only visible in your RX parity and
+work-now is gated on armed+idle, so you grab them when seen and the SPA works them when
+it can. Drawer + Operate-tab depth badge; Abandon pauses the drain (queue kept, Resume);
+Clear-all + per-entry remove. **SPA-only — the daemon is untouched** (reuses
+work-a-caller + the `ft8-qso` idle signal); the queue is in-memory (erased on tab close,
+like the Phone/CW `callsignStack`).
+
+This **supersedes the daemon `caller_answer_mode: operator_pick` mode**, which stays
+`501`-rejected at `StartCallCq` and is now unlikely to be built: the SPA stack delivers
+operator-chosen working for *anyone* calling you (whether or not you called CQ), without
+new daemon state/endpoints. `auto_first` Call-CQ remains as the hands-off "call CQ +
+auto-work the answerers" loop. Attended throughout — the operator explicitly Ctrl+clicks
+every station; the daemon only does the protocol sequencing it already does for
+`auto_first`/work-a-caller (strictly *more* attended than `auto_first`, which the
+operator never chose per-station).
 
 ## References
 

@@ -8,6 +8,7 @@
     import Ft8EnrichmentBox from './Ft8EnrichmentBox.svelte';
     import { sessionQsosState } from '../../states/sessionQsos.svelte';
     import { ft8State, startFt8, stopFt8, type DecodeEntry } from '../../states/ft8.svelte';
+    import { ft8PileupStack } from '../../states/ft8PileupStack.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
@@ -204,6 +205,67 @@
         if (out.kind !== 'ok') toasts.error(out.message);
     }
 
+    // Pile-up stacking: Ctrl/Cmd+click a calling-you decode to ENQUEUE it (pure
+    // capture — call/grid/SNR/slot — available in ANY state, including mid-QSO or
+    // disarmed, because nothing transmits at capture time). Plain click still works
+    // the station now (when armed+idle). This is the whole point: grab callers the
+    // instant you see them in your RX slot, even when you can't act on them yet.
+    function enqueueCaller(d: DecodeEntry): void {
+        const toMe = parseDirectedToMe(d.text, myCall);
+        if (!toMe) return;
+        ft8PileupStack.push({ call: toMe.call, grid: toMe.grid, snr: d.snr, slotUtc: d.startUtc });
+        // A fresh capture re-enables draining (an Abandon earlier paused it).
+        ft8PileupStack.resume();
+    }
+    function onCallerClick(e: MouseEvent, d: DecodeEntry): void {
+        if (e.ctrlKey || e.metaKey) {
+            enqueueCaller(d);
+            return;
+        }
+        if (canAnswer) void workCaller(d);
+        // Plain click while busy/disarmed: no-op — Ctrl+click to stack instead.
+    }
+
+    // Drain the pile-up stack (operator-curated FIFO): whenever the rig is armed +
+    // idle + freq known + an offset picked and auto-drain is enabled, work the head
+    // via the work-a-caller path, advancing as each contact completes. `draining`
+    // latches from the StartWorkCaller call until qso.active confirms, so the effect
+    // can't double-fire in the window before the daemon pushes the active state. The
+    // queue lives wholly in the SPA; the daemon is untouched (reuses StartWorkCaller).
+    let draining = false;
+    $effect(() => {
+        // A contact is active (ours just started, or in flight) → never drain, and
+        // clear the latch: our start has landed.
+        if (ft8State.qso.active) {
+            draining = false;
+            return;
+        }
+        if (draining) return;
+        if (!ft8PileupStack.enabled || ft8PileupStack.items.length === 0) return;
+        if (!ft8State.tx.armed || !freqKnown || ft8State.selectedOffset === null) return;
+        const head = ft8PileupStack.peek();
+        if (!head) return;
+        draining = true;
+        ft8PileupStack.dequeue();
+        const offset = ft8State.selectedOffset;
+        void startFt8WorkCaller(
+            head.call,
+            head.grid,
+            head.snr,
+            head.slotUtc,
+            offset,
+            opFreq / 1_000_000
+        ).then((out) => {
+            // On success the latch clears when qso.active flips true (above). On a
+            // refused start, surface it and release the latch so the next idle tick
+            // can try the next entry.
+            if (out.kind !== 'ok') {
+                toasts.error(out.message);
+                draining = false;
+            }
+        });
+    });
+
     // Slot label: "14:30:15 · odd", or a waiting state before the first event.
     // start_utc is RFC3339 UTC; render its UTC wall-clock with seconds so the four
     // 15 s slots per minute are distinguishable. (Congestion isn't shown here — the
@@ -324,7 +386,9 @@
     // $derived so the Session count tracks sessionQsosState as FT8 QSOs land.
     const tabs: { id: Ft8TabId; title: string; count?: number }[] = $derived([
         { id: 'occupancy', title: 'Occupancy' },
-        { id: 'ladder', title: 'Operate' },
+        // Operate carries the pile-up depth so the operator sees the stack building
+        // from any tab (the drawer itself lives in the Operate tab).
+        { id: 'ladder', title: 'Operate', count: ft8PileupStack.count || undefined },
         { id: 'settings', title: 'Settings' },
         { id: 'session', title: 'Session', count: sessionQsosState.count },
     ]);
@@ -389,11 +453,12 @@
     {@const lineGrid = cq?.grid ?? toMe?.grid ?? ''}
     {@const info = lineCall ? ft8EnrichState.info(lineCall, band) : undefined}
     {@const answerable = cq !== null && canAnswer}
-    {@const workable = toMe !== null && canAnswer}
+    {@const queued = toMe !== null && ft8PileupStack.items.some((x) => x.call === lineCall)}
     {@const bearing = lineGrid && myGrid ? pathInfo(myGrid, lineGrid)?.shortPathBearing : undefined}
     <!-- A station calling US (toMe) gets a distinct amber tint so it stands out from
-         band chatter — visible whether or not we can act on it yet (live pile-up); it
-         is only clickable (workable) when idle + armed, like answering a CQ. -->
+         band chatter. The row is ALWAYS clickable: Ctrl/Cmd+click adds it to the pile-
+         up stack (any state — pure capture), plain click works it now (when armed+idle).
+         A ✓ marks one already on the stack. -->
     <li class="flex gap-2 whitespace-nowrap {toMe ? 'rounded bg-amber-50' : ''}">
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
         <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
@@ -413,16 +478,14 @@
                 title={`Answer ${lineCall}`}
                 onclick={() => answerCq(d)}>{d.text}</button
             >
-        {:else if workable}
+        {:else if toMe}
             <button
                 type="button"
                 class="truncate text-left font-medium text-amber-700 cursor-pointer hover:underline"
-                title={`Work ${lineCall} (calling you)`}
-                onclick={() => workCaller(d)}>{d.text}</button
-            >
-        {:else if toMe}
-            <span class="truncate font-medium text-amber-700" title={`${lineCall} is calling you`}
-                >{d.text}</span
+                title={canAnswer
+                    ? `Work ${lineCall} now · Ctrl+click to add to the pile-up stack`
+                    : `${lineCall} is calling you · Ctrl+click to add to the pile-up stack`}
+                onclick={(e) => onCallerClick(e, d)}>{queued ? '✓ ' : ''}{d.text}</button
             >
         {:else}
             <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
