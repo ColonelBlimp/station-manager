@@ -64,3 +64,35 @@ export function parseCq(text: string): { call: string; grid: string } | null {
     }
     return null;
 }
+
+/**
+ * parseDirectedToMe returns the calling station's callsign AND grid from a decode
+ * that is a station CALLING US — the opening of a contact, `<myCall> <theirCall>
+ * <grid>` (e.g. `7Q5MLV PA3KUS JO21`) — or null otherwise. This is the pile-up
+ * signal: stations answering us / tail-ending while we're on frequency. Used to
+ * make those lines clickable to work the caller (ADR 0033 "work a caller").
+ *
+ * It matches ONLY the grid-bearing opening, which is unambiguous — deliberately NOT
+ * the mid-exchange replies addressed to us (`<myCall> <theirCall> R-12` / `RR73` /
+ * `73`), which are part of an in-progress QSO, not a fresh caller to pick up. The
+ * caller's grid is carried for the logged QSO. myCall is compared case-insensitively;
+ * a blank myCall (no station callsign configured) never matches.
+ */
+export function parseDirectedToMe(
+    text: string,
+    myCall: string
+): { call: string; grid: string } | null {
+    const me = myCall.trim().toUpperCase();
+    if (me === '') return null;
+    const toks = text.trim().toUpperCase().split(/\s+/);
+    // <me> <them> <grid> — exactly the opening shape; the third token must be a grid.
+    if (toks.length < 3) return null;
+    if (toks[0] !== me) return null;
+    if (!looksLikeCall(toks[1])) return null;
+    // RR73 satisfies GRID4 (R,R ∈ A–R; 7,3 ∈ 0–9) but is a roger token, not a grid —
+    // the well-known FT8 Maidenhead collision. Exclude it so a roger addressed to us
+    // ("<me> <them> RR73", an in-progress QSO) isn't misread as a fresh caller. RRR /
+    // 73 / R-report don't match GRID4, so RR73 is the only token that needs excluding.
+    if (toks[2] === 'RR73' || !GRID4.test(toks[2])) return null;
+    return { call: toks[1], grid: toks[2] };
+}

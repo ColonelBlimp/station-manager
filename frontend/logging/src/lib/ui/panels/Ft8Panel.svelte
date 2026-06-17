@@ -11,8 +11,8 @@
     import { ft8EnrichState, type Ft8CallInfo } from '../../states/ft8Enrich.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
-    import { parseCqCall, parseCq } from '../../utils/ft8Message';
-    import { startFt8Qso } from '../../api/ft8qso';
+    import { parseCqCall, parseCq, parseDirectedToMe } from '../../utils/ft8Message';
+    import { startFt8Qso, startFt8WorkCaller } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
     import { frequencyToBand } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
@@ -88,6 +88,12 @@
     // Operator's Maidenhead grid — the local end of the beam-heading calc for each CQ.
     // pathInfo() tolerates 4/6/8-char; empty/invalid yields no bearing (blank column).
     const myGrid = $derived(configState.loggingStation.myGridsquare);
+    // Operator's callsign — used to spot decodes calling US (the pile-up). Falls back to
+    // the operator field, mirroring the daemon's identity resolution. parseDirectedToMe
+    // trims/upper-cases; a blank value never matches.
+    const myCall = $derived(
+        configState.loggingStation.stationCallsign || configState.loggingStation.operator || ''
+    );
 
     // A Main-Freq button highlights when the live dial is within this much of its
     // configured FT8 freq. The dial sits exactly on the watering hole during FT8, so
@@ -102,7 +108,9 @@
     // callsign); reply/report lines are left plain for now.
     $effect(() => {
         for (const d of ft8State.decodes) {
-            const call = parseCqCall(d.text);
+            // CQ lines, plus stations calling US (the pile-up) — both carry one
+            // unambiguous callsign, so both get the flag + worked-before tint.
+            const call = parseCqCall(d.text) ?? parseDirectedToMe(d.text, myCall)?.call ?? null;
             if (call) ft8EnrichState.observe(call, band);
         }
     });
@@ -161,6 +169,23 @@
         const out = await startFt8Qso(
             cq.call,
             cq.grid,
+            d.startUtc,
+            ft8State.selectedOffset,
+            opFreq / 1_000_000
+        );
+        if (out.kind !== 'ok') toasts.error(out.message);
+    }
+
+    // Working a station calling US (ADR 0033 "work a caller"): a directed-at-me row is
+    // clickable under the same gate as answering a CQ (armed + offset + idle). d.snr is
+    // our SNR of their calling signal — the report we send back (RST_SENT).
+    async function workCaller(d: DecodeEntry): Promise<void> {
+        const toMe = parseDirectedToMe(d.text, myCall);
+        if (!toMe || !canAnswer || ft8State.selectedOffset === null) return;
+        const out = await startFt8WorkCaller(
+            toMe.call,
+            toMe.grid,
+            d.snr,
             d.startUtc,
             ft8State.selectedOffset,
             opFreq / 1_000_000
@@ -332,14 +357,20 @@
 
 {#snippet decodeRow(d: DecodeEntry)}
     {@const cq = parseCq(d.text)}
-    {@const cqCall = cq?.call ?? null}
-    {@const info = cqCall ? ft8EnrichState.info(cqCall, band) : undefined}
-    {@const answerable = cqCall !== null && canAnswer}
-    {@const bearing = cq?.grid && myGrid ? pathInfo(myGrid, cq.grid)?.shortPathBearing : undefined}
-    <li class="flex gap-2 whitespace-nowrap">
+    {@const toMe = cq ? null : parseDirectedToMe(d.text, myCall)}
+    {@const lineCall = cq?.call ?? toMe?.call ?? null}
+    {@const lineGrid = cq?.grid ?? toMe?.grid ?? ''}
+    {@const info = lineCall ? ft8EnrichState.info(lineCall, band) : undefined}
+    {@const answerable = cq !== null && canAnswer}
+    {@const workable = toMe !== null && canAnswer}
+    {@const bearing = lineGrid && myGrid ? pathInfo(myGrid, lineGrid)?.shortPathBearing : undefined}
+    <!-- A station calling US (toMe) gets a distinct amber tint so it stands out from
+         band chatter — visible whether or not we can act on it yet (live pile-up); it
+         is only clickable (workable) when idle + armed, like answering a CQ. -->
+    <li class="flex gap-2 whitespace-nowrap {toMe ? 'rounded bg-amber-50' : ''}">
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
         <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
-        <span class="w-10 text-right text-indigo-600" title="Beam heading to this CQ (short path)"
+        <span class="w-10 text-right text-indigo-600" title="Beam heading (short path)"
             >{bearing !== undefined
                 ? `${Math.round(bearing).toString().padStart(3, '0')}°`
                 : ''}</span
@@ -352,8 +383,19 @@
                 type="button"
                 class="truncate text-left text-gray-700 cursor-pointer hover:underline"
                 style:color={rowColor(info)}
-                title={`Answer ${cqCall}`}
+                title={`Answer ${lineCall}`}
                 onclick={() => answerCq(d)}>{d.text}</button
+            >
+        {:else if workable}
+            <button
+                type="button"
+                class="truncate text-left font-medium text-amber-700 cursor-pointer hover:underline"
+                title={`Work ${lineCall} (calling you)`}
+                onclick={() => workCaller(d)}>{d.text}</button
+            >
+        {:else if toMe}
+            <span class="truncate font-medium text-amber-700" title={`${lineCall} is calling you`}
+                >{d.text}</span
             >
         {:else}
             <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
@@ -494,21 +536,22 @@
         Next slot in {secondsToNextSlot}s · {nextSlotParity}
     </div>
     <div class="">&nbsp;|&nbsp;</div>
-    <div class={rxCaptionClass}>{rxCaption}</div>
-</div>
-<!-- "Working [callsign]" channel banner — always visible (every lower tab) while a
-     contact is in flight, so a station landing on the picked channel between pick and
-     TX shows up before the next transmission keys. green=clear · red=busy · gray=unknown. -->
-{#if workingCall}
-    <div class="flex justify-center w-full">
+    <!-- RH info cell. While a contact is in flight it shows the worked station +
+         selected-channel occupancy + the auto-abandon "N calls left" countdown
+         (green=clear · red=busy · gray=unknown), replacing the idle offset readout —
+         a station landing on the picked channel surfaces before the next TX keys.
+         It lives in this always-visible countdown row, so it shows on every lower tab. -->
+    {#if workingCall}
         <div
-            class="rounded px-3 py-0.5 text-sm font-semibold {workingBannerClass}"
-            title="Selected TX channel occupancy for the station being worked"
+            class="rounded px-2 py-0.5 {workingBannerClass}"
+            title="Worked station — selected TX channel occupancy + calls left before auto-abandon"
         >
             Working {workingCall} — {workingChannelLabel}{callsLeftLabel}
         </div>
-    </div>
-{/if}
+    {:else}
+        <div class={rxCaptionClass}>{rxCaption}</div>
+    {/if}
+</div>
 <!-- Heroicon "cog-6-tooth" (outline) — the Settings tab icon, matching the gear
      used on InfoPanel's My Station tab so the two operating modes read alike. -->
 {#snippet settingsIcon()}

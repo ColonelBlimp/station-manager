@@ -265,6 +265,14 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`.
 - **Notes:** `slot_utc` fixes the worked station's parity. Logged QSO freq = `operating_freq_mhz` + audio offset.
 
+### `POST /v1/ft8/qso/work`
+- **Purpose:** Begin working a station that is calling US, picked from the pile-up (ADR 0033 "work a caller"). Caller-style exchange (we report first → RR73 → log), then **idle** (does not loop to CQ). For tail-enders / answerers that call us when we're not in a Call-CQ session.
+- **Gating:** **Only when FT8 is enabled.** Requires TX armed + no session in flight.
+- **Request:** Body `{"their_call" (req), "their_grid"?, "their_snr"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?}`. `their_snr` is the SPA's SNR of the picked decode — the report we send (RST_SENT). Our own callsign/grid resolved server-side.
+- **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
+- **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_tx_bad_message`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`; 503 `rig_not_ready`.
+- **Notes:** `slot_utc` fixes the caller's parity. Logged QSO freq = `operating_freq_mhz` + audio offset.
+
 ### `POST /v1/ft8/cq/start`
 - **Purpose:** Begin a sequenced Call-CQ session that works answerers (ADR 0033). Answerer-selection mode = daemon config `ft8.tx.caller_answer_mode` (default `auto_first`).
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed.

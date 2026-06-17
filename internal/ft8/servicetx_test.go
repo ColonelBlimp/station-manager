@@ -113,6 +113,24 @@ func TestStartSession_RefusesWhenRigBecomesUnready(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074), ErrTxNotReady)
 	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074), ErrTxNotReady)
+	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074), ErrTxNotReady)
+}
+
+// TestStartWorkCaller_Gating: the work-a-caller entry point shares the arm gate with
+// StartQso/StartCallCq — refused when disarmed, committed (session active) when armed.
+func TestStartWorkCaller_Gating(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	t.Run("refused when disarmed", func(t *testing.T) {
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074), ErrTxNotArmed)
+	})
+	t.Run("commits when armed", func(t *testing.T) {
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		require.NoError(t, s.ArmTx(true))
+		require.NoError(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074))
+		require.True(t, s.seq.Active(), "an armed work-a-caller start commits a session")
+		s.AbandonQso()
+	})
 }
 
 func TestArmTx_AcquiresAndReleasesDevice(t *testing.T) {

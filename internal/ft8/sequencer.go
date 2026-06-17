@@ -55,6 +55,11 @@ const (
 	seqIdle seqMode = iota
 	seqAnswering
 	seqCalling
+	// seqWorking: working a station that is calling US (it sent a grid directed to
+	// our call), picked by the operator from the pile-up (ADR 0033 "work a caller").
+	// Reuses the caller ladder (we report first), but unlike seqCalling it has no
+	// CQ phase and on completion/off-ramp it goes idle rather than resuming CQ.
+	seqWorking
 )
 
 // QsoStatus roles (the `ft8-qso` SSE Role field) — which side of the contact we
@@ -258,6 +263,8 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		s.onSlotAnswering(ref, msgs, now)
 	case seqCalling:
 		s.onSlotCalling(ref, msgs, now)
+	case seqWorking:
+		s.onSlotWorking(ref, msgs, now)
 	default:
 		// seqIdle — no active session; nothing to drive this slot.
 	}
@@ -462,6 +469,19 @@ func (s *Sequencer) fireOpening(now time.Time) {
 			return
 		}
 		msg, rung = s.cqMessage, "calling-cq"
+	case seqWorking:
+		// Opening rung is our report (cqReporting) — always non-terminal, so the
+		// no-completion contract here holds (RR73 is never an opening).
+		if s.caller == nil {
+			s.mu.Unlock()
+			return
+		}
+		m, ok := s.caller.TxMessage()
+		if !ok {
+			s.mu.Unlock()
+			return
+		}
+		msg, rung = m, s.caller.State.label()
 	default:
 		s.mu.Unlock()
 		return
@@ -550,6 +570,32 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		} else {
 			st.State = "calling-cq"
 			st.NextMessage = s.cqMessage
+		}
+		return st
+	case seqWorking:
+		// Working a station that called us: caller-role ladder (report → RR73), but
+		// no calling-cq phase — s.caller is always set. Role "caller" so the SPA
+		// renders the same ladder as Call-CQ; the cap governs the pre-RR73 rung.
+		if s.caller == nil {
+			return QsoStatus{Active: false}
+		}
+		msg, _ := s.caller.TxMessage()
+		st := QsoStatus{
+			Active:      true,
+			Role:        roleCaller,
+			TheirCall:   s.caller.TheirCall,
+			State:       s.caller.State.label(),
+			NextMessage: msg,
+			Repeats:     s.repeats,
+		}
+		if s.caller.State != cqRogering {
+			st.MaxRepeats = s.maxRepeats
+		}
+		if s.caller.HasSendSnr {
+			st.OurReport = formatReport(s.caller.SendSnr)
+		}
+		if s.caller.HasRcvdReport {
+			st.TheirReport = formatReport(s.caller.RcvdReport)
 		}
 		return st
 	default:

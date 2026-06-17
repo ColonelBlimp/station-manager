@@ -367,6 +367,31 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, time.Now().UTC())
 }
 
+// StartWorkCaller begins working a station that is calling us (ADR 0033 "work a
+// caller"): the operator picked theirCall/theirGrid from a decode directed at our
+// call ("<ourCall> <theirCall> <grid>"), heard in the slot at theirSlotUTC; theirSnr
+// is our SNR of that signal (the report we send back). Requires TX **armed** — the
+// sequencer keys through the armed controller. ourCall is the station identity the
+// api layer resolved from config.
+func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+	const op errors.Op = "ft8.Service.StartWorkCaller"
+	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	s.txMu.Lock()
+	armed := s.txArmed
+	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	// Live readiness, not just the sticky armed flag (review M1).
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
+	}
+	return s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+}
+
 // SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029
 // step e4) — the daemon (cmd/smd) wires it to qsoservice. Called once during
 // wiring, before Start. A nil logger (e.g. tests) means completed exchanges are

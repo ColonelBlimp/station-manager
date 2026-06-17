@@ -106,6 +106,59 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// ft8QsoWorkRequest is the POST /v1/ft8/qso/work body (ADR 0033 "work a caller"):
+// work the station `their_call` (grid `their_grid`) that is calling US, heard in the
+// slot at `slot_utc` (which fixes its parity), transmitting on `offset_hz`. `their_snr`
+// is the SPA's SNR of the picked decode — the report we send back (RST_SENT). Our own
+// callsign/grid are resolved server-side from the station config, like qso/start.
+type ft8QsoWorkRequest struct {
+	TheirCall string  `json:"their_call"`
+	TheirGrid string  `json:"their_grid"`
+	TheirSnr  int     `json:"their_snr"`
+	SlotUTC   string  `json:"slot_utc"`
+	OffsetHz  float64 `json:"offset_hz"`
+	// OperatingFreqMHz is the rig's dial frequency (the SPA reads it from the live rig
+	// state); the logged QSO frequency IS this dial (FT8 convention — see qso/start).
+	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
+}
+
+// handleFt8QsoWork begins working a station that is calling us (ADR 0033). The operator
+// picked it from the Band-Activity pile-up. Registered only when FT8 is enabled;
+// requires TX already armed and no session in flight. A 202 means "the sequencer is now
+// driving this contact"; progress (reporting → rogering) rides the ft8-qso SSE.
+func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8QsoWork"
+
+	var req ft8QsoWorkRequest
+	if !s.readJSONBody(w, r, op, &req) {
+		return
+	}
+	if strings.TrimSpace(req.TheirCall) == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "their_call is required", op)
+		return
+	}
+
+	// Our identity is daemon-owned (the station config), not client-supplied.
+	ls := s.cfg.Snapshot().LoggingStation
+	ourCall := strings.TrimSpace(ls.StationCallsign)
+	if ourCall == "" {
+		ourCall = strings.TrimSpace(ls.Operator)
+	}
+	if ourCall == "" {
+		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
+			"set your station callsign in My Station before transmitting", op)
+		return
+	}
+
+	err := s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+		req.OffsetHz, req.OperatingFreqMHz)
+	if err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // handleFt8QsoAbandon drops any active sequenced session — answer-a-CQ or Call-CQ.
 // Idempotent — abandoning when idle is a 202 no-op.
 func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, _ *http.Request) {

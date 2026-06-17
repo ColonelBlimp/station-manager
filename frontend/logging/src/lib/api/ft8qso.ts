@@ -2,11 +2,13 @@
     Thin daemon-side wrapper for the FT8 manual-sequencer endpoints (ADR 0031,
     step e3; ADR 0033 caller side):
       - POST /v1/ft8/qso/start    {their_call, their_grid, slot_utc, offset_hz}
+      - POST /v1/ft8/qso/work     {their_call, their_grid, their_snr, slot_utc, offset_hz}
       - POST /v1/ft8/cq/start     {offset_hz, operating_freq_mhz}
-      - POST /v1/ft8/qso/abandon  (drops either session)
+      - POST /v1/ft8/qso/abandon  (drops any session)
 
-    qso/start begins answering a CQ; cq/start begins calling CQ and working the
-    stations that answer. Either way the daemon auto-advances the CQ→73 ladder.
+    qso/start begins answering a CQ; qso/work begins working a station calling us
+    (picked from the pile-up); cq/start begins calling CQ and working the stations
+    that answer. Either way the daemon auto-advances the CQ→73 ladder.
     Both return 202 with no body on success; the contact's progress arrives
     out-of-band as `ft8-qso` SSE events. Our own callsign/grid are resolved
     server-side from the station config, not sent here. Errors carry the daemon's
@@ -93,6 +95,35 @@ export function startFt8Cq(
     return postFt8Qso(
         '/v1/ft8/cq/start',
         { offset_hz: offsetHz, operating_freq_mhz: operatingFreqMHz },
+        signal
+    );
+}
+
+/** Start working a station that is calling us (ADR 0033 "work a caller"): the
+ *  operator picked it from the pile-up. theirCall/theirGrid come from the picked
+ *  decode (`<myCall> <theirCall> <grid>`); theirSnr is our SNR of that decode — the
+ *  report we send back (RST_SENT). slotUtc is the RFC3339 start of the slot it was
+ *  heard in (fixes the caller's parity); offsetHz is the picked TX offset;
+ *  operatingFreqMHz is the rig dial frequency. Our callsign/grid resolve server-side. */
+export function startFt8WorkCaller(
+    theirCall: string,
+    theirGrid: string,
+    theirSnr: number,
+    slotUtc: string,
+    offsetHz: number,
+    operatingFreqMHz: number,
+    signal?: AbortSignal
+): Promise<Ft8QsoOutcome> {
+    return postFt8Qso(
+        '/v1/ft8/qso/work',
+        {
+            their_call: theirCall,
+            their_grid: theirGrid,
+            their_snr: theirSnr,
+            slot_utc: slotUtc,
+            offset_hz: offsetHz,
+            operating_freq_mhz: operatingFreqMHz,
+        },
         signal
     );
 }

@@ -195,6 +195,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// Manual sequencer (ADR 0031 step e3) — start/abandon an answer-a-CQ
 		// exchange the daemon then auto-advances. Same enablement gate.
 		mux.HandleFunc("POST /v1/ft8/qso/start", s.handleFt8QsoStart)
+		// Work a station calling US, picked from the pile-up (ADR 0033 "work a
+		// caller") — a caller-style exchange against the chosen station; idle on
+		// completion. Abandon uses the shared qso/abandon route.
+		mux.HandleFunc("POST /v1/ft8/qso/work", s.handleFt8QsoWork)
 		mux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
 		// Caller-side sequencer (ADR 0033) — start a Call-CQ session that works the
 		// stations that answer (auto_first / operator_pick per ft8.tx.caller_answer_mode);

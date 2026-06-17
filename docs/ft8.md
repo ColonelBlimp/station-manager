@@ -173,6 +173,18 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   `highlight_worked`; defaults green = new, grey = worked). **Answering (e3):** a
   CQ row is clickable to start a sequenced QSO when TX is armed + a clear offset is
   picked + no QSO is already running (the daemon then auto-advances the ladder).
+  **Working a caller — the pile-up (ADR 0033 "work a caller"):** a decode that is a
+  station *calling you* — the grid-bearing opening `<yourCall> <theirCall> <grid>`
+  (e.g. `7Q5MLV PA3KUS JO21`) — is tinted **amber** so it stands out from band chatter,
+  and is **clickable** (under the same gate as answering: armed + offset + idle) to
+  work that station via `POST /v1/ft8/qso/work`. The amber tint shows live — even mid-
+  contact, so you can see who's waiting — but the row only becomes clickable once you
+  go idle (finish or Abandon the current QSO), so you line the next one up and click it
+  the moment you're free. The daemon then runs a caller-style exchange (we report first
+  → RR73 → log) and returns to idle. Detection is SPA-side (`parseDirectedToMe`); only
+  the unambiguous grid opening is matched, not the mid-exchange `R-12`/`RR73`/`73`
+  replies. (The complementary `operator_pick` Call-CQ answerer stack is still pending —
+  this is its manual, no-CQ-needed sibling.)
 - **Clear Offsets** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
   select it as the TX base offset**; the selected chip is marked with a **darker
@@ -189,9 +201,11 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   states prompt accordingly. Purely SPA-side — filters the existing
   `ft8State.decodes`, no daemon change. (Replaced the temporary "TX Frequency"
   occupied-Hz validation view, which the Occupancy-tab strip superseded.)
-- **"Working [callsign]" channel banner** — an always-visible strip (below the slot
-  countdown, so it shows on **every** lower tab) that appears only while a contact is
-  in flight (`ft8State.qso.active`). It reads `Working <call> — channel clear/BUSY`
+- **"Working [callsign]" channel readout** — occupies the right-hand cell of the
+  always-visible slot-countdown row (so it shows on **every** lower tab), **replacing
+  the idle offset readout** while a contact is in flight (`ft8State.qso.active`); when
+  idle that cell reverts to the `Offset N Hz ±tol` / `No offset selected` text. It
+  reads `Working <call> — channel clear/BUSY`
   and colours **green when the selected TX channel is clear, red when occupied** —
   the same overlap test as the Occupancy strip (`ft8State.channelOccupied`: the
   `[selectedOffset, selectedOffset + signalWidth)` span vs the latest occupied bands),

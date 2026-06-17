@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCqCall, parseCq } from './ft8Message';
+import { parseCqCall, parseCq, parseDirectedToMe } from './ft8Message';
 
 describe('parseCq (call + grid)', () => {
     it('parses call and grid', () => {
@@ -59,5 +59,51 @@ describe('parseCqCall', () => {
 
     it('returns null for a CQ with no recognisable callsign', () => {
         expect(parseCqCall('CQ DX')).toBeNull();
+    });
+});
+
+describe('parseDirectedToMe', () => {
+    it('parses a station calling us with a grid (the opening)', () => {
+        expect(parseDirectedToMe('7Q5MLV PA3KUS JO21', '7Q5MLV')).toEqual({
+            call: 'PA3KUS',
+            grid: 'JO21',
+        });
+    });
+
+    it('is case- and whitespace-tolerant on both the line and my call', () => {
+        expect(parseDirectedToMe('  7q5mlv  pa3kus  jo21 ', ' 7Q5MLV ')).toEqual({
+            call: 'PA3KUS',
+            grid: 'JO21',
+        });
+    });
+
+    it('returns null when the line is addressed to someone else', () => {
+        expect(parseDirectedToMe('K1ABC PA3KUS JO21', '7Q5MLV')).toBeNull();
+    });
+
+    it('returns null for mid-exchange replies to us (report / roger / 73)', () => {
+        // These are in-progress QSO traffic, not a fresh caller to pick up.
+        expect(parseDirectedToMe('7Q5MLV PA3KUS R-12', '7Q5MLV')).toBeNull();
+        expect(parseDirectedToMe('7Q5MLV PA3KUS RR73', '7Q5MLV')).toBeNull();
+        expect(parseDirectedToMe('7Q5MLV PA3KUS 73', '7Q5MLV')).toBeNull();
+        expect(parseDirectedToMe('7Q5MLV PA3KUS -09', '7Q5MLV')).toBeNull();
+    });
+
+    it('returns null for a CQ (not directed at us)', () => {
+        expect(parseDirectedToMe('CQ PA3KUS JO21', '7Q5MLV')).toBeNull();
+    });
+
+    it('returns null for a bare directed call with no grid', () => {
+        // <me> <them> alone is ambiguous; only the grid-bearing opening is actionable.
+        expect(parseDirectedToMe('7Q5MLV PA3KUS', '7Q5MLV')).toBeNull();
+    });
+
+    it('returns null when my callsign is blank', () => {
+        expect(parseDirectedToMe('7Q5MLV PA3KUS JO21', '')).toBeNull();
+        expect(parseDirectedToMe('7Q5MLV PA3KUS JO21', '   ')).toBeNull();
+    });
+
+    it('returns null when the second token is not a callsign', () => {
+        expect(parseDirectedToMe('7Q5MLV CQ JO21', '7Q5MLV')).toBeNull();
     });
 });

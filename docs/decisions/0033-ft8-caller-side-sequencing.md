@@ -101,6 +101,35 @@ completed QSOs unlogged. WSJT-X logs the caller at RR73; we match.
   duplication hurts, reconsider a single role-parameterised resolver behind a common
   interface.
 
+## Amendment (2026-06-17) — "work a caller" entry point
+
+Shipping the caller side surfaced a gap the original framing missed: stations call
+`7Q5MLV` directly even when we are **not** calling CQ — e.g. tail-enders that pile on
+right after we finish answering someone else's CQ (the `seqAnswering` flow). The
+operator's `7Q5MLV PA3KUS JO21` scenario is exactly this: a directed-at-us opening
+(`<ourCall> <theirCall> <grid>`) with no CQ of ours behind it. The Call-CQ session
+(`auto_first`/`operator_pick`) does not cover it, because there is no CQ phase.
+
+Added a third sequencer entry point, **`StartWorkCaller`** (mode `seqWorking`,
+`internal/ft8/work_sequencer.go`; `POST /v1/ft8/qso/work`): the operator picks a
+station calling us from the Band-Activity **pile-up** (directed-at-us decodes are
+tinted live and clickable when armed + idle) and we run a `CallerExchange` against
+*that* station. It reuses the caller ladder unchanged, but unlike Call-CQ it has **no
+CQ phase** and on completion/off-ramp it goes **idle** rather than looping back to a
+CQ (there is no standing CQ to resume). The report we send is our SNR of the picked
+decode (the SPA passes `their_snr`). Attended throughout — the operator initiates each
+contact by clicking it.
+
+This is the foundation the still-pending **`operator_pick`** Call-CQ stack sits on:
+`operator_pick` is "the same pick, but the candidates are answerers to *our* CQ,
+queued for the operator to pop." `auto_first` Call-CQ remains as shipped; `StartWorkCaller`
+is the manual, no-CQ-needed pick. Why not fold work-a-caller into the answerer flow
+(`StartQso`)? Because the *roles* differ — a station that sent us a grid has opened the
+exchange, so **we report first** (the caller ladder), whereas `StartQso` answers a CQ by
+sending our grid first (the answerer ladder). Reusing `CallerExchange` keeps each ladder
+true to its role (the "build specific" lesson), as the original decision argued for the
+two-ladder split.
+
 ## References
 
 - ADR 0029 (FT8 transmit, manual-first), 0030 (PTT/slot controller), 0031 (manual send

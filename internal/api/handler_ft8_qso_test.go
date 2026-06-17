@@ -76,6 +76,34 @@ func TestHandleFt8QsoStart(t *testing.T) {
 	})
 }
 
+func TestHandleFt8QsoWork(t *testing.T) {
+	t.Run("missing their_call", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/work", `{"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`, srv.handleFt8QsoWork)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+			t.Fatalf("status=%d code=%q, want 400 invalid_field_value", w.Code, decodeErrCode(t, w))
+		}
+	})
+
+	t.Run("no station callsign configured", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/work",
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`, srv.handleFt8QsoWork)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "no_station_callsign" {
+			t.Fatalf("status=%d code=%q, want 400 no_station_callsign", w.Code, decodeErrCode(t, w))
+		}
+	})
+
+	t.Run("not armed", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/work",
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`, srv.handleFt8QsoWork)
+		if w.Code != http.StatusConflict || decodeErrCode(t, w) != "ft8_tx_not_armed" {
+			t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+	})
+}
+
 func TestHandleFt8QsoAbandon(t *testing.T) {
 	srv := ft8QsoTestServer(t, "G0TST")
 	w := postFt8Qso(t, srv, "/v1/ft8/qso/abandon", ``, srv.handleFt8QsoAbandon)
