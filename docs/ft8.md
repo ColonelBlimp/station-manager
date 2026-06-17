@@ -163,8 +163,13 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
     up into a rolling history; `single` shows only the current 15 s slot,
     replacing the list each slot (WSJT-X "clear each period" style).
   - **row cap** (`history_max`, default 100, clamped 10–2000 daemon-side): the
-    accumulate-mode history limit (also a safety bound on a very busy single
-    slot). The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
+    accumulate-mode history limit (also a safety bound on a very busy single slot).
+  - **float CQ to top** (`cq_to_top`, default off): pins CQ rows (the answerable
+    stations) above the rest of the feed, stably partitioned (each group keeps its
+    order). Per-slot separators are suppressed while on (the list is no longer
+    slot-ordered). SPA-side reorder of `ft8State.decodes`; no daemon change.
+
+    The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
   from go-ft8's `DecodedMessage.SNR` (dB, 2500 Hz reference), added in go-ft8
   v0.3.0 and threaded through `DecodeLine.SNR` → the `ft8-decode` SSE → the row.
   **CQ lines are enriched**: each
@@ -237,8 +242,8 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   Phone/CW InfoPanel tabs): **Occupancy** (chart-bar — the TX Offset strip below),
   **Operate** (signal — `Ft8MsgPanel`, the FT8 transmit surface, see next bullet),
   **Session** (list-bullet — the shared session log, see below), and **Settings**
-  (cog — `Ft8SettingsPanel`, the FT8 display preferences: row cap, feed mode, CQ
-  highlight colours). The Settings tab saves the **same way as the My Station tab**
+  (cog — `Ft8SettingsPanel`, the FT8 display preferences: row cap, feed mode, float-
+  CQ-to-top, CQ highlight colours). The Settings tab saves the **same way as the My Station tab**
   — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
   `/v1/config` (bundling the current `logging_station`/`station` so the unconditional
   overwrite doesn't clobber them) and re-hydrates from the response.
@@ -452,6 +457,7 @@ does not consume these — they're pure SPA presentation — it stores + resolve
 | `feed_mode` | `accumulate` | `accumulate` (roll slots up) or `single` (current slot only) |
 | `highlight_unworked` | `#15803d` | CQ tint — not worked on this band (attention) |
 | `highlight_worked` | `#9ca3af` | CQ tint — worked-before (muted) |
+| `cq_to_top` | `false` | float CQ rows to the top of Band Activity (separators suppressed) |
 
 Daemon-backed rather than browser localStorage so they survive a browser change /
 data clear and follow the operator (per the "settings live in config.json, not

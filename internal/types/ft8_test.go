@@ -51,6 +51,15 @@ func TestResolveFt8Display(t *testing.T) {
 			t.Fatalf("colours = (%q, %q), want passthrough", d.HighlightUnworked, d.HighlightWorked)
 		}
 	})
+
+	t.Run("cq_to_top defaults false and passes through", func(t *testing.T) {
+		if ResolveFt8Display(nil).CqToTop {
+			t.Error("CqToTop should default false")
+		}
+		if !ResolveFt8Display(&Ft8DisplayConfig{CqToTop: true}).CqToTop {
+			t.Error("CqToTop=true should pass through")
+		}
+	})
 }
 
 func TestFt8FeedModeValid(t *testing.T) {

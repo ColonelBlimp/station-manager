@@ -76,6 +76,11 @@ type Ft8DisplayConfig struct {
 	// for a station not-yet-worked-on-this-band vs worked-before. Empty → defaults.
 	HighlightUnworked string `json:"highlight_unworked,omitempty"`
 	HighlightWorked   string `json:"highlight_worked,omitempty"`
+	// CqToTop floats CQ decodes to the top of the Band Activity feed (the
+	// actionable rows — the ones you can answer — pinned above the rest) instead
+	// of leaving them interleaved by slot. Plain bool: default false (off) is the
+	// zero value, so no resolve special-casing is needed.
+	CqToTop bool `json:"cq_to_top,omitempty"`
 }
 
 // FT8 display defaults. Code constants (the single source of truth, shared by
@@ -127,6 +132,7 @@ func ResolveFt8Display(c *Ft8DisplayConfig) Ft8DisplayConfig {
 	if c.HighlightWorked != "" {
 		d.HighlightWorked = c.HighlightWorked
 	}
+	d.CqToTop = c.CqToTop // plain bool — default false, operator value passes through
 	return d
 }
 

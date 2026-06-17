@@ -26,6 +26,7 @@ describe('configState ft8Display', () => {
                     feed_mode: 'single',
                     highlight_unworked: '#abcdef',
                     highlight_worked: '#123456',
+                    cq_to_top: true,
                 },
             })
         );
@@ -33,6 +34,7 @@ describe('configState ft8Display', () => {
         expect(configState.ft8Display.feedMode).toBe('single');
         expect(configState.ft8Display.highlightUnworked).toBe('#abcdef');
         expect(configState.ft8Display.highlightWorked).toBe('#123456');
+        expect(configState.ft8Display.cqToTop).toBe(true);
     });
 
     it('falls back to defaults when ft8_display is absent (older daemon)', () => {
@@ -41,6 +43,7 @@ describe('configState ft8Display', () => {
         expect(configState.ft8Display.feedMode).toBe('accumulate');
         expect(configState.ft8Display.highlightUnworked).toBe('#15803d');
         expect(configState.ft8Display.highlightWorked).toBe('#9ca3af');
+        expect(configState.ft8Display.cqToTop).toBe(false);
     });
 });
 

@@ -55,6 +55,7 @@ export interface Ft8DisplayFields {
     feed_mode?: 'accumulate' | 'single';
     highlight_unworked?: string;
     highlight_worked?: string;
+    cq_to_top?: boolean;
 }
 
 export interface BridgeFields {

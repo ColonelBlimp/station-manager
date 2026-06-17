@@ -223,6 +223,22 @@
     const topPick = $derived(ft8State.suggested[0] ?? null);
     const sortedOffsets = $derived([...ft8State.suggested].sort((a, b) => a - b));
 
+    // Band Activity ordering. Normally the feed is the decode list as-is (newest slot
+    // first, freq-ascending within slot). With "Float CQ calls to top" on, CQ rows are
+    // stably partitioned above the rest (each group keeps its existing order) so the
+    // answerable stations sit together at the top. Slot separators are suppressed in
+    // that mode (the list is no longer slot-ordered) — see showSlot in the markup.
+    const cqToTop = $derived(configState.ft8Display.cqToTop);
+    const orderedDecodes = $derived.by(() => {
+        if (!cqToTop) return ft8State.decodes;
+        const cq: DecodeEntry[] = [];
+        const rest: DecodeEntry[] = [];
+        for (const d of ft8State.decodes) {
+            (parseCqCall(d.text) !== null ? cq : rest).push(d);
+        }
+        return [...cq, ...rest];
+    });
+
     // ---- Rx Frequency pane (WSJT-X-style) -------------------------------------
     // Filter the decode feed to the conversation the operator is watching. While
     // a QSO is active, the messages involving the worked station — matched by
@@ -474,9 +490,9 @@
              unnoticed. "waiting for rig" (amber) when the rig hasn't reported a dial yet
              (catState.freqKnown false); FT8 TX is blocked in that state, so it doubles as
              the why-can't-I-click explanation. -->
-        <div class="mt-2 font-mono text-sm" title="Live dial frequency — what FT8 logs">
+        <div class="mt-4 text-base" title="Live dial frequency — what FT8 logs">
             {#if freqKnown}
-                <span class="font-semibold text-gray-700">{formatFrequency(opFreq)}</span>
+                <span class="font-semibold text-indigo-700">{formatFrequency(opFreq)} Hz</span>
             {:else}
                 <span class="text-amber-600">waiting for rig…</span>
             {/if}
@@ -485,12 +501,15 @@
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
         <div class="flex h-65 flex-col rounded border border-gray-300 overflow-y-scroll">
-            {#if ft8State.decodes.length > 0}
-                {@const showSlot = configState.ft8Display.feedMode === 'accumulate'}
+            {#if orderedDecodes.length > 0}
+                <!-- Slot separators only in accumulate mode AND when not floating CQ to
+                     top (the CQ-first order isn't slot-grouped, so separators would be
+                     meaningless). -->
+                {@const showSlot = configState.ft8Display.feedMode === 'accumulate' && !cqToTop}
                 {@render headerRow()}
                 <ul class="flex-1 space-y-0.5 py-1 pl-1 pr-2 text-left font-mono text-xs">
-                    {#each ft8State.decodes as d, i (d.id)}
-                        {#if showSlot && (i === 0 || ft8State.decodes[i - 1].startUtc !== d.startUtc)}
+                    {#each orderedDecodes as d, i (d.id)}
+                        {#if showSlot && (i === 0 || orderedDecodes[i - 1].startUtc !== d.startUtc)}
                             {@render slotSeparator(d.startUtc)}
                         {/if}
                         {@render decodeRow(d)}

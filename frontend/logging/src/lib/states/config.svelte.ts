@@ -272,6 +272,8 @@ class Ft8DisplayView {
     feedMode: 'accumulate' | 'single' = $state('accumulate');
     highlightUnworked: string = $state('#15803d');
     highlightWorked: string = $state('#9ca3af');
+    // Float CQ decodes to the top of the Band Activity feed (default off).
+    cqToTop: boolean = $state(false);
 }
 
 class ConfigState {
@@ -383,6 +385,7 @@ class ConfigState {
         this.ft8Display.feedMode = fd?.feed_mode ?? 'accumulate';
         this.ft8Display.highlightUnworked = fd?.highlight_unworked ?? '#15803d';
         this.ft8Display.highlightWorked = fd?.highlight_worked ?? '#9ca3af';
+        this.ft8Display.cqToTop = fd?.cq_to_top ?? false;
         this.ft8Frequencies = resp.ft8_frequencies ?? {};
 
         // mailer projection — daemon-managed, read-only on the SPA

@@ -28,6 +28,7 @@
                     feed_mode: fd.feedMode,
                     highlight_unworked: fd.highlightUnworked,
                     highlight_worked: fd.highlightWorked,
+                    cq_to_top: fd.cqToTop,
                 },
             });
             switch (outcome.kind) {
@@ -78,6 +79,17 @@
                 <option value="accumulate">Accumulate (roll up)</option>
                 <option value="single">Single slot</option>
             </select>
+        </label>
+
+        <label class="flex items-center justify-between gap-3 pt-1">
+            <!-- Floats CQ rows (the answerable ones) to the top of the feed; in this
+                 mode per-slot separators are suppressed (the list is no longer slot-ordered). -->
+            <span>Float CQ calls to top</span>
+            <input
+                type="checkbox"
+                bind:checked={configState.ft8Display.cqToTop}
+                class="h-4 w-4 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
         </label>
     </div>
     <div class="flex flex-col w-66">

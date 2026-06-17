@@ -128,24 +128,30 @@ when it ships — don't let this rot into a graveyard.
   just non-clickable (lean: hide, with a toggle to reveal); (3) match semantics —
   exact callsign vs prefix/wildcard. Whether it also feeds AP-hint *de*-prioritising
   (ADR 0025) is a later question, not v1.
-- **FT8 Band Activity — float CQ calls to the top (config toggle, feed mode
-  `single`).** In `single` feed mode the operator wants every **CQ** decode grouped
-  at the **top** of the Band Activity list (`ft8State.decodes`, the `{#each}` at
-  `Ft8Panel.svelte` ~line 253) so answerable calls are immediately visible. Make it a
-  **daemon-config knob in the Settings tab** (per the settings-in-config rule),
-  alongside feed mode / row cap / highlight colours:
-  - *Daemon:* add `ft8.display.cq_first` (bool) to the Ft8 display config
-    (`internal/types`, mirrored in `config.svelte.ts` `Ft8DisplayView`, `/v1/config`
-    round-trip next to the `feed_mode` / `history_max` / `highlight_*` siblings).
-    Default TBD — lean **ON** (the operator asked for it).
-  - *Settings tab:* a checkbox bound to `configState.ft8Display.cqFirst`, saved the
-    same way as the other ft8Display prefs.
-  - *SPA render:* a `$derived` view over `ft8State.decodes` that **stable-partitions**
-    CQ rows (`parseCqCall(d.text) !== null`) to the top, non-CQ rows keeping their
-    order below — gated on `feedMode === 'single' && cqFirst`, not a store mutation.
-    In `accumulate` mode newest-slot-on-top chronology is the point — leave it alone.
-  Open point: within the CQ group, preserve daemon order or sub-sort (by SNR /
-  offset)? Lean: just partition, keep order within each group.
+- **FT8 — work compound/portable callsigns (`/P`, `/MM`, `K1ABC/4`, …) and free-text
+  messages.** Flagged on air 2026-06-17. Today the answer-a-CQ, work-a-caller, and
+  Call-CQ paths can only work stations whose exchange encodes as a **standard
+  structured FT8 message**: `go-ft8`'s `EncodeStandardMessage` rejects compound/
+  portable calls and free text, and the sequencer defensively **skips** such an
+  answerer/caller (the "reply does not encode" guard in `caller_sequencer.go` /
+  `StartQso` / `StartWorkCaller`). So a `CQ G0XYZ/P` or a `/MM` caller is decoded and
+  shown but **cannot be answered**, and free-text (`<call> <call> HW?` etc.) isn't
+  supported either. Needs: (1) the WSJT-X **hashed-callsign / type-1 vs type-2
+  message** scheme so compound calls round-trip via the 22-bit hash (`<...>`),
+  including the hash table the decoder/encoder share — this is real protocol work, not
+  a tweak, and depends on what `go-ft8` exposes (it may need a `go-ft8` API addition);
+  (2) **free-text** (71-bit) message encode + a UX to enter/send it. Scope/sequence
+  TBD — likely hashed-call support first (lets the pile-up be worked completely), free
+  text second. Until then the skip behaviour is correct (better than transmitting an
+  unencodable/garbled message), and the operator just can't complete those contacts in
+  SM. Capture point: `docs/ft8.md`; see ADR 0029 (the `EncodeStandardMessage` seam).
+- **FT8 Band Activity — display filter (prefix/substring), design pending.** Operator
+  wants to narrow the feed to decodes matching a typed filter (e.g. "only show calls
+  starting with …"). Design discussion in progress 2026-06-17 (session-handoff);
+  session-scoped (in-memory, like the selected offset — NOT a durable config setting).
+  Open design points: match target (callsign vs whole decode text), prefix vs
+  substring, placement (inline above Band Activity), and interaction with float-CQ-to-
+  top. Pin the design, then build.
 - **FT8 e4 — `TIME_ON` should be the QSO start, not the completion instant.**
   `ft8.BuildQso` (`internal/ft8/qsolog.go`) stamps both `TIME_ON` and `TIME_OFF`
   from `now` (the moment the 73 is sent) because `CompletedQso` carries no start

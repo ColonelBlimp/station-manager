@@ -45,7 +45,5 @@
         {#if headingLabel !== null}
             <div class="text-indigo-600" title="Beam heading (short path)">{headingLabel}</div>
         {/if}
-    {:else}
-        <span class="text-gray-400">Enrichment</span>
     {/if}
 </div>
