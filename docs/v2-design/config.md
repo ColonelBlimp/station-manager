@@ -133,9 +133,12 @@ Operator's standing outgoing-QSL defaults: `qsl_via` (QSL route/manager), `qslms
 (standing card/upload message), `qsl_sent_via` (default send method B/D/E/M). A SUBSET
 of `types.Qsl` — the per-QSO confirmation status fields are deliberately excluded
 (per-contact, not config). Stamped onto a logged QSO **only when the field is empty**
-(per-QSO value wins) and **only when the default is non-empty** (`QslDefaults.ApplyTo`),
-so an unset default never adds an empty ADIF tag. Applied across modes: the e4 sink for
-FT8, the SPA at submit for Phone/CW. Writable via `PUT /v1/config` (presence-aware).
+(per-QSO value wins) and **only when the default is non-empty**, so an unset default
+never adds an empty ADIF tag. A single record-level stamp point — `adif.Record.ApplyQslDefaults`
+— is called by **both** daemon logging paths (the Phone/CW submit handler and the FT8
+e4 sink, after `QsoToRecord`); ADIF **import** is deliberately left alone. No SPA
+involvement (it's pure config the daemon owns). Writable via `PUT /v1/config`
+(presence-aware). A config-SPA editor is future work; set it by hand for now.
 
 ### Other blocks (all global, config.json-authoritative, read at start)
 
