@@ -193,6 +193,10 @@ tasks:
     desc: Build and run the daemon using SM_WORKING_DIR from .env
     deps: [build]
     cmds:
+      # Stop the systemd smd first so the two daemons don't fight over :8080.
+      # Tolerant: no-op if it isn't running / the unit isn't installed.
+      - echo '>> stopping systemd smd (if running) to free :8080 — restart later with: systemctl --user start smd'
+      - systemctl --user stop smd 2>/dev/null || true
       - ./build/bin/smd
 
   run:smd:
@@ -201,9 +205,15 @@ tasks:
       `task frontend:dev` in another terminal — Vite serves the SPA on :5173
       and proxies /v1/* to this daemon. Uses SM_WORKING_DIR from .env.
       CGO on, so live FT8 capture works without a deploy — the fast FT8
-      iteration loop (no RPM): stop the systemd smd to free the audio/serial
-      port, then `task run:smd`.
+      iteration loop (no RPM). Automatically stops the systemd `smd` first so
+      the two don't contend for :8080 / the audio + serial ports; restart the
+      dogfood daemon afterwards with `systemctl --user start smd`.
     cmds:
+      # Free :8080 + the audio/serial ports: a running systemd smd would
+      # otherwise collide with this dev daemon (the "address already in use"
+      # restart flap). Tolerant of not-running / unit-not-installed.
+      - echo '>> stopping systemd smd (if running) to free :8080 — restart later with: systemctl --user start smd'
+      - systemctl --user stop smd 2>/dev/null || true
       - CGO_ENABLED=1 go run -ldflags="-X main.Version={{.SM_VERSION}}" ./cmd/smd
 
   tag:

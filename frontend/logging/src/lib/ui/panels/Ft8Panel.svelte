@@ -680,7 +680,7 @@
                     {/each}
                 </ul>
             {:else}
-                <p class="mt-1 text-xs">Waiting for decodes…</p>
+                <p class="mt-2 text-xs">Waiting for decodes…</p>
             {/if}
         </div>
         <div class="w-full mt-2 font-semibold text-gray-700 text-sm">{slotLabel}</div>

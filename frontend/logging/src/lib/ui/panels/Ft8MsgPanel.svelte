@@ -96,14 +96,23 @@
         { dir: 'rx', text: `${myCall} ${dxCall} 73` },
     ]);
 
-    // The highlighted row is the message for the CURRENT slot. The caller's TX rungs
-    // are rows 0 (calling-cq) / 2 (reporting) / 4 (rogering); while transmitting that
-    // rung is current, and between transmissions (listening for the reply) the RX row
-    // just below (1 / 3 / 5) is. Idle (no session) sits on the CQ row.
+    // The highlighted ("current") ladder row for a TX rung at index txRow. While
+    // transmitting — OR before we've sent this rung at all (repeats === 0, e.g. the
+    // instant an exchange opens, before our first key) — the TX rung is current. Only
+    // once it's been sent and we're waiting for the reply (repeats > 0 and not
+    // transmitting) does the RX row just below become current. Without the repeats
+    // guard the reply row flashes as current at the very start of an exchange (the
+    // daemon publishes the opening rung with repeats=0 + transmitting=false before the
+    // first transmit fires).
+    const rowFor = (txRow: number, len: number): number =>
+        Math.min(!tx.transmitting && qso.repeats > 0 ? txRow + 1 : txRow, len - 1);
+
+    // The caller's TX rungs are rows 0 (calling-cq) / 2 (reporting) / 4 (rogering).
+    // Idle (no session) sits on the CQ row.
     const callerStep = $derived.by(() => {
         const txRow = qso.state === 'reporting' ? 2 : qso.state === 'rogering' ? 4 : 0;
         if (!qso.active) return txRow;
-        return tx.transmitting ? txRow : txRow + 1;
+        return rowFor(txRow, callerLadder.length);
     });
 
     // Work-a-caller ladder (role "worker"): the caller ladder with the CQ row dropped —
@@ -116,11 +125,12 @@
         { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
         { dir: 'rx', text: `${myCall} ${dxCall} 73` },
     ]);
-    // Our TX rungs are rows 1 (reporting) / 3 (rogering); transmitting → that row, else
-    // the RX row below it (waiting for their reply). Opening defaults to the report rung.
+    // Our TX rungs are rows 1 (reporting) / 3 (rogering). Opening defaults to the
+    // report rung — and rowFor keeps row 1 current until our report actually keys,
+    // rather than jumping to the reply row (row 2) the instant the exchange opens.
     const workStep = $derived.by(() => {
         const txRow = qso.state === 'rogering' ? 3 : 1;
-        return Math.min(tx.transmitting ? txRow : txRow + 1, workLadder.length - 1);
+        return rowFor(txRow, workLadder.length);
     });
 
     // Answer-a-CQ ladder (qso.active): we are the ANSWERING station — our rungs are
@@ -135,8 +145,7 @@
     ]);
     const answerStep = $derived.by(() => {
         const txRow = qso.state === 'reporting' ? 2 : qso.state === 'confirming' ? 4 : 0;
-        const next = tx.transmitting ? txRow : txRow + 1;
-        return Math.min(next, answerLadder.length - 1);
+        return rowFor(txRow, answerLadder.length);
     });
 
     // Rendered ladder + highlight, by role: answerer → answer ladder; worker → the
