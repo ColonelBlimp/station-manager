@@ -195,7 +195,7 @@ tasks:
     cmds:
       # Stop the systemd smd first so the two daemons don't fight over :8080.
       # Tolerant: no-op if it isn't running / the unit isn't installed.
-      - echo '>> stopping systemd smd (if running) to free :8080 — restart later with: systemctl --user start smd'
+      - echo "stopping systemd smd (if running) to free :8080 - restart it later with systemctl --user start smd"
       - systemctl --user stop smd 2>/dev/null || true
       - ./build/bin/smd
 
@@ -212,7 +212,7 @@ tasks:
       # Free :8080 + the audio/serial ports: a running systemd smd would
       # otherwise collide with this dev daemon (the "address already in use"
       # restart flap). Tolerant of not-running / unit-not-installed.
-      - echo '>> stopping systemd smd (if running) to free :8080 — restart later with: systemctl --user start smd'
+      - echo "stopping systemd smd (if running) to free :8080 - restart it later with systemctl --user start smd"
       - systemctl --user stop smd 2>/dev/null || true
       - CGO_ENABLED=1 go run -ldflags="-X main.Version={{.SM_VERSION}}" ./cmd/smd
 
