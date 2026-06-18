@@ -13,4 +13,3 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 ## Notes
 
 <!-- /log appends below this line -->
-- [2026-06-18] add click to Offset... label that when clicked it opens the Occupancy tab

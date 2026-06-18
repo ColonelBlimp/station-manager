@@ -687,7 +687,14 @@
                     Working {workingCall} — {workingChannelLabel}{callsLeftLabel}
                 </div>
             {:else}
-                <div class={rxCaptionClass}>{rxCaption}</div>
+                <!-- The idle offset readout doubles as a shortcut to the Occupancy
+                     tab, where the TX offset is picked/changed. -->
+                <button
+                    type="button"
+                    class="{rxCaptionClass} cursor-pointer hover:underline"
+                    title="Open the Occupancy tab to pick a TX offset"
+                    onclick={() => (activeTab = 'occupancy')}>{rxCaption}</button
+                >
             {/if}
         </div>
     </div>
