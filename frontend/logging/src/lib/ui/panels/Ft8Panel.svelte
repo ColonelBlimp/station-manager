@@ -345,9 +345,8 @@
         return ft8State.decodes.filter((d) => {
             if (parseDirectedToMe(d.text, myCall) !== null) return true; // calling us — always show
             if (hideHashed && d.text.includes('<...>')) return false;
-            if (filter !== '' && !d.text.toUpperCase().split(/\s+/).some((t) => t.startsWith(filter)))
-                return false;
-            return true;
+            return !(filter !== '' && !d.text.toUpperCase().split(/\s+/).some((t) => t.startsWith(filter)));
+
         });
     });
     const orderedDecodes = $derived.by(() => {
