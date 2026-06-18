@@ -663,11 +663,11 @@
                     {/each}
                 </ul>
             {:else if ft8State.qso.active}
-                <p class="mt-1 text-xs">Waiting for {ft8State.qso.theirCall}…</p>
+                <p class="mt-2 text-xs">Waiting for {ft8State.qso.theirCall}…</p>
             {:else if ft8State.selectedOffset !== null}
-                <p class="mt-1 text-xs">Nothing on this offset.</p>
+                <p class="text-xs mt-2">Nothing on this offset.</p>
             {:else}
-                <p class="mt-1 text-xs">Pick an offset on the Occupancy tab.</p>
+                <p class="mt-2 text-xs">Pick an offset on the Occupancy tab.</p>
             {/if}
         </div>
         <Ft8EnrichmentBox

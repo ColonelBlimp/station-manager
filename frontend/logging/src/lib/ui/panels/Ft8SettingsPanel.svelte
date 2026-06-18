@@ -80,9 +80,9 @@
             />
         </label>
     </div>
-</div>
-<div class="mt-2">
-    <button type="button" class="btn btn-primary" onclick={onSave} disabled={saving}>
-        {saving ? 'Saving…' : 'Save'}
-    </button>
+    <div class="mt-2">
+        <button type="button" class="btn btn-primary" onclick={onSave} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+        </button>
+    </div>
 </div>
