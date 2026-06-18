@@ -530,7 +530,8 @@
         {:else if toMe}
             <button
                 type="button"
-                class="truncate text-left font-medium text-amber-700 cursor-pointer hover:underline"
+                class="truncate text-left font-medium cursor-pointer hover:underline"
+                style:color={configState.ft8Display.highlightCalling}
                 title={canAnswer
                     ? `Work ${lineCall} now · Ctrl+click to add to the pile-up stack`
                     : `${lineCall} is calling you · Ctrl+click to add to the pile-up stack`}

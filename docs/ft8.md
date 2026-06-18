@@ -197,7 +197,10 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   picked + no QSO is already running (the daemon then auto-advances the ladder).
   **Working a caller — the pile-up (ADR 0033 "work a caller"):** a decode that is a
   station *calling you* — the grid-bearing opening `<yourCall> <theirCall> <grid>`
-  (e.g. `7Q5MLV PA3KUS JO21`) — is tinted **amber** so it stands out from band chatter,
+  (e.g. `7Q5MLV PA3KUS JO21`) — is tinted with the **calling colour** (daemon-backed
+  `ft8.display.highlight_calling`, default amber `#b45309`; **no LSPA picker** — it's
+  edited via config.json / the config SPA, the LSPA only reads + round-trips it) so it
+  stands out from band chatter,
   and is **clickable** (under the same gate as answering: armed + offset + idle) to
   work that station via `POST /v1/ft8/qso/work`. The amber tint shows live — even mid-
   contact, so you can see who's waiting — but the row only becomes clickable once you
@@ -519,6 +522,7 @@ does not consume these — they're pure SPA presentation — it stores + resolve
 | `feed_mode` | `accumulate` | `accumulate` (roll slots up) or `single` (current slot only) |
 | `highlight_unworked` | `#15803d` | CQ tint — not worked on this band (attention) |
 | `highlight_worked` | `#9ca3af` | CQ tint — worked-before (muted) |
+| `highlight_calling` | `#b45309` | text colour for a station calling you (toMe/pile-up rows) — no LSPA picker, config-SPA/hand-edited |
 | `cq_to_top` | `false` | float CQ rows to the top of Band Activity (separators suppressed) |
 | `hide_hashed_calls` | `false` | hide decodes with an unresolved hashed call (`<...>`); stations calling you still show |
 

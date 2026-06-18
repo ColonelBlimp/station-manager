@@ -28,6 +28,10 @@
                     feed_mode: fd.feedMode,
                     highlight_unworked: fd.highlightUnworked,
                     highlight_worked: fd.highlightWorked,
+                    // Round-tripped (no LSPA picker — config-SPA/hand-edited). The
+                    // PUT replaces the whole ft8_display block, so we must send it
+                    // back unchanged or a Settings save would reset it to default.
+                    highlight_calling: fd.highlightCalling,
                     cq_to_top: fd.cqToTop,
                     hide_hashed_calls: fd.hideHashedCalls,
                 },

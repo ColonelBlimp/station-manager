@@ -193,7 +193,7 @@ provider templates. **A known wart:** this split exists only because these field
 
 | Resolver | Defaults |
 |---|---|
-| `ResolveFt8Display` | history_max 100 (clamp [10,2000]), feed_mode `accumulate`, highlight_unworked `#15803d`, highlight_worked `#9ca3af` |
+| `ResolveFt8Display` | history_max 100 (clamp [10,2000]), feed_mode `accumulate`, highlight_unworked `#15803d`, highlight_worked `#9ca3af`, highlight_calling `#b45309` (calling-us tint; no LSPA picker) |
 | `ResolveFt8Frequencies` | `DefaultFt8Frequencies()` per band, operator overrides where `>0` |
 | `ResolveFt8CallerAnswerMode` | `auto_first` |
 

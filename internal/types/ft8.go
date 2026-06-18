@@ -76,6 +76,10 @@ type Ft8DisplayConfig struct {
 	// for a station not-yet-worked-on-this-band vs worked-before. Empty → defaults.
 	HighlightUnworked string `json:"highlight_unworked,omitempty"`
 	HighlightWorked   string `json:"highlight_worked,omitempty"`
+	// HighlightCalling is the text colour (CSS hex) for a station calling US — the
+	// pile-up/toMe rows in Band Activity. Empty → default (amber). No LSPA picker:
+	// it's edited via config.json / the config SPA (the LSPA only reads + applies it).
+	HighlightCalling string `json:"highlight_calling,omitempty"`
 	// CqToTop floats CQ decodes to the top of the Band Activity feed (the
 	// actionable rows — the ones you can answer — pinned above the rest) instead
 	// of leaving them interleaved by slot. Plain bool: default false (off) is the
@@ -98,6 +102,7 @@ const (
 	DefaultFt8FeedMode          = "accumulate"
 	DefaultFt8HighlightUnworked = "#15803d" // tailwind green-700 — un-worked (attention)
 	DefaultFt8HighlightWorked   = "#9ca3af" // tailwind gray-400 — worked-before (muted)
+	DefaultFt8HighlightCalling  = "#b45309" // tailwind amber-700 — a station calling us
 )
 
 // Ft8FeedModeValid reports whether s is an accepted feed-mode literal.
@@ -116,6 +121,7 @@ func ResolveFt8Display(c *Ft8DisplayConfig) Ft8DisplayConfig {
 		FeedMode:          DefaultFt8FeedMode,
 		HighlightUnworked: DefaultFt8HighlightUnworked,
 		HighlightWorked:   DefaultFt8HighlightWorked,
+		HighlightCalling:  DefaultFt8HighlightCalling,
 	}
 	if c == nil {
 		return d
@@ -137,6 +143,9 @@ func ResolveFt8Display(c *Ft8DisplayConfig) Ft8DisplayConfig {
 	}
 	if c.HighlightWorked != "" {
 		d.HighlightWorked = c.HighlightWorked
+	}
+	if c.HighlightCalling != "" {
+		d.HighlightCalling = c.HighlightCalling
 	}
 	d.CqToTop = c.CqToTop                 // plain bool — default false, operator value passes through
 	d.HideHashedCalls = c.HideHashedCalls // plain bool — default false (show)

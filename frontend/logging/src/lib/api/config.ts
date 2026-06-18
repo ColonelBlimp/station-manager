@@ -55,6 +55,7 @@ export interface Ft8DisplayFields {
     feed_mode?: 'accumulate' | 'single';
     highlight_unworked?: string;
     highlight_worked?: string;
+    highlight_calling?: string;
     cq_to_top?: boolean;
     hide_hashed_calls?: boolean;
 }
