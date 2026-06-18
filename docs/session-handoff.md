@@ -30,9 +30,15 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-06-17)
+## Current state (as of 2026-06-18)
 
-> **Recent arc (sessions 178–184, all 2026-06-16/17, uncommitted unless noted):** bridge
+> **Recent arc (session 185, 2026-06-18):** **PSK Reporter reception-report upload SHIPPED**
+> (`internal/pskreporter` — opt-in, IPFIX/UDP, live-validated against the real collector AND
+> running in production on the dogfood daemon); **FT8 "Next"-drain bug** + **ladder-highlight
+> bug** fixed (both operator-reported, root-caused from dogfood logs); **port-8080
+> restart-flap** addressed (`server.StopAccepting` releases the listener first + a Taskfile
+> guard so `task run:smd` can't collide with the systemd daemon); **go-ft8 v0.3.5** brings
+> standard `/P`. **Earlier arc (sessions 178–184, all 2026-06-16/17, uncommitted unless noted):** bridge
 > TX-safety review fixes; FT8 "Working [call]" channel banner + auto-abandon countdown
 > (+ `ft8.tx.max_repeats` knob); **FT8 work-a-caller** (`StartWorkCaller` / `qso/work`) +
 > the dedicated `worker` ladder; **wrong-band FT8 logging fixed** at two layers —
@@ -64,6 +70,15 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 185 (2026-06-18) — **PSK Reporter reception-report upload SHIPPED + live-validated; FT8 Next-drain & ladder-highlight bugs fixed; port-8080 restart-flap fix + Taskfile dev-daemon guard; go-ft8 v0.3.5 `/P`.** All green throughout (Go build/vet/`-race`/suites; SPA check/lint/build + 835 vitest).
+- **go-ft8 v0.3.4 → v0.3.5: standard `/P` now encodes.** `EncodeStandardMessage` accepts the standard `/P` variant, so SM works `/P` stations **end-to-end with NO SM code change** — every TX guard decides by trying the encode + skipping on error, so the upstream gain flows straight through. **Type-4 compound (`PJ4/K1ABC`, `/MM`, …) + free text still skipped** (need WSJT-X hashed-callsign encode, gated on go-ft8). Proven offline (`internal/ft8/modulate_test.go`: `TestEncodeStandardMessage_Portable` + round-trip). Committed.
+- **PSK Reporter reception-report upload — new `internal/pskreporter` (report/upload side only).** The FT8 "who's hearing me" / propagation-map feed. **IPFIX/UDP encoder, byte-exact vs the spec's worked example** (`ipfix_test.go`); a buffer → dedup (best SNR per call) → flush service: ~5 min cadence (program-relative timer + jitter, NOT clock-synced), descriptors first-3-datagrams + hourly, one long-lived UDP socket (constant source port). **Fed by FT8 decodes via `ft8.Service.SetDecodeSink`** (one-way DI, same pattern as `SetQsoLogger` — `internal/ft8` stays narrow); `cmd/smd` extracts a spot per decode with **`ft8.SpotFrom`** (reuses the sequencer `parseMessage`; CQ→caller+grid, directed→sender, hashed/free-text skipped), reporting **freq = dial + audio offset** (the real RF, via `bridge.CurrentDialMHz`), SNR, mode FT8, slot time, `informationSource=1`. Receiver identity from `logging_station` (call/grid) + `StationManager <ver>` + **antenna from `MY_ANTENNA`** (sourced from the station config, NOT a separate `psk_reporter` key). Config block `psk_reporter` (`enabled` default **OFF** — opt-in/public; `host`/`port`), set-once like SMTP (not on `/v1/config`). **Collector host = `report.pskreporter.info` (NOT `pskreporter.info` — that hostname is the Cloudflare website and silently drops UDP); port 4739 = production, 14739 = test** (same host, parses without writing the live DB). `cmd/ft8-psk-probe` = a dev/test CLI (flags; defaults to the test port; `-dry`). **Live-validated against the real collector** (`/cgi-bin/psk-analysis.pl` showed our datagram received + every field parsed) AND **running in production on the dogfood daemon** (`pskreporter: uploaded spots` 80–81/flush). **3 review findings fixed:** (1) optional startup made non-fatal (cmd/smd logs+continues; `AddSpot` guards `conn==nil` so a failed start can't grow the buffer unbounded); (2) a full-buffer flush no longer does UDP I/O on the FT8 decode goroutine — `AddSpot` signals the flush loop (non-blocking); (3) the receiver template is a **fixed 4-field shape** (antenna always present, empty when unset) so a runtime `SetReceiver` can't desync the cached template. Committed + deployed.
+- **FT8 "Next" drain bug fixed (operator-reported).** Clicking Next on a pile-up no-show *stopped* the auto-drain with no way to restart. **Root-caused from the dogfood logs:** Next → `qso/abandon`, then the drain's immediate `qso/work` hit a transient **`503 rig_not_ready`** (the TX→RX settle right after cancelling the in-flight TX); the drain treated it as terminal — cleared its latch, **lost the already-dequeued head**, and never retried (nothing reactive re-fired the `$effect`). Fix (`Ft8Panel.svelte` drain `$effect`): don't dequeue until the start **succeeds**; on a transient (`rig_not_ready`/network) keep the head + **retry** (~1.5 s, up to ~9 s) via a reactive tick; if the rig's genuinely down after the retries, **pause** (queue kept, Resume restarts); drop only on a hard per-entry rejection. Committed + deployed.
+- **FT8 ladder-highlight bug fixed (operator-reported, cosmetic).** Starting a work-a-caller (or answer-a-CQ) exchange briefly highlighted the **RX reply row** instead of the opening **TX rung**, then snapped back when TX keyed. Root cause: `tx.transmitting ? txRow : txRow+1` reads "not transmitting" as "waiting for reply" — but at the open the daemon publishes the rung with `repeats=0` + `transmitting=false` **before** the first key (`work_sequencer.go` 69→75→78). Fix: a `rowFor(txRow,len)` helper keys off `qso.repeats` — TX row when transmitting OR `repeats===0` (about to send), RX row only once sent + waiting (`repeats>0` && !transmitting). Applied to all three ladders (work/answer/caller). The daemon always *sent* the right messages — display-only. Uncommitted (latest).
+- **Port-8080 restart-flap.** (1) **`server.StopAccepting()`** closes the listener at the START of shutdown — it was held until the final `server.Shutdown`, behind the multi-second bridge/ft8/psk teardown (`ft8.Stop` waits for an in-flight decode), so a replacement process racing the old daemon's teardown got `address already in use`. Now `:8080` frees immediately; the later `Shutdown` still drains connections. Race-guarded listener field, `net.ErrClosed` treated as a clean stop; regression test `TestServer_StopAccepting_ReleasesPort`. Committed + deployed. (2) **The actual recurring cause = a SECOND smd** — the dogfood `task run:smd` (or a stray `build/bin/smd`) overlapping the systemd daemon on `:8080`. Proven from the journal: systemd smd cleanly Stopped at 16:44:15 yet `:8080` was still in use at 16:44:25 → a freed listen port is instantly rebindable (`SO_REUSEADDR`), so another process held it. Fix: **Taskfile `run`/`run:smd` now auto-stop the systemd smd first** (tolerant of not-running/not-installed) + an echo reminder to restart it after. ⚠️ **Validate Taskfile edits with `task --list`, not `python yaml.safe_load`** — a `: ` (colon-space) inside a cmd string parses as a valid-but-wrong YAML *map*, which `safe_load` accepts but Task rejects ("invalid keys in command"); my first guard shipped broken and was caught on the next `task deploy:local:dev`. Taskfile guard committed (after the YAML fix).
+- **Dogfood-inbox:** "footer for Band activity needs to be bigger text" (capture-only).
+- **Roll-off due:** the live `### Session N` list is now ~17 entries (169–185) — past the ~15 cap; move sessions 169–170 to `session-handoff-archive.md` next maintenance pass.
 
 ### Session 184 (2026-06-17) — **Session-email subject = logbook-callsign-prefixed + body QSO-count line (daemon-only).** All green: `go test ./internal/api`, build.
 - **Why:** as multi-operator interest grows, a QSL manager receiving logs from several operators got identical-looking mail (the logging callsign was only inside the ADIF). Now the **subject is prefixed with the logbook callsign** (e.g. `G4ABC Station Manager session ADIF — …`) and the **body adds `Contains N QSOs.`** under "ADIF for this session attached." (singular `QSO` for 1).
@@ -274,17 +289,27 @@ All green: full Go build + `go test ./internal/ft8 ./cmd/smd` pass; SPA check 0/
 
 ## Next steps (priority order)
 
-> **⚠️ CURRENT NEXT STEPS (as of session 184, 2026-06-17) — the items deeper below are
+> **⚠️ CURRENT NEXT STEPS (as of session 185, 2026-06-18) — the items deeper below are
 > STALE history (operator_pick is SUPERSEDED, IC-7300 arc closed; kept for the trail):**
-> 1. **Commit** the uncommitted sessions 178–184 work (operator commits per their habit).
-> 2. **`task deploy:local:dev`** then **on-air / bench re-validate** the recent FT8 arc:
->    the **IC-7300 operating-freq POLL fix** (freq should track continuously while parked;
->    a fresh tab shows it within ~a poll cycle — this is the embedded-rigdef change that
->    needs a redeploy), **pile-up callsign stacking** (Ctrl+click callers → drains), the
->    **wrong-band logging fix** (FT8 QSOs log the live dial), and caller-side Call CQ.
-> 3. **Parked design — Band Activity prefix/substring filter** (session 182; design in the
->    backlog, ready to shape → build). Plus the new backlog items: **PSK Reporter upload**
->    and **configurable session-email subject/body templates**.
+> 1. **Commit the FT8 ladder-highlight fix** (`Ft8MsgPanel.svelte` `rowFor`) — the one
+>    piece of session 185 left uncommitted. Most of session 185 (PSK Reporter, port fix,
+>    Next-drain fix, go-ft8 v0.3.5 `/P`) is already committed + deployed; confirm the
+>    178–184 arc landed too.
+> 2. **Redeploy + on-air verify the two SPA bug fixes** (`task deploy:local:dev`): the
+>    **Next-drain fix** (Next now advances past a no-show instead of stalling on the
+>    transient `rig_not_ready`) and the **ladder-highlight fix** (an exchange opens on our
+>    TX rung, not the RX reply row). PSK Reporter is **already live + validated** (don't
+>    re-check). After a `task run:smd` dev session, restart the dogfood daemon
+>    (`systemctl --user start smd`) — the Taskfile now stops it for you on `run:smd`.
+> 3. **Parked design — Band Activity prefix/substring filter** (session 182; backlog,
+>    ready to shape → build).
+> 4. **PSK Reporter follow-ups (future, in backlog):** the **retrieve/query side** (who
+>    heard *you* — distinct from the report side just shipped); a **config-SPA surface**
+>    for the `psk_reporter` block (hand-config for now); and **generalize to a
+>    spot-submitter registry only when a 2nd destination (DX cluster) lands** (build
+>    specific, not generic — one destination doesn't justify the framework).
+> 5. **Maintenance:** roll sessions 169–170 into `session-handoff-archive.md` (the live
+>    `### Session N` list is at ~17, past the ~15 cap).
 >
 > The FT8-TX items further below are STALE — TX (a)–(e) + answer-a-CQ + caller-side +
 > work-a-caller + pile-up stacking all shipped; "auto-sequence" is OUT OF SCOPE /
