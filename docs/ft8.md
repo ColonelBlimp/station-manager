@@ -834,9 +834,14 @@ that drains via the work-a-caller path — the operator-curated alternative to
 **Automatic/unattended sequencing is out of scope and unsupported — the QEX FT8
 specification forbids automatic operation.**
 
-`go-ft8`'s `EncodeStandardMessage` covers standard structured messages only (no
-free text / compound calls yet); SM owns tones → GFSK audio → output → PTT →
-timing.
+`go-ft8`'s `EncodeStandardMessage` covers standard structured messages, **including
+the standard `/P` variant** (go-ft8 ≥ **v0.3.5**). SM works `/P` stations end to end
+with **no SM code change** — every TX guard decides by trying `EncodeStandardMessage`
+and skipping on error, so an upstream encoder gain flows straight through (proven
+offline in `internal/ft8/modulate_test.go`: `TestEncodeStandardMessage_Portable` +
+`TestModulate_RoundTrip_Portable`). **Still unencodable → still skipped:** type-4
+compound/nonstandard calls (`PJ4/K1ABC`, `/MM`, …) and free text. SM owns tones →
+GFSK audio → output → PTT → timing.
 
 ## 6. Where the code lives
 

@@ -94,7 +94,9 @@ func TestWorkCaller_RejectsUnencodableCaller(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
-	err := s.StartWorkCaller("G0XYZ", "K1ABC/P", "FN42", -12, slot, 1500, 14.074, time.Unix(0, 0).UTC())
+	// Type-4 compound — still unencodable (the standard /P variant encodes on
+	// go-ft8 ≥ v0.3.5, so it's no longer a rejection example).
+	err := s.StartWorkCaller("G0XYZ", "PJ4/K1ABC", "FN42", -12, slot, 1500, 14.074, time.Unix(0, 0).UTC())
 	require.True(t, stderr.Is(err, ErrTxBadMessage))
 	require.False(t, s.Active(), "an unencodable caller must not commit a session")
 }

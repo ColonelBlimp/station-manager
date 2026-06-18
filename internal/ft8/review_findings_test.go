@@ -165,8 +165,9 @@ func TestSequencer_AbandonDuringFinal73SuppressesStaleCallback(t *testing.T) {
 func TestSequencer_StartQsoRejectsUnencodableCall(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	// A compound/portable call the standard encoder rejects.
-	err := s.StartQso("G0XYZ", "IO91", "K1ABC/P", "FN42",
+	// A type-4 compound call the standard encoder still rejects (the standard /P
+	// variant encodes on go-ft8 ≥ v0.3.5, so /P is no longer an "unencodable" example).
+	err := s.StartQso("G0XYZ", "IO91", "PJ4/K1ABC", "FN42",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC())
 	require.ErrorIs(t, err, ErrTxBadMessage)
 	require.False(t, s.Active(), "no session committed for an unencodable opening (review M1)")
@@ -176,7 +177,7 @@ func TestSequencer_StartQsoRejectsUnencodableCall(t *testing.T) {
 func TestCallerSequencer_StartCallCqRejectsUnencodableCq(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	err := s.StartCallCq("K1ABC/P", "FN42", 2700, 28.074, "auto_first", time.Unix(0, 0).UTC())
+	err := s.StartCallCq("PJ4/K1ABC", "FN42", 2700, 28.074, "auto_first", time.Unix(0, 0).UTC())
 	require.ErrorIs(t, err, ErrTxBadMessage)
 	require.False(t, s.Active(), "no CQ session committed for an unencodable CQ (review M1)")
 	require.Empty(t, r.sentMsgs())

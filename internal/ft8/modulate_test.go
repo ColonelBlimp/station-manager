@@ -57,6 +57,89 @@ func TestEncodeToSlot_RejectsUnsupported(t *testing.T) {
 	}
 }
 
+// TestEncodeStandardMessage_Portable proves the go-ft8 v0.3.5 bump unblocks the
+// standard /P variant. Every SM TX guard decides by trying EncodeStandardMessage
+// (caller_sequencer / sequencer / work_sequencer / EncodeWaveform → ErrTxBadMessage
+// on error), so once these rung messages encode, a /P station can be worked end to
+// end with no SM code change. The negative cases prove the guard still does its job:
+// a type-4 compound call and free text remain unencodable and stay skipped.
+// Light (no decode) — runs under -short too.
+func TestEncodeStandardMessage_Portable(t *testing.T) {
+	// The CQ-answer + work-a-caller ladder rungs for a /P station (their call has
+	// the /P suffix; ours is standard), in the directed "<them> <us> <token>" shape
+	// SM transmits.
+	supported := []string{
+		"CQ G0XYZ/P IO91",
+		"G0XYZ/P K1ABC FN42",
+		"G0XYZ/P K1ABC -10",
+		"G0XYZ/P K1ABC R-09",
+		"G0XYZ/P K1ABC RR73",
+		"G0XYZ/P K1ABC 73",
+	}
+	for _, m := range supported {
+		if _, err := goft8.EncodeStandardMessage(m); err != nil {
+			t.Errorf("EncodeStandardMessage(%q) = %v, want nil (/P should encode on v0.3.5)", m, err)
+		}
+	}
+
+	// Still unsupported by the encoder → the dynamic guard keeps skipping these.
+	unsupported := []string{
+		"PJ4/K1ABC FN42",        // type-4 compound (prefix/call), not the standard /P variant
+		"HELLO BRAVE NEW WORLD", // free text
+	}
+	for _, m := range unsupported {
+		if _, err := goft8.EncodeStandardMessage(m); err == nil {
+			t.Errorf("EncodeStandardMessage(%q) = nil, want error (still unsupported)", m)
+		}
+	}
+}
+
+// TestModulate_RoundTrip_Portable is the offline RF-free proof for /P: encode each
+// /P ladder rung to audio and decode it back with the shipped decoder, asserting the
+// text survives. Same discipline as TestModulate_RoundTrip; heavy, gated under -short.
+func TestModulate_RoundTrip_Portable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+
+	cases := []struct {
+		text   string
+		offset float64
+	}{
+		{"CQ G0XYZ/P IO91", 1500},
+		{"G0XYZ/P K1ABC FN42", 1200},
+		{"G0XYZ/P K1ABC R-09", 800},
+		{"G0XYZ/P K1ABC RR73", 2400},
+	}
+	for _, c := range cases {
+		t.Run(c.text, func(t *testing.T) {
+			enc, err := goft8.EncodeStandardMessage(c.text)
+			if err != nil {
+				t.Fatalf("EncodeStandardMessage(%q): %v", c.text, err)
+			}
+			slot, err := EncodeToSlot(c.text, c.offset, 0.5)
+			if err != nil {
+				t.Fatalf("EncodeToSlot(%q): %v", c.text, err)
+			}
+			msgs := DecodeSlot(slot, true, logging.Noop())
+			found := false
+			for _, m := range msgs {
+				if strings.EqualFold(strings.TrimSpace(m.Text), enc.Text) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				got := make([]string, len(msgs))
+				for i, m := range msgs {
+					got[i] = m.Text
+				}
+				t.Fatalf("/P signal did not round-trip; decoded %v, want %q", got, enc.Text)
+			}
+		})
+	}
+}
+
 // TestModulate_RoundTrip is the step-(b) de-risking proof: encode a standard
 // message, modulate it to audio, and decode that audio back with the shipped
 // decoder — asserting the text survives and lands at the chosen offset. Zero

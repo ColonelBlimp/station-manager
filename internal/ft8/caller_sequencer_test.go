@@ -101,8 +101,8 @@ func TestCallerSequencer_AutoFirstSkipsUnencodableAnswerer(t *testing.T) {
 	s := newTestSeq(r)
 	startCq(t, s)
 	driveTheir(s, 30, []goft8.DecodedMessage{
-		dm("7Q5MLV K1ABC/P JO41", -5), // portable: our report to it won't encode → skip
-		dm("7Q5MLV DL9UW JO41", -8),   // standard: work this one instead
+		dm("7Q5MLV PJ4/K1ABC JO41", -5), // type-4 compound: our report won't encode → skip
+		dm("7Q5MLV DL9UW JO41", -8),     // standard: work this one instead
 	})
 	require.NotNil(t, s.caller, "must pick the encodable answerer, not abandon the session")
 	require.Equal(t, "DL9UW", s.caller.TheirCall)

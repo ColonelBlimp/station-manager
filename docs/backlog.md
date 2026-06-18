@@ -143,28 +143,23 @@ when it ships — don't let this rot into a graveyard.
   just non-clickable (lean: hide, with a toggle to reveal); (3) match semantics —
   exact callsign vs prefix/wildcard. Whether it also feeds AP-hint *de*-prioritising
   (ADR 0025) is a later question, not v1.
-- **FT8 — work compound/portable callsigns (`/P`, `/MM`, `K1ABC/4`, …) and free-text
-  messages.** Flagged on air 2026-06-17. Today the answer-a-CQ, work-a-caller, and
-  Call-CQ paths can only work stations whose exchange encodes as a **standard
-  structured FT8 message**: `go-ft8`'s `EncodeStandardMessage` rejects compound/
-  portable calls and free text, and the sequencer defensively **skips** such an
-  answerer/caller (the "reply does not encode" guard in `caller_sequencer.go` /
-  `StartQso` / `StartWorkCaller`). So a `CQ G0XYZ/P` or a `/MM` caller is decoded and
-  shown but **cannot be answered**, and free-text (`<call> <call> HW?` etc.) isn't
-  supported either. Needs: (1) the WSJT-X **hashed-callsign / type-1 vs type-2
-  message** scheme so compound calls round-trip via the 22-bit hash (`<...>`),
-  including the hash table the decoder/encoder share — this is real protocol work, not
-  a tweak, and depends on what `go-ft8` exposes (it may need a `go-ft8` API addition);
-  (2) **free-text** (71-bit) message encode + a UX to enter/send it. Scope/sequence
-  TBD — likely hashed-call support first (lets the pile-up be worked completely), free
-  text second. Until then the skip behaviour is correct (better than transmitting an
-  unencodable/garbled message), and the operator just can't complete those contacts in
-  SM. Capture point: `docs/ft8.md`; see ADR 0029 (the `EncodeStandardMessage` seam).
-  **Upstream requested 2026-06-18:** the operator filed a feature request with the
-  **go-ft8** project for compound/portable (`/P`) support. So part (1) is now
-  **blocked on upstream** — track go-ft8's response; once it exposes the hashed-callsign
-  type-1/type-2 encode path, wire it through the `EncodeStandardMessage` seam + drop the
-  sequencer skip-guard for the calls it can now encode. Free-text (part 2) is separate.
+- **FT8 — work type-4 compound calls + free-text messages.** The answer-a-CQ,
+  work-a-caller, and Call-CQ paths work any station whose exchange encodes as a
+  **standard structured FT8 message**; the sequencer defensively **skips** anything
+  else (the dynamic "reply does not encode" guard — every site tries
+  `goft8.EncodeStandardMessage` and treats an error as `ErrTxBadMessage`, in
+  `caller_sequencer.go` / `sequencer.go` / `work_sequencer.go` / `EncodeWaveform`).
+  - ~~**Standard `/P` variant.**~~ **SHIPPED 2026-06-18** with the **go-ft8 v0.3.4→v0.3.5**
+    bump — `EncodeStandardMessage` now accepts the standard `/P` variant, so the dynamic
+    guards pass it through with **no SM code change** (the encode-check seam was designed
+    for exactly this). Proven offline: `internal/ft8/modulate_test.go`
+    (`TestEncodeStandardMessage_Portable` + `TestModulate_RoundTrip_Portable`).
+  - **Still unsupported (deliberately skipped):** **type-4 compound / nonstandard calls**
+    (`PJ4/K1ABC`, `K1ABC/4`, `/MM`, …) which need the WSJT-X hashed-callsign type-1/type-2
+    scheme (the 22-bit hash + shared hash table — real protocol work, gated on go-ft8
+    exposing an encode path for it); and **free text** (71-bit) encode + a UX to enter it.
+    Until go-ft8 supports those encodes, the skip behaviour stays correct. Capture point:
+    `docs/ft8.md`; see ADR 0029 (the `EncodeStandardMessage` seam).
 - ~~**FT8 Band Activity — typed display filter (token-prefix).**~~ **SHIPPED 2026-06-18.**
   Token-prefix match (any whitespace token starts with the typed text, case-insensitive),
   toMe-bypass, session-scoped (`ft8State.bandFilter`). Placement landed as a **funnel
