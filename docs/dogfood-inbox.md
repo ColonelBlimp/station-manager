@@ -13,3 +13,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 ## Notes
 
 <!-- /log appends below this line -->
+- [2026-06-18] footer for Band activity needs to be bigger text

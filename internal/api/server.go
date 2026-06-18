@@ -56,6 +56,9 @@ type Server struct {
 	// unguarded close(shutdownCh) panics ("close of closed channel") on a
 	// second call (a future test, supervisor retry, or duplicated teardown).
 	shutdownOnce sync.Once
+	// listenerMu guards listener: it's assigned in ListenAndServe (serve
+	// goroutine) and read by StopAccepting (shutdown goroutine).
+	listenerMu sync.Mutex
 }
 
 // New constructs a Server from the resolved services and config. The
@@ -300,16 +303,38 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsgf("binding %s listener on %s", s.protocol, socketPath)
 	}
+	s.listenerMu.Lock()
 	s.listener = ln
+	s.listenerMu.Unlock()
 	s.socketPath = socketPath // cached for Shutdown's socket-file cleanup
 
 	s.logger.InfoWith().Str("protocol", s.protocol).Str("address", socketPath).Msg("HTTP server listening")
 
-	if err = s.httpServer.Serve(ln); err != nil && !stderr.Is(err, http.ErrServerClosed) {
+	// http.ErrServerClosed is the clean-stop signal from Shutdown; net.ErrClosed
+	// is the clean-stop signal from StopAccepting closing the listener directly.
+	if err = s.httpServer.Serve(ln); err != nil &&
+		!stderr.Is(err, http.ErrServerClosed) && !stderr.Is(err, net.ErrClosed) {
 		return errors.New(op).WithErr(err)
 	}
 
 	return nil
+}
+
+// StopAccepting closes the network listener, releasing the bound address
+// IMMEDIATELY without draining in-flight connections. Call it at the very start
+// of shutdown so the port frees before the (possibly multi-second) subsystem
+// teardown — otherwise the listener stays bound until Shutdown runs last, and a
+// replacement process racing the old one's teardown fails to bind ("address
+// already in use"). Active connections are drained later by Shutdown; the Serve
+// loop's resulting net.ErrClosed is treated as a clean stop. Safe if never bound,
+// and idempotent (a second close is a harmless error we ignore).
+func (s *Server) StopAccepting() {
+	s.listenerMu.Lock()
+	ln := s.listener
+	s.listenerMu.Unlock()
+	if ln != nil {
+		_ = ln.Close()
+	}
 }
 
 // Shutdown gracefully shuts down the HTTP server.

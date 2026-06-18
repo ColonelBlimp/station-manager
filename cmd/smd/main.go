@@ -633,6 +633,15 @@ func run() error {
 	}
 
 	// ---- Graceful shutdown ----
+	// Release the bound port FIRST. The subsystem teardown below (bridge, ft8 —
+	// which waits for an in-flight decode — and pskreporter) takes several seconds,
+	// and server.Shutdown (which closes the listener) runs last. Closing the
+	// listener up front frees :8080 immediately so a replacement process from a
+	// deploy/restart can bind right away instead of racing the old daemon's
+	// teardown ("address already in use" → systemd retry flap). Connections are
+	// still drained by server.Shutdown below; only the accept listener closes here.
+	server.StopAccepting()
+
 	// Cancel forwarder workers first so that any in-flight forwarder Submit() call
 	// with ctx-cancel support (e.g. HTTP POST to QRZ) aborts promptly,
 	// and no new DB work is started against the about-to-close handle.

@@ -33,7 +33,7 @@
 </script>
 
 <div
-    class="h-44 mt-2 overflow-y-auto rounded border border-gray-300 bg-gray-100 px-2 pt-7 text-center text-xs"
+    class="h-44 mt-2 overflow-y-auto rounded border border-gray-300 bg-gray-100 px-2 pt-4 text-center text-xs"
 >
     {#if info}
         {#if info.flag || info.country}

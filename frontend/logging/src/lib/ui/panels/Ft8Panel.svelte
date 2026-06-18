@@ -270,7 +270,21 @@
     // can't double-fire in the window before the daemon pushes the active state. The
     // queue lives wholly in the SPA; the daemon is untouched (reuses StartWorkCaller).
     let draining = false;
+    // Re-fire trigger + per-head retry counter for transient start failures. Right
+    // after Next/Abandon (which cancels the in-flight TX) the rig is briefly not
+    // ready — the TX→RX settle — so an immediate `work` gets a 503 rig_not_ready.
+    // That is transient: keep the head and re-attempt, rather than dropping the
+    // caller AND stalling the drain (nothing reactive would otherwise re-fire this
+    // effect). retryTick is reactive so a scheduled bump re-runs the drain.
+    const WORK_RETRY_MS = 1500;
+    const MAX_WORK_RETRIES = 6; // ~9s of settle before we conclude the rig is really down
+    let retryTick = $state(0);
+    let workRetries = 0;
     $effect(() => {
+        // Touch retryTick so a scheduled bump re-runs this effect — the bare read IS
+        // the point (registers the Svelte reactive dep), hence the disable.
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        retryTick;
         // A contact is active (ours just started, or in flight) → never drain, and
         // clear the latch: our start has landed.
         if (ft8State.qso.active) {
@@ -283,7 +297,6 @@
         const head = ft8PileupStack.peek();
         if (!head) return;
         draining = true;
-        ft8PileupStack.dequeue();
         const offset = ft8State.selectedOffset;
         void startFt8WorkCaller(
             head.call,
@@ -293,12 +306,32 @@
             offset,
             opFreq / 1_000_000
         ).then((out) => {
-            // On success the latch clears when qso.active flips true (above). On a
-            // refused start, surface it and release the latch so the next idle tick
-            // can try the next entry.
-            if (out.kind !== 'ok') {
-                toasts.error(out.message);
-                draining = false;
+            if (out.kind === 'ok') {
+                // Now being worked — remove it from the queue. The latch clears when
+                // qso.active flips true (above).
+                ft8PileupStack.dequeue();
+                workRetries = 0;
+                return;
+            }
+            draining = false;
+            const transient =
+                out.kind === 'network' || (out.kind === 'server' && out.code === 'rig_not_ready');
+            if (transient && workRetries < MAX_WORK_RETRIES) {
+                // Keep the head; re-attempt shortly (TX→RX settle after Next/Abandon).
+                workRetries++;
+                setTimeout(() => retryTick++, WORK_RETRY_MS);
+                return;
+            }
+            workRetries = 0;
+            toasts.error(out.message);
+            if (transient) {
+                // Rig still not ready after several tries → pause (keep the queue) so
+                // the operator can fix the rig and Resume, instead of losing callers.
+                ft8PileupStack.pause();
+            } else {
+                // Hard rejection of THIS entry → drop it so the drain advances (the
+                // dequeue re-fires this effect for the next head).
+                ft8PileupStack.dequeue();
             }
         });
     });
@@ -650,7 +683,7 @@
                 <p class="mt-1 text-xs">Waiting for decodes…</p>
             {/if}
         </div>
-        <div class="w-full mt-2 font-semibold text-gray-700 text-xs">{slotLabel}</div>
+        <div class="w-full mt-2 font-semibold text-gray-700 text-sm">{slotLabel}</div>
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Rx Frequency</h2>
