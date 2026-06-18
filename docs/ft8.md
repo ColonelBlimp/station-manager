@@ -212,7 +212,9 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   tab/browser close, like the Phone/CW `callsignStack`). This is the realised
   operator-pick experience and **supersedes** the daemon `operator_pick` Call-CQ mode.
 
-  *The drawer* (Operate tab; depth badge on the tab) is a deliberate twin of the
+  *The drawer* hangs off the **right edge of the logging card** (mounted alongside the
+  Phone/CW Call Stack), always visible while non-empty regardless of which FT8 sub-tab
+  is open; the Operate tab also carries a depth badge. It is a deliberate twin of the
   Phone/CW Call Stack so it operates the same on sight. It **auto-hides when empty** —
   it isn't shown until a caller is queued, and disappears once the queue drains or is
   cleared. Per-row **×** removes that one caller; the header **×** ("Clear all &
@@ -252,6 +254,18 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   states prompt accordingly. Purely SPA-side — filters the existing
   `ft8State.decodes`, no daemon change. (Replaced the temporary "TX Frequency"
   occupied-Hz validation view, which the Occupancy-tab strip superseded.)
+- **Worked-station enrichment box + short/long path radio** — while a QSO is active the
+  Rx Frequency pane shows the worked station's flag/country/op-name and the **beam
+  heading + distance**, with a **Short / Long path radio** beneath (mirrors the Phone/CW
+  Country panel). The radio is **logging-only** — it picks which great-circle figures are
+  recorded (`ANT_AZ`, `DISTANCE`) and stamps ADIF **`ANT_PATH`** (`S`/`L`); it never
+  touches the on-air signal (FT8 messages carry no path info, and you aim the beam at the
+  rig). Because FT8 QSOs are built **daemon-side**, the choice is sent via
+  `POST /v1/ft8/qso/path` rather than on a SPA submit; the daemon stamps it in `BuildQso`
+  (bearing/distance math mirrors `bearing.ts`, so FT8 and Phone/CW agree). Defaults to
+  **short** and resets to short at the start of each contact (both SPA and daemon), so a
+  prior QSO's "long" never carries over. *(Phone/CW logs `ANT_PATH` too now — its
+  Country-panel radio stamps it on submit, mode-independent, matching FT8.)*
 - **"Working [callsign]" channel readout** — occupies the right-hand cell of the
   always-visible slot-countdown row (so it shows on **every** lower tab), **replacing
   the idle offset readout** while a contact is in flight (`ft8State.qso.active`); when

@@ -281,6 +281,13 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Errors:** 400 `invalid_json`/`no_station_callsign`/`ft8_no_offset`/`invalid_field_value`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`.
 - **Notes:** One session at a time. Stopped via the shared abandon route below.
 
+### `POST /v1/ft8/qso/path`
+- **Purpose:** Record the operator's antenna-path choice for the active FT8 exchange (the short/long radio in the FT8 enrichment panel). **Logging-only** — it annotates the logged QSO (ADIF `ANT_PATH`, plus the matching great-circle `ANT_AZ` + `DISTANCE`) and never touches the on-air signal. FT8 QSOs are built daemon-side, so unlike Phone/CW (where the SPA stamps it at submit) the choice is sent here.
+- **Gating:** **Only when FT8 is enabled.**
+- **Request:** Body `{"path": "S"|"short"|"L"|"long"}` (case-insensitive). Lenient — anything other than long is treated as short.
+- **Response:** **202 Accepted.**
+- **Notes:** Settable any time during a contact; read once when the exchange completes. Resets to short at the start of each exchange, so a prior contact's "long" never carries over. `ANT_AZ`/`DISTANCE` are only stamped when both grids resolve; `ANT_PATH` is stamped regardless.
+
 ### `POST /v1/ft8/qso/abandon`
 - **Purpose:** Drop any active sequenced session (answer-a-CQ or Call-CQ). **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (no-op while idle). No error codes.
 

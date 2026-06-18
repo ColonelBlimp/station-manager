@@ -17,6 +17,7 @@
     let distanceKm = $state(1287);
     let hasBearing = $state(true);
     let bearingDeg = $state(45);
+    let path = $state<'short' | 'long'>('short');
 
     const info = $derived<Ft8CallInfo | undefined>(active ? { opName, flag, country } : undefined);
     const dist = $derived(hasDistance ? distanceKm : null);
@@ -84,7 +85,16 @@
         <!-- Live preview, sized like the Rx Frequency column it lives in. -->
         <div class="w-44">
             <h2 class="mb-1 text-xs font-semibold text-gray-500">Live preview (w-44)</h2>
-            <Ft8EnrichmentBox {call} {info} distanceKm={dist} bearingDeg={bearing} />
+            <Ft8EnrichmentBox
+                {call}
+                {info}
+                distanceKm={dist}
+                bearingDeg={bearing}
+                {path}
+                onPathChange={(p: 'short' | 'long') => {
+                    path = p;
+                }}
+            />
         </div>
     </div>
 </main>

@@ -159,6 +159,30 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// ft8QsoPathRequest is the POST /v1/ft8/qso/path body: the operator's antenna-path
+// choice for the active exchange — "S"/"short" or "L"/"long". Logging-only — it
+// annotates the QSO the exchange logs (ADIF ANT_PATH + the matching bearing/distance)
+// and never touches the on-air signal. Mirrors the Phone/CW short/long radio, but
+// FT8 QSOs are built daemon-side, so the choice is sent here rather than at submit.
+type ft8QsoPathRequest struct {
+	Path string `json:"path"`
+}
+
+// handleFt8QsoPath records the antenna-path choice for the active FT8 exchange.
+// Registered only when FT8 is enabled. Lenient: any value other than long ("L"/
+// "long") is treated as short, so a bad value can't produce an invalid ADIF code.
+// 202 — the choice is applied when the exchange logs (it resets to short per QSO).
+func (s *Server) handleFt8QsoPath(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8QsoPath"
+
+	var req ft8QsoPathRequest
+	if !s.readJSONBody(w, r, op, &req) {
+		return
+	}
+	s.ft8.SetExchangePath(req.Path)
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // handleFt8QsoAbandon drops any active sequenced session — answer-a-CQ or Call-CQ.
 // Idempotent — abandoning when idle is a 202 no-op.
 func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, _ *http.Request) {

@@ -49,6 +49,51 @@ func TestBuildQso(t *testing.T) {
 	require.Equal(t, "-10", q.RstRcvd) // they sent us
 }
 
+func TestBuildQso_AntPath(t *testing.T) {
+	station := types.LoggingStation{StationCallsign: "G0XYZ", MyGridsquare: "IO91"}
+	base := CompletedQso{TheirCall: "K1ABC", TheirGrid: "FN42", DialFreqMHz: 14.074}
+
+	t.Run("short stamps ANT_PATH + short bearing/distance", func(t *testing.T) {
+		c := base
+		c.AntPath = "S"
+		q := BuildQso(c, station, 1, time.Now())
+		require.Equal(t, "S", q.AntPath)
+		require.NotEmpty(t, q.AntennaAzimuth, "ANT_AZ should be set when both grids resolve")
+		require.NotEmpty(t, q.Distance)
+	})
+
+	t.Run("long stamps ANT_PATH=L + the long-path bearing/distance", func(t *testing.T) {
+		short := base
+		short.AntPath = "S"
+		qs := BuildQso(short, station, 1, time.Now())
+
+		long := base
+		long.AntPath = "L"
+		ql := BuildQso(long, station, 1, time.Now())
+
+		require.Equal(t, "L", ql.AntPath)
+		// Long-path bearing/distance differ from short for a non-degenerate pair.
+		require.NotEqual(t, qs.AntennaAzimuth, ql.AntennaAzimuth)
+		require.NotEqual(t, qs.Distance, ql.Distance)
+	})
+
+	t.Run("unset path leaves ANT_PATH empty (default short is stamped by the Service)", func(t *testing.T) {
+		q := BuildQso(base, station, 1, time.Now()) // c.AntPath == ""
+		require.Empty(t, q.AntPath)
+		require.Empty(t, q.AntennaAzimuth)
+	})
+
+	t.Run("missing grid still stamps ANT_PATH, omits bearing/distance", func(t *testing.T) {
+		c := base
+		c.TheirGrid = ""
+		c.AntPath = "L"
+		q := BuildQso(c, station, 1, time.Now())
+		require.Equal(t, "L", q.AntPath)
+		require.Empty(t, q.AntennaAzimuth)
+		require.Empty(t, q.Distance)
+	})
+}
+
 func TestBuildQso_StationCallsignFallsBackToOperator(t *testing.T) {
 	// Operator set, StationCallsign empty → STATION_CALLSIGN must fall back so
 	// the submit's required-field check passes.

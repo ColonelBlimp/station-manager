@@ -14,7 +14,7 @@
     import { displayedState } from '../../states/displayed.svelte';
     import { catState } from '../../states/cat.svelte';
     import { parseCqCall, parseCq, parseDirectedToMe } from '../../utils/ft8Message';
-    import { startFt8Qso, startFt8WorkCaller } from '../../api/ft8qso';
+    import { startFt8Qso, startFt8WorkCaller, setFt8QsoPath } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
     import { frequencyToBand, formatFrequency } from '../../utils/frequency';
     import { formatUtcClock } from '../../utils/time';
@@ -143,8 +143,39 @@
     const workedPath = $derived(
         myGrid && workedInfo?.grid ? pathInfo(myGrid, workedInfo.grid) : null
     );
-    const workedDistanceKm = $derived(workedPath?.shortPathDistanceKm ?? null);
-    const workedBearingDeg = $derived(workedPath?.shortPathBearing ?? null);
+    // Operator's antenna-path choice for the active exchange (logging-only — mirrors
+    // the Phone/CW CountryPanel radio). The enrichment box shows the chosen path's
+    // bearing/distance; on change we POST it so the daemon stamps ADIF ANT_PATH + the
+    // matching bearing/distance on the logged FT8 QSO (FT8 logs daemon-side, so the
+    // choice can't ride a SPA submit). Reset to short per worked station — the daemon
+    // resets its own copy on each exchange start, so the two stay in lockstep.
+    let txPath = $state<'short' | 'long'>('short');
+    let lastWorkedCall = '';
+    $effect(() => {
+        const c = ft8State.qso.active ? ft8State.qso.theirCall : '';
+        if (c !== lastWorkedCall) {
+            lastWorkedCall = c;
+            txPath = 'short';
+        }
+    });
+    function onTxPathChange(p: 'short' | 'long'): void {
+        txPath = p;
+        void setFt8QsoPath(p);
+    }
+    const workedDistanceKm = $derived(
+        workedPath
+            ? txPath === 'long'
+                ? workedPath.longPathDistanceKm
+                : workedPath.shortPathDistanceKm
+            : null
+    );
+    const workedBearingDeg = $derived(
+        workedPath
+            ? txPath === 'long'
+                ? workedPath.longPathBearing
+                : workedPath.shortPathBearing
+            : null
+    );
 
     // SNR formatted WSJT-X-style: an explicit-sign integer dB ("+04", "-13").
     function formatSnr(snr: number): string {
@@ -492,10 +523,16 @@
                 title={canAnswer
                     ? `Work ${lineCall} now · Ctrl+click to add to the pile-up stack`
                     : `${lineCall} is calling you · Ctrl+click to add to the pile-up stack`}
-                onclick={(e) => onCallerClick(e, d)}>{queued ? '✓ ' : ''}{d.text}</button
+                onclick={(e) => onCallerClick(e, d)}>{d.text}</button
             >
         {:else}
             <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
+        {/if}
+        {#if queued}
+            <!-- Queued-in-pile-up marker, pushed to the far right of the row (ml-auto). -->
+            <span class="ml-auto pl-2 font-semibold text-amber-700" title="Queued in the pile-up"
+                >✓</span
+            >
         {/if}
     </li>
 {/snippet}
@@ -613,6 +650,8 @@
             info={workedInfo}
             distanceKm={workedDistanceKm}
             bearingDeg={workedBearingDeg}
+            path={txPath}
+            onPathChange={onTxPathChange}
         />
     </div>
     <div class="flex flex-col text-center w-20">

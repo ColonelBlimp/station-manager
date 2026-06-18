@@ -11,12 +11,19 @@
         call: string;
         /** Enrichment facts; undefined = no active QSO / not yet looked up. */
         info: Ft8CallInfo | undefined;
-        /** Short-path distance in km, or null when grids are unknown. */
+        /** Distance in km for the SELECTED path, or null when grids are unknown. */
         distanceKm: number | null;
-        /** Short-path beam heading in degrees, or null when grids are unknown. */
+        /** Beam heading in degrees for the SELECTED path, or null when grids unknown. */
         bearingDeg: number | null;
+        /** Operator's antenna-path choice (logging-only — drives ADIF ANT_PATH + the
+         *  recorded bearing/distance). Mirrors the Phone/CW CountryPanel radio. Optional
+         *  so the ?ft8demo harness can render the box without wiring it. */
+        path?: 'short' | 'long';
+        /** Called when the operator picks a path; the parent owns the state + the daemon
+         *  POST. Omitted → no radio (e.g. demo without path wiring). */
+        onPathChange?: (p: 'short' | 'long') => void;
     }
-    let { call, info, distanceKm, bearingDeg }: Props = $props();
+    let { call, info, distanceKm, bearingDeg, path = 'short', onPathChange }: Props = $props();
 
     // Beam heading WSJT-X-style: a zero-padded integer degree ("045°"), matching
     // the per-CQ heading column in Band Activity so the operator reads one format.
@@ -43,7 +50,36 @@
             <div class="text-gray-600">{distanceKm.toLocaleString()} km</div>
         {/if}
         {#if headingLabel !== null}
-            <div class="text-indigo-600" title="Beam heading (short path)">{headingLabel}</div>
+            <div class="text-indigo-600" title={`Beam heading (${path} path)`}>{headingLabel}</div>
+        {/if}
+        {#if onPathChange}
+            <!-- Antenna-path radio (logging-only — sets ADIF ANT_PATH + the recorded
+                 bearing/distance; never the on-air signal). Mirrors the Phone/CW
+                 CountryPanel radio so the operator drives both the same way. -->
+            <div class="mt-1 flex justify-center gap-x-3 text-xs">
+                <label class="inline-flex cursor-pointer items-center">
+                    <input
+                        type="radio"
+                        name="ft8-path"
+                        value="short"
+                        checked={path === 'short'}
+                        onchange={() => onPathChange?.('short')}
+                        class="mr-1"
+                    />
+                    Short
+                </label>
+                <label class="inline-flex cursor-pointer items-center">
+                    <input
+                        type="radio"
+                        name="ft8-path"
+                        value="long"
+                        checked={path === 'long'}
+                        onchange={() => onPathChange?.('long')}
+                        class="mr-1"
+                    />
+                    Long
+                </label>
+            </div>
         {/if}
     {/if}
 </div>

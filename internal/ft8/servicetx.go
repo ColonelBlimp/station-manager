@@ -4,12 +4,33 @@ import (
 	"context"
 	stderrors "errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
+
+// ADIF ANT_PATH values the FT8 logging path uses (QsoDetails.AntPath notes only
+// S and L are used). The operator's short/long radio maps onto these.
+const (
+	antPathShort = "S"
+	antPathLong  = "L"
+)
+
+// normalizeAntPath maps an operator/SPA path value onto an ADIF ANT_PATH code.
+// Accepts "L"/"long" (case-insensitive) for long path; anything else — including
+// "S"/"short" and empty — is short. Lenient by design: an unrecognised value can
+// only ever fall back to short, never an invalid ADIF code.
+func normalizeAntPath(p string) string {
+	switch strings.ToUpper(strings.TrimSpace(p)) {
+	case antPathLong, "LONG":
+		return antPathLong
+	default:
+		return antPathShort
+	}
+}
 
 // FT8 transmit wiring (ADR 0030 step e1) — the daemon-reachable TX path.
 //
@@ -331,6 +352,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	s.resetExchangePath()
 	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
@@ -364,6 +386,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	s.resetExchangePath()
 	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, time.Now().UTC())
 }
 
@@ -389,6 +412,7 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	s.resetExchangePath()
 	return s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
@@ -399,6 +423,40 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 // config / adif: the assembly + submit live in the injected sink.
 func (s *Service) SetQsoLogger(fn func(ctx context.Context, c CompletedQso)) {
 	s.qsoLogger = fn
+}
+
+// SetExchangePath records the operator's antenna-path choice for the active
+// exchange — "S"/"short" or "L"/"long" (case-insensitive). Logging-only: it
+// annotates the QSO the exchange logs (ADIF ANT_PATH + the short/long
+// bearing+distance, stamped in BuildQso) and never touches the on-air signal.
+// Settable any time during a contact (the SPA's short/long radio POSTs here);
+// read once when the exchange completes. Defaults to short and resets to short
+// at the start of each new exchange, so a prior contact's "long" never carries
+// over.
+func (s *Service) SetExchangePath(path string) {
+	p := normalizeAntPath(path)
+	s.txMu.Lock()
+	s.exchPath = p
+	s.txMu.Unlock()
+}
+
+// exchangePath returns the active exchange's antenna path, "S" or "L"
+// (short when unset).
+func (s *Service) exchangePath() string {
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	if s.exchPath == "" {
+		return antPathShort
+	}
+	return s.exchPath
+}
+
+// resetExchangePath clears the path back to its short-path default — called at
+// the start of each new exchange.
+func (s *Service) resetExchangePath() {
+	s.txMu.Lock()
+	s.exchPath = ""
+	s.txMu.Unlock()
 }
 
 // AbandonQso drops any active sequenced QSO (operator action). Idempotent.

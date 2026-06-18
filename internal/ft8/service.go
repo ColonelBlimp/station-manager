@@ -104,6 +104,7 @@ type Service struct {
 	txMessage  string // message of the in-flight transmission ("" = none)
 	txOffsetHz float64
 	txLastErr  string // i18n code of the last failed transmission ("" = none)
+	exchPath   string // operator's antenna-path choice for the active exchange ("S"/"L"); logging-only
 	txDevice   txPlayer
 	txCtrl     *TxController
 	txCancel   context.CancelFunc
@@ -161,6 +162,11 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 	// s.qsoLogger at call time (set via SetQsoLogger before Start), so the
 	// daemon wires logging after construction.
 	s.seq.onComplete = func(c CompletedQso) {
+		// Stamp the operator's antenna-path choice (logging-only) onto the
+		// completed exchange just before the sink builds the QSO record. The
+		// sequencer is path-agnostic; the choice lives on the Service (set via
+		// the /v1/ft8/qso/path endpoint, defaulting to short per exchange).
+		c.AntPath = s.exchangePath()
 		if s.qsoLogger != nil {
 			s.qsoLogger(s.base(), c)
 		}

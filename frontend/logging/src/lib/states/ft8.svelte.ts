@@ -24,6 +24,7 @@
 
 import { configState } from './config.svelte';
 import { sessionQsosState } from './sessionQsos.svelte';
+import { ft8EnrichState } from './ft8Enrich.svelte';
 import { toasts } from './toasts.svelte';
 import { qsoDefaults } from './qsoDefaults.svelte';
 import { pathInfo } from '../utils/bearing';
@@ -433,6 +434,11 @@ function openSource(): void {
                 distanceKm: path ? String(Math.round(path.shortPathDistanceKm)) : '',
                 adif: '',
             });
+            // Gray the station out in Band Activity so it can't be accidentally
+            // re-worked. The worked-before cache is lookup-once per session and was
+            // populated (worked:false) before the contact, so without this it stays
+            // clickable until a band change.
+            ft8EnrichState.markWorked(call, band);
             // FT8 QSOs log daemon-side with no form to clear, so a toast is the only
             // visible "it's in the log" signal. Same setting + wording as the Phone/CW
             // logged-toast (qsoDefaults.notifyQsoStored) so one switch governs both.

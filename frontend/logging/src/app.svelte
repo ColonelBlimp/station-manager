@@ -8,6 +8,7 @@
     import { onMount } from 'svelte';
     import { isValidCallsign } from './lib/validators/callsign';
     import StackingDrawer from './lib/ui/cards/StackingDrawer.svelte';
+    import Ft8PileupDrawer from './lib/ui/panels/Ft8PileupDrawer.svelte';
     import Ft8EnrichDemo from './lib/ui/demo/Ft8EnrichDemo.svelte';
     import Ft8PileupDemo from './lib/ui/demo/Ft8PileupDemo.svelte';
 
@@ -159,6 +160,13 @@
     <main class="relative rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
         <LoggingCard />
         <StackingDrawer />
+        <!-- FT8 pile-up rail — twin of the Phone/CW Call Stack, hung off the same right
+             edge. Self-guards on a non-empty ft8PileupStack, so it shows only in FT8 mode
+             with queued callers (the two never coincide in practice — one operating mode
+             is used at a time). -->
+        <div class="absolute top-0 -right-37 z-10">
+            <Ft8PileupDrawer />
+        </div>
     </main>
 {/snippet}
 

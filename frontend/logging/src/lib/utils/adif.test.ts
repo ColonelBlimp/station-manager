@@ -320,6 +320,11 @@ describe('formatAdifRecord — operator station (MY_* / STATION_CALLSIGN)', () =
         expect(adif).toContain('<ANT_AZ:5>273.4');
     });
 
+    it('emits ANT_PATH when set', () => {
+        expect(formatAdifRecord({ ...baseFields, antPath: 'L' })).toContain('<ANT_PATH:1>L');
+        expect(formatAdifRecord({ ...baseFields, antPath: 'S' })).toContain('<ANT_PATH:1>S');
+    });
+
     it('omits all new MY_* fields when missing', () => {
         const adif = formatAdifRecord(baseFields);
         for (const tag of [
@@ -338,6 +343,7 @@ describe('formatAdifRecord — operator station (MY_* / STATION_CALLSIGN)', () =
             'MY_MORSE_KEY_TYPE',
             'MY_MORSE_KEY_INFO',
             'ANT_AZ',
+            'ANT_PATH',
         ]) {
             expect(adif).not.toContain(tag);
         }
@@ -376,6 +382,7 @@ describe('formatAdifRecord — full MY_* canonical record', () => {
             myMorseKeyType: 'PADDLE',
             myMorseKeyInfo: 'Begali Sculpture',
             antAz: '273.4',
+            antPath: 'S',
         });
 
         const expected = [
@@ -408,6 +415,7 @@ describe('formatAdifRecord — full MY_* canonical record', () => {
             '<MY_MORSE_KEY_TYPE:6>PADDLE',
             '<MY_MORSE_KEY_INFO:16>Begali Sculpture',
             '<ANT_AZ:5>273.4',
+            '<ANT_PATH:1>S',
             '<EOR>',
         ].join('\n');
 

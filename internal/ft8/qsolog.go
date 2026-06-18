@@ -54,6 +54,23 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	if c.HasTheirReport {
 		q.RstRcvd = strconv.Itoa(c.TheirReport)
 	}
+	// Antenna path (logging-only — the operator's short/long choice; FT8 messages
+	// carry no path info, so this never affects the on-air signal). ANT_PATH always
+	// records the chosen path; ANT_AZ + DISTANCE carry the matching great-circle
+	// bearing/distance when both grids resolve (else left unset — ANT_PATH alone is
+	// still valid ADIF). Bearing/distance math mirrors the SPA's bearing.ts so a
+	// daemon-logged FT8 QSO and an SPA-logged Phone/CW QSO agree.
+	if c.AntPath != "" {
+		q.AntPath = c.AntPath
+		if geo, ok := utils.GridPath(station.MyGridsquare, c.TheirGrid); ok {
+			bearing, dist := geo.ShortBearingDeg, geo.ShortDistanceKm
+			if c.AntPath == antPathLong {
+				bearing, dist = geo.LongBearingDeg, geo.LongDistanceKm
+			}
+			q.AntennaAzimuth = strconv.FormatFloat(bearing, 'f', 1, 64)
+			q.Distance = strconv.FormatFloat(dist, 'f', 0, 64)
+		}
+	}
 	return q
 }
 

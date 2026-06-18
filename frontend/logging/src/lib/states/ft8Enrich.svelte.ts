@@ -130,6 +130,27 @@ class Ft8EnrichState {
         });
     }
 
+    /**
+     * Mark a call as worked on a band+mode (dupe), so the Band Activity row grays
+     * out immediately. Called when an FT8 QSO is logged (the `ft8-logged` SSE):
+     * the lookup-once cache would otherwise hold the stale `worked: false` captured
+     * before the contact, leaving the station clickable and re-workable until a band
+     * change. Optimistic — the daemon's DB already has the QSO by the time the event
+     * fires, so this just spares a re-query and updates the tint without a slot's lag.
+     *
+     * Also (re-)kicks observe() so a station worked without ever appearing as a CQ
+     * row first (e.g. via the pile-up) still gets its flag resolved; the worked=true
+     * merge below wins over observe's own dupe result (which is also true now).
+     */
+    markWorked(call: string, band: string): void {
+        const c = call.trim().toUpperCase();
+        if (c === '' || band === '') return;
+        this.observe(c, band);
+        const key = cacheKey(c, band);
+        const prev = this.cache[key] ?? {};
+        this.cache = { ...this.cache, [key]: { ...prev, worked: true } };
+    }
+
     /** Drop all decorations. Called when the FT8 view closes so a re-open starts clean. */
     clear(): void {
         this.cache = {};

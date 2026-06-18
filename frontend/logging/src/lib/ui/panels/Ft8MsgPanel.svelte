@@ -1,7 +1,6 @@
 <script lang="ts">
     import { ft8State } from '../../states/ft8.svelte';
     import { ft8PileupStack } from '../../states/ft8PileupStack.svelte';
-    import Ft8PileupDrawer from './Ft8PileupDrawer.svelte';
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { catState } from '../../states/cat.svelte';
@@ -163,16 +162,6 @@
         }
     }
 
-    // Pile-up header × ("clear all & abandon"): clear the queue (the drawer
-    // auto-hides once empty) and abandon the run. If an exchange is in flight,
-    // onAbandon aborts it on the daemon (and pauses the drain); otherwise there's
-    // nothing to abort, so just halt the auto-drain before clearing.
-    async function onPileupClose(): Promise<void> {
-        if (canAbandon) await onAbandon();
-        else ft8PileupStack.pause();
-        ft8PileupStack.clear();
-    }
-
     async function toggleArm(): Promise<void> {
         if (arming) return;
         arming = true;
@@ -267,7 +256,3 @@
     </div>
     <div class="z-0 flex flex-col items-center -mt-7.5">{statusLine}</div>
 </div>
-<!-- Pile-up stack (ADR 0033 operator-curated FIFO): Ctrl+click callers in Band Activity
-     to enqueue; this drains them oldest-first via the work-a-caller path. Self-contained
-     (reads ft8PileupStack); shown only when non-empty. -->
-<Ft8PileupDrawer onClose={onPileupClose} />

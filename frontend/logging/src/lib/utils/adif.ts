@@ -125,8 +125,13 @@ export interface AdifQsoFields {
     /** ADIF MY_MORSE_KEY_INFO — free-form. */
     myMorseKeyInfo?: string;
 
-    /** ADIF ANT_AZ — short-path bearing, computed per QSO from MY_LAT/MY_LON. */
+    /** ADIF ANT_AZ — bearing for the operator's selected path, computed per QSO
+     *  from MY_LAT/MY_LON + the contacted grid. */
     antAz?: string;
+
+    /** ADIF ANT_PATH — the operator's antenna-path choice: "S" (short) or "L"
+     *  (long). Paired with antAz so the recorded bearing and path agree. */
+    antPath?: string;
 
     // Contacted-station enrichment, captured at submit from the values the
     // Country/Details panels resolved (enrichment already ran on Tab — these
@@ -292,6 +297,9 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     }
     if (f.antAz && f.antAz.length > 0) {
         lines.push(adifTag('ANT_AZ', f.antAz));
+    }
+    if (f.antPath && f.antPath.length > 0) {
+        lines.push(adifTag('ANT_PATH', f.antPath));
     }
 
     // Contacted-station enrichment (Country / Details panels). The daemon

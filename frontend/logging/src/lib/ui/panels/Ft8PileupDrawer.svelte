@@ -1,5 +1,8 @@
 <script lang="ts">
     import { ft8PileupStack } from '../../states/ft8PileupStack.svelte';
+    import { ft8State } from '../../states/ft8.svelte';
+    import { abandonFt8Qso } from '../../api/ft8qso';
+    import { toasts } from '../../states/toasts.svelte';
 
     /*
         FT8 pile-up drawer — the operator-curated FIFO of stations calling you,
@@ -9,34 +12,45 @@
         dequeued on start and shown in the ladder/banner; this list is "up next".
 
         Deliberately a visual + operational twin of the Phone/CW StackingDrawer so the
-        operator recognises the widget on sight and knows how to drive it:
+        operator recognises the widget on sight and knows how to drive it: it hangs off
+        the right edge of the logging card (mounted alongside StackingDrawer in app.svelte),
+        always visible (when non-empty) regardless of which FT8 sub-tab is open.
           - data-driven visibility — hidden until non-empty, auto-closes when emptied;
           - per-row × removes that one caller (discard);
-          - header × clears all + closes — AND abandons the run (see onClose).
+          - header × clears all + closes — AND abandons the run (see handleClose).
         The one mechanics difference: the FT8 daemon auto-drains the queue, so clicking
         a row here is a NO-OP (nothing to "load") — whereas a Phone/CW row click pops the
         call into the QSO draft. Grid/SNR are captured in each entry but not displayed;
         the list is a compact callsign roster.
 
-        onClose is the header-× handler, injected by the parent (Ft8MsgPanel), so this
-        component stays presentational and doesn't reach for the lib/api abandon call
-        itself. It clears the queue, closes the drawer (clear → auto-hide), and abandons
-        the active exchange. Standalone/demo mounts omit it and fall back to a plain
-        clear (no daemon to abandon).
+        Self-contained (like StackingDrawer) because it's mounted at the card level, not
+        inside the Operate-tab Ft8MsgPanel — so it can't borrow that panel's abandon
+        handler. The header × clears the queue (→ auto-hide) and, when an exchange is
+        actually in flight (armed + active), aborts it on the daemon. With no active
+        exchange (incl. the ?pileupdemo mount, where ft8State stays idle) it just halts
+        the drain + clears — no daemon call.
     */
-    let { onClose }: { onClose?: () => void | Promise<void> } = $props();
+    const canAbandon = $derived(ft8State.tx.armed && ft8State.qso.active);
+    let closing = $state(false);
 
-    function handleClose(): void {
-        if (onClose) {
-            void onClose();
-            return;
+    async function handleClose(): Promise<void> {
+        if (closing) return;
+        closing = true;
+        try {
+            if (canAbandon) {
+                const out = await abandonFt8Qso();
+                if (out.kind !== 'ok') toasts.error(out.message);
+            }
+            ft8PileupStack.pause();
+            ft8PileupStack.clear();
+        } finally {
+            closing = false;
         }
-        ft8PileupStack.clear();
     }
 </script>
 
 {#if ft8PileupStack.items.length > 0}
-    <div class="mt-2 w-33 max-h-60 overflow-y-auto rounded-xl border border-line-soft px-3">
+    <div class="w-33 max-h-166 overflow-y-auto rounded-xl border border-line-soft px-3">
         <div class="flex flex-row items-center justify-between">
             <h2 class="mt-2.5 text-xs font-semibold uppercase tracking-tight text-orange-600">
                 Pile-up ({ft8PileupStack.count}){#if !ft8PileupStack.enabled}&nbsp;· paused{/if}

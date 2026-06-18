@@ -128,6 +128,18 @@ export function startFt8WorkCaller(
     );
 }
 
+/** Set the operator's antenna-path choice for the active exchange — 'short' or
+ *  'long'. Logging-only: it annotates the logged QSO (ADIF ANT_PATH + the matching
+ *  bearing/distance) and never affects the on-air signal. Mirrors the Phone/CW
+ *  short/long radio, but FT8 QSOs are built daemon-side, so the choice is POSTed
+ *  here rather than carried on a SPA submit. The daemon resets to short per exchange. */
+export function setFt8QsoPath(
+    path: 'short' | 'long',
+    signal?: AbortSignal
+): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/qso/path', { path: path === 'long' ? 'L' : 'S' }, signal);
+}
+
 /** Abandon any active sequenced session — answer-a-CQ or Call-CQ. */
 export function abandonFt8Qso(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
     return postFt8Qso('/v1/ft8/qso/abandon', {}, signal);

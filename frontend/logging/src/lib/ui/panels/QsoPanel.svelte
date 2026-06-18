@@ -406,6 +406,12 @@
                 // empty so the record is clean rather than carrying a
                 // fabricated zero.
                 antAz: enrichBearing || undefined,
+                // ANT_PATH — the operator's short/long choice (Country panel radio,
+                // default short). Stamped on every QSO regardless of mode (this is the
+                // shared submit for all Phone/CW modes) and independent of enrichment —
+                // the path flag needs no grid, unlike the ANT_AZ bearing above. Matches
+                // the FT8 path-stamping so both logging paths record ANT_PATH the same way.
+                antPath: enrichmentState.path === 'long' ? 'L' : 'S',
                 // Contacted-station enrichment — capture what the Country/Details
                 // panels resolved so the logged QSO (and its QRZ/ClubLog upload +
                 // ADIF export) carries the entity, zones, DXCC and grid instead of

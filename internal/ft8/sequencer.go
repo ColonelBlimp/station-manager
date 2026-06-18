@@ -116,6 +116,13 @@ type CompletedQso struct {
 	// reads it from the live rig state). The logged QSO frequency is this plus
 	// the audio offset; the band is derived from the sum.
 	DialFreqMHz float64
+	// AntPath is the operator's antenna-path choice for this contact, "S" (short)
+	// or "L" (long), used only to annotate the logged QSO (ADIF ANT_PATH + the
+	// short/long bearing+distance). It is NOT part of the on-air exchange — FT8
+	// messages carry no path info. The sequencer doesn't set it; the Service
+	// stamps the current exchange path onto the CompletedQso just before handing
+	// it to the logger (see Service.onComplete). Empty = unset (defaults to short).
+	AntPath string
 }
 
 // Sequencer owns the (single) active session — answering a CQ or calling CQ, never
