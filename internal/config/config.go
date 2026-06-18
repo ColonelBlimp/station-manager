@@ -118,6 +118,13 @@ type Config struct {
 	// the wire (ConfigResponse.Station) and on disk (config.json).
 	Station types.StationConfig `json:"station"`
 
+	// Qsl holds the operator's standing outgoing-QSL defaults (QSL_VIA, QSLMSG,
+	// QSL_SENT_VIA). Stamped onto a logged QSO when the per-QSO field is empty,
+	// across all modes (SPA for Phone/CW, e4 sink for FT8). Empty fields are
+	// omitted, so an unset default never adds an empty ADIF tag. Reuses
+	// types.QslDefaults per the canonical-DTO idiom (same struct on wire + disk).
+	Qsl types.QslDefaults `json:"qsl"`
+
 	// Lookup holds the enrichment pipeline configuration per ADR 0017
 	// — hamnut (country source-of-truth), the callsign-class provider
 	// chain, per-table staleness TTLs, and the bound on the async-

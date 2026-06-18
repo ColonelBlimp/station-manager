@@ -127,6 +127,16 @@ secretly are) rig-specific.
 params — **declared but NOT yet wired**; `ActiveBridge()` does not apply them). This is
 the per-rig home that the rig-specific fields above *should* live in but mostly don't yet.
 
+### `QslDefaults` (`internal/types/qsl.go`, config key `qsl`)
+
+Operator's standing outgoing-QSL defaults: `qsl_via` (QSL route/manager), `qslmsg`
+(standing card/upload message), `qsl_sent_via` (default send method B/D/E/M). A SUBSET
+of `types.Qsl` — the per-QSO confirmation status fields are deliberately excluded
+(per-contact, not config). Stamped onto a logged QSO **only when the field is empty**
+(per-QSO value wins) and **only when the default is non-empty** (`QslDefaults.ApplyTo`),
+so an unset default never adds an empty ADIF tag. Applied across modes: the e4 sink for
+FT8, the SPA at submit for Phone/CW. Writable via `PUT /v1/config` (presence-aware).
+
 ### Other blocks (all global, config.json-authoritative, read at start)
 
 `StationConfig`, `LoggingStation` (ADIF `MY_*`), `ForwarderConfig` (+`RetryConfig`),

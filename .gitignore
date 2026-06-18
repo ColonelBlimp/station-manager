@@ -41,3 +41,4 @@ frontend/logbook/dist/*
 config.json
 /db
 /log
+/.claude/commands/log.md

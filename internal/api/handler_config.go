@@ -39,8 +39,13 @@ type ConfigResponse struct {
 	DefaultLogbook types.Logbook        `json:"default_logbook"`
 	DefaultRig     types.RigConfig      `json:"default_rig"`
 	Station        types.StationConfig  `json:"station"`
-	Bridge         BridgeInfo           `json:"bridge"`
-	Mailer         MailerInfo           `json:"mailer"`
+	// Qsl is the operator's standing outgoing-QSL defaults (QSL_VIA / QSLMSG /
+	// QSL_SENT_VIA). Like Ft8Display it is **presence-aware** on PUT — a body that
+	// omits it leaves the stored block untouched; one that includes it replaces it
+	// — so a My Station save can't accidentally wipe it. Always populated on GET.
+	Qsl    *types.QslDefaults `json:"qsl,omitempty"`
+	Bridge BridgeInfo         `json:"bridge"`
+	Mailer MailerInfo         `json:"mailer"`
 	// Ft8Display is the FT8 Band Activity display preferences (row cap, feed
 	// mode, CQ highlight colours) — operator-writable, unlike the read-only
 	// Bridge/Mailer projections. On GET it is always populated with the resolved
@@ -171,6 +176,11 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// resolution (clamp colours/cap, default feed_mode) happens after validation.
 	if req.Ft8Display != nil {
 		candidate.Ft8.Display = req.Ft8Display
+	}
+	// QSL defaults — presence-aware, same rationale as ft8_display: a My Station
+	// save omits `qsl` and must leave it alone.
+	if req.Qsl != nil {
+		candidate.Qsl = *req.Qsl
 	}
 	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
 	// defaults so only operator deviations persist, stored on the active rig
@@ -366,6 +376,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 			DefaultRecipient: s.mailer.DefaultRecipient(),
 		},
 	}
+
+	// QSL defaults — served as-is (empty fields just omit). Copied to a local so
+	// the response carries a pointer that doesn't alias the snapshot.
+	qsl := cfg.Qsl
+	resp.Qsl = &qsl
 
 	// FT8 display prefs, always resolved (defaults filled) so a fresh config
 	// still yields sensible values for the SPA's Settings tab.
