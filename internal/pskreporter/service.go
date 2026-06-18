@@ -61,8 +61,9 @@ type Service struct {
 	lastTpl time.Time       // last time descriptors were included
 	conn    *net.UDPConn
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	flushNow chan struct{} // wakes the flush loop when the buffer fills (off the caller's goroutine)
 }
 
 // New builds the service. recv is the receiver identity (from the station config);
@@ -77,7 +78,7 @@ func New(cfg Config, recv Receiver, log logging.Logger) *Service {
 	if cfg.Port == 0 {
 		cfg.Port = DefaultPort
 	}
-	return &Service{cfg: cfg, log: log, recv: recv, buf: make(map[string]Spot)}
+	return &Service{cfg: cfg, log: log, recv: recv, buf: make(map[string]Spot), flushNow: make(chan struct{}, 1)}
 }
 
 // SetReceiver updates the receiver identity (e.g. after a config change).
@@ -87,21 +88,32 @@ func (s *Service) SetReceiver(r Receiver) {
 	s.mu.Unlock()
 }
 
-// AddSpot buffers a reception report. No-op when disabled or the call is blank.
-// Dedups within the flush window — the strongest SNR per call wins (the spec wants
-// each call at most once per ~5 min). Flushes immediately if the buffer fills.
+// AddSpot buffers a reception report. No-op when disabled, the call is blank, or the
+// service isn't live (not started / start failed / stopped — so the buffer can't
+// grow unbounded with nowhere to flush). Dedups within the flush window — the
+// strongest SNR per call wins (the spec wants each call at most once per ~5 min).
+// When the buffer fills it WAKES the flush loop rather than sending inline: this can
+// be called on the FT8 decode goroutine, and UDP I/O must never block decoding.
 func (s *Service) AddSpot(spot Spot) {
 	if !s.cfg.Enabled || strings.TrimSpace(spot.Call) == "" {
 		return
 	}
 	s.mu.Lock()
+	if s.conn == nil { // not live — drop (best-effort)
+		s.mu.Unlock()
+		return
+	}
 	if cur, ok := s.buf[spot.Call]; !ok || spot.SNR > cur.SNR {
 		s.buf[spot.Call] = spot
 	}
 	full := len(s.buf) >= maxBufferedRows
 	s.mu.Unlock()
 	if full {
-		s.flush()
+		// Non-blocking wake; a pending signal already covers this.
+		select {
+		case s.flushNow <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -152,9 +164,11 @@ func (s *Service) Stop() error {
 	return nil
 }
 
-// flushLoop sends buffered spots on a ~5 min cadence. The interval is timer-based
-// (program-relative, NOT synced to the system clock) plus jitter, per the spec, so
-// many stations don't all report on the same second.
+// flushLoop sends buffered spots on a ~5 min cadence, or early when AddSpot signals
+// a full buffer (the "unless the packet becomes full" exception). The interval is
+// timer-based (program-relative, NOT synced to the system clock) plus jitter, per
+// the spec, so many stations don't all report on the same second. All UDP I/O
+// happens here (or in Stop's final flush), never on a caller's goroutine.
 func (s *Service) flushLoop(ctx context.Context) {
 	for {
 		jitter := time.Duration(rand.Int64N(int64(maxJitter)))
@@ -162,6 +176,8 @@ func (s *Service) flushLoop(ctx context.Context) {
 		case <-ctx.Done():
 			s.flush() // best-effort final flush on shutdown
 			return
+		case <-s.flushNow:
+			s.flush() // buffer filled — drain it now (off the decode goroutine)
 		case <-time.After(flushInterval + jitter):
 			s.flush()
 		}

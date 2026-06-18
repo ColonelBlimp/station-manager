@@ -77,3 +77,19 @@ func TestService_DisabledIsNoop(t *testing.T) {
 	}
 	_ = s.Stop()
 }
+
+// TestService_AddSpotBeforeStartDrops guards against unbounded buffer growth when
+// the service isn't live (Start not called, or it failed): with no socket to flush
+// to, AddSpot must drop rather than accumulate.
+func TestService_AddSpotBeforeStartDrops(t *testing.T) {
+	s := New(Config{Enabled: true, Host: "127.0.0.1", Port: 9}, Receiver{Call: "G0XYZ"}, nil)
+	for i := 0; i < 200; i++ {
+		s.AddSpot(Spot{Call: "VK3ABC", SNR: -5, Mode: "FT8"})
+	}
+	s.mu.Lock()
+	n := len(s.buf)
+	s.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("AddSpot before Start buffered %d spots, want 0 (no socket to flush to)", n)
+	}
+}

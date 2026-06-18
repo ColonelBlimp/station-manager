@@ -30,15 +30,18 @@ func TestAppendVarStr(t *testing.T) {
 	}
 }
 
-// TestReceiverTemplate_MatchesSpec reproduces the spec's 3-field receiver options
-// template descriptor byte-for-byte (the antenna-less form).
+// TestReceiverTemplate_MatchesSpec reproduces the spec's 4-field receiver options
+// template descriptor (callsign, locator, decoderSoftware, antennaInformation)
+// byte-for-byte. We always emit the 4-field shape so the cached template can't
+// desync when antenna is added/removed at runtime.
 func TestReceiverTemplate_MatchesSpec(t *testing.T) {
-	want := hexb(t, `00 03 00 24 99 92 00 03 00 01
+	want := hexb(t, `00 03 00 2C 99 92 00 04 00 01
 		80 02 FF FF 00 00 76 8F
 		80 04 FF FF 00 00 76 8F
 		80 08 FF FF 00 00 76 8F
+		80 09 FF FF 00 00 76 8F
 		00 00`)
-	got := encodeTemplate(rxTemplateID, 1, receiverFields(false))
+	got := encodeTemplate(rxTemplateID, 1, receiverFields())
 	if !bytes.Equal(got, want) {
 		t.Fatalf("receiver template\n got % X\nwant % X", got, want)
 	}
@@ -64,7 +67,10 @@ func TestSenderTemplate_MatchesSpec(t *testing.T) {
 }
 
 // TestReceiverRecord_MatchesSpec reproduces the spec's worked-example receiver
-// record (N1DQ / FN42hn / "Homebrew v5.6"), including the trailing 4-byte pad.
+// record (N1DQ / FN42hn / "Homebrew v5.6") byte-for-byte. With no antenna the now-
+// always-present antennaInformation is a length-0 field whose 0x00 byte coincides
+// with what was previously padding — so the encoded bytes are identical to the
+// spec's 3-field example, even though we now use the fixed 4-field template.
 func TestReceiverRecord_MatchesSpec(t *testing.T) {
 	want := hexb(t, `99 92 00 20
 		04 4E 31 44 51

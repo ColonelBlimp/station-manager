@@ -98,18 +98,19 @@ var senderFields = []tField{
 	{id: fidFlowStartSeconds, length: 4, std: true},
 }
 
-// receiverFields returns the receiver template, with antennaInformation appended
-// when the operator configured an antenna string.
-func receiverFields(withAntenna bool) []tField {
-	f := []tField{
+// receiverFields returns the receiver template. antennaInformation is ALWAYS one of
+// the four fields (sent as an empty string when unset), so the template shape is
+// invariant — the field count never changes with config. Descriptors ride only the
+// first few datagrams + hourly, so a fixed shape is what lets a runtime SetReceiver
+// (antenna added/removed) stay consistent with the cached template ID. Mirrors the
+// always-richest sender template.
+func receiverFields() []tField {
+	return []tField{
 		{id: fidReceiverCallsign, length: varLength},
 		{id: fidReceiverLocator, length: varLength},
 		{id: fidDecoderSoftware, length: varLength},
+		{id: fidAntenna, length: varLength},
 	}
-	if withAntenna {
-		f = append(f, tField{id: fidAntenna, length: varLength})
-	}
-	return f
 }
 
 // encodeTemplate builds a descriptor set. optionsScope > 0 → an options template
@@ -154,16 +155,16 @@ func appendVarStr(b []byte, s string) []byte {
 	return append(b, s...)
 }
 
-// encodeReceiverRecord builds the receiver-info data block (link id 0x9992). Its
-// fields MUST match the receiver template chosen (3 fields, or 4 with antenna).
+// encodeReceiverRecord builds the receiver-info data block (link id 0x9992). The
+// four fields always match the fixed 4-field receiver template; antenna is sent as
+// an empty string when unset (a length-0 field — for the no-antenna case this byte
+// coincides with what would otherwise be padding, so the bytes are unchanged).
 func encodeReceiverRecord(r Receiver) []byte {
 	var rec []byte
 	rec = appendVarStr(rec, r.Call)
 	rec = appendVarStr(rec, r.Locator)
 	rec = appendVarStr(rec, r.Software)
-	if r.Antenna != "" {
-		rec = appendVarStr(rec, r.Antenna)
-	}
+	rec = appendVarStr(rec, r.Antenna)
 	return wrapSet(rxTemplateID, rec)
 }
 
@@ -192,7 +193,7 @@ func encodeSenderRecords(spots []Spot) []byte {
 func encodeDatagram(timeUnix, seq, id uint32, includeTemplates bool, r Receiver, spots []Spot) []byte {
 	var body []byte
 	if includeTemplates {
-		body = append(body, encodeTemplate(rxTemplateID, 1, receiverFields(r.Antenna != ""))...)
+		body = append(body, encodeTemplate(rxTemplateID, 1, receiverFields())...)
 		body = append(body, encodeTemplate(txTemplateID, 0, senderFields)...)
 	}
 	body = append(body, encodeReceiverRecord(r)...)

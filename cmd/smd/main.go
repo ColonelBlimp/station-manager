@@ -595,9 +595,11 @@ func run() error {
 	if err := ft8Svc.Start(workerCtx); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("start ft8")
 	}
-	// Start the PSK Reporter uploader (no-op + no socket when disabled).
+	// Start the PSK Reporter uploader (no-op + no socket when disabled). Best-effort:
+	// a resolve/dial failure (DNS outage, typo'd host, bad port) must NOT stop the
+	// daemon for an optional reporting path — log and continue without uploads.
 	if err := pskSvc.Start(workerCtx); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("start pskreporter")
+		loggerSvc.WarnWith().Err(err).Msg("pskreporter: start failed; FT8 spot upload disabled")
 	}
 	defer func() { _ = pskSvc.Stop() }()
 	// Idempotent Stop (sync.Once); the explicit shutdown call below turns
