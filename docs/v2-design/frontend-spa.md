@@ -97,6 +97,38 @@ SPA, `GET /config/` → config SPA (correct `/config/assets/*` refs), `GET /conf
 → 307 → `/config/`, `GET /config/assets/index.js` → 200 js, `GET /config/rigs` →
 config index.html (fallback), `GET /v1/healthz` → 200 (API unaffected).
 
+## Logbook SPA scaffold landed — 2026-06-18
+
+The **logbook client** is the third embedded SPA, scaffolded as a separate
+sibling project at `frontend/logbook/` (same rationale as the config SPA — a
+distinct project, not a route inside `frontend/logging/`). It is a **blank page**
+today (`app.svelte` is just a title heading); the actual logbook-management UX
+(QSL-awaiting view, edit-history viewer, logbook search — see the
+logging-vs-logbook scope note) is future work and gets its own design pass before
+any Svelte. The scaffold exists so the embed wiring, route, and CI gate are in
+place for that work to build on.
+
+**Serving — `/logbook/` sub-path, same origin.** Identical shape to the config
+SPA:
+
+- Vite `base: '/logbook/'` so the built `index.html` references
+  `/logbook/assets/index.{js,css}`.
+- `internal/api/server.go` registers `GET /logbook/` →
+  `http.StripPrefix("/logbook", spaHandler(frontend.LogbookFS()))`, behind the
+  same `tcp && ServeSPA` gate. Subtree pattern → ServeMux redirects bare
+  `/logbook` to `/logbook/`; the shared `spaHandler` does bundle resolution +
+  SPA-fallback.
+- `frontend/embed.go` gains `//go:embed all:logbook/dist` + `LogbookFS()`.
+
+**Build wiring.** `frontend:logbook:{install,dev,build}` Taskfile entries; dev
+server on **:5175** (alongside logging's :5173 and config's :5174).
+`frontend:build:all` now builds all three SPAs (logging + config + logbook), so
+the `build:smd*` daemon builds embed fresh bundles for every client. CI gained a
+logbook install→lint→type-check→test→build gate and the npm cache keys on all
+three lockfiles. `.gitignore` mirrors the logging/config rule (committed
+`dist/index.html`, gitignored assets). `internal/api/spa_test.go` gains a
+`LogbookFS()` embed smoke test guarding the committed placeholder.
+
 ## Config SPA — rig-profiles editor (design, 2026-06-14)
 
 The config SPA's purpose is a **parking place for set-once config** that is UI

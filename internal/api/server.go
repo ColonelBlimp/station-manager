@@ -250,6 +250,9 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// 301-redirects a bare "/config" to "/config/". This more-specific
 		// pattern takes priority over the "/" catch-all below.
 		mux.Handle("GET /config/", http.StripPrefix("/config", spaHandler(frontend.ConfigFS())))
+		// Logbook SPA at the /logbook/ sub-path — same StripPrefix +
+		// subtree-redirect rationale as the config SPA above.
+		mux.Handle("GET /logbook/", http.StripPrefix("/logbook", spaHandler(frontend.LogbookFS())))
 		mux.Handle("GET /", spaHandler(frontend.LoggingFS()))
 	}
 

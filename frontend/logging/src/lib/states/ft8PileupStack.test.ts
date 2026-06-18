@@ -40,6 +40,15 @@ describe('ft8PileupStack', () => {
         expect(ft8PileupStack.peek()).toMatchObject({ call: 'K1ABC', snr: -3, grid: 'FN42' });
     });
 
+    it('push reports whether the entry was new (true) or refreshed/empty (false)', () => {
+        // The Ctrl+click handler relies on this to resume the drain ONLY for a
+        // genuinely new caller — a re-click of a queued station must not un-pause.
+        expect(ft8PileupStack.push(entry('K1ABC'))).toBe(true); // new → appended
+        expect(ft8PileupStack.push(entry('k1abc', -3))).toBe(false); // dedup → refreshed
+        expect(ft8PileupStack.push(entry('   '))).toBe(false); // empty → no-op
+        expect(ft8PileupStack.push(entry('9A4ZM'))).toBe(true); // another new caller
+    });
+
     it('dequeue pops the head (oldest)', () => {
         ft8PileupStack.push(entry('K1ABC'));
         ft8PileupStack.push(entry('9A4ZM'));

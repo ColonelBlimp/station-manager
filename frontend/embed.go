@@ -33,6 +33,15 @@ var loggingSPA embed.FS
 //go:embed all:config/dist
 var configSPA embed.FS
 
+// logbookSPA holds the built logbook SPA's static assets — the
+// logbook-management client (QSL-awaiting view, edit-history viewer,
+// logbook search), served by the daemon under the /logbook/ sub-path
+// while the logging SPA owns the root. Same `all:` rationale as
+// loggingSPA.
+//
+//go:embed all:logbook/dist
+var logbookSPA embed.FS
+
 // LoggingFS returns the logging SPA's filesystem rooted at the dist/
 // directory so http.FileServer treats index.html as the root document.
 //
@@ -59,6 +68,17 @@ func ConfigFS() fs.FS {
 	sub, err := fs.Sub(configSPA, "config/dist")
 	if err != nil {
 		panic("frontend: fs.Sub on embedded configSPA failed: " + err.Error())
+	}
+	return sub
+}
+
+// LogbookFS returns the logbook SPA's filesystem rooted at its dist/
+// directory. Same infallible-at-runtime contract as LoggingFS — the
+// embed directive guarantees the path at compile time.
+func LogbookFS() fs.FS {
+	sub, err := fs.Sub(logbookSPA, "logbook/dist")
+	if err != nil {
+		panic("frontend: fs.Sub on embedded logbookSPA failed: " + err.Error())
 	}
 	return sub
 }

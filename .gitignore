@@ -28,6 +28,11 @@ frontend/logging/dist/*
 frontend/config/node_modules/
 frontend/config/dist/*
 !frontend/config/dist/index.html
+# Logbook SPA — same rule as logging: node_modules untracked, dist/ built by
+# Vite, dist/index.html committed so `//go:embed all:logbook/dist` compiles.
+frontend/logbook/node_modules/
+frontend/logbook/dist/*
+!frontend/logbook/dist/index.html
 # Stray repo-root node_modules (e.g. vitest cache left behind by running
 # from the wrong cwd) — Go project, never legitimate here.
 /node_modules/

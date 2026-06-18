@@ -9,12 +9,19 @@
     import { isValidCallsign } from './lib/validators/callsign';
     import StackingDrawer from './lib/ui/cards/StackingDrawer.svelte';
     import Ft8EnrichDemo from './lib/ui/demo/Ft8EnrichDemo.svelte';
+    import Ft8PileupDemo from './lib/ui/demo/Ft8PileupDemo.svelte';
 
-    // ?ft8demo renders a standalone layout playground for the FT8 enrichment box
-    // and short-circuits the whole app (no config fetch, no daemon needed). Dev
-    // affordance only — the gate is a static URL check at module init.
-    const ft8Demo =
-        typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('ft8demo');
+    // ?ft8demo / ?pileupdemo render standalone layout playgrounds (the FT8
+    // enrichment box, the FT8 pile-up drawer) and short-circuit the whole app
+    // (no config fetch, no daemon needed). Dev affordance only — the gate is a
+    // static URL check at module init.
+    const params =
+        typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search)
+            : new URLSearchParams();
+    const ft8Demo = params.has('ft8demo');
+    const pileupDemo = params.has('pileupdemo');
+    const anyDemo = ft8Demo || pileupDemo;
 
     // Local form state for the setup card. Lives here (not in
     // configState) because configState mirrors the DAEMON's view —
@@ -89,7 +96,7 @@
     // opens/closes the EventSource accordingly — no-op while CAT is
     // disabled, automatic open when the operator toggles CAT on.
     onMount(async (): Promise<void> => {
-        if (ft8Demo) return; // playground: no daemon, no config fetch
+        if (anyDemo) return; // playground: no daemon, no config fetch
         const outcome = await fetchConfig();
         switch (outcome.kind) {
             case 'ok':
@@ -126,6 +133,8 @@
 -->
 {#if ft8Demo}
     <Ft8EnrichDemo />
+{:else if pileupDemo}
+    <Ft8PileupDemo />
 {:else if configState.loaded}
     {#if !configState.setupComplete}
         {@render setup()}

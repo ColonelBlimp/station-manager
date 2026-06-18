@@ -73,9 +73,27 @@ tasks:
     cmds:
       - npm run build
 
+  frontend:logbook:install:
+    desc: Install logbook-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
+    dir: frontend/logbook
+    cmds:
+      - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
+
+  frontend:logbook:dev:
+    desc: Run the logbook SPA Vite dev server with HMR on :5175 (proxies /v1/* to daemon on :8080; runs alongside frontend:dev)
+    dir: frontend/logbook
+    cmds:
+      - npm run dev
+
+  frontend:logbook:build:
+    desc: Production build of the logbook SPA (consumed by go:embed)
+    dir: frontend/logbook
+    cmds:
+      - npm run build
+
   frontend:build:all:
-    desc: Build every embedded SPA (logging + config). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
-    deps: [frontend:build, frontend:config:build]
+    desc: Build every embedded SPA (logging + config + logbook). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
+    deps: [frontend:build, frontend:config:build, frontend:logbook:build]
 
   build:smd:
     desc: |

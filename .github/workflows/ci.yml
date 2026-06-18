@@ -56,6 +56,7 @@ jobs:
           cache-dependency-path: |
             frontend/logging/package-lock.json
             frontend/config/package-lock.json
+            frontend/logbook/package-lock.json
 
       # ─── SPA gate ───────────────────────────────────────────────
       # Run SPA-side checks BEFORE the Go build so the daemon embed
@@ -104,6 +105,30 @@ jobs:
 
       - name: Config SPA build (produces dist/ for daemon embed)
         working-directory: frontend/config
+        run: npm run build
+
+      # ─── Logbook SPA gate ───────────────────────────────────────
+      # The logbook client (frontend/logbook/) is a separate embedded SPA
+      # served at /logbook/. Same lint → type-check → test → build order.
+
+      - name: Logbook SPA install
+        working-directory: frontend/logbook
+        run: npm ci
+
+      - name: Logbook SPA lint
+        working-directory: frontend/logbook
+        run: npm run lint
+
+      - name: Logbook SPA type-check
+        working-directory: frontend/logbook
+        run: npx svelte-check --fail-on-warnings
+
+      - name: Logbook SPA tests
+        working-directory: frontend/logbook
+        run: npx vitest run
+
+      - name: Logbook SPA build (produces dist/ for daemon embed)
+        working-directory: frontend/logbook
         run: npm run build
 
       # ─── Go gate ────────────────────────────────────────────────

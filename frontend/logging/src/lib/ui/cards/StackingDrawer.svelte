@@ -48,14 +48,23 @@
         </div>
         <ul class="flex flex-col gap-1 -mt-2">
             {#each callsignStack.items as call, index (call)}
-                <li class="flex items-center">
+                <li class="flex items-center gap-1">
                     <button
                         type="button"
-                        class="w-full text-left px-2 py-1 rounded font-mono text-sm hover:bg-gray-100 cursor-pointer"
+                        class="flex-1 truncate text-left px-2 py-1 rounded font-mono text-sm hover:bg-gray-100 cursor-pointer"
                         title="Load {call} (pop from stack)"
                         onclick={() => pop(index)}
                     >
                         {call}
+                    </button>
+                    <button
+                        type="button"
+                        class="cursor-pointer px-1 leading-none text-gray-400 hover:text-red-600"
+                        aria-label={`Remove ${call} from the stack`}
+                        title="Remove"
+                        onclick={() => callsignStack.removeAt(index)}
+                    >
+                        <span aria-hidden="true">×</span>
                     </button>
                 </li>
             {/each}

@@ -213,9 +213,16 @@
     function enqueueCaller(d: DecodeEntry): void {
         const toMe = parseDirectedToMe(d.text, myCall);
         if (!toMe) return;
-        ft8PileupStack.push({ call: toMe.call, grid: toMe.grid, snr: d.snr, slotUtc: d.startUtc });
-        // A fresh capture re-enables draining (an Abandon earlier paused it).
-        ft8PileupStack.resume();
+        const added = ft8PileupStack.push({
+            call: toMe.call,
+            grid: toMe.grid,
+            snr: d.snr,
+            slotUtc: d.startUtc,
+        });
+        // Only a genuinely NEW caller re-enables draining (an Abandon earlier paused it).
+        // Re-clicking an already-queued station just refreshes its data and must NOT
+        // silently un-pause — the operator who hit Abandon stays in control.
+        if (added) ft8PileupStack.resume();
     }
     function onCallerClick(e: MouseEvent, d: DecodeEntry): void {
         if (e.ctrlKey || e.metaKey) {

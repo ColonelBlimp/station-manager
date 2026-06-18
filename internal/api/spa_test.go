@@ -29,6 +29,26 @@ func TestSpaHandler_ServesIndexAtRoot(t *testing.T) {
 	}
 }
 
+// TestSpaHandler_ServesLogbookIndex confirms the logbook SPA's embedded
+// index.html is reachable through its filesystem. Guards the committed
+// dist/index.html placeholder against being stripped from git (which
+// would break the //go:embed all:logbook/dist directive at build time
+// and 404 the SPA at runtime).
+func TestSpaHandler_ServesLogbookIndex(t *testing.T) {
+	h := spaHandler(frontend.LogbookFS())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Logbook") {
+		t.Fatalf("body missing expected logbook SPA marker; got: %s", rec.Body.String())
+	}
+}
+
 // TestSpaHandler_FallsBackToIndexForUnknownPaths confirms client-side
 // router paths like /log or /logbook return index.html instead of 404,
 // which is the load-bearing behaviour for SPA refresh-on-deep-link.

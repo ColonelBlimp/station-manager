@@ -208,11 +208,34 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   row already stacked), so you grab callers the instant you see them in your RX slot and
   the SPA works them when it can. The Operate view **drains** the stack via the
   work-a-caller path whenever the rig is armed + idle, advancing as each contact
-  completes, while you keep adding. **Abandon pauses** the drain (queue kept; Resume on
-  the drawer); the drawer (Operate tab, depth badge on the tab) lists the waiting callers
-  with per-entry remove + Clear-all. SPA-only (daemon untouched); in-memory (erased on
+  completes, while you keep adding. SPA-only (daemon untouched); in-memory (erased on
   tab/browser close, like the Phone/CW `callsignStack`). This is the realised
   operator-pick experience and **supersedes** the daemon `operator_pick` Call-CQ mode.
+
+  *The drawer* (Operate tab; depth badge on the tab) is a deliberate twin of the
+  Phone/CW Call Stack so it operates the same on sight. It **auto-hides when empty** —
+  it isn't shown until a caller is queued, and disappears once the queue drains or is
+  cleared. Per-row **×** removes that one caller; the header **×** ("Clear all &
+  abandon") clears the queue *and* abandons the run (aborts the active exchange if one
+  is in flight). Clicking a row **does nothing** — unlike the Phone/CW stack (where a
+  click loads the call into the QSO draft), the FT8 daemon auto-drains the queue for
+  you, so there's nothing to "load." Grid/SNR are captured per entry but not displayed.
+
+  **Re-clicking a station already on the stack is harmless.** The push de-dups by
+  callsign: it **refreshes** that entry's grid/SNR/slot in place (a later decode is
+  better data to work from) **without** adding a duplicate and **without** changing its
+  FIFO position. (A ✓ on the Band Activity row tells you it's already queued.)
+
+  **Auto-drain pause/resume.** The stack **starts draining** (enabled by default) and
+  stays that way through QSO completions, decode gaps, and errors — nothing pauses it
+  automatically. It is **suspended only by Abandon**: the ladder's **Abandon** button
+  pauses the drain but *keeps* the queue (the drawer shows "· paused" + a **Resume**
+  button), and the header **×** also pauses but then clears the queue so the drawer
+  hides. It **resumes** when you press **Resume** — *or* when you Ctrl/Cmd+click a
+  **new** caller (enqueuing a genuinely new station re-enables the drain). Re-clicking a
+  station **already** on the stack only refreshes its data and does **not** un-pause —
+  so once you've hit Abandon you stay paused until you explicitly Resume or stack a
+  caller you haven't queued yet.
 - **Clear Offsets** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
   select it as the TX base offset**; the selected chip is marked with a **darker

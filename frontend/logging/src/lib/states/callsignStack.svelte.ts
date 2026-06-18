@@ -93,6 +93,17 @@ class CallsignStack {
     }
 
     /**
+     * Remove the call at the given index WITHOUT loading it. Out-of-bounds
+     * is a no-op. This is the drawer's per-row "×" (discard one): unlike
+     * popAt (click-the-row = load into the draft), this just drops the
+     * entry — the operator decided they won't work that station.
+     */
+    removeAt(index: number): void {
+        if (index < 0 || index >= this.items.length) return;
+        this.items = [...this.items.slice(0, index), ...this.items.slice(index + 1)];
+    }
+
+    /**
      * Empty the stack. Provided for the drawer's "discard all" affordance
      * and for test setup.
      */

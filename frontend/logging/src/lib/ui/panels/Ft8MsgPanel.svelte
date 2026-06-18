@@ -163,6 +163,16 @@
         }
     }
 
+    // Pile-up header × ("clear all & abandon"): clear the queue (the drawer
+    // auto-hides once empty) and abandon the run. If an exchange is in flight,
+    // onAbandon aborts it on the daemon (and pauses the drain); otherwise there's
+    // nothing to abort, so just halt the auto-drain before clearing.
+    async function onPileupClose(): Promise<void> {
+        if (canAbandon) await onAbandon();
+        else ft8PileupStack.pause();
+        ft8PileupStack.clear();
+    }
+
     async function toggleArm(): Promise<void> {
         if (arming) return;
         arming = true;
@@ -260,4 +270,4 @@
 <!-- Pile-up stack (ADR 0033 operator-curated FIFO): Ctrl+click callers in Band Activity
      to enqueue; this drains them oldest-first via the work-a-caller path. Self-contained
      (reads ft8PileupStack); shown only when non-empty. -->
-<Ft8PileupDrawer />
+<Ft8PileupDrawer onClose={onPileupClose} />

@@ -47,17 +47,23 @@ class Ft8PileupStack {
      * Enqueue a caller at the tail. Normalises the call (trim + upper); silent no-op
      * on empty. Dedup by call: an already-queued station's grid/SNR/slot refresh in
      * place (newer decode = better data) without reordering.
+     *
+     * Returns true when a NEW entry was appended, false when an existing one was
+     * refreshed (or the call was empty). Callers use this to distinguish "a genuinely
+     * new caller arrived" from "re-clicked one already queued" — e.g. only a new
+     * caller resumes a paused drain.
      */
-    push(entry: PileupEntry): void {
+    push(entry: PileupEntry): boolean {
         const call = entry.call.trim().toUpperCase();
-        if (call === '') return;
+        if (call === '') return false;
         const e: PileupEntry = { ...entry, call };
         const i = this.items.findIndex((x) => x.call === call);
         if (i >= 0) {
             this.items = this.items.map((x, idx) => (idx === i ? e : x));
-            return;
+            return false;
         }
         this.items = [...this.items, e];
+        return true;
     }
 
     /** The head (worked next), or undefined when empty. */
