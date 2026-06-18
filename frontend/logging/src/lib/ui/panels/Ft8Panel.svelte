@@ -329,11 +329,22 @@
     // answerable stations sit together at the top. Slot separators are suppressed in
     // that mode (the list is no longer slot-ordered) — see showSlot in the markup.
     const cqToTop = $derived(configState.ft8Display.cqToTop);
+    // Base Band Activity feed with the hashed-call dross removed when the operator
+    // has "Hide hashed calls" on: drop decodes carrying an unresolved hashed call
+    // ("<...>" — a non-standard/compound call the receiver can't expand, so it can't
+    // be identified or worked) — but NEVER hide a station calling us (toMe-bypass),
+    // since missing a caller is costly. Ordering (cqToTop) runs on this filtered base.
+    const visibleDecodes = $derived.by(() => {
+        if (!configState.ft8Display.hideHashedCalls) return ft8State.decodes;
+        return ft8State.decodes.filter(
+            (d) => !d.text.includes('<...>') || parseDirectedToMe(d.text, myCall) !== null
+        );
+    });
     const orderedDecodes = $derived.by(() => {
-        if (!cqToTop) return ft8State.decodes;
+        if (!cqToTop) return visibleDecodes;
         const cq: DecodeEntry[] = [];
         const rest: DecodeEntry[] = [];
-        for (const d of ft8State.decodes) {
+        for (const d of visibleDecodes) {
             (parseCqCall(d.text) !== null ? cq : rest).push(d);
         }
         return [...cq, ...rest];

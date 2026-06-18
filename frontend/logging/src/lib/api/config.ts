@@ -56,6 +56,7 @@ export interface Ft8DisplayFields {
     highlight_unworked?: string;
     highlight_worked?: string;
     cq_to_top?: boolean;
+    hide_hashed_calls?: boolean;
 }
 
 export interface BridgeFields {

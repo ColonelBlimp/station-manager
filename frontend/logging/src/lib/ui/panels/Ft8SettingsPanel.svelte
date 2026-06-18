@@ -29,6 +29,7 @@
                     highlight_unworked: fd.highlightUnworked,
                     highlight_worked: fd.highlightWorked,
                     cq_to_top: fd.cqToTop,
+                    hide_hashed_calls: fd.hideHashedCalls,
                 },
             });
             switch (outcome.kind) {
@@ -88,6 +89,17 @@
             <input
                 type="checkbox"
                 bind:checked={configState.ft8Display.cqToTop}
+                class="h-4 w-4 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+        </label>
+
+        <label class="flex items-center justify-between gap-3 pt-1">
+            <!-- Hides decodes with an unresolved hashed call ("<...>") — dross you can't
+                 identify or work. Stations calling you still show through. -->
+            <span>Hide hashed calls (&lt;...&gt;)</span>
+            <input
+                type="checkbox"
+                bind:checked={configState.ft8Display.hideHashedCalls}
                 class="h-4 w-4 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
             />
         </label>

@@ -160,13 +160,22 @@ when it ships — don't let this rot into a graveyard.
   text second. Until then the skip behaviour is correct (better than transmitting an
   unencodable/garbled message), and the operator just can't complete those contacts in
   SM. Capture point: `docs/ft8.md`; see ADR 0029 (the `EncodeStandardMessage` seam).
-- **FT8 Band Activity — display filter (prefix/substring), design pending.** Operator
-  wants to narrow the feed to decodes matching a typed filter (e.g. "only show calls
-  starting with …"). Design discussion in progress 2026-06-17 (session-handoff);
-  session-scoped (in-memory, like the selected offset — NOT a durable config setting).
-  Open design points: match target (callsign vs whole decode text), prefix vs
-  substring, placement (inline above Band Activity), and interaction with float-CQ-to-
-  top. Pin the design, then build.
+  **Upstream requested 2026-06-18:** the operator filed a feature request with the
+  **go-ft8** project for compound/portable (`/P`) support. So part (1) is now
+  **blocked on upstream** — track go-ft8's response; once it exposes the hashed-callsign
+  type-1/type-2 encode path, wire it through the `EncodeStandardMessage` seam + drop the
+  sequencer skip-guard for the calls it can now encode. Free-text (part 2) is separate.
+- **FT8 Band Activity — typed display filter (token-prefix), placement pending.**
+  Operator wants to narrow the feed to decodes matching a typed filter ("only show calls
+  starting with …"). **Design pinned 2026-06-18:** match = **token-prefix** (show a
+  decode if any whitespace token starts with the typed text, case-insensitive — so `VK`
+  matches the `VK3ABC` token but not `G4VKX`, and `CQ`/`73` filter by message kind);
+  **toMe-bypass** (a station calling you always shows through); session-scoped in-memory
+  (`ft8State.bandFilter`, like the selected offset — NOT durable); composes after the
+  hide-hashed filter and before CQ-to-top ordering. **Still open: placement** (operator
+  mulling — inline under the Band Activity header was the proposal). Build once placement
+  is decided. *(The separate "hide hashed-call dross" toggle SHIPPED 2026-06-18 —
+  `ft8.display.hide_hashed_calls`, default off, FT8 Settings tab; see `docs/ft8.md`.)*
 - **FT8 e4 — `TIME_ON` should be the QSO start, not the completion instant.**
   `ft8.BuildQso` (`internal/ft8/qsolog.go`) stamps both `TIME_ON` and `TIME_OFF`
   from `now` (the moment the 73 is sent) because `CompletedQso` carries no start

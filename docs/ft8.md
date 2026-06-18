@@ -168,6 +168,12 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
     stations) above the rest of the feed, stably partitioned (each group keeps its
     order). Per-slot separators are suppressed while on (the list is no longer
     slot-ordered). SPA-side reorder of `ft8State.decodes`; no daemon change.
+  - **hide hashed calls** (`hide_hashed_calls`, default off): drops Band Activity
+    decodes carrying an unresolved hashed call (`<...>` — a non-standard/compound call
+    the receiver can't expand, which can't be identified or worked → dross). A station
+    **calling you** still shows through (toMe-bypass), so you never miss a caller.
+    SPA-side filter of `ft8State.decodes`, ahead of the CQ-to-top ordering; Band
+    Activity only (the Rx Frequency pane is unaffected). No daemon change.
 
     The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
   from go-ft8's `DecodedMessage.SNR` (dB, 2500 Hz reference), added in go-ft8
@@ -514,6 +520,7 @@ does not consume these — they're pure SPA presentation — it stores + resolve
 | `highlight_unworked` | `#15803d` | CQ tint — not worked on this band (attention) |
 | `highlight_worked` | `#9ca3af` | CQ tint — worked-before (muted) |
 | `cq_to_top` | `false` | float CQ rows to the top of Band Activity (separators suppressed) |
+| `hide_hashed_calls` | `false` | hide decodes with an unresolved hashed call (`<...>`); stations calling you still show |
 
 Daemon-backed rather than browser localStorage so they survive a browser change /
 data clear and follow the operator (per the "settings live in config.json, not

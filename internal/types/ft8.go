@@ -81,6 +81,12 @@ type Ft8DisplayConfig struct {
 	// of leaving them interleaved by slot. Plain bool: default false (off) is the
 	// zero value, so no resolve special-casing is needed.
 	CqToTop bool `json:"cq_to_top,omitempty"`
+	// HideHashedCalls drops Band Activity decodes carrying an unresolved hashed
+	// callsign (rendered "<...>") — third-party traffic for a non-standard/compound
+	// call the receiver can't expand, which can't be identified or worked, so it's
+	// pure clutter. Stations calling US still show (the SPA's toMe-bypass). Plain
+	// bool: default false (show everything), the zero value.
+	HideHashedCalls bool `json:"hide_hashed_calls,omitempty"`
 }
 
 // FT8 display defaults. Code constants (the single source of truth, shared by
@@ -132,7 +138,8 @@ func ResolveFt8Display(c *Ft8DisplayConfig) Ft8DisplayConfig {
 	if c.HighlightWorked != "" {
 		d.HighlightWorked = c.HighlightWorked
 	}
-	d.CqToTop = c.CqToTop // plain bool — default false, operator value passes through
+	d.CqToTop = c.CqToTop                 // plain bool — default false, operator value passes through
+	d.HideHashedCalls = c.HideHashedCalls // plain bool — default false (show)
 	return d
 }
 
