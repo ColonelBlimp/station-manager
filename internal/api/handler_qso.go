@@ -249,6 +249,13 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 		}
 		force = v
 	}
+	// Standing QSL defaults (config.json `qsl`) — fill QSL_VIA / QSLMSG /
+	// QSL_SENT_VIA where this submission left them empty (a future per-QSO form
+	// value would win). Same record method the FT8 e4 sink uses, so both logging
+	// paths stamp identical defaults. Live submit only — ADIF import (SubmitImport)
+	// is left alone so imported QSOs keep their own QSL data.
+	rec.ApplyQslDefaults(s.cfg.Snapshot().Qsl)
+
 	result, err := s.qso.Submit(r.Context(), logbookID, rec, force)
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {

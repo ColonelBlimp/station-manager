@@ -511,12 +511,12 @@ func run() error {
 				}
 				q.TxPwr = strconv.Itoa(int(math.Round(rawW * mult)))
 			}
-			// Standing QSL defaults (config.json `qsl`) — fill the fields the QSO
-			// leaves empty; empty defaults are skipped (omitempty drops them from the
-			// record). FT8 has no form, so the daemon applies them; Phone/CW does the
-			// same SPA-side at submit.
-			snap.Qsl.ApplyTo(&q)
 			rec := adif.QsoToRecord(q)
+			// Standing QSL defaults (config.json `qsl`) — fill the fields the QSO
+			// leaves empty; empty defaults are skipped (omitempty drops them). FT8 has
+			// no form, so the daemon applies them here; the Phone/CW submit handler
+			// calls the same record method, so both modes log identical defaults.
+			rec.ApplyQslDefaults(snap.Qsl)
 			res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false)
 			if err != nil {
 				loggerSvc.ErrorWith().Err(err).Str("call", c.TheirCall).

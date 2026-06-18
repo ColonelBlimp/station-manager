@@ -37,6 +37,28 @@ type Record struct {
 	AppQrzlogLogid  string `adif:"app_qrzlog_logid,omitempty"`
 }
 
+// ApplyQslDefaults fills the record's outgoing-QSL fields (QSL_VIA, QSLMSG,
+// QSL_SENT_VIA) from the operator's standing config defaults — but only where the
+// record leaves a field empty (so a per-QSO value always wins) and only when the
+// default itself is non-empty (so an unset default never adds an empty ADIF tag,
+// which `omitempty` would drop anyway). The single stamping point for both logging
+// paths: the Phone/CW submit handler and the FT8 e4 sink (after QsoToRecord) call
+// this on the record about to be submitted, so both modes log identical defaults.
+func (r *Record) ApplyQslDefaults(d types.QslDefaults) {
+	if r == nil {
+		return
+	}
+	if r.QslVia == "" {
+		r.QslVia = d.QslVia
+	}
+	if r.QslMsg == "" {
+		r.QslMsg = d.QslMsg
+	}
+	if r.QslSentVia == "" {
+		r.QslSentVia = d.QslSendVia
+	}
+}
+
 type QslSection struct {
 	QslMsg     string `adif:"qslmsg,omitempty"`
 	QslMsgIntl string `adif:"qslmsg_intl,omitempty"`

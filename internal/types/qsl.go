@@ -40,22 +40,3 @@ type QslDefaults struct {
 	// bureau/direct/electronic/manager).
 	QslSendVia string `json:"qsl_sent_via,omitempty"`
 }
-
-// ApplyTo stamps the standing QSL defaults onto q: it fills only the fields q
-// leaves empty (so any per-QSO value wins) and skips empty defaults (so an unset
-// default never adds an empty ADIF tag). Used by the FT8 logging path; Phone/CW
-// applies the same defaults SPA-side at submit. nil-safe.
-func (d QslDefaults) ApplyTo(q *Qso) {
-	if q == nil {
-		return
-	}
-	if q.QslVia == "" {
-		q.QslVia = d.QslVia
-	}
-	if q.QslMsg == "" {
-		q.QslMsg = d.QslMsg
-	}
-	if q.QslSendVia == "" {
-		q.QslSendVia = d.QslSendVia
-	}
-}
