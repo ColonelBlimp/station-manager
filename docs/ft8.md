@@ -275,8 +275,8 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   **short** and resets to short at the start of each contact (both SPA and daemon), so a
   prior QSO's "long" never carries over. *(Phone/CW logs `ANT_PATH` too now — its
   Country-panel radio stamps it on submit, mode-independent, matching FT8.)*
-- **"Working [callsign]" channel readout** — occupies the right-hand cell of the
-  always-visible slot-countdown row (so it shows on **every** lower tab), **replacing
+- **"Working [callsign]" channel readout** — occupies the
+  always-visible info row above the lower tabs (so it shows on **every** lower tab), **replacing
   the idle offset readout** while a contact is in flight (`ft8State.qso.active`); when
   idle that cell reverts to the `Offset N Hz ±tol` / `No offset selected` text. It
   reads `Working <call> — channel clear/BUSY`
@@ -305,8 +305,10 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
   `/v1/config` (bundling the current `logging_station`/`station` so the unconditional
   overwrite doesn't clobber them) and re-hydrates from the response.
-  (The **"Next slot in Ns · even/odd" countdown** sits in the main panel footer below
-  the activity row, so it stays visible regardless of the active lower tab.)
+  (The **slot countdown** sits in the **Band Activity footer** — one line reading
+  `<UTC time> · <parity> · next in Ns`: the current displayed slot's time + parity
+  (shown once here, not duplicated in the info row) plus the live countdown to the next
+  slot boundary. It's in the always-visible top row, so it shows regardless of tab.)
 - **Session tab** (`SessionPanel` + `SessionEmailControls`) — the **shared** session
   QSO log, identical to InfoPanel's Session tab: a "session" is everything worked
   this sitting **across both modes**, so FT8 QSOs and Phone/CW QSOs share one list

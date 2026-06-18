@@ -55,14 +55,12 @@
         clearInterval(slotTimer);
     });
 
-    // Countdown to the next slot + that slot's parity. seconds-to-next = 15 −
-    // (epoch mod 15) (epoch 0 is a slot boundary). Next-slot parity matches the
-    // daemon convention (occupancy.go SlotRefFromTime): (unix / 15) % 2 == 0 → even
-    // (:00/:30), else odd (:15/:45).
+    // Countdown to the next slot boundary. seconds-to-next = 15 − (epoch mod 15)
+    // (epoch 0 is a slot boundary). Shown in the Band Activity footer (slotLabel)
+    // alongside the current slot's time + parity. (Next-slot parity is no longer
+    // displayed — the footer carries the current displayed slot's parity once,
+    // de-duplicating what used to also appear in the countdown row.)
     const secondsToNextSlot = $derived(SLOT_SECONDS - (nowSec % SLOT_SECONDS));
-    const nextSlotParity = $derived(
-        (Math.floor(nowSec / SLOT_SECONDS) + 1) % 2 === 0 ? 'even' : 'odd'
-    );
 
     // Current operating band, derived from the selected VFO. The worked-before
     // lookup is band+mode-specific, so the band is part of each enrichment key.
@@ -309,9 +307,10 @@
     // 15 s slots per minute are distinguishable. (Congestion isn't shown here — the
     // occupancy strip carries it visually; a raw count wasn't actionable.)
     const slotLabel = $derived.by(() => {
-        if (!ft8State.slot) return 'Waiting for slot…';
+        const next = `next in ${secondsToNextSlot}s`;
+        if (!ft8State.slot) return `Waiting for slot… · ${next}`;
         const clock = formatUtcClock(new Date(ft8State.slot.start_utc));
-        return `${clock} · ${ft8State.slot.period}`;
+        return `${clock} · ${ft8State.slot.period} · ${next}`;
     });
 
     // The daemon sends `suggested` best-first by rank. For display we sort a copy
@@ -693,18 +692,14 @@
         {/if}
     </div>
 </div>
-<!-- Slot countdown — moved here from the Operate tab so it's visible regardless of
-     the active lower tab; sits at the bottom of the main activity row. -->
+<!-- Always-visible info row (above the lower tabs, so it shows on every tab). The
+     slot countdown moved up into the Band Activity footer (slotLabel); this row now
+     carries only the worked-station / Rx-caption cell.
+     While a contact is in flight it shows the worked station + selected-channel
+     occupancy + the auto-abandon "N calls left" countdown (green=clear · red=busy ·
+     gray=unknown), replacing the idle offset readout — a station landing on the picked
+     channel surfaces before the next TX keys. -->
 <div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5">
-    <div class="w-40 text-right">
-        Next slot in {secondsToNextSlot}s · {nextSlotParity}
-    </div>
-    <div class="">&nbsp;|&nbsp;</div>
-    <!-- RH info cell. While a contact is in flight it shows the worked station +
-         selected-channel occupancy + the auto-abandon "N calls left" countdown
-         (green=clear · red=busy · gray=unknown), replacing the idle offset readout —
-         a station landing on the picked channel surfaces before the next TX keys.
-         It lives in this always-visible countdown row, so it shows on every lower tab. -->
     {#if workingCall}
         <div
             class="rounded px-2 py-0.5 {workingBannerClass}"
