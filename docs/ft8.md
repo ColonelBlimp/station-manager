@@ -318,7 +318,12 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   button (the arm gate; red when enabled, gated on a live rig via
   `displayedState.isLive`); **Call CQ** and **Abandon** buttons, always visible but
   gated (Call CQ enabled when armed + idle + offset + callsign; Abandon only while a
-  sequenced session — answer-a-CQ or call-CQ — is active); and a **message ladder**
+  sequenced session — answer-a-CQ or call-CQ — is active); a **Next** button that
+  appears below Abandon **only mid-contact with stations still queued** in the pile-up —
+  it aborts the current exchange but, unlike Abandon, does **not** pause the drain, so it
+  jumps straight to the next queued caller (the operator's "this one's a no-show, move
+  on" shortcut — ditch a station after a rung or two instead of waiting out the full
+  `max_repeats` backstop, which it leaves untouched); and a **message ladder**
   rendering the exchange one slot per row — our TX messages interleaved with the
   remote's expected responses (`rx`), unknowns as placeholders `<DX>` / `<GRID>` /
   `<RST>` — the **reports fill in live** from `qso.our_report`/`their_report` once the

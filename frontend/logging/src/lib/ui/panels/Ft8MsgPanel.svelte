@@ -62,6 +62,9 @@
     // Abandon is enabled whenever a sequenced session is active (answer-a-CQ or
     // call-CQ) and TX is armed — abandonFt8Qso drops either.
     const canAbandon = $derived(tx.armed && qso.active);
+    // "Next" is offered only mid-contact AND with stations still queued — it drops
+    // the current exchange and lets the drain advance to the next caller.
+    const canNext = $derived(canAbandon && ft8PileupStack.count > 0);
 
     // ---- Message ladder --------------------------------------------------------
     // One slot per row, top to bottom: our TX messages interleaved with the remote
@@ -162,6 +165,26 @@
         }
     }
 
+    let nexting = $state(false);
+
+    // "Next" — abort the in-flight pile-up contact and move straight to the next
+    // queued station. Unlike Abandon it does NOT pause the drain, so the Ft8Panel
+    // drain effect picks up the next head as soon as this contact goes idle. Lets
+    // the operator ditch a no-show after a rung or two instead of burning the full
+    // max_repeats backstop — without touching that config (it governs CQ /
+    // answer-a-CQ). The current station was dequeued when it started being worked,
+    // so aborting just drops it; nothing extra to expel.
+    async function onNext(): Promise<void> {
+        if (nexting) return;
+        nexting = true;
+        try {
+            const out = await abandonFt8Qso();
+            if (out.kind !== 'ok') toasts.error(out.message);
+        } finally {
+            nexting = false;
+        }
+    }
+
     async function toggleArm(): Promise<void> {
         if (arming) return;
         arming = true;
@@ -239,6 +262,17 @@
                 >
                     Abandon
                 </button>
+                {#if canNext}
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        title="Drop this station and work the next in the pile-up"
+                        onclick={onNext}
+                        disabled={nexting}
+                    >
+                        Next
+                    </button>
+                {/if}
             </div>
             <div>
                 <button
