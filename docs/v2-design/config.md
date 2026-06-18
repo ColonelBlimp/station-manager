@@ -144,7 +144,8 @@ involvement (it's pure config the daemon owns). Writable via `PUT /v1/config`
 
 FT8 reception-report upload to PSK Reporter. `enabled` (default **false** — opt-in,
 publishes RX to a public service), `host`/`port` (default `report.pskreporter.info:4739`;
-`pskreporter.info:14739` is the test server), `antenna` (freeform). Receiver identity
+port `14739` on the same host is the test server — NOT `pskreporter.info`, which is the
+Cloudflare website and drops UDP), `antenna` (freeform). Receiver identity
 comes from `LoggingStation`, not here. Read at startup → fed to `internal/pskreporter`;
 **not on `/v1/config`** (set-once, like the SMTP block — a config-SPA surface can come
 later). Detail in `docs/ft8.md`.

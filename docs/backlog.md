@@ -220,9 +220,11 @@ when it ships — don't let this rot into a graveyard.
   ~5 min (program-relative + jitter), descriptors in the first 3 datagrams + hourly,
   one long-lived UDP socket (constant source port). **Opt-in: `psk_reporter.enabled`
   default OFF**, also gated on a configured receiver callsign; **best-effort, never blocks
-  decode**. Host/Port default to production `report.pskreporter.info:4739`; point at
-  `pskreporter.info:14739` to use the test server. **Report/upload side only** — the
-  retrieve/query feed (who heard *you*) remains a separate, later item.
+  decode**. Host/Port default to production `report.pskreporter.info:4739`; port `14739`
+  on the same host is the test server (NOT `pskreporter.info` — that's the website and
+  drops UDP). Validated end-to-end against the live collector via `cmd/ft8-psk-probe`
+  (received + fully parsed per `/cgi-bin/psk-analysis.pl`, 2026-06-18). **Report/upload
+  side only** — the retrieve/query feed (who heard *you*) remains a separate, later item.
 - **Spot-submitter registry — generalize when a 2nd destination lands (e.g. DX cluster).**
   PSK Reporter is the first "submit what I heard" destination. A **DX cluster spot submit**
   (telnet/TCP to a cluster node, e.g. announce a worked/heard DX) would be a second — at

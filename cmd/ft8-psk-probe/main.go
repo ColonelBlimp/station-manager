@@ -7,9 +7,11 @@
 // FT8 decodes (cmd/smd wires ft8.Service.SetDecodeSink → pskreporter). This tool
 // exists only to validate the codebase against a real server.
 //
-// Defaults target the TEST server (pskreporter.info:14739), so a run won't pollute
-// the live database. Point -host/-port at report.pskreporter.info:4739 to send to
-// production (your callsign will then appear on the live map).
+// The UDP collector host is report.pskreporter.info (NOT pskreporter.info — that's
+// the Cloudflare-fronted website and drops UDP). Defaults target the TEST PORT
+// (report.pskreporter.info:14739), so a run won't pollute the live database; sends
+// are visible at https://pskreporter.info/cgi-bin/psk-analysis.pl (keyed by your
+// source IP). Use -port=4739 for production (your callsign appears on the live map).
 //
 // Usage:
 //
@@ -40,8 +42,8 @@ import (
 )
 
 func main() {
-	host := flag.String("host", "pskreporter.info", "PSK Reporter host (test server by default; production: report.pskreporter.info)")
-	port := flag.Int("port", 14739, "UDP port (test 14739; production 4739)")
+	host := flag.String("host", "report.pskreporter.info", "PSK Reporter UDP collector host (NOT pskreporter.info — that's the website)")
+	port := flag.Int("port", 14739, "UDP port (14739 = test, won't hit the live DB; 4739 = production)")
 	call := flag.String("call", "", "receiver callsign — yours (required)")
 	grid := flag.String("grid", "", "receiver locator — yours (e.g. IO91)")
 	software := flag.String("software", "StationManager-probe", "decoderSoftware string")

@@ -18,13 +18,14 @@ import (
 // stays constant, as the protocol requires). Best-effort by contract — a send
 // failure is logged and dropped; nothing here ever blocks the FT8 decode path.
 //
-// Default endpoint is the production server report.pskreporter.info:4739; point
-// Config at pskreporter.info:14739 to exercise the test server without polluting
-// the live database.
+// The UDP collector is report.pskreporter.info (NOT pskreporter.info — that's the
+// Cloudflare-fronted website and silently drops UDP). Port 4739 is production (the
+// default); port 14739 on the SAME host is the test server, which accepts + parses
+// datagrams without writing the live database (verify at /cgi-bin/psk-analysis.pl).
 
 const (
 	// DefaultHost/DefaultPort are the production collector — the fallback when the
-	// operator leaves Host/Port unset. The test server (pskreporter.info:14739) is
+	// operator leaves Host/Port unset. The test endpoint (same host, port 14739) is
 	// not a constant here: it's just another Host/Port the operator (or the
 	// ft8-psk-probe CLI) supplies via Config.
 	DefaultHost = "report.pskreporter.info"

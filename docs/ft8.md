@@ -571,16 +571,19 @@ feed. The **report/upload** side only; the retrieve/query feed is future work.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | upload FT8 spots (opt-in) |
-| `host` | `report.pskreporter.info` | collector host; set `pskreporter.info` for the test server |
-| `port` | `4739` | collector port; `14739` is the test server |
+| `host` | `report.pskreporter.info` | UDP collector host (NOT `pskreporter.info` — that's the website and drops UDP) |
+| `port` | `4739` | `4739` = production; `14739` = test port on the same host (parses without writing the live DB) |
 | `antenna` | — | freeform antenna description, shown on the PSK map |
 
 The encoder is verified byte-for-byte against the spec's worked example
-(`internal/pskreporter/ipfix_test.go`). For manual end-to-end validation without the
-daemon, **`cmd/ft8-psk-probe`** (dev/test only, not a production path) builds spots
-from sample decode lines via `ft8.SpotFrom` and sends one datagram to a server —
-defaulting to the **test** server (`pskreporter.info:14739`); `-host`/`-port` point it
-at production. `-dry` parses + prints without sending.
+(`internal/pskreporter/ipfix_test.go`), and validated end-to-end against the live
+collector: a probe datagram was received + fully parsed (receiver + sender records)
+per `/cgi-bin/psk-analysis.pl`. For manual validation without the daemon,
+**`cmd/ft8-psk-probe`** (dev/test only, not a production path) builds spots from
+sample decode lines via `ft8.SpotFrom` and sends one datagram —
+defaulting to **`report.pskreporter.info:14739`** (the test port: parsed but not
+written to the live DB); `-port=4739` for production. `-dry` parses + prints without
+sending.
 
 ## 5. Transmit roadmap (ADR 0029)
 
