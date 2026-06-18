@@ -39,6 +39,9 @@ export interface Ft8DisplayFields {
     feed_mode?: 'accumulate' | 'single';
     highlight_unworked?: string;
     highlight_worked?: string;
+    highlight_calling?: string;
+    cq_to_top?: boolean;
+    hide_hashed_calls?: boolean;
 }
 
 export interface MailerFields {
@@ -71,6 +74,58 @@ export type ConfigOutcome =
 
 export async function fetchConfig(signal?: AbortSignal): Promise<ConfigOutcome> {
     const fetched = await safeFetch('/v1/config', { signal });
+    if (!fetched.ok) {
+        return { kind: fetched.kind, message: fetched.message };
+    }
+    const body = await readJsonBody(fetched.response);
+    if (fetched.response.ok) {
+        if (
+            !isShape<ConfigResponse>(body, ['setup_complete', 'logging_station', 'default_logbook'])
+        ) {
+            return {
+                kind: 'server',
+                code: 'malformed_response',
+                message: 'daemon returned /v1/config without the required blocks',
+            };
+        }
+        return { kind: 'ok', config: body };
+    }
+    const err = isPlainObject(body) ? (body as { code?: string; message?: string }) : null;
+    return {
+        kind: 'server',
+        code: err?.code ?? 'unknown_error',
+        message: err?.message ?? `HTTP ${fetched.response.status}`,
+    };
+}
+
+/*
+    ConfigPatch is the writable body the config SPA sends to PUT /v1/config.
+
+    `logging_station` and `station` are **echoed verbatim** from the last GET —
+    the daemon's PUT overwrites those blocks unconditionally (backlog M5), so a
+    PUT that omits or trims them would zero the operator identity / MY_* fields.
+    The typed subsets here don't matter at runtime: the JS objects from the GET
+    carry every field the daemon sent, and JSON.stringify serialises them all, so
+    echoing the received objects is lossless. (The proper fix — presence-aware
+    daemon PUT — is the M5 backlog item; until then, echo.)
+
+    `ft8_display` is the only block this SPA actually edits; it is sent in FULL
+    (the daemon replaces the block raw on PUT), so callers must round-trip the
+    fields they aren't changing.
+*/
+export interface ConfigPatch {
+    logging_station: LoggingStationFields;
+    station: StationFields;
+    ft8_display?: Ft8DisplayFields;
+}
+
+export async function putConfig(patch: ConfigPatch, signal?: AbortSignal): Promise<ConfigOutcome> {
+    const fetched = await safeFetch('/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+        signal,
+    });
     if (!fetched.ok) {
         return { kind: fetched.kind, message: fetched.message };
     }

@@ -61,5 +61,59 @@
                 {/each}
             </ul>
         </section>
+
+        <!--
+            FT8 highlight colours — moved here from the logging SPA's FT8 Settings
+            tab (this is their home now). Holding-place UI: three native colour
+            pickers + a Save that PUTs /v1/config (echoing logging_station/station so
+            the unconditional overwrite can't wipe identity; see api/config.ts).
+        -->
+        <section class="mt-6 max-w-sm">
+            <h2 class="font-semibold text-gray-800">FT8 Band Activity colours</h2>
+            <div class="mt-2 flex flex-col gap-2 text-sm text-gray-700">
+                <label class="flex items-center justify-between gap-3">
+                    <span>CQ — not worked on this band</span>
+                    <input
+                        type="color"
+                        bind:value={configState.highlightUnworked}
+                        class="h-7 w-12 cursor-pointer rounded border border-gray-300"
+                        aria-label="Not-worked highlight colour"
+                    />
+                </label>
+                <label class="flex items-center justify-between gap-3">
+                    <span>CQ — worked before (dupe)</span>
+                    <input
+                        type="color"
+                        bind:value={configState.highlightWorked}
+                        class="h-7 w-12 cursor-pointer rounded border border-gray-300"
+                        aria-label="Worked-before highlight colour"
+                    />
+                </label>
+                <label class="flex items-center justify-between gap-3">
+                    <span>Station calling you</span>
+                    <input
+                        type="color"
+                        bind:value={configState.highlightCalling}
+                        class="h-7 w-12 cursor-pointer rounded border border-gray-300"
+                        aria-label="Calling-you highlight colour"
+                    />
+                </label>
+            </div>
+            <div class="mt-3 flex items-center gap-3">
+                <button
+                    type="button"
+                    onclick={() => void configState.saveColours()}
+                    disabled={configState.savingColours}
+                    class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                    {configState.savingColours ? 'Saving…' : 'Save'}
+                </button>
+                {#if configState.coloursStatus === 'ok'}
+                    <span class="text-sm text-green-700">Saved.</span>
+                {:else if configState.coloursStatus}
+                    <span class="text-sm text-red-700">{configState.coloursStatus}</span>
+                {/if}
+            </div>
+        </section>
     {/if}
 </main>

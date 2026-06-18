@@ -10,8 +10,14 @@
     as the editor surfaces are built.
 */
 
-import { fetchConfig, type ConfigResponse } from '../api/config';
+import { fetchConfig, putConfig, type ConfigOutcome, type ConfigResponse } from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
+
+// FT8 highlight-colour defaults — mirror the daemon's ResolveFt8Display so a
+// fresh config (block omitted) still shows the real values in the pickers.
+const DEFAULT_HIGHLIGHT_UNWORKED = '#15803d';
+const DEFAULT_HIGHLIGHT_WORKED = '#9ca3af';
+const DEFAULT_HIGHLIGHT_CALLING = '#b45309';
 
 class ConfigState {
     /** False until the first load() round-trip settles (success or error). */
@@ -27,6 +33,17 @@ class ConfigState {
     rigs: RigConfig[] = $state([]);
     catalogue: RigDefSummary[] = $state([]);
 
+    // FT8 highlight-colour holding place (moved out of the logging SPA's FT8
+    // Settings tab). Editable copies the pickers bind to; hydrated from
+    // config.ft8_display on load and re-hydrated from the PUT response on save.
+    highlightUnworked: string = $state(DEFAULT_HIGHLIGHT_UNWORKED);
+    highlightWorked: string = $state(DEFAULT_HIGHLIGHT_WORKED);
+    highlightCalling: string = $state(DEFAULT_HIGHLIGHT_CALLING);
+    /** True while a colour save PUT is in flight. */
+    savingColours: boolean = $state(false);
+    /** Last colour-save status: 'ok', an error message, or null (idle/in-flight). */
+    coloursStatus: string | null = $state(null);
+
     /**
      * Fetch /v1/config and /v1/rigs concurrently and hydrate. Either failing
      * sets `error` but whatever succeeded is still applied, so a partially
@@ -38,6 +55,7 @@ class ConfigState {
         const errs: string[] = [];
         if (cfg.kind === 'ok') {
             this.config = cfg.config;
+            this.hydrateColours();
         } else {
             errs.push(`config: ${outcomeMessage(cfg)}`);
         }
@@ -56,6 +74,45 @@ class ConfigState {
     /** The rigdef defaults for a configured rig's model, or undefined if unknown. */
     rigdefFor(model: string): RigDefSummary | undefined {
         return this.catalogue.find((c) => c.id === model);
+    }
+
+    /** Copy the resolved highlight colours from config into the editable fields. */
+    private hydrateColours(): void {
+        const fd = this.config?.ft8_display;
+        this.highlightUnworked = fd?.highlight_unworked ?? DEFAULT_HIGHLIGHT_UNWORKED;
+        this.highlightWorked = fd?.highlight_worked ?? DEFAULT_HIGHLIGHT_WORKED;
+        this.highlightCalling = fd?.highlight_calling ?? DEFAULT_HIGHLIGHT_CALLING;
+    }
+
+    /**
+     * Persist the three FT8 highlight colours via PUT /v1/config. Echoes
+     * logging_station + station verbatim (the daemon overwrites them
+     * unconditionally — see ConfigPatch) and sends the FULL ft8_display block
+     * (the daemon replaces it raw), changing only the three colours and
+     * round-tripping the rest. Re-hydrates from the response on success.
+     */
+    async saveColours(): Promise<void> {
+        if (this.savingColours || !this.config) return;
+        this.savingColours = true;
+        this.coloursStatus = null;
+        const outcome: ConfigOutcome = await putConfig({
+            logging_station: this.config.logging_station,
+            station: this.config.station,
+            ft8_display: {
+                ...this.config.ft8_display,
+                highlight_unworked: this.highlightUnworked,
+                highlight_worked: this.highlightWorked,
+                highlight_calling: this.highlightCalling,
+            },
+        });
+        if (outcome.kind === 'ok') {
+            this.config = outcome.config;
+            this.hydrateColours();
+            this.coloursStatus = 'ok';
+        } else {
+            this.coloursStatus = outcomeMessage(outcome);
+        }
+        this.savingColours = false;
     }
 }
 

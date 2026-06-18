@@ -592,7 +592,7 @@
     >
 {/snippet}
 
-<div class="flex justify-center h-85 text-gray-500 space-x-3 mt-1">
+<div class="flex justify-center h-98 text-gray-500 space-x-3 mt-1">
     <div class="flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
         <div class="flex flex-col place-items-center px-2 space-y-1">
@@ -618,7 +618,7 @@
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Band Activity</h2>
-        <div class="flex h-65 flex-col rounded border border-gray-300 overflow-y-scroll">
+        <div class="flex h-80 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if orderedDecodes.length > 0}
                 <!-- Slot separators only in accumulate mode AND when not floating CQ to
                      top (the CQ-first order isn't slot-grouped, so separators would be
@@ -641,7 +641,7 @@
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Rx Frequency</h2>
-        <div class="flex h-19 flex-col rounded border border-gray-300 overflow-y-scroll">
+        <div class="flex h-34 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if rxDecodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each rxDecodes as d (d.id)}
@@ -664,6 +664,18 @@
             path={txPath}
             onPathChange={onTxPathChange}
         />
+        <div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1">
+            {#if workingCall}
+                <div
+                    class="rounded px-2 py-0.5 {workingBannerClass}"
+                    title="Worked station — selected TX channel occupancy + calls left before auto-abandon"
+                >
+                    Working {workingCall} — {workingChannelLabel}{callsLeftLabel}
+                </div>
+            {:else}
+                <div class={rxCaptionClass}>{rxCaption}</div>
+            {/if}
+        </div>
     </div>
     <div class="flex flex-col text-center w-20">
         <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>
@@ -699,7 +711,7 @@
      occupancy + the auto-abandon "N calls left" countdown (green=clear · red=busy ·
      gray=unknown), replacing the idle offset readout — a station landing on the picked
      channel surfaces before the next TX keys. -->
-<div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5">
+<!--div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5">
     {#if workingCall}
         <div
             class="rounded px-2 py-0.5 {workingBannerClass}"
@@ -710,7 +722,7 @@
     {:else}
         <div class={rxCaptionClass}>{rxCaption}</div>
     {/if}
-</div>
+</div-->
 <!-- Heroicon "cog-6-tooth" (outline) — the Settings tab icon, matching the gear
      used on InfoPanel's My Station tab so the two operating modes read alike. -->
 {#snippet settingsIcon()}

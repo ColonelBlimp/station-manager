@@ -26,11 +26,12 @@
                 ft8_display: {
                     history_max: fd.historyMax,
                     feed_mode: fd.feedMode,
+                    // The three highlight colours have no LSPA picker — they're edited
+                    // in the config SPA. But the PUT replaces the whole ft8_display
+                    // block, so we round-trip them unchanged here; omitting them would
+                    // reset them to default on a Band Activity save.
                     highlight_unworked: fd.highlightUnworked,
                     highlight_worked: fd.highlightWorked,
-                    // Round-tripped (no LSPA picker — config-SPA/hand-edited). The
-                    // PUT replaces the whole ft8_display block, so we must send it
-                    // back unchanged or a Settings save would reset it to default.
                     highlight_calling: fd.highlightCalling,
                     cq_to_top: fd.cqToTop,
                     hide_hashed_calls: fd.hideHashedCalls,
@@ -59,7 +60,7 @@
     }
 </script>
 
-<div class="flex gap-x-6 px-2 py-4 text-sm text-gray-700">
+<div class="flex gap-x-6 px-2 py-4 text-sm ft8-info-panel-height text-gray-700">
     <div class="flex flex-col w-80">
         <h3 class="font-semibold text-gray-800">Band Activity</h3>
         <label class="flex items-center justify-between gap-3">
@@ -85,7 +86,8 @@
                 <option value="single">Single slot</option>
             </select>
         </label>
-
+    </div>
+    <div>
         <label class="flex items-center justify-between gap-3 pt-1">
             <!-- Floats CQ rows (the answerable ones) to the top of the feed; in this
                  mode per-slot separators are suppressed (the list is no longer slot-ordered). -->
@@ -105,29 +107,6 @@
                 type="checkbox"
                 bind:checked={configState.ft8Display.hideHashedCalls}
                 class="h-4 w-4 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            />
-        </label>
-    </div>
-    <div class="flex flex-col w-66">
-        <h3 class="mt-2 font-semibold text-gray-800">CQ highlight colours</h3>
-
-        <label class="flex items-center justify-between gap-3">
-            <span>Not worked on this band</span>
-            <input
-                type="color"
-                bind:value={configState.ft8Display.highlightUnworked}
-                class="h-7 w-12 cursor-pointer rounded border border-gray-300"
-                aria-label="Not-worked highlight colour"
-            />
-        </label>
-
-        <label class="flex items-center justify-between gap-3">
-            <span>Worked before (dupe)</span>
-            <input
-                type="color"
-                bind:value={configState.ft8Display.highlightWorked}
-                class="h-7 w-12 cursor-pointer rounded border border-gray-300"
-                aria-label="Worked-before highlight colour"
             />
         </label>
     </div>

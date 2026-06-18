@@ -31,7 +31,7 @@
     interface Props {
         cssTableHeight?: string;
     }
-    let { cssTableHeight = 'h-35' }: Props = $props();
+    let { cssTableHeight = 'h-36' }: Props = $props();
 
     /*
         Reverse for newest-first display without mutating the
@@ -160,7 +160,7 @@
     </svg>
 {/snippet}
 
-<div class="px-2">
+<div class="px-2 {cssTableHeight}">
     {#if rows.length === 0}
         <p class="text-sm text-gray-500 italic px-1 py-2 {cssTableHeight}">
             No QSOs logged this session.

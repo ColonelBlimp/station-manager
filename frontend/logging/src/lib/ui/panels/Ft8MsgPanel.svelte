@@ -220,16 +220,16 @@
     });
 </script>
 
-<div class="flex flex-col text-sm text-gray-700 h-42 mt-4">
+<div class="flex flex-col text-sm text-gray-700 ft8-info-panel-height pt-4">
     <div class="flex flex-row h-46">
-        <div class="w-full px-2">
+        <div class="flex w-100">
             {#if tx.armed}
                 <div
-                    class="flex flex-col py-0 font-mono text-sm text-left border border-gray-300 rounded"
+                    class="w-100 h-31 flex flex-col py-0 font-mono text-xs text-left border border-gray-300 rounded"
                 >
                     {#each ladder as m, i (i)}
                         <div
-                            class="items-center h-6 flex gap-x-2 rounded px-2 {i === ladderStep
+                            class="items-center h-5 flex gap-x-2 rounded px-2 {i === ladderStep
                                 ? 'bg-indigo-100 font-semibold text-indigo-800'
                                 : m.dir === 'rx'
                                   ? 'italic text-gray-400'
@@ -244,7 +244,7 @@
                 <p class="text-xs text-gray-400">Enable TX to call CQ.</p>
             {/if}
         </div>
-        <div class="flex flex-col gap-1 w-50 z-10">
+        <div class="flex flex-col gap-1 px-5 w-50 z-10">
             <div class="flex flex-col gap-y-2 h-29">
                 <button
                     type="button"
@@ -274,19 +274,19 @@
                     </button>
                 {/if}
             </div>
-            <div>
-                <button
-                    type="button"
-                    onclick={toggleArm}
-                    disabled={arming || !canArm}
-                    class="h-8 w-41 rounded px-3 py-1.5 text-sm font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
+        </div>
+        <div class="flex flex-col w-80 items-center justify-center">
+            <button
+                type="button"
+                onclick={toggleArm}
+                disabled={arming || !canArm}
+                class="h-22 w-40 rounded text-base font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
                         ? 'bg-red-600 text-white hover:bg-red-700'
                         : 'bg-focus text-surface hover:opacity-90'}"
-                >
-                    {tx.armed ? 'Disable Tx' : 'Enable Tx'}
-                </button>
-            </div>
+            >
+                {tx.armed ? 'Disable Tx' : 'Enable Tx'}
+            </button>
         </div>
     </div>
-    <div class="z-0 flex flex-col items-center -mt-7.5">{statusLine}</div>
+    <!-- div class="z-0 flex flex-col items-center -mt-7.5">{statusLine}</div-->
 </div>

@@ -201,4 +201,7 @@
     .ft8-panel-width {
         @apply w-80;
     }
+    .ft8-info-panel-height {
+        @apply h-34;
+    }
 }
