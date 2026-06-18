@@ -45,10 +45,12 @@
 
 import type {
     AdifModePair,
+    ConfigOutcome,
     ConfigResponse,
     LoggingStationFields,
     StationFields,
 } from '../api/config';
+import { putConfig } from '../api/config';
 import { fetchLogbookCount } from '../api/logbook';
 
 class StationConfig {
@@ -452,6 +454,34 @@ class ConfigState {
             amp_multiplier: this.station.ampMultiplier,
             default_power: this.station.defaultPower,
         };
+    }
+
+    /**
+     * Persist the FT8 display block via PUT /v1/config. The single save point for
+     * `ft8.display` — used by both the FT8 Settings tab (history_max / feed_mode /
+     * cq_to_top) and the Band Activity filter popover (hide_hashed_calls auto-save).
+     * Sends the FULL ft8_display block (the daemon replaces it raw, so every field is
+     * round-tripped, including the three colours the config SPA owns) and bundles the
+     * current logging_station/station (the daemon overwrites those unconditionally —
+     * omitting them would zero the operator identity). Re-hydrates on success.
+     */
+    async saveFt8Display(): Promise<ConfigOutcome> {
+        const fd = this.ft8Display;
+        const outcome = await putConfig({
+            logging_station: this.toLoggingStationFields(),
+            station: this.toStationFields(),
+            ft8_display: {
+                history_max: fd.historyMax,
+                feed_mode: fd.feedMode,
+                highlight_unworked: fd.highlightUnworked,
+                highlight_worked: fd.highlightWorked,
+                highlight_calling: fd.highlightCalling,
+                cq_to_top: fd.cqToTop,
+                hide_hashed_calls: fd.hideHashedCalls,
+            },
+        });
+        if (outcome.kind === 'ok') this.applyResponse(outcome.config);
+        return outcome;
     }
 
     /**

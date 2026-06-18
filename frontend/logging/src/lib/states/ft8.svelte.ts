@@ -206,6 +206,14 @@ class Ft8State {
      */
     selectedOffset: number | null = $state(loadTxOffset());
     /**
+     * Band Activity typed filter (the funnel popover). Token-prefix match: a decode
+     * shows when any whitespace token starts with this text (case-insensitive);
+     * stations calling us bypass it. Session-scoped, in-memory only — a transient
+     * hunt, NOT a durable setting (unlike the hide-hashed toggle, which is config).
+     * Empty = no filter.
+     */
+    bandFilter: string = $state('');
+    /**
      * Rolling decode history for the Band Activity feed — newest slot on top,
      * frequency-ascending within each slot. Capped at configState.ft8Display
      * .historyMax (daemon-owned) and shown either accumulated or single-slot per

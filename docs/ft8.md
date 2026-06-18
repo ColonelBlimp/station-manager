@@ -168,12 +168,26 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
     stations) above the rest of the feed, stably partitioned (each group keeps its
     order). Per-slot separators are suppressed while on (the list is no longer
     slot-ordered). SPA-side reorder of `ft8State.decodes`; no daemon change.
-  - **hide hashed calls** (`hide_hashed_calls`, default off): drops Band Activity
-    decodes carrying an unresolved hashed call (`<...>` — a non-standard/compound call
-    the receiver can't expand, which can't be identified or worked → dross). A station
-    **calling you** still shows through (toMe-bypass), so you never miss a caller.
-    SPA-side filter of `ft8State.decodes`, ahead of the CQ-to-top ordering; Band
-    Activity only (the Rx Frequency pane is unaffected). No daemon change.
+  (Note `cq_to_top` is *ordering*, not filtering — it reorders, it never hides — so it
+  lives in the Settings tab. The row-*hiding* filters live in the funnel popover below.)
+
+  **Band Activity filters — the funnel popover.** A **funnel icon** sits to the right
+  of the "Band Activity" header; it opens a small popover holding the two controls that
+  **hide rows** (the funnel shows an active tint whenever either is narrowing the feed —
+  the only cue that rows are hidden while the popover is closed). A station **calling you**
+  (toMe) **always shows through** both filters, so you never miss a caller.
+  - **typed filter** (`ft8State.bandFilter`): **token-prefix** — a decode shows when any
+    whitespace token starts with the typed text, case-insensitive ("show calls starting
+    with VK" matches the `VK3ABC` token, not `G4VKX`; `CQ`/`73` filter by message kind).
+    **Session-scoped, in-memory** — a transient hunt, NOT a durable setting; cleared on
+    tab close. No save.
+  - **hide hashed calls** (`hide_hashed_calls`, default off): drops decodes carrying an
+    unresolved hashed call (`<...>` — a non-standard/compound call the receiver can't
+    expand → dross). **Durable** config (`ft8.display`); the popover toggle **auto-saves**
+    on change (no Save button — reuses `configState.saveFt8Display()`).
+
+  Both run SPA-side on `ft8State.decodes`, ahead of the CQ-to-top ordering; Band Activity
+  only (the Rx Frequency pane is unaffected). No daemon change beyond the persisted flag.
 
     The **SNR** column (WSJT-X-style signed dB, e.g. `-13`/`+04`) comes
   from go-ft8's `DecodedMessage.SNR` (dB, 2500 Hz reference), added in go-ft8
@@ -513,9 +527,11 @@ config.
 
 ### Config — `ft8.display.*` (Band Activity preferences)
 
-Operator display settings edited from the **FT8 Settings tab** (not hand-edited);
-served resolved on `/v1/config` (`ft8_display`) and PUT back to persist. The daemon
-does not consume these — they're pure SPA presentation — it stores + resolves them
+Operator display settings, served resolved on `/v1/config` (`ft8_display`) and PUT back
+to persist. Edited across a few surfaces: `history_max` / `feed_mode` / `cq_to_top` from
+the **FT8 Settings tab**; `hide_hashed_calls` from the **Band Activity filter funnel**
+(auto-saves on toggle); the three `highlight_*` colours from the **config SPA**. The
+daemon does not consume these — they're pure SPA presentation — it stores + resolves them
 (`types.ResolveFt8Display`), so a fresh config still yields sensible values.
 
 | Key | Default | Meaning |

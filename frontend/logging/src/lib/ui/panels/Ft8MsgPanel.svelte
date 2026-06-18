@@ -210,14 +210,16 @@
         }
     }
 
-    // Status line under the controls.
-    const statusLine = $derived.by(() => {
-        if (!tx.armed) return 'Tx disabled.';
-        if (tx.transmitting)
-            return `Transmitting ${tx.message || cqMessage} @ ${tx.offsetHz || offset} Hz…`;
-        if (tx.error) return `Last transmission failed (${tx.error}).`;
-        return 'Tx Enabled — ready.';
-    });
+    // Status line under the controls. Commented out alongside its render (search
+    // for the matching `{statusLine}` block in the markup) while the layout is being
+    // reworked — re-enable both together.
+    // const statusLine = $derived.by(() => {
+    //     if (!tx.armed) return 'Tx disabled.';
+    //     if (tx.transmitting)
+    //         return `Transmitting ${tx.message || cqMessage} @ ${tx.offsetHz || offset} Hz…`;
+    //     if (tx.error) return `Last transmission failed (${tx.error}).`;
+    //     return 'Tx Enabled — ready.';
+    // });
 </script>
 
 <div class="flex flex-col text-sm text-gray-700 ft8-info-panel-height pt-4">

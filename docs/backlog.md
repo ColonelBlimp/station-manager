@@ -165,17 +165,13 @@ when it ships — don't let this rot into a graveyard.
   **blocked on upstream** — track go-ft8's response; once it exposes the hashed-callsign
   type-1/type-2 encode path, wire it through the `EncodeStandardMessage` seam + drop the
   sequencer skip-guard for the calls it can now encode. Free-text (part 2) is separate.
-- **FT8 Band Activity — typed display filter (token-prefix), placement pending.**
-  Operator wants to narrow the feed to decodes matching a typed filter ("only show calls
-  starting with …"). **Design pinned 2026-06-18:** match = **token-prefix** (show a
-  decode if any whitespace token starts with the typed text, case-insensitive — so `VK`
-  matches the `VK3ABC` token but not `G4VKX`, and `CQ`/`73` filter by message kind);
-  **toMe-bypass** (a station calling you always shows through); session-scoped in-memory
-  (`ft8State.bandFilter`, like the selected offset — NOT durable); composes after the
-  hide-hashed filter and before CQ-to-top ordering. **Still open: placement** (operator
-  mulling — inline under the Band Activity header was the proposal). Build once placement
-  is decided. *(The separate "hide hashed-call dross" toggle SHIPPED 2026-06-18 —
-  `ft8.display.hide_hashed_calls`, default off, FT8 Settings tab; see `docs/ft8.md`.)*
+- ~~**FT8 Band Activity — typed display filter (token-prefix).**~~ **SHIPPED 2026-06-18.**
+  Token-prefix match (any whitespace token starts with the typed text, case-insensitive),
+  toMe-bypass, session-scoped (`ft8State.bandFilter`). Placement landed as a **funnel
+  popover** beside the "Band Activity" header (`Ft8FilterPopover.svelte`) — also holds the
+  **hide hashed-call** toggle (moved out of the Settings tab; durable, auto-saves). The
+  funnel shows an active tint when either filter is narrowing the feed. `cq_to_top` stayed
+  in Settings (it's ordering, not a filter). See `docs/ft8.md`.
 - **FT8 e4 — `TIME_ON` should be the QSO start, not the completion instant.**
   `ft8.BuildQso` (`internal/ft8/qsolog.go`) stamps both `TIME_ON` and `TIME_OFF`
   from `now` (the moment the 73 is sent) because `CompletedQso` carries no start

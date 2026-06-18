@@ -3,6 +3,7 @@
     import Ft8OccupancyPanel from './Ft8OccupancyPanel.svelte';
     import Ft8MsgPanel from './Ft8MsgPanel.svelte';
     import Ft8SettingsPanel from './Ft8SettingsPanel.svelte';
+    import Ft8FilterPopover from './Ft8FilterPopover.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import SessionEmailControls from './SessionEmailControls.svelte';
     import Ft8EnrichmentBox from './Ft8EnrichmentBox.svelte';
@@ -328,16 +329,26 @@
     // answerable stations sit together at the top. Slot separators are suppressed in
     // that mode (the list is no longer slot-ordered) — see showSlot in the markup.
     const cqToTop = $derived(configState.ft8Display.cqToTop);
-    // Base Band Activity feed with the hashed-call dross removed when the operator
-    // has "Hide hashed calls" on: drop decodes carrying an unresolved hashed call
-    // ("<...>" — a non-standard/compound call the receiver can't expand, so it can't
-    // be identified or worked) — but NEVER hide a station calling us (toMe-bypass),
-    // since missing a caller is costly. Ordering (cqToTop) runs on this filtered base.
+    // Base Band Activity feed after the funnel filters (both HIDE rows):
+    //   - hide-hashed: drop decodes with an unresolved hashed call ("<...>" — a
+    //     non-standard/compound call the receiver can't expand, so it can't be
+    //     identified or worked).
+    //   - typed token-prefix (ft8State.bandFilter): keep a decode only if some
+    //     whitespace token starts with the filter (case-insensitive) — "show calls
+    //     starting with VK".
+    // A station calling us (toMe) ALWAYS shows — neither filter hides it, since
+    // missing a caller is costly. Ordering (cqToTop) runs on this filtered base.
     const visibleDecodes = $derived.by(() => {
-        if (!configState.ft8Display.hideHashedCalls) return ft8State.decodes;
-        return ft8State.decodes.filter(
-            (d) => !d.text.includes('<...>') || parseDirectedToMe(d.text, myCall) !== null
-        );
+        const hideHashed = configState.ft8Display.hideHashedCalls;
+        const filter = ft8State.bandFilter.trim().toUpperCase();
+        if (!hideHashed && filter === '') return ft8State.decodes;
+        return ft8State.decodes.filter((d) => {
+            if (parseDirectedToMe(d.text, myCall) !== null) return true; // calling us — always show
+            if (hideHashed && d.text.includes('<...>')) return false;
+            if (filter !== '' && !d.text.toUpperCase().split(/\s+/).some((t) => t.startsWith(filter)))
+                return false;
+            return true;
+        });
     });
     const orderedDecodes = $derived.by(() => {
         if (!cqToTop) return visibleDecodes;
@@ -617,7 +628,10 @@
         </div>
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
-        <h2 class="text-base font-semibold my-2">Band Activity</h2>
+        <div class="my-2 flex items-center justify-center gap-1.5">
+            <h2 class="text-base font-semibold m-0">Band Activity</h2>
+            <Ft8FilterPopover />
+        </div>
         <div class="flex h-80 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if orderedDecodes.length > 0}
                 <!-- Slot separators only in accumulate mode AND when not floating CQ to
@@ -637,7 +651,7 @@
                 <p class="mt-1 text-xs">Waiting for decodes…</p>
             {/if}
         </div>
-        <div class="mt-0.5 text-gray-700 text-xs">{slotLabel}</div>
+        <div class="w-full mt-2 font-semibold text-gray-700 text-xs">{slotLabel}</div>
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Rx Frequency</h2>
