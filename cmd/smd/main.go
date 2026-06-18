@@ -550,7 +550,7 @@ func run() error {
 			Call:     pskRxCall,
 			Locator:  strings.TrimSpace(cfg.LoggingStation.MyGridsquare),
 			Software: "StationManager " + Version,
-			Antenna:  cfg.PskReporter.Antenna,
+			Antenna:  strings.TrimSpace(cfg.LoggingStation.MyAntenna), // ADIF MY_ANTENNA — single source
 		},
 		loggerSvc,
 	)

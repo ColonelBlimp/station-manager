@@ -216,7 +216,7 @@ when it ships — don't let this rot into a graveyard.
   stays decode-only — narrow-scope holds). Per spot: sender call + grid (`ft8.SpotFrom`,
   reusing the sequencer parse; hashed/free-text skipped), **freq = dial + audio offset**,
   SNR, `FT8`, slot time, `informationSource=1`; receiver = `logging_station` call/grid +
-  `StationManager <ver>` + optional antenna. Dedup per call (best SNR) per window, flush
+  `StationManager <ver>` + antenna (from `MY_ANTENNA`). Dedup per call (best SNR) per window, flush
   ~5 min (program-relative + jitter), descriptors in the first 3 datagrams + hourly,
   one long-lived UDP socket (constant source port). **Opt-in: `psk_reporter.enabled`
   default OFF**, also gated on a configured receiver callsign; **best-effort, never blocks

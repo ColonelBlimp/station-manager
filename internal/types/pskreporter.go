@@ -8,12 +8,12 @@ package types
 // host and set Port=14739 (the test port on the same collector — parses without
 // writing the live database); NOT pskreporter.info, which is the website + drops UDP.
 //
-// The receiver identity (callsign, grid) is NOT here — it comes from
-// LoggingStation. Not exposed over /v1/config (set-once daemon config, like the
-// SMTP block); a config-SPA surface can come later.
+// The receiver identity is NOT here — callsign and grid come from LoggingStation,
+// and the antennaInformation is sourced from its MY_ANTENNA (single source of
+// truth, same as the antenna stamped on logged QSOs). Not exposed over /v1/config
+// (set-once daemon config, like the SMTP block); a config-SPA surface can come later.
 type PskReporterConfig struct {
 	Enabled bool   `json:"enabled,omitempty"`
-	Host    string `json:"host,omitempty"`    // "" → production report.pskreporter.info
-	Port    int    `json:"port,omitempty"`    // 0 → 4739
-	Antenna string `json:"antenna,omitempty"` // freeform antennaInformation, shown on the PSK map
+	Host    string `json:"host,omitempty"` // "" → production report.pskreporter.info
+	Port    int    `json:"port,omitempty"` // 0 → 4739
 }

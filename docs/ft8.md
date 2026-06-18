@@ -573,7 +573,9 @@ feed. The **report/upload** side only; the retrieve/query feed is future work.
 | `enabled` | `false` | upload FT8 spots (opt-in) |
 | `host` | `report.pskreporter.info` | UDP collector host (NOT `pskreporter.info` — that's the website and drops UDP) |
 | `port` | `4739` | `4739` = production; `14739` = test port on the same host (parses without writing the live DB) |
-| `antenna` | — | freeform antenna description, shown on the PSK map |
+
+The reported antenna comes from the station's **`MY_ANTENNA`** (My Station config), not a
+`psk_reporter` key — single source of truth with the antenna stamped on logged QSOs.
 
 The encoder is verified byte-for-byte against the spec's worked example
 (`internal/pskreporter/ipfix_test.go`), and validated end-to-end against the live
