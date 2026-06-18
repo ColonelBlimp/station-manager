@@ -131,6 +131,12 @@ type Service struct {
 	// logged. Read only in the seq.onComplete callback (decodeLoop goroutine,
 	// created after wiring — happens-before holds).
 	qsoLogger func(ctx context.Context, c CompletedQso)
+
+	// decodeSink observes every slot's decodes (e.g. the PSK Reporter uploader);
+	// injected via SetDecodeSink before Start. nil = no observer. Called from the
+	// decode goroutine after the SSE publish. DI keeps internal/ft8 free of the
+	// consumer (one-way import), same as qsoLogger.
+	decodeSink func(DecodeReport)
 }
 
 // newService constructs a Service with an injected capture source. The
@@ -397,7 +403,11 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// Publish the decode feed (live Band Activity) and the occupancy report
 		// (TX-offset picker) for the same slot. Independent SSE events on one
 		// stream; order between them doesn't matter to the SPA.
-		s.hub.publish(hubEvent{name: EventDecode, payload: newDecodeReport(ref, msgs)})
+		report := newDecodeReport(ref, msgs)
+		s.hub.publish(hubEvent{name: EventDecode, payload: report})
+		if s.decodeSink != nil {
+			s.decodeSink(report)
+		}
 
 		rep := Occupancy(ref, slot.Samples, msgs, s.occCfg)
 		rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, prevTop)

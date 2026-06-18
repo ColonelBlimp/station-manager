@@ -549,6 +549,35 @@ data clear and follow the operator (per the "settings live in config.json, not
 localStorage" rule). The **selected TX offset** is the one exception — it stays in
 localStorage (`sm.ft8.tx.offset`) as live operating state, not a setting.
 
+### PSK Reporter upload — `psk_reporter.*` (`internal/pskreporter`)
+
+Uploads FT8 **reception reports** ("I heard this station") to PSK Reporter
+(<https://pskreporter.info/pskdev.html>) — the propagation-map / "who's hearing me"
+feed. The **report/upload** side only; the retrieve/query feed is future work.
+
+- **Opt-in, default OFF** (`psk_reporter.enabled`) — it publishes your RX to a public
+  service. Also gated on a configured receiver callsign (`logging_station`).
+- **Fed by the FT8 decode stream** via `ft8.Service.SetDecodeSink` (one-way DI like
+  `SetQsoLogger`, so `internal/ft8` stays decode-only — narrow-daemon-scope holds).
+  `cmd/smd` extracts a spot per decode with `ft8.SpotFrom` (sender call + grid; hashed
+  `<...>` / free text skipped), and reports **freq = dial + audio offset** (the real RF,
+  not the dial-only QSO convention), SNR, mode `FT8`, slot time.
+- **Transport:** IPFIX over one long-lived UDP socket (constant source port). Dedup per
+  call (best SNR) within a window; flush ~5 min (program-relative timer + jitter, never
+  system-clock-synced); descriptors in the first 3 datagrams + hourly. **Best-effort —
+  a send failure logs and drops; never blocks decoding.**
+- **Config keys** (`config.json` → `psk_reporter`, not on `/v1/config`):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | upload FT8 spots (opt-in) |
+| `host` | `report.pskreporter.info` | collector host; set `pskreporter.info` for the test server |
+| `port` | `4739` | collector port; `14739` is the test server |
+| `antenna` | — | freeform antenna description, shown on the PSK map |
+
+The encoder is verified byte-for-byte against the spec's worked example
+(`internal/pskreporter/ipfix_test.go`).
+
 ## 5. Transmit roadmap (ADR 0029)
 
 Daemon-owned TX, **operator-initiated and attended** (a human starts each QSO; the

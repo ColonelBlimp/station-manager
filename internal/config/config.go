@@ -125,6 +125,11 @@ type Config struct {
 	// types.QslDefaults per the canonical-DTO idiom (same struct on wire + disk).
 	Qsl types.QslDefaults `json:"qsl"`
 
+	// PskReporter holds FT8 reception-report upload settings (opt-in, default off).
+	// Read at startup and fed to the internal/pskreporter subsystem; not exposed
+	// over /v1/config (set-once, like the SMTP block).
+	PskReporter types.PskReporterConfig `json:"psk_reporter,omitempty"`
+
 	// Lookup holds the enrichment pipeline configuration per ADR 0017
 	// — hamnut (country source-of-truth), the callsign-class provider
 	// chain, per-table staleness TTLs, and the bound on the async-

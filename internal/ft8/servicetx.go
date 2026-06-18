@@ -425,6 +425,13 @@ func (s *Service) SetQsoLogger(fn func(ctx context.Context, c CompletedQso)) {
 	s.qsoLogger = fn
 }
 
+// SetDecodeSink injects an observer called once per slot with that slot's decodes
+// (the PSK Reporter uploader). Set once during wiring, before Start. Like
+// SetQsoLogger, it keeps internal/ft8 free of the consumer (one-way import via DI).
+func (s *Service) SetDecodeSink(fn func(DecodeReport)) {
+	s.decodeSink = fn
+}
+
 // SetExchangePath records the operator's antenna-path choice for the active
 // exchange — "S"/"short" or "L"/"long" (case-insensitive). Logging-only: it
 // annotates the QSO the exchange logs (ADIF ANT_PATH + the short/long

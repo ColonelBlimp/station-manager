@@ -108,6 +108,20 @@ type message struct {
 	report int    // signal report value — msgReport / msgRReport only
 }
 
+// SpotFrom extracts a PSK Reporter reception spot — the TRANSMITTING station's
+// callsign and (when the message carries it) grid — from a decoded FT8 line.
+// ok is false for lines with no resolvable sender (hashed `<...>`, free text, bare
+// modifiers). The sender is the message's `from`: for a CQ it's the caller (grid
+// included); for a directed message it's the second call (grid only on a grid
+// reply). Reuses parseMessage so the spot view matches the sequencer's.
+func SpotFrom(text string) (call, grid string, ok bool) {
+	m := parseMessage(text)
+	if m.from == "" {
+		return "", "", false
+	}
+	return m.from, m.grid, true
+}
+
 // parseMessage reduces a decoded FT8 line to the sequencer's message model. An
 // unrecognised or non-standard line parses to a zero message (kind msgOther),
 // which the resolver simply ignores — degrade, never break.

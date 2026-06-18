@@ -140,6 +140,15 @@ e4 sink, after `QsoToRecord`); ADIF **import** is deliberately left alone. No SP
 involvement (it's pure config the daemon owns). Writable via `PUT /v1/config`
 (presence-aware). A config-SPA editor is future work; set it by hand for now.
 
+### `PskReporterConfig` (`internal/types/pskreporter.go`, config key `psk_reporter`)
+
+FT8 reception-report upload to PSK Reporter. `enabled` (default **false** — opt-in,
+publishes RX to a public service), `host`/`port` (default `report.pskreporter.info:4739`;
+`pskreporter.info:14739` is the test server), `antenna` (freeform). Receiver identity
+comes from `LoggingStation`, not here. Read at startup → fed to `internal/pskreporter`;
+**not on `/v1/config`** (set-once, like the SMTP block — a config-SPA surface can come
+later). Detail in `docs/ft8.md`.
+
 ### Other blocks (all global, config.json-authoritative, read at start)
 
 `StationConfig`, `LoggingStation` (ADIF `MY_*`), `ForwarderConfig` (+`RetryConfig`),

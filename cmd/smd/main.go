@@ -37,6 +37,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/lookup/hamnut"
 	lookupqrz "github.com/ColonelBlimp/station-manager/internal/lookup/qrz"
 	"github.com/ColonelBlimp/station-manager/internal/lookup/refresher"
+	"github.com/ColonelBlimp/station-manager/internal/pskreporter"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -531,12 +532,74 @@ func run() error {
 			ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID))
 		}, false /* one-shot: a completed QSO is a single event, no respawn */)
 	})
+	// PSK Reporter upload (opt-in): every FT8 decode is a "heard this station"
+	// reception report. The uploader is fed the decode stream via SetDecodeSink
+	// (same one-way DI as the QSO logger), so internal/ft8 stays free of it and
+	// narrow-daemon-scope holds. Best-effort: it never touches the decode timing.
+	pskRxCall := strings.TrimSpace(cfg.LoggingStation.StationCallsign)
+	if pskRxCall == "" {
+		pskRxCall = strings.TrimSpace(cfg.LoggingStation.Operator)
+	}
+	pskSvc := pskreporter.New(
+		pskreporter.Config{
+			Enabled: cfg.PskReporter.Enabled,
+			Host:    cfg.PskReporter.Host,
+			Port:    cfg.PskReporter.Port,
+		},
+		pskreporter.Receiver{
+			Call:     pskRxCall,
+			Locator:  strings.TrimSpace(cfg.LoggingStation.MyGridsquare),
+			Software: "StationManager " + Version,
+			Antenna:  cfg.PskReporter.Antenna,
+		},
+		loggerSvc,
+	)
+	ft8Svc.SetDecodeSink(func(r ft8.DecodeReport) {
+		// Gate on a configured receiver callsign too: an empty receiver record is
+		// rejected by the server, so without a callsign we upload nothing.
+		if !cfg.PskReporter.Enabled || pskRxCall == "" {
+			return
+		}
+		// Absolute frequency needs the rig dial (the bridge has it; FT8 logs the
+		// dial, not dial+offset). No reliable dial → skip the slot rather than
+		// report a wrong/zero frequency (frequency is a required spot field).
+		dialMHz, ok := bridgeSvc.CurrentDialMHz()
+		if !ok {
+			return
+		}
+		t, err := time.Parse(time.RFC3339, r.Slot.StartUTC)
+		if err != nil {
+			return
+		}
+		dialHz := uint32(dialMHz * 1e6)
+		unix := uint32(t.Unix())
+		for _, d := range r.Decodes {
+			call, grid, ok := ft8.SpotFrom(d.Text)
+			if !ok || call == pskRxCall { // unparseable/hashed, or our own call
+				continue
+			}
+			pskSvc.AddSpot(pskreporter.Spot{
+				Call:     call,
+				Grid:     grid,
+				FreqHz:   dialHz + uint32(d.FreqHz),
+				SNR:      int8(d.SNR),
+				Mode:     "FT8",
+				TimeUnix: unix,
+			})
+		}
+	})
+
 	if err := ft8Svc.Initialize(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("initialize ft8")
 	}
 	if err := ft8Svc.Start(workerCtx); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("start ft8")
 	}
+	// Start the PSK Reporter uploader (no-op + no socket when disabled).
+	if err := pskSvc.Start(workerCtx); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("start pskreporter")
+	}
+	defer func() { _ = pskSvc.Stop() }()
 	// Idempotent Stop (sync.Once); the explicit shutdown call below turns
 	// this into a no-op on the happy path. Covers the error-return paths.
 	defer func() {
@@ -590,6 +653,10 @@ func run() error {
 	// slot's decode time.
 	if err := ft8Svc.Stop(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("ft8: Stop error")
+	}
+	// Flush + close the PSK Reporter uploader (final best-effort send).
+	if err := pskSvc.Stop(); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("pskreporter: Stop error")
 	}
 
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
