@@ -576,7 +576,11 @@ feed. The **report/upload** side only; the retrieve/query feed is future work.
 | `antenna` | — | freeform antenna description, shown on the PSK map |
 
 The encoder is verified byte-for-byte against the spec's worked example
-(`internal/pskreporter/ipfix_test.go`).
+(`internal/pskreporter/ipfix_test.go`). For manual end-to-end validation without the
+daemon, **`cmd/ft8-psk-probe`** (dev/test only, not a production path) builds spots
+from sample decode lines via `ft8.SpotFrom` and sends one datagram to a server —
+defaulting to the **test** server (`pskreporter.info:14739`); `-host`/`-port` point it
+at production. `-dry` parses + prints without sending.
 
 ## 5. Transmit roadmap (ADR 0029)
 

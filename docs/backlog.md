@@ -223,6 +223,18 @@ when it ships — don't let this rot into a graveyard.
   decode**. Host/Port default to production `report.pskreporter.info:4739`; point at
   `pskreporter.info:14739` to use the test server. **Report/upload side only** — the
   retrieve/query feed (who heard *you*) remains a separate, later item.
+- **Spot-submitter registry — generalize when a 2nd destination lands (e.g. DX cluster).**
+  PSK Reporter is the first "submit what I heard" destination. A **DX cluster spot submit**
+  (telnet/TCP to a cluster node, e.g. announce a worked/heard DX) would be a second — at
+  which point it's a natural fit to extract a **spot-submitter interface + registry**,
+  mirroring `internal/forwarding` (Forwarder interface + `init()`-registered destinations)
+  and the lookup-provider chain: one decode-sink fans out to N registered submitters, each
+  with its own config/enable/transport. **Deliberately NOT done now** ("build specific, not
+  generic" — the v1 `internal/adapters` cautionary tale): one destination doesn't justify a
+  framework, and the cluster transport/semantics (TCP, often selective/manual announce) differ
+  enough that the abstraction should be designed against **two** real implementations, not
+  one. The current `pskreporter.Service` (AddSpot/Flush/Start/Stop) is shaped so the extraction
+  is clean when the DX-cluster submit actually arrives. Trigger: that second destination.
 - **FT8 Rx Frequency pane — cap the decode list + add a worked-station enrichment
   card.** The Rx Frequency column (`Ft8Panel.svelte`, `rxDecodes`) renders a tall
   scrolling decode list that earns little mid-QSO — the worked station transmits once

@@ -23,11 +23,12 @@ import (
 // the live database.
 
 const (
+	// DefaultHost/DefaultPort are the production collector — the fallback when the
+	// operator leaves Host/Port unset. The test server (pskreporter.info:14739) is
+	// not a constant here: it's just another Host/Port the operator (or the
+	// ft8-psk-probe CLI) supplies via Config.
 	DefaultHost = "report.pskreporter.info"
 	DefaultPort = 4739
-	// TestHost/TestPort — the test server (no live-database side effects).
-	TestHost = "pskreporter.info"
-	TestPort = 14739
 
 	flushInterval   = 5 * time.Minute  // protocol floor: a datagram at most every 5 min
 	maxJitter       = 30 * time.Second // de-synchronise reporters (spec)
@@ -199,6 +200,11 @@ func (s *Service) flush() {
 	s.log.InfoWith().Int("spots", len(spots)).Bool("templates", withTemplates).
 		Msg("pskreporter: uploaded spots")
 }
+
+// Flush sends any buffered spots immediately as the next datagram. The 5-minute
+// loop normally drives this; exposed for the ft8-psk-probe CLI (and a forced
+// send). No-op when nothing is buffered or the socket is closed.
+func (s *Service) Flush() { s.flush() }
 
 func (s *Service) onPanic(name string, panicValue any, stack []byte) {
 	s.log.ErrorWith().

@@ -288,3 +288,28 @@ func TestExchangeTrimsGridToFourChars(t *testing.T) {
 		t.Errorf("EncodeStandardMessage(%q) failed: %v", msg, err)
 	}
 }
+
+func TestSpotFrom(t *testing.T) {
+	cases := []struct {
+		text       string
+		call, grid string
+		ok         bool
+	}{
+		{"CQ VK3ABC QF22", "VK3ABC", "QF22", true},  // CQ → caller + grid
+		{"CQ DX W1AW FN31", "W1AW", "FN31", true},   // CQ with modifier
+		{"G0XYZ K1ABC -10", "K1ABC", "", true},      // directed report → sender, no grid
+		{"G0XYZ K1ABC R-09", "K1ABC", "", true},     // directed R-report
+		{"G0XYZ DL9UW JO31", "DL9UW", "JO31", true}, // directed grid → sender + grid
+		{"G0XYZ K1ABC/P 73", "K1ABC/P", "", true},   // /P sender encodes/decodes (v0.3.5)
+		{"<...> K1ABC -12", "", "", false},          // hashed counterpart → no parse
+		{"CQ", "", "", false},                       // bare CQ
+		{"HELLO BRAVE NEW WORLD", "", "", false},    // free text
+	}
+	for _, c := range cases {
+		call, grid, ok := SpotFrom(c.text)
+		if ok != c.ok || call != c.call || grid != c.grid {
+			t.Errorf("SpotFrom(%q) = (%q,%q,%v), want (%q,%q,%v)",
+				c.text, call, grid, ok, c.call, c.grid, c.ok)
+		}
+	}
+}
