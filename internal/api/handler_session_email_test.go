@@ -359,17 +359,17 @@ func submitTestQsoUUID(t *testing.T, srv *Server, lbID int64) string {
 
 func TestSessionEmailSubject_CallsignPrefix(t *testing.T) {
 	now := time.Date(2026, 6, 17, 14, 30, 0, 0, time.UTC)
-	// Default subject (none supplied), prefixed with the logbook callsign.
+	// Default subject (none supplied), prefixed with the logbook callsign + colon.
 	def := sessionEmailSubject("G4ABC", "", now)
-	if !strings.HasPrefix(def, "G4ABC ") {
-		t.Errorf("subject = %q, want it prefixed with 'G4ABC '", def)
+	if !strings.HasPrefix(def, "G4ABC: ") {
+		t.Errorf("subject = %q, want it prefixed with 'G4ABC: '", def)
 	}
 	if !strings.Contains(def, "Station Manager session ADIF") {
 		t.Errorf("default subject body missing; got %q", def)
 	}
-	// Operator-supplied subject is also prefixed with the callsign.
-	if got := sessionEmailSubject("G4ABC", "My QSOs", now); got != "G4ABC My QSOs" {
-		t.Errorf("supplied subject = %q, want 'G4ABC My QSOs'", got)
+	// Operator-supplied subject is also prefixed with the callsign + colon.
+	if got := sessionEmailSubject("G4ABC", "My QSOs", now); got != "G4ABC: My QSOs" {
+		t.Errorf("supplied subject = %q, want 'G4ABC: My QSOs'", got)
 	}
 	// No callsign → no prefix (just the supplied/default subject).
 	if got := sessionEmailSubject("", "My QSOs", now); got != "My QSOs" {

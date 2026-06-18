@@ -247,7 +247,7 @@ func sessionEmailSubject(callsign, supplied string, now time.Time) string {
 		subject = fmt.Sprintf("Station Manager session ADIF — %s", now.Format("2006-01-02 15:04 UTC"))
 	}
 	if c := strings.TrimSpace(callsign); c != "" {
-		subject = c + " " + subject
+		subject = c + ": " + subject
 	}
 	return subject
 }
