@@ -11,9 +11,9 @@ This project is intentionally minimal and aims to be straightforward to read and
 
 ## Installation
 
-- Go 1.20+
-- Add to your project:
-  go get github.com/ColonelBlimp/iocdi
+This is an **internal** package of Station Manager
+(`github.com/ColonelBlimp/station-manager/internal/iocdi`) — import it directly
+within the module; it is not separately `go get`-able.
 
 ## Quick start
 
@@ -50,7 +50,9 @@ This project is intentionally minimal and aims to be straightforward to read and
 3) Resolve your service.
 
 ```
-    v, err := c.ResolveSafe("bervicebean")
+    // Bean IDs are case-insensitive (lower-cased internally), so "ServiceBean"
+    // and "servicebean" resolve the same bean.
+    v, err := c.ResolveSafe("ServiceBean")
     if err != nil { panic(err) }
     svc := v.(*Service)
     // svc.Config and svc.Logger are injected; svc.Config.WorkingDir == "/var/app"
@@ -71,12 +73,13 @@ You can provide string dependencies at injection time without pre-registering th
 
 ```
     iocdi.SetLiteralProvider(func(id string, t reflect.Type) (any, bool, error) {
-        if id == "WorkingDir" { return "/workspace", true, nil }
+        // id is the LOWER-CASED tag, so match the lower-cased form.
+        if id == "workingdir" { return "/workspace", true, nil }
         return nil, false, nil
     })
 ```
 
-When `Build()` runs and encounters a missing string dependency (e.g., `WorkingDir`), the container will query the provider and inject the returned value. If you later register a bean with the same ID, that takes precedence and the provider is not called.
+When `Build()` runs and encounters a missing string dependency (e.g., a field tagged `di.inject:"WorkingDir"`), the container queries the provider with the lower-cased id (`"workingdir"`) and injects the returned value. If you later register a bean with the same ID, that takes precedence and the provider is not called.
 
 Note: The LiteralProvider is intended for strings only. You can extend the approach if you need more scalar types.
 
@@ -101,15 +104,19 @@ The container performs DFS-based cycle detection and returns a descriptive error
 
 ## Concurrency notes
 
-- Build is guarded; registration and build use internal locking
-- Resolution after build uses read locks for safety
-- The global LiteralProvider is stored via atomic.Value for race-free reads and safe updates; set it before building to avoid surprises
+- **Registration is expected to complete before `Build`, on one goroutine** —
+  the daemon registers all beans, then builds. Concurrent `Register`/`Build` is
+  NOT currently fully guarded (a known gap; see the package backlog) — don't
+  register from multiple goroutines or while building.
+- Resolution after build uses read locks for safety.
+- The global LiteralProvider is stored via atomic.Value for race-free reads and safe updates; set it before building to avoid surprises.
 
 ## Limitations (by design)
 
-- Only pointer-to-struct and string fields are discovered for injection
-- Interfaces and non-pointer struct fields are not supported by the built-in discovery
-- Tag-only injection: untagged fields are ignored, even if a compatible bean exists
+- Only pointer-to-struct and string fields are discovered for injection.
+- **Interfaces ARE supported** (a tagged interface field is satisfied by a
+  registered bean whose type implements it). Non-pointer struct fields are not.
+- Tag-only injection: untagged fields are ignored, even if a compatible bean exists.
 
 ## Testing
 

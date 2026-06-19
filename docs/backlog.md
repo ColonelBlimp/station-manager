@@ -47,6 +47,28 @@ when it ships — don't let this rot into a graveyard.
 
 ## Features / enhancements
 
+- **`internal/iocdi` contract hardening (concurrency + build-time validation).**
+  Filed from the `internal/iocdi` review (2026-06-19, M1 + M3 + M4); deferred
+  because the daemon registers single-threaded then builds, so none is exercised
+  today — the fail-fast wins (M2 reject duplicate/invalid registration) + L1/L2
+  shipped 2026-06-19. **M1:** registration isn't transactional — dependency
+  discovery + the `built` check happen before `regMu` is taken, so a concurrent
+  `Register`/`Build` can race the dependency map or accept a post-build bean. Fix:
+  do the whole register transaction (check `built` → discover deps → validate →
+  mutate both maps) under one lock; add a race test. **M3:** `requiredDependency`
+  stores one type per bean ID, so two fields sharing a tag ID with different types
+  lose one; and unexported/incompatible tagged fields are silently skipped, so
+  `Build` can succeed with a nil `di.inject` dependency that fails at first use.
+  Fix: store dependency edges per-field and validate EVERY tagged field at build
+  (settable, bean exists, assignable) — treat tagged-but-unset as a build error.
+  **NB before doing M3: confirm the current cmd/smd wiring has no latent
+  unsatisfied tag, or it will turn into a startup failure.** **M4:** `Build` runs
+  user `Initialize()` while holding `regMu` (an initializer that resolves/registers
+  would deadlock), and a failed initializer leaves `built=false` so a retry re-runs
+  the already-succeeded ones. Fix: release the registry lock before invoking
+  initializers, add a `building` state, and document/enforce initializer
+  idempotence. See `docs/reviews/internal-iocdi-2026-06-19.md`.
+
 - **`/v1/hardware` per-direction audio availability + enumeration caching.**
   Filed from the `internal/hardware` review (2026-06-19, M2 + M3), deferred to the
   **config-SPA workstream** (the unbuilt consumer). **M2:** `AudioDevices` returns

@@ -46,6 +46,51 @@ func TestContainerTestSuite(t *testing.T) {
 	suite.Run(t, new(TestSuite))
 }
 
+// emptyMarker is a genuinely zero-size struct — the case the removed L1 special
+// case targeted. Used to confirm an empty-struct dependency still injects.
+type emptyMarker struct{}
+
+type emptyMarkerReceiver struct {
+	M *emptyMarker `di.inject:"Marker"`
+}
+
+// TestRegister_RejectsPointerToNonStruct: a *int (etc.) must be rejected AT
+// Register, not silently registered and then skipped by Build (review M2).
+func TestRegister_RejectsPointerToNonStruct(t *testing.T) {
+	c := New()
+	require.ErrorIs(t, c.Register("BadBean", reflect.TypeFor[*int]()), ErrBeanTypeNotSupported)
+	// A pointer-to-struct is still fine.
+	require.NoError(t, c.Register("GoodBean", reflect.TypeFor[*Config]()))
+}
+
+// TestRegister_RejectsDuplicateBeanID: a repeated bean ID (incl. a case variant,
+// since IDs are lower-cased) is rejected rather than silently overwriting the
+// earlier bean (review M2).
+func TestRegister_RejectsDuplicateBeanID(t *testing.T) {
+	c := New()
+	require.NoError(t, c.Register("Dup", reflect.TypeFor[*Config]()))
+	require.ErrorIs(t, c.Register("Dup", reflect.TypeFor[*Logger]()), ErrDuplicateBeanID)
+	require.ErrorIs(t, c.Register("dup", reflect.TypeFor[*Logger]()), ErrDuplicateBeanID, "IDs are case-insensitive")
+
+	require.NoError(t, c.RegisterInstance("Inst", "first"))
+	require.ErrorIs(t, c.RegisterInstance("Inst", "second"), ErrDuplicateBeanID)
+}
+
+// TestInject_EmptyStructDependency: an empty (zero-size) struct dependency still
+// injects (non-nil) after the L1 special-case removal. Pointer identity isn't
+// asserted — Go aliases all zero-size allocations to runtime.zerobase, so it's
+// unobservable; this guards that injection of an empty-struct dep still happens.
+func TestInject_EmptyStructDependency(t *testing.T) {
+	c := New()
+	require.NoError(t, c.RegisterInstance("Marker", &emptyMarker{}))
+	require.NoError(t, c.Register("MarkerReceiver", reflect.TypeFor[*emptyMarkerReceiver]()))
+	require.NoError(t, c.Build())
+
+	got, err := c.ResolveSafe("MarkerReceiver")
+	require.NoError(t, err)
+	require.NotNil(t, got.(*emptyMarkerReceiver).M, "empty-struct dependency must be injected")
+}
+
 func (suite *TestSuite) TestContainer() {
 	container := New()
 	assert.NotNil(suite.T(), container)

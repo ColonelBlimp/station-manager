@@ -43,12 +43,13 @@ func New() *Container {
 
 // Register registers a bean by its reflect.Type.
 // If the type is a struct, it will be normalized to a pointer-to-struct for consistent injection semantics.
-// The 'beanID' parameter is case-sensitive with regard to the bean identifier and the
-// corresponding receiving bean tag. The case of the bean identifier must match the case of the
-// tag in the receiving bean.
+// The 'beanID' parameter is case-INSENSITIVE: it is lower-cased here and tags are
+// lower-cased before matching, so "Foo" and "foo" are the same bean.
 //
-// This method only supports registering structs and pointers to structs; simple types (e.g., string)
-// must be registered as instances using RegisterInstance.
+// This method only supports structs and POINTERS-TO-STRUCT; a pointer to a
+// non-struct (e.g. *int) or any other simple type must be registered as an
+// instance via RegisterInstance. A bean ID may be registered only once —
+// registering it twice returns ErrDuplicateBeanID.
 func (c *Container) Register(beanID string, beanType reflect.Type) error {
 	if beanID == emptyString {
 		return ErrBeanIdParamIsEmpty
@@ -62,10 +63,15 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 
 	beanID = strings.ToLower(beanID)
 
-	// Normalize struct kind to pointer-to-struct
+	// Normalize struct kind to pointer-to-struct. A pointer is accepted only if it
+	// points to a struct — Build only instantiates pointer-to-struct beans, so a
+	// *int (etc.) would register silently and then surface as "not initialized" at
+	// ResolveSafe, far from the bad Register call (review 2026-06-19 M2).
 	switch beanType.Kind() {
 	case reflect.Ptr:
-		// Expect a pointer to struct (legacy rule)
+		if beanType.Elem().Kind() != reflect.Struct {
+			return ErrBeanTypeNotSupported
+		}
 	case reflect.Struct:
 		beanType = reflect.PointerTo(beanType)
 	default:
@@ -84,16 +90,19 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 		dependencies:    deps,
 	}
 	c.regMu.Lock()
+	defer c.regMu.Unlock()
+	if _, dup := c.registeredBeans[beanID]; dup {
+		return ErrDuplicateBeanID
+	}
 	c.registeredBeans[beanID] = b
-	c.regMu.Unlock()
 	return nil
 }
 
 // RegisterInstance registers a concrete instance for type T.
 // The instance is treated as a singleton. Struct instances are normalized to pointers.
-// The 'beanID' parameter is case-sensitive with regard to the bean identifier and the
-// corresponding receiving bean tag. The case of the bean identifier must match the case of the
-// tag in the receiving bean.
+// The 'beanID' parameter is case-INSENSITIVE (lower-cased here, as tags are before
+// matching). A bean ID may be registered only once — a duplicate returns
+// ErrDuplicateBeanID rather than silently replacing the earlier instance.
 func (c *Container) RegisterInstance(beanID string, instance any) error {
 	if beanID == emptyString {
 		return ErrBeanIdParamIsEmpty
@@ -129,9 +138,11 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 	}
 
 	c.regMu.Lock()
+	defer c.regMu.Unlock()
+	if _, dup := c.registeredBeans[beanID]; dup {
+		return ErrDuplicateBeanID
+	}
 	c.registeredBeans[beanID] = b
-	c.regMu.Unlock()
-
 	return nil
 }
 

@@ -58,15 +58,13 @@ func injectIntoStruct(receiverBean bean, depBean bean, chain []string) error {
 
 		fieldType := fv.Type()
 
-		// Exact type match, including basic types like string and exact pointer types
+		// Exact type match, including basic types like string and exact pointer types.
+		// Inject the registered singleton instance directly — no special case for
+		// pointer-to-empty-struct (which used to allocate a fresh instance and so
+		// broke the singleton contract for zero-sized marker services; review
+		// 2026-06-19 L1).
 		if fieldType == depType {
-			// Special-case: if this is a pointer to an empty struct, allocate a fresh instance to
-			// avoid identical pointer values for zero-sized types (ensures distinct injections like LoggerA vs LoggerB).
-			if depType.Kind() == reflect.Ptr && depType.Elem().Kind() == reflect.Struct && depType.Elem().NumField() == 0 {
-				fv.Set(reflect.New(depType.Elem()))
-			} else {
-				fv.Set(depVal)
-			}
+			fv.Set(depVal)
 			continue
 		}
 
