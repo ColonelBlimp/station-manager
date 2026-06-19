@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/gen2brain/malgo"
@@ -223,16 +224,18 @@ func (c *Capture) Start(ctx context.Context) error {
 			c.running.Store(false)
 			return errors.New(op).WithErr(err)
 		}
+		names := make([]string, len(devices))
 		for i := range devices {
-			if devices[i].Name() == c.config.DeviceName {
-				deviceID = devices[i].ID.Pointer()
-				break
-			}
+			names[i] = devices[i].Name()
 		}
-		if deviceID == nil {
+		// Fail on a duplicate (ambiguous) name rather than silently binding the
+		// first match — wrong-codec is worse than idle (review 2026-06-19 M1).
+		idx, merr := audio.MatchDeviceName(names, c.config.DeviceName, "capture")
+		if merr != nil {
 			c.running.Store(false)
-			return errors.New(op).WithMsgf("capture device %q not found", c.config.DeviceName)
+			return errors.New(op).WithErr(merr)
 		}
+		deviceID = devices[idx].ID.Pointer()
 	case c.config.DeviceIndex >= 0:
 		devices, err := c.ctx.Devices(malgo.Capture)
 		if err != nil {

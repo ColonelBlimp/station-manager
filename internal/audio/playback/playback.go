@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/ColonelBlimp/station-manager/internal/audio"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/gen2brain/malgo"
@@ -188,16 +189,18 @@ func (p *Player) Play(samples []int16) (<-chan struct{}, error) {
 			p.playing.Store(false)
 			return nil, errors.New(op).WithErr(err)
 		}
+		names := make([]string, len(devices))
 		for i := range devices {
-			if devices[i].Name() == p.config.DeviceName {
-				deviceID = devices[i].ID.Pointer()
-				break
-			}
+			names[i] = devices[i].Name()
 		}
-		if deviceID == nil {
+		// Fail on a duplicate (ambiguous) name rather than silently binding the
+		// first match — wrong-codec is worse than idle (review 2026-06-19 M1).
+		idx, merr := audio.MatchDeviceName(names, p.config.DeviceName, "playback")
+		if merr != nil {
 			p.playing.Store(false)
-			return nil, errors.New(op).WithMsgf("playback device %q not found", p.config.DeviceName)
+			return nil, errors.New(op).WithErr(merr)
 		}
+		deviceID = devices[idx].ID.Pointer()
 	case p.config.DeviceIndex >= 0:
 		devices, err := p.ctx.Devices(malgo.Playback)
 		if err != nil {

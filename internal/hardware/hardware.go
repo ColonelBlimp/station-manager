@@ -80,12 +80,25 @@ func SerialPorts() ([]SerialPort, error) {
 	return out, nil
 }
 
-// serialLabel builds the friendly picker label: the USB product description
-// plus the device path for disambiguation (two identical adapters differ only
-// by path), falling back to the bare path when no product string is known.
+// serialLabel builds the friendly picker label, using the best metadata the
+// host populated so the operator rarely sees a bare device path (the KISS
+// rig-profile goal). Preference: USB product description → VID:PID (+ serial
+// number when present) → serial number → the bare path. The device path is
+// ALWAYS appended for disambiguation, since two identical adapters differ only
+// by path (review 2026-06-19 L2 — udev doesn't always populate Product).
 func serialLabel(d *enumerator.PortDetails) string {
-	if d.Product != "" {
+	switch {
+	case d.Product != "":
 		return d.Product + " (" + d.Name + ")"
+	case d.VID != "" && d.PID != "":
+		label := "USB " + d.VID + ":" + d.PID
+		if d.SerialNumber != "" {
+			label += " #" + d.SerialNumber
+		}
+		return label + " (" + d.Name + ")"
+	case d.SerialNumber != "":
+		return "USB #" + d.SerialNumber + " (" + d.Name + ")"
+	default:
+		return d.Name
 	}
-	return d.Name
 }

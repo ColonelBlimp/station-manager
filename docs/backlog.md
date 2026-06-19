@@ -47,6 +47,24 @@ when it ships — don't let this rot into a graveyard.
 
 ## Features / enhancements
 
+- **`/v1/hardware` per-direction audio availability + enumeration caching.**
+  Filed from the `internal/hardware` review (2026-06-19, M2 + M3), deferred to the
+  **config-SPA workstream** (the unbuilt consumer). **M2:** `AudioDevices` returns
+  `(capture, playback, err)` but errors on EITHER direction's failure, and the
+  handler collapses that to `audio.available=false` with both lists empty — so a
+  playback-enumeration failure hides a working capture list (and vice versa).
+  Fix: surface per-direction availability (e.g. `capture_available` /
+  `playback_available` on the `/v1/hardware` response, or populate the successful
+  direction + log which failed). It's a Tier-1 `api-endpoints.md` wire change, so
+  shape it WITH the config SPA that consumes it. **M3:** `/v1/hardware` does
+  uncached live OS/audio enumeration on every request (a fresh malgo
+  context per call), with only the default 128-wide request limiter — a buggy SPA
+  tab / retry loop can spin up many audio contexts. Fix: a short-TTL cache or
+  singleflight around enumeration (+ maybe a lower per-route cap), with a refresh
+  path if the picker needs immediate hot-plug detection. Both are hardening for
+  the config SPA; the M1 wrong-codec safety guard + L2 labels shipped 2026-06-19.
+  See `docs/reviews/internal-hardware-2026-06-19.md`.
+
 - **CI-V `sets_state` value-compatibility validation.** Filed from the
   `internal/cat` review (2026-06-19, L1). `ValidateRigDefinition` rejects a CI-V
   `sets_state` that names no State marker, but it does NOT verify the command's

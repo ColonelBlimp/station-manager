@@ -18,7 +18,24 @@ func TestSerialLabel(t *testing.T) {
 			want: "CP2105 Dual UART (/dev/ttyUSB0)",
 		},
 		{
-			name: "no product falls back to the bare path",
+			name: "no product falls back to VID:PID + serial (review L2)",
+			d: &enumerator.PortDetails{
+				Name: "/dev/ttyUSB1", VID: "10c4", PID: "ea60", SerialNumber: "0001",
+			},
+			want: "USB 10c4:ea60 #0001 (/dev/ttyUSB1)",
+		},
+		{
+			name: "no product, VID:PID without serial",
+			d:    &enumerator.PortDetails{Name: "/dev/ttyUSB2", VID: "0403", PID: "6001"},
+			want: "USB 0403:6001 (/dev/ttyUSB2)",
+		},
+		{
+			name: "no product, only a serial number",
+			d:    &enumerator.PortDetails{Name: "/dev/ttyUSB3", SerialNumber: "A50285BI"},
+			want: "USB #A50285BI (/dev/ttyUSB3)",
+		},
+		{
+			name: "no usb metadata at all falls back to the bare path",
 			d:    &enumerator.PortDetails{Name: "/dev/ttyS0"},
 			want: "/dev/ttyS0",
 		},
