@@ -10,13 +10,14 @@
  * session start moment lives at `sm.session.startedAt`; this list
  * lives at `sm.session.qsos`. Both naturally clear when the
  * operator's tab closes — that's what defines "session end" in the
- * v1 carry-forward UX. F5 / accidental refresh survives.
+ * UX. F5 / accidental refresh survives.
  *
  * Per ADR 0004 (daemon-vs-SPA split): the daemon owns canonical
- * persistence; this list holds enough fields for the panel render +
- * the ADIF body for email-out, plus the full ADIF record snapshotted
- * at submit time so the email path doesn't have to re-fetch every
- * QSO from the daemon.
+ * persistence; this list holds only the fields the SessionPanel needs
+ * to render. It deliberately does NOT snapshot the full ADIF record
+ * (review 2026-06-19 L2): email-out posts UUIDs and the daemon rebuilds
+ * ADIF from the live DB rows, so keeping a per-row ADIF copy was just
+ * unnecessary QSO/station PII sitting in sessionStorage.
  *
  * `Distance` is snapshotted from `enrichmentState.paths` at submit
  * time — once the operator Tabs the next callsign, that data is
@@ -48,14 +49,6 @@ export interface SessionQso {
     country: string;
     /** Active-path distance in km (string for display tolerance — empty when grids unavailable). */
     distanceKm: string;
-    /**
-     * Full ADIF record submitted to the daemon — the same string
-     * formatAdifRecord() produced. Retained as a per-row snapshot for
-     * potential offline/export use; the email flow no longer ships it
-     * (the daemon rebuilds ADIF from the live rows keyed by uuid), so
-     * this is no longer on the email critical path.
-     */
-    adif: string;
 
     /**
      * UTC YYYYMMDD of the send that last included this QSO in a session

@@ -126,6 +126,27 @@ describe('rigControl', () => {
             swapVfo();
             expect(mockSend).not.toHaveBeenCalled();
         });
+
+        it('rolls back the optimistic VFO-B mirror when the rig rejects the swap (L1)', async () => {
+            setCatLive();
+            configState.bridge.ops = ['swap_vfo'];
+            catState.vfoA = 14_074_000;
+            catState.vfoB = 7_074_000;
+            mockSend.mockResolvedValueOnce({
+                kind: 'server',
+                code: 'rig_not_connected',
+                message: 'no rig',
+            });
+
+            swapVfo();
+            // Optimistic set is synchronous.
+            expect(catState.vfoB).toBe(14_074_000);
+
+            // Once the rejected command resolves, VFO-B reverts to its prior value
+            // rather than retaining the invented swap.
+            await vi.waitFor(() => expect(catState.vfoB).toBe(7_074_000));
+            expect(mockSend).toHaveBeenCalledWith('swap_vfo', undefined);
+        });
     });
 
     describe('band step', () => {

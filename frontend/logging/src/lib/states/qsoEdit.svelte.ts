@@ -18,11 +18,13 @@
  * save button reactively branch on them.
  *
  * Date / time format note: the form components (DateInput, TimeInput)
- * expect `YYYY-MM-DD` and `HH:MM` shapes. The daemon's GET response
- * returns canonical ADIF (`YYYYMMDD`, `HHMM` or `HHMMSS`). `open()`
- * converts the daemon's canonical form into the SPA-friendly form on
- * load; the daemon's PATCH path normalises either way (sanitizes
- * dashes and colons), so no inverse conversion is needed on save.
+ * expect `YYYY-MM-DD` and `HH:MM` shapes. The daemon stores times at
+ * minute precision (the sqlite schema's `length(time_on)=4` CHECK, and
+ * the service truncates any accepted HHMMSS to HHMM — review 2026-06-19),
+ * so the GET response is always `HHMM`. `open()` converts the daemon's
+ * canonical form into the SPA-friendly form on load; the daemon's PATCH
+ * path normalises either way (sanitizes dashes and colons), so no inverse
+ * conversion is needed on save.
  */
 
 // `DaemonQsoForEdit` is the wire shape for GET/PATCH /v1/qso/{uuid}; it
@@ -47,11 +49,12 @@ function adifDateToInput(d: string): string {
 }
 
 /**
- * Convert ADIF canonical time `HHMM` or `HHMMSS` → `HH:MM` for the
- * TimeInput component. The component only handles HH:MM, so seconds
- * are dropped on the way in. The PATCH round-trip preserves any
- * seconds the operator didn't touch — daemon's SanitizeTimeToADIF
- * accepts both shapes.
+ * Convert ADIF canonical time `HHMM` (or a defensive `HHMMSS`) → `HH:MM`
+ * for the TimeInput component. Storage is minute precision (see the
+ * format note above), so the daemon sends `HHMM` in practice and there
+ * are no seconds to lose; the HHMMSS branch is just tolerance. Edits
+ * round-trip at minute precision by design — there is no second-level
+ * data to preserve.
  */
 function adifTimeToInput(t: string): string {
     if (t.length >= 4 && !t.includes(':')) {

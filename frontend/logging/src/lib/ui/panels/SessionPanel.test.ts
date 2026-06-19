@@ -46,7 +46,6 @@ const makeRow = (uuid: string, callsign: string): SessionQso => ({
     qsoDate: '2026-06-04',
     country: '',
     distanceKm: '',
-    adif: '',
 });
 
 const okOutcome = (uuid: string, callsign: string): FetchQsoOutcome => ({

@@ -292,8 +292,8 @@
                 onclick={toggleArm}
                 disabled={arming || !canArm}
                 class="h-22 w-40 rounded text-base font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
-                        ? 'bg-red-600 text-white hover:bg-red-700'
-                        : 'bg-focus text-surface hover:opacity-90'}"
+                    ? 'bg-red-600 text-white hover:bg-red-700'
+                    : 'bg-focus text-surface hover:opacity-90'}"
             >
                 {tx.armed ? 'Disable Tx' : 'Enable Tx'}
             </button>

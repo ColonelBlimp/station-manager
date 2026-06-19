@@ -65,8 +65,19 @@ export function swapVfo(): void {
 // overwrites this at once, so it's harmless there.
 function swapVfoLive(): void {
     if (!configState.bridge.ops.includes('swap_vfo')) return;
+    // Optimistic mirror, but roll back if the rig rejects the command
+    // (rig_not_connected, identity failure, serial error): otherwise the UI
+    // would retain a false VFO-B until the next rig-state refresh (review
+    // 2026-06-19 L1). On a rig that DOES push both VFOs, the confirm-by-push
+    // overwrites this before any rollback would matter; the rollback only bites
+    // on an actual non-ok outcome.
+    const prevVfoB = catState.vfoB;
     catState.vfoB = catState.vfoA;
-    void driveRig('swap_vfo');
+    void driveRig('swap_vfo').then((outcome) => {
+        if (outcome.kind !== 'ok') {
+            catState.vfoB = prevVfoB;
+        }
+    });
 }
 
 /**
@@ -239,11 +250,14 @@ export function setMode(value: string): void {
     void driveRig('set_mode', value);
 }
 
-async function driveRig(op: string, value?: string): Promise<void> {
+// driveRig sends one op, toasts on failure, and returns the outcome so callers
+// that made an optimistic catState write can roll it back on a non-ok result.
+async function driveRig(op: string, value?: string) {
     const outcome = await sendRigCommand(op, value);
     if (outcome.kind !== 'ok') {
         toasts.error(`Rig command failed: ${outcome.message}`);
     }
+    return outcome;
 }
 
 /**

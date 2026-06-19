@@ -54,8 +54,16 @@
     <div class="flex gap-8">
         <!-- Controls -->
         <div class="flex w-72 flex-col gap-2 text-sm">
-            <button type="button" class="cursor-pointer rounded-md border border-line px-3 py-1.5 text-left hover:bg-gray-100" onclick={reseed}>Re-seed (3 mock callers)</button>
-            <button type="button" class="cursor-pointer rounded-md border border-line px-3 py-1.5 text-left hover:bg-gray-100" onclick={addCaller}>Add a caller</button>
+            <button
+                type="button"
+                class="cursor-pointer rounded-md border border-line px-3 py-1.5 text-left hover:bg-gray-100"
+                onclick={reseed}>Re-seed (3 mock callers)</button
+            >
+            <button
+                type="button"
+                class="cursor-pointer rounded-md border border-line px-3 py-1.5 text-left hover:bg-gray-100"
+                onclick={addCaller}>Add a caller</button
+            >
             <button
                 type="button"
                 class="cursor-pointer rounded-md border border-line px-3 py-1.5 text-left hover:bg-gray-100"
@@ -64,7 +72,11 @@
             >
                 {ft8PileupStack.enabled ? 'Pause (Abandon)' : 'Resume'}
             </button>
-            <button type="button" class="cursor-pointer rounded-md border border-line px-3 py-1.5 text-left hover:bg-gray-100" onclick={() => ft8PileupStack.clear()}>
+            <button
+                type="button"
+                class="cursor-pointer rounded-md border border-line px-3 py-1.5 text-left hover:bg-gray-100"
+                onclick={() => ft8PileupStack.clear()}
+            >
                 Clear (hides drawer)
             </button>
 

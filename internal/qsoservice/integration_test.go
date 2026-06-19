@@ -189,6 +189,28 @@ func TestSubmit_HHMMSSStoredAsHHMM(t *testing.T) {
 	require.Equal(t, "0850", existing.QsoDetails.TimeOff, "TIME_OFF narrowed to HHMM")
 }
 
+// TestSubmit_AcceptsVHFBand guards review 2026-06-19 (frontend M2): a 2m QSO —
+// the band the SPA + utils.FrequencyToBand map for a 144 MHz dial — is now an
+// accepted band, so it stores instead of being rejected as invalid_field_value.
+func TestSubmit_AcceptsVHFBand(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "2m", Mode: "SSB", Freq: "144.174", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err, "a 2m QSO must be accepted")
+
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "2m", existing.QsoDetails.Band)
+	require.Equal(t, "144.174", existing.QsoDetails.Freq)
+}
+
 // TestSubmit_RejectsNonPositiveFreq guards review 2026-06-19 M3: FREQ=0 is a
 // clean invalid_field_value at the service boundary, not a late insert failure.
 func TestSubmit_RejectsNonPositiveFreq(t *testing.T) {

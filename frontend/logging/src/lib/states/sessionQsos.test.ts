@@ -25,7 +25,6 @@ const makeQso = (overrides: Partial<SessionQso> = {}): SessionQso => ({
     qsoDate: '2026-05-09',
     country: 'England',
     distanceKm: '350',
-    adif: '<call:5>M0XYZ<eor>',
     ...overrides,
 });
 
@@ -165,7 +164,6 @@ describe('sessionQsosState', () => {
                 callsign: 'RTX',
                 country: 'Malawi',
                 distanceKm: '8123',
-                adif: '<call:3>RTX<band:3>20m<eor>',
             });
             sessionQsosState.add(original);
             const raw = sessionStorage.getItem('sm.session.qsos');

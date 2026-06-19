@@ -61,6 +61,9 @@ describe('QsoPanel — submit in-flight guard (M1)', () => {
         qsoDraft.clear();
         enrichmentState.clear();
         contactHistoryState.clear();
+        // A configured default logbook is required for submit (M1 guard);
+        // a real session has one after config hydrates.
+        configState.defaultLogbook.id = 1;
         // A valid callsign is all canSubmit needs — RST defaults to '59'
         // and date/time default to "now" at construction / clear().
         qsoDraft.callsign = 'M0XYZ';
@@ -144,6 +147,53 @@ describe('QsoPanel — submit in-flight guard (M1)', () => {
 
         d2.resolve(DUPLICATE);
         await tick();
+    });
+});
+
+describe('QsoPanel — submits to the configured default logbook (M1)', () => {
+    beforeEach(() => {
+        mockSubmit.mockReset();
+        qsoDraft.clear();
+        enrichmentState.clear();
+        contactHistoryState.clear();
+        qsoDraft.callsign = 'M0XYZ';
+    });
+
+    afterEach(() => {
+        cleanup();
+        qsoDraft.clear();
+        configState.defaultLogbook.id = 0;
+        _disposeForTests();
+    });
+
+    it('posts the configured default_logbook id, not a hardcoded 1', async () => {
+        configState.defaultLogbook.id = 7;
+        const d = deferred<SubmitOutcome>();
+        mockSubmit.mockReturnValue(d.promise);
+
+        render(QsoPanel);
+        await tick();
+        await fireEvent.click(logButton());
+        await tick();
+
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+        // submitQso(adif, logbookID, signal?) — assert the second arg is the
+        // configured id.
+        expect(mockSubmit).toHaveBeenCalledWith(expect.any(String), 7);
+
+        d.resolve(DUPLICATE);
+        await tick();
+    });
+
+    it('blocks submit (no POST) when no default logbook is configured', async () => {
+        configState.defaultLogbook.id = 0;
+
+        render(QsoPanel);
+        await tick();
+        await fireEvent.click(logButton());
+        await tick();
+
+        expect(mockSubmit).not.toHaveBeenCalled();
     });
 });
 

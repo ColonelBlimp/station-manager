@@ -15,6 +15,14 @@ func TestIsValidBand(t *testing.T) {
 		Band12.String(),
 		Band10.String(),
 		Band6.String(),
+		// VHF/UHF (review 2026-06-19 M2) — accepted to match the frequency→band
+		// mappers in internal/utils and the logging SPA.
+		Band4.String(),
+		Band2.String(),
+		Band125.String(),
+		Band70cm.String(),
+		Band33cm.String(),
+		Band23cm.String(),
 	}
 
 	for _, in := range valid {
@@ -23,7 +31,8 @@ func TestIsValidBand(t *testing.T) {
 		}
 	}
 
-	invalid := []string{"", "2m", "20M", " 20m ", "unknown"}
+	// "2m" is now valid; case/whitespace variants and unknowns stay invalid.
+	invalid := []string{"", "2M", " 20m ", "unknown", "13cm"}
 	for _, in := range invalid {
 		if IsValidBand(in) {
 			t.Fatalf("expected %q to be invalid", in)

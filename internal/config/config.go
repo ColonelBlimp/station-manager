@@ -97,14 +97,15 @@ type Config struct {
 	// My Station card without re-triggering setup.
 	SetupComplete bool `json:"setup_complete"`
 
-	// DefaultLogbookID is a scalar pointer at the logbook row used
-	// when the SPA doesn't supply ?logbook=N on QSO submit. Stored as
-	// a scalar here because the row's display fields (name, callsign)
-	// live in the DB, not in config.json — the API GET /v1/config
-	// joins them at response time. Defaults to 1, so the system runs
-	// on first launch without "missing config" errors; the daemon
-	// ensures a logbook row with that id exists during first-run
-	// setup.
+	// DefaultLogbookID is a scalar pointer at the operator's default
+	// logbook row. The SPA reads it from GET /v1/config and submits it
+	// as the required ?logbook=N on QSO submit (POST /v1/qso rejects a
+	// missing logbook — it is NOT defaulted server-side). Stored as a
+	// scalar here because the row's display fields (name, callsign) live
+	// in the DB, not in config.json — the API GET /v1/config joins them
+	// at response time. Defaults to 1, so the system runs on first
+	// launch without "missing config" errors; the daemon ensures a
+	// logbook row with that id exists during first-run setup.
 	DefaultLogbookID int64 `json:"default_logbook_id"`
 
 	// DefaultRigID is a scalar pointer at the rig used when the SPA

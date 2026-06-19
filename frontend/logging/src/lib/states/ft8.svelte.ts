@@ -447,7 +447,6 @@ function openSource(): void {
                 qsoDate: p.qso_date ?? '',
                 country: p.country ?? '',
                 distanceKm: path ? String(Math.round(path.shortPathDistanceKm)) : '',
-                adif: '',
             });
             // Gray the station out in Band Activity so it can't be accidentally
             // re-worked. The worked-before cache is lookup-once per session and was

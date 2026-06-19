@@ -378,8 +378,13 @@
         return ft8State.decodes.filter((d) => {
             if (parseDirectedToMe(d.text, myCall) !== null) return true; // calling us — always show
             if (hideHashed && d.text.includes('<...>')) return false;
-            return !(filter !== '' && !d.text.toUpperCase().split(/\s+/).some((t) => t.startsWith(filter)));
-
+            return !(
+                filter !== '' &&
+                !d.text
+                    .toUpperCase()
+                    .split(/\s+/)
+                    .some((t) => t.startsWith(filter))
+            );
         });
     });
     const orderedDecodes = $derived.by(() => {
@@ -710,7 +715,9 @@
             path={txPath}
             onPathChange={onTxPathChange}
         />
-        <div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1">
+        <div
+            class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1"
+        >
             {#if workingCall}
                 <div
                     class="rounded px-2 py-0.5 {workingBannerClass}"

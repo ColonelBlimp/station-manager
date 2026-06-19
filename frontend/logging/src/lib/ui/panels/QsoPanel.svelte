@@ -39,14 +39,6 @@
     import TimerControls from '../components/TimerControls.svelte';
 
     /*
-        Hardcoded until a logbook switcher lands. The daemon seeds a
-        default logbook at id=1 on first run, so this matches the
-        running-daemon default. When the switcher arrives this becomes
-        a derived value from a logbook store seeded from `GET /v1/logbook`.
-    */
-    const DEFAULT_LOGBOOK_ID = 1;
-
-    /*
         Operator-friendly mode list for the dropdown. These are the
         names operators say at the mic (USB, FT8, PSK31, CW) — the
         ADIF main-vs-submode split happens inside displayedState's
@@ -432,7 +424,19 @@
                 appSmRequestQsl: qsoDraft.requestQsl,
             });
 
-            const outcome = await submitQsoToDaemon(adif, DEFAULT_LOGBOOK_ID);
+            // Submit into the operator's configured default logbook — NOT a
+            // hardcoded id=1 (review 2026-06-19 M1). POST /v1/qso requires an
+            // explicit ?logbook and the daemon rejects a logbook whose callsign
+            // doesn't match STATION_CALLSIGN, so posting to a stale 1 could
+            // route into the wrong logbook or fail callsign_mismatch. A zero id
+            // means config hasn't hydrated / setup isn't complete — block the
+            // submit with a toast rather than send an invalid request.
+            const logbookID = configState.defaultLogbook.id;
+            if (logbookID <= 0) {
+                toasts.error('No default logbook configured yet — finish station setup first.');
+                return;
+            }
+            const outcome = await submitQsoToDaemon(adif, logbookID);
             switch (outcome.kind) {
                 case 'stored':
                     // Snapshot session-row fields BEFORE the clears below
@@ -453,7 +457,6 @@
                         qsoDate: qsoDraft.qsoDate,
                         country: enrich?.country?.name ?? '',
                         distanceKm: enrichDistanceKm,
-                        adif,
                     });
                     // Save the logged comment to the paste list (newest at
                     // top, deduped, capped) so it's offered back on the
