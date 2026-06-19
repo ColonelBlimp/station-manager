@@ -44,10 +44,11 @@ import (
 // **Performance note.** This entry point allocates an ad-hoc Plan
 // on every call, recomputing twiddle factors and scratch buffers
 // from scratch. Callers that run many FFTs of the same size N
-// (e.g. dsp.Spectrogram's 372 × FFT(3840) per slot) should build
-// one Plan up-front with NewPlan(N) and call Plan.FFT instead —
-// the precomputed twiddle table + workspace arena cut wall time
-// ~50% and allocations >99% for batched same-size FFT workloads.
+// (e.g. the FT8 occupancy detector's repeated same-size real FFTs
+// via NewRealPlan(3840)) should build one Plan up-front with
+// NewPlan(N) and call Plan.FFT instead — the precomputed twiddle
+// table + workspace arena cut wall time ~50% and allocations >99%
+// for batched same-size FFT workloads.
 func FFT(x []complex128) []complex128 {
 	return NewPlan(len(x)).FFT(x)
 }

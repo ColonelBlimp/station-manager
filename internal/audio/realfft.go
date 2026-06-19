@@ -18,9 +18,10 @@ import "math"
 //  3. Unpack Z into the N/2+1 unique real-FFT outputs using
 //     Hermitian symmetry relations.
 //
-// Net result: about half the work of the naive approach. For SM's
-// hot path that's the Spectrogram's 372 sliding-window FFTs of
-// size NFFT1=3840 — RealPlan halves that work.
+// Net result: about half the work of the naive approach. SM's in-tree
+// hot path is the FT8 occupancy detector's repeated same-size real
+// FFTs (NewRealPlan(3840), once per 15 s slot) — RealPlan halves that
+// work.
 //
 // **Reference:** Brigham, "The Fast Fourier Transform", §10-5 (1974);
 // any modern DSP textbook section on "real-valued FFTs". Standard
@@ -44,9 +45,9 @@ import "math"
 // half-size complex Plan's returned result (length N/2) and the
 // real-FFT's returned result (length N/2+1). The packed-input
 // scratch and the half-Plan's workspace are owned by the RealPlan
-// and pooled across calls. For Spectrogram's 372 × FFT(N=3840)
-// per slot, RealPlan trims both compute time and allocation count
-// vs the complex-Plan path. If single-allocation performance ever
+// and pooled across calls. For the FT8 occupancy detector's
+// repeated FFT(N=3840) over a slot, RealPlan trims both compute
+// time and allocation count vs the complex-Plan path. If single-allocation performance ever
 // matters, the fix is to add an in-place FFT method on the
 // underlying Plan and route through it; today's two-allocation
 // shape is the cost of keeping Plan.FFT's "returns a fresh slice"

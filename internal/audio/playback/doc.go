@@ -14,12 +14,15 @@
 // (FormatS16) — so the int16 waveform from ft8.EncodeToSlot streams straight
 // to the device with no float conversion.
 //
-// RF safety: this layer produces AUDIO only. It does not key the rig — PTT
-// and the daemon-owned guaranteed-stop sequencing arrive in step (d). Playing
-// a waveform here drives a sound card, not a transmitter.
+// RF safety: this layer produces AUDIO only. It never keys the rig — PTT and
+// the daemon-owned guaranteed-stop sequencing live above it in the FT8 transmit
+// controller and the bridge keyer (ADR 0030, shipped). Playing a waveform here
+// drives a sound card, not a transmitter.
 //
 // Lifecycle: New → Init → Play(samples) → (wait on the returned done channel)
 // → Stop / Close. Stop halts output immediately; Close releases the audio
-// context. All terminal-state calls return a sentinel error rather than
-// panicking, mirroring internal/audio/capture.
+// context and is terminal — once closed, Init / ListDevices / Play return
+// ErrClosed (a fresh Player is created per FT8 session), mirroring
+// internal/audio/capture. All terminal-state calls return a sentinel error
+// rather than panicking.
 package playback

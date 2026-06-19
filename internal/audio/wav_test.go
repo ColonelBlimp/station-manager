@@ -550,3 +550,35 @@ func TestReadWAV_DataBeforeFmt_IsInvalidHeader(t *testing.T) {
 		t.Errorf("ReadWAV(data-before-fmt) err=%v, want ErrWAVInvalidHeader", err)
 	}
 }
+
+// A data chunk whose declared size exceeds the bytes actually present is
+// malformed structure, not a shorter valid recording — it must classify as
+// ErrWAVInvalidHeader rather than silently decoding the available bytes. Covers
+// both PCM16 (the alignment check would mask some cases) and PCM8 (byte-aligned,
+// so it would otherwise always slip through). Regression for review 2026-06-19 M1.
+func TestReadWAV_TruncatedData_IsInvalidHeader(t *testing.T) {
+	cases := []struct {
+		name          string
+		bitsPerSample uint16
+		blockAlign    uint16
+		declaredBytes uint32
+		pcm           []byte
+	}{
+		{"pcm16 declares 4 has 2", 16, 2, 4, []byte{0x00, 0x00}},
+		{"pcm8 declares 3 has 2", 8, 1, 3, []byte{0x80, 0x80}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := wavBytes(
+				"RIFF", uint32(36)+tc.declaredBytes, "WAVE",
+				"fmt ", uint32(16),
+				uint16(1), uint16(1), uint32(12000), uint32(12000), tc.blockAlign, tc.bitsPerSample,
+				"data", tc.declaredBytes, tc.pcm,
+			)
+			_, err := ReadWAV(writeRawWAV(t, raw))
+			if !errors.Is(err, ErrWAVInvalidHeader) {
+				t.Errorf("ReadWAV(truncated data) err=%v, want ErrWAVInvalidHeader", err)
+			}
+		})
+	}
+}

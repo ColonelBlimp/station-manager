@@ -1,8 +1,8 @@
 package audio
 
 // itoa is a tiny stdlib-free int formatter for FFT-size panic
-// messages. Avoids pulling strconv just for one panic. Shared
-// across the pure-Go (fft.go) and CGO (fft_cgo.go) Plan
+// messages. Avoids pulling strconv just for one panic. Shared by
+// the pure-Go complex (fft.go) and real (realfft.go) Plan
 // implementations.
 func itoa(n int) string {
 	if n == 0 {

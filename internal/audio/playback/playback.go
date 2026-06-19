@@ -77,7 +77,8 @@ type Player struct {
 	ctx     *malgo.AllocatedContext
 	device  *malgo.Device
 	playing atomic.Bool
-	mu      sync.Mutex // protects ctx, device, buf, done
+	closed  atomic.Bool // Close makes the player terminal — mirrors capture
+	mu      sync.Mutex  // protects ctx, device, buf, done
 
 	// buf is the waveform currently being played; pos is the next sample the
 	// callback will emit (atomic for lock-free hot-path access). done is closed
@@ -97,11 +98,19 @@ func New(cfg Config) *Player {
 
 // Init initialises the audio backend. Idempotent: a second call after a
 // successful initialisation returns nil.
+//
+// Returns ErrClosed once Close has been called — a Player is terminal after
+// close and cannot be reused (mirrors capture; FT8 arms a fresh Player per
+// session rather than reopening a closed one).
 func (p *Player) Init() error {
 	const op errors.Op = "playback.Player.Init"
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.closed.Load() {
+		return ErrClosed
+	}
 
 	if p.ctx != nil {
 		return nil
@@ -123,6 +132,9 @@ func (p *Player) ListDevices() ([]malgo.DeviceInfo, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed.Load() {
+		return nil, ErrClosed
+	}
 	if p.ctx == nil {
 		return nil, ErrNotInitialized
 	}
@@ -158,6 +170,10 @@ func (p *Player) Play(samples []int16) (<-chan struct{}, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed.Load() {
+		p.playing.Store(false)
+		return nil, ErrClosed
+	}
 	if p.ctx == nil {
 		p.playing.Store(false)
 		return nil, ErrNotInitialized
@@ -272,7 +288,9 @@ func (p *Player) Stop() error {
 	return nil
 }
 
-// Close releases all audio resources, halting any active playback first.
+// Close releases all audio resources, halting any active playback first. It is
+// terminal and idempotent: once closed, Init / ListDevices / Play return
+// ErrClosed, and a second Close is a no-op.
 func (p *Player) Close() error {
 	const op errors.Op = "playback.Player.Close"
 
@@ -282,6 +300,8 @@ func (p *Player) Close() error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	p.closed.Store(true)
 
 	if p.ctx != nil {
 		if err := p.ctx.Uninit(); err != nil {

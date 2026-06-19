@@ -2,12 +2,15 @@
 // ReadWAV/WriteWAV are the file-I/O pair; the FFT helpers live in
 // fft.go / realfft.go.
 //
-// The package is deliberately self-contained with no daemon-subsystem
-// dependencies, so it stays open for future consumers (e.g. operator-
-// facing recording / playback for QSO archives). It was retained when
-// the FT8 subsystem was moved out of the SM tree (2026-05-30, preserved
-// at tag ft8-snapshot-2026-05-30); the former audio/capture CGO
-// miniaudio subpackage went with that removal.
+// The root audio package is deliberately self-contained and CGO-free, with no
+// daemon-subsystem dependencies, so it stays open for future consumers (e.g.
+// operator-facing recording / playback for QSO archives). The CGO miniaudio
+// dependency is isolated in the peer subpackages internal/audio/capture (live
+// FT8 RX) and internal/audio/playback (FT8 TX), which were re-added with the
+// in-tree FT8 transmit/receive work — importing this package for a WAV read or
+// FFT never pulls in a C toolchain. (Both subpackages were briefly absent when
+// the FT8 subsystem was moved out of the tree on 2026-05-30, preserved at tag
+// ft8-snapshot-2026-05-30.)
 package audio
 
 import (
@@ -175,6 +178,17 @@ outer:
 			pcmData, readErr = io.ReadAll(io.LimitReader(f, int64(chunkSize)))
 			if readErr != nil {
 				return nil, errors.New(op).WithErr(readErr)
+			}
+			// A short payload — the file hit EOF before chunkSize bytes — is
+			// malformed RIFF structure, not a shorter valid recording. Without
+			// this check a data chunk declaring 4 bytes but holding 2 would
+			// silently decode as a one-sample file (and PCM8 truncation, being
+			// byte-aligned, would never trip the later alignment check). The
+			// LimitReader stays as the OOM defense for oversized declared sizes;
+			// this guards the under-supplied case (review 2026-06-19 M1).
+			if uint64(len(pcmData)) != uint64(chunkSize) {
+				return nil, errors.New(op).WithErr(ErrWAVInvalidHeader).
+					WithMsgf("data chunk declares %d bytes, file supplied %d", chunkSize, len(pcmData))
 			}
 			break outer
 
