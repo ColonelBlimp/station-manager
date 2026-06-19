@@ -15,6 +15,45 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
+// TestMissingCoreTables_FlagsIncompleteSchema guards review 2026-06-19 M2:
+// post-migration verification must flag every runtime-required table, not just
+// logbook+qso — a "version current" DB missing qso_upload / qso_history /
+// contacted_station / country would otherwise pass startup and fail later in
+// forwarding, audit-history, or enrichment code.
+func TestMissingCoreTables_FlagsIncompleteSchema(t *testing.T) {
+	svc := testService(t) // fully migrated — all tables present
+	if missing, err := svc.missingCoreTables(); err != nil || len(missing) != 0 {
+		t.Fatalf("freshly-migrated schema reported missing=%v err=%v, want none", missing, err)
+	}
+
+	// Simulate a partially-damaged schema by dropping the tables the old
+	// two-table check ignored. FK enforcement off so DROP order is irrelevant.
+	if _, err := svc.handle.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("pragma: %v", err)
+	}
+	dropped := []string{"qso_history", "qso_upload", "contacted_station", "country"}
+	for _, tbl := range dropped {
+		if _, err := svc.handle.Exec("DROP TABLE " + tbl); err != nil {
+			t.Fatalf("drop %s: %v", tbl, err)
+		}
+	}
+
+	missing, err := svc.missingCoreTables()
+	if err != nil {
+		t.Fatalf("missingCoreTables: %v", err)
+	}
+	want := map[string]struct{}{}
+	for _, tbl := range dropped {
+		want[tbl] = struct{}{}
+	}
+	for _, m := range missing {
+		delete(want, m)
+	}
+	if len(want) > 0 {
+		t.Errorf("missingCoreTables failed to flag %v; got %v", want, missing)
+	}
+}
+
 // testService wires a Service to an in-memory sqlite database, opens it,
 // and runs migrations. The returned service is ready for use.
 func testService(t *testing.T) *Service {
@@ -861,38 +900,6 @@ func TestUpdateCountry(t *testing.T) {
 	got, _ := svc.FetchCountryByName("Federal Republic of Germany")
 	if got.Prefix != "DL" {
 		t.Fatalf("prefix = %q, want DL", got.Prefix)
-	}
-}
-
-func TestUpsertLogbook(t *testing.T) {
-	svc := testService(t)
-	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "Original", Callsign: "G4ABC"})
-
-	// Upsert to update
-	err := svc.UpsertLogbook(types.Logbook{
-		ID:          lbID,
-		Name:        "Upserted",
-		Callsign:    "G4ABC",
-		Description: "new description",
-	})
-	if err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
-
-	got, _ := svc.FetchLogbookByID(lbID)
-	if got.Name != "Upserted" {
-		t.Fatalf("name = %q, want Upserted", got.Name)
-	}
-	if got.Description != "new description" {
-		t.Fatalf("description = %q, want 'new description'", got.Description)
-	}
-}
-
-func TestUpsertLogbook_InvalidID(t *testing.T) {
-	svc := testService(t)
-	err := svc.UpsertLogbook(types.Logbook{ID: 0, Name: "X", Callsign: "G4ABC"})
-	if err == nil {
-		t.Fatal("expected error for id=0")
 	}
 }
 

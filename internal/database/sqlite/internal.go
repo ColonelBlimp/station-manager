@@ -185,8 +185,20 @@ func (s *Service) missingCoreTables() ([]string, error) {
 		return nil, errors.New(op).WithMsgf("Unsupported database driver: %s", s.DatabaseConfig.Driver)
 	}
 
-	// Client-side schema: no api_keys table (full key stored on logbook)
-	required := []string{"logbook", "qso"}
+	// Every table the running daemon touches must exist after migration —
+	// verifying only logbook+qso let a partially-damaged "version current"
+	// schema (missing qso_upload / qso_history / enrichment-cache tables) pass
+	// startup and fail later in forwarding, session upload-status reads, audit
+	// history, or enrichment refreshes (review 2026-06-19 M2). Client-side
+	// schema: no api_keys table (full key stored on logbook).
+	required := []string{
+		"logbook",
+		"qso",
+		"contacted_station",
+		"country",
+		"qso_upload",
+		"qso_history",
+	}
 
 	rows, err := s.handle.Query(`SELECT name FROM sqlite_master WHERE type='table'`)
 	if err != nil {
@@ -237,7 +249,7 @@ func (s *Service) missingCoreTables() ([]string, error) {
 // detection logic — the second-caller threshold the comment in the
 // previous local copy reserved for promotion has now been crossed
 // (qsoservice.Submit uses it for race-resolution; sqlite api_context
-// uses it for InsertLogbook / UpsertLogbook duplicate-name handling).
+// uses it for InsertLogbook / UpdateLogbook duplicate-name handling).
 //
 // SQLITE_CONSTRAINT (19) covers all constraint violations; the
 // extended code SQLITE_CONSTRAINT_UNIQUE (2067) is what UNIQUE-index

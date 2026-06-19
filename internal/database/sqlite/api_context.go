@@ -431,8 +431,10 @@ func (s *Service) FetchQsoByIdWithContext(ctx context.Context, id int64) (types.
 
 // FetchQsoByUUIDWithContext fetches a QSO by its UUIDv7 (the canonical
 // external identifier per ADR 0016). Mirrors FetchQsoByIdWithContext —
-// soft-deleted rows return ErrNotFound; format validation is a quick
-// reject on obviously-malformed input so the DB doesn't see garbage.
+// soft-deleted rows return ErrNotFound. Input guarding here is only an
+// empty-string reject; the lookup is parameterized (no injection risk) and the
+// API route handler validates the path UUIDv7 before calling in, so a malformed
+// non-empty string simply matches no row → ErrNotFound.
 func (s *Service) FetchQsoByUUIDWithContext(ctx context.Context, uuid string) (types.Qso, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoByUUIDWithContext"
 	if err := checkService(op, s); err != nil {
@@ -810,14 +812,37 @@ func (s *Service) UpdateContactedStationWithContext(ctx context.Context, station
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
-
+	if model.ID < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
 	model.ModifiedAt = null.TimeFrom(time.Now())
 
-	_, err = model.Update(ctx, h, boil.Infer())
+	// Active-row update (review 2026-06-19 M1, same shape as updateActiveQso /
+	// UpdateLogbook): the `id = ? AND deleted_at IS NULL` predicate is in the
+	// UPDATE itself, so a soft-deleted row can't be written through (the old
+	// generated Update(Infer) matched by PK only and would resurrect a
+	// tombstone), and zero rows affected → ErrNotFound instead of a false
+	// success. Explicit map omits id / created_at / deleted_at; refreshes
+	// modified_at. Keep in sync with the columns ContactedStationTypeToModel sets.
+	cols := models.M{
+		models.ContactedStationColumns.Name:            model.Name,
+		models.ContactedStationColumns.Call:            model.Call,
+		models.ContactedStationColumns.Country:         model.Country,
+		models.ContactedStationColumns.AdditionalData:  model.AdditionalData,
+		models.ContactedStationColumns.LastRefreshedAt: model.LastRefreshedAt,
+		models.ContactedStationColumns.ModifiedAt:      model.ModifiedAt,
+	}
+	n, err := models.ContactedStations(
+		models.ContactedStationWhere.ID.EQ(model.ID),
+		models.ContactedStationWhere.DeletedAt.IsNull(),
+	).UpdateAll(ctx, h, cols)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("Updating contacted station failed.")
 	}
-
+	if n == 0 {
+		return errors.New(op).WithErr(errors.ErrNotFound).
+			WithMsgf("no active contacted station with id %d", model.ID)
+	}
 	return nil
 }
 
@@ -980,11 +1005,35 @@ func (s *Service) UpdateCountryWithContext(ctx context.Context, country types.Co
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
+	if model.ID < 1 {
+		return errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	model.ModifiedAt = null.TimeFrom(time.Now())
 
-	if _, err = model.Update(ctx, h, boil.Infer()); err != nil {
+	// Active-row update (review 2026-06-19 M1) — see UpdateContactedStation:
+	// soft-deleted rows are not written through, and a missing id is ErrNotFound.
+	cols := models.M{
+		models.CountryColumns.Name:            model.Name,
+		models.CountryColumns.CQZone:          model.CQZone,
+		models.CountryColumns.ItuZone:         model.ItuZone,
+		models.CountryColumns.Continent:       model.Continent,
+		models.CountryColumns.Prefix:          model.Prefix,
+		models.CountryColumns.Ccode:           model.Ccode,
+		models.CountryColumns.DXCCPrefix:      model.DXCCPrefix,
+		models.CountryColumns.TimeOffset:      model.TimeOffset,
+		models.CountryColumns.LastRefreshedAt: model.LastRefreshedAt,
+		models.CountryColumns.ModifiedAt:      model.ModifiedAt,
+	}
+	n, err := models.Countries(
+		models.CountryWhere.ID.EQ(model.ID),
+		models.CountryWhere.DeletedAt.IsNull(),
+	).UpdateAll(ctx, h, cols)
+	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("Updating country failed.")
 	}
-
+	if n == 0 {
+		return errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active country with id %d", model.ID)
+	}
 	return nil
 }
 
@@ -1546,41 +1595,6 @@ func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Lo
 	}
 	if n == 0 {
 		return errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active logbook with id %d", logbook.ID)
-	}
-
-	return nil
-}
-
-func (s *Service) UpsertLogbookWithContext(ctx context.Context, logbook types.Logbook) error {
-	const op errors.Op = "sqlite.Service.UpsertLogbookWithContext"
-	if err := checkService(op, s); err != nil {
-		return err
-	}
-
-	if logbook.ID < 1 {
-		return errors.New(op).WithMsg("Logbook ID must be greater than 0")
-	}
-	//TODO: Other validation
-
-	h, err := s.getOpenHandle(op)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := s.ensureCtxTimeout(ctx)
-	defer cancel()
-
-	model := models.Logbook{
-		ID:          logbook.ID,
-		Name:        logbook.Name,
-		Callsign:    logbook.Callsign,
-		Description: null.StringFrom(logbook.Description),
-	}
-
-	// updateOnConflict=true means: on conflict (by primary key), update
-	// the non-key columns. conflictColumns=nil uses the primary key.
-	if err = model.Upsert(ctx, h, true, nil, boil.Infer(), boil.Infer()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("upserting logbook failed")
 	}
 
 	return nil

@@ -11,19 +11,6 @@ when it ships — don't let this rot into a graveyard.
 
 ## Bugs
 
-- **Contacted-station update uses the unguarded generated `Update(Infer)`
-  pattern.** Filed from the `internal/database` review (2026-06-14, M2 follow-up).
-  The contacted-station update helper converts to a fresh SQLBoiler model and
-  calls `model.Update(boil.Infer())` with a primary-key-only predicate and an
-  ignored rows-affected count — the same shape that let a stale QSO update write
-  through a soft-deleted row. The table has `deleted_at`. The **QSO** path
-  (`updateActiveQso`) and the **logbook** path (api review M3, 2026-06-14) are
-  now fixed with the active-row `UpdateAll WHERE id AND deleted_at IS NULL` +
-  `ErrNotFound`; contacted-station should get the same treatment for consistency.
-  Lower risk (it's an enrichment-cache row, rarely soft-deleted, not directly
-  API-reachable for update), hence deferred. See
-  `docs/reviews/internal-database-2026-06-14.md`.
-
 - **`PUT /v1/config` contract: default ids ignored + omitted blocks zeroed.**
   Filed from the `internal/api` review (2026-06-14, M4 + M5). M4: the handler
   accepts `default_logbook.id`/`default_rig.id` (documented + in the SPA's

@@ -122,10 +122,6 @@ func (s *Service) UpdateLogbook(logbook types.Logbook) error {
 	return s.UpdateLogbookWithContext(context.Background(), logbook)
 }
 
-func (s *Service) UpsertLogbook(logbook types.Logbook) error {
-	return s.UpsertLogbookWithContext(context.Background(), logbook)
-}
-
 /**********************************************************************************************************************
  * Contest Related Methods
  **********************************************************************************************************************/

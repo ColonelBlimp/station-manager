@@ -4,13 +4,16 @@
 // # Service lifecycle
 //
 // [Service] follows the project's lifecycle convention: Initialize() →
-// Open() → Migrate() → use → Close(). All lifecycle methods are
-// idempotent. Initialize validates config and ensures the database
-// directory exists. Open connects to sqlite, sets PRAGMAs
-// (foreign_keys, WAL, busy_timeout) and pings. Migrate runs pending
-// schema migrations — it is a distinct call after Open, not part of
-// Open itself. Close closes the connection and resets the Initialize
-// guard so the service can be re-initialised.
+// Open() → Migrate() → use → Close(). Initialize is idempotent (a second
+// call after success is a no-op). Open is NOT: it deliberately returns an
+// "already open" error when called while open (a double-open guard, with a
+// TOCTOU re-check under the lock) rather than silently succeeding. Initialize
+// validates config and ensures the database directory exists. Open connects to
+// sqlite, sets PRAGMAs (foreign_keys, WAL, busy_timeout) and pings. Migrate
+// runs pending schema migrations — a distinct call after Open, not part of Open
+// itself — and verifies every runtime-required table exists afterwards. Close
+// closes the connection and resets the Initialize guard so the service can be
+// re-initialised.
 //
 // # Adapter pattern
 //
