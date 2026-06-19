@@ -48,12 +48,11 @@ type Qso struct {
 	// as the embedded sub-structs — adding it here is a one-line change
 	// per the doc.go pattern.
 	//
-	// Today the ADIF parser at internal/adif/adif.go does not surface
-	// APP_SM_REQUEST_QSL into this field, so the original POST /v1/qso
-	// (ADIF body) submit path silently drops it. The PATCH /v1/qso/{uuid}
-	// edit path (JSON body) does persist it — the operator can correct
-	// missed flags via the SessionPanel edit overlay after-the-fact.
-	// Closing the parser gap is a separate task.
+	// Both submit paths surface this field: the ADIF body of POST /v1/qso
+	// round-trips it via the adif.Record `app_sm_request_qsl` tag
+	// (QsoToRecord / RecordToQso map "Y" ⇄ true), and the PATCH
+	// /v1/qso/{uuid} edit path (JSON body) persists it directly — so a
+	// missed flag can also be corrected via the SessionPanel edit overlay.
 	AppSmRequestQsl bool `json:"app_sm_request_qsl,omitempty"`
 	/*
 		All the below fields are compatible with the ADI format and are populated by the adapter.

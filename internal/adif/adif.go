@@ -60,14 +60,17 @@ func (r *Record) ApplyQslDefaults(d types.QslDefaults) {
 }
 
 type QslSection struct {
-	QslMsg     string `adif:"qslmsg,omitempty"`
-	QslMsgIntl string `adif:"qslmsg_intl,omitempty"`
-	QslRDate   string `adif:"qslrdate,omitempty"`
-	QslSDate   string `adif:"qslsdate,omitempty"`
-	QslRcvd    string `adif:"qsl_rcvd,omitempty"` // QslRcvd: the QSL received status
-	QslSent    string `adif:"qsl_sent,omitempty"` // QslSent: the QSL sent status
-	QslSentVia string `adif:"qsl_sent_via,omitempty"`
-	QslVia     string `adif:"qsl_via,omitempty"`
+	QslMsg       string `adif:"qslmsg,omitempty"`
+	QslMsgIntl   string `adif:"qslmsg_intl,omitempty"`
+	QslMsgRcvd   string `adif:"qslmsg_rcvd,omitempty"` // message that accompanied an incoming QSL
+	QslRDate     string `adif:"qslrdate,omitempty"`
+	QslSDate     string `adif:"qslsdate,omitempty"`
+	QslRcvd      string `adif:"qsl_rcvd,omitempty"`     // QslRcvd: the QSL received status
+	QslRcvdVia   string `adif:"qsl_rcvd_via,omitempty"` // route the incoming QSL arrived by
+	QslRcvdNotes string `adif:"qsl_rcvd_notes,omitempty"`
+	QslSent      string `adif:"qsl_sent,omitempty"` // QslSent: the QSL sent status
+	QslSentVia   string `adif:"qsl_sent_via,omitempty"`
+	QslVia       string `adif:"qsl_via,omitempty"`
 
 	QrzComQsoDownloadDate   string `adif:"qrzcom_qso_download_date,omitempty"`
 	QrzComQsoDownloadStatus string `adif:"qrzcom_qso_download_status,omitempty"`
@@ -107,9 +110,12 @@ func QsoToRecord(q types.Qso) Record {
 	// Map QSL
 	r.QslSection = QslSection{
 		QslMsg:                q.Qsl.QslMsg,
+		QslMsgRcvd:            q.Qsl.QslMsgRcvd,
 		QslRDate:              q.Qsl.QslRDate,
 		QslSDate:              q.Qsl.QslSDate,
 		QslRcvd:               q.Qsl.QslRcvd,
+		QslRcvdVia:            q.Qsl.QslRcvdVia,
+		QslRcvdNotes:          q.Qsl.QslRcvdNotes,
 		QslSent:               q.Qsl.QslSent,
 		QslSentVia:            q.Qsl.QslSendVia,
 		QslVia:                q.Qsl.QslVia,
@@ -158,13 +164,16 @@ func RecordToQso(rec Record, logbookID int64) types.Qso {
 		ContactedStation: rec.ContactedStation,
 		LoggingStation:   rec.LoggingStation,
 		Qsl: types.Qsl{
-			QslMsg:     rec.QslSection.QslMsg,
-			QslRDate:   rec.QslSection.QslRDate,
-			QslSDate:   rec.QslSection.QslSDate,
-			QslRcvd:    rec.QslSection.QslRcvd,
-			QslSent:    rec.QslSection.QslSent,
-			QslSendVia: rec.QslSection.QslSentVia,
-			QslVia:     rec.QslSection.QslVia,
+			QslMsg:       rec.QslSection.QslMsg,
+			QslMsgRcvd:   rec.QslSection.QslMsgRcvd,
+			QslRDate:     rec.QslSection.QslRDate,
+			QslSDate:     rec.QslSection.QslSDate,
+			QslRcvd:      rec.QslSection.QslRcvd,
+			QslRcvdVia:   rec.QslSection.QslRcvdVia,
+			QslRcvdNotes: rec.QslSection.QslRcvdNotes,
+			QslSent:      rec.QslSection.QslSent,
+			QslSendVia:   rec.QslSection.QslSentVia,
+			QslVia:       rec.QslSection.QslVia,
 		},
 		QrzComUploadDate:    rec.QslSection.QrzComQsoUploadDate,
 		QrzComUploadStatus:  rec.QslSection.QrzComQsoUploadStatus,

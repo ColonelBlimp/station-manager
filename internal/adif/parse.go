@@ -52,15 +52,29 @@ func Parse(data []byte) (Adif, error) {
 		// Field header `<TAG:len[:type]>` anchored exactly at i?
 		if loc := fieldHeadRe.FindSubmatchIndex(data[i:]); loc != nil {
 			tag := strings.ToUpper(string(data[i+loc[2] : i+loc[3]]))
-			length, _ := strconv.Atoi(string(data[i+loc[4] : i+loc[5]]))
+			length, lenErr := strconv.Atoi(string(data[i+loc[4] : i+loc[5]]))
 			valStart := i + loc[1]
-			valEnd := valStart + length
-			if valEnd > n {
-				// Declared length overruns the buffer. Tolerant policy:
-				// take what's there (review 2026-06-04 L1 — this is the
-				// single point a future strict/warn mode would flag).
-				valEnd = n
+			// Declared length overruns the buffer, or is so large it doesn't
+			// fit in an int (Atoi range error). Tolerant policy: take what's
+			// there (review 2026-06-04 L1 — the single point a future
+			// strict/warn mode would flag). The length is checked against the
+			// remaining bytes *before* the addition so a malformed huge length
+			// can't overflow valStart+length into a negative, invalid slice
+			// bound and panic the parser (review 2026-06-19 H1).
+			valEnd := n
+			if lenErr == nil && length <= n-valStart {
+				valEnd = valStart + length
 			}
+			// Deliberate, not strict: every parsed value is right-trimmed of
+			// whitespace. SM is a personal logger that ingests real-world ADIF,
+			// and exporters commonly pad values within the declared length;
+			// trimming keeps a padded "M0CMC " from mismatching the same call
+			// in dupe-detection and contact-history comparisons. The cost is
+			// that a free-text value (COMMENT, NOTES, QSLMSG) intentionally
+			// ending in whitespace loses it — accepted here. This is the one
+			// point where the parser is NOT byte-faithful to the length prefix;
+			// a future strict/import mode would make the trim opt-out (review
+			// 2026-06-19 M2).
 			val := strings.TrimRightFunc(string(data[valStart:valEnd]), unicode.IsSpace)
 			if inBody {
 				if cur == nil {

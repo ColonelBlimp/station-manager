@@ -5,9 +5,16 @@
 //
 // [Parse] accepts raw ADIF bytes and returns a populated [Adif] struct.
 // It is intentionally tolerant: unknown fields are ignored, tags are
-// case-insensitive, and only string fields are supported. The parser
-// splits on <EOH>/<EOR> markers and uses reflection over struct tags
+// case-insensitive, and only string fields are supported. The parser is a
+// single length-aware forward scan: each value is skipped by its declared
+// `<TAG:n>` byte length, so <EOH>/<EOR> are recognised as markers only at a
+// tag boundary, never inside a value. It uses reflection over struct tags
 // (adif:"..." with json:"..." as fallback) to populate [Record] fields.
+//
+// Parsed values are right-trimmed of trailing whitespace — a deliberate
+// cleanliness choice (real-world exporters pad within the declared length, and
+// a padded callsign must still match in dupe-detection), not strict
+// byte-faithfulness to the length prefix. See [Parse] for the trade-off.
 //
 // # Serialisation
 //
@@ -24,7 +31,13 @@
 // tag names. QSL and Station Manager user-defined fields use separate
 // structs ([QslSection], [UserDef]) with explicit adif:"..." tags.
 //
-// The structural drift between [QslSection] and [types.Qsl] is a known
-// issue flagged for design review — the two structs cover overlapping
-// but not identical ADIF field sets.
+// [QslSection] and [types.Qsl] now round-trip every QSL field the canonical
+// [types.Qso] model can hold — including the incoming-QSL fields QSLMSG_RCVD,
+// QSL_RCVD_VIA, and QSL_RCVD_NOTES (review 2026-06-19 M1). [QslSection] still
+// carries a few ADIF fields that have NO home on [types.Qso] and are therefore
+// intentionally NOT persisted: QSLMSG_INTL (the internationalised QSL message)
+// and the QRZCOM_QSO_DOWNLOAD_DATE / QRZCOM_QSO_DOWNLOAD_STATUS pair. They are
+// parsed into the transient [Record] (so a parse doesn't choke on them) and
+// dropped at the persistence boundary — a faithful re-import of those specific
+// fields is unsupported by design until a concrete need appears.
 package adif

@@ -247,6 +247,65 @@ func TestRoundTrip_QsoToRecordStringParse(t *testing.T) {
 	}
 }
 
+// TestRoundTrip_ReceivedQslFields guards review 2026-06-19 M1: the incoming-QSL
+// fields on types.Qsl (QSLMSG_RCVD / QSL_RCVD_VIA / QSL_RCVD_NOTES) must survive
+// the full types.Qso → ADIF → types.Qso round-trip. Before the fix QslSection
+// omitted them, so they were silently dropped on export (session email, QRZ
+// forwarding) and import.
+func TestRoundTrip_ReceivedQslFields(t *testing.T) {
+	in := types.Qso{
+		Qsl: types.Qsl{
+			QslRcvd:      "Y",
+			QslMsgRcvd:   "TNX QSO 73",
+			QslRcvdVia:   "B",
+			QslRcvdNotes: "card filed in box 3",
+		},
+	}
+	in.Call = "M0CMC" // a minimally-valid record so parse emits a record
+
+	adifStr := ConvertQsoToAdifNoHeader(in)
+
+	parsed, err := Parse([]byte(adifStr))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("got %d records, want 1", len(parsed.Records))
+	}
+	got := RecordToQso(parsed.Records[0], 0).Qsl
+
+	if got.QslMsgRcvd != in.Qsl.QslMsgRcvd {
+		t.Errorf("QslMsgRcvd = %q, want %q", got.QslMsgRcvd, in.Qsl.QslMsgRcvd)
+	}
+	if got.QslRcvdVia != in.Qsl.QslRcvdVia {
+		t.Errorf("QslRcvdVia = %q, want %q", got.QslRcvdVia, in.Qsl.QslRcvdVia)
+	}
+	if got.QslRcvdNotes != in.Qsl.QslRcvdNotes {
+		t.Errorf("QslRcvdNotes = %q, want %q", got.QslRcvdNotes, in.Qsl.QslRcvdNotes)
+	}
+}
+
+// TestParse_TrailingWhitespaceTrimmed characterizes the deliberate M2 behaviour
+// (review 2026-06-19): parsed values are right-trimmed of trailing whitespace
+// even though the length prefix declares those bytes. This protects against
+// padded real-world exports at the cost of byte-faithfulness for free text. If
+// a future strict/import mode makes the trim opt-out, this test should flip.
+func TestParse_TrailingWhitespaceTrimmed(t *testing.T) {
+	// <COMMENT:8> declares exactly the 8 bytes "TNX QSO " (note the trailing
+	// space); the parser reads all 8 then right-trims the whitespace.
+	input := "<CALL:5>M0CMC<COMMENT:8>TNX QSO <EOR>"
+	parsed, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 {
+		t.Fatalf("got %d records, want 1", len(parsed.Records))
+	}
+	if got := parsed.Records[0].Comment; got != "TNX QSO" {
+		t.Errorf("Comment = %q, want %q (trailing whitespace trimmed)", got, "TNX QSO")
+	}
+}
+
 // ---- Parse: multiple records without trailing EOR ---------------------------
 
 func TestParse_TrailingRecordWithoutEOR(t *testing.T) {
@@ -369,6 +428,37 @@ func TestParse_OverlongFieldLengthTruncatesTolerantly(t *testing.T) {
 	}
 	if parsed.Records[0].Call != "M0CMC" {
 		t.Errorf("Call = %q, want M0CMC (truncated to available bytes)", parsed.Records[0].Call)
+	}
+}
+
+// TestParse_AbsurdFieldLengthDoesNotPanic guards review 2026-06-19 H1: a
+// declared length too large to fit in an int makes strconv.Atoi return a range
+// error and a saturated MaxInt; the old code ignored the error and computed
+// valStart+length, which overflowed to a negative slice bound and panicked on
+// untrusted input. The malformed length must now collapse to the same tolerant
+// "take the available bytes" policy as a merely-overlong length — no panic.
+func TestParse_AbsurdFieldLengthDoesNotPanic(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string // expected Call (tolerant: remaining bytes)
+	}{
+		{"overflow", "<CALL:999999999999999999999999999999>M0CMC", "M0CMC"},
+		{"large-but-valid-overruns", "<CALL:5000000>M0CMC", "M0CMC"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := Parse([]byte(tc.input))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(parsed.Records) != 1 {
+				t.Fatalf("got %d records, want 1", len(parsed.Records))
+			}
+			if parsed.Records[0].Call != tc.want {
+				t.Errorf("Call = %q, want %q", parsed.Records[0].Call, tc.want)
+			}
+		})
 	}
 }
 

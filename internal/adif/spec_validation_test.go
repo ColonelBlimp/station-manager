@@ -207,9 +207,12 @@ var specField = map[string]adifType{
 	// QslSection
 	"QSLMSG":                     typString,
 	"QSLMSG_INTL":                typString,
+	"QSLMSG_RCVD":                typString,
 	"QSLRDATE":                   typDate,
 	"QSLSDATE":                   typDate,
 	"QSL_RCVD":                   typEnum,
+	"QSL_RCVD_VIA":               typEnum,
+	"QSL_RCVD_NOTES":             typString,
 	"QSL_SENT":                   typEnum,
 	"QSL_SENT_VIA":               typEnum,
 	"QSL_VIA":                    typString,
@@ -372,8 +375,9 @@ func fullyPopulatedQso() types.Qso {
 		Operator: "7Q5MLV", OwnerCallsign: "7Q5MLV", StationCallsign: "7Q5MLV",
 	}
 	q.Qsl = types.Qsl{
-		QslMsg: "Thanks for the QSO", QslRDate: "20260614", QslSDate: "20260614",
-		QslRcvd: "Y", QslSent: "N", QslSendVia: "B", QslVia: "via the bureau",
+		QslMsg: "Thanks for the QSO", QslMsgRcvd: "TNX QSO 73", QslRDate: "20260614",
+		QslSDate: "20260614", QslRcvd: "Y", QslRcvdVia: "B", QslRcvdNotes: "card filed",
+		QslSent: "N", QslSendVia: "B", QslVia: "via the bureau",
 	}
 	return q
 }
