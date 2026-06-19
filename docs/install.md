@@ -159,9 +159,15 @@ smd import /path/to/your-export.adi
 ```
 
 The importer drives the same QSO submission path the live SPA uses
-(validation + atomic write + audit table all inherited). Throughput
+(field validation + atomic write + audit table all inherited). Throughput
 is around 900 records per second on typical hardware — a few
-thousand QSOs import in seconds.
+thousand QSOs import in seconds. **One deliberate difference:** import
+does *not* enforce that each record's `STATION_CALLSIGN` matches the
+target logbook's callsign — a historical or mixed log can legitimately
+carry QSOs made under a different callsign — though it still requires the
+target logbook to exist. The live submit path (SPA + FT8) *does* enforce
+the callsign match, so QSOs logged on-air always line up with the logbook
+the forwarders upload to.
 
 The importer prints a summary on exit: `{stored, duplicate,
 errors}`. Errors are usually source-data problems (e.g. an `rst_rcvd`

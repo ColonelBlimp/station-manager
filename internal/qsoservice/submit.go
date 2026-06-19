@@ -118,6 +118,25 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "STATION_CALLSIGN must be 3-32 characters and contain at least one digit"}
 	}
 
+	// Logbook invariant (review 2026-06-19 M3). The target logbook must exist, and
+	// for live/public submits its callsign must match STATION_CALLSIGN — QRZ and
+	// other forwarders reject a QSO whose station callsign doesn't match the
+	// logbook. Enforced HERE (not only in the HTTP handler) so the FT8 e4 sink and
+	// any direct caller get the same guard, never silently storing a mismatched
+	// row. SubmitImport (preserveUUID) relaxes the callsign match — a historical /
+	// mixed log may legitimately carry a different callsign — but still requires
+	// the logbook to exist.
+	logbookCallsign, lberr := s.DB.LogbookCallsignByIDWithContext(ctx, logbookID)
+	if lberr != nil {
+		if stderr.Is(lberr, errors.ErrNotFound) {
+			return SubmitResult{}, &SubmitError{Code: "logbook_not_found", Message: "logbook does not exist"}
+		}
+		return SubmitResult{}, errors.New(op).WithErr(lberr).WithMsg("looking up logbook callsign")
+	}
+	if !preserveUUID && !strings.EqualFold(logbookCallsign, stationCallsign) {
+		return SubmitResult{}, &SubmitError{Code: "callsign_mismatch", Message: "STATION_CALLSIGN does not match the logbook's callsign"}
+	}
+
 	// ---- Validate field values ----
 	if !bands.IsValidBand(band) {
 		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("BAND %q is not a recognised band", band)}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
@@ -21,8 +22,22 @@ type Service struct {
 	Hub    *events.Hub      `di.inject:"eventhub"`
 }
 
-// Initialize satisfies the iocdi.Initializer interface.
+// Initialize satisfies the iocdi.Initializer interface. It fails fast when a
+// required dependency wasn't injected, so a DI-tag change or partial test
+// harness surfaces a clear startup error rather than a nil-deref panic on the
+// first QSO submit/update/delete (review 2026-06-19 L1).
 func (s *Service) Initialize() error {
+	const op errors.Op = "qsoservice.Service.Initialize"
+	switch {
+	case s.DB == nil:
+		return errors.New(op).WithMsg("DB dependency not injected")
+	case s.Config == nil:
+		return errors.New(op).WithMsg("Config dependency not injected")
+	case s.Logger == nil:
+		return errors.New(op).WithMsg("Logger dependency not injected")
+	case s.Hub == nil:
+		return errors.New(op).WithMsg("Hub dependency not injected")
+	}
 	return nil
 }
 

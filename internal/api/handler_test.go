@@ -1327,12 +1327,35 @@ func TestUpdateQso_InvalidBand(t *testing.T) {
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 	_, id := submitAndGetID(t, srv, lbID, testQsoADIF)
 
-	w := patchQso(t, srv, id, `{"band":"not-a-band"}`)
+	// Since review 2026-06-19 M2, BAND is derived from FREQ whenever the freq maps
+	// to a band — so a bad band alongside a valid freq is silently CORRECTED, not
+	// rejected (see TestUpdateQso_FreqEditCorrectsBand). To still exercise band
+	// validation, pair the bad band with an out-of-ham-band freq that maps to no
+	// band, so the supplied (invalid) band survives to the validator.
+	w := patchQso(t, srv, id, `{"band":"not-a-band","freq":"999.999"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "invalid_field_value") {
 		t.Fatalf("body = %q, want invalid_field_value", w.Body.String())
+	}
+}
+
+// TestUpdateQso_FreqEditCorrectsBand pins the review 2026-06-19 M2 contract at
+// the HTTP boundary: a freq edit derives BAND, so a stale/mismatched band in the
+// PATCH body is overwritten by the freq-derived band rather than persisted.
+func TestUpdateQso_FreqEditCorrectsBand(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	_, id := submitAndGetID(t, srv, lbID, testQsoADIF) // 40m / 7.050
+
+	// Move to 20m via freq but send the stale 40m band — the daemon derives 20m.
+	w := patchQso(t, srv, id, `{"freq":"14.250","band":"40m"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"band":"20m"`) || !strings.Contains(w.Body.String(), `"freq":"14.250"`) {
+		t.Fatalf("expected derived band 20m + freq 14.250; body = %s", w.Body.String())
 	}
 }
 

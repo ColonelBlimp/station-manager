@@ -90,6 +90,15 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 			return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("freq %q: %v", freq, err)}
 		}
 		merged.QsoDetails.Freq = utils.FormatFreqMHz(kHz)
+		// Band is a function of frequency, so derive it from the canonical freq —
+		// the edit overlay sends the OLD band on a VFO freq change, which would
+		// otherwise persist an impossible BAND/FREQ pair (and a wrong dedupe key,
+		// and contradictory ADIF to forwarders). Review 2026-06-19 M2. Only
+		// overwrite when the freq maps to a known band; an out-of-band freq keeps
+		// the supplied band so the band validation below still catches it.
+		if derived := utils.FrequencyToBand(merged.QsoDetails.Freq); derived != "" {
+			merged.QsoDetails.Band = strings.ToLower(derived)
+		}
 	}
 
 	// ---- Validate required-field invariants on the merged result ----
@@ -126,11 +135,18 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	if !utils.IsValidTimeADIF(merged.QsoDetails.TimeOff) {
 		return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: "time_off is not a valid time (expected HHMM or HHMMSS)"}
 	}
-	if merged.QsoDetails.RstSent == "" {
-		return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "rst_sent cannot be empty"}
-	}
-	if merged.QsoDetails.RstRcvd == "" {
-		return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "rst_rcvd cannot be empty"}
+	// RST is mode-aware (review 2026-06-19 M1). FT8 reports are signed SNR in dB
+	// and a caller-side bare-roger QSO can legitimately have no RST_RCVD — Submit
+	// leaves FT8 reports empty rather than fabricating "59", so Update must not
+	// reject an empty FT8 report either (otherwise a no-op or comment-only edit of
+	// a valid bare-roger FT8 QSO fails with a 400). Phone/CW keep the requirement.
+	if merged.QsoDetails.Mode != "FT8" {
+		if merged.QsoDetails.RstSent == "" {
+			return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "rst_sent cannot be empty"}
+		}
+		if merged.QsoDetails.RstRcvd == "" {
+			return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "rst_rcvd cannot be empty"}
+		}
 	}
 	if merged.ContactedStation.Country == "" {
 		return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "country cannot be empty"}
@@ -200,12 +216,11 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 		merged.DedupeKey = newKey
 	}
 
-	// ---- Atomic write: QSO + (future) upload-queue rows ----
+	// ---- Atomic write: QSO update + update-action upload rows + qso_history ----
 	// Symmetric with Submit: both ingest paths write under the same
-	// one-fails-all-fail contract. No upload-queue rows are produced on
-	// edit today (the forwarder lands in a later milestone), but when
-	// they are, the Insert loop will slot in here alongside the update
-	// inside the existing transaction envelope — no shape change needed.
+	// one-fails-all-fail contract. A single transaction carries the QSO update,
+	// the action.Update upload-queue rows for configured forwarders, and the
+	// qso_history audit row.
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
 	if err != nil {
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to begin transaction")

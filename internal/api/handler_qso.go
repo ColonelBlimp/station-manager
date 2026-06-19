@@ -194,9 +194,11 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ---- Resolve and validate logbook ----
-	// The client must provide ?logbook=<id>. The daemon verifies the
-	// logbook exists and its callsign matches STATION_CALLSIGN.
+	// ---- Resolve logbook id ----
+	// The client must provide ?logbook=<id>. The logbook-exists +
+	// callsign-matches-STATION_CALLSIGN invariant now lives in qsoservice.Submit
+	// (review 2026-06-19 M3) so every submit caller (HTTP, FT8 e4 sink, …) shares
+	// it; Submit returns logbook_not_found / callsign_mismatch, mapped below.
 	logbookIDStr := r.URL.Query().Get("logbook")
 	if logbookIDStr == "" {
 		s.writeError(w, http.StatusBadRequest, "missing_required_param",
@@ -208,26 +210,6 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	if err != nil || logbookID < 1 {
 		s.writeError(w, http.StatusBadRequest, "invalid_id",
 			"logbook must be a positive integer", op)
-		return
-	}
-
-	// We only need the logbook's callsign (to match against
-	// STATION_CALLSIGN). The dedicated SELECT-callsign helper avoids a
-	// full-row scan + adapter call on the submit hot path.
-	logbookCallsign, err := s.db.LogbookCallsignByIDWithContext(r.Context(), logbookID)
-	if err != nil {
-		if stderr.Is(err, errors.ErrNotFound) {
-			s.writeError(w, http.StatusNotFound, "logbook_not_found",
-				"logbook does not exist", op)
-			return
-		}
-		s.writeServerError(w, op, err, "db_error", "database operation failed")
-		return
-	}
-
-	if !strings.EqualFold(logbookCallsign, stationCallsign) {
-		s.writeError(w, http.StatusBadRequest, "callsign_mismatch",
-			"STATION_CALLSIGN does not match the logbook's callsign", op)
 		return
 	}
 
@@ -259,7 +241,13 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 	result, err := s.qso.Submit(r.Context(), logbookID, rec, force)
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {
-			s.writeError(w, http.StatusBadRequest, se.Code, se.Message, op)
+			// logbook_not_found is a 404 (the referenced logbook doesn't exist);
+			// every other SubmitError is a 400 client error.
+			status := http.StatusBadRequest
+			if se.Code == "logbook_not_found" {
+				status = http.StatusNotFound
+			}
+			s.writeError(w, status, se.Code, se.Message, op)
 			return
 		}
 		s.writeServerError(w, op, err, "submit_failed", "QSO submit failed")
