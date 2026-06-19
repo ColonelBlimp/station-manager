@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	stderrors "errors"
 	"strings"
 	"sync"
@@ -237,6 +238,59 @@ func TestService_Update_NestedMutationRollback(t *testing.T) {
 	}
 	if !got[0].Enabled {
 		t.Error("aborted in-place mutation of Forwarders[0].Enabled leaked into live config")
+	}
+}
+
+// --- L2 (review 2026-06-19): accessor defensive copies are deep ----------
+
+// Forwarders() promises callers can't mutate the live config. The copy must be
+// deep: writing through a returned entry's nested Credentials / ActionFilter /
+// Retry must not reach s.Cfg, or a future caller following the defensive-copy
+// contract could race Update.
+func TestForwarders_DeepCopyIsolatesNestedFields(t *testing.T) {
+	svc := New(Config{
+		Forwarders: []types.ForwarderConfig{{
+			Name:         "qrz",
+			Type:         "qrz",
+			Credentials:  json.RawMessage(`{"key":"orig"}`),
+			ActionFilter: []string{"insert"},
+			Retry:        &types.RetryConfig{MaxAttempts: 3},
+		}},
+	})
+
+	out := svc.Forwarders()
+	out[0].ActionFilter[0] = "MUTATED"
+	out[0].Credentials[2] = 'X'
+	out[0].Retry.MaxAttempts = 99
+
+	live := svc.Cfg.Forwarders[0]
+	if live.ActionFilter[0] != "insert" {
+		t.Errorf("live ActionFilter mutated: %q", live.ActionFilter[0])
+	}
+	if string(live.Credentials) != `{"key":"orig"}` {
+		t.Errorf("live Credentials mutated: %s", live.Credentials)
+	}
+	if live.Retry.MaxAttempts != 3 {
+		t.Errorf("live Retry.MaxAttempts mutated: %d", live.Retry.MaxAttempts)
+	}
+}
+
+// Enrichment() returns the pipeline config by value; its Chain slice must be a
+// copy so a caller can't mutate the live provider list under the lock.
+func TestEnrichment_DeepCopyIsolatesChain(t *testing.T) {
+	svc := New(Config{
+		Lookup: types.EnrichmentConfig{
+			Chain: []types.LookupConfig{{Name: "qrz", Enabled: true}},
+		},
+	})
+
+	out := svc.Enrichment()
+	out.Chain[0].Name = "MUTATED"
+	out.Chain[0].Enabled = false
+
+	live := svc.Cfg.Lookup.Chain[0]
+	if live.Name != "qrz" || !live.Enabled {
+		t.Errorf("live Chain entry mutated: %+v", live)
 	}
 }
 

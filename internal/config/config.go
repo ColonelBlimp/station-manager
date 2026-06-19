@@ -1610,7 +1610,10 @@ func (s *Service) DatastoreConfig() (types.DatastoreConfig, error) {
 // Forwarders returns a defensive copy of the configured forwarding
 // destinations. Callers (qsoservice submit/update/delete) range over it; a
 // copy means they can neither race Update's reassignment nor accidentally
-// mutate the live config slice.
+// mutate the live config slice. The copy is deep: each entry's mutable nested
+// fields (Credentials, ActionFilter, Retry) are cloned, so a caller that
+// writes through a returned entry can't reach the live config under the lock
+// (review 2026-06-19 L2).
 func (s *Service) Forwarders() []types.ForwarderConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1618,16 +1621,40 @@ func (s *Service) Forwarders() []types.ForwarderConfig {
 		return nil
 	}
 	out := make([]types.ForwarderConfig, len(s.Cfg.Forwarders))
-	copy(out, s.Cfg.Forwarders)
+	for i, f := range s.Cfg.Forwarders {
+		out[i] = cloneForwarder(f)
+	}
 	return out
 }
 
-// Enrichment returns the enrichment pipeline configuration per
-// ADR 0017. Caller should not mutate the returned struct.
+// cloneForwarder deep-copies the mutable nested fields of a ForwarderConfig
+// (the scalar fields copy by value with the struct assignment).
+func cloneForwarder(f types.ForwarderConfig) types.ForwarderConfig {
+	if f.Credentials != nil {
+		f.Credentials = append(json.RawMessage(nil), f.Credentials...)
+	}
+	if f.ActionFilter != nil {
+		f.ActionFilter = append([]string(nil), f.ActionFilter...)
+	}
+	if f.Retry != nil {
+		r := *f.Retry
+		f.Retry = &r
+	}
+	return f
+}
+
+// Enrichment returns a defensive copy of the enrichment pipeline
+// configuration per ADR 0017. The Chain slice is cloned so a caller can't
+// mutate the live provider list under the lock; LookupConfig itself is all
+// scalars, so a per-element value copy suffices (review 2026-06-19 L2).
 func (s *Service) Enrichment() types.EnrichmentConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.Cfg.Lookup
+	out := s.Cfg.Lookup
+	if out.Chain != nil {
+		out.Chain = append([]types.LookupConfig(nil), out.Chain...)
+	}
+	return out
 }
 
 // CountryTTL returns the country-table staleness threshold as a

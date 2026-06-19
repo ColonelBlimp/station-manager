@@ -39,7 +39,9 @@ export interface EnrichmentCountry {
     long_path_bearing?: string;
     is_new_entity?: boolean;
     local_time?: string;
-    last_refreshed_at?: string;
+    // No last_refreshed_at: it's `json:"-"` on the Go Country struct (cache
+    // metadata, column-only — daemon review 2026-06-19 M1), so it never
+    // appears on the enrichment wire.
 }
 
 // Daemon parity: internal/types/contacted_station.go → ContactedStation.
@@ -75,7 +77,9 @@ export interface EnrichmentStation {
     wwff_ref?: string;
     lat?: string;
     lon?: string;
-    last_refreshed_at?: string;
+    // No last_refreshed_at: it's `json:"-"` on the Go ContactedStation struct
+    // (cache metadata, column-only — daemon review 2026-06-19 M1), so it never
+    // appears on the enrichment wire.
 }
 
 export interface EnrichmentResult {

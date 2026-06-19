@@ -32,7 +32,8 @@ func ContactedStationModelToType(model *models.ContactedStation) (types.Contacte
 	station.Call = model.Call
 	station.Country = model.Country
 	// last_refreshed_at lives only on the column (cache-plumbing, not
-	// part of the additional_data blob shape). Zero time when NULL,
+	// part of the additional_data blob shape — enforced by `json:"-"`
+	// on the field, so the blob never carries it). Zero time when NULL,
 	// which the orchestrator treats as "never refreshed → stale."
 	station.LastRefreshedAt = model.LastRefreshedAt.Time
 

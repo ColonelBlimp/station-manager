@@ -21,23 +21,29 @@ import (
 //     Pass through both directions.
 //   - DefaultLogbook: id from config.json; name/callsign/description
 //     joined from the DB row at GET time.
-//   - DefaultRig: id from config.json; model/port joined from
-//     cfg.Rigs (when CAT lands; for now the joined fields stay zero).
+//   - DefaultRig: a narrow read-only projection (DefaultRigInfo) of the
+//     active rig — id from config.json, model/port joined from cfg.Rigs.
+//     NOT the full types.RigConfig: the logging SPA only needs id/model/port,
+//     and reusing the write-oriented RigConfig here leaked port/audio/
+//     overrides/mode_mappings onto /v1/config and would have auto-widened the
+//     wire surface on every future RigConfig field (review 2026-06-19 L1).
+//     Full rig profiles (with overrides) live on the config SPA's /v1/rigs.
 //   - Mailer: read-only projection of the SMTP block — only the SPA-
 //     relevant subset (enabled flag + default recipient). Host / port /
 //     username / password are deliberately not on the wire; SMTP creds
 //     are operator-side config.json material, not UI-editable.
 //
 // PUT bodies use the same shape; the handler honours only writable
-// fields (LoggingStation block, DefaultLogbook.ID, DefaultRig.ID).
-// SetupComplete and Mailer are server-managed — the handler ignores
-// any values the client sends and reasserts the authoritative state
-// in the response.
+// fields (the LoggingStation / Station blocks, Qsl, Ft8Display, and the
+// Bridge mode-mapping overlay). SetupComplete, Mailer, and DefaultRig are
+// server-managed/read-only — the handler ignores any values the client
+// sends (the default rig is selected via PUT /v1/rigs' default_rig_id, not
+// here) and reasserts the authoritative state in the response.
 type ConfigResponse struct {
 	SetupComplete  bool                 `json:"setup_complete"`
 	LoggingStation types.LoggingStation `json:"logging_station"`
 	DefaultLogbook types.Logbook        `json:"default_logbook"`
-	DefaultRig     types.RigConfig      `json:"default_rig"`
+	DefaultRig     DefaultRigInfo       `json:"default_rig"`
 	Station        types.StationConfig  `json:"station"`
 	// Qsl is the operator's standing outgoing-QSL defaults (QSL_VIA / QSLMSG /
 	// QSL_SENT_VIA). Like Ft8Display it is **presence-aware** on PUT — a body that
@@ -60,6 +66,21 @@ type ConfigResponse struct {
 	// (no Settings control yet) and a PUT never carries it, so it's left untouched on
 	// write (it survives in the in-memory cfg, rewritten with the rest).
 	Ft8Frequencies map[string]int `json:"ft8_frequencies,omitempty"`
+}
+
+// DefaultRigInfo is the SPA-visible subset of the active rig for GET
+// /v1/config. The logging SPA needs only the rig's identity and serial
+// port (the My Station Equipment readout); it must NOT receive the full
+// types.RigConfig (audio devices, serial overrides, per-rig mode mappings,
+// ft8_mode, my_rig) — those are the config SPA's concern and stay on
+// /v1/rigs. Keeping this a deliberate narrow type means a future field on
+// types.RigConfig can't silently widen the /v1/config wire surface (review
+// 2026-06-19 L1). Read-only: the default-rig selection is written via PUT
+// /v1/rigs' default_rig_id, not /v1/config.
+type DefaultRigInfo struct {
+	ID    int64  `json:"id"`
+	Model string `json:"model,omitempty"`
+	Port  string `json:"port,omitempty"`
 }
 
 // MailerInfo is the SPA-visible subset of the SMTP config. Enabled
@@ -297,8 +318,8 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 }
 
 // buildConfigResponse projects a Config snapshot into the wire shape.
-// Joins the default_logbook DB row when one exists; leaves the
-// default_rig empty until CAT lands and cfg.Rigs is populated.
+// Joins the default_logbook DB row when one exists and the active rig's
+// id/model/port into the narrow DefaultRigInfo (L1).
 //
 // The Mailer block is sourced from the live mailer Service rather
 // than the cfg snapshot — Enabled() and DefaultRecipient() are
@@ -368,7 +389,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		SetupComplete:  cfg.SetupComplete,
 		LoggingStation: cfg.LoggingStation,
 		DefaultLogbook: types.Logbook{ID: cfg.DefaultLogbookID},
-		DefaultRig:     types.RigConfig{ID: cfg.DefaultRigID},
+		DefaultRig:     DefaultRigInfo{ID: cfg.DefaultRigID},
 		Station:        cfg.Station,
 		Bridge:         bridgeInfoFor(cfg),
 		Mailer: MailerInfo{
@@ -403,10 +424,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 
 	// DefaultRig join (ADR 0028): cfg.Rigs is now populated (a single-rig
 	// config is migrated into a one-entry catalogue at Load), so resolve the
-	// active rig's display fields. The bare {ID: N} stub stands in when no
-	// rig matches (a catalogue-less / bridge-disabled host).
+	// active rig's display fields. Only id/model/port cross to the logging SPA
+	// (L1); the bare {ID: N} stub stands in when no rig matches (a
+	// catalogue-less / bridge-disabled host).
 	if rc := cfg.RigByID(cfg.DefaultRigID); rc != nil {
-		resp.DefaultRig = *rc
+		resp.DefaultRig = DefaultRigInfo{ID: rc.ID, Model: rc.Model, Port: rc.Port}
 	}
 
 	return resp, nil

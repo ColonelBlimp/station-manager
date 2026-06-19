@@ -16,7 +16,7 @@ One of the other main requirements is that the software should not require an in
 Here in Malawi, the internet is not always available, and when it is, it is not always reliable. So, the software should
 be able to operate without an internet connection. The application will forward QSOs to online logbooks such as QRZ.com and ClubLog (configurable), but this is not a requirement for the software to operate.
 
-The software is not currently aimed at contesting (although it does support it), rather at general HF operation by SSB and CW. There are
+The software is not currently aimed at contesting (although support is planned), rather at general HF operation by SSB, CW, and FT8. There are
 plans to support serious contesting, including multiple distributed stations, etc.
 
 Install and first-run setup: see [`docs/install.md`](docs/install.md).
@@ -25,7 +25,7 @@ Design decisions, architecture notes, and the ADR log live under `docs/`.
 
 ## Computer Aided Transceiver (CAT)
 
-The software does support CAT operation; however, only Yaesu FTdx10 and FT-710 have been tested (I don't own any other
+The software does support CAT operation; however, only Yaesu FTdx10, FT-710, and IC7300 have been tested (I don't own any other
 rigs).
 
 ## Licence

@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -279,6 +280,33 @@ func TestContactedStationTypeToModel_ValidStation_MinimalData(t *testing.T) {
 	assert.Equal(t, "W1ABC", result.Call)
 	assert.Equal(t, "United States", result.Country)
 	assert.NotEmpty(t, result.AdditionalData)
+}
+
+// last_refreshed_at is column-only (cache plumbing, `json:"-"` on the type —
+// review 2026-06-19 M1): the promoted column must carry the timestamp while
+// the additional_data blob must not, so the durable blob stays free of the
+// zero-time noise and the column remains the single authoritative source.
+func TestContactedStationTypeToModel_LastRefreshedAtColumnOnly(t *testing.T) {
+	ts := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	station := types.ContactedStation{
+		Call:            "W1ABC",
+		LastRefreshedAt: ts,
+	}
+	result, err := ContactedStationTypeToModel(station)
+	require.NoError(t, err)
+
+	// Column populated.
+	assert.True(t, result.LastRefreshedAt.Valid, "last_refreshed_at column should be populated")
+	assert.True(t, result.LastRefreshedAt.Time.Equal(ts), "column timestamp mismatch")
+
+	// Blob free of the field (and of any zero-time literal).
+	assert.NotContains(t, string(result.AdditionalData), "last_refreshed_at")
+	assert.NotContains(t, string(result.AdditionalData), "0001-01-01")
+
+	// A zero timestamp maps to a NULL column.
+	zero, err := ContactedStationTypeToModel(types.ContactedStation{Call: "W1ABC"})
+	require.NoError(t, err)
+	assert.False(t, zero.LastRefreshedAt.Valid, "zero time should be a NULL column")
 }
 
 // =============================================================================

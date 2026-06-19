@@ -15,8 +15,10 @@ package types
 // RigConfig does NOT embed serial.Config, because types is stdlib-only
 // (doc.go "Import constraint") and serial.Config carries go.bug.st/serial
 // enum values. Overrides here are primitives; the composition that
-// produces a real serial.Config lives in internal/rigconfig (landing when
-// the first consumer — the logging app — is built).
+// produces a real serial.Config (overlaying these overrides onto the
+// rigdef defaults, parsing parity / stop-bits / delimiter, validating the
+// numeric fields) lives in internal/rigserial — called by the bridge's
+// buildSerialConfig and by cmd/catcli (review 2026-06-19).
 type RigConfig struct {
 	// ID is a stable numeric identifier for this rig within the
 	// operator's config. Matches Logbook.ID's int64 shape so the

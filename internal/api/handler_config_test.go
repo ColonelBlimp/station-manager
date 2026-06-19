@@ -801,6 +801,71 @@ func TestHandlePutConfig_MailerBlockIgnored(t *testing.T) {
 	}
 }
 
+// TestHandleGetConfig_DefaultRigNarrowShape pins the L1 boundary (review
+// 2026-06-19): /v1/config's default_rig is the narrow DefaultRigInfo
+// (id/model/port only). The active rig's wider fields — serial overrides,
+// per-rig audio devices, mode mappings, ft8_mode, my_rig — are config-SPA
+// concerns served on /v1/rigs and must NOT cross to the logging SPA, so a
+// future types.RigConfig field can't silently widen this wire surface.
+func TestHandleGetConfig_DefaultRigNarrowShape(t *testing.T) {
+	ft8Mode := "DATA-U"
+	myRig := "Yaesu FTdx10"
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		cfg.Rigs = []types.RigConfig{{
+			ID:    1,
+			Model: "yaesu-ftdx10",
+			Port:  "/dev/ttyUSB-secret",
+			Audio: types.RigAudioConfig{RX: "PCM2901-capture", TX: "PCM2901-playback"},
+			Overrides: types.RigOverrides{
+				BaudRate:      38400,
+				LineDelimiter: "0xFD",
+			},
+			ModeMappings: map[string]types.ModeMapping{"DATA-U": {Mode: "FT4"}},
+			Ft8Mode:      &ft8Mode,
+			MyRig:        &myRig,
+		}}
+		cfg.DefaultRigID = 1
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// Decode just the default_rig object and assert its exact key set.
+	var envelope struct {
+		DefaultRig map[string]json.RawMessage `json:"default_rig"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	allowed := map[string]bool{"id": true, "model": true, "port": true}
+	for k := range envelope.DefaultRig {
+		if !allowed[k] {
+			t.Errorf("default_rig exposed disallowed field %q (full payload: %s)", k, w.Body.String())
+		}
+	}
+
+	// The wider values must not appear anywhere in the payload.
+	body := w.Body.String()
+	for _, leak := range []string{"PCM2901-capture", "PCM2901-playback", "38400", "0xFD", "my_rig"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("wider rig field leaked into /v1/config: %q in %s", leak, body)
+		}
+	}
+
+	// And the narrow fields that ARE allowed round-trip correctly.
+	var resp ConfigResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.DefaultRig.ID != 1 || resp.DefaultRig.Model != "yaesu-ftdx10" || resp.DefaultRig.Port != "/dev/ttyUSB-secret" {
+		t.Errorf("default_rig narrow fields wrong: %+v", resp.DefaultRig)
+	}
+}
+
 func readFileForTest(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -8,10 +8,13 @@ import "time"
 // row's additional_data JSON blob (and, for the standalone enrichment
 // row, inside contacted_station.additional_data).
 //
-// Every field is tagged `,omitempty` per ADR 0015: the blob omits
-// empty values uniformly so it carries operator-set / enriched data
-// only, not "field exists but empty" noise. Read-back via
-// json.Unmarshal is unaffected (missing fields → zero value).
+// Every operator/enrichment field is tagged `,omitempty` per ADR 0015: the
+// blob omits empty values uniformly so it carries operator-set / enriched
+// data only, not "field exists but empty" noise. Read-back via
+// json.Unmarshal is unaffected (missing fields → zero value). The sole
+// exception is LastRefreshedAt — `json:"-"` — which is cache plumbing that
+// lives on the DB column and the in-memory struct, never in the JSON blob or
+// on the API wire (see its field comment).
 type ContactedStation struct {
 	// ID is the primary key of the ContactedStation table. This is only used when updating the contacted station details.
 	// Notice the JSON tag for this struct is "csid" so that it does not clash with the "id" field of the QSO struct.
@@ -48,5 +51,14 @@ type ContactedStation struct {
 	// used by the enrichment orchestrator to branch fresh / stale /
 	// cold per ADR 0017's three-state read policy. Zero means "never
 	// refreshed (NULL in DB), treat as stale on first read."
-	LastRefreshedAt time.Time `json:"last_refreshed_at,omitempty"`
+	//
+	// `json:"-"`: this is storage/cache metadata, not blob or wire
+	// shape. It lives on the `last_refreshed_at` DB column (the
+	// authoritative source on read-back) and on this in-memory struct
+	// for the orchestrator; the marshalled form (additional_data blob,
+	// enrichment API responses) must not carry it. A zero time.Time
+	// would otherwise serialize as "0001-01-01T00:00:00Z" — meaningless
+	// noise that contradicts ADR 0015's operator-set/enriched-only blob
+	// contract (review 2026-06-19 M1).
+	LastRefreshedAt time.Time `json:"-"`
 }

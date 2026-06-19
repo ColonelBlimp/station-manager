@@ -8,9 +8,12 @@ package types
 // zone enrichment; ContactHistory carries prior contacts with the
 // same callsign.
 //
-// Per ADR 0015, every field on this struct and its embeds is tagged
-// `,omitempty` so the marshalled JSON blob carries operator-set /
-// enriched data only, not "field exists but empty" noise.
+// Per ADR 0015, every operator/enriched field on this struct and its
+// embeds is tagged `,omitempty` so the marshalled JSON blob carries
+// operator-set / enriched data only, not "field exists but empty" noise.
+// The two LastRefreshedAt cache-metadata fields (on the embedded
+// ContactedStation and on CountryDetails) are the exception — `json:"-"`,
+// column-only, never in the blob (review 2026-06-19 M1).
 type Qso struct {
 	ID int64 `json:"id,omitempty"`
 

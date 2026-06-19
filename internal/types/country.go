@@ -7,10 +7,12 @@ import "time"
 // `country_details` member and travels inside the qso row's
 // additional_data JSON blob.
 //
-// Every field is tagged `,omitempty` per ADR 0015 so an unenriched
-// QSO emits `"country_details":{}` rather than 14 empty-string keys.
-// Read-back via json.Unmarshal is unaffected (missing fields → zero
-// value). Eliminating the `country_details` member entirely when zero
+// Every enrichment field is tagged `,omitempty` per ADR 0015 so an
+// unenriched QSO emits `"country_details":{}` rather than 14
+// empty-string keys (LastRefreshedAt is the lone `json:"-"` exception —
+// cache metadata, never on the wire). Read-back via json.Unmarshal is
+// unaffected (missing fields → zero value). Eliminating the
+// `country_details` member entirely when zero
 // would require changing the embed to `*Country` plus nil-checks at
 // every assignment site; deferred per ADR 0015's "Alternatives
 // considered" until the empty-object pattern becomes a real noise
@@ -39,5 +41,12 @@ type Country struct {
 	// refreshed (NULL in DB), treat as stale on first read." Carried
 	// on the type so the orchestrator gets it in one fetch round-trip
 	// alongside the country fields.
-	LastRefreshedAt time.Time `json:"last_refreshed_at,omitempty"`
+	//
+	// `json:"-"`: storage/cache metadata, not blob or wire shape — it
+	// lives on the `last_refreshed_at` DB column (authoritative on
+	// read-back) and on this in-memory struct, never in the JSON blob
+	// (Country travels inside the QSO's country_details) or on the API
+	// wire. A zero time.Time would otherwise serialize as
+	// "0001-01-01T00:00:00Z" (review 2026-06-19 M1).
+	LastRefreshedAt time.Time `json:"-"`
 }
