@@ -6,6 +6,23 @@
 //
 // Design rationale in docs/v2-design/forwarding.md §9.
 //
+// # Caller contract (load-bearing — review 2026-06-19)
+//
+// Two obligations are easy to miss and have caused real bugs:
+//
+//  1. A panic is recovered OUTSIDE fn's body, so code AFTER the panic point does
+//     not run. Anything that must happen on every exit — releasing a semaphore,
+//     clearing in-flight state, sending on a channel, publishing status, invoking
+//     a completion callback — must be in a `defer` INSIDE fn, not written as
+//     ordinary statements after the panic-prone call. (ft8.tx's transmit state
+//     wedged in-flight because its cleanup wasn't deferred.)
+//  2. With GoTracked, wg.Add(1) runs synchronously at the call site, but that only
+//     helps if the goroutine is launched BEFORE any other path can reach the
+//     matching wg.Wait(). If the caller exposes waitable in-flight state (a cancel
+//     func, an "active" flag) before calling GoTracked, a concurrent shutdown can
+//     pass Wait with a zero counter. Call GoTracked while still holding the lock
+//     that gates the waiter (see internal/lookup/refresher for the pattern).
+//
 // Package layout note: the forwarding design originally proposed
 // internal/utils/safego.go, but internal/logging already imports
 // internal/utils, so a *logging.Service parameter in utils would

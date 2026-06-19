@@ -144,7 +144,12 @@ func (s *Service) Start(ctx context.Context) error {
 
 	s.log.InfoWith().Str("host", s.cfg.Host).Int("port", s.cfg.Port).
 		Msg("pskreporter: uploading FT8 reception spots")
-	safego.GoTracked(runCtx, "pskreporter.flush", s.onPanic, func() { s.flushLoop(runCtx) }, false, &s.wg)
+	// respawn=true: the flush loop is a long-lived worker driving off shared
+	// buffer/socket state, so a recovered panic must NOT leave spots buffering
+	// with no background flusher (review 2026-06-19 M2). Re-entering flushLoop is
+	// safe — it re-reads the same s.buf/s.conn. Stop cancels runCtx, which ends
+	// the respawn loop, so shutdown still drains.
+	safego.GoTracked(runCtx, "pskreporter.flush", s.onPanic, func() { s.flushLoop(runCtx) }, true, &s.wg)
 	return nil
 }
 

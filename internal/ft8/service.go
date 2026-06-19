@@ -299,11 +299,19 @@ func (s *Service) startCaptureLocked() {
 	s.captureCancel = cancel
 	s.capturing = true
 
+	// The scheduler + decoder are a COUPLED pair (Scheduler.Run closes its slots
+	// channel on exit), so they can't be respawned independently (respawn=false).
+	// Instead each installs onCaptureLoopExit: if either exits while the session
+	// is still live (a safego-recovered panic, or an unexpected early return), the
+	// subsystem is marked not-capturing + a terminal error logged, so the operator
+	// isn't left with a live-looking but dead capture (review 2026-06-19 M2).
 	sch := NewScheduler(samples, s.log)
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
+		defer s.onCaptureLoopExit(runCtx, "ft8.scheduler")
 		_ = sch.Run(runCtx)
 	}, false, &s.wg)
 	safego.GoTracked(runCtx, "ft8.decoder", s.onPanic, func() {
+		defer s.onCaptureLoopExit(runCtx, "ft8.decoder")
 		s.decodeLoop(sch.Slots())
 	}, false, &s.wg)
 
@@ -311,6 +319,34 @@ func (s *Service) startCaptureLocked() {
 		Str("device", s.cfg.Device).
 		Bool("osd", s.osdEnabled()).
 		Msg("ft8: subscriber present; capture started, decoding live slots")
+}
+
+// onCaptureLoopExit handles a scheduler/decoder goroutine exit (review 2026-06-19
+// M2). When runCtx is already cancelled the exit is a normal teardown
+// (release/Stop) and this is a no-op. Otherwise the loop died unexpectedly — a
+// safego-recovered panic or a premature return — so it marks the subsystem
+// not-capturing, cancels the session (winding down the coupled sibling
+// goroutine), and logs a terminal error so the operator isn't left with a
+// live-looking but dead capture. It runs in a defer so it fires on a recovered
+// panic too (safego recovers outside the goroutine body). There is no automatic
+// restart: re-opening the FT8 view re-acquires capture. Does NOT wait on s.wg,
+// so it can't deadlock a concurrent releaseCaptureLocked drain.
+func (s *Service) onCaptureLoopExit(runCtx context.Context, who string) {
+	if runCtx.Err() != nil {
+		return // normal teardown: release/Stop cancelled the session first
+	}
+	s.mu.Lock()
+	wasCapturing := s.capturing
+	s.capturing = false
+	if s.captureCancel != nil {
+		s.captureCancel()
+		s.captureCancel = nil
+	}
+	s.mu.Unlock()
+	if wasCapturing {
+		s.log.ErrorWith().Str("goroutine", who).
+			Msg("ft8: capture loop exited unexpectedly; capture stopped — re-open the FT8 view to restart")
+	}
 }
 
 // releaseCaptureLocked cancels the current capture session, releases the

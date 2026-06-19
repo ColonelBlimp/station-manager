@@ -840,10 +840,10 @@ func ensureDefaultLogbook(
 }
 
 // spawnForwarderWorkers constructs one worker per enabled forwarder
-// in cfg and launches each under safego.Go with respawn=true. A panic
-// inside a worker's Run path is recovered, logged via the daemon
-// logger, and the worker is respawned so that a transient panic doesn't
-// permanently disable a destination — see forwarding.md §9.
+// in cfg and launches each under safego.GoTracked with respawn=true (tracked so
+// shutdown waits for the workers to drain). A panic inside a worker's Run path is
+// recovered, logged via the daemon logger, and the worker is respawned so that a
+// transient panic doesn't permanently disable a destination — see forwarding.md §9.
 //
 // Retry config resolution: operator's `retry` block wins if present;
 // otherwise the forwarder package's own registered DefaultRetry is

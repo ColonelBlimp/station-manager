@@ -332,40 +332,60 @@ func (s *Service) startTransmission(
 	s.txMessage = message
 	s.txOffsetHz = offsetHz
 	s.txLastErr = ""
-	s.txMu.Unlock()
 
-	s.publishTxState() // transmitting
-
+	// Launch UNDER txMu (review 2026-06-19 M1): GoTracked does txWg.Add(1)
+	// synchronously, so doing it while we still hold txMu means a concurrent
+	// disarmTx — which reads txCancel/txInFlight under txMu, then txWg.Wait
+	// outside it — cannot pass Wait with a zero counter in the window before the
+	// goroutine is counted. The goroutine's cleanup re-takes txMu, so it parks
+	// until we Unlock below; fn itself needs no lock. (Mirrors the
+	// hold-the-lock-across-Add pattern in internal/lookup/refresher.)
 	safego.GoTracked(txCtx, "ft8.tx", s.onPanic, func() {
-		defer cancel() // release the ctx on normal completion
-		err := fn(txCtx, ctrl)
+		defer cancel() // release the ctx on every exit (runs last)
 
-		// A cancel (disarm / daemon stop) is a normal stop, not a failure.
-		failed := err != nil && !stderrors.Is(err, context.Canceled)
+		var txErr error
+		normal := false
+		// Cleanup runs on EVERY exit, INCLUDING a panic that safego recovers
+		// (normal stays false then). safego recovers panics outside fn's body, so
+		// without this defer the post-fn cleanup would be skipped on a panic,
+		// leaving txInFlight/txCancel set and the TX path wedged in-flight until a
+		// daemon restart (review 2026-06-19 H1).
+		defer func() {
+			// A cancel (disarm / daemon stop) is a normal stop, not a failure; a
+			// panic (normal=false) or any non-cancel error is.
+			failed := !normal || (txErr != nil && !stderrors.Is(txErr, context.Canceled))
+			s.txMu.Lock()
+			s.txInFlight = false
+			s.txMessage = ""
+			s.txOffsetHz = 0
+			s.txCancel = nil
+			if failed {
+				s.txLastErr = "ft8_tx_failed"
+			}
+			s.txMu.Unlock()
 
-		s.txMu.Lock()
-		s.txInFlight = false
-		s.txMessage = ""
-		s.txOffsetHz = 0
-		s.txCancel = nil
-		if failed {
-			s.txLastErr = "ft8_tx_failed"
-		}
-		s.txMu.Unlock()
+			switch {
+			case !normal:
+				s.log.ErrorWith().Msg("ft8 tx: transmission panicked (recovered); in-flight state cleared")
+			case failed:
+				s.log.WarnWith().Err(txErr).Msg("ft8 tx: transmission failed")
+			}
+			s.publishTxState() // done / failed
 
-		if failed {
-			s.log.WarnWith().Err(err).Msg("ft8 tx: transmission failed")
-		}
-		s.publishTxState() // done (or failed)
+			// Completion callback (final-rung QSO logging): ok only on a clean
+			// success — a cancel, error, or panic means the final transmission did
+			// NOT complete on air, so the QSO must not be logged.
+			if onDone != nil {
+				onDone(normal && txErr == nil)
+			}
+		}()
 
-		// Completion callback (final-rung QSO logging, review H1): ok only on a
-		// clean success — a cancel (disarm/stop) or any error means the final
-		// transmission did NOT complete on air, so the QSO must not be logged.
-		if onDone != nil {
-			onDone(err == nil)
-		}
+		txErr = fn(txCtx, ctrl)
+		normal = true
 	}, false, &s.txWg)
 
+	s.txMu.Unlock()
+	s.publishTxState() // transmitting
 	return nil
 }
 

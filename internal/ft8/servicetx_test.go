@@ -1,6 +1,7 @@
 package ft8
 
 import (
+	"context"
 	"math"
 	"sync"
 	"testing"
@@ -10,6 +11,58 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/stretchr/testify/require"
 )
+
+// TestStartTransmission_PanicClearsInFlight guards review 2026-06-19 H1: a panic
+// in the transmit fn (recovered by safego) must still run the cleanup defer —
+// clearing txInFlight/txCancel, publishing a final state, and calling
+// onDone(false) — so the TX path isn't wedged in-flight until a daemon restart.
+func TestStartTransmission_PanicClearsInFlight(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	done := make(chan bool, 1)
+	err := s.startTransmission("CQ G0XYZ IO91", 1500,
+		func(context.Context, *TxController) error { panic("boom in fn") },
+		func(ok bool) { done <- ok })
+	require.NoError(t, err, "launch succeeds; the panic happens in the tracked goroutine")
+
+	select {
+	case ok := <-done:
+		require.False(t, ok, "onDone(false) after a panicked transmission")
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup defer / onDone did not run after a recovered panic")
+	}
+
+	s.txMu.Lock()
+	inFlight, cancelSet := s.txInFlight, s.txCancel != nil
+	s.txMu.Unlock()
+	require.False(t, inFlight, "txInFlight cleared after a recovered panic")
+	require.False(t, cancelSet, "txCancel cleared after a recovered panic")
+
+	// The TX path is not wedged: a later transmit is accepted, not ErrTxInFlight.
+	require.NotErrorIs(t, s.TransmitNext("CQ G0XYZ IO91", 1600), ErrTxInFlight)
+}
+
+// TestStartTransmission_DisarmRaceClearsState guards review 2026-06-19 M1:
+// GoTracked's wg.Add runs under txMu, so a disarm racing a transmit launch
+// cannot pass txWg.Wait before the goroutine is counted — by the time disarm
+// returns, any launched TX has cleared its in-flight state. Run under -race a
+// regression also surfaces as a data race on the txCancel/txInFlight fields.
+func TestStartTransmission_DisarmRaceClearsState(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		require.NoError(t, s.ArmTx(true))
+		go func() { _ = s.TransmitNext("CQ G0XYZ IO91", 1500) }()
+		_ = s.ArmTx(false) // disarm racing the launch
+
+		s.txMu.Lock()
+		armed, inFlight := s.txArmed, s.txInFlight
+		s.txMu.Unlock()
+		require.False(t, armed)
+		require.False(t, inFlight, "disarm must drain any launched TX goroutine before returning")
+	}
+}
 
 // TestValidateTxOffset_RejectsOutOfPassband guards review 2026-06-19 M1: the
 // daemon refuses a TX audio offset outside the usable passband on every keying
