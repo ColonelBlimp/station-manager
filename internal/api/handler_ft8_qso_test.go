@@ -1,12 +1,14 @@
 package api
 
 import (
+	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -66,6 +68,19 @@ func TestHandleFt8QsoStart(t *testing.T) {
 		}
 	})
 
+	t.Run("malformed slot_utc", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/start",
+			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"not-a-time","offset_hz":1500}`, srv.handleFt8QsoStart)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+			t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+		// A stable, slot_utc-specific message — never Go's raw time.Parse text.
+		if !strings.Contains(w.Body.String(), "slot_utc") {
+			t.Errorf("message should name slot_utc; got %s", w.Body.String())
+		}
+	})
+
 	t.Run("not armed", func(t *testing.T) {
 		srv := ft8QsoTestServer(t, "G0TST")
 		w := postFt8Qso(t, srv, "/v1/ft8/qso/start",
@@ -94,6 +109,18 @@ func TestHandleFt8QsoWork(t *testing.T) {
 		}
 	})
 
+	t.Run("malformed slot_utc", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/work",
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"nope","offset_hz":1500}`, srv.handleFt8QsoWork)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+			t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "slot_utc") {
+			t.Errorf("message should name slot_utc; got %s", w.Body.String())
+		}
+	})
+
 	t.Run("not armed", func(t *testing.T) {
 		srv := ft8QsoTestServer(t, "G0TST")
 		w := postFt8Qso(t, srv, "/v1/ft8/qso/work",
@@ -102,6 +129,45 @@ func TestHandleFt8QsoWork(t *testing.T) {
 			t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
 		}
 	})
+}
+
+// TestWriteFt8QsoError_Mapping pins the error-classification surface directly
+// (review 2026-06-19 L2): each known FT8 sentinel maps to its stable
+// status+code, and an unknown error becomes a generic 500 internal_error that
+// does NOT leak the raw error text to the client (review 2026-06-19 M2). Driving
+// every sentinel through the live service would need a rig, so the mapper is
+// exercised here rather than only indirectly via the ft8_tx_not_armed path.
+func TestWriteFt8QsoError_Mapping(t *testing.T) {
+	srv := testServer(t)
+	const op errors.Op = "api.test"
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"not armed", ft8.ErrTxNotArmed, http.StatusConflict, "ft8_tx_not_armed"},
+		{"not ready", ft8.ErrTxNotReady, http.StatusServiceUnavailable, "rig_not_ready"},
+		{"in progress", ft8.ErrQsoInProgress, http.StatusConflict, "ft8_qso_in_progress"},
+		{"no offset", ft8.ErrNoOffset, http.StatusBadRequest, "ft8_no_offset"},
+		{"bad message", ft8.ErrTxBadMessage, http.StatusBadRequest, "ft8_tx_bad_message"},
+		{"caller mode unsupported", ft8.ErrCallerAnswerModeUnsupported, http.StatusNotImplemented, "ft8_caller_mode_unsupported"},
+		{"unknown maps to generic 500", stderrors.New("boom: internal detail"), http.StatusInternalServerError, "internal_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			srv.writeFt8QsoError(w, op, tc.err)
+			if w.Code != tc.wantStatus || decodeErrCode(t, w) != tc.wantCode {
+				t.Fatalf("status=%d code=%q, want %d %q (body %s)",
+					w.Code, decodeErrCode(t, w), tc.wantStatus, tc.wantCode, w.Body.String())
+			}
+			if tc.wantCode == "internal_error" && strings.Contains(w.Body.String(), "boom") {
+				t.Errorf("generic 500 must not leak raw error text; got %s", w.Body.String())
+			}
+		})
+	}
 }
 
 func TestHandleFt8QsoAbandon(t *testing.T) {

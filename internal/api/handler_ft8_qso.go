@@ -4,10 +4,21 @@ import (
 	stderr "errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 )
+
+// validFt8SlotUTC reports whether v is the RFC3339 UTC timestamp the FT8
+// sequencer expects (it parses with time.RFC3339 — sequencer.go /
+// work_sequencer.go). Validating at the API boundary keeps Go's raw parse-error
+// text out of the wire envelope and out of the catch-all error branch, which
+// must stay reserved for genuine server faults (review 2026-06-19 M2).
+func validFt8SlotUTC(v string) bool {
+	_, err := time.Parse(time.RFC3339, v)
+	return err == nil
+}
 
 // ft8QsoStartRequest is the POST /v1/ft8/qso/start body (ADR 0031): answer the
 // CQ from `their_call` (with `their_grid`), heard in the slot at `slot_utc`
@@ -39,6 +50,11 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.TheirCall) == "" {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "their_call is required", op)
+		return
+	}
+	if !validFt8SlotUTC(req.SlotUTC) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"slot_utc must be an RFC3339 UTC timestamp", op)
 		return
 	}
 
@@ -137,6 +153,11 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "their_call is required", op)
 		return
 	}
+	if !validFt8SlotUTC(req.SlotUTC) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"slot_utc must be an RFC3339 UTC timestamp", op)
+		return
+	}
 
 	// Our identity is daemon-owned (the station config), not client-supplied.
 	ls := s.cfg.Snapshot().LoggingStation
@@ -213,9 +234,12 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 			"operator_pick answerer selection is not yet implemented; "+
 				"set ft8.tx.caller_answer_mode to auto_first", op)
 	default:
-		// A bad slot_utc (time.Parse failure) and anything else map to 400 —
-		// the request is malformed, not a server fault.
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			"could not start the QSO: "+err.Error(), op)
+		// Client-input faults (bad slot_utc, missing call) are validated and
+		// mapped to 400 in the handlers BEFORE the service is called, and every
+		// known service condition has a sentinel above. Anything reaching here
+		// is an unexpected service/hardware fault, not malformed input: log the
+		// detail and return a generic 500 — never leak err.Error() to the wire
+		// or mislabel a server fault as a 400 (review 2026-06-19 M2).
+		s.writeServerError(w, op, err, "internal_error", "could not start the QSO; check daemon logs")
 	}
 }

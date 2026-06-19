@@ -117,6 +117,114 @@ func TestSessionEmail_ToWithoutAt_Returns400(t *testing.T) {
 	}
 }
 
+// TestSessionEmail_HeaderInjectionRecipient_Returns400 covers review M1: a
+// recipient carrying CR/LF (the "a@b\r\nBcc: x@y" header-injection shape) is
+// rejected at the API boundary as a 400 — it must never reach the
+// compose/archive/send path. The body is a raw string literal so the \r\n stays
+// a JSON escape that decodes to actual control characters.
+func TestSessionEmail_HeaderInjectionRecipient_Returns400(t *testing.T) {
+	srv := testServerWithMailer(t, types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
+
+	body := `{"to":"a@b\r\nBcc: x@y","uuids":["x"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleSessionEmail(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_field_value") {
+		t.Errorf("body should carry code invalid_field_value; got %s", w.Body.String())
+	}
+	// No side effect: a rejected recipient must not have written an archive.
+	if entries := readArchiveDir(t, srv); len(entries) != 0 {
+		t.Errorf("invalid recipient wrote %d archive file(s); want 0", len(entries))
+	}
+}
+
+// TestSessionEmail_MultipleRecipients_Returns400 covers review M1: a
+// comma-separated address list is not a single mailbox and is rejected.
+func TestSessionEmail_MultipleRecipients_Returns400(t *testing.T) {
+	srv := testServerWithMailer(t, types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
+
+	body := `{"to":"a@b.com, c@d.com","uuids":["x"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleSessionEmail(w, req)
+
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_field_value") {
+		t.Errorf("status = %d body = %s, want 400 invalid_field_value", w.Code, w.Body.String())
+	}
+}
+
+// TestSessionEmail_DisplayNameRecipient_Sends covers review M1: a display-name
+// address ("Name" <addr>) is a valid single mailbox — it's accepted and
+// normalized to the bare address, so the full send path succeeds (200).
+func TestSessionEmail_DisplayNameRecipient_Sends(t *testing.T) {
+	fake := newAPISmtpFake(t)
+	defer fake.close()
+	host, port := fake.hostPort()
+
+	srv := testServerWithMailer(t, types.SmtpConfig{
+		Enabled: true, Host: host, Port: port, From: "f@x", StartTLS: false, TimeoutSec: 5,
+	})
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	uuid := submitTestQsoUUID(t, srv, lbID)
+
+	body := `{"to":"\"QSL Manager\" <manager@example.com>","uuids":["` + uuid + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleSessionEmail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSessionEmail_DuplicateUuids_EmitsOnce covers review L1: a repeated UUID is
+// deduplicated, so the QSO appears once in the ADIF attachment and once in the
+// emitted list — not twice.
+func TestSessionEmail_DuplicateUuids_EmitsOnce(t *testing.T) {
+	fake := newAPISmtpFake(t)
+	defer fake.close()
+	host, port := fake.hostPort()
+
+	srv := testServerWithMailer(t, types.SmtpConfig{
+		Enabled: true, Host: host, Port: port, From: "f@x", StartTLS: false, TimeoutSec: 5,
+	})
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	uuid := submitTestQsoUUID(t, srv, lbID)
+
+	body := `{"to":"manager@example.com","uuids":["` + uuid + `","` + uuid + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleSessionEmail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	var resp SessionEmailResponse
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Emailed) != 1 {
+		t.Errorf("emailed = %v, want exactly one UUID", resp.Emailed)
+	}
+
+	// The archived ADIF (same bytes as the attachment) must carry one record.
+	entries := readArchiveDir(t, srv)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 archived ADIF, got %d", len(entries))
+	}
+	saved, err := os.ReadFile(filepath.Join(srv.cfg.WorkingDir(), "exports", "sent-adif", entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read archived ADIF: %v", err)
+	}
+	if n := strings.Count(strings.ToUpper(string(saved)), "<EOR>"); n != 1 {
+		t.Errorf("archived ADIF has %d records (<EOR>), want 1:\n%s", n, saved)
+	}
+}
+
 func TestSessionEmail_MalformedJson_Returns400(t *testing.T) {
 	srv := testServerWithMailer(t, types.SmtpConfig{Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5})
 

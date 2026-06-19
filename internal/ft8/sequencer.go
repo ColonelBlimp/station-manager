@@ -113,8 +113,9 @@ type CompletedQso struct {
 	HasTheirReport bool
 	OffsetHz       float64
 	// DialFreqMHz is the rig's dial frequency at QSO start (from the SPA, which
-	// reads it from the live rig state). The logged QSO frequency is this plus
-	// the audio offset; the band is derived from the sum.
+	// reads it from the live rig state). The logged QSO frequency IS this dial
+	// (FT8 convention — see BuildQso); the band is derived from the dial, and
+	// OffsetHz is TX audio placement only, never folded into FREQ.
 	DialFreqMHz float64
 	// AntPath is the operator's antenna-path choice for this contact, "S" (short)
 	// or "L" (long), used only to annotate the logged QSO (ADIF ANT_PATH + the

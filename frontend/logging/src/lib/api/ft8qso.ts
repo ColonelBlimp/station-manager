@@ -60,7 +60,8 @@ async function postFt8Qso(
 
 /** Start answering a CQ. slotUtc is the RFC3339 start of the slot the CQ was
  *  heard in (it fixes the worked station's parity); offsetHz is the picked offset;
- *  operatingFreqMHz is the rig dial frequency (the logged QSO freq = dial + offset). */
+ *  operatingFreqMHz is the rig dial frequency (the logged QSO freq IS the dial;
+ *  offsetHz is TX audio placement only, never folded into FREQ). */
 export function startFt8Qso(
     theirCall: string,
     theirGrid: string,
@@ -85,7 +86,7 @@ export function startFt8Qso(
 /** Start calling CQ (ADR 0033): the daemon calls CQ on offsetHz and works the
  *  stations that answer, one at a time, until abandoned (auto_first / operator_pick
  *  per the daemon's ft8.tx.caller_answer_mode). operatingFreqMHz is the rig dial
- *  frequency (logged QSO freq = dial + offset). Our callsign/grid are resolved
+ *  frequency (logged QSO freq IS the dial; offset is TX placement only). Our callsign/grid are resolved
  *  server-side from the station config. */
 export function startFt8Cq(
     offsetHz: number,
