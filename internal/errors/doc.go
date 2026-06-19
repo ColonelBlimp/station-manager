@@ -18,11 +18,14 @@
 //	    return nil
 //	}
 //
-// Every function that can return an error declares a package-scoped
-// operation constant (`const op errors.Op = "..."`) and uses it as the
+// By convention, a function that can return an error declares a local
+// operation constant (`const op errors.Op = "..."`) and passes it as the
 // first argument to `New`. The op string is conventionally `"pkg.Func"` or
-// `"pkg.Type.Method"` — whatever makes the error site grep-able. Because
-// Op is a typed string, the compiler catches typos and renames.
+// `"pkg.Type.Method"` — whatever makes the error site grep-able. The named
+// Op type documents intent and stops a bare string being passed where an op
+// is expected, but it is NOT compiler-verified against the actual function
+// name: keeping the literal in sync with a rename is the author's job (grep
+// for the old name on rename).
 //
 // # Builder chain
 //
@@ -84,6 +87,6 @@
 // project idiom — not just a style choice. See CLAUDE.md "Project
 // idioms" and "Code style" for how new code should use it.
 //
-// See docs/reviews/internal-errors.md for the review that shaped the
+// See docs/reviews/archive/internal-errors.md for the review that shaped the
 // current package surface (session 6, 2026-04-16).
 package errors

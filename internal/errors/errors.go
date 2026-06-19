@@ -23,13 +23,29 @@ func New(op Op) *DetailedError {
 	}
 }
 
-// AsDetailedError attempts to cast the given error to a DetailedError instance.
+// AsDetailedError reports whether a *DetailedError appears ANYWHERE in err's
+// wrapped chain (it uses errors.As). Use it for one-shot classification ("does
+// this error involve a DetailedError"), NOT as a current-frame predicate.
 func AsDetailedError(err error) (*DetailedError, bool) {
 	var dErr *DetailedError
 	if stderr.As(err, &dErr) {
 		return dErr, true
 	}
 	return nil, false
+}
+
+// DetailedFrame reports whether err's CURRENT frame is a *DetailedError, via a
+// direct type assertion — it does NOT search the wrapped chain the way
+// AsDetailedError does. A frame-by-frame walker (e.g. logging.buildErrorChain)
+// must use this: with AsDetailedError, a stdlib wrapper such as
+// fmt.Errorf("…: %w", dErr) would yield the NESTED DetailedError, dropping the
+// wrapper's own frame and recording the nested error twice (review 2026-06-19 M1).
+func DetailedFrame(err error) (*DetailedError, bool) {
+	dErr, ok := err.(*DetailedError)
+	if !ok || dErr == nil {
+		return nil, false
+	}
+	return dErr, true
 }
 
 // Error implements the error interface.
@@ -44,9 +60,10 @@ func AsDetailedError(err error) (*DetailedError, bool) {
 //	New("pkg.Func").Err(inner).Msg("x")      -> "pkg.Func: x: inner.Error()"
 //
 // This matches the stdlib convention for wrapped errors (fmt.Errorf with
-// %w produces a similar chained string). Callers that need only the
-// message set on this specific frame — without the op prefix or the
-// recursive cause — should use LocalMsg() instead.
+// %w produces a similar chained string). Error() INTENTIONALLY returns the
+// full recursive chain, not just this frame's message — there is no
+// local-frame accessor today; if one is ever needed, add an explicit Msg() /
+// LocalMsg() with its own tests rather than parsing this string.
 func (e *DetailedError) Error() string {
 	if e == nil {
 		return ""
@@ -110,7 +127,7 @@ func (e *DetailedError) WithMsgf(format string, a ...any) *DetailedError {
 //	errors.New(op).WithMsgf("context: %v", err)
 //
 // depending on whether the intent is to wrap the error as a cause or to
-// produce a formatted message only. See docs/reviews/internal-errors.md
+// produce a formatted message only. See docs/reviews/archive/internal-errors.md
 // finding 4.4 for the background.
 func (e *DetailedError) WithErr(err error) *DetailedError {
 	if e == nil {

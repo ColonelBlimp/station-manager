@@ -54,6 +54,27 @@ func TestBuildErrorChain_WithDetailedAndStd(t *testing.T) {
 	assert.Equal(t, root, root2)
 }
 
+// TestBuildErrorChain_StdWrapperFrameNotDuplicated is the M1 regression: a
+// DetailedError → stdlib fmt wrapper → DetailedError chain must record the
+// stdlib wrapper as its own frame (empty op) and the inner DetailedError exactly
+// once. Before the fix, buildErrorChain used the chain-searching AsDetailedError
+// as a per-frame predicate, so the wrapper frame was dropped and the inner
+// DetailedError was counted twice.
+func TestBuildErrorChain_StdWrapperFrameNotDuplicated(t *testing.T) {
+	inner := smerrors.New("db.Connect").WithMsg("refused")
+	outer := smerrors.New("server.Start").WithErr(fmt.Errorf("wrap: %w", inner)).WithMsg("boom")
+
+	chain, ops, root, _ := buildErrorChain(outer)
+
+	assert.Equal(t, []string{
+		"server.Start: boom: wrap: db.Connect: refused",
+		"wrap: db.Connect: refused",
+		"db.Connect: refused",
+	}, chain)
+	assert.Equal(t, []string{"server.Start", "", "db.Connect"}, ops)
+	assert.Equal(t, "db.Connect: refused", root)
+}
+
 func TestEventErr_EmitsChainFields(t *testing.T) {
 	var buf bytes.Buffer
 	logger := zerolog.New(&buf)

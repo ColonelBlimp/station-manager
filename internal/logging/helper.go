@@ -14,9 +14,12 @@ import (
 //   - root: the innermost error message
 //   - rootOp: the innermost operation identifier if available
 //
-// The traversal prefers Station-Manager DetailedError.Cause() and then
-// falls back to stdlib errors.Unwrap. It guards against excessive depth
-// and repeated messages to avoid cycles.
+// The traversal unwraps one frame at a time via stdlib errors.Unwrap. Each
+// frame is classified with smerrors.DetailedFrame — a DIRECT type assertion, not
+// the chain-searching AsDetailedError, so a stdlib wrapper around a
+// DetailedError gets its own ("" op) frame and the nested DetailedError isn't
+// counted twice (review 2026-06-19 M1). It guards against excessive depth and
+// repeated messages to avoid cycles.
 func buildErrorChain(err error) (chain []string, ops []string, root string, rootOp string) {
 	const maxDepth = 50
 	visited := 0
@@ -25,7 +28,7 @@ func buildErrorChain(err error) (chain []string, ops []string, root string, root
 	for err != nil && visited < maxDepth {
 		visited++
 
-		if dErr, ok := smerrors.AsDetailedError(err); ok && dErr != nil {
+		if dErr, ok := smerrors.DetailedFrame(err); ok {
 			msg := dErr.Error()
 			chain = append(chain, msg)
 			op := string(dErr.Op())

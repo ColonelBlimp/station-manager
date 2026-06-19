@@ -64,6 +64,6 @@
 // DetailedError type). Standard-library wrapped errors (fmt.Errorf with
 // %w, errors.Unwrap chains) are traversed correctly for their message
 // strings but contribute empty strings to error_ops because they carry
-// no operation context. See docs/reviews/internal-errors.md and
+// no operation context. See docs/reviews/archive/internal-errors.md and
 // docs/reviews/internal-logging.md for the full pattern rationale.
 package logging
