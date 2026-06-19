@@ -14,3 +14,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 
 <!-- /log appends below this line -->
 - [2026-06-18] footer for Band activity needs to be bigger text
+- [2026-06-19] It seems the ANT_AZ is recorded in decimal points 200.7 etc. I should be to the nearest degree - no minutes.

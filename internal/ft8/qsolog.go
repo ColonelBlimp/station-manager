@@ -67,7 +67,9 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 			if c.AntPath == antPathLong {
 				bearing, dist = geo.LongBearingDeg, geo.LongDistanceKm
 			}
-			q.AntennaAzimuth = strconv.FormatFloat(bearing, 'f', 1, 64)
+			// ANT_AZ to the nearest whole degree — it's a rotator heading, and
+			// sub-degree precision is spurious (FormatFloat rounds at prec 0).
+			q.AntennaAzimuth = strconv.FormatFloat(bearing, 'f', 0, 64)
 			q.Distance = strconv.FormatFloat(dist, 'f', 0, 64)
 		}
 	}

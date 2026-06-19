@@ -150,7 +150,8 @@ describe('enrichmentState', () => {
             configState.loggingStation.myGridsquare = 'KH78an';
             enrichmentState.setResult(makeResult({ gridsquare: 'KH66UB' }));
             flushSync();
-            const expected = enrichmentState.paths!.shortPathBearing.toFixed(1);
+            // ANT_AZ is recorded to the nearest whole degree (rotator heading).
+            const expected = enrichmentState.paths!.shortPathBearing.toFixed(0);
             expect(enrichmentState.activeBearing).toBe(expected);
         });
 
@@ -159,7 +160,7 @@ describe('enrichmentState', () => {
             enrichmentState.setResult(makeResult({ gridsquare: 'KH66UB' }));
             enrichmentState.path = 'long';
             flushSync();
-            const expected = enrichmentState.paths!.longPathBearing.toFixed(1);
+            const expected = enrichmentState.paths!.longPathBearing.toFixed(0);
             expect(enrichmentState.activeBearing).toBe(expected);
         });
     });

@@ -51,8 +51,9 @@ class EnrichmentState {
     });
 
     /**
-     * Bearing string for the currently-selected path, formatted to
-     * 0.1° precision. Empty string when paths is null — the form-
+     * Bearing string for the currently-selected path, rounded to the
+     * nearest whole degree — ANT_AZ is a rotator heading, so sub-degree
+     * precision is spurious. Empty string when paths is null — the form-
      * level ADIF emitter omits ANT_AZ when antAz is empty, so the
      * "no grid available" case naturally produces a record with no
      * ANT_AZ rather than a fabricated zero.
@@ -60,7 +61,7 @@ class EnrichmentState {
     activeBearing: string = $derived.by(() => {
         if (this.paths === null) return '';
         const b = this.path === 'short' ? this.paths.shortPathBearing : this.paths.longPathBearing;
-        return b.toFixed(1);
+        return b.toFixed(0);
     });
 
     /**

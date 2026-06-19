@@ -52,7 +52,7 @@
     async function handleSend(): Promise<void> {
         if (!canSend) return;
         sending = true;
-        const sendingToastId = toasts.info('Sending…', 0);
+        const sendingToastId = toasts.info('Sending email…', 0);
         try {
             const uuids = sessionQsosState.items.map((q) => q.uuid);
             const outcome = await sendSessionEmail({ to: recipient.trim(), uuids });
@@ -118,7 +118,7 @@
     disabled={!canSend}
     class="p-1.5 rounded text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 disabled:text-gray-400 disabled:hover:bg-transparent disabled:cursor-not-allowed cursor-pointer"
     aria-label="Send session ADIF"
-    title={sending ? 'Sending…' : 'Send session ADIF'}
+    title={sending ? 'Sending email…' : 'Send session ADIF'}
 >
     {@render paperPlaneIcon()}
 </button>

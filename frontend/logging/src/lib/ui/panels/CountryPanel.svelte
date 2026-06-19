@@ -104,11 +104,11 @@
                 <!-- Bearing pair -->
                 <div class="mb-3 tabular-nums">
                     <span class={enrichmentState.path === 'short' ? activeClass : inactiveClass}>
-                        {enrichmentState.paths.shortPathBearing.toFixed(1)}&deg;
+                        {enrichmentState.paths.shortPathBearing.toFixed(0)}&deg;
                     </span>
                     <span class="text-ink"> / </span>
                     <span class={enrichmentState.path === 'long' ? activeClass : inactiveClass}>
-                        {enrichmentState.paths.longPathBearing.toFixed(1)}&deg;
+                        {enrichmentState.paths.longPathBearing.toFixed(0)}&deg;
                     </span>
                 </div>
 
