@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -102,6 +103,13 @@ func validateRigs(cfg Config) []Finding {
 		if rc.Model == "" {
 			out = append(out, rigErr(fmt.Sprintf("rigs[id=%d]", rc.ID),
 				fmt.Sprintf("rigs[id=%d]: model must not be empty", rc.ID)))
+		} else if _, ok := cat.Lookup(rc.Model); !ok {
+			// Model is a cat.Lookup driver id (types.RigConfig.Model). Reject an
+			// unknown one HERE, at the single validation boundary, rather than
+			// letting it pass to a runtime unknown_driver bridge error after the
+			// daemon has already started (review 2026-06-19 M2).
+			out = append(out, rigErr(fmt.Sprintf("rigs[id=%d]", rc.ID),
+				fmt.Sprintf("rigs[id=%d]: model %q is not a known rig driver", rc.ID, rc.Model)))
 		}
 		for lit, mm := range rc.ModeMappings {
 			field := fmt.Sprintf("rigs[id=%d].mode_mappings[%s]", rc.ID, lit)

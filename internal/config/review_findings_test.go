@@ -1,6 +1,8 @@
 package config
 
 import (
+	stderrors "errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -119,6 +121,60 @@ func TestConfig_Clone_IsIndependent(t *testing.T) {
 // reassign) against the read-locked accessors. Run under `go test -race` it
 // proves the accessors no longer race a concurrent PUT /v1/config. (Without
 // the read locks added for review M1, the race detector flags s.Cfg here.)
+// TestValidateRigs_RejectsUnknownModel guards review 2026-06-19 M2: a rig whose
+// Model isn't a known cat.Lookup driver must fail config validation at the
+// single boundary, not slip through to a runtime unknown_driver bridge error.
+// A real model validates; a typo does not.
+func TestValidateRigs_RejectsUnknownModel(t *testing.T) {
+	hasModelFinding := func(findings []Finding) bool {
+		for _, f := range findings {
+			if strings.Contains(f.Message, "not a known rig driver") {
+				return true
+			}
+		}
+		return false
+	}
+
+	good := Config{Rigs: []types.RigConfig{{ID: 1, Model: "yaesu-ftdx10"}}, DefaultRigID: 1}
+	if hasModelFinding(Validate(good)) {
+		t.Error("a real rig model was flagged as unknown")
+	}
+
+	bad := Config{Rigs: []types.RigConfig{{ID: 1, Model: "yaesu-typo"}}, DefaultRigID: 1}
+	if !hasModelFinding(Validate(bad)) {
+		t.Errorf("unknown rig model was not rejected; findings = %+v", Validate(bad))
+	}
+}
+
+// TestService_Update_NestedMutationRollback guards review 2026-06-19 M3: when an
+// Update closure mutates a NESTED value (here, appending to Forwarders) and then
+// returns an error, the live in-memory config must be untouched — Update works
+// on a deep Clone, not a shallow copy that aliases the live slices.
+func TestService_Update_NestedMutationRollback(t *testing.T) {
+	svc := New(Config{
+		Forwarders: []types.ForwarderConfig{{Name: "qrz", Type: "qrz", Enabled: true}},
+	})
+	svc.SetPath(t.TempDir() + "/config.json")
+
+	wantErr := stderrors.New("abort")
+	err := svc.Update(func(cfg *Config) error {
+		cfg.Forwarders = append(cfg.Forwarders, types.ForwarderConfig{Name: "leak", Type: "clublog"})
+		cfg.Forwarders[0].Enabled = false // also mutate an existing element in place
+		return wantErr
+	})
+	if !stderrors.Is(err, wantErr) {
+		t.Fatalf("Update err = %v, want the abort error", err)
+	}
+
+	got := svc.Snapshot().Forwarders
+	if len(got) != 1 {
+		t.Fatalf("Forwarders len = %d, want 1 (aborted append leaked)", len(got))
+	}
+	if !got[0].Enabled {
+		t.Error("aborted in-place mutation of Forwarders[0].Enabled leaked into live config")
+	}
+}
+
 func TestService_UpdateAccessorRace(t *testing.T) {
 	svc := New(Config{
 		Forwarders: []types.ForwarderConfig{{Name: "qrz", Type: "qrz", Enabled: true}},

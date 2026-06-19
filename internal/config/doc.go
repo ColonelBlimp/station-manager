@@ -1,26 +1,28 @@
-// Package config holds the daemon's runtime configuration.
+// Package config holds the daemon's runtime configuration — the single
+// config.json the operator hand-edits and the daemon reads/rewrites.
 //
-// The v1 config package served three Wails apps with rig/CAT/audio/FT8/server
-// concerns bolted on over time. This v2 rewrite is deliberately minimal: it
-// covers what smd actually needs at milestone 1 — a data directory, a Unix
-// socket path for the HTTP API, a logging configuration, and the sqlite
-// datastore location.
+// It started (milestone 1) as a deliberately minimal block — data dir, HTTP
+// API binding, logging, sqlite location — and grew with its consumers. It now
+// owns the full surface: forwarders, enrichment lookups, SMTP/email, the serial
+// bridge, FT8 (capture + display + TX), rig profiles + QSL defaults + PSK
+// Reporter, plus the shared validation (Validate → []Finding) and the
+// version-stamped migration chain that runs at Load. The v1 aggregation shape
+// (AppConfig, RequiredConfigs, OptionalConfigs) was deliberately NOT ported —
+// that was a three-Wails-apps artefact.
 //
-// New configuration surfaces (forwarders, enrichment lookups, email, etc.)
-// are added as their consumers come online in later milestones. Don't
-// preemptively port v1's config aggregation (AppConfig, RequiredConfigs,
-// OptionalConfigs); that shape was driven by three-Wails-apps needs that do
-// not apply here.
+// Secrets: config.json stores plaintext credentials (SMTP password,
+// lookup-provider passwords, forwarder API keys). They are deliberately kept
+// OFF the /v1/config API (the handler strips them), and WriteJSON writes the
+// file 0600 so the on-disk copy isn't world/group-readable either. Encryption
+// at rest is deferred pending a security assessment.
 //
-// First-run behaviour: the daemon's loadConfig (cmd/smd/main.go) calls
-// WriteJSON to seed a default config.json at the resolved candidate path
-// when no file exists yet. This gives the operator a discoverable,
-// hand-editable file on first launch. WriteJSON itself is package-private
-// in the sense that it's only ever called by the daemon's startup path;
-// run-time config updates from /v1/config (forthcoming) reuse the same
-// helper for atomic rewrites.
+// First-run: the daemon's loadConfig (cmd/smd/main.go) calls WriteJSON to seed
+// a default config.json when none exists — a discoverable, hand-editable file.
+// Runtime updates from PUT /v1/config go through Service.Update, which applies
+// the change to a deep Clone, persists atomically via WriteJSON (temp-file +
+// rename), and swaps the in-memory config in only after the disk write succeeds.
 //
-// See docs/v2-design/structure.md and docs/v1-analysis/lessons-for-v2.md →
-// "Enumerate all API surfaces before designing any of them" — the same
-// principle applies to configuration.
+// See docs/v2-design/config.md (the canonical config reference) and
+// docs/v1-analysis/lessons-for-v2.md → "Enumerate all API surfaces before
+// designing any of them" — the same principle applies to configuration.
 package config

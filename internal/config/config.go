@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -309,9 +311,10 @@ func (c Config) RigByID(id int64) *types.RigConfig {
 // unchanged. The catalogue is authoritative: a resolved active rig always
 // wins over any stale loose bridge.serial / bridge.cat left on disk.
 //
-// RigConfig.Overrides (per-rig serial param shadowing) are NOT yet wired —
-// serial defaults continue to come from the rigdef, as before; wiring them is
-// future work alongside the discovery/picker UI.
+// RigConfig.Overrides (per-rig serial param shadowing) ARE projected — the
+// active rig's Overrides are carried onto the runtime BridgeSerialConfig below
+// (pinned by TestActiveBridge_ProjectsRigSerialOverrides); the bridge merges
+// them over the rigdef serial defaults at open time.
 func (c Config) ActiveBridge() types.BridgeConfig {
 	b := c.Bridge
 	// Serial/Cat are nil in the stored config (config.md §10): build fresh blocks
@@ -605,15 +608,37 @@ func DefaultConfig(dataDir string) Config {
 // rename so a partial write can never leave a half-formed config on
 // disk for the next startup. The parent directory must already exist;
 // daemon startup resolves that elsewhere via utils.WorkingDir.
+//
+// The file is written 0600 (owner read/write only): config.json holds
+// plaintext secrets — SMTP credentials, lookup-provider passwords, forwarder
+// API keys — that are deliberately kept off the /v1/config API, so the on-disk
+// copy must not be world/group-readable on a multi-user host either (review
+// 2026-06-19 M1). An existing file that's already stricter (e.g. 0400) is
+// preserved; a wider one (a legacy 0644) is tightened on the next write.
 func WriteJSON(path string, cfg Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
 
+	mode := os.FileMode(0o600)
+	if fi, statErr := os.Stat(path); statErr == nil {
+		// Preserve an operator-tightened mode (a subset of owner-rw, e.g. 0400);
+		// never loosen, and tighten anything wider down to 0600.
+		if perm := fi.Mode().Perm(); perm&^0o600 == 0 && perm != 0 {
+			mode = perm
+		}
+	}
+
 	tmp := path + ".tmp"
-	if err = os.WriteFile(tmp, data, 0o644); err != nil {
+	if err = os.WriteFile(tmp, data, mode); err != nil {
 		return fmt.Errorf("writing temp config: %w", err)
+	}
+	// WriteFile applies the mode through umask on create; force it exactly so a
+	// permissive umask can't leave the secret-bearing file group/world-readable.
+	if err = os.Chmod(tmp, mode); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("setting temp config mode: %w", err)
 	}
 	if err = os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
@@ -972,6 +997,95 @@ func Warnings(cfg Config) []string {
 	return out
 }
 
+// UnknownKeys returns the dotted paths of JSON keys present in the raw config
+// document but NOT recognised by the Config schema (review 2026-06-19 L1). Load
+// deliberately ignores unknown keys (forward-compatibility — an old daemon must
+// still load a config a newer one wrote), but that means a hand-editing
+// operator's typo — "bridge.enable", "smtp.timeot_sec", "server.max_body_byte"
+// — silently falls back to the default. The daemon logs these at startup so the
+// mistake is visible without making one typo fatal. Advisory only.
+//
+// It runs the same migrateDocument as Load first, so a key a migration renames
+// or removes isn't falsely flagged. Recursion descends struct / *struct blocks
+// (where the review's nested examples live); slice elements and map values are
+// treated as opaque (a map's keys are data, not schema). Returns nil for a
+// document that doesn't parse as a JSON object — Load surfaces real parse errors.
+func UnknownKeys(data []byte) []string {
+	migrated, err := migrateDocument(data)
+	if err != nil {
+		return nil
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(migrated, &raw) != nil {
+		return nil
+	}
+	var out []string
+	collectUnknownKeys("", raw, reflect.TypeOf(Config{}), &out)
+	sort.Strings(out)
+	return out
+}
+
+// collectUnknownKeys diffs the raw JSON object against the json-tagged fields of
+// struct type t, appending dotted paths of unrecognised keys to out and
+// recursing into struct-typed fields whose value is itself a JSON object.
+func collectUnknownKeys(prefix string, raw map[string]json.RawMessage, t reflect.Type, out *[]string) {
+	known := jsonFieldsOf(t)
+	for k, v := range raw {
+		ft, ok := known[k]
+		if !ok {
+			*out = append(*out, prefix+k)
+			continue
+		}
+		for ft.Kind() == reflect.Ptr {
+			ft = ft.Elem()
+		}
+		if ft.Kind() != reflect.Struct {
+			continue // scalars, slices, and maps are leaves for this check
+		}
+		var child map[string]json.RawMessage
+		if json.Unmarshal(v, &child) == nil {
+			// Value is a JSON object → descend. A non-object value (e.g. a
+			// time.Time serialised as a string) fails this and is left alone.
+			collectUnknownKeys(prefix+k+".", child, ft, out)
+		}
+	}
+}
+
+// jsonFieldsOf maps the JSON key → field type for every exported, encodable
+// field of struct type t, honouring `json:"name,..."` tags, `json:"-"` skips,
+// and anonymous-field promotion (an embedded struct with no json name promotes
+// its fields to this level — matching encoding/json).
+func jsonFieldsOf(t reflect.Type) map[string]reflect.Type {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	out := map[string]reflect.Type{}
+	if t.Kind() != reflect.Struct {
+		return out
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.PkgPath != "" && !f.Anonymous {
+			continue // unexported, non-embedded
+		}
+		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		if name == "-" {
+			continue
+		}
+		if name == "" && f.Anonymous {
+			for k, ft := range jsonFieldsOf(f.Type) {
+				out[k] = ft
+			}
+			continue
+		}
+		if name == "" {
+			name = f.Name // encoding/json default: the field name itself
+		}
+		out[name] = f.Type
+	}
+	return out
+}
+
 // isLoopbackBind reports whether the host portion of a host:port
 // string resolves to a loopback address. Empty host (":8080") is
 // treated as wildcard bind (NOT loopback). Hostnames that aren't
@@ -1319,6 +1433,13 @@ func (c Config) Clone() Config {
 // failure); in that case neither the in-memory state nor the file is
 // touched.
 //
+// The working value is a deep Clone, not a shallow value copy: a shallow copy
+// shares nested slices/maps/pointers with the live config, so a closure that
+// appended to cfg.Forwarders or edited cfg.Rigs[i].ModeMappings before
+// returning an error (or before a write failure) would leak that mutation into
+// the live in-memory config despite Update reporting failure (review 2026-06-19
+// M3). Cloning keeps the "abort touches nothing" contract true for nested edits.
+//
 // Pattern: the API handler reads Snapshot(), constructs the new
 // value, calls Update with a closure that copies the new value into
 // *cfg. Keeps the write window narrow and the mutation explicit.
@@ -1330,7 +1451,7 @@ func (s *Service) Update(fn func(cfg *Config) error) error {
 		return fmt.Errorf("config.Service.Update: no on-disk path set; cannot persist update")
 	}
 
-	next := s.Cfg
+	next := s.Cfg.Clone()
 	if err := fn(&next); err != nil {
 		return err
 	}
@@ -1359,7 +1480,10 @@ func (s *Service) UpdateInMemoryThenPersist(fn func(cfg *Config) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	next := s.Cfg
+	// Deep clone for the same reason as Update (M3): on an fn error we return
+	// with memory untouched, so the working value must not alias the live
+	// config's nested slices/maps.
+	next := s.Cfg.Clone()
 	if err := fn(&next); err != nil {
 		return err
 	}

@@ -286,6 +286,18 @@ func run() error {
 		loggerSvc.WarnWith().Msg(w)
 	}
 
+	// Unknown/misspelled config keys (review 2026-06-19 L1): Load silently
+	// ignores them (forward-compat), so surface them here — a typo in a
+	// hand-edited config otherwise just falls back to the default with no
+	// signal. Best-effort: a re-read failure is non-fatal (Load already
+	// succeeded on this path).
+	if raw, rerr := os.ReadFile(cfgPath); rerr == nil {
+		for _, k := range config.UnknownKeys(raw) {
+			loggerSvc.WarnWith().Str("key", k).
+				Msg("config: unrecognised key ignored (typo? — value falls back to default)")
+		}
+	}
+
 	// Optional ADIF modes override: $SM_WORKING_DIR/modes.json layered
 	// on top of the embedded baseline (`internal/enums/modes/adif-modes.json`).
 	// Missing file is a no-op; malformed file is loud-and-fatal — an

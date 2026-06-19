@@ -124,8 +124,11 @@ secretly are) rig-specific.
 ### `RigConfig` (`internal/types/rig.go`)
 
 `ID`, `Model`, `Port`, `Audio.Device` (all per-rig), and `Overrides` (per-rig serial
-params — **declared but NOT yet wired**; `ActiveBridge()` does not apply them). This is
-the per-rig home that the rig-specific fields above *should* live in but mostly don't yet.
+params). The active rig's fields ARE projected at runtime: `ActiveBridge()` overlays
+`Model`→`cat.driver`, `Port`, and `Overrides` onto the bridge serial/cat config, and
+`ActiveFt8()` projects the active rig's `Audio.Device` (both pinned by tests). `Model` is
+validated against the embedded `cat.Lookup` catalogue at Load/PUT (review 2026-06-19 M2),
+so an unknown driver id is rejected at the config boundary, not at bridge startup.
 
 ### `QslDefaults` (`internal/types/qsl.go`, config key `qsl`)
 

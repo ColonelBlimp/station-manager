@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -332,6 +333,91 @@ func TestWriteJSON_AtomicViaTempFile(t *testing.T) {
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf("temp file should not exist after successful WriteJSON; stat err = %v", err)
 	}
+}
+
+// TestUnknownKeys guards review 2026-06-19 L1: hand-edited typos are reported
+// as dotted paths (advisory), while a clean default config and arbitrary map
+// keys produce no false positives.
+func TestUnknownKeys(t *testing.T) {
+	// A fully-default config must flag ZERO unknown keys — the critical guard
+	// that the reflective schema walk doesn't false-flag a real field.
+	clean, err := json.Marshal(DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatalf("marshal default: %v", err)
+	}
+	if got := UnknownKeys(clean); len(got) != 0 {
+		t.Fatalf("default config flagged unknown keys (false positives): %v", got)
+	}
+
+	// Top-level + nested typos are reported; real sibling keys are not.
+	doc := []byte(`{
+		"data_dir": "/x",
+		"bogus_top": 1,
+		"smtp": {"host": "h", "timeot_sec": 5},
+		"bridge": {"enabled": true, "enable": true}
+	}`)
+	want := map[string]bool{"bogus_top": true, "smtp.timeot_sec": true, "bridge.enable": true}
+	got := UnknownKeys(doc)
+	for _, k := range got {
+		if !want[k] {
+			t.Errorf("unexpected key reported as unknown: %q (all: %v)", k, got)
+			continue
+		}
+		delete(want, k)
+	}
+	for k := range want {
+		t.Errorf("expected unknown key %q was not reported; got %v", k, got)
+	}
+}
+
+// TestWriteJSON_FileMode guards review 2026-06-19 M1: config.json holds
+// plaintext secrets, so a fresh write must be 0600 (owner-only), and a legacy
+// wider mode (0644) must be tightened on the next write — while an operator's
+// stricter mode (0400) is preserved.
+func TestWriteJSON_FileMode(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("fresh write is 0600", func(t *testing.T) {
+		path := filepath.Join(dir, "fresh.json")
+		if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+			t.Fatalf("WriteJSON: %v", err)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Errorf("mode = %o, want 0600", perm)
+		}
+	})
+
+	t.Run("legacy 0644 tightened to 0600", func(t *testing.T) {
+		path := filepath.Join(dir, "legacy.json")
+		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+			t.Fatalf("WriteJSON: %v", err)
+		}
+		fi, _ := os.Stat(path)
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Errorf("mode = %o, want 0600 (legacy 0644 tightened)", perm)
+		}
+	})
+
+	t.Run("stricter 0400 preserved", func(t *testing.T) {
+		path := filepath.Join(dir, "strict.json")
+		if err := os.WriteFile(path, []byte("{}"), 0o400); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if err := WriteJSON(path, DefaultConfig(dir)); err != nil {
+			t.Fatalf("WriteJSON: %v", err)
+		}
+		fi, _ := os.Stat(path)
+		if perm := fi.Mode().Perm(); perm != 0o400 {
+			t.Errorf("mode = %o, want 0400 preserved", perm)
+		}
+	})
 }
 
 func TestWriteJSON_FailsOnBadParentDir(t *testing.T) {
