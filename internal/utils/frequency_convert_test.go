@@ -49,6 +49,18 @@ func TestParseFreqMHz_InvalidInput(t *testing.T) {
 	}
 }
 
+// FREQ is required and no caller uses zero as a sentinel, so a non-positive
+// frequency is an input error here rather than a value that reaches storage
+// (review 2026-06-19 M3). Both the MHz-decimal and bare-integer-kHz forms
+// reject it.
+func TestParseFreqMHz_RejectsNonPositive(t *testing.T) {
+	for _, in := range []string{"0", "0.000", "-1", "-14.074", "-7050"} {
+		if got, err := ParseFreqMHz(in); err == nil {
+			t.Errorf("ParseFreqMHz(%q) = %d, nil; want error", in, got)
+		}
+	}
+}
+
 func TestParseFreqMHz_Rounding(t *testing.T) {
 	// 14.0745 MHz = 14074.5 kHz → rounds to 14075.
 	got, err := ParseFreqMHz("14.0745")

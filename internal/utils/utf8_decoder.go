@@ -6,10 +6,13 @@ import (
 	"strings"
 )
 
-// DecodeStringToUTF8 converts a given string to UTF-8 encoding, resolving any encoding issues if possible.
-// Returns the UTF-8 decoded string or an error if the conversion fails.
+// DecodeStringToUTF8 reads input through a UTF-8 reader and returns the result.
+// It does NOT sniff or convert from an unknown source charset — the label is
+// always "utf-8" — so for already-UTF-8 input it is effectively a validating
+// pass-through; bytes that aren't valid UTF-8 are replaced per the charset
+// reader's policy. Returns an error only if constructing the reader or reading
+// fails.
 func DecodeStringToUTF8(input string) (string, error) {
-	// Fix possible encoding issues using a UTF-8 decoder
 	decoded, err := charset.NewReaderLabel("utf-8", strings.NewReader(input))
 	if err != nil {
 		return emptyString, err

@@ -18,45 +18,53 @@ var (
 
 var reFrequencyMHz = regexp.MustCompile(`^\d{7,8}$`)
 
-// frequencyRanges holds the mapping of frequency prefixes to their min and max ranges.
-var frequencyRanges = map[string][2]float64{
-	"54.": {50.000000, 54.000000},
-	"53.": {50.000000, 54.000000},
-	"52.": {50.000000, 54.000000},
-	"51.": {50.000000, 54.000000},
-	"50.": {50.000000, 54.000000},
-	"29.": {28.000000, 29.700000},
-	"28.": {28.000000, 29.700000},
-	"24.": {24.890000, 24.990000},
-	"21.": {21.000000, 21.450000},
-	"18.": {18.068000, 18.168000},
-	"14.": {14.000000, 14.350000},
-	"10.": {10.100000, 10.150000},
-	"7.":  {7.000000, 7.200000},
-	"5.":  {5.351500, 5.366500},
-	"3.":  {3.500000, 3.800000},
-	"2.":  {1.810000, 2.000000},
-	"1.":  {1.810000, 2.000000},
+// bandRange is one amateur band's MHz allocation. The table is range-based
+// (low/high), NOT prefix-based: an earlier prefix scheme (e.g. "14." → 20m)
+// classified in-prefix-out-of-band values as valid — 14.999 → 20m even though
+// 20m ends at 14.350 — so values between bands or past a band edge were
+// mislabelled (review 2026-06-19 M1). Mirrors the frontend's table
+// (frontend/logging/src/lib/utils/frequency.ts) so the daemon and SPA agree on
+// what counts as in-band: IARU allocations broad enough to cover Regions 1/2/3
+// for the common bands, with 60m widened to 5.25–5.45 MHz.
+type bandRange struct {
+	low  float64 // MHz, inclusive
+	high float64 // MHz, inclusive
+	name string  // ADIF BAND literal
 }
 
-var bandNames = map[string]string{
-	"54.": "6m",
-	"53.": "6m",
-	"52.": "6m",
-	"51.": "6m",
-	"50.": "6m",
-	"29.": "10m",
-	"28.": "10m",
-	"24.": "12m",
-	"21.": "15m",
-	"18.": "17m",
-	"14.": "20m",
-	"10.": "30m",
-	"7.":  "40m",
-	"5.":  "60m",
-	"3.":  "80m",
-	"2.":  "160m",
-	"1.":  "160m",
+var bandRanges = []bandRange{
+	{1.800, 2.000, "160m"},
+	{3.500, 4.000, "80m"},
+	{5.250, 5.450, "60m"},
+	{7.000, 7.300, "40m"},
+	{10.100, 10.150, "30m"},
+	{14.000, 14.350, "20m"},
+	{18.068, 18.168, "17m"},
+	{21.000, 21.450, "15m"},
+	{24.890, 24.990, "12m"},
+	{28.000, 29.700, "10m"},
+	{50.000, 54.000, "6m"},
+	{70.000, 70.500, "4m"},
+	{144.000, 148.000, "2m"},
+	{222.000, 225.000, "1.25m"},
+	{420.000, 450.000, "70cm"},
+	{902.000, 928.000, "33cm"},
+	{1240.000, 1300.000, "23cm"},
+}
+
+// bandRangeFor parses a decimal-MHz frequency string and returns the band whose
+// allocation contains it, or nil when the value is unparseable or out of band.
+func bandRangeFor(freq string) *bandRange {
+	mhz, err := strconv.ParseFloat(strings.TrimSpace(freq), 64)
+	if err != nil {
+		return nil
+	}
+	for i := range bandRanges {
+		if mhz >= bandRanges[i].low && mhz <= bandRanges[i].high {
+			return &bandRanges[i]
+		}
+	}
+	return nil
 }
 
 // FormatFrequencyToKhz converts a 9-character raw frequency string into a formatted frequency string in kHz format.
@@ -71,24 +79,23 @@ func FormatFrequencyToKhz(rawFreq string) (string, error) {
 	return mhz + dotString + khz + dotString + hz, nil
 }
 
-// GetFrequencyRange retrieves the min and max frequency range for a given frequency prefix.
-// It returns the minimum and maximum frequency values if a match is found, or 0, 0 if no match exists.
+// GetFrequencyRange returns the min and max MHz of the band allocation
+// containing freq (a decimal-MHz string), or 0, 0 when freq is out of band or
+// unparseable. Range-checked against the actual allocations, not a MHz prefix.
 func GetFrequencyRange(freq string) (float64, float64) {
-	for prefix, ranges := range frequencyRanges {
-		if strings.HasPrefix(freq, prefix) {
-			return ranges[0], ranges[1]
-		}
+	if br := bandRangeFor(freq); br != nil {
+		return br.low, br.high
 	}
 	return 0, 0
 }
 
-// FrequencyToBand determines the band corresponding to a given frequency string using predefined mappings.
-// It returns the band name if a match is found or an empty string if no match exists.
+// FrequencyToBand returns the ADIF band literal for freq (a decimal-MHz
+// string), or an empty string when freq falls between bands, past a band edge,
+// or cannot be parsed. Callers (FT8 dial validation, QSO band derivation) rely
+// on the empty string to mean "not a valid in-band dial frequency".
 func FrequencyToBand(freq string) string {
-	for prefix, band := range bandNames {
-		if strings.HasPrefix(freq, prefix) {
-			return band
-		}
+	if br := bandRangeFor(freq); br != nil {
+		return br.name
 	}
 	return emptyString
 }
@@ -120,23 +127,36 @@ func FormatFrequencyToMhz(rawFreq string) (string, error) {
 // ("14.074", the ADIF-native form) or plain integer kHz ("14074"). The
 // tolerance for bare integers is there for legacy clients and tools that
 // already speak kHz; ADIF-compliant callers send MHz.
+//
+// A non-positive result (zero or negative) is rejected: FREQ is a required QSO
+// field and no caller uses zero as a sentinel, so letting 0/negative through
+// would either store meaningless data (the sqlite freq check allows >= 0) or
+// surface as a late insert/update failure instead of a clean 400. Catching it
+// here means every caller's existing error path turns it into invalid_field_value
+// (review 2026-06-19 M3).
 func ParseFreqMHz(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	if s == emptyString {
 		return 0, fmt.Errorf("empty frequency")
 	}
+	var kHz int64
 	if strings.Contains(s, dotString) {
 		f, err := strconv.ParseFloat(s, 64)
 		if err != nil {
 			return 0, fmt.Errorf("cannot parse as MHz: %w", err)
 		}
-		return int64(math.Round(f * 1000)), nil
+		kHz = int64(math.Round(f * 1000))
+	} else {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("cannot parse as integer frequency: %w", err)
+		}
+		kHz = n
 	}
-	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("cannot parse as integer frequency: %w", err)
+	if kHz <= 0 {
+		return 0, fmt.Errorf("frequency must be positive, got %q", s)
 	}
-	return n, nil
+	return kHz, nil
 }
 
 // FormatFreqMHz formats an integer kHz value as a canonical decimal MHz

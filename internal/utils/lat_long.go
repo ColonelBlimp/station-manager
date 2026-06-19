@@ -10,12 +10,29 @@ import (
 
 // ConvertToXDDDMMM converts a latitude or longitude string to the XDDD MMM.MMM format.
 // isLat must be true for latitude (N/S) and false for longitude (E/W).
-// Returns an error if the input cannot be parsed as a valid floating-point number.
+// Returns an error if the input cannot be parsed as a valid floating-point
+// number, is non-finite (NaN/±Inf), or is out of geographic bounds — latitude
+// must be within ±90°, longitude within ±180° (review 2026-06-19 L1). The
+// daemon's only caller feeds Maidenhead-derived values that are already in
+// range, but this is an exported helper on the shared utility surface, so it
+// rejects impossible coordinates rather than formatting them (e.g. lat 91).
 func ConvertToXDDDMMM(input string, isLat bool) (string, error) {
 	// Parse the input string to a float
 	coord, err := strconv.ParseFloat(input, 64)
 	if err != nil {
 		return emptyString, err
+	}
+	if math.IsNaN(coord) || math.IsInf(coord, 0) {
+		return emptyString, fmt.Errorf("coordinate is not finite: %q", input)
+	}
+	limit := 180.0
+	kind := "longitude"
+	if isLat {
+		limit = 90.0
+		kind = "latitude"
+	}
+	if math.Abs(coord) > limit {
+		return emptyString, fmt.Errorf("%s out of range (|%g| > %g)", kind, coord, limit)
 	}
 
 	// Determine the directional character

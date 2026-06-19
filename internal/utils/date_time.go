@@ -15,7 +15,7 @@ var (
 )
 
 // FormatDate converts a raw date string in YYYYMMDD format into a formatted date string in YYYY-MM-DD format.
-// Returns "YYYY-MM-DD" if the input does not have exactly 8 characters.
+// Returns an empty string if the input does not have exactly 8 characters.
 func FormatDate(rawDate string) string {
 	if len(rawDate) != 8 {
 		return emptyString
@@ -24,7 +24,7 @@ func FormatDate(rawDate string) string {
 	return rawDate[:4] + "-" + rawDate[4:6] + "-" + rawDate[6:]
 }
 
-// FormatTime converts a 4-digit string representing time in HHMM format to a string in HH:MM format. Returns "HH:MM" on error.
+// FormatTime converts a 4-digit string representing time in HHMM format to a string in HH:MM format. Returns an empty string if the input does not have exactly 4 characters.
 func FormatTime(rawTime string) string {
 	if len(rawTime) != 4 {
 		return emptyString
@@ -74,6 +74,22 @@ func IsValidTimeADIF(s string) bool {
 		return false
 	}
 	return true
+}
+
+// TimeToHHMM narrows an ADIF time to the HHMM storage form the sqlite schema
+// requires (length(time_on)=4). IsValidTimeADIF / SanitizeTimeToADIF accept the
+// optional-seconds HHMMSS form per the ADIF spec, but the storage layer, the
+// FT8 logging path, and the SPA all work to minute precision — so a body with
+// HHMMSS would otherwise validate and then fail at insert as a generic 500.
+// Truncating the seconds here keeps the documented "API accepts HHMMSS"
+// contract while storing to the minute (review 2026-06-19 M2). A 6-digit input
+// has its trailing seconds dropped; anything else is returned unchanged (the
+// caller validates the result).
+func TimeToHHMM(s string) string {
+	if len(s) == 6 {
+		return s[:4]
+	}
+	return s
 }
 
 func DateNowAsYYYYMMDD() string {

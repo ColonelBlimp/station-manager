@@ -22,6 +22,7 @@ func TestFrequencyToBand(t *testing.T) {
 		"7.050":   "40m",
 		"50.313":  "6m",
 		"1.900":   "160m",
+		"144.174": "2m",
 		"999.999": "",
 	}
 	for in, want := range cases {
@@ -31,14 +32,49 @@ func TestFrequencyToBand(t *testing.T) {
 	}
 }
 
+// In-prefix-out-of-band values used to be mislabelled by the old prefix scheme
+// (review 2026-06-19 M1): 14.999 → 20m, 7.999 → 40m, 5.000 → 60m, 24.100 → 12m.
+// They must now classify as out of band (empty), and the band edges + just-past
+// values must land correctly.
+func TestFrequencyToBand_RangeEdges(t *testing.T) {
+	cases := map[string]string{
+		// Old false positives — now out of band.
+		"14.999": "",
+		"7.999":  "",
+		"5.000":  "",
+		"24.100": "",
+		// Edges (inclusive low/high) and just-outside.
+		"14.350": "20m",
+		"14.351": "",
+		"7.200":  "40m", // inside the 7.0–7.3 allocation
+		"7.300":  "40m",
+		"7.301":  "",
+		"5.250":  "60m",
+		"5.357":  "60m",
+		"24.890": "12m",
+		"24.889": "",
+		// Unparseable → empty, never a panic.
+		"":     "",
+		"abc":  "",
+		"-1.0": "",
+	}
+	for in, want := range cases {
+		if got := FrequencyToBand(in); got != want {
+			t.Errorf("FrequencyToBand(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
 func TestGetFrequencyRange(t *testing.T) {
 	mini, maxi := GetFrequencyRange("14.074")
-	if mini == 0 && maxi == 0 {
-		t.Fatal("expected non-zero range for 20m band prefix")
+	if mini != 14.000 || maxi != 14.350 {
+		t.Fatalf("GetFrequencyRange(14.074) = %g,%g; want 14.000,14.350", mini, maxi)
 	}
-	min2, max2 := GetFrequencyRange("999.999")
-	if min2 != 0 || max2 != 0 {
-		t.Fatal("expected zero range for unknown prefix")
+	// In-prefix-out-of-band and unknown both yield the zero range.
+	for _, in := range []string{"14.999", "999.999", "5.000", ""} {
+		if mn, mx := GetFrequencyRange(in); mn != 0 || mx != 0 {
+			t.Errorf("GetFrequencyRange(%q) = %g,%g; want 0,0", in, mn, mx)
+		}
 	}
 }
 

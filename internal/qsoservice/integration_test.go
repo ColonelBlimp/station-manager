@@ -162,3 +162,48 @@ func TestUpdate_FreqEditDerivesBand(t *testing.T) {
 	require.Equal(t, "20m", updated.QsoDetails.Band, "band derived from freq, not the stale patch band")
 	require.Equal(t, "14.250", updated.QsoDetails.Freq)
 }
+
+// TestSubmit_HHMMSSStoredAsHHMM guards review 2026-06-19 M2: an ADIF body with
+// HHMMSS times validates and is then narrowed to HHMM for storage (the schema
+// requires length 4), so it stores cleanly instead of failing at insert as a
+// generic 500.
+func TestSubmit_HHMMSSStoredAsHHMM(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails: types.QsoDetails{
+			Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101",
+			TimeOn: "084500", TimeOff: "085030",
+		},
+		LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err, "HHMMSS must not fail at insert")
+
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "0845", existing.QsoDetails.TimeOn, "TIME_ON narrowed to HHMM")
+	require.Equal(t, "0850", existing.QsoDetails.TimeOff, "TIME_OFF narrowed to HHMM")
+}
+
+// TestSubmit_RejectsNonPositiveFreq guards review 2026-06-19 M3: FREQ=0 is a
+// clean invalid_field_value at the service boundary, not a late insert failure.
+func TestSubmit_RejectsNonPositiveFreq(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "0", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	_, err := s.Submit(ctx, lbID, rec, false)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se, "must be a SubmitError (→ 400), not a late storage failure")
+	require.Equal(t, "invalid_field_value", se.Code)
+}

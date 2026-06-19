@@ -26,6 +26,38 @@ func TestConvertToXDDDMMM_Lat_Negative(t *testing.T) {
 	}
 }
 
+// Out-of-range and non-finite coordinates are rejected rather than formatted
+// into a syntactically-valid-but-impossible string (review 2026-06-19 L1).
+func TestConvertToXDDDMMM_RejectsOutOfRange(t *testing.T) {
+	cases := []struct {
+		in    string
+		isLat bool
+	}{
+		{"91", true}, // latitude > 90
+		{"-90.001", true},
+		{"181", false}, // longitude > 180
+		{"-200", false},
+		{"NaN", true},
+		{"Inf", false},
+		{"-Inf", true},
+	}
+	for _, c := range cases {
+		if got, err := ConvertToXDDDMMM(c.in, c.isLat); err == nil {
+			t.Errorf("ConvertToXDDDMMM(%q, %v) = %q, nil; want error", c.in, c.isLat, got)
+		}
+	}
+
+	// The exact bounds are still accepted.
+	for _, c := range []struct {
+		in    string
+		isLat bool
+	}{{"90", true}, {"-90", true}, {"180", false}, {"-180", false}} {
+		if _, err := ConvertToXDDDMMM(c.in, c.isLat); err != nil {
+			t.Errorf("ConvertToXDDDMMM(%q, %v) rejected a boundary value: %v", c.in, c.isLat, err)
+		}
+	}
+}
+
 func TestConvertToXDDDMMM_Lon_Positive(t *testing.T) {
 	in := "12.3456"
 	got, err := ConvertToXDDDMMM(in, false)

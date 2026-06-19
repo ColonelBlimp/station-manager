@@ -79,8 +79,10 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	} else {
 		merged.QsoDetails.QsoDateOff = ""
 	}
-	merged.QsoDetails.TimeOn = utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOn))
-	merged.QsoDetails.TimeOff = utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOff))
+	// Narrow to HHMM for storage (schema length 4): accepted HHMMSS has its
+	// seconds dropped so it can't fail at update as a generic 500 (M2).
+	merged.QsoDetails.TimeOn = utils.TimeToHHMM(utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOn)))
+	merged.QsoDetails.TimeOff = utils.TimeToHHMM(utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOff)))
 	merged.QsoDetails.RstSent = strings.TrimSpace(merged.QsoDetails.RstSent)
 	merged.QsoDetails.RstRcvd = strings.TrimSpace(merged.QsoDetails.RstRcvd)
 	merged.ContactedStation.Country = strings.TrimSpace(merged.ContactedStation.Country)

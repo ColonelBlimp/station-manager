@@ -155,9 +155,14 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	if timeOn == "" || !utils.IsValidTimeADIF(timeOn) {
 		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "TIME_ON is not a valid time (expected HHMM or HHMMSS)"}
 	}
+	// Narrow to HHMM for storage (the schema requires length 4); accepted
+	// HHMMSS has its seconds dropped here so it doesn't fail at insert (M2).
+	// Done before the time-coherence compare below so both times are the same
+	// precision.
+	timeOn = utils.TimeToHHMM(timeOn)
 
 	// Sanitize timeOff if present
-	timeOff := utils.SanitizeTimeToADIF(strings.TrimSpace(rec.TimeOff))
+	timeOff := utils.TimeToHHMM(utils.SanitizeTimeToADIF(strings.TrimSpace(rec.TimeOff)))
 	if timeOff == "" {
 		timeOff = timeOn // Default to timeOn if not provided
 	}

@@ -37,3 +37,19 @@ func TestSanitizeTimeToADIF(t *testing.T) {
 		}
 	}
 }
+
+// TimeToHHMM narrows an HHMMSS time to HHMM for storage; everything else is
+// returned unchanged (review 2026-06-19 M2).
+func TestTimeToHHMM(t *testing.T) {
+	cases := map[string]string{
+		"235958": "2359", // seconds dropped
+		"084500": "0845",
+		"0845":   "0845", // already HHMM — unchanged
+		"":       "",     // empty — unchanged (caller validates)
+	}
+	for in, want := range cases {
+		if got := TimeToHHMM(in); got != want {
+			t.Errorf("TimeToHHMM(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
