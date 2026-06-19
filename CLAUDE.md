@@ -26,20 +26,24 @@
 
 ## Where the durable project context lives
 
-Read these before making non-trivial design choices. They are the reference, not the scratchpad.
+**[`docs/README.md`](docs/README.md) is the authoritative documentation map** —
+which docs are *live* (Tier 1, kept current and checked against the code) versus
+*historical* (Tier 2, a frozen reasoning trail, never edited to reflect current
+state). Read it to find the right doc; don't maintain a second index here.
 
-- **`docs/v1-analysis/invariants.md`** — load-bearing rules that must carry forward into v2. Check proposals against this list.
-- **`docs/v1-analysis/lessons-for-v2.md`** — synthesis: patterns to apply, patterns to avoid, what v1 got right. The single most important read before any v2 design choice.
-- **`docs/v1-analysis/design-decisions-log.md`** — keep/change/delete verdicts on every v1 major shape decision, plus the v2 rewrite decision.
-- **`docs/v1-analysis/bug-inventory.md`** — known v1 issues, fixed and open. The "do not recreate these" list for v2.
-- **`docs/v1-analysis/architecture-map.md`** — what v1 actually contains, module by module.
-- **`docs/v2-design/`** — v2 design decisions as they're made. `structure.md` is the first; siblings (`api.md`, `milestones.md`, `db-layer.md`, etc.) appear as the corresponding questions get answered. **`api-endpoints.md` is the canonical, complete HTTP endpoint reference** (every route, full request/response/error/gating detail); `api.md` is the design *brief* (the why). Update `api-endpoints.md` in the same commit as any route change.
-- **`docs/decisions/`** — append-only ADR log. One file per decision, numbered, with `status` field. Captures the reasoning trail (alternatives considered, why each lost, what would change the answer) for decisions that get revisited. Format and lifecycle in `docs/decisions/README.md`; copy `template.md` to start a new one. Use this when a choice has plausible alternatives that were genuinely weighed; skip it for routine code-level choices or one-obvious-answer decisions.
-- **`docs/session-handoff.md`** — rolling cross-session state. Read at session start; update at session end.
-- **`docs/backlog.md`** — cross-cutting deferred work: known bugs and enhancements that are real but deliberately not-now. Distinct from session-handoff (which holds the *active*-cycle next action). Add an item when something is found-but-shelved; remove it when it ships.
-- **`docs/keyboard-shortcuts.md`** — running inventory of every keyboard shortcut wired up in the SPA. Source-of-truth for the user-facing manual; update in the same commit as any code change that adds, removes, or rebinds a shortcut.
-- **`docs/install.md`** — operator-facing install and first-run setup guide. Update when packaging, the unit file, the data-dir path, or the first-run flow changes; this is the doc a new user is expected to read end-to-end.
-- **`docs/ft8.md`** — FT8 operator & contributor guide: enabling FT8 (CGO build, config), the SPA panels + SSE wire, how the occupancy detector + ranking + guard work (with the `ft8.tx.occupancy.*` knobs), and the ADR 0029 transmit roadmap. The single capture point for the FT8 picture; keep current as the TX layers land.
+Before a non-trivial design choice, the load-bearing reads are still the
+v1-analysis baseline — **`docs/v1-analysis/invariants.md`** (rules that must
+carry forward; check proposals against it) and **`docs/v1-analysis/lessons-for-v2.md`**
+(patterns to apply/avoid — the single most important pre-design read). For
+decisions with genuinely-weighed alternatives, record an ADR in
+**`docs/decisions/`** (append-only; format in `decisions/README.md`).
+
+When docs and code disagree, **the code wins** — and only Tier 1 is expected to
+track it. The canonical current-state references are
+**`docs/v2-design/api-endpoints.md`** (every HTTP route — update in the same
+commit as any route change) and **`docs/v2-design/config.md`** (config.json
+shape/validation); the other `docs/v2-design/` files are historical design
+briefs, not current references.
 
 ## Load-bearing invariants (headlines)
 
