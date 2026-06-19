@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -71,6 +72,7 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateLoggingStation(cfg.LoggingStation)...)
 	out = append(out, validateStationPrefs(cfg.Station)...)
 	out = append(out, validateFt8Display(cfg.Ft8.Display)...)
+	out = append(out, validateFt8Occupancy(cfg.Ft8.TX)...)
 	// Advisory findings (non-fatal) — currently just the non-loopback-bind notice.
 	for _, w := range Warnings(cfg) {
 		out = append(out, Finding{Field: "socket_path", Code: "insecure_bind", Message: w, Warning: true})
@@ -188,6 +190,60 @@ func validateFt8Display(d *types.Ft8DisplayConfig) []Finding {
 			Message: fmt.Sprintf("ft8_display.feed_mode %q must be \"accumulate\" or \"single\"", d.FeedMode)}}
 	}
 	return nil
+}
+
+// validateFt8Occupancy bounds the ft8.tx.occupancy knobs (review 2026-06-19 M3).
+// They shape the clear-offset picker AND — once a suggestion is selected — a real
+// TX offset, so a bad passband must be rejected, not silently yield negative or
+// alias-prone suggestions. Each field is a sparse override (0/nil = use the
+// built-in default, resolved in internal/ft8), so only NON-zero values are
+// checked. Each passband edge is validated independently; the low<high + width
+// cross-checks fire only when BOTH edges are overridden (a single-edge override
+// resolves against the known-good default, so we needn't duplicate that default
+// here). The 50 Hz signal width + 6 kHz Nyquist (12 kHz/2) mirror internal/ft8.
+func validateFt8Occupancy(tx *types.Ft8TXConfig) []Finding {
+	if tx == nil || tx.Occupancy == nil {
+		return nil
+	}
+	const (
+		ft8SignalWidthHz = 50
+		ft8NyquistHz     = 6000
+	)
+	o := tx.Occupancy
+	var out []Finding
+	fld := func(f, msg string) {
+		out = append(out, Finding{Field: "ft8.tx.occupancy." + f, Code: "invalid_field_value", Message: msg})
+	}
+
+	if o.PassbandLowHz != 0 && (o.PassbandLowHz < 0 || o.PassbandLowHz >= ft8NyquistHz) {
+		fld("passband_low_hz", fmt.Sprintf("must be in 1..%d", ft8NyquistHz-1))
+	}
+	if o.PassbandHighHz != 0 && (o.PassbandHighHz <= 0 || o.PassbandHighHz > ft8NyquistHz) {
+		fld("passband_high_hz", fmt.Sprintf("must be in 1..%d (Nyquist for the 12 kHz FT8 sample rate)", ft8NyquistHz))
+	}
+	if o.PassbandLowHz > 0 && o.PassbandHighHz > 0 {
+		if o.PassbandLowHz >= o.PassbandHighHz {
+			fld("passband", fmt.Sprintf("passband_low_hz (%d) must be < passband_high_hz (%d)", o.PassbandLowHz, o.PassbandHighHz))
+		} else if o.PassbandHighHz-o.PassbandLowHz < ft8SignalWidthHz {
+			fld("passband", fmt.Sprintf("width must be >= %d Hz (one FT8 signal)", ft8SignalWidthHz))
+		}
+	}
+
+	if o.ThresholdFactor != 0 && (o.ThresholdFactor <= 0 || math.IsNaN(o.ThresholdFactor) || math.IsInf(o.ThresholdFactor, 0)) {
+		fld("threshold_factor", "must be a finite positive number")
+	}
+	checkWeight := func(name string, w float64) {
+		if w != 0 && (w < 0 || math.IsNaN(w) || math.IsInf(w, 0)) {
+			fld(name, "must be a finite non-negative number")
+		}
+	}
+	checkWeight("weight_margin", o.WeightMargin)
+	checkWeight("weight_edge", o.WeightEdge)
+	checkWeight("weight_centered", o.WeightCentered)
+	if o.GuardMarginHz != nil && *o.GuardMarginHz < 0 {
+		fld("guard_margin_hz", "must be >= 0")
+	}
+	return out
 }
 
 // isValidCallsign mirrors qsoservice.IsValidCallsign (3-32 chars, only

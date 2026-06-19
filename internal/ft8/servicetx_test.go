@@ -1,6 +1,7 @@
 package ft8
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,30 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/stretchr/testify/require"
 )
+
+// TestValidateTxOffset_RejectsOutOfPassband guards review 2026-06-19 M1: the
+// daemon refuses a TX audio offset outside the usable passband on every keying
+// path, regardless of the SPA. The gate runs before the arm check, so a disarmed
+// service exercises it; offset 0 stays ErrNoOffset ("pick one"), a finite
+// out-of-range or non-finite value is ErrTxBadOffset, and a valid offset passes
+// through to the arm gate.
+func TestValidateTxOffset_RejectsOutOfPassband(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	const msg = "CQ G0XYZ IO91"
+
+	require.ErrorIs(t, s.TransmitNext(msg, 0), ErrNoOffset)
+	require.ErrorIs(t, s.TransmitNext(msg, 50), ErrTxBadOffset)          // below the 200 Hz low edge
+	require.ErrorIs(t, s.TransmitNext(msg, 4000), ErrTxBadOffset)        // above the 3000 Hz high edge
+	require.ErrorIs(t, s.TransmitNext(msg, 2990), ErrTxBadOffset)        // 2990+50 spills past the high edge
+	require.ErrorIs(t, s.TransmitNext(msg, math.Inf(1)), ErrTxBadOffset) // non-finite
+	require.ErrorIs(t, s.TransmitNext(msg, math.NaN()), ErrTxBadOffset)  // non-finite
+	require.ErrorIs(t, s.TransmitNext(msg, 1500), ErrTxNotArmed)         // valid → reaches the arm gate
+
+	// The sequenced start paths share the gate.
+	require.ErrorIs(t,
+		s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", "2026-06-10T14:30:00Z", 4000, 14.074),
+		ErrTxBadOffset)
+}
 
 // fakeTxPlayer is a txPlayer (slotPlayer + Init/Close) recording its lifecycle.
 type fakeTxPlayer struct {

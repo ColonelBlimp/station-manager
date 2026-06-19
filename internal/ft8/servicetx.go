@@ -3,6 +3,7 @@ package ft8
 import (
 	"context"
 	stderrors "errors"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,13 @@ var (
 	ErrTxInFlight = stderrors.New("ft8: a transmission is already in flight")
 	// ErrTxBadMessage: the message is not an encodable standard FT8 message.
 	ErrTxBadMessage = stderrors.New("ft8: not an encodable standard message")
+	// ErrTxBadOffset: the requested TX audio offset is non-finite or sits outside
+	// the usable passband (a signal at offset..offset+signalWidth must fit inside
+	// the configured passband, which is itself kept <= Nyquist). The daemon owns
+	// this gate because the endpoints drive real RF — it must never key a tone
+	// the SPA mis-supplied (review 2026-06-19 M1). Distinct from ErrNoOffset
+	// (offset 0 = "operator hasn't picked one yet").
+	ErrTxBadOffset = stderrors.New("ft8: TX offset outside the usable passband")
 	// ErrCallerAnswerModeUnsupported: a Call-CQ session was requested with an
 	// answerer-selection mode that is configured but not yet implemented
 	// (operator_pick — the pile-up stack is future work). Rejected at start so a
@@ -210,6 +218,35 @@ func (s *Service) disarmTx(closing bool) {
 	s.publishTxState()
 }
 
+// validateTxOffset is the daemon-owned guard on the TX audio offset, used by
+// every endpoint that can key the rig (TransmitNext + the three sequenced
+// starts) — the SPA's localStorage value is NOT a sufficient guard for a
+// hardware-facing API (review 2026-06-19 M1). offset 0 stays ErrNoOffset
+// ("operator hasn't picked one"); a non-finite value or one whose signal
+// (offset..offset+signalWidthHz) doesn't fit inside the resolved occupancy
+// passband is ErrTxBadOffset. The passband is config-validated to <= Nyquist
+// (M3), so fitting inside it also keeps the modulator below the alias limit.
+func (s *Service) validateTxOffset(op errors.Op, offsetHz float64) error {
+	if math.IsNaN(offsetHz) || math.IsInf(offsetHz, 0) {
+		return errors.New(op).WithErr(ErrTxBadOffset).WithMsg("offset_hz is not a finite number")
+	}
+	if offsetHz <= 0 {
+		return errors.New(op).WithErr(ErrNoOffset)
+	}
+	var occCfg *types.Ft8OccupancyConfig
+	if s.cfg.TX != nil {
+		occCfg = s.cfg.TX.Occupancy
+	}
+	occ := resolveOccupancyConfig(occCfg)
+	low, high := float64(occ.PassbandLowHz), float64(occ.PassbandHighHz)
+	if offsetHz < low || offsetHz+float64(signalWidthHz) > high {
+		return errors.New(op).WithErr(ErrTxBadOffset).WithMsgf(
+			"offset_hz %.0f outside usable passband [%d, %d] (signal width %d Hz)",
+			offsetHz, occ.PassbandLowHz, occ.PassbandHighHz, signalWidthHz)
+	}
+	return nil
+}
+
 // TransmitNext queues one standard FT8 message to transmit on the next UTC
 // slot. Refused unless armed, idle (no transmission in flight), and the message
 // encodes. Returns immediately — the transmission runs in a tracked goroutine
@@ -219,6 +256,9 @@ func (s *Service) disarmTx(closing bool) {
 func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	const op errors.Op = "ft8.Service.TransmitNext"
 
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
 	// Validate encodability synchronously so a bad message is an immediate
 	// error, not an async failure after the (up to 15 s) slot wait.
 	if _, err := EncodeToSlot(message, offsetHz, txNominalDtSec); err != nil {
@@ -336,6 +376,9 @@ func (s *Service) startTransmission(
 // layer resolved from config.
 func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartQso"
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
@@ -364,6 +407,9 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 // offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency.
 func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartCallCq"
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
 	// Reject operator_pick until the pile-up stack exists (review H2): the
 	// sequencer would otherwise silently auto-pick the first answerer, which is
 	// NOT what operator_pick promises. Fail loudly so a config typo is visible.
@@ -398,6 +444,9 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 // api layer resolved from config.
 func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartWorkCaller"
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()

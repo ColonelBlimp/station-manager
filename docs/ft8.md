@@ -383,8 +383,9 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   controller (step d/e) consumes it.** Any cell is clickable (the grid keeps
   picks signal-aligned); the strip is **best-effort guidance, not a hard gate** —
   SM is attended-only, so the offset is the operator's choice and the daemon does
-  **not** refuse or snap an overlapping pick (a daemon-side admission gate was
-  considered and deliberately left out — see the review note below). The pick is
+  **not** refuse or snap an *overlapping* pick (it DOES reject a non-finite or
+  out-of-passband offset — a safety bound, not overlap admission; see the review
+  note below). The pick is
   **persisted** (localStorage `sm.ft8.tx.offset`, per device): it survives a slot
   change, a browser refresh, and a view-leave/return, so the chosen channel sticks
   until the operator picks another. A restored offset that has since become
@@ -496,9 +497,13 @@ sits flush ("brushed edge"). Unlike WSJT-X — which gives the operator no occup
 cue at all — SM ranks and highlights the clean spots and shades the busy ones, so
 a clear offset is obvious at a glance. But the pick is the **operator's** (SM is
 attended-only): the strip is best-effort **guidance**, not a hard gate — SM does
-**not** refuse or snap an overlapping selection. A daemon-side admission gate was
-considered (review 2026-06-16 H1) and deliberately left out; enforcement would
-fight the attended-operation model.
+**not** refuse or snap an *overlapping* selection. A daemon-side overlap-admission
+gate was considered (review 2026-06-16 H1) and deliberately left out; enforcement
+would fight the attended-operation model. The daemon DOES, however, reject an
+offset that is **non-finite or outside the usable passband** at send time (review
+2026-06-19 M1) — a hardware-safety sanity bound, distinct from overlap admission:
+a station may transmit where it overlaps another, but never where the tone can't
+be a valid FT8 placement at all.
 
 **Offset hysteresis (stickiness).** The per-slot scoring above picks the *first*
 recommendation, but the ★ then **stays put across slots while it remains clear**
@@ -603,7 +608,7 @@ audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**. **Call-CQ `auto_first` shipped 2026-06-12 (ADR 0033)** — Call CQ → daemon works the pile-up (first answerer) → logged, looping until Abandon; the `operator_pick` stack pending. Automatic/unattended sequencing is out of scope — QEX-forbidden. |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**. **Call-CQ `auto_first` shipped 2026-06-12 (ADR 0033)** — Call CQ → daemon works the pile-up (first answerer) → logged, looping until Abandon. The **operator-pick experience shipped as the SPA pile-up stack** (Ctrl/Cmd+click a caller → FIFO → work-a-caller drain) — the daemon `caller_answer_mode=operator_pick` mode is **superseded by it** and rejected 501 (`ft8_caller_mode_unsupported`), not a pending roadmap item. Automatic/unattended sequencing is out of scope — QEX-forbidden. |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**

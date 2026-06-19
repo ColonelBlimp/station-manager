@@ -255,22 +255,22 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed.
 - **Request:** Body `{"message": string, "offset_hz": float64}`.
 - **Response:** **202 Accepted** (completion/failure via `ft8-tx` SSE).
-- **Errors:** Same set as `/v1/ft8/tx/arm`.
+- **Errors:** 400 `invalid_json`/`ft8_tx_bad_message`/`ft8_no_offset`/`ft8_bad_offset`; 503 `ft8_tx_unavailable`/`rig_not_ready`; 409 `ft8_tx_not_armed`/`ft8_tx_in_flight`; 500 `ft8_tx_failed`. (`offset_hz` is daemon-validated against the usable passband — review 2026-06-19 M1.)
 
 ### `POST /v1/ft8/qso/start`
 - **Purpose:** Begin a manual answer-a-CQ exchange the daemon auto-advances CQ→73 (ADR 0031 e3).
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed.
 - **Request:** Body `{"their_call" (req), "their_grid"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?}`. Our own callsign/grid are resolved server-side from station config.
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
-- **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`.
-- **Notes:** `slot_utc` fixes the worked station's parity. Logged QSO `FREQ`/`BAND` come from `operating_freq_mhz` (the rig dial); `offset_hz` is TX audio placement only, never folded into FREQ.
+- **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`.
+- **Notes:** `slot_utc` fixes the worked station's parity. `offset_hz` is daemon-validated against the usable passband (M1) and `operating_freq_mhz` must be a positive known-band dial frequency (M2 — refused before the on-air exchange, since a QSO is logged only at completion). Logged QSO `FREQ`/`BAND` come from `operating_freq_mhz` (the rig dial); `offset_hz` is TX audio placement only, never folded into FREQ.
 
 ### `POST /v1/ft8/qso/work`
 - **Purpose:** Begin working a station that is calling US, picked from the pile-up (ADR 0033 "work a caller"). Caller-style exchange (we report first → RR73 → log), then **idle** (does not loop to CQ). For tail-enders / answerers that call us when we're not in a Call-CQ session.
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed + no session in flight.
 - **Request:** Body `{"their_call" (req), "their_grid"?, "their_snr"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?}`. `their_snr` is the SPA's SNR of the picked decode — the report we send (RST_SENT). Our own callsign/grid resolved server-side.
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
-- **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_tx_bad_message`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`; 503 `rig_not_ready`.
+- **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`/`ft8_tx_bad_message`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`; 503 `rig_not_ready`.
 - **Notes:** `slot_utc` fixes the caller's parity. Logged QSO `FREQ`/`BAND` come from `operating_freq_mhz` (the rig dial); `offset_hz` is TX audio placement only, never folded into FREQ.
 
 ### `POST /v1/ft8/cq/start`
@@ -278,7 +278,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed.
 - **Request:** Body `{"offset_hz": float64, "operating_freq_mhz": float64}`. Callsign/grid resolved server-side.
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
-- **Errors:** 400 `invalid_json`/`no_station_callsign`/`ft8_no_offset`/`invalid_field_value`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`.
+- **Errors:** 400 `invalid_json`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`/`invalid_field_value`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`/`ft8_caller_mode_unsupported` (501 when `caller_answer_mode=operator_pick`).
 - **Notes:** One session at a time. Stopped via the shared abandon route below.
 
 ### `POST /v1/ft8/qso/path`

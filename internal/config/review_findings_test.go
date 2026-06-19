@@ -170,6 +170,47 @@ func TestValidateSmtp_RejectsMalformedFrom(t *testing.T) {
 	}
 }
 
+// TestValidateFt8Occupancy_RejectsBadValues guards review 2026-06-19 M3 (FT8): a
+// bad ft8.tx.occupancy block (inverted/over-Nyquist passband, negative weight,
+// non-positive threshold) is rejected at config validation, since those values
+// shape the clear-offset picker and — once selected — a real TX offset.
+func TestValidateFt8Occupancy_RejectsBadValues(t *testing.T) {
+	hasOcc := func(findings []Finding) bool {
+		for _, f := range findings {
+			if strings.HasPrefix(f.Field, "ft8.tx.occupancy") {
+				return true
+			}
+		}
+		return false
+	}
+
+	good := types.Ft8OccupancyConfig{PassbandLowHz: 300, PassbandHighHz: 2800, ThresholdFactor: 2.0, WeightEdge: 1.5}
+	if hasOcc(Validate(Config{Ft8: types.Ft8Config{TX: &types.Ft8TXConfig{Occupancy: &good}}})) {
+		t.Error("a valid occupancy block was flagged")
+	}
+
+	bads := []struct {
+		name string
+		o    types.Ft8OccupancyConfig
+	}{
+		{"inverted passband", types.Ft8OccupancyConfig{PassbandLowHz: 3000, PassbandHighHz: 200}},
+		{"high above Nyquist", types.Ft8OccupancyConfig{PassbandHighHz: 7000}},
+		{"negative low", types.Ft8OccupancyConfig{PassbandLowHz: -100, PassbandHighHz: 2000}},
+		{"passband too narrow", types.Ft8OccupancyConfig{PassbandLowHz: 1000, PassbandHighHz: 1010}},
+		{"negative weight", types.Ft8OccupancyConfig{WeightEdge: -1}},
+		{"non-positive threshold", types.Ft8OccupancyConfig{ThresholdFactor: -2}},
+	}
+	for _, b := range bads {
+		t.Run(b.name, func(t *testing.T) {
+			o := b.o
+			cfg := Config{Ft8: types.Ft8Config{TX: &types.Ft8TXConfig{Occupancy: &o}}}
+			if !hasOcc(Validate(cfg)) {
+				t.Errorf("bad occupancy %q not flagged; findings=%+v", b.name, Validate(cfg))
+			}
+		})
+	}
+}
+
 // TestService_Update_NestedMutationRollback guards review 2026-06-19 M3: when an
 // Update closure mutates a NESTED value (here, appending to Forwarders) and then
 // returns an error, the live in-memory config must be untouched — Update works

@@ -80,6 +80,12 @@ func (s *Server) writeFt8TxError(w http.ResponseWriter, op errors.Op, err error)
 	case stderr.Is(err, ft8.ErrTxBadMessage):
 		s.writeError(w, http.StatusBadRequest, "ft8_tx_bad_message",
 			"not an encodable standard FT8 message", op)
+	case stderr.Is(err, ft8.ErrNoOffset):
+		s.writeError(w, http.StatusBadRequest, "ft8_no_offset",
+			"pick a clear TX offset before transmitting", op)
+	case stderr.Is(err, ft8.ErrTxBadOffset):
+		s.writeError(w, http.StatusBadRequest, "ft8_bad_offset",
+			"TX offset is outside the usable passband", op)
 	default:
 		s.writeServerError(w, op, err, "ft8_tx_failed", "failed to drive FT8 transmit")
 	}

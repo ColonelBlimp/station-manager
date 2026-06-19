@@ -62,7 +62,7 @@ func TestHandleFt8QsoStart(t *testing.T) {
 	t.Run("no station callsign configured", func(t *testing.T) {
 		srv := ft8QsoTestServer(t, "") // no callsign
 		w := postFt8Qso(t, srv, "/v1/ft8/qso/start",
-			`{"their_call":"K1ABC","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`, srv.handleFt8QsoStart)
+			`{"their_call":"K1ABC","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074}`, srv.handleFt8QsoStart)
 		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "no_station_callsign" {
 			t.Fatalf("status=%d code=%q, want 400 no_station_callsign", w.Code, decodeErrCode(t, w))
 		}
@@ -84,7 +84,7 @@ func TestHandleFt8QsoStart(t *testing.T) {
 	t.Run("not armed", func(t *testing.T) {
 		srv := ft8QsoTestServer(t, "G0TST")
 		w := postFt8Qso(t, srv, "/v1/ft8/qso/start",
-			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`, srv.handleFt8QsoStart)
+			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074}`, srv.handleFt8QsoStart)
 		if w.Code != http.StatusConflict || decodeErrCode(t, w) != "ft8_tx_not_armed" {
 			t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
 		}
@@ -103,7 +103,7 @@ func TestHandleFt8QsoWork(t *testing.T) {
 	t.Run("no station callsign configured", func(t *testing.T) {
 		srv := ft8QsoTestServer(t, "")
 		w := postFt8Qso(t, srv, "/v1/ft8/qso/work",
-			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`, srv.handleFt8QsoWork)
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074}`, srv.handleFt8QsoWork)
 		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "no_station_callsign" {
 			t.Fatalf("status=%d code=%q, want 400 no_station_callsign", w.Code, decodeErrCode(t, w))
 		}
@@ -124,11 +124,47 @@ func TestHandleFt8QsoWork(t *testing.T) {
 	t.Run("not armed", func(t *testing.T) {
 		srv := ft8QsoTestServer(t, "G0TST")
 		w := postFt8Qso(t, srv, "/v1/ft8/qso/work",
-			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`, srv.handleFt8QsoWork)
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074}`, srv.handleFt8QsoWork)
 		if w.Code != http.StatusConflict || decodeErrCode(t, w) != "ft8_tx_not_armed" {
 			t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
 		}
 	})
+}
+
+// TestHandleFt8Qso_RejectsUnloggableFrequency guards review 2026-06-19 M2: a
+// sequenced QSO must not be accepted with a frequency that can't be logged
+// (0 / out-of-band) — the contact would be made on air and only then fail
+// logging. All three start paths enforce it before committing the sequencer.
+func TestHandleFt8Qso_RejectsUnloggableFrequency(t *testing.T) {
+	cases := []struct {
+		name, path, body string
+		h                func(*Server) http.HandlerFunc
+	}{
+		{"qso/start missing freq", "/v1/ft8/qso/start",
+			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8QsoStart }},
+		{"qso/start zero freq", "/v1/ft8/qso/start",
+			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":0}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8QsoStart }},
+		{"qso/start out-of-band freq", "/v1/ft8/qso/start",
+			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":9999.0}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8QsoStart }},
+		{"cq/start missing freq", "/v1/ft8/cq/start",
+			`{"offset_hz":1500}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8CqStart }},
+		{"qso/work missing freq", "/v1/ft8/qso/work",
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8QsoWork }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := ft8QsoTestServer(t, "G0TST")
+			w := postFt8Qso(t, srv, tc.path, tc.body, tc.h(srv))
+			if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "ft8_no_frequency" {
+				t.Fatalf("status=%d code=%q, want 400 ft8_no_frequency (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+			}
+		})
+	}
 }
 
 // TestWriteFt8QsoError_Mapping pins the error-classification surface directly

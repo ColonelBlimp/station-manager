@@ -146,8 +146,11 @@ export interface DecodeEntry {
 /**
  * Selected TX base offset (Hz) — a per-device operator choice in localStorage so
  * the picked channel survives a browser refresh and a view-leave/return, not just
- * a slot change. A restored offset that is now occupied is harmless: the daemon
- * TX gate (ADR 0029) refuses/snaps an overlapping offset at send time.
+ * a slot change. The daemon does NOT snap or refuse an *overlapping* offset —
+ * occupancy overlap is guidance only (docs/ft8.md). It DOES, however, reject an
+ * offset outside the usable passband at send time (review 2026-06-19 M1), so a
+ * stale/corrupt restored value can't key an out-of-band tone — but a restored
+ * value that merely overlaps a signal transmits as picked.
  */
 const KEY_TX_OFFSET = 'sm.ft8.tx.offset';
 
@@ -243,8 +246,11 @@ class Ft8State {
      * Is the selected TX channel currently sitting under another signal? The
      * channel spans [selectedOffset, selectedOffset + signalWidth]; it is
      * occupied when that span overlaps any band in the latest occupancy report.
-     * Returns null when no offset is picked or no occupancy has arrived yet — the
-     * caller renders that as "unknown" rather than a clear/occupied claim.
+     *
+     * Returns null ("unknown") only when no offset is picked OR no occupancy
+     * report has arrived yet (slot === null). A report that arrived with an EMPTY
+     * occupied list is a valid "clear slot" → false, NOT unknown — conflating the
+     * two made a quiet/clear slot read as "channel unknown" (review 2026-06-19 L1).
      *
      * This is the pick-time → TX-time gap closer: a channel chosen clear can have
      * a station land on it a slot or two later, and this re-evaluates each slot
@@ -252,7 +258,8 @@ class Ft8State {
      */
     get channelOccupied(): boolean | null {
         if (this.selectedOffset === null) return null;
-        if (this.occupied.length === 0) return null;
+        if (this.slot === null) return null; // no report yet → genuinely unknown
+        if (this.occupied.length === 0) return false; // report arrived, nothing busy → clear
         const lo = this.selectedOffset;
         const hi = this.selectedOffset + this.signalWidth;
         // Half-open overlap: band.low < channel.high && band.high > channel.low.

@@ -184,13 +184,26 @@ describe('ft8 channelOccupied (selected-channel collision check)', () => {
         expect(ft8State.channelOccupied).toBeNull();
     });
 
-    it('is null when an offset is picked but no occupancy has arrived', () => {
+    it('is null when an offset is picked but no occupancy report has arrived', () => {
+        // beforeEach's stopFt8() leaves slot === null = "no report yet".
         ft8State.selectedOffset = 1500;
         ft8State.occupied = [];
+        expect(ft8State.slot).toBeNull();
         expect(ft8State.channelOccupied).toBeNull();
     });
 
+    // review 2026-06-19 L1: a report that arrived with NO occupied bands is a
+    // valid clear slot → false, not "unknown". slot != null distinguishes it from
+    // the no-report case above.
+    it('is false (clear) when a report arrived with an empty occupied list', () => {
+        ft8State.slot = { start_utc: '2026-06-07T14:30:15Z', period: 'odd' };
+        ft8State.selectedOffset = 1500;
+        ft8State.occupied = [];
+        expect(ft8State.channelOccupied).toBe(false);
+    });
+
     it('is false when the channel span clears every occupied band', () => {
+        ft8State.slot = { start_utc: '2026-06-07T14:30:15Z', period: 'odd' };
         ft8State.signalWidth = 50;
         ft8State.selectedOffset = 1500; // [1500,1550)
         ft8State.occupied = [
@@ -201,6 +214,7 @@ describe('ft8 channelOccupied (selected-channel collision check)', () => {
     });
 
     it('is true when the channel span overlaps an occupied band', () => {
+        ft8State.slot = { start_utc: '2026-06-07T14:30:15Z', period: 'odd' };
         ft8State.signalWidth = 50;
         ft8State.selectedOffset = 1500; // [1500,1550)
         ft8State.occupied = [{ low_hz: 1540, high_hz: 1590 }];
@@ -208,6 +222,7 @@ describe('ft8 channelOccupied (selected-channel collision check)', () => {
     });
 
     it('treats touching edges as clear (half-open overlap)', () => {
+        ft8State.slot = { start_utc: '2026-06-07T14:30:15Z', period: 'odd' };
         ft8State.signalWidth = 50;
         ft8State.selectedOffset = 1500; // [1500,1550)
         // A band starting exactly at the channel's high edge does not overlap.

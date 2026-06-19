@@ -2,12 +2,15 @@ package api
 
 import (
 	stderr "errors"
+	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // validFt8SlotUTC reports whether v is the RFC3339 UTC timestamp the FT8
@@ -18,6 +21,21 @@ import (
 func validFt8SlotUTC(v string) bool {
 	_, err := time.Parse(time.RFC3339, v)
 	return err == nil
+}
+
+// validFt8OperatingFreq reports whether mhz is a positive, known-band dial
+// frequency. A sequenced QSO is made ON AIR and only logged at completion, so
+// committing one with an unloggable frequency means the exchange finishes and
+// THEN auto-logging fails after the fact — unrecoverable (review 2026-06-19 M2).
+// The SPA gates on freqKnown; the daemon enforces the same invariant for direct
+// or stale clients. (At completion the daemon prefers the bridge's live dial;
+// this validates the SPA-supplied fallback that's used when the bridge hasn't
+// decoded a frequency yet.)
+func validFt8OperatingFreq(mhz float64) bool {
+	if mhz <= 0 || math.IsNaN(mhz) || math.IsInf(mhz, 0) {
+		return false
+	}
+	return utils.FrequencyToBand(fmt.Sprintf("%.6f", mhz)) != ""
 }
 
 // ft8QsoStartRequest is the POST /v1/ft8/qso/start body (ADR 0031): answer the
@@ -59,6 +77,12 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Our identity is daemon-owned (the station config), not client-supplied.
+	if !validFt8OperatingFreq(req.OperatingFreqMHz) {
+		s.writeError(w, http.StatusBadRequest, "ft8_no_frequency",
+			"operating_freq_mhz must be a positive known-band frequency (the rig dial)", op)
+		return
+	}
+
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall := strings.TrimSpace(ls.StationCallsign)
 	if ourCall == "" {
@@ -104,6 +128,12 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Our identity is daemon-owned (the station config), not client-supplied.
+	if !validFt8OperatingFreq(req.OperatingFreqMHz) {
+		s.writeError(w, http.StatusBadRequest, "ft8_no_frequency",
+			"operating_freq_mhz must be a positive known-band frequency (the rig dial)", op)
+		return
+	}
+
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall := strings.TrimSpace(ls.StationCallsign)
 	if ourCall == "" {
@@ -160,6 +190,12 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Our identity is daemon-owned (the station config), not client-supplied.
+	if !validFt8OperatingFreq(req.OperatingFreqMHz) {
+		s.writeError(w, http.StatusBadRequest, "ft8_no_frequency",
+			"operating_freq_mhz must be a positive known-band frequency (the rig dial)", op)
+		return
+	}
+
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall := strings.TrimSpace(ls.StationCallsign)
 	if ourCall == "" {
@@ -225,6 +261,9 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 	case stderr.Is(err, ft8.ErrNoOffset):
 		s.writeError(w, http.StatusBadRequest, "ft8_no_offset",
 			"pick a clear TX offset before starting a QSO", op)
+	case stderr.Is(err, ft8.ErrTxBadOffset):
+		s.writeError(w, http.StatusBadRequest, "ft8_bad_offset",
+			"TX offset is outside the usable passband", op)
 	case stderr.Is(err, ft8.ErrTxBadMessage):
 		s.writeError(w, http.StatusBadRequest, "ft8_tx_bad_message",
 			"that station can't be worked on FT8 — only standard messages transmit "+

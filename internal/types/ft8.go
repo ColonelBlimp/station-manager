@@ -213,10 +213,12 @@ type Ft8TXConfig struct {
 
 	// CallerAnswerMode selects how a sequenced Call-CQ session picks which station
 	// to work when stations answer (ADR 0033): "auto_first" works the first valid
-	// answerer (WSJT-X "Auto Seq"); "operator_pick" queues answerers for the
-	// operator to pop (the pile-up stack). Empty/invalid → the
-	// ResolveFt8CallerAnswerMode default (auto_first). Edited from the FT8 Settings
-	// tab once operator_pick ships; until then the daemon reads it from config.json.
+	// answerer (WSJT-X "Auto Seq"). "operator_pick" is **superseded by the SPA
+	// pile-up stack** (Ctrl/Cmd+click a caller → FIFO → work-a-caller drain) and is
+	// **rejected at start** (501 ft8_caller_mode_unsupported) rather than silently
+	// auto-picking — it is not a pending daemon feature. Empty/invalid → the
+	// ResolveFt8CallerAnswerMode default (auto_first); the daemon reads this from
+	// config.json (no Settings-tab control).
 	CallerAnswerMode string `json:"caller_answer_mode,omitempty"`
 
 	// MaxRepeats caps how many times an unanswered rung is re-sent before the
