@@ -655,7 +655,7 @@
             {#if freqKnown}
                 <span class="font-semibold text-indigo-700">{formatFrequency(opFreq)} Hz</span>
             {:else}
-                <span class="text-amber-600">waiting for rig…</span>
+                <span class="text-amber-600">Waiting…</span>
             {/if}
         </div>
     </div>
