@@ -5,12 +5,15 @@ import (
 	stderrs "errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -776,7 +779,7 @@ type stringerValue string
 func (s stringerValue) String() string { return string(s) }
 
 // TestLogEventBuilder_FilteredLevelSkipsCounters locks in the
-// behavioral guarantee from docs/reviews/internal-logging.md finding
+// behavioral guarantee from docs/reviews/archive/internal-logging.md finding
 // 4.6: a log call at a level below the logger's configured level must
 // NOT increment the activeOps counter. The short-circuit level check
 // in logEventBuilder ensures filtered events return an untracked no-op
@@ -831,7 +834,7 @@ func TestLogEventBuilder_FilteredLevelSkipsCounters(t *testing.T) {
 }
 
 // TestEventForLevel_AllKnownLevels directly exercises the eventForLevel
-// helper extracted in docs/reviews/internal-logging.md finding 4.4. It
+// helper extracted in docs/reviews/archive/internal-logging.md finding 4.4. It
 // verifies that every zerolog level recognized by the switch returns a
 // non-nil event when the logger is configured to accept all levels, and
 // that an unknown level falls through the default case to nil.
@@ -946,4 +949,113 @@ func TestNoop_FullChainIsNoOp(t *testing.T) {
 	grandchild := child.With().Str("gc", "ok").Logger()
 	require.NotNil(t, grandchild)
 	grandchild.InfoWith().Msg("grandchild")
+}
+
+// --- 2026-06-19 review (logging) regression tests ----------------------------
+
+// TestInitialize_FailsWhenLogFileUnwritable guards review M1: lumberjack opens
+// the file lazily, so an unwritable target must be proven at Initialize, not
+// surface at the first (lost) log line. Root-proof: the would-be log file path
+// is pre-created as a DIRECTORY, so opening it for write returns EISDIR
+// regardless of euid (a chmod-based test would pass under root).
+func TestInitialize_FailsWhenLogFileUnwritable(t *testing.T) {
+	exeName, err := utils.ExecName(true)
+	require.NoError(t, err)
+
+	workingDir := t.TempDir()
+	logDir := filepath.Join(workingDir, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0o750))
+	require.NoError(t, os.Mkdir(filepath.Join(logDir, exeName+".log"), 0o750))
+
+	cfg := validLoggingConfig()
+	cfg.FileLogging = true
+	cfg.ConsoleLogging = false
+	cfg.RelLogFileDir = "logs"
+	service := &Service{WorkingDir: workingDir, ConfigService: newTestConfigService(cfg)}
+
+	require.Error(t, service.Initialize(), "Initialize must fail when the log file target is not writable")
+}
+
+// TestClose_LateEventAfterTimeoutWritesSafely guards review M2: when the drain
+// times out with an event still in flight, Close leaves the writer OPEN so the
+// straggler's terminal write lands safely instead of reopening a closed file.
+func TestClose_LateEventAfterTimeoutWritesSafely(t *testing.T) {
+	workingDir := t.TempDir()
+	cfg := validLoggingConfig()
+	cfg.FileLogging = true
+	cfg.ConsoleLogging = false
+	cfg.RelLogFileDir = "logs"
+	cfg.Level = "info"
+	cfg.ShutdownTimeoutMS = 10 // force a drain timeout while an event is outstanding (10ms = config min)
+	service := &Service{WorkingDir: workingDir, ConfigService: newTestConfigService(cfg)}
+	require.NoError(t, service.Initialize())
+
+	// Build a tracked event but do NOT finish it — Close will drain-timeout.
+	e := service.InfoWith().Str("k", "v")
+	require.NoError(t, service.Close())
+
+	// The straggler completes after Close returned: must not panic, and the line
+	// must be written (the writer was left open on timeout, not closed).
+	e.Msg("late line")
+
+	exeName, err := utils.ExecName(true)
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(workingDir, "logs", exeName+".log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "late line")
+}
+
+// TestFinish_IdempotentOnDoubleTerminal guards review M3: a second terminal call
+// on the same event (Msg twice, or Msg then Send) must be a no-op, not a
+// negative-WaitGroup panic. Balanced counters + a clean Close prove it.
+func TestFinish_IdempotentOnDoubleTerminal(t *testing.T) {
+	workingDir := t.TempDir()
+	cfg := validLoggingConfig()
+	cfg.FileLogging = true
+	cfg.ConsoleLogging = false
+	cfg.RelLogFileDir = "logs"
+	cfg.Level = "info"
+	service := &Service{WorkingDir: workingDir, ConfigService: newTestConfigService(cfg)}
+	require.NoError(t, service.Initialize())
+
+	e := service.InfoWith().Str("k", "v")
+	e.Msg("first")
+	e.Msg("second") // double terminal — must not underflow the WaitGroup
+
+	e2 := service.InfoWith().Int("n", 1)
+	e2.Msg("a")
+	e2.Send() // Msg then Send — also a no-op the second time
+
+	assert.Equal(t, int32(0), service.activeOps.Load(), "counters stay balanced after double terminal calls")
+	require.NoError(t, service.Close(), "Close must not hang or panic with a balanced WaitGroup")
+}
+
+// TestLogBuilder_ConcurrentWithClose_NoPanic guards review H1: the event
+// builder's wg.Add must not race Close's wg.Wait. Many goroutines log while
+// Close runs; under -race + the WaitGroup misuse detector this would panic
+// before the fix (Add concurrent with Wait). Light enough for -race -short.
+func TestLogBuilder_ConcurrentWithClose_NoPanic(t *testing.T) {
+	for iter := 0; iter < 20; iter++ {
+		workingDir := t.TempDir()
+		cfg := validLoggingConfig()
+		cfg.FileLogging = true
+		cfg.ConsoleLogging = false
+		cfg.RelLogFileDir = "logs"
+		cfg.Level = "info"
+		service := &Service{WorkingDir: workingDir, ConfigService: newTestConfigService(cfg)}
+		require.NoError(t, service.Initialize())
+
+		var wg sync.WaitGroup
+		for g := 0; g < 4; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < 50; i++ {
+					service.InfoWith().Int("i", i).Msg("concurrent")
+				}
+			}()
+		}
+		_ = service.Close() // close while loggers are still firing
+		wg.Wait()
+	}
 }

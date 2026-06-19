@@ -45,7 +45,7 @@ type Service struct {
 	// tracking path does not contend with event-creation paths that
 	// hold mu.RLock. Only used when the `logging_debug` build tag is
 	// set; untouched in release builds. See
-	// docs/reviews/internal-logging.md finding 4.7.
+	// docs/reviews/archive/internal-logging.md finding 4.7.
 	debugMu           sync.Mutex
 	activeOpLocations map[string]int // Debug: where active operations were created
 }
@@ -107,6 +107,18 @@ func (s *Service) Initialize() error {
 		}
 
 		mw := io.MultiWriter(s.initializeWriters(exeName)...)
+
+		// Prove the file target is writable NOW. lumberjack opens the file lazily
+		// on first Write, so an unwritable dir/file would otherwise let Initialize
+		// report success and only fail at the first log line — silently losing the
+		// very startup log that would diagnose it (review 2026-06-19 M1).
+		if s.fileWriter != nil {
+			if probeErr := probeLogFileWritable(s.fileWriter.Filename); probeErr != nil {
+				s.initErr = errors.New(op).WithErr(fmt.Errorf("log file %q is not writable: %w", s.fileWriter.Filename, probeErr))
+				return
+			}
+		}
+
 		logger := zerolog.New(mw).With().Logger()
 
 		level, levelErr := zerolog.ParseLevel(s.LoggingConfig.Level)
@@ -157,7 +169,7 @@ func (s *Service) Initialize() error {
 // isInitialized to false, nothing else is waiting on the WaitGroup, and
 // stragglers that complete after Close() returns will decrement their own
 // counters normally — they're just updating state on a Service that's
-// about to be garbage collected. See docs/reviews/internal-logging.md
+// about to be garbage collected. See docs/reviews/archive/internal-logging.md
 // finding 4.1 for the background.
 func (s *Service) Close() error {
 	const op errors.Op = "logging.Service.Close"
@@ -199,7 +211,8 @@ func (s *Service) Close() error {
 	// Wait for active logging operations to complete using WaitGroup with
 	// timeout. If the drain times out, we log a warning (when configured)
 	// but do NOT force-drain — see the doc comment above for why.
-	if waitTimeout(&s.wg, time.Duration(timeoutMS)*time.Millisecond) && warnOnTimeout && logger != nil {
+	timedOut := waitTimeout(&s.wg, time.Duration(timeoutMS)*time.Millisecond)
+	if timedOut && warnOnTimeout && logger != nil {
 		event := logger.Warn().
 			Int32("active_operations", s.activeOps.Load()).
 			Int("timeout_ms", timeoutMS)
@@ -214,8 +227,20 @@ func (s *Service) Close() error {
 		event.Msg("Logger shutdown timeout exceeded; in-flight operations will complete after Close() returns")
 	}
 
-	// Close the file writer if it exists
-	// fileWriter is only accessed here and during initialization (protected by sync.Once)
+	// Close the file writer ONLY when the drain completed. On a timed-out drain
+	// we deliberately LEAVE lumberjack open: a straggler's terminal Msg/Send
+	// still holds the original multi-writer, and closing here would let that
+	// late write REOPEN the file after Close() returned — an fd outside the
+	// service's control (review 2026-06-19 M2). A timed-out Close is the
+	// process-exit path (the OS reclaims the fd; the service can't be
+	// re-initialised — initOnce), so the open writer is never reused. When the
+	// drain completes, no event is in flight (finish() runs after the write via
+	// defer), so closing is safe.
+	// fileWriter is only accessed here and during initialization (protected by sync.Once).
+	if timedOut {
+		return nil
+	}
+
 	s.mu.Lock()
 	fileWriter := s.fileWriter
 	s.fileWriter = nil

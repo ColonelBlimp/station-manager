@@ -27,7 +27,12 @@
 // emits additional structured fields describing the full error chain in
 // addition to zerolog's standard "error" field:
 //
-//	error_chain    — array of frame messages from outermost to root
+//	error_chain    — array of each frame's full Error() string, outermost to
+//	                 root. Note this is RECURSIVE: a DetailedError's Error()
+//	                 returns its own message PLUS the remaining cause tail, so
+//	                 each entry repeats the chain from that frame down (deeper
+//	                 entries are progressively shorter suffixes). For the
+//	                 per-frame operation identifiers alone, use error_ops.
 //	error_root     — the root cause message (last element of the chain)
 //	error_history  — the joined chain as a single string with " -> " between
 //	                 frames; human-readable for console output
@@ -48,14 +53,14 @@
 //	  "msg":   "operation failed",
 //	  "error": "startup failed",
 //	  "error_chain": [
-//	    "startup failed",
-//	    "failed to connect to database",
-//	    "dial tcp 127.0.0.1:5432: connect: connection refused"
+//	    "server.Start: startup failed: db.Open: failed to connect to database: db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused",
+//	    "db.Open: failed to connect to database: db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused",
+//	    "db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused"
 //	  ],
 //	  "error_ops":     ["server.Start", "db.Open", "db.Connect"],
-//	  "error_root":    "dial tcp 127.0.0.1:5432: connect: connection refused",
+//	  "error_root":    "db.Connect: dial tcp 127.0.0.1:5432: connect: connection refused",
 //	  "error_root_op": "db.Connect",
-//	  "error_history": "startup failed -> failed to connect to database -> dial tcp 127.0.0.1:5432: connect: connection refused"
+//	  "error_history": "<error_chain joined with ' -> '>"
 //	}
 //
 // Operation identifiers (error_ops, error_root_op) are populated only
@@ -65,5 +70,5 @@
 // %w, errors.Unwrap chains) are traversed correctly for their message
 // strings but contribute empty strings to error_ops because they carry
 // no operation context. See docs/reviews/archive/internal-errors.md and
-// docs/reviews/internal-logging.md for the full pattern rationale.
+// docs/reviews/archive/internal-logging.md for the full pattern rationale.
 package logging

@@ -28,6 +28,19 @@ func (s *Service) initializeRollingFileLogger(exeName string) *lumberjack.Logger
 	}
 }
 
+// probeLogFileWritable proves the log file path can actually be opened for
+// writing, using the same final filename + flags + owner-only mode lumberjack
+// will use (it opens lazily on first Write, so this surfaces a bad dir/perms at
+// Initialize time — review 2026-06-19 M1). It creates the file if absent (as
+// lumberjack would) and closes it immediately; the logger then appends.
+func probeLogFileWritable(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 // initializeWriters creates the set of io.Writer targets for the logger based on configuration.
 // If both console and file logging are disabled, file logging is enabled by default for safety.
 // The method also stores the file writer on the Service for later Close().

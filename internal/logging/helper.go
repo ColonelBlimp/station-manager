@@ -85,7 +85,7 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 	// no-op after only two atomic reads (s.logger.Load and
 	// logger.GetLevel), avoiding the counter increment, WaitGroup.Add,
 	// location capture, and RWMutex RLock the tracked path requires.
-	// See docs/reviews/internal-logging.md finding 4.6.
+	// See docs/reviews/archive/internal-logging.md finding 4.6.
 	//
 	// The logger snapshot here is used only for the level check; the
 	// tracked path below re-loads the logger under the read lock to
@@ -95,45 +95,43 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 		return newLogEvent(nil)
 	}
 
-	// Event is going to be logged. Commit: increment counters (every
-	// early-return path below must decrement them via releaseCounters
-	// to keep the WaitGroup balanced), capture debug location if the
-	// logging_debug build tag is set, then acquire the read lock.
-	s.activeOps.Add(1)
-	s.wg.Add(1)
-	location := trackLocation(s, 2)
-
+	// Event is going to be logged. Acquire the read lock FIRST and re-check
+	// under it, then register the in-flight op: wg.Add must NOT run concurrently
+	// with Close's wg.Wait (a documented WaitGroup misuse that can panic), and
+	// holding the read lock blocks Close from starting its wait until we've added
+	// (review 2026-06-19 H1 — mirrors the context-builder ordering in event.go).
+	// The lock-free snapshot above is only a level fast-path; the authoritative
+	// checks are these, under the lock.
 	s.mu.RLock()
 
-	// TOCTOU: between the short-circuit check and the lock acquisition
-	// above, Close() could have run and flipped isInitialized to false.
 	if !s.isInitialized.Load() {
 		s.mu.RUnlock()
-		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
 	// Re-load the logger under the lock — Close() replaces the logger
-	// pointer with nil, and the short-circuit snapshot above may be
-	// stale at this point.
+	// pointer with nil, and the short-circuit snapshot above may be stale.
 	logger = s.logger.Load()
 	if logger == nil {
 		s.mu.RUnlock()
-		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
 	event := eventForLevel(logger, level)
 	if event == nil {
 		s.mu.RUnlock()
-		releaseCounters(s, location)
 		return newLogEvent(nil)
 	}
 
+	// Register the in-flight op while STILL holding the read lock (so Close
+	// cannot have started wg.Wait), then capture debug location. Balanced by
+	// finish() on the event's terminal Msg/Msgf/Send.
+	s.activeOps.Add(1)
+	s.wg.Add(1)
+	location := trackLocation(s, 2)
+
 	s.mu.RUnlock()
 
-	// Wrap the event so its terminal Msg/Msgf/Send call decrements the
-	// counters this function incremented above.
 	return newTrackedLogEvent(event, s, location)
 }
 
@@ -143,7 +141,7 @@ func logEventBuilder(s *Service, level zerolog.Level) LogEvent {
 //
 // Extracted so the 7-case level dispatch isn't duplicated between
 // logEventBuilder and newTrackedContextLogEvent — see
-// docs/reviews/internal-logging.md finding 4.4.
+// docs/reviews/archive/internal-logging.md finding 4.4.
 func eventForLevel(l *zerolog.Logger, level zerolog.Level) *zerolog.Event {
 	switch level {
 	case zerolog.DebugLevel:
@@ -163,15 +161,4 @@ func eventForLevel(l *zerolog.Logger, level zerolog.Level) *zerolog.Event {
 	default:
 		return nil
 	}
-}
-
-// releaseCounters undoes the active-operations counter + WaitGroup
-// increment that logEventBuilder makes before entering any of its
-// early-return paths. Extracted as a helper to eliminate three copies
-// of the same 3-6 line unwind block that the previous code carried in
-// logEventBuilder's early-return paths.
-func releaseCounters(s *Service, location string) {
-	s.activeOps.Add(-1)
-	s.wg.Done()
-	untrackLocation(s, location)
 }

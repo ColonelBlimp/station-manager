@@ -114,7 +114,7 @@ type LogEvent interface {
 // returned interface value hit the non-tracking logEvent methods, so the
 // active-operations counter was never decremented. The bug was masked
 // by the Close() force-drain path and surfaced only when that force-drain
-// was removed (see docs/reviews/internal-logging.md finding 4.1).
+// was removed (see docs/reviews/archive/internal-logging.md finding 4.1).
 //
 // It is safe to call any method on a logEvent with a nil event field;
 // the builder methods become no-ops, and the terminal methods still run
@@ -414,13 +414,25 @@ func (e *logEvent) Dict(key string, dict func(LogEvent)) LogEvent {
 // tracking. No-op for untracked events. Called from the terminal methods
 // Msg, Msgf, and Send. Extracted as a helper to avoid the three-way
 // defer-block duplication the previous code had.
+// finish decrements the counters and is IDEMPOTENT for the common
+// single-goroutine case (review 2026-06-19 M3). It clears BOTH e.event and
+// e.service, so a second terminal call on the same event (Msg then Send, or Msg
+// twice) is a no-op: clearing e.service prevents a double wg.Done() ("negative
+// WaitGroup counter" panic), and clearing e.event prevents a second
+// e.event.Msg() touching the zerolog event that the first terminal already
+// finalized and returned to the pool (an "index out of range" panic). It runs
+// deferred — after the underlying write — so the first call still logs.
+// LogEvents are built and finalized on one goroutine; they are not shared.
 func (e *logEvent) finish() {
-	if e.service == nil {
+	e.event = nil
+	s := e.service
+	if s == nil {
 		return
 	}
-	e.service.activeOps.Add(-1)
-	e.service.wg.Done()
-	untrackLocation(e.service, e.location)
+	e.service = nil
+	s.activeOps.Add(-1)
+	s.wg.Done()
+	untrackLocation(s, e.location)
 }
 
 func (e *logEvent) Msg(msg string) {
