@@ -1137,19 +1137,33 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 			}
 		}
 
-		if fc.TickIntervalSec < 0 {
-			return fmt.Errorf("forwarder %q: tick_interval_sec must be >= 0", fc.Name)
+		// Upper bounds catch a hand-edit typo (an extra zero) before it becomes a
+		// self-DoS or — for the backoff seconds — a `secs * time.Second` int64
+		// overflow that wraps to a non-positive duration and silently COLLAPSES
+		// the configured backoff (review 2026-06-19 L1). The ceilings are far
+		// above any sane operator value, so real tuning is never rejected.
+		const (
+			maxForwarderTickSec       = 86400 // 1 day — a poll slower than this is a typo
+			maxForwarderBatchSize     = 1000  // far above the default 5
+			maxForwarderRetryAttempts = 100   // beyond this, retrying is pointless
+			maxForwarderBackoffSec    = 86400 // 1 day; also keeps secs*time.Second well inside int64
+		)
+		if fc.TickIntervalSec < 0 || fc.TickIntervalSec > maxForwarderTickSec {
+			return fmt.Errorf("forwarder %q: tick_interval_sec must be in 0..%d", fc.Name, maxForwarderTickSec)
 		}
-		if fc.BatchSize < 0 {
-			return fmt.Errorf("forwarder %q: batch_size must be >= 0", fc.Name)
+		if fc.BatchSize < 0 || fc.BatchSize > maxForwarderBatchSize {
+			return fmt.Errorf("forwarder %q: batch_size must be in 0..%d", fc.Name, maxForwarderBatchSize)
 		}
 
 		if fc.Retry != nil {
-			if fc.Retry.MaxAttempts < 1 {
-				return fmt.Errorf("forwarder %q: retry.max_attempts must be >= 1", fc.Name)
+			if fc.Retry.MaxAttempts < 1 || fc.Retry.MaxAttempts > maxForwarderRetryAttempts {
+				return fmt.Errorf("forwarder %q: retry.max_attempts must be in 1..%d", fc.Name, maxForwarderRetryAttempts)
 			}
-			if fc.Retry.InitialBackoffSec < 1 {
-				return fmt.Errorf("forwarder %q: retry.initial_backoff_sec must be >= 1", fc.Name)
+			if fc.Retry.InitialBackoffSec < 1 || fc.Retry.InitialBackoffSec > maxForwarderBackoffSec {
+				return fmt.Errorf("forwarder %q: retry.initial_backoff_sec must be in 1..%d", fc.Name, maxForwarderBackoffSec)
+			}
+			if fc.Retry.MaxBackoffSec > maxForwarderBackoffSec {
+				return fmt.Errorf("forwarder %q: retry.max_backoff_sec must be <= %d", fc.Name, maxForwarderBackoffSec)
 			}
 			if fc.Retry.MaxBackoffSec < fc.Retry.InitialBackoffSec {
 				return fmt.Errorf("forwarder %q: retry.max_backoff_sec must be >= initial_backoff_sec", fc.Name)

@@ -270,6 +270,19 @@ func TestClassify_Update_OK_RecordInserted_Success(t *testing.T) {
 	}
 }
 
+// RESULT=OK on an update with NO LOGID must be terminal, not success (review
+// 2026-06-19 M2): marking it uploaded with no upstream id leaves a later DELETE
+// unable to find the remote record.
+func TestClassify_Update_OK_NoLogID_Terminal(t *testing.T) {
+	res := classifyResponse(action.Update, response{Result: "OK"})
+	if res.Outcome != forwarding.OutcomeTerminal {
+		t.Fatalf("outcome = %q, want terminal (RESULT=OK without LOGID)", res.Outcome)
+	}
+	if res.UpstreamID != "" {
+		t.Errorf("UpstreamID = %q, want empty", res.UpstreamID)
+	}
+}
+
 func TestClassify_Update_FAIL_Terminal(t *testing.T) {
 	res := classifyResponse(action.Update, response{Result: "FAIL", Reason: "bad adif"})
 	if res.Outcome != forwarding.OutcomeTerminal {

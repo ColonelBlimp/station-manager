@@ -680,6 +680,22 @@ func TestLoad_Forwarders_ValidationErrors(t *testing.T) {
 			body:    `{"forwarders":[{"name":"x","type":"qrz","retry":{"max_attempts":5,"initial_backoff_sec":60,"max_backoff_sec":30}}]}`,
 			wantErr: "retry.max_backoff_sec",
 		},
+		// review 2026-06-19 L1: over-bound (typo / overflow-scale) values rejected.
+		{
+			name:    "tick_interval_sec absurdly large",
+			body:    `{"forwarders":[{"name":"x","type":"qrz","tick_interval_sec":99999999}]}`,
+			wantErr: "tick_interval_sec must be in 0..",
+		},
+		{
+			name:    "batch_size absurdly large",
+			body:    `{"forwarders":[{"name":"x","type":"qrz","batch_size":1000000}]}`,
+			wantErr: "batch_size must be in 0..",
+		},
+		{
+			name:    "initial_backoff_sec overflow-scale",
+			body:    `{"forwarders":[{"name":"x","type":"qrz","retry":{"max_attempts":5,"initial_backoff_sec":9999999999,"max_backoff_sec":9999999999}}]}`,
+			wantErr: "retry.initial_backoff_sec must be in 1..",
+		},
 	}
 
 	for _, tc := range cases {

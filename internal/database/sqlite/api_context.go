@@ -2260,9 +2260,14 @@ func (s *Service) FetchQsoHistoryByUUIDWithContext(ctx context.Context, qsoUUID 
 // are excluded by the action filter for clarity.)
 //
 // UNIQUE(qso_id, forwarder_name, action) means at most one insert and one
-// update row exist per pair; ORDER BY created_at DESC LIMIT 1 picks the most
-// recent of them. created_at is set once at insert and never mutated, so the
-// ordering is stable regardless of retry bookkeeping.
+// update row exist per pair; we want the one whose SUCCESS is most recent.
+// Ordering is by `modified_at DESC, id DESC`, NOT created_at: created_at is set
+// once at insert and never mutated, but InsertQsoUploadTx re-arms an existing
+// row on conflict without touching its created_at, and the success transition
+// bumps modified_at. So a re-armed update can be the latest successful upstream
+// write while carrying an older created_at than the insert row — ordering by
+// created_at would then hand a stale LOGID to the delete. modified_at tracks the
+// last state transition; id DESC breaks ties (review 2026-06-19 M1).
 //
 // Returns:
 //   - ("", nil) when no matching row exists. The worker reclassifies
@@ -2298,7 +2303,7 @@ func (s *Service) FetchPriorUpstreamIDWithContext(
 		models.QsoUploadWhere.Action.IN([]string{action.Insert.String(), action.Update.String()}),
 		models.QsoUploadWhere.Status.EQ(status.Uploaded.String()),
 		models.QsoUploadWhere.UpstreamID.IsNotNull(),
-		qm.OrderBy("created_at DESC"),
+		qm.OrderBy("modified_at DESC, id DESC"),
 		qm.Limit(1),
 	).One(ctx, h)
 	if err != nil {

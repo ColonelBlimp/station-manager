@@ -23,7 +23,7 @@ tasks:
     desc: Compile the whole module and build the daemon binary (CGO on → live FT8 capture)
     cmds:
       - CGO_ENABLED=1 go build ./...
-      - CGO_ENABLED=1 go build -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=1 go build -tags dev -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
   frontend:install:
     desc: Install logging-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
@@ -103,7 +103,7 @@ tasks:
       shape) use build:smd:static; for faster decode use build:smd:pocketfft.
     deps: [frontend:build:all]
     cmds:
-      - CGO_ENABLED=1 go build -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=1 go build -tags dev -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
   build:smd:static:
     desc: |
@@ -125,7 +125,7 @@ tasks:
       CGO-free shape.
     deps: [frontend:build:all]
     cmds:
-      - CGO_ENABLED=1 go build -tags pocketfft -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=1 go build -tags "dev pocketfft" -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
   rpm:dev:
     desc: |
@@ -214,7 +214,7 @@ tasks:
       # restart flap). Tolerant of not-running / unit-not-installed.
       - echo "stopping systemd smd (if running) to free :8080 - restart it later with systemctl --user start smd"
       - systemctl --user stop smd 2>/dev/null || true
-      - CGO_ENABLED=1 go run -ldflags="-X main.Version={{.SM_VERSION}}" ./cmd/smd
+      - CGO_ENABLED=1 go run -tags dev -ldflags="-X main.Version={{.SM_VERSION}}" ./cmd/smd
 
   tag:
     desc: |

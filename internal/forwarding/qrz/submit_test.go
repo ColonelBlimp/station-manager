@@ -252,6 +252,23 @@ func TestSubmit_Update_OK_Success(t *testing.T) {
 	}
 }
 
+// RESULT=OK on an update WITHOUT a LOGID must be terminal, not a phantom success
+// (review 2026-06-19 M2) — the sibling of TestSubmit_Insert_OK_MissingLOGID_IsTerminal.
+// Marking it uploaded with no upstream id leaves a later DELETE unresolvable.
+func TestSubmit_Update_OK_MissingLOGID_IsTerminal(t *testing.T) {
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&COUNT=1", &rec)
+	fwd := fwdAt(srv.URL, "key")
+
+	res := fwd.Submit(context.Background(), sampleQso(), action.Update, "")
+	if res.Outcome != forwarding.OutcomeTerminal {
+		t.Fatalf("outcome = %q, want terminal (update RESULT=OK without LOGID)", res.Outcome)
+	}
+	if res.UpstreamID != "" {
+		t.Errorf("UpstreamID = %q, want empty", res.UpstreamID)
+	}
+}
+
 // ---------- malformed body ----------
 
 func TestSubmit_Insert_MalformedBody_IsTerminal(t *testing.T) {

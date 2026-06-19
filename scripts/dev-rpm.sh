@@ -40,18 +40,21 @@ echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
 
 # FFT backend selection — see scripts/release-rpm.sh for the rationale.
 # Default gonum (pure Go, static); SM_FFT=pocketfft builds the CGO backend.
+# The dev RPM always carries the `dev` build tag, which registers the test-only
+# "stub" forwarder (review 2026-06-19 M3) — the shipped release (release-rpm.sh)
+# does NOT, so production can't select type:"stub".
 CGO_VAL=0
-TAGS_ARG=()
+BUILD_TAGS="dev"
 FFT_BACKEND="gonum (pure Go, static)"
 if [ "${SM_FFT:-}" = "pocketfft" ]; then
   CGO_VAL=1
-  TAGS_ARG=(-tags pocketfft)
+  BUILD_TAGS="dev pocketfft"
   FFT_BACKEND="PocketFFT (CGO, dynamically linked)"
 fi
 
 echo "── [2/3] Building daemon → build/bin/smd (version: ${VERSION}, FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
-CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
+CGO_ENABLED=$CGO_VAL go build -trimpath -tags "${BUILD_TAGS}" \
     -ldflags="-s -w -X main.Version=${VERSION}" \
     -o build/bin/smd ./cmd/smd
 

@@ -1,5 +1,12 @@
 # Station Manager v2 — Forwarding Subsystem
 
+> **⚠️ Historical design (Tier 2 — see [`../README.md`](../README.md)).** This is
+> the pre/mid-build design brief, **not** a current reference and not maintained
+> to match the code. The forwarding subsystem shipped — multi-destination
+> `Forwarder` + worker + registry, the QRZ port, and the `forward.*` SSE events
+> all landed. Current truth: the code under `internal/forwarding/`, ADRs 0014 +
+> 0022, and `api-endpoints.md` for routes.
+
 **Status:** Fourth entry in `docs/v2-design/`, written 2026-04-18 at the
 start of milestone 1c work. Draft — everything here is revisable until
 code contradicts it.

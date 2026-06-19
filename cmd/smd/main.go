@@ -27,8 +27,12 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
-	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"    // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
-	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/stub" // side-effect: register "stub" forwarder + default retry
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz" // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
+	// The test-only "stub" forwarder is registered ONLY in dev builds (-tags dev,
+	// see forwarder_stub_dev.go) — never in a release binary, so a production
+	// config can't select type:"stub" and get fake "uploaded" status without
+	// sending anywhere (review 2026-06-19 M3). The registry rejects an
+	// unregistered type as "unknown forwarder type" at startup.
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"

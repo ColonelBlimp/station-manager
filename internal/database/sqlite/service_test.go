@@ -1392,6 +1392,56 @@ func TestFetchPriorUpstreamID_ConsidersUpdateAction(t *testing.T) {
 	}
 }
 
+// TestFetchPriorUpstreamID_OrdersBySuccessFreshnessNotCreation is the M1
+// regression (review 2026-06-19): the lookup must pick the row whose SUCCESS is
+// most recent (modified_at), not the most recently CREATED row (created_at). The
+// re-arm case: an insert row created first, then re-armed and re-uploaded AFTER
+// a later-created update row succeeded — the insert holds the live upstream id
+// despite its older created_at. Timestamps are pinned via raw SQL because
+// DATETIME is second-resolution and a fast test would otherwise tie.
+func TestFetchPriorUpstreamID_OrdersBySuccessFreshnessNotCreation(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	ins, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(ctx, ins[0].ID, "insert-id-rearmed"); err != nil {
+		t.Fatalf("mark insert: %v", err)
+	}
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Update)
+	upd, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	if err := svc.MarkUploadSuccessWithContext(ctx, upd[0].ID, "update-id-stale"); err != nil {
+		t.Fatalf("mark update: %v", err)
+	}
+
+	// Encode the re-arm: the UPDATE row was CREATED later, but the INSERT row was
+	// re-uploaded (modified) later — so it owns the current upstream id. Drop the
+	// auto-touch trigger first, else it stamps modified_at = now on our UPDATEs
+	// and both rows tie at the test-run second.
+	if _, e := svc.handle.Exec(`DROP TRIGGER IF EXISTS trg_qso_upload_set_updated_at`); e != nil {
+		t.Fatalf("drop trigger: %v", e)
+	}
+	if _, e := svc.handle.Exec(
+		`UPDATE qso_upload SET created_at='2026-01-01 00:00:01', modified_at='2026-01-01 00:00:09' WHERE id=?`, ins[0].ID); e != nil {
+		t.Fatalf("pin insert ts: %v", e)
+	}
+	if _, e := svc.handle.Exec(
+		`UPDATE qso_upload SET created_at='2026-01-01 00:00:05', modified_at='2026-01-01 00:00:03' WHERE id=?`, upd[0].ID); e != nil {
+		t.Fatalf("pin update ts: %v", e)
+	}
+
+	got, err := svc.FetchPriorUpstreamIDWithContext(ctx, qsoID, "qrz")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "insert-id-rearmed" {
+		t.Fatalf("got %q, want insert-id-rearmed — lookup must order by success freshness (modified_at), "+
+			"not creation (created_at); under created_at ordering the stale later-created update row wins", got)
+	}
+}
+
 // A successful DELETE row must NOT satisfy the lookup — a delete removes the
 // upstream record, it doesn't create one. Only insert/update count.
 func TestFetchPriorUpstreamID_IgnoresDeleteAction(t *testing.T) {

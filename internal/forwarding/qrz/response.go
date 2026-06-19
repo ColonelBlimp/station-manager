@@ -186,7 +186,18 @@ func classifyUpdate(resp response) forwarding.Result {
 	case resultOK:
 		// Updated record didn't exist — QRZ inserted it. That's a
 		// logical success from the operator's perspective (the
-		// record now exists upstream with our data).
+		// record now exists upstream with our data). Require the LOGID
+		// just like the insert path + the REPLACE branch below: marking
+		// an update "uploaded" with no upstream id leaves a later DELETE
+		// unable to identify the remote record, so it would settle as
+		// forward.failed — better to fail the update terminally now with
+		// a clear reason (review 2026-06-19 M2).
+		if resp.LogID == "" {
+			return forwarding.Result{
+				Outcome: forwarding.OutcomeTerminal,
+				Err:     errors.New(op).WithMsg("RESULT=OK on update without LOGID"),
+			}
+		}
 		return forwarding.Result{
 			Outcome:    forwarding.OutcomeSuccess,
 			UpstreamID: resp.LogID,

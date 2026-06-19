@@ -1,5 +1,12 @@
 # Forwarder Subsystem — Implementation Guide
 
+> **⚠️ Historical design (Tier 2 — see [`../README.md`](../README.md)).** Written
+> during the build; **not** maintained to match the code. Known drift to ignore:
+> the delete LOGID lookup is now `FetchPriorUpstreamIDWithContext` — it considers
+> insert OR update rows, ordered by success freshness (`modified_at`) — not the
+> `FetchInsertUpstreamIDWithContext` / prior-insert-only described below. Current
+> truth is the code under `internal/forwarding/` + `internal/database/sqlite/`.
+
 **Companion to:** [`forwarding.md`](forwarding.md) (the design).
 **Scope:** where each decision lives in the code, and how the moving parts
 fit together end-to-end.
