@@ -78,7 +78,9 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	}
 	if s.tuneActive {
 		s.mu.Unlock()
-		return errors.New(errOp).WithMsg("tune carrier active; refusing concurrent FT8 TX")
+		// Typed (ErrTxActive) so callers can classify this mutual-exclusion
+		// conflict rather than see a generic transmit failure (review L1).
+		return errors.New(errOp).WithErr(ErrTxActive).WithMsg("tune carrier active; refusing concurrent FT8 TX")
 	}
 	cl := s.activeClient
 	if cl == nil {

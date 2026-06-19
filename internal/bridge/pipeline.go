@@ -287,7 +287,9 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	// a terminal-read error within milliseconds; if it's a transient
 	// flake, the readLoop probe re-issues READ on the next timeout.
 	civSnapshot := def.Protocol == cat.ProtocolIcomCIV
-	if err := s.writeSnapshotReads(ctx, client, civSnapshot, readBytes); err != nil {
+	if err := s.underCmdMuCIV(civSnapshot, func() error {
+		return s.writeSnapshotReads(ctx, client, civSnapshot, readBytes)
+	}); err != nil {
 		s.logger.WarnWith().
 			Err(err).
 			Str("driver", def.ID).
@@ -351,9 +353,9 @@ func (s *Service) runPollLoop(ctx context.Context, client serial.Client, pollByt
 			if busy {
 				continue // collision back-off: rig is mid-broadcast (dial spin)
 			}
-			s.cmdMu.Lock()
-			err := s.writeSnapshotReads(ctx, client, true, pollBytes)
-			s.cmdMu.Unlock()
+			err := s.underCmdMuCIV(true, func() error {
+				return s.writeSnapshotReads(ctx, client, true, pollBytes)
+			})
 			if err != nil && ctx.Err() == nil {
 				s.logger.WarnWith().Str("error", errMessage(err)).
 					Msg("bridge: CI-V state-mirror poll write failed")
@@ -464,14 +466,17 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					s.publishDisconnect(RigCodeNoData, nil)
 					announcedDisconnect = true
 				}
-				if werr := client.WriteCommandBytes(ctx, initBytes); werr != nil {
-					if ctx.Err() != nil {
-						return exitContextCancelled
+				// Re-arm + re-probe as ONE sequence: for CI-V the INIT and the
+				// READ snapshot are held together under cmdMu so a command/key
+				// ACK flow can't slip a frame between them on the half-duplex bus
+				// (review 2026-06-19 M2).
+				civ := def.Protocol == cat.ProtocolIcomCIV
+				if werr := s.underCmdMuCIV(civ, func() error {
+					if err := client.WriteCommandBytes(ctx, initBytes); err != nil {
+						return err
 					}
-					s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(werr)})
-					return exitTransient
-				}
-				if werr := s.writeSnapshotReads(ctx, client, def.Protocol == cat.ProtocolIcomCIV, readBytes); werr != nil {
+					return s.writeSnapshotReads(ctx, client, civ, readBytes)
+				}); werr != nil {
 					if ctx.Err() != nil {
 						return exitContextCancelled
 					}
@@ -897,6 +902,24 @@ func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) 
 // line_delimiter too, but the snapshot splitter doesn't need the serial config
 // in scope).
 const civFrameDelimiter = 0xFD
+
+// underCmdMuCIV runs fn while holding cmdMu when civ is true, or directly
+// otherwise. cmdMu is the CI-V "one command sequence on the half-duplex bus"
+// guard (ADR 0034); every CI-V snapshot/keying writer must take it so a
+// bootstrap, startup, poll, or liveness-recovery READ burst can't interleave
+// its frames with an in-flight SendCommands batch or key/unkey ACK sequence
+// (review 2026-06-19 M2). Kenwood is full-duplex confirm-by-push with no
+// one-outstanding-command contract, so it writes directly. Callers must hold
+// neither mu nor keyMu (lock order keyMu → cmdMu → mu); writeSnapshotReads
+// itself takes no lock, so the only ordering edge is cmdMu before any mu fn
+// might take.
+func (s *Service) underCmdMuCIV(civ bool, fn func() error) error {
+	if civ {
+		s.cmdMu.Lock()
+		defer s.cmdMu.Unlock()
+	}
+	return fn()
+}
 
 // writeSnapshotReads writes a READ state snapshot to the rig. For Kenwood it is
 // a single write — the rig queues the ;-delimited burst fine. For CI-V it must

@@ -111,6 +111,74 @@ func TestSendCommandsCIV_AdoptsFreqOnAck(t *testing.T) {
 	}
 }
 
+// TestSendCommandsCIV_UpdatesDialSnapshotOnAck guards review 2026-06-19 M1: an
+// ACKed set_freq must update the internal dial snapshot (CurrentDialMHz) — the
+// authoritative dial cmd/smd logs FT8 QSOs / PSK Reporter spots from — not just
+// the SSE state, and without waiting for a later poll. startedCIVService seeds
+// identity from a 14.074 MHz broadcast, so the dial starts there.
+func TestSendCommandsCIV_UpdatesDialSnapshotOnAck(t *testing.T) {
+	s, _, ch, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup()
+
+	if mhz, ok := s.CurrentDialMHz(); !ok || mhz != 14.074 {
+		t.Fatalf("seed dial = %v (ok=%v), want 14.074", mhz, ok)
+	}
+
+	if err := s.SendCommand(context.Background(), "set_freq", "18100000"); err != nil {
+		t.Fatalf("SendCommand(set_freq): %v", err)
+	}
+	// The synthesized push and the dial-snapshot write happen in the same call;
+	// waiting for the push guarantees captureDialFreq has run.
+	waitForRigState(t, ch, func(p RigStatePayload) bool { return p.VfoA == 18100000 }, time.Second)
+
+	if mhz, ok := s.CurrentDialMHz(); !ok || mhz != 18.1 {
+		t.Errorf("dial after ACKed set_freq = %v (ok=%v), want 18.1 (no poll)", mhz, ok)
+	}
+}
+
+// TestTriggerBootstrapCIV_SerialisesBehindCmdMu guards review 2026-06-19 M2: a
+// CI-V bootstrap READ burst must not write to the half-duplex bus while a
+// command/key ACK sequence holds cmdMu — it has to wait its turn. Holding cmdMu
+// here stands in for that in-flight sequence; TriggerBootstrap must neither
+// return nor write until the lock is released. The liveness-recovery READ uses
+// the same underCmdMuCIV helper, so this also covers that path's serialization.
+func TestTriggerBootstrapCIV_SerialisesBehindCmdMu(t *testing.T) {
+	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup()
+
+	s.cmdMu.Lock() // simulate an in-flight command/key sequence owning the bus
+
+	before := len(fake.recordedWrites())
+	done := make(chan error, 1)
+	go func() { done <- s.TriggerBootstrap(context.Background()) }()
+
+	// While cmdMu is held, the bootstrap must be parked — no return, no writes.
+	select {
+	case err := <-done:
+		s.cmdMu.Unlock()
+		t.Fatalf("TriggerBootstrap returned while cmdMu held (err=%v) — not serialised", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := len(fake.recordedWrites()) - before; got != 0 {
+		s.cmdMu.Unlock()
+		t.Fatalf("bootstrap wrote %d frame(s) while cmdMu held; want 0", got)
+	}
+
+	s.cmdMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("TriggerBootstrap after release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TriggerBootstrap did not complete after cmdMu released")
+	}
+	if len(fake.recordedWrites()) <= before {
+		t.Error("bootstrap wrote no READ frames after cmdMu released")
+	}
+}
+
 // TestSendCommandsCIV_AdoptsModeOnMultiFrameAck: set_mode "USB-D" encodes to TWO
 // CI-V frames (06 then 1A06); each must be ACKed, then the commanded mode
 // literal is synthesized — proving the per-frame wait loop and that adopt-on-ACK

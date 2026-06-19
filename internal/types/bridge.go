@@ -2,10 +2,14 @@ package types
 
 // BridgeConfig holds the daemon's serial/CAT bridge subsystem
 // configuration. Per ADR 0013 the bridge runs in-process as a
-// subsystem of `cmd/smd`; per ADR 0019 the v1 shape is read-only
-// (rig pushes state via AUTO-mode CAT, bridge filters and forwards
-// via SSE on `/v1/rig/events`, SPA displays — no inbound command
-// path, no PTT awareness in v1).
+// subsystem of `cmd/smd`. State display is read-only (rig pushes
+// state via AUTO-mode CAT — ADR 0019 — the bridge filters and
+// forwards via SSE on `/v1/rig/events`, the SPA displays). On top of
+// that read path the bridge now also carries a narrow inbound command
+// path (`/v1/rig/command` — freq/mode/VFO/band, ADR 0026) and two
+// daemon-owned keyed-transmission features that drive PTT: the tune
+// carrier (ADR 0027) and FT8 TX (ADR 0030). Still NOT in v1:
+// phone/CW PTT-for-operating (QSO keying) and rigctld-compat TCP.
 //
 // Enabled gates the whole subsystem. When false (operator's master
 // smd, headless server, or any deployment without a rig connected),

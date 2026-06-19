@@ -108,8 +108,9 @@ func TestKeyFt8Tx_RefusesDuringTune(t *testing.T) {
 	s.tuneActive = true
 	s.mu.Unlock()
 
-	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err == nil {
-		t.Fatal("KeyFt8Tx should refuse while a tune is active")
+	// Typed so the API can classify it as a 409 conflict, not a generic 500.
+	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); !stderr.Is(err, ErrTxActive) {
+		t.Fatalf("KeyFt8Tx during tune = %v, want ErrTxActive", err)
 	}
 	if w := fake.recordedWrites(); len(w) != 0 {
 		t.Errorf("expected no writes when refused, got %q", w)
@@ -124,8 +125,8 @@ func TestStartTune_RefusesDuringFt8Tx(t *testing.T) {
 	s.ft8TxActive = true
 	s.mu.Unlock()
 
-	if err := s.StartTune(context.Background()); err == nil {
-		t.Fatal("StartTune should refuse while FT8 TX is active")
+	if err := s.StartTune(context.Background()); !stderr.Is(err, ErrTxActive) {
+		t.Fatalf("StartTune during FT8 TX = %v, want ErrTxActive", err)
 	}
 	if w := fake.recordedWrites(); len(w) != 0 {
 		t.Errorf("expected no tune writes when refused, got %q", w)

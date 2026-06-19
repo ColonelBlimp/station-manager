@@ -57,6 +57,11 @@ func (s *Server) writeRigTuneError(w http.ResponseWriter, op errors.Op, err erro
 	case stderr.Is(err, bridge.ErrRigIdentityUnverified):
 		s.writeError(w, http.StatusConflict, "rig_identity_unverified",
 			"connected rig's identity is unverified; check the configured driver matches the rig", op)
+	case stderr.Is(err, bridge.ErrTxActive):
+		// FT8 TX is keyed — one keyed transmission at a time on one PTT. A state
+		// conflict, not a tune failure (review 2026-06-19 L1).
+		s.writeError(w, http.StatusConflict, "rig_tx_active",
+			"a transmission is already active; stop it before tuning", op)
 	default:
 		s.writeServerError(w, op, err, "rig_tune_failed", "failed to drive rig tune")
 	}

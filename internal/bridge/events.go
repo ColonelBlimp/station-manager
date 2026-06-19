@@ -22,10 +22,13 @@ const (
 	EventRigState EventName = "rig-state"
 
 	// EventRigDisconnected fires when the bridge concludes the rig
-	// is no longer alive — CAT identity check fails at startup, no
-	// data has flowed for the timeout window (ADR 0010 passive
-	// liveness), or the serial port returns EIO/closed. Payload is
-	// {Reason string} for the SPA to surface as a toast.
+	// is no longer alive — no data has flowed for the timeout window
+	// (ADR 0010 passive liveness) or the serial port returns
+	// EIO/closed. Payload is {Reason string} for the SPA to surface
+	// as a toast. A CAT identity *mismatch* is NOT this event: it
+	// halts the pipeline as a permanent EventBridgeError instead (an
+	// unrecognised — not definitely-wrong — ID is an advisory
+	// EventBridgeError that keeps reading state).
 	EventRigDisconnected EventName = "rig-disconnected"
 
 	// EventBridgeError surfaces operator-actionable bridge-side

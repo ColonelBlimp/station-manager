@@ -8,6 +8,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -70,6 +71,26 @@ func TestHandleRigTune(t *testing.T) {
 			t.Fatalf("status = %d, want 202 (body %s)", w.Code, w.Body.String())
 		}
 	})
+}
+
+// TestWriteRigTuneError_TxActiveIsConflict guards review 2026-06-19 L1: a tune
+// requested while FT8 TX is keyed is a state conflict (409 rig_tx_active), not a
+// generic 500 rig_tune_failed. StartTune returning ErrTxActive for that case is
+// pinned at the bridge layer (TestStartTune_RefusesDuringFt8Tx); this pins the
+// handler's mapping of that sentinel.
+func TestWriteRigTuneError_TxActiveIsConflict(t *testing.T) {
+	srv := testServer(t)
+	const op errors.Op = "api.test"
+
+	w := httptest.NewRecorder()
+	srv.writeRigTuneError(w, op, bridge.ErrTxActive)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", w.Code, w.Body.String())
+	}
+	if code := decodeErrCode(t, w); code != "rig_tx_active" {
+		t.Errorf("code = %q, want rig_tx_active", code)
+	}
 }
 
 // TestBridgeInfoFor_Tune pins the capability flag: BOTH shipped Yaesu rigs

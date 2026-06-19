@@ -87,10 +87,12 @@ func TestHub_ClearsTransientBridgeErrorOnRigState(t *testing.T) {
 	}
 }
 
-// TestHub_KeepsPermanentBridgeErrorAcrossRigState is the complement: a
-// permanent / operator-actionable error (e.g. identity mismatch, which is
-// advisory and followed by rig-state in today's code) must NOT be cleared by a
-// rig-state — it stays cached so every late subscriber still sees it.
+// TestHub_KeepsPermanentBridgeErrorAcrossRigState is the complement: an
+// operator-actionable bridge-error (e.g. an identity-unrecognised advisory,
+// which keeps reading state so a rig-state follows it) must NOT be cleared by a
+// rig-state — it stays cached so every late subscriber still sees it. (A
+// definite identity mismatch is also a bridge-error but halts the pipeline, so
+// no rig-state follows it; this test models the advisory-then-rig-state flow.)
 func TestHub_KeepsPermanentBridgeErrorAcrossRigState(t *testing.T) {
 	h := newHub()
 	h.publish(bridgeErr(BridgeErrCodeIdentityMismatch))

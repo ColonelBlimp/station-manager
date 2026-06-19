@@ -28,12 +28,15 @@ var ErrRigNotConnected = stderr.New("bridge: no active rig connection")
 // stays for the pipeline's lifetime on a definite mismatch (which also halts).
 var ErrRigIdentityUnverified = stderr.New("bridge: rig identity not verified; refusing to send")
 
-// ErrTxActive is returned by SendCommands when a tune carrier or FT8
-// transmission is keyed. The generic command path must not write while the rig
-// is transmitting: it could retune/re-mode the rig mid-transmission, and
-// set_power (Exposed) would override the tune-power clamp and transmit at full
-// power. Only the keyed-transmission controllers (tune / FT8 TX) may touch the
-// rig while PTT is down-to-up; everything else waits (review 2026-06-16).
+// ErrTxActive marks a keyed-transmission conflict. SendCommands returns it when
+// a tune carrier or FT8 transmission is keyed (the generic command path must not
+// write while the rig is transmitting: it could retune/re-mode mid-transmission,
+// and set_power (Exposed) would override the tune-power clamp and transmit at
+// full power — only the keyed-transmission controllers may touch the rig while
+// PTT is down-to-up; everything else waits, review 2026-06-16). StartTune and
+// KeyFt8Tx also return it for their mutual-exclusion case — one keyed
+// transmission at a time on one PTT — so the API maps the conflict to 409
+// rig_tx_active rather than a generic 500 (review 2026-06-19 L1).
 var ErrTxActive = stderr.New("bridge: transmission active; refusing command")
 
 // ErrCommandRejected is returned by the CI-V command path (ADR 0034
@@ -292,9 +295,15 @@ func (s *Service) clearPendingAck(ch chan bool) {
 // Kenwood confirm-by-push (ADR 0034). The op's SetsState names the marker the
 // value sets; the value is already in decoded state form (Hz digits for freq,
 // the rig mode literal for mode), so it feeds the same mapStatusToPayload →
-// hub.publish path the readLoop uses for a decoded frame. captureTuneSnapshot
-// keeps the tune-restore snapshot current (a commanded mode change is a real
-// state change). A no-op when the op declares no SetsState.
+// hub.publish path the readLoop uses for a decoded frame. It refreshes BOTH
+// rolling snapshots before publishing, exactly as the decoded-frame path does:
+// captureTuneSnapshot keeps the tune-restore mode+power current (a commanded
+// mode change is a real state change), and captureDialFreq keeps the dial
+// snapshot current — CurrentDialMHz is the authoritative dial cmd/smd uses to
+// log completed FT8 QSOs and PSK Reporter spots, so an ACKed CI-V set_freq must
+// update it immediately rather than waiting for the next poll/read (review
+// 2026-06-19 M1). Both helpers no-op on a payload that lacks their fields. A
+// no-op overall when the op declares no SetsState.
 func (s *Service) publishCommandedState(def cat.RigDefinition, op, value string) {
 	tag := cat.CommandSetsState(def, op)
 	if tag == "" {
@@ -305,6 +314,7 @@ func (s *Service) publishCommandedState(def cat.RigDefinition, op, value string)
 		return
 	}
 	s.captureTuneSnapshot(payload)
+	s.captureDialFreq(payload)
 	s.hub.publish(Event{Name: EventRigState, Payload: payload})
 }
 

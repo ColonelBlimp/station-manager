@@ -121,7 +121,9 @@ func (s *Service) StartTune(ctx context.Context) error {
 	// time on one rig/one PTT — refuse a tune while FT8 is keying.
 	if s.ft8TxActive {
 		s.mu.Unlock()
-		return errors.New(errOp).WithMsg("ft8 tx active; refusing concurrent tune")
+		// Typed so the API maps the mutual-exclusion conflict to 409
+		// rig_tx_active, not a generic 500 (review 2026-06-19 L1).
+		return errors.New(errOp).WithErr(ErrTxActive).WithMsg("ft8 tx active; refusing concurrent tune")
 	}
 	if s.lastMode == "" || s.lastPower <= 0 {
 		s.mu.Unlock()

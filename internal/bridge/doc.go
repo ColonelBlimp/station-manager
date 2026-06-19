@@ -29,9 +29,12 @@
 // The tune controller's mode+power restore snapshot is the one scoped
 // exception to "no persistent rig-state cache" (alongside the hub's
 // one-slot event-replay caches). See ADR 0019 for the original v1
-// design and the trigger-list for further expansion (FT8 stack,
-// rigctld-compat TCP, multi-rig hardware, PTT-for-operating — none of
-// which are in v1).
+// design. Since then the bridge has gained an inbound command path
+// (`/v1/rig/command`, ADR 0026) and two daemon-owned keyed-transmission
+// features — the tune carrier (ADR 0027) and FT8 TX keying (this
+// package's ft8tx.go, ADR 0030). Still NOT in v1: phone/CW
+// PTT-for-operating (QSO keying), rigctld-compat TCP, and multi-rig
+// hardware.
 //
 // Package boundary discipline (ADR 0013): the storage package
 // (internal/database/sqlite), the forwarder package

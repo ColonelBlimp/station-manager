@@ -438,5 +438,9 @@ func (s *Service) TriggerBootstrap(ctx context.Context) error {
 	if cl == nil || len(bb) == 0 {
 		return nil
 	}
-	return s.writeSnapshotReads(ctx, cl, civ, bb)
+	// CI-V: serialise behind cmdMu so a new subscriber's bootstrap READ burst
+	// can't interleave an in-flight command/key ACK sequence (review M2).
+	return s.underCmdMuCIV(civ, func() error {
+		return s.writeSnapshotReads(ctx, cl, civ, bb)
+	})
 }
