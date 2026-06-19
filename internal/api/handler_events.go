@@ -69,6 +69,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Subscribe BEFORE the 200 OK is observable. The hub keeps no backlog, so a
+	// client that opens the stream and then immediately fetches state (or
+	// triggers a write) must not lose an event published in the gap between the
+	// flush and Subscribe(). Subscribing first closes that window — the
+	// "open the stream first, then fetch" contract is only sound if the
+	// subscription exists by the time the client sees the stream open (review
+	// 2026-06-19 M1). Subscribe doesn't touch w, so it's safe before WriteHeader.
+	ch, unsub := s.hub.Subscribe()
+	defer unsub()
+
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
@@ -79,9 +89,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	armWrite()
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	ch, unsub := s.hub.Subscribe()
-	defer unsub()
 
 	keepalive := time.NewTicker(sseKeepAliveInterval)
 	defer keepalive.Stop()

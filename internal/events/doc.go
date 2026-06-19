@@ -9,8 +9,9 @@
 //     not hundreds.
 //   - Events are ephemeral notifications, not an audit log. The
 //     authoritative state lives in the SQLite database; a client
-//     reconnecting re-queries state via `GET /v1/qsos` (etc.) and
-//     then resumes the stream.
+//     reconnecting reconciles baseline state via the logbook-scoped
+//     list `GET /v1/logbook/{id}/qso` (and `GET /v1/qso/{uuid}` for
+//     per-row detail), then resumes the stream.
 //   - No backlog, no replay. A subscriber connecting 1 hour after
 //     daemon start sees events from the moment of Subscribe, not
 //     from daemon start.

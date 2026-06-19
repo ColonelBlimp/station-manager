@@ -288,37 +288,110 @@ func TestHandleEvents_ShutdownChClosureEndsStream(t *testing.T) {
 	waitForSubscriberCount(t, hub, 0)
 }
 
-func TestHandleEvents_SlowReaderIsEvictedAndStreamEnds(t *testing.T) {
-	// A client that never reads from its side forces the handler to
-	// stack frames in the per-subscriber buffer. Once it's full, the
-	// hub evicts the subscriber (channel closed); the handler sees
-	// !ok and returns. The observable end-state: SubscriberCount = 0.
-	ts, hub := startEventsServer(t)
+// probeWriter is a minimal http.ResponseWriter + Flusher used to drive
+// handleEvents directly (no loopback), so eviction/subscribe timing is
+// deterministic. It records the hub subscriber count at the first Flush and can
+// optionally block that first Flush on `release` (to park the handler before it
+// consumes, forcing a buffer overflow → eviction). SetWriteDeadline is a no-op
+// so http.NewResponseController succeeds and the handler never hits the
+// nil-logger path. All fields are touched only by the handler goroutine until
+// firstFlush closes, so no locking is needed.
+type probeWriter struct {
+	hub         *events.Hub
+	hdr         http.Header
+	flushed     bool
+	subsAtFlush int
+	firstFlush  chan struct{} // closed on the first Flush
+	release     chan struct{} // if non-nil, the first Flush blocks until closed
+}
 
-	resp, err := http.Get(ts.URL + "/v1/events")
-	if err != nil {
-		t.Fatalf("get: %v", err)
+func (w *probeWriter) Header() http.Header {
+	if w.hdr == nil {
+		w.hdr = http.Header{}
 	}
-	defer resp.Body.Close()
+	return w.hdr
+}
+func (w *probeWriter) Write(b []byte) (int, error)        { return len(b), nil }
+func (w *probeWriter) WriteHeader(int)                    {}
+func (w *probeWriter) SetWriteDeadline(_ time.Time) error { return nil }
+func (w *probeWriter) Flush() {
+	if w.flushed {
+		return
+	}
+	w.flushed = true
+	if w.hub != nil {
+		w.subsAtFlush = w.hub.SubscriberCount()
+	}
+	if w.firstFlush != nil {
+		close(w.firstFlush)
+	}
+	if w.release != nil {
+		<-w.release
+	}
+}
 
+// TestHandleEvents_SubscribesBeforeStreamObservable is the M1 regression: the
+// hub subscription must exist BEFORE the client can observe the open stream
+// (the first Flush), or an event published in that gap is lost (no replay).
+func TestHandleEvents_SubscribesBeforeStreamObservable(t *testing.T) {
+	hub := events.NewHub()
+	defer hub.Close()
+	srv := &Server{hub: hub, shutdownCh: make(chan struct{})}
+
+	w := &probeWriter{hub: hub, firstFlush: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() { srv.handleEvents(w, req); close(done) }()
+
+	select {
+	case <-w.firstFlush:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler never flushed the open response")
+	}
+	if w.subsAtFlush != 1 {
+		t.Errorf("subscriber count at first flush = %d, want 1 (subscription must precede the observable open)", w.subsAtFlush)
+	}
+	cancel()
+	<-done
+}
+
+func TestHandleEvents_SlowReaderIsEvictedAndStreamEnds(t *testing.T) {
+	// Deterministic eviction: park the handler in its open-stream Flush (before
+	// it consumes anything), overflow the per-subscriber buffer so the hub
+	// evicts (closes the channel), then release the Flush — the handler loops,
+	// sees the closed channel, returns, and the deferred unsub runs. Observable
+	// end-state: SubscriberCount == 0. (The httptest-loopback version of this
+	// could drain without evicting and asserted nothing — review 2026-06-19 L1.)
+	hub := events.NewHub()
+	defer hub.Close()
+	srv := &Server{hub: hub, shutdownCh: make(chan struct{})}
+
+	w := &probeWriter{firstFlush: make(chan struct{}), release: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() { srv.handleEvents(w, req); close(done) }()
+
+	<-w.firstFlush // handler has subscribed and is parked in the open Flush
 	waitForSubscriberCount(t, hub, 1)
 
-	// Publish enough to overflow the 64-wide buffer + a few extras.
-	// The handler's own consume loop runs concurrently, so we need
-	// significantly more than 64 to reliably overflow; 500 is
-	// plenty without being slow.
+	// Overflow the buffer while the handler isn't consuming → hub evicts.
 	for i := range 500 {
 		hub.Publish(events.NameQsoStored, events.QsoStoredPayload{QsoID: int64(i)})
 	}
+	close(w.release) // let the open Flush return → handler sees the closed channel
 
-	// Once evicted, the handler exits — subscriber count hits 0
-	// regardless of how far along the client got reading. Note:
-	// this test may occasionally drain without eviction if the
-	// client (httptest loopback) happens to read fast enough; the
-	// assertion holds either way since the test's Cleanup closes
-	// the hub.
-	_ = resp
-	_ = hub
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not exit after the subscriber was evicted")
+	}
+	waitForSubscriberCount(t, hub, 0) // deferred unsub ran
 }
 
 func TestHandleEvents_Keepalive(t *testing.T) {

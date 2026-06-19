@@ -151,6 +151,70 @@ func TestE2E_SSE_InsertFlow(t *testing.T) {
 	}
 }
 
+// TestE2E_SSE_UpdateAndDeleteFlow pins qso.updated and qso.deleted through the
+// SSE stream (review 2026-06-19 M2 — two of the five documented event types were
+// unexercised at the API boundary). No forwarder is configured, so the only
+// events are the qso lifecycle ones: stored (submit) → updated (PATCH) →
+// deleted (DELETE), in monotonic hub-id order.
+func TestE2E_SSE_UpdateAndDeleteFlow(t *testing.T) {
+	h := startE2E(t) // no forwarder → no forward.* events to interleave
+	defer h.shutdown()
+
+	ts := httptest.NewServer(h.srv.httpServer.Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/events")
+	if err != nil {
+		t.Fatalf("open SSE: %v", err)
+	}
+	defer resp.Body.Close()
+
+	waitForSubscriberCount(t, h.srv.hub, 1)
+
+	lbID := createTestLogbook(t, h.srv, "My Log", "G4ABC")
+	qsoID, qsoUUID := submitAndGetID(t, h.srv, lbID, testQsoADIF)
+
+	if w := patchQso(t, h.srv, qsoUUID, `{"comment":"edited via SSE test"}`); w.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d; body = %s", w.Code, w.Body.String())
+	}
+	if w := deleteQso(t, h.srv, qsoUUID); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	// Drain stored + updated + deleted.
+	frames := consumeSSE(t, resp.Body, 3, 3*time.Second)
+
+	var sawUpdated, sawDeleted bool
+	for _, f := range frames {
+		switch f.name {
+		case events.NameQsoUpdated:
+			var p events.QsoUpdatedPayload
+			if err := json.Unmarshal([]byte(f.data), &p); err != nil {
+				t.Fatalf("qso.updated payload: %v, raw=%q", err, f.data)
+			}
+			if p.QsoID != qsoID || p.LogbookID != lbID {
+				t.Errorf("qso.updated payload = %+v, want {qso:%d, logbook:%d}", p, qsoID, lbID)
+			}
+			sawUpdated = true
+		case events.NameQsoDeleted:
+			var p events.QsoDeletedPayload
+			if err := json.Unmarshal([]byte(f.data), &p); err != nil {
+				t.Fatalf("qso.deleted payload: %v, raw=%q", err, f.data)
+			}
+			if p.QsoID != qsoID || p.LogbookID != lbID {
+				t.Errorf("qso.deleted payload = %+v, want {qso:%d, logbook:%d}", p, qsoID, lbID)
+			}
+			sawDeleted = true
+		}
+	}
+	if !sawUpdated {
+		t.Errorf("did not receive qso.updated frame; got %+v", frames)
+	}
+	if !sawDeleted {
+		t.Errorf("did not receive qso.deleted frame; got %+v", frames)
+	}
+}
+
 // TestE2E_SSE_FailureFlow proves forward.failed is emitted when the
 // stub is configured to always return a terminal outcome. The row
 // should transition pending → failed and the subscriber should see
