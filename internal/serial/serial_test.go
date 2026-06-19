@@ -351,7 +351,10 @@ func feedOverflow(readCh chan<- []byte) {
 	}
 }
 
-func TestOversizedLineEmitsErrorAndIsDropped(t *testing.T) {
+// TestOversizedLineCountedAndDropped: an oversized line is COUNTED via
+// DroppedLines (recoverable diagnostic, review 2026-06-19 M1) and discarded —
+// no response is delivered for it.
+func TestOversizedLineCountedAndDropped(t *testing.T) {
 	o := newOverflowPort()
 	cfg := Config{
 		PortName:      "mock",
@@ -363,67 +366,68 @@ func TestOversizedLineEmitsErrorAndIsDropped(t *testing.T) {
 
 	c := newPort(o, cfg)
 
-	// Feed enough data to exceed maxLineSize (4096) without any delimiter.
+	// Feed enough data to exceed maxLineSize (4096) without any delimiter, then
+	// end the oversized line with its delimiter.
 	feedOverflow(o.readCh)
-
-	// Send a delimiter to end the oversized line, then close the mock.
 	o.readCh <- []byte(";")
-	close(o.readCh)
 
-	// We expect one best-effort error on Errors(), and no line delivered.
-	select {
-	case err, ok := <-c.Errors():
-		if !ok {
-			t.Fatalf("expected error value before channel close")
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for c.DroppedLines() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("oversized line was not counted (DroppedLines still 0)")
 		}
-		if err == nil {
-			t.Fatalf("expected non-nil error from Errors() for oversized line")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("timed out waiting for error from Errors() for oversized line")
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-
-	// There should be no response line because the oversized line is dropped.
+	// No response line: the oversized line was dropped, not delivered.
 	if _, err := c.ReadResponse(ctx); err == nil {
 		t.Fatalf("expected error or timeout when reading after oversized line; got nil")
 	}
 }
 
-// TestOversizedLineEmitsErrorOnErrorsStream verifies that when the
-// readerLoop encounters a line longer than maxLineSize, it emits a
-// best-effort error on Errors() and does not panic or deadlock.
-func TestOversizedLineEmitsErrorOnErrorsStream(t *testing.T) {
+// TestOversizedLineDoesNotHideTerminalError is the M1 regression: a recoverable
+// oversized-line drop is counted (NOT placed on the one-slot terminal errCh), so
+// a subsequent non-timeout read error is still delivered on Errors() rather than
+// dropped because a warning had filled the slot.
+func TestOversizedLineDoesNotHideTerminalError(t *testing.T) {
 	o := newOverflowPort()
-	cfg := Config{
-		PortName:      "mock",
-		BaudRate:      9600,
-		DataBits:      8,
-		StopBits:      1,
-		LineDelimiter: ';',
-	}
-
+	cfg := Config{PortName: "mock", BaudRate: 9600, LineDelimiter: ';'}
 	c := newPort(o, cfg)
 
-	// Feed enough data to exceed maxLineSize (4096) without any delimiter.
+	// Oversized line (no delimiter) → counted + discarding.
 	feedOverflow(o.readCh)
 
-	// Close underlying channel so readerLoop eventually exits after
-	// processing the oversized line.
-	close(o.readCh)
+	// Wait for the overflow to register BEFORE injecting the terminal error —
+	// mockPort.Read checks errToReturn before readCh, so setting it too early
+	// would short-circuit the buffered overflow chunks and skip the count.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for c.DroppedLines() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("oversized line was not counted before error injection")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Inject a terminal read error, then wake the reader with one more discarded
+	// chunk so its NEXT Read returns the injected error.
+	injected := stderr.New("device removed")
+	o.mu.Lock()
+	o.errToReturn = injected
+	o.mu.Unlock()
+	o.readCh <- []byte("noise-no-delim")
 
 	select {
 	case err, ok := <-c.Errors():
-		if !ok {
-			t.Fatalf("expected error value before channel close for oversized line")
+		if !ok || !stderr.Is(err, injected) {
+			t.Fatalf("expected the injected terminal error, got ok=%v err=%v", ok, err)
 		}
-		if err == nil {
-			t.Fatalf("expected non-nil error from Errors() for oversized line")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("timed out waiting for Errors() notification for oversized line")
+	case <-time.After(time.Second):
+		t.Fatalf("terminal read error was not delivered (hidden by the oversized drop?)")
+	}
+	if c.DroppedLines() == 0 {
+		t.Errorf("oversized line should have been counted in DroppedLines")
 	}
 }
 
@@ -801,11 +805,13 @@ func TestOversizedLineTailIsDiscarded(t *testing.T) {
 	// would be emitted as a spurious response.
 	o.readCh <- []byte("TAIL;GOOD;")
 
-	// Drain the best-effort oversized-line error.
-	select {
-	case <-c.Errors():
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("timed out waiting for oversized-line error")
+	// The oversized line is counted, not sent on Errors() (review M1).
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for c.DroppedLines() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("oversized line was not counted (DroppedLines still 0)")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -848,11 +854,14 @@ func TestFramingResumesAfterOversizedLine(t *testing.T) {
 	o.readCh <- []byte("OND;")
 	o.readCh <- []byte("THIRD;")
 
-	// Drain the best-effort oversized-line error so it doesn't block.
-	select {
-	case <-c.Errors():
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("timed out waiting for oversized-line error")
+	// The oversized line is COUNTED (recoverable), not sent on the terminal
+	// Errors() channel (review 2026-06-19 M1). Wait for the drop to register.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for c.DroppedLines() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("oversized line was not counted (DroppedLines still 0)")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

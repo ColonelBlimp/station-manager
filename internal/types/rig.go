@@ -107,10 +107,10 @@ type RigAudioConfig struct {
 
 // RigOverrides shadows per-rig defaults from cat.RigDefinition. Field
 // types are stdlib primitives so types stays stdlib-only; the composition
-// step in internal/rigconfig translates string values ("none", "even",
-// "odd" for Parity; a single-character string for LineDelimiter) into
-// go.bug.st/serial enum values when constructing the runtime
-// serial.Config.
+// step in internal/rigserial translates string values ("none", "even",
+// "odd" for Parity; a single byte OR the "0xNN" hex form for LineDelimiter —
+// e.g. CI-V's "0xFD") into go.bug.st/serial enum values when constructing the
+// runtime serial.Config, and validates the numeric fields.
 type RigOverrides struct {
 	BaudRate      int    `json:"baud_rate,omitempty"`
 	DataBits      int    `json:"data_bits,omitempty"`

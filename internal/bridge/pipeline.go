@@ -3,7 +3,6 @@ package bridge
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	stderr "errors"
 	"strconv"
 	"strings"
@@ -11,10 +10,9 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/rigserial"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 	"github.com/ColonelBlimp/station-manager/internal/types"
-
-	bugst "go.bug.st/serial"
 )
 
 // livenessTimeout is the default data-flow silence window after
@@ -183,6 +181,16 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	// a bridge-policy timeout, not a rigdef-derived serial parameter, so it's
 	// applied here rather than inside buildSerialConfig.
 	serialCfg.WriteTimeoutMS = int(s.writeWatchdog / time.Millisecond)
+
+	// On Unix the OS can't set RTS/DTR before opening the port, so a rigdef that
+	// de-asserts them (e.g. the IC-7300, to keep USB SEND from keying PTT) can
+	// still see a brief assert pulse at open — go.bug.st/serial can't guarantee
+	// otherwise (review 2026-06-19 H1). Warn once per connect so the operator
+	// knows the rig-side mitigation (USB SEND = OFF) is the real fix.
+	if rigserial.OpenMayPulseLines(serialCfg) {
+		s.logger.WarnWith().Str("port", serialCfg.PortName).
+			Msg("bridge: OS may briefly assert RTS/DTR at open; ensure the rig's PTT-on-control-line (e.g. IC-7300 USB SEND) is OFF")
+	}
 
 	// Pre-encode INIT and READ before touching hardware. Both encodes
 	// are pure (no I/O); if either rigdef entry is missing, fail fast
@@ -845,55 +853,33 @@ func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) 
 	// Per-rig serial overrides (config.md §10, B2): a non-zero/non-empty override
 	// field wins over the rigdef default; a zero field inherits. brCfg.Overrides is
 	// the active rig's RigConfig.Overrides, projected by Config.ActiveBridge().
+	// The effective values are then handed to the shared rigserial composer, which
+	// parses (parity / stop-bits / 0xNN delimiter) and validates (baud / data
+	// bits) — one source of truth shared with the diagnostic CLIs so they can't
+	// disagree on RTS/DTR carry-through or delimiter parsing (review 2026-06-19
+	// H2). A bad numeric field is a config error here, surfaced as exitPermanent
+	// by the caller, not a transient open failure (review 2026-06-19 M2).
 	ov := brCfg.Overrides
-	baudRate := rigSerial.BaudRate
+	eff := rigSerial
 	if ov.BaudRate != 0 {
-		baudRate = ov.BaudRate
+		eff.BaudRate = ov.BaudRate
 	}
-	dataBits := rigSerial.DataBits
 	if ov.DataBits != 0 {
-		dataBits = ov.DataBits
+		eff.DataBits = ov.DataBits
 	}
-	stopBitsN := rigSerial.StopBits
 	if ov.StopBits != 0 {
-		stopBitsN = ov.StopBits
+		eff.StopBits = ov.StopBits
 	}
-	parityStr := rigSerial.Parity
 	if ov.Parity != "" {
-		parityStr = ov.Parity
+		eff.Parity = ov.Parity
 	}
-	delimStr := rigSerial.LineDelimiter
 	if ov.LineDelimiter != "" {
-		delimStr = ov.LineDelimiter
+		eff.LineDelimiter = ov.LineDelimiter
 	}
-	readTimeoutMS := rigSerial.ReadTimeoutMS
 	if ov.ReadTimeoutMS != 0 {
-		readTimeoutMS = ov.ReadTimeoutMS
+		eff.ReadTimeoutMS = ov.ReadTimeoutMS
 	}
-
-	parity, err := parityFromString(parityStr)
-	if err != nil {
-		return serial.Config{}, err
-	}
-	stopBits, err := stopBitsFromInt(stopBitsN)
-	if err != nil {
-		return serial.Config{}, err
-	}
-	delim, err := delimiterFromString(delimStr)
-	if err != nil {
-		return serial.Config{}, err
-	}
-	return serial.Config{
-		PortName:      brCfg.Port,
-		BaudRate:      baudRate,
-		DataBits:      dataBits,
-		Parity:        parity,
-		StopBits:      stopBits,
-		LineDelimiter: delim,
-		ReadTimeoutMS: readTimeoutMS,
-		RTS:           rigSerial.RTS,
-		DTR:           rigSerial.DTR,
-	}, nil
+	return rigserial.Compose(eff, brCfg.Port)
 }
 
 // civFrameDelimiter is the CI-V frame terminator (0xFD). The icom_civ codec
@@ -969,71 +955,10 @@ func splitCIVFrames(b []byte) [][]byte {
 	return frames
 }
 
-// parityFromString maps the rigdef's parity string to the
-// go.bug.st/serial enum. Empty string defaults to NoParity (matches
-// serial.validateConfig's zero-value treatment); unknown values
-// surface as an error so a typo in a future rigdef fails loudly.
-func parityFromString(p string) (bugst.Parity, error) {
-	switch strings.ToLower(strings.TrimSpace(p)) {
-	case "", "none":
-		return bugst.NoParity, nil
-	case "odd":
-		return bugst.OddParity, nil
-	case "even":
-		return bugst.EvenParity, nil
-	case "mark":
-		return bugst.MarkParity, nil
-	case "space":
-		return bugst.SpaceParity, nil
-	default:
-		return 0, stderr.New("bridge: unknown parity " + strconv.Quote(p))
-	}
-}
-
-// stopBitsFromInt maps the rigdef's stop_bits integer to the
-// go.bug.st/serial enum. Zero defaults to OneStopBit (matches
-// serial.validateConfig). FT-710 / FTDX10 rigdefs use 1.
-func stopBitsFromInt(n int) (bugst.StopBits, error) {
-	switch n {
-	case 0, 1:
-		return bugst.OneStopBit, nil
-	case 2:
-		return bugst.TwoStopBits, nil
-	default:
-		return 0, stderr.New("bridge: unsupported stop_bits " + strconv.Itoa(n))
-	}
-}
-
-// delimiterFromString extracts the single-byte line delimiter from
-// the rigdef's string form. The bridge requires every rigdef to
-// declare an explicit delimiter — leaving it empty would lean on a
-// serial-package-private fallback (zero byte → '\r'), which is the
-// kind of cross-package contract that drifts silently. Per the
-// 2026-05-10 internal-bridge-pipeline review (#7), an empty value
-// is a rigdef config error and surfaces loudly at startup. Both
-// shipping rigdefs declare ';' so this branch is unreachable for
-// supported drivers; it guards against a future rigdef that forgets
-// the field.
-func delimiterFromString(s string) (byte, error) {
-	if s == "" {
-		return 0, stderr.New("bridge: rigdef serial.line_delimiter is required (no implicit default)")
-	}
-	// Hex-byte form "0xFD" (case-insensitive) for binary protocols whose frame
-	// delimiter isn't a printable character: a raw 0xFD byte can't be a JSON
-	// string (not valid UTF-8), and "ý" would unmarshal to the 2-byte UTF-8 of
-	// U+00FD, not the single byte. The CI-V rigdef declares "0xFD" (ADR 0034).
-	if len(s) == 4 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
-		b, err := hex.DecodeString(s[2:])
-		if err != nil || len(b) != 1 {
-			return 0, stderr.New("bridge: line_delimiter hex form must be 0x followed by two hex digits, got " + strconv.Quote(s))
-		}
-		return b[0], nil
-	}
-	if len(s) != 1 {
-		return 0, stderr.New("bridge: line_delimiter must be a single byte or 0xNN hex form, got " + strconv.Quote(s))
-	}
-	return s[0], nil
-}
+// Serial parity / stop-bits / delimiter parsing now lives in the shared
+// internal/rigserial composer (used by buildSerialConfig above + the diagnostic
+// CLIs), so the bridge and catcli can't drift on RTS/DTR or 0xNN delimiters
+// (review 2026-06-19 H2).
 
 // errMessage flattens an error to its top-level message. Used in
 // rig-disconnected reason strings where the operator-facing toast

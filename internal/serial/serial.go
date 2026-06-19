@@ -5,6 +5,7 @@ import (
 	"context"
 	stderr "errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -122,12 +123,26 @@ type Port struct {
 	doneCh    chan struct{}
 
 	// errCh carries a single terminal error from the reader loop, if any.
-	// It is closed when readerLoop exits.
+	// It is closed when readerLoop exits. Recoverable diagnostics (an
+	// oversized-line drop) are NOT sent here — they're counted in droppedLines —
+	// so a recoverable warning can never fill the one slot and hide the terminal
+	// error (review 2026-06-19 M1).
 	errCh chan error
+
+	// droppedLines counts lines discarded for exceeding maxLineSize. Recoverable
+	// (the reader keeps running); exposed via DroppedLines for observability
+	// instead of riding the terminal errCh.
+	droppedLines atomic.Uint64
 
 	closed bool
 	mu     sync.RWMutex
 }
+
+// DroppedLines returns the cumulative count of reader-loop lines discarded for
+// exceeding maxLineSize (4096 bytes) on a noisy/corrupt serial line. Recoverable
+// — the reader keeps running; this is a diagnostic counter, separate from the
+// terminal Errors() channel (review 2026-06-19 M1).
+func (p *Port) DroppedLines() uint64 { return p.droppedLines.Load() }
 
 // Open initializes and opens a serial port based on the given Config. It returns a Port or an error if unsuccessful.
 func Open(cfg Config) (*Port, error) {
@@ -145,12 +160,21 @@ func Open(cfg Config) (*Port, error) {
 		Parity:   ncfg.Parity,
 	}
 
-	// Set the initial DTR/RTS line state AT OPEN when the config specifies it.
-	// go.bug.st/serial asserts both when InitialStatusBits is nil; for a rig
-	// whose PTT can be mapped to a control line (Icom USB SEND), asserting on
-	// open would key the transmitter, so we must set the lines before the port
-	// is live — not assert-then-clear. The baseline is the library default
-	// (both true); a non-nil field overrides just that line.
+	// Set the initial DTR/RTS line state via InitialStatusBits when the config
+	// specifies it. go.bug.st/serial asserts both when InitialStatusBits is nil;
+	// for a rig whose PTT can be mapped to a control line (Icom USB SEND),
+	// leaving them asserted would key the transmitter, so we de-assert. The
+	// baseline is the library default (both true); a non-nil field overrides just
+	// that line.
+	//
+	// IMPORTANT (review 2026-06-19 H1): this does NOT guarantee a pulse-free open
+	// on Unix. go.bug.st/serial documents that Linux/macOS cannot set modem
+	// output bits BEFORE the port is opened — InitialStatusBits is applied just
+	// after open, so a de-asserted line can still go true for a few ms. On a rig
+	// with USB SEND mapped to a control line that brief pulse can key TX. The real
+	// mitigation is the rig-side setting (e.g. IC-7300 USB SEND = OFF); callers
+	// warn via rigserial.OpenMayPulseLines. Only Windows can set the bits before
+	// open.
 	if ncfg.RTS != nil || ncfg.DTR != nil {
 		bits := &serial.ModemOutputBits{RTS: true, DTR: true}
 		if ncfg.RTS != nil {
@@ -461,14 +485,13 @@ func (p *Port) readerLoop() {
 				}
 				lineBuf = append(lineBuf, chunk...)
 				if len(lineBuf) > maxLineSize {
-					// drop overly long lines and notify via Errors() on a
-					// best-effort basis without terminating the loop.
+					// Drop the overly long line and keep running. This is
+					// recoverable, so it must NOT ride the terminal errCh (a
+					// best-effort send there could fill the one slot and hide a
+					// later terminal read error) — count it instead (review M1).
 					lineBuf = lineBuf[:0]
 					discarding = true
-					select {
-					case p.errCh <- errors.New(errors.Op("serial.readerLoop")).WithMsg("serial: dropped line exceeding maxLineSize (4096 bytes)"):
-					default:
-					}
+					p.droppedLines.Add(1)
 				}
 				break
 			}

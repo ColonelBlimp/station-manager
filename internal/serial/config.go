@@ -51,14 +51,18 @@ type Config struct {
 	WriteTimeoutMS int `json:"write_timeout_ms"`
 
 	// RTS and DTR set the initial state of the corresponding modem output
-	// lines AT OPEN. nil leaves go.bug.st/serial's default (both asserted /
+	// lines at open. nil leaves go.bug.st/serial's default (both asserted /
 	// true) — the historical behaviour and correct for USB-CDC rigs where the
 	// lines aren't flow control. A non-nil false DE-ASSERTS the line: required
 	// for Icom CI-V, where the rig's USB SEND function can map PTT to RTS or
 	// DTR, so a port opened with the line asserted would key the transmitter
-	// (ADR 0034 bench finding). Applied via serial.Mode.InitialStatusBits so
-	// the line is never asserted even momentarily — there is no
-	// assert-then-clear window.
+	// (ADR 0034 bench finding). Applied via serial.Mode.InitialStatusBits.
+	//
+	// CAVEAT (review 2026-06-19 H1): on Unix this is NOT a pulse-free guarantee.
+	// go.bug.st/serial cannot set modem bits before opening the port on
+	// Linux/macOS, so a de-asserted line can momentarily assert (a few ms) right
+	// after open — enough to key a control-line-PTT rig. The dependable fix is
+	// the rig-side setting (IC-7300 USB SEND = OFF); see rigserial.OpenMayPulseLines.
 	RTS *bool `json:"rts,omitempty"`
 	DTR *bool `json:"dtr,omitempty"`
 }

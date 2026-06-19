@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/rigserial"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 	bugst "go.bug.st/serial"
 )
@@ -64,9 +65,23 @@ func main() {
 		if !ok {
 			log.Fatalf("rig %q not in database; available: %v", *rigID, cat.List())
 		}
-		cfg = serialConfigFromRig(def.Serial, *device)
+		// Use the SHARED composer the bridge uses (review 2026-06-19 H2): it
+		// carries the rigdef's RTS/DTR through (so an IC-7300 opens with the
+		// control lines de-asserted, not the go.bug.st default of asserted) and
+		// parses the "0xFD" CI-V delimiter correctly.
+		var err error
+		cfg, err = rigserial.Compose(def.Serial, *device)
+		if err != nil {
+			log.Fatalf("rig %q serial config: %v", *rigID, err)
+		}
 	} else {
 		cfg = manualSerialConfig(*device, *baud, *dataBits, *parity, *stopBits, *delimiter)
+	}
+
+	// Unix can briefly pulse RTS/DTR at open even when de-asserting (H1): warn so
+	// a control-line-PTT rig (e.g. IC-7300 USB SEND) isn't keyed unexpectedly.
+	if rigserial.OpenMayPulseLines(cfg) {
+		log.Printf("WARNING: opening %s may briefly assert RTS/DTR; ensure the rig's PTT-on-control-line (e.g. IC-7300 USB SEND) is OFF", *device)
 	}
 
 	if *initBurst && !haveRig {
@@ -210,52 +225,23 @@ func sendNamedCommand(port *serial.Port, def cat.RigDefinition, name string, tim
 	return port.WriteCommandBytes(ctx, wire)
 }
 
-// serialConfigFromRig builds a serial.Config from a rig-database entry's
-// RigSerial block plus the operator-supplied port path. This is the
-// inline diagnostic version of what internal/rigconfig will eventually
-// do in a more principled way (with operator-override support); catcli
-// doesn't need overrides.
-func serialConfigFromRig(rs cat.RigSerial, portName string) serial.Config {
-	cfg := serial.Config{
-		PortName:      portName,
-		BaudRate:      rs.BaudRate,
-		DataBits:      rs.DataBits,
-		ReadTimeoutMS: rs.ReadTimeoutMS,
-		LineDelimiter: firstByteOrZero(rs.LineDelimiter),
-	}
-	switch rs.StopBits {
-	case 2:
-		cfg.StopBits = bugst.TwoStopBits
-	default:
-		cfg.StopBits = bugst.OneStopBit
-	}
-	switch strings.ToLower(rs.Parity) {
-	case "even":
-		cfg.Parity = bugst.EvenParity
-	case "odd":
-		cfg.Parity = bugst.OddParity
-	default:
-		cfg.Parity = bugst.NoParity
-	}
-	return cfg
-}
-
-func firstByteOrZero(s string) byte {
-	if s == "" {
-		return 0
-	}
-	return s[0]
-}
+// The rigdef → serial.Config composition now lives in the shared
+// internal/rigserial package (used by the bridge too), so catcli can't drift
+// from the production path on RTS/DTR carry-through or 0xNN delimiter parsing
+// (review 2026-06-19 H2). The -rig path calls rigserial.Compose directly in main.
 
 func manualSerialConfig(device string, baud, dataBits int, parity string, stopBits int, delim string) serial.Config {
-	if delim == "" {
-		log.Fatalf("invalid -delim flag: must be a non-empty string")
+	// Parse the delimiter via the shared helper so a manual `-delim 0xFD` works
+	// like the rigdef form, not the old first-byte truncation.
+	d, err := rigserial.DelimiterFromString(delim)
+	if err != nil {
+		log.Fatalf("invalid -delim flag: %v", err)
 	}
 	cfg := serial.Config{
 		PortName:      device,
 		BaudRate:      baud,
 		DataBits:      dataBits,
-		LineDelimiter: delim[0],
+		LineDelimiter: d,
 	}
 	switch strings.ToUpper(parity) {
 	case "N":

@@ -125,6 +125,18 @@ accessible from the My Station tab in the SPA:
   and mode directly from a connected transceiver (the tested drivers
   are the Yaesu FT-710 and FTdx10 over Kenwood-style CAT and the Icom
   IC-7300 over CI-V).
+
+  > **Icom IC-7300 prerequisites — set these in the radio's menu first.**
+  > Set **USB SEND = OFF** (Menu » SET » Connectors » USB SEND). The IC-7300
+  > can map PTT to a serial control line (RTS/DTR); on Linux/macOS the OS may
+  > briefly assert that line when the daemon opens the port, which would key
+  > the transmitter. Turning USB SEND off removes PTT from the control line
+  > and is the dependable fix (the daemon de-asserts the lines, but the OS
+  > can't guarantee a pulse-free open — you'll see a one-line warning at
+  > connect). Also set **CI-V Transceive = ON** (so the rig pushes
+  > frequency/mode changes), **CI-V USB Port = Link to [REMOTE]**, and match
+  > the daemon's baud to the rig's **CI-V Baud Rate** (the default rigdef
+  > uses 19200 — that's the CI-V baud, not the USB baud). See ADR 0034.
 - **Forwarders** (QRZ Logbook, etc.) if you want QSOs uploaded to
   online services. No forwarders are configured by default — add an
   entry to the `forwarders` array in `config.json` for each destination

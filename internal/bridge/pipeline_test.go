@@ -1081,30 +1081,30 @@ func TestBuildSerialConfig_FromIcomCIVRigDef(t *testing.T) {
 	}
 }
 
-// TestDelimiterFromString covers the literal-char and 0xNN hex forms plus the
-// rejection paths, so the CI-V "0xFD" delimiter and the Kenwood ";" both round
-// through one parser.
-func TestDelimiterFromString(t *testing.T) {
-	ok := map[string]byte{
-		";":    ';',
-		"\r":   '\r',
-		"0xFD": 0xFD,
-		"0XFD": 0xFD,
-		"0x3b": ';',
+// Delimiter parsing moved to internal/rigserial (shared with the diagnostic
+// CLIs, review 2026-06-19 H2); its round-trip + rejection cases are covered by
+// rigserial's TestDelimiterFromString. The bridge's IC-7300 path is still pinned
+// end-to-end by TestBuildSerialConfig_FromIcomCIVRigDef above (0xFD + RTS/DTR).
+
+// TestBuildSerialConfig_RejectsInvalidOverride guards review 2026-06-19 M2: a bad
+// numeric per-rig override is a config error returned by buildSerialConfig (the
+// caller maps it to exitPermanent), not a transient open failure the supervisor
+// would retry forever.
+func TestBuildSerialConfig_RejectsInvalidOverride(t *testing.T) {
+	def, ok := cat.Lookup("yaesu-ft710")
+	if !ok {
+		t.Fatal("yaesu-ft710 rigdef not found")
 	}
-	for in, want := range ok {
-		got, err := delimiterFromString(in)
-		if err != nil {
-			t.Errorf("delimiterFromString(%q): unexpected error %v", in, err)
-			continue
-		}
-		if got != want {
-			t.Errorf("delimiterFromString(%q) = %#x, want %#x", in, got, want)
-		}
+	if _, err := buildSerialConfig(types.BridgeSerialConfig{
+		Port:      "/dev/ttyUSB0",
+		Overrides: types.RigOverrides{BaudRate: -1},
+	}, def.Serial); err == nil {
+		t.Fatal("negative baud_rate override should be rejected (→ exitPermanent)")
 	}
-	for _, bad := range []string{"", "ab", "0xFFF", "0x", "0xGG", "ý"} {
-		if _, err := delimiterFromString(bad); err == nil {
-			t.Errorf("delimiterFromString(%q) = nil error, want error", bad)
-		}
+	if _, err := buildSerialConfig(types.BridgeSerialConfig{
+		Port:      "/dev/ttyUSB0",
+		Overrides: types.RigOverrides{DataBits: 9},
+	}, def.Serial); err == nil {
+		t.Fatal("data_bits override of 9 should be rejected (→ exitPermanent)")
 	}
 }
