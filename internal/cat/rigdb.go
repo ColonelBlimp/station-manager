@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path"
 	"sort"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 //go:embed rigs/*.json
@@ -64,6 +66,87 @@ func init() {
 func Lookup(id string) (RigDefinition, bool) {
 	def, ok := rigDB[id]
 	return def, ok
+}
+
+// CloneRigDefinition returns a deep copy of def whose slices, maps, and pointers
+// share no backing storage with the original. Lookup returns a rigdef by value,
+// but its Commands/States/ModeMappings (and the nested ModeSeq/Frames/Markers/
+// ValueMappings) still point at the process-global rigDB entry — a caller that
+// mutated them in place would corrupt every later lookup of that id (review
+// 2026-06-19 L2). All current callers are read-only, so Lookup itself stays
+// zero-cost (no clone on the per-command lookup path); a caller that needs to
+// MODIFY a looked-up rigdef (e.g. a future operator-override merge) must clone
+// first via this helper. That keeps the foot-gun opt-in rather than taxing every
+// read.
+func CloneRigDefinition(def RigDefinition) RigDefinition {
+	clone := def // copies scalar fields + the all-scalar RigSerial/RigTiming structs
+
+	// RigSerial.RTS/DTR are *bool tri-state pointers; copy the pointees so a
+	// caller toggling them can't reach back into the shared definition.
+	if def.Serial.RTS != nil {
+		v := *def.Serial.RTS
+		clone.Serial.RTS = &v
+	}
+	if def.Serial.DTR != nil {
+		v := *def.Serial.DTR
+		clone.Serial.DTR = &v
+	}
+
+	if def.Commands != nil {
+		clone.Commands = make([]Command, len(def.Commands))
+		for i, c := range def.Commands {
+			c.Frames = cloneStringSlice(c.Frames)
+			if c.ModeSeq != nil {
+				ms := make([]ModeSequence, len(c.ModeSeq))
+				for j, m := range c.ModeSeq {
+					m.Frames = cloneStringSlice(m.Frames)
+					ms[j] = m
+				}
+				c.ModeSeq = ms
+			}
+			clone.Commands[i] = c
+		}
+	}
+
+	if def.States != nil {
+		clone.States = make([]State, len(def.States))
+		for i, s := range def.States {
+			if s.Markers != nil {
+				mk := make([]Marker, len(s.Markers))
+				for j, m := range s.Markers {
+					if m.ValueMappings != nil {
+						vm := make([]ValueMapping, len(m.ValueMappings))
+						copy(vm, m.ValueMappings) // ValueMapping is all-scalar
+						m.ValueMappings = vm
+					}
+					mk[j] = m
+				}
+				s.Markers = mk
+			}
+			clone.States[i] = s
+		}
+	}
+
+	if def.ModeMappings != nil {
+		mm := make(map[string]types.ModeMapping, len(def.ModeMappings))
+		for k, v := range def.ModeMappings {
+			mm[k] = v // types.ModeMapping is all-scalar
+		}
+		clone.ModeMappings = mm
+	}
+
+	return clone
+}
+
+// cloneStringSlice returns a copy of s sharing no backing array, or nil when s
+// is nil (preserving the nil/empty distinction so a round-trip is exact).
+func cloneStringSlice(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
 }
 
 // List returns the ids of all known rigs, sorted alphabetically.

@@ -99,7 +99,8 @@ export interface BridgeFields {
      * Whether the configured rig can run the tune-carrier feature (ADR
      * 0027) — rigdef-derived (the rig defines set_mode/set_power/tx_on/
      * tx_off). The SPA shows the Tune button only when true; absent
-     * (treated as false) for a rig that can't tune (e.g. the FT-710).
+     * (treated as false) for a rig whose rigdef lacks those commands.
+     * (All three shipped drivers — FT-710, FTdx10, IC-7300 — tune.)
      */
     tune?: boolean;
     /**

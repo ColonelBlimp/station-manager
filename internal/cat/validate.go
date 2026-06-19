@@ -96,6 +96,9 @@ func ValidateRigDefinition(def RigDefinition) error {
 		if c.Pad < 0 {
 			return errors.New(op).WithMsgf("command %q has negative pad %d", c.Name, c.Pad)
 		}
+		if err := validateCommandRange(op, c); err != nil {
+			return err
+		}
 
 		// Mirror EncodeCommand's valueless test: a command is valueless only
 		// when it has no ValueMap, no Pad, and no % verb. Everything else fills
@@ -214,6 +217,9 @@ func validateCIV(def RigDefinition) error {
 					"command %q must not be exposed (TX/playback commands are controller-only, ADR 0027)", c.Name)
 			}
 		}
+		if err := validateCommandRange(op, c); err != nil {
+			return err
+		}
 
 		if _, ok := civEncodingKinds[c.Encoding]; !ok {
 			return errors.New(op).WithMsgf(
@@ -291,6 +297,23 @@ func validateCIV(def RigDefinition) error {
 }
 
 // validateModeSeq checks an EncodingModeSeq command: it must carry at least one
+// validateCommandRange rejects a malformed numeric range on a command (review
+// 2026-06-19 M2): if Min or Max is set, the range must be well-formed and
+// actually enforceable — 0 <= Min <= Max with Max > 0. This stops a rigdef from
+// declaring a Min that's silently never checked (EncodeCommand only enforces
+// when Max > 0) or an inverted range that rejects everything.
+func validateCommandRange(op errors.Op, c Command) error {
+	if c.Min == 0 && c.Max == 0 {
+		return nil // unbounded — the common case
+	}
+	if c.Min < 0 || c.Max <= 0 || c.Min > c.Max {
+		return errors.New(op).WithMsgf(
+			"command %q range [min %d, max %d] invalid: need 0 <= min <= max and max > 0",
+			c.Name, c.Min, c.Max)
+	}
+	return nil
+}
+
 // mode entry, each entry needs at least one frame, every frame must be valid
 // hex, and the mode literals must be unique (lookupModeSeq returns the first
 // match, so a duplicate would silently shadow — the CI-V analogue of the

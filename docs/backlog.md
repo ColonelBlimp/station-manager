@@ -60,6 +60,24 @@ when it ships — don't let this rot into a graveyard.
 
 ## Features / enhancements
 
+- **CI-V `sets_state` value-compatibility validation.** Filed from the
+  `internal/cat` review (2026-06-19, L1). `ValidateRigDefinition` rejects a CI-V
+  `sets_state` that names no State marker, but it does NOT verify the command's
+  *encoding* can populate that marker — so a future CI-V rigdef could pass
+  validation with a mismatched pair (a `bcd_freq` command setting a mode tag, a
+  `bcd_power` command setting `MAINMODE`, or a valueless command declaring
+  `sets_state`), and the wait-for-ACK path (ADR 0034) would then synthesize the
+  wrong/empty state push after a successful ACK. NOT an active bug — the shipped
+  IC-7300 rigdef's `sets_state` pairs are all correct (pinned by
+  `TestCommandSetsState`). Deferred until external/operator rigdef loading is real
+  (`RegisterExternalDir` is still a stub), since that's when an unvetted rigdef
+  could actually reach this gap. Fix: extend CI-V validation so `sets_state` is
+  encoding-compatible (`bcd_freq`→BCD-freq marker, `bcd_power`→BCD-level marker,
+  `mode_seq`→marker whose mapped values include the mode literals; valueless
+  commands can't declare `sets_state`), with negative tests per incompatible pair
+  + a positive test per shipped IC-7300 `sets_state` command. See
+  `docs/reviews/internal-cat-2026-06-19.md`.
+
 - **Configurable session-email subject + body (formatting tags).** Flagged
   2026-06-17 as multi-operator interest grows — a QSL manager receiving logs from
   several operators benefits from operator-tailored, distinguishable mail. Today the

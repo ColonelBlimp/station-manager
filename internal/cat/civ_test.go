@@ -232,6 +232,25 @@ func TestEmbeddedIC7300_PowerScaling(t *testing.T) {
 	}
 }
 
+// TestEmbeddedIC7300_PowerOverRangeRejected guards review 2026-06-19 M2: watts
+// above the rig's ScaleMaxWatts must be rejected (rig_invalid_value, no write),
+// not silently clamped to full-scale level 255 — clamping would transmit at max
+// power for an invalid request. The exact-max boundary (100 W) still encodes.
+func TestEmbeddedIC7300_PowerOverRangeRejected(t *testing.T) {
+	def, ok := Lookup("icom-ic7300")
+	if !ok {
+		t.Fatal("icom-ic7300 not embedded")
+	}
+	// Boundary: exactly ScaleMaxWatts encodes fine (→ level 255).
+	if _, err := EncodeCommand(def, "set_power", "100"); err != nil {
+		t.Fatalf("set_power 100W (max) should encode: %v", err)
+	}
+	// Over range: rejected as an invalid value, never coerced to 255.
+	if _, err := EncodeCommand(def, "set_power", "150"); !stderr.Is(err, ErrInvalidPaddedValue) {
+		t.Errorf("set_power 150W (over max) = %v, want ErrInvalidPaddedValue", err)
+	}
+}
+
 func TestEncodeCommandCIV_Errors(t *testing.T) {
 	def := civTestDef()
 
@@ -577,6 +596,11 @@ func TestCIVAck(t *testing.T) {
 		{"our echo (from controller E0)", []byte{0xFE, 0xFE, 0x94, 0xE0, 0x05, 0x00, 0x40, 0x07, 0x14, 0x00}, false, false},
 		{"too short", []byte{0xFE, 0xFE, 0xE0, 0x94}, false, false},
 		{"not a CI-V preamble", []byte{0x01, 0x02, 0xE0, 0x94, 0xFB}, false, false},
+		// review 2026-06-19 M1: ACK-looking frames not addressed to us, or with
+		// payload bytes, must NOT be classified as our command's ACK.
+		{"FB to another controller (E1)", []byte{0xFE, 0xFE, 0xE1, 0x94, 0xFB}, false, false},
+		{"FB broadcast (to 00)", []byte{0xFE, 0xFE, 0x00, 0x94, 0xFB}, false, false},
+		{"overlong ACK-looking (payload byte)", []byte{0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0x00}, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -56,6 +56,13 @@ func TestValidateRigDefinition(t *testing.T) {
 		t.Fatalf("def with non-exposed tx_on/tx_off failed validation: %v", err)
 	}
 
+	// A well-formed numeric range (Yaesu PC 5-100 W shape) is accepted.
+	withRange := goodRigDef()
+	withRange.Commands[1].Min, withRange.Commands[1].Max = 5, 100
+	if err := ValidateRigDefinition(withRange); err != nil {
+		t.Fatalf("def with valid [min,max] range failed validation: %v", err)
+	}
+
 	cases := []struct {
 		name string
 		mod  func(*RigDefinition)
@@ -87,6 +94,10 @@ func TestValidateRigDefinition(t *testing.T) {
 		}},
 		{"marker zero length", func(d *RigDefinition) { d.States[0].Markers[0].Length = 0 }},
 		{"marker negative index", func(d *RigDefinition) { d.States[0].Markers[0].Index = -1 }},
+		// M2 range metadata: a declared range must be well-formed and enforceable.
+		{"inverted range (min > max)", func(d *RigDefinition) { d.Commands[1].Min, d.Commands[1].Max = 100, 5 }},
+		{"negative min", func(d *RigDefinition) { d.Commands[1].Min, d.Commands[1].Max = -1, 100 }},
+		{"min set but max zero (never enforced)", func(d *RigDefinition) { d.Commands[1].Min = 5 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

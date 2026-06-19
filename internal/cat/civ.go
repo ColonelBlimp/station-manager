@@ -60,12 +60,19 @@ func CIVAck(def RigDefinition, line []byte) (isAck, accepted bool) {
 	if err != nil {
 		return false, false
 	}
-	// FE FE <to> <from> <cmd>; trailing FD already stripped by the reader.
-	if len(line) < 5 || line[0] != civPreamble || line[1] != civPreamble {
+	// FE FE <to> <from> <cmd>; trailing FD already stripped by the reader. A
+	// bare ACK is EXACTLY 5 bytes (no payload), addressed TO the controller (E0)
+	// FROM the rig. Requiring both addresses + the exact length stops an
+	// ACK-looking frame on a shared CI-V bus that is bound for another
+	// controller (…E1 94 FB), a broadcast (…00 94 FB), or carries payload bytes
+	// from being mistaken for OUR command's ACK — which would otherwise let a
+	// safety-critical tx_on/tx_off confirm complete on a frame the rig never
+	// sent us (review 2026-06-19 M1).
+	if len(line) != 5 || line[0] != civPreamble || line[1] != civPreamble {
 		return false, false
 	}
-	if line[3] != rigAddr {
-		return false, false // our echo, or another bus member — not the rig
+	if line[2] != civControllerAddress || line[3] != rigAddr {
+		return false, false // not addressed to us, or our echo / another bus member
 	}
 	switch line[4] {
 	case civAckOK:
@@ -147,6 +154,12 @@ func encodeCommandCIV(def RigDefinition, name, value string) ([]byte, error) {
 			return nil, errors.New(op).WithErr(ErrInvalidPaddedValue).
 				WithMsgf("value %q is not a valid frequency for command %q", value, name)
 		}
+		// Semantic range check (review 2026-06-19 M2) — freqToBCD already proved
+		// value is digits, so Atoi can't fail; a no-op unless the rigdef sets Max.
+		n, _ := strconv.Atoi(value)
+		if err := checkCommandRange(op, c, n); err != nil {
+			return nil, err
+		}
 		return civFrame(def, append(cmdBytes, bcd...))
 
 	case EncodingModeSeq:
@@ -192,10 +205,16 @@ func encodeCommandCIV(def RigDefinition, name, value string) ([]byte, error) {
 				return nil, errors.New(op).WithErr(ErrInvalidPaddedValue).
 					WithMsgf("value %q is not valid watts for command %q", value, name)
 			}
-			lv := int(math.Round(float64(w) * 255 / float64(c.ScaleMaxWatts)))
-			if lv > 255 {
-				lv = 255
+			// Reject over-range watts rather than clamp: silently coercing (say)
+			// 999 W to the rig's full-scale level would transmit at max power when
+			// the operator asked for something invalid — dangerous into an amp
+			// (review 2026-06-19 M2). Rejecting surfaces it as rig_invalid_value
+			// and writes nothing.
+			if w > c.ScaleMaxWatts {
+				return nil, errors.New(op).WithErr(ErrInvalidPaddedValue).
+					WithMsgf("value %d W exceeds rig maximum %d W for command %q", w, c.ScaleMaxWatts, name)
 			}
+			lv := int(math.Round(float64(w) * 255 / float64(c.ScaleMaxWatts)))
 			level = strconv.Itoa(lv)
 		}
 		lvl, err := levelToBCD(level, civPowerBCDLen)

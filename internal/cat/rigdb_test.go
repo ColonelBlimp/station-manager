@@ -2,6 +2,8 @@ package cat
 
 import (
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestListReturnsEmbeddedRigs(t *testing.T) {
@@ -57,6 +59,48 @@ func TestLookupUnknownRig(t *testing.T) {
 	_, ok := Lookup("does-not-exist")
 	if ok {
 		t.Error("Lookup of unknown id returned ok=true")
+	}
+}
+
+// TestCloneRigDefinition_IsolatesFromGlobal guards review 2026-06-19 L2:
+// mutating a CloneRigDefinition result — its slices, nested slices, maps, or the
+// Serial *bool pointers — must not affect a later Lookup of the same id, which
+// shares the process-global rigDB backing storage.
+func TestCloneRigDefinition_IsolatesFromGlobal(t *testing.T) {
+	orig, ok := Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("Lookup(yaesu-ftdx10) not found")
+	}
+	clone := CloneRigDefinition(orig)
+
+	// Mutate the clone in every reference-typed place a deep copy must isolate.
+	clone.Commands[0].Name = "MUTATED"
+	clone.Commands[0].Frames = append(clone.Commands[0].Frames, "x")
+	clone.States[0].Prefix = "MUTATED"
+	clone.States[0].Markers[0].Tag = "MUTATED"
+	if len(clone.States[0].Markers[0].ValueMappings) > 0 {
+		clone.States[0].Markers[0].ValueMappings[0].Value = "MUTATED"
+	}
+	for k := range clone.ModeMappings {
+		clone.ModeMappings[k] = types.ModeMapping{Mode: "MUTATED"}
+		break
+	}
+	if clone.Serial.RTS != nil {
+		*clone.Serial.RTS = !*clone.Serial.RTS
+	}
+
+	// A fresh lookup must be pristine — none of the above leaked into rigDB.
+	again, _ := Lookup("yaesu-ftdx10")
+	if again.Commands[0].Name == "MUTATED" {
+		t.Error("mutating clone.Commands leaked into the global rigdef")
+	}
+	if again.States[0].Prefix == "MUTATED" || again.States[0].Markers[0].Tag == "MUTATED" {
+		t.Error("mutating clone.States/Markers leaked into the global rigdef")
+	}
+	for _, v := range again.ModeMappings {
+		if v.Mode == "MUTATED" {
+			t.Error("mutating clone.ModeMappings leaked into the global rigdef")
+		}
 	}
 }
 

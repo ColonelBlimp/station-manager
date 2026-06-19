@@ -67,6 +67,16 @@ func TestEncodeCommand(t *testing.T) {
 		{name: "set_freq over-wide", cmd: "set_freq", value: "1407400000", wantErr: ErrInvalidPaddedValue},
 		{name: "set_power at width", cmd: "set_power", value: "100", want: "PC100;"},
 		{name: "set_power padded", cmd: "set_power", value: "20", want: "PC020;"},
+		// Semantic range validation (review 2026-06-19 M2): width-valid but
+		// out-of-range Yaesu values must be rejected, not put on the wire (Yaesu
+		// has no command ACK). PC range 005-100 W, FA/FB range 30k-75M Hz.
+		{name: "set_power over max (PC999)", cmd: "set_power", value: "999", wantErr: ErrInvalidPaddedValue},
+		{name: "set_power below min", cmd: "set_power", value: "4", wantErr: ErrInvalidPaddedValue},
+		{name: "set_power at min", cmd: "set_power", value: "5", want: "PC005;"},
+		{name: "set_freq below min", cmd: "set_freq", value: "29999", wantErr: ErrInvalidPaddedValue},
+		{name: "set_freq at min", cmd: "set_freq", value: "30000", want: "FA000030000;"},
+		{name: "set_freq at max", cmd: "set_freq", value: "75000000", want: "FA075000000;"},
+		{name: "set_freq over max", cmd: "set_freq", value: "75000001", wantErr: ErrInvalidPaddedValue},
 		{name: "PLAYBACK not exposed", cmd: "PLAYBACK", value: "5", wantErr: ErrCommandNotExposed},
 		{name: "READ not exposed", cmd: "READ", value: "", wantErr: ErrCommandNotExposed},
 		{name: "unknown command", cmd: "NOT_A_COMMAND", value: "x", wantErr: ErrUnknownCommand},

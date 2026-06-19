@@ -122,8 +122,9 @@ accessible from the My Station tab in the SPA:
   Country panel depend on it.
 - **Name** (operator name) and other ADIF MY_\* fields.
 - **Rig / CAT settings** if you want the daemon to read frequency
-  and mode directly from a connected transceiver (Yaesu FT-710 and
-  FTdx10 are the two tested drivers).
+  and mode directly from a connected transceiver (the tested drivers
+  are the Yaesu FT-710 and FTdx10 over Kenwood-style CAT and the Icom
+  IC-7300 over CI-V).
 - **Forwarders** (QRZ Logbook, etc.) if you want QSOs uploaded to
   online services. No forwarders are configured by default — add an
   entry to the `forwarders` array in `config.json` for each destination

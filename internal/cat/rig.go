@@ -167,6 +167,18 @@ type Command struct {
 	Pad      int    `json:"pad,omitempty"`
 	Exposed  bool   `json:"exposed,omitempty"`
 
+	// Min and Max bound the semantic range of a numeric command's value, in the
+	// command's natural unit (Hz for set_freq, watts for set_power) — e.g. the
+	// Yaesu FA/FB 000030000–075000000 Hz and PC 005–100 W ranges. EncodeCommand
+	// rejects an in-width but out-of-range value as ErrInvalidPaddedValue (→ API
+	// rig_invalid_value, no write), so a hand-crafted /v1/rig/command can't push
+	// e.g. PC999; or an out-of-band frequency onto the rig (review 2026-06-19
+	// M2). Enforced only when Max > 0; both zero leaves the command unbounded
+	// (back-compat for commands without a documented range). Data-driven, so a
+	// new rig's ranges are a rigdef edit, not code.
+	Min int `json:"min,omitempty"`
+	Max int `json:"max,omitempty"`
+
 	// ScaleMaxWatts is the rated full-scale power in watts for an
 	// EncodingBCDPower command whose rig takes a 0–255 level (Icom 14 0A): the
 	// incoming watts value is scaled to a level (level = round(watts × 255 /

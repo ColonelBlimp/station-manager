@@ -1,6 +1,7 @@
 package cat
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -112,9 +113,33 @@ func EncodeCommand(def RigDefinition, name, value string) ([]byte, error) {
 			return nil, errors.New(op).WithErr(ErrInvalidPaddedValue).
 				WithMsgf("value %q must be at most %d digits for command %q", value, c.Pad, name)
 		}
+		// Semantic range check (review 2026-06-19 M2): a width-valid value can
+		// still be out of the rig's documented range (e.g. PC999 or an out-of-
+		// band frequency). Yaesu has no command ACK, so without this the bad CAT
+		// line just goes on the wire. isASCIIDigits already proved v parses; the
+		// width cap keeps it well inside int range.
+		if c.ValueMap == "" {
+			n, _ := strconv.Atoi(v)
+			if err := checkCommandRange(op, c, n); err != nil {
+				return nil, err
+			}
+		}
 		v = leftZeroPad(v, c.Pad)
 	}
 	return Encode(def, name, v)
+}
+
+// checkCommandRange enforces a numeric command's optional [Min, Max] semantic
+// range (review 2026-06-19 M2). n is the already-parsed value in the command's
+// natural unit (Hz for set_freq, watts for set_power). A no-op when Max is 0
+// (the command declares no range — unbounded, back-compat). Shared by the
+// Kenwood padded path and the CI-V bcd_freq path so the rule is one place.
+func checkCommandRange(op errors.Op, c Command, n int) error {
+	if c.Max > 0 && (n < c.Min || n > c.Max) {
+		return errors.New(op).WithErr(ErrInvalidPaddedValue).
+			WithMsgf("value %d out of range [%d, %d] for command %q", n, c.Min, c.Max, c.Name)
+	}
+	return nil
 }
 
 // isASCIIDigits reports whether s is non-empty and every byte is '0'..'9'.

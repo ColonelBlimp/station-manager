@@ -11,8 +11,8 @@
         updates the button too.
 
         Visibility: rendered only when the configured rig can tune
-        (configState.bridge.tune — rigdef-derived), so an unsupported rig
-        (FT-710) shows no dangling TX affordance. Disabled unless the rig is
+        (configState.bridge.tune — rigdef-derived), so a rig with no tune
+        support shows no dangling TX affordance. Disabled unless the rig is
         live; tuning a non-live rig is impossible (the daemon refuses).
 
         Click-only by design — no keyboard shortcut. Starting a transmission
