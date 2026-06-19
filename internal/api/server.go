@@ -292,10 +292,25 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 func (s *Server) ListenAndServe(socketPath string) error {
 	const op errors.Op = "api.ListenAndServe"
 
-	// For Unix sockets, remove stale socket file if it exists.
+	// For Unix sockets, remove a stale socket file before binding — but only if
+	// the existing path is actually a socket. A typo'd socket_path aimed at a
+	// regular file the daemon can delete (config.json, an ADIF export, another
+	// user file) would otherwise be unlinked on startup, which is destructive
+	// since the same config can hold secrets. lstat first; refuse to start if the
+	// path exists as anything other than a socket (review 2026-06-19 H1).
 	if s.protocol == "unix" {
-		if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-			return errors.New(op).WithErr(err).WithMsg("removing stale socket")
+		fi, statErr := os.Lstat(socketPath)
+		switch {
+		case statErr != nil && !os.IsNotExist(statErr):
+			return errors.New(op).WithErr(statErr).WithMsgf("inspecting socket path %s", socketPath)
+		case statErr == nil && fi.Mode()&os.ModeSocket == 0:
+			return errors.New(op).WithMsgf(
+				"socket_path %s exists and is not a socket (refusing to remove it); "+
+					"point socket_path at a free path or remove the file by hand", socketPath)
+		case statErr == nil:
+			if err := os.Remove(socketPath); err != nil {
+				return errors.New(op).WithErr(err).WithMsg("removing stale socket")
+			}
 		}
 	}
 

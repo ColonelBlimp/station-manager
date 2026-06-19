@@ -71,6 +71,94 @@ func hasFinding(findings []Finding, field string) bool {
 	return false
 }
 
+func hasErrorFinding(findings []Finding, field string) bool {
+	for _, f := range findings {
+		if f.Field == field && !f.Warning {
+			return true
+		}
+	}
+	return false
+}
+
+// --- M1 (review 2026-06-19): server config validation --------------------
+
+// A fully-defaulted config must produce no server error findings.
+func TestValidateServer_DefaultsClean(t *testing.T) {
+	cfg := DefaultConfig(t.TempDir())
+	for _, f := range Validate(cfg) {
+		if !f.Warning && len(f.Field) >= 7 && f.Field[:7] == "server." {
+			t.Errorf("default config produced a server error finding: %+v", f)
+		}
+	}
+}
+
+// applyDefaults only fills zero values, so a hand-edited negative survives to
+// runtime: max_concurrent_requests < 0 panics newLoadLimiter. Validate must
+// reject these as config errors (→ fatal at Load / 400 at PUT) before api.New.
+func TestValidateServer_RejectsNonsenseValues(t *testing.T) {
+	base := DefaultConfig(t.TempDir())
+
+	cases := []struct {
+		name  string
+		field string
+		mut   func(*Config)
+	}{
+		{"negative max_concurrent_requests", "server.max_concurrent_requests",
+			func(c *Config) { c.Server.MaxConcurrentRequests = -1 }},
+		{"negative read_header_timeout", "server.read_header_timeout_sec",
+			func(c *Config) { c.Server.ReadHeaderTimeoutSec = -5 }},
+		{"zero-after-edit write_timeout", "server.write_timeout_sec",
+			func(c *Config) { c.Server.WriteTimeoutSec = -1 }},
+		{"non-positive max_body_bytes", "server.max_body_bytes",
+			func(c *Config) { c.Server.MaxBodyBytes = -1 }},
+		{"negative submit burst", "server.submit_rate_burst",
+			func(c *Config) { c.Server.SubmitRateBurst = -1 }},
+		{"unknown protocol", "server.protocol",
+			func(c *Config) { c.Server.Protocol = "udp" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			tc.mut(&cfg)
+			if !hasErrorFinding(Validate(cfg), tc.field) {
+				t.Errorf("%s not rejected; findings = %+v", tc.name, Validate(cfg))
+			}
+		})
+	}
+}
+
+// default_page_limit must not exceed max_page_limit (it would clamp every
+// unspecified-limit request below its own default).
+func TestValidateServer_PageLimitOrdering(t *testing.T) {
+	cfg := DefaultConfig(t.TempDir())
+	cfg.Server.DefaultPageLimit = 500
+	cfg.Server.MaxPageLimit = 100
+	if !hasErrorFinding(Validate(cfg), "server.default_page_limit") {
+		t.Errorf("default_page_limit > max_page_limit not rejected; findings = %+v", Validate(cfg))
+	}
+}
+
+// Profiling on a non-loopback TCP bind is an advisory warning (not fatal).
+func TestValidateServer_ProfilingNonLoopbackWarns(t *testing.T) {
+	cfg := DefaultConfig(t.TempDir())
+	cfg.Server.Protocol = "tcp"
+	cfg.SocketPath = "0.0.0.0:8080"
+	cfg.Server.EnableProfiling = true
+
+	var found bool
+	for _, f := range Validate(cfg) {
+		if f.Field == "server.enable_profiling" {
+			found = true
+			if !f.Warning {
+				t.Error("profiling exposure should be advisory (Warning), not a fatal error")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("profiling + non-loopback bind produced no advisory; findings = %+v", Validate(cfg))
+	}
+}
+
 // --- M1: Clone deep-copy independence + accessor/Update race --------------
 
 // TestConfig_Clone_IsIndependent proves Clone returns a config that shares no

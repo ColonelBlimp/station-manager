@@ -52,7 +52,7 @@ func runImport(args []string) error {
 	var logbookID int64
 	var dryRun bool
 	var progressEvery int
-	fs.StringVar(&configPath, "config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
+	fs.StringVar(&configPath, "config", "", "path to config.json (default: $SM_WORKING_DIR, else the XDG data dir for a system install, else the executable's directory)")
 	fs.Int64Var(&logbookID, "logbook", 0, "target logbook id (default: default_logbook from config)")
 	fs.BoolVar(&dryRun, "dry-run", false, "parse and validate only — no DB writes")
 	fs.IntVar(&progressEvery, "progress-every", 100, "emit a progress line every N records (0 disables)")

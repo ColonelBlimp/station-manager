@@ -61,6 +61,13 @@ const (
 	ExitPanic = 2
 )
 
+// ft8QsoLogTimeout bounds the off-pipeline log+enrich of one completed FT8
+// exchange (a DB write plus a best-effort country lookup). Independent of the
+// FT8 decode-loop context so Stop's cancellation can't abort persisting a QSO
+// that already happened on the air (review 2026-06-19 M2); generous enough for a
+// slow enrich on a flaky link, bounded so a hung lookup can't outlive shutdown.
+const ft8QsoLogTimeout = 30 * time.Second
+
 func main() {
 	// Top-level panic safety net. run()'s own defers (dbSvc close,
 	// loggerSvc close) still fire first as the panic unwinds through
@@ -132,7 +139,7 @@ func main() {
 func run() error {
 	const op errors.Op = "smd.run"
 
-	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR/config.json or ./config.json)")
+	configPath := flag.String("config", "", "path to config.json (default: $SM_WORKING_DIR, else the XDG data dir for a system install, else the executable's directory)")
 	flag.Parse()
 
 	// ---- Propagate build version to ADIF emission ----
@@ -386,6 +393,11 @@ func run() error {
 	// restart.
 	var workerWG sync.WaitGroup
 
+	// qsoLogWG tracks the off-pipeline FT8 completed-QSO log goroutines (below)
+	// so shutdown can drain an in-flight log of an already-completed on-air QSO
+	// before the daemon hub / DB tear down, instead of racing it (M2).
+	var qsoLogWG sync.WaitGroup
+
 	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, loggerSvc, hub); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
@@ -475,14 +487,19 @@ func run() error {
 		loggerSvc.ErrorWith().Str("goroutine", name).Interface("panic", pv).
 			Str("stack", string(stack)).Msg("ft8: qso-log goroutine panicked")
 	}
-	ft8Svc.SetQsoLogger(func(ctx context.Context, c ft8.CompletedQso) {
+	ft8Svc.SetQsoLogger(func(_ context.Context, c ft8.CompletedQso) {
 		// This callback fires on the FT8 decode loop (after the 73). Submit does
 		// DB writes and the country lookup below does network I/O — running either
 		// inline would stall slot decoding and drop slots (the scheduler buffers
 		// one slot then drops on backpressure). So the whole log+enrich runs in a
 		// one-shot safego goroutine, decoupled from the real-time pipeline; a panic
 		// here is recovered and can't take the daemon (or the decode loop) down.
-		safego.Go(ctx, "ft8.qsolog", ft8LogPanic, func() {
+		//
+		// launchFt8QsoLog tracks the goroutine on qsoLogWG and runs the work under
+		// a fresh bounded context decoupled from the passed (decode-loop) context
+		// — see its doc for why both matter (M2). The "_" input context is
+		// deliberately unused here.
+		launchFt8QsoLog(&qsoLogWG, ft8LogPanic, func(ctx context.Context) {
 			snap := cfgSvc.Snapshot()
 			// Authoritative frequency: the rig's live dial from the bridge, NOT the
 			// SPA's start-time snapshot (c.DialFreqMHz). The SPA value is captured once
@@ -547,7 +564,7 @@ func run() error {
 			// The canonical UUID flows through so the SPA's email-out / edit paths
 			// work for FT8 rows; best-effort, after a confirmed store.
 			ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID))
-		}, false /* one-shot: a completed QSO is a single event, no respawn */)
+		})
 	})
 	// PSK Reporter upload (opt-in): every FT8 decode is a "heard this station"
 	// reception report. The uploader is fed the decode stream via SetDecodeSink
@@ -722,10 +739,29 @@ func run() error {
 			Msg("forwarder workers did not drain within shutdown timeout")
 	}
 
-	// All publishers (workers, qsoservice via in-flight HTTP handlers)
-	// have stopped by here — workers drained above, handlers finished
-	// under server.Shutdown. Close the hub so any still-connected SSE
-	// subscribers see a clean channel-close and return.
+	// Drain in-flight FT8 completed-QSO log goroutines (M2). ft8Svc.Stop() above
+	// halted the decode loop, so no new ones launch; these are exchanges that
+	// finished on the air just as shutdown began and must still reach the DB.
+	// Bounded by the same shutdown window — a straggler beyond it is left to the
+	// deferred dbSvc.Close (its late Submit errors safely, same as any detached
+	// goroutine racing close).
+	qsoLogDone := make(chan struct{})
+	go func() {
+		qsoLogWG.Wait()
+		close(qsoLogDone)
+	}()
+	select {
+	case <-qsoLogDone:
+	case <-ctx.Done():
+		loggerSvc.WarnWith().
+			Dur("timeout", shutdownTimeout).
+			Msg("ft8 completed-QSO log goroutines did not drain within shutdown timeout")
+	}
+
+	// All publishers (workers, qsoservice via in-flight HTTP handlers, the FT8
+	// QSO loggers drained above) have stopped by here — workers drained above,
+	// handlers finished under server.Shutdown. Close the hub so any
+	// still-connected SSE subscribers see a clean channel-close and return.
 	//
 	// Deliberately untimed: hub.Close holds the hub mutex only for a
 	// brief synchronous "close every subscriber channel" loop and does
@@ -735,6 +771,25 @@ func run() error {
 	hub.Close()
 
 	return runErr
+}
+
+// launchFt8QsoLog runs one completed-FT8-exchange log+enrich job off the decode
+// loop (review 2026-06-19 M2). Two properties matter, both pinned by tests:
+//
+//   - Tracked: GoTracked calls wg.Add(1) synchronously here, on the decode loop.
+//     ft8Svc.Stop() drains that loop, so by the time it returns every in-flight
+//     job is on wg and shutdown can drain it before the hub/DB tear down.
+//   - Context-decoupled: work runs under a fresh Background-derived context
+//     bounded by ft8QsoLogTimeout, NOT the decode-loop context (which Stop
+//     cancels). A QSO that already completed on the air must still be persisted
+//     during the shutdown drain rather than aborting on a cancelled context; the
+//     timeout still bounds a hung enrich/submit so a straggler can't run forever.
+func launchFt8QsoLog(wg *sync.WaitGroup, onPanic safego.PanicHandler, work func(ctx context.Context)) {
+	safego.GoTracked(context.Background(), "ft8.qsolog", onPanic, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), ft8QsoLogTimeout)
+		defer cancel()
+		work(ctx)
+	}, false /* one-shot: a completed QSO is a single event, no respawn */, wg)
 }
 
 // ensureDefaultLogbook guarantees the row at cfg.DefaultLogbookID

@@ -68,6 +68,7 @@ func Validate(cfg Config) []Finding {
 	if err := validateBridge(cfg.ActiveBridge()); err != nil {
 		out = append(out, Finding{Field: "bridge", Code: "invalid_bridge", Message: err.Error()})
 	}
+	out = append(out, validateServer(cfg)...)
 	out = append(out, validateRigs(cfg)...)
 	out = append(out, validateLoggingStation(cfg.LoggingStation)...)
 	out = append(out, validateStationPrefs(cfg.Station)...)
@@ -77,6 +78,78 @@ func Validate(cfg Config) []Finding {
 	for _, w := range Warnings(cfg) {
 		out = append(out, Finding{Field: "socket_path", Code: "insecure_bind", Message: w, Warning: true})
 	}
+	return out
+}
+
+// validateServer checks the ServerConfig block (review 2026-06-19 M1).
+// applyDefaults only fills zero-valued fields, so a hand-edited config can still
+// carry a negative or otherwise nonsensical value that reaches runtime: a
+// negative max_concurrent_requests panics newLoadLimiter (a buffered channel of
+// negative size), a non-positive HTTP timeout is read by net/http as "disabled"
+// (silently dropping the slow-header guard), and a non-positive submit bucket
+// can wedge submits. These are config errors, caught here before api.New rather
+// than as a runtime panic or a quietly-weakened guard.
+//
+// Lower bounds + the page-limit ordering + the profiling advisory are enforced;
+// deliberately no arbitrary upper ceilings — a large-but-valid operator value
+// (a generous body cap, a big page limit) is not a safety hazard, and capping it
+// would just reject legitimate tuning.
+func validateServer(cfg Config) []Finding {
+	var out []Finding
+	s := cfg.Server
+
+	if s.Protocol != "tcp" && s.Protocol != "unix" {
+		out = append(out, Finding{Field: "server.protocol", Code: "invalid_field_value",
+			Message: fmt.Sprintf("server.protocol %q must be \"tcp\" or \"unix\"", s.Protocol)})
+	}
+
+	// Positive-required integer knobs. Each maps a config path to its value; the
+	// loop keeps the rule list readable and the messages uniform.
+	type posRule struct {
+		field string
+		val   int
+	}
+	for _, r := range []posRule{
+		{"server.read_header_timeout_sec", s.ReadHeaderTimeoutSec},
+		{"server.read_timeout_sec", s.ReadTimeoutSec},
+		{"server.write_timeout_sec", s.WriteTimeoutSec},
+		{"server.idle_timeout_sec", s.IdleTimeoutSec},
+		{"server.shutdown_timeout_sec", s.ShutdownTimeoutSec},
+		{"server.default_page_limit", s.DefaultPageLimit},
+		{"server.max_page_limit", s.MaxPageLimit},
+		{"server.max_contact_history_results", s.MaxContactHistoryResults},
+		{"server.max_concurrent_requests", s.MaxConcurrentRequests},
+		{"server.max_event_subscribers", s.MaxEventSubscribers},
+		{"server.submit_rate_per_sec", s.SubmitRatePerSec},
+		{"server.submit_rate_burst", s.SubmitRateBurst},
+	} {
+		if r.val <= 0 {
+			out = append(out, Finding{Field: r.field, Code: "invalid_field_value",
+				Message: fmt.Sprintf("%s must be a positive value (got %d)", r.field, r.val)})
+		}
+	}
+	if s.MaxBodyBytes <= 0 {
+		out = append(out, Finding{Field: "server.max_body_bytes", Code: "invalid_field_value",
+			Message: fmt.Sprintf("server.max_body_bytes must be a positive value (got %d)", s.MaxBodyBytes)})
+	}
+
+	// Page-limit ordering: a default above the ceiling would clamp every
+	// unspecified-limit request below its own default.
+	if s.DefaultPageLimit > 0 && s.MaxPageLimit > 0 && s.DefaultPageLimit > s.MaxPageLimit {
+		out = append(out, Finding{Field: "server.default_page_limit", Code: "invalid_field_value",
+			Message: fmt.Sprintf("server.default_page_limit (%d) must not exceed server.max_page_limit (%d)",
+				s.DefaultPageLimit, s.MaxPageLimit)})
+	}
+
+	// Profiling on a non-loopback TCP bind exposes heap/goroutine/CPU forensics
+	// (and a /debug/pprof/profile DoS vector) to the LAN. Advisory, like the
+	// existing insecure-bind warning.
+	if s.EnableProfiling && s.Protocol == "tcp" && !isLoopbackBind(cfg.SocketPath) {
+		out = append(out, Finding{Field: "server.enable_profiling", Code: "insecure_profiling", Warning: true,
+			Message: "server.enable_profiling=true with a non-loopback TCP bind exposes /debug/pprof " +
+				"(heap/goroutine/CPU dumps + a profiling DoS vector) to any host that can reach this address"})
+	}
+
 	return out
 }
 
