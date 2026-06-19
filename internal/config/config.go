@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/mail"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1233,9 +1234,38 @@ func validateLookupProvider(label string, p types.LookupConfig) error {
 	if p.HttpTimeoutSec <= 0 {
 		return fmt.Errorf("lookup.%s: timeout_sec must be > 0", label)
 	}
+	// A credentialed provider (QRZ) carries username/password in the request
+	// URL, so it must not send them over plain http to a remote host — require
+	// https (http allowed only for loopback, for local mocks). Review 2026-06-19 M2.
+	if (p.Username != "" || p.Password != "") && !lookupTransportSecure(p.URL) {
+		return fmt.Errorf("lookup.%s: url must use https when credentials are set (http allowed only for loopback)", label)
+	}
 	// User-Agent is checked at provider Initialize time (sourced from
 	// the daemon's global Config.UserAgent, not per-provider config).
 	return nil
+}
+
+// lookupTransportSecure reports whether a credentialed lookup provider's URL is
+// safe to carry credentials: https to any host, or http only to a loopback
+// address (so a local mock / test server works while a real remote URL must be
+// https). Review 2026-06-19 M2.
+func lookupTransportSecure(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // validateSmtp checks the SMTP block. Enabled=false = mailer

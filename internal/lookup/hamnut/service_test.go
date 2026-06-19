@@ -305,3 +305,24 @@ func TestUnmarshalResponse_BadJSON(t *testing.T) {
 		t.Fatalf("err = %v, want bare decode error (not ErrNotFound)", err)
 	}
 }
+
+// TestLookup_RejectsOversizedSuccessBody guards review 2026-06-19 M1: a 200
+// response larger than successBodyLimit must error rather than buffer it whole.
+func TestLookup_RejectsOversizedSuccessBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		chunk := make([]byte, 64*1024)
+		for sent := 0; sent <= successBodyLimit; sent += len(chunk) {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	s := initializedService(t, srv.URL, srv.Client())
+	if _, err := s.Lookup("M0CMC"); err == nil {
+		t.Fatal("expected an error for an oversized 200 body, got nil")
+	}
+}

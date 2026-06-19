@@ -330,3 +330,32 @@ func TestLoad_RejectsInvalidLookupBlock(t *testing.T) {
 		t.Fatal("expected validation error for empty URL on enabled hamnut")
 	}
 }
+
+// TestValidateLookup_CredentialedProviderRequiresSecureTransport guards review
+// 2026-06-19 M2: a provider carrying credentials (QRZ) must not send them over
+// plain http to a remote host. https is required; http is allowed only to
+// loopback (for local mocks); non-credentialed providers are unaffected.
+func TestValidateLookup_CredentialedProviderRequiresSecureTransport(t *testing.T) {
+	creds := func(rawURL string) types.EnrichmentConfig {
+		return types.EnrichmentConfig{Chain: []types.LookupConfig{{
+			Name: "qrzlookupservice", Enabled: true, URL: rawURL,
+			HttpTimeoutSec: 1, Username: "abc", Password: "abcde",
+		}}}
+	}
+	if err := validateLookup(creds("http://xml.qrz.com/")); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Errorf("credentialed http (remote) should be rejected, got %v", err)
+	}
+	if err := validateLookup(creds("https://xml.qrz.com/")); err != nil {
+		t.Errorf("credentialed https should pass, got %v", err)
+	}
+	if err := validateLookup(creds("http://127.0.0.1:8080/")); err != nil {
+		t.Errorf("credentialed http to loopback should pass, got %v", err)
+	}
+	// A provider with no credentials over plain http is fine (e.g. hamnut).
+	noCreds := types.EnrichmentConfig{Chain: []types.LookupConfig{{
+		Name: "someprovider", Enabled: true, URL: "http://example.com/", HttpTimeoutSec: 1,
+	}}}
+	if err := validateLookup(noCreds); err != nil {
+		t.Errorf("non-credentialed http provider should pass, got %v", err)
+	}
+}

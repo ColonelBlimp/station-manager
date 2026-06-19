@@ -69,10 +69,14 @@ func TestInitialize_RejectsBrokenConfig(t *testing.T) {
 	}{
 		{"empty URL", &types.LookupConfig{Enabled: true, URL: "", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, "a"},
 		{"invalid URL", &types.LookupConfig{Enabled: true, URL: "::nope", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, "a"},
-		{"empty UserAgent", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, ""},
-		{"zero timeout", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 0, Username: "abc", Password: "abcde"}, "a"},
-		{"short username", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1, Username: "ab", Password: "abcde"}, "a"},
-		{"short password", &types.LookupConfig{Enabled: true, URL: "http://x", HttpTimeoutSec: 1, Username: "abc", Password: "abc"}, "a"},
+		// http to a non-loopback host is rejected — QRZ creds travel in the URL (M2).
+		{"insecure http URL", &types.LookupConfig{Enabled: true, URL: "http://xml.qrz.com/", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, "a"},
+		// The remaining cases use https:// so they exercise their intended check,
+		// not the transport gate.
+		{"empty UserAgent", &types.LookupConfig{Enabled: true, URL: "https://x", HttpTimeoutSec: 1, Username: "abc", Password: "abcde"}, ""},
+		{"zero timeout", &types.LookupConfig{Enabled: true, URL: "https://x", HttpTimeoutSec: 0, Username: "abc", Password: "abcde"}, "a"},
+		{"short username", &types.LookupConfig{Enabled: true, URL: "https://x", HttpTimeoutSec: 1, Username: "ab", Password: "abcde"}, "a"},
+		{"short password", &types.LookupConfig{Enabled: true, URL: "https://x", HttpTimeoutSec: 1, Username: "abc", Password: "abc"}, "a"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -526,4 +530,17 @@ func TestImplementsCallsignProvider(t *testing.T) {
 	// The functional behaviour is exercised by the other tests; this
 	// test exists to flag interface-shape drift loud and early.
 	t.Skip("interface compliance is enforced at compile time via service.go's `var _ lookup.CallsignProvider = (*Service)(nil)`")
+}
+
+// TestReadLimitedBody_RejectsOversized guards review 2026-06-19 M1: the shared
+// 2xx-body reader (used by both the session-auth and lookup reads) errors when
+// the upstream sends more than successBodyLimit, rather than buffering it whole.
+func TestReadLimitedBody_RejectsOversized(t *testing.T) {
+	if _, err := readLimitedBody(strings.NewReader(strings.Repeat("x", successBodyLimit+1))); err == nil {
+		t.Error("expected an error for a body over the limit")
+	}
+	b, err := readLimitedBody(strings.NewReader(strings.Repeat("x", successBodyLimit)))
+	if err != nil || len(b) != successBodyLimit {
+		t.Errorf("limit-sized body should pass: len=%d err=%v", len(b), err)
+	}
 }

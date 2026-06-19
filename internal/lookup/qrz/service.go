@@ -282,7 +282,7 @@ func (s *Service) lookupOnce(ctx context.Context, callsign string) (types.Contac
 			WithMsgf("QRZ.com returned status %d: %s", resp.StatusCode, string(b))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedBody(resp.Body)
 	if err != nil {
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("failed to read response body")
 	}

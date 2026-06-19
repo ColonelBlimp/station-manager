@@ -35,14 +35,15 @@ import (
 // orchestrator (and logging) to identify which provider produced a
 // given result without needing the concrete kind in scope.
 type Provider interface {
-	// Name returns the provider's stable identifier — the DI service
-	// name (hamnut's "hamnut", QRZ's "qrzlookupservice"). For a
-	// CallsignProvider this value is exactly what the orchestrator puts
-	// in the response's station_source indicator (ADR 0017 #12) and the
-	// log/event label, so the public source value is the service name,
-	// not a short label. The country layer does NOT use a provider
-	// Name() — it carries the fixed Source* constants (SourceHamnut /
-	// SourceCountryTable). A future split of DI-name vs public label is
+	// Name returns the provider's stable identifier — the DI service NAME
+	// (hamnut's types.HamNutLookupServiceName = "hamnutlookupservice", QRZ's
+	// "qrzlookupservice"). NOTE this is distinct from the public country SOURCE
+	// constant "hamnut" (SourceHamnut): the country layer reports the fixed
+	// Source* constants (SourceHamnut / SourceCountryTable) and does NOT use a
+	// provider Name(). For a CallsignProvider, Name() is exactly what the
+	// orchestrator puts in the response's station_source indicator (ADR 0017 #12)
+	// and the log/event label — so the station public source value IS the service
+	// name, not a short label. A future split of DI-name vs public label is
 	// deferred (review 2026-06-04 L2).
 	Name() string
 

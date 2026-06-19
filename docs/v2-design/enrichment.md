@@ -1,5 +1,13 @@
 # Enrichment pipeline — implementation detail
 
+> **Historical design brief (Tier 2 — see `docs/README.md`).** Captures the
+> reasoning trail as the enrichment pipeline was built; it is NOT freshened to
+> current state. The "Out of scope" task framing below (e.g. #62 operator config,
+> #63 HTTP handler) reflects authoring time — those have since **shipped**. For
+> current ground truth use the code plus the live refs: `docs/v2-design/api-endpoints.md`
+> (`/v1/enrich/callsign`) and `docs/v2-design/config.md` (lookup config). When this
+> doc and the code disagree, the code wins. (Reviewed 2026-06-19, L2.)
+
 This document is the operational counterpart to ADR 0017 (the "what + why" decision record). ADR 0017 captures the architecture decisions and the alternatives that were weighed; this doc captures the **how** — pipeline phases, read-state matrix, filter/merge sequencing, async refresh contract.
 
 Read ADR 0017 first if you haven't. Decisions here aren't being made; they're being explained.

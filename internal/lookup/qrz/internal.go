@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	stderr "errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +18,44 @@ import (
 // error message — enough to capture an upstream error string without slurping
 // a misbehaving giant body.
 const errorBodyLimit = 512
+
+// successBodyLimit caps a 2xx response body. QRZ's URL is operator-configured
+// and the endpoint is remote; a captive portal, misconfigured URL, or
+// compromised path could otherwise return an unbounded 200 the daemon buffers
+// whole (review 2026-06-19 M1). 1 MiB is generous for QRZ's XML.
+const successBodyLimit = 1 << 20
+
+// secureOrLoopbackURL reports whether u is safe to carry QRZ credentials:
+// https to any host, or plain http only to a loopback address (so httptest /
+// local mocks work, while a real remote URL must be https). Review 2026-06-19 M2.
+func secureOrLoopbackURL(u *url.URL) bool {
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// readLimitedBody reads up to successBodyLimit bytes of a 2xx body, erroring if
+// the upstream sent more rather than buffering it unbounded. Shared by the
+// session-auth and lookup reads.
+func readLimitedBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, successBodyLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > successBodyLimit {
+		return nil, stderr.New("response body exceeds size limit")
+	}
+	return body, nil
+}
 
 // requestAndSetSessionKey fetches a session key from QRZ.com using
 // configured username/password and stores it on the Service for
@@ -66,7 +105,7 @@ func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		return errors.New(op).WithMsgf("QRZ.com returned status %d: %s", resp.StatusCode, string(b))
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedBody(resp.Body)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("failed to read response body")
 	}
@@ -209,6 +248,12 @@ func (s *Service) validateConfig(op errors.Op) error {
 	u, err := url.Parse(s.Config.URL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return errors.New(op).WithErr(err).WithMsg("QRZ URL is invalid")
+	}
+	// QRZ session auth puts username + password in the request URL, so refuse to
+	// send them over plain http to a remote host — https required (http allowed
+	// only for loopback, for local mocks). Review 2026-06-19 M2.
+	if !secureOrLoopbackURL(u) {
+		return errors.New(op).WithMsg("QRZ URL must use https (http allowed only for loopback) — credentials travel in the request URL")
 	}
 
 	s.UserAgent = strings.TrimSpace(s.UserAgent)

@@ -270,8 +270,24 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 		defer func() { sCh <- out }()
 		out = o.readStation(ctx, callsign, force)
 	}, false)
-	c := <-cCh
-	s := <-sCh
+	// Wait for both layers, but bail out on request cancellation rather than
+	// blocking forever if a provider/DB call ignores ctx (review 2026-06-19 M3).
+	// The goroutines finish later into the buffered (cap-1) channels, so there's
+	// no leak; the SourceNone zero-values make every conditional below (coldMiss,
+	// staleHit, write-backs, new-entity query) a no-op, so a cancelled Enrich
+	// returns promptly with empty data instead of hanging the handler.
+	var c countryReadResult
+	var s stationReadResult
+	select {
+	case c = <-cCh:
+	case <-ctx.Done():
+		c = countryReadResult{source: SourceNone}
+	}
+	select {
+	case s = <-sCh:
+	case <-ctx.Done():
+		s = stationReadResult{source: SourceNone}
+	}
 
 	// On panic, the source field on the recovered outcome is the zero
 	// value (""), not SourceNone. Normalise so downstream consumers
@@ -299,14 +315,18 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// write back; stale and fresh hits don't write here. `now` is also
 	// reflected onto the returned data so a cold-miss response carries
 	// last_refreshed_at, matching the cache-hit path (review 2026-06-04 H2).
+	// The o.DB != nil guards on the synchronous write-back + new-entity paths
+	// keep a miswired/test Orchestrator (nil DB) from panicking here — the async
+	// readCountry/readStation already run under safego, but these run inline
+	// (review 2026-06-19 L1). Production wiring in cmd/smd always supplies DB.
 	now := time.Now()
-	if c.coldMiss && c.data.Prefix != "" {
+	if c.coldMiss && c.data.Prefix != "" && o.DB != nil {
 		if werr := o.DB.UpsertCountryWithContext(ctx, c.data); werr != nil {
 			o.warn("country upsert failed", werr)
 		}
 		c.data.LastRefreshedAt = now
 	}
-	if s.coldMiss && !IsEmpty(s.data) {
+	if s.coldMiss && !IsEmpty(s.data) && o.DB != nil {
 		// Replace, not merge: a provider refresh (force-refresh, or the cold
 		// miss itself) is authoritative, so a field that's empty upstream must
 		// clear in the cache rather than retain a stale prior value (H1).
@@ -344,7 +364,7 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// not a worked-list. A failed lookup leaves the flag at its zero
 	// value (false) and logs a warn rather than failing Enrich; new-
 	// entity is presentation, never load-bearing for logging.
-	if c.data.Name != "" {
+	if c.data.Name != "" && o.DB != nil {
 		exists, hErr := o.DB.HasQsoForCountryWithContext(ctx, c.data.Name)
 		if hErr != nil {
 			o.warn("new-entity check failed", hErr)

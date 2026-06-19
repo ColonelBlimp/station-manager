@@ -39,6 +39,12 @@ const ServiceName = types.HamNutLookupServiceName
 // misbehaving giant body.
 const errorBodyLimit = 512
 
+// successBodyLimit caps a 2xx response body. The upstream is an
+// operator-configured/remote URL; a captive portal, misconfigured endpoint, or
+// compromised path could otherwise return an unbounded 200 the daemon buffers
+// whole (review 2026-06-19 M1). 1 MiB is generous for Hamnut's JSON.
+const successBodyLimit = 1 << 20
+
 // Compile-time check that Service satisfies lookup.CountryProvider.
 var _ lookup.CountryProvider = (*Service)(nil)
 
@@ -227,9 +233,12 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 			WithMsgf("hamnut returned status %d: %s", resp.StatusCode, string(b))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, successBodyLimit+1))
 	if err != nil {
 		return types.Country{}, errors.New(op).WithErr(err).WithMsg("failed to read response body")
+	}
+	if len(body) > successBodyLimit {
+		return types.Country{}, errors.New(op).WithMsgf("hamnut response body exceeds %d-byte limit", successBodyLimit)
 	}
 	country, err := s.unmarshalResponse(body)
 	if err != nil {

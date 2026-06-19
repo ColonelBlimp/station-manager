@@ -1406,3 +1406,48 @@ func TestEnrichRefresh_NoCacheRow_BehavesLikeColdMiss(t *testing.T) {
 		t.Errorf("expected 1 call to each upstream; hamnut=%d qrz=%d", hamnut.calls, qrz.calls)
 	}
 }
+
+// blockingCallsignProvider ignores ctx and blocks in LookupWithContext until
+// released — models a misbehaving provider for the cancellation test.
+type blockingCallsignProvider struct{ release chan struct{} }
+
+func (b *blockingCallsignProvider) Name() string                       { return "blocking" }
+func (b *blockingCallsignProvider) Initialize(_ context.Context) error { return nil }
+func (b *blockingCallsignProvider) Lookup(_ string) (types.ContactedStation, error) {
+	return types.ContactedStation{}, nil
+}
+func (b *blockingCallsignProvider) LookupWithContext(_ context.Context, _ string) (types.ContactedStation, error) {
+	<-b.release // deliberately ignores ctx
+	return types.ContactedStation{}, nil
+}
+
+// TestEnrich_ReturnsPromptlyOnContextCancel guards review 2026-06-19 M3: if a
+// provider ignores ctx and blocks, Enrich must still return when the request is
+// cancelled rather than hanging the handler. The blocked goroutine finishes
+// later into the buffered channel (released at test end) — no leak.
+func TestEnrich_ReturnsPromptlyOnContextCancel(t *testing.T) {
+	db := newTestSqlite(t)
+	blocking := &blockingCallsignProvider{release: make(chan struct{})}
+	defer close(blocking.release)
+
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    &stubCountryProvider{name: "hamnut"}, // returns fast → country layer doesn't block
+		Chain:      []lookup.CallsignProvider{blocking},  // station layer blocks, ignoring ctx
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &syncRefresher{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan lookup.Result, 1)
+	go func() { done <- o.Enrich(ctx, "m0cmc") }()
+	cancel()
+
+	select {
+	case <-done:
+		// Returned promptly after cancellation — correct.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Enrich did not return after context cancellation; it blocked on a ctx-ignoring provider")
+	}
+}
