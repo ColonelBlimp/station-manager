@@ -64,7 +64,7 @@ type Receiver struct {
 	Call     string
 	Locator  string
 	Software string // decoderSoftware, e.g. "StationManager 2.0.0"
-	Antenna  string // antennaInformation; "" → omitted (the 3-field template is used)
+	Antenna  string // antennaInformation; "" is sent as an empty variable-length field (the encoder always uses the fixed 4-field receiver template)
 }
 
 // tField is one field in a template descriptor.

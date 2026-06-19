@@ -47,7 +47,8 @@ type Config struct {
 }
 
 // Service owns the spot buffer + UDP transport. Construct with New, then
-// Initialize → Start(ctx) → Stop, like the other daemon services.
+// Start(ctx) → Stop. Start is single-use — calling it twice would open a second
+// socket + flush loop without closing the first; the daemon calls it once.
 type Service struct {
 	cfg Config
 	log logging.Logger
@@ -60,6 +61,7 @@ type Service struct {
 	sent    int             // datagrams sent (drives the first-N-templates rule)
 	lastTpl time.Time       // last time descriptors were included
 	conn    *net.UDPConn
+	stopped bool // set by Stop after its final flush — further AddSpot drops
 
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -99,7 +101,7 @@ func (s *Service) AddSpot(spot Spot) {
 		return
 	}
 	s.mu.Lock()
-	if s.conn == nil { // not live — drop (best-effort)
+	if s.conn == nil || s.stopped { // not live / stopped — drop (best-effort)
 		s.mu.Unlock()
 		return
 	}
@@ -146,7 +148,12 @@ func (s *Service) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cancels the flush loop (which does a final flush) and closes the socket.
+// Stop cancels the flush loop, then performs the authoritative final flush and
+// closes the socket. Stop owns the final flush (not just the loop's ctx.Done
+// flush): the daemon cancels the shared worker context BEFORE draining FT8, so a
+// last decode can buffer a spot after the loop has already exited — marking
+// stopped here (so further AddSpot drops) and flushing once more sends it rather
+// than losing it silently (review 2026-06-19 M1).
 func (s *Service) Stop() error {
 	s.mu.Lock()
 	cancel := s.cancel
@@ -154,7 +161,14 @@ func (s *Service) Stop() error {
 	if cancel != nil {
 		cancel()
 	}
-	s.wg.Wait() // let the loop's final flush land before we close the socket
+	s.wg.Wait() // the loop has exited (and did its own best-effort ctx.Done flush)
+
+	// Mark stopped first so any concurrent late AddSpot drops, then flush
+	// whatever was buffered up to this cutoff, then close the socket.
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+	s.flush()
 	s.mu.Lock()
 	if s.conn != nil {
 		_ = s.conn.Close()
@@ -170,18 +184,41 @@ func (s *Service) Stop() error {
 // the spec, so many stations don't all report on the same second. All UDP I/O
 // happens here (or in Stop's final flush), never on a caller's goroutine.
 func (s *Service) flushLoop(ctx context.Context) {
+	// A stoppable timer (not time.After per iteration): a full-buffer flushNow
+	// wake must reset the timer, not leave the old 5-min-plus-jitter timer
+	// allocated until its deadline — avoidable retention in a long-running
+	// daemon (review 2026-06-19 L1).
+	timer := time.NewTimer(flushInterval + jitter())
+	defer timer.Stop()
 	for {
-		jitter := time.Duration(rand.Int64N(int64(maxJitter)))
 		select {
 		case <-ctx.Done():
 			s.flush() // best-effort final flush on shutdown
 			return
 		case <-s.flushNow:
 			s.flush() // buffer filled — drain it now (off the decode goroutine)
-		case <-time.After(flushInterval + jitter):
+			resetTimer(timer)
+		case <-timer.C:
 			s.flush()
+			resetTimer(timer)
 		}
 	}
+}
+
+// jitter is the spec's per-reporter de-synchronisation offset (0..maxJitter).
+func jitter() time.Duration { return time.Duration(rand.Int64N(int64(maxJitter))) }
+
+// resetTimer stops the timer (draining a pending fire non-blockingly) and rearms
+// it for the next interval+jitter, so an early flushNow wake doesn't leak the
+// prior timer.
+func resetTimer(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(flushInterval + jitter())
 }
 
 // flush snapshots + clears the buffer under the lock, then encodes and sends
@@ -198,24 +235,43 @@ func (s *Service) flush() {
 		spots = append(spots, sp)
 	}
 	s.buf = make(map[string]Spot)
-	withTemplates := s.sent < templateBurst || time.Since(s.lastTpl) >= templateRefresh
-	seq := s.seq
-	s.seq += uint32(len(spots)) // IPFIX: seq counts reports, not packets
-	s.sent++
-	if withTemplates {
-		s.lastTpl = time.Now()
-	}
 	recv, id, conn := s.recv, s.id, s.conn
+
+	// Split into datagrams of at most maxBufferedRows spots each. The early-flush
+	// wake is only a hint, not a hard cap, so a bursty caller can leave the buffer
+	// well past one datagram's worth; encoding all of it into a single packet
+	// risks an oversized UDP write or a wrapped IPFIX length field (review M2).
+	// Per-datagram header state (seq counts reports; templates ride the first
+	// burst + hourly) is computed up-front under the one lock.
+	type plan struct {
+		seq           uint32
+		withTemplates bool
+		spots         []Spot
+	}
+	var plans []plan
+	for start := 0; start < len(spots); start += maxBufferedRows {
+		end := min(start+maxBufferedRows, len(spots))
+		chunk := spots[start:end]
+		withTemplates := s.sent < templateBurst || time.Since(s.lastTpl) >= templateRefresh
+		plans = append(plans, plan{seq: s.seq, withTemplates: withTemplates, spots: chunk})
+		s.seq += uint32(len(chunk)) // IPFIX: seq counts reports, not packets
+		s.sent++
+		if withTemplates {
+			s.lastTpl = time.Now()
+		}
+	}
 	s.mu.Unlock()
 
-	dg := encodeDatagram(uint32(time.Now().Unix()), seq, id, withTemplates, recv, spots)
-	if _, err := conn.Write(dg); err != nil {
-		s.log.WarnWith().Err(err).Int("spots", len(spots)).
-			Msg("pskreporter: datagram send failed (dropped)")
-		return
+	for _, p := range plans {
+		dg := encodeDatagram(uint32(time.Now().Unix()), p.seq, id, p.withTemplates, recv, p.spots)
+		if _, err := conn.Write(dg); err != nil {
+			s.log.WarnWith().Err(err).Int("spots", len(p.spots)).
+				Msg("pskreporter: datagram send failed (dropped)")
+			continue
+		}
+		s.log.InfoWith().Int("spots", len(p.spots)).Bool("templates", p.withTemplates).
+			Msg("pskreporter: uploaded spots")
 	}
-	s.log.InfoWith().Int("spots", len(spots)).Bool("templates", withTemplates).
-		Msg("pskreporter: uploaded spots")
 }
 
 // Flush sends any buffered spots immediately as the next datagram. The 5-minute
