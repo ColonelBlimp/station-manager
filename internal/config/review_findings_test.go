@@ -146,6 +146,30 @@ func TestValidateRigs_RejectsUnknownModel(t *testing.T) {
 	}
 }
 
+// TestValidateSmtp_RejectsMalformedFrom guards review 2026-06-19 M2 (config
+// side): an enabled SMTP block with a non-mailbox smtp.from fails validation at
+// startup/PUT, not only when the operator first sends. A valid mailbox passes.
+func TestValidateSmtp_RejectsMalformedFrom(t *testing.T) {
+	hasSmtpFinding := func(findings []Finding) bool {
+		for _, f := range findings {
+			if f.Field == "smtp" {
+				return true
+			}
+		}
+		return false
+	}
+
+	good := Config{Smtp: types.SmtpConfig{Enabled: true, Host: "smtp.x", From: "ops@example.com", Port: 587, TimeoutSec: 5}}
+	if hasSmtpFinding(Validate(good)) {
+		t.Error("a valid smtp.from was flagged")
+	}
+
+	bad := Config{Smtp: types.SmtpConfig{Enabled: true, Host: "smtp.x", From: "not a mailbox", Port: 587, TimeoutSec: 5}}
+	if !hasSmtpFinding(Validate(bad)) {
+		t.Errorf("malformed smtp.from was not rejected; findings = %+v", Validate(bad))
+	}
+}
+
 // TestService_Update_NestedMutationRollback guards review 2026-06-19 M3: when an
 // Update closure mutates a NESTED value (here, appending to Forwarders) and then
 // returns an error, the live in-memory config must be untouched — Update works

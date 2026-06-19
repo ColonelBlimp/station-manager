@@ -144,7 +144,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `POST /v1/session/email`
 - **Purpose:** Email a session's QSOs as an ADIF attachment via the daemon's SMTP (SessionPanel "send").
 - **Gating:** Always-on route; refuses if the mailer is disabled.
-- **Request:** Body `{"to" (req, must contain "@"), "subject"?, "uuids": []string (req, non-empty), "filename"?}` (subject/filename defaulted from UTC time).
+- **Request:** Body `{"to" (req, exactly one RFC 5322 mailbox — `net/mail.ParseAddress`; comma-lists and CR/LF rejected, display-name normalized to the bare address), "subject"?, "uuids": []string (req, non-empty), "filename"?}` (subject/filename defaulted from UTC time).
 - **Response:** **200** `{"status": "sent", "emailed": []string, "date": "YYYYMMDD"}`.
 - **Errors:** 503 `mailer_disabled`; 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`; 502 `smtp_failure`.
 - **Notes:** Daemon rebuilds ADIF from live DB rows (not the client blob), archives it under `<workingDir>/exports/sent-adif/` (best-effort), then stamps `sm_fwrd_by_email_*` on the rows. Unknown UUIDs are skipped with a warning.

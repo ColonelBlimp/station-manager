@@ -58,8 +58,8 @@ type SessionEmailResponse struct {
 //
 //	200  body: {"status":"sent"} on successful send.
 //	400  validation: missing to / adif, malformed JSON, etc.
-//	503  mailer disabled (smtp.host empty in config) — operator
-//	     hasn't configured SMTP; SPA toasts "email not configured".
+//	503  mailer disabled (smtp.enabled is false) — operator
+//	     hasn't enabled SMTP; SPA toasts "email not configured".
 //	502  SMTP transport failure (DNS / TLS / auth / RCPT rejected)
 //	     — wraps the underlying error so logs carry the cause.
 //
@@ -71,7 +71,7 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 
 	if !s.mailer.Enabled() {
 		s.writeError(w, http.StatusServiceUnavailable, "mailer_disabled",
-			"SMTP is not configured (smtp.host is empty)", op)
+			"SMTP is not enabled (smtp.enabled is false)", op)
 		return
 	}
 

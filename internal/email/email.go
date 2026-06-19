@@ -11,11 +11,12 @@
 //     failures, daemon-health probes — call the same Send with
 //     their own Subject / Body / Attachments.
 //
-// "External services degrade, not crash" applies: an empty Host in
-// config disables the mailer, Send returns ErrMailerDisabled, and
-// callers fold that into a user-visible "email not configured" path
-// rather than a 500. SMTP transport failures return wrapped errors
-// the caller surfaces as a toast.
+// "External services degrade, not crash" applies: smtp.enabled=false is the
+// kill switch — Send returns ErrMailerDisabled and callers fold that into a
+// user-visible "email not configured" path rather than a 500. (When enabled,
+// config validation requires host/from/port/timeout, so an enabled-but-blank
+// block is rejected at startup, not silently disabled.) SMTP transport failures
+// return wrapped errors the caller surfaces as a toast.
 //
 // Stdlib-only by design — net/smtp + crypto/tls + a hand-rolled
 // MIME multipart envelope. The message shape (one text/plain body,
@@ -27,11 +28,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	stderrs "errors"
 	"fmt"
 	"mime"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strings"
 	"time"
@@ -87,6 +90,12 @@ type Message struct {
 type Service struct {
 	cfg    types.SmtpConfig
 	logger *logging.Service
+
+	// tlsRoots overrides the root CA pool the STARTTLS handshake verifies the
+	// server certificate against. nil (production) → the system roots. Tests set
+	// it to a self-signed test cert's pool so the STARTTLS path can be exercised
+	// end-to-end; server-name verification and the TLS 1.2 minimum still apply.
+	tlsRoots *x509.CertPool
 }
 
 // New constructs a mailer Service. The cfg is read once and snapshotted
@@ -135,11 +144,16 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 	if s == nil || !s.cfg.Enabled {
 		return ErrMailerDisabled
 	}
-	if msg.To == "" {
-		return errors.New(op).WithErr(ErrInvalidMessage).WithMsg("recipient is required")
-	}
-	if msg.Subject == "" {
-		return errors.New(op).WithErr(ErrInvalidMessage).WithMsg("subject is required")
+
+	// Validate at the package boundary, before any network I/O — internal/email
+	// is a general-purpose mailer whose future callers (alert paths) won't repeat
+	// the HTTP handler's checks, so address/header/attachment safety must live
+	// here (review 2026-06-19 M2). fromAddr/toAddr are the parsed bare mailboxes
+	// used for the SMTP envelope; they can't carry CR/LF (ParseAddress rejects
+	// it), which closes header-injection on the envelope.
+	fromAddr, toAddr, err := s.validateMessage(op, msg)
+	if err != nil {
+		return err
 	}
 
 	deadline := time.Now().Add(time.Duration(s.cfg.TimeoutSec) * time.Second)
@@ -174,6 +188,7 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 		tlsCfg := &tls.Config{
 			ServerName: s.cfg.Host,
 			MinVersion: tls.VersionTLS12,
+			RootCAs:    s.tlsRoots, // nil → system roots (production)
 		}
 		if err := client.StartTLS(tlsCfg); err != nil {
 			return errors.New(op).WithErr(err).WithMsg("starttls")
@@ -187,18 +202,18 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 		}
 	}
 
-	if err := client.Mail(s.cfg.From); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("mail from %s", s.cfg.From)
+	if err := client.Mail(fromAddr); err != nil {
+		return errors.New(op).WithErr(err).WithMsgf("mail from %s", fromAddr)
 	}
-	if err := client.Rcpt(msg.To); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("rcpt to %s", msg.To)
+	if err := client.Rcpt(toAddr); err != nil {
+		return errors.New(op).WithErr(err).WithMsgf("rcpt to %s", toAddr)
 	}
 
 	w, err := client.Data()
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("smtp data")
 	}
-	if _, err := w.Write(buildMimeEnvelope(s.cfg.From, msg)); err != nil {
+	if _, err := w.Write(buildMimeEnvelope(fromAddr, toAddr, msg)); err != nil {
 		_ = w.Close()
 		return errors.New(op).WithErr(err).WithMsg("write data")
 	}
@@ -216,21 +231,73 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 	return nil
 }
 
+// validateMessage enforces the mailer's input contract before any network I/O
+// and returns the parsed bare from/to mailboxes for the SMTP envelope. cfg.From
+// and msg.To must each be exactly one RFC 5322 mailbox; the subject is required
+// and must be control-character-free (header-injection guard); attachment
+// filenames must be control-free and any declared content type must be a valid
+// media type. Every failure wraps ErrInvalidMessage so callers map it to 400,
+// not a transport 5xx (review 2026-06-19 M2).
+func (s *Service) validateMessage(op errors.Op, msg Message) (fromAddr, toAddr string, err error) {
+	from, perr := mail.ParseAddress(s.cfg.From)
+	if perr != nil {
+		return "", "", errors.New(op).WithErr(ErrInvalidMessage).WithMsgf("invalid smtp.from %q", s.cfg.From)
+	}
+	if msg.To == "" {
+		return "", "", errors.New(op).WithErr(ErrInvalidMessage).WithMsg("recipient is required")
+	}
+	to, perr := mail.ParseAddress(msg.To)
+	if perr != nil {
+		return "", "", errors.New(op).WithErr(ErrInvalidMessage).WithMsgf("invalid recipient %q", msg.To)
+	}
+	if msg.Subject == "" {
+		return "", "", errors.New(op).WithErr(ErrInvalidMessage).WithMsg("subject is required")
+	}
+	if hasControlChars(msg.Subject) {
+		return "", "", errors.New(op).WithErr(ErrInvalidMessage).WithMsg("subject contains control characters")
+	}
+	for _, att := range msg.Attachments {
+		if hasControlChars(att.Filename) {
+			return "", "", errors.New(op).WithErr(ErrInvalidMessage).
+				WithMsgf("attachment filename %q contains control characters", att.Filename)
+		}
+		if att.ContentType != "" {
+			if _, _, mperr := mime.ParseMediaType(att.ContentType); mperr != nil {
+				return "", "", errors.New(op).WithErr(ErrInvalidMessage).
+					WithMsgf("invalid attachment content type %q", att.ContentType)
+			}
+		}
+	}
+	return from.Address, to.Address, nil
+}
+
+// hasControlChars reports whether s contains any C0 control character or DEL —
+// notably CR/LF, the SMTP/MIME header-injection vectors.
+func hasControlChars(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // buildMimeEnvelope formats msg as a multipart/mixed MIME message
 // suitable for SMTP DATA. Single text/plain body part + one
 // application/* attachment per Attachment (base64-encoded). Headers
-// follow RFC 5322 / RFC 2045.
+// follow RFC 5322 / RFC 2045. from/to are the validated bare mailboxes
+// (validateMessage ran first), so they carry no CR/LF.
 //
 // Boundary is a random-ish string built from the current time —
 // good enough for "doesn't collide with body content" at this scale,
 // no need for a crypto/rand boundary.
-func buildMimeEnvelope(from string, msg Message) []byte {
+func buildMimeEnvelope(from, to string, msg Message) []byte {
 	var buf bytes.Buffer
 	boundary := fmt.Sprintf("sm-mime-%d", time.Now().UnixNano())
 
 	// RFC 5322 envelope headers.
 	_, _ = fmt.Fprintf(&buf, "From: %s\r\n", from)
-	_, _ = fmt.Fprintf(&buf, "To: %s\r\n", msg.To)
+	_, _ = fmt.Fprintf(&buf, "To: %s\r\n", to)
 	_, _ = fmt.Fprintf(&buf, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", msg.Subject))
 	_, _ = fmt.Fprintf(&buf, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	buf.WriteString("MIME-Version: 1.0\r\n")
@@ -260,9 +327,17 @@ func buildMimeEnvelope(from string, msg Message) []byte {
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
+		// FormatMediaType emits RFC 2045/2231-correct parameters — quoting or
+		// RFC 2231-encoding the filename as needed (notably non-ASCII names) —
+		// rather than the previous naive %q, which can't represent those.
+		ctHeader := mime.FormatMediaType(ct, map[string]string{"name": att.Filename})
+		if ctHeader == "" {
+			ctHeader = ct // defensive: ct is validated upstream, so unreachable
+		}
+		disp := mime.FormatMediaType("attachment", map[string]string{"filename": att.Filename})
 		_, _ = fmt.Fprintf(&buf, "--%s\r\n", boundary)
-		_, _ = fmt.Fprintf(&buf, "Content-Type: %s; name=%q\r\n", ct, att.Filename)
-		_, _ = fmt.Fprintf(&buf, "Content-Disposition: attachment; filename=%q\r\n", att.Filename)
+		_, _ = fmt.Fprintf(&buf, "Content-Type: %s\r\n", ctHeader)
+		_, _ = fmt.Fprintf(&buf, "Content-Disposition: %s\r\n", disp)
 		buf.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
 		writeBase64Wrapped(&buf, att.Body)
 		buf.WriteString("\r\n")

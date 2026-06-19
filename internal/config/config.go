@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -141,7 +142,7 @@ type Config struct {
 	Lookup types.EnrichmentConfig `json:"lookup"`
 
 	// Smtp holds the operator's SMTP submission credentials used by
-	// the daemon's general-purpose mailer (internal/email). Empty Host
+	// the daemon's general-purpose mailer (internal/email). enabled=false
 	// disables the mailer; Send returns ErrMailerDisabled and callers
 	// fold that into a user-visible "email not configured" path. The
 	// SessionPanel's "email session ADIF" button is the first consumer;
@@ -1240,6 +1241,18 @@ func validateSmtp(s types.SmtpConfig) error {
 	}
 	if s.From == "" {
 		return fmt.Errorf("smtp.from is required when smtp.enabled is true")
+	}
+	// Parse From (and a non-empty default recipient) as a single mailbox at
+	// startup/PUT so a malformed address fails fast here rather than only when
+	// the operator first tries to send (review 2026-06-19 M2). Matches the
+	// mailbox check internal/email.Send applies at send time.
+	if _, err := mail.ParseAddress(s.From); err != nil {
+		return fmt.Errorf("smtp.from %q is not a valid email address", s.From)
+	}
+	if s.DefaultRecipient != "" {
+		if _, err := mail.ParseAddress(s.DefaultRecipient); err != nil {
+			return fmt.Errorf("smtp.default_recipient %q is not a valid email address", s.DefaultRecipient)
+		}
 	}
 	if s.Port <= 0 || s.Port > 65535 {
 		return fmt.Errorf("smtp.port must be in 1..65535, got %d", s.Port)

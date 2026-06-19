@@ -120,7 +120,7 @@ func main() {
 //     because operator config gates which providers exist — see
 //     buildEnrichment's own doc for the rationale.
 //   - Mailer: no Initialize / Start / Stop. The Service reports
-//     Enabled() from cfg.Smtp.Host; handlers gate via Enabled() and
+//     Enabled() from cfg.Smtp.Enabled; handlers gate via Enabled() and
 //     return 503 mailer_disabled otherwise. Lifecycle would be ceremony.
 //   - Hub: constructed inline (events.NewHub), no Initialize / Start,
 //     manual Close after publishers drain. It's a fan-out primitive,
@@ -411,11 +411,12 @@ func run() error {
 	}
 
 	// ---- Mailer ----
-	// Constructed regardless of whether SMTP is configured; the Service
-	// itself reports Enabled() based on cfg.Smtp.Host. Handlers check
-	// Enabled() and return 503 mailer_disabled when unconfigured —
-	// no startup-time error path for the "operator hasn't filled in
-	// SMTP yet" state.
+	// Constructed regardless of whether SMTP is enabled; the Service
+	// itself reports Enabled() based on cfg.Smtp.Enabled. Handlers check
+	// Enabled() and return 503 mailer_disabled when disabled —
+	// no startup-time error path for the "operator hasn't enabled
+	// SMTP yet" state. (An enabled-but-incomplete block is rejected by
+	// config validation at load, so it never reaches here.)
 	mailerSvc := email.New(cfg.Smtp, loggerSvc)
 
 	// ---- Bridge subsystem (ADR 0013 + ADR 0019) ----
