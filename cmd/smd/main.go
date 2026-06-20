@@ -156,6 +156,9 @@ func run() error {
 	// first-run case without a separate explicit call here.
 	cfg, firstRunPath, err := loadConfig(*configPath)
 	if err != nil {
+		// Pre-logger failure: mirror into smd.log so a bad config.json isn't a
+		// silent exit (stderr alone only reaches the journal). See logStartupFailure.
+		logStartupFailure(err)
 		return err
 	}
 
@@ -175,7 +178,9 @@ func run() error {
 		cfg.UserAgent = "station-manager/" + Version
 	}
 	if cfg.UserAgent == "" {
-		return fmt.Errorf("global UserAgent resolved to empty string; cannot start daemon (build version=%q)", Version)
+		err := fmt.Errorf("global UserAgent resolved to empty string; cannot start daemon (build version=%q)", Version)
+		logStartupFailure(err)
+		return err
 	}
 
 	// ---- Build DI container ----
@@ -186,6 +191,7 @@ func run() error {
 	// loadConfig.
 	cfgPath, err := resolveConfigPath(*configPath, firstRunPath)
 	if err != nil {
+		logStartupFailure(err)
 		return err
 	}
 	cfgSvc.SetPath(cfgPath)
@@ -247,13 +253,17 @@ func run() error {
 
 	// Build triggers Initialize() on all beans in dependency order.
 	if err = container.Build(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("build container")
+		err = errors.New(op).WithErr(err).WithMsg("build container")
+		logStartupFailure(err) // still pre-logger
+		return err
 	}
 
 	// ---- Resolve services ----
 	loggerSvc, err := iocdi.ResolveAs[*logging.Service](container, logging.ServiceName)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("resolve logging service")
+		err = errors.New(op).WithErr(err).WithMsg("resolve logging service")
+		logStartupFailure(err) // the logger itself didn't come up — mirror to smd.log
+		return err
 	}
 
 	// Register logger cleanup first (defer-LIFO means it runs last, after

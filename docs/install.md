@@ -9,8 +9,10 @@ support is on the roadmap but not yet packaged.
 
 ## 1. Prerequisites
 
-- A modern Linux distribution with `dnf` and `systemd` (Fedora 40+,
-  RHEL 9+ or equivalent).
+- An RPM-based Linux with `dnf`/`zypper` and `systemd`. The release
+  binary's glibc floor is 2.28, so it runs on **Fedora 34+, RHEL/Rocky/
+  AlmaLinux 8+**, and recent openSUSE. (Debian/Ubuntu `.deb` is on the
+  roadmap but not yet packaged — see §9.)
 - Permission to run `sudo` for the install step. Everything after
   install runs as your normal user.
 - A web browser. The UI is the embedded Svelte SPA served by the
@@ -58,12 +60,17 @@ systemctl --user daemon-reload
 systemctl --user enable --now smd
 ```
 
-To start the daemon at boot without needing an active login session
-(recommended for a personal logging machine):
+`enable --now` starts smd immediately **and** auto-starts it whenever you log
+in. For an always-on logging machine you also want it to start at **boot, with
+no login session** — enable lingering for your user:
 
 ```
 loginctl enable-linger "$USER"
 ```
+
+Without linger, smd runs only while you have a session open; with it, your
+user's systemd instance (and smd) starts at boot and survives logout. It's a
+`--user` service throughout — there is no `sudo systemctl enable smd`.
 
 Verify it's running:
 
@@ -72,9 +79,12 @@ systemctl --user status smd
 ```
 
 The service should report `active (running)`. If it doesn't, check
-`journalctl --user -u smd` for the cause — the most common failure
-on first run is a stale `config.json` from a prior install pointing
-at unreadable paths.
+`journalctl --user -u smd` for the cause — the most common failure on
+first run is a bad `config.json` (malformed JSON, an invalid value, or
+a stale path from a prior install). A config/startup error that aborts
+the daemon before logging starts is **also written to `smd.log`** (see
+§6 for its location), so either place shows it — look for the
+`"smd startup failed (fatal) before logging was initialised"` line.
 
 For day-to-day start/stop, the package installs a small wrapper,
 `smctl`, alongside the binary:
@@ -122,27 +132,108 @@ accessible from the My Station tab in the SPA:
   and longitude from this; bearing and distance calculations on the
   Country panel depend on it.
 - **Name** (operator name) and other ADIF MY_\* fields.
-- **Rig / CAT settings** if you want the daemon to read frequency
-  and mode directly from a connected transceiver (the tested drivers
-  are the Yaesu FT-710 and FTdx10 over Kenwood-style CAT and the Icom
-  IC-7300 over CI-V).
-
-  > **Icom IC-7300 prerequisites — set these in the radio's menu first.**
-  > Set **USB SEND = OFF** (Menu » SET » Connectors » USB SEND). The IC-7300
-  > can map PTT to a serial control line (RTS/DTR); on Linux/macOS the OS may
-  > briefly assert that line when the daemon opens the port, which would key
-  > the transmitter. Turning USB SEND off removes PTT from the control line
-  > and is the dependable fix (the daemon de-asserts the lines, but the OS
-  > can't guarantee a pulse-free open — you'll see a one-line warning at
-  > connect). Also set **CI-V Transceive = ON** (so the rig pushes
-  > frequency/mode changes), **CI-V USB Port = Link to [REMOTE]**, and match
-  > the daemon's baud to the rig's **CI-V Baud Rate** (the default rigdef
-  > uses 19200 — that's the CI-V baud, not the USB baud). See ADR 0034.
+- **Rig / CAT** — to have the daemon read frequency/mode from a connected
+  transceiver (and key PTT for the tune carrier and FT8 transmit), see
+  **"Connecting a rig (CAT)"** just below. Skip it for a logging-only station —
+  the bridge stays disabled and you type frequency/mode by hand.
 - **Forwarders** (QRZ Logbook, etc.) if you want QSOs uploaded to
   online services. No forwarders are configured by default — add an
   entry to the `forwarders` array in `config.json` for each destination
   you want, then restart the daemon. A first-run setup affordance for
   this in the SPA is future work; see ADR 0022.
+
+### Connecting a rig (CAT)
+
+CAT lets the daemon read the rig's frequency and mode (shown live in the SPA)
+and key PTT for the tune carrier and FT8 transmit. It's optional — a
+logging-only station leaves the bridge disabled and enters frequency/mode by
+hand. There is no rig editor in the SPA yet (that's the future config app), so
+this is a `config.json` edit.
+
+**1. List the host's devices.** With the daemon running, ask it what hardware is
+present — no extra tools needed (the `ft8-capture-probe` / `catcli` dev tools
+are not in the RPM):
+
+```
+curl -s http://127.0.0.1:8080/v1/hardware | jq
+```
+
+`serial_ports[].id` are the CAT port paths (each with a friendly `label` and
+VID:PID); `audio.capture` / `audio.playback` list the sound devices by `name`
+(needed only for FT8). Prefer the stable `/dev/serial/by-id/...` path over a
+bare `/dev/ttyUSBn` — it survives reboots and re-plugging. A rig like the FTdx10
+presents **two** serial ports (a dual USB UART); the CAT one is the "Enhanced"
+port — if unsure, try one and check the log (step 4), then the other.
+
+**2. Grant serial-port access.** The daemon runs as your user, so your user must
+be able to open the port. Read which group owns it and add yourself — the group
+name varies by distro, so take it from `stat`, don't assume `dialout`:
+
+```
+stat -c '%U %G %a' /dev/ttyUSB0      # → e.g. "root <group> 660"
+sudo usermod -aG <group> "$USER"     # use the group printed above
+```
+
+Then **log out and back in (or reboot)**: the systemd `--user` instance only
+picks up the new group on a fresh session (`newgrp` won't fix the service).
+Confirm with `id`.
+
+> On Fedora, **ModemManager** probes USB serial ports on plug-in and can briefly
+> hold the CAT port, which looks like an open failure. If CAT connects flakily,
+> check `systemctl status ModemManager`; a udev rule tagging the rig's VID:PID
+> with `ENV{ID_MM_DEVICE_IGNORE}="1"` tells it to leave the port alone.
+
+**3. Configure the rig.** Stop the daemon first — it rewrites `config.json` on
+any change, so a hand-edit while it's running gets clobbered:
+
+```
+smctl stop
+```
+
+Add a rig to the `rigs` array, point `default_rig_id` at it, and enable the
+bridge:
+
+```json
+"bridge": { "enabled": true },
+"rigs": [
+  {
+    "id": 1,
+    "model": "yaesu-ftdx10",
+    "port": "/dev/serial/by-id/usb-..._-if00",
+    "audio": { "rx": "<capture name>", "tx": "<playback name>" }
+  }
+],
+"default_rig_id": 1
+```
+
+- `model` is the CAT **driver id**. Tested rigs: **`yaesu-ftdx10`** and
+  **`yaesu-ft710`** (Kenwood-style CAT), **`icom-ic7300`** (CI-V — also set the
+  radio-menu items below; ADR 0034).
+- `port` is a `serial_ports[].id` from step 1.
+- `audio.rx` / `audio.tx` are `audio.*[].name` values from step 1 — needed only
+  for FT8 (capture / playback). Omit them for CAT display only.
+
+> **Icom IC-7300 — set these in the radio's menu first.** Set **USB SEND = OFF**
+> (Menu » SET » Connectors » USB SEND). The IC-7300 can map PTT to a serial
+> control line (RTS/DTR); on Linux/macOS the OS may briefly assert that line when
+> the daemon opens the port, which would key the transmitter. USB SEND = OFF
+> removes PTT from the control line and is the dependable fix (the daemon
+> de-asserts the lines, but the OS can't guarantee a pulse-free open — you'll see
+> a one-line warning at connect). Also set **CI-V Transceive = ON** (so the rig
+> pushes frequency/mode changes), **CI-V USB Port = Link to [REMOTE]**, and match
+> the daemon's baud to the rig's **CI-V Baud Rate** (the default rigdef uses
+> 19200 — that's the CI-V baud, not the USB baud). See ADR 0034.
+
+**4. Restart and verify.**
+
+```
+smctl restart
+```
+
+The SPA's frequency/mode readout should go live within a second or two. If it
+doesn't, `journalctl --user -u smd` (or `smd.log`, §6) shows the bridge
+connecting — look for the decoded `rigIdentity`, or a permission / port / serial
+error.
 
 ---
 
@@ -282,31 +373,32 @@ Two prerequisites:
    `docs/ft8.md` for the timing detail. Nothing else is needed to keep the
    timing healthy beyond not pinning the CPU during a QSO.
 2. **Receive audio routed to a capture device** — typically the rig's
-   USB audio codec.
+   USB audio codec, set on the rig profile (see "Connecting a rig (CAT)").
 
-Find your capture device index with the probe tool (CGO build):
+List the available capture devices from the running daemon — no dev tools
+needed (`ft8-capture-probe` isn't in the RPM):
 
 ```
-CGO_ENABLED=1 go run ./cmd/ft8-capture-probe -list
+curl -s http://127.0.0.1:8080/v1/hardware | jq '.audio.capture'
 ```
 
-It prints each device and its index. Pick the rig's codec, then set
-the FT8 block in `config.json`:
+Take the rig codec's `name`, set it as the active rig's `audio.rx`, and turn
+FT8 on in `config.json`:
 
 ```json
-"ft8": {
-  "enabled": true,
-  "device": "1",
-  "enable_osd": true
-}
+"ft8": { "enabled": true, "enable_osd": true },
+"rigs": [
+  { "id": 1, "model": "yaesu-ftdx10", "port": "...",
+    "audio": { "rx": "<capture name>", "tx": "<playback name>" } }
+]
 ```
 
-`device` is the integer index from `-list` as a string; an empty
-string means the system default capture device. `enable_osd` (default
-**true**, so you can omit it) turns on go-ft8's deeper OSD fallback
-decode — it recovers weak signals that basic decoding misses, at a
-small CPU cost well within the 15-second budget; set it to `false`
-only if you want the faster, shallower decode.
+The daemon resolves the device **by name** (ADR 0028), so it survives index
+reordering across reboots; an empty/absent `audio.rx` falls back to the system
+default capture device. `enable_osd` (default **true**, so you can omit it)
+turns on go-ft8's deeper OSD fallback decode — it recovers weak signals that
+basic decoding misses, at a small CPU cost well within the 15-second budget;
+set it to `false` only if you want the faster, shallower decode.
 
 Enabling FT8 does **not** make the daemon hold the capture device the
 whole time it runs. Capture is acquired only while you have the FT8
@@ -315,14 +407,20 @@ so an idle daemon with FT8 enabled leaves the sound device free for
 other software. (The first decode after you open the view can take up
 to one 15-second slot to appear.)
 
-Restart the daemon (`smctl restart`) and watch the log for decodes:
+Restart the daemon (`smctl restart`), then open the **FT8 view** in the SPA —
+capture starts when you do, and decodes appear in Band Activity. Per-decode log
+lines are **debug**-level (a 12–16×/slot firehose), so they don't show at the
+default log level. To capture the decode stream durably, enable the **decode
+log** (`ft8.decode_log` — a JTDX `ALL.TXT`-style file; see `docs/ft8.md`); for a
+one-off look, raise the daemon to debug level and:
 
 ```
 journalctl --user -u smd -f | grep "ft8 decode"
 ```
 
-To smoke-test capture directly without the daemon, the probe can run
-the live slot scheduler and print decodes per UTC slot:
+To smoke-test capture without the daemon — **from a source checkout** (the probe
+isn't shipped in the RPM) — run the live slot scheduler and print decodes per
+UTC slot:
 
 ```
 CGO_ENABLED=1 go run ./cmd/ft8-capture-probe -scheduler -slots=4 -device=1
