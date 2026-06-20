@@ -120,6 +120,7 @@ secretly are) rig-specific.
 | `TX.Occupancy.*` | D | start (per-slot read of snapshot) | — | Occupancy detector tuning |
 | `Display.*` (history/feed/colours) | SPA | served; PUT-writable (presence-aware) | — | Daemon stores, ignores; pure SPA prefs |
 | `Frequencies` (band→Hz) | SPA | served (resolved) | — | Main-Freq buttons; PUT not yet wired |
+| `DecodeLog.{Enabled,Path}` | D | start (read at capture acquire) | — | JTDX ALL.TXT decode log (RX + our TX); off by default; `Path` default `$SM_WORKING_DIR/log/ft8-all.txt`. Independent of log level. Detail in `docs/ft8.md` |
 
 ### `RigConfig` (`internal/types/rig.go`)
 

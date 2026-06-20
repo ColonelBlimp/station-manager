@@ -49,6 +49,12 @@ type Ft8Config struct {
 	// (the daemon serves resolved defaults via ResolveFt8Display).
 	Display *Ft8DisplayConfig `json:"display,omitempty"`
 
+	// DecodeLog configures the JTDX-style ALL.TXT decode log (RX decodes + our own
+	// TX), a diagnostic record written independently of the daemon log level so an
+	// operator can reconstruct an on-air exchange after the fact. Pointer-typed for
+	// the same inert-block reason as TX/Display; nil or Enabled=false → no file.
+	DecodeLog *Ft8DecodeLogConfig `json:"decode_log,omitempty"`
+
 	// Frequencies maps a band label (e.g. "20m") to its FT8 dial frequency in Hz.
 	// SPA-facing (the daemon doesn't consume it): the Main-Freq band buttons tune to
 	// these and highlight the one matching the live dial. Stored sparse, served
@@ -56,6 +62,18 @@ type Ft8Config struct {
 	// the ResolveFt8Frequencies defaults (the WSJT-X FT8 dial frequencies). omitempty
 	// so an untouched config carries no inert block.
 	Frequencies map[string]int `json:"frequencies,omitempty"`
+}
+
+// Ft8DecodeLogConfig configures the FT8 decode log — a WSJT-X/JTDX ALL.TXT-style
+// file. When Enabled, every RX slot's decodes and our own transmissions are
+// appended in JTDX line format, independent of the daemon's log level (so the
+// decode stream survives at the default info level, where the per-decode log line
+// is gated off). Off by default: the file grows unbounded, like WSJT-X's ALL.TXT,
+// and the operator clears it. Path defaults to $SM_WORKING_DIR/log/ft8-all.txt
+// when empty (next to smd.log).
+type Ft8DecodeLogConfig struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path,omitempty"`
 }
 
 // Ft8DisplayConfig holds the FT8 Band Activity display preferences the SPA reads

@@ -3,6 +3,7 @@ package ft8
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -103,8 +104,9 @@ type Service struct {
 	txClosed   bool   // set on Stop; refuses further arming
 	txMessage  string // message of the in-flight transmission ("" = none)
 	txOffsetHz float64
-	txLastErr  string // i18n code of the last failed transmission ("" = none)
-	exchPath   string // operator's antenna-path choice for the active exchange ("S"/"L"); logging-only
+	txDialMHz  float64 // dial MHz of the active session (0 = unknown/manual), for the decode-log TX line
+	txLastErr  string  // i18n code of the last failed transmission ("" = none)
+	exchPath   string  // operator's antenna-path choice for the active exchange ("S"/"L"); logging-only
 	txDevice   txPlayer
 	txCtrl     *TxController
 	txCancel   context.CancelFunc
@@ -137,6 +139,14 @@ type Service struct {
 	// decode goroutine after the SSE publish. DI keeps internal/ft8 free of the
 	// consumer (one-way import), same as qsoLogger.
 	decodeSink func(DecodeReport)
+
+	// decLog is the optional JTDX-style ALL.TXT decode log (ft8.decode_log.enabled).
+	// Opened at capture-start and closed at capture-release, so it follows the
+	// demand-driven capture lifecycle. atomic.Pointer because the RX writer
+	// (decode goroutine, under s.mu's session) and the TX writer (tx goroutine,
+	// under txMu) both Load it without a shared lock; nil = disabled/idle (its
+	// methods are nil-safe no-ops).
+	decLog atomic.Pointer[DecodeLog]
 }
 
 // newService constructs a Service with an injected capture source. The
@@ -299,6 +309,14 @@ func (s *Service) startCaptureLocked() {
 	s.captureCancel = cancel
 	s.capturing = true
 
+	// Open the JTDX ALL.TXT decode log for this session if the operator enabled it
+	// (ft8.decode_log). Fail-soft: openDecodeLog returns nil on any error, leaving
+	// the writer a no-op. Closed in releaseCaptureLocked after the decode goroutine
+	// drains, so no RX write can race the close.
+	if dl := s.cfg.DecodeLog; dl != nil && dl.Enabled {
+		s.decLog.Store(openDecodeLog(dl.Path, s.log))
+	}
+
 	// The scheduler + decoder are a COUPLED pair (Scheduler.Run closes its slots
 	// channel on exit), so they can't be respawned independently (respawn=false).
 	// Instead each installs onCaptureLoopExit: if either exits while the session
@@ -367,6 +385,12 @@ func (s *Service) releaseCaptureLocked() {
 	}
 	s.wg.Wait()
 	s.capturing = false
+	// Close the decode log AFTER the decode goroutine has drained (s.wg.Wait above),
+	// so no RX write is in flight. A late TX write is safe regardless — DecodeLog
+	// serialises writes against Close and no-ops after it.
+	if dl := s.decLog.Swap(nil); dl != nil {
+		dl.Close()
+	}
 	// Invalidate the Band Activity / occupancy replay cache: with the session
 	// ended, a later subscriber must not be handed this session's last slot (it
 	// would show stale decodes when the rig is off and capture can't reacquire).
@@ -435,6 +459,10 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	for slot := range slots {
 		msgs := DecodeSlot(slot.Samples, osd, s.log)
 		ref := SlotRefFromTime(slot.StartUTC)
+
+		// JTDX ALL.TXT RX lines (ft8.decode_log) — independent of the daemon log
+		// level. nil-safe no-op when the decode log is disabled.
+		s.decLog.Load().WriteRx(slot.StartUTC, msgs)
 
 		// Publish the decode feed (live Band Activity) and the occupancy report
 		// (TX-offset picker) for the same slot. Independent SSE events on one

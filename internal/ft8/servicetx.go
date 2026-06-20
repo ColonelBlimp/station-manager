@@ -264,6 +264,10 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	if _, err := EncodeToSlot(message, offsetHz, txNominalDtSec); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
+	// Manual transmit has no session dial, so the decode-log TX line omits the band.
+	s.txMu.Lock()
+	s.txDialMHz = 0
+	s.txMu.Unlock()
 	// Boundary-aligned: TransmitSlot waits for the next UTC slot and starts at the
 	// nominal +0.5 s — right for a manually-initiated CQ (we pick our own slot/
 	// parity, so we start on time with no truncation).
@@ -332,6 +336,11 @@ func (s *Service) startTransmission(
 	s.txMessage = message
 	s.txOffsetHz = offsetHz
 	s.txLastErr = ""
+
+	// JTDX ALL.TXT TX line (ft8.decode_log) — stamped at commit (within ~1 s of the
+	// on-air key for a sequencer rung). Under txMu so txDialMHz reads consistently;
+	// nil-safe no-op when the decode log is disabled.
+	s.decLog.Load().WriteTx(time.Now().UTC(), s.txDialMHz, offsetHz, message)
 
 	// Launch UNDER txMu (review 2026-06-19 M1): GoTracked does txWg.Add(1)
 	// synchronously, so doing it while we still hold txMu means a concurrent
@@ -405,6 +414,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	s.txMu.Lock()
 	armed := s.txArmed
 	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txDialMHz = dialFreqMHz // session dial, for the decode-log TX line
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
@@ -444,6 +454,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	s.txMu.Lock()
 	armed := s.txArmed
 	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txDialMHz = dialFreqMHz // session dial, for the decode-log TX line
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
@@ -473,6 +484,7 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	s.txMu.Lock()
 	armed := s.txArmed
 	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txDialMHz = dialFreqMHz // session dial, for the decode-log TX line
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)

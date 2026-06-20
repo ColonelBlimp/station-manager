@@ -409,8 +409,8 @@ what went out in the daemon log: `ft8 seq: transmitting rung` records the litera
 message, rung, offset, and how late into the slot it fired. The `ft8 seq:` QSO
 events log at **info**, so they are always captured; the full per-slot decode stream
 — `ft8 decode`, one line per decoded signal — logs at **debug** to keep the normal
-log quiet, so raise the daemon log level to `debug` when you want every decode for
-on-air diagnosis.)
+log quiet, so raise the daemon log level to `debug` for a one-off look, or — for a
+durable record — enable the **decode log** below.)
 
 **Don't expect the station you answered to always come back.** Two normal FT8
 realities — neither a fault in SM, and both visible in the log as a string of
@@ -435,6 +435,41 @@ until you Abandon). To choose *which* callers to work and in what order, use **p
 callsign stacking** instead: **Ctrl/Cmd+click** each calling-you decode to queue it, and
 SM works the stack oldest-first (see "Working a caller" above). `auto_first` Call CQ is
 the hands-off option; the stack is the operator-curated one.
+
+### Decode log (`ALL.TXT`-style) — `ft8.decode_log.*`
+
+A durable, append-only record of **every RX decode and our own TX**, in the JTDX
+`ALL.TXT` line format — so you can reconstruct an on-air exchange after the fact and
+compare it line-for-line with another operator's log. It is written **independently of
+the daemon log level** (the per-decode `ft8 decode` line is gated off at the default
+`info`, a 12–16×/slot firehose; this is the way to keep the stream without running the
+whole daemon at `debug`).
+
+Off by default — like WSJT-X's `ALL.TXT`, the file grows unbounded and you clear it
+yourself. Enable it in `config.json` (restart to apply; capture opens the file when the
+FT8 view is first opened and closes it when the last subscriber leaves):
+
+```jsonc
+"ft8": {
+  "decode_log": {
+    "enabled": true,
+    "path": ""   // optional; default $SM_WORKING_DIR/log/ft8-all.txt (next to smd.log)
+  }
+}
+```
+
+Line format (UTC throughout):
+
+```
+20260618_140830 -7 0.3 2752 ~ JM1ISX 7Q5MLV -15                       # RX: ts snr dt freqHz ~ message
+20260618_140845.104 Transmitting 14.074 MHz + 2997Hz FT8: 7Q5MLV JM1ISX R-07   # TX: ts.ms dial + offset
+```
+
+RX lines carry no dial (only the audio offset within the passband); the TX line carries
+the session dial (omitted for a manual transmit with no session dial). The TX timestamp
+is stamped when the transmission commits — within ~1 s of the on-air key for a sequencer
+rung. Fail-soft: if the file can't be opened (bad path, full disk) the daemon logs one
+warning and keeps decoding — the decode log never blocks FT8.
 
 ### SSE wire — `GET /v1/ft8/events`
 
