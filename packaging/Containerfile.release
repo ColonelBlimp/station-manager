@@ -1,0 +1,33 @@
+# Station Manager release builder.
+#
+# AlmaLinux 8 (a RHEL-8 rebuild) pins glibc 2.28 — older than Fedora 43,
+# Debian 12, and Ubuntu 24.04 — so the CGO + PocketFFT (live-FT8) binary built
+# here runs on every RPM distro at or newer than RHEL 8: Fedora (incl. 43),
+# RHEL/Rocky/Alma 8+, recent openSUSE. The FT8 build CANNOT be fully static
+# (miniaudio dlopen's the host audio backend, and glibc forbids static dlopen),
+# so it is dynamically linked to glibc and the build host's glibc is the floor —
+# hence the oldest practical base. AlmaLinux (not Rocky) because its image is
+# reliably published on Docker Hub.
+#
+# This image builds the Go binary and packages the RPM with nfpm (no rpmbuild).
+# The embedded SPA is built on the HOST and mounted in (scripts/release.sh), so
+# Node/npm are deliberately NOT installed here.
+FROM almalinux:8
+
+ARG GO_VERSION=1.26.2
+
+# gcc for cgo (PocketFFT C); git so scripts/version.sh's git calls don't trip on
+# the mounted repo; curl/tar to fetch the Go toolchain.
+RUN dnf -y install gcc git curl tar gzip && dnf clean all
+
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    | tar -C /usr/local -xz
+ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH
+
+# nfpm builds the .rpm from nfpm.yaml without rpmbuild, on any distro.
+RUN go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+# The mounted repo is owned by the host user; let git operate on it anyway.
+RUN git config --global --add safe.directory /src
+
+WORKDIR /src

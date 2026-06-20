@@ -32,13 +32,14 @@ sudo dnf install /path/to/station-manager-<version>.x86_64.rpm
 The package installs three files:
 
 - `/usr/bin/smd` — the daemon binary (the browser SPA is embedded
-  inside it). The default build is a single statically-linked,
-  CGO-free executable. A CGO build (built with `SM_FFT=pocketfft`) is
-  dynamically linked against the C runtime and adds two things the
-  static build lacks: ~2× faster FT8 decode (PocketFFT) **and live FT8
-  audio capture** — the static default can decode WAV files but cannot
-  capture from a sound device. See the "Live FT8 decode" section below
-  if you want live FT8.
+  inside it). The shipped RPM is a **CGO + PocketFFT** build, so **live
+  FT8 capture + decode work out of the box** (faster PocketFFT decode,
+  plus the audio capture the CGO-free build can't do). It is dynamically
+  linked against glibc and built on an old-glibc baseline (AlmaLinux 8 →
+  glibc 2.28), so it runs on Fedora and other RPM distros back to RHEL 8.
+  The only runtime need beyond a base system is an audio backend —
+  PipeWire, PulseAudio, or ALSA — which any desktop already has. See §8
+  for FT8 setup, and §9 for how the release is built.
 - `/usr/bin/smctl` — the start/stop control wrapper (see §3).
 - `/usr/lib/systemd/user/smd.service` — the systemd user unit.
 
@@ -266,12 +267,14 @@ aid, not a logger.
 
 Two prerequisites:
 
-1. **A CGO build of the daemon.** Live audio capture requires CGO; the
-   static default build cannot open a sound device (it logs "capture
-   unavailable; subsystem idle" and stays up). Build/install the CGO
-   flavour with `SM_FFT=pocketfft` — e.g. for a local dogfood install,
-   `SM_FFT=pocketfft task deploy:local:dev`. **PocketFFT (not the plain
-   gonum CGO build) is the supported flavour for live FT8 *transmit*:**
+1. **A CGO build of the daemon.** The shipped RPM is already a CGO +
+   PocketFFT build, so live capture works out of the box — no separate
+   build step. (Only the CGO-free fallback build can't open a sound
+   device; if you somehow run that one it logs "capture unavailable;
+   subsystem idle" and stays up.) For a local dogfood build the
+   equivalent is `SM_FFT=pocketfft task deploy:local:dev`. **PocketFFT
+   (not the plain gonum CGO build) is the supported flavour for live FT8
+   *transmit*:**
    answering a CQ must finish decoding within ~1.7 s of the slot boundary
    to reply in time, and PocketFFT's faster decode stays comfortably inside
    that on typical hardware (gonum is borderline with OSD on — a missed slot
@@ -332,7 +335,38 @@ unconnected.
 
 ---
 
-## 9. Uninstall
+## 9. Building the release RPM (maintainers)
+
+The shipped RPM is the **CGO + PocketFFT** (live-FT8) build. Because that
+build is dynamically linked to glibc — live capture `dlopen`s the audio
+backend, which rules out a fully static binary — it must be built on the
+**oldest glibc** you intend to support, or it won't start on older distros
+(`version 'GLIBC_2.xx' not found`). `scripts/release.sh` does exactly that in
+an **AlmaLinux 8** container (glibc 2.28 → runs on RHEL 8+, Fedora incl. 43,
+recent openSUSE):
+
+```
+scripts/release.sh 2.0.0-alpha.2
+```
+
+It builds the SPA on the host, then compiles the binary and packages the RPM
+inside the container (via nfpm — no `rpmbuild`). Output lands in
+`build/release/*.rpm`. Needs `podman` (or `SM_CONTAINER_ENGINE=docker`) and
+network on the **first** run to build the cached builder image.
+
+Do **not** build a release with a bare `SM_FFT=pocketfft scripts/release-rpm.sh`
+on your own (newer) Fedora — that binary is pinned to your machine's glibc and
+may fail to start on the target. `release-rpm.sh` deliberately stays CGO-free by
+default so an accidental local build can't ship a glibc-broken binary; the
+container is what supplies the old-glibc baseline.
+
+Only an RPM is built today (RPM distros — decided 2026-06-20, first external
+deploy). A portable tarball / `.deb` for Debian/Ubuntu isn't built yet; nfpm can
+emit them from the same `nfpm.yaml` when a non-RPM target appears.
+
+---
+
+## 10. Uninstall
 
 ```
 systemctl --user disable --now smd

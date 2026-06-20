@@ -38,7 +38,18 @@ VERSION="${1#v}" # strip an optional leading 'v' (v2.0.0 → 2.0.0)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
 
 echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
-(cd frontend/logging && npm run build)
+# SM_SKIP_SPA=1 reuses an already-built dist/ (set by scripts/release.sh, which
+# builds the SPA on the host so the build container needs no Node). Bare runs
+# still build it.
+if [ "${SM_SKIP_SPA:-}" = "1" ]; then
+  if [ ! -d frontend/logging/dist ]; then
+    echo "error: SM_SKIP_SPA=1 but frontend/logging/dist/ is missing — build the SPA first" >&2
+    exit 1
+  fi
+  echo "  (SM_SKIP_SPA=1 — using pre-built frontend/logging/dist/)"
+else
+  (cd frontend/logging && npm run build)
+fi
 
 # FFT backend selection. Default is gonum (pure Go) → CGO-free, fully
 # static binary, cross-platform by default. Set SM_FFT=pocketfft to build
