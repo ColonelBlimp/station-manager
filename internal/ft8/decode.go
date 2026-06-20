@@ -47,12 +47,15 @@ func newDecodeReport(slot SlotRef, msgs []goft8.DecodedMessage) DecodeReport {
 // it. A stateful per-stream Decoder is a later concern for the live path.
 //
 // Logging policy:
-//   - one info line per decoded message ("heard this");
-//   - a debug line per slot with aggregate diagnostics (off at the default
-//     info level; flip to debug when bringing the live path up or chasing an
-//     empty slot — covers the why-nothing case for every slot, decoding or
-//     not);
+//   - one debug line per decoded message ("heard this");
+//   - one debug line per slot with aggregate diagnostics (covers the
+//     why-nothing case for every slot, decoding or not);
 //   - a warn for a rejected slot or a recovered panic.
+//
+// Both debug streams are off at the default info level (zerolog gates them to a
+// near-free no-op — no build, no file I/O); set the level to debug when bringing
+// the live path up or chasing an empty slot to recover the decode stream for
+// on-air diagnosis. The live view is the SPA Band Activity, not the log.
 //
 // Fail-soft: a panic inside the decoder is recovered and logged, never
 // propagated, and a rejected slot returns nil. An FT8 failure must never take
