@@ -16,6 +16,7 @@ type seqRecorder struct {
 	mu          sync.Mutex
 	sent        []string
 	offsets     []float64
+	dials       []float64
 	statuses    []QsoStatus
 	completed   []CompletedQso
 	transmitErr error // non-nil → transmit returns it synchronously (onDone never fires)
@@ -42,7 +43,7 @@ func (r *seqRecorder) fireOnDone(ok bool) {
 // ("queued"), then fires onDone with the on-air outcome. Tests fire onDone
 // synchronously (the real path fires it from the tx goroutine); ok=true unless
 // asyncFail is set, so the final-rung completion path is exercised either way.
-func (r *seqRecorder) transmit(msg string, off float64, onDone func(ok bool)) error {
+func (r *seqRecorder) transmit(msg string, off, dialMHz float64, onDone func(ok bool)) error {
 	r.mu.Lock()
 	if r.transmitErr != nil {
 		err := r.transmitErr
@@ -51,6 +52,7 @@ func (r *seqRecorder) transmit(msg string, off float64, onDone func(ok bool)) er
 	}
 	r.sent = append(r.sent, msg)
 	r.offsets = append(r.offsets, off)
+	r.dials = append(r.dials, dialMHz)
 	fail := r.asyncFail
 	if r.deferOnDone {
 		r.pendingOnDone = onDone // fired later via fireOnDone
@@ -266,4 +268,32 @@ func TestSequencer_AbandonsWhenDisarmedMidQso(t *testing.T) {
 	driveTheir(s, 30, nil) // transmit returns ErrTxNotArmed → abandon
 	require.False(t, s.Active(), "a not-armed transmit abandons the QSO")
 	require.True(t, stderrors.Is(r.transmitErr, ErrTxNotArmed))
+}
+
+// TestSequencer_TransmitCarriesSessionDial pins the decode-log dial fix: the dial
+// passed to transmit comes from the ACTIVE session's own state, and a rejected
+// concurrent StartQso (ErrQsoInProgress) can never relabel an active rung with the
+// rejected request's dial (the dial is threaded through transmit, not held in
+// shared mutable Service state).
+func TestSequencer_TransmitCarriesSessionDial(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	// A second start with a DIFFERENT dial is rejected while a session is active.
+	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 21.074, time.Unix(0, 0).UTC())
+	require.ErrorIs(t, err, ErrQsoInProgress)
+
+	// Drive a rung on the active session; every transmit carries 14.074, not 21.074.
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	require.NotEmpty(t, r.dials, "at least one rung transmitted")
+	for _, d := range r.dials {
+		require.Equal(t, 14.074, d, "transmit must carry the accepted session dial")
+	}
 }

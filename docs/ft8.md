@@ -468,8 +468,14 @@ Line format (UTC throughout):
 RX lines carry no dial (only the audio offset within the passband); the TX line carries
 the session dial (omitted for a manual transmit with no session dial). The TX timestamp
 is stamped when the transmission commits — within ~1 s of the on-air key for a sequencer
-rung. Fail-soft: if the file can't be opened (bad path, full disk) the daemon logs one
-warning and keeps decoding — the decode log never blocks FT8.
+rung. The default path resolves against the daemon's working dir (the same one `smd.log`
+uses, honouring `--config` / `data_dir`).
+
+**Never blocks FT8.** All disk I/O runs on a dedicated writer goroutine; the decode and
+TX paths only format a line and hand it off without blocking. If the disk stalls (full,
+slow, network-backed), lines are **dropped** (counted, and reported on close) rather than
+stalling slot decoding or current-slot TX timing. Fail-soft on open too: a bad path / full
+disk logs one warning and leaves the subsystem decoding normally without a log.
 
 ### SSE wire — `GET /v1/ft8/events`
 

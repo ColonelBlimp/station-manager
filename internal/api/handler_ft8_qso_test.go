@@ -21,7 +21,7 @@ import (
 func ft8QsoTestServer(t *testing.T, callsign string) *Server {
 	t.Helper()
 	srv := testServer(t)
-	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{})
+	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, "")
 	if callsign != "" {
 		if err := srv.cfg.Update(func(c *config.Config) error {
 			c.LoggingStation.StationCallsign = callsign

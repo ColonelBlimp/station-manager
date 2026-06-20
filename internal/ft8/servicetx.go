@@ -264,14 +264,11 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	if _, err := EncodeToSlot(message, offsetHz, txNominalDtSec); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
-	// Manual transmit has no session dial, so the decode-log TX line omits the band.
-	s.txMu.Lock()
-	s.txDialMHz = 0
-	s.txMu.Unlock()
 	// Boundary-aligned: TransmitSlot waits for the next UTC slot and starts at the
 	// nominal +0.5 s — right for a manually-initiated CQ (we pick our own slot/
-	// parity, so we start on time with no truncation).
-	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
+	// parity, so we start on time with no truncation). dialMHz 0 — a manual transmit
+	// has no session dial, so the decode-log TX line omits the band.
+	return s.startTransmission(message, offsetHz, 0, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitSlot(ctx, message, offsetHz)
 	}, nil)
 }
@@ -285,12 +282,12 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 // finishes, with ok=true only on actual success (a cancel from disarm/stop is
 // ok=false). The sequencer uses it to log a completed QSO only after the final
 // rung truly transmitted — never on "queued" alone (review H1).
-func (s *Service) seqTransmit(message string, offsetHz float64, onDone func(ok bool)) error {
+func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error {
 	const op errors.Op = "ft8.Service.seqTransmit"
 	if _, err := EncodeWaveform(message, offsetHz); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
-	return s.startTransmission(message, offsetHz, func(ctx context.Context, ctrl *TxController) error {
+	return s.startTransmission(message, offsetHz, dialMHz, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitCurrentSlot(ctx, message, offsetHz)
 	}, onDone)
 }
@@ -303,7 +300,7 @@ func (s *Service) seqTransmit(message string, offsetHz float64, onDone func(ok b
 // guaranteed down on every path (controller deferred-unkey + bridge auto-off).
 func (s *Service) startTransmission(
 	message string,
-	offsetHz float64,
+	offsetHz, dialMHz float64,
 	fn func(ctx context.Context, ctrl *TxController) error,
 	onDone func(ok bool),
 ) error {
@@ -338,9 +335,10 @@ func (s *Service) startTransmission(
 	s.txLastErr = ""
 
 	// JTDX ALL.TXT TX line (ft8.decode_log) — stamped at commit (within ~1 s of the
-	// on-air key for a sequencer rung). Under txMu so txDialMHz reads consistently;
-	// nil-safe no-op when the decode log is disabled.
-	s.decLog.Load().WriteTx(time.Now().UTC(), s.txDialMHz, offsetHz, message)
+	// on-air key for a sequencer rung). dialMHz is the accepted session's dial,
+	// passed in by the caller (0 for a manual transmit) — no shared mutable state, so
+	// a rejected concurrent Start* can't relabel this rung. nil-safe no-op when off.
+	s.decLog.Load().WriteTx(time.Now().UTC(), dialMHz, offsetHz, message)
 
 	// Launch UNDER txMu (review 2026-06-19 M1): GoTracked does txWg.Add(1)
 	// synchronously, so doing it while we still hold txMu means a concurrent
@@ -414,7 +412,6 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	s.txMu.Lock()
 	armed := s.txArmed
 	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txDialMHz = dialFreqMHz // session dial, for the decode-log TX line
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
@@ -426,6 +423,8 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	s.resetExchangePath()
+	// The decode-log TX dial comes from the sequencer's accepted session (threaded
+	// through seqTransmit), so a rejected start here can't relabel an active rung.
 	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
@@ -454,7 +453,6 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	s.txMu.Lock()
 	armed := s.txArmed
 	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txDialMHz = dialFreqMHz // session dial, for the decode-log TX line
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
@@ -484,7 +482,6 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	s.txMu.Lock()
 	armed := s.txArmed
 	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txDialMHz = dialFreqMHz // session dial, for the decode-log TX line
 	s.txMu.Unlock()
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)

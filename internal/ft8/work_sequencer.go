@@ -165,7 +165,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.repeats++
 	}
 
-	transmit, offset := s.transmit, s.offsetHz
+	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -214,7 +214,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	}
 
-	if err := transmit(msg, offset, onDone); err != nil {
+	if err := transmit(msg, offset, dial, onDone); err != nil {
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: working caller rung transmit failed")
 		// onDone never fired, so a final-rung QSO is correctly not logged. Terminal
 		// errors abandon; transient ones leave the contact for the next slot to retry.

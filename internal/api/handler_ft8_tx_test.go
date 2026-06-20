@@ -19,7 +19,7 @@ import (
 func ft8TxTestServer(t *testing.T) *Server {
 	t.Helper()
 	srv := testServer(t)
-	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{})
+	srv.ft8 = ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, "")
 	return srv
 }
 

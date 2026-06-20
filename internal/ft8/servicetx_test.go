@@ -22,7 +22,7 @@ func TestStartTransmission_PanicClearsInFlight(t *testing.T) {
 	defer func() { _ = s.ArmTx(false) }()
 
 	done := make(chan bool, 1)
-	err := s.startTransmission("CQ G0XYZ IO91", 1500,
+	err := s.startTransmission("CQ G0XYZ IO91", 1500, 0,
 		func(context.Context, *TxController) error { panic("boom in fn") },
 		func(ok bool) { done <- ok })
 	require.NoError(t, err, "launch succeeds; the panic happens in the tracked goroutine")

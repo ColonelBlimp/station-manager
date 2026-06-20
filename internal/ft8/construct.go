@@ -13,9 +13,15 @@ import (
 //
 // Config is snapshotted at construction — an operator restart picks up edits,
 // matching internal/bridge.
-func NewService(cfg types.Ft8Config, log logging.Logger) *Service {
+//
+// workingDir is the daemon's RESOLVED working dir (cfgSvc.WorkingDir(), which
+// honours --config / data_dir) — used as the default decode-log location so it
+// lands next to smd.log rather than wherever a bare utils.WorkingDir() resolves.
+func NewService(cfg types.Ft8Config, log logging.Logger, workingDir string) *Service {
 	if log == nil {
 		log = logging.Noop()
 	}
-	return newService(cfg, log, newCaptureSource(cfg, log))
+	s := newService(cfg, log, newCaptureSource(cfg, log))
+	s.workingDir = workingDir
+	return s
 }

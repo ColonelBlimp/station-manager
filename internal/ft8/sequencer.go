@@ -173,17 +173,21 @@ type Sequencer struct {
 	// log a QSO or publish idle over a newer session (review follow-up M1).
 	sessionGen uint64
 
-	// transmit sends a rung. onDone (optional) fires from the transmit goroutine
-	// once the transmission finishes — ok=true only on a clean on-air success.
-	// The final rung passes a completion closure so the QSO is logged ONLY after
-	// the 73/RR73 actually transmitted, never on "queued" (review H1).
-	transmit   func(message string, offsetHz float64, onDone func(ok bool)) error
+	// transmit sends a rung. dialMHz is the active session's dial (from this
+	// sequencer's own accepted state), passed through so the decode-log TX line
+	// records the correct band without the Service holding mutable per-session dial
+	// state (review: a rejected concurrent Start* must not relabel an active rung).
+	// onDone (optional) fires from the transmit goroutine once the transmission
+	// finishes — ok=true only on a clean on-air success. The final rung passes a
+	// completion closure so the QSO is logged ONLY after the 73/RR73 actually
+	// transmitted, never on "queued" (review H1).
+	transmit   func(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error
 	publish    func(QsoStatus)
 	onComplete func(CompletedQso)
 	log        logging.Logger
 }
 
-func newSequencer(transmit func(string, float64, func(ok bool)) error, publish func(QsoStatus), maxRepeats int, log logging.Logger) *Sequencer {
+func newSequencer(transmit func(string, float64, float64, func(ok bool)) error, publish func(QsoStatus), maxRepeats int, log logging.Logger) *Sequencer {
 	if log == nil {
 		log = logging.Noop()
 	}
@@ -376,7 +380,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.repeats++
 	}
 
-	transmit, offset := s.transmit, s.offsetHz
+	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -437,7 +441,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		}
 	}
 
-	if err := transmit(msg, offset, onDone); err != nil {
+	if err := transmit(msg, offset, dial, onDone); err != nil {
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
 		// onDone never fired (the goroutine didn't start). ErrTxNotArmed (TX gone)
 		// and ErrTxBadMessage (will never encode — review M1) are terminal. Anything
@@ -524,7 +528,7 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	}
 
 	s.repeats++
-	transmit, offset, repeats := s.transmit, s.offsetHz, s.repeats
+	transmit, offset, dial, repeats := s.transmit, s.offsetHz, s.dialFreqMHz, s.repeats
 	st := s.statusLocked()
 	s.mu.Unlock()
 
@@ -532,7 +536,7 @@ func (s *Sequencer) fireOpening(now time.Time) {
 		Float64("dt_s", dt).Int("repeats", repeats).Bool("immediate", true).
 		Msg("ft8 seq: transmitting rung")
 	// The opening rung is always non-terminal (no completion), so no onDone.
-	if err := transmit(msg, offset, nil); err != nil {
+	if err := transmit(msg, offset, dial, nil); err != nil {
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon() // TX gone / message can't encode — can't continue.

@@ -104,9 +104,8 @@ type Service struct {
 	txClosed   bool   // set on Stop; refuses further arming
 	txMessage  string // message of the in-flight transmission ("" = none)
 	txOffsetHz float64
-	txDialMHz  float64 // dial MHz of the active session (0 = unknown/manual), for the decode-log TX line
-	txLastErr  string  // i18n code of the last failed transmission ("" = none)
-	exchPath   string  // operator's antenna-path choice for the active exchange ("S"/"L"); logging-only
+	txLastErr  string // i18n code of the last failed transmission ("" = none)
+	exchPath   string // operator's antenna-path choice for the active exchange ("S"/"L"); logging-only
 	txDevice   txPlayer
 	txCtrl     *TxController
 	txCancel   context.CancelFunc
@@ -141,12 +140,14 @@ type Service struct {
 	decodeSink func(DecodeReport)
 
 	// decLog is the optional JTDX-style ALL.TXT decode log (ft8.decode_log.enabled).
-	// Opened at capture-start and closed at capture-release, so it follows the
-	// demand-driven capture lifecycle. atomic.Pointer because the RX writer
-	// (decode goroutine, under s.mu's session) and the TX writer (tx goroutine,
-	// under txMu) both Load it without a shared lock; nil = disabled/idle (its
-	// methods are nil-safe no-ops).
-	decLog atomic.Pointer[DecodeLog]
+	// Opened at capture-start and closed at capture-release (and on an unexpected
+	// capture-loop exit), so it follows the demand-driven capture lifecycle.
+	// atomic.Pointer because the RX writer (decode goroutine) and the TX writer (tx
+	// goroutine) both Load it without a shared lock; nil = disabled/idle (its
+	// methods are nil-safe no-ops). workingDir is the daemon's resolved working dir,
+	// the default decode-log location (set by NewService).
+	decLog     atomic.Pointer[DecodeLog]
+	workingDir string
 }
 
 // newService constructs a Service with an injected capture source. The
@@ -281,17 +282,25 @@ func (s *Service) onLingerExpired() {
 		s.mu.Unlock()
 		return
 	}
-	s.releaseCaptureLocked()
 	s.mu.Unlock()
 
 	// Attended-only: the last /v1/ft8/events subscriber is gone past the linger
 	// window (the browser was closed, not briefly reloaded), so no operator is
-	// attending FT8 — TX must not stay armed across browser sessions. Disarm
-	// OUTSIDE s.mu: disarmTx takes its own txMu and may wait on an in-flight
-	// transmission to drain (txWg); holding s.mu across that would stall subscriber
-	// / capture accounting. Idempotent — a no-op on the capture-only path (TX not
-	// armed); when armed it drops PTT and abandons any active sequenced QSO.
+	// attending FT8 — TX must not stay armed across browser sessions. Disarm FIRST,
+	// and OUTSIDE s.mu, so dropping PTT + abandoning any active QSO (the safety
+	// action) is never delayed by releaseCaptureLocked's decode-log close, which can
+	// block on a stalled disk. disarmTx takes its own txMu and waits on an in-flight
+	// transmission to drain (txWg); idempotent — a no-op when TX isn't armed.
 	s.disarmTx(false)
+
+	// Then release the capture device. Re-check under s.mu: a subscriber that
+	// reconnected during the disarm window keeps the session (skip the release);
+	// it re-arms TX, consistent with attended-only.
+	s.mu.Lock()
+	if s.subCount == 0 && !s.stopped && s.capturing {
+		s.releaseCaptureLocked()
+	}
+	s.mu.Unlock()
 }
 
 // startCaptureLocked acquires the capture source and spawns the scheduler +
@@ -314,7 +323,7 @@ func (s *Service) startCaptureLocked() {
 	// the writer a no-op. Closed in releaseCaptureLocked after the decode goroutine
 	// drains, so no RX write can race the close.
 	if dl := s.cfg.DecodeLog; dl != nil && dl.Enabled {
-		s.decLog.Store(openDecodeLog(dl.Path, s.log))
+		s.decLog.Store(openDecodeLog(dl.Path, s.workingDir, s.log))
 	}
 
 	// The scheduler + decoder are a COUPLED pair (Scheduler.Run closes its slots
@@ -361,6 +370,13 @@ func (s *Service) onCaptureLoopExit(runCtx context.Context, who string) {
 		s.captureCancel = nil
 	}
 	s.mu.Unlock()
+	// Close the decode log so the dead session doesn't leak the open file or let a
+	// later TX write to a stale log (releaseCaptureLocked would early-return now
+	// that capturing=false). Safe even though the sibling loop may still be winding
+	// down: only the decode goroutine writes RX, and it is the one exiting here.
+	if dl := s.decLog.Swap(nil); dl != nil {
+		dl.Close()
+	}
 	if wasCapturing {
 		s.log.ErrorWith().Str("goroutine", who).
 			Msg("ft8: capture loop exited unexpectedly; capture stopped — re-open the FT8 view to restart")

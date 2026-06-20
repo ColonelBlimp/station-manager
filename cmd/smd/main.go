@@ -472,7 +472,7 @@ func run() error {
 	// CGO-free build) it logs and stays idle. A decode is NOT a QSO: the
 	// subsystem only logs "heard this" lines, so it never touches the
 	// log/forward path (narrow-daemon-scope holds by the import graph).
-	ft8Svc := ft8.NewService(cfg.ActiveFt8(), loggerSvc)
+	ft8Svc := ft8.NewService(cfg.ActiveFt8(), loggerSvc, cfgSvc.WorkingDir())
 	// Wire the bridge as the FT8 TX keyer (ADR 0030): internal/ft8 keys PTT
 	// through this adapter so it never imports internal/bridge (narrow-daemon-
 	// scope by import graph). Only meaningful when the bridge is enabled and a
