@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
@@ -315,5 +316,70 @@ func TestImport_QrzLogidStamping(t *testing.T) {
 	}
 	if qso.QrzComUploadDate != "20240617" {
 		t.Errorf("QrzComUploadDate: got %q, want %q (record's historical value)", qso.QrzComUploadDate, "20240617")
+	}
+}
+
+// noLogidRecord is an N1MM-style phone QSO with NO QRZ log-id / upload fields —
+// the "already uploaded to QRZ via the web, now importing for the record" case
+// that the LOGID auto-stamp can't catch.
+const noLogidRecord = `<call:5>7Q8AC<station_callsign:5>7Q8AC<band:3>10m<mode:3>SSB<freq:8>28.30000<qso_date:8>20260517<time_on:4>1243<rst_sent:2>59<rst_rcvd:2>59`
+
+func TestImport_UploadedFlag(t *testing.T) {
+	// A QRZ forwarder is configured, so Submit enqueues a 'pending' qso_upload
+	// row. The log has no QRZ log-ids, so --uploaded (not the LOGID stamp) is what
+	// must mark the row 'uploaded' — otherwise the forwarder would re-send a log
+	// that's already on QRZ.
+	tmp := setupImportTestbed(t, func(c *config.Config) {
+		creds, _ := json.Marshal(map[string]string{"api_key": "fake-key"})
+		c.Forwarders = []types.ForwarderConfig{{
+			Name: "qrz-main", Type: "qrz", Enabled: true, Credentials: creds,
+		}}
+	})
+	adifPath := writeADIF(t, tmp, "input.adi", noLogidRecord)
+
+	if err := runImport([]string{"--uploaded", "QRZ-MAIN", adifPath}); err != nil { // case-insensitive
+		t.Fatalf("import: %v", err)
+	}
+
+	db := reopenDB(t, tmp)
+	qsos, err := db.FetchQsoSliceByLogbookIdWithContext(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("fetch qsos: %v", err)
+	}
+	if len(qsos) != 1 {
+		t.Fatalf("expected 1 QSO, got %d", len(qsos))
+	}
+	uploads, err := db.FetchUploadsByQsoIDWithContext(context.Background(), qsos[0].ID)
+	if err != nil {
+		t.Fatalf("fetch uploads: %v", err)
+	}
+	var found bool
+	for _, u := range uploads {
+		if !strings.EqualFold(u.ForwarderName, "qrz-main") {
+			continue
+		}
+		found = true
+		if u.Status != "uploaded" {
+			t.Errorf("status: got %q, want uploaded", u.Status)
+		}
+		if u.UpstreamID != "" {
+			t.Errorf("upstream_id: got %q, want empty (externally uploaded, no SM id)", u.UpstreamID)
+		}
+	}
+	if !found {
+		t.Fatal("no qrz-main qso_upload row found for the stored QSO")
+	}
+}
+
+func TestImport_UploadedFlag_UnknownForwarderFails(t *testing.T) {
+	tmp := setupImportTestbed(t, nil) // no forwarders configured
+	adifPath := writeADIF(t, tmp, "input.adi", noLogidRecord)
+
+	err := runImport([]string{"--uploaded", "nope", adifPath})
+	if err == nil {
+		t.Fatal("expected an error when --uploaded names an unconfigured forwarder")
+	}
+	if !strings.Contains(err.Error(), "no forwarder named") {
+		t.Errorf("error = %v, want it to mention 'no forwarder named'", err)
 	}
 }

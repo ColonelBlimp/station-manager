@@ -262,6 +262,27 @@ Import:
 smd import /path/to/your-export.adi
 ```
 
+**Already uploaded out of band? Use `--uploaded`.** If the log is already on a
+service but the ADIF has no `app_qrzlog_logid` (e.g. an N1MM/contest export you
+uploaded through the QRZ website, not a QRZ *export*), the auto-stamp above can't
+recognise it — and with a forwarder configured, the importer would enqueue the
+whole batch for re-upload. (QRZ dedupes server-side so you won't get duplicate
+QSOs, but it's a wasted upload storm and the rows end up flagged failed.) Tell
+the importer the batch is already sent so it marks those `qso_upload` rows
+`uploaded` from the start:
+
+```
+smd import --uploaded qrz /path/to/log.adi          # one forwarder (by name)
+smd import --uploaded qrz,lotw /path/to/log.adi     # several
+```
+
+The names are your `forwarders[].name` values (matched case-insensitively); an
+unknown name fails the import up front. The summary then reports a
+`marked-uploaded:` count. The cleaner path when you have the choice is still to
+import the service's own **export** (it carries the IDs and is auto-stamped) or
+to import **before** configuring the forwarder — `--uploaded` is the fix for a
+log that's already live somewhere with no IDs to prove it.
+
 The importer drives the same QSO submission path the live SPA uses
 (field validation + atomic write + audit table all inherited). Throughput
 is around 900 records per second on typical hardware — a few

@@ -52,10 +52,12 @@ func runImport(args []string) error {
 	var logbookID int64
 	var dryRun bool
 	var progressEvery int
+	var uploadedFwds string
 	fs.StringVar(&configPath, "config", "", "path to config.json (default: $SM_WORKING_DIR, else the XDG data dir for a system install, else the executable's directory)")
 	fs.Int64Var(&logbookID, "logbook", 0, "target logbook id (default: default_logbook from config)")
 	fs.BoolVar(&dryRun, "dry-run", false, "parse and validate only — no DB writes")
 	fs.IntVar(&progressEvery, "progress-every", 100, "emit a progress line every N records (0 disables)")
+	fs.StringVar(&uploadedFwds, "uploaded", "", "comma-separated forwarder name(s) the imported QSOs are ALREADY uploaded to (e.g. \"qrz\"): their qso_upload rows start as 'uploaded' so the forwarder won't re-send the batch")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: smd import [flags] <file.adi>")
 		fs.PrintDefaults()
@@ -197,11 +199,37 @@ func runImport(args []string) error {
 		}
 	}
 
+	// ---- --uploaded: forwarder names the batch is ALREADY uploaded to (out of
+	// band — e.g. a QRZ web import). Their qso_upload rows start as 'uploaded' so
+	// the forwarder won't re-send a log that's already on the service. Validate
+	// each name against the configured forwarders (enabled or not — Submit
+	// enqueues a row for any *present* forwarder, ADR 0022, so a disabled-but-
+	// present one still gets a row worth marking). Matched case-insensitively.
+	uploadedNames := map[string]bool{}
+	if s := strings.TrimSpace(uploadedFwds); s != "" {
+		configured := map[string]bool{}
+		for _, f := range cfg.Forwarders {
+			configured[strings.ToLower(strings.TrimSpace(f.Name))] = true
+		}
+		for _, raw := range strings.Split(s, ",") {
+			name := strings.ToLower(strings.TrimSpace(raw))
+			if name == "" {
+				continue
+			}
+			if !configured[name] {
+				return errors.New(op).WithMsgf(
+					"--uploaded: no forwarder named %q in config (check forwarders[].name)", strings.TrimSpace(raw))
+			}
+			uploadedNames[name] = true
+		}
+	}
+
 	loggerSvc.InfoWith().
 		Str("file", adifPath).
 		Int("records", len(parsed.Records)).
 		Int64("logbook_id", logbookID).
 		Bool("qrz_forwarder_configured", qrzConfigured).
+		Int("mark_uploaded_forwarders", len(uploadedNames)).
 		Bool("dry_run", dryRun).
 		Msg("import starting")
 
@@ -214,6 +242,7 @@ func runImport(args []string) error {
 	stored := 0
 	duplicate := 0
 	stampSkipped := 0
+	markedUploaded := 0
 	var errLines []errLine
 
 	ctx := context.Background()
@@ -261,6 +290,17 @@ func runImport(args []string) error {
 					stampSkipped++
 				}
 			}
+			// --uploaded: pre-mark this QSO's rows for the named forwarders as
+			// 'uploaded' (already on the service, sent out of band). Skips rows the
+			// QRZ-LOGID stamp above already marked, so the two don't fight.
+			if len(uploadedNames) > 0 {
+				if n, merr := markUploadedForForwarders(ctx, dbSvc, res.ID, uploadedNames); merr != nil {
+					loggerSvc.WarnWith().Err(merr).Str("call", rec.Call).Int64("qso_id", res.ID).
+						Msg("could not mark upload row(s) uploaded (--uploaded)")
+				} else {
+					markedUploaded += n
+				}
+			}
 		}
 
 		if progressEvery > 0 && (i+1)%progressEvery == 0 {
@@ -278,6 +318,9 @@ func runImport(args []string) error {
 	fmt.Fprintf(os.Stdout, "  errors:     %d\n", len(errLines))
 	if stampSkipped > 0 {
 		fmt.Fprintf(os.Stdout, "  qrz-stamp-skipped: %d (stored, but qso_upload row not found / update failed; forwarder retry will sort it)\n", stampSkipped)
+	}
+	if markedUploaded > 0 {
+		fmt.Fprintf(os.Stdout, "  marked-uploaded:   %d (qso_upload rows pre-set to 'uploaded' via --uploaded; not re-sent)\n", markedUploaded)
 	}
 	if len(errLines) > 0 {
 		fmt.Fprintln(os.Stdout, "errored records (first 20):")
@@ -335,4 +378,30 @@ func stampQrzUpload(ctx context.Context, db *sqlite.Service, qsoID int64, logid 
 		}
 	}
 	return errors.ErrNotFound
+}
+
+// markUploadedForForwarders marks the just-stored QSO's qso_upload rows for the
+// named forwarders (by forwarder_name, lowercased keys) as 'uploaded', with an
+// empty upstream_id — the QSO was sent to the service out of band (e.g. a QRZ
+// web import), so SM has no upstream id for it. Rows already 'uploaded' (e.g. one
+// the QRZ-LOGID stamp just handled) are skipped, so this is idempotent and won't
+// clobber a real upstream id. A QSO with no row for a named forwarder is a no-op.
+// Returns the number of rows marked.
+func markUploadedForForwarders(ctx context.Context, db *sqlite.Service, qsoID int64, names map[string]bool) (int, error) {
+	const op errors.Op = "smd.import.markUploadedForForwarders"
+	rows, err := db.FetchUploadsByQsoIDWithContext(ctx, qsoID)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("fetch uploads")
+	}
+	marked := 0
+	for _, r := range rows {
+		if !names[strings.ToLower(r.ForwarderName)] || strings.EqualFold(r.Status, "uploaded") {
+			continue
+		}
+		if err := db.MarkUploadSuccessWithContext(ctx, r.ID, ""); err != nil {
+			return marked, errors.New(op).WithErr(err).WithMsgf("mark upload %d uploaded", r.ID)
+		}
+		marked++
+	}
+	return marked, nil
 }
