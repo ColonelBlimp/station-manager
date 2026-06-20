@@ -111,7 +111,12 @@ type CompletedQso struct {
 	HasOurReport   bool
 	TheirReport    int // the report THEY sent us
 	HasTheirReport bool
-	OffsetHz       float64
+	// StartedAt is when this contact began — the operator's click for answer-a-CQ /
+	// work-a-caller, or the slot we picked the answerer for a Call-CQ pile-up. It is
+	// the QSO's TIME_ON; the completion instant passed to BuildQso is TIME_OFF. Zero
+	// if a path failed to stamp it (BuildQso falls back to the completion instant).
+	StartedAt time.Time
+	OffsetHz  float64
 	// DialFreqMHz is the rig's dial frequency at QSO start (from the SPA, which
 	// reads it from the live rig state). The logged QSO frequency IS this dial
 	// (FT8 convention — see BuildQso); the band is derived from the dial, and
@@ -155,7 +160,8 @@ type Sequencer struct {
 	// opposite our CQ parity); we transmit in the opposite (current) slot.
 	theirPeriod string
 	offsetHz    float64
-	dialFreqMHz float64 // rig dial freq at start, for the logged QSO frequency
+	dialFreqMHz float64   // rig dial freq at start, for the logged QSO frequency
+	startedAt   time.Time // contact start, stamped as the logged QSO's TIME_ON
 	repeats     int
 	maxRepeats  int
 
@@ -228,6 +234,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.theirGrid = theirGrid
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
+	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
 	s.mu.Unlock()
@@ -631,6 +638,7 @@ func (s *Sequencer) completedQsoLocked() CompletedQso {
 		HasOurReport:   s.ex.HasSendSnr,
 		TheirReport:    s.ex.RcvdReport,
 		HasTheirReport: s.ex.HasRcvdReport,
+		StartedAt:      s.startedAt,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}

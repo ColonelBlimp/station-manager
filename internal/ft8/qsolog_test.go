@@ -21,6 +21,7 @@ func TestBuildQso(t *testing.T) {
 		HasOurReport:   true,
 		TheirReport:    -10,
 		HasTheirReport: true,
+		StartedAt:      time.Date(2026, 6, 10, 14, 28, 30, 0, time.UTC),
 		OffsetHz:       1500,
 		DialFreqMHz:    14.074,
 	}
@@ -40,13 +41,53 @@ func TestBuildQso(t *testing.T) {
 	require.Equal(t, "20m", q.Band)
 	require.Equal(t, "20260610", q.QsoDate)
 	// HHMM, not HHMMSS — the qso table's time_on/time_off CHECK constraint requires
-	// exactly 4 chars (length(time_on) = 4). Both come from `now` (the completion
-	// instant). This is the regression guard for the constraint-violation that
-	// silently failed every FT8 QSO insert until 2026-06-12.
-	require.Equal(t, "1430", q.TimeOn)
+	// exactly 4 chars (length(time_on) = 4). The constraint guard here also pins the
+	// regression that silently failed every FT8 QSO insert until 2026-06-12.
+	// TIME_ON is the contact START (14:28), TIME_OFF the completion instant (14:30).
+	require.Equal(t, "1428", q.TimeOn)
 	require.Equal(t, "1430", q.TimeOff)
 	require.Equal(t, "-12", q.RstSent) // we sent
 	require.Equal(t, "-10", q.RstRcvd) // they sent us
+}
+
+func TestBuildQso_TimeOn(t *testing.T) {
+	station := types.LoggingStation{Operator: "G0XYZ"}
+	base := CompletedQso{TheirCall: "K1ABC", DialFreqMHz: 14.074}
+
+	t.Run("TIME_ON is the start instant, TIME_OFF the completion", func(t *testing.T) {
+		c := base
+		c.StartedAt = time.Date(2026, 6, 10, 14, 28, 30, 0, time.UTC)
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 14, 30, 15, 0, time.UTC))
+		require.Equal(t, "1428", q.TimeOn)
+		require.Equal(t, "1430", q.TimeOff)
+		require.Equal(t, "20260610", q.QsoDate)
+	})
+
+	t.Run("a non-UTC start is normalised to UTC", func(t *testing.T) {
+		// +02:00 local 16:28 == 14:28 UTC — TIME_ON must be the UTC minute.
+		loc := time.FixedZone("CEST", 2*60*60)
+		c := base
+		c.StartedAt = time.Date(2026, 6, 10, 16, 28, 30, 0, loc)
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 16, 30, 0, 0, loc))
+		require.Equal(t, "1428", q.TimeOn)
+		require.Equal(t, "1430", q.TimeOff)
+	})
+
+	t.Run("a zero start falls back to the completion instant", func(t *testing.T) {
+		q := BuildQso(base, station, 1, time.Date(2026, 6, 10, 14, 30, 0, 0, time.UTC))
+		require.Equal(t, "1430", q.TimeOn)
+		require.Equal(t, "1430", q.TimeOff)
+		require.Equal(t, "20260610", q.QsoDate)
+	})
+
+	t.Run("QSO_DATE follows the start when the exchange crosses midnight", func(t *testing.T) {
+		c := base
+		c.StartedAt = time.Date(2026, 6, 10, 23, 59, 30, 0, time.UTC)
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 11, 0, 0, 13, 0, time.UTC))
+		require.Equal(t, "20260610", q.QsoDate) // start date, not completion date
+		require.Equal(t, "2359", q.TimeOn)
+		require.Equal(t, "0000", q.TimeOff)
+	})
 }
 
 func TestBuildQso_AntPath(t *testing.T) {

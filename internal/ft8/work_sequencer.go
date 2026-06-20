@@ -66,6 +66,7 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
+	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
 	s.mu.Unlock()

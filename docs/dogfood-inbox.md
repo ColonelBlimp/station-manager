@@ -13,3 +13,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 ## Notes
 
 <!-- /log appends below this line -->
+- [2026-06-20] on the pile-up have an up arrow on the left to move the callsign up the list

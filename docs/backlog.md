@@ -212,15 +212,13 @@ when it ships — don't let this rot into a graveyard.
   **hide hashed-call** toggle (moved out of the Settings tab; durable, auto-saves). The
   funnel shows an active tint when either filter is narrowing the feed. `cq_to_top` stayed
   in Settings (it's ordering, not a filter). See `docs/ft8.md`.
-- **FT8 e4 — `TIME_ON` should be the QSO start, not the completion instant.**
-  `ft8.BuildQso` (`internal/ft8/qsolog.go`) stamps both `TIME_ON` and `TIME_OFF`
-  from `now` (the moment the 73 is sent) because `CompletedQso` carries no start
-  time. `TIME_OFF` is therefore correct; `TIME_ON` is up to ~2 min late. Harmless
-  for QSL time-matching (±30 min window) but not strictly accurate. Fix: thread the
-  `StartQso` instant into `CompletedQso` (a `StartedAt`) and use it for `TIME_ON`,
-  keeping `now` for `TIME_OFF`. The first-rung fix (shipped 2026-06-12) already
-  injects `now` into `Sequencer.StartQso`, so the wall-clock is in hand — this item
-  is now just capturing it onto `CompletedQso` and stamping `TIME_ON` from it.
+- ~~**FT8 e4 — `TIME_ON` should be the QSO start, not the completion instant.**~~
+  **SHIPPED 2026-06-20.** `CompletedQso` now carries `StartedAt`, stamped at each
+  session start (`StartQso` answer-a-CQ, `StartWorkCaller`, and the Call-CQ
+  answerer-selection in `onSlotCalling`). `ft8.BuildQso` (`internal/ft8/qsolog.go`)
+  uses it for `TIME_ON` (and `QSO_DATE`), keeping the completion instant for
+  `TIME_OFF`; a zero start falls back to the completion instant. Both stay HHMM
+  (schema CHECK). Regression tests in `qsolog_test.go` (`TestBuildQso_TimeOn`).
 - **FT8 caller-side sequencing — `auto_first` SHIPPED 2026-06-12 (ADR 0033); the
   `operator_pick` stack remains.** When *we* call CQ and stations answer, work them one
   at a time, looping the pile-up until Abandon. This was the gap on 2026-06-12 when a

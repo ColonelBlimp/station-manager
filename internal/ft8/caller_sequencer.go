@@ -121,6 +121,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 				continue
 			}
 			s.caller = &c
+			s.startedAt = now.UTC()
 			s.repeats = 0
 			heard = m.Text
 			advanced = true
@@ -273,6 +274,7 @@ func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 		HasOurReport:   s.caller.HasSendSnr,
 		TheirReport:    s.caller.RcvdReport,
 		HasTheirReport: s.caller.HasRcvdReport,
+		StartedAt:      s.startedAt,
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}
