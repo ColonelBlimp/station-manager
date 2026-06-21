@@ -26,6 +26,7 @@ the code is a bug to fix.
 | [`v2-design/config.md`](v2-design/config.md) | **Canonical config reference** — `config.json` shape, validation rules, safety ceilings. Decided + implemented. |
 | [`ft8.md`](ft8.md) | FT8 operator & contributor guide — the single capture point for the FT8 picture (enabling/CGO, SPA panels + SSE wire, occupancy/TX). Keep current as FT8 evolves. |
 | [`install.md`](install.md) | Operator install + first-run guide. Update when packaging, the unit file, the data-dir path, or first-run flow changes. |
+| [`../manual/`](../manual/) | **Operator manual source** — per-chapter markdown built by Hugo into a single self-contained zero-JS page (ADR 0036), embedded in the daemon and served at `/manual`, and shipped on disk in the RPM for `file://` reading. The built site is a shipped artifact; keep the manual's self-contained tables in step with the code (release-checklist re-sync). |
 | [`keyboard-shortcuts.md`](keyboard-shortcuts.md) | Running inventory of every SPA keyboard shortcut. Update in the same commit as any binding change. |
 | [`licensing.md`](licensing.md) | Current licensing rules (GPL-3.0-only; see ADR 0023). |
 

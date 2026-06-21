@@ -37,7 +37,7 @@ fi
 VERSION="${1#v}" # strip an optional leading 'v' (v2.0.0 → 2.0.0)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
 
-echo "── [1/3] Building SPA → frontend/logging/dist/ ──"
+echo "── [1/3] Building SPA → frontend/logging/dist/ + manual → manual/public/ ──"
 # SM_SKIP_SPA=1 reuses an already-built dist/ (set by scripts/release.sh, which
 # builds the SPA on the host so the build container needs no Node). Bare runs
 # still build it.
@@ -49,6 +49,22 @@ if [ "${SM_SKIP_SPA:-}" = "1" ]; then
   echo "  (SM_SKIP_SPA=1 — using pre-built frontend/logging/dist/)"
 else
   (cd frontend/logging && npm run build)
+fi
+# SM_SKIP_MANUAL=1 reuses an already-built manual/public/ (set by
+# scripts/release.sh, which builds the manual on the host so the build
+# container needs no Hugo — same rationale as the SPA). Bare runs still build it.
+if [ "${SM_SKIP_MANUAL:-}" = "1" ]; then
+  if [ ! -f manual/public/index.html ]; then
+    echo "error: SM_SKIP_MANUAL=1 but manual/public/index.html is missing — build the manual first" >&2
+    exit 1
+  fi
+  echo "  (SM_SKIP_MANUAL=1 — using pre-built manual/public/)"
+else
+  if ! command -v hugo >/dev/null 2>&1; then
+    echo "error: hugo not in PATH (the operator manual is built with Hugo); build it on the host and pass SM_SKIP_MANUAL=1" >&2
+    exit 1
+  fi
+  (cd manual && hugo --quiet)
 fi
 
 # FFT backend selection. Default is gonum (pure Go) → CGO-free, fully

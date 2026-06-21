@@ -46,13 +46,19 @@ if ! "$ENGINE" image inspect "$IMAGE" >/dev/null 2>&1; then
   "$ENGINE" build -t "$IMAGE" -f packaging/Containerfile.release packaging/
 fi
 
-# 1) SPA on the HOST: fast, uses the operator's cached node toolchain, and keeps
-#    Node out of the build container. The container's go:embed picks up dist/.
-echo "── [1/2] Building SPA on host → frontend/logging/dist/ ──"
+# 1) SPA + manual on the HOST: fast, uses the operator's cached node/Hugo
+#    toolchains, and keeps Node and Hugo out of the build container. The
+#    container's go:embed picks up dist/ and manual/public/.
+echo "── [1/2] Building SPA + manual on host → frontend/logging/dist/ + manual/public/ ──"
 (cd frontend/logging && npm run build)
+if ! command -v hugo >/dev/null 2>&1; then
+  echo "error: hugo not in PATH (the operator manual is built with Hugo — e.g. 'dnf install hugo')" >&2
+  exit 1
+fi
+(cd manual && hugo --quiet)
 
 # 2) Compile the CGO+PocketFFT binary + package the RPM INSIDE the container,
-#    reusing release-rpm.sh with the SPA step skipped.
+#    reusing release-rpm.sh with the SPA + manual steps skipped.
 #
 # Notes:
 #   --security-opt label=disable: lets the container read the bind-mounted repo
@@ -75,6 +81,7 @@ fi
   "${MOUNT_GOMODCACHE[@]}" \
   -e SM_FFT=pocketfft \
   -e SM_SKIP_SPA=1 \
+  -e SM_SKIP_MANUAL=1 \
   "$IMAGE" \
   bash -c "scripts/release-rpm.sh '$VERSION'"
 

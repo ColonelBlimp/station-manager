@@ -95,13 +95,25 @@ tasks:
     desc: Build every embedded SPA (logging + config + logbook). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
     deps: [frontend:build, frontend:config:build, frontend:logbook:build]
 
+  manual:build:
+    desc: Build the operator manual (Hugo → manual/public/) for the daemon's go:embed. Single self-contained zero-JS page (ADR 0036).
+    dir: manual
+    cmds:
+      - hugo --quiet
+
+  manual:serve:
+    desc: Preview the operator manual with live reload on http://localhost:1313 while writing content. Dev-only; not the embedded build.
+    dir: manual
+    cmds:
+      - hugo server --buildDrafts
+
   build:smd:
     desc: |
       Build the daemon with a freshly built embedded SPA. CGO on (live FT8
       capture; dynamically linked against core glibc) — the default dev build.
       For the static CGO-free shape (headless/aggregator + the shipped-release
       shape) use build:smd:static; for faster decode use build:smd:pocketfft.
-    deps: [frontend:build:all]
+    deps: [frontend:build:all, manual:build]
     cmds:
       - CGO_ENABLED=1 go build -tags dev -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
@@ -111,7 +123,7 @@ tasks:
       audio capture, so the FT8 subsystem stays idle. This is the shipped-release
       shape (matches release-rpm.sh's CGO_ENABLED=0 default) and the right build
       for a headless / network-only aggregator node.
-    deps: [frontend:build:all]
+    deps: [frontend:build:all, manual:build]
     cmds:
       - CGO_ENABLED=0 go build -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
@@ -123,7 +135,7 @@ tasks:
       gate. build:smd is also CGO now (live capture) but uses the gonum FFT;
       this task swaps in the faster PocketFFT FFT. build:smd:static is the
       CGO-free shape.
-    deps: [frontend:build:all]
+    deps: [frontend:build:all, manual:build]
     cmds:
       - CGO_ENABLED=1 go build -tags "dev pocketfft" -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 

@@ -21,6 +21,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
+	"github.com/ColonelBlimp/station-manager/manual"
 )
 
 // Server holds the HTTP server and its dependencies.
@@ -257,6 +258,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// Logbook SPA at the /logbook/ sub-path — same StripPrefix +
 		// subtree-redirect rationale as the config SPA above.
 		mux.Handle("GET /logbook/", http.StripPrefix("/logbook", spaHandler(frontend.LogbookFS())))
+		// Operator manual at /manual/ — a static, zero-JS Hugo page (ADR 0036),
+		// NOT an SPA, so it uses manualHandler (plain file server, real 404s) not
+		// spaHandler. Same StripPrefix + subtree-redirect rationale as the SPAs.
+		mux.Handle("GET /manual/", http.StripPrefix("/manual", manualHandler(manual.FS())))
 		mux.Handle("GET /", spaHandler(frontend.LoggingFS()))
 	}
 

@@ -1,0 +1,28 @@
+# Station Manager operator manual — Hugo config.
+#
+# The manual is a SINGLE self-contained zero-JS page (ADR 0036). It ships two
+# ways from one build: embedded in the daemon and served at /manual, and as the
+# same static files in the RPM (opened from file:// when the daemon is down).
+# Both contexts are served from a path prefix we don't control, so every URL
+# must be relative — hence relativeURLs. The page uses only #-anchors and
+# inlined CSS, so in practice there are no asset URLs to get wrong, but the flag
+# keeps any future link honest.
+baseURL = '/'
+locale = 'en-us'
+title = 'Station Manager — Operator Manual'
+
+relativeURLs = true
+canonifyURLs = false
+
+# Single-page output: no taxonomies, feeds, or sitemap. The per-chapter pages
+# are still built into the site object (the home template ranges over them) but
+# we don't need their standalone output kinds.
+disableKinds = ['taxonomy', 'term', 'RSS', 'sitemap']
+
+[markup.goldmark.renderer]
+  # Our own trusted content — allow raw HTML (<kbd>, the odd inline table cell).
+  unsafe = true
+
+[markup.tableOfContents]
+  startLevel = 3
+  endLevel = 4

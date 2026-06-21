@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="{{ .Site.Language.Lang | default "en" }}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ .Site.Title }}</title>
+    {{/*
+      CSS is INLINED, not linked. The manual must work as a single self-contained
+      file opened from file:// (daemon-down case). A <link rel=stylesheet> would
+      also work from file://, but inlining keeps the whole manual in one
+      index.html with zero side files — the strongest form of self-contained.
+      Zero JS by design (ADR 0036): the sidebar is position:sticky (pure CSS) and
+      navigation is #-anchors + the browser's own Ctrl-F over the single page.
+    */}}
+    <style>
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.6;
+        color: #1a1a1a;
+        background: #fff;
+      }
+      .layout { display: flex; align-items: flex-start; }
+
+      /* CSS-only sticky table of contents. No JS toggle — it just stays put. */
+      .toc {
+        position: sticky;
+        top: 0;
+        align-self: flex-start;
+        flex: 0 0 17rem;
+        height: 100vh;
+        overflow: auto;
+        padding: 1.25rem 1rem;
+        border-right: 1px solid #e2e2e2;
+        background: #fafafa;
+        font-size: 0.9rem;
+      }
+      .toc-title { margin: 0 0 0.75rem; font-weight: 600; font-size: 0.95rem; }
+      .toc ol { list-style: none; margin: 0; padding: 0; }
+      .toc li { margin: 0.15rem 0; }
+      .toc a { color: #1a4d7a; text-decoration: none; }
+      .toc a:hover { text-decoration: underline; }
+      .toc .appendix { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid #e2e2e2; }
+
+      .content {
+        flex: 1 1 auto;
+        max-width: 50rem;
+        padding: 1.5rem 2.5rem 5rem;
+        min-width: 0;
+      }
+      .content h1 { margin-top: 0; }
+      .chapter { scroll-margin-top: 1rem; padding-top: 0.5rem; }
+      .chapter + .chapter { margin-top: 2.5rem; border-top: 1px solid #eee; padding-top: 2rem; }
+      .content pre {
+        background: #f5f5f5;
+        padding: 0.75rem 1rem;
+        border-radius: 4px;
+        overflow: auto;
+      }
+      .content code { background: #f0f0f0; padding: 0.1em 0.3em; border-radius: 3px; }
+      .content pre code { background: none; padding: 0; }
+      .content table { border-collapse: collapse; }
+      .content th, .content td { border: 1px solid #ddd; padding: 0.35rem 0.6rem; text-align: left; }
+      kbd {
+        background: #eee;
+        border: 1px solid #ccc;
+        border-bottom-width: 2px;
+        border-radius: 3px;
+        padding: 0.05em 0.4em;
+        font-family: inherit;
+        font-size: 0.85em;
+      }
+      .skip-link {
+        position: absolute;
+        left: -999px;
+      }
+      .skip-link:focus { left: 0.5rem; top: 0.5rem; background: #fff; padding: 0.5rem; }
+
+      /* Narrow screens: stack the TOC above the content, no JS. */
+      @media (max-width: 50rem) {
+        .layout { display: block; }
+        .toc {
+          position: static;
+          flex-basis: auto;
+          width: auto;
+          height: auto;
+          border-right: none;
+          border-bottom: 1px solid #e2e2e2;
+        }
+        .content { padding: 1.25rem; }
+      }
+
+      /* Print: drop the sidebar, let the prose use the full page. */
+      @media print {
+        .toc, .skip-link { display: none; }
+        .content { max-width: none; padding: 0; }
+        .chapter { page-break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <div class="layout">
+      {{ $chapters := (where .Site.RegularPages "Section" "chapters").ByWeight }}
+      <nav class="toc" aria-label="Contents">
+        <p class="toc-title">{{ .Site.Title }}</p>
+        <ol>
+          {{ range $chapters }}
+            <li class="{{ if .Params.appendix }}appendix{{ end }}">
+              <a href="#{{ .File.ContentBaseName }}">{{ .Title }}</a>
+            </li>
+          {{ end }}
+        </ol>
+      </nav>
+      <main id="content" class="content">
+        <h1>{{ .Site.Title }}</h1>
+        {{/* Lead paragraph(s) from content/_index.md, if any. */}}
+        {{ .Content }}
+        {{ range $chapters }}
+          {{/*
+            Each chapter is a <section> anchored by its filename (e.g. #ft8).
+            Chapter title renders as <h2>; in-chapter headings are authored at
+            ### (h3) and below so the single-page hierarchy stays h1 > h2 > h3.
+          */}}
+          <section id="{{ .File.ContentBaseName }}" class="chapter">
+            <h2>{{ .Title }}</h2>
+            {{ .Content }}
+          </section>
+        {{ end }}
+      </main>
+    </div>
+  </body>
+</html>

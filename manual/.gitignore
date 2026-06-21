@@ -1,0 +1,10 @@
+# Hugo build output + transient artifacts. The manual is built into public/ at
+# build time and embedded into the daemon; the generated site is NOT committed —
+# EXCEPT a placeholder public/index.html, kept so the `manual` package's
+# go:embed compiles before Hugo has run (mirrors the SPA dist/index.html
+# placeholder). `hugo` overwrites the placeholder with the real page at build
+# time; don't commit that overwrite.
+/public/*
+!/public/index.html
+/resources/_gen/
+.hugo_build.lock

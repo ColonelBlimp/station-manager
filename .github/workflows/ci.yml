@@ -131,6 +131,20 @@ jobs:
         working-directory: frontend/logbook
         run: npm run build
 
+      # The operator manual is a static Hugo site embedded into the daemon
+      # (manual/ → go:embed all:public). Build it so the daemon-build smoke
+      # below compiles against the real page and a broken Hugo template or
+      # content fails CI. Pinned binary download — no third-party action.
+      - name: Install Hugo
+        run: |
+          HUGO_VERSION=0.162.1
+          curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin hugo
+
+      - name: Manual build (produces public/ for daemon embed)
+        working-directory: manual
+        run: hugo --quiet
+
       # ─── Go gate ────────────────────────────────────────────────
       # gofmt is run as a check (-l lists files needing format; we
       # fail if the list is non-empty). vet + race-detector tests

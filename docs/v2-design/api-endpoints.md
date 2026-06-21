@@ -7,8 +7,8 @@
 > `internal/api/handler_*.go`. Update this file in the same commit as any route change.
 
 All application endpoints live under the `/v1/*` prefix (API versioning — unrelated to
-the project's v1/v2 distinction). The embedded SPAs are served at `/` and `/config/`;
-profiling at `/debug/pprof/*`.
+the project's v1/v2 distinction). The embedded SPAs are served at `/`, `/config/`, and
+`/logbook/`; the operator manual at `/manual/`; profiling at `/debug/pprof/*`.
 
 ## Conventions
 
@@ -301,11 +301,17 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Routes:** `GET /debug/pprof/`, `/cmdline`, `/profile`, `/symbol` (GET+POST), `/trace`. Standard `net/http/pprof` semantics (`profile?seconds=N` blocks N seconds — a DoS vector, so it stays off by default).
 - **Notes:** Registered on this mux (not `http.DefaultServeMux`); method-specific GET registration avoids a ServeMux conflict with the `GET /` SPA catch-all.
 
-### `GET /` and `GET /config/` (embedded SPAs)
-- **Purpose:** Serve the embedded Svelte SPAs — logging app at `/`, config app at `/config/` — with client-side-routing fallback.
+### `GET /`, `GET /config/`, `GET /logbook/` (embedded SPAs)
+- **Purpose:** Serve the embedded Svelte SPAs — logging app at `/`, config app at `/config/`, logbook app at `/logbook/` — with client-side-routing fallback.
 - **Gating:** **Only when `Protocol == "tcp" && *ServeSPA`** (browsers need TCP; a headless Unix-socket daemon leaves these unregistered).
-- **Routes:** `GET /config/` → `StripPrefix("/config", spaHandler(ConfigFS()))` (subtree pattern; bare `/config` 301→`/config/`); `GET /` → `spaHandler(LoggingFS())` (catch-all). Go 1.22 ServeMux gives `/v1/*`, `/config/`, and pprof patterns priority, so `/` is naturally bounded to unmatched paths.
+- **Routes:** `GET /config/` → `StripPrefix("/config", spaHandler(ConfigFS()))` and `GET /logbook/` → `StripPrefix("/logbook", spaHandler(LogbookFS()))` (subtree patterns; bare `/config`,`/logbook` 301→ trailing slash); `GET /` → `spaHandler(LoggingFS())` (catch-all). Go 1.22 ServeMux gives `/v1/*`, the sub-path, `/manual/`, and pprof patterns priority, so `/` is naturally bounded to unmatched paths.
 - **Response:** **200** with the static asset, or `index.html` when the path doesn't resolve to a file (SPA-router fallback, so a refresh on `/log` etc. doesn't 404). `Cache-Control: no-cache` on every asset (the entry bundle has a stable, hash-free name).
+
+### `GET /manual/` (embedded operator manual)
+- **Purpose:** Serve the embedded operator manual — a single self-contained, zero-JS Hugo page (ADR 0036). Distinct from the SPAs: plain static files, **no** client-side-router fallback.
+- **Gating:** Same as the SPAs — **only when `Protocol == "tcp" && *ServeSPA`**. The on-disk copy (`/usr/share/doc/station-manager/manual/`, shipped in the RPM) covers reading it from `file://` when the daemon isn't serving.
+- **Routes:** `GET /manual/` → `StripPrefix("/manual", manualHandler(manual.FS()))` (subtree pattern; bare `/manual` 301→`/manual/`). More specific than the `/` catch-all, so it takes priority.
+- **Response:** **200** with the static page, **404** for any unresolved path (no SPA fallback — it's static). `Cache-Control: no-cache` (the manual is rebuilt with the daemon, so the served copy always matches the running version).
 
 ---
 
@@ -313,4 +319,5 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 
 - [api.md](api.md) — the API design brief (rationale, cross-cutting decisions, the decision trail).
 - [frontend-spa.md](frontend-spa.md) — SPA embed/serving (the `/` and `/config/` routes).
+- [decisions/0036-operator-manual-embedded-zero-js-site.md](decisions/0036-operator-manual-embedded-zero-js-site.md) — the operator manual at `/manual/` (Hugo, zero-JS, embedded + on-disk).
 - ADRs: [0010](../decisions/0010-rig-sse-wire-shape.md) (SSE/error shape), [0013](../decisions/0013-bridge-as-daemon-subsystem.md), [0017](../decisions/0017-enrichment-pipeline-domain-table-cache.md), [0026](../decisions/0026-inbound-rig-command-path.md), [0027](../decisions/0027-tune-carrier-tx.md), [0028](../decisions/0028-rig-profiles.md), [0029](../decisions/0029-ft8-transmit.md)/0030/0031/0033 (FT8).

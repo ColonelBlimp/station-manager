@@ -41,6 +41,14 @@ contents:
     file_info:
       mode: 0644
 
+  # Operator manual, on disk. The same static site the daemon serves at
+  # /manual is also installed here so it's readable from a browser via
+  # file:// when the daemon won't start — the troubleshooting moment docs
+  # are most needed (ADR 0036). Built by Hugo into manual/public/ before
+  # packaging (release.sh on the host; dev-rpm.sh / release-rpm.sh otherwise).
+  - src: manual/public/
+    dst: /usr/share/doc/station-manager/manual/
+
 # No postinstall scriptlet. An RPM scriptlet runs as root and so
 # can't `systemctl --user enable`, `loginctl enable-linger`, or do
 # anything else that needs the operator's session — those are the
