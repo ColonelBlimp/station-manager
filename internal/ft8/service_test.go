@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrors "errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,4 +242,89 @@ func TestStop_BeforeStart_IsTerminal(t *testing.T) {
 	_, unsub := s.Subscribe()
 	defer unsub()
 	require.False(t, src.wasStarted(), "after Stop, no subscriber may acquire capture")
+}
+
+// withReconcileInterval bumps catReconcileInterval up so the background
+// CAT-reconcile loop never fires on its own during a test — the test drives
+// reconcileCat() directly for determinism — restoring it on cleanup.
+func withReconcileInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := catReconcileInterval
+	catReconcileInterval = d
+	t.Cleanup(func() { catReconcileInterval = prev })
+}
+
+// TestCapture_CatGate_DefersWhenRigOff is the bug fix: with a CAT gate installed
+// and the rig off, a subscriber (FT8 view open) must NOT grab the microphone.
+func TestCapture_CatGate_DefersWhenRigOff(t *testing.T) {
+	withReconcileInterval(t, time.Hour) // only the reconcileCat() we call runs
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	var live atomic.Bool // rig off
+	s.SetCatGate(live.Load)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe() // FT8 view open, but rig off
+	defer unsub()
+	require.False(t, src.wasStarted(), "rig off → capture must be deferred (no mic grab)")
+}
+
+// TestCapture_CatGate_AcquiresWhenCatComesUp: the deferred capture is acquired
+// once CAT goes live with a subscriber still present (operator powered the rig).
+func TestCapture_CatGate_AcquiresWhenCatComesUp(t *testing.T) {
+	withReconcileInterval(t, time.Hour)
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	var live atomic.Bool
+	s.SetCatGate(live.Load)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.False(t, src.wasStarted(), "deferred while rig off")
+
+	live.Store(true) // operator powers the rig
+	s.reconcileCat() // the reconcile loop's tick
+	require.Equal(t, 1, src.startCount(),
+		"capture must acquire once CAT is live with a subscriber present")
+}
+
+// TestCapture_CatGate_ReleasesWhenCatDrops: a live session is released when CAT
+// drops mid-session (rig powered off), freeing the mic.
+func TestCapture_CatGate_ReleasesWhenCatDrops(t *testing.T) {
+	withReconcileInterval(t, time.Hour)
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	var live atomic.Bool
+	live.Store(true) // rig on
+	s.SetCatGate(live.Load)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.Equal(t, 1, src.startCount(), "rig on + subscriber → capture acquired")
+
+	live.Store(false) // rig powered off
+	s.reconcileCat()  // releaseCaptureLocked drains synchronously
+	require.Equal(t, 1, src.stopCount(), "capture released when CAT drops mid-session")
+}
+
+// TestCapture_NoCatGate_DemandDriven: with no gate installed (no CAT configured),
+// capture stays purely demand-driven — a subscriber acquires immediately.
+func TestCapture_NoCatGate_DemandDriven(t *testing.T) {
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.True(t, src.wasStarted(), "no CAT gate → subscriber acquires capture immediately")
 }

@@ -26,15 +26,16 @@ when it ships — don't let this rot into a graveyard.
   changes `/v1/config` semantics and wants its own test/readthrough pass against
   both SPAs. See `docs/reviews/internal-api-2026-06-14.md`.
 
-- **FT8 capture grabs the mic with no CAT / rig off.** Capture is demand-driven
-  (acquired when the first `/v1/ft8/events` SSE subscriber connects). On PC boot
-  `smd` autostarts and, if the SPA reopens to the FT8 view from last session, it
-  subscribes immediately and the daemon grabs the audio input device — even when
-  CAT is not live (rig off / not connected). The rig should not be powered before
-  the PC is up anyway, and grabbing the mic in that state is wrong. **Gate FT8
-  capture acquisition on CAT being live:** no live rig → no mic, regardless of an
-  open FT8 view; acquire only once CAT comes up (and release the mic if CAT
-  drops). Stay fail-soft (subsystem idle, no crash) when CAT is absent.
+- ~~**FT8 capture grabs the mic with no CAT / rig off.**~~ **FIXED 2026-06-21.**
+  Capture acquisition is now gated on CAT being live. `bridge.Service.RigConnected()`
+  (the `activeClient != nil && identityConfirmed` core of `TxReady`, minus the
+  tune/FT8-TX flags) is injected into the FT8 service via `ft8.Service.SetCatGate`
+  in `cmd/smd` — **only when the bridge is enabled**, so a no-CAT audio-only setup
+  stays purely demand-driven. `startCaptureLocked` defers (logs, no mic) when the
+  gate is false; a reconcile loop (`catReconcileInterval`, 2s) acquires once CAT
+  comes up with a subscriber present and releases the mic if CAT drops mid-session.
+  Fail-soft throughout. Tests: `TestCapture_CatGate_*` (ft8), `TestRigConnected`
+  (bridge).
 
 - **Rx Frequency table shows duplicate rows when feed mode ≠ "single".** With the
   FT8 display feed mode set to anything other than `single` (i.e. `accumulate`),

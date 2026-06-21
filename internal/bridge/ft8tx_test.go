@@ -149,6 +149,39 @@ func TestKeyFt8Tx_SingleFlight(t *testing.T) {
 	s.finishFt8Tx() // cancel the auto-off timer
 }
 
+// TestRigConnected is the CAT-live signal used to gate FT8 capture: connected +
+// identity confirmed → true; identity unconfirmed → false. Unlike TxReady it is
+// indifferent to the tune/FT8-TX single-flight flags — a keyed transmission does
+// not mean the rig stopped being connected.
+func TestRigConnected(t *testing.T) {
+	s, _ := newCommandTestService(t) // connected + identity confirmed
+	if !s.RigConnected() {
+		t.Fatal("RigConnected should be true when connected + identity confirmed")
+	}
+
+	// A tune/FT8-TX in flight must NOT flip RigConnected (it is not TxReady).
+	s.mu.Lock()
+	s.tuneActive = true
+	s.mu.Unlock()
+	if !s.RigConnected() {
+		t.Error("RigConnected should stay true during a tune — CAT is still live")
+	}
+
+	s.mu.Lock()
+	s.tuneActive = false
+	s.identityConfirmed = false
+	s.mu.Unlock()
+	if s.RigConnected() {
+		t.Error("RigConnected should be false when identity is not confirmed")
+	}
+
+	// Nil receiver is safe (absent/disabled bridge → not connected).
+	var nilSvc *Service
+	if nilSvc.RigConnected() {
+		t.Error("nil-receiver RigConnected should be false")
+	}
+}
+
 // TestTxReady_FalseWhileTransmitting (review 2026-06-16 #4): TxReady must report
 // not-ready while a tune carrier or FT8 TX already owns the PTT, so the FT8 arm/
 // transmit gate waits instead of arming and then hitting a refused key.

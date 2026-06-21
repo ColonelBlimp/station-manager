@@ -59,7 +59,16 @@ on any PUT):
   opens the input device when the first `/v1/ft8/events` subscriber connects (you
   open the FT8 view) and releases it a few seconds after the last one leaves. So
   an idle daemon with `ft8.enabled=true` holds no microphone until you actually
-  switch to FT8.
+  switch to FT8. **And when CAT is configured (the bridge is enabled), capture is
+  additionally gated on the rig being live:** opening the FT8 view with the rig
+  *off* does not grab the mic — the daemon waits until the rig is connected +
+  identity-confirmed, acquires then, and releases the mic again if the rig drops
+  mid-session. (This stops the daemon seizing the audio device when the SPA
+  reopens to FT8 on PC boot before the rig is powered.) With no CAT configured
+  there's no rig to gate on, so capture stays purely demand-driven. The liveness
+  check is `bridge.Service.RigConnected()`, injected via `ft8.Service.SetCatGate`
+  in `cmd/smd`; a 2 s reconcile loop (`catReconcileInterval`) tracks the rig
+  powering on/off.
 - **`device`** — integer capture-device index from `ft8-capture-probe -list`, as
   a string. Empty = system default. Under ADR 0028 the active rig's audio device
   in the rig catalogue wins over this loose field.

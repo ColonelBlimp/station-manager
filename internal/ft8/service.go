@@ -19,6 +19,14 @@ import (
 // reacquired on every brief gap. Package-level var so tests can dial it down.
 var captureLinger = 5 * time.Second
 
+// catReconcileInterval is how often the CAT-gate reconcile loop checks rig
+// liveness to acquire the mic once CAT comes up (rig powered on after the FT8
+// view was already open) or release it when CAT drops mid-session. Only runs
+// when a CAT gate is installed (SetCatGate). A second or two of latency on
+// mic acquire/release tracking the rig's power state is immaterial. Package-
+// level var so tests can dial it down (or drive reconcileCat directly).
+var catReconcileInterval = 2 * time.Second
+
 // captureSource is the live-audio seam: it produces a stream of int16 PCM
 // sample batches (12 kHz mono) and runs until Stop. The real implementation
 // (miniaudio via malgo, behind //go:build cgo) is wired in a later step;
@@ -77,6 +85,20 @@ type Service struct {
 	captureCancel context.CancelFunc // cancels the current capture run
 	lingerTimer   *time.Timer        // pending release after the last unsubscribe
 	wg            sync.WaitGroup     // scheduler + decoder of the current session
+
+	// catLive gates capture acquisition on the rig/CAT being live: no live rig →
+	// no microphone, even with the FT8 view open (the boot-time mic-grab bug —
+	// smd autostarts, the SPA reopens to FT8, and the daemon grabbed the mic with
+	// the rig off). Injected via SetCatGate in cmd/smd, and ONLY when the bridge
+	// is enabled — nil means no gate (no CAT configured, or tests), preserving
+	// pure demand-driven capture. The acquire-time check lives in
+	// startCaptureLocked; the dynamic half (acquire when CAT comes up, release
+	// when it drops) is the catReconcile loop. Read under s.mu where it gates;
+	// catLive() itself takes the bridge lock, so the lock order is s.mu → bridge
+	// (the bridge never calls back into ft8).
+	catLive  func() bool
+	bgCancel context.CancelFunc // cancels subsystem-lifetime loops (catReconcile)
+	bgWg     sync.WaitGroup     // subsystem-lifetime loops; drained by Stop
 
 	// stopOnce + stopDone serialise concurrent Stop calls so the "Stop
 	// returned, therefore stopped" contract holds for every caller.
@@ -230,6 +252,19 @@ func (s *Service) Start(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	s.parentCtx = ctx
+
+	// CAT gate installed → run the reconcile loop for the subsystem's lifetime so
+	// capture tracks the rig powering on/off. bgCtx is a child of the daemon ctx
+	// cancelled by Stop (parentCtx itself isn't ours to cancel). No gate → no loop;
+	// capture stays purely demand-driven.
+	if s.catLive != nil {
+		bgCtx, cancel := context.WithCancel(ctx)
+		s.bgCancel = cancel
+		safego.GoTracked(bgCtx, "ft8.catReconcile", s.onPanic, func() {
+			s.runCatReconcile(bgCtx)
+		}, true, &s.bgWg)
+	}
+
 	s.log.InfoWith().Msg("ft8: subsystem ready; capture starts on first /v1/ft8/events subscriber")
 	return nil
 }
@@ -303,11 +338,93 @@ func (s *Service) onLingerExpired() {
 	s.mu.Unlock()
 }
 
+// SetCatGate installs the CAT-liveness predicate that gates capture acquisition
+// (no live rig → no microphone). When set, the device is acquired only while the
+// predicate returns true AND a subscriber is present; it is released if CAT drops
+// mid-session and (re)acquired when CAT returns. cmd/smd wires this to
+// bridge.Service.RigConnected, and ONLY when the bridge is enabled — leaving it
+// nil (no gate, pure demand-driven capture) for a no-CAT setup. Call before Start;
+// read under s.mu where it gates.
+func (s *Service) SetCatGate(catLive func() bool) {
+	s.mu.Lock()
+	s.catLive = catLive
+	s.mu.Unlock()
+}
+
+// runCatReconcile is the dynamic half of the CAT gate (startCaptureLocked is the
+// acquire-time half): it periodically aligns the capture session with rig
+// liveness — acquiring the mic once CAT comes up with a subscriber waiting (the
+// operator powered the rig after opening the FT8 view) and releasing it when CAT
+// drops mid-session. Started by Start only when a gate is installed; exits on
+// bgCtx cancel (Stop).
+func (s *Service) runCatReconcile(ctx context.Context) {
+	t := time.NewTicker(catReconcileInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.reconcileCat()
+		}
+	}
+}
+
+// reconcileCat acquires/releases capture to match CAT liveness. Periodic and
+// idempotent, so any check-then-act race self-corrects on the next tick. catLive()
+// is sampled outside s.mu (it takes the bridge lock); the locked sections re-check
+// the conditions that matter (startCaptureLocked re-runs the gate itself; the
+// release path re-checks liveness) so a stale snapshot can't act wrongly.
+func (s *Service) reconcileCat() {
+	if s.catLive == nil {
+		return
+	}
+	live := s.catLive()
+
+	// CAT dropped while capturing → drop the mic now. Disarm TX first and OUTSIDE
+	// s.mu (same ordering as onLingerExpired): the rig is gone, so PTT / any active
+	// exchange must end before the device is released, and disarmTx takes txMu then
+	// s.mu. Re-check !catLive() under the lock so a CAT blip that recovered within
+	// the tick doesn't needlessly tear the session down.
+	s.mu.Lock()
+	dropMic := s.capturing && !live && s.started && !s.stopped
+	s.mu.Unlock()
+	if dropMic {
+		s.disarmTx(false)
+		s.mu.Lock()
+		if s.capturing && !s.stopped && !s.catLive() {
+			s.log.InfoWith().Msg("ft8: rig/CAT dropped — releasing capture")
+			s.releaseCaptureLocked()
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	// CAT came up while a subscriber is waiting → acquire (the boot/rig-off case,
+	// resolved once the operator powers the rig). startCaptureLocked re-runs the
+	// gate, so a stale `live` can't force an acquire.
+	s.mu.Lock()
+	if live && !s.capturing && s.subCount > 0 && s.lingerTimer == nil &&
+		s.started && !s.stopped && s.cfg.Enabled {
+		s.startCaptureLocked()
+	}
+	s.mu.Unlock()
+}
+
 // startCaptureLocked acquires the capture source and spawns the scheduler +
 // decode worker for one session. Fail-soft: a source that won't start leaves
 // capturing=false (the subsystem stays idle, logged) rather than erroring.
 // Caller holds s.mu.
 func (s *Service) startCaptureLocked() {
+	// CAT-liveness gate: never grab the microphone when the rig is off / CAT
+	// isn't live, even with a subscriber present. The catReconcile loop reacquires
+	// once CAT comes up. A nil gate (no CAT configured, or tests) means
+	// demand-driven as before. catLive() takes the bridge lock; safe under s.mu
+	// (lock order s.mu → bridge; the bridge never calls back into ft8).
+	if s.catLive != nil && !s.catLive() {
+		s.log.InfoWith().Msg("ft8: capture deferred — rig/CAT not live (will acquire when CAT comes up)")
+		return
+	}
 	runCtx, cancel := context.WithCancel(s.parentCtx)
 	samples, err := s.src.Start(runCtx)
 	if err != nil {
@@ -442,7 +559,16 @@ func (s *Service) Stop() error {
 			s.lingerTimer = nil
 		}
 		s.releaseCaptureLocked() // cancels + stops + drains; no-op if idle
+		bgCancel := s.bgCancel
 		s.mu.Unlock()
+
+		// Stop the CAT-reconcile loop (if running) and wait for it to exit —
+		// OUTSIDE s.mu, since the loop takes s.mu each tick (waiting under the lock
+		// would deadlock).
+		if bgCancel != nil {
+			bgCancel()
+		}
+		s.bgWg.Wait()
 
 		// Disconnect any ft8 SSE subscribers so they return promptly rather
 		// than waiting on the daemon's graceful timeout.

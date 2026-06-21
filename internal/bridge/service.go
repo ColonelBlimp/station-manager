@@ -398,6 +398,21 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.cfg.Enabled
 }
 
+// RigConnected reports whether a rig is connected and its identity confirmed —
+// the "CAT is live" signal. It is the liveness core of TxReady WITHOUT the
+// tune/FT8-TX single-flight flags, because those are irrelevant to "is the rig
+// powered and talking." The FT8 subsystem gates microphone acquisition on this
+// (no live rig → no mic), wired via ft8.Service.SetCatGate in cmd/smd. Nil-safe:
+// an absent/disabled bridge reads "not connected."
+func (s *Service) RigConnected() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeClient != nil && s.identityConfirmed
+}
+
 // Subscribe registers a new SSE subscriber. Returns the receive-only
 // channel + idempotent unsubscribe. Channel closes on unsubscribe,
 // slow-subscriber eviction, or Service.Stop.

@@ -488,6 +488,14 @@ func run() error {
 	// scope by import graph). Only meaningful when the bridge is enabled and a
 	// rig is connected; otherwise TxReady() stays false and arming is refused.
 	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
+	// Gate FT8 capture on the rig/CAT being live — only when the bridge is
+	// enabled (CAT configured). Without it, the daemon would grab the microphone
+	// as soon as the FT8 view opens (e.g. SPA reopens to FT8 on PC boot) even with
+	// the rig off. With no bridge (no CAT), no gate is installed and capture stays
+	// purely demand-driven, so an audio-only setup is unaffected.
+	if bridgeSvc.Enabled() {
+		ft8Svc.SetCatGate(bridgeSvc.RigConnected)
+	}
 	// Wire the completed-QSO sink (ADR 0029 step e4): a finished FT8 exchange
 	// becomes a logged QSO. The assembly + submit live here (the composition
 	// root has config + qsoservice + adif), so internal/ft8 stays narrow — it
