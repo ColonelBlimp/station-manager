@@ -453,6 +453,14 @@ func TestPipeline_DisconnectAnnouncedOnce(t *testing.T) {
 	case <-time.After(livenessTimeout * 4):
 		// expected — dedup held
 	}
+
+	// Each silent window still accrues a no-data strike even though the
+	// announce is deduped — that's what lets RigConnected fall to false on a
+	// genuine drop (the FT8 capture gate then releases the mic). After several
+	// windows the count is well past the trip limit.
+	if got := s.noDataStrikes.Load(); got < noDataStrikeLimit {
+		t.Errorf("noDataStrikes = %d after sustained silence, want >= %d", got, noDataStrikeLimit)
+	}
 }
 
 // TestPipeline_DataResumesAfterDisconnect covers the recovery shape:

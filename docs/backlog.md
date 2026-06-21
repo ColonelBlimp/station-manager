@@ -34,8 +34,15 @@ when it ships — don't let this rot into a graveyard.
   stays purely demand-driven. `startCaptureLocked` defers (logs, no mic) when the
   gate is false; a reconcile loop (`catReconcileInterval`, 2s) acquires once CAT
   comes up with a subscriber present and releases the mic if CAT drops mid-session.
-  Fail-soft throughout. Tests: `TestCapture_CatGate_*` (ft8), `TestRigConnected`
-  (bridge).
+  **Passive no-data disconnect (review M1):** a rig that goes silent but leaves the
+  serial port open keeps `activeClient`/`identityConfirmed` set (they clear only on
+  pipeline exit), so `RigConnected` also requires fewer than `noDataStrikeLimit` (2)
+  consecutive readLoop no-data timeouts — a quiet-but-alive rig recovers on the
+  INIT+READ probe within one liveness cycle (one strike, then reset) and stays
+  "connected"; a genuinely dead rig accrues strikes and reads not-connected, so the
+  mic is released. Fail-soft throughout. Tests: `TestCapture_CatGate_*` (ft8),
+  `TestRigConnected` + `TestRigConnected_NoDataDisconnect` + the strike assertion in
+  `TestPipeline_DisconnectAnnouncedOnce` (bridge).
 
 - **Rx Frequency table shows duplicate rows when feed mode ≠ "single".** With the
   FT8 display feed mode set to anything other than `single` (i.e. `accumulate`),

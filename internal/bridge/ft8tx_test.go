@@ -182,6 +182,38 @@ func TestRigConnected(t *testing.T) {
 	}
 }
 
+// TestRigConnected_NoDataDisconnect covers the passive-disconnect path: when the
+// rig goes silent but leaves the serial port open, activeClient/identityConfirmed
+// stay set (they clear only on pipeline exit), so RigConnected must instead fall
+// to false once consecutive no-data timeouts reach the strike limit — otherwise
+// the FT8 capture gate would never release the mic on a real mid-session drop.
+// A single strike (the normal quiet-rig-then-probe-recovers cycle) must NOT trip
+// it.
+func TestRigConnected_NoDataDisconnect(t *testing.T) {
+	s, _ := newCommandTestService(t) // connected + identity confirmed, 0 strikes
+	if !s.RigConnected() {
+		t.Fatal("RigConnected should be true when connected with no strikes")
+	}
+
+	// One strike = a quiet rig that the probe is about to recover — still live.
+	s.noDataStrikes.Store(1)
+	if !s.RigConnected() {
+		t.Error("a single no-data strike (quiet rig, probe pending) must not drop RigConnected")
+	}
+
+	// Reaching the limit = a genuinely dead rig that never answered the probe.
+	s.noDataStrikes.Store(noDataStrikeLimit)
+	if s.RigConnected() {
+		t.Error("RigConnected must be false once no-data strikes reach the limit")
+	}
+
+	// A successful read elsewhere resets the count → live again.
+	s.noDataStrikes.Store(0)
+	if !s.RigConnected() {
+		t.Error("RigConnected should recover once the strike count resets")
+	}
+}
+
 // TestTxReady_FalseWhileTransmitting (review 2026-06-16 #4): TxReady must report
 // not-ready while a tune carrier or FT8 TX already owns the PTT, so the FT8 arm/
 // transmit gate waits instead of arming and then hitting a refused key.

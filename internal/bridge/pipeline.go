@@ -313,6 +313,10 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	s.bootstrapCIV = civSnapshot
 	s.pollBytes = pollBytes
 	s.mu.Unlock()
+	// Fresh pipeline run: clear any no-data strikes carried over from a prior
+	// run's drop so RigConnected starts clean (it still gates on
+	// identityConfirmed, which the teardown reset to false).
+	s.noDataStrikes.Store(0)
 
 	s.logger.InfoWith().
 		Str("port", serialCfg.PortName).
@@ -470,6 +474,12 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			// probe makes "switch the rig on" the only operator
 			// action needed for recovery.
 			if stderr.Is(err, context.DeadlineExceeded) {
+				// Count every consecutive no-data timeout (not just the first
+				// announce): RigConnected trips at noDataStrikeLimit so the FT8
+				// capture gate releases the mic on a genuine mid-session drop. A
+				// quiet-but-alive rig recovers on the probe below (a successful
+				// read resets the count), so it never reaches the limit.
+				s.noDataStrikes.Add(1)
 				if !announcedDisconnect {
 					s.publishDisconnect(RigCodeNoData, nil)
 					announcedDisconnect = true
@@ -504,6 +514,12 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		}
 
 		announcedDisconnect = false
+		// A successful read means the rig is responding — clear the no-data
+		// strike count so a recovered (or merely-quiet, probe-answered) rig reads
+		// as connected again. Gated on non-zero to avoid an atomic store per read.
+		if s.noDataStrikes.Load() != 0 {
+			s.noDataStrikes.Store(0)
+		}
 
 		// Track unsolicited Transceive broadcasts so the poll loop's collision
 		// back-off can defer while the rig is mid dial-turn storm (ADR 0035).

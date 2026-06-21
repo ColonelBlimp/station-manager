@@ -68,7 +68,10 @@ on any PUT):
   there's no rig to gate on, so capture stays purely demand-driven. The liveness
   check is `bridge.Service.RigConnected()`, injected via `ft8.Service.SetCatGate`
   in `cmd/smd`; a 2 s reconcile loop (`catReconcileInterval`) tracks the rig
-  powering on/off.
+  powering on/off. A rig that goes silent but keeps its serial port open (a
+  passive no-data disconnect) is caught too — `RigConnected` falls to false after
+  a couple of consecutive no-data liveness timeouts, distinguishing a genuinely
+  dead rig from a merely-quiet one the bridge's probe recovers each cycle.
 - **`device`** — integer capture-device index from `ft8-capture-probe -list`, as
   a string. Empty = system default. Under ADR 0028 the active rig's audio device
   in the rig catalogue wins over this loose field.

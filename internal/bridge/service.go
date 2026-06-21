@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -101,6 +102,18 @@ type Service struct {
 	// display but stay write-blocked. Reset to false on pipeline teardown,
 	// so each pipeline instance re-verifies. Mu-guarded.
 	identityConfirmed bool
+
+	// noDataStrikes counts CONSECUTIVE no-data liveness timeouts in readLoop
+	// (reset to 0 on any successful read, and on a fresh pipeline). It exists so
+	// RigConnected can tell a merely-quiet rig from a genuinely dead one: a
+	// passive no-data disconnect leaves activeClient/identityConfirmed set (they
+	// clear only on pipeline exit), and the readLoop's INIT+READ probe recovers a
+	// quiet-but-alive rig within ONE liveness cycle (one strike, then reset). A
+	// rig that's actually gone but left the serial port open accrues strikes with
+	// no recovery. RigConnected trips at noDataStrikeLimit so the FT8 capture gate
+	// releases the mic on a real mid-session drop without flickering on the normal
+	// per-cycle probe. atomic so readLoop updates it without taking s.mu per read.
+	noDataStrikes atomic.Int32
 
 	// lastPublishedExitKey is the dedup token for the supervisor's
 	// retry loop. Each exit-causing publish (publishExitBridgeError /
@@ -398,14 +411,29 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.cfg.Enabled
 }
 
-// RigConnected reports whether a rig is connected and its identity confirmed —
-// the "CAT is live" signal. It is the liveness core of TxReady WITHOUT the
-// tune/FT8-TX single-flight flags, because those are irrelevant to "is the rig
-// powered and talking." The FT8 subsystem gates microphone acquisition on this
-// (no live rig → no mic), wired via ft8.Service.SetCatGate in cmd/smd. Nil-safe:
-// an absent/disabled bridge reads "not connected."
+// noDataStrikeLimit is how many CONSECUTIVE no-data liveness timeouts mark the
+// rig as dropped for RigConnected. Normal static operation produces at most one
+// strike per cycle (timeout → probe → the rig answers → reset), so a limit of 2
+// never trips on a quiet-but-alive rig while a genuinely dead rig (no probe
+// recovery) trips after ~2 liveness cycles. A small const — the exact value just
+// trades mic-release latency on a real drop against tolerance of one flaky probe.
+const noDataStrikeLimit int32 = 2
+
+// RigConnected reports whether the rig is connected, identity-confirmed, AND
+// currently responding — the "CAT is live" signal. It is the liveness core of
+// TxReady WITHOUT the tune/FT8-TX single-flight flags (irrelevant to "is the rig
+// powered and talking"), PLUS a no-data guard: a passive disconnect (rig went
+// silent, serial port still open) leaves activeClient/identityConfirmed set —
+// they clear only on pipeline exit — so without the strike check this would stay
+// true through a real mid-session drop and the FT8 capture gate would never
+// release the mic. The FT8 subsystem gates microphone acquisition on this
+// (ft8.Service.SetCatGate in cmd/smd). Nil-safe: an absent/disabled bridge reads
+// "not connected."
 func (s *Service) RigConnected() bool {
 	if s == nil {
+		return false
+	}
+	if s.noDataStrikes.Load() >= noDataStrikeLimit {
 		return false
 	}
 	s.mu.Lock()
