@@ -48,10 +48,32 @@
     const errorKey = $derived(isValidCallsign(value));
     const errorId = $derived(`${id}-err`);
 
+    /*
+        Commit-the-callsign keys: Tab, Enter, and Space all fire onenrich
+        (QsoPanel's handleEnrich → enrichment lookup + QSO-timer start) when
+        the value is a valid, non-empty callsign. Tab keeps its native
+        focus-advance — no preventDefault — so the operator's hands flow on
+        to RST. Enter has no useful default here (QsoPanel renders no <form>),
+        and a callsign never contains a space, so both are consumed to avoid
+        a stray space or accidental submit while still firing the lookup.
+
+        Modified variants are deliberately left for QsoPanel's window-level
+        handler: Shift+Enter = pile-up stack push, Ctrl/Cmd+Enter = submit,
+        Shift+Tab = focus-previous (abandon the entry). Any modifier held →
+        return early so the event bubbles untouched.
+    */
     const handleKeydown = (e: KeyboardEvent): void => {
-        if (e.key !== 'Tab' || e.shiftKey) return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        const isSpace = e.key === ' ' || e.code === 'Space';
+        // Swallow Space regardless of validity — the field is a single token,
+        // so a literal space is never wanted, even mid-edit of an invalid call.
+        if (isSpace) e.preventDefault();
+        if (e.key !== 'Tab' && e.key !== 'Enter' && !isSpace) return;
         const trimmed = value.trim();
         if (trimmed === '' || isValidCallsign(trimmed) !== null) return;
+        // Enter has no meaningful default in this form-less single-token field;
+        // consume it (Space is already handled above). Tab advances focus.
+        if (e.key === 'Enter') e.preventDefault();
         onenrich?.(trimmed.toUpperCase());
     };
 </script>

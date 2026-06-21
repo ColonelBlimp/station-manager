@@ -10,8 +10,10 @@ import Callsign from './Callsign.svelte';
  *     is NOT trapped — operator can Shift+Tab away from a half-typed
  *     callsign to abandon the QSO entry. The submit button is the
  *     load-bearing guard against logging an invalid callsign.
- *   - Tab → onenrich callback (Tab only, not Shift+Tab) when value is
- *     valid + non-empty; uppercase-normalized to the callback
+ *   - Tab / Enter / Space → onenrich callback (unmodified only — not
+ *     Shift+Tab, Shift/Ctrl/Cmd+Enter) when value is valid + non-empty;
+ *     uppercase-normalized to the callback. Tab keeps native focus-advance;
+ *     Enter/Space are consumed (no <form> submit, no stray space).
  *   - Uppercase visual styling via the `uppercase` Tailwind class
  *
  * Per the project's validator-presence convention, an empty value is
@@ -177,12 +179,58 @@ describe('Callsign', () => {
             expect(onenrich).not.toHaveBeenCalled();
         });
 
-        it('does not fire onenrich on other keys', async () => {
+        it('does not fire onenrich on ordinary character keys', async () => {
             const onenrich = vi.fn();
             const { input } = setup({ value: 'M0ABC', onenrich });
-            await fireEvent.keyDown(input, { key: 'Enter' });
-            await fireEvent.keyDown(input, { key: ' ' });
             await fireEvent.keyDown(input, { key: 'a' });
+            expect(onenrich).not.toHaveBeenCalled();
+        });
+
+        it('fires onenrich on Enter when value is valid + non-empty', async () => {
+            const onenrich = vi.fn();
+            const { input } = setup({ value: 'm0abc', onenrich });
+            await fireEvent.keyDown(input, { key: 'Enter' });
+            expect(onenrich).toHaveBeenCalledTimes(1);
+            expect(onenrich).toHaveBeenCalledWith('M0ABC');
+        });
+
+        it('fires onenrich on Space when value is valid + non-empty', async () => {
+            const onenrich = vi.fn();
+            const { input } = setup({ value: 'm0abc', onenrich });
+            await fireEvent.keyDown(input, { key: ' ', code: 'Space' });
+            expect(onenrich).toHaveBeenCalledTimes(1);
+            expect(onenrich).toHaveBeenCalledWith('M0ABC');
+        });
+
+        it('does not fire onenrich on Enter when value is invalid', async () => {
+            const onenrich = vi.fn();
+            const { input } = setup({ value: 'M0', onenrich });
+            await fireEvent.keyDown(input, { key: 'Enter' });
+            expect(onenrich).not.toHaveBeenCalled();
+        });
+
+        it('does not fire onenrich on Space when value is empty', async () => {
+            const onenrich = vi.fn();
+            const { input } = setup({ value: '', onenrich });
+            await fireEvent.keyDown(input, { key: ' ', code: 'Space' });
+            expect(onenrich).not.toHaveBeenCalled();
+        });
+
+        // Modified Enter is reserved for QsoPanel's window handler
+        // (Shift+Enter = stack push, Ctrl/Cmd+Enter = submit), so the
+        // Callsign field must leave those alone.
+        it('does not fire onenrich on Shift+Enter', async () => {
+            const onenrich = vi.fn();
+            const { input } = setup({ value: 'M0ABC', onenrich });
+            await fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+            expect(onenrich).not.toHaveBeenCalled();
+        });
+
+        it('does not fire onenrich on Ctrl+Enter or Cmd+Enter', async () => {
+            const onenrich = vi.fn();
+            const { input } = setup({ value: 'M0ABC', onenrich });
+            await fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+            await fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
             expect(onenrich).not.toHaveBeenCalled();
         });
 
