@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -914,10 +916,19 @@ func applyDefaults(cfg *Config, baseDir string) {
 			fc.BatchSize = defaultForwarderBatchSize
 		}
 		if len(fc.ActionFilter) == 0 {
-			fc.ActionFilter = []string{
-				string(action.Insert),
-				string(action.Update),
-				string(action.Delete),
+			// Default an omitted filter to the forwarder's SUPPORTED action
+			// set when it registered one (e.g. ClubLog = insert/delete only),
+			// so a natural config never queues rows the forwarder must reject.
+			// Forwarders that register nothing keep the historical all-three
+			// default.
+			if supported, ok := forwarding.SupportedActionsFor(fc.Type); ok {
+				fc.ActionFilter = actionsToStrings(supported)
+			} else {
+				fc.ActionFilter = []string{
+					string(action.Insert),
+					string(action.Update),
+					string(action.Delete),
+				}
 			}
 		}
 	}
@@ -1119,6 +1130,17 @@ func isLoopbackBind(socketPath string) bool {
 // validateForwarders checks the statically decidable correctness of every
 // forwarder entry. Type-specific credential validation happens later when
 // the forwarder package is constructed at daemon startup.
+// actionsToStrings converts a forwarder's supported-action set (as
+// returned by forwarding.SupportedActionsFor) into the string form used
+// by ForwarderConfig.ActionFilter.
+func actionsToStrings(as []action.Action) []string {
+	out := make([]string, len(as))
+	for i, a := range as {
+		out[i] = a.String()
+	}
+	return out
+}
+
 func validateForwarders(fwds []types.ForwarderConfig) error {
 	names := make(map[string]struct{}, len(fwds))
 	for i, fc := range fwds {
@@ -1136,6 +1158,21 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 		for _, a := range fc.ActionFilter {
 			if _, err := action.Parse(a); err != nil {
 				return fmt.Errorf("forwarder %q: %w", fc.Name, err)
+			}
+		}
+		// Reject an explicit action the forwarder type can't perform (e.g.
+		// "update" on ClubLog) so the operator learns at load time, not via
+		// a stream of failed upload rows. Only enforced when the type
+		// registered a supported set; an unregistered type isn't gated.
+		if supported, ok := forwarding.SupportedActionsFor(fc.Type); ok {
+			allowed := actionsToStrings(supported)
+			for _, a := range fc.ActionFilter {
+				if !slices.Contains(allowed, a) {
+					return fmt.Errorf(
+						"forwarder %q: type %q does not support action %q (supports %v)",
+						fc.Name, fc.Type, a, allowed,
+					)
+				}
 			}
 		}
 

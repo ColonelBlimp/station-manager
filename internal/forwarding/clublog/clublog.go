@@ -133,6 +133,11 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// ClubLog real-time supports insert + delete only — it cannot edit a
+	// logged QSO's fields (see Submit). Registering the supported set means
+	// an omitted action_filter defaults to insert/delete (not all three),
+	// so a natural config never queues update rows bound to fail.
+	forwarding.RegisterSupportedActions(Type, []forwarding.Action{action.Insert, action.Delete})
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials

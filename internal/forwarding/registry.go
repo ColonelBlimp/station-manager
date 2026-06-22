@@ -3,6 +3,7 @@ package forwarding
 import (
 	"sync"
 
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -15,9 +16,10 @@ import (
 type Constructor func(types.ForwarderConfig) (Forwarder, error)
 
 var (
-	registryMu      sync.Mutex
-	registry        = map[string]Constructor{}
-	defaultRetryMap = map[string]types.RetryConfig{}
+	registryMu       sync.Mutex
+	registry         = map[string]Constructor{}
+	defaultRetryMap  = map[string]types.RetryConfig{}
+	supportedActions = map[string][]Action{}
 )
 
 // Register adds a forwarder constructor under the given type name.
@@ -116,4 +118,64 @@ func DefaultRetryFor(typeName string) (types.RetryConfig, bool) {
 	defer registryMu.Unlock()
 	retry, ok := defaultRetryMap[typeName]
 	return retry, ok
+}
+
+// RegisterSupportedActions records which QSO lifecycle actions forwarder
+// typeName can actually carry out. QRZ supports insert/update/delete;
+// ClubLog's real-time API supports insert/delete only (it cannot edit a
+// logged QSO). The daemon consults this at config time in two places:
+//
+//   - applyDefaults fills an OMITTED action_filter with the supported set
+//     (instead of a blanket insert/update/delete), so a natural config
+//     never queues rows the forwarder is bound to reject.
+//   - validateForwarders rejects an EXPLICIT action_filter that names an
+//     unsupported action, surfacing the mistake at load time rather than
+//     as a stream of failed upload rows.
+//
+// Registration is OPTIONAL: a forwarder that registers nothing keeps the
+// historical "all three actions" default and is not validated against a
+// supported set — so this is additive and never regresses existing
+// forwarders.
+//
+// Panics on the usual programmer errors (empty typeName, empty set,
+// unknown or duplicate action, duplicate registration) — all bugs in the
+// binary, not runtime conditions.
+func RegisterSupportedActions(typeName string, actions []Action) {
+	if typeName == "" {
+		panic("forwarding.RegisterSupportedActions: empty type name")
+	}
+	if len(actions) == 0 {
+		panic("forwarding.RegisterSupportedActions: empty action set for " + typeName)
+	}
+	seen := make(map[Action]struct{}, len(actions))
+	for _, a := range actions {
+		switch a {
+		case action.Insert, action.Update, action.Delete:
+		default:
+			panic("forwarding.RegisterSupportedActions: unknown action " + string(a) + " for " + typeName)
+		}
+		if _, dup := seen[a]; dup {
+			panic("forwarding.RegisterSupportedActions: duplicate action " + string(a) + " for " + typeName)
+		}
+		seen[a] = struct{}{}
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := supportedActions[typeName]; exists {
+		panic("forwarding.RegisterSupportedActions: type already registered: " + typeName)
+	}
+	supportedActions[typeName] = append([]Action(nil), actions...)
+}
+
+// SupportedActionsFor returns the registered supported-action set for
+// typeName and whether one was registered. The returned slice is a copy,
+// so callers can't mutate the registry's state.
+func SupportedActionsFor(typeName string) ([]Action, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	a, ok := supportedActions[typeName]
+	if !ok {
+		return nil, false
+	}
+	return append([]Action(nil), a...), true
 }

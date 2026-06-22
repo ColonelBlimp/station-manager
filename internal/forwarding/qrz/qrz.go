@@ -99,6 +99,10 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// QRZ's Logbook API supports the full insert/update/delete lifecycle.
+	forwarding.RegisterSupportedActions(Type, []forwarding.Action{
+		action.Insert, action.Update, action.Delete,
+	})
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials

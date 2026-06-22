@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -149,6 +150,68 @@ func TestRegisterDefaultRetry_PanicsOnDuplicate(t *testing.T) {
 		}
 	}()
 	RegisterDefaultRetry("retrytest-dup", validRetry())
+}
+
+// ---- RegisterSupportedActions / SupportedActionsFor ----
+
+func TestRegisterSupportedActions_And_Lookup(t *testing.T) {
+	RegisterSupportedActions("actstest-ok", []Action{action.Insert, action.Delete})
+
+	got, ok := SupportedActionsFor("actstest-ok")
+	if !ok {
+		t.Fatal("SupportedActionsFor returned ok=false for registered type")
+	}
+	want := []Action{action.Insert, action.Delete}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("SupportedActionsFor = %v, want %v", got, want)
+	}
+
+	// Returned slice is a copy — mutating it must not corrupt the registry.
+	got[0] = action.Update
+	again, _ := SupportedActionsFor("actstest-ok")
+	if again[0] != action.Insert {
+		t.Fatalf("registry mutated via returned slice: got %v", again)
+	}
+}
+
+func TestSupportedActionsFor_UnknownType(t *testing.T) {
+	if _, ok := SupportedActionsFor("actstest-never-used"); ok {
+		t.Fatal("SupportedActionsFor returned ok=true for unregistered type")
+	}
+}
+
+func TestRegisterSupportedActions_Panics(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"empty type", func() { RegisterSupportedActions("", []Action{action.Insert}) }},
+		{"empty set", func() { RegisterSupportedActions("actstest-empty", nil) }},
+		{"unknown action", func() { RegisterSupportedActions("actstest-unknown", []Action{"hovercraft"}) }},
+		{"duplicate action", func() {
+			RegisterSupportedActions("actstest-dupact", []Action{action.Insert, action.Insert})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("%s: did not panic", tc.name)
+				}
+			}()
+			tc.fn()
+		})
+	}
+}
+
+func TestRegisterSupportedActions_PanicsOnDuplicateRegistration(t *testing.T) {
+	RegisterSupportedActions("actstest-dupreg", []Action{action.Insert})
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("duplicate registration did not panic")
+		}
+	}()
+	RegisterSupportedActions("actstest-dupreg", []Action{action.Insert})
 }
 
 func TestRegisterDefaultRetry_PanicsOnInvalidConfig(t *testing.T) {
