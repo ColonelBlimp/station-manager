@@ -220,6 +220,8 @@ var specField = map[string]adifType{
 	"QRZCOM_QSO_DOWNLOAD_STATUS": typEnum,
 	"QRZCOM_QSO_UPLOAD_DATE":     typDate,
 	"QRZCOM_QSO_UPLOAD_STATUS":   typEnum,
+	"CLUBLOG_QSO_UPLOAD_DATE":    typDate,
+	"CLUBLOG_QSO_UPLOAD_STATUS":  typEnum,
 
 	// UserDef (type declared by USERDEF, not the core spec)
 	"SM_QSO_UPLOAD_DATE":      typString,

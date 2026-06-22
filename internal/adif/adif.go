@@ -76,6 +76,9 @@ type QslSection struct {
 	QrzComQsoDownloadStatus string `adif:"qrzcom_qso_download_status,omitempty"`
 	QrzComQsoUploadDate     string `adif:"qrzcom_qso_upload_date,omitempty"`
 	QrzComQsoUploadStatus   string `adif:"qrzcom_qso_upload_status,omitempty"`
+
+	ClubLogQsoUploadDate   string `adif:"clublog_qso_upload_date,omitempty"`
+	ClubLogQsoUploadStatus string `adif:"clublog_qso_upload_status,omitempty"`
 }
 
 type HeaderSection struct {
@@ -109,18 +112,20 @@ func QsoToRecord(q types.Qso) Record {
 	r.LoggingStation = q.LoggingStation
 	// Map QSL
 	r.QslSection = QslSection{
-		QslMsg:                q.Qsl.QslMsg,
-		QslMsgRcvd:            q.Qsl.QslMsgRcvd,
-		QslRDate:              q.Qsl.QslRDate,
-		QslSDate:              q.Qsl.QslSDate,
-		QslRcvd:               q.Qsl.QslRcvd,
-		QslRcvdVia:            q.Qsl.QslRcvdVia,
-		QslRcvdNotes:          q.Qsl.QslRcvdNotes,
-		QslSent:               q.Qsl.QslSent,
-		QslSentVia:            q.Qsl.QslSendVia,
-		QslVia:                q.Qsl.QslVia,
-		QrzComQsoUploadDate:   q.QrzComUploadDate,
-		QrzComQsoUploadStatus: q.QrzComUploadStatus,
+		QslMsg:                 q.Qsl.QslMsg,
+		QslMsgRcvd:             q.Qsl.QslMsgRcvd,
+		QslRDate:               q.Qsl.QslRDate,
+		QslSDate:               q.Qsl.QslSDate,
+		QslRcvd:                q.Qsl.QslRcvd,
+		QslRcvdVia:             q.Qsl.QslRcvdVia,
+		QslRcvdNotes:           q.Qsl.QslRcvdNotes,
+		QslSent:                q.Qsl.QslSent,
+		QslSentVia:             q.Qsl.QslSendVia,
+		QslVia:                 q.Qsl.QslVia,
+		QrzComQsoUploadDate:    q.QrzComUploadDate,
+		QrzComQsoUploadStatus:  q.QrzComUploadStatus,
+		ClubLogQsoUploadDate:   q.ClubLogUploadDate,
+		ClubLogQsoUploadStatus: q.ClubLogUploadStatus,
 	}
 	// Map user-defined fields
 	r.UserDef = UserDef{
@@ -177,6 +182,8 @@ func RecordToQso(rec Record, logbookID int64) types.Qso {
 		},
 		QrzComUploadDate:    rec.QslSection.QrzComQsoUploadDate,
 		QrzComUploadStatus:  rec.QslSection.QrzComQsoUploadStatus,
+		ClubLogUploadDate:   rec.QslSection.ClubLogQsoUploadDate,
+		ClubLogUploadStatus: rec.QslSection.ClubLogQsoUploadStatus,
 		SmQsoUploadDate:     rec.UserDef.SmQsoUploadDate,
 		SmQsoUploadStatus:   rec.UserDef.SmQsoUploadStatus,
 		SmFwrdByEmailDate:   rec.UserDef.SmFwrdByEmailDate,

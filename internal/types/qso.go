@@ -44,6 +44,9 @@ type Qso struct {
 	QrzComUploadDate   string `json:"qrzcom_qso_upload_date,omitempty"`
 	QrzComUploadStatus string `json:"qrzcom_qso_upload_status,omitempty"`
 
+	ClubLogUploadDate   string `json:"clublog_qso_upload_date,omitempty"`
+	ClubLogUploadStatus string `json:"clublog_qso_upload_status,omitempty"`
+
 	// AppSmRequestQsl is the operator's "I want to request a QSL card
 	// from this contact" flag. Custom application-extension field
 	// (ADIF APP_<programid>_<fieldname> convention). Persists via the
