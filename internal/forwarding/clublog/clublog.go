@@ -1,0 +1,507 @@
+// Package clublog provides the Club Log forwarder. It pushes QSOs to
+// Club Log via the real-time HTTP API and classifies upstream
+// responses into Success / Transient / Terminal outcomes so the worker
+// can retry, mark failed, or stamp success as appropriate.
+//
+// Credentials shape (all four required):
+//
+//	{
+//	  "email":    "operator@example.com",
+//	  "password": "an-application-password",
+//	  "callsign": "7Q5MLV",
+//	  "api":      "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33"
+//	}
+//
+// Club Log needs TWO distinct credentials, and the API key ALONE is not
+// enough to upload or delete — the names ("application password" vs
+// "application API key") sound alike but authenticate different things:
+//
+//   - email + password = the OPERATOR'S ACCOUNT. password should be a
+//     Club Log "Application Password" (a scoped, revocable per-account
+//     password the operator generates in their account settings, used
+//     instead of their real login password). These tell Club Log whose
+//     log the QSO belongs to and that the request is authorised.
+//   - api = the SOFTWARE making the request (Station Manager). It is the
+//     SAME key for every SM install, so it carries no operator identity —
+//     it is the app-identification / rate-limiting layer, not account
+//     auth, which is why email + password are still required.
+//
+// (Contrast QRZ, whose single logbook-specific api_key both authenticates
+// AND selects the logbook, so the QRZ forwarder needs nothing else.)
+//
+// callsign selects which of the account's logs the QSO lands in. Club Log
+// issues one api key per *application* and auto-deletes any key it finds
+// published in a public repository — so the key is always operator-
+// supplied here, never embedded in this source. See
+// docs/v2-design/forwarding.md and the ClubLog API-key guide.
+//
+// Two endpoints back the two supported actions:
+//
+//	insert → POST realtime.php with the QSO as a single ADIF record
+//	delete → POST delete.php identifying the record by dxcall +
+//	         datetime + bandid (Club Log returns no upstream record id,
+//	         so deletes match on QSO fields, not a stored id)
+//
+// Club Log's real-time API has no general field-update: re-uploading an
+// edited QSO is detected as a duplicate and the edit is ignored. So
+// action=update is classified Terminal with a clear message rather than
+// silently no-op'ing. Operators correct QSO details via a bulk
+// re-upload outside the real-time path.
+//
+// On HTTP 403 Club Log mandates that the client "STOP sending real-time
+// requests immediately" or the IP is firewalled. The worker processes a
+// batch of rows per tick, so a single bad credential would otherwise
+// fire several 403s in quick succession. To honour the rule, the
+// forwarder trips an internal circuit breaker on the first 403: every
+// subsequent Submit short-circuits to Terminal WITHOUT a network call
+// until the daemon restarts (by which point the operator has presumably
+// fixed the credentials).
+//
+// Registers under type "clublog" via init(). Import the package with
+//
+//	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/clublog"
+//
+// from cmd/smd (or a test) so the registry learns about it.
+package clublog
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/adif"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+)
+
+// Type is the registry identifier for this forwarder.
+const Type = "clublog"
+
+// AdifFieldPrefix is the ADIF field-name prefix the worker stamps on
+// the QSO row after a successful insert. Combined with the standard
+// suffixes it produces CLUBLOG_QSO_UPLOAD_STATUS and
+// CLUBLOG_QSO_UPLOAD_DATE, per the ADIF specification.
+const AdifFieldPrefix = "CLUBLOG"
+
+// DefaultRealtimeEndpoint is the Club Log real-time upload URL (insert).
+// DefaultDeleteEndpoint is the real-time delete URL. Both are
+// overridable via the package-internal constructor so httptest fixtures
+// can stand in for the real service.
+const (
+	DefaultRealtimeEndpoint = "https://clublog.org/realtime.php"
+	DefaultDeleteEndpoint   = "https://clublog.org/delete.php"
+)
+
+// DefaultHTTPTimeout is the per-call timeout for Club Log requests. The
+// operator's internet link is flaky (see project_sm_operator_network
+// memory), so 30s balances "give the server time" against "don't let a
+// hung socket wedge the worker".
+const DefaultHTTPTimeout = 30 * time.Second
+
+// maxResponseBytes caps the response body. Club Log responses are tiny
+// (a short status string); the cap only bounds memory if a misbehaving
+// upstream (DNS hijack, transparent proxy) returns a giant body.
+const maxResponseBytes = 1 << 20 // 1 MiB
+
+// errorSnippetLen bounds the response-body excerpt stored in last_error
+// so it fits a log line.
+const errorSnippetLen = 200
+
+// UserAgent is the User-Agent header this forwarder sends. cmd/smd
+// overrides this var at startup with the daemon's global
+// Config.UserAgent. The "dev" fallback keeps in-package tests hermetic.
+var UserAgent = "station-manager/dev"
+
+// DefaultRetry is the retry policy the daemon uses when a Club Log
+// forwarder config entry has no explicit `retry` block. Tuned like
+// QRZ's: transient 5xx/network blips recover within minutes, and the
+// operator's link is slow so we don't hammer the server.
+var DefaultRetry = types.RetryConfig{
+	MaxAttempts:       5,
+	InitialBackoffSec: 60,
+	MaxBackoffSec:     1800,
+}
+
+func init() {
+	forwarding.Register(Type, New)
+	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+}
+
+// credentials is the type-specific shape of ForwarderConfig.Credentials
+// for Club Log. Extra fields are ignored.
+type credentials struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Callsign string `json:"callsign"`
+	APIKey   string `json:"api"`
+}
+
+// Forwarder implements forwarding.Forwarder by POSTing to the Club Log
+// real-time API. The credential/endpoint fields are set at construction
+// and read-only thereafter; authFailed is the only mutable state (the
+// 403 circuit breaker), guarded by atomic access so concurrent Submit
+// calls from the worker are safe.
+type Forwarder struct {
+	email      string
+	password   string
+	callsign   string
+	apiKey     string
+	realtime   string
+	deleteURL  string
+	client     *http.Client
+	authFailed atomic.Bool
+}
+
+// New constructs a Club Log Forwarder from the given ForwarderConfig.
+// All four credential fields are required.
+func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
+	const op errors.Op = "clublog.New"
+
+	if len(fc.Credentials) == 0 {
+		return nil, errors.New(op).WithMsg("credentials required (email, password, callsign, api)")
+	}
+
+	var creds credentials
+	if err := json.Unmarshal(fc.Credentials, &creds); err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("parse credentials")
+	}
+	switch {
+	case creds.Email == "":
+		return nil, errors.New(op).WithMsg("credentials.email is required")
+	case creds.Password == "":
+		return nil, errors.New(op).WithMsg("credentials.password is required")
+	case creds.Callsign == "":
+		return nil, errors.New(op).WithMsg("credentials.callsign is required")
+	case creds.APIKey == "":
+		return nil, errors.New(op).WithMsg("credentials.api is required")
+	}
+
+	return newWithEndpoints(creds, DefaultRealtimeEndpoint, DefaultDeleteEndpoint, &http.Client{
+		Timeout: DefaultHTTPTimeout,
+	}), nil
+}
+
+// newWithEndpoints is the package-internal constructor that tests use to
+// point the forwarder at httptest.NewServer URLs with an arbitrary
+// http.Client. Production code goes through New.
+func newWithEndpoints(creds credentials, realtime, deleteURL string, client *http.Client) *Forwarder {
+	if client == nil {
+		client = &http.Client{Timeout: DefaultHTTPTimeout}
+	}
+	return &Forwarder{
+		email:     creds.Email,
+		password:  creds.Password,
+		callsign:  creds.Callsign,
+		apiKey:    creds.APIKey,
+		realtime:  realtime,
+		deleteURL: deleteURL,
+		client:    client,
+	}
+}
+
+// Type returns the registry identifier for this forwarder.
+func (f *Forwarder) Type() string { return Type }
+
+// AdifPrefix returns "CLUBLOG" so the worker stamps
+// CLUBLOG_QSO_UPLOAD_STATUS / CLUBLOG_QSO_UPLOAD_DATE on the QSO row
+// after a successful insert.
+func (f *Forwarder) AdifPrefix() string { return AdifFieldPrefix }
+
+// Submit pushes one QSO+action pair to Club Log.
+//
+//	insert → realtime.php, QSO as one ADIF record
+//	update → Terminal (Club Log real-time can't edit QSO fields)
+//	delete → delete.php, matched by dxcall + datetime + bandid
+//
+// priorUpstreamID is ignored: Club Log returns no upstream record id, so
+// a delete is identified by the QSO's own fields. If the 403 circuit
+// breaker has tripped, every action short-circuits to Terminal without
+// touching the network.
+func (f *Forwarder) Submit(
+	ctx context.Context,
+	qso types.Qso,
+	act forwarding.Action,
+	priorUpstreamID string,
+) forwarding.Result {
+	const op errors.Op = "clublog.Submit"
+
+	if err := ctx.Err(); err != nil {
+		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}
+	}
+
+	// Circuit breaker: once Club Log has returned a 403 we must not send
+	// further real-time requests or the IP gets firewalled.
+	if f.authFailed.Load() {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err: errors.New(op).WithMsg(
+				"ClubLog auth previously rejected (403); refusing further requests until restart — fix credentials",
+			),
+		}
+	}
+
+	switch act {
+	case action.Insert:
+		return f.submitInsert(ctx, qso)
+	case action.Update:
+		// Club Log real-time has no REPLACE: an edited QSO re-uploaded is
+		// detected as a duplicate and the change is ignored. Fail loudly
+		// rather than report a phantom success.
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err: errors.New(op).WithMsg(
+				"ClubLog real-time API cannot edit QSO fields; correct via bulk re-upload",
+			),
+		}
+	case action.Delete:
+		return f.submitDelete(ctx, qso)
+	default:
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithMsgf("unknown action %q", act),
+		}
+	}
+}
+
+// submitInsert POSTs the QSO as a single ADIF record to realtime.php.
+func (f *Forwarder) submitInsert(ctx context.Context, qso types.Qso) forwarding.Result {
+	const op errors.Op = "clublog.submitInsert"
+
+	form := url.Values{}
+	form.Set("email", f.email)
+	form.Set("password", f.password)
+	form.Set("callsign", f.callsign)
+	form.Set("api", f.apiKey)
+	form.Set("adif", adif.ConvertQsoToAdifNoHeader(qso))
+
+	return f.post(ctx, op, f.realtime, form)
+}
+
+// submitDelete POSTs a delete request to delete.php. Club Log identifies
+// the record by the counterparty callsign, the QSO timestamp, and the
+// numeric band id; all three must be derivable from the QSO or the
+// delete can never resolve (Terminal, no network call).
+func (f *Forwarder) submitDelete(ctx context.Context, qso types.Qso) forwarding.Result {
+	const op errors.Op = "clublog.submitDelete"
+
+	if qso.Call == "" {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithMsg("delete requires a contacted callsign"),
+		}
+	}
+	datetime, err := formatDateTime(qso.QsoDate, qso.TimeOn)
+	if err != nil {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithErr(err).WithMsg("delete requires a valid QSO date/time"),
+		}
+	}
+	bandid, ok := bandID(qso.Band)
+	if !ok {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithMsgf("delete: band %q has no ClubLog band id", qso.Band),
+		}
+	}
+
+	form := url.Values{}
+	form.Set("email", f.email)
+	form.Set("password", f.password)
+	form.Set("callsign", f.callsign)
+	form.Set("api", f.apiKey)
+	form.Set("dxcall", qso.Call)
+	form.Set("datetime", datetime)
+	form.Set("bandid", bandid)
+
+	return f.post(ctx, op, f.deleteURL, form)
+}
+
+// post sends the form to the endpoint and classifies the outcome.
+// Transport faults (network, ctx, body read) are decided here; HTTP
+// status is handed to classifyHTTPStatus, which also trips the 403
+// circuit breaker.
+func (f *Forwarder) post(ctx context.Context, op errors.Op, endpoint string, form url.Values) forwarding.Result {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()),
+	)
+	if err != nil {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithErr(err).WithMsg("build HTTP request"),
+		}
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		// net errors (DNS, connection refused, tls, timeout, ctx cancel
+		// mid-flight) are retryable from our perspective.
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTransient,
+			Err:     errors.New(op).WithErr(err).WithMsg("POST to ClubLog"),
+		}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTransient,
+			Err:     errors.New(op).WithErr(err).WithMsg("read ClubLog response"),
+		}
+	}
+
+	return f.classifyHTTPStatus(op, resp.StatusCode, resp.Status, body)
+}
+
+// classifyHTTPStatus maps a Club Log HTTP response into a
+// forwarding.Result. Club Log encodes the result entirely in the status
+// code (the reason phrase / body carry human detail only):
+//
+//	2xx                    → Success (QSO OK / Modified / Duplicate on
+//	                         insert; OK / Not Deleted on delete — all of
+//	                         these mean "end state matches our intent")
+//	403 Forbidden          → Terminal + trips the circuit breaker
+//	408 / 429 / 5xx        → Transient
+//	other 4xx (e.g. 400)   → Terminal (QSO Rejected — bad ADIF)
+//	other                  → Terminal (unexpected for this API)
+//
+// status is the numeric code; statusText is the full status line (e.g.
+// "200 QSO Duplicate") which Club Log uses to convey the sub-result and
+// which we surface in diagnostics.
+func (f *Forwarder) classifyHTTPStatus(op errors.Op, status int, statusText string, body []byte) forwarding.Result {
+	if status >= 200 && status < 300 {
+		// Club Log returns no upstream record id, so UpstreamID stays empty.
+		return forwarding.Result{Outcome: forwarding.OutcomeSuccess}
+	}
+
+	detail := statusOrSnippet(statusText, body)
+
+	if status == http.StatusForbidden {
+		// Honour ClubLog's "STOP sending immediately" rule: trip the
+		// breaker so no further request reaches the upstream this run.
+		f.authFailed.Store(true)
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err: errors.New(op).WithMsgf(
+				"ClubLog auth rejected (HTTP 403): %s — stopping requests until credentials are fixed", detail,
+			),
+		}
+	}
+
+	switch {
+	case status == http.StatusRequestTimeout,
+		status == http.StatusTooManyRequests,
+		status >= 500 && status < 600:
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTransient,
+			Err:     errors.New(op).WithMsgf("ClubLog returned HTTP %d (%s)", status, detail),
+		}
+	default:
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithMsgf("ClubLog returned HTTP %d (%s)", status, detail),
+		}
+	}
+}
+
+// statusOrSnippet prefers the HTTP status line (Club Log's sub-result,
+// e.g. "200 QSO Rejected") and falls back to a bounded body excerpt when
+// the status line is empty.
+func statusOrSnippet(statusText string, body []byte) string {
+	if s := strings.TrimSpace(statusText); s != "" {
+		return s
+	}
+	return bodySnippet(body, errorSnippetLen)
+}
+
+// bodySnippet returns a bounded view of the response body for error
+// messages — full bodies can be large and aren't useful in last_error.
+func bodySnippet(body []byte, max int) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+// formatDateTime converts an ADIF QSO date (YYYYMMDD) and time (HHMM or
+// HHMMSS) into Club Log's delete.php datetime format "YYYY-MM-DD
+// HH:MM:SS". An HHMM time is zero-padded to whole seconds.
+func formatDateTime(qsoDate, timeOn string) (string, error) {
+	const op errors.Op = "clublog.formatDateTime"
+
+	if len(qsoDate) != 8 || !allDigits(qsoDate) {
+		return "", errors.New(op).WithMsgf("qso_date %q is not YYYYMMDD", qsoDate)
+	}
+	t := timeOn
+	switch len(t) {
+	case 4:
+		t += "00"
+	case 6:
+		// already HHMMSS
+	default:
+		return "", errors.New(op).WithMsgf("time_on %q is not HHMM or HHMMSS", timeOn)
+	}
+	if !allDigits(t) {
+		return "", errors.New(op).WithMsgf("time_on %q is not numeric", timeOn)
+	}
+
+	return fmt.Sprintf("%s-%s-%s %s:%s:%s",
+		qsoDate[0:4], qsoDate[4:6], qsoDate[6:8],
+		t[0:2], t[2:4], t[4:6],
+	), nil
+}
+
+// bandIDByBand maps the ADIF band string (as stored on the QSO, lower-
+// case) to Club Log's numeric band id used by delete.php. Bands without
+// a Club Log id (e.g. 1.25m, 33cm) are absent — a delete on such a band
+// classifies Terminal rather than guessing.
+var bandIDByBand = map[string]string{
+	"160m": "160",
+	"80m":  "80",
+	"60m":  "60",
+	"40m":  "40",
+	"30m":  "30",
+	"20m":  "20",
+	"17m":  "17",
+	"15m":  "15",
+	"12m":  "12",
+	"10m":  "10",
+	"6m":   "6",
+	"4m":   "4",
+	"2m":   "2",
+	"70cm": "70",
+	"23cm": "23",
+	"13cm": "13",
+}
+
+// bandID returns the Club Log numeric band id for an ADIF band string,
+// and whether a mapping exists.
+func bandID(b string) (string, bool) {
+	id, ok := bandIDByBand[strings.ToLower(strings.TrimSpace(b))]
+	return id, ok
+}
+
+// allDigits reports whether s is non-empty and all ASCII digits.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}

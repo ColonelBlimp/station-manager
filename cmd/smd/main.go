@@ -27,7 +27,8 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
-	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz" // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/clublog" // registers "clublog" forwarder + default retry via init(); main also sets clublog.UserAgent below
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"     // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
 	// The test-only "stub" forwarder is registered ONLY in dev builds (-tags dev,
 	// see forwarder_stub_dev.go) — never in a release binary, so a production
 	// config can't select type:"stub" and get fake "uploaded" status without
@@ -211,9 +212,10 @@ func run() error {
 			"smd: could not persist resolved UserAgent to config.json: %v (continuing with in-memory value %q)\n",
 			uerr, cfg.UserAgent)
 	}
-	// Forwarder package var — every QRZ forwarder POST stamps this
-	// on the User-Agent header. Set after the UA is final.
+	// Forwarder package vars — every forwarder POST stamps this on the
+	// User-Agent header. Set after the UA is final.
 	qrz.UserAgent = cfg.UserAgent
+	clublog.UserAgent = cfg.UserAgent
 
 	container := iocdi.New()
 
