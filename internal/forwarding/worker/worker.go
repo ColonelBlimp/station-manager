@@ -248,12 +248,21 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 
 // resolvePriorUpstreamID fetches the upstream_id recorded on the prior
 // successful upstream-creating action (insert OR update) for delete actions,
-// so the forwarder can identify the record to remove upstream. For
-// insert/update it returns an empty string without touching the DB.
+// so a forwarder that identifies the remote record by id (QRZ's LOGIDS) can
+// issue the delete. For insert/update it returns an empty string without
+// touching the DB.
 //
-// Returns handled=true when the row has already been resolved (DB
-// infra error → transient, no matching upstream-creating row → terminal) so
-// the caller skips the 'submit' step.
+// An EMPTY result is passed through, NOT failed: some upstreams (ClubLog)
+// delete by QSO fields and never stored a record id, so a missing id is
+// normal for them. Whether a missing id is fatal is the forwarder's call —
+// its Submit returns Terminal when it needs an id it didn't get (e.g.
+// qrz.buildForm). The worker no longer gates on presence here; doing so
+// made id-less-delete forwarders unreachable (review finding, High).
+//
+// Returns handled=true only when a DB infra error was already resolved
+// (transient retry), so the caller skips the 'submit' step. The DB lookup
+// error is the only worker-level outcome — everything else, empty id
+// included, flows to Submit.
 func (w *Worker) resolvePriorUpstreamID(
 	ctx context.Context, row types.QsoUpload, act action.Action,
 ) (string, bool) {
@@ -270,14 +279,8 @@ func (w *Worker) resolvePriorUpstreamID(
 		w.markTransientInternal(ctx, row, err)
 		return "", true
 	}
-	if upstreamID == "" {
-		// No prior successful insert OR update for this (qso, forwarder).
-		// The delete can never resolve — mark terminal (rather than looping
-		// on an impossible operation).
-		w.markFailed(ctx, row,
-			"no upstream id for delete — no successful insert/update found")
-		return "", true
-	}
+	// Empty id is intentionally passed through to Submit — the forwarder
+	// decides whether it can proceed without one. See the doc comment.
 	return upstreamID, false
 }
 

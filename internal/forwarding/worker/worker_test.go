@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -835,16 +836,65 @@ func TestWorker_InsertSuccess_EmptyPrefix_DoesNotStamp(t *testing.T) {
 // Stage 5: delete action + priorUpstreamID lookup
 // =============================================================================
 
-func TestWorker_Delete_NoPriorInsert_IsTerminalImmediately(t *testing.T) {
+// TestWorker_Delete_NoPriorInsert_IdLessForwarderReaches is the integration
+// guard for the High review finding: a forwarder that deletes by QSO fields
+// (ClubLog-shaped — no stored upstream id) must still have its delete
+// dispatched even with no prior insert row. Previously the worker
+// short-circuited an empty upstream id to `failed` before Submit ran, which
+// made such deletes unreachable. The worker now passes the empty id through
+// and lets the forwarder decide. Package-level Submit tests can't catch this
+// because they call Submit directly, bypassing resolvePriorUpstreamID.
+func TestWorker_Delete_NoPriorInsert_IdLessForwarderReaches(t *testing.T) {
 	h := newHarness(t)
 	qsoID := h.seedLogbookAndQso()
-	// No prior insert row seeded — the lookup will come back empty.
+	// No prior insert row seeded — the lookup comes back empty.
 	h.enqueueUpload(qsoID, "stub", stub.Type, action.Delete)
 
-	// The forwarder should never be invoked. A recordingForwarder with
-	// an empty-by-default Result lets us observe that Submit wasn't
-	// called.
-	fwd := &recordingForwarder{typeName: stub.Type}
+	// An id-less forwarder that succeeds regardless of priorUpstreamID.
+	fwd := &recordingForwarder{
+		typeName: stub.Type,
+		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess},
+	}
+	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	runUntilAction(t, w, h, qsoID, action.Delete, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	calls := fwd.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("forwarder Submit called %d times, want 1 (worker must dispatch the delete)", len(calls))
+	}
+	if calls[0].action != action.Delete {
+		t.Fatalf("Submit action = %q, want delete", calls[0].action)
+	}
+	if calls[0].priorUpstreamID != "" {
+		t.Fatalf("priorUpstreamID = %q, want empty (no prior insert)", calls[0].priorUpstreamID)
+	}
+}
+
+// TestWorker_Delete_NoPriorInsert_IdRequiringForwarderFails proves the other
+// half of the contract: a forwarder that NEEDS the upstream id (QRZ-shaped)
+// still ends the row `failed` when there's no prior insert — but the failure
+// is now the forwarder's terminal Result, decided after Submit is called with
+// the empty id, not a worker-side short-circuit.
+func TestWorker_Delete_NoPriorInsert_IdRequiringForwarderFails(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Delete)
+
+	// Forwarder that rejects a missing id terminally (stands in for QRZ's
+	// buildForm empty-priorUpstreamID guard).
+	fwd := &recordingForwarder{
+		typeName: stub.Type,
+		result: forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     fmt.Errorf("delete requires non-empty priorUpstreamID"),
+		},
+	}
 	w, err := New(defaultCfg("stub"), fwd, h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
@@ -853,14 +903,15 @@ func TestWorker_Delete_NoPriorInsert_IsTerminalImmediately(t *testing.T) {
 	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
 		return u.Status == status.Failed.String()
 	})
-	if !strings.Contains(row.LastError, "no upstream id for delete") {
-		t.Fatalf("last_error = %q, want 'no upstream id for delete' substring", row.LastError)
+	if !strings.Contains(row.LastError, "priorUpstreamID") {
+		t.Fatalf("last_error = %q, want forwarder's terminal reason", row.LastError)
 	}
-	if row.Attempts != 1 {
-		t.Fatalf("attempts = %d, want 1 (single terminal transition)", row.Attempts)
+	calls := fwd.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("forwarder Submit called %d times, want 1 (worker must dispatch, forwarder decides)", len(calls))
 	}
-	if got := fwd.snapshotCalls(); len(got) != 0 {
-		t.Fatalf("forwarder Submit was called %d times, want 0 (worker must short-circuit)", len(got))
+	if calls[0].priorUpstreamID != "" {
+		t.Fatalf("priorUpstreamID = %q, want empty", calls[0].priorUpstreamID)
 	}
 }
 
