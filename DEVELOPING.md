@@ -40,7 +40,7 @@ sudo dnf install -y \
   golang \
   nodejs npm \
   hugo \
-  alsa-lib pipewire-libs
+  pipewire-libs
 ```
 
 Notes:
@@ -60,11 +60,11 @@ Notes:
   curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \
     | sudo tar -xz -C /usr/local/bin hugo
   ```
-- **`alsa-lib` / `pipewire-libs`** are *runtime* audio backends. miniaudio
-  `dlopen`s an audio backend at run time for live FT8 capture; on Fedora 43
-  that's PipeWire (with the ALSA compat layer). They're almost always already
-  installed as part of the desktop — listed here for a truly minimal install.
-  No `-devel` headers are needed (miniaudio bundles its own C).
+- **`pipewire-libs`** is the *runtime* audio backend. miniaudio `dlopen`s an
+  audio backend at run time for live FT8 capture; on Fedora 43 that's PipeWire.
+  It's almost always already installed as part of the desktop — listed here for
+  a truly minimal install. No `-devel` headers are needed (miniaudio bundles its
+  own C).
 
 ### 2.1 Go toolchain (if Fedora's is too old)
 
@@ -112,7 +112,7 @@ subsystem stays disconnected.
 
 `gcc` → `build-essential`; `nodejs npm` (use NodeSource for Node ≥ 22);
 `hugo` is often too old — use the pinned-release `curl` above; audio runtime
-is `libasound2` / `libpipewire-0.3-0`; serial group is also `dialout`.
+is `libpipewire-0.3-0`; serial group is also `dialout`.
 
 ---
 
