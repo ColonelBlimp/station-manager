@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
+	migratepkg "github.com/golang-migrate/migrate/v4"
 )
 
 // TestMissingCoreTables_FlagsIncompleteSchema guards review 2026-06-19 M2:
@@ -57,6 +59,17 @@ func TestMissingCoreTables_FlagsIncompleteSchema(t *testing.T) {
 // testService wires a Service to an in-memory sqlite database, opens it,
 // and runs migrations. The returned service is ready for use.
 func testService(t *testing.T) *Service {
+	svc := testServiceWithoutMigrations(t)
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate: %v", err)
+	}
+	return svc
+}
+
+// testServiceWithoutMigrations wires and opens a Service without running schema
+// migrations. Tests that need to stop at an intermediate migration version use
+// this to drive golang-migrate manually.
+func testServiceWithoutMigrations(t *testing.T) *Service {
 	t.Helper()
 
 	cfg := config.DefaultConfig(t.TempDir())
@@ -92,14 +105,28 @@ func testService(t *testing.T) *Service {
 	if err := svc.Open(); err != nil {
 		t.Fatalf("sqlite open: %v", err)
 	}
-	if err := svc.Migrate(); err != nil {
-		t.Fatalf("sqlite migrate: %v", err)
-	}
 	t.Cleanup(func() {
 		_ = svc.Close()
 		_ = logSvc.Close()
 	})
 	return svc
+}
+
+func applyMigrationSteps(t *testing.T, svc *Service, steps int) {
+	t.Helper()
+	srcDriver, dbDriver, err := GetMigrationDrivers(svc.handle)
+	if err != nil {
+		t.Fatalf("migration drivers: %v", err)
+	}
+	defer func() { _ = srcDriver.Close() }()
+
+	m, err := migratepkg.NewWithInstance("iofs", srcDriver, svc.DatabaseConfig.Driver, dbDriver)
+	if err != nil {
+		t.Fatalf("migrate instance: %v", err)
+	}
+	if err := m.Steps(steps); err != nil {
+		t.Fatalf("migrate steps(%d): %v", steps, err)
+	}
 }
 
 // validTestQso builds a minimal valid QSO. The call field defaults to
@@ -247,6 +274,80 @@ func TestInsertLogbook_AndFetch(t *testing.T) {
 	}
 	if got.Callsign != "G4ABC" {
 		t.Fatalf("callsign = %q, want G4ABC", got.Callsign)
+	}
+}
+
+func TestMigrate_RelaxesRSTLengthFromVersion1(t *testing.T) {
+	svc := testServiceWithoutMigrations(t)
+	applyMigrationSteps(t, svc, 1)
+
+	logbookID, err := svc.InsertLogbookWithContext(context.Background(), types.Logbook{
+		Name:     "Test",
+		Callsign: "G4ABC",
+	})
+	if err != nil {
+		t.Fatalf("insert logbook: %v", err)
+	}
+
+	before := validTestQso(logbookID, "M0CMC", "20m", "SSB", "20240615", "1253")
+	beforeID, err := svc.InsertQsoWithContext(context.Background(), before)
+	if err != nil {
+		t.Fatalf("insert version-1 qso: %v", err)
+	}
+	enqueueUpload(t, svc, beforeID, "qrz-main", "qrz", action.Insert)
+	insertQsoHistory(t, svc, before.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
+
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("migrate to latest: %v", err)
+	}
+
+	after := validTestQso(logbookID, "SP5VYF", "15m", "SSB", "20240722", "1637")
+	after.QsoDetails.RstSent = "5759"
+	after.QsoDetails.RstRcvd = "4657"
+	if _, err := svc.InsertQsoWithContext(context.Background(), after); err != nil {
+		t.Fatalf("insert qso with wide RST values after migration: %v", err)
+	}
+
+	qsos, err := svc.FetchQsoSliceByLogbookIdWithContext(context.Background(), logbookID)
+	if err != nil {
+		t.Fatalf("fetch qsos: %v", err)
+	}
+	if len(qsos) != 2 {
+		t.Fatalf("QSO count = %d, want 2", len(qsos))
+	}
+	uploads, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), beforeID)
+	if err != nil {
+		t.Fatalf("fetch preserved uploads: %v", err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("preserved upload count = %d, want 1", len(uploads))
+	}
+	history, err := svc.FetchQsoHistoryByUUIDWithContext(context.Background(), before.UUID)
+	if err != nil {
+		t.Fatalf("fetch preserved history: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("preserved history count = %d, want 1", len(history))
+	}
+
+	var foundBefore, foundAfter bool
+	for _, q := range qsos {
+		switch q.ContactedStation.Call {
+		case "M0CMC":
+			foundBefore = true
+			if q.QsoDetails.RstRcvd != "59" {
+				t.Fatalf("pre-migration QSO RstRcvd = %q, want 59", q.QsoDetails.RstRcvd)
+			}
+		case "SP5VYF":
+			foundAfter = true
+			if q.QsoDetails.RstSent != "5759" || q.QsoDetails.RstRcvd != "4657" {
+				t.Fatalf("wide RST values = sent %q rcvd %q, want 5759/4657",
+					q.QsoDetails.RstSent, q.QsoDetails.RstRcvd)
+			}
+		}
+	}
+	if !foundBefore || !foundAfter {
+		t.Fatalf("expected both pre- and post-migration QSOs, found before=%v after=%v", foundBefore, foundAfter)
 	}
 }
 

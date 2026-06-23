@@ -159,6 +159,8 @@ const sampleRecord = `<call:5>M0ZNK<station_callsign:6>M0TEST<band:3>20m<mode:3>
 
 const secondRecord = `<call:5>G4XYZ<station_callsign:6>M0TEST<band:3>40m<mode:2>CW<freq:6>7.0250<qso_date:8>20240616<time_on:4>1430<rst_sent:3>599<rst_rcvd:3>599<country:7>England<my_gridsquare:6>IO91vl<app_qrzlog_logid:10>1112033000<qrzcom_qso_upload_status:1>Y<qrzcom_qso_upload_date:8>20240618`
 
+const wideRstRecord = `<call:6>SP5VYF<station_callsign:6>M0TEST<band:3>15m<mode:3>USB<freq:5>21.28<qso_date:8>20240722<time_on:4>1637<rst_sent:2>57<rst_rcvd:4>4657<country:6>Poland<my_gridsquare:6>KH78AN`
+
 func TestImport_HappyPath(t *testing.T) {
 	tmp := setupImportTestbed(t, nil)
 	adifPath := writeADIF(t, tmp, "input.adi", sampleRecord, secondRecord)
@@ -174,6 +176,27 @@ func TestImport_HappyPath(t *testing.T) {
 	}
 	if len(qsos) != 2 {
 		t.Fatalf("expected 2 QSOs, got %d", len(qsos))
+	}
+}
+
+func TestImport_AllowsWideRstValues(t *testing.T) {
+	tmp := setupImportTestbed(t, nil)
+	adifPath := writeADIF(t, tmp, "input.adi", wideRstRecord)
+
+	if err := runImport([]string{adifPath}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	db := reopenDB(t, tmp)
+	qsos, err := db.FetchQsoSliceByLogbookIdWithContext(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("fetch qsos: %v", err)
+	}
+	if len(qsos) != 1 {
+		t.Fatalf("expected 1 QSO, got %d", len(qsos))
+	}
+	if qsos[0].QsoDetails.RstRcvd != "4657" {
+		t.Fatalf("RstRcvd = %q, want 4657", qsos[0].QsoDetails.RstRcvd)
 	}
 }
 
