@@ -198,7 +198,11 @@ func validateRigs(cfg Config) []Finding {
 			}
 		}
 	}
-	if len(cfg.Rigs) > 0 && cfg.RigByID(cfg.DefaultRigID) == nil {
+	// default_rig_id must resolve to a defined rig. The sole exception is a
+	// rig-less config (fresh install before CAT is set up): id 0 with no rigs
+	// means "no active rig" and is valid. A non-zero id resolving to nothing —
+	// or any id once rigs exist — is a dangling pointer.
+	if cfg.RigByID(cfg.DefaultRigID) == nil && !(len(cfg.Rigs) == 0 && cfg.DefaultRigID == 0) {
 		out = append(out, rigErr("default_rig_id",
 			fmt.Sprintf("default_rig_id %d does not match any defined rig", cfg.DefaultRigID)))
 	}

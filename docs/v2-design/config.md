@@ -903,3 +903,24 @@ sparse-on-disk was rejected (§15.2) in favour of keeping filled-on-disk and han
 drift via a §13 migration when (rarely) a default changes. Nothing to build now — this section
 records the decision. The only remaining redesign code item is §14's optional defaults-fill
 consolidation (and §11, gated on the config-SPA write path — §11.5).
+
+### 15.5 Sparse-but-served for operator-invisible defaults (2026-06-23)
+
+§15.2 rejected *full* sparse (the wholesale move of `applyDefaults` to resolve-on-read). It did
+**not** preclude a narrower, per-block pattern that some blocks already use and that resolves the
+"the operator can't see this default" problem without materialising it on disk:
+
+- The block stays **sparse on disk** (zero = "use the built-in default," applied at point-of-use in
+  the consuming package).
+- `/v1/config` **GET serves the RESOLVED view** via a dedicated `Resolve*` helper, so the SPA reads
+  effective values even though config.json never freezes them. No migration needed (nothing frozen
+  on disk), and the consuming package stays the single owner of its defaults (no drift).
+
+Blocks on this pattern: `ft8.display` / `ft8.frequencies` (`types.ResolveFt8Display` /
+`ResolveFt8Frequencies`), `psk_reporter` (zero-resolves at use), and — added 2026-06-23 —
+`bridge.timeouts` / `bridge.tune` (`bridge.ResolveTimeouts` / `ResolveTune`, the same resolution
+`Service.New` applies, so served == runtime; tune ceilings stay non-overridable in `internal/bridge`).
+This is why a fresh `config.json` legitimately shows `bridge.timeouts: {}` while the GET reports
+`bridge_timeouts.liveness_ms: 5000` — sparse file, resolved API. Genuinely filled-on-disk blocks
+(`server`/`datastore`/`logging`/`smtp`/`lookup`) keep their §15.2 treatment; the distinction is
+whether the operator has another way to see the effective value (resolved GET) or not.

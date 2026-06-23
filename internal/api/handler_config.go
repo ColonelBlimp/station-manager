@@ -66,6 +66,18 @@ type ConfigResponse struct {
 	// (no Settings control yet) and a PUT never carries it, so it's left untouched on
 	// write (it survives in the in-memory cfg, rewritten with the rest).
 	Ft8Frequencies map[string]int `json:"ft8_frequencies,omitempty"`
+	// BridgeTimeouts / BridgeTune are the resolved (defaults-filled, ceilings
+	// applied) bridge supervisor/readLoop timeouts and tune-carrier params.
+	// Like Ft8Frequencies, the on-disk config stays SPARSE — zero = "use the
+	// built-in default," applied in internal/bridge — and these are served
+	// RESOLVED on GET (via bridge.ResolveTimeouts / bridge.ResolveTune, the same
+	// resolution the running Service uses) so the config SPA can show effective
+	// values without materialising them into config.json (config.md §15
+	// sparse-but-served). Read-only over /v1/config: a PUT never carries them
+	// (they're edited in config.json while the daemon is stopped), so they're
+	// left untouched on write.
+	BridgeTimeouts *types.BridgeTimeoutsConfig `json:"bridge_timeouts,omitempty"`
+	BridgeTune     *types.BridgeTuneConfig     `json:"bridge_tune,omitempty"`
 }
 
 // DefaultRigInfo is the SPA-visible subset of the active rig for GET
@@ -411,6 +423,15 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// FT8 per-band dial frequencies, always resolved (defaults + overrides) for the
 	// SPA's Main-Freq band buttons.
 	resp.Ft8Frequencies = types.ResolveFt8Frequencies(cfg.Ft8.Frequencies)
+
+	// Bridge timeouts + tune params, served RESOLVED (defaults filled, ceilings
+	// applied) like the FT8 blocks above — config.json stays sparse. Uses the same
+	// resolution the running Service applies, so the SPA reads the daemon's
+	// effective values even though they aren't materialised on disk.
+	bridgeTimeouts := bridge.ResolveTimeouts(cfg.Bridge.Timeouts)
+	resp.BridgeTimeouts = &bridgeTimeouts
+	bridgeTune := bridge.ResolveTune(cfg.Bridge.Tune)
+	resp.BridgeTune = &bridgeTune
 
 	if cfg.DefaultLogbookID > 0 {
 		row, err := s.db.FetchLogbookByIDWithContext(r.Context(), cfg.DefaultLogbookID)

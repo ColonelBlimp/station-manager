@@ -40,8 +40,23 @@ func TestHandleGetConfig_PreSetup(t *testing.T) {
 	if resp.DefaultLogbook.Name != "" || resp.DefaultLogbook.Callsign != "" {
 		t.Errorf("Pre-setup default_logbook should have empty name/callsign; got %+v", resp.DefaultLogbook)
 	}
-	if resp.DefaultRig.ID != 1 {
-		t.Errorf("DefaultRig.ID = %d, want 1 (default)", resp.DefaultRig.ID)
+	// Pre-setup there is no rig catalogue, so default_rig_id stays 0
+	// ("no active rig") rather than dangling at a non-existent rig 1.
+	if resp.DefaultRig.ID != 0 {
+		t.Errorf("DefaultRig.ID = %d, want 0 (no rig configured pre-setup)", resp.DefaultRig.ID)
+	}
+
+	// Bridge timeouts are served RESOLVED even though config.json keeps them
+	// sparse (config.md §15 sparse-but-served): a fresh config still reports the
+	// effective defaults (liveness 5s) so the config SPA can show them.
+	if resp.BridgeTimeouts == nil {
+		t.Fatal("bridge_timeouts should be served resolved, got nil")
+	}
+	if resp.BridgeTimeouts.LivenessMs != 5000 {
+		t.Errorf("bridge_timeouts.liveness_ms = %d, want 5000 (resolved default)", resp.BridgeTimeouts.LivenessMs)
+	}
+	if resp.BridgeTune == nil || resp.BridgeTune.PowerW != 20 {
+		t.Errorf("bridge_tune should be served resolved with power_w 20, got %+v", resp.BridgeTune)
 	}
 	if resp.LoggingStation.StationCallsign != "" {
 		t.Errorf("Pre-setup station_callsign should be empty; got %q", resp.LoggingStation.StationCallsign)

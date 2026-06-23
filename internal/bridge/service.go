@@ -319,6 +319,44 @@ func clampDuration(d, max time.Duration) time.Duration {
 	return d
 }
 
+// ResolveTimeouts returns the EFFECTIVE bridge timeouts — operator values where
+// set, built-in package defaults where zero, the civ-read-gap ceiling applied —
+// as a fully populated config in milliseconds. It mirrors the resolution New
+// applies into the Service (the same resolveTimeout / clampDuration helpers and
+// package-default symbols), so the value served here is exactly what a running
+// Service would use. Exposed so the /v1/config GET can serve effective bridge
+// timeouts without materialising them into config.json (config.md §15
+// sparse-but-served): the file stays sparse, the API reports the resolved view.
+func ResolveTimeouts(c types.BridgeTimeoutsConfig) types.BridgeTimeoutsConfig {
+	ms := func(d time.Duration) int { return int(d / time.Millisecond) }
+	return types.BridgeTimeoutsConfig{
+		LivenessMs:             ms(resolveTimeout(c.LivenessMs, livenessTimeout)),
+		BackoffInitialMs:       ms(resolveTimeout(c.BackoffInitialMs, supervisorInitialBackoff)),
+		BackoffMaxMs:           ms(resolveTimeout(c.BackoffMaxMs, supervisorMaxBackoff)),
+		SteadyStateThresholdMs: ms(resolveTimeout(c.SteadyStateThresholdMs, supervisorSteadyStateThreshold)),
+		WriteWatchdogMs:        ms(resolveTimeout(c.WriteWatchdogMs, writeWatchdog)),
+		CivReadGapMs:           ms(clampDuration(resolveTimeout(c.CivReadGapMs, civReadGap), civReadGapMax)),
+		CivAckMs:               ms(resolveTimeout(c.CivAckMs, civAckTimeout)),
+		CivPollIntervalMs:      ms(resolveTimeout(c.CivPollIntervalMs, civPollInterval)),
+		CivPollQuietMs:         ms(resolveTimeout(c.CivPollQuietMs, civPollQuiet)),
+	}
+}
+
+// ResolveTune returns the EFFECTIVE tune-carrier params — defaults where zero,
+// clamped to the hard safety ceilings — reusing the same resolveTune* helpers
+// New uses, so the served view matches runtime. Same sparse-but-served rationale
+// as ResolveTimeouts; the ceilings stay non-overridable in this package.
+func ResolveTune(c types.BridgeTuneConfig) types.BridgeTuneConfig {
+	powerW, _ := resolveTunePower(c.PowerW)
+	dur, _ := resolveTuneDuration(c.MaxDurationMs)
+	settle, _ := resolveTuneRestoreSettle(c.RestoreSettleMs)
+	return types.BridgeTuneConfig{
+		PowerW:          powerW,
+		MaxDurationMs:   int(dur / time.Millisecond),
+		RestoreSettleMs: int(settle / time.Millisecond),
+	}
+}
+
 // Initialize validates dependencies. Idempotent. Required by the
 // project's service-lifecycle pattern; today the only check is
 // "logger present" (config was already validated by config.Load via

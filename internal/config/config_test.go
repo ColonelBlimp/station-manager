@@ -152,6 +152,54 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	if cfg.Datastore.Path != wantPath {
 		t.Fatalf("Datastore.Path = %q, want %q", cfg.Datastore.Path, wantPath)
 	}
+
+	// Fresh-install rig pointer: with no rig catalogue, default_rig_id must
+	// stay 0 ("no active rig"), NOT dangle at a non-existent rig 1 (the old
+	// applyDefaults stamped 1 unconditionally — the fresh-install dogfood bug).
+	if len(cfg.Rigs) != 0 {
+		t.Fatalf("expected no rigs in an empty config, got %d", len(cfg.Rigs))
+	}
+	if cfg.DefaultRigID != 0 {
+		t.Errorf("DefaultRigID = %d, want 0 (no rig configured)", cfg.DefaultRigID)
+	}
+	// The logbook pointer is still defaulted to 1 (its row is seeded at setup).
+	if cfg.DefaultLogbookID != 1 {
+		t.Errorf("DefaultLogbookID = %d, want 1", cfg.DefaultLogbookID)
+	}
+}
+
+// TestValidate_DefaultRigID guards the dangling-pointer rule: a rig-less config
+// with default_rig_id 0 is valid (fresh install, no CAT yet), but any
+// default_rig_id that resolves to no rig — including a non-zero id with no rigs
+// — is rejected.
+func TestValidate_DefaultRigID(t *testing.T) {
+	hasRigIDFinding := func(findings []Finding) bool {
+		for _, f := range findings {
+			if f.Field == "default_rig_id" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Rig-less + 0: valid.
+	if hasRigIDFinding(Validate(Config{})) {
+		t.Error("rig-less config with default_rig_id 0 should be valid")
+	}
+	// Rig-less + non-zero: dangling, rejected (the fresh-install bug class).
+	if !hasRigIDFinding(Validate(Config{DefaultRigID: 1})) {
+		t.Error("default_rig_id 1 with no rigs should be rejected as dangling")
+	}
+	// Rigs present + resolving id: valid.
+	good := Config{Rigs: []types.RigConfig{{ID: 1, Model: "yaesu-ftdx10"}}, DefaultRigID: 1}
+	if hasRigIDFinding(Validate(good)) {
+		t.Error("default_rig_id resolving to a defined rig should be valid")
+	}
+	// Rigs present + non-resolving id: rejected.
+	bad := Config{Rigs: []types.RigConfig{{ID: 1, Model: "yaesu-ftdx10"}}, DefaultRigID: 2}
+	if !hasRigIDFinding(Validate(bad)) {
+		t.Error("default_rig_id 2 with only rig 1 defined should be rejected")
+	}
 }
 
 func TestDefaultConfig_LoggingDefaults(t *testing.T) {

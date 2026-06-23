@@ -53,20 +53,32 @@ when it ships — don't let this rot into a graveyard.
   whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
   and decide whether the Rx pane should collapse to the latest decode per station.
 
-- **Fresh-install `config.json` is sparse + can carry a dangling `default_rig_id`.**
-  Filed from the 2026-06-23 clean-DB dogfood deploy. A newly generated config
-  (1) omits defaultable keys instead of materializing them —
-  `bridge.timeouts.liveness_ms` absent, `ft8` carries only `enabled`/`enable_osd`,
-  and `forwarders` is `null` rather than the supported set listed-but-disabled;
-  and (2) `internal/config/migrations.go:67` sets `default_rig_id = 1` even with
-  zero rigs, which `validate.go:201` lets pass because it only checks the pointer
-  resolves when `len(rigs) > 0`. Downstream symptoms from the same clean install:
-  no rig configured → the Phone/CW panel shows no Rig display at first startup,
-  and the `qsl` defaults block reads empty (clarify whether the complaint is the
-  null JSON field or a blank UI). Needs a first-run decision: full-scaffold a
-  complete annotated config vs. keep it minimal but fix the dangling-id
-  validation + add SPA empty-states. Closely tied to the install-friction item
-  under Features.
+- **Fresh-install `config.json` shape (design decision pending).** Filed from the
+  2026-06-23 clean-DB dogfood deploy; narrowed as sub-issues resolved:
+  - ~~**Dangling `default_rig_id`.**~~ **FIXED 2026-06-23.** `applyDefaults` now
+    only sets `default_rig_id` when a rig catalogue exists (a rig-less install
+    leaves it `0` = "no active rig"); `validate.go` rejects any non-resolving id
+    except `0`-with-no-rigs; the logging header shows **"Rig: not set"** when unset
+    (`LoggingCard.svelte`). Tests: `TestValidate_DefaultRigID`, the `default_rig_id`
+    assertions in `TestLoad_DefaultsApplied`, and `TestHandleGetConfig_PreSetup`.
+  - **`forwarders: null` is correct — WON'T change.** Do NOT pre-list types
+    disabled: ADR 0022 enqueues by presence, so a listed-but-disabled forwarder
+    accrues upload rows. The operator adds the ones they use via the config SPA
+    (see the data-driven forwarder-setup item below).
+  - ~~**Materialization is inconsistent.**~~ **DECIDED + DONE 2026-06-23 (sparse-but-served).**
+    The investigation found the codebase uses three models, not two: filled-on-disk
+    (`server`/`datastore`/`logging`/`smtp`/`lookup`), **sparse-but-served-resolved**
+    (`ft8.display`/`ft8.frequencies`, `psk_reporter` — file empty, `/v1/config` GET
+    serves resolved defaults), and sparse-AND-not-served (`bridge.timeouts`/`tune` —
+    the only genuinely *invisible* block). Chosen fix: bring bridge onto the
+    **sparse-but-served** pattern (config.md §15.5), NOT materialize-on-disk —
+    `bridge.ResolveTimeouts`/`ResolveTune` (the same resolution `Service.New` uses,
+    so served == runtime) are now served on GET as `bridge_timeouts`/`bridge_tune`.
+    `config.json` stays sparse; the SPA reads effective values; no default-freeze,
+    no migration, no constant duplication. `qsl: {}` stays empty (pure operator data,
+    no defaults to serve). Tests: `TestResolveTimeouts`/`TestResolveTune` (bridge),
+    bridge-timeout assertions in `TestHandleGetConfig_PreSetup` (api). Docs: config.md
+    §15.5, api-endpoints.md GET/PUT `/v1/config`.
 
 ## Features / enhancements
 

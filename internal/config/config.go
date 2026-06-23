@@ -197,7 +197,9 @@ const legacyRigID int64 = 1
 // loose bridge/ft8 fields — the active rig is projected on demand via
 // ActiveBridge() / ActiveFt8(), so the catalogue stays the single on-disk
 // source of truth (the helpers always win over any stale loose field).
-// Runs after applyDefaults, so DefaultRigID is already its 1 default here.
+// Runs after applyDefaults. For a rig-less config DefaultRigID is still 0 here
+// (applyDefaults only defaults it once rigs exist); the migration below sets it
+// to legacyRigID for the synthesised rig.
 func applyRigProfiles(cfg *Config) error {
 	if len(cfg.Rigs) == 0 {
 		// Migrate: a config predating the catalogue carries the rig identity
@@ -891,15 +893,20 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.Station.AmpMultiplier = defaultAmpMultiplier
 	}
 
-	// Default-pointer defaults. 1/1 so the system has a sane "default
-	// logbook" and "default rig" to point at on first run, even before
-	// the operator finishes setup. The first-run logbook row is seeded
-	// to id=1 by the /v1/config setup transition; the default rig is
-	// a no-op until CAT lands.
+	// Default-pointer defaults. The default logbook is always 1 — the
+	// first-run logbook row is seeded to id=1 by the /v1/config setup
+	// transition, so the pointer is valid even before setup completes.
+	// The default rig, by contrast, is only set when a rig catalogue
+	// exists: a rig-less fresh install must leave DefaultRigID at 0
+	// ("no active rig"), never dangle it at a non-existent rig 1 — that
+	// left a fresh install with a default_rig_id matching no rig (and the
+	// Phone/CW panel with no rig to display). The pre-catalogue migration
+	// path sets it explicitly in applyRigProfiles after synthesising the
+	// id-1 rig.
 	if cfg.DefaultLogbookID == 0 {
 		cfg.DefaultLogbookID = defaultLogbookID
 	}
-	if cfg.DefaultRigID == 0 {
+	if cfg.DefaultRigID == 0 && len(cfg.Rigs) > 0 {
 		cfg.DefaultRigID = defaultRigID
 	}
 

@@ -77,8 +77,12 @@
         </div>
         <div class="flex flex-row items-center">
             <div class="flex-none w-15">Rig:</div>
-            <div class="text-ellipsis overflow-hidden text-green-800">
-                {configState.station.rigName}
+            <div
+                class="text-ellipsis overflow-hidden {configState.station.rigName
+                    ? 'text-green-800'
+                    : 'text-gray-400 italic'}"
+            >
+                {configState.station.rigName || 'not set'}
             </div>
         </div>
     </div>
