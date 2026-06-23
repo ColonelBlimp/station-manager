@@ -351,6 +351,52 @@ func TestMigrate_RelaxesRSTLengthFromVersion1(t *testing.T) {
 	}
 }
 
+func TestMigrate_DownRestoresRSTLengthConstraint(t *testing.T) {
+	svc := testServiceWithoutMigrations(t)
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate: %v", err)
+	}
+
+	logbookID, err := svc.InsertLogbookWithContext(context.Background(), types.Logbook{
+		Name:     "Test",
+		Callsign: "G4ABC",
+	})
+	if err != nil {
+		t.Fatalf("insert logbook: %v", err)
+	}
+
+	qso := validTestQso(logbookID, "M0CMC", "20m", "SSB", "20240615", "1253")
+	qsoID, err := svc.InsertQsoWithContext(context.Background(), qso)
+	if err != nil {
+		t.Fatalf("insert latest-schema qso: %v", err)
+	}
+	enqueueUpload(t, svc, qsoID, "qrz-main", "qrz", action.Insert)
+	insertQsoHistory(t, svc, qso.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
+
+	applyMigrationSteps(t, svc, -1)
+
+	uploads, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch preserved uploads after down migration: %v", err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("preserved upload count after down migration = %d, want 1", len(uploads))
+	}
+	history, err := svc.FetchQsoHistoryByUUIDWithContext(context.Background(), qso.UUID)
+	if err != nil {
+		t.Fatalf("fetch preserved history after down migration: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("preserved history count after down migration = %d, want 1", len(history))
+	}
+
+	wide := validTestQso(logbookID, "SP5VYF", "15m", "SSB", "20240722", "1637")
+	wide.QsoDetails.RstRcvd = "4657"
+	if _, err := svc.InsertQsoWithContext(context.Background(), wide); err == nil {
+		t.Fatal("insert with four-character RST_RCVD succeeded after down migration; want old constraint restored")
+	}
+}
+
 func TestFetchLogbookByID_NotFound(t *testing.T) {
 	svc := testService(t)
 	_, err := svc.FetchLogbookByID(999)
