@@ -16,3 +16,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-20] on the pile-up have an up arrow on the left to move the callsign up the list
 - [2026-06-20] indicate in ft8 enrichment if the selected decode (working it) is a new entity
 - [2026-06-20] Remove the 'Tune' button from the ft8 qso edit overlay
+- [2026-06-22] is the ALL.TXT type logging done? Where does this special log file live?
