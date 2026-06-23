@@ -385,6 +385,55 @@ when it ships — don't let this rot into a graveyard.
   + enable, §10 uninstall) so the two don't drift — install.md stays the single
   canonical source. External/website work, out of this repo.
 
+- **Config SPA: data-driven forwarder setup (`RegisterForwarderType` + `/v1/forwarder-types`).**
+  Filed 2026-06-23. For the config-SPA workstream. Adding a forwarder must be
+  frictionless (KISS / ADR 0028 rig-profiles pattern): the operator picks a
+  **type** from a list and supplies only their **credentials** — never a URL,
+  action_filter, or JSON. The URL is already a type property (a `DefaultEndpoint`
+  const in each forwarder package, not in `ForwarderConfig`), so this is mostly a
+  setup-UX gap, not a data-model change. Plan:
+  - Extend the registry (today `RegisterSupportedActions(type, actions)`) into
+    `RegisterForwarderType(...)` carrying display name + supported actions +
+    **credential field descriptors** (`[]{key, label, kind: text|password|secret,
+    help?}`). Upload logic stays specific per type (each `Forwarder` impl is its
+    own protocol — QRZ api-key POST, ClubLog two-endpoint, HamQTH session XML…);
+    ONLY the setup form is data-driven.
+  - Daemon exposes `GET /v1/forwarder-types`; the SPA "Add forwarder" lists them
+    and renders the right credential fields on pick. Adding a 9th type in Go then
+    needs **zero** SPA changes.
+  - Why data-driven (not per-type hardcoded forms): the type list is long and
+    growing — QRZ, ClubLog, LoTW, HamQTH, HamCall, StationMaster, qrzcq, WRL… —
+    so hardcoded forms would be real duplication + a SPA edit per new type.
+  - Current credential shapes to seed the descriptors: **QRZ** = `{api_key}` (one
+    field); **ClubLog** = `{email, password, callsign, api}` (four — and the `api`
+    is an *application* key the operator must obtain from ClubLog, NOT embedded in
+    source, so its descriptor needs help text / a link). Per-field help is part of
+    the descriptor for exactly this reason.
+  - Reinforces fresh-install `forwarders: null` (do NOT pre-list types disabled —
+    ADR 0022 enqueues by presence, so a present-but-disabled forwarder still
+    accrues upload rows; the operator adds only the ones they use).
+
+- **Clear the queued-upload backlog for a forwarder (esp. a disabled one).**
+  Filed 2026-06-23. The shadow side of ADR 0022's enqueue-by-presence: a
+  configured-but-disabled forwarder silently accumulates `pending` `qso_upload`
+  rows, so *enabling it later flushes the whole backlog*. The operator needs a
+  deliberate way to **discard that queue** ("don't upload the backlog, start
+  sending from now"). Design points:
+  - Daemon op: purge `pending`/`failed` `qso_upload` rows for a named forwarder;
+    **never touch `uploaded`/`success` rows** (those are real upload history).
+    Per-forwarder scope (not global). Safe for a disabled forwarder (worker idle,
+    no race); for an enabled one, coordinate with the in-flight batch.
+  - UX home: forwarder management in the **config SPA** — show "N queued for
+    upload · [Clear queue]" next to each forwarder, with confirmation. Pairs with
+    the enable/disable toggle (consider offering "clear queue?" when disabling).
+  - Consider recording the purge in the audit trail (`qso_history`) so a cleared
+    backlog is explainable later.
+  - **Document the underlying behaviour for operators** (manual forwarding
+    chapter, currently a stub): adding a forwarder queues *future* QSOs; disabling
+    doesn't stop the queue growing, only the sending; this is the lever to empty
+    it. The inverse (bulk-forward an existing log to a newly-enabled service) is
+    the separate backfill feature.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
