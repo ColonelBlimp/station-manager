@@ -43,7 +43,7 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	if s.Config != nil {
 		rec.MyRig = s.Config.Snapshot().ResolveMyRig()
 	}
-	return s.submit(ctx, logbookID, rec, force, false)
+	return s.submit(ctx, logbookID, rec, force, false, nil)
 }
 
 // SubmitImport is the restore/import entry point (cmd/smd import). Unlike
@@ -53,8 +53,15 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 // malformed supplied UUID falls back to a freshly minted one. Kept distinct
 // from Submit so only the trusted import path, never the public endpoint, can
 // set a QSO's identity from the wire.
-func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Record, force bool) (SubmitResult, error) {
-	return s.submit(ctx, logbookID, rec, force, true)
+//
+// forwardTo names the forwarders (by config name, case-insensitive) the
+// imported QSO should be QUEUED to upload to. It is normally empty: importing
+// a historical logbook must never auto-upload to QRZ/ClubLog (retrospective
+// backfill is operator-driven, never automatic — ADR 0022). `smd import
+// --forward qrz,…` is the explicit opt-in; bulk backfill of an already-stored
+// log is the logbook SPA's job, not the importer's.
+func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Record, force bool, forwardTo []string) (SubmitResult, error) {
+	return s.submit(ctx, logbookID, rec, force, true, forwardTo)
 }
 
 // resolveSubmitUUID applies the UUID policy (ADR 0016; review 2026-06-04 H1):
@@ -68,9 +75,14 @@ func resolveSubmitUUID(supplied string, preserve bool) string {
 	return utils.NewUUIDv7()
 }
 
-// submit is the shared implementation. preserveUUID selects the UUID policy:
-// false (public) always mints; true (import) keeps a valid supplied UUIDv7.
-func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, preserveUUID bool) (SubmitResult, error) {
+// submit is the shared implementation. isImport marks the trusted import/restore
+// path (SubmitImport) and drives every divergence from a live/public submit:
+// it preserves a valid supplied UUIDv7 (vs. always minting), relaxes the
+// logbook-callsign match (a historical/mixed log may carry a different
+// callsign), and enqueues upload rows only for forwarders named in forwardTo
+// (default none) — importing a historical logbook must never auto-upload
+// (retrospective backfill is operator-driven, never automatic; ADR 0022).
+func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string) (SubmitResult, error) {
 	const op errors.Op = "qsoservice.Submit"
 
 	// ---- Validate required fields ----
@@ -123,7 +135,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// other forwarders reject a QSO whose station callsign doesn't match the
 	// logbook. Enforced HERE (not only in the HTTP handler) so the FT8 e4 sink and
 	// any direct caller get the same guard, never silently storing a mismatched
-	// row. SubmitImport (preserveUUID) relaxes the callsign match — a historical /
+	// row. SubmitImport (isImport) relaxes the callsign match — a historical /
 	// mixed log may legitimately carry a different callsign — but still requires
 	// the logbook to exist.
 	logbookCallsign, lberr := s.DB.LogbookCallsignByIDWithContext(ctx, logbookID)
@@ -133,7 +145,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		}
 		return SubmitResult{}, errors.New(op).WithErr(lberr).WithMsg("looking up logbook callsign")
 	}
-	if !preserveUUID && !strings.EqualFold(logbookCallsign, stationCallsign) {
+	if !isImport && !strings.EqualFold(logbookCallsign, stationCallsign) {
 		return SubmitResult{}, &SubmitError{Code: "callsign_mismatch", Message: "STATION_CALLSIGN does not match the logbook's callsign"}
 	}
 
@@ -270,7 +282,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// is by content key (above), not UUID, so re-importing identical QSOs still
 	// dedupes before reaching here; a preserved UUID that collides with a
 	// different existing row is an out-of-scope edge surfaced by the insert.
-	qso.UUID = resolveSubmitUUID(qso.UUID, preserveUUID)
+	qso.UUID = resolveSubmitUUID(qso.UUID, isImport)
 
 	// ---- Atomic write: QSO + upload-queue rows ----
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
@@ -322,6 +334,13 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// configured → the loop is a no-op and only the QSO row is committed.
 	for _, fwd := range s.Config.Forwarders() {
 		if !shouldEnqueue(fwd, action.Insert) {
+			continue
+		}
+		// Import enqueues only for forwarders the operator explicitly named via
+		// `smd import --forward`; default import (empty forwardTo) uploads
+		// nothing. The live/public path passes nil forwardTo and isImport=false,
+		// so this gate never trips for it.
+		if isImport && !forwarderNamed(forwardTo, fwd.Name) {
 			continue
 		}
 		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type); err != nil {

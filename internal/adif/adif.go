@@ -21,11 +21,12 @@ import (
 // is the absence-equivalent — omitempty drops it from emitted ADIF.
 //
 // AppQrzlogLogid carries QRZ Logbook's per-QSO LOGID, surfaced on
-// every record QRZ exports. The importer (cmd/smd import) stashes it
-// into the QRZ qso_upload row's upstream_id so future PATCH/DELETE
-// forwarder flows can target the right QRZ record. Empty on every
-// non-import path — it never appears on records the SPA submits to
-// `POST /v1/qso`, so omitempty drops it from the emitted ADIF.
+// every record QRZ exports. RecordToQso preserves it onto the QSO as
+// provenance (types.Qso.QrzlogLogid, persisted in additional_data), so a
+// later SPA-driven edit/delete can target the right QRZ record. Import
+// itself queues no upload (default no-forward), so this is pure metadata,
+// not a forwarder-queue concern. Empty on records the SPA submits to
+// `POST /v1/qso`, so omitempty drops it from the emitted ADIF there.
 type Record struct {
 	types.QsoDetails
 	types.ContactedStation
@@ -135,6 +136,7 @@ func QsoToRecord(q types.Qso) Record {
 		SmFwrdByEmailStatus: q.SmFwrdByEmailStatus,
 	}
 	r.AppSmQsoID = q.UUID
+	r.AppQrzlogLogid = q.QrzlogLogid
 	if q.AppSmRequestQsl {
 		// "Y" is the project's encoding for the operator's "request a
 		// QSL" reminder flag. Parser checks for this exact value on
@@ -188,6 +190,7 @@ func RecordToQso(rec Record, logbookID int64) types.Qso {
 		SmQsoUploadStatus:   rec.UserDef.SmQsoUploadStatus,
 		SmFwrdByEmailDate:   rec.UserDef.SmFwrdByEmailDate,
 		SmFwrdByEmailStatus: rec.UserDef.SmFwrdByEmailStatus,
+		QrzlogLogid:         rec.AppQrzlogLogid,
 		AppSmRequestQsl:     rec.AppSmRequestQsl == "Y",
 	}
 	return q

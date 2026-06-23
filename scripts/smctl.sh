@@ -13,10 +13,23 @@
 #
 # Usage:
 #   smctl start|stop|restart|status
+#   smctl import [smd-import-flags] <file.adi>
+#
+# `smctl import` wraps the single-writer dance: smd uses an exclusive
+# SQLite handle, so the daemon must be down while `smd import` runs. This
+# stops smd (if running), runs the import, and restarts smd only if it was
+# running before — so the operator runs one command and never sees a
+# database-locked error. Import uploads NOTHING by default; pass
+# `--forward <name>` to queue the imported QSOs to a forwarder.
 
 set -euo pipefail
 
 UNIT="smd"
+
+# smd lives next to smctl (both installed to /usr/bin by the RPM); fall back
+# to PATH for a dev checkout.
+SMD_BIN="$(dirname "$(readlink -f "$0")")/smd"
+[ -x "$SMD_BIN" ] || SMD_BIN="$(command -v smd || true)"
 
 if [ -t 1 ]; then
     BOLD=$'\033[1m'
@@ -72,6 +85,41 @@ cmd_restart() {
     cmd_start
 }
 
+cmd_import() {
+    if [ -z "$SMD_BIN" ] || [ ! -x "$SMD_BIN" ]; then
+        fail "smd binary not found (looked next to smctl and on PATH)."
+        return 1
+    fi
+    if [ "$#" -eq 0 ]; then
+        echo "usage: $0 import [--forward <name>] <file.adi>" >&2
+        echo "  $0 import mylog.adi                  # seed the logbook, upload nothing" >&2
+        echo "  $0 import --forward qrz mylog.adi    # also queue an upload to the 'qrz' forwarder" >&2
+        return 2
+    fi
+
+    # Free the database: smd holds an exclusive SQLite handle.
+    local was_active=0
+    if is_active; then
+        was_active=1
+        note "Stopping SM for import (exclusive database access)…"
+        cmd_stop
+    fi
+
+    # Run the import; capture its exit so we always restart afterwards.
+    local rc=0
+    "$SMD_BIN" import "$@" || rc=$?
+
+    if [ "$was_active" -eq 1 ]; then
+        note "Restarting SM…"
+        cmd_start
+    fi
+
+    if [ "$rc" -ne 0 ]; then
+        fail "Import failed (exit $rc)."
+    fi
+    return "$rc"
+}
+
 cmd_status() {
     if is_active; then
         ok "SM is running."
@@ -86,8 +134,9 @@ case "${1:-}" in
     stop)    cmd_stop ;;
     restart) cmd_restart ;;
     status)  cmd_status ;;
+    import)  shift; cmd_import "$@" ;;
     *)
-        echo "usage: $0 {start|stop|restart|status}" >&2
+        echo "usage: $0 {start|stop|restart|status|import}" >&2
         exit 2
         ;;
 esac

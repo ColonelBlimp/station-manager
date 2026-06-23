@@ -250,38 +250,35 @@ your operating history:
 - **Country panel** flags DXCC entities you've never worked before
   with a `*` marker ("new one"). With no history imported, every
   country reads as new.
-- **Forwarder upload status** carries through. The importer stamps
-  the QRZ `qso_upload` row pre-success for any record that came
-  out of QRZ Logbook (recognised via `app_qrzlog_logid`), so the
-  daemon won't try to re-upload your history when forwarding is
-  later enabled.
+- **Nothing is uploaded.** Import seeds your *local* logbook only — it
+  never re-sends your history to QRZ, ClubLog, or any forwarder, even
+  when those are already configured and running. Your past QSOs already
+  live on whatever service you logged them to; SM just needs its own
+  copy for the panels above. (If a record came from a QRZ export, its
+  QRZ logid is preserved on the QSO so a later edit can still find the
+  right QRZ record — but import itself sends nothing.)
 
-Import:
-
-```
-smd import /path/to/your-export.adi
-```
-
-**Already uploaded out of band? Use `--uploaded`.** If the log is already on a
-service but the ADIF has no `app_qrzlog_logid` (e.g. an N1MM/contest export you
-uploaded through the QRZ website, not a QRZ *export*), the auto-stamp above can't
-recognise it — and with a forwarder configured, the importer would enqueue the
-whole batch for re-upload. (QRZ dedupes server-side so you won't get duplicate
-QSOs, but it's a wasted upload storm and the rows end up flagged failed.) Tell
-the importer the batch is already sent so it marks those `qso_upload` rows
-`uploaded` from the start:
+Import with `smctl import` — it stops the daemon, imports, and restarts
+it for you (the daemon and importer can't share the database at once):
 
 ```
-smd import --uploaded qrz /path/to/log.adi          # one forwarder (by name)
-smd import --uploaded qrz,lotw /path/to/log.adi     # several
+smctl import /path/to/your-export.adi
+```
+
+**Want the imported log pushed to a service? Use `--forward`.** This is the
+rare case — e.g. you're seeding a log that genuinely *isn't* on QRZ yet and you
+want it sent. Name the forwarder(s) to queue the whole batch for upload:
+
+```
+smctl import --forward qrz /path/to/log.adi          # one forwarder (by name)
+smctl import --forward qrz,clublog /path/to/log.adi  # several
 ```
 
 The names are your `forwarders[].name` values (matched case-insensitively); an
-unknown name fails the import up front. The summary then reports a
-`marked-uploaded:` count. The cleaner path when you have the choice is still to
-import the service's own **export** (it carries the IDs and is auto-stamped) or
-to import **before** configuring the forwarder — `--uploaded` is the fix for a
-log that's already live somewhere with no IDs to prove it.
+unknown name fails the import up front. Without `--forward`, the summary reports
+`uploads: none`. If you only later subscribe to a service (say ClubLog) and want
+your existing log sent then, that's a one-click bulk action in the logbook app —
+not something you redo the import for.
 
 The importer drives the same QSO submission path the live SPA uses
 (field validation + atomic write + audit table all inherited). Throughput
@@ -301,9 +298,11 @@ can patch the source ADIF and re-import. Re-imports are idempotent —
 already-stored QSOs return as `duplicate`, not as errors.
 
 The importer is the same binary as the daemon — there's no separate
-package. **Stop the daemon first** (`smctl stop`) so the two processes
-aren't racing on the same SQLite file, then run the import, then
-`smctl start`. The import itself takes seconds.
+package. `smctl import` handles the database hand-off for you: it stops
+the daemon (if running), runs the import, and restarts it only if it was
+running before. If you call the raw `smd import` instead, stop the daemon
+yourself first (`smctl stop`) so the two aren't racing on the same SQLite
+file. The import itself takes seconds.
 
 You don't need to set `SM_WORKING_DIR` in your shell. When run from
 `/usr/bin/smd` (the installed location), the binary resolves its

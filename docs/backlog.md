@@ -53,6 +53,21 @@ when it ships — don't let this rot into a graveyard.
   whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
   and decide whether the Rx pane should collapse to the latest decode per station.
 
+- **Fresh-install `config.json` is sparse + can carry a dangling `default_rig_id`.**
+  Filed from the 2026-06-23 clean-DB dogfood deploy. A newly generated config
+  (1) omits defaultable keys instead of materializing them —
+  `bridge.timeouts.liveness_ms` absent, `ft8` carries only `enabled`/`enable_osd`,
+  and `forwarders` is `null` rather than the supported set listed-but-disabled;
+  and (2) `internal/config/migrations.go:67` sets `default_rig_id = 1` even with
+  zero rigs, which `validate.go:201` lets pass because it only checks the pointer
+  resolves when `len(rigs) > 0`. Downstream symptoms from the same clean install:
+  no rig configured → the Phone/CW panel shows no Rig display at first startup,
+  and the `qsl` defaults block reads empty (clarify whether the complaint is the
+  null JSON field or a blank UI). Needs a first-run decision: full-scaffold a
+  complete annotated config vs. keep it minimal but fix the dangling-id
+  validation + add SPA empty-states. Closely tied to the install-friction item
+  under Features.
+
 ## Features / enhancements
 
 - **`internal/iocdi` contract hardening (concurrency + build-time validation).**
@@ -332,6 +347,35 @@ when it ships — don't let this rot into a graveyard.
   so really only the idle offset readout moves.) Net: one tidy status strip along the
   panel bottom — next-slot countdown · parity · selected TX offset — leaving the three
   top panes (Main Freq / Band Activity / Rx-now-enrichment) uncluttered.
+
+- **Install + first-run onboarding is too high-friction for non-Linux operators.**
+  Filed from the 2026-06-23 clean-DB dogfood deploy. `docs/install.md` walks the
+  operator through detailed manual rig configuration; for a non-experienced Linux
+  user that's too much. North-star (KISS): the daemon discovers serial/audio
+  devices and offers friendly labels, the SPA picks — the operator never
+  hand-edits `config.json` or types hardware ids (extends the rig-profiles
+  direction, ADR 0028). Scope is the whole onboarding arc — install, first-run
+  rig setup, identity — not just the doc. Design initiative; pairs with the
+  fresh-install config-defaults bug above.
+
+- **FT8 `cmd/smd` / decode log: no WSJT-X-style `ALL.TXT` append-only decode log.**
+  Filed from a 2026-06-22 dogfood question. SM does not write an `ALL.TXT`
+  equivalent today; the FT8 wrapper logs each decode to the **daemon log** only.
+  Decide: treat the daemon log as sufficient (non-issue) or add a real
+  append-only per-decode log file (and document where it lives).
+
+- **FT8 Operate pile-up: up-arrow to reorder callsigns in the answer queue.**
+  Filed 2026-06-20. Add a left-side up-arrow on each pile-up entry to move a
+  callsign up the list. Belongs with the `operator_pick` pile-up stack workstream
+  (ADR 0033, currently pending — see the FT8 caller-side notes).
+
+- **FT8 Band Activity enrichment: flag the worked decode as a new entity.**
+  Filed 2026-06-20. When a decode is selected/being worked, indicate in the FT8
+  enrichment display whether it's a new DXCC/entity. Extends the existing CQ
+  enrichment (flag + worked-before tint) to the actively-worked station.
+
+- **FT8 QSO edit overlay: remove the stray "Tune" button.** Filed 2026-06-20.
+  The Tune control doesn't belong in the FT8 QSO edit overlay. Small UI removal.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

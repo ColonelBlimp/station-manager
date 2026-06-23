@@ -17,10 +17,11 @@ import (
 // newTestService wires a qsoservice.Service to an in-memory SQLite DB + real
 // config/logging/hub — the package-level integration harness the 2026-06-19
 // review flagged as missing (the other package tests cover only pure helpers).
-func newTestService(t *testing.T) *Service {
+func newTestService(t *testing.T, forwarders ...types.ForwarderConfig) *Service {
 	t.Helper()
 	cfg := config.DefaultConfig(t.TempDir())
 	cfg.Datastore.Path = ":memory:"
+	cfg.Forwarders = forwarders
 	cfgSvc := config.New(cfg)
 	require.NoError(t, cfgSvc.Initialize())
 
@@ -102,14 +103,62 @@ func TestSubmit_EnforcesLogbookCallsign(t *testing.T) {
 	require.NotNil(t, se)
 	require.Equal(t, "logbook_not_found", se.Code)
 
-	res, err = s.SubmitImport(ctx, lbID, rec("G0XYZ", "K4ABC"), false)
+	res, err = s.SubmitImport(ctx, lbID, rec("G0XYZ", "K4ABC"), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, "stored", res.Status, "import relaxes the callsign match")
 
-	_, err = s.SubmitImport(ctx, 9999, rec("M0ABC", "K5ABC"), false)
+	_, err = s.SubmitImport(ctx, 9999, rec("M0ABC", "K5ABC"), false, nil)
 	se = IsSubmitError(err)
 	require.NotNil(t, se)
 	require.Equal(t, "logbook_not_found", se.Code, "import still requires the logbook to exist")
+}
+
+// TestSubmitImport_ForwardSelection guards the dogfood-2026-06-23 fix at the
+// service boundary: a public Submit enqueues every configured forwarder, but
+// SubmitImport enqueues NOTHING unless the forwarder is named in forwardTo
+// (retrospective backfill is operator-driven, never automatic — ADR 0022).
+func TestSubmitImport_ForwardSelection(t *testing.T) {
+	// Two unregistered-type forwarders; an unregistered type isn't action-gated
+	// by validateForwarders, so a bare insert filter exercises the enqueue loop.
+	s := newTestService(t,
+		types.ForwarderConfig{Name: "qrz", Type: "qrz", Enabled: true, ActionFilter: []string{"insert"}},
+		types.ForwarderConfig{Name: "clublog", Type: "clublog", Enabled: true, ActionFilter: []string{"insert"}},
+	)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+	rec := func(contact string) adif.Record {
+		return adif.Record{
+			ContactedStation: types.ContactedStation{Call: contact},
+			QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101", TimeOn: "1200"},
+			LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+		}
+	}
+	countByForwarder := func(qsoID int64) map[string]int {
+		rows, ferr := s.DB.FetchUploadsByQsoIDWithContext(ctx, qsoID)
+		require.NoError(t, ferr)
+		m := map[string]int{}
+		for _, r := range rows {
+			m[r.ForwarderName]++
+		}
+		return m
+	}
+
+	// Public submit → both forwarders enqueued.
+	live, err := s.Submit(ctx, lbID, rec("K1ABC"), false)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"qrz": 1, "clublog": 1}, countByForwarder(live.ID),
+		"public Submit enqueues all configured forwarders")
+
+	// Import, default (no forwardTo) → nothing enqueued.
+	imp, err := s.SubmitImport(ctx, lbID, rec("K2ABC"), false, nil)
+	require.NoError(t, err)
+	require.Empty(t, countByForwarder(imp.ID), "default import enqueues nothing")
+
+	// Import with --forward qrz (case-insensitive) → only qrz enqueued.
+	sel, err := s.SubmitImport(ctx, lbID, rec("K3ABC"), false, []string{"QRZ"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"qrz": 1}, countByForwarder(sel.ID),
+		"import enqueues only the named forwarder, case-insensitively")
 }
 
 // TestUpdate_FT8EmptyReportEditable guards review 2026-06-19 M1: an FT8 QSO

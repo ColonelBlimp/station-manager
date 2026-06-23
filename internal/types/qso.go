@@ -44,6 +44,15 @@ type Qso struct {
 	QrzComUploadDate   string `json:"qrzcom_qso_upload_date,omitempty"`
 	QrzComUploadStatus string `json:"qrzcom_qso_upload_status,omitempty"`
 
+	// QrzlogLogid is QRZ Logbook's per-QSO LOGID, captured as provenance
+	// when importing a QRZ export (every QRZ record carries it). It records
+	// "this QSO is QRZ record #N" independent of any forwarder upload row, so
+	// a later SPA-driven edit/delete can target the right QRZ record even
+	// though import itself queues no upload. Persists via the additional_data
+	// blob like the fields above; round-trips through the adif
+	// `app_qrzlog_logid` tag.
+	QrzlogLogid string `json:"app_qrzlog_logid,omitempty"`
+
 	ClubLogUploadDate   string `json:"clublog_qso_upload_date,omitempty"`
 	ClubLogUploadStatus string `json:"clublog_qso_upload_status,omitempty"`
 

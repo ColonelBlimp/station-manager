@@ -257,12 +257,12 @@ func TestImport_PreservesMyStarFields(t *testing.T) {
 	}
 }
 
-func TestImport_QrzLogidStamping(t *testing.T) {
+func TestImport_DefaultNoUploadPreservesLogid(t *testing.T) {
+	// A QRZ forwarder is configured, but with no --forward the import must queue
+	// NO upload rows (default no-upload — ADR 0022; seeding a historical log must
+	// never re-send it). The QRZ LOGID and the historical upload status/date are
+	// still preserved on the QSO row as provenance.
 	tmp := setupImportTestbed(t, func(c *config.Config) {
-		// Stand up a QRZ forwarder so the qso_upload row exists for
-		// the importer to stamp. Stub creds with an inert API key —
-		// the importer never actually calls QRZ; we just need the row
-		// to land.
 		creds, _ := json.Marshal(map[string]string{"api_key": "fake-key"})
 		c.Forwarders = []types.ForwarderConfig{{
 			Name:        "qrz-main",
@@ -286,31 +286,21 @@ func TestImport_QrzLogidStamping(t *testing.T) {
 		t.Fatalf("expected 1 QSO, got %d", len(qsos))
 	}
 	qso := qsos[0]
+
+	// Default import queues nothing — the whole point of the fix.
 	uploads, err := db.FetchUploadsByQsoIDWithContext(context.Background(), qso.ID)
 	if err != nil {
 		t.Fatalf("fetch uploads: %v", err)
 	}
-	var found bool
-	for _, u := range uploads {
-		if u.ForwarderType != "qrz" {
-			continue
-		}
-		found = true
-		if u.UpstreamID != "1112032999" {
-			t.Errorf("upstream_id: got %q, want %q", u.UpstreamID, "1112032999")
-		}
-		if u.Status != "success" && u.Status != "uploaded" {
-			t.Errorf("status: got %q, want success/uploaded", u.Status)
-		}
-	}
-	if !found {
-		t.Fatal("no QRZ qso_upload row found for stored QSO")
+	if len(uploads) != 0 {
+		t.Fatalf("default import must queue no upload rows; got %d", len(uploads))
 	}
 
-	// The QSO row's additional_data should also carry the historical
-	// qrzcom_qso_upload_status/_date from the source ADIF (RecordToQso
-	// preserves them; the importer never overwrites). Verify the wire
-	// fields round-tripped.
+	// The QRZ LOGID is preserved on the QSO as provenance (not on an upload row).
+	if qso.QrzlogLogid != "1112032999" {
+		t.Errorf("QrzlogLogid: got %q, want %q", qso.QrzlogLogid, "1112032999")
+	}
+	// Historical upload status/date round-trip too.
 	if qso.QrzComUploadStatus != adif.YesString {
 		t.Errorf("QrzComUploadStatus: got %q, want %q", qso.QrzComUploadStatus, adif.YesString)
 	}
@@ -319,16 +309,12 @@ func TestImport_QrzLogidStamping(t *testing.T) {
 	}
 }
 
-// noLogidRecord is an N1MM-style phone QSO with NO QRZ log-id / upload fields —
-// the "already uploaded to QRZ via the web, now importing for the record" case
-// that the LOGID auto-stamp can't catch.
+// noLogidRecord is an N1MM-style phone QSO with NO QRZ log-id / upload fields.
 const noLogidRecord = `<call:5>7Q8AC<station_callsign:5>7Q8AC<band:3>10m<mode:3>SSB<freq:8>28.30000<qso_date:8>20260517<time_on:4>1243<rst_sent:2>59<rst_rcvd:2>59`
 
-func TestImport_UploadedFlag(t *testing.T) {
-	// A QRZ forwarder is configured, so Submit enqueues a 'pending' qso_upload
-	// row. The log has no QRZ log-ids, so --uploaded (not the LOGID stamp) is what
-	// must mark the row 'uploaded' — otherwise the forwarder would re-send a log
-	// that's already on QRZ.
+func TestImport_ForwardFlagQueuesNamedForwarder(t *testing.T) {
+	// --forward qrz-main is the explicit opt-in: the imported QSO gets a
+	// 'pending' qso_upload row for that forwarder, which the worker will drain.
 	tmp := setupImportTestbed(t, func(c *config.Config) {
 		creds, _ := json.Marshal(map[string]string{"api_key": "fake-key"})
 		c.Forwarders = []types.ForwarderConfig{{
@@ -337,7 +323,7 @@ func TestImport_UploadedFlag(t *testing.T) {
 	})
 	adifPath := writeADIF(t, tmp, "input.adi", noLogidRecord)
 
-	if err := runImport([]string{"--uploaded", "QRZ-MAIN", adifPath}); err != nil { // case-insensitive
+	if err := runImport([]string{"--forward", "QRZ-MAIN", adifPath}); err != nil { // case-insensitive
 		t.Fatalf("import: %v", err)
 	}
 
@@ -359,27 +345,48 @@ func TestImport_UploadedFlag(t *testing.T) {
 			continue
 		}
 		found = true
-		if u.Status != "uploaded" {
-			t.Errorf("status: got %q, want uploaded", u.Status)
-		}
-		if u.UpstreamID != "" {
-			t.Errorf("upstream_id: got %q, want empty (externally uploaded, no SM id)", u.UpstreamID)
+		if u.Status != "pending" {
+			t.Errorf("status: got %q, want pending (queued for the worker to send)", u.Status)
 		}
 	}
 	if !found {
-		t.Fatal("no qrz-main qso_upload row found for the stored QSO")
+		t.Fatal("no qrz-main qso_upload row found for the stored QSO (--forward should enqueue it)")
 	}
 }
 
-func TestImport_UploadedFlag_UnknownForwarderFails(t *testing.T) {
+func TestImport_ForwardFlag_UnknownForwarderFails(t *testing.T) {
 	tmp := setupImportTestbed(t, nil) // no forwarders configured
 	adifPath := writeADIF(t, tmp, "input.adi", noLogidRecord)
 
-	err := runImport([]string{"--uploaded", "nope", adifPath})
+	err := runImport([]string{"--forward", "nope", adifPath})
 	if err == nil {
-		t.Fatal("expected an error when --uploaded names an unconfigured forwarder")
+		t.Fatal("expected an error when --forward names an unconfigured forwarder")
 	}
 	if !strings.Contains(err.Error(), "no forwarder named") {
 		t.Errorf("error = %v, want it to mention 'no forwarder named'", err)
+	}
+}
+
+// TestNormalizeImportedMode pins the mode massaging the QRZ export relies on:
+// USB/LSB split to SSB + SUBMODE, while values that are already valid main
+// modes (SSB with no sideband, FT8, CW) pass through untouched. Mirrors the
+// five MODE values present in the operator's real 4509-record QRZ export.
+func TestNormalizeImportedMode(t *testing.T) {
+	cases := []struct{ in, wantMode, wantSub string }{
+		{"USB", "SSB", "USB"},
+		{"LSB", "SSB", "LSB"},
+		{"SSB", "SSB", ""}, // valid main mode, no sideband to recover
+		{"FT8", "FT8", ""}, // valid main mode, kept as-is
+		{"CW", "CW", ""},
+		{"", "", ""}, // empty MODE untouched
+	}
+	for _, c := range cases {
+		var rec adif.Record
+		rec.Mode = c.in
+		normalizeImportedMode(&rec)
+		if rec.Mode != c.wantMode || rec.Submode != c.wantSub {
+			t.Errorf("normalizeImportedMode(%q): got mode %q sub %q; want mode %q sub %q",
+				c.in, rec.Mode, rec.Submode, c.wantMode, c.wantSub)
+		}
 	}
 }
