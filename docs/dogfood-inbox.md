@@ -13,3 +13,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 ## Notes
 
 <!-- /log appends below this line -->
+- [2026-06-23] default_rig_id is 0 on fresh install, Rig shows not set
