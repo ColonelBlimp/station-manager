@@ -377,6 +377,14 @@ when it ships — don't let this rot into a graveyard.
 - **FT8 QSO edit overlay: remove the stray "Tune" button.** Filed 2026-06-20.
   The Tune control doesn't belong in the FT8 QSO edit overlay. Small UI removal.
 
+- **Download-site install page (derive from `docs/install.md`).** Filed
+  2026-06-23. The operator manual deliberately omits install/uninstall (ADR
+  0036 arc starts at First Run; the embedded manual is unreachable pre-install
+  anyway), so the public download site needs its own install page. Make it a
+  lightly-edited operator-friendly rendering of `docs/install.md` (§1–3 install
+  + enable, §10 uninstall) so the two don't drift — install.md stays the single
+  canonical source. External/website work, out of this repo.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

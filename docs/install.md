@@ -486,9 +486,25 @@ emit them from the same `nfpm.yaml` when a non-RPM target appears.
 
 ## 10. Uninstall
 
+Stop and disable the user service first (so its enable-symlink is cleaned
+while the unit file still exists), then remove the package:
+
 ```
 systemctl --user disable --now smd
 sudo dnf remove station-manager
+systemctl --user daemon-reload    # clear the removed unit from systemd's view
+```
+
+These are manual `--user` steps for the same reason install is: smd is a
+`--user` service, and `dnf remove` runs as root with no operator session, so
+the package can't disable a per-user unit or unwind per-user lingering on its
+own (see the "No postinstall scriptlet" note in `nfpm.yaml`).
+
+If you enabled lingering in §3 **solely** for Station Manager, disable it too —
+skip this if you rely on lingering for other `--user` services:
+
+```
+loginctl disable-linger "$USER"
 ```
 
 The data directory at `~/.local/share/station-manager/` is left in
