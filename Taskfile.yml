@@ -176,6 +176,20 @@ tasks:
     cmds:
       - bash scripts/deploy-local-dev.sh
 
+  reset:local:dev:
+    desc: |
+      Fully UNINSTALL the local dogfood install — leave the system as if Station
+      Manager had never been installed. The inverse of deploy:local:dev:
+      disable + stop the smd user service (systemctl --user disable --now),
+      disable user lingering (loginctl disable-linger), remove the package
+      (sudo dnf remove station-manager — drops the binary + systemd unit), then
+      DELETE the working dir (~/.local/share/station-manager: config.json + QSO
+      database + logs). DESTRUCTIVE + needs sudo — prompts to confirm
+      (SM_RESET_YES=1 to skip). Re-install with `task deploy:local:dev`.
+    interactive: true
+    cmds:
+      - bash scripts/reset-local-dev.sh
+
   test:
     desc: Run tests with race detector and -short
     cmds:
