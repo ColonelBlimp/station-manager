@@ -31,10 +31,11 @@ func TestVersion_HappyPath(t *testing.T) {
 		t.Fatalf("body = %q, want go:%q", body, runtime.Version())
 	}
 
-	// schema version: migrations ran in testServer's setup, so schema
-	// should be version 1 and not dirty.
-	if !strings.Contains(body, `"schema":{"version":1,"dirty":false}`) {
-		t.Fatalf("body = %q, want schema:{version:1,dirty:false}", body)
+	// schema version: migrations ran in testServer's setup, so schema should be
+	// at the latest migration and not dirty. Bump this with each new migration —
+	// currently 2 (0001_init + 0002_relax_rst_length).
+	if !strings.Contains(body, `"schema":{"version":2,"dirty":false}`) {
+		t.Fatalf("body = %q, want schema:{version:2,dirty:false}", body)
 	}
 }
 

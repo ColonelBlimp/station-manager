@@ -174,10 +174,14 @@ func (r *responseRecorder) noteError(code, message, op string) {
 }
 
 func (r *responseRecorder) WriteHeader(code int) {
-	if !r.wroteHeader {
-		r.status = code
-		r.wroteHeader = true
+	// First WriteHeader wins, mirroring net/http: a later call is a no-op (and
+	// forwarding it would trigger net/http's "superfluous WriteHeader" warning),
+	// so return before touching the wrapped writer again.
+	if r.wroteHeader {
+		return
 	}
+	r.status = code
+	r.wroteHeader = true
 	r.ResponseWriter.WriteHeader(code)
 }
 
