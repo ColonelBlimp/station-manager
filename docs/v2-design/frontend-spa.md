@@ -194,10 +194,11 @@ portable" stays in logging; "set once" moves here*:
   *then* does the logging My Station drop them (Identity keeps callsign/operator/
   owner/grid; Location/Equipment/CW + the Modes sub-tab go).
 
-### Rigs tab — rig-profiles editor (design 2026-06-14, expanded 2026-06-24; Step 1 BUILT 2026-06-24, pending operator test)
+### Rigs tab — rig-profiles editor (design 2026-06-14, expanded 2026-06-24; Steps 1–3 BUILT 2026-06-24, pending operator test)
 
-**Status:** **Step 1 built** (uncommitted/untested as of writing) — the write path
-+ core editor. **Steps 2 (Mode Mappings) + 3 (Serial overrides) pending.**
+**Status:** **Steps 1–3 built** (pending operator on-rig test) — the write path +
+core editor (Step 1), the **Mode Mappings** sub-editor (Step 2), and the **Serial
+overrides** sub-editor (Step 3). The Rigs tab is now feature-complete.
 
 - **Write path — DONE (the recommended approach):** `PUT /v1/config` now accepts
   presence-aware `rigs` + `default_rig_id` (write-only; validated via the same
@@ -219,10 +220,32 @@ portable" stays in logging; "set once" moves here*:
     a raw `JSON.stringify` compare saw `null ≠ absent` and left the form spuriously
     dirty after a clean save. Canonicalising both sides (drop null/empty optionals)
     fixes dirty-tracking + the restart-banner check.
-  - **Step-1 simplifications (revisit with Steps 2/3 / the override-revert UI):**
+  - **Step-1 simplifications (the override-revert UI is still deferred):**
     the FT8-mode/MY_RIG inputs treat empty = inherit (the explicit-`""` *suppress*
     tri-state + a ↺ revert affordance are deferred); audio pickers degrade to
     read-only text on a no-audio (static) build.
+- **Step 2 — Mode Mappings sub-editor — DONE.** `ModeMappingsEditor.svelte`, a
+  collapsible `<details>` in the Rigs detail pane. One row per rig mode literal
+  (`rigdef.rig_modes`): MODE + optional SUBMODE (free text, daemon-validated on
+  save). Stores **only deviations** in `rig.mode_mappings` (an edited row equal to
+  the rigdef default, or empty MODE, clears the override → inherit). Migrates the
+  logging SPA's My Station → Modes sub-tab.
+- **Step 3 — Serial overrides sub-editor — DONE.** `SerialOverridesEditor.svelte`,
+  an advanced (collapsed) `<details>`. The six overridable serial fields
+  (`baud_rate`/`data_bits`/`stop_bits`/`parity`/`line_delimiter`/`read_timeout_ms`,
+  i.e. `types.RigOverrides`); blank = inherit the rigdef default. **These are wired
+  end-to-end** — `Config.ActiveBridge()` projects `RigConfig.Overrides` and
+  `buildSerialConfig` applies them (zero-inherits) — so a change is **restart-only**
+  (raises the restart banner; `canonRig` includes `overrides`).
+- **Shared sub-editor discipline (Steps 2/3):** both editors keep a local
+  string-keyed `editing` snapshot taken **once** on mount via an `untrack`'d
+  `$effect.pre` (no feedback loop with the reconcile effect, no edit-wiping), and
+  reconcile edits → `rig.{mode_mappings,overrides}` via a `primed`-gated,
+  value-guarded `$effect` (skip the initial run + write only on real change → no
+  spurious dirty). Both are wrapped in `{#key `${rig.id}:${rig.model}`}` for a
+  fresh snapshot per rig/model. **`canonRig` sorts `mode_mappings` *and*
+  `overrides` keys** so the dirty-check is order-insensitive (Go marshals them in a
+  different order than the editor builds them).
 
 (Original design, still the reference for the master-detail shape:)
 
@@ -296,9 +319,9 @@ also not yet written — the config SPA has `api/{config,rigs}.ts` only.
    SPA `api/rigs.ts` consumes it).
 3. Config SPA plumbing (`configState` + `/v1/config` GET/PUT wrapper) — **shipped**.
 4. **Shell (category tabs) + Station tab — shipped 2026-06-24.**
-5. Rigs tab — **Step 1 BUILT 2026-06-24** (write path via `PUT /v1/config` +
-   core master-detail editor); Steps 2 (Mode Mappings) + 3 (Serial overrides)
-   PENDING.
+5. Rigs tab — **Steps 1–3 BUILT 2026-06-24** (write path via `PUT /v1/config` +
+   core master-detail editor + Mode Mappings + Serial overrides sub-editors);
+   feature-complete, pending operator on-rig test.
 6. FT8 / Forwarding / Email / Enrichment tabs — **PENDING** (lighter
    `PUT /v1/config` surfaces; FT8-display colour logic already lives on
    `configState` from the earlier holding-place UI).

@@ -70,9 +70,11 @@ rejected-alternative); `default_rig_id` is the active selector.
   `ft8.enabled`/`enable_osd`.
 - The catalogue is **top-level**, not nested under `bridge`, because a profile spans
   two subsystems (bridge serial + ft8 audio).
-- `RigConfig.overrides` (per-rig serial-param shadowing) exists but is **not yet
-  wired** — serial defaults still come from the rigdef, as before. Wiring it is future
-  work alongside the picker UI.
+- `RigConfig.overrides` (per-rig serial-param shadowing) is **wired** — the active
+  rig's `Overrides` are projected by `Config.ActiveBridge()` and applied in
+  `internal/bridge` `buildSerialConfig` (a non-zero/non-empty field wins over the
+  rigdef default; a zero field inherits). Edited via the config-SPA Rigs tab's
+  Serial-overrides sub-editor (Step 3, built 2026-06-24); restart-only.
 
 ## Strategy: resolve-and-project via helpers (as built)
 
@@ -163,26 +165,29 @@ items below are the underlying daemon pieces that design draws on.
 
 - ~~**Hardware-discovery endpoint**~~ — **SHIPPED 2026-06-14** as `GET /v1/hardware`
   (serial ports via go.bug.st enumerator + audio capture/playback via malgo,
-  friendly labels). The config SPA still needs a thin `api/hardware.ts` wrapper to
-  consume it for the Port/Audio dropdowns.
-- **Profile-editor UI** — the Rigs tab (master-detail; see `frontend-spa.md`).
+  friendly labels). Consumed by the config SPA's `api/hardware.ts` wrapper for the
+  Port/Audio dropdowns.
+- ~~**Profile-editor UI**~~ — the Rigs tab (master-detail; see `frontend-spa.md`).
   Dropdowns of discovered hardware; pick model from known rigdefs; pick port +
-  audio device from discovered lists. Operator never types an identifier. **Step 1
-  BUILT 2026-06-24** (core editor + the catalogue write path via presence-aware
-  `rigs`/`default_rig_id` on `PUT /v1/config`); Mode Mappings + Serial overrides
-  sub-editors pending.
+  audio device from discovered lists. Operator never types an identifier.
+  **Steps 1–3 BUILT 2026-06-24** (core editor + catalogue write path via
+  presence-aware `rigs`/`default_rig_id` on `PUT /v1/config`; Mode Mappings +
+  Serial overrides sub-editors); feature-complete, pending operator on-rig test.
 - **Runtime hot-swap** — `POST /v1/rig/select {id}` + Service re-bind (tear down
   current pipeline, re-project, reopen; reset per-rig live state — tune snapshot, hub
   caches, identity confirmation — as cleanly as a disconnect, ADR 0028).
 - ~~**Name-based audio resolution**~~ — **SHIPPED daemon-side 2026-06-16** as per-direction
   `audio.{rx,tx}` names, resolved against the capture/playback enumeration at acquire
   (`internal/audio/{capture,playback}` `DeviceName`); the global `ft8.device`/`ft8.tx.device`
-  knobs are dropped. Only the by-name **picker UI** remains for this workstream — the operator
-  hand-edits `audio.rx`/`audio.tx` names until it lands.
-- **`RigConfig.Overrides` wiring** — per-rig serial-param shadowing into the bridge's
-  `buildSerialConfig` (today the rigdef defaults win).
-- **Per-rig `tune` / `mode_mappings` overrides** — only if a real need appears; today
-  they're global on `bridge`.
+  knobs are dropped. ~~picker UI~~ — **the Rigs-tab Audio RX/TX pickers shipped 2026-06-24**
+  (Step 1), enumerated from `GET /v1/hardware`.
+- ~~**`RigConfig.Overrides` wiring**~~ — **wired** (`Config.ActiveBridge()` projects it,
+  `buildSerialConfig` applies it, zero-inherits) **and editable** via the Rigs-tab Serial-
+  overrides sub-editor (**Step 3, 2026-06-24**).
+- **Per-rig `tune` override** — only if a real need appears; today `tune` is global on
+  `bridge`. (Per-rig **`mode_mappings`** is already per-rig — `RigConfig.ModeMappings`,
+  merged with the rigdef defaults — and is editable via the Rigs-tab Mode-Mappings
+  sub-editor, **Step 2, 2026-06-24**.)
 
 ## Deferred — config-shape full cleanup (not SPA-gated)
 
