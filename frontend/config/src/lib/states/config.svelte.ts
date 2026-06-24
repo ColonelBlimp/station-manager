@@ -269,6 +269,11 @@ class ConfigState {
     savingRigs: boolean = $state(false);
     /** Last Rigs-save status: 'ok', an error message, or null (idle/in-flight). */
     rigsStatus: string | null = $state(null);
+    /** Editable master switch for the rig CAT bridge (Rigs tab toggle → bridge.enabled). */
+    bridgeEnabled: boolean = $state(false);
+
+    /** Editable master switch for the FT8 subsystem (FT8 tab toggle → ft8.enabled). */
+    ft8Enabled: boolean = $state(false);
 
     // Forwarding tab — the data-driven type descriptors (GET /v1/forwarder-types),
     // the loaded destinations (masked, from /v1/config), and the editable draft.
@@ -339,6 +344,8 @@ class ConfigState {
             this.hydrateForwarders();
             this.lookup = this.config.lookup ?? null;
             this.lookupForm = lookupFormFrom(this.lookup);
+            this.bridgeEnabled = this.config.bridge_enabled ?? false;
+            this.ft8Enabled = this.config.ft8_enabled ?? false;
         } else {
             errs.push(`config: ${outcomeMessage(cfg)}`);
         }
@@ -381,10 +388,12 @@ class ConfigState {
         return this.rigDraft.find((r) => r.id === this.selectedRigId);
     }
 
-    /** True when the Rigs draft diverges from the loaded catalogue (drives Save/Cancel). */
+    /** True when the Rigs draft diverges from the loaded catalogue, or the
+     *  CAT-enable toggle changed (drives Save/Cancel). */
     get rigsDirty(): boolean {
         return (
             this.draftDefaultRigId !== this.defaultRigId ||
+            this.bridgeEnabled !== (this.config?.bridge_enabled ?? false) ||
             canonRigs(this.rigDraft, true) !== canonRigs(this.rigs, true)
         );
     }
@@ -394,6 +403,7 @@ class ConfigState {
      *  A pure MY_RIG edit applies live, so it doesn't raise it. */
     get rigsRestartRequired(): boolean {
         if (this.draftDefaultRigId !== this.defaultRigId) return true;
+        if (this.bridgeEnabled !== (this.config?.bridge_enabled ?? false)) return true;
         const draft = this.rigDraft.map(restartRelevant).join(' ');
         const loaded = this.rigs.map(restartRelevant).join(' ');
         return draft !== loaded;
@@ -447,10 +457,12 @@ class ConfigState {
         return this.catalogue.find((c) => c.id === model);
     }
 
-    /** True when the FT8 display form diverges from the loaded config. */
+    /** True when the FT8 display form OR the FT8-enable toggle diverges from the
+     *  loaded config (drives Save/Cancel). */
     get ft8Dirty(): boolean {
         if (!this.config) return false;
         return (
+            this.ft8Enabled !== (this.config.ft8_enabled ?? false) ||
             JSON.stringify(this.ft8Form) !== JSON.stringify(ft8FormFrom(this.config.ft8_display))
         );
     }
@@ -470,10 +482,12 @@ class ConfigState {
             logging_station: this.config.logging_station,
             station: this.config.station,
             ft8_display: { ...this.ft8Form },
+            ft8_enabled: this.ft8Enabled,
         });
         if (outcome.kind === 'ok') {
             this.config = outcome.config;
             this.ft8Form = ft8FormFrom(this.config.ft8_display);
+            this.ft8Enabled = this.config.ft8_enabled ?? false;
             this.ft8Status = 'ok';
         } else {
             this.ft8Status = outcomeMessage(outcome);
@@ -481,9 +495,12 @@ class ConfigState {
         this.savingFt8 = false;
     }
 
-    /** Revert the FT8 display form to the loaded config (discard unsaved edits). */
+    /** Revert the FT8 display form + enable toggle to the loaded config. */
     cancelFt8(): void {
-        if (this.config) this.ft8Form = ft8FormFrom(this.config.ft8_display);
+        if (this.config) {
+            this.ft8Form = ft8FormFrom(this.config.ft8_display);
+            this.ft8Enabled = this.config.ft8_enabled ?? false;
+        }
         this.ft8Status = null;
     }
 
@@ -537,9 +554,11 @@ class ConfigState {
             station: this.config.station,
             rigs: this.rigDraft,
             default_rig_id: this.draftDefaultRigId,
+            bridge_enabled: this.bridgeEnabled,
         });
         if (outcome.kind === 'ok') {
             this.config = outcome.config;
+            this.bridgeEnabled = outcome.config.bridge_enabled ?? false;
             const rigs = await fetchRigs();
             if (rigs.kind === 'ok') {
                 this.defaultRigId = rigs.rigs.default_rig_id;
@@ -554,9 +573,10 @@ class ConfigState {
         this.savingRigs = false;
     }
 
-    /** Discard staged Rigs edits — reset the draft to the loaded catalogue. */
+    /** Discard staged Rigs edits — reset the draft + CAT-enable toggle. */
     cancelRigs(): void {
         this.hydrateRigs();
+        this.bridgeEnabled = this.config?.bridge_enabled ?? false;
         this.rigsStatus = null;
     }
 

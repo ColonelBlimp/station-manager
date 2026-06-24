@@ -105,6 +105,14 @@ type ConfigResponse struct {
 	// omits `lookup` leaves the enrichment config untouched; one that carries it
 	// REPLACES it (with passwords merged). Always set on GET.
 	Lookup *LookupInfo `json:"lookup,omitempty"`
+	// BridgeEnabled / Ft8Enabled are the master on/off switches for the rig CAT
+	// bridge and the FT8 subsystem (config SPA's Rigs / FT8 tabs). Read+write:
+	// always set on GET (current value) so the toggles show state; presence-aware
+	// on PUT (pointer) — a body that omits them leaves the flag untouched, one
+	// that carries it sets it. Enabling the bridge requires the active rig to have
+	// port+driver (validateBridge) — a 400 otherwise.
+	BridgeEnabled *bool `json:"bridge_enabled,omitempty"`
+	Ft8Enabled    *bool `json:"ft8_enabled,omitempty"`
 }
 
 // LookupProviderInfo is the config SPA's view of one enrichment provider
@@ -325,6 +333,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// default provider URLs; validateLookup gates the result.
 	if req.Lookup != nil {
 		candidate.Lookup = mergeLookup(*req.Lookup, current.Lookup)
+	}
+	// Master subsystem switches — presence-aware (config SPA Rigs / FT8 tabs).
+	// validateBridge below enforces port+driver when bridge is enabled.
+	if req.BridgeEnabled != nil {
+		candidate.Bridge.Enabled = *req.BridgeEnabled
+	}
+	if req.Ft8Enabled != nil {
+		candidate.Ft8.Enabled = *req.Ft8Enabled
 	}
 	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
 	// defaults so only operator deviations persist, stored on the active rig
@@ -584,6 +600,12 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// Enrichment — masked (provider passwords reported set/unset, never the value).
 	lookupInfo := lookupInfoFrom(cfg.Lookup)
 	resp.Lookup = &lookupInfo
+
+	// Master subsystem switches — current values so the SPA toggles show state.
+	bridgeEnabled := cfg.Bridge.Enabled
+	ft8Enabled := cfg.Ft8.Enabled
+	resp.BridgeEnabled = &bridgeEnabled
+	resp.Ft8Enabled = &ft8Enabled
 
 	return resp, nil
 }

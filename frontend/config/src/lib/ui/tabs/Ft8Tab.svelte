@@ -20,6 +20,14 @@
     <p class="text-sm text-gray-500">Loading…</p>
 {:else}
     <div class="mx-auto max-w-xl space-y-8">
+        <!-- Master FT8 switch (ft8.enabled). Off → the FT8 subsystem doesn't run
+             (no capture, no decode); the display prefs below still save. -->
+        <label class="flex items-center gap-2 text-sm font-medium text-gray-700">
+            <input type="checkbox" bind:checked={configState.ft8Enabled} class="cursor-pointer" />
+            Enable FT8
+            <span class="font-normal text-gray-400">— run the FT8 capture + decode subsystem</span>
+        </label>
+
         <section>
             <h2 class="mb-3 text-base font-semibold text-gray-800">Highlight colours</h2>
             <div class="flex flex-col gap-2 text-sm text-gray-700">

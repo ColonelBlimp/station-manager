@@ -51,6 +51,16 @@
 {#if !configState.config}
     <p class="text-sm text-gray-500">Loading…</p>
 {:else}
+    <!-- Master CAT switch (bridge.enabled). Off → the daemon never opens the
+         serial port, so the rig stays disconnected regardless of the profile. -->
+    <label class="mb-5 flex items-center gap-2 text-sm font-medium text-gray-700">
+        <input type="checkbox" bind:checked={configState.bridgeEnabled} class="cursor-pointer" />
+        Enable rig connection (CAT)
+        <span class="font-normal text-gray-400"
+            >— connect the daemon to the active rig's serial port</span
+        >
+    </label>
+
     <div class="flex gap-6">
         <!-- Left: rig list -->
         <aside class="w-56 shrink-0">

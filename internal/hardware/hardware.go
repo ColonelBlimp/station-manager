@@ -18,6 +18,8 @@ package hardware
 
 import (
 	stderr "errors"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"go.bug.st/serial/enumerator"
@@ -30,10 +32,12 @@ import (
 // (available=false), NOT a failure.
 var ErrAudioUnavailable = stderr.New("hardware: audio enumeration unavailable on this build (requires CGO)")
 
-// SerialPort is one enumerated serial device. ID is the raw device path that
-// RigConfig.Port stores; Label is the human-friendly form for the picker. The
-// USB metadata is carried through so the SPA can group/emphasise USB adapters
-// (the rig is almost always one).
+// SerialPort is one enumerated serial device. ID is the path RigConfig.Port
+// stores — the stable /dev/serial/by-id/ symlink when one exists (so the stored
+// port survives ttyUSBn renumbering), else the raw device path. Label is the
+// human-friendly form for the picker (always carries the raw /dev/tty* path for
+// recognition). The USB metadata is carried through so the SPA can
+// group/emphasise USB adapters (the rig is almost always one).
 type SerialPort struct {
 	ID           string `json:"id"`
 	Label        string `json:"label"`
@@ -67,7 +71,7 @@ func SerialPorts() ([]SerialPort, error) {
 			continue
 		}
 		out = append(out, SerialPort{
-			ID:           d.Name,
+			ID:           stableSerialID(d.Name),
 			Label:        serialLabel(d),
 			USB:          d.IsUSB,
 			VID:          d.VID,
@@ -78,6 +82,32 @@ func SerialPorts() ([]SerialPort, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// stableSerialID returns the stable /dev/serial/by-id/ symlink that resolves to
+// devName when one exists, else devName itself. The by-id name encodes the USB
+// adapter's vendor/product/serial, so it always points at the same physical rig
+// — unlike /dev/ttyUSBn, which renumbers across reboots and replugs (and can
+// point at a DIFFERENT adapter when several are attached). That instability is
+// exactly what bit a stored RigConfig.Port. Linux-only in practice; the dir is
+// absent elsewhere, where it falls back to the raw path.
+func stableSerialID(devName string) string {
+	target, err := filepath.EvalSymlinks(devName)
+	if err != nil {
+		target = devName
+	}
+	const byID = "/dev/serial/by-id"
+	entries, err := os.ReadDir(byID)
+	if err != nil {
+		return devName // no by-id dir (non-Linux / no udev) → raw path
+	}
+	for _, e := range entries {
+		link := filepath.Join(byID, e.Name())
+		if resolved, err := filepath.EvalSymlinks(link); err == nil && resolved == target {
+			return link
+		}
+	}
+	return devName
 }
 
 // serialLabel builds the friendly picker label, using the best metadata the

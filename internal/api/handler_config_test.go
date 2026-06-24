@@ -1063,6 +1063,55 @@ func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_EnableToggles covers the master subsystem switches the
+// config SPA's Rigs (bridge) + FT8 tabs write: bridge_enabled / ft8_enabled are
+// read+write, presence-aware. Enabling the bridge needs the active rig to carry
+// port+driver (validateBridge), so they're sent alongside the rig catalogue.
+func TestHandlePutConfig_EnableToggles(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station":{},"station":{},` +
+		`"rigs":[{"id":1,"model":"yaesu-ftdx10","port":"/dev/ttyUSB0"}],"default_rig_id":1,` +
+		`"bridge_enabled":true,"ft8_enabled":true}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+	cfg := srv.cfg.Snapshot()
+	if !cfg.Bridge.Enabled || !cfg.Ft8.Enabled {
+		t.Fatalf("enables not applied: bridge=%v ft8=%v", cfg.Bridge.Enabled, cfg.Ft8.Enabled)
+	}
+
+	// GET reflects them so the toggles show state.
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	getW := httptest.NewRecorder()
+	srv.handleGetConfig(getW, getReq)
+	getBody := getW.Body.String()
+	if !strings.Contains(getBody, `"bridge_enabled":true`) || !strings.Contains(getBody, `"ft8_enabled":true`) {
+		t.Fatalf("GET did not report the enables: %s", getBody)
+	}
+
+	// Presence-aware: a PUT carrying only ft8_enabled=false leaves bridge alone.
+	body2 := `{"logging_station":{},"station":{},"ft8_enabled":false}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	cfg = srv.cfg.Snapshot()
+	if cfg.Ft8.Enabled {
+		t.Fatal("ft8_enabled not set to false")
+	}
+	if !cfg.Bridge.Enabled {
+		t.Fatal("bridge.enabled wrongly changed by an ft8-only PUT (presence-aware broken)")
+	}
+}
+
 // TestHandlePutConfig_LookupMaskedAndMerged covers the Enrichment tab contract:
 // a QRZ provider's password is stored on PUT, MASKED on GET (password_set, never
 // the value), the QRZ/hamnut URLs are defaulted daemon-side (operator types no

@@ -120,6 +120,10 @@ export interface ConfigResponse {
     ft8_frequencies?: Record<string, number>;
     forwarders?: ForwarderInfo[];
     lookup?: LookupInfo;
+    // Master subsystem switches (read+write): the rig CAT bridge and the FT8
+    // subsystem. Always present on GET.
+    bridge_enabled?: boolean;
+    ft8_enabled?: boolean;
 }
 
 export type ConfigOutcome =
@@ -190,6 +194,10 @@ export interface ConfigPatch {
     // provider's `password` is MERGED onto the stored value daemon-side (blank =
     // keep). Omit `lookup` to leave it untouched.
     lookup?: LookupInfo;
+    // Presence-aware master switches: the Rigs tab sends bridge_enabled, the FT8
+    // tab sends ft8_enabled. Omit to leave the flag untouched.
+    bridge_enabled?: boolean;
+    ft8_enabled?: boolean;
 }
 
 export async function putConfig(patch: ConfigPatch, signal?: AbortSignal): Promise<ConfigOutcome> {
