@@ -15,10 +15,48 @@ import {
     putConfig,
     type ConfigOutcome,
     type ConfigResponse,
+    type ForwarderInfo,
     type LoggingStationFields,
 } from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
 import { fetchHardware, type HardwareResponse } from '../api/hardware';
+import { fetchForwarderTypes, type ForwarderType } from '../api/forwarderTypes';
+
+// ForwarderDraft — the Forwarding tab's editable view of one destination.
+// credentialsSet (from the masked GET) drives the "already set" hint; credentials
+// holds the operator's newly-typed values (transient — blank = keep the stored
+// secret on save).
+export interface ForwarderDraft {
+    name: string;
+    type: string;
+    enabled: boolean;
+    action_filter: string[];
+    credentialsSet: string[];
+    credentials: Record<string, string>;
+}
+
+function forwarderDraftFrom(f: ForwarderInfo): ForwarderDraft {
+    return {
+        name: f.name,
+        type: f.type,
+        enabled: f.enabled,
+        action_filter: f.action_filter ?? [],
+        credentialsSet: f.credentials_set ?? [],
+        credentials: {},
+    };
+}
+
+/** Structural identity of a forwarder for dirty-tracking — everything the SPA
+ *  edits EXCEPT the transient typed credentials (those are checked separately,
+ *  since a blank/untyped credential is not a change). */
+function forwarderStructKey(f: ForwarderDraft): string {
+    return JSON.stringify({
+        name: f.name,
+        type: f.type,
+        enabled: f.enabled,
+        action_filter: [...f.action_filter].sort(),
+    });
+}
 
 /** Deep clone of a rig catalogue, for the Rigs-tab editable draft (rig objects
  *  are JSON-safe). Keeps the draft from aliasing the loaded `rigs`. */
@@ -154,6 +192,16 @@ class ConfigState {
     /** Last Rigs-save status: 'ok', an error message, or null (idle/in-flight). */
     rigsStatus: string | null = $state(null);
 
+    // Forwarding tab — the data-driven type descriptors (GET /v1/forwarder-types),
+    // the loaded destinations (masked, from /v1/config), and the editable draft.
+    forwarderTypes: ForwarderType[] = $state([]);
+    forwarders: ForwarderInfo[] = $state([]);
+    forwarderDraft: ForwarderDraft[] = $state([]);
+    /** True while a Forwarding save PUT is in flight. */
+    savingForwarders: boolean = $state(false);
+    /** Last Forwarding-save status: 'ok', an error message, or null (idle/in-flight). */
+    forwardersStatus: string | null = $state(null);
+
     // FT8 highlight-colour holding place (moved out of the logging SPA's FT8
     // Settings tab). Editable copies the pickers bind to; hydrated from
     // config.ft8_display on load and re-hydrated from the PUT response on save.
@@ -190,13 +238,20 @@ class ConfigState {
      * mount.
      */
     async load(): Promise<void> {
-        const [cfg, rigs, hw] = await Promise.all([fetchConfig(), fetchRigs(), fetchHardware()]);
+        const [cfg, rigs, hw, ftypes] = await Promise.all([
+            fetchConfig(),
+            fetchRigs(),
+            fetchHardware(),
+            fetchForwarderTypes(),
+        ]);
 
         const errs: string[] = [];
         if (cfg.kind === 'ok') {
             this.config = cfg.config;
             this.hydrateColours();
             this.stationForm = stationFormFrom(this.config.logging_station);
+            this.forwarders = this.config.forwarders ?? [];
+            this.hydrateForwarders();
         } else {
             errs.push(`config: ${outcomeMessage(cfg)}`);
         }
@@ -212,6 +267,11 @@ class ConfigState {
             this.hardware = hw.hardware;
         } else {
             errs.push(`hardware: ${outcomeMessage(hw)}`);
+        }
+        if (ftypes.kind === 'ok') {
+            this.forwarderTypes = ftypes.types;
+        } else {
+            errs.push(`forwarder-types: ${outcomeMessage(ftypes)}`);
         }
 
         this.error = errs.length > 0 ? errs.join('; ') : null;
@@ -404,6 +464,103 @@ class ConfigState {
     cancelRigs(): void {
         this.hydrateRigs();
         this.rigsStatus = null;
+    }
+
+    // ── Forwarding tab ─────────────────────────────────────────────────────────
+
+    /** Reset the forwarders draft to the loaded list (initial hydrate, Cancel,
+     *  post-save re-hydrate). Clears any typed-but-unsaved credentials. */
+    private hydrateForwarders(): void {
+        this.forwarderDraft = this.forwarders.map(forwarderDraftFrom);
+    }
+
+    /** The descriptor for a forwarder type, or undefined if the type isn't
+     *  registered in this daemon (a stale config entry). */
+    forwarderTypeFor(type: string): ForwarderType | undefined {
+        return this.forwarderTypes.find((t) => t.type === type);
+    }
+
+    /** True when the forwarders draft diverges from the loaded list — a
+     *  structural change (add/remove/rename/type/enabled/action) OR any typed
+     *  credential value. Drives Save/Cancel. */
+    get forwardersDirty(): boolean {
+        const draftKeys = this.forwarderDraft.map(forwarderStructKey);
+        const loadedKeys = this.forwarders.map((f) => forwarderStructKey(forwarderDraftFrom(f)));
+        if (JSON.stringify(draftKeys) !== JSON.stringify(loadedKeys)) return true;
+        return this.forwarderDraft.some((f) =>
+            Object.values(f.credentials).some((v) => v.trim() !== '')
+        );
+    }
+
+    /** Append a destination of the given type — name defaults to a unique handle
+     *  (type, then type-2…), action_filter to the type's supported actions, and
+     *  enabled true. */
+    addForwarder(type: string): void {
+        const used = new Set(this.forwarderDraft.map((f) => f.name));
+        let name = type;
+        for (let n = 2; used.has(name); n++) name = `${type}-${n}`;
+        const td = this.forwarderTypeFor(type);
+        this.forwarderDraft = [
+            ...this.forwarderDraft,
+            {
+                name,
+                type,
+                enabled: true,
+                action_filter: td ? [...td.supported_actions] : [],
+                credentialsSet: [],
+                credentials: {},
+            },
+        ];
+    }
+
+    removeForwarder(index: number): void {
+        this.forwarderDraft = this.forwarderDraft.filter((_, i) => i !== index);
+    }
+
+    /**
+     * Persist the forwarders draft via PUT /v1/config. Sends the whole list
+     * (presence-aware daemon-side) with only the NON-EMPTY typed credentials per
+     * destination — the daemon merges them onto the stored secrets, so a blank
+     * field keeps its value. Echoes logging_station/station; omits rigs/ft8 so
+     * those are left untouched. Re-hydrates from the (masked) PUT response.
+     */
+    async saveForwarders(): Promise<void> {
+        if (this.savingForwarders || !this.config || !this.forwardersDirty) return;
+        this.savingForwarders = true;
+        this.forwardersStatus = null;
+        const payload: ForwarderInfo[] = this.forwarderDraft.map((f) => {
+            const creds: Record<string, string> = {};
+            for (const [k, v] of Object.entries(f.credentials)) {
+                if (v.trim() !== '') creds[k] = v;
+            }
+            return {
+                name: f.name,
+                type: f.type,
+                enabled: f.enabled,
+                action_filter: f.action_filter,
+                ...(Object.keys(creds).length > 0 ? { credentials: creds } : {}),
+            };
+        });
+        const outcome: ConfigOutcome = await putConfig({
+            logging_station: this.config.logging_station,
+            station: this.config.station,
+            forwarders: payload,
+        });
+        if (outcome.kind === 'ok') {
+            this.config = outcome.config;
+            this.forwarders = outcome.config.forwarders ?? [];
+            this.hydrateForwarders();
+            this.forwardersStatus = 'ok';
+        } else {
+            this.forwardersStatus = outcomeMessage(outcome);
+        }
+        this.savingForwarders = false;
+    }
+
+    /** Discard staged forwarder edits — reset the draft to the loaded list. */
+    cancelForwarders(): void {
+        this.hydrateForwarders();
+        this.forwardersStatus = null;
     }
 }
 

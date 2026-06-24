@@ -64,6 +64,24 @@ export interface DefaultLogbookFields {
     description?: string;
 }
 
+/**
+ * A forwarding destination. Asymmetric (masked-on-GET, merge-on-PUT, mirrors
+ * the daemon's ForwarderInfo):
+ *   - GET: `credentials_set` lists the credential keys that currently hold a
+ *     value (never the values). `credentials` is absent.
+ *   - PUT: `credentials` carries new/changed values (only the fields the
+ *     operator typed); an omitted field keeps its stored value. `credentials_set`
+ *     is ignored.
+ */
+export interface ForwarderInfo {
+    name: string;
+    type: string;
+    enabled: boolean;
+    action_filter?: string[];
+    credentials_set?: string[];
+    credentials?: Record<string, string>;
+}
+
 export interface ConfigResponse {
     setup_complete: boolean;
     logging_station: LoggingStationFields;
@@ -72,6 +90,7 @@ export interface ConfigResponse {
     mailer: MailerFields;
     ft8_display?: Ft8DisplayFields;
     ft8_frequencies?: Record<string, number>;
+    forwarders?: ForwarderInfo[];
 }
 
 export type ConfigOutcome =
@@ -133,6 +152,11 @@ export interface ConfigPatch {
     ft8_display?: Ft8DisplayFields;
     rigs?: RigConfig[];
     default_rig_id?: number;
+    // Presence-aware (Forwarding tab): replaces the whole list; per-entry
+    // credentials are MERGED onto the stored values daemon-side, so omit a
+    // credential field to keep its secret. Omit `forwarders` entirely to leave
+    // the list untouched (a Station/FT8/Rigs save never carries it).
+    forwarders?: ForwarderInfo[];
 }
 
 export async function putConfig(patch: ConfigPatch, signal?: AbortSignal): Promise<ConfigOutcome> {
