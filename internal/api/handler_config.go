@@ -34,11 +34,12 @@ import (
 //     are operator-side config.json material, not UI-editable.
 //
 // PUT bodies use the same shape; the handler honours only writable
-// fields (the LoggingStation / Station blocks, Qsl, Ft8Display, and the
-// Bridge mode-mapping overlay). SetupComplete, Mailer, and DefaultRig are
-// server-managed/read-only — the handler ignores any values the client
-// sends (the default rig is selected via PUT /v1/rigs' default_rig_id, not
-// here) and reasserts the authoritative state in the response.
+// fields (the LoggingStation / Station blocks, Qsl, Ft8Display, the
+// Bridge mode-mapping overlay, and — for the config SPA's Rigs tab —
+// the rig catalogue (`rigs`) + active-rig selector (`default_rig_id`),
+// both presence-aware). SetupComplete, Mailer, and the DefaultRig read
+// join are server-managed/read-only — the handler ignores them on PUT
+// and reasserts the authoritative state in the response.
 type ConfigResponse struct {
 	SetupComplete  bool                 `json:"setup_complete"`
 	LoggingStation types.LoggingStation `json:"logging_station"`
@@ -78,6 +79,18 @@ type ConfigResponse struct {
 	// left untouched on write.
 	BridgeTimeouts *types.BridgeTimeoutsConfig `json:"bridge_timeouts,omitempty"`
 	BridgeTune     *types.BridgeTuneConfig     `json:"bridge_tune,omitempty"`
+	// Rigs + DefaultRigID are WRITE-ONLY on this endpoint (the config SPA's Rigs
+	// tab). Presence-aware on PUT: a body carrying `rigs` replaces the whole
+	// catalogue; one carrying `default_rig_id` sets the active rig. Both are
+	// validated through the same Normalize+Validate pipeline as Load
+	// (validateRigs — unique positive ids, non-empty model, default_rig_id
+	// resolves), so a bad catalogue is a 400. They are NEVER emitted on GET
+	// (buildConfigResponse leaves them nil → omitempty drops them): the full
+	// catalogue read surface stays on GET /v1/rigs and the active rig's narrow
+	// read view stays on the DefaultRig join above. Pointers distinguish "sent"
+	// from "absent".
+	Rigs         *[]types.RigConfig `json:"rigs,omitempty"`
+	DefaultRigID *int64             `json:"default_rig_id,omitempty"`
 }
 
 // DefaultRigInfo is the SPA-visible subset of the active rig for GET
@@ -215,6 +228,17 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if req.Qsl != nil {
 		candidate.Qsl = *req.Qsl
 	}
+	// Rig catalogue + active-rig selector — presence-aware (config SPA Rigs tab).
+	// Applied BEFORE the mode-mapping overlay (which bases off candidate.Rigs)
+	// and before Normalize+Validate, so validateRigs catches a bad catalogue
+	// (duplicate/non-positive ids, empty model, dangling default_rig_id) as a 400.
+	// A fresh slice so the candidate never aliases the request's backing array.
+	if req.Rigs != nil {
+		candidate.Rigs = append([]types.RigConfig(nil), (*req.Rigs)...)
+	}
+	if req.DefaultRigID != nil {
+		candidate.DefaultRigID = *req.DefaultRigID
+	}
 	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
 	// defaults so only operator deviations persist, stored on the active rig
 	// (config.md §10). Bad ADIF in the result is caught by Validate below.
@@ -232,8 +256,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Copy the rig slice before mutating so the active rig's mappings don't
-		// alias the live config (candidate := current is a shallow copy).
-		candidate.Rigs = append([]types.RigConfig(nil), current.Rigs...)
+		// alias the live config. Base off candidate.Rigs (not current.Rigs) so a
+		// `rigs` block applied just above isn't clobbered by the mode-mapping overlay.
+		candidate.Rigs = append([]types.RigConfig(nil), candidate.Rigs...)
 		if rc := candidate.RigByID(candidate.DefaultRigID); rc != nil {
 			if len(overrides) > 0 {
 				rc.ModeMappings = overrides

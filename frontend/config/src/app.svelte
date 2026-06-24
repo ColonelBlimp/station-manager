@@ -3,6 +3,7 @@
     import { configState } from './lib/states/config.svelte';
     import TabPlaceholder from './lib/ui/TabPlaceholder.svelte';
     import StationTab from './lib/ui/tabs/StationTab.svelte';
+    import RigsTab from './lib/ui/tabs/RigsTab.svelte';
 
     // ── Tab shell ────────────────────────────────────────────────────────────
     // The config SPA is a category-tab shell (design 2026-06-24): one tab per
@@ -116,6 +117,8 @@
         <div id={`panel-${activeTab}`} role="tabpanel" aria-labelledby={`tab-${activeTab}`}>
             {#if activeTab === 'station'}
                 <StationTab />
+            {:else if activeTab === 'rigs'}
+                <RigsTab />
             {:else}
                 <TabPlaceholder title={activeTitle} />
             {/if}

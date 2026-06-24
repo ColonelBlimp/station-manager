@@ -14,6 +14,7 @@
 */
 
 import { isShape, readJsonBody, safeFetch, isPlainObject } from './_helpers';
+import type { RigConfig } from './rigs';
 
 export interface LoggingStationFields {
     station_callsign?: string;
@@ -119,11 +120,19 @@ export async function fetchConfig(signal?: AbortSignal): Promise<ConfigOutcome> 
     `ft8_display` is the only block this SPA actually edits; it is sent in FULL
     (the daemon replaces the block raw on PUT), so callers must round-trip the
     fields they aren't changing.
+
+    `rigs` + `default_rig_id` are the config SPA's Rigs-tab write path: both are
+    presence-aware daemon-side (omitting them leaves the catalogue alone), so a
+    Station / FT8 / colours save never carries them. When the Rigs tab saves it
+    sends the WHOLE catalogue (the daemon replaces it) + the active-rig id. The
+    daemon validates them through the same pipeline as Load (validateRigs).
 */
 export interface ConfigPatch {
     logging_station: LoggingStationFields;
     station: StationFields;
     ft8_display?: Ft8DisplayFields;
+    rigs?: RigConfig[];
+    default_rig_id?: number;
 }
 
 export async function putConfig(patch: ConfigPatch, signal?: AbortSignal): Promise<ConfigOutcome> {

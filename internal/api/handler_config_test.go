@@ -942,3 +942,74 @@ func TestHandlePutConfig_ModeMappingsOverride_RoundTrip(t *testing.T) {
 		t.Fatalf("merged USB mode = %q, want SSB (untouched rigdef default preserved)", got)
 	}
 }
+
+// TestHandlePutConfig_WritesRigCatalogue covers the config-SPA Rigs tab write
+// path: a PUT carrying `rigs` + `default_rig_id` persists the catalogue and
+// selects the active rig — and the catalogue stays OFF the /v1/config GET
+// surface (write-only; the full read view is GET /v1/rigs).
+func TestHandlePutConfig_WritesRigCatalogue(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station":{},"station":{},` +
+		`"rigs":[{"id":1,"model":"yaesu-ftdx10","port":"/dev/ttyUSB0"},` +
+		`{"id":2,"model":"icom-ic7300","port":"/dev/ttyUSB1"}],` +
+		`"default_rig_id":2}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// Persisted to the live config.
+	cfg := srv.cfg.Snapshot()
+	if len(cfg.Rigs) != 2 {
+		t.Fatalf("Rigs len = %d, want 2", len(cfg.Rigs))
+	}
+	if cfg.DefaultRigID != 2 {
+		t.Fatalf("DefaultRigID = %d, want 2", cfg.DefaultRigID)
+	}
+	if cfg.Rigs[0].Model != "yaesu-ftdx10" || cfg.Rigs[1].Model != "icom-ic7300" {
+		t.Fatalf("rig models = %q/%q, want yaesu-ftdx10/icom-ic7300",
+			cfg.Rigs[0].Model, cfg.Rigs[1].Model)
+	}
+
+	// The catalogue is WRITE-ONLY here: GET /v1/config must not emit `rigs`.
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	getW := httptest.NewRecorder()
+	srv.handleGetConfig(getW, getReq)
+	if strings.Contains(getW.Body.String(), `"rigs"`) {
+		t.Fatalf("GET /v1/config leaked the rigs catalogue: %s", getW.Body.String())
+	}
+
+	// And the full catalogue is readable via GET /v1/rigs.
+	rigsReq := httptest.NewRequest(http.MethodGet, "/v1/rigs", nil)
+	rigsW := httptest.NewRecorder()
+	srv.handleRigs(rigsW, rigsReq)
+	if !strings.Contains(rigsW.Body.String(), `"default_rig_id":2`) {
+		t.Fatalf("GET /v1/rigs = %s, want default_rig_id 2", rigsW.Body.String())
+	}
+}
+
+// TestHandlePutConfig_RejectsBadRigCatalogue confirms the write path runs the
+// same validateRigs gate as Load: a dangling default_rig_id is a 400, not a
+// persisted bad catalogue.
+func TestHandlePutConfig_RejectsBadRigCatalogue(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station":{},"station":{},` +
+		`"rigs":[{"id":1,"model":"yaesu-ftdx10","port":"/dev/ttyUSB0"}],` +
+		`"default_rig_id":99}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PUT status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	// Nothing persisted.
+	if cfg := srv.cfg.Snapshot(); len(cfg.Rigs) != 0 {
+		t.Fatalf("Rigs len = %d after rejected PUT, want 0 (no partial write)", len(cfg.Rigs))
+	}
+}
