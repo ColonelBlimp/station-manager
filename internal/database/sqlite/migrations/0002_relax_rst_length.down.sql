@@ -179,12 +179,12 @@ CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_update
     BEFORE UPDATE
     ON qso_history
 BEGIN
-    SELECT RAISE(ABORT, 'qso_history is append-only - UPDATE not permitted');
+    SELECT RAISE(ABORT, 'qso_history is append-only — UPDATE not permitted');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_delete
     BEFORE DELETE
     ON qso_history
 BEGIN
-    SELECT RAISE(ABORT, 'qso_history is append-only - DELETE not permitted');
+    SELECT RAISE(ABORT, 'qso_history is append-only — DELETE not permitted');
 END;

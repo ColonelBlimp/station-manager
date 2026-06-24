@@ -53,8 +53,8 @@ CREATE TABLE qso
         (length(time_off) = 4 AND substr(time_off, 1, 2) BETWEEN '00' AND '23' AND
          substr(time_off, 3, 2) BETWEEN '00' AND '59')
         ),
-    rst_sent        TEXT     NOT NULL,
-    rst_rcvd        TEXT     NOT NULL,
+    rst_sent        TEXT     NOT NULL CHECK (length(rst_sent) <= 10),
+    rst_rcvd        TEXT     NOT NULL CHECK (length(rst_rcvd) <= 10),
     country         TEXT     NOT NULL CHECK (length(trim(country)) <= 50),
     additional_data JSON     NOT NULL DEFAULT ('{}') CHECK (json_valid(additional_data)),
     dedupe_key      TEXT     NOT NULL CHECK (length(dedupe_key) = 64),
@@ -179,12 +179,12 @@ CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_update
     BEFORE UPDATE
     ON qso_history
 BEGIN
-    SELECT RAISE(ABORT, 'qso_history is append-only - UPDATE not permitted');
+    SELECT RAISE(ABORT, 'qso_history is append-only — UPDATE not permitted');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_qso_history_no_delete
     BEFORE DELETE
     ON qso_history
 BEGIN
-    SELECT RAISE(ABORT, 'qso_history is append-only - DELETE not permitted');
+    SELECT RAISE(ABORT, 'qso_history is append-only — DELETE not permitted');
 END;
