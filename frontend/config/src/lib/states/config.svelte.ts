@@ -233,10 +233,19 @@ class ConfigState {
         this.selectedRigId = id;
     }
 
-    /** Append a blank rig (next free id, first catalogue model) and select it. */
-    addRig(): void {
+    /** The model a newly-added rig should default to: the first catalogue model
+     *  not already configured (so Add doesn't silently create a duplicate),
+     *  falling back to the first catalogue entry when every model is already in
+     *  use. The Rigs tab confirms before adding when this returns an in-use model. */
+    nextRigModel(): string {
+        const used = new Set(this.rigDraft.map((r) => r.model));
+        const unused = this.catalogue.find((c) => !used.has(c.id));
+        return (unused ?? this.catalogue[0])?.id ?? '';
+    }
+
+    /** Append a blank rig with the given model (next free id) and select it. */
+    addRig(model: string): void {
         const nextId = this.rigDraft.reduce((m, r) => Math.max(m, r.id), 0) + 1;
-        const model = this.catalogue[0]?.id ?? '';
         this.rigDraft = [...this.rigDraft, { id: nextId, model, port: '' }];
         this.selectedRigId = nextId;
     }

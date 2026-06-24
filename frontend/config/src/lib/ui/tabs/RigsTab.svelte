@@ -31,6 +31,23 @@
     function ensureAudio(): void {
         if (rig && !rig.audio) rig.audio = {};
     }
+
+    // Add a rig, defaulting to the first model not already configured. Two rigs of
+    // the same model is valid (e.g. a pair of identical rigs, each on its own port),
+    // but uncommon — so when every catalogue model is already in use (the only case
+    // where Add must duplicate), confirm first rather than silently adding a clone.
+    function onAddRig(): void {
+        const model = configState.nextRigModel();
+        if (configState.rigDraft.some((r) => r.model === model)) {
+            const name = configState.rigdefFor(model)?.name ?? model;
+            if (
+                !window.confirm(`A "${name}" is already configured. Add another of the same model?`)
+            ) {
+                return;
+            }
+        }
+        configState.addRig(model);
+    }
 </script>
 
 {#if !configState.config}
@@ -72,7 +89,7 @@
             {/if}
             <button
                 type="button"
-                onclick={() => configState.addRig()}
+                onclick={onAddRig}
                 class="mt-3 w-full cursor-pointer rounded-md border border-dashed border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:border-gray-400 hover:bg-gray-50"
             >
                 + Add rig
