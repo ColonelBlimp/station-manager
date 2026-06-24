@@ -28,10 +28,6 @@
         return opts;
     });
 
-    function ensureAudio(): void {
-        if (rig && !rig.audio) rig.audio = {};
-    }
-
     // Add a rig, defaulting to the first model not already configured. Two rigs of
     // the same model is valid (e.g. a pair of identical rigs, each on its own port),
     // but uncommon — so when every catalogue model is already in use (the only case
@@ -172,11 +168,7 @@
                                     >Audio RX (capture)</span
                                 >
                                 <select
-                                    value={rig.audio?.rx ?? ''}
-                                    onchange={(e) => {
-                                        ensureAudio();
-                                        rig.audio!.rx = e.currentTarget.value;
-                                    }}
+                                    bind:value={rig.audio!.rx}
                                     class="w-72 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                                 >
                                     <option value="">— select —</option>
@@ -192,11 +184,7 @@
                                     >Audio TX (playback)</span
                                 >
                                 <select
-                                    value={rig.audio?.tx ?? ''}
-                                    onchange={(e) => {
-                                        ensureAudio();
-                                        rig.audio!.tx = e.currentTarget.value;
-                                    }}
+                                    bind:value={rig.audio!.tx}
                                     class="w-72 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                                 >
                                     <option value="">— select —</option>

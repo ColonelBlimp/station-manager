@@ -26,6 +26,14 @@ function cloneRigs(rigs: RigConfig[]): RigConfig[] {
     return JSON.parse(JSON.stringify(rigs)) as RigConfig[];
 }
 
+/** Ensure a draft rig has a concrete `audio` object with string rx/tx, so the
+ *  Rigs-tab audio dropdowns can `bind:value` directly (no lazy-init handler).
+ *  Empty strings round-trip cleanly — the daemon omits empty audio on GET, and
+ *  canonRig treats '' as absent — so this never shows as a spurious change. */
+function withAudio(r: RigConfig): RigConfig {
+    return { ...r, audio: { rx: r.audio?.rx ?? '', tx: r.audio?.tx ?? '' } };
+}
+
 /**
  * Canonical form of a rig for change-detection, matching what the daemon
  * round-trips. The daemon nils per-rig overrides that equal the rigdef default
@@ -199,7 +207,7 @@ class ConfigState {
      *  post-save re-hydrate). Preserves the current selection when it still
      *  exists, else selects the first rig (or none). */
     private hydrateRigs(): void {
-        this.rigDraft = cloneRigs(this.rigs);
+        this.rigDraft = cloneRigs(this.rigs).map(withAudio);
         this.draftDefaultRigId = this.defaultRigId;
         if (!this.rigDraft.some((r) => r.id === this.selectedRigId)) {
             this.selectedRigId = this.rigDraft[0]?.id ?? null;
@@ -246,7 +254,7 @@ class ConfigState {
     /** Append a blank rig with the given model (next free id) and select it. */
     addRig(model: string): void {
         const nextId = this.rigDraft.reduce((m, r) => Math.max(m, r.id), 0) + 1;
-        this.rigDraft = [...this.rigDraft, { id: nextId, model, port: '' }];
+        this.rigDraft = [...this.rigDraft, withAudio({ id: nextId, model, port: '' })];
         this.selectedRigId = nextId;
     }
 
