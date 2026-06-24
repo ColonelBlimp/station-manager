@@ -135,8 +135,7 @@
                     <label class="flex flex-col gap-1">
                         <span class="text-sm font-medium text-gray-700">Model</span>
                         <select
-                            value={rig.model}
-                            onchange={(e) => (rig.model = e.currentTarget.value)}
+                            bind:value={rig.model}
                             class="rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                         >
                             {#each configState.catalogue as def (def.id)}
@@ -149,8 +148,7 @@
                     <label class="flex flex-col gap-1">
                         <span class="text-sm font-medium text-gray-700">Serial port</span>
                         <select
-                            value={rig.port}
-                            onchange={(e) => (rig.port = e.currentTarget.value)}
+                            bind:value={rig.port}
                             class="rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                         >
                             <option value="">— select a port —</option>
