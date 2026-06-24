@@ -12,6 +12,7 @@
     import { configState } from '../../states/config.svelte';
     import TabFooter from '../TabFooter.svelte';
     import ModeMappingsEditor from '../ModeMappingsEditor.svelte';
+    import SerialOverridesEditor from '../SerialOverridesEditor.svelte';
 
     const rig = $derived(configState.selectedRig);
     const rigdef = $derived(rig ? configState.rigdefFor(rig.model) : undefined);
@@ -233,10 +234,11 @@
                         </span>
                     </label>
 
-                    <!-- Mode mappings (per-rig literal → ADIF MODE/SUBMODE). Keyed
-                         so it re-snapshots when the rig or its model changes. -->
+                    <!-- Per-rig sub-editors (mode mappings + serial overrides).
+                         Keyed so they re-snapshot when the rig or its model changes. -->
                     {#key `${rig.id}:${rig.model}`}
                         <ModeMappingsEditor {rig} {rigdef} />
+                        <SerialOverridesEditor {rig} {rigdef} />
                     {/key}
                 </div>
             {/if}

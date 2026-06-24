@@ -61,7 +61,15 @@ function canonRig(r: RigConfig, includeMyRig: boolean): Record<string, unknown> 
         for (const k of Object.keys(mm).sort()) sorted[k] = mm[k];
         o.mode_mappings = sorted;
     }
-    if (r.overrides && Object.keys(r.overrides).length > 0) o.overrides = r.overrides;
+    if (r.overrides && Object.keys(r.overrides).length > 0) {
+        // Same key-order normalisation as mode_mappings: Go marshals the struct
+        // fields in declaration order, the editor sets them in another — sort both
+        // sides so identical override content doesn't read as a spurious diff.
+        const ov = r.overrides as Record<string, unknown>;
+        const sorted: Record<string, unknown> = {};
+        for (const k of Object.keys(ov).sort()) sorted[k] = ov[k];
+        o.overrides = sorted;
+    }
     return o;
 }
 
