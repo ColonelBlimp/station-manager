@@ -147,6 +147,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// catalogue (defaults) for the config SPA's default-vs-override editing.
 	mux.HandleFunc("GET /v1/rigs", s.handleRigs)
 
+	// Data-driven forwarder-type descriptors for the config SPA's Forwarding tab
+	// (display name, supported actions, credential field shapes).
+	mux.HandleFunc("GET /v1/forwarder-types", s.handleForwarderTypes)
+
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)

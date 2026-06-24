@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	stderr "errors"
 	"net/http"
+	"sort"
 
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -91,6 +93,36 @@ type ConfigResponse struct {
 	// from "absent".
 	Rigs         *[]types.RigConfig `json:"rigs,omitempty"`
 	DefaultRigID *int64             `json:"default_rig_id,omitempty"`
+	// Forwarders is the config SPA's Forwarding-tab surface — masked on GET,
+	// merge-on-PUT (see ForwarderInfo). Presence-aware on PUT: a body that omits
+	// it leaves the forwarder list untouched (so a Station / FT8 save can't wipe
+	// it); a body that carries it REPLACES the whole list. Emitted on GET only
+	// when at least one forwarder is configured (omitempty), masked.
+	Forwarders []ForwarderInfo `json:"forwarders,omitempty"`
+}
+
+// ForwarderInfo is the config SPA's view of one forwarding destination. It is
+// deliberately asymmetric to keep secrets off the wire (masked-on-GET):
+//
+//   - On GET: Name/Type/Enabled/ActionFilter + CredentialsSet (the credential
+//     keys that currently hold a non-empty value — NEVER the values). Credentials
+//     is nil/omitted.
+//   - On PUT: Name/Type/Enabled/ActionFilter + Credentials (key→new value, only
+//     the fields the operator typed; an omitted field keeps its stored value).
+//     CredentialsSet is ignored.
+//
+// The advanced knobs (tick_interval_sec / batch_size / retry) are intentionally
+// absent: the SPA doesn't edit them, and the PUT merge carries the stored values
+// forward by name so a Forwarding-tab save never wipes an operator's hand-set
+// values. ActionFilter is sent by the SPA (derived from the type's supported
+// actions), so it round-trips without daemon defaulting.
+type ForwarderInfo struct {
+	Name           string            `json:"name"`
+	Type           string            `json:"type"`
+	Enabled        bool              `json:"enabled"`
+	ActionFilter   []string          `json:"action_filter,omitempty"`
+	CredentialsSet []string          `json:"credentials_set,omitempty"`
+	Credentials    map[string]string `json:"credentials,omitempty"`
 }
 
 // DefaultRigInfo is the SPA-visible subset of the active rig for GET
@@ -238,6 +270,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DefaultRigID != nil {
 		candidate.DefaultRigID = *req.DefaultRigID
+	}
+	// Forwarders — presence-aware (config SPA Forwarding tab). A body carrying
+	// `forwarders` REPLACES the whole list; each entry's credentials are MERGED
+	// onto the stored values (matched by name) so a field the operator left blank
+	// keeps its secret (masked-on-GET means the SPA never had it to echo). The
+	// advanced knobs (tick/batch/retry) carry over from the matched existing entry
+	// too. Validated through validateForwarders below (dup names / unknown type /
+	// unsupported action).
+	if req.Forwarders != nil {
+		candidate.Forwarders = mergeForwarders(req.Forwarders, current.Forwarders)
 	}
 	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
 	// defaults so only operator deviations persist, stored on the active rig
@@ -477,5 +519,95 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		resp.DefaultRig = DefaultRigInfo{ID: rc.ID, Model: rc.Model, Port: rc.Port}
 	}
 
+	// Forwarders — masked: name/type/enabled/action_filter + which credential
+	// keys are set (never the values). omitempty drops the field when none, so
+	// the logging SPA's /v1/config payload is unaffected on a forwarder-less host.
+	if len(cfg.Forwarders) > 0 {
+		fwds := make([]ForwarderInfo, 0, len(cfg.Forwarders))
+		for _, fc := range cfg.Forwarders {
+			fwds = append(fwds, ForwarderInfo{
+				Name:           fc.Name,
+				Type:           fc.Type,
+				Enabled:        fc.Enabled,
+				ActionFilter:   fc.ActionFilter,
+				CredentialsSet: credentialKeysSet(fc.Credentials),
+			})
+		}
+		resp.Forwarders = fwds
+	}
+
 	return resp, nil
+}
+
+// credentialKeysSet returns the credential keys that currently hold a non-empty
+// value, sorted — the masked GET view (the values themselves never leave the
+// daemon). A non-string value is reported as set when non-null (all current
+// forwarder creds are strings, but this stays robust to a future shape).
+func credentialKeysSet(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k, v := range m {
+		if s, ok := v.(string); ok {
+			if s != "" {
+				keys = append(keys, k)
+			}
+			continue
+		}
+		if v != nil {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// mergeForwarders builds the new forwarder list from the SPA's PUT payload,
+// preserving secrets the masked-on-GET surface never exposed: credentials are
+// merged onto the stored entry (matched by name) — a field the operator didn't
+// type keeps its stored value — and the advanced knobs (tick/batch/retry) carry
+// over from the stored entry too. A forwarder with no name match is treated as
+// new (its supplied credentials stand alone).
+func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig) []types.ForwarderConfig {
+	byName := make(map[string]types.ForwarderConfig, len(existing))
+	for _, fc := range existing {
+		byName[fc.Name] = fc
+	}
+	out := make([]types.ForwarderConfig, 0, len(incoming))
+	for _, in := range incoming {
+		fc := types.ForwarderConfig{
+			Name:         in.Name,
+			Type:         in.Type,
+			Enabled:      in.Enabled,
+			ActionFilter: in.ActionFilter,
+		}
+		ex, matched := byName[in.Name]
+		if matched {
+			fc.TickIntervalSec = ex.TickIntervalSec
+			fc.BatchSize = ex.BatchSize
+			fc.Retry = ex.Retry
+		}
+		// Merge credentials: stored base overlaid with supplied (typed) fields.
+		base := map[string]json.RawMessage{}
+		if matched && len(ex.Credentials) > 0 {
+			_ = json.Unmarshal(ex.Credentials, &base)
+		}
+		for k, v := range in.Credentials {
+			if b, err := json.Marshal(v); err == nil {
+				base[k] = b
+			}
+		}
+		if len(base) > 0 {
+			if rawCreds, err := json.Marshal(base); err == nil {
+				fc.Credentials = rawCreds
+			}
+		}
+		out = append(out, fc)
+	}
+	return out
 }

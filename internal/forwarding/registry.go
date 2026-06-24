@@ -1,6 +1,7 @@
 package forwarding
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
@@ -20,6 +21,7 @@ var (
 	registry         = map[string]Constructor{}
 	defaultRetryMap  = map[string]types.RetryConfig{}
 	supportedActions = map[string][]Action{}
+	descriptors      = map[string]TypeDescriptor{}
 )
 
 // Register adds a forwarder constructor under the given type name.
@@ -178,4 +180,90 @@ func SupportedActionsFor(typeName string) ([]Action, bool) {
 		return nil, false
 	}
 	return append([]Action(nil), a...), true
+}
+
+// CredentialField describes one credential input a forwarder type needs, so the
+// config SPA can render its "add forwarder" form data-drivenly (no per-type
+// hardcoded forms). Kind drives the input widget + masking: "password" fields
+// are never echoed back on GET /v1/config (masked-on-GET); "text" fields are.
+type CredentialField struct {
+	Key   string `json:"key"`   // matches the forwarder's credentials JSON key (e.g. "api_key")
+	Label string `json:"label"` // human label for the input
+	Kind  string `json:"kind"`  // "text" | "password"
+	Help  string `json:"help,omitempty"`
+}
+
+// TypeDescriptor is the editor-facing description of a forwarder type, served by
+// GET /v1/forwarder-types. It carries everything the config SPA needs to offer
+// the type and collect its credentials; the upload logic itself stays
+// per-type-specific in each Forwarder implementation.
+type TypeDescriptor struct {
+	Type             string            `json:"type"`
+	DisplayName      string            `json:"display_name"`
+	SupportedActions []string          `json:"supported_actions"`
+	CredentialFields []CredentialField `json:"credential_fields"`
+}
+
+// RegisterForwarderType records a type's editor descriptor (display name +
+// credential fields) AND its supported actions in one call — the canonical
+// registration for a real forwarder, from its init(). It delegates the
+// type/action validation + recording to RegisterSupportedActions (so the
+// supported-action set, action_filter defaulting, and dup checks all behave
+// identically), then validates the credential fields and stores the descriptor.
+//
+// Panics on programmer errors (those from RegisterSupportedActions, plus empty
+// display name, bad/duplicate credential field) — all binary bugs.
+func RegisterForwarderType(typeName, displayName string, actions []Action, creds []CredentialField) {
+	if displayName == "" {
+		panic("forwarding.RegisterForwarderType: empty display name for " + typeName)
+	}
+	seen := make(map[string]struct{}, len(creds))
+	for _, c := range creds {
+		if c.Key == "" {
+			panic("forwarding.RegisterForwarderType: empty credential key for " + typeName)
+		}
+		if c.Kind != "text" && c.Kind != "password" {
+			panic("forwarding.RegisterForwarderType: bad credential kind " + c.Kind + " for " + typeName)
+		}
+		if _, dup := seen[c.Key]; dup {
+			panic("forwarding.RegisterForwarderType: duplicate credential key " + c.Key + " for " + typeName)
+		}
+		seen[c.Key] = struct{}{}
+	}
+	// Validates type/actions + dup registration, and records the supported set.
+	RegisterSupportedActions(typeName, actions)
+
+	sa := make([]string, len(actions))
+	for i, a := range actions {
+		sa[i] = string(a)
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	descriptors[typeName] = TypeDescriptor{
+		Type:             typeName,
+		DisplayName:      displayName,
+		SupportedActions: sa,
+		CredentialFields: append([]CredentialField(nil), creds...),
+	}
+}
+
+// ForwarderTypes returns every registered type descriptor, sorted by type, as
+// deep copies (callers can't mutate registry state). Drives GET
+// /v1/forwarder-types. Only types registered via RegisterForwarderType appear —
+// a type registered with the bare RegisterSupportedActions (e.g. a test) does
+// not, since it has no editor descriptor.
+func ForwarderTypes() []TypeDescriptor {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	out := make([]TypeDescriptor, 0, len(descriptors))
+	for _, d := range descriptors {
+		out = append(out, TypeDescriptor{
+			Type:             d.Type,
+			DisplayName:      d.DisplayName,
+			SupportedActions: append([]string(nil), d.SupportedActions...),
+			CredentialFields: append([]CredentialField(nil), d.CredentialFields...),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
+	return out
 }

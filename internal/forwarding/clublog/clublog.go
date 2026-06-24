@@ -136,8 +136,19 @@ func init() {
 	// ClubLog real-time supports insert + delete only — it cannot edit a
 	// logged QSO's fields (see Submit). Registering the supported set means
 	// an omitted action_filter defaults to insert/delete (not all three),
-	// so a natural config never queues update rows bound to fail.
-	forwarding.RegisterSupportedActions(Type, []forwarding.Action{action.Insert, action.Delete})
+	// so a natural config never queues update rows bound to fail. The
+	// descriptor drives the config SPA's add-forwarder form: ClubLog needs the
+	// account email + an Application Password + callsign + an Application API key.
+	forwarding.RegisterForwarderType(Type, "ClubLog",
+		[]forwarding.Action{action.Insert, action.Delete},
+		[]forwarding.CredentialField{
+			{Key: "email", Label: "Account email", Kind: "text"},
+			{Key: "password", Label: "Application password", Kind: "password",
+				Help: "A ClubLog Application Password — create one in your ClubLog settings; NOT your main account password."},
+			{Key: "callsign", Label: "Callsign", Kind: "text"},
+			{Key: "api", Label: "Application API key", Kind: "password",
+				Help: "Your ClubLog Application API key (clublog.org → API). Obtain from ClubLog; never shared in source."},
+		})
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials

@@ -992,6 +992,77 @@ func TestHandlePutConfig_WritesRigCatalogue(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_ForwardersMaskedAndMerged covers the config-SPA Forwarding
+// tab contract: a forwarder's secret is stored on PUT, MASKED on GET (only the
+// set credential keys, never the value), and a later PUT that omits the secret
+// MERGES — keeping the stored value — so an enable/disable toggle can't wipe it.
+// And a forwarder-less PUT leaves the list untouched (presence-aware).
+func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
+	srv := testServer(t)
+
+	// 1. Create a forwarder carrying a secret credential.
+	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"qrz-main","type":"qrz","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"api_key":"SECRET123"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d, body = %s", w.Code, w.Body.String())
+	}
+	cfg := srv.cfg.Snapshot()
+	if len(cfg.Forwarders) != 1 {
+		t.Fatalf("Forwarders len = %d, want 1", len(cfg.Forwarders))
+	}
+	if !strings.Contains(string(cfg.Forwarders[0].Credentials), "SECRET123") {
+		t.Fatalf("stored credentials = %s, want the secret persisted", cfg.Forwarders[0].Credentials)
+	}
+
+	// 2. GET masks the secret — only the set key, never the value.
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	getW := httptest.NewRecorder()
+	srv.handleGetConfig(getW, getReq)
+	getBody := getW.Body.String()
+	if strings.Contains(getBody, "SECRET123") {
+		t.Fatalf("GET /v1/config leaked the credential value: %s", getBody)
+	}
+	if !strings.Contains(getBody, `"credentials_set":["api_key"]`) {
+		t.Fatalf("GET did not report the set credential key: %s", getBody)
+	}
+
+	// 3. PUT changing only `enabled`, omitting credentials → secret preserved.
+	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"qrz-main","type":"qrz","enabled":false,"action_filter":["insert"]}]}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	cfg = srv.cfg.Snapshot()
+	if cfg.Forwarders[0].Enabled {
+		t.Fatal("enabled not updated to false")
+	}
+	if !strings.Contains(string(cfg.Forwarders[0].Credentials), "SECRET123") {
+		t.Fatalf("merge lost the secret on a credential-less PUT: %s", cfg.Forwarders[0].Credentials)
+	}
+
+	// 4. Presence-aware: a forwarder-less PUT leaves the list intact.
+	body3 := `{"logging_station":{"station_callsign":"M0ABC"},"station":{}}`
+	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body3))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	srv.handlePutConfig(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("PUT 3 status = %d, body = %s", w3.Code, w3.Body.String())
+	}
+	if cfg := srv.cfg.Snapshot(); len(cfg.Forwarders) != 1 {
+		t.Fatalf("forwarder-less PUT wiped the list: len = %d, want 1", len(cfg.Forwarders))
+	}
+}
+
 // TestHandlePutConfig_RejectsBadRigCatalogue confirms the write path runs the
 // same validateRigs gate as Load: a dangling default_rig_id is a 400, not a
 // persisted bad catalogue.

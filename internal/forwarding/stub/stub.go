@@ -55,10 +55,15 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
-	// The stub exercises every lifecycle action in plumbing tests.
-	forwarding.RegisterSupportedActions(Type, []forwarding.Action{
-		action.Insert, action.Update, action.Delete,
-	})
+	// The stub exercises every lifecycle action in plumbing tests. It registers
+	// a descriptor too (dev builds embed it) so the data-driven types endpoint
+	// has something to surface in development; its creds shape is the stub's own.
+	forwarding.RegisterForwarderType(Type, "Stub (testing)",
+		[]forwarding.Action{action.Insert, action.Update, action.Delete},
+		[]forwarding.CredentialField{
+			{Key: "mode", Label: "Mode", Kind: "text",
+				Help: "Stub behaviour mode (dev/testing only)."},
+		})
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials

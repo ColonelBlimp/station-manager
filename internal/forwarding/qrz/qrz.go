@@ -99,10 +99,14 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
-	// QRZ's Logbook API supports the full insert/update/delete lifecycle.
-	forwarding.RegisterSupportedActions(Type, []forwarding.Action{
-		action.Insert, action.Update, action.Delete,
-	})
+	// QRZ's Logbook API supports the full insert/update/delete lifecycle. The
+	// descriptor drives the config SPA's add-forwarder form: one API-key field.
+	forwarding.RegisterForwarderType(Type, "QRZ Logbook",
+		[]forwarding.Action{action.Insert, action.Update, action.Delete},
+		[]forwarding.CredentialField{
+			{Key: "api_key", Label: "API key", Kind: "password",
+				Help: "Your QRZ Logbook API key (Logbook → Settings → enable API access). Per-logbook."},
+		})
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials

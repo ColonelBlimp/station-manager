@@ -249,3 +249,93 @@ func TestRegisterDefaultRetry_PanicsOnInvalidConfig(t *testing.T) {
 		})
 	}
 }
+
+// ---- RegisterForwarderType / ForwarderTypes ----
+
+func TestRegisterForwarderType_And_ForwarderTypes(t *testing.T) {
+	RegisterForwarderType("fwdtype-ok", "OK Forwarder",
+		[]Action{action.Insert, action.Delete},
+		[]CredentialField{{Key: "api", Label: "API", Kind: "password", Help: "h"}})
+
+	// The supported-action set is recorded too (delegated to the shared path), so
+	// the action_filter defaulting / validation keep working for this type.
+	got, ok := SupportedActionsFor("fwdtype-ok")
+	if !ok || len(got) != 2 {
+		t.Fatalf("SupportedActionsFor(fwdtype-ok) = %v,%v; want a 2-action set", got, ok)
+	}
+
+	types := ForwarderTypes()
+	for i := 1; i < len(types); i++ {
+		if types[i-1].Type > types[i].Type {
+			t.Fatalf("ForwarderTypes not sorted by type: %q before %q", types[i-1].Type, types[i].Type)
+		}
+	}
+	var d *TypeDescriptor
+	for i := range types {
+		if types[i].Type == "fwdtype-ok" {
+			d = &types[i]
+		}
+	}
+	if d == nil {
+		t.Fatal("ForwarderTypes did not include fwdtype-ok")
+	}
+	if d.DisplayName != "OK Forwarder" {
+		t.Fatalf("DisplayName = %q, want OK Forwarder", d.DisplayName)
+	}
+	if len(d.SupportedActions) != 2 {
+		t.Fatalf("SupportedActions = %v, want 2", d.SupportedActions)
+	}
+	if len(d.CredentialFields) != 1 || d.CredentialFields[0].Key != "api" ||
+		d.CredentialFields[0].Kind != "password" {
+		t.Fatalf("CredentialFields = %+v, want one password field 'api'", d.CredentialFields)
+	}
+
+	// Returned slices are copies — mutating them can't corrupt the registry.
+	d.CredentialFields[0].Key = "mutated"
+	if again := ForwarderTypes(); func() bool {
+		for _, x := range again {
+			if x.Type == "fwdtype-ok" {
+				return x.CredentialFields[0].Key != "api"
+			}
+		}
+		return true
+	}() {
+		t.Fatal("ForwarderTypes did not return a defensive copy of credential fields")
+	}
+}
+
+func TestRegisterForwarderType_Panics(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"empty display name", func() {
+			RegisterForwarderType("ftpanic-nodisp", "", []Action{action.Insert}, nil)
+		}},
+		{"bad credential kind", func() {
+			RegisterForwarderType("ftpanic-kind", "X", []Action{action.Insert},
+				[]CredentialField{{Key: "k", Label: "K", Kind: "secret"}})
+		}},
+		{"empty credential key", func() {
+			RegisterForwarderType("ftpanic-key", "X", []Action{action.Insert},
+				[]CredentialField{{Key: "", Label: "K", Kind: "text"}})
+		}},
+		{"duplicate credential key", func() {
+			RegisterForwarderType("ftpanic-dupkey", "X", []Action{action.Insert},
+				[]CredentialField{{Key: "k", Label: "A", Kind: "text"}, {Key: "k", Label: "B", Kind: "text"}})
+		}},
+		{"empty type (delegated)", func() {
+			RegisterForwarderType("", "X", []Action{action.Insert}, nil)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: expected panic", c.name)
+				}
+			}()
+			c.fn()
+		})
+	}
+}
