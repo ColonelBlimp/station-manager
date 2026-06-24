@@ -17,6 +17,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
@@ -75,119 +76,98 @@ func resolveSubmitUUID(supplied string, preserve bool) string {
 	return utils.NewUUIDv7()
 }
 
-// submit is the shared implementation. isImport marks the trusted import/restore
-// path (SubmitImport) and drives every divergence from a live/public submit:
-// it preserves a valid supplied UUIDv7 (vs. always minting), relaxes the
-// logbook-callsign match (a historical/mixed log may carry a different
-// callsign), and enqueues upload rows only for forwarders named in forwardTo
-// (default none) — importing a historical logbook must never auto-upload
-// (retrospective backfill is operator-driven, never automatic; ADR 0022).
-func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string) (SubmitResult, error) {
-	const op errors.Op = "qsoservice.Submit"
+// prepareQso runs all of a submit's validation + normalization for one ADIF
+// record and returns an insert-ready Qso (with DedupeKey + UUID set) plus its
+// dedupe key. It performs NO database access — the logbook callsign is passed in
+// (the caller looks it up: submit once per record, the bulk importer once for
+// the whole run, hoisting that query out of its per-record loop). A caller-facing
+// validation failure is returned as a *SubmitError. Shared by the live submit
+// path and SubmitImportBatch so both validate IDENTICALLY (no drift).
+func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign string, force, isImport bool) (types.Qso, string, error) {
+	const op errors.Op = "qsoservice.prepareQso"
 
 	// ---- Validate required fields ----
 	call := strings.ToUpper(strings.TrimSpace(rec.Call))
 	if call == "" {
-		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "CALL is required"}
+		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "CALL is required"}
 	}
 	if !IsValidCallsign(call) {
-		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "CALL must be 3-32 characters and contain at least one digit"}
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "CALL must be 3-32 characters and contain at least one digit"}
 	}
 
 	band := strings.ToLower(strings.TrimSpace(rec.Band))
 	if band == "" {
-		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "BAND is required"}
+		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "BAND is required"}
 	}
 
 	mode := strings.ToUpper(strings.TrimSpace(rec.Mode))
 	if mode == "" {
-		// Try to resolve from submode
 		if sub := strings.TrimSpace(rec.Submode); sub != "" {
 			if resolved, ok := modes.GetModeBySubmode(sub); ok {
 				mode = resolved.String()
 			}
 		}
 		if mode == "" {
-			return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "MODE is required"}
+			return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "MODE is required"}
 		}
 	}
 
 	qsoDate := strings.TrimSpace(rec.QsoDate)
 	if qsoDate == "" {
-		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "QSO_DATE is required"}
+		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "QSO_DATE is required"}
 	}
 
 	timeOn := strings.TrimSpace(rec.TimeOn)
 	if timeOn == "" {
-		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "TIME_ON is required"}
+		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "TIME_ON is required"}
 	}
 
 	stationCallsign := strings.ToUpper(strings.TrimSpace(rec.StationCallsign))
 	if stationCallsign == "" {
-		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "STATION_CALLSIGN is required"}
+		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "STATION_CALLSIGN is required"}
 	}
 	if !IsValidCallsign(stationCallsign) {
-		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "STATION_CALLSIGN must be 3-32 characters and contain at least one digit"}
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "STATION_CALLSIGN must be 3-32 characters and contain at least one digit"}
 	}
 
-	// Logbook invariant (review 2026-06-19 M3). The target logbook must exist, and
-	// for live/public submits its callsign must match STATION_CALLSIGN — QRZ and
-	// other forwarders reject a QSO whose station callsign doesn't match the
-	// logbook. Enforced HERE (not only in the HTTP handler) so the FT8 e4 sink and
-	// any direct caller get the same guard, never silently storing a mismatched
-	// row. SubmitImport (isImport) relaxes the callsign match — a historical /
-	// mixed log may legitimately carry a different callsign — but still requires
-	// the logbook to exist.
-	logbookCallsign, lberr := s.DB.LogbookCallsignByIDWithContext(ctx, logbookID)
-	if lberr != nil {
-		if stderr.Is(lberr, errors.ErrNotFound) {
-			return SubmitResult{}, &SubmitError{Code: "logbook_not_found", Message: "logbook does not exist"}
-		}
-		return SubmitResult{}, errors.New(op).WithErr(lberr).WithMsg("looking up logbook callsign")
-	}
+	// Logbook-callsign match: live submits require STATION_CALLSIGN == the
+	// logbook's callsign (forwarders reject a mismatch); import relaxes it (a
+	// historical/mixed log may carry a different callsign). The logbook-exists
+	// check lives in the caller (it owns the lookup that yields logbookCallsign).
 	if !isImport && !strings.EqualFold(logbookCallsign, stationCallsign) {
-		return SubmitResult{}, &SubmitError{Code: "callsign_mismatch", Message: "STATION_CALLSIGN does not match the logbook's callsign"}
+		return types.Qso{}, "", &SubmitError{Code: "callsign_mismatch", Message: "STATION_CALLSIGN does not match the logbook's callsign"}
 	}
 
 	// ---- Validate field values ----
 	if !bands.IsValidBand(band) {
-		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("BAND %q is not a recognised band", band)}
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("BAND %q is not a recognised band", band)}
 	}
-
 	if !modes.IsValidMode(mode) {
-		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("MODE %q is not a recognised mode", mode)}
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("MODE %q is not a recognised mode", mode)}
 	}
 
 	qsoDate = utils.SanitizeDateToYYYYMMDD(qsoDate)
 	if qsoDate == "" || !utils.IsValidDateYYYYMMDD(qsoDate) {
-		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "QSO_DATE is not a valid date (expected YYYYMMDD)"}
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "QSO_DATE is not a valid date (expected YYYYMMDD)"}
 	}
 
 	timeOn = utils.SanitizeTimeToADIF(timeOn)
 	if timeOn == "" || !utils.IsValidTimeADIF(timeOn) {
-		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: "TIME_ON is not a valid time (expected HHMM or HHMMSS)"}
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "TIME_ON is not a valid time (expected HHMM or HHMMSS)"}
 	}
-	// Narrow to HHMM for storage (the schema requires length 4); accepted
-	// HHMMSS has its seconds dropped here so it doesn't fail at insert (M2).
-	// Done before the time-coherence compare below so both times are the same
-	// precision.
 	timeOn = utils.TimeToHHMM(timeOn)
 
-	// Sanitize timeOff if present
 	timeOff := utils.TimeToHHMM(utils.SanitizeTimeToADIF(strings.TrimSpace(rec.TimeOff)))
 	if timeOff == "" {
-		timeOff = timeOn // Default to timeOn if not provided
+		timeOff = timeOn
 	}
 
-	// Sanitize qsoDateOff if present
 	qsoDateOff := utils.SanitizeDateToYYYYMMDD(strings.TrimSpace(rec.QsoDateOff))
 
 	// ---- Validate time coherence ----
-	// If TIME_ON > TIME_OFF the QSO crossed midnight, which is only valid
-	// when QSO_DATE_OFF is the following day.
 	if timeOn > timeOff {
 		if qsoDateOff == "" || qsoDateOff == qsoDate {
-			return SubmitResult{}, &SubmitError{
+			return types.Qso{}, "", &SubmitError{
 				Code:    "invalid_time_range",
 				Message: "TIME_ON is after TIME_OFF without a QSO_DATE_OFF on the following day",
 			}
@@ -195,7 +175,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		onDate, _ := time.Parse("20060102", qsoDate)
 		offDate, _ := time.Parse("20060102", qsoDateOff)
 		if !offDate.Equal(onDate.AddDate(0, 0, 1)) {
-			return SubmitResult{}, &SubmitError{
+			return types.Qso{}, "", &SubmitError{
 				Code:    "invalid_time_range",
 				Message: fmt.Sprintf("QSO_DATE_OFF (%s) must be the day after QSO_DATE (%s) when TIME_ON is after TIME_OFF", qsoDateOff, qsoDate),
 			}
@@ -203,18 +183,13 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	}
 
 	// ---- Normalize frequency ----
-	// ADIF freq is MHz as a string (e.g. "14.074"). types.Qso.Freq follows
-	// the ADIF spec and stores MHz too — the kHz integer is only the DB
-	// storage unit and lives below the adapter. We keep the int-kHz form
-	// around locally for the dedupe hash (deterministic numeric
-	// representation) and format the canonical MHz string for the Qso.
 	freqStr := strings.TrimSpace(rec.Freq)
 	if freqStr == "" {
-		return SubmitResult{}, &SubmitError{Code: "missing_required_field", Message: "FREQ is required"}
+		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "FREQ is required"}
 	}
 	freqKHz, err := utils.ParseFreqMHz(freqStr)
 	if err != nil {
-		return SubmitResult{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("FREQ %q: %v", freqStr, err)}
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("FREQ %q: %v", freqStr, err)}
 	}
 	freqMHz := utils.FormatFreqMHz(freqKHz)
 
@@ -230,17 +205,11 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	qso.QsoDetails.Freq = freqMHz
 	qso.LoggingStation.StationCallsign = stationCallsign
 
-	// Country: use whatever was in the record, or empty string as fallback.
-	// The schema requires country NOT NULL, so provide a default.
 	if strings.TrimSpace(qso.ContactedStation.Country) == "" {
 		qso.ContactedStation.Country = "Unknown"
 	}
 
-	// RST defaults. The "59" voice-style default is meaningless for FT8, whose
-	// reports are SNR in dB (e.g. -10). The caller-side bare-roger path completes
-	// a QSO with no RST_RCVD decoded (the other station sent a plain RR73), so
-	// fabricating 59 there would be false log data (review M3) — leave FT8 RST
-	// empty (ADIF omits an empty report) rather than defaulting it.
+	// RST defaults (skipped for FT8, whose reports are dB SNR; see review M3).
 	if mode != "FT8" {
 		if strings.TrimSpace(qso.QsoDetails.RstSent) == "" {
 			qso.QsoDetails.RstSent = "59"
@@ -250,39 +219,63 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		}
 	}
 
-	// ---- Dedupe ----
-	// Hash input uses the int-kHz string, so the hash is deterministic
-	// regardless of how the caller wrote the MHz decimal ("7.050" /
-	// "7.0500" / "7050" all collapse to the same integer).
+	// ---- Dedupe key ----
 	dedupeKey := ComputeDedupeKey(call, band, mode, strconv.FormatInt(freqKHz, 10), qsoDate, timeOn)
-
 	if force {
-		// Force mode: generate a unique dedupe key so the UNIQUE index
-		// doesn't block the insert. The key is still a valid 64-char hex
-		// string but is not reproducible — this QSO won't be deduplicated.
+		// Force mode: a random key so the UNIQUE index never blocks the insert
+		// (this QSO won't be deduplicated).
 		nonce := make([]byte, dedupeKeyBytes)
 		if _, err = rand.Read(nonce); err != nil {
-			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("generating force nonce")
+			return types.Qso{}, "", errors.New(op).WithErr(err).WithMsg("generating force nonce")
 		}
 		dedupeKey = hex.EncodeToString(nonce)
-	} else {
-		existing, err := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
-		if err == nil {
-			return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
+	}
+	qso.DedupeKey = dedupeKey
+
+	// UUID policy (ADR 0016; H1): public Submit always mints; import preserves a
+	// valid supplied UUIDv7 (carried onto qso.UUID by RecordToQso).
+	qso.UUID = resolveSubmitUUID(qso.UUID, isImport)
+
+	return qso, dedupeKey, nil
+}
+
+// submit is the shared implementation. isImport marks the trusted import/restore
+// path (SubmitImport) and drives every divergence from a live/public submit:
+// it preserves a valid supplied UUIDv7 (vs. always minting), relaxes the
+// logbook-callsign match (a historical/mixed log may carry a different
+// callsign), and enqueues upload rows only for forwarders named in forwardTo
+// (default none) — importing a historical logbook must never auto-upload
+// (retrospective backfill is operator-driven, never automatic; ADR 0022).
+func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, force, isImport bool, forwardTo []string) (SubmitResult, error) {
+	const op errors.Op = "qsoservice.Submit"
+
+	// Logbook must exist; the callsign-match check (live submits only) lives in
+	// prepareQso, which takes the callsign as a param. Looked up once here per
+	// submit (SubmitImportBatch hoists this same lookup out of its per-record loop).
+	logbookCallsign, lberr := s.DB.LogbookCallsignByIDWithContext(ctx, logbookID)
+	if lberr != nil {
+		if stderr.Is(lberr, errors.ErrNotFound) {
+			return SubmitResult{}, &SubmitError{Code: "logbook_not_found", Message: "logbook does not exist"}
 		}
-		if !stderr.Is(err, errors.ErrNotFound) {
-			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("dedupe check failed")
-		}
+		return SubmitResult{}, errors.New(op).WithErr(lberr).WithMsg("looking up logbook callsign")
 	}
 
-	qso.DedupeKey = dedupeKey
-	// UUID policy (ADR 0016; review 2026-06-04 H1): public Submit always mints;
-	// SubmitImport preserves a valid supplied UUIDv7 (carried onto qso.UUID by
-	// RecordToQso) so canonical identity round-trips on restore/import. Dedupe
-	// is by content key (above), not UUID, so re-importing identical QSOs still
-	// dedupes before reaching here; a preserved UUID that collides with a
-	// different existing row is an out-of-scope edge surfaced by the insert.
-	qso.UUID = resolveSubmitUUID(qso.UUID, isImport)
+	qso, dedupeKey, err := s.prepareQso(rec, logbookID, logbookCallsign, force, isImport)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+	call := qso.ContactedStation.Call
+
+	// ---- Dedupe ----
+	if !force {
+		existing, derr := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
+		if derr == nil {
+			return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
+		}
+		if !stderr.Is(derr, errors.ErrNotFound) {
+			return SubmitResult{}, errors.New(op).WithErr(derr).WithMsg("dedupe check failed")
+		}
+	}
 
 	// ---- Atomic write: QSO + upload-queue rows ----
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
@@ -358,11 +351,11 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Str("uuid", qso.UUID).
 		Int64("logbook_id", logbookID).
 		Str("call", call).
-		Str("qso_date", qsoDate).
-		Str("time_on", timeOn).
-		Str("freq_mhz", freqMHz).
-		Str("band", band).
-		Str("mode", mode).
+		Str("qso_date", qso.QsoDetails.QsoDate).
+		Str("time_on", qso.QsoDetails.TimeOn).
+		Str("freq_mhz", qso.QsoDetails.Freq).
+		Str("band", qso.QsoDetails.Band).
+		Str("mode", qso.QsoDetails.Mode).
 		Msg("QSO stored")
 
 	s.Hub.Publish(events.NameQsoStored, events.QsoStoredPayload{

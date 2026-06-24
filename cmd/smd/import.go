@@ -217,77 +217,54 @@ func runImport(args []string) error {
 		Bool("dry_run", dryRun).
 		Msg("import starting")
 
-	// ---- Iterate records.
-	type errLine struct {
-		index  int
-		call   string
-		reason string
+	// ---- Bulk import.
+	// Normalize modes in place, then write through qsoservice.SubmitImportBatch:
+	// chunked transactions + a hoisted logbook lookup + deduped contacted_station
+	// upserts, far cheaper than per-record submit on a big logbook. Import
+	// preserves each record's source UUID (APP_SM_QSO_ID) when valid (ADR 0016).
+	// forwardTo is empty by default, so no upload rows are enqueued unless
+	// --forward named a forwarder.
+	for i := range parsed.Records {
+		normalizeImportedMode(&parsed.Records[i])
 	}
-	stored := 0
-	duplicate := 0
-	var errLines []errLine
 
 	ctx := context.Background()
+	total := len(parsed.Records)
 	start := time.Now()
 
-	for i, rec := range parsed.Records {
-		normalizeImportedMode(&rec)
-		// Import preserves the source UUID (APP_SM_QSO_ID) when present + valid,
-		// so a Station Manager export restores its canonical identities (ADR
-		// 0016; review 2026-06-04 H1). The public POST /v1/qso path uses Submit
-		// (always mints) instead. forwardTo is empty by default, so no upload
-		// rows are enqueued unless --forward named a forwarder.
-		res, serr := qsoSvc.SubmitImport(ctx, logbookID, rec, false, forwardTo)
-		if serr != nil {
-			if sub := qsoservice.IsSubmitError(serr); sub != nil {
-				errLines = append(errLines, errLine{
-					index:  i,
-					call:   rec.Call,
-					reason: sub.Code + ": " + sub.Message,
-				})
-			} else {
-				errLines = append(errLines, errLine{
-					index:  i,
-					call:   rec.Call,
-					reason: serr.Error(),
-				})
+	res, ierr := qsoSvc.SubmitImportBatch(ctx, logbookID, parsed.Records, forwardTo, 0,
+		func(done int, r qsoservice.ImportBatchResult) {
+			if progressEvery <= 0 {
+				return
 			}
-			continue
-		}
-		if res.Status == "duplicate" {
-			duplicate++
-		} else {
-			stored++
-		}
-
-		if progressEvery > 0 && (i+1)%progressEvery == 0 {
-			elapsed := time.Since(start)
-			rate := float64(i+1) / elapsed.Seconds()
+			rate := float64(done) / time.Since(start).Seconds()
 			fmt.Fprintf(os.Stderr, "  %d/%d (stored=%d, duplicate=%d, errors=%d) — %.1f rec/s\n",
-				i+1, len(parsed.Records), stored, duplicate, len(errLines), rate)
-		}
+				done, total, r.Stored, r.Duplicate, len(r.Errors), rate)
+		})
+	if ierr != nil {
+		return errors.New(op).WithErr(ierr).WithMsg("bulk import failed")
 	}
 
 	elapsed := time.Since(start)
-	fmt.Fprintf(os.Stdout, "imported %d records in %s\n", len(parsed.Records), elapsed.Round(time.Millisecond))
-	fmt.Fprintf(os.Stdout, "  stored:     %d\n", stored)
-	fmt.Fprintf(os.Stdout, "  duplicate:  %d\n", duplicate)
-	fmt.Fprintf(os.Stdout, "  errors:     %d\n", len(errLines))
+	fmt.Fprintf(os.Stdout, "imported %d records in %s\n", total, elapsed.Round(time.Millisecond))
+	fmt.Fprintf(os.Stdout, "  stored:     %d\n", res.Stored)
+	fmt.Fprintf(os.Stdout, "  duplicate:  %d\n", res.Duplicate)
+	fmt.Fprintf(os.Stdout, "  errors:     %d\n", len(res.Errors))
 	if len(forwardTo) > 0 {
 		fmt.Fprintf(os.Stdout, "  queued for upload to: %s\n", strings.Join(forwardTo, ", "))
 	} else {
 		fmt.Fprintln(os.Stdout, "  uploads: none (use --forward to queue a forwarder)")
 	}
-	if len(errLines) > 0 {
+	if len(res.Errors) > 0 {
 		fmt.Fprintln(os.Stdout, "errored records (first 20):")
-		limit := len(errLines)
+		limit := len(res.Errors)
 		if limit > 20 {
 			limit = 20
 		}
-		for _, e := range errLines[:limit] {
-			fmt.Fprintf(os.Stdout, "  #%d %s: %s\n", e.index, e.call, e.reason)
+		for _, e := range res.Errors[:limit] {
+			fmt.Fprintf(os.Stdout, "  #%d %s: %s\n", e.Index, e.Call, e.Reason)
 		}
-		return errors.New(op).WithMsgf("%d record(s) failed to import", len(errLines))
+		return errors.New(op).WithMsgf("%d record(s) failed to import", len(res.Errors))
 	}
 	return nil
 }

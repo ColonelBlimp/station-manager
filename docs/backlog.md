@@ -494,6 +494,38 @@ when it ships — don't let this rot into a graveyard.
   also flow anywhere outbound (e.g. forwarder profiles) or stays purely local
   contact info. Deferred — no concrete consumer yet.
 
+- **Outbound UDP telemetry stream (WSJT-X-protocol-compatible).**
+  Filed 2026-06-24, prompted by an external query about feeding WSJT-X data into
+  Prometheus/Loki/Grafana. Idea: SM **emits** a UDP datagram stream of its FT8
+  decodes, QSO-logged events, and rig status, the way WSJT-X's UDP Message
+  Protocol does — so the existing ham tooling ecosystem (GridTracker, JTAlert,
+  Grafana/Prometheus exporters, the operator-observability stacks people build)
+  works against SM as the FT8 engine for free. Turns SM from a walled garden into
+  a first-class citizen of the UDP-consuming tooling world; a real interop
+  differentiator.
+  - **Building blocks already exist:** `internal/events` (the hub) + the SSE
+    surface (`/v1/rig/events`, `/v1/ft8/events`, `ft8-logged`, `rig-state`)
+    already produce + fan out exactly this data — a UDP emitter is just another
+    hub sink. `internal/pskreporter` already proves the outbound-UDP,
+    never-block-the-decode-loop pattern (fire-and-forget, I/O off the decode
+    goroutine). Architecturally a clean opt-in egress subsystem beside
+    bridge/ft8/pskreporter; config-gated, default off.
+  - **The decision (wants an ADR when it lands):** emit the **WSJT-X UDP protocol**
+    (Qt QDataStream, big-endian, the Status/Decode/QSOLogged schema) for instant
+    ecosystem compatibility — vs an SM-native JSON-over-UDP that's trivial to
+    build but nothing consumes. Lean WSJT-X-compatible; the whole value is riding
+    existing tooling. Cost: implement + MAINTAIN QDataStream encoding against a
+    schema that's WSJT-X's to change (a maintenance tail — hence the ADR).
+  - **Hard constraints to bake in:** (1) **emit-only** — expose only the OUTBOUND
+    subset; the WSJT-X protocol's inbound control side (Reply / HaltTx / Replay)
+    is a remote-rig-control surface that collides with the attended-only FT8
+    invariant and the existing daemon-owned command path. Telemetry out, never
+    control in. (2) **never block** decode/TX — same discipline as PSK Reporter
+    (send off the decode path, drop on a full buffer, fail-soft).
+  - Meaty subsystem; **later**, after SM is releasable. Closes the loop with the
+    external WSJT-X→Grafana request (they could point existing WSJT-X-consuming
+    tools straight at SM).
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
