@@ -370,11 +370,13 @@ when it ships — don't let this rot into a graveyard.
   rig setup, identity — not just the doc. Design initiative; pairs with the
   fresh-install config-defaults bug above.
 
-- **FT8 `cmd/smd` / decode log: no WSJT-X-style `ALL.TXT` append-only decode log.**
-  Filed from a 2026-06-22 dogfood question. SM does not write an `ALL.TXT`
-  equivalent today; the FT8 wrapper logs each decode to the **daemon log** only.
-  Decide: treat the daemon log as sufficient (non-issue) or add a real
-  append-only per-decode log file (and document where it lives).
+- ~~**FT8 `cmd/smd` / decode log: no WSJT-X-style `ALL.TXT` append-only decode log.**~~
+  **SHIPPED 2026-06-23.** Filed from a 2026-06-22 dogfood question. Resolved by
+  the `ft8.decode_log` feature (`internal/ft8/decodelog.go`): a fail-soft,
+  append-only JTDX `ALL.TXT`-style writer logging both RX decodes and our own TX
+  rungs, on its own queued goroutine (never blocks decode/TX). Off by default
+  (grows unbounded like WSJT-X's `ALL.TXT`); default path
+  `$SM_WORKING_DIR/log/ft8-all.txt`. Documented in `docs/ft8.md` §"Decode log".
 
 - **FT8 Operate pile-up: up-arrow to reorder callsigns in the answer queue.**
   Filed 2026-06-20. Add a left-side up-arrow on each pile-up entry to move a
