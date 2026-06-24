@@ -44,7 +44,10 @@ export interface StationFields {
 
 export interface Ft8DisplayFields {
     history_max?: number;
-    feed_mode?: 'accumulate' | 'single';
+    // 'accumulate' | 'single' — typed as string because the daemon is the
+    // validator (a bogus value resolves to the default), which keeps the FT8
+    // form's two-way binding free of union-narrowing friction.
+    feed_mode?: string;
     highlight_unworked?: string;
     highlight_worked?: string;
     highlight_calling?: string;

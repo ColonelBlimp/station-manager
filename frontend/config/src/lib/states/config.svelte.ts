@@ -16,6 +16,7 @@ import {
     type ConfigOutcome,
     type ConfigResponse,
     type ForwarderInfo,
+    type Ft8DisplayFields,
     type LoggingStationFields,
 } from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
@@ -156,11 +157,39 @@ function stationFormFrom(ls: LoggingStationFields): StationForm {
     };
 }
 
-// FT8 highlight-colour defaults — mirror the daemon's ResolveFt8Display so a
-// fresh config (block omitted) still shows the real values in the pickers.
+// FT8 Band Activity display-pref defaults — mirror the daemon's
+// ResolveFt8Display so a fresh config (block omitted) still shows real values.
+// GET serves ft8_display RESOLVED, so these are only the cold-start fallback.
 const DEFAULT_HIGHLIGHT_UNWORKED = '#15803d';
 const DEFAULT_HIGHLIGHT_WORKED = '#9ca3af';
 const DEFAULT_HIGHLIGHT_CALLING = '#b45309';
+const DEFAULT_FT8_HISTORY_MAX = 100;
+const DEFAULT_FT8_FEED_MODE = 'accumulate';
+
+// Ft8Form — the editable FT8 Band Activity display prefs (the whole ft8_display
+// block). feed_mode is a plain string (the daemon validates + defaults a bogus
+// value); history_max is clamped daemon-side (10..2000).
+export interface Ft8Form {
+    history_max: number;
+    feed_mode: string;
+    highlight_unworked: string;
+    highlight_worked: string;
+    highlight_calling: string;
+    cq_to_top: boolean;
+    hide_hashed_calls: boolean;
+}
+
+function ft8FormFrom(d: Ft8DisplayFields | undefined): Ft8Form {
+    return {
+        history_max: d?.history_max ?? DEFAULT_FT8_HISTORY_MAX,
+        feed_mode: d?.feed_mode ?? DEFAULT_FT8_FEED_MODE,
+        highlight_unworked: d?.highlight_unworked ?? DEFAULT_HIGHLIGHT_UNWORKED,
+        highlight_worked: d?.highlight_worked ?? DEFAULT_HIGHLIGHT_WORKED,
+        highlight_calling: d?.highlight_calling ?? DEFAULT_HIGHLIGHT_CALLING,
+        cq_to_top: d?.cq_to_top ?? false,
+        hide_hashed_calls: d?.hide_hashed_calls ?? false,
+    };
+}
 
 class ConfigState {
     /** False until the first load() round-trip settles (success or error). */
@@ -202,16 +231,14 @@ class ConfigState {
     /** Last Forwarding-save status: 'ok', an error message, or null (idle/in-flight). */
     forwardersStatus: string | null = $state(null);
 
-    // FT8 highlight-colour holding place (moved out of the logging SPA's FT8
-    // Settings tab). Editable copies the pickers bind to; hydrated from
-    // config.ft8_display on load and re-hydrated from the PUT response on save.
-    highlightUnworked: string = $state(DEFAULT_HIGHLIGHT_UNWORKED);
-    highlightWorked: string = $state(DEFAULT_HIGHLIGHT_WORKED);
-    highlightCalling: string = $state(DEFAULT_HIGHLIGHT_CALLING);
-    /** True while a colour save PUT is in flight. */
-    savingColours: boolean = $state(false);
-    /** Last colour-save status: 'ok', an error message, or null (idle/in-flight). */
-    coloursStatus: string | null = $state(null);
+    // FT8 tab — the full Band Activity display prefs (colours + row cap + feed
+    // mode + toggles), hydrated from config.ft8_display on load and re-hydrated
+    // from the PUT response on save. Bound directly by the FT8 tab's inputs.
+    ft8Form: Ft8Form = $state(ft8FormFrom(undefined));
+    /** True while an FT8-display save PUT is in flight. */
+    savingFt8: boolean = $state(false);
+    /** Last FT8-save status: 'ok', an error message, or null (idle/in-flight). */
+    ft8Status: string | null = $state(null);
 
     // Station tab — editable MY_* set-once fields, hydrated from
     // config.logging_station on load and re-hydrated from the PUT response on
@@ -248,7 +275,7 @@ class ConfigState {
         const errs: string[] = [];
         if (cfg.kind === 'ok') {
             this.config = cfg.config;
-            this.hydrateColours();
+            this.ft8Form = ft8FormFrom(this.config.ft8_display);
             this.stationForm = stationFormFrom(this.config.logging_station);
             this.forwarders = this.config.forwarders ?? [];
             this.hydrateForwarders();
@@ -354,43 +381,44 @@ class ConfigState {
         return this.catalogue.find((c) => c.id === model);
     }
 
-    /** Copy the resolved highlight colours from config into the editable fields. */
-    private hydrateColours(): void {
-        const fd = this.config?.ft8_display;
-        this.highlightUnworked = fd?.highlight_unworked ?? DEFAULT_HIGHLIGHT_UNWORKED;
-        this.highlightWorked = fd?.highlight_worked ?? DEFAULT_HIGHLIGHT_WORKED;
-        this.highlightCalling = fd?.highlight_calling ?? DEFAULT_HIGHLIGHT_CALLING;
+    /** True when the FT8 display form diverges from the loaded config. */
+    get ft8Dirty(): boolean {
+        if (!this.config) return false;
+        return (
+            JSON.stringify(this.ft8Form) !== JSON.stringify(ft8FormFrom(this.config.ft8_display))
+        );
     }
 
     /**
-     * Persist the three FT8 highlight colours via PUT /v1/config. Echoes
-     * logging_station + station verbatim (the daemon overwrites them
-     * unconditionally — see ConfigPatch) and sends the FULL ft8_display block
-     * (the daemon replaces it raw), changing only the three colours and
-     * round-tripping the rest. Re-hydrates from the response on success.
+     * Persist the FT8 Band Activity display prefs via PUT /v1/config. Sends the
+     * FULL ft8_display block (the daemon replaces it raw, then clamps/validates +
+     * returns it resolved) and echoes logging_station/station verbatim (the
+     * daemon overwrites those unconditionally — see ConfigPatch). Re-hydrates from
+     * the response on success.
      */
-    async saveColours(): Promise<void> {
-        if (this.savingColours || !this.config) return;
-        this.savingColours = true;
-        this.coloursStatus = null;
+    async saveFt8(): Promise<void> {
+        if (this.savingFt8 || !this.config || !this.ft8Dirty) return;
+        this.savingFt8 = true;
+        this.ft8Status = null;
         const outcome: ConfigOutcome = await putConfig({
             logging_station: this.config.logging_station,
             station: this.config.station,
-            ft8_display: {
-                ...this.config.ft8_display,
-                highlight_unworked: this.highlightUnworked,
-                highlight_worked: this.highlightWorked,
-                highlight_calling: this.highlightCalling,
-            },
+            ft8_display: { ...this.ft8Form },
         });
         if (outcome.kind === 'ok') {
             this.config = outcome.config;
-            this.hydrateColours();
-            this.coloursStatus = 'ok';
+            this.ft8Form = ft8FormFrom(this.config.ft8_display);
+            this.ft8Status = 'ok';
         } else {
-            this.coloursStatus = outcomeMessage(outcome);
+            this.ft8Status = outcomeMessage(outcome);
         }
-        this.savingColours = false;
+        this.savingFt8 = false;
+    }
+
+    /** Revert the FT8 display form to the loaded config (discard unsaved edits). */
+    cancelFt8(): void {
+        if (this.config) this.ft8Form = ft8FormFrom(this.config.ft8_display);
+        this.ft8Status = null;
     }
 
     /**
