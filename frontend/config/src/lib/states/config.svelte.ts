@@ -10,8 +10,48 @@
     as the editor surfaces are built.
 */
 
-import { fetchConfig, putConfig, type ConfigOutcome, type ConfigResponse } from '../api/config';
+import {
+    fetchConfig,
+    putConfig,
+    type ConfigOutcome,
+    type ConfigResponse,
+    type LoggingStationFields,
+} from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
+
+// StationForm — the editable set-once LoggingStation MY_* fields the config
+// SPA's Station tab owns (operational identity — callsign / operator / grid —
+// stays in the logging SPA; design 2026-06-24). All LoggingStation fields are
+// strings daemon-side, so the form is all strings.
+export interface StationForm {
+    my_country: string;
+    my_dxcc: string;
+    my_cq_zone: string;
+    my_itu_zone: string;
+    my_altitude: string;
+    my_street: string;
+    my_city: string;
+    my_postal_code: string;
+    my_antenna: string;
+    my_morse_key_type: string;
+    my_morse_key_info: string;
+}
+
+function stationFormFrom(ls: LoggingStationFields): StationForm {
+    return {
+        my_country: ls.my_country ?? '',
+        my_dxcc: ls.my_dxcc ?? '',
+        my_cq_zone: ls.my_cq_zone ?? '',
+        my_itu_zone: ls.my_itu_zone ?? '',
+        my_altitude: ls.my_altitude ?? '',
+        my_street: ls.my_street ?? '',
+        my_city: ls.my_city ?? '',
+        my_postal_code: ls.my_postal_code ?? '',
+        my_antenna: ls.my_antenna ?? '',
+        my_morse_key_type: ls.my_morse_key_type ?? '',
+        my_morse_key_info: ls.my_morse_key_info ?? '',
+    };
+}
 
 // FT8 highlight-colour defaults — mirror the daemon's ResolveFt8Display so a
 // fresh config (block omitted) still shows the real values in the pickers.
@@ -44,6 +84,24 @@ class ConfigState {
     /** Last colour-save status: 'ok', an error message, or null (idle/in-flight). */
     coloursStatus: string | null = $state(null);
 
+    // Station tab — editable MY_* set-once fields, hydrated from
+    // config.logging_station on load and re-hydrated from the PUT response on
+    // save. Bound directly by the Station tab's inputs.
+    stationForm: StationForm = $state(stationFormFrom({}));
+    /** True while a Station save PUT is in flight. */
+    savingStation: boolean = $state(false);
+    /** Last Station-save status: 'ok', an error message, or null (idle/in-flight). */
+    stationStatus: string | null = $state(null);
+
+    /** True when the Station form diverges from the loaded config (drives Save/Cancel). */
+    get stationDirty(): boolean {
+        if (!this.config) return false;
+        return (
+            JSON.stringify(this.stationForm) !==
+            JSON.stringify(stationFormFrom(this.config.logging_station))
+        );
+    }
+
     /**
      * Fetch /v1/config and /v1/rigs concurrently and hydrate. Either failing
      * sets `error` but whatever succeeded is still applied, so a partially
@@ -56,6 +114,7 @@ class ConfigState {
         if (cfg.kind === 'ok') {
             this.config = cfg.config;
             this.hydrateColours();
+            this.stationForm = stationFormFrom(this.config.logging_station);
         } else {
             errs.push(`config: ${outcomeMessage(cfg)}`);
         }
@@ -113,6 +172,38 @@ class ConfigState {
             this.coloursStatus = outcomeMessage(outcome);
         }
         this.savingColours = false;
+    }
+
+    /**
+     * Persist the Station tab's MY_* edits via PUT /v1/config. The daemon
+     * overwrites `logging_station` unconditionally, so we merge the form onto
+     * the FULL logging_station block from the last GET (round-tripping the
+     * operational fields — callsign / operator / grid — the logging SPA owns)
+     * and echo `station` verbatim. `ft8_display` / `qsl` are presence-aware, so
+     * omitting them leaves those blocks untouched. Re-hydrates on success.
+     */
+    async saveStation(): Promise<void> {
+        if (this.savingStation || !this.config || !this.stationDirty) return;
+        this.savingStation = true;
+        this.stationStatus = null;
+        const outcome: ConfigOutcome = await putConfig({
+            logging_station: { ...this.config.logging_station, ...this.stationForm },
+            station: this.config.station,
+        });
+        if (outcome.kind === 'ok') {
+            this.config = outcome.config;
+            this.stationForm = stationFormFrom(this.config.logging_station);
+            this.stationStatus = 'ok';
+        } else {
+            this.stationStatus = outcomeMessage(outcome);
+        }
+        this.savingStation = false;
+    }
+
+    /** Revert the Station form to the loaded config (discard unsaved edits). */
+    cancelStation(): void {
+        if (this.config) this.stationForm = stationFormFrom(this.config.logging_station);
+        this.stationStatus = null;
     }
 }
 

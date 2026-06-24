@@ -25,6 +25,13 @@ export interface LoggingStationFields {
     my_cq_zone?: string;
     my_itu_zone?: string;
     my_dxcc?: string;
+    my_country?: string;
+    my_altitude?: string;
+    my_street?: string;
+    my_city?: string;
+    my_postal_code?: string;
+    my_morse_key_type?: string;
+    my_morse_key_info?: string;
 }
 
 export interface StationFields {

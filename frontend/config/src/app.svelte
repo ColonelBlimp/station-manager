@@ -2,6 +2,7 @@
     import { onMount } from 'svelte';
     import { configState } from './lib/states/config.svelte';
     import TabPlaceholder from './lib/ui/TabPlaceholder.svelte';
+    import StationTab from './lib/ui/tabs/StationTab.svelte';
 
     // ── Tab shell ────────────────────────────────────────────────────────────
     // The config SPA is a category-tab shell (design 2026-06-24): one tab per
@@ -108,29 +109,16 @@
         </div>
     </div>
 
-    <!-- Active tab body -->
+    <!-- Active tab body. Each tab owns its own save footer (the Rigs tab writes
+         via rig CRUD, the rest via PUT /v1/config), so there's no shared shell
+         footer. Tabs not yet built show a placeholder. -->
     <main class="flex-1 px-6 py-6">
         <div id={`panel-${activeTab}`} role="tabpanel" aria-labelledby={`tab-${activeTab}`}>
-            <TabPlaceholder title={activeTitle} />
+            {#if activeTab === 'station'}
+                <StationTab />
+            {:else}
+                <TabPlaceholder title={activeTitle} />
+            {/if}
         </div>
     </main>
-
-    <!-- Per-tab footer. Save/Cancel are dirty-tracked per tab once the panels
-         land; disabled here because the placeholder bodies have nothing to save. -->
-    <footer class="flex items-center justify-end gap-3 border-t border-gray-300 bg-white px-6 py-3">
-        <button
-            type="button"
-            disabled
-            class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-            Cancel
-        </button>
-        <button
-            type="button"
-            disabled
-            class="cursor-pointer rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-            Save
-        </button>
-    </footer>
 </div>

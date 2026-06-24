@@ -474,6 +474,23 @@ when it ships — don't let this rot into a graveyard.
   theming all SPAs at once. Likely also revisits the logging SPA's own layout for
   consistency. Not now — flagged for when the theming workstream starts.
 
+- **Operator email address — config Station tab field (needs a daemon home).**
+  Filed 2026-06-24. Surfaced while building the config-SPA Station tab: there's
+  no operator/station email field anywhere today. It **can't ride
+  `logging_station`** — that block strictly follows ADIF, and ADIF has no
+  `MY_EMAIL`. So a working field needs a small daemon-side home; the leading
+  option is a new SM config string **`operator_email`** (served on `/v1/config`
+  GET, set via PUT, echoed like the rest), with the input dropped into the
+  Station tab's Postal-address section. Rejected reusing `mailer.default_recipient`
+  (that's "where session-log emails go," not the operator's contact address —
+  don't overload). Related context (operator): **QRZ.com exposes an email address
+  and uses it to populate the ADIF `EMAIL` field** — note that ADIF `EMAIL` is the
+  *contacted station's* address (already modelled at `types.ContactedStation.Email`
+  + filled by QRZ enrichment), distinct from the operator's *own* email this item
+  is about. Worth checking, when this lands, whether the operator email should
+  also flow anywhere outbound (e.g. forwarder profiles) or stays purely local
+  contact info. Deferred — no concrete consumer yet.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
