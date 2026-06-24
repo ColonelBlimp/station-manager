@@ -413,11 +413,17 @@ class ConfigState {
         return (unused ?? this.catalogue[0])?.id ?? '';
     }
 
-    /** Append a blank rig with the given model (next free id) and select it. */
+    /** Append a blank rig with the given model (next free id) and select it. The
+     *  first rig added (when no valid active rig exists yet — e.g. a fresh
+     *  install) becomes the active rig, so the save carries a resolvable
+     *  default_rig_id rather than a dangling 0 that validateRigs rejects. */
     addRig(model: string): void {
         const nextId = this.rigDraft.reduce((m, r) => Math.max(m, r.id), 0) + 1;
         this.rigDraft = [...this.rigDraft, withAudio({ id: nextId, model, port: '' })];
         this.selectedRigId = nextId;
+        if (!this.rigDraft.some((r) => r.id === this.draftDefaultRigId)) {
+            this.draftDefaultRigId = nextId;
+        }
     }
 
     /** Remove a rig from the draft; re-point default/selection if it was either. */
@@ -725,11 +731,18 @@ class ConfigState {
     }
 }
 
-/** A non-'ok' outcome's display string (the two API wrappers share these arms). */
+/** A non-'ok' outcome's display string (the two API wrappers share these arms).
+ *  A server fault carries the daemon's descriptive {code, message} (e.g. a config
+ *  validation finding) — show the MESSAGE so the footer says what's actually
+ *  wrong, with the code in parentheses for reference. Transport outcomes
+ *  (aborted / network) carry only a message. */
 function outcomeMessage(
     o: { kind: 'server'; code: string; message: string } | { kind: string; message: string }
 ): string {
-    return 'code' in o ? `${o.kind} (${o.code})` : `${o.kind}: ${o.message}`;
+    if ('code' in o) {
+        return o.message ? `${o.message} (${o.code})` : `${o.kind} (${o.code})`;
+    }
+    return `${o.kind}: ${o.message}`;
 }
 
 export const configState = new ConfigState();
