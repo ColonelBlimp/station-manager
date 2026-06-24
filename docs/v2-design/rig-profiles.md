@@ -167,8 +167,10 @@ items below are the underlying daemon pieces that design draws on.
   consume it for the Port/Audio dropdowns.
 - **Profile-editor UI** — the Rigs tab (master-detail; see `frontend-spa.md`).
   Dropdowns of discovered hardware; pick model from known rigdefs; pick port +
-  audio device from discovered lists. Operator never types an identifier. **Gated
-  on the catalogue write path** (none today).
+  audio device from discovered lists. Operator never types an identifier. **Step 1
+  BUILT 2026-06-24** (core editor + the catalogue write path via presence-aware
+  `rigs`/`default_rig_id` on `PUT /v1/config`); Mode Mappings + Serial overrides
+  sub-editors pending.
 - **Runtime hot-swap** — `POST /v1/rig/select {id}` + Service re-bind (tear down
   current pipeline, re-project, reopen; reset per-rig live state — tune snapshot, hub
   caches, identity confirmation — as cleanly as a disconnect, ADR 0028).

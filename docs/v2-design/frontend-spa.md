@@ -194,7 +194,37 @@ portable" stays in logging; "set once" moves here*:
   *then* does the logging My Station drop them (Identity keeps callsign/operator/
   owner/grid; Location/Equipment/CW + the Modes sub-tab go).
 
-### Rigs tab — rig-profiles editor (design 2026-06-14, expanded 2026-06-24; PENDING)
+### Rigs tab — rig-profiles editor (design 2026-06-14, expanded 2026-06-24; Step 1 BUILT 2026-06-24, pending operator test)
+
+**Status:** **Step 1 built** (uncommitted/untested as of writing) — the write path
++ core editor. **Steps 2 (Mode Mappings) + 3 (Serial overrides) pending.**
+
+- **Write path — DONE (the recommended approach):** `PUT /v1/config` now accepts
+  presence-aware `rigs` + `default_rig_id` (write-only; validated via the same
+  `Normalize`+`validateRigs` pipeline as Load; never emitted on GET — see
+  api-endpoints.md). Daemon tests: catalogue round-trip + GET stays narrow, and a
+  dangling `default_rig_id` → 400 with no partial write.
+- **SPA — DONE:** `api/hardware.ts` (`GET /v1/hardware` for the Port/Audio
+  pickers); `configState` holds a **whole-catalogue draft** (`rigDraft` +
+  `draftDefaultRigId` + `selectedRigId`) that the editor mutates (edit / add /
+  delete / set-active); **Save PUTs the whole draft** then re-GETs `/v1/rigs`,
+  Cancel reverts. `RigsTab.svelte` is the master-detail surface (Model / Port /
+  Audio-RX-TX dropdowns from `/v1/hardware`; FT8-mode + MY_RIG override inputs;
+  restart banner; shared `TabFooter`).
+  - **A single Save persists the whole draft** (not per-rig Update) — this refines
+    the original "Update persists the selected rig" sketch below, because the
+    write path is whole-catalogue and it matches the shared `TabFooter` model.
+  - **Change-detection canonicalises rigs** (`canonRig`): the daemon nils
+    overrides equal to the rigdef default and omits nil/empty optionals on GET, so
+    a raw `JSON.stringify` compare saw `null ≠ absent` and left the form spuriously
+    dirty after a clean save. Canonicalising both sides (drop null/empty optionals)
+    fixes dirty-tracking + the restart-banner check.
+  - **Step-1 simplifications (revisit with Steps 2/3 / the override-revert UI):**
+    the FT8-mode/MY_RIG inputs treat empty = inherit (the explicit-`""` *suppress*
+    tri-state + a ↺ revert affordance are deferred); audio pickers degrade to
+    read-only text on a no-audio (static) build.
+
+(Original design, still the reference for the master-detail shape:)
 
 The config SPA's headline surface. **Mode Mappings**, currently in the logging
 SPA's My Station → Mode Mappings sub-tab, is just *one facet of a per-rig profile*
@@ -266,7 +296,9 @@ also not yet written — the config SPA has `api/{config,rigs}.ts` only.
    SPA `api/rigs.ts` consumes it).
 3. Config SPA plumbing (`configState` + `/v1/config` GET/PUT wrapper) — **shipped**.
 4. **Shell (category tabs) + Station tab — shipped 2026-06-24.**
-5. Rigs tab (the 3 steps above) — **PENDING** (gated on the write path).
+5. Rigs tab — **Step 1 BUILT 2026-06-24** (write path via `PUT /v1/config` +
+   core master-detail editor); Steps 2 (Mode Mappings) + 3 (Serial overrides)
+   PENDING.
 6. FT8 / Forwarding / Email / Enrichment tabs — **PENDING** (lighter
    `PUT /v1/config` surfaces; FT8-display colour logic already lives on
    `configState` from the earlier holding-place UI).

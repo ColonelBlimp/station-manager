@@ -163,7 +163,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `PUT /v1/config`
 - **Purpose:** Persist the operator-writable config subset (My Station / Settings save).
 - **Gating:** Always-on.
-- **Request:** Body = `ConfigResponse` shape. Writable: `logging_station`, `station`, `qsl` (presence-aware — omit to leave untouched), `ft8_display` (presence-aware — omit to leave untouched), `bridge.mode_mappings` (diffed against rigdef defaults; only deviations stored, on the active rig). `setup_complete`, `mailer`, `ft8_frequencies`, `bridge_timeouts`, `bridge_tune` are server-managed/ignored.
+- **Request:** Body = `ConfigResponse` shape. Writable: `logging_station`, `station`, `qsl` (presence-aware — omit to leave untouched), `ft8_display` (presence-aware — omit to leave untouched), `bridge.mode_mappings` (diffed against rigdef defaults; only deviations stored, on the active rig), and — for the config SPA's Rigs tab — `rigs` (`[]types.RigConfig`, replaces the whole catalogue) + `default_rig_id` (the active rig), both **presence-aware** and validated via `validateRigs`. `rigs`/`default_rig_id` are **write-only here**: never emitted on GET (the catalogue read surface is `GET /v1/rigs`; the active rig's narrow read view is the `default_rig` join). `setup_complete`, `mailer`, `ft8_frequencies`, `bridge_timeouts`, `bridge_tune` are server-managed/ignored.
 - **Response:** **200**, body = freshly-built `ConfigResponse`.
 - **Errors:** 400 `invalid_json`/`invalid_field_value`, plus the config validator's stable `{code, message}` findings (config.md §12 / ADR 0010); 500 `config_write_error`/`db_error`.
 - **Notes:** Candidate runs `config.Normalize` + `config.Validate` (same pipeline as Load). The first PUT with a non-empty callsign completes setup (seeds default logbook, flips `setup_complete`). Rewrites the whole `config.json` from in-memory state — **don't hand-edit config.json while the daemon runs.**
@@ -183,7 +183,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
   - `RigDefSummary` = `{id, name, manufacturer, model, family, description?, ft8_mode?, rig_modes?, mode_mappings?, serial}` — the editor-facing projection of a rigdef; **omits the large `commands`/`states` CAT tables**.
   - The SPA joins `rig.model` → `catalogue[].id` to compute default-vs-override per field, and derives the default MY_RIG from the matched `catalogue[].name`.
 - **Errors:** None on the wire (always 200).
-- **Notes:** Read-only. The write path (save a profile / set the default rig) lands with the editor; until then rigs are edited in `config.json` (stop → edit → restart).
+- **Notes:** **Read-only.** The **write path is `PUT /v1/config`** (presence-aware `rigs` + `default_rig_id` — see above), used by the config SPA's Rigs tab: it GETs the catalogue here, edits a whole-catalogue draft, and PUTs it back. The SPA re-GETs this endpoint after a save (the PUT response doesn't carry the catalogue) to re-hydrate the canonical view.
 
 ---
 
