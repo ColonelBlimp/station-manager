@@ -52,8 +52,15 @@ function canonRig(r: RigConfig, includeMyRig: boolean): Record<string, unknown> 
     const rx = r.audio?.rx ?? '';
     const tx = r.audio?.tx ?? '';
     if (rx !== '' || tx !== '') o.audio = { rx, tx };
-    if (r.mode_mappings && Object.keys(r.mode_mappings).length > 0)
-        o.mode_mappings = r.mode_mappings;
+    if (r.mode_mappings && Object.keys(r.mode_mappings).length > 0) {
+        // Sort keys so the comparison is order-insensitive: Go marshals map keys
+        // sorted on GET, but the editor builds them in rigdef-literal order — an
+        // unsorted compare would report a spurious diff for identical content.
+        const mm = r.mode_mappings;
+        const sorted: Record<string, unknown> = {};
+        for (const k of Object.keys(mm).sort()) sorted[k] = mm[k];
+        o.mode_mappings = sorted;
+    }
     if (r.overrides && Object.keys(r.overrides).length > 0) o.overrides = r.overrides;
     return o;
 }
