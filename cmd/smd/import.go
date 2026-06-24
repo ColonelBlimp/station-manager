@@ -61,7 +61,7 @@ func runImport(args []string) error {
 	fs.IntVar(&progressEvery, "progress-every", 100, "emit a progress line every N records (0 disables)")
 	fs.StringVar(&forwardFwds, "forward", "", "comma-separated forwarder name(s) to QUEUE the imported QSOs for upload to (e.g. \"qrz\"). DEFAULT IS NONE: import uploads nothing unless you name a forwarder here. Use only when you actually want the imported log pushed to that service.")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: smd import [flags] <file.adi>")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: smd import [flags] <file.adi>")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -94,7 +94,7 @@ func runImport(args []string) error {
 	// validation. Useful before the install-day import to verify the
 	// QRZ export downloaded cleanly.
 	if dryRun {
-		fmt.Fprintf(os.Stdout, "dry-run: %s parses to %d record(s); no DB writes\n",
+		_, _ = fmt.Fprintf(os.Stdout, "dry-run: %s parses to %d record(s); no DB writes\n",
 			adifPath, len(parsed.Records))
 		return nil
 	}
@@ -149,7 +149,7 @@ func runImport(args []string) error {
 	}
 	defer func() {
 		if cerr := loggerSvc.Close(); cerr != nil {
-			fmt.Fprintf(os.Stderr, "smd import: logger close error: %v\n", cerr)
+			_, _ = fmt.Fprintf(os.Stderr, "smd import: logger close error: %v\n", cerr)
 		}
 	}()
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
@@ -238,7 +238,7 @@ func runImport(args []string) error {
 				return
 			}
 			rate := float64(done) / time.Since(start).Seconds()
-			fmt.Fprintf(os.Stderr, "  %d/%d (stored=%d, duplicate=%d, errors=%d) — %.1f rec/s\n",
+			_, _ = fmt.Fprintf(os.Stderr, "  %d/%d (stored=%d, duplicate=%d, errors=%d) — %.1f rec/s\n",
 				done, total, r.Stored, r.Duplicate, len(r.Errors), rate)
 		})
 	if ierr != nil {
@@ -246,23 +246,23 @@ func runImport(args []string) error {
 	}
 
 	elapsed := time.Since(start)
-	fmt.Fprintf(os.Stdout, "imported %d records in %s\n", total, elapsed.Round(time.Millisecond))
-	fmt.Fprintf(os.Stdout, "  stored:     %d\n", res.Stored)
-	fmt.Fprintf(os.Stdout, "  duplicate:  %d\n", res.Duplicate)
-	fmt.Fprintf(os.Stdout, "  errors:     %d\n", len(res.Errors))
+	_, _ = fmt.Fprintf(os.Stdout, "imported %d records in %s\n", total, elapsed.Round(time.Millisecond))
+	_, _ = fmt.Fprintf(os.Stdout, "  stored:     %d\n", res.Stored)
+	_, _ = fmt.Fprintf(os.Stdout, "  duplicate:  %d\n", res.Duplicate)
+	_, _ = fmt.Fprintf(os.Stdout, "  errors:     %d\n", len(res.Errors))
 	if len(forwardTo) > 0 {
-		fmt.Fprintf(os.Stdout, "  queued for upload to: %s\n", strings.Join(forwardTo, ", "))
+		_, _ = fmt.Fprintf(os.Stdout, "  queued for upload to: %s\n", strings.Join(forwardTo, ", "))
 	} else {
-		fmt.Fprintln(os.Stdout, "  uploads: none (use --forward to queue a forwarder)")
+		_, _ = fmt.Fprintln(os.Stdout, "  uploads: none (use --forward to queue a forwarder)")
 	}
 	if len(res.Errors) > 0 {
-		fmt.Fprintln(os.Stdout, "errored records (first 20):")
+		_, _ = fmt.Fprintln(os.Stdout, "errored records (first 20):")
 		limit := len(res.Errors)
 		if limit > 20 {
 			limit = 20
 		}
 		for _, e := range res.Errors[:limit] {
-			fmt.Fprintf(os.Stdout, "  #%d %s: %s\n", e.Index, e.Call, e.Reason)
+			_, _ = fmt.Fprintf(os.Stdout, "  #%d %s: %s\n", e.Index, e.Call, e.Reason)
 		}
 		return errors.New(op).WithMsgf("%d record(s) failed to import", len(res.Errors))
 	}
