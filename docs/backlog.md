@@ -399,13 +399,16 @@ when it ships — don't let this rot into a graveyard.
   + enable, §10 uninstall) so the two don't drift — install.md stays the single
   canonical source. External/website work, out of this repo.
 
-- **Config SPA: data-driven forwarder setup (`RegisterForwarderType` + `/v1/forwarder-types`).**
-  Filed 2026-06-23. For the config-SPA workstream. Adding a forwarder must be
-  frictionless (KISS / ADR 0028 rig-profiles pattern): the operator picks a
-  **type** from a list and supplies only their **credentials** — never a URL,
-  action_filter, or JSON. The URL is already a type property (a `DefaultEndpoint`
-  const in each forwarder package, not in `ForwarderConfig`), so this is mostly a
-  setup-UX gap, not a data-model change. Plan:
+- ~~**Config SPA: data-driven forwarder setup (`RegisterForwarderType` + `/v1/forwarder-types`).**~~
+  **SHIPPED 2026-06-24.** Filed 2026-06-23. Delivered as designed: the registry
+  gained `RegisterForwarderType(type, displayName, actions, credentialFields)` +
+  `ForwarderTypes()`; QRZ/ClubLog declare their credential descriptors;
+  `GET /v1/forwarder-types` serves them; the config SPA's **Forwarding tab**
+  renders the credential form data-drivenly and writes via masked-GET/merge-PUT
+  `forwarders` on `/v1/config` (secrets never echoed back). The `kind:"secret"`
+  idea collapsed to `text|password` (password covers masking). **Still deferred:**
+  the queue-management purge (separate item below). Original plan retained for the
+  record:
   - Extend the registry (today `RegisterSupportedActions(type, actions)`) into
     `RegisterForwarderType(...)` carrying display name + supported actions +
     **credential field descriptors** (`[]{key, label, kind: text|password|secret,

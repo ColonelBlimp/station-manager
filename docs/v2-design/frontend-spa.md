@@ -300,9 +300,8 @@ block** (the SPA edits the in-memory catalogue and PUTs the whole thing), rather
 than new `…/v1/rigs` CRUD endpoints. Rationale: the catalogue is tiny (1–3 rigs),
 it reuses the existing config write path + echo pattern, and set-default is
 restart-only in Phase 1 (no live re-bind needed). The CRUD-endpoints alternative
-stays open if granular live operations (hot-swap, §11.4) are unparked. The
-`api/hardware.ts` wrapper (`GET /v1/hardware` for the Port/Audio dropdowns) is
-also not yet written — the config SPA has `api/{config,rigs}.ts` only.
+stays open if granular live operations (hot-swap, §11.4) are unparked. (The
+`api/hardware.ts` wrapper for the Port/Audio dropdowns shipped with Step 1.)
 
 **Build sequencing (proposed 2026-06-24) — three steps, not one:**
 - **Step 1 — core editor.** Daemon write path (above) + `api/hardware.ts`, then
@@ -311,6 +310,36 @@ also not yet written — the config SPA has `api/{config,rigs}.ts` only.
 - **Step 2 — Mode Mappings sub-editor** (self-contained; the facet migrating from
   logging My Station).
 - **Step 3 — Serial overrides** sub-section (advanced; inherit-vs-override).
+
+### Forwarding tab (design + build 2026-06-24; SHIPPED, pending operator test)
+
+Manage forwarding destinations (QRZ, ClubLog, …) — **data-driven** so adding a
+forwarder type in Go needs zero SPA change, and **masked-on-GET** so credentials
+never reach the browser (operator decision 2026-06-24).
+
+- **Daemon:** a **forwarder-type registry** — `RegisterForwarderType(type,
+  displayName, actions, credentialFields)` + `ForwarderTypes()` (`internal/forwarding`),
+  with each forwarder declaring its `CredentialField`s (QRZ = `api_key`; ClubLog =
+  `email`/`password`/`callsign`/`api`); `GET /v1/forwarder-types` serves the
+  descriptors. `forwarders` added to `/v1/config`: **masked GET** (`ForwarderInfo`
+  carries `credentials_set` — which keys are set, never values) + **merge PUT**
+  (presence-aware; credentials overlaid onto the stored secret by name, so a blank
+  field keeps its value; tick/batch/retry carried over; validated via
+  `validateForwarders`). Secrets stay plaintext in `config.json` (existing posture)
+  but **never travel back to the browser**.
+- **SPA:** `api/forwarderTypes.ts`; `forwarders` on `configState` (a draft list +
+  `forwardersDirty` / `addForwarder` / `removeForwarder` / `saveForwarders` /
+  `cancelForwarders`). `ForwardingTab.svelte` — stacked destination cards (type +
+  editable name + enabled + remove), **credential fields rendered from the type
+  descriptor** (password kind → masked input + "•••• (set — leave blank to keep)"
+  placeholder), an add-by-type picker, and a restart-required banner. Dirty =
+  structural change OR any typed credential; save sends only non-empty creds.
+- **Restart-only:** the forwarder worker binds config at startup (§11 hot-reload
+  unwired), so changes apply on restart — the tab shows the banner.
+- **Deferred:** queue management (the "N queued · Clear queue" purge) is its own
+  backlog item (needs a purge endpoint); not in this tab yet. `action_filter` is
+  auto (the SPA derives it from the type's supported actions); tick/batch/retry are
+  advanced and left to config.json / Load defaulting.
 
 **Build order (daemon-first, committable slices):**
 1. **`GET /v1/hardware`** enumeration endpoint — **shipped 2026-06-14**
@@ -322,7 +351,9 @@ also not yet written — the config SPA has `api/{config,rigs}.ts` only.
 5. Rigs tab — **Steps 1–3 BUILT 2026-06-24** (write path via `PUT /v1/config` +
    core master-detail editor + Mode Mappings + Serial overrides sub-editors);
    feature-complete, pending operator on-rig test.
-6. FT8 / Forwarding / Email / Enrichment tabs — **PENDING** (lighter
+6. **Forwarding tab — SHIPPED 2026-06-24** (forwarder-type registry +
+   `GET /v1/forwarder-types` + masked-GET/merge-PUT `forwarders` on `/v1/config`
+   + the SPA tab). FT8 / Email / Enrichment tabs — **PENDING** (lighter
    `PUT /v1/config` surfaces; FT8-display colour logic already lives on
    `configState` from the earlier holding-place UI).
 7. Logging-SPA cleanup (Phase 2): remove the moved My Station fields + the Mode
