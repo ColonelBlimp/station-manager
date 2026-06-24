@@ -99,6 +99,45 @@ type ConfigResponse struct {
 	// it); a body that carries it REPLACES the whole list. Emitted on GET only
 	// when at least one forwarder is configured (omitempty), masked.
 	Forwarders []ForwarderInfo `json:"forwarders,omitempty"`
+	// Lookup is the config SPA's Enrichment-tab surface (ADR 0017) — masked on
+	// GET (provider passwords reported as set/unset, never the value), merge-on-PUT
+	// (see LookupProviderInfo). Pointer so the PUT is presence-aware: a body that
+	// omits `lookup` leaves the enrichment config untouched; one that carries it
+	// REPLACES it (with passwords merged). Always set on GET.
+	Lookup *LookupInfo `json:"lookup,omitempty"`
+}
+
+// LookupProviderInfo is the config SPA's view of one enrichment provider
+// (hamnut or a chain entry). Asymmetric like ForwarderInfo to keep the password
+// off the wire (masked-on-GET):
+//
+//   - On GET: name/enabled/url/username/timeout_sec/view_url + PasswordSet (is a
+//     password stored). Password is "" (masked).
+//   - On PUT: + Password (new value; blank = keep the stored one). PasswordSet is
+//     ignored.
+//
+// Username is shown on GET (a QRZ login/callsign, not a secret); only Password
+// is masked.
+type LookupProviderInfo struct {
+	Name        string `json:"name"`
+	Enabled     bool   `json:"enabled"`
+	URL         string `json:"url,omitempty"`
+	Username    string `json:"username,omitempty"`
+	PasswordSet bool   `json:"password_set"`
+	Password    string `json:"password,omitempty"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
+	ViewURL     string `json:"view_url,omitempty"`
+}
+
+// LookupInfo mirrors types.EnrichmentConfig for the wire, with each provider's
+// password masked (LookupProviderInfo). The config SPA's Enrichment tab edits
+// hamnut + the callsign chain (QRZ today) + the cache TTLs.
+type LookupInfo struct {
+	Hamnut             LookupProviderInfo   `json:"hamnut"`
+	Chain              []LookupProviderInfo `json:"chain"`
+	CountryTTLDays     int                  `json:"country_ttl_days"`
+	StationTTLDays     int                  `json:"station_ttl_days"`
+	RefreshMaxInFlight int                  `json:"refresh_max_in_flight"`
 }
 
 // ForwarderInfo is the config SPA's view of one forwarding destination. It is
@@ -280,6 +319,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// unsupported action).
 	if req.Forwarders != nil {
 		candidate.Forwarders = mergeForwarders(req.Forwarders, current.Forwarders)
+	}
+	// Enrichment (config SPA Enrichment tab) — presence-aware; provider passwords
+	// merged onto the stored values by name (blank = keep). Normalize stamps the
+	// default provider URLs; validateLookup gates the result.
+	if req.Lookup != nil {
+		candidate.Lookup = mergeLookup(*req.Lookup, current.Lookup)
 	}
 	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
 	// defaults so only operator deviations persist, stored on the active rig
@@ -536,7 +581,78 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 		resp.Forwarders = fwds
 	}
 
+	// Enrichment — masked (provider passwords reported set/unset, never the value).
+	lookupInfo := lookupInfoFrom(cfg.Lookup)
+	resp.Lookup = &lookupInfo
+
 	return resp, nil
+}
+
+// lookupProviderInfoFrom masks one provider for GET: the password becomes a
+// set/unset flag, the value is dropped.
+func lookupProviderInfoFrom(c types.LookupConfig) LookupProviderInfo {
+	return LookupProviderInfo{
+		Name:        c.Name,
+		Enabled:     c.Enabled,
+		URL:         c.URL,
+		Username:    c.Username,
+		PasswordSet: c.Password != "",
+		TimeoutSec:  c.HttpTimeoutSec,
+		ViewURL:     c.ViewURL,
+	}
+}
+
+func lookupInfoFrom(lc types.EnrichmentConfig) LookupInfo {
+	chain := make([]LookupProviderInfo, 0, len(lc.Chain))
+	for _, c := range lc.Chain {
+		chain = append(chain, lookupProviderInfoFrom(c))
+	}
+	return LookupInfo{
+		Hamnut:             lookupProviderInfoFrom(lc.Hamnut),
+		Chain:              chain,
+		CountryTTLDays:     lc.CountryTTLDays,
+		StationTTLDays:     lc.StationTTLDays,
+		RefreshMaxInFlight: lc.RefreshMaxInFlight,
+	}
+}
+
+// mergeLookupProvider rebuilds a provider from the PUT payload, keeping the
+// stored password when the operator left the field blank (masked-on-GET means
+// the SPA never had it to echo). Matched against the stored entry `ex`.
+func mergeLookupProvider(in LookupProviderInfo, ex types.LookupConfig) types.LookupConfig {
+	pw := ex.Password
+	if in.Password != "" {
+		pw = in.Password
+	}
+	return types.LookupConfig{
+		Name:           in.Name,
+		Enabled:        in.Enabled,
+		URL:            in.URL,
+		Username:       in.Username,
+		Password:       pw,
+		HttpTimeoutSec: in.TimeoutSec,
+		ViewURL:        in.ViewURL,
+	}
+}
+
+// mergeLookup rebuilds the enrichment config from the PUT payload, merging each
+// provider's password onto the stored value by name (hamnut + each chain entry).
+func mergeLookup(in LookupInfo, existing types.EnrichmentConfig) types.EnrichmentConfig {
+	exByName := make(map[string]types.LookupConfig, len(existing.Chain))
+	for _, c := range existing.Chain {
+		exByName[c.Name] = c
+	}
+	chain := make([]types.LookupConfig, 0, len(in.Chain))
+	for _, p := range in.Chain {
+		chain = append(chain, mergeLookupProvider(p, exByName[p.Name]))
+	}
+	return types.EnrichmentConfig{
+		Hamnut:             mergeLookupProvider(in.Hamnut, existing.Hamnut),
+		Chain:              chain,
+		CountryTTLDays:     in.CountryTTLDays,
+		StationTTLDays:     in.StationTTLDays,
+		RefreshMaxInFlight: in.RefreshMaxInFlight,
+	}
 }
 
 // credentialKeysSet returns the credential keys that currently hold a non-empty

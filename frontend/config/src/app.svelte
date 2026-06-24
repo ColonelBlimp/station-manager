@@ -6,6 +6,7 @@
     import RigsTab from './lib/ui/tabs/RigsTab.svelte';
     import ForwardingTab from './lib/ui/tabs/ForwardingTab.svelte';
     import Ft8Tab from './lib/ui/tabs/Ft8Tab.svelte';
+    import EnrichmentTab from './lib/ui/tabs/EnrichmentTab.svelte';
 
     // ── Tab shell ────────────────────────────────────────────────────────────
     // The config SPA is a category-tab shell (design 2026-06-24): one tab per
@@ -125,6 +126,8 @@
                 <ForwardingTab />
             {:else if activeTab === 'ft8'}
                 <Ft8Tab />
+            {:else if activeTab === 'enrichment'}
+                <EnrichmentTab />
             {:else}
                 <TabPlaceholder title={activeTitle} />
             {/if}

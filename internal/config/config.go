@@ -695,6 +695,40 @@ func Normalize(cfg *Config) {
 	if cfg.Bridge.Cat != nil && cfg.Bridge.Cat.Driver == "" {
 		cfg.Bridge.Cat = nil
 	}
+
+	normalizeLookupURLs(cfg)
+}
+
+// normalizeLookupURLs stamps the canonical public endpoint for the known
+// providers when the operator left the URL empty — so the config SPA's
+// Enrichment tab stays frictionless (credentials only, never a URL). In
+// Normalize (not applyDefaults) so it runs on PUT too: a newly-enabled QRZ entry
+// with no URL gets the default before validateLookup's "enabled provider needs a
+// URL" check. Idempotent; a non-empty operator URL is left untouched.
+func normalizeLookupURLs(cfg *Config) {
+	if cfg.Lookup.Hamnut.URL == "" {
+		cfg.Lookup.Hamnut.URL = types.HamNutLookupDefaultURL
+	}
+	if cfg.Lookup.Hamnut.HttpTimeoutSec == 0 {
+		cfg.Lookup.Hamnut.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
+	}
+	for i := range cfg.Lookup.Chain {
+		c := &cfg.Lookup.Chain[i]
+		if c.Name == types.QRZLookupServiceName {
+			if c.URL == "" {
+				c.URL = types.QRZLookupDefaultURL
+			}
+			if c.ViewURL == "" {
+				c.ViewURL = types.QRZLookupDefaultViewURL
+			}
+		}
+		// Per-provider timeout default — here (Normalize, both Load + PUT) rather
+		// than applyDefaults so an enabled provider added via the config SPA passes
+		// validateLookupProvider's "timeout_sec > 0 when enabled" check.
+		if c.HttpTimeoutSec == 0 {
+			c.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
+		}
+	}
 }
 
 // normalizeRigOverrides nils out per-rig Ft8Mode / MyRig overrides that merely
@@ -960,18 +994,9 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.Lookup.Hamnut.Name == "" {
 		cfg.Lookup.Hamnut.Name = types.HamNutLookupServiceName
 	}
-	if cfg.Lookup.Hamnut.HttpTimeoutSec == 0 {
-		cfg.Lookup.Hamnut.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
-	}
-	// Per-chain-entry timeout default — operators rarely need to
-	// override this so the explicit zero is treated as "use the
-	// daemon default" rather than "infinite timeout."
-	for i := range cfg.Lookup.Chain {
-		c := &cfg.Lookup.Chain[i]
-		if c.HttpTimeoutSec == 0 {
-			c.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
-		}
-	}
+	// Per-provider URL + timeout defaults live in Normalize (normalizeLookupURLs)
+	// so they apply on PUT too, not just Load — an enabled provider added via the
+	// config SPA needs them stamped before validateLookupProvider runs.
 
 	// SMTP defaults. Port 587 is the IANA submission port (RFC 6409)
 	// — the right default for any operator running through their ISP

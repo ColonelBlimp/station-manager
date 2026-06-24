@@ -85,6 +85,31 @@ export interface ForwarderInfo {
     credentials?: Record<string, string>;
 }
 
+/**
+ * An enrichment provider (hamnut or a callsign-chain entry). Asymmetric like
+ * ForwarderInfo: GET reports `password_set` (never the value); PUT carries a new
+ * `password` (blank = keep the stored one). `username` is shown on GET (not a
+ * secret). URLs are defaulted daemon-side for hamnut/QRZ.
+ */
+export interface LookupProviderInfo {
+    name: string;
+    enabled: boolean;
+    url?: string;
+    username?: string;
+    password_set?: boolean;
+    password?: string;
+    timeout_sec?: number;
+    view_url?: string;
+}
+
+export interface LookupInfo {
+    hamnut: LookupProviderInfo;
+    chain: LookupProviderInfo[];
+    country_ttl_days: number;
+    station_ttl_days: number;
+    refresh_max_in_flight: number;
+}
+
 export interface ConfigResponse {
     setup_complete: boolean;
     logging_station: LoggingStationFields;
@@ -94,6 +119,7 @@ export interface ConfigResponse {
     ft8_display?: Ft8DisplayFields;
     ft8_frequencies?: Record<string, number>;
     forwarders?: ForwarderInfo[];
+    lookup?: LookupInfo;
 }
 
 export type ConfigOutcome =
@@ -160,6 +186,10 @@ export interface ConfigPatch {
     // credential field to keep its secret. Omit `forwarders` entirely to leave
     // the list untouched (a Station/FT8/Rigs save never carries it).
     forwarders?: ForwarderInfo[];
+    // Presence-aware (Enrichment tab): replaces the enrichment config; each
+    // provider's `password` is MERGED onto the stored value daemon-side (blank =
+    // keep). Omit `lookup` to leave it untouched.
+    lookup?: LookupInfo;
 }
 
 export async function putConfig(patch: ConfigPatch, signal?: AbortSignal): Promise<ConfigOutcome> {

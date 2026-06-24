@@ -1063,6 +1063,70 @@ func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_LookupMaskedAndMerged covers the Enrichment tab contract:
+// a QRZ provider's password is stored on PUT, MASKED on GET (password_set, never
+// the value), the QRZ/hamnut URLs are defaulted daemon-side (operator types no
+// URL), and a later credential-less PUT MERGES — keeping the stored password.
+func TestHandlePutConfig_LookupMaskedAndMerged(t *testing.T) {
+	srv := testServer(t)
+
+	// 1. Configure hamnut + a QRZ chain entry with a password, no URLs sent.
+	body1 := `{"logging_station":{},"station":{},"lookup":{` +
+		`"hamnut":{"name":"hamnutlookupservice","enabled":true},` +
+		`"chain":[{"name":"qrzlookupservice","enabled":true,"username":"M0ABC","password":"QRZSECRET"}],` +
+		`"country_ttl_days":30,"station_ttl_days":7,"refresh_max_in_flight":4}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d, body = %s", w.Code, w.Body.String())
+	}
+	cfg := srv.cfg.Snapshot()
+	if len(cfg.Lookup.Chain) != 1 || cfg.Lookup.Chain[0].Password != "QRZSECRET" {
+		t.Fatalf("QRZ password not stored: %+v", cfg.Lookup.Chain)
+	}
+	// URLs defaulted daemon-side (operator sent none).
+	if cfg.Lookup.Chain[0].URL != types.QRZLookupDefaultURL {
+		t.Fatalf("QRZ URL = %q, want defaulted %q", cfg.Lookup.Chain[0].URL, types.QRZLookupDefaultURL)
+	}
+	if cfg.Lookup.Hamnut.URL != types.HamNutLookupDefaultURL {
+		t.Fatalf("hamnut URL = %q, want defaulted", cfg.Lookup.Hamnut.URL)
+	}
+
+	// 2. GET masks the password.
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	getW := httptest.NewRecorder()
+	srv.handleGetConfig(getW, getReq)
+	getBody := getW.Body.String()
+	if strings.Contains(getBody, "QRZSECRET") {
+		t.Fatalf("GET leaked the QRZ password: %s", getBody)
+	}
+	if !strings.Contains(getBody, `"password_set":true`) {
+		t.Fatalf("GET did not report password_set: %s", getBody)
+	}
+
+	// 3. Credential-less PUT (toggle QRZ off) → password preserved by merge.
+	body2 := `{"logging_station":{},"station":{},"lookup":{` +
+		`"hamnut":{"name":"hamnutlookupservice","enabled":true},` +
+		`"chain":[{"name":"qrzlookupservice","enabled":false,"username":"M0ABC"}],` +
+		`"country_ttl_days":30,"station_ttl_days":7,"refresh_max_in_flight":4}}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	cfg = srv.cfg.Snapshot()
+	if cfg.Lookup.Chain[0].Enabled {
+		t.Fatal("QRZ enabled not updated to false")
+	}
+	if cfg.Lookup.Chain[0].Password != "QRZSECRET" {
+		t.Fatalf("merge lost the QRZ password: %q", cfg.Lookup.Chain[0].Password)
+	}
+}
+
 // TestHandlePutConfig_RejectsBadRigCatalogue confirms the write path runs the
 // same validateRigs gate as Load: a dangling default_rig_id is a 400, not a
 // persisted bad catalogue.

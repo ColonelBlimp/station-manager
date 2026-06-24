@@ -18,6 +18,8 @@ import {
     type ForwarderInfo,
     type Ft8DisplayFields,
     type LoggingStationFields,
+    type LookupInfo,
+    type LookupProviderInfo,
 } from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
 import { fetchHardware, type HardwareResponse } from '../api/hardware';
@@ -157,6 +159,53 @@ function stationFormFrom(ls: LoggingStationFields): StationForm {
     };
 }
 
+// The QRZ callsign-lookup provider's service name (matches
+// types.QRZLookupServiceName) — the chain entry the Enrichment tab's QRZ
+// section maps to. The daemon defaults this provider's URL.
+const QRZ_LOOKUP_PROVIDER = 'qrzlookupservice';
+
+// LookupForm — the Enrichment tab's editable subset (option A: specific QRZ +
+// Hamnut + TTL sections, not a generic chain editor). qrzPassword is the typed
+// new value (transient — blank = keep the stored secret); qrzPasswordSet (from
+// the masked GET) drives the "set" hint.
+export interface LookupForm {
+    qrzEnabled: boolean;
+    qrzUsername: string;
+    qrzPassword: string;
+    qrzPasswordSet: boolean;
+    hamnutEnabled: boolean;
+    countryTtlDays: number;
+    stationTtlDays: number;
+    refreshMaxInFlight: number;
+}
+
+function lookupFormFrom(l: LookupInfo | null): LookupForm {
+    const qrz = l?.chain.find((p) => p.name === QRZ_LOOKUP_PROVIDER);
+    return {
+        qrzEnabled: qrz?.enabled ?? false,
+        qrzUsername: qrz?.username ?? '',
+        qrzPassword: '',
+        qrzPasswordSet: qrz?.password_set ?? false,
+        hamnutEnabled: l?.hamnut.enabled ?? false,
+        countryTtlDays: l?.country_ttl_days ?? 0,
+        stationTtlDays: l?.station_ttl_days ?? 0,
+        refreshMaxInFlight: l?.refresh_max_in_flight ?? 0,
+    };
+}
+
+/** Structural identity of the lookup form for dirty-tracking — excludes the
+ *  transient typed password (checked separately) and the GET-only set flag. */
+function lookupFormKey(f: LookupForm): string {
+    return JSON.stringify({
+        qrzEnabled: f.qrzEnabled,
+        qrzUsername: f.qrzUsername,
+        hamnutEnabled: f.hamnutEnabled,
+        countryTtlDays: f.countryTtlDays,
+        stationTtlDays: f.stationTtlDays,
+        refreshMaxInFlight: f.refreshMaxInFlight,
+    });
+}
+
 // FT8 Band Activity display-pref defaults — mirror the daemon's
 // ResolveFt8Display so a fresh config (block omitted) still shows real values.
 // GET serves ft8_display RESOLVED, so these are only the cold-start fallback.
@@ -231,6 +280,15 @@ class ConfigState {
     /** Last Forwarding-save status: 'ok', an error message, or null (idle/in-flight). */
     forwardersStatus: string | null = $state(null);
 
+    // Enrichment tab — the loaded (masked) lookup config + the editable form
+    // (option A: specific QRZ + Hamnut + TTL sections).
+    lookup: LookupInfo | null = $state(null);
+    lookupForm: LookupForm = $state(lookupFormFrom(null));
+    /** True while an Enrichment save PUT is in flight. */
+    savingLookup: boolean = $state(false);
+    /** Last Enrichment-save status: 'ok', an error message, or null (idle/in-flight). */
+    lookupStatus: string | null = $state(null);
+
     // FT8 tab — the full Band Activity display prefs (colours + row cap + feed
     // mode + toggles), hydrated from config.ft8_display on load and re-hydrated
     // from the PUT response on save. Bound directly by the FT8 tab's inputs.
@@ -279,6 +337,8 @@ class ConfigState {
             this.stationForm = stationFormFrom(this.config.logging_station);
             this.forwarders = this.config.forwarders ?? [];
             this.hydrateForwarders();
+            this.lookup = this.config.lookup ?? null;
+            this.lookupForm = lookupFormFrom(this.lookup);
         } else {
             errs.push(`config: ${outcomeMessage(cfg)}`);
         }
@@ -589,6 +649,79 @@ class ConfigState {
     cancelForwarders(): void {
         this.hydrateForwarders();
         this.forwardersStatus = null;
+    }
+
+    // ── Enrichment tab ─────────────────────────────────────────────────────────
+
+    /** True when the Enrichment form diverges from the loaded config — a
+     *  structural change OR a freshly-typed QRZ password. */
+    get lookupDirty(): boolean {
+        if (!this.config) return false;
+        const base = lookupFormFrom(this.lookup);
+        return (
+            lookupFormKey(this.lookupForm) !== lookupFormKey(base) ||
+            this.lookupForm.qrzPassword.trim() !== ''
+        );
+    }
+
+    /**
+     * Persist the Enrichment form via PUT /v1/config. Overlays the form's edits
+     * (QRZ enabled/username/password, hamnut enabled, TTLs) onto a copy of the
+     * loaded lookup block — preserving daemon-defaulted URLs/timeouts and any
+     * other chain entries — and sends only a non-empty typed QRZ password (the
+     * daemon merges it onto the stored secret). Re-hydrates from the (masked)
+     * response.
+     */
+    async saveLookup(): Promise<void> {
+        if (this.savingLookup || !this.config || !this.lookupDirty) return;
+        this.savingLookup = true;
+        this.lookupStatus = null;
+
+        const base = this.lookup;
+        const hamnut: LookupProviderInfo = {
+            ...(base?.hamnut ?? { name: 'hamnutlookupservice', enabled: false }),
+            enabled: this.lookupForm.hamnutEnabled,
+        };
+        const chain: LookupProviderInfo[] = (base?.chain ?? []).map((p) => ({ ...p }));
+        let qrz = chain.find((p) => p.name === QRZ_LOOKUP_PROVIDER);
+        if (!qrz) {
+            qrz = { name: QRZ_LOOKUP_PROVIDER, enabled: false };
+            chain.push(qrz);
+        }
+        qrz.enabled = this.lookupForm.qrzEnabled;
+        qrz.username = this.lookupForm.qrzUsername;
+        if (this.lookupForm.qrzPassword.trim() !== '') qrz.password = this.lookupForm.qrzPassword;
+        // password_set is GET-only; the daemon ignores it on PUT, but drop it for cleanliness.
+        for (const p of chain) delete p.password_set;
+        delete hamnut.password_set;
+
+        const payload: LookupInfo = {
+            hamnut,
+            chain,
+            country_ttl_days: this.lookupForm.countryTtlDays,
+            station_ttl_days: this.lookupForm.stationTtlDays,
+            refresh_max_in_flight: this.lookupForm.refreshMaxInFlight,
+        };
+        const outcome: ConfigOutcome = await putConfig({
+            logging_station: this.config.logging_station,
+            station: this.config.station,
+            lookup: payload,
+        });
+        if (outcome.kind === 'ok') {
+            this.config = outcome.config;
+            this.lookup = outcome.config.lookup ?? null;
+            this.lookupForm = lookupFormFrom(this.lookup);
+            this.lookupStatus = 'ok';
+        } else {
+            this.lookupStatus = outcomeMessage(outcome);
+        }
+        this.savingLookup = false;
+    }
+
+    /** Discard staged Enrichment edits — reset the form to the loaded config. */
+    cancelLookup(): void {
+        this.lookupForm = lookupFormFrom(this.lookup);
+        this.lookupStatus = null;
     }
 }
 

@@ -307,27 +307,31 @@ func TestLoad_ValidLookupBlock(t *testing.T) {
 }
 
 func TestLoad_RejectsInvalidLookupBlock(t *testing.T) {
-	// Empty URL on an enabled hamnut block — exercises the
-	// Load → validateLookup → validateLookupProvider path
-	// end-to-end. UserAgent is no longer a per-provider field, so
-	// the previously-tested "empty useragent" case lives on the
-	// Service.Initialize side now (see hamnut + qrz lookup tests).
+	// Empty URL on an enabled provider — exercises the
+	// Load → validateLookup → validateLookupProvider path end-to-end.
+	// Uses a GENERIC chain provider (not hamnut/QRZ): those two now have their
+	// fixed public endpoints defaulted in Normalize (frictionless config-SPA
+	// setup), so an empty URL on them is filled, not rejected. A custom-named
+	// provider is left untouched, so the empty-URL rejection still fires here.
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.json")
 	content := `{
 		"lookup": {
-			"hamnut": {
-				"enabled": true,
-				"url": "",
-				"timeout_sec": 5
-			}
+			"chain": [
+				{
+					"name": "customlookupservice",
+					"enabled": true,
+					"url": "",
+					"timeout_sec": 5
+				}
+			]
 		}
 	}`
 	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
 	if _, err := Load(cfgFile); err == nil {
-		t.Fatal("expected validation error for empty URL on enabled hamnut")
+		t.Fatal("expected validation error for empty URL on an enabled provider")
 	}
 }
 
