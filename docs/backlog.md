@@ -448,6 +448,32 @@ when it ships — don't let this rot into a graveyard.
     it. The inverse (bulk-forward an existing log to a newly-enabled service) is
     the separate backfill feature.
 
+- **Operator / user profiles — selectable op-identity bundles.**
+  Filed 2026-06-24. Surfaced during the config-SPA Station-tab split: the
+  **operational op-identity pair** (`Operator` callsign + `Operator Name`, and
+  possibly `Owner's Callsign`) stays in the logging SPA precisely because it
+  swaps per session — in a contest or multi-op you change operator mid-event.
+  The future enhancement: turn that pair into **named, selectable profiles** the
+  operator picks at session start instead of retyping (e.g. a dropdown of saved
+  operators on the logging My Station / QSO surface). Daemon owns the profile
+  list (config.json), SPA picks. Keep the current single-pair fields working;
+  profiles layer on top without foreclosing today's split. Not scoped/started —
+  a direction, not a commitment. Depends on the config-SPA workstream existing
+  first (that's where profile CRUD would live).
+
+- **UI consistency across SPAs — shared theme layer.**
+  Filed 2026-06-24. The config SPA's tab shell was built with plain Tailwind
+  utilities, because the logging SPA's theme tokens (`bg-focus`, `text-surface`,
+  `outline-line`, `text-ink`) and shared classes (`.btn`, `.btn-primary`,
+  `.tab-item`) live only in `frontend/logging/src/styles/app.css`. That's a small
+  but real visual divergence between the two clients. Operator wants the SPAs to
+  look like siblings: lift the theme tokens + shared component classes into a
+  **layer both SPAs import** (a shared CSS / Tailwind theme package), then
+  re-skin the config SPA onto it. Natural to do **with the UI-themes / dark-mode
+  work** (see dogfood-inbox 2026-06-24) — a shared theme is the prerequisite for
+  theming all SPAs at once. Likely also revisits the logging SPA's own layout for
+  consistency. Not now — flagged for when the theming workstream starts.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

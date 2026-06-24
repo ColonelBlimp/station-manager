@@ -15,3 +15,5 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 <!-- /log appends below this line -->
 - [2026-06-23] default_rig_id is 0 on fresh install, Rig shows not set
 - [2026-06-24] browser tab icon is the default. Should be the radio tower.
+- [2026-06-24] we need some links in the logging SPA (and the other SPAs) to other URIs: config, logbook, db manager, etc
+- [2026-06-24] we need to implement UI themes as well as dark mode

@@ -1,119 +1,136 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { configState } from './lib/states/config.svelte';
+    import TabPlaceholder from './lib/ui/TabPlaceholder.svelte';
 
-    // Slice 3 — plumbing only: load the daemon's config + rig-profiles data on
-    // mount and prove it flows into configState. The rig-profiles editor UX is
-    // slice 4 (a separate design pass); this view is a temporary readout, not
-    // the final surface.
+    // ── Tab shell ────────────────────────────────────────────────────────────
+    // The config SPA is a category-tab shell (design 2026-06-24): one tab per
+    // set-once config area. Order is setup-order — what you'd touch on a fresh
+    // install, identity first. Bodies are placeholders for now; each tab gets a
+    // real panel component as the workstream fills it in. Default landing = the
+    // first tab (Station).
+    type TabId = 'station' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment';
+
+    const tabs: { id: TabId; title: string }[] = [
+        { id: 'station', title: 'Station' },
+        { id: 'rigs', title: 'Rigs' },
+        { id: 'ft8', title: 'FT8' },
+        { id: 'forwarding', title: 'Forwarding' },
+        { id: 'email', title: 'Email' },
+        { id: 'enrichment', title: 'Enrichment' },
+    ];
+
+    const validTab = (s: string): s is TabId => tabs.some((t) => t.id === s);
+
+    // Hash-based deep-linking (#rigs, #forwarding, …): cheap, no router dep, and
+    // lets the daemon's future "restart required" hint / docs link straight to a
+    // tab. Falls back to the first tab for an empty/unknown hash.
+    function tabFromHash(): TabId {
+        const h = location.hash.replace(/^#/, '');
+        return validTab(h) ? h : tabs[0].id;
+    }
+
+    let activeTab: TabId = $state(tabFromHash());
+
+    function selectTab(id: TabId): void {
+        activeTab = id;
+        if (location.hash !== `#${id}`) {
+            location.hash = id;
+        }
+    }
+
+    // Left/Right arrow moves between tabs (ARIA tab pattern, roving tabindex).
+    function onTabKeydown(e: KeyboardEvent): void {
+        const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (dir === 0) return;
+        e.preventDefault();
+        const i = tabs.findIndex((t) => t.id === activeTab);
+        const next = tabs[(i + dir + tabs.length) % tabs.length];
+        selectTab(next.id);
+        document.getElementById(`tab-${next.id}`)?.focus();
+    }
+
+    const activeTitle = $derived(tabs.find((t) => t.id === activeTab)?.title ?? '');
+
+    // Daemon-connection dot: green once /v1/config + /v1/rigs load clean, red on
+    // error, grey while the first round-trip is in flight.
+    const statusColour = $derived(
+        !configState.loaded ? 'bg-gray-300' : configState.error ? 'bg-red-500' : 'bg-green-500'
+    );
+    const statusLabel = $derived(
+        !configState.loaded ? 'Connecting…' : configState.error ? 'Daemon error' : 'Daemon OK'
+    );
+
     onMount(() => {
         void configState.load();
+        const onHash = (): void => {
+            activeTab = tabFromHash();
+        };
+        window.addEventListener('hashchange', onHash);
+        return () => window.removeEventListener('hashchange', onHash);
     });
 </script>
 
-<main class="min-h-screen bg-gray-50 p-8 font-sans">
-    <h1 class="text-2xl font-semibold text-gray-900">Station Manager — Config</h1>
+<div class="flex min-h-screen flex-col bg-gray-50 font-sans text-gray-900">
+    <!-- Header bar. The right-side slot is the future home for cross-SPA links
+         (→ logging, → logbook, → db manager — dogfood-inbox 2026-06-24); left
+         empty for now. -->
+    <header class="flex items-center justify-between border-b border-gray-300 bg-white px-6 py-3">
+        <h1 class="text-lg font-semibold">Station Manager — Config</h1>
+        <div class="flex items-center gap-2 text-sm text-gray-600">
+            <span class="inline-block h-2.5 w-2.5 rounded-full {statusColour}" aria-hidden="true"
+            ></span>
+            <span>{statusLabel}</span>
+        </div>
+    </header>
 
-    {#if !configState.loaded}
-        <p class="mt-2 text-gray-600">Loading…</p>
-    {:else}
-        {#if configState.error}
-            <p class="mt-2 rounded bg-red-50 px-2 py-1 text-sm text-red-700">{configState.error}</p>
-        {/if}
-
-        <p class="mt-2 text-gray-600">
-            Setup complete: <strong>{configState.config?.setup_complete ? 'yes' : 'no'}</strong>
-            · Station callsign:
-            <strong>{configState.config?.logging_station.station_callsign || '—'}</strong>
-        </p>
-
-        <section class="mt-6">
-            <h2 class="font-semibold text-gray-800">
-                Configured rigs ({configState.rigs.length}) · default #{configState.defaultRigId}
-            </h2>
-            {#if configState.rigs.length === 0}
-                <p class="text-sm text-gray-500">None configured yet.</p>
-            {:else}
-                <ul class="mt-1 text-sm text-gray-700">
-                    {#each configState.rigs as rig (rig.id)}
-                        <li>
-                            #{rig.id}
-                            {configState.rigdefFor(rig.model)?.name ?? rig.model}
-                            @ {rig.port || '—'}
-                            {#if rig.id === configState.defaultRigId}<span class="text-green-700"
-                                    >✓ default</span
-                                >{/if}
-                        </li>
-                    {/each}
-                </ul>
-            {/if}
-        </section>
-
-        <section class="mt-6">
-            <h2 class="font-semibold text-gray-800">
-                Rig catalogue ({configState.catalogue.length})
-            </h2>
-            <ul class="mt-1 text-sm text-gray-700">
-                {#each configState.catalogue as def (def.id)}
-                    <li>
-                        {def.name} — FT8 {def.ft8_mode || '—'}, {def.rig_modes?.length ?? 0} modes
-                    </li>
-                {/each}
-            </ul>
-        </section>
-
-        <!--
-            FT8 highlight colours — moved here from the logging SPA's FT8 Settings
-            tab (this is their home now). Holding-place UI: three native colour
-            pickers + a Save that PUTs /v1/config (echoing logging_station/station so
-            the unconditional overwrite can't wipe identity; see api/config.ts).
-        -->
-        <section class="mt-6 max-w-sm">
-            <h2 class="font-semibold text-gray-800">FT8 Band Activity colours</h2>
-            <div class="mt-2 flex flex-col gap-2 text-sm text-gray-700">
-                <label class="flex items-center justify-between gap-3">
-                    <span>CQ — not worked on this band</span>
-                    <input
-                        type="color"
-                        bind:value={configState.highlightUnworked}
-                        class="h-7 w-12 cursor-pointer rounded border border-gray-300"
-                        aria-label="Not-worked highlight colour"
-                    />
-                </label>
-                <label class="flex items-center justify-between gap-3">
-                    <span>CQ — worked before (dupe)</span>
-                    <input
-                        type="color"
-                        bind:value={configState.highlightWorked}
-                        class="h-7 w-12 cursor-pointer rounded border border-gray-300"
-                        aria-label="Worked-before highlight colour"
-                    />
-                </label>
-                <label class="flex items-center justify-between gap-3">
-                    <span>Station calling you</span>
-                    <input
-                        type="color"
-                        bind:value={configState.highlightCalling}
-                        class="h-7 w-12 cursor-pointer rounded border border-gray-300"
-                        aria-label="Calling-you highlight colour"
-                    />
-                </label>
-            </div>
-            <div class="mt-3 flex items-center gap-3">
+    <!-- Tab strip -->
+    <div class="border-b border-gray-300 bg-white px-6">
+        <div role="tablist" class="flex flex-row items-center gap-6">
+            {#each tabs as tab (tab.id)}
                 <button
+                    id={`tab-${tab.id}`}
                     type="button"
-                    onclick={() => void configState.saveColours()}
-                    disabled={configState.savingColours}
-                    class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                    role="tab"
+                    aria-selected={activeTab === tab.id}
+                    aria-controls={`panel-${tab.id}`}
+                    tabindex={activeTab === tab.id ? 0 : -1}
+                    onclick={() => selectTab(tab.id)}
+                    onkeydown={onTabKeydown}
+                    class="-mb-px cursor-pointer border-b-2 py-3 text-sm font-medium transition-colors {activeTab ===
+                    tab.id
+                        ? 'border-indigo-600 text-indigo-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'}"
                 >
-                    {configState.savingColours ? 'Saving…' : 'Save'}
+                    {tab.title}
                 </button>
-                {#if configState.coloursStatus === 'ok'}
-                    <span class="text-sm text-green-700">Saved.</span>
-                {:else if configState.coloursStatus}
-                    <span class="text-sm text-red-700">{configState.coloursStatus}</span>
-                {/if}
-            </div>
-        </section>
-    {/if}
-</main>
+            {/each}
+        </div>
+    </div>
+
+    <!-- Active tab body -->
+    <main class="flex-1 px-6 py-6">
+        <div id={`panel-${activeTab}`} role="tabpanel" aria-labelledby={`tab-${activeTab}`}>
+            <TabPlaceholder title={activeTitle} />
+        </div>
+    </main>
+
+    <!-- Per-tab footer. Save/Cancel are dirty-tracked per tab once the panels
+         land; disabled here because the placeholder bodies have nothing to save. -->
+    <footer class="flex items-center justify-end gap-3 border-t border-gray-300 bg-white px-6 py-3">
+        <button
+            type="button"
+            disabled
+            class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+            Cancel
+        </button>
+        <button
+            type="button"
+            disabled
+            class="cursor-pointer rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+            Save
+        </button>
+    </footer>
+</div>
