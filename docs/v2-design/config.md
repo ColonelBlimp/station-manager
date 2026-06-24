@@ -562,6 +562,16 @@ logging-vs-logbook scope rule. The config SPA itself is a **separate design/buil
 redesign assumes config editing lands there, so the per-rig mode-mappings editor and the FT8
 display-prefs editor target the **config SPA**, not the logging SPA.
 
+**Status (2026-06-24):** the config SPA is now a **category-tab shell** —
+`Station · Rigs · FT8 · Forwarding · Email · Enrichment`. The shell + the
+**Station tab** (the set-once `LoggingStation` MY_* fields — zones/DXCC/country,
+postal address, altitude, antenna, CW) shipped; the rest are placeholders. Full
+design (shell, the operational-vs-set-once Station split, the Rigs master-detail
+editor + its recommended write path) lives in
+[`frontend-spa.md`](frontend-spa.md) → "Config SPA — design". The logging-side
+removal of the moved Station fields is **Phase 2**, deferred until the config SPA
+is live.
+
 ## 11. Redesign — dynamic reload (decided 2026-06-13)
 
 Resolves the §8 "dynamic reload" input + the operator's no-restart-friction concern. Three

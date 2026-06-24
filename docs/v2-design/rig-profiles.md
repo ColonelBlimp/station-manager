@@ -153,12 +153,22 @@ are unchanged.
 
 ## Deferred to the config-SPA work (pieces 2 & 3)
 
-- **Hardware-discovery endpoint** — enumerate serial ports (go.bug.st/serial
-  enumerator: USB VID/PID/serial → friendly label) + audio devices (malgo, as
-  `ft8-capture-probe -list` already does).
-- **Profile-editor UI** — dropdowns of discovered hardware; pick model from known
-  rigdefs; pick port + audio device from discovered lists. Operator never types an
-  identifier.
+The config SPA now exists as a **category-tab shell** (shipped 2026-06-24); the
+rig-profiles editor is its **Rigs tab**. Full editor design — master-detail
+layout, default-vs-override facets, the recommended **write path** (extend
+`PUT /v1/config` with a presence-aware `rigs` + `default_rig_id` block, vs new
+`…/v1/rigs` CRUD), and the 3-step build sequencing — lives in
+[`frontend-spa.md`](frontend-spa.md) → "Config SPA — design" → Rigs tab. The
+items below are the underlying daemon pieces that design draws on.
+
+- ~~**Hardware-discovery endpoint**~~ — **SHIPPED 2026-06-14** as `GET /v1/hardware`
+  (serial ports via go.bug.st enumerator + audio capture/playback via malgo,
+  friendly labels). The config SPA still needs a thin `api/hardware.ts` wrapper to
+  consume it for the Port/Audio dropdowns.
+- **Profile-editor UI** — the Rigs tab (master-detail; see `frontend-spa.md`).
+  Dropdowns of discovered hardware; pick model from known rigdefs; pick port +
+  audio device from discovered lists. Operator never types an identifier. **Gated
+  on the catalogue write path** (none today).
 - **Runtime hot-swap** — `POST /v1/rig/select {id}` + Service re-bind (tear down
   current pipeline, re-project, reopen; reset per-rig live state — tune snapshot, hub
   caches, identity confirmation — as cleanly as a disconnect, ADR 0028).

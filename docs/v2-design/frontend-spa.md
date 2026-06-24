@@ -129,14 +129,76 @@ three lockfiles. `.gitignore` mirrors the logging/config rule (committed
 `dist/index.html`, gitignored assets). `internal/api/spa_test.go` gains a
 `LogbookFS()` embed smoke test guarding the committed placeholder.
 
-## Config SPA — rig-profiles editor (design, 2026-06-14)
+## Config SPA — design
 
 The config SPA's purpose is a **parking place for set-once config** that is UI
-noise in the live-logging client (operator direction; config.md §10.6). Its
-**first real surface is a rig-profiles editor** — and Mode Mappings, currently
-buried in the logging SPA's My Station → Mode Mappings sub-tab, is just *one
-facet of a per-rig profile* (`types.RigConfig`), so it migrates as part of this,
-not standalone.
+noise in the live-logging client (operator direction; config.md §10.6). It is a
+**category-tab shell**: one tab per set-once config area. This section covers the
+shell, then each tab. Daemon-authoritative throughout — `configState`
+(`/v1/config` + `/v1/rigs`), no localStorage cache (ADR 0003).
+
+### Shell — category tabs (design + build 2026-06-24)
+
+**SHIPPED 2026-06-24:** the shell + the Station tab. The Rigs/FT8/Forwarding/
+Email/Enrichment tabs render a placeholder until built.
+
+- **Tabs, in setup-order:** `Station · Rigs · FT8 · Forwarding · Email ·
+  Enrichment`. Order = what you'd touch on a fresh install (identity first, then
+  hardware, then the display tweak, then the network services). **Default landing
+  tab = Station.**
+- **Nav = a horizontal top tab strip** (`role="tablist"`/`tab`/`tabpanel`, roving
+  tabindex, Left/Right arrow nav). Built with plain Tailwind, *not* the logging
+  SPA's theme tokens (`.tab-item`, `bg-focus`, …) — a deliberate-for-now
+  divergence; unifying via a shared theme layer is a backlog item (UI consistency
+  / dark mode).
+- **Routing = hash deep-links** (`#rigs`, `#forwarding`, …); falls back to the
+  first tab. Cheap (no router dep) and lets the daemon's future "restart required"
+  hint / docs link straight to a tab.
+- **Per-tab save, not global.** Each tab owns its own dirty-tracking + Save/Cancel
+  via the shared `TabFooter` component — forced by the data anyway (Rigs writes
+  via a rig write path; the rest via `PUT /v1/config`). No shared shell footer.
+- **Header bar:** title + a daemon-connection status dot (green once `/v1/config`
+  + `/v1/rigs` load clean, red on error, grey while connecting). The right-side
+  slot is the reserved home for **cross-SPA links** (→ logging, → logbook, → db
+  manager — dogfood-inbox 2026-06-24); not built yet.
+
+### Station tab (design + build 2026-06-24; SHIPPED)
+
+Holds the **set-once `LoggingStation` MY_* fields**. The split from the logging
+SPA's My Station follows one rule — *"touch it per session or when you go
+portable" stays in logging; "set once" moves here*:
+
+- **Stays in logging (operational):** Station Callsign, Operator + Operator Name
+  (the op-identity pair — swaps together in contests/multi-op; future *User
+  profiles*, see backlog), Owner's Callsign, **Grid Square** (+ derived Lat/Lon).
+  Grid is the one location field that changes on a *local* portable trip, so it's
+  the sole operational location field.
+- **Moved to the config Station tab (set-once):** **CQ Zone, ITU Zone, DXCC,
+  Country** (change only on a *cross-border* DXpedition — a full setup event, not
+  a quick tweak), Operator's postal address (Street, City, Postal Code), Altitude,
+  Antenna (`MY_ANTENNA`), Morse Key Type / Info (CW).
+- **Layout:** grouped sections (no nested tabs) — a location cluster (no heading),
+  then *Postal address (for QSL cards)* / *Equipment* / *CW*; centred `mx-auto
+  max-w-3xl`.
+- **Save:** merges edits onto the FULL `logging_station` block from the last GET
+  (so the logging-owned operational fields round-trip untouched) + echoes
+  `station`; omits `ft8_display`/`qsl` (presence-aware on the daemon PUT). Light
+  client validation only (numeric inputmode); the daemon validates on PUT.
+- **Deferred:** an **operator email** field — no daemon home today (can't ride
+  `logging_station`: ADIF has no `MY_EMAIL`). Backlog item (`operator_email`
+  config field). NB ADIF `EMAIL` is the *contacted* station's address (QRZ-filled,
+  `types.ContactedStation.Email`), distinct from the operator's own.
+- **⚠ Phase-2 logging cleanup is deferred until the config SPA is live + working**
+  (operator directive 2026-06-24): the moved fields stay editable in *both* SPAs
+  in the interim — `configState`/`PUT /v1/config` keeps them consistent — and only
+  *then* does the logging My Station drop them (Identity keeps callsign/operator/
+  owner/grid; Location/Equipment/CW + the Modes sub-tab go).
+
+### Rigs tab — rig-profiles editor (design 2026-06-14, expanded 2026-06-24; PENDING)
+
+The config SPA's headline surface. **Mode Mappings**, currently in the logging
+SPA's My Station → Mode Mappings sub-tab, is just *one facet of a per-rig profile*
+(`types.RigConfig`), so it migrates here, not standalone.
 
 **Scope decision: profile *instances* only.** User-defined rig *definitions*
 (authoring new rigdefs into a working-dir override directory) were **considered
@@ -178,16 +240,39 @@ enumeration is CGO-gated, so the static build reports `audio.available:false`
 (graceful degrade); serial is pure-Go (all builds). Friendly serial labels
 depend on udev providing the USB product string — may fall back to the bare path.
 
+**Write path — recommended, pending confirmation (2026-06-24).** There is **no
+catalogue write path today** (`GET /v1/rigs` reads; nothing writes). Recommended:
+**extend `PUT /v1/config` to accept a presence-aware `rigs` + `default_rig_id`
+block** (the SPA edits the in-memory catalogue and PUTs the whole thing), rather
+than new `…/v1/rigs` CRUD endpoints. Rationale: the catalogue is tiny (1–3 rigs),
+it reuses the existing config write path + echo pattern, and set-default is
+restart-only in Phase 1 (no live re-bind needed). The CRUD-endpoints alternative
+stays open if granular live operations (hot-swap, §11.4) are unparked. The
+`api/hardware.ts` wrapper (`GET /v1/hardware` for the Port/Audio dropdowns) is
+also not yet written — the config SPA has `api/{config,rigs}.ts` only.
+
+**Build sequencing (proposed 2026-06-24) — three steps, not one:**
+- **Step 1 — core editor.** Daemon write path (above) + `api/hardware.ts`, then
+  the master-detail surface: rig list, add / delete / set-default, Model / Port /
+  Audio / FT8-mode / MY_RIG, restart banner, save.
+- **Step 2 — Mode Mappings sub-editor** (self-contained; the facet migrating from
+  logging My Station).
+- **Step 3 — Serial overrides** sub-section (advanced; inherit-vs-override).
+
 **Build order (daemon-first, committable slices):**
 1. **`GET /v1/hardware`** enumeration endpoint — **shipped 2026-06-14**
    (`internal/hardware` + handler; serial pure-Go, audio CGO-seam).
-2. Daemon: rigdef-defaults exposure (likely `GET /v1/rigs`) for the
-   default-vs-override UX.
-3. Config SPA plumbing (`configState` + `/v1/config` GET/PUT wrapper).
-4. Config SPA rig-profiles surface (the master-detail UX above).
-5. Logging-SPA cleanup: remove My Station → Mode Mappings + the inert Rig field
-   once the CSPA covers them.
-6. Docs: the install.md hardware-pick hint table.
+2. **`GET /v1/rigs`** rigdef-defaults + catalogue exposure — **shipped** (config
+   SPA `api/rigs.ts` consumes it).
+3. Config SPA plumbing (`configState` + `/v1/config` GET/PUT wrapper) — **shipped**.
+4. **Shell (category tabs) + Station tab — shipped 2026-06-24.**
+5. Rigs tab (the 3 steps above) — **PENDING** (gated on the write path).
+6. FT8 / Forwarding / Email / Enrichment tabs — **PENDING** (lighter
+   `PUT /v1/config` surfaces; FT8-display colour logic already lives on
+   `configState` from the earlier holding-place UI).
+7. Logging-SPA cleanup (Phase 2): remove the moved My Station fields + the Mode
+   Mappings sub-tab + the inert Rig field — **only after the config SPA is live**.
+8. Docs: the install.md hardware-pick hint table.
 
 ## Toolkit choice (confirmed 2026-04-30)
 
