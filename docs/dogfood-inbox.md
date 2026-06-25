@@ -19,3 +19,5 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-24] we need to implement UI themes as well as dark mode
 - [2026-06-24] the initial setup page should say something like, 'if you want to continue configuring Station Manager, click here [link]' which should go to the config SPA
 - [2026-06-24] all password/secret input field should be able to 'display' the password (the little eye glyph)
+- [2026-06-25] psk reporter config not seen
+- [2026-06-25] qsl fields not seen
