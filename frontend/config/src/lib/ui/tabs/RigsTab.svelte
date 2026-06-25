@@ -57,7 +57,7 @@
         <input type="checkbox" bind:checked={configState.bridgeEnabled} class="cursor-pointer" />
         Enable rig connection (CAT)
         <span class="font-normal text-gray-400"
-            >— connect the daemon to the active rig's serial port</span
+            >— connect the Station Manager to the active rig's serial port</span
         >
     </label>
 

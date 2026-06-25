@@ -560,6 +560,49 @@ when it ships — don't let this rot into a graveyard.
   wait on the cross-SPA-link component); when that shared nav lands, the link can
   be revisited for consistency.
 
+- **FT8 occupancy — investigate a rendered waterfall option.** Filed from
+  dogfood-inbox 2026-06-25. Today TX-offset selection is a per-slot **data**
+  view: `Ft8OccupancyStrip` lays the passband out horizontally with busy bands
+  shaded and daemon-vetted clear offsets as clickable markers (deliberately *not*
+  a rendered waterfall — CLAUDE.md). Investigate offering a real **scrolling
+  waterfall** (spectrogram over time) as an alternative/additional occupancy view
+  — the WSJT-X-familiar visual. Open points: (1) data path — needs per-slot (or
+  faster) FFT magnitude frames pushed to the SPA (new SSE payload / cadence), well
+  beyond today's once-per-15s occupancy snapshot; (2) the occupancy FFT
+  (`internal/audio` `RealPlan`) is **deliberately pure-Go** precisely because it's
+  once-per-15s and not hot — a ~10 fps waterfall is the exact trigger to revisit
+  PocketFFT there (see memory `project_sm_realfft_stays_pure_go`); (3) SPA render
+  cost + whether it's worth it vs the current clear-offset markers, which already
+  answer "where can I transmit". Investigation first, not a build commitment.
+
+- **LSPA → My Station → Location: future POTA fields.** Filed from dogfood-inbox
+  2026-06-25, alongside the Location-tab field trim (the trim itself is the
+  active phase-2 LSPA cleanup, not backlog). Once the Location tab is reduced to
+  Grid Square / Altitude / Lat / Lon, the future addition is **POTA fields**
+  (park references — `MY_SIG`/`MY_SIG_INFO` ADIF, or POTA park id). Sibling to
+  the already-deferred IOTA/POTA/SOTA bucket (memory
+  `project_sm_adif_my_star_buckets`). Not scoped — a placeholder so the "future
+  add POTA" intent isn't lost when the trim lands.
+
+- **Config SPA — FT8 decode-log toggle (`ft8.decode_log`).** Filed from
+  dogfood-inbox 2026-06-25. The FT8 decode log (JTDX `ALL.TXT`-style RX+TX record,
+  `internal/ft8/decodelog.go`, shipped 2026-06-23) is **`config.json`-only today** —
+  no SPA control. Add an enable toggle (+ optional path field) to the config SPA's
+  **FT8 tab**, beside the PSK Reporter section. Two layers, mirroring the
+  session-191 PSK Reporter work:
+  - **Daemon:** `ft8.decode_log` is **not** surfaced on `/v1/config` GET/PUT yet
+    (only `ft8_display` + `psk_reporter` are). Add `Ft8DecodeLog
+    *types.Ft8DecodeLogConfig` to `ConfigResponse` + `ConfigPatch`
+    (`handler_config.go`), serve `cfg.Ft8.DecodeLog` on GET, apply presence-aware
+    on PUT (a save omitting it leaves it alone). Reuse the canonical
+    `types.Ft8DecodeLogConfig{Enabled, Path}` — no parallel struct. Update
+    `api-endpoints.md`.
+  - **SPA:** `config.ts` type + a form in `config.svelte.ts` + the FT8-tab UI
+    (toggle + path input, default-path placeholder). The log file opens at FT8
+    **service start**, so a change is **restart-required** — fold into the FT8 save
+    with the same restart banner the PSK Reporter editor uses.
+  Small, well-scoped; not started.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

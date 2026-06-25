@@ -189,9 +189,8 @@
         <div class="py-4">
             <p>
                 Before you can use Station Manager, the <i>default log book</i> needs to be initialised.
-                All this requires is a callsign. Don't worry if you are not sure which callsign to enter;
-                it is generally recommended that the <i>default log book</i> be associated with you personal
-                callsign.
+                All this requires is a callsign. it is generally recommended that the <i>default log book</i>
+                be associated with you personal callsign.
             </p>
             <p>
                 If you use QRZ.com and plan to forward QSOs to it, then the callsign entered here should be

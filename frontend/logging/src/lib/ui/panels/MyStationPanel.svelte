@@ -9,7 +9,6 @@
     import { isValidCallsign } from '../../validators/callsign';
     import { isValidMaidenhead } from '../../validators/maidenhead';
     import { passthrough } from '../../validators/passthrough';
-    import { isValidCqZone, isValidItuZone, isValidDxcc } from '../../validators/zone';
     import ValidatedInput from '../components/ValidatedInput.svelte';
 
     /*
@@ -286,6 +285,16 @@
                     aria-labelledby="my-station-tab-location"
                     class="flex flex-col pt-3"
                 >
+                    <!--
+                        Location holds only the operating-relevant geo fields:
+                        Grid Square (operator-edited), Altitude, and the
+                        daemon-derived Lat/Lon mirror. The set-once fields —
+                        CQ/ITU zone, DXCC, and the postal address — moved to the
+                        config SPA's Station tab (2026-06-25 LSPA cleanup); they're
+                        still round-tripped unchanged in the PUT below (the daemon
+                        full-replaces logging_station), so removing the editors
+                        here doesn't clear them.
+                    -->
                     <div class="flex space-x-4">
                         <ValidatedInput
                             id="my-gridsquare"
@@ -295,66 +304,6 @@
                             widthClass="w-fit"
                             inputClass="w-38"
                         />
-                        <ValidatedInput
-                            id="my-cq-zone"
-                            label="CQ Zone"
-                            bind:value={configState.loggingStation.myCqZone}
-                            validator={isValidCqZone}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                        <ValidatedInput
-                            id="my-itu-zone"
-                            label="ITU Zone"
-                            bind:value={configState.loggingStation.myItuZone}
-                            validator={isValidItuZone}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                        <ValidatedInput
-                            id="my-dxcc"
-                            label="DXCC"
-                            bind:value={configState.loggingStation.myDxcc}
-                            validator={isValidDxcc}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                    </div>
-                    <div class="flex space-x-4">
-                        <ValidatedInput
-                            id="my-street"
-                            label="Street"
-                            bind:value={configState.loggingStation.myStreet}
-                            validator={passthrough}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                        <ValidatedInput
-                            id="my-city"
-                            label="City"
-                            bind:value={configState.loggingStation.myCity}
-                            validator={passthrough}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                        <ValidatedInput
-                            id="my-postal-code"
-                            label="Postal Code"
-                            bind:value={configState.loggingStation.myPostalCode}
-                            validator={passthrough}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                        <ValidatedInput
-                            id="my-country"
-                            label="Country"
-                            bind:value={configState.loggingStation.myCountry}
-                            validator={passthrough}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                    </div>
-                    <div class="flex space-x-4">
                         <ValidatedInput
                             id="my-altitude"
                             label="Altitude (m)"
