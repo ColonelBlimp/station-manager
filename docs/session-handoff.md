@@ -32,25 +32,27 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-06-25)
 
-> **Recent arc (session 191, 2026-06-25):** **config-SPA build-out + full dogfood-triage
-> sweep.** The config SPA gained four real surfaces: **Email/SMTP tab** (masked-on-GET
-> `SmtpInfo`, merge-on-PUT keeps the stored password), a **PSK Reporter** section on the
-> FT8 tab (`psk_reporter` reused unmasked, served raw/sparse, restart banner), a **Station
-> identity** section (callsign/operator/owner/name/grid now editable in the CSPA — first-run
-> setup is doable without hopping to the logging SPA, and because the daemon re-derives
-> lat/lon from grid on every PUT this also fixed the CSPA lat/lon-on-save report), and a
-> **QSL defaults** section (QSL_VIA/QSLMSG/QSL_SENT_VIA). Plus a reusable **`PasswordField`**
-> (eye-glyph) across all CSPA secret inputs, the **radio-tower favicon** on all three SPAs,
-> and the **CAT/FT8 master enable toggles**. Infra: a **bulk-import path**
-> (`SubmitImportBatch` — batched txns + hoisted lookups → ~9×, 4509 recs 11.7s→2.3s, no
-> schema change), the **serial by-id port fix** (`hardware.go` stores the stable
-> `/dev/serial/by-id/` symlink), and a **three-SPA build-script fix** (dev-rpm/release-rpm/
-> release.sh now build config+logbook too — they'd been silently shipping stale bundles).
-> Dogfood inbox fully triaged: 7 fixed, 1 verified-WAI, 3 → backlog. **Earlier arc (sessions
-> 187–190, 2026-06-22→24):** ClubLog forwarder shipped (187); importer redesigned to default
-> NO-UPLOAD + `smctl import` (188); fresh-install config fixes — dangling `default_rig_id`,
-> bridge sparse-but-served (189); Codex's RST-length migration `0002` reviewed + hardened,
-> 4509-QSO fresh-install import validated end-to-end (190). Per-session detail below.
+> **Recent arc (session 192, 2026-06-25):** **FT8 enrichment correctness + Operate polish +
+> config-SPA decode-log + LSPA phase-2 cleanup.** The FT8 Band-Activity **"new DXCC" `*`
+> marker** shipped this session — and was immediately found false-positiving on worked
+> entities (European Russia, Germany). Root cause + fix: the `is_new_entity` check matched on
+> the **country-NAME string**, which never matched because hamnut's names ("Fed. Rep. of
+> Germany", "European Russia") differ from QRZ-imported QSOs' stored names; reworked to match
+> the **numeric ADIF DXCC code** via a new embedded `internal/enums/dxcc` prefix→number table
+> + `HasQsoForDxcc` (`json_extract`) + name-match fallback (memory `project_sm_new_entity_dxcc`).
+> Also: FT8 **pile-up up-arrow reorder** (`moveUp`), the **FT8 logbook-count bump fix**
+> (`ft8-logged` → `refreshLogbookCount`), a **config-SPA FT8 decode-log toggle**
+> (`ft8_decode_log` on `/v1/config` + an FT8-tab section surfacing the ALL.TXT log), the
+> **LSPA phase-2 cleanup** (removed My Station's Mode Mappings + CW sub-tabs, trimmed Location
+> to grid/altitude/lat/lon — all now config-SPA domain; fields still round-tripped so the
+> daemon's full-replace doesn't clear them), and a first-run **setup→config hand-off
+> interstitial**. **Earlier arc (session 191, 2026-06-25):** config-SPA build-out — Email/SMTP,
+> PSK Reporter, Station-identity, QSL-defaults tabs + reusable `PasswordField` + radio-tower
+> favicon + a bulk-import path (~9×) + the serial by-id fix + a three-SPA build-script fix.
+> **Before that (187–190, 2026-06-22→24):** ClubLog forwarder (187); importer default-NO-UPLOAD
+> + `smctl import` (188); fresh-install config fixes — dangling `default_rig_id`, bridge
+> sparse-but-served (189); Codex's RST-length migration hardened + 4509-QSO import validated
+> end-to-end (190). Per-session detail below.
 
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
@@ -60,7 +62,7 @@ In-tree and shipped:
 - **Enrichment** (ADR 0017) — hamnut + QRZ providers, domain-tables-as-cache, three-state read policy, bounded async refresh worker. Never blocks logging.
 - **Forwarder** (ADR 0022) — multi-destination `Forwarder` interface + worker + registry; enqueue gated on config presence, not `Enabled`.
 - **Bridge** (`internal/bridge`, ADR 0013 + 0019) — M3a closed 2026-05-11. Read-only rig state over `/v1/rig/events` SSE; AUTO-mode CAT → filter → SPA; pipeline supervisor (ADR 0020) self-heals first-boot ordering + mid-session disruption; rig-mode → ADIF mappings; i18n error codes (ADR 0010). **Inbound command path** (ADR 0026): `POST /v1/rig/command` drives freq/mode/VFO/band (data-driven `cat` commands + `BridgeInfo.ops`); SPA rig-control on Shift+Ctrl shortcuts. **Tune-carrier path** (ADR 0027): `POST /v1/rig/tune` + a daemon-owned TX state machine keys a reduced-power RTTY carrier for external-amp tuning — the first TX feature; the daemon owns the guaranteed stop; click-only Tune button. **Rig profiles** (ADR 0028, Phase 1 shipped 2026-06-05): `config.Rigs []types.RigConfig` (+`audio`) catalogue with `default_rig_id` as the active selector; legacy loose `bridge.serial`/`bridge.cat` migrate into a single id-1 rig at load; per-rig audio is **per-direction name-based** `audio.{rx,tx}` (Session 177); `ActiveBridge()`/`ActiveFt8()` project the active rig; bridge/ft8 internals unchanged. Switch = edit `default_rig_id` + restart. Discovery endpoint + picker UI + runtime hot-swap deferred to the config-SPA work.
-- **SPA logging client** — QsoPanel + CountryPanel + InfoPanel with four tabs (Worked / Details / My Station / Session), all shipped. **FT8 view (`Ft8Panel`)** carries the live Band Activity decode feed + occupancy/Clear-Slots readout; CQ decode lines are enriched SPA-side with a country flag + worked-before tint (Session 158). Keyboard-first flow, enrichment + contact-history wiring, QSO edit overlay, per-session QSO list. My Station has seven sub-tabs (identity / location / equipment / CW / qso / Mode Mappings / **About** — the last a read-only `/v1/version` diagnostics panel). The Comment field carries a **paste-list** (localStorage MRU of recently-logged comments, clipboard-list dropdown). **Session email-out**: posts `{to, uuids[]}`; the daemon rebuilds the ADIF from the live DB rows (proper `<EOH>` header), durably stamps `sm_fwrd_by_email_*` (SessionPanel "Emailed" column), and archives a copy under `<workingDir>/exports/sent-adif/`. See memory `project_sm_session_email_sent_status`.
+- **SPA logging client** — QsoPanel + CountryPanel + InfoPanel with four tabs (Worked / Details / My Station / Session), all shipped. **FT8 view (`Ft8Panel`)** carries the live Band Activity decode feed + occupancy/Clear-Slots readout; CQ decode lines are enriched SPA-side with a country flag + worked-before tint (Session 158). Keyboard-first flow, enrichment + contact-history wiring, QSO edit overlay, per-session QSO list. My Station has five sub-tabs (identity / location / equipment / qso / **About** — the last a read-only `/v1/version` diagnostics panel); Mode Mappings + CW moved to the config SPA and Location was trimmed to grid/altitude/lat/lon (session 192 phase-2 cleanup). The Comment field carries a **paste-list** (localStorage MRU of recently-logged comments, clipboard-list dropdown). **Session email-out**: posts `{to, uuids[]}`; the daemon rebuilds the ADIF from the live DB rows (proper `<EOH>` header), durably stamps `sm_fwrd_by_email_*` (SessionPanel "Emailed" column), and archives a copy under `<workingDir>/exports/sent-adif/`. See memory `project_sm_session_email_sent_status`.
 - **Config SPA (`frontend/config/`)** — second embedded SPA, scaffolded 2026-06-14, served at `/config/` (sub-path on the same origin; Vite `base:'/config/'` + `StripPrefix` route; dev on :5174). Separate sibling project, NOT a route in the logging SPA. Placeholder shell only — its purpose is a **parking place for set-once config** that's UI noise in the logging client. Its **first real surface is a rig-profiles editor** (design settled in `frontend-spa.md` → "Config SPA — rig-profiles editor"). **Slice 1 shipped 2026-06-14:** `GET /v1/hardware` (`internal/hardware` — serial enum pure-Go all builds, audio enum CGO-seam, graceful degrade) for the profile pickers. CI gates it (config install/lint/check/build). See `docs/v2-design/api-endpoints.md` (new canonical endpoint reference) + `frontend-spa.md`.
 - **CD pipeline** — `.github/workflows/ci.yml` gates every push to main (SPA lint/check/test/build + gofmt/vet/`go test -race`/embed-build/all `cmd/...`). Local mirror `task ci:local`; dogfood refresh `task deploy:local:dev`.
 - **Operator daemon control** — the RPM ships `/usr/bin/smctl` (`start|stop|restart|status`) alongside `/usr/bin/smd`; it wraps `systemctl --user … smd` and prints a state-verified `SM Started.` / `SM Stopped.` line (bare `systemctl` is silent on success). See `docs/install.md §3`.
@@ -73,6 +75,8 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 192 (2026-06-25) — **New-entity DXCC-match fix + FT8 Band-Activity new-entity `*` marker + pile-up up-arrow reorder + FT8 logbook-count bump fix + config-SPA decode-log toggle + LSPA phase-2 cleanup + setup→config hand-off.** All green: full `go build`/`go vet`/`go test ./...`, gofmt clean; logging SPA lint/check + 845 vitest, config SPA lint/check + 5 vitest. **New-entity correctness (daemon):** the "new DXCC" flag (`country.is_new_entity`, `lookup/orchestrator.go` — drives the FT8 `*` and the Phone/CW Country-panel `*`) was false-positiving on worked entities (European Russia, Germany). Root cause: an **exact country-NAME string match** against the log, but hamnut's names ("Fed. Rep. of Germany", "European Russia") differ from QRZ-imported QSOs' stored names ("Germany", "Russia"), and name-match can't split European (54) vs Asiatic (15) Russia. Fixed to match the **numeric ADIF DXCC code**: new `internal/enums/dxcc` (embedded `dxcc-entities.json`, 154 entities, mirrors `enums/modes` embed + `LoadOverride` override) maps hamnut `primaryDXCCPrefix → DXCC number`; new `sqlite.HasQsoForDxccWithContext` (`json_extract(additional_data,'$.dxcc')` — the numeric DXCC lives in the blob, no column); the orchestrator derives the number and **falls back to the old name-match when a prefix isn't mapped** (partial coverage safe). Table built by `scripts/gen-dxcc-entities.py` (seed = the log's distinct DXCC numbers + a sample call → hamnut prefix; prefix collisions resolved by preferring the candidate whose stored name matches hamnut's, which rejected a log misfile — an HK4 Colombian call logged as Dominican Republic → kept HK→116). `dxcc.LoadOverride` wired in `cmd/smd`; operator override `$SM_WORKING_DIR/dxcc-entities.json`. Confirmed hamnut returns **no** numeric DXCC (only `primaryDXCCPrefix`); HamQTH `dxcc.php` does, but a live per-lookup call was rejected (a 2nd network dep in a fail-soft display path). **Known limit:** the table covers only the ~154 entities in the dogfood log — an unmapped worked entity with a name mismatch can still false-positive until its prefix is added (override / regenerate). Tests: `enums/dxcc`, `HasQsoForDxcc`, `IsNewEntity_MatchedByDxccDespiteNameMismatch` / `_DxccPath_NoPriorQso` (existing name-match tests still pass — fallback preserved). Memory `project_sm_new_entity_dxcc`. **FT8 SPA:** (1) **new-entity `*` marker** — `Ft8Panel` `decodeRow` shows a far-right green `*` when `info.isNewEntity` (rides the existing `enrichCallsign` flag lookup — no extra fetch; `ft8Enrich.svelte.ts` now carries `isNewEntity`), coexisting with the pile-up `✓` via `ml-auto`. (2) **pile-up up-arrow reorder** — `ft8PileupStack.moveUp(index)` (swap toward head; head/OOB no-op) + a left-side `↑` per `Ft8PileupDrawer` row (spacer on the head row) so a caller can be prioritised without clearing the FIFO. (3) **FT8 logbook-count fix** — the `ft8-logged` SSE handler now calls `configState.refreshLogbookCount()`; the LoggingCard `(N)` wasn't bumping for FT8 QSOs (the bump only lived in the Phone/CW submit path). **Config-SPA FT8 decode-log toggle:** `ft8_decode_log` added to `/v1/config` GET/PUT (reuses `types.Ft8DecodeLogConfig`, presence-aware; nil-in-config served as a disabled zero block so the form binds) + a Decode-log section (enable + path, default-path placeholder) on the FT8 tab, folded into the FT8 save + restart banner — surfaces the shipped-but-config-only `ft8.decode_log` (JTDX ALL.TXT) so the operator can enable it for enquiry backup. Tests: `handler_config_decodelog_test.go`; `api-endpoints.md` updated. **LSPA phase-2 cleanup (My Station):** removed the **Mode Mappings** + **CW** sub-tabs (now config-SPA domain — Rigs-tab `ModeMappingsEditor` + Station-tab morse fields) and **trimmed the Location sub-tab** to Grid Square / Altitude / Lat / Lon (CQ/ITU/DXCC + postal address live in the CSPA Station tab). All removed fields stay in the LSPA's PUT payload (the daemon full-replaces `logging_station`, so dropping them would clear them). My Station is now **5 sub-tabs** (identity / location / equipment / qso / About). CLAUDE.md + config.md mode-mapping pointers updated to the config SPA. **Setup→config hand-off:** the first-run callsign save now shows a "✓ Setup complete" interstitial (`app.svelte` `setup_done` snippet, local `justCompleted`) offering **Open the Config app →** (`<a href="/config/">`) + secondary **Start logging →**, shown once per install. **Install docs:** "power the rig on first" callout in `install.md` §4 step 1 (a USB-CAT serial port only enumerates with the rig powered on). **Dogfood triage:** new captures routed — FT8 occupancy **waterfall** → backlog (the ~10fps trigger to revisit PocketFFT for the occupancy FFT), decode-log toggle + LSPA Location trim → built this session, cross-SPA nav + themes/dark mode struck → backlog (already tracked). Backlog marked SHIPPED: new-entity `*` + DXCC fix, decode-log toggle, pile-up reorder, setup→config link, LSPA mode-mappings/CW removal.
 
 ### Session 191 (2026-06-25) — **Config-SPA build-out (Email / PSK Reporter / Station identity / QSL) + PasswordField + favicon + bulk import + 3-SPA build fix; full dogfood triage.** All green: `go test ./internal/api/ ./internal/config/`, gofmt/vet; config-SPA lint/check/format/build. **Daemon:** (1) **Bulk import** — new `qsoservice.SubmitImportBatch` (`submit_batch.go`): two-phase per batch (validate+dedupe with no open tx → one-tx write of survivors), hoisted logbook-callsign lookup, deduped `contacted_station` upserts, per-record fallback (re-run via `submit()`) on a batch-write failure; `cmd/smd/import.go` rewired to it. ~9× faster (4509 recs 11.7s→2.3s); **NO schema change** — reuses existing methods + the `(logbook_id,dedupe_key)` unique index. (2) **Serial by-id fix** — `hardware.SerialPorts()` now stores the stable `/dev/serial/by-id/…` symlink (`stableSerialID`/`EvalSymlinks`) instead of the renumber-prone `/dev/ttyUSBn`, so a saved rig port survives reboots. (3) **Email/SMTP edit surface** — masked `SmtpInfo` on `/v1/config` (`password_set` reports set/unset, merge-on-PUT keeps the stored secret; `smtpInfoFrom`/`mergeSmtp`); the read-only `mailer` projection (logging SPA) is untouched. (4) **PSK Reporter** — `psk_reporter` on `/v1/config` reusing `types.PskReporterConfig` unmasked, served raw/sparse (empty host/port → production default), `validatePskReporter` (port 0..65535). (5) **CAT/FT8 master toggles** — `bridge_enabled`/`ft8_enabled` presence-aware. New tests: `handler_config_smtp_test.go`, `handler_config_psk_test.go`, enable-toggle test. **Config SPA** (wired into the existing per-tab save model): **Email tab** (full SMTP form), **PSK Reporter** section on the FT8 tab (folded into the FT8 save + a new `ft8RestartRequired` banner — also closes the latent "no restart hint for the FT8-enable toggle" gap), **Station identity** section (identity now editable in BOTH SPAs onto one daemon source of truth, ADR 0003 — daemon `Normalize` re-derives lat/lon from grid on PUT, fixing the lat/lon-on-save report; first-run setup now self-sufficient in the CSPA), **QSL defaults** section (folded into the Station save). Reusable **`PasswordField.svelte`** (eye/eye-slash, controlled value+oninput to preserve masked-on-GET) swapped into Email/Enrichment/Forwarding. **Favicon:** `assets/logo.png` (radio tower) → each SPA's `public/logo.png`; `<link rel=icon>` base-rewritten per mount (`/logo.png`, `/config/logo.png`, `/logbook/logo.png`); rebuilt + committed all three dist seeds. **Build-script fix:** `dev-rpm.sh`/`release-rpm.sh`/`release.sh` now loop `logging config logbook` (were logging-only → silently shipping stale config/logbook bundles, incl. the new tabs). **Dogfood triage:** inbox fully worked — fixed favicon, password-glyph, QSL, PSK, and the operator/grid/lat-lon identity cluster; verified #1 (fresh-install default rig) working-as-intended; filed cross-SPA nav links, UI themes/dark mode, and setup→config hand-off to `backlog.md`. New captures pending triage: **remove mode-mappings + CW settings from the logging SPA** (now the config SPA's domain), and an **install-docs note** (power the rig on before running the config SPA so its serial port enumerates). Docs updated: `api-endpoints.md` (smtp/psk_reporter on GET+PUT), `types/pskreporter.go` comment.
 
@@ -150,29 +154,32 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 
 ## Next steps (priority order)
 
-> **⚠️ CURRENT NEXT STEPS (as of session 191, 2026-06-25) — the items deeper below are
+> **⚠️ CURRENT NEXT STEPS (as of session 192, 2026-06-25) — the items deeper below are
 > STALE history (operator_pick is SUPERSEDED, IC-7300 arc closed; kept for the trail):**
-> 1. **Behavioural retest of the session-191 config-SPA build-out** on the dogfood daemon
->    (`task deploy:local:dev` — now embeds all three SPAs): confirm Email, PSK Reporter,
->    Station identity, and QSL surfaces save + round-trip; the favicon shows; the password
->    eye-glyph works; and the CAT/FT8 master toggles take effect after restart.
-> 2. **Triage the new dogfood-inbox captures:** **remove mode-mappings + CW settings from
->    the logging SPA** (now the config SPA's domain — they were left in the LSPA's My
->    Station), and the **install-docs note** (power the rig on *before* running the config
->    SPA so its serial port enumerates in the picker).
-> 3. **Config-SPA shell is now complete** (Station/Rigs/FT8/Forwarding/Email/Enrichment —
->    Email was the last new tab). Remaining config-SPA backlog (filed 2026-06-25): **cross-SPA
->    nav links**, **UI themes/dark mode**, **setup→config hand-off link**.
-> 4. **Phase-2 logging-SPA cleanup:** remove the My Station fields that moved to the config
->    SPA (identity is now editable in both; the LSPA may carry now-redundant set-once
->    fields) — sequence after the retest confirms the CSPA covers them. Overlaps item 2.
-> 5. **PSK Reporter follow-ups (future, in backlog):** the **retrieve/query side** (who
->    heard *you*) and **generalize to a spot-submitter registry only when a 2nd destination
->    (DX cluster) lands**. (The config-SPA surface for `psk_reporter` shipped this session.)
-> 6. **Parked design — Band Activity prefix/substring filter** (session 182; backlog).
+> 1. **Behavioural retest on the dogfood daemon** (`task deploy:local:dev` — embeds all three
+>    SPAs). Largest single retest of the dogfood arc — this session's daemon changes need a
+>    real run: **new-entity DXCC matching** (confirm European Russia + Germany no longer show
+>    the `*`; genuinely new entities still do) and the **config-SPA decode-log toggle**
+>    (enable → restart → `ft8.decode_log` writes ALL.TXT). Plus the FT8 **`*` marker** +
+>    **pile-up ↑ reorder** + **logbook-count bump**, the **LSPA trims** (Mode Mappings/CW gone,
+>    Location reduced), and still-unconfirmed session-191 surfaces (Email/PSK/Station/QSL
+>    save + round-trip, favicon, password eye-glyph, CAT/FT8 master toggles).
+> 2. **New-entity DXCC table coverage:** the embedded table covers the ~154 entities in the
+>    dogfood log. If a known-worked entity shows a stray `*`, add its `primaryDXCCPrefix` via
+>    `$SM_WORKING_DIR/dxcc-entities.json` or regenerate (`scripts/gen-dxcc-entities.py`).
+>    Memory `project_sm_new_entity_dxcc`.
+> 3. **Remaining cross-SPA / config-SPA backlog (filed 2026-06-24/25):** **cross-SPA nav
+>    links** + **UI themes/dark mode** (+ the shared-theme-layer prerequisite). The
+>    setup→config hand-off link shipped session 192.
+> 4. **FT8 occupancy waterfall** — investigate a rendered scrolling-waterfall view (backlog;
+>    the ~10fps trigger to revisit PocketFFT for the occupancy FFT — memory
+>    `project_sm_realfft_stays_pure_go`).
+> 5. **PSK Reporter follow-ups (future, in backlog):** the **retrieve/query side** (who heard
+>    *you*) and **generalize to a spot-submitter registry only when a 2nd destination (DX
+>    cluster) lands**.
 >
-> *(Maintenance done session 191: rolled sessions 176–179 into the archive — live list now
-> at the 12 most recent, 180–191.)*
+> *(Maintenance: no roll-off needed — live list is 180–192 = 13 entries, under the ~15
+> threshold.)*
 >
 > The FT8-TX items further below are STALE — TX (a)–(e) + answer-a-CQ + caller-side +
 > work-a-caller + pile-up stacking all shipped; "auto-sequence" is OUT OF SCOPE /
