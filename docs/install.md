@@ -165,6 +165,12 @@ bare `/dev/ttyUSBn` — it survives reboots and re-plugging. A rig like the FTdx
 presents **two** serial ports (a dual USB UART); the CAT one is the "Enhanced"
 port — if unsure, try one and check the log (step 4), then the other.
 
+> **Power the rig on first.** A USB-CAT rig's serial port is provided by a USB
+> UART inside the radio — it only enumerates on the host once the rig is powered
+> on and connected. If you run the device probe (or open the config SPA's rig
+> picker) with the rig off, its port won't be in the list. Turn the rig on, then
+> probe / refresh the list.
+
 **2. Grant serial-port access.** The daemon runs as your user, so your user must
 be able to open the port. Read which group owns it and add yourself — the group
 name varies by distro, so take it from `stat`, don't assume `dialout`:
