@@ -21,3 +21,6 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-24] all password/secret input field should be able to 'display' the password (the little eye glyph)
 - [2026-06-25] psk reporter config not seen
 - [2026-06-25] qsl fields not seen
+- [2026-06-25] lat and lon are no calculated when the config SPA is saved, but it is updated in My Station LSPA
+- [2026-06-25] lat and lon needs gridsquare which is not edited in the config spa
+- [2026-06-25] operator name cannot be edited via CSPA
