@@ -448,6 +448,12 @@ function openSource(): void {
                 country: p.country ?? '',
                 distanceKm: path ? String(Math.round(path.shortPathDistanceKm)) : '',
             });
+            // Refresh the default-logbook QSO count so the LoggingCard header
+            // reflects the new row — FT8 QSOs log daemon-side (no form submit), so
+            // this is the only place the count gets bumped for them, mirroring the
+            // Phone/CW submit path in QsoPanel. Fire-and-forget: a refresh failure
+            // leaves the previous count visible until the next QSO succeeds.
+            void configState.refreshLogbookCount();
             // Gray the station out in Band Activity so it can't be accidentally
             // re-worked. The worked-before cache is lookup-once per session and was
             // populated (worked:false) before the contact, so without this it stays

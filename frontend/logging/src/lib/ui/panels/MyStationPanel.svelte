@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { untrack } from 'svelte';
     import { putConfig } from '../../api/config';
     import { catState } from '../../states/cat.svelte';
     import { configState } from '../../states/config.svelte';
@@ -34,25 +33,11 @@
         try {
             const ls = configState.loggingStation;
 
-            // Mode-mappings payload — only included when the operator
-            // has visited the Mode Mappings sub-tab (which is what
-            // populates editingModes via snapModeMappings). Omitting
-            // the field on the PUT keeps the daemon's existing
-            // override map untouched; sending an empty object would
-            // clear all overrides. Blank-MODE rows are dropped here
-            // so the daemon's diff layer treats them as "revert to
-            // rigdef default".
-            let modeMappingsPayload: Record<string, { mode: string; submode?: string }> | undefined;
-            if (Object.keys(editingModes).length > 0) {
-                modeMappingsPayload = {};
-                for (const [rigStr, pair] of Object.entries(editingModes)) {
-                    const mode = pair.mode.trim();
-                    if (mode === '') continue;
-                    const submode = pair.submode.trim();
-                    modeMappingsPayload[rigStr] = submode ? { mode, submode } : { mode };
-                }
-            }
-
+            // The morse-key fields no longer have an editor here (they
+            // moved to the config SPA's Station tab), but they're still
+            // sent unchanged from configState: the daemon does a full
+            // replace of logging_station on PUT, so omitting them would
+            // clear the stored values.
             const outcome = await putConfig({
                 logging_station: {
                     station_callsign: ls.stationCallsign,
@@ -78,27 +63,10 @@
                     amp_multiplier: configState.station.ampMultiplier,
                     default_power: configState.station.defaultPower,
                 },
-                ...(modeMappingsPayload !== undefined && {
-                    bridge: {
-                        enabled: configState.station.enabled,
-                        driver: configState.bridge.driver,
-                        mode_mappings: modeMappingsPayload,
-                    },
-                }),
             });
             switch (outcome.kind) {
                 case 'ok':
                     configState.applyResponse(outcome.config);
-                    // Re-snap editingModes from the daemon's response
-                    // so the panel reflects the merged post-save view
-                    // (operator's overrides + any daemon-side
-                    // normalisation). Only re-snap when we actually
-                    // sent mode_mappings — otherwise leave editingModes
-                    // alone (operator may have unsaved edits we
-                    // shouldn't overwrite from an Identity-only save).
-                    if (modeMappingsPayload !== undefined) {
-                        snapModeMappings();
-                    }
                     if (qsoDefaults.notifyConfigSaved) {
                         toasts.info('Station updated.');
                     }
@@ -127,7 +95,7 @@
         ARIA pattern as InfoPanel's outer tabs (tablist / tab /
         tabpanel) so screen readers see the nesting correctly.
     */
-    type SectionId = 'identity' | 'location' | 'equipment' | 'modes' | 'cw' | 'qso' | 'about';
+    type SectionId = 'identity' | 'location' | 'equipment' | 'qso' | 'about';
 
     interface Section {
         id: SectionId;
@@ -138,8 +106,6 @@
         { id: 'identity', title: 'Identity' },
         { id: 'location', title: 'Location' },
         { id: 'equipment', title: 'Equipment' },
-        { id: 'modes', title: 'Mode Mappings' },
-        { id: 'cw', title: 'CW' },
         { id: 'qso', title: 'QSO' },
         { id: 'about', title: 'About' },
     ];
@@ -158,8 +124,6 @@
         'identity',
         'location',
         'equipment',
-        'modes',
-        'cw',
         'qso',
         'about',
     ];
@@ -177,58 +141,6 @@
     }
 
     let activeSection: SectionId = $state(loadActiveSection());
-
-    /*
-        Local editing state for the Mode Mappings sub-tab. Snapped
-        from configState.bridge.modeMappings each time the operator
-        navigates INTO the tab — that way an external config refresh
-        doesn't stomp in-progress edits while the operator is mid-
-        change. On successful save the snap is taken from the
-        daemon's response (which has the merged view post-write).
-    */
-    interface EditablePair {
-        mode: string;
-        submode: string;
-    }
-    let editingModes: Record<string, EditablePair> = $state({});
-
-    function snapModeMappings(): void {
-        const fresh: Record<string, EditablePair> = {};
-        for (const rigStr of configState.bridge.rigModes) {
-            const m = configState.bridge.modeMappings[rigStr];
-            fresh[rigStr] = { mode: m?.mode ?? '', submode: m?.submode ?? '' };
-        }
-        editingModes = fresh;
-    }
-
-    // $effect.pre runs BEFORE the DOM patches that follow a state
-    // change. That ordering matters here: clicking the Mode Mappings
-    // tab sets activeSection='modes', the template re-renders the
-    // `{:else if activeSection === 'modes'}` branch, and the
-    // `bind:value={editingModes[rigStr].mode}` inputs need a non-
-    // undefined entry for every rigStr they iterate over. A plain
-    // $effect would populate editingModes AFTER the failed render —
-    // $effect.pre lands the population before the template binds.
-    //
-    // Tracked dependency: ONLY activeSection. snapModeMappings reads
-    // configState.bridge.rigModes + .modeMappings, so calling it inside
-    // the effect would make those reactive deps of this effect — any
-    // future actor that mutates bridge config (a periodic /v1/config
-    // refresh, an SSE-driven applyResponse, a second-tab PUT) would
-    // re-fire this effect and silently wipe whatever the operator had
-    // typed into the Mode Mappings tab. untrack() isolates the snap
-    // call so it doesn't bind those reads as deps. The lastSection
-    // gate restricts re-snaps to the INTO-modes transition; a re-run
-    // of this effect while already on the modes tab (currently no such
-    // trigger exists, but the gate is cheap defence) does nothing.
-    let lastSection: SectionId | undefined;
-    $effect.pre(() => {
-        const section = activeSection;
-        if (section === 'modes' && lastSection !== 'modes') {
-            untrack(() => snapModeMappings());
-        }
-        lastSection = section;
-    });
 
     $effect(() => {
         try {
@@ -551,96 +463,6 @@
                                 records.
                             </p>
                         </div>
-                    </div>
-                </div>
-            {:else if activeSection === 'modes'}
-                <div
-                    id="my-station-modes"
-                    role="tabpanel"
-                    aria-labelledby="my-station-tab-modes"
-                    class="flex w-full p-2"
-                >
-                    <div class="flex flex-col w-110 overflow-hidden">
-                        <ul role="list" class="flex flex-col space-y-3 h-52 p-2 overflow-y-scroll">
-                            {#each configState.bridge.rigModes as rigStr (rigStr)}
-                                {#if editingModes[rigStr]}
-                                    <li
-                                        class="flex items-center space-x-4 text-sm border border-gray-300 rounded-md px-6 py-3"
-                                    >
-                                        <div class="w-22 font-semibold">{rigStr}</div>
-                                        <span>:</span>
-                                        <div>
-                                            <input
-                                                id={`mode-map-${rigStr}-mode`}
-                                                type="text"
-                                                class="input-base w-30"
-                                                placeholder="MODE"
-                                                bind:value={editingModes[rigStr].mode}
-                                                autocomplete="off"
-                                                spellcheck="false"
-                                            />
-                                        </div>
-                                        <div>
-                                            <input
-                                                id={`mode-map-${rigStr}-submode`}
-                                                type="text"
-                                                class="input-base w-30"
-                                                placeholder="(optional)"
-                                                bind:value={editingModes[rigStr].submode}
-                                                autocomplete="off"
-                                                spellcheck="false"
-                                            />
-                                        </div>
-                                    </li>
-                                {/if}
-                            {/each}
-                        </ul>
-                    </div>
-                    <div class="flex-col p-4 w-80">
-                        {#if configState.bridge.rigModes.length === 0}
-                            <p class="text-sm opacity-70">
-                                No CAT rig is configured. Mode mappings translate a rig defined MODE
-                                into an ADIF MODE / SUBMODE values; the table populates once
-                                <code>bridge.enabled</code> is set in <code>config.json</code> and the
-                                application recognises the configured driver.
-                            </p>
-                        {:else}
-                            <p class="text-xs opacity-70">
-                                Translation table for <strong>{configState.station.rigName}</strong
-                                >: each row maps a rig defined MODE (left) to an ADIF MODE (centre)
-                                plus an optional ADIF SUBMODE (right). The defaults are sensible for
-                                common usage; change any row when you're operating a different
-                                protocol (e.g. running PSK31 on DATA-U instead of FT8). Empty MODE
-                                clears the operator override so the default mappings applies;
-                                validation rejects unknown ADIF values with an error message.
-                            </p>
-                        {/if}
-                    </div>
-                </div>
-            {:else if activeSection === 'cw'}
-                <div
-                    id="my-station-cw"
-                    role="tabpanel"
-                    aria-labelledby="my-station-tab-cw"
-                    class="flex flex-col space-y-1 pt-3"
-                >
-                    <div class="flex space-x-4">
-                        <ValidatedInput
-                            id="my-morse-key-type"
-                            label="Morse Key Type"
-                            bind:value={configState.loggingStation.myMorseKeyType}
-                            validator={passthrough}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
-                        <ValidatedInput
-                            id="my-morse-key-info"
-                            label="Morse Key Info"
-                            bind:value={configState.loggingStation.myMorseKeyInfo}
-                            validator={passthrough}
-                            widthClass="w-fit"
-                            inputClass="w-38"
-                        />
                     </div>
                 </div>
             {:else if activeSection === 'qso'}

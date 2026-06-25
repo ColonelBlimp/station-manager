@@ -286,12 +286,12 @@
                 {/if}
             </div>
         </div>
-        <div class="flex flex-col w-80 items-center justify-center">
+        <div class="flex flex-col w-80 items-center mt-4.5">
             <button
                 type="button"
                 onclick={toggleArm}
                 disabled={arming || !canArm}
-                class="h-22 w-40 rounded text-base font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
+                class="h-23 w-40 rounded text-base font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
                     ? 'bg-red-600 text-white hover:bg-red-700'
                     : 'bg-focus text-surface hover:opacity-90'}"
             >

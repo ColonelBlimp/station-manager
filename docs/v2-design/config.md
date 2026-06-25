@@ -362,8 +362,8 @@ a sensible default exists:
   **param overrides**, **mode-mappings**. Resolution: `rig.Model` → rigdef per-model default
   → apply this rig's override; the **merged** value is authoritative.
 
-**`mode_mappings` is the reference implementation of B2 today** (My Station → Mode
-Mappings; rigdef ships defaults; only operator deltas persist; merged at `/v1/config` GET).
+**`mode_mappings` is the reference implementation of B2 today** (config SPA Rigs tab →
+Mode Mappings; rigdef ships defaults; only operator deltas persist; merged at `/v1/config` GET).
 `ft8.tx.mode` and the serial overrides simply adopt the same pattern.
 
 ### 9.3 The placement rule (apply to any field; first match wins)
@@ -551,8 +551,9 @@ ceilings, ADR 0027), not vestigial — kept.
 
 Operator direction (2026-06-13): **set-once config moves to a dedicated config SPA, separate
 from the logging SPA.** Things configured once and rarely/never changed are UI *noise* in the
-live logging client — examples called out: **per-rig mode-mappings** (today My Station → Mode
-Mappings) and the **FT8 Band Activity colour-coding / display prefs** (`ft8_display`: highlight
+live logging client — examples called out: **per-rig mode-mappings** (moved to the config SPA's
+Rigs tab 2026-06-25; removed from the logging SPA) and the **FT8 Band Activity colour-coding /
+display prefs** (`ft8_display`: highlight
 colours, row cap, feed mode). These belong in the config SPA; the logging SPA keeps only what's
 needed *during* logging (QSO form, live rig state, session, operationally-relevant identity).
 
