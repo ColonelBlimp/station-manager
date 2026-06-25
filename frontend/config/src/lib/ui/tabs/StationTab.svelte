@@ -107,6 +107,40 @@
         </section>
 
         <section>
+            <h2 class="mb-3 text-base font-semibold text-gray-800">QSL defaults</h2>
+            <p class="mt-0.5 mb-3 text-sm text-gray-500">
+                Standing outgoing-QSL info stamped on logged QSOs (ADIF QSL_VIA / QSLMSG /
+                QSL_SENT_VIA).
+            </p>
+            <div class="flex flex-wrap gap-x-4 gap-y-3">
+                <Field
+                    label="QSL via (route / manager)"
+                    bind:value={configState.qslForm.qsl_via}
+                    widthClass="w-64"
+                    hint="e.g. a manager callsign, or LoTW."
+                />
+                <Field
+                    label="QSL message"
+                    bind:value={configState.qslForm.qslmsg}
+                    widthClass="w-full"
+                />
+                <label class="flex flex-col gap-1">
+                    <span class="text-sm font-medium text-gray-700">Default send method</span>
+                    <select
+                        bind:value={configState.qslForm.qsl_sent_via}
+                        class="w-56 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                    >
+                        <option value="">— none —</option>
+                        <option value="B">Bureau</option>
+                        <option value="D">Direct</option>
+                        <option value="E">Electronic</option>
+                        <option value="M">Manager</option>
+                    </select>
+                </label>
+            </div>
+        </section>
+
+        <section>
             <h2 class="mb-3 text-base font-semibold text-gray-800">Equipment</h2>
             <div class="flex flex-wrap gap-x-4 gap-y-3">
                 <Field

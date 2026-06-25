@@ -3,12 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!--
-        Empty data URL suppresses the browser's default /favicon.ico
-        fallback request. Swap href to "favicon.ico" (and put a real
-        ICO at frontend/config/public/favicon.ico) when branding lands.
-    -->
-    <link rel="icon" href="data:," />
+    <!-- Station Manager radio-tower mark (public/logo.png, copied to the dist
+         root by Vite). The leading-slash href is base-rewritten to /config/. -->
+    <link rel="icon" type="image/png" href="/config/logo.png" />
     <title>Station Manager — Config</title>
     <script type="module" crossorigin src="/config/assets/index.js"></script>
     <link rel="stylesheet" crossorigin href="/config/assets/index.css">

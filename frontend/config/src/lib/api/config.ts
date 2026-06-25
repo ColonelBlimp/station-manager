@@ -42,6 +42,17 @@ export interface StationFields {
     amp_multiplier?: number;
 }
 
+/**
+ * Standing outgoing-QSL defaults (ADIF QSL_VIA / QSLMSG / QSL_SENT_VIA). Stamped
+ * on logged QSOs. Presence-aware on PUT (omit to leave untouched; carry to
+ * replace). Always populated on GET.
+ */
+export interface QslFields {
+    qsl_via?: string;
+    qslmsg?: string;
+    qsl_sent_via?: string;
+}
+
 export interface Ft8DisplayFields {
     history_max?: number;
     // 'accumulate' | 'single' — typed as string because the daemon is the
@@ -147,6 +158,7 @@ export interface ConfigResponse {
     logging_station: LoggingStationFields;
     default_logbook: DefaultLogbookFields;
     station: StationFields;
+    qsl?: QslFields;
     mailer: MailerFields;
     smtp?: SmtpInfo;
     psk_reporter?: PskReporterFields;
@@ -216,6 +228,9 @@ export async function fetchConfig(signal?: AbortSignal): Promise<ConfigOutcome> 
 export interface ConfigPatch {
     logging_station: LoggingStationFields;
     station: StationFields;
+    // Presence-aware (Station tab): replaces the QSL defaults block. Omit to leave
+    // it untouched (a non-Station save never carries it).
+    qsl?: QslFields;
     ft8_display?: Ft8DisplayFields;
     // Presence-aware (FT8 tab): replaces the PSK Reporter block; no secrets, so
     // it's taken as-sent (the daemon validates the port). Omit to leave untouched.

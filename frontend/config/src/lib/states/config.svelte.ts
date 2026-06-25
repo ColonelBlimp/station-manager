@@ -21,6 +21,7 @@ import {
     type LookupInfo,
     type LookupProviderInfo,
     type PskReporterFields,
+    type QslFields,
     type SmtpInfo,
 } from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
@@ -173,6 +174,24 @@ function stationFormFrom(ls: LoggingStationFields): StationForm {
         my_antenna: ls.my_antenna ?? '',
         my_morse_key_type: ls.my_morse_key_type ?? '',
         my_morse_key_info: ls.my_morse_key_info ?? '',
+    };
+}
+
+// QslForm — the Station tab's standing outgoing-QSL defaults (ADIF QSL_VIA /
+// QSLMSG / QSL_SENT_VIA). Sits with the postal address (also "for QSL"), folded
+// into the Station save. qsl_sent_via is one of B/D/E/M (bureau/direct/electronic/
+// manager) or blank; the SPA offers a select, the daemon stores the literal.
+export interface QslForm {
+    qsl_via: string;
+    qslmsg: string;
+    qsl_sent_via: string;
+}
+
+function qslFormFrom(q: QslFields | null | undefined): QslForm {
+    return {
+        qsl_via: q?.qsl_via ?? '',
+        qslmsg: q?.qslmsg ?? '',
+        qsl_sent_via: q?.qsl_sent_via ?? '',
     };
 }
 
@@ -410,17 +429,21 @@ class ConfigState {
     // config.logging_station on load and re-hydrated from the PUT response on
     // save. Bound directly by the Station tab's inputs.
     stationForm: StationForm = $state(stationFormFrom({}));
+    /** Standing outgoing-QSL defaults (Station tab, folded into the Station save). */
+    qslForm: QslForm = $state(qslFormFrom(null));
     /** True while a Station save PUT is in flight. */
     savingStation: boolean = $state(false);
     /** Last Station-save status: 'ok', an error message, or null (idle/in-flight). */
     stationStatus: string | null = $state(null);
 
-    /** True when the Station form diverges from the loaded config (drives Save/Cancel). */
+    /** True when the Station form OR the QSL defaults diverge from the loaded config
+     *  (drives Save/Cancel). */
     get stationDirty(): boolean {
         if (!this.config) return false;
         return (
             JSON.stringify(this.stationForm) !==
-            JSON.stringify(stationFormFrom(this.config.logging_station))
+                JSON.stringify(stationFormFrom(this.config.logging_station)) ||
+            JSON.stringify(this.qslForm) !== JSON.stringify(qslFormFrom(this.config.qsl))
         );
     }
 
@@ -450,6 +473,7 @@ class ConfigState {
             this.lookupForm = lookupFormFrom(this.lookup);
             this.smtp = this.config.smtp ?? null;
             this.emailForm = emailFormFrom(this.smtp);
+            this.qslForm = qslFormFrom(this.config.qsl);
             this.bridgeEnabled = this.config.bridge_enabled ?? false;
             this.ft8Enabled = this.config.ft8_enabled ?? false;
         } else {
@@ -634,10 +658,11 @@ class ConfigState {
      * identity (callsign / operator / owner / name / grid) too, so those keys
      * override the echoed values; any field the form doesn't hold (e.g. the
      * daemon-derived my_lat/my_lon) rides along from the echo and is recomputed by
-     * the daemon from my_gridsquare. `station` is echoed verbatim; `ft8_display` /
-     * `qsl` are presence-aware (omitting them leaves those blocks untouched). A
-     * first save carrying a callsign completes setup daemon-side. Re-hydrates on
-     * success (so daemon-canonicalised callsign/grid flow back into the form).
+     * the daemon from my_gridsquare. `station` is echoed verbatim; `qsl` carries the
+     * QSL-defaults form (also a Station-tab concern); `ft8_display` is omitted
+     * (presence-aware, left untouched). A first save carrying a callsign completes
+     * setup daemon-side. Re-hydrates on success (so daemon-canonicalised
+     * callsign/grid and QSL defaults flow back into the forms).
      */
     async saveStation(): Promise<void> {
         if (this.savingStation || !this.config || !this.stationDirty) return;
@@ -646,10 +671,12 @@ class ConfigState {
         const outcome: ConfigOutcome = await putConfig({
             logging_station: { ...this.config.logging_station, ...this.stationForm },
             station: this.config.station,
+            qsl: { ...this.qslForm },
         });
         if (outcome.kind === 'ok') {
             this.config = outcome.config;
             this.stationForm = stationFormFrom(this.config.logging_station);
+            this.qslForm = qslFormFrom(this.config.qsl);
             this.stationStatus = 'ok';
         } else {
             this.stationStatus = outcomeMessage(outcome);
@@ -657,9 +684,12 @@ class ConfigState {
         this.savingStation = false;
     }
 
-    /** Revert the Station form to the loaded config (discard unsaved edits). */
+    /** Revert the Station form + QSL defaults to the loaded config. */
     cancelStation(): void {
-        if (this.config) this.stationForm = stationFormFrom(this.config.logging_station);
+        if (this.config) {
+            this.stationForm = stationFormFrom(this.config.logging_station);
+            this.qslForm = qslFormFrom(this.config.qsl);
+        }
         this.stationStatus = null;
     }
 

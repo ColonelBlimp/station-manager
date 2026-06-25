@@ -7,6 +7,7 @@
     // Provider changes are restart-only (the enrichment workers bind at startup).
     import { configState } from '../../states/config.svelte';
     import TabFooter from '../TabFooter.svelte';
+    import PasswordField from '../PasswordField.svelte';
 
     const form = $derived(configState.lookupForm);
 
@@ -45,16 +46,12 @@
                 </label>
                 <label class="flex flex-col gap-1">
                     <span class="text-sm font-medium text-gray-700">Password</span>
-                    <input
-                        type="password"
+                    <PasswordField
                         value={form.qrzPassword}
-                        oninput={(e) => (form.qrzPassword = e.currentTarget.value)}
+                        oninput={(v: string) => (form.qrzPassword = v)}
                         placeholder={form.qrzPasswordSet
                             ? '•••••••• (set — leave blank to keep)'
                             : ''}
-                        autocomplete="off"
-                        spellcheck="false"
-                        class="w-72 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                     />
                 </label>
             </div>

@@ -7,6 +7,7 @@
     // changes are restart-only (the worker binds config at startup).
     import { configState } from '../../states/config.svelte';
     import TabFooter from '../TabFooter.svelte';
+    import PasswordField from '../PasswordField.svelte';
 
     // Add-destination type picker (defaults to the first available type).
     let addType: string = $state('');
@@ -78,18 +79,29 @@
                         {#each td.credential_fields as field (field.key)}
                             <label class="flex flex-col gap-1">
                                 <span class="text-sm font-medium text-gray-700">{field.label}</span>
-                                <input
-                                    type={field.kind === 'password' ? 'password' : 'text'}
-                                    value={f.credentials[field.key] ?? ''}
-                                    oninput={(e) =>
-                                        (f.credentials[field.key] = e.currentTarget.value)}
-                                    placeholder={isSet(f, field.key)
-                                        ? '•••••••• (set — leave blank to keep)'
-                                        : ''}
-                                    autocomplete="off"
-                                    spellcheck="false"
-                                    class="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                                />
+                                {#if field.kind === 'password'}
+                                    <PasswordField
+                                        value={f.credentials[field.key] ?? ''}
+                                        oninput={(v: string) => (f.credentials[field.key] = v)}
+                                        placeholder={isSet(f, field.key)
+                                            ? '•••••••• (set — leave blank to keep)'
+                                            : ''}
+                                        widthClass="w-full"
+                                    />
+                                {:else}
+                                    <input
+                                        type="text"
+                                        value={f.credentials[field.key] ?? ''}
+                                        oninput={(e) =>
+                                            (f.credentials[field.key] = e.currentTarget.value)}
+                                        placeholder={isSet(f, field.key)
+                                            ? '•••••••• (set — leave blank to keep)'
+                                            : ''}
+                                        autocomplete="off"
+                                        spellcheck="false"
+                                        class="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                                    />
+                                {/if}
                                 {#if field.help}
                                     <span class="text-xs text-gray-400">{field.help}</span>
                                 {/if}

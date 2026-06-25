@@ -18,9 +18,9 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-24] we need some links in the logging SPA (and the other SPAs) to other URIs: config, logbook, db manager, etc
 - [2026-06-24] we need to implement UI themes as well as dark mode
 - [2026-06-24] the initial setup page should say something like, 'if you want to continue configuring Station Manager, click here [link]' which should go to the config SPA
-- [2026-06-24] all password/secret input field should be able to 'display' the password (the little eye glyph)
+- ~~[2026-06-24] all password/secret input field should be able to 'display' the password (the little eye glyph)~~ **FIXED 2026-06-25** — new reusable `PasswordField` (eye/eye-slash toggle) swapped into all config-SPA password inputs: Email (SMTP), Enrichment (QRZ), Forwarding (creds).
 - ~~[2026-06-25] psk reporter config not seen~~ **FIXED 2026-06-25** — added a PSK Reporter section to the config SPA's FT8 tab (enable + host/port, daemon-validated), folded into the FT8 save with a restart-required banner.
-- [2026-06-25] qsl fields not seen
+- ~~[2026-06-25] qsl fields not seen~~ **FIXED 2026-06-25** — added a QSL defaults section (QSL_VIA / QSLMSG / QSL_SENT_VIA) to the config SPA's Station tab, folded into the Station save (the daemon already handled the `qsl` block presence-aware).
 - ~~[2026-06-25] lat and lon are no calculated when the config SPA is saved, but it is updated in My Station LSPA~~ **FIXED 2026-06-25** — root cause was no gridsquare field in the CSPA; the daemon already re-derives lat/lon from grid on every PUT.
 - ~~[2026-06-25] lat and lon needs gridsquare which is not edited in the config spa~~ **FIXED 2026-06-25** — added Station identity section (callsign/operator/owner/name/grid) to the CSPA Station tab.
 - ~~[2026-06-25] operator name cannot be edited via CSPA~~ **FIXED 2026-06-25** — same Station identity section; identity now editable in BOTH SPAs (one daemon source of truth, ADR 0003).

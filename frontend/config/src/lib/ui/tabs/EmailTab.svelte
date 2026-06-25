@@ -5,6 +5,7 @@
     // stored secret. Provider settings are restart-only (the mailer binds at boot).
     import { configState } from '../../states/config.svelte';
     import TabFooter from '../TabFooter.svelte';
+    import PasswordField from '../PasswordField.svelte';
 
     const form = $derived(configState.emailForm);
 
@@ -84,14 +85,10 @@
             </label>
             <label class="flex flex-col gap-1">
                 <span class="text-sm font-medium text-gray-700">Password</span>
-                <input
-                    type="password"
+                <PasswordField
                     value={form.password}
-                    oninput={(e) => (form.password = e.currentTarget.value)}
+                    oninput={(v: string) => (form.password = v)}
                     placeholder={form.passwordSet ? '•••••••• (set — leave blank to keep)' : ''}
-                    autocomplete="off"
-                    spellcheck="false"
-                    class="w-72 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                 />
             </label>
         </section>
