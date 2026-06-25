@@ -32,13 +32,22 @@
     let callsign: string = $state('');
     let saving: boolean = $state(false);
 
+    // First-run hand-off interstitial. A successful callsign save flips
+    // configState.setupComplete=true, which would otherwise fall straight
+    // through to the logging UI. We hold on a "setup complete" screen
+    // instead — offering the Config app to finish station setup — until
+    // the operator picks a path. Purely local + session-scoped: it's only
+    // ever true right after THIS session's save, so a returning operator
+    // (setupComplete already true on load) never sees it.
+    let justCompleted: boolean = $state(false);
+
     // Focus the welcome-page callsign input the moment it enters the
     // DOM. The setup snippet renders behind the
     // {#if !configState.setupComplete} gate, so a script-level
     // onMount focus call would fire before the input exists. A node
     // action runs at the right moment: when the {#if} branch becomes
     // truthy and the input mounts.
-    function autofocus(node: HTMLInputElement) {
+    function autofocus(node: HTMLElement) {
         node.focus();
     }
 
@@ -63,10 +72,12 @@
             switch (outcome.kind) {
                 case 'ok':
                     // Hydrate from the response — flips
-                    // configState.setupComplete=true reactively, the
-                    // {#if !setupComplete} branch falls away, and
-                    // main_app renders. No manual flag flip here.
+                    // configState.setupComplete=true reactively. Rather
+                    // than fall straight to main_app, hold the hand-off
+                    // interstitial (justCompleted) so the operator is
+                    // offered the Config app before logging starts.
                     configState.applyResponse(outcome.config);
+                    justCompleted = true;
                     break;
                 case 'validation':
                     console.warn(`[config save] ${outcome.code}: ${outcome.message}`);
@@ -139,6 +150,8 @@
 {:else if configState.loaded}
     {#if !configState.setupComplete}
         {@render setup()}
+    {:else if justCompleted}
+        {@render setup_done()}
     {:else}
         {@render main_app()}
     {/if}
@@ -175,15 +188,15 @@
         <h1 class="text-center font-semibold text-2xl">Welcome to Station Manager</h1>
         <div class="py-4">
             <p>
-                For Station Manager to work, the <i>default log book</i> needs to be initialised.
-                All this requires is a callsign. Don't worry if you are not sure which callsign to
-                enter; it is generally recommended that the <i>default log book</i> be associated with
-                you personal callsign.
+                Before you can use Station Manager, the <i>default log book</i> needs to be initialised.
+                All this requires is a callsign. Don't worry if you are not sure which callsign to enter;
+                it is generally recommended that the <i>default log book</i> be associated with you personal
+                callsign.
             </p>
             <p>
-                If you use QRZ.com, then the callsign entered here should be the same as the
-                callsign for the QRZ.com log book to which the QSOs will be forwarded (forwarding of
-                QSOs is configurable and not enabled by default).
+                If you use QRZ.com and plan to forward QSOs to it, then the callsign entered here should be
+                the same as the callsign used for your target logbook at QRZ.com. If you are not sure what
+                callsign to enter, just use your personal callsign - it can easily be changed later.
             </p>
         </div>
         <!--
@@ -221,5 +234,44 @@
                 >
             </div>
         </form>
+    </main>
+{/snippet}
+
+<!--
+    First-run hand-off interstitial. Shown once, immediately after the
+    callsign save completes (justCompleted), before the logging UI. The
+    Config-app action is a plain full-page <a href="/config/"> — the
+    config SPA is a separate mount, not an in-app route, so a dumb link
+    is correct (no router). "Start logging" stays in the SPA: it just
+    clears justCompleted so the main_app branch renders.
+-->
+{#snippet setup_done()}
+    <main class="rounded-xl border border-line-soft h-120 w-200 mx-auto mt-12 p-8">
+        <h1 class="text-center font-semibold text-2xl">
+            ✓ Setup complete{configState.loggingStation.stationCallsign
+                ? ` — ${configState.loggingStation.stationCallsign}`
+                : ''}
+        </h1>
+        <div class="py-4 text-center">
+            <p>Your default logbook is ready and you can start logging right away.</p>
+            <p class="mt-3">
+                Want to finish setting up your station first? The <i>Config</i> app is where you set
+                up your rig (CAT), QSO forwarding (QRZ, ClubLog…), session email, FT8, and the rest
+                of your station details.
+            </p>
+        </div>
+        <div class="flex flex-col items-center space-y-3 pt-2">
+            <a
+                href="/config/"
+                class="inline-flex h-9 items-center justify-center rounded-md bg-focus px-4 py-1.5 text-base font-semibold text-white shadow-sm hover:bg-focus-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                use:autofocus>Open the Config app →</a
+            >
+            <button
+                type="button"
+                onclick={() => (justCompleted = false)}
+                class="cursor-pointer text-sm text-ink opacity-70 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                >Start logging →</button
+            >
+        </div>
     </main>
 {/snippet}

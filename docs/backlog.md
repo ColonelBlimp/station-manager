@@ -548,13 +548,17 @@ when it ships — don't let this rot into a graveyard.
   `theme` config block is the natural home. Do the colour-token refactor as its
   own pass before wiring the toggle.
 
-- **First-run setup → config SPA hand-off link.** From dogfood-inbox 2026-06-24.
-  The logging SPA's initial setup page should, once the minimum identity is in,
-  offer something like "want to finish configuring Station Manager? → open Config"
-  linking to `/config/`. Ties into the 2026-06-25 decision that first-run config
-  is now fully doable in the config SPA (identity editable there). Small — a
-  conditional link on the setup screen — but depends on the cross-SPA-link set
-  above, so sequence it after (or fold into) that item.
+- ~~**First-run setup → config SPA hand-off link.**~~ **SHIPPED 2026-06-25.** From
+  dogfood-inbox 2026-06-24. Delivered as a **post-save interstitial** (operator's
+  choice over an always-visible inline link): after the first-run callsign save
+  flips `setupComplete`, the logging SPA holds on a "✓ Setup complete" screen
+  (`app.svelte` `setup_done` snippet) offering **Open the Config app →**
+  (a dumb full-page `<a href="/config/">`, no router) and a secondary **Start
+  logging →** (clears the local `justCompleted` to fall through to `main_app`).
+  Shown once per install — `justCompleted` is only ever set right after this
+  session's save, so a returning operator never sees it. Done standalone (didn't
+  wait on the cross-SPA-link component); when that shared nav lands, the link can
+  be revisited for consistency.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
