@@ -24,3 +24,6 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - ~~[2026-06-25] lat and lon are no calculated when the config SPA is saved, but it is updated in My Station LSPA~~ **FIXED 2026-06-25** — root cause was no gridsquare field in the CSPA; the daemon already re-derives lat/lon from grid on every PUT.
 - ~~[2026-06-25] lat and lon needs gridsquare which is not edited in the config spa~~ **FIXED 2026-06-25** — added Station identity section (callsign/operator/owner/name/grid) to the CSPA Station tab.
 - ~~[2026-06-25] operator name cannot be edited via CSPA~~ **FIXED 2026-06-25** — same Station identity section; identity now editable in BOTH SPAs (one daemon source of truth, ADR 0003).
+- [2026-06-25] mode-mappings should be removed from the LSPA
+- [2026-06-25] CW setting should be removed from the LSPA
+- [2026-06-25] install/setup docs: rig should be on BEFORE running the config SPA otherwise rig's serial port may not show up in the list
