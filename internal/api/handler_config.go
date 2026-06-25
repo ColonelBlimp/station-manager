@@ -123,6 +123,13 @@ type ConfigResponse struct {
 	// presence-aware on PUT (omit → untouched; carry → replace); always set on GET.
 	// Restart-only (the subsystem binds at boot).
 	PskReporter *types.PskReporterConfig `json:"psk_reporter,omitempty"`
+	// Ft8DecodeLog is the config SPA's FT8-tab decode-log surface (the
+	// ft8.decode_log block — a JTDX ALL.TXT-style record of RX decodes + our own
+	// TX). No secrets, so the canonical types.Ft8DecodeLogConfig rides the wire
+	// directly. Pointer = presence-aware on PUT (omit → untouched; carry →
+	// replace); always set on GET (nil-in-config served as a disabled zero block so
+	// the form binds). Restart-only: the log file opens at FT8 service start.
+	Ft8DecodeLog *types.Ft8DecodeLogConfig `json:"ft8_decode_log,omitempty"`
 	// BridgeEnabled / Ft8Enabled are the master on/off switches for the rig CAT
 	// bridge and the FT8 subsystem (config SPA's Rigs / FT8 tabs). Read+write:
 	// always set on GET (current value) so the toggles show state; presence-aware
@@ -396,6 +403,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// an empty host/port round-trips to the runtime default.
 	if req.PskReporter != nil {
 		candidate.PskReporter = *req.PskReporter
+	}
+	// FT8 decode log (config SPA FT8 tab) — presence-aware; no secrets, stored as
+	// sent. Pointer block, so a disabled log can persist as {enabled:false} or be
+	// dropped — either reads as "no file" at service start.
+	if req.Ft8DecodeLog != nil {
+		candidate.Ft8.DecodeLog = req.Ft8DecodeLog
 	}
 	// Master subsystem switches — presence-aware (config SPA Rigs / FT8 tabs).
 	// validateBridge below enforces port+driver when bridge is enabled.
@@ -673,6 +686,16 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// empty host/port show as defaults in the SPA). Always set so the form binds.
 	psk := cfg.PskReporter
 	resp.PskReporter = &psk
+
+	// FT8 decode log (config SPA FT8 tab) — served so the form binds. A nil block in
+	// config (never enabled) is served as a disabled zero value; an empty path means
+	// "use the default" (resolved in internal/ft8 at open), shown as a placeholder.
+	if cfg.Ft8.DecodeLog != nil {
+		dl := *cfg.Ft8.DecodeLog
+		resp.Ft8DecodeLog = &dl
+	} else {
+		resp.Ft8DecodeLog = &types.Ft8DecodeLogConfig{}
+	}
 
 	// Master subsystem switches — current values so the SPA toggles show state.
 	bridgeEnabled := cfg.Bridge.Enabled

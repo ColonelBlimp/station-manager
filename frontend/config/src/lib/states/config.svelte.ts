@@ -16,6 +16,7 @@ import {
     type ConfigOutcome,
     type ConfigResponse,
     type ForwarderInfo,
+    type Ft8DecodeLogFields,
     type Ft8DisplayFields,
     type LoggingStationFields,
     type LookupInfo,
@@ -338,6 +339,25 @@ function pskFormKey(f: PskForm): string {
     return JSON.stringify({ enabled: f.enabled, host: f.host, port: f.port });
 }
 
+// DecodeLogForm — the FT8 tab's decode-log section (ft8.decode_log). path blank →
+// the daemon's default ($SM_WORKING_DIR/log/ft8-all.txt), shown as a placeholder.
+// Folded into the FT8 tab's save; restart-only (the file opens at service start).
+export interface DecodeLogForm {
+    enabled: boolean;
+    path: string;
+}
+
+function decodeLogFormFrom(d: Ft8DecodeLogFields | undefined): DecodeLogForm {
+    return {
+        enabled: d?.enabled ?? false,
+        path: d?.path ?? '',
+    };
+}
+
+function decodeLogFormKey(f: DecodeLogForm): string {
+    return JSON.stringify({ enabled: f.enabled, path: f.path });
+}
+
 function ft8FormFrom(d: Ft8DisplayFields | undefined): Ft8Form {
     return {
         history_max: d?.history_max ?? DEFAULT_FT8_HISTORY_MAX,
@@ -420,6 +440,8 @@ class ConfigState {
     ft8Form: Ft8Form = $state(ft8FormFrom(undefined));
     /** PSK Reporter section of the FT8 tab (folded into the FT8 save). */
     pskForm: PskForm = $state(pskFormFrom(null));
+    /** Decode-log section of the FT8 tab (folded into the FT8 save). */
+    decodeLogForm: DecodeLogForm = $state(decodeLogFormFrom(undefined));
     /** True while an FT8-display save PUT is in flight. */
     savingFt8: boolean = $state(false);
     /** Last FT8-save status: 'ok', an error message, or null (idle/in-flight). */
@@ -466,6 +488,7 @@ class ConfigState {
             this.config = cfg.config;
             this.ft8Form = ft8FormFrom(this.config.ft8_display);
             this.pskForm = pskFormFrom(this.config.psk_reporter ?? null);
+            this.decodeLogForm = decodeLogFormFrom(this.config.ft8_decode_log);
             this.stationForm = stationFormFrom(this.config.logging_station);
             this.forwarders = this.config.forwarders ?? [];
             this.hydrateForwarders();
@@ -587,26 +610,32 @@ class ConfigState {
         return this.catalogue.find((c) => c.id === model);
     }
 
-    /** True when the FT8 display form, the FT8-enable toggle, OR the PSK Reporter
-     *  section diverges from the loaded config (drives Save/Cancel). */
+    /** True when the FT8 display form, the FT8-enable toggle, the PSK Reporter
+     *  section, OR the decode-log section diverges from the loaded config (drives
+     *  Save/Cancel). */
     get ft8Dirty(): boolean {
         if (!this.config) return false;
         return (
             this.ft8Enabled !== (this.config.ft8_enabled ?? false) ||
             JSON.stringify(this.ft8Form) !== JSON.stringify(ft8FormFrom(this.config.ft8_display)) ||
-            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null))
+            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null)) ||
+            decodeLogFormKey(this.decodeLogForm) !==
+                decodeLogFormKey(decodeLogFormFrom(this.config.ft8_decode_log))
         );
     }
 
-    /** True when a staged FT8-tab change is restart-only — the FT8-enable toggle or
-     *  the PSK Reporter settings (both subsystems bind at boot). The display prefs
-     *  apply live (the logging SPA re-reads them), so a colours/row-cap edit alone
-     *  doesn't raise this. Drives the FT8 tab's "restart required" banner. */
+    /** True when a staged FT8-tab change is restart-only — the FT8-enable toggle,
+     *  the PSK Reporter settings, or the decode-log settings (all bind at boot: the
+     *  decode-log file opens at FT8 service start). The display prefs apply live
+     *  (the logging SPA re-reads them), so a colours/row-cap edit alone doesn't
+     *  raise this. Drives the FT8 tab's "restart required" banner. */
     get ft8RestartRequired(): boolean {
         if (!this.config) return false;
         return (
             this.ft8Enabled !== (this.config.ft8_enabled ?? false) ||
-            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null))
+            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null)) ||
+            decodeLogFormKey(this.decodeLogForm) !==
+                decodeLogFormKey(decodeLogFormFrom(this.config.ft8_decode_log))
         );
     }
 
@@ -627,12 +656,14 @@ class ConfigState {
             ft8_display: { ...this.ft8Form },
             ft8_enabled: this.ft8Enabled,
             psk_reporter: { ...this.pskForm },
+            ft8_decode_log: { ...this.decodeLogForm },
         });
         if (outcome.kind === 'ok') {
             this.config = outcome.config;
             this.ft8Form = ft8FormFrom(this.config.ft8_display);
             this.ft8Enabled = this.config.ft8_enabled ?? false;
             this.pskForm = pskFormFrom(this.config.psk_reporter ?? null);
+            this.decodeLogForm = decodeLogFormFrom(this.config.ft8_decode_log);
             this.ft8Status = 'ok';
         } else {
             this.ft8Status = outcomeMessage(outcome);
@@ -640,13 +671,14 @@ class ConfigState {
         this.savingFt8 = false;
     }
 
-    /** Revert the FT8 display form, enable toggle, and PSK Reporter section to the
-     *  loaded config. */
+    /** Revert the FT8 display form, enable toggle, PSK Reporter section, and
+     *  decode-log section to the loaded config. */
     cancelFt8(): void {
         if (this.config) {
             this.ft8Form = ft8FormFrom(this.config.ft8_display);
             this.ft8Enabled = this.config.ft8_enabled ?? false;
             this.pskForm = pskFormFrom(this.config.psk_reporter ?? null);
+            this.decodeLogForm = decodeLogFormFrom(this.config.ft8_decode_log);
         }
         this.ft8Status = null;
     }

@@ -584,24 +584,23 @@ when it ships — don't let this rot into a graveyard.
   `project_sm_adif_my_star_buckets`). Not scoped — a placeholder so the "future
   add POTA" intent isn't lost when the trim lands.
 
-- **Config SPA — FT8 decode-log toggle (`ft8.decode_log`).** Filed from
-  dogfood-inbox 2026-06-25. The FT8 decode log (JTDX `ALL.TXT`-style RX+TX record,
-  `internal/ft8/decodelog.go`, shipped 2026-06-23) is **`config.json`-only today** —
-  no SPA control. Add an enable toggle (+ optional path field) to the config SPA's
-  **FT8 tab**, beside the PSK Reporter section. Two layers, mirroring the
-  session-191 PSK Reporter work:
-  - **Daemon:** `ft8.decode_log` is **not** surfaced on `/v1/config` GET/PUT yet
-    (only `ft8_display` + `psk_reporter` are). Add `Ft8DecodeLog
-    *types.Ft8DecodeLogConfig` to `ConfigResponse` + `ConfigPatch`
-    (`handler_config.go`), serve `cfg.Ft8.DecodeLog` on GET, apply presence-aware
-    on PUT (a save omitting it leaves it alone). Reuse the canonical
-    `types.Ft8DecodeLogConfig{Enabled, Path}` — no parallel struct. Update
-    `api-endpoints.md`.
-  - **SPA:** `config.ts` type + a form in `config.svelte.ts` + the FT8-tab UI
-    (toggle + path input, default-path placeholder). The log file opens at FT8
-    **service start**, so a change is **restart-required** — fold into the FT8 save
-    with the same restart banner the PSK Reporter editor uses.
-  Small, well-scoped; not started.
+- ~~**Config SPA — FT8 decode-log toggle (`ft8.decode_log`).**~~ **SHIPPED
+  2026-06-25.** Filed from dogfood-inbox 2026-06-25; built the same day. Delivered
+  exactly as scoped, mirroring the session-191 PSK Reporter pattern:
+  - **Daemon:** added `Ft8DecodeLog *types.Ft8DecodeLogConfig`
+    (`json:"ft8_decode_log"`) to the config handler's request/response struct
+    (`handler_config.go`); GET serves `cfg.Ft8.DecodeLog` (nil → disabled zero block
+    so the form binds), PUT applies presence-aware (omit → untouched). Reuses the
+    canonical `types.Ft8DecodeLogConfig{Enabled, Path}`. Tests in
+    `handler_config_decodelog_test.go` (GET round-trip, nil-served-as-zero, PUT
+    round-trip, presence-aware).
+  - **SPA:** `Ft8DecodeLogFields` type (`config.ts`); `DecodeLogForm` +
+    `decodeLogFormFrom`/`decodeLogFormKey` folded into `ft8Dirty` /
+    `ft8RestartRequired` / `saveFt8` / `cancelFt8` (`config.svelte.ts`); a "Decode
+    log" section (enable toggle + path field, default-path placeholder) in
+    `Ft8Tab.svelte`, under the same FT8-tab footer + restart banner as PSK Reporter.
+  - **Restart-required:** the log file opens at FT8 service start, so the FT8 tab's
+    restart banner now covers it. `api-endpoints.md` updated (GET + PUT).
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

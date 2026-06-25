@@ -164,11 +164,47 @@
             </div>
         </section>
 
+        <section>
+            <h2 class="text-base font-semibold text-gray-800">Decode log</h2>
+            <p class="mt-0.5 mb-3 text-sm text-gray-500">
+                Append every FT8 RX decode and your own transmissions to a JTDX
+                <code>ALL.TXT</code>-style file — a durable record for reconstructing an on-air
+                exchange after the fact (handy when answering enquiries). The file grows unbounded,
+                like WSJT-X's <code>ALL.TXT</code>; clear it yourself when it gets large.
+            </p>
+            <div class="space-y-4">
+                <label class="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                        type="checkbox"
+                        bind:checked={configState.decodeLogForm.enabled}
+                        class="cursor-pointer"
+                    />
+                    Enable the FT8 decode log
+                </label>
+                <label class="flex flex-col gap-1">
+                    <span class="text-sm font-medium text-gray-700">File path</span>
+                    <input
+                        type="text"
+                        bind:value={configState.decodeLogForm.path}
+                        placeholder="log/ft8-all.txt (default, in the data directory)"
+                        autocomplete="off"
+                        spellcheck="false"
+                        class="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                    />
+                    <span class="text-xs text-gray-400">
+                        Leave blank for the default (<code>ft8-all.txt</code> in the data
+                        directory's <code>log/</code> folder).
+                    </span>
+                </label>
+            </div>
+        </section>
+
         {#if configState.ft8RestartRequired}
             <div
                 class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
             >
-                ⚠ Enabling/disabling FT8 or changing PSK Reporter applies on daemon restart.
+                ⚠ Enabling/disabling FT8, or changing PSK Reporter or the decode log, applies on
+                daemon restart.
             </div>
         {/if}
 

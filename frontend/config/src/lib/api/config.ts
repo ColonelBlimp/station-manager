@@ -84,6 +84,17 @@ export interface PskReporterFields {
 }
 
 /**
+ * FT8 decode-log settings (the FT8 tab). A JTDX ALL.TXT-style record of RX decodes
+ * + our own TX. No secrets. An empty path means "use the default"
+ * ($SM_WORKING_DIR/log/ft8-all.txt, resolved daemon-side), shown as a placeholder.
+ * Restart-only: the file opens at FT8 service start.
+ */
+export interface Ft8DecodeLogFields {
+    enabled?: boolean;
+    path?: string;
+}
+
+/**
  * The SMTP block — the config SPA's Email-tab edit surface. Asymmetric like
  * LookupProviderInfo (masked-on-GET, merge-on-PUT): GET reports `password_set`
  * (never the value); PUT carries a new `password` (blank = keep the stored one).
@@ -162,6 +173,7 @@ export interface ConfigResponse {
     mailer: MailerFields;
     smtp?: SmtpInfo;
     psk_reporter?: PskReporterFields;
+    ft8_decode_log?: Ft8DecodeLogFields;
     ft8_display?: Ft8DisplayFields;
     ft8_frequencies?: Record<string, number>;
     forwarders?: ForwarderInfo[];
@@ -235,6 +247,9 @@ export interface ConfigPatch {
     // Presence-aware (FT8 tab): replaces the PSK Reporter block; no secrets, so
     // it's taken as-sent (the daemon validates the port). Omit to leave untouched.
     psk_reporter?: PskReporterFields;
+    // Presence-aware (FT8 tab): replaces the decode-log block; no secrets. Omit to
+    // leave untouched. Restart-only (the log file opens at FT8 service start).
+    ft8_decode_log?: Ft8DecodeLogFields;
     rigs?: RigConfig[];
     default_rig_id?: number;
     // Presence-aware (Forwarding tab): replaces the whole list; per-entry
