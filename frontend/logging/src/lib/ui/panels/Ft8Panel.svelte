@@ -734,7 +734,7 @@
                      tab, where the TX offset is picked/changed. -->
                 <button
                     type="button"
-                    class="{rxCaptionClass} cursor-pointer hover:underline"
+                    class="{rxCaptionClass} cursor-pointer hover:underline w-full"
                     title="Open the Occupancy tab to pick a TX offset"
                     onclick={() => (activeTab = 'occupancy')}>{rxCaption}</button
                 >
