@@ -23,6 +23,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
+	"github.com/ColonelBlimp/station-manager/internal/enums/dxcc"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
@@ -329,6 +330,16 @@ func run() error {
 	if err := modes.LoadOverride(cfg.DataDir); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("modes: override load failed")
 		return errors.New(op).WithErr(err).WithMsg("load modes override")
+	}
+
+	// Optional DXCC entity override: $SM_WORKING_DIR/dxcc-entities.json layered
+	// on top of the embedded baseline (`internal/enums/dxcc/dxcc-entities.json`),
+	// used by the enrichment new-entity check (hamnut primaryDXCCPrefix → ADIF
+	// DXCC number). Same loud-and-fatal contract as modes so a hand-edited file
+	// surfaces its error at startup.
+	if err := dxcc.LoadOverride(cfg.DataDir); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("dxcc: override load failed")
+		return errors.New(op).WithErr(err).WithMsg("load dxcc override")
 	}
 
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)

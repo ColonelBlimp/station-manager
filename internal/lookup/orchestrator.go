@@ -10,6 +10,7 @@ import (
 	"time"
 
 	sqlsvc "github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/enums/dxcc"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
@@ -357,19 +358,33 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// the persisted source of truth; LocalTime is presentation.
 	c.data = applyLocalTime(c.data, now)
 
-	// IsNewEntity = "operator has never logged a QSO with this
-	// country before." Determined by querying the qso table for any
-	// non-deleted row whose country column matches; the country (cache)
-	// table itself doesn't participate — it's hamnut's prefix lookup,
-	// not a worked-list. A failed lookup leaves the flag at its zero
-	// value (false) and logs a warn rather than failing Enrich; new-
-	// entity is presentation, never load-bearing for logging.
-	if c.data.Name != "" && o.DB != nil {
-		exists, hErr := o.DB.HasQsoForCountryWithContext(ctx, c.data.Name)
-		if hErr != nil {
-			o.warn("new-entity check failed", hErr)
-		} else {
-			c.data.IsNewEntity = !exists
+	// IsNewEntity = "operator has never logged a QSO with this DXCC entity
+	// before." Preferred match is the numeric ADIF DXCC code: hamnut's
+	// primaryDXCCPrefix maps to the code via enums/dxcc, and the qso table is
+	// queried for any non-deleted row carrying that code. The code is the right
+	// key because it distinguishes split entities the display name conflates
+	// (European vs Asiatic Russia) and survives the naming gap between hamnut
+	// ("Fed. Rep. of Germany") and an imported QSO's country field ("Germany").
+	// When the prefix isn't in the table (or hamnut gave none), fall back to the
+	// country-name match so partial table coverage degrades gracefully rather
+	// than silently flagging everything new. A failed lookup leaves the flag at
+	// its zero value (false) and logs a warn rather than failing Enrich —
+	// new-entity is presentation, never load-bearing for logging.
+	if o.DB != nil {
+		if code, ok := dxcc.DXCCForPrefix(c.data.DXCCPrefix); ok {
+			exists, hErr := o.DB.HasQsoForDxccWithContext(ctx, code)
+			if hErr != nil {
+				o.warn("new-entity check (dxcc) failed", hErr)
+			} else {
+				c.data.IsNewEntity = !exists
+			}
+		} else if c.data.Name != "" {
+			exists, hErr := o.DB.HasQsoForCountryWithContext(ctx, c.data.Name)
+			if hErr != nil {
+				o.warn("new-entity check (country) failed", hErr)
+			} else {
+				c.data.IsNewEntity = !exists
+			}
 		}
 	}
 

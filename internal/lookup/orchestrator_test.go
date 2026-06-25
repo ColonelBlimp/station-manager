@@ -1207,6 +1207,76 @@ func TestEnrich_IsNewEntity_WithPriorQso(t *testing.T) {
 	}
 }
 
+// TestEnrich_IsNewEntity_MatchedByDxccDespiteNameMismatch — the bug this fix
+// addresses. hamnut names Germany "Fed. Rep. of Germany" while an imported QSO
+// stores "Germany"; the country-name match therefore fails and the entity reads
+// as new even though it's been worked. With a DXCCPrefix on the country
+// (DL→230 in the embedded table) and the numeric DXCC on the prior QSO, the
+// check matches by entity number and correctly reports NOT new.
+func TestEnrich_IsNewEntity_MatchedByDxccDespiteNameMismatch(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{
+		Name:       "Fed. Rep. of Germany", // hamnut's name
+		Prefix:     "DL",
+		DXCCPrefix: "DL", // → ADIF 230 via enums/dxcc
+	}); err != nil {
+		t.Fatalf("seed country: %v", err)
+	}
+	if _, err := db.InsertLogbookWithContext(context.Background(), types.Logbook{
+		Name: "Default", Callsign: "7Q5MLV",
+	}); err != nil {
+		t.Fatalf("seed logbook: %v", err)
+	}
+	// Prior QSO stores the SHORT name + the numeric DXCC (as an ADIF import does).
+	if _, err := db.InsertQsoWithContext(context.Background(), types.Qso{
+		LogbookID: 1,
+		UUID:      utils.NewUUIDv7(),
+		DedupeKey: strings.Repeat("d", 64),
+		QsoDetails: types.QsoDetails{
+			Band: "20m", Mode: "FT8", Freq: "14074",
+			QsoDate: "20260507", TimeOn: "1200", TimeOff: "1205",
+			RstSent: "59", RstRcvd: "59",
+		},
+		ContactedStation: types.ContactedStation{
+			Call:    "DL3ABC",
+			Country: "Germany", // deliberately != the cached "Fed. Rep. of Germany"
+			DXCC:    "230",
+		},
+	}); err != nil {
+		t.Fatalf("seed prior QSO: %v", err)
+	}
+
+	o := &lookup.Orchestrator{DB: db, CountryTTL: time.Hour, StationTTL: time.Hour}
+	got := o.Enrich(context.Background(), "DL1ABC")
+	if got.Country.DXCCPrefix != "DL" {
+		t.Fatalf("precondition: cached country not resolved (DXCCPrefix=%q)", got.Country.DXCCPrefix)
+	}
+	if got.Country.IsNewEntity {
+		t.Error("IsNewEntity = true; want false — DXCC 230 was worked despite the name mismatch")
+	}
+}
+
+// TestEnrich_IsNewEntity_DxccPath_NoPriorQso — the DXCC path also reports a
+// genuinely new entity correctly: prefix maps to a number, but no QSO carries it.
+func TestEnrich_IsNewEntity_DxccPath_NoPriorQso(t *testing.T) {
+	db := newTestSqlite(t)
+	if err := db.UpsertCountry(types.Country{
+		Name:       "Asiatic Russia",
+		Prefix:     "UA9",
+		DXCCPrefix: "UA9", // → ADIF 15
+	}); err != nil {
+		t.Fatalf("seed country: %v", err)
+	}
+	o := &lookup.Orchestrator{DB: db, CountryTTL: time.Hour, StationTTL: time.Hour}
+	got := o.Enrich(context.Background(), "UA9ABC")
+	if got.Country.DXCCPrefix != "UA9" {
+		t.Fatalf("precondition: cached country not resolved (DXCCPrefix=%q)", got.Country.DXCCPrefix)
+	}
+	if !got.Country.IsNewEntity {
+		t.Error("IsNewEntity = false; want true — DXCC 15 has no prior QSO")
+	}
+}
+
 // TestEnrich_IsNewEntity_EmptyCountry — defensive: orchestrator path
 // where the country layer returned no data must NOT flag IsNewEntity
 // (true would mislead — there is no entity to report newness for).

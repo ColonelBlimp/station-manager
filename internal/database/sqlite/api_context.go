@@ -292,6 +292,49 @@ func (s *Service) HasQsoForCountryWithContext(ctx context.Context, country strin
 	return exists, nil
 }
 
+// HasQsoForDxccWithContext returns true when at least one non-deleted QSO row
+// exists whose stored ADIF DXCC entity code equals `dxcc`. Like
+// HasQsoForCountryWithContext it backs the enrichment "new entity" check, but
+// matches on the numeric DXCC code rather than the country-name string — the
+// code distinguishes split entities (e.g. European vs Asiatic Russia) that the
+// display name conflates, and it survives the naming differences between
+// hamnut and an imported QSO's country field. An empty code returns
+// (false, nil) without a query.
+//
+// The DXCC code lives in the QSO's additional_data JSON blob (no dedicated
+// column), so this uses json_extract — a deliberate raw-SQL fragment, since
+// sqlboiler's typed WHERE can't express a JSON path. The default soft-delete
+// filter (deleted_at IS NULL) still applies via models.Qsos, so deleted rows
+// don't count as prior contact. Not index-backed (a full scan over the JSON);
+// fine at a single operator's log size, but a generated column + index is the
+// scale-up path if it ever matters.
+func (s *Service) HasQsoForDxccWithContext(ctx context.Context, dxcc string) (bool, error) {
+	const op errors.Op = "sqlite.Service.HasQsoForDxccWithContext"
+	if err := checkService(op, s); err != nil {
+		return false, err
+	}
+	dxcc = strings.TrimSpace(dxcc)
+	if dxcc == "" {
+		return false, nil
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return false, err
+	}
+
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	exists, err := models.Qsos(
+		qm.Where("json_extract(additional_data, '$.dxcc') = ?", dxcc),
+	).Exists(ctx, h)
+	if err != nil {
+		return false, errors.New(op).WithErr(err).WithMsg("checking QSO existence by dxcc")
+	}
+	return exists, nil
+}
+
 // SchemaVersionWithContext returns the current migration version recorded
 // in the schema_migrations table (maintained by golang-migrate). Returns
 // 0 if no migrations have been applied yet (fresh DB). The `dirty` flag
