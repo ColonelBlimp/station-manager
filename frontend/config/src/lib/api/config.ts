@@ -60,6 +60,26 @@ export interface MailerFields {
     default_recipient?: string;
 }
 
+/**
+ * The SMTP block — the config SPA's Email-tab edit surface. Asymmetric like
+ * LookupProviderInfo (masked-on-GET, merge-on-PUT): GET reports `password_set`
+ * (never the value); PUT carries a new `password` (blank = keep the stored one).
+ * Distinct from `mailer` (the read-only running-mailer projection): `smtp` is the
+ * persisted-intent surface this SPA edits; they can diverge until a daemon restart.
+ */
+export interface SmtpInfo {
+    enabled: boolean;
+    host?: string;
+    port?: number;
+    username?: string;
+    from?: string;
+    default_recipient?: string;
+    starttls: boolean;
+    timeout_sec?: number;
+    password_set?: boolean;
+    password?: string;
+}
+
 export interface DefaultLogbookFields {
     id: number;
     name?: string;
@@ -116,6 +136,7 @@ export interface ConfigResponse {
     default_logbook: DefaultLogbookFields;
     station: StationFields;
     mailer: MailerFields;
+    smtp?: SmtpInfo;
     ft8_display?: Ft8DisplayFields;
     ft8_frequencies?: Record<string, number>;
     forwarders?: ForwarderInfo[];
@@ -194,6 +215,10 @@ export interface ConfigPatch {
     // provider's `password` is MERGED onto the stored value daemon-side (blank =
     // keep). Omit `lookup` to leave it untouched.
     lookup?: LookupInfo;
+    // Presence-aware (Email tab): replaces the SMTP block; `password` is MERGED
+    // onto the stored value daemon-side (blank = keep). Omit `smtp` to leave it
+    // untouched (a Station/FT8/Rigs save never carries it).
+    smtp?: SmtpInfo;
     // Presence-aware master switches: the Rigs tab sends bridge_enabled, the FT8
     // tab sends ft8_enabled. Omit to leave the flag untouched.
     bridge_enabled?: boolean;

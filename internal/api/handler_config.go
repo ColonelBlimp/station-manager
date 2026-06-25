@@ -105,6 +105,14 @@ type ConfigResponse struct {
 	// omits `lookup` leaves the enrichment config untouched; one that carries it
 	// REPLACES it (with passwords merged). Always set on GET.
 	Lookup *LookupInfo `json:"lookup,omitempty"`
+	// Smtp is the config SPA's Email-tab surface — masked on GET (password reported
+	// set/unset via password_set, never the value), merge-on-PUT (mergeSmtp: a blank
+	// password keeps the stored one). Pointer so the PUT is presence-aware: a body
+	// that omits `smtp` leaves the SMTP block untouched (a Station / FT8 save can't
+	// wipe it); one that carries it REPLACES the block (password merged). Always set
+	// on GET. Distinct from the read-only Mailer projection above (logging SPA,
+	// live-mailer state); the handler ignores Mailer on PUT and honours Smtp.
+	Smtp *SmtpInfo `json:"smtp,omitempty"`
 	// BridgeEnabled / Ft8Enabled are the master on/off switches for the rig CAT
 	// bridge and the FT8 subsystem (config SPA's Rigs / FT8 tabs). Read+write:
 	// always set on GET (current value) so the toggles show state; presence-aware
@@ -196,6 +204,38 @@ type DefaultRigInfo struct {
 type MailerInfo struct {
 	Enabled          bool   `json:"enabled"`
 	DefaultRecipient string `json:"default_recipient,omitempty"`
+}
+
+// SmtpInfo is the config SPA's editable view of the SMTP block (Email tab). It is
+// the persisted-intent EDIT surface (cfg.Smtp-backed, presence-aware on PUT),
+// distinct from the read-only MailerInfo above — which stays the logging SPA's
+// RUNNING-state projection (enabled + default recipient from the live mailer).
+// Same split the codebase uses for DefaultRig (narrow read) vs /v1/rigs (full
+// edit): the two can diverge until the daemon restarts to pick up a saved change,
+// which is the config-SPA-requires-restart model the Bridge/FT8 toggles also use.
+//
+// Asymmetric to keep the password off the wire (masked-on-GET, merge-on-PUT, like
+// ForwarderInfo / LookupProviderInfo):
+//   - On GET: enabled/host/port/username/from/default_recipient/starttls/
+//     timeout_sec + PasswordSet (is a password stored). Password is "" (masked).
+//   - On PUT: + Password (new value; blank = keep the stored one). PasswordSet is
+//     ignored.
+//
+// Username is shown on GET (an SMTP login, not masked the way the password is) —
+// the same call LookupProviderInfo makes. validateSmtp (config pipeline) gates the
+// merged result, so an enabled block missing host/from or with a bad address is a
+// 400 — the SPA never has to re-implement the rules.
+type SmtpInfo struct {
+	Enabled          bool   `json:"enabled"`
+	Host             string `json:"host,omitempty"`
+	Port             int    `json:"port,omitempty"`
+	Username         string `json:"username,omitempty"`
+	From             string `json:"from,omitempty"`
+	DefaultRecipient string `json:"default_recipient,omitempty"`
+	StartTLS         bool   `json:"starttls"`
+	TimeoutSec       int    `json:"timeout_sec,omitempty"`
+	PasswordSet      bool   `json:"password_set"`
+	Password         string `json:"password,omitempty"`
 }
 
 // BridgeInfo is the SPA-visible subset of the bridge subsystem config.
@@ -333,6 +373,13 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// default provider URLs; validateLookup gates the result.
 	if req.Lookup != nil {
 		candidate.Lookup = mergeLookup(*req.Lookup, current.Lookup)
+	}
+	// SMTP (config SPA Email tab) — presence-aware; the password is merged onto the
+	// stored value (blank = keep, masked-on-GET means the SPA never had it to echo).
+	// validateSmtp (in the pipeline below) gates the merged block: an enabled block
+	// missing host/from or with a malformed address is a 400.
+	if req.Smtp != nil {
+		candidate.Smtp = mergeSmtp(*req.Smtp, current.Smtp)
 	}
 	// Master subsystem switches — presence-aware (config SPA Rigs / FT8 tabs).
 	// validateBridge below enforces port+driver when bridge is enabled.
@@ -601,6 +648,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	lookupInfo := lookupInfoFrom(cfg.Lookup)
 	resp.Lookup = &lookupInfo
 
+	// SMTP (config SPA Email tab) — masked: the password is reported set/unset via
+	// password_set, never the value. Always served (the form needs the full shape).
+	smtpInfo := smtpInfoFrom(cfg.Smtp)
+	resp.Smtp = &smtpInfo
+
 	// Master subsystem switches — current values so the SPA toggles show state.
 	bridgeEnabled := cfg.Bridge.Enabled
 	ft8Enabled := cfg.Ft8.Enabled
@@ -621,6 +673,44 @@ func lookupProviderInfoFrom(c types.LookupConfig) LookupProviderInfo {
 		PasswordSet: c.Password != "",
 		TimeoutSec:  c.HttpTimeoutSec,
 		ViewURL:     c.ViewURL,
+	}
+}
+
+// smtpInfoFrom masks the SMTP block for GET: the password becomes a set/unset
+// flag, the value is dropped. Every other field round-trips (none are secret in
+// the way the password is).
+func smtpInfoFrom(s types.SmtpConfig) SmtpInfo {
+	return SmtpInfo{
+		Enabled:          s.Enabled,
+		Host:             s.Host,
+		Port:             s.Port,
+		Username:         s.Username,
+		From:             s.From,
+		DefaultRecipient: s.DefaultRecipient,
+		StartTLS:         s.StartTLS,
+		TimeoutSec:       s.TimeoutSec,
+		PasswordSet:      s.Password != "",
+	}
+}
+
+// mergeSmtp rebuilds the SMTP block from the PUT payload, keeping the stored
+// password when the operator left the field blank — same keep-on-blank rule as
+// mergeLookupProvider (masked-on-GET means the SPA never had the secret to echo).
+func mergeSmtp(in SmtpInfo, ex types.SmtpConfig) types.SmtpConfig {
+	pw := ex.Password
+	if in.Password != "" {
+		pw = in.Password
+	}
+	return types.SmtpConfig{
+		Enabled:          in.Enabled,
+		Host:             in.Host,
+		Port:             in.Port,
+		Username:         in.Username,
+		Password:         pw,
+		From:             in.From,
+		DefaultRecipient: in.DefaultRecipient,
+		StartTLS:         in.StartTLS,
+		TimeoutSec:       in.TimeoutSec,
 	}
 }
 

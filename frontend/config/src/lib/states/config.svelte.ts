@@ -20,6 +20,7 @@ import {
     type LoggingStationFields,
     type LookupInfo,
     type LookupProviderInfo,
+    type SmtpInfo,
 } from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
 import { fetchHardware, type HardwareResponse } from '../api/hardware';
@@ -206,6 +207,59 @@ function lookupFormKey(f: LookupForm): string {
     });
 }
 
+// SMTP submission defaults — mirror the daemon's applyDefaults (port 587 =
+// RFC 6409 submission, 30s round-trip timeout, STARTTLS on). GET serves the SMTP
+// block resolved, so these are only the cold-start fallback when no block exists.
+const DEFAULT_SMTP_PORT = 587;
+const DEFAULT_SMTP_TIMEOUT_SEC = 30;
+
+// EmailForm — the Email tab's editable view of the SMTP block. password is the
+// typed new value (transient — blank = keep the stored secret); passwordSet (from
+// the masked GET) drives the "set" hint. Numbers are plain (the daemon validates
+// + clamps); the form keeps them as numbers for the numeric inputs.
+export interface EmailForm {
+    enabled: boolean;
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    passwordSet: boolean;
+    from: string;
+    defaultRecipient: string;
+    starttls: boolean;
+    timeoutSec: number;
+}
+
+function emailFormFrom(s: SmtpInfo | null): EmailForm {
+    return {
+        enabled: s?.enabled ?? false,
+        host: s?.host ?? '',
+        port: s?.port ?? DEFAULT_SMTP_PORT,
+        username: s?.username ?? '',
+        password: '',
+        passwordSet: s?.password_set ?? false,
+        from: s?.from ?? '',
+        defaultRecipient: s?.default_recipient ?? '',
+        starttls: s?.starttls ?? true,
+        timeoutSec: s?.timeout_sec ?? DEFAULT_SMTP_TIMEOUT_SEC,
+    };
+}
+
+/** Structural identity of the email form for dirty-tracking — excludes the
+ *  transient typed password (checked separately) and the GET-only set flag. */
+function emailFormKey(f: EmailForm): string {
+    return JSON.stringify({
+        enabled: f.enabled,
+        host: f.host,
+        port: f.port,
+        username: f.username,
+        from: f.from,
+        defaultRecipient: f.defaultRecipient,
+        starttls: f.starttls,
+        timeoutSec: f.timeoutSec,
+    });
+}
+
 // FT8 Band Activity display-pref defaults — mirror the daemon's
 // ResolveFt8Display so a fresh config (block omitted) still shows real values.
 // GET serves ft8_display RESOLVED, so these are only the cold-start fallback.
@@ -294,6 +348,16 @@ class ConfigState {
     /** Last Enrichment-save status: 'ok', an error message, or null (idle/in-flight). */
     lookupStatus: string | null = $state(null);
 
+    // Email tab — the loaded (masked) SMTP block + the editable form. smtp is the
+    // persisted-intent edit surface (distinct from config.mailer, the read-only
+    // running-mailer projection); changes are restart-only (the mailer binds at boot).
+    smtp: SmtpInfo | null = $state(null);
+    emailForm: EmailForm = $state(emailFormFrom(null));
+    /** True while an Email save PUT is in flight. */
+    savingEmail: boolean = $state(false);
+    /** Last Email-save status: 'ok', an error message, or null (idle/in-flight). */
+    emailStatus: string | null = $state(null);
+
     // FT8 tab — the full Band Activity display prefs (colours + row cap + feed
     // mode + toggles), hydrated from config.ft8_display on load and re-hydrated
     // from the PUT response on save. Bound directly by the FT8 tab's inputs.
@@ -344,6 +408,8 @@ class ConfigState {
             this.hydrateForwarders();
             this.lookup = this.config.lookup ?? null;
             this.lookupForm = lookupFormFrom(this.lookup);
+            this.smtp = this.config.smtp ?? null;
+            this.emailForm = emailFormFrom(this.smtp);
             this.bridgeEnabled = this.config.bridge_enabled ?? false;
             this.ft8Enabled = this.config.ft8_enabled ?? false;
         } else {
@@ -748,6 +814,65 @@ class ConfigState {
     cancelLookup(): void {
         this.lookupForm = lookupFormFrom(this.lookup);
         this.lookupStatus = null;
+    }
+
+    // ── Email tab ──────────────────────────────────────────────────────────────
+
+    /** True when the Email form diverges from the loaded config — a structural
+     *  change OR a freshly-typed password. */
+    get emailDirty(): boolean {
+        if (!this.config) return false;
+        const base = emailFormFrom(this.smtp);
+        return (
+            emailFormKey(this.emailForm) !== emailFormKey(base) ||
+            this.emailForm.password.trim() !== ''
+        );
+    }
+
+    /**
+     * Persist the Email form via PUT /v1/config. Sends the FULL SMTP block
+     * (presence-aware daemon-side — the daemon REPLACES it) with only a non-empty
+     * typed password (merged onto the stored secret, so blank keeps it). Echoes
+     * logging_station/station verbatim; omits the other blocks so they're left
+     * untouched. validateSmtp gates the result (a 400 surfaces in the footer).
+     * Re-hydrates from the (masked) response on success.
+     */
+    async saveEmail(): Promise<void> {
+        if (this.savingEmail || !this.config || !this.emailDirty) return;
+        this.savingEmail = true;
+        this.emailStatus = null;
+        const f = this.emailForm;
+        const payload: SmtpInfo = {
+            enabled: f.enabled,
+            host: f.host,
+            port: f.port,
+            username: f.username,
+            from: f.from,
+            default_recipient: f.defaultRecipient,
+            starttls: f.starttls,
+            timeout_sec: f.timeoutSec,
+        };
+        if (f.password.trim() !== '') payload.password = f.password;
+        const outcome: ConfigOutcome = await putConfig({
+            logging_station: this.config.logging_station,
+            station: this.config.station,
+            smtp: payload,
+        });
+        if (outcome.kind === 'ok') {
+            this.config = outcome.config;
+            this.smtp = outcome.config.smtp ?? null;
+            this.emailForm = emailFormFrom(this.smtp);
+            this.emailStatus = 'ok';
+        } else {
+            this.emailStatus = outcomeMessage(outcome);
+        }
+        this.savingEmail = false;
+    }
+
+    /** Discard staged Email edits — reset the form to the loaded config. */
+    cancelEmail(): void {
+        this.emailForm = emailFormFrom(this.smtp);
+        this.emailStatus = null;
     }
 }
 
