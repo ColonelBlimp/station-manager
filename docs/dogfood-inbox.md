@@ -13,7 +13,7 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 ## Notes
 
 <!-- /log appends below this line -->
-- [2026-06-23] default_rig_id is 0 on fresh install, Rig shows not set
+- ~~[2026-06-23] default_rig_id is 0 on fresh install, Rig shows not set~~ **RESOLVED/WAI 2026-06-25** — daemon migrates a loose bridge/cat config into a one-entry catalogue + sets default_rig_id; a genuinely rig-less config correctly shows "not set"; commit 8c2fa625 makes the first rig added in the config SPA active. No bug remaining.
 - ~~[2026-06-24] browser tab icon is the default. Should be the radio tower.~~ **FIXED 2026-06-25** — `assets/logo.png` (the tower mark) wired as the favicon for all three SPAs via each `public/logo.png`; Vite base-rewrites the href per SPA mount.
 - [2026-06-24] we need some links in the logging SPA (and the other SPAs) to other URIs: config, logbook, db manager, etc
 - [2026-06-24] we need to implement UI themes as well as dark mode

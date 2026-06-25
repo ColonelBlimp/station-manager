@@ -526,6 +526,36 @@ when it ships — don't let this rot into a graveyard.
     external WSJT-X→Grafana request (they could point existing WSJT-X-consuming
     tools straight at SM).
 
+- **Cross-SPA navigation links (all SPAs).** From dogfood-inbox 2026-06-24. The
+  three SPAs (logging at `/`, config at `/config/`, logbook at `/logbook/`) have
+  no links between them — the operator hops by editing the URL. Add a small nav
+  affordance (the header right-side slot is already reserved in each app shell)
+  linking to the sibling SPAs + the future DB manager. Keep it dumb: static
+  `<a href>`s to the known mount paths, no router. Decide the set once (logging ↔
+  config ↔ logbook ↔ db-manager) so all three share one component. Small, but
+  cross-cutting (touches every SPA shell), so batched here rather than done
+  piecemeal.
+
+- **UI themes + dark mode (all SPAs).** From dogfood-inbox 2026-06-24. Today the
+  SPAs are light-only with hardcoded Tailwind colour classes (`text-gray-700`,
+  `bg-white`, …). Wants a theme system: at minimum a dark mode, ideally
+  operator-selectable themes. The real cost is that colours are inline across
+  every component — a theme system needs them routed through CSS variables /
+  Tailwind theme tokens / a `dark:` pass first, which is a broad refactor touching
+  all three SPAs. Largest of the dogfood UI items. The theme **choice** is a
+  durable setting → daemon `config.json`, not localStorage (per the settings-in-
+  config rule); the FT8 highlight colours already live there, so a `display`/
+  `theme` config block is the natural home. Do the colour-token refactor as its
+  own pass before wiring the toggle.
+
+- **First-run setup → config SPA hand-off link.** From dogfood-inbox 2026-06-24.
+  The logging SPA's initial setup page should, once the minimum identity is in,
+  offer something like "want to finish configuring Station Manager? → open Config"
+  linking to `/config/`. Ties into the 2026-06-25 decision that first-run config
+  is now fully doable in the config SPA (identity editable there). Small — a
+  conditional link on the setup screen — but depends on the cross-SPA-link set
+  above, so sequence it after (or fold into) that item.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
