@@ -76,7 +76,20 @@
         <ul class="-mt-2 flex flex-col">
             {#each ft8PileupStack.items as e, i (e.call)}
                 <li class="flex items-center">
-                    <span class="flex-1 truncate px-2 py-1 font-mono text-sm text-gray-800"
+                    {#if i > 0}
+                        <button
+                            type="button"
+                            class="cursor-pointer px-1 leading-none text-gray-400 hover:text-indigo-600"
+                            aria-label={`Move ${e.call} up the pile-up`}
+                            title="Move up"
+                            onclick={() => ft8PileupStack.moveUp(i)}
+                            ><span aria-hidden="true">↑</span></button
+                        >
+                    {:else}
+                        <!-- Head row: no up-arrow (already next); spacer keeps calls aligned. -->
+                        <span class="px-1" aria-hidden="true">&nbsp;</span>
+                    {/if}
+                    <span class="flex-1 truncate px-1 py-1 font-mono text-sm text-gray-800"
                         >{e.call}</span
                     >
                     <button

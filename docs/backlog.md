@@ -378,10 +378,15 @@ when it ships — don't let this rot into a graveyard.
   (grows unbounded like WSJT-X's `ALL.TXT`); default path
   `$SM_WORKING_DIR/log/ft8-all.txt`. Documented in `docs/ft8.md` §"Decode log".
 
-- **FT8 Operate pile-up: up-arrow to reorder callsigns in the answer queue.**
-  Filed 2026-06-20. Add a left-side up-arrow on each pile-up entry to move a
-  callsign up the list. Belongs with the `operator_pick` pile-up stack workstream
-  (ADR 0033, currently pending — see the FT8 caller-side notes).
+- ~~**FT8 Operate pile-up: up-arrow to reorder callsigns in the answer queue.**~~
+  **SHIPPED 2026-06-25.** Filed 2026-06-20. Added `ft8PileupStack.moveUp(index)`
+  (swap one place toward the head; head/out-of-bounds no-op) + a left-side `↑`
+  button per drawer row (`Ft8PileupDrawer.svelte`), with a spacer on the head row
+  to keep callsigns aligned. SPA-only, in-memory — the operator can prioritise a
+  caller without clearing the FIFO. Test: `ft8PileupStack.test.ts` ("moveUp swaps
+  an entry toward the head…"). Built against the SPA-owned pile-up stack (the
+  shipped `operator_pick` shape), independent of the still-pending daemon
+  `caller_answer_mode: operator_pick` Call-CQ mode.
 
 - ~~**FT8 Band Activity enrichment: flag the worked decode as a new entity.**~~
   **SHIPPED 2026-06-25.** Filed 2026-06-20; reshaped 2026-06-25 from "flag the

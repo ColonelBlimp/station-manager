@@ -68,6 +68,22 @@ describe('ft8PileupStack', () => {
         expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['K1ABC', 'PA3KUS']);
     });
 
+    it('moveUp swaps an entry toward the head; head and out-of-bounds are no-ops', () => {
+        ft8PileupStack.push(entry('K1ABC'));
+        ft8PileupStack.push(entry('9A4ZM'));
+        ft8PileupStack.push(entry('PA3KUS'));
+        // Prioritise PA3KUS (index 2 → 1).
+        ft8PileupStack.moveUp(2);
+        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['K1ABC', 'PA3KUS', '9A4ZM']);
+        // Again → reaches the head.
+        ft8PileupStack.moveUp(1);
+        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS', 'K1ABC', '9A4ZM']);
+        // Head and out-of-bounds: no change.
+        ft8PileupStack.moveUp(0);
+        ft8PileupStack.moveUp(9);
+        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS', 'K1ABC', '9A4ZM']);
+    });
+
     it('clear empties the queue', () => {
         ft8PileupStack.push(entry('K1ABC'));
         ft8PileupStack.clear();

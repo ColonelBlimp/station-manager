@@ -85,6 +85,19 @@ class Ft8PileupStack {
         this.items = [...this.items.slice(0, index), ...this.items.slice(index + 1)];
     }
 
+    /**
+     * Move the entry at index one place toward the head (worked sooner) — the
+     * drawer's per-entry up-arrow, so the operator can prioritise a particular
+     * caller without clearing the queue. No-op at the head (index 0) or
+     * out-of-bounds. FIFO order is otherwise preserved.
+     */
+    moveUp(index: number): void {
+        if (index <= 0 || index >= this.items.length) return;
+        const next = [...this.items];
+        [next[index - 1], next[index]] = [next[index], next[index - 1]];
+        this.items = next;
+    }
+
     /** Empty the queue — the drawer's Clear-all. */
     clear(): void {
         this.items = [];
