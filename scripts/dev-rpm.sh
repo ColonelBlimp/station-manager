@@ -40,8 +40,14 @@ VERSION=$(sm_git_version)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
 OUTPUT=build/release/station-manager-dev.x86_64.rpm
 
-echo "── [1/3] Building SPA → frontend/logging/dist/ + manual → manual/public/ ──"
-(cd frontend/logging && npm run build)
+echo "── [1/3] Building SPAs → frontend/{logging,config,logbook}/dist/ + manual → manual/public/ ──"
+# Every embedded SPA (frontend/embed.go //go:embed all:<spa>/dist) must be rebuilt
+# here — the Go build embeds whatever is already in each dist/, so skipping one
+# silently ships a STALE bundle for that client (e.g. config-SPA toggles missing).
+for spa in logging config logbook; do
+  echo "  • frontend/${spa}"
+  (cd "frontend/${spa}" && npm run build)
+done
 (cd manual && hugo --quiet)
 
 # FFT backend selection — see scripts/release-rpm.sh for the rationale.

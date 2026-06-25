@@ -37,18 +37,26 @@ fi
 VERSION="${1#v}" # strip an optional leading 'v' (v2.0.0 → 2.0.0)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
 
-echo "── [1/3] Building SPA → frontend/logging/dist/ + manual → manual/public/ ──"
-# SM_SKIP_SPA=1 reuses an already-built dist/ (set by scripts/release.sh, which
-# builds the SPA on the host so the build container needs no Node). Bare runs
-# still build it.
+echo "── [1/3] Building SPAs → frontend/{logging,config,logbook}/dist/ + manual → manual/public/ ──"
+# Every embedded SPA (frontend/embed.go //go:embed all:<spa>/dist) must be present
+# and current — the Go build embeds whatever is in each dist/, so a missing or
+# stale bundle ships a broken/old client for that surface.
+# SM_SKIP_SPA=1 reuses already-built dist/ dirs (set by scripts/release.sh, which
+# builds the SPAs on the host so the build container needs no Node). Bare runs
+# still build them.
 if [ "${SM_SKIP_SPA:-}" = "1" ]; then
-  if [ ! -d frontend/logging/dist ]; then
-    echo "error: SM_SKIP_SPA=1 but frontend/logging/dist/ is missing — build the SPA first" >&2
-    exit 1
-  fi
-  echo "  (SM_SKIP_SPA=1 — using pre-built frontend/logging/dist/)"
+  for spa in logging config logbook; do
+    if [ ! -d "frontend/${spa}/dist" ]; then
+      echo "error: SM_SKIP_SPA=1 but frontend/${spa}/dist/ is missing — build the SPAs first" >&2
+      exit 1
+    fi
+  done
+  echo "  (SM_SKIP_SPA=1 — using pre-built frontend/{logging,config,logbook}/dist/)"
 else
-  (cd frontend/logging && npm run build)
+  for spa in logging config logbook; do
+    echo "  • frontend/${spa}"
+    (cd "frontend/${spa}" && npm run build)
+  done
 fi
 # SM_SKIP_MANUAL=1 reuses an already-built manual/public/ (set by
 # scripts/release.sh, which builds the manual on the host so the build

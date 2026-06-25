@@ -49,8 +49,13 @@ fi
 # 1) SPA + manual on the HOST: fast, uses the operator's cached node/Hugo
 #    toolchains, and keeps Node and Hugo out of the build container. The
 #    container's go:embed picks up dist/ and manual/public/.
-echo "── [1/2] Building SPA + manual on host → frontend/logging/dist/ + manual/public/ ──"
-(cd frontend/logging && npm run build)
+echo "── [1/2] Building SPAs + manual on host → frontend/{logging,config,logbook}/dist/ + manual/public/ ──"
+# All three embedded SPAs (frontend/embed.go) must be built on the host — the
+# container's go:embed picks up each dist/, so a skipped SPA ships a stale bundle.
+for spa in logging config logbook; do
+  echo "  • frontend/${spa}"
+  (cd "frontend/${spa}" && npm run build)
+done
 if ! command -v hugo >/dev/null 2>&1; then
   echo "error: hugo not in PATH (the operator manual is built with Hugo — e.g. 'dnf install hugo')" >&2
   exit 1
