@@ -61,6 +61,18 @@ export interface MailerFields {
 }
 
 /**
+ * PSK Reporter upload settings (the FT8 tab). No secrets — receiver identity
+ * (callsign/grid/antenna) comes from the station config. Served sparse: an empty
+ * host/port means "use the production collector default" (resolved daemon-side),
+ * which the SPA renders as placeholders. Round-trips as the canonical type.
+ */
+export interface PskReporterFields {
+    enabled?: boolean;
+    host?: string;
+    port?: number;
+}
+
+/**
  * The SMTP block — the config SPA's Email-tab edit surface. Asymmetric like
  * LookupProviderInfo (masked-on-GET, merge-on-PUT): GET reports `password_set`
  * (never the value); PUT carries a new `password` (blank = keep the stored one).
@@ -137,6 +149,7 @@ export interface ConfigResponse {
     station: StationFields;
     mailer: MailerFields;
     smtp?: SmtpInfo;
+    psk_reporter?: PskReporterFields;
     ft8_display?: Ft8DisplayFields;
     ft8_frequencies?: Record<string, number>;
     forwarders?: ForwarderInfo[];
@@ -204,6 +217,9 @@ export interface ConfigPatch {
     logging_station: LoggingStationFields;
     station: StationFields;
     ft8_display?: Ft8DisplayFields;
+    // Presence-aware (FT8 tab): replaces the PSK Reporter block; no secrets, so
+    // it's taken as-sent (the daemon validates the port). Omit to leave untouched.
+    psk_reporter?: PskReporterFields;
     rigs?: RigConfig[];
     default_rig_id?: number;
     // Presence-aware (Forwarding tab): replaces the whole list; per-entry

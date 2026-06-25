@@ -20,6 +20,7 @@ import {
     type LoggingStationFields,
     type LookupInfo,
     type LookupProviderInfo,
+    type PskReporterFields,
     type SmtpInfo,
 } from '../api/config';
 import { fetchRigs, type RigConfig, type RigDefSummary } from '../api/rigs';
@@ -126,11 +127,21 @@ function restartRelevant(r: RigConfig): string {
     return JSON.stringify(canonRig(r, false));
 }
 
-// StationForm — the editable set-once LoggingStation MY_* fields the config
-// SPA's Station tab owns (operational identity — callsign / operator / grid —
-// stays in the logging SPA; design 2026-06-24). All LoggingStation fields are
-// strings daemon-side, so the form is all strings.
+// StationForm — the editable LoggingStation fields the config SPA's Station tab
+// owns. Originally just the set-once MY_* facts (design 2026-06-24), it now ALSO
+// carries the operating identity — callsign / operator / owner / name / grid — so
+// first-run setup is doable entirely in the config SPA without hopping to the
+// logging app (decided 2026-06-25). The logging SPA's My Station edits the SAME
+// daemon-config fields (one source of truth, ADR 0003 — two views, never a fork);
+// it stays the fast mid-session "changing op" surface. lat/lon are DERIVED from
+// my_gridsquare by the daemon on PUT, so they're not in the form. All
+// LoggingStation fields are strings daemon-side, so the form is all strings.
 export interface StationForm {
+    station_callsign: string;
+    operator: string;
+    owner_callsign: string;
+    my_name: string;
+    my_gridsquare: string;
     my_country: string;
     my_dxcc: string;
     my_cq_zone: string;
@@ -146,6 +157,11 @@ export interface StationForm {
 
 function stationFormFrom(ls: LoggingStationFields): StationForm {
     return {
+        station_callsign: ls.station_callsign ?? '',
+        operator: ls.operator ?? '',
+        owner_callsign: ls.owner_callsign ?? '',
+        my_name: ls.my_name ?? '',
+        my_gridsquare: ls.my_gridsquare ?? '',
         my_country: ls.my_country ?? '',
         my_dxcc: ls.my_dxcc ?? '',
         my_cq_zone: ls.my_cq_zone ?? '',
@@ -282,6 +298,27 @@ export interface Ft8Form {
     hide_hashed_calls: boolean;
 }
 
+// PskForm — the FT8 tab's PSK Reporter section. host/port are blank/0 by default
+// (the daemon resolves empty → production collector); the SPA shows the defaults
+// as placeholders. Folded into the FT8 tab's save (one footer for the whole tab).
+export interface PskForm {
+    enabled: boolean;
+    host: string;
+    port: number;
+}
+
+function pskFormFrom(p: PskReporterFields | null): PskForm {
+    return {
+        enabled: p?.enabled ?? false,
+        host: p?.host ?? '',
+        port: p?.port ?? 0,
+    };
+}
+
+function pskFormKey(f: PskForm): string {
+    return JSON.stringify({ enabled: f.enabled, host: f.host, port: f.port });
+}
+
 function ft8FormFrom(d: Ft8DisplayFields | undefined): Ft8Form {
     return {
         history_max: d?.history_max ?? DEFAULT_FT8_HISTORY_MAX,
@@ -362,6 +399,8 @@ class ConfigState {
     // mode + toggles), hydrated from config.ft8_display on load and re-hydrated
     // from the PUT response on save. Bound directly by the FT8 tab's inputs.
     ft8Form: Ft8Form = $state(ft8FormFrom(undefined));
+    /** PSK Reporter section of the FT8 tab (folded into the FT8 save). */
+    pskForm: PskForm = $state(pskFormFrom(null));
     /** True while an FT8-display save PUT is in flight. */
     savingFt8: boolean = $state(false);
     /** Last FT8-save status: 'ok', an error message, or null (idle/in-flight). */
@@ -403,6 +442,7 @@ class ConfigState {
         if (cfg.kind === 'ok') {
             this.config = cfg.config;
             this.ft8Form = ft8FormFrom(this.config.ft8_display);
+            this.pskForm = pskFormFrom(this.config.psk_reporter ?? null);
             this.stationForm = stationFormFrom(this.config.logging_station);
             this.forwarders = this.config.forwarders ?? [];
             this.hydrateForwarders();
@@ -523,13 +563,26 @@ class ConfigState {
         return this.catalogue.find((c) => c.id === model);
     }
 
-    /** True when the FT8 display form OR the FT8-enable toggle diverges from the
-     *  loaded config (drives Save/Cancel). */
+    /** True when the FT8 display form, the FT8-enable toggle, OR the PSK Reporter
+     *  section diverges from the loaded config (drives Save/Cancel). */
     get ft8Dirty(): boolean {
         if (!this.config) return false;
         return (
             this.ft8Enabled !== (this.config.ft8_enabled ?? false) ||
-            JSON.stringify(this.ft8Form) !== JSON.stringify(ft8FormFrom(this.config.ft8_display))
+            JSON.stringify(this.ft8Form) !== JSON.stringify(ft8FormFrom(this.config.ft8_display)) ||
+            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null))
+        );
+    }
+
+    /** True when a staged FT8-tab change is restart-only — the FT8-enable toggle or
+     *  the PSK Reporter settings (both subsystems bind at boot). The display prefs
+     *  apply live (the logging SPA re-reads them), so a colours/row-cap edit alone
+     *  doesn't raise this. Drives the FT8 tab's "restart required" banner. */
+    get ft8RestartRequired(): boolean {
+        if (!this.config) return false;
+        return (
+            this.ft8Enabled !== (this.config.ft8_enabled ?? false) ||
+            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null))
         );
     }
 
@@ -549,11 +602,13 @@ class ConfigState {
             station: this.config.station,
             ft8_display: { ...this.ft8Form },
             ft8_enabled: this.ft8Enabled,
+            psk_reporter: { ...this.pskForm },
         });
         if (outcome.kind === 'ok') {
             this.config = outcome.config;
             this.ft8Form = ft8FormFrom(this.config.ft8_display);
             this.ft8Enabled = this.config.ft8_enabled ?? false;
+            this.pskForm = pskFormFrom(this.config.psk_reporter ?? null);
             this.ft8Status = 'ok';
         } else {
             this.ft8Status = outcomeMessage(outcome);
@@ -561,22 +616,28 @@ class ConfigState {
         this.savingFt8 = false;
     }
 
-    /** Revert the FT8 display form + enable toggle to the loaded config. */
+    /** Revert the FT8 display form, enable toggle, and PSK Reporter section to the
+     *  loaded config. */
     cancelFt8(): void {
         if (this.config) {
             this.ft8Form = ft8FormFrom(this.config.ft8_display);
             this.ft8Enabled = this.config.ft8_enabled ?? false;
+            this.pskForm = pskFormFrom(this.config.psk_reporter ?? null);
         }
         this.ft8Status = null;
     }
 
     /**
-     * Persist the Station tab's MY_* edits via PUT /v1/config. The daemon
-     * overwrites `logging_station` unconditionally, so we merge the form onto
-     * the FULL logging_station block from the last GET (round-tripping the
-     * operational fields — callsign / operator / grid — the logging SPA owns)
-     * and echo `station` verbatim. `ft8_display` / `qsl` are presence-aware, so
-     * omitting them leaves those blocks untouched. Re-hydrates on success.
+     * Persist the Station tab's edits via PUT /v1/config. The daemon overwrites
+     * `logging_station` unconditionally, so we merge the form onto the FULL
+     * logging_station block from the last GET — the form now carries the operating
+     * identity (callsign / operator / owner / name / grid) too, so those keys
+     * override the echoed values; any field the form doesn't hold (e.g. the
+     * daemon-derived my_lat/my_lon) rides along from the echo and is recomputed by
+     * the daemon from my_gridsquare. `station` is echoed verbatim; `ft8_display` /
+     * `qsl` are presence-aware (omitting them leaves those blocks untouched). A
+     * first save carrying a callsign completes setup daemon-side. Re-hydrates on
+     * success (so daemon-canonicalised callsign/grid flow back into the form).
      */
     async saveStation(): Promise<void> {
         if (this.savingStation || !this.config || !this.stationDirty) return;

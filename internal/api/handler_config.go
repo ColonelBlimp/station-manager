@@ -113,6 +113,16 @@ type ConfigResponse struct {
 	// on GET. Distinct from the read-only Mailer projection above (logging SPA,
 	// live-mailer state); the handler ignores Mailer on PUT and honours Smtp.
 	Smtp *SmtpInfo `json:"smtp,omitempty"`
+	// PskReporter is the config SPA's FT8-tab PSK Reporter surface (the psk_reporter
+	// block — opt-in public upload of FT8 reception spots). No secrets (receiver
+	// identity comes from LoggingStation), so the canonical types.PskReporterConfig
+	// rides the wire directly — no masked projection needed. Served RAW (sparse):
+	// an empty host/port means "use the production collector default", resolved in
+	// internal/pskreporter at runtime, and the SPA renders those as placeholders —
+	// so config.json stays sparse rather than materialising the defaults. Pointer =
+	// presence-aware on PUT (omit → untouched; carry → replace); always set on GET.
+	// Restart-only (the subsystem binds at boot).
+	PskReporter *types.PskReporterConfig `json:"psk_reporter,omitempty"`
 	// BridgeEnabled / Ft8Enabled are the master on/off switches for the rig CAT
 	// bridge and the FT8 subsystem (config SPA's Rigs / FT8 tabs). Read+write:
 	// always set on GET (current value) so the toggles show state; presence-aware
@@ -380,6 +390,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// missing host/from or with a malformed address is a 400.
 	if req.Smtp != nil {
 		candidate.Smtp = mergeSmtp(*req.Smtp, current.Smtp)
+	}
+	// PSK Reporter (config SPA FT8 tab) — presence-aware; no secrets, so the block
+	// is taken as-sent (validatePskReporter gates the port below). Stored sparse:
+	// an empty host/port round-trips to the runtime default.
+	if req.PskReporter != nil {
+		candidate.PskReporter = *req.PskReporter
 	}
 	// Master subsystem switches — presence-aware (config SPA Rigs / FT8 tabs).
 	// validateBridge below enforces port+driver when bridge is enabled.
@@ -652,6 +668,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// password_set, never the value. Always served (the form needs the full shape).
 	smtpInfo := smtpInfoFrom(cfg.Smtp)
 	resp.Smtp = &smtpInfo
+
+	// PSK Reporter (config SPA FT8 tab) — served RAW (no secrets to mask, sparse so
+	// empty host/port show as defaults in the SPA). Always set so the form binds.
+	psk := cfg.PskReporter
+	resp.PskReporter = &psk
 
 	// Master subsystem switches — current values so the SPA toggles show state.
 	bridgeEnabled := cfg.Bridge.Enabled

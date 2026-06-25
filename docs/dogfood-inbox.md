@@ -14,13 +14,13 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 
 <!-- /log appends below this line -->
 - [2026-06-23] default_rig_id is 0 on fresh install, Rig shows not set
-- [2026-06-24] browser tab icon is the default. Should be the radio tower.
+- ~~[2026-06-24] browser tab icon is the default. Should be the radio tower.~~ **FIXED 2026-06-25** — `assets/logo.png` (the tower mark) wired as the favicon for all three SPAs via each `public/logo.png`; Vite base-rewrites the href per SPA mount.
 - [2026-06-24] we need some links in the logging SPA (and the other SPAs) to other URIs: config, logbook, db manager, etc
 - [2026-06-24] we need to implement UI themes as well as dark mode
 - [2026-06-24] the initial setup page should say something like, 'if you want to continue configuring Station Manager, click here [link]' which should go to the config SPA
 - [2026-06-24] all password/secret input field should be able to 'display' the password (the little eye glyph)
-- [2026-06-25] psk reporter config not seen
+- ~~[2026-06-25] psk reporter config not seen~~ **FIXED 2026-06-25** — added a PSK Reporter section to the config SPA's FT8 tab (enable + host/port, daemon-validated), folded into the FT8 save with a restart-required banner.
 - [2026-06-25] qsl fields not seen
-- [2026-06-25] lat and lon are no calculated when the config SPA is saved, but it is updated in My Station LSPA
-- [2026-06-25] lat and lon needs gridsquare which is not edited in the config spa
-- [2026-06-25] operator name cannot be edited via CSPA
+- ~~[2026-06-25] lat and lon are no calculated when the config SPA is saved, but it is updated in My Station LSPA~~ **FIXED 2026-06-25** — root cause was no gridsquare field in the CSPA; the daemon already re-derives lat/lon from grid on every PUT.
+- ~~[2026-06-25] lat and lon needs gridsquare which is not edited in the config spa~~ **FIXED 2026-06-25** — added Station identity section (callsign/operator/owner/name/grid) to the CSPA Station tab.
+- ~~[2026-06-25] operator name cannot be edited via CSPA~~ **FIXED 2026-06-25** — same Station identity section; identity now editable in BOTH SPAs (one daemon source of truth, ADR 0003).

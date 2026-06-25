@@ -10,8 +10,10 @@ package types
 //
 // The receiver identity is NOT here — callsign and grid come from LoggingStation,
 // and the antennaInformation is sourced from its MY_ANTENNA (single source of
-// truth, same as the antenna stamped on logged QSOs). Not exposed over /v1/config
-// (set-once daemon config, like the SMTP block); a config-SPA surface can come later.
+// truth, same as the antenna stamped on logged QSOs). Editable over /v1/config via
+// the config SPA's FT8 tab (unmasked — no secrets here; served raw/sparse so empty
+// host/port round-trip to the runtime default). Restart-only — the subsystem binds
+// at boot.
 type PskReporterConfig struct {
 	Enabled bool   `json:"enabled,omitempty"`
 	Host    string `json:"host,omitempty"` // "" → production report.pskreporter.info

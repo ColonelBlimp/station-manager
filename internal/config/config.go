@@ -1377,6 +1377,18 @@ func validateSmtp(s types.SmtpConfig) error {
 	return nil
 }
 
+// validatePskReporter checks the PSK Reporter block. The subsystem is opt-in and
+// fills Host/Port defaults at runtime (report.pskreporter.info:4739) when empty,
+// so an empty block is valid; the only thing to guard is an out-of-range port —
+// 0 means "use the default", anything outside 0..65535 is a typo the SPA's
+// numeric input shouldn't produce but the daemon stays the authoritative gate.
+func validatePskReporter(p types.PskReporterConfig) error {
+	if p.Port < 0 || p.Port > 65535 {
+		return fmt.Errorf("psk_reporter.port must be in 0..65535 (0 = default), got %d", p.Port)
+	}
+	return nil
+}
+
 // validateBridge checks the bridge subsystem block. Enabled=false
 // means the subsystem doesn't acquire a serial port and `/v1/rig/events`
 // isn't registered — disabled config is always valid (master smd /

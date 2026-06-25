@@ -1,9 +1,11 @@
 <script lang="ts">
-    // Station tab — the set-once LoggingStation MY_* fields (design 2026-06-24).
-    // Operational identity (callsign / operator / grid) stays in the logging
-    // SPA; this holds what changes only rarely: the cross-border location facts,
-    // postal address (for QSL), antenna, and CW key. Grouped sections, not
-    // nested tabs. Saves via configState.saveStation() (PUT /v1/config).
+    // Station tab — the operator's station details. Identity (callsign / operator /
+    // owner / name / grid) lives here so first-run setup is doable entirely in the
+    // config SPA (decided 2026-06-25); the logging SPA's My Station edits the SAME
+    // daemon-config fields (one source of truth, ADR 0003) as the fast mid-session
+    // surface. Below identity: the set-once location facts, postal address (QSL),
+    // antenna, and CW key. lat/lon are DERIVED from the grid square by the daemon
+    // on save. Grouped sections; saves via configState.saveStation() (PUT /v1/config).
     import { configState } from '../../states/config.svelte';
     import Field from '../Field.svelte';
     import TabFooter from '../TabFooter.svelte';
@@ -14,6 +16,40 @@
 {:else}
     <div class="mx-auto max-w-3xl space-y-8">
         <section>
+            <h2 class="mb-3 text-base font-semibold text-gray-800">Station identity</h2>
+            <div class="flex flex-wrap gap-x-4 gap-y-3">
+                <Field
+                    label="Station callsign"
+                    bind:value={configState.stationForm.station_callsign}
+                    widthClass="w-48"
+                    hint="Your on-air callsign; saving it completes first-run setup."
+                />
+                <Field
+                    label="Operator"
+                    bind:value={configState.stationForm.operator}
+                    widthClass="w-48"
+                />
+                <Field
+                    label="Owner callsign"
+                    bind:value={configState.stationForm.owner_callsign}
+                    widthClass="w-48"
+                />
+                <Field
+                    label="Name"
+                    bind:value={configState.stationForm.my_name}
+                    widthClass="w-64"
+                />
+                <Field
+                    label="Grid square"
+                    bind:value={configState.stationForm.my_gridsquare}
+                    widthClass="w-40"
+                    hint="Maidenhead locator — lat/lon are derived from this on save."
+                />
+            </div>
+        </section>
+
+        <section>
+            <h2 class="mb-3 text-base font-semibold text-gray-800">Location &amp; zones</h2>
             <div class="flex flex-wrap gap-x-4 gap-y-3">
                 <Field
                     label="Country"
