@@ -30,33 +30,27 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-06-19)
+## Current state (as of 2026-06-25)
 
-> **Recent arc (session 186, 2026-06-19):** **full-codebase code-review sweep** — an
-> external review landed one package at a time (`adif`, `api`, `audio`, `bridge`, `cat`,
-> `config`, `database`, `email`, `errors`) and every finding was fixed or deliberately
-> triaged, with a resolution section appended to each `docs/reviews/archive/internal-<pkg>-2026-06-19.md`
-> and committed before the next. Notable: a parser-panic fix (`adif`), CI-V ACK address
-> hardening + data-driven command range metadata (`cat`), `0600` secret-file perms + rig-model
-> validation (`config`), STARTTLS test coverage + mailer-boundary validation (`email`), and a
-> structured-logging chain-walk fix (`errors`); `UpsertLogbook` removed as dead. Pre-review
-> small fixes the same day: ANT_AZ rounded to whole degrees, session-email progress-toast
-> wording. **Earlier arc (session 185, 2026-06-18):** **PSK Reporter reception-report upload SHIPPED**
-> (`internal/pskreporter` — opt-in, IPFIX/UDP, live-validated against the real collector AND
-> running in production on the dogfood daemon); **FT8 "Next"-drain bug** + **ladder-highlight
-> bug** fixed (both operator-reported, root-caused from dogfood logs); **port-8080
-> restart-flap** addressed (`server.StopAccepting` releases the listener first + a Taskfile
-> guard so `task run:smd` can't collide with the systemd daemon); **go-ft8 v0.3.5** brings
-> standard `/P`. **Earlier arc (sessions 178–184, all 2026-06-16/17, uncommitted unless noted):** bridge
-> TX-safety review fixes; FT8 "Working [call]" channel banner + auto-abandon countdown
-> (+ `ft8.tx.max_repeats` knob); **FT8 work-a-caller** (`StartWorkCaller` / `qso/work`) +
-> the dedicated `worker` ladder; **wrong-band FT8 logging fixed** at two layers —
-> daemon now logs the bridge's live dial at completion (`CurrentDialMHz`), and the
-> **IC-7300 POLL now reads the operating freq (`25 00`)** (the real root cause; needs a
-> redeploy + bench re-confirm); FT8 Settings **Float-CQ-to-top** toggle; **FT8 pile-up
-> callsign stacking** (Ctrl+click → SPA FIFO → drains via work-a-caller; SPA-only); and
-> the **session-email subject = logbook-callsign-prefixed + `Contains N QSOs.` body**.
-> Per-session detail in the `### Session N` entries below.
+> **Recent arc (session 191, 2026-06-25):** **config-SPA build-out + full dogfood-triage
+> sweep.** The config SPA gained four real surfaces: **Email/SMTP tab** (masked-on-GET
+> `SmtpInfo`, merge-on-PUT keeps the stored password), a **PSK Reporter** section on the
+> FT8 tab (`psk_reporter` reused unmasked, served raw/sparse, restart banner), a **Station
+> identity** section (callsign/operator/owner/name/grid now editable in the CSPA — first-run
+> setup is doable without hopping to the logging SPA, and because the daemon re-derives
+> lat/lon from grid on every PUT this also fixed the CSPA lat/lon-on-save report), and a
+> **QSL defaults** section (QSL_VIA/QSLMSG/QSL_SENT_VIA). Plus a reusable **`PasswordField`**
+> (eye-glyph) across all CSPA secret inputs, the **radio-tower favicon** on all three SPAs,
+> and the **CAT/FT8 master enable toggles**. Infra: a **bulk-import path**
+> (`SubmitImportBatch` — batched txns + hoisted lookups → ~9×, 4509 recs 11.7s→2.3s, no
+> schema change), the **serial by-id port fix** (`hardware.go` stores the stable
+> `/dev/serial/by-id/` symlink), and a **three-SPA build-script fix** (dev-rpm/release-rpm/
+> release.sh now build config+logbook too — they'd been silently shipping stale bundles).
+> Dogfood inbox fully triaged: 7 fixed, 1 verified-WAI, 3 → backlog. **Earlier arc (sessions
+> 187–190, 2026-06-22→24):** ClubLog forwarder shipped (187); importer redesigned to default
+> NO-UPLOAD + `smctl import` (188); fresh-install config fixes — dangling `default_rig_id`,
+> bridge sparse-but-served (189); Codex's RST-length migration `0002` reviewed + hardened,
+> 4509-QSO fresh-install import validated end-to-end (190). Per-session detail below.
 
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
@@ -79,6 +73,8 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 191 (2026-06-25) — **Config-SPA build-out (Email / PSK Reporter / Station identity / QSL) + PasswordField + favicon + bulk import + 3-SPA build fix; full dogfood triage.** All green: `go test ./internal/api/ ./internal/config/`, gofmt/vet; config-SPA lint/check/format/build. **Daemon:** (1) **Bulk import** — new `qsoservice.SubmitImportBatch` (`submit_batch.go`): two-phase per batch (validate+dedupe with no open tx → one-tx write of survivors), hoisted logbook-callsign lookup, deduped `contacted_station` upserts, per-record fallback (re-run via `submit()`) on a batch-write failure; `cmd/smd/import.go` rewired to it. ~9× faster (4509 recs 11.7s→2.3s); **NO schema change** — reuses existing methods + the `(logbook_id,dedupe_key)` unique index. (2) **Serial by-id fix** — `hardware.SerialPorts()` now stores the stable `/dev/serial/by-id/…` symlink (`stableSerialID`/`EvalSymlinks`) instead of the renumber-prone `/dev/ttyUSBn`, so a saved rig port survives reboots. (3) **Email/SMTP edit surface** — masked `SmtpInfo` on `/v1/config` (`password_set` reports set/unset, merge-on-PUT keeps the stored secret; `smtpInfoFrom`/`mergeSmtp`); the read-only `mailer` projection (logging SPA) is untouched. (4) **PSK Reporter** — `psk_reporter` on `/v1/config` reusing `types.PskReporterConfig` unmasked, served raw/sparse (empty host/port → production default), `validatePskReporter` (port 0..65535). (5) **CAT/FT8 master toggles** — `bridge_enabled`/`ft8_enabled` presence-aware. New tests: `handler_config_smtp_test.go`, `handler_config_psk_test.go`, enable-toggle test. **Config SPA** (wired into the existing per-tab save model): **Email tab** (full SMTP form), **PSK Reporter** section on the FT8 tab (folded into the FT8 save + a new `ft8RestartRequired` banner — also closes the latent "no restart hint for the FT8-enable toggle" gap), **Station identity** section (identity now editable in BOTH SPAs onto one daemon source of truth, ADR 0003 — daemon `Normalize` re-derives lat/lon from grid on PUT, fixing the lat/lon-on-save report; first-run setup now self-sufficient in the CSPA), **QSL defaults** section (folded into the Station save). Reusable **`PasswordField.svelte`** (eye/eye-slash, controlled value+oninput to preserve masked-on-GET) swapped into Email/Enrichment/Forwarding. **Favicon:** `assets/logo.png` (radio tower) → each SPA's `public/logo.png`; `<link rel=icon>` base-rewritten per mount (`/logo.png`, `/config/logo.png`, `/logbook/logo.png`); rebuilt + committed all three dist seeds. **Build-script fix:** `dev-rpm.sh`/`release-rpm.sh`/`release.sh` now loop `logging config logbook` (were logging-only → silently shipping stale config/logbook bundles, incl. the new tabs). **Dogfood triage:** inbox fully worked — fixed favicon, password-glyph, QSL, PSK, and the operator/grid/lat-lon identity cluster; verified #1 (fresh-install default rig) working-as-intended; filed cross-SPA nav links, UI themes/dark mode, and setup→config hand-off to `backlog.md`. New captures pending triage: **remove mode-mappings + CW settings from the logging SPA** (now the config SPA's domain), and an **install-docs note** (power the rig on before running the config SPA so its serial port enumerates). Docs updated: `api-endpoints.md` (smtp/psk_reporter on GET+PUT), `types/pskreporter.go` comment.
 
 ### Session 190 (2026-06-24) — **Reviewed + hardened Codex's RST-length fix; validated fresh-install + 4509-QSO import end-to-end.** While the operator was offline (2026-06-23) Codex shipped the crucial **RST-length relaxation** (migration `0002_relax_rst_length`, commits `8ae65fc1` + `39fb7e10`): the `qso.rst_sent`/`rst_rcvd` `CHECK (length ≤ 3)` from `0001_init` was rejecting legitimate imported QSOs with wider RST values (e.g. `SP5VYF rst_rcvd=4657` in the operator's real 7Q5MLV export), surfaced by `runImport` as errored records. **Review verdict: correct, FK-safe, well-tested.** The SQLite table-rebuild (rename→recreate→copy→drop, mandatory since you can't `ALTER` a CHECK) reproduces every column/index/trigger/constraint faithfully — only the two RST CHECKs drop — and rebuilds the child tables (`qso_upload`, `qso_history`) *before* dropping `qso_old`, so FK enforcement (ON via DSN + runtime PRAGMA) never breaks; both migration tests assert upload + history rows survive. Two minor fixes applied this session: **(1)** restored the em-dash `—` in `0002`'s `qso_history` append-only RAISE messages (Codex had drifted to ASCII `-`, diverging from `0001`); **(2)** added `CHECK (length(rst_*) ≤ 10)` to the up-migration's relaxed columns (unbounded → generous cap that still admits real wide values but catches garbage). Down migration keeps its `≤ 3` restore. **Also struck a stale backlog entry:** the WSJT-X-style `ALL.TXT` decode log was filed as "not done" on 2026-06-22 but had since shipped (`ft8.decode_log` / `internal/ft8/decodelog.go`, commits `46f207ba` + `037e9aef`) — a fail-soft queued writer logging RX decodes + our own TX rungs, off by default, default path `$SM_WORKING_DIR/log/ft8-all.txt`; marked SHIPPED 2026-06-23 with pointers. **Fresh-install dogfood validation (operator-run):** first `smctl import` of the 4509-record export hit `target logbook id=1 does not exist` — a **fresh-install ordering gotcha**: the default logbook is only seeded on the first config PUT carrying a station callsign (`seedDefaultLogbook`, the My Station setup transition). After saving the callsign in My Station, import ran clean: **4509 stored, 0 errors, 0 dupes**; DB spot-check confirmed schema at migration **v2 (dirty=0)**, the single wide-RST `SP5VYF` row stored intact, and the `≤ 10` cap exercised on a genuinely-fresh DB. Re-import was **idempotent** — 4509 duplicates, `stored=0`, and `MAX(id)` unchanged at 4509 (dedupe short-circuits *before* INSERT, burning no row ids); `distinct dedupe_keys = total = 4509`. Operator chose to leave the malformed `4657` RST as faithful-import (SM stores, doesn't mangle). Open (non-blocking): friendlier "complete first-run setup before importing" message in `smd import` (vs raw not-found), and `/log` the fresh-install ordering gotcha for the onboarding arc. All green: `go test ./internal/database/sqlite/ ./cmd/smd/` after both edits.
 
@@ -152,57 +148,31 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 - **`RR73` Maidenhead collision fix (caught by the SPA test):** `RR73` satisfies the grid regex `^[A-R]{2}[0-9]{2}$` (R,R ∈ A–R; 7,3 ∈ 0–9), so `parseDirectedToMe` first read `<me> <them> RR73` (a roger, mid-QSO) as a fresh caller. Excluded `RR73` explicitly, mirroring the daemon parser (`sequence.go` checks RRR/RR73/73 before `isGrid4`). RRR/73/R-report don't match the regex, so RR73 is the only clash.
 - **On-air validated 2026-06-17** (operator worked 9A4ZM via the pile-up). One display wrinkle found + fixed: a work-a-caller session reused the **Call-CQ ladder**, showing a spurious `tx CQ …` row that never happened + an unfilled `<GRID>` opening. Fix: `seqWorking` now publishes a distinct **`role: "worker"`** + `QsoStatus.TheirGrid` (carried for all roles); the SPA renders a dedicated **no-CQ work ladder** (opening = their call to us, real grid) and fills `<GRID>` from `qso.their_grid` on the caller ladder too. Daemon role const + the `their_grid` field; SPA `Ft8MsgPanel` `workLadder`/`workStep` routed by role. All green: SPA check/lint/format + 824 vitest; Go ft8/api. **Committed** (the e2e feature); this ladder fix is uncommitted pending the operator's next commit.
 
-### Session 179 (2026-06-17) — **FT8 Operate UX: "Working [callsign]" channel banner + per-rung auto-abandon countdown.** All green: SPA check/lint/format + 816 vitest; Go ft8/types/config/api tests, vet, CGO-off build, gofmt.
-- **"Working [callsign]" channel banner (SPA-only, RX-safe).** An always-visible strip below the slot countdown (every lower tab) that shows only while a contact is in flight (`qso.active`): `Working <call> — channel clear/BUSY`, green/red on whether the **selected TX channel** overlaps the latest occupied bands, re-evaluated each slot. Closes the pick-time → TX-time gap (a channel chosen clear can go busy a slot or two later, before TX keys). New reactive getter `ft8State.channelOccupied` (`[offset, offset+signalWidth)` vs `occupied`); consolidated the pre-existing duplicate `selectedOffsetBusy` derived onto it. Grey "unknown" when no offset/occupancy yet.
-- **Per-rung attempts-remaining countdown** folded into that banner (`· N calls left`). The sequencer auto-abandons an unanswered rung after a repeat cap (ADR 0031 off-ramp); the banner now counts it down. Daemon: added `MaxRepeats` to the `ft8-qso` `QsoStatus` payload, advertised **only on the capped rungs** (answerer pre-73 / caller working-an-answerer pre-RR73; 0 on calling-CQ + one-shot 73/RR73), so the SPA shows the countdown iff `max_repeats>0` with no cap-vs-one-shot logic of its own. remaining = `max_repeats − repeats`, floored at 0.
-- **The cap is now a config knob** (operator request): `ft8.tx.max_repeats`, default **6**, `0`/absent → default, **hard-clamped ≤ 10** (`types.Ft8MaxRepeatsCeiling` + `ResolveFt8MaxRepeats`) — a safety bound alongside the tune-power/auto-off clamps so no config value can keep the rig calling a dead station for minutes. Threaded via `newSequencer(…, maxRepeats, …)` from `types.ResolveFt8MaxRepeats(cfg.TX)`; `defaultSeqMaxRepeats` now references the types const (single source of truth). Config-only today (no Settings-tab control yet, like `caller_answer_mode`). Registered in `config.md` §4 safety-ceiling table + `defaults.go` doc block.
-- Tests: Go `TestResolveFt8MaxRepeats` (clamp/default), `TestSequencer_MaxRepeatsHonouredAndExposed`; SPA `channelOccupied` describe (5) + `ft8-qso` `max_repeats` mapping (2). Docs: `docs/ft8.md` (banner + countdown + `tx.max_repeats` knob), `config.md`, `defaults.go`.
-
-### Session 178 (2026-06-16) — **Bridge TX-safety hardening (review fix, 4 findings) + small FT8/UI fixes.** All green: `go test ./...`, `-race` bridge+ft8, vet, CGO-off build.
-- **A bridge TX-safety code review landed (4 findings on the keyed-transmission path); all fixed with regression tests.** Doc: `docs/reviews/internal-bridge-2026-06-16.md`; durable notes in memory `project_sm_serial_bridge` ("TX-safety hardening" section).
-  - **H1 — generic commands could write during PTT.** `SendCommands` gated only on connect+identity; `set_power` is Exposed, so a command could override the tune-power clamp and TX at full power. Fix: `ErrTxActive` sentinel; refuse when `tuneActive||ft8TxActive` → API **409 `rig_tx_active`**.
-  - **H2 — CI-V FT8/tune key/unkey bypassed the ACK contract.** On `icom_civ` the `tx_on`/`tx_off` were plain writes; a NAK/no-ACK `tx_off` looked like a clean unkey → backstop cancelled → **stranded PTT**. Fix: factored `writeCIVFramesAwaitAck` out of `sendCommandsCIV`; new protocol-aware `writeKeyedLine` (CI-V waits FB/FA per frame, Yaesu unchanged) used by **both** FT8 + tune key/unkey/restore. A failed `tx_off` now keeps TX armed for the backstop.
-  - **M — releases not serialized.** New `keyMu` across the full `KeyFt8Tx`/`StartTune`/`releaseFt8Tx`/`releaseTune` bodies (lock order `keyMu→cmdMu→mu`); no double-release / key-over-settle.
-  - **L — `TxReady`** now also requires `!tuneActive && !ft8TxActive`.
-  - Tests added: `TestSendCommands_RefusedWhileTransmitting`, `TestTxReady_FalseWhileTransmitting`, `TestKeyUnkeyFt8TxCIV_ConfirmedByAck`, `TestUnkeyFt8TxCIV_NoAckKeepsArmed`, `TestReleaseTune_ConcurrentStopsReleaseOnce`, `TestKeyRelease_ConcurrentStartStopNoDeadlock`.
-  - **⇒ On-air follow-up:** H2 changed the bench-validated IC-7300 FT8 TX path (now waits for `tx_on`/`tx_off` ACKs) — **re-validate FT8 TX on the IC-7300 before relying on it on air** (FTdx10/Yaesu fire-and-forget path unchanged).
-- **Smaller fixes earlier in the session (committed):** FT8 enrichment pane now shows the short-path **beam heading** (`045°`, matches the per-CQ column); the **serial-open error toast** was shortened (drop the ~95-char by-id path, UI-only — daemon still logs it); the FT8 hub now **clears the decode+occupancy replay cache on capture release** (`clearActivity`) so reopening the SPA with the rig off no longer shows the previous session's Band Activity (offset, in localStorage, is kept). The backlog "Abandon doesn't stop in-flight TX" item was confirmed **already fixed** (646d476d) and pruned.
-
-### Session 177 (2026-06-16) — **Per-direction name-based audio devices SHIPPED & validated with a real FT8 QSO.** The deferred 2e (config.md §10.4 #1) daemon side, done — device selection is now a per-rig property.
-- **Audio model REVISED single-name → per-direction (operator's call), then shipped.** Session 176 had closed §10.4 #1 as *single* name-based `RigConfig.Audio.Device`; the operator chose **two flat fields** `RigConfig.Audio.{rx, tx}` (each a device **name**) instead — more robust (a rig isn't guaranteed to share one codec/name across RX+TX, and the single field was never wired for playback). §10.4 #1 updated in place to record the reversal (no new ADR; the deleted 0036 had drafted a two-field model but contradicted the *then*-current single-name decision — now the decision itself is per-direction).
-- **What shipped (daemon only, no SPA):** `RigAudioConfig{RX,TX string}` (names) replacing `{Device}`; `Config.ActiveFt8()` projects `audio.rx→Ft8Config.Device` (capture) + `audio.tx→Ft8Config.TX.Device` (playback) — completing the half-wiring; `internal/audio/{capture,playback}` gained a `DeviceName` config field resolving name→live-index at **acquire** (fail-soft: no match → that direction idle, never wrong default; integer string still honoured as a raw index for un-migrated configs); `internal/ft8` `resolveAudioDevice()` + the `newPlayer(name,index)` seam carry it; `internal/ft8` still imports no rig catalogue (consumes plain `Ft8Config`, same discipline as `ActiveBridge`). **Global `ft8.device`/`ft8.tx.device` operator knobs DROPPED** — switching `default_rig_id` now re-binds audio with the CAT port+driver. **No index→name auto-migration** (loader can't enumerate safely); legacy migration no longer fakes audio from an index.
-- **Validated end-to-end:** unit (`TestApplyRigProfiles_ResolvesAndProjects` asserts RX→Device, TX→TX.Device), full `go test ./...` (CGO on+off), gofmt, config-SPA `svelte-check` all green. Live RX decode on dev (named `"PCM2901 Audio Codec Analog Stereo"` → IC-7300 capture), then a **full two-way FT8 QSO with a UK station on the deployed dogfood binary via the IC-7300** — name-based audio for BOTH RX and TX, and switching `default_rig_id`→3 re-bound to PCM2901 with no other change.
-- **Configs updated:** `build/config.json` (dev) IC-7300 rig carries `audio.{rx,tx}="PCM2901 …"`, globals removed. Dogfood `~/.local/share/.../config.json`: **IC-7300 added (id 3, PCM2901)** + FTdx10 (id 1) given `audio.{rx,tx}="PCM2903C Audio CODEC Analog Stereo"`; stale global `ft8.tx.device` removed; default_rig_id since switched to 3 (IC-7300). FT-710 (id 2) left untouched (not plugged in → codec name unknown). **Note capture/playback enumerate the codec under the *same* name per direction** (PCM2901 capture idx 3 / playback idx 1; PCM2903C capture idx 1 / playback idx 0 — names match, indices don't).
-- **Docs:** config.md §10.3/§10.4 #1/§10.5 + decisions table, rig-profiles.md, `internal/types/{rig,ft8}.go` + `internal/hardware` comments, memory `project_sm_ic7300_borrowed`.
-- **⇒ Only remaining rig-profiles item:** the **by-name picker UI** (config-SPA rig-profile editor) — operator hand-edits `audio.rx`/`audio.tx` names until it lands. Everything daemon-side is done.
-
-### Session 176 (2026-06-16) — **First Icom on-air FT8 TX validated end-to-end.** The Session 175 `-key` bench ran; full clean key→TX→auto-unkey cycle on the IC-7300.
-- **`ft8-tx-probe -key` bench passed on the real rig (first Icom RF through SM).** RF-safe phase first: `/tmp/ft8-tx-probe -device=2 -msg="CQ 7Q5MLV KH78" -offset=1500 -wav=/tmp/tx.wav` → `/tmp/ft8-decode-file /tmp/tx.wav` gave an **exact round-trip** (`1500.0 Hz CQ 7Q5MLV KH78`), proving encode→modulate→PCM2901-out→decode agree. Then the keyed phase: stop the dogfood daemon (frees serial), `/tmp/ft8-tx-probe -key -config build/config.json -msg="CQ 7Q5MLV KH78" -offset=1500`. Operator confirmed: **rig keyed on the UTC slot, switched to USB-D (`ft8.tx.mode` from rigdef), transmitted, and unkeyed cleanly on its own** at waveform end → back to RX — no Ctrl-C, no 18 s auto-off backstop. So the `ft8.TxKeyer`→bridge `KeyFt8Tx`→tune-controller guaranteed-stop chain (ADR 0030) is proven on the **second rig family**. Probe binaries are throwaway (`/tmp/ft8-tx-probe`, `/tmp/ft8-decode-file`); nothing committed this session except docs/memory.
-- **ADR 0036 cleanup DONE.** Deleted `docs/decisions/0036-rig-profile-audio-devices.md` (it duplicated + contradicted `config.md` §10.4 #1, which already decided the **single name-based** `RigConfig.Audio.Device` → both endpoints on 2026-06-13). Repointed ADR 0028's audio-model forward-note at config.md §10.4 #1 (single-name, per-direction resolution; not the two-field shape 0036 had drafted). Added a validation note to §10.4 #1: the IC-7300's PCM2901 codec appears under the *same name* as capture idx 4 / playback idx 2 — a clean demonstration of single-name→both-endpoints (and of why an index can't be the identifier) — plus the `ActiveFt8()` clobber-bug fix. **The whole IC-7300 arc is now closed**; per-rig audio *implementation* stays deferred to the config-SPA rig-profile-editor workstream (unchanged).
-
 ## Next steps (priority order)
 
-> **⚠️ CURRENT NEXT STEPS (as of session 185, 2026-06-18) — the items deeper below are
+> **⚠️ CURRENT NEXT STEPS (as of session 191, 2026-06-25) — the items deeper below are
 > STALE history (operator_pick is SUPERSEDED, IC-7300 arc closed; kept for the trail):**
-> 1. **Commit the FT8 ladder-highlight fix** (`Ft8MsgPanel.svelte` `rowFor`) — the one
->    piece of session 185 left uncommitted. Most of session 185 (PSK Reporter, port fix,
->    Next-drain fix, go-ft8 v0.3.5 `/P`) is already committed + deployed; confirm the
->    178–184 arc landed too.
-> 2. **Redeploy + on-air verify the two SPA bug fixes** (`task deploy:local:dev`): the
->    **Next-drain fix** (Next now advances past a no-show instead of stalling on the
->    transient `rig_not_ready`) and the **ladder-highlight fix** (an exchange opens on our
->    TX rung, not the RX reply row). PSK Reporter is **already live + validated** (don't
->    re-check). After a `task run:smd` dev session, restart the dogfood daemon
->    (`systemctl --user start smd`) — the Taskfile now stops it for you on `run:smd`.
-> 3. **Parked design — Band Activity prefix/substring filter** (session 182; backlog,
->    ready to shape → build).
-> 4. **PSK Reporter follow-ups (future, in backlog):** the **retrieve/query side** (who
->    heard *you* — distinct from the report side just shipped); a **config-SPA surface**
->    for the `psk_reporter` block (hand-config for now); and **generalize to a
->    spot-submitter registry only when a 2nd destination (DX cluster) lands** (build
->    specific, not generic — one destination doesn't justify the framework).
-> 5. **Maintenance:** roll sessions 169–170 into `session-handoff-archive.md` (the live
->    `### Session N` list is at ~17, past the ~15 cap).
+> 1. **Behavioural retest of the session-191 config-SPA build-out** on the dogfood daemon
+>    (`task deploy:local:dev` — now embeds all three SPAs): confirm Email, PSK Reporter,
+>    Station identity, and QSL surfaces save + round-trip; the favicon shows; the password
+>    eye-glyph works; and the CAT/FT8 master toggles take effect after restart.
+> 2. **Triage the new dogfood-inbox captures:** **remove mode-mappings + CW settings from
+>    the logging SPA** (now the config SPA's domain — they were left in the LSPA's My
+>    Station), and the **install-docs note** (power the rig on *before* running the config
+>    SPA so its serial port enumerates in the picker).
+> 3. **Config-SPA shell is now complete** (Station/Rigs/FT8/Forwarding/Email/Enrichment —
+>    Email was the last new tab). Remaining config-SPA backlog (filed 2026-06-25): **cross-SPA
+>    nav links**, **UI themes/dark mode**, **setup→config hand-off link**.
+> 4. **Phase-2 logging-SPA cleanup:** remove the My Station fields that moved to the config
+>    SPA (identity is now editable in both; the LSPA may carry now-redundant set-once
+>    fields) — sequence after the retest confirms the CSPA covers them. Overlaps item 2.
+> 5. **PSK Reporter follow-ups (future, in backlog):** the **retrieve/query side** (who
+>    heard *you*) and **generalize to a spot-submitter registry only when a 2nd destination
+>    (DX cluster) lands**. (The config-SPA surface for `psk_reporter` shipped this session.)
+> 6. **Parked design — Band Activity prefix/substring filter** (session 182; backlog).
+>
+> *(Maintenance done session 191: rolled sessions 176–179 into the archive — live list now
+> at the 12 most recent, 180–191.)*
 >
 > The FT8-TX items further below are STALE — TX (a)–(e) + answer-a-CQ + caller-side +
 > work-a-caller + pile-up stacking all shipped; "auto-sequence" is OUT OF SCOPE /
