@@ -587,6 +587,12 @@
         {:else}
             <span class="truncate text-gray-700" style:color={rowColor(info)}>{d.text}</span>
         {/if}
+        {#if info?.isNewEntity}
+            <!-- New-DXCC-entity marker ("new one"), pushed to the far right (ml-auto).
+                 Coexists with the queued ✓ below: a second ml-auto has no free space
+                 left, so it sits right after this star. -->
+            <span class="ml-auto pl-2 font-semibold text-green-700" title="New DXCC entity">*</span>
+        {/if}
         {#if queued}
             <!-- Queued-in-pile-up marker, pushed to the far right of the row (ml-auto). -->
             <span class="ml-auto pl-2 font-semibold text-amber-700" title="Queued in the pile-up"

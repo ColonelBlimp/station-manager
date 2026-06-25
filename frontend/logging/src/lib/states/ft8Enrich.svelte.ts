@@ -43,6 +43,10 @@ export interface Ft8CallInfo {
     /** Country name (from the same enrichment lookup as the flag) for the flag's
      *  hover tooltip. undefined when unknown/pending. */
     country?: string;
+    /** true = this station's DXCC entity has never been worked (a "new one"),
+     *  from the same enrichment lookup as the flag. Drives the far-right `*` marker
+     *  in Band Activity. undefined when unknown/pending; false when already worked. */
+    isNewEntity?: boolean;
     /** Operator name (enrichment station.name), shown in the answering panel.
      *  undefined when unknown/pending; '' when the lookup returned no name. */
     opName?: string;
@@ -102,6 +106,7 @@ class Ft8EnrichState {
                     merge({
                         flag: ccodeToFlag(out.result.country?.ccode),
                         country: out.result.country?.name,
+                        isNewEntity: out.result.country?.is_new_entity,
                         opName: out.result.station?.name,
                         grid: out.result.station?.gridsquare,
                     });

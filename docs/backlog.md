@@ -383,10 +383,19 @@ when it ships — don't let this rot into a graveyard.
   callsign up the list. Belongs with the `operator_pick` pile-up stack workstream
   (ADR 0033, currently pending — see the FT8 caller-side notes).
 
-- **FT8 Band Activity enrichment: flag the worked decode as a new entity.**
-  Filed 2026-06-20. When a decode is selected/being worked, indicate in the FT8
-  enrichment display whether it's a new DXCC/entity. Extends the existing CQ
-  enrichment (flag + worked-before tint) to the actively-worked station.
+- ~~**FT8 Band Activity enrichment: flag the worked decode as a new entity.**~~
+  **SHIPPED 2026-06-25.** Filed 2026-06-20; reshaped 2026-06-25 from "flag the
+  actively-worked station in the enrichment display" to **mark any new-DXCC decode
+  with a far-right `*` directly in the Band Activity list** (operator's call — a
+  per-row marker reads better than a separate display, and it covers every decode,
+  not just the one being worked). Nearly free: the `enrichCallsign` lookup the rows
+  already do for the flag carries `country.is_new_entity` (the same field the
+  Phone/CW `CountryPanel` uses for its "new one" `*`) — no daemon change, no extra
+  fetch. Added `isNewEntity` to `Ft8CallInfo` + the flag-lookup merge
+  (`ft8Enrich.svelte.ts`); rendered a far-right green `*` in the `decodeRow` snippet
+  (`Ft8Panel.svelte`), coexisting with the pile-up `✓` via a second `ml-auto`. Flag
+  far-left, "new one" `*` far-right, message between. Test:
+  `ft8Enrich.test.ts` ("carries is_new_entity…").
 
 - **FT8 QSO edit overlay: remove the stray "Tune" button.** Filed 2026-06-20.
   The Tune control doesn't belong in the FT8 QSO edit overlay. Small UI removal.

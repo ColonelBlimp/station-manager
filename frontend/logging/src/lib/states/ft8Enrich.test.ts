@@ -70,6 +70,21 @@ describe('ft8EnrichState.observe', () => {
         expect(ft8EnrichState.info('G3XYZ', '20m')?.country).toBe('England');
     });
 
+    it('carries is_new_entity from enrichment (the far-right new-DXCC marker)', async () => {
+        enrichMock.mockResolvedValue({
+            kind: 'ok' as const,
+            result: {
+                callsign: 'X',
+                country: { ccode: 'GB', is_new_entity: true },
+                country_source: 'hamnut' as const,
+                station_source: 'none',
+            },
+        });
+        ft8EnrichState.observe('G3XYZ', '20m');
+        await settle();
+        expect(ft8EnrichState.info('G3XYZ', '20m')?.isNewEntity).toBe(true);
+    });
+
     it('is fail-soft: a flag lookup error still leaves the worked answer', async () => {
         enrichMock.mockRejectedValue(new Error('hamnut down'));
         dupeMock.mockResolvedValue({ kind: 'ok', duplicate: false });
