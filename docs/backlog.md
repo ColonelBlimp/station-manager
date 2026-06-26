@@ -585,7 +585,9 @@ when it ships — don't let this rot into a graveyard.
   durable setting → daemon `config.json`, not localStorage (per the settings-in-
   config rule); the FT8 highlight colours already live there, so a `display`/
   `theme` config block is the natural home. Do the colour-token refactor as its
-  own pass before wiring the toggle.
+  own pass before wiring the toggle. The theme **picker** belongs on the config
+  SPA's new **`General` tab** (see "Config SPA — a `General` tab" below), alongside
+  the other cross-cutting preferences.
 
 - ~~**First-run setup → config SPA hand-off link.**~~ **SHIPPED 2026-06-25.** From
   dogfood-inbox 2026-06-24. Delivered as a **post-save interstitial** (operator's
@@ -725,14 +727,25 @@ when it ships — don't let this rot into a graveyard.
   restart" per block; and the daemon mechanism (a reload/reconfigure entry point per
   subsystem vs a coarse re-init). **Not now — recorded as a whole-area initiative.**
 
-- **Config SPA — toggle for `restore_rig_on_mode_switch`.** Filed 2026-06-26. The
-  mode-switch CAT-live re-tune knob (top-level config `restore_rig_on_mode_switch`,
-  `*bool`, default ON) shipped daemon + logging-SPA-gating, but has **no config-SPA
-  editor yet** — it's config.json-only (stop daemon → set `false` → restart). Add a
-  checkbox to the config SPA (natural home: the **Rigs tab**, since it's rig-control
-  behaviour — fold into `saveRigs`, which already PUTs presence-aware fields). Small;
-  deferred with the rest of the config-SPA workstream. Until then, the default-ON
-  behaviour is the common case and turning it off is a documented config.json edit.
+- **Config SPA — a `General` tab for cross-cutting operator preferences.** Decided
+  2026-06-26. Several preferences don't belong to a domain tab (Station/Rigs/FT8/
+  Forwarding/Email/Enrichment) — they're *behaviour/UI* choices. Rather than wedge them
+  into the nearest domain tab, give the config SPA a **`General`** tab (name chosen over
+  "System", which reads as daemon/infra — server port, timeouts, paths, log level — that
+  is deliberately config.json-only/advanced and stays OUT of this tab). First/known
+  occupants:
+  - **`restore_rig_on_mode_switch`** — the mode-switch CAT-live re-tune knob (top-level
+    config, `*bool`, default ON). Shipped daemon + logging-SPA-gating 2026-06-26 but has
+    **no config-SPA editor yet** (config.json-only: stop daemon → set `false` → restart).
+    A checkbox here, folded into a presence-aware `/v1/config` PUT.
+  - **UI theme / dark-mode** choice (see the "UI themes + dark mode" item) — the durable
+    theme selection is a pref, so it lands here too when that workstream starts.
+  - future behaviour/notification toggles (e.g. the FT8 notify/qso-defaults that are
+    localStorage today but should migrate to config per the settings-in-config rule).
+  Hold the line: daemon/system internals are NOT exposed here; if an "advanced/system"
+  surface is ever wanted it's a separate, clearly-gated thing. Until the tab exists,
+  `restore_rig_on_mode_switch` defaults ON (the common case) and is a documented
+  config.json edit to disable.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
