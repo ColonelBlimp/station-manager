@@ -408,6 +408,26 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   until the operator picks another. A restored offset that has since become
   occupied simply re-colours busy on the strip — it's the operator's call to
   re-pick; SM does not block it.
+  - **Spectrum view (switchable, shipped 2026-06-26).** A second presentation of the
+    SAME per-slot occupancy snapshot, toggled by a **Channels | Spectrum** control
+    (operating state, `ft8State.occupancyView`, localStorage `sm.ft8.occupancy.view`;
+    default Channels). Where the channelised strip discretises into ~50 Hz cells —
+    which makes a band *look* fuller than it is and turns a pick **binary-red** when a
+    neighbour merely touches its span — the Spectrum view (`Ft8OccupancySpectrum.svelte`)
+    shows the **continuous** truth: signals as soft neutral shading at their true
+    `low_hz`→`high_hz` positions, the daemon's clear offsets as ▾ ticks (★ = top pick)
+    at their real positions (aligned with the Clear Offsets list, which never
+    channelised), **click-anywhere** for a continuous offset (clamped so the ±signal-
+    width footprint fits; arrow keys nudge, Home/End to the edges), and a **graded** pick
+    status — **clear / near / sharing** with soft, judgment-friendly wording ("sharing —
+    usually OK in FT8, both should decode") instead of binary red. Rationale: FT8 is
+    continuous + overlap-tolerant (strong FEC; close/overlapping signals routinely both
+    decode), so straddling a gap or sharing an offset is normal — the channelisation
+    over-reported "full" and manufactured TX guilt. Grading is **position-only**
+    (`Ft8Band` carries no strength — distinguishing a loud vs weak signal needs the
+    waterfall's FFT magnitudes; backlog). Pure logic in `lib/utils/ft8Spectrum.ts`
+    (`signalProximity` / `offsetFromFraction`, unit-tested). Both views write the one
+    `selectedOffset`; a rendered scrolling **waterfall** remains a separate backlog item.
   - **TX offset only — by design (decided 2026-06-09).** It sets where *you*
     transmit, never an RX focus. FT8 RX is wideband (the daemon decodes the whole
     passband every slot, so you already hear every station regardless of offset),

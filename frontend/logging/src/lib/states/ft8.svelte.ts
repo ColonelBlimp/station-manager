@@ -203,6 +203,34 @@ function saveTxParity(p: TxParity): void {
     }
 }
 
+/**
+ * Occupancy view mode: 'channels' (the discrete ~50 Hz red/green strip, the default)
+ * or 'spectrum' (a continuous bar — signals at their true positions, click-anywhere,
+ * graded clear/near/sharing proximity rather than binary red). Both present the SAME
+ * per-slot occupancy snapshot and write the same selectedOffset; this is just which
+ * presentation the operator prefers. Operating state, per-device localStorage like
+ * the offset + parity.
+ */
+export type OccupancyView = 'channels' | 'spectrum';
+const KEY_OCC_VIEW = 'sm.ft8.occupancy.view';
+
+function loadOccupancyView(): OccupancyView {
+    try {
+        return localStorage.getItem(KEY_OCC_VIEW) === 'spectrum' ? 'spectrum' : 'channels';
+    } catch {
+        return 'channels';
+    }
+}
+
+function saveOccupancyView(v: OccupancyView): void {
+    try {
+        if (v === 'channels') localStorage.removeItem(KEY_OCC_VIEW);
+        else localStorage.setItem(KEY_OCC_VIEW, v);
+    } catch {
+        // Best-effort; the in-memory value still applies this session.
+    }
+}
+
 // Monotonic key source for decode rows. Never reset — uniqueness is all that
 // matters, and 2^53 ids outlast any session.
 let decodeSeq = 0;
@@ -243,6 +271,12 @@ class Ft8State {
      */
     txParity: TxParity = $state(loadTxParity());
     /**
+     * Occupancy view mode — 'channels' (default strip) or 'spectrum' (continuous).
+     * Operating state, persisted per-device. Drives which picker Ft8OccupancyPanel
+     * renders; both write selectedOffset.
+     */
+    occupancyView: OccupancyView = $state(loadOccupancyView());
+    /**
      * Band Activity typed filter (the funnel popover). Token-prefix match: a decode
      * shows when any whitespace token starts with this text (case-insensitive);
      * stations calling us bypass it. Session-scoped, in-memory only — a transient
@@ -280,6 +314,12 @@ class Ft8State {
     setTxParity(p: TxParity): void {
         this.txParity = p;
         saveTxParity(p);
+    }
+
+    /** Switch the occupancy view (channels ↔ spectrum); persisted across refresh. */
+    setOccupancyView(v: OccupancyView): void {
+        this.occupancyView = v;
+        saveOccupancyView(v);
     }
 
     /**

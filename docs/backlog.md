@@ -625,13 +625,19 @@ when it ships — don't let this rot into a graveyard.
   complementary expert view).
 
   **Two distinct strands (weigh separately):**
-  1. **Soften the occupancy semantics (cheap — targets the *guilt* directly, no
-     waterfall).** Replace binary red with a *graded* indicator (clear / near / on-top),
-     tighten "occupied" to a real collision width rather than a touch-overlap, and
-     relabel so "near" reads as informational not a violation. Small tweak on data we
-     already compute. **Middle rung:** the strip could also show *where* neighbours sit
-     relative to the channel ("40 Hz low, not on me") — a chunk of the waterfall's
-     straddle value at a fraction of the cost.
+  1. ~~**Soften the occupancy semantics.**~~ **SHIPPED 2026-06-26 as the switchable
+     "Spectrum" view.** Rather than alter the channelised strip in place, this landed
+     as a **second, switchable presentation** (Channels | Spectrum toggle in
+     `Ft8OccupancyPanel`, operating state `ft8State.occupancyView`): the Spectrum view
+     (`Ft8OccupancySpectrum.svelte`) shows signals as soft shading at their **true
+     continuous positions** (no cells), the daemon clear offsets as ▾/★ ticks at real
+     positions (aligned with the Clear Offsets list), **click-anywhere** continuous
+     offset pick, and a **graded clear / near / sharing** status with soft wording
+     instead of binary red — directly killing the false-full + TX-guilt. Pure logic in
+     `lib/utils/ft8Spectrum.ts` (`signalProximity`/`offsetFromFraction`, tested). Both
+     views write the one `selectedOffset`. The grading is **position-only** (`Ft8Band`
+     has no strength — loud-vs-weak needs the waterfall's FFT magnitudes). Docs: `ft8.md`,
+     CLAUDE.md FT8 bullet.
   2. **The waterfall itself (rich — the continuous view).** Feasibility assessed
      2026-06-26: **the browser render is NOT the bottleneck** and the "JS redraw is
      slow vs C/Go" worry is misplaced *if* done right — Canvas 2D self-blit scroll
@@ -647,6 +653,29 @@ when it ships — don't let this rot into a graveyard.
      is open), plus scaling/contrast (AGC) + slot-time gridlines for readability.
      **De-risk by spiking the Canvas render with synthetic rows first** (an afternoon,
      no daemon work) before building the FFT-streaming pipeline.
+
+- **FT8 Spectrum view — colour revision.** Filed 2026-06-26. The Spectrum occupancy
+  view (`Ft8OccupancySpectrum.svelte`) shipped with first-pass colours: soft slate
+  shading for signals, green/amber/orange-red footprint by proximity (clear/near/
+  sharing), indigo/amber ▾/★ offset ticks. Operator wants these revised (palette TBD)
+  — likely tighten the proximity ramp + the signal-vs-pick contrast, and reconcile with
+  the eventual shared theme layer / dark-mode work (the FT8 highlight colours are
+  already operator-configurable daemon config `ft8.display`; consider whether the
+  Spectrum palette should join that or stay component-level). Cosmetic; no logic change.
+
+- **FT8 Spectrum view — drag-to-set the offset indicator.** Filed 2026-06-26.
+  Let the operator **drag** the footprint along the continuous bar, not just click.
+  Feasible + small (no daemon change): Pointer Events (`pointerdown`/`move`/`up` +
+  `setPointerCapture` so the drag tracks off-element; mouse/touch/pen for free),
+  reusing `offsetFromFraction`. Unify click+drag — `pointerdown` picks immediately,
+  `pointermove` refines live, `pointerup` ends. Notes for the build: **persist on
+  release** (update the offset reactively during the drag but only write localStorage
+  on `pointerup` — don't hammer storage per move); `touch-action: none` on the bar so a
+  touch-drag doesn't scroll; keep the keyboard nudge (arrows/Home/End) as the fine
+  control. The payoff is **live proximity feedback** — the footprint colour updates
+  clear→near→sharing as you drag past signals, so you slide into a gap by feel.
+  Optional later: a hold-Shift "magnetic" snap to the nearest clear offset / signal
+  edge (off by default — it fights the continuous ethos).
 
 - **LSPA → My Station → Location: future POTA fields.** Filed from dogfood-inbox
   2026-06-25, alongside the Location-tab field trim (the trim itself is the
