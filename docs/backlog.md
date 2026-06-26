@@ -178,17 +178,20 @@ when it ships — don't let this rot into a graveyard.
   `resolveAudioDevice` (`internal/ft8/servicetx.go`) accepts a device **name** (a
   non-numeric string resolves by name; a numeric string still works as a legacy
   index; empty → system default). No remaining follow-up.
-- **FT8 Tx even/odd sequence option (caller-side).** WSJT-X's "Tx even/1st": let
-  the operator choose which slot parity to transmit in when **calling CQ** (even =
-  `:00/:30`, odd = `:15/:45`). Today the single-shot Call CQ (`TransmitNext` →
-  `TransmitSlot`) fires on the *very next* boundary regardless of parity; the option
-  would wait for the next slot of the chosen parity. **Caller-side only** — when
-  *answering* a CQ the parity is forced opposite the worked station (ADR 0031/0032
-  already correct), so this never applies there. Belongs with the deferred call-CQ
-  caller-side scope, but the toggle is small enough to add to the single-shot
-  button independently. Open design point: **persistent setting** (`config.json`)
-  vs **operating state** (session toggle, like the selected offset) — WSJT-X treats
-  it as a live checkbox; lean operating-state with maybe a config default.
+- ~~**FT8 Tx even/odd sequence option (caller-side).**~~ **SHIPPED 2026-06-26.**
+  WSJT-X's "Tx even/1st" for **Call CQ**. Delivered as a **3-state** selector
+  (operator's choice over WSJT-X's binary): **Next** (fire on the next slot
+  regardless of parity — SM's fast default, ≤15s first CQ), **Even** (:00/:30),
+  **Odd** (:15/:45). Daemon: `tx_parity` ("even"|"odd"|"") threaded
+  `handler_ft8_qso.go` → `Service.StartCallCq` → `Sequencer.StartCallCq`, where it
+  picks the CQ parity (`s.theirPeriod = oppositePeriod(ourPeriod)`); "" / unknown
+  keeps the next-slot default. SPA: a **CQ slot** `<select>` in `Ft8MsgPanel` bound
+  to `ft8State.txParity` (operating state in localStorage `sm.ft8.tx.parity`, like
+  the offset — settled the open config-vs-operating-state question as operating
+  state, no config field), locked while a session is active, sent on `cq/start`.
+  **Caller-side only** — answering a CQ forces the opposite parity (ADR 0031/0032),
+  so it never applies there. Tests: `TestCallerSequencer_TxParityChoice`. Docs:
+  `api-endpoints.md` (`cq/start` body), `ft8.md` (Operate tab).
 - **FT8 semi-auto response to a session watch-list — SET ASIDE 2026-06-12 in favour
   of the caller-side work-stack; hunter/auto-fire variant stays UNDER CONSIDERATION
   (grayline, NOT decided).** The 2026-06-12 stack discussion concluded the

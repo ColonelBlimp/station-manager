@@ -353,9 +353,14 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
   is computed SPA-side from your grid.
 - **Operate tab** (`Ft8MsgPanel`) — the FT8 transmit surface: an **Enable/Disable TX**
   button (the arm gate; red when enabled, gated on a live rig via
-  `displayedState.isLive`); **Call CQ** and **Abandon** buttons, always visible but
-  gated (Call CQ enabled when armed + idle + offset + callsign; Abandon only while a
-  sequenced session — answer-a-CQ or call-CQ — is active); a **Next** button that
+  `displayedState.isLive`); a **CQ slot** parity selector (WSJT-X "Tx even/1st":
+  **Next** = call CQ on the next slot regardless of parity, the fast default; **Even**
+  = :00/:30; **Odd** = :15/:45) — operating state in localStorage (`sm.ft8.tx.parity`,
+  like the selected offset), sent as `tx_parity` on `cq/start`, locked while a session
+  is active; caller-side only (answering a CQ forces the opposite parity); **Call CQ**
+  and **Abandon** buttons, always visible but gated (Call CQ enabled when armed + idle +
+  offset + callsign; Abandon only while a sequenced session — answer-a-CQ or call-CQ —
+  is active); a **Next** button that
   appears below Abandon **only mid-contact with stations still queued** in the pile-up —
   it aborts the current exchange but, unlike Abandon, does **not** pause the drain, so it
   jumps straight to the next queued caller (the operator's "this one's a no-show, move

@@ -211,8 +211,9 @@
         sending = true;
         try {
             // Start a sequenced Call-CQ session (ADR 0033). The daemon resolves our
-            // callsign/grid from config; we pass the offset + dial freq for logging.
-            const out = await startFt8Cq(offset, opFreq / 1_000_000);
+            // callsign/grid from config; we pass the offset + dial freq for logging,
+            // and the chosen CQ slot parity (next/even/odd, WSJT-X "Tx even/1st").
+            const out = await startFt8Cq(offset, opFreq / 1_000_000, ft8State.txParity);
             if (out.kind !== 'ok') toasts.error(out.message);
         } finally {
             sending = false;
@@ -286,12 +287,33 @@
                 {/if}
             </div>
         </div>
-        <div class="flex flex-col w-80 items-center mt-4.5">
+        <div class="flex flex-col w-36 mt-1">
+            <!-- Call-CQ slot parity (WSJT-X "Tx even/1st"). 'Next' fires on the next
+                 slot (fastest); Even/Odd wait for that parity. Applies to the next
+                 Call CQ — locked while a session is active (parity is fixed at start).
+                 Caller-side only; answering a CQ forces the opposite parity. -->
+            <label class="flex items-center justify-between gap-1 text-xs text-gray-600">
+                <span title="Which 15-second slot parity to call CQ in">CQ slot</span>
+                <select
+                    class="rounded border border-gray-300 px-1 py-0.5 text-xs focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+                    bind:value={ft8State.txParity}
+                    onchange={(e) =>
+                        ft8State.setTxParity(e.currentTarget.value as 'next' | 'even' | 'odd')}
+                    disabled={qso.active}
+                    aria-label="Call CQ slot parity"
+                >
+                    <option value="next">Next slot</option>
+                    <option value="even">Even :00/:30</option>
+                    <option value="odd">Odd :15/:45</option>
+                </select>
+            </label>
+        </div>
+        <div class="flex flex-col w-48 items-center mt-4.5">
             <button
                 type="button"
                 onclick={toggleArm}
                 disabled={arming || !canArm}
-                class="h-23 w-40 rounded text-base font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
+                class="h-23 w-38 rounded text-base font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {tx.armed
                     ? 'bg-red-600 text-white hover:bg-red-700'
                     : 'bg-focus text-surface hover:opacity-90'}"
             >

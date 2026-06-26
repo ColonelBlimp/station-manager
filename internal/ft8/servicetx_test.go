@@ -190,7 +190,7 @@ func TestStartSession_RefusesWhenRigBecomesUnready(t *testing.T) {
 	k.setNotReady(true) // rig disconnects / loses identity after arming
 	now := time.Now().UTC().Format(time.RFC3339)
 	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074), ErrTxNotReady)
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074), ErrTxNotReady)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, ""), ErrTxNotReady)
 	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074), ErrTxNotReady)
 }
 

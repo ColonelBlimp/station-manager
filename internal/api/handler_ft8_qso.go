@@ -113,6 +113,11 @@ type ft8CqStartRequest struct {
 	// rig state); the logged QSO frequency IS this dial frequency (FT8 convention —
 	// BuildQso logs the dial, not dial+offset).
 	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
+	// TxParity is the operator's chosen CQ slot parity (WSJT-X "Tx even/1st"):
+	// "even" (:00/:30) or "odd" (:15/:45). Empty (or any other value) = fire on the
+	// next slot regardless of parity (the default, fastest first CQ). Operating
+	// state, sent per Call-CQ session — not a persisted daemon setting.
+	TxParity string `json:"tx_parity,omitempty"`
 }
 
 // handleFt8CqStart begins a sequenced Call-CQ session (ADR 0033, step e + caller
@@ -145,7 +150,7 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz); err != nil {
+	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.TxParity); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}

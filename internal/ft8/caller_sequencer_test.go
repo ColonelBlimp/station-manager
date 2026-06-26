@@ -13,7 +13,7 @@ import (
 // even slot → the next slot is odd (our CQ parity) → answerers' parity is even.
 func startCq(t *testing.T, s *Sequencer) {
 	t.Helper()
-	require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 28.074, "auto_first", time.Unix(0, 0).UTC()))
+	require.NoError(t, s.StartCallCq("7q5mlv", "kh78", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC()))
 	require.Equal(t, "even", s.theirPeriod)
 }
 
@@ -49,14 +49,36 @@ func TestCallerSequencer_StartErrors(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	now := time.Unix(0, 0).UTC()
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 0, 28.074, "auto_first", now), ErrNoOffset)
-	require.ErrorIs(t, s.StartCallCq("", "KH78", 2700, 28.074, "auto_first", now), ErrNoCall)
-	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", now))
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 0, 28.074, "auto_first", "", now), ErrNoOffset)
+	require.ErrorIs(t, s.StartCallCq("", "KH78", 2700, 28.074, "auto_first", "", now), ErrNoCall)
+	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now))
 	// One session at a time — a second call-CQ OR an answer-a-CQ is refused.
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", now), ErrQsoInProgress)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", now), ErrQsoInProgress)
 	require.ErrorIs(t,
 		s.StartQso("7Q5MLV", "KH78", "K1ABC", "", now.Format(time.RFC3339), 2700, 28.074, now),
 		ErrQsoInProgress)
+}
+
+// TxParity (WSJT-X "Tx even/1st") picks the CQ slot parity. theirPeriod (the
+// answerers' slots we process) is the OPPOSITE of our CQ parity, so asserting it
+// pins the choice. now = Unix 0 is an even slot, so the next slot is odd → the
+// default (fire ASAP) calls CQ on odd and processes even.
+func TestCallerSequencer_TxParityChoice(t *testing.T) {
+	now := time.Unix(0, 0).UTC()
+	cases := []struct{ parity, wantTheir string }{
+		{"", "even"},      // default → CQ on the next slot (odd) → process even
+		{"even", "odd"},   // CQ on even slots → process odd
+		{"odd", "even"},   // CQ on odd slots → process even
+		{"EVEN", "odd"},   // case-insensitive
+		{"bogus", "even"}, // unknown value → fall back to the fire-ASAP default
+	}
+	for _, c := range cases {
+		s := newTestSeq(&seqRecorder{})
+		require.NoErrorf(t,
+			s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", c.parity, now),
+			"parity=%q", c.parity)
+		require.Equalf(t, c.wantTheir, s.theirPeriod, "parity=%q", c.parity)
+	}
 }
 
 // Calling CQ has no repeat cap — it keeps calling until answered or abandoned.

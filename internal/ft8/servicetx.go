@@ -434,7 +434,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 // answerer-selection mode is read from ft8.tx.caller_answer_mode (default auto_first).
 // ourCall/ourGrid are the station identity the api layer resolved from config;
 // offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency.
-func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64) error {
+func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, txParity string) error {
 	const op errors.Op = "ft8.Service.StartCallCq"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -462,7 +462,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	s.resetExchangePath()
-	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, time.Now().UTC())
+	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC())
 }
 
 // StartWorkCaller begins working a station that is calling us (ADR 0033 "work a

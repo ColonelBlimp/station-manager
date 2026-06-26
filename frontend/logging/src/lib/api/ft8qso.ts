@@ -91,11 +91,18 @@ export function startFt8Qso(
 export function startFt8Cq(
     offsetHz: number,
     operatingFreqMHz: number,
+    txParity: 'next' | 'even' | 'odd' = 'next',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
         '/v1/ft8/cq/start',
-        { offset_hz: offsetHz, operating_freq_mhz: operatingFreqMHz },
+        {
+            offset_hz: offsetHz,
+            operating_freq_mhz: operatingFreqMHz,
+            // 'next' = fire on the next slot regardless of parity (the daemon
+            // default); only send a parity when the operator chose even/odd.
+            ...(txParity === 'next' ? {} : { tx_parity: txParity }),
+        },
         signal
     );
 }

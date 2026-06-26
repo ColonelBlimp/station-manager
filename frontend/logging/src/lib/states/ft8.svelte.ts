@@ -175,6 +175,34 @@ function saveTxOffset(hz: number | null): void {
     }
 }
 
+/**
+ * Selected Call-CQ slot parity (WSJT-X "Tx even/1st"). 'next' = fire on the very
+ * next slot regardless of parity (SM's fast default); 'even' = :00/:30; 'odd' =
+ * :15/:45. Operating state, per-device localStorage like the TX offset — not a
+ * durable per-operator config setting. Applies ONLY to caller-side Call CQ;
+ * answering a CQ forces the opposite parity daemon-side, so this never affects it.
+ */
+export type TxParity = 'next' | 'even' | 'odd';
+const KEY_TX_PARITY = 'sm.ft8.tx.parity';
+
+function loadTxParity(): TxParity {
+    try {
+        const raw = localStorage.getItem(KEY_TX_PARITY);
+        return raw === 'even' || raw === 'odd' ? raw : 'next';
+    } catch {
+        return 'next';
+    }
+}
+
+function saveTxParity(p: TxParity): void {
+    try {
+        if (p === 'next') localStorage.removeItem(KEY_TX_PARITY);
+        else localStorage.setItem(KEY_TX_PARITY, p);
+    } catch {
+        // Best-effort; the in-memory value still applies this session.
+    }
+}
+
 // Monotonic key source for decode rows. Never reset — uniqueness is all that
 // matters, and 2^53 ids outlast any session.
 let decodeSeq = 0;
@@ -209,6 +237,12 @@ class Ft8State {
      */
     selectedOffset: number | null = $state(loadTxOffset());
     /**
+     * Selected Call-CQ slot parity (WSJT-X "Tx even/1st") — 'next' (default,
+     * fire ASAP) | 'even' | 'odd'. Operating state, persisted per-device like the
+     * offset. Consumed by the Call CQ button (caller side only).
+     */
+    txParity: TxParity = $state(loadTxParity());
+    /**
      * Band Activity typed filter (the funnel popover). Token-prefix match: a decode
      * shows when any whitespace token starts with this text (case-insensitive);
      * stations calling us bypass it. Session-scoped, in-memory only — a transient
@@ -240,6 +274,12 @@ class Ft8State {
     selectOffset(hz: number): void {
         this.selectedOffset = hz;
         saveTxOffset(hz);
+    }
+
+    /** Set the Call-CQ slot parity; persisted so it survives a refresh. */
+    setTxParity(p: TxParity): void {
+        this.txParity = p;
+        saveTxParity(p);
     }
 
     /**

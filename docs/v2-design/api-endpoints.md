@@ -286,7 +286,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `POST /v1/ft8/cq/start`
 - **Purpose:** Begin a sequenced Call-CQ session that works answerers (ADR 0033). Answerer-selection mode = daemon config `ft8.tx.caller_answer_mode` (default `auto_first`).
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed.
-- **Request:** Body `{"offset_hz": float64, "operating_freq_mhz": float64}`. Callsign/grid resolved server-side.
+- **Request:** Body `{"offset_hz": float64, "operating_freq_mhz": float64, "tx_parity"?: "even"|"odd"}`. Callsign/grid resolved server-side. `tx_parity` is the operator's chosen CQ slot parity (WSJT-X "Tx even/1st" — `even` = :00/:30, `odd` = :15/:45); **omitted/empty/any-other value = call CQ on the next slot regardless of parity** (the default, fastest first CQ). Operating state, sent per session — not a persisted daemon setting. Caller-side only (answering a CQ forces the opposite parity).
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
 - **Errors:** 400 `invalid_json`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`/`invalid_field_value`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`/`ft8_caller_mode_unsupported` (501 when `caller_answer_mode=operator_pick`).
 - **Notes:** One session at a time. Stopped via the shared abandon route below.

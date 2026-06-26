@@ -20,7 +20,7 @@ import (
 // for the logged QSO frequency; answerMode selects answerer picking; nowUTC fixes our
 // TX parity (we call in the next slot). Requires armed TX (Service.StartCallCq checks
 // the arm gate). One session at a time (ErrQsoInProgress).
-func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode string, nowUTC time.Time) error {
+func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, nowUTC time.Time) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
@@ -58,16 +58,26 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.repeats = 0
-	// We transmit CQ in our parity (the next slot's) and PROCESS answers in the
-	// opposite (answerers') parity — theirPeriod. Either parity works; answerers reply
-	// opposite our CQ regardless.
-	s.theirPeriod = oppositePeriod(nextSlotPeriod(nowUTC))
+	// Our CQ parity: the operator's explicit even/odd choice (WSJT-X "Tx even/1st"),
+	// else the next slot (fire ASAP — the default). We transmit CQ in our parity and
+	// PROCESS answers in the opposite (answerers') parity — theirPeriod; onSlotCalling
+	// fires the CQ in our parity. A non-even/odd value (e.g. "") keeps the fire-ASAP
+	// default. Choosing a parity can delay the first CQ by one extra slot when the next
+	// boundary is the other parity — expected (it's the point of the choice).
+	ourPeriod := nextSlotPeriod(nowUTC)
+	switch strings.ToLower(strings.TrimSpace(txParity)) {
+	case "even":
+		ourPeriod = "even"
+	case "odd":
+		ourPeriod = "odd"
+	}
+	s.theirPeriod = oppositePeriod(ourPeriod)
 	st := s.statusLocked()
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("our_call", call).Str("answer_mode", answerMode).
-		Float64("offset_hz", offsetHz).Str("their_period", s.theirPeriod).
-		Msg("ft8 seq: calling CQ")
+		Float64("offset_hz", offsetHz).Str("cq_period", ourPeriod).
+		Str("their_period", s.theirPeriod).Msg("ft8 seq: calling CQ")
 	s.publish(st)
 	// No immediate-fire here (unlike answering a CQ): we chose our CQ parity as the
 	// NEXT slot, so the first CQ goes out at the upcoming boundary (≤ one slot, ~15 s)
