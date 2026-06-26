@@ -599,20 +599,54 @@ when it ships — don't let this rot into a graveyard.
   wait on the cross-SPA-link component); when that shared nav lands, the link can
   be revisited for consistency.
 
-- **FT8 occupancy — investigate a rendered waterfall option.** Filed from
-  dogfood-inbox 2026-06-25. Today TX-offset selection is a per-slot **data**
-  view: `Ft8OccupancyStrip` lays the passband out horizontally with busy bands
-  shaded and daemon-vetted clear offsets as clickable markers (deliberately *not*
-  a rendered waterfall — CLAUDE.md). Investigate offering a real **scrolling
-  waterfall** (spectrogram over time) as an alternative/additional occupancy view
-  — the WSJT-X-familiar visual. Open points: (1) data path — needs per-slot (or
-  faster) FFT magnitude frames pushed to the SPA (new SSE payload / cadence), well
-  beyond today's once-per-15s occupancy snapshot; (2) the occupancy FFT
-  (`internal/audio` `RealPlan`) is **deliberately pure-Go** precisely because it's
-  once-per-15s and not hot — a ~10 fps waterfall is the exact trigger to revisit
-  PocketFFT there (see memory `project_sm_realfft_stays_pure_go`); (3) SPA render
-  cost + whether it's worth it vs the current clear-offset markers, which already
-  answer "where can I transmit". Investigation first, not a build commitment.
+- **FT8 occupancy — multiple switchable spectral views (channelised strip +
+  waterfall).** Filed from dogfood-inbox 2026-06-25; rationale + direction settled
+  2026-06-26. **Decision: provide BOTH the current channelised strip AND a scrolling
+  waterfall, switchable** — not one or the other. Today TX-offset selection is a
+  per-slot **data** view: `Ft8OccupancyStrip` lays the passband out horizontally with
+  busy bands shaded + daemon-vetted clear offsets as clickable markers (deliberately
+  *not* a render — CLAUDE.md).
+
+  **Why the waterfall matters (the load-bearing rationale — operator's insight):**
+  SM is, as far as we know, the **only FT8 app that channelises the offset**. On the
+  air FT8 is *continuous and overlap-tolerant* — stations sit at arbitrary audio
+  offsets (6.25 Hz tone spacing, ~50 Hz wide), the decoder processes the whole
+  passband, and two close/partially-overlapping signals routinely BOTH decode (strong
+  LDPC FEC + Costas sync; a real collision needs them within ~a signal-width *and*
+  comparable strength). Channelising a continuous space has two costs: (a) the band
+  **looks fuller than it is** (a neighbour that merely touches your nominal window
+  shades the channel), and (b) the binary **red "occupied"** manufactures operator
+  *guilt* — "why did they come onto my channel" / "am I transmitting on top of
+  someone" — when in FT8 sharing offsets is normal, low-stakes, and usually fine. A
+  waterfall shows the **continuous truth** and lets the operator exercise *judgment* —
+  see real gaps, **straddle** between signals, pick a spot that's "clear enough." That
+  is a genuine capability the channel markers can't give (channelising stays the right
+  frictionless default for the common "click a green one" case; the waterfall is the
+  complementary expert view).
+
+  **Two distinct strands (weigh separately):**
+  1. **Soften the occupancy semantics (cheap — targets the *guilt* directly, no
+     waterfall).** Replace binary red with a *graded* indicator (clear / near / on-top),
+     tighten "occupied" to a real collision width rather than a touch-overlap, and
+     relabel so "near" reads as informational not a violation. Small tweak on data we
+     already compute. **Middle rung:** the strip could also show *where* neighbours sit
+     relative to the channel ("40 Hz low, not on me") — a chunk of the waterfall's
+     straddle value at a fraction of the cost.
+  2. **The waterfall itself (rich — the continuous view).** Feasibility assessed
+     2026-06-26: **the browser render is NOT the bottleneck** and the "JS redraw is
+     slow vs C/Go" worry is misplaced *if* done right — Canvas 2D self-blit scroll
+     (`drawImage(canvas,0,1)` + one `putImageData` row), sub-ms/frame, proven by every
+     web SDR (WebSDR/KiwiSDR/OpenWebRX) at far higher data rates than FT8's ~3 kHz /
+     ~10 fps. **DOM-per-cell would be catastrophic — never do that.** The FFT stays in
+     Go (the browser does zero numeric work — it rasterises pre-computed magnitude
+     rows). **The real work/cost is daemon-side:** a sub-slot FFT cadence (~10 fps vs
+     today's once-per-15s — ~150× more FFTs, still cheap absolute, but the exact trigger
+     to revisit PocketFFT for the occupancy/waterfall FFT — memory
+     `project_sm_realfft_stays_pure_go`), a streaming push channel (~8 KB/s of quantised
+     rows — binary WebSocket cleaner than text SSE), demand-driven (only while the view
+     is open), plus scaling/contrast (AGC) + slot-time gridlines for readability.
+     **De-risk by spiking the Canvas render with synthetic rows first** (an afternoon,
+     no daemon work) before building the FFT-streaming pipeline.
 
 - **LSPA → My Station → Location: future POTA fields.** Filed from dogfood-inbox
   2026-06-25, alongside the Location-tab field trim (the trim itself is the
