@@ -11,13 +11,14 @@ when it ships — don't let this rot into a graveyard.
 
 ## Bugs
 
-- **`PUT /v1/config` contract: default ids ignored + omitted blocks zeroed.**
-  Filed from the `internal/api` review (2026-06-14, M4 + M5). M4: the handler
-  accepts `default_logbook.id`/`default_rig.id` (documented + in the SPA's
-  writable type) but never copies them into the candidate — a silent no-op. M5:
-  `logging_station`/`station` are copied unconditionally from the request, so a
-  PUT omitting them zeroes the operator identity (the SPA works around it by
-  always bundling the blocks). Fix together with a **presence-aware pointer-block
+- **`PUT /v1/config` contract: omitted blocks zeroed (+ `default_logbook.id` unwired).**
+  Filed from the `internal/api` review (2026-06-14, M4 + M5). **Partially addressed:**
+  M4's `default_rig_id` half shipped with the config-SPA Rigs tab (`req.DefaultRigID`
+  presence-aware at `handler_config.go:375`, validated). **Still open:** `default_logbook.id`
+  is still never copied (no logbook-switching consumer yet — low priority), and M5 stands —
+  `logging_station`/`station` are still copied unconditionally (`handler_config.go:353-354`),
+  so a PUT omitting them zeroes the operator identity (the SPAs work around it by always
+  bundling the blocks). Fix together with a **presence-aware pointer-block
   PUT request type** (`*types.LoggingStation`, `*types.StationConfig`,
   `*types.Logbook`, `*types.RigConfig`, `*types.Ft8DisplayConfig`, `*BridgeInfo` —
   pointers to the canonical `types.X`, not re-defined fields): apply only present
@@ -53,7 +54,10 @@ when it ships — don't let this rot into a graveyard.
   whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
   and decide whether the Rx pane should collapse to the latest decode per station.
 
-- **Fresh-install `config.json` shape (design decision pending).** Filed from the
+- ~~**Fresh-install `config.json` shape (design decision pending).**~~ **RESOLVED
+  2026-06-23** — all three sub-issues below are closed (dangling `default_rig_id`
+  fixed; `forwarders: null` confirmed correct; materialization decided →
+  sparse-but-served). Nothing pending; kept for the trail. Filed from the
   2026-06-23 clean-DB dogfood deploy; narrowed as sub-issues resolved:
   - ~~**Dangling `default_rig_id`.**~~ **FIXED 2026-06-23.** `applyDefaults` now
     only sets `default_rig_id` when a rig catalogue exists (a rig-less install
@@ -168,9 +172,12 @@ when it ships — don't let this rot into a graveyard.
   `Ft8OccupancyStrip` offers daemon-vetted clear offsets as discrete markers
   today; clicking arbitrary spectrum (with a daemon-side snap to the nearest
   no-overlap slot) is future work.
-- **`ft8.device` name-matching.** Config takes an integer device index from
-  `ft8-capture-probe -list`; matching by device *name* (stable across reorder)
-  is a noted follow-up.
+- ~~**`ft8.device` name-matching.**~~ **DONE (stale — superseded by ADR 0028).**
+  Audio-device selection is now name-based: the active rig's `audio.rx`/`audio.tx`
+  (by device *name*, stable across reorder) feed `Ft8Config.Device`, and
+  `resolveAudioDevice` (`internal/ft8/servicetx.go`) accepts a device **name** (a
+  non-numeric string resolves by name; a numeric string still works as a legacy
+  index; empty → system default). No remaining follow-up.
 - **FT8 Tx even/odd sequence option (caller-side).** WSJT-X's "Tx even/1st": let
   the operator choose which slot parity to transmit in when **calling CQ** (even =
   `:00/:30`, odd = `:15/:45`). Today the single-shot Call CQ (`TransmitNext` →
@@ -254,10 +261,13 @@ when it ships — don't let this rot into a graveyard.
   uses it for `TIME_ON` (and `QSO_DATE`), keeping the completion instant for
   `TIME_OFF`; a zero start falls back to the completion instant. Both stay HHMM
   (schema CHECK). Regression tests in `qsolog_test.go` (`TestBuildQso_TimeOn`).
-- **FT8 caller-side sequencing — `auto_first` SHIPPED 2026-06-12 (ADR 0033); the
-  `operator_pick` stack remains.** When *we* call CQ and stations answer, work them one
-  at a time, looping the pile-up until Abandon. This was the gap on 2026-06-12 when a
-  real 7Q pile-up (DK8IF / DL9UW / …) was unworkable.
+- **FT8 caller-side sequencing — BOTH flows SHIPPED; only on-air validation remains.**
+  `auto_first` (Call CQ, ADR 0033) shipped 2026-06-12 and the operator-pick experience
+  shipped 2026-06-17 as the SPA-owned pile-up stack (+ up-arrow reorder, session 192) —
+  which **supersedes** the never-built daemon `operator_pick` Call-CQ mode (501-rejected,
+  not needed). The one true remainder is **on-air validation** of the caller side + the
+  session-tab logging (unit-tested + offline-encode-verified only). Detail below; this was
+  the gap on 2026-06-12 when a real 7Q pile-up (DK8IF / DL9UW / …) was unworkable.
   - **SHIPPED — `auto_first` (the WSJT-X "Auto Seq" mode):** the Operate-tab **Call CQ**
     button starts a sequenced session (`POST /v1/ft8/cq/start` → `Service.StartCallCq` →
     the `Sequencer` caller mode) that calls CQ, **auto-works the first answerer** through
@@ -428,8 +438,9 @@ when it ships — don't let this rot into a graveyard.
   a worked-but-unmapped entity with a name mismatch can still false-positive until
   its prefix is added (override file, or regenerate from a richer log).
 
-- **FT8 QSO edit overlay: remove the stray "Tune" button.** Filed 2026-06-20.
-  The Tune control doesn't belong in the FT8 QSO edit overlay. Small UI removal.
+- ~~**FT8 QSO edit overlay: remove the stray "Tune" button.**~~ **DONE (stale).**
+  Confirmed gone 2026-06-26 — `QsoEditOverlay.svelte` carries no Tune control (no
+  `TuneButton` import, no "Tune" reference). Operator confirmed visually.
 
 - **Download-site install page (derive from `docs/install.md`).** Filed
   2026-06-23. The operator manual deliberately omits install/uninstall (ADR
