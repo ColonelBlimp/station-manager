@@ -705,6 +705,26 @@ when it ships — don't let this rot into a graveyard.
   - **Restart-required:** the log file opens at FT8 service start, so the FT8 tab's
     restart banner now covers it. `api-endpoints.md` updated (GET + PUT).
 
+- **Config hot-reload — apply changes without a daemon restart (whole-thing review).**
+  Filed 2026-06-26. Today most config is **restart-only**: a subsystem binds its config
+  at boot, so changing it needs a full `smd` restart (the config SPA shows a
+  "restart required" banner). The friction the operator hit: **add a rig, then switch the
+  active rig to it** — `rigs` + `default_rig_id` are restart-bound (ADR 0028 Phase 1: rig
+  switch = edit `default_rig_id` + restart), so a perfectly routine "I just added my new
+  rig, make it active" is a restart. Same for the bridge, forwarders, FT8/PSK/decode-log,
+  SMTP. Meanwhile *some* config already applies **live** (My Station identity, `ft8_display`
+  prefs — re-read by the SPA after a `/v1/config` PUT). So the ask is a **whole-thing
+  review of what can/should hot-reload vs stay restart-only**, then make the high-friction
+  ones live — **rig add + active-rig switch first** (re-open the bridge against the new
+  active rig without dropping the process; the demand-driven FT8 capture + the bridge
+  supervisor already tear down / reopen, so a "reconfigure + re-acquire" path is plausible).
+  Context: this is `config.md §11` (hot-reload, previously deferred *to* the config-SPA
+  workstream) made concrete by real dogfooding. Open design points: which blocks are
+  safe to swap live (rig/audio device re-acquire, serial reopen) vs genuinely need a
+  restart (e.g. server listen address); how the SPA signals "applied live" vs "needs
+  restart" per block; and the daemon mechanism (a reload/reconfigure entry point per
+  subsystem vs a coarse re-init). **Not now — recorded as a whole-area initiative.**
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
