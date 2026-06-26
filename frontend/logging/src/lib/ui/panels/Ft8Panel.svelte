@@ -675,7 +675,7 @@
             <h2 class="text-base font-semibold m-0">Band Activity</h2>
             <Ft8FilterPopover />
         </div>
-        <div class="flex h-80 flex-col rounded border border-gray-300 overflow-y-scroll">
+        <div class="flex h-79 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if orderedDecodes.length > 0}
                 <!-- Slot separators only in accumulate mode AND when not floating CQ to
                      top (the CQ-first order isn't slot-grouped, so separators would be
@@ -698,7 +698,7 @@
     </div>
     <div class="flex flex-col text-center ft8-panel-width">
         <h2 class="text-base font-semibold my-2">Rx Frequency</h2>
-        <div class="flex h-34 flex-col rounded border border-gray-300 overflow-y-scroll">
+        <div class="flex h-33 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if rxDecodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each rxDecodes as d (d.id)}

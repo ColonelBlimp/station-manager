@@ -23,7 +23,11 @@ export const en: Record<string, string> = {
     // SPA renders via `bridge.disconnected.<code>`.
 
     'bridge.disconnected.rig_no_data': 'The rig has gone quiet — is it powered on?',
-    'bridge.disconnected.serial_port_error': 'Lost the serial connection to the rig ({error})',
+    // Friendly + actionable, matching rig_no_data — the raw Go serial error (e.g.
+    // "serial: port closed", "i/o timeout") is jargon to the operator and stays in
+    // smd.log for debugging; the toast just says what to check.
+    'bridge.disconnected.serial_port_error':
+        'Lost the connection to the rig — check it is powered on and the cable is connected.',
 
     // ─── Bridge: implicit reconnect (SPA-derived, not a daemon event)
     // Fired by bridge.svelte.ts on the first rig-state after a

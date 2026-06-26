@@ -340,14 +340,16 @@ describe('bridge SSE consumer — rig-disconnected', () => {
         expect(bridgeState.rigResponding).toBe(true);
     });
 
-    it('substitutes details into the template for serial_port_error (after suppression window)', () => {
+    it('shows a friendly serial_port_error message without leaking the raw Go error (after suppression window)', () => {
         currentSource().emit(
             'rig-disconnected',
             JSON.stringify({ code: 'serial_port_error', details: { error: 'i/o timeout' } })
         );
         vi.advanceTimersByTime(800);
-        // Template: 'Lost the serial connection to the rig ({error})'
-        expect(toastsState.items[0].message).toContain('i/o timeout');
+        // Friendly, actionable wording — the raw daemon error is jargon and must NOT
+        // surface in the operator toast (it stays in smd.log).
+        expect(toastsState.items[0].message).toContain('Lost the connection to the rig');
+        expect(toastsState.items[0].message).not.toContain('i/o timeout');
     });
 });
 
@@ -436,9 +438,10 @@ describe('bridge SSE consumer — implicit reconnect + flash suppression', () =>
         );
         vi.advanceTimersByTime(800);
         expect(toastsState.items).toHaveLength(1);
-        // The visible toast carries the LATER disconnect's message,
-        // not the earlier one.
-        expect(toastsState.items[0].message).toContain('i/o timeout');
+        // The visible toast carries the LATER disconnect's message (serial_port_error),
+        // not the earlier one (rig_no_data) — distinguished by their friendly text.
+        expect(toastsState.items[0].message).toContain('Lost the connection to the rig');
+        expect(toastsState.items[0].message).not.toContain('gone quiet');
     });
 
     it('dismisses the visible sticky warn toast when CAT is disabled mid-disconnect (regression M1)', () => {
