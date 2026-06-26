@@ -131,6 +131,22 @@ The header **Operating Mode** switch chooses Phone/CW vs FT8; the choice is
 persisted to `localStorage` (survives reload). FT8 mode renders `Ft8Panel`,
 which opens the `/v1/ft8/events` stream on mount and closes it on leave.
 
+**Operating state is remembered across a mode switch — BOTH ways** (`LoggingCard` +
+`rigControl.snapshotOperatingState`/`restoreOperatingState`): on every Phone/CW ↔ FT8
+switch SM snapshots the **outgoing** mode's operating state (VFO A/B, mode, selection)
+and restores the **incoming** mode's last snapshot — so phone→ft8 returns to your last
+FT8 band/freq and ft8→phone to your last Phone/CW, instead of staying parked on the
+other mode's frequencies. First switch into a mode (no snapshot yet) restores nothing.
+CAT-off rewrites `manualState`; **CAT-live auto re-tunes the rig**, sending
+`set_freq`/`set_freq_b`/`set_mode` for only the values that changed, each
+capability-gated. No VFO-swap is issued (it would exchange VFO contents; selection is
+preserved across an excursion since each mode tunes the selected VFO). Snapshots are
+in-memory only, so a reload mid-mode won't trigger a surprise re-tune on return. **The
+CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
+(default ON; an explicit `false` disables the live re-tune — the harmless CAT-off
+`manualState` restore is unaffected). The daemon only stores/serves the flag; the
+behaviour is SPA-side.
+
 - **Main-Freq band buttons** — one button per configured FT8 band; clicking
   tunes the operating VFO to that band's dial freq and, **when CAT is live, also
   asserts the rig's FT8 mode** (`setFreq` + `setMode(configState.bridge.ft8Mode)`),

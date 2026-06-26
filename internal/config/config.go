@@ -117,6 +117,16 @@ type Config struct {
 	// (when CAT lands); the API joins them at response time.
 	DefaultRigID int64 `json:"default_rig_id"`
 
+	// RestoreRigOnModeSwitch controls whether switching the operating mode
+	// (Phone/CW ↔ FT8) auto re-tunes a CAT-LIVE rig back to that mode's last
+	// freq/mode: the SPA snapshots each mode's operating state on leave and
+	// restores it on return. Pointer so nil = unset = the default (ON); set false
+	// to disable the live re-tune. The CAT-off restore (rewriting the SPA's local
+	// manualState) is unaffected — it never touches the rig. The daemon only
+	// stores + serves this; the behaviour lives in the SPA (LoggingCard +
+	// rigControl).
+	RestoreRigOnModeSwitch *bool `json:"restore_rig_on_mode_switch,omitempty"`
+
 	// Station holds operator-typed station-property preferences that
 	// participate in QSO-emission derivations (e.g. effectivePower in
 	// the SPA's displayedState). Distinct from LoggingStation, which

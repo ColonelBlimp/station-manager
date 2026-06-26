@@ -48,6 +48,14 @@ export interface ConfigResponse {
      * a daemon build that predates it. Read-only over /v1/config (edited in config.json).
      */
     ft8_frequencies?: Record<string, number>;
+    /**
+     * Whether a Phone/CW ↔ FT8 operating-mode switch auto re-tunes a CAT-live rig
+     * back to that mode's last freq/mode. Daemon-resolved (always present on GET;
+     * true when unset = the default ON). Optional on the type for forward-compat
+     * with a daemon build that predates it (undefined → treated as ON). The CAT-off
+     * restore (SPA manualState) is unaffected by this flag.
+     */
+    restore_rig_on_mode_switch?: boolean;
 }
 
 export interface Ft8DisplayFields {

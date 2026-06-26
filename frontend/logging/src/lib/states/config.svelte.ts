@@ -316,6 +316,15 @@ class ConfigState {
     ft8Frequencies: Record<string, number> = $state({});
 
     /**
+     * Whether a Phone/CW ↔ FT8 operating-mode switch auto re-tunes a CAT-live rig
+     * to that mode's last freq/mode (daemon `restore_rig_on_mode_switch`, default
+     * ON). Read by `rigControl.restoreOperatingState` to gate the live re-tune; the
+     * CAT-off restore is unaffected. Defaults true so a daemon build predating the
+     * field (or a missing block) keeps the shipped behaviour.
+     */
+    restoreRigOnModeSwitch: boolean = $state(true);
+
+    /**
      * Hydrate from a daemon GET/PUT /v1/config response. Each block
      * is copied field-by-field rather than wholesale-assigned so the
      * Svelte 5 $state reactivity boundaries on the inner classes are
@@ -397,6 +406,10 @@ class ConfigState {
         this.ft8Display.cqToTop = fd?.cq_to_top ?? false;
         this.ft8Display.hideHashedCalls = fd?.hide_hashed_calls ?? false;
         this.ft8Frequencies = resp.ft8_frequencies ?? {};
+
+        // Default ON when absent (older daemon or unset) — the field is served
+        // resolved, but `?? true` keeps the shipped behaviour for a predating build.
+        this.restoreRigOnModeSwitch = resp.restore_rig_on_mode_switch ?? true;
 
         // mailer projection — daemon-managed, read-only on the SPA
         // side. Defensive guard against missing block (older daemon

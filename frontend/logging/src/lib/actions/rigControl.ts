@@ -250,6 +250,73 @@ export function setMode(value: string): void {
     void driveRig('set_mode', value);
 }
 
+/**
+ * Operating-state snapshot — the Phone/CW VFO freqs, mode, and selection captured
+ * when the operator leaves Phone/CW for FT8, so it can be restored on return
+ * (FT8 band-tuning otherwise leaves the rig — or manualState, CAT-off — parked on
+ * the FT8 watering hole). Freqs are Hz (representation-agnostic). Mode is captured
+ * BOTH as the live rig literal (`catState.mode` → `set_mode` on a live restore) and
+ * the friendly `manualState` value (→ manualState on a CAT-off restore), so the
+ * right one is used for whichever CAT state is in effect on return.
+ */
+export interface OperatingSnapshot {
+    vfoA: number;
+    vfoB: number;
+    selectedVfo: 'A' | 'B';
+    liveMode: string;
+    manualMode: string;
+}
+
+export function snapshotOperatingState(): OperatingSnapshot {
+    return {
+        vfoA: displayedState.vfoA,
+        vfoB: displayedState.vfoB,
+        selectedVfo: displayedState.selectedVfo,
+        liveMode: catState.mode,
+        manualMode: manualState.mode,
+    };
+}
+
+/**
+ * Restore a Phone/CW snapshot on return from FT8 (the operating-mode switch fires
+ * this). CAT off → write manualState directly (pure SPA, no rig). CAT live →
+ * re-command the rig, but ONLY for the values FT8 actually changed (diffed against
+ * the live state, so an untouched VFO/mode isn't needlessly re-sent), each
+ * capability-gated. Freqs go via the per-physical-VFO ops (`set_freq`=FA,
+ * `set_freq_b`=FB), which are selection-independent — so no VFO swap is needed (and
+ * we deliberately don't auto-swap: `swap_vfo` exchanges VFO *contents*, and the
+ * selection is preserved across an FT8 excursion anyway since FT8 tunes the selected
+ * VFO without swapping).
+ */
+export function restoreOperatingState(snap: OperatingSnapshot): void {
+    if (!displayedState.isLive) {
+        manualState.vfoA = clampFreq(snap.vfoA);
+        manualState.vfoB = clampFreq(snap.vfoB);
+        manualState.mode = snap.manualMode;
+        manualState.selectedVfo = snap.selectedVfo;
+        return;
+    }
+    // CAT live: auto re-tune is opt-out (config `restore_rig_on_mode_switch`, default
+    // ON). When disabled, the rig is left wherever the other mode put it — only the
+    // (harmless, no-rig) CAT-off restore above is unconditional.
+    if (!configState.restoreRigOnModeSwitch) return;
+    const ops = configState.bridge.ops;
+    if (snap.vfoA !== displayedState.vfoA && ops.includes('set_freq')) {
+        void driveRig('set_freq', String(clampFreq(snap.vfoA)));
+    }
+    if (snap.vfoB !== displayedState.vfoB && ops.includes('set_freq_b')) {
+        void driveRig('set_freq_b', String(clampFreq(snap.vfoB)));
+    }
+    if (snap.liveMode && snap.liveMode !== catState.mode && ops.includes('set_mode')) {
+        void driveRig('set_mode', snap.liveMode);
+    }
+    // Re-base the optimistic freq-step targets off the restored freqs so a later
+    // key-repeat nudge doesn't compute from a stale pending value.
+    pendingFreqHz.A = null;
+    pendingFreqHz.B = null;
+    lastFreqVfo = null;
+}
+
 // driveRig sends one op, toasts on failure, and returns the outcome so callers
 // that made an optimistic catState write can roll it back on a non-ok result.
 async function driveRig(op: string, value?: string) {

@@ -725,6 +725,15 @@ when it ships — don't let this rot into a graveyard.
   restart" per block; and the daemon mechanism (a reload/reconfigure entry point per
   subsystem vs a coarse re-init). **Not now — recorded as a whole-area initiative.**
 
+- **Config SPA — toggle for `restore_rig_on_mode_switch`.** Filed 2026-06-26. The
+  mode-switch CAT-live re-tune knob (top-level config `restore_rig_on_mode_switch`,
+  `*bool`, default ON) shipped daemon + logging-SPA-gating, but has **no config-SPA
+  editor yet** — it's config.json-only (stop daemon → set `false` → restart). Add a
+  checkbox to the config SPA (natural home: the **Rigs tab**, since it's rig-control
+  behaviour — fold into `saveRigs`, which already PUTs presence-aware fields). Small;
+  deferred with the rest of the config-SPA workstream. Until then, the default-ON
+  behaviour is the common case and turning it off is a documented config.json edit.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

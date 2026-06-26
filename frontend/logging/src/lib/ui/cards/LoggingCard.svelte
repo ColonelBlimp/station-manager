@@ -3,6 +3,11 @@
     import PhonePanel from '../panels/PhonePanel.svelte';
     import Ft8Panel from '../panels/Ft8Panel.svelte';
     import { configState } from '../../states/config.svelte';
+    import {
+        snapshotOperatingState,
+        restoreOperatingState,
+        type OperatingSnapshot,
+    } from '../../actions/rigControl';
 
     const countFormatter = new Intl.NumberFormat();
     const formattedCount = $derived(countFormatter.format(configState.defaultLogbook.qsoCount));
@@ -25,9 +30,31 @@
 
     let operatingMode = $state<'phone' | 'ft8'>(loadOperatingMode());
 
+    // Operating-state memory across a mode switch — BOTH ways. Tuning in either mode
+    // changes the rig's freq/mode (or manualState when CAT-off); without this a switch
+    // leaves you parked on the other mode's frequencies. On every switch we snapshot
+    // the OUTGOING mode's operating state (VFO freqs/mode/selection) and restore the
+    // INCOMING mode's last snapshot — so phone→ft8 returns to your last FT8 band/freq
+    // and ft8→phone to your last Phone/CW. Restore re-tunes a live rig (gated by the
+    // config knob restoreRigOnModeSwitch) or rewrites manualState (CAT-off, always).
+    // First switch into a mode has no snapshot yet → nothing to restore (as before).
+    // In-memory only — snapshots are NOT persisted, so a reload mid-mode won't trigger
+    // a surprise re-tune. prevOperatingMode/snapshots are plain (non-$state) so updating
+    // them inside the effect doesn't re-trigger it; seed prevOperatingMode from the
+    // loader (not the $state var) so the first $effect run is a no-op transition.
+    let prevOperatingMode: 'phone' | 'ft8' = loadOperatingMode();
+    const snapshots: Record<'phone' | 'ft8', OperatingSnapshot | null> = { phone: null, ft8: null };
+
     $effect(() => {
+        const mode = operatingMode;
+        if (mode !== prevOperatingMode) {
+            snapshots[prevOperatingMode] = snapshotOperatingState();
+            const incoming = snapshots[mode];
+            if (incoming) restoreOperatingState(incoming);
+            prevOperatingMode = mode;
+        }
         try {
-            localStorage.setItem(OPERATING_MODE_KEY, operatingMode);
+            localStorage.setItem(OPERATING_MODE_KEY, mode);
         } catch {
             // localStorage unavailable — persistence is best-effort.
         }

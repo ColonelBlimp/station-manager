@@ -9,6 +9,9 @@ import {
     nudgeFreq,
     nudgeFreqJump,
     setMode,
+    snapshotOperatingState,
+    restoreOperatingState,
+    type OperatingSnapshot,
     _resetFreqStepForTests,
 } from './rigControl';
 import { manualState } from '../states/manual.svelte';
@@ -49,6 +52,7 @@ describe('rigControl', () => {
         bridgeState.tuneActive = false;
         configState.bridge.ops = [];
         configState.bridge.tune = false;
+        configState.restoreRigOnModeSwitch = true; // default ON
         manualState.selectedVfo = 'A';
         catState.selectedVfo = 'A';
     });
@@ -351,6 +355,111 @@ describe('rigControl', () => {
             configState.bridge.ops = [];
             setMode('LSB');
             expect(mockSend).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('snapshot / restore operating state (Phone/CW ↔ FT8 memory)', () => {
+        it('snapshotOperatingState captures displayed VFOs/selection + both mode forms', () => {
+            // CAT off → displayedState reads manualState; liveMode reads catState.
+            manualState.vfoA = 14_200_000;
+            manualState.vfoB = 7_050_000;
+            manualState.mode = 'CW';
+            manualState.selectedVfo = 'A';
+            catState.mode = 'CW-U';
+            const snap = snapshotOperatingState();
+            expect(snap).toEqual({
+                vfoA: 14_200_000,
+                vfoB: 7_050_000,
+                selectedVfo: 'A',
+                manualMode: 'CW',
+                liveMode: 'CW-U',
+            });
+        });
+
+        it('CAT off: restore writes manualState (friendly mode), no rig commands', () => {
+            const snap: OperatingSnapshot = {
+                vfoA: 14_250_000,
+                vfoB: 7_100_000,
+                selectedVfo: 'B',
+                liveMode: 'USB',
+                manualMode: 'SSB',
+            };
+            restoreOperatingState(snap);
+            expect(manualState.vfoA).toBe(14_250_000);
+            expect(manualState.vfoB).toBe(7_100_000);
+            expect(manualState.mode).toBe('SSB'); // friendly value, not the rig literal
+            expect(manualState.selectedVfo).toBe('B');
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('CAT live: re-commands only the values FT8 changed, capability-gated', () => {
+            setCatLive();
+            configState.bridge.ops = ['set_freq', 'set_freq_b', 'set_mode'];
+            // Current live state = the FT8 watering hole (VFO-B untouched by FT8).
+            catState.vfoA = 7_074_000;
+            catState.vfoB = 7_100_000;
+            catState.mode = 'DATA-U';
+            catState.selectedVfo = 'A';
+            const snap: OperatingSnapshot = {
+                vfoA: 14_250_000, // changed → set_freq
+                vfoB: 7_100_000, // unchanged → no set_freq_b
+                selectedVfo: 'A',
+                liveMode: 'USB', // changed → set_mode
+                manualMode: 'SSB',
+            };
+            restoreOperatingState(snap);
+            expect(mockSend).toHaveBeenCalledWith('set_freq', '14250000');
+            expect(mockSend).toHaveBeenCalledWith('set_mode', 'USB');
+            expect(mockSend).not.toHaveBeenCalledWith('set_freq_b', expect.anything());
+        });
+
+        it('CAT live: skips the re-tune entirely when restoreRigOnModeSwitch is off', () => {
+            setCatLive();
+            configState.restoreRigOnModeSwitch = false;
+            configState.bridge.ops = ['set_freq', 'set_freq_b', 'set_mode'];
+            catState.vfoA = 7_074_000;
+            catState.mode = 'DATA-U';
+            const snap: OperatingSnapshot = {
+                vfoA: 14_250_000,
+                vfoB: 14_100_000,
+                selectedVfo: 'A',
+                liveMode: 'USB',
+                manualMode: 'SSB',
+            };
+            restoreOperatingState(snap);
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('CAT off: restore still runs even when restoreRigOnModeSwitch is off (no rig touched)', () => {
+            configState.restoreRigOnModeSwitch = false; // CAT off → flag irrelevant
+            restoreOperatingState({
+                vfoA: 14_250_000,
+                vfoB: 7_100_000,
+                selectedVfo: 'A',
+                liveMode: 'USB',
+                manualMode: 'SSB',
+            });
+            expect(manualState.vfoA).toBe(14_250_000);
+            expect(mockSend).not.toHaveBeenCalled();
+        });
+
+        it('CAT live: skips an op the rig does not expose', () => {
+            setCatLive();
+            configState.bridge.ops = ['set_freq']; // no set_mode / set_freq_b
+            catState.vfoA = 7_074_000;
+            catState.vfoB = 7_074_000;
+            catState.mode = 'DATA-U';
+            const snap: OperatingSnapshot = {
+                vfoA: 14_250_000,
+                vfoB: 14_100_000, // would change, but no set_freq_b op
+                selectedVfo: 'A',
+                liveMode: 'USB', // would change, but no set_mode op
+                manualMode: 'SSB',
+            };
+            restoreOperatingState(snap);
+            expect(mockSend).toHaveBeenCalledWith('set_freq', '14250000');
+            expect(mockSend).not.toHaveBeenCalledWith('set_mode', expect.anything());
+            expect(mockSend).not.toHaveBeenCalledWith('set_freq_b', expect.anything());
         });
     });
 });
