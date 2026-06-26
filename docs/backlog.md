@@ -338,11 +338,14 @@ when it ships — don't let this rot into a graveyard.
   scroll" intent). The **new-DXCC `*`** was added to the card 2026-06-26 (green `*`
   after the country, matching the Band Activity marker; previewable via the `?ft8demo`
   toggle) — `info.isNewEntity` rides the same `enrichCallsign` lookup, no extra fetch.
-  **Deferred (revisit only if there's pressure for more):** the richer field set —
-  DXCC prefix, worked-before tint, CQ/ITU zone, continent, QTH — and the idle-state
-  "blank, mirror CountryPanel empty state + drop the idle offset-decode list" polish
-  (the 2026-06-12 decision; the pane currently still shows offset decodes when idle).
-  Operator's call 2026-06-26: ship the new-DXCC marker, leave the rest until needed.
+  **Idle state — resolved WAI 2026-06-26:** the 2026-06-12 "go blank, drop the idle
+  offset-decode list" decision is **superseded**. Dogfooding the live behaviour, the
+  operator prefers the current idle pane — with no QSO it shows decodes on/near the
+  **selected TX offset** (`rxDecodes` offset branch, ±tolerance), i.e. "what's on the
+  channel I'm parked on" (useful for spotting a clear TX freq), and falls to a
+  placeholder only when no offset is picked. That's the desired behaviour; no change.
+  **Deferred (revisit only if there's pressure for more):** the richer field set on the
+  card — DXCC prefix, worked-before tint, CQ/ITU zone, continent, QTH.
 - **FT8 main-panel footer → an info strip (rehome the offset readout there).** The
   bottom-of-main-panel footer now holds "Next slot in Ns · even/odd" (added with the
   countdown move). Grow it into a small **info / status strip** and relocate the
