@@ -20,7 +20,7 @@
 -->
 <div class="pt-2 ft8-info-panel-height">
     <!-- View toggle -->
-    <div class="flex justify-end px-3">
+    <div class="flex justify-end px-3 h-6">
         <div class="inline-flex overflow-hidden rounded border border-gray-300 text-xs">
             <button
                 type="button"
@@ -40,7 +40,7 @@
             >
         </div>
     </div>
-
+    <div class="h-30">
     {#if ft8State.occupancyView === 'spectrum'}
         <Ft8OccupancySpectrum
             passbandLow={ft8State.passbandLow}
@@ -52,6 +52,7 @@
             selected={ft8State.selectedOffset}
             hasSlot={ft8State.slot !== null}
             onselect={(hz: number) => ft8State.selectOffset(hz)}
+            onpreview={(hz: number) => ft8State.previewOffset(hz)}
         />
     {:else}
         <Ft8OccupancyStrip
@@ -65,4 +66,5 @@
             onselect={(hz: number) => ft8State.selectOffset(hz)}
         />
     {/if}
+    </div>
 </div>

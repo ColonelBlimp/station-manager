@@ -741,7 +741,7 @@
             {/if}
         </div>
     </div>
-    <div class="flex flex-col text-center w-20">
+    <div class="flex flex-col text-center w-21">
         <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>
         {#if sortedOffsets.length > 0}
             <div class="flex flex-col place-items-center px-2 space-y-1 overflow-y-scroll">
@@ -757,7 +757,7 @@
                             : 'Click to select for TX'}
                         onclick={() => ft8State.selectOffset(offset)}
                     >
-                        {offset}{#if offset === topPick}&nbsp;*{/if}
+                        {offset}{#if offset === topPick}<span class="pl-1 text-green-700 leading-none text-[18px]">★</span>{:else}<span class="pl-1 text-indigo-600">▼</span>{/if}
                     </button>
                 {/each}
             </div>
@@ -768,25 +768,6 @@
         {/if}
     </div>
 </div>
-<!-- Always-visible info row (above the lower tabs, so it shows on every tab). The
-     slot countdown moved up into the Band Activity footer (slotLabel); this row now
-     carries only the worked-station / Rx-caption cell.
-     While a contact is in flight it shows the worked station + selected-channel
-     occupancy + the auto-abandon "N calls left" countdown (green=clear · red=busy ·
-     gray=unknown), replacing the idle offset readout — a station landing on the picked
-     channel surfaces before the next TX keys. -->
-<!--div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5">
-    {#if workingCall}
-        <div
-            class="rounded px-2 py-0.5 {workingBannerClass}"
-            title="Worked station — selected TX channel occupancy + calls left before auto-abandon"
-        >
-            Working {workingCall} — {workingChannelLabel}{callsLeftLabel}
-        </div>
-    {:else}
-        <div class={rxCaptionClass}>{rxCaption}</div>
-    {/if}
-</div-->
 <!-- Heroicon "cog-6-tooth" (outline) — the Settings tab icon, matching the gear
      used on InfoPanel's My Station tab so the two operating modes read alike. -->
 {#snippet settingsIcon()}

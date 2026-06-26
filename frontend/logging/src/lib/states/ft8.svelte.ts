@@ -310,6 +310,16 @@ class Ft8State {
         saveTxOffset(hz);
     }
 
+    /**
+     * Set the TX offset WITHOUT persisting — used for live drag on the Spectrum bar
+     * so the whole UI (footprint, footer readout, Rx pane) follows the pointer, while
+     * localStorage is written only once on release (via selectOffset). Writing on
+     * every pointermove would hammer storage (synchronous, dozens/sec).
+     */
+    previewOffset(hz: number): void {
+        this.selectedOffset = hz;
+    }
+
     /** Set the Call-CQ slot parity; persisted so it survives a refresh. */
     setTxParity(p: TxParity): void {
         this.txParity = p;

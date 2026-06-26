@@ -36,6 +36,11 @@ frontend/logbook/dist/*
 # Stray repo-root node_modules (e.g. vitest cache left behind by running
 # from the wrong cwd) — Go project, never legitimate here.
 /node_modules/
+# Catch-all: any node_modules at ANY depth (the anchored SPA paths above don't
+# match nested strays like frontend/logging/src/node_modules/.vite, a Vite dep
+# cache vitest can deposit there). node_modules is never source — ignore it
+# wherever it lands.
+**/node_modules/
 /smd
 
 config.json

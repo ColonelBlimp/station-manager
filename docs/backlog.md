@@ -632,8 +632,9 @@ when it ships — don't let this rot into a graveyard.
      (`Ft8OccupancySpectrum.svelte`) shows signals as soft shading at their **true
      continuous positions** (no cells), the daemon clear offsets as ▾/★ ticks at real
      positions (aligned with the Clear Offsets list), **click-anywhere** continuous
-     offset pick, and a **graded clear / near / sharing** status with soft wording
-     instead of binary red — directly killing the false-full + TX-guilt. Pure logic in
+     offset pick, and a **graded clear / near / sharing** status (neutral status words,
+     no advice — the operator judges) instead of binary red — directly killing the
+     false-full + TX-guilt. Pure logic in
      `lib/utils/ft8Spectrum.ts` (`signalProximity`/`offsetFromFraction`, tested). Both
      views write the one `selectedOffset`. The grading is **position-only** (`Ft8Band`
      has no strength — loud-vs-weak needs the waterfall's FFT magnitudes). Docs: `ft8.md`,
@@ -663,19 +664,19 @@ when it ships — don't let this rot into a graveyard.
   already operator-configurable daemon config `ft8.display`; consider whether the
   Spectrum palette should join that or stay component-level). Cosmetic; no logic change.
 
-- **FT8 Spectrum view — drag-to-set the offset indicator.** Filed 2026-06-26.
-  Let the operator **drag** the footprint along the continuous bar, not just click.
-  Feasible + small (no daemon change): Pointer Events (`pointerdown`/`move`/`up` +
-  `setPointerCapture` so the drag tracks off-element; mouse/touch/pen for free),
-  reusing `offsetFromFraction`. Unify click+drag — `pointerdown` picks immediately,
-  `pointermove` refines live, `pointerup` ends. Notes for the build: **persist on
-  release** (update the offset reactively during the drag but only write localStorage
-  on `pointerup` — don't hammer storage per move); `touch-action: none` on the bar so a
-  touch-drag doesn't scroll; keep the keyboard nudge (arrows/Home/End) as the fine
-  control. The payoff is **live proximity feedback** — the footprint colour updates
-  clear→near→sharing as you drag past signals, so you slide into a gap by feel.
-  Optional later: a hold-Shift "magnetic" snap to the nearest clear offset / signal
-  edge (off by default — it fights the continuous ethos).
+- ~~**FT8 Spectrum view — drag-to-set the offset indicator.**~~ **SHIPPED 2026-06-26.**
+  Built as designed: Pointer Events on the Spectrum bar (`pointerdown`/`move`/`up`/`cancel`
+  + `setPointerCapture` so the drag tracks off-bar; mouse/touch/pen), unifying click+drag —
+  pointerdown picks, pointermove refines, release commits. **Persist-on-release** via a new
+  `ft8State.previewOffset` (sets `selectedOffset` without writing localStorage) for the live
+  drag, with `selectOffset` (persists) fired once on release — so the whole UI (footprint,
+  footer readout, Rx pane) follows the pointer live + the proximity colour updates
+  clear→near→sharing as you drag past signals, but storage is written once. `touch-none` on
+  the bar so a touch-drag doesn't scroll; keyboard nudge (arrows/Home/End) retained. Tests:
+  `previewOffset` non-persist vs `selectOffset` persist (`ft8.test.ts`); the pure
+  `offsetFromFraction`/`clampOffset` already covered. Docs: `ft8.md`. **Deferred (optional):**
+  a hold-Shift "magnetic" snap to the nearest clear offset / signal edge (off by default — it
+  fights the continuous ethos).
 
 - **LSPA → My Station → Location: future POTA fields.** Filed from dogfood-inbox
   2026-06-25, alongside the Location-tab field trim (the trim itself is the

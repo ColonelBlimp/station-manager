@@ -96,7 +96,7 @@
 </script>
 
 <div class="w-full px-3 py-2">
-    <div class="flex items-baseline justify-between text-xs text-gray-600">
+    <div class="flex items-baseline justify-between text-xs text-gray-600 mb-6">
         <span>Tx Offset — click a channel</span>
         <span class="font-mono text-gray-600">
             Offset {selected !== null ? `${selected} Hz` : 'none selected'}
@@ -135,7 +135,7 @@
                 >
             {/if}
         </div>
-        <div class="flex justify-between font-mono text-[10px] text-gray-600">
+        <div class="flex justify-between font-mono text-[10px] text-gray-600 mt-6">
             <span>{passbandLow} Hz</span>
             <span>{passbandHigh} Hz</span>
         </div>

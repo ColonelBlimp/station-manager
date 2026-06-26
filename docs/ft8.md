@@ -417,10 +417,13 @@ which opens the `/v1/ft8/events` stream on mount and closes it on leave.
     shows the **continuous** truth: signals as soft neutral shading at their true
     `low_hz`→`high_hz` positions, the daemon's clear offsets as ▾ ticks (★ = top pick)
     at their real positions (aligned with the Clear Offsets list, which never
-    channelised), **click-anywhere** for a continuous offset (clamped so the ±signal-
-    width footprint fits; arrow keys nudge, Home/End to the edges), and a **graded** pick
-    status — **clear / near / sharing** with soft, judgment-friendly wording ("sharing —
-    usually OK in FT8, both should decode") instead of binary red. Rationale: FT8 is
+    channelised), **click-anywhere or drag** for a continuous offset (clamped so the
+    ±signal-width footprint fits; drag is Pointer Events + `setPointerCapture` so it
+    tracks off-bar, mouse/touch/pen, with **live preview** — `previewOffset`, no
+    localStorage write per move — and **persist-on-release**; arrow keys nudge, Home/End
+    to the edges), and a **graded** pick
+    status — **clear / near / sharing** (neutral status words, no advice — the operator
+    judges) instead of binary red. Rationale: FT8 is
     continuous + overlap-tolerant (strong FEC; close/overlapping signals routinely both
     decode), so straddling a gap or sharing an offset is normal — the channelisation
     over-reported "full" and manufactured TX guilt. Grading is **position-only**

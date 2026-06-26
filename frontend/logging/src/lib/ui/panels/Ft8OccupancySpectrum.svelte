@@ -20,7 +20,11 @@
         recommended: number | null;
         selected: number | null;
         hasSlot: boolean;
+        /** Commit a pick (persists). Fired on click and on drag release. */
         onselect: (hz: number) => void;
+        /** Live, non-persisting update during a drag. Optional (the demo omits it →
+         *  drags fall back to onselect, which persists each move). */
+        onpreview?: (hz: number) => void;
     }
     let {
         passbandLow,
@@ -32,6 +36,7 @@
         selected,
         hasSlot,
         onselect,
+        onpreview,
     }: Props = $props();
 
     const span = $derived(Math.max(1, passbandHigh - passbandLow));
@@ -66,16 +71,47 @@
     const captionText = $derived.by(() => {
         if (selected === null) return 'none selected';
         if (prox === null) return `${selected} Hz`;
-        if (prox.kind === 'sharing') return `${selected} Hz · sharing — usually OK in FT8`;
+        if (prox.kind === 'sharing') return `${selected} Hz · sharing`;
         if (prox.kind === 'near') return `${selected} Hz · near — signal ~${prox.gapHz} Hz off`;
         return `${selected} Hz · clear`;
     });
 
-    // Click anywhere on the bar → a continuous offset (clamped so the footprint fits).
-    function onBarClick(e: MouseEvent & { currentTarget: HTMLElement }): void {
+    // Click-anywhere AND drag, unified via Pointer Events: pointerdown picks (live),
+    // pointermove refines while held, pointerup commits (persists). setPointerCapture
+    // keeps the drag tracking even if the pointer leaves the bar. During the drag we
+    // update via onpreview (no localStorage write per move); the final value persists
+    // once on release. A plain click is just down→up with no move. Mouse/touch/pen all
+    // work (the bar has touch-none so a touch-drag doesn't scroll the page).
+    let dragging = $state(false);
+
+    function hzAt(e: { clientX: number; currentTarget: HTMLElement }): number {
         const rect = e.currentTarget.getBoundingClientRect();
         const frac = (e.clientX - rect.left) / rect.width;
-        onselect(offsetFromFraction(frac, passbandLow, passbandHigh, signalWidth));
+        return offsetFromFraction(frac, passbandLow, passbandHigh, signalWidth);
+    }
+
+    function onBarPointerDown(e: PointerEvent & { currentTarget: HTMLElement }): void {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        dragging = true;
+        (onpreview ?? onselect)(hzAt(e));
+    }
+
+    function onBarPointerMove(e: PointerEvent & { currentTarget: HTMLElement }): void {
+        if (!dragging) return;
+        (onpreview ?? onselect)(hzAt(e));
+    }
+
+    function onBarPointerUp(e: PointerEvent & { currentTarget: HTMLElement }): void {
+        if (!dragging) return;
+        dragging = false;
+        try {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+        } catch {
+            // Capture may already be gone (e.g. pointercancel raced) — ignore.
+        }
+        // Persist the final value once. `selected` already reflects the last preview,
+        // so this also covers pointercancel (which carries no useful position).
+        if (selected !== null) onselect(selected);
     }
 
     // Keyboard: arrows nudge by ~a tenth of a signal width (fine control); Home/End
@@ -118,21 +154,25 @@
     {#if hasSlot}
         <!-- soft shading = a signal · green/amber band = your pick (clear/near/sharing) · ▾ = daemon clear offset, ★ = top pick -->
         <div class="relative my-3 pt-3">
-            <!-- Suggested clear offsets (continuous, true positions) — visual hints
-                 aligned with the Clear Offsets list; the bar handles the actual click. -->
+            <!-- Suggested clear offsets — clickable markers centred on each offset's
+                 footprint (s + signalWidth/2), aligned with the Clear Offsets list.
+                 Clicking one commits that exact offset (onselect), same as a Clear
+                 Offset button; the bar itself handles click-anywhere + drag. ★ = top pick. -->
             {#each suggested as s (s)}
-                <span
-                    class="pointer-events-none absolute top-0 -translate-x-1/2 text-[11px] leading-none {s ===
+                <button
+                    type="button"
+                    class="absolute top-0 -mt-0.5 -translate-x-1/2 cursor-pointer border-0 bg-transparent p-0 text-[11px] leading-none hover:opacity-70 {s ===
                     recommended
-                        ? 'text-amber-600'
-                        : 'text-indigo-400'}"
-                    style:left="{pct(s)}%"
-                    title={`Daemon clear offset ${s} Hz${s === recommended ? ' (top pick)' : ''}`}
-                    aria-hidden="true">{s === recommended ? '★' : '▾'}</span
+                        ? 'text-green-700 z-50'
+                        : 'text-indigo-600'}"
+                    style:left="{pct(s + signalWidth / 2)}%"
+                    title={`Select clear offset ${s} Hz${s === recommended ? ' (top pick)' : ''}`}
+                    aria-label={`Select clear offset ${s} hertz${s === recommended ? ', top pick' : ''}`}
+                    onclick={() => onselect(s)}>{s === recommended ? '★' : '▼'}</button
                 >
             {/each}
 
-            <!-- The continuous passband bar: click-anywhere TX-offset picker. -->
+            <!-- The continuous passband bar: click-anywhere + drag TX-offset picker. -->
             <div
                 role="slider"
                 tabindex="0"
@@ -140,8 +180,13 @@
                 aria-valuemin={passbandLow}
                 aria-valuemax={maxOffset}
                 aria-valuenow={selected ?? passbandLow}
-                class="relative h-8 w-full cursor-crosshair overflow-hidden rounded border border-gray-400 bg-gray-50 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
-                onclick={onBarClick}
+                class="relative h-8 w-full touch-none overflow-hidden rounded border border-gray-400 bg-gray-50 focus:ring-2 focus:ring-indigo-400 focus:outline-none {dragging
+                    ? 'cursor-grabbing'
+                    : 'cursor-crosshair'}"
+                onpointerdown={onBarPointerDown}
+                onpointermove={onBarPointerMove}
+                onpointerup={onBarPointerUp}
+                onpointercancel={onBarPointerUp}
                 onkeydown={onBarKey}
             >
                 <!-- Signals: soft neutral shading at their true positions (not red — the
@@ -173,7 +218,7 @@
                 >
             {/if}
         </div>
-        <div class="flex justify-between font-mono text-[10px] text-gray-600">
+        <div class="flex justify-between font-mono text-[10px] text-gray-600 mt-6">
             <span>{passbandLow} Hz</span>
             <span>{passbandHigh} Hz</span>
         </div>

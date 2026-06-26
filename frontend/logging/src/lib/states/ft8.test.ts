@@ -175,6 +175,16 @@ describe('ft8 TX-offset selection', () => {
         ft8State.selectOffset(1800);
         expect(localStorage.getItem('sm.ft8.tx.offset')).toBe('1800');
     });
+
+    it('previewOffset updates the selection WITHOUT persisting (live drag); selectOffset commits', () => {
+        // Drag preview: the value updates live but storage is untouched...
+        ft8State.previewOffset(1234);
+        expect(ft8State.selectedOffset).toBe(1234);
+        expect(localStorage.getItem('sm.ft8.tx.offset')).toBeNull();
+        // ...then release persists once.
+        ft8State.selectOffset(1234);
+        expect(localStorage.getItem('sm.ft8.tx.offset')).toBe('1234');
+    });
 });
 
 describe('ft8 channelOccupied (selected-channel collision check)', () => {
