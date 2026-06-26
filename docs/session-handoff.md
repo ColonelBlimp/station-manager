@@ -30,29 +30,35 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-06-25)
+## Current state (as of 2026-06-26)
 
-> **Recent arc (session 192, 2026-06-25):** **FT8 enrichment correctness + Operate polish +
-> config-SPA decode-log + LSPA phase-2 cleanup.** The FT8 Band-Activity **"new DXCC" `*`
-> marker** shipped this session — and was immediately found false-positiving on worked
-> entities (European Russia, Germany). Root cause + fix: the `is_new_entity` check matched on
-> the **country-NAME string**, which never matched because hamnut's names ("Fed. Rep. of
-> Germany", "European Russia") differ from QRZ-imported QSOs' stored names; reworked to match
-> the **numeric ADIF DXCC code** via a new embedded `internal/enums/dxcc` prefix→number table
-> + `HasQsoForDxcc` (`json_extract`) + name-match fallback (memory `project_sm_new_entity_dxcc`).
-> Also: FT8 **pile-up up-arrow reorder** (`moveUp`), the **FT8 logbook-count bump fix**
-> (`ft8-logged` → `refreshLogbookCount`), a **config-SPA FT8 decode-log toggle**
-> (`ft8_decode_log` on `/v1/config` + an FT8-tab section surfacing the ALL.TXT log), the
-> **LSPA phase-2 cleanup** (removed My Station's Mode Mappings + CW sub-tabs, trimmed Location
-> to grid/altitude/lat/lon — all now config-SPA domain; fields still round-tripped so the
-> daemon's full-replace doesn't clear them), and a first-run **setup→config hand-off
-> interstitial**. **Earlier arc (session 191, 2026-06-25):** config-SPA build-out — Email/SMTP,
-> PSK Reporter, Station-identity, QSL-defaults tabs + reusable `PasswordField` + radio-tower
-> favicon + a bulk-import path (~9×) + the serial by-id fix + a three-SPA build-script fix.
-> **Before that (187–190, 2026-06-22→24):** ClubLog forwarder (187); importer default-NO-UPLOAD
-> + `smctl import` (188); fresh-install config fixes — dangling `default_rig_id`, bridge
-> sparse-but-served (189); Codex's RST-length migration hardened + 4509-QSO import validated
-> end-to-end (190). Per-session detail below.
+> **Recent arc (session 193, 2026-06-26):** **FT8 occupancy Spectrum view + Tx parity
+> selector + backlog staleness audit.** Two FT8 SPA features. (1) A **Tx even/odd parity
+> selector** for Call CQ — 3-state **Next/Even/Odd** (daemon `tx_parity` threaded
+> handler→`Service.StartCallCq`→`Sequencer.StartCallCq`, choosing the CQ-slot parity;
+> SPA operating-state in localStorage; settled the open config-vs-operating-state question
+> as operating state). (2) A switchable **Spectrum occupancy view**
+> (`Ft8OccupancySpectrum.svelte`, Channels|Spectrum toggle) — a *continuous* alternative to
+> the channelised strip: signals at their true `low_hz`→`high_hz` positions, daemon clear
+> offsets as ▾/★ ticks, **click-anywhere** continuous offset pick, and graded
+> **clear/near/sharing** with soft wording instead of binary red. Rationale (operator's
+> insight): SM is the only FT8 app that *channelises*, which over-reports "full" and
+> manufactures TX guilt; FT8 is continuous + overlap-tolerant, so the Spectrum view shows the
+> real picture (pure logic in `lib/utils/ft8Spectrum.ts`, tested). Also: the **new-DXCC `*`**
+> added to the worked-station enrichment card (matching Band Activity), and a **backlog
+> staleness audit** — 5 items cleaned (ft8.device name-matching DONE, fresh-install
+> config-shape RESOLVED, caller-side sequencing retitled "both flows shipped", PUT /v1/config
+> partial-credit, Rx-pane idle-state resolved WAI, stray Tune button DONE). A rendered
+> scrolling **waterfall** stays scoped in the backlog (feasibility assessed: Canvas not DOM,
+> FFT stays in Go, real cost is the daemon streaming pipeline). **Earlier arc (session 192,
+> 2026-06-25):** new-entity **DXCC-match fix** (country-name match false-positived European
+> Russia/Germany → match numeric DXCC via embedded `internal/enums/dxcc` + `HasQsoForDxcc` +
+> name fallback; memory `project_sm_new_entity_dxcc`) + FT8 `*` marker + pile-up ↑ reorder +
+> logbook-count fix + config-SPA decode-log toggle + LSPA cleanup + setup→config hand-off.
+> **Before (191):** config-SPA build-out (Email/PSK/Station/QSL + `PasswordField` + favicon +
+> bulk import ~9× + serial by-id + 3-SPA build fix). **Before (187–190):** ClubLog forwarder;
+> importer NO-UPLOAD + `smctl import`; fresh-install config fixes; RST-length migration +
+> 4509-QSO import validated. Per-session detail below.
 
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
@@ -75,6 +81,8 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 193 (2026-06-26) — **FT8 Tx even/odd parity selector + switchable Spectrum occupancy view + new-DXCC on the enrichment card + backlog staleness audit.** All green: `go build`/`go vet`/`go test ./...`, gofmt clean; logging SPA lint/check + 852 vitest, config SPA unaffected. **(1) Tx even/odd parity (WSJT-X "Tx even/1st") for Call CQ.** Daemon: `tx_parity` ("even"|"odd"|"") threaded `handler_ft8_qso.go` → `Service.StartCallCq` → `Sequencer.StartCallCq`, where it picks the CQ slot parity via `s.theirPeriod = oppositePeriod(ourPeriod)` ("" / unknown → next-slot default). SPA: a **3-state** selector (**Next** = fire on the next slot, the fast default; **Even** :00/:30; **Odd** :15/:45 — operator chose 3-state over WSJT-X's binary to keep the fast default) in `Ft8MsgPanel`, bound to `ft8State.txParity` (operating state, localStorage `sm.ft8.tx.parity`), locked while a session is active, sent on `cq/start`. **Settled the open config-vs-operating-state question as operating state** (no config field). Caller-side only (answering forces opposite parity). Test `TestCallerSequencer_TxParityChoice`; docs api-endpoints.md + ft8.md. **(2) Switchable Spectrum occupancy view.** New `Ft8OccupancySpectrum.svelte` + a **Channels | Spectrum** toggle in `Ft8OccupancyPanel` (`ft8State.occupancyView`, localStorage `sm.ft8.occupancy.view`, default Channels). Same per-slot occupancy snapshot, *continuous* presentation: signals as soft slate shading at their true `low_hz`→`high_hz` positions (no cells), daemon clear offsets as ▾/★ ticks at real positions (aligned with the Clear Offsets list), **click-anywhere** continuous offset (clamped; arrow keys nudge, Home/End to edges, `role=slider`), and a **graded clear/near/sharing** status with soft wording instead of binary red. **Rationale (operator's insight, captured in the backlog waterfall item):** SM is the only FT8 app that channelises → over-reports "full" + manufactures TX guilt; FT8 is continuous + overlap-tolerant (close/overlapping signals routinely both decode), so the continuous view + soft grading matches reality. Grading is **position-only** (`Ft8Band` has no strength — loud-vs-weak needs the waterfall's FFT magnitudes). Pure logic `lib/utils/ft8Spectrum.ts` (`signalProximity`/`offsetFromFraction`/`clampOffset`, 7 tests). Both views write the one `selectedOffset`. **(3) new-DXCC `*` on the worked-station enrichment card** (`Ft8EnrichmentBox` — green `*` after the country when `info.isNewEntity`, matching Band Activity; rides the existing enrich lookup, no extra fetch; `?ft8demo` toggle added). Closed the "Rx-pane cap + enrichment card" backlog item (card + height-cap already shipped; richer fields deferred). **(4) Backlog staleness audit (operator: "some items are stale"):** cleaned 5 — `ft8.device` name-matching **DONE** (`resolveAudioDevice` name-matches + ADR 0028 audio.rx/tx by name), fresh-install config-shape **RESOLVED** (all sub-issues closed), FT8 caller-side sequencing retitled **"both flows shipped; only on-air validation remains"** (SPA pile-up stack + ↑ reorder superseded the daemon `operator_pick` mode), `PUT /v1/config` updated to **partial** (`default_rig_id` wired; M5 + `default_logbook.id` remain), Rx-pane **idle-state resolved WAI** (the offset-decode-when-idle behaviour is preferred over the old "go blank" decision), stray **Tune button DONE** (gone from `QsoEditOverlay`). **(5) Backlog captures (no code):** the waterfall item rewritten with the continuous-vs-channelised rationale + multiple-switchable-views decision + Canvas-not-DOM/FFT-stays-in-Go feasibility + spike-the-render-first; plus **Spectrum colour revision** and **Spectrum drag-to-set the offset** (Pointer Events + setPointerCapture, persist-on-release, live proximity feedback) — both deferred to next session by operator. Inbox: **About → config SPA + version-in-tab-title** logged (untriaged). Docs updated: ft8.md (Spectrum sub-section + Tx parity), CLAUDE.md FT8 bullet, api-endpoints.md, backlog.
 
 ### Session 192 (2026-06-25) — **New-entity DXCC-match fix + FT8 Band-Activity new-entity `*` marker + pile-up up-arrow reorder + FT8 logbook-count bump fix + config-SPA decode-log toggle + LSPA phase-2 cleanup + setup→config hand-off.** All green: full `go build`/`go vet`/`go test ./...`, gofmt clean; logging SPA lint/check + 845 vitest, config SPA lint/check + 5 vitest. **New-entity correctness (daemon):** the "new DXCC" flag (`country.is_new_entity`, `lookup/orchestrator.go` — drives the FT8 `*` and the Phone/CW Country-panel `*`) was false-positiving on worked entities (European Russia, Germany). Root cause: an **exact country-NAME string match** against the log, but hamnut's names ("Fed. Rep. of Germany", "European Russia") differ from QRZ-imported QSOs' stored names ("Germany", "Russia"), and name-match can't split European (54) vs Asiatic (15) Russia. Fixed to match the **numeric ADIF DXCC code**: new `internal/enums/dxcc` (embedded `dxcc-entities.json`, 154 entities, mirrors `enums/modes` embed + `LoadOverride` override) maps hamnut `primaryDXCCPrefix → DXCC number`; new `sqlite.HasQsoForDxccWithContext` (`json_extract(additional_data,'$.dxcc')` — the numeric DXCC lives in the blob, no column); the orchestrator derives the number and **falls back to the old name-match when a prefix isn't mapped** (partial coverage safe). Table built by `scripts/gen-dxcc-entities.py` (seed = the log's distinct DXCC numbers + a sample call → hamnut prefix; prefix collisions resolved by preferring the candidate whose stored name matches hamnut's, which rejected a log misfile — an HK4 Colombian call logged as Dominican Republic → kept HK→116). `dxcc.LoadOverride` wired in `cmd/smd`; operator override `$SM_WORKING_DIR/dxcc-entities.json`. Confirmed hamnut returns **no** numeric DXCC (only `primaryDXCCPrefix`); HamQTH `dxcc.php` does, but a live per-lookup call was rejected (a 2nd network dep in a fail-soft display path). **Known limit:** the table covers only the ~154 entities in the dogfood log — an unmapped worked entity with a name mismatch can still false-positive until its prefix is added (override / regenerate). Tests: `enums/dxcc`, `HasQsoForDxcc`, `IsNewEntity_MatchedByDxccDespiteNameMismatch` / `_DxccPath_NoPriorQso` (existing name-match tests still pass — fallback preserved). Memory `project_sm_new_entity_dxcc`. **FT8 SPA:** (1) **new-entity `*` marker** — `Ft8Panel` `decodeRow` shows a far-right green `*` when `info.isNewEntity` (rides the existing `enrichCallsign` flag lookup — no extra fetch; `ft8Enrich.svelte.ts` now carries `isNewEntity`), coexisting with the pile-up `✓` via `ml-auto`. (2) **pile-up up-arrow reorder** — `ft8PileupStack.moveUp(index)` (swap toward head; head/OOB no-op) + a left-side `↑` per `Ft8PileupDrawer` row (spacer on the head row) so a caller can be prioritised without clearing the FIFO. (3) **FT8 logbook-count fix** — the `ft8-logged` SSE handler now calls `configState.refreshLogbookCount()`; the LoggingCard `(N)` wasn't bumping for FT8 QSOs (the bump only lived in the Phone/CW submit path). **Config-SPA FT8 decode-log toggle:** `ft8_decode_log` added to `/v1/config` GET/PUT (reuses `types.Ft8DecodeLogConfig`, presence-aware; nil-in-config served as a disabled zero block so the form binds) + a Decode-log section (enable + path, default-path placeholder) on the FT8 tab, folded into the FT8 save + restart banner — surfaces the shipped-but-config-only `ft8.decode_log` (JTDX ALL.TXT) so the operator can enable it for enquiry backup. Tests: `handler_config_decodelog_test.go`; `api-endpoints.md` updated. **LSPA phase-2 cleanup (My Station):** removed the **Mode Mappings** + **CW** sub-tabs (now config-SPA domain — Rigs-tab `ModeMappingsEditor` + Station-tab morse fields) and **trimmed the Location sub-tab** to Grid Square / Altitude / Lat / Lon (CQ/ITU/DXCC + postal address live in the CSPA Station tab). All removed fields stay in the LSPA's PUT payload (the daemon full-replaces `logging_station`, so dropping them would clear them). My Station is now **5 sub-tabs** (identity / location / equipment / qso / About). CLAUDE.md + config.md mode-mapping pointers updated to the config SPA. **Setup→config hand-off:** the first-run callsign save now shows a "✓ Setup complete" interstitial (`app.svelte` `setup_done` snippet, local `justCompleted`) offering **Open the Config app →** (`<a href="/config/">`) + secondary **Start logging →**, shown once per install. **Install docs:** "power the rig on first" callout in `install.md` §4 step 1 (a USB-CAT serial port only enumerates with the rig powered on). **Dogfood triage:** new captures routed — FT8 occupancy **waterfall** → backlog (the ~10fps trigger to revisit PocketFFT for the occupancy FFT), decode-log toggle + LSPA Location trim → built this session, cross-SPA nav + themes/dark mode struck → backlog (already tracked). Backlog marked SHIPPED: new-entity `*` + DXCC fix, decode-log toggle, pile-up reorder, setup→config link, LSPA mode-mappings/CW removal.
 
@@ -154,31 +162,40 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 
 ## Next steps (priority order)
 
-> **⚠️ CURRENT NEXT STEPS (as of session 192, 2026-06-25) — the items deeper below are
+> **⚠️ CURRENT NEXT STEPS (as of session 193, 2026-06-26) — the items deeper below are
 > STALE history (operator_pick is SUPERSEDED, IC-7300 arc closed; kept for the trail):**
+> 0. **NEXT SESSION'S OPENER (operator-set):** the two **FT8 Spectrum view** follow-ups
+>    captured in the backlog — **(1) colour revision** (the first-pass slate/green/amber/
+>    orange-red palette wants reworking, reconcile with the shared-theme/dark-mode work) and
+>    **(2) drag-to-set the offset indicator** (Pointer Events + `setPointerCapture`, reuse
+>    `offsetFromFraction`, persist-on-release, `touch-action:none`, live proximity-colour
+>    feedback). Both deferred from session 193 to here. See the backlog "FT8 Spectrum view"
+>    items.
 > 1. **Behavioural retest on the dogfood daemon** (`task deploy:local:dev` — embeds all three
->    SPAs). Largest single retest of the dogfood arc — this session's daemon changes need a
->    real run: **new-entity DXCC matching** (confirm European Russia + Germany no longer show
->    the `*`; genuinely new entities still do) and the **config-SPA decode-log toggle**
->    (enable → restart → `ft8.decode_log` writes ALL.TXT). Plus the FT8 **`*` marker** +
->    **pile-up ↑ reorder** + **logbook-count bump**, the **LSPA trims** (Mode Mappings/CW gone,
->    Location reduced), and still-unconfirmed session-191 surfaces (Email/PSK/Station/QSL
->    save + round-trip, favicon, password eye-glyph, CAT/FT8 master toggles).
+>    SPAs). Still the biggest unvalidated batch: session-192/193 **daemon** changes —
+>    **new-entity DXCC matching** (confirm European Russia + Germany no longer show the `*`),
+>    the **config-SPA decode-log toggle** (enable → restart → `ft8.decode_log` writes ALL.TXT),
+>    and the **Tx even/odd parity** (pick Even/Odd → first CQ lands on that parity). Plus the
+>    FT8 SPA surfaces (`*` marker, pile-up ↑, **Spectrum view** click-anywhere + grading,
+>    logbook-count bump), the LSPA trims, and still-unconfirmed session-191 surfaces
+>    (Email/PSK/Station/QSL, favicon, eye-glyph, CAT/FT8 toggles).
 > 2. **New-entity DXCC table coverage:** the embedded table covers the ~154 entities in the
 >    dogfood log. If a known-worked entity shows a stray `*`, add its `primaryDXCCPrefix` via
 >    `$SM_WORKING_DIR/dxcc-entities.json` or regenerate (`scripts/gen-dxcc-entities.py`).
 >    Memory `project_sm_new_entity_dxcc`.
 > 3. **Remaining cross-SPA / config-SPA backlog (filed 2026-06-24/25):** **cross-SPA nav
 >    links** + **UI themes/dark mode** (+ the shared-theme-layer prerequisite). The
->    setup→config hand-off link shipped session 192.
-> 4. **FT8 occupancy waterfall** — investigate a rendered scrolling-waterfall view (backlog;
->    the ~10fps trigger to revisit PocketFFT for the occupancy FFT — memory
->    `project_sm_realfft_stays_pure_go`).
+>    setup→config hand-off link shipped session 192. Also the inbox **About → config SPA +
+>    version-in-tab-title** capture (untriaged).
+> 4. **FT8 occupancy waterfall** — the rendered scrolling-waterfall view (backlog, now with
+>    full rationale + feasibility); the soften-the-red strand shipped as the Spectrum view
+>    (session 193). The ~10fps cadence is the trigger to revisit PocketFFT for the occupancy
+>    FFT (memory `project_sm_realfft_stays_pure_go`).
 > 5. **PSK Reporter follow-ups (future, in backlog):** the **retrieve/query side** (who heard
 >    *you*) and **generalize to a spot-submitter registry only when a 2nd destination (DX
 >    cluster) lands**.
 >
-> *(Maintenance: no roll-off needed — live list is 180–192 = 13 entries, under the ~15
+> *(Maintenance: no roll-off needed — live list is 180–193 = 14 entries, under the ~15
 > threshold.)*
 >
 > The FT8-TX items further below are STALE — TX (a)–(e) + answer-a-CQ + caller-side +
