@@ -17,9 +17,12 @@
     let distanceKm = $state(1287);
     let hasBearing = $state(true);
     let bearingDeg = $state(45);
+    let isNewEntity = $state(false);
     let path = $state<'short' | 'long'>('short');
 
-    const info = $derived<Ft8CallInfo | undefined>(active ? { opName, flag, country } : undefined);
+    const info = $derived<Ft8CallInfo | undefined>(
+        active ? { opName, flag, country, isNewEntity } : undefined
+    );
     const dist = $derived(hasDistance ? distanceKm : null);
     const bearing = $derived(hasBearing ? bearingDeg : null);
 </script>
@@ -53,6 +56,10 @@
             <label class="flex flex-col gap-1">
                 <span class="text-gray-600">Country</span>
                 <input class="input-base" bind:value={country} disabled={!active} />
+            </label>
+            <label class="flex items-center gap-2">
+                <input type="checkbox" bind:checked={isNewEntity} disabled={!active} />
+                <span>New DXCC entity (★ after country)</span>
             </label>
             <label class="flex items-center gap-2">
                 <input type="checkbox" bind:checked={hasDistance} disabled={!active} />

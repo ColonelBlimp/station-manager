@@ -328,39 +328,21 @@ when it ships — don't let this rot into a graveyard.
   enough that the abstraction should be designed against **two** real implementations, not
   one. The current `pskreporter.Service` (AddSpot/Flush/Start/Stop) is shaped so the extraction
   is clean when the DX-cluster submit actually arrives. Trigger: that second destination.
-- **FT8 Rx Frequency pane — cap the decode list + add a worked-station enrichment
-  card.** The Rx Frequency column (`Ft8Panel.svelte`, `rxDecodes`) renders a tall
-  scrolling decode list that earns little mid-QSO — the worked station transmits once
-  per cycle, so the last ~3 of *their* messages is all that matters. Two changes:
-  - *Cap the list to ~3–4 visible rows + scroll.* Also quietly de-fangs the B3
-    "duplicate rows in accumulate" bug (far less surface to look wrong).
-  - *Use the freed space for a compact worked-station enrichment card,* keyed to the
-    current contact. **Caller or answerer:** key on *the current worked station*
-    (`qso.theirCall` while `qso.active`), so it serves answer-a-CQ today and the
-    caller-side pile-up stack later — one component, both roles, no rework when the
-    stack lands.
-  - *Reuse the DATA layer, not the stateful component.* We already hold the worked
-    station's **grid** (from the CQ / their reply), so bearing + distance are free via
-    `bearing.ts` / `pathInfo`. `/v1/enrich/callsign` gives flag / country / DXCC /
-    CQ+ITU zone / continent / name / QTH; `ft8EnrichState` gives worked-before. Feed a
-    small FT8 card from those endpoints — do **NOT** reuse the Phone/CW `CountryPanel` /
-    `enrichmentState`, which is coupled to the manual draft + ANT_AZ path-selection and
-    would tangle the two flows.
-  - *Field set (lean, DX-focused):* flag · country · DXCC prefix; grid → **bearing +
-    distance** (short/long — the FT8 DXing headline); **worked-before** on band+mode
-    (the dupe tint already computed); CQ/ITU zone · continent; name/QTH secondary.
-    (NB **per-CQ-row beam heading already shipped 2026-06-12** — Band Activity shows a
-    short-path bearing on each CQ row via `pathInfo`, for pre-aiming before you answer.
-    This card is the *persistent worked-station* view during an active QSO — distance +
-    long-path + country, keyed on `qso.theirCall` — not a duplicate of the per-row one.)
-  - *Idle state (DECIDED 2026-06-12):* when no QSO is active the pane is **blank —
-    mirror the Phone/CW `CountryPanel` empty state** (same placeholder presentation, so
-    the two modes feel consistent). The idle offset-decode list is **dropped** (the
-    operator found it low-value); the pane exists to show the *current contact*, so no
-    contact → blank. During an active QSO it shows the capped 3–4 row list of the
-    worked station's messages + the enrichment card. (Presentation mirrors
-    `CountryPanel`; data still comes from the FT8 data layer, not its stateful
-    `enrichmentState` — see the reuse note above.)
+- ~~**FT8 Rx Frequency pane — cap the decode list + add a worked-station enrichment
+  card.**~~ **DONE 2026-06-26.** The headline shipped: `Ft8EnrichmentBox.svelte`
+  renders below the Rx Frequency list, keyed to `qso.theirCall` for both roles
+  (answerer + caller), showing **flag · country · op name · distance · beam heading ·
+  short/long-path radio** — fed from the FT8 data layer (`ft8EnrichState` +
+  `bearing.ts`/`pathInfo`), NOT the Phone/CW `CountryPanel`/`enrichmentState`. The Rx
+  decode list is height-capped via a fixed `h-34` scroll box (the "cap to ~3–4 rows +
+  scroll" intent). The **new-DXCC `*`** was added to the card 2026-06-26 (green `*`
+  after the country, matching the Band Activity marker; previewable via the `?ft8demo`
+  toggle) — `info.isNewEntity` rides the same `enrichCallsign` lookup, no extra fetch.
+  **Deferred (revisit only if there's pressure for more):** the richer field set —
+  DXCC prefix, worked-before tint, CQ/ITU zone, continent, QTH — and the idle-state
+  "blank, mirror CountryPanel empty state + drop the idle offset-decode list" polish
+  (the 2026-06-12 decision; the pane currently still shows offset decodes when idle).
+  Operator's call 2026-06-26: ship the new-DXCC marker, leave the rest until needed.
 - **FT8 main-panel footer → an info strip (rehome the offset readout there).** The
   bottom-of-main-panel footer now holds "Next slot in Ns · even/odd" (added with the
   countdown move). Grow it into a small **info / status strip** and relocate the

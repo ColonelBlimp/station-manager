@@ -41,7 +41,12 @@
                 {#if info.flag}<span class="text-4xl leading-none" aria-hidden="true"
                         >{info.flag}</span
                     >{/if}
-                {#if info.country}<span class="mb-1">{info.country}</span>{/if}
+                {#if info.country}<span class="mb-1"
+                        >{info.country}{#if info.isNewEntity}<span
+                                class="ml-1 font-semibold text-green-700"
+                                title="New DXCC entity">*</span
+                            >{/if}</span
+                    >{/if}
             </div>
         {/if}
         <div class="font-semibold text-gray-700">{call}</div>
