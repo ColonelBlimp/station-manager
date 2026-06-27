@@ -622,7 +622,7 @@
     tab's strip.
 -->
 
-{#snippet decodeRow(d: DecodeEntry)}
+{#snippet decodeRow(d: DecodeEntry, showBearing: boolean)}
     {@const cq = parseCq(d.text)}
     {@const toMe = cq ? null : parseDirectedToMe(d.text, myCall)}
     {@const lineCall = cq?.call ?? toMe?.call ?? null}
@@ -667,11 +667,13 @@
                   : 'text-transparent'}"
             title={parity ? `${parity} slot` : ''}>{parity ? parity[0].toUpperCase() : '·'}</span
         >
-        <span class="w-10 text-right text-indigo-600" title="Beam heading (short path)"
-            >{bearing !== undefined
-                ? `${Math.round(bearing).toString().padStart(3, '0')}°`
-                : ''}</span
-        >
+        {#if showBearing}
+            <span class="w-10 text-right text-indigo-600" title="Beam heading (short path)"
+                >{bearing !== undefined
+                    ? `${Math.round(bearing).toString().padStart(3, '0')}°`
+                    : ''}</span
+            >
+        {/if}
         {#if info?.flag}
             <span class="" title={info.country} aria-hidden="true">{info.flag}</span>
         {/if}
@@ -730,11 +732,11 @@
      mirror decodeRow so the labels line up over their data. -->
 {#snippet headerRow()}
     <div
-        class="sticky top-0 z-10 flex gap-2 whitespace-nowrap border-b border-gray-200 bg-white pb-0.5 pl-1 pr-2 pt-1 font-mono text-xs text-gray-400"
+        class="sticky top-0 z-10 flex gap-2 whitespace-nowrap border-b border-gray-300 bg-white pb-0.5 pl-1 pr-2 pt-1 font-mono text-xs text-gray-400"
     >
         <span class="w-7 text-right">dB</span>
-        <span class="w-10 text-right">Hz</span>
-        <span class="w-6 text-center" title="Slot parity — even (:00/:30) / odd (:15/:45)">E/O</span>
+        <span class="w-9 text-right">Hz</span>
+        <span class="w-4 text-center" title="Slot parity — even (:00/:30) / odd (:15/:45)">E/O</span>
         <span class="w-10 text-right">Beam</span>
         <span class="flex-1 text-left">Message</span>
     </div>
@@ -799,7 +801,7 @@
                         {#if showSlot && (i === 0 || orderedDecodes[i - 1].startUtc !== d.startUtc)}
                             {@render slotSeparator(d.startUtc)}
                         {/if}
-                        {@render decodeRow(d)}
+                        {@render decodeRow(d, true)}
                     {/each}
                 </ul>
             {:else}
@@ -814,7 +816,7 @@
             {#if rxDecodes.length > 0}
                 <ul class="flex-1 space-y-0.5 px-2 py-1 text-left font-mono text-xs">
                     {#each rxDecodes as d (d.id)}
-                        {@render decodeRow(d)}
+                        {@render decodeRow(d, false)}
                     {/each}
                 </ul>
             {:else if ft8State.qso.active}
