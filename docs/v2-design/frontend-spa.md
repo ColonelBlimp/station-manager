@@ -97,16 +97,23 @@ SPA, `GET /config/` → config SPA (correct `/config/assets/*` refs), `GET /conf
 → 307 → `/config/`, `GET /config/assets/index.js` → 200 js, `GET /config/rigs` →
 config index.html (fallback), `GET /v1/healthz` → 200 (API unaffected).
 
-## Logbook SPA scaffold landed — 2026-06-18
+## Logbook SPA — QSO browse shipped 2026-06-26 (scaffold 2026-06-18)
 
-The **logbook client** is the third embedded SPA, scaffolded as a separate
-sibling project at `frontend/logbook/` (same rationale as the config SPA — a
-distinct project, not a route inside `frontend/logging/`). It is a **blank page**
-today (`app.svelte` is just a title heading); the actual logbook-management UX
-(QSL-awaiting view, edit-history viewer, logbook search — see the
-logging-vs-logbook scope note) is future work and gets its own design pass before
-any Svelte. The scaffold exists so the embed wiring, route, and CI gate are in
-place for that work to build on.
+The **logbook client** is the third embedded SPA, a separate sibling project at
+`frontend/logbook/` (same rationale as the config SPA — a distinct project, not a
+route inside `frontend/logging/`).
+
+**First real surface — QSO browse, shipped 2026-06-26.** `LogbookView.svelte`: a
+**logbook selector** (`GET /v1/logbook`) + a **paged QSO table** (Date · Time ·
+Callsign · Band · Freq · Mode · Country · Name · Comment; callsign tinted
+red/green by forward/upload status) + total count (`/count`). Paging is
+**cursor-based Next/Prev/First** (`GET /v1/logbook/{id}/qso` `?limit&after` →
+`{items, next_cursor}`) with a client-side per-page cursor stack + page-size
+selector — no page-number jumps (the daemon has no offset endpoint, by design).
+Read-only: the heavier logbook-management UX (multi-select, export, upload-to-
+services, send-by-email, per-row **edit**, QSL-awaiting, edit-history — see the
+logging-vs-logbook scope note) remains future work. Layers: `lib/api/logbooks.ts`
+(+ shared `_helpers.ts`), `lib/states/logbook.svelte.ts`, `lib/utils/format.ts`.
 
 **Serving — `/logbook/` sub-path, same origin.** Identical shape to the config
 SPA:

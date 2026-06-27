@@ -182,6 +182,10 @@ export interface ConfigResponse {
     // subsystem. Always present on GET.
     bridge_enabled?: boolean;
     ft8_enabled?: boolean;
+    // General tab: whether a Phone/CW ↔ FT8 mode switch auto re-tunes a CAT-live
+    // rig back to that mode's last freq/mode. Served resolved (always present;
+    // true = the default ON).
+    restore_rig_on_mode_switch?: boolean;
 }
 
 export type ConfigOutcome =
@@ -269,6 +273,9 @@ export interface ConfigPatch {
     // tab sends ft8_enabled. Omit to leave the flag untouched.
     bridge_enabled?: boolean;
     ft8_enabled?: boolean;
+    // Presence-aware (General tab): the mode-switch rig-restore knob. Omit to leave
+    // untouched.
+    restore_rig_on_mode_switch?: boolean;
 }
 
 export async function putConfig(patch: ConfigPatch, signal?: AbortSignal): Promise<ConfigOutcome> {

@@ -727,25 +727,58 @@ when it ships — don't let this rot into a graveyard.
   restart" per block; and the daemon mechanism (a reload/reconfigure entry point per
   subsystem vs a coarse re-init). **Not now — recorded as a whole-area initiative.**
 
-- **Config SPA — a `General` tab for cross-cutting operator preferences.** Decided
-  2026-06-26. Several preferences don't belong to a domain tab (Station/Rigs/FT8/
-  Forwarding/Email/Enrichment) — they're *behaviour/UI* choices. Rather than wedge them
-  into the nearest domain tab, give the config SPA a **`General`** tab (name chosen over
-  "System", which reads as daemon/infra — server port, timeouts, paths, log level — that
-  is deliberately config.json-only/advanced and stays OUT of this tab). First/known
-  occupants:
-  - **`restore_rig_on_mode_switch`** — the mode-switch CAT-live re-tune knob (top-level
-    config, `*bool`, default ON). Shipped daemon + logging-SPA-gating 2026-06-26 but has
-    **no config-SPA editor yet** (config.json-only: stop daemon → set `false` → restart).
-    A checkbox here, folded into a presence-aware `/v1/config` PUT.
-  - **UI theme / dark-mode** choice (see the "UI themes + dark mode" item) — the durable
-    theme selection is a pref, so it lands here too when that workstream starts.
-  - future behaviour/notification toggles (e.g. the FT8 notify/qso-defaults that are
-    localStorage today but should migrate to config per the settings-in-config rule).
-  Hold the line: daemon/system internals are NOT exposed here; if an "advanced/system"
-  surface is ever wanted it's a separate, clearly-gated thing. Until the tab exists,
-  `restore_rig_on_mode_switch` defaults ON (the common case) and is a documented
-  config.json edit to disable.
+- ~~**Config SPA — a `General` tab for cross-cutting operator preferences.**~~
+  **SHIPPED 2026-06-26.** The config SPA gained a **General** tab (last in the strip)
+  as the home for prefs that don't belong to a domain tab — chosen over "System"
+  (which reads as daemon/infra, deliberately config.json-only and kept OUT). Shipped
+  occupants: the **`restore_rig_on_mode_switch`** toggle (checkbox → presence-aware
+  `/v1/config` PUT via `saveGeneral`) and the **About/version** diagnostics (moved from
+  the logging SPA's My Station → About; new config-SPA `api/version.ts`). Pending
+  occupants for when their workstreams land: the **UI theme / dark-mode** picker (see
+  "UI themes + dark mode") and future behaviour/notification toggles (e.g. the FT8
+  notify/qso-defaults that are localStorage today but should migrate to config). The
+  line holds: daemon/system internals stay out; an "advanced/system" surface, if ever
+  wanted, is separate + clearly-gated.
+
+- **Version display in a more permanent place (e.g. tab title) across all SPAs.**
+  Filed 2026-06-26 (the second half of the About→config inbox note). The build version
+  now lives on the config SPA's General-tab About section, but the operator wants it
+  more *ambient* — surfaced consistently across all three SPAs without opening a tab,
+  e.g. the browser **tab title** (`<title>Station Manager — Config (2.0.0-…)`), a footer,
+  or a header chip. Small per-SPA; do it with the cross-SPA shared-shell / nav work so
+  the three stay consistent. Source is `GET /v1/version` (`daemon` field).
+
+- **Logbook SPA — the management surface (beyond browse).** Filed 2026-06-26. The
+  logbook SPA's QSO **browse** (selector + cursor-paged read-only table) shipped
+  2026-06-26; the richer logbook-management UX — present in the operator's v1 reference
+  app (`7Q-Station-Manager.20250823/logbook-app`) and flagged by the logging-vs-logbook
+  scope memory — is deferred. Each is its own pass (design the UX first, per the
+  design-SPA-UX-before-building rule):
+  - **Per-row QSO edit** — open a row into an edit overlay; PATCH back. Daemon support
+    exists (`PATCH /v1/qso/{uuid}`, used by the logging SPA's edit overlay); the logbook
+    edit form would reuse that path. The first management feature to land, probably.
+  - **Multi-select + bulk actions** — row checkboxes + select-all, driving:
+    - **Export (selected / all) as ADIF** — reuses the session email-out's server-side
+      ADIF rebuild from `{uuids[]}`, or a dedicated export endpoint / download.
+    - **Send selected by email** — the session email-out endpoint already takes
+      `{to, uuids[]}`; generalise it to an arbitrary selection.
+    - **Upload selected to online services** — bulk-enqueue chosen QSOs to forwarders.
+      This is the operator-driven **backfill** lever (ADR 0022 enqueues *future* QSOs by
+      presence; retrospective upload of an existing log is explicitly this app's job —
+      see the forwarder-enqueue memory + the "clear queued-upload backlog" item, its
+      inverse).
+  - **Search / filter** — by callsign / date range / band / mode / country. Needs new
+    daemon query params on the QSO-list endpoint (today it's cursor paging only, no
+    filters) — a wire + validation + test change, so design it WITH the SPA.
+  - **QSL-awaiting view** — filter to QSOs flagged for QSL (e.g. `app_sm_request_qsl` /
+    QSL status) for card/label workflows.
+  - **Edit-history viewer** — surface the `qso_history` append-only audit table for a
+    QSO (who/what/when changed) — read-only forensics.
+  - **Logbook management** — create / rename / delete logbooks from the UI (daemon
+    endpoints exist: POST / PATCH / DELETE `/v1/logbook`; DELETE refuses a non-empty one).
+  Build order roughly: edit → search/filter → bulk actions (export/email/upload) →
+  QSL-awaiting → edit-history → logbook CRUD. The reference app is a UX guide, not a
+  port (it's Wails + page-number paging; SM is HTTP + cursor paging + its own utils/tokens).
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

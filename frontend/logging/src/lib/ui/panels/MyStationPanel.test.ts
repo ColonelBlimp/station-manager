@@ -71,10 +71,10 @@ describe('MyStationPanel — tablist keyboard nav (I15)', () => {
         await fireEvent.keyDown(identityTab, { key: 'ArrowLeft' });
         await tick();
 
-        // Sections order is identity → location → equipment → qso → about,
-        // so ArrowLeft from identity wraps to about.
-        expect(activeTabId(container)).toBe('my-station-tab-about');
-        expect(document.activeElement?.id).toBe('my-station-tab-about');
+        // Sections order is identity → location → equipment → qso (About moved to
+        // the config SPA's General tab), so ArrowLeft from identity wraps to qso.
+        expect(activeTabId(container)).toBe('my-station-tab-qso');
+        expect(document.activeElement?.id).toBe('my-station-tab-qso');
     });
 
     it('End jumps to last tab', async () => {
@@ -87,7 +87,7 @@ describe('MyStationPanel — tablist keyboard nav (I15)', () => {
         await fireEvent.keyDown(identityTab, { key: 'End' });
         await tick();
 
-        expect(activeTabId(container)).toBe('my-station-tab-about');
+        expect(activeTabId(container)).toBe('my-station-tab-qso');
     });
 
     it('Home jumps to first tab', async () => {

@@ -144,8 +144,8 @@ preserved across an excursion since each mode tunes the selected VFO). Snapshots
 in-memory only, so a reload mid-mode won't trigger a surprise re-tune on return. **The
 CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
 (default ON; an explicit `false` disables the live re-tune — the harmless CAT-off
-`manualState` restore is unaffected). The daemon only stores/serves the flag; the
-behaviour is SPA-side.
+`manualState` restore is unaffected). Editable on the **config SPA's General tab**
+(2026-06-26); the daemon only stores/serves the flag, the behaviour is SPA-side.
 
 - **Main-Freq band buttons** — one button per configured FT8 band; clicking
   tunes the operating VFO to that band's dial freq and, **when CAT is live, also

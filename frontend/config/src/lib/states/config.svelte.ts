@@ -405,6 +405,14 @@ class ConfigState {
     /** Editable master switch for the FT8 subsystem (FT8 tab toggle → ft8.enabled). */
     ft8Enabled: boolean = $state(false);
 
+    /** General tab: the mode-switch rig-restore knob (restore_rig_on_mode_switch,
+     *  default ON). Hydrated from config; saved presence-aware via saveGeneral. */
+    restoreRigOnModeSwitch: boolean = $state(true);
+    /** True while a General-tab save PUT is in flight. */
+    savingGeneral: boolean = $state(false);
+    /** Last General-save status: 'ok', an error message, or null (idle/in-flight). */
+    generalStatus: string | null = $state(null);
+
     // Forwarding tab — the data-driven type descriptors (GET /v1/forwarder-types),
     // the loaded destinations (masked, from /v1/config), and the editable draft.
     forwarderTypes: ForwarderType[] = $state([]);
@@ -499,6 +507,7 @@ class ConfigState {
             this.qslForm = qslFormFrom(this.config.qsl);
             this.bridgeEnabled = this.config.bridge_enabled ?? false;
             this.ft8Enabled = this.config.ft8_enabled ?? false;
+            this.restoreRigOnModeSwitch = this.config.restore_rig_on_mode_switch ?? true;
         } else {
             errs.push(`config: ${outcomeMessage(cfg)}`);
         }
@@ -681,6 +690,44 @@ class ConfigState {
             this.decodeLogForm = decodeLogFormFrom(this.config.ft8_decode_log);
         }
         this.ft8Status = null;
+    }
+
+    /** True when the General-tab preferences diverge from the loaded config. */
+    get generalDirty(): boolean {
+        if (!this.config) return false;
+        return this.restoreRigOnModeSwitch !== (this.config.restore_rig_on_mode_switch ?? true);
+    }
+
+    /**
+     * Persist the General tab's preferences via PUT /v1/config. Sends the knob
+     * presence-aware; echoes logging_station/station verbatim (the daemon overwrites
+     * those unconditionally — see ConfigPatch). Re-hydrates from the response.
+     */
+    async saveGeneral(): Promise<void> {
+        if (this.savingGeneral || !this.config || !this.generalDirty) return;
+        this.savingGeneral = true;
+        this.generalStatus = null;
+        const outcome: ConfigOutcome = await putConfig({
+            logging_station: this.config.logging_station,
+            station: this.config.station,
+            restore_rig_on_mode_switch: this.restoreRigOnModeSwitch,
+        });
+        if (outcome.kind === 'ok') {
+            this.config = outcome.config;
+            this.restoreRigOnModeSwitch = this.config.restore_rig_on_mode_switch ?? true;
+            this.generalStatus = 'ok';
+        } else {
+            this.generalStatus = outcomeMessage(outcome);
+        }
+        this.savingGeneral = false;
+    }
+
+    /** Revert the General-tab preferences to the loaded config. */
+    cancelGeneral(): void {
+        if (this.config) {
+            this.restoreRigOnModeSwitch = this.config.restore_rig_on_mode_switch ?? true;
+        }
+        this.generalStatus = null;
     }
 
     /**

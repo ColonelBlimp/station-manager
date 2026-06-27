@@ -8,6 +8,7 @@
     import Ft8Tab from './lib/ui/tabs/Ft8Tab.svelte';
     import EnrichmentTab from './lib/ui/tabs/EnrichmentTab.svelte';
     import EmailTab from './lib/ui/tabs/EmailTab.svelte';
+    import GeneralTab from './lib/ui/tabs/GeneralTab.svelte';
 
     // ── Tab shell ────────────────────────────────────────────────────────────
     // The config SPA is a category-tab shell (design 2026-06-24): one tab per
@@ -15,7 +16,7 @@
     // install, identity first. Bodies are placeholders for now; each tab gets a
     // real panel component as the workstream fills it in. Default landing = the
     // first tab (Station).
-    type TabId = 'station' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment';
+    type TabId = 'station' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment' | 'general';
 
     const tabs: { id: TabId; title: string }[] = [
         { id: 'station', title: 'Station' },
@@ -24,6 +25,9 @@
         { id: 'forwarding', title: 'Forwarding' },
         { id: 'email', title: 'Email' },
         { id: 'enrichment', title: 'Enrichment' },
+        // Cross-cutting operator preferences + About/version — a catch-all for knobs
+        // that don't belong to a domain tab (decided 2026-06-26). Last in the strip.
+        { id: 'general', title: 'General' },
     ];
 
     const validTab = (s: string): s is TabId => tabs.some((t) => t.id === s);
@@ -131,6 +135,8 @@
                 <EnrichmentTab />
             {:else if activeTab === 'email'}
                 <EmailTab />
+            {:else if activeTab === 'general'}
+                <GeneralTab />
             {:else}
                 <TabPlaceholder title={activeTitle} />
             {/if}
