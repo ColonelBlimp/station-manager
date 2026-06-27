@@ -84,7 +84,47 @@ when it ships — don't let this rot into a graveyard.
     bridge-timeout assertions in `TestHandleGetConfig_PreSetup` (api). Docs: config.md
     §15.5, api-endpoints.md GET/PUT `/v1/config`.
 
-## Features / enhancements
+- **Multiple browser tabs share one rig with no arbitration — operating-lock needed.**
+  Filed 2026-06-27 (operator flagged as a real risk to mitigate). The SPA is multi-tab:
+  every tab subscribes to `/v1/rig/events` and any tab can `POST /v1/rig/command` —
+  there is **no "which tab owns the rig" concept**. Command writes are serialised only
+  at the CAT-line level (`bridge` `cmdMu`), and TX is single-flight (`keyMu`/`ErrTxActive`,
+  shared by tune + FT8-TX) so two tabs physically can't double-key or steal the mic
+  (FT8 capture is refcounted on `/v1/ft8/events` subscribers, which a Phone/CW tab
+  doesn't hold). The unmitigated hazard is the **shared VFO/mode**: a frequency/band/mode
+  change in one tab physically moves the one radio the other tab is operating on — e.g. a
+  Phone/CW tab retuning mid-FT8-QSO. Two control surfaces, one rig, no coordination.
+  Direction to design (UX-first per the rule): a daemon-tracked **active operating client
+  / rig lock** — one tab "holds" the rig for operating; others go read-only (state display
+  still live) or must explicitly take over; surfaced in the SPA so the operator knows which
+  tab is in control. Related dogfood notes (same root — uncoordinated control during an
+  active exchange): "Next during TX moves on mid-transmit", "currently-worked station still
+  clickable in Band Activity". Touches `internal/bridge` (ownership/lease), the rig command
+  handler (reject/queue non-owner writes), and all three SPAs (lock indicator + take-over).
+
+- **FT8 pile-up stack mixes odd/even parities — unworkable + confusing.** Filed 2026-06-27
+  (operator confirmed as a real bug during a live pile-up). FT8 is half-duplex on a 15s
+  two-parity grid: every station you can work in one run must sit on the parity OPPOSITE
+  your TX (you're deaf to your own parity mid-transmit), and a single TX parity cannot
+  serve a mixed-parity queue — chasing a wrong-parity station means flipping your whole
+  run's parity, which mis-aligns everyone else. The caller sequencer already gets this
+  right for answers (`caller_sequencer.go`: `theirPeriod = oppositePeriod(ourPeriod)`,
+  scans only `theirPeriod`). The **SPA pile-up stack does not.** `ft8PileupStack.svelte.ts`
+  captures `slotUtc` per entry (the comment says it "fixes the TX parity" and you should
+  "only SEE/select them in your RX parity") but **never enforces or displays parity** —
+  while idle/between QSOs both parities decode, so ctrl+click can queue stations from
+  either, the FIFO drain interleaves them, and after a few QSOs the operator loses track
+  of which entry is actually workable when. Fix direction: derive each entry's parity from
+  `slotUtc`; make the stack single-parity (= the run's `theirPeriod`) — reject or grey a
+  conflicting-parity push (don't silently queue it), show parity per entry in
+  `Ft8PileupDrawer.svelte`, and have the drain only work same-parity entries (a wrong-parity
+  station needs an explicit "flip the run's parity" action, not an interleave). Surfaces:
+  `ft8PileupStack.svelte.ts`, `Ft8PileupDrawer.svelte`, the work-a-caller drain in the
+  Operate view. Related dogfood notes (same pile-up cluster): "add the currently-worked
+  station to the pile-up list", "currently-worked station should be coloured/disabled in
+  Band Activity", "adjustable number of calls before Next". This also feeds the rationale
+  for the pending `operator_pick` stack (ADR 0033) — bake the single-parity constraint in
+  there too.
 
 - **`internal/iocdi` contract hardening (concurrency + build-time validation).**
   Filed from the `internal/iocdi` review (2026-06-19, M1 + M3 + M4); deferred
@@ -787,6 +827,21 @@ when it ships — don't let this rot into a graveyard.
   QSL-awaiting → edit-history → logbook CRUD (edit + the selection mechanism are done).
   The reference app is a UX guide, not a port (it's Wails + page-number paging; SM is
   HTTP + cursor paging + its own utils/tokens).
+
+- **FT8 slot parity (odd/even) is never labelled in the UI.** Filed 2026-06-27. The
+  operator has to read parity off the decode's UTC seconds (SM convention, grounded in
+  `scheduler.go`/`caller_sequencer.go`: `(unix/15) % 2 == 0 → even`; on the clock,
+  **:00/:30 = even, :15/:45 = odd**, = WSJT-X "Tx even/1st"). Nothing surfaces it —
+  not on Band Activity decode rows, not on pile-up entries, not on the Operate/ladder
+  view — so the operator counts seconds in their head to tell which stations are workable
+  on the current run's parity. Add a clear per-row/per-entry parity indicator (even/odd
+  badge or colour) and ideally a "current TX parity" readout for the session, so the
+  workable set is obvious at a glance. Each decode/`PileupEntry` already carries the slot
+  time (`slotUtc`), so this is presentation-only — no daemon change. Surfaces: the Band
+  Activity feed, `Ft8PileupDrawer.svelte`, the Operate view; parity derivation belongs in
+  a shared SPA util (mirror the daemon's `(unix/15)%2` convention). Prerequisite-adjacent
+  to the **"FT8 pile-up stack mixes odd/even parities"** bug (Bugs section) — that fix
+  needs parity visible anyway; this is the display half, useful on its own.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
