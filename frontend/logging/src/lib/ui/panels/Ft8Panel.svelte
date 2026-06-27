@@ -660,7 +660,7 @@
         <!-- Slot parity (even/odd) — the label that makes the workable set legible:
              even=:00/:30, odd=:15/:45. Distinct colours so it scans at a glance. -->
         <span
-            class="w-3 text-center text-[10px] font-semibold {parity === 'even'
+            class="w-6 text-center text-[10px] font-semibold {parity === 'even'
                 ? 'text-sky-600'
                 : parity === 'odd'
                   ? 'text-purple-600'
@@ -734,6 +734,8 @@
     >
         <span class="w-7 text-right">dB</span>
         <span class="w-10 text-right">Hz</span>
+        <span class="w-6 text-center" title="Slot parity — even (:00/:30) / odd (:15/:45)">E/O</span
+        >
         <span class="w-10 text-right">Beam</span>
         <span class="flex-1 text-left">Message</span>
     </div>
