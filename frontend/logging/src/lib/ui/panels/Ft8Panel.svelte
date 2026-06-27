@@ -201,6 +201,14 @@
     const canAnswer = $derived(
         ft8State.tx.armed && ft8State.selectedOffset !== null && !ft8State.qso.active && freqKnown
     );
+    // A Call-CQ session is running (we are the caller). In this mode the daemon's
+    // auto-pick is the single "who's next" engine, so the pile-up queue is DISABLED:
+    // letting the operator enqueue here builds a second, competing controller — and
+    // (proven from the daemon log) a non-empty queue lights the Next button, whose
+    // click abandons the CQ run and silently hands the rig to the pile-up drain, which
+    // never resumes CQ. Abandon is the one way to stop a Call-CQ run. Queueing stays
+    // available in answer-a-CQ / work-a-caller (role != caller), where it's the point.
+    const callerActive = $derived(ft8State.qso.active && ft8State.qso.role === 'caller');
 
     async function answerCq(d: DecodeEntry): Promise<void> {
         const cq = parseCq(d.text);
@@ -256,6 +264,15 @@
     }
     function onCallerClick(e: MouseEvent, d: DecodeEntry): void {
         if (e.ctrlKey || e.metaKey) {
+            // Queueing is disabled while running CQ (single-controller rule): tell the
+            // operator why rather than silently no-op'ing, so the disabled queue is
+            // understood, not mistaken for a bug.
+            if (callerActive) {
+                toasts.info(
+                    'Calling CQ — pile-up queue disabled. Abandon to work stations by hand.'
+                );
+                return;
+            }
             enqueueCaller(d);
             return;
         }
