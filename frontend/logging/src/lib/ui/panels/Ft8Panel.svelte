@@ -649,18 +649,18 @@
          up stack (any state — pure capture), plain click works it now (when armed+idle).
          A ✓ marks one already on the stack. -->
     <li
-        class="flex gap-2 whitespace-nowrap {isWorking
+        class="cursor-default flex gap-2 whitespace-nowrap {isWorking
             ? 'rounded bg-indigo-50 ring-1 ring-indigo-200'
             : toMe
               ? 'rounded bg-amber-50'
               : ''} {sessionDupe || wrongForQueue ? 'opacity-50' : ''}"
     >
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
-        <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
+        <span class="w-9 text-right text-gray-500">{Math.round(d.freqHz)}</span>
         <!-- Slot parity (even/odd) — the label that makes the workable set legible:
              even=:00/:30, odd=:15/:45. Distinct colours so it scans at a glance. -->
         <span
-            class="w-6 text-center text-[10px] font-semibold {parity === 'even'
+            class="w-4 text-center text-[10px] font-semibold {parity === 'even'
                 ? 'text-sky-600'
                 : parity === 'odd'
                   ? 'text-purple-600'
@@ -673,7 +673,7 @@
                 : ''}</span
         >
         {#if info?.flag}
-            <span class="cursor-default" title={info.country} aria-hidden="true">{info.flag}</span>
+            <span class="" title={info.country} aria-hidden="true">{info.flag}</span>
         {/if}
         {#if answerable}
             <button
@@ -734,8 +734,7 @@
     >
         <span class="w-7 text-right">dB</span>
         <span class="w-10 text-right">Hz</span>
-        <span class="w-6 text-center" title="Slot parity — even (:00/:30) / odd (:15/:45)">E/O</span
-        >
+        <span class="w-6 text-center" title="Slot parity — even (:00/:30) / odd (:15/:45)">E/O</span>
         <span class="w-10 text-right">Beam</span>
         <span class="flex-1 text-left">Message</span>
     </div>
@@ -783,7 +782,7 @@
             {/if}
         </div>
     </div>
-    <div class="flex flex-col text-center ft8-panel-width">
+    <div class="flex flex-col text-center w-90">
         <div class="my-2 flex items-center justify-center gap-1.5">
             <h2 class="text-base font-semibold m-0">Band Activity</h2>
             <Ft8FilterPopover />
@@ -809,7 +808,7 @@
         </div>
         <div class="w-full mt-2 font-semibold text-gray-700 text-sm">{slotLabel}</div>
     </div>
-    <div class="flex flex-col text-center ft8-panel-width">
+    <div class="flex flex-col text-center w-70">
         <h2 class="text-base font-semibold my-2">Rx Frequency</h2>
         <div class="flex h-33 flex-col rounded border border-gray-300 overflow-y-scroll">
             {#if rxDecodes.length > 0}
