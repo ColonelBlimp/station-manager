@@ -110,10 +110,29 @@ red/green by forward/upload status) + total count (`/count`). Paging is
 **cursor-based Next/Prev/First** (`GET /v1/logbook/{id}/qso` `?limit&after` →
 `{items, next_cursor}`) with a client-side per-page cursor stack + page-size
 selector — no page-number jumps (the daemon has no offset endpoint, by design).
-Read-only: the heavier logbook-management UX (multi-select, export, upload-to-
-services, send-by-email, per-row **edit**, QSL-awaiting, edit-history — see the
-logging-vs-logbook scope note) remains future work. Layers: `lib/api/logbooks.ts`
-(+ shared `_helpers.ts`), `lib/states/logbook.svelte.ts`, `lib/utils/format.ts`.
+
+**Multi-select shipped 2026-06-26/27.** A first-column row checkbox + a header
+select-all (indeterminate when only some visible rows are picked); selection
+persists across pages (keyed on QSO id via a `SvelteSet`), cleared on logbook
+switch; a "N selected · Clear" indicator. The **bulk ACTIONS** it feeds (export,
+upload-to-services, send-by-email) remain future work — the selection plumbing is
+in place for them.
+
+**Per-row edit shipped 2026-06-27.** An Edit button per row opens
+`EditQsoModal.svelte` (seeded once from the row via `untrack`, fresh-mounted per
+open), Save PATCHes `/v1/qso/{uuid}` (`api/qso.ts` `patchQso`) and replaces the
+row in place with the daemon's canonical merged QSO; orchestration
+(`openEdit`/`closeEdit`/`saveEdit`) lives in `logbook.svelte.ts`. The form covers
+the editable fields (date/times via native pickers, call, freq+band, mode/submode,
+RST sent/rcvd, country, name, grid, comment); the daemon restores immutables,
+re-derives band from freq, and re-validates, so a bad edit returns a message and
+the modal stays open. ESC cancels, Ctrl/Cmd+Enter saves (the modal owns its ESC).
+
+The remaining logbook-management UX (bulk actions, search/filter, QSL-awaiting,
+edit-history, logbook CRUD — see the logging-vs-logbook scope note) is future
+work. Layers: `lib/api/{logbooks,qso}.ts` (+ shared `_helpers.ts`),
+`lib/states/logbook.svelte.ts`, `lib/ui/{LogbookView,EditQsoModal}.svelte`,
+`lib/utils/format.ts`.
 
 **Serving — `/logbook/` sub-path, same origin.** Identical shape to the config
 SPA:

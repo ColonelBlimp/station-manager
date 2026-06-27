@@ -29,14 +29,19 @@ export interface LogbookQso {
     id: number;
     uuid?: string;
     qso_date?: string; // ADIF YYYYMMDD
+    qso_date_off?: string; // ADIF YYYYMMDD (overnight QSOs)
     time_on?: string; // ADIF HHMM[SS]
+    time_off?: string; // ADIF HHMM[SS]
     call?: string;
     band?: string;
     freq?: string; // ADIF-native MHz decimal (e.g. "14.074")
     mode?: string;
     submode?: string;
+    rst_sent?: string;
+    rst_rcvd?: string;
     country?: string;
     name?: string;
+    gridsquare?: string;
     comment?: string;
     // Upload/forward status (e.g. "Y") — drive the callsign tint.
     sm_fwrd_by_email_status?: string;

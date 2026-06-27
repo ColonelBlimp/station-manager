@@ -754,10 +754,17 @@ when it ships — don't let this rot into a graveyard.
   app (`7Q-Station-Manager.20250823/logbook-app`) and flagged by the logging-vs-logbook
   scope memory — is deferred. Each is its own pass (design the UX first, per the
   design-SPA-UX-before-building rule):
-  - **Per-row QSO edit** — open a row into an edit overlay; PATCH back. Daemon support
-    exists (`PATCH /v1/qso/{uuid}`, used by the logging SPA's edit overlay); the logbook
-    edit form would reuse that path. The first management feature to land, probably.
-  - **Multi-select + bulk actions** — row checkboxes + select-all, driving:
+  - ~~**Per-row QSO edit**~~ **SHIPPED 2026-06-27** — an Edit button per row opens a
+    modal seeded from the row; Save PATCHes `/v1/qso/{uuid}` and replaces the row in
+    place. Form covers the editable fields (date/times, call, freq+band, mode/submode,
+    RST sent/rcvd, country, name, grid, comment); the daemon restores immutables,
+    re-derives band from freq, and re-validates (a bad edit returns a message, modal
+    stays open). ESC cancels, Ctrl/Cmd+Enter saves. `EditQsoModal.svelte` +
+    `api/qso.ts` (`patchQso`) + edit orchestration in `logbook.svelte.ts`.
+  - ~~**Multi-select (selection mechanism)**~~ **SHIPPED 2026-06-26/27** — first-column
+    row checkboxes + a header select-all (indeterminate when partial), selection
+    persists across pages (keyed on QSO id), cleared on logbook switch; a "N selected ·
+    Clear" indicator. The **bulk ACTIONS** it feeds are still deferred:
     - **Export (selected / all) as ADIF** — reuses the session email-out's server-side
       ADIF rebuild from `{uuids[]}`, or a dedicated export endpoint / download.
     - **Send selected by email** — the session email-out endpoint already takes
@@ -776,9 +783,10 @@ when it ships — don't let this rot into a graveyard.
     QSO (who/what/when changed) — read-only forensics.
   - **Logbook management** — create / rename / delete logbooks from the UI (daemon
     endpoints exist: POST / PATCH / DELETE `/v1/logbook`; DELETE refuses a non-empty one).
-  Build order roughly: edit → search/filter → bulk actions (export/email/upload) →
-  QSL-awaiting → edit-history → logbook CRUD. The reference app is a UX guide, not a
-  port (it's Wails + page-number paging; SM is HTTP + cursor paging + its own utils/tokens).
+  Build order for what remains: search/filter → bulk actions (export/email/upload) →
+  QSL-awaiting → edit-history → logbook CRUD (edit + the selection mechanism are done).
+  The reference app is a UX guide, not a port (it's Wails + page-number paging; SM is
+  HTTP + cursor paging + its own utils/tokens).
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

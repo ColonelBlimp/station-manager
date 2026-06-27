@@ -1,13 +1,13 @@
 <script lang="ts">
     // Logbook browse view — pick a logbook, page through its QSOs, multi-select
-    // rows. The selection mechanism is here (per-row + select-all-on-page checkboxes,
-    // selection persists across pages); the bulk ACTIONS it feeds (export, upload,
-    // email, per-row edit) are still a follow-up. Paging is cursor-based
-    // Next/Prev/First (the daemon has no page-number/offset endpoint — see
-    // logbook.svelte.ts).
+    // rows, and edit one (the Edit button opens a modal → PATCH /v1/qso/{uuid}).
+    // The selection mechanism feeds the bulk ACTIONS (export, upload, email) which
+    // are still a follow-up. Paging is cursor-based Next/Prev/First (the daemon has
+    // no page-number/offset endpoint — see logbook.svelte.ts).
     import { onMount } from 'svelte';
     import { logbookState } from '../states/logbook.svelte';
     import { formatQsoDate, formatTime, formatFreq, formatMode } from '../utils/format';
+    import EditQsoModal from './EditQsoModal.svelte';
     import type { LogbookQso } from '../api/logbooks';
 
     onMount(() => void logbookState.init());
@@ -83,7 +83,9 @@
         {:else}
             <div class="overflow-x-auto rounded-md border border-gray-300 bg-white">
                 <table class="table-fixed w-full border-collapse text-left text-sm">
-                    <thead class="h-8 font-medium border-b border-gray-300 bg-gray-50 text-xs text-gray-500 uppercase">
+                    <thead
+                        class="h-8 font-medium border-b border-gray-300 bg-gray-50 text-xs text-gray-500 uppercase"
+                    >
                         <tr>
                             <th class="w-10 pl-3">
                                 <input
@@ -105,6 +107,7 @@
                             <th class="w-32">Country</th>
                             <th class="w-32">Name</th>
                             <th class="pl-4">Comment</th>
+                            <th class="w-14"><span class="sr-only">Edit</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -125,48 +128,46 @@
                                         onchange={() => logbookState.toggleRow(row.id)}
                                     />
                                 </td>
-                                <td class=""
-                                    >{formatQsoDate(row.qso_date)}</td
-                                >
-                                <td class=""
-                                    >{formatTime(row.time_on)}</td
-                                >
+                                <td class="">{formatQsoDate(row.qso_date)}</td>
+                                <td class="">{formatTime(row.time_on)}</td>
                                 <td
-                                    class="font-semibold {handled(
-                                        row
-                                    )
+                                    class="font-semibold {handled(row)
                                         ? 'text-green-800'
                                         : 'text-red-700'}"
                                     title={handled(row)
                                         ? undefined
                                         : 'Not yet forwarded or uploaded'}>{row.call ?? ''}</td
                                 >
-                                <td class=""
-                                    >{row.band ?? ''}</td
+                                <td class="">{row.band ?? ''}</td>
+                                <td class="">{formatFreq(row.freq)}</td>
+                                <td class="">{formatMode(row.mode, row.submode)}</td>
+                                <td class="overflow-hidden text-ellipsis" title={row.country ?? ''}
+                                    >{row.country ?? ''}</td
                                 >
-                                <td class=""
-                                    >{formatFreq(row.freq)}</td
-                                >
-                                <td class=""
-                                    >{formatMode(row.mode, row.submode)}</td
-                                >
-                                <td
-                                    class="overflow-hidden text-ellipsis"
-                                    title={row.country ?? ''}>{row.country ?? ''}</td
-                                >
-                                <td
-                                    class="overflow-hidden text-ellipsis"
-                                    title={row.name ?? ''}>{row.name ?? ''}</td
+                                <td class="overflow-hidden text-ellipsis" title={row.name ?? ''}
+                                    >{row.name ?? ''}</td
                                 >
                                 <td
                                     class="pl-4 overflow-hidden text-ellipsis"
                                     title={row.comment ?? ''}>{row.comment ?? ''}</td
                                 >
+                                <td class="pr-3 text-right">
+                                    <button
+                                        type="button"
+                                        class="cursor-pointer rounded px-1.5 py-0.5 font-sans text-xs text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:text-gray-300"
+                                        aria-label="Edit QSO with {row.call ?? 'unknown'}"
+                                        disabled={!row.uuid}
+                                        title={row.uuid
+                                            ? 'Edit this QSO'
+                                            : 'This QSO has no id and cannot be edited'}
+                                        onclick={() => logbookState.openEdit(row)}>Edit</button
+                                    >
+                                </td>
                             </tr>
                         {/each}
                         {#if logbookState.rows.length === 0 && !logbookState.loading}
                             <tr>
-                                <td colspan="10" class="px-3 py-6 text-center text-sm text-gray-400"
+                                <td colspan="11" class="px-3 py-6 text-center text-sm text-gray-400"
                                     >No QSOs in this logbook.</td
                                 >
                             </tr>
@@ -210,3 +211,7 @@
         {/if}
     </div>
 </main>
+
+{#if logbookState.editing !== null}
+    <EditQsoModal row={logbookState.editing} />
+{/if}

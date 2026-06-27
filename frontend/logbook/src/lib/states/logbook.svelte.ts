@@ -19,6 +19,7 @@ import {
     type Logbook,
     type LogbookQso,
 } from '../api/logbooks';
+import { patchQso, type QsoPatch } from '../api/qso';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -41,6 +42,14 @@ class LogbookState {
     loading: boolean = $state(false);
     /** Human-readable error, or null. */
     error: string | null = $state(null);
+
+    // The QSO currently open in the edit modal, or null when closed. Holds the
+    // row as it was when opened (the modal seeds its form from it).
+    editing: LogbookQso | null = $state(null);
+    /** True while an edit PATCH is in flight. */
+    savingEdit: boolean = $state(false);
+    /** Edit error to show in the modal (validation/conflict/transport), or null. */
+    editError: string | null = $state(null);
 
     // Selected QSO row ids (the numeric primary key), for bulk actions
     // (forward/export/email — those actions are a follow-up). Selection persists
@@ -103,6 +112,47 @@ class LogbookState {
     /** Drop the entire selection. */
     clearSelection(): void {
         this.selected.clear();
+    }
+
+    /** Open the edit modal on a row. */
+    openEdit(row: LogbookQso): void {
+        this.editing = row;
+        this.editError = null;
+    }
+    /** Close the edit modal (discarding any unsaved form changes). */
+    closeEdit(): void {
+        this.editing = null;
+        this.editError = null;
+        this.savingEdit = false;
+    }
+
+    /**
+     * Apply an edit to the QSO currently open in the modal. On success the row
+     * is replaced in place (the daemon returns the canonical merged QSO, with
+     * band re-derived from freq etc.) and the modal closes. On failure the
+     * daemon's message lands in editError and the modal stays open so the
+     * operator can fix it. Returns true on success.
+     */
+    async saveEdit(patch: QsoPatch): Promise<boolean> {
+        const target = this.editing;
+        if (target?.uuid === undefined || target.uuid === '') {
+            this.editError = 'This QSO has no id and cannot be edited.';
+            return false;
+        }
+        this.savingEdit = true;
+        this.editError = null;
+        const out = await patchQso(target.uuid, patch);
+        this.savingEdit = false;
+        if (out.kind !== 'ok') {
+            this.editError = out.message;
+            return false;
+        }
+        // Replace the row in place by id ($state arrays are deeply reactive, so
+        // an index assignment re-renders just that row).
+        const i = this.rows.findIndex((r) => r.id === target.id);
+        if (i !== -1) this.rows[i] = out.qso;
+        this.closeEdit();
+        return true;
     }
 
     /** Load the logbook list on mount, then auto-select the first one. */
