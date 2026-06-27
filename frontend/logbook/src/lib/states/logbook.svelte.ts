@@ -11,6 +11,7 @@
     isn't worth surviving a reload).
 */
 
+import { SvelteSet } from 'svelte/reactivity';
 import {
     fetchLogbooks,
     fetchLogbookCount,
@@ -41,6 +42,12 @@ class LogbookState {
     /** Human-readable error, or null. */
     error: string | null = $state(null);
 
+    // Selected QSO row ids (the numeric primary key), for bulk actions
+    // (forward/export/email — those actions are a follow-up). Selection persists
+    // across pages so an operator can gather rows from several pages before acting;
+    // it's cleared only when switching logbooks. SvelteSet so `.has()` reads are reactive.
+    readonly selected = new SvelteSet<number>();
+
     // The `after` cursor for each loaded page index (cursors[0] = null = first page).
     // Non-reactive: pure navigation bookkeeping, never rendered.
     #cursors: (string | null)[] = [null];
@@ -67,6 +74,37 @@ class LogbookState {
         return this.logbooks.find((l) => l.id === this.selectedId);
     }
 
+    /** How many rows are selected (across all pages). */
+    get selectedCount(): number {
+        return this.selected.size;
+    }
+    /** True when every row on the current page is selected (and there is at least one). */
+    get allVisibleSelected(): boolean {
+        return this.rows.length > 0 && this.rows.every((r) => this.selected.has(r.id));
+    }
+    /** True when some — but not all — visible rows are selected (header checkbox indeterminate). */
+    get someVisibleSelected(): boolean {
+        return this.rows.some((r) => this.selected.has(r.id)) && !this.allVisibleSelected;
+    }
+
+    /** Toggle one row's selection. */
+    toggleRow(id: number): void {
+        if (this.selected.has(id)) this.selected.delete(id);
+        else this.selected.add(id);
+    }
+    /** Header checkbox: select all visible rows, or clear them if all are already selected. */
+    toggleAllVisible(): void {
+        if (this.allVisibleSelected) {
+            for (const r of this.rows) this.selected.delete(r.id);
+        } else {
+            for (const r of this.rows) this.selected.add(r.id);
+        }
+    }
+    /** Drop the entire selection. */
+    clearSelection(): void {
+        this.selected.clear();
+    }
+
     /** Load the logbook list on mount, then auto-select the first one. */
     async init(): Promise<void> {
         this.loading = true;
@@ -87,6 +125,7 @@ class LogbookState {
     /** Switch logbooks: reset paging, refresh count + first page. */
     async selectLogbook(id: number): Promise<void> {
         this.selectedId = id;
+        this.clearSelection();
         this.#resetPaging();
         await Promise.all([this.#loadCount(), this.#loadPage(0)]);
     }

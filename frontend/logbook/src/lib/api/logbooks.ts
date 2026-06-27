@@ -61,7 +61,8 @@ const transportMessage = (kind: string): string =>
 export async function fetchLogbooks(signal?: AbortSignal): Promise<LogbooksOutcome> {
     const fetched = await safeFetch('/v1/logbook', { signal });
     if (!fetched.ok) return { kind: 'error', message: transportMessage(fetched.kind) };
-    if (!fetched.response.ok) return { kind: 'error', message: `Daemon error (${fetched.response.status}).` };
+    if (!fetched.response.ok)
+        return { kind: 'error', message: `Daemon error (${fetched.response.status}).` };
     const body = await readJsonBody(fetched.response);
     if (!Array.isArray(body)) return { kind: 'error', message: 'Unexpected logbooks response.' };
     return { kind: 'ok', logbooks: body as Logbook[] };
@@ -71,7 +72,8 @@ export async function fetchLogbooks(signal?: AbortSignal): Promise<LogbooksOutco
 export async function fetchLogbookCount(id: number, signal?: AbortSignal): Promise<CountOutcome> {
     const fetched = await safeFetch(`/v1/logbook/${id}/count`, { signal });
     if (!fetched.ok) return { kind: 'error', message: transportMessage(fetched.kind) };
-    if (!fetched.response.ok) return { kind: 'error', message: `Daemon error (${fetched.response.status}).` };
+    if (!fetched.response.ok)
+        return { kind: 'error', message: `Daemon error (${fetched.response.status}).` };
     const body = await readJsonBody(fetched.response);
     if (!isPlainObject(body) || typeof body.count !== 'number') {
         return { kind: 'error', message: 'Unexpected count response.' };
@@ -91,7 +93,8 @@ export async function fetchQsoPage(
     if (after) q.set('after', after);
     const fetched = await safeFetch(`/v1/logbook/${id}/qso?${q}`, { signal });
     if (!fetched.ok) return { kind: 'error', message: transportMessage(fetched.kind) };
-    if (!fetched.response.ok) return { kind: 'error', message: `Daemon error (${fetched.response.status}).` };
+    if (!fetched.response.ok)
+        return { kind: 'error', message: `Daemon error (${fetched.response.status}).` };
     const body = await readJsonBody(fetched.response);
     if (!isPlainObject(body) || !Array.isArray(body.items)) {
         return { kind: 'error', message: 'Unexpected QSO-page response.' };

@@ -1,8 +1,10 @@
 <script lang="ts">
-    // Logbook browse view — pick a logbook, page through its QSOs. Read-only for
-    // now; the heavier logbook-management surface (multi-select, export, upload,
-    // email, per-row edit) is a follow-up. Paging is cursor-based Next/Prev/First
-    // (the daemon has no page-number/offset endpoint — see logbook.svelte.ts).
+    // Logbook browse view — pick a logbook, page through its QSOs, multi-select
+    // rows. The selection mechanism is here (per-row + select-all-on-page checkboxes,
+    // selection persists across pages); the bulk ACTIONS it feeds (export, upload,
+    // email, per-row edit) are still a follow-up. Paging is cursor-based
+    // Next/Prev/First (the daemon has no page-number/offset endpoint — see
+    // logbook.svelte.ts).
     import { onMount } from 'svelte';
     import { logbookState } from '../states/logbook.svelte';
     import { formatQsoDate, formatTime, formatFreq, formatMode } from '../utils/format';
@@ -22,14 +24,13 @@
     }
 </script>
 
-<main class="min-h-screen bg-gray-50 p-6 font-sans text-gray-900">
-    <div class="mx-auto max-w-6xl">
+<main class="bg-gray-50 p-6 font-sans text-gray-900">
+    <div class="mx-auto w-280">
         <div class="mb-4 flex flex-wrap items-center gap-4">
             <h1 class="text-2xl font-semibold">Logbook</h1>
 
             <!-- Logbook selector -->
             <label class="flex items-center gap-2 text-sm">
-                <span class="text-gray-600">Logbook</span>
                 <select
                     class="rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none disabled:opacity-50"
                     value={logbookState.selectedId ?? ''}
@@ -47,7 +48,7 @@
                 <span class="text-gray-600">Rows</span>
                 <select
                     class="rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                    value={logbookState.pageSize}
+                    bind:value={logbookState.pageSize}
                     onchange={(e) => logbookState.setPageSize(Number(e.currentTarget.value))}
                 >
                     {#each logbookState.pageSizeOptions as n (n)}
@@ -55,6 +56,22 @@
                     {/each}
                 </select>
             </label>
+
+            <!-- Selection indicator. The bulk actions (forward / export / email /
+                 upload-selected) are a follow-up; for now selection just reports a
+                 count and offers a Clear. -->
+            {#if logbookState.selectedCount > 0}
+                <div class="ml-auto flex items-center gap-2 text-sm">
+                    <span class="font-medium text-indigo-700"
+                        >{logbookState.selectedCount.toLocaleString()} selected</span
+                    >
+                    <button
+                        type="button"
+                        class="cursor-pointer rounded-md border border-gray-300 px-2 py-1 hover:bg-gray-50"
+                        onclick={() => logbookState.clearSelection()}>Clear</button
+                    >
+                </div>
+            {/if}
         </div>
 
         {#if logbookState.error !== null}
@@ -64,32 +81,58 @@
         {:else if logbookState.logbooks.length === 0 && !logbookState.loading}
             <p class="text-sm text-gray-500">No logbooks yet.</p>
         {:else}
-            <div class="overflow-x-auto rounded-md border border-gray-200 bg-white">
-                <table class="w-full border-collapse text-left text-sm">
-                    <thead class="border-b border-gray-200 bg-gray-50 text-xs text-gray-500 uppercase">
+            <div class="overflow-x-auto rounded-md border border-gray-300 bg-white">
+                <table class="table-fixed w-full border-collapse text-left text-sm">
+                    <thead class="h-8 font-medium border-b border-gray-300 bg-gray-50 text-xs text-gray-500 uppercase">
                         <tr>
-                            <th class="px-3 py-2 font-medium">Date</th>
-                            <th class="px-3 py-2 font-medium">Time</th>
-                            <th class="px-3 py-2 font-medium">Callsign</th>
-                            <th class="px-3 py-2 font-medium">Band</th>
-                            <th class="px-3 py-2 font-medium">Freq</th>
-                            <th class="px-3 py-2 font-medium">Mode</th>
-                            <th class="px-3 py-2 font-medium">Country</th>
-                            <th class="px-3 py-2 font-medium">Name</th>
-                            <th class="px-3 py-2 font-medium">Comment</th>
+                            <th class="w-10 pl-3">
+                                <input
+                                    type="checkbox"
+                                    class="cursor-pointer align-middle"
+                                    aria-label="Select all rows on this page"
+                                    checked={logbookState.allVisibleSelected}
+                                    indeterminate={logbookState.someVisibleSelected}
+                                    disabled={logbookState.rows.length === 0}
+                                    onchange={() => logbookState.toggleAllVisible()}
+                                />
+                            </th>
+                            <th class="w-26">Date</th>
+                            <th class="w-16">Time</th>
+                            <th class="w-32">Callsign</th>
+                            <th class="w-13">Band</th>
+                            <th class="w-18">Freq</th>
+                            <th class="w-32">Mode</th>
+                            <th class="w-32">Country</th>
+                            <th class="w-32">Name</th>
+                            <th class="pl-4">Comment</th>
                         </tr>
                     </thead>
                     <tbody>
                         {#each logbookState.rows as row (row.id)}
-                            <tr class="border-b border-gray-100 last:border-b-0 hover:bg-gray-50">
-                                <td class="px-3 py-1.5 font-mono whitespace-nowrap text-gray-600"
+                            <tr
+                                class="h-6 font-mono border-b border-gray-300 last:border-b-0 text-gray-700 whitespace-nowrap hover:bg-gray-100 {logbookState.selected.has(
+                                    row.id
+                                )
+                                    ? 'bg-indigo-100'
+                                    : ''}"
+                            >
+                                <td class="pl-3 pt-1">
+                                    <input
+                                        type="checkbox"
+                                        class="cursor-pointer items-center"
+                                        aria-label="Select QSO with {row.call ?? 'unknown'}"
+                                        checked={logbookState.selected.has(row.id)}
+                                        onchange={() => logbookState.toggleRow(row.id)}
+                                    />
+                                </td>
+                                <td class=""
                                     >{formatQsoDate(row.qso_date)}</td
                                 >
-                                <td class="px-3 py-1.5 font-mono whitespace-nowrap text-gray-600"
+                                <td class=""
                                     >{formatTime(row.time_on)}</td
                                 >
                                 <td
-                                    class="px-3 py-1.5 font-mono font-semibold whitespace-nowrap {handled(
+                                    class="font-semibold {handled(
                                         row
                                     )
                                         ? 'text-green-800'
@@ -98,30 +141,32 @@
                                         ? undefined
                                         : 'Not yet forwarded or uploaded'}>{row.call ?? ''}</td
                                 >
-                                <td class="px-3 py-1.5 whitespace-nowrap text-gray-700">{row.band ?? ''}</td>
-                                <td class="px-3 py-1.5 font-mono whitespace-nowrap text-gray-700"
+                                <td class=""
+                                    >{row.band ?? ''}</td
+                                >
+                                <td class=""
                                     >{formatFreq(row.freq)}</td
                                 >
-                                <td class="px-3 py-1.5 whitespace-nowrap text-gray-700"
+                                <td class=""
                                     >{formatMode(row.mode, row.submode)}</td
                                 >
                                 <td
-                                    class="max-w-[10rem] truncate px-3 py-1.5 text-gray-700"
+                                    class="overflow-hidden text-ellipsis"
                                     title={row.country ?? ''}>{row.country ?? ''}</td
                                 >
                                 <td
-                                    class="max-w-[10rem] truncate px-3 py-1.5 text-gray-700"
+                                    class="overflow-hidden text-ellipsis"
                                     title={row.name ?? ''}>{row.name ?? ''}</td
                                 >
                                 <td
-                                    class="max-w-[14rem] truncate px-3 py-1.5 text-gray-500"
+                                    class="pl-4 overflow-hidden text-ellipsis"
                                     title={row.comment ?? ''}>{row.comment ?? ''}</td
                                 >
                             </tr>
                         {/each}
                         {#if logbookState.rows.length === 0 && !logbookState.loading}
                             <tr>
-                                <td colspan="9" class="px-3 py-6 text-center text-sm text-gray-400"
+                                <td colspan="10" class="px-3 py-6 text-center text-sm text-gray-400"
                                     >No QSOs in this logbook.</td
                                 >
                             </tr>
