@@ -446,6 +446,12 @@
     // only while a contact is in flight (qso.active). Colour tracks the selected TX
     // channel's occupancy so a station landing on the channel between pick and TX is
     // visible BEFORE the next transmission keys, not discovered after it starts.
+    // ON AIR indicator: true whenever the rig is keyed for an FT8 transmission (any
+    // role — calling CQ, answering, or working a caller). Shown in the always-visible
+    // banner so the operator can see they're transmitting from any lower tab. Pulses
+    // for the ~12.6 s of each TX slot, then clears during the RX half.
+    const transmitting = $derived(ft8State.tx.transmitting);
+
     const workingCall = $derived(ft8State.qso.active ? ft8State.qso.theirCall : '');
     // green = channel clear · red = channel busy · gray = unknown (no offset picked
     // or no occupancy report yet — can't claim either).
@@ -721,7 +727,19 @@
             path={txPath}
             onPathChange={onTxPathChange}
         />
-        <div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1">
+        <div
+            class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1"
+        >
+            {#if transmitting}
+                <div
+                    class="flex items-center gap-x-1 rounded bg-red-600 px-2 py-0.5 text-white animate-pulse"
+                    title={ft8State.tx.message
+                        ? `On air — transmitting ${ft8State.tx.message}`
+                        : 'On air — transmitting'}
+                >
+                    <span aria-hidden="true">●</span> ON AIR
+                </div>
+            {/if}
             {#if workingCall}
                 <div
                     class="rounded px-2 py-0.5 {workingBannerClass}"
@@ -757,7 +775,9 @@
                             : 'Click to select for TX'}
                         onclick={() => ft8State.selectOffset(offset)}
                     >
-                        {offset}{#if offset === topPick}<span class="pl-1 text-green-700 leading-none text-[18px]">★</span>{:else}<span class="pl-1 text-indigo-600">▼</span>{/if}
+                        {offset}{#if offset === topPick}<span
+                                class="pl-1 text-green-700 leading-none text-[18px]">★</span
+                            >{:else}<span class="pl-1 text-indigo-600">▼</span>{/if}
                     </button>
                 {/each}
             </div>

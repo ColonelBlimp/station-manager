@@ -188,14 +188,16 @@
         <h1 class="text-center font-semibold text-2xl">Welcome to Station Manager</h1>
         <div class="py-4">
             <p>
-                Before you can use Station Manager, the <i>default log book</i> needs to be initialised.
-                All this requires is a callsign. it is generally recommended that the <i>default log book</i>
+                Before you can use Station Manager, the <i>default log book</i> needs to be
+                initialised. All this requires is a callsign. it is generally recommended that the
+                <i>default log book</i>
                 be associated with you personal callsign.
             </p>
             <p>
-                If you use QRZ.com and plan to forward QSOs to it, then the callsign entered here should be
-                the same as the callsign used for your target logbook at QRZ.com. If you are not sure what
-                callsign to enter, just use your personal callsign - it can easily be changed later.
+                If you use QRZ.com and plan to forward QSOs to it, then the callsign entered here
+                should be the same as the callsign used for your target logbook at QRZ.com. If you
+                are not sure what callsign to enter, just use your personal callsign - it can easily
+                be changed later.
             </p>
         </div>
         <!--
@@ -254,9 +256,9 @@
         <div class="py-4 text-center">
             <p>Your default logbook is ready and you can start logging right away.</p>
             <p class="mt-3">
-                Want to finish setting up your station first? The <i>Config</i> app is where you set
-                up your rig (CAT), QSO forwarding (QRZ, ClubLog…), session email, FT8, and the rest
-                of your station details.
+                Want to finish setting up your station first? The <i>Config</i> app is where you set up
+                your rig (CAT), QSO forwarding (QRZ, ClubLog…), session email, FT8, and the rest of your
+                station details.
             </p>
         </div>
         <div class="flex flex-col items-center space-y-3 pt-2">

@@ -65,6 +65,10 @@
     // "Next" is offered only mid-contact AND with stations still queued — it drops
     // the current exchange and lets the drain advance to the next caller.
     const canNext = $derived(canAbandon && ft8PileupStack.count > 0);
+    // A Call-CQ session is in progress (we are the caller, looping the pile-up). The
+    // Call CQ button turns red while this holds so "I'm running CQ" is unmistakable —
+    // distinct from the per-slot ON AIR indicator (Ft8Panel) that pulses during TX.
+    const callerActive = $derived(qso.active && qso.role === 'caller');
 
     // ---- Message ladder --------------------------------------------------------
     // One slot per row, top to bottom: our TX messages interleaved with the remote
@@ -183,8 +187,15 @@
     // max_repeats backstop — without touching that config (it governs CQ /
     // answer-a-CQ). The current station was dequeued when it started being worked,
     // so aborting just drops it; nothing extra to expel.
+    //
+    // Only acts BETWEEN transmissions (gated on !tx.transmitting, both here and on the
+    // button): clicking Next mid-slot used to abandon the contact while the current
+    // slot played out AND then immediately key the next caller — so the tail of one
+    // station's message ran straight into a transmission for a different callsign.
+    // Advancing only during the RX half means the drop lands cleanly and the next
+    // caller opens on the following TX slot.
     async function onNext(): Promise<void> {
-        if (nexting) return;
+        if (nexting || tx.transmitting) return;
         nexting = true;
         try {
             const out = await abandonFt8Qso();
@@ -260,11 +271,13 @@
             <div class="flex flex-col gap-y-2 h-29">
                 <button
                     type="button"
-                    class="btn btn-primary"
+                    class="btn {callerActive
+                        ? 'bg-red-600 text-white hover:bg-red-700'
+                        : 'btn-primary'}"
                     onclick={callCq}
                     disabled={!canSend || sending}
                 >
-                    {qso.active && qso.role === 'caller' ? 'Calling CQ…' : 'Call CQ'}
+                    {callerActive ? 'Calling CQ…' : 'Call CQ'}
                 </button>
                 <button
                     type="button"
@@ -278,9 +291,11 @@
                     <button
                         type="button"
                         class="btn btn-secondary"
-                        title="Drop this station and work the next in the pile-up"
+                        title={tx.transmitting
+                            ? 'Wait for receive — Next advances between transmissions'
+                            : 'Drop this station and work the next in the pile-up'}
                         onclick={onNext}
-                        disabled={nexting}
+                        disabled={nexting || tx.transmitting}
                     >
                         Next
                     </button>

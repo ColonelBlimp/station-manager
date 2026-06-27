@@ -125,6 +125,42 @@ when it ships — don't let this rot into a graveyard.
   Band Activity", "adjustable number of calls before Next". This also feeds the rationale
   for the pending `operator_pick` stack (ADR 0033) — bake the single-parity constraint in
   there too.
+  **Agreed approach (2026-06-27, operator):** the workable parity in answer-a-CQ mode is
+  precisely **your RX parity = the parity of the CQ you answered** (you take the opposite
+  of station X, so X's parity is what you receive on, and every queueable caller must match
+  it). Enforcement = **ctrl+click only enqueues a decode whose slot parity == your RX
+  parity; wrong-parity decodes are non-clickable (greyed) with a reason**, never silently
+  queued. Requires the parity-label work (next item) so the operator can SEE why a station
+  is/ isn't clickable — the two ship together.
+
+- **FT8 Call-CQ + pile-up queue = two controllers fighting over the rig.** Filed 2026-06-27
+  (operator observed live). During an auto Call-CQ session the daemon's `auto_first` is the
+  "who's next" engine (picks each answerer by decode order, loops until Abandon). But the
+  SPA pile-up queue is still live: ctrl+clicking answering stations into it **flips the run
+  into pile-up-drain mode** — it stops auto-answering the next decode and instead drains the
+  operator's queue (work-a-caller). So two independent "who's next" engines drive one rig
+  with no coordination — the single-tab cousin of the multi-tab rig-lock risk above. (NB: a
+  static read of the drain `$effect` guard `if (ft8State.qso.active) return` at
+  `Ft8Panel.svelte:290` predicts the queue should be INERT during Call-CQ, since `seqCalling`
+  publishes `Active:true` throughout — `caller_sequencer.go:251-260` / `sequencer.go:581`.)
+  **Root cause CONFIRMED from the daemon log (2026-06-27, smd.log @ 10:03:31):** the queue
+  IS inert during Call-CQ — the trigger is the **Next button**. ctrl+click populates the
+  stack → a non-empty stack makes `canNext` true (`Ft8MsgPanel.svelte:67` =
+  `canAbandon && pileup.count > 0`) → the **Next button appears inside the Call-CQ controls**
+  → clicking it runs `onNext` = `abandon` **without pausing the stack** → the Call-CQ session
+  goes idle → `qso.active` flips false → the drain un-parks and works the queue via
+  work-a-caller, whose completions go IDLE (not resume CQ), so it **never returns to calling
+  CQ**. Log proof: one `cq/start` at 09:12, then `session abandoned` at 10:03:31 immediately
+  followed by `/work` (503 settle, then 202) and 100 `working a caller` starts / 0 further CQ.
+  **Agreed approach (2026-06-27, operator):** ONE control model per mode. While a Call-CQ
+  session is active,
+  **ctrl+click-to-enqueue is DISABLED** (visibly — "Calling CQ — queue disabled", not a
+  dead no-op), and **Abandon is the single way to stop the auto-answer loop**. This is the
+  correct *interim* posture while `operator_pick` is parked (the desire to hand-pick during
+  CQ IS `operator_pick`; when it lands, CQ-mode clicking becomes the picker's feed — so this
+  is a coherent waypoint, not a forever-no). Surfaces: the Band Activity ctrl+click handler
+  (gate on `qso.active && role==='caller'`), `ft8PileupStack.svelte.ts` /
+  `Ft8PileupDrawer.svelte`, the drain `$effect` in `Ft8Panel.svelte`.
 
 - **`internal/iocdi` contract hardening (concurrency + build-time validation).**
   Filed from the `internal/iocdi` review (2026-06-19, M1 + M3 + M4); deferred
@@ -842,6 +878,19 @@ when it ships — don't let this rot into a graveyard.
   a shared SPA util (mirror the daemon's `(unix/15)%2` convention). Prerequisite-adjacent
   to the **"FT8 pile-up stack mixes odd/even parities"** bug (Bugs section) — that fix
   needs parity visible anyway; this is the display half, useful on its own.
+
+- **FT8 Call-CQ auto-pick strategy should be config-selectable (decode-order vs strongest).**
+  Filed 2026-06-27. In `auto_first` the daemon picks the next answerer by **decode order** —
+  the first grid-reply to our call that we can encode a reply to (`caller_sequencer.go:109-139`;
+  `m.SNR` is read only for the report we *send*, never for selection). From the operator's
+  seat that looks arbitrary ("random") and ignores normal pile-up etiquette (work the
+  strongest / cleanest copy). Add a config knob to choose the auto-pick strategy: **first
+  in the decode list** (current behaviour) or **strongest signal** (rank the slot's valid
+  answerers by SNR, take the highest). New field on `Ft8TXConfig` (`internal/types/ft8.go`,
+  e.g. `ft8.tx.auto_pick = "decode_order" | "strongest"`, resolved with a default +
+  validation like the other tx fields); the pick loop in `onSlotCalling` selects per the
+  resolved strategy instead of always taking the first match. Independent of `operator_pick`
+  (which is whom-to-work-next *by hand* — parked); this only governs the *automatic* pick.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

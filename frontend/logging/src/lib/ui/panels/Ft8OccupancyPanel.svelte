@@ -41,30 +41,30 @@
         </div>
     </div>
     <div class="h-30">
-    {#if ft8State.occupancyView === 'spectrum'}
-        <Ft8OccupancySpectrum
-            passbandLow={ft8State.passbandLow}
-            passbandHigh={ft8State.passbandHigh}
-            signalWidth={ft8State.signalWidth}
-            occupied={ft8State.occupied}
-            suggested={ft8State.suggested}
-            recommended={topPick}
-            selected={ft8State.selectedOffset}
-            hasSlot={ft8State.slot !== null}
-            onselect={(hz: number) => ft8State.selectOffset(hz)}
-            onpreview={(hz: number) => ft8State.previewOffset(hz)}
-        />
-    {:else}
-        <Ft8OccupancyStrip
-            passbandLow={ft8State.passbandLow}
-            passbandHigh={ft8State.passbandHigh}
-            signalWidth={ft8State.signalWidth}
-            occupied={ft8State.occupied}
-            recommended={topPick}
-            selected={ft8State.selectedOffset}
-            hasSlot={ft8State.slot !== null}
-            onselect={(hz: number) => ft8State.selectOffset(hz)}
-        />
-    {/if}
+        {#if ft8State.occupancyView === 'spectrum'}
+            <Ft8OccupancySpectrum
+                passbandLow={ft8State.passbandLow}
+                passbandHigh={ft8State.passbandHigh}
+                signalWidth={ft8State.signalWidth}
+                occupied={ft8State.occupied}
+                suggested={ft8State.suggested}
+                recommended={topPick}
+                selected={ft8State.selectedOffset}
+                hasSlot={ft8State.slot !== null}
+                onselect={(hz: number) => ft8State.selectOffset(hz)}
+                onpreview={(hz: number) => ft8State.previewOffset(hz)}
+            />
+        {:else}
+            <Ft8OccupancyStrip
+                passbandLow={ft8State.passbandLow}
+                passbandHigh={ft8State.passbandHigh}
+                signalWidth={ft8State.signalWidth}
+                occupied={ft8State.occupied}
+                recommended={topPick}
+                selected={ft8State.selectedOffset}
+                hasSlot={ft8State.slot !== null}
+                onselect={(hz: number) => ft8State.selectOffset(hz)}
+            />
+        {/if}
     </div>
 </div>
