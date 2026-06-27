@@ -15,6 +15,7 @@
     import { displayedState } from '../../states/displayed.svelte';
     import { catState } from '../../states/cat.svelte';
     import { parseCqCall, parseCq, parseDirectedToMe } from '../../utils/ft8Message';
+    import { slotParity } from '../../utils/ft8Parity';
     import { startFt8Qso, startFt8WorkCaller, setFt8QsoPath } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
     import { frequencyToBand, formatFrequency } from '../../utils/frequency';
@@ -210,6 +211,18 @@
     // available in answer-a-CQ / work-a-caller (role != caller), where it's the point.
     const callerActive = $derived(ft8State.qso.active && ft8State.qso.role === 'caller');
 
+    // The single parity the pile-up may contain (FT8 half-duplex: you can only work
+    // stations on your RX parity — the one OPPOSITE your TX — and a single run can't
+    // mix parities without re-syncing). Authoritative source while a contact is live:
+    // the daemon's RX parity (qso.theirPeriod). Otherwise the queue defines its own
+    // parity from its head, so it stays single-parity once anything is in it. '' means
+    // no constraint yet (idle + empty queue): the first enqueue sets the run's parity.
+    const workableParity = $derived.by(() => {
+        if (ft8State.qso.active && ft8State.qso.theirPeriod) return ft8State.qso.theirPeriod;
+        const head = ft8PileupStack.items[0];
+        return head ? slotParity(head.slotUtc) : '';
+    });
+
     async function answerCq(d: DecodeEntry): Promise<void> {
         const cq = parseCq(d.text);
         if (!cq || !canAnswer || ft8State.selectedOffset === null) return;
@@ -270,6 +283,17 @@
             if (callerActive) {
                 toasts.info(
                     'Calling CQ — pile-up queue disabled. Abandon to work stations by hand.'
+                );
+                return;
+            }
+            // Single-parity rule: a station can only join the pile-up if it shares the
+            // run's workable parity (your RX parity). Wrong-parity stations transmit when
+            // you do — unworkable on this run — so block with the reason rather than queue
+            // an entry that would stall the drain.
+            const p = slotParity(d.startUtc);
+            if (workableParity !== '' && p !== '' && p !== workableParity) {
+                toasts.info(
+                    `${p} slot — can't add to this run (working ${workableParity} stations). Finish or Abandon first.`
                 );
                 return;
             }
@@ -574,13 +598,32 @@
     {@const answerable = cq !== null && canAnswer}
     {@const queued = toMe !== null && ft8PileupStack.items.some((x) => x.call === lineCall)}
     {@const bearing = lineGrid && myGrid ? pathInfo(myGrid, lineGrid)?.shortPathBearing : undefined}
+    {@const parity = slotParity(d.startUtc)}
+    <!-- A station calling us on the wrong parity can't be added to the current pile-up
+         run (it transmits when we do); mute it so it reads as "not for this run". -->
+    {@const wrongForQueue =
+        toMe !== null && workableParity !== '' && parity !== '' && parity !== workableParity}
     <!-- A station calling US (toMe) gets a distinct amber tint so it stands out from
          band chatter. The row is ALWAYS clickable: Ctrl/Cmd+click adds it to the pile-
          up stack (any state — pure capture), plain click works it now (when armed+idle).
          A ✓ marks one already on the stack. -->
-    <li class="flex gap-2 whitespace-nowrap {toMe ? 'rounded bg-amber-50' : ''}">
+    <li
+        class="flex gap-2 whitespace-nowrap {toMe ? 'rounded bg-amber-50' : ''} {wrongForQueue
+            ? 'opacity-50'
+            : ''}"
+    >
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
         <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>
+        <!-- Slot parity (even/odd) — the label that makes the workable set legible:
+             even=:00/:30, odd=:15/:45. Distinct colours so it scans at a glance. -->
+        <span
+            class="w-3 text-center text-[10px] font-semibold {parity === 'even'
+                ? 'text-sky-600'
+                : parity === 'odd'
+                  ? 'text-purple-600'
+                  : 'text-transparent'}"
+            title={parity ? `${parity} slot` : ''}>{parity ? parity[0].toUpperCase() : '·'}</span
+        >
         <span class="w-10 text-right text-indigo-600" title="Beam heading (short path)"
             >{bearing !== undefined
                 ? `${Math.round(bearing).toString().padStart(3, '0')}°`
@@ -602,9 +645,11 @@
                 type="button"
                 class="truncate text-left font-medium cursor-pointer hover:underline"
                 style:color={configState.ft8Display.highlightCalling}
-                title={canAnswer
-                    ? `Work ${lineCall} now · Ctrl+click to add to the pile-up stack`
-                    : `${lineCall} is calling you · Ctrl+click to add to the pile-up stack`}
+                title={wrongForQueue
+                    ? `${lineCall} is on the ${parity} slot — wrong parity for this ${workableParity} run; can't add to the pile-up`
+                    : canAnswer
+                      ? `Work ${lineCall} now · Ctrl+click to add to the pile-up stack`
+                      : `${lineCall} is calling you · Ctrl+click to add to the pile-up stack`}
                 onclick={(e) => onCallerClick(e, d)}>{d.text}</button
             >
         {:else}

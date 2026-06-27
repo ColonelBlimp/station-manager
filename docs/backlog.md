@@ -102,7 +102,14 @@ when it ships — don't let this rot into a graveyard.
   clickable in Band Activity". Touches `internal/bridge` (ownership/lease), the rig command
   handler (reject/queue non-owner writes), and all three SPAs (lock indicator + take-over).
 
-- **FT8 pile-up stack mixes odd/even parities — unworkable + confusing.** Filed 2026-06-27
+- ~~**FT8 pile-up stack mixes odd/even parities — unworkable + confusing.**~~ **SHIPPED
+  2026-06-27.** The daemon now exposes the session's RX parity (`QsoStatus.their_period`
+  on the `ft8-qso` SSE); the SPA derives each decode's parity via `utils/ft8Parity.ts`
+  `slotParity` (`(unix/15)%2`, tested), and `Ft8Panel` computes the run's `workableParity`
+  (RX parity when a contact is live, else the queue head's parity). ctrl+click enqueue is
+  blocked for a wrong-parity decode (info toast with the reason); wrong-parity calling-you
+  rows are muted (opacity-50) with an explanatory title; the pile-up drawer header shows
+  the run parity. Original report below for reference. Filed 2026-06-27
   (operator confirmed as a real bug during a live pile-up). FT8 is half-duplex on a 15s
   two-parity grid: every station you can work in one run must sit on the parity OPPOSITE
   your TX (you're deaf to your own parity mid-transmit), and a single TX parity cannot
@@ -864,7 +871,13 @@ when it ships — don't let this rot into a graveyard.
   The reference app is a UX guide, not a port (it's Wails + page-number paging; SM is
   HTTP + cursor paging + its own utils/tokens).
 
-- **FT8 slot parity (odd/even) is never labelled in the UI.** Filed 2026-06-27. The
+- ~~**FT8 slot parity (odd/even) is never labelled in the UI.**~~ **SHIPPED 2026-06-27**
+  (with the mixed-parity fix above — they shipped together). Band Activity rows now carry an
+  even/odd badge (E sky / O purple, derived from `slotUtc` via `utils/ft8Parity.ts`), and the
+  pile-up drawer header shows the run's parity. The "current TX parity readout" idea is
+  effectively covered by the drawer's run-parity tag + the per-row badges; a dedicated
+  session readout can be revisited if it's still wanted after on-air evaluation. Original
+  note below. Filed 2026-06-27. The
   operator has to read parity off the decode's UTC seconds (SM convention, grounded in
   `scheduler.go`/`caller_sequencer.go`: `(unix/15) % 2 == 0 → even`; on the clock,
   **:00/:30 = even, :15/:45 = odd**, = WSJT-X "Tx even/1st"). Nothing surfaces it —

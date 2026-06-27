@@ -100,6 +100,12 @@ type QsoStatus struct {
 	// us. The SPA fills the ladder's <RST> placeholders from these.
 	OurReport   string `json:"our_report,omitempty"`
 	TheirReport string `json:"their_report,omitempty"`
+	// TheirPeriod — the FT8 slot parity ("even"|"odd") of the slots we PROCESS, i.e.
+	// the operator's RX parity (the worked/answered station transmits in these slots).
+	// The SPA uses it as the single workable parity for the pile-up queue: a station
+	// can only be worked next if it shares this parity, so wrong-parity decodes are
+	// blocked from the queue. Empty when idle.
+	TheirPeriod string `json:"their_period,omitempty"`
 }
 
 // CompletedQso is captured when an exchange finishes (73 sent) — the data e4 maps
@@ -562,6 +568,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			State:       s.ex.State.label(),
 			NextMessage: msg,
 			Repeats:     s.repeats,
+			TheirPeriod: s.theirPeriod,
 		}
 		// Advertise the cap only on the rungs it governs (everything but the one-shot
 		// 73), so the SPA's countdown shows iff max_repeats>0.
@@ -578,7 +585,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 	case seqCalling:
 		// Calling CQ: active from the first CQ. Until a station is being worked
 		// (caller != nil) the rung is "calling-cq" and the next message is the CQ.
-		st := QsoStatus{Active: true, Role: roleCaller, Repeats: s.repeats}
+		st := QsoStatus{Active: true, Role: roleCaller, Repeats: s.repeats, TheirPeriod: s.theirPeriod}
 		if s.caller != nil {
 			msg, _ := s.caller.TxMessage()
 			st.TheirCall = s.caller.TheirCall
@@ -617,6 +624,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			State:       s.caller.State.label(),
 			NextMessage: msg,
 			Repeats:     s.repeats,
+			TheirPeriod: s.theirPeriod,
 		}
 		if s.caller.State != cqRogering {
 			st.MaxRepeats = s.maxRepeats

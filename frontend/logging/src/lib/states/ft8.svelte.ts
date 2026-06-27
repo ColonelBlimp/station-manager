@@ -108,6 +108,11 @@ export interface Ft8QsoStatus {
     // fills its <RST> placeholders from these.
     ourReport: string;
     theirReport: string;
+    // theirPeriod — the FT8 slot parity ('even'|'odd') of the slots we PROCESS, i.e.
+    // the operator's RX parity (the worked station transmits in these). The single
+    // workable parity for the pile-up: only same-parity stations can be queued/worked
+    // next. '' when idle.
+    theirPeriod: string;
 }
 
 const emptyQsoStatus = (): Ft8QsoStatus => ({
@@ -121,6 +126,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     maxRepeats: 0,
     ourReport: '',
     theirReport: '',
+    theirPeriod: '',
 });
 
 /**
@@ -477,6 +483,7 @@ function openSource(): void {
                 max_repeats: number;
                 our_report: string;
                 their_report: string;
+                their_period: string;
             }>;
             ft8State.qso = {
                 active: p.active ?? false,
@@ -489,6 +496,7 @@ function openSource(): void {
                 maxRepeats: p.max_repeats ?? 0,
                 ourReport: p.our_report ?? '',
                 theirReport: p.their_report ?? '',
+                theirPeriod: p.their_period ?? '',
             };
         } catch (e) {
             console.warn('[ft8] qso JSON parse failed', e);

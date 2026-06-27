@@ -289,6 +289,27 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   station **already** on the stack only refreshes its data and does **not** un-pause —
   so once you've hit Abandon you stay paused until you explicitly Resume or stack a
   caller you haven't queued yet.
+
+  **Single-parity rule (2026-06-27).** FT8 is half-duplex on a two-parity 15 s grid, so
+  every station you can work in one run must sit on **your RX parity** — the slot parity
+  you receive on (= opposite your TX = the parity of the CQ you answered). The pile-up is
+  therefore **single-parity**: Ctrl/Cmd+click only enqueues a decode whose slot parity
+  matches the run's **workable parity** (the daemon's `their_period` while a contact is
+  live, else the queue head's parity); a wrong-parity calling-you row is **muted**
+  (greyed) with an explanatory title, and Ctrl+click on it shows an info toast instead of
+  queuing an entry that could never be worked on this run. Band Activity rows carry an
+  **even/odd badge** (E sky / O purple, derived SPA-side from the slot time via
+  `utils/ft8Parity.ts`; even = :00/:30, odd = :15/:45 UTC), and the pile-up drawer header
+  shows the run's parity (`Pile-up (N) · odd`). Parity comes off the daemon's
+  `their_period` field on the `ft8-qso` SSE.
+
+  **Queueing is disabled while *calling* CQ (2026-06-27).** During a Call-CQ session the
+  daemon's auto-pick is the single "who's next" engine, so Ctrl/Cmd+click does **not**
+  enqueue — it shows a "Calling CQ — pile-up queue disabled" toast. (Letting it enqueue
+  built a second, competing controller: a non-empty stack lit the **Next** button, whose
+  click abandoned the CQ run and silently handed the rig to the pile-up drain, which never
+  resumed CQ.) **Abandon** is the one way to stop a Call-CQ run. Queueing stays available
+  in answer-a-CQ / work-a-caller (role ≠ caller), where it's the whole point.
 - **Clear Offsets** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
   select it as the TX base offset**; the selected chip is marked with a **darker
@@ -337,6 +358,13 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   `ft8-qso` payload **only on the rungs it governs**, so the countdown shows iff
   `max_repeats > 0` — it's absent on the uncapped calling-CQ rung and the one-shot
   73/RR73.
+
+  **ON AIR indicator (2026-06-27).** The same always-visible banner row shows a red,
+  pulsing **`● ON AIR`** pill whenever the rig is keyed for an FT8 transmission, in any
+  role (calling CQ, answering, working a caller) — it tracks `ft8State.tx.transmitting`,
+  so it lights for the ~12.6 s of each TX slot and clears during the RX half. Being in
+  the upper section it shows on **every** lower tab (Occupancy / Operate / Session /
+  Settings), so "am I transmitting?" is answerable from anywhere in the FT8 view.
 - **Lower section — tabs** (same tablist pattern + `.tab-item` class as InfoPanel,
   full WAI-ARIA keyboard nav; each tab carries a Heroicon to read alike with the
   Phone/CW InfoPanel tabs): **Occupancy** (chart-bar — the TX Offset strip below),
@@ -381,7 +409,12 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   it aborts the current exchange but, unlike Abandon, does **not** pause the drain, so it
   jumps straight to the next queued caller (the operator's "this one's a no-show, move
   on" shortcut — ditch a station after a rung or two instead of waiting out the full
-  `max_repeats` backstop, which it leaves untouched); and a **message ladder**
+  `max_repeats` backstop, which it leaves untouched). **Next is disabled while
+  transmitting** (2026-06-27) — it acts only in the RX half of the cycle, so the drop
+  lands cleanly and the next caller opens on the following TX slot; clicking it mid-slot
+  used to abandon the contact while the current slot played out *and* then key the next
+  caller, running one station's message tail straight into a transmission for a different
+  callsign. And a **message ladder**
   rendering the exchange one slot per row — our TX messages interleaved with the
   remote's expected responses (`rx`), unknowns as placeholders `<DX>` / `<GRID>` /
   `<RST>` — the **reports fill in live** from `qso.our_report`/`their_report` once the
@@ -392,7 +425,9 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   (grid → R-report → 73); **Call CQ** (`caller`, ADR 0033) starts a *sequenced*
   session — the daemon calls CQ and auto-works the answerers (per
   `ft8.tx.caller_answer_mode`, default `auto_first`), the caller ladder highlights the
-  real rung (`calling-cq → reporting → rogering`), and the button reads "Calling CQ…".
+  real rung (`calling-cq → reporting → rogering`), and the button reads "Calling CQ…"
+  **and turns red** while the run is live (2026-06-27 — an unmistakable "I'm running CQ"
+  cue, distinct from the per-slot ON AIR pulse below).
   When idle the caller ladder shows as a static preview. **Working a caller** (`worker`,
   ADR 0033 "work a caller") shows a third ladder: the caller-style exchange with **no CQ
   row** — the opening is the station's call to *us* (their actual grid, from
@@ -545,10 +580,12 @@ subscriber would duplicate a session-list row):
   occupied:[{low_hz, high_hz, source, level}], suggested:[hz…] }`
 - **`ft8-tx`** → `TxState{ armed, transmitting, message, offset_hz, error }` — the
   transmit arm/in-flight status (step e1).
-- **`ft8-qso`** → `QsoStatus{ active, role, their_call, state, next_message, repeats,
-  our_report, their_report }` — `our_report`/`their_report` are the exchanged signal
-  reports (e.g. `-12`), empty until known, used to fill the ladder's `<RST>` slots —
-  the manual sequencer's active contact (step e3).
+- **`ft8-qso`** → `QsoStatus{ active, role, their_call, their_grid, state, next_message,
+  repeats, max_repeats, our_report, their_report, their_period }` —
+  `our_report`/`their_report` are the exchanged signal reports (e.g. `-12`), empty until
+  known, used to fill the ladder's `<RST>` slots; **`their_period`** ("even"|"odd", empty
+  when idle) is the slots we process = the operator's RX parity, used by the SPA as the
+  pile-up's single workable parity — the manual sequencer's active contact (step e3).
 - **`ft8-logged`** → `LoggedQso{ uuid, callsign, freq_hz, band, rst_sent, rst_rcvd,
   mode, time_on, qso_date, gridsquare, country }` — a completed exchange the daemon
   just stored (step e4), so the SPA adds it to its session list. Emitted by the e4 sink

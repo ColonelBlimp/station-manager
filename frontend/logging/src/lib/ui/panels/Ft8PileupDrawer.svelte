@@ -3,6 +3,7 @@
     import { ft8State } from '../../states/ft8.svelte';
     import { abandonFt8Qso } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
+    import { slotParity } from '../../utils/ft8Parity';
 
     /*
         FT8 pile-up drawer — the operator-curated FIFO of stations calling you,
@@ -31,6 +32,11 @@
         the drain + clears — no daemon call.
     */
     const canAbandon = $derived(ft8State.tx.armed && ft8State.qso.active);
+    // The whole queue is single-parity (enforced at enqueue), so its parity is the
+    // head's. Shown in the header to reinforce "this is the {even|odd} run".
+    const runParity = $derived(
+        ft8PileupStack.items.length > 0 ? slotParity(ft8PileupStack.items[0].slotUtc) : ''
+    );
     let closing = $state(false);
 
     async function handleClose(): Promise<void> {
@@ -53,7 +59,8 @@
     <div class="w-33 max-h-166 overflow-y-auto rounded-xl border border-line-soft px-3">
         <div class="flex flex-row items-center justify-between">
             <h2 class="mt-2.5 text-xs font-semibold uppercase tracking-tight text-orange-600">
-                Pile-up ({ft8PileupStack.count}){#if !ft8PileupStack.enabled}&nbsp;· paused{/if}
+                Pile-up ({ft8PileupStack.count}){#if runParity}&nbsp;· {runParity}{/if}{#if !ft8PileupStack.enabled}&nbsp;·
+                    paused{/if}
             </h2>
             <div class="flex items-center">
                 {#if !ft8PileupStack.enabled}
