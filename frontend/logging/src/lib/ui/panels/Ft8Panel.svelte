@@ -223,9 +223,25 @@
         return head ? slotParity(head.slotUtc) : '';
     });
 
+    // Same-session dupe (contest-style): true if we've already logged this call on the
+    // current band THIS session. sessionQsosState is the per-tab session log (Phone/CW
+    // + FT8). Band-scoped — working a station you have in the DURABLE logbook (a prior
+    // session) is fine; only a repeat WITHIN this session is the dupe we block. Cross-
+    // band the same call is not a dupe (you'd want them on the new band).
+    function workedThisSession(call: string | null): boolean {
+        return (
+            call !== null &&
+            sessionQsosState.items.some((q) => q.callsign === call && q.band === band)
+        );
+    }
+
     async function answerCq(d: DecodeEntry): Promise<void> {
         const cq = parseCq(d.text);
         if (!cq || !canAnswer || ft8State.selectedOffset === null) return;
+        if (workedThisSession(cq.call)) {
+            toasts.info(`Already worked ${cq.call} this session.`);
+            return;
+        }
         // opFreq is the dial frequency in Hz (selected VFO); the daemon logs the
         // QSO at the dial frequency (FT8 convention — not dial+offset), so it
         // needs the dial freq in MHz.
@@ -245,6 +261,10 @@
     async function workCaller(d: DecodeEntry): Promise<void> {
         const toMe = parseDirectedToMe(d.text, myCall);
         if (!toMe || !canAnswer || ft8State.selectedOffset === null) return;
+        if (workedThisSession(toMe.call)) {
+            toasts.info(`Already worked ${toMe.call} this session.`);
+            return;
+        }
         const out = await startFt8WorkCaller(
             toMe.call,
             toMe.grid,
@@ -284,6 +304,19 @@
                 toasts.info(
                     'Calling CQ — pile-up queue disabled. Abandon to work stations by hand.'
                 );
+                return;
+            }
+            const toMe = parseDirectedToMe(d.text, myCall);
+            // The station we're working right now was just dequeued — its grid-opening
+            // re-calls still decode, but re-queuing the one in flight is never wanted.
+            if (toMe && ft8State.qso.active && toMe.call === ft8State.qso.theirCall) {
+                toasts.info(`Already working ${toMe.call}.`);
+                return;
+            }
+            // Same-session dupe: don't queue a station already worked on this band this
+            // session (contest-dupe rule). A prior-session logbook contact is fine.
+            if (toMe && workedThisSession(toMe.call)) {
+                toasts.info(`Already worked ${toMe.call} this session.`);
                 return;
             }
             // Single-parity rule: a station can only join the pile-up if it shares the
@@ -599,6 +632,14 @@
     {@const queued = toMe !== null && ft8PileupStack.items.some((x) => x.call === lineCall)}
     {@const bearing = lineGrid && myGrid ? pathInfo(myGrid, lineGrid)?.shortPathBearing : undefined}
     {@const parity = slotParity(d.startUtc)}
+    <!-- The station we're working THIS exchange: any decode mentioning their call
+         (their re-CQ, grid, or R-report). Highlighted so it reads as the live contact,
+         not an available caller — and re-queuing it is blocked (onCallerClick). -->
+    {@const isWorking = workingCall !== '' && d.text.split(' ').includes(workingCall)}
+    <!-- Same-session dupe: already worked this call on this band this session. Greyed
+         (contest-dupe style) and click-blocked in answerCq/workCaller/enqueue. Not the
+         live contact (that's isWorking) and not a prior-session logbook contact (fine). -->
+    {@const sessionDupe = !isWorking && lineCall !== null && workedThisSession(lineCall)}
     <!-- A station calling us on the wrong parity can't be added to the current pile-up
          run (it transmits when we do); mute it so it reads as "not for this run". -->
     {@const wrongForQueue =
@@ -608,9 +649,11 @@
          up stack (any state — pure capture), plain click works it now (when armed+idle).
          A ✓ marks one already on the stack. -->
     <li
-        class="flex gap-2 whitespace-nowrap {toMe ? 'rounded bg-amber-50' : ''} {wrongForQueue
-            ? 'opacity-50'
-            : ''}"
+        class="flex gap-2 whitespace-nowrap {isWorking
+            ? 'rounded bg-indigo-50 ring-1 ring-indigo-200'
+            : toMe
+              ? 'rounded bg-amber-50'
+              : ''} {sessionDupe || wrongForQueue ? 'opacity-50' : ''}"
     >
         <span class="w-7 text-right text-gray-500">{formatSnr(d.snr)}</span>
         <span class="w-10 text-right text-gray-500">{Math.round(d.freqHz)}</span>

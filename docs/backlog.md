@@ -927,6 +927,23 @@ when it ships — don't let this rot into a graveyard.
   gating. Related: the multi-tab rig-lock item (Bugs) shares the "which surface is doing
   what" question.
 
+- **FT8 same-session dupe rule — extend to the daemon auto-workers.** Filed 2026-06-27.
+  The SPA now blocks working/queuing a **same-session dupe** (a call already logged on the
+  current band this session — contest-dupe style) from **Band Activity clicks**
+  (`Ft8Panel` `workedThisSession`, gating `answerCq`/`workCaller`/enqueue; greyed rows).
+  But the rule only covers operator clicks — the **daemon auto-workers don't honour it**:
+  Call-CQ `auto_first` (`caller_sequencer.go` answerer-pick) and the pile-up drain could
+  still work a station already logged this session. To make the "no same-session dupes"
+  rule airtight, the daemon needs a session-dupe notion too — which is awkward because
+  **the session is an SPA concept** (`sessionQsosState`, per-tab), not a daemon one (the
+  daemon has no session_id, by design — see the session-scope memory). Options to weigh:
+  (a) the SPA passes a "skip these calls" set / a since-timestamp to the daemon on
+  `cq/start`; (b) the daemon dedupes against *today's* logbook rows on this band+mode (a
+  proxy for "this session" — simpler, but not exactly session-scoped); (c) leave the
+  auto-workers as-is and accept that hands-off modes may re-work a session dupe (document
+  it). Decide the model before building. Until then, the SPA-click guard is the protection
+  and the auto-workers are a known gap (noted in `docs/ft8.md`).
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

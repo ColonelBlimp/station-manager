@@ -310,6 +310,21 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   click abandoned the CQ run and silently handed the rig to the pile-up drain, which never
   resumed CQ.) **Abandon** is the one way to stop a Call-CQ run. Queueing stays available
   in answer-a-CQ / work-a-caller (role ≠ caller), where it's the whole point.
+
+  **Currently-working station + same-session dupes (2026-06-27).** The station you're
+  working *this exchange* (`qso.their_call` while active) is **highlighted** in Band
+  Activity (indigo row + ring — any decode mentioning their call) so it reads as the live
+  contact, not an available caller, and **can't be re-queued** (its grid-opening re-calls
+  still decode, but Ctrl+click shows "Already working <call>" — it was just dequeued when
+  the contact started). Separately, a **same-session dupe** — a call already logged on the
+  **current band this session** (`sessionQsosState`, contest-dupe style) — is **greyed
+  out** and **blocked** from being worked or queued (answer/work/enqueue all short-circuit
+  with "Already worked <call> this session"). This is **session-scoped on purpose**:
+  re-working a station you hold in the **durable logbook from a *prior* session is fine**
+  (left freely workable, only the existing worked-before *tint* applies); only a repeat
+  **within this session** is the dupe. Cross-band is not a dupe (you'd want them on the new
+  band). NB the guard is on the **SPA Band Activity clicks** only — the daemon auto-workers
+  (Call-CQ `auto_first`, the pile-up drain) don't yet honour the session-dupe rule (backlog).
 - **Clear Offsets** — the daemon's ranked clear base offsets, shown
   frequency-sorted with **★** marking the daemon's top pick. **Click a chip to
   select it as the TX base offset**; the selected chip is marked with a **darker

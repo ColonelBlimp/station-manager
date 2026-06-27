@@ -43,3 +43,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-27] big pile-up, lots of callsigns in the plie-up stack, if a station stops listening (or just no longer hears us) it takes 5 attempts before moving to the Next - it would be useful to have an override field (number) to the right of the Next button to adjust down the number of attemps to stop wasting time on stations which are not responding.
 - [2026-06-27] it would be good to have some form of visual indicator when in TX for ft8
 - [2026-06-27] can add the station currently being worked (ft8) to the pile-up list
+- [2026-06-27] I am thinking that ft8 should only hold the mic when TX is enabled (via the Enable TX button) and it should be released when that button is toggled, OR the Op shifts to Phone/CW?
