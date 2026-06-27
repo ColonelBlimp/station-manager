@@ -217,10 +217,15 @@
     // the daemon's RX parity (qso.theirPeriod). Otherwise the queue defines its own
     // parity from its head, so it stays single-parity once anything is in it. '' means
     // no constraint yet (idle + empty queue): the first enqueue sets the run's parity.
+    // A run is live while stations are queued OR a contact is in flight. Only then does
+    // a "workable parity" constrain new adds / grey wrong-parity rows; idle + empty queue
+    // means no run, so any parity may start the next one.
+    const runActive = $derived(ft8PileupStack.items.length > 0 || ft8State.qso.active);
     const workableParity = $derived.by(() => {
-        if (ft8State.qso.active && ft8State.qso.theirPeriod) return ft8State.qso.theirPeriod;
-        const head = ft8PileupStack.items[0];
-        return head ? slotParity(head.slotUtc) : '';
+        if (!runActive) return '';
+        // The queue's locked parity is the stable anchor (survives the drain emptying the
+        // queue). Before anything is queued, fall back to the live contact's RX parity.
+        return ft8PileupStack.lockedParity || (ft8State.qso.active ? ft8State.qso.theirPeriod : '');
     });
 
     // Same-session dupe (contest-style): true if we've already logged this call on the
@@ -284,6 +289,29 @@
     function enqueueCaller(d: DecodeEntry): void {
         const toMe = parseDirectedToMe(d.text, myCall);
         if (!toMe) return;
+        const parity = slotParity(d.startUtc);
+        const already = ft8PileupStack.items.some((x) => x.call === toMe.call);
+        // New run? If the queue is empty AND no contact is in flight, the previous run is
+        // over (the agreed release rule), so unlock — the first add below sets a fresh
+        // parity. While a run is live (stations queued or one being worked) the lock holds
+        // across the drain emptying the queue, which is what makes the rule actually bite.
+        if (!already && ft8PileupStack.items.length === 0 && !ft8State.qso.active) {
+            ft8PileupStack.clearLock();
+        }
+        // Single-parity rule: reject a wrong-parity add (re-adds of an already-queued
+        // station are fine — same call, already the right parity). Wrong-parity callers
+        // transmit when we do, so they can't be worked on this run.
+        if (
+            !already &&
+            ft8PileupStack.lockedParity !== '' &&
+            parity !== '' &&
+            parity !== ft8PileupStack.lockedParity
+        ) {
+            toasts.info(
+                `${parity} slot — can't add to this ${ft8PileupStack.lockedParity} run. Finish or Abandon first.`
+            );
+            return;
+        }
         const added = ft8PileupStack.push({
             call: toMe.call,
             grid: toMe.grid,
@@ -319,17 +347,8 @@
                 toasts.info(`Already worked ${toMe.call} this session.`);
                 return;
             }
-            // Single-parity rule: a station can only join the pile-up if it shares the
-            // run's workable parity (your RX parity). Wrong-parity stations transmit when
-            // you do — unworkable on this run — so block with the reason rather than queue
-            // an entry that would stall the drain.
-            const p = slotParity(d.startUtc);
-            if (workableParity !== '' && p !== '' && p !== workableParity) {
-                toasts.info(
-                    `${p} slot — can't add to this run (working ${workableParity} stations). Finish or Abandon first.`
-                );
-                return;
-            }
+            // The single-parity rule (reject a wrong-parity add) lives in enqueueCaller,
+            // against the queue's stable locked parity.
             enqueueCaller(d);
             return;
         }
@@ -736,7 +755,8 @@
     >
         <span class="w-7 text-right">dB</span>
         <span class="w-9 text-right">Hz</span>
-        <span class="w-4 text-center" title="Slot parity — even (:00/:30) / odd (:15/:45)">E/O</span>
+        <span class="w-4 text-center" title="Slot parity — even (:00/:30) / odd (:15/:45)">E/O</span
+        >
         <span class="w-10 text-right">Beam</span>
         <span class="flex-1 text-left">Message</span>
     </div>
@@ -784,12 +804,14 @@
             {/if}
         </div>
         {#if transmitting}
-        <div
-            class="mx-6 mt-4 font-semibold rounded bg-red-600 px-2 py-0.5 text-white animate-pulse"
-            title={ft8State.tx.message
+            <div
+                class="mx-6 mt-4 font-semibold rounded bg-red-600 px-2 py-0.5 text-white animate-pulse"
+                title={ft8State.tx.message
                     ? `On air — transmitting ${ft8State.tx.message}`
                     : 'On air — transmitting'}
-        >ON AIR</div>
+            >
+                ON AIR
+            </div>
         {/if}
     </div>
     <div class="flex flex-col text-center w-90 mr-3">
@@ -843,7 +865,9 @@
             path={txPath}
             onPathChange={onTxPathChange}
         />
-        <div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1">
+        <div
+            class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1"
+        >
             {#if workingCall}
                 <div
                     class="rounded px-2 py-0.5 {workingBannerClass}"

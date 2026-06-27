@@ -293,15 +293,23 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   **Single-parity rule (2026-06-27).** FT8 is half-duplex on a two-parity 15 s grid, so
   every station you can work in one run must sit on **your RX parity** — the slot parity
   you receive on (= opposite your TX = the parity of the CQ you answered). The pile-up is
-  therefore **single-parity**: Ctrl/Cmd+click only enqueues a decode whose slot parity
-  matches the run's **workable parity** (the daemon's `their_period` while a contact is
-  live, else the queue head's parity); a wrong-parity calling-you row is **muted**
-  (greyed) with an explanatory title, and Ctrl+click on it shows an info toast instead of
-  queuing an entry that could never be worked on this run. Band Activity rows carry an
-  **even/odd badge** (E sky / O purple, derived SPA-side from the slot time via
-  `utils/ft8Parity.ts`; even = :00/:30, odd = :15/:45 UTC), and the pile-up drawer header
-  shows the run's parity (`Pile-up (N) · odd`). Parity comes off the daemon's
-  `their_period` field on the `ft8-qso` SSE.
+  therefore **single-parity**, enforced against a **stable run-parity lock**
+  (`ft8PileupStack.lockedParity`): the FIRST station added fixes the run's parity, and the
+  lock is **held across the drain emptying the queue** between contacts — so Ctrl/Cmd+click
+  rejects any later add whose slot parity differs (info toast + the wrong-parity calling-you
+  row is **muted/greyed** with a reason). The lock **releases** when a fresh run starts —
+  detected lazily at enqueue time: queue empty **and** no contact active means the previous
+  run is over, so the next add relocks to its parity — and on Abandon/Clear. (Earlier this
+  anchored on the live queue *head*, which the drain kept clearing, so the rule almost never
+  bit — the lock fix is what makes it stick.) Band Activity rows carry an **even/odd badge**
+  (E sky / O purple, derived SPA-side from the slot time via `utils/ft8Parity.ts`; even =
+  :00/:30, odd = :15/:45 UTC), and the pile-up drawer header shows the run's parity
+  (`Pile-up (N) · odd`). **Expected, not a bug:** while *working* a pile-up you transmit on
+  one parity and are therefore **deaf to it**, so Band Activity only ever shows your RX
+  parity for the whole run (all-E if you're replying on odd) — the other parity only appears
+  when you're not transmitting (idle gaps), which is the only time a wrong-parity add is even
+  possible. The daemon's `their_period` (on the `ft8-qso` SSE) seeds the workable parity
+  before anything is queued; once a station is queued the SPA lock is authoritative.
 
   **Queueing is disabled while *calling* CQ (2026-06-27).** During a Call-CQ session the
   daemon's auto-pick is the single "who's next" engine, so Ctrl/Cmd+click does **not**

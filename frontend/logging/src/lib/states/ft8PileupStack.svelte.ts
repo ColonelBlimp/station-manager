@@ -19,7 +19,17 @@
  * grid/SNR/slot in place (a later decode is the better data to work from) without
  * changing its FIFO position. Only ctrl+click enqueues — nothing auto-pushes — so
  * dedup mostly guards an accidental double-add.
+ *
+ * Single-parity run: the queue carries `lockedParity` — the slot parity of the run,
+ * fixed by the FIRST station added and held until the run ends (the operator clears,
+ * or starts a fresh run when the queue is empty + no contact active — see the panel's
+ * enqueue path). The enforcement (reject a wrong-parity add) lives in the panel so it
+ * can explain itself; the stack just owns the locked value so it survives the drain
+ * emptying the queue between adds (the bug that let mixed parities in: the old anchor
+ * was the live queue head, which the drain kept clearing).
  */
+import { slotParity, type SlotParity } from '../utils/ft8Parity';
+
 export interface PileupEntry {
     call: string;
     grid: string;
@@ -44,6 +54,14 @@ class Ft8PileupStack {
     enabled: boolean = $state(true);
 
     /**
+     * The run's locked slot parity ('' = no run / unlocked). Set by the first push of a
+     * run; the panel rejects any later add whose parity differs, and clears it (clearLock)
+     * when a fresh run starts (queue empty + no contact) or on clear()/Clear-all. Held
+     * across the drain emptying the queue mid-run so the lock can't evaporate between adds.
+     */
+    lockedParity: SlotParity | '' = $state('');
+
+    /**
      * Enqueue a caller at the tail. Normalises the call (trim + upper); silent no-op
      * on empty. Dedup by call: an already-queued station's grid/SNR/slot refresh in
      * place (newer decode = better data) without reordering.
@@ -63,6 +81,12 @@ class Ft8PileupStack {
             return false;
         }
         this.items = [...this.items, e];
+        // First station of a run fixes the run's parity (if not already locked). The
+        // panel enforces the lock on subsequent adds; this just records it.
+        if (this.lockedParity === '') {
+            const p = slotParity(e.slotUtc);
+            if (p !== '') this.lockedParity = p;
+        }
         return true;
     }
 
@@ -98,9 +122,16 @@ class Ft8PileupStack {
         this.items = next;
     }
 
-    /** Empty the queue — the drawer's Clear-all. */
+    /** Empty the queue — the drawer's Clear-all. Also unlocks the run parity. */
     clear(): void {
         this.items = [];
+        this.lockedParity = '';
+    }
+
+    /** Unlock the run parity without touching the queue — used when a fresh run starts
+     *  (queue empty + no contact active), so the next add can set a new parity. */
+    clearLock(): void {
+        this.lockedParity = '';
     }
 
     /** Pause auto-drain (Abandon) — the queue is kept. */

@@ -45,3 +45,7 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-27] can add the station currently being worked (ft8) to the pile-up list
 - ~~[2026-06-27] I am thinking that ft8 should only hold the mic when TX is enabled (via the Enable TX button) and it should be released when that button is toggled, OR the Op shifts to Phone/CW?~~ **DECIDED — leave as-is (2026-06-27).** Triaged: gating the mic on Enable-TX would couple RX to TX-arm (no decodes / empty Band Activity until armed), but the operator wants to **monitor the band (decode) without arming TX** — so the current view-open capture model (mic held while the FT8 view is open, CAT-gated, released on shift to Phone/CW) stays. The Enable-TX-as-gate model is rejected; see the Monitor-toggle backlog discussion-point.
 - [2026-06-27] the O/E is fine, but there is no header for it so the header's label are not aligned properly
+- [2026-06-27] heading of pile-up . even needs to be in one line not wrapped
+- [2026-06-27] can add to the pile-up queue a station already in the queue
+- [2026-06-27] if a station is in the pile-up queue, it can't be double-added, but it should not be allowed to be ctrl+click'ed - or remove the hover
+- [2026-06-27] still I can add calling stations from both odd and even

@@ -98,4 +98,33 @@ describe('ft8PileupStack', () => {
         ft8PileupStack.resume();
         expect(ft8PileupStack.enabled).toBe(true);
     });
+
+    // Run parity lock — the stable anchor the panel enforces against. The stack only
+    // SETS it (from the first add) and clears it; the wrong-parity rejection is the
+    // panel's job (it owns the toast + the new-run detection).
+    const ODD = '2026-06-17T14:30:15Z'; // :15 → odd
+    const EVEN = '2026-06-17T14:30:00Z'; // :00 → even
+
+    it('first push locks the run parity; later pushes do not change it', () => {
+        expect(ft8PileupStack.lockedParity).toBe('');
+        ft8PileupStack.push(entry('K1ABC', -10, 'JO21', EVEN));
+        expect(ft8PileupStack.lockedParity).toBe('even');
+        // A later add (even an odd-slot one — the stack doesn't reject) leaves the lock.
+        ft8PileupStack.push(entry('9A4ZM', -10, 'JO21', ODD));
+        expect(ft8PileupStack.lockedParity).toBe('even');
+    });
+
+    it('clear() and clearLock() both unlock; clearLock keeps the queue', () => {
+        ft8PileupStack.push(entry('K1ABC', -10, 'JO21', ODD));
+        expect(ft8PileupStack.lockedParity).toBe('odd');
+        ft8PileupStack.clearLock();
+        expect(ft8PileupStack.lockedParity).toBe('');
+        expect(ft8PileupStack.items.length).toBe(1); // queue untouched
+        // Re-locks on the next add.
+        ft8PileupStack.push(entry('PA3KUS', -10, 'JO21', EVEN));
+        expect(ft8PileupStack.lockedParity).toBe('even');
+        ft8PileupStack.clear();
+        expect(ft8PileupStack.lockedParity).toBe('');
+        expect(ft8PileupStack.items).toEqual([]);
+    });
 });
