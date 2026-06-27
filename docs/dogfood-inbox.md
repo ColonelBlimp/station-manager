@@ -49,3 +49,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-27] can add to the pile-up queue a station already in the queue
 - [2026-06-27] if a station is in the pile-up queue, it can't be double-added, but it should not be allowed to be ctrl+click'ed - or remove the hover
 - [2026-06-27] still I can add calling stations from both odd and even
+- [2026-06-27] let's revisit the need for the E/O in the band activity now that the display lock to whatever parity you are TX'ing on
