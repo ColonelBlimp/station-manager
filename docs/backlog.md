@@ -892,6 +892,28 @@ when it ships — don't let this rot into a graveyard.
   resolved strategy instead of always taking the first match. Independent of `operator_pick`
   (which is whom-to-work-next *by hand* — parked); this only governs the *automatic* pick.
 
+- **FT8 Monitor/Listen on-off toggle — DISCUSSION POINT (not a committed build).** Filed
+  2026-06-27. Today FT8 audio capture is tied to the **FT8 view being open**: `Ft8Panel`'s
+  `onMount` calls `startFt8` → subscribes `/v1/ft8/events` → the daemon acquires the mic
+  (demand-driven, refcounted, ~5 s linger, CAT-gated). So as long as a tab sits on the FT8
+  operating mode — even backgrounded — the daemon holds the microphone and decodes every
+  slot. That's correct and WSJT-X-like (its receiver runs while the window is up), and a
+  2026-06-27 "why is the mic held?" turned out to be exactly this (an FT8 browser tab open
+  alongside a Phone/CW one — benign). The discussion: should capture instead be gated on an
+  explicit **Monitor/Listen** control the operator toggles, so the mic engages only when
+  they deliberately start listening, not merely because the view is on screen? Points to
+  weigh: (a) does Monitor *replace* the view-open trigger or *augment* it (view open but not
+  monitoring → no mic, no Band Activity)? (b) interaction with the existing demand-driven
+  refcount + CAT gate (Monitor would become the primary gate, subscriber-count secondary);
+  (c) what the FT8 view shows when not monitoring (empty Band Activity + a "Listening off"
+  state); (d) is Monitor per-tab UI state or daemon-owned (ties into the multi-tab
+  operating-lock item — two tabs, who's monitoring?); (e) is the current behaviour actually
+  a problem, or fine once the operator understands it (the trigger was a misunderstanding,
+  not a fault)? Decide the model before any build. Surfaces if pursued: `Ft8Panel` (gate
+  `startFt8`/subscription on a Monitor toggle), `ft8.svelte.ts`, possibly daemon capture
+  gating. Related: the multi-tab rig-lock item (Bugs) shares the "which surface is doing
+  what" question.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
