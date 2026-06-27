@@ -760,8 +760,8 @@
     >
 {/snippet}
 
-<div class="flex justify-center h-98 text-gray-500 space-x-3 mt-1">
-    <div class="flex flex-col text-center">
+<div class="flex h-98 text-gray-500 mt-1">
+    <div class="w-48 flex flex-col text-center">
         <h2 class="text-base font-semibold my-2">Main Freq</h2>
         <div class="flex flex-col place-items-center px-2 space-y-1">
             <div class="flex gap-1">{@render bandButton('160m')}{@render bandButton('80m')}</div>
@@ -783,8 +783,16 @@
                 <span class="text-amber-600">Waiting…</span>
             {/if}
         </div>
+        {#if transmitting}
+        <div
+            class="mx-6 mt-4 font-semibold rounded bg-red-600 px-2 py-0.5 text-white animate-pulse"
+            title={ft8State.tx.message
+                    ? `On air — transmitting ${ft8State.tx.message}`
+                    : 'On air — transmitting'}
+        >ON AIR</div>
+        {/if}
     </div>
-    <div class="flex flex-col text-center w-90">
+    <div class="flex flex-col text-center w-90 mr-3">
         <div class="my-2 flex items-center justify-center gap-1.5">
             <h2 class="text-base font-semibold m-0">Band Activity</h2>
             <Ft8FilterPopover />
@@ -835,19 +843,7 @@
             path={txPath}
             onPathChange={onTxPathChange}
         />
-        <div
-            class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1"
-        >
-            {#if transmitting}
-                <div
-                    class="flex items-center gap-x-1 rounded bg-red-600 px-2 py-0.5 text-white animate-pulse"
-                    title={ft8State.tx.message
-                        ? `On air — transmitting ${ft8State.tx.message}`
-                        : 'On air — transmitting'}
-                >
-                    <span aria-hidden="true">●</span> ON AIR
-                </div>
-            {/if}
+        <div class="flex flex-row gap-x-2 text-gray-700 text-sm font-semibold justify-center w-full h-6.5 mt-1">
             {#if workingCall}
                 <div
                     class="rounded px-2 py-0.5 {workingBannerClass}"
@@ -867,7 +863,7 @@
             {/if}
         </div>
     </div>
-    <div class="flex flex-col text-center w-21">
+    <div class="flex flex-col text-center w-34">
         <h2 class="pt-1.5 text-xs font-semibold my-2">Clear Offsets</h2>
         {#if sortedOffsets.length > 0}
             <div class="flex flex-col place-items-center px-2 space-y-1 overflow-y-scroll">
