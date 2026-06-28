@@ -42,7 +42,7 @@
 </script>
 
 <div class="flex px-2 py-4 text-sm ft8-info-panel-height text-gray-700">
-    <div class="flex flex-col w-60 h-34 border">
+    <div class="flex flex-col w-60 h-34">
         <h3 class="font-semibold text-gray-800">Band Activity</h3>
         <div class="flex mt-2">
             <label class="w-22 pt-0.5" for="max_rows">Max Rows</label>
@@ -75,7 +75,7 @@
             />
         </div>
     </div>
-    <div class="flex flex-col w-70 h-34 border">
+    <div class="flex flex-col w-70 h-34">
         <h3 class="font-semibold text-gray-800">Call CQ</h3>
         <div class="flex mt-2">
             <label class="w-24 pt-0.5" for="ans_order">Answer order</label>
