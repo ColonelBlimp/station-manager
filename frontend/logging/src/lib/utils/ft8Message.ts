@@ -47,6 +47,22 @@ export function parseCqCall(text: string): string | null {
 }
 
 /**
+ * isCqFd reports whether a CQ decode is an ARRL Field Day call — `CQ FD <call> <grid>`
+ * (the `FD` modifier appears before the callsign). Used to route the answer to the FD
+ * exchange (class/section) instead of the standard grid/report one. Mirrors the
+ * daemon's parseMessage FD detection so browser and daemon agree.
+ */
+export function isCqFd(text: string): boolean {
+    const toks = text.trim().toUpperCase().split(/\s+/);
+    if (toks.length < 2 || toks[0] !== 'CQ') return false;
+    for (let i = 1; i < toks.length; i++) {
+        if (toks[i] === 'FD') return true;
+        if (looksLikeCall(toks[i])) return false; // reached the call without an FD modifier
+    }
+    return false;
+}
+
+/**
  * parseCq returns the calling station's callsign AND grid from a CQ decode, or
  * null if the line is not an answerable CQ. The grid is the 4-char Maidenhead
  * token immediately after the call when present (`CQ K1ABC FN42` → FN42), else

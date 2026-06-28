@@ -2,6 +2,7 @@ package ft8
 
 import (
 	stderrors "errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,9 @@ var (
 	ErrNoOffset = stderrors.New("ft8: no TX offset selected")
 	// ErrNoCall: StartCallCq without an operator callsign.
 	ErrNoCall = stderrors.New("ft8: no operator callsign configured")
+	// ErrFdIdentityUnset: StartQsoFd without the operator's Field Day class+section
+	// (ft8.field_day) — we can't transmit an FD exchange without our own identity.
+	ErrFdIdentityUnset = stderrors.New("ft8: Field Day class/section not configured")
 )
 
 // seqMode is the active sequencer session: idle, answering a CQ (ex drives), or
@@ -60,6 +64,10 @@ const (
 	// Reuses the caller ladder (we report first), but unlike seqCalling it has no
 	// CQ phase and on completion/off-ramp it goes idle rather than resuming CQ.
 	seqWorking
+	// seqAnsweringFd: answering a station's CQ FD (ARRL Field Day, search & pounce).
+	// The FD twin of seqAnswering — fdEx drives it; we send our class+section then
+	// RR73 and log their exchange. No FD caller side (we never call CQ FD).
+	seqAnsweringFd
 )
 
 // QsoStatus roles (the `ft8-qso` SSE Role field) — which side of the contact we
@@ -78,8 +86,11 @@ const (
 // (answerer/caller), the active contact's rung, the worked call, the message we'll
 // send next, and the unanswered-repeat count. Active=false means idle (no session).
 type QsoStatus struct {
-	Active    bool   `json:"active"`
-	Role      string `json:"role,omitempty"` // "answerer" | "caller" | "worker"; empty when idle
+	Active bool   `json:"active"`
+	Role   string `json:"role,omitempty"` // "answerer" | "caller" | "worker"; empty when idle
+	// Fd marks an ARRL Field Day answer-a-CQ session, so the SPA renders the FD ladder
+	// (class/section rungs) instead of the standard grid/report one.
+	Fd        bool   `json:"fd,omitempty"`
 	TheirCall string `json:"their_call,omitempty"`
 	// TheirGrid — the worked station's 4-char grid, for the ladder's opening row (so it
 	// shows the real grid, not a "<GRID>" placeholder). Empty until known.
@@ -135,6 +146,12 @@ type CompletedQso struct {
 	// stamps the current exchange path onto the CompletedQso just before handing
 	// it to the logger (see Service.onComplete). Empty = unset (defaults to short).
 	AntPath string
+
+	// Class / Section are the WORKED station's ARRL Field Day exchange (their class
+	// + ARRL/RAC section), set only for an answer-a-CQ-FD contact. Empty for a
+	// standard QSO. BuildQso maps them to ADIF CLASS / ARRL_SECT (+ CONTEST_ID).
+	Class   string
+	Section string
 }
 
 // Sequencer owns the (single) active session — answering a CQ or calling CQ, never
@@ -151,6 +168,9 @@ type Sequencer struct {
 	// worked station's grid from the CQ we answered.
 	ex        *Exchange
 	theirGrid string
+
+	// Answering a CQ FD (seqAnsweringFd): fdEx is the active Field Day exchange.
+	fdEx *FdExchange
 
 	// Calling CQ (seqCalling, ADR 0033): caller is nil while still calling (phase 1),
 	// set once an answerer is chosen (phase 2). cqMessage is repeated each of our
@@ -258,6 +278,56 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	return nil
 }
 
+// StartQsoFd begins answering a CQ FD (ARRL Field Day, search & pounce). It is the
+// FD twin of StartQso: ourClass/ourSection are the operator's configured Field Day
+// identity (the reply carries them), theirGrid comes from their CQ FD (logged, not
+// exchanged). Same one-session-at-a-time + opening-encode-validation discipline.
+func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
+	if offsetHz <= 0 {
+		return ErrNoOffset
+	}
+	if strings.TrimSpace(ourClass) == "" || strings.TrimSpace(ourSection) == "" {
+		return ErrFdIdentityUnset
+	}
+	t, err := time.Parse(time.RFC3339, theirSlotUTC)
+	if err != nil {
+		return err
+	}
+
+	ex := NewFdExchange(ourCall, ourClass, ourSection, theirCall, theirGrid)
+	// Validate our opening exchange encodes before committing (mirrors StartQso): a
+	// compound/portable call or a class/section the packer rejects would otherwise
+	// publish a ladder that can never produce RF.
+	if msg, ok := ex.TxMessage(); ok {
+		if _, err := goft8.EncodeStandardMessage(msg); err != nil {
+			return ErrTxBadMessage
+		}
+	}
+
+	s.mu.Lock()
+	if s.mode != seqIdle {
+		s.mu.Unlock()
+		return ErrQsoInProgress
+	}
+	s.mode = seqAnsweringFd
+	s.sessionGen++
+	s.fdEx = &ex
+	s.theirPeriod = SlotRefFromTime(t).Period
+	s.offsetHz = offsetHz
+	s.dialFreqMHz = dialFreqMHz
+	s.startedAt = now.UTC()
+	s.repeats = 0
+	st := s.statusLocked()
+	s.mu.Unlock()
+
+	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", s.theirPeriod).
+		Float64("offset_hz", offsetHz).Str("our_class", ourClass).Str("our_section", ourSection).
+		Msg("ft8 seq: answering CQ FD")
+	s.publish(st)
+	s.fireOpening(now)
+	return nil
+}
+
 // Abandon drops the active session — answering or calling CQ (operator action,
 // disarm, or off-ramp). Idempotent.
 func (s *Sequencer) Abandon() {
@@ -266,6 +336,7 @@ func (s *Sequencer) Abandon() {
 	s.mode = seqIdle
 	s.sessionGen++ // supersede any in-flight final-rung callback (review follow-up M1)
 	s.ex = nil
+	s.fdEx = nil
 	s.caller = nil
 	s.repeats = 0
 	s.mu.Unlock()
@@ -294,6 +365,8 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 	switch mode {
 	case seqAnswering:
 		s.onSlotAnswering(ref, msgs, now)
+	case seqAnsweringFd:
+		s.onSlotAnsweringFd(ref, msgs, now)
 	case seqCalling:
 		s.onSlotCalling(ref, msgs, now)
 	case seqWorking:
@@ -464,6 +537,143 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// Completion (confirming) is handled by onDone from the transmit goroutine.
 }
 
+// onSlotAnsweringFd drives an answer-a-CQ-FD exchange — the FD twin of
+// onSlotAnswering (kept separate so the live standard path is untouched). The final
+// rung is fdRogering (we send RR73); the QSO logs from the transmit goroutine's
+// onDone only after RR73 truly transmits, with the same sessionGen guard against a
+// superseding Abandon/disarm.
+func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
+	s.mu.Lock()
+	if s.fdEx == nil {
+		s.mu.Unlock()
+		return
+	}
+	if ref.Period != s.theirPeriod {
+		s.mu.Unlock()
+		return
+	}
+
+	var heard string
+	advanced := false
+	for _, m := range msgs {
+		if pm := parseMessage(m.Text); pm.to == s.fdEx.OurCall && pm.from == s.fdEx.TheirCall {
+			heard = m.Text
+		}
+		if next, ok := s.fdEx.Advance(m.Text); ok {
+			*s.fdEx = next
+			s.repeats = 0
+			advanced = true
+			break
+		}
+	}
+	if heard != "" {
+		s.log.InfoWith().Str("from_worked", heard).Bool("advanced", advanced).
+			Str("now_rung", s.fdEx.State.label()).Msg("ft8 seq: FD decode from worked station")
+	}
+
+	msg, ok := s.fdEx.TxMessage()
+	if !ok { // already done — clear defensively.
+		s.fdEx = nil
+		s.mode = seqIdle
+		s.mu.Unlock()
+		s.publish(QsoStatus{Active: false})
+		return
+	}
+	rung := s.fdEx.State.label()
+
+	curStart, perr := time.Parse(time.RFC3339, ref.StartUTC)
+	if perr != nil {
+		s.mu.Unlock()
+		return
+	}
+	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
+	if dt < 0 || dt > txLateWindowSec {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
+
+	confirming := s.fdEx.State == fdRogering
+	if !confirming {
+		if s.repeats >= s.maxRepeats {
+			s.fdEx = nil
+			s.mode = seqIdle
+			s.mu.Unlock()
+			s.log.InfoWith().Msg("ft8 seq: FD no answer after max repeats; abandoning")
+			s.publish(QsoStatus{Active: false})
+			return
+		}
+		s.repeats++
+	}
+
+	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	repeats := s.repeats
+	var completed *CompletedQso
+	if confirming {
+		c := s.completedQsoFdLocked()
+		completed = &c
+	}
+	gen := s.sessionGen
+	st := s.statusLocked()
+	onComplete, publish := s.onComplete, s.publish
+	s.mu.Unlock()
+
+	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
+		Float64("dt_s", dt).Int("repeats", repeats).Msg("ft8 seq: transmitting FD rung")
+
+	var onDone func(ok bool)
+	if completed != nil {
+		c := *completed
+		onDone = func(ok bool) {
+			s.mu.Lock()
+			if s.sessionGen != gen { // superseded — stale callback
+				s.mu.Unlock()
+				return
+			}
+			if !ok {
+				s.mu.Unlock()
+				s.log.WarnWith().Str("their_call", c.TheirCall).
+					Msg("ft8 seq: FD final RR73 did not transmit; will retry next slot")
+				return
+			}
+			s.fdEx = nil
+			s.mode = seqIdle
+			s.mu.Unlock()
+			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: FD QSO complete (RR73 sent)")
+			if onComplete != nil {
+				onComplete(c)
+			}
+			publish(QsoStatus{Active: false})
+		}
+	}
+
+	if err := transmit(msg, offset, dial, onDone); err != nil {
+		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: FD rung transmit failed")
+		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.Abandon()
+			return
+		}
+		publish(st)
+		return
+	}
+	publish(st)
+}
+
+// completedQsoFdLocked snapshots an answer-a-CQ-FD contact for logging. No report
+// fields — FD exchanges class+section, not an SNR report. Caller holds s.mu.
+func (s *Sequencer) completedQsoFdLocked() CompletedQso {
+	return CompletedQso{
+		TheirCall:   s.fdEx.TheirCall,
+		TheirGrid:   s.fdEx.TheirGrid,
+		Class:       s.fdEx.TheirClass,
+		Section:     s.fdEx.TheirSection,
+		StartedAt:   s.startedAt,
+		OffsetHz:    s.offsetHz,
+		DialFreqMHz: s.dialFreqMHz,
+	}
+}
+
 // slotStart returns the UTC 15-second slot boundary containing t, epoch-aligned to
 // match SlotRefFromTime's parity convention (:00/:15/:30/:45).
 func slotStart(t time.Time) time.Time {
@@ -496,6 +706,17 @@ func (s *Sequencer) fireOpening(now time.Time) {
 			return
 		}
 		msg, rung = m, s.ex.State.label()
+	case seqAnsweringFd:
+		if s.fdEx == nil {
+			s.mu.Unlock()
+			return
+		}
+		m, ok := s.fdEx.TxMessage()
+		if !ok {
+			s.mu.Unlock()
+			return
+		}
+		msg, rung = m, s.fdEx.State.label()
 	case seqCalling:
 		if s.caller != nil { // a contact already started — not an opening
 			s.mu.Unlock()
@@ -580,6 +801,27 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		}
 		if s.ex.HasRcvdReport {
 			st.TheirReport = formatReport(s.ex.RcvdReport)
+		}
+		return st
+	case seqAnsweringFd:
+		if s.fdEx == nil {
+			return QsoStatus{Active: false}
+		}
+		msg, _ := s.fdEx.TxMessage()
+		st := QsoStatus{
+			Active:      true,
+			Role:        roleAnswerer,
+			Fd:          true,
+			TheirCall:   s.fdEx.TheirCall,
+			TheirGrid:   s.fdEx.TheirGrid,
+			State:       s.fdEx.State.label(),
+			NextMessage: msg,
+			Repeats:     s.repeats,
+			TheirPeriod: s.theirPeriod,
+		}
+		// Cap governs the pre-RR73 rung only (the one-shot RR73 is uncapped).
+		if s.fdEx.State != fdRogering {
+			st.MaxRepeats = s.maxRepeats
 		}
 		return st
 	case seqCalling:

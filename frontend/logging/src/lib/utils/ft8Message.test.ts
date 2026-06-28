@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { parseCqCall, parseCq, parseDirectedToMe } from './ft8Message';
+import { parseCqCall, parseCq, parseDirectedToMe, isCqFd } from './ft8Message';
+
+describe('isCqFd (Field Day CQ)', () => {
+    it('detects a CQ FD call', () => {
+        expect(isCqFd('CQ FD K1ABC FN42')).toBe(true);
+        expect(isCqFd('cq fd k1abc fn42')).toBe(true);
+    });
+    it('is false for a plain CQ or a non-CQ line', () => {
+        expect(isCqFd('CQ K1ABC FN42')).toBe(false);
+        expect(isCqFd('CQ DX K1ABC FN42')).toBe(false);
+        expect(isCqFd('K1ABC 7Q5MLV 1D DX')).toBe(false);
+        expect(isCqFd('')).toBe(false);
+    });
+    it('parseCq still returns the right call/grid for a CQ FD', () => {
+        expect(parseCq('CQ FD K1ABC FN42')).toEqual({ call: 'K1ABC', grid: 'FN42' });
+    });
+});
 
 describe('parseCq (call + grid)', () => {
     it('parses call and grid', () => {

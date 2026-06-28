@@ -14,7 +14,7 @@
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { catState } from '../../states/cat.svelte';
-    import { parseCqCall, parseCq, parseDirectedToMe } from '../../utils/ft8Message';
+    import { parseCqCall, parseCq, parseDirectedToMe, isCqFd } from '../../utils/ft8Message';
     import { slotParity } from '../../utils/ft8Parity';
     import { startFt8Qso, startFt8WorkCaller, setFt8QsoPath } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
@@ -250,12 +250,15 @@
         // opFreq is the dial frequency in Hz (selected VFO); the daemon logs the
         // QSO at the dial frequency (FT8 convention — not dial+offset), so it
         // needs the dial freq in MHz.
+        // A CQ FD answers with the operator's Field Day exchange (class/section from
+        // daemon config), not a standard grid/report; the daemon reads our identity.
         const out = await startFt8Qso(
             cq.call,
             cq.grid,
             d.startUtc,
             ft8State.selectedOffset,
-            opFreq / 1_000_000
+            opFreq / 1_000_000,
+            isCqFd(d.text) ? 'fd' : 'standard'
         );
         if (out.kind !== 'ok') toasts.error(out.message);
     }

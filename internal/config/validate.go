@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -274,8 +275,10 @@ func validateFt8Display(d *types.Ft8DisplayConfig) []Finding {
 }
 
 // validateFt8FieldDay checks the operator's Field Day exchange. Both fields are
-// optional (empty = FD identity not set). Class is validated strictly; Section only
-// loosely — the canonical ARRL/RAC list is owned by go-ft8 (see Ft8FieldDaySectionValid).
+// optional (empty = FD identity not set). Class is validated by the syntactic rule in
+// types; Section is checked against go-ft8's canonical ARRL/RAC list
+// (ValidARRLFieldDaySection, which trims + upper-cases internally) — go-ft8 owns that
+// enumeration because it encodes the section into the FD frame.
 func validateFt8FieldDay(d *types.Ft8FieldDayConfig) []Finding {
 	if d == nil {
 		return nil
@@ -286,10 +289,10 @@ func validateFt8FieldDay(d *types.Ft8FieldDayConfig) []Finding {
 			Message: fmt.Sprintf("ft8_field_day.class %q must be a transmitter count 1–99 "+
 				"followed by a category A–F (e.g. \"2A\")", d.Class)})
 	}
-	if d.Section != "" && !types.Ft8FieldDaySectionValid(d.Section) {
+	if d.Section != "" && !goft8.ValidARRLFieldDaySection(d.Section) {
 		out = append(out, Finding{Field: "ft8_field_day.section", Code: "invalid_field_value",
-			Message: fmt.Sprintf("ft8_field_day.section %q must be 2–4 letters/digits "+
-				"(e.g. \"EMA\", \"DX\")", d.Section)})
+			Message: fmt.Sprintf("ft8_field_day.section %q is not a valid ARRL/RAC Field Day "+
+				"section (e.g. \"EMA\", or \"DX\" outside US/Canada)", d.Section)})
 	}
 	return out
 }

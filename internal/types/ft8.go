@@ -87,23 +87,12 @@ type Ft8FieldDayConfig struct {
 // by a category letter A–F (e.g. "2A", "1D", "10F"). Anchored, so junk is rejected.
 var ft8FieldDayClassPattern = regexp.MustCompile(`^[1-9][0-9]?[A-F]$`)
 
-// ft8FieldDaySectionPattern is a LOOSE guard only — 2–4 upper-case letters/digits,
-// enough to catch a fat-finger. The authoritative ARRL/RAC section list is owned by
-// go-ft8 (it encodes the section into the FD frame and will expose
-// ARRLFieldDaySections() / ValidARRLFieldDaySection()); Ft8FieldDaySectionValid is
-// the single swap point that delegates to that contract once the release is pinned.
-var ft8FieldDaySectionPattern = regexp.MustCompile(`^[A-Z0-9]{2,4}$`)
-
-// Ft8FieldDayClassValid reports whether s is a well-formed Field Day class.
+// Ft8FieldDayClassValid reports whether s is a well-formed Field Day class. The
+// SECTION is NOT validated here — it's checked in internal/config against go-ft8's
+// canonical ARRL/RAC list (ValidARRLFieldDaySection); types stays stdlib-only and so
+// cannot import go-ft8, and class is the one field with a purely syntactic rule.
 func Ft8FieldDayClassValid(s string) bool {
 	return ft8FieldDayClassPattern.MatchString(s)
-}
-
-// Ft8FieldDaySectionValid reports whether s passes SM's LOOSE section guard. This is
-// deliberately NOT a membership test against the canonical ARRL/RAC list — go-ft8
-// owns that (ValidARRLFieldDaySection); swap this body to delegate when go-ft8 lands.
-func Ft8FieldDaySectionValid(s string) bool {
-	return ft8FieldDaySectionPattern.MatchString(s)
 }
 
 // Ft8DecodeLogConfig configures the FT8 decode log — a WSJT-X/JTDX ALL.TXT-style

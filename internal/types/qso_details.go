@@ -16,7 +16,9 @@ type QsoDetails struct {
 	BandRx      string `json:"band_rx,omitempty"` //in a split frequency QSO, the logging station's receiving band
 	Comment     string `json:"comment,omitempty"`
 	ContestId   string `json:"contest_id,omitempty"`
-	Distance    string `json:"distance,omitempty"` // km
+	Class       string `json:"class,omitempty"`     // ADIF CLASS — contest class, e.g. Field Day "2A"
+	ArrlSect    string `json:"arrl_sect,omitempty"` // ADIF ARRL_SECT — ARRL/RAC section, e.g. "EMA" / "DX"
+	Distance    string `json:"distance,omitempty"`  // km
 	Freq        string `json:"freq,omitempty"`
 	FreqRx      string `json:"freq_rx,omitempty"`
 	Mode        string `json:"mode,omitempty" validate:"mode"`

@@ -132,6 +132,8 @@ var specField = map[string]adifType{
 	"BAND_RX":      typEnum,
 	"COMMENT":      typString,
 	"CONTEST_ID":   typString,
+	"CLASS":        typString, // Field Day class, e.g. "2A"
+	"ARRL_SECT":    typString, // ARRL/RAC section, e.g. "EMA" / "DX"
 	"DISTANCE":     typNumber,
 	"FREQ":         typNumber,
 	"FREQ_RX":      typNumber,

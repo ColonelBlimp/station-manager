@@ -428,6 +428,39 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
+// StartQsoFd begins a manual answer-a-CQ-FD exchange (ARRL Field Day, search &
+// pounce): the operator picked a station calling CQ FD. Our Field Day identity
+// (class + section) is daemon config (ft8.field_day), not client-supplied — mirroring
+// how StartCallCq reads the answer mode — and a missing identity is refused up front.
+// Requires TX armed, same as StartQso.
+func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+	const op errors.Op = "ft8.Service.StartQsoFd"
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
+	var class, section string
+	if s.cfg.FieldDay != nil {
+		class, section = s.cfg.FieldDay.Class, s.cfg.FieldDay.Section
+	}
+	if strings.TrimSpace(class) == "" || strings.TrimSpace(section) == "" {
+		return errors.New(op).WithErr(ErrFdIdentityUnset)
+	}
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	s.txMu.Lock()
+	armed := s.txArmed
+	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
+	}
+	s.resetExchangePath()
+	return s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+}
+
 // StartCallCq begins a sequenced Call-CQ session (ADR 0033): we call CQ in our slot
 // parity and work the stations that answer, one at a time, looping until AbandonQso.
 // Requires TX **armed** — the sequencer keys through the armed controller. The

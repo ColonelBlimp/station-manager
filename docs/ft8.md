@@ -111,13 +111,13 @@ on any PUT):
   `class` is `<transmitters><category>` (e.g. `2A`, `1D`); `section` is the ARRL/RAC
   section, or `DX` for a station outside US/Canada. Both empty = FD identity not set
   (the off-season default). Surfaced over `/v1/config` as `ft8_field_day` (presence-aware),
-  stored upper-cased. **Validation:** class strict (`^[1-9][0-9]?[A-F]$`); section only
-  *loosely* in SM (2–4 upper-case alnum) because **go-ft8 owns the canonical ARRL/RAC
-  section list** (`ARRLFieldDaySections()` / `ValidARRLFieldDaySection()`, v0.4.0) —
-  `types.Ft8FieldDaySectionValid` is the single swap point to delegate to it, and that
-  list drives the SPA section dropdown. The FD **parse / answerer ladder / QSO→ADIF
-  mapping** (the operate path) are the remaining work; this block is just the SM-owned
-  identity the reply carries.
+  stored upper-cased. **Validation:** class strict (`^[1-9][0-9]?[A-F]$`, in `types`);
+  **section checked against go-ft8's canonical ARRL/RAC list** (`ValidARRLFieldDaySection`,
+  go-ft8 v0.4.0) — done in `internal/config/validate.go` rather than `types`, which
+  stays stdlib-only and so can't import go-ft8. The same list (`ARRLFieldDaySections()`,
+  a `[]ARRLFieldDaySection`) will drive the SPA section dropdown. The FD **parse /
+  answerer ladder / QSO→ADIF mapping** (the operate path) are the remaining work; this
+  block is just the SM-owned identity the reply carries.
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on

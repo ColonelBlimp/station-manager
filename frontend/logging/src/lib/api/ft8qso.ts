@@ -68,6 +68,7 @@ export function startFt8Qso(
     slotUtc: string,
     offsetHz: number,
     operatingFreqMHz: number,
+    mode: 'standard' | 'fd' = 'standard',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -78,6 +79,9 @@ export function startFt8Qso(
             slot_utc: slotUtc,
             offset_hz: offsetHz,
             operating_freq_mhz: operatingFreqMHz,
+            // 'fd' answers a CQ FD with the operator's Field Day class+section (daemon
+            // config). Omit for a standard answer so the wire stays unchanged.
+            ...(mode === 'fd' ? { mode: 'fd' } : {}),
         },
         signal
     );

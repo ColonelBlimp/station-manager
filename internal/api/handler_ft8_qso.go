@@ -54,6 +54,10 @@ type ft8QsoStartRequest struct {
 	// placement only, never folded into FREQ). The daemon can't read the dial
 	// itself (the bridge is a pure pass-through), so the SPA supplies it.
 	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
+	// Mode selects the exchange: "" / "standard" is the normal grid+report answer;
+	// "fd" answers a CQ FD with the operator's ARRL Field Day exchange (class+section
+	// from ft8.field_day config). The SPA sets "fd" when the clicked decode is a CQ FD.
+	Mode string `json:"mode,omitempty"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -94,8 +98,16 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
-		req.OffsetHz, req.OperatingFreqMHz)
+	var err error
+	if strings.EqualFold(strings.TrimSpace(req.Mode), "fd") {
+		// ARRL Field Day: our class+section come from ft8.field_day config (read by
+		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
+		err = s.ft8.StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.SlotUTC,
+			req.OffsetHz, req.OperatingFreqMHz)
+	} else {
+		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
+			req.OffsetHz, req.OperatingFreqMHz)
+	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
@@ -277,6 +289,9 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 		s.writeError(w, http.StatusNotImplemented, "ft8_caller_mode_unsupported",
 			"operator_pick answerer selection is not yet implemented; "+
 				"set ft8.tx.caller_answer_mode to auto_first", op)
+	case stderr.Is(err, ft8.ErrFdIdentityUnset):
+		s.writeError(w, http.StatusBadRequest, "ft8_field_day_unset",
+			"set your Field Day class and section (ft8.field_day) before answering a CQ FD", op)
 	default:
 		// Client-input faults (bad slot_utc, missing call) are validated and
 		// mapped to 400 in the handlers BEFORE the service is called, and every

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 )
 
 // FT8 message sequencing for answering a CQ (ADR 0029 step e2).
@@ -87,13 +89,14 @@ func formatReport(snr int) string {
 type msgKind int
 
 const (
-	msgOther   msgKind = iota
-	msgCQ              // CQ [mod...] <call> [grid]
-	msgGrid            // <to> <from> <grid4>     — a reply carrying a grid
-	msgReport          // <to> <from> <±report>   — a signal report (rung 2)
-	msgRReport         // <to> <from> R<±report>  — a rogered report (rung 3)
-	msgRoger           // <to> <from> RRR | RR73  — rogered (RR73 also says 73)
-	msg73              // <to> <from> 73
+	msgOther      msgKind = iota
+	msgCQ                 // CQ [mod...] <call> [grid]
+	msgGrid               // <to> <from> <grid4>     — a reply carrying a grid
+	msgReport             // <to> <from> <±report>   — a signal report (rung 2)
+	msgRReport            // <to> <from> R<±report>  — a rogered report (rung 3)
+	msgRoger              // <to> <from> RRR | RR73  — rogered (RR73 also says 73)
+	msg73                 // <to> <from> 73
+	msgFdExchange         // <to> <from> [R] <class> <section> — ARRL Field Day exchange
 )
 
 // message is a standard FT8 message reduced to the fields the sequencer needs.
@@ -106,6 +109,11 @@ type message struct {
 	from   string
 	grid   string // 4-char Maidenhead — msgCQ / msgGrid only
 	report int    // signal report value — msgReport / msgRReport only
+	// ARRL Field Day. fd marks a CQ carrying the "FD" modifier (msgCQ); class and
+	// section carry the exchange of an msgFdExchange (e.g. "2A" / "EMA").
+	fd      bool
+	class   string
+	section string
 }
 
 // SpotFrom extracts a PSK Reporter reception spot — the TRANSMITTING station's
@@ -132,11 +140,18 @@ func parseMessage(text string) message {
 	}
 
 	// CQ: skip leading non-call modifiers (DX, EU, POTA, a directed numeric…)
-	// and take the first callsign, with an optional trailing grid.
+	// and take the first callsign, with an optional trailing grid. "FD" is the
+	// ARRL Field Day modifier — noted so the answer routes to the FD ladder, not
+	// a standard grid reply (which would be the wrong exchange).
 	if toks[0] == "CQ" {
+		fd := false
 		for i := 1; i < len(toks); i++ {
+			if toks[i] == "FD" {
+				fd = true
+				continue
+			}
 			if looksLikeCall(toks[i]) {
-				m := message{kind: msgCQ, from: toks[i]}
+				m := message{kind: msgCQ, from: toks[i], fd: fd}
 				if i+1 < len(toks) && isGrid4(toks[i+1]) {
 					m.grid = toks[i+1]
 				}
@@ -160,6 +175,15 @@ func parseMessage(text string) message {
 		m.kind = msgRoger
 	case tok == "73":
 		m.kind = msg73
+	// ARRL Field Day exchange. The R-variant "<to> <from> R <class> <section>" is what
+	// an answerer receives (rung 2); the bare "<to> <from> <class> <section>" is the
+	// opening reply (parsed for symmetry / the future caller side). The section is
+	// confirmed against go-ft8's canonical list so a real report/grid can't be misread
+	// as an exchange.
+	case tok == "R" && len(toks) >= 5 && looksLikeFdClass(toks[3]) && goft8.ValidARRLFieldDaySection(toks[4]):
+		m.kind, m.class, m.section = msgFdExchange, toks[3], toks[4]
+	case looksLikeFdClass(tok) && len(toks) >= 4 && goft8.ValidARRLFieldDaySection(toks[3]):
+		m.kind, m.class, m.section = msgFdExchange, tok, toks[3]
 	case isGrid4(tok):
 		m.kind, m.grid = msgGrid, tok
 	default:

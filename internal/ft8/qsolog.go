@@ -77,6 +77,14 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 			q.Distance = strconv.FormatFloat(dist, 'f', 0, 64)
 		}
 	}
+	// ARRL Field Day exchange (answer-a-CQ-FD): the worked station's class + section,
+	// plus the contest id, so the QSO logs as a Field Day contact. Set only when the
+	// exchange was an FD one (Class non-empty); a standard QSO leaves these empty.
+	if c.Class != "" {
+		q.Class = c.Class
+		q.ArrlSect = c.Section
+		q.ContestId = "ARRL-FD"
+	}
 	return q
 }
 
