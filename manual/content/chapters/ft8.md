@@ -3,11 +3,18 @@ title: Operating FT8
 weight: 70
 ---
 
-> **Station Manager operates FT8 attended only.** You decide whom to work and
-> arm each transmission; SM never calls or answers on its own. Unattended or
-> automatic operation is not supported.
+Station Manager allows you to easily make and log FT8 contacts without *any* other 3rd party software installed. The
+user interface is easy to use and contacts can be forwarded to online services in real-time. Integration with
+the [PSK reporter online service](https://pskreporter.info/) is also built-in.
 
-*Draft outline — content to be written.*
+## Getting started with FT8
+
+### Enabling FT8
+
+To use FT8 your transmitter must support CAT and be connected to the hardware where SM is installed and running.
+See [Enabling CAT](#cat) for details.
+
+
 
 - Enabling FT8 and what's required.
 - Choosing your audio device.
@@ -16,12 +23,14 @@ weight: 70
 - Calling CQ and working answerers.
 - The Session tab and where your FT8 QSOs go.
 
-## Answering a CQ
+## Operating FT8
 
-Answering a CQ is the most common way to make an FT8 contact: another station calls
-CQ, you reply, and Station Manager runs the rest of the exchange for you.
+### Answering a CQ
 
-### Before you transmit
+Answering a CQ is a common way to make an FT8 contact: another station calls CQ, you reply, and Station Manager runs
+the rest of the exchange for you.
+
+#### Before answering a CQ
 
 Two things need to be in place first:
 

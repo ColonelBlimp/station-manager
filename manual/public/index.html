@@ -1,112 +1,572 @@
-<!doctype html><html lang=en><head><meta name=generator content="Hugo 0.162.1"><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Station Manager — Operator Manual</title><style>*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font-family:system-ui,-apple-system,segoe ui,Roboto,sans-serif;line-height:1.6;color:#1a1a1a;background:#fff}.layout{display:flex;align-items:flex-start}.toc{position:sticky;top:0;align-self:flex-start;flex:0 0 17rem;height:100vh;overflow:auto;padding:1.25rem 1rem;border-right:1px solid #e2e2e2;background:#fafafa;font-size:.9rem}.toc-title{margin:0 0 .75rem;font-weight:600;font-size:.95rem}.toc ol{list-style:none;margin:0;padding:0}.toc li{margin:.15rem 0}.toc a{color:#1a4d7a;text-decoration:none}.toc a:hover{text-decoration:underline}.toc .appendix{margin-top:.6rem;padding-top:.6rem;border-top:1px solid #e2e2e2}.content{flex:auto;max-width:50rem;padding:1.5rem 2.5rem 5rem;min-width:0}.content h1{margin-top:0}.chapter{scroll-margin-top:1rem;padding-top:.5rem}.chapter+.chapter{margin-top:2.5rem;border-top:1px solid #eee;padding-top:2rem}.content pre{background:#f5f5f5;padding:.75rem 1rem;border-radius:4px;overflow:auto}.content code{background:#f0f0f0;padding:.1em .3em;border-radius:3px}.content pre code{background:0 0;padding:0}.content table{border-collapse:collapse}.content th,.content td{border:1px solid #ddd;padding:.35rem .6rem;text-align:left}kbd{background:#eee;border:1px solid #ccc;border-bottom-width:2px;border-radius:3px;padding:.05em .4em;font-family:inherit;font-size:.85em}.skip-link{position:absolute;left:-999px}.skip-link:focus{left:.5rem;top:.5rem;background:#fff;padding:.5rem}@media(max-width:50rem){.layout{display:block}.toc{position:static;flex-basis:auto;width:auto;height:auto;border-right:none;border-bottom:1px solid #e2e2e2}.content{padding:1.25rem}}@media print{.toc,.skip-link{display:none}.content{max-width:none;padding:0}.chapter{page-break-inside:avoid}}</style></head><body><a class=skip-link href=#content>Skip to content</a><div class=layout><nav class=toc aria-label=Contents><p class=toc-title>Station Manager — Operator Manual</p><ol><li><a href=#what-is-sm>What Station Manager Is</a></li><li><a href=#first-run>First Run</a></li><li><a href=#my-station>Setting Up My Station</a></li><li><a href=#logging>Logging a Contact (Phone / CW)</a></li><li><a href=#cat>Connecting Your Rig (CAT)</a></li><li><a href=#tuning>Tuning an Amplifier</a></li><li><a href=#ft8>Operating FT8</a></li><li><a href=#forwarding>Forwarding Your Log (QRZ and ClubLog)</a></li><li><a href=#importing>Importing an Existing Log</a></li><li><a href=#session-log>The Session Log and Email-Out</a></li><li><a href=#troubleshooting>Troubleshooting</a></li><li class=appendix><a href=#appendix-shortcuts>Appendix: Keyboard Shortcuts</a></li><li class=appendix><a href=#appendix-files>Appendix: File Locations</a></li><li class=appendix><a href=#appendix-cli>Appendix: Command-Line Reference</a></li><li class=appendix><a href=#appendix-glossary>Appendix: Glossary</a></li></ol></nav><main id=content class=content><h1>Station Manager — Operator Manual</h1><p>Station Manager (SM) is a ham radio logger. You start it once in the background
+<!doctype html>
+<html lang="en">
+  <head>
+	<meta name="generator" content="Hugo 0.162.1"><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Station Manager — Operator Manual</title>
+    
+    <style>
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.6;
+        color: #1a1a1a;
+        background: #fff;
+      }
+      .layout { display: flex; align-items: flex-start; }
+
+       
+      .toc {
+        position: sticky;
+        top: 0;
+        align-self: flex-start;
+        flex: 0 0 17rem;
+        height: 100vh;
+        overflow: auto;
+        padding: 1.25rem 1rem;
+        border-right: 1px solid #e2e2e2;
+        background: #fafafa;
+        font-size: 0.9rem;
+      }
+      .toc-title { margin: 0 0 0.75rem; font-weight: 600; font-size: 0.95rem; }
+      .toc ol { list-style: none; margin: 0; padding: 0; }
+      .toc li { margin: 0.15rem 0; }
+      .toc a { color: #1a4d7a; text-decoration: none; }
+      .toc a:hover { text-decoration: underline; }
+      .toc .appendix { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid #e2e2e2; }
+
+      .content {
+        flex: 1 1 auto;
+        max-width: 50rem;
+        padding: 1.5rem 2.5rem 5rem;
+        min-width: 0;
+      }
+      .content h1 { margin-top: 0; }
+      .chapter { scroll-margin-top: 1rem; padding-top: 0.5rem; }
+      .chapter + .chapter { margin-top: 2.5rem; border-top: 1px solid #eee; padding-top: 2rem; }
+      .content pre {
+        background: #f5f5f5;
+        padding: 0.75rem 1rem;
+        border-radius: 4px;
+        overflow: auto;
+      }
+      .content code { background: #f0f0f0; padding: 0.1em 0.3em; border-radius: 3px; }
+      .content pre code { background: none; padding: 0; }
+      .content table { border-collapse: collapse; }
+      .content th, .content td { border: 1px solid #ddd; padding: 0.35rem 0.6rem; text-align: left; }
+      kbd {
+        background: #eee;
+        border: 1px solid #ccc;
+        border-bottom-width: 2px;
+        border-radius: 3px;
+        padding: 0.05em 0.4em;
+        font-family: inherit;
+        font-size: 0.85em;
+      }
+      .skip-link {
+        position: absolute;
+        left: -999px;
+      }
+      .skip-link:focus { left: 0.5rem; top: 0.5rem; background: #fff; padding: 0.5rem; }
+
+       
+      @media (max-width: 50rem) {
+        .layout { display: block; }
+        .toc {
+          position: static;
+          flex-basis: auto;
+          width: auto;
+          height: auto;
+          border-right: none;
+          border-bottom: 1px solid #e2e2e2;
+        }
+        .content { padding: 1.25rem; }
+      }
+
+       
+      @media print {
+        .toc, .skip-link { display: none; }
+        .content { max-width: none; padding: 0; }
+        .chapter { page-break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <div class="layout">
+      
+      <nav class="toc" aria-label="Contents">
+        <p class="toc-title">Station Manager — Operator Manual</p>
+        <ol>
+          
+            <li class="">
+              <a href="#what-is-sm">What Is Station Manager?</a>
+            </li>
+          
+            <li class="">
+              <a href="#first-run">First Run</a>
+            </li>
+          
+            <li class="">
+              <a href="#my-station">Setting Up My Station</a>
+            </li>
+          
+            <li class="">
+              <a href="#logging">Logging a Contact (Phone / CW)</a>
+            </li>
+          
+            <li class="">
+              <a href="#cat">Connecting Your Rig (CAT)</a>
+            </li>
+          
+            <li class="">
+              <a href="#tuning">Tuning a Linear Amplifier</a>
+            </li>
+          
+            <li class="">
+              <a href="#ft8">Operating FT8</a>
+            </li>
+          
+            <li class="">
+              <a href="#forwarding">Forwarding Your Log (QRZ and ClubLog)</a>
+            </li>
+          
+            <li class="">
+              <a href="#importing">Importing an Existing Log</a>
+            </li>
+          
+            <li class="">
+              <a href="#session-log">The Session Log and Email-Out</a>
+            </li>
+          
+            <li class="">
+              <a href="#troubleshooting">Troubleshooting</a>
+            </li>
+          
+            <li class="appendix">
+              <a href="#appendix-shortcuts">Appendix: Keyboard Shortcuts</a>
+            </li>
+          
+            <li class="appendix">
+              <a href="#appendix-files">Appendix: File Locations</a>
+            </li>
+          
+            <li class="appendix">
+              <a href="#appendix-cli">Appendix: Command-Line Reference</a>
+            </li>
+          
+            <li class="appendix">
+              <a href="#appendix-glossary">Appendix: Glossary</a>
+            </li>
+          
+        </ol>
+      </nav>
+      <main id="content" class="content">
+        <h1>Station Manager — Operator Manual</h1>
+        
+        <p>Station Manager (SM) is a ham radio logger. You start it once in the background
 and operate it from your web browser — logging contacts, controlling your rig,
-running FT8, and forwarding your log to online services.</p><p>Use the contents on the left to jump to a topic, or press <kbd>Ctrl</kbd>+<kbd>F</kbd>
-(<kbd>⌘</kbd>+<kbd>F</kbd> on a Mac) to search this whole page.</p><section id=what-is-sm class=chapter><h2>What Station Manager Is</h2><p><em>Draft outline — content to be written.</em></p><ul><li>What SM does: a local logbook that also forwards your contacts to online services.</li><li>The model in one screen: a background program (the <em>daemon</em>) plus a browser window — start it once, log in the browser.</li><li>What you need: a web browser, optionally a supported rig, and accounts for any upload services you use.</li><li>Attended operation only — SM never operates the radio on its own.</li></ul></section><section id=first-run class=chapter><h2>First Run</h2><p><em>Draft outline — content to be written.</em></p><ul><li>Starting Station Manager and opening it in your browser (the address to visit).</li><li>A tour of the main screen: the QSO entry form, rig state, session log, and panels.</li><li>Confirming the daemon is running.</li></ul></section><section id=my-station class=chapter><h2>Setting Up My Station</h2><p><em>Draft outline — content to be written.</em></p><ul><li>Opening <strong>My Station</strong> and why these details matter (they end up in every QSO).</li><li>Your callsign, grid square, name, and location.</li><li>Operator vs. station vs. owner callsign.</li><li>Mode mappings — how your rig&rsquo;s modes become standard ADIF modes.</li></ul></section><section id=logging class=chapter><h2>Logging a Contact (Phone / CW)</h2><p><em>Draft outline — content to be written.</em></p><ul><li>The keyboard-first flow: type a callsign, then commit with <kbd>Tab</kbd>, <kbd>Enter</kbd>, or <kbd>Space</kbd> to start enrichment and the QSO timer.</li><li>Filling in RST, name, and comments.</li><li>Logging the contact (<kbd>Ctrl</kbd>+<kbd>Enter</kbd>) and what happens next.</li><li>Working a pile-up with the callsign stack.</li></ul></section><section id=cat class=chapter><h2>Connecting Your Rig (CAT)</h2><p><em>Draft outline — content to be written.</em></p><ul><li>What CAT gives you: live frequency, mode, and rig control from the browser.</li><li>Choosing your rig and serial port.</li><li>Adding yourself to the serial device group (find the real group — don&rsquo;t assume <code>dialout</code>).</li><li>Rig-control shortcuts (band, VFO, frequency step).</li><li>Supported rigs.</li></ul></section><section id=tuning class=chapter><h2>Tuning an Amplifier</h2><p><em>Draft outline — content to be written.</em></p><ul><li>The <strong>Tune</strong> button: keying a reduced-power carrier to tune an external amp.</li><li>Power and time limits, and how SM guarantees the carrier stops.</li><li>When it&rsquo;s available.</li></ul></section><section id=ft8 class=chapter><h2>Operating FT8</h2><blockquote><p><strong>Station Manager operates FT8 attended only.</strong> You decide whom to work and
-arm each transmission; SM never calls or answers on its own. Unattended or
-automatic operation is not supported.</p></blockquote><p><em>Draft outline — content to be written.</em></p><ul><li>Enabling FT8 and what&rsquo;s required.</li><li>Choosing your audio device.</li><li>Band Activity: reading decodes, country flags, and beam headings.</li><li>Answering a CQ: pick a clear transmit offset, click a CQ, and let the exchange auto-advance to 73.</li><li>Calling CQ and working answerers.</li><li>The Session tab and where your FT8 QSOs go.</li></ul><h2 id=answering-a-cq>Answering a CQ</h2><p>Answering a CQ is the most common way to make an FT8 contact: another station calls
-CQ, you reply, and Station Manager runs the rest of the exchange for you.</p><h3 id=before-you-transmit>Before you transmit</h3><p>Two things need to be in place first:</p><ul><li><strong>Enable transmit.</strong> Click <strong>Enable Tx</strong> — it turns red to show transmit is armed.
+running FT8, and forwarding your log to online services.</p>
+<p>Use the contents on the left to jump to a topic, or press <kbd>Ctrl</kbd>+<kbd>F</kbd>
+(<kbd>⌘</kbd>+<kbd>F</kbd> on a Mac) to search this whole page.</p>
+
+        
+          
+          <section id="what-is-sm" class="chapter">
+            <h2>What Is Station Manager?</h2>
+            <p>Station Manager (SM) is a program designed to help you log and organize your Amateur Radio contacts (QSOs).
+It maintains a list of logbooks and their associated QSOs and can upload them in real-time to various online services
+such as <a href="https://www.qrz.com">qrz.com</a>, <a href="https://clublog.org">ClubLog</a>, <a href="https://hamqth.com">HamQTH</a>, etc. It is
+designed to handle slow, intermittent, and unreliable internet connections.</p>
+<p>The author has tried to keep the program interface simple to use and easy to learn.</p>
+<p>SM has many other features besides logging to make Amateur Radio operating easier:</p>
+<ul>
+<li>FT8 encoding, decoding, and logging without the need for any other software to be installed. See <a href="#ft8">Operating FT8</a></li>
+<li>Computer Assisted Transceiver (CAT) support.</li>
+<li>QSO enrichment with additional information lookup from online services.</li>
+<li>Extensive keyboard shortcuts.</li>
+<li>Multiple logbooks.</li>
+<li>ADIF import and export.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="first-run" class="chapter">
+            <h2>First Run</h2>
+            <p><em>Draft outline — content to be written.</em></p>
+<ul>
+<li>Starting Station Manager and opening it in your browser (the address to visit).</li>
+<li>A tour of the main screen: the QSO entry form, rig state, session log, and panels.</li>
+<li>Confirming the daemon is running.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="my-station" class="chapter">
+            <h2>Setting Up My Station</h2>
+            <p><em>Draft outline — content to be written.</em></p>
+<ul>
+<li>Opening <strong>My Station</strong> and why these details matter (they end up in every QSO).</li>
+<li>Your callsign, grid square, name, and location.</li>
+<li>Operator vs. station vs. owner callsign.</li>
+<li>Mode mappings — how your rig&rsquo;s modes become standard ADIF modes.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="logging" class="chapter">
+            <h2>Logging a Contact (Phone / CW)</h2>
+            <p><em>Draft outline — content to be written.</em></p>
+<ul>
+<li>The keyboard-first flow: type a callsign, then commit with <kbd>Tab</kbd>, <kbd>Enter</kbd>, or <kbd>Space</kbd> to start enrichment and the QSO timer.</li>
+<li>Filling in RST, name, and comments.</li>
+<li>Logging the contact (<kbd>Ctrl</kbd>+<kbd>Enter</kbd>) and what happens next.</li>
+<li>Working a pile-up with the callsign stack.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="cat" class="chapter">
+            <h2>Connecting Your Rig (CAT)</h2>
+            <p><em>Draft outline — content to be written.</em></p>
+<ul>
+<li>What CAT gives you: live frequency, mode, and rig control from the browser.</li>
+<li>Choosing your rig and serial port.</li>
+<li>Adding yourself to the serial device group (find the real group — don&rsquo;t assume <code>dialout</code>).</li>
+<li>Rig-control shortcuts (band, VFO, frequency step).</li>
+<li>Supported rigs.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="tuning" class="chapter">
+            <h2>Tuning a Linear Amplifier</h2>
+            <p>If you are using a linear amplifier, which needs to be manually tuned, SM provides a convenient way to do so.</p>
+<ul>
+<li>The <strong>Tune</strong> button: keying a reduced-power carrier to tune an external amp.</li>
+<li>Power and time limits, and how SM guarantees the carrier stops.</li>
+<li>When it&rsquo;s available.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="ft8" class="chapter">
+            <h2>Operating FT8</h2>
+            <p>Station Manager allows you to easily make and log FT8 contacts without <em>any</em> other 3rd party software installed. The
+user interface is easy to use and contacts can be forwarded to online services in real-time. Integration with
+the <a href="https://pskreporter.info/">PSK reporter online service</a> is also built-in.</p>
+<h2 id="getting-started-with-ft8">Getting started with FT8</h2>
+<h3 id="enabling-ft8">Enabling FT8</h3>
+<p>To use FT8 your transmitter must support CAT and be connected to the hardware where SM is installed and running.
+See <a href="#cat">Enabling CAT</a> for details.</p>
+<ul>
+<li>Enabling FT8 and what&rsquo;s required.</li>
+<li>Choosing your audio device.</li>
+<li>Band Activity: reading decodes, country flags, and beam headings.</li>
+<li>Answering a CQ: pick a clear transmit offset, click a CQ, and let the exchange auto-advance to 73.</li>
+<li>Calling CQ and working answerers.</li>
+<li>The Session tab and where your FT8 QSOs go.</li>
+</ul>
+<h2 id="operating-ft8">Operating FT8</h2>
+<h3 id="answering-a-cq">Answering a CQ</h3>
+<p>Answering a CQ is a common way to make an FT8 contact: another station calls CQ, you reply, and Station Manager runs
+the rest of the exchange for you.</p>
+<h4 id="before-answering-a-cq">Before answering a CQ</h4>
+<p>Two things need to be in place first:</p>
+<ul>
+<li><strong>Enable transmit.</strong> Click <strong>Enable Tx</strong> — it turns red to show transmit is armed.
 Until transmit is armed, Station Manager only listens, and clicking a CQ won&rsquo;t start
 a reply. Arming needs a connected, CAT-controlled rig; the button stays disabled
-otherwise.</li><li><strong>Pick a transmit offset.</strong> On the <strong>Occupancy</strong> tab the passband is laid out as a
+otherwise.</li>
+<li><strong>Pick a transmit offset.</strong> On the <strong>Occupancy</strong> tab the passband is laid out as a
 strip of frequency slots: busy slots are shaded, clear slots show as green markers,
 and a ★ marks Station Manager&rsquo;s top pick. Click a clear marker (or the <strong>Clear
 Offsets</strong> chip) to choose where your signal goes out, so you&rsquo;re not transmitting on
-top of another station.</li></ul><p>Both settings stay put between contacts, so you normally do this once at the start of
-a session.</p><h3 id=making-the-contact>Making the contact</h3><ol><li>In <strong>Band Activity</strong>, find a station calling <strong>CQ</strong>. CQ lines stand out, and each
+top of another station.</li>
+</ul>
+<p>Both settings stay put between contacts, so you normally do this once at the start of
+a session.</p>
+<h3 id="making-the-contact">Making the contact</h3>
+<ol>
+<li>In <strong>Band Activity</strong>, find a station calling <strong>CQ</strong>. CQ lines stand out, and each
 carries a country flag and a beam heading — the short-path bearing from your grid to
-theirs — so you can turn the antenna before you reply.</li><li><strong>Click the CQ line.</strong> Station Manager answers that station on your chosen offset, in
+theirs — so you can turn the antenna before you reply.</li>
+<li><strong>Click the CQ line.</strong> Station Manager answers that station on your chosen offset, in
 the correct slot, and the exchange begins. If you click partway through a slot it can
-still reply in that same slot when there&rsquo;s time, so you don&rsquo;t lose a whole cycle.</li><li>From there it runs itself. The <strong>Operate</strong> tab shows the message ladder — your
+still reply in that same slot when there&rsquo;s time, so you don&rsquo;t lose a whole cycle.</li>
+<li>From there it runs itself. The <strong>Operate</strong> tab shows the message ladder — your
 transmissions interleaved with the other station&rsquo;s — with the current step
 highlighted. The standard exchange advances automatically through the signal reports
-to the closing <strong>RR73 / 73</strong>.</li><li>When the exchange completes, the contact is <strong>logged</strong> and appears in the <strong>Session</strong>
-tab (shared with your Phone/CW session log, ready for email-out).</li></ol><h3 id=stopping-early>Stopping early</h3><p>Click <strong>Abandon</strong> at any point to stop the exchange — for instance if the other station
+to the closing <strong>RR73 / 73</strong>.</li>
+<li>When the exchange completes, the contact is <strong>logged</strong> and appears in the <strong>Session</strong>
+tab (shared with your Phone/CW session log, ready for email-out).</li>
+</ol>
+<h3 id="stopping-early">Stopping early</h3>
+<p>Click <strong>Abandon</strong> at any point to stop the exchange — for instance if the other station
 vanishes or starts working someone else. Abandon drops the contact immediately and
-returns you to listening, still armed and ready for the next one.</p><blockquote><p><strong>Your reply may not go out the instant you click.</strong> FT8 only transmits on slot
+returns you to listening, still armed and ready for the next one.</p>
+<blockquote>
+<p><strong>Your reply may not go out the instant you click.</strong> FT8 only transmits on slot
 boundaries, so there can be a short wait before your signal is sent. The <strong>ON AIR</strong>
-indicator lights while you are actually transmitting.</p></blockquote><h2 id=calling-cq-choosing-your-slot>Calling CQ: choosing your slot</h2><p>FT8 runs on a strict 15-second grid, and every station transmits in one of two
+indicator lights while you are actually transmitting.</p>
+</blockquote>
+<h2 id="calling-cq-choosing-your-slot">Calling CQ: choosing your slot</h2>
+<p>FT8 runs on a strict 15-second grid, and every station transmits in one of two
 alternating slots — commonly called the two <em>parities</em>. Counting from the top of
-each minute (UTC):</p><ul><li><strong>Even</strong> slots start at <strong>:00</strong> and <strong>:30</strong>.</li><li><strong>Odd</strong> slots start at <strong>:15</strong> and <strong>:45</strong>.</li></ul><p>You transmit in one parity and listen in the other. The <strong>CQ slot</strong> selector next
-to the <strong>Call CQ</strong> button decides which slot your CQ goes out in:</p><ul><li><strong>Next</strong> <em>(default)</em> — call on the very next slot boundary, whatever its parity.
-This is the fastest start: your first CQ goes out within about 15 seconds.</li><li><strong>Even</strong> — call only in even slots (:00 / :30).</li><li><strong>Odd</strong> — call only in odd slots (:15 / :45).</li></ul><p>When you pick <strong>Even</strong> or <strong>Odd</strong>, Station Manager waits for the next slot of that
+each minute (UTC):</p>
+<ul>
+<li><strong>Even</strong> slots start at <strong>:00</strong> and <strong>:30</strong>.</li>
+<li><strong>Odd</strong> slots start at <strong>:15</strong> and <strong>:45</strong>.</li>
+</ul>
+<p>You transmit in one parity and listen in the other. The <strong>CQ slot</strong> selector next
+to the <strong>Call CQ</strong> button decides which slot your CQ goes out in:</p>
+<ul>
+<li><strong>Next</strong> <em>(default)</em> — call on the very next slot boundary, whatever its parity.
+This is the fastest start: your first CQ goes out within about 15 seconds.</li>
+<li><strong>Even</strong> — call only in even slots (:00 / :30).</li>
+<li><strong>Odd</strong> — call only in odd slots (:15 / :45).</li>
+</ul>
+<p>When you pick <strong>Even</strong> or <strong>Odd</strong>, Station Manager waits for the next slot of that
 parity before keying. If the very next boundary happens to be the <em>other</em> parity,
 your first CQ is held back by one extra slot — so choosing a parity can add up to
 roughly 15–30 seconds before transmission begins, compared with <strong>Next</strong>. This is
-expected: it is the price of controlling which half of the cycle you call in.</p><p>Why pick a parity at all? To settle on a clear half of the cycle, to stay
+expected: it is the price of controlling which half of the cycle you call in.</p>
+<p>Why pick a parity at all? To settle on a clear half of the cycle, to stay
 consistent with how you&rsquo;ve been operating, or to avoid a parity that&rsquo;s congested
-where you are. If you just want to get on the air quickly, leave it on <strong>Next</strong>.</p><blockquote><p><strong>Note:</strong> when you click <strong>Call CQ</strong> with <strong>Even</strong> or <strong>Odd</strong> selected, the
+where you are. If you just want to get on the air quickly, leave it on <strong>Next</strong>.</p>
+<blockquote>
+<p><strong>Note:</strong> when you click <strong>Call CQ</strong> with <strong>Even</strong> or <strong>Odd</strong> selected, the
 button changes to <em>Calling CQ…</em> straight away, but the radio stays silent until
 the next slot of the chosen parity arrives. A short quiet gap before the first
-transmission is normal — Station Manager is waiting for your slot, not stalling.</p></blockquote></section><section id=forwarding class=chapter><h2>Forwarding Your Log (QRZ and ClubLog)</h2><p>Forwarding sends each QSO you log to your online services automatically.
+transmission is normal — Station Manager is waiting for your slot, not stalling.</p>
+</blockquote>
+
+          </section>
+        
+          
+          <section id="forwarding" class="chapter">
+            <h2>Forwarding Your Log (QRZ and ClubLog)</h2>
+            <p>Forwarding sends each QSO you log to your online services automatically.
 When you log a contact, Station Manager records it locally first — that
 never depends on the network — and then, in the background, uploads it to
 whichever destinations you have configured. If your internet is slow or
-drops out, the upload waits and retries; your logging is never blocked.</p><p>Two destinations are supported today: <strong>QRZ.com</strong> and <strong>Club Log</strong>.
-(LoTW is planned but not yet available — see the end of this chapter.)</p><h3 id=where-forwarding-is-configured>Where forwarding is configured</h3><p>Forwarding is set up in <code>config.json</code>, in the <code>forwarders</code> list. On a
-normal install the file lives at:</p><pre tabindex=0><code>~/.local/share/station-manager/config.json
-</code></pre><blockquote><p><strong>Stop the daemon before you edit <code>config.json</code>.</strong>
+drops out, the upload waits and retries; your logging is never blocked.</p>
+<p>Two destinations are supported today: <strong>QRZ.com</strong> and <strong>Club Log</strong>.
+(LoTW is planned but not yet available — see the end of this chapter.)</p>
+<h3 id="where-forwarding-is-configured">Where forwarding is configured</h3>
+<p>Forwarding is set up in <code>config.json</code>, in the <code>forwarders</code> list. On a
+normal install the file lives at:</p>
+<pre tabindex="0"><code>~/.local/share/station-manager/config.json
+</code></pre><blockquote>
+<p><strong>Stop the daemon before you edit <code>config.json</code>.</strong>
 While Station Manager is running it rewrites the whole file from memory
 whenever a setting changes in the app, which will overwrite edits you
-made by hand. Always: stop the daemon → edit the file → start it again.</p><pre tabindex=0><code>systemctl --user stop smd
+made by hand. Always: stop the daemon → edit the file → start it again.</p>
+<pre tabindex="0"><code>systemctl --user stop smd
 # edit config.json
 systemctl --user start smd
-</code></pre></blockquote><p>Each entry in <code>forwarders</code> describes one destination:</p><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td><code>name</code></td><td>A label you choose (e.g. <code>"qrz"</code>). Used in logs and status.</td></tr><tr><td><code>type</code></td><td>The service: <code>"qrz"</code> or <code>"clublog"</code>.</td></tr><tr><td><code>enabled</code></td><td><code>true</code> to upload, <code>false</code> to keep the entry but pause it.</td></tr><tr><td><code>credentials</code></td><td>The login details for that service (differs per type — see below).</td></tr><tr><td><code>action_filter</code></td><td>Which changes to send: <code>"insert"</code>, <code>"update"</code>, <code>"delete"</code>. Optional — if you leave it out, it defaults to what the service actually supports.</td></tr><tr><td><code>tick_interval_sec</code></td><td>How often the uploader checks for new QSOs. Default <code>120</code> (every 2 minutes).</td></tr><tr><td><code>batch_size</code></td><td>How many QSOs to send per check. Default <code>5</code>.</td></tr></tbody></table><p>The defaults for <code>tick_interval_sec</code> and <code>batch_size</code> are deliberately
+</code></pre></blockquote>
+<p>Each entry in <code>forwarders</code> describes one destination:</p>
+<table>
+	<thead>
+			<tr>
+					<th>Field</th>
+					<th>Meaning</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td><code>name</code></td>
+					<td>A label you choose (e.g. <code>&quot;qrz&quot;</code>). Used in logs and status.</td>
+			</tr>
+			<tr>
+					<td><code>type</code></td>
+					<td>The service: <code>&quot;qrz&quot;</code> or <code>&quot;clublog&quot;</code>.</td>
+			</tr>
+			<tr>
+					<td><code>enabled</code></td>
+					<td><code>true</code> to upload, <code>false</code> to keep the entry but pause it.</td>
+			</tr>
+			<tr>
+					<td><code>credentials</code></td>
+					<td>The login details for that service (differs per type — see below).</td>
+			</tr>
+			<tr>
+					<td><code>action_filter</code></td>
+					<td>Which changes to send: <code>&quot;insert&quot;</code>, <code>&quot;update&quot;</code>, <code>&quot;delete&quot;</code>. Optional — if you leave it out, it defaults to what the service actually supports.</td>
+			</tr>
+			<tr>
+					<td><code>tick_interval_sec</code></td>
+					<td>How often the uploader checks for new QSOs. Default <code>120</code> (every 2 minutes).</td>
+			</tr>
+			<tr>
+					<td><code>batch_size</code></td>
+					<td>How many QSOs to send per check. Default <code>5</code>.</td>
+			</tr>
+	</tbody>
+</table>
+<p>The defaults for <code>tick_interval_sec</code> and <code>batch_size</code> are deliberately
 gentle — they suit a slow or unreliable connection. You rarely need to
-change them.</p><h3 id=qrzcom>QRZ.com</h3><p>QRZ needs a single <strong>logbook API key</strong>. Each QRZ logbook has its own key,
+change them.</p>
+<h3 id="qrzcom">QRZ.com</h3>
+<p>QRZ needs a single <strong>logbook API key</strong>. Each QRZ logbook has its own key,
 found on the logbook&rsquo;s settings page on QRZ.com. That one key both
-authenticates you and selects which logbook the QSO lands in.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-json data-lang=json><span style=display:flex><span>{
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;name&#34;</span>: <span style=color:#e6db74>&#34;qrz&#34;</span>,
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;type&#34;</span>: <span style=color:#e6db74>&#34;qrz&#34;</span>,
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;enabled&#34;</span>: <span style=color:#66d9ef>true</span>,
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;credentials&#34;</span>: {
-</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;api_key&#34;</span>: <span style=color:#e6db74>&#34;XXXX-XXXX-XXXX-XXXX&#34;</span>
-</span></span><span style=display:flex><span>  }
-</span></span><span style=display:flex><span>}
+authenticates you and selects which logbook the QSO lands in.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;name&#34;</span>: <span style="color:#e6db74">&#34;qrz&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;type&#34;</span>: <span style="color:#e6db74">&#34;qrz&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;enabled&#34;</span>: <span style="color:#66d9ef">true</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;credentials&#34;</span>: {
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;api_key&#34;</span>: <span style="color:#e6db74">&#34;XXXX-XXXX-XXXX-XXXX&#34;</span>
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>}
 </span></span></code></pre></div><p>QRZ supports the full lifecycle, so if you later edit or delete a QSO in
-Station Manager, that change is forwarded too.</p><h3 id=club-log>Club Log</h3><p>Club Log needs <strong>two separate credentials</strong>, and this trips people up
-because the names sound alike:</p><ul><li><strong>Your account login</strong> — <code>email</code> plus <code>password</code>. Use a Club Log
+Station Manager, that change is forwarded too.</p>
+<h3 id="club-log">Club Log</h3>
+<p>Club Log needs <strong>two separate credentials</strong>, and this trips people up
+because the names sound alike:</p>
+<ul>
+<li><strong>Your account login</strong> — <code>email</code> plus <code>password</code>. Use a Club Log
 <strong>Application Password</strong> (generate one in your Club Log account
 settings) rather than your main login password, so it can be revoked
-on its own. This is what tells Club Log <em>whose</em> log the QSO belongs to.</li><li><strong>The application API key</strong> — <code>api</code>. This identifies <em>Station Manager
+on its own. This is what tells Club Log <em>whose</em> log the QSO belongs to.</li>
+<li><strong>The application API key</strong> — <code>api</code>. This identifies <em>Station Manager
 as a piece of software</em>, not you. It does <strong>not</strong> replace your login —
 Club Log needs both. You obtain one key at
-<a href=https://clublog.org/requestapikey.php>clublog.org/requestapikey.php</a>.</li></ul><p><code>callsign</code> selects which of your account&rsquo;s logs receives the QSO.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-json data-lang=json><span style=display:flex><span>{
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;name&#34;</span>: <span style=color:#e6db74>&#34;clublog&#34;</span>,
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;type&#34;</span>: <span style=color:#e6db74>&#34;clublog&#34;</span>,
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;enabled&#34;</span>: <span style=color:#66d9ef>true</span>,
-</span></span><span style=display:flex><span>  <span style=color:#f92672>&#34;credentials&#34;</span>: {
-</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;email&#34;</span>: <span style=color:#e6db74>&#34;you@example.com&#34;</span>,
-</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;password&#34;</span>: <span style=color:#e6db74>&#34;your-application-password&#34;</span>,
-</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;callsign&#34;</span>: <span style=color:#e6db74>&#34;7Q5MLV&#34;</span>,
-</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;api&#34;</span>: <span style=color:#e6db74>&#34;your-clublog-application-api-key&#34;</span>
-</span></span><span style=display:flex><span>  }
-</span></span><span style=display:flex><span>}
-</span></span></code></pre></div><h4 id=club-log-only-uploads-and-deletes--it-does-not-edit>Club Log only uploads and deletes — it does not edit</h4><p>Club Log&rsquo;s real-time interface can <strong>add</strong> a QSO and <strong>delete</strong> a QSO,
+<a href="https://clublog.org/requestapikey.php">clublog.org/requestapikey.php</a>.</li>
+</ul>
+<p><code>callsign</code> selects which of your account&rsquo;s logs receives the QSO.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;name&#34;</span>: <span style="color:#e6db74">&#34;clublog&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;type&#34;</span>: <span style="color:#e6db74">&#34;clublog&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;enabled&#34;</span>: <span style="color:#66d9ef">true</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;credentials&#34;</span>: {
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;email&#34;</span>: <span style="color:#e6db74">&#34;you@example.com&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;password&#34;</span>: <span style="color:#e6db74">&#34;your-application-password&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;callsign&#34;</span>: <span style="color:#e6db74">&#34;7Q5MLV&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;api&#34;</span>: <span style="color:#e6db74">&#34;your-clublog-application-api-key&#34;</span>
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h4 id="club-log-only-uploads-and-deletes--it-does-not-edit">Club Log only uploads and deletes — it does not edit</h4>
+<p>Club Log&rsquo;s real-time interface can <strong>add</strong> a QSO and <strong>delete</strong> a QSO,
 but it cannot change the fields of one already in your log (re-sending an
 edited QSO is just treated as a duplicate). Station Manager knows this:
 if you leave <code>action_filter</code> out, Club Log defaults to
-<code>["insert", "delete"]</code> automatically — so editing a QSO won&rsquo;t pile up
+<code>[&quot;insert&quot;, &quot;delete&quot;]</code> automatically — so editing a QSO won&rsquo;t pile up
 failed uploads. If you set <code>action_filter</code> by hand, don&rsquo;t include
-<code>"update"</code> for Club Log; the daemon will refuse to start and tell you why.</p><h4 id=if-your-credentials-are-wrong>If your credentials are wrong</h4><p>If Club Log rejects your login, it requires software to <strong>stop sending
+<code>&quot;update&quot;</code> for Club Log; the daemon will refuse to start and tell you why.</p>
+<h4 id="if-your-credentials-are-wrong">If your credentials are wrong</h4>
+<p>If Club Log rejects your login, it requires software to <strong>stop sending
 immediately</strong> — otherwise your address can be temporarily blocked.
 Station Manager honours this: the first rejection halts further Club Log
 uploads until you fix the credentials and restart the daemon. So if Club
 Log uploads stop, check <code>email</code> / <code>password</code> / <code>api</code>, correct them (with
-the daemon stopped), and start it again.</p><h3 id=how-to-tell-a-qso-was-uploaded>How to tell a QSO was uploaded</h3><p>After a successful upload, Station Manager stamps the QSO with the
+the daemon stopped), and start it again.</p>
+<h3 id="how-to-tell-a-qso-was-uploaded">How to tell a QSO was uploaded</h3>
+<p>After a successful upload, Station Manager stamps the QSO with the
 service&rsquo;s status field — <code>QRZCOM_QSO_UPLOAD_STATUS</code> for QRZ,
 <code>CLUBLOG_QSO_UPLOAD_STATUS</code> for Club Log — set to <code>Y</code>, along with the
 date. These travel with the QSO in ADIF exports, so you can always see
-which contacts have been forwarded.</p><h3 id=slow-or-unreliable-internet>Slow or unreliable internet</h3><p>Uploads run in the background and retry on their own. A network blip, a
+which contacts have been forwarded.</p>
+<h3 id="slow-or-unreliable-internet">Slow or unreliable internet</h3>
+<p>Uploads run in the background and retry on their own. A network blip, a
 rate limit, or a brief service outage is treated as temporary: the QSO is
 re-queued and tried again later, with the wait growing between attempts so
 the service isn&rsquo;t hammered. A QSO that the service <em>permanently</em> rejects
 (bad data, wrong credentials) is marked failed rather than retried
 forever. Either way, your local log already has the contact — forwarding
-never holds up logging.</p><h3 id=not-yet-available-lotw>Not yet available: LoTW</h3><p>ARRL Logbook of the World is on the roadmap but not implemented yet. Only
+never holds up logging.</p>
+<h3 id="not-yet-available-lotw">Not yet available: LoTW</h3>
+<p>ARRL Logbook of the World is on the roadmap but not implemented yet. Only
 <code>qrz</code> and <code>clublog</code> are valid <code>type</code> values today; any other type will be
-rejected at startup.</p></section><section id=importing class=chapter><h2>Importing an Existing Log</h2><p><em>Draft outline — content to be written.</em></p><ul><li>Importing an ADIF file with <code>smctl import</code> (wraps the stop/import/restart
-database hand-off so you run one command).</li><li><strong>Uploads default to OFF:</strong> import seeds your local logbook only and never
-re-sends your history to QRZ/ClubLog. Opt in per-forwarder with <code>--forward &lt;name></code> only when you actually want the imported log pushed to a service.</li><li>Bulk-forwarding an already-imported log to a newly-subscribed service is a
-one-click action in the logbook app — not a re-import.</li><li>The QRZ per-QSO logid (<code>app_qrzlog_logid</code>) is preserved as provenance on each
-imported QSO, independent of any upload.</li><li>Setting the station callsign for the imported log.</li></ul></section><section id=session-log class=chapter><h2>The Session Log and Email-Out</h2><p><em>Draft outline — content to be written.</em></p><ul><li>The session log: the contacts you&rsquo;ve made this sitting.</li><li>Editing a logged QSO.</li><li>Emailing your session log as an ADIF attachment.</li></ul></section><section id=troubleshooting class=chapter><h2>Troubleshooting</h2><p><em>Draft outline — content to be written.</em></p><ul><li>Station Manager won&rsquo;t start — and where the startup error is logged.</li><li>The rig won&rsquo;t connect.</li><li>FT8 says it&rsquo;s idle.</li><li>Where the logs are.</li><li>Reading this manual when the daemon is down (open it from disk).</li></ul></section><section id=appendix-shortcuts class=chapter><h2>Appendix: Keyboard Shortcuts</h2><p><em>Draft — the operator-facing shortcut tables go here.</em></p><p>This manual is self-contained: the full shortcut tables live here, not behind a
-link, so they&rsquo;re available offline and from disk.</p></section><section id=appendix-files class=chapter><h2>Appendix: File Locations</h2><p><em>Draft — where the database, logs, and config live, and how the data directory is resolved.</em></p></section><section id=appendix-cli class=chapter><h2>Appendix: Command-Line Reference</h2><p><em>Draft — the <code>smd</code> / <code>smctl</code> subcommands an operator runs (e.g. <code>smctl import</code>, including the <code>--forward</code> flag for opting imported QSOs into a forwarder upload; default is no upload).</em></p></section><section id=appendix-glossary class=chapter><h2>Appendix: Glossary</h2><p><em>Draft — SM-specific terms an operator will meet: daemon, forwarder, enrichment, bridge, session.</em></p></section></main></div></body></html>
+rejected at startup.</p>
+
+          </section>
+        
+          
+          <section id="importing" class="chapter">
+            <h2>Importing an Existing Log</h2>
+            <p><em>Draft outline — content to be written.</em></p>
+<ul>
+<li>Importing an ADIF file with <code>smctl import</code> (wraps the stop/import/restart
+database hand-off so you run one command).</li>
+<li><strong>Uploads default to OFF:</strong> import seeds your local logbook only and never
+re-sends your history to QRZ/ClubLog. Opt in per-forwarder with <code>--forward &lt;name&gt;</code> only when you actually want the imported log pushed to a service.</li>
+<li>Bulk-forwarding an already-imported log to a newly-subscribed service is a
+one-click action in the logbook app — not a re-import.</li>
+<li>The QRZ per-QSO logid (<code>app_qrzlog_logid</code>) is preserved as provenance on each
+imported QSO, independent of any upload.</li>
+<li>Setting the station callsign for the imported log.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="session-log" class="chapter">
+            <h2>The Session Log and Email-Out</h2>
+            <p><em>Draft outline — content to be written.</em></p>
+<ul>
+<li>The session log: the contacts you&rsquo;ve made this sitting.</li>
+<li>Editing a logged QSO.</li>
+<li>Emailing your session log as an ADIF attachment.</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="troubleshooting" class="chapter">
+            <h2>Troubleshooting</h2>
+            <p><em>Draft outline — content to be written.</em></p>
+<ul>
+<li>Station Manager won&rsquo;t start — and where the startup error is logged.</li>
+<li>The rig won&rsquo;t connect.</li>
+<li>FT8 says it&rsquo;s idle.</li>
+<li>Where the logs are.</li>
+<li>Reading this manual when the daemon is down (open it from disk).</li>
+</ul>
+
+          </section>
+        
+          
+          <section id="appendix-shortcuts" class="chapter">
+            <h2>Appendix: Keyboard Shortcuts</h2>
+            <p><em>Draft — the operator-facing shortcut tables go here.</em></p>
+<p>This manual is self-contained: the full shortcut tables live here, not behind a
+link, so they&rsquo;re available offline and from disk.</p>
+
+          </section>
+        
+          
+          <section id="appendix-files" class="chapter">
+            <h2>Appendix: File Locations</h2>
+            <p><em>Draft — where the database, logs, and config live, and how the data directory is resolved.</em></p>
+
+          </section>
+        
+          
+          <section id="appendix-cli" class="chapter">
+            <h2>Appendix: Command-Line Reference</h2>
+            <p><em>Draft — the <code>smd</code> / <code>smctl</code> subcommands an operator runs (e.g. <code>smctl import</code>, including the <code>--forward</code> flag for opting imported QSOs into a forwarder upload; default is no upload).</em></p>
+
+          </section>
+        
+          
+          <section id="appendix-glossary" class="chapter">
+            <h2>Appendix: Glossary</h2>
+            <p><em>Draft — SM-specific terms an operator will meet: daemon, forwarder, enrichment, bridge, session.</em></p>
+
+          </section>
+        
+      </main>
+    </div>
+  </body>
+</html>
