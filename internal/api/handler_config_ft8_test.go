@@ -142,6 +142,63 @@ func TestConfig_Ft8CallerAnswerMode_InvalidValue400(t *testing.T) {
 	}
 }
 
+// GET serves an empty Field Day block on a fresh config (no defaults — FD is once
+// a year, so unset is the normal state), giving the SPA a stable {class, section}.
+func TestConfig_Ft8FieldDay_GetReturnsEmpty(t *testing.T) {
+	srv := testServer(t)
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8FieldDay == nil {
+		t.Fatal("ft8_field_day absent on GET; want an empty block")
+	}
+	if resp.Ft8FieldDay.Class != "" || resp.Ft8FieldDay.Section != "" {
+		t.Errorf("ft8_field_day = %+v, want empty", resp.Ft8FieldDay)
+	}
+}
+
+// A PUT persists the Field Day exchange and normalises it to upper-case.
+func TestConfig_Ft8FieldDay_PutUpdatesAndUpperCases(t *testing.T) {
+	srv := testServer(t)
+	if w := ft8PutConfig(t, srv, `{"ft8_field_day":{"class":"2a","section":"dx"}}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8FieldDay == nil || resp.Ft8FieldDay.Class != "2A" || resp.Ft8FieldDay.Section != "DX" {
+		t.Fatalf("after PUT, ft8_field_day = %+v (want 2A/DX)", resp.Ft8FieldDay)
+	}
+}
+
+// A PUT that omits ft8_field_day leaves a previously-stored value untouched.
+func TestConfig_Ft8FieldDay_OmittedPutDoesNotClobber(t *testing.T) {
+	srv := testServer(t)
+	if w := ft8PutConfig(t, srv, `{"ft8_field_day":{"class":"3A","section":"EMA"}}`); w.Code != http.StatusOK {
+		t.Fatalf("seed PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	if w := ft8PutConfig(t, srv, `{"ft8_display":{"feed_mode":"single"}}`); w.Code != http.StatusOK {
+		t.Fatalf("display PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8FieldDay == nil || resp.Ft8FieldDay.Class != "3A" || resp.Ft8FieldDay.Section != "EMA" {
+		t.Fatalf("ft8_field_day clobbered by an omitted PUT: %+v", resp.Ft8FieldDay)
+	}
+}
+
+// A malformed class (and a malformed section) are each a 400 via the shared Validate.
+func TestConfig_Ft8FieldDay_InvalidValue400(t *testing.T) {
+	srv := testServer(t)
+	for _, body := range []string{
+		`{"ft8_field_day":{"class":"99Z"}}`,                    // bad category
+		`{"ft8_field_day":{"class":"2A","section":"TOOLONG"}}`, // section too long
+	} {
+		w := ft8PutConfig(t, srv, body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("PUT %s = %d, want 400 (body %s)", body, w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "invalid_field_value" {
+			t.Errorf("PUT %s code = %q, want invalid_field_value", body, code)
+		}
+	}
+}
+
 // An invalid feed_mode is a 400 (the one enum gets a friendly error; row
 // cap / colours are normalised, not rejected).
 func TestConfig_Ft8Display_InvalidFeedMode400(t *testing.T) {

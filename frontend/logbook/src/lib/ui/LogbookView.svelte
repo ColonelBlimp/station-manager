@@ -1,13 +1,15 @@
 <script lang="ts">
     // Logbook browse view — pick a logbook, page through its QSOs, multi-select
     // rows, and edit one (the Edit button opens a modal → PATCH /v1/qso/{uuid}).
-    // The selection mechanism feeds the bulk ACTIONS (export, upload, email) which
-    // are still a follow-up. Paging is cursor-based Next/Prev/First (the daemon has
-    // no page-number/offset endpoint — see logbook.svelte.ts).
+    // The selection feeds the bulk ACTIONS: email-out is wired (LogbookEmailControls
+    // → /v1/session/email); forward / export / upload-selected are still a follow-up.
+    // Paging is cursor-based Next/Prev/First (the daemon has no page-number/offset
+    // endpoint — see logbook.svelte.ts).
     import { onMount } from 'svelte';
     import { logbookState } from '../states/logbook.svelte';
     import { formatQsoDate, formatTime, formatFreq, formatMode } from '../utils/format';
     import EditQsoModal from './EditQsoModal.svelte';
+    import LogbookEmailControls from './LogbookEmailControls.svelte';
     import type { LogbookQso } from '../api/logbooks';
 
     onMount(() => void logbookState.init());
@@ -57,14 +59,15 @@
                 </select>
             </label>
 
-            <!-- Selection indicator. The bulk actions (forward / export / email /
-                 upload-selected) are a follow-up; for now selection just reports a
-                 count and offers a Clear. -->
+            <!-- Selection toolbar: count + email-out + Clear. Email posts the selected
+                 rows' UUIDs to /v1/session/email (LogbookEmailControls). The other bulk
+                 actions (forward / export / upload-selected) are a follow-up. -->
             {#if logbookState.selectedCount > 0}
-                <div class="ml-auto flex items-center gap-2 text-sm">
+                <div class="ml-auto flex flex-wrap items-center gap-2 text-sm">
                     <span class="font-medium text-indigo-700"
                         >{logbookState.selectedCount.toLocaleString()} selected</span
                     >
+                    <LogbookEmailControls />
                     <button
                         type="button"
                         class="cursor-pointer rounded-md border border-gray-300 px-2 py-1 hover:bg-gray-50"
@@ -125,7 +128,7 @@
                                         class="cursor-pointer items-center"
                                         aria-label="Select QSO with {row.call ?? 'unknown'}"
                                         checked={logbookState.selected.has(row.id)}
-                                        onchange={() => logbookState.toggleRow(row.id)}
+                                        onchange={() => logbookState.toggleRow(row)}
                                     />
                                 </td>
                                 <td class="">{formatQsoDate(row.qso_date)}</td>

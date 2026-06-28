@@ -5,6 +5,7 @@ import (
 	stderr "errors"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -79,6 +80,14 @@ type ConfigResponse struct {
 	// rejected at Call-CQ start), so the wire surface only ever carries the two
 	// attended auto modes.
 	Ft8CallerAnswerMode *string `json:"ft8_caller_answer_mode,omitempty"`
+	// Ft8FieldDay is the operator's ARRL Field Day exchange (class + ARRL/RAC
+	// section), sent when answering a CQ FD over FT8. Served on GET as the stored
+	// block (empty `{}` when unset — FD is once a year, so empty is normal).
+	// Operator-writable; **presence-aware** on PUT (omitting it leaves the stored
+	// block untouched) and normalised to upper-case before the shared Validate
+	// checks it (class strict, section loose — go-ft8 owns the canonical section
+	// list). Pointer-typed so the handler tells "sent" from "absent".
+	Ft8FieldDay *types.Ft8FieldDayConfig `json:"ft8_field_day,omitempty"`
 	// BridgeTimeouts / BridgeTune are the resolved (defaults-filled, ceilings
 	// applied) bridge supervisor/readLoop timeouts and tune-carrier params.
 	// Like Ft8Frequencies, the on-disk config stays SPARSE — zero = "use the
@@ -391,6 +400,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		candidate.Ft8.TX.CallerAnswerMode = mode
 	}
+	// FT8 Field Day exchange — presence-aware (config SPA FT8 tab). Normalised to
+	// upper-case (TrimSpace+ToUpper) here so "2a"/"dx" store canonically; the shared
+	// Validate then rejects a malformed class/section as a 400 (validateFt8FieldDay).
+	// An empty block (both fields blank) is the valid "FD identity not set" state.
+	if req.Ft8FieldDay != nil {
+		candidate.Ft8.FieldDay = &types.Ft8FieldDayConfig{
+			Class:   strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Class)),
+			Section: strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Section)),
+		}
+	}
 	// QSL defaults — presence-aware, same rationale as ft8_display: a My Station
 	// save omits `qsl` and must leave it alone.
 	if req.Qsl != nil {
@@ -666,6 +685,16 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// the SPA dropdown only offers the two auto modes and a PUT rejects anything else.
 	callerMode := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX)
 	resp.Ft8CallerAnswerMode = &callerMode
+
+	// FT8 Field Day exchange — served as the stored block, or an empty `{}` when
+	// unset, so the SPA always reads a stable {class, section} shape (no defaults to
+	// resolve: empty means "FD identity not set").
+	if cfg.Ft8.FieldDay != nil {
+		fd := *cfg.Ft8.FieldDay
+		resp.Ft8FieldDay = &fd
+	} else {
+		resp.Ft8FieldDay = &types.Ft8FieldDayConfig{}
+	}
 
 	// FT8 per-band dial frequencies, always resolved (defaults + overrides) for the
 	// SPA's Main-Freq band buttons.

@@ -20,6 +20,7 @@ import {
     type LogbookQso,
 } from '../api/logbooks';
 import { patchQso, type QsoPatch } from '../api/qso';
+import { fetchMailer } from '../api/config';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -51,11 +52,22 @@ class LogbookState {
     /** Edit error to show in the modal (validation/conflict/transport), or null. */
     editError: string | null = $state(null);
 
-    // Selected QSO row ids (the numeric primary key), for bulk actions
-    // (forward/export/email — those actions are a follow-up). Selection persists
-    // across pages so an operator can gather rows from several pages before acting;
-    // it's cleared only when switching logbooks. SvelteSet so `.has()` reads are reactive.
+    // Selected QSO row ids (the numeric primary key), for bulk actions (email today;
+    // forward/export are a follow-up). Selection persists across pages so an operator
+    // can gather rows from several pages before acting; it's cleared only when
+    // switching logbooks. SvelteSet so `.has()` reads are reactive.
     readonly selected = new SvelteSet<number>();
+    // id → UUID for every selected row, captured at selection time. The page only
+    // holds the current rows, but selection spans pages, so we can't recover a
+    // paged-away row's UUID from `rows` at send time — we stash it on toggle. Plain
+    // Map: read only when building the email payload, never in render.
+    readonly #selectedUuids = new Map<number, string>();
+
+    // Mailer config (SMTP enabled + default recipient), read once on init from
+    // /v1/config so the email-out controls can gate + pre-fill — mirroring the
+    // logging SPA's SessionEmailControls. Absent/failed fetch → disabled, no default.
+    mailerEnabled: boolean = $state(false);
+    mailerDefaultRecipient: string = $state('');
 
     // The `after` cursor for each loaded page index (cursors[0] = null = first page).
     // Non-reactive: pure navigation bookkeeping, never rendered.
@@ -96,22 +108,61 @@ class LogbookState {
         return this.rows.some((r) => this.selected.has(r.id)) && !this.allVisibleSelected;
     }
 
-    /** Toggle one row's selection. */
-    toggleRow(id: number): void {
-        if (this.selected.has(id)) this.selected.delete(id);
-        else this.selected.add(id);
+    /** UUIDs of the selected rows (skips any row lacking a UUID — e.g. a pre-UUID
+     *  legacy import, which can't be emailed). The email payload keys off these. */
+    get selectedUuids(): string[] {
+        const out: string[] = [];
+        for (const id of this.selected) {
+            const uuid = this.#selectedUuids.get(id);
+            if (uuid) out.push(uuid);
+        }
+        return out;
+    }
+
+    /** Toggle one row's selection. Takes the row (not just the id) so the UUID is
+     *  captured for cross-page email — see #selectedUuids. */
+    toggleRow(row: LogbookQso): void {
+        if (this.selected.has(row.id)) {
+            this.selected.delete(row.id);
+            this.#selectedUuids.delete(row.id);
+        } else {
+            this.selected.add(row.id);
+            if (row.uuid) this.#selectedUuids.set(row.id, row.uuid);
+        }
     }
     /** Header checkbox: select all visible rows, or clear them if all are already selected. */
     toggleAllVisible(): void {
         if (this.allVisibleSelected) {
-            for (const r of this.rows) this.selected.delete(r.id);
+            for (const r of this.rows) {
+                this.selected.delete(r.id);
+                this.#selectedUuids.delete(r.id);
+            }
         } else {
-            for (const r of this.rows) this.selected.add(r.id);
+            for (const r of this.rows) {
+                this.selected.add(r.id);
+                if (r.uuid) this.#selectedUuids.set(r.id, r.uuid);
+            }
         }
     }
     /** Drop the entire selection. */
     clearSelection(): void {
         this.selected.clear();
+        this.#selectedUuids.clear();
+    }
+
+    /** Flip the visible rows whose UUID was just emailed to "forwarded by email"
+     *  so the callsign tint updates immediately (the daemon has durably stamped
+     *  sm_fwrd_by_email_*; this mirrors that onto the in-memory page). Rows on other
+     *  pages reflect it on their next fetch. */
+    markEmailed(uuids: string[]): void {
+        if (uuids.length === 0) return;
+        const set = new Set(uuids);
+        for (let i = 0; i < this.rows.length; i++) {
+            const uuid = this.rows[i].uuid;
+            if (uuid && set.has(uuid)) {
+                this.rows[i] = { ...this.rows[i], sm_fwrd_by_email_status: 'Y' };
+            }
+        }
     }
 
     /** Open the edit modal on a row. */
@@ -155,10 +206,13 @@ class LogbookState {
         return true;
     }
 
-    /** Load the logbook list on mount, then auto-select the first one. */
+    /** Load the logbook list on mount, then auto-select the first one. The mailer
+     *  block is fetched alongside (fire-and-forget): the email-out controls gate on
+     *  it, but a failure there must not block browsing, so it's not awaited here. */
     async init(): Promise<void> {
         this.loading = true;
         this.error = null;
+        void this.loadMailer();
         const out = await fetchLogbooks();
         if (out.kind !== 'ok') {
             this.error = out.message;
@@ -169,6 +223,17 @@ class LogbookState {
         this.loading = false;
         if (out.logbooks.length > 0) {
             await this.selectLogbook(out.logbooks[0].id);
+        }
+    }
+
+    /** Read the mailer block (SMTP enabled + default recipient) from /v1/config for
+     *  the email-out controls. Best-effort: a failure leaves the controls disabled
+     *  (mailerEnabled stays false), never an error — browsing is unaffected. */
+    async loadMailer(): Promise<void> {
+        const out = await fetchMailer();
+        if (out.kind === 'ok') {
+            this.mailerEnabled = out.mailer.enabled;
+            this.mailerDefaultRecipient = out.mailer.defaultRecipient;
         }
     }
 

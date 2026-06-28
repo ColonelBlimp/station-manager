@@ -106,6 +106,18 @@ on any PUT):
   tune-power / auto-off clamps, so no config value can leave the rig calling a dead
   station for minutes. Surfaced to the SPA as a per-rung "N calls left" countdown in
   the Working banner (see §4). Config-only today (no Settings-tab control yet).
+- **`field_day.{class, section}`** — the operator's **ARRL Field Day exchange**, sent
+  when **answering** a `CQ FD` over FT8 (search & pounce; SM does **not** call CQ FD).
+  `class` is `<transmitters><category>` (e.g. `2A`, `1D`); `section` is the ARRL/RAC
+  section, or `DX` for a station outside US/Canada. Both empty = FD identity not set
+  (the off-season default). Surfaced over `/v1/config` as `ft8_field_day` (presence-aware),
+  stored upper-cased. **Validation:** class strict (`^[1-9][0-9]?[A-F]$`); section only
+  *loosely* in SM (2–4 upper-case alnum) because **go-ft8 owns the canonical ARRL/RAC
+  section list** (`ARRLFieldDaySections()` / `ValidARRLFieldDaySection()`, v0.4.0) —
+  `types.Ft8FieldDaySectionValid` is the single swap point to delegate to it, and that
+  list drives the SPA section dropdown. The FD **parse / answerer ladder / QSO→ADIF
+  mapping** (the operate path) are the remaining work; this block is just the SM-owned
+  identity the reply carries.
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on

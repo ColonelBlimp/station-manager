@@ -77,6 +77,7 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateStationPrefs(cfg.Station)...)
 	out = append(out, validateFt8Display(cfg.Ft8.Display)...)
 	out = append(out, validateFt8Occupancy(cfg.Ft8.TX)...)
+	out = append(out, validateFt8FieldDay(cfg.Ft8.FieldDay)...)
 	// Advisory findings (non-fatal) — currently just the non-loopback-bind notice.
 	for _, w := range Warnings(cfg) {
 		out = append(out, Finding{Field: "socket_path", Code: "insecure_bind", Message: w, Warning: true})
@@ -270,6 +271,27 @@ func validateFt8Display(d *types.Ft8DisplayConfig) []Finding {
 			Message: fmt.Sprintf("ft8_display.feed_mode %q must be \"accumulate\" or \"single\"", d.FeedMode)}}
 	}
 	return nil
+}
+
+// validateFt8FieldDay checks the operator's Field Day exchange. Both fields are
+// optional (empty = FD identity not set). Class is validated strictly; Section only
+// loosely — the canonical ARRL/RAC list is owned by go-ft8 (see Ft8FieldDaySectionValid).
+func validateFt8FieldDay(d *types.Ft8FieldDayConfig) []Finding {
+	if d == nil {
+		return nil
+	}
+	var out []Finding
+	if d.Class != "" && !types.Ft8FieldDayClassValid(d.Class) {
+		out = append(out, Finding{Field: "ft8_field_day.class", Code: "invalid_field_value",
+			Message: fmt.Sprintf("ft8_field_day.class %q must be a transmitter count 1–99 "+
+				"followed by a category A–F (e.g. \"2A\")", d.Class)})
+	}
+	if d.Section != "" && !types.Ft8FieldDaySectionValid(d.Section) {
+		out = append(out, Finding{Field: "ft8_field_day.section", Code: "invalid_field_value",
+			Message: fmt.Sprintf("ft8_field_day.section %q must be 2–4 letters/digits "+
+				"(e.g. \"EMA\", \"DX\")", d.Section)})
+	}
+	return out
 }
 
 // validateFt8Occupancy bounds the ft8.tx.occupancy knobs (review 2026-06-19 M3).

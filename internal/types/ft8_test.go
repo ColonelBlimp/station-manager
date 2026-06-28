@@ -106,6 +106,40 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 	}
 }
 
+func TestFt8FieldDayClassValid(t *testing.T) {
+	valid := []string{"1A", "2A", "5F", "1D", "10A", "99F"}
+	for _, s := range valid {
+		if !Ft8FieldDayClassValid(s) {
+			t.Errorf("Ft8FieldDayClassValid(%q) = false, want true", s)
+		}
+	}
+	// empty, no count, no category, leading zero, bad category, lowercase, 3 digits,
+	// trailing junk, padding.
+	invalid := []string{"", "A", "1", "0A", "1G", "2a", "100A", "1AA", "A1", " 1A", "1A "}
+	for _, s := range invalid {
+		if Ft8FieldDayClassValid(s) {
+			t.Errorf("Ft8FieldDayClassValid(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestFt8FieldDaySectionValid(t *testing.T) {
+	// Loose guard only — 2–4 upper-case alnum (go-ft8 owns the canonical ARRL/RAC
+	// membership test). So "ZZ" passes the guard even though it isn't a real section.
+	valid := []string{"DX", "EMA", "WI", "ON", "SDG", "PR"}
+	for _, s := range valid {
+		if !Ft8FieldDaySectionValid(s) {
+			t.Errorf("Ft8FieldDaySectionValid(%q) = false, want true", s)
+		}
+	}
+	invalid := []string{"", "A", "ema", "TOOLONG", "E MA", "E-A"}
+	for _, s := range invalid {
+		if Ft8FieldDaySectionValid(s) {
+			t.Errorf("Ft8FieldDaySectionValid(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestResolveFt8MaxRepeats(t *testing.T) {
 	cases := []struct {
 		name string

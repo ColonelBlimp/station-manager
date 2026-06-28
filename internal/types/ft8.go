@@ -1,5 +1,7 @@
 package types
 
+import "regexp"
+
 // Ft8Config holds the daemon's FT8 subsystem configuration. The FT8 work
 // runs as an in-process subsystem of `cmd/smd` under `internal/ft8`,
 // decoding live receive audio into messages.
@@ -62,6 +64,46 @@ type Ft8Config struct {
 	// the ResolveFt8Frequencies defaults (the WSJT-X FT8 dial frequencies). omitempty
 	// so an untouched config carries no inert block.
 	Frequencies map[string]int `json:"frequencies,omitempty"`
+
+	// FieldDay holds the operator's ARRL Field Day exchange (class + ARRL/RAC
+	// section), sent when ANSWERING a CQ FD over FT8 — search & pounce only; SM
+	// does not call CQ FD. Pointer-typed for the same inert-block reason as
+	// TX/Display: FD is one weekend a year, so an unset block is the normal state.
+	// The canonical section enumeration + the FD message ladder are owned by
+	// go-ft8; this is just the SM-owned identity the reply carries.
+	FieldDay *Ft8FieldDayConfig `json:"field_day,omitempty"`
+}
+
+// Ft8FieldDayConfig is the operator's ARRL Field Day exchange, transmitted when
+// answering a CQ FD over FT8. Class is "<transmitters><category>" (e.g. "2A", "1D",
+// "5F"); Section is the ARRL/RAC section, or "DX" for a station outside US/Canada.
+// Both empty = FD identity not set (the off-season default). Stored upper-cased.
+type Ft8FieldDayConfig struct {
+	Class   string `json:"class,omitempty"`
+	Section string `json:"section,omitempty"`
+}
+
+// ft8FieldDayClassPattern matches a Field Day class: transmitter count 1–99 followed
+// by a category letter A–F (e.g. "2A", "1D", "10F"). Anchored, so junk is rejected.
+var ft8FieldDayClassPattern = regexp.MustCompile(`^[1-9][0-9]?[A-F]$`)
+
+// ft8FieldDaySectionPattern is a LOOSE guard only — 2–4 upper-case letters/digits,
+// enough to catch a fat-finger. The authoritative ARRL/RAC section list is owned by
+// go-ft8 (it encodes the section into the FD frame and will expose
+// ARRLFieldDaySections() / ValidARRLFieldDaySection()); Ft8FieldDaySectionValid is
+// the single swap point that delegates to that contract once the release is pinned.
+var ft8FieldDaySectionPattern = regexp.MustCompile(`^[A-Z0-9]{2,4}$`)
+
+// Ft8FieldDayClassValid reports whether s is a well-formed Field Day class.
+func Ft8FieldDayClassValid(s string) bool {
+	return ft8FieldDayClassPattern.MatchString(s)
+}
+
+// Ft8FieldDaySectionValid reports whether s passes SM's LOOSE section guard. This is
+// deliberately NOT a membership test against the canonical ARRL/RAC list — go-ft8
+// owns that (ValidARRLFieldDaySection); swap this body to delegate when go-ft8 lands.
+func Ft8FieldDaySectionValid(s string) bool {
+	return ft8FieldDaySectionPattern.MatchString(s)
 }
 
 // Ft8DecodeLogConfig configures the FT8 decode log — a WSJT-X/JTDX ALL.TXT-style
