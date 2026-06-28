@@ -86,6 +86,62 @@ func TestConfig_Ft8Display_OmittedPutDoesNotClobber(t *testing.T) {
 	}
 }
 
+// GET resolves the caller-answer mode (default auto_first on a fresh config) so
+// the Settings-tab dropdown has a value to render without a prior save.
+func TestConfig_Ft8CallerAnswerMode_GetReturnsDefault(t *testing.T) {
+	srv := testServer(t)
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8CallerAnswerMode == nil {
+		t.Fatal("ft8_caller_answer_mode absent on GET; want resolved default")
+	}
+	if *resp.Ft8CallerAnswerMode != types.Ft8CallerAnswerAutoFirst {
+		t.Errorf("mode = %q, want %q", *resp.Ft8CallerAnswerMode, types.Ft8CallerAnswerAutoFirst)
+	}
+}
+
+// A PUT carrying ft8_caller_answer_mode persists it; a follow-up GET reflects it.
+func TestConfig_Ft8CallerAnswerMode_PutUpdates(t *testing.T) {
+	srv := testServer(t)
+	if w := ft8PutConfig(t, srv, `{"ft8_caller_answer_mode":"auto_strongest"}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8CallerAnswerMode == nil || *resp.Ft8CallerAnswerMode != types.Ft8CallerAnswerAutoStrongest {
+		t.Fatalf("after PUT, ft8_caller_answer_mode = %v", resp.Ft8CallerAnswerMode)
+	}
+}
+
+// A PUT that omits ft8_caller_answer_mode must NOT reset a previously-stored value
+// — the presence-aware contract (a My Station / display-only save leaves it alone).
+func TestConfig_Ft8CallerAnswerMode_OmittedPutDoesNotClobber(t *testing.T) {
+	srv := testServer(t)
+	if w := ft8PutConfig(t, srv, `{"ft8_caller_answer_mode":"auto_strongest"}`); w.Code != http.StatusOK {
+		t.Fatalf("seed PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	if w := ft8PutConfig(t, srv, `{"ft8_display":{"feed_mode":"single"}}`); w.Code != http.StatusOK {
+		t.Fatalf("display PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8CallerAnswerMode == nil || *resp.Ft8CallerAnswerMode != types.Ft8CallerAnswerAutoStrongest {
+		t.Fatalf("caller-answer mode clobbered by an omitted PUT: %v", resp.Ft8CallerAnswerMode)
+	}
+}
+
+// The SPA wire surface accepts only the two attended auto modes; operator_pick (a
+// config.json-only literal, rejected at Call-CQ start) and any junk are a 400.
+func TestConfig_Ft8CallerAnswerMode_InvalidValue400(t *testing.T) {
+	srv := testServer(t)
+	for _, bad := range []string{"operator_pick", "bogus"} {
+		w := ft8PutConfig(t, srv, `{"ft8_caller_answer_mode":"`+bad+`"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("PUT %q = %d, want 400 (body %s)", bad, w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "invalid_field_value" {
+			t.Errorf("PUT %q code = %q, want invalid_field_value", bad, code)
+		}
+	}
+}
+
 // An invalid feed_mode is a 400 (the one enum gets a friendly error; row
 // cap / colours are normalised, not rejected).
 func TestConfig_Ft8Display_InvalidFeedMode400(t *testing.T) {

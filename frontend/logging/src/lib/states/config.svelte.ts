@@ -309,6 +309,15 @@ class ConfigState {
     ft8Display: Ft8DisplayView = new Ft8DisplayView();
 
     /**
+     * FT8 Call-CQ answerer-selection strategy, mirrored from `ft8_caller_answer_mode`
+     * on every applyResponse and persisted via the FT8 Settings tab (bundled into the
+     * saveFt8Display PUT). `auto_first` = work the first valid answerer by decode order;
+     * `auto_strongest` = work the highest-SNR valid answerer in the slot. Defaults to
+     * auto_first until the first /v1/config fetch settles.
+     */
+    ft8CallerAnswerMode: 'auto_first' | 'auto_strongest' = $state('auto_first');
+
+    /**
      * FT8 per-band dial frequencies (band label → Hz), mirrored from
      * `ft8_frequencies` on every applyResponse. Read by the Main-Freq band buttons to
      * tune + highlight; empty until the first /v1/config fetch settles.
@@ -405,6 +414,7 @@ class ConfigState {
         this.ft8Display.highlightCalling = fd?.highlight_calling ?? '#b45309';
         this.ft8Display.cqToTop = fd?.cq_to_top ?? false;
         this.ft8Display.hideHashedCalls = fd?.hide_hashed_calls ?? false;
+        this.ft8CallerAnswerMode = resp.ft8_caller_answer_mode ?? 'auto_first';
         this.ft8Frequencies = resp.ft8_frequencies ?? {};
 
         // Default ON when absent (older daemon or unset) — the field is served
@@ -474,7 +484,8 @@ class ConfigState {
      * `ft8.display` — used by both the FT8 Settings tab (history_max / feed_mode /
      * cq_to_top) and the Band Activity filter popover (hide_hashed_calls auto-save).
      * Sends the FULL ft8_display block (the daemon replaces it raw, so every field is
-     * round-tripped, including the three colours the config SPA owns) and bundles the
+     * round-tripped, including the three colours the config SPA owns), the FT8
+     * caller-answer mode (the other durable Settings-tab knob), and bundles the
      * current logging_station/station (the daemon overwrites those unconditionally —
      * omitting them would zero the operator identity). Re-hydrates on success.
      */
@@ -492,6 +503,7 @@ class ConfigState {
                 cq_to_top: fd.cqToTop,
                 hide_hashed_calls: fd.hideHashedCalls,
             },
+            ft8_caller_answer_mode: this.ft8CallerAnswerMode,
         });
         if (outcome.kind === 'ok') this.applyResponse(outcome.config);
         return outcome;

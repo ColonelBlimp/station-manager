@@ -6,6 +6,8 @@ import (
 	"time"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // Caller-side sequencing (ADR 0033): the Sequencer methods that drive a Call-CQ
@@ -107,9 +109,14 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	var heard string
 	advanced := false
 	if s.caller == nil {
-		// auto_first: the first decode that answers our CQ (<ourCall> <them> <grid>).
-		// operator_pick would instead queue answerers for the operator to pop — a
-		// later increment; today we always take the first.
+		// Pick an answerer to our CQ ("<ourCall> <them> <grid>") whose reply encodes:
+		// auto_first takes the first by decode order; auto_strongest takes the
+		// highest-SNR one in the slot (clear the loud ones first). operator_pick is
+		// rejected before we ever reach seqCalling, so only the two auto modes land here.
+		strongest := s.answerMode == types.Ft8CallerAnswerAutoStrongest
+		var pick *CallerExchange
+		var pickText string
+		var pickSnr int
 		for _, m := range msgs {
 			pm := parseMessage(m.Text)
 			if pm.kind != msgGrid || pm.to != s.ourCall {
@@ -130,12 +137,21 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 					Msg("ft8 seq: skipping answerer — our reply does not encode (compound/portable call?)")
 				continue
 			}
-			s.caller = &c
+			if pick == nil || (strongest && m.SNR > pickSnr) {
+				pick = &c
+				pickText = m.Text
+				pickSnr = m.SNR
+			}
+			if !strongest {
+				break // auto_first: the first encodable answerer wins
+			}
+		}
+		if pick != nil {
+			s.caller = pick
 			s.startedAt = now.UTC()
 			s.repeats = 0
-			heard = m.Text
+			heard = pickText
 			advanced = true
-			break
 		}
 	} else {
 		for _, m := range msgs {

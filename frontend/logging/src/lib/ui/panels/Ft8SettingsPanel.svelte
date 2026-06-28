@@ -41,47 +41,56 @@
     }
 </script>
 
-<div class="flex gap-x-6 px-2 py-4 text-sm ft8-info-panel-height text-gray-700">
-    <div class="flex flex-col w-80">
+<div class="flex px-2 py-4 text-sm ft8-info-panel-height text-gray-700">
+    <div class="flex flex-col w-60 h-34 border">
         <h3 class="font-semibold text-gray-800">Band Activity</h3>
-        <label class="flex items-center justify-between gap-3">
-            <span>Max rows shown</span>
-            <!-- Bound directly to the daemon-mirrored config; the daemon clamps the
-             value (10–2000) on save, so out-of-range typing is corrected there. -->
+        <div class="flex mt-2">
+            <label class="w-22 pt-0.5" for="max_rows">Max Rows</label>
             <input
+                id="max_rows"
                 type="number"
                 min="10"
                 max="2000"
                 bind:value={configState.ft8Display.historyMax}
-                class="w-24 rounded border border-gray-300 px-2 py-1 text-right focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                class="w-18 rounded border border-gray-300 px-1 pb-1 pt-0.5 text-right focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
-        </label>
-
-        <label class="flex items-center justify-between gap-3 pt-1">
-            <span>Feed mode</span>
+        </div>
+        <div class="flex mt-2">
+            <label class="w-22 pt-0.5" for="feed_mode">Feed mode</label>
             <select
+                id="feed_mode"
                 bind:value={configState.ft8Display.feedMode}
-                class="w-44 rounded border border-gray-300 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                class="w-32 rounded border border-gray-300 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
-                <option value="accumulate">Accumulate (roll up)</option>
+                <option value="accumulate">Accumulate</option>
                 <option value="single">Single slot</option>
             </select>
-        </label>
-    </div>
-    <div>
-        <label class="flex items-center justify-between gap-3 pt-1">
-            <!-- Floats CQ rows (the answerable ones) to the top of the feed; in this
-                 mode per-slot separators are suppressed (the list is no longer slot-ordered). -->
-            <span>Float CQ calls to top</span>
+        </div>
+        <div class="flex mt-2">
+            <label class="w-22 pt-0.5 -mt-1" for="cq_to_top">CQ to top</label>
             <input
                 type="checkbox"
                 bind:checked={configState.ft8Display.cqToTop}
-                class="h-4 w-4 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                class="h-5 w-5 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
             />
-        </label>
+        </div>
     </div>
-    <div class="mt-2">
-        <button type="button" class="btn btn-primary" onclick={onSave} disabled={saving}>
+    <div class="flex flex-col w-70 h-34 border">
+        <h3 class="font-semibold text-gray-800">Call CQ</h3>
+        <div class="flex mt-2">
+            <label class="w-24 pt-0.5" for="ans_order">Answer order</label>
+            <select
+                id="ans_order"
+                bind:value={configState.ft8CallerAnswerMode}
+                class="w-32 rounded border border-gray-300 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+                <option value="auto_first">First</option>
+                <option value="auto_strongest">Strongest</option>
+            </select>
+        </div>
+    </div>
+    <div class="flex w-100 h-34 place-items-end justify-end">
+        <button type="button" class="btn btn-primary h-8 w-20" onclick={onSave} disabled={saving}>
             {saving ? 'Saving…' : 'Save'}
         </button>
     </div>

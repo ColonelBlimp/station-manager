@@ -49,6 +49,15 @@ export interface ConfigResponse {
      */
     ft8_frequencies?: Record<string, number>;
     /**
+     * FT8 Call-CQ answerer-selection strategy (`ft8.tx.caller_answer_mode`):
+     * `auto_first` works the first valid answerer by decode order; `auto_strongest`
+     * works the highest-SNR valid answerer in the slot. Daemon-resolved (always
+     * present on GET, default `auto_first`). Operator-writable from the FT8 Settings
+     * tab; PUT it back to persist (presence-aware on the daemon). Optional on the
+     * type for forward-compat with a daemon build that predates it.
+     */
+    ft8_caller_answer_mode?: 'auto_first' | 'auto_strongest';
+    /**
      * Whether a Phone/CW ↔ FT8 operating-mode switch auto re-tunes a CAT-live rig
      * back to that mode's last freq/mode. Daemon-resolved (always present on GET;
      * true when unset = the default ON). Optional on the type for forward-compat
@@ -243,6 +252,7 @@ export async function putConfig(
             | 'station'
             | 'bridge'
             | 'ft8_display'
+            | 'ft8_caller_answer_mode'
         >
     >,
     signal?: AbortSignal

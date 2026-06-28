@@ -86,13 +86,19 @@ on any PUT):
   `set_mode` uses), restored after the transmission. Empty leaves the rig's
   current mode untouched, for operators who keep the rig in the data mode
   themselves.
-- **`tx.caller_answer_mode`** — when WE call CQ, which answering station to work
-  (ADR 0033): `"auto_first"` works the first valid answerer (WSJT-X "Auto Seq");
-  `"operator_pick"` queues answerers for the operator to pop (the pile-up stack).
-  Default `auto_first`; empty/invalid → the default. `operator_pick` is **not yet
-  implemented** — Call CQ with it configured is **rejected** at start (501
-  `ft8_caller_mode_unsupported`) rather than silently auto-picking, so the setting
-  never misbehaves; use `auto_first` until the stack ships.
+- **`tx.caller_answer_mode`** — when WE call CQ, which answering station the daemon
+  works next (ADR 0033): `"auto_first"` works the first valid answerer by decode
+  order (WSJT-X "Auto Seq"); `"auto_strongest"` works the highest-SNR valid answerer
+  in the slot (clear the loud signals first). Both are operator-writable from the
+  logging SPA's **FT8 Settings tab → Call CQ → Answer** (First answerer / Strongest
+  signal), surfaced over `/v1/config` as `ft8_caller_answer_mode`; the wire surface
+  only ever carries those two attended auto modes. Default `auto_first`;
+  empty/invalid → the default. The third literal `"operator_pick"` is a
+  **config.json-only** value, **superseded by the SPA pile-up stack** and **rejected**
+  at Call-CQ start (501 `ft8_caller_mode_unsupported`) — the SPA dropdown never offers
+  it and a `/v1/config` PUT carrying it is a 400. (The pile-up stack always drains
+  **FIFO** regardless of this knob — the mode governs only the hands-off
+  auto-answerer.)
 - **`tx.max_repeats`** — how many times the sequencer re-sends an unanswered rung
   before it auto-abandons the contact (ADR 0031 off-ramp; the caller side resumes
   CQ instead of abandoning). Default **6** (~90 s of calling); `0`/absent → default.
@@ -394,10 +400,12 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   **Operate** (signal — `Ft8MsgPanel`, the FT8 transmit surface, see next bullet),
   **Session** (list-bullet — the shared session log, see below), and **Settings**
   (cog — `Ft8SettingsPanel`, the FT8 display preferences: row cap, feed mode, float-
-  CQ-to-top, CQ highlight colours). The Settings tab saves the **same way as the My Station tab**
-  — controls bind to `configState.ft8Display` (live preview), a **Save** button PUTs
-  `/v1/config` (bundling the current `logging_station`/`station` so the unconditional
-  overwrite doesn't clobber them) and re-hydrates from the response.
+  CQ-to-top, CQ highlight colours — **plus a Call CQ → Answer dropdown** for the
+  auto-answerer selection mode, `ft8_caller_answer_mode`: First answerer / Strongest
+  signal). The Settings tab saves the **same way as the My Station tab** — controls
+  bind to `configState.ft8Display` / `configState.ft8CallerAnswerMode` (live preview),
+  a **Save** button PUTs `/v1/config` (bundling the current `logging_station`/`station`
+  so the unconditional overwrite doesn't clobber them) and re-hydrates from the response.
   (The **slot countdown** sits in the **Band Activity footer** — one line reading
   `<UTC time> · <parity> · next in Ns`: the current displayed slot's time + parity
   (shown once here, not duplicated in the info row) plus the live countdown to the next
@@ -543,12 +551,15 @@ realities — neither a fault in SM, and both visible in the log as a string of
 
 **Operational takeaway:** from a sought-after location, work the callers in your
 pile-up rather than chasing weak-path CQs — **press Call CQ** and SM works the
-answerers for you (ADR 0033 caller-side sequencing, `auto_first`: it calls CQ,
-auto-works the first answerer through RR73, logs it, and resumes — looping the pile-up
-until you Abandon). To choose *which* callers to work and in what order, use **pile-up
-callsign stacking** instead: **Ctrl/Cmd+click** each calling-you decode to queue it, and
-SM works the stack oldest-first (see "Working a caller" above). `auto_first` Call CQ is
-the hands-off option; the stack is the operator-curated one.
+answerers for you (ADR 0033 caller-side sequencing: it calls CQ, auto-works one
+answerer through RR73, logs it, and resumes — looping the pile-up until you Abandon).
+Which answerer it picks each round is the **FT8 Settings tab → Call CQ → Answer**
+knob: **First answerer** (`auto_first`, by decode order) or **Strongest signal**
+(`auto_strongest`, highest SNR in the slot — clears the loud ones first). To choose
+*which* callers to work and in what order yourself, use **pile-up callsign stacking**
+instead: **Ctrl/Cmd+click** each calling-you decode to queue it, and SM works the stack
+oldest-first (FIFO, see "Working a caller" above). Auto-answer Call CQ is the hands-off
+option; the stack is the operator-curated one.
 
 ### Decode log (`ALL.TXT`-style) — `ft8.decode_log.*`
 

@@ -85,6 +85,7 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 		{"empty → default", &Ft8TXConfig{}, Ft8CallerAnswerAutoFirst},
 		{"invalid → default", &Ft8TXConfig{CallerAnswerMode: "bogus"}, Ft8CallerAnswerAutoFirst},
 		{"auto_first honoured", &Ft8TXConfig{CallerAnswerMode: "auto_first"}, Ft8CallerAnswerAutoFirst},
+		{"auto_strongest honoured", &Ft8TXConfig{CallerAnswerMode: "auto_strongest"}, Ft8CallerAnswerAutoStrongest},
 		{"operator_pick honoured", &Ft8TXConfig{CallerAnswerMode: "operator_pick"}, Ft8CallerAnswerOperatorPick},
 	}
 	for _, c := range cases {
@@ -94,6 +95,14 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 	}
 	if DefaultFt8CallerAnswerMode != Ft8CallerAnswerAutoFirst {
 		t.Errorf("default = %q, want auto_first", DefaultFt8CallerAnswerMode)
+	}
+	for _, m := range []string{Ft8CallerAnswerAutoFirst, Ft8CallerAnswerAutoStrongest, Ft8CallerAnswerOperatorPick} {
+		if !Ft8CallerAnswerModeValid(m) {
+			t.Errorf("Ft8CallerAnswerModeValid(%q) = false, want true", m)
+		}
+	}
+	if Ft8CallerAnswerModeValid("bogus") {
+		t.Error("Ft8CallerAnswerModeValid(bogus) = true, want false")
 	}
 }
 

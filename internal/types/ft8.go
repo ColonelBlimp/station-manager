@@ -231,12 +231,14 @@ type Ft8TXConfig struct {
 
 	// CallerAnswerMode selects how a sequenced Call-CQ session picks which station
 	// to work when stations answer (ADR 0033): "auto_first" works the first valid
-	// answerer (WSJT-X "Auto Seq"). "operator_pick" is **superseded by the SPA
-	// pile-up stack** (Ctrl/Cmd+click a caller → FIFO → work-a-caller drain) and is
-	// **rejected at start** (501 ft8_caller_mode_unsupported) rather than silently
-	// auto-picking — it is not a pending daemon feature. Empty/invalid → the
-	// ResolveFt8CallerAnswerMode default (auto_first); the daemon reads this from
-	// config.json (no Settings-tab control).
+	// answerer by decode order (WSJT-X "Auto Seq"); "auto_strongest" works the
+	// highest-SNR valid answerer in the slot (clear the strong ones first). Both are
+	// operator-writable from the logging SPA's FT8 Settings tab. "operator_pick" is
+	// **superseded by the SPA pile-up stack** (Ctrl/Cmd+click a caller → FIFO →
+	// work-a-caller drain) and is **rejected at start** (501 ft8_caller_mode_unsupported)
+	// rather than silently auto-picking — it is a config.json-only literal, never
+	// offered over the wire. Empty/invalid → the ResolveFt8CallerAnswerMode default
+	// (auto_first).
 	CallerAnswerMode string `json:"caller_answer_mode,omitempty"`
 
 	// MaxRepeats caps how many times an unanswered rung is re-sent before the
@@ -254,8 +256,9 @@ type Ft8TXConfig struct {
 
 // Caller-answer-mode literals (ADR 0033) for Ft8TXConfig.CallerAnswerMode.
 const (
-	Ft8CallerAnswerAutoFirst    = "auto_first"    // work the first valid answerer (WSJT-X "Auto Seq")
-	Ft8CallerAnswerOperatorPick = "operator_pick" // queue answerers; operator pops one (pile-up stack)
+	Ft8CallerAnswerAutoFirst     = "auto_first"     // work the first valid answerer (WSJT-X "Auto Seq")
+	Ft8CallerAnswerAutoStrongest = "auto_strongest" // work the highest-SNR valid answerer in the slot
+	Ft8CallerAnswerOperatorPick  = "operator_pick"  // queue answerers; operator pops one (pile-up stack)
 
 	// DefaultFt8CallerAnswerMode is the resolve fallback (ADR 0033).
 	DefaultFt8CallerAnswerMode = Ft8CallerAnswerAutoFirst
@@ -263,7 +266,9 @@ const (
 
 // Ft8CallerAnswerModeValid reports whether s is an accepted caller-answer-mode literal.
 func Ft8CallerAnswerModeValid(s string) bool {
-	return s == Ft8CallerAnswerAutoFirst || s == Ft8CallerAnswerOperatorPick
+	return s == Ft8CallerAnswerAutoFirst ||
+		s == Ft8CallerAnswerAutoStrongest ||
+		s == Ft8CallerAnswerOperatorPick
 }
 
 // Unanswered-rung repeat cap (ADR 0031 off-ramp) for Ft8TXConfig.MaxRepeats.

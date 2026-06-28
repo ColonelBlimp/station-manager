@@ -45,6 +45,45 @@ func TestCallerSequencer_HappyPathLoops(t *testing.T) {
 	require.True(t, s.Active())                       // still calling CQ after the QSO
 }
 
+// auto_strongest: when several stations answer in the same slot, the daemon works
+// the highest-SNR encodable one (clear the loud signals first) regardless of decode
+// order — here DL9UW at -3, not the first-decoded K1ABC at -18.
+func TestCallerSequencer_AutoStrongestPicksHighestSnr(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t,
+		s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_strongest", "", time.Unix(0, 0).UTC()))
+	require.Equal(t, "even", s.theirPeriod)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{
+		dm("7Q5MLV K1ABC FN42", -18),
+		dm("7Q5MLV DL9UW JO41", -3),
+		dm("7Q5MLV 9A4ZM JN95", -12),
+	})
+	require.NotNil(t, s.caller)
+	require.Equal(t, "DL9UW", s.caller.TheirCall) // strongest, not first
+
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-10", -3)}) // they R → we RR73 (logs)
+	require.Len(t, r.completed, 1)
+	require.Equal(t, "DL9UW", r.completed[0].TheirCall)
+}
+
+// auto_first ignores SNR: the first answerer by decode order wins even when a
+// louder one is in the same slot. The contrast with auto_strongest is the point.
+func TestCallerSequencer_AutoFirstPicksFirstByOrder(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t,
+		s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "", time.Unix(0, 0).UTC()))
+
+	driveTheir(s, 60, []goft8.DecodedMessage{
+		dm("7Q5MLV K1ABC FN42", -18), // first by order, weakest
+		dm("7Q5MLV DL9UW JO41", -3),  // louder, but later
+	})
+	require.NotNil(t, s.caller)
+	require.Equal(t, "K1ABC", s.caller.TheirCall)
+}
+
 func TestCallerSequencer_StartErrors(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)

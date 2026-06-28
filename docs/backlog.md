@@ -362,6 +362,16 @@ when it ships — don't let this rot into a graveyard.
     `caller_sequencer.go` (`onSlotCalling`); live role-aware ladder + "Calling CQ…":
     `Ft8MsgPanel`. Config: `ft8.tx.caller_answer_mode` (default `auto_first`). **Needs
     on-air validation** — unit-tested + offline-encode-verified only so far.
+  - **SHIPPED 2026-06-28 — `auto_strongest` answerer selection + Settings-tab knob.**
+    `onSlotCalling` now picks the **highest-SNR** encodable answerer in the slot (clear
+    the loud ones first) when `caller_answer_mode == auto_strongest`, else the first by
+    decode order (`auto_first`). Surfaced over `/v1/config` as `ft8_caller_answer_mode`
+    (presence-aware; only the two attended auto modes accepted, `operator_pick`/junk →
+    400) and editable from the logging SPA's **FT8 Settings tab → Call CQ → Answer**
+    (First answerer / Strongest signal). Pile-up drain stays **FIFO** — the knob governs
+    only the hands-off auto-answerer. Tests: `caller_sequencer_test.go`
+    (auto_strongest-picks-highest / auto_first-picks-first), `handler_config_ft8_test.go`,
+    `types/ft8_test.go`. **Needs on-air validation** like the rest of the caller side.
   - **SHIPPED 2026-06-17 — pile-up callsign stacking (the operator-pick experience, as
     an SPA-owned FIFO).** Realised the "pick which caller to work" need via a different
     (operator-chosen) shape than the original daemon `operator_pick` Call-CQ mode:
@@ -892,18 +902,32 @@ when it ships — don't let this rot into a graveyard.
   to the **"FT8 pile-up stack mixes odd/even parities"** bug (Bugs section) — that fix
   needs parity visible anyway; this is the display half, useful on its own.
 
-- **FT8 Call-CQ auto-pick strategy should be config-selectable (decode-order vs strongest).**
-  Filed 2026-06-27. In `auto_first` the daemon picks the next answerer by **decode order** —
-  the first grid-reply to our call that we can encode a reply to (`caller_sequencer.go:109-139`;
-  `m.SNR` is read only for the report we *send*, never for selection). From the operator's
-  seat that looks arbitrary ("random") and ignores normal pile-up etiquette (work the
-  strongest / cleanest copy). Add a config knob to choose the auto-pick strategy: **first
-  in the decode list** (current behaviour) or **strongest signal** (rank the slot's valid
-  answerers by SNR, take the highest). New field on `Ft8TXConfig` (`internal/types/ft8.go`,
-  e.g. `ft8.tx.auto_pick = "decode_order" | "strongest"`, resolved with a default +
-  validation like the other tx fields); the pick loop in `onSlotCalling` selects per the
-  resolved strategy instead of always taking the first match. Independent of `operator_pick`
-  (which is whom-to-work-next *by hand* — parked); this only governs the *automatic* pick.
+- ~~**FT8 Call-CQ auto-pick strategy should be config-selectable (decode-order vs strongest).**~~
+  **SHIPPED 2026-06-28.** Filed 2026-06-27. Realised by **folding into the existing
+  `ft8.tx.caller_answer_mode` knob** rather than adding a separate `auto_pick` field —
+  the new literal `auto_strongest` ranks the slot's valid answerers by SNR and works the
+  highest; `auto_first` keeps decode-order. `onSlotCalling` (`caller_sequencer.go`) selects
+  per `s.answerMode`. Surfaced over `/v1/config` as `ft8_caller_answer_mode` (presence-aware,
+  only the two attended auto modes accepted) and editable from the logging SPA's **FT8
+  Settings tab → Call CQ → Answer** (First answerer / Strongest signal). The pile-up stack
+  is unaffected — it always drains FIFO; the knob governs only the automatic answerer.
+  Tests: `caller_sequencer_test.go`, `handler_config_ft8_test.go`, `types/ft8_test.go`.
+  Still wants **on-air validation** like the rest of the caller side.
+
+- **FT8 Call CQ — no operator feedback while waiting for a chosen slot parity.** Filed
+  2026-06-28. When **CQ slot** is set to **Even** or **Odd** (not the default **Next**),
+  `StartCallCq` forces our CQ parity and deliberately does **not** immediate-fire — the
+  first CQ is held until the next slot of the chosen parity (`caller_sequencer.go:63-88`),
+  which can be up to ~one extra slot (~15–30 s) after the click. Correct behaviour (it's
+  the point of choosing a parity), but the UI gives no sign it's waiting: the button flips
+  to *Calling CQ…* immediately while the rig stays silent, so a non-default parity can read
+  as "it didn't fire." Enhancement: a transient **"waiting for even/odd slot…"** indicator
+  (or a countdown on the Call CQ control) until the first CQ actually keys, then drop to the
+  normal calling state. SPA-only — the daemon already publishes the chosen `cq_period`
+  (`QsoStatus`) and the first `tx-state {transmitting:true}` marks the real start, so the
+  SPA can show "waiting" between StartCallCq and that first TX edge. Surfaces: `Ft8MsgPanel`
+  (the Call CQ control), `ft8.svelte.ts`. Low effort; pure clarity. Default **Next** is
+  unaffected (it fires on the very next boundary, so there's nothing to wait through).
 
 - **FT8 Monitor/Listen on-off toggle — DISCUSSION POINT (not a committed build).** Filed
   2026-06-27. Today FT8 audio capture is tied to the **FT8 view being open**: `Ft8Panel`'s

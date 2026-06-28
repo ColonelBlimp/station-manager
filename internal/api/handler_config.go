@@ -69,6 +69,16 @@ type ConfigResponse struct {
 	// (no Settings control yet) and a PUT never carries it, so it's left untouched on
 	// write (it survives in the in-memory cfg, rewritten with the rest).
 	Ft8Frequencies map[string]int `json:"ft8_frequencies,omitempty"`
+	// Ft8CallerAnswerMode is the FT8 Call-CQ answerer-selection strategy
+	// (ft8.tx.caller_answer_mode): "auto_first" (first valid answerer by decode
+	// order) or "auto_strongest" (highest-SNR valid answerer in the slot). Always
+	// served RESOLVED on GET (default auto_first) for the logging SPA's FT8 Settings
+	// tab. Operator-writable; **presence-aware** on PUT (omitting it leaves the
+	// stored value untouched). Pointer-typed so the handler tells "sent" from
+	// "absent". The config-only "operator_pick" literal is NOT accepted here (it's
+	// rejected at Call-CQ start), so the wire surface only ever carries the two
+	// attended auto modes.
+	Ft8CallerAnswerMode *string `json:"ft8_caller_answer_mode,omitempty"`
 	// BridgeTimeouts / BridgeTune are the resolved (defaults-filled, ceilings
 	// applied) bridge supervisor/readLoop timeouts and tune-carrier params.
 	// Like Ft8Frequencies, the on-disk config stays SPARSE — zero = "use the
@@ -364,6 +374,23 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if req.Ft8Display != nil {
 		candidate.Ft8.Display = req.Ft8Display
 	}
+	// FT8 caller-answer mode — presence-aware (logging SPA FT8 Settings tab). Only
+	// the two attended auto modes are accepted over the wire; operator_pick is a
+	// config.json-only literal (rejected at Call-CQ start), so the SPA can't set it.
+	// Validated here rather than via config.Validate (which tolerates an invalid
+	// value → default) so a bad value is a loud 400, matching feed_mode's contract.
+	if req.Ft8CallerAnswerMode != nil {
+		mode := *req.Ft8CallerAnswerMode
+		if mode != types.Ft8CallerAnswerAutoFirst && mode != types.Ft8CallerAnswerAutoStrongest {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				"ft8_caller_answer_mode must be auto_first or auto_strongest", op)
+			return
+		}
+		if candidate.Ft8.TX == nil {
+			candidate.Ft8.TX = &types.Ft8TXConfig{}
+		}
+		candidate.Ft8.TX.CallerAnswerMode = mode
+	}
 	// QSL defaults — presence-aware, same rationale as ft8_display: a My Station
 	// save omits `qsl` and must leave it alone.
 	if req.Qsl != nil {
@@ -633,6 +660,12 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// still yields sensible values for the SPA's Settings tab.
 	ft8Display := types.ResolveFt8Display(cfg.Ft8.Display)
 	resp.Ft8Display = &ft8Display
+
+	// FT8 Call-CQ answerer-selection mode, resolved (default auto_first) for the
+	// Settings tab. A config holding operator_pick still reads back as-is here, but
+	// the SPA dropdown only offers the two auto modes and a PUT rejects anything else.
+	callerMode := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX)
+	resp.Ft8CallerAnswerMode = &callerMode
 
 	// FT8 per-band dial frequencies, always resolved (defaults + overrides) for the
 	// SPA's Main-Freq band buttons.
