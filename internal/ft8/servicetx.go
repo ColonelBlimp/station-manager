@@ -527,6 +527,39 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	return s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
+// StartWorkCallerFd begins working a station that called us with a Field Day exchange
+// (the FD twin of StartWorkCaller): the operator picked "<ourCall> <theirCall> <class>
+// <section>". theirClass/theirSection are parsed by the api layer from that decode; OUR
+// class/section come from ft8.field_day config (not client-supplied). Requires TX armed.
+func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, theirSection, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+	const op errors.Op = "ft8.Service.StartWorkCallerFd"
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
+	var class, section string
+	if s.cfg.FieldDay != nil {
+		class, section = s.cfg.FieldDay.Class, s.cfg.FieldDay.Section
+	}
+	if strings.TrimSpace(class) == "" || strings.TrimSpace(section) == "" {
+		return errors.New(op).WithErr(ErrFdIdentityUnset)
+	}
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	s.txMu.Lock()
+	armed := s.txArmed
+	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
+	}
+	s.resetExchangePath()
+	return s.seq.StartWorkCallerFd(ourCall, class, section, theirCall, theirGrid, theirClass, theirSection,
+		theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+}
+
 // SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029
 // step e4) — the daemon (cmd/smd) wires it to qsoservice. Called once during
 // wiring, before Start. A nil logger (e.g. tests) means completed exchanges are

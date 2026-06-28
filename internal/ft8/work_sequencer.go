@@ -225,3 +225,186 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	s.publish(st)
 }
+
+// StartWorkCallerFd begins working a station that called US with a Field Day exchange
+// (the FD twin of StartWorkCaller). theirClass/theirSection are parsed from the call we
+// picked ("<ourCall> <theirCall> <class> <section>"); ourClass/ourSection are the
+// operator's configured identity. Requires armed TX; one session at a time.
+func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
+	if offsetHz <= 0 {
+		return ErrNoOffset
+	}
+	call := strings.ToUpper(strings.TrimSpace(ourCall))
+	if call == "" {
+		return ErrNoCall
+	}
+	if strings.TrimSpace(ourClass) == "" || strings.TrimSpace(ourSection) == "" {
+		return ErrFdIdentityUnset
+	}
+	if strings.TrimSpace(theirCall) == "" {
+		return ErrTxBadMessage
+	}
+	t, err := time.Parse(time.RFC3339, theirSlotUTC)
+	if err != nil {
+		return err
+	}
+
+	c := NewFdWorkExchange(call, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection)
+	if msg, ok := c.TxMessage(); ok {
+		if _, err := goft8.EncodeStandardMessage(msg); err != nil {
+			return ErrTxBadMessage
+		}
+	}
+
+	s.mu.Lock()
+	if s.mode != seqIdle {
+		s.mu.Unlock()
+		return ErrQsoInProgress
+	}
+	s.mode = seqWorkingFd
+	s.sessionGen++
+	s.fdWork = &c
+	s.ourCall = call
+	s.theirPeriod = SlotRefFromTime(t).Period
+	s.offsetHz = offsetHz
+	s.dialFreqMHz = dialFreqMHz
+	s.startedAt = now.UTC()
+	s.repeats = 0
+	st := s.statusLocked()
+	s.mu.Unlock()
+
+	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", s.theirPeriod).
+		Float64("offset_hz", offsetHz).Str("our_class", ourClass).Str("our_section", ourSection).
+		Str("their_class", theirClass).Str("their_section", theirSection).
+		Msg("ft8 seq: working a caller (FD)")
+	s.publish(st)
+	s.fireOpening(now)
+	return nil
+}
+
+// onSlotWorkingFd drives a work-a-caller-FD contact (seqWorkingFd) — the FD twin of
+// onSlotWorking: send R+our class/section, advance on their RR73, send our RR73, log
+// their class/section. Same idle-terminal + off-ramp + final-rung onDone discipline.
+func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
+	s.mu.Lock()
+	if s.mode != seqWorkingFd {
+		s.mu.Unlock()
+		return
+	}
+	if s.fdWork == nil {
+		s.mode = seqIdle
+		s.mu.Unlock()
+		s.publish(QsoStatus{Active: false})
+		return
+	}
+	if ref.Period != s.theirPeriod {
+		s.mu.Unlock()
+		return
+	}
+
+	var heard string
+	advanced := false
+	for _, m := range msgs {
+		if pm := parseMessage(m.Text); pm.to == s.ourCall && pm.from == s.fdWork.TheirCall {
+			heard = m.Text
+		}
+		if next, ok := s.fdWork.Advance(m.Text); ok {
+			*s.fdWork = next
+			s.repeats = 0
+			advanced = true
+			break
+		}
+	}
+
+	msg, ok := s.fdWork.TxMessage()
+	if !ok {
+		s.mode = seqIdle
+		s.fdWork = nil
+		s.mu.Unlock()
+		s.publish(QsoStatus{Active: false})
+		return
+	}
+	rung := s.fdWork.State.label()
+	if heard != "" {
+		s.log.InfoWith().Str("from_worked", heard).Bool("advanced", advanced).
+			Str("now_rung", rung).Msg("ft8 seq: working caller (FD) — decode from worked station")
+	}
+
+	curStart, perr := time.Parse(time.RFC3339, ref.StartUTC)
+	if perr != nil {
+		s.mu.Unlock()
+		return
+	}
+	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
+	if dt < 0 || dt > txLateWindowSec {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
+
+	confirming := s.fdWork.State == fdwRogering
+	if !confirming {
+		if s.repeats >= s.maxRepeats {
+			s.fdWork = nil
+			s.mode = seqIdle
+			s.mu.Unlock()
+			s.log.InfoWith().Msg("ft8 seq: working caller (FD) — no answer after max repeats; abandoning")
+			s.publish(QsoStatus{Active: false})
+			return
+		}
+		s.repeats++
+	}
+
+	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	repeats := s.repeats
+	var completed *CompletedQso
+	if confirming {
+		c := s.completedFdWorkQsoLocked()
+		completed = &c
+	}
+	gen := s.sessionGen
+	st := s.statusLocked()
+	publish, onComplete := s.publish, s.onComplete
+	s.mu.Unlock()
+
+	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
+		Float64("dt_s", dt).Int("repeats", repeats).Msg("ft8 seq: working caller (FD) transmitting rung")
+
+	var onDone func(ok bool)
+	if completed != nil {
+		c := *completed
+		onDone = func(ok bool) {
+			s.mu.Lock()
+			if s.sessionGen != gen { // superseded (abandon) — stale callback
+				s.mu.Unlock()
+				return
+			}
+			if !ok {
+				s.mu.Unlock()
+				s.log.WarnWith().Str("their_call", c.TheirCall).
+					Msg("ft8 seq: working caller (FD) RR73 did not transmit; will retry next slot")
+				return
+			}
+			s.fdWork = nil
+			s.mode = seqIdle
+			s.repeats = 0
+			s.mu.Unlock()
+			s.log.InfoWith().Str("their_call", c.TheirCall).
+				Msg("ft8 seq: working caller (FD) QSO complete (RR73 sent)")
+			if onComplete != nil {
+				onComplete(c)
+			}
+			publish(QsoStatus{Active: false})
+		}
+	}
+
+	if err := transmit(msg, offset, dial, onDone); err != nil {
+		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: working caller (FD) rung transmit failed")
+		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.Abandon()
+			return
+		}
+	}
+	s.publish(st)
+}

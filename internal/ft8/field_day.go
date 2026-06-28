@@ -132,3 +132,105 @@ func (e FdExchange) Sent() FdExchange {
 	}
 	return e
 }
+
+// --- ARRL Field Day, the WORKED side (a station calls US with an FD exchange) ------
+//
+// As a sought-after station we get called directly: "<ourCall> <theirCall> <class>
+// <section>" (e.g. "7Q5MLV K7IOC 1D WWA"). The operator picks one; we reply with R +
+// OUR class/section, they RR73, we RR73 and log THEIR class/section. The FD twin of
+// CallerExchange's working role (report → RR73), with class/section in place of a report.
+//
+//	fdwReporting: <them> <us> R <ourClass> <ourSection>   (e.g. "K7IOC 7Q5MLV R 1D DX")
+//	             ── receive <us> <them> RR73 ──>
+//	fdwRogering : <them> <us> RR73                         (QSO logs after this slot)
+
+type fdwState int
+
+const (
+	fdwReporting fdwState = iota // send <them> <us> R <class> <section>; wait for their roger
+	fdwRogering                  // send <them> <us> RR73; QSO logs after this slot
+	fdwDone                      // RR73 sent; nothing more to transmit
+)
+
+func (s fdwState) label() string {
+	switch s {
+	case fdwReporting:
+		return "reporting"
+	case fdwRogering:
+		return "rogering"
+	default:
+		return "done"
+	}
+}
+
+// FdWorkExchange is the state of working a station that called US with a Field Day
+// exchange. Their class+section come from the call we picked (and are logged); our
+// class+section come from config. Pure + value-returning like the other ladders.
+type FdWorkExchange struct {
+	OurCall      string
+	OurClass     string
+	OurSection   string
+	TheirCall    string
+	TheirGrid    string
+	TheirClass   string // their exchange, from the picked call — logged (ADIF CLASS)
+	TheirSection string // their exchange section — logged (ADIF ARRL_SECT)
+
+	State fdwState
+}
+
+// NewFdWorkExchange begins working a caller's FD call. ourClass/ourSection are the
+// operator's configured identity; theirClass/theirSection are parsed from the call we
+// picked. Values are upper-cased; the grid trimmed to 4 chars.
+func NewFdWorkExchange(ourCall, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection string) FdWorkExchange {
+	up := func(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+	grid := up(theirGrid)
+	if len(grid) > 4 {
+		grid = grid[:4]
+	}
+	return FdWorkExchange{
+		OurCall:      up(ourCall),
+		OurClass:     up(ourClass),
+		OurSection:   up(ourSection),
+		TheirCall:    up(theirCall),
+		TheirGrid:    grid,
+		TheirClass:   up(theirClass),
+		TheirSection: up(theirSection),
+		State:        fdwReporting,
+	}
+}
+
+// TxMessage is the message for the current rung, or ok=false when done.
+func (e FdWorkExchange) TxMessage() (string, bool) {
+	switch e.State {
+	case fdwReporting:
+		return e.TheirCall + " " + e.OurCall + " R " + e.OurClass + " " + e.OurSection, true
+	case fdwRogering:
+		return e.TheirCall + " " + e.OurCall + " RR73", true
+	default:
+		return "", false
+	}
+}
+
+// Advance moves to rogering when the worked station rogers our reply (RR73/RRR directed
+// to us). They already sent their exchange in the call we picked, so a bare roger is all
+// we await.
+func (e FdWorkExchange) Advance(text string) (FdWorkExchange, bool) {
+	m := parseMessage(text)
+	if m.to != e.OurCall || m.from != e.TheirCall {
+		return e, false
+	}
+	if e.State == fdwReporting && m.kind == msgRoger {
+		e.State = fdwRogering
+		return e, true
+	}
+	return e, false
+}
+
+// Sent advances the TX-only final rung: after RR73 leaves the radio the contact is
+// complete (fdwRogering → fdwDone) and the QSO logs.
+func (e FdWorkExchange) Sent() FdWorkExchange {
+	if e.State == fdwRogering {
+		e.State = fdwDone
+	}
+	return e
+}

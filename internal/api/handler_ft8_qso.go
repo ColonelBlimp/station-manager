@@ -183,6 +183,13 @@ type ft8QsoWorkRequest struct {
 	// OperatingFreqMHz is the rig's dial frequency (the SPA reads it from the live rig
 	// state); the logged QSO frequency IS this dial (FT8 convention — see qso/start).
 	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
+	// Mode "fd" works a caller who called us with a Field Day exchange (the SPA parsed
+	// their class+section from "<ourCall> <theirCall> <class> <section>" and sends them
+	// here); "" / "standard" is the normal grid/report work. Our own class+section come
+	// from ft8.field_day config, not the client.
+	Mode         string `json:"mode,omitempty"`
+	TheirClass   string `json:"their_class,omitempty"`
+	TheirSection string `json:"their_section,omitempty"`
 }
 
 // handleFt8QsoWork begins working a station that is calling us (ADR 0033). The operator
@@ -224,8 +231,15 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-		req.OffsetHz, req.OperatingFreqMHz)
+	var err error
+	if strings.EqualFold(strings.TrimSpace(req.Mode), "fd") {
+		// Field Day: their class+section came from the picked call; ours from config.
+		err = s.ft8.StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,
+			req.TheirClass, req.TheirSection, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz)
+	} else {
+		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+			req.OffsetHz, req.OperatingFreqMHz)
+	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return

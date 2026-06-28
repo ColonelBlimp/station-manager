@@ -165,3 +165,52 @@ func TestBuildQso_FieldDay(t *testing.T) {
 	require.Equal(t, "EMA", q.ArrlSect)
 	require.Equal(t, "ARRL-FD", q.ContestId)
 }
+
+// FD work-a-caller ladder: us = G0XYZ (1D/DX) working K7IOC, who called us with their
+// exchange (2A WWA, captured from the call we picked).
+func TestFdWorkExchange_Ladder(t *testing.T) {
+	e := NewFdWorkExchange("g0xyz", "1d", "dx", "k7ioc", "", "2A", "WWA")
+	if e.State != fdwReporting || e.TheirClass != "2A" || e.TheirSection != "WWA" {
+		t.Fatalf("after New: %+v", e)
+	}
+	if msg, ok := e.TxMessage(); !ok || msg != "K7IOC G0XYZ R 1D DX" {
+		t.Fatalf("reporting TxMessage = %q (ok=%v), want \"K7IOC G0XYZ R 1D DX\"", msg, ok)
+	}
+	if _, ok := e.Advance("K7IOC G0XYZ R 1D DX"); ok {
+		t.Fatal("advanced on a non-roger")
+	}
+	next, ok := e.Advance("G0XYZ K7IOC RR73")
+	if !ok || next.State != fdwRogering {
+		t.Fatalf("after their RR73: %+v (ok=%v)", next, ok)
+	}
+	e = next
+	if msg, ok := e.TxMessage(); !ok || msg != "K7IOC G0XYZ RR73" {
+		t.Fatalf("rogering TxMessage = %q, want \"K7IOC G0XYZ RR73\"", msg)
+	}
+	if e = e.Sent(); e.State != fdwDone {
+		t.Fatalf("after Sent: %v, want fdwDone", e.State)
+	}
+}
+
+// FD work-a-caller through the daemon sequencer: a complete contact drives end-to-end
+// and logs the worked caller's class/section.
+func TestSequencer_FieldDayWorkCaller(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartWorkCallerFd("G0XYZ", "1D", "DX", "K7IOC", "", "2A", "WWA",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.True(t, s.Active())
+
+	driveTheir(s, 30, nil)                                                 // send our R+exchange
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K7IOC RR73", -12)}) // their RR73 → we RR73 + log
+
+	require.Equal(t, []string{
+		"K7IOC G0XYZ R 1D DX",
+		"K7IOC G0XYZ RR73",
+	}, r.sentMsgs())
+	require.False(t, s.Active())
+	require.Len(t, r.completed, 1)
+	require.Equal(t, "K7IOC", r.completed[0].TheirCall)
+	require.Equal(t, "2A", r.completed[0].Class)
+	require.Equal(t, "WWA", r.completed[0].Section)
+}

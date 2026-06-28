@@ -124,6 +124,7 @@ export function startFt8WorkCaller(
     slotUtc: string,
     offsetHz: number,
     operatingFreqMHz: number,
+    fd?: { class: string; section: string },
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -135,6 +136,9 @@ export function startFt8WorkCaller(
             slot_utc: slotUtc,
             offset_hz: offsetHz,
             operating_freq_mhz: operatingFreqMHz,
+            // Field Day: route to the FD work exchange with the caller's class+section
+            // (ours comes from daemon config). Omitted for a standard caller.
+            ...(fd ? { mode: 'fd', their_class: fd.class, their_section: fd.section } : {}),
         },
         signal
     );

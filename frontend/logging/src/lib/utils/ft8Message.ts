@@ -112,3 +112,29 @@ export function parseDirectedToMe(
     if (toks[2] === 'RR73' || !GRID4.test(toks[2])) return null;
     return { call: toks[1], grid: toks[2] };
 }
+
+const FD_CLASS = /^[0-9]{1,2}[A-F]$/;
+const FD_SECTION = /^[A-Z]{2,4}$/;
+
+/**
+ * parseDirectedToMeFd returns a station CALLING US with an ARRL Field Day exchange —
+ * `<myCall> <theirCall> <class> <section>` (e.g. `7Q5MLV K7IOC 1D WWA`) — or null. The
+ * FD twin of parseDirectedToMe: a Field Day caller sends their class+section instead of
+ * a grid, so we work them with the FD exchange. `grid` is '' (an FD call carries no
+ * grid). The class/section shapes are loose guards (the daemon owns the canonical
+ * section list); the `<call> <2-digit+A–F> <2–4 letters>` shape is FD-specific enough
+ * that ordinary traffic won't match.
+ */
+export function parseDirectedToMeFd(
+    text: string,
+    myCall: string
+): { call: string; grid: string; class: string; section: string } | null {
+    const me = myCall.trim().toUpperCase();
+    if (me === '') return null;
+    const toks = text.trim().toUpperCase().split(/\s+/);
+    if (toks.length < 4) return null;
+    if (toks[0] !== me) return null;
+    if (!looksLikeCall(toks[1])) return null;
+    if (!FD_CLASS.test(toks[2]) || !FD_SECTION.test(toks[3])) return null;
+    return { call: toks[1], grid: '', class: toks[2], section: toks[3] };
+}

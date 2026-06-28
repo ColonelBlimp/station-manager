@@ -68,6 +68,10 @@ const (
 	// The FD twin of seqAnswering — fdEx drives it; we send our class+section then
 	// RR73 and log their exchange. No FD caller side (we never call CQ FD).
 	seqAnsweringFd
+	// seqWorkingFd: working a station that called US with a Field Day exchange (the FD
+	// twin of seqWorking). fdWork drives it; we reply R+our class/section, RR73, and log
+	// their class/section. This is the dominant path for a sought-after DX station.
+	seqWorkingFd
 )
 
 // QsoStatus roles (the `ft8-qso` SSE Role field) — which side of the contact we
@@ -171,6 +175,9 @@ type Sequencer struct {
 
 	// Answering a CQ FD (seqAnsweringFd): fdEx is the active Field Day exchange.
 	fdEx *FdExchange
+
+	// Working a caller in FD (seqWorkingFd): fdWork is the active Field Day work exchange.
+	fdWork *FdWorkExchange
 
 	// Calling CQ (seqCalling, ADR 0033): caller is nil while still calling (phase 1),
 	// set once an answerer is chosen (phase 2). cqMessage is repeated each of our
@@ -337,6 +344,7 @@ func (s *Sequencer) Abandon() {
 	s.sessionGen++ // supersede any in-flight final-rung callback (review follow-up M1)
 	s.ex = nil
 	s.fdEx = nil
+	s.fdWork = nil
 	s.caller = nil
 	s.repeats = 0
 	s.mu.Unlock()
@@ -371,6 +379,8 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		s.onSlotCalling(ref, msgs, now)
 	case seqWorking:
 		s.onSlotWorking(ref, msgs, now)
+	case seqWorkingFd:
+		s.onSlotWorkingFd(ref, msgs, now)
 	default:
 		// seqIdle — no active session; nothing to drive this slot.
 	}
@@ -674,6 +684,20 @@ func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 	}
 }
 
+// completedFdWorkQsoLocked snapshots a work-a-caller-FD contact for logging — their
+// class/section came from the call we picked. Caller holds s.mu.
+func (s *Sequencer) completedFdWorkQsoLocked() CompletedQso {
+	return CompletedQso{
+		TheirCall:   s.fdWork.TheirCall,
+		TheirGrid:   s.fdWork.TheirGrid,
+		Class:       s.fdWork.TheirClass,
+		Section:     s.fdWork.TheirSection,
+		StartedAt:   s.startedAt,
+		OffsetHz:    s.offsetHz,
+		DialFreqMHz: s.dialFreqMHz,
+	}
+}
+
 // slotStart returns the UTC 15-second slot boundary containing t, epoch-aligned to
 // match SlotRefFromTime's parity convention (:00/:15/:30/:45).
 func slotStart(t time.Time) time.Time {
@@ -717,6 +741,17 @@ func (s *Sequencer) fireOpening(now time.Time) {
 			return
 		}
 		msg, rung = m, s.fdEx.State.label()
+	case seqWorkingFd:
+		if s.fdWork == nil {
+			s.mu.Unlock()
+			return
+		}
+		m, ok := s.fdWork.TxMessage()
+		if !ok {
+			s.mu.Unlock()
+			return
+		}
+		msg, rung = m, s.fdWork.State.label()
 	case seqCalling:
 		if s.caller != nil { // a contact already started — not an opening
 			s.mu.Unlock()
@@ -821,6 +856,26 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		}
 		// Cap governs the pre-RR73 rung only (the one-shot RR73 is uncapped).
 		if s.fdEx.State != fdRogering {
+			st.MaxRepeats = s.maxRepeats
+		}
+		return st
+	case seqWorkingFd:
+		if s.fdWork == nil {
+			return QsoStatus{Active: false}
+		}
+		msg, _ := s.fdWork.TxMessage()
+		st := QsoStatus{
+			Active:      true,
+			Role:        roleWorker,
+			Fd:          true,
+			TheirCall:   s.fdWork.TheirCall,
+			TheirGrid:   s.fdWork.TheirGrid,
+			State:       s.fdWork.State.label(),
+			NextMessage: msg,
+			Repeats:     s.repeats,
+			TheirPeriod: s.theirPeriod,
+		}
+		if s.fdWork.State != fdwRogering {
 			st.MaxRepeats = s.maxRepeats
 		}
 		return st

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCqCall, parseCq, parseDirectedToMe, isCqFd } from './ft8Message';
+import { parseCqCall, parseCq, parseDirectedToMe, parseDirectedToMeFd, isCqFd } from './ft8Message';
 
 describe('isCqFd (Field Day CQ)', () => {
     it('detects a CQ FD call', () => {
@@ -14,6 +14,23 @@ describe('isCqFd (Field Day CQ)', () => {
     });
     it('parseCq still returns the right call/grid for a CQ FD', () => {
         expect(parseCq('CQ FD K1ABC FN42')).toEqual({ call: 'K1ABC', grid: 'FN42' });
+    });
+});
+
+describe('parseDirectedToMeFd (Field Day caller)', () => {
+    it('parses a caller FD exchange directed to me', () => {
+        expect(parseDirectedToMeFd('7Q5MLV K7IOC 1D WWA', '7Q5MLV')).toEqual({
+            call: 'K7IOC',
+            grid: '',
+            class: '1D',
+            section: 'WWA',
+        });
+    });
+    it('is null for a grid opening, a roger, or a non-me address', () => {
+        expect(parseDirectedToMeFd('7Q5MLV K7IOC FN42', '7Q5MLV')).toBeNull();
+        expect(parseDirectedToMeFd('7Q5MLV K7IOC RR73', '7Q5MLV')).toBeNull();
+        expect(parseDirectedToMeFd('W1ABC K7IOC 1D WWA', '7Q5MLV')).toBeNull();
+        expect(parseDirectedToMeFd('7Q5MLV K7IOC R 1D WWA', '7Q5MLV')).toBeNull();
     });
 });
 

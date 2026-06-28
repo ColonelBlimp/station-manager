@@ -14,7 +14,13 @@
     import { configState } from '../../states/config.svelte';
     import { displayedState } from '../../states/displayed.svelte';
     import { catState } from '../../states/cat.svelte';
-    import { parseCqCall, parseCq, parseDirectedToMe, isCqFd } from '../../utils/ft8Message';
+    import {
+        parseCqCall,
+        parseCq,
+        parseDirectedToMe,
+        parseDirectedToMeFd,
+        isCqFd,
+    } from '../../utils/ft8Message';
     import { slotParity } from '../../utils/ft8Parity';
     import { startFt8Qso, startFt8WorkCaller, setFt8QsoPath } from '../../api/ft8qso';
     import { toasts } from '../../states/toasts.svelte';
@@ -118,7 +124,11 @@
         for (const d of ft8State.decodes) {
             // CQ lines, plus stations calling US (the pile-up) — both carry one
             // unambiguous callsign, so both get the flag + worked-before tint.
-            const call = parseCqCall(d.text) ?? parseDirectedToMe(d.text, myCall)?.call ?? null;
+            const call =
+                parseCqCall(d.text) ??
+                parseDirectedToMe(d.text, myCall)?.call ??
+                parseDirectedToMeFd(d.text, myCall)?.call ??
+                null;
             if (call) ft8EnrichState.observe(call, band);
         }
     });
@@ -267,7 +277,11 @@
     // clickable under the same gate as answering a CQ (armed + offset + idle). d.snr is
     // our SNR of their calling signal — the report we send back (RST_SENT).
     async function workCaller(d: DecodeEntry): Promise<void> {
-        const toMe = parseDirectedToMe(d.text, myCall);
+        // A Field Day caller (`<me> <them> <class> <section>`) is worked with the FD
+        // exchange (class/section); a standard caller (`<me> <them> <grid>`) the normal
+        // way. Try FD first — its shape is more specific.
+        const fd = parseDirectedToMeFd(d.text, myCall);
+        const toMe = fd ?? parseDirectedToMe(d.text, myCall);
         if (!toMe || !canAnswer || ft8State.selectedOffset === null) return;
         if (workedThisSession(toMe.call)) {
             toasts.info(`Already worked ${toMe.call} this session.`);
@@ -279,7 +293,8 @@
             d.snr,
             d.startUtc,
             ft8State.selectedOffset,
-            opFreq / 1_000_000
+            opFreq / 1_000_000,
+            fd ? { class: fd.class, section: fd.section } : undefined
         );
         if (out.kind !== 'ok') toasts.error(out.message);
     }
@@ -646,7 +661,9 @@
 
 {#snippet decodeRow(d: DecodeEntry, showBearing: boolean)}
     {@const cq = parseCq(d.text)}
-    {@const toMe = cq ? null : parseDirectedToMe(d.text, myCall)}
+    {@const toMe = cq
+        ? null
+        : (parseDirectedToMe(d.text, myCall) ?? parseDirectedToMeFd(d.text, myCall))}
     {@const lineCall = cq?.call ?? toMe?.call ?? null}
     {@const lineGrid = cq?.grid ?? toMe?.grid ?? ''}
     {@const info = lineCall ? ft8EnrichState.info(lineCall, band) : undefined}
