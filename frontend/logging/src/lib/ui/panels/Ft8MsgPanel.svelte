@@ -152,13 +152,66 @@
         return rowFor(txRow, answerLadder.length);
     });
 
-    // Rendered ladder + highlight, by role: answerer → answer ladder; worker → the
-    // no-CQ work-a-caller ladder; else the caller ladder (live while calling CQ, or a
-    // static preview when idle).
+    // ---- ARRL Field Day ladders (qso.fd) --------------------------------------
+    // FD carries class + section instead of grid + report, so the rungs differ from the
+    // standard ladders above. Our class/section are known from config at start; theirs
+    // fill from qso.theirClass/theirSection once known (the answerer learns them in the
+    // R-exchange; the worker has them from the picked call). role is still
+    // answerer (answer a CQ FD) / worker (work an FD caller).
+    const ourCls = $derived(qso.ourClass || '<CLS>');
+    const ourSec = $derived(qso.ourSection || '<SEC>');
+    const theirCls = $derived(qso.theirClass || '<CLS>');
+    const theirSec = $derived(qso.theirSection || '<SEC>');
+    // Answer-a-CQ-FD: our exchange → their R+exchange → our RR73 (tx rows 0/2; state
+    // calling → rogering).
+    const fdAnswerLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
+        { dir: 'tx', text: `${dxCall} ${myCall} ${ourCls} ${ourSec}` },
+        { dir: 'rx', text: `${myCall} ${dxCall} R ${theirCls} ${theirSec}` },
+        { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
+    ]);
+    const fdAnswerStep = $derived.by(() =>
+        rowFor(qso.state === 'rogering' ? 2 : 0, fdAnswerLadder.length)
+    );
+    // Work-a-caller-FD: their call to us (their exchange) → our R+exchange → their RR73
+    // → our RR73 (tx rows 1/3; state reporting → rogering).
+    const fdWorkLadder: { dir: 'tx' | 'rx'; text: string }[] = $derived([
+        { dir: 'rx', text: `${myCall} ${dxCall} ${theirCls} ${theirSec}` },
+        { dir: 'tx', text: `${dxCall} ${myCall} R ${ourCls} ${ourSec}` },
+        { dir: 'rx', text: `${myCall} ${dxCall} RR73` },
+        { dir: 'tx', text: `${dxCall} ${myCall} RR73` },
+    ]);
+    const fdWorkStep = $derived.by(() =>
+        rowFor(qso.state === 'rogering' ? 3 : 1, fdWorkLadder.length)
+    );
+
+    // Rendered ladder + highlight, by role: a Field Day session (qso.fd) uses the FD
+    // answer/work ladder; otherwise answerer → answer ladder, worker → the no-CQ
+    // work-a-caller ladder, else the caller ladder (live while calling CQ, or a static
+    // preview when idle).
     const answering = $derived(qso.active && qso.role === 'answerer');
     const working = $derived(qso.active && qso.role === 'worker');
-    const ladder = $derived(answering ? answerLadder : working ? workLadder : callerLadder);
-    const ladderStep = $derived(answering ? answerStep : working ? workStep : callerStep);
+    const ladder = $derived(
+        qso.fd && answering
+            ? fdAnswerLadder
+            : qso.fd && working
+              ? fdWorkLadder
+              : answering
+                ? answerLadder
+                : working
+                  ? workLadder
+                  : callerLadder
+    );
+    const ladderStep = $derived(
+        qso.fd && answering
+            ? fdAnswerStep
+            : qso.fd && working
+              ? fdWorkStep
+              : answering
+                ? answerStep
+                : working
+                  ? workStep
+                  : callerStep
+    );
 
     let arming = $state(false);
     let sending = $state(false);

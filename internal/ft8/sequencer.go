@@ -115,6 +115,14 @@ type QsoStatus struct {
 	// us. The SPA fills the ladder's <RST> placeholders from these.
 	OurReport   string `json:"our_report,omitempty"`
 	TheirReport string `json:"their_report,omitempty"`
+	// FD exchange (Fd sessions only) — our + their ARRL Field Day class/section, for the
+	// SPA's FD ladder. Ours are known from config at start; theirs are empty until known
+	// (an answerer learns them in their R-exchange rung; a worker has them from the
+	// picked call). The SPA fills the FD ladder's <CLS>/<SEC> placeholders from these.
+	OurClass     string `json:"our_class,omitempty"`
+	OurSection   string `json:"our_section,omitempty"`
+	TheirClass   string `json:"their_class,omitempty"`
+	TheirSection string `json:"their_section,omitempty"`
 	// TheirPeriod — the FT8 slot parity ("even"|"odd") of the slots we PROCESS, i.e.
 	// the operator's RX parity (the worked/answered station transmits in these slots).
 	// The SPA uses it as the single workable parity for the pile-up queue: a station
@@ -844,15 +852,19 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		}
 		msg, _ := s.fdEx.TxMessage()
 		st := QsoStatus{
-			Active:      true,
-			Role:        roleAnswerer,
-			Fd:          true,
-			TheirCall:   s.fdEx.TheirCall,
-			TheirGrid:   s.fdEx.TheirGrid,
-			State:       s.fdEx.State.label(),
-			NextMessage: msg,
-			Repeats:     s.repeats,
-			TheirPeriod: s.theirPeriod,
+			Active:       true,
+			Role:         roleAnswerer,
+			Fd:           true,
+			TheirCall:    s.fdEx.TheirCall,
+			TheirGrid:    s.fdEx.TheirGrid,
+			State:        s.fdEx.State.label(),
+			NextMessage:  msg,
+			Repeats:      s.repeats,
+			TheirPeriod:  s.theirPeriod,
+			OurClass:     s.fdEx.OurClass,
+			OurSection:   s.fdEx.OurSection,
+			TheirClass:   s.fdEx.TheirClass,
+			TheirSection: s.fdEx.TheirSection,
 		}
 		// Cap governs the pre-RR73 rung only (the one-shot RR73 is uncapped).
 		if s.fdEx.State != fdRogering {
@@ -865,15 +877,19 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		}
 		msg, _ := s.fdWork.TxMessage()
 		st := QsoStatus{
-			Active:      true,
-			Role:        roleWorker,
-			Fd:          true,
-			TheirCall:   s.fdWork.TheirCall,
-			TheirGrid:   s.fdWork.TheirGrid,
-			State:       s.fdWork.State.label(),
-			NextMessage: msg,
-			Repeats:     s.repeats,
-			TheirPeriod: s.theirPeriod,
+			Active:       true,
+			Role:         roleWorker,
+			Fd:           true,
+			TheirCall:    s.fdWork.TheirCall,
+			TheirGrid:    s.fdWork.TheirGrid,
+			State:        s.fdWork.State.label(),
+			NextMessage:  msg,
+			Repeats:      s.repeats,
+			TheirPeriod:  s.theirPeriod,
+			OurClass:     s.fdWork.OurClass,
+			OurSection:   s.fdWork.OurSection,
+			TheirClass:   s.fdWork.TheirClass,
+			TheirSection: s.fdWork.TheirSection,
 		}
 		if s.fdWork.State != fdwRogering {
 			st.MaxRepeats = s.maxRepeats

@@ -113,6 +113,18 @@ export interface Ft8QsoStatus {
     // workable parity for the pile-up: only same-parity stations can be queued/worked
     // next. '' when idle.
     theirPeriod: string;
+    // fd — an ARRL Field Day session: the exchange carries class/section (below)
+    // instead of grid/report, so the SPA renders the FD ladder. The role is still
+    // 'answerer' (answer a CQ FD) or 'worker' (work an FD caller).
+    fd: boolean;
+    // FD exchange — our + their class/section, formatted as on the air (e.g. '1D'/'DX').
+    // Ours are known from config at start; theirs '' until known (an answerer learns
+    // them in the R-exchange; a worker has them from the picked call). Fill the FD
+    // ladder's <CLS>/<SEC> placeholders.
+    ourClass: string;
+    ourSection: string;
+    theirClass: string;
+    theirSection: string;
 }
 
 const emptyQsoStatus = (): Ft8QsoStatus => ({
@@ -127,6 +139,11 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     ourReport: '',
     theirReport: '',
     theirPeriod: '',
+    fd: false,
+    ourClass: '',
+    ourSection: '',
+    theirClass: '',
+    theirSection: '',
 });
 
 /**
@@ -484,6 +501,11 @@ function openSource(): void {
                 our_report: string;
                 their_report: string;
                 their_period: string;
+                fd: boolean;
+                our_class: string;
+                our_section: string;
+                their_class: string;
+                their_section: string;
             }>;
             ft8State.qso = {
                 active: p.active ?? false,
@@ -497,6 +519,11 @@ function openSource(): void {
                 ourReport: p.our_report ?? '',
                 theirReport: p.their_report ?? '',
                 theirPeriod: p.their_period ?? '',
+                fd: p.fd ?? false,
+                ourClass: p.our_class ?? '',
+                ourSection: p.our_section ?? '',
+                theirClass: p.their_class ?? '',
+                theirSection: p.their_section ?? '',
             };
         } catch (e) {
             console.warn('[ft8] qso JSON parse failed', e);
