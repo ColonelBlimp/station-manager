@@ -115,9 +115,9 @@ on any PUT):
   **section checked against go-ft8's canonical ARRL/RAC list** (`ValidARRLFieldDaySection`,
   go-ft8 v0.4.0) — done in `internal/config/validate.go` rather than `types`, which
   stays stdlib-only and so can't import go-ft8. The same list (`ARRLFieldDaySections()`,
-  a `[]ARRLFieldDaySection`) will drive the SPA section dropdown. The FD **parse /
-  answerer ladder / QSO→ADIF mapping** (the operate path) are the remaining work; this
-  block is just the SM-owned identity the reply carries.
+  a `[]ARRLFieldDaySection`) will drive the future SPA section dropdown (config is
+  config.json-only for now). This block is the SM-owned identity both FD exchanges
+  carry — see **ARRL Field Day operating** below for the answer + work paths it feeds.
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on
@@ -533,6 +533,59 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
     WSJT-X red Tx marker, not the green Rx marker). Choosing *which station* to
     work is a separate callsign-based action for the step-(e) sequencer, not a
     frequency this strip sets.
+
+### ARRL Field Day operating (answer + work) — SHIPPED + on-air validated 2026-06-28
+
+SM operates **ARRL Field Day** over FT8 in **both directions** — search & pounce (answer
+a `CQ FD`) and as the sought-after station (work a caller who calls you in FD). It does
+**NOT** call `CQ FD` (no FD run/caller-CQ side) and stays **attended** (operator clicks
+each contact). FD is a distinct FT8 message type (`i3=0`/`n3=3,4`) carrying **class +
+ARRL/RAC section** instead of grid/report — go-ft8 v0.4.0's packer handles the encode and
+decode, so the encode/modulate seam is unchanged (offline round-trip proof:
+`TestFieldDay_RoundTrip`). Your own class/section come from config (`ft8.field_day`);
+clicking is the only way a contact starts.
+
+**Answer a CQ FD** (you S&P) — click a `CQ FD <call> <grid>` row (the SPA's `isCqFd`
+routes the click to `mode:"fd"`; `Service.StartQsoFd` → `seqAnsweringFd` / `FdExchange`):
+
+```
+RX  CQ FD K1ABC FN42
+TX  K1ABC 7Q5MLV 1D DX        (your exchange — class + section from config)
+RX  7Q5MLV K1ABC R 2A EMA     (their R + exchange — parsed: msgFdExchange)
+TX  K1ABC 7Q5MLV RR73         → QSO logs (CLASS=2A, ARRL_SECT=EMA, CONTEST_ID=ARRL-FD)
+```
+
+**Work a caller in FD** (you're the DX) — a station calls you with their exchange,
+`<yourCall> <theirCall> <class> <section>`. The SPA's `parseDirectedToMeFd` recognises
+that shape (distinct from a grid opening) and makes the row clickable; a plain click
+routes to `mode:"fd"` with their class/section (`Service.StartWorkCallerFd` →
+`seqWorkingFd` / `FdWorkExchange`):
+
+```
+RX  7Q5MLV K7IOC 1D WWA       (their call — their class/section captured from it)
+TX  K7IOC 7Q5MLV R 1D DX      (your R + exchange)
+RX  7Q5MLV K7IOC RR73
+TX  K7IOC 7Q5MLV RR73         → QSO logs (CLASS=1D, ARRL_SECT=WWA, CONTEST_ID=ARRL-FD)
+```
+
+As a rare DX station the **work-a-caller** path is the dominant one (people call *you*
+far more than you S&P). Both ladders are pure value-returning state machines (`field_day.go`)
+driven one slot at a time by isolated handlers (`onSlotAnsweringFd` / `onSlotWorkingFd`,
+kept separate from the standard path so it's untouched), with the same off-ramp
+(`max_repeats`), final-rung `onDone` logging, and `sessionGen` guard as the standard
+sequencer. The QSO maps to ADIF via `BuildQso` (their class/section → `CLASS` /
+`ARRL_SECT`, plus `CONTEST_ID=ARRL-FD`); `CompletedQso` carries `Class`/`Section`.
+
+**Wire:** both `POST /v1/ft8/qso/start` and `.../work` take an optional `mode:"fd"`
+(work also takes `their_class`/`their_section`); your class/section are read from config
+by the daemon, never sent by the client (`ft8_field_day_unset` 400 if unset). The
+`ft8-qso` SSE `QsoStatus` carries `fd:true` for an FD session.
+
+**Known limits (2026-06-28):** the Operate-tab message **ladder still renders
+standard-shaped** (the QSO works + logs, but the rung visuals aren't FD-aware yet); the
+**Ctrl/Cmd+click pile-up queue does not support FD callers** (plain-click works them
+directly); the config **SPA section dropdown** is pending (config.json-only for now).
+On-air validated during ARRL FD 2026: **K7T, W6A** (answer) and **K7IOC** (work).
 
 ### Working a CQ — what to expect on the air
 

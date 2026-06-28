@@ -247,7 +247,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
   - `ft8-occupancy` → `OccupancyReport` `{slot: {start_utc, period}, passband: Band, signal_width_hz, occupied: [Band], suggested: [int]}` (`Band` = `{low_hz, high_hz, source?, level?}`).
   - `ft8-decode` → `DecodeReport` `{slot: SlotRef, decodes: [{text, freq_hz, dt_s, snr}]}`.
   - `ft8-tx` → `TxState` `{armed, transmitting, message?, offset_hz?, error?}`.
-  - `ft8-qso` → `QsoStatus` `{active, role?, their_call?, state?, next_message?, repeats?, our_report?, their_report?}`.
+  - `ft8-qso` → `QsoStatus` `{active, role?, fd?, their_call?, state?, next_message?, repeats?, our_report?, their_report?}` (`fd:true` marks an ARRL Field Day session).
   - `ft8-logged` → `LoggedQso` `{uuid, callsign, freq_hz, band, rst_sent, rst_rcvd, mode, time_on:"HH:MM", qso_date:"YYYY-MM-DD", gridsquare, country}`.
 - **Errors:** 503 `server_busy`.
 - **Notes:** All events except `ft8-logged` are replay-cached for late subscribers (`ft8-logged` is not — replay would dup a session row). **Demand-driven:** the first subscriber acquires the audio capture device, the last (after a linger) releases it. Live decode needs a CGO build; the static build keeps the subsystem idle (keepalives only).
@@ -270,7 +270,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `POST /v1/ft8/qso/start`
 - **Purpose:** Begin a manual answer-a-CQ exchange the daemon auto-advances CQ→73 (ADR 0031 e3).
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed.
-- **Request:** Body `{"their_call" (req), "their_grid"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?}`. Our own callsign/grid are resolved server-side from station config.
+- **Request:** Body `{"their_call" (req), "their_grid"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?, "mode"?}`. Our own callsign/grid are resolved server-side from station config. `mode:"fd"` answers a `CQ FD` with the operator's ARRL Field Day exchange (class/section from `ft8.field_day` config; `ft8_field_day_unset` 400 if unset) — see ft8.md "ARRL Field Day operating"; "" / "standard" is the normal grid/report answer.
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
 - **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`.
 - **Notes:** `slot_utc` fixes the worked station's parity. `offset_hz` is daemon-validated against the usable passband (M1) and `operating_freq_mhz` must be a positive known-band dial frequency (M2 — refused before the on-air exchange, since a QSO is logged only at completion). Logged QSO `FREQ`/`BAND` come from `operating_freq_mhz` (the rig dial); `offset_hz` is TX audio placement only, never folded into FREQ.
@@ -278,7 +278,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `POST /v1/ft8/qso/work`
 - **Purpose:** Begin working a station that is calling US, picked from the pile-up (ADR 0033 "work a caller"). Caller-style exchange (we report first → RR73 → log), then **idle** (does not loop to CQ). For tail-enders / answerers that call us when we're not in a Call-CQ session.
 - **Gating:** **Only when FT8 is enabled.** Requires TX armed + no session in flight.
-- **Request:** Body `{"their_call" (req), "their_grid"?, "their_snr"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?}`. `their_snr` is the SPA's SNR of the picked decode — the report we send (RST_SENT). Our own callsign/grid resolved server-side.
+- **Request:** Body `{"their_call" (req), "their_grid"?, "their_snr"?, "slot_utc"?, "offset_hz"?, "operating_freq_mhz"?, "mode"?, "their_class"?, "their_section"?}`. `their_snr` is the SPA's SNR of the picked decode — the report we send (RST_SENT). Our own callsign/grid resolved server-side. `mode:"fd"` works a caller who called us with an ARRL Field Day exchange — the SPA parsed `their_class`/`their_section` from `<ourCall> <theirCall> <class> <section>`, and our class/section come from `ft8.field_day` config (`ft8_field_day_unset` 400 if unset); "" / "standard" is the normal grid/report work.
 - **Response:** **202 Accepted** (progress via `ft8-qso` SSE).
 - **Errors:** 400 `invalid_json`/`invalid_field_value`/`no_station_callsign`/`ft8_no_offset`/`ft8_bad_offset`/`ft8_no_frequency`/`ft8_tx_bad_message`; 409 `ft8_tx_not_armed`/`ft8_qso_in_progress`; 503 `rig_not_ready`.
 - **Notes:** `slot_utc` fixes the caller's parity. Logged QSO `FREQ`/`BAND` come from `operating_freq_mhz` (the rig dial); `offset_hz` is TX audio placement only, never folded into FREQ.
