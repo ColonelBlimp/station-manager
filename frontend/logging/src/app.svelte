@@ -1,6 +1,7 @@
 <script lang="ts">
     import LoggingCard from './lib/ui/cards/LoggingCard.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
+    import ManualLink from './lib/ui/ManualLink.svelte';
     import { fetchConfig, putConfig } from './lib/api/config';
     import { configState } from './lib/states/config.svelte';
     import { startBridge } from './lib/states/bridge.svelte';
@@ -157,6 +158,7 @@
     {/if}
 {/if}
 <Toasts />
+<ManualLink />
 
 <!--
     h-140 / w-fit | w-200 are the whole-app shell dimensions — single use,

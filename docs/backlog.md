@@ -658,15 +658,18 @@ when it ships — don't let this rot into a graveyard.
     external WSJT-X→Grafana request (they could point existing WSJT-X-consuming
     tools straight at SM).
 
-- **Cross-SPA navigation links (all SPAs).** From dogfood-inbox 2026-06-24. The
-  three SPAs (logging at `/`, config at `/config/`, logbook at `/logbook/`) have
-  no links between them — the operator hops by editing the URL. Add a small nav
-  affordance (the header right-side slot is already reserved in each app shell)
-  linking to the sibling SPAs + the future DB manager. Keep it dumb: static
-  `<a href>`s to the known mount paths, no router. Decide the set once (logging ↔
-  config ↔ logbook ↔ db-manager) so all three share one component. Small, but
-  cross-cutting (touches every SPA shell), so batched here rather than done
-  piecemeal.
+- **Cross-SPA navigation links (all SPAs) — PARTIAL: manual link + the corner shipped 2026-06-28.**
+  From dogfood-inbox 2026-06-24. The three SPAs (logging at `/`, config at `/config/`,
+  logbook at `/logbook/`) have no links between them — the operator hops by editing
+  the URL. **Shipped:** a **fixed top-right corner** `ManualLink` (identical component
+  in each SPA — `*/src/lib/ui/ManualLink.svelte`) opening the embedded manual at
+  `/manual/` in a new tab; this corner is now the chosen home for the rest of the
+  cluster (the config header was nudged `pr-32` so its status cluster clears it). The
+  component is **duplicated** across the three Vite projects by design (no shared
+  package). **Remaining:** the sibling-SPA links themselves — static `<a href>`s to
+  the known mount paths (logging ↔ config ↔ logbook ↔ future db-manager), added into
+  the same corner cluster, no router. Decide the set once so all three stay identical.
+  When that lands, fold the three `ManualLink` copies into the shared cluster component.
 
 - **UI themes + dark mode (all SPAs).** From dogfood-inbox 2026-06-24. Today the
   SPAs are light-only with hardcoded Tailwind colour classes (`text-gray-700`,

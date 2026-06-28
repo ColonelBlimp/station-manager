@@ -9,6 +9,7 @@
     import EnrichmentTab from './lib/ui/tabs/EnrichmentTab.svelte';
     import EmailTab from './lib/ui/tabs/EmailTab.svelte';
     import GeneralTab from './lib/ui/tabs/GeneralTab.svelte';
+    import ManualLink from './lib/ui/ManualLink.svelte';
 
     // ── Tab shell ────────────────────────────────────────────────────────────
     // The config SPA is a category-tab shell (design 2026-06-24): one tab per
@@ -81,11 +82,16 @@
     });
 </script>
 
+<!-- Fixed top-right Manual link, shared with the logging + logbook SPAs (identical
+     ManualLink component). This corner is the planned home of the cross-SPA links
+     (→ logging, → logbook — backlog), so they'll join it here rather than the header
+     right-slot. The header gets extra right padding (pr-32) so its status cluster
+     clears the fixed link. -->
+<ManualLink />
 <div class="flex min-h-screen flex-col bg-gray-50 font-sans text-gray-900">
-    <!-- Header bar. The right-side slot is the future home for cross-SPA links
-         (→ logging, → logbook, → db manager — dogfood-inbox 2026-06-24); left
-         empty for now. -->
-    <header class="flex items-center justify-between border-b border-gray-300 bg-white px-6 py-3">
+    <header
+        class="flex items-center justify-between border-b border-gray-300 bg-white py-3 pl-6 pr-32"
+    >
         <h1 class="text-lg font-semibold">Station Manager — Config</h1>
         <div class="flex items-center gap-2 text-sm text-gray-600">
             <span class="inline-block h-2.5 w-2.5 rounded-full {statusColour}" aria-hidden="true"

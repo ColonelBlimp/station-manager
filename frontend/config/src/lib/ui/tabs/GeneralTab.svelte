@@ -50,10 +50,10 @@
                 <span>
                     Restore the rig when switching operating mode
                     <span class="mt-0.5 block text-xs text-gray-400">
-                        On a Phone/CW ↔ FT8 switch, return the rig to that mode's last
-                        frequency and mode. When a rig is connected (CAT) this re-tunes the rig;
-                        with no rig it just restores the displayed values. Turn off to leave the
-                        rig wherever the other mode left it.
+                        On a Phone/CW ↔ FT8 switch, return the rig to that mode's last frequency and
+                        mode. When a rig is connected (CAT) this re-tunes the rig; with no rig it
+                        just restores the displayed values. Turn off to leave the rig wherever the
+                        other mode left it.
                     </span>
                 </span>
             </label>
@@ -87,9 +87,7 @@
                     <dt class="font-semibold text-gray-700">DB schema</dt>
                     <dd class="font-mono text-gray-700">
                         {#if versionInfo.schema !== undefined}
-                            {versionInfo.schema.version}{versionInfo.schema.dirty
-                                ? ' (dirty)'
-                                : ''}
+                            {versionInfo.schema.version}{versionInfo.schema.dirty ? ' (dirty)' : ''}
                         {:else}
                             unavailable
                         {/if}

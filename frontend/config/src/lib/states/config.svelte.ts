@@ -627,7 +627,8 @@ class ConfigState {
         return (
             this.ft8Enabled !== (this.config.ft8_enabled ?? false) ||
             JSON.stringify(this.ft8Form) !== JSON.stringify(ft8FormFrom(this.config.ft8_display)) ||
-            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null)) ||
+            pskFormKey(this.pskForm) !==
+                pskFormKey(pskFormFrom(this.config.psk_reporter ?? null)) ||
             decodeLogFormKey(this.decodeLogForm) !==
                 decodeLogFormKey(decodeLogFormFrom(this.config.ft8_decode_log))
         );
@@ -642,7 +643,8 @@ class ConfigState {
         if (!this.config) return false;
         return (
             this.ft8Enabled !== (this.config.ft8_enabled ?? false) ||
-            pskFormKey(this.pskForm) !== pskFormKey(pskFormFrom(this.config.psk_reporter ?? null)) ||
+            pskFormKey(this.pskForm) !==
+                pskFormKey(pskFormFrom(this.config.psk_reporter ?? null)) ||
             decodeLogFormKey(this.decodeLogForm) !==
                 decodeLogFormKey(decodeLogFormFrom(this.config.ft8_decode_log))
         );
