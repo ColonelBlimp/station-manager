@@ -16,6 +16,53 @@ weight: 70
 - Calling CQ and working answerers.
 - The Session tab and where your FT8 QSOs go.
 
+## Answering a CQ
+
+Answering a CQ is the most common way to make an FT8 contact: another station calls
+CQ, you reply, and Station Manager runs the rest of the exchange for you.
+
+### Before you transmit
+
+Two things need to be in place first:
+
+- **Enable transmit.** Click **Enable Tx** — it turns red to show transmit is armed.
+  Until transmit is armed, Station Manager only listens, and clicking a CQ won't start
+  a reply. Arming needs a connected, CAT-controlled rig; the button stays disabled
+  otherwise.
+- **Pick a transmit offset.** On the **Occupancy** tab the passband is laid out as a
+  strip of frequency slots: busy slots are shaded, clear slots show as green markers,
+  and a ★ marks Station Manager's top pick. Click a clear marker (or the **Clear
+  Offsets** chip) to choose where your signal goes out, so you're not transmitting on
+  top of another station.
+
+Both settings stay put between contacts, so you normally do this once at the start of
+a session.
+
+### Making the contact
+
+1. In **Band Activity**, find a station calling **CQ**. CQ lines stand out, and each
+   carries a country flag and a beam heading — the short-path bearing from your grid to
+   theirs — so you can turn the antenna before you reply.
+2. **Click the CQ line.** Station Manager answers that station on your chosen offset, in
+   the correct slot, and the exchange begins. If you click partway through a slot it can
+   still reply in that same slot when there's time, so you don't lose a whole cycle.
+3. From there it runs itself. The **Operate** tab shows the message ladder — your
+   transmissions interleaved with the other station's — with the current step
+   highlighted. The standard exchange advances automatically through the signal reports
+   to the closing **RR73 / 73**.
+4. When the exchange completes, the contact is **logged** and appears in the **Session**
+   tab (shared with your Phone/CW session log, ready for email-out).
+
+### Stopping early
+
+Click **Abandon** at any point to stop the exchange — for instance if the other station
+vanishes or starts working someone else. Abandon drops the contact immediately and
+returns you to listening, still armed and ready for the next one.
+
+> **Your reply may not go out the instant you click.** FT8 only transmits on slot
+> boundaries, so there can be a short wait before your signal is sent. The **ON AIR**
+> indicator lights while you are actually transmitting.
+
 ## Calling CQ: choosing your slot
 
 FT8 runs on a strict 15-second grid, and every station transmits in one of two
