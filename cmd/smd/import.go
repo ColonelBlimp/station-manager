@@ -174,6 +174,18 @@ func runImport(args []string) error {
 
 	// reference.db / log-db split: log connection for qso/queue/history, a
 	// reference connection for the enrichment caches qsoservice warms on import.
+	logDBDir := filepath.Dir(dbSvc.DatabaseConfig.Path)
+	refPath := filepath.Join(logDBDir, referenceDBFilename)
+
+	// Idempotent, backup-first split of an existing single-file DB — in case an
+	// operator runs `smd import` against an old DB before the daemon has started
+	// once. No-op when fresh or already split. Must precede Open.
+	if err := sqlite.BootstrapReferenceSplit(
+		dbSvc.DatabaseConfig.Path, refPath, filepath.Join(logDBDir, "backups"), loggerSvc,
+	); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
+	}
+
 	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
 	if err := dbSvc.Open(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open database")
@@ -188,7 +200,7 @@ func runImport(args []string) error {
 	}
 
 	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
-	refDbSvc.SetDatabasePath(filepath.Join(filepath.Dir(dbSvc.DatabaseConfig.Path), referenceDBFilename))
+	refDbSvc.SetDatabasePath(refPath)
 	if err := refDbSvc.Open(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open reference database")
 	}

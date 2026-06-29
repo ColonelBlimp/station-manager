@@ -371,6 +371,19 @@ func run() error {
 	// The log connection holds logbook/qso/qso_upload/qso_history; the reference
 	// connection holds the operator-global enrichment caches in reference.db,
 	// alongside the log DB in the same directory.
+	logDBDir := filepath.Dir(dbSvc.DatabaseConfig.Path)
+	refPath := filepath.Join(logDBDir, referenceDBFilename)
+
+	// One-time, backup-first migration of an existing single-file DB into the
+	// split. No-op on fresh installs and on already-split DBs. MUST run before
+	// the connections open (it re-keys the log DB's migration tracking so the
+	// log connection's migrate is a no-op rather than re-running 0002).
+	if err = sqlite.BootstrapReferenceSplit(
+		dbSvc.DatabaseConfig.Path, refPath, filepath.Join(logDBDir, "backups"), loggerSvc,
+	); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
+	}
+
 	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
 	if err = dbSvc.Open(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open database")
@@ -387,7 +400,7 @@ func run() error {
 	}
 
 	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
-	refDbSvc.SetDatabasePath(filepath.Join(filepath.Dir(dbSvc.DatabaseConfig.Path), referenceDBFilename))
+	refDbSvc.SetDatabasePath(refPath)
 	if err = refDbSvc.Open(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open reference database")
 	}
