@@ -51,3 +51,8 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-27] still I can add calling stations from both odd and even
 - [2026-06-27] let's revisit the need for the E/O in the band activity now that the display lock to whatever parity you are TX'ing on
 - [2026-06-28] correct the ladder display for the ARRL FD
+- [2026-06-29] logbook - need to able to edit more fields of a QSO: notes, LP/SP
+- [2026-06-29] logbook: date_off = should it be populated always?
+- [2026-06-29] logbook - qso list should indicate if it has been sent via email
+- [2026-06-29] logbook - need to able to export selected/all
+- [2026-06-29] logbook - maybe move the email option to a dialog overlay - same with export?
