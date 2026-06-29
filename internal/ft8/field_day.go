@@ -73,13 +73,19 @@ type FdExchange struct {
 	TheirClass   string
 	TheirSection string
 	HasTheirExch bool
+
+	// SendSnr is OUR measured SNR of their signal (from the decode the operator clicked).
+	// FD doesn't exchange a report on the air, but we still log it as RST_SENT — like a
+	// standard FT8 QSO — so the QSO isn't reportless. HasSendSnr is true once set.
+	SendSnr    int
+	HasSendSnr bool
 }
 
 // NewFdExchange starts answering a CQ FD. ourClass/ourSection are the operator's
 // configured Field Day identity (ft8.field_day); theirGrid comes from their CQ (kept
 // for the log, not the exchange). Values are upper-cased to match decoded text and the
 // grid trimmed to 4 chars (FT8 standard messages carry only the 4-char field).
-func NewFdExchange(ourCall, ourClass, ourSection, theirCall, theirGrid string) FdExchange {
+func NewFdExchange(ourCall, ourClass, ourSection, theirCall, theirGrid string, sendSnr int) FdExchange {
 	up := func(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
 	grid := up(theirGrid)
 	if len(grid) > 4 {
@@ -92,6 +98,8 @@ func NewFdExchange(ourCall, ourClass, ourSection, theirCall, theirGrid string) F
 		TheirCall:  up(theirCall),
 		TheirGrid:  grid,
 		State:      fdCalling,
+		SendSnr:    sendSnr,
+		HasSendSnr: true,
 	}
 }
 
@@ -176,12 +184,18 @@ type FdWorkExchange struct {
 	TheirSection string // their exchange section — logged (ADIF ARRL_SECT)
 
 	State fdwState
+
+	// SendSnr is OUR measured SNR of their signal (the decode the operator clicked) —
+	// logged as RST_SENT, since FD exchanges no report on the air. Always set here (the
+	// caller's signal is what we picked), so HasSendSnr is true.
+	SendSnr    int
+	HasSendSnr bool
 }
 
 // NewFdWorkExchange begins working a caller's FD call. ourClass/ourSection are the
 // operator's configured identity; theirClass/theirSection are parsed from the call we
 // picked. Values are upper-cased; the grid trimmed to 4 chars.
-func NewFdWorkExchange(ourCall, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection string) FdWorkExchange {
+func NewFdWorkExchange(ourCall, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection string, sendSnr int) FdWorkExchange {
 	up := func(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
 	grid := up(theirGrid)
 	if len(grid) > 4 {
@@ -196,6 +210,8 @@ func NewFdWorkExchange(ourCall, ourClass, ourSection, theirCall, theirGrid, thei
 		TheirClass:   up(theirClass),
 		TheirSection: up(theirSection),
 		State:        fdwReporting,
+		SendSnr:      sendSnr,
+		HasSendSnr:   true,
 	}
 }
 

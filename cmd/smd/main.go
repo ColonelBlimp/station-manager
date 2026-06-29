@@ -542,6 +542,15 @@ func run() error {
 				c.DialFreqMHz = dialMHz
 			}
 			q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
+			// ARRL Field Day RST_RCVD default (config ft8.field_day.default_rst_rcvd):
+			// FD exchanges class/section, not a report, so we never receive an RST.
+			// RST_SENT is the measured SNR (set by BuildQso); some OQRS systems require
+			// RST_RCVD non-empty too, so fill it from the operator's configured default
+			// for FD QSOs. Empty default / non-FD QSO → unchanged. A logging-policy
+			// default, applied here beside the QSL / TX_PWR defaults (not on-air data).
+			if q.ContestId == "ARRL-FD" && q.RstRcvd == "" && snap.Ft8.FieldDay != nil {
+				q.RstRcvd = strings.TrimSpace(snap.Ft8.FieldDay.DefaultRstRcvd)
+			}
 			// Country/DXCC enrichment for the contacted station. The SPA logging
 			// form gets this by calling /v1/enrich/callsign before it submits; the
 			// FT8 path has no form, so the daemon runs the same lookup here. Besides

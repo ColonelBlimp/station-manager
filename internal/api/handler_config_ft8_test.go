@@ -155,15 +155,18 @@ func TestConfig_Ft8FieldDay_GetReturnsEmpty(t *testing.T) {
 	}
 }
 
-// A PUT persists the Field Day exchange and normalises it to upper-case.
+// A PUT persists the Field Day exchange + RST_RCVD default; class/section upper-case,
+// the RST default kept verbatim (case meaningless for a report).
 func TestConfig_Ft8FieldDay_PutUpdatesAndUpperCases(t *testing.T) {
 	srv := testServer(t)
-	if w := ft8PutConfig(t, srv, `{"ft8_field_day":{"class":"2a","section":"dx"}}`); w.Code != http.StatusOK {
+	if w := ft8PutConfig(t, srv,
+		`{"ft8_field_day":{"class":"2a","section":"dx","default_rst_rcvd":"59"}}`); w.Code != http.StatusOK {
 		t.Fatalf("PUT = %d, body %s", w.Code, w.Body.String())
 	}
 	resp := ft8GetConfig(t, srv)
-	if resp.Ft8FieldDay == nil || resp.Ft8FieldDay.Class != "2A" || resp.Ft8FieldDay.Section != "DX" {
-		t.Fatalf("after PUT, ft8_field_day = %+v (want 2A/DX)", resp.Ft8FieldDay)
+	if resp.Ft8FieldDay == nil || resp.Ft8FieldDay.Class != "2A" ||
+		resp.Ft8FieldDay.Section != "DX" || resp.Ft8FieldDay.DefaultRstRcvd != "59" {
+		t.Fatalf("after PUT, ft8_field_day = %+v (want 2A/DX/59)", resp.Ft8FieldDay)
 	}
 }
 

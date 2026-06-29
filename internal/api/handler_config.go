@@ -408,6 +408,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		candidate.Ft8.FieldDay = &types.Ft8FieldDayConfig{
 			Class:   strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Class)),
 			Section: strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Section)),
+			// RST_RCVD default is an operator-chosen report value (e.g. "59", "-15") —
+			// trimmed but NOT upper-cased; case is meaningless for a report.
+			DefaultRstRcvd: strings.TrimSpace(req.Ft8FieldDay.DefaultRstRcvd),
 		}
 	}
 	// QSL defaults — presence-aware, same rationale as ft8_display: a My Station

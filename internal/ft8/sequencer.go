@@ -297,7 +297,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 // FD twin of StartQso: ourClass/ourSection are the operator's configured Field Day
 // identity (the reply carries them), theirGrid comes from their CQ FD (logged, not
 // exchanged). Same one-session-at-a-time + opening-encode-validation discipline.
-func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
+func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
@@ -309,7 +309,7 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 		return err
 	}
 
-	ex := NewFdExchange(ourCall, ourClass, ourSection, theirCall, theirGrid)
+	ex := NewFdExchange(ourCall, ourClass, ourSection, theirCall, theirGrid, theirSnr)
 	// Validate our opening exchange encodes before committing (mirrors StartQso): a
 	// compound/portable call or a class/section the packer rejects would otherwise
 	// publish a ladder that can never produce RF.
@@ -682,13 +682,15 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 // fields — FD exchanges class+section, not an SNR report. Caller holds s.mu.
 func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 	return CompletedQso{
-		TheirCall:   s.fdEx.TheirCall,
-		TheirGrid:   s.fdEx.TheirGrid,
-		Class:       s.fdEx.TheirClass,
-		Section:     s.fdEx.TheirSection,
-		StartedAt:   s.startedAt,
-		OffsetHz:    s.offsetHz,
-		DialFreqMHz: s.dialFreqMHz,
+		TheirCall:    s.fdEx.TheirCall,
+		TheirGrid:    s.fdEx.TheirGrid,
+		Class:        s.fdEx.TheirClass,
+		Section:      s.fdEx.TheirSection,
+		OurReport:    s.fdEx.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
+		HasOurReport: s.fdEx.HasSendSnr, // RST_RCVD is the config default, applied at log time
+		StartedAt:    s.startedAt,
+		OffsetHz:     s.offsetHz,
+		DialFreqMHz:  s.dialFreqMHz,
 	}
 }
 
@@ -696,13 +698,15 @@ func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 // class/section came from the call we picked. Caller holds s.mu.
 func (s *Sequencer) completedFdWorkQsoLocked() CompletedQso {
 	return CompletedQso{
-		TheirCall:   s.fdWork.TheirCall,
-		TheirGrid:   s.fdWork.TheirGrid,
-		Class:       s.fdWork.TheirClass,
-		Section:     s.fdWork.TheirSection,
-		StartedAt:   s.startedAt,
-		OffsetHz:    s.offsetHz,
-		DialFreqMHz: s.dialFreqMHz,
+		TheirCall:    s.fdWork.TheirCall,
+		TheirGrid:    s.fdWork.TheirGrid,
+		Class:        s.fdWork.TheirClass,
+		Section:      s.fdWork.TheirSection,
+		OurReport:    s.fdWork.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
+		HasOurReport: s.fdWork.HasSendSnr, // RST_RCVD is the config default, applied at log time
+		StartedAt:    s.startedAt,
+		OffsetHz:     s.offsetHz,
+		DialFreqMHz:  s.dialFreqMHz,
 	}
 }
 

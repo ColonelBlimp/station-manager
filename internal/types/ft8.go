@@ -81,6 +81,12 @@ type Ft8Config struct {
 type Ft8FieldDayConfig struct {
 	Class   string `json:"class,omitempty"`
 	Section string `json:"section,omitempty"`
+	// DefaultRstRcvd is the value logged as RST_RCVD for an FD QSO. Field Day exchanges
+	// class+section, not a signal report, so we never receive an RST — but some OQRS
+	// systems require RST_RCVD non-empty. The operator sets this to whatever their OQRS
+	// wants (e.g. "59", "599", "-15"). Empty → RST_RCVD left blank. (RST_SENT is the
+	// measured SNR, recorded from the decode like a standard FT8 QSO.)
+	DefaultRstRcvd string `json:"default_rst_rcvd,omitempty"`
 }
 
 // ft8FieldDayClassPattern matches a Field Day class: transmitter count 1–99 followed

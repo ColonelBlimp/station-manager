@@ -118,6 +118,14 @@ on any PUT):
   a `[]ARRLFieldDaySection`) will drive the future SPA section dropdown (config is
   config.json-only for now). This block is the SM-owned identity both FD exchanges
   carry — see **ARRL Field Day operating** below for the answer + work paths it feeds.
+- **`field_day.default_rst_rcvd`** — the value logged as **RST_RCVD** for an FD QSO. FD
+  exchanges class/section, not a report, so we never receive an RST — but some OQRS
+  systems require RST_RCVD non-empty. The operator sets this (e.g. `59`, `599`, `-15`);
+  empty → RST_RCVD left blank. (RST_SENT is the **measured SNR**, recorded from the
+  decode like a standard FT8 QSO — the SPA passes our SNR of the clicked decode as
+  `their_snr`, threaded to `FdExchange`/`FdWorkExchange.SendSnr` → `CompletedQso.OurReport`.
+  The RST_RCVD default is applied at log time in the `cmd/smd` e4 sink, which has config —
+  `BuildQso` stays config-free.)
 
 FFT backend: the default is pure-Go **gonum**; the opt-in **PocketFFT** (CGO,
 `SM_FFT=pocketfft`) is ~2× faster decode but dynamically linked. Decode time on
@@ -575,6 +583,11 @@ kept separate from the standard path so it's untouched), with the same off-ramp
 (`max_repeats`), final-rung `onDone` logging, and `sessionGen` guard as the standard
 sequencer. The QSO maps to ADIF via `BuildQso` (their class/section → `CLASS` /
 `ARRL_SECT`, plus `CONTEST_ID=ARRL-FD`); `CompletedQso` carries `Class`/`Section`.
+**RST on FD:** the on-air exchange carries no report, but the QSO still logs both —
+`RST_SENT` = our **measured SNR** of the station (the SPA passes our SNR of the clicked
+decode as `their_snr`; `BuildQso` writes it like a standard QSO), and `RST_RCVD` = the
+operator's `ft8.field_day.default_rst_rcvd` (applied in the e4 sink), because some OQRS
+systems require both fields non-empty.
 
 **Wire:** both `POST /v1/ft8/qso/start` and `.../work` take an optional `mode:"fd"`
 (work also takes `their_class`/`their_section`); your class/section are read from config

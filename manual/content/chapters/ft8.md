@@ -103,3 +103,60 @@ where you are. If you just want to get on the air quickly, leave it on **Next**.
 > button changes to *Calling CQ…* straight away, but the radio stays silent until
 > the next slot of the chosen parity arrives. A short quiet gap before the first
 > transmission is normal — Station Manager is waiting for your slot, not stalling.
+
+## ARRL Field Day
+
+Station Manager can make **ARRL Field Day** contacts over FT8 in both directions —
+answering another station's `CQ FD`, and working stations that call **you**. (It does
+not *call* `CQ FD` itself.) Field Day uses a different exchange from an ordinary
+contact: instead of a signal report, each station sends its **class** (number of
+transmitters plus a category letter, e.g. `2A`) and its **ARRL/RAC section** (e.g.
+`EMA`, or `DX` if you are outside the US and Canada).
+
+### Set your Field Day identity
+
+Before operating Field Day you must tell Station Manager your own class and section.
+These live in the configuration file (`config.json`) under `ft8.field_day` — stop the
+daemon, edit, and restart:
+
+```jsonc
+"ft8": {
+  "field_day": {
+    "class":            "1D",   // your entry: <transmitters><category>, e.g. 2A, 5F
+    "section":          "DX",   // your ARRL/RAC section, or DX outside US/Canada
+    "default_rst_rcvd": "59"    // see "Signal reports" below
+  }
+}
+```
+
+If your class or section is not set, Station Manager will refuse to start a Field Day
+contact (and tell you why) rather than send an incomplete exchange.
+
+### Operating
+
+- **Answering a `CQ FD`** (search & pounce): in **Band Activity**, a Field Day CQ shows
+  as `CQ FD <call> <grid>`. Click it just like an ordinary CQ — Station Manager sends
+  your class and section, reads theirs, and logs the contact.
+- **Working a station that calls you**: when you are the sought-after station, callers
+  reach you with their exchange — `<your-call> <their-call> <class> <section>` (for
+  example `7Q5MLV K7IOC 1D WWA`). That line is clickable; clicking it works them with
+  the Field Day exchange. This is usually your busiest path.
+
+A logged Field Day contact records the other station's **class** and **section** and is
+marked as an `ARRL-FD` contest QSO.
+
+### Signal reports on Field Day
+
+Field Day does not exchange a signal report on the air — the class and section take its
+place. Station Manager still fills in the report fields so your log is complete:
+
+- **RST sent** is set to **your measured signal-to-noise of the other station** (the
+  same value you would have sent in an ordinary FT8 contact).
+- **RST received** is set to the **default you configured** in `default_rst_rcvd`,
+  because the other station never sends you one.
+
+Why bother? Some **OQRS** (Online QSL Request Service) systems and log checkers require
+both *RST sent* and *RST received* to be present, and will reject or flag a contact
+with either left blank. Set `default_rst_rcvd` to whatever value those services expect
+(commonly `59` or `599`). Leave it empty if you don't need it — then *RST received* is
+simply left blank on Field Day contacts.

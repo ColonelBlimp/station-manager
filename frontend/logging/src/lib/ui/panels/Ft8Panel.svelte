@@ -268,7 +268,8 @@
             d.startUtc,
             ft8State.selectedOffset,
             opFreq / 1_000_000,
-            isCqFd(d.text) ? 'fd' : 'standard'
+            isCqFd(d.text) ? 'fd' : 'standard',
+            d.snr // our SNR of their CQ — logged as RST_SENT for FD (no report exchanged)
         );
         if (out.kind !== 'ok') toasts.error(out.message);
     }

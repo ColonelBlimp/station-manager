@@ -433,7 +433,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 // (class + section) is daemon config (ft8.field_day), not client-supplied — mirroring
 // how StartCallCq reads the answer mode — and a missing identity is refused up front.
 // Requires TX armed, same as StartQso.
-func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartQsoFd"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -458,7 +458,7 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid, theirSlotUTC string,
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	s.resetExchangePath()
-	return s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+	return s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
 // StartCallCq begins a sequenced Call-CQ session (ADR 0033): we call CQ in our slot
@@ -531,7 +531,7 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 // (the FD twin of StartWorkCaller): the operator picked "<ourCall> <theirCall> <class>
 // <section>". theirClass/theirSection are parsed by the api layer from that decode; OUR
 // class/section come from ft8.field_day config (not client-supplied). Requires TX armed.
-func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, theirSection, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, theirSection string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
 	const op errors.Op = "ft8.Service.StartWorkCallerFd"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -557,7 +557,7 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 	}
 	s.resetExchangePath()
 	return s.seq.StartWorkCallerFd(ourCall, class, section, theirCall, theirGrid, theirClass, theirSection,
-		theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+		theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
 // SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029

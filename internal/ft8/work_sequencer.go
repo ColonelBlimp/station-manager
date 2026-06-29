@@ -230,7 +230,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 // (the FD twin of StartWorkCaller). theirClass/theirSection are parsed from the call we
 // picked ("<ourCall> <theirCall> <class> <section>"); ourClass/ourSection are the
 // operator's configured identity. Requires armed TX; one session at a time.
-func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
+func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
@@ -249,7 +249,7 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 		return err
 	}
 
-	c := NewFdWorkExchange(call, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection)
+	c := NewFdWorkExchange(call, ourClass, ourSection, theirCall, theirGrid, theirClass, theirSection, theirSnr)
 	if msg, ok := c.TxMessage(); ok {
 		if _, err := goft8.EncodeStandardMessage(msg); err != nil {
 			return ErrTxBadMessage

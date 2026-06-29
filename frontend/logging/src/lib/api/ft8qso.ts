@@ -69,6 +69,7 @@ export function startFt8Qso(
     offsetHz: number,
     operatingFreqMHz: number,
     mode: 'standard' | 'fd' = 'standard',
+    theirSnr?: number,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -80,8 +81,9 @@ export function startFt8Qso(
             offset_hz: offsetHz,
             operating_freq_mhz: operatingFreqMHz,
             // 'fd' answers a CQ FD with the operator's Field Day class+section (daemon
-            // config). Omit for a standard answer so the wire stays unchanged.
-            ...(mode === 'fd' ? { mode: 'fd' } : {}),
+            // config). their_snr is our SNR of the CQ — logged as RST_SENT, since FD
+            // exchanges no report. Omit both for a standard answer (wire unchanged).
+            ...(mode === 'fd' ? { mode: 'fd', their_snr: theirSnr ?? 0 } : {}),
         },
         signal
     );

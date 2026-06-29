@@ -58,6 +58,10 @@ type ft8QsoStartRequest struct {
 	// "fd" answers a CQ FD with the operator's ARRL Field Day exchange (class+section
 	// from ft8.field_day config). The SPA sets "fd" when the clicked decode is a CQ FD.
 	Mode string `json:"mode,omitempty"`
+	// TheirSnr — our SNR of the clicked CQ FD decode. Used only for mode "fd": FD
+	// exchanges no report on the air, so we log this measured SNR as RST_SENT (standard
+	// answer-a-CQ derives its report from the exchange, so this is ignored there).
+	TheirSnr int `json:"their_snr,omitempty"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -102,7 +106,7 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(strings.TrimSpace(req.Mode), "fd") {
 		// ARRL Field Day: our class+section come from ft8.field_day config (read by
 		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
-		err = s.ft8.StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.SlotUTC,
+		err = s.ft8.StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz)
 	} else {
 		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
@@ -235,7 +239,7 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(strings.TrimSpace(req.Mode), "fd") {
 		// Field Day: their class+section came from the picked call; ours from config.
 		err = s.ft8.StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,
-			req.TheirClass, req.TheirSection, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz)
+			req.TheirClass, req.TheirSection, req.TheirSnr, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz)
 	} else {
 		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz)

@@ -67,10 +67,10 @@ func TestLooksLikeFdClass(t *testing.T) {
 
 // The answerer ladder, us = 7Q5MLV (1D/DX) answering K1ABC's CQ FD.
 func TestFdExchange_Ladder(t *testing.T) {
-	e := NewFdExchange("7q5mlv", "1d", "dx", "k1abc", "FN42AA")
+	e := NewFdExchange("7q5mlv", "1d", "dx", "k1abc", "FN42AA", -12)
 
-	// Opening rung: our exchange. Grid is trimmed to 4 chars.
-	if e.State != fdCalling || e.TheirGrid != "FN42" {
+	// Opening rung: our exchange. Grid trimmed to 4 chars; our SNR of them captured.
+	if e.State != fdCalling || e.TheirGrid != "FN42" || e.SendSnr != -12 || !e.HasSendSnr {
 		t.Fatalf("after New: %+v", e)
 	}
 	if msg, ok := e.TxMessage(); !ok || msg != "K1ABC 7Q5MLV 1D DX" {
@@ -114,7 +114,7 @@ func TestSequencer_FieldDayHappyPath(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 
-	require.NoError(t, s.StartQsoFd("G0XYZ", "1D", "DX", "K1ABC", "FN42",
+	require.NoError(t, s.StartQsoFd("G0XYZ", "1D", "DX", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.True(t, s.Active())
 
@@ -134,6 +134,8 @@ func TestSequencer_FieldDayHappyPath(t *testing.T) {
 	require.Equal(t, "FN42", r.completed[0].TheirGrid)
 	require.Equal(t, "2A", r.completed[0].Class)
 	require.Equal(t, "EMA", r.completed[0].Section)
+	require.Equal(t, -12, r.completed[0].OurReport) // our SNR of them → RST_SENT
+	require.True(t, r.completed[0].HasOurReport)
 	require.Equal(t, 14.074, r.completed[0].DialFreqMHz)
 	require.Equal(t, 1500.0, r.completed[0].OffsetHz)
 }
@@ -143,20 +145,22 @@ func TestSequencer_FieldDayRequiresIdentity(t *testing.T) {
 	s := newTestSeq(r)
 	now := time.Unix(0, 0).UTC()
 	slot := now.Format(time.RFC3339)
-	require.ErrorIs(t, s.StartQsoFd("G0XYZ", "", "DX", "K1ABC", "FN42", slot, 1500, 14.074, now),
+	require.ErrorIs(t, s.StartQsoFd("G0XYZ", "", "DX", "K1ABC", "FN42", 0, slot, 1500, 14.074, now),
 		ErrFdIdentityUnset)
-	require.ErrorIs(t, s.StartQsoFd("G0XYZ", "1D", "", "K1ABC", "FN42", slot, 1500, 14.074, now),
+	require.ErrorIs(t, s.StartQsoFd("G0XYZ", "1D", "", "K1ABC", "FN42", 0, slot, 1500, 14.074, now),
 		ErrFdIdentityUnset)
 }
 
 func TestBuildQso_FieldDay(t *testing.T) {
 	c := CompletedQso{
-		TheirCall:   "K1ABC",
-		TheirGrid:   "FN42",
-		Class:       "2A",
-		Section:     "EMA",
-		DialFreqMHz: 14.074,
-		StartedAt:   time.Unix(0, 0).UTC(),
+		TheirCall:    "K1ABC",
+		TheirGrid:    "FN42",
+		Class:        "2A",
+		Section:      "EMA",
+		OurReport:    -12, // our SNR of them
+		HasOurReport: true,
+		DialFreqMHz:  14.074,
+		StartedAt:    time.Unix(0, 0).UTC(),
 	}
 	q := BuildQso(c, types.LoggingStation{Operator: "G0XYZ"}, 1, time.Unix(0, 0).UTC())
 	require.Equal(t, "K1ABC", q.Call)
@@ -164,13 +168,18 @@ func TestBuildQso_FieldDay(t *testing.T) {
 	require.Equal(t, "2A", q.Class)
 	require.Equal(t, "EMA", q.ArrlSect)
 	require.Equal(t, "ARRL-FD", q.ContestId)
+	require.Equal(t, "-12", q.RstSent) // RST_SENT = the measured SNR
+	// RST_RCVD stays empty here — the config default is applied at log time (cmd/smd),
+	// not in BuildQso (which is config-free).
+	require.Equal(t, "", q.RstRcvd)
 }
 
 // FD work-a-caller ladder: us = G0XYZ (1D/DX) working K7IOC, who called us with their
 // exchange (2A WWA, captured from the call we picked).
 func TestFdWorkExchange_Ladder(t *testing.T) {
-	e := NewFdWorkExchange("g0xyz", "1d", "dx", "k7ioc", "", "2A", "WWA")
-	if e.State != fdwReporting || e.TheirClass != "2A" || e.TheirSection != "WWA" {
+	e := NewFdWorkExchange("g0xyz", "1d", "dx", "k7ioc", "", "2A", "WWA", 5)
+	if e.State != fdwReporting || e.TheirClass != "2A" || e.TheirSection != "WWA" ||
+		e.SendSnr != 5 || !e.HasSendSnr {
 		t.Fatalf("after New: %+v", e)
 	}
 	if msg, ok := e.TxMessage(); !ok || msg != "K7IOC G0XYZ R 1D DX" {
@@ -197,7 +206,7 @@ func TestFdWorkExchange_Ladder(t *testing.T) {
 func TestSequencer_FieldDayWorkCaller(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	require.NoError(t, s.StartWorkCallerFd("G0XYZ", "1D", "DX", "K7IOC", "", "2A", "WWA",
+	require.NoError(t, s.StartWorkCallerFd("G0XYZ", "1D", "DX", "K7IOC", "", "2A", "WWA", 2,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.True(t, s.Active())
 
@@ -213,4 +222,6 @@ func TestSequencer_FieldDayWorkCaller(t *testing.T) {
 	require.Equal(t, "K7IOC", r.completed[0].TheirCall)
 	require.Equal(t, "2A", r.completed[0].Class)
 	require.Equal(t, "WWA", r.completed[0].Section)
+	require.Equal(t, 2, r.completed[0].OurReport) // our SNR of them → RST_SENT
+	require.True(t, r.completed[0].HasOurReport)
 }
