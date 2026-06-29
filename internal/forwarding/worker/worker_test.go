@@ -653,6 +653,88 @@ func TestWorker_TransientExhaustionBecomesFailed(t *testing.T) {
 }
 
 // =============================================================================
+// Connectivity outage (OutcomeUnreachable) — retried indefinitely, never failed
+// (ADR 0038). Direct contrast with TestWorker_TransientExhaustionBecomesFailed
+// above: identical MaxAttempts=1, but an unreachable host stays pending instead
+// of being promoted to failed. This is what makes offline-first logging durable.
+// =============================================================================
+
+func TestWorker_UnreachableStaysPendingPastBudget(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	cfg := defaultCfg("stub")
+	cfg.Retry.MaxAttempts = 1 // A transient outcome would fail here; unreachable must not.
+	fwd := &recordingForwarder{
+		typeName: stub.Type,
+		result: forwarding.Result{
+			Outcome: forwarding.OutcomeUnreachable,
+			Err:     fmt.Errorf("dial tcp: connect: connection refused"),
+		},
+	}
+	w, err := New(cfg, fwd, h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	before := time.Now().Unix()
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Pending.String() && u.Attempts >= 1
+	})
+	if row.Status != status.Pending.String() {
+		t.Fatalf("status = %q, want pending (unreachable must never become failed)", row.Status)
+	}
+	if row.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", row.Attempts)
+	}
+	if row.NextAttemptAt <= before {
+		t.Fatalf("next_attempt_at=%d must be scheduled in the future (before=%d)", row.NextAttemptAt, before)
+	}
+	if row.LastError == "" {
+		t.Fatal("last_error should be populated on an unreachable outcome")
+	}
+}
+
+// TestWorker_UnreachableRetriesAcrossCycles proves the retry is genuinely
+// indefinite, not just one extra attempt: with MaxAttempts=1 the row is claimed
+// and submitted repeatedly (attempts climbs past the budget) yet never lands in
+// failed. Uses the minimum 1s backoff, so it waits a real second — skipped in
+// -short to keep the fast CI lane quick.
+func TestWorker_UnreachableRetriesAcrossCycles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping backoff-timed multi-cycle test in -short")
+	}
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	cfg := defaultCfg("stub")
+	cfg.Retry.MaxAttempts = 1
+	cfg.Retry.InitialBackoffSec = 1 // Minimum; second claim lands ~1s after the first.
+	fwd := &recordingForwarder{
+		typeName: stub.Type,
+		result: forwarding.Result{
+			Outcome: forwarding.OutcomeUnreachable,
+			Err:     fmt.Errorf("dial tcp: i/o timeout"),
+		},
+	}
+	w, err := New(cfg, fwd, h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	row := runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		// Attempts climbing to >=2 with MaxAttempts=1 proves the budget no
+		// longer gates this class; status must stay pending throughout.
+		return u.Status == status.Pending.String() && u.Attempts >= 2
+	})
+	if row.Status != status.Pending.String() {
+		t.Fatalf("status = %q, want pending after multiple cycles", row.Status)
+	}
+}
+
+// =============================================================================
 // Soft-delete handling — §4
 // =============================================================================
 

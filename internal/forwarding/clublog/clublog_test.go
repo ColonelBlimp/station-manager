@@ -156,11 +156,13 @@ func TestNew_MalformedCredentials_Errors(t *testing.T) {
 
 // ---------- insert: transport classification ----------
 
-func TestSubmit_Insert_NetworkError_IsTransient(t *testing.T) {
+func TestSubmit_Insert_NetworkError_IsUnreachable(t *testing.T) {
+	// No response from the host (connection refused) → unreachable, retried
+	// indefinitely rather than failed (ADR 0038).
 	fwd := fwdAt("http://127.0.0.1:1", "http://127.0.0.1:1")
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
-	if res.Outcome != forwarding.OutcomeTransient {
-		t.Fatalf("outcome = %q, want transient on network error", res.Outcome)
+	if res.Outcome != forwarding.OutcomeUnreachable {
+		t.Fatalf("outcome = %q, want unreachable on network error", res.Outcome)
 	}
 }
 

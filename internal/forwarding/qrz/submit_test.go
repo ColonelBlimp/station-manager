@@ -77,16 +77,18 @@ func sampleQso() types.Qso {
 
 // ---------- transport classification ----------
 
-func TestSubmit_Insert_NetworkError_IsTransient(t *testing.T) {
+func TestSubmit_Insert_NetworkError_IsUnreachable(t *testing.T) {
 	// Point at a URL that isn't listening — immediate connection refused.
+	// No response came back, so the host is unreachable: the worker retries
+	// it forever and never marks it failed (ADR 0038).
 	fwd := fwdAt("http://127.0.0.1:1", "key")
 
 	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
-	if res.Outcome != forwarding.OutcomeTransient {
-		t.Fatalf("outcome = %q, want transient on network error", res.Outcome)
+	if res.Outcome != forwarding.OutcomeUnreachable {
+		t.Fatalf("outcome = %q, want unreachable on network error", res.Outcome)
 	}
 	if res.Err == nil {
-		t.Fatal("Err nil on transient outcome")
+		t.Fatal("Err nil on unreachable outcome")
 	}
 }
 

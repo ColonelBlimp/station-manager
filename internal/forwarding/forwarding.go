@@ -29,8 +29,24 @@ type Outcome string
 const (
 	// OutcomeSuccess — upstream accepted.
 	OutcomeSuccess Outcome = "success"
-	// OutcomeTransient — try again later. Network errors, rate limits,
-	// temporary upstream outages. Worker re-queues per retry policy (§5).
+	// OutcomeUnreachable — the host could not be reached AT ALL: no
+	// response came back (DNS failure, connection refused, TLS handshake
+	// failure, timeout, no route). The QSO is fine; only the link is down.
+	// The worker retries INDEFINITELY — the row stays pending, backoff
+	// saturates at the cap, and it is NEVER promoted to `failed` and NEVER
+	// counts against MaxAttempts (ADR 0038). This is what makes
+	// offline-first logging durable: a QSO logged during an outage uploads
+	// whenever the link returns, an hour or ten days later. Return this
+	// only when the HTTP client yielded no response; the moment a response
+	// arrives (even an error status) the host is reachable — use
+	// OutcomeTransient or OutcomeTerminal instead.
+	OutcomeUnreachable Outcome = "unreachable"
+	// OutcomeTransient — the host responded but cannot accept right now:
+	// rate limits (429), request timeout (408), 5xx, or a mid-transfer
+	// transport glitch after headers arrived. Worker re-queues per the
+	// BOUNDED retry policy (§5) and promotes the row to `failed` once the
+	// budget is exhausted. "Couldn't reach the host at all" is
+	// OutcomeUnreachable, not this.
 	OutcomeTransient Outcome = "transient"
 	// OutcomeTerminal — upstream definitively rejected and retrying will
 	// not help. Malformed data, revoked credentials, dedupe rejection,

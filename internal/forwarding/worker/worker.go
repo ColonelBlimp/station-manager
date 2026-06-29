@@ -384,6 +384,10 @@ func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, call s
 		w.markTransientFromForwarder(ctx, row, call,
 			nonNilErr(res.Err, "forwarder reported transient outcome without an error"))
 
+	case forwarding.OutcomeUnreachable:
+		w.markUnreachable(ctx, row, call,
+			nonNilErr(res.Err, "forwarder reported unreachable outcome without an error"))
+
 	default:
 		// Unknown outcome from the forwarder — treat as terminal so we
 		// don't spin on it. Forwarder authors should only return the
@@ -426,6 +430,31 @@ func (w *Worker) markTransientFromForwarder(ctx context.Context, row types.QsoUp
 		Dur("delay", delay).
 		Err(cause).
 		Msg("forwarding: transient — will retry")
+	w.markTransientRetry(ctx, row, nextAt, errText(cause))
+}
+
+// markUnreachable records a connectivity failure: the upstream host could
+// not be reached at all (the forwarder returned OutcomeUnreachable). Unlike
+// a transient outcome it does NOT consume the retry budget and is NEVER
+// promoted to `failed` — the row goes back to `pending` and is retried
+// indefinitely, with backoff saturating at MaxBackoffSec, so a QSO logged
+// during an outage uploads whenever the link returns (ADR 0038). attempts
+// still increments (useful diagnostics, and it drives backoff toward the
+// cap) but never triggers give-up. `failed` stays reserved for host-up
+// rejections, which keeps it a clean "needs operator attention" signal.
+func (w *Worker) markUnreachable(ctx context.Context, row types.QsoUpload, call string, cause error) {
+	nextAttempts := row.Attempts + 1
+	delay := computeBackoff(nextAttempts, w.cfg.Retry)
+	nextAt := time.Now().Add(delay).Unix()
+	w.logger.InfoWith().
+		Str("forwarder", w.cfg.Name).
+		Int64("qso_id", row.QsoID).
+		Str("action", row.Action).
+		Str("call", call).
+		Int64("attempts", nextAttempts).
+		Dur("delay", delay).
+		Err(cause).
+		Msg("forwarding: host unreachable — will retry (no give-up)")
 	w.markTransientRetry(ctx, row, nextAt, errText(cause))
 }
 

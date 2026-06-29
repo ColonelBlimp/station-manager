@@ -225,10 +225,12 @@ func (f *Forwarder) Submit(
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		// net errors (DNS, connection refused, tls, timeout, ctx cancel
-		// mid-flight) are inherently retryable from our perspective.
+		// No response came back — the host is unreachable (DNS, connection
+		// refused, TLS, timeout, no route, or ctx cancel mid-flight). The
+		// QSO is fine; only the link is down. Unreachable → retry forever
+		// so an outage never abandons the QSO (ADR 0038).
 		return forwarding.Result{
-			Outcome: forwarding.OutcomeTransient,
+			Outcome: forwarding.OutcomeUnreachable,
 			Err:     errors.New(op).WithErr(err).WithMsg("POST to QRZ"),
 		}
 	}
