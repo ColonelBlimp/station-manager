@@ -23,11 +23,33 @@ type Service struct {
 	LoggerService  *logging.Service `di.inject:"loggingservice"`
 	DatabaseConfig *types.DatastoreConfig
 
+	// migrationSets restricts which schema domains this connection migrates
+	// and verifies. Empty means "all domains in one connection" (the default
+	// single-DB shape, used by every test); the file-split wiring sets a
+	// single domain per connection via SetMigrationSets.
+	migrationSets []string
+
 	handle *sql.DB
 
 	mu            sync.RWMutex
 	isInitialized atomic.Bool
 	isOpen        atomic.Bool
+}
+
+// SetMigrationSets restricts this Service to the named migration sets
+// (MigrationSetLog / MigrationSetReference), affecting both which migrations
+// run and which core tables are verified. Call before Migrate(). With no sets
+// configured the Service runs every domain in one connection (the default).
+func (s *Service) SetMigrationSets(sets ...string) { s.migrationSets = sets }
+
+// SetDatabasePath overrides the on-disk path resolved from config — used to
+// point a second connection at reference.db, sharing the log DB's directory.
+// Call after Initialize and before Open; a no-op once the connection is open.
+func (s *Service) SetDatabasePath(p string) {
+	if s.isOpen.Load() || s.DatabaseConfig == nil {
+		return
+	}
+	s.DatabaseConfig.Path = p
 }
 
 // Initialize initializes the database service. No constructor is provided as this service is to be

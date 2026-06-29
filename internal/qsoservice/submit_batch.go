@@ -91,8 +91,9 @@ func (s *Service) SubmitImportBatch(
 
 	// contacted_station cache — best-effort (one-fails-all-fail keeps this outside
 	// the QSO transactions), deduped to unique calls.
+	refDB := s.refCacheDB()
 	for _, cs := range contacts {
-		if uerr := s.DB.UpsertContactedStationWithContext(ctx, cs); uerr != nil {
+		if uerr := refDB.UpsertContactedStationWithContext(ctx, cs); uerr != nil {
 			s.Logger.WarnWith().Err(uerr).Str("call", cs.Call).
 				Msg("contacted_station upsert failed (best-effort, import)")
 		}

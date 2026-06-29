@@ -5,9 +5,15 @@ package types
 // the daemon's own facade or a command's CLI-facing service) define their own
 // ServiceName constants locally — only shared names live here.
 const (
-	ConfigServiceName  = "configservice"
-	SqliteServiceName  = "sqliteservice"
-	LoggingServiceName = "loggingservice"
+	ConfigServiceName = "configservice"
+	// SqliteServiceName is the LOG database connection (logbook, qso,
+	// qso_upload, qso_history). ReferenceDBServiceName is the shared
+	// enrichment-cache connection (country, contacted_station) — reference.db
+	// per the reference.db / log-db split. Both beans are the same
+	// *sqlite.Service type, distinguished by name + migration set.
+	SqliteServiceName      = "sqliteservice"
+	ReferenceDBServiceName = "referencedb"
+	LoggingServiceName     = "loggingservice"
 
 	// Lookup provider service names (ADR 0017). Used both as the DI
 	// bean ID and as the LookupConfig.Name value the orchestrator

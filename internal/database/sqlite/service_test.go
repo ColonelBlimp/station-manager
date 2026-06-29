@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	stderr "errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -112,9 +114,112 @@ func testServiceWithoutMigrations(t *testing.T) *Service {
 	return svc
 }
 
+// applyMigrationSteps drives the LOG set's migrations by a fixed number of
+// steps. The RST-length migrations (0001 tight → 0002 relaxed) live in the log
+// set, so the version-1-to-2 tests step that set; the reference set is left
+// alone (these tests don't touch the enrichment caches).
+// splitService wires a file-backed Service restricted to the given migration
+// set(s) — the real daemon's per-connection shape (reference.db / log-db
+// split), which the default :memory: helpers (single connection, all sets)
+// don't exercise.
+func splitService(t *testing.T, path string, sets ...string) *Service {
+	t.Helper()
+
+	cfg := config.DefaultConfig(t.TempDir())
+	cfg.Datastore.Path = path
+	cfgSvc := config.New(cfg)
+	if err := cfgSvc.Initialize(); err != nil {
+		t.Fatalf("config init: %v", err)
+	}
+	logSvc := &logging.Service{}
+	logSvc.ConfigService = cfgSvc
+	logSvc.WorkingDir = cfgSvc.WorkingDir()
+	if err := logSvc.Initialize(); err != nil {
+		t.Fatalf("logging init: %v", err)
+	}
+	svc := &Service{}
+	svc.ConfigService = cfgSvc
+	svc.LoggerService = logSvc
+	if err := svc.Initialize(); err != nil {
+		t.Fatalf("sqlite init: %v", err)
+	}
+	svc.DatabaseConfig = &types.DatastoreConfig{
+		Driver:                    "sqlite",
+		Path:                      path,
+		MaxOpenConns:              1,
+		MaxIdleConns:              1,
+		ContextTimeout:            10,
+		TransactionContextTimeout: 10,
+	}
+	svc.SetMigrationSets(sets...)
+	if err := svc.Open(); err != nil {
+		t.Fatalf("sqlite open: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = svc.Close()
+		_ = logSvc.Close()
+	})
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate (%v): %v", sets, err)
+	}
+	return svc
+}
+
+func tableExists(t *testing.T, svc *Service, name string) bool {
+	t.Helper()
+	var got string
+	err := svc.handle.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, name,
+	).Scan(&got)
+	if err == nil {
+		return true
+	}
+	if stderr.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	t.Fatalf("tableExists(%q): %v", name, err)
+	return false
+}
+
+// TestMigrate_SplitSetsIsolateTables proves the migration-set split actually
+// partitions the schema: a log-only connection contains the four log tables and
+// NONE of the enrichment caches, and a reference-only connection is the mirror.
+// This is the regression guard against a cache-table CREATE leaking into the log
+// set (or vice versa) — the failure the reference.db / log-db split exists to
+// prevent.
+func TestMigrate_SplitSetsIsolateTables(t *testing.T) {
+	dir := t.TempDir()
+	logTables := []string{"logbook", "qso", "qso_upload", "qso_history"}
+	refTables := []string{"contacted_station", "country"}
+
+	logSvc := splitService(t, filepath.Join(dir, "log.db"), MigrationSetLog)
+	for _, tbl := range logTables {
+		if !tableExists(t, logSvc, tbl) {
+			t.Errorf("log connection missing expected table %q", tbl)
+		}
+	}
+	for _, tbl := range refTables {
+		if tableExists(t, logSvc, tbl) {
+			t.Errorf("log connection unexpectedly has reference table %q", tbl)
+		}
+	}
+
+	refSvc := splitService(t, filepath.Join(dir, "reference.db"), MigrationSetReference)
+	for _, tbl := range refTables {
+		if !tableExists(t, refSvc, tbl) {
+			t.Errorf("reference connection missing expected table %q", tbl)
+		}
+	}
+	for _, tbl := range logTables {
+		if tableExists(t, refSvc, tbl) {
+			t.Errorf("reference connection unexpectedly has log table %q", tbl)
+		}
+	}
+}
+
 func applyMigrationSteps(t *testing.T, svc *Service, steps int) {
 	t.Helper()
-	srcDriver, dbDriver, err := GetMigrationDrivers(svc.handle)
+	srcDriver, dbDriver, err := GetMigrationDrivers(svc.handle, MigrationSetLog)
 	if err != nil {
 		t.Fatalf("migration drivers: %v", err)
 	}

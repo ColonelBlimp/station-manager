@@ -191,13 +191,13 @@ func (s *Service) missingCoreTables() ([]string, error) {
 	// startup and fail later in forwarding, session upload-status reads, audit
 	// history, or enrichment refreshes (review 2026-06-19 M2). Client-side
 	// schema: no api_keys table (full key stored on logbook).
-	required := []string{
-		"logbook",
-		"qso",
-		"contacted_station",
-		"country",
-		"qso_upload",
-		"qso_history",
+	//
+	// Scoped to this connection's migration sets (ADR: reference.db / log-db
+	// split): a log-only connection must not flag the reference cache tables
+	// as missing, and vice versa. The default (all sets) verifies all six.
+	var required []string
+	for _, set := range s.resolvedMigrationSets() {
+		required = append(required, coreTablesBySet[set]...)
 	}
 
 	rows, err := s.handle.Query(`SELECT name FROM sqlite_master WHERE type='table'`)

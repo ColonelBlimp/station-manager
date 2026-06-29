@@ -372,7 +372,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// Subsequent enrichment Tabs may overwrite the country fields
 	// with hamnut's truth per ADR 0017 #11; the operator's QSO row
 	// preserves what they typed regardless.
-	if uerr := s.DB.UpsertContactedStationWithContext(ctx, qso.ContactedStation); uerr != nil {
+	if uerr := s.refCacheDB().UpsertContactedStationWithContext(ctx, qso.ContactedStation); uerr != nil {
 		s.Logger.WarnWith().
 			Err(uerr).
 			Str("call", call).

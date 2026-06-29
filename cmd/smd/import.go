@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -128,6 +129,12 @@ func runImport(args []string) error {
 	if err := container.Register(types.SqliteServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("register sqlite service")
 	}
+	// Reference-cache bean (reference.db) — qsoservice injects it for the
+	// best-effort contacted_station upsert during import (reference.db / log-db
+	// split). Without it the DI build can't satisfy qsoservice.RefDB.
+	if err := container.Register(types.ReferenceDBServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("register reference-db sqlite service")
+	}
 	if err := container.Register(qsoservice.ServiceName, reflect.TypeFor[*qsoservice.Service]()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("register qso service")
 	}
@@ -156,11 +163,18 @@ func runImport(args []string) error {
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve sqlite service")
 	}
+	refDbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.ReferenceDBServiceName)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("resolve reference-db sqlite service")
+	}
 	qsoSvc, err := iocdi.ResolveAs[*qsoservice.Service](container, qsoservice.ServiceName)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
 	}
 
+	// reference.db / log-db split: log connection for qso/queue/history, a
+	// reference connection for the enrichment caches qsoservice warms on import.
+	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
 	if err := dbSvc.Open(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open database")
 	}
@@ -171,6 +185,20 @@ func runImport(args []string) error {
 	}()
 	if err := dbSvc.Migrate(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("run migrations")
+	}
+
+	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
+	refDbSvc.SetDatabasePath(filepath.Join(filepath.Dir(dbSvc.DatabaseConfig.Path), referenceDBFilename))
+	if err := refDbSvc.Open(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("open reference database")
+	}
+	defer func() {
+		if cerr := refDbSvc.Close(); cerr != nil {
+			loggerSvc.ErrorWith().Err(cerr).Msg("reference database close error")
+		}
+	}()
+	if err := refDbSvc.Migrate(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
 	}
 
 	// ---- Resolve target logbook.

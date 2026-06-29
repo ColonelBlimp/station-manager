@@ -63,6 +63,11 @@ const (
 	ExitPanic = 2
 )
 
+// referenceDBFilename is the shared enrichment-cache database (country +
+// contacted_station), opened alongside the log DB in the same directory
+// (reference.db / log-db split).
+const referenceDBFilename = "reference.db"
+
 // ft8QsoLogTimeout bounds the off-pipeline log+enrich of one completed FT8
 // exchange (a DB write plus a best-effort country lookup). Independent of the
 // FT8 decode-loop context so Stop's cancellation can't abort persisting a QSO
@@ -238,6 +243,12 @@ func run() error {
 	if err = container.Register(types.SqliteServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("register sqlite service")
 	}
+	// Second sqlite bean: the shared enrichment-cache connection (reference.db),
+	// distinguished from the log bean by name + migration set (configured after
+	// resolve, before Open). qsoservice + the orchestrator inject it.
+	if err = container.Register(types.ReferenceDBServiceName, reflect.TypeFor[*sqlite.Service]()); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("register reference-db sqlite service")
+	}
 	if err = container.Register(qsoservice.ServiceName, reflect.TypeFor[*qsoservice.Service]()); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("register qso service")
 	}
@@ -346,17 +357,24 @@ func run() error {
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve sqlite service")
 	}
+	refDbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.ReferenceDBServiceName)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("resolve reference-db sqlite service")
+	}
 
 	qsoSvc, err := iocdi.ResolveAs[*qsoservice.Service](container, qsoservice.ServiceName)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
 	}
 
-	// ---- Open database and run migrations ----
+	// ---- Open databases and run migrations (reference.db / log-db split) ----
+	// The log connection holds logbook/qso/qso_upload/qso_history; the reference
+	// connection holds the operator-global enrichment caches in reference.db,
+	// alongside the log DB in the same directory.
+	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
 	if err = dbSvc.Open(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open database")
 	}
-
 	// Registered AFTER Open succeeds, so that we never double-close or close a
 	// handle we didn't open.
 	defer func() {
@@ -364,12 +382,25 @@ func run() error {
 			loggerSvc.ErrorWith().Err(err).Msg("database close error")
 		}
 	}()
-
 	if err = dbSvc.Migrate(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("run migrations")
 	}
 
-	loggerSvc.InfoWith().Msg("database open and migrated")
+	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
+	refDbSvc.SetDatabasePath(filepath.Join(filepath.Dir(dbSvc.DatabaseConfig.Path), referenceDBFilename))
+	if err = refDbSvc.Open(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("open reference database")
+	}
+	defer func() {
+		if err := refDbSvc.Close(); err != nil {
+			loggerSvc.ErrorWith().Err(err).Msg("reference database close error")
+		}
+	}()
+	if err = refDbSvc.Migrate(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
+	}
+
+	loggerSvc.InfoWith().Msg("databases open and migrated")
 
 	// Self-heal the "config says setup-complete and points at logbook
 	// id=N, but the DB has no row at N" failure mode. Most commonly
@@ -431,7 +462,7 @@ func run() error {
 	// orchestrator that ties them together. nil orchestrator means
 	// no providers were enabled — the API handler then returns
 	// empty-result responses with source=none.
-	enrichOrchestrator, lookupRefresher, err := buildEnrichment(workerCtx, cfg, cfgSvc, dbSvc, loggerSvc)
+	enrichOrchestrator, lookupRefresher, err := buildEnrichment(workerCtx, cfg, cfgSvc, dbSvc, refDbSvc, loggerSvc)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("build enrichment pipeline")
 	}
@@ -1068,6 +1099,7 @@ func buildEnrichment(
 	cfg config.Config,
 	cfgSvc *config.Service,
 	dbSvc *sqlite.Service,
+	refDbSvc *sqlite.Service,
 	loggerSvc *logging.Service,
 ) (*lookup.Orchestrator, *refresher.Service, error) {
 	const op errors.Op = "smd.buildEnrichment"
@@ -1137,7 +1169,8 @@ func buildEnrichment(
 	}
 
 	orch := &lookup.Orchestrator{
-		DB:         dbSvc,
+		DB:         refDbSvc, // enrichment caches live in reference.db
+		LogDB:      dbSvc,    // new-entity check queries the log DB's qso table
 		Country:    countryProvider,
 		Chain:      chain,
 		CountryTTL: cfgSvc.CountryTTL(),

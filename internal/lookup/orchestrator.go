@@ -103,7 +103,14 @@ func (r Result) MarshalJSON() ([]byte, error) {
 // this from operator config); the orchestrator itself doesn't read
 // the per-provider Enabled flag at runtime.
 type Orchestrator struct {
-	DB         *sqlsvc.Service
+	// DB is the enrichment-cache connection (reference.db): country +
+	// contacted_station reads/writes.
+	DB *sqlsvc.Service
+	// LogDB is the log connection, used only for the new-entity check
+	// (HasQsoForDxcc / HasQsoForCountry query the qso table). Optional: nil in
+	// single-connection mode (tests, pre-split), where logCheckDB falls back to
+	// DB. new-entity is presentation, never load-bearing for logging.
+	LogDB      *sqlsvc.Service
 	Country    CountryProvider
 	Chain      []CallsignProvider
 	CountryTTL time.Duration
@@ -370,16 +377,16 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// than silently flagging everything new. A failed lookup leaves the flag at
 	// its zero value (false) and logs a warn rather than failing Enrich —
 	// new-entity is presentation, never load-bearing for logging.
-	if o.DB != nil {
+	if logDB := o.logCheckDB(); logDB != nil {
 		if code, ok := dxcc.DXCCForPrefix(c.data.DXCCPrefix); ok {
-			exists, hErr := o.DB.HasQsoForDxccWithContext(ctx, code)
+			exists, hErr := logDB.HasQsoForDxccWithContext(ctx, code)
 			if hErr != nil {
 				o.warn("new-entity check (dxcc) failed", hErr)
 			} else {
 				c.data.IsNewEntity = !exists
 			}
 		} else if c.data.Name != "" {
-			exists, hErr := o.DB.HasQsoForCountryWithContext(ctx, c.data.Name)
+			exists, hErr := logDB.HasQsoForCountryWithContext(ctx, c.data.Name)
 			if hErr != nil {
 				o.warn("new-entity check (country) failed", hErr)
 			} else {
@@ -663,6 +670,16 @@ func (o *Orchestrator) warn(msg string, err error) {
 		return
 	}
 	o.Logger.WarnWith().Err(err).Msg(msg)
+}
+
+// logCheckDB returns the connection used for the new-entity qso-table check:
+// the dedicated log connection when wired (the file-split daemon), else DB
+// (single-connection mode — tests and the pre-split shape).
+func (o *Orchestrator) logCheckDB() *sqlsvc.Service {
+	if o.LogDB != nil {
+		return o.LogDB
+	}
+	return o.DB
 }
 
 // onPanic is the safego panic handler for the two Enrich-spawned

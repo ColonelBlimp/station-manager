@@ -336,9 +336,14 @@ func (s *Service) HasQsoForDxccWithContext(ctx context.Context, dxcc string) (bo
 }
 
 // SchemaVersionWithContext returns the current migration version recorded
-// in the schema_migrations table (maintained by golang-migrate). Returns
-// 0 if no migrations have been applied yet (fresh DB). The `dirty` flag
-// is true if the last migration attempt failed midway.
+// in this connection's primary migration set's tracking table (maintained by
+// golang-migrate). Returns 0 if no migrations have been applied yet (fresh
+// DB). The `dirty` flag is true if the last migration attempt failed midway.
+//
+// With the reference.db / log-db split each set has its own
+// schema_migrations_<set> table; this reports the first resolved set's version
+// (the log set for the default all-domains connection), which is the schema
+// version the operator-facing version readout means.
 func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64, dirty bool, err error) {
 	const op errors.Op = "sqlite.Service.SchemaVersionWithContext"
 	if err = checkService(op, s); err != nil {
@@ -353,10 +358,12 @@ func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64,
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	// LIMIT 1 is defensive. golang-migrate guarantees exactly one row in
-	// schema_migrations (the current state), so the limit never actually
-	// clips results — it just pins the query shape in case of corruption.
-	row := h.QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations LIMIT 1`)
+	// LIMIT 1 is defensive. golang-migrate guarantees exactly one row in the
+	// tracking table (the current state), so the limit never actually clips
+	// results — it just pins the query shape in case of corruption. The table
+	// name is derived from an internal set constant, never user input.
+	tbl := schemaMigrationsTable(s.resolvedMigrationSets()[0])
+	row := h.QueryRowContext(ctx, `SELECT version, dirty FROM `+tbl+` LIMIT 1`)
 	if err = row.Scan(&version, &dirty); err != nil {
 		if stderr.Is(err, sql.ErrNoRows) {
 			return 0, false, nil

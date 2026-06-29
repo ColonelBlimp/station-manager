@@ -16,10 +16,27 @@ const ServiceName = "qsoservice"
 // parsing, validation, deduplication, atomic storage, and forwarder
 // queue fan-out (per docs/v2-design/forwarding.md §6).
 type Service struct {
-	DB     *sqlite.Service  `di.inject:"sqliteservice"`
+	DB *sqlite.Service `di.inject:"sqliteservice"`
+	// RefDB is the shared enrichment-cache connection (reference.db) for the
+	// best-effort contacted_station upsert, which lives OUTSIDE the QSO
+	// transaction. Optional: nil in single-connection mode (tests, pre-split),
+	// where refCacheDB falls back to DB.
+	RefDB  *sqlite.Service  `di.inject:"referencedb"`
 	Logger *logging.Service `di.inject:"loggingservice"`
 	Config *config.Service  `di.inject:"configservice"`
 	Hub    *events.Hub      `di.inject:"eventhub"`
+}
+
+// refCacheDB returns the connection for best-effort enrichment-cache writes:
+// the dedicated reference connection when wired (the file-split daemon), else
+// DB (single-connection mode — tests and the pre-split shape). The
+// contacted_station upsert is outside the QSO transaction, so routing it to a
+// separate connection is safe.
+func (s *Service) refCacheDB() *sqlite.Service {
+	if s.RefDB != nil {
+		return s.RefDB
+	}
+	return s.DB
 }
 
 // Initialize satisfies the iocdi.Initializer interface. It fails fast when a
