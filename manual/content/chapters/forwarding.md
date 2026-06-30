@@ -38,7 +38,7 @@ Each entry in `forwarders` describes one destination:
 |-------|---------|
 | `name` | A label you choose (e.g. `"qrz"`). Used in logs and status. |
 | `type` | The service: `"qrz"` or `"clublog"`. |
-| `enabled` | `true` to upload, `false` to keep the entry but pause it. |
+| `enabled` | `true` to upload new QSOs to this service. `false` means *don't queue anything* for it — see "Turning a destination off" below. |
 | `credentials` | The login details for that service (differs per type — see below). |
 | `action_filter` | Which changes to send: `"insert"`, `"update"`, `"delete"`. Optional — if you leave it out, it defaults to what the service actually supports. |
 | `tick_interval_sec` | How often the uploader checks for new QSOs. Default `120` (every 2 minutes). |
@@ -123,17 +123,56 @@ After a successful upload, Station Manager stamps the QSO with the
 service's status field — `QRZCOM_QSO_UPLOAD_STATUS` for QRZ,
 `CLUBLOG_QSO_UPLOAD_STATUS` for Club Log — set to `Y`, along with the
 date. These travel with the QSO in ADIF exports, so you can always see
-which contacts have been forwarded.
+which contacts have been forwarded. This stamp — not any internal queue —
+is the lasting record that a contact reached a service, so it survives
+exporting and re-importing your log.
+
+<!-- DRAFT NOTE for the later manual pass — the mechanism below is built and
+     working in the daemon (ADR 0038/0039); the logbook-app screens that expose
+     it visually are still being built, so describe the workflow once the UI
+     lands. Rebuild the embedded manual (cd manual && hugo --quiet --minify)
+     when finalising. -->
+
+### Turning a destination off
+
+Setting `enabled: false` means Station Manager **stops queuing** new QSOs
+for that service. It is *not* a pause-and-catch-up: any QSOs already
+waiting to upload to that service are dropped from the queue (the contacts
+themselves are untouched in your log — only the pending upload is
+cleared). This is deliberate — it's the clean way to keep a batch of QSOs
+(say, a contest) off a service. When you turn the destination back on,
+new QSOs queue again, but the ones logged while it was off do **not** get
+sent automatically. You send those yourself — see "Catching up" below.
+
+### Catching up: sending past QSOs to a service (backfill)
+
+QSOs logged while a service was disabled, logged before you added it, or
+imported from another log won't have been uploaded to that service. You
+can send them yourself from the logbook app:
+
+1. Pick the destination (e.g. QRZ) and the app shows you the contacts
+   **not yet uploaded** to it — judged by the upload stamp described
+   above, so a contact already on the service (even one imported with its
+   stamp intact) is correctly treated as done, not offered again.
+2. Select the contacts you want to send and upload them to that service.
+
+Uploading is safe to repeat: a contact already on the service is skipped
+rather than sent twice (the services de-duplicate anyway). Backfill always
+sends one service at a time, and only when you ask — Station Manager never
+bulk-uploads your history on its own.
 
 ### Slow or unreliable internet
 
-Uploads run in the background and retry on their own. A network blip, a
-rate limit, or a brief service outage is treated as temporary: the QSO is
-re-queued and tried again later, with the wait growing between attempts so
-the service isn't hammered. A QSO that the service *permanently* rejects
-(bad data, wrong credentials) is marked failed rather than retried
-forever. Either way, your local log already has the contact — forwarding
-never holds up logging.
+Uploads run in the background and retry on their own, and this is built
+for genuinely bad links. A network blip, a rate limit, or an outage is
+treated as temporary: the QSO stays queued and is retried later, with the
+wait growing between attempts so the service isn't hammered — **for as
+long as the connection is gone, whether that's an hour or ten days**. The
+moment the link returns, the backlog uploads. (A QSO that a *reachable*
+service actively rejects — bad data, wrong credentials — is marked failed
+instead, since retrying won't help.) Either way your local log already has
+the contact, so forwarding never holds up logging — which is what makes a
+no-internet field laptop or a DXpedition viable.
 
 ### Not yet available: LoTW
 
