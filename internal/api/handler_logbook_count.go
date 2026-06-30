@@ -25,7 +25,20 @@ func (s *Server) handleLogbookCount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	count, err := s.db.FetchQsoCountByLogbookIdWithContext(r.Context(), logbookID)
+	// missing_from (ADR 0039): count only QSOs not yet uploaded to this
+	// destination, so the SPA's "of N" matches the filtered page.
+	var missingPrefix string
+	if raw := r.URL.Query().Get("missing_from"); raw != "" {
+		p, ok := s.resolveMissingFromPrefix(raw)
+		if !ok {
+			s.writeError(w, http.StatusBadRequest, "invalid_missing_from",
+				"missing_from must name a configured forwarder with an upload-status stamp", op)
+			return
+		}
+		missingPrefix = p
+	}
+
+	count, err := s.db.FetchQsoCountByLogbookIdWithContext(r.Context(), logbookID, missingPrefix)
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return

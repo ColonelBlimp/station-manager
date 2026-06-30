@@ -988,6 +988,27 @@ when it ships — don't let this rot into a graveyard.
   live — no coupling into log/forward internals. Build alongside the DB-manager SPA
   workstream.
 
+## Website / public presence
+
+- **Landing page for `station-manager.org`** (flagged 2026-06-30; domain purchased,
+  10-yr reg). Static marketing page — NOT a docs site. Job #1 is positioning: "Station
+  Manager — **free, open-source** Linux ham-radio station management," which is what
+  differentiates it from the paid service **Station Master** without naming them (see
+  [[project_sm_name_decision]] / the dogfood-inbox name note). Content priority: (1)
+  what-it-is + who-for in one line, (2) screenshots (logging SPA, rig control, FT8),
+  (3) free/OSS/GPL-3.0 + GitHub link, (4) get-it (RPM install), (5) manual link + honest
+  "alpha" status. Decided leanings (not yet built): reuse the **Hugo** toolchain the
+  manual already uses (ADR 0036) for visual-identity consistency + no new stack; host
+  static on GitHub/Cloudflare/Netlify Pages with the custom domain (no server). **Decided
+  2026-06-30: a SEPARATE public repo** (not a subdir of this one) — the deciding factor is
+  CI: this repo's `ci.yml` is a heavy merge gate (`go test -race`, three SPA builds, embed
+  build), and a landing-page copy tweak must not run that or be blocked by a flaky daemon
+  test. A separate repo gets its own trivial Hugo build + Pages deploy. (Binary bloat is NOT
+  a factor — only `manual/public/` is `//go:embed`'d; a non-embedded subdir wouldn't ship in
+  the binary anyway.) Reuse the manual's Hugo theme/identity by copying. Keep secrets out of
+  the repo (deploy tokens → Pages/CI secret store); state content licensing in its README
+  (project code GPL; prose/screenshots possibly CC-BY). Its own workstream — plan when picked up.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

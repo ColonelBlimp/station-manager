@@ -103,6 +103,11 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	mux.HandleFunc("DELETE /v1/qso/{uuid}", s.handleDeleteQso)
 	mux.HandleFunc("GET /v1/qso/{uuid}/uploads", s.handleListQsoUploads)
 
+	// Manual upload backfill (ADR 0039) — the logbook SPA queues selected
+	// stored QSOs for upload to one enabled forwarder. See
+	// handler_forwarder_uploads.go.
+	mux.HandleFunc("POST /v1/forwarder/{name}/uploads", s.handleEnqueueForwarderUploads)
+
 	// Logbook CRUD
 	mux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)
 	mux.HandleFunc("GET /v1/logbook/{id}", s.handleGetLogbook)

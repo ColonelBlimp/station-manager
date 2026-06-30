@@ -228,7 +228,7 @@ func (s *Service) FetchQsoSliceByLogbookIdWithContext(ctx context.Context, id in
 	return typeSlice, nil
 }
 
-func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id int64) (int64, error) {
+func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id int64, missingFromPrefix string) (int64, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoCountByLogbookIdWithContext"
 	if err := checkService(op, s); err != nil {
 		return 0, err
@@ -236,6 +236,10 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 
 	if id < 1 {
 		return 0, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	missingMod, err := missingFromUploadMod(op, missingFromPrefix)
+	if err != nil {
+		return 0, err
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -246,12 +250,74 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	count, err := models.Qsos(models.QsoWhere.LogbookID.EQ(id)).Count(ctx, h)
+	mods := []qm.QueryMod{models.QsoWhere.LogbookID.EQ(id)}
+	if missingMod != nil {
+		mods = append(mods, missingMod)
+	}
+	count, err := models.Qsos(mods...).Count(ctx, h)
 	if err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("Failed to fetch QSO count by logbook ID.")
 	}
 
 	return count, nil
+}
+
+// missingFromUploadMod builds the "not yet uploaded to <destination>" query
+// predicate (ADR 0039 manual-backfill filter): the QSO's ADIF upload-status
+// stamp for adifPrefix (<prefix>_qso_upload_status in additional_data) is absent
+// or not "Y". Empty adifPrefix → (nil, nil) = no restriction. The stamp is the
+// durable, import-surviving "uploaded to X?" signal — the SAME source the SPA
+// colour and the enqueue skip-check use — so a restored already-uploaded log is
+// not surfaced as a false gap. The prefix is validated against adifPrefixPattern
+// (an invalid one is a caller bug → error, not a silent no-op); the JSON path is
+// passed as a bound parameter so the statement stays static.
+func missingFromUploadMod(op errors.Op, adifPrefix string) (qm.QueryMod, error) {
+	if adifPrefix == "" {
+		return nil, nil
+	}
+	if !adifPrefixPattern.MatchString(adifPrefix) {
+		return nil, errors.New(op).WithMsgf("invalid adifPrefix %q", adifPrefix)
+	}
+	path := "$." + strings.ToLower(adifPrefix) + "_qso_upload_status"
+	return qm.Where("COALESCE(json_extract(additional_data, ?), '') <> ?", path, adif.YesString), nil
+}
+
+// HasUploadStampWithContext reports whether the QSO's ADIF upload-status stamp
+// for adifPrefix is "Y" — i.e. it has already been uploaded to that destination.
+// The stamp (written by the worker on a successful insert, atomically with the
+// queue row) is the durable per-destination "done" signal that survives
+// import/restore, so it is what the manual-backfill skip-check keys on (ADR
+// 0039), consistent with the missing_from filter and the SPA colour.
+func (s *Service) HasUploadStampWithContext(ctx context.Context, qsoID int64, adifPrefix string) (bool, error) {
+	const op errors.Op = "sqlite.Service.HasUploadStampWithContext"
+	if err := checkService(op, s); err != nil {
+		return false, err
+	}
+	if qsoID < 1 {
+		return false, errors.New(op).WithMsg(errMsgInvalidId)
+	}
+	if !adifPrefixPattern.MatchString(adifPrefix) {
+		return false, errors.New(op).WithMsgf("invalid adifPrefix %q", adifPrefix)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	path := "$." + strings.ToLower(adifPrefix) + "_qso_upload_status"
+	var val sql.NullString
+	if err := h.QueryRowContext(ctx,
+		`SELECT json_extract(additional_data, ?) FROM qso WHERE id = ?`, path, qsoID,
+	).Scan(&val); err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, errors.New(op).WithErr(err)
+	}
+	return val.Valid && val.String == adif.YesString, nil
 }
 
 // HasQsoForCountryWithContext returns true when at least one
@@ -671,6 +737,7 @@ func (s *Service) FetchQsoPageByLogbookWithContext(
 	afterDate, afterTime string,
 	afterID int64,
 	limit int,
+	missingFromPrefix string,
 ) (types.QsoSlice, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoPageByLogbookWithContext"
 	if err := checkService(op, s); err != nil {
@@ -681,6 +748,10 @@ func (s *Service) FetchQsoPageByLogbookWithContext(
 	}
 	if limit < 1 {
 		return nil, errors.New(op).WithMsgf("limit must be positive, got %d", limit)
+	}
+	missingMod, err := missingFromUploadMod(op, missingFromPrefix)
+	if err != nil {
+		return nil, err
 	}
 
 	h, err := s.getOpenHandle(op)
@@ -693,6 +764,9 @@ func (s *Service) FetchQsoPageByLogbookWithContext(
 
 	mods := []qm.QueryMod{
 		models.QsoWhere.LogbookID.EQ(logbookID),
+	}
+	if missingMod != nil {
+		mods = append(mods, missingMod)
 	}
 	// Cursor predicate on the (qso_date, time_on, id) tuple in DESC order:
 	// rows strictly before the cursor.

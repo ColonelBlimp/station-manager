@@ -6,10 +6,26 @@ import (
 	stderr "errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
+
+// resolveMissingFromPrefix maps a ?missing_from= forwarder NAME to its ADIF
+// upload-status prefix (uppercase, e.g. "QRZCOM") for the stamp-based "not yet
+// uploaded to X" logbook filter (ADR 0039). ok=false when the name matches no
+// configured forwarder, or that forwarder's type stamps no upload status (so
+// "missing from" is undefined for it — e.g. a custom webhook).
+func (s *Server) resolveMissingFromPrefix(name string) (string, bool) {
+	for _, fc := range s.cfg.Forwarders() {
+		if strings.EqualFold(fc.Name, name) {
+			return forwarding.AdifPrefixForType(fc.Type)
+		}
+	}
+	return "", false
+}
 
 // qsoPageCursor is the decoded form of the opaque ?after= token. It
 // represents the sort-key tuple (qso_date, time_on, id) of the last QSO
@@ -82,6 +98,19 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 		limit = n
 	}
 
+	// ---- missing_from (ADR 0039): page only QSOs not yet uploaded to this
+	// destination, by its durable ADIF stamp ----
+	var missingPrefix string
+	if raw := r.URL.Query().Get("missing_from"); raw != "" {
+		p, ok := s.resolveMissingFromPrefix(raw)
+		if !ok {
+			s.writeError(w, http.StatusBadRequest, "invalid_missing_from",
+				"missing_from must name a configured forwarder with an upload-status stamp", op)
+			return
+		}
+		missingPrefix = p
+	}
+
 	// ---- cursor ----
 	var afterDate, afterTime string
 	var afterID int64
@@ -97,7 +126,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 
 	// Fetch limit+1 so we can detect "has more" without a second query.
 	rows, err := s.db.FetchQsoPageByLogbookWithContext(
-		r.Context(), logbookID, afterDate, afterTime, afterID, limit,
+		r.Context(), logbookID, afterDate, afterTime, afterID, limit, missingPrefix,
 	)
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")

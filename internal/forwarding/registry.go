@@ -1,6 +1,7 @@
 package forwarding
 
 import (
+	"regexp"
 	"sort"
 	"sync"
 
@@ -23,7 +24,15 @@ var (
 	supportedActions    = map[string][]Action{}
 	descriptors         = map[string]TypeDescriptor{}
 	defaultEndpointsMap = map[string]map[string]string{}
+	adifPrefixMap       = map[string]string{}
 )
+
+// adifPrefixPattern enforces a safe shape for the ADIF upload-status field prefix
+// a type stamps (e.g. "QRZCOM" → qrzcom_qso_upload_status). It mirrors the
+// validator in the sqlite stamp writer so a bad prefix is rejected at
+// registration, not at first upload. (App-defined APP_SM_* prefixes, which carry
+// underscores, are not yet supported by the stamp writer — a future relaxation.)
+var adifPrefixPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*$`)
 
 // Register adds a forwarder constructor under the given type name.
 // Intended to be called from a forwarder package's init() function.
@@ -229,6 +238,43 @@ func DefaultEndpointsFor(typeName string) (map[string]string, bool) {
 		cp[k] = v
 	}
 	return cp, true
+}
+
+// RegisterAdifPrefix records the ADIF upload-status field prefix forwarder
+// typeName stamps on a successfully-uploaded QSO (e.g. qrz → "QRZCOM", whose
+// worker writes qrzcom_qso_upload_status). The daemon reads it back via
+// AdifPrefixForType to resolve a forwarder to its stamp field WITHOUT building
+// the forwarder — used by the manual-backfill skip-check and the
+// `missing_from` logbook filter (ADR 0039), which both key "uploaded to X?" on
+// the durable ADIF stamp. From the forwarder package's init().
+//
+// Registration is OPTIONAL: a type that stamps nothing (the dev/test stub,
+// custom webhooks) registers none and reads back (\"\", false). Panics on empty
+// typeName, a prefix that fails adifPrefixPattern, or duplicate registration —
+// all binary bugs.
+func RegisterAdifPrefix(typeName, prefix string) {
+	if typeName == "" {
+		panic("forwarding.RegisterAdifPrefix: empty type name")
+	}
+	if !adifPrefixPattern.MatchString(prefix) {
+		panic("forwarding.RegisterAdifPrefix: invalid prefix " + prefix + " for " + typeName)
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := adifPrefixMap[typeName]; exists {
+		panic("forwarding.RegisterAdifPrefix: type already registered: " + typeName)
+	}
+	adifPrefixMap[typeName] = prefix
+}
+
+// AdifPrefixForType returns the registered ADIF upload-status prefix for
+// typeName and whether one was registered. (\"\", false) means the type stamps
+// no upload status — so it has no stamp-based "uploaded to X?" signal.
+func AdifPrefixForType(typeName string) (string, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	p, ok := adifPrefixMap[typeName]
+	return p, ok
 }
 
 // ResolveEndpoint returns the first non-empty endpoint among keys in m, falling

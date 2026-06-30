@@ -35,7 +35,7 @@ func (s *Service) FetchQsoSliceByLogbookId(id int64) (types.QsoSlice, error) {
 }
 
 func (s *Service) FetchQsoCountByLogbookId(id int64) (int64, error) {
-	return s.FetchQsoCountByLogbookIdWithContext(context.Background(), id)
+	return s.FetchQsoCountByLogbookIdWithContext(context.Background(), id, "")
 }
 
 func (s *Service) FetchQsoById(id int64) (types.Qso, error) {

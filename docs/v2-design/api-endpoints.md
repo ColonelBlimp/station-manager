@@ -83,6 +83,14 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Response:** **200**, body `{"items": [types.QsoUpload, …]}` (never null; ordered by forwarder_name, action). Includes soft-deleted QSOs (delete forwarding stays observable).
 - **Errors:** 400 `invalid_uuid`; 404 `not_found`; 500 `db_error`.
 
+### `POST /v1/forwarder/{name}/uploads`
+- **Purpose:** Manual upload backfill (ADR 0039) — queue already-stored QSOs for upload to one **enabled** forwarder. The load-bearing path for QSOs logged while a forwarder was disabled, pre-dating it, or otherwise never auto-queued; the logbook SPA selects rows and pushes them to one destination at a time. The existing per-destination worker drains the rows.
+- **Gating:** Always-on (the destination must itself be enabled — see Errors).
+- **Request:** Path `{name}` (the forwarder's config name). Body `{"uuids": ["…", …], "force": false}`. `uuids` are deduplicated; `force` (default false) re-sends QSOs already uploaded to this destination instead of skipping them.
+- **Behaviour:** action is always `insert`. Each UUID lands in exactly one bucket — enqueued, `skipped_uploaded` (already on this destination, no force), `skipped_deleted` (soft-deleted; not backfilled), or `not_found` (unknown/malformed). Per-QSO best-effort: one bad UUID never fails the rest. "Already uploaded" = an existing insert-upload row at status `uploaded` for this forwarder (keyed by name, so N-agnostic across forwarder types).
+- **Response:** **200**, body `{"enqueued": N, "skipped_uploaded": M, "skipped_deleted"?: ["…"], "not_found"?: ["…"]}`.
+- **Errors:** 400 `invalid_forwarder` (empty name); 400 `missing_required_field` (empty `uuids`); 400 `batch_too_large` (> 5000 uuids); 400 `forwarder_unavailable` (forwarder unknown, **disabled**, or doesn't forward inserts — a disabled forwarder has no worker and gets its queue rows discarded at startup, so enqueuing would strand them); 400 malformed body; 500 `enqueue_failed`.
+
 ---
 
 ## Logbook
@@ -105,12 +113,12 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `GET /v1/logbook/{id}/qso`
 - **Purpose:** Cursor-paginated QSO list for a logbook (logbook-browse views).
 - **Gating:** Always-on.
-- **Request:** Path `{id}`. Query: `limit` (int, default `Server.DefaultPageLimit`, clamped to `MaxPageLimit`, ≥1), `after` (opaque base64url cursor over `{qso_date, time_on, id}`).
+- **Request:** Path `{id}`. Query: `limit` (int, default `Server.DefaultPageLimit`, clamped to `MaxPageLimit`, ≥1), `after` (opaque base64url cursor over `{qso_date, time_on, id}`), `missing_from` (forwarder **name**) — filter to QSOs **not yet uploaded** to that destination (ADR 0039 backfill). "Not uploaded" = the destination's ADIF upload-status stamp (`<prefix>_qso_upload_status`) is absent or not `"Y"` — the durable, import-surviving signal (same source as the SPA's tri-state colour + the enqueue skip-check). Resolved name→type→ADIF-prefix server-side.
 - **Response:** **200**, body `{"items": types.QsoSlice, "next_cursor": string|null}` (`next_cursor` set only when more rows exist).
-- **Errors:** 400 `invalid_id`/`invalid_limit`/`invalid_cursor`; 404 `logbook_not_found`; 500 `db_error`.
+- **Errors:** 400 `invalid_id`/`invalid_limit`/`invalid_cursor`/`invalid_missing_from` (name matches no configured forwarder, or that forwarder's type stamps no upload status); 404 `logbook_not_found`; 500 `db_error`.
 
 ### `GET /v1/logbook/{id}/count`
-- **Purpose:** QSO count for a logbook. **Always-on.** **200** `{"logbook_id": int64, "count": int64}`. Errors: 400 `invalid_id`; 404 `logbook_not_found`; 500 `db_error`.
+- **Purpose:** QSO count for a logbook. **Always-on.** Query: `missing_from` (forwarder name) applies the same not-yet-uploaded filter as the QSO list, so the SPA's "of N" matches the filtered page. **200** `{"logbook_id": int64, "count": int64}`. Errors: 400 `invalid_id`/`invalid_missing_from`; 404 `logbook_not_found`; 500 `db_error`.
 
 ---
 

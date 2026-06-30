@@ -99,6 +99,10 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// The ADIF stamp prefix the worker writes on a successful upload — so the
+	// daemon can resolve qrz → its "uploaded to X?" stamp field without building
+	// the forwarder (manual-backfill skip-check + missing_from filter, ADR 0039).
+	forwarding.RegisterAdifPrefix(Type, AdifFieldPrefix)
 	// One API URL serves all actions; seed it under each so the config is
 	// config-driven + overridable (ADR 0039). New resolves the URL from config.
 	forwarding.RegisterDefaultEndpoints(Type, map[string]string{

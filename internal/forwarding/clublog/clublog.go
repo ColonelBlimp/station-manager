@@ -133,6 +133,11 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// The ADIF stamp prefix the worker writes on a successful upload — so the
+	// daemon can resolve clublog → its "uploaded to X?" stamp field without
+	// building the forwarder (manual-backfill skip-check + missing_from filter,
+	// ADR 0039).
+	forwarding.RegisterAdifPrefix(Type, AdifFieldPrefix)
 	// Per-action endpoints: insert → realtime, delete → delete. Seeded into
 	// config so they're config-driven + overridable without a recompile (ADR
 	// 0039); New resolves each from config with these as fallbacks.
