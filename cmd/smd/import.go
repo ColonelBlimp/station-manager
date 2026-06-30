@@ -235,18 +235,30 @@ func runImport(args []string) error {
 	// enabled is a pending follow-up.
 	var forwardTo []string
 	if s := strings.TrimSpace(forwardFwds); s != "" {
-		configured := map[string]bool{}
+		present := map[string]bool{}
+		enabled := map[string]bool{}
 		for _, f := range cfg.Forwarders {
-			configured[strings.ToLower(strings.TrimSpace(f.Name))] = true
+			key := strings.ToLower(strings.TrimSpace(f.Name))
+			present[key] = true
+			enabled[key] = f.Enabled
 		}
 		for _, raw := range strings.Split(s, ",") {
 			name := strings.TrimSpace(raw)
 			if name == "" {
 				continue
 			}
-			if !configured[strings.ToLower(name)] {
+			key := strings.ToLower(name)
+			if !present[key] {
 				return errors.New(op).WithMsgf(
 					"--forward: no forwarder named %q in config (check forwarders[].name)", name)
+			}
+			// ADR 0039: `enabled` gates enqueue and the daemon discards a
+			// disabled forwarder's queued rows at startup, so importing to a
+			// disabled forwarder would queue rows that never upload. Require it
+			// be enabled rather than silently seed rows that get swept away.
+			if !enabled[key] {
+				return errors.New(op).WithMsgf(
+					"--forward: forwarder %q is disabled — enable it to queue imported QSOs (ADR 0039)", name)
 			}
 			forwardTo = append(forwardTo, name)
 		}

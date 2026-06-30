@@ -390,6 +390,27 @@ func TestImport_ForwardFlag_UnknownForwarderFails(t *testing.T) {
 	}
 }
 
+func TestImport_ForwardFlag_DisabledForwarderFails(t *testing.T) {
+	// ADR 0039: `enabled` gates enqueue and the daemon discards a disabled
+	// forwarder's queued rows at startup, so --forward to a disabled forwarder
+	// is futile — import must reject it rather than seed rows that get swept.
+	tmp := setupImportTestbed(t, func(c *config.Config) {
+		creds, _ := json.Marshal(map[string]string{"api_key": "fake-key"})
+		c.Forwarders = []types.ForwarderConfig{{
+			Name: "qrz-main", Type: "qrz", Enabled: false, Credentials: creds,
+		}}
+	})
+	adifPath := writeADIF(t, tmp, "input.adi", noLogidRecord)
+
+	err := runImport([]string{"--forward", "qrz-main", adifPath})
+	if err == nil {
+		t.Fatal("expected an error when --forward names a disabled forwarder")
+	}
+	if !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("error = %v, want it to mention 'disabled'", err)
+	}
+}
+
 // TestNormalizeImportedMode pins the mode massaging the QRZ export relies on:
 // USB/LSB split to SSB + SUBMODE, while values that are already valid main
 // modes (SSB with no sideband, FT8, CW) pass through untouched. Mirrors the
