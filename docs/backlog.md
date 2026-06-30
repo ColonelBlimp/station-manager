@@ -971,6 +971,23 @@ when it ships — don't let this rot into a graveyard.
   it). Decide the model before building. Until then, the SPA-click guard is the protection
   and the auto-workers are a known gap (noted in `docs/ft8.md`).
 
+- **Operator log viewer (daemon diagnostics) — DB-manager tab to start.** Surfaced
+  2026-06-30 while specifying ADR 0039's "loud startup log line" for the
+  disabled-forwarder queue discard. The realisation: a loud `smd.log` line is
+  worthless to an operator who won't `tail` a file — and external ops (7Q8AC etc.)
+  have *no* window into daemon activity/errors. Distinct from the **live
+  operational toasts** that already exist (rig-disconnected, upload-failed, bridge
+  errors via SSE in the logging SPA) — this is a viewer for the **structured log
+  history + admin-class events that never become toasts** (forwarder discards,
+  migrations, the reference.db bootstrap, startup warnings). Decided shape (2026-06-30):
+  **a diagnostics surface inside the DB-manager**, not a 5th standalone SPA — same
+  admin/troubleshooting audience + cadence as queue-health/DB-health; promote to its
+  own SPA later only if it grows teeth (live streaming, heavy filtering, multi-source).
+  Daemon side stays narrow: a recent-log endpoint (`GET` over a ring buffer of the
+  last N structured lines, or a bounded `smd.log` read), optionally an SSE tail for
+  live — no coupling into log/forward internals. Build alongside the DB-manager SPA
+  workstream.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

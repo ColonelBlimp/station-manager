@@ -1,11 +1,21 @@
 ---
 number: 0022
 title: Forwarder enqueue is gated by config presence, not by the Enabled flag; retrospective backfill is operator-driven
-status: Accepted
+status: Superseded in part by 0039
 date: 2026-05-17
 ---
 
 # 0022 — Forwarder enqueue gated by config presence; retrospective backfill is operator-driven
+
+> **Superseded in part by [ADR 0039](0039-forwarder-enabled-gates-enqueue-config-driven.md) (2026-06-30).**
+> The **enqueue rule** below (rules 1–2: enqueue by config *presence*, `enabled`
+> as worker-lifecycle only, the queued-but-not-uploaded "suspended" state) is
+> reversed by 0039 — once ADR 0038 made outages retry forever while enabled, the
+> suspended state lost its only use case. Under 0039, `enabled` gates enqueue
+> (disabled = don't queue) and config is non-sparse + config-driven. Rule 3 —
+> **retrospective backfill is operator-driven, never automatic** — survives and
+> is strengthened by 0039. The body below is the original record; read 0039 for
+> current behaviour.
 
 ## Context
 
