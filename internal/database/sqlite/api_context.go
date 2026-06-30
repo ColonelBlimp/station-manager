@@ -754,7 +754,7 @@ func (s *Service) FetchQsoSlicePagingWithContext(ctx context.Context, logbookId,
 
 	var mods []qm.QueryMod
 	mods = append(mods, models.QsoWhere.LogbookID.EQ(logbookId))
-	mods = append(mods, qm.OrderBy(models.QsoColumns.ID+" "+ordering.String()))
+	mods = append(mods, qm.OrderBy(models.QsoColumns.ID+" "+ordering.sqlDir()))
 	mods = append(mods, qm.Limit(int(pageSize)))
 	mods = append(mods, qm.Offset(int(offset)))
 
@@ -1869,25 +1869,28 @@ func (s *Service) MarkUploadSuccessWithContext(ctx context.Context, id int64, up
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	row, err := models.FindQsoUpload(ctx, h, id)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
-		}
-		return errors.New(op).WithErr(err)
-	}
-
-	row.Status = status.Uploaded.String()
-	row.Attempts++
+	var upstreamArg any
 	if upstreamID != "" {
-		row.UpstreamID = null.StringFrom(upstreamID)
-	} else {
-		row.UpstreamID = null.String{}
+		upstreamArg = upstreamID
 	}
-	row.LastError = null.String{}
-
-	if _, err = row.Update(ctx, h, boil.Infer()); err != nil {
+	// Conditional on status='in_progress' so a worker whose row was re-armed to
+	// 'pending' by a concurrent operator edit mid-send cannot clobber it back to
+	// 'uploaded' (stale-completion race). Zero rows affected = re-armed or gone
+	// → no-op: the re-armed row stays pending to be re-claimed and re-forwarded
+	// with the latest state.
+	res, err := h.ExecContext(ctx, `
+UPDATE qso_upload
+SET    status      = ?,
+       attempts    = attempts + 1,
+       upstream_id = ?,
+       last_error  = NULL
+WHERE  id = ? AND status = ?`,
+		status.Uploaded.String(), upstreamArg, id, status.InProgress.String())
+	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload success")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.classifyZeroRowCompletion(ctx, h, id, "success")
 	}
 	return nil
 }
@@ -1980,14 +1983,17 @@ SET    status      = ?,
        attempts    = attempts + 1,
        upstream_id = ?,
        last_error  = NULL
-WHERE  id = ?`,
-		status.Uploaded.String(), upstreamArg, id,
+WHERE  id = ? AND status = ?`,
+		status.Uploaded.String(), upstreamArg, id, status.InProgress.String(),
 	)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("update qso_upload")
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.ErrNotFound
+		// Re-armed by a concurrent edit (or gone): skip the QSO stamp and let
+		// the deferred rollback discard the (no-op) tx — don't mark the QSO
+		// uploaded for a send whose row no longer represents the latest state.
+		return s.classifyZeroRowCompletion(ctx, tx, id, "success+stamp")
 	}
 
 	// Step 2 — qso row ADIF stamp via json_set on additional_data.
@@ -2118,25 +2124,26 @@ func (s *Service) MarkUploadTransientRetryWithContext(ctx context.Context, id in
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	row, err := models.FindQsoUpload(ctx, h, id)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
-		}
-		return errors.New(op).WithErr(err)
-	}
-
-	row.Status = status.Pending.String()
-	row.Attempts++
-	row.NextAttemptAt = nextAttemptAt
+	var lastErrArg any
 	if lastError != "" {
-		row.LastError = null.StringFrom(lastError)
-	} else {
-		row.LastError = null.String{}
+		lastErrArg = lastError
 	}
-
-	if _, err = row.Update(ctx, h, boil.Infer()); err != nil {
+	// Conditional on status='in_progress' — see MarkUploadSuccessWithContext.
+	// A re-armed row (operator edit) already cleared its retry state, so a stale
+	// worker's retry must not overwrite next_attempt_at/last_error.
+	res, err := h.ExecContext(ctx, `
+UPDATE qso_upload
+SET    status          = ?,
+       attempts        = attempts + 1,
+       next_attempt_at = ?,
+       last_error      = ?
+WHERE  id = ? AND status = ?`,
+		status.Pending.String(), nextAttemptAt, lastErrArg, id, status.InProgress.String())
+	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload transient retry")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.classifyZeroRowCompletion(ctx, h, id, "transient-retry")
 	}
 	return nil
 }
@@ -2161,24 +2168,50 @@ func (s *Service) MarkUploadFailedWithContext(ctx context.Context, id int64, las
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	row, err := models.FindQsoUpload(ctx, h, id)
+	var lastErrArg any
+	if lastError != "" {
+		lastErrArg = lastError
+	}
+	// Conditional on status='in_progress' — see MarkUploadSuccessWithContext.
+	// A re-armed row must not be marked 'failed' for a stale send: it stays
+	// pending so the operator's latest state is forwarded.
+	res, err := h.ExecContext(ctx, `
+UPDATE qso_upload
+SET    status     = ?,
+       attempts   = attempts + 1,
+       last_error = ?
+WHERE  id = ? AND status = ?`,
+		status.Failed.String(), lastErrArg, id, status.InProgress.String())
 	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
-		}
+		return errors.New(op).WithErr(err).WithMsg("mark upload failed")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.classifyZeroRowCompletion(ctx, h, id, "failed")
+	}
+	return nil
+}
+
+// classifyZeroRowCompletion decides what a completion that affected zero rows
+// means: the conditional `WHERE id=? AND status='in_progress'` matched nothing
+// either because the row genuinely doesn't exist (a bug — wrong id → ErrNotFound,
+// preserving the prior contract) or because it exists but is no longer
+// in_progress — a concurrent operator edit re-armed it to 'pending' (the
+// stale-completion race). The latter is an intentional no-op: the re-armed row
+// stays pending for the next claim, so the latest QSO state is forwarded.
+func (s *Service) classifyZeroRowCompletion(ctx context.Context, exec boil.ContextExecutor, id int64, kind string) error {
+	const op errors.Op = "sqlite.Service.classifyZeroRowCompletion"
+	exists, err := models.QsoUploadExists(ctx, exec, id)
+	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
-
-	row.Status = status.Failed.String()
-	row.Attempts++
-	if lastError != "" {
-		row.LastError = null.StringFrom(lastError)
-	} else {
-		row.LastError = null.String{}
+	if !exists {
+		return errors.ErrNotFound
 	}
-
-	if _, err = row.Update(ctx, h, boil.Infer()); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("mark upload failed")
+	if s.LoggerService != nil {
+		s.LoggerService.DebugWith().
+			Int64("upload_id", id).
+			Str("completion", kind).
+			Msg("upload completion skipped: row re-armed by a concurrent edit (no longer in_progress)")
 	}
 	return nil
 }

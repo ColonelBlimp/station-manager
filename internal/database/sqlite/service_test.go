@@ -1488,6 +1488,73 @@ func TestMarkUploadFailed(t *testing.T) {
 	}
 }
 
+// TestMarkUploadSuccess_StaleAfterReArm_NoOps defends the stale-completion race
+// (code review #1): a worker claims a row (in_progress), an operator edit
+// re-arms the SAME (qso, forwarder, action) row to pending mid-send, and the
+// stale worker then tries to mark it uploaded. The completion must NO-OP so the
+// re-armed row survives to be re-forwarded with the latest state.
+func TestMarkUploadSuccess_StaleAfterReArm_NoOps(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	qsoID, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+	ctx := context.Background()
+
+	// Worker claims the row → in_progress.
+	claimed, _ := svc.ClaimPendingUploadsWithContext(ctx, "qrz", 1)
+	rowID := claimed[0].ID
+
+	// Operator edit re-arms the same triple → upsert resets it to pending,
+	// attempts=0 (InsertQsoUploadTx's ON CONFLICT path).
+	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
+
+	// Stale worker completes — must not clobber the re-armed row.
+	if err := svc.MarkUploadSuccessWithContext(ctx, rowID, "logid-stale"); err != nil {
+		t.Fatalf("mark success: %v", err)
+	}
+
+	uploads, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qsoID)
+	got := uploads[0]
+	if got.Status != "pending" {
+		t.Fatalf("Status = %q, want pending (re-arm must survive the stale completion)", got.Status)
+	}
+	if got.UpstreamID == "logid-stale" {
+		t.Fatal("stale upstream_id leaked onto the re-armed row")
+	}
+	if got.Attempts != 0 {
+		t.Fatalf("Attempts = %d, want 0 (re-arm reset it; the stale completion must not bump it)", got.Attempts)
+	}
+}
+
+// TestFetchCountry_PreservesID_AllowsUpdate defends code review #2: the
+// Country adapter must copy the row's primary key, or a fetched country comes
+// back with ID==0 and UpdateCountryWithContext (which rejects ID<1) can never
+// update it.
+func TestFetchCountry_PreservesID_AllowsUpdate(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+	c := types.Country{
+		Name: "Malawi", Prefix: "7Q", Ccode: "0", Continent: "AF",
+		CQZone: "37", ITUZone: "53", DXCCPrefix: "7Q", TimeOffset: "+2",
+	}
+	if _, err := svc.InsertCountryWithContext(ctx, c); err != nil {
+		t.Fatalf("insert country: %v", err)
+	}
+
+	got, err := svc.FetchCountryByPrefixWithContext(ctx, "7Q")
+	if err != nil {
+		t.Fatalf("fetch country: %v", err)
+	}
+	if got.ID < 1 {
+		t.Fatalf("fetched country ID = %d, want >= 1 (adapter dropped the PK)", got.ID)
+	}
+
+	got.Name = "Republic of Malawi"
+	if err := svc.UpdateCountryWithContext(ctx, got); err != nil {
+		t.Fatalf("update fetched country (ID=%d): %v", got.ID, err)
+	}
+}
+
 func TestResetOrphanedUploads(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
@@ -1529,30 +1596,46 @@ func TestResetOrphanedUploads_NoOrphans_ReturnsZero(t *testing.T) {
 // reconciliation: a disabled forwarder's not-yet-uploaded rows (pending /
 // in_progress / failed) are deleted, its 'uploaded' rows are KEPT (upstream_id
 // provenance), and other forwarders are untouched.
+// claimOneAndMark claims the single currently-pending row for fwd (asserting
+// exactly one) and applies mark to it — the realistic worker flow, which the
+// completion methods' in_progress guard now requires.
+func claimOneAndMark(t *testing.T, svc *Service, fwd string, mark func(id int64) error) {
+	t.Helper()
+	claimed, err := svc.ClaimPendingUploadsWithContext(context.Background(), fwd, 10)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claim: got %d pending rows, want exactly 1", len(claimed))
+	}
+	if err := mark(claimed[0].ID); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+}
+
 func TestDiscardQueuedUploadsForForwarder(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
 	ctx := context.Background()
 
-	// qrz pending — should be discarded.
-	qPending, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
-	enqueueUpload(t, svc, qPending, "qrz", "qrz", action.Insert)
-
-	// qrz failed — should be discarded.
-	qFailed, _ := svc.InsertQso(validTestQso(lbID, "EA1B", "10m", "SSB", "20250508", "0930"))
-	enqueueUpload(t, svc, qFailed, "qrz", "qrz", action.Insert)
-	upF, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qFailed)
-	if err := svc.MarkUploadFailedWithContext(ctx, upF[0].ID, "bad data"); err != nil {
-		t.Fatalf("mark failed: %v", err)
-	}
-
-	// qrz uploaded — MUST survive (carries upstream_id).
+	// qrz uploaded — claim then mark success; MUST survive (carries upstream_id).
+	// Done first so it's the only pending qrz row at claim time.
 	qUploaded, _ := svc.InsertQso(validTestQso(lbID, "G3XYZ", "20m", "SSB", "20250508", "0900"))
 	enqueueUpload(t, svc, qUploaded, "qrz", "qrz", action.Insert)
-	upU, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qUploaded)
-	if err := svc.MarkUploadSuccessWithContext(ctx, upU[0].ID, "logid-1"); err != nil {
-		t.Fatalf("mark uploaded: %v", err)
-	}
+	claimOneAndMark(t, svc, "qrz", func(id int64) error {
+		return svc.MarkUploadSuccessWithContext(ctx, id, "logid-1")
+	})
+
+	// qrz failed — claim then mark failed; should be discarded.
+	qFailed, _ := svc.InsertQso(validTestQso(lbID, "EA1B", "10m", "SSB", "20250508", "0930"))
+	enqueueUpload(t, svc, qFailed, "qrz", "qrz", action.Insert)
+	claimOneAndMark(t, svc, "qrz", func(id int64) error {
+		return svc.MarkUploadFailedWithContext(ctx, id, "bad data")
+	})
+
+	// qrz pending — left pending; should be discarded.
+	qPending, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qPending, "qrz", "qrz", action.Insert)
 
 	// clublog pending — different forwarder, MUST be untouched.
 	qOther, _ := svc.InsertQso(validTestQso(lbID, "F5ABC", "15m", "SSB", "20250508", "0915"))
@@ -1817,15 +1900,16 @@ func TestInsertQsoUploadTx_ReArmOnConflict(t *testing.T) {
 	// First enqueue creates the row.
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
 
-	// Simulate a successful upload: status='uploaded', upstream_id set.
-	rows0, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	// Simulate a successful upload via the realistic flow: claim (→ in_progress,
+	// which the completion guard requires) then mark uploaded with an upstream_id.
+	claimed, err := svc.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
 	if err != nil {
-		t.Fatalf("fetch uploads (pre): %v", err)
+		t.Fatalf("claim: %v", err)
 	}
-	if len(rows0) != 1 {
-		t.Fatalf("pre-upsert len = %d, want 1", len(rows0))
+	if len(claimed) != 1 {
+		t.Fatalf("claim len = %d, want 1", len(claimed))
 	}
-	uploadID := rows0[0].ID
+	uploadID := claimed[0].ID
 	if err = svc.MarkUploadSuccessWithContext(context.Background(), uploadID, "qrz-12345"); err != nil {
 		t.Fatalf("mark uploaded: %v", err)
 	}

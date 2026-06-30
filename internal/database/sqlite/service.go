@@ -298,6 +298,12 @@ func (s *Service) Migrate() error {
 func (s *Service) BeginTxContext(ctx context.Context) (*sql.Tx, context.CancelFunc, error) {
 	const op errors.Op = "sqlite.Service.BeginTxContext"
 
+	// Tolerate a nil ctx like the package's ensureCtxTimeout-based methods do —
+	// ctx.Deadline() below would otherwise panic on nil.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	h, err := s.getOpenHandle(op)
 	if err != nil {
 		return nil, nil, err

@@ -46,6 +46,7 @@ func CountryModelToType(model *models.Country) (types.Country, error) {
 		return types.Country{}, errors.New(op).WithMsg(errMsgNilModel)
 	}
 	return types.Country{
+		ID:         model.ID,
 		Name:       model.Name,
 		Prefix:     model.Prefix,
 		Continent:  model.Continent,
